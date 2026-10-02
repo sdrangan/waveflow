@@ -7,7 +7,7 @@
 //   LAST  read S from s_blk; one iteration; emit X on x_blk (the job ends)
 // Per iteration and per column group (L columns in parallel), three pipelined passes over the K rows:
 //   1. ps = q_ps(sum Re(conj(P) S))                       exact accumulator dot_ps_t
-//      alpha = q_alpha(w(rz) / ps), 0 if ps == 0          L dividers
+//      alpha = q_alpha(w(rz) / ps), 0 if ps == 0          L dividers side by side
 //   2. X = q_X(X + P alpha), R = q_R(R - S alpha), rz' = q_rz(sum |R|^2)
 //      beta = q_beta(w(rz') / rz), 0 if rz == 0; rz = rz'
 //   3. P = q_P(R + P beta)
@@ -127,9 +127,14 @@ ITERS:
 #pragma HLS ARRAY_PARTITION variable=alpha complete
                 for (int l = 0; l < L; ++l) {
 #pragma HLS UNROLL
+                    // Divide unconditionally by a safe divisor, then select: the L dividers then run
+                    // side by side (a guarded divide is a branch HLS serializes).  Bit-exact: when
+                    // ps != 0 the divisor is ps, and when ps == 0 the quotient is discarded.
                     ps_t ps = ps_acc[l];
+                    ps_t den = (ps == 0) ? ps_t(1) : ps;
                     rzw_t num = rz[g][l];
-                    alpha[l] = (ps == 0) ? alpha_t(0) : alpha_t(num / ps);
+                    alpha_t q = num / den;
+                    alpha[l] = (ps == 0) ? alpha_t(0) : q;
                 }
                 // pass 2: X = q_X(X + P alpha), R = q_R(R - S alpha), rz' = q_rz(sum |R|^2)
                 dot_rz_t rz_acc[L];
@@ -157,8 +162,10 @@ ITERS:
                 for (int l = 0; l < L; ++l) {
 #pragma HLS UNROLL
                     rz_t rz_new = rz_acc[l];
+                    rz_t den = (rz[g][l] == 0) ? rz_t(1) : rz[g][l];  // as for alpha
                     rzw_t num = rz_new;
-                    beta[l] = (rz[g][l] == 0) ? beta_t(0) : beta_t(num / rz[g][l]);
+                    beta_t q = num / den;
+                    beta[l] = (rz[g][l] == 0) ? beta_t(0) : q;
                     rz[g][l] = rz_new;
                 }
                 // pass 3: P = q_P(R + P beta)

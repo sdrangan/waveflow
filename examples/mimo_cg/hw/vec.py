@@ -258,7 +258,7 @@ class CgVecRx(FreeRunMod):
         w = int(self.mem_dwidth)
         nw = nwords(int(self.K) * int(self.N), w)
         cmd = yield from self.s_cmd.get_schema(CgVecUnitCmd)
-        nit = int(cmd.nit)
+        nit = min(max(int(cmd.nit), 1), int(self.K))  # clamped as in the C++ framer
         frames = [
             MemRCmd(addr=int(cmd.b_off), len=nw, fwd_bursts=1),
             CgDesc(nit=nit, x_off=int(cmd.out_off)),
@@ -543,11 +543,16 @@ class CgVecUnitTB(FreeRunMod):
     N: HwParam[int] = DEFAULT_N
     L: HwParam[int] = DEFAULT_L
     fmt: HwParam[int] = DEFAULT_FMT
+    cmd_depth: HwParam[int] = 2
+    sob_depth: HwParam[int] = 2
     n_cycles: int = 200_000
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        bad = [n for n in self.jobs if not 1 <= int(n) <= int(self.K)]
+        if bad:
+            raise ValueError(f"nit must lie in 1..K = {int(self.K)}; got {bad}")
         w, K, N = int(self.mem_dwidth), int(self.K), int(self.N)
         nw = nwords(K * N, w)
         cur, self.layout = 0, []
@@ -575,6 +580,8 @@ class CgVecUnitTB(FreeRunMod):
             N=N,
             L=int(self.L),
             fmt=int(self.fmt),
+            cmd_depth=int(self.cmd_depth),
+            sob_depth=int(self.sob_depth),
             clk=self.clk,
         )
         self.cmds = [

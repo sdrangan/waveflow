@@ -203,7 +203,12 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   in lockstep, so the reader can lead the writer by only about seven firings. One extra
   read per job deadlocked the RTL after six jobs, in XSI only: the Python sim and C-sim
   cannot see it. Balance with a zero-length final write that carries the echo. Test
-  more jobs than any FIFO is deep.
+  more jobs than any FIFO is deep. Within a job, the reads needed before the first write,
+  minus the writes already done, must also stay within the writer's pointer-FIFO depth,
+  which HLS chooses (7 in the units, 8 in the detector).
+- **A guarded divide is a serial divide.** `(d == 0) ? 0 : n / d` inside an unrolled loop
+  made HLS run the L dividers one after another. Divide by a safe divisor and select
+  instead: it is bit-exact and the dividers run side by side.
 - **Trace the top before guessing.** The VCD dumper (run.sh `trace`) shows each task's
   done count and each FIFO's full/empty state at the hang. Two pages of output named
   the culprit after two blind hypotheses had only narrowed it down.

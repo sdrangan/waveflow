@@ -70,6 +70,14 @@ def test_vec_unit_is_built_on_the_framework_mem_streams():
     assert names == ["s_cmd", "m_in", "m_out", "s_done"]
 
 
+def test_out_of_range_nit_is_rejected():
+    from examples.mimo_cg.hw.vec import CgVecUnitTB
+
+    for bad in (0, 5):
+        with pytest.raises(ValueError, match="nit must lie in 1..K"):
+            CgVecUnitTB(name="t", sim=Simulation(), jobs=(1, bad), K=4)
+
+
 def test_blocks_are_lane_groups():
     blk = block_type(12, 16, 32, 4)
     assert blk.max_shape == (16 * 32 // 4,)
@@ -98,6 +106,33 @@ def test_vec_unit_csim_is_bit_exact(tmp_path, fmt_id, K):
     problems, jobs = _jobs(fmt_id, K, seed=700 + 10 * fmt_id + K)
     sim = CgVecUnitSim(problems[-12:], jobs[-12:], K=K, fmt=fmt_id)
     result = run_csim(tmp_path, VEC_TOP, 64, sim.scenario(), jobs[-12:], VEC_REPS)
+    assert result["ok"], result["log"][-3000:]
+
+
+@pytest.mark.vitis
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"K": 4, "L": 8},
+        {"K": 8, "L": 2, "fmt": 2},
+        {"K": 4, "mem_dw": 32},
+        {"K": 4, "cmd_depth": 3, "sob_depth": 3},
+    ],
+    ids=["L8", "L2-stress", "mem32", "depth3"],
+)
+def test_vec_unit_csim_honours_every_knob(tmp_path, knobs):
+    """The knobs the default builds do not exercise: lane count, memory word width, queue and
+    stream-of-blocks depths -- bit-exact in sequential C-sim (M4 review)."""
+    _require_vitis()
+    K, fmt, mem_dw = knobs["K"], knobs.get("fmt", 0), knobs.get("mem_dw", 64)
+    gen = {
+        k: v for k, v in knobs.items() if k in ("L", "mem_dw", "cmd_depth", "sob_depth")
+    }
+    generate_vec_unit(tmp_path, K=K, fmt=fmt, **gen)
+    problems, jobs = _jobs(fmt, K, seed=950 + K)
+    tb = {k: v for k, v in knobs.items() if k in ("L", "cmd_depth", "sob_depth")}
+    sim = CgVecUnitSim(problems[-8:], jobs[-8:], K=K, fmt=fmt, mem_dwidth=mem_dw, **tb)
+    result = run_csim(tmp_path, VEC_TOP, mem_dw, sim.scenario(), jobs[-8:], VEC_REPS)
     assert result["ok"], result["log"][-3000:]
 
 

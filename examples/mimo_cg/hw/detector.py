@@ -111,9 +111,10 @@ class CgCmdRx(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         w, K, N = int(self.mem_dwidth), int(self.K), int(self.N)
         cmd = yield from self.s_cmd.get_schema(CgCmd)
+        nit = min(max(int(cmd.nit), 1), K)  # clamped as in cg_cmd_rx_task.h
         frames = [
             MemRCmd(addr=int(cmd.a_off), len=nwords(K * K, w), fwd_bursts=1),
-            CgDesc(nit=int(cmd.nit), x_off=int(cmd.x_off)),
+            CgDesc(nit=nit, x_off=int(cmd.x_off)),
             MemRCmd(addr=int(cmd.b_off), len=nwords(K * N, w), fwd_bursts=0),
         ]
         for fr in frames:
@@ -456,11 +457,16 @@ class CgDetectorTB(FreeRunMod):
     C: HwParam[int] = DEFAULT_C
     cmul: HwParam[int] = DEFAULT_CMUL
     fmt: HwParam[int] = DEFAULT_FMT
+    cmd_depth: HwParam[int] = 2
+    sob_depth: HwParam[int] = 2
     n_cycles: int = 400_000
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        bad = [n for n in self.jobs if not 1 <= int(n) <= int(self.K)]
+        if bad:
+            raise ValueError(f"nit must lie in 1..K = {int(self.K)}; got {bad}")
         w, K, N = int(self.mem_dwidth), int(self.K), int(self.N)
         nwa, nwb = nwords(K * K, w), nwords(K * N, w)
         cur, self.layout = 0, []
@@ -491,6 +497,8 @@ class CgDetectorTB(FreeRunMod):
             C=int(self.C),
             cmul=int(self.cmul),
             fmt=int(self.fmt),
+            cmd_depth=int(self.cmd_depth),
+            sob_depth=int(self.sob_depth),
             clk=self.clk,
         )
         self.cmds = [

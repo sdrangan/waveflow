@@ -99,6 +99,37 @@ def test_mm_unit_csim_is_bit_exact(tmp_path, fmt_id, K, cmul):
     assert result["ok"], result["log"][-3000:]
 
 
+@pytest.mark.vitis
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"K": 4, "R": 2, "C": 8},
+        {"K": 8, "R": 2, "C": 16, "L": 8, "cmul": 3, "fmt": 1},
+        {"K": 4, "mem_dw": 32},
+        {"K": 4, "cmd_depth": 3, "sob_depth": 3},
+    ],
+    ids=["R2-C8", "R2-C16-L8-cmul3-W14", "mem32", "depth3"],
+)
+def test_mm_unit_csim_honours_every_knob(tmp_path, knobs):
+    """The knobs the default builds do not exercise: R < K, C != L, L, memory word width, queue
+    and stream-of-blocks depths -- bit-exact in sequential C-sim (M4 review)."""
+    _require_vitis()
+    K, fmt, mem_dw = knobs["K"], knobs.get("fmt", 0), knobs.get("mem_dw", 64)
+    names = ("L", "R", "C", "cmul", "mem_dw", "cmd_depth", "sob_depth")
+    generate_mm_unit(
+        tmp_path, K=K, fmt=fmt, **{k: v for k, v in knobs.items() if k in names}
+    )
+    problems, jobs = _jobs(fmt, K, seed=960 + K)
+    tb = {
+        k: v
+        for k, v in knobs.items()
+        if k in ("L", "R", "C", "cmul", "cmd_depth", "sob_depth")
+    }
+    sim = CgMmUnitSim(problems[-8:], jobs[-8:], K=K, fmt=fmt, mem_dwidth=mem_dw, **tb)
+    result = run_csim(tmp_path, MM_TOP, mem_dw, sim.scenario(), jobs[-8:], MM_REPS)
+    assert result["ok"], result["log"][-3000:]
+
+
 def _synth(K: int, cmul: int) -> dict:
     d = build_dir(MM_TOP, K, 0, cmul=cmul)
     generate_mm_unit(d, K=K, fmt=0, cmul=cmul)

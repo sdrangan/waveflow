@@ -19,18 +19,20 @@ static void cg_vec_rx_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
     const int NW = (K * N + LW - 1) / LW;
     CgVecUnitCmd c;
     c.read_stream<MEM_DW>(s_cmd);
+    // nit is clamped to 1..K: the blocks' loops end at K, so a larger nit would never send LAST.
+    const int nit = (int)c.nit < 1 ? 1 : ((int)c.nit > K ? K : (int)c.nit);
     MemRCmd rb;
     rb.addr = c.b_off;
     rb.len = NW;
     rb.fwd_bursts = 1;
     rb.write_framed_stream<MEM_DW>(cmd_out);
     CgDesc d;
-    d.nit = c.nit;
+    d.nit = nit;
     d.x_off = c.out_off;
     d.write_framed_stream<MEM_DW>(cmd_out);
 READS:
     for (int n = 0; n < K; ++n) {
-        if (n < (int)c.nit) {
+        if (n < nit) {
             MemRCmd rs;
             rs.addr = c.s_off + n * NW;
             rs.len = NW;

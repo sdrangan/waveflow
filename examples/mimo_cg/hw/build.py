@@ -168,9 +168,14 @@ def gen_headers(config: BuildConfig, schemas, formats: CgFormats, K: int, mem_dw
 
 
 def build_dir(top: str, K: int, fmt: int, **knobs) -> Path:
-    """The default build directory of one configuration."""
+    """The default build directory of one configuration: every knob passed here is in the name."""
     tag = "_".join(f"{k}{v}" for k, v in sorted(knobs.items()))
     return BUILD_ROOT / (f"{top}_k{K}_f{fmt}" + (f"_{tag}" if tag else ""))
+
+
+def _nondefault(knobs: dict, defaults: dict) -> dict:
+    """The knobs that differ from their defaults, which name a non-default build directory."""
+    return {k: v for k, v in knobs.items() if defaults.get(k) != v}
 
 
 def generate_top(
@@ -303,6 +308,15 @@ def check_xsi_outputs(out_dir: Path, scenario: dict) -> list[int]:
 # --- the vector unit -------------------------------------------------------------------------
 
 VEC_TOP = "cg_vec_unit"
+#: Default knobs: a build with these is named by K and the format alone (the gate builds).
+_VEC_DEFAULTS = {
+    "N": DEFAULT_N,
+    "L": 4,
+    "mem_dw": DEFAULT_MEM_DW,
+    "cmd_depth": 2,
+    "sob_depth": 2,
+}
+_UNIT_DEFAULTS = {**_VEC_DEFAULTS, "R": 0, "C": 4, "cmul": 4}
 
 
 def generate_vec_unit(
@@ -320,7 +334,14 @@ def generate_vec_unit(
     from examples.mimo_cg.hw.vec import CgVecUnit, CgVecUnitCmd
 
     if out_dir is None:
-        out_dir = build_dir(VEC_TOP, K, fmt)
+        knobs = {
+            "N": N,
+            "L": L,
+            "mem_dw": mem_dw,
+            "cmd_depth": cmd_depth,
+            "sob_depth": sob_depth,
+        }
+        out_dir = build_dir(VEC_TOP, K, fmt, **_nondefault(knobs, _VEC_DEFAULTS))
     params = {
         "mem_dwidth": mem_dw,
         "K": K,
@@ -357,7 +378,18 @@ def generate_mm_unit(
     from examples.mimo_cg.hw.mm import CgMmUnit, CgMmUnitCmd
 
     if out_dir is None:
-        out_dir = build_dir(MM_TOP, K, fmt, cmul=cmul)
+        knobs = {
+            "N": N,
+            "L": L,
+            "R": R,
+            "C": C,
+            "mem_dw": mem_dw,
+            "cmd_depth": cmd_depth,
+        }
+        knobs["sob_depth"] = sob_depth
+        out_dir = build_dir(
+            MM_TOP, K, fmt, cmul=cmul, **_nondefault(knobs, _UNIT_DEFAULTS)
+        )
     params = {
         "mem_dwidth": mem_dw,
         "K": K,
@@ -397,7 +429,9 @@ def generate_detector(
     from examples.mimo_cg.hw.detector import CgDetector
 
     if out_dir is None:
-        out_dir = build_dir(DET_TOP, K, fmt)
+        knobs = {"N": N, "L": L, "R": R, "C": C, "cmul": cmul, "mem_dw": mem_dw}
+        knobs |= {"cmd_depth": cmd_depth, "sob_depth": sob_depth}
+        out_dir = build_dir(DET_TOP, K, fmt, **_nondefault(knobs, _UNIT_DEFAULTS))
     params = {
         "mem_dwidth": mem_dw,
         "K": K,

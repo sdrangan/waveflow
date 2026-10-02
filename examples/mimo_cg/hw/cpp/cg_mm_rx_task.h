@@ -20,18 +20,20 @@ static void cg_mm_rx_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
     const int NWP = (K * N + LW - 1) / LW;
     CgMmUnitCmd c;
     c.read_stream<MEM_DW>(s_cmd);
+    // nit is clamped to 1..K: the blocks' loops end at K, so a larger nit would never send LAST.
+    const int nit = (int)c.nit < 1 ? 1 : ((int)c.nit > K ? K : (int)c.nit);
     MemRCmd ra;
     ra.addr = c.a_off;
     ra.len = NWA;
     ra.fwd_bursts = 1;
     ra.write_framed_stream<MEM_DW>(cmd_out);
     CgDesc d;
-    d.nit = c.nit;
+    d.nit = nit;
     d.x_off = c.out_off;
     d.write_framed_stream<MEM_DW>(cmd_out);
 READS:
     for (int n = 0; n < K; ++n) {
-        if (n < (int)c.nit) {
+        if (n < nit) {
             MemRCmd rp;
             rp.addr = c.p_off + n * NWP;
             rp.len = NWP;

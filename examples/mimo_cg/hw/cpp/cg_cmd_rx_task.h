@@ -17,13 +17,15 @@ static void cg_cmd_rx_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
     const int LW = cg::a_mem::lane_capacity<MEM_DW>();
     CgCmd c;
     c.read_stream<MEM_DW>(s_cmd);
+    // nit is clamped to 1..K: the blocks' loops end at K, so a larger nit would never send LAST.
+    const int nit = (int)c.nit < 1 ? 1 : ((int)c.nit > K ? K : (int)c.nit);
     MemRCmd ra;
     ra.addr = c.a_off;
     ra.len = (K * K + LW - 1) / LW;
     ra.fwd_bursts = 1;
     ra.write_framed_stream<MEM_DW>(cmd_out);
     CgDesc d;
-    d.nit = c.nit;
+    d.nit = nit;
     d.x_off = c.x_off;
     d.write_framed_stream<MEM_DW>(cmd_out);
     MemRCmd rb;

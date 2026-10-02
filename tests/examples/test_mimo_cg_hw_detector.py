@@ -9,8 +9,8 @@ Step 4.9 (``-m vitis``): ``CgDetector`` synthesizes on ``xczu48dr-ffvg1517-2-e``
 clock of at most 4 ns at K ∈ {4, 8, 16} (W12g8) and at K = 4 with W14g8.
 
 Step 4.10 (``-m xsi``): the K = 4 RTL, on problems from M = 32 channels with jobs nit = 1 … 4, is
-bit-exact for W12g8 and W14g8 (AC4's integrated check); it needs the step 4.9 csynth and skips
-loudly when that RTL is missing or stale.
+bit-exact for W12g8 and W14g8 (AC4's integrated check); so are the K = 8 and K = 16 RTL at every
+nit.  The runs need the step 4.9 csynth and skip loudly when that RTL is missing or stale.
 """
 
 from __future__ import annotations
@@ -65,6 +65,13 @@ def test_detector_with_other_knobs():
     CgDetectorSim(problems, jobs, K=8, fmt=0, L=8, C=8).run()
 
 
+def test_out_of_range_nit_is_rejected():
+    from examples.mimo_cg.hw.detector import CgDetectorTB
+
+    with pytest.raises(ValueError, match="nit must lie in 1..K"):
+        CgDetectorTB(name="t", sim=Simulation(), jobs=(17,), K=16)
+
+
 def test_detector_structure():
     det = CgDetector(name="d", sim=Simulation(), K=4, fmt=0)
     assert isinstance(det.rstream, MemRStream) and det.rstream.inband
@@ -106,20 +113,34 @@ def test_detector_csynth_meets_4_ns(K, fmt):
 # --- step 4.10: the RTL through XSI (AC4) ----------------------------------------------------
 
 
+#: The RTL runs: AC4's integrated check (K = 4 on M = 32 problems, both formats), and the K = 8 and
+#: K = 16 builds of step 4.9 (M4 review: the detector's glue and loop had run only at K = 4).
+#: (K, format, problems each run at every nit, M, cycle bound)
+RTL_RUNS = [
+    (4, "W12g8", 5, 32, 400_000),
+    (4, "W14g8", 5, 32, 400_000),
+    (8, "W12g8", 3, 64, 1_000_000),
+    (16, "W12g8", 2, 64, 2_000_000),
+]
+
+
 @pytest.mark.xsi
-@pytest.mark.parametrize("fmt", list(FRONTIER))
-def test_detector_rtl_is_bit_exact_at_m32_k4(fmt):
-    """Problems from M = 32, K = 4 channels (the last the zero-residual case), each at nit = 1..4,
-    through the K = 4 RTL: every X word equals cg_fixed's, one done per job, no deadlock.
-    """
-    d = build_dir(DET_TOP, 4, FRONTIER[fmt])
+@pytest.mark.parametrize(
+    ("K", "fmt", "n", "M", "n_cycles"),
+    RTL_RUNS,
+    ids=[f"K{r[0]}-{r[1]}" for r in RTL_RUNS],
+)
+def test_detector_rtl_is_bit_exact(K, fmt, n, M, n_cycles):
+    """Problems from M x K channels (the last the zero-residual case), each at every nit = 1..K,
+    through the K RTL: every X word equals cg_fixed's, one done per job, no deadlock."""
+    d = build_dir(DET_TOP, K, FRONTIER[fmt])
     if not (d / f"{DET_TOP}_proj").is_dir():
         pytest.skip(f"no csynth RTL at {d} -- run the step 4.9 csynth first")
     why = rtl_staleness(d, DET_TOP)
     if why is not None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
-    problems, jobs = _every_nit(32, 4, 5, seed=100 + FRONTIER[fmt])
-    sim = CgDetectorSim(problems, jobs, K=4, fmt=FRONTIER[fmt])
+    problems, jobs = _every_nit(M, K, n, seed=100 + 10 * K + FRONTIER[fmt])
+    sim = CgDetectorSim(problems, jobs, K=K, fmt=FRONTIER[fmt], n_cycles=n_cycles)
     scenario = generate_tb(d, DET_TOP, sim.tb, sim)
     proc = run_xsi(d, DET_TOP)
     assert (
@@ -128,4 +149,5 @@ def test_detector_rtl_is_bit_exact_at_m32_k4(fmt):
     assert (
         d / "xsi" / "vectors" / "out"
     ).exists(), "the XSI run produced no memory dump"
-    check_xsi_outputs(d, scenario)
+    cycles = check_xsi_outputs(d, scenario)
+    print(f"{DET_TOP} K={K} {fmt}: {len(jobs)} jobs, last done at cycle {cycles[-1]}")
