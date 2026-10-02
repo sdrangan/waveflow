@@ -82,11 +82,20 @@ over a bus adds a [memory-mapped adaptor](../interface/derived/mm_slave.md) and 
 checks that every BFM module has a C++ BFM and every port of the RTL top is covered, and
 `render_tb_harness` emits the harness: which models exist, which pins each drives, and the fixed-N
 cycle loop. The models themselves are pre-written ([`xsi_bfm.h`](../../../waveflow/build/xsi/xsi_bfm.h));
-the harness only wires them. Details: [Generating the XSI simulation](./concurrent_codegen.md).
+the harness only wires them. (The code calls the XSI simulation top the testbench — `tb_top_spec`,
+`TbSpec` — so read `tb` there as "XSI simulation top".) The full walk is the
+[XSI testbench](../comp_codegen/xsi_tb.md) page.
+
+One kind of BFM module is not generated today: a host *program* — one that reads a status register
+and decides what to write next. It is written by hand as a C++ state machine over the `AxiMmMaster`
+BFM; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
 
 **XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a
 bit-exact result *and* an exact cycle count (`mem_copy` = 2908 cycles for 16 jobs), so a count that
-moves is a real behaviour change.
+moves is a real behaviour change. The example gates run through their own build; an RTL top
+assembled without a Vitis project — hand-written Verilog and vendor IP, as in the adaptor gates —
+runs through [`XsiWorkspace`](../../../waveflow/build/xsi_workspace.py), which writes the `xvlog`
+file list and the harness and invokes the same `run.bat` / `run.sh`.
 
 > The Vitis kernel and the harness are generated from the **same** object that runs the Python golden —
 > one statement, two backends. That is what keeps the pysim model and the RTL from testing different

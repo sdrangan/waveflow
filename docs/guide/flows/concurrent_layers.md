@@ -50,8 +50,8 @@ Its components fall into two groups:
   modules are generally not intended for synthesis.
 
 Which children are inside the RTL top is decided per build — that is the
-[cut](./modules.md#the-cut). How the composite becomes a running simulation is
-[Generating the XSI simulation](./concurrent_codegen.md).
+[cut](./modules.md#the-cut). How the composite becomes a running simulation is the
+[flow steps](./concurrent_flowsteps.md) page.
 
 ### Three kinds of module
 
@@ -144,8 +144,7 @@ but not built — see `plans/design_cut.md` §S5.
   semantics, and the ordering guarantee.
 - [MM Interfaces](../interface/primitive/aximm.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
   `axi_crossbar` at RTL.
-- [Generating the XSI simulation](./concurrent_codegen.md) — how the XSI simulation top becomes a
-  harness, and how a simulation is run.
+- [Flow steps](./concurrent_flowsteps.md) — how the XSI simulation top becomes a running simulation.
 - [mm_fir](../../examples/mm_fir/) — every piece in one design: a Vitis kernel, an adaptor and a
   crossbar in the RTL top, a host program in the testbench.
 - [Memory-mapped slave adaptor](../interface/derived/mm_slave.md#the-structure) — why a kernel can
