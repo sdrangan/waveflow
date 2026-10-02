@@ -8,7 +8,6 @@ snippets: run
 api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveAdaptor, QueueView, RegBankView, BramView, render_view_slot, render_adaptor_slot, AxiXbarConfig, generate_axi_xbar]
 summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. Four views (queue in, queue out, register bank, BRAM window), each with stated semantics; one or several behind one front; the ordering guarantee and its measured scope; and where the pysim twins agree with RTL and where they do not."
 ---
-
 # Slave side — memory-mapped adaptor
 
 A free-running kernel is **reached** over the bus — a host writing its registers, another kernel
@@ -84,21 +83,21 @@ and a refused burst completes at full speed with SLVERR.
 
 ## The views
 
-| view | bus side | kernel side | RTL leaf | pysim |
-|---|---|---|---|---|
-| **queue in** | burst writes push words | an AXIS stream, TLAST from an in-band length header | `mm_queue_in.v` | `MemSlaveWStream` |
-| **queue out** | reads pop words; a status read gives the occupancy | an AXIS stream the kernel writes | `mm_queue_out.v` | `MemSlaveRStream` |
-| **register bank** | write config fields, then COMMIT; read status | one config **message** per commit; status messages the kernel pushes | `mm_regbank.v` | `MemSlaveRegBank` |
-| **BRAM window** | read / write words of a memory | the memory's other port | `mm_bram_port.v` + `bram_t2p.v` | `MemSlaveBramWindow` |
+| view                    | bus side                                           | kernel side                                                               | RTL leaf                            | pysim                  |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------- | ---------------------- |
+| **queue in**      | burst writes push words                            | an AXIS stream, TLAST from an in-band length header                       | `mm_queue_in.v`                   | `MemSlaveWStream`    |
+| **queue out**     | reads pop words; a status read gives the occupancy | an AXIS stream the kernel writes                                          | `mm_queue_out.v`                  | `MemSlaveRStream`    |
+| **register bank** | write config fields, then COMMIT; read status      | one config**message** per commit; status messages the kernel pushes | `mm_regbank.v`                    | `MemSlaveRegBank`    |
+| **BRAM window**   | read / write words of a memory                     | the memory's other port                                                   | `mm_bram_port.v` + `bram_t2p.v` | `MemSlaveBramWindow` |
 
 Every view occupies an address **window** of at least 4 KB, not one address: HLS `m_axi` issues
 only INCR bursts, so the address moves every beat, and an AXI burst may not cross a 4 KB boundary.
 
 ### Queue in
 
-| local address | write | read |
-|---|---|---|
-| anywhere in the window | push (framed, below) | the **vacancy**: free slots, `0..depth`; no side effects |
+| local address          | write                | read                                                            |
+| ---------------------- | -------------------- | --------------------------------------------------------------- |
+| anywhere in the window | push (framed, below) | the**vacancy**: free slots, `0..depth`; no side effects |
 
 - **Framing is in-band.** Each packet is `[len | data × len]`: the header's low 32 bits are the length,
   the header itself is consumed, and the leaf asserts TLAST on the last data word. Because the leaf
@@ -114,10 +113,10 @@ only INCR bursts, so the address moves every beat, and an AXI burst may not cros
 
 ### Queue out
 
-| local address | read | write |
-|---|---|---|
-| lower half | **pop** one word per beat; an **empty** queue answers 0 with SLVERR | dropped |
-| upper half | the **occupancy**: words available, `0..depth`; no side effects | dropped |
+| local address | read                                                                            | write   |
+| ------------- | ------------------------------------------------------------------------------- | ------- |
+| lower half    | **pop** one word per beat; an **empty** queue answers 0 with SLVERR | dropped |
+| upper half    | the**occupancy**: words available, `0..depth`; no side effects          | dropped |
 
 A read never waits for data: a slave that held RVALID until data arrived would hold the whole bus. The
 reader checks the occupancy, then pops. A 4 KB window's lower half is 256 words at 64 bits — one
@@ -125,11 +124,11 @@ maximal AXI4 burst. TLAST from the kernel is not carried to the bus side.
 
 ### Register bank
 
-| local address (W = window) | write | read |
-|---|---|---|
-| `[0, W/2)` | config **shadow**, word *i* at `i × bytes-per-word` | the shadow |
-| `W/2` | **COMMIT**: snapshot the shadow, send it as one packet | the number of commits so far |
-| `[3W/4, W)` | — | status word *i* of the latest **complete** message |
+| local address (W = window) | write                                                         | read                                                      |
+| -------------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| `[0, W/2)`               | config**shadow**, word *i* at `i × bytes-per-word` | the shadow                                                |
+| `W/2`                    | **COMMIT**: snapshot the shadow, send it as one packet  | the number of commits so far                              |
+| `[3W/4, W)`              | —                                                            | status word*i* of the latest **complete** message |
 
 - **Shadow and commit.** Streaming each register write would let the kernel see a half-updated
   configuration. A commit is the one event at which the configuration changes — the contract
@@ -142,6 +141,52 @@ maximal AXI4 burst. TLAST from the kernel is not carried to the bus side.
   stalls the bus until it has gone. (Measured: 87 cycles with the kernel side held off.)
 - **Status is latest-value.** The kernel pushes status messages at whatever rate it likes; a message
   becomes visible all at once when its last word (or TLAST) arrives, so a read never mixes two.
+
+#### How it works
+
+The kernel never reads the registers. `s_cfg.get_schema(Cfg)` **receives a message** — one per
+COMMIT, and nothing until the next. Between the host's writes and that message, the configuration
+lives in up to three places:
+
+| copy | where | why it exists | size |
+|---|---|---|---|
+| shadow | register bank | where the host's field writes land, one at a time | `NCFG` words |
+| snapshot | register bank | taken at COMMIT; the message is sent from it, so the host can keep writing the shadow while it drains | `NCFG` words |
+| the kernel's own | kernel state | whatever the kernel keeps to compute with | up to the kernel |
+
+There is no FIFO between the bank and the kernel: `m_cfg` is driven straight from the snapshot, one
+word per cycle.
+
+The kernel's copy is unavoidable — a kernel that uses a configuration across many samples has to hold
+it somewhere, just as a host-activated kernel latches its `s_axilite` arguments at `ap_start`. The
+snapshot is the one copy that could be dropped, at the price of stalling the host's shadow writes for
+the few cycles a message takes to drain; it costs `NCFG × DW` flip-flops (320 bits for `mm_fir`'s
+config). For a few dozen words that is negligible. For a large table — a thousand taps, a lookup
+table — copying is the wrong design: use a [BRAM window](#bram-window), which the host writes in place
+and a doorbell announces.
+
+**There is no lock, because nothing is shared that would need one.** The bank never lets the host and
+the kernel touch the same storage:
+
+- **The host only writes the shadow, and the kernel never reads it.** A write in progress has nothing
+  to collide with.
+- **COMMIT is the handoff.** At that instant the snapshot is taken, and from then on the message is
+  immutable: later shadow writes cannot reach it.
+- **The kernel only ever sees whole messages** — all `NCFG` words of one commit, in order, never half
+  of an old configuration and half of a new one.
+- **The only blocking is on the bus.** `get_schema` waits until a commit *exists*, not because a write
+  is in progress. A second COMMIT while the first message is still untaken stalls the *host's* write;
+  a write never makes the kernel wait.
+- **The kernel chooses when a new configuration takes effect.** Checking with `get_schema_nb` at a
+  safe point — between packets, or between samples — means a configuration never changes mid
+  computation: the free-running kernel's version of "registers only change between calls".
+  [mm_fir](../../../examples/mm_fir/) does this, and goes further by naming the exact sample a
+  configuration applies at.
+
+One rule remains, and it is a protocol rule rather than a hardware one: **a register bank has one
+owner.** Two masters writing fields of the same shadow at once are each served whole — the front
+serializes their transactions — but one could commit the other's half-written configuration. If two
+writers are ever needed, give each its own bank, or send complete configurations through a queue.
 
 ### BRAM window
 
@@ -172,10 +217,10 @@ Measured at RTL ([`test_mm_bram_order_xsi.py`](../../../../tests/build/test_mm_b
 host 0 writes a 256-word burst into a BRAM window, host 1 rings a doorbell two cycles later, and a
 reader reads the memory highest address first once the doorbell arrives.
 
-| | burst done | doorbell done | stale words read |
-|---|---|---|---|
-| both views behind **one front** | cycle 263 | cycle 267 | **0** |
-| each view behind **its own front** | cycle 263 | cycle 12 | **63** of 256 |
+|                                         | burst done | doorbell done | stale words read    |
+| --------------------------------------- | ---------- | ------------- | ------------------- |
+| both views behind**one front**    | cycle 263  | cycle 267     | **0**         |
+| each view behind**its own front** | cycle 263  | cycle 12      | **63** of 256 |
 
 The second row is the negative control, and it is the point: the guarantee holds behind one front and
 **not across fronts**. A design that needs "data, then doorbell" puts both views in one adaptor.
@@ -190,9 +235,9 @@ misapplied.
 
 ## One view per slot, or several behind one front
 
-| | RTL | pysim |
-|---|---|---|
-| one view per crossbar slot | `render_view_slot(view, axi, ...)` — a front and a leaf | bind each view's `s_mem` to its own crossbar slave port |
+|                                | RTL                                                                                                                 | pysim                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| one view per crossbar slot     | `render_view_slot(view, axi, ...)` — a front and a leaf                                                          | bind each view's`s_mem` to its own crossbar slave port      |
 | several views behind one front | `render_adaptor_slot(name, views, axi, ...)` — one front, a generated decoder, view *k* at local `k × 4 KB` | `MemSlaveAdaptor(views=[...])` — one slave port, `s_mem` |
 
 The second shape is what ordering statement 1 needs, and it uses one crossbar slot. The decoder routes
@@ -218,13 +263,13 @@ transaction, as the front does. It is opt-in; every other slave behaves as befor
 
 Each view's kernel side is a stream endpoint, and a kernel declares the other end:
 
-| view | the view's endpoint | the kernel's endpoint | carries |
-|---|---|---|---|
-| queue in (`MemSlaveWStream`) | `m_out` (sends) | a `StreamIFSlave`, e.g. `s_in` | one packet per length-prefixed packet the bus wrote |
-| queue out (`MemSlaveRStream`) | `s_in` (receives) | a `StreamIFMaster`, e.g. `m_out` | words for the bus to pop |
-| register bank (`MemSlaveRegBank`) | `m_cfg` (sends) | a `StreamIFSlave`, e.g. `s_cfg` | one config message per COMMIT |
-| | `s_status` (receives) | a `StreamIFMaster`, e.g. `m_status` | status messages; the bank keeps the latest |
-| BRAM window (`MemSlaveBramWindow`) | the memory's port B | `port_b_read` / `port_b_write` in pysim | words, by address |
+| view                                 | the view's endpoint     | the kernel's endpoint                       | carries                                             |
+| ------------------------------------ | ----------------------- | ------------------------------------------- | --------------------------------------------------- |
+| queue in (`MemSlaveWStream`)       | `m_out` (sends)       | a`StreamIFSlave`, e.g. `s_in`           | one packet per length-prefixed packet the bus wrote |
+| queue out (`MemSlaveRStream`)      | `s_in` (receives)     | a`StreamIFMaster`, e.g. `m_out`         | words for the bus to pop                            |
+| register bank (`MemSlaveRegBank`)  | `m_cfg` (sends)       | a`StreamIFSlave`, e.g. `s_cfg`          | one config message per COMMIT                       |
+|                                      | `s_status` (receives) | a`StreamIFMaster`, e.g. `m_status`      | status messages; the bank keeps the latest          |
+| BRAM window (`MemSlaveBramWindow`) | the memory's port B     | `port_b_read` / `port_b_write` in pysim | words, by address                                   |
 
 Here the view's prefix does tell you its direction: `m_` sends, `s_` receives.
 
@@ -377,13 +422,13 @@ change to the stream model that moves it shows up.
 
 ## Gates
 
-| | pysim | RTL (`-m xsi`) |
-|---|---|---|
-| queues | `tests/hw/test_mm_queue.py` | `tests/build/test_mm_queue_xsi.py`, `test_mm_queue_memw_xsi.py` |
-| register bank | `tests/hw/test_mm_regbank.py` | `tests/build/test_mm_regbank_xsi.py` |
-| BRAM window, ordering | `tests/hw/test_mm_bram.py` | `tests/build/test_mm_bram_order_xsi.py` |
-| several views, one front | `tests/hw/test_mm_adaptor.py` | `tests/examples/test_mm_fir_xsi.py` (both shapes) |
-| crossbar | — | `tests/build/test_axi_xbar_xsi.py` |
+|                          | pysim                           | RTL (`-m xsi`)                                                    |
+| ------------------------ | ------------------------------- | ------------------------------------------------------------------- |
+| queues                   | `tests/hw/test_mm_queue.py`   | `tests/build/test_mm_queue_xsi.py`, `test_mm_queue_memw_xsi.py` |
+| register bank            | `tests/hw/test_mm_regbank.py` | `tests/build/test_mm_regbank_xsi.py`                              |
+| BRAM window, ordering    | `tests/hw/test_mm_bram.py`    | `tests/build/test_mm_bram_order_xsi.py`                           |
+| several views, one front | `tests/hw/test_mm_adaptor.py` | `tests/examples/test_mm_fir_xsi.py` (both shapes)                 |
+| crossbar                 | —                              | `tests/build/test_axi_xbar_xsi.py`                                |
 
 ## What is not built yet
 
