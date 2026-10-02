@@ -9,20 +9,44 @@ summary: "Memory-mapped access in Waveflow: one Python model of AXI-MM traffic (
 
 # AXI-MM
 
-AXI-MM is how hardware is reached by address: a host writing a kernel's registers, a kernel reading
-a buffer in DDR, one kernel filling another's queue. This section covers all of it, in both flows.
+## Background: what AXI-MM is
 
-## One model, both flows
+**AXI** (Advanced eXtensible Interface) is the on-chip interconnect protocol of Arm's AMBA family, and
+the standard way blocks are connected on AMD FPGAs and SoCs: processors, DMA engines, memory
+controllers, peripherals, and accelerator kernels all speak it. It comes in two kinds:
 
-In Python there is **one** model of memory-mapped traffic, and both flows use it unchanged:
+- **AXI memory-mapped (AXI-MM)** — transactions carry an **address**. A *read* asks for the words at an
+  address; a *write* delivers words to one. This is how a processor programs a peripheral's registers,
+  how a kernel reads a buffer in DDR, and how one block fills another's memory.
+- **AXI-Stream** — no addresses at all: data flows from producer to consumer in order, with a
+  valid/ready handshake per word. In Waveflow that is a [`StreamIF`](../primitive/stream.md), and it is
+  what free-running kernels use between themselves.
 
-- an **`MMIFMaster`** issues reads and writes — in bursts, typed or raw;
-- an **`MMIFSlave`** answers them, through callbacks a module supplies;
-- they are joined either one-to-one by a **`DirectMMIF`**, or many-to-many by an **`AXIMMCrossBarIF`**
-  that routes each transaction by address.
+Every AXI-MM connection has two sides:
 
-[Modeling memory-mapped traffic](./modeling.md) is that model in detail — endpoints, interconnects,
-the latency model.
+- the **master** *initiates* each transaction — it presents the address and asks to read or write;
+- the **slave** *responds* — it decodes the address and returns or accepts the data.
+
+A master may reach several slaves, and a slave may be reached by several masters, through an
+**interconnect** (a *crossbar*) that routes each transaction to the slave owning its address. AXI-MM
+comes in two strengths: full **AXI4**, whose transactions are *bursts* of up to 256 words, used for
+memory; and **AXI4-Lite**, one word per transaction, used for control registers.
+
+## In Waveflow, AXI-MM is an interface
+
+Waveflow models AXI-MM as an **interface** — the same kind of object as a stream: something that
+connects modules and carries transactions between them. The interface has a **master side** and a
+**slave side**, and a module takes part by owning an endpoint on one of them:
+
+- an **`MMIFMaster`** endpoint issues reads and writes — in bursts, typed or raw;
+- an **`MMIFSlave`** endpoint answers them, through callbacks its module supplies;
+- the interface that joins them is either a **`DirectMMIF`** (one master to one slave) or an
+  **`AXIMMCrossBarIF`** (many masters to many slaves, routing each transaction by address — the
+  crossbar).
+
+There is **one** such model, and both flows use it unchanged. [Modeling memory-mapped
+traffic](./modeling.md) is that model in detail — endpoints, interconnects, the latency model. The rest
+of this page is about how each side becomes hardware, which is where the flows differ.
 
 ## What decides the realization: what Vitis HLS can generate
 
