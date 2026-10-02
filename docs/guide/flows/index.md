@@ -32,7 +32,17 @@ channels. It has no start/done handshake, so Vitis co-sim refuses it; verificati
 elaborated RTL cycle-by-cycle through an **XSI BFM**. Toy example throughout: `mem_copy`
 (`examples/mem_copy/`). Targets: `composite_kernel` + `sequential_xsi_tb`.
 
-<!-- One-paragraph pros/cons/when-to-use per flow can go here or in each sub-section's index. -->
+## Where the work is going
+
+The concurrent flow is the only one that can express **concurrency**: several tasks running at once,
+streams between them, memory shared between them, kernels reached over a bus by a host or by one
+another — and RTL verification that is cycle-accurate across all of it. Most designs worth
+accelerating need some of that, so we expect most of Waveflow's development — new interfaces, new
+kinds of module, timing models calibrated against RTL — to land in this flow.
+
+The sequential flow stays. It is the shortest path from a Python function to a verified kernel, it is
+where the examples start, and a control-driven kernel is the right realization for work a host
+genuinely launches one call at a time.
 
 A third path — the full system on the fabric (an FPGA `bitstream` via Vivado IPI, no testbench, host
 software drives it) — is future work; it is not one of the two simulation flows above.

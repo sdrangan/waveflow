@@ -37,7 +37,7 @@ way. Knowing which layer an object lands in is most of what it takes to read a g
 ## Where each pysim object lands
 
 The same Python class can land in different layers in different builds — that is the
-[cut](./concurrent.md#dut-tb-boundary) — but each kind of object has a usual home:
+[cut](./modules.md#the-cut) — but each kind of object has a usual home:
 
 | pysim object | layer at RTL | as |
 |---|---|---|
@@ -95,6 +95,40 @@ graph:
 list (generated IP sources, hand-written leaves, csynth's Verilog, the top) and the testbench, and
 runs. It needs no Vitis project for the parts that have none, which is what the adaptor and crossbar
 gates use.
+
+## Moving the cut: what it costs today {#moving-the-cut}
+
+Which modules are inside the Vitis top is [a property of the build, not of the
+class](./modules.md#the-cut) — so in principle a module moves between layers by changing only the
+cut. The capability is real in the **graph** and not yet real in the **artifact**, and it is worth
+being precise about which is which.
+
+`MemRStream` genuinely is generated at two cuts: as its own top
+([`examples/interleaver/gen/mem_r_stream.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/gen/mem_r_stream.cpp),
+XSI gate **158**) and as a task inside `mem_copy`
+([`examples/mem_copy/gen/mem_copy.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/gen/mem_copy.cpp),
+gate **2908**). But those two are **two protocols**, not one module at two cuts: the standalone one
+reads an `MRCmd` and bursts; the composite one reads a `MemRCmd` and relays `fwd_bursts` opaque
+bursts first. `inband` is a `HwParam` — a build-time parameter of the *design* — precisely because it
+selects a protocol, and the framing follows from the protocol rather than the other way round.
+
+Holding the protocol fixed and moving *only* the cut does not work yet. Ask the generator for the
+in-band reader as a standalone top and it will emit this:
+
+```cpp
+void mem_r_stream(hls::stream<ap_uint<64> >& s_cmd, ...) {          // plain words at the boundary
+    hls_thread_local hls::task t0(mem_r_stream_framed_task<64>, s_cmd, m_mem, m_out);
+}                                          // ...but the body's signature demands framed_word<64>
+```
+
+That does not compile, and nothing in Python catches it. The task body's argument word types are not
+part of `kernel_task()`'s contract, so the generator cannot check them — and the obvious proxy does
+not work either: `mem_copy`'s own `s_done` endpoint is `has_tlast=True` in Python while
+`mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and that design is the 2908
+gate. The Python framing flag and the C++ word type already disagree on a *working* design.
+
+Making the cut free in the artifact means teaching `kernel_task()` about the cut. That is designed
+but not built — see `plans/design_cut.md` §S5.
 
 ## See also
 
