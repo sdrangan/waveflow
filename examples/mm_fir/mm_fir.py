@@ -32,6 +32,7 @@ golden :func:`fir_golden` is bit-exact by construction.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 
@@ -124,8 +125,17 @@ def _s16(w: int) -> int:
 class MmFir(FreeRunMod):
     """The FIR kernel: streams only.  One firing = one config, one sample packet, or one idle cycle."""
 
+    cpp_kernel_name: ClassVar[str | None] = "mm_fir"
+    cpp_namespace: ClassVar[str | None] = "mm_fir_impl"
+
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
+
+    def kernel_task(self):
+        """The hand-written HLS body, ``include/mm_fir_task.h`` -- the twin of :meth:`run_iter`."""
+        from waveflow.hw.mem_stream import KernelTask
+        return KernelTask("mm_fir_task", "mm_fir_task.h", ("s_cfg", "s_in", "m_out", "m_status"),
+                          template_args=(DW,))
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -137,7 +147,9 @@ class MmFir(FreeRunMod):
         for ep in (self.s_cfg, self.s_in, self.m_out, self.m_status):
             self.add_endpoint(ep)
         self.taps = np.zeros(0, dtype=np.int64)
-        self.pending: list[tuple[int, np.ndarray]] = []     # received, not yet in force
+        #: ONE pending slot -- ``(apply_at, taps)`` received but not yet in force -- as in the RTL.
+        #: A config arriving while one is pending first puts the pending one in force.
+        self.pending: tuple[int, np.ndarray] | None = None
         self.hist = np.zeros(NTAP_MAX, dtype=np.int64)      # hist[k] = x[n-1-k]
         self.nsamp = 0
         self.ncfg = 0
@@ -155,16 +167,17 @@ class MmFir(FreeRunMod):
             if at < self.nsamp:
                 self.late += 1
                 at = self.nsamp                     # too late for its sample: in force from now
-            self.pending.append((at, taps))
-            self.pending.sort(key=lambda p: p[0])
+            if self.pending is not None:            # superseded: in force now, as the RTL does
+                self.taps = self.pending[1]
+            self.pending = (at, taps)
             yield from self._publish()
             return
         if self.s_in.data_buffer.items:
             pkt = yield from self.s_in.get()
             out = np.zeros(len(pkt), dtype=np.uint64)
             for i, w in enumerate(np.asarray(pkt).tolist()):
-                while self.pending and self.pending[0][0] <= self.nsamp:
-                    self.taps = self.pending.pop(0)[1]
+                if self.pending is not None and self.pending[0] <= self.nsamp:
+                    self.taps, self.pending = self.pending[1], None
                 xn = _s16(int(w))
                 window = np.concatenate([[xn], self.hist[:NTAP_MAX - 1]])
                 acc = int(np.dot(self.taps, window[:len(self.taps)])) if len(self.taps) else 0

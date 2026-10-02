@@ -83,7 +83,12 @@ import pytest
 #:
 #: 132 -> 134 on 2026-10-02 (``plans/mm_slave_adaptor.md`` Stage 2): ``test_mm_regbank_xsi.py``, the
 #: register bank beside two queue windows behind one crossbar (functional + exact-cycle).
-WANT_XSI_GATES = 134
+#:
+#: 134 -> 136 on 2026-10-02 (``plans/mm_slave_adaptor.md``, the mm_fir witness, rung 3):
+#: ``tests/examples/test_mm_fir_xsi.py`` -- the csynth'd mm_fir kernel behind the adaptor, bit-exact
+#: against the numpy golden through a mid-stream tap switch, plus its cycle count.  Needs
+#: ``python -m examples.mm_fir.mm_fir_build``, so it CAN skip.
+WANT_XSI_GATES = 136
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
