@@ -4,6 +4,7 @@ parent: AXI-MM
 grand_parent: Interfaces
 nav_order: 3
 audience: python
+snippets: run
 api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveAdaptor, QueueView, RegBankView, BramView, render_view_slot, render_adaptor_slot, AxiXbarConfig, generate_axi_xbar]
 summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. Four views (queue in, queue out, register bank, BRAM window), each with stated semantics; one or several behind one front; the ordering guarantee and its measured scope; and where the pysim twins agree with RTL and where they do not."
 ---
@@ -26,18 +27,33 @@ becomes *as a message*.
 
 ## The structure
 
-```
-           AXI4-full (from the crossbar)
-                    │
-          ┌─────────▼─────────┐
-          │  axi_slave_front  │   one AXI transaction in service at a time
-          └─────────┬─────────┘
-                    │  request bus: req (valid/ready, we, addr, wdata) + rsp (valid/ready, rdata, err)
-         ┌──────────┼──────────┬──────────────┐        (generated decoder when there are several)
-   mm_queue_in  mm_queue_out  mm_regbank   mm_bram_port ─▶ bram_t2p port A
-         │          ▲          │    ▲                         port B ◀─▶ kernel
-         ▼ axis     │ axis     ▼    │ axis
-                 kernel (a kernel module, in the Vitis kernel)
+```mermaid
+flowchart TB
+  X["AXI crossbar"]
+  subgraph ad["slave adaptor — RTL modules"]
+    direction TB
+    F["axi_slave_front<br/>one AXI transaction at a time"]
+    D{{"decoder<br/>(generated, when several views)"}}
+    QI["mm_queue_in"]
+    QO["mm_queue_out"]
+    RB["mm_regbank"]
+    BP["mm_bram_port"]
+    BR[("bram_t2p")]
+    F -->|"request bus"| D
+    D --> QI
+    D --> QO
+    D --> RB
+    D --> BP
+    BP -->|"port A"| BR
+  end
+  K["kernel<br/>(a kernel module, in the Vitis kernel)"]
+
+  X -->|"AXI4-full"| F
+  QI -->|"stream"| K
+  K -->|"stream"| QO
+  RB -->|"config messages"| K
+  K -->|"status messages"| RB
+  BR <-->|"port B"| K
 ```
 
 - **`axi_slave_front.v`** is the only module that speaks AXI. It turns each beat into one request on
@@ -184,28 +200,11 @@ a request by the address bits above 12, takes the read response from the view th
 (one read outstanding, so a latched select is enough), and answers an address in the span's unused
 tail with SLVERR so a stray read cannot hang the bus.
 
-In pysim:
+In pysim the second shape is a `MemSlaveAdaptor`; [Using it from a kernel](#using-it-from-a-kernel)
+builds one.
 
-```python
-from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
-from waveflow.hw.mm_adaptor import MemSlaveAdaptor
-from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
-from waveflow.hw.mm_regbank import MemSlaveRegBank
-
-regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=FirCfg, status_type=FirStatus)
-qin = MemSlaveWStream(name="qin", sim=sim, depth=64)
-qout = MemSlaveRStream(name="qout", sim=sim, depth=64)
-adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, views=[regs, qin, qout])   # 0x0000, 0x1000, 0x2000
-
-xbar.bind("slave_0", adaptor.s_mem)
-assign_address_ranges([adaptor.s_mem], [(0x0000, adaptor.span())])
-# each view's kernel side is an ordinary stream: regs.m_cfg, regs.s_status, qin.m_out, qout.s_in
-```
-
-Two pysim details follow from the RTL. The stream channel a queue drives **is** its FIFO, so its
-`depth` must equal the view's (checked at start), and the channel on `regs.m_cfg` must hold exactly
-one config packet — the RTL's snapshot register. And `MemSlaveAdaptor`'s port is declared both
-`half_duplex` and `serialize_transactions`, the second of which needs a word of explanation.
+`MemSlaveAdaptor`'s port is declared both `half_duplex` and `serialize_transactions`, the second of
+which needs a word of explanation.
 
 ### `serialize_transactions`
 
@@ -214,6 +213,152 @@ channel only while the slave's callback runs. For a memory that is harmless. For
 wrong: a short doorbell issued after a long burst reached the views first — the opposite of the RTL.
 `MMIFSlave.serialize_transactions = True` makes the crossbar hold the channel for the whole
 transaction, as the front does. It is opt-in; every other slave behaves as before.
+
+## Using it from a kernel
+
+Each view's kernel side is a stream endpoint, and a kernel declares the other end:
+
+| view | the view's endpoint | the kernel's endpoint | carries |
+|---|---|---|---|
+| queue in (`MemSlaveWStream`) | `m_out` (sends) | a `StreamIFSlave`, e.g. `s_in` | one packet per length-prefixed packet the bus wrote |
+| queue out (`MemSlaveRStream`) | `s_in` (receives) | a `StreamIFMaster`, e.g. `m_out` | words for the bus to pop |
+| register bank (`MemSlaveRegBank`) | `m_cfg` (sends) | a `StreamIFSlave`, e.g. `s_cfg` | one config message per COMMIT |
+| | `s_status` (receives) | a `StreamIFMaster`, e.g. `m_status` | status messages; the bank keeps the latest |
+| BRAM window (`MemSlaveBramWindow`) | the memory's port B | `port_b_read` / `port_b_write` in pysim | words, by address |
+
+Here the view's prefix does tell you its direction: `m_` sends, `s_` receives.
+
+A complete, runnable example: a kernel that waits for a gain in the register bank, then multiplies
+every sample it is sent by it. First the two messages the register bank carries:
+
+```python
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.mm_adaptor import MemSlaveAdaptor
+from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
+from waveflow.hw.mm_regbank import MemSlaveRegBank
+from waveflow.simulation.simobj import SimObj
+from waveflow.simulation.simulation import Simulation
+
+U32 = IntField.specialize(bitwidth=32, signed=False)
+
+
+class Cfg(DataList):
+    elements = {"gain": U32}
+
+
+class Status(DataList):
+    elements = {"nsamp": U32}
+```
+
+The kernel. Its four endpoints are the other ends of the views' four streams, and it never sees an
+address:
+
+```python
+@dataclass
+class Scale(FreeRunMod):
+    """Waits for a config, then multiplies every sample by its gain."""
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.s_cfg = StreamIFSlave(name=f"{self.name}_s_cfg", sim=self.sim, bitwidth=64)      # <- regs.m_cfg
+        self.m_status = StreamIFMaster(name=f"{self.name}_m_status", sim=self.sim, bitwidth=64)  # -> regs.s_status
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)        # <- qin.m_out
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)     # -> qout.s_in
+        for ep in (self.s_cfg, self.m_status, self.s_in, self.m_out):
+            self.add_endpoint(ep)
+        self.gain = None
+        self.nsamp = 0
+
+    def run_iter(self):
+        if self.gain is None:                          # first firing: the config
+            cfg = yield from self.s_cfg.get_schema(Cfg)
+            self.gain = int(cfg.gain)
+            return
+        pkt = yield from self.s_in.get()               # one packet of samples (TLAST = its end)
+        yield from self.m_out.write(np.asarray(pkt, dtype=np.uint64) * self.gain)
+        self.nsamp += len(pkt)
+        yield from self.m_status.write(Status(nsamp=self.nsamp))
+```
+
+A host program, holding an `MMIFMaster`: it stages the config and commits it, pushes one packet of
+four samples (the length goes first — queue in frames in-band), waits until queue out holds all four
+results, pops them, and reads the status:
+
+```python
+@dataclass
+class Host(SimObj):
+    """Configure, push one packet, wait for the results, read them and the status."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=64)
+
+    def run_proc(self):
+        REGS, QIN, QOUT = 0x0000, 0x1000, 0x2000
+        yield from self.m.write(np.asarray(Cfg(gain=3).serialize(word_bw=64)), REGS)  # the shadow
+        yield from self.m.write(np.array([1], dtype=np.uint64), REGS + 0x800)        # COMMIT
+        yield from self.m.write(np.array([4, 1, 2, 3, 4], dtype=np.uint64), QIN)     # [len | samples]
+        while int((yield from self.m.read(1, QOUT + 0x800))[0]) < 4:                 # occupancy
+            yield self.env.timeout(10e-9)
+        print("results:", [int(w) for w in (yield from self.m.read(4, QOUT))])        # pop
+        st = Status().deserialize((yield from self.m.read(1, REGS + 0xC00)), word_bw=64)
+        print("status: nsamp =", int(st.nsamp))
+```
+
+The wiring: the three views behind one adaptor port at `0x0000`, `0x1000` and `0x2000`, their kernel
+sides joined to the kernel with plain streams, and the host reaching the adaptor through a crossbar.
+
+```python
+sim = Simulation()
+clk = Clock(freq=100e6)
+regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=Cfg, status_type=Status, clk=clk)
+qin = MemSlaveWStream(name="qin", sim=sim, depth=16, clk=clk)
+qout = MemSlaveRStream(name="qout", sim=sim, depth=16, clk=clk)
+adaptor = MemSlaveAdaptor(name="mm", sim=sim, views=[regs, qin, qout])   # 0x0000, 0x1000, 0x2000
+kern = Scale(name="kern", sim=sim, clk=clk)
+host = Host(name="host", sim=sim)
+
+for name, master, slave, depth in (("cfg", regs.m_cfg, kern.s_cfg, regs.ncfg),
+                                   ("status", kern.m_status, regs.s_status, 4),
+                                   ("in", qin.m_out, kern.s_in, 16),
+                                   ("out", kern.m_out, qout.s_in, 16)):
+    s = StreamIF(name=name, sim=sim, clk=clk, bitwidth=64, depth=depth)
+    s.bind(ep_name="master", endpoint=master)
+    s.bind(ep_name="slave", endpoint=slave)
+
+xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=1, bitwidth=64)
+xbar.bind("master_0", host.m)
+xbar.bind("slave_0", adaptor.s_mem)
+assign_address_ranges([adaptor.s_mem], [(0x0000, adaptor.span())])
+
+sim.run_sim()
+```
+
+```text
+results: [3, 6, 9, 12]
+status: nsamp = 4
+```
+
+Two depths in the wiring are not free choices, and the views check them when the simulation starts:
+a queue's stream channel **is** its FIFO, so its depth is the queue's; and the channel on `regs.m_cfg`
+holds exactly one config packet (`regs.ncfg` words), because the RTL register bank has one snapshot
+register.
+
+**The views' streams need not go to one kernel module.** As on the [master
+side](./master.md#splitting-the-endpoints), each view's stream is an ordinary stream, so a design can
+send the configuration to one stage and the samples to another. What it cannot assume is any order
+*between* those streams — that is ordering statement 2 above, and the reason
+[mm_fir](../../../examples/mm_fir/) carries `apply_at` in its config.
 
 ## The crossbar
 
