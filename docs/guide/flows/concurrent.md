@@ -111,6 +111,9 @@ but not built — see `plans/design_cut.md` §S5.
   `run_iter` (one firing) versus a composite's graph, and carrying state across firings.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the component graph to a
   generated top, generated XSI harness, and an exact cycle-count check.
+- **[The layers of a design](./concurrent_layers.md)** — what the generated top sits inside at RTL:
+  the RTL top that joins it to hand-written Verilog, the memory-mapped adaptor and the AXI crossbar,
+  and the XSI harness around that; which pysim object lands in which layer.
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
   (`Sequencer → MemRStream → MemWStream`), the generated `ap_ctrl_none` top, the generated XSI
   testbench, and the RTL/XSI verification.

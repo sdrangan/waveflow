@@ -27,6 +27,7 @@ underneath** — and that difference is worth knowing before you wire one up.
 | [Credit Stream](./credit_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
 | [Acked Stream](./acked_stream.md) | **declares** two `StreamIF`s and exposes them; wiring is automatic |
 | [AXI-MM Command Queue](./mmqueue.md) | a protocol *over* an `MMIFMaster` — the ring lives in the transactions, not in a new channel |
+| [Memory-mapped slave adaptor](./mm_slave.md) | an `MMIFSlave` on the bus side, ordinary streams on the kernel side — the adaptor between them is hand-written RTL |
 
 The two reverse channels declare their composition, so a walk over the design finds the underlying
 streams without help:
@@ -66,6 +67,9 @@ copies.
 
 - [AXI-MM Command Queue](./mmqueue.md) — the in-memory command ring (`AXIMMQueue`): control moved
   off the stream and into shared memory, over an `MMIFMaster`.
+- [Memory-mapped slave adaptor](./mm_slave.md) — how a kernel is *reached* over the bus: queues,
+  a register bank and a BRAM window behind one AXI slave port, each turning transactions into stream
+  messages; the ordering guarantee and its scope.
 - [Credit Stream](./credit_stream.md) — the receiver's reverse channel: cumulative words consumed,
   so a producer that cannot be stalled can ask about room *before* it commits.
 - [Acked Stream](./acked_stream.md) — the transmitter's reverse channel: one outcome per marked

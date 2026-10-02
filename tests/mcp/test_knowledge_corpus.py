@@ -2,7 +2,7 @@
 
 ``test_every_toc_page_names_a_real_example_dir`` is the one the plan calls for
 by name.  It exists because ``example_dir:`` is the *only* thing connecting a
-docs page to the source it documents, three of the fourteen have a directory
+docs page to the source it documents, three of the fifteen have a directory
 name that differs from the page name, and a rename that misses the front
 matter would silently drop an example out of the corpus with no other symptom.
 """
@@ -22,7 +22,7 @@ from waveflow.mcp.knowledge import (
 from waveflow.mcp.knowledge.corpus import TOC_DIR, parse_front_matter
 from waveflow.mcp.knowledge.roots import repo_root
 
-#: The docs TOC as of 2026-09-29.  Pinned so that *adding* an example is a
+#: The docs TOC as of 2026-10-02 (mm_fir added).  Pinned so that *adding* an example is a
 #: deliberate two-line change rather than something that happens by accident,
 #: and so the count in the plan stays honest.
 TOC_EXAMPLES = {
@@ -31,6 +31,7 @@ TOC_EXAMPLES = {
     "firblock",
     "interleaver",
     "memcpy",
+    "mm_fir",
     "mmqueue",
     "regmap",
     "rf_loopback",

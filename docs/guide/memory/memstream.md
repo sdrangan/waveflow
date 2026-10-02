@@ -115,6 +115,12 @@ decides what the tag means (a job index, a demux route, a source id) and reads i
 completion to correlate. It is what makes many in-flight jobs — and the multi-unit arbitration above —
 tractable without the memory stage holding any per-job state.
 
+> **The other side of the bus.** `MemRStream` / `MemWStream` let a kernel *drive* the bus. To be
+> *reached* over it — a queue a host writes, registers it sets, a memory it fills — a kernel gets a
+> [memory-mapped slave adaptor](../interface/derived/mm_slave.md) in the RTL top. The two meet: a
+> kernel with a `MemWStream` writes into another kernel's queue window just by pointing its base
+> address there.
+
 > **Composing these into a kernel** (a memcpy: `MemRStream` → `MemWStream`) is a separate topic — see
 > the [MemCopy example](../../examples/memcpy/), which drives the two with a sequencer and uses a
 > richer *in-band framed* command protocol so a store command can never separate from the data it
