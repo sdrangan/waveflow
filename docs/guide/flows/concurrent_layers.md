@@ -44,12 +44,26 @@ An XSI simulation has two parts:
 - **The RTL top** — one Verilog module, the design under test. It is what `xsim` elaborates.
 - **The testbench** — every BFM around it, each driving or answering some of the RTL top's pins.
 
-In Python the whole thing is a **testbench graph**: a composite `FreeRunMod` (in the
+In Python the whole thing is the **XSI simulation top**: a composite `FreeRunMod` (in the
 [mem_copy example](../../examples/memcpy/), `MemCopyTB`) whose children are the design under test and
-the participants around it, wired by interfaces exactly as in pysim. `tb_top_spec` walks that graph,
-and `render_tb_harness` emits the **harness**: the C++ program that constructs the testbench's models,
-binds each to its pins, and runs the cycle loop. Which children are inside the RTL top is decided per
-build — that is the [cut](./modules.md#the-cut).
+the testbench participants around it, wired by interfaces exactly as in pysim. It needs no special
+attribute; what makes it an XSI simulation top is what two framework functions in
+[`composite_gen.py`](../../../waveflow/build/composite_gen.py) can do with it. (The code calls this
+composite the testbench — `tb_top_spec`, `TbSpec` — so read `tb` there as "XSI simulation top".)
+
+- **`tb_top_spec(top, dut=None)` checks it and describes it.** It picks the design under test — the
+  child named by `dut=`, or else the one child with a `boundary` — and walks that child's boundary
+  ports. For each port it finds the participant wired to it and resolves the participant's BFM,
+  refusing the design if a participant declares none, names a model class that does not exist, or
+  leaves a port uncovered. The result, a `TbSpec`, is plain data: which model sits on which pins.
+- **`render_tb_harness(spec)` renders that description** as the **harness**: the C++ that constructs
+  the testbench's models, binds each to its pins, and runs the cycle loop. It checks nothing and
+  generates no model code — the BFMs are pre-written, and the harness only instantiates and wires
+  them. The design under test is generated separately, from its own graph, by `composite_top_spec`
+  and `render_top`.
+
+Which children are inside the RTL top is decided per build — that is the
+[cut](./modules.md#the-cut).
 
 ### Three ways to be realized
 
@@ -151,7 +165,7 @@ graph:
   ([`examples/mm_fir/mm_fir_xsi.py`](../../../examples/mm_fir/mm_fir_xsi.py)), not read off the module
   graph. Teaching `wrapper_gen` to emit it is the first item under *Remaining* in
   `plans/mm_slave_adaptor.md`.
-- **Testbench graph → harness:** generated, for stream and memory models. A host *program* — a
+- **XSI simulation top → harness:** generated, for stream and memory models. A host *program* — a
   sequence of bus transactions with decisions in it — is written as a C++ state machine over
   `AxiMmMaster` (again in `mm_fir_xsi.py`).
 
@@ -203,7 +217,7 @@ but not built — see `plans/design_cut.md` §S5.
   semantics, and the ordering guarantee.
 - [MM Interfaces](../interface/primitive/aximm.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
   `axi_crossbar` at RTL.
-- [XSI testbench in HLS](../comp_codegen/xsi_tb.md) — how the harness is generated from the testbench
-  graph.
+- [XSI testbench in HLS](../comp_codegen/xsi_tb.md) — how the harness is generated from the XSI
+  simulation top.
 - [mm_fir](../../examples/mm_fir/) — every piece in one design: a Vitis kernel, an adaptor and a
   crossbar in the RTL top, a host program in the testbench.
