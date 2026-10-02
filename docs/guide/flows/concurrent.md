@@ -56,7 +56,7 @@ stages should run concurrently — anything that benefits from pipelining rather
   memory-mapped adaptor, the AXI crossbar) and the testbench of BFMs around it; which pysim object
   lands where.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the component graph to a
-  generated Vitis top, generated XSI harness, and an exact cycle-count check.
+  generated Vitis kernel, generated XSI harness, and an exact cycle-count check.
 - **[Generating the XSI simulation](./concurrent_codegen.md)** — how the XSI simulation top becomes
   a C++ harness (`tb_top_spec`, `render_tb_harness`), and how a simulation is run.
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
