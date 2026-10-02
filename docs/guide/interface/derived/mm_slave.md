@@ -249,7 +249,7 @@ change to the stream model that moves it shows up.
 ## What is not built yet
 
 - The adaptor is assembled by example code (which views, which addresses, which kernel ports), not
-  emitted by `wrapper_gen` from the module graph — see [The layers of a design](../../flows/concurrent_layers.md#what-is-generated-today-and-what-is-not).
+  emitted by `wrapper_gen` from the module graph — see [XSI simulation components](../../flows/concurrent_layers.md#what-is-generated-today-and-what-is-not).
 - No host header is generated from the address map yet.
 - The BRAM window's kernel side is plain `port_b_read` / `port_b_write` in pysim, not yet a `BramIF`,
   and has no ownership (lock) stream.

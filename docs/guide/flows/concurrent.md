@@ -51,9 +51,10 @@ stages should run concurrently — anything that benefits from pipelining rather
 
 - **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
   `run_iter` (one firing) versus a composite's graph, and carrying state across firings.
-- **[The layers of a design](./concurrent_layers.md)** — what the generated top sits inside at RTL:
-  the RTL top that joins it to hand-written Verilog, the memory-mapped adaptor and the AXI crossbar,
-  and the XSI harness around that; which pysim object lands in which layer.
+- **[XSI simulation components](./concurrent_layers.md)** — Python DES versus XSI simulation, and
+  what an XSI simulation is made of: the RTL top (the Vitis kernel, hand-written Verilog, the
+  memory-mapped adaptor, the AXI crossbar) and the testbench of BFMs around it; which pysim object
+  lands where.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the component graph to a
   generated Vitis top, generated XSI harness, and an exact cycle-count check.
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
