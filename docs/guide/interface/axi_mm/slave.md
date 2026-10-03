@@ -202,11 +202,21 @@ The second row is the negative control, and it is the point: the guarantee holds
 
 **2. Order across two kernel-side streams is not preserved.** Once a config message and data words
 travel on different streams, the kernel can read them in either order, whatever order they were
-written in. A protocol that needs cross-stream order says so **in the messages**. In
-[mm_fir](../../../examples/mm_fir/) a config carries `apply_at`, the sample index it takes effect at;
-the host waits until the status shows the config *received* before sending that sample; and a config
-that arrives after its sample is applied at once and counted `late` — detected, never silently
-misapplied.
+written in. A protocol that needs cross-stream order says so **in the messages**.
+
+The recipe [mm_fir](../../../examples/mm_fir/) uses is a **sequence number**:
+
+- configs are numbered by when they are committed — the *k*-th COMMIT is config *k*;
+- every data packet carries, in an in-band header on the data stream, the number of the config it
+  needs (`cfg_seq`);
+- the kernel, on reading a header, takes configs until it has taken `cfg_seq` of them — waiting if
+  that config has not arrived — and only then reads the data.
+
+A packet can then use neither an older config (the kernel waits for the one it names) nor a newer one
+(a config nobody has asked for stays in its stream), so the host commits a config and sends the data
+that needs it in either order, and never asks whether the config arrived. The wait is on the kernel's
+own stream, not on the bus. mm_fir also has the kernel echo, per packet, the `cfg_seq` it actually
+used into a response queue, so the host can check the order end to end.
 
 ## Using it from a kernel
 
@@ -358,7 +368,7 @@ register.
 side](./master.md#splitting-the-endpoints), each view's stream is an ordinary stream, so a design can
 send the configuration to one stage and the samples to another. What it cannot assume is any order
 *between* those streams — that is ordering statement 2 above, and the reason
-[mm_fir](../../../examples/mm_fir/) carries `apply_at` in its config.
+[mm_fir](../../../examples/mm_fir/) puts a config sequence number in each packet's header.
 
 ## What is not built yet
 

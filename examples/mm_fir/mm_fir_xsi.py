@@ -34,6 +34,7 @@ from examples.mm_fir.mm_fir import (
     QRESP,
     RDEPTH,
     REGS,
+    S16,
     FirCfg,
     FirCmdHdr,
     FirRespHdr,
@@ -41,6 +42,7 @@ from examples.mm_fir.mm_fir import (
     host_schedule,
     make_cfg,
 )
+from waveflow.hw.arrayutils import array
 from waveflow.build.axi_xbar import (
     AxiXbarConfig,
     AxiXbarRange,
@@ -173,12 +175,12 @@ def render_tb(dll: str, x) -> str:
     rows, tx = [], 0
     for item in host_schedule(len(x), PLAN, PKT):
         if item[0] == "cfg":
-            rows.append(f"    {{CFG, {{{hexes(make_cfg(item[1]).serialize(word_bw=DW))}}}, {{}}, 0u, 0u}},")
+            rows.append(f"    {{CFG, {{{hexes(make_cfg(item[1]).serialize(word_bw=DW))}}}, {{}}, 0u, 0u, 0u}},")
         else:
             _, n0, n1, tag, want = item
             hdr = FirCmdHdr(nsamp=n1 - n0, tx_id=tx, cfg_seq=tag).serialize(word_bw=DW)
-            samples = [int(v) & 0xFFFF for v in x[n0:n1]]
-            rows.append(f"    {{PKT, {{{hexes(hdr)}}}, {{{hexes(samples)}}}, {tx}u, {want}u}},")
+            samples = array(S16, np.asarray(x[n0:n1], dtype=np.int64)).serialize(word_bw=DW)
+            rows.append(f"    {{PKT, {{{hexes(hdr)}}}, {{{hexes(samples)}}}, {n1 - n0}u, {tx}u, {want}u}},")
             tx += 1
     f_nsamp = field_pos(FirStatus, "nsamp")
     f_ncfg = field_pos(FirStatus, "ncfg")
@@ -198,8 +200,9 @@ using namespace wfbfm;
 
 enum {{ CFG = 0, PKT = 1 }};
 /// One schedule entry: a config (words = the FirCfg), or a packet (words = its FirCmdHdr, samples =
-/// its samples, tx / want = the response the host expects back).
-struct Item {{ int kind; std::vector<uint64_t> words, samples; uint32_t tx, want; }};
+/// its samples as the serializer packs them -- four int16 to a word -- nsamp = how many, tx / want = the
+/// response the host expects back).
+struct Item {{ int kind; std::vector<uint64_t> words, samples; uint32_t nsamp, tx, want; }};
 static const std::vector<Item> SCHEDULE = {{
 {chr(10).join(rows)}
 }};
@@ -270,7 +273,7 @@ public:
         }}
         if (phase_ == IDLE) {{
             while (i_ < SCHEDULE.size() && SCHEDULE[i_].kind != PKT) ++i_;
-            if (i_ < SCHEDULE.size()) {{ qout_.start((uint32_t)SCHEDULE[i_].samples.size()); phase_ = READ; }}
+            if (i_ < SCHEDULE.size()) {{ qout_.start(SCHEDULE[i_].nsamp); phase_ = READ; }}
             else {{ st_.start(0); phase_ = STATUS; }}
         }}
     }}

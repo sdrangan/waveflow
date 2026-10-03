@@ -1,7 +1,7 @@
 # Plan: mm_fir on the in-band command-header pattern, with a config sequence number
 
-> **Status (2026-10-03): proposed, building.** Follows `plans/mm_adaptor_host_endpoints.md` on branch
-> `mm-host-endpoints`.
+> **Status (2026-10-03): BUILT** (branch `mm-host-endpoints`, unpushed). RTL bit-exact, 768 / 783.
+> Where the build departed from the text below, the **Built** section at the end says so.
 
 ## Why
 
@@ -67,3 +67,25 @@ none on the unframed-get truncation hazard recorded in `plans/mm_adaptor_host_en
 `examples/mm_fir/mm_fir.py` (schemas, kernel, host), `include/mm_fir_task.h` (HLS body), csynth,
 `mm_fir_build.py` (the new header struct), `mm_fir_xsi.py` (C++ host), tests, the mm_fir docs, and the
 slave page's ordering section.
+
+## Built
+
+- **A response FIFO was added** (the user's idea, mid-build): a second memory-mapped queue out,
+  `qresp` at `0x3000`, on a new kernel port `m_resp`. Per packet the kernel writes
+  `FirRespHdr(nsamp, tx_id, cfg_seq actually used)`, after the results. `FirCmdHdr` gained `tx_id`
+  (16 bits; `cfg_seq` 16, `nsamp` 32 -- still one word). The wait ENFORCES the order; the echo
+  VERIFIES it. The negative control became a wrong tag (`stale_tag`) exposed by the responses; the
+  late commit (`lag`) became a positive test (waited for, still exact).
+- **A config that never arrives is waited for forever** -- added to the limits. The wait is on the
+  kernel's own `s_cfg` stream, never the bus (the user asked).
+- **`FirCfg` puts `coeffs` first.** At 64 bits Python packs a DataList densely and the generated C++
+  starts an array on a fresh word (`plans/stream_array_alignment.md`, unfixed). With `ntaps` first the
+  RTL read the taps 32 bits late -- the RTL gate's first run caught it. 16 int16 taps = 4 full words,
+  so array-first agrees in both layouts.
+- **Samples are typed `S16`, packed by the serializer four to a word** (the user's catch: the first
+  build hand-packed one sample per 64-bit word). Results are `S64`, one per word. The HLS body uses
+  the generated `int16_array_utils::read_array_lane` / `int64_array_utils::write_array_lane`, holding
+  the input lane across firings so it filters ONE sample per cycle (16 multipliers, not 64). RTL
+  937 / 922 -> 768 / 783: a quarter of the sample words.
+- **Cost, stated:** ~6 bus ops per packet against ~4 for the `apply_at` protocol (567 / 721); packing
+  won back most of it. pysim 536 / 874 gets the ORDER of the two topologies wrong -- open.

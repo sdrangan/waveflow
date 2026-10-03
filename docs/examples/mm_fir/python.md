@@ -3,48 +3,76 @@ title: Python model
 parent: A memory-mapped FIR
 nav_order: 1
 has_children: false
-summary: "The Python side of mm_fir: two DataList messages (the config and the status) that also generate the C++ structs, an exact-integer golden, the kernel as a FreeRunMod whose run_iter is one config, one packet of samples, or one idle cycle, and the host program -- a writer that commits configs, waits for them to be received and sends the samples, and a reader that takes the results."
+summary: "The Python side of mm_fir: four DataList messages (the packet header, the response, the config and the status) that also generate the C++ structs, typed int16 samples and int64 results packed by the serializer, a vectorized exact-integer golden, the kernel as a FreeRunMod whose run_iter is one packet -- header, the config it names, samples, response -- and the host program: a writer that commits configs and sends tagged packets, and a reader that takes the results and checks each response."
 ---
 
 # Python model
 
 All of it is in [`examples/mm_fir/mm_fir.py`](../../../examples/mm_fir/mm_fir.py).
 
-## The two messages
+## The messages
 
-The kernel exchanges exactly two structured messages with the register bank, and both are
-`DataList`s — so the same declaration is what pysim serializes and what generates the C++ structs the
-HLS body reads ([Code generation](codegen.md)). Nothing on either side unpacks a word by hand.
+Everything that crosses a stream is a declared type, so the same declaration is what pysim
+serializes and what generates the C++ the HLS body uses ([Code generation](codegen.md)). Nothing on
+either side packs or unpacks a word by hand.
 
 ```python
-S16 = IntField.specialize(bitwidth=16, signed=True)
+S16 = IntField.specialize(bitwidth=16, signed=True, include_dir="include")
+S64 = IntField.specialize(bitwidth=64, signed=True, include_dir="include")
+U16 = IntField.specialize(bitwidth=16, signed=False)
 U32 = IntField.specialize(bitwidth=32, signed=False)
 Taps = DataArray.specialize(S16, max_shape=(NTAP_MAX,))
 
 
-class FirCfg(DataList):
-    """One configuration: ``ntaps`` taps from ``coeffs``, in force from sample ``apply_at`` on."""
-
+class FirCmdHdr(DataList):
+    """The in-band header in front of every sample packet on ``s_in`` -- one 64-bit word."""
     elements = {
-        "ntaps": {"schema": U32, "description": "active taps (<= NTAP_MAX)"},
-        "apply_at": {"schema": U32, "description": "index of the first sample filtered with these taps"},
+        "nsamp": {"schema": U32, "description": "samples in this packet"},
+        "tx_id": {"schema": U16, "description": "the host's packet id, echoed in the response"},
+        "cfg_seq": {"schema": U16,
+                    "description": "the config this packet needs: config k is the k-th COMMIT"},
+    }
+
+
+class FirRespHdr(DataList):
+    """The kernel's response to one packet, on the response FIFO -- one 64-bit word."""
+    elements = {
+        "nsamp": {"schema": U32, "description": "samples filtered in this packet"},
+        "tx_id": {"schema": U16, "description": "echo of the packet's tx_id"},
+        "cfg_seq": {"schema": U16, "description": "the config the packet was filtered with"},
+    }
+
+
+class FirCfg(DataList):
+    """One configuration: ``ntaps`` taps from ``coeffs``."""
+    elements = {
         "coeffs": {"schema": Taps, "description": "tap k multiplies x[n-k]"},
+        "ntaps": {"schema": U32, "description": "active taps (<= NTAP_MAX)"},
     }
 
 
 class FirStatus(DataList):
-    """What the kernel publishes after every event (latest value wins)."""
-
+    """What the kernel publishes after every packet (latest value wins)."""
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered so far"},
-        "ncfg": {"schema": U32, "description": "configs received so far"},
-        "late": {"schema": U32, "description": "configs that arrived after their apply_at sample"},
+        "ncfg": {"schema": U32, "description": "configs taken so far"},
     }
 ```
 
-At the 64-bit bus width a `FirCfg` is 5 words (`FirCfg.nwords_per_inst(64)`) and a `FirStatus` 2.
-Those two numbers are the register bank's `NCFG` / `NSTAT`: the shadow holds 5 words, and a commit
-sends a 5-word packet.
+| message | stream | words at 64 bits |
+|---|---|---|
+| `FirCmdHdr` | `s_in`, in front of each packet's samples | 1 |
+| samples | `s_in`, an array of `S16` | `ceil(nsamp / 4)` — the serializer packs four int16 to a word |
+| results | `m_out`, an array of `S64` | `nsamp` — one int64 per word |
+| `FirRespHdr` | `m_resp`, the response FIFO | 1 |
+| `FirCfg` | `s_cfg`, from the register bank | 5 — the bank's `NCFG` |
+| `FirStatus` | `m_status`, to the register bank | 1 — the bank's `NSTAT` |
+
+**Why `coeffs` comes first in `FirCfg`.** At 64 bits, Python packs a `DataList` densely, while the
+generated C++ starts an array on a fresh word — a known disagreement
+(`plans/stream_array_alignment.md`, not fixed yet). With `ntaps` first, the RTL read the taps 32 bits
+late; the RTL gate caught it on its first run. Sixteen int16 taps are exactly four 64-bit words, so
+with the array first both layouts agree.
 
 ## The golden
 
@@ -67,56 +95,47 @@ samples it is in force for. The loop is over configs — a handful — not sampl
 `int64` is integer arithmetic, so the result is exact with nothing to round: int16 samples times int16
 taps, summed over at most 16 taps, need 37 bits.
 
-Two properties are worth stating because the kernel must match them: the filter **history is
-continuous across a switch** (only the taps change — the samples already seen stay in the delay
-line), and samples before the first config see all-zero taps. `cfgs` is the plan,
-`[(apply_at, taps), ...]`.
+The filter **history is continuous across a switch** (only the taps change — the samples already seen
+stay in the delay line), and samples before the first config see all-zero taps. `cfgs` is the plan,
+`[(apply_at, taps), ...]`: the sample each config is meant to start at.
 
 ## The kernel
 
-`MmFir` is an ordinary `FreeRunMod` leaf with four stream endpoints and no memory-mapped anything:
+`MmFir` is an ordinary `FreeRunMod` leaf with five stream endpoints and no memory-mapped anything:
 
 | endpoint | direction | carries |
 |---|---|---|
-| `s_cfg` | in | one `FirCfg` per commit, from the register bank |
-| `s_in` | in | samples, one per word, from queue in |
+| `s_cfg` | in | `FirCfg` messages, one per commit, from the register bank |
+| `s_in` | in | per packet: a `FirCmdHdr`, then its samples, from queue in |
 | `m_out` | out | results, one per sample, to queue out |
+| `m_resp` | out | one `FirRespHdr` per packet, to the response FIFO |
 | `m_status` | out | `FirStatus` messages, to the register bank |
 
-One firing of `run_iter` is exactly one of three things — a config, a packet of samples, or an idle
-cycle — and the config is checked **first**. A packet is filtered by `_filter` and timed as the HLS body
-runs:
+One firing of `run_iter` is one packet — the in-band header pattern of
+[stream_inband](../../../examples/stream_inband/poly.py):
 
 ```python
     def run_iter(self):
-        cfg = yield from self.s_cfg.get_schema_nb(FirCfg)
-        if cfg is not None:
+        hdr = yield from self.s_in.get_schema(FirCmdHdr)
+        # The order the two streams cannot give, carried in the header: wait for this packet's
+        # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
+        while self.ncfg < int(hdr.cfg_seq):
+            cfg = yield from self.s_cfg.get_schema(FirCfg)
+            self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
             self.ncfg += 1
-            taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
-            at = int(cfg.apply_at)
-            if at < self.nsamp:
-                self.late += 1
-                at = self.nsamp                     # too late for its sample: in force from now
-            if self.pending is not None:            # superseded: in force now, as the RTL does
-                self.taps = self.pending[1]
-            self.pending = (at, taps)
-            yield from self._publish()
-            return
-        if self.s_in.data_buffer.items:
-            pkt = yield from self.s_in.get()
-            n = len(pkt)
-            # The packet's first word arrived (n - 1) cycles before its last, at II=1.
-            tstart = self.env.now - (n - 1) * self.clk.period
-            y = self._filter(samples_of(pkt))
+        n = int(hdr.nsamp)
+        if n:
+            x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
+            y = self._filter(np.asarray(x.val, dtype=np.int64))
             # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
             # sample arrived, and one result follows every proc_ii cycles.
             t_out_start = tstart + self.proc_latency * self.clk.period
             proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
-            yield from self.m_out.write_pipelined(y.view(np.uint64), t_out_start)
-            yield from self._publish()
-            return
-        yield self.timeout(self.clk.period)         # idle: poll again next cycle
+            yield from self.m_out.write_pipelined(array(S64, y), t_out_start)
+        # The response: which packet, and which config it was ACTUALLY filtered with.
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+        yield from self._publish()
 ```
 
 `_filter` is the golden itself, run over the filter's history and the packet:
@@ -124,100 +143,97 @@ runs:
 ```python
     def _filter(self, x: np.ndarray) -> np.ndarray:
         h, n = len(self.hist), len(x)
-        plan = [(0, self.taps)]
-        if self.pending is not None:
-            k = max(self.pending[0] - self.nsamp, 0)   # the sample in this packet it applies at
-            if k < n:
-                plan.append((h + k, self.pending[1]))
-                self.taps, self.pending = self.pending[1], None
-        y = fir_golden(np.concatenate([self.hist, x]), plan)[h:]
-        self.hist = np.concatenate([self.hist, x])[n:]
+        xs = np.concatenate([self.hist, x])
+        y = fir_golden(xs, [(0, self.taps)])[h:]
+        self.hist = xs[n:]
         self.nsamp += n
         return y
 ```
 
-A pending config's `apply_at` lands on at most one sample of a packet, so a packet is at most two
-segments — the taps in force, then the new ones — and `fir_golden` filters each with one convolution.
-`hist` (the last 15 samples) is what keeps the delay line continuous from one packet to the next.
-
 What to read in it:
 
-- **Config first, and non-blocking.** `get_schema_nb` returns `None` when nothing is waiting. Because
-  the config is checked even when no samples are arriving, a host that is *waiting for the config to
-  be received* gets its answer — a kernel that blocked on `s_in` would deadlock that host.
-- **One pending slot.** A received config is parked as `(apply_at, taps)` and put in force at the
-  first sample whose index reaches `apply_at`. A second config arriving while one is pending first
-  puts the pending one in force. The HLS body has exactly one slot too, which is why the Python does.
-- **`late`.** A config whose `apply_at` has already passed is in force from the next sample and
-  counted. The status makes the miss visible; nothing pretends it was on time.
+- **The config wait.** The header's `cfg_seq` names the config the packet needs; the kernel takes
+  configs until it has that many, waiting if the config has not arrived. A packet can use neither an
+  older config nor one nobody has asked for yet. The [index](index.md#the-one-subtle-part-switching-taps-mid-stream)
+  explains why this is the whole ordering protocol. The wait is on `s_cfg`, the kernel's own stream —
+  it costs nothing on the bus.
+- **One packet, one config.** The host cuts packets at every switch point, so `_filter` filters a
+  whole packet with one set of taps — one vectorized convolution. `hist` (the last 15 samples) keeps
+  the delay line continuous from one packet to the next.
+- **Typed reads and writes.** `get_pipelined(S16, n)` reads `n` int16 samples and the serializer
+  unpacks them from their words; `array(S64, y)` is serialized one result per word. The kernel never
+  sees a word.
 - **The timing is the HLS body's.** `proc_ii = 1` and `proc_latency = 10` are the csynth report's
   interval and latency: the first result leaves 10 cycles after the first sample arrived, one per
-  cycle after that — the same pattern as `PolyAccel` in
-  [stream_inband](../../../examples/stream_inband/poly.py). `write_pipelined` anchors the output at
+  cycle after that — the same pattern as `PolyAccel`. `write_pipelined` anchors the output at
   `t_out_start`, so a packet's input and output overlap rather than adding.
-- **The idle branch** waits one clock and returns. It is the pysim model of an HLS loop that checks
-  both streams with `read_nb` every cycle — and because such a loop never runs out of events, the
-  testbench ends the simulation explicitly (`Simulation.run_sim(until=...)`).
+- **The response is written after the results**, so a host that has its response has its results.
 
 ## The host program
 
-`FirHost` is the protocol from the [index](index.md#the-one-subtle-part-switching-taps-mid-stream),
-written as stream code. It holds four endpoints and never an address:
+`FirHost` holds five endpoints and never an address:
 
 | endpoint | type | one call |
 |---|---|---|
 | `cfg` | `StreamIFMaster` | `write(cfg)` sends one config to the kernel |
-| `qin` | `StreamIFMaster` | `write(samples)` sends one packet |
-| `qout` | `StreamIFSlave`, unframed | `get(nwords_max=n)` takes *n* outputs |
+| `qin` | `StreamIFMaster` | `write(...)` sends one queue-in packet — a header, or a packet's samples |
+| `qout` | `StreamIFSlave`, unframed | `get_array(S64, n)` takes *n* results |
+| `qresp` | `StreamIFSlave`, unframed | `get_schema(FirRespHdr)` takes one response |
 | `status` | `LatestValueIFSlave` | `read()` returns the latest status |
 
 The system gives it those endpoints, either through the adaptor or joined straight to the kernel
 ([Python simulation](pysim.md) shows both), so the same class runs over the bus and without it.
 
-It runs as two processes. The **writer** sends the configs and the sample packets in the order
-`host_schedule` lays out:
+It runs as two processes, laid out by `host_schedule`. The **writer** commits each config and sends
+each packet — its header, then its samples:
 
 ```python
     def _writer(self):
         for item in self.schedule:
             if item[0] == "cfg":
-                _, i, apply_at, taps = item
-                yield from self.cfg.write(make_cfg(taps, apply_at))
-                while int((yield from self._read_status()).ncfg) < i + 1:
-                    yield self.timeout(self.poll_cycles * self.clk.period)
+                yield from self.cfg.write(make_cfg(item[1]))
             else:
-                _, n0, n1 = item
-                chunk = np.asarray([int(v) & 0xFFFF for v in self.x[n0:n1]], dtype=np.uint64)
-                yield from self.qin.write(chunk)
+                _, n0, n1, tag, _want = item
+                yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
+                                                    cfg_seq=tag))
+                yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
 ```
 
-After each config it reads the status until `ncfg` shows the config *received*; only then does it
-send the sample the config applies at. A packet never straddles a commit point, so the packet
-containing `apply_at` is cut there.
+It never asks whether a config has arrived: the header's `cfg_seq` makes the kernel wait. Packets are
+cut at every switch point, so each sees one config, and each is tagged with the config it needs. The
+header and the samples are two queue-in writes, so each reaches the kernel as one burst and the
+kernel's exact-count reads take each whole.
 
-The **reader** takes one output packet per input packet, the same size. Queue out is unframed — the
-bus cannot see where the kernel's packets end — so the reader names the size, and it knows the size
-because it reads the same schedule:
+The **reader** takes one output packet per input packet, then its response, and checks it:
 
 ```python
     def _reader(self):
         for item in self.schedule:
             if item[0] == "pkt":
-                words = yield from self.qout.get(nwords_max=item[2] - item[1])
-                self.y += [int(np.int64(np.uint64(w))) for w in np.asarray(words)]
+                _, n0, n1, _tag, want = item
+                y = yield from self.qout.get_array(S64, n1 - n0)
+                self.y += [int(v) for v in y.val]
+                resp = yield from self.qresp.get_schema(FirRespHdr)
+                got = (int(resp.tx_id), int(resp.cfg_seq))
+                self.responses.append(got)
+                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_seq", want, got[1])):
+                    if exp != val:
+                        self.mismatches.append((got[0], name, exp, val))
 ```
 
-Two processes are what make this simple. With one, the host has to empty queue out before every push:
-queue out is 64 deep, a full output queue stops the kernel, and a kernel that has stopped takes no
-input, so a host waiting for room in queue in would wait forever. The earlier single-process host did
-exactly that bookkeeping, with the addresses written out.
+Queue out is unframed — the bus cannot see where the kernel's packets end — so the reader names how
+many results it wants, and it knows because it reads the same schedule.
 
-Every call blocks, and over the bus it blocks by **polling** — reading the free space or the count
-and asking again — never by stalling the bus. That matters here: the writer waiting for room and the
-reader popping outputs share one bus master, and one adaptor front. A write stalled on a full queue
-would hold the front, the reader's pops could not get through, and the host would deadlock.
+Over the bus every call blocks by **polling** — reading the free space or the count and asking again
+— never by stalling the bus. That matters here: the writer and the reader share one bus master and,
+behind one front, one adaptor. A write stalled on a full queue would hold the front, the reader's
+pops could not get through, and the host would deadlock.
 
-`lag` is the negative-control knob. With `lag > 0` the host commits each config after the first
-`lag` samples *after* its `apply_at` — deliberately late — and the kernel must report it.
+Two knobs exercise the protocol:
+
+- **`lag`** commits each config (after the first) that many samples after the packets that need it
+  went out. Those packets wait in queue in until it arrives, and the output is still exact.
+- **`stale_tag`** is the negative control: every packet is tagged with config 1. The kernel never
+  takes config 2, and every response after the switch shows `cfg_seq = 1` where the host meant 2.
 
 Next: [Python simulation](pysim.md).

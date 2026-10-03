@@ -33,8 +33,10 @@ queue out, the response FIFO: the packet's ``tx_id`` and the ``cfg_seq`` it actu
 The host compares each response with the config it meant the packet to use.  The wait makes a wrong
 config impossible from the kernel's side; the echo catches a host that asked for the wrong one.
 
-Numbers: samples are int16, one per 64-bit word (low bits); taps are int16; outputs are the exact
-integer convolution, int64 two's complement in a 64-bit word.  No rounding anywhere, so the numpy
+Numbers: samples are int16 (:data:`S16`), packed by the serializer four to a 64-bit word; taps are
+int16; outputs are the exact integer convolution, int64 (:data:`S64`), one per word.  Nothing on either
+side packs a word by hand: Python uses the schema's serializer, the HLS body the generated
+``int16_array_utils`` / ``int64_array_utils`` lane routines.  No rounding anywhere, so the numpy
 golden :func:`fir_golden` is bit-exact by construction.
 """
 from __future__ import annotations
@@ -44,6 +46,7 @@ from typing import ClassVar
 
 import numpy as np
 
+from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -66,10 +69,10 @@ DW = 64
 NTAP_MAX = 16
 QDEPTH = 64
 
-S16 = IntField.specialize(bitwidth=16, signed=True)
+S16 = IntField.specialize(bitwidth=16, signed=True, include_dir="include")
 U32 = IntField.specialize(bitwidth=32, signed=False)
-#: One sample word on ``s_in`` / one result word on ``m_out``: 64 bits, the sample in the low 16.
-Word = IntField.specialize(bitwidth=64, signed=False)
+#: One result on ``m_out``: the exact sum, int64.
+S64 = IntField.specialize(bitwidth=64, signed=True, include_dir="include")
 Taps = DataArray.specialize(S16, max_shape=(NTAP_MAX,))
 
 
@@ -160,11 +163,6 @@ def make_cfg(taps) -> FirCfg:
     return FirCfg(ntaps=len(taps), coeffs=coeffs)
 
 
-def samples_of(words) -> np.ndarray:
-    """Sample words -> int16 values as int64: the low 16 bits of each 64-bit word are the sample."""
-    return (np.asarray(words, dtype=np.uint64) & 0xFFFF).astype(np.uint16).view(np.int16).astype(np.int64)
-
-
 # ---------------------------------------------------------------------------
 # The kernel
 # ---------------------------------------------------------------------------
@@ -234,14 +232,14 @@ class MmFir(FreeRunMod):
             self.ncfg += 1
         n = int(hdr.nsamp)
         if n:
-            words, tstart = yield from self.s_in.get_pipelined(Word, n)
-            y = self._filter(samples_of(words.val))
+            x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
+            y = self._filter(np.asarray(x.val, dtype=np.int64))
             # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
             # sample arrived, and one result follows every proc_ii cycles.
             t_out_start = tstart + self.proc_latency * self.clk.period
             proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
-            yield from self.m_out.write_pipelined(y.view(np.uint64), t_out_start)
+            yield from self.m_out.write_pipelined(array(S64, y), t_out_start)
         # The response: which packet, and which config it was ACTUALLY filtered with.
         yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
         yield from self._publish()
@@ -354,8 +352,7 @@ class FirHost(SimObj):
                 _, n0, n1, tag, _want = item
                 yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
                                                     cfg_seq=tag))
-                chunk = np.asarray([int(v) & 0xFFFF for v in self.x[n0:n1]], dtype=np.uint64)
-                yield from self.qin.write(chunk)
+                yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
 
     def _tx_id(self, n0: int) -> int:
         """A packet's id: its index among the packets, mod 2**16."""
@@ -365,8 +362,8 @@ class FirHost(SimObj):
         for item in self.schedule:
             if item[0] == "pkt":
                 _, n0, n1, _tag, want = item
-                words = yield from self.qout.get(nwords_max=n1 - n0)
-                self.y += [int(np.int64(np.uint64(w))) for w in np.asarray(words)]
+                y = yield from self.qout.get_array(S64, n1 - n0)
+                self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
                 got = (int(resp.tx_id), int(resp.cfg_seq))
                 self.responses.append(got)

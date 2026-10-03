@@ -3,7 +3,7 @@ title: RTL simulation
 parent: A memory-mapped FIR
 nav_order: 4
 has_children: false
-summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all three behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, at 567 and 721 cycles."
+summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all four behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, every response checked, at 768 and 783 cycles."
 ---
 
 # RTL simulation
@@ -39,19 +39,20 @@ by `wrapper_gen` from the module graph, the way a design's memories are.
 ```python
 XBARS = {
     "per_view": AxiXbarConfig(
-        name="xbar_mm3_1x3", n_si=1,
-        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12)],
+        name="xbar_mm4_1x4", n_si=1,
+        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12),
+            AxiXbarRange(QRESP, 12)],
         data_width=DW, addr_width=32, id_width=1),
     "one_front": AxiXbarConfig(
         name="xbar_mm1_1x2", n_si=1,
-        mi=[AxiXbarRange(REGS, adaptor_law(3)), AxiXbarRange(0x0001_0000, 12)],
+        mi=[AxiXbarRange(REGS, adaptor_law(4)), AxiXbarRange(0x0001_0000, 12)],
         data_width=DW, addr_width=32, id_width=1),
 }
 ```
 
-- **`per_view`** — each view is its own crossbar slave, with its own front (`render_view_slot`). Three
-  4 KB windows at `0x0000`, `0x1000`, `0x2000`.
-- **`one_front`** — all three views behind **one** front and a generated decoder
+- **`per_view`** — each view is its own crossbar slave, with its own front (`render_view_slot`). Four
+  4 KB windows at `0x0000`, `0x1000`, `0x2000`, `0x3000`.
+- **`one_front`** — all four views behind **one** front and a generated decoder
   (`render_adaptor_slot`), in one 16 KB window at `0x0000`. The views land at the same addresses, so
   the host program is identical. The crossbar's second slot is a stub nothing addresses: a 1×1
   `axi_crossbar` is degenerate — `create_ip` silently generates an inconsistent two-slave IP for it
@@ -64,7 +65,8 @@ NCFG = FirCfg.nwords_per_inst(DW)
 NSTAT = FirStatus.nwords_per_inst(DW)
 VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_axis="k_stat"),
          QueueView("qin", "in", axis="k_in", depth=QDEPTH),
-         QueueView("qout", "out", axis="k_out", depth=QDEPTH)]
+         QueueView("qout", "out", axis="k_out", depth=QDEPTH),
+         QueueView("qresp", "out", axis="k_resp", depth=RDEPTH)]
 ```
 
 `NCFG` and `NSTAT` are read off the schemas, so the register bank's shadow and status sizes cannot
@@ -77,36 +79,41 @@ In the `one_front` top, this is all the decoding there is — a table from addre
 ```verilog
   axi_slave_front #(.DW(64), .AW(32), .IDW(1), .LAW(14)) u_fir_mm_front ( ... );
   wire [1:0] fir_mm_sel = fir_mm_req_addr[13:12];
-  wire fir_mm_hole = (fir_mm_sel >= 3);
+  wire fir_mm_hole = 1'b0;                       // four views fill all four windows
   ...
   assign regs_req_valid = fir_mm_req_valid && (fir_mm_sel == 0);
   assign regs_req_addr  = fir_mm_req_addr[11:0];
-  mm_regbank #(.DW(64), .LAW(12), .NCFG(5), .NSTAT(2)) u_regs ( ... );
+  mm_regbank #(.DW(64), .LAW(12), .NCFG(5), .NSTAT(1)) u_regs ( ... );
   assign qin_req_valid = fir_mm_req_valid && (fir_mm_sel == 1);
   mm_queue_in #(.DW(64), .LAW(12), .DEPTH(64)) u_qin ( ... );
+  ...
+  assign qresp_req_valid = fir_mm_req_valid && (fir_mm_sel == 3);
   ...
   assign fir_mm_rsp_rdata = fir_mm_hole_rsp ? {64{1'b0}} :
                             ((fir_mm_rsel == 0) ? regs_rsp_rdata : (fir_mm_rsel == 1) ? qin_rsp_rdata : ...);
 ```
 
 A request goes to the view its address selects; a read response comes from the view selected when the
-read was accepted (`fir_mm_rsel`, latched — the front has one read outstanding); the fourth window,
-unused, answers SLVERR.
+read was accepted (`fir_mm_rsel`, latched — the front has one read outstanding). With four views every
+window is used; with three, the decoder would answer the unused fourth with SLVERR so a stray read
+cannot hang the bus.
 
 ### Joining the kernel
 
-The kernel's four streams meet the views on `k_cfg`, `k_stat`, `k_in`, `k_out`. The kernel has no TLAST
-pins, so the TLASTs the leaves *drive* go nowhere, and the two they *read* are tied low — the status
-bank completes a message on its second word, and queue out ignores TLAST:
+The kernel's five streams meet the views on `k_cfg`, `k_stat`, `k_in`, `k_out`, `k_resp`. The kernel
+has no TLAST pins, so the TLASTs the leaves *drive* go nowhere, and the three they *read* are tied low —
+the status bank completes a message on its last word, and a queue out ignores TLAST:
 
 ```verilog
   assign k_stat_TLAST = 1'b0;
   assign k_out_TLAST = 1'b0;
+  assign k_resp_TLAST = 1'b0;
   mm_fir u_fir (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
     .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
     .s_in_TDATA(k_in_TDATA), .s_in_TVALID(k_in_TVALID), .s_in_TREADY(k_in_TREADY),
     .m_out_TDATA(k_out_TDATA), .m_out_TVALID(k_out_TVALID), .m_out_TREADY(k_out_TREADY),
+    .m_resp_TDATA(k_resp_TDATA), .m_resp_TVALID(k_resp_TVALID), .m_resp_TREADY(k_resp_TREADY),
     .m_status_TDATA(k_stat_TDATA), .m_status_TVALID(k_stat_TVALID), .m_status_TREADY(k_stat_TREADY)
   );
 ```
@@ -121,7 +128,7 @@ The host is the pysim [`FirHost`](python.md#the-host-program), written in C++ ag
 | register bank, config | `StreamIFMaster` | `MmRegBankCfg` |
 | register bank, status | `LatestValueIFSlave` | `MmStatusReader` |
 | queue in | `StreamIFMaster` | `MmQueueWriter` |
-| queue out | `MmStreamIFSlave` | `MmQueueReader` |
+| queue out (results, responses) | `MmStreamIFSlave` | `MmQueueReader` |
 
 An XSI participant cannot block, so each C++ endpoint is a small state machine: the host calls
 `start(...)`, then `step()` once per cycle, until `busy()` is false. The rules inside are the Python
@@ -136,16 +143,19 @@ Two things are generated from Python, so the C++ restates neither:
 
   ```cpp
   namespace mm_fir_map {
-  static const wfbfm::MmView regs = {"regs", wfbfm::MmKind::RegBank, 0x0ull, 4096u, 8u, 0u, 5u, 2u, 0u};
+  static const wfbfm::MmView regs = {"regs", wfbfm::MmKind::RegBank, 0x0ull, 4096u, 8u, 0u, 5u, 1u, 0u};
   static const wfbfm::MmView qin = {"qin", wfbfm::MmKind::QueueIn, 0x1000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
   static const wfbfm::MmView qout = {"qout", wfbfm::MmKind::QueueOut, 0x2000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
+  static const wfbfm::MmView qresp = {"qresp", wfbfm::MmKind::QueueOut, 0x3000ull, 4096u, 8u, 16u, 0u, 0u, 0u};
   }
   ```
 
   The offsets inside a window — COMMIT at `W/2`, status at `3W/4` — are not in the header. `MmView`
   computes them, as `ViewEntry` does in Python.
 - **The schedule.** `host_schedule` — the list of configs and sample packets the pysim host sends — is
-  rendered as a table the C++ `Writer` walks and the `Reader` reads its packet sizes from.
+  rendered as a table: each config's words, and each packet's `FirCmdHdr` word, its samples as the
+  serializer packs them (four int16 to a word), and the response the host expects back. The C++
+  `Writer` walks it, and the `Reader` reads its packet sizes and expected responses from it.
 
 The host itself is two `XsiSimObj`s sharing one `AxiMmMaster`, as the pysim host is two processes
 sharing one `MMIFMaster`:
@@ -154,24 +164,34 @@ sharing one `MMIFMaster`:
 class Writer : public XsiSimObj {
     ...
     void update() override {
-        cfg_.step(); qin_.step(); st_.step();
-        if (phase_ == SEND_CFG && !cfg_.busy()) { st_.start(0); phase_ = WAIT_RX; }
-        else if (phase_ == WAIT_RX && !st_.busy()) {
-            if (field(st_.words, 0, 32) >= SCHEDULE[i_].i + 1) next();
-            else { ++polls_; st_.start(POLL); }
-        }
-        else if (phase_ == SEND_PKT && !qin_.busy()) next();
+        cfg_.step(); qin_.step();
+        if (phase_ == SEND_CFG && !cfg_.busy()) next();
+        else if (phase_ == SEND_HDR && !qin_.busy()) { qin_.start(SCHEDULE[i_].samples); phase_ = SEND_SAMP; }
+        else if (phase_ == SEND_SAMP && !qin_.busy()) next();
         if (phase_ == IDLE && i_ < SCHEDULE.size()) {
             const Item& it = SCHEDULE[i_];
             if (it.kind == CFG) { cfg_.start(it.words); phase_ = SEND_CFG; }
-            else                { qin_.start(it.words); phase_ = SEND_PKT; }
+            else                { qin_.start(it.words); phase_ = SEND_HDR; }
         }
     }
 };
 ```
 
-The field positions the host decodes from the status — where `ncfg` sits in the two words — are read
-off `FirStatus`'s own serializer by `field_pos`, not written into the C++.
+The `Writer` never waits for a config to be received: the header's `cfg_seq` makes the kernel wait. The
+`Reader` takes each packet's results, then its response from the response FIFO, and counts any
+response whose `tx_id` or `cfg_seq` is not what the schedule expects:
+
+```cpp
+        else if (phase_ == RESP && !qresp_.busy()) {
+            const Item& it = SCHEDULE[i_];
+            ++nresp;
+            if (field(qresp_.words, 0, 32, 16) != it.tx || field(qresp_.words, 0, 48, 16) != it.want) ++mismatches;
+            ++i_; phase_ = IDLE;
+        }
+```
+
+The field positions and widths — where `tx_id` and `cfg_seq` sit in the response word — are read off
+`FirRespHdr`'s own serializer and field types by `field_pos`, not written into the C++.
 
 ### The bus master: one read and one write at once
 
@@ -199,38 +219,37 @@ issue a read that depends on a write until the write's response has come back.
 
 The pysim side needs no setting: a pysim `MMIFMaster` already lets a read and a write run at once.
 
-Set `OVERLAP_RW = False` to see the one-at-a-time master; the counts below say what it costs.
+Set `OVERLAP_RW = False` to see the one-at-a-time master; the history table under Results shows what
+it cost on the earlier protocol.
 
 ## Results
 
-| topology | bit-exact vs `fir_golden` | status `nsamp / ncfg / late` | cycles | bus operations | polls |
-|---|---|---|---|---|---|
-| `per_view` | yes | 200 / 2 / 0 | **567** | 76 | 9 |
-| `one_front` | yes | 200 / 2 / 0 | **721** | 74 | 7 |
+| topology | bit-exact vs `fir_golden` | status `nsamp / ncfg` | responses | cycles | bus operations | polls |
+|---|---|---|---|---|---|---|
+| `per_view` | yes | 200 / 2 | 13, 0 mismatches | **768** | 124 | 5 |
+| `one_front` | yes | 200 / 2 | 13, 0 mismatches | **783** | 125 | 4 |
 
-Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, and both
-report every config received in time.
+Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, both take
+both configs, and every one of the 13 responses echoes its packet's `tx_id` and intended config.
 
-`per_view` is the faster shape here: with three fronts the writer's pushes and the reader's pops reach
-different views at the same time. Behind `one_front` they take turns — that serialization is the
-[ordering guarantee](../../guide/interface/axi_mm/slave.md#ordering), and this is its price.
+**Against pysim.** pysim says 536 for `per_view` (30% under RTL) and 874 for `one_front` (12% over), so
+it also gets the order of the two shapes wrong: at RTL they are nearly equal. That is not attributed
+yet. See [Python simulation](pysim.md#how-close-is-pysims-timing).
 
-**What the master costs.** The same host with the one-at-a-time master (`OVERLAP_RW = False`):
+**How the numbers got here**, on the same scenario:
 
-| topology | one read and one write at once | one transaction at a time |
+| host program | `per_view` | `one_front` |
 |---|---|---|
-| `per_view` | **567** | 811 |
-| `one_front` | **721** | 776 |
+| this one: header + `cfg_seq` + responses, samples packed four to a word | **768** | **783** |
+| the same, one sample per 64-bit word | 937 | 922 |
+| `apply_at` configs, host polls status for "received", overlapping master | 567 | 721 |
+| the same, one-transaction-at-a-time master (`OVERLAP_RW = False`) | 811 | 776 |
+| single-process host, drained queue out before every push | 857 | 823 |
 
-`per_view` gains most, since its reads and writes go to different fronts. `one_front` gains too: its
-front still serves one transaction at a time, but the master no longer waits for a write's response
-before presenting the next read's address.
-
-**Against pysim.** pysim says 742 for `one_front` (3% over RTL) and 423 for `per_view` (25% under).
-The `per_view` gap is not attributed yet. See [Python simulation](pysim.md#how-close-is-pysims-timing).
-
-Before the host was rewritten on the endpoints, a single-process host that drained queue out before
-every push measured 857 and 823 on the same RTL, with the one-at-a-time master.
+The header pattern costs more bus operations per packet than the `apply_at` protocol did — the header's
+own write and free-space poll, and the response's poll and pop — and packing the samples four to a
+word wins back most of it. What it buys is not speed: the host never waits on a status round trip,
+and every packet's config is checked.
 
 ## Before the run: is this the RTL I think it is?
 

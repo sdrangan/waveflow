@@ -79,13 +79,17 @@ def test_mm_fir_rtl_cycles(fir_run):
 
 #: Recorded 2026-10-03, after mm_fir moved to the in-band header pattern (plans/mm_fir_cfg_seq.md):
 #: every packet is a FirCmdHdr write and a sample write to queue in, and a FirRespHdr read from the
-#: response FIFO; the host never polls the status for "received".  Bus master overlaps one read and one
-#: write (mm_fir_xsi.OVERLAP_RW).  per_view 937 (143 ops, 12 polls) / one_front 922 (124 ops, 3 polls).
+#: response FIFO; the host never polls the status for "received".  Samples are int16 packed by the
+#: serializer four to a word (the HLS body unpacks them with the generated int16 lane routines).  Bus
+#: master overlaps one read and one write (mm_fir_xsi.OVERLAP_RW).  per_view 768 (124 ops, 5 polls) /
+#: one_front 783 (125 ops, 4 polls).
 #:
-#: pysim says 575 / 1023 -- and so gets the ORDER of the two topologies wrong (RTL: nearly equal; pysim:
+#: pysim says 536 / 874 -- and so gets the ORDER of the two topologies wrong (RTL: nearly equal; pysim:
 #: per_view far faster).  Not attributed; it is the same open question as the earlier 25% gap.
 #:
-#: History (same host program shape, same RTL kernel unless noted):
+#: History (same RTL scenario):
+#:   * header pattern with ONE sample per 64-bit word (hand-packed): 937 / 922 (143 / 124 ops), pysim
+#:     575 / 1023 -- the serializer's packing moves a quarter of the sample words;
 #:   * apply_at protocol, two-process host, overlap master: 567 / 721 (76 / 74 ops), pysim 423 / 742;
 #:   * the same with the one-at-a-time master: 811 / 776 (73 ops), pysim 742 / 742 when its master is
 #:     forced to one transaction too;
@@ -93,4 +97,4 @@ def test_mm_fir_rtl_cycles(fir_run):
 #:   * a kernel that was not II=1 (a whole config / status per firing): 2096 cycles, 221 ops.
 #: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
 #: and the response FIFO's poll and pop -- more than dropping the status wait saved.
-EXPECTED_CYCLES = {"per_view": 937, "one_front": 922}
+EXPECTED_CYCLES = {"per_view": 768, "one_front": 783}
