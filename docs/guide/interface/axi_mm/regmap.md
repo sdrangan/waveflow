@@ -33,6 +33,13 @@ The register map matches the model that Vitis HLS generates from `s_axilite` sca
 > is [Host launch lifecycle](../../comp_codegen/host_launch.md). A register map is useful without a
 > launch; a launch is not possible without a register map, which is the direction of the dependency.
 
+> **For a free-running kernel, use a register bank instead.** A register map is a host-activated
+> kernel's register file: Vitis generates it as `s_axilite`, and the kernel reads its fields at launch.
+> A free-running kernel never launches and cannot see a write happen, so its register file is the
+> [register bank](./slave.md#register-bank) — a shadow the host writes, sent to the kernel as one
+> message per COMMIT. The two are compared side by side in
+> [Register bank or register map?](./slave.md#register-bank-or-register-map).
+
 ## Quick example
 
 ```python

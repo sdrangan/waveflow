@@ -25,6 +25,12 @@ A kernel facing raw registers, a raw FIFO and a raw memory at once has no define
 A stream message has one — it arrives, in order, once — so each view below states what one bus access
 becomes *as a message*.
 
+**A view** is one way a kernel can be reached through the adaptor: a window of bus addresses with
+defined semantics on the bus side, and one stream protocol on the kernel side. There are four kinds —
+**queue in**, **queue out**, **register bank** and **BRAM window** — and each kind is one hand-written
+RTL leaf with one pysim class. Each view occupies its own address window of at least 4 KB, and one
+adaptor holds one view or several: a kernel with a register bank and two queues has three views.
+
 ## The structure
 
 ```mermaid
@@ -142,6 +148,28 @@ maximal AXI4 burst. TLAST from the kernel is not carried to the bus side.
   stalls the bus until it has gone. (Measured: 87 cycles with the kernel side held off.)
 - **Status is latest-value.** The kernel pushes status messages at whatever rate it likes; a message
   becomes visible all at once when its last word (or TLAST) arrives, so a read never mixes two.
+
+#### Register bank or register map?
+
+A [register map](./regmap.md) is the same idea — a register file a host writes to configure a kernel —
+realized for the other kind of kernel:
+
+| | Register map (`RegMap`) | Register bank (`MemSlaveRegBank`) |
+|---|---|---|
+| for a | host-activated kernel | free-running kernel |
+| realized as | Vitis-generated `s_axilite`, inside the kernel | hand-written RTL (`mm_regbank`), beside the kernel |
+| bus | AXI-Lite: one word per transaction | AXI4 through the adaptor and crossbar: bursts |
+| layout | named fields, each at its own offset | one `DataSchema` in a shadow at offset 0; COMMIT and status at fixed offsets |
+| the host writes | a field at a time, straight into what the kernel uses | into a shadow the kernel never sees |
+| the kernel sees a change | at its next launch, when `ap_start` latches its arguments | when it takes the next config message, one per COMMIT |
+| status | output fields the host reads (typically after `ap_done`) | the latest complete status message |
+| per-field access modes (`W1C`, `W1S`, hooks) | yes | no: whole messages only |
+
+COMMIT plays the role `ap_start` plays for a host-activated kernel: the one moment the configuration
+changes hands. The bank exists because `s_axilite` is no use to a free-running kernel, which cannot see
+a write happen. The two share no code today; laying the bank's shadow out with `RegMap`'s field
+offsets — so a host could write one field by name, and one generated host header could serve both — is
+a natural next step, not yet built.
 
 #### How it works
 
