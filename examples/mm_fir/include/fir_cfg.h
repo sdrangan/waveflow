@@ -13,11 +13,10 @@
 #include "int16_array.h"
 
 struct FirCfg {
-    ap_uint<32> ntaps;  // active taps (<= NTAP_MAX)
-    ap_uint<32> apply_at;  // index of the first sample filtered with these taps
     Int16Array coeffs;  // tap k multiplies x[n-k]
+    ap_uint<32> ntaps;  // active taps (<= NTAP_MAX)
 
-    static constexpr int bitwidth = 320;
+    static constexpr int bitwidth = 288;
 
     template<int word_bw>
     struct word_bw_tag {};
@@ -39,17 +38,15 @@ struct FirCfg {
 
     static ap_uint<bitwidth> pack_to_uint(const FirCfg& data) {
         ap_uint<bitwidth> res = 0;
-        res.range(31, 0) = data.ntaps;
-        res.range(63, 32) = data.apply_at;
-        res.range(319, 64) = Int16Array::pack_to_uint(data.coeffs);
+        res.range(255, 0) = Int16Array::pack_to_uint(data.coeffs);
+        res.range(287, 256) = data.ntaps;
         return res;
     }
 
     static FirCfg unpack_from_uint(const ap_uint<bitwidth>& packed) {
         FirCfg data;
-        data.ntaps = (ap_uint<32>)(packed.range(31, 0));
-        data.apply_at = (ap_uint<32>)(packed.range(63, 32));
-        data.coeffs = Int16Array::unpack_from_uint(packed.range(319, 64));
+        data.coeffs = Int16Array::unpack_from_uint(packed.range(255, 0));
+        data.ntaps = (ap_uint<32>)(packed.range(287, 256));
         return data;
     }
 
@@ -61,12 +58,9 @@ struct FirCfg {
     }
 
     static void write_array_impl(word_bw_tag<64>, const FirCfg* self, ap_uint<64> x[]) {
-        x[0] = 0;
-        x[0].range(31, 0) = self->ntaps;
-        x[0].range(63, 32) = self->apply_at;
         {
             const int n0_eff = 16;
-            int out_idx = 1;
+            int out_idx = 0;
             for (int i = 0; i < n0_eff; i += 4) {
                 #pragma HLS PIPELINE II=1
                 ap_uint<64> w = 0;
@@ -85,6 +79,8 @@ struct FirCfg {
                 x[out_idx++] = w;
             }
         }
+        x[4] = 0;
+        x[4].range(31, 0) = self->ntaps;
     }
 
     template<int word_bw>
@@ -101,10 +97,6 @@ struct FirCfg {
 
     static void write_stream_impl(word_bw_tag<64>, const FirCfg* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
-        w.range(31, 0) = self->ntaps;
-        w.range(63, 32) = self->apply_at;
-        s.write(w);
-        w = 0;
         {
             const int n0_eff = 16;
             int out_idx = 0;
@@ -127,6 +119,8 @@ struct FirCfg {
                 out_idx++;
             }
         }
+        w.range(31, 0) = self->ntaps;
+        s.write(w);
     }
 
     template<int word_bw>
@@ -144,10 +138,6 @@ struct FirCfg {
 
     static void write_axi4_stream_impl(word_bw_tag<64>, const FirCfg* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
-        w.range(31, 0) = self->ntaps;
-        w.range(63, 32) = self->apply_at;
-        streamutils::write_axi4_word<64>(s, w, false);
-        w = 0;
         {
             const int n0_eff = 16;
             int out_idx = 0;
@@ -166,10 +156,12 @@ struct FirCfg {
                 if (i + 3 < n0_eff) {
                     w.range(63, 48) = self->coeffs.data[i + 3];
                 }
-                streamutils::write_axi4_word<64>(s, w, tlast);
+                streamutils::write_axi4_word<64>(s, w, false);
                 out_idx++;
             }
         }
+        w.range(31, 0) = self->ntaps;
+        streamutils::write_axi4_word<64>(s, w, tlast);
     }
 
     template<int word_bw>
@@ -185,11 +177,9 @@ struct FirCfg {
     }
 
     static void read_array_impl(word_bw_tag<64>, FirCfg* self, const ap_uint<64> x[]) {
-        self->ntaps = (ap_uint<32>)(x[0].range(31, 0));
-        self->apply_at = (ap_uint<32>)(x[0].range(63, 32));
         {
             const int n0_eff = 16;
-            int in_idx = 1;
+            int in_idx = 0;
             for (int i = 0; i < n0_eff; i += 4) {
                 #pragma HLS PIPELINE II=1
                 ap_uint<64> w = x[in_idx++];
@@ -207,6 +197,7 @@ struct FirCfg {
                 }
             }
         }
+        self->ntaps = (ap_uint<32>)(x[4].range(31, 0));
     }
 
     template<int word_bw>
@@ -223,12 +214,9 @@ struct FirCfg {
 
     static void read_stream_impl(word_bw_tag<64>, FirCfg* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
-        w = s.read();
-        self->ntaps = (ap_uint<32>)(w.range(31, 0));
-        self->apply_at = (ap_uint<32>)(w.range(63, 32));
         {
             const int n0_eff = 16;
-            int in_idx = 1;
+            int in_idx = 0;
             for (int i = 0; i < n0_eff; i += 4) {
                 #pragma HLS PIPELINE II=1
                 w = s.read();
@@ -247,6 +235,8 @@ struct FirCfg {
                 }
             }
         }
+        w = s.read();
+        self->ntaps = (ap_uint<32>)(w.range(31, 0));
     }
 
     template<int word_bw>
@@ -266,28 +256,9 @@ struct FirCfg {
             ap_uint<64> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
-        if (last) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        {
-            auto axis_word = s.read();
-            w = axis_word.data;
-            last = axis_word.last;
-        }
-        self->ntaps = (ap_uint<32>)(w.range(31, 0));
-        if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        self->apply_at = (ap_uint<32>)(w.range(63, 32));
-        if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
         {
             const int n0_eff = 16;
-            int in_idx = 1;
+            int in_idx = 0;
             int i = 0;
             for (; i < n0_eff; i += 4) {
                 #pragma HLS PIPELINE II=1
@@ -321,6 +292,20 @@ struct FirCfg {
                 return;
             }
         }
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        if (last) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        {
+            auto axis_word = s.read();
+            w = axis_word.data;
+            last = axis_word.last;
+        }
+        self->ntaps = (ap_uint<32>)(w.range(31, 0));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }

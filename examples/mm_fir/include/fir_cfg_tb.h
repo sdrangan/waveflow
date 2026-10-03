@@ -21,16 +21,6 @@ inline void FirCfg::dump_json(std::ostream& os, int indent, int level) const {
     os << "{";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"ntaps\": ";
-    os << static_cast<unsigned long long>(this->ntaps);
-    os << ",";
-    os << "\n";
-    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"apply_at\": ";
-    os << static_cast<unsigned long long>(this->apply_at);
-    os << ",";
-    os << "\n";
-    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
     os << "\"coeffs\": ";
     os << "[";
     for (int i0 = 0; i0 < 16; ++i0) {
@@ -38,6 +28,11 @@ inline void FirCfg::dump_json(std::ostream& os, int indent, int level) const {
     os << static_cast<long long>(this->coeffs.data[i0]);
     }
     os << "]";
+    os << ",";
+    os << "\n";
+    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
+    os << "\"ntaps\": ";
+    os << static_cast<unsigned long long>(this->ntaps);
     os << "\n";
     for (int i = 0; i < (level) * step; ++i) { os << ' '; }
     os << "}";
@@ -45,9 +40,8 @@ inline void FirCfg::dump_json(std::ostream& os, int indent, int level) const {
 
 inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
-    bool seen_root_ntaps = false;
-    bool seen_root_apply_at = false;
     bool seen_root_coeffs = false;
+    bool seen_root_ntaps = false;
     bool first = true;
     while (true) {
     streamutils::json_skip_ws(json_text, pos);
@@ -61,15 +55,7 @@ inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
     first = false;
     std::string key = streamutils::json_parse_string(json_text, pos);
     streamutils::json_expect_char(json_text, pos, ':');
-    if (key == "ntaps") {
-        seen_root_ntaps = true;
-        this->ntaps = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
-    }
-    else if (key == "apply_at") {
-        seen_root_apply_at = true;
-        this->apply_at = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
-    }
-    else if (key == "coeffs") {
+    if (key == "coeffs") {
         seen_root_coeffs = true;
         streamutils::json_expect_char(json_text, pos, '[');
         for (int i0 = 0; i0 < 16; ++i0) {
@@ -80,18 +66,19 @@ inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
         }
         streamutils::json_expect_char(json_text, pos, ']');
     }
+    else if (key == "ntaps") {
+        seen_root_ntaps = true;
+        this->ntaps = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
     }
     }
-    if (!seen_root_ntaps) {
-    throw std::runtime_error("Malformed JSON: missing required key 'ntaps'.");
-    }
-    if (!seen_root_apply_at) {
-    throw std::runtime_error("Malformed JSON: missing required key 'apply_at'.");
-    }
     if (!seen_root_coeffs) {
     throw std::runtime_error("Malformed JSON: missing required key 'coeffs'.");
+    }
+    if (!seen_root_ntaps) {
+    throw std::runtime_error("Malformed JSON: missing required key 'ntaps'.");
     }
 }
 

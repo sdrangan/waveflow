@@ -9,21 +9,29 @@ view                  base       kernel side
 ====================  =========  ===========================================================
 register bank         0x0000     ``s_cfg`` <- one :class:`FirCfg` per commit;
                                  ``m_status`` -> :class:`FirStatus` (latest-value)
-queue in              0x1000     ``s_in``  <- sample packets ``[len | x x len]``
+queue in              0x1000     ``s_in``  <- ``FirCmdHdr | x[0] .. x[nsamp-1]`` per packet
 queue out             0x2000     ``m_out`` -> one output word per sample
+queue out (response)  0x3000     ``m_resp`` -> one :class:`FirRespHdr` per packet
 ====================  =========  ===========================================================
 
 (The same 1x3 shape as the Stage 2 RTL gate, ``tests/build/test_mm_regbank_xsi.py``.)
 
-**Cross-view order is carried in the messages** (the plan's decision D5).  A configuration and the
-samples travel on different streams, so the kernel could see them in either order.  A config therefore
-says *where* it applies -- ``apply_at``, a sample index -- and the kernel switches taps exactly there.
-The host makes that happen in time by waiting until the status shows the config was **received**
-(``ncfg``) before sending the sample at ``apply_at``.  A config that arrives after its sample has
-already been filtered is applied at once and counted in ``late``: detected, never silently misapplied.
+**The stream_inband pattern, with a config sequence number** (``plans/mm_fir_cfg_seq.md``).  Every
+sample packet is preceded in-band by a :class:`FirCmdHdr` -- its sample count and ``cfg_seq``, the
+number of the config it needs (config *k* is the *k*-th COMMIT).  Per packet the kernel reads the
+header, takes configs from ``s_cfg`` until it has config ``cfg_seq`` -- **waiting** if it has not
+arrived -- then reads the samples, filters them and writes the results.
 
-The kernel polls both streams, config first -- the pysim model of an HLS ``read_nb`` loop -- so it
-picks up a commit even while no samples are arriving, which is exactly what the host's wait needs.
+**Cross-view order is carried in the messages** (the slave page's ordering statement 2).  A config and
+and the samples travel on different streams, so either could reach the kernel first.  The sequence number
+makes that harmless: a packet cannot use a config older than the one it names (the kernel waits for
+it), nor a newer one (a config nobody has asked for stays in its stream).  So the host commits a config
+and sends the packets that need it, in either order, and never has to ask whether the config arrived.
+
+**And the host can check it.**  After each packet the kernel writes a :class:`FirRespHdr` to a second
+queue out, the response FIFO: the packet's ``tx_id`` and the ``cfg_seq`` it actually filtered with.
+The host compares each response with the config it meant the packet to use.  The wait makes a wrong
+config impossible from the kernel's side; the echo catches a host that asked for the wrong one.
 
 Numbers: samples are int16, one per 64-bit word (low bits); taps are int16; outputs are the exact
 integer convolution, int64 two's complement in a 64-bit word.  No rounding anywhere, so the numpy
@@ -60,30 +68,62 @@ QDEPTH = 64
 
 S16 = IntField.specialize(bitwidth=16, signed=True)
 U32 = IntField.specialize(bitwidth=32, signed=False)
+#: One sample word on ``s_in`` / one result word on ``m_out``: 64 bits, the sample in the low 16.
+Word = IntField.specialize(bitwidth=64, signed=False)
 Taps = DataArray.specialize(S16, max_shape=(NTAP_MAX,))
 
 
-class FirCfg(DataList):
-    """One configuration: ``ntaps`` taps from ``coeffs``, in force from sample ``apply_at`` on."""
+U16 = IntField.specialize(bitwidth=16, signed=False)
+
+
+class FirCmdHdr(DataList):
+    """The in-band header in front of every sample packet on ``s_in`` -- one 64-bit word."""
 
     elements = {
-        "ntaps": {"schema": U32, "description": "active taps (<= NTAP_MAX)"},
-        "apply_at": {"schema": U32, "description": "index of the first sample filtered with these taps"},
+        "nsamp": {"schema": U32, "description": "samples in this packet"},
+        "tx_id": {"schema": U16, "description": "the host's packet id, echoed in the response"},
+        "cfg_seq": {"schema": U16,
+                    "description": "the config this packet needs: config k is the k-th COMMIT"},
+    }
+
+
+class FirRespHdr(DataList):
+    """The kernel's response to one packet, on the response FIFO -- one 64-bit word."""
+
+    elements = {
+        "nsamp": {"schema": U32, "description": "samples filtered in this packet"},
+        "tx_id": {"schema": U16, "description": "echo of the packet's tx_id"},
+        "cfg_seq": {"schema": U16, "description": "the config the packet was filtered with"},
+    }
+
+
+class FirCfg(DataList):
+    """One configuration: ``ntaps`` taps from ``coeffs``.
+
+    ``coeffs`` comes FIRST on purpose.  At 64 bits Python packs a DataList densely, while the
+    generated C++ starts an array on a fresh word (``plans/stream_array_alignment.md``, not fixed
+    yet).  Sixteen int16 taps are exactly four 64-bit words, so with the array first both layouts
+    agree; with ``ntaps`` first the C++ read the taps 32 bits late.
+    """
+
+    elements = {
         "coeffs": {"schema": Taps, "description": "tap k multiplies x[n-k]"},
+        "ntaps": {"schema": U32, "description": "active taps (<= NTAP_MAX)"},
     }
 
 
 class FirStatus(DataList):
-    """What the kernel publishes after every event (latest value wins)."""
+    """What the kernel publishes after every packet (latest value wins)."""
 
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered so far"},
-        "ncfg": {"schema": U32, "description": "configs received so far"},
-        "late": {"schema": U32, "description": "configs that arrived after their apply_at sample"},
+        "ncfg": {"schema": U32, "description": "configs taken so far"},
     }
 
 
-REGS, QIN, QOUT = 0x0000, 0x1000, 0x2000
+REGS, QIN, QOUT, QRESP = 0x0000, 0x1000, 0x2000, 0x3000
+#: Depth of the response FIFO: one word per packet, so a handful of packets in flight.
+RDEPTH = 16
 
 
 # ---------------------------------------------------------------------------
@@ -111,13 +151,13 @@ def fir_golden(x, cfgs) -> np.ndarray:
     return y
 
 
-def make_cfg(taps, apply_at: int) -> FirCfg:
+def make_cfg(taps) -> FirCfg:
     taps = list(taps)
     if not 1 <= len(taps) <= NTAP_MAX:
         raise ValueError(f"1..{NTAP_MAX} taps, got {len(taps)}")
     coeffs = np.zeros(NTAP_MAX, dtype=np.int64)
     coeffs[:len(taps)] = taps
-    return FirCfg(ntaps=len(taps), apply_at=int(apply_at), coeffs=coeffs)
+    return FirCfg(ntaps=len(taps), coeffs=coeffs)
 
 
 def samples_of(words) -> np.ndarray:
@@ -131,24 +171,24 @@ def samples_of(words) -> np.ndarray:
 
 @dataclass
 class MmFir(FreeRunMod):
-    """The FIR kernel: streams only.  One firing = one config, one sample packet, or one idle cycle."""
+    """The FIR kernel: streams only.  One firing = one packet: its header, the config it needs, its
+    samples."""
 
     cpp_kernel_name: ClassVar[str | None] = "mm_fir"
     cpp_namespace: ClassVar[str | None] = "mm_fir_impl"
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
-    #: Timing of the HLS body, from its csynth report: pipelined at II=1, latency 10 cycles (pipeline
-    #: depth 11).  A sample's result leaves ``proc_latency`` cycles after the sample arrived, and one
-    #: sample is taken per ``proc_ii`` cycles.
+    #: Timing of the HLS body, from its csynth report: pipelined at II=1.  A sample's result leaves
+    #: ``proc_latency`` cycles after the sample arrived, and one sample is taken per ``proc_ii`` cycles.
     proc_ii: int = 1
     proc_latency: int = 10
 
     def kernel_task(self):
         """The hand-written HLS body, ``include/mm_fir_task.h`` -- the twin of :meth:`run_iter`."""
         from waveflow.hw.mem_stream import KernelTask
-        return KernelTask("mm_fir_task", "mm_fir_task.h", ("s_cfg", "s_in", "m_out", "m_status"),
-                          template_args=(DW,))
+        return KernelTask("mm_fir_task", "mm_fir_task.h",
+                          ("s_cfg", "s_in", "m_out", "m_resp", "m_status"), template_args=(DW,))
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -158,100 +198,99 @@ class MmFir(FreeRunMod):
         # TLAST pin on this port (mm_fir_xsi.render_top ties it off).
         self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=DW,
                                     has_tlast=False)
+        # The response FIFO: one FirRespHdr per packet.  Unframed, as any queue out is.
+        self.m_resp = StreamIFMaster(name=f"{self.name}_m_resp", sim=self.sim, bitwidth=DW,
+                                     has_tlast=False)
         self.m_status = StreamIFMaster(name=f"{self.name}_m_status", sim=self.sim, bitwidth=DW,
                                        has_tlast=True)
-        for ep in (self.s_cfg, self.s_in, self.m_out, self.m_status):
+        for ep in (self.s_cfg, self.s_in, self.m_out, self.m_resp, self.m_status):
             self.add_endpoint(ep)
         self.taps = np.zeros(0, dtype=np.int64)
-        #: ONE pending slot -- ``(apply_at, taps)`` received but not yet in force -- as in the RTL.
-        #: A config arriving while one is pending first puts the pending one in force.
-        self.pending: tuple[int, np.ndarray] | None = None
         #: The last NTAP_MAX - 1 samples, oldest first: the filter's memory across packets.
         self.hist = np.zeros(NTAP_MAX - 1, dtype=np.int64)
         self.nsamp = 0
         self.ncfg = 0
-        self.late = 0
 
     def _publish(self):
-        yield from self.m_status.write(FirStatus(nsamp=self.nsamp, ncfg=self.ncfg, late=self.late))
+        yield from self.m_status.write(FirStatus(nsamp=self.nsamp, ncfg=self.ncfg))
 
     def _filter(self, x: np.ndarray) -> np.ndarray:
-        """Filter one packet: :func:`fir_golden` over the history and the packet, with the taps in
-        force and -- if a pending config's ``apply_at`` falls inside this packet -- the switch to its
-        taps at that sample.  A packet holds at most one switch (one pending slot), so it is at most
-        two segments, each a vectorized convolution."""
+        """Filter one packet with the taps in force: :func:`fir_golden` over the history and the
+        packet -- one vectorized convolution -- keeping the history continuous across packets."""
         h, n = len(self.hist), len(x)
-        plan = [(0, self.taps)]
-        if self.pending is not None:
-            k = max(self.pending[0] - self.nsamp, 0)   # the sample in this packet it applies at
-            if k < n:
-                plan.append((h + k, self.pending[1]))
-                self.taps, self.pending = self.pending[1], None
-        y = fir_golden(np.concatenate([self.hist, x]), plan)[h:]
-        self.hist = np.concatenate([self.hist, x])[n:]
+        xs = np.concatenate([self.hist, x])
+        y = fir_golden(xs, [(0, self.taps)])[h:]
+        self.hist = xs[n:]
         self.nsamp += n
         return y
 
     def run_iter(self):
-        cfg = yield from self.s_cfg.get_schema_nb(FirCfg)
-        if cfg is not None:
+        hdr = yield from self.s_in.get_schema(FirCmdHdr)
+        # The order the two streams cannot give, carried in the header: wait for this packet's
+        # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
+        while self.ncfg < int(hdr.cfg_seq):
+            cfg = yield from self.s_cfg.get_schema(FirCfg)
+            self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
             self.ncfg += 1
-            taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
-            at = int(cfg.apply_at)
-            if at < self.nsamp:
-                self.late += 1
-                at = self.nsamp                     # too late for its sample: in force from now
-            if self.pending is not None:            # superseded: in force now, as the RTL does
-                self.taps = self.pending[1]
-            self.pending = (at, taps)
-            yield from self._publish()
-            return
-        if self.s_in.data_buffer.items:
-            pkt = yield from self.s_in.get()
-            n = len(pkt)
-            # The packet's first word arrived (n - 1) cycles before its last, at II=1.
-            tstart = self.env.now - (n - 1) * self.clk.period
-            y = self._filter(samples_of(pkt))
+        n = int(hdr.nsamp)
+        if n:
+            words, tstart = yield from self.s_in.get_pipelined(Word, n)
+            y = self._filter(samples_of(words.val))
             # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
             # sample arrived, and one result follows every proc_ii cycles.
             t_out_start = tstart + self.proc_latency * self.clk.period
             proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
             yield from self.m_out.write_pipelined(y.view(np.uint64), t_out_start)
-            yield from self._publish()
-            return
-        yield self.timeout(self.clk.period)         # idle: poll again next cycle
+        # The response: which packet, and which config it was ACTUALLY filtered with.
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+        yield from self._publish()
 
 
 # ---------------------------------------------------------------------------
 # The host and the system
 # ---------------------------------------------------------------------------
 
-def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0) -> list[tuple]:
-    """What the host sends, in order: ``("cfg", i, apply_at, taps)`` and ``("pkt", n0, n1)``.
+def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0, stale_tag: bool = False) -> list[tuple]:
+    """What the host sends, in order: ``("cfg", taps)`` and ``("pkt", n0, n1, tag, want)`` -- *tag* is
+    the ``cfg_seq`` the packet's header carries, *want* the config the plan means it to use (they
+    differ only under *stale_tag*).
 
-    Samples go out in packets of at most *pkt*; a packet never straddles a commit point, because the
-    config for it is committed first.  Config *i* (after the first) is committed *lag* samples after
-    its ``apply_at`` -- 0 is the correct host, >0 is the negative control.  The writer sends this list;
-    the reader reads one output packet per ``"pkt"`` entry, the same size, because queue out is
+    *plan* is ``[(apply_at, taps), ...]``: config *i* (the *i+1*-th COMMIT, ``cfg_seq = i + 1``) is in
+    force from sample ``apply_at``.  Samples go out in packets of at most *pkt*, cut at every
+    ``apply_at`` so a packet sees one config, and each packet is tagged with the config it needs.
+
+    Each config is committed when the samples before its ``apply_at`` have been sent -- or *lag*
+    samples later (a late commit, which the kernel must wait for).  *stale_tag* is the negative
+    control: every packet is tagged with config 1, so no packet ever asks for config 2.
+
+    The reader reads one output packet per ``"pkt"`` entry, the same size, because queue out is
     unframed and the reader has to know.
     """
     cfgs = sorted(plan, key=lambda c: c[0])
     if not cfgs or cfgs[0][0] != 0:
         raise ValueError("the first config must apply at sample 0")
+    starts = [at for at, _ in cfgs]
 
     def due(i: int) -> int:
         return cfgs[i][0] + (lag if i else 0)
+
+    def seq_at(n: int) -> int:
+        return sum(1 for at in starts if at <= n)
 
     out: list[tuple] = []
     nxt = n = 0
     while n < nsamp:
         while nxt < len(cfgs) and due(nxt) <= n:
-            out.append(("cfg", nxt, cfgs[nxt][0], cfgs[nxt][1]))
+            out.append(("cfg", cfgs[nxt][1]))
             nxt += 1
-        end = min(n + pkt, nsamp, due(nxt) if nxt < len(cfgs) else nsamp)
-        out.append(("pkt", n, end))
+        cuts = [at for at in starts if at > n] + [due(nxt) if nxt < len(cfgs) else nsamp]
+        end = min([n + pkt, nsamp] + cuts)
+        out.append(("pkt", n, end, 1 if stale_tag else seq_at(n), seq_at(n)))
         n = end
+    while nxt < len(cfgs):                          # a config committed after the last sample
+        out.append(("cfg", cfgs[nxt][1]))
+        nxt += 1
     return out
 
 
@@ -259,15 +298,18 @@ def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0) -> list[tuple]:
 class FirHost(SimObj):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
 
-    Two processes, as stream code is written: a **writer** that commits each config -- then waits
-    until the status shows it *received*, so it cannot miss its sample -- and sends the sample
-    packets; and a **reader** that takes one output packet per input packet.  The host holds four
-    endpoints and never an address, so the same class runs memory-mapped (through the adaptor) and
-    direct (joined straight to the kernel); :class:`MmFirSystem` sets them:
+    Two processes, as stream code is written: a **writer** that commits each config and sends each
+    sample packet behind its :class:`FirCmdHdr` -- never asking whether a config has arrived, because
+    the header's ``cfg_seq`` makes the kernel wait for it -- and a **reader** that takes one output
+    packet per input packet, and that packet's response, which it checks: the response must echo the
+    packet's ``tx_id`` and the config the plan meant it to use.  The host holds five endpoints and
+    never an address, so the same class runs memory-mapped (through the adaptor) and direct (joined
+    straight to the kernel); :class:`MmFirSystem` sets them:
 
     * ``cfg`` -- a ``StreamIFMaster``: one ``write`` is one committed config;
-    * ``qin`` -- a ``StreamIFMaster``: one ``write`` is one sample packet;
+    * ``qin`` -- a ``StreamIFMaster``: one ``write`` is one queue-in packet (a header, or samples);
     * ``qout`` -- a ``StreamIFSlave``, unframed: reads name their size;
+    * ``qresp`` -- a ``StreamIFSlave``, unframed: one :class:`FirRespHdr` per packet;
     * ``status`` -- a :class:`~waveflow.hw.mm_host.LatestValueIFSlave`: the latest status.
     """
 
@@ -275,9 +317,11 @@ class FirHost(SimObj):
     plan: list = field(default_factory=list)
     pkt: int = 16
     poll_cycles: int = 8
-    #: Negative-control knob: commit each config (after the first) this many samples AFTER its
-    #: ``apply_at``.  0 is the correct host.  >0 makes the config late, which the kernel must report.
+    #: Commit each config (after the first) this many samples AFTER its packets went out.  The
+    #: packets wait in queue in until it arrives, and the output is still exact.
     lag: int = 0
+    #: Negative control: tag every packet with config 1, so config 2 is never taken.
+    stale_tag: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -287,11 +331,16 @@ class FirHost(SimObj):
         self.cfg: StreamIFMaster | None = None
         self.qin: StreamIFMaster | None = None
         self.qout: StreamIFSlave | None = None
+        self.qresp: StreamIFSlave | None = None
         self.status = None
         self.done = self.env.event()
         self.y: list[int] = []
+        #: Every response, as ``(tx_id, cfg_seq)``.
+        self.responses: list[tuple[int, int]] = []
+        #: Responses that did not echo what the host expected: ``(tx_id, field, expected, got)``.
+        self.mismatches: list[tuple[int, str, int, int]] = []
         self.status_reads = 0
-        self.schedule = host_schedule(len(self.x), self.plan, self.pkt, self.lag)
+        self.schedule = host_schedule(len(self.x), self.plan, self.pkt, self.lag, self.stale_tag)
 
     def _read_status(self):
         self.status_reads += 1
@@ -300,20 +349,30 @@ class FirHost(SimObj):
     def _writer(self):
         for item in self.schedule:
             if item[0] == "cfg":
-                _, i, apply_at, taps = item
-                yield from self.cfg.write(make_cfg(taps, apply_at))
-                while int((yield from self._read_status()).ncfg) < i + 1:
-                    yield self.timeout(self.poll_cycles * self.clk.period)
+                yield from self.cfg.write(make_cfg(item[1]))
             else:
-                _, n0, n1 = item
+                _, n0, n1, tag, _want = item
+                yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
+                                                    cfg_seq=tag))
                 chunk = np.asarray([int(v) & 0xFFFF for v in self.x[n0:n1]], dtype=np.uint64)
                 yield from self.qin.write(chunk)
+
+    def _tx_id(self, n0: int) -> int:
+        """A packet's id: its index among the packets, mod 2**16."""
+        return [it[1] for it in self.schedule if it[0] == "pkt"].index(n0) & 0xFFFF
 
     def _reader(self):
         for item in self.schedule:
             if item[0] == "pkt":
-                words = yield from self.qout.get(nwords_max=item[2] - item[1])
+                _, n0, n1, _tag, want = item
+                words = yield from self.qout.get(nwords_max=n1 - n0)
                 self.y += [int(np.int64(np.uint64(w))) for w in np.asarray(words)]
+                resp = yield from self.qresp.get_schema(FirRespHdr)
+                got = (int(resp.tx_id), int(resp.cfg_seq))
+                self.responses.append(got)
+                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_seq", want, got[1])):
+                    if exp != val:
+                        self.mismatches.append((got[0], name, exp, val))
         # The kernel publishes its status after writing a packet's outputs; wait for that last one.
         while True:
             st = yield from self._read_status()
@@ -342,6 +401,7 @@ class MmFirSystem:
     plan: list
     pkt: int = 16
     lag: int = 0
+    stale_tag: bool = False
     #: Stage 4: all three views behind one adaptor port instead of one crossbar slot each.
     one_front: bool = False
     link: str = "mm"
@@ -356,7 +416,7 @@ class MmFirSystem:
         sim = self.sim = Simulation()
         self.fir = MmFir(name="fir", sim=sim, clk=self.clk)
         self.host = FirHost(name="host", sim=sim, x=list(self.x), plan=list(self.plan), pkt=self.pkt,
-                            lag=self.lag, clk=self.clk)
+                            lag=self.lag, stale_tag=self.stale_tag, clk=self.clk)
         if self.link == "direct":
             self._wire_direct()
         else:
@@ -372,10 +432,12 @@ class MmFirSystem:
         host.cfg = StreamIFMaster(name="host_cfg", sim=sim, bitwidth=DW, has_tlast=True)
         host.qin = StreamIFMaster(name="host_qin", sim=sim, bitwidth=DW, has_tlast=True)
         host.qout = StreamIFSlave(name="host_qout", sim=sim, bitwidth=DW, has_tlast=False)
+        host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
         host.status = LatestValueIFSlave(name="host_status", sim=sim)
         self._stream("k_cfg", host.cfg, fir.s_cfg, FirCfg.nwords_per_inst(DW))
         self._stream("k_in", host.qin, fir.s_in, QDEPTH)
         self._stream("k_out", fir.m_out, host.qout, QDEPTH)
+        self._stream("k_resp", fir.m_resp, host.qresp, RDEPTH)
         self.status_if = LatestValueIF(name="k_stat", sim=sim, schema_type=FirStatus, bitwidth=DW,
                                        clk=self.clk)
         self.status_if.bind("master", fir.m_status)
@@ -387,18 +449,20 @@ class MmFirSystem:
                                     mem_dwidth=DW, clk=clk)
         self.qin = MemSlaveWStream(name="qin", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
         self.qout = MemSlaveRStream(name="qout", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
+        self.qresp = MemSlaveRStream(name="qresp", sim=sim, mem_dwidth=DW, depth=RDEPTH, clk=clk)
         self._stream("k_cfg", self.regs.m_cfg, fir.s_cfg, self.regs.ncfg)
         self._stream("k_stat", fir.m_status, self.regs.s_status, 8)
         self._stream("k_in", self.qin.m_out, fir.s_in, QDEPTH)
         self._stream("k_out", fir.m_out, self.qout.s_in, QDEPTH)
+        self._stream("k_resp", fir.m_resp, self.qresp.s_in, RDEPTH)
+        views = [self.regs, self.qin, self.qout, self.qresp]
         if self.one_front:
-            # Stage 4: the three views behind ONE bus port, at the same addresses (view k at k*4 KB).
-            self.adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, mem_dwidth=DW,
-                                           views=[self.regs, self.qin, self.qout])
+            # Stage 4: the views behind ONE bus port, at the same addresses (view k at k*4 KB).
+            self.adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, mem_dwidth=DW, views=views)
             slaves, ranges = [self.adaptor.s_mem], [(REGS, self.adaptor.span())]
         else:
-            slaves = [self.regs.s_mem, self.qin.s_mem, self.qout.s_mem]
-            ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000)]
+            slaves = [v.s_mem for v in views]
+            ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000), (QRESP, 0x1000)]
         self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1,
                                     nports_slave=len(slaves), bitwidth=DW,
                                     latency_init=self.xbar_latency)
@@ -407,11 +471,12 @@ class MmFirSystem:
             self.xbar.bind(f"slave_{k}", ep)
         assign_address_ranges(slaves, ranges)
         self.slave_map = (self.adaptor.slave_map() if self.one_front
-                          else MemSlaveMap.from_views([self.regs, self.qin, self.qout]))
+                          else MemSlaveMap.from_views(views))
         mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
         self.host.cfg = mm.stream_master("regs")
         self.host.qin = mm.stream_master("qin")
         self.host.qout = mm.stream_slave("qout")
+        self.host.qresp = mm.stream_slave("qresp")
         self.host.status = mm.status("regs")
 
     def run(self) -> np.ndarray:

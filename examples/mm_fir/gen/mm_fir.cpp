@@ -13,12 +13,14 @@ void mm_fir(
     hls::stream<ap_uint<64> >& s_cfg,
     hls::stream<ap_uint<64> >& s_in,
     hls::stream<ap_uint<64> >& m_out,
+    hls::stream<ap_uint<64> >& m_resp,
     hls::stream<ap_uint<64> >& m_status
 ) {
 #pragma HLS INTERFACE axis port=s_cfg
 #pragma HLS INTERFACE axis port=s_in
 #pragma HLS INTERFACE axis port=m_out
+#pragma HLS INTERFACE axis port=m_resp
 #pragma HLS INTERFACE axis port=m_status
 #pragma HLS INTERFACE ap_ctrl_none port=return
-    hls_thread_local hls::task t0(mm_fir_task<64>, s_cfg, s_in, m_out, m_status);
+    hls_thread_local hls::task t0(mm_fir_task<64>, s_cfg, s_in, m_out, m_resp, m_status);
 }

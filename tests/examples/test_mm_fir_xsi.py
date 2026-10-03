@@ -4,9 +4,10 @@ The system itself -- AMD's crossbar, the hand-written adaptor leaves and the csy
 kernel under one generated top, and the C++ host program -- is built by
 ``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host is the pysim
 ``FirHost`` on the C++ endpoints of ``xsi_mm_host.h`` (plans/mm_adaptor_host_endpoints.md Stage 2): a
-writer that commits each config and waits until the status shows it RECEIVED, then sends the sample
-packets; and a reader that takes one output packet per input packet.  The output must equal the numpy
-golden bit for bit, and the status must show both configs received and none late.
+writer that commits each config and sends each packet behind a FirCmdHdr whose cfg_seq names the config
+it needs (plans/mm_fir_cfg_seq.md); and a reader that takes one output packet per input packet and its
+response.  The output must equal the numpy golden bit for bit, the status must show both configs taken,
+and every response must echo its packet's tx_id and intended config.
 
 Run: ``pytest tests/examples/test_mm_fir_xsi.py -m xsi`` (needs Vivado, and
 ``python -m examples.mm_fir.mm_fir_build`` for the kernel's csynth).
@@ -18,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import MmFirSystem, fir_golden
+from examples.mm_fir.mm_fir import MmFirSystem, fir_golden, host_schedule
 from examples.mm_fir.mm_fir_xsi import (
     NSAMP,
     PKT,
@@ -56,7 +57,10 @@ def test_mm_fir_rtl_bit_exact(fir_run):
     done = parse_kv(fir_run, "DONE")
     assert done["done"] == 1, fir_run[-3000:]
     st = parse_kv(fir_run, "STATUS")
-    assert st == {"nsamp": NSAMP, "ncfg": 2, "late": 0}, st
+    assert st == {"nsamp": NSAMP, "ncfg": 2}, st
+    # Every packet answered, each echoing its tx_id and the config it was meant to use.
+    npkt = sum(1 for it in host_schedule(NSAMP, PLAN, PKT) if it[0] == "pkt")
+    assert parse_kv(fir_run, "RESP") == {"n": npkt, "mismatches": 0}
     y = output_words(fir_run)
     assert np.array_equal(y, fir_golden(scenario_x(), PLAN)), "RTL output differs from the numpy golden"
 
@@ -73,22 +77,20 @@ def test_mm_fir_rtl_cycles(fir_run):
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
-#: Recorded 2026-10-03, with the two-process host on the C++ endpoints (xsi_mm_host.h) and a bus
-#: master that may have one read and one write outstanding at once (mm_fir_xsi.OVERLAP_RW, i.e.
-#: AxiMmMaster's overlap_rw): host program start to the final status read, 200 samples, one tap
-#: switch.  per_view 567 (76 ops, 9 polls) / one_front 721 (74 ops, 7 polls).
+#: Recorded 2026-10-03, after mm_fir moved to the in-band header pattern (plans/mm_fir_cfg_seq.md):
+#: every packet is a FirCmdHdr write and a sample write to queue in, and a FirRespHdr read from the
+#: response FIFO; the host never polls the status for "received".  Bus master overlaps one read and one
+#: write (mm_fir_xsi.OVERLAP_RW).  per_view 937 (143 ops, 12 polls) / one_front 922 (124 ops, 3 polls).
 #:
-#: pysim says 423 / 742.  one_front: pysim 3% pessimistic.  per_view: pysim 25% optimistic -- the
-#: remaining gap is not attributed yet.
+#: pysim says 575 / 1023 -- and so gets the ORDER of the two topologies wrong (RTL: nearly equal; pysim:
+#: per_view far faster).  Not attributed; it is the same open question as the earlier 25% gap.
 #:
-#: The same host with the one-at-a-time master (OVERLAP_RW = False) measured 811 / 776 (73 ops,
-#: 6 polls); a pysim master forced to one transaction at a time gives 742 for both, so that is the
-#: model the overlap removed.  one_front gains too (776 -> 721): its front still serves one
-#: transaction at a time, but the master no longer waits for a write's response before presenting
-#: the next read's address.
-#:
-#: History.  The single-process host (drain before every push, 4 ops per packet), one-at-a-time
-#: master: 857 / 823, pysim 709 for both, on the same RTL.  Before that, a kernel that was not II=1 ran
-#: ~1 sample per 10 cycles: 2096 cycles, 221 ops, 55 polls.  Where one_front differs from per_view
-#: beyond the master (a 1x2 instead of a 1x3 crossbar, one front instead of three) is not isolated.
-EXPECTED_CYCLES = {"per_view": 567, "one_front": 721}
+#: History (same host program shape, same RTL kernel unless noted):
+#:   * apply_at protocol, two-process host, overlap master: 567 / 721 (76 / 74 ops), pysim 423 / 742;
+#:   * the same with the one-at-a-time master: 811 / 776 (73 ops), pysim 742 / 742 when its master is
+#:     forced to one transaction too;
+#:   * the single-process host (drain before every push): 857 / 823, pysim 709;
+#:   * a kernel that was not II=1 (a whole config / status per firing): 2096 cycles, 221 ops.
+#: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
+#: and the response FIFO's poll and pop -- more than dropping the status wait saved.
+EXPECTED_CYCLES = {"per_view": 937, "one_front": 922}

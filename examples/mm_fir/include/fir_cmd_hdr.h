@@ -1,5 +1,5 @@
-#ifndef INCLUDE_FIR_STATUS_H
-#define INCLUDE_FIR_STATUS_H
+#ifndef INCLUDE_FIR_CMD_HDR_H
+#define INCLUDE_FIR_CMD_HDR_H
 
 #include <ap_int.h>
 #include <hls_stream.h>
@@ -10,9 +10,11 @@
 #endif
 #include "streamutils_hls.h"
 
-struct FirStatus {
-    ap_uint<32> nsamp;  // samples filtered so far
-    ap_uint<32> ncfg;  // configs taken so far
+struct FirCmdHdr {
+    ap_uint<32> nsamp;  // samples in this packet
+    ap_uint<16> tx_id;  // the host's packet id, echoed in the response
+    // the config this packet needs: config k is the k-th COMMIT
+    ap_uint<16> cfg_seq;
 
     static constexpr int bitwidth = 64;
 
@@ -34,31 +36,34 @@ struct FirStatus {
         return nwords_value(word_bw_tag<word_bw>{});
     }
 
-    static ap_uint<bitwidth> pack_to_uint(const FirStatus& data) {
+    static ap_uint<bitwidth> pack_to_uint(const FirCmdHdr& data) {
         ap_uint<bitwidth> res = 0;
         res.range(31, 0) = data.nsamp;
-        res.range(63, 32) = data.ncfg;
+        res.range(47, 32) = data.tx_id;
+        res.range(63, 48) = data.cfg_seq;
         return res;
     }
 
-    static FirStatus unpack_from_uint(const ap_uint<bitwidth>& packed) {
-        FirStatus data;
+    static FirCmdHdr unpack_from_uint(const ap_uint<bitwidth>& packed) {
+        FirCmdHdr data;
         data.nsamp = (ap_uint<32>)(packed.range(31, 0));
-        data.ncfg = (ap_uint<32>)(packed.range(63, 32));
+        data.tx_id = (ap_uint<16>)(packed.range(47, 32));
+        data.cfg_seq = (ap_uint<16>)(packed.range(63, 48));
         return data;
     }
 
     template<int word_bw>
-    static void write_array_impl(word_bw_tag<word_bw>, const FirStatus* self, ap_uint<word_bw> x[]) {
+    static void write_array_impl(word_bw_tag<word_bw>, const FirCmdHdr* self, ap_uint<word_bw> x[]) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_array");
         (void)self;
         (void)x;
     }
 
-    static void write_array_impl(word_bw_tag<64>, const FirStatus* self, ap_uint<64> x[]) {
+    static void write_array_impl(word_bw_tag<64>, const FirCmdHdr* self, ap_uint<64> x[]) {
         x[0] = 0;
         x[0].range(31, 0) = self->nsamp;
-        x[0].range(63, 32) = self->ncfg;
+        x[0].range(47, 32) = self->tx_id;
+        x[0].range(63, 48) = self->cfg_seq;
     }
 
     template<int word_bw>
@@ -67,16 +72,17 @@ struct FirStatus {
     }
 
     template<int word_bw>
-    static void write_stream_impl(word_bw_tag<word_bw>, const FirStatus* self, hls::stream<ap_uint<word_bw>> &s) {
+    static void write_stream_impl(word_bw_tag<word_bw>, const FirCmdHdr* self, hls::stream<ap_uint<word_bw>> &s) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_stream");
         (void)self;
         (void)s;
     }
 
-    static void write_stream_impl(word_bw_tag<64>, const FirStatus* self, hls::stream<ap_uint<64>> &s) {
+    static void write_stream_impl(word_bw_tag<64>, const FirCmdHdr* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
-        w.range(63, 32) = self->ncfg;
+        w.range(47, 32) = self->tx_id;
+        w.range(63, 48) = self->cfg_seq;
         s.write(w);
         w = 0;
     }
@@ -87,17 +93,18 @@ struct FirStatus {
     }
 
     template<int word_bw>
-    static void write_axi4_stream_impl(word_bw_tag<word_bw>, const FirStatus* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, bool tlast) {
+    static void write_axi4_stream_impl(word_bw_tag<word_bw>, const FirCmdHdr* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, bool tlast) {
         static_assert(word_bw < 0, "Unsupported word_bw for write_axi4_stream");
         (void)self;
         (void)s;
         (void)tlast;
     }
 
-    static void write_axi4_stream_impl(word_bw_tag<64>, const FirStatus* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
+    static void write_axi4_stream_impl(word_bw_tag<64>, const FirCmdHdr* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
-        w.range(63, 32) = self->ncfg;
+        w.range(47, 32) = self->tx_id;
+        w.range(63, 48) = self->cfg_seq;
         streamutils::write_axi4_word<64>(s, w, tlast);
         w = 0;
     }
@@ -108,15 +115,16 @@ struct FirStatus {
     }
 
     template<int word_bw>
-    static void read_array_impl(word_bw_tag<word_bw>, FirStatus* self, const ap_uint<word_bw> x[]) {
+    static void read_array_impl(word_bw_tag<word_bw>, FirCmdHdr* self, const ap_uint<word_bw> x[]) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_array");
         (void)self;
         (void)x;
     }
 
-    static void read_array_impl(word_bw_tag<64>, FirStatus* self, const ap_uint<64> x[]) {
+    static void read_array_impl(word_bw_tag<64>, FirCmdHdr* self, const ap_uint<64> x[]) {
         self->nsamp = (ap_uint<32>)(x[0].range(31, 0));
-        self->ncfg = (ap_uint<32>)(x[0].range(63, 32));
+        self->tx_id = (ap_uint<16>)(x[0].range(47, 32));
+        self->cfg_seq = (ap_uint<16>)(x[0].range(63, 48));
     }
 
     template<int word_bw>
@@ -125,17 +133,18 @@ struct FirStatus {
     }
 
     template<int word_bw>
-    static void read_stream_impl(word_bw_tag<word_bw>, FirStatus* self, hls::stream<ap_uint<word_bw>> &s) {
+    static void read_stream_impl(word_bw_tag<word_bw>, FirCmdHdr* self, hls::stream<ap_uint<word_bw>> &s) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_stream");
         (void)self;
         (void)s;
     }
 
-    static void read_stream_impl(word_bw_tag<64>, FirStatus* self, hls::stream<ap_uint<64>> &s) {
+    static void read_stream_impl(word_bw_tag<64>, FirCmdHdr* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w = s.read();
         self->nsamp = (ap_uint<32>)(w.range(31, 0));
-        self->ncfg = (ap_uint<32>)(w.range(63, 32));
+        self->tx_id = (ap_uint<16>)(w.range(47, 32));
+        self->cfg_seq = (ap_uint<16>)(w.range(63, 48));
     }
 
     template<int word_bw>
@@ -144,14 +153,14 @@ struct FirStatus {
     }
 
     template<int word_bw>
-    static void read_axi4_stream_impl(word_bw_tag<word_bw>, FirStatus* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, streamutils::tlast_status &tl) {
+    static void read_axi4_stream_impl(word_bw_tag<word_bw>, FirCmdHdr* self, hls::stream<streamutils::axi4s_word<word_bw>> &s, streamutils::tlast_status &tl) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_axi4_stream");
         (void)self;
         (void)s;
         (void)tl;
     }
 
-    static void read_axi4_stream_impl(word_bw_tag<64>, FirStatus* self, hls::stream<streamutils::axi4s_word<64>> &s, streamutils::tlast_status &tl) {
+    static void read_axi4_stream_impl(word_bw_tag<64>, FirCmdHdr* self, hls::stream<streamutils::axi4s_word<64>> &s, streamutils::tlast_status &tl) {
             ap_uint<64> w = 0;
             tl = streamutils::tlast_status::no_tlast;
             bool last = false;
@@ -169,7 +178,12 @@ struct FirStatus {
             tl = streamutils::tlast_status::tlast_early;
             return;
         }
-        self->ncfg = (ap_uint<32>)(w.range(63, 32));
+        self->tx_id = (ap_uint<16>)(w.range(47, 32));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        self->cfg_seq = (ap_uint<16>)(w.range(63, 48));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }
@@ -189,7 +203,7 @@ struct FirStatus {
         read_axi4_stream<word_bw>(s, tl);
     }
 
-#ifdef WAVEFLOW_ENABLE_FIR_STATUS_TB_H_MEMBERS
+#ifdef WAVEFLOW_ENABLE_FIR_CMD_HDR_TB_H_MEMBERS
     void dump_json(std::ostream& os, int indent = 2, int level = 0) const;
     void load_json(const std::string& json_text, size_t& pos);
     void load_json(std::istream& is);
@@ -198,4 +212,4 @@ struct FirStatus {
 #endif
 };
 
-#endif // INCLUDE_FIR_STATUS_H
+#endif // INCLUDE_FIR_CMD_HDR_H

@@ -21,7 +21,7 @@ from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
 
-from examples.mm_fir.mm_fir import DW, FirCfg, FirStatus, MmFir, Taps
+from examples.mm_fir.mm_fir import DW, FirCfg, FirCmdHdr, FirRespHdr, FirStatus, MmFir, Taps
 
 HERE = Path(__file__).resolve().parent
 TOP = "mm_fir"
@@ -31,7 +31,7 @@ def gen_headers(root: Path = HERE) -> None:
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     dag.add(MemMgrStep(output_dir=INCLUDE_DIR))     # the generated top includes memmgr.hpp
-    for cls in (Taps, FirCfg, FirStatus):
+    for cls in (Taps, FirCmdHdr, FirRespHdr, FirCfg, FirStatus):
         dag.add(DataSchemaStep(cls, word_bw_supported=[DW], include_dir=INCLUDE_DIR))
     res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
     bad = [k for k, r in res.items() if not r.success]
