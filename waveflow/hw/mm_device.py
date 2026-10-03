@@ -200,8 +200,62 @@ def build_mm_device(kernel, *, sim, clk: Clock, mem_dwidth: int = 64, one_front:
     if one_front:
         adaptor = MemSlaveAdaptor(name=f"{prefix}mm", sim=sim, mem_dwidth=dw,
                                   views=list(views.values()))
-    return MmSlaveDevice(kernel=kernel, views=views, layout=layout, adaptor=adaptor, streams=streams)
+    dev = MmSlaveDevice(kernel=kernel, views=views, layout=layout, adaptor=adaptor, streams=streams)
+    # Each bus-facing module knows its device, so a walk from a crossbar can find it (D5).
+    for mod in ([adaptor] if adaptor is not None else list(views.values())):
+        mod.mm_device = dev
+    return dev
+
+
+def _snake(name: str) -> str:
+    out = []
+    for i, c in enumerate(name):
+        if c.isupper() and i and (not name[i - 1].isupper() or
+                                  (i + 1 < len(name) and name[i + 1].islower())):
+            out.append("_")
+        out.append(c.lower())
+    return "".join(out)
+
+
+def bus_address_headers(xbar, *, system: str) -> dict[str, str]:
+    """The C++ headers a bus master on *xbar* needs, found by walking the crossbar
+    (``plans/bus_address_map.md`` D5): one **layout** header per kernel type reachable through it
+    (``<type>_layout.h``, namespace ``<type>_layout``), and the **bases** header for the system
+    (``<system>_bases.h``: ``<INSTANCE>_BASE`` / ``_SPAN`` per instance).  The keys are the file
+    names, in include order.
+
+    Every slave on the crossbar must belong to a device built by :func:`build_mm_device` -- a slave
+    that does not (a plain memory) has no layout to give, and is refused rather than skipped.  Call it
+    after ``assign_address_ranges``.
+    """
+    from waveflow.hw.mm_host import bases_to_cpp_header
+
+    devices: dict[int, tuple[MmSlaveDevice, int]] = {}
+    for k in range(int(xbar.nports_slave)):
+        ep = xbar.endpoints.get(f"slave_{k}")
+        dev = getattr(getattr(ep, "comp", None), "mm_device", None) if ep is not None else None
+        if dev is None:
+            raise TypeError(f"{xbar.name}: slave_{k} is not a memory-mapped device's port (no "
+                            f"layout to generate)")
+        if ep.addr_range is None:
+            raise RuntimeError(f"{xbar.name}: slave_{k} has no address range yet")
+        # The device's base is its port's base minus that port's offset in the layout.
+        off = next(o for p, o, _ in dev.bus_ports() if p is ep)
+        base = int(ep.addr_range.base_addr) - off
+        seen = devices.get(id(dev))
+        if seen is not None and seen[1] != base:
+            raise ValueError(f"{xbar.name}: {dev.kernel.name}'s ports are not at one base")
+        devices[id(dev)] = (dev, base)
+    out: dict[str, str] = {}
+    src = f"bus_address_headers({xbar.name})"
+    for dev, _ in devices.values():
+        ns = f"{_snake(type(dev.kernel).__name__)}_layout"
+        out.setdefault(f"{ns}.h", dev.layout.to_cpp_header(ns, source=src))
+    out[f"{system}_bases.h"] = bases_to_cpp_header(
+        f"{system}_bases", {dev.kernel.name: (base, dev.layout.span) for dev, base in devices.values()},
+        source=src)
+    return out
 
 
 __all__ = ["QueueIn", "QueueOut", "RegBank", "BramWindow", "layout_of", "MmSlaveDevice",
-           "build_mm_device"]
+           "build_mm_device", "bus_address_headers"]

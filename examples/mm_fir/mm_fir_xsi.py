@@ -28,8 +28,6 @@ import numpy as np
 from examples.mm_fir.mm_fir import (
     DW,
     MmFirSystem,
-    MM_BASE,
-    MM_LAYOUT,
     QDEPTH,
     RDEPTH,
     S16,
@@ -42,7 +40,7 @@ from examples.mm_fir.mm_fir import (
     make_cfg,
 )
 from waveflow.hw.arrayutils import array
-from waveflow.hw.mm_host import bases_to_cpp_header
+from waveflow.hw.mm_device import bus_address_headers
 from waveflow.build.axi_xbar import (
     AxiXbarConfig,
     axi_port_decls,
@@ -163,15 +161,12 @@ def field_pos(schema, name: str) -> tuple[int, int, int]:
 
 
 def address_headers() -> dict[str, str]:
-    """The two halves of the address map the C++ host uses (``plans/bus_address_map.md``): the FIR
-    TYPE's layout (offsets within the slave, from ``MmFir.mm_views``) and this SYSTEM's bases (where
-    the FIR instance is placed).  The testbench combines them -- ``at(mm_fir_layout::qin, FIR)`` -- and
-    restates neither.  The same for both topologies: one front or one slot per view, the views sit at
-    the same offsets."""
-    src = "examples/mm_fir/mm_fir_xsi.py"
-    return {"mm_fir_layout.h": MM_LAYOUT.to_cpp_header("mm_fir_layout", source=src),
-            "mm_fir_bases.h": bases_to_cpp_header("mm_fir_bases", {"fir": (MM_BASE, MM_LAYOUT.span)},
-                                                  source=src)}
+    """The address-map headers the C++ host needs, found by walking the pysim system's crossbar
+    (``bus_address_headers``): the FIR TYPE's layout (``mm_fir_layout.h``, from ``MmFir.mm_views``) and
+    this SYSTEM's bases (``mm_fir_bases.h``).  The testbench combines them --
+    ``at(mm_fir_layout::qin, FIR)`` -- and restates neither.  The same for both topologies: one front
+    or one slot per view, the views sit at the same offsets."""
+    return bus_address_headers(MmFirSystem(x=[0], plan=PLAN).xbar, system="mm_fir")
 
 
 def render_tb(dll: str, x) -> str:
@@ -179,6 +174,8 @@ def render_tb(dll: str, x) -> str:
     endpoints of ``xsi_mm_host.h``.  Same two programs (a writer and a reader on one bus master), the
     same :func:`~examples.mm_fir.mm_fir.host_schedule`, the same polling rules, the same check of
     every response."""
+    includes = "\n".join(f'#include "{h}"' for h in address_headers())
+
     def hexes(words):
         return ", ".join(f"0x{int(w):x}ull" for w in words)
 
@@ -205,8 +202,7 @@ def render_tb(dll: str, x) -> str:
 // a writer and a reader sharing one AxiMmMaster, and no address anywhere in this file.
 #include "xsi_bfm.h"
 #include "xsi_mm_host.h"
-#include "mm_fir_layout.h"
-#include "mm_fir_bases.h"
+{includes}
 using namespace wfbfm;
 
 enum {{ CFG = 0, PKT = 1 }};

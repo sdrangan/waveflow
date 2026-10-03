@@ -242,6 +242,7 @@ _CONTEXT_ATTRS = frozenset({
     # between transactions, matching the XSI AxiMmMaster), and ``_slots`` holds its simpy resources.  Adding the field moved every FirBlock
     # key in one commit, caught by tests/calib/test_key_stability.py -- the same lesson as above.
     "max_outstanding", "issue_cycles", "_slots",        # MMIFMaster
+    "mm_device",          # a view/adaptor's back-reference to its MmSlaveDevice (an address-map walk)
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value
