@@ -2,11 +2,11 @@
 
 The system itself -- AMD's crossbar, the hand-written adaptor leaves and the csynth'd ``mm_fir``
 kernel under one generated top, and the C++ host program -- is built by
-``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host runs the same
-protocol as the pysim ``FirHost``: commit a config, poll the status until the config is RECEIVED, wait
-for room before each packet, drain the outputs between packets, and switch taps mid-stream.  The
-output must equal the numpy golden bit for bit, and the status must show both configs received and
-none late.
+``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host is the pysim
+``FirHost`` on the C++ endpoints of ``xsi_mm_host.h`` (plans/mm_adaptor_host_endpoints.md Stage 2): a
+writer that commits each config and waits until the status shows it RECEIVED, then sends the sample
+packets; and a reader that takes one output packet per input packet.  The output must equal the numpy
+golden bit for bit, and the status must show both configs received and none late.
 
 Run: ``pytest tests/examples/test_mm_fir_xsi.py -m xsi`` (needs Vivado, and
 ``python -m examples.mm_fir.mm_fir_build`` for the kernel's csynth).
@@ -73,19 +73,21 @@ def test_mm_fir_rtl_cycles(fir_run):
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
-#: Recorded 2026-10-02: host program start to the final status read, 200 samples, one tap switch.
+#: Recorded 2026-10-03, with the two-process host on the C++ endpoints (xsi_mm_host.h): host program
+#: start to the final status read, 200 samples, one tap switch.  per_view 811 / one_front 776, 73 bus
+#: ops, 6 polls.  Measured on RTL csynth'd from this checkout; the previous host on the SAME RTL still
+#: measured 857 / 823 (68 ops, 2 polls), so the move is the host program and nothing else.
 #:
-#: The kernel is pipelined at II=1 (csynth: latency 10, interval 1).  Its first version was not -- it
-#: read a whole 5-word config and wrote a whole 2-word status inside one firing -- and ran at ~1 sample
-#: per 10 cycles: 2096 cycles, 221 bus ops, 55 polls, because every drain found only a few outputs.
-#: Moving at most one word per stream per firing fixed it: 857 cycles, 68 ops, 2 polls.
+#: pysim says 423 / 742.  The per_view gap is the BUS MASTER MODEL, not the adaptor: AxiMmMaster keeps
+#: one transaction outstanding, so the writer's and the reader's operations take turns even when they
+#: go to different slaves, while a pysim MMIFMaster lets a read and a write run at once.  Probe: wrap
+#: the pysim master in a capacity-1 resource and per_view drops to 742 -- equal to one_front, where the
+#: single front serializes them anyway.  Under the same master model pysim is 4-9% optimistic
+#: (742 vs 776 / 811).  Which master model is right is open (plans/mm_adaptor_host_endpoints.md).
 #:
-#: pysim (crossbar latency_init = 4) predicts 709, 17% optimistic.  Per packet the RTL takes ~57 cycles
-#: and pysim ~51, and the difference is the C++ host's own pacing: AxiMmMaster starts each op two
-#: cycles after the previous one ends, and the protocol issues four ops per packet.  That is the
-#: testbench, not the system; the adaptor alone tracks RTL within 2 cycles (tests/hw/test_mm_queue.py).
-#:
-#: one_front (Stage 4, recorded the same day): 823 -- 34 fewer over the same 68 ops.  Where the half
-#: cycle per op comes from (a 1x2 instead of a 1x3 crossbar, or one front instead of three) has NOT
-#: been isolated; both runs are bit-exact and pysim predicts 709 for each.
-EXPECTED_CYCLES = {"per_view": 857, "one_front": 823}
+#: History.  2026-10-02, the single-process host (drain before every push, 4 ops per packet): 857 /
+#: 823, pysim 709 for both.  Before that, a kernel that was not II=1 (it moved a whole 5-word config
+#: and a whole 2-word status in one firing) ran ~1 sample per 10 cycles: 2096 cycles, 221 ops, 55 polls.
+#: Where one_front's advantage over per_view comes from (a 1x2 instead of a 1x3 crossbar, or one front
+#: instead of three) has NOT been isolated.
+EXPECTED_CYCLES = {"per_view": 811, "one_front": 776}

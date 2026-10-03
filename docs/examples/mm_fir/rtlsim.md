@@ -3,7 +3,7 @@ title: RTL simulation
 parent: A memory-mapped FIR
 nav_order: 4
 has_children: false
-summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by a C++ host program that runs the pysim host's protocol. Two adaptor shapes — one view per crossbar slot, and all three behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, at 857 and 823 cycles."
+summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all three behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, at 811 and 776 cycles."
 ---
 
 # RTL simulation
@@ -29,7 +29,7 @@ at once:
 | vendor IP | `axi_crossbar`, 1 SI, 2 or 3 MI | `generate_axi_xbar(XBARS[topology], ...)` |
 | hand-written RTL | `axi_slave_front`, `mm_regbank`, `mm_queue_in`, `mm_queue_out` | `waveflow/build/rtl/` |
 | RTL top | `mm_fir_top`: the three above, wired | `render_top(top, topology)` |
-| testbench (the harness) | an `AxiMmMaster` and a `HostProgram` state machine | `render_tb(dll, x)` |
+| testbench (the harness) | an `AxiMmMaster`, and the host's `Writer` and `Reader` on the C++ endpoints | `render_tb(dll, x)`, `map_header(topology)` |
 
 The RTL top is assembled by this example's `render_top` from framework pieces — it is not yet emitted
 by `wrapper_gen` from the module graph, the way a design's memories are.
@@ -113,65 +113,91 @@ bank completes a message on its second word, and queue out ignores TLAST:
 
 ## The host program
 
-The pysim host is a Python generator that decides as it goes: poll until the config is received, wait
-until there is room. At RTL the host is a C++ model, and those decisions become a **state machine over
-bus operations**. `host_actions(x)` lays the protocol out as a flat list — the same decisions, in the
-same order, as `FirHost`:
+The host is the pysim [`FirHost`](python.md#the-host-program), written in C++ against the endpoints of
+[`xsi_mm_host.h`](../../../waveflow/build/xsi/xsi_mm_host.h) — the C++ twins of the Python endpoints:
 
-```python
-def host_actions(x) -> list[tuple]:
-    """The FirHost protocol as a flat action list (same decisions as the pysim host)."""
-    acts: list[tuple] = []
-    cfgs = sorted(PLAN, key=lambda c: c[0])
-    nxt, n = 0, 0
-    while n < len(x):
-        while nxt < len(cfgs) and cfgs[nxt][0] <= n:
-            words = [int(w) for w in make_cfg(cfgs[nxt][1], cfgs[nxt][0]).serialize(word_bw=DW)]
-            acts += [("W", REGS, words), ("W", REGS + 0x800, [1]), ("POLL_NCFG", nxt + 1)]
-            nxt += 1
-        end = min(n + PKT, len(x), cfgs[nxt][0] if nxt < len(cfgs) else len(x))
-        chunk = [int(v) & 0xFFFF for v in x[n:end]]
-        acts += [("DRAIN", 0), ("WAIT_VAC", len(chunk)), ("W", QIN, [len(chunk)] + chunk)]
-        n = end
-    acts += [("DRAIN_ALL", len(x)), ("STATUS", 0)]
-    return acts
+| view | Python endpoint | C++ endpoint |
+|---|---|---|
+| register bank, config | `StreamIFMaster` | `MmRegBankCfg` |
+| register bank, status | `LatestValueIFSlave` | `MmStatusReader` |
+| queue in | `StreamIFMaster` | `MmQueueWriter` |
+| queue out | `MmStreamIFSlave` | `MmQueueReader` |
+
+An XSI participant cannot block, so each C++ endpoint is a small state machine: the host calls
+`start(...)`, then `step()` once per cycle, until `busy()` is false. The rules inside are the Python
+ones, line for line — poll until a packet fits, poll until words are ready, sleep `POLL` cycles after a
+poll that found too little — so the two hosts issue the same kinds of bus operations for the same
+reasons.
+
+Two things are generated from Python, so the C++ restates neither:
+
+- **The address map.** `map_header(topology)` builds the same `MmFirSystem` the pysim gates run and
+  writes its `slave_map` out with `MemSlaveMap.to_cpp_header`:
+
+  ```cpp
+  namespace mm_fir_map {
+  static const wfbfm::MmView regs = {"regs", wfbfm::MmKind::RegBank, 0x0ull, 4096u, 8u, 0u, 5u, 2u, 0u};
+  static const wfbfm::MmView qin = {"qin", wfbfm::MmKind::QueueIn, 0x1000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
+  static const wfbfm::MmView qout = {"qout", wfbfm::MmKind::QueueOut, 0x2000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
+  }
+  ```
+
+  The offsets inside a window — COMMIT at `W/2`, status at `3W/4` — are not in the header. `MmView`
+  computes them, as `ViewEntry` does in Python.
+- **The schedule.** `host_schedule` — the list of configs and sample packets the pysim host sends — is
+  rendered as a table the C++ `Writer` walks and the `Reader` reads its packet sizes from.
+
+The host itself is two `XsiSimObj`s sharing one `AxiMmMaster`, as the pysim host is two processes
+sharing one `MMIFMaster`:
+
+```cpp
+class Writer : public XsiSimObj {
+    ...
+    void update() override {
+        cfg_.step(); qin_.step(); st_.step();
+        if (phase_ == SEND_CFG && !cfg_.busy()) { st_.start(0); phase_ = WAIT_RX; }
+        else if (phase_ == WAIT_RX && !st_.busy()) {
+            if (field(st_.words, 0, 32) >= SCHEDULE[i_].i + 1) next();
+            else { ++polls_; st_.start(POLL); }
+        }
+        else if (phase_ == SEND_PKT && !qin_.busy()) next();
+        if (phase_ == IDLE && i_ < SCHEDULE.size()) {
+            const Item& it = SCHEDULE[i_];
+            if (it.kind == CFG) { cfg_.start(it.words); phase_ = SEND_CFG; }
+            else                { qin_.start(it.words); phase_ = SEND_PKT; }
+        }
+    }
+};
 ```
 
-For the gate's 200 samples that is 50 actions, beginning:
-
-| action | address | |
-|---|---|---|
-| `W` | `0x0000` | the 5-word `FirCfg` into the shadow |
-| `W` | `0x0800` | COMMIT |
-| `POLL_NCFG` | `0x0C00` | read the status until `ncfg ≥ 1` |
-| `DRAIN` | `0x2800`, `0x2000` | read the occupancy; pop that many results |
-| `WAIT_VAC` | `0x1000` | read the vacancy until 16 slots are free |
-| `W` | `0x1000` | the packet `[16 \| 16 samples]` |
-
-`render_tb` turns the list into a C++ `HostProgram`: an `XsiSimObj` that, each cycle, checks whether the
-`AxiMmMaster`'s current operation is done, reacts to the result (a `POLL_NCFG` that read `ncfg = 0`
-issues the same read again, eight cycles later), and issues the next. The field positions it decodes
-from the status — where `ncfg` sits in the two words — are read off `FirStatus`'s own serializer by
-`field_pos`, not written into the C++.
+`AxiMmMaster` serves the operations the two programs queue in order, one at a time. The field
+positions the host decodes from the status — where `ncfg` sits in the two words — are read off
+`FirStatus`'s own serializer by `field_pos`, not written into the C++.
 
 ## Results
 
-| topology | bit-exact vs `fir_golden` | status `nsamp / ncfg / late` | cycles | bus operations | status polls |
+| topology | bit-exact vs `fir_golden` | status `nsamp / ncfg / late` | cycles | bus operations | polls |
 |---|---|---|---|---|---|
-| `per_view` | yes | 200 / 2 / 0 | **857** | 68 | 2 |
-| `one_front` | yes | 200 / 2 / 0 | **823** | 68 | 2 |
+| `per_view` | yes | 200 / 2 / 0 | **811** | 73 | 6 |
+| `one_front` | yes | 200 / 2 / 0 | **776** | 73 | 6 |
 
 Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, and both
 report every config received in time.
 
-`one_front` is 34 cycles faster over the same 68 operations — half a cycle per operation. Where that
-comes from (a 1×2 instead of a 1×3 crossbar, or one front instead of three) has **not** been isolated;
-the cycle counts are exact and gated, the attribution is open.
+`one_front` is 35 cycles faster over the same 73 operations. Where that comes from (a 1×2 instead of
+a 1×3 crossbar, or one front instead of three) has **not** been isolated; the cycle counts are exact
+and gated, the attribution is open.
 
-pysim predicts 709 for both. The gap is mostly the C++ host's own pacing — it starts each operation
-two cycles after the previous one ends, and the protocol issues four per packet — rather than the
-adaptor, which tracks RTL to within 2 cycles per operation on its own. See
+**Against pysim.** pysim says 742 for `one_front` — 4% under RTL's 776. For `per_view` it says 423,
+and that gap is not the adaptor: it is the bus master. `AxiMmMaster` keeps one transaction outstanding,
+so the writer's and the reader's operations take turns even when they go to different slaves; a pysim
+`MMIFMaster` lets a read and a write run at once. Make the pysim master take one transaction at a time
+and `per_view` drops to 742 too — the same as `one_front`, whose single front serializes them anyway.
+Which master is the right model of a real host is an open question. See
 [Python simulation](pysim.md#how-close-is-pysims-timing).
+
+Before the host was rewritten on the endpoints, a single-process host that drained queue out before
+every push measured 857 and 823 on the same RTL.
 
 ## Before the run: is this the RTL I think it is?
 

@@ -338,3 +338,30 @@ def test_latest_value_if_keeps_only_the_latest_complete_message():
     sim.env.process(proc())
     sim.run_sim()
     assert seen == [0, 3, 30] and lv.nmsg == 3
+
+
+# ---------------------------------------------------------------------------
+# The map as a C++ header (the XSI host's address map)
+# ---------------------------------------------------------------------------
+
+def test_cpp_header_carries_every_view_and_no_derived_offset():
+    """One MmView per view with the base and sizes; the offsets inside a window (COMMIT, status) are
+    NOT in the header -- MmView computes them, as ViewEntry does, so they are written once per
+    language and cannot be restated wrong in a generated file."""
+    r = Rig(procs=[])
+    h = r.adaptor.slave_map().to_cpp_header("rig_map", source="test")
+    assert '#include "xsi_mm_host.h"' in h and "namespace rig_map {" in h
+    assert ('static const wfbfm::MmView regs = {"regs", wfbfm::MmKind::RegBank, 0x40000000ull, '
+            '4096u, 8u, 0u, 1u, 1u, 0u};') in h
+    assert ('static const wfbfm::MmView qout = {"qout", wfbfm::MmKind::QueueOut, 0x40002000ull, '
+            '4096u, 8u, 16u, 0u, 0u, 0u};') in h
+    assert "wfbfm::MmKind::Bram, 0x40003000ull" in h and "wfbfm::MmKind::QueueIn, 0x40001000ull" in h
+    assert "0x40000800" not in h and "0x40000c00" not in h
+
+
+def test_cpp_header_refuses_a_view_name_that_is_not_an_identifier():
+    sim = Simulation()
+    q = MemSlaveWStream(name="queue-in", sim=sim)
+    assign_address_ranges([q.s_mem], [(0, 0x1000)])
+    with pytest.raises(ValueError, match=r"not a C\+\+ identifier"):
+        MemSlaveMap.from_views([q]).to_cpp_header("m")

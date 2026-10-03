@@ -3,7 +3,7 @@ title: Python simulation
 parent: A memory-mapped FIR
 nav_order: 2
 has_children: false
-summary: "The whole system in pysim, in three wirings with one host class: each view on its own crossbar slot, all three behind one adaptor port, and the host joined straight to the kernel. Bit-exact through a mid-stream tap switch in all three, including one inside a packet; the late-host negative control reports the miss and matches 'switched where it arrived'. Cycle counts, and why they cannot yet be compared with RTL."
+summary: "The whole system in pysim, in three wirings with one host class: each view on its own crossbar slot, all three behind one adaptor port, and the host joined straight to the kernel. Bit-exact through a mid-stream tap switch in all three, including one inside a packet; the late-host negative control reports the miss and matches 'switched where it arrived'. Cycle counts against RTL, and why one topology's gap is the bus master model rather than the adaptor."
 ---
 
 # Simulation
@@ -131,19 +131,19 @@ three wirings give the same outputs from the same host; and the config bounds.
 
 ## How close is pysim's timing?
 
-**Not comparable at the moment.** The RTL gate measures **857** cycles with one view per slot and
-**823** behind one front, but its host is still the earlier single-process protocol, written as a C++
-state machine — it drains queue out before every push, where the pysim host now reads and writes in
-two processes. Until the C++ host is ported to the same endpoints (the next stage of
-`plans/mm_adaptor_host_endpoints.md`), the two measure different host programs.
+RTL measures **811** cycles with one view per slot and **776** behind one front, running the same host
+on C++ endpoints ([RTL simulation](rtlsim.md#results)).
 
-What does carry over:
+- **Behind one front, pysim says 742**: 4% under RTL.
+- **With one view per slot, pysim says 423**, and that gap is the *bus master*, not the adaptor. The
+  C++ `AxiMmMaster` keeps one transaction outstanding, so the host's writer and reader take turns even
+  when they reach different slaves; a pysim `MMIFMaster` lets a read and a write run at once. Make the
+  pysim master take one transaction at a time and `per_view` drops to 742, the same as `one_front`.
+  Which of the two is the right model of a real host is an open question.
 
-- The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
-  to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),
-  [`tests/hw/test_mm_regbank.py`](../../../tests/hw/test_mm_regbank.py)).
-- With the earlier host on both sides, pysim predicted 709 cycles against RTL's 857 / 823; the gap was
-  the C++ host's own pacing (it starts each bus operation two cycles after the previous one ends).
+The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
+to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),
+[`tests/hw/test_mm_regbank.py`](../../../tests/hw/test_mm_regbank.py)).
 
 The one place pysim is structurally coarser: an operation that waits on a full queue, or on a config
 packet the kernel has not taken, is released up to one packet early in pysim, because a pysim stream

@@ -1,7 +1,8 @@
 # Plan: host-side endpoints for the memory-mapped slave adaptor
 
-> **Status (2026-10-03): Stages 0 and 1 BUILT** (branch `mm-host-endpoints`, unpushed). Stage 2
-> (XSI) next. Plan text below is the design as proposed; where the build departed from it, a
+> **Status (2026-10-03): Stages 0, 1 and 2 BUILT** (branch `mm-host-endpoints`, unpushed). mm_fir
+> runs one host program over the bus in pysim, directly in pysim, and over the bus at RTL (811 / 776,
+> bit-exact). Stage 3 is the deferred list. One new open question: which bus-master model is right. Plan text below is the design as proposed; where the build departed from it, a
 > **Built:** note says how and why. Section headings are cited from code — do not rename them.
 
 ## Motivation
@@ -302,7 +303,31 @@ runs exactly that; its negative control (a raw, non-polling writer) deadlocks as
 4. Re-measure `EXPECTED_CYCLES` for both topologies (see *XSI host*).
 
 **Gates (`-m xsi`):** `tests/examples/test_mm_fir_xsi.py` bit-exact and status in both topologies, new
-cycle counts asserted exactly. `WANT_XSI_GATES` unchanged (same tests, new numbers) unless a test is
+cycle counts asserted exactly.
+
+**Built** (2026-10-03):
+
+- `waveflow/build/xsi/xsi_mm_host.h`: `MmView` (the C++ `ViewEntry`, offsets computed, never stored)
+  and four endpoints -- `MmQueueWriter`, `MmQueueReader`, `MmRegBankCfg`, `MmStatusReader` -- each a
+  start/step/busy state machine. Added to `XsiWorkspace.HARNESS_FILES` only; it is a new file, so no
+  example's committed harness copy changes.
+- **No per-caller queue was needed.** `AxiMmMaster` already queues ops from any caller and serves them
+  in order, one at a time, so two programs share it as two pysim processes share an `MMIFMaster`.
+- `MemSlaveMap.to_cpp_header`; mm_fir's `map_header(topology)` builds it from the SAME `MmFirSystem`
+  the pysim gates run, so the RTL host restates no address. `host_actions` is deleted; `render_tb`
+  renders `host_schedule` and a `Writer` + `Reader` on the endpoints.
+- **The RTL on disk was stale** before this stage (`include/mm_fir_task.h` changed after its last
+  csynth, not on this branch). Re-synthesized first, then the OLD host was run on the fresh RTL:
+  still 857 / 823. So the move below is the host program and nothing else.
+- **New counts: 811 / 776** (73 ops, 6 polls; was 857 / 823, 68 ops, 2 polls). Bit-exact, status
+  200 / 2 / 0, both topologies.
+- **pysim vs RTL:** one_front 742 vs 776 (4% optimistic). per_view 423 vs 811 -- attributed by a pysim
+  probe to the **bus-master model**: `AxiMmMaster` keeps one transaction outstanding, a pysim
+  `MMIFMaster` lets a read and a write run at once. Wrapping the pysim master in a capacity-1 resource
+  makes per_view 742, equal to one_front. See *Open questions*.
+- C++ trap: Windows headers define a `min` macro; `std::min(a, b)` breaks, `std::min<T>(a, b)` and
+  `(std::min)(a, b)` do not, and `(std::min)<T>(...)` is not valid C++ at all.
+- `WANT_XSI_GATES` unchanged: same tests, new numbers. `WANT_XSI_GATES` unchanged (same tests, new numbers) unless a test is
 added for the BFM classes on their own, in which case it goes up by that count.
 
 ### Stage 3 — later, not in this plan
@@ -327,3 +352,12 @@ added for the BFM classes on their own, in which case it goes up by that count.
   behaviour (truncate the burst, discard the rest) is a data-loss hazard on any unframed stream.
   Worth its own issue.
 - **`LatestValueIF` at RTL** (D4): pysim-only in direct mode for now.
+- **Which bus-master model is right** (found in Stage 2). The C++ `AxiMmMaster` keeps ONE transaction
+  outstanding; a pysim `MMIFMaster` lets a read and a write proceed at once (separate AR/AW channels,
+  as real AXI allows). With a two-process host and views on separate slots the two disagree by ~2x
+  (423 vs 811 cycles); behind one front they agree to 4%, because the front serializes anyway.
+  Options: (a) an opt-in `max_outstanding=1` on `MMIFMaster`, for hosts that really are one
+  outstanding; (b) an opt-in dual-channel mode on `AxiMmMaster` (one read + one write outstanding),
+  so the RTL testbench overlaps as pysim does -- touches `xsi_bfm.h` and therefore every example's
+  committed harness copy; (c) leave both and record the gap. Recommendation: (b) if the target host
+  is a CPU or DMA that overlaps reads and writes, (a) if it is a simple single-threaded driver.
