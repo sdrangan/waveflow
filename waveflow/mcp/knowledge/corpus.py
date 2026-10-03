@@ -639,20 +639,25 @@ def _build(root: Path) -> Corpus:
     # content rather than by name so it also covers the next copied header.
     by_content: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
-    for ex in corpus.examples.values():
-        for rel in list(ex.files) + list(ex.extra_files):
-            if rel in seen:
-                continue
-            seen.add(rel)
-            corpus.file_owner[rel] = ex.name
-            digest = _content_hash(root / rel)
-            first = by_content.get(digest) if digest else None
-            if first is not None:
-                dupes.setdefault(first, []).append(rel)
-                continue
-            if digest:
-                by_content[digest] = rel
-            corpus.chunks.extend(_chunk_source(root, rel, ex.name, tracked))
+    # Two passes: every example claims its OWN directory first, and only then the files its pages
+    # link to elsewhere.  In one pass, an example whose name sorts earlier claimed another example's
+    # file just by linking to it (mm_fir's docs link stream_inband/poly.py), and the file's own example
+    # lost it -- its usages were then credited to the wrong example.
+    claims = [(ex, rel) for ex in corpus.examples.values() for rel in ex.files]
+    claims += [(ex, rel) for ex in corpus.examples.values() for rel in ex.extra_files]
+    for ex, rel in claims:
+        if rel in seen:
+            continue
+        seen.add(rel)
+        corpus.file_owner[rel] = ex.name
+        digest = _content_hash(root / rel)
+        first = by_content.get(digest) if digest else None
+        if first is not None:
+            dupes.setdefault(first, []).append(rel)
+            continue
+        if digest:
+            by_content[digest] = rel
+        corpus.chunks.extend(_chunk_source(root, rel, ex.name, tracked))
     corpus.duplicates = {k: tuple(v) for k, v in dupes.items()}
 
     # --- extra roots (a course's own examples) ----------------------------
