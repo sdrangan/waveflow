@@ -15,13 +15,17 @@ top, never as an HLS task (Vitis has no AXI4-full slave).
 **Semantics, identical to the RTL** (the gate is ``tests/build/test_mm_queue_xsi.py``; the pysim
 twin of its scenario is ``tests/hw/test_mm_queue.py``):
 
-* **Queue in, writes** — any address in the window.  Framing is in-band: each packet is
+* **Queue in, writes** — the window's lower half pushes.  Framing is in-band: each packet is
   ``[len | data x len]`` (the header's low 32 bits); the header is consumed, the data words are pushed,
-  and a packet may span any number of bursts.  ``len = 0`` is an empty packet.
+  and a packet may span any number of bursts.  ``len = 0`` is an empty packet.  A write to the
+  **upper half** sets the interrupt threshold and pushes nothing (``plans/mm_irq.md`` D2).
 * **Queue in, reads** — any address: the **vacancy** (free slots, ``0..depth``).  No side effects.
 * **Queue out, reads** — the window's lower half pops data; the upper half returns the
   **occupancy**.  Popping an empty queue returns 0 and is an error (SLVERR in RTL), never a wait.
-* **Queue out, writes** — dropped.
+* **Queue out, writes** — to the upper half: the interrupt threshold.  Elsewhere: dropped.
+* **Interrupts** — each view drives :attr:`m_irq` (an :class:`~waveflow.hw.irq.IrqIFSource`): queue in
+  while ``vacancy >= threshold``, queue out while ``occupancy >= threshold``.  Threshold 0 (the reset
+  value) disables it, so a design that never writes one sees nothing new.
 
 **What pysim models coarser than RTL.**  A pysim stream moves whole *bursts*, so a packet reaches the
 kernel as one burst once its last word has been written (in RTL the words stream through as they
@@ -43,13 +47,36 @@ import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_module import HwModule, HwParam
+import simpy
+
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+from waveflow.hw.irq import IrqIFSource
 from waveflow.hw.memif import MMIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen
 
 
 def _dtype(dw: int) -> np.dtype:
     return np.dtype(np.uint32) if dw <= 32 else np.dtype(np.uint64)
+
+
+class _NotifyingStore(simpy.Store):
+    """A ``simpy.Store`` that calls *on_change* after every put and take -- so a queue view can drive
+    its interrupt the instant its count changes, without polling the count inside the simulation."""
+
+    def __init__(self, env, on_change, items=()):
+        super().__init__(env)
+        self.items.extend(items)
+        self._on_change = on_change
+
+    def _do_put(self, event):
+        out = super()._do_put(event)
+        self._on_change()
+        return out
+
+    def _do_get(self, event):
+        out = super()._do_get(event)
+        self._on_change()
+        return out
 
 
 def _check_geometry(name: str, depth: int, window: int) -> None:
@@ -87,8 +114,12 @@ class MemSlaveWStream(HwModule):
                                peek_read=self._peek)
         self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=dw,
                                     has_tlast=True)
-        for ep in (self.s_mem, self.m_out):
+        #: The interrupt: high while ``vacancy >= irq_threshold`` (``plans/mm_irq.md`` D2).
+        self.m_irq = IrqIFSource(name=f"{self.name}_m_irq", sim=self.sim)
+        for ep in (self.s_mem, self.m_out, self.m_irq):
             self.add_endpoint(ep)
+        #: Written by the bus at the upper half of the window; 0 disables the interrupt.
+        self.irq_threshold = 0
         self._dt = _dtype(dw)
         self._left = 0                      # data words the current packet still owes; 0 = header next
         self._pkt: list[int] = []
@@ -120,13 +151,24 @@ class MemSlaveWStream(HwModule):
         the queue drains (burst-granular back-pressure), which RTL -- word by word -- never does."""
         return max(0, int(self.depth) - self.occupancy())
 
+    def _update_irq(self) -> None:
+        t = int(self.irq_threshold)
+        self.m_irq.set(t > 0 and self.vacancy() >= t)
+
     def pre_sim(self) -> None:
         super().pre_sim()
-        self._fifo()                        # fail at start, not at the first write
+        ep = self._fifo()                   # fail at start, not at the first write
+        # Hear every put and take on the FIFO -- the kernel draining it changes the vacancy.
+        ep.data_buffer = _NotifyingStore(self.env, self._update_irq, ep.data_buffer.items)
 
     # -- bus side ----------------------------------------------------------------------------------
     def _on_write(self, words: Words, local_addr: int) -> ProcessGen[None]:
-        for w in np.asarray(words).tolist():
+        bpw = int(self.mem_dwidth) // 8
+        for i, w in enumerate(np.asarray(words).tolist()):
+            if int(local_addr) + i * bpw >= int(self.window) // 2:
+                self.irq_threshold = int(w)          # the control half: the interrupt threshold
+                self._update_irq()
+                continue
             if self._left == 0:
                 self._left = int(w) & 0xFFFF_FFFF
                 self._pkt = []
@@ -182,8 +224,14 @@ class MemSlaveRStream(HwModule):
                                peek_read=self._peek)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=dw,
                                   has_tlast=False)
-        for ep in (self.s_mem, self.s_in):
+        # Hear every word the kernel puts (and every take) -- they change the occupancy.
+        self.s_in.data_buffer = _NotifyingStore(self.env, self._update_irq)
+        #: The interrupt: high while ``occupancy >= irq_threshold`` (``plans/mm_irq.md`` D2).
+        self.m_irq = IrqIFSource(name=f"{self.name}_m_irq", sim=self.sim)
+        for ep in (self.s_mem, self.s_in, self.m_irq):
             self.add_endpoint(ep)
+        #: Written by the bus at the status half of the window; 0 disables the interrupt.
+        self.irq_threshold = 0
         self._dt = _dtype(dw)
         self._held: deque[int] = deque()    # words of a burst already taken off s_in, not yet read
         self.errors: list[tuple[float, str, int]] = []
@@ -196,8 +244,20 @@ class MemSlaveRStream(HwModule):
         """Words readable now: those held plus every burst waiting on ``s_in``."""
         return len(self._held) + int(sum(len(b) for b in self.s_in.data_buffer.items))
 
+    def _update_irq(self) -> None:
+        if not hasattr(self, "m_irq"):
+            return                           # during construction
+        t = int(self.irq_threshold)
+        self.m_irq.set(t > 0 and self.occupancy() >= t)
+
     def _on_write(self, words: Words, local_addr: int) -> ProcessGen[None]:
-        yield self.env.timeout(0)            # dropped, as in RTL
+        # The status half takes the interrupt threshold; anything else is dropped, as in RTL.
+        bpw = int(self.mem_dwidth) // 8
+        for i, w in enumerate(np.asarray(words).tolist()):
+            if int(local_addr) + i * bpw >= self.status_addr():
+                self.irq_threshold = int(w)
+        self._update_irq()
+        yield self.env.timeout(0)
 
     def _on_read(self, nwords: int, local_addr: int) -> ProcessGen[Words]:
         if local_addr >= self.status_addr():
@@ -215,6 +275,7 @@ class MemSlaveRStream(HwModule):
                 out[i] = self._held.popleft()
             else:
                 self.errors.append((self.env.now, "pop_empty", int(local_addr)))
+        self._update_irq()
         yield self.env.timeout(0)
         return out
 

@@ -24,7 +24,13 @@ so host code does not change between a memory-mapped and a direct connection.  O
     qin = host_mm.stream_master("qin")
     yield from qin.write(samples)
 
-**Blocking, by polling — never by stalling the bus** (the plan's D3).  Every call blocks like the
+**Blocking, on the view's interrupt** (``plans/mm_irq.md``).  Given the host's end of a queue view's
+interrupt line (``stream_master(name, irq=sink)`` / ``stream_slave(name, irq=sink)``), an endpoint never
+reads a count: it sets the view's threshold, sleeps until the interrupt says the words (or the room)
+are there, and moves them.  This is how the examples wait.
+
+**Without an interrupt: blocking by polling — never by stalling the bus** (the plan's D3), a
+fallback.  Every call blocks like the
 stream method it replaces, but underneath it reads the free slots or the occupancy, sleeps
 ``poll_cycles`` and asks again, and moves data only when it fits.  A write that a full queue would
 stall holds WREADY low, which holds the adaptor's one front, which blocks *every* view behind it for
@@ -45,6 +51,7 @@ from typing import Any
 import numpy as np
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.irq import IrqIFSink
 from waveflow.hw.interface import (
     Interface,
     InterfaceEndpoint,
@@ -211,6 +218,9 @@ class _MmViewIF(Interface):
     view: ViewEntry | None = None
     clk: Clock | None = None
     poll_cycles: int = 8
+    irq: IrqIFSink | None = None
+    """The host's end of the view's interrupt line.  Given, the endpoint waits on it instead of
+    polling (``plans/mm_irq.md`` D3)."""
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -226,6 +236,14 @@ class _MmViewIF(Interface):
 
     def _sleep(self) -> ProcessGen[None]:
         yield self.timeout(self.poll_cycles * self.clk.period)
+
+    def _set_threshold(self, value: int) -> ProcessGen[None]:
+        """Write the view's interrupt threshold -- only when it changes, so a steady host writes it
+        once.  (The endpoint is the view's only writer of it, so its copy is the register's value.)"""
+        if getattr(self, "_threshold", None) != int(value):
+            yield from self.master.write(np.asarray([int(value)], dtype=self._dtype),
+                                         self.view.base + self.view.window // 2)
+            self._threshold = int(value)
 
     def _read_word(self, addr: int) -> ProcessGen[int]:
         return int((yield from self.master.read(1, addr))[0])
@@ -271,6 +289,9 @@ class MmQueueInIF(_MmViewIF):
         words = np.asarray(words, dtype=self._dtype)
         n, depth = len(words), int(self.view.depth)
         head = np.asarray([n], dtype=self._dtype)
+        if self.irq is not None:
+            yield from self._write_irq(words, head)
+            return
         if n <= depth:
             while (yield from self._read_word(self.view.base)) < n:
                 yield from self._sleep()
@@ -287,6 +308,33 @@ class MmQueueInIF(_MmViewIF):
                 piece = np.concatenate([head, piece])
             yield from self._write_bursts(piece, self.view.base)
             sent += room
+
+    def _write_irq(self, words: Words, head: Words) -> ProcessGen[None]:
+        """Interrupt mode: keep a lower bound on the free space, refilled by the interrupt.
+
+        The interrupt is high while ``vacancy >= threshold``; when the bound is too low for the next
+        piece, set the threshold to ``max(need, depth / 2)`` -- normally once for the whole run -- sleep
+        until it fires, and take the threshold as the new bound.  Every write lowers the bound by what
+        it pushed; the kernel draining the queue only ever raises the real vacancy, so the bound stays
+        true.  No read of the vacancy, ever."""
+        n, depth = len(words), int(self.view.depth)
+        if not hasattr(self, "_room"):
+            self._room = 0
+        sent = 0
+        while True:
+            need = min(n - sent, depth)
+            if self._room < need:
+                yield from self._set_threshold(max(need, depth // 2))
+                yield from self.irq.wait_high()
+                self._room = self._threshold
+            piece = words[sent:sent + need]
+            if sent == 0:
+                piece = np.concatenate([head, piece])
+            yield from self._write_bursts(piece, self.view.base)
+            self._room -= need
+            sent += need
+            if sent >= n:
+                return
 
     def offer(self, words: Words, word_rate: float | None = None) -> ProcessGen[int]:
         raise TypeError(f"{self.name}: offer() is for a producer that cannot wait; a bus master "
@@ -410,6 +458,18 @@ class MmQueueOutIF(_MmViewIF):
         n = self._need(nwords_max)
         got: list[Words] = []
         have = 0
+        if self.irq is not None:
+            # Interrupt mode: the interrupt is high while occupancy >= threshold, so with the
+            # threshold at the words still wanted it MEANS they are there.  No read of the occupancy.
+            while have < n:
+                k = min(n - have, int(self.view.depth))
+                yield from self._set_threshold(k)
+                yield from self.irq.wait_high()
+                for i in range(0, k, self.view.max_burst):
+                    m = min(self.view.max_burst, k - i)
+                    got.append(np.asarray((yield from self._pop(m)), dtype=self._dtype))
+                have += k
+            return np.concatenate(got) if got else np.zeros(0, dtype=self._dtype)
         while have < n:
             occ = yield from self._read_word(self.view.status_addr)
             if occ == 0:
@@ -422,6 +482,11 @@ class MmQueueOutIF(_MmViewIF):
 
     def try_pull(self, nwords_max) -> ProcessGen[Words | None]:
         n = self._need(nwords_max)
+        if self.irq is not None:
+            yield from self._set_threshold(min(n, int(self.view.depth)))
+            if not self.irq.level:
+                return None
+            return (yield from self.pull(n))
         if (yield from self._read_word(self.view.status_addr)) < n:
             return None
         return (yield from self.pull(n))
@@ -596,30 +661,34 @@ class BoundMemSlaveAdaptor:
             raise TypeError(f"{call}({name!r}): '{name}' is a {v.kind} view; use {right}()")
         return v
 
-    def _iface(self, cls, v: ViewEntry, suffix: str):
+    def _iface(self, cls, v: ViewEntry, suffix: str, irq: IrqIFSink | None = None):
         return cls(name=f"{self.master.name}_{v.name}_{suffix}", sim=self.master.sim,
-                   master=self.master, view=v, clk=self.clk, poll_cycles=self.poll_cycles)
+                   master=self.master, view=v, clk=self.clk, poll_cycles=self.poll_cycles, irq=irq)
 
-    def stream_master(self, name: str) -> StreamIFMaster:
+    def stream_master(self, name: str, *, irq: IrqIFSink | None = None) -> StreamIFMaster:
         """The writing end of a queue in (one ``write`` = one packet) or of a register bank's config
-        (one ``write`` = one committed config)."""
+        (one ``write`` = one committed config).  For a queue in, *irq* is the host's end of the view's
+        interrupt line: given, ``write`` waits on it for room instead of polling the vacancy."""
         key = ("stream_master", name)
         if key not in self._cache:
             v = self._view(name, "queue_in", "regbank", call="stream_master")
+            if irq is not None and v.kind != "queue_in":
+                raise TypeError(f"stream_master({name!r}): only a queue in has an interrupt")
             iface = self._iface(MmQueueInIF if v.kind == "queue_in" else MmRegBankCfgIF, v,
-                                "tx" if v.kind == "queue_in" else "cfg")
+                                "tx" if v.kind == "queue_in" else "cfg", irq)
             ep = StreamIFMaster(name=f"{iface.name}_ep", sim=self.master.sim,
                                 bitwidth=v.mem_dwidth, has_tlast=True)
             iface.bind("master", ep)
             self._cache[key] = ep
         return self._cache[key]
 
-    def stream_slave(self, name: str) -> MmStreamIFSlave:
-        """The reading end of a queue out.  Unframed: reads name their size."""
+    def stream_slave(self, name: str, *, irq: IrqIFSink | None = None) -> MmStreamIFSlave:
+        """The reading end of a queue out.  Unframed: reads name their size.  *irq* is the host's end
+        of the view's interrupt line: given, reads wait on it instead of polling the occupancy."""
         key = ("stream_slave", name)
         if key not in self._cache:
             v = self._view(name, "queue_out", call="stream_slave")
-            iface = self._iface(MmQueueOutIF, v, "rx")
+            iface = self._iface(MmQueueOutIF, v, "rx", irq)
             ep = MmStreamIFSlave(name=f"{iface.name}_ep", sim=self.master.sim,
                                  bitwidth=v.mem_dwidth)
             iface.bind("slave", ep)

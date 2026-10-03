@@ -12,6 +12,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.irq import IrqIF, IrqIFSink, IrqIFSource
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_bram import MemSlaveBramWindow
 from waveflow.hw.mm_host import (
@@ -114,6 +115,13 @@ class Rig:
         xbar.bind("slave_0", self.adaptor.s_mem)
         assign_address_ranges([self.adaptor.s_mem], [(BASE, self.adaptor.span())])
         self.mm = BoundMemSlaveAdaptor(self.adaptor.slave_map(), self.host.m)
+        # The two queue views' interrupt lines, to the host (used only by the interrupt-mode tests).
+        self.host.irq = {}
+        for v in (self.qin, self.qout):
+            line = IrqIF(name=f"{v.name}_irq", sim=sim)
+            line.bind("source", v.m_irq)
+            self.host.irq[v.name] = IrqIFSink(name=f"host_{v.name}_irq", sim=sim)
+            line.bind("sink", self.host.irq[v.name])
 
     def run(self, until: float = 2e-4):
         self.sim.run_sim(until=until)
@@ -365,3 +373,96 @@ def test_cpp_header_refuses_a_view_name_that_is_not_an_identifier():
     assign_address_ranges([q.s_mem], [(0, 0x1000)])
     with pytest.raises(ValueError, match=r"not a C\+\+ identifier"):
         MemSlaveMap.from_views([q]).to_cpp_header("m")
+
+
+# ---------------------------------------------------------------------------
+# Interrupts (plans/mm_irq.md)
+# ---------------------------------------------------------------------------
+
+def test_irq_line_waits_on_the_edge_and_returns_at_once_when_high():
+    sim = Simulation()
+    line = IrqIF(name="l", sim=sim)
+    src, sink = IrqIFSource(name="src", sim=sim), IrqIFSink(name="sink", sim=sim)
+    line.bind("source", src)
+    line.bind("sink", sink)
+    woke = []
+
+    def waiter():
+        yield from sink.wait_high()          # low: parks until the rise at t = 5
+        woke.append(sim.env.now)
+        yield from sink.wait_high()          # still high: returns at once
+        woke.append(sim.env.now)
+
+    def driver():
+        yield sim.env.timeout(5)
+        src.set(True)
+
+    sim.env.process(waiter())
+    sim.env.process(driver())
+    sim.run_sim()
+    assert woke == [5, 5] and line.nrise == 1
+
+
+def test_queue_views_drive_their_interrupts_from_the_threshold():
+    """Threshold 0 (reset) never interrupts; queue out interrupts while occupancy >= threshold, queue
+    in while vacancy >= threshold; the threshold is written at the upper half of the window."""
+    def host(h):
+        m = h.mm.slave_map
+        h.log["reset"] = (h.irq["qin"].level, h.irq["qout"].level)
+        yield from h.m.write(np.asarray([DEPTH], dtype=np.uint64), m["qin"].base + 0x800)
+        h.log["qin_all_free"] = h.irq["qin"].level
+        yield from h.m.write(np.asarray([3], dtype=np.uint64), m["qout"].base + 0x800)
+        yield from _configure(h, gain=1)
+        yield from h.mm.stream_master("qin").write(np.arange(2, dtype=np.uint64))
+        yield h.env.timeout(2e-7)
+        h.log["two_ready"] = h.irq["qout"].level           # 2 < 3
+        yield from h.mm.stream_master("qin").write(np.arange(1, dtype=np.uint64))
+        yield h.env.timeout(2e-7)
+        h.log["three_ready"] = h.irq["qout"].level         # 3 >= 3
+
+    r = Rig(procs=[host])
+    r.host.mm = r.mm
+    assert r.run() == {"reset": (False, False), "qin_all_free": True, "two_ready": False,
+                       "three_ready": True}
+
+
+def _count_reads(rig):
+    """Wrap the host master's read to record every address it reads."""
+    reads = []
+    orig = rig.host.m.read
+
+    def read(nwords, addr):
+        reads.append(int(addr))
+        return (yield from orig(nwords, addr))
+
+    rig.host.m.read = read
+    return reads
+
+
+def test_interrupt_mode_never_reads_a_count_and_never_deadlocks():
+    """The no-stall scenario again -- the kernel fills queue out and stops taking input while nobody
+    reads -- with the endpoints in interrupt mode.  Everything drains, and the host never reads queue
+    in's vacancy or queue out's occupancy: every read it issues is a pop."""
+    def writer(h):
+        yield from _configure(h, gain=1)
+        qin = h.mm.stream_master("qin", irq=h.irq["qin"])
+        for k in range(NPKT):
+            yield from qin.write(np.full(PKT, k, dtype=np.uint64))
+        h.log["wrote"] = NPKT
+
+    def reader(h):
+        yield h.env.timeout(5e-6)
+        y = yield from h.mm.stream_slave("qout", irq=h.irq["qout"]).get_array(U64, NPKT * PKT)
+        h.log["y"] = [int(v) for v in y.val]
+
+    r = Rig(procs=[writer, reader], qdepth=QD)
+    r.host.mm = r.mm
+    reads = _count_reads(r)
+    log = r.run(until=1e-3)
+    assert log["wrote"] == NPKT
+    assert log["y"] == [k for k in range(NPKT) for _ in range(PKT)]
+    m = r.mm.slave_map
+    counts = [a for a in reads
+              if m["qin"].base <= a < m["qin"].base + 0x1000 or a >= m["qout"].status_addr and
+              a < m["qout"].base + 0x1000]
+    assert reads and counts == [], f"count reads in interrupt mode: {[hex(a) for a in counts]}"
