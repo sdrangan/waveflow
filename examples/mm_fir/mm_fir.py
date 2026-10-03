@@ -54,15 +54,13 @@ from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
-from waveflow.hw.mm_adaptor import MemSlaveAdaptor
+from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
     LatestValueIF,
     LatestValueIFSlave,
-    MemSlaveMap,
+    MemSlaveLayout,
 )
-from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
-from waveflow.hw.mm_regbank import MemSlaveRegBank
 from waveflow.simulation.simobj import SimObj
 from waveflow.simulation.simulation import Simulation
 
@@ -125,7 +123,9 @@ class FirStatus(DataList):
     }
 
 
-REGS, QIN, QOUT, QRESP = 0x0000, 0x1000, 0x2000, 0x3000
+#: Where the FIR's memory-mapped side is placed on the bus -- the per-SYSTEM half of the address map
+#: (``plans/bus_address_map.md``).  The view addresses below are this plus the per-TYPE layout.
+MM_BASE = 0x0000
 
 #: The host's bus master: one read and one write in flight at a time, each direction in issue order.
 #: AXI's read and write channels are independent and AMD's crossbar routes them in parallel, so a host
@@ -194,6 +194,18 @@ class MmFir(FreeRunMod):
 
     cpp_kernel_name: ClassVar[str | None] = "mm_fir"
     cpp_namespace: ClassVar[str | None] = "mm_fir_impl"
+
+    #: The kernel's memory-mapped views, in address order (``plans/bus_address_map.md`` D1): which of
+    #: its stream ports a bus master reaches, and as what.  This is the TYPE's address layout --
+    #: ``MemSlaveLayout.of(MmFir)`` -- shared by every instance; ``build_mm_device`` builds an
+    #: instance's views from it.  The kernel itself stays streams only.
+    mm_views: ClassVar[tuple] = (
+        RegBank("regs", cfg_port="s_cfg", status_port="m_status",
+                cfg_type=FirCfg, status_type=FirStatus),
+        QueueIn("qin", port="s_in", depth=QDEPTH),
+        QueueOut("qout", port="m_out", depth=QDEPTH),
+        QueueOut("qresp", port="m_resp", depth=RDEPTH),
+    )
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
@@ -265,6 +277,12 @@ class MmFir(FreeRunMod):
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
         yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+
+
+#: The FIR type's address layout (offsets within the slave), and its views' absolute addresses at
+#: :data:`MM_BASE` -- what the RTL crossbar and the testbench are configured with.
+MM_LAYOUT = MemSlaveLayout.of(MmFir, mem_dwidth=DW)
+REGS, QIN, QOUT, QRESP = (MM_BASE + MM_LAYOUT[n].base for n in ("regs", "qin", "qout", "qresp"))
 
 
 # ---------------------------------------------------------------------------
@@ -465,25 +483,15 @@ class MmFirSystem:
         self.status_if.bind("slave", host.status)
 
     def _wire_mm(self) -> None:
-        sim, clk, fir = self.sim, self.clk, self.fir
-        self.regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=FirCfg, status_type=FirStatus,
-                                    mem_dwidth=DW, clk=clk)
-        self.qin = MemSlaveWStream(name="qin", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
-        self.qout = MemSlaveRStream(name="qout", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
-        self.qresp = MemSlaveRStream(name="qresp", sim=sim, mem_dwidth=DW, depth=RDEPTH, clk=clk)
-        self._stream("k_cfg", self.regs.m_cfg, fir.s_cfg, self.regs.ncfg)
-        self._stream("k_stat", fir.m_status, self.regs.s_status, 8)
-        self._stream("k_in", self.qin.m_out, fir.s_in, QDEPTH)
-        self._stream("k_out", fir.m_out, self.qout.s_in, QDEPTH)
-        self._stream("k_resp", fir.m_resp, self.qresp.s_in, RDEPTH)
-        views = [self.regs, self.qin, self.qout, self.qresp]
-        if self.one_front:
-            # Stage 4: the views behind ONE bus port, at the same addresses (view k at k*4 KB).
-            self.adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, mem_dwidth=DW, views=views)
-            slaves, ranges = [self.adaptor.s_mem], [(REGS, self.adaptor.span())]
-        else:
-            slaves = [v.s_mem for v in views]
-            ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000), (QRESP, 0x1000)]
+        sim, clk = self.sim, self.clk
+        # The kernel's memory-mapped side, built from the views its type declares: behind one front,
+        # or one crossbar slot per view -- the same addresses either way (view k at k * 4 KB).
+        self.device = build_mm_device(self.fir, sim=sim, clk=clk, mem_dwidth=DW,
+                                      one_front=self.one_front)
+        self.regs, self.qin, self.qout, self.qresp = (
+            self.device.views[n] for n in ("regs", "qin", "qout", "qresp"))
+        self.adaptor = self.device.adaptor
+        slaves, ranges = self.device.ranges(MM_BASE)
         self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1,
                                     nports_slave=len(slaves), bitwidth=DW,
                                     latency_init=self.xbar_latency,
@@ -492,8 +500,7 @@ class MmFirSystem:
         for k, ep in enumerate(slaves):
             self.xbar.bind(f"slave_{k}", ep)
         assign_address_ranges(slaves, ranges)
-        self.slave_map = (self.adaptor.slave_map() if self.one_front
-                          else MemSlaveMap.from_views(views))
+        self.slave_map = self.device.layout.at(MM_BASE)
         mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m)
         self.host.cfg = mm.stream_master("regs")
         # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.

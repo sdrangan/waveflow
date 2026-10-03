@@ -162,8 +162,7 @@ class MemSlaveMap:
 
     @classmethod
     def from_adaptor(cls, adaptor) -> "MemSlaveMap":
-        base = _base_of(adaptor.s_mem, adaptor.name)
-        return cls({v.name: _entry(v, base + adaptor.offset_of(v)) for v in adaptor.views})
+        return MemSlaveLayout.from_adaptor(adaptor).at(_base_of(adaptor.s_mem, adaptor.name))
 
     @classmethod
     def from_views(cls, views) -> "MemSlaveMap":
@@ -204,6 +203,48 @@ class MemSlaveMap:
                 f"{v.ncfg or 0}u, {v.nstat or 0}u, {v.nelem or 0}u}};")
         lines += ["", f"}}  // namespace {namespace}", "", f"#endif  // {guard}", ""]
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class MemSlaveLayout:
+    """A slave **type's** views, by name, at offsets **relative to the slave** -- no base.
+
+    The per-type half of the address map (``plans/bus_address_map.md`` D2): two instances of one
+    kernel type share one layout and differ only in where they are placed.  Each entry is a
+    :class:`ViewEntry` whose ``base`` is the view's offset within the slave; :meth:`at` places the
+    whole layout at a base and gives the absolute :class:`MemSlaveMap` a bus master uses.
+
+    * :meth:`of` -- from a kernel type's declared views (``mm_views``), no simulation needed;
+    * :meth:`from_adaptor` -- from an adaptor instance's views.
+
+    ``span`` is the bytes the slave occupies: the view count rounded up to a power of two, times the
+    4 KB view window (the RTL decoder's select field is whole bits).
+    """
+
+    views: dict[str, ViewEntry] = field(default_factory=dict)
+    span: int = 0
+
+    @classmethod
+    def of(cls, kernel_type, *, mem_dwidth: int = 64) -> "MemSlaveLayout":
+        """The layout a kernel type declares (its ``mm_views``), at bus width *mem_dwidth*."""
+        from waveflow.hw.mm_device import layout_of
+        return layout_of(kernel_type, mem_dwidth=mem_dwidth)
+
+    @classmethod
+    def from_adaptor(cls, adaptor) -> "MemSlaveLayout":
+        return cls({v.name: _entry(v, adaptor.offset_of(v)) for v in adaptor.views},
+                   span=int(adaptor.span()))
+
+    def at(self, base: int) -> MemSlaveMap:
+        """The absolute map of this layout placed at *base*."""
+        from dataclasses import replace
+        return MemSlaveMap({n: replace(v, base=int(base) + v.base) for n, v in self.views.items()})
+
+    def __getitem__(self, name: str) -> ViewEntry:
+        try:
+            return self.views[name]
+        except KeyError:
+            raise KeyError(f"no view named {name!r}; the layout has {sorted(self.views)}") from None
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +694,13 @@ class BoundMemSlaveAdaptor:
         self.clk = clk
         self._cache: dict[tuple[str, str], Any] = {}
 
+    @classmethod
+    def at(cls, layout: MemSlaveLayout, base: int, master: MMIFMaster, **kw) -> "BoundMemSlaveAdaptor":
+        """A device: *layout* (the slave TYPE's offsets) placed at *base* (this INSTANCE's address),
+        reached through *master* -- the per-type and per-system halves of the address map combined
+        (``plans/bus_address_map.md`` D2).  Two instances of one type: one layout, two bases."""
+        return cls(layout.at(base), master, **kw)
+
     def _view(self, name: str, *kinds: str, call: str) -> ViewEntry:
         v = self.slave_map[name]
         if v.kind not in kinds:
@@ -717,6 +765,7 @@ __all__ = [
     "VIEW_KINDS",
     "ViewEntry",
     "MemSlaveMap",
+    "MemSlaveLayout",
     "MmQueueInIF",
     "MmRegBankCfgIF",
     "MmQueueOutIF",
