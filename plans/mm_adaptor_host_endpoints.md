@@ -1,7 +1,8 @@
 # Plan: host-side endpoints for the memory-mapped slave adaptor
 
-> **Status (2026-10-02): proposed, not started.** Follows `plans/mm_slave_adaptor.md` (Stages 0-4
-> built, PR #213). Section headings are cited from code once built — do not rename them.
+> **Status (2026-10-03): Stages 0 and 1 BUILT** (branch `mm-host-endpoints`, unpushed). Stage 2
+> (XSI) next. Plan text below is the design as proposed; where the build departed from it, a
+> **Built:** note says how and why. Section headings are cited from code — do not rename them.
 
 ## Motivation
 
@@ -237,6 +238,12 @@ run while the other sleeps between polls. If they cannot interleave, either this
 falls back to a single process that alternates writer and reader steps. (Its own stage so the answer is
 recorded rather than assumed; it may take an hour, or it may reshape Stage 1.)
 
+**Built:** answered from the code, then confirmed in a run. `MMIFMaster` has no per-master lock: each
+call is its own crossbar process, and only the slave's channel is contended (for the adaptor,
+`half_duplex` + `serialize_transactions` hold one channel per transaction). Two host processes on one
+master therefore interleave per transaction. `test_polling_writer_and_reader_share_one_front_without_deadlock`
+runs exactly that; its negative control (a raw, non-polling writer) deadlocks as D3 predicts.
+
 ### Stage 1 — the map, the pysim endpoints, mm_fir in pysim
 
 1. `MemSlaveMap` / `ViewEntry`, `from_adaptor`, `from_views` (D1, D2); unique view names in
@@ -259,6 +266,30 @@ recorded rather than assumed; it may take an hour, or it may reshape Stage 1.)
   `link in ("mm", "direct")` and, for `"mm"`, `one_front in (False, True)`. Same `y`, same status,
   same `late` detection, all modes.
 - The docs snippet harness runs the rewritten example.
+
+**Built** as planned, with these departures:
+
+- **D7's cross-proxy rejection is not built.** One proxy caches its endpoints (asking twice returns
+  the same object); two *different* proxies on one view are not detected.
+- **`MmStreamIFSlave` is a subclass, not a plain `StreamIFSlave`.** Stream writes go through the
+  interface, but stream reads do not: `get_schema`, `get_array`, `get_pipelined` all call the base
+  class's `get`, which reads the endpoint's own buffer. A mixin (`_InterfacePull`) placed between
+  `StreamIFSlave` and that base replaces exactly that one step, so every typed read keeps its code.
+- **Queue in waits for room for the WHOLE packet when it fits the queue**, instead of writing pieces
+  as room appears. In pysim the view holds a partial packet until it completes and then hands it
+  over whole (burst-granular back-pressure), so a piece-wise write of a packet that fits would end in
+  a stall. Pieces are used only for a packet longer than the queue.
+- **The mm_fir reader reads in the writer's packet sizes**, from a shared `host_schedule`. Queue out
+  is unframed, and in direct mode a plain unframed `StreamIFSlave.get(nwords_max=n)` returns ONE
+  burst cut to *n* (the open question below), so exact-size reads are the only host code that is the
+  same in both wirings.
+- **Two mm_fir assertions encoded the old single-process host** and were changed, not deleted:
+  per-view vs one-front timing was *equal* and is now *one front slower* (writer and reader overlap
+  behind separate fronts and take turns behind one: 423 vs 742 cycles on the docs scenario); the late
+  config's switch sample was *exactly 128* and is now "the sample it arrived at", which is 128 over
+  the bus and 112 direct.
+- **pysim no longer compares with RTL** on mm_fir until Stage 2: the RTL gate (857 / 823) still runs
+  the single-process C++ host. `docs/examples/mm_fir/pysim.md` says so.
 
 ### Stage 2 — XSI: generated header, BFM endpoint classes, mm_fir at RTL
 

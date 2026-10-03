@@ -15,10 +15,11 @@ constructor, then describes its two sides:
 
 - **The kernel side** is what the kernel's code does: read or write a stream (or, for the BRAM window,
   a memory port). The kernel never sees an address.
-- **The bus side** is what a bus master — a host program, or another kernel through its `m_axi` port —
-  does: read and write addresses in the view's window. Those addresses are the interface of whoever
-  writes the host software, so each view lists them. An offset is relative to the start of the view's
-  window; [Building an adaptor](./slave.md#building-an-adaptor) says where the window starts.
+- **The bus side** is what a bus master — a host program, or a test standing in for one — does. It
+  asks the adaptor for the view by name and gets an ordinary endpoint
+  ([Reaching the views from a bus master](./slave.md#reaching-the-views-from-a-bus-master)); the
+  endpoint turns each call into bus reads and writes. The addresses it uses are in
+  [how it works](./slave_howitworks.md#the-address-map-behind-the-endpoints).
 
 All four constructors take `name`, `sim` and `clk` like any module, and these two:
 
@@ -53,22 +54,22 @@ pkt = yield from self.s_in.get()        # one packet, as the bus master wrote it
 
 Each packet ends with TLAST, so the kernel sees where the bus master's packets begin and end.
 
-**The bus side.** A bus master pushes a packet by writing its length, then its words:
+**The bus side** is a `StreamIFMaster`:
 
-| to | do | at offset |
-|---|---|---|
-| push a packet of *n* words | write `[n, d0, d1, ..., d(n-1)]` | anywhere in the window, typically `0` |
-| see how much room is left | read one word: the number of free slots, `0..depth` | anywhere in the window |
+```python
+qin_ep = mm.stream_master("qin")
+yield from qin_ep.write(samples)        # one packet; returns once the queue has taken it
+```
 
-- **The length goes first.** The first word of each packet is its length (low 32 bits) and is not
-  passed to the kernel. A packet may be split across any number of bursts, and a length of 0 is an
-  empty packet.
-- **A full queue stalls the writer.** When the FIFO is full the write waits until the kernel drains
-  it — the bus master's whole port waits with it. A bus master whose port carries other traffic reads
-  the free slots first, or uses credits ([Credit Stream](../derived/credit_stream.md)).
+- **One `write` is one packet**, and the kernel's `get()` returns it whole.
+- **`write` waits for room** — by reading the free space and trying again, never by stalling the bus.
+  A packet that fits the queue goes in one piece once there is room for all of it; a longer one goes
+  in pieces as room appears.
 - **A completed write means the queue took the words, not that the kernel has read them.**
 - **Kernel to kernel.** A kernel that writes memory through `MemWStream` can feed another kernel's
-  queue by pointing its base address at the window and putting the length first.
+  queue by pointing its base address at the window and putting the packet's length first — the format
+  in [how it works](./slave_howitworks.md#queue-in). That path stalls rather than waits, so it suits a
+  master port that carries nothing else.
 
 **RTL:** `QueueView(name, kind="in", axis, depth=512, law=12)`, where `axis` names the kernel's AXIS
 port and `law` is log2 of the window size; module `mm_queue_in.v`.
@@ -87,27 +88,28 @@ qout = MemSlaveRStream(name="qout", sim=sim, depth=16, clk=clk)
 | `depth` | `512` | FIFO depth in words; a power of two, at least 2 |
 
 **The kernel side** is the stream endpoint `qout.s_in`. Bind it to a stream whose `depth` equals the
-queue's `depth`, and give the kernel a `StreamIFMaster` on the other end. The kernel writes as it would
+queue's `depth`, and give the kernel a `StreamIFMaster` on the other end, declared
+`has_tlast=False`: queue out carries no packet boundaries (see below). The kernel writes as it would
 to any stream, and blocks when the queue is full:
 
 ```python
 yield from self.m_out.write(words)
 ```
 
-**The bus side.** The window is split in two: the lower half pops data, the upper half reports how
-much there is. `qout.status_addr()` returns the start of the upper half (`window / 2`).
+**The bus side** is an `MmStreamIFSlave` — a `StreamIFSlave` declared `has_tlast=False`:
 
-| to | do | at offset |
-|---|---|---|
-| see how many words are ready | read one word: `0..depth` | `window / 2` (`0x800`) |
-| take *n* words | read *n* words; each word read is removed from the queue | `0` |
+```python
+qout_ep = mm.stream_slave("qout")
+y = yield from qout_ep.get(nwords_max=n)            # exactly n words
+y = yield from qout_ep.get_array(Sample, count=n)   # n typed elements
+```
 
-- **Check before popping.** A read never waits for data: a pop from an empty queue returns 0 and an
-  error response (SLVERR). Read the count, then pop at most that many. (A slave that waited would hold
-  the whole bus.)
-- At 64 bits, the lower half of a 4 KB window is 256 words, one maximal AXI burst.
-- Packet boundaries (TLAST) from the kernel are not visible to the bus master.
-- Writes to the window are ignored.
+- **Reads name their size.** The bus cannot see where the kernel's packets end (the RTL drops TLAST),
+  so `get()` without a count is refused. `get(nwords_max=n)` returns **exactly** *n* words, waiting
+  until they are all there — what an HLS read of *n* words does.
+- **Reads wait by polling.** The endpoint reads how many words are ready, pops at most that many, and
+  asks again. It never pops an empty queue.
+- The `*_nb` reads ask once, and return `None` unless all the words are already there.
 
 **RTL:** `QueueView(name, kind="out", axis, depth=512, law=12)`; module `mm_queue_out.v`.
 
@@ -146,21 +148,25 @@ regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=Cfg, status_type=Status, c
   yield from self.m_status.write(Status(nsamp=self.nsamp))
   ```
 
-**The bus side:**
+**The bus side** is two endpoints, one per direction:
 
-| to | do | at offset |
-|---|---|---|
-| stage a configuration | write `regs.cfg_words(cfg)` (word *i* of the config at `i × bytes-per-word`) | `0` |
-| send it to the kernel | write any value | `regs.commit_offset()` = `window / 2` (`0x800`) |
-| count the commits so far | read one word | `regs.commit_offset()` |
-| read the staged configuration back | read | `0` |
-| read the latest status | read `regs.nstat` words; decode with `Status().deserialize(words, word_bw=64)` | `regs.status_offset()` = `3 × window / 4` (`0xC00`) |
+```python
+cfg_ep = mm.stream_master("regs")
+yield from cfg_ep.write(make_cfg(...))   # one config message to the kernel
 
-- **Nothing reaches the kernel until the commit.** Writes to the configuration only change a staging
-  copy (the *shadow*), so the kernel never sees a half-written configuration. The commit sends the
-  shadow as it was at that moment; writes after it go into the next configuration.
+status_ep = mm.status("regs")
+st = yield from status_ep.read()         # the latest status message, decoded
+```
+
+- **One `write` is one configuration.** It writes the configuration registers (a staging copy the
+  kernel never sees, the *shadow*), then COMMIT, which sends the shadow to the kernel as one message.
+  The kernel never sees a half-written configuration.
 - **A commit is never merged or dropped.** If the kernel has not yet taken the previous configuration,
-  the commit write waits until it has.
+  the commit waits until it has. This is the one place the endpoint can stall the bus, because the
+  bank reports how many commits it accepted, not how many the kernel took; the stall lasts until the
+  kernel reads.
+- **`status.read()` does not consume.** Read it twice and you get the same message. It is a
+  `LatestValueIFSlave`, the same endpoint a direct connection gets from a `LatestValueIF`.
 - **Status is the latest complete message.** A read never mixes words of two status messages.
 - **The kernel chooses when a new configuration takes effect.** Checking with `get_schema_nb` at a
   safe point — between packets, or between samples — means a configuration never changes mid
@@ -220,12 +226,14 @@ x = bram.port_b_read(i)
 bram.port_b_write(i, value)
 ```
 
-**The bus side:**
+**The bus side** is a `Region` — the same element-indexed view of memory a kernel uses through
+its `m_axi` port:
 
-| to | do | at offset |
-|---|---|---|
-| write words *i* .. *i+n-1* | write *n* words | `i × bytes-per-word` |
-| read words *i* .. *i+n-1* | read *n* words | `i × bytes-per-word` |
+```python
+buf = mm.region("bram", Sample)
+yield from buf.write_slice(0, table)       # elements 0 .. len(table)-1
+x = yield from buf.read_slice(16, 32)      # elements 16 .. 31
+```
 
 An access beyond `nelem` is an error: a write there is dropped, and a read returns 0 with SLVERR.
 

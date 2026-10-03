@@ -3,34 +3,30 @@ title: Python simulation
 parent: A memory-mapped FIR
 nav_order: 2
 has_children: false
-summary: "The whole system in pysim: the kernel, the three adaptor views and the host on an AXIMMCrossBarIF, wired as in the RTL. Bit-exact through a mid-stream tap switch, including one inside a packet; the late-host negative control reports the miss and matches 'switched where it arrived'. The same system with the three views behind one adaptor port behaves identically. pysim predicts 709 cycles where RTL measures 857 / 823, and the difference is the C++ host's own pacing."
+summary: "The whole system in pysim, in three wirings with one host class: each view on its own crossbar slot, all three behind one adaptor port, and the host joined straight to the kernel. Bit-exact through a mid-stream tap switch in all three, including one inside a packet; the late-host negative control reports the miss and matches 'switched where it arrived'. Cycle counts, and why they cannot yet be compared with RTL."
 ---
 
 # Simulation
 
 ## The system
 
-`MmFirSystem` in [`mm_fir.py`](../../../examples/mm_fir/mm_fir.py) wires the whole design. The three
-views are the adaptor's pysim twins — each an `HwModule` with a bus port (`s_mem`) on one side and
-ordinary streams on the other — and the kernel is joined to them with plain `StreamIF`s:
+`MmFirSystem` in [`mm_fir.py`](../../../examples/mm_fir/mm_fir.py) wires the whole design, in one of
+three ways. The kernel and the host are the same in all three.
+
+### Over the bus (`link="mm"`, the default)
+
+The three views are the adaptor's pysim twins — each an `HwModule` with a bus port (`s_mem`) on one
+side and ordinary streams on the other — and the kernel is joined to them with plain `StreamIF`s:
 
 ```python
         self.regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=FirCfg, status_type=FirStatus,
                                     mem_dwidth=DW, clk=clk)
         self.qin = MemSlaveWStream(name="qin", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
         self.qout = MemSlaveRStream(name="qout", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
-        self.fir = MmFir(name="fir", sim=sim, clk=clk)
-        self.host = FirHost(name="host", sim=sim, x=list(self.x), plan=list(self.plan), pkt=self.pkt,
-                            lag=self.lag, clk=clk)
-        for name, m, s, depth in (
-            ("k_cfg", self.regs.m_cfg, self.fir.s_cfg, self.regs.ncfg),
-            ("k_stat", self.fir.m_status, self.regs.s_status, 8),
-            ("k_in", self.qin.m_out, self.fir.s_in, QDEPTH),
-            ("k_out", self.fir.m_out, self.qout.s_in, QDEPTH),
-        ):
-            si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=depth)
-            si.bind(ep_name="master", endpoint=m)
-            si.bind(ep_name="slave", endpoint=s)
+        self._stream("k_cfg", self.regs.m_cfg, fir.s_cfg, self.regs.ncfg)
+        self._stream("k_stat", fir.m_status, self.regs.s_status, 8)
+        self._stream("k_in", self.qin.m_out, fir.s_in, QDEPTH)
+        self._stream("k_out", fir.m_out, self.qout.s_in, QDEPTH)
 ```
 
 Two of those depths are not free choices, and the views check them when the simulation starts:
@@ -56,8 +52,42 @@ and with `one_front=True` all three go behind one `MemSlaveAdaptor` port, at the
 ```
 
 The crossbar is an `AXIMMCrossBarIF` with `latency_init = 4` — the per-transaction cost measured
-through AMD's `axi_crossbar` at RTL. `run()` ends the simulation when the host program finishes
-(`run_sim(until=self.host.done)`), because a polling kernel would otherwise keep it running forever.
+through AMD's `axi_crossbar` at RTL. Last, the host gets its endpoints from the address map, by view
+name:
+
+```python
+        self.slave_map = (self.adaptor.slave_map() if self.one_front
+                          else MemSlaveMap.from_views([self.regs, self.qin, self.qout]))
+        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
+        self.host.cfg = mm.stream_master("regs")
+        self.host.qin = mm.stream_master("qin")
+        self.host.qout = mm.stream_slave("qout")
+        self.host.status = mm.status("regs")
+```
+
+### Direct (`link="direct"`)
+
+No bus, no views: the host's endpoints are joined straight to the kernel's. The configuration and the
+samples are plain streams, and the status is a `LatestValueIF` — a channel that keeps only the latest
+complete message, as the register bank's status half does:
+
+```python
+        host.cfg = StreamIFMaster(name="host_cfg", sim=sim, bitwidth=DW, has_tlast=True)
+        host.qin = StreamIFMaster(name="host_qin", sim=sim, bitwidth=DW, has_tlast=True)
+        host.qout = StreamIFSlave(name="host_qout", sim=sim, bitwidth=DW, has_tlast=False)
+        host.status = LatestValueIFSlave(name="host_status", sim=sim)
+        self._stream("k_cfg", host.cfg, fir.s_cfg, FirCfg.nwords_per_inst(DW))
+        self._stream("k_in", host.qin, fir.s_in, QDEPTH)
+        self._stream("k_out", fir.m_out, host.qout, QDEPTH)
+        self.status_if = LatestValueIF(name="k_stat", sim=sim, schema_type=FirStatus, bitwidth=DW,
+                                       clk=self.clk)
+```
+
+Direct is what the system would be with no bus at all, so it is the reference the memory-mapped runs
+are checked against: same outputs, same status.
+
+`run()` ends the simulation when the host program finishes (`run_sim(until=self.host.done)`), because
+a polling kernel would otherwise keep it running forever.
 
 ## Running it
 
@@ -78,38 +108,45 @@ packet, so the host has to cut a packet at the switch.
 
 | run | bit-exact vs `fir_golden` | status `nsamp / ncfg / late` | cycles |
 |---|---|---|---|
-| one view per crossbar port | yes | 200 / 2 / 0 | 709 |
-| three views behind one adaptor (`one_front=True`) | yes | 200 / 2 / 0 | 709 |
-| late host (`lag=32`) — the negative control | **no** | 200 / 2 / **1** | 709 |
+| one view per crossbar port | yes | 200 / 2 / 0 | 423 |
+| three views behind one adaptor (`one_front=True`) | yes | 200 / 2 / 0 | 742 |
+| direct (`link="direct"`) | yes | 200 / 2 / 0 | 265 |
+| late host (`lag=32`) — the negative control | **no** | 200 / 2 / **1** | 423 |
 
-The third row is the one that gives the first two their meaning. A host that commits the second
-config 32 samples after its `apply_at` produces output that does **not** match the plan — and it
-matches the golden for "the second taps took effect at sample 133", exactly where the config arrived.
-The kernel counted the miss. Without this run, a pass in the first row could mean the protocol works
-or that it was never exercised.
+The last row is the one that gives the others their meaning. A host that commits the second config 32
+samples after its `apply_at` produces output that does **not** match the plan — and it matches the
+golden for "the second taps took effect at sample 133", exactly where the config arrived. The kernel
+counted the miss. Without this run, a pass in the first rows could mean the protocol works or that it
+was never exercised. (Direct, the same late host switches at sample 112: with no bus in between the
+kernel keeps closer behind the host, so fewer samples are still queued when the config lands. Still
+late, still counted.)
 
-The two topologies take the same 709 cycles in pysim because the host keeps one transaction
-outstanding at a time, so there is nothing for a single port to serialize. (At RTL they differ by 34
-cycles — see [RTL simulation](rtlsim.md).)
+**One front is slower than one port per view**, because the host's writer and reader overlap behind
+separate fronts and take turns behind one. That serialization is the
+[ordering guarantee](../../guide/interface/axi_mm/slave.md#ordering), and this is its price.
 
 The tests are [`tests/examples/test_mm_fir.py`](../../../tests/examples/test_mm_fir.py): one tap set,
-switches at samples 16, 96 and 101, the late host, and the config bounds.
+switches at samples 16, 96 and 101, and the late host, each in all three wirings; a check that the
+three wirings give the same outputs from the same host; and the config bounds.
 
 ## How close is pysim's timing?
 
-pysim predicts **709** cycles; RTL measures **857** with one view per slot and **823** behind one
-front. Most of that is not the adaptor:
+**Not comparable at the moment.** The RTL gate measures **857** cycles with one view per slot and
+**823** behind one front, but its host is still the earlier single-process protocol, written as a C++
+state machine — it drains queue out before every push, where the pysim host now reads and writes in
+two processes. Until the C++ host is ported to the same endpoints (the next stage of
+`plans/mm_adaptor_host_endpoints.md`), the two measure different host programs.
+
+What does carry over:
 
 - The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
   to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),
   [`tests/hw/test_mm_regbank.py`](../../../tests/hw/test_mm_regbank.py)).
-- Per 16-sample packet RTL takes ~57 cycles and pysim ~51. The host issues four bus operations per
-  packet, and the C++ host model starts each operation two cycles after the previous one ends — the
-  testbench's own pacing, which the pysim host does not have.
+- With the earlier host on both sides, pysim predicted 709 cycles against RTL's 857 / 823; the gap was
+  the C++ host's own pacing (it starts each bus operation two cycles after the previous one ends).
 
 The one place pysim is structurally coarser: an operation that waits on a full queue, or on a config
 packet the kernel has not taken, is released up to one packet early in pysim, because a pysim stream
-hands over a whole packet in one event where RTL drains it a word per cycle. This scenario never fills
-a queue, so it does not show here.
+hands over a whole packet in one event where RTL drains it a word per cycle.
 
 Next: [Code generation](codegen.md).

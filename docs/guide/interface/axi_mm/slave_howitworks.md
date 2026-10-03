@@ -50,6 +50,38 @@ response from the view that accepted the read (one read outstanding, so a latche
 and answers an address in the span's unused tail with SLVERR so a stray read cannot hang the bus. The
 span is the view count rounded up to a power of two, because the select field is whole bits.
 
+## The address map behind the endpoints
+
+A bus master's endpoints ([Reaching the views](./slave.md#reaching-the-views-from-a-bus-master))
+turn each call into reads and writes at these offsets from the start of the view's window
+(`W` = the window size, 4 KB inside an adaptor). The endpoints are in
+[`waveflow/hw/mm_host.py`](../../../../waveflow/hw/mm_host.py), and the offsets are written once, on
+`ViewEntry` (`commit_addr`, `status_addr`, `max_burst`). Anything driving the bus without the
+endpoints — a C++ testbench today, real host software later — follows the same table.
+
+| view | offset | write | read |
+|---|---|---|---|
+| queue in | anywhere | push: a packet is `[len, d0 .. d(len-1)]` | the free slots, `0..depth`; no side effects |
+| queue out | `[0, W/2)` | ignored | **pop** one word per beat; an empty queue answers 0 with SLVERR |
+| | `[W/2, W)` | ignored | the words ready, `0..depth`; no side effects |
+| register bank | `[0, W/2)` | the config shadow, word *i* at `i × bytes-per-word` | the shadow |
+| | `W/2` | **COMMIT**: snapshot the shadow, send it as one message | the number of commits so far |
+| | `[3W/4, W)` | — | word *i* of the latest complete status message |
+| BRAM window | `i × bytes-per-word` | word *i* of the memory | word *i* of the memory |
+
+What the endpoints do with it:
+
+| endpoint call | on the bus |
+|---|---|
+| queue in `write(words)`, *n* ≤ depth | read the free slots until ≥ *n*; write `[n, words]` |
+| queue in `write(words)`, *n* > depth | read the free slots; write as much as fits (the length first); repeat |
+| queue out `get(nwords_max=n)` | read the ready count until > 0; pop up to that many; repeat until *n* |
+| register bank `write(cfg)` | write the shadow; write COMMIT |
+| register bank `status.read()` | read `nstat` words at `3W/4` |
+| BRAM `read_slice` / `write_slice` | read / write at `i × bytes-per-word` |
+
+No burst is longer than 256 beats (AXI4's limit) or runs past the part of the window it addresses.
+
 ## The views in RTL
 
 ### Queue in

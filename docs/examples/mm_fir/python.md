@@ -133,39 +133,61 @@ What to read in it:
 
 ## The host program
 
-`FirHost` is a `SimObj` holding an `MMIFMaster` — the one place a plain master endpoint belongs. It is
-the protocol from the [index](index.md#the-one-subtle-part-switching-taps-mid-stream), written out:
+`FirHost` is the protocol from the [index](index.md#the-one-subtle-part-switching-taps-mid-stream),
+written as stream code. It holds four endpoints and never an address:
+
+| endpoint | type | one call |
+|---|---|---|
+| `cfg` | `StreamIFMaster` | `write(cfg)` sends one config to the kernel |
+| `qin` | `StreamIFMaster` | `write(samples)` sends one packet |
+| `qout` | `StreamIFSlave`, unframed | `get(nwords_max=n)` takes *n* outputs |
+| `status` | `LatestValueIFSlave` | `read()` returns the latest status |
+
+The system gives it those endpoints, either through the adaptor or joined straight to the kernel
+([Python simulation](pysim.md) shows both), so the same class runs over the bus and without it.
+
+It runs as two processes. The **writer** sends the configs and the sample packets in the order
+`host_schedule` lays out:
 
 ```python
-    def _commit(self, cfg: FirCfg, want_ncfg: int):
-        yield from self.m.write(np.asarray(cfg.serialize(word_bw=DW), dtype=np.uint64), REGS)
-        yield from self.m.write(np.asarray([1], dtype=np.uint64), REGS + 0x800)
-        while True:                                   # received, so it cannot miss its sample
-            st = yield from self._status()
-            if int(st.ncfg) >= want_ncfg:
-                return
-            yield self.timeout(self.poll_cycles * self.clk.period)
+    def _writer(self):
+        for item in self.schedule:
+            if item[0] == "cfg":
+                _, i, apply_at, taps = item
+                yield from self.cfg.write(make_cfg(taps, apply_at))
+                while int((yield from self._read_status()).ncfg) < i + 1:
+                    yield self.timeout(self.poll_cycles * self.clk.period)
+            else:
+                _, n0, n1 = item
+                chunk = np.asarray([int(v) & 0xFFFF for v in self.x[n0:n1]], dtype=np.uint64)
+                yield from self.qin.write(chunk)
 ```
 
-The config goes into the shadow at `REGS` as one burst, the write to `REGS + 0x800` commits it, and
-the host polls the status (`REGS + 0xC00`) until `ncfg` shows it arrived. Only then does it send the
-sample the config applies at — and since a packet of samples never straddles a commit point, the
-packet containing `apply_at` is cut there.
+After each config it reads the status until `ncfg` shows the config *received*; only then does it
+send the sample the config applies at. A packet never straddles a commit point, so the packet
+containing `apply_at` is cut there.
 
-Between packets the host **drains** what is ready (read the occupancy at `QOUT + 0x800`, then pop that
-many words) and **waits for room** (read queue in's vacancy until the next packet fits). Draining is
-not optional: queue out is 64 deep, and a full output queue stops the kernel, which stops it taking
-input, which would leave the host waiting for room forever.
+The **reader** takes one output packet per input packet, the same size. Queue out is unframed — the
+bus cannot see where the kernel's packets end — so the reader names the size, and it knows the size
+because it reads the same schedule:
 
 ```python
-            chunk = [int(v) & 0xFFFF for v in self.x[n:end]]
-            yield from self._drain()
-            while int((yield from self.m.read(1, QIN))[0]) < len(chunk):
-                yield self.timeout(self.poll_cycles * self.clk.period)
-            yield from self.m.write(np.asarray([len(chunk)] + chunk, dtype=np.uint64), QIN)
+    def _reader(self):
+        for item in self.schedule:
+            if item[0] == "pkt":
+                words = yield from self.qout.get(nwords_max=item[2] - item[1])
+                self.y += [int(np.int64(np.uint64(w))) for w in np.asarray(words)]
 ```
 
-The packet is `[len | samples]`: queue in frames in-band, so the length goes first.
+Two processes are what make this simple. With one, the host has to empty queue out before every push:
+queue out is 64 deep, a full output queue stops the kernel, and a kernel that has stopped takes no
+input, so a host waiting for room in queue in would wait forever. The earlier single-process host did
+exactly that bookkeeping, with the addresses written out.
+
+Every call blocks, and over the bus it blocks by **polling** — reading the free space or the count
+and asking again — never by stalling the bus. That matters here: the writer waiting for room and the
+reader popping outputs share one bus master, and one adaptor front. A write stalled on a full queue
+would hold the front, the reader's pops could not get through, and the host would deadlock.
 
 `lag` is the negative-control knob. With `lag > 0` the host commits each config after the first
 `lag` samples *after* its `apply_at` — deliberately late — and the kernel must report it.
