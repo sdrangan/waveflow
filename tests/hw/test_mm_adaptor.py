@@ -10,7 +10,7 @@ from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
 from waveflow.simulation.simulation import Simulation
 
 
-def test_mm_fir_one_front_is_bit_exact_and_matches_per_view_timing():
+def test_mm_fir_one_front_is_bit_exact_and_no_faster_than_per_view():
     x = np.random.default_rng(3).integers(-2000, 2000, size=150)
     plan = [(0, [1, 2, 3]), (77, [4, -5, 6, -7])]
     a = MmFirSystem(x=list(x), plan=plan)
@@ -19,8 +19,10 @@ def test_mm_fir_one_front_is_bit_exact_and_matches_per_view_timing():
     assert np.array_equal(yb, fir_golden(x, plan))
     assert np.array_equal(ya, yb)
     assert b.adaptor.errors == []
-    # One host transaction at a time either way, so one port changes nothing in pysim.
-    assert a.sim.env.now == b.sim.env.now
+    # The host has a writer and a reader process.  Behind separate fronts the reader's pops and the
+    # writer's pushes overlap; behind one front they take turns -- that serialization is the
+    # ordering guarantee, and it costs time.
+    assert a.sim.env.now < b.sim.env.now
 
 
 def test_span_and_offsets():
