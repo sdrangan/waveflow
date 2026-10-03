@@ -19,6 +19,7 @@ declared endpoint, so a generated kernel can bind it) -- a follow-up the plan re
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 
@@ -31,6 +32,9 @@ from waveflow.simulation.simobj import ProcessGen
 @dataclass
 class MemSlaveBramWindow(HwModule):
     """A BRAM of ``nelem`` words: port A on the bus (:attr:`s_mem`), port B for the kernel."""
+
+    #: What a bus master reaches this view as -- see :class:`~waveflow.hw.mm_host.MemSlaveMap`.
+    view_kind: ClassVar[str] = "bram"
 
     mem_dwidth: HwParam[int] = 64
     nelem: HwParam[int] = 512

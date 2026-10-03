@@ -29,6 +29,7 @@ crossbar's write channel is held, so the host stalls — in RTL, WREADY low).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 
@@ -43,6 +44,9 @@ from waveflow.simulation.simobj import ProcessGen
 @dataclass
 class MemSlaveRegBank(HwModule):
     """Config + status register bank behind one bus window.  See the module docstring."""
+
+    #: What a bus master reaches this view as -- see :class:`~waveflow.hw.mm_host.MemSlaveMap`.
+    view_kind: ClassVar[str] = "regbank"
 
     cfg_type: type[DataSchema] = None  # type: ignore[assignment]
     status_type: type[DataSchema] = None  # type: ignore[assignment]

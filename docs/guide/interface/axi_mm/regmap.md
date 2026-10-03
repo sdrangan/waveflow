@@ -2,7 +2,7 @@
 title: Register Maps
 parent: AXI-MM
 grand_parent: Interfaces
-nav_order: 4
+nav_order: 6
 audience: python
 api: [RegMap, RegField, RegAccess, RegMapMMIFSlave, MMIFSlave, DataSchema]
 summary: "The AXI-Lite register map as an interface — RegField / RegAccess (R, W, RW, W1C, W1S), the auto-assigned offset table, the RegMapMMIFSlave read/write dispatch, composite and bit-packed fields, and the per-transaction hook contract. axilite_slave is its own kind_of_endpoint boundary kind. The launch lifecycle layered on top of it — VitisRegMap's ap_ctrl_hs and the BoundRegMap host surface — is a separate page."
@@ -32,6 +32,13 @@ The register map matches the model that Vitis HLS generates from `s_axilite` sca
 > `ap_start` / `ap_done` handshake, `VitisRegMapMMIFSlave`, and the `BoundRegMap` host surface —
 > is [Host launch lifecycle](../../comp_codegen/host_launch.md). A register map is useful without a
 > launch; a launch is not possible without a register map, which is the direction of the dependency.
+
+> **For a free-running kernel, use a register bank instead.** A register map is a host-activated
+> kernel's register file: Vitis generates it as `s_axilite`, and the kernel reads its fields at launch.
+> A free-running kernel never launches and cannot see a write happen, so its register file is the
+> [register bank](./slave_views.md#register-bank) — a shadow the host writes, sent to the kernel as one
+> message per COMMIT. The two are compared side by side in
+> [Register bank or register map?](./slave_views.md#register-bank-or-register-map).
 
 ## Quick example
 

@@ -18,10 +18,11 @@ from pathlib import Path
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
+from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
 
-from examples.mm_fir.mm_fir import DW, FirCfg, FirStatus, MmFir, Taps
+from examples.mm_fir.mm_fir import DW, S16, S64, FirCfg, FirCmdHdr, FirRespHdr, FirStatus, MmFir, Taps
 
 HERE = Path(__file__).resolve().parent
 TOP = "mm_fir"
@@ -31,8 +32,11 @@ def gen_headers(root: Path = HERE) -> None:
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     dag.add(MemMgrStep(output_dir=INCLUDE_DIR))     # the generated top includes memmgr.hpp
-    for cls in (Taps, FirCfg, FirStatus):
+    for cls in (Taps, FirCmdHdr, FirRespHdr, FirCfg, FirStatus):
         dag.add(DataSchemaStep(cls, word_bw_supported=[DW], include_dir=INCLUDE_DIR))
+    # The lane routines the body packs samples and results with: int16 four to a word, int64 one.
+    for elem in (S16, S64):
+        dag.add(ArrayUtilsStep(elem, [DW]))
     res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
     bad = [k for k, r in res.items() if not r.success]
     if bad:

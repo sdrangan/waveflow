@@ -3,9 +3,11 @@
 Rung 3 of ``plans/mm_slave_adaptor.md``'s witness.  Everything here is real RTL -- AMD's crossbar
 (:mod:`waveflow.build.axi_xbar`), the hand-written adaptor leaves joined by generated wiring
 (:mod:`waveflow.build.mm_adaptor_gen`), and the csynth'd ``mm_fir`` kernel -- under one generated
-Verilog top, simulated through XSI.  The host is a C++ state machine (:func:`render_tb`) running the
-same protocol as the pysim :class:`~examples.mm_fir.mm_fir.FirHost`, its decisions laid out by
-:func:`host_actions`.
+Verilog top, simulated through XSI.  The host (:func:`render_tb`) is the pysim
+:class:`~examples.mm_fir.mm_fir.FirHost` written against the C++ endpoints of
+``waveflow/build/xsi/xsi_mm_host.h``: the same writer and reader, the same
+:func:`~examples.mm_fir.mm_fir.host_schedule`, and an address map generated from the same pysim
+system (:func:`map_header`) -- the testbench names no address.
 
 Two topologies with one address map (view *k* at ``REGS + k * 4 KB``):
 
@@ -25,14 +27,23 @@ import numpy as np
 
 from examples.mm_fir.mm_fir import (
     DW,
+    MmFirSystem,
     QDEPTH,
     QIN,
     QOUT,
+    QRESP,
+    RDEPTH,
     REGS,
+    S16,
     FirCfg,
+    FirCmdHdr,
+    FirRespHdr,
     FirStatus,
+    HOST_MAX_OUTSTANDING,
+    host_schedule,
     make_cfg,
 )
+from waveflow.hw.arrayutils import array
 from waveflow.build.axi_xbar import (
     AxiXbarConfig,
     AxiXbarRange,
@@ -57,28 +68,40 @@ ROOT = Path(__file__).resolve().parent
 RTL = ROOT / "mm_fir_proj" / "solution1" / "syn" / "verilog"
 
 #: Two topologies, one address map (view k at REGS + k * 4 KB either way):
-#:   per_view  -- a 1x3 crossbar, each view its own MI slot and its own front (Stages 1-2);
-#:   one_front -- all three views behind ONE front and a generated decoder (Stage 4), on MI0 of a 1x2
+#:   per_view  -- a 1x4 crossbar, each view its own MI slot and its own front (Stages 1-2);
+#:   one_front -- all four views behind ONE front and a generated decoder (Stage 4), on MI0 of a 1x2
 #:                crossbar.  MI1 is a stub nothing addresses: a 1x1 crossbar is degenerate (create_ip
 #:                generates an inconsistent 2-MI IP for it -- see AxiXbarConfig), and a real system has
 #:                more than one slave anyway.
 XBARS = {
     "per_view": AxiXbarConfig(
-        name="xbar_mm3_1x3", n_si=1,
-        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12)],
+        name="xbar_mm4_1x4", n_si=1,
+        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12),
+            AxiXbarRange(QRESP, 12)],
         data_width=DW, addr_width=32, id_width=1),
     "one_front": AxiXbarConfig(
         name="xbar_mm1_1x2", n_si=1,
-        mi=[AxiXbarRange(REGS, adaptor_law(3)), AxiXbarRange(0x0001_0000, 12)],
+        mi=[AxiXbarRange(REGS, adaptor_law(4)), AxiXbarRange(0x0001_0000, 12)],
         data_width=DW, addr_width=32, id_width=1),
 }
 NCFG = FirCfg.nwords_per_inst(DW)
 NSTAT = FirStatus.nwords_per_inst(DW)
 VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_axis="k_stat"),
          QueueView("qin", "in", axis="k_in", depth=QDEPTH),
-         QueueView("qout", "out", axis="k_out", depth=QDEPTH)]
+         QueueView("qout", "out", axis="k_out", depth=QDEPTH),
+         QueueView("qresp", "out", axis="k_resp", depth=RDEPTH)]
 
 NSAMP, SWITCH_AT, PKT, POLL = 200, 101, 16, 8
+
+#: The C++ host's bus master keeps one read AND one write outstanding at once (AxiMmMaster's
+#: ``overlap_rw``) -- derived from ``mm_fir.HOST_MAX_OUTSTANDING``, the same setting pysim's
+#: ``MMIFMaster.max_outstanding`` uses, so the two backends cannot model different masters.
+#: AxiMmMaster supports exactly one per direction (overlap) or one in total (not), so any other limit
+#: is refused rather than silently approximated.
+if HOST_MAX_OUTSTANDING != 1:
+    raise ValueError(f"AxiMmMaster models one transaction per direction; HOST_MAX_OUTSTANDING is "
+                     f"{HOST_MAX_OUTSTANDING}")
+OVERLAP_RW = True
 TAPS_A = [3, -1, 4, 1, -5]
 TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]
 PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
@@ -93,16 +116,19 @@ def render_top(top: str, topology: str) -> str:
     dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
+    # The queue views' interrupts, for the host (plans/mm_irq.md): the testbench samples these pins.
+    ports += [f"output wire irq_{v.name}" for v in VIEWS if isinstance(v, QueueView)]
     mi = [f"mi{k}_axi" for k in range(len(xbar.mi))]
     body = []
     for p in mi:
         body += ["  " + d for d in axi_wire_decls(p, mi_wire_signals(dw, aw, idw))]
-    for g in ("k_cfg", "k_stat", "k_in", "k_out"):
+    for g in ("k_cfg", "k_stat", "k_in", "k_out", "k_resp"):
         body += [f"  wire [{dw - 1}:0] {g}_TDATA;", f"  wire {g}_TVALID, {g}_TREADY, {g}_TLAST;"]
     # The kernel's ports carry no TLAST (it filters sample by sample and reads a fixed-size config),
     # so the TLASTs the leaves drive go nowhere, and the ones they read are tied low: the status bank
-    # completes a message on its NSTAT-th word, and queue out ignores TLAST.
-    body += ["  assign k_stat_TLAST = 1'b0;", "  assign k_out_TLAST = 1'b0;"]
+    # completes a message on its NSTAT-th word, and a queue out ignores TLAST.
+    body += ["  assign k_stat_TLAST = 1'b0;", "  assign k_out_TLAST = 1'b0;",
+             "  assign k_resp_TLAST = 1'b0;"]
     body.append(render_xbar_instance(xbar, "u_xbar", ["s0_axi"], mi))
     if topology == "one_front":
         body.append(render_adaptor_slot("fir_mm", VIEWS, mi[0], dw, aw, idw))
@@ -112,11 +138,13 @@ def render_top(top: str, topology: str) -> str:
     else:
         for view, p in zip(VIEWS, mi):
             body.append(render_view_slot(view, p, dw, aw, idw))
+    body += [f"  assign irq_{v.name} = {v.name}_irq;" for v in VIEWS if isinstance(v, QueueView)]
     body.append("""  mm_fir u_fir (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
     .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
     .s_in_TDATA(k_in_TDATA), .s_in_TVALID(k_in_TVALID), .s_in_TREADY(k_in_TREADY),
     .m_out_TDATA(k_out_TDATA), .m_out_TVALID(k_out_TVALID), .m_out_TREADY(k_out_TREADY),
+    .m_resp_TDATA(k_resp_TDATA), .m_resp_TVALID(k_resp_TVALID), .m_resp_TREADY(k_resp_TREADY),
     .m_status_TDATA(k_stat_TDATA), .m_status_TVALID(k_stat_TVALID), .m_status_TREADY(k_stat_TREADY)
   );""")
     return (f"// {top}.v -- GENERATED by examples/mm_fir/mm_fir_xsi.py (mm_fir, {topology}).\n"
@@ -124,155 +152,178 @@ def render_top(top: str, topology: str) -> str:
             + "\n".join(body) + "\nendmodule\n")
 
 
-def field_pos(schema, name: str) -> tuple[int, int]:
-    """(word, bit) where *name* starts in *schema*'s 64-bit serialization -- read off the schema's own
-    serializer, so the testbench never restates the layout."""
+def field_pos(schema, name: str) -> tuple[int, int, int]:
+    """(word, bit, width) of *name* in *schema*'s 64-bit serialization -- the position read off the
+    schema's own serializer, the width off the field's type, so the testbench never restates the
+    layout."""
     words = np.asarray(schema(**{name: 1}).serialize(word_bw=DW), dtype=np.uint64)
+    width = int(schema.elements[name]["schema"].bitwidth)
     for i, w in enumerate(words):
         if int(w):
-            return i, int(w).bit_length() - 1
+            return i, int(w).bit_length() - 1, width
     raise AssertionError(name)
 
 
-def host_actions(x) -> list[tuple]:
-    """The FirHost protocol as a flat action list (same decisions as the pysim host)."""
-    acts: list[tuple] = []
-    cfgs = sorted(PLAN, key=lambda c: c[0])
-    nxt, n = 0, 0
-    while n < len(x):
-        while nxt < len(cfgs) and cfgs[nxt][0] <= n:
-            words = [int(w) for w in make_cfg(cfgs[nxt][1], cfgs[nxt][0]).serialize(word_bw=DW)]
-            acts += [("W", REGS, words), ("W", REGS + 0x800, [1]), ("POLL_NCFG", nxt + 1)]
-            nxt += 1
-        end = min(n + PKT, len(x), cfgs[nxt][0] if nxt < len(cfgs) else len(x))
-        chunk = [int(v) & 0xFFFF for v in x[n:end]]
-        acts += [("DRAIN", 0), ("WAIT_VAC", len(chunk)), ("W", QIN, [len(chunk)] + chunk)]
-        n = end
-    acts += [("DRAIN_ALL", len(x)), ("STATUS", 0)]
-    return acts
+def map_header(topology: str) -> str:
+    """The address map the C++ host uses, generated from the SAME pysim system the pysim gates run
+    (``MmFirSystem.slave_map``), so the testbench restates no base and no offset."""
+    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    return sysm.slave_map.to_cpp_header("mm_fir_map", source="examples/mm_fir/mm_fir_xsi.py")
 
 
 def render_tb(dll: str, x) -> str:
-    kinds = {"W": 0, "POLL_NCFG": 1, "DRAIN": 2, "WAIT_VAC": 3, "DRAIN_ALL": 4, "STATUS": 5}
-    rows = []
-    for a in host_actions(x):
-        if a[0] == "W":
-            rows.append(f"    {{0, 0x{a[1]:x}ull, {{{', '.join(f'0x{w:x}ull' for w in a[2])}}}, 0}},")
+    """The C++ host: the pysim :class:`~examples.mm_fir.mm_fir.FirHost`, written against the C++
+    endpoints of ``xsi_mm_host.h``.  Same two programs (a writer and a reader on one bus master), the
+    same :func:`~examples.mm_fir.mm_fir.host_schedule`, the same polling rules, the same check of
+    every response."""
+    def hexes(words):
+        return ", ".join(f"0x{int(w):x}ull" for w in words)
+
+    rows, tx = [], 0
+    for item in host_schedule(len(x), PLAN, PKT):
+        if item[0] == "cfg":
+            rows.append(f"    {{CFG, {{{hexes(make_cfg(item[1]).serialize(word_bw=DW))}}}, {{}}, 0u, 0u, 0u}},")
         else:
-            rows.append(f"    {{{kinds[a[0]]}, 0, {{}}, {a[1]}}},")
-    nw, nb = field_pos(FirStatus, "ncfg")
-    sw, sb = field_pos(FirStatus, "nsamp")
-    lw, lb = field_pos(FirStatus, "late")
+            _, n0, n1, tag, want = item
+            hdr = FirCmdHdr(nsamp=n1 - n0, tx_id=tx, cfg_seq=tag).serialize(word_bw=DW)
+            samples = array(S16, np.asarray(x[n0:n1], dtype=np.int64)).serialize(word_bw=DW)
+            rows.append(f"    {{PKT, {{{hexes(hdr)}}}, {{{hexes(samples)}}}, {n1 - n0}u, {tx}u, {want}u}},")
+            tx += 1
+    f_nsamp = field_pos(FirStatus, "nsamp")
+    f_ncfg = field_pos(FirStatus, "ncfg")
+    f_tx = field_pos(FirRespHdr, "tx_id")
+    f_seq = field_pos(FirRespHdr, "cfg_seq")
+
+    def fld(words: str, pos) -> str:
+        return f"field({words}, {pos[0]}, {pos[1]}, {pos[2]})"
+
     return f'''// mm_fir_tb.cpp -- GENERATED by examples/mm_fir/mm_fir_xsi.py: host program -> crossbar ->
-// adaptor -> mm_fir kernel.  The host is a state machine over AxiMmMaster ops.
+// adaptor -> mm_fir kernel.  The host is the pysim FirHost on the C++ endpoints of xsi_mm_host.h:
+// a writer and a reader sharing one AxiMmMaster, and no address anywhere in this file.
 #include "xsi_bfm.h"
+#include "xsi_mm_host.h"
+#include "mm_fir_map.h"
 using namespace wfbfm;
 
-struct Act {{ int kind; uint64_t addr; std::vector<uint64_t> words; uint64_t arg; }};
-enum {{ W = 0, POLL_NCFG = 1, DRAIN = 2, WAIT_VAC = 3, DRAIN_ALL = 4, STATUS = 5 }};
-static const uint64_t REGS = 0x{REGS:x}, QIN = 0x{QIN:x}, QOUT = 0x{QOUT:x};
-static const uint64_t STATUS_A = REGS + 0xC00, OCC_A = QOUT + 0x800;
+enum {{ CFG = 0, PKT = 1 }};
+/// One schedule entry: a config (words = the FirCfg), or a packet (words = its FirCmdHdr, samples =
+/// its samples as the serializer packs them -- four int16 to a word -- nsamp = how many, tx / want = the
+/// response the host expects back).
+struct Item {{ int kind; std::vector<uint64_t> words, samples; uint32_t nsamp, tx, want; }};
+static const std::vector<Item> SCHEDULE = {{
+{chr(10).join(rows)}
+}};
 static const long POLL = {POLL};
+static const uint32_t NSAMP = {len(x)};
 
-static uint32_t field(const std::vector<uint64_t>& w, int word, int bit) {{
-    return (uint32_t)(w[word] >> bit);
+static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int width) {{
+    const uint64_t v = w[word] >> bit;
+    return (uint32_t)(width >= 64 ? v : (v & ((1ull << width) - 1)));
 }}
 
-class HostProgram : public XsiSimObj {{
+/// Commits each config; sends each packet as two queue-in packets -- its header, then its samples.
+/// It never waits for a config to be received: the header's cfg_seq makes the kernel wait.  It waits
+/// for room in queue in on queue in's interrupt -- no polling.
+class Writer : public XsiSimObj {{
 public:
-    HostProgram(AxiMmMaster& m, std::vector<Act> acts) : m_(m), acts_(std::move(acts)) {{}}
-    std::vector<uint64_t> y;
-    std::vector<uint64_t> final_status;
-    bool done() const {{ return ai_ >= acts_.size() && !busy_; }}
-    long polls = 0;
+    Writer(AxiMmMaster& m, const IrqPin& qin_irq)
+        : cfg_(m, mm_fir_map::regs, POLL), qin_(m, mm_fir_map::qin, POLL) {{ qin_.use_irq(qin_irq); }}
+    bool done() const {{ return i_ >= SCHEDULE.size() && phase_ == IDLE; }}
+    long polls() const {{ return qin_.polls; }}
 
     void update() override {{
-        ++cyc_;
-        if (busy_) {{
-            if (!m_.op(op_).done()) return;
-            busy_ = false;
-            on_done(m_.op(op_));
+        cfg_.step(); qin_.step();
+        if (phase_ == SEND_CFG && !cfg_.busy()) next();
+        else if (phase_ == SEND_HDR && !qin_.busy()) {{ qin_.start(SCHEDULE[i_].samples); phase_ = SEND_SAMP; }}
+        else if (phase_ == SEND_SAMP && !qin_.busy()) next();
+        if (phase_ == IDLE && i_ < SCHEDULE.size()) {{
+            const Item& it = SCHEDULE[i_];
+            if (it.kind == CFG) {{ cfg_.start(it.words); phase_ = SEND_CFG; }}
+            else                {{ qin_.start(it.words); phase_ = SEND_HDR; }}
         }}
-        if (!busy_ && ai_ < acts_.size()) issue();
     }}
 
 private:
-    void read(uint64_t a, uint32_t n, long delay) {{ op_ = m_.read(a, n, cyc_ + delay); busy_ = true; }}
-    void issue() {{
-        const Act& a = acts_[ai_];
-        const long d = again_ ? POLL : 0;
-        switch (a.kind) {{
-        case W:         op_ = m_.write(a.addr, a.words); busy_ = true; break;
-        case POLL_NCFG: case STATUS: read(STATUS_A, {NSTAT}, d); if (again_) ++polls; break;
-        case WAIT_VAC:  read(QIN, 1, d); if (again_) ++polls; break;
-        case DRAIN: case DRAIN_ALL:
-            if (left_ > 0) read(QOUT, (uint32_t)std::min<long>(left_, 256), 0);
-            else           read(OCC_A, 1, d);
-            break;
+    enum {{ IDLE, SEND_CFG, SEND_HDR, SEND_SAMP }};
+    void next() {{ ++i_; phase_ = IDLE; }}
+    MmRegBankCfg cfg_;
+    MmQueueWriter qin_;
+    size_t i_ = 0;
+    int phase_ = IDLE;
+}};
+
+/// Takes one output packet per input packet, then that packet's response, which it checks -- each on
+/// its queue's interrupt, no polling; then reads the final status once (the kernel publishes it before
+/// each response, so after the last response it is final).
+class Reader : public XsiSimObj {{
+public:
+    Reader(AxiMmMaster& m, const IrqPin& qout_irq, const IrqPin& qresp_irq)
+        : qout_(m, mm_fir_map::qout, POLL), qresp_(m, mm_fir_map::qresp, POLL),
+          st_(m, mm_fir_map::regs, POLL) {{ qout_.use_irq(qout_irq); qresp_.use_irq(qresp_irq); }}
+    bool done() const {{ return phase_ == DONE; }}
+    long polls() const {{ return qout_.polls + qresp_.polls; }}
+    std::vector<uint64_t> y, final_status;
+    long nresp = 0, mismatches = 0;
+
+    void update() override {{
+        qout_.step(); qresp_.step(); st_.step();
+        if (phase_ == READ && !qout_.busy()) {{
+            y.insert(y.end(), qout_.words.begin(), qout_.words.end());
+            qresp_.start(1); phase_ = RESP;
+        }}
+        else if (phase_ == RESP && !qresp_.busy()) {{
+            const Item& it = SCHEDULE[i_];
+            ++nresp;
+            if ({fld("qresp_.words", f_tx)} != it.tx || {fld("qresp_.words", f_seq)} != it.want) ++mismatches;
+            ++i_; phase_ = IDLE;
+        }}
+        else if (phase_ == STATUS && !st_.busy()) {{ final_status = st_.words; phase_ = DONE; }}
+        if (phase_ == IDLE) {{
+            while (i_ < SCHEDULE.size() && SCHEDULE[i_].kind != PKT) ++i_;
+            if (i_ < SCHEDULE.size()) {{ qout_.start(SCHEDULE[i_].nsamp); phase_ = READ; }}
+            else {{ st_.start(0); phase_ = STATUS; }}
         }}
     }}
-    void next() {{ ++ai_; again_ = false; left_ = 0; }}
-    void on_done(const AxiMmMaster::Op& o) {{
-        const Act& a = acts_[ai_];
-        switch (a.kind) {{
-        case W: next(); break;
-        case POLL_NCFG:
-            if (field(o.rdata, {nw}, {nb}) >= a.arg) next(); else again_ = true;
-            break;
-        case WAIT_VAC: if (o.rdata[0] >= a.arg) next(); else again_ = true; break;
-        case STATUS: final_status = o.rdata; next(); break;
-        case DRAIN: case DRAIN_ALL:
-            if (o.addr == OCC_A) {{
-                left_ = (long)o.rdata[0];
-                if (left_ == 0) {{
-                    if (a.kind == DRAIN || y.size() >= a.arg) next(); else again_ = true;
-                }} else {{
-                    again_ = false;
-                }}
-            }} else {{
-                y.insert(y.end(), o.rdata.begin(), o.rdata.end());
-                left_ -= (long)o.rdata.size();
-                if (left_ == 0) {{
-                    if (a.kind == DRAIN || y.size() >= a.arg) next(); else again_ = false;
-                }}
-            }}
-            break;
-        }}
-    }}
-    AxiMmMaster& m_;
-    std::vector<Act> acts_;
-    size_t ai_ = 0, op_ = 0;
-    bool busy_ = false, again_ = false;
-    long left_ = 0, cyc_ = 0;
+
+private:
+    enum {{ IDLE, READ, RESP, STATUS, DONE }};
+    MmQueueReader qout_, qresp_;
+    MmStatusReader st_;
+    size_t i_ = 0;
+    int phase_ = IDLE;
 }};
 
 int main() {{
     XsiSim sim("{dll}", "mm_fir.wdb");
-    AxiMmMaster host(sim.dut(), "s0_axi", 8, 0);
-    HostProgram prog(host, {{
-{chr(10).join(rows)}
-    }});
-    std::vector<XsiSimObj*> all = {{&host, &prog}};
+    AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/{"true" if OVERLAP_RW else "false"});
+    IrqPin irq_qin(sim.dut(), "irq_qin"), irq_qout(sim.dut(), "irq_qout"), irq_qresp(sim.dut(), "irq_qresp");
+    Reader rd(host, irq_qout, irq_qresp);   // the pysim reader runs first at t = 0 too (it is the host's run_proc)
+    Writer wr(host, irq_qin);
+    std::vector<XsiSimObj*> all = {{&irq_qin, &irq_qout, &irq_qresp, &host, &rd, &wr}};
     auto drive = [&] {{ for (auto* p : all) p->drive(); }};
     sim.reset(drive);
     long cyc = 0;
-    for (; cyc < 200000 && !prog.done(); ++cyc) {{
+    auto finished = [&] {{ return rd.done() && wr.done(); }};
+    for (; cyc < 200000 && !finished(); ++cyc) {{
         sim.clock_low();  for (auto* p : all) p->sample();
         sim.clock_high(); for (auto* p : all) p->update(); drive();
     }}
-    std::printf("DONE done=%d cycles=%ld polls=%ld nops=%zu\\n", (int)prog.done(), cyc, prog.polls, host.nops());
-    std::printf("STATUS nsamp=%u ncfg=%u late=%u\\n", field(prog.final_status, {sw}, {sb}),
-                field(prog.final_status, {nw}, {nb}), field(prog.final_status, {lw}, {lb}));
+    std::printf("DONE done=%d cycles=%ld polls=%ld nops=%zu\\n", (int)finished(), cyc,
+                rd.polls() + wr.polls(), host.nops());
+    std::printf("RESP n=%ld mismatches=%ld\\n", rd.nresp, rd.mismatches);
+    if (rd.done())
+        std::printf("STATUS nsamp=%u ncfg=%u\\n", {fld("rd.final_status", f_nsamp)},
+                    {fld("rd.final_status", f_ncfg)});
     for (size_t i = 0; i < host.nops(); ++i) {{
         const AxiMmMaster::Op& o = host.op(i);
         std::printf("OP %c 0x%llx n=%zu s=%ld e=%ld\\n", o.write ? 'W' : 'R', (unsigned long long)o.addr,
                     o.write ? o.wdata.size() : (size_t)o.nwords, o.t_start, o.t_end);
     }}
     std::printf("Y");
-    for (uint64_t v : prog.y) std::printf(" %llx", (unsigned long long)v);
+    for (uint64_t v : rd.y) std::printf(" %llx", (unsigned long long)v);
     std::printf("\\n");
     sim.close();
-    return prog.done() ? 0 : 1;
+    return finished() ? 0 : 1;
 }}
 '''
 
@@ -303,5 +354,6 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600) -> str:
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + ["mm_fir_top.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
                tb_cpp=render_tb(ws.design_dll, scenario_x()),
-               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology)})
+               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology),
+                            "mm_fir_map.h": map_header(topology)})
     return ws.run(timeout=timeout)

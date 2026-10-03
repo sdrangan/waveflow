@@ -456,6 +456,15 @@ private:
 /// pipelining — because what the gates measure is the slave path, and a master that overlapped its
 /// own transactions would fold its own policy into every number.
 ///
+/// **`overlap_rw`** (constructor, default false) lets ONE read and ONE write be outstanding at once,
+/// each channel still in queue order -- what AXI's independent read and write channels allow, what a
+/// DMA engine or a multi-threaded host does, and what a pysim MMIFMaster does (plans/
+/// mm_adaptor_host_endpoints.md, "Which bus-master model is right").  A host with a writer and a reader
+/// program needs it to overlap the two.  Order BETWEEN a read and a write is then the master's own
+/// business, as on a real bus: a program that needs a write to land before a read waits for the
+/// write's B response first (the xsi_mm_host.h endpoints always do).  Off, the master is exactly the
+/// one-at-a-time model every existing gate was measured with.
+///
 /// A write presents AW and its first W beat in the SAME cycle (AXI allows W before or with AW; a
 /// master that waited for AWREADY first would add a cycle that belongs to the TB, not the DUT).
 /// BREADY and RREADY are held high: the master never back-pressures a response.
@@ -482,8 +491,9 @@ public:
 
     /// *prefix* names the port group, e.g. "s0_axi" for ports "s0_axi_AWADDR" ...; *id* is driven on
     /// AWID/ARID when the port has them (a crossbar SI routes the response back by it).
-    AxiMmMaster(Dut& d, const std::string& prefix, int bytes_per_word, uint32_t id = 0)
-        : d_(d), bpw_(bytes_per_word), id_(id) {
+    AxiMmMaster(Dut& d, const std::string& prefix, int bytes_per_word, uint32_t id = 0,
+                bool overlap_rw = false)
+        : d_(d), bpw_(bytes_per_word), id_(id), overlap_(overlap_rw) {
         size_ = 0; while ((1 << size_) < bpw_) ++size_;
         auto P = [&](const char* s) { return d.port((prefix + s).c_str()); };
         auto O = [&](const char* s) { return d.port_opt((prefix + s).c_str()); };
@@ -516,7 +526,12 @@ public:
         ops_.push_back(std::move(o)); return ops_.size() - 1;
     }
 
-    bool idle() const { return cur_ >= ops_.size(); }
+    bool idle() const {
+        if (!overlap_) return cur_ >= ops_.size();
+        return !wact_ && !ract_ && next_of(true, wcur_) >= ops_.size() &&
+               next_of(false, rcur_) >= ops_.size();
+    }
+    bool overlap_rw() const { return overlap_; }
     const Op& op(size_t i) const { return ops_[i]; }
     /// Mutable access, for the fault knobs (`wstrb`, `size`) on an op already queued.
     Op& op_mut(size_t i) { return ops_[i]; }
@@ -537,6 +552,7 @@ public:
     }
 
     void update() override {
+        if (overlap_) { update_overlap(); return; }
         ++cycle_;
         if (active_) {
             Op& o = ops_[cur_];
@@ -567,27 +583,35 @@ public:
     }
 
     void drive() override {
+        // One op on both channels (the default), or the write channel's op and the read channel's
+        // op separately (overlap_rw).  Either way: AW/W from the write op, AR from the read op.
         const Op* o = active_ ? &ops_[cur_] : nullptr;
-        const bool wr = o && o->write;
-        const uint64_t len = o ? (wr ? o->wdata.size() : o->nwords) - 1 : 0;
-        d_.putW(P_awaddr, wr ? o->addr : 0);
-        d_.putW(P_awlen, wr ? len : 0);
+        const Op* wo = overlap_ ? (wact_ ? &ops_[wop_] : nullptr) : ((o && o->write) ? o : nullptr);
+        const Op* ro = overlap_ ? (ract_ ? &ops_[rop_] : nullptr) : ((o && !o->write) ? o : nullptr);
+        d_.putW(P_awaddr, wo ? wo->addr : 0);
+        d_.putW(P_awlen, wo ? wo->wdata.size() - 1 : 0);
         d_.put1(P_awvalid, h_awvalid_);
-        d_.putW(P_wdata, (wr && wbeat_ < o->wdata.size()) ? o->wdata[wbeat_] : 0);
-        d_.put1(P_wlast, (wr && wbeat_ + 1 == o->wdata.size()) ? 1u : 0u);
+        d_.putW(P_wdata, (wo && wbeat_ < wo->wdata.size()) ? wo->wdata[wbeat_] : 0);
+        d_.put1(P_wlast, (wo && wbeat_ + 1 == wo->wdata.size()) ? 1u : 0u);
         d_.put1(P_wvalid, h_wvalid_);
         const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
-        if (P_wstrb >= 0) d_.putW(P_wstrb, (o ? o->wstrb : ~(uint64_t)0) & strb_all);
+        const Op* so = overlap_ ? wo : o;      // the default model drives WSTRB from any active op
+        if (P_wstrb >= 0) d_.putW(P_wstrb, (so ? so->wstrb : ~(uint64_t)0) & strb_all);
         d_.put1(P_bready, h_bready_);
-        d_.putW(P_araddr, (o && !wr) ? o->addr : 0);
-        d_.putW(P_arlen, (o && !wr) ? len : 0);
+        d_.putW(P_araddr, ro ? ro->addr : 0);
+        d_.putW(P_arlen, ro ? ro->nwords - 1 : 0);
         d_.put1(P_arvalid, h_arvalid_);
         d_.put1(P_rready, h_rready_);
         if (P_awid >= 0) d_.putW(P_awid, id_);
         if (P_arid >= 0) d_.putW(P_arid, id_);
-        const uint64_t sz = (o && o->size >= 0) ? (uint64_t)o->size : (uint64_t)size_;
-        if (P_awsize >= 0) d_.putW(P_awsize, sz);
-        if (P_arsize >= 0) d_.putW(P_arsize, sz);
+        if (overlap_) {
+            if (P_awsize >= 0) d_.putW(P_awsize, (wo && wo->size >= 0) ? (uint64_t)wo->size : (uint64_t)size_);
+            if (P_arsize >= 0) d_.putW(P_arsize, (ro && ro->size >= 0) ? (uint64_t)ro->size : (uint64_t)size_);
+        } else {
+            const uint64_t sz = (o && o->size >= 0) ? (uint64_t)o->size : (uint64_t)size_;
+            if (P_awsize >= 0) d_.putW(P_awsize, sz);
+            if (P_arsize >= 0) d_.putW(P_arsize, sz);
+        }
         if (P_awburst >= 0) d_.putW(P_awburst, 1);   // INCR
         if (P_arburst >= 0) d_.putW(P_arburst, 1);
         if (P_awcache >= 0) d_.putW(P_awcache, 3);   // normal non-cacheable bufferable (AXI default)
@@ -610,12 +634,61 @@ private:
     }
     void finish(Op& o) { o.t_end = cycle_; active_ = false; ++cur_; }
 
+    // -- overlap_rw: a write channel and a read channel, each one op at a time, in queue order ----
+    /// The first op at or after *from* on the write (true) or read (false) channel.
+    size_t next_of(bool write, size_t from) const {
+        while (from < ops_.size() && ops_[from].write != write) ++from;
+        return from;
+    }
+    void update_overlap() {
+        ++cycle_;
+        if (wact_) {
+            Op& o = ops_[wop_];
+            if (aw_beat_) h_awvalid_ = 0;
+            if (w_beat_) { ++wbeat_; if (wbeat_ >= o.wdata.size()) h_wvalid_ = 0; }
+            if (b_beat_) {
+                if (h_awvalid_ || h_wvalid_) bad("B before the burst was fully sent");
+                o.resp = bresp_; o.t_end = cycle_; wact_ = false;
+            }
+        }
+        if (ract_) {
+            Op& o = ops_[rop_];
+            if (ar_beat_) h_arvalid_ = 0;
+            if (r_beat_) {
+                if (h_arvalid_) bad("R before AR was accepted");
+                o.rdata.push_back(rdata_);
+                if (rresp_ > o.resp) o.resp = rresp_;
+                if (rlast_) {
+                    if (o.rdata.size() != o.nwords) bad("RLAST on the wrong beat");
+                    o.t_end = cycle_; ract_ = false;
+                }
+            }
+        }
+        if (!wact_) {
+            wcur_ = next_of(true, wcur_);
+            if (wcur_ < ops_.size() && cycle_ >= ops_[wcur_].not_before) {
+                wop_ = wcur_++; wact_ = true; wbeat_ = 0;
+                ops_[wop_].t_start = cycle_ + 1; h_awvalid_ = 1; h_wvalid_ = 1;
+            }
+        }
+        if (!ract_) {
+            rcur_ = next_of(false, rcur_);
+            if (rcur_ < ops_.size() && cycle_ >= ops_[rcur_].not_before) {
+                rop_ = rcur_++; ract_ = true;
+                ops_[rop_].t_start = cycle_ + 1; h_arvalid_ = 1;
+            }
+        }
+    }
+
     Dut& d_;
     int bpw_, size_;
     uint32_t id_;
+    bool overlap_;
     std::vector<Op> ops_;
     size_t cur_ = 0, wbeat_ = 0;
     bool active_ = false;
+    size_t wcur_ = 0, rcur_ = 0, wop_ = 0, rop_ = 0;   ///< overlap_rw only
+    bool wact_ = false, ract_ = false;                ///< overlap_rw only
     long cycle_ = 0;
     int P_awaddr, P_awlen, P_awvalid, P_awready, P_wdata, P_wlast, P_wvalid, P_wready, P_bvalid,
         P_bready, P_araddr, P_arlen, P_arvalid, P_arready, P_rdata, P_rlast, P_rvalid, P_rready,

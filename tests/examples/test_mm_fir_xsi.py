@@ -2,23 +2,25 @@
 
 The system itself -- AMD's crossbar, the hand-written adaptor leaves and the csynth'd ``mm_fir``
 kernel under one generated top, and the C++ host program -- is built by
-``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host runs the same
-protocol as the pysim ``FirHost``: commit a config, poll the status until the config is RECEIVED, wait
-for room before each packet, drain the outputs between packets, and switch taps mid-stream.  The
-output must equal the numpy golden bit for bit, and the status must show both configs received and
-none late.
+``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host is the pysim
+``FirHost`` on the C++ endpoints of ``xsi_mm_host.h`` (plans/mm_adaptor_host_endpoints.md Stage 2): a
+writer that commits each config and sends each packet behind a FirCmdHdr whose cfg_seq names the config
+it needs (plans/mm_fir_cfg_seq.md); and a reader that takes one output packet per input packet and its
+response.  The output must equal the numpy golden bit for bit, the status must show both configs taken,
+and every response must echo its packet's tx_id and intended config.
 
 Run: ``pytest tests/examples/test_mm_fir_xsi.py -m xsi`` (needs Vivado, and
 ``python -m examples.mm_fir.mm_fir_build`` for the kernel's csynth).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import MmFirSystem, fir_golden
+from examples.mm_fir.mm_fir import QIN, QOUT, QRESP, REGS, MmFirSystem, fir_golden, host_schedule
 from examples.mm_fir.mm_fir_xsi import (
     NSAMP,
     PKT,
@@ -56,9 +58,26 @@ def test_mm_fir_rtl_bit_exact(fir_run):
     done = parse_kv(fir_run, "DONE")
     assert done["done"] == 1, fir_run[-3000:]
     st = parse_kv(fir_run, "STATUS")
-    assert st == {"nsamp": NSAMP, "ncfg": 2, "late": 0}, st
+    assert st == {"nsamp": NSAMP, "ncfg": 2}, st
+    # Every packet answered, each echoing its tx_id and the config it was meant to use.
+    npkt = sum(1 for it in host_schedule(NSAMP, PLAN, PKT) if it[0] == "pkt")
+    assert parse_kv(fir_run, "RESP") == {"n": npkt, "mismatches": 0}
     y = output_words(fir_run)
     assert np.array_equal(y, fir_golden(scenario_x(), PLAN)), "RTL output differs from the numpy golden"
+
+
+@pytest.mark.xsi
+def test_mm_fir_rtl_host_never_polls(fir_run):
+    """The host waits on the views' interrupts (plans/mm_irq.md): among every bus operation the
+    testbench host issued, no read of queue in's vacancy or of a queue out's occupancy, and the status
+    read exactly once."""
+    _topology, out = fir_run
+    reads = [int(m[1], 16) for m in re.finditer(r"OP R 0x([0-9a-f]+)", out)]
+    counts = [a for a in reads if QIN <= a < QIN + 0x1000 or QOUT + 0x800 <= a < QOUT + 0x1000
+              or QRESP + 0x800 <= a < QRESP + 0x1000]
+    assert reads and counts == [], [hex(a) for a in counts]
+    assert reads.count(REGS + 0xC00) == 1
+    assert parse_kv(out, "DONE")["polls"] == 0
 
 
 @pytest.mark.xsi
@@ -73,19 +92,23 @@ def test_mm_fir_rtl_cycles(fir_run):
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
-#: Recorded 2026-10-02: host program start to the final status read, 200 samples, one tap switch.
+#: Recorded 2026-10-03, with NO polling (plans/mm_irq.md): the host waits on the queue views'
+#: interrupts -- queue in's for room, queue out's and the response FIFO's for data -- and reads the final
+#: status once (the kernel publishes it before each response).  Header + cfg_seq protocol, samples
+#: packed four to a word, bus master overlapping one read and one write.  per_view 520 / one_front 529,
+#: 67 bus ops, 0 polls.  pysim 498 / 545 (-4.2% / +3.0%).
 #:
-#: The kernel is pipelined at II=1 (csynth: latency 10, interval 1).  Its first version was not -- it
-#: read a whole 5-word config and wrote a whole 2-word status inside one firing -- and ran at ~1 sample
-#: per 10 cycles: 2096 cycles, 221 bus ops, 55 polls, because every drain found only a few outputs.
-#: Moving at most one word per stream per firing fixed it: 857 cycles, 68 ops, 2 polls.
-#:
-#: pysim (crossbar latency_init = 4) predicts 709, 17% optimistic.  Per packet the RTL takes ~57 cycles
-#: and pysim ~51, and the difference is the C++ host's own pacing: AxiMmMaster starts each op two
-#: cycles after the previous one ends, and the protocol issues four ops per packet.  That is the
-#: testbench, not the system; the adaptor alone tracks RTL within 2 cycles (tests/hw/test_mm_queue.py).
-#:
-#: one_front (Stage 4, recorded the same day): 823 -- 34 fewer over the same 68 ops.  Where the half
-#: cycle per op comes from (a 1x2 instead of a 1x3 crossbar, or one front instead of three) has NOT
-#: been isolated; both runs are bit-exact and pysim predicts 709 for each.
-EXPECTED_CYCLES = {"per_view": 857, "one_front": 823}
+#: History (same RTL scenario):
+#:   * the same protocol with the endpoints POLLING the counts: 768 / 783 (124 / 125 ops), pysim
+#:     734 / 792 after three model fixes (crossbar travel 2 of 4 cycles; one read + one write per
+#:     master; 2 cycles of host pacing) -- 536 / 874 before them;
+#:   * header pattern with ONE sample per 64-bit word (hand-packed): 937 / 922 (143 / 124 ops), pysim
+#:     575 / 1023 -- the serializer's packing moves a quarter of the sample words;
+#:   * apply_at protocol, two-process host, overlap master: 567 / 721 (76 / 74 ops), pysim 423 / 742;
+#:   * the same with the one-at-a-time master: 811 / 776 (73 ops), pysim 742 / 742 when its master is
+#:     forced to one transaction too;
+#:   * the single-process host (drain before every push): 857 / 823, pysim 709;
+#:   * a kernel that was not II=1 (a whole config / status per firing): 2096 cycles, 221 ops.
+#: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
+#: and the response FIFO's poll and pop -- more than dropping the status wait saved.
+EXPECTED_CYCLES = {"per_view": 520, "one_front": 529}

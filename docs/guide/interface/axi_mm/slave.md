@@ -5,10 +5,9 @@ grand_parent: Interfaces
 nav_order: 3
 audience: python
 snippets: run
-api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveAdaptor, QueueView, RegBankView, BramView, render_view_slot, render_adaptor_slot, AxiXbarConfig, generate_axi_xbar]
-summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. Four views (queue in, queue out, register bank, BRAM window), each with stated semantics; one or several behind one front; the ordering guarantee and its measured scope; and where the pysim twins agree with RTL and where they do not."
+api: [MemSlaveAdaptor, BoundMemSlaveAdaptor, MemSlaveMap, IrqIF, IrqIFSink, IrqIFSource, MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, render_view_slot, render_adaptor_slot]
+summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. The four views (queue in, queue out, register bank, BRAM window) and how to build an adaptor from them; one adaptor or one per view; the ordering guarantee and its measured scope; a runnable example."
 ---
-
 # Slave side — memory-mapped adaptor
 
 A free-running kernel is **reached** over the bus — a host writing its registers, another kernel
@@ -22,8 +21,36 @@ kernel *driving* the bus, is the [master side](./master.md). The rule that makes
 > **Kernels stay stream-only. Every synchronization a kernel sees is a stream message.**
 
 A kernel facing raw registers, a raw FIFO and a raw memory at once has no defined order between them.
-A stream message has one — it arrives, in order, once — so each view below states what one bus access
+A stream message has one — it arrives, in order, once — so each view states what one bus access
 becomes *as a message*.
+
+This topic has three pages. This one says what an adaptor is, how to build one, and what it
+guarantees. [Slave adaptor views](./slave_views.md) describes each view: its constructor, what the
+kernel does with it, and what a bus master does with it.
+[Slave adaptor — how it works](./slave_howitworks.md) has the RTL and pysim internals, which you do
+not need in order to use an adaptor.
+
+## Views
+
+An adaptor is made of **views**. A view is one way the kernel can be reached over the bus: a window of
+bus addresses with defined semantics on the bus side, and a defined interface on the kernel side. There
+are four kinds:
+
+| view | what it is | the kernel side | pysim class |
+|---|---|---|---|
+| **queue in** | a FIFO a bus master writes packets into | a stream the kernel reads | `MemSlaveWStream` |
+| **queue out** | a FIFO a bus master reads words out of | a stream the kernel writes | `MemSlaveRStream` |
+| **register bank** | configuration registers a bus master writes, and status it reads | a stream of config messages, one per commit, and a stream of status messages | `MemSlaveRegBank` |
+| **BRAM window** | a memory a bus master reads and writes by address | the memory's other port | `MemSlaveBramWindow` |
+
+Each kind is one hand-written RTL module with one pysim class, and an adaptor holds one view or
+several: a kernel with a register bank and two input queues has three views. Three of the four kinds
+reach the kernel as streams. The BRAM window is the exception: the kernel reads and writes the memory
+directly, and learns that new data is ready from a message on another view (a doorbell).
+
+On the bus side each view occupies its own window of at least 4 KB. A window is more than one address
+because HLS `m_axi` issues only INCR bursts, so the address moves every beat, and an AXI burst may not
+cross a 4 KB boundary.
 
 ## The structure
 
@@ -56,154 +83,135 @@ flowchart TB
   BR <-->|"port B"| K
 ```
 
-- **`axi_slave_front.v`** is the only module that speaks AXI. It turns each beat into one request on
-  a simple **request bus** and is the source of the ordering guarantee below.
-- **A leaf per view** (`mm_queue_in.v`, `mm_queue_out.v`, `mm_regbank.v`, `mm_bram_port.v`) implements
-  one view's semantics on that bus. Widths, depths and sizes ride on Verilog parameters; the files are
-  never rewritten.
-- **The wiring** — instances, nets, and the decoder when several views share a front — is generated
-  by [`mm_adaptor_gen.py`](../../../../waveflow/build/mm_adaptor_gen.py). The decoder is the only
-  generated logic, and it is a table.
+A **front** (`axi_slave_front.v`) is the only module that speaks AXI. It serves one AXI transaction at
+a time and passes each beat to the view whose window the address falls in. Each view is one RTL module
+behind it. When several views share a front, a generated decoder picks the view by address. The
+details are in [how it works](./slave_howitworks.md#the-rtl-modules).
 
-All of it is in [`waveflow/build/rtl/`](../../../../waveflow/build/rtl/). Each leaf has a pysim twin
-with the same semantics, listed with each view.
+## Building an adaptor
 
-### The front end
+In pysim, build each view, then put them behind one `MemSlaveAdaptor`:
 
-- Serves **one AXI transaction at a time**, reads and writes alike, in the order accepted; when an AW
-  and an AR are both waiting it alternates between them.
-- **Refuses** (SLVERR, the beat never reaches a leaf): an `AxSIZE` other than the bus width — a stream
-  cannot carry a partial word — a WRAP burst, and any W beat whose `WSTRB` is not all ones (consumed
-  and dropped, so the burst still completes).
-- INCR bursts advance one word per beat; FIXED bursts repeat one address.
-- Keeps at most one read outstanding at a leaf and issues the next in the cycle the previous response
-  is taken, so a leaf with a one-cycle registered response sustains **one beat per cycle**.
+<!-- snippet: skip -->
+```python
+regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=Cfg, status_type=Status, clk=clk)
+qin  = MemSlaveWStream(name="qin", sim=sim, depth=16, clk=clk)
+qout = MemSlaveRStream(name="qout", sim=sim, depth=16, clk=clk)
+bram = MemSlaveBramWindow(name="bram", sim=sim, nelem=256, clk=clk)
+adaptor = MemSlaveAdaptor(name="mm", sim=sim, views=[regs, qin, qout, bram])
 
-Measured through the crossbar: both directions sustain one beat per cycle after a fixed 4–5 cycles,
-and a refused burst completes at full speed with SLVERR.
+assign_address_ranges([adaptor.s_mem], [(0x4000_0000, adaptor.span())])
+```
 
-## The views
+Each view's constructor is described with the view, in [Slave adaptor views](./slave_views.md).
+`MemSlaveAdaptor` itself takes:
 
-| view | bus side | kernel side | RTL leaf | pysim |
-|---|---|---|---|---|
-| **queue in** | burst writes push words | an AXIS stream, TLAST from an in-band length header | `mm_queue_in.v` | `MemSlaveWStream` |
-| **queue out** | reads pop words; a status read gives the occupancy | an AXIS stream the kernel writes | `mm_queue_out.v` | `MemSlaveRStream` |
-| **register bank** | write config fields, then COMMIT; read status | one config **message** per commit; status messages the kernel pushes | `mm_regbank.v` | `MemSlaveRegBank` |
-| **BRAM window** | read / write words of a memory | the memory's other port | `mm_bram_port.v` + `bram_t2p.v` | `MemSlaveBramWindow` |
+| parameter | meaning |
+|---|---|
+| `views` | the views, in address order: view *k* answers the 4 KB window at offset `k × 0x1000` from the adaptor's base. At least one; every view must use the default 4 KB `window` |
+| `mem_dwidth` | the bus width in bits, default 64; every view must have the same width |
 
-Every view occupies an address **window** of at least 4 KB, not one address: HLS `m_axi` issues
-only INCR bursts, so the address moves every beat, and an AXI burst may not cross a 4 KB boundary.
+The adaptor has one bus slave port, `adaptor.s_mem`. Bind it to a crossbar slave port, then give it a
+base address with `assign_address_ranges`. The size of its address range is `adaptor.span()`: the
+number of views rounded up to a power of two, times 4 KB (four views need `0x4000`; three need
+`0x4000` too).
 
-### Queue in
+## Reaching the views from a bus master
 
-| local address | write | read |
+A bus master — a host program, or a test standing in for one — does not write addresses. It asks for
+a view **by name** and gets the same endpoint it would get from a direct connection to the kernel:
+
+<!-- snippet: skip -->
+```python
+mm = BoundMemSlaveAdaptor(adaptor.slave_map(), master=host.m)
+
+cfg    = mm.stream_master("regs")                   # write(cfg): one config message to the kernel
+qin    = mm.stream_master("qin", irq=qin_irq)       # write(words): one packet
+qout   = mm.stream_slave("qout", irq=qout_irq)      # get(nwords_max=n), get_array, get_schema
+status = mm.status("regs")                          # read(): the latest status message
+buf    = mm.region("bram", Sample)                  # read_slice / write_slice, in element coordinates
+```
+
+| view | the bus master gets | what a call does on the bus |
 |---|---|---|
-| anywhere in the window | push (framed, below) | the **vacancy**: free slots, `0..depth`; no side effects |
+| queue in | a `StreamIFMaster` | `write` waits for the view's interrupt to say there is room, then writes the packet with its length first |
+| register bank | a `StreamIFMaster` (config) | `write` writes the configuration registers, then COMMIT |
+| | a `LatestValueIFSlave` (status) | `read` reads the latest status message; reading does not consume it |
+| queue out | an `MmStreamIFSlave` | `get_*` waits for the view's interrupt to say the words are there, then pops them |
+| BRAM window | a `Region` | `read_slice` / `write_slice` read and write the memory |
 
-- **Framing is in-band.** Each packet is `[len | data × len]`: the header's low 32 bits are the length,
-  the header itself is consumed, and the leaf asserts TLAST on the last data word. Because the leaf
-  counts words, a packet may span any number of bursts, and an interconnect that splits a burst cannot
-  move a packet boundary. `len = 0` is an empty packet.
-- **A full FIFO holds WREADY low**: the writer's burst stalls until the kernel drains. That is modelled,
-  not avoided — a producer whose bus port carries other traffic reads the vacancy first, or holds
-  credits ([Credit Stream](../derived/credit_stream.md)).
-- **Accepted is not consumed.** The B response means the adaptor took the words.
-- A kernel that already writes memory through `MemWStream` reaches another kernel's queue by pointing
-  its base address at the window and prepending the length — gated at RTL with the real synthesized
-  `mem_w_stream` as the producer.
+`adaptor.slave_map()` is the address map as plain data — every view by name, at its absolute bus
+address — so build it after `assign_address_ranges`. For views that each sit on their own crossbar
+slot, `MemSlaveMap.from_views([regs, qin, qout])` builds the same map.
 
-### Queue out
+Two things differ from a direct connection, and both are honest about the bus:
 
-| local address | read | write |
+- **Calls block on the view's interrupt.** Each queue view drives an interrupt line (an `IrqIF`, see
+  [Interrupts](#interrupts) below). Given the host's end of it (`irq=`), the endpoint sets the view's
+  threshold, sleeps until the interrupt says the room (queue in) or the words (queue out) are there,
+  and moves them. It never reads a count, and it never issues a transfer the view would stall — a
+  stalled transfer holds the front, and with it every view behind it, so a host with one process
+  writing and another reading would deadlock as soon as the kernel stopped to wait on its output.
+- **Queue out is unframed.** The bus cannot see where the kernel's packets end, so a read names how
+  many words it wants: `get(nwords_max=n)`, `get_array` or `get_schema`. `get(nwords_max=n)` returns
+  exactly *n* words. A kernel writing to a queue out declares its output `has_tlast=False` to match.
+
+So the host is the same code either way: [mm_fir](../../../examples/mm_fir/) runs one host class over
+the bus and joined directly to the kernel, and checks the outputs agree. The addresses behind each
+call are in [how it works](./slave_howitworks.md#the-address-map-behind-the-endpoints).
+
+### Interrupts
+
+A real host does not ask a device over and over whether it is ready; it sleeps until the device
+interrupts. So each queue view drives an interrupt line, and the endpoints wait on it:
+
+| view | the interrupt is high while | threshold |
 |---|---|---|
-| lower half | **pop** one word per beat; an **empty** queue answers 0 with SLVERR | dropped |
-| upper half | the **occupancy**: words available, `0..depth`; no side effects | dropped |
+| queue in | `vacancy >= threshold` — that much room | written at the upper half of the window |
+| queue out | `occupancy >= threshold` — that many words ready | written at the upper half of the window |
 
-A read never waits for data: a slave that held RVALID until data arrived would hold the whole bus. The
-reader checks the occupancy, then pops. A 4 KB window's lower half is 256 words at 64 bits — one
-maximal AXI4 burst. TLAST from the kernel is not carried to the bus side.
+The line is an `IrqIF` ([`irq.py`](../../../../waveflow/hw/irq.py)): the view's `m_irq`
+(an `IrqIFSource`) on one side, the host's `IrqIFSink` on the other. It is **level-sensitive**: high
+for as long as the condition holds, so a host that comes to wait late cannot miss it. At RTL it is the
+view's `irq` output — a wire — and the XSI testbench's host samples it as a pin (`IrqPin`).
 
-### Register bank
+{F}python
+line = IrqIF(name="qout_irq", sim=sim)
+line.bind("source", qout.m_irq)
+qout_irq = IrqIFSink(name="host_qout_irq", sim=sim)
+line.bind("sink", qout_irq)
+qout_ep = mm.stream_slave("qout", irq=qout_irq)
+{F}
 
-| local address (W = window) | write | read |
+The endpoint manages the threshold itself: a read of *n* words sets it to *n* (a bus write, only when
+it changes) and sleeps — the interrupt then *means* the words are there. A write keeps a lower bound
+on the free space and, when that is too low, waits for room of half the queue, so one threshold write
+normally serves a whole run. **Threshold 0 disables the interrupt** and is the reset value: a view no
+one sets a threshold on behaves exactly as before.
+
+Without `irq=`, the endpoints fall back to reading the count and asking again — polling. No example
+uses it: waiting on the interrupt costs no bus traffic while the host waits, and wakes it the moment
+the condition holds.
+
+**In RTL**, the same adaptor is generated by `render_adaptor_slot(name, views, axi, ...)` from RTL-side
+view descriptions (`QueueView`, `RegBankView`, `BramView` in
+[`mm_adaptor_gen.py`](../../../../waveflow/build/mm_adaptor_gen.py)); each view's page section lists
+its RTL counterpart.
+
+## One adaptor, or one per view
+
+A view can also sit alone behind its own front, in its own crossbar slot:
+
+| | RTL | pysim |
 |---|---|---|
-| `[0, W/2)` | config **shadow**, word *i* at `i × bytes-per-word` | the shadow |
-| `W/2` | **COMMIT**: snapshot the shadow, send it as one packet | the number of commits so far |
-| `[3W/4, W)` | — | status word *i* of the latest **complete** message |
+| one view per crossbar slot | `render_view_slot(view, axi, ...)` — a front and one view | bind each view's own `s_mem` port to its own crossbar slave port |
+| several views behind one front | `render_adaptor_slot(name, views, axi, ...)` — one front, a generated decoder | `MemSlaveAdaptor(views=[...])`, one slave port `s_mem` |
 
-- **Shadow and commit.** Streaming each register write would let the kernel see a half-updated
-  configuration. A commit is the one event at which the configuration changes — the contract
-  `ap_start` gives a host-activated kernel, made explicit for a free-running one. The bank is typed:
-  `MemSlaveRegBank(cfg_type=..., status_type=...)`, and the kernel reads a commit with
-  `s_cfg.get_schema(cfg_type)`. A host stages a config with `regs.cfg_words(cfg)`.
-- **Snapshot isolation.** The packet is sent from a copy taken at the commit, so a shadow write after
-  the commit never reaches it.
-- **A commit is never merged or dropped.** A second commit while the first packet is still untaken
-  stalls the bus until it has gone. (Measured: 87 cycles with the kernel side held off.)
-- **Status is latest-value.** The kernel pushes status messages at whatever rate it likes; a message
-  becomes visible all at once when its last word (or TLAST) arrives, so a read never mixes two.
-
-#### How it works
-
-The kernel never reads the registers. `s_cfg.get_schema(Cfg)` **receives a message** — one per
-COMMIT, and nothing until the next. Between the host's writes and that message, the configuration
-lives in up to three places:
-
-| copy | where | why it exists | size |
-|---|---|---|---|
-| shadow | register bank | where the host's field writes land, one at a time | `NCFG` words |
-| snapshot | register bank | taken at COMMIT; the message is sent from it, so the host can keep writing the shadow while it drains | `NCFG` words |
-| the kernel's own | kernel state | whatever the kernel keeps to compute with | up to the kernel |
-
-There is no FIFO between the bank and the kernel: `m_cfg` is driven straight from the snapshot, one
-word per cycle.
-
-The kernel's copy is unavoidable — a kernel that uses a configuration across many samples has to hold
-it somewhere, just as a host-activated kernel latches its `s_axilite` arguments at `ap_start`. The
-snapshot is the one copy that could be dropped, at the price of stalling the host's shadow writes for
-the few cycles a message takes to drain; it costs `NCFG × DW` flip-flops (320 bits for `mm_fir`'s
-config). For a few dozen words that is negligible. For a large table — a thousand taps, a lookup
-table — copying is the wrong design: use a [BRAM window](#bram-window), which the host writes in place
-and a doorbell announces.
-
-**There is no lock, because nothing is shared that would need one.** The bank never lets the host and
-the kernel touch the same storage:
-
-- **The host only writes the shadow, and the kernel never reads it.** A write in progress has nothing
-  to collide with.
-- **COMMIT is the handoff.** At that instant the snapshot is taken, and from then on the message is
-  immutable: later shadow writes cannot reach it.
-- **The kernel only ever sees whole messages** — all `NCFG` words of one commit, in order, never half
-  of an old configuration and half of a new one.
-- **The only blocking is on the bus.** `get_schema` waits until a commit *exists*, not because a write
-  is in progress. A second COMMIT while the first message is still untaken stalls the *host's* write;
-  a write never makes the kernel wait.
-- **The kernel chooses when a new configuration takes effect.** Checking with `get_schema_nb` at a
-  safe point — between packets, or between samples — means a configuration never changes mid
-  computation: the free-running kernel's version of "registers only change between calls".
-  [mm_fir](../../../examples/mm_fir/) does this, and goes further by naming the exact sample a
-  configuration applies at.
-
-One rule remains, and it is a protocol rule rather than a hardware one: **a register bank has one
-owner.** Two masters writing fields of the same shadow at once are each served whole — the front
-serializes their transactions — but one could commit the other's half-written configuration. If two
-writers are ever needed, give each its own bank, or send complete configurations through a queue.
-
-### BRAM window
-
-The memory is `bram_t2p`, beside the kernel as for any [BRAM between modules](../primitive/bram.md):
-the leaf drives port A, the kernel keeps port B.
-
-- Word *i* at local byte `i × bytes-per-word`; beyond the memory a write is dropped and a read answers
-  0 with SLVERR.
-- A write is **done at its request handshake** — the word is in the memory at the next clock edge,
-  before the front can decode the next transaction. That is this view's part in the ordering guarantee.
-- One read in flight; the leaf's read latency is a parameter the generator reads from `bram_t2p.v`'s
-  published `READ_LATENCY`, so the two have one source.
-
-Data does not travel as messages here — that would waste the memory's random access — but
-synchronization still does: the "data is ready" signal is a write to a queue or register bank in the
-same adaptor. Which leads to ordering.
+The difference is concurrency. One front serves **one AXI transaction at a time**, reads and writes
+alike, so views behind one front are reached one transaction after another; views behind separate
+fronts can be reached at the same time. That is what makes the ordering guarantee below hold, and why
+it holds only within one adaptor. Several views behind one front also use one crossbar slot instead of
+several.
 
 ## Ordering
 
@@ -228,41 +236,26 @@ The second row is the negative control, and it is the point: the guarantee holds
 
 **2. Order across two kernel-side streams is not preserved.** Once a config message and data words
 travel on different streams, the kernel can read them in either order, whatever order they were
-written in. A protocol that needs cross-stream order says so **in the messages**. In
-[mm_fir](../../../examples/mm_fir/) a config carries `apply_at`, the sample index it takes effect at;
-the host waits until the status shows the config *received* before sending that sample; and a config
-that arrives after its sample is applied at once and counted `late` — detected, never silently
-misapplied.
+written in. A protocol that needs cross-stream order says so **in the messages**.
 
-## One view per slot, or several behind one front
+The recipe [mm_fir](../../../examples/mm_fir/) uses is a **sequence number**:
 
-| | RTL | pysim |
-|---|---|---|
-| one view per crossbar slot | `render_view_slot(view, axi, ...)` — a front and a leaf | bind each view's `s_mem` to its own crossbar slave port |
-| several views behind one front | `render_adaptor_slot(name, views, axi, ...)` — one front, a generated decoder, view *k* at local `k × 4 KB` | `MemSlaveAdaptor(views=[...])` — one slave port, `s_mem` |
+- configs are numbered by when they are committed — the *k*-th COMMIT is config *k*;
+- every data packet carries, in an in-band header on the data stream, the number of the config it
+  needs (`cfg_seq`);
+- the kernel, on reading a header, takes configs until it has taken `cfg_seq` of them — waiting if
+  that config has not arrived — and only then reads the data.
 
-The second shape is what ordering statement 1 needs, and it uses one crossbar slot. The decoder routes
-a request by the address bits above 12, takes the read response from the view that accepted the read
-(one read outstanding, so a latched select is enough), and answers an address in the span's unused
-tail with SLVERR so a stray read cannot hang the bus.
-
-In pysim the second shape is a `MemSlaveAdaptor`; [Using it from a kernel](#using-it-from-a-kernel)
-builds one.
-
-`MemSlaveAdaptor`'s port is declared both `half_duplex` and `serialize_transactions`, the second of
-which needs a word of explanation.
-
-### `serialize_transactions`
-
-The pysim crossbar charges a burst's transfer time *before* taking the slave's channel, and holds the
-channel only while the slave's callback runs. For a memory that is harmless. For the adaptor it was
-wrong: a short doorbell issued after a long burst reached the views first — the opposite of the RTL.
-`MMIFSlave.serialize_transactions = True` makes the crossbar hold the channel for the whole
-transaction, as the front does. It is opt-in; every other slave behaves as before.
+A packet can then use neither an older config (the kernel waits for the one it names) nor a newer one
+(a config nobody has asked for stays in its stream), so the host commits a config and sends the data
+that needs it in either order, and never asks whether the config arrived. The wait is on the kernel's
+own stream, not on the bus. mm_fir also has the kernel echo, per packet, the `cfg_seq` it actually
+used into a response queue, so the host can check the order end to end.
 
 ## Using it from a kernel
 
-Each view's kernel side is a stream endpoint, and a kernel declares the other end:
+Each view's kernel side is a stream endpoint (or, for the BRAM window, a memory port), and the kernel
+declares the other end:
 
 | view | the view's endpoint | the kernel's endpoint | carries |
 |---|---|---|---|
@@ -272,7 +265,7 @@ Each view's kernel side is a stream endpoint, and a kernel declares the other en
 | | `s_status` (receives) | a `StreamIFMaster`, e.g. `m_status` | status messages; the bank keeps the latest |
 | BRAM window (`MemSlaveBramWindow`) | the memory's port B | `port_b_read` / `port_b_write` in pysim | words, by address |
 
-Here the view's prefix does tell you its direction: `m_` sends, `s_` receives.
+The view's prefix tells you its direction: `m_` sends, `s_` receives.
 
 A complete, runnable example: a kernel that waits for a gain in the register bank, then multiplies
 every sample it is sent by it. First the two messages the register bank carries:
@@ -286,8 +279,10 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor
 from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
 from waveflow.hw.mm_regbank import MemSlaveRegBank
 from waveflow.simulation.simobj import SimObj
@@ -319,7 +314,8 @@ class Scale(FreeRunMod):
         self.s_cfg = StreamIFSlave(name=f"{self.name}_s_cfg", sim=self.sim, bitwidth=64)      # <- regs.m_cfg
         self.m_status = StreamIFMaster(name=f"{self.name}_m_status", sim=self.sim, bitwidth=64)  # -> regs.s_status
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)        # <- qin.m_out
-        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)     # -> qout.s_in
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64,
+                                    has_tlast=False)                                      # -> qout.s_in
         for ep in (self.s_cfg, self.m_status, self.s_in, self.m_out):
             self.add_endpoint(ep)
         self.gain = None
@@ -331,38 +327,39 @@ class Scale(FreeRunMod):
             self.gain = int(cfg.gain)
             return
         pkt = yield from self.s_in.get()               # one packet of samples (TLAST = its end)
-        yield from self.m_out.write(np.asarray(pkt, dtype=np.uint64) * self.gain)
         self.nsamp += len(pkt)
-        yield from self.m_status.write(Status(nsamp=self.nsamp))
+        yield from self.m_status.write(Status(nsamp=self.nsamp))   # status first: see the host
+        yield from self.m_out.write(np.asarray(pkt, dtype=np.uint64) * self.gain)
 ```
 
-A host program, holding an `MMIFMaster`: it stages the config and commits it, pushes one packet of
-four samples (the length goes first — queue in frames in-band), waits until queue out holds all four
-results, pops them, and reads the status:
+A host program. It holds an `MMIFMaster` for the bus, and four endpoints the wiring gives it. It
+sends a config, pushes one packet of four samples, takes the four results, and reads the status —
+without an address in sight, and without polling: its queue endpoints wait on the views' interrupts.
+The kernel publishes its status *before* the results, so once the host has the results, one read of
+the status is final:
 
 ```python
 @dataclass
 class Host(SimObj):
-    """Configure, push one packet, wait for the results, read them and the status."""
+    """Configure, push one packet, take the results, read the status."""
 
     def __post_init__(self):
         super().__post_init__()
         self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=64)
+        self.cfg = self.qin = self.qout = self.status = None      # set by the wiring
 
     def run_proc(self):
-        REGS, QIN, QOUT = 0x0000, 0x1000, 0x2000
-        yield from self.m.write(np.asarray(Cfg(gain=3).serialize(word_bw=64)), REGS)  # the shadow
-        yield from self.m.write(np.array([1], dtype=np.uint64), REGS + 0x800)        # COMMIT
-        yield from self.m.write(np.array([4, 1, 2, 3, 4], dtype=np.uint64), QIN)     # [len | samples]
-        while int((yield from self.m.read(1, QOUT + 0x800))[0]) < 4:                 # occupancy
-            yield self.env.timeout(10e-9)
-        print("results:", [int(w) for w in (yield from self.m.read(4, QOUT))])        # pop
-        st = Status().deserialize((yield from self.m.read(1, REGS + 0xC00)), word_bw=64)
+        yield from self.cfg.write(Cfg(gain=3))                              # one config message
+        yield from self.qin.write(np.array([1, 2, 3, 4], dtype=np.uint64))  # one packet
+        y = yield from self.qout.get(nwords_max=4)                          # waits for all four
+        print("results:", [int(w) for w in y])
+        st = yield from self.status.read()
         print("status: nsamp =", int(st.nsamp))
 ```
 
 The wiring: the three views behind one adaptor port at `0x0000`, `0x1000` and `0x2000`, their kernel
-sides joined to the kernel with plain streams, and the host reaching the adaptor through a crossbar.
+sides joined to the kernel with plain streams, the host reaching the adaptor through a crossbar, and
+the host's endpoints taken from the adaptor's map.
 
 ```python
 sim = Simulation()
@@ -387,6 +384,18 @@ xbar.bind("master_0", host.m)
 xbar.bind("slave_0", adaptor.s_mem)
 assign_address_ranges([adaptor.s_mem], [(0x0000, adaptor.span())])
 
+irq = {}                                        # the queue views' interrupt lines, to the host
+for view in (qin, qout):
+    line = IrqIF(name=f"{view.name}_irq", sim=sim)
+    line.bind("source", view.m_irq)
+    irq[view.name] = IrqIFSink(name=f"host_{view.name}_irq", sim=sim)
+    line.bind("sink", irq[view.name])
+
+mm = BoundMemSlaveAdaptor(adaptor.slave_map(), master=host.m)
+host.cfg, host.status = mm.stream_master("regs"), mm.status("regs")
+host.qin = mm.stream_master("qin", irq=irq["qin"])
+host.qout = mm.stream_slave("qout", irq=irq["qout"])
+
 sim.run_sim()
 ```
 
@@ -404,39 +413,21 @@ register.
 side](./master.md#splitting-the-endpoints), each view's stream is an ordinary stream, so a design can
 send the configuration to one stage and the samples to another. What it cannot assume is any order
 *between* those streams — that is ordering statement 2 above, and the reason
-[mm_fir](../../../examples/mm_fir/) carries `apply_at` in its config.
-
-## The crossbar
-
-The slave ports above are reached through AMD's `axi_crossbar` IP, the same core a board design uses,
-so the cycle counts measured through it transfer. `AxiXbarConfig` describes it and
-`generate_axi_xbar` produces it with `create_ip` (about 30 s, cached). See
-[MM Interfaces — how it lowers](modeling.md#how-it-lowers).
-
-## pysim and RTL
-
-With the crossbar's `latency_init` set to the measured 4 cycles, every adaptor operation in pysim lands
-within **2 cycles** of RTL — except an operation that waited on a full queue or an untaken config
-packet, which pysim releases up to one packet early: a pysim stream hands the kernel a whole packet in
-one event, where RTL drains it a word per cycle. The tests assert that difference as a bound, so a
-change to the stream model that moves it shows up.
-
-## Gates
-
-| | pysim | RTL (`-m xsi`) |
-|---|---|---|
-| queues | `tests/hw/test_mm_queue.py` | `tests/build/test_mm_queue_xsi.py`, `test_mm_queue_memw_xsi.py` |
-| register bank | `tests/hw/test_mm_regbank.py` | `tests/build/test_mm_regbank_xsi.py` |
-| BRAM window, ordering | `tests/hw/test_mm_bram.py` | `tests/build/test_mm_bram_order_xsi.py` |
-| several views, one front | `tests/hw/test_mm_adaptor.py` | `tests/examples/test_mm_fir_xsi.py` (both shapes) |
-| crossbar | — | `tests/build/test_axi_xbar_xsi.py` |
+[mm_fir](../../../examples/mm_fir/) puts a config sequence number in each packet's header.
 
 ## What is not built yet
 
 - The adaptor is assembled by example code (which views, which addresses, which kernel ports), not
   emitted by `wrapper_gen` from the module graph, the way a design's memories are.
-- No host header is generated from the address map yet.
+- Each view is described twice, once for pysim (`MemSlaveRegBank`, ...) and once for RTL
+  (`RegBankView`, ...), with different parameter names. One description should produce both.
+- Interrupts are level lines with a threshold; there are no interrupt enable / status / clear
+  registers like Vitis's `GIER` / `IER` / `ISR`, and a host-activated kernel's `ap_done` is not an
+  `IrqIF` yet.
+- The endpoints exist for pysim and for an XSI testbench (`xsi_mm_host.h`, with the address map
+  generated by `MemSlaveMap.to_cpp_header`), not yet for real host software or for a Vitis kernel
+  acting as the bus master.
 - The BRAM window's kernel side is plain `port_b_read` / `port_b_write` in pysim, not yet a `BramIF`,
   and has no ownership (lock) stream.
 - Queue out does not carry packet boundaries to the bus side, and the request bus has no write-error
-  path from a leaf (a write to queue out is dropped silently).
+  path from a view (a write to queue out is dropped silently).

@@ -237,6 +237,11 @@ _CONTEXT_ATTRS = frozenset({
     # caught only by ``tests/calib/test_key_stability.py``.
     "dropped", "last_drop_time",                        # StreamIF (offer)
     "blocks_sent", "blocks_delivered", "underrun", "overrun",    # RFSampIF
+    # How the pysim model ISSUES a master's transactions, not what the master is.  An MMIFMaster's
+    # outstanding limit and issue delay model the host driving it (one read + one write, 2 cycles
+    # between transactions, matching the XSI AxiMmMaster), and ``_slots`` holds its simpy resources.  Adding the field moved every FirBlock
+    # key in one commit, caught by tests/calib/test_key_stability.py -- the same lesson as above.
+    "max_outstanding", "issue_cycles", "_slots",        # MMIFMaster
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value

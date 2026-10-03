@@ -59,13 +59,13 @@ class LateSink(SimObj):
 
 @dataclass
 class Source(SimObj):
-    """The kernel side of a queue-out: writes one burst at t = 0."""
+    """The kernel side of a queue-out: writes one burst at t = 0.  Unframed, as queue out is."""
 
     words: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.ep = StreamIFMaster(name=f"{self.name}_ep", sim=self.sim, bitwidth=DW, has_tlast=True)
+        self.ep = StreamIFMaster(name=f"{self.name}_ep", sim=self.sim, bitwidth=DW, has_tlast=False)
 
     def run_proc(self):
         yield from self.ep.write(np.asarray(self.words, dtype=np.uint64))

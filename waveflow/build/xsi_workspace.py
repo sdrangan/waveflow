@@ -26,6 +26,7 @@ _SRC = Path(__file__).resolve().parent / "xsi"
 
 #: The harness files every run needs beside the testbench (the same set XsiHarnessStep copies).
 HARNESS_FILES = ("xsi_bfm.h", "xsi_simobj.h", "xsi_channel.h", "xsi_bundle.h", "xsi_loader.h",
+                 "xsi_mm_host.h",
                  "xsi_loader.cpp", "xsi_shared_lib.h", "xsi_rf_block.h", "xsi_rfdc_samp.h",
                  "xsi_rfdc.h", "run.bat", "run.sh")
 
