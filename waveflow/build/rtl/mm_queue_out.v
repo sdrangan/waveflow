@@ -10,8 +10,10 @@
 //                  no side effects.
 // A 4 KB window gives a 2 KB data half: 256 words at 64 bits, exactly one maximal AXI4 burst.
 //
-// Writes are accepted and DROPPED.  (The request bus carries no write error back; a stray write is
-// harmless here and the plan's open question on write errors stays open.)
+// Writes to the STATUS half set the interrupt threshold (plans/mm_irq.md D2): `irq` is high while
+// OCCUPANCY >= threshold.  Threshold 0 -- the reset value -- holds it low, so a master that never
+// writes one sees the leaf exactly as before.  Writes to the data half are accepted and DROPPED.
+// (The request bus carries no write error back; a stray write is harmless here.)
 //
 // TLAST is accepted and ignored: the data half delivers raw words.  Packet boundaries on this side
 // are a Stage 1 open question in the plan.
@@ -37,7 +39,9 @@ module mm_queue_out #(
     input  wire [DW-1:0]     s_axis_TDATA,
     input  wire              s_axis_TVALID,
     output wire              s_axis_TREADY,
-    input  wire              s_axis_TLAST
+    input  wire              s_axis_TLAST,
+    // interrupt: high while the occupancy is at least the threshold
+    output wire              irq
 );
     localparam integer CW = $clog2(DEPTH);
 
@@ -50,6 +54,9 @@ module mm_queue_out #(
     wire rd_hs  = req_valid && !req_we && rd_ready;
     wire status = req_addr[LAW-1];
     wire pop    = rd_hs && !status && !fifo_empty;
+    wire wr_hs  = req_valid && req_we;
+    reg  [CW:0] thresh_q;
+    assign irq  = (thresh_q != 0) && (fifo_count >= thresh_q);
 
     assign s_axis_TREADY = !fifo_full;
     mm_sync_fifo #(.W(DW), .DEPTH(DEPTH)) u_fifo (
@@ -61,8 +68,9 @@ module mm_queue_out #(
 
     always @(posedge ap_clk) begin
         if (!ap_rst_n) begin
-            rsp_valid <= 1'b0; rsp_rdata <= 0; rsp_err <= 1'b0;
+            rsp_valid <= 1'b0; rsp_rdata <= 0; rsp_err <= 1'b0; thresh_q <= 0;
         end else begin
+            if (wr_hs && status) thresh_q <= req_wdata[CW:0];
             if (rd_hs) begin
                 rsp_valid <= 1'b1;
                 rsp_rdata <= status ? fifo_count : (fifo_empty ? {DW{1'b0}} : fifo_dout);

@@ -167,7 +167,12 @@ def _leaf_inst(view, dw: int) -> list[str]:
     if isinstance(view, QueueView):
         side = "m_axis" if view.kind == "in" else "s_axis"
         head = f"  {view.module} #(.DW({dw}), .LAW({view.law}), .DEPTH({view.depth})) u_{n} ("
-        streams = [_axis_conns(side, view.axis)]
+        # The interrupt (plans/mm_irq.md): the net <view>_irq, for the top to route to its host.
+        streams = [_axis_conns(side, view.axis) + ",", f"    .irq({n}_irq)"]
+        req = _req_conns(n)
+        req[-1] += ","
+        return [f"  wire {n}_irq;", head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req,
+                *streams, "  );"]
     elif isinstance(view, RegBankView):
         head = (f"  mm_regbank #(.DW({dw}), .LAW({view.law}), .NCFG({view.ncfg}), "
                 f".NSTAT({view.nstat})) u_{n} (")

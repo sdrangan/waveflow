@@ -52,6 +52,7 @@ from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_host import (
@@ -259,9 +260,11 @@ class MmFir(FreeRunMod):
             proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
             yield from self.m_out.write_pipelined(array(S64, y), t_out_start)
+        # The status first, then the response -- so a host holding a packet's response knows the
+        # status already counts it, and reads the final status once instead of waiting for it.
+        yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
         yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
-        yield from self._publish()
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +321,10 @@ class FirHost(SimObj):
     Two processes, as stream code is written: a **writer** that commits each config and sends each
     sample packet behind its :class:`FirCmdHdr` -- never asking whether a config has arrived, because
     the header's ``cfg_seq`` makes the kernel wait for it -- and a **reader** that takes one output
-    packet per input packet, and that packet's response, which it checks: the response must echo the
+    packet per input packet, and that packet's response, which it checks.  **Nothing polls**: over the
+    bus, the endpoints sleep on the queue views' interrupts (``plans/mm_irq.md``) -- queue in's for room,
+    queue out's and the response FIFO's for data -- and the final status is read once, because the
+    kernel publishes it before each response.  A response must echo: the response must echo the
     packet's ``tx_id`` and the config the plan meant it to use.  The host holds five endpoints and
     never an address, so the same class runs memory-mapped (through the adaptor) and direct (joined
     straight to the kernel); :class:`MmFirSystem` sets them:
@@ -333,7 +339,6 @@ class FirHost(SimObj):
     x: list = field(default_factory=list)
     plan: list = field(default_factory=list)
     pkt: int = 16
-    poll_cycles: int = 8
     #: Commit each config (after the first) this many samples AFTER its packets went out.  The
     #: packets wait in queue in until it arrives, and the output is still exact.
     lag: int = 0
@@ -351,6 +356,8 @@ class FirHost(SimObj):
         self.qout: StreamIFSlave | None = None
         self.qresp: StreamIFSlave | None = None
         self.status = None
+        #: The host's ends of the queue views' interrupt lines, by view (memory-mapped wiring only).
+        self.irq: dict[str, IrqIFSink] = {}
         self.done = self.env.event()
         self.y: list[int] = []
         #: Every response, as ``(tx_id, cfg_seq)``.
@@ -390,13 +397,9 @@ class FirHost(SimObj):
                 for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_seq", want, got[1])):
                     if exp != val:
                         self.mismatches.append((got[0], name, exp, val))
-        # The kernel publishes its status after writing a packet's outputs; wait for that last one.
-        while True:
-            st = yield from self._read_status()
-            if int(st.nsamp) >= len(self.x):
-                break
-            yield self.timeout(self.poll_cycles * self.clk.period)
-        self.final_status = st
+        # The kernel publishes its status before each response, so after the last response the
+        # status is final: one read, no waiting for it.
+        self.final_status = yield from self._read_status()
         self.done.succeed()
 
     def run_proc(self):
@@ -491,11 +494,17 @@ class MmFirSystem:
         assign_address_ranges(slaves, ranges)
         self.slave_map = (self.adaptor.slave_map() if self.one_front
                           else MemSlaveMap.from_views(views))
-        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
+        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m)
         self.host.cfg = mm.stream_master("regs")
-        self.host.qin = mm.stream_master("qin")
-        self.host.qout = mm.stream_slave("qout")
-        self.host.qresp = mm.stream_slave("qresp")
+        # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.
+        for v in (self.qin, self.qout, self.qresp):
+            line = IrqIF(name=f"{v.name}_irq", sim=sim)
+            line.bind("source", v.m_irq)
+            self.host.irq[v.name] = IrqIFSink(name=f"host_{v.name}_irq", sim=sim)
+            line.bind("sink", self.host.irq[v.name])
+        self.host.qin = mm.stream_master("qin", irq=self.host.irq["qin"])
+        self.host.qout = mm.stream_slave("qout", irq=self.host.irq["qout"])
+        self.host.qresp = mm.stream_slave("qresp", irq=self.host.irq["qresp"])
         self.host.status = mm.status("regs")
 
     def run(self) -> np.ndarray:

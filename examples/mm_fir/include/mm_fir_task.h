@@ -12,15 +12,17 @@
 //         packed four to a word by the serializer: a word is unpacked into a LANE with the generated
 //         int16_array_utils::read_array_lane (the lane routines poly uses), and the lane is consumed
 //         one sample per firing -- one result per firing, since an int64 result fills a word;
-//   RESP  writes one FirRespHdr to m_resp: the packet's tx_id and the cfg_seq it was filtered with.
+//   RESP  once the packet's status has gone out, writes one FirRespHdr to m_resp: the packet's tx_id
+//         and the cfg_seq it was filtered with.  Status first, so a host holding a response knows the
+//         status already counts the packet (plans/mm_irq.md D4).
 //
 // A free-running hls::task body, pipelined at II=1: ONE firing per cycle, and every firing moves AT
 // MOST ONE WORD on each stream -- that is what lets the whole body pipeline.  Inputs are read with
 // read_nb, so a firing that finds nothing does nothing (and touches no bus: s_in and s_cfg are
 // streams from the adaptor beside the kernel).
 //
-// Status (nsamp, ncfg) is published after every packet: serialized once (FirStatus::write_array) and
-// emitted a word per firing; a publish requested while one is going out waits for it.
+// Status (nsamp, ncfg) is published after every packet's samples, before its response: serialized
+// once (FirStatus::write_array) and emitted a word per firing.
 //
 // Numbers: int16 samples, int16 taps, the exact integer sum in an ap_int<64>.  Nothing here packs or
 // unpacks a word by hand: the generated FirCfg / FirCmdHdr / FirRespHdr / FirStatus structs and the
@@ -56,7 +58,7 @@ static void mm_fir_task(hls::stream<ap_uint<DW> >& s_cfg,
     static ap_uint<2> state = HDR;
     static ap_uint<4> ci = 0;            // config words collected
     static ap_uint<4> si = 0;            // status words still to emit (0 = idle)
-    static bool want_pub = false;
+    static bool want_pub = false, pub_asked = false;
     static ap_uint<32> nleft = 0, npkt = 0;
     static ap_uint<16> tx_id = 0, need = 0;
     static ap_uint<32> nsamp = 0;
@@ -122,13 +124,16 @@ static void mm_fir_task(hls::stream<ap_uint<DW> >& s_cfg,
             lane = (lane == PF - 1 || nleft == 0) ? ap_uint<3>(0) : ap_uint<3>(lane + 1);
             if (nleft == 0) state = RESP;
         }
-    } else {                             // RESP: which packet, and the config it ACTUALLY used
+    } else if (!pub_asked) {             // RESP, first firing: ask for the packet's status
+        want_pub = true;                 // (requested here, not on the last sample, so that firing's
+        pub_asked = true;                //  nsamp++ does not feed the status packing: timing)
+    } else if (si == 0 && !want_pub) {   // RESP, once the status is out: which packet, which config
+        pub_asked = false;
         FirRespHdr r;
         r.nsamp = npkt; r.tx_id = tx_id; r.cfg_seq = ncfg;
         ap_uint<DW> rb[1];
         r.write_array<DW>(rb);
         m_resp.write(rb[0]);
-        want_pub = true;
         state = HDR;
     }
 

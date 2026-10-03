@@ -116,6 +116,8 @@ def render_top(top: str, topology: str) -> str:
     dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
+    # The queue views' interrupts, for the host (plans/mm_irq.md): the testbench samples these pins.
+    ports += [f"output wire irq_{v.name}" for v in VIEWS if isinstance(v, QueueView)]
     mi = [f"mi{k}_axi" for k in range(len(xbar.mi))]
     body = []
     for p in mi:
@@ -136,6 +138,7 @@ def render_top(top: str, topology: str) -> str:
     else:
         for view, p in zip(VIEWS, mi):
             body.append(render_view_slot(view, p, dw, aw, idw))
+    body += [f"  assign irq_{v.name} = {v.name}_irq;" for v in VIEWS if isinstance(v, QueueView)]
     body.append("""  mm_fir u_fir (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
     .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
@@ -219,10 +222,12 @@ static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int wid
 }}
 
 /// Commits each config; sends each packet as two queue-in packets -- its header, then its samples.
-/// It never waits for a config to be received: the header's cfg_seq makes the kernel wait.
+/// It never waits for a config to be received: the header's cfg_seq makes the kernel wait.  It waits
+/// for room in queue in on queue in's interrupt -- no polling.
 class Writer : public XsiSimObj {{
 public:
-    explicit Writer(AxiMmMaster& m) : cfg_(m, mm_fir_map::regs, POLL), qin_(m, mm_fir_map::qin, POLL) {{}}
+    Writer(AxiMmMaster& m, const IrqPin& qin_irq)
+        : cfg_(m, mm_fir_map::regs, POLL), qin_(m, mm_fir_map::qin, POLL) {{ qin_.use_irq(qin_irq); }}
     bool done() const {{ return i_ >= SCHEDULE.size() && phase_ == IDLE; }}
     long polls() const {{ return qin_.polls; }}
 
@@ -247,15 +252,16 @@ private:
     int phase_ = IDLE;
 }};
 
-/// Takes one output packet per input packet, then that packet's response, which it checks; then waits
-/// for the final status.
+/// Takes one output packet per input packet, then that packet's response, which it checks -- each on
+/// its queue's interrupt, no polling; then reads the final status once (the kernel publishes it before
+/// each response, so after the last response it is final).
 class Reader : public XsiSimObj {{
 public:
-    explicit Reader(AxiMmMaster& m)
+    Reader(AxiMmMaster& m, const IrqPin& qout_irq, const IrqPin& qresp_irq)
         : qout_(m, mm_fir_map::qout, POLL), qresp_(m, mm_fir_map::qresp, POLL),
-          st_(m, mm_fir_map::regs, POLL) {{}}
+          st_(m, mm_fir_map::regs, POLL) {{ qout_.use_irq(qout_irq); qresp_.use_irq(qresp_irq); }}
     bool done() const {{ return phase_ == DONE; }}
-    long polls() const {{ return polls_ + qout_.polls + qresp_.polls; }}
+    long polls() const {{ return qout_.polls + qresp_.polls; }}
     std::vector<uint64_t> y, final_status;
     long nresp = 0, mismatches = 0;
 
@@ -271,10 +277,7 @@ public:
             if ({fld("qresp_.words", f_tx)} != it.tx || {fld("qresp_.words", f_seq)} != it.want) ++mismatches;
             ++i_; phase_ = IDLE;
         }}
-        else if (phase_ == STATUS && !st_.busy()) {{
-            if ({fld("st_.words", f_nsamp)} >= NSAMP) {{ final_status = st_.words; phase_ = DONE; }}
-            else {{ ++polls_; st_.start(POLL); }}
-        }}
+        else if (phase_ == STATUS && !st_.busy()) {{ final_status = st_.words; phase_ = DONE; }}
         if (phase_ == IDLE) {{
             while (i_ < SCHEDULE.size() && SCHEDULE[i_].kind != PKT) ++i_;
             if (i_ < SCHEDULE.size()) {{ qout_.start(SCHEDULE[i_].nsamp); phase_ = READ; }}
@@ -288,15 +291,15 @@ private:
     MmStatusReader st_;
     size_t i_ = 0;
     int phase_ = IDLE;
-    long polls_ = 0;
 }};
 
 int main() {{
     XsiSim sim("{dll}", "mm_fir.wdb");
     AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/{"true" if OVERLAP_RW else "false"});
-    Reader rd(host);            // the pysim reader runs first at t = 0 too (it is the host's run_proc)
-    Writer wr(host);
-    std::vector<XsiSimObj*> all = {{&host, &rd, &wr}};
+    IrqPin irq_qin(sim.dut(), "irq_qin"), irq_qout(sim.dut(), "irq_qout"), irq_qresp(sim.dut(), "irq_qresp");
+    Reader rd(host, irq_qout, irq_qresp);   // the pysim reader runs first at t = 0 too (it is the host's run_proc)
+    Writer wr(host, irq_qin);
+    std::vector<XsiSimObj*> all = {{&irq_qin, &irq_qout, &irq_qresp, &host, &rd, &wr}};
     auto drive = [&] {{ for (auto* p : all) p->drive(); }};
     sim.reset(drive);
     long cyc = 0;

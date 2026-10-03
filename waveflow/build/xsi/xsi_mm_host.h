@@ -14,9 +14,11 @@
 //   register bank   MmRegBankCfg      start(words): write the shadow, then COMMIT
 //                   MmStatusReader    start(): read the latest status message
 //
-// **Blocking by polling, never by stalling the bus** -- the reason is in mm_host.py's docstring, and
-// the rules (when to poll, when to sleep, how long a burst may be) are the same here, line for line,
-// so a pysim host and an XSI host issue the same sequence of bus operations.
+// **Blocking on the view's interrupt** (plans/mm_irq.md): give a queue endpoint the IrqPin of its
+// view's `irq` output (use_irq) and it never reads a count -- it sets the view's threshold, waits for
+// the pin, and moves the words.  This is how the examples wait.  Without an IrqPin the endpoints fall
+// back to polling, never stalling the bus.  The rules are mm_host.py's, line for line, so a pysim host
+// and an XSI host issue the same sequence of bus operations.
 //
 // The cycle model: an XSI participant cannot block, so an endpoint is a small state machine.  The
 // owning program calls start(...) once, then step() once per cycle from its own update(), until
@@ -61,6 +63,19 @@ struct MmView {
     }
 };
 
+/// One interrupt pin of the DUT, sampled every cycle -- the C++ end of an IrqIF.  Put it in the
+/// participant list with the endpoints that wait on it.
+class IrqPin : public XsiSimObj {
+public:
+    IrqPin(Dut& d, const char* port) : d_(d), p_(d.port(port)) {}
+    void sample() override { level = d_.get1(p_) != 0; }
+    bool level = false;
+
+private:
+    Dut& d_;
+    int p_;
+};
+
 /// What every endpoint shares: the master, the view, the poll period, and one operation in flight.
 class MmEndpoint {
 public:
@@ -72,6 +87,8 @@ public:
         }
     }
     bool busy() const { return state_ != 0; }
+    /// Wait on this interrupt pin instead of polling (plans/mm_irq.md).
+    void use_irq(const IrqPin& pin) { irq_ = &pin; }
     /// Bus operations this endpoint issued that were polls (reads that found too little).
     long polls = 0;
 
@@ -89,11 +106,22 @@ protected:
             write(addr, std::vector<uint64_t>(w.begin() + i, w.begin() + (std::min)(w.size(), i + step)));
     }
 
+    /// Write the view's interrupt threshold (upper half of the window) if it differs from the last
+    /// one written.  Returns true when a write was issued.
+    bool set_threshold(uint64_t value) {
+        if (thr_ == value) return false;
+        write(v_.base + v_.window / 2, {value});
+        thr_ = value;
+        return true;
+    }
+
     AxiMmMaster& m_;
     const MmView& v_;
     long poll_;
     size_t op_ = 0;
     int state_ = 0;
+    const IrqPin* irq_ = nullptr;
+    uint64_t thr_ = 0;          ///< the threshold last written (the view resets it to 0)
 };
 
 /// Queue in: one start() is one packet.
@@ -104,9 +132,28 @@ public:
 
     void start(std::vector<uint64_t> words) {
         pkt_ = std::move(words); sent_ = 0;
+        if (irq_) {
+            const uint64_t n = pkt_.size();
+            if (n > v_.depth) {
+                std::fprintf(stderr, "FATAL: MmQueueWriter on '%s': a %llu-word packet does not fit "
+                             "the queue in interrupt mode\n", v_.name, (unsigned long long)n);
+                std::exit(5);
+            }
+            if (room_ >= n) { send(); return; }
+            // Not enough known room: wait for vacancy >= max(n, depth/2), normally one threshold
+            // write for the whole run.
+            state_ = set_threshold(std::max<uint64_t>(n, v_.depth / 2)) ? THR : WAIT;
+            return;
+        }
         read(v_.base, 1, 0); state_ = POLL;
     }
     void step() {
+        if (irq_) {
+            if (state_ == THR && op_done()) state_ = WAIT;
+            if (state_ == WAIT && irq_->level) { room_ = thr_; send(); return; }
+            if (state_ == WRITE && op_done()) state_ = 0;
+            return;
+        }
         if (!state_ || !op_done()) return;
         const uint64_t n = pkt_.size();
         if (state_ == POLL) {
@@ -129,9 +176,17 @@ public:
     }
 
 private:
-    enum { POLL = 1, WRITE = 2 };
+    enum { POLL = 1, WRITE = 2, THR = 3, WAIT = 4 };
+    void send() {
+        const uint64_t n = pkt_.size();
+        std::vector<uint64_t> w; w.reserve(n + 1);
+        w.push_back(n); w.insert(w.end(), pkt_.begin(), pkt_.end());
+        write_bursts(v_.base, w);
+        room_ -= n; sent_ = n; state_ = WRITE;
+    }
     std::vector<uint64_t> pkt_;
     uint64_t sent_ = 0;
+    uint64_t room_ = 0;         ///< interrupt mode: a lower bound on the queue's free slots
 };
 
 /// Queue out: one start(n) takes exactly n words.  Unframed -- the caller names the count.
@@ -142,9 +197,21 @@ public:
 
     void start(uint32_t n) {
         want_ = n; words.clear();
+        if (irq_) { chunk(); return; }
         read(v_.status_addr(), 1, 0); state_ = POLL;
     }
     void step() {
+        if (irq_) {
+            if (state_ == THR && op_done()) state_ = WAIT;
+            if (state_ == WAIT && irq_->level) { left_ = k_; pop_next(); return; }
+            if (state_ == POP && op_done()) {
+                words.insert(words.end(), rdata().begin(), rdata().end());
+                if (left_ > 0) pop_next();
+                else if (words.size() < want_) chunk();
+                else state_ = 0;
+            }
+            return;
+        }
         if (!state_ || !op_done()) return;
         if (state_ == POLL) {
             const uint64_t occ = rdata()[0];
@@ -161,8 +228,18 @@ public:
     std::vector<uint64_t> words;
 
 private:
-    enum { POLL = 1, POP = 2 };
-    uint32_t want_ = 0;
+    enum { POLL = 1, POP = 2, THR = 3, WAIT = 4 };
+    /// Interrupt mode: the next chunk -- set the threshold to the words still wanted (up to the
+    /// depth), then wait for the pin.  The pin high MEANS they are there.
+    void chunk() {
+        k_ = std::min<uint32_t>(want_ - (uint32_t)words.size(), v_.depth);
+        state_ = set_threshold(k_) ? THR : WAIT;
+    }
+    void pop_next() {
+        const uint32_t m = std::min<uint32_t>(left_, v_.max_burst());
+        read(v_.base, m, 0); left_ -= m; state_ = POP;
+    }
+    uint32_t want_ = 0, k_ = 0, left_ = 0;
 };
 
 /// Register bank, config: one start() is one config message (the shadow, then COMMIT).  As in pysim,

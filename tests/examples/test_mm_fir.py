@@ -118,6 +118,28 @@ def test_the_host_is_the_same_class_with_the_same_schedule_in_every_wiring():
     assert systems[1].slave_map["qresp"].base == 0x3000
 
 
+@pytest.mark.parametrize("one_front", [False, True], ids=["per_view", "one_front"])
+def test_the_host_never_polls(one_front):
+    """Over the bus the host sleeps on the queue views' interrupts (plans/mm_irq.md): it never reads
+    queue in's vacancy or a queue out's occupancy, and reads the status exactly once, at the end."""
+    x, plan = _x(), [(0, TAPS_A), (101, TAPS_B)]
+    s = _sys("mm", one_front, x=list(x), plan=plan)
+    reads = []
+    orig = s.host.m.read
+
+    def read(nwords, addr):
+        reads.append(int(addr))
+        return (yield from orig(nwords, addr))
+
+    s.host.m.read = read
+    assert np.array_equal(s.run(), fir_golden(x, plan))
+    m = s.slave_map
+    counts = [a for a in reads if m["qin"].base <= a < m["qin"].base + 0x1000
+              or any(m[q].status_addr <= a < m[q].base + 0x1000 for q in ("qout", "qresp"))]
+    assert counts == [], [hex(a) for a in counts]
+    assert reads.count(m["regs"].base + 0xC00) == 1        # the final status, once
+
+
 def test_schedule_cuts_at_switches_and_tags_each_packet():
     sched = host_schedule(40, [(0, TAPS_A), (21, TAPS_B)], pkt=16)
     assert sched == [("cfg", TAPS_A), ("pkt", 0, 16, 1, 1), ("pkt", 16, 21, 1, 1),

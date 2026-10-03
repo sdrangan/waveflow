@@ -14,12 +14,13 @@ Run: ``pytest tests/examples/test_mm_fir_xsi.py -m xsi`` (needs Vivado, and
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import MmFirSystem, fir_golden, host_schedule
+from examples.mm_fir.mm_fir import QIN, QOUT, QRESP, REGS, MmFirSystem, fir_golden, host_schedule
 from examples.mm_fir.mm_fir_xsi import (
     NSAMP,
     PKT,
@@ -66,6 +67,20 @@ def test_mm_fir_rtl_bit_exact(fir_run):
 
 
 @pytest.mark.xsi
+def test_mm_fir_rtl_host_never_polls(fir_run):
+    """The host waits on the views' interrupts (plans/mm_irq.md): among every bus operation the
+    testbench host issued, no read of queue in's vacancy or of a queue out's occupancy, and the status
+    read exactly once."""
+    _topology, out = fir_run
+    reads = [int(m[1], 16) for m in re.finditer(r"OP R 0x([0-9a-f]+)", out)]
+    counts = [a for a in reads if QIN <= a < QIN + 0x1000 or QOUT + 0x800 <= a < QOUT + 0x1000
+              or QRESP + 0x800 <= a < QRESP + 0x1000]
+    assert reads and counts == [], [hex(a) for a in counts]
+    assert reads.count(REGS + 0xC00) == 1
+    assert parse_kv(out, "DONE")["polls"] == 0
+
+
+@pytest.mark.xsi
 def test_mm_fir_rtl_cycles(fir_run):
     topology, fir_run = fir_run
     done = parse_kv(fir_run, "DONE")
@@ -77,24 +92,16 @@ def test_mm_fir_rtl_cycles(fir_run):
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
-#: Recorded 2026-10-03, after mm_fir moved to the in-band header pattern (plans/mm_fir_cfg_seq.md):
-#: every packet is a FirCmdHdr write and a sample write to queue in, and a FirRespHdr read from the
-#: response FIFO; the host never polls the status for "received".  Samples are int16 packed by the
-#: serializer four to a word (the HLS body unpacks them with the generated int16 lane routines).  Bus
-#: master overlaps one read and one write (mm_fir_xsi.OVERLAP_RW).  per_view 768 (124 ops, 5 polls) /
-#: one_front 783 (125 ops, 4 polls).
-#:
-#: pysim says 734 / 792 (-4.4% / +1.1%), after three model fixes found by lining up both backends' bus
-#: operations one by one (it said 536 / 874 before -- the topology ORDER wrong):
-#:   * the crossbar's 4-cycle latency is 2 of travel + 2 at the slave, and the travel overlaps whatever
-#:     a one-at-a-time slave is serving (AXIMMCrossBarIF.latency_travel = 2) -- every read/write switch
-#:     behind the adaptor's front cost pysim 2 extra cycles;
-#:   * the host's master keeps one read + one write in flight, like AxiMmMaster with overlap_rw
-#:     (MMIFMaster.max_outstanding = 1) -- pysim let the writer's and the reader's polls travel together;
-#:   * the C++ host presents each transaction 2 cycles after its process's previous one finished
-#:     (MMIFMaster.issue_cycles = 2) -- the testbench host's own pacing.
+#: Recorded 2026-10-03, with NO polling (plans/mm_irq.md): the host waits on the queue views'
+#: interrupts -- queue in's for room, queue out's and the response FIFO's for data -- and reads the final
+#: status once (the kernel publishes it before each response).  Header + cfg_seq protocol, samples
+#: packed four to a word, bus master overlapping one read and one write.  per_view 520 / one_front 529,
+#: 67 bus ops, 0 polls.  pysim 498 / 545 (-4.2% / +3.0%).
 #:
 #: History (same RTL scenario):
+#:   * the same protocol with the endpoints POLLING the counts: 768 / 783 (124 / 125 ops), pysim
+#:     734 / 792 after three model fixes (crossbar travel 2 of 4 cycles; one read + one write per
+#:     master; 2 cycles of host pacing) -- 536 / 874 before them;
 #:   * header pattern with ONE sample per 64-bit word (hand-packed): 937 / 922 (143 / 124 ops), pysim
 #:     575 / 1023 -- the serializer's packing moves a quarter of the sample words;
 #:   * apply_at protocol, two-process host, overlap master: 567 / 721 (76 / 74 ops), pysim 423 / 742;
@@ -104,4 +111,4 @@ def test_mm_fir_rtl_cycles(fir_run):
 #:   * a kernel that was not II=1 (a whole config / status per firing): 2096 cycles, 221 ops.
 #: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
 #: and the response FIFO's poll and pop -- more than dropping the status wait saved.
-EXPECTED_CYCLES = {"per_view": 768, "one_front": 783}
+EXPECTED_CYCLES = {"per_view": 520, "one_front": 529}

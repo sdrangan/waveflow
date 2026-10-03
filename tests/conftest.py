@@ -94,7 +94,10 @@ import pytest
 #:
 #: 138 -> 140 on 2026-10-02 (Stage 3): ``test_mm_bram_order_xsi.py``, the BRAM window and the ordering
 #: guarantee -- one front (nothing stale) and its negative control, per-view fronts (63 stale words).
-WANT_XSI_GATES = 140
+#:
+#: 140 -> 142 on 2026-10-03 (plans/mm_irq.md): ``test_mm_fir_rtl_host_never_polls`` in both topologies --
+#: the host waits on the queue views' interrupts; no count is ever read at RTL.
+WANT_XSI_GATES = 142
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

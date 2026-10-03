@@ -2,8 +2,9 @@
 //
 // plans/mm_slave_adaptor.md, "Queue windows".  The kernel side is an ordinary AXIS master.
 //
-// WRITES (any address in the window -- an INCR burst advances the address every beat, so a queue
-// cannot be one address).  The stream is framed IN-BAND: each packet is `[len | data x len]`, the
+// WRITES to the LOWER half of the window (an INCR burst advances the address every beat, so a
+// queue cannot be one address; an AXI4 burst is at most 256 beats, 2 KB at 64 bits, so a burst from
+// the base stays in the lower half).  The stream is framed IN-BAND: each packet is `[len | data x len]`, the
 // header's low 32 bits being `len`.  The header is consumed here; the `len` data words are pushed,
 // the last with TLAST.  Because the leaf counts words, a packet may span any number of bursts, and an
 // interconnect that splits a burst cannot move a packet boundary.  `len = 0` is an empty packet:
@@ -15,6 +16,10 @@
 //
 // READS (any address) return the VACANCY: free data slots, 0..DEPTH, in the low bits.  No side
 // effects -- reading it twice is harmless.  A header occupies no slot.
+//
+// INTERRUPT (plans/mm_irq.md D2).  A write to the UPPER half sets the threshold (and pushes nothing);
+// `irq` is high while VACANCY >= threshold.  Threshold 0 -- the reset value -- holds it low, so a
+// master that never writes one sees the leaf exactly as before.
 `timescale 1ns/1ps
 module mm_queue_in #(
     parameter integer DW    = 64,
@@ -37,7 +42,9 @@ module mm_queue_in #(
     output wire [DW-1:0]     m_axis_TDATA,
     output wire              m_axis_TVALID,
     input  wire              m_axis_TREADY,
-    output wire              m_axis_TLAST
+    output wire              m_axis_TLAST,
+    // interrupt: high while the vacancy is at least the threshold
+    output wire              irq
 );
     localparam integer CW = $clog2(DEPTH);
 
@@ -48,14 +55,17 @@ module mm_queue_in #(
     wire         fifo_full, fifo_empty;
     wire [CW:0]  fifo_count;
 
-    // A header is always accepted; a data word only when there is a slot for it.
-    wire wr_ready = in_hdr ? 1'b1 : !fifo_full;
+    wire ctl = req_addr[LAW-1];       // the upper half: control (the interrupt threshold)
+    reg  [CW:0] thresh_q;
+
+    // A header and a control write are always accepted; a data word only when there is a slot.
+    wire wr_ready = (ctl || in_hdr) ? 1'b1 : !fifo_full;
     wire rd_ready = !rsp_valid || rsp_ready;
     assign req_ready = req_we ? wr_ready : rd_ready;
     wire wr_hs = req_valid && req_we && wr_ready;
     wire rd_hs = req_valid && !req_we && rd_ready;
 
-    wire push = wr_hs && !in_hdr;
+    wire push = wr_hs && !ctl && !in_hdr;
     mm_sync_fifo #(.W(DW + 1), .DEPTH(DEPTH)) u_fifo (
         .clk(ap_clk), .rst_n(ap_rst_n),
         .push(push), .din({left_q == 1, req_wdata}),
@@ -67,12 +77,14 @@ module mm_queue_in #(
     assign m_axis_TLAST  = fifo_dout[DW];
     assign m_axis_TVALID = !fifo_empty;
     assign rsp_err       = 1'b0;
+    assign irq           = (thresh_q != 0) && ((DEPTH - fifo_count) >= thresh_q);
 
     always @(posedge ap_clk) begin
         if (!ap_rst_n) begin
-            left_q <= 0; rsp_valid <= 1'b0; rsp_rdata <= 0;
+            left_q <= 0; rsp_valid <= 1'b0; rsp_rdata <= 0; thresh_q <= 0;
         end else begin
-            if (wr_hs) left_q <= in_hdr ? req_wdata[31:0] : left_q - 1;
+            if (wr_hs && ctl)  thresh_q <= req_wdata[CW:0];
+            if (wr_hs && !ctl) left_q <= in_hdr ? req_wdata[31:0] : left_q - 1;
             if (rd_hs) begin
                 rsp_valid <= 1'b1;
                 rsp_rdata <= DEPTH - fifo_count;
