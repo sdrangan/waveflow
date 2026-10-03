@@ -114,4 +114,7 @@ Either way the kernel is written the same way: it reads and writes streams, and 
   free-running kernel reads and writes memory.
 - [Slave side — memory-mapped adaptor](./slave.md) — queues, a register bank and a BRAM window behind
   one AXI slave port: how a free-running kernel is reached, and the ordering guarantee.
+- [Slave adaptor views](./slave_views.md) — each view's constructor, its kernel side and its bus side.
+- [Slave adaptor — how it works](./slave_howitworks.md) — the RTL modules, the front end, and how
+  closely pysim matches RTL.
 - [Register Maps](./regmap.md) — the AXI-Lite register file of a host-activated kernel.
