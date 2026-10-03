@@ -1,7 +1,7 @@
 # Plan: a hierarchical bus address map -- per-type layouts, per-system bases
 
-> **Status (2026-10-03): proposed, not started.** Follows `plans/mm_adaptor_host_endpoints.md` and
-> `plans/mm_irq.md`. Prerequisite for the two-kernel example (`plans/no_polling_next.md`, Part B).
+> **Status (2026-10-03): BUILT, Stages 1-5** (branch `bus-address-map`). D6 (a kernel as bus master)
+> is exercised by the two-kernel example, not built here. Departures are in **Built** at the end.
 
 ## Why
 
@@ -101,3 +101,22 @@ D6 is exercised by the two-kernel example, built after this.
   JSON/Python form for PYNQ -- generated from the same objects; the bases then come from the Vivado
   block design's address assignment (`plans/board_packaging.md`), which the system map is checked
   against.
+
+## Built
+
+- **D1 decided: views declared on the kernel** (the user's choice over a wrapper type).  `mm_views` on
+  the kernel class -- `RegBank` / `QueueIn` / `QueueOut` / `BramWindow` specs naming its ports
+  (`waveflow/hw/mm_device.py`).  The RTL adaptor is still assembled by the example's testbench top,
+  not by `wrapper_gen`; that is the wrapper path's job, not taken.
+- **D2:** `MemSlaveLayout` (entries are `ViewEntry`s whose `base` is the offset within the slave),
+  `.of(KernelType)`, `.from_adaptor`, `.at(base)`; `build_mm_device` / `MmSlaveDevice.ranges(base)`;
+  `BoundMemSlaveAdaptor.at(layout, base, master)`.  An instance's view MODULES carry a prefix
+  (`a_qin`); the layout is keyed by the type's names (`qin`).
+- **D3:** `MemSlaveLayout.to_cpp_header` (`MmViewLayout`, `SPAN`), `bases_to_cpp_header`
+  (`<INSTANCE>_BASE` / `_SPAN`), `wfbfm::at(view, base)`.  The C++ endpoints hold `MmView` by value.
+- **D4:** `AxiXbarConfig.from_crossbar`; mm_fir's configs from it are identical to the old literals
+  (IP digest included), so the RTL did not change.  `VIEW_LAW` derives from `VIEW_BYTES`.
+- **D5:** `bus_address_headers(xbar, system=)` -- found by a walk from the crossbar (each bus-facing
+  module records its device as `mm_device`, excluded from `structure_signature`); refuses a slave with
+  no layout.  mm_fir's testbench takes its headers and `#include` lines from it.
+- mm_fir: same addresses and cycle counts throughout (pysim 498 / 545 / 341, RTL 520 / 529).

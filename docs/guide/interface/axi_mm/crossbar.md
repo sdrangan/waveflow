@@ -46,6 +46,11 @@ xbar = AxiXbarConfig(
 | `data_width`, `addr_width`, `id_width` | the bus |
 | `part` | the FPGA part the IP is generated for (default `xczu48dr-ffvg1517-2-e`, the RFSoC 4x2's) |
 
+**Or generate it from the pysim crossbar.** `AxiXbarConfig.from_crossbar(xbar, name)` gives one slot per
+slave bound to a pysim `AXIMMCrossBarIF`, at the base and size `assign_address_ranges` set — so a
+design writes each address once, in Python, and both backends decode it. A crossbar with one slave
+gets the unused second slot the IP needs. mm_fir builds both its topologies' crossbars this way.
+
 The config refuses what the IP would get wrong:
 
 - **A window is at least 4 KB** (`addr_width >= 12`) and **aligned to its size.** An AXI burst may not
@@ -149,7 +154,7 @@ multi-threaded program, a DMA engine — and belong with whatever models it.
 ## What is not built yet
 
 - The crossbar is not emitted by `wrapper_gen` from the module graph: an RTL top that needs one builds
-  it, as mm_fir's `render_top` does.
+  it (from the pysim crossbar, with `from_crossbar`), as mm_fir's `render_top` does.
 - No SmartConnect, and no block design: the crossbar is generated standalone, for XSI and synthesis
   (`plans/board_packaging.md` plans a block design).
 - The crossbar's measured latency is set per design, not resolved from a platform model.

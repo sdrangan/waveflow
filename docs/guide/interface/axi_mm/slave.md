@@ -5,7 +5,7 @@ grand_parent: Interfaces
 nav_order: 3
 audience: python
 snippets: run
-api: [MemSlaveAdaptor, BoundMemSlaveAdaptor, MemSlaveMap, IrqIF, IrqIFSink, IrqIFSource, MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, render_view_slot, render_adaptor_slot]
+api: [MemSlaveAdaptor, BoundMemSlaveAdaptor, MemSlaveMap, MemSlaveLayout, build_mm_device, bus_address_headers, bases_to_cpp_header, QueueIn, QueueOut, RegBank, BramWindow, IrqIF, IrqIFSink, IrqIFSource, MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, render_view_slot, render_adaptor_slot]
 summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. The four views (queue in, queue out, register bank, BRAM window) and how to build an adaptor from them; one adaptor or one per view; the ordering guarantee and its measured scope; a runnable example."
 ---
 # Slave side — memory-mapped adaptor
@@ -90,31 +90,76 @@ details are in [how it works](./slave_howitworks.md#the-rtl-modules).
 
 ## Building an adaptor
 
-In pysim, build each view, then put them behind one `MemSlaveAdaptor`:
+**A kernel type declares its views.** On its class, a kernel names which of its stream ports a bus
+master reaches, and as what, in address order — [`mm_device.py`](../../../../waveflow/hw/mm_device.py):
 
 <!-- snippet: skip -->
 ```python
-regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=Cfg, status_type=Status, clk=clk)
-qin  = MemSlaveWStream(name="qin", sim=sim, depth=16, clk=clk)
-qout = MemSlaveRStream(name="qout", sim=sim, depth=16, clk=clk)
-bram = MemSlaveBramWindow(name="bram", sim=sim, nelem=256, clk=clk)
-adaptor = MemSlaveAdaptor(name="mm", sim=sim, views=[regs, qin, qout, bram])
-
-assign_address_ranges([adaptor.s_mem], [(0x4000_0000, adaptor.span())])
+class MmFir(FreeRunMod):
+    mm_views = (
+        RegBank("regs", cfg_port="s_cfg", status_port="m_status",
+                cfg_type=FirCfg, status_type=FirStatus),
+        QueueIn("qin", port="s_in", depth=64),
+        QueueOut("qout", port="m_out", depth=64),
+        QueueOut("qresp", port="m_resp", depth=16),
+    )
 ```
 
-Each view's constructor is described with the view, in [Slave adaptor views](./slave_views.md).
-`MemSlaveAdaptor` itself takes:
+| spec | the kernel's port | becomes |
+|---|---|---|
+| `QueueIn(name, port, depth)` | a stream slave | a queue in |
+| `QueueOut(name, port, depth)` | a stream master | a queue out |
+| `RegBank(name, cfg_port, status_port, cfg_type, status_type)` | a stream slave and a stream master | a register bank |
+| `BramWindow(name, nelem)` | — (the memory's port B) | a BRAM window |
 
-| parameter | meaning |
-|---|---|
-| `views` | the views, in address order: view *k* answers the 4 KB window at offset `k × 0x1000` from the adaptor's base. At least one; every view must use the default 4 KB `window` |
-| `mem_dwidth` | the bus width in bits, default 64; every view must have the same width |
+The kernel stays streams only; the declaration is about how it is reached.
 
-The adaptor has one bus slave port, `adaptor.s_mem`. Bind it to a crossbar slave port, then give it a
-base address with `assign_address_ranges`. The size of its address range is `adaptor.span()`: the
-number of views rounded up to a power of two, times 4 KB (four views need `0x4000`; three need
-`0x4000` too).
+**An instance gets its views built:**
+
+<!-- snippet: skip -->
+```python
+fir = MmFir(name="fir", sim=sim, clk=clk)
+dev = build_mm_device(fir, sim=sim, clk=clk, mem_dwidth=64, one_front=True)
+slaves, ranges = dev.ranges(base=0x4000_0000)      # for assign_address_ranges
+```
+
+`build_mm_device` makes the views, joins each to the kernel's named port with a channel of the right
+depth (a queue's channel *is* its FIFO; a register bank's config channel holds exactly one config),
+and puts them behind one `MemSlaveAdaptor` (`one_front=True`) or gives each its own bus port. A
+`prefix` names an instance's view modules, so two instances of one type can coexist.
+
+The views can also be built one by one — their constructors are with each view, in
+[Slave adaptor views](./slave_views.md) — and put behind a `MemSlaveAdaptor(views=[...])`, whose one bus
+port `adaptor.s_mem` spans the views (view *k* at `k × 4 KB`; the span is the view count rounded up to
+a power of two, times 4 KB).
+
+## The address map: a layout per type, a base per instance
+
+A bus master needs two numbers to reach a view: **where the slave instance is placed** and **where the
+view sits inside it**. They are kept apart, as a driver stack keeps a system's base addresses apart
+from each IP type's register offsets:
+
+| | what | changes when | from |
+|---|---|---|---|
+| **layout**, per kernel type | each view's offset within the slave, its kind and sizes | the type's views change | `MemSlaveLayout.of(MmFir)` — the class's `mm_views`; no instance needed |
+| **base**, per instance | where this instance sits on the bus | it is placed elsewhere | `assign_address_ranges` |
+
+`layout.at(base)` combines them into the absolute map a host uses, and two instances of one type share
+one layout and differ only in base:
+
+<!-- snippet: skip -->
+```python
+layout = MemSlaveLayout.of(MmFir)
+dev_a = BoundMemSlaveAdaptor.at(layout, 0x4000_0000, host.m)
+dev_b = BoundMemSlaveAdaptor.at(layout, 0x4001_0000, host.m)
+```
+
+The same split reaches the C++ host as two generated headers — a layout header per type
+(`MemSlaveLayout.to_cpp_header`, offsets only) and a bases header per system (`bases_to_cpp_header`,
+bases only) — combined in C++ by `wfbfm::at(view, base)`. `bus_address_headers(xbar, system=...)`
+finds both by walking a crossbar: every device bound to it, one layout header per type, and each
+instance's base from where its port was placed. And the RTL crossbar is configured from the same pysim
+crossbar ([AXI crossbar](crossbar.md#describing-one)), so an address is written once.
 
 ## Reaching the views from a bus master
 
@@ -140,9 +185,9 @@ buf    = mm.region("bram", Sample)                  # read_slice / write_slice, 
 | queue out | an `MmStreamIFSlave` | `get_*` waits for the view's interrupt to say the words are there, then pops them |
 | BRAM window | a `Region` | `read_slice` / `write_slice` read and write the memory |
 
-`adaptor.slave_map()` is the address map as plain data — every view by name, at its absolute bus
-address — so build it after `assign_address_ranges`. For views that each sit on their own crossbar
-slot, `MemSlaveMap.from_views([regs, qin, qout])` builds the same map.
+The map handed to `BoundMemSlaveAdaptor` is plain data — every view by name, at its absolute bus
+address: `layout.at(base)` (see [the address map](#the-address-map-a-layout-per-type-a-base-per-instance)),
+or `adaptor.slave_map()` for an adaptor already placed by `assign_address_ranges`.
 
 Two things differ from a direct connection, and both are honest about the bus:
 
@@ -417,16 +462,16 @@ send the configuration to one stage and the samples to another. What it cannot a
 
 ## What is not built yet
 
-- The adaptor is assembled by example code (which views, which addresses, which kernel ports), not
-  emitted by `wrapper_gen` from the module graph, the way a design's memories are.
+- The views are declared by the kernel type and built by `build_mm_device`, but the RTL adaptor is
+  still assembled by the example's testbench top, not emitted by `wrapper_gen` from the module graph.
 - Each view is described twice, once for pysim (`MemSlaveRegBank`, ...) and once for RTL
   (`RegBankView`, ...), with different parameter names. One description should produce both.
 - Interrupts are level lines with a threshold; there are no interrupt enable / status / clear
   registers like Vitis's `GIER` / `IER` / `ISR`, and a host-activated kernel's `ap_done` is not an
   `IrqIF` yet.
-- The endpoints exist for pysim and for an XSI testbench (`xsi_mm_host.h`, with the address map
-  generated by `MemSlaveMap.to_cpp_header`), not yet for real host software or for a Vitis kernel
-  acting as the bus master.
+- The endpoints exist for pysim and for an XSI testbench (`xsi_mm_host.h`, with the layout and bases
+  headers found by `bus_address_headers`), not yet for real host software or for a Vitis kernel acting
+  as the bus master.
 - The BRAM window's kernel side is plain `port_b_read` / `port_b_write` in pysim, not yet a `BramIF`,
   and has no ownership (lock) stream.
 - Queue out does not carry packet boundaries to the bus side, and the request bus has no write-error
