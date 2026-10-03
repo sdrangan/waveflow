@@ -61,9 +61,10 @@ endpoints — a C++ testbench today, real host software later — follows the sa
 
 | view | offset | write | read |
 |---|---|---|---|
-| queue in | anywhere | push: a packet is `[len, d0 .. d(len-1)]` | the free slots, `0..depth`; no side effects |
+| queue in | `[0, W/2)` | push: a packet is `[len, d0 .. d(len-1)]` | the free slots, `0..depth`; no side effects |
+| | `[W/2, W)` | the interrupt threshold (0 = off) | the free slots |
 | queue out | `[0, W/2)` | ignored | **pop** one word per beat; an empty queue answers 0 with SLVERR |
-| | `[W/2, W)` | ignored | the words ready, `0..depth`; no side effects |
+| | `[W/2, W)` | the interrupt threshold (0 = off) | the words ready, `0..depth`; no side effects |
 | register bank | `[0, W/2)` | the config shadow, word *i* at `i × bytes-per-word` | the shadow |
 | | `W/2` | **COMMIT**: snapshot the shadow, send it as one message | the number of commits so far |
 | | `[3W/4, W)` | — | word *i* of the latest complete status message |
@@ -73,9 +74,10 @@ What the endpoints do with it:
 
 | endpoint call | on the bus |
 |---|---|
-| queue in `write(words)`, *n* ≤ depth | read the free slots until ≥ *n*; write `[n, words]` |
-| queue in `write(words)`, *n* > depth | read the free slots; write as much as fits (the length first); repeat |
-| queue out `get(nwords_max=n)` | read the ready count until > 0; pop up to that many; repeat until *n* |
+| queue in `write(words)`, with `irq=` | if the known room is below *n*: set the threshold to `max(n, depth/2)` (once), wait for the interrupt; write `[n, words]` |
+| queue out `get(nwords_max=n)`, with `irq=` | set the threshold to *n* (when it changes); wait for the interrupt; pop *n* |
+| queue in `write(words)`, polling fallback | read the free slots until ≥ *n*; write `[n, words]` (a packet longer than the queue: in pieces) |
+| queue out `get(nwords_max=n)`, polling fallback | read the ready count until > 0; pop up to that many; repeat until *n* |
 | register bank `write(cfg)` | write the shadow; write COMMIT |
 | register bank `status.read()` | read `nstat` words at `3W/4` |
 | BRAM `read_slice` / `write_slice` | read / write at `i × bytes-per-word` |
@@ -92,11 +94,16 @@ packet may span any number of bursts, and an interconnect that splits a burst ca
 boundary. Words cut through to the stream as each beat arrives. A full FIFO holds WREADY low, which is
 how the writer stalls. Gated at RTL with the real synthesized `mem_w_stream` as the producer.
 
+A write to the upper half of the window sets a threshold register, and the module's `irq` output is
+high while the vacancy is at least the threshold. The register resets to 0, which holds `irq` low.
+
 ### Queue out
 
 The lower half of the window pops, the upper half returns the occupancy. A read never waits for data:
 a slave that held RVALID until data arrived would hold the whole bus, so an empty pop answers 0 with
-SLVERR. TLAST from the kernel is dropped, and so is a write (the request bus has no write-error path).
+SLVERR. TLAST from the kernel is dropped. A write to the upper half sets the interrupt threshold —
+`irq` is high while the occupancy is at least it, and 0 (the reset value) holds it low — and a write
+to the lower half is dropped (the request bus has no write-error path).
 
 ### Register bank
 

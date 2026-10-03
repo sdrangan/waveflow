@@ -63,11 +63,17 @@ name:
 ```python
         self.slave_map = (self.adaptor.slave_map() if self.one_front
                           else MemSlaveMap.from_views(views))
-        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
+        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m)
         self.host.cfg = mm.stream_master("regs")
-        self.host.qin = mm.stream_master("qin")
-        self.host.qout = mm.stream_slave("qout")
-        self.host.qresp = mm.stream_slave("qresp")
+        # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.
+        for v in (self.qin, self.qout, self.qresp):
+            line = IrqIF(name=f"{v.name}_irq", sim=sim)
+            line.bind("source", v.m_irq)
+            self.host.irq[v.name] = IrqIFSink(name=f"host_{v.name}_irq", sim=sim)
+            line.bind("sink", self.host.irq[v.name])
+        self.host.qin = mm.stream_master("qin", irq=self.host.irq["qin"])
+        self.host.qout = mm.stream_slave("qout", irq=self.host.irq["qout"])
+        self.host.qresp = mm.stream_slave("qresp", irq=self.host.irq["qresp"])
         self.host.status = mm.status("regs")
 ```
 
@@ -94,8 +100,8 @@ complete message, as the register bank's status half does:
 Direct is what the system would be with no bus at all, so it is the reference the memory-mapped runs
 are checked against: same outputs, same status.
 
-`run()` ends the simulation when the host program finishes (`run_sim(until=self.host.done)`), because
-a polling kernel would otherwise keep it running forever.
+`run()` ends the simulation when the host program finishes (`run_sim(until=self.host.done)`): the
+kernel is free-running, and its idle loop would otherwise keep the simulation going forever.
 
 ## Running it
 
@@ -116,11 +122,11 @@ packet, so the host has to cut a packet at the switch.
 
 | run | bit-exact vs `fir_golden` | status `nsamp / ncfg` | response mismatches | cycles |
 |---|---|---|---|---|
-| one view per crossbar port | yes | 200 / 2 | 0 | 734 |
-| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 792 |
-| direct (`link="direct"`) | yes | 200 / 2 | 0 | 348 |
-| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 786 |
-| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 734 |
+| one view per crossbar port | yes | 200 / 2 | 0 | 498 |
+| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 545 |
+| direct (`link="direct"`) | yes | 200 / 2 | 0 | 341 |
+| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 498 |
+| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 498 |
 
 **The late commit is waited for.** The host sends the packets that need config 2 and only then
 commits it. Those packets wait in queue in — their header names config 2, and the kernel will not
@@ -143,12 +149,13 @@ and the message sizes.
 
 ## How close is pysim's timing?
 
-RTL measures **768** cycles with one view per slot and **783** behind one front
-([RTL simulation](rtlsim.md#results)). pysim says **734** (−4.4%) and **792** (+1.1%), and ranks the two
+RTL measures **520** cycles with one view per slot and **529** behind one front
+([RTL simulation](rtlsim.md#results)). pysim says **498** (−4.2%) and **545** (+3.0%), and ranks the two
 shapes the same way.
 
-It did not start there: pysim said 536 and 874, the second shape *slower* where RTL had them nearly
-equal. The gap was found by logging every bus operation the pysim host issues — kind, address,
+Before the host waited on interrupts it polled, and those numbers were 768 / 783 at RTL and 734 / 792
+in pysim. Before three model fixes, pysim said 536 and 874 for the polling host, the second shape
+*slower* where RTL had them nearly equal. The gap was found by logging every bus operation the pysim host issues — kind, address,
 length, start, end — and lining it up, per process, with the operations the XSI testbench prints.
 Three model gaps came out, each now a setting in
 [`mm_fir.py`](../../../examples/mm_fir/mm_fir.py):
@@ -156,7 +163,7 @@ Three model gaps came out, each now a setting in
 | found | the fix | setting |
 |---|---|---|
 | Behind one front, every switch between a read and a write cost pysim 2 cycles more than RTL; read-after-read matched exactly. The crossbar's 4-cycle latency is 2 cycles of travel plus 2 at the front, and the travel overlaps what the front is serving. | charge the travel before taking the front | `XBAR_TRAVEL = 2` → `AXIMMCrossBarIF.latency_travel` |
-| pysim let the writer's and the reader's polls — both reads — travel together; the C++ master has one read and one write in flight. | limit the master | `HOST_MAX_OUTSTANDING = 1` → `MMIFMaster.max_outstanding` |
+| pysim let two of the host's reads (the polls, as it then was) travel together; the C++ master has one read and one write in flight. | limit the master | `HOST_MAX_OUTSTANDING = 1` → `MMIFMaster.max_outstanding` |
 | The C++ host presents each transaction 2 cycles after its process's previous one finished; the pysim host, at once. | the host's pacing | `HOST_ISSUE_CYCLES = 2` → `MMIFMaster.issue_cycles` |
 
 The first describes the crossbar; the other two describe the host — the C++ testbench host, here —
@@ -165,8 +172,7 @@ so the XSI testbench derives its master from the same `HOST_MAX_OUTSTANDING`. Th
 
 What is left is small and understood: when a read and a write reach the front together, RTL's front
 alternates and pysim serves whichever process asked first; and pysim's kernel hands a whole packet's
-results over at once, where RTL produces one per cycle, so the RTL reader sometimes finds 2 ready and
-pops 2, then 14.
+results over at once, where RTL produces one per cycle.
 
 The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
 to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),

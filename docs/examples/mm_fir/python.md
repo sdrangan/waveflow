@@ -133,9 +133,11 @@ One firing of `run_iter` is one packet — the in-band header pattern of
             proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
             yield from self.m_out.write_pipelined(array(S64, y), t_out_start)
+        # The status first, then the response -- so a host holding a packet's response knows the
+        # status already counts it, and reads the final status once instead of waiting for it.
+        yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
         yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
-        yield from self._publish()
 ```
 
 `_filter` is the golden itself, run over the filter's history and the packet:
@@ -167,7 +169,8 @@ What to read in it:
   interval and latency: the first result leaves 10 cycles after the first sample arrived, one per
   cycle after that — the same pattern as `PolyAccel`. `write_pipelined` anchors the output at
   `t_out_start`, so a packet's input and output overlap rather than adding.
-- **The response is written after the results**, so a host that has its response has its results.
+- **The status, then the response, after the results.** A host that has a packet's response has its
+  results, and a status that already counts the packet — so it never has to ask again.
 
 ## The host program
 
@@ -224,10 +227,22 @@ The **reader** takes one output packet per input packet, then its response, and 
 Queue out is unframed — the bus cannot see where the kernel's packets end — so the reader names how
 many results it wants, and it knows because it reads the same schedule.
 
-Over the bus every call blocks by **polling** — reading the free space or the count and asking again
-— never by stalling the bus. That matters here: the writer and the reader share one bus master and,
-behind one front, one adaptor. A write stalled on a full queue would hold the front, the reader's
-pops could not get through, and the host would deadlock.
+**Nothing polls.** Over the bus, the queue endpoints sleep on the views'
+[interrupts](../../guide/interface/axi_mm/slave.md#interrupts): queue in's for room, queue out's and
+the response FIFO's for data. They never read a count, and never issue a transfer a queue would stall
+— which matters here, because the writer and the reader share one bus master and, behind one front,
+one adaptor: a write stalled on a full queue would hold the front, the reader's pops could not get
+through, and the host would deadlock.
+
+After the last response the reader reads the status once:
+
+```python
+        self.final_status = yield from self._read_status()
+```
+
+One read is enough because the kernel publishes its status *before* each response, so a host holding
+the last response knows the status already counts every packet. (Publishing after it would leave the
+host a choice between reading a stale status and asking again until it changed — a poll.)
 
 Two knobs exercise the protocol:
 

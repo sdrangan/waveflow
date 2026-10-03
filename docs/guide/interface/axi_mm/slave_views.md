@@ -54,17 +54,20 @@ pkt = yield from self.s_in.get()        # one packet, as the bus master wrote it
 
 Each packet ends with TLAST, so the kernel sees where the bus master's packets begin and end.
 
-**The bus side** is a `StreamIFMaster`:
+**The bus side** is a `StreamIFMaster`, given the host's end of the view's interrupt line
+(`qin.m_irq`, see [Interrupts](./slave.md#interrupts)):
 
 ```python
-qin_ep = mm.stream_master("qin")
+qin_ep = mm.stream_master("qin", irq=qin_irq)
 yield from qin_ep.write(samples)        # one packet; returns once the queue has taken it
 ```
 
 - **One `write` is one packet**, and the kernel's `get()` returns it whole.
-- **`write` waits for room** — by reading the free space and trying again, never by stalling the bus.
-  A packet that fits the queue goes in one piece once there is room for all of it; a longer one goes
-  in pieces as room appears.
+- **`write` waits for room on the interrupt** — high while the free space is at least the threshold
+  the endpoint sets — never by stalling the bus, and never by reading the free space. A packet goes in
+  one piece once there is room for all of it.
+- **The window's upper half is control:** a write there sets the interrupt threshold. Pushes go to the
+  lower half (an AXI4 burst — at most 2 KB at 64 bits — from the base stays there).
 - **A completed write means the queue took the words, not that the kernel has read them.**
 - **Kernel to kernel.** A kernel that writes memory through `MemWStream` can feed another kernel's
   queue by pointing its base address at the window and putting the packet's length first — the format
@@ -96,10 +99,11 @@ to any stream, and blocks when the queue is full:
 yield from self.m_out.write(words)
 ```
 
-**The bus side** is an `MmStreamIFSlave` — a `StreamIFSlave` declared `has_tlast=False`:
+**The bus side** is an `MmStreamIFSlave` — a `StreamIFSlave` declared `has_tlast=False` — given the
+host's end of the view's interrupt line (`qout.m_irq`):
 
 ```python
-qout_ep = mm.stream_slave("qout")
+qout_ep = mm.stream_slave("qout", irq=qout_irq)
 y = yield from qout_ep.get(nwords_max=n)            # exactly n words
 y = yield from qout_ep.get_array(Sample, count=n)   # n typed elements
 ```
@@ -107,9 +111,10 @@ y = yield from qout_ep.get_array(Sample, count=n)   # n typed elements
 - **Reads name their size.** The bus cannot see where the kernel's packets end (the RTL drops TLAST),
   so `get()` without a count is refused. `get(nwords_max=n)` returns **exactly** *n* words, waiting
   until they are all there — what an HLS read of *n* words does.
-- **Reads wait by polling.** The endpoint reads how many words are ready, pops at most that many, and
-  asks again. It never pops an empty queue.
-- The `*_nb` reads ask once, and return `None` unless all the words are already there.
+- **Reads wait on the interrupt.** The endpoint sets the threshold to the words it wants, sleeps until
+  the interrupt says they are there, and pops them. It never reads the count, and never pops an empty
+  queue. A write to the upper half of the window sets the threshold.
+- The `*_nb` reads return `None` unless all the words are already there (the interrupt is high).
 
 **RTL:** `QueueView(name, kind="out", axis, depth=512, law=12)`; module `mm_queue_out.v`.
 

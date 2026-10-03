@@ -5,7 +5,7 @@ grand_parent: Interfaces
 nav_order: 3
 audience: python
 snippets: run
-api: [MemSlaveAdaptor, BoundMemSlaveAdaptor, MemSlaveMap, MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, render_view_slot, render_adaptor_slot]
+api: [MemSlaveAdaptor, BoundMemSlaveAdaptor, MemSlaveMap, IrqIF, IrqIFSink, IrqIFSource, MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, render_view_slot, render_adaptor_slot]
 summary: "How a free-running kernel is reached by a bus master — a host or another kernel — when Vitis HLS cannot generate an AXI4-full slave. An adaptor in the RTL top turns bus transactions into stream messages, so the kernel still sees only streams. The four views (queue in, queue out, register bank, BRAM window) and how to build an adaptor from them; one adaptor or one per view; the ordering guarantee and its measured scope; a runnable example."
 ---
 # Slave side — memory-mapped adaptor
@@ -125,19 +125,19 @@ a view **by name** and gets the same endpoint it would get from a direct connect
 ```python
 mm = BoundMemSlaveAdaptor(adaptor.slave_map(), master=host.m)
 
-cfg    = mm.stream_master("regs")       # write(cfg): one config message to the kernel
-qin    = mm.stream_master("qin")        # write(words): one packet
-qout   = mm.stream_slave("qout")        # get(nwords_max=n), get_array, get_schema
-status = mm.status("regs")              # read(): the latest status message
-buf    = mm.region("bram", Sample)      # read_slice / write_slice, in element coordinates
+cfg    = mm.stream_master("regs")                   # write(cfg): one config message to the kernel
+qin    = mm.stream_master("qin", irq=qin_irq)       # write(words): one packet
+qout   = mm.stream_slave("qout", irq=qout_irq)      # get(nwords_max=n), get_array, get_schema
+status = mm.status("regs")                          # read(): the latest status message
+buf    = mm.region("bram", Sample)                  # read_slice / write_slice, in element coordinates
 ```
 
 | view | the bus master gets | what a call does on the bus |
 |---|---|---|
-| queue in | a `StreamIFMaster` | `write` waits until the queue has room for the packet, then writes it with its length first |
+| queue in | a `StreamIFMaster` | `write` waits for the view's interrupt to say there is room, then writes the packet with its length first |
 | register bank | a `StreamIFMaster` (config) | `write` writes the configuration registers, then COMMIT |
 | | a `LatestValueIFSlave` (status) | `read` reads the latest status message; reading does not consume it |
-| queue out | an `MmStreamIFSlave` | `get_*` waits until the words are there, then pops them |
+| queue out | an `MmStreamIFSlave` | `get_*` waits for the view's interrupt to say the words are there, then pops them |
 | BRAM window | a `Region` | `read_slice` / `write_slice` read and write the memory |
 
 `adaptor.slave_map()` is the address map as plain data — every view by name, at its absolute bus
@@ -146,11 +146,12 @@ slot, `MemSlaveMap.from_views([regs, qin, qout])` builds the same map.
 
 Two things differ from a direct connection, and both are honest about the bus:
 
-- **Calls block by polling.** A write to queue in reads the free space first and waits until the
-  packet fits; a read from queue out reads the count first and waits until the words are there. The
-  endpoint never issues a transfer the view would stall, because a stalled transfer holds the front,
-  and with it every view behind it. A host with one process writing and another reading would
-  otherwise deadlock as soon as the kernel stopped to wait on its output.
+- **Calls block on the view's interrupt.** Each queue view drives an interrupt line (an `IrqIF`, see
+  [Interrupts](#interrupts) below). Given the host's end of it (`irq=`), the endpoint sets the view's
+  threshold, sleeps until the interrupt says the room (queue in) or the words (queue out) are there,
+  and moves them. It never reads a count, and it never issues a transfer the view would stall — a
+  stalled transfer holds the front, and with it every view behind it, so a host with one process
+  writing and another reading would deadlock as soon as the kernel stopped to wait on its output.
 - **Queue out is unframed.** The bus cannot see where the kernel's packets end, so a read names how
   many words it wants: `get(nwords_max=n)`, `get_array` or `get_schema`. `get(nwords_max=n)` returns
   exactly *n* words. A kernel writing to a queue out declares its output `has_tlast=False` to match.
@@ -158,6 +159,39 @@ Two things differ from a direct connection, and both are honest about the bus:
 So the host is the same code either way: [mm_fir](../../../examples/mm_fir/) runs one host class over
 the bus and joined directly to the kernel, and checks the outputs agree. The addresses behind each
 call are in [how it works](./slave_howitworks.md#the-address-map-behind-the-endpoints).
+
+### Interrupts
+
+A real host does not ask a device over and over whether it is ready; it sleeps until the device
+interrupts. So each queue view drives an interrupt line, and the endpoints wait on it:
+
+| view | the interrupt is high while | threshold |
+|---|---|---|
+| queue in | `vacancy >= threshold` — that much room | written at the upper half of the window |
+| queue out | `occupancy >= threshold` — that many words ready | written at the upper half of the window |
+
+The line is an `IrqIF` ([`irq.py`](../../../../waveflow/hw/irq.py)): the view's `m_irq`
+(an `IrqIFSource`) on one side, the host's `IrqIFSink` on the other. It is **level-sensitive**: high
+for as long as the condition holds, so a host that comes to wait late cannot miss it. At RTL it is the
+view's `irq` output — a wire — and the XSI testbench's host samples it as a pin (`IrqPin`).
+
+{F}python
+line = IrqIF(name="qout_irq", sim=sim)
+line.bind("source", qout.m_irq)
+qout_irq = IrqIFSink(name="host_qout_irq", sim=sim)
+line.bind("sink", qout_irq)
+qout_ep = mm.stream_slave("qout", irq=qout_irq)
+{F}
+
+The endpoint manages the threshold itself: a read of *n* words sets it to *n* (a bus write, only when
+it changes) and sleeps — the interrupt then *means* the words are there. A write keeps a lower bound
+on the free space and, when that is too low, waits for room of half the queue, so one threshold write
+normally serves a whole run. **Threshold 0 disables the interrupt** and is the reset value: a view no
+one sets a threshold on behaves exactly as before.
+
+Without `irq=`, the endpoints fall back to reading the count and asking again — polling. No example
+uses it: waiting on the interrupt costs no bus traffic while the host waits, and wakes it the moment
+the condition holds.
 
 **In RTL**, the same adaptor is generated by `render_adaptor_slot(name, views, axi, ...)` from RTL-side
 view descriptions (`QueueView`, `RegBankView`, `BramView` in
@@ -245,6 +279,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor
@@ -292,14 +327,16 @@ class Scale(FreeRunMod):
             self.gain = int(cfg.gain)
             return
         pkt = yield from self.s_in.get()               # one packet of samples (TLAST = its end)
-        yield from self.m_out.write(np.asarray(pkt, dtype=np.uint64) * self.gain)
         self.nsamp += len(pkt)
-        yield from self.m_status.write(Status(nsamp=self.nsamp))
+        yield from self.m_status.write(Status(nsamp=self.nsamp))   # status first: see the host
+        yield from self.m_out.write(np.asarray(pkt, dtype=np.uint64) * self.gain)
 ```
 
 A host program. It holds an `MMIFMaster` for the bus, and four endpoints the wiring gives it. It
 sends a config, pushes one packet of four samples, takes the four results, and reads the status —
-without an address in sight:
+without an address in sight, and without polling: its queue endpoints wait on the views' interrupts.
+The kernel publishes its status *before* the results, so once the host has the results, one read of
+the status is final:
 
 ```python
 @dataclass
@@ -347,9 +384,17 @@ xbar.bind("master_0", host.m)
 xbar.bind("slave_0", adaptor.s_mem)
 assign_address_ranges([adaptor.s_mem], [(0x0000, adaptor.span())])
 
+irq = {}                                        # the queue views' interrupt lines, to the host
+for view in (qin, qout):
+    line = IrqIF(name=f"{view.name}_irq", sim=sim)
+    line.bind("source", view.m_irq)
+    irq[view.name] = IrqIFSink(name=f"host_{view.name}_irq", sim=sim)
+    line.bind("sink", irq[view.name])
+
 mm = BoundMemSlaveAdaptor(adaptor.slave_map(), master=host.m)
-host.cfg, host.qin = mm.stream_master("regs"), mm.stream_master("qin")
-host.qout, host.status = mm.stream_slave("qout"), mm.status("regs")
+host.cfg, host.status = mm.stream_master("regs"), mm.status("regs")
+host.qin = mm.stream_master("qin", irq=irq["qin"])
+host.qout = mm.stream_slave("qout", irq=irq["qout"])
 
 sim.run_sim()
 ```
@@ -376,6 +421,9 @@ send the configuration to one stage and the samples to another. What it cannot a
   emitted by `wrapper_gen` from the module graph, the way a design's memories are.
 - Each view is described twice, once for pysim (`MemSlaveRegBank`, ...) and once for RTL
   (`RegBankView`, ...), with different parameter names. One description should produce both.
+- Interrupts are level lines with a threshold; there are no interrupt enable / status / clear
+  registers like Vitis's `GIER` / `IER` / `ISR`, and a host-activated kernel's `ap_done` is not an
+  `IrqIF` yet.
 - The endpoints exist for pysim and for an XSI testbench (`xsi_mm_host.h`, with the address map
   generated by `MemSlaveMap.to_cpp_header`), not yet for real host software or for a Vitis kernel
   acting as the bus master.

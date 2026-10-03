@@ -94,9 +94,8 @@ that need it, and the output is still exact: those packets wait in queue in unti
 
 **Waiting costs nothing on the bus.** The kernel waits on its own stream from the register bank,
 which sits beside it; it never touches the bus. While it waits it takes no samples, so queue in fills
-and the host's writer waits for room — by polling the free space, the same short reads it uses
-whenever the queue is full. They never hold the adaptor, so other masters and views still get
-through.
+and the host's writer waits for room — asleep on queue in's interrupt, which fires when the kernel
+has drained enough. Nothing polls.
 
 **The response FIFO lets the host check.** After each packet the kernel writes a `FirRespHdr` to a
 second queue out: the packet's `tx_id` and the `cfg_seq` it was actually filtered with. The host
@@ -125,8 +124,12 @@ the other examples use.
 
 - A kernel reached through registers and queues, with **no** change to how a kernel is written.
 - The adaptor's views behind the real AMD crossbar, gated bit-exact at RTL in two shapes: one view
-  per crossbar slot (768 cycles), and all four views behind one front with a generated decoder
-  (783 cycles).
+  per crossbar slot (520 cycles), and all four views behind one front with a generated decoder
+  (529 cycles).
+- **No polling anywhere.** The host sleeps on the queue views' interrupts — queue in's for room, queue
+  out's and the response FIFO's for data — and reads the final status once, because the kernel
+  publishes it before each response. Tests check it at both levels: in pysim and at RTL, the host
+  never reads a count.
 - One host program, holding endpoints and never an address, run over the bus in pysim, joined
   directly to the kernel in pysim, and — written against the C++ twins of the same endpoints — over
   the bus at RTL.

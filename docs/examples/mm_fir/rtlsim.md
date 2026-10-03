@@ -3,7 +3,7 @@ title: RTL simulation
 parent: A memory-mapped FIR
 nav_order: 4
 has_children: false
-summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all four behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, every response checked, at 768 and 783 cycles."
+summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all four behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, every response checked, no polling (the host sleeps on the queue views' interrupts), at 520 and 529 cycles."
 ---
 
 # RTL simulation
@@ -132,9 +132,19 @@ The host is the pysim [`FirHost`](python.md#the-host-program), written in C++ ag
 
 An XSI participant cannot block, so each C++ endpoint is a small state machine: the host calls
 `start(...)`, then `step()` once per cycle, until `busy()` is false. The rules inside are the Python
-ones, line for line — poll until a packet fits, poll until words are ready, sleep `POLL` cycles after a
-poll that found too little — so the two hosts issue the same kinds of bus operations for the same
-reasons.
+ones, line for line, so the two hosts issue the same kinds of bus operations for the same reasons.
+
+**The interrupts.** The top routes each queue view's `irq` output to a port (`irq_qin`, `irq_qout`,
+`irq_qresp`), and the testbench samples each as an `IrqPin`. A queue endpoint given one
+(`use_irq(pin)`) waits on it exactly as the Python endpoint waits on its `IrqIFSink`: set the view's
+threshold (a bus write, only when it changes), wait for the pin, move the words. No count is ever
+read:
+
+```cpp
+    IrqPin irq_qin(sim.dut(), "irq_qin"), irq_qout(sim.dut(), "irq_qout"), irq_qresp(sim.dut(), "irq_qresp");
+    Reader rd(host, irq_qout, irq_qresp);
+    Writer wr(host, irq_qin);
+```
 
 Two things are generated from Python, so the C++ restates neither:
 
@@ -179,7 +189,8 @@ class Writer : public XsiSimObj {
 
 The `Writer` never waits for a config to be received: the header's `cfg_seq` makes the kernel wait. The
 `Reader` takes each packet's results, then its response from the response FIFO, and counts any
-response whose `tx_id` or `cfg_seq` is not what the schedule expects:
+response whose `tx_id` or `cfg_seq` is not what the schedule expects; after the last one it reads the
+status once:
 
 ```cpp
         else if (phase_ == RESP && !qresp_.busy()) {
@@ -226,13 +237,16 @@ it cost on the earlier protocol.
 
 | topology | bit-exact vs `fir_golden` | status `nsamp / ncfg` | responses | cycles | bus operations | polls |
 |---|---|---|---|---|---|---|
-| `per_view` | yes | 200 / 2 | 13, 0 mismatches | **768** | 124 | 5 |
-| `one_front` | yes | 200 / 2 | 13, 0 mismatches | **783** | 125 | 4 |
+| `per_view` | yes | 200 / 2 | 13, 0 mismatches | **520** | 67 | 0 |
+| `one_front` | yes | 200 / 2 | 13, 0 mismatches | **529** | 67 | 0 |
 
 Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, both take
 both configs, and every one of the 13 responses echoes its packet's `tx_id` and intended config.
 
-**Against pysim.** pysim says 734 for `per_view` (4.4% under RTL) and 792 for `one_front` (1.1% over),
+**No polls:** the gate parses every bus operation the testbench host issued and checks that none reads
+a count (queue in's vacancy, a queue out's occupancy) and that the status is read exactly once.
+
+**Against pysim.** pysim says 498 for `per_view` (4.2% under RTL) and 545 for `one_front` (3.0% over),
 after three model fixes found by lining up both backends' bus operations — see
 [Python simulation](pysim.md#how-close-is-pysims-timing).
 
@@ -240,16 +254,17 @@ after three model fixes found by lining up both backends' bus operations — see
 
 | host program | `per_view` | `one_front` |
 |---|---|---|
-| this one: header + `cfg_seq` + responses, samples packed four to a word | **768** | **783** |
+| this one: header + `cfg_seq` + responses, packed samples, the host on interrupts | **520** | **529** |
+| the same, the host polling the counts | 768 | 783 |
 | the same, one sample per 64-bit word | 937 | 922 |
 | `apply_at` configs, host polls status for "received", overlapping master | 567 | 721 |
 | the same, one-transaction-at-a-time master (`OVERLAP_RW = False`) | 811 | 776 |
 | single-process host, drained queue out before every push | 857 | 823 |
 
-The header pattern costs more bus operations per packet than the `apply_at` protocol did — the header's
-own write and free-space poll, and the response's poll and pop — and packing the samples four to a
-word wins back most of it. What it buys is not speed: the host never waits on a status round trip,
-and every packet's config is checked.
+Waiting on interrupts instead of polling roughly halves the bus operations (67 against 124) and the
+time: a poll that finds nothing still occupies the bus, and an interrupt costs nothing until it fires.
+The header pattern itself costs a header write per packet and a response pop; what it buys is that the
+host never waits on a status round trip, and every packet's config is checked.
 
 ## Before the run: is this the RTL I think it is?
 

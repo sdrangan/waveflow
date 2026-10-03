@@ -1,7 +1,8 @@
 # Plan: interrupts for the memory-mapped queues, and no polling in the examples
 
-> **Status (2026-10-03): proposed, building** (branch `mm-host-endpoints`). Section headings are cited
-> from code once built -- do not rename them.
+> **Status (2026-10-03): BUILT, Stages 1-4** (branch `mm-host-endpoints`, unpushed). mm_fir has no
+> polling, in pysim and at RTL: 520 / 529 cycles, 67 bus ops (was 768 / 783, 124). Section headings are
+> cited from code -- do not rename them. Departures are in **Built** at the end.
 
 ## Why
 
@@ -87,3 +88,20 @@ and calls polling a fallback.
 
 Later, not in this plan: `ap_done` as an `IrqIF` for host-activated kernels (retires the regmap
 examples' polling), and the two-kernel command/response example.
+
+## Built
+
+- As designed, with these notes:
+- **The kernel's status-before-response cost a timing fix in HLS.** Requesting the status on the last
+  sample's firing put `nsamp++` and the status packing in one cycle: estimated 13.3 ns against a 10 ns
+  clock.  The RESP state now requests it in its own first firing and writes the response once it has
+  gone out: 7.7 ns, II=1, latency 10, unchanged resources.
+- **The slave guide's runnable example** waits on two interrupts (queue in, queue out), and its kernel
+  publishes the status before the results -- the same rule as mm_fir's.
+- **The C++ queue writer's interrupt mode refuses a packet longer than the queue** (pysim splits it in
+  pieces); no example sends one.
+- **Gates:** `test_mm_host.py` (the line; both views' thresholds; a writer+reader host in interrupt
+  mode drains everything and reads no count), `test_mm_fir.py::test_the_host_never_polls` (pysim, both
+  bus wirings), `test_mm_fir_xsi.py::test_mm_fir_rtl_host_never_polls` (RTL, parsed from the
+  testbench's bus operations).  `WANT_XSI_GATES` 140 -> 142.  Every other adaptor XSI gate keeps its
+  number (thresholds stay 0).
