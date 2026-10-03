@@ -174,6 +174,18 @@ packet, which pysim releases up to one packet early: a pysim stream hands the ke
 one event, where RTL drains it a word per cycle. The tests assert that difference as a bound, so a
 change to the stream model that moves it shows up.
 
+**Behind one front,** two more settings matter, both found by lining up mm_fir's bus operations in
+the two backends:
+
+- **`latency_travel = 2`** on the crossbar. Of the 4 cycles, 2 are the request travelling to the
+  front, and that travel overlaps whatever the front is serving. Without it, every switch between a
+  read and a write behind the front cost pysim 2 extra cycles.
+- **`max_outstanding = 1`** on the host's master: one read and one write in flight, as the C++ host.
+  Without it, a host's two processes could send two reads through the crossbar together.
+
+With those (and the host's own pacing, `issue_cycles = 2`), mm_fir behind one front is within 1.1% of
+RTL. See [the crossbar page](crossbar.md#matching-pysim-to-it).
+
 ## Gates
 
 | | pysim | RTL (`-m xsi`) |

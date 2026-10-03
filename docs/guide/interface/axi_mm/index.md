@@ -110,6 +110,9 @@ Either way the kernel is written the same way: it reads and writes streams, and 
 
 - [Modeling memory-mapped traffic](./modeling.md) — `MMIFMaster` / `MMIFSlave`, `DirectMMIF`,
   `AXIMMCrossBarIF`, the latency model; the model both flows share.
+- [AXI crossbar](./crossbar.md) — the interconnect in both backends: `AXIMMCrossBarIF` in pysim,
+  AMD's `axi_crossbar` IP at RTL; describing, generating and instantiating it, what it costs, and how
+  the pysim model is set to match.
 - [Master side — streaming memory kernels](./master.md) — `MemRStream` / `MemWStream`: how a
   free-running kernel reads and writes memory.
 - [Slave side — memory-mapped adaptor](./slave.md) — queues, a register bank and a BRAM window behind

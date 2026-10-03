@@ -232,9 +232,9 @@ it cost on the earlier protocol.
 Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, both take
 both configs, and every one of the 13 responses echoes its packet's `tx_id` and intended config.
 
-**Against pysim.** pysim says 536 for `per_view` (30% under RTL) and 874 for `one_front` (12% over), so
-it also gets the order of the two shapes wrong: at RTL they are nearly equal. That is not attributed
-yet. See [Python simulation](pysim.md#how-close-is-pysims-timing).
+**Against pysim.** pysim says 734 for `per_view` (4.4% under RTL) and 792 for `one_front` (1.1% over),
+after three model fixes found by lining up both backends' bus operations — see
+[Python simulation](pysim.md#how-close-is-pysims-timing).
 
 **How the numbers got here**, on the same scenario:
 

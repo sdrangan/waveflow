@@ -3,7 +3,7 @@ title: Python simulation
 parent: A memory-mapped FIR
 nav_order: 2
 has_children: false
-summary: "The whole system in pysim, in three wirings with one host class: each view on its own crossbar slot, all three behind one adaptor port, and the host joined straight to the kernel. Bit-exact through a mid-stream tap switch in all three, including one inside a packet; a config committed after its packets is waited for; the wrong-tag negative control is exposed by the responses. Cycle counts against RTL, and why one topology's gap is the bus master model rather than the adaptor."
+summary: "The whole system in pysim, in three wirings with one host class: each view on its own crossbar slot, all four behind one adaptor port, and the host joined straight to the kernel. Bit-exact through a mid-stream tap switch in all three, including one inside a packet; a config committed after its packets is waited for; the wrong-tag negative control is exposed by the responses. Cycle counts against RTL, and the three model fixes -- found by lining up both backends' bus operations -- that bring pysim within 4.4% of it."
 ---
 
 # Simulation
@@ -53,8 +53,11 @@ and with `one_front=True` all four go behind one `MemSlaveAdaptor` port, at the 
             slaves, ranges = [self.adaptor.s_mem], [(REGS, self.adaptor.span())]
 ```
 
-The crossbar is an `AXIMMCrossBarIF` with `latency_init = 4` — the per-transaction cost measured
-through AMD's `axi_crossbar` at RTL. Last, the host gets its endpoints from the address map, by view
+The crossbar is an `AXIMMCrossBarIF` with `latency_init = 4`, of which `latency_travel = 2` — the
+per-transaction cost measured through AMD's `axi_crossbar` at RTL, and how much of it overlaps the
+slave's current work (see [How close is pysim's timing?](#how-close-is-pysims-timing)). The host's
+master keeps one read and one write in flight and paces its transactions 2 cycles apart, as the C++
+host does. Last, the host gets its endpoints from the address map, by view
 name:
 
 ```python
@@ -113,11 +116,11 @@ packet, so the host has to cut a packet at the switch.
 
 | run | bit-exact vs `fir_golden` | status `nsamp / ncfg` | response mismatches | cycles |
 |---|---|---|---|---|
-| one view per crossbar port | yes | 200 / 2 | 0 | 536 |
-| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 874 |
+| one view per crossbar port | yes | 200 / 2 | 0 | 734 |
+| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 792 |
 | direct (`link="direct"`) | yes | 200 / 2 | 0 | 348 |
-| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 536 |
-| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 536 |
+| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 786 |
+| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 734 |
 
 **The late commit is waited for.** The host sends the packets that need config 2 and only then
 commits it. Those packets wait in queue in — their header names config 2, and the kernel will not
@@ -140,16 +143,30 @@ and the message sizes.
 
 ## How close is pysim's timing?
 
-RTL measures **768** cycles with one view per slot and **783** behind one front, running the same host
-on C++ endpoints, with a bus master that may have one read and one write in flight at once — as a
-pysim `MMIFMaster` does, and as AXI and AMD's crossbar allow ([RTL simulation](rtlsim.md#the-bus-master-one-read-and-one-write-at-once)).
+RTL measures **768** cycles with one view per slot and **783** behind one front
+([RTL simulation](rtlsim.md#results)). pysim says **734** (−4.4%) and **792** (+1.1%), and ranks the two
+shapes the same way.
 
-- **Behind one front, pysim says 874**: 12% over RTL.
-- **With one view per slot, pysim says 536**: 30% under RTL.
+It did not start there: pysim said 536 and 874, the second shape *slower* where RTL had them nearly
+equal. The gap was found by logging every bus operation the pysim host issues — kind, address,
+length, start, end — and lining it up, per process, with the operations the XSI testbench prints.
+Three model gaps came out, each now a setting in
+[`mm_fir.py`](../../../examples/mm_fir/mm_fir.py):
 
-So pysim also gets the *order* of the two topologies wrong: RTL has them nearly equal, pysim has one
-port per view far faster. That is not attributed yet; it is the same open question as the earlier
-gap.
+| found | the fix | setting |
+|---|---|---|
+| Behind one front, every switch between a read and a write cost pysim 2 cycles more than RTL; read-after-read matched exactly. The crossbar's 4-cycle latency is 2 cycles of travel plus 2 at the front, and the travel overlaps what the front is serving. | charge the travel before taking the front | `XBAR_TRAVEL = 2` → `AXIMMCrossBarIF.latency_travel` |
+| pysim let the writer's and the reader's polls — both reads — travel together; the C++ master has one read and one write in flight. | limit the master | `HOST_MAX_OUTSTANDING = 1` → `MMIFMaster.max_outstanding` |
+| The C++ host presents each transaction 2 cycles after its process's previous one finished; the pysim host, at once. | the host's pacing | `HOST_ISSUE_CYCLES = 2` → `MMIFMaster.issue_cycles` |
+
+The first describes the crossbar; the other two describe the host — the C++ testbench host, here —
+so the XSI testbench derives its master from the same `HOST_MAX_OUTSTANDING`. The
+[AXI crossbar](../../guide/interface/axi_mm/crossbar.md#matching-pysim-to-it) page has them for any design.
+
+What is left is small and understood: when a read and a write reach the front together, RTL's front
+alternates and pysim serves whichever process asked first; and pysim's kernel hands a whole packet's
+results over at once, where RTL produces one per cycle, so the RTL reader sometimes finds 2 ready and
+pops 2, then 14.
 
 The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
 to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),
