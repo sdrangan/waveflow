@@ -1,8 +1,8 @@
 # Plan: host-side endpoints for the memory-mapped slave adaptor
 
 > **Status (2026-10-03): Stages 0, 1 and 2 BUILT** (branch `mm-host-endpoints`, unpushed). mm_fir
-> runs one host program over the bus in pysim, directly in pysim, and over the bus at RTL (811 / 776,
-> bit-exact). Stage 3 is the deferred list. One new open question: which bus-master model is right. Plan text below is the design as proposed; where the build departed from it, a
+> runs one host program over the bus in pysim, directly in pysim, and over the bus at RTL (567 / 721,
+> bit-exact, with a master that overlaps one read and one write). Stage 3 is the deferred list. Plan text below is the design as proposed; where the build departed from it, a
 > **Built:** note says how and why. Section headings are cited from code — do not rename them.
 
 ## Motivation
@@ -352,6 +352,12 @@ added for the BFM classes on their own, in which case it goes up by that count.
   behaviour (truncate the burst, discard the rest) is a data-loss hazard on any unframed stream.
   Worth its own issue.
 - **`LatestValueIF` at RTL** (D4): pysim-only in direct mode for now.
+- ~~**Which bus-master model is right**~~ **RESOLVED 2026-10-03: overlap, option (b).** AXI's read
+  and write channels are independent and AMD's `axi_crossbar` (default config) routes them in
+  parallel, so a concurrent host overlaps them on a real bus. `AxiMmMaster(..., overlap_rw=true)`:
+  one read + one write outstanding, each channel in queue order; default false, so every other gate
+  is unchanged. mm_fir sets it via `mm_fir_xsi.OVERLAP_RW`: 811 / 776 -> **567 / 721** (pysim 423 /
+  742: one_front 3% pessimistic, per_view 25% optimistic, unattributed). The original analysis:
 - **Which bus-master model is right** (found in Stage 2). The C++ `AxiMmMaster` keeps ONE transaction
   outstanding; a pysim `MMIFMaster` lets a read and a write proceed at once (separate AR/AW channels,
   as real AXI allows). With a two-process host and views on separate slots the two disagree by ~2x

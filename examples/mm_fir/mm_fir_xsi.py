@@ -83,6 +83,13 @@ VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_ax
          QueueView("qout", "out", axis="k_out", depth=QDEPTH)]
 
 NSAMP, SWITCH_AT, PKT, POLL = 200, 101, 16, 8
+
+#: The C++ host's bus master may have one read AND one write outstanding at once (AxiMmMaster's
+#: ``overlap_rw``).  AXI's read and write channels are independent and AMD's crossbar routes them in
+#: parallel, so a host whose writer and reader run concurrently -- this one -- overlaps them on a real
+#: bus, and the pysim MMIFMaster does too.  False is the one-transaction-at-a-time master (a single-
+#: threaded driver), which is what the cycle counts before 2026-10-03 were measured with.
+OVERLAP_RW = True
 TAPS_A = [3, -1, 4, 1, -5]
 TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]
 PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
@@ -254,7 +261,7 @@ private:
 
 int main() {{
     XsiSim sim("{dll}", "mm_fir.wdb");
-    AxiMmMaster host(sim.dut(), "s0_axi", 8, 0);
+    AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/{"true" if OVERLAP_RW else "false"});
     Reader rd(host);            // the pysim reader runs first at t = 0 too (it is the host's run_proc)
     Writer wr(host);
     std::vector<XsiSimObj*> all = {{&host, &rd, &wr}};

@@ -73,21 +73,22 @@ def test_mm_fir_rtl_cycles(fir_run):
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
 
 
-#: Recorded 2026-10-03, with the two-process host on the C++ endpoints (xsi_mm_host.h): host program
-#: start to the final status read, 200 samples, one tap switch.  per_view 811 / one_front 776, 73 bus
-#: ops, 6 polls.  Measured on RTL csynth'd from this checkout; the previous host on the SAME RTL still
-#: measured 857 / 823 (68 ops, 2 polls), so the move is the host program and nothing else.
+#: Recorded 2026-10-03, with the two-process host on the C++ endpoints (xsi_mm_host.h) and a bus
+#: master that may have one read and one write outstanding at once (mm_fir_xsi.OVERLAP_RW, i.e.
+#: AxiMmMaster's overlap_rw): host program start to the final status read, 200 samples, one tap
+#: switch.  per_view 567 (76 ops, 9 polls) / one_front 721 (74 ops, 7 polls).
 #:
-#: pysim says 423 / 742.  The per_view gap is the BUS MASTER MODEL, not the adaptor: AxiMmMaster keeps
-#: one transaction outstanding, so the writer's and the reader's operations take turns even when they
-#: go to different slaves, while a pysim MMIFMaster lets a read and a write run at once.  Probe: wrap
-#: the pysim master in a capacity-1 resource and per_view drops to 742 -- equal to one_front, where the
-#: single front serializes them anyway.  Under the same master model pysim is 4-9% optimistic
-#: (742 vs 776 / 811).  Which master model is right is open (plans/mm_adaptor_host_endpoints.md).
+#: pysim says 423 / 742.  one_front: pysim 3% pessimistic.  per_view: pysim 25% optimistic -- the
+#: remaining gap is not attributed yet.
 #:
-#: History.  2026-10-02, the single-process host (drain before every push, 4 ops per packet): 857 /
-#: 823, pysim 709 for both.  Before that, a kernel that was not II=1 (it moved a whole 5-word config
-#: and a whole 2-word status in one firing) ran ~1 sample per 10 cycles: 2096 cycles, 221 ops, 55 polls.
-#: Where one_front's advantage over per_view comes from (a 1x2 instead of a 1x3 crossbar, or one front
-#: instead of three) has NOT been isolated.
-EXPECTED_CYCLES = {"per_view": 811, "one_front": 776}
+#: The same host with the one-at-a-time master (OVERLAP_RW = False) measured 811 / 776 (73 ops,
+#: 6 polls); a pysim master forced to one transaction at a time gives 742 for both, so that is the
+#: model the overlap removed.  one_front gains too (776 -> 721): its front still serves one
+#: transaction at a time, but the master no longer waits for a write's response before presenting
+#: the next read's address.
+#:
+#: History.  The single-process host (drain before every push, 4 ops per packet), one-at-a-time
+#: master: 857 / 823, pysim 709 for both, on the same RTL.  Before that, a kernel that was not II=1 ran
+#: ~1 sample per 10 cycles: 2096 cycles, 221 ops, 55 polls.  Where one_front differs from per_view
+#: beyond the master (a 1x2 instead of a 1x3 crossbar, one front instead of three) is not isolated.
+EXPECTED_CYCLES = {"per_view": 567, "one_front": 721}

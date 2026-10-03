@@ -131,15 +131,16 @@ three wirings give the same outputs from the same host; and the config bounds.
 
 ## How close is pysim's timing?
 
-RTL measures **811** cycles with one view per slot and **776** behind one front, running the same host
-on C++ endpoints ([RTL simulation](rtlsim.md#results)).
+RTL measures **567** cycles with one view per slot and **721** behind one front, running the same host
+on C++ endpoints, with a bus master that may have one read and one write in flight at once — as a
+pysim `MMIFMaster` does, and as AXI and AMD's crossbar allow ([RTL simulation](rtlsim.md#the-bus-master-one-read-and-one-write-at-once)).
 
-- **Behind one front, pysim says 742**: 4% under RTL.
-- **With one view per slot, pysim says 423**, and that gap is the *bus master*, not the adaptor. The
-  C++ `AxiMmMaster` keeps one transaction outstanding, so the host's writer and reader take turns even
-  when they reach different slaves; a pysim `MMIFMaster` lets a read and a write run at once. Make the
-  pysim master take one transaction at a time and `per_view` drops to 742, the same as `one_front`.
-  Which of the two is the right model of a real host is an open question.
+- **Behind one front, pysim says 742**: 3% over RTL.
+- **With one view per slot, pysim says 423**: 25% under RTL. That gap is not attributed yet.
+
+The bus-master model matters more than either gap. With a one-at-a-time C++ master the RTL takes 811
+and 776; a pysim master forced to one transaction at a time gives 742 for both. Whichever model is
+chosen, both backends must use the same one.
 
 The views alone track RTL to within 2 cycles per operation once the crossbar's `latency_init` is set
 to the measured 4 ([`tests/hw/test_mm_queue.py`](../../../tests/hw/test_mm_queue.py),

@@ -3,7 +3,7 @@ title: RTL simulation
 parent: A memory-mapped FIR
 nav_order: 4
 has_children: false
-summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all three behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, at 811 and 776 cycles."
+summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all three behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, at 567 and 721 cycles."
 ---
 
 # RTL simulation
@@ -170,34 +170,67 @@ class Writer : public XsiSimObj {
 };
 ```
 
-`AxiMmMaster` serves the operations the two programs queue in order, one at a time. The field
-positions the host decodes from the status — where `ncfg` sits in the two words — are read off
-`FirStatus`'s own serializer by `field_pos`, not written into the C++.
+The field positions the host decodes from the status — where `ncfg` sits in the two words — are read
+off `FirStatus`'s own serializer by `field_pos`, not written into the C++.
+
+### The bus master: one read and one write at once
+
+AXI's read channels and write channels are independent, and AMD's crossbar routes a read and a write
+in parallel. So a host whose writer and reader run concurrently — this one — can have a read and a
+write in flight at the same time on a real bus. The testbench's bus master is told so where it is
+built, in `render_tb`:
+
+```cpp
+AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/true);
+```
+
+The `true` comes from one constant at the top of
+[`mm_fir_xsi.py`](../../../examples/mm_fir/mm_fir_xsi.py):
+
+```python
+OVERLAP_RW = True
+```
+
+With `overlap_rw`, `AxiMmMaster` keeps one read and one write outstanding, each channel in the order
+it was queued. Without it (the default, and what every other gate uses) it serves one transaction at
+a time — a model of a single-threaded driver, which waits for each access to finish before the next.
+Order *between* a read and a write is then up to the host, as on a real bus: the endpoints never
+issue a read that depends on a write until the write's response has come back.
+
+The pysim side needs no setting: a pysim `MMIFMaster` already lets a read and a write run at once.
+
+Set `OVERLAP_RW = False` to see the one-at-a-time master; the counts below say what it costs.
 
 ## Results
 
 | topology | bit-exact vs `fir_golden` | status `nsamp / ncfg / late` | cycles | bus operations | polls |
 |---|---|---|---|---|---|
-| `per_view` | yes | 200 / 2 / 0 | **811** | 73 | 6 |
-| `one_front` | yes | 200 / 2 / 0 | **776** | 73 | 6 |
+| `per_view` | yes | 200 / 2 / 0 | **567** | 76 | 9 |
+| `one_front` | yes | 200 / 2 / 0 | **721** | 74 | 7 |
 
 Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, and both
 report every config received in time.
 
-`one_front` is 35 cycles faster over the same 73 operations. Where that comes from (a 1×2 instead of
-a 1×3 crossbar, or one front instead of three) has **not** been isolated; the cycle counts are exact
-and gated, the attribution is open.
+`per_view` is the faster shape here: with three fronts the writer's pushes and the reader's pops reach
+different views at the same time. Behind `one_front` they take turns — that serialization is the
+[ordering guarantee](../../guide/interface/axi_mm/slave.md#ordering), and this is its price.
 
-**Against pysim.** pysim says 742 for `one_front` — 4% under RTL's 776. For `per_view` it says 423,
-and that gap is not the adaptor: it is the bus master. `AxiMmMaster` keeps one transaction outstanding,
-so the writer's and the reader's operations take turns even when they go to different slaves; a pysim
-`MMIFMaster` lets a read and a write run at once. Make the pysim master take one transaction at a time
-and `per_view` drops to 742 too — the same as `one_front`, whose single front serializes them anyway.
-Which master is the right model of a real host is an open question. See
-[Python simulation](pysim.md#how-close-is-pysims-timing).
+**What the master costs.** The same host with the one-at-a-time master (`OVERLAP_RW = False`):
+
+| topology | one read and one write at once | one transaction at a time |
+|---|---|---|
+| `per_view` | **567** | 811 |
+| `one_front` | **721** | 776 |
+
+`per_view` gains most, since its reads and writes go to different fronts. `one_front` gains too: its
+front still serves one transaction at a time, but the master no longer waits for a write's response
+before presenting the next read's address.
+
+**Against pysim.** pysim says 742 for `one_front` (3% over RTL) and 423 for `per_view` (25% under).
+The `per_view` gap is not attributed yet. See [Python simulation](pysim.md#how-close-is-pysims-timing).
 
 Before the host was rewritten on the endpoints, a single-process host that drained queue out before
-every push measured 857 and 823 on the same RTL.
+every push measured 857 and 823 on the same RTL, with the one-at-a-time master.
 
 ## Before the run: is this the RTL I think it is?
 

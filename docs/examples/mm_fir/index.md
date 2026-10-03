@@ -76,8 +76,8 @@ and an output equal to "switched where it arrived", not to the plan.
 
 - A kernel reached through registers and queues, with **no** change to how a kernel is written.
 - The adaptor's views behind the real AMD crossbar, gated bit-exact at RTL in two shapes: one view
-  per crossbar slot (811 cycles), and all three views behind one front with a generated decoder
-  (776 cycles).
+  per crossbar slot (567 cycles), and all three views behind one front with a generated decoder
+  (721 cycles).
 - One host program, holding endpoints and never an address, run over the bus in pysim, joined
   directly to the kernel in pysim, and — written against the C++ twins of the same endpoints — over
   the bus at RTL.
