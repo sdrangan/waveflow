@@ -84,8 +84,15 @@ def test_mm_fir_rtl_cycles(fir_run):
 #: master overlaps one read and one write (mm_fir_xsi.OVERLAP_RW).  per_view 768 (124 ops, 5 polls) /
 #: one_front 783 (125 ops, 4 polls).
 #:
-#: pysim says 536 / 874 -- and so gets the ORDER of the two topologies wrong (RTL: nearly equal; pysim:
-#: per_view far faster).  Not attributed; it is the same open question as the earlier 25% gap.
+#: pysim says 734 / 792 (-4.4% / +1.1%), after three model fixes found by lining up both backends' bus
+#: operations one by one (it said 536 / 874 before -- the topology ORDER wrong):
+#:   * the crossbar's 4-cycle latency is 2 of travel + 2 at the slave, and the travel overlaps whatever
+#:     a one-at-a-time slave is serving (AXIMMCrossBarIF.latency_travel = 2) -- every read/write switch
+#:     behind the adaptor's front cost pysim 2 extra cycles;
+#:   * the host's master keeps one read + one write in flight, like AxiMmMaster with overlap_rw
+#:     (MMIFMaster.max_outstanding = 1) -- pysim let the writer's and the reader's polls travel together;
+#:   * the C++ host presents each transaction 2 cycles after its process's previous one finished
+#:     (MMIFMaster.issue_cycles = 2) -- the testbench host's own pacing.
 #:
 #: History (same RTL scenario):
 #:   * header pattern with ONE sample per 64-bit word (hand-packed): 937 / 922 (143 / 124 ops), pysim

@@ -39,6 +39,7 @@ from examples.mm_fir.mm_fir import (
     FirCmdHdr,
     FirRespHdr,
     FirStatus,
+    HOST_MAX_OUTSTANDING,
     host_schedule,
     make_cfg,
 )
@@ -92,11 +93,14 @@ VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_ax
 
 NSAMP, SWITCH_AT, PKT, POLL = 200, 101, 16, 8
 
-#: The C++ host's bus master may have one read AND one write outstanding at once (AxiMmMaster's
-#: ``overlap_rw``).  AXI's read and write channels are independent and AMD's crossbar routes them in
-#: parallel, so a host whose writer and reader run concurrently -- this one -- overlaps them on a real
-#: bus, and the pysim MMIFMaster does too.  False is the one-transaction-at-a-time master (a single-
-#: threaded driver), which is what the cycle counts before 2026-10-03 were measured with.
+#: The C++ host's bus master keeps one read AND one write outstanding at once (AxiMmMaster's
+#: ``overlap_rw``) -- derived from ``mm_fir.HOST_MAX_OUTSTANDING``, the same setting pysim's
+#: ``MMIFMaster.max_outstanding`` uses, so the two backends cannot model different masters.
+#: AxiMmMaster supports exactly one per direction (overlap) or one in total (not), so any other limit
+#: is refused rather than silently approximated.
+if HOST_MAX_OUTSTANDING != 1:
+    raise ValueError(f"AxiMmMaster models one transaction per direction; HOST_MAX_OUTSTANDING is "
+                     f"{HOST_MAX_OUTSTANDING}")
 OVERLAP_RW = True
 TAPS_A = [3, -1, 4, 1, -5]
 TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]

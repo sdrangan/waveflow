@@ -125,6 +125,25 @@ class FirStatus(DataList):
 
 
 REGS, QIN, QOUT, QRESP = 0x0000, 0x1000, 0x2000, 0x3000
+
+#: The host's bus master: one read and one write in flight at a time, each direction in issue order.
+#: AXI's read and write channels are independent and AMD's crossbar routes them in parallel, so a host
+#: whose writer and reader run concurrently overlaps them -- but each process waits for its own
+#: transaction before the next.  ONE setting for both backends: pysim's ``MMIFMaster.max_outstanding``
+#: and the XSI testbench's ``AxiMmMaster(..., overlap_rw=true)`` (``mm_fir_xsi``) both read it.
+HOST_MAX_OUTSTANDING = 1
+
+#: The host's own pacing: cycles between a process asking for its next transaction and the master
+#: presenting it.  2 is what the XSI testbench's host does (an endpoint sees its previous transaction
+#: finish, then ``AxiMmMaster`` presents the next), measured by lining up both backends' bus
+#: operations.  It models the TESTBENCH host; a real host's number is its own.
+HOST_ISSUE_CYCLES = 2
+
+#: AMD's ``axi_crossbar`` as ``AxiXbarConfig`` generates it, at 100 MHz, measured at RTL: a request
+#: takes 4 cycles, 2 of them travelling to the slave -- overlapped with whatever the slave is serving.
+#: (``plans/mm_adaptor_host_endpoints.md``, the timing probe.)  A property of the interconnect, so it
+#: belongs in the platform model; it is here until that exists.
+XBAR_LATENCY, XBAR_TRAVEL = 4.0, 2.0
 #: Depth of the response FIFO: one word per packet, so a handful of packets in flight.
 RDEPTH = 16
 
@@ -325,7 +344,8 @@ class FirHost(SimObj):
     def __post_init__(self) -> None:
         super().__post_init__()
         #: The bus master, when the system is memory-mapped (unbound when it is direct).
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW)
+        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW,
+                            max_outstanding=HOST_MAX_OUTSTANDING, issue_cycles=HOST_ISSUE_CYCLES)
         self.cfg: StreamIFMaster | None = None
         self.qin: StreamIFMaster | None = None
         self.qout: StreamIFSlave | None = None
@@ -402,7 +422,8 @@ class MmFirSystem:
     #: Stage 4: all three views behind one adaptor port instead of one crossbar slot each.
     one_front: bool = False
     link: str = "mm"
-    xbar_latency: float = 4.0
+    xbar_latency: float = XBAR_LATENCY
+    xbar_travel: float = XBAR_TRAVEL
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -462,7 +483,8 @@ class MmFirSystem:
             ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000), (QRESP, 0x1000)]
         self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1,
                                     nports_slave=len(slaves), bitwidth=DW,
-                                    latency_init=self.xbar_latency)
+                                    latency_init=self.xbar_latency,
+                                    latency_travel=self.xbar_travel)
         self.xbar.bind("master_0", self.host.m)
         for k, ep in enumerate(slaves):
             self.xbar.bind(f"slave_{k}", ep)
