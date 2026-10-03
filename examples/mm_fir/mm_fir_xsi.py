@@ -27,7 +27,8 @@ import numpy as np
 
 from examples.mm_fir.mm_fir import (
     DW,
-    MmFirSystem,
+    MM_BASE,
+    MM_LAYOUT,
     QDEPTH,
     QIN,
     QOUT,
@@ -44,6 +45,7 @@ from examples.mm_fir.mm_fir import (
     make_cfg,
 )
 from waveflow.hw.arrayutils import array
+from waveflow.hw.mm_host import bases_to_cpp_header
 from waveflow.build.axi_xbar import (
     AxiXbarConfig,
     AxiXbarRange,
@@ -164,11 +166,16 @@ def field_pos(schema, name: str) -> tuple[int, int, int]:
     raise AssertionError(name)
 
 
-def map_header(topology: str) -> str:
-    """The address map the C++ host uses, generated from the SAME pysim system the pysim gates run
-    (``MmFirSystem.slave_map``), so the testbench restates no base and no offset."""
-    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
-    return sysm.slave_map.to_cpp_header("mm_fir_map", source="examples/mm_fir/mm_fir_xsi.py")
+def address_headers() -> dict[str, str]:
+    """The two halves of the address map the C++ host uses (``plans/bus_address_map.md``): the FIR
+    TYPE's layout (offsets within the slave, from ``MmFir.mm_views``) and this SYSTEM's bases (where
+    the FIR instance is placed).  The testbench combines them -- ``at(mm_fir_layout::qin, FIR)`` -- and
+    restates neither.  The same for both topologies: one front or one slot per view, the views sit at
+    the same offsets."""
+    src = "examples/mm_fir/mm_fir_xsi.py"
+    return {"mm_fir_layout.h": MM_LAYOUT.to_cpp_header("mm_fir_layout", source=src),
+            "mm_fir_bases.h": bases_to_cpp_header("mm_fir_bases", {"fir": (MM_BASE, MM_LAYOUT.span)},
+                                                  source=src)}
 
 
 def render_tb(dll: str, x) -> str:
@@ -202,7 +209,8 @@ def render_tb(dll: str, x) -> str:
 // a writer and a reader sharing one AxiMmMaster, and no address anywhere in this file.
 #include "xsi_bfm.h"
 #include "xsi_mm_host.h"
-#include "mm_fir_map.h"
+#include "mm_fir_layout.h"
+#include "mm_fir_bases.h"
 using namespace wfbfm;
 
 enum {{ CFG = 0, PKT = 1 }};
@@ -214,6 +222,8 @@ static const std::vector<Item> SCHEDULE = {{
 {chr(10).join(rows)}
 }};
 static const long POLL = {POLL};
+/// Where this system placed the FIR -- its views are this plus the type's layout offsets.
+static const uint64_t FIR = mm_fir_bases::FIR_BASE;
 static const uint32_t NSAMP = {len(x)};
 
 static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int width) {{
@@ -227,7 +237,9 @@ static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int wid
 class Writer : public XsiSimObj {{
 public:
     Writer(AxiMmMaster& m, const IrqPin& qin_irq)
-        : cfg_(m, mm_fir_map::regs, POLL), qin_(m, mm_fir_map::qin, POLL) {{ qin_.use_irq(qin_irq); }}
+        : cfg_(m, at(mm_fir_layout::regs, FIR), POLL), qin_(m, at(mm_fir_layout::qin, FIR), POLL) {{
+        qin_.use_irq(qin_irq);
+    }}
     bool done() const {{ return i_ >= SCHEDULE.size() && phase_ == IDLE; }}
     long polls() const {{ return qin_.polls; }}
 
@@ -258,8 +270,8 @@ private:
 class Reader : public XsiSimObj {{
 public:
     Reader(AxiMmMaster& m, const IrqPin& qout_irq, const IrqPin& qresp_irq)
-        : qout_(m, mm_fir_map::qout, POLL), qresp_(m, mm_fir_map::qresp, POLL),
-          st_(m, mm_fir_map::regs, POLL) {{ qout_.use_irq(qout_irq); qresp_.use_irq(qresp_irq); }}
+        : qout_(m, at(mm_fir_layout::qout, FIR), POLL), qresp_(m, at(mm_fir_layout::qresp, FIR), POLL),
+          st_(m, at(mm_fir_layout::regs, FIR), POLL) {{ qout_.use_irq(qout_irq); qresp_.use_irq(qresp_irq); }}
     bool done() const {{ return phase_ == DONE; }}
     long polls() const {{ return qout_.polls + qresp_.polls; }}
     std::vector<uint64_t> y, final_status;
@@ -355,5 +367,5 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600) -> str:
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
                tb_cpp=render_tb(ws.design_dll, scenario_x()),
                extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology),
-                            "mm_fir_map.h": map_header(topology)})
+                            **address_headers()})
     return ws.run(timeout=timeout)

@@ -63,6 +63,20 @@ struct MmView {
     }
 };
 
+/// One view of a slave TYPE, at an offset relative to the slave -- the per-type half of the address
+/// map (plans/bus_address_map.md), from MemSlaveLayout.to_cpp_header.  at(view, base) places it.
+struct MmViewLayout {
+    const char* name;
+    MmKind kind;
+    uint64_t offset;        ///< the view's offset within the slave
+    uint32_t window, bpw, depth, ncfg, nstat, nelem;
+};
+
+/// A layout view placed at an instance's base: the view a bus master's endpoint uses.
+inline MmView at(const MmViewLayout& l, uint64_t base) {
+    return MmView{l.name, l.kind, base + l.offset, l.window, l.bpw, l.depth, l.ncfg, l.nstat, l.nelem};
+}
+
 /// One interrupt pin of the DUT, sampled every cycle -- the C++ end of an IrqIF.  Put it in the
 /// participant list with the endpoints that wait on it.
 class IrqPin : public XsiSimObj {
@@ -116,7 +130,7 @@ protected:
     }
 
     AxiMmMaster& m_;
-    const MmView& v_;
+    const MmView v_;            ///< by value: a view built as at(layout, base) may be a temporary
     long poll_;
     size_t op_ = 0;
     int state_ = 0;

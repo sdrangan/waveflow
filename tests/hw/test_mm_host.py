@@ -20,6 +20,7 @@ from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
     MemSlaveLayout,
+    bases_to_cpp_header,
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveMap,
@@ -530,3 +531,17 @@ def test_two_instances_of_one_type_one_layout_two_bases():
     inst = MemSlaveLayout.from_adaptor(devs["a"].adaptor)
     assert [(v.kind, v.base, v.depth) for v in inst.views.values()] ==         [(v.kind, v.base, v.depth) for v in layout.views.values()]
     assert inst.span == layout.span
+
+
+def test_layout_and_bases_headers_split_the_address_map():
+    """The per-type header carries offsets and no base; the per-system header carries bases and no
+    offsets.  The C++ host combines them with wfbfm::at(view, base)."""
+    lay = MemSlaveLayout.of(ScaleDev, mem_dwidth=DW)
+    h = lay.to_cpp_header("scale_layout")
+    assert "static const uint64_t SPAN = 0x4000ull;" in h
+    assert ('static const wfbfm::MmViewLayout qout = {"qout", wfbfm::MmKind::QueueOut, 0x2000ull, '
+            '4096u, 8u, 16u, 0u, 0u, 0u};') in h
+    b = bases_to_cpp_header("sys_bases", {"a": (0x4000_0000, lay.span), "b": (0x4001_0000, lay.span)})
+    assert "A_BASE = 0x40000000ull, A_SPAN = 0x4000ull;" in b
+    assert "B_BASE = 0x40010000ull, B_SPAN = 0x4000ull;" in b
+    assert "MmView" not in b and "0x4000000" not in h
