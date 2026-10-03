@@ -142,7 +142,10 @@ class MmFir(FreeRunMod):
         super().__post_init__()
         self.s_cfg = StreamIFSlave(name=f"{self.name}_s_cfg", sim=self.sim, bitwidth=DW, has_tlast=True)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=DW, has_tlast=True)
-        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=DW, has_tlast=True)
+        # Unframed: queue out carries no packet boundary to the bus, and the RTL kernel has no
+        # TLAST pin on this port (mm_fir_xsi.render_top ties it off).
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=DW,
+                                    has_tlast=False)
         self.m_status = StreamIFMaster(name=f"{self.name}_m_status", sim=self.sim, bitwidth=DW,
                                        has_tlast=True)
         for ep in (self.s_cfg, self.s_in, self.m_out, self.m_status):

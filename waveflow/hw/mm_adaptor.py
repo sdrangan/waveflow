@@ -45,6 +45,12 @@ class MemSlaveAdaptor(HwModule):
         super().__post_init__()
         if not self.views:
             raise ValueError(f"{type(self).__name__} needs at least one view")
+        names = [v.name for v in self.views]
+        dup = sorted({n for n in names if names.count(n) > 1})
+        if dup:
+            # A bus master reaches a view BY NAME (MemSlaveMap), so a name must pick out one window.
+            raise ValueError(f"{self.name}: two views are named {dup[0]!r}; view names must be "
+                             f"unique within an adaptor")
         for v in self.views:
             if not hasattr(v, "s_mem"):
                 raise TypeError(f"{type(v).__name__} is not a memory-mapped view (no s_mem)")
@@ -74,6 +80,13 @@ class MemSlaveAdaptor(HwModule):
     def offset_of(self, view) -> int:
         """Local byte offset of *view*'s window."""
         return self.views.index(view) * VIEW_BYTES
+
+    def slave_map(self):
+        """The address map a bus master needs, as plain data -- every view by name, at its absolute
+        bus address.  Call it after :func:`~waveflow.hw.memif.assign_address_ranges` has given
+        :attr:`s_mem` a base.  See :class:`~waveflow.hw.mm_host.MemSlaveMap`."""
+        from waveflow.hw.mm_host import MemSlaveMap
+        return MemSlaveMap.from_adaptor(self)
 
     def _route(self, local_addr: int):
         k, off = divmod(int(local_addr), VIEW_BYTES)

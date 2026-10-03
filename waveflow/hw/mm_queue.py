@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 
@@ -68,6 +69,9 @@ class MemSlaveWStream(HwModule):
     channel ``m_out`` is bound to IS the FIFO: its ``depth`` must equal :attr:`depth`, checked when
     the simulation starts.
     """
+
+    #: What a bus master reaches this view as -- see :class:`~waveflow.hw.mm_host.MemSlaveMap`.
+    view_kind: ClassVar[str] = "queue_in"
 
     mem_dwidth: HwParam[int] = 64
     depth: HwParam[int] = 512
@@ -156,7 +160,13 @@ class MemSlaveRStream(HwModule):
     Endpoints: ``s_mem`` (:class:`~waveflow.hw.memif.MMIFSlave`) and ``s_in``
     (:class:`~waveflow.hw.interface.StreamIFSlave`, the kernel writes to it).  Local addresses below
     ``window / 2`` pop data; at or above it, a read returns the occupancy.
+
+    ``s_in`` is **unframed** (``has_tlast=False``): the bus side has no way to see a packet
+    boundary (the RTL drops TLAST), so the honest declaration is that this queue does not carry
+    one, and a kernel feeding it declares its own end ``has_tlast=False`` to match.
     """
+
+    view_kind: ClassVar[str] = "queue_out"
 
     mem_dwidth: HwParam[int] = 64
     depth: HwParam[int] = 512
@@ -171,7 +181,7 @@ class MemSlaveRStream(HwModule):
                                rx_write_proc=self._on_write, rx_read_proc=self._on_read,
                                peek_read=self._peek)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=dw,
-                                  has_tlast=True)
+                                  has_tlast=False)
         for ep in (self.s_mem, self.s_in):
             self.add_endpoint(ep)
         self._dt = _dtype(dw)
@@ -198,7 +208,8 @@ class MemSlaveRStream(HwModule):
             if not self._held and self.s_in.data_buffer.items:
                 # A burst is already waiting, so this get() does not block: it only moves the words
                 # from the channel to here (retiring them frees the kernel's side of the FIFO).
-                burst = yield from self.s_in.get()
+                # Unframed, so get() needs a count: take exactly the waiting burst, whole.
+                burst = yield from self.s_in.get(nwords_max=len(self.s_in.data_buffer.items[0]))
                 self._held.extend(int(w) for w in np.asarray(burst).tolist())
             if self._held:
                 out[i] = self._held.popleft()
