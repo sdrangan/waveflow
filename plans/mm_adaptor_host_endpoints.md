@@ -288,7 +288,7 @@ runs exactly that; its negative control (a raw, non-polling writer) deadlocks as
   per-view vs one-front timing was *equal* and is now *one front slower* (writer and reader overlap
   behind separate fronts and take turns behind one: 423 vs 742 cycles on the docs scenario); the late
   config's switch sample was *exactly 128* and is now "the sample it arrived at", which is 128 over
-  the bus and 112 direct.
+  the bus and 112 direct (128 once the kernel got its csynth timing model).
 - **pysim no longer compares with RTL** on mm_fir until Stage 2: the RTL gate (857 / 823) still runs
   the single-process C++ host. `docs/examples/mm_fir/pysim.md` says so.
 

@@ -110,16 +110,16 @@ packet, so the host has to cut a packet at the switch.
 |---|---|---|---|
 | one view per crossbar port | yes | 200 / 2 / 0 | 423 |
 | three views behind one adaptor (`one_front=True`) | yes | 200 / 2 / 0 | 742 |
-| direct (`link="direct"`) | yes | 200 / 2 / 0 | 265 |
+| direct (`link="direct"`) | yes | 200 / 2 / 0 | 256 |
 | late host (`lag=32`) — the negative control | **no** | 200 / 2 / **1** | 423 |
 
 The last row is the one that gives the others their meaning. A host that commits the second config 32
 samples after its `apply_at` produces output that does **not** match the plan — and it matches the
 golden for "the second taps took effect at sample 133", exactly where the config arrived. The kernel
 counted the miss. Without this run, a pass in the first rows could mean the protocol works or that it
-was never exercised. (Direct, the same late host switches at sample 112: with no bus in between the
-kernel keeps closer behind the host, so fewer samples are still queued when the config lands. Still
-late, still counted.)
+was never exercised. (Direct, the same late host switches at sample 128 rather than 133: with no bus
+in between, how far the kernel lags the host is different, so a different number of samples is still
+queued when the config lands. Still late, still counted.)
 
 **One front is slower than one port per view**, because the host's writer and reader overlap behind
 separate fronts and take turns behind one. That serialization is the

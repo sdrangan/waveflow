@@ -3,7 +3,7 @@ title: Python model
 parent: A memory-mapped FIR
 nav_order: 1
 has_children: false
-summary: "The Python side of mm_fir: two DataList messages (the config and the status) that also generate the C++ structs, an exact-integer golden, the kernel as a FreeRunMod whose run_iter is one config, one packet of samples, or one idle cycle, and the host program that commits configs, waits for them to be received, paces the samples and drains the results."
+summary: "The Python side of mm_fir: two DataList messages (the config and the status) that also generate the C++ structs, an exact-integer golden, the kernel as a FreeRunMod whose run_iter is one config, one packet of samples, or one idle cycle, and the host program -- a writer that commits configs, waits for them to be received and sends the samples, and a reader that takes the results."
 ---
 
 # Python model
@@ -53,17 +53,19 @@ def fir_golden(x, cfgs) -> np.ndarray:
     """Exact FIR over the whole stream: sample *n* uses the latest config with ``apply_at <= n``."""
     x = np.asarray(x, dtype=np.int64)
     y = np.zeros(len(x), dtype=np.int64)
-    order = sorted(cfgs, key=lambda c: c[0])
-    for n in range(len(x)):
-        taps = np.zeros(0, dtype=np.int64)
-        for at, t in order:
-            if at <= n:
-                taps = np.asarray(t, dtype=np.int64)
-        for k, c in enumerate(taps):
-            if n - k >= 0:
-                y[n] += int(c) * int(x[n - k])
+    order = sorted(cfgs, key=lambda c: c[0])        # stable: of two configs at one sample, the later wins
+    for i, (at, taps) in enumerate(order):
+        end = min(order[i + 1][0] if i + 1 < len(order) else len(x), len(x))
+        taps = np.asarray(taps, dtype=np.int64)
+        if end > at and len(taps):
+            y[at:end] = np.convolve(x, taps)[at:end]
     return y
 ```
+
+Each config's taps are applied to the whole input with one `np.convolve`, and the config keeps the
+samples it is in force for. The loop is over configs — a handful — not samples. `np.convolve` on
+`int64` is integer arithmetic, so the result is exact with nothing to round: int16 samples times int16
+taps, summed over at most 16 taps, need 37 bits.
 
 Two properties are worth stating because the kernel must match them: the filter **history is
 continuous across a switch** (only the taps change — the samples already seen stay in the delay
@@ -82,7 +84,8 @@ line), and samples before the first config see all-zero taps. `cfgs` is the plan
 | `m_status` | out | `FirStatus` messages, to the register bank |
 
 One firing of `run_iter` is exactly one of three things — a config, a packet of samples, or an idle
-cycle — and the config is checked **first**:
+cycle — and the config is checked **first**. A packet is filtered by `_filter` and timed as the HLS body
+runs:
 
 ```python
     def run_iter(self):
@@ -101,21 +104,41 @@ cycle — and the config is checked **first**:
             return
         if self.s_in.data_buffer.items:
             pkt = yield from self.s_in.get()
-            out = np.zeros(len(pkt), dtype=np.uint64)
-            for i, w in enumerate(np.asarray(pkt).tolist()):
-                if self.pending is not None and self.pending[0] <= self.nsamp:
-                    self.taps, self.pending = self.pending[1], None
-                xn = _s16(int(w))
-                window = np.concatenate([[xn], self.hist[:NTAP_MAX - 1]])
-                acc = int(np.dot(self.taps, window[:len(self.taps)])) if len(self.taps) else 0
-                out[i] = np.uint64(acc & 0xFFFF_FFFF_FFFF_FFFF)
-                self.hist = window[:NTAP_MAX]
-                self.nsamp += 1
-            yield from self.m_out.write(out)
+            n = len(pkt)
+            # The packet's first word arrived (n - 1) cycles before its last, at II=1.
+            tstart = self.env.now - (n - 1) * self.clk.period
+            y = self._filter(samples_of(pkt))
+            # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
+            # sample arrived, and one result follows every proc_ii cycles.
+            t_out_start = tstart + self.proc_latency * self.clk.period
+            proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
+            yield self.timeout(proc_time)
+            yield from self.m_out.write_pipelined(y.view(np.uint64), t_out_start)
             yield from self._publish()
             return
         yield self.timeout(self.clk.period)         # idle: poll again next cycle
 ```
+
+`_filter` is the golden itself, run over the filter's history and the packet:
+
+```python
+    def _filter(self, x: np.ndarray) -> np.ndarray:
+        h, n = len(self.hist), len(x)
+        plan = [(0, self.taps)]
+        if self.pending is not None:
+            k = max(self.pending[0] - self.nsamp, 0)   # the sample in this packet it applies at
+            if k < n:
+                plan.append((h + k, self.pending[1]))
+                self.taps, self.pending = self.pending[1], None
+        y = fir_golden(np.concatenate([self.hist, x]), plan)[h:]
+        self.hist = np.concatenate([self.hist, x])[n:]
+        self.nsamp += n
+        return y
+```
+
+A pending config's `apply_at` lands on at most one sample of a packet, so a packet is at most two
+segments — the taps in force, then the new ones — and `fir_golden` filters each with one convolution.
+`hist` (the last 15 samples) is what keeps the delay line continuous from one packet to the next.
 
 What to read in it:
 
@@ -127,6 +150,11 @@ What to read in it:
   puts the pending one in force. The HLS body has exactly one slot too, which is why the Python does.
 - **`late`.** A config whose `apply_at` has already passed is in force from the next sample and
   counted. The status makes the miss visible; nothing pretends it was on time.
+- **The timing is the HLS body's.** `proc_ii = 1` and `proc_latency = 10` are the csynth report's
+  interval and latency: the first result leaves 10 cycles after the first sample arrived, one per
+  cycle after that — the same pattern as `PolyAccel` in
+  [stream_inband](../../../examples/stream_inband/poly.py). `write_pipelined` anchors the output at
+  `t_out_start`, so a packet's input and output overlap rather than adding.
 - **The idle branch** waits one clock and returns. It is the pysim model of an HLS loop that checks
   both streams with `read_nb` every cycle — and because such a loop never runs out of events, the
   testbench ends the simulation explicitly (`Simulation.run_sim(until=...)`).

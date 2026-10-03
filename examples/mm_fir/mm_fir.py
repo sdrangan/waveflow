@@ -95,18 +95,19 @@ def fir_golden(x, cfgs) -> np.ndarray:
 
     The filter history is continuous across a switch (only the taps change), and samples before the
     first config see all-zero taps.  *cfgs* is ``[(apply_at, taps), ...]``.
+
+    Each config's taps are applied to the WHOLE input with one ``np.convolve``, and the config keeps
+    the samples it is in force for.  ``np.convolve`` on ``int64`` is integer arithmetic, so this is
+    exact with no rounding: int16 samples times int16 taps, summed over at most 16 taps, need 37 bits.
     """
     x = np.asarray(x, dtype=np.int64)
     y = np.zeros(len(x), dtype=np.int64)
-    order = sorted(cfgs, key=lambda c: c[0])
-    for n in range(len(x)):
-        taps = np.zeros(0, dtype=np.int64)
-        for at, t in order:
-            if at <= n:
-                taps = np.asarray(t, dtype=np.int64)
-        for k, c in enumerate(taps):
-            if n - k >= 0:
-                y[n] += int(c) * int(x[n - k])
+    order = sorted(cfgs, key=lambda c: c[0])        # stable: of two configs at one sample, the later wins
+    for i, (at, taps) in enumerate(order):
+        end = min(order[i + 1][0] if i + 1 < len(order) else len(x), len(x))
+        taps = np.asarray(taps, dtype=np.int64)
+        if end > at and len(taps):
+            y[at:end] = np.convolve(x, taps)[at:end]
     return y
 
 
@@ -119,9 +120,9 @@ def make_cfg(taps, apply_at: int) -> FirCfg:
     return FirCfg(ntaps=len(taps), apply_at=int(apply_at), coeffs=coeffs)
 
 
-def _s16(w: int) -> int:
-    w &= 0xFFFF
-    return w - 0x10000 if w & 0x8000 else w
+def samples_of(words) -> np.ndarray:
+    """Sample words -> int16 values as int64: the low 16 bits of each 64-bit word are the sample."""
+    return (np.asarray(words, dtype=np.uint64) & 0xFFFF).astype(np.uint16).view(np.int16).astype(np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,11 @@ class MmFir(FreeRunMod):
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
+    #: Timing of the HLS body, from its csynth report: pipelined at II=1, latency 10 cycles (pipeline
+    #: depth 11).  A sample's result leaves ``proc_latency`` cycles after the sample arrived, and one
+    #: sample is taken per ``proc_ii`` cycles.
+    proc_ii: int = 1
+    proc_latency: int = 10
 
     def kernel_task(self):
         """The hand-written HLS body, ``include/mm_fir_task.h`` -- the twin of :meth:`run_iter`."""
@@ -160,13 +166,31 @@ class MmFir(FreeRunMod):
         #: ONE pending slot -- ``(apply_at, taps)`` received but not yet in force -- as in the RTL.
         #: A config arriving while one is pending first puts the pending one in force.
         self.pending: tuple[int, np.ndarray] | None = None
-        self.hist = np.zeros(NTAP_MAX, dtype=np.int64)      # hist[k] = x[n-1-k]
+        #: The last NTAP_MAX - 1 samples, oldest first: the filter's memory across packets.
+        self.hist = np.zeros(NTAP_MAX - 1, dtype=np.int64)
         self.nsamp = 0
         self.ncfg = 0
         self.late = 0
 
     def _publish(self):
         yield from self.m_status.write(FirStatus(nsamp=self.nsamp, ncfg=self.ncfg, late=self.late))
+
+    def _filter(self, x: np.ndarray) -> np.ndarray:
+        """Filter one packet: :func:`fir_golden` over the history and the packet, with the taps in
+        force and -- if a pending config's ``apply_at`` falls inside this packet -- the switch to its
+        taps at that sample.  A packet holds at most one switch (one pending slot), so it is at most
+        two segments, each a vectorized convolution."""
+        h, n = len(self.hist), len(x)
+        plan = [(0, self.taps)]
+        if self.pending is not None:
+            k = max(self.pending[0] - self.nsamp, 0)   # the sample in this packet it applies at
+            if k < n:
+                plan.append((h + k, self.pending[1]))
+                self.taps, self.pending = self.pending[1], None
+        y = fir_golden(np.concatenate([self.hist, x]), plan)[h:]
+        self.hist = np.concatenate([self.hist, x])[n:]
+        self.nsamp += n
+        return y
 
     def run_iter(self):
         cfg = yield from self.s_cfg.get_schema_nb(FirCfg)
@@ -184,17 +208,16 @@ class MmFir(FreeRunMod):
             return
         if self.s_in.data_buffer.items:
             pkt = yield from self.s_in.get()
-            out = np.zeros(len(pkt), dtype=np.uint64)
-            for i, w in enumerate(np.asarray(pkt).tolist()):
-                if self.pending is not None and self.pending[0] <= self.nsamp:
-                    self.taps, self.pending = self.pending[1], None
-                xn = _s16(int(w))
-                window = np.concatenate([[xn], self.hist[:NTAP_MAX - 1]])
-                acc = int(np.dot(self.taps, window[:len(self.taps)])) if len(self.taps) else 0
-                out[i] = np.uint64(acc & 0xFFFF_FFFF_FFFF_FFFF)
-                self.hist = window[:NTAP_MAX]
-                self.nsamp += 1
-            yield from self.m_out.write(out)
+            n = len(pkt)
+            # The packet's first word arrived (n - 1) cycles before its last, at II=1.
+            tstart = self.env.now - (n - 1) * self.clk.period
+            y = self._filter(samples_of(pkt))
+            # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
+            # sample arrived, and one result follows every proc_ii cycles.
+            t_out_start = tstart + self.proc_latency * self.clk.period
+            proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
+            yield self.timeout(proc_time)
+            yield from self.m_out.write_pipelined(y.view(np.uint64), t_out_start)
             yield from self._publish()
             return
         yield self.timeout(self.clk.period)         # idle: poll again next cycle
