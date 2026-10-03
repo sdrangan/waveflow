@@ -27,14 +27,11 @@ import numpy as np
 
 from examples.mm_fir.mm_fir import (
     DW,
+    MmFirSystem,
     MM_BASE,
     MM_LAYOUT,
     QDEPTH,
-    QIN,
-    QOUT,
-    QRESP,
     RDEPTH,
-    REGS,
     S16,
     FirCfg,
     FirCmdHdr,
@@ -48,7 +45,6 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.mm_host import bases_to_cpp_header
 from waveflow.build.axi_xbar import (
     AxiXbarConfig,
-    AxiXbarRange,
     axi_port_decls,
     axi_signals,
     axi_wire_decls,
@@ -60,7 +56,6 @@ from waveflow.build.mm_adaptor_gen import (
     RegBankView,
     leaf_sources,
     mi_wire_signals,
-    adaptor_law,
     render_adaptor_slot,
     render_view_slot,
 )
@@ -75,17 +70,9 @@ RTL = ROOT / "mm_fir_proj" / "solution1" / "syn" / "verilog"
 #:                crossbar.  MI1 is a stub nothing addresses: a 1x1 crossbar is degenerate (create_ip
 #:                generates an inconsistent 2-MI IP for it -- see AxiXbarConfig), and a real system has
 #:                more than one slave anyway.
-XBARS = {
-    "per_view": AxiXbarConfig(
-        name="xbar_mm4_1x4", n_si=1,
-        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12),
-            AxiXbarRange(QRESP, 12)],
-        data_width=DW, addr_width=32, id_width=1),
-    "one_front": AxiXbarConfig(
-        name="xbar_mm1_1x2", n_si=1,
-        mi=[AxiXbarRange(REGS, adaptor_law(4)), AxiXbarRange(0x0001_0000, 12)],
-        data_width=DW, addr_width=32, id_width=1),
-}
+#: Their crossbars' IP names.  The ranges are NOT written here: :func:`xbar_config` reads them off the
+#: pysim system's crossbar, where ``assign_address_ranges`` set them (``plans/bus_address_map.md`` D4).
+XBAR_NAMES = {"per_view": "xbar_mm4_1x4", "one_front": "xbar_mm1_1x2"}
 NCFG = FirCfg.nwords_per_inst(DW)
 NSTAT = FirStatus.nwords_per_inst(DW)
 VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_axis="k_stat"),
@@ -109,12 +96,21 @@ TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]
 PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
 
 
+def xbar_config(topology: str) -> AxiXbarConfig:
+    """The RTL crossbar for *topology*, generated from the pysim system's own crossbar -- the same
+    slaves at the same ranges, so an address is written once (``MM_BASE`` + the type's layout)."""
+    if topology not in XBAR_NAMES:
+        raise ValueError(f"topology must be one of {sorted(XBAR_NAMES)}, got {topology!r}")
+    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    return AxiXbarConfig.from_crossbar(sysm.xbar, XBAR_NAMES[topology])
+
+
 def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
 
 
 def render_top(top: str, topology: str) -> str:
-    xbar = XBARS[topology]
+    xbar = xbar_config(topology)
     dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
@@ -356,12 +352,12 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600) -> str:
 
     Needs Vivado (``create_ip`` + xsim) and the kernel's RTL (``python -m examples.mm_fir.mm_fir_build``).
     """
-    if topology not in XBARS:
-        raise ValueError(f"topology must be one of {sorted(XBARS)}, got {topology!r}")
+    if topology not in XBAR_NAMES:
+        raise ValueError(f"topology must be one of {sorted(XBAR_NAMES)}, got {topology!r}")
     if not RTL.is_dir():
         raise FileNotFoundError(f"no csynth RTL at {RTL}: run python -m examples.mm_fir.mm_fir_build")
     work_dir = Path(work_dir)
-    ip = generate_axi_xbar(XBARS[topology], work_dir / "ip")
+    ip = generate_axi_xbar(xbar_config(topology), work_dir / "ip")
     ws = XsiWorkspace(work_dir / f"mm_fir_{topology}", top="mm_fir_top")
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + ["mm_fir_top.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
