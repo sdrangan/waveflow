@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from enum import Enum
@@ -531,6 +531,10 @@ class MemoryMod(HwModule):
     When ``inline=False`` external callers use ``alloc()`` / ``free()`` to
     carve out regions, then access them via their own wired ``MMIFMaster``.
     """
+
+    #: A plain memory on a bus has a base and a span but no views, so a bus walk
+    #: (:func:`~waveflow.hw.mm_device.bus_address_headers`) lists it in the bases header only.
+    bus_memory: ClassVar[bool] = True
 
     word_size: int = 32        # bits per word
     addr_size: int = 32        # address bits

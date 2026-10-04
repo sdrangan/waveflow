@@ -139,7 +139,20 @@ class FreeRunMod(HwModule):
                 f"port names, in add_comp x add_endpoint order). Only a leaf derives its boundary "
                 f"entirely (from kernel_task()'s signature)."
             )
-        return tuple((attr, getattr(self, attr)) for attr in self.kernel_task().signature)
+        out = []
+        for attr in self.kernel_task().signature:
+            ep = getattr(self, attr)
+            phys = list(ep.physical_endpoints())
+            if phys == [ep]:
+                out.append((attr, ep))
+                continue
+            # A composite endpoint (a credit stream: forward + credit) is several boundary ports,
+            # in physical_endpoints() order -- the order its task args are spliced in.  Each is named
+            # after the attribute plus its own suffix (``m_u`` -> ``m_u_fwd``, ``m_u_crd``).
+            for p in phys:
+                suffix = p.name[len(ep.name) + 1:] if p.name.startswith(f"{ep.name}_") else p.name
+                out.append((f"{attr}_{suffix}", p))
+        return tuple(out)
 
     @boundary.setter
     def boundary(self, value) -> None:

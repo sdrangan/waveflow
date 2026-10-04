@@ -254,16 +254,25 @@ def bus_address_headers(xbar, *, system: str) -> dict[str, str]:
     (``<system>_bases.h``: ``<INSTANCE>_BASE`` / ``_SPAN`` per instance).  The keys are the file
     names, in include order.
 
-    Every slave on the crossbar must belong to a device built by :func:`build_mm_device` -- a slave
-    that does not (a plain memory) has no layout to give, and is refused rather than skipped.  Call it
-    after ``assign_address_ranges``.
+    Every slave on the crossbar must belong to a device built by :func:`build_mm_device`, or be a
+    **plain memory** (a component declaring ``bus_memory = True``, as
+    :class:`~waveflow.hw.memory.MemoryMod` does): a memory has no views, so it gets a base and a span
+    in the bases header and no layout header.  Any other slave has no layout to give and is refused
+    rather than skipped.  Call it after ``assign_address_ranges``.
     """
     from waveflow.hw.mm_host import bases_to_cpp_header
 
     devices: dict[int, tuple[MmSlaveDevice, int]] = {}
+    memories: dict[str, tuple[int, int]] = {}
     for k in range(int(xbar.nports_slave)):
         ep = xbar.endpoints.get(f"slave_{k}")
-        dev = getattr(getattr(ep, "comp", None), "mm_device", None) if ep is not None else None
+        comp = getattr(ep, "comp", None) if ep is not None else None
+        dev = getattr(comp, "mm_device", None)
+        if dev is None and getattr(type(comp), "bus_memory", False):
+            if ep.addr_range is None:
+                raise RuntimeError(f"{xbar.name}: slave_{k} has no address range yet")
+            memories[comp.name] = (int(ep.addr_range.base_addr), int(ep.addr_range.size))
+            continue
         if dev is None:
             raise TypeError(f"{xbar.name}: slave_{k} is not a memory-mapped device's port (no "
                             f"layout to generate)")
@@ -282,7 +291,8 @@ def bus_address_headers(xbar, *, system: str) -> dict[str, str]:
         ns = f"{_snake(type(dev.kernel).__name__)}_layout"
         out.setdefault(f"{ns}.h", dev.layout.to_cpp_header(ns, source=src))
     out[f"{system}_bases.h"] = bases_to_cpp_header(
-        f"{system}_bases", {dev.kernel.name: (base, dev.layout.span) for dev, base in devices.values()},
+        f"{system}_bases", {**{dev.kernel.name: (base, dev.layout.span)
+                               for dev, base in devices.values()}, **memories},
         source=src)
     return out
 

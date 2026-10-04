@@ -481,6 +481,11 @@ class MemWStream(FreeRunMod):
     #: forward buffer (this component holds the response bursts across the write, then echoes them).
     #: Default ``False`` keeps the legacy protocol.
     inband: HwParam[bool] = False
+    #: In-band only: whether ``s_done`` carries TLAST in pysim.  The HLS port never does (it is a plain
+    #: ``hls::stream<ap_uint<MEM_DW>>``), so ``False`` is the faithful choice when ``s_done`` feeds an
+    #: unframed consumer -- a queue-out view, say (``examples/markov``).  ``True`` (default) keeps the
+    #: whole-burst reads ``MemCopy``'s host makes.
+    done_framed: bool = True
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: When set, attach a :class:`~waveflow.calib.timing_model.StreamTimingModel` at this directory
     #: and inject its predicted (trailing) delay per firing — the posted-write drain the RTL law
@@ -515,7 +520,7 @@ class MemWStream(FreeRunMod):
         if self.emit_done:
             self.s_done = StreamIFMaster(
                 name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
-                has_tlast=bool(self.inband))
+                has_tlast=bool(self.inband) and bool(self.done_framed))
             eps.append(self.s_done)
         for ep in eps:
             self.add_endpoint(ep)
