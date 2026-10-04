@@ -562,3 +562,102 @@ def test_committed_implementation_check_per_module():
         differ = {m for m, r in mine.items() if r["csynth_dsp"] != r["impl_dsp"]}
         assert differ == {"CgVec"}
         assert int(mine["CgVec"]["impl_dsp"]) - int(mine["CgVec"]["csynth_dsp"]) == 16
+
+
+# --- the supplementary held-out set (step 5.8a, M5 review) ---------------------------------------
+
+
+def _supplement():
+    from examples.mimo_cg.mimo_cg import read_table
+
+    detail = read_table(MD.PAPER_DATA / "model_validation_supplement.csv")
+    metrics = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_supplement_metrics.csv")
+    }
+    return detail, metrics
+
+
+def test_supplement_is_scored_with_the_frozen_models_and_has_no_gates(tmp_path):
+    from examples.mimo_cg.hw import validate as V
+    from examples.mimo_cg.hw.space import read_supplement
+
+    V.validate(out_dir=tmp_path, role="supplement")
+    for name in (
+        "model_validation_supplement.csv",
+        "model_validation_supplement_metrics.csv",
+    ):
+        assert (tmp_path / name).read_bytes() == (MD.PAPER_DATA / name).read_bytes()
+        head = (MD.PAPER_DATA / name).read_text(encoding="utf-8").splitlines()[0]
+        assert (
+            f"model_sha256={FROZEN_MODEL_SHA256[:16]}" in head
+            and "role=supplement" in head
+        )
+    detail, metrics = _supplement()
+    assert {r["build"] for r in detail} == {b for b, _t, _r, _c in read_supplement()}
+    assert all(r["threshold"] == "" and r["pass"] == "" for r in metrics.values())
+    assert (
+        V.overlapping(role="supplement") == set()
+    )  # disjoint from the fit by construction
+
+
+def test_supplement_confirms_the_resource_models_at_k16():
+    """K = 16 vector units, a 16-lane matmul, an 8-row matmul and two K = 16 detectors: DSP and
+    BRAM exact everywhere, and the detectors' LUT and FF within the AC5 bounds."""
+    detail, metrics = _supplement()
+    blocks = metrics["blocks: DSP and BRAM both exact (%)"]
+    assert (blocks["n"], float(blocks["value"])) == ("6", 100.0)
+    mem = metrics["channel memories: BRAM, LUT and FF exact (%)"]
+    assert (mem["n"], float(mem["value"])) == ("24", 100.0)
+    assert float(metrics["designs: DSP exact (%)"]["value"]) == 100.0
+    assert float(metrics["designs: BRAM exact (%)"]["value"]) == 100.0
+    assert float(metrics["designs: LUT MAPE (%)"]["worst"]) < 2.0
+    assert float(metrics["designs: FF MAPE (%)"]["worst"]) < 7.0
+    designs = [r for r in detail if r["scope"] == "design" and r["quantity"] == "lut"]
+    assert sorted(int(r["measured"]) for r in designs) == [80124, 100104]
+    # the matmul LUT model extrapolates at 16 lanes (models.MM_FIT_LANES): 15% low there
+    lut = {
+        r["build"]: float(r["error_pct"])
+        for r in detail
+        if r["scope"] == "block:CgMm" and r["quantity"] == "lut"
+    }
+    assert -16.0 < lut["mm_k16_r2_c32_m4_w14_l16"] < -14.0
+    assert abs(lut["mm_k16_r8_c4_m4_w16_l1"]) < 3.0
+
+
+def test_supplement_finds_the_memory_bound_regime_the_cycle_model_lacks():
+    """Block spans hold at K = 16 (within 0.5% on the unit builds).  Job time does not, on one
+    detector: with 16 lanes an iteration is so short that a short job is limited by loading its
+    matrices through 32-bit memory words, and the interval between completions then depends on
+    the jobs around it, not on nit alone.  The model has no term for that (recorded for gate 6.0).
+    """
+    detail, metrics = _supplement()
+    for q in ("vec.iter", "vec.init", "mm.iter"):
+        assert float(metrics[f"unit builds: {q} span MAPE (%)"]["worst"]) < 0.5
+    jobs = {}
+    for r in detail:
+        if r["quantity"].startswith("job_cycles"):
+            jobs.setdefault(r["build"], []).append(float(r["error_pct"]))
+    fast, slow = (
+        "det_k16_l16_r8_c16_m3_w10g0_d32_s3_q2",
+        "det_k16_l2_r16_c16_m4_w8g0_d32_s4_q4",
+    )
+    assert (
+        max(abs(e) for e in jobs[slow]) < 0.1
+    )  # the loop is the bottleneck: the model holds
+    assert 15.0 < max(abs(e) for e in jobs[fast]) < 18.0  # memory-bound short jobs
+    # the model is never much too slow there, only too fast (a negative error)
+    assert all(e < 1.0 for e in jobs[fast])
+    # the same nit takes two different times in that run
+    cycles = _committed_cycles(fast)
+    assert len(cycles[2]) == 2 and max(cycles[2]) - min(cycles[2]) > 200
+
+
+def _committed_cycles(build: str) -> dict:
+    from examples.mimo_cg.mimo_cg import read_table
+
+    out: dict = {}
+    for r in read_table(MD.PAPER_DATA / "hw_cycles.csv"):
+        if r["build"] == build and r["quantity"] == "job_interval":
+            out.setdefault(int(r["nit"]), []).append(int(float(r["cycles"])))
+    return out

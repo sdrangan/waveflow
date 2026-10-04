@@ -292,3 +292,10 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   a failure in a shared test for a whole phase.
 - **A reality check on one knob setting supports claims about that setting only.** Three
   implemented designs with the same lanes and format say nothing about narrow formats.
+- **A stratified supplement found what the uniform draw could not.** Six builds aimed at
+  the thin strata confirmed the resource models at K = 16 and exposed a regime the cycle
+  model lacks: a fast loop behind slow memory, where job time is set by loading the
+  matrices. Twenty-six detectors had never entered it.
+- **"Linear in nit with zero residual" is a property of the builds measured.** It held in
+  every detector until one was fast enough to outrun its memory. Check the residual of
+  every new design, and treat a non-zero one as a regime change, not noise.
