@@ -3,7 +3,7 @@ title: RTL simulation
 parent: A memory-mapped FIR
 nav_order: 4
 has_children: false
-summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all four behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, every response checked, no polling (the host sleeps on the queue views' interrupts), at 520 and 529 cycles."
+summary: "The whole system as RTL under XSI: AMD's axi_crossbar, the hand-written adaptor leaves, and the csynth'd mm_fir kernel in one generated Verilog top, driven by the pysim host program written against C++ endpoints, with an address map generated from the pysim system. Two adaptor shapes — one view per crossbar slot, and all four behind one front with a generated decoder — both bit-exact against the numpy golden through a mid-stream tap switch, every response checked, no polling (the host sleeps on the queue views' interrupts), at 618 and 611 cycles."
 ---
 
 # RTL simulation
@@ -238,8 +238,8 @@ it cost on the earlier protocol.
 
 | topology | bit-exact vs `fir_golden` | status `nsamp / ncfg` | responses | cycles | bus operations | polls |
 |---|---|---|---|---|---|---|
-| `per_view` | yes | 200 / 2 | 13, 0 mismatches | **520** | 67 | 0 |
-| `one_front` | yes | 200 / 2 | 13, 0 mismatches | **529** | 67 | 0 |
+| `per_view` | yes | 200 / 2 | 13, 0 mismatches | **618** | 67 | 0 |
+| `one_front` | yes | 200 / 2 | 13, 0 mismatches | **611** | 67 | 0 |
 
 Both shapes produce the golden's 200 outputs bit for bit through the switch at sample 101, both take
 both configs, and every one of the 13 responses echoes its packet's `tx_id` and intended config.
@@ -247,15 +247,16 @@ both configs, and every one of the 13 responses echoes its packet's `tx_id` and 
 **No polls:** the gate parses every bus operation the testbench host issued and checks that none reads
 a count (queue in's vacancy, a queue out's occupancy) and that the status is read exactly once.
 
-**Against pysim.** pysim says 498 for `per_view` (4.2% under RTL) and 545 for `one_front` (3.0% over),
-after three model fixes found by lining up both backends' bus operations — see
-[Python simulation](pysim.md#how-close-is-pysims-timing).
+**Against pysim.** pysim says 498 for `per_view` and 545 for `one_front` -- 19% and 11% under RTL, since
+the body became straight-line per packet and pays a pipeline drain per packet that pysim does not
+charge yet; see [Python simulation](pysim.md#how-close-is-pysims-timing).
 
 **How the numbers got here**, on the same scenario:
 
 | host program | `per_view` | `one_front` |
 |---|---|---|
-| this one: header + `cfg_seq` + responses, packed samples, the host on interrupts | **520** | **529** |
+| this one: header + `cfg_seq` + responses, packed samples, the host on interrupts; the body straight-line per packet | **618** | **611** |
+| the same, the body a single-firing state machine (no drain between packets) | 520 | 529 |
 | the same, the host polling the counts | 768 | 783 |
 | the same, one sample per 64-bit word | 937 | 922 |
 | `apply_at` configs, host polls status for "received", overlapping master | 567 | 721 |

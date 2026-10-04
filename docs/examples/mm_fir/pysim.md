@@ -135,9 +135,13 @@ and the message sizes.
 
 ## How close is pysim's timing?
 
-RTL measures **520** cycles with one view per slot and **529** behind one front
-([RTL simulation](rtlsim.md#results)). pysim says **498** (−4.2%) and **545** (+3.0%), and ranks the two
-shapes the same way.
+RTL measures **618** cycles with one view per slot and **611** behind one front
+([RTL simulation](rtlsim.md#results)). pysim says **498** (−19%) and **545** (−11%).
+
+That gap opened when the kernel body became straight-line per packet
+([codegen](codegen.md#why-it-is-shaped-like-this)): each packet now pays the sample loop's pipeline fill
+and drain at RTL, and pysim does not charge it yet. Against the earlier state-machine body (520 / 529,
+no drain between packets) pysim was within −4.2% / +3.0%, after the three model fixes below.
 
 Before the host waited on interrupts it polled, and those numbers were 768 / 783 at RTL and 734 / 792
 in pysim. Before three model fixes, pysim said 536 and 874 for the polling host, the second shape

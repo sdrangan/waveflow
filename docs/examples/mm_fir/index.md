@@ -124,8 +124,8 @@ the other examples use.
 
 - A kernel reached through registers and queues, with **no** change to how a kernel is written.
 - The adaptor's views behind the real AMD crossbar, gated bit-exact at RTL in two shapes: one view
-  per crossbar slot (520 cycles), and all four views behind one front with a generated decoder
-  (529 cycles).
+  per crossbar slot (618 cycles), and all four views behind one front with a generated decoder
+  (611 cycles).
 - **No polling anywhere.** The host sleeps on the queue views' interrupts — queue in's for room, queue
   out's and the response FIFO's for data — and reads the final status once, because the kernel
   publishes it before each response. Tests check it at both levels: in pysim and at RTL, the host

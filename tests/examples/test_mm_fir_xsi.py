@@ -99,6 +99,10 @@ def test_mm_fir_rtl_cycles(fir_run):
 #: 67 bus ops, 0 polls.  pysim 498 / 545 (-4.2% / +3.0%).
 #:
 #: History (same RTL scenario):
+#:   * the same protocol with the kernel body a single-firing STATE MACHINE (one word per stream per
+#:     firing, no pipeline drain between packets): 520 / 529.  The loop-style body (one packet per
+#:     firing, a pipelined sample loop) costs a pipeline fill + drain and a few cycles per packet --
+#:     13 packets of 16 samples -- for code that reads like run_iter (2026-10-04, the user's choice);
 #:   * the same protocol with the endpoints POLLING the counts: 768 / 783 (124 / 125 ops), pysim
 #:     734 / 792 after three model fixes (crossbar travel 2 of 4 cycles; one read + one write per
 #:     master; 2 cycles of host pacing) -- 536 / 874 before them;
@@ -111,4 +115,4 @@ def test_mm_fir_rtl_cycles(fir_run):
 #:   * a kernel that was not II=1 (a whole config / status per firing): 2096 cycles, 221 ops.
 #: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
 #: and the response FIFO's poll and pop -- more than dropping the status wait saved.
-EXPECTED_CYCLES = {"per_view": 520, "one_front": 529}
+EXPECTED_CYCLES = {"per_view": 618, "one_front": 611}

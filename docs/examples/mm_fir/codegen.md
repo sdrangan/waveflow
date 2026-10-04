@@ -3,7 +3,7 @@ title: Code generation
 parent: A memory-mapped FIR
 nav_order: 3
 has_children: false
-summary: "What becomes the Vitis kernel, and what does not. The message structs and the free-running top are generated; the task body is hand-written and declared with kernel_task(). The memory-mapped side is not in the kernel at all — it is RTL beside it. And the lesson of the body: a first version that moved a whole message per firing could not pipeline and ran at one sample per ten cycles; moving at most one word per stream per firing pipelined it at II=1."
+summary: "What becomes the Vitis kernel, and what does not. The message structs and the free-running top are generated; the task body is hand-written and declared with kernel_task(). The memory-mapped side is not in the kernel at all — it is RTL beside it. And the lessons of the body: a first version with no pipelined loop ran at one sample per ten cycles; a single-firing state machine reached II=1 and never drained between packets; the body now is straight-line per packet with a pipelined sample loop -- the twin of run_iter -- at a measured ~15% cost on short packets."
 ---
 
 # Code generation
@@ -61,126 +61,81 @@ The body is declared, not extracted:
 ## The hand-written body
 
 [`include/mm_fir_task.h`](../../../examples/mm_fir/include/mm_fir_task.h) is the HLS twin of
-`run_iter`. Its state is `static` (what survives re-firing in an `hls::task` body), and it is a small
-state machine over one packet — header, the config it names, its samples, its response:
+`run_iter`, and reads like it: **one firing is one packet**, written straight down.
 
 ```cpp
-    if (state == HDR) {
-        if (s_in.read_nb(w)) {
-            ap_uint<DW> hb[1] = {w};
-            FirCmdHdr h;
-            h.read_array<DW>(hb);                    // the generated struct decodes it
-            nleft = h.nsamp; npkt = h.nsamp; tx_id = h.tx_id; need = h.cfg_seq;
-            lane = 0;                                // a packet's samples start on a fresh word
-            state = (ncfg < need) ? CFG : ((h.nsamp != 0) ? SAMP : RESP);
-        }
-    } else if (state == CFG) {                       // wait for the config this packet needs
-        if (s_cfg.read_nb(w)) {
-            ...                                      // collect CW words, FirCfg::read_array, load taps
-            ncfg++;
-            if (ncfg >= need) state = (nleft != 0) ? SAMP : RESP;
-        }
-    } else if (state == SAMP) {
-        bool have = (lane != 0);
-        if (!have && s_in.read_nb(w)) {             // a new word every PF samples
-            int16_array_utils::read_array_lane<DW>(&w, x_lane, (nleft < PF) ? (int)nleft : PF);
-            have = true;
-        }
-        if (have) {
-            const ap_int<16> x = x_lane[lane];
-            ...                                      // 16-tap MAC over (x, hist), shift history
-            int64_array_utils::value_type y_lane[1] = {acc};
-            ap_uint<DW> yw;
-            int64_array_utils::write_array_lane<DW>(y_lane, &yw, 1);
-            m_out.write(yw);
-            nsamp++; nleft--;
-            lane = (lane == PF - 1 || nleft == 0) ? 0 : lane + 1;
-            if (nleft == 0) state = RESP;
-        }
-    } else {                                         // RESP: which packet, which config it used
-        FirRespHdr r;
-        r.nsamp = npkt; r.tx_id = tx_id; r.cfg_seq = ncfg;
-        ...                                          // FirRespHdr::write_array, then
-        m_resp.write(rb[0]);
-        want_pub = true;
-        state = HDR;
+    FirCmdHdr h;
+    h.read_stream<DW>(s_in);                         // 1. the header
+
+CFG: while (ncfg < h.cfg_seq) {                      // 2. the config this packet needs
+        FirCfg c;
+        c.read_stream<DW>(s_cfg);
+        ...                                          //    load the taps
+        ncfg++;
     }
+
+SAMP: for (ap_uint<32> i = 0; i < h.nsamp; ++i) {    // 3. the samples, one per cycle
+#pragma HLS PIPELINE II=1
+        const int k = (int)(i % PF);
+        if (k == 0) {                                //    a fresh word every PF samples
+            ap_uint<DW> w = s_in.read();
+            int16_array_utils::read_array_lane<DW>(&w, x_lane, min(PF, h.nsamp - i));
+        }
+        const ap_int<16> x = x_lane[k];
+        ...                                          //    16-tap MAC over (x, hist), shift history
+        m_out.write(y_word);
+    }
+
+    FirStatus st;  ...  st.write_stream<DW>(m_status);   // 4. the status, then the response
+    FirRespHdr r;  ...  r.write_stream<DW>(m_resp);
 ```
 
-and, after that, a status word goes out if one is pending (below). Every message is decoded and encoded
-by generated code — the `FirCmdHdr` / `FirCfg` / `FirRespHdr` / `FirStatus` structs, and the
-`int16_array_utils` / `int64_array_utils` lane routines — so the body never shifts or masks a field
-out of a word.
+The taps, the filter's history and the counters are `static`, so they survive from packet to packet
+(the `hls::task` runtime re-fires the body). Every message is decoded and encoded by generated code --
+the `FirCmdHdr` / `FirCfg` / `FirRespHdr` / `FirStatus` structs and the `int16_array_utils` /
+`int64_array_utils` lane routines -- so the body never shifts or masks a field out of a word. The
+order every read and write happens in is fixed by the packet, so the blocking reads cannot deadlock.
 
 **The lane loop, one sample per cycle.** Samples are int16, packed four to a 64-bit word by the
-serializer, so a word is a *lane* of `PF = 4` samples — the same lane routines
-[stream_inband](../../../examples/stream_inband/poly_body_impl.tpp) uses. Poly evaluates a whole lane
-per iteration. This body deliberately does not: it reads a lane every fourth sample and filters **one
-sample per firing**, so the MAC is 16 multipliers rather than 64. Written as a loop, it is:
+serializer, so a word is a *lane* of `PF = 4` samples.
+[Poly](../../../examples/stream_inband/poly_body_impl.tpp) evaluates a whole lane per iteration, with
+its compute unrolled four ways. This loop deliberately does not: it reads a word every fourth iteration
+and filters **one sample per iteration**, so the MAC is 16 multipliers rather than 64. Both shapes are
+in [Design patterns for loop optimization](../../guide/vectorization/hls/loop_optimization.md).
 
-```cpp
-j = 0;
-for (i = 0; i < nsamp; i++) {
-    if (j == 0) read_array_lane(word, x_lane);   // every PF samples
-    x = x_lane[j];
-    j = (j + 1) % PF;
-    y[i] = MAC over the 16 taps;                 // unrolled: 16 multipliers, one result per cycle
-}
-```
+### Why it is shaped like this
 
-— and in the task body the loop is the firing itself: `lane` is `j`, and it restarts at 0 for every
-packet, whose samples begin on a fresh word.
+Three bodies have been measured on the same scenario (200 samples in 13 packets, one switch):
 
-### Why it is shaped like this: one word per stream per firing
-
-The first version of this body was the obvious one: on a config, `c.read_stream<DW>(s_cfg)` — read
-all five words; after samples, `st.write_stream<DW>(m_status)` — write both status words. It was
-correct and bit-exact at RTL. It was also slow:
-
-| | first body | this body |
+| body | csynth | RTL cycles (`per_view` / `one_front`) |
 |---|---|---|
-| csynth | not pipelined; interval 3–16 cycles per firing | **pipelined, II = 1**, latency 10 |
-| measured at RTL (200 samples, one switch, the host of the time) | **2096** cycles, 221 bus operations, 55 status polls | **857** cycles, 68 operations, 2 polls |
-| resources | 16 DSP, 1758 LUT, 1614 FF | 16 DSP, 2169 LUT, 3672 FF |
+| straight-line, **no pipelined loop**: a whole message read or written per firing | not pipelined; interval 3--16 cycles per firing | 2096 (with the host of the time) |
+| a **single-firing state machine**: one word per stream per firing, the whole kernel one II=1 pipeline | II = 1, 7.7 ns | 520 / 529 |
+| **this one**: straight-line per packet, the sample loop pipelined at II = 1 | II = 1, 6.8 ns | **618 / 611** |
 
-A firing that may read five words from one stream, or write two to another, cannot be pipelined at
-II = 1 — the loop's interval is set by its longest path. So the kernel ran at about one sample per ten
-cycles, every drain the host did found only a few results, and the host spent its time polling.
+The first could not pipeline at all: a firing that may read five words from one stream cannot run at
+II = 1, so the kernel filtered about one sample per ten cycles. The state machine fixed that by moving
+**at most one word on each stream per firing** -- and, as a side effect, never drained: it read the
+next packet's header while the last samples were still in flight.
 
-The fix is a rule worth keeping: **in a pipelined task body, move at most one word on each stream per
-firing.** Config words are collected into `cbuf`, one per firing, and decoded when the fifth arrives;
-a status message is serialized once into `sbuf` and emitted one word per firing:
-
-```cpp
-    if (si == 0 && want_pub) {
-        FirStatus st;
-        st.nsamp = nsamp; st.ncfg = ncfg;
-        st.write_array<DW>(sbuf);
-        si = SW;
-        want_pub = false;
-    }
-    if (si != 0) {
-        m_status.write(sbuf[SW - si]);
-        si--;
-    }
-```
-
-A publish requested while one is still going out waits for it, rather than restarting: a restart would
-hand the status bank the first words of one message and the rest of the next. (The status is one word
-now; the rule still holds for any status that is not.) The price of II = 1 is registers — more flip-flops for the staged config and
-the pipeline — not multipliers.
+This body puts the pipeline where the work is -- the sample loop -- and writes everything else as the
+Python does. The cost is measured: each packet pays the loop's fill and drain (its latency is 11) and a
+few cycles of header, config check, status and response. With 16-sample packets that is about 15%; with
+long packets it is noise. **A state machine is an optimization for short firings**, to be reached for
+when a measurement says the drain matters; the loop is the pattern.
 
 ### Where the twins differ, deliberately
 
-- pysim's `run_iter` takes a whole **packet** per firing — header, config, all its samples — and
-  times it with the HLS body's interval and latency; the HLS body takes **one word per stream per
-  firing**. The output is the same sample-for-sample; the timing granularity is not.
+- Both take one packet per firing. pysim times the sample loop with the HLS body's interval and
+  latency but does not yet charge the per-packet fill and drain -- which is why its timing is now further
+  from RTL (see [Python simulation](pysim.md#how-close-is-pysims-timing)).
 - Both publish the status once per packet, and both write the response after the packet's results.
 
 ## csynth
 
-The build targets `xc7z020clg484-1` at 100 MHz (the default `render_tcl` emits). The body pipelines at
-II = 1 with latency 10, uses 16 DSP, 1913 LUT and 2610 FF, and closes timing at an estimated 7.7 ns. After csynth the build writes a source stamp beside the project, so the
+The build targets `xc7z020clg484-1` at 100 MHz (the default `render_tcl` emits). The sample loop pipelines at
+II = 1 with latency 11; the kernel uses 16 DSP, 2190 LUT and 2690 FF, and closes timing at an estimated
+6.8 ns. After csynth the build writes a source stamp beside the project, so the
 [XSI gate](rtlsim.md) can refuse RTL that was not built from the sources on disk.
 
 Next: [RTL simulation](rtlsim.md).
