@@ -131,17 +131,17 @@ what it counts:
 > The timer brackets **`run_once_sim`** — so `py_timing` is the **kernel transaction**: ~**4 cycles**,
 > the kernel's own `latency_cycles`.
 
-Compare that with the system simulation, which reported the host observing `ap_done` at **6** cycles.
-Both numbers are correct; they measure different things:
+Compare that with the system simulation, where the host is woken by the kernel's interrupt at **4**
+cycles. The numbers agree here, but they measure different things:
 
 | | measures | cycles |
 |---|---|---|
-| [System simulation](./pysim.md#reading-the-trace) | host-observed round trip, **including polling overhead** | 6 |
+| [System simulation](./pysim.md#reading-the-trace) | host-observed completion: the interrupt waking the host | 4 |
 | **Sequential execution** (this page) | the **kernel transaction** alone | 4 |
 | RTL co-simulation | the kernel transaction, in hardware | 5 |
 
 The sequential number is the one worth comparing against co-simulation, because it measures the same
-thing: Vitis co-simulation drives the kernel directly — there is no polling driver in the loop. That
+thing: Vitis co-simulation drives the kernel directly — there is no host driver in the loop. That
 like-for-like framing is why `py_timing` comes from this page and not the last one.
 
 ## Running it in the build DAG

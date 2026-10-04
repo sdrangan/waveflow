@@ -1,7 +1,8 @@
 # Plan: the rest of "no polling in the examples" -- ap_done as an interrupt, and kernel-to-kernel
 
-> **Status (2026-10-03): proposed, not started.** Follows `plans/mm_irq.md` (built: `IrqIF`, queue
-> interrupts, mm_fir with no polling).  Two independent parts; either order.
+> **Status (2026-10-03): Part A BUILT** (branch `ap-done-irq`); Part B waits on the user's choice of
+> example.  Follows `plans/mm_irq.md` (built: `IrqIF`, queue interrupts, mm_fir with no polling).
+> Departures from Part A are in **Built (Part A)** at the end.
 
 ## What still polls
 
@@ -66,3 +67,24 @@ credit, which is the point of the pattern.
 
 A first is smaller and retires the last polling hosts; B is a new example built on `mm_irq` and the
 credit rule.
+
+## Built (Part A)
+
+- **The survey was wider than the polling.**  Only two hosts actually polled or guessed:
+  `simp_fun.py` (`poll_end`) and `regmap_demo.py` (a fixed `timeout` after launch).  `hist.py` and
+  `poly.py` already wait on their response streams and read status once; no C++ / XSI testbench reads
+  `ap_done` (C-sim and cosim call the kernel directly), so step 3 had nothing to re-record.
+- **The line lives on the slave, not the module:** `VitisRegMapMMIFSlave.interrupt()` returns the
+  `IrqIFSource` (made on first use), so any `VitisRegMap` kernel -- `HwModule` or raw `SimObj` -- has it.
+  `gier` / `ier` re-evaluate the line on write; `isr` is toggle-on-write; at `on_start`'s return
+  `isr |= ier & 3`.  Mirrors `simp_fun_control_s_axi.v`.
+- **Host:** `BoundRegMap.enable_irq()` (`ier = 1`, `gier = 1`), `wait_done(irq)` (wait high, write 1 to
+  `isr`; raises without `enable_irq`), and `run(irq)` = enable once + `start` + `wait_done` -- the call
+  the examples make.  `poll_end` stays, documented as a debugging fallback.
+- **The `IER` mask gate is weaker than planned:** `ap_ready` and `ap_done` coincide in the model (both
+  at `on_start`'s return), so "`ap_ready`-only does not fire on `ap_done`" cannot be told apart.  Gated
+  instead: no reads during `run` (counted), two launches = two rises (re-arm), `gier` gates the line
+  but not `isr`, `ier = 0` sets no status.
+- simp_fun's trace: `host_done` moves from 60 ns (second poll) to 40 ns -- the instant the kernel
+  finishes.
+

@@ -77,7 +77,7 @@ class SystemSimStep(BuildStep):
     This is the first checkpoint in the example's progression: once the DUT and the host exist,
     you can simulate the whole system and *confirm it works* — before writing any testbench.
     The host does the real register-map protocol (write ``x``/``a``/``b`` → set ``ap_start`` →
-    poll ``ap_done`` → read ``y``), so this is the one path that demonstrates the interface this
+    wait for the interrupt → read ``y``), so this is the one path that demonstrates the interface this
     example is about, and the only one that yields a **per-step** event trace.
 
     It is **Python-only by nature**, not by omission: the host and the DUT are two *concurrent*

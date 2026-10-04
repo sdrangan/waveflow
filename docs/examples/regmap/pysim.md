@@ -3,7 +3,7 @@ title: System simulation
 parent: Register mapped simple function
 nav_order: 3
 has_children: false
-summary: "Simulating the whole system in Python before writing any testbench: a host SimObj running concurrently with the kernel over real AXI-Lite transactions — write the inputs, assert ap_start, poll ap_done, read the result. The only path here that exercises the register-map protocol, and Python-only by nature rather than by omission, because a Vitis C++ testbench is a single straight-line main with nothing for that concurrency to lower onto."
+summary: "Simulating the whole system in Python before writing any testbench: a host SimObj running concurrently with the kernel over real AXI-Lite transactions — write the inputs, assert ap_start, wait for the interrupt, read the result. The only path here that exercises the register-map protocol, and Python-only by nature rather than by omission, because a Vitis C++ testbench is a single straight-line main with nothing for that concurrency to lower onto."
 ---
 # System simulation
 
@@ -12,7 +12,8 @@ and confirm it works — before writing a single line of testbench.
 
 This is the first of the example's [two ways to simulate](./index.md#two-ways-to-simulate-it). Here a
 host `SimObj` runs **concurrently** with the kernel, exchanging real AXI-Lite transactions over a
-`DirectMMIF` link: it writes `x`/`a`/`b`, asserts `ap_start`, polls `ap_done`, and reads `y`. It is the
+`DirectMMIF` link: it writes `x`/`a`/`b`, asserts `ap_start`, sleeps until the kernel's interrupt
+fires, and reads `y`. It is the
 only path in this example that exercises the register-map protocol — the thing this example is *about* —
 and the only one that yields a per-step event trace.
 
@@ -40,13 +41,16 @@ def simulate_case(case, *, clk_freq=100e6, latency_cycles=4, log_file=None):
 ```
 
 `connect()` is the wiring — it binds the host's `MMIFMaster` to the kernel's `VitisRegMapMMIFSlave`
-through a `DirectMMIF`, the AXI-Lite link:
+through a `DirectMMIF`, the AXI-Lite link, and the kernel's interrupt to the host through an `IrqIF`:
 
 ```python
 def connect(sim, host, accel, clk):
     lite_link = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
     lite_link.bind("master", host.master)
     lite_link.bind("slave", accel.s_lite)
+    irq = IrqIF(name="simp_fun_irq", sim=sim)
+    irq.bind("source", accel.s_lite.interrupt())
+    irq.bind("sink", host.irq)
     host._regmap_ref = accel.regmap
 ```
 
@@ -61,7 +65,8 @@ self.y = yield from rm.get("y")
 self.passed = self.y == self.case.expected_y and self.ap_done == 1
 ```
 
-so a run is only "passed" if the value is right **and** the kernel actually signalled completion.
+so a run is only "passed" if the value is right **and** the kernel actually signalled completion —
+`ap_done` is set to 1 by the interrupt having fired, since the host never reads the bit.
 
 ## Running it in the build DAG
 
@@ -132,7 +137,7 @@ time,event,value
 0,ap_start_host,1
 0,kernel_busy,1
 4e-08,kernel_done,1
-6e-08,host_done,1
+4e-08,host_done,1
 ```
 
 ## Reading the trace
@@ -144,21 +149,20 @@ Those four rows are the register-map handshake, timed. At 100 MHz (10 ns per cyc
 | `ap_start_host` | 0 | 0 | the host writes `ap_start` |
 | `kernel_busy` | 0 | 0 | the slave launches `on_start` |
 | `kernel_done` | 40 ns | 4 | the kernel finishes — its `latency_cycles` |
-| `host_done` | 60 ns | 6 | the **host observes** `ap_done` |
+| `host_done` | 40 ns | 4 | the **host is woken** by the interrupt |
 
-The gap between the last two is the lesson: the kernel is done at **4** cycles, but the host does not
-find out until **6**, because it polls every `poll_interval_cycles` and catches the flag on its second
-read. That polling overhead is real — it is what a driver actually pays — and it is invisible to the
-[sequential path](./seqtb.md), which reports the kernel transaction alone (4 cycles). Neither number is
-wrong; they measure different things, and this trace is what lets you see the difference rather than be
-told it.
+The last two rows coincide, and that is the lesson: the host learns the kernel is done in the same
+instant it finishes, because the slave raises the interrupt line as `on_start` returns and the host is
+parked on it. A host that **polled** `ap_done` instead would find out late — up to one polling interval
+after the kernel finished — and would spend a bus read on every look. (The `isr` clear that follows is
+one more AXI-Lite write; on this zero-latency `DirectMMIF` it takes no simulated time.)
 
 The events come from `@sim_only` log calls on both sides of the link:
 
 ```python
 # host (SimpFunHost.run_proc)          # kernel (SimpFun.on_start)
 self._log("ap_start_host", 1)          self._log("kernel_busy", 1)
-self._log("host_done", int(self.ap_done))   self._log("kernel_done", 1)
+self._log("host_done", 1)              self._log("kernel_done", 1)
 ```
 
 `_log` is a thin `@sim_only` wrapper around the `Logger`. The decorator tells the codegen extractor

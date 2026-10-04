@@ -91,16 +91,19 @@ What Vitis supplies is not `on_start`'s body but the **launch** around it: the `
 
 ## Creating the Host
 
-The host is the SimPy stand-in for the CPU driver. It is a plain `SimObj` with an `MMIFMaster` connected to the kernel's slave via a `DirectMMIF` (the in-process AXI-Lite link). Inside `run_proc`, it obtains a bound regmap proxy with `regmap.bind_master(...)` and then talks to the kernel by name rather than by address.
+The host is the SimPy stand-in for the CPU driver. It is a plain `SimObj` with two ends: an `MMIFMaster` connected to the kernel's slave via a `DirectMMIF` (the in-process AXI-Lite link), and an `IrqIFSink` connected to the kernel's **interrupt line**. Inside `run_proc`, it obtains a bound regmap proxy with `regmap.bind_master(...)` and then talks to the kernel by name rather than by address.
 
 ```python
 @dataclass(kw_only=True)
 class SimpFunHost(SimObj):
     case: SimpFunCase
     clk:  Clock
-    latency_cycles:       int = 4
-    poll_interval_cycles: int = 4
-    max_polls:            int = 32
+    latency_cycles: int = 4
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.master = MMIFMaster(name=f"{self.name}_m_lite", sim=self.sim, bitwidth=32)
+        self.irq = IrqIFSink(name=f"{self.name}_irq", sim=self.sim)
 
     def run_proc(self) -> ProcessGen[None]:
         rm = self._regmap().bind_master(self.master, base_addr=self.base_addr)
@@ -108,26 +111,20 @@ class SimpFunHost(SimObj):
         yield from rm.set("x", self.case.x)
         yield from rm.set("a", self.case.a)
         yield from rm.set("b", self.case.b)
-        yield from rm.start()                                       # write 1 to ap_start
-
-        yield self.timeout(self.latency_cycles * self.clk.period)   # don't poll too early
-
-        self.ap_done = yield from rm.poll_end(                       # poll ap_done until == 1
-            interval=self.poll_interval_cycles * self.clk.period,
-            max_polls=self.max_polls,
-        )
+        yield from rm.run(self.irq)     # enable the interrupt, ap_start, sleep until it fires
+        self.ap_done = 1
         self.y = yield from rm.get("y")
 ```
 
 Three things are doing real work here:
 
-1. **`bind_master`** wraps the regmap with a host-side proxy so subsequent `get` / `set` / `start` / `poll_end` calls all dispatch through the AXI-Lite master at the configured `base_addr`. The proxy mirrors the kernel-side `regmap.get/set` API — same names, different yield discipline because bus traffic is asynchronous.
-2. **`rm.start()`** is the convenience wrapper for "write 1 to `ap_start`."
-3. **`rm.poll_end(interval=..., max_polls=...)`** polls the auto-emitted `ap_done` field every `interval` seconds until it reads 1 (the default target), then returns the read value. Raises `RuntimeError` after `max_polls` if the kernel never completes.
+1. **`bind_master`** wraps the regmap with a host-side proxy so subsequent `get` / `set` / `run` calls all dispatch through the AXI-Lite master at the configured `base_addr`. The proxy mirrors the kernel-side `regmap.get/set` API — same names, different yield discipline because bus traffic is asynchronous.
+2. **`rm.run(self.irq)`** launches the kernel and waits for it the way a driver does, on the interrupt. The first call enables the `ap_done` interrupt (`ier = 1`, then `gier = 1`); every call then writes `ap_start`, sleeps on the interrupt line, and writes `1` to `isr` to clear it (the register is toggle-on-write), which lowers the line for the next launch. It is `rm.enable_irq()` once, then `rm.start()` + `rm.wait_done(irq)` per launch, if you need the steps apart.
+3. **The wait reads nothing.** While the kernel runs, the host issues no bus transactions at all — it is parked on the line, and the slave raises it the moment `on_start` returns. There is no polling interval to tune and no early-read waste.
 
-The `latency_cycles` initial wait is an optimization: the host knows the kernel cannot possibly be done before that many cycles, so the early reads would just be wasted bus traffic. `poll_interval_cycles` then controls how aggressively the host hits the bus while waiting. Polling every clock cycle would saturate the AXI-Lite link in a real system — `poll_end` makes the cadence an explicit, tunable parameter.
+The line itself is wired in `connect()`: the slave's `interrupt()` is the source (`interrupt = gier[0] && isr != 0`, as in the Vitis-generated control slave), the host's `IrqIFSink` the sink.
 
-> **In production**, the host wouldn't poll at all — it would wait on an AXI-Lite interrupt line. The polling path here is a pedagogical and debugging convenience. Waveflow's interrupt-based wait API will land in a future release.
+> **Polling** is still available as `rm.poll_end(interval=..., max_polls=...)`, which reads `ap_done` until it is 1. It is a debugging fallback (a kernel whose interrupt is not wired), not how a host should wait.
 
 ## Using the interface
 

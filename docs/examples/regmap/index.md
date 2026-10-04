@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 2
 has_children: true
 example_dir: examples/regmap
-summary: "The first end-to-end example: design, simulation, synthesis and RTL co-simulation of a standalone control-driven Vitis kernel, over the simplest AXI interface there is — an AXI-Lite register map. A host modelled as a SimObj drives the launch protocol (write the inputs, assert ap_start, poll ap_done, read the result), so a system simulation confirms the design works before any testbench exists, and the measured RTL cycles are compared back against the Python estimate."
+summary: "The first end-to-end example: design, simulation, synthesis and RTL co-simulation of a standalone control-driven Vitis kernel, over the simplest AXI interface there is — an AXI-Lite register map. A host modelled as a SimObj drives the launch protocol (write the inputs, assert ap_start, wait for the interrupt, read the result), so a system simulation confirms the design works before any testbench exists, and the measured RTL cycles are compared back against the Python estimate."
 ---
 # Register Map Interface for a Simple Function
 
@@ -18,7 +18,7 @@ In going through this example, you will learn to:
 
 - Declare a `VitisRegMap` of typed registers and wire it into a `HostActivated` kernel.
 - Write the kernel's behavior as a Python method that reads the input registers, computes a result, and writes it back to the output register.
-- Model a **host** as a `SimObj` that drives the register-map protocol — write the inputs, assert `ap_start`, poll `ap_done`, read the result.
+- Model a **host** as a `SimObj` that drives the register-map protocol — write the inputs, assert `ap_start`, wait for the interrupt, read the result.
 - Run a **system simulation** in Python and *confirm the model works* before writing any testbench.
 - Write a **`SeqTB`** — a sequential testbench that invokes the kernel and times it.
 - Generate the Vitis HLS C++ kernel and testbench from those same Python sources.
@@ -43,7 +43,7 @@ following sequence to exercise it:
 
 1. Write the three inputs to their register offsets.
 2. Write `1` to a specialized register, `ap_start`, to launch the kernel.
-3. Poll `ap_done` (or wait for an interrupt) until the kernel signals it is finished.
+3. Wait for the kernel's interrupt, which it raises when it is finished, and clear it.
 4. Read `y` from its register offset.
 
 ## Two ways to simulate it
@@ -54,7 +54,7 @@ runs through this whole example:
 |               | **System simulation**                                                                            | **Sequential execution**                                         |
 | ------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | What runs     | a host `SimObj` running **concurrently** with the kernel, exchanging real AXI-Lite transactions | **one** sequential program (a `SeqTB`) that invokes the kernel |
-| What you see  | the **protocol** — `ap_start` → poll → `ap_done` — plus a per-step event trace            | the functional result and the total transaction latency                |
+| What you see  | the **protocol** — `ap_start` → interrupt → clear — plus a per-step event trace            | the functional result and the total transaction latency                |
 | Where it runs | **Python only**                                                                                  | **Python, C-simulation, and RTL co-simulation**                  |
 | Page          | [System simulation](./pysim.md)                                                                         | [Sequential execution](./seqtb.md)                                      |
 
