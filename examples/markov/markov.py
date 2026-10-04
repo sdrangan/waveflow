@@ -190,7 +190,8 @@ class MarkovGen(FreeRunMod):
         u = uniforms(int(cmd.seed), n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
-            yield self.timeout(c * self.proc_ii * self.clk.period)
+            # One firing to admit the write, then one draw per proc_ii (markov_gen_task.h).
+            yield self.timeout((1 + c * self.proc_ii) * self.clk.period)
             yield from self.m_u.write(array(U16, u[k0:k0 + c]))
         self.njobs += 1
 
