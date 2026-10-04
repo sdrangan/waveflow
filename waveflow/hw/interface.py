@@ -713,9 +713,16 @@ class TypedCodecMixin:
         return int(self.bitwidth if word_bw is None else word_bw)
 
     def _typed_nwords(self, schema_type, count=None, *, word_bw=None) -> int:
-        """Words one transfer of *schema_type* costs — *count* instances if given."""
-        nwords = schema_type.nwords_per_inst(self._codec_word_bw(word_bw))
-        return nwords * int(count) if count is not None else nwords
+        """Words one transfer of *schema_type* costs — *count* instances if given.
+
+        *count* instances are an **array**, which the serializer packs densely (eight ``U8`` to a
+        64-bit word), so the count comes from the array layout, never ``count * words-per-instance``
+        -- that charged one word per element, which is right only at one lane per word."""
+        bw = self._codec_word_bw(word_bw)
+        if count is None:
+            return schema_type.nwords_per_inst(bw)
+        from waveflow.hw.arrayutils import get_nwords
+        return int(get_nwords(schema_type, word_bw=bw, shape=int(count)))
 
     def _unpack(self, raw_words, schema_type, count=None, *, word_bw=None):
         """Words -> a *schema_type* instance, or a ``DataArray`` of *count* of them.
