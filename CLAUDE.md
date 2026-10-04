@@ -71,6 +71,12 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 2. Create a `Simulation`, pass in the components and interfaces.
 3. `Simulation.run()` calls `pre_sim()` on all SimObjs, then schedules their `run_proc()` coroutines inside SimPy, then calls `post_sim()` for teardown/analysis.
 
+### Designing an accelerator
+
+Start from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
+carrying `n` and a `tx_id`, the work on `n` elements, a response that echoes it; through a pipeline the
+command travels with the data and the last stage answers) -- the page links every layer it touches.
+
 ### Writing HLS kernel bodies
 
 Before writing or reviewing a kernel body, read `docs/guide/vectorization/hls/loop_optimization.md`
