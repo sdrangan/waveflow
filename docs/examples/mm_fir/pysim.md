@@ -108,11 +108,11 @@ packet, so the host has to cut a packet at the switch.
 
 | run | bit-exact vs `fir_golden` | status `nsamp / ncfg` | response mismatches | cycles |
 |---|---|---|---|---|
-| one view per crossbar port | yes | 200 / 2 | 0 | 498 |
-| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 545 |
-| direct (`link="direct"`) | yes | 200 / 2 | 0 | 341 |
-| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 498 |
-| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 498 |
+| one view per crossbar port | yes | 200 / 2 | 0 | 635 |
+| four views behind one adaptor (`one_front=True`) | yes | 200 / 2 | 0 | 635 |
+| direct (`link="direct"`) | yes | 200 / 2 | 0 | 582 |
+| config committed 32 samples late (`lag=32`) | yes | 200 / 2 | 0 | 635 |
+| wrong tag (`stale_tag=True`) — the negative control | **no** | 200 / **1** | **7** | 635 |
 
 **The late commit is waited for.** The host sends the packets that need config 2 and only then
 commits it. Those packets wait in queue in — their header names config 2, and the kernel will not
@@ -136,12 +136,26 @@ and the message sizes.
 ## How close is pysim's timing?
 
 RTL measures **618** cycles with one view per slot and **611** behind one front
-([RTL simulation](rtlsim.md#results)). pysim says **498** (−19%) and **545** (−11%).
+([RTL simulation](rtlsim.md#results)). pysim says **635** for both (+2.8% and +3.9%), and a gate keeps
+it within 5%.
 
-That gap opened when the kernel body became straight-line per packet
-([codegen](codegen.md#why-it-is-shaped-like-this)): each packet now pays the sample loop's pipeline fill
-and drain at RTL, and pysim does not charge it yet. Against the earlier state-machine body (520 / 529,
-no drain between packets) pysim was within −4.2% / +3.0%, after the three model fixes below.
+**The kernel is the bottleneck, and the body's shape sets its cost.** Since the body became
+straight-line per packet ([codegen](codegen.md#why-it-is-shaped-like-this)) a packet costs the kernel
+40 cycles at RTL for 16 samples. Handshake probes on the kernel's streams
+(`mm_fir_xsi.run_xsi(topology, work_dir, probes=True)`) show where -- packet 2:
+
+| cycle | event | |
+|---|---|---|
+| 88 | the header is read | |
+| 92 | the first sample | `hdr_cycles = 4`: the header, the config check, entering the loop |
+| 101--116 | the 16 results | `proc_latency = 9`, then one per cycle |
+| 126 | status and response | `tail_cycles = 10`: leaving the loop, the two messages |
+| 128 | the next header | `restart_cycles = 2` |
+
+pysim charged none of the four fixed costs -- and let a packet's samples start before its own header was
+handled -- so it took 25 cycles a packet and said 498 / 545 (−19% / −11%). It now charges all four,
+each a measured setting on `MmFir`. (Against the earlier state-machine body, 520 / 529 at RTL with no
+drain between packets, pysim was within −4.2% / +3.0% after the three model fixes below.)
 
 Before the host waited on interrupts it polled, and those numbers were 768 / 783 at RTL and 734 / 792
 in pysim. Before three model fixes, pysim said 536 and 874 for the polling host, the second shape

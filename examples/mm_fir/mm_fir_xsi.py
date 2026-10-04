@@ -94,6 +94,18 @@ TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]
 PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
 
 
+#: Timing probes: one-bit handshakes the top exposes as outputs when built with ``probes=True``; the
+#: testbench samples them every cycle and prints the cycles each fired.  Off for the gate.
+PROBES = {
+    "in": "k_in_TVALID && k_in_TREADY",          # the kernel takes a word from queue in (header or samples)
+    "cfg": "k_cfg_TVALID && k_cfg_TREADY",       # ... a config word
+    "out": "k_out_TVALID && k_out_TREADY",       # a result into queue out
+    "resp": "k_resp_TVALID && k_resp_TREADY",    # a response word
+    "stat": "k_stat_TVALID && k_stat_TREADY",    # a status word
+    "out_full": "k_out_TVALID && !k_out_TREADY",  # the kernel held up by a full queue out
+}
+
+
 def xbar_config(topology: str) -> AxiXbarConfig:
     """The RTL crossbar for *topology*, generated from the pysim system's own crossbar -- the same
     slaves at the same ranges, so an address is written once (``MM_BASE`` + the type's layout)."""
@@ -107,13 +119,15 @@ def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
 
 
-def render_top(top: str, topology: str) -> str:
+def render_top(top: str, topology: str, probes: bool = False) -> str:
     xbar = xbar_config(topology)
     dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
     # The queue views' interrupts, for the host (plans/mm_irq.md): the testbench samples these pins.
     ports += [f"output wire irq_{v.name}" for v in VIEWS if isinstance(v, QueueView)]
+    if probes:
+        ports += [f"output wire probe_{n}" for n in PROBES]
     mi = [f"mi{k}_axi" for k in range(len(xbar.mi))]
     body = []
     for p in mi:
@@ -135,6 +149,8 @@ def render_top(top: str, topology: str) -> str:
         for view, p in zip(VIEWS, mi):
             body.append(render_view_slot(view, p, dw, aw, idw))
     body += [f"  assign irq_{v.name} = {v.name}_irq;" for v in VIEWS if isinstance(v, QueueView)]
+    if probes:
+        body += [f"  assign probe_{n} = {e};" for n, e in PROBES.items()]
     body.append("""  mm_fir u_fir (
     .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
     .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
@@ -169,7 +185,7 @@ def address_headers() -> dict[str, str]:
     return bus_address_headers(MmFirSystem(x=[0], plan=PLAN).xbar, system="mm_fir")
 
 
-def render_tb(dll: str, x) -> str:
+def render_tb(dll: str, x, probes: bool = False) -> str:
     """The C++ host: the pysim :class:`~examples.mm_fir.mm_fir.FirHost`, written against the C++
     endpoints of ``xsi_mm_host.h``.  Same two programs (a writer and a reader on one bus master), the
     same :func:`~examples.mm_fir.mm_fir.host_schedule`, the same polling rules, the same check of
@@ -189,6 +205,10 @@ def render_tb(dll: str, x) -> str:
             samples = array(S16, np.asarray(x[n0:n1], dtype=np.int64)).serialize(word_bw=DW)
             rows.append(f"    {{PKT, {{{hexes(hdr)}}}, {{{hexes(samples)}}}, {n1 - n0}u, {tx}u, {want}u}},")
             tx += 1
+    names = list(PROBES) if probes else []
+    probe_decl = "\n".join(f'    ProbePin pr_{n}(sim.dut(), "probe_{n}", "{n}");' for n in names)
+    probe_list = "".join(f", &pr_{n}" for n in names)
+    probe_dump = "\n".join(f"    pr_{n}.dump();" for n in names)
     f_nsamp = field_pos(FirStatus, "nsamp")
     f_ncfg = field_pos(FirStatus, "ncfg")
     f_tx = field_pos(FirRespHdr, "tx_id")
@@ -217,6 +237,28 @@ static const long POLL = {POLL};
 /// Where this system placed the FIR -- its views are this plus the type's layout offsets.
 static const uint64_t FIR = mm_fir_bases::FIR_BASE;
 static const uint32_t NSAMP = {len(x)};
+
+/// A timing probe: a one-bit output of the top, sampled every cycle; dump() prints the cycles it was
+/// high, as runs "start+len".
+class ProbePin : public XsiSimObj {{
+public:
+    ProbePin(Dut& d, const char* port, const char* name) : d_(d), p_(d.port(port)), name_(name) {{}}
+    void sample() override {{
+        if (d_.get1(p_)) {{
+            if (!runs_.empty() && runs_.back().first + runs_.back().second == cyc_) ++runs_.back().second;
+            else runs_.push_back({{cyc_, 1}});
+        }}
+        ++cyc_;
+    }}
+    void dump() const {{
+        std::printf("PROBE %s", name_);
+        for (auto& r : runs_) std::printf(" %ld+%ld", r.first, r.second);
+        std::printf("\\n");
+    }}
+private:
+    Dut& d_; int p_; const char* name_; long cyc_ = 0;
+    std::vector<std::pair<long, long> > runs_;
+}};
 
 static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int width) {{
     const uint64_t v = w[word] >> bit;
@@ -301,9 +343,10 @@ int main() {{
     XsiSim sim("{dll}", "mm_fir.wdb");
     AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/{"true" if OVERLAP_RW else "false"});
     IrqPin irq_qin(sim.dut(), "irq_qin"), irq_qout(sim.dut(), "irq_qout"), irq_qresp(sim.dut(), "irq_qresp");
+{probe_decl}
     Reader rd(host, irq_qout, irq_qresp);   // the pysim reader runs first at t = 0 too (it is the host's run_proc)
     Writer wr(host, irq_qin);
-    std::vector<XsiSimObj*> all = {{&irq_qin, &irq_qout, &irq_qresp, &host, &rd, &wr}};
+    std::vector<XsiSimObj*> all = {{&irq_qin, &irq_qout, &irq_qresp, &host, &rd, &wr{probe_list}}};
     auto drive = [&] {{ for (auto* p : all) p->drive(); }};
     sim.reset(drive);
     long cyc = 0;
@@ -312,6 +355,7 @@ int main() {{
         sim.clock_low();  for (auto* p : all) p->sample();
         sim.clock_high(); for (auto* p : all) p->update(); drive();
     }}
+{probe_dump}
     std::printf("DONE done=%d cycles=%ld polls=%ld nops=%zu\\n", (int)finished(), cyc,
                 rd.polls() + wr.polls(), host.nops());
     std::printf("RESP n=%ld mismatches=%ld\\n", rd.nresp, rd.mismatches);
@@ -332,6 +376,16 @@ int main() {{
 '''
 
 
+def probe_runs(out: str) -> dict[str, list[tuple[int, int]]]:
+    """``{probe: [(start_cycle, length), ...]}`` from a ``probes=True`` run's PROBE lines."""
+    res = {}
+    for ln in out.splitlines():
+        if ln.startswith("PROBE "):
+            parts = ln.split()
+            res[parts[1]] = [tuple(int(v) for v in r.split("+")) for r in parts[2:]]
+    return res
+
+
 def parse_kv(out: str, tag: str) -> dict[str, int]:
     line = next(ln for ln in out.splitlines() if ln.startswith(tag + " "))
     return {k: int(v) for k, v in (kv.split("=") for kv in line.split()[1:])}
@@ -343,7 +397,7 @@ def output_words(out: str) -> np.ndarray:
     return np.array([np.int64(np.uint64(int(h, 16))) for h in y_line.split()[1:]], dtype=np.int64)
 
 
-def run_xsi(topology: str, work_dir, timeout: int = 3600) -> str:
+def run_xsi(topology: str, work_dir, timeout: int = 3600, probes: bool = False) -> str:
     """Generate the crossbar, render the top and the host program, and run XSI.  Returns the output.
 
     Needs Vivado (``create_ip`` + xsim) and the kernel's RTL (``python -m examples.mm_fir.mm_fir_build``).
@@ -354,10 +408,10 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600) -> str:
         raise FileNotFoundError(f"no csynth RTL at {RTL}: run python -m examples.mm_fir.mm_fir_build")
     work_dir = Path(work_dir)
     ip = generate_axi_xbar(xbar_config(topology), work_dir / "ip")
-    ws = XsiWorkspace(work_dir / f"mm_fir_{topology}", top="mm_fir_top")
+    ws = XsiWorkspace(work_dir / f"mm_fir_{topology}{'_probes' if probes else ''}", top="mm_fir_top")
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + ["mm_fir_top.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
-               tb_cpp=render_tb(ws.design_dll, scenario_x()),
-               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology),
+               tb_cpp=render_tb(ws.design_dll, scenario_x(), probes=probes),
+               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology, probes=probes),
                             **address_headers()})
     return ws.run(timeout=timeout)

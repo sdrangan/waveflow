@@ -247,9 +247,10 @@ both configs, and every one of the 13 responses echoes its packet's `tx_id` and 
 **No polls:** the gate parses every bus operation the testbench host issued and checks that none reads
 a count (queue in's vacancy, a queue out's occupancy) and that the status is read exactly once.
 
-**Against pysim.** pysim says 498 for `per_view` and 545 for `one_front` -- 19% and 11% under RTL, since
-the body became straight-line per packet and pays a pipeline drain per packet that pysim does not
-charge yet; see [Python simulation](pysim.md#how-close-is-pysims-timing).
+**Against pysim.** pysim says 635 for both -- 2.8% and 3.9% over RTL -- once it charges the
+straight-line body's measured per-packet costs (header, loop drain, status and response, restart),
+found with handshake probes; see [Python simulation](pysim.md#how-close-is-pysims-timing). The cycle
+gate also checks pysim stays within 5%.
 
 **How the numbers got here**, on the same scenario:
 

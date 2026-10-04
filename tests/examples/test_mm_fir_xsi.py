@@ -90,6 +90,10 @@ def test_mm_fir_rtl_cycles(fir_run):
     print({"topology": topology, "rtl": done, "pysim_cycles": pysim_cycles})
     assert done["cycles"] == EXPECTED_CYCLES[topology], (
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")
+    # The timing model is calibrated against this RTL (MmFir's hdr/tail/restart cycles, measured with
+    # mm_fir_xsi's probes): pysim within PYSIM_TOLERANCE of it.
+    assert abs(pysim_cycles - done["cycles"]) <= PYSIM_TOLERANCE * done["cycles"], (
+        f"{topology}: pysim {pysim_cycles:.0f} vs RTL {done['cycles']}")
 
 
 #: Recorded 2026-10-03, with NO polling (plans/mm_irq.md): the host waits on the queue views'
@@ -116,3 +120,5 @@ def test_mm_fir_rtl_cycles(fir_run):
 #: The header pattern costs ~6 bus ops per packet against ~4 -- the header's own vacancy poll and write,
 #: and the response FIFO's poll and pop -- more than dropping the status wait saved.
 EXPECTED_CYCLES = {"per_view": 618, "one_front": 611}
+#: pysim 635 / 635 -- +2.8% / +3.9% -- once it charges the loop body's measured per-packet costs.
+PYSIM_TOLERANCE = 0.05
