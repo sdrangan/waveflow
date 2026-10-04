@@ -18,6 +18,7 @@ mm_k16_r16_c16_m4_w8_l16,mm,fit2,calibration: 16 lanes,16,16,16,16,4,8,8,64,2,2
 mm_k16_r16_c16_m4_w16_l16,mm,fit2,calibration: 16 lanes,16,16,16,16,4,16,8,64,2,2
 mm_k16_r1_c32_m4_w8_l16,mm,fit2,calibration: 16 lanes,16,16,1,32,4,8,8,64,2,2
 mm_k16_r1_c32_m4_w16_l16,mm,fit2,calibration: 16 lanes,16,16,1,32,4,16,8,64,2,2
+mm_k8_r1_c8_m4_w12_l8,mm,fit2,"calibration: one row, one lane group",8,8,1,8,4,12,8,64,2,2
 mm_k4_r2_c4_m3_w10_l2,mm,supplement2,mm: 2 lanes,4,2,2,4,3,10,8,64,2,2
 mm_k4_r2_c8_m3_w10_l2,mm,supplement2,mm: 2 lanes,4,2,2,8,3,10,8,64,2,2
 mm_k4_r4_c4_m3_w16_l2,mm,supplement2,mm: 2 lanes,4,2,4,4,3,16,8,64,2,2

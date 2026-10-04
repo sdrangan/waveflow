@@ -202,13 +202,16 @@ def test_committed_supplement_is_what_the_code_regenerates(tmp_path):
 
 
 def test_second_calibration_round():
-    """Step 6.1: 18 more matmul calibration builds at 2 and 16 lanes, and six fresh held-out matmul
-    builds at those lane counts.  Nothing in the round is an earlier build, the held-out ones share
-    no matmul with any calibration build, and the first split and supplement are untouched.
+    """Step 6.1: 18 more matmul calibration builds at 2 and 16 lanes, one more with one row and one
+    lane group at C = 8, and six fresh held-out matmul builds at 2 and 16 lanes.  Nothing in the
+    round is an earlier build, the held-out ones share no matmul with any calibration build, and
+    the first split and supplement are untouched.
     """
     fit2 = space.mm_fit_v2()
-    assert len(fit2) == 18 == len(set(fit2))
-    assert Counter(c.L for c in fit2) == {2: 9, 16: 9}
+    assert len(fit2) == 19 == len(set(fit2))
+    assert Counter(c.L for c in fit2) == {2: 9, 16: 9, 8: 1}
+    # the build added after the first eighteen ran: last, and outside both held-out pools
+    assert fit2[-1] == space.HwConfig(K=8, L=8, R=1, C=8, cmul=4, W=12, g_s=8)
     assert all(space.is_valid(c) for c in fit2)
     # the first design's centre and corners, with C raised to the lane count where it must be
     assert {(c.K, c.R, c.C, c.W) for c in fit2 if c.L == 2} == {
@@ -257,6 +260,56 @@ def test_second_calibration_round():
 def test_committed_second_round_is_what_the_code_regenerates(tmp_path):
     again = space.write_v2(tmp_path / "calibration_v2.csv")
     assert again.read_bytes() == space.V2_PATH.read_bytes()
+
+
+def test_bruteforce_grid():
+    """Step 6.3: the 1,440 detectors of gate 6.0 (item 4).  A full cross-product of the listed
+    values, inside the design space, with what the calibration has seen of each build recorded.
+    """
+    grid = space.bruteforce_grid()
+    assert len(grid) == 1440 == len(set(grid))
+    assert all(space.is_valid(c) for c in grid)
+    assert Counter(c.K for c in grid) == {4: 360, 8: 540, 16: 540}
+    assert {(c.W, c.g_s) for c in grid} == {(W, g) for W in SPACE_W for g in SPACE_G}
+    assert {(c.L, c.C) for c in grid} == {(1, 4), (4, 4), (16, 16)}
+    assert {K: {c.R for c in grid if c.K == K} for K in (4, 8, 16)} == {
+        4: {1, 4},
+        8: {1, 4, 8},
+        16: {1, 4, 16},
+    }
+    assert {c.cmul for c in grid} == {3, 4} and {c.mem_dw for c in grid} == {32, 64}
+    assert {(c.sob_depth, c.cmd_depth) for c in grid} == {(2, 2)}
+    # a full cross-product: every combination of the values above that K allows
+    assert len(grid) == sum(15 * 3 * n_rows * 2 * 2 for n_rows in (2, 3, 3))
+
+    rows = space.bruteforce_rows()
+    assert all(
+        r["build"].startswith("bf_det_") and r["role"] == "bruteforce" for r in rows
+    )
+    assert len({r["build"] for r in rows}) == 1440
+    # what the calibration has seen: 8 calibration detectors, and the blocks of others
+    assert sum(r["in_fit"] for r in rows) == 8
+    assert sum(r["vec_in_fit"] for r in rows) == 304
+    assert sum(r["mm_in_fit"] for r in rows) == 102
+    assert sum(not (r["vec_in_fit"] or r["mm_in_fit"]) for r in rows) == 1078
+    assert all(r["vec_in_fit"] and r["mm_in_fit"] for r in rows if r["in_fit"])
+    # no held-out detector is in the grid, and no build name collides with an earlier build
+    held = set(space.holdout("det")) | {
+        c for _n, t, c in space.supplement() if t == "det"
+    }
+    assert not set(grid) & held
+    earlier = {
+        b for b, *_ in [*space.read_split(), *space.read_supplement(), *space.read_v2()]
+    }
+    assert not {r["build"] for r in rows} & earlier
+
+
+def test_committed_bruteforce_grid_is_what_the_code_regenerates(tmp_path):
+    again = space.write_bruteforce(tmp_path / "bruteforce_grid.csv")
+    assert again.read_bytes() == space.BRUTEFORCE_PATH.read_bytes()
+    read = space.read_bruteforce()
+    assert [c for _b, _t, _r, c in read] == space.bruteforce_grid()
+    assert {r for _b, _t, r, _c in read} == {"bruteforce"}
 
 
 def test_committed_split_is_what_the_code_regenerates(tmp_path):

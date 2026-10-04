@@ -391,11 +391,21 @@ def test_campaign_grid_roles_and_shards():
     from examples.mimo_cg.hw import campaign as C
 
     labels = list(C.split())
-    # the split's 101, the 6 supplementary builds, and the second round's 18 + 6 (step 6.1)
-    assert len(C.grid()) == len(labels) == 131
-    assert [b for b in labels if C.split()[b][1] == "supplement"] == labels[101:107]
-    assert [b for b in labels if C.split()[b][1] == "fit2"] == labels[107:125]
-    assert [b for b in labels if C.split()[b][1] == "supplement2"] == labels[125:]
+    # the split's 101, the 6 supplementary builds, the second round's 19 + 6 (step 6.1), and the
+    # brute-force sub-grid's 1,440 (step 6.3)
+    roles = [role for _t, role, _c in C.split().values()]
+    assert len(C.grid()) == len(labels) == 132 + 1440
+    assert [
+        b for b, r in zip(labels, roles, strict=True) if r == "supplement"
+    ] == labels[101:107]
+    assert [b for b, r in zip(labels, roles, strict=True) if r == "fit2"] == labels[
+        107:126
+    ]
+    assert [
+        b for b, r in zip(labels, roles, strict=True) if r == "supplement2"
+    ] == labels[126:132]
+    assert set(roles[132:]) == {C.BRUTEFORCE} and C.BRUTEFORCE not in roles[:132]
+    assert all(b.startswith("bf_det_") for b in labels[132:])
     fit = [b for b in labels if C.split()[b][1] == "fit"]
     assert len(fit) == 67
     shards = [C.shard(fit, f"{i}/4") for i in range(4)]
@@ -589,7 +599,7 @@ def test_committed_tables_hold_every_build_of_their_roles():
     header, builds = _committed("hw_builds")
     assert "tool=vitis_hls 2024.1" in header and "part=xczu48dr-ffvg1517-2-e" in header
     roles = header.split("roles=")[1].split(",")[0].split("+")
-    assert roles in (["fit"], ["fit", "holdout"], ["fit", "holdout", "supplement"])
+    assert "fit" in roles and set(roles) <= set(C.ROLES) - {C.BRUTEFORCE}
     expected = [b for b, (_t, role, _c) in C.split().items() if role in roles]
     assert [r["build"] for r in builds] == expected
     for r in builds:

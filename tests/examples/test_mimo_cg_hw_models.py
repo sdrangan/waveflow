@@ -100,7 +100,10 @@ def refit() -> MD.Models:
 def test_committed_model_file_is_what_a_refit_gives(refit):
     committed = MD.Models.load()
     assert committed.table == refit.table
-    assert committed.meta == refit.meta and committed.meta["fit_builds"] == 67
+    assert committed.meta == refit.meta
+    # version 2 (plan step 6.1): the first round's 67 builds and the second round's 19
+    assert committed.meta["fit_builds"] == 86 and committed.meta["version"] == 2
+    assert committed.meta["fit_roles"] == ["fit", "fit2"]
     assert set(committed.coef) == set(refit.coef) == set(MD.TERMS)
     for name, co in refit.coef.items():
         assert set(co) == {*MD.TERMS[name][1], "intercept"}
@@ -141,15 +144,19 @@ def test_leave_one_out_errors_of_the_regressions(refit):
     """Leave-one-out errors on the fit rows, as mean and worst percent of the predicted quantity,
     for every regression.  The blocks and the cycle models are tight.  The loader, the store and
     the framer's flip-flops are not (M5 review): few samples, small quantities, and errors of tens
-    of percent — which the glue's total hides because measured tables dominate it."""
+    of percent — which the glue's total hides because measured tables dominate it.
+
+    Version 2: the matmul's three regressions are fitted on 45 builds, at every lane count.  With
+    v1's terms on those 45 builds the LUT model's leave-one-out error was 7.3% on average and 28%
+    at worst; with the output-stage terms it is 2.2% and 14.6%."""
     bounds = {
         "CgVec.lut": (2.0, 4.0),
         "CgVec.ff": (3.0, 9.0),
-        "CgMm.lut": (4.0, 14.0),
-        "CgMm.ff": (3.0, 20.0),
+        "CgMm.lut": (2.5, 15.0),
+        "CgMm.ff": (3.0, 16.0),
         "vec.iter": (1.0, 3.0),
         "vec.init": (1.5, 4.0),
-        "mm.iter": (1.0, 3.0),
+        "mm.iter": (1.0, 3.1),
         "CgCmdRx.lut": (1.0, 3.0),
         "CgCtrl.lut": (0.5, 1.0),
         "CgCtrl.ff": (1.0, 3.0),
@@ -167,6 +174,10 @@ def test_leave_one_out_errors_of_the_regressions(refit):
     for name in ("CgVec.lut", "CgVec.ff", "CgMm.lut", "CgMm.ff", "vec.iter", "mm.iter"):
         r = refit.report[name]
         assert r["n"] >= 25 and r["terms"] <= r["n"] // 2
+    assert {refit.report[n]["n"] for n in ("CgMm.lut", "CgMm.ff", "mm.iter")} == {45}
+    # the matmul's cycle model has six fitted parameters: its loops' trip counts are counted
+    assert refit.report["mm.iter"]["terms"] == 6
+    assert refit.report["mm.iter"]["max_abs_residual"] < 11
     # the loader is a large part of a detector's csynth LUTs (22-35%), so its absolute residuals
     # are what bound its effect on a design
     assert refit.report["load.lut"]["max_abs_residual"] < 500
@@ -195,9 +206,10 @@ def test_estimate_on_the_fit_detectors():
         for q in ("lut", "ff", "t_iter", "t0")
     }
     mean = {q: float(np.mean([abs(r[f"{q}_err_pct"]) for r in rows])) for q in worst}
-    assert worst["lut"] < 7.0 and mean["lut"] < 3.0
+    assert worst["lut"] < 2.0 and mean["lut"] < 1.5
     assert worst["ff"] < 4.0 and mean["ff"] < 2.0
-    assert worst["t_iter"] < 1.5 and mean["t_iter"] < 0.6
+    # v2's matmul cycle model is 14 cycles (1.9%) slow on the K = 16, 16-lane, 3-multiply detector
+    assert worst["t_iter"] < 2.0 and mean["t_iter"] < 0.6
     assert worst["t0"] < 2.5
 
 
@@ -237,7 +249,8 @@ def test_compose_walks_the_same_numbers():
         assert {k: est.total[k] for k in MD.COUNTERS} == models.resources(c)["total"]
         assert len(est.per_module) == 9  # the top's own term and its eight modules
         assert est.own == {k: round(v) for k, v in models.integration(c).items()}
-    # the matmul's LUT model was calibrated at 1, 4 and 8 lanes: elsewhere it says so
+    # since version 2 the matmul is calibrated at every lane count, so nothing inside the space
+    # extrapolates (v1 said EXTRAPOLATED at 2 and 16 lanes)
     from waveflow.calib.confidence import ConfidenceLevel
 
     def level(c):
@@ -246,9 +259,9 @@ def test_compose_walks_the_same_numbers():
         )
         return compose(top, model_for=MD.model_for(models)).level
 
-    assert level(HwConfig(L=4)) is ConfidenceLevel.INTERPOLATED
-    assert level(HwConfig(L=16, C=16)) is ConfidenceLevel.EXTRAPOLATED
-    assert level(HwConfig(L=2)) is ConfidenceLevel.EXTRAPOLATED
+    assert MD.MM_FIT_LANES == (1, 2, 4, 8, 16)
+    for c in (HwConfig(L=4), HwConfig(L=16, C=16), HwConfig(L=2)):
+        assert level(c) is ConfidenceLevel.INTERPOLATED
 
 
 # --- the Python block models use the calibrated spans (step 5.5) ---------------------------------
@@ -312,8 +325,9 @@ def test_python_simulation_takes_the_models_job_time(c):
 
 # --- held-out validation (steps 5.7 and 5.8, AC5) ------------------------------------------------
 
-#: The model file as frozen in step 5.6, before any held-out build ran (plan §15).
-FROZEN_MODEL_SHA256 = "6450abe0889054c8bcb513fd52f6d38924303cd3d3827c6da1e4cb505ca5c513"
+#: The model file as frozen: version 2, in step 6.1, before any build of the second held-out set
+#: ran (plan §15).  Version 1 was frozen in step 5.6 as 6450abe0…c513, before any held-out build.
+FROZEN_MODEL_SHA256 = "d95510d337e992d3194fa17fff715d15989573e9ea8863553b3998dcfdbb95d9"
 
 
 def test_models_are_unchanged_since_they_were_frozen():
@@ -445,7 +459,8 @@ def test_results_files_name_their_tool_version():
         MD.MODEL_FILE.with_suffix(".provenance.json").read_text(encoding="utf-8")
     )
     assert side["sha256"] == FROZEN_MODEL_SHA256 and side["tool"] == "vitis_hls 2024.1"
-    assert side["fit_builds"] == MD.Models.load().meta["fit_builds"] == 67
+    assert side["fit_builds"] == MD.Models.load().meta["fit_builds"] == 86
+    assert side["version"] == MD.Models.load().meta["version"] == 2
 
 
 # --- the implementation reality check (step 5.9) -------------------------------------------------
@@ -617,9 +632,11 @@ def test_supplement_is_scored_with_the_frozen_models_and_has_no_gates(tmp_path):
     detail, metrics = _supplement()
     assert {r["build"] for r in detail} == {b for b, _t, _r, _c in read_supplement()}
     assert all(r["threshold"] == "" and r["pass"] == "" for r in metrics.values())
-    assert (
-        V.overlapping(role="supplement") == set()
-    )  # disjoint from the fit by construction
+    # Disjoint from the first calibration round by construction.  The second round (step 6.1)
+    # repeats the first design's corners at 2 lanes, and one of them is this detector's matmul;
+    # the table gives the metrics without it too.
+    assert V.overlapping(role="supplement") == {"det_k16_l2_r16_c16_m4_w8g0_d32_s4_q4"}
+    assert metrics["disjoint from fit: designs LUT MAPE (%)"]["n"] == "1"
 
 
 def test_supplement_confirms_the_resource_models_at_k16():
@@ -636,25 +653,33 @@ def test_supplement_confirms_the_resource_models_at_k16():
     assert float(metrics["designs: FF MAPE (%)"]["worst"]) < 7.0
     designs = [r for r in detail if r["scope"] == "design" and r["quantity"] == "lut"]
     assert sorted(int(r["measured"]) for r in designs) == [80124, 100104]
-    # the matmul LUT model extrapolates at 16 lanes (models.MM_FIT_LANES): 15% low there
+    # the 16-lane matmul: v1's LUT model, calibrated at 1, 4 and 8 lanes, was 15% low here; this
+    # build is what prompted version 2, which is 4.3% low
     lut = {
         r["build"]: float(r["error_pct"])
         for r in detail
         if r["scope"] == "block:CgMm" and r["quantity"] == "lut"
     }
-    assert -16.0 < lut["mm_k16_r2_c32_m4_w14_l16"] < -14.0
+    assert -5.0 < lut["mm_k16_r2_c32_m4_w14_l16"] < -4.0
     assert abs(lut["mm_k16_r8_c4_m4_w16_l1"]) < 3.0
 
 
 def test_supplement_finds_the_memory_bound_regime_the_cycle_model_lacks():
-    """Block spans hold at K = 16 (within 0.5% on the unit builds).  Job time does not, on one
-    detector: with 16 lanes an iteration is so short that a short job is limited by loading its
-    matrices through 32-bit memory words, and the interval between completions then depends on
-    the jobs around it, not on nit alone.  The model has no term for that (recorded for gate 6.0).
+    """The vector unit's spans hold at K = 16 (within 0.5% on the unit builds).  Job time does not,
+    on one detector: with 16 lanes an iteration is so short that a short job is limited by loading
+    its matrices through 32-bit memory words, and the interval between completions then depends on
+    the jobs around it, not on nit alone.  The model has no term for that; since gate 6.0 the DSE
+    guards against it instead (``dse.GUARD``).
+
+    The matmul's span is where version 2 is worse than version 1 on this set: 4.4% (23 cycles) slow
+    on the two-row, 32-column, 16-lane build, which v1 had within 0.5%.  v2 fits one overhead per
+    tile that grows with log2 of the columns whenever the array has more than one row; at two rows
+    it does not grow.  The models were frozen before this was scored, so it stays as measured.
     """
     detail, metrics = _supplement()
-    for q in ("vec.iter", "vec.init", "mm.iter"):
+    for q in ("vec.iter", "vec.init"):
         assert float(metrics[f"unit builds: {q} span MAPE (%)"]["worst"]) < 0.5
+    assert 4.0 < float(metrics["unit builds: mm.iter span MAPE (%)"]["worst"]) < 5.0
     jobs = {}
     for r in detail:
         if r["quantity"].startswith("job_cycles"):
@@ -666,9 +691,11 @@ def test_supplement_finds_the_memory_bound_regime_the_cycle_model_lacks():
     assert (
         max(abs(e) for e in jobs[slow]) < 0.1
     )  # the loop is the bottleneck: the model holds
-    assert 15.0 < max(abs(e) for e in jobs[fast]) < 18.0  # memory-bound short jobs
-    # the model is never much too slow there, only too fast (a negative error)
-    assert all(e < 1.0 for e in jobs[fast])
+    assert 14.0 < max(abs(e) for e in jobs[fast]) < 16.0  # memory-bound short jobs
+    # the large errors are all one way: the model is too fast (a negative error), and never more
+    # than 2.4% too slow
+    assert all(e < 2.5 for e in jobs[fast])
+    assert sorted(jobs[fast])[1] < -4.0 < sorted(jobs[fast])[2]
     # the same nit takes two different times in that run
     cycles = _committed_cycles(fast)
     assert len(cycles[2]) == 2 and max(cycles[2]) - min(cycles[2]) > 200

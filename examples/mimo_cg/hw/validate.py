@@ -42,7 +42,7 @@ import hashlib
 from pathlib import Path
 
 from examples.mimo_cg.hw import models as MD
-from examples.mimo_cg.hw.space import HwConfig
+from examples.mimo_cg.hw.space import FIT_ROLES, HwConfig
 from examples.mimo_cg.mimo_cg import provenance, read_table, write_table
 
 HERE = Path(__file__).resolve().parent
@@ -259,7 +259,7 @@ def summary_rows(detail: list[dict]) -> list[dict]:
 
 
 def overlapping(data_dir: Path = PAPER_DATA, role: str = ROLE) -> set[str]:
-    """Held-out builds that share a block with a ``fit`` build of the other kind of top."""
+    """Held-out builds that share a block with a calibration build of the other kind of top."""
     rows = read_table(data_dir / "hw_builds.csv")
     knobs = HwConfig.__dataclass_fields__
     cfg = {r["build"]: HwConfig(**{k: int(r[k]) for k in knobs}) for r in rows}
@@ -269,7 +269,7 @@ def overlapping(data_dir: Path = PAPER_DATA, role: str = ROLE) -> set[str]:
         return {
             key[kind](cfg[r["build"]])
             for r in rows
-            if r["role"] == "fit" and r["top"] == top
+            if r["role"] in FIT_ROLES and r["top"] == top
         }
 
     fit_unit = {kind: keys(kind, kind) for kind in key}
@@ -383,7 +383,8 @@ def validate(
     """Score the committed models on the rows of ``role`` and write the two tables.
 
     ``holdout`` is AC5's set and writes ``model_validation*.csv``.  ``supplement`` is the extra
-    held-out set of the M5 review: the same metrics, in ``model_validation_supplement*.csv``, with
+    held-out set of the M5 review, and ``supplement2`` the held-out matmul builds of the second
+    calibration round (plan step 6.1): the same metrics, in ``model_validation_<role>*.csv``, with
     no thresholds, because AC5 is judged on the first set.
     """
     models = MD.Models.load()
@@ -410,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="accepted for symmetry: every run rewrites"
     )
     ap.add_argument("--no-figure", action="store_true")
-    ap.add_argument("--role", choices=(ROLE, "supplement"), default=ROLE)
+    ap.add_argument("--role", choices=(ROLE, "supplement", "supplement2"), default=ROLE)
     args = ap.parse_args(argv)
     detail, summary = validate(role=args.role)
     print(f"model {model_sha256()[:16]}…  {len(detail)} rows")

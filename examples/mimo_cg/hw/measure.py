@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import time
 import zlib
 from pathlib import Path
@@ -49,7 +50,7 @@ import numpy as np
 
 from examples.mimo_cg.hw import build as B
 from examples.mimo_cg.hw.common import DEFAULT_N, CgDesc, hw_format
-from examples.mimo_cg.hw.space import HwConfig, read_split
+from examples.mimo_cg.hw.space import NITS, HwConfig, read_split
 
 HERE = Path(__file__).resolve().parent
 #: Per-build measurement records (gitignored working files; the merged tables go to paper_data/).
@@ -112,15 +113,31 @@ def elab_params(top: str, c: HwConfig) -> dict:
     return kw | {"N": DEFAULT_N}
 
 
-def job_nits(K: int) -> list[int]:
-    """The scenario's jobs: a short ramp, the longest job, then the ramp's start again, so the
-    interval fit has four distinct iteration counts and one repeat."""
-    return [1, 2, 3, K, 1, 2]
+#: In a ``steady`` run, jobs of up to this many iterations are issued twice in a row.
+STEADY_PAIR_MAX_NIT = 4
 
 
-def workload(top: str, c: HwConfig, build: str):
+def job_nits(K: int, steady: bool = False) -> list[int]:
+    """The scenario's jobs.
+
+    By default (the calibration and held-out campaigns): a short ramp, the longest job, then the
+    ramp's start again, so the interval fit has four distinct iteration counts and one repeat.
+
+    ``steady`` (the brute force, plan step 6.3): every iteration count of the accuracy table, in
+    rising order, the short ones twice in a row.  A short job can finish before the next job's
+    matrices are loaded, and that delays the next job; the second of two equal jobs is past it, so
+    its interval is the job time of a stream of such jobs (:func:`job_intervals`).
+    """
+    if not steady:
+        return [1, 2, 3, K, 1, 2]
+    return [
+        nit for nit in NITS[K] for _ in range(2 if nit <= STEADY_PAIR_MAX_NIT else 1)
+    ]
+
+
+def workload(top: str, c: HwConfig, build: str, steady: bool = False):
     """``(problems, jobs)`` of the build's scenario; the last problem is the zero-residual one."""
-    jobs = job_nits(c.K)
+    jobs = job_nits(c.K, steady)
     seed = zlib.crc32(build.encode()) & 0xFFFF
     if top == "det":
         from examples.mimo_cg.hw.detector import detector_problems
@@ -374,10 +391,16 @@ def file_records(
 # --- cycles: job intervals -------------------------------------------------------------------
 
 
-def job_intervals(done_cycles: list[int], jobs: list[int]) -> dict:
+def job_intervals(
+    done_cycles: list[int], jobs: list[int], steady: bool = False
+) -> dict:
     """Fit the intervals between consecutive job completions as ``T0 + nit·T_iter``.
 
     ``done_cycles`` holds one cycle per done word; a job's completion is its last word.
+
+    With ``steady`` (a :func:`job_nits` ``steady`` list) the result also has ``steady``, the job
+    time per iteration count: the interval of the *last* job of each count, which for a short job
+    is the second of its pair.  The fit then uses those intervals only.
     """
     per = len(done_cycles) // len(jobs)
     if per < 1 or per * len(jobs) != len(done_cycles):
@@ -385,11 +408,17 @@ def job_intervals(done_cycles: list[int], jobs: list[int]) -> dict:
     done = np.asarray(done_cycles[per - 1 :: per], dtype=float)
     gaps = np.diff(done)
     nit = np.asarray(jobs[1:], dtype=float)
-    t_iter, t0 = np.polyfit(nit, gaps, 1)
-    return {
+    out = {
         "first_done": int(done[0]),
         "nit": [int(n) for n in nit],
         "interval": [int(g) for g in gaps],
+    }
+    if steady:
+        last = sorted({int(n): i for i, n in enumerate(nit)}.values())
+        out["steady"] = {str(int(nit[i])): int(gaps[i]) for i in last}
+        nit, gaps = nit[last], gaps[last]
+    t_iter, t0 = np.polyfit(nit, gaps, 1)
+    return out | {
         "t0": float(t0),
         "t_iter": float(t_iter),
         "max_resid": float(np.abs(gaps - (t0 + t_iter * nit)).max()),
@@ -545,6 +574,21 @@ def _write_dumper(out_dir: Path, top: str) -> None:
     step.run(BuildConfig(root_dir=out_dir, params={}))
 
 
+def prune_build(out_dir: Path, top_name: str) -> None:
+    """Delete what the tools left in ``out_dir`` beyond the reports, the logs, the generated
+    sources and the test vectors: the HLS database, the generated RTL and the compiled simulation.
+    The csynth reports stay, so the build can be re-attributed; anything else needs a rebuild.
+    """
+    sol = Path(out_dir) / f"{top_name}_proj" / "solution1"
+    for sub in (sol / ".autopilot", sol / "impl", Path(out_dir) / "xsi" / "xsim.dir"):
+        shutil.rmtree(sub, ignore_errors=True)
+    for sub in (sol / "syn").glob("*"):
+        if sub.is_dir() and sub.name != "report":
+            shutil.rmtree(sub, ignore_errors=True)
+    for path in (Path(out_dir) / "xsi").glob("*.wdb"):
+        path.unlink()
+
+
 def measure(
     build: str,
     top: str,
@@ -553,12 +597,20 @@ def measure(
     *,
     role: str = "",
     keep_trace: bool = False,
+    steady: bool = False,
+    trace: bool = True,
+    prune: bool = False,
 ) -> dict:
     """Take one build through csynth, attribution, the traced RTL run and the extraction.
 
     Returns the build's record and writes it to ``results/hw_points/<build>.json``.  A step that
     fails is recorded in ``error`` with whatever was measured before it; nothing is raised for a
     failed build, so a campaign keeps its other points.
+
+    ``steady`` runs the steady-state job list (:func:`job_nits`).  ``trace=False`` runs the RTL
+    without a waveform, for when only the job intervals are wanted: there are then no block spans.
+    ``prune`` deletes the tool's working files afterwards (:func:`prune_build`), which a campaign
+    of a thousand builds needs: a build directory is 100–400 MB with them and a few MB without.
     """
     out_dir = Path(out_dir) if out_dir else B.BUILD_ROOT / build
     name = TOP_NAME[top]
@@ -582,14 +634,15 @@ def measure(
             raise RuntimeError("csynth failed: " + log[-600:])
         rec["resources"] = attribute(top, c, out_dir)
 
-        problems, jobs = workload(top, c, build)
+        problems, jobs = workload(top, c, build, steady)
         n_cycles = cycles_bound(top, c, jobs)
-        _write_dumper(out_dir, top)
+        if trace:
+            _write_dumper(out_dir, top)
         started = time.perf_counter()
         for _attempt in range(3):
             sim = _sim(top, c, problems, jobs, n_cycles)
             scenario = B.generate_tb(out_dir, name, sim.tb, sim)
-            proc = B.run_xsi(out_dir, name, trace=True)
+            proc = B.run_xsi(out_dir, name, trace=trace)
             if proc.returncode != 0:
                 raise RuntimeError(
                     "XSI run failed: " + (proc.stdout + proc.stderr)[-600:]
@@ -611,18 +664,23 @@ def measure(
             "done_words_per_job": CgDesc.nwords_per_inst(c.mem_dw),
             "done_cycles": cycles,
         }
-        rec["intervals"] = job_intervals(cycles, jobs)
-        vcd = out_dir / "xsi" / f"{name}_trace.vcd"
-        spans = block_spans(lock_events(vcd))
-        rec["spans"] = summarize_spans(spans)
-        rec["span_samples"] = {
-            k: [[s["span"], s["regime"], int(s["stalled"])] for s in v]
-            for k, v in spans.items()
-        }
-        if not keep_trace:
-            vcd.unlink()
+        rec["intervals"] = job_intervals(cycles, jobs, steady)
+        if trace:
+            vcd = out_dir / "xsi" / f"{name}_trace.vcd"
+            spans = block_spans(lock_events(vcd))
+            rec["spans"] = summarize_spans(spans)
+            rec["span_samples"] = {
+                k: [[s["span"], s["regime"], int(s["stalled"])] for s in v]
+                for k, v in spans.items()
+            }
+            if not keep_trace:
+                vcd.unlink()
     except Exception as exc:  # noqa: BLE001 - a failed build is a datapoint
         rec["error"] = f"{type(exc).__name__}: {exc}"
+    if (
+        prune and "error" not in rec
+    ):  # a failed build keeps everything, for the post-mortem
+        prune_build(out_dir, name)
     POINTS_DIR.mkdir(parents=True, exist_ok=True)
     (POINTS_DIR / f"{build}.json").write_text(
         json.dumps(rec, indent=1) + "\n", encoding="utf-8"

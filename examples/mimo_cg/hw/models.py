@@ -32,11 +32,26 @@ the tool binds it on this device.
   memory of its own.
 * **Registers.**  The matmul holds ``A`` in ``2·K²·W`` flip-flops.
 
-What the calibration does not cover (M5 review): the matmul's calibration builds have 1, 4 and 8
-lanes, so its LUT model extrapolates at 2 and 16 (:data:`MM_FIT_LANES`); the detector calibration
-builds have W ∈ {8, 12, 16} and no C = 32; and a block's row was measured with 64-bit memory words
-(with 32-bit words the two blocks' rows differ by up to 28 LUTs and 29 flip-flops, which the models
-ignore).
+What the calibration does not cover (M5 review): the detector calibration builds have
+W ∈ {8, 12, 16} and no C = 32; and a block's row was measured with 64-bit memory words (with 32-bit
+words the two blocks' rows differ by up to 28 LUTs and 29 flip-flops, which the models ignore).
+
+Version 2 (plan step 6.1)
+-------------------------
+The first matmul calibration design had 1, 4 and 8 lanes, and its LUT model came out 15% low at 16.
+The second round (roles ``fit`` and ``fit2``, :data:`~examples.mimo_cg.hw.space.FIT_ROLES`) adds
+builds at 2 and 16 lanes, and two things changed in the matmul's terms:
+
+* **LUT.**  The lane count acts in one place, the loop that rounds the accumulators and writes
+  ``S``: its cost is per lane, with a part that grows with the width and a part that grows with
+  the array's rows when the lanes do not cover the columns (then a lane selects among rows and
+  lane groups).  The three terms ``l``, ``lw`` and ``lr_fl`` replace v1's three.
+* **Cycles.**  The loops whose trip counts are known are counted, not fitted
+  (:func:`mm_iter_counted`): loading ``P`` and writing ``S`` take ``K·N/L`` cycles each, and a tile's
+  sweep takes ``K + R + C − 2``.  What is fitted is the overhead per tile.  With one row and as
+  many lanes as columns the tile has no output loop, and the tool merges the tile loops into the
+  sweep — but only up to :data:`MM_MERGE_MAX_C` columns (measured: merged at C = 4 and 8, not at
+  16).  v1 fitted the trip counts too, and assumed the merge at every C.
 
 *Fitted* terms are linear regressions (:class:`~waveflow.calib.calib.LinCalibModel`) of what is
 left, on terms read off each body's structure (:data:`TERMS`).
@@ -63,7 +78,7 @@ import pandas as pd
 
 from examples.mimo_cg.hw import build as B
 from examples.mimo_cg.hw.common import DEFAULT_N
-from examples.mimo_cg.hw.space import HwConfig, is_valid
+from examples.mimo_cg.hw.space import FIT_ROLES, HwConfig, is_valid
 from examples.mimo_cg.mimo_cg import read_table
 from waveflow.calib.calib import LinCalibModel
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
@@ -86,10 +101,13 @@ PLAIN_MULT_DSP_MIN_BITS = 12
 SDP_SHAPES = ((512, 36), (1024, 18), (2048, 9), (4096, 4), (8192, 2), (16384, 1))
 #: Below this many bits a stream-of-blocks memory is LUT RAM with an output register.
 SOB_BRAM_MIN_BITS = 1024
-#: The lane counts the matmul's calibration builds visit.  Its LUT model has a log2(L) term, so at the
-#: other lane counts of the space (2 and 16) it extrapolates: every 16-lane matmul row seen so far is
-#: under-predicted, by 2–16% (M5 review).  The matmul's DSP, BRAM and cycle models are not affected.
-MM_FIT_LANES = (1, 4, 8)
+#: The lane counts the matmul's calibration builds visit: every one of the space since version 2
+#: (the first round had 1, 4 and 8 only, and its LUT model extrapolated at 2 and 16).
+MM_FIT_LANES = (1, 2, 4, 8, 16)
+#: The widest one-row, one-lane-group array whose tile loops the tool merges into the sweep.
+MM_MERGE_MAX_C = 8
+#: The models' version: 2 since the second calibration round (plan step 6.1).
+VERSION = 2
 
 
 def knobs(c) -> dict:
@@ -242,7 +260,13 @@ def _mm_terms(k: dict) -> dict:
         float(k["cmul"] == 3),
         float(R > 1),
     )  # one row: no output multiplexer
+    groups = (
+        C // L
+    )  # lane groups per tile row: with more than one, a lane selects among them
     return {
+        "l": L,
+        "lw": L * W,
+        "lr_fl": L * R * float(groups > 1),
         "p": p,
         "pw": p * W,
         "p3": p * m3,
@@ -287,19 +311,36 @@ def _vec_init_terms(k: dict) -> dict:
     return {"ngk": (N // k["L"]) * k["K"], "w": k["W"]}
 
 
-def _mm_iter_terms(k: dict) -> dict:
+def _mm_merged(k: dict) -> bool:
+    """Whether the tool merges the matmul's tile loops into the sweep: one row and one lane group
+    (so the tile has no output loop), up to :data:`MM_MERGE_MAX_C` columns."""
+    return k["R"] * (k["C"] // k["L"]) == 1 and k["C"] <= MM_MERGE_MAX_C
+
+
+def mm_iter_counted(k: dict) -> int:
+    """The cycles of one matmul iteration that follow from trip counts alone: the load of ``P``
+    and the write of ``S``, ``K·N/L`` each, and one sweep of ``K + R + C − 2`` per tile.  When the
+    tile loops are merged into the sweep the write happens inside it and takes no cycle of its own.
+    """
     K, R, C, L = k["K"], k["R"], k["C"], k["L"]
-    tiles, groups = (K // R) * (N // C), C // L
-    flat = R * groups == 1  # the tile loops and the sweep become one pipelined loop
+    tiles = (K // R) * (N // C)
+    passes = 1 if _mm_merged(k) else 2
+    return passes * (K * N // L) + tiles * (K + R + C - 2)
+
+
+def _mm_iter_terms(k: dict) -> dict:
+    """What is left of one matmul iteration after :func:`mm_iter_counted`: an overhead per tile,
+    larger for the 3-multiply form and, with more than one row, growing with log2 of the columns;
+    a constant when the tile loops are merged."""
+    K, R, C = k["K"], k["R"], k["C"]
+    tiles, merged = (K // R) * (N // C), _mm_merged(k)
+    looped = tiles * (not merged)
     return {
-        "knl": K * N // L,
-        "ts": tiles * (K + R + C - 2),
-        "t": tiles * (not flat),
+        "t": looped,
         "t3": tiles * (k["cmul"] == 3),
-        "t_out1": tiles * ((R == 1) != (groups == 1)),
-        "kr": (K // R) * (not flat),
-        "kr1": float(K // R == 1),
-        "nc1": float(N // C == 1),
+        "t_r": looped * (R > 1),
+        "t_lgc": looped * (R > 1) * math.log2(C),
+        "flat": float(merged),
     }
 
 
@@ -313,12 +354,12 @@ TERMS = {
     "CgVec.ff": (_vec_terms, ("l", "lw", "lg", "w", "g", "fab", "l2wg")),
     "CgMm.lut": (
         _mm_terms,
-        ("p", "pw", "p3", "pw3", "fab", "k", "k2", "c", "out", "out_w", "out_lgl"),
+        ("p", "pw", "p3", "pw3", "fab", "k", "k2", "c", "l", "lw", "lr_fl"),
     ),
     "CgMm.ff": (_mm_terms, ("p", "pw", "p3", "pw3", "k", "w", "kw", "out_wide")),
     "vec.iter": (_vec_iter_terms, ("ngk", "ng", "ngw", "ngg", "w", "g")),
     "vec.init": (_vec_init_terms, ("ngk", "w")),
-    "mm.iter": (_mm_iter_terms, ("knl", "ts", "t", "t3", "t_out1", "kr", "kr1", "nc1")),
+    "mm.iter": (_mm_iter_terms, ("t", "t3", "t_r", "t_lgc", "flat")),
 }
 for _name in ("load.lut", "load.ff", "store.lut", "store.ff"):
     TERMS[_name] = (
@@ -459,12 +500,16 @@ class Models:
         total = {ctr: sum(row[ctr] for row in mods.values()) for ctr in COUNTERS}
         return {"total": total, "modules": mods}
 
+    def span(self, name: str, c) -> float:
+        """One block span at ``c``, in cycles: the counted part, if it has one, plus the fit."""
+        k = knobs(c)
+        counted = mm_iter_counted(k) if name == "mm.iter" else 0
+        return counted + self._reg(name, TERMS[name][0](k))
+
     def spans(self, c) -> dict:
         """The block spans at ``c``, in cycles: ``mm.iter``, ``vec.iter`` and ``vec.init``."""
-        k = knobs(c)
         return {
-            name: self._reg(name, TERMS[name][0](k))
-            for name in ("mm.iter", "vec.iter", "vec.init")
+            name: self.span(name, c) for name in ("mm.iter", "vec.iter", "vec.init")
         }
 
     def cycles(self, c) -> dict:
@@ -511,7 +556,7 @@ def block_span(kind: str, fmt: int, N: int = N, **knob) -> float | None:
         k |= {"R": k["K"], "C": max(4, k["L"])}
     if not is_valid(HwConfig(**k)):
         return None
-    return models._reg(kind, TERMS[kind][0](k))
+    return models.span(kind, k)
 
 
 #: The detector's modules, in graph order.
@@ -573,9 +618,15 @@ class CgResourceModel(ResourceModel):
         return {ctr: round(res[ctr]) for ctr in COUNTERS}
 
     def confidence_feat(self, row) -> Confidence:
-        """``INTERPOLATED`` inside the calibrated design space, ``EXTRAPOLATED`` outside it and for
-        the matmul at a lane count its calibration builds did not visit."""
+        """``INTERPOLATED`` inside the calibrated design space, ``EXTRAPOLATED`` outside it (and,
+        should a later design leave a lane count out, for the matmul at that lane count).
+        """
         full = knobs(HwConfig()) | dict(row)
+        # a module that does not see the array still needs a valid one to be checked against
+        if "C" not in row:
+            full["C"] = max(full["C"], full["L"])
+        if "R" not in row:
+            full["R"] = full["K"]
         inside = is_valid(HwConfig(**full))
         if inside and self.cls == "CgMm" and full["L"] not in MM_FIT_LANES:
             inside = False
@@ -606,19 +657,22 @@ def model_for(models: Models):
 # --- fitting ---------------------------------------------------------------------------------
 
 
-def _fit_tables(data_dir: Path) -> tuple[dict, list[dict], list[dict]]:
-    """The campaign tables, cut to the ``fit`` builds: ``(configs by build, module rows, cycles)``."""
+def _fit_tables(
+    data_dir: Path, roles: tuple[str, ...] = FIT_ROLES
+) -> tuple[dict, list[dict], list[dict]]:
+    """The campaign tables, cut to the calibration builds (``roles``): ``(configs by build, module
+    rows, cycles)``."""
     builds = {
         r["build"]: r
         for r in read_table(data_dir / "hw_builds.csv")
-        if r["role"] == "fit"
+        if r["role"] in roles
     }
     cfg = {
         b: {k: int(r[k]) for k in HwConfig.__dataclass_fields__}
         for b, r in builds.items()
     }
-    modules = [r for r in read_table(data_dir / "hw_modules.csv") if r["role"] == "fit"]
-    cycles = [r for r in read_table(data_dir / "hw_cycles.csv") if r["role"] == "fit"]
+    modules = [r for r in read_table(data_dir / "hw_modules.csv") if r["role"] in roles]
+    cycles = [r for r in read_table(data_dir / "hw_cycles.csv") if r["role"] in roles]
     assert all(r["build"] in cfg for r in modules + cycles)
     return cfg, modules, cycles
 
@@ -670,7 +724,14 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
     """Fit every model from the ``fit`` rows of the campaign tables in ``data_dir``."""
     cfg, modules, cycles = _fit_tables(data_dir)
     m = Models(
-        meta={"part": PART, "period_ns": B.PERIOD_NS, "fit_builds": len(cfg), "N": N}
+        meta={
+            "part": PART,
+            "period_ns": B.PERIOD_NS,
+            "fit_builds": len(cfg),
+            "N": N,
+            "version": VERSION,
+            "fit_roles": list(FIT_ROLES),
+        }
     )
 
     def rows(top: str, kind: str) -> list[dict]:
@@ -801,8 +862,15 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
         ]
 
     for name, top in (("vec.iter", "vec"), ("vec.init", "vec"), ("mm.iter", "mm")):
+        got = span(top, name)
+        counted = [mm_iter_counted(k) if name == "mm.iter" else 0 for k, _y in got]
         m.coef[name], m.report[name] = _regress(
-            name, [(TERMS[name][0](k), y) for k, y in span(top, name)]
+            name,
+            [
+                (TERMS[name][0](k), y - cnt)
+                for (k, y), cnt in zip(got, counted, strict=True)
+            ],
+            scale=[y for _k, y in got],
         )
     by = {
         (r["build"], r["quantity"]): float(r["cycles"])

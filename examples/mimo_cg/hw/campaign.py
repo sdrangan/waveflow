@@ -28,6 +28,12 @@ plan step 5.7 does after the models are committed.
 The second calibration round (plan step 6.1) adds two roles from ``paper_data/calibration_v2.csv``:
 ``fit2`` builds calibrate, like ``fit``; ``supplement2`` builds are held out, and run only after the
 v2 models are frozen.
+
+The brute force (plan steps 6.3 and 6.4) is the role ``bruteforce``: the 1,440 detectors of
+``paper_data/bruteforce_grid.csv``.  Its builds run the steady-state job list with no waveform and
+are pruned afterwards (:func:`~examples.mimo_cg.hw.measure.measure`), and ``--merge bruteforce``
+writes its own tables, ``bruteforce_builds.csv``, ``bruteforce_modules.csv`` (module rows only) and
+``bruteforce_cycles.csv`` (with one ``job_time`` row per iteration count).
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from examples.mimo_cg.hw import measure as M
 from examples.mimo_cg.hw.space import (
     FIT_ROLES,
     HwConfig,
+    read_bruteforce,
     read_split,
     read_supplement,
     read_v2,
@@ -62,16 +69,19 @@ COUNTERS = ("lut", "ff", "dsp", "bram", "uram")
 #: held-out set of the M5 review.  ``fit2`` and ``supplement2`` are the second round (step 6.1): more
 #: matmul calibration builds, and their own held-out set.  Only the calibration roles
 #: (:data:`~examples.mimo_cg.hw.space.FIT_ROLES`) are ever filed into the calibration store.
-ROLES = ("fit", "holdout", "supplement", "fit2", "supplement2")
+ROLES = ("fit", "holdout", "supplement", "fit2", "supplement2", "bruteforce")
+#: The role measured for the decision comparison: steady-state jobs, no waveform, pruned builds,
+#: and tables of its own.
+BRUTEFORCE = "bruteforce"
 
 
 def split() -> dict[str, tuple[str, str, HwConfig]]:
     """``{build: (top, role, configuration)}``: the committed split in file order, then the
-    supplementary held-out set (role ``supplement``, M5 review) and the second calibration round
-    (roles ``fit2`` and ``supplement2``, step 6.1), each when its file is there."""
-    return {
-        b: (t, r, c) for b, t, r, c in [*read_split(), *read_supplement(), *read_v2()]
-    }
+    supplementary held-out set (role ``supplement``, M5 review), the second calibration round
+    (roles ``fit2`` and ``supplement2``, step 6.1) and the brute-force sub-grid (role
+    ``bruteforce``, step 6.3), each when its file is there."""
+    builds = [*read_split(), *read_supplement(), *read_v2(), *read_bruteforce()]
+    return {b: (t, r, c) for b, t, r, c in builds}
 
 
 def grid() -> ParamGrid:
@@ -101,7 +111,10 @@ class HwPointStep(BuildStep):
 
     def run(self, config: BuildConfig, **kw) -> dict:
         top, role, c = split()[kw["build"]]
-        rec = M.measure(kw["build"], top, c, role=role)
+        brute = role == BRUTEFORCE
+        rec = M.measure(
+            kw["build"], top, c, role=role, steady=brute, trace=not brute, prune=brute
+        )
         if "error" in rec:
             raise RuntimeError(rec["error"])
         marker = M.POINTS_DIR / "last_point.txt"
@@ -123,7 +136,7 @@ class DryPointStep(BuildStep):
 
         top, role, c = split()[kw["build"]]
         elaborate(M.comp_class(top), M.elab_params(top, c), name=M.TOP_NAME[top])
-        _problems, jobs = M.workload(top, c, kw["build"])
+        _problems, jobs = M.workload(top, c, kw["build"], role == BRUTEFORCE)
         path = M.POINTS_DIR / "dry_point.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -186,7 +199,7 @@ def build_rows(recs: list[dict]) -> list[dict]:
     return rows
 
 
-def module_rows(recs: list[dict]) -> list[dict]:
+def module_rows(recs: list[dict], modules_only: bool = False) -> list[dict]:
     rows = []
     for rec in recs:
         res = rec.get("resources", {})
@@ -197,6 +210,8 @@ def module_rows(recs: list[dict]) -> list[dict]:
                 | {k: m[k] for k in COUNTERS}
                 | {"words": "", "bits": "", "banks": ""}
             )
+            if modules_only:
+                continue
             for loop, sub in m.get("subblocks", {}).items():
                 rows.append(
                     _head(rec)
@@ -208,7 +223,7 @@ def module_rows(recs: list[dict]) -> list[dict]:
                     | {k: sub.get(k, 0) for k in COUNTERS}
                     | {"words": "", "bits": "", "banks": ""}
                 )
-        for ch in res.get("channels", []):
+        for ch in [] if modules_only else res.get("channels", []):
             rows.append(
                 _head(rec)
                 | {"kind": ch["kind"], "name": ch["name"], "rtl_module": ""}
@@ -220,7 +235,9 @@ def module_rows(recs: list[dict]) -> list[dict]:
 
 def cycle_rows(recs: list[dict]) -> list[dict]:
     """Long format: ``quantity`` is ``job_interval`` (one row per job, with its ``nit``), a fit term
-    (``first_done``, ``t0``, ``t_iter``, ``max_resid``) or a span kind (``mm.iter`` …).
+    (``first_done``, ``t0``, ``t_iter``, ``max_resid``), a span kind (``mm.iter`` …) or, for a
+    steady-state run, ``job_time`` (one row per iteration count: the job time of a stream of such
+    jobs).
     """
     blank = dict.fromkeys(("nit", "n", "stalled", "wait_n", "wait_min", "wait_max"), "")
     blank |= dict.fromkeys(("b2b_n", "b2b_min", "b2b_max"), "")
@@ -234,6 +251,13 @@ def cycle_rows(recs: list[dict]) -> list[dict]:
                     | {"quantity": "job_interval", "cycles": cyc}
                     | blank
                     | {"nit": nit}
+                )
+            for nit, cyc in fit.get("steady", {}).items():
+                rows.append(
+                    _head(rec)
+                    | {"quantity": "job_time", "cycles": cyc}
+                    | blank
+                    | {"nit": int(nit)}
                 )
             for q in ("first_done", "t0", "t_iter", "max_resid"):
                 rows.append(
@@ -262,7 +286,15 @@ def merge(
     points_dir: Path = M.POINTS_DIR,
     out_dir: Path = PAPER_DATA,
 ) -> dict:
-    """Write the three tables for the builds of ``roles``; returns ``{table: path}``."""
+    """Write the three tables for the builds of ``roles``; returns ``{table: path}``.
+
+    The brute force is merged on its own, into ``bruteforce_*.csv``: its builds ran a different
+    job list, and its module table keeps the module rows only.
+    """
+    brute = BRUTEFORCE in roles
+    if brute and len(roles) > 1:
+        raise ValueError("merge the brute force on its own: --merge bruteforce")
+    stem = BRUTEFORCE if brute else "hw"
     recs = _records(roles, points_dir)
     tools = sorted({r["tool"] for r in recs})
     note = {
@@ -273,9 +305,9 @@ def merge(
     }
     out = {}
     for name, rows in (
-        ("hw_builds", build_rows(recs)),
-        ("hw_modules", module_rows(recs)),
-        ("hw_cycles", cycle_rows(recs)),
+        (f"{stem}_builds", build_rows(recs)),
+        (f"{stem}_modules", module_rows(recs, modules_only=brute)),
+        (f"{stem}_cycles", cycle_rows(recs)),
     ):
         out[name] = Path(out_dir) / f"{name}.csv"
         write_table(out[name], rows, provenance(name, **note))
@@ -353,11 +385,11 @@ def main(argv: list[str] | None = None) -> int:
 
     labels = list(split())
 
+    role_of = {b: r for b, (_t, r, _c) in split().items()}
+
     def narrow(g: ParamGrid, args) -> ParamGrid:
         chosen = [
-            b
-            for b in g.axes["build"]
-            if args.role is None or split()[b][1] == args.role
+            b for b in g.axes["build"] if args.role is None or role_of[b] == args.role
         ]
         if args.shard:
             chosen = shard(chosen, args.shard)

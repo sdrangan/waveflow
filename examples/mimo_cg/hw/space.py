@@ -77,6 +77,8 @@ _SPLIT_STREAM = 90
 N_HOLDOUT = {"vec": 12, "mm": 12, "det": 10}
 #: The roles whose builds calibrate the models: the first design and the second round (step 6.1).
 FIT_ROLES = ("fit", "fit2")
+#: The iteration counts the Phase 3 accuracy table holds, per K: the ``nit`` values a design can run.
+NITS = {4: (1, 2, 3, 4), 8: (1, 2, 3, 4, 6, 8), 16: (1, 2, 3, 4, 6, 8, 12, 16)}
 
 
 @dataclass(frozen=True, order=True)
@@ -386,6 +388,8 @@ V2_PATH = HERE.parent / "paper_data" / "calibration_v2.csv"
 _V2_STREAM = 92
 #: The lane counts the first matmul calibration design left out.
 MM_V2_LANES = (2, 16)
+#: The one-row, one-lane-group build between the two that were measured (C = 4 and C = 16).
+MM_V2_ONE_GROUP = {"R": 1, "C": 8, "L": 8}
 #: The second supplementary held-out set, in draw order: ``(name, top, how many, what belongs)``.
 V2_STRATA = (
     ("mm: 2 lanes", "mm", 3, lambda c: c.L == 2),
@@ -394,9 +398,18 @@ V2_STRATA = (
 
 
 def mm_fit_v2() -> list[HwConfig]:
-    """18 more matmul calibration builds: the centre of :func:`mm_fit` and its eight array-size ×
-    width corners, repeated at 2 and at 16 lanes.  The lanes must divide ``C``, so ``C`` is raised to
-    the lane count where it is smaller (the centre and one corner, at 16 lanes)."""
+    """19 more matmul calibration builds.
+
+    Eighteen are the centre of :func:`mm_fit` and its eight array-size × width corners, repeated at
+    2 and at 16 lanes.  The lanes must divide ``C``, so ``C`` is raised to the lane count where it
+    is smaller (the centre and one corner, at 16 lanes).
+
+    The last one was added after those eighteen ran (plan §15, step 6.1).  With one row and as many
+    lanes as columns the tile has nothing to loop over at its output, and the tool merged the tile
+    loops into the sweep at C = 4 but not at C = 16, which changes the cycles per tile.  The two
+    rounds had no such build at C = 8, so :data:`MM_V2_ONE_GROUP` supplies it.  It has 8 lanes, so
+    it is in neither pool of :func:`supplement2`, and the held-out draw does not move.
+    """
     centre = {"K": 8, "R": 4, "C": 8, "cmul": 4, "W": 12}
     corners = ((8, 1, 4), (8, 8, 32), (16, 16, 16), (16, 1, 32))
     pts = []
@@ -407,7 +420,8 @@ def mm_fit_v2() -> list[HwConfig]:
             for K, R, C in corners
             for W in (8, 16)
         ]
-    cfgs = _unique([_mm(**(p | {"C": max(p["C"], p["L"])})) for p in pts])
+    pts = [p | {"C": max(p["C"], p["L"])} for p in pts]
+    cfgs = _unique([_mm(**p) for p in [*pts, centre | MM_V2_ONE_GROUP]])
     held = set(holdout("mm")) | {c for _s, t, c in supplement() if t == "mm"}
     assert not set(cfgs) & (set(mm_fit()) | held), "a v2 calibration build was used"
     return cfgs
@@ -447,7 +461,11 @@ def v2_rows() -> list[dict]:
             "build": label("mm", c),
             "top": "mm",
             "role": "fit2",
-            "stratum": f"calibration: {c.L} lanes",
+            "stratum": (
+                f"calibration: {c.L} lanes"
+                if c.L in MM_V2_LANES
+                else "calibration: one row, one lane group"
+            ),
             **asdict(c),
         }
         for c in mm_fit_v2()
@@ -473,6 +491,87 @@ def write_v2(path: Path = V2_PATH) -> Path:
 
 def read_v2(path: Path = V2_PATH) -> list[tuple[str, str, str, HwConfig]]:
     """The committed second round, as ``(build, top, role, configuration)``; empty if absent."""
+    return read_supplement(path)
+
+
+# --- the brute-force sub-grid (gate 6.0, plan step 6.3) --------------------------------------
+
+BRUTEFORCE_PATH = HERE.parent / "paper_data" / "bruteforce_grid.csv"
+#: The sub-grid's knob values (gate 6.0, item 4): a full cross-product, so its true optimum is known.
+BF_LANES_COLS = ((1, 4), (4, 4), (16, 16))  # (L, C)
+BF_ROWS = (1, 4, "K")
+BF_SOB_DEPTH = BF_CMD_DEPTH = 2
+
+
+def bruteforce_grid() -> list[HwConfig]:
+    """The 1,440 detectors every one of which is built and measured: every K, all 15 formats,
+    three lane counts (with the narrowest array they allow), array rows 1, 4 and K, both
+    multiplier forms and both memory widths; the two depths at 2."""
+    out = []
+    for K in K_VALUES:
+        rows = sorted({K if R == "K" else R for R in BF_ROWS})
+        for L, C in BF_LANES_COLS:
+            for R in rows:
+                for cmul in CMULS:
+                    for W in SPACE_W:
+                        for g in SPACE_G:
+                            for mem_dw in MEM_DWS:
+                                out.append(
+                                    HwConfig(
+                                        K,
+                                        L,
+                                        R,
+                                        C,
+                                        cmul,
+                                        W,
+                                        g,
+                                        mem_dw,
+                                        BF_SOB_DEPTH,
+                                        BF_CMD_DEPTH,
+                                    )
+                                )
+    return _unique(out)
+
+
+def bf_label(c: HwConfig) -> str:
+    """A brute-force build's name.  The prefix keeps it apart from a calibration or held-out
+    build of the same configuration: the brute force builds and measures every design itself.
+    """
+    return f"bf_{label('det', c)}"
+
+
+def bruteforce_rows() -> list[dict]:
+    """One row per brute-force build, with what the calibration has seen of it: ``in_fit`` (the
+    detector is a calibration build), ``vec_in_fit`` and ``mm_in_fit`` (its vector unit or its
+    matmul is the block of a calibration build, as a unit or inside a calibration detector).
+    """
+    fit_det = set(det_fit())
+    vec_seen = {c.vec_key() for c in [*vec_fit(), *det_fit()]}
+    mm_seen = {c.mm_key() for c in [*mm_fit(), *mm_fit_v2(), *det_fit()]}
+    return [
+        {
+            "build": bf_label(c),
+            "top": "det",
+            "role": "bruteforce",
+            **asdict(c),
+            "in_fit": int(c in fit_det),
+            "vec_in_fit": int(c.vec_key() in vec_seen),
+            "mm_in_fit": int(c.mm_key() in mm_seen),
+        }
+        for c in bruteforce_grid()
+    ]
+
+
+def write_bruteforce(path: Path = BRUTEFORCE_PATH) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_table(path, bruteforce_rows(), provenance("bruteforce_grid"))
+    return path
+
+
+def read_bruteforce(
+    path: Path = BRUTEFORCE_PATH,
+) -> list[tuple[str, str, str, HwConfig]]:
+    """The committed sub-grid, as ``(build, top, role, configuration)``; empty if absent."""
     return read_supplement(path)
 
 
@@ -528,7 +627,18 @@ def main(argv: list[str] | None = None) -> int:
         "--write-supplement", action="store_true", help=f"write {SUPPLEMENT_PATH.name}"
     )
     ap.add_argument("--write-v2", action="store_true", help=f"write {V2_PATH.name}")
+    ap.add_argument(
+        "--write-bruteforce", action="store_true", help=f"write {BRUTEFORCE_PATH.name}"
+    )
     args = ap.parse_args(argv)
+    if args.write_bruteforce:
+        rows = bruteforce_rows()
+        seen = {
+            k: sum(r[k] for r in rows) for k in ("in_fit", "vec_in_fit", "mm_in_fit")
+        }
+        print(f"{len(rows)} brute-force builds; seen by the calibration: {seen}")
+        print("wrote", write_bruteforce())
+        return 0
     if args.write_v2:
         for r in v2_rows():
             print(f"  {r['role']:11s} {r['stratum']:22s} {r['build']}")
