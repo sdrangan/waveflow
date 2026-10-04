@@ -4,8 +4,8 @@ parent: AXI-MM
 grand_parent: Interfaces
 nav_order: 4
 audience: python
-api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, QueueView, RegBankView, BramView]
-summary: "The four views of the memory-mapped slave adaptor — queue in, queue out, register bank, BRAM window. For each: what it is for, its constructor, what the kernel does with it, and what a bus master does with it. Also: register bank versus register map."
+api: [MemSlaveWStream, MemSlaveRStream, MemSlaveRegBank, MemSlaveBramWindow, MemSlaveCreditIn, QueueView, RegBankView, BramView, CreditInView]
+summary: "The views of the memory-mapped slave adaptor — queue in, queue out, register bank, BRAM window, and credit in (the producer end of a credit stream routed over the bus). For each: what it is for, its constructor, what the kernel does with it, and what a bus master does with it. Also: register bank versus register map."
 ---
 # Slave adaptor views
 
@@ -21,7 +21,7 @@ constructor, then describes its two sides:
   endpoint turns each call into bus reads and writes. The addresses it uses are in
   [how it works](./slave_howitworks.md#the-address-map-behind-the-endpoints).
 
-All four constructors take `name`, `sim` and `clk` like any module, and these two:
+All the constructors take `name`, `sim` and `clk` like any module, and these two:
 
 | parameter | default | meaning |
 |---|---|---|
@@ -249,3 +249,36 @@ view must be **in the same adaptor**; see [Ordering](./slave.md#ordering).
 
 **RTL:** `BramView(name, kport, baw=9, law=12)`, where `baw` is log2 of the memory's size in words and
 `kport` names the kernel's port B nets; modules `mm_bram_port.v` and `bram_t2p.v`.
+
+## Credit in
+
+A **credit in** is the producer end of a [credit stream](../derived/credit_stream.md) routed over the
+bus. The consumer kernel's bus writer writes its **cumulative** count of words consumed here; the
+producer kernel receives each new count on its credit stream and knows how much room the consumer's
+queue in has before it writes. You will rarely build one by hand: a kernel declares it, with
+`CreditIn("u_crd", port="m_u")` in its `mm_views`, and
+[`MmCreditStreamIF`](../derived/credit_stream.md#over-a-shared-bus) does the wiring.
+
+```python
+crd = MemSlaveCreditIn(name="u_crd", sim=sim, clk=clk)
+```
+
+| parameter | default | meaning |
+|---|---|---|
+| `ctr_bits` | `16` | the counter's width; the stream to the kernel is this wide |
+
+**The kernel side** is the stream endpoint `crd.m_out`, joined to the credit half (`crd_ep`) of the
+kernel's `CreditStreamMasterIF`. The kernel does nothing new: its `write` sleeps on that stream until
+the credit covers the burst.
+
+**The bus side** is a single word written anywhere in the window — by a writer, not a host program, so
+there is no host endpoint for it.
+
+- **A write never waits.** The view is a latest-value register, not a queue: a count is cumulative, so
+  the newest value is the whole truth and may replace one the kernel has not taken yet. (Contrast a
+  register bank's COMMIT, which waits for the kernel to take the previous config.) That is what lets a
+  consumer return credit over a shared bus without ever stalling it.
+- **The kernel sees fewer values when it lags, never older ones.**
+- A read returns the current value — for debugging; nothing needs it.
+
+**RTL:** `CreditInView(name, axis, law=12)`; module `mm_credit_in.v`.

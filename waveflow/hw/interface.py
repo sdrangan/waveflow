@@ -713,9 +713,16 @@ class TypedCodecMixin:
         return int(self.bitwidth if word_bw is None else word_bw)
 
     def _typed_nwords(self, schema_type, count=None, *, word_bw=None) -> int:
-        """Words one transfer of *schema_type* costs — *count* instances if given."""
-        nwords = schema_type.nwords_per_inst(self._codec_word_bw(word_bw))
-        return nwords * int(count) if count is not None else nwords
+        """Words one transfer of *schema_type* costs — *count* instances if given.
+
+        *count* instances are an **array**, which the serializer packs densely (eight ``U8`` to a
+        64-bit word), so the count comes from the array layout, never ``count * words-per-instance``
+        -- that charged one word per element, which is right only at one lane per word."""
+        bw = self._codec_word_bw(word_bw)
+        if count is None:
+            return schema_type.nwords_per_inst(bw)
+        from waveflow.hw.arrayutils import get_nwords
+        return int(get_nwords(schema_type, word_bw=bw, shape=int(count)))
 
     def _unpack(self, raw_words, schema_type, count=None, *, word_bw=None):
         """Words -> a *schema_type* instance, or a ``DataArray`` of *count* of them.
@@ -746,9 +753,11 @@ class TypedCodecMixin:
         return out
 
     def _pack(self, elements, element_type, count=None, *, word_bw=None) -> Words:
-        """Elements -> hardware words: the element type's vectorized
-        :meth:`~waveflow.hw.dataschema.DataSchema.to_words_numpy` fast path, else the canonical
-        recursive serializer.  *count* — when given — selects the first *count* elements first."""
+        """Elements -> hardware words, by one rule: ``DataArray.specialize(element_type, n)(elements)
+        .serialize()``, whatever *elements* is.  The element type's vectorized
+        :meth:`~waveflow.hw.dataschema.DataSchema.to_words_numpy` is an optimization that must give
+        the same words; otherwise the canonical serializer.  *count* — when given — selects the first
+        *count* elements first."""
         bw = self._codec_word_bw(word_bw)
         if count is not None:
             elements = elements[:int(count)]

@@ -1006,3 +1006,141 @@ class TestTheTypedReadPath:
             assert m.avail == 7
 
         _run(sim, body)
+
+
+# ---------------------------------------------------------------------------
+# The blocking write and batched credit  (plans/mm_credit_stream.md D4, D5)
+# ---------------------------------------------------------------------------
+
+
+def _credit_batched(depth=8, crd_every=4, credit_depth=4, bitwidth=32):
+    sim = Simulation()
+    m = CreditStreamMasterIF(name="m", sim=sim, bitwidth=bitwidth)
+    s = CreditStreamSlaveIF(name="s", sim=sim, bitwidth=bitwidth, crd_every=crd_every)
+    iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=bitwidth,
+                           depth=depth, credit_depth=credit_depth)
+    iface.bind("master", m)
+    iface.bind("slave", s)
+    return sim, iface, m, s
+
+
+class TestTheBlockingWrite:
+    """``write`` sleeps on the credit channel until the burst fits; it never refuses and never
+    writes a burst that would stall the forward channel.  Two processes here, deliberately: the
+    point is a producer waiting on a consumer."""
+
+    def test_a_producer_ahead_of_its_consumer_waits_and_loses_nothing(self):
+        sim, iface, m, s = _credit_batched(depth=8, crd_every=1)
+        got: list[int] = []
+        nwords = 40
+
+        def producer():
+            for k in range(0, nwords, 2):
+                yield from m.write(_w(k, k + 1))
+                assert m.outstanding <= m.depth - m.resp_words   # never past the room it knew
+
+        def consumer():
+            for _ in range(nwords // 2):                          # whole bursts: pysim moves bursts
+                yield sim.env.timeout(10 * SLOT)                  # a slow consumer
+                d = yield from s.get()
+                got.extend(int(v) for v in np.asarray(d).reshape(-1))
+
+        sim.env.process(producer())
+        sim.env.process(consumer())
+        sim.env.run()
+        assert got == list(range(nwords))
+        assert m.n_credit_waits > 0, "the producer was ahead: it must have waited"
+        assert m.n_no_room == 0
+
+    def test_a_burst_that_can_never_fit_is_refused_at_once(self):
+        sim, iface, m, s = _credit_batched(depth=8)
+        caught = []
+
+        def body():
+            try:
+                yield from m.write(_w(*range(8)))                 # depth 8, 1 reserved: 7 max
+            except ValueError as exc:
+                caught.append(exc)
+
+        _run(sim, body)
+        assert caught and m.written == 0
+
+
+class TestBatchedCredit:
+    """``crd_every`` batches the offers; the producer's ``max_write`` shrinks by ``crd_every - 1``,
+    which is what keeps a waiting producer live."""
+
+    def test_offers_are_batched(self):
+        sim, iface, m, s = _credit_batched(depth=64, crd_every=8, credit_depth=8)
+        nwords = 48
+
+        def body():
+            for k in range(nwords):
+                assert (yield from m.write_nb(_w(k))) is True
+            for _ in range(nwords):
+                yield from s.get(nwords_max=1)
+            yield from m.poll_credit(8)
+
+        _run(sim, body)
+        assert s.n_offers == nwords // 8
+        assert m.acked == nwords and m.outstanding == 0
+
+    def test_max_write_accounts_for_the_batch(self):
+        sim, iface, m, s = _credit_batched(depth=16, crd_every=4)
+        assert m.max_write == 16 - 1 - 3
+        caught = []
+
+        def body():
+            try:
+                yield from m.write(_w(*range(13)))
+            except ValueError as exc:
+                caught.append(exc)
+
+        _run(sim, body)
+        assert caught, "a write the batch could starve is refused"
+
+    def test_a_write_at_max_write_never_starves(self):
+        """The liveness case: the consumer sits on crd_every - 1 unreported words; a producer
+        writing max_write words at a time still always gets its room."""
+        sim, iface, m, s = _credit_batched(depth=8, crd_every=4)
+        assert m.max_write == 4
+        got: list[int] = []
+        nbursts = 12
+
+        def producer():
+            for k in range(nbursts):
+                yield from m.write(_w(*range(4 * k, 4 * k + 4)))
+
+        def consumer():
+            for _ in range(nbursts):
+                d = yield from s.get()
+                got.extend(int(v) for v in np.asarray(d).reshape(-1))
+
+        sim.env.process(producer())
+        sim.env.process(consumer())
+        sim.env.run()
+        assert got == list(range(4 * nbursts))
+
+    def test_credit_waits_survive_the_counter_wrap(self):
+        sim = Simulation()
+        m = CreditStreamMasterIF(name="m", sim=sim, bitwidth=32, ctr_bits=4)
+        s = CreditStreamSlaveIF(name="s", sim=sim, bitwidth=32, ctr_bits=4, crd_every=2)
+        iface = CreditStreamIF(name="c", sim=sim, clk=Clock(freq=FREQ), bitwidth=32, depth=6,
+                               ctr_bits=4)
+        iface.bind("master", m)
+        iface.bind("slave", s)
+        got: list[int] = []
+
+        def producer():
+            for k in range(0, 60, 3):                            # 60 words: the 4-bit counter wraps
+                yield from m.write(_w(k, k + 1, k + 2))
+
+        def consumer():
+            while len(got) < 60:
+                d = yield from s.get()
+                got.extend(int(v) for v in np.asarray(d).reshape(-1))
+
+        sim.env.process(producer())
+        sim.env.process(consumer())
+        sim.env.run()
+        assert got == list(range(60))

@@ -243,6 +243,10 @@ _CONTEXT_ATTRS = frozenset({
     # key in one commit, caught by tests/calib/test_key_stability.py -- the same lesson as above.
     "max_outstanding", "issue_cycles", "_slots",        # MMIFMaster
     "mm_device",          # a view/adaptor's back-reference to its MmSlaveDevice (an address-map walk)
+    # MemWStream.done_framed only chooses whether pysim's s_done carries TLAST (the HLS port never
+    # does); the endpoint's own has_tlast still tells two such writers apart.  Adding the field moved
+    # every FirBlock key -- caught by test_key_stability, again.
+    "done_framed",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value

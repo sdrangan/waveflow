@@ -86,13 +86,14 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, NamedTuple
+from typing import Any, ClassVar, NamedTuple
 
 import numpy as np
 
 from waveflow.hw import arrayutils
 from waveflow.hw.dataschema import DataList, DataSchema, IntField
 from waveflow.hw.interface import (
+    FramedStreamIFMaster,
     Interface,
     InterfaceEndpoint,
     StreamIF,
@@ -119,6 +120,10 @@ CTR_MASK = (1 << CTR_BITS) - 1
 #: ``depth - RESP_WORDS``; the verdict always fits.  A *dropped* verdict is indistinguishable at the
 #: consumer from a hang, which is why it gets reserved room instead of taking its chances.
 RESP_WORDS = 1
+
+#: How many queued credit values :meth:`CreditStreamMasterIF.write` takes after a wake, to catch up
+#: to the newest.  A compile-time bound (rule 3); a value left behind only makes ``avail`` staler.
+CREDIT_DRAIN = 4
 
 #: Default number of frames an :class:`AckedStreamMasterIF` may have unresolved at once.  One number
 #: governs two things — the ``pending`` FIFO length *and* the minimum ack-channel depth — because a
@@ -223,6 +228,11 @@ class CreditStreamMasterIF(InterfaceEndpoint):
 
     type_name = 'credit_stream_master_if'
 
+    #: The forward endpoint's class.  :class:`FramedCreditStreamMasterIF` swaps in a
+    #: :class:`~waveflow.hw.interface.FramedStreamIFMaster` (a TLAST pin at RTL); a ClassVar, so the
+    #: choice moves no existing design's structure signature.
+    _fwd_cls: ClassVar[type] = StreamIFMaster
+
     def physical_endpoints(self):
         """Two streams, forward then reverse — there is no credit-stream object in C++."""
         return [self.fwd_ep, self.crd_ep]
@@ -240,7 +250,7 @@ class CreditStreamMasterIF(InterfaceEndpoint):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.fwd_ep = StreamIFMaster(
+        self.fwd_ep = self._fwd_cls(
             name=f"{self.name}_fwd", sim=self.sim, bitwidth=self.bitwidth, has_tlast=True)
         self.crd_ep = StreamIFSlave(
             name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
@@ -256,6 +266,9 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         #: reserved precisely so this cannot happen, so a non-zero value means the reservation was
         #: violated, not that a response was unlucky.
         self.n_resp_no_room = 0
+        #: Times :meth:`write` slept for credit (observability: how often the consumer was the
+        #: bottleneck).
+        self.n_credit_waits = 0
 
     # -- accounting ---------------------------------------------------------------------------
 
@@ -264,13 +277,32 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         """The forward channel's physical FIFO depth in words.
 
         Read from the interface, which is the single source for both backends
-        (:attr:`waveflow.hw.interface.StreamIF.depth`).  There is no local copy to drift.
+        (:attr:`waveflow.hw.interface.StreamIF.depth`).  There is no local copy to drift.  Routed over
+        a bus (:class:`~waveflow.hw.mm_credit.MmCreditStreamIF`) it is the receiving queue-in view's
+        depth.
         """
         if self.interface is None:
             raise RuntimeError(
                 f"{type(self).__name__} '{self.name}' is not bound: there is no channel to have a "
                 f"depth, so no credit can be computed")
-        return int(self.interface.fwd_if.depth)
+        return int(self.interface.depth)
+
+    def _crd_every(self) -> int:
+        s = self.interface.endpoints.get("slave") if self.interface is not None else None
+        return int(getattr(s, "crd_every", 1)) if s is not None else 1
+
+    @property
+    def max_write(self) -> int:
+        """The longest burst :meth:`write` accepts: ``depth - resp_words - (crd_every - 1)``.
+
+        This is what makes a **batched** consumer live without any extra rule.  The consumer offers
+        credit once ``crd_every`` words are unoffered, so it may sit on up to ``crd_every - 1``
+        consumed-but-unreported words indefinitely (nothing more arrives to push it over).  A writer
+        waiting for ``n`` words of room then needs ``outstanding <= depth - resp_words - n``; with
+        ``n <= max_write`` that holds whenever only those unreported words are outstanding -- so a
+        wait always ends.  At ``crd_every = 1`` it is the old bound, ``depth - resp_words``.
+        """
+        return self.depth - int(self.resp_words) - (self._crd_every() - 1)
 
     @property
     def outstanding(self) -> int:
@@ -327,6 +359,33 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         self.written = (self.written + n) & ((1 << int(self.ctr_bits)) - 1)
         return True
 
+    def write(self, words: Any) -> ProcessGen[None]:
+        """Write *words* once the credit accounting says they fit, **sleeping on the credit channel**
+        until it does.  For a producer that may wait (``plans/mm_credit_stream.md`` D4).
+
+        The wait is a blocking read of the reverse channel -- it sleeps until a credit value
+        *arrives*, it never re-reads anything -- followed by a bounded :meth:`poll_credit` that takes
+        any newer values already queued (rule 3).  The forward write that follows cannot stall, so a
+        producer using this never back-pressures what carries the forward channel: which is the point
+        when that is a shared bus (a stalled bus write holds the bus).
+
+        A burst longer than :attr:`max_write` is refused at once rather than risk waiting forever.
+        """
+        n = nwords_of(words, self.bitwidth)
+        if n > self.max_write:
+            raise ValueError(
+                f"{self.name}: a {n}-word burst exceeds max_write={self.max_write} (depth "
+                f"{self.depth}, {self.resp_words} reserved, consumer batching crd_every="
+                f"{self._crd_every()}); split it")
+        mask = (1 << int(self.ctr_bits)) - 1
+        while n > self.avail:
+            self.n_credit_waits += 1
+            got = yield from self.crd_ep.get()
+            self.acked = int(np.asarray(got).reshape(-1)[-1]) & mask
+            yield from self.poll_credit(CREDIT_DRAIN)
+        yield from self.fwd_ep.write(words)
+        self.written = (self.written + n) & mask
+
     def write_resp_nb(self, resp: Any) -> ProcessGen[bool]:
         """Write a **response**, drawing on the reserved headroom so it cannot be refused for room.
 
@@ -348,6 +407,20 @@ class CreditStreamMasterIF(InterfaceEndpoint):
 
 
 @dataclass
+class FramedCreditStreamMasterIF(CreditStreamMasterIF):
+    """A credit producer whose forward boundary port carries TLAST at RTL.
+
+    Ask for it when what receives the forward channel acts on the frame boundary -- a routed link's
+    bus writer (:class:`~waveflow.hw.mm_credit.MmStreamWriter`) frames each producer write as one
+    queue-in packet ``[len | data]``, and at RTL only the TLAST pin can tell it where a write ends.
+    A direct link to a consumer that reads by count does not need it."""
+
+    _fwd_cls: ClassVar[type] = FramedStreamIFMaster
+
+    type_name = 'framed_credit_stream_master_if'
+
+
+@dataclass
 class CreditStreamSlaveIF(InterfaceEndpoint):
     """Consumer side of a :class:`CreditStreamIF`: consume, then say how much in total.
 
@@ -360,6 +433,17 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
 
     ctr_bits: int = CTR_BITS
     """Width of the credit counter on the wire.  Must match the master's."""
+
+    crd_every: int = 1
+    """Offer credit once at least this many words have been consumed since the last offer
+    (``plans/mm_credit_stream.md`` D5).  ``1`` (the default) offers after every read, as before; a
+    larger value batches the reverse channel, which matters when every offer is a bus write.
+
+    Batching alone could starve a producer waiting for room the consumer has freed but not reported,
+    so the producer's :attr:`CreditStreamMasterIF.max_write` shrinks by ``crd_every - 1`` -- which
+    makes every wait end, with no further rule.  (A "flush when the queue drains" rule does the same
+    in pysim, but at RTL a queue fed one word every few cycles is momentarily empty after nearly every
+    read, and the flush would send a credit per word.)"""
 
     queue_size: int | None = None
     """Forward RX queue depth in words.  ``None`` — the normal case — lets
@@ -390,6 +474,10 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
             name=f"{self.name}_crd", sim=self.sim, bitwidth=self.crd_bitwidth, has_tlast=True)
         #: Cumulative words consumed, masked at :attr:`ctr_bits` — exactly what goes on the wire.
         self.consumed = 0
+        #: The value last offered (for :attr:`crd_every` batching).
+        self.offered = 0
+        #: Offers made (observability: with batching, about ``words / crd_every``).
+        self.n_offers = 0
 
     # Three readers, mirroring `StreamIFSlave`'s three, so this stays a drop-in for a plain stream
     # slave — the credit offer is the only addition.  They split for the same reason the stream's
@@ -425,7 +513,8 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
         """
         n = nwords_of(data, self.bitwidth)
         self.consumed = (self.consumed + n) & ((1 << int(self.ctr_bits)) - 1)
-        yield from self.offer_credit()
+        if udiff(self.consumed, self.offered, self.ctr_bits) >= int(self.crd_every):
+            yield from self.offer_credit()
 
     def offer_credit(self) -> ProcessGen[int]:
         """Offer the current cumulative total on the reverse channel.  Non-blocking; may be dropped.
@@ -434,6 +523,8 @@ class CreditStreamSlaveIF(InterfaceEndpoint):
         typed read, a drain) can still keep the credit channel honest without re-implementing it.
         """
         word = np.array([self.consumed], dtype=_block_dtype(self.crd_bitwidth))
+        self.offered = self.consumed
+        self.n_offers += 1
         return (yield from self.crd_ep.offer(word))
 
 

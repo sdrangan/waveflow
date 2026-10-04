@@ -128,6 +128,9 @@ class MemSlaveWStream(HwModule):
         self.errors: list[tuple[float, str, int]] = []
         #: Packets pushed, as word counts (observability; the RTL's TLAST positions).
         self.packets: list[int] = []
+        #: Packets that arrived with too little room and so stalled the bus until the kernel drained
+        #: the queue.  A writer that respects credit (``plans/mm_credit_stream.md``) keeps it zero.
+        self.nstall = 0
 
     # -- the FIFO is the stream channel ------------------------------------------------------------
     def _fifo(self):
@@ -179,6 +182,8 @@ class MemSlaveWStream(HwModule):
                 pkt = np.asarray(self._pkt, dtype=self._dt)
                 self._pkt = []
                 self.packets.append(len(pkt))
+                if self.vacancy() < len(pkt):
+                    self.nstall += 1
                 # Early-anchored: in RTL the words cut through to the stream as each beat arrives,
                 # so the packet is delivered as its LAST word lands -- now -- not one packet-length
                 # later.  A plain write() would charge the length a second time, after the bus burst

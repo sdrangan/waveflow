@@ -42,6 +42,24 @@ from waveflow.build.build import Buildable, BuildConfig, BuildResult
 HLS_AP_UINT_MAX_BITWIDTH = 8191
 
 
+
+def _dense_lanes(cls, elem_dtype, word_bw: int) -> int | None:
+    """Elements per word in the canonical (dense) array layout, when the numpy fast path can
+    reproduce it: ``1`` when one element fills a word's worth of lanes, ``word_bw // bits`` when
+    several fit and each is exactly its numpy type (8/16/32/64 bits, little-endian), and ``None`` when
+    several fit but are not whole bytes (a 12-bit field) -- the caller then uses the canonical
+    serializer.  The fast path used to put ONE element per word whatever the width, which disagreed
+    with the serializer and the C++ lane routines everywhere except one lane per word."""
+    import sys
+
+    bits = int(cls.get_bitwidth())
+    lanes = int(word_bw) // bits if bits else 1
+    if lanes <= 1:
+        return 1
+    if bits != elem_dtype.itemsize * 8 or int(word_bw) % bits or sys.byteorder != "little":
+        return None
+    return lanes
+
 class DataSchema(ABC):
     """Abstract base class for schema nodes.
 
@@ -1047,6 +1065,18 @@ class DataField(DataSchema):
             return None
         word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
         arr = np.ascontiguousarray(values, dtype=elem_dtype).reshape(-1)
+        lanes = _dense_lanes(cls, elem_dtype, word_bw)
+        if lanes is None:
+            return None                       # packed lanes that are not whole bytes: canonical path
+        if lanes > 1:
+            # Several elements to a word, element 0 in the low bits -- the canonical serializer's
+            # dense layout, and the C++ lane routines'.  A little-endian byte view IS that layout
+            # once the tail is padded to whole words.
+            pad = (-len(arr)) % lanes
+            raw = arr.view(np.dtype(f"u{arr.dtype.itemsize}"))
+            if pad:
+                raw = np.concatenate([raw, np.zeros(pad, dtype=raw.dtype)])
+            return raw.view(word_dtype).copy()
         if arr.dtype.itemsize == word_dtype.itemsize:
             return arr.view(word_dtype)
         unsigned_same = np.dtype(f"u{arr.dtype.itemsize}")
@@ -1057,6 +1087,12 @@ class DataField(DataSchema):
         elem_dtype = cls._numpy_elem_dtype()
         if elem_dtype is None or cls.nwords_per_inst(word_bw) != 1:
             return None
+        lanes = _dense_lanes(cls, elem_dtype, word_bw)
+        if lanes is None:
+            return None
+        if lanes > 1:                         # the dense layout: see to_words_numpy
+            word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
+            return np.ascontiguousarray(words, dtype=word_dtype).view(elem_dtype)[:count].copy()
         words = np.ascontiguousarray(words)
         if words.dtype.itemsize == elem_dtype.itemsize:
             out = words.view(elem_dtype)
