@@ -91,7 +91,7 @@ demo("direct")["bit_exact"], demo("mm")["bit_exact"]      # (True, True)
 |---|---|---|---|
 | `markov_gen` | the generator; credit accounting in the body | 1 | 6.8 ns |
 | `markov_chain` | the chain core + the in-band memory writer | 1 | 6.6 ns (core) |
-| `mm_queue_writer_64_64` | the routed link's forward writer | -- | 7.3 ns |
+| `mm_queue_writer_64_128` | the routed link's forward writer | -- | 7.3 ns |
 | `mm_credit_writer_64` | the routed link's credit writer | -- | 7.3 ns |
 
 Both bodies are written as the [command-response pattern](../../guide/patterns/command_response.md)
@@ -110,13 +110,31 @@ depends on where the other is placed. The C++ host is the pysim host on the test
 
 | | pysim | RTL |
 |---|---|---|
-| 4 jobs x 300 steps, 2 in flight | 1700 cycles | **2246 cycles** |
+| 4 jobs x 300 steps, 2 in flight | 1926 cycles | **1865 cycles** |
 | `x` | bit-exact | **bit-exact** |
 | host polls | 0 | **0** |
 
-pysim is 24% fast. The likely cause is in the link: the RTL queue writer gathers a whole write before
-it bursts, and nothing buffers the generator while it does -- neither is in the pysim model. That gap
-is open.
+pysim is within 3.3% of the RTL, and a gate keeps it within 5%.
+
+## Finding the time
+
+The first RTL run took 2356 cycles against pysim's 1700. `markov_xsi.run_xsi(..., probes=True)` exposes
+one-bit probes on every link's handshake -- the generator's words to its writer, each writer's bus
+bursts and acknowledgements, the chain's reads, credit offered and taken, responses -- and the
+testbench prints the cycles each fired. Lined up, they found two defects in the **design** and two
+costs missing from the **model**:
+
+| step | what the probes showed | the change | RTL cycles |
+|---|---|---|---|
+| -- | state-machine bodies | -- | 2356 |
+| 1 | -- | both bodies rewritten as loops per job | 2246 |
+| 2 | a chunk left the generator every 103 cycles for 64 draws: the queue writer is store-and-forward (it needs a write's length before its words), so while it burst one chunk it read nothing -- and nothing buffered the generator, which stalled | a FIFO between the generator and its writer (`MmCreditStreamIF.fwd_depth`, two chunks; the RTL top instantiates it at that depth) | 2015 |
+| 3 | at every job start the generator stalled for 70--110 cycles waiting for credit, then the chain starved for ~60: the 63-word credit window was smaller than the link's round trip (FIFO, writer, queue, up to 31 unreported words, the credit path back) | the chain's queue 64 -> 128 words -- a window that covers the bandwidth-delay product | **1865** |
+| 4 | the chain now the bottleneck at 79 cycles a chunk, the generator at 71: 64 steps plus a fixed cost (the loop's fill and drain, the `MemWCmd` words, the credit check) | the model charges each kernel's measured `chunk_overhead` (15 and 7) | pysim 1700 -> 1926 |
+
+Steps 2 and 3 are the lessons that carry over: a store-and-forward stage needs a buffer in front of it
+the size of what it gathers, and a credit window must cover the link's bandwidth-delay product -- see
+[Credit stream over a shared bus](../../guide/interface/derived/credit_stream.md#over-a-shared-bus).
 
 ## Files
 

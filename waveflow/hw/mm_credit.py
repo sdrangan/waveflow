@@ -234,7 +234,13 @@ class MmCreditStreamIF(Interface):
     ctr_bits: int = CTR_BITS
     clk: Clock | None = None
     writer_depth: int = 2
-    """Depth of the stream between each kernel and its writer."""
+    """Depth of the credit stream between the consumer and its credit writer."""
+    fwd_depth: int = 2
+    """Depth, in words, of the FIFO between the producer and its forward writer -- a real FIFO in RTL
+    too (the system top instantiates it at this depth).  The writer is store-and-forward (it needs a
+    write's length before its words), so while it bursts one write it reads nothing; the FIFO is what
+    lets the producer keep going.  Give it at least one write's words, or the producer stalls for
+    every burst (measured on examples/markov: 103 cycles per 64-draw chunk at depth 0, against 64)."""
     max_outstanding: int = 1
     issue_cycles: int = 0
 
@@ -273,16 +279,18 @@ class MmCreditStreamIF(Interface):
             if endpoint.crd_ep.interface is None:
                 raise RuntimeError(f"{self.name}: {endpoint.name}'s credit half is not joined to a "
                                    f"credit-in view -- build the producer's mm device first")
-            self._join(f"{self.name}_fwd", endpoint.fwd_ep, self.fwd_writer.s_in, int(self.bitwidth))
+            self._join(f"{self.name}_fwd", endpoint.fwd_ep, self.fwd_writer.s_in, int(self.bitwidth),
+                       int(self.fwd_depth))
         else:
             if endpoint.fwd_ep.interface is None:
                 raise RuntimeError(f"{self.name}: {endpoint.name}'s forward half is not joined to a "
                                    f"queue-in view -- build the consumer's mm device first")
-            self._join(f"{self.name}_crd", endpoint.crd_ep, self.crd_writer.s_in, int(self.ctr_bits))
+            self._join(f"{self.name}_crd", endpoint.crd_ep, self.crd_writer.s_in, int(self.ctr_bits),
+                       int(self.writer_depth))
         super().bind(ep_name, endpoint)
 
-    def _join(self, name: str, master, slave, bw: int) -> None:
-        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=bw, depth=int(self.writer_depth))
+    def _join(self, name: str, master, slave, bw: int, depth: int) -> None:
+        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=bw, depth=int(depth))
         si.bind(ep_name="master", endpoint=master)
         si.bind(ep_name="slave", endpoint=slave)
 

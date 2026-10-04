@@ -65,12 +65,19 @@ DW = 64
 UBITS = 16
 #: Samples per transfer between the kernels (and per memory write): 16 words of u, 8 words of x.
 CHUNK = 64
-#: The chain's input queue, in words: four chunks.  Credit is returned every half queue.
-QDEPTH = 64
-CRD_EVERY = QDEPTH // 2
+#: The chain's input queue, in words: eight chunks.  Credit is returned every 32 words consumed.
+#: The credit window (QDEPTH - 1 words) must cover the bandwidth-delay product of the link -- a word's
+#: round trip through the forward FIFO, the store-and-forward writer, the queue, up to CRD_EVERY - 1
+#: unreported words and the credit path back -- or credit, not compute, sets the rate.  Measured at RTL:
+#: 64 words throttled the generator at every job start and starved the chain (2015 cycles).
+QDEPTH = 128
+CRD_EVERY = 32
 #: The command and response queues, in words.
 CDEPTH = 16
 RDEPTH = 16
+#: The FIFO between the generator and its forward bus writer, in words: two chunks, so the generator
+#: fills one while the writer bursts the other (the writer is store-and-forward).
+FWD_DEPTH = 2 * (CHUNK // 4)
 #: Jobs the host keeps outstanding.
 MAX_IN_FLIGHT = 2
 
@@ -164,6 +171,9 @@ class MarkovGen(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: Cycles per draw (the HLS body's II).
     proc_ii: int = 1
+    #: Cycles a chunk costs beyond its draws: the credit check before the loop, the loop's fill and
+    #: drain.  MEASURED at RTL (markov_xsi probes: a chunk leaves every 71 cycles for 64 draws).
+    chunk_overhead: int = 7
 
     def kernel_task(self):
         """The hand-written HLS body, ``include/markov_gen_task.h``: the twin of :meth:`run_iter`,
@@ -190,8 +200,8 @@ class MarkovGen(FreeRunMod):
         u = uniforms(int(cmd.seed), n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
-            # One firing to admit the write, then one draw per proc_ii (markov_gen_task.h).
-            yield self.timeout((1 + c * self.proc_ii) * self.clk.period)
+            # The credit check, then one draw per proc_ii (markov_gen_task.h).
+            yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
             yield from self.m_u.write(array(U16, u[k0:k0 + c]))
         self.njobs += 1
 
@@ -209,6 +219,10 @@ class ChainCore(FreeRunMod):
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     proc_ii: int = 1
+    #: Cycles a chunk costs beyond its steps: the MemWCmd words, the step loop's fill and drain (its
+    #: depth is 5), the credit offer.  MEASURED at RTL (markov_xsi probes: x leaves for memory every
+    #: 79 cycles for 64 steps).
+    chunk_overhead: int = 15
 
     def kernel_task(self):
         """The hand-written HLS body, ``include/markov_chain_core_task.h``: the twin of
@@ -236,7 +250,7 @@ class ChainCore(FreeRunMod):
             xs = chain_golden(np.asarray(u.val), x, int(cmd.p01), int(cmd.p10))
             x = int(xs[-1])
             ones += int(xs.sum())
-            yield self.timeout(c * self.proc_ii * self.clk.period)
+            yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
             # Chunk k0 lands at dstaddr + k0 bytes (one U8 per sample, eight to a word); MemWCmd's
             # address is a word index (the writer's m_axi base is 0).
             xw = array(U8, xs).serialize(word_bw=DW)
@@ -432,7 +446,7 @@ class MarkovSystem:
         self.gen_dev = build_mm_device(self.gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
         self.chain_dev = build_mm_device(self.chain, sim=sim, clk=clk, mem_dwidth=DW,
                                          prefix="chain_")
-        self.u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW)
+        self.u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
         self.u_link.bind("master", self.gen.m_u)
         self.u_link.bind("slave", self.chain.s_u)
         masters = [host.m, *self.u_link.bus_masters(), self.chain.m_mem]

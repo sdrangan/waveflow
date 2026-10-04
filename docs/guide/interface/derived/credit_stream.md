@@ -210,6 +210,19 @@ Three things make it safe to put on a shared bus:
   A consumer may then sit on up to `crd_every - 1` unreported words indefinitely; the producer's
   `max_write` shrinks by exactly that much, so a waiting producer always gets its room.
 
+Two sizes decide whether the link runs at the kernels' rate, both measured on
+[Markov](../../../examples/markov/index.md#finding-the-time):
+
+- **`fwd_depth` -- the FIFO in front of the forward writer.** The writer is store-and-forward: it needs
+  a write's length before its words, so it gathers a whole write, then bursts it, and reads nothing
+  while it bursts. Without a FIFO the producer stalls for every burst (103 cycles per 64-draw chunk
+  against 64). Give it at least one write's words; the RTL top instantiates it at this depth.
+- **The queue depth -- the credit window.** The producer can be at most `depth - resp_words` words ahead
+  of what the consumer has *reported*. A word's round trip -- through the FIFO, the writer, the queue,
+  up to `crd_every - 1` unreported words, and the credit path back -- has to fit in that window at the
+  link's rate, or credit, not compute, sets the pace: the **bandwidth-delay product**. Markov's 64-word
+  queue throttled the producer at every job start; 128 did not.
+
 **Several writers into one kernel** get one channel each -- one queue per writer, as NVMe gives each
 core its own submission queue -- and the receiving kernel round-robins over its inputs. Credits go
 back point to point, to the writer that used them, so nothing is broadcast and no two writers can race

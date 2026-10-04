@@ -19,5 +19,5 @@ void markov_gen(
 #pragma HLS INTERFACE axis port=m_u_fwd
 #pragma HLS INTERFACE axis port=m_u_crd
 #pragma HLS INTERFACE ap_ctrl_none port=return
-    hls_thread_local hls::task t0(markov_gen_task<64, 64, 32>, s_cmd, m_u_fwd, m_u_crd);
+    hls_thread_local hls::task t0(markov_gen_task<64, 128, 32>, s_cmd, m_u_fwd, m_u_crd);
 }

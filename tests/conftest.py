@@ -100,7 +100,10 @@ import pytest
 #:
 #: 142 -> 145 on 2026-10-04 (plans/mm_credit_stream.md): the Markov system -- two kernels joined by a
 #: credit stream routed over a four-master crossbar -- bit-exact, never polling, and its cycle count.
-WANT_XSI_GATES = 145
+#:
+#: 145 -> 146 on 2026-10-04 (markov-timing): test_markov_pysim_tracks_rtl -- the calibrated model within
+#: 5% of the RTL.
+WANT_XSI_GATES = 146
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

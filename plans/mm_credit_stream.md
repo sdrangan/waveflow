@@ -180,7 +180,10 @@ host <- mem        : x
   (`tests/examples/test_markov_xsi.py`): bit-exact, no polls, **2356 cycles**.  `WANT_XSI_GATES` 145.
 - **Rewrite (2026-10-04, branch markov-timing):** both bodies straight-line loops per job (the
   command-response pattern) -- 6.8 / 6.6 ns, RTL 2356 -> **2246** cycles.
-- **Open: pysim is 24% fast at RTL** (1700 vs 2246; was 28% vs 2356).  Hypothesis, not yet probed: the RTL queue writer
+- **Timing gap closed (branch markov-timing):** found with `markov_xsi` handshake probes -- two design
+  defects (no FIFO in front of the store-and-forward queue writer: `fwd_depth`; a credit window smaller
+  than the link's bandwidth-delay product: queue 64 -> 128) and two model gaps (each kernel's measured
+  per-chunk overhead).  RTL 2246 -> **1865**, pysim 1926 (+3.3%, gated within 5%).  WANT_XSI_GATES 146.  Hypothesis, not yet probed: the RTL queue writer
   gathers a whole write before bursting, and nothing buffers the generator while it bursts.
 - **Stage 5.**  `credit_stream.md` (over a shared bus; `write`, `max_write`, `crd_every`), the slave views
   page (credit in), `docs/examples/markov/index.md`.
