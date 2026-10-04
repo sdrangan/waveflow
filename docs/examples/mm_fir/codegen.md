@@ -127,8 +127,8 @@ when a measurement says the drain matters; the loop is the pattern.
 ### Where the twins differ, deliberately
 
 - Both take one packet per firing. pysim times the sample loop with the HLS body's interval and
-  latency but does not yet charge the per-packet fill and drain -- which is why its timing is now further
-  from RTL (see [Python simulation](pysim.md#how-close-is-pysims-timing)).
+  latency, and charges the body's fixed per-packet costs as measured at RTL -- `hdr_cycles`,
+  `tail_cycles`, `restart_cycles` (see [Python simulation](pysim.md#how-close-is-pysims-timing)).
 - Both publish the status once per packet, and both write the response after the packet's results.
 
 ## csynth

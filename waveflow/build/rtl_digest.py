@@ -70,23 +70,29 @@ def source_files(root, top: str, *, gen_dir: str = "gen",
     return sorted(out)
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def _sha256(path: Path, *, raw: bool = False) -> str:
+    """The digest of *path*'s content with line endings normalized to LF (``raw=True``: the bytes).
+
+    A checkout that converts LF to CRLF (git's ``core.autocrlf`` on Windows) restores identical
+    source with different bytes -- the same false "stale" this module exists to remove for mtimes,
+    and it skipped the mm_fir gates on a branch switch (2026-10-04).  The compiler reads both the same.
+    Stamps written before this hashed the raw bytes, so :func:`first_mismatch` also accepts the raw
+    digest (``legacy``) -- otherwise every CRLF source built on Windows would read as stale at once."""
+    data = Path(path).read_bytes()
+    if not raw:
+        data = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def source_digests(root, top: str, *, gen_dir: str = "gen",
-                   include_dir: str = "include") -> dict[str, str]:
+                   include_dir: str = "include", raw: bool = False) -> dict[str, str]:
     """``{repo-relative posix path: sha256}`` for *top*'s source set.
 
     Keys are POSIX-spelled so a stamp written on Windows and read on Linux compares equal — the
     stamp lives in build output, but a shared build tree is not something to make surprising.
     """
     root = Path(root)
-    return {p.relative_to(root).as_posix(): _sha256(p)
+    return {p.relative_to(root).as_posix(): _sha256(p, raw=raw)
             for p in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir)}
 
 
@@ -140,15 +146,19 @@ def read_stamp(root, top: str) -> dict[str, str] | None:
     return files
 
 
-def first_mismatch(recorded: dict[str, str], current: dict[str, str]) -> tuple[str, str] | None:
+def first_mismatch(recorded: dict[str, str], current: dict[str, str],
+                   legacy: dict[str, str] | None = None) -> tuple[str, str] | None:
     """``(path, verb)`` for the first source that disagrees, or ``None`` if they match.
+
+    *legacy* -- the current raw-byte digests -- is accepted as a match too, for stamps written
+    before digests normalized line endings (see :func:`_sha256`).
 
     The verb ("has changed" / "is new" / "is gone") is what turns a digest comparison back into the
     sentence a human can act on; a bare hash pair tells nobody what to do.
     """
     for rel in sorted(set(recorded) | set(current)):
         was, now = recorded.get(rel), current.get(rel)
-        if was == now:
+        if was == now or (legacy is not None and was is not None and was == legacy.get(rel)):
             continue
         if was is None:
             return rel, "is new"

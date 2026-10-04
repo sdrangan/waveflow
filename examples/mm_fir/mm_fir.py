@@ -209,10 +209,21 @@ class MmFir(FreeRunMod):
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
-    #: Timing of the HLS body, from its csynth report: pipelined at II=1.  A sample's result leaves
-    #: ``proc_latency`` cycles after the sample arrived, and one sample is taken per ``proc_ii`` cycles.
+    #: Timing of the HLS body -- one packet per firing, the sample loop pipelined at II=1 -- MEASURED at
+    #: RTL with mm_fir_xsi's handshake probes (packet 2: header read at 88, samples from 92, results
+    #: 101..116, status and response at 126, next header at 128 -- 40 cycles for 16 samples):
+    #:
+    #: * ``hdr_cycles``: from the header to the first sample the loop can take (the header, the config
+    #:   check, the loop's entry) -- the samples cannot start before their own header is handled;
+    #: * ``proc_ii`` / ``proc_latency``: one sample per cycle; a result leaves this long after its sample;
+    #: * ``tail_cycles``: from the last result to the status and response (the loop's exit, the two
+    #:   messages);
+    #: * ``restart_cycles``: from the response to the next firing's header.
     proc_ii: int = 1
-    proc_latency: int = 10
+    proc_latency: int = 9
+    hdr_cycles: int = 4
+    tail_cycles: int = 10
+    restart_cycles: int = 2
 
     def kernel_task(self):
         """The hand-written HLS body, ``include/mm_fir_task.h`` -- the twin of :meth:`run_iter`."""
@@ -263,20 +274,25 @@ class MmFir(FreeRunMod):
             self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
             self.ncfg += 1
         n = int(hdr.nsamp)
+        T = self.clk.period
+        t_loop = self.env.now + self.hdr_cycles * T          # the earliest the sample loop starts
         if n:
             x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
             y = self._filter(np.asarray(x.val, dtype=np.int64))
-            # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
-            # sample arrived, and one result follows every proc_ii cycles.
-            t_out_start = tstart + self.proc_latency * self.clk.period
-            proc_time = max(0.0, n * self.proc_ii * self.clk.period + (t_out_start - self.env.now))
+            # Timing, as the HLS body: the loop takes its first sample once the header is handled and
+            # the sample has arrived; the first result leaves proc_latency cycles later, then one per
+            # proc_ii cycles.
+            t_out_start = max(tstart, t_loop) + self.proc_latency * T
+            proc_time = max(0.0, n * self.proc_ii * T + (t_out_start - self.env.now))
             yield self.timeout(proc_time)
             yield from self.m_out.write_pipelined(array(S64, y), t_out_start)
+        yield self.timeout(self.tail_cycles * T)
         # The status first, then the response -- so a host holding a packet's response knows the
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
         yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+        yield self.timeout(self.restart_cycles * T)
 
 
 #: The FIR type's address layout (offsets within the slave), and its views' absolute addresses at

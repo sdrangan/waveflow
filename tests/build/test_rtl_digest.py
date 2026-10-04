@@ -288,3 +288,16 @@ def test_no_gate_re_stamps_the_sources_it_is_about_to_check():
         "these render_rtl_f() calls under tests/ would stamp the source digest, disabling the "
         "staleness guard for whatever they touch; pass stamp_sources=False:\n  "
         + "\n  ".join(offenders))
+
+
+def test_line_endings_do_not_make_a_source_stale(tmp_path):
+    """A checkout that rewrites LF as CRLF restores identical source: not stale (it skipped the mm_fir
+    gates after a branch switch, 2026-10-04)."""
+    from waveflow.build.rtl_digest import _sha256
+    lf, crlf = tmp_path / "a.h", tmp_path / "b.h"
+    lf.write_bytes(b"int x;\nint y;\n")
+    crlf.write_bytes(b"int x;\r\nint y;\r\n")
+    assert _sha256(lf) == _sha256(crlf)
+    other = tmp_path / "c.h"
+    other.write_bytes(b"int x;\nint z;\n")
+    assert _sha256(other) != _sha256(lf)

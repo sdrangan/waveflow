@@ -555,7 +555,8 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     recorded = read_stamp(root, top)
     if recorded is not None:
         current = source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir)
-        miss = first_mismatch(recorded, current)
+        miss = first_mismatch(recorded, current, source_digests(
+            root, top, gen_dir=gen_dir, include_dir=include_dir, raw=True))
         if miss is None:
             return None
         rel, verb = miss
