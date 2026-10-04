@@ -391,7 +391,10 @@ def test_campaign_grid_roles_and_shards():
     from examples.mimo_cg.hw import campaign as C
 
     labels = list(C.split())
-    assert len(C.grid()) == len(labels) == 101
+    assert (
+        len(C.grid()) == len(labels) == 107
+    )  # the split's 101 and the 6 supplementary builds
+    assert [b for b in labels if C.split()[b][1] == "supplement"] == labels[101:]
     fit = [b for b in labels if C.split()[b][1] == "fit"]
     assert len(fit) == 67
     shards = [C.shard(fit, f"{i}/4") for i in range(4)]
@@ -585,7 +588,7 @@ def test_committed_tables_hold_every_build_of_their_roles():
     header, builds = _committed("hw_builds")
     assert "tool=vitis_hls 2024.1" in header and "part=xczu48dr-ffvg1517-2-e" in header
     roles = header.split("roles=")[1].split(",")[0].split("+")
-    assert roles in (["fit"], ["fit", "holdout"])
+    assert roles in (["fit"], ["fit", "holdout"], ["fit", "holdout", "supplement"])
     expected = [b for b, (_t, role, _c) in C.split().items() if role in roles]
     assert [r["build"] for r in builds] == expected
     for r in builds:

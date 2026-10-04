@@ -160,6 +160,47 @@ def test_what_the_held_out_draw_covers():
     assert 10 not in {c.W for c in det}
 
 
+def test_supplementary_held_out_set():
+    """The six builds added at the M5 review: drawn by rule inside the strata the first draw left
+    thin, disjoint from every fit and first held-out build, sharing no block with a fit build of
+    another top, and committed as the code regenerates it.  The first split is untouched.
+    """
+    sup = space.supplement()
+    assert [(name, top) for name, top, _c in sup] == [
+        ("vec: K = 16", "vec"),
+        ("vec: K = 16", "vec"),
+        ("mm: 16 lanes", "mm"),
+        ("mm: R >= 8", "mm"),
+        ("det: K = 16, 16 lanes", "det"),
+        ("det: K = 16, R >= 8", "det"),
+    ]
+    assert all(c.K == 16 and space.is_valid(c) for _n, _t, c in sup)
+    by_top = {top: [c for _n, t, c in sup if t == top] for top in space.TOPS}
+    assert by_top["mm"][0].L == 16 and by_top["mm"][1].R >= 8
+    assert by_top["det"][0].L == 16 and by_top["det"][1].R >= 8
+    for top, cfgs in by_top.items():
+        assert not set(cfgs) & (set(space.FIT[top]()) | set(space.holdout(top)))
+    # nothing in it was seen by a fit, even as a block of something else
+    det_fit = space.det_fit()
+    assert not {c.vec_key() for c in by_top["vec"]} & {c.vec_key() for c in det_fit}
+    assert not {c.mm_key() for c in by_top["mm"]} & {c.mm_key() for c in det_fit}
+    assert not {c.vec_key() for c in by_top["det"]} & {
+        c.vec_key() for c in space.vec_fit()
+    }
+    assert not {c.mm_key() for c in by_top["det"]} & {
+        c.mm_key() for c in space.mm_fit()
+    }
+    read = space.read_supplement()
+    assert [(b, t, r) for b, t, r, _c in read] == [
+        (space.label(t, c), t, "supplement") for _n, t, c in sup
+    ]
+
+
+def test_committed_supplement_is_what_the_code_regenerates(tmp_path):
+    again = space.write_supplement(tmp_path / "holdout_supplement.csv")
+    assert again.read_bytes() == space.SUPPLEMENT_PATH.read_bytes()
+
+
 def test_committed_split_is_what_the_code_regenerates(tmp_path):
     again = space.write_split(tmp_path / "holdout_split.csv")
     assert again.read_bytes() == space.SPLIT_PATH.read_bytes()

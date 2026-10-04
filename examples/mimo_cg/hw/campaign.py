@@ -38,7 +38,7 @@ from typing import ClassVar
 
 from examples.mimo_cg.hw import build as B
 from examples.mimo_cg.hw import measure as M
-from examples.mimo_cg.hw.space import HwConfig, read_split
+from examples.mimo_cg.hw.space import HwConfig, read_split, read_supplement
 from examples.mimo_cg.mimo_cg import provenance, write_table
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.sweep import ParamGrid, Stage, SweepRunner, sweep_cli
@@ -48,11 +48,15 @@ EXAMPLE = HERE.parent
 PAPER_DATA = EXAMPLE / "paper_data"
 KNOBS = tuple(HwConfig.__dataclass_fields__)
 COUNTERS = ("lut", "ff", "dsp", "bram", "uram")
+#: ``fit`` builds calibrate; ``holdout`` builds are AC5's test; ``supplement`` builds are the extra
+#: held-out set of the M5 review.  Only ``fit`` builds are ever filed into the calibration store.
+ROLES = ("fit", "holdout", "supplement")
 
 
 def split() -> dict[str, tuple[str, str, HwConfig]]:
-    """``{build: (top, role, configuration)}`` of the committed split, in file order."""
-    return {b: (t, r, c) for b, t, r, c in read_split()}
+    """``{build: (top, role, configuration)}``: the committed split in file order, then the
+    supplementary held-out set (role ``supplement``, M5 review) when it is there."""
+    return {b: (t, r, c) for b, t, r, c in [*read_split(), *read_supplement()]}
 
 
 def grid() -> ParamGrid:
@@ -308,11 +312,9 @@ def file_fit_records(points_dir: Path = M.POINTS_DIR) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument("--merge", nargs="+", choices=("fit", "holdout"), default=None)
-    pre.add_argument(
-        "--reattribute", nargs="+", choices=("fit", "holdout"), default=None
-    )
-    pre.add_argument("--role", choices=("fit", "holdout"), default=None)
+    pre.add_argument("--merge", nargs="+", choices=ROLES, default=None)
+    pre.add_argument("--reattribute", nargs="+", choices=ROLES, default=None)
+    pre.add_argument("--role", choices=ROLES, default=None)
     pre.add_argument("--shard", default=None)
     known, _ = pre.parse_known_args(argv)
     rest = [a for a in (argv if argv is not None else sys.argv[1:])]
@@ -358,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
             (
                 ("--role",),
                 {
-                    "choices": ("fit", "holdout"),
+                    "choices": ROLES,
                     "default": None,
                     "help": "builds of one role",
                 },

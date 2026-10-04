@@ -258,7 +258,7 @@ def summary_rows(detail: list[dict]) -> list[dict]:
     return out
 
 
-def overlapping(data_dir: Path = PAPER_DATA) -> set[str]:
+def overlapping(data_dir: Path = PAPER_DATA, role: str = ROLE) -> set[str]:
     """Held-out builds that share a block with a ``fit`` build of the other kind of top."""
     rows = read_table(data_dir / "hw_builds.csv")
     knobs = HwConfig.__dataclass_fields__
@@ -276,7 +276,7 @@ def overlapping(data_dir: Path = PAPER_DATA) -> set[str]:
     fit_det = {kind: keys(kind, "det") for kind in key}
     out = set()
     for r in rows:
-        if r["role"] != ROLE:
+        if r["role"] != role:
             continue
         c = cfg[r["build"]]
         if r["top"] in key and key[r["top"]](c) in fit_det[r["top"]]:
@@ -286,16 +286,18 @@ def overlapping(data_dir: Path = PAPER_DATA) -> set[str]:
     return out
 
 
-def channel_exactness(data_dir: Path = PAPER_DATA) -> tuple[int, int, int]:
+def channel_exactness(
+    data_dir: Path = PAPER_DATA, role: str = ROLE
+) -> tuple[int, int, int]:
     """``(memories, with BRAM > 0, reproduced exactly)`` over the held-out builds' channels."""
     builds = {
         r["build"]: r
         for r in read_table(data_dir / "hw_builds.csv")
-        if r["role"] == ROLE
+        if r["role"] == role
     }
     n = nonzero = exact = 0
     for r in read_table(data_dir / "hw_modules.csv"):
-        if r["role"] != ROLE or r["kind"] != "memory":
+        if r["role"] != role or r["kind"] != "memory":
             continue
         b = builds[r["build"]]
         c = HwConfig(**{k: int(b[k]) for k in HwConfig.__dataclass_fields__})
@@ -308,7 +310,9 @@ def channel_exactness(data_dir: Path = PAPER_DATA) -> tuple[int, int, int]:
     return n, nonzero, exact
 
 
-def disclosure_rows(detail: list[dict], data_dir: Path = PAPER_DATA) -> list[dict]:
+def disclosure_rows(
+    detail: list[dict], data_dir: Path = PAPER_DATA, role: str = ROLE
+) -> list[dict]:
     """The rows added at the M5 review: what "exact" rests on, and the fit-disjoint subset."""
     out = []
 
@@ -334,16 +338,17 @@ def disclosure_rows(detail: list[dict], data_dir: Path = PAPER_DATA) -> list[dic
         {(r["build"], r["scope"]) for r in detail if r["scope"].startswith("block:")}
     )
     with_bram = [b for b in blocks if by[(*b, "bram")]["measured"] > 0]
-    add(
-        "blocks with BRAM > 0: DSP and BRAM both exact (%)",
-        len(with_bram),
-        100.0 * both_exact(with_bram) / len(with_bram),
-    )
-    n, nonzero, exact = channel_exactness(data_dir)
+    if with_bram:
+        add(
+            "blocks with BRAM > 0: DSP and BRAM both exact (%)",
+            len(with_bram),
+            100.0 * both_exact(with_bram) / len(with_bram),
+        )
+    n, nonzero, exact = channel_exactness(data_dir, role)
     add("channel memories: BRAM, LUT and FF exact (%)", n, 100.0 * exact / n)
     add("channel memories with BRAM > 0 (count)", n, nonzero)
 
-    skip = overlapping(data_dir)
+    skip = overlapping(data_dir, role)
     kept = [b for b in blocks if b[0] not in skip]
     add(
         "disjoint from fit: blocks DSP and BRAM both exact (%)",
@@ -373,21 +378,29 @@ def model_sha256() -> str:
 
 
 def validate(
-    data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA
+    data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA, role: str = ROLE
 ) -> tuple[list[dict], list[dict]]:
-    """Score the committed models on the held-out rows and write the two tables."""
+    """Score the committed models on the rows of ``role`` and write the two tables.
+
+    ``holdout`` is AC5's set and writes ``model_validation*.csv``.  ``supplement`` is the extra
+    held-out set of the M5 review: the same metrics, in ``model_validation_supplement*.csv``, with
+    no thresholds, because AC5 is judged on the first set.
+    """
     models = MD.Models.load()
-    detail = detail_rows(models, data_dir)
-    summary = summary_rows(detail) + disclosure_rows(detail, data_dir)
+    detail = detail_rows(models, data_dir, role)
+    summary = summary_rows(detail) + disclosure_rows(detail, data_dir, role)
+    stem = "model_validation" if role == ROLE else f"model_validation_{role}"
+    if role != ROLE:
+        summary = [r | {"threshold": "", "pass": ""} for r in summary]
     note = provenance(
-        "model_validation",
+        stem,
         tool=hls_tool(data_dir),
-        role=ROLE,
+        role=role,
         model_sha256=model_sha256()[:16],
         part=MD.PART,
     )
-    write_table(Path(out_dir) / "model_validation.csv", detail, note)
-    write_table(Path(out_dir) / "model_validation_metrics.csv", summary, note)
+    write_table(Path(out_dir) / f"{stem}.csv", detail, note)
+    write_table(Path(out_dir) / f"{stem}_metrics.csv", summary, note)
     return detail, summary
 
 
@@ -397,8 +410,9 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="accepted for symmetry: every run rewrites"
     )
     ap.add_argument("--no-figure", action="store_true")
-    ap.parse_args(argv)
-    detail, summary = validate()
+    ap.add_argument("--role", choices=(ROLE, "supplement"), default=ROLE)
+    args = ap.parse_args(argv)
+    detail, summary = validate(role=args.role)
     print(f"model {model_sha256()[:16]}…  {len(detail)} rows")
     for r in summary:
         gate = (
@@ -408,8 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         worst = f"  worst {r['worst']}" if r["worst"] != "" else ""
         print(f"  {r['metric']:42s} n={r['n']:3d}  {r['value']:8.3f}{worst}{gate}")
-    args = ap.parse_args(argv)
-    if not args.no_figure:
+    if not args.no_figure and args.role == ROLE:
         from examples.mimo_cg.hw.validate_figure import render
 
         print("wrote", render(detail, IMAGES / "model_validation.svg"))

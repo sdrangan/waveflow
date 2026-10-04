@@ -261,13 +261,13 @@ def _unique(cfgs: list[HwConfig]) -> list[HwConfig]:
 # --- the held-out draws ----------------------------------------------------------------------
 
 
-def _draw(pool: list[HwConfig], n: int, stream: int) -> list[HwConfig]:
+def _draw(
+    pool: list[HwConfig], n: int, stream: int, namespace: int = _SPLIT_STREAM
+) -> list[HwConfig]:
     """``n`` configurations drawn without replacement from ``pool`` (sorted first, so the draw does
     not depend on the enumeration order), in sorted order."""
     pool = sorted(pool)
-    rng = np.random.default_rng(
-        np.random.SeedSequence([BASE_SEED, _SPLIT_STREAM, stream])
-    )
+    rng = np.random.default_rng(np.random.SeedSequence([BASE_SEED, namespace, stream]))
     picks = rng.choice(len(pool), size=n, replace=False)
     return [pool[i] for i in sorted(int(i) for i in picks)]
 
@@ -281,6 +281,92 @@ def holdout(top: str) -> list[HwConfig]:
 
 
 FIT = {"vec": vec_fit, "mm": mm_fit, "det": det_fit}
+
+
+# --- the supplementary held-out set (M5 review) ----------------------------------------------
+
+SUPPLEMENT_PATH = HERE.parent / "paper_data" / "holdout_supplement.csv"
+#: Seed namespace of the supplementary draws.
+_SUPPLEMENT_STREAM = 91
+#: The strata the first draw left thin, in draw order: ``(name, top, how many, what belongs)``.
+SUPPLEMENT_STRATA = (
+    ("vec: K = 16", "vec", 2, lambda c: c.K == 16),
+    ("mm: 16 lanes", "mm", 1, lambda c: c.L == 16),
+    ("mm: R >= 8", "mm", 1, lambda c: c.R >= 8 and c.L < 16),
+    ("det: K = 16, 16 lanes", "det", 1, lambda c: c.K == 16 and c.L == 16),
+    ("det: K = 16, R >= 8", "det", 1, lambda c: c.K == 16 and c.R >= 8 and c.L < 16),
+)
+
+
+def supplement() -> list[tuple[str, str, HwConfig]]:
+    """Six more held-out builds, as ``(stratum, top, configuration)``.
+
+    The first draw was uniform and came out thin where the designs are largest: no K = 16
+    vector unit, no 16-lane matmul, matmul arrays of at most 4 rows, and one K = 16 detector.
+    This set is drawn the same way (uniformly, with a fixed seed) but inside those strata.  A
+    stratum's pool leaves out the ``fit`` builds, the first held-out builds, and every
+    configuration that shares a block with a ``fit`` build of another kind of top, so nothing in
+    it was seen by a fit, even as part of something else.
+
+    It is scored with the models as frozen in step 5.6, and it is evidence beside AC5, not part of
+    it: AC5 is judged on the first set.
+    """
+    spaces = {"vec": vec_space, "mm": mm_space, "det": lambda: list(full_space())}
+    key = {"vec": HwConfig.vec_key, "mm": HwConfig.mm_key}
+    fit_unit = {kind: {key[kind](c) for c in FIT[kind]()} for kind in key}
+    fit_det = {kind: {key[kind](c) for c in det_fit()} for kind in key}
+
+    def unseen(top: str, c: HwConfig) -> bool:
+        if top == "det":
+            return not any(key[kind](c) in fit_unit[kind] for kind in key)
+        return key[top](c) not in fit_det[top]
+
+    out = []
+    for i, (name, top, n, belongs) in enumerate(SUPPLEMENT_STRATA):
+        taken = (
+            set(FIT[top]()) | set(holdout(top)) | {c for _s, t, c in out if t == top}
+        )
+        pool = [
+            c for c in spaces[top]() if belongs(c) and c not in taken and unseen(top, c)
+        ]
+        out += [(name, top, c) for c in _draw(pool, n, i, _SUPPLEMENT_STREAM)]
+    return out
+
+
+def supplement_rows() -> list[dict]:
+    return [
+        {
+            "build": label(top, c),
+            "top": top,
+            "role": "supplement",
+            "stratum": name,
+            **asdict(c),
+        }
+        for name, top, c in supplement()
+    ]
+
+
+def write_supplement(path: Path = SUPPLEMENT_PATH) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_table(
+        path,
+        supplement_rows(),
+        provenance("holdout_supplement", stream=_SUPPLEMENT_STREAM),
+    )
+    return path
+
+
+def read_supplement(
+    path: Path = SUPPLEMENT_PATH,
+) -> list[tuple[str, str, str, HwConfig]]:
+    """The committed supplementary set, as ``(build, top, role, configuration)``; empty if absent."""
+    if not Path(path).is_file():
+        return []
+    knobs = list(HwConfig.__dataclass_fields__)
+    return [
+        (r["build"], r["top"], r["role"], HwConfig(**{k: int(r[k]) for k in knobs}))
+        for r in read_table(path)
+    ]
 
 
 # --- the split file --------------------------------------------------------------------------
@@ -331,7 +417,15 @@ def read_split(path: Path = SPLIT_PATH) -> list[tuple[str, str, str, HwConfig]]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write", action="store_true", help=f"write {SPLIT_PATH.name}")
+    ap.add_argument(
+        "--write-supplement", action="store_true", help=f"write {SUPPLEMENT_PATH.name}"
+    )
     args = ap.parse_args(argv)
+    if args.write_supplement:
+        for r in supplement_rows():
+            print(f"  {r['stratum']:24s} {r['build']}")
+        print("wrote", write_supplement())
+        return 0
     rows = split_rows()
     print(
         f"spaces: vec {len(vec_space())}, mm {len(mm_space())}, glue {len(glue_space())}, "
