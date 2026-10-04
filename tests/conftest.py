@@ -68,7 +68,16 @@ import pytest
 #: the cost measurement, the disjoint-region and read-during-write gates, contiguity, alternation,
 #: the clean-run identity with the default build, II, the template argument, and the pysim rung's
 #: record.  ``test_rf_shot_rx_xsi.py`` is unchanged at 9.
-WANT_XSI_GATES = 127
+#:
+#: 127 -> 139 on 2026-10-04 (``plans/mimo_cg/mimo_cg_paper_sims.md``): four new files collect **12**.
+#: Phase 4 (AC4) added seven RTL gates of the CG detector's blocks, each bit-exact against the Python
+#: golden: ``test_mimo_cg_hw_vec.py`` 1, ``test_mimo_cg_hw_mm.py`` 2 (both multiply forms) and
+#: ``test_mimo_cg_hw_detector.py`` 4 (K = 4 at two formats, K = 8, K = 16).  They should have raised
+#: this number on 2026-10-01 and did not; the miss was caught by this file's own collection test at
+#: the Phase 5 regression run.  Phase 5 added five in ``test_mimo_cg_hw_measure.py``: the measurement
+#: harness on the three default builds (report rows, job intervals, block spans, record filing) and
+#: on a memory-bound unit.
+WANT_XSI_GATES = 139
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
