@@ -16,42 +16,29 @@ three ways. The kernel and the host are the same in all three.
 ### Over the bus (`link="mm"`, the default)
 
 The four views are the adaptor's pysim twins — each an `HwModule` with a bus port (`s_mem`) on one
-side and ordinary streams on the other — and the kernel is joined to them with plain `StreamIF`s:
+side and ordinary streams on the other — built from the views `MmFir` declares:
 
 ```python
-        self.regs = MemSlaveRegBank(name="regs", sim=sim, cfg_type=FirCfg, status_type=FirStatus,
-                                    mem_dwidth=DW, clk=clk)
-        self.qin = MemSlaveWStream(name="qin", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
-        self.qout = MemSlaveRStream(name="qout", sim=sim, mem_dwidth=DW, depth=QDEPTH, clk=clk)
-        self.qresp = MemSlaveRStream(name="qresp", sim=sim, mem_dwidth=DW, depth=RDEPTH, clk=clk)
-        self._stream("k_cfg", self.regs.m_cfg, fir.s_cfg, self.regs.ncfg)
-        self._stream("k_stat", fir.m_status, self.regs.s_status, 8)
-        self._stream("k_in", self.qin.m_out, fir.s_in, QDEPTH)
-        self._stream("k_out", fir.m_out, self.qout.s_in, QDEPTH)
-        self._stream("k_resp", fir.m_resp, self.qresp.s_in, RDEPTH)
-        views = [self.regs, self.qin, self.qout, self.qresp]
+        self.device = build_mm_device(self.fir, sim=sim, clk=clk, mem_dwidth=DW,
+                                      one_front=self.one_front)
+        self.regs, self.qin, self.qout, self.qresp = (
+            self.device.views[n] for n in ("regs", "qin", "qout", "qresp"))
+        self.adaptor = self.device.adaptor
+        slaves, ranges = self.device.ranges(MM_BASE)
 ```
 
-Two of those depths are not free choices, and the views check them when the simulation starts:
+`build_mm_device` joins each view to the kernel's port with a stream channel, and two of those depths
+are not free choices (the views check them when the simulation starts):
 
-- **`k_in`, `k_out` and `k_resp` have their queues' depth.** The stream channel a queue drives *is* its FIFO — in
+- **A queue's channel has the queue's depth.** The stream channel a queue drives *is* its FIFO — in
   RTL there is one FIFO, inside the leaf — so its depth is the queue's.
-- **`k_cfg` holds exactly one config packet** (`regs.ncfg`, 5 words). The RTL register bank has one
-  snapshot register; a deeper channel in pysim would accept a second commit that RTL stalls.
+- **The config channel holds exactly one config packet** (`regs.ncfg`, 5 words). The RTL register
+  bank has one snapshot register; a deeper channel in pysim would accept a second commit that RTL
+  stalls.
 
-Then the bus side. By default each view gets its own crossbar slave port:
-
-```python
-            slaves = [v.s_mem for v in views]
-            ranges = [(REGS, 0x1000), (QIN, 0x1000), (QOUT, 0x1000), (QRESP, 0x1000)]
-```
-
-and with `one_front=True` all four go behind one `MemSlaveAdaptor` port, at the same addresses:
-
-```python
-            self.adaptor = MemSlaveAdaptor(name="fir_mm", sim=sim, mem_dwidth=DW, views=views)
-            slaves, ranges = [self.adaptor.s_mem], [(REGS, self.adaptor.span())]
-```
+With `one_front=False` (the default here) each view gets its own crossbar slave port; with
+`one_front=True` all four go behind one `MemSlaveAdaptor` port. `device.ranges(MM_BASE)` gives the
+slaves and their ranges either way, at the same addresses.
 
 The crossbar is an `AXIMMCrossBarIF` with `latency_init = 4`, of which `latency_travel = 2` — the
 per-transaction cost measured through AMD's `axi_crossbar` at RTL, and how much of it overlaps the
@@ -61,8 +48,7 @@ host does. Last, the host gets its endpoints from the address map, by view
 name:
 
 ```python
-        self.slave_map = (self.adaptor.slave_map() if self.one_front
-                          else MemSlaveMap.from_views(views))
+        self.slave_map = self.device.layout.at(MM_BASE)
         mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m)
         self.host.cfg = mm.stream_master("regs")
         # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.

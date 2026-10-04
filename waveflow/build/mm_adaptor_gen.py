@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from waveflow.hw.mm_adaptor import VIEW_BYTES
+
 from waveflow.build.axi_xbar import axi_signals
 
 RTL_DIR = Path(__file__).resolve().parent / "rtl"
@@ -236,7 +238,10 @@ def render_queue_slot(view: QueueView, axi: str, data_width: int, addr_width: in
 # ---------------------------------------------------------------------------
 
 #: Every view window is 4 KB in a multi-view adaptor: the view index is the address above bit 12.
-VIEW_LAW = 12
+#: Derived from the pysim adaptor's ``VIEW_BYTES`` -- ONE definition of the rule both decoders apply
+#: (``plans/bus_address_map.md`` D4).
+VIEW_LAW = VIEW_BYTES.bit_length() - 1
+assert 1 << VIEW_LAW == VIEW_BYTES, "VIEW_BYTES must be a power of two"
 
 
 def adaptor_law(nviews: int) -> int:

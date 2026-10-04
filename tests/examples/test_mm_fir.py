@@ -158,3 +158,18 @@ def test_message_sizes():
         make_cfg([1] * (NTAP_MAX + 1))
     assert (FirCfg.nwords_per_inst(64), FirCmdHdr.nwords_per_inst(64),
             FirRespHdr.nwords_per_inst(64)) == (5, 1, 1)
+
+
+@pytest.mark.parametrize("topology", ["per_view", "one_front"])
+def test_the_rtl_crossbar_is_generated_from_the_pysim_one(topology):
+    """plans/bus_address_map.md D4: the RTL crossbar's slots come from the pysim crossbar's ranges, so
+    every view address the host uses (MM_BASE + the type's layout) decodes to exactly one slot, and
+    the slot is the one pysim routes it to."""
+    from examples.mm_fir.mm_fir import MM_BASE, MM_LAYOUT
+    from examples.mm_fir.mm_fir_xsi import xbar_config
+    cfg = xbar_config(topology)
+    assert len(cfg.mi) == (4 if topology == "per_view" else 2)
+    for v in MM_LAYOUT.at(MM_BASE).views.values():
+        for addr in (v.base, v.base + v.window - 1):
+            hits = [r for r in cfg.mi if r.base <= addr < r.base + r.size]
+            assert len(hits) == 1, (v.name, hex(addr), hits)

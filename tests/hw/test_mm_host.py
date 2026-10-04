@@ -4,6 +4,7 @@ endpoints poll."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -15,8 +16,11 @@ from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
 from waveflow.hw.irq import IrqIF, IrqIFSink, IrqIFSource
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_bram import MemSlaveBramWindow
+from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device, bus_address_headers
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
+    MemSlaveLayout,
+    bases_to_cpp_header,
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveMap,
@@ -466,3 +470,114 @@ def test_interrupt_mode_never_reads_a_count_and_never_deadlocks():
               if m["qin"].base <= a < m["qin"].base + 0x1000 or a >= m["qout"].status_addr and
               a < m["qout"].base + 0x1000]
     assert reads and counts == [], f"count reads in interrupt mode: {[hex(a) for a in counts]}"
+
+
+# ---------------------------------------------------------------------------
+# Layouts and devices (plans/bus_address_map.md)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ScaleDev(Scale):
+    """``Scale``, reached over the bus: its type declares its views."""
+
+    mm_views: ClassVar[tuple] = (
+        RegBank("regs", cfg_port="s_cfg", status_port="m_status", cfg_type=Cfg, status_type=Status),
+        QueueIn("qin", port="s_in", depth=DEPTH),
+        QueueOut("qout", port="m_out", depth=DEPTH),
+    )
+
+
+def test_a_type_layout_needs_no_instance():
+    lay = MemSlaveLayout.of(ScaleDev, mem_dwidth=DW)
+    assert [(n, v.kind, v.base) for n, v in lay.views.items()] == [
+        ("regs", "regbank", 0x0000), ("qin", "queue_in", 0x1000), ("qout", "queue_out", 0x2000)]
+    assert lay.span == 0x4000 and lay["regs"].ncfg == 1 and lay["qin"].depth == DEPTH
+    assert lay.at(0x8000_0000)["qout"].status_addr == 0x8000_2800
+
+
+def test_two_instances_of_one_type_one_layout_two_bases():
+    """One host reaches two instances of one kernel type: the same layout object, two bases."""
+    sim, clk = Simulation(), Clock(freq=100e6)
+    kerns = {k: ScaleDev(name=f"kern_{k}", sim=sim) for k in ("a", "b")}
+    devs = {k: build_mm_device(kn, sim=sim, clk=clk, mem_dwidth=DW, prefix=f"{k}_")
+            for k, kn in kerns.items()}
+    bases = {"a": 0x4000_0000, "b": 0x4001_0000}
+    layout = MemSlaveLayout.of(ScaleDev, mem_dwidth=DW)
+
+    def host(h):
+        for k, gain in (("a", 2), ("b", 5)):
+            mm = BoundMemSlaveAdaptor.at(layout, bases[k], h.m)
+            yield from mm.stream_master("regs").write(Cfg(gain=gain, offset=0))
+            yield from mm.stream_master("qin").write(np.asarray([1, 2, 3], dtype=np.uint64))
+            y = yield from mm.stream_slave("qout").get_array(U64, 3)
+            h.log[k] = [int(v) for v in y.val]
+
+    h = Host(name="host", sim=sim, procs=[host])
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=2,
+                           bitwidth=DW, latency_init=4)
+    xbar.bind("master_0", h.m)
+    slaves, ranges = [], []
+    for k in ("a", "b"):
+        s_, r_ = devs[k].ranges(bases[k])
+        slaves += s_
+        ranges += r_
+    for i, ep in enumerate(slaves):
+        xbar.bind(f"slave_{i}", ep)
+    assign_address_ranges(slaves, ranges)
+    sim.run_sim(until=1e-4)
+    assert h.log == {"a": [2, 4, 6], "b": [5, 10, 15]}
+    # The instance's adaptor lays its views out exactly as the type declares (its view MODULES carry
+    # the instance prefix -- "a_qin" -- while the layout is keyed by the type's names).
+    inst = MemSlaveLayout.from_adaptor(devs["a"].adaptor)
+    assert [(v.kind, v.base, v.depth) for v in inst.views.values()] ==         [(v.kind, v.base, v.depth) for v in layout.views.values()]
+    assert inst.span == layout.span
+
+
+def test_layout_and_bases_headers_split_the_address_map():
+    """The per-type header carries offsets and no base; the per-system header carries bases and no
+    offsets.  The C++ host combines them with wfbfm::at(view, base)."""
+    lay = MemSlaveLayout.of(ScaleDev, mem_dwidth=DW)
+    h = lay.to_cpp_header("scale_layout")
+    assert "static const uint64_t SPAN = 0x4000ull;" in h
+    assert ('static const wfbfm::MmViewLayout qout = {"qout", wfbfm::MmKind::QueueOut, 0x2000ull, '
+            '4096u, 8u, 16u, 0u, 0u, 0u};') in h
+    b = bases_to_cpp_header("sys_bases", {"a": (0x4000_0000, lay.span), "b": (0x4001_0000, lay.span)})
+    assert "A_BASE = 0x40000000ull, A_SPAN = 0x4000ull;" in b
+    assert "B_BASE = 0x40010000ull, B_SPAN = 0x4000ull;" in b
+    assert "MmView" not in b and "0x4000000" not in h
+
+
+@pytest.mark.parametrize("one_front", [True, False], ids=["one_front", "per_view"])
+def test_bus_walk_finds_one_layout_per_type_and_every_instance_base(one_front):
+    """plans/bus_address_map.md D5: walking a crossbar finds each device on it -- two instances of one
+    type give ONE layout header and two bases -- whether a device sits behind one front or one slot
+    per view."""
+    sim, clk = Simulation(), Clock(freq=100e6)
+    devs = {k: build_mm_device(ScaleDev(name=k, sim=sim), sim=sim, clk=clk, mem_dwidth=DW,
+                               one_front=one_front, prefix=f"{k}_") for k in ("dev_a", "dev_b")}
+    bases = {"dev_a": 0x4000_0000, "dev_b": 0x4001_0000}
+    slaves, ranges = [], []
+    for k, d in devs.items():
+        s_, r_ = d.ranges(bases[k])
+        slaves += s_
+        ranges += r_
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=len(slaves),
+                           bitwidth=DW)
+    for i, ep in enumerate(slaves):
+        xbar.bind(f"slave_{i}", ep)
+    assign_address_ranges(slaves, ranges)
+    h = bus_address_headers(xbar, system="sys")
+    assert list(h) == ["scale_dev_layout.h", "sys_bases.h"]
+    assert "DEV_A_BASE = 0x40000000ull" in h["sys_bases.h"]
+    assert "DEV_B_BASE = 0x40010000ull" in h["sys_bases.h"]
+
+
+def test_bus_walk_refuses_a_slave_with_no_layout():
+    sim, clk = Simulation(), Clock(freq=100e6)
+    q = MemSlaveWStream(name="q", sim=sim)                 # a view, but not from a device
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=1,
+                           bitwidth=64)
+    xbar.bind("slave_0", q.s_mem)
+    assign_address_ranges([q.s_mem], [(0, 0x1000)])
+    with pytest.raises(TypeError, match="no layout"):
+        bus_address_headers(xbar, system="sys")

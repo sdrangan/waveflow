@@ -26,10 +26,10 @@ at once:
 | component | here | produced by |
 |---|---|---|
 | Vitis kernel | `mm_fir` — csynth's Verilog for the [generated top-level function](codegen.md) | `mm_fir_build.py` |
-| vendor IP | `axi_crossbar`, 1 SI, 2 or 3 MI | `generate_axi_xbar(XBARS[topology], ...)` |
+| vendor IP | `axi_crossbar`, 1 SI, 4 or 2 MI | `generate_axi_xbar(xbar_config(topology), ...)` |
 | hand-written RTL | `axi_slave_front`, `mm_regbank`, `mm_queue_in`, `mm_queue_out` | `waveflow/build/rtl/` |
 | RTL top | `mm_fir_top`: the three above, wired | `render_top(top, topology)` |
-| testbench (the harness) | an `AxiMmMaster`, and the host's `Writer` and `Reader` on the C++ endpoints | `render_tb(dll, x)`, `map_header(topology)` |
+| testbench (the harness) | an `AxiMmMaster`, and the host's `Writer` and `Reader` on the C++ endpoints | `render_tb(dll, x)`, `address_headers()` |
 
 The RTL top is assembled by this example's `render_top` from framework pieces — it is not yet emitted
 by `wrapper_gen` from the module graph, the way a design's memories are.
@@ -37,18 +37,14 @@ by `wrapper_gen` from the module graph, the way a design's memories are.
 ## Two topologies, one address map
 
 ```python
-XBARS = {
-    "per_view": AxiXbarConfig(
-        name="xbar_mm4_1x4", n_si=1,
-        mi=[AxiXbarRange(REGS, 12), AxiXbarRange(QIN, 12), AxiXbarRange(QOUT, 12),
-            AxiXbarRange(QRESP, 12)],
-        data_width=DW, addr_width=32, id_width=1),
-    "one_front": AxiXbarConfig(
-        name="xbar_mm1_1x2", n_si=1,
-        mi=[AxiXbarRange(REGS, adaptor_law(4)), AxiXbarRange(0x0001_0000, 12)],
-        data_width=DW, addr_width=32, id_width=1),
-}
+def xbar_config(topology: str) -> AxiXbarConfig:
+    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    return AxiXbarConfig.from_crossbar(sysm.xbar, XBAR_NAMES[topology])
 ```
+
+The crossbar is not written here: `xbar_config` builds it from the pysim system's own crossbar, so its
+slots are the ranges `assign_address_ranges` set — `MM_BASE` plus the FIR type's layout. The result is
+the same IP the hand-written configs used to produce, down to its cache digest.
 
 - **`per_view`** — each view is its own crossbar slave, with its own front (`render_view_slot`). Four
   4 KB windows at `0x0000`, `0x1000`, `0x2000`, `0x3000`.
@@ -148,20 +144,25 @@ read:
 
 Two things are generated from Python, so the C++ restates neither:
 
-- **The address map.** `map_header(topology)` builds the same `MmFirSystem` the pysim gates run and
-  writes its `slave_map` out with `MemSlaveMap.to_cpp_header`:
+- **The address map, in two halves.** `address_headers()` walks the pysim system's crossbar
+  (`bus_address_headers`) and returns a **layout** header for the FIR type — offsets within the slave,
+  from `MmFir.mm_views` — and a **bases** header for this system — where the FIR instance is placed:
 
   ```cpp
-  namespace mm_fir_map {
-  static const wfbfm::MmView regs = {"regs", wfbfm::MmKind::RegBank, 0x0ull, 4096u, 8u, 0u, 5u, 1u, 0u};
-  static const wfbfm::MmView qin = {"qin", wfbfm::MmKind::QueueIn, 0x1000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
-  static const wfbfm::MmView qout = {"qout", wfbfm::MmKind::QueueOut, 0x2000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
-  static const wfbfm::MmView qresp = {"qresp", wfbfm::MmKind::QueueOut, 0x3000ull, 4096u, 8u, 16u, 0u, 0u, 0u};
+  namespace mm_fir_layout {
+  static const uint64_t SPAN = 0x4000ull;
+  static const wfbfm::MmViewLayout regs = {"regs", wfbfm::MmKind::RegBank, 0x0ull, 4096u, 8u, 0u, 5u, 1u, 0u};
+  static const wfbfm::MmViewLayout qin = {"qin", wfbfm::MmKind::QueueIn, 0x1000ull, 4096u, 8u, 64u, 0u, 0u, 0u};
+  ...
+  }
+  namespace mm_fir_bases {
+  static const uint64_t FIR_BASE = 0x0ull, FIR_SPAN = 0x4000ull;
   }
   ```
 
-  The offsets inside a window — COMMIT at `W/2`, status at `3W/4` — are not in the header. `MmView`
-  computes them, as `ViewEntry` does in Python.
+  The testbench includes both (its `#include` lines come from the same walk) and builds every endpoint
+  as `at(mm_fir_layout::qin, FIR)` — layout plus base. The offsets inside a window — COMMIT at `W/2`,
+  status at `3W/4` — are in neither header: `MmView` computes them, as `ViewEntry` does in Python.
 - **The schedule.** `host_schedule` — the list of configs and sample packets the pysim host sends — is
   rendered as a table: each config's words, and each packet's `FirCmdHdr` word, its samples as the
   serializer packs them (four int16 to a word), and the response the host expects back. The C++

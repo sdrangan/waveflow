@@ -101,7 +101,28 @@ stay in the delay line), and samples before the first config see all-zero taps. 
 
 ## The kernel
 
-`MmFir` is an ordinary `FreeRunMod` leaf with five stream endpoints and no memory-mapped anything:
+`MmFir` is an ordinary `FreeRunMod` leaf with five stream endpoints and no memory-mapped anything —
+except a declaration, on the class, of which of those endpoints a bus master reaches and as what
+(its address layout; see [the slave guide](../../guide/interface/axi_mm/slave.md#building-an-adaptor)):
+
+```python
+    mm_views: ClassVar[tuple] = (
+        RegBank("regs", cfg_port="s_cfg", status_port="m_status",
+                cfg_type=FirCfg, status_type=FirStatus),
+        QueueIn("qin", port="s_in", depth=QDEPTH),
+        QueueOut("qout", port="m_out", depth=QDEPTH),
+        QueueOut("qresp", port="m_resp", depth=RDEPTH),
+    )
+```
+
+The view addresses the rest of the example uses are this layout placed at `MM_BASE`:
+
+```python
+MM_LAYOUT = MemSlaveLayout.of(MmFir, mem_dwidth=DW)
+REGS, QIN, QOUT, QRESP = (MM_BASE + MM_LAYOUT[n].base for n in ("regs", "qin", "qout", "qresp"))
+```
+
+The endpoints:
 
 | endpoint | direction | carries |
 |---|---|---|

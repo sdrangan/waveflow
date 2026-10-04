@@ -87,6 +87,35 @@ class AxiXbarConfig:
             if b0 < a1:
                 raise ValueError(f"MI windows overlap at 0x{b0:x}")
 
+    @classmethod
+    def from_crossbar(cls, xbar, name: str, *, addr_width: int = 32, id_width: int = 1,
+                      part: str | None = None) -> "AxiXbarConfig":
+        """The RTL crossbar for a pysim ``AXIMMCrossBarIF``: one master-side (MI) slot per bound
+        slave, at the base and size ``assign_address_ranges`` gave it -- so a slave's address is
+        written once, in Python, and both backends decode it (``plans/bus_address_map.md`` D4).
+
+        Each range must be a power of two of at least 4 KB, aligned to its size, as the IP requires.
+        A crossbar with one slave gets a second, unused slot (a 1 x 1 ``axi_crossbar`` is refused --
+        see the class): 4 KB at the first 64 KB boundary past the last range.
+        """
+        mi: list[AxiXbarRange] = []
+        for k in range(int(xbar.nports_slave)):
+            ep = xbar.endpoints.get(f"slave_{k}")
+            if ep is None or ep.addr_range is None:
+                raise ValueError(f"{xbar.name}: slave_{k} is unbound or has no address range; call "
+                                 f"assign_address_ranges first")
+            base, size = int(ep.addr_range.base_addr), int(ep.addr_range.size)
+            aw = size.bit_length() - 1
+            if size != 1 << aw:
+                raise ValueError(f"{xbar.name}: slave_{k}'s range 0x{size:x} is not a power of two")
+            mi.append(AxiXbarRange(base, aw))
+        if len(mi) == 1:
+            end = mi[0].base + mi[0].size
+            mi.append(AxiXbarRange(-(-end // 0x1_0000) * 0x1_0000, 12))
+        kw = {} if part is None else {"part": part}
+        return cls(name=name, n_si=int(xbar.nports_master), mi=mi, data_width=int(xbar.bitwidth),
+                   addr_width=addr_width, id_width=id_width, **kw)
+
     def digest(self) -> str:
         """A short hash of the configuration: the cache key for the generated IP."""
         blob = json.dumps({**asdict(self), "mi": [asdict(r) for r in self.mi]}, sort_keys=True)
