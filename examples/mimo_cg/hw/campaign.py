@@ -24,6 +24,10 @@ its own summary::
 It also rebuilds the work platform's module store from the ``fit`` builds, serially.  **Held-out
 builds are never filed there**, and are merged only when ``--merge fit holdout`` asks for them, which
 plan step 5.7 does after the models are committed.
+
+The second calibration round (plan step 6.1) adds two roles from ``paper_data/calibration_v2.csv``:
+``fit2`` builds calibrate, like ``fit``; ``supplement2`` builds are held out, and run only after the
+v2 models are frozen.
 """
 
 from __future__ import annotations
@@ -38,7 +42,13 @@ from typing import ClassVar
 
 from examples.mimo_cg.hw import build as B
 from examples.mimo_cg.hw import measure as M
-from examples.mimo_cg.hw.space import HwConfig, read_split, read_supplement
+from examples.mimo_cg.hw.space import (
+    FIT_ROLES,
+    HwConfig,
+    read_split,
+    read_supplement,
+    read_v2,
+)
 from examples.mimo_cg.mimo_cg import provenance, write_table
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.sweep import ParamGrid, Stage, SweepRunner, sweep_cli
@@ -49,14 +59,19 @@ PAPER_DATA = EXAMPLE / "paper_data"
 KNOBS = tuple(HwConfig.__dataclass_fields__)
 COUNTERS = ("lut", "ff", "dsp", "bram", "uram")
 #: ``fit`` builds calibrate; ``holdout`` builds are AC5's test; ``supplement`` builds are the extra
-#: held-out set of the M5 review.  Only ``fit`` builds are ever filed into the calibration store.
-ROLES = ("fit", "holdout", "supplement")
+#: held-out set of the M5 review.  ``fit2`` and ``supplement2`` are the second round (step 6.1): more
+#: matmul calibration builds, and their own held-out set.  Only the calibration roles
+#: (:data:`~examples.mimo_cg.hw.space.FIT_ROLES`) are ever filed into the calibration store.
+ROLES = ("fit", "holdout", "supplement", "fit2", "supplement2")
 
 
 def split() -> dict[str, tuple[str, str, HwConfig]]:
     """``{build: (top, role, configuration)}``: the committed split in file order, then the
-    supplementary held-out set (role ``supplement``, M5 review) when it is there."""
-    return {b: (t, r, c) for b, t, r, c in [*read_split(), *read_supplement()]}
+    supplementary held-out set (role ``supplement``, M5 review) and the second calibration round
+    (roles ``fit2`` and ``supplement2``, step 6.1), each when its file is there."""
+    return {
+        b: (t, r, c) for b, t, r, c in [*read_split(), *read_supplement(), *read_v2()]
+    }
 
 
 def grid() -> ParamGrid:
@@ -285,15 +300,19 @@ def reattribute(roles: tuple[str, ...], points_dir: Path = M.POINTS_DIR) -> int:
     return n
 
 
-def file_fit_records(points_dir: Path = M.POINTS_DIR) -> int:
-    """Rebuild the work platform's module store from the ``fit`` builds (never a held-out one)."""
+def file_fit_records(
+    roles: tuple[str, ...] = ("fit",), points_dir: Path = M.POINTS_DIR
+) -> int:
+    """Rebuild the work platform's module store from the calibration builds among ``roles``
+    (never a held-out one)."""
+    roles = tuple(r for r in roles if r in FIT_ROLES)
     store = M.WORK_ROOT / M.PLATFORM / "modules"
     if store.is_dir():
         shutil.rmtree(
             store
         )  # derived data: rebuilt whole, so a re-merge cannot double-file
     n = 0
-    for rec in _records(("fit",), points_dir):
+    for rec in _records(roles, points_dir):
         if "error" in rec:
             continue
         c = HwConfig(**rec["config"])
@@ -327,7 +346,9 @@ def main(argv: list[str] | None = None) -> int:
         roles = tuple(dict.fromkeys(known.merge))
         for name, path in merge(roles).items():
             print(f"{name} -> {path}")
-        print(f"filed {file_fit_records()} record(s) into {M.WORK_ROOT / M.PLATFORM}")
+        print(
+            f"filed {file_fit_records(roles)} record(s) into {M.WORK_ROOT / M.PLATFORM}"
+        )
         return 0
 
     labels = list(split())

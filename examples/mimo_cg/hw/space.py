@@ -28,6 +28,14 @@ configurations.
 ``python -m examples.mimo_cg.hw.space --write`` writes ``paper_data/holdout_split.csv``.  It is
 committed before any campaign build, and the held-out builds are run only after the models are
 committed (plan steps 5.1, 5.6, 5.7).
+
+The second calibration round (plan step 6.1)
+--------------------------------------------
+The first matmul calibration design has 1, 4 and 8 lanes, and its LUT model came out 15% low at 16.
+:func:`mm_fit_v2` repeats the design's centre and corners at 2 and at 16 lanes (role ``fit2``), and
+:func:`supplement2` draws six fresh held-out matmul builds at those lane counts (role
+``supplement2``).  ``--write-v2`` writes both to ``paper_data/calibration_v2.csv``, committed before
+any of them runs.  The first split and the first supplement are not touched.
 """
 
 from __future__ import annotations
@@ -67,6 +75,8 @@ TOPS = ("vec", "mm", "det")
 _SPLIT_STREAM = 90
 #: Held-out builds per top (AC5 asks for at least 10 per block and 5 full designs).
 N_HOLDOUT = {"vec": 12, "mm": 12, "det": 10}
+#: The roles whose builds calibrate the models: the first design and the second round (step 6.1).
+FIT_ROLES = ("fit", "fit2")
 
 
 @dataclass(frozen=True, order=True)
@@ -369,6 +379,103 @@ def read_supplement(
     ]
 
 
+# --- the second calibration round (gate 6.0, plan step 6.1) ----------------------------------
+
+V2_PATH = HERE.parent / "paper_data" / "calibration_v2.csv"
+#: Seed namespace of the second supplementary draw.
+_V2_STREAM = 92
+#: The lane counts the first matmul calibration design left out.
+MM_V2_LANES = (2, 16)
+#: The second supplementary held-out set, in draw order: ``(name, top, how many, what belongs)``.
+V2_STRATA = (
+    ("mm: 2 lanes", "mm", 3, lambda c: c.L == 2),
+    ("mm: 16 lanes", "mm", 3, lambda c: c.L == 16),
+)
+
+
+def mm_fit_v2() -> list[HwConfig]:
+    """18 more matmul calibration builds: the centre of :func:`mm_fit` and its eight array-size ×
+    width corners, repeated at 2 and at 16 lanes.  The lanes must divide ``C``, so ``C`` is raised to
+    the lane count where it is smaller (the centre and one corner, at 16 lanes)."""
+    centre = {"K": 8, "R": 4, "C": 8, "cmul": 4, "W": 12}
+    corners = ((8, 1, 4), (8, 8, 32), (16, 16, 16), (16, 1, 32))
+    pts = []
+    for L in MM_V2_LANES:
+        pts.append(centre | {"L": L})
+        pts += [
+            centre | {"K": K, "R": R, "C": C, "W": W, "L": L}
+            for K, R, C in corners
+            for W in (8, 16)
+        ]
+    cfgs = _unique([_mm(**(p | {"C": max(p["C"], p["L"])})) for p in pts])
+    held = set(holdout("mm")) | {c for _s, t, c in supplement() if t == "mm"}
+    assert not set(cfgs) & (set(mm_fit()) | held), "a v2 calibration build was used"
+    return cfgs
+
+
+def supplement2() -> list[tuple[str, str, HwConfig]]:
+    """Six fresh held-out matmul builds, three at each new lane count, as ``(stratum, top,
+    configuration)``.
+
+    Drawn like :func:`supplement`: uniformly, with a fixed seed, inside each stratum.  A pool leaves
+    out every calibration build of both rounds, every earlier held-out build, and every
+    configuration whose matmul a calibration detector contains.  They are run only after the v2
+    models are frozen, and they are what judges the refit.
+    """
+    seen = {c.mm_key() for c in det_fit()}
+    taken = (
+        set(mm_fit())
+        | set(mm_fit_v2())
+        | set(holdout("mm"))
+        | {c for _s, t, c in supplement() if t == "mm"}
+    )
+    out = []
+    for i, (name, top, n, belongs) in enumerate(V2_STRATA):
+        pool = [
+            c
+            for c in mm_space()
+            if belongs(c) and c not in taken and c.mm_key() not in seen
+        ]
+        out += [(name, top, c) for c in _draw(pool, n, i, _V2_STREAM)]
+    return out
+
+
+def v2_rows() -> list[dict]:
+    """The second round's builds: the ``fit2`` builds in design order, then ``supplement2``."""
+    rows = [
+        {
+            "build": label("mm", c),
+            "top": "mm",
+            "role": "fit2",
+            "stratum": f"calibration: {c.L} lanes",
+            **asdict(c),
+        }
+        for c in mm_fit_v2()
+    ]
+    rows += [
+        {
+            "build": label(top, c),
+            "top": top,
+            "role": "supplement2",
+            "stratum": name,
+            **asdict(c),
+        }
+        for name, top, c in supplement2()
+    ]
+    return rows
+
+
+def write_v2(path: Path = V2_PATH) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_table(path, v2_rows(), provenance("calibration_v2", stream=_V2_STREAM))
+    return path
+
+
+def read_v2(path: Path = V2_PATH) -> list[tuple[str, str, str, HwConfig]]:
+    """The committed second round, as ``(build, top, role, configuration)``; empty if absent."""
+    return read_supplement(path)
+
+
 # --- the split file --------------------------------------------------------------------------
 
 
@@ -420,7 +527,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--write-supplement", action="store_true", help=f"write {SUPPLEMENT_PATH.name}"
     )
+    ap.add_argument("--write-v2", action="store_true", help=f"write {V2_PATH.name}")
     args = ap.parse_args(argv)
+    if args.write_v2:
+        for r in v2_rows():
+            print(f"  {r['role']:11s} {r['stratum']:22s} {r['build']}")
+        print("wrote", write_v2())
+        return 0
     if args.write_supplement:
         for r in supplement_rows():
             print(f"  {r['stratum']:24s} {r['build']}")

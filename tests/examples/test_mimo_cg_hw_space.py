@@ -201,6 +201,64 @@ def test_committed_supplement_is_what_the_code_regenerates(tmp_path):
     assert again.read_bytes() == space.SUPPLEMENT_PATH.read_bytes()
 
 
+def test_second_calibration_round():
+    """Step 6.1: 18 more matmul calibration builds at 2 and 16 lanes, and six fresh held-out matmul
+    builds at those lane counts.  Nothing in the round is an earlier build, the held-out ones share
+    no matmul with any calibration build, and the first split and supplement are untouched.
+    """
+    fit2 = space.mm_fit_v2()
+    assert len(fit2) == 18 == len(set(fit2))
+    assert Counter(c.L for c in fit2) == {2: 9, 16: 9}
+    assert all(space.is_valid(c) for c in fit2)
+    # the first design's centre and corners, with C raised to the lane count where it must be
+    assert {(c.K, c.R, c.C, c.W) for c in fit2 if c.L == 2} == {
+        (8, 4, 8, 12),
+        *(
+            (K, R, C, W)
+            for K, R, C in ((8, 1, 4), (8, 8, 32), (16, 16, 16), (16, 1, 32))
+            for W in (8, 16)
+        ),
+    }
+    assert {(c.K, c.R, c.C, c.W) for c in fit2 if c.L == 16} == {
+        (8, 4, 16, 12),
+        *(
+            (K, R, C, W)
+            for K, R, C in ((8, 1, 16), (8, 8, 32), (16, 16, 16), (16, 1, 32))
+            for W in (8, 16)
+        ),
+    }
+    earlier_held = set(space.holdout("mm")) | {
+        c for _n, t, c in space.supplement() if t == "mm"
+    }
+    assert not set(fit2) & (set(space.mm_fit()) | earlier_held)
+
+    sup2 = space.supplement2()
+    assert [(name, top) for name, top, _c in sup2] == [
+        *[("mm: 2 lanes", "mm")] * 3,
+        *[("mm: 16 lanes", "mm")] * 3,
+    ]
+    held = [c for _n, _t, c in sup2]
+    assert [c.L for c in held] == [2, 2, 2, 16, 16, 16]
+    assert len(set(held)) == 6 and all(space.is_valid(c) for c in held)
+    assert not set(held) & (set(space.mm_fit()) | set(fit2) | earlier_held)
+    assert not {c.mm_key() for c in held} & {c.mm_key() for c in space.det_fit()}
+    # what the draw covers: recorded so the coverage behind the refit's score is stated
+    assert [c.K for c in held] == [4, 4, 4, 8, 16, 16]
+    assert [c.cmul for c in held] == [3, 3, 3, 4, 3, 4]
+
+    read = space.read_v2()
+    assert [(b, r) for b, _t, r, _c in read] == [
+        *[(space.label("mm", c), "fit2") for c in fit2],
+        *[(space.label("mm", c), "supplement2") for c in held],
+    ]
+    assert space.FIT_ROLES == ("fit", "fit2")
+
+
+def test_committed_second_round_is_what_the_code_regenerates(tmp_path):
+    again = space.write_v2(tmp_path / "calibration_v2.csv")
+    assert again.read_bytes() == space.V2_PATH.read_bytes()
+
+
 def test_committed_split_is_what_the_code_regenerates(tmp_path):
     again = space.write_split(tmp_path / "holdout_split.csv")
     assert again.read_bytes() == space.SPLIT_PATH.read_bytes()

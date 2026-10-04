@@ -391,10 +391,11 @@ def test_campaign_grid_roles_and_shards():
     from examples.mimo_cg.hw import campaign as C
 
     labels = list(C.split())
-    assert (
-        len(C.grid()) == len(labels) == 107
-    )  # the split's 101 and the 6 supplementary builds
-    assert [b for b in labels if C.split()[b][1] == "supplement"] == labels[101:]
+    # the split's 101, the 6 supplementary builds, and the second round's 18 + 6 (step 6.1)
+    assert len(C.grid()) == len(labels) == 131
+    assert [b for b in labels if C.split()[b][1] == "supplement"] == labels[101:107]
+    assert [b for b in labels if C.split()[b][1] == "fit2"] == labels[107:125]
+    assert [b for b in labels if C.split()[b][1] == "supplement2"] == labels[125:]
     fit = [b for b in labels if C.split()[b][1] == "fit"]
     assert len(fit) == 67
     shards = [C.shard(fit, f"{i}/4") for i in range(4)]

@@ -1,0 +1,26 @@
+# mimo_cg calibration_v2: numpy=2.5.3, base_seed=20260930, stream=92
+build,top,role,stratum,K,L,R,C,cmul,W,g_s,mem_dw,sob_depth,cmd_depth
+mm_k8_r4_c8_m4_w12_l2,mm,fit2,calibration: 2 lanes,8,2,4,8,4,12,8,64,2,2
+mm_k8_r1_c4_m4_w8_l2,mm,fit2,calibration: 2 lanes,8,2,1,4,4,8,8,64,2,2
+mm_k8_r1_c4_m4_w16_l2,mm,fit2,calibration: 2 lanes,8,2,1,4,4,16,8,64,2,2
+mm_k8_r8_c32_m4_w8_l2,mm,fit2,calibration: 2 lanes,8,2,8,32,4,8,8,64,2,2
+mm_k8_r8_c32_m4_w16_l2,mm,fit2,calibration: 2 lanes,8,2,8,32,4,16,8,64,2,2
+mm_k16_r16_c16_m4_w8_l2,mm,fit2,calibration: 2 lanes,16,2,16,16,4,8,8,64,2,2
+mm_k16_r16_c16_m4_w16_l2,mm,fit2,calibration: 2 lanes,16,2,16,16,4,16,8,64,2,2
+mm_k16_r1_c32_m4_w8_l2,mm,fit2,calibration: 2 lanes,16,2,1,32,4,8,8,64,2,2
+mm_k16_r1_c32_m4_w16_l2,mm,fit2,calibration: 2 lanes,16,2,1,32,4,16,8,64,2,2
+mm_k8_r4_c16_m4_w12_l16,mm,fit2,calibration: 16 lanes,8,16,4,16,4,12,8,64,2,2
+mm_k8_r1_c16_m4_w8_l16,mm,fit2,calibration: 16 lanes,8,16,1,16,4,8,8,64,2,2
+mm_k8_r1_c16_m4_w16_l16,mm,fit2,calibration: 16 lanes,8,16,1,16,4,16,8,64,2,2
+mm_k8_r8_c32_m4_w8_l16,mm,fit2,calibration: 16 lanes,8,16,8,32,4,8,8,64,2,2
+mm_k8_r8_c32_m4_w16_l16,mm,fit2,calibration: 16 lanes,8,16,8,32,4,16,8,64,2,2
+mm_k16_r16_c16_m4_w8_l16,mm,fit2,calibration: 16 lanes,16,16,16,16,4,8,8,64,2,2
+mm_k16_r16_c16_m4_w16_l16,mm,fit2,calibration: 16 lanes,16,16,16,16,4,16,8,64,2,2
+mm_k16_r1_c32_m4_w8_l16,mm,fit2,calibration: 16 lanes,16,16,1,32,4,8,8,64,2,2
+mm_k16_r1_c32_m4_w16_l16,mm,fit2,calibration: 16 lanes,16,16,1,32,4,16,8,64,2,2
+mm_k4_r2_c4_m3_w10_l2,mm,supplement2,mm: 2 lanes,4,2,2,4,3,10,8,64,2,2
+mm_k4_r2_c8_m3_w10_l2,mm,supplement2,mm: 2 lanes,4,2,2,8,3,10,8,64,2,2
+mm_k4_r4_c4_m3_w16_l2,mm,supplement2,mm: 2 lanes,4,2,4,4,3,16,8,64,2,2
+mm_k8_r8_c16_m4_w8_l16,mm,supplement2,mm: 16 lanes,8,16,8,16,4,8,8,64,2,2
+mm_k16_r1_c32_m3_w14_l16,mm,supplement2,mm: 16 lanes,16,16,1,32,3,14,8,64,2,2
+mm_k16_r1_c32_m4_w10_l16,mm,supplement2,mm: 16 lanes,16,16,1,32,4,10,8,64,2,2
