@@ -159,15 +159,22 @@ def detail_rows(
 
 
 def _stats(rows: list[dict]) -> tuple[float, float]:
+    """``(mean, worst)`` absolute error in percent; zeros for no rows (the caller drops those)."""
     errs = [abs(r["error_pct"]) for r in rows]
-    return sum(errs) / len(errs), max(errs)
+    return (sum(errs) / len(errs), max(errs)) if errs else (0.0, 0.0)
 
 
 def summary_rows(detail: list[dict]) -> list[dict]:
-    """One row per metric; the AC5 metrics carry their threshold and whether they meet it."""
+    """One row per metric; the AC5 metrics carry their threshold and whether they meet it.
+
+    A metric with nothing to average is left out: a held-out set of unit builds only (the second
+    calibration round's) has no design rows.
+    """
     out = []
 
     def add(metric: str, n: int, value: float, worst, threshold="", passed="") -> None:
+        if not n:
+            return
         out.append(
             {
                 "metric": metric,
@@ -238,7 +245,7 @@ def summary_rows(detail: list[dict]) -> list[dict]:
         add(
             f"designs: {ctr.upper()} exact (%)",
             len(rows),
-            100.0 * sum(r["exact"] for r in rows) / len(rows),
+            100.0 * sum(r["exact"] for r in rows) / max(len(rows), 1),
             "",
         )
     for q in ("t_iter", "t0"):
@@ -317,6 +324,8 @@ def disclosure_rows(
     out = []
 
     def add(metric: str, n: int, value: float, worst="") -> None:
+        if not n:
+            return
         out.append(
             {
                 "metric": metric,
@@ -345,7 +354,7 @@ def disclosure_rows(
             100.0 * both_exact(with_bram) / len(with_bram),
         )
     n, nonzero, exact = channel_exactness(data_dir, role)
-    add("channel memories: BRAM, LUT and FF exact (%)", n, 100.0 * exact / n)
+    add("channel memories: BRAM, LUT and FF exact (%)", n, 100.0 * exact / max(n, 1))
     add("channel memories with BRAM > 0 (count)", n, nonzero)
 
     skip = overlapping(data_dir, role)
@@ -353,7 +362,7 @@ def disclosure_rows(
     add(
         "disjoint from fit: blocks DSP and BRAM both exact (%)",
         len(kept),
-        100.0 * both_exact(kept) / len(kept),
+        100.0 * both_exact(kept) / max(len(kept), 1),
     )
     design = [r for r in detail if r["scope"] == "design" and r["build"] not in skip]
     for label, rows in (

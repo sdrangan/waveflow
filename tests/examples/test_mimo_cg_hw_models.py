@@ -701,6 +701,51 @@ def test_supplement_finds_the_memory_bound_regime_the_cycle_model_lacks():
     assert len(cycles[2]) == 2 and max(cycles[2]) - min(cycles[2]) > 200
 
 
+def test_second_held_out_set_judges_the_refit(tmp_path):
+    """Step 6.1's exit: six fresh matmul builds at 2 and 16 lanes, drawn before the second
+    calibration round ran and built only after version 2 was frozen.  The matmul LUT error is at
+    most 10% on average (it is 1.7%, and 4.5% at worst); DSP and BRAM are exact on all six.
+    """
+    from examples.mimo_cg.hw import validate as V
+    from examples.mimo_cg.hw.space import read_v2
+    from examples.mimo_cg.mimo_cg import read_table
+
+    V.validate(out_dir=tmp_path, role="supplement2")
+    names = (
+        "model_validation_supplement2.csv",
+        "model_validation_supplement2_metrics.csv",
+    )
+    for name in names:
+        assert (tmp_path / name).read_bytes() == (MD.PAPER_DATA / name).read_bytes()
+        head = (MD.PAPER_DATA / name).read_text(encoding="utf-8").splitlines()[0]
+        assert f"model_sha256={FROZEN_MODEL_SHA256[:16]}" in head
+        assert "role=supplement2" in head and "tool=vitis_hls 2024.1" in head
+    detail = read_table(MD.PAPER_DATA / names[0])
+    metrics = {r["metric"]: r for r in read_table(MD.PAPER_DATA / names[1])}
+    held = {b for b, _t, role, _c in read_v2() if role == "supplement2"}
+    assert {r["build"] for r in detail} == held and len(held) == 6
+    assert V.overlapping(role="supplement2") == set()
+    assert all(
+        r["threshold"] == "" for r in metrics.values()
+    )  # evidence, not an AC5 gate
+    assert not any(m.startswith("designs:") for m in metrics)  # unit builds only
+
+    lut = metrics["CgMm: LUT MAPE (%)"]
+    assert lut["n"] == "6" and float(lut["value"]) <= 10.0  # the step's exit condition
+    assert float(lut["value"]) < 2.0 and float(lut["worst"]) < 5.0
+    blocks = metrics["blocks: DSP and BRAM both exact (%)"]
+    assert (blocks["n"], float(blocks["value"])) == ("6", 100.0)
+    assert float(metrics["CgMm: FF MAPE (%)"]["worst"]) < 7.0
+    assert float(metrics["unit builds: mm.iter span MAPE (%)"]["worst"]) < 2.5
+    # both lane counts, each within 5%
+    by_lane = {}
+    for r in detail:
+        if r["quantity"] == "lut":
+            lanes = int(r["build"].rsplit("_l", 1)[1])
+            by_lane.setdefault(lanes, []).append(abs(float(r["error_pct"])))
+    assert set(by_lane) == {2, 16} and all(max(e) < 5.0 for e in by_lane.values())
+
+
 def _committed_cycles(build: str) -> dict:
     from examples.mimo_cg.mimo_cg import read_table
 
