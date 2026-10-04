@@ -1,0 +1,14 @@
+{
+  "key": "cg_store-e3467894",
+  "cls_name": "CgStore",
+  "cls_module": "examples.mimo_cg.hw.detector",
+  "params": {
+    "K": 4,
+    "L": 4,
+    "N": 32,
+    "fmt": 0,
+    "mem_dwidth": 64,
+    "sob_depth": 3
+  },
+  "signature": "e346789424a275c5a8bfa21949f27b32c1a4df0557ad77ba29e09651fd5de653"
+}

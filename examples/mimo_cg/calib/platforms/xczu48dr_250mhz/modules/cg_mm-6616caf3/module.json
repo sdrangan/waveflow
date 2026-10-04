@@ -1,0 +1,17 @@
+{
+  "key": "cg_mm-6616caf3",
+  "cls_name": "CgMm",
+  "cls_module": "examples.mimo_cg.hw.mm",
+  "params": {
+    "C": 8,
+    "K": 8,
+    "L": 4,
+    "N": 32,
+    "R": 4,
+    "cmul": 4,
+    "fmt": 1,
+    "mem_dwidth": 64,
+    "sob_depth": 2
+  },
+  "signature": "6616caf3ebc15efb38a2e5d48bcf3bfd21c7b442f4d08d07f8b7a4131a0ba047"
+}

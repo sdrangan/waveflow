@@ -11,12 +11,14 @@ its own summary::
     python -m examples.mimo_cg.hw.campaign --role fit --shard 0/4         # one of four processes
     python -m examples.mimo_cg.hw.campaign --role fit --shard 0/4 --resume
     python -m examples.mimo_cg.hw.campaign --merge fit                    # tables + platform records
+    python -m examples.mimo_cg.hw.campaign --reattribute fit              # re-read the reports
 
 ``--merge`` writes three tables to ``paper_data/`` from the per-build records:
 
 * ``hw_builds.csv`` — one row per build: its knobs, the totals, the clock and the wall time;
-* ``hw_modules.csv`` — one row per module of each build, and one per channel of its top (the
-  stream-of-blocks memories, the FIFOs and the bus adapters);
+* ``hw_modules.csv`` — one row per module of each build, one per pipelined loop inside a module
+  (``subblock`` rows: a part of their module's row, not an addition to it), and one per channel of
+  the top (the stream-of-blocks memories, the FIFOs and the bus adapters);
 * ``hw_cycles.csv`` — the job intervals and their fit, and the block spans.
 
 It also rebuilds the work platform's module store from the ``fit`` builds, serially.  **Held-out
@@ -176,6 +178,17 @@ def module_rows(recs: list[dict]) -> list[dict]:
                 | {k: m[k] for k in COUNTERS}
                 | {"words": "", "bits": "", "banks": ""}
             )
+            for loop, sub in m.get("subblocks", {}).items():
+                rows.append(
+                    _head(rec)
+                    | {
+                        "kind": "subblock",
+                        "name": f"{m['cls']}.{loop}",
+                        "rtl_module": "",
+                    }
+                    | {k: sub.get(k, 0) for k in COUNTERS}
+                    | {"words": "", "bits": "", "banks": ""}
+                )
         for ch in res.get("channels", []):
             rows.append(
                 _head(rec)
@@ -250,6 +263,24 @@ def merge(
     return out
 
 
+def reattribute(roles: tuple[str, ...], points_dir: Path = M.POINTS_DIR) -> int:
+    """Re-read the csynth reports of measured builds into their records (no tool runs).
+
+    For when the attribution gains detail: the reports are still on disk, so the ``resources`` of
+    each record are refreshed in place.  Returns how many records were refreshed.
+    """
+    n = 0
+    for rec in _records(roles, points_dir):
+        if "resources" not in rec:
+            continue
+        c = HwConfig(**rec["config"])
+        rec["resources"] = M.attribute(rec["top"], c, B.BUILD_ROOT / rec["build"])
+        path = points_dir / f"{rec['build']}.json"
+        path.write_text(json.dumps(rec, indent=1) + "\n", encoding="utf-8")
+        n += 1
+    return n
+
+
 def file_fit_records(points_dir: Path = M.POINTS_DIR) -> int:
     """Rebuild the work platform's module store from the ``fit`` builds (never a held-out one)."""
     store = M.WORK_ROOT / M.PLATFORM / "modules"
@@ -278,10 +309,18 @@ def file_fit_records(points_dir: Path = M.POINTS_DIR) -> int:
 def main(argv: list[str] | None = None) -> int:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--merge", nargs="+", choices=("fit", "holdout"), default=None)
+    pre.add_argument(
+        "--reattribute", nargs="+", choices=("fit", "holdout"), default=None
+    )
     pre.add_argument("--role", choices=("fit", "holdout"), default=None)
     pre.add_argument("--shard", default=None)
     known, _ = pre.parse_known_args(argv)
     rest = [a for a in (argv if argv is not None else sys.argv[1:])]
+    if known.reattribute:
+        print(
+            f"re-attributed {reattribute(tuple(dict.fromkeys(known.reattribute)))} record(s)"
+        )
+        return 0
     if known.merge:
         roles = tuple(dict.fromkeys(known.merge))
         for name, path in merge(roles).items():

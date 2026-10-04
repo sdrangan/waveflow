@@ -242,9 +242,15 @@ def channel_rows(report_dir: Path, top_name: str, module_rtl: set[str]) -> list[
     return out
 
 
+def _loop_label(rtl_name: str) -> str:
+    """The loop a sub-block row belongs to: ``cg_mm_task_64_4_…_Pipeline_SWEEP`` → ``SWEEP``."""
+    return rtl_name.split("_Pipeline_", 1)[-1]
+
+
 def attribute(top: str, c: HwConfig, out_dir: Path) -> dict:
-    """The build's csynth report, attributed: module rows, the integration remainder, the total,
-    the top's channel rows and the estimated clock."""
+    """The build's csynth report, attributed: module rows (each with the rows of its pipelined
+    loops), the integration remainder, the total, the top's channel rows and the estimated clock.
+    """
     from waveflow.build.elaborate import elaborate
     from waveflow.calib.synth_report import report_from_solution
     from waveflow.utils.csynthparse import synth_target
@@ -254,7 +260,13 @@ def attribute(top: str, c: HwConfig, out_dir: Path) -> dict:
     sol = Path(out_dir) / f"{name}_proj" / "solution1"
     report = report_from_solution(comp, sol, top_name=name)
     modules = [
-        {"cls": m.cls_name, "key": m.key, "rtl_module": m.rtl_module, **m.resources}
+        {
+            "cls": m.cls_name,
+            "key": m.key,
+            "rtl_module": m.rtl_module,
+            **m.resources,
+            "subblocks": {_loop_label(k): dict(v) for k, v in m.subblocks.items()},
+        }
         for m in report.modules
     ]
     target = synth_target(sol / "syn" / "report")

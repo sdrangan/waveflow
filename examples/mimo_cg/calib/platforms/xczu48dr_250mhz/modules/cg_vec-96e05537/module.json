@@ -1,0 +1,14 @@
+{
+  "key": "cg_vec-96e05537",
+  "cls_name": "CgVec",
+  "cls_module": "examples.mimo_cg.hw.vec",
+  "params": {
+    "K": 8,
+    "L": 1,
+    "N": 32,
+    "fmt": 13,
+    "mem_dwidth": 64,
+    "sob_depth": 2
+  },
+  "signature": "96e0553755a541d8386d0e0b5722c76d00781764f784b21cb9c3a63278e5c748"
+}

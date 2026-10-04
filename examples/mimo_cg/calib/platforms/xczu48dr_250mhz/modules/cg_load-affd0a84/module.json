@@ -1,0 +1,14 @@
+{
+  "key": "cg_load-affd0a84",
+  "cls_name": "CgLoad",
+  "cls_module": "examples.mimo_cg.hw.detector",
+  "params": {
+    "K": 4,
+    "L": 1,
+    "N": 32,
+    "fmt": 0,
+    "mem_dwidth": 64,
+    "sob_depth": 2
+  },
+  "signature": "affd0a84f382083187e1b68d88cf1db52dc562f356e6ccf103cf79c690e26d5a"
+}

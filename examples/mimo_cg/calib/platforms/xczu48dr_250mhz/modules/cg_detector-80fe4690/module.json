@@ -1,0 +1,18 @@
+{
+  "key": "cg_detector-80fe4690",
+  "cls_name": "CgDetector",
+  "cls_module": "examples.mimo_cg.hw.detector",
+  "params": {
+    "C": 8,
+    "K": 4,
+    "L": 8,
+    "N": 32,
+    "R": 4,
+    "cmd_depth": 2,
+    "cmul": 4,
+    "fmt": 0,
+    "mem_dwidth": 64,
+    "sob_depth": 2
+  },
+  "signature": "80fe4690113e9673e9b335bd70784f1eb7522912238549eabfc98d413c9c07d3"
+}

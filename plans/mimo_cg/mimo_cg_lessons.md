@@ -252,3 +252,17 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   the detail rows say 0. Keep the difference as its own row or the parts will not add up.
 - **A report has two "+ Detail" sections.** The latency one comes first and its Instance
   table has a two-line header. Slice from "== Utilization Estimates".
+- **"One DSP per multiply" holds only from 12 bits.** Below that the tool builds a plain
+  multiply from LUTs and keeps only multiply-add patterns in DSPs. Read the report's
+  instance names (`mac_muladd_…`, `mul_8s_8s_…`) before writing a DSP rule.
+- **A stream-of-blocks is one memory, not one per bank.** Its banks share a
+  simple-dual-port memory, so a wide element uses the 36-bit shape: 96 bits cost 3 blocks,
+  not 6. It splits into one memory per bank when a task touches two groups per cycle.
+- **Break a module into its report rows before regressing it.** The csynth report has a
+  row per pipelined loop. The matmul's sweep, output loop and registers each follow a
+  simple law; their sum does not look like one. The loaders only became fittable from
+  their loop rows, where two instances of the same code give twice the points.
+- **The report can be re-read; the synthesis need not be re-run.** Keeping the build
+  directories let the attribution gain detail after the campaign, for free.
+- **Unit jobs that are block-bound differ from waiting jobs by one cycle.** That is why the
+  span is the smallest clean sample, and why it composes exactly in the detector.

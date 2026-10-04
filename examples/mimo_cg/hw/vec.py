@@ -84,8 +84,8 @@ DEFAULT_K = 4
 DEFAULT_L = 4
 #: The default format id, ``HW_FORMAT_NAMES[0]`` = W12g8.
 DEFAULT_FMT = 0
-#: Placeholder pipeline model (cycles), to be replaced by Phase 5's fit: a divider's latency and
-#: the fixed overhead of one firing.
+#: Fallback pipeline model (cycles) for a build the Phase 5 fit does not cover: a divider's latency
+#: and the fixed overhead of one firing.
 _DIV_LATENCY = 40
 _OVERHEAD = 10
 
@@ -105,9 +105,21 @@ def _put(block, re: np.ndarray, im: np.ndarray):
     return block
 
 
-def vec_cycles(op: IterOp, K: int, N: int, L: int) -> float:
-    """Placeholder cycles of one command: a lane-parallel pass over the K·N block for ``INIT``;
-    three passes and two divisions per column group for an iteration."""
+def vec_cycles(op: IterOp, K: int, N: int, L: int, fmt: int | None = None) -> float:
+    """Cycles of one command, from "input there and block free" to the output's hand-over.
+
+    With a format of the Phase 5 space, the calibrated span of the block
+    (:func:`examples.mimo_cg.hw.models.block_span`: fitted to the RTL's stream-of-blocks handshakes).
+    Otherwise a rough fallback: a lane-parallel pass over the K·N block for ``INIT``, and three
+    passes and two divisions per column group for an iteration.
+    """
+    if fmt is not None:
+        from examples.mimo_cg.hw.models import block_span
+
+        kind = "vec.init" if op == IterOp.INIT else "vec.iter"
+        span = block_span(kind, fmt, K=K, L=L)
+        if span is not None:
+            return span
     if op == IterOp.INIT:
         return _OVERHEAD + K * N / L
     return _OVERHEAD + (N / L) * (3 * K + 2 * _DIV_LATENCY)
@@ -176,7 +188,7 @@ class CgVec(FreeRunMod):
         )
 
     def _wait(self, op: IterOp):
-        cyc = vec_cycles(op, int(self.K), int(self.N), int(self.L))
+        cyc = vec_cycles(op, int(self.K), int(self.N), int(self.L), int(self.fmt))
         return self.timeout(cyc * self.clk.period)
 
     def run_iter(self) -> ProcessGen[None]:

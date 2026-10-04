@@ -84,8 +84,27 @@ def a_block_type(W: int, K: int) -> type[DataArray]:
     return DataArray.specialize(element_type=row, max_shape=(K,), member_name="rows")
 
 
-def mm_cycles(K: int, N: int, R: int, C: int) -> float:
-    """Placeholder cycles of one product: per tile, the skewed systolic sweep ``K + R + C − 2``."""
+def mm_cycles(
+    K: int,
+    N: int,
+    R: int,
+    C: int,
+    L: int | None = None,
+    cmul: int | None = None,
+    fmt: int | None = None,
+) -> float:
+    """Cycles of one product, from "P there and block free" to the hand-over of S.
+
+    With the lanes, the multiply form and a format of the Phase 5 space, the calibrated span of the
+    block (:func:`examples.mimo_cg.hw.models.block_span`).  Otherwise a rough fallback: per tile,
+    the skewed systolic sweep ``K + R + C − 2``.
+    """
+    if None not in (L, cmul, fmt):
+        from examples.mimo_cg.hw.models import block_span
+
+        span = block_span("mm.iter", fmt, K=K, R=R, C=C, L=L, cmul=cmul)
+        if span is not None:
+            return span
     return (K // R) * (N // C) * (K + R + C - 2) + 10
 
 
@@ -170,7 +189,10 @@ class CgMm(FreeRunMod):
             pb = yield from self.p_blk.acquire_read()
             sr, si = mm_step(ar, ai, *pb.payload, f)
             yield from self.p_blk.release_read()
-            yield self.timeout(mm_cycles(K, N, self.rows, C) * self.clk.period)
+            cyc = mm_cycles(
+                K, N, self.rows, C, int(self.L), int(self.cmul), int(self.fmt)
+            )
+            yield self.timeout(cyc * self.clk.period)
             sb = yield from self.s_blk.acquire_write()
             yield from self.s_blk.commit_write(_put(sb, sr, si))
             if IterOp(int(cmd.op)) == IterOp.LAST:

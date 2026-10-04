@@ -603,12 +603,27 @@ def test_committed_module_rows_add_up_to_the_build_totals():
     _, modules = _committed("hw_modules")
     assert {r["build"] for r in modules} == {r["build"] for r in builds}
     for b in builds:
-        rows = [r for r in modules if r["build"] == b["build"]]
+        mine = [r for r in modules if r["build"] == b["build"]]
+        rows = [
+            r for r in mine if r["kind"] != "subblock"
+        ]  # a sub-block is part of its module
         for k in ("lut", "ff", "dsp", "bram"):
             assert sum(int(r[k]) for r in rows) == int(b[k]), (b["build"], k)
         integ = [r for r in rows if r["kind"] != "module"]
         for k in ("lut", "ff", "bram"):
             assert sum(int(r[k]) for r in integ) == int(b[f"integ_{k}"])
+        for mod in (r for r in rows if r["kind"] == "module"):
+            parts = [
+                r
+                for r in mine
+                if r["kind"] == "subblock" and r["name"].startswith(mod["name"] + ".")
+            ]
+            for k in ("lut", "ff", "dsp", "bram"):
+                assert sum(int(r[k]) for r in parts) <= int(mod[k]), (
+                    b["build"],
+                    mod["name"],
+                    k,
+                )
 
 
 def test_committed_cycles_have_a_fit_and_a_clean_span_for_every_block():
