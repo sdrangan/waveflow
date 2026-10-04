@@ -4,6 +4,8 @@ regmap_demo.py — VitisRegMap + VitisRegMapMMIFSlave demonstration.
 Topology
 --------
   CPU ──── AXIMMCrossBarIF (LITE) ──── FakeAccel (VitisRegMapMMIFSlave)
+   ^                                        |
+   └────────────── IrqIF ───────────────────┘   (the kernel's interrupt line)
 
 Scenario
 --------
@@ -21,6 +23,9 @@ The kernel (on_start) sleeps 5 cycles, reads coeff_pair, and either:
 
 CPU sequence
 ------------
+Each launch is ``ap_start`` followed by a sleep on the kernel's interrupt (enabled once, cleared
+after each wake) -- the CPU never reads ap_done.
+
   1. coeff_pair=[0,0]        → launch → expect BAD_INPUT, halted=1
   2. clear → coeff_pair=[600,700] → launch → expect OVERFLOW, halted=1
   3. clear → coeff_pair=[10,20]  → launch → expect OK, halted=0
@@ -40,6 +45,7 @@ from waveflow.hw.aximm import (
 )
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, EnumField, IntField
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.regmap import (
     Bit,
     RegAccess,
@@ -170,7 +176,9 @@ class CPU(SimObj):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.master = MMIFMaster(sim=self.sim, bitwidth=32)
+        self.irq = IrqIFSink(name=f"{self.name}_irq", sim=self.sim)
         self.passed = False
+        self._rm = None
 
     def _addr(self, field: str) -> int:
         return self.base_addr + self.accel.regmap.offset_of(field)
@@ -183,9 +191,11 @@ class CPU(SimObj):
         val = yield from self.master.read_schema(DemoErrorField, addr=self._addr("error"))
         return DemoError(val.val)
 
-    def _launch_and_wait(self, wait_cycles: int = 15) -> ProcessGen[None]:
-        yield from self.accel.regmap.start(self.master, base_addr=self.base_addr)
-        yield self.timeout(wait_cycles)
+    def _launch_and_wait(self) -> ProcessGen[None]:
+        """Launch, then sleep until the kernel's interrupt fires (and clear it)."""
+        if self._rm is None:
+            self._rm = self.accel.regmap.bind_master(self.master, base_addr=self.base_addr)
+        yield from self._rm.run(self.irq)
 
     def _clear_status(self) -> ProcessGen[None]:
         yield from self.master.write_schema(
@@ -289,6 +299,10 @@ class RegMapDemo:
         )
         self.xbar.bind("master_0", self.cpu.master)
         self.xbar.bind("slave_0",  self.accel.slave, protocol=AXIMMProtocol.LITE)
+
+        self.irq = IrqIF(name="accel_irq", sim=self.sim)
+        self.irq.bind("source", self.accel.slave.interrupt())
+        self.irq.bind("sink", self.cpu.irq)
 
         assign_address_ranges(
             [self.accel.slave],

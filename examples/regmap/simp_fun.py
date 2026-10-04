@@ -10,6 +10,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
 from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_testbench import SeqTB
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.hw.synth import sim_only, synthesizable
 from waveflow.simulation.logger import Logger, NullLogger
@@ -120,14 +121,14 @@ class SimpFunHost(SimObj):
     case: SimpFunCase
     clk: Clock
     latency_cycles: int = 4
-    poll_interval_cycles: int = 4
-    max_polls: int = 32
     logger: Logger | NullLogger = field(default_factory=NullLogger)
     base_addr: int = 0x0
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.master = MMIFMaster(name=f"{self.name}_m_lite", sim=self.sim, bitwidth=32)
+        # The host's end of the kernel's interrupt line (Vitis's ``interrupt`` port).
+        self.irq = IrqIFSink(name=f"{self.name}_irq", sim=self.sim)
         self.y: int | None = None
         self.ap_done: int | None = None
         self.passed: bool = False
@@ -143,19 +144,11 @@ class SimpFunHost(SimObj):
         yield from rm.set("a", self.case.a)
         yield from rm.set("b", self.case.b)
         self._log("ap_start_host", 1)
-        yield from rm.start()
-        # The kernel now models its own compute latency inside on_start (it yields
-        # a timeout), so the host genuinely polls ap_done until it flips — no
-        # artificial pre-poll wait here.
-
-        # Polls ap_done at ``poll_interval_cycles`` clocks per read. In
-        # production you would wait on the AXI-Lite interrupt line instead;
-        # this is the pedagogical / debugging path.
-        self.ap_done = yield from rm.poll_end(
-            interval=self.poll_interval_cycles * self.clk.period,
-            max_polls=self.max_polls,
-        )
-        self._log("host_done", int(self.ap_done))
+        # Enable the ap_done interrupt (ier, gier), launch, and sleep until the kernel's
+        # interrupt line rises; then clear isr, which drops the line.  No ap_done reads.
+        yield from rm.run(self.irq)
+        self.ap_done = 1                 # the interrupt IS the completion
+        self._log("host_done", 1)
         self.y = yield from rm.get("y")
         self.passed = self.y == self.case.expected_y and self.ap_done == 1
 
@@ -220,6 +213,9 @@ def connect(sim: Simulation, host: SimpFunHost, accel: SimpFun, clk: Clock) -> N
     lite_link = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)
     lite_link.bind("master", host.master)
     lite_link.bind("slave", accel.s_lite)
+    irq = IrqIF(name="simp_fun_irq", sim=sim)
+    irq.bind("source", accel.s_lite.interrupt())
+    irq.bind("sink", host.irq)
     host._regmap_ref = accel.regmap
 
 

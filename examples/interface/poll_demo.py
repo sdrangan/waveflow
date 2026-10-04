@@ -6,6 +6,10 @@ loosely-timed model in :meth:`waveflow.hw.memif.MMIFMaster.poll_until` charges
 both in *O(transactions)* — it never steps the sim every poll cycle.  This demo
 isolates each cost in its own scenario so the output reads as a teaching script.
 
+This demo is **about** polling -- what it costs -- not an example of how a host should wait.  The
+examples wait on interrupts instead: ``BoundRegMap.run`` / ``wait_done`` on a kernel's ``ap_done``
+interrupt (``examples/regmap``), ``IrqIF`` on a queue's threshold (``examples/mm_fir``).
+
 Topology (one shared FULL slave, so the pollers and the bursts contend)::
 
       Producer  (master_0) ──┐

@@ -532,6 +532,40 @@ class BoundRegMap:
         """Write 1 to ``ap_start`` (only valid on a :class:`VitisRegMap`)."""
         yield from self.set("ap_start", 1)
 
+    # -- completion by interrupt (only valid on a VitisRegMap) -----------------------------------
+    def enable_irq(self) -> ProcessGen[None]:
+        """Enable the ap_done interrupt: ``ier = 1`` (ap_done only), then ``gier = 1``.  Two writes,
+        once per kernel -- the enables stay set across launches.  Must precede the launch it is to
+        report, or a kernel that finishes first sets no status bit."""
+        yield from self.set("ier", 1)
+        yield from self.set("gier", 1)
+        self._irq_enabled = True
+
+    def wait_done(self, irq) -> ProcessGen[None]:
+        """Wait for the launched kernel to finish, on its interrupt line, then clear it.
+
+        *irq* is the host's :class:`~waveflow.hw.irq.IrqIFSink`, bound by an
+        :class:`~waveflow.hw.irq.IrqIF` to the slave's
+        :meth:`VitisRegMapMMIFSlave.interrupt`.  The wait reads nothing on the bus; the one write
+        after it clears ``isr[0]`` (toggle-on-write), which drops the line and re-arms it for the
+        next launch.  Requires :meth:`enable_irq` first.
+        """
+        if not getattr(self, "_irq_enabled", False):
+            raise RuntimeError("wait_done: call enable_irq() before the launch it waits for")
+        yield from irq.wait_high()
+        yield from self.set("isr", 1)
+
+    def run(self, irq) -> ProcessGen[None]:
+        """Launch the kernel and wait for it on its interrupt: enable once, ``start``,
+        :meth:`wait_done`.  The usual host call::
+
+            yield from rm.run(irq)
+        """
+        if not getattr(self, "_irq_enabled", False):
+            yield from self.enable_irq()
+        yield from self.start()
+        yield from self.wait_done(irq)
+
     def poll_end(
         self,
         interval: float,
@@ -542,8 +576,7 @@ class BoundRegMap:
         """Poll ``field`` until it reads ``target``, with ``interval`` seconds between reads.
 
         Defaults to the standard ``ap_done == 1`` completion contract that
-        :class:`VitisRegMap` auto-emits via :class:`VitisRegMapMMIFSlave` — so a
-        typical kernel-launch flow is just::
+        :class:`VitisRegMap` auto-emits via :class:`VitisRegMapMMIFSlave`::
 
             yield from rm.start()
             yield from rm.poll_end(interval=clk.period * 4, max_polls=64)
@@ -554,8 +587,8 @@ class BoundRegMap:
         service stuffs the AXI-Lite link with redundant reads — choose
         ``interval`` to match the expected kernel runtime.
 
-        Polling is a pedagogical / debugging convenience. Production hosts
-        should wait on the AXI-Lite interrupt line instead.
+        Polling is a debugging fallback.  A host waits on the kernel's
+        interrupt line instead -- :meth:`run` / :meth:`wait_done`.
 
         Raises :class:`RuntimeError` if ``target`` has not been observed
         after ``max_polls`` reads.
@@ -784,10 +817,14 @@ class VitisRegMap(RegMap):
       when ``on_start`` returns and cleared on the next ``ap_start``.  A host
       may therefore read ``ap_done`` repeatedly and keep seeing 1, where real
       hardware clears it on the first read of 0x00.
-    - ``gier`` / ``ier`` / ``isr`` are plain storage: writing them enables no
-      interrupt, and ``isr`` does not implement toggle-on-write.  There is no
-      interrupt line in the simulation.
-    - ``auto_restart`` (bit 7) and ``interrupt`` (bit 9) are not modelled.
+    - ``gier`` / ``ier`` / ``isr`` drive an interrupt line exactly as the Vitis-generated
+      ``*_control_s_axi.v`` does (``plans/no_polling_next.md`` Part A): ``isr`` bit 0 sets when
+      the kernel finishes with ``ier`` bit 0 enabled (bit 1 likewise for ``ap_ready``), a host
+      write *toggles* the bits it writes 1 to (toggle-on-write), and the line is
+      ``gier[0] && isr != 0`` -- :meth:`VitisRegMapMMIFSlave.interrupt`.  Because ``ap_done`` is
+      held here rather than pulsed, ``isr`` is set at the completion *event*, not while
+      ``ap_done`` reads 1.
+    - ``auto_restart`` (bit 7) and the ``interrupt`` status bit (bit 9) are not modelled.
 
     The ``-m vitis`` test ``tests/hw/test_regmap_vitis_layout.py`` csynths
     probe kernels and diffs this layout against the generated ``ADDR_*``
@@ -906,21 +943,24 @@ class VitisRegMap(RegMap):
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x04,
-                description="Global Interrupt Enable Register — storage only",
+                description="Global Interrupt Enable: bit 0 gates the interrupt line",
                 is_vitis_auto=True,
             ),
             "ier": RegField(
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x08,
-                description="IP Interrupt Enable Register — storage only",
+                description="IP Interrupt Enable: bit 0 ap_done, bit 1 ap_ready",
                 is_vitis_auto=True,
             ),
             "isr": RegField(
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x0C,
-                description="IP Interrupt Status Register — storage only",
+                description=(
+                    "IP Interrupt Status: bit 0 ap_done, bit 1 ap_ready; set on the event when "
+                    "enabled, toggled by a host write of 1"
+                ),
                 is_vitis_auto=True,
             ),
         }
@@ -941,6 +981,10 @@ class VitisRegMap(RegMap):
 @dataclass
 class VitisRegMapMMIFSlave(RegMapMMIFSlave):
     """RegMapMMIFSlave that invokes an ``on_start`` generator on ap_start writes.
+
+    It also drives the kernel's **interrupt line**, as the Vitis-generated control slave does:
+    :meth:`interrupt` returns its :class:`~waveflow.hw.irq.IrqIFSource`, high while
+    ``gier[0] && isr != 0``.  A host waits on it with :meth:`BoundRegMap.wait_done`.
 
     When the host writes 1 to ``ap_start``:
 
@@ -967,7 +1011,46 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
             )
         self._busy: bool = False
         ap_field.on_write = self._on_ap_start
+        # The interrupt registers: gier / ier just re-evaluate the line; isr is toggle-on-write.
+        self._isr_bits: int = 0
+        self._irq_src = None
+        self.regmap._fields["gier"].on_write = self._on_irq_reg
+        self.regmap._fields["ier"].on_write = self._on_irq_reg
+        self.regmap._fields["isr"].on_write = self._on_isr_write
         super().__post_init__()
+
+    # -- the interrupt (Vitis *_control_s_axi.v: interrupt = gie && |isr) ------------------------
+    def interrupt(self):
+        """The kernel's interrupt line: an :class:`~waveflow.hw.irq.IrqIFSource`, high while
+        ``gier[0] && isr != 0``.  Bind it to an :class:`~waveflow.hw.irq.IrqIF` whose sink the host
+        waits on.  (Created on first use.)"""
+        if self._irq_src is None:
+            from waveflow.hw.irq import IrqIFSource
+            self._irq_src = IrqIFSource(name=f"{self.name}_irq", sim=self.sim)
+            self._update_irq()
+        return self._irq_src
+
+    def _update_irq(self) -> None:
+        if self._irq_src is not None:
+            gie = int(self.regmap.read_word("gier", 0)) & 1
+            self._irq_src.set(bool(gie and (self._isr_bits & 0x3)))
+
+    def _on_irq_reg(self, name: str, sub_word: int, value: int) -> None:
+        self._update_irq()
+
+    def _on_isr_write(self, name: str, sub_word: int, value: int) -> None:
+        """Toggle-on-write, as Vitis: each bit written 1 flips (so a host clears a set bit by
+        writing 1 to it).  The register store took the raw value; put the real bits back."""
+        self._isr_bits ^= int(value) & 0x3
+        self.regmap.write_word("isr", 0, self._isr_bits, source="owner")
+        self._update_irq()
+
+    def _raise_isr(self) -> None:
+        """At completion: set each status bit whose source is enabled in ier."""
+        ier = int(self.regmap.read_word("ier", 0))
+        self._isr_bits |= ier & 0x3          # bit 0 ap_done, bit 1 ap_ready -- both fire here
+        self.regmap.write_word("isr", 0, self._isr_bits, source="owner")
+        self._update_irq()
 
     def _on_ap_start(self, name: str, sub_word: int, value: int) -> None:
         """Hook installed on ap_start; spawns _launch() if not busy.
@@ -997,3 +1080,4 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
             self.regmap.set("ap_ready", 1)
             self.regmap.set("ap_idle", 1)
             self._busy = False
+            self._raise_isr()

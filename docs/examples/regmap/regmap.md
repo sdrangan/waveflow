@@ -149,9 +149,9 @@ the host reads back. The host never writes `y`.
 > *layout* above, and models `ap_start`, `ap_done`, `ap_idle` and `ap_ready`.
 > It does **not** model the clear-on-read (`COR`) semantics: the simulator's
 > `ap_done` is cleared on the next `ap_start` rather than by the read itself, so
-> a host may read it twice and see `1` both times. `gier`/`ier`/`isr` are plain
-> storage — there is no interrupt line in the simulation — and `auto_restart` /
-> `interrupt` are not modelled. See the
+> a host may read it twice and see `1` both times. `gier`/`ier`/`isr` drive the
+> kernel's interrupt line as Vitis generates them; `auto_restart` and the control
+> word's `interrupt` bit are not modelled. See the
 > [Register Maps guide](../../guide/interface/axi_mm/regmap.md) for the full reference.
 
 ## The execution model
@@ -164,12 +164,14 @@ transactions:
 2. **Launch.** Host writes `1` to bit 0 of the control word (`0x00`).
 3. **Kernel runs.** It reads `x`/`a`/`b`, computes `max(0, a*x + b)`, writes `y`,
    and sets `ap_done`.
-4. **Poll for completion.** Host reads the control word (`0x00`) repeatedly until
-   bit 1 (`ap_done`) reads `1`. (On real hardware you would usually wait on an
-   interrupt instead; polling is the simple, pedagogical path.)
+4. **Wait for the interrupt.** With the `ap_done` interrupt enabled (`ier` bit 0 and
+   `gier` bit 0, written once), the kernel's `interrupt` line rises when it finishes.
+   The host sleeps until then, then writes `1` to `isr` (`0x0c`) to clear it.
 5. **Read the result.** Host reads `y` (`0x28`).
 
-This start-then-poll handshake is the essence of the AXI-Lite control model.
+This start-then-interrupt handshake is the essence of the AXI-Lite control model. (A host
+can instead read the control word until bit 1, `ap_done`, reads `1` — polling, a debugging
+fallback that spends bus traffic for nothing.)
 
 ### What the Python model abstracts away
 
@@ -184,16 +186,14 @@ rm = self.regmap.bind_master(self.master, base_addr=self.base_addr)
 yield from rm.set("x", case.x)      # AXI-Lite write -> 0x10
 yield from rm.set("a", case.a)      #               -> 0x18
 yield from rm.set("b", case.b)      #               -> 0x20
-yield from rm.start()               # write 1 to bit 0 of 0x00 (ap_start)
-ap_done = yield from rm.poll_end(   # read 0x00, test bit 1, until it reads 1
-    interval=..., max_polls=...,
-)
+yield from rm.run(irq)              # first time: ier = 1, gier = 1; then ap_start,
+                                    # sleep on the interrupt, write 1 to isr
 y = yield from rm.get("y")          # AXI-Lite read <- 0x28
 ```
 
 Bit-packed fields cost no extra bus traffic: `rm.start()` is a single word write
-composing `ap_start` into bit 0, and each `poll_end` read is a single word read
-that extracts bit 1. You address fields by *name*, so the packing stays an
+composing `ap_start` into bit 0; a read of `ap_done` (the polling fallback) is a
+single word read that extracts bit 1. You address fields by *name*, so the packing stays an
 implementation detail of the layout.
 
 ### How the offsets stay honest

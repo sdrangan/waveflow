@@ -1123,3 +1123,113 @@ class TestPublicAPI:
         sim = Simulation()
         with pytest.raises(ValueError, match="bitwidth"):
             RegMapMMIFSlave(sim=sim, bitwidth=64, regmap=rm)
+
+
+class TestVitisRegMapInterrupt:
+    """The control slave's interrupt line (Vitis ``*_control_s_axi.v``: ``interrupt = gier[0] &&
+    isr != 0``, ``isr`` toggle-on-write) and ``BoundRegMap.run`` / ``wait_done``, which wait on it
+    without reading the bus."""
+
+    LATENCY = 7
+
+    def _build(self):
+        from waveflow.hw.irq import IrqIF, IrqIFSink
+
+        sim = Simulation()
+        rm = VitisRegMap({"x": RegField(Bit, RegAccess.R)})
+
+        def on_start() -> ProcessGen[None]:
+            yield sim.env.timeout(self.LATENCY)
+
+        slave = VitisRegMapMMIFSlave(sim=sim, bitwidth=32, regmap=rm, on_start=on_start)
+        master = MMIFMaster(sim=sim, bitwidth=32)
+        direct = DirectMMIF(sim=sim, clk=Clock(freq=1.0))
+        direct.bind("master", master)
+        direct.bind("slave", slave)
+        sink = IrqIFSink(name="host_irq", sim=sim)
+        line = IrqIF(name="irq", sim=sim)
+        line.bind("source", slave.interrupt())
+        line.bind("sink", sink)
+        # Count every bus read the host makes.
+        reads = []
+        orig = master.read_schema
+
+        def counting_read(*a, **k):
+            reads.append(k.get("addr"))
+            return (yield from orig(*a, **k))
+
+        master.read_schema = counting_read
+        return sim, rm, slave, master, sink, line, reads
+
+    def _run(self, sim, proc) -> None:
+        done = sim.env.event()
+
+        def _wrap() -> ProcessGen[None]:
+            yield from proc()
+            done.succeed()
+
+        sim.env.process(_wrap())
+        sim.env.run(until=done)
+
+    def test_run_wakes_at_completion_without_reads_and_rearms(self) -> None:
+        sim, rm, slave, master, sink, line, reads = self._build()
+        wakes: list[float] = []
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(master)
+            for _ in range(2):
+                t0 = sim.env.now
+                yield from rb.run(sink)
+                wakes.append(sim.env.now - t0)
+                assert not sink.level                   # the isr clear dropped the line
+
+        self._run(sim, proc)
+        assert reads == []                              # never read ap_done (or anything)
+        assert len(wakes) == 2 and all(w >= self.LATENCY for w in wakes)
+        assert line.nrise == 2                          # one interrupt per launch: re-armed
+        assert int(rm.read_word("isr", 0)) == 0
+
+    def test_wait_done_requires_enable(self) -> None:
+        sim, rm, slave, master, sink, line, reads = self._build()
+        caught: list[Exception] = []
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(master)
+            yield from rb.start()
+            try:
+                yield from rb.wait_done(sink)
+            except RuntimeError as exc:
+                caught.append(exc)
+
+        self._run(sim, proc)
+        assert caught
+
+    def test_gier_gates_the_line_but_not_isr(self) -> None:
+        sim, rm, slave, master, sink, line, reads = self._build()
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(master)
+            yield from rb.set("ier", 1)                 # source enabled, global enable off
+            yield from rb.start()
+            yield sim.env.timeout(2 * self.LATENCY)
+            assert int(rm.read_word("isr", 0)) & 1      # the status bit is set ...
+            assert not sink.level                       # ... but the line is gated by gier
+            yield from rb.set("gier", 1)
+            assert sink.level                           # enabling raises the pending interrupt
+            yield from rb.set("isr", 1)                 # toggle-on-write clears it
+            assert not sink.level
+
+        self._run(sim, proc)
+
+    def test_ier_off_sets_no_status(self) -> None:
+        sim, rm, slave, master, sink, line, reads = self._build()
+
+        def proc() -> ProcessGen[None]:
+            rb = rm.bind_master(master)
+            yield from rb.set("gier", 1)
+            yield from rb.start()
+            yield sim.env.timeout(2 * self.LATENCY)
+            assert int(rm.read_word("isr", 0)) == 0
+            assert not sink.level
+
+        self._run(sim, proc)

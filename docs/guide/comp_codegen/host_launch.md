@@ -3,15 +3,15 @@ title: Host launch lifecycle
 parent: Module Code Generation
 nav_order: 3.5
 audience: python
-api: [VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap, MMIFMaster, SimObj, Simulation]
-summary: "How a host starts a HostActivated kernel and learns that it finished, modelled in SimPy — VitisRegMap's ap_ctrl_hs control block (the 0x00 word, the 0x10 user-field base), the ap_start / ap_done handshake VitisRegMapMMIFSlave runs around on_start, and the BoundRegMap host surface (bind_master / start / poll_end). Includes what the model does not reproduce about real ap_ctrl_hs, and the planned host-artifact generators."
+api: [VitisRegMap, VitisRegMapMMIFSlave, BoundRegMap, MMIFMaster, IrqIF, IrqIFSink, SimObj, Simulation]
+summary: "How a host starts a HostActivated kernel and learns that it finished, modelled in SimPy — VitisRegMap's ap_ctrl_hs control block (the 0x00 word, the 0x10 user-field base), the ap_start / ap_done handshake VitisRegMapMMIFSlave runs around on_start, the kernel's interrupt line (gier / ier / isr, as Vitis generates them), and the BoundRegMap host surface (bind_master / run / wait_done). Includes what the model does not reproduce about real ap_ctrl_hs, and the planned host-artifact generators."
 ---
 
 # Host launch lifecycle
 
 A [`HostActivated`](../flows/modules.md) module does not run until a host starts it. That handshake
-is `ap_ctrl_hs`: the host writes `ap_start`, the kernel runs, the kernel raises `ap_done`, the host
-polls until it sees it. This page is the **Python model** of that lifecycle — what the simulation
+is `ap_ctrl_hs`: the host writes `ap_start`, the kernel runs, the kernel raises `ap_done` and, with
+the interrupt enabled, its **interrupt line**; the host, asleep on that line, wakes and clears it. This page is the **Python model** of that lifecycle — what the simulation
 does, so that the [generated kernel](./hostactivated.md) and the simulation agree about when work
 begins and ends.
 
@@ -21,10 +21,10 @@ without a launch; a launch is not possible without a register map.
 
 ## A minimal simulation
 
-Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-poll lifecycle over a
+Two raw [`SimObj`](../sim/simobj.md)s exercising the launch-then-interrupt lifecycle over a
 [`DirectMMIF`](../interface/axi_mm/modeling.md#directmmif): a `Kernel` holding a `VitisRegMapMMIFSlave` runs its `on_start`
-when launched, and a `Host` holding an `MMIFMaster` writes the inputs, asserts `ap_start`, polls
-`ap_done`, and reads the result back. No `HwModule`. (`on_start` is the regmap-launched entry — see
+when launched, and a `Host` holding an `MMIFMaster` and an `IrqIFSink` writes the inputs, asserts
+`ap_start`, sleeps until the kernel's interrupt fires, and reads the result back. No `HwModule`. (`on_start` is the regmap-launched entry — see
 the [SimObj lifecycle](../sim/simobj.md#its-lifecycle); the `yield from` mechanics are in
 [Process generators](../sim/procgen.md).)
 
@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from waveflow.hw.aximm import DirectMMIF, MMIFMaster
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import IntField
+from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.regmap import RegAccess, RegField, VitisRegMap, VitisRegMapMMIFSlave
 from waveflow.simulation.simobj import ProcessGen, SimObj
 from waveflow.simulation.simulation import Simulation
@@ -71,7 +72,7 @@ class Kernel(SimObj):
 
 @dataclass
 class Host(SimObj):
-    """Holds the master; configures inputs, launches, polls ap_done, reads y back."""
+    """Holds the master; configures inputs, launches, waits on the interrupt, reads y back."""
 
     master: MMIFMaster | None = None
     kernel: Kernel | None = None
@@ -79,6 +80,7 @@ class Host(SimObj):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        self.irq = IrqIFSink(name=f"{self.name}_irq", sim=self.sim)
         self.y: int | None = None
 
     def run_proc(self) -> ProcessGen[None]:
@@ -86,10 +88,9 @@ class Host(SimObj):
         yield from rm.set("x", 5)
         yield from rm.set("a", 3)
         yield from rm.set("b", -4)
-        yield from rm.start()                            # write ap_start
-        ap_done = yield from rm.poll_end(interval=4 * self.clk.period, max_polls=32)
+        yield from rm.run(self.irq)        # ier = gier = 1 (first time), ap_start, wait, clear isr
         self.y = yield from rm.get("y")
-        print(f"ap_done={ap_done}, y={self.y}")
+        print(f"done at t={self.sim.env.now}, y={self.y}")
 
 
 sim = Simulation()
@@ -102,12 +103,17 @@ link = DirectMMIF(sim=sim, clk=clk, byte_addressable=True)   # byte addresses (A
 link.bind("master", host.master)
 link.bind("slave", kernel.s_lite)
 
+irq = IrqIF(name="kernel_irq", sim=sim)                       # the kernel's interrupt wire
+irq.bind("source", kernel.s_lite.interrupt())
+irq.bind("sink", host.irq)
+
 sim.run_sim()
 ```
 
 `host.y` is `11` (`3*5 - 4`): the host's `set` writes land in the register fields, `start()` writes
-`ap_start` which launches `on_start`, the slave sets `ap_done` when it returns, and `poll_end` reads
-that back before the host fetches `y`. `bind_master` / `start` / `poll_end` are the host-side
+`ap_start` which launches `on_start`, the slave sets `ap_done` and raises the interrupt when it
+returns, and `run` wakes on it — reading nothing while it waits — before the host fetches `y`.
+`bind_master` / `run` are the host-side
 [`BoundRegMap`](#host-side-boundregmap) surface. See [SimObj](../sim/simobj.md) for the lifecycle.
 
 ## Host-side: BoundRegMap
@@ -120,7 +126,10 @@ Kernel-side `RegMap.get()` / `RegMap.set()` run in-process on the component obje
 - `BoundRegMap.get(name)` (coroutine): reads through `master.read_schema(...)` and returns native Python values (`int`, `IntEnum`, `float`, or schema instances for array/list fields).
 - `BoundRegMap.set(name, value)` (coroutine): writes through `master.write_schema(...)`, auto-wrapping raw values using the field schema.
 - `BoundRegMap.start()` (coroutine): convenience launch helper for `VitisRegMap` that writes `ap_start`.
-- `BoundRegMap.poll_end(field="ap_done", interval=…, max_polls=…)` (coroutine): polls a status field until it reads its completion value (default `ap_done == 1`), returns the read value, and raises after `max_polls`. The standard "wait for the kernel to finish" helper on a `VitisRegMap`.
+- `BoundRegMap.enable_irq()` (coroutine): writes `ier = 1` (the `ap_done` interrupt only) then `gier = 1`. Once per kernel, **before** the launch it is to report — a kernel that finishes before its interrupt is enabled sets no `isr` bit and never wakes the host.
+- `BoundRegMap.wait_done(irq)` (coroutine): sleeps on the host's `IrqIFSink` until the line is high, then writes `1` to `isr` (toggle-on-write), which clears it and lowers the line. No bus reads. Raises if `enable_irq` has not run.
+- `BoundRegMap.run(irq)` (coroutine): the usual call — `enable_irq` the first time, then `start` + `wait_done`.
+- `BoundRegMap.poll_end(field="ap_done", interval=…, max_polls=…)` (coroutine): reads a status field until it reads its completion value. A **debugging fallback** for a kernel whose interrupt is not wired: every look costs a bus read, and completion is seen up to one `interval` late.
 
 Source class: [`BoundRegMap`](../../../waveflow/hw/regmap.py).
 
@@ -146,7 +155,7 @@ This keeps host-side register access aligned with kernel-side ergonomics while p
 - Use `bind_master(...)` once per `(master, base_addr)` pair.
 - `get(name)` returns deserialized typed values.
 - `set(name, value)` accepts either schema instances or raw values.
-- `start()` / `poll_end()` are available on `VitisRegMap`-backed maps — for the `ap_start` launch and the `ap_done` completion poll.
+- `start()` / `enable_irq()` / `wait_done()` / `run()` (and the `poll_end()` fallback) are available on `VitisRegMap`-backed maps — for the `ap_start` launch and the completion wait.
 - `BoundRegMap` is host-side only; kernel logic still uses `RegMap.get/set`.
 
 ---
@@ -216,7 +225,7 @@ The *layout* mirrors Vitis. The *side effects* are modelled only as far as the s
 
 - **`ap_done` / `ap_ready` are not clear-on-read.** Real hardware clears them when the host reads `0x00` (`COR`). The model clears them on the next `ap_start` instead, so a host can read `ap_done` repeatedly and keep seeing `1`.
 - **`ap_start` is `W1S`, not `COH`.** It auto-clears once the launch hook has run rather than on the `ap_ready` handshake — the same net effect for a sim that launches synchronously.
-- **`gier` / `ier` / `isr` are plain storage.** There is no interrupt line in the simulation; writing them enables nothing, and `isr` does not implement toggle-on-write.
+- **`gier` / `ier` / `isr` drive the interrupt line, as Vitis generates them** (`*_control_s_axi.v`): `interrupt = gier[0] && isr != 0`; `isr[i]` is set at completion when `ier[i]` is, and **toggled** by a host write of 1. One simplification: `ap_ready` and `ap_done` coincide in the model (both at `on_start`'s return), so `isr` bits 0 and 1 are set together.
 - **`auto_restart` (bit 7) and `interrupt` (bit 9) are not modelled** at all.
 - **The multi-word stride is unverified.** The 8-byte stride is confirmed for 32-bit scalars. Fields spanning several words follow the same data-words-plus-control-word rule, but Vitis maps array arguments on s_axilite as a BRAM-backed region, which `VitisRegMap` does not reproduce.
 
@@ -240,7 +249,19 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
 1. Host writes `1` to the `ap_start` register.
 2. If `on_start` is already running (a previous launch hasn't returned), the write is silently ignored. This mirrors Vitis `ap_ctrl_hs`, where `ap_start` writes are gated by `ap_idle`. The W1S auto-clear of `ap_start` still fires.
 3. Otherwise the slave clears `ap_done` to `0`, spawns `env.process(on_start())`, and marks itself busy.
-4. When `on_start` returns, the slave sets `ap_done` to `1` (in a `finally` block) and marks itself idle. The host polls `ap_done` to detect completion; subsequent `ap_start` writes launch a new invocation.
+4. When `on_start` returns, the slave sets `ap_done` to `1` (in a `finally` block), marks itself idle, sets the `isr` bits enabled in `ier`, and re-evaluates the interrupt line. Subsequent `ap_start` writes launch a new invocation.
+
+### The interrupt line
+
+`slave.interrupt()` returns the kernel's interrupt as an [`IrqIFSource`](../../../waveflow/hw/irq.py) — the pysim twin of the `interrupt` port Vitis adds to an `s_axilite` control slave. Bind it to an `IrqIF` whose sink the host holds:
+
+```python
+irq = IrqIF(name="kernel_irq", sim=sim)
+irq.bind("source", kernel.s_lite.interrupt())
+irq.bind("sink", host.irq)                 # an IrqIFSink; the host calls rm.run(host.irq)
+```
+
+The line is **level**: high while `gier[0] && isr != 0`. A host that comes to wait after the kernel has already finished returns at once, so a fast kernel cannot be missed — provided its interrupt was enabled before the launch.
 
 ### What `on_start` should do
 
@@ -358,7 +379,7 @@ yield from poly.regmap.start(cpu, base_addr=POLY_BASE)
 
 # ... time passes; host issues stream transactions on the data path ...
 
-# On suspected halt: poll status
+# On suspected halt: read status
 halted = yield from cpu.read_schema(Bit, addr=POLY_BASE + poly.regmap.offset_of("halted"))
 if halted:
     err   = yield from cpu.read_schema(PolyErrorField, addr=POLY_BASE + poly.regmap.offset_of("error"))
@@ -376,7 +397,6 @@ The same `VitisRegMap` object drives the SimPy simulation and would drive the (p
 
 - **`RegAccess.COR`** (clear-on-read): host reads return the current value, then the backing store is zeroed. Real `ap_done` / `ap_ready` are `COR`; the model clears them on the next `ap_start` instead.
 - **`auto_restart` semantics in `VitisRegMapMMIFSlave`**: when bit 7 is set and `on_start` returns, the slave would immediately re-invoke `on_start` without another host write.
-- **Interrupts.** `gier` / `ier` / `isr` exist as storage only. Wiring them up would mean firing an `interrupt_event` (a SimPy event) when `ap_done` asserts with the matching `ier` bit set, so a host model could `yield` on it instead of polling.
 - **A `control.h` conformance test.** Nothing checks the modelled layout against the artifact Vitis emits — see [Fidelity](#fidelity-what-is-and-is-not-modelled).
 
 ---

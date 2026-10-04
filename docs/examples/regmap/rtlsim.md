@@ -42,7 +42,7 @@ Each step is described below in the order it runs.
 
 ## C-sim functional verification
 
-`CSimStep` invokes Vitis HLS's C-simulator on the generated `.cpp` files. The kernel runs as a normal C++ program; its testbench (also auto-generated) reads the input `.bin` files written by `BuildInputsStep`, writes the registers via the slave model, drives `ap_start`, polls `ap_done`, and writes the kernel's output back to `y_data.bin` plus a `regmap_status.json` mirror of the final regmap state.
+`CSimStep` invokes Vitis HLS's C-simulator on the generated `.cpp` files. The kernel runs as a normal C++ program; its testbench (also auto-generated) reads the input `.bin` files written by `BuildInputsStep`, calls the kernel function with them (C-simulation is untimed: there is no `ap_start` / `ap_done` handshake to drive), and writes the kernel's output back to `y_data.bin` plus a `regmap_status.json` mirror of the final regmap state.
 
 `FunctionalVerifyStep` then compares those C-sim outputs to the Python golden produced by `py_sim`:
 
