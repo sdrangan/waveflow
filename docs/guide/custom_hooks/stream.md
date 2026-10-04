@@ -22,6 +22,10 @@ per-transaction helper, `transaction()`.
 
 ## The lane loop
 
+> This is the word-per-iteration shape of the lane loop.  For the other shape -- one element per
+> iteration, a word read every `PF` iterations -- see
+> [Design patterns for loop optimization](../vectorization/hls/loop_optimization.md).
+
 `pf = float32_array_utils::pf<in_bw>()` is the number of elements packed per stream word. The loop
 steps by `pf`: [`read_axi4_stream_lane`](./reference.md) pulls the next lane off `s_in`, the compute
 is `UNROLL`-ed across the `pf` lanes, and [`write_axi4_stream_lane`](./reference.md) pushes the

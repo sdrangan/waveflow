@@ -71,6 +71,15 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 2. Create a `Simulation`, pass in the components and interfaces.
 3. `Simulation.run()` calls `pre_sim()` on all SimObjs, then schedules their `run_proc()` coroutines inside SimPy, then calls `post_sim()` for teardown/analysis.
 
+### Writing HLS kernel bodies
+
+Before writing or reviewing a kernel body, read `docs/guide/vectorization/hls/loop_optimization.md`
+(*Design patterns for loop optimization*): the lane loop for several samples per bus word (a word per
+iteration with the compute unrolled, or one element per iteration reading a word every PF), a
+straight-line loop per message as the default body shape (a single-firing state machine is an
+optimization), and the timing rule "do not decide, compute and commit in one iteration".  Never pack or
+unpack a word by hand -- use the generated `<elem>_array_utils` lane routines.
+
 ### Synthesis flow
 
 A Component's Python behavior is translated to Vitis HLS C++ via `BuildConfig` (`build/build.py`). `sv_synth` / `sv_impl` scripts drive Vitis and Vivado from generated TCL. AI-assisted prompt generation can derive HLS code from the Python `forward()` specification.
