@@ -97,7 +97,10 @@ import pytest
 #:
 #: 140 -> 142 on 2026-10-03 (plans/mm_irq.md): ``test_mm_fir_rtl_host_never_polls`` in both topologies --
 #: the host waits on the queue views' interrupts; no count is ever read at RTL.
-WANT_XSI_GATES = 142
+#:
+#: 142 -> 145 on 2026-10-04 (plans/mm_credit_stream.md): the Markov system -- two kernels joined by a
+#: credit stream routed over a four-master crossbar -- bit-exact, never polling, and its cycle count.
+WANT_XSI_GATES = 145
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

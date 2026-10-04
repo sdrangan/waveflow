@@ -52,13 +52,13 @@ def test_bit_exact(link):
 
 
 def test_a_job_that_is_not_a_whole_number_of_chunks():
-    _, jobs, res = _run("mm", njobs=2, n=CHUNK * 2 + 7)
+    _, jobs, res = _run("mm", njobs=2, n=CHUNK * 2 + 7)   # 135 steps: 2 whole chunks + 7
     for j in jobs:
         assert np.array_equal(res[j["tx_id"]]["x"], markov_golden(j))
 
 
 def test_the_routed_link_never_stalls_and_batches_credit():
-    sysm, jobs, _ = _run("mm", njobs=4, n=600)
+    sysm, jobs, _ = _run("mm", njobs=8, n=500)
     qu = sysm.chain_dev.views["qu"]
     assert qu.nstall == 0
     nwords = sum(-(-j["n"] // 4) + 3 for j in jobs)        # u words + the 3-word header per job
@@ -91,8 +91,8 @@ def test_the_host_never_polls():
 
 
 def test_admission_bounds_the_jobs_in_flight():
-    sysm, jobs, res = _run("mm", njobs=6, n=200)
-    assert sysm.host._slots == MAX_IN_FLIGHT and len(res) == 6
+    sysm, jobs, res = _run("mm", njobs=8, n=200)
+    assert sysm.host._slots == MAX_IN_FLIGHT and len(res) == 8
 
 
 def test_the_fraction_of_ones_approaches_the_stationary_probability():
@@ -109,5 +109,5 @@ def test_the_bus_headers_list_the_memory():
     assert list(h) == ["markov_gen_layout.h", "markov_chain_layout.h", "markov_bases.h"]
     bases = h["markov_bases.h"]
     assert "GEN_BASE = 0x0ull" in bases and "CHAIN_BASE = 0x4000ull" in bases
-    assert "MEM_BASE = 0x100000ull" in bases
+    assert "MEM_BASE = 0x100000ull" in bases and "MEM_SPAN = 0x1000ull" in bases
     assert "u_crd" in h["markov_gen_layout.h"] and "CreditIn" in h["markov_gen_layout.h"]

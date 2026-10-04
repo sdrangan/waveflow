@@ -38,7 +38,7 @@
 
 namespace wfbfm {
 
-enum class MmKind { QueueIn, QueueOut, RegBank, Bram };
+enum class MmKind { QueueIn, QueueOut, RegBank, Bram, CreditIn };
 
 /// One view as a bus master sees it -- the C++ form of waveflow.hw.mm_host.ViewEntry.  The offsets
 /// inside the window are written here once, as there.

@@ -52,7 +52,7 @@ from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
 from waveflow.hw.mem_stream import MemWCmd, MemWStream
-from waveflow.hw.memory import MemoryMod
+from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_credit import MmCreditStreamIF
 from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor, MemSlaveLayout
@@ -293,7 +293,11 @@ GEN_LAYOUT = MemSlaveLayout.of(MarkovGen, mem_dwidth=DW)
 CHAIN_LAYOUT = MemSlaveLayout.of(MarkovChain, mem_dwidth=DW)
 #: Where the system places them.
 GEN_BASE, CHAIN_BASE = 0x0000, 0x4000
-MEM_BASE, MEM_SPAN = 0x10_0000, 0x10_0000
+#: The shared memory: one 4 KB window -- in RTL a BRAM behind the adaptor's front (which echoes AXI IDs,
+#: as a four-master crossbar's responses need).  Each job's x gets a REGION_BYTES region, so a job is at
+#: most REGION_BYTES steps and at most MEM_SPAN // REGION_BYTES jobs fit.
+MEM_BASE, MEM_SPAN = 0x10_0000, 0x1000
+REGION_BYTES = 0x200
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +341,8 @@ class MarkovHost(SimObj):
         self._slot_free = None
 
     def _dst(self, j: int) -> int:
-        """Job *j*'s region: one 4 KB page per job, memory-local."""
-        return j * 0x1000
+        """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
+        return j * REGION_BYTES
 
     def _writer(self):
         for j, job in enumerate(self.jobs):
@@ -390,12 +394,14 @@ class MarkovSystem:
         self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk)
         self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
         self.mem = MemoryMod(name="mem", sim=sim, word_size=DW, inline=False, clk=self.clk,
-                             nwords_tot=MEM_SPAN // 8)
+                             nwords_tot=MEM_SPAN // 8, addr_unit=AddrUnit.byte)
         self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
         self.host.mem = self.mem
+        if len(self.jobs) > MEM_SPAN // REGION_BYTES or any(j["n"] > REGION_BYTES for j in self.jobs):
+            raise ValueError(f"at most {MEM_SPAN // REGION_BYTES} jobs of at most {REGION_BYTES} steps")
         for j in range(len(self.jobs)):          # each job's x region, at the host's offsets
-            a = self.mem.alloc(512)
-            assert a == self.host._dst(j) or j == 0 or a <= self.host._dst(j)
+            a = self.mem.alloc(REGION_BYTES // 8)
+            assert a == self.host._dst(j), (a, self.host._dst(j))
         if self.link == "direct":
             self._wire_direct()
         else:

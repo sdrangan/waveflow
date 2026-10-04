@@ -86,6 +86,23 @@ class RegBankView:
 
 
 @dataclass(frozen=True)
+class CreditInView:
+    """A credit-in window (``mm_credit_in.v``): the producer end of a routed credit stream
+    (``plans/mm_credit_stream.md`` D2).  Bus writes replace a latest-value register; the kernel
+    receives each new value on the AXIS group ``axis``.  A write never waits."""
+
+    name: str
+    axis: str
+    law: int = 12
+
+    def __post_init__(self) -> None:
+        if self.law < 12:
+            raise ValueError("a credit window is at least 4 KB (law >= 12)")
+
+    module = "mm_credit_in"
+
+
+@dataclass(frozen=True)
 class BramView:
     """A BRAM window (``mm_bram_port.v`` on port A of a ``bram_t2p`` holding ``2**baw`` words).
 
@@ -120,7 +137,8 @@ def bram_read_latency() -> int:
 def leaf_sources() -> list[Path]:
     """Every hand-written adaptor source, for an xvlog file list (order-independent)."""
     return [RTL_DIR / f for f in ("mm_sync_fifo.v", "axi_slave_front.v", "mm_queue_in.v",
-                                  "mm_queue_out.v", "mm_regbank.v", "mm_bram_port.v", "bram_t2p.v")]
+                                  "mm_queue_out.v", "mm_regbank.v", "mm_bram_port.v", "bram_t2p.v",
+                                  "mm_credit_in.v")]
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +193,9 @@ def _leaf_inst(view, dw: int) -> list[str]:
         req[-1] += ","
         return [f"  wire {n}_irq;", head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req,
                 *streams, "  );"]
+    elif isinstance(view, CreditInView):
+        head = f"  mm_credit_in #(.DW({dw}), .LAW({view.law})) u_{n} ("
+        streams = [_axis_conns("m_axis", view.axis)]
     elif isinstance(view, RegBankView):
         head = (f"  mm_regbank #(.DW({dw}), .LAW({view.law}), .NCFG({view.ncfg}), "
                 f".NSTAT({view.nstat})) u_{n} (")
@@ -208,6 +229,8 @@ def _leaf_inst(view, dw: int) -> list[str]:
 def _title(view) -> str:
     if isinstance(view, QueueView):
         return f"queue view '{view.name}' ({view.module}, depth {view.depth})"
+    if isinstance(view, CreditInView):
+        return f"credit-in view '{view.name}' (mm_credit_in)"
     if isinstance(view, BramView):
         return f"BRAM view '{view.name}' ({1 << view.baw} words, kernel on port B '{view.kport}')"
     return f"regbank view '{view.name}' (ncfg {view.ncfg}, nstat {view.nstat})"
