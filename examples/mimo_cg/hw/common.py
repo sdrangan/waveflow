@@ -30,6 +30,7 @@ testbench uses the same renderer, so the hardware and the proven C++ reference a
 
 from __future__ import annotations
 
+import functools
 from enum import IntEnum
 from typing import ClassVar
 
@@ -183,27 +184,59 @@ def nwords(n_elems: int, mem_dw: int = DEFAULT_MEM_DW) -> int:
 # --- the formats the hardware is built for ----------------------------------------------------
 
 
-#: The format sets a block can be built with, by id (a ``HwParam`` is an integer): the M3 frontier
-#: formats (W12g8, the default; W14g8 for 64-QAM 32×16) and the M2 saturation stress set
-#: (gate 4.0 decision 5).
+#: The format sets of the M4 gates, ids 0–2: the M3 frontier formats (W12g8, the default; W14g8
+#: for 64-QAM 32×16) and the M2 saturation stress set (gate 4.0 decision 5).
 HW_FORMAT_NAMES = ("W12g8", "W14g8", "stress")
+#: The register widths and guards of the Phase 5 design space (gate 5.0 decision 2): every sweep
+#: format whose registers fit the 16-bit memory lane.
+SPACE_W = (8, 10, 12, 14, 16)
+SPACE_G = (0, 4, 8)
+#: Every format set a block can be built with, by id (a ``HwParam`` is an integer): the gate
+#: formats, then the rest of the space in (W, g_s) order.
+ALL_FORMAT_NAMES = HW_FORMAT_NAMES + tuple(
+    name
+    for name in (f"W{W}g{g}" for W in SPACE_W for g in SPACE_G)
+    if name not in HW_FORMAT_NAMES
+)
 
 
-def hw_formats() -> dict[str, CgFormats]:
-    """The buildable format sets, by name (see :data:`HW_FORMAT_NAMES`)."""
+@functools.cache
+def _hw_formats() -> dict[str, CgFormats]:
     from examples.mimo_cg.mimo_cg_accuracy_sweep import sweep_format
     from examples.mimo_cg.mimo_cg_conformance import STRESS_FORMATS
 
-    return {
-        "W12g8": sweep_format(12, 8),
-        "W14g8": sweep_format(14, 8),
-        "stress": STRESS_FORMATS,
-    }
+    sets = {f"W{W}g{g}": sweep_format(W, g) for W in SPACE_W for g in SPACE_G}
+    sets["stress"] = STRESS_FORMATS
+    return {name: sets[name] for name in ALL_FORMAT_NAMES}
+
+
+def hw_formats() -> dict[str, CgFormats]:
+    """The buildable format sets, by name, in id order (see :data:`ALL_FORMAT_NAMES`)."""
+    return dict(_hw_formats())
 
 
 def hw_format(fmt_id: int) -> CgFormats:
-    """The format set with this id (``HW_FORMAT_NAMES[fmt_id]``)."""
-    return hw_formats()[HW_FORMAT_NAMES[int(fmt_id)]]
+    """The format set with this id (``ALL_FORMAT_NAMES[fmt_id]``)."""
+    return _hw_formats()[ALL_FORMAT_NAMES[int(fmt_id)]]
+
+
+def format_id(W: int, g_s: int) -> int:
+    """The id of the sweep format with register width ``W`` and guard ``g_s``."""
+    name = f"W{int(W)}g{int(g_s)}"
+    if name not in ALL_FORMAT_NAMES:
+        raise ValueError(
+            f"{name} is not a hardware format (W in {SPACE_W}, g_s in {SPACE_G})"
+        )
+    return ALL_FORMAT_NAMES.index(name)
+
+
+def format_wg(fmt_id: int) -> tuple[int, int]:
+    """``(W, g_s)`` of a sweep format id; raises for the stress set, which has neither."""
+    name = ALL_FORMAT_NAMES[int(fmt_id)]
+    if not name.startswith("W"):
+        raise ValueError(f"format {name!r} is not a (W, g_s) sweep format")
+    w, g = name[1:].split("g")
+    return int(w), int(g)
 
 
 # --- C++ types -----------------------------------------------------------------------------
