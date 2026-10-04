@@ -121,7 +121,7 @@ filter them without it — so the output is still exact.
 **The last row gives the others their meaning.** The host tags every packet with config 1 while
 meaning config 2 after the switch. The kernel obeys the tag: it never takes config 2 (`ncfg = 1`),
 the output equals the golden for taps A throughout, and the seven responses after the switch each
-report `cfg_seq = 1` where the host expected 2. Without this run, an empty mismatch list could mean
+report `cfg_id = 1` where the host expected 2. Without this run, an empty mismatch list could mean
 the echo works or that it checks nothing.
 
 **One front is slower than one port per view**, because the host's writer and reader overlap behind

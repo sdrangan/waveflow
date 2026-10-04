@@ -4,7 +4,7 @@ parent: Design patterns
 grand_parent: Guide
 nav_order: 1
 audience: python
-summary: "The default shape of an accelerator in Waveflow: read a command carrying n, do the work on n elements, send a response. The whole pattern in one place -- the command and response schemas (n, a transaction id, a status, a config sequence number), the Python run_iter and its timing model, the HLS body (a straight-line loop with the lane loop inside), the host side (jobs in flight, waiting on an interrupt, checking the echo), errors, and the pipeline form where the command travels with the data through several stages and the last one answers. Links into the layer pages for each piece."
+summary: "The default shape of an accelerator in Waveflow: read a command carrying n, do the work on n elements, send a response. The whole pattern in one place -- the command and response schemas (n, a transaction id, a status, a config id), the Python run_iter and its timing model, the HLS body (a straight-line loop with the lane loop inside), the host side (jobs in flight, waiting on an interrupt, checking the echo), errors, and the pipeline form where the command travels with the data through several stages and the last one answers. Links into the layer pages for each piece."
 ---
 
 # Command–response
@@ -23,9 +23,9 @@ end to end; each section links to the layer page that has the details.
 
 | | [poly](../../examples/stream_inband/index.md) | [vecmult](../../examples/vecmult/index.md) | [mm_fir](../../examples/mm_fir/index.md) | [markov](../../examples/markov/index.md) |
 |---|---|---|---|---|
-| command | `PolyCmdHdr(cmd_type, tx_id, nsamp)`, in-band | `VecCmd(tx_id, n)`, in-band ahead of both vectors | `FirCmdHdr(nsamp, tx_id, cfg_seq)`, in-band | `MkvCmd(tx_id, n, ...)` |
+| command | `PolyCmdHdr(cmd_type, tx_id, nsamp)`, in-band | `VecCmd(tx_id, n)`, in-band ahead of both vectors | `FirCmdHdr(nsamp, tx_id, cfg_id)`, in-band | `MkvCmd(tx_id, n, ...)` |
 | the work | evaluate a polynomial on `nsamp` samples | multiply two `n`-vectors element-wise | filter `nsamp` samples | `n` steps of a Markov chain |
-| response | status + `tx_id` | `VecResp(tx_id)`, after the results on the same stream | `FirRespHdr(nsamp, tx_id, cfg_seq)` | `MkvResp(tx_id, n, ones)` -- only once `x` is stored |
+| response | status + `tx_id` | `VecResp(tx_id)`, after the results on the same stream | `FirRespHdr(nsamp, tx_id, cfg_id)` | `MkvResp(tx_id, n, ones)` -- only once `x` is stored |
 
 ## The messages
 
@@ -55,9 +55,11 @@ The fields that keep coming back, and why:
 - **`tx_id`** -- a job id the response **echoes**. It is how the host pairs a response with the job it
   sent, and how it notices a dropped or reordered one. Cheap, and worth having from the first version.
 - **`status`** -- what happened: `OK`, or an error code (below).
-- **A sequence number for configuration** (mm_fir's `cfg_seq`) -- when the configuration travels on a
-  different path from the data, the command names the configuration it needs, the kernel waits for it,
-  and the response echoes the one it used. That carries the order two separate paths cannot.
+- **An id for configuration** (mm_fir's `cfg_id`) -- when the configuration travels on a
+  different path from the data, the host names each configuration, the command names the one it needs,
+  the kernel waits for it, and the response echoes the one it used. That carries the order two
+  separate paths cannot. Put the id **in** the configuration rather than counting commits at both ends:
+  a count drifts the first time a host restarts or a message is lost, and nothing can tell.
 
 **In-band or separate.** The command can ride in front of its data on the same stream -- `[CmdHdr | x[0]
 ... x[n-1]]`, the *in-band header* -- or on a stream of its own. In-band welds the command to its data,
@@ -125,7 +127,7 @@ The host sends commands and collects responses, usually as two processes -- a **
 - **Wait, do not poll.** Over a bus the host waits on the response queue's interrupt
   ([Interrupts](../interface/axi_mm/slave.md#interrupts)); a host-launched kernel waits on its `ap_done`
   interrupt ([Host launch](../comp_codegen/host_launch.md)).
-- **Check the echo.** Every response's `tx_id` (and `cfg_seq`, if there is one) against what was sent.
+- **Check the echo.** Every response's `tx_id` (and `cfg_id`, if there is one) against what was sent.
 
 ## Errors
 

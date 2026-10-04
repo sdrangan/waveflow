@@ -2,6 +2,12 @@
 
 > **Status (2026-10-03): BUILT** (branch `mm-host-endpoints`, unpushed). RTL bit-exact, 768 / 783.
 > Where the build departed from the text below, the **Built** section at the end says so.
+>
+> **Superseded in part (2026-10-04):** the counted sequence number (`cfg_seq`, config *k* = the *k*-th
+> COMMIT) became a **carried config id** -- `FirCfg.cfg_id`, named by the host; the header's `cfg_id`
+> names the config a packet needs; the kernel takes configs until the one in force has that id
+> (equality, not a count).  A count kept at both ends drifts the first time a host restarts or a commit
+> is lost; an id in the message needs nothing to be in step.  Same wire sizes, same cycle counts.
 
 ## Why
 

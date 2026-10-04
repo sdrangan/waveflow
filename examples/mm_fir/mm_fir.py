@@ -16,20 +16,22 @@ queue out (response)  0x3000     ``m_resp`` -> one :class:`FirRespHdr` per packe
 
 (The same 1x3 shape as the Stage 2 RTL gate, ``tests/build/test_mm_regbank_xsi.py``.)
 
-**The stream_inband pattern, with a config sequence number** (``plans/mm_fir_cfg_seq.md``).  Every
-sample packet is preceded in-band by a :class:`FirCmdHdr` -- its sample count and ``cfg_seq``, the
-number of the config it needs (config *k* is the *k*-th COMMIT).  Per packet the kernel reads the
-header, takes configs from ``s_cfg`` until it has config ``cfg_seq`` -- **waiting** if it has not
-arrived -- then reads the samples, filters them and writes the results.
+**The stream_inband pattern, with a config id** (``plans/mm_fir_cfg_seq.md``).  The host names every
+config it commits -- :attr:`FirCfg.cfg_id`, ``1, 2, ...`` -- and every sample packet is preceded in-band
+by a :class:`FirCmdHdr`: its sample count, its ``tx_id`` and the ``cfg_id`` of the config it needs.
+Per packet the kernel reads the header, takes configs from ``s_cfg`` until the one in force has that
+id -- **waiting** if it has not arrived -- then reads the samples, filters them and writes the results.
+The id is carried in the messages rather than counted at both ends, so a host that lost its place
+needs nothing from the kernel: it commits a config with a new id and tags its packets with it.
 
 **Cross-view order is carried in the messages** (the slave page's ordering statement 2).  A config and
-and the samples travel on different streams, so either could reach the kernel first.  The sequence number
-makes that harmless: a packet cannot use a config older than the one it names (the kernel waits for
+and the samples travel on different streams, so either could reach the kernel first.  The config
+id makes that harmless: a packet cannot use a config older than the one it names (the kernel waits for
 it), nor a newer one (a config nobody has asked for stays in its stream).  So the host commits a config
 and sends the packets that need it, in either order, and never has to ask whether the config arrived.
 
 **And the host can check it.**  After each packet the kernel writes a :class:`FirRespHdr` to a second
-queue out, the response FIFO: the packet's ``tx_id`` and the ``cfg_seq`` it actually filtered with.
+queue out, the response FIFO: the packet's ``tx_id`` and the ``cfg_id`` it actually filtered with.
 The host compares each response with the config it meant the packet to use.  The wait makes a wrong
 config impossible from the kernel's side; the echo catches a host that asked for the wrong one.
 
@@ -84,8 +86,7 @@ class FirCmdHdr(DataList):
     elements = {
         "nsamp": {"schema": U32, "description": "samples in this packet"},
         "tx_id": {"schema": U16, "description": "the host's packet id, echoed in the response"},
-        "cfg_seq": {"schema": U16,
-                    "description": "the config this packet needs: config k is the k-th COMMIT"},
+        "cfg_id": {"schema": U16, "description": "the id of the config this packet needs"},
     }
 
 
@@ -95,7 +96,7 @@ class FirRespHdr(DataList):
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered in this packet"},
         "tx_id": {"schema": U16, "description": "echo of the packet's tx_id"},
-        "cfg_seq": {"schema": U16, "description": "the config the packet was filtered with"},
+        "cfg_id": {"schema": U16, "description": "the id of the config the packet was filtered with"},
     }
 
 
@@ -111,6 +112,9 @@ class FirCfg(DataList):
     elements = {
         "coeffs": {"schema": Taps, "description": "tap k multiplies x[n-k]"},
         "ntaps": {"schema": U32, "description": "active taps (<= NTAP_MAX)"},
+        "cfg_id": {"schema": U16,
+                   "description": "the host's name for this config, 1..65535 (0 = no config yet); "
+                                  "packets ask for it by this id"},
     }
 
 
@@ -119,7 +123,8 @@ class FirStatus(DataList):
 
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered so far"},
-        "ncfg": {"schema": U32, "description": "configs taken so far"},
+        "cfg_id": {"schema": U16, "description": "the id of the config in force (0 = none yet)"},
+        "ncfg": {"schema": U16, "description": "configs taken so far"},
     }
 
 
@@ -174,13 +179,15 @@ def fir_golden(x, cfgs) -> np.ndarray:
     return y
 
 
-def make_cfg(taps) -> FirCfg:
+def make_cfg(taps, cfg_id: int = 1) -> FirCfg:
     taps = list(taps)
     if not 1 <= len(taps) <= NTAP_MAX:
         raise ValueError(f"1..{NTAP_MAX} taps, got {len(taps)}")
+    if not 1 <= int(cfg_id) <= 0xFFFF:
+        raise ValueError(f"cfg_id must be 1..65535 (0 means no config), got {cfg_id}")
     coeffs = np.zeros(NTAP_MAX, dtype=np.int64)
     coeffs[:len(taps)] = taps
-    return FirCfg(ntaps=len(taps), coeffs=coeffs)
+    return FirCfg(ntaps=len(taps), coeffs=coeffs, cfg_id=int(cfg_id))
 
 
 # ---------------------------------------------------------------------------
@@ -251,9 +258,12 @@ class MmFir(FreeRunMod):
         self.hist = np.zeros(NTAP_MAX - 1, dtype=np.int64)
         self.nsamp = 0
         self.ncfg = 0
+        #: The id of the config in force; 0 = none yet (the RTL's reset state).
+        self.cfg_id = 0
 
     def _publish(self):
-        yield from self.m_status.write(FirStatus(nsamp=self.nsamp, ncfg=self.ncfg))
+        yield from self.m_status.write(FirStatus(nsamp=self.nsamp, cfg_id=self.cfg_id,
+                                                 ncfg=self.ncfg & 0xFFFF))
 
     def _filter(self, x: np.ndarray) -> np.ndarray:
         """Filter one packet with the taps in force: :func:`fir_golden` over the history and the
@@ -269,9 +279,10 @@ class MmFir(FreeRunMod):
         hdr = yield from self.s_in.get_schema(FirCmdHdr)
         # The order the two streams cannot give, carried in the header: wait for this packet's
         # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
-        while self.ncfg < int(hdr.cfg_seq):
+        while self.cfg_id != int(hdr.cfg_id):
             cfg = yield from self.s_cfg.get_schema(FirCfg)
             self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
+            self.cfg_id = int(cfg.cfg_id)
             self.ncfg += 1
         n = int(hdr.nsamp)
         T = self.clk.period
@@ -291,7 +302,7 @@ class MmFir(FreeRunMod):
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
-        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_id=self.cfg_id))
         yield self.timeout(self.restart_cycles * T)
 
 
@@ -306,11 +317,11 @@ REGS, QIN, QOUT, QRESP = (MM_BASE + MM_LAYOUT[n].base for n in ("regs", "qin", "
 # ---------------------------------------------------------------------------
 
 def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0, stale_tag: bool = False) -> list[tuple]:
-    """What the host sends, in order: ``("cfg", taps)`` and ``("pkt", n0, n1, tag, want)`` -- *tag* is
-    the ``cfg_seq`` the packet's header carries, *want* the config the plan means it to use (they
-    differ only under *stale_tag*).
+    """What the host sends, in order: ``("cfg", taps, cfg_id)`` and ``("pkt", n0, n1, tag, want)`` --
+    *tag* is the ``cfg_id`` the packet's header carries, *want* the config the plan means it to use
+    (they differ only under *stale_tag*).
 
-    *plan* is ``[(apply_at, taps), ...]``: config *i* (the *i+1*-th COMMIT, ``cfg_seq = i + 1``) is in
+    *plan* is ``[(apply_at, taps), ...]``: config *i*, named ``cfg_id = i + 1``, is in
     force from sample ``apply_at``.  Samples go out in packets of at most *pkt*, cut at every
     ``apply_at`` so a packet sees one config, and each packet is tagged with the config it needs.
 
@@ -336,14 +347,14 @@ def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0, stale_tag: bool = Fa
     nxt = n = 0
     while n < nsamp:
         while nxt < len(cfgs) and due(nxt) <= n:
-            out.append(("cfg", cfgs[nxt][1]))
+            out.append(("cfg", cfgs[nxt][1], nxt + 1))
             nxt += 1
         cuts = [at for at in starts if at > n] + [due(nxt) if nxt < len(cfgs) else nsamp]
         end = min([n + pkt, nsamp] + cuts)
         out.append(("pkt", n, end, 1 if stale_tag else seq_at(n), seq_at(n)))
         n = end
     while nxt < len(cfgs):                          # a config committed after the last sample
-        out.append(("cfg", cfgs[nxt][1]))
+        out.append(("cfg", cfgs[nxt][1], nxt + 1))
         nxt += 1
     return out
 
@@ -354,7 +365,7 @@ class FirHost(SimObj):
 
     Two processes, as stream code is written: a **writer** that commits each config and sends each
     sample packet behind its :class:`FirCmdHdr` -- never asking whether a config has arrived, because
-    the header's ``cfg_seq`` makes the kernel wait for it -- and a **reader** that takes one output
+    the header's ``cfg_id`` makes the kernel wait for it -- and a **reader** that takes one output
     packet per input packet, and that packet's response, which it checks.  **Nothing polls**: over the
     bus, the endpoints sleep on the queue views' interrupts (``plans/mm_irq.md``) -- queue in's for room,
     queue out's and the response FIFO's for data -- and the final status is read once, because the
@@ -394,7 +405,7 @@ class FirHost(SimObj):
         self.irq: dict[str, IrqIFSink] = {}
         self.done = self.env.event()
         self.y: list[int] = []
-        #: Every response, as ``(tx_id, cfg_seq)``.
+        #: Every response, as ``(tx_id, cfg_id)``.
         self.responses: list[tuple[int, int]] = []
         #: Responses that did not echo what the host expected: ``(tx_id, field, expected, got)``.
         self.mismatches: list[tuple[int, str, int, int]] = []
@@ -408,11 +419,11 @@ class FirHost(SimObj):
     def _writer(self):
         for item in self.schedule:
             if item[0] == "cfg":
-                yield from self.cfg.write(make_cfg(item[1]))
+                yield from self.cfg.write(make_cfg(item[1], cfg_id=item[2]))
             else:
                 _, n0, n1, tag, _want = item
                 yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
-                                                    cfg_seq=tag))
+                                                    cfg_id=tag))
                 yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
 
     def _tx_id(self, n0: int) -> int:
@@ -426,9 +437,9 @@ class FirHost(SimObj):
                 y = yield from self.qout.get_array(S64, n1 - n0)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
-                got = (int(resp.tx_id), int(resp.cfg_seq))
+                got = (int(resp.tx_id), int(resp.cfg_id))
                 self.responses.append(got)
-                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_seq", want, got[1])):
+                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_id", want, got[1])):
                     if exp != val:
                         self.mismatches.append((got[0], name, exp, val))
         # The kernel publishes its status before each response, so after the last response the

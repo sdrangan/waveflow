@@ -29,8 +29,7 @@ class FirCmdHdr(DataList):
     elements = {
         "nsamp": {"schema": U32, "description": "samples in this packet"},
         "tx_id": {"schema": U16, "description": "the host's packet id, echoed in the response"},
-        "cfg_seq": {"schema": U16,
-                    "description": "the config this packet needs: config k is the k-th COMMIT"},
+        "cfg_id": {"schema": U16, "description": "the id of the config this packet needs"},
     }
 
 
@@ -39,7 +38,7 @@ class FirRespHdr(DataList):
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered in this packet"},
         "tx_id": {"schema": U16, "description": "echo of the packet's tx_id"},
-        "cfg_seq": {"schema": U16, "description": "the config the packet was filtered with"},
+        "cfg_id": {"schema": U16, "description": "the id of the config the packet was filtered with"},
     }
 
 
@@ -55,7 +54,8 @@ class FirStatus(DataList):
     """What the kernel publishes after every packet (latest value wins)."""
     elements = {
         "nsamp": {"schema": U32, "description": "samples filtered so far"},
-        "ncfg": {"schema": U32, "description": "configs taken so far"},
+        "cfg_id": {"schema": U16, "description": "the id of the config in force (0 = none yet)"},
+        "ncfg": {"schema": U16, "description": "configs taken so far"},
     }
 ```
 
@@ -140,9 +140,10 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         hdr = yield from self.s_in.get_schema(FirCmdHdr)
         # The order the two streams cannot give, carried in the header: wait for this packet's
         # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
-        while self.ncfg < int(hdr.cfg_seq):
+        while self.cfg_id != int(hdr.cfg_id):
             cfg = yield from self.s_cfg.get_schema(FirCfg)
             self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
+            self.cfg_id = int(cfg.cfg_id)
             self.ncfg += 1
         n = int(hdr.nsamp)
         if n:
@@ -158,7 +159,7 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
-        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_seq=self.ncfg))
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_id=self.cfg_id))
 ```
 
 `_filter` is the golden itself, run over the filter's history and the packet:
@@ -175,7 +176,7 @@ One firing of `run_iter` is one packet — the in-band header pattern of
 
 What to read in it:
 
-- **The config wait.** The header's `cfg_seq` names the config the packet needs; the kernel takes
+- **The config wait.** The header's `cfg_id` names the config the packet needs; the kernel takes
   configs until it has that many, waiting if the config has not arrived. A packet can use neither an
   older config nor one nobody has asked for yet. The [index](index.md#the-one-subtle-part-switching-taps-mid-stream)
   explains why this is the whole ordering protocol. The wait is on `s_cfg`, the kernel's own stream —
@@ -219,11 +220,11 @@ each packet — its header, then its samples:
             else:
                 _, n0, n1, tag, _want = item
                 yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
-                                                    cfg_seq=tag))
+                                                    cfg_id=tag))
                 yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
 ```
 
-It never asks whether a config has arrived: the header's `cfg_seq` makes the kernel wait. Packets are
+It never asks whether a config has arrived: the header's `cfg_id` makes the kernel wait. Packets are
 cut at every switch point, so each sees one config, and each is tagged with the config it needs. The
 header and the samples are two queue-in writes, so each reaches the kernel as one burst and the
 kernel's exact-count reads take each whole.
@@ -238,9 +239,9 @@ The **reader** takes one output packet per input packet, then its response, and 
                 y = yield from self.qout.get_array(S64, n1 - n0)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
-                got = (int(resp.tx_id), int(resp.cfg_seq))
+                got = (int(resp.tx_id), int(resp.cfg_id))
                 self.responses.append(got)
-                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_seq", want, got[1])):
+                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_id", want, got[1])):
                     if exp != val:
                         self.mismatches.append((got[0], name, exp, val))
 ```
@@ -270,6 +271,6 @@ Two knobs exercise the protocol:
 - **`lag`** commits each config (after the first) that many samples after the packets that need it
   went out. Those packets wait in queue in until it arrives, and the output is still exact.
 - **`stale_tag`** is the negative control: every packet is tagged with config 1. The kernel never
-  takes config 2, and every response after the switch shows `cfg_seq = 1` where the host meant 2.
+  takes config 2, and every response after the switch shows `cfg_id = 1` where the host meant 2.
 
 Next: [Python simulation](pysim.md).

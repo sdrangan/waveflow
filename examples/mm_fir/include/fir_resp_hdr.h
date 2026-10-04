@@ -13,7 +13,7 @@
 struct FirRespHdr {
     ap_uint<32> nsamp;  // samples filtered in this packet
     ap_uint<16> tx_id;  // echo of the packet's tx_id
-    ap_uint<16> cfg_seq;  // the config the packet was filtered with
+    ap_uint<16> cfg_id;  // the id of the config the packet was filtered with
 
     static constexpr int bitwidth = 64;
 
@@ -39,7 +39,7 @@ struct FirRespHdr {
         ap_uint<bitwidth> res = 0;
         res.range(31, 0) = data.nsamp;
         res.range(47, 32) = data.tx_id;
-        res.range(63, 48) = data.cfg_seq;
+        res.range(63, 48) = data.cfg_id;
         return res;
     }
 
@@ -47,7 +47,7 @@ struct FirRespHdr {
         FirRespHdr data;
         data.nsamp = (ap_uint<32>)(packed.range(31, 0));
         data.tx_id = (ap_uint<16>)(packed.range(47, 32));
-        data.cfg_seq = (ap_uint<16>)(packed.range(63, 48));
+        data.cfg_id = (ap_uint<16>)(packed.range(63, 48));
         return data;
     }
 
@@ -62,7 +62,7 @@ struct FirRespHdr {
         x[0] = 0;
         x[0].range(31, 0) = self->nsamp;
         x[0].range(47, 32) = self->tx_id;
-        x[0].range(63, 48) = self->cfg_seq;
+        x[0].range(63, 48) = self->cfg_id;
     }
 
     template<int word_bw>
@@ -81,7 +81,7 @@ struct FirRespHdr {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
         w.range(47, 32) = self->tx_id;
-        w.range(63, 48) = self->cfg_seq;
+        w.range(63, 48) = self->cfg_id;
         s.write(w);
         w = 0;
     }
@@ -103,7 +103,7 @@ struct FirRespHdr {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
         w.range(47, 32) = self->tx_id;
-        w.range(63, 48) = self->cfg_seq;
+        w.range(63, 48) = self->cfg_id;
         streamutils::write_axi4_word<64>(s, w, tlast);
         w = 0;
     }
@@ -123,7 +123,7 @@ struct FirRespHdr {
     static void read_array_impl(word_bw_tag<64>, FirRespHdr* self, const ap_uint<64> x[]) {
         self->nsamp = (ap_uint<32>)(x[0].range(31, 0));
         self->tx_id = (ap_uint<16>)(x[0].range(47, 32));
-        self->cfg_seq = (ap_uint<16>)(x[0].range(63, 48));
+        self->cfg_id = (ap_uint<16>)(x[0].range(63, 48));
     }
 
     template<int word_bw>
@@ -143,7 +143,7 @@ struct FirRespHdr {
         w = s.read();
         self->nsamp = (ap_uint<32>)(w.range(31, 0));
         self->tx_id = (ap_uint<16>)(w.range(47, 32));
-        self->cfg_seq = (ap_uint<16>)(w.range(63, 48));
+        self->cfg_id = (ap_uint<16>)(w.range(63, 48));
     }
 
     template<int word_bw>
@@ -182,7 +182,7 @@ struct FirRespHdr {
             tl = streamutils::tlast_status::tlast_early;
             return;
         }
-        self->cfg_seq = (ap_uint<16>)(w.range(63, 48));
+        self->cfg_id = (ap_uint<16>)(w.range(63, 48));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }

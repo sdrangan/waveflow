@@ -2,17 +2,19 @@
 #define EXAMPLES_MM_FIR_TASK_H
 // mm_fir_task.h -- the mm_fir kernel body (HAND-WRITTEN), the HLS twin of MmFir.run_iter.
 //
-// plans/mm_fir_cfg_seq.md: the stream_inband pattern with a config sequence number.  ONE FIRING = ONE
+// plans/mm_fir_cfg_seq.md: the stream_inband pattern with a config id.  ONE FIRING = ONE
 // PACKET, written as the Python reads -- straight-line, a loop over the samples:
 //
-//   1. read the packet's FirCmdHdr (nsamp, tx_id, cfg_seq) off s_in;
-//   2. take configs off s_cfg until cfg_seq of them have arrived -- WAITING for one that has not (a
-//      config nobody has asked for stays in s_cfg);
+//   1. read the packet's FirCmdHdr (nsamp, tx_id, cfg_id) off s_in;
+//   2. take configs off s_cfg until the one in force has the id the header names -- WAITING for one
+//      that has not arrived (a config nobody has asked for stays in s_cfg).  The id is the host's name
+//      for a config, carried in it, so the rule is equality, not a count: a host that lost its place
+//      commits a config with a fresh id and the kernel takes its way to it;
 //   3. filter nsamp samples, ONE PER CYCLE: the lane loop at one sample per cycle
 //      (docs/guide/vectorization/hls/loop_optimization.md).  Samples are int16, four to a word; a word
 //      is read and unpacked into a lane every fourth iteration, and each iteration uses one sample of
 //      the lane -- the 16-tap MAC is not replicated four times;
-//   4. publish the status (nsamp, ncfg), THEN the response: which packet, and which config it was
+//   4. publish the status (nsamp, cfg_id, ncfg), THEN the response: which packet, and which config it was
 //      filtered with.  Status first, so a host holding a response knows the status already counts the
 //      packet (plans/mm_irq.md D4).
 //
@@ -44,6 +46,7 @@ static void mm_fir_task(hls::stream<ap_uint<DW> >& s_cfg,
     static ap_int<16> hist[NT];          // hist[0] = newest sample
     static ap_uint<32> nsamp = 0;        // samples filtered so far
     static ap_uint<16> ncfg = 0;         // configs taken so far
+    static ap_uint<16> cfg_id = 0;       // the id of the config in force; 0 = none yet
 #pragma HLS ARRAY_PARTITION variable=taps complete dim=1
 #pragma HLS ARRAY_PARTITION variable=hist complete dim=1
 
@@ -52,13 +55,14 @@ static void mm_fir_task(hls::stream<ap_uint<DW> >& s_cfg,
     h.read_stream<DW>(s_in);
 
     // 2. the config this packet needs
-CFG: while (ncfg < h.cfg_seq) {
+CFG: while (cfg_id != h.cfg_id) {
         FirCfg c;
         c.read_stream<DW>(s_cfg);
     LOAD: for (int k = 0; k < NT; ++k) {
 #pragma HLS UNROLL
             taps[k] = (k < (int)c.ntaps) ? c.coeffs.data[k] : ap_int<16>(0);
         }
+        cfg_id = c.cfg_id;
         ncfg++;
     }
 
@@ -93,10 +97,10 @@ SAMP: for (ap_uint<32> i = 0; i < h.nsamp; ++i) {
 
     // 4. the status, then the response
     FirStatus st;
-    st.nsamp = nsamp; st.ncfg = ncfg;
+    st.nsamp = nsamp; st.cfg_id = cfg_id; st.ncfg = ncfg;
     st.write_stream<DW>(m_status);
     FirRespHdr r;
-    r.nsamp = h.nsamp; r.tx_id = h.tx_id; r.cfg_seq = ncfg;
+    r.nsamp = h.nsamp; r.tx_id = h.tx_id; r.cfg_id = cfg_id;
     r.write_stream<DW>(m_resp);
 }
 

@@ -283,18 +283,21 @@ The second row is the negative control, and it is the point: the guarantee holds
 travel on different streams, the kernel can read them in either order, whatever order they were
 written in. A protocol that needs cross-stream order says so **in the messages**.
 
-The recipe [mm_fir](../../../examples/mm_fir/) uses is a **sequence number**:
+The recipe [mm_fir](../../../examples/mm_fir/) uses is a **config id**:
 
-- configs are numbered by when they are committed — the *k*-th COMMIT is config *k*;
-- every data packet carries, in an in-band header on the data stream, the number of the config it
-  needs (`cfg_seq`);
-- the kernel, on reading a header, takes configs until it has taken `cfg_seq` of them — waiting if
-  that config has not arrived — and only then reads the data.
+- the host names every config it commits, in the config itself (`cfg_id`);
+- every data packet carries, in an in-band header on the data stream, the id of the config it needs;
+- the kernel, on reading a header, takes configs until the one in force has that id — waiting if it
+  has not arrived — and only then reads the data.
+
+The id is **carried, not counted**: a count of commits kept at both ends drifts the first time a host
+restarts or a commit is lost, and nothing could notice; an id in the message needs nothing to be in
+step.
 
 A packet can then use neither an older config (the kernel waits for the one it names) nor a newer one
 (a config nobody has asked for stays in its stream), so the host commits a config and sends the data
 that needs it in either order, and never asks whether the config arrived. The wait is on the kernel's
-own stream, not on the bus. mm_fir also has the kernel echo, per packet, the `cfg_seq` it actually
+own stream, not on the bus. mm_fir also has the kernel echo, per packet, the `cfg_id` it actually
 used into a response queue, so the host can check the order end to end.
 
 ## Using it from a kernel
@@ -458,7 +461,7 @@ register.
 side](./master.md#splitting-the-endpoints), each view's stream is an ordinary stream, so a design can
 send the configuration to one stage and the samples to another. What it cannot assume is any order
 *between* those streams — that is ordering statement 2 above, and the reason
-[mm_fir](../../../examples/mm_fir/) puts a config sequence number in each packet's header.
+[mm_fir](../../../examples/mm_fir/) puts a config id in each packet's header.
 
 ## What is not built yet
 

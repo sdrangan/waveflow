@@ -15,8 +15,10 @@
 struct FirCfg {
     Int16Array coeffs;  // tap k multiplies x[n-k]
     ap_uint<32> ntaps;  // active taps (<= NTAP_MAX)
+    // the host's name for this config, 1..65535 (0 = no config yet); packets ask for it by this id
+    ap_uint<16> cfg_id;
 
-    static constexpr int bitwidth = 288;
+    static constexpr int bitwidth = 304;
 
     template<int word_bw>
     struct word_bw_tag {};
@@ -40,6 +42,7 @@ struct FirCfg {
         ap_uint<bitwidth> res = 0;
         res.range(255, 0) = Int16Array::pack_to_uint(data.coeffs);
         res.range(287, 256) = data.ntaps;
+        res.range(303, 288) = data.cfg_id;
         return res;
     }
 
@@ -47,6 +50,7 @@ struct FirCfg {
         FirCfg data;
         data.coeffs = Int16Array::unpack_from_uint(packed.range(255, 0));
         data.ntaps = (ap_uint<32>)(packed.range(287, 256));
+        data.cfg_id = (ap_uint<16>)(packed.range(303, 288));
         return data;
     }
 
@@ -81,6 +85,7 @@ struct FirCfg {
         }
         x[4] = 0;
         x[4].range(31, 0) = self->ntaps;
+        x[4].range(47, 32) = self->cfg_id;
     }
 
     template<int word_bw>
@@ -120,6 +125,7 @@ struct FirCfg {
             }
         }
         w.range(31, 0) = self->ntaps;
+        w.range(47, 32) = self->cfg_id;
         s.write(w);
     }
 
@@ -161,6 +167,7 @@ struct FirCfg {
             }
         }
         w.range(31, 0) = self->ntaps;
+        w.range(47, 32) = self->cfg_id;
         streamutils::write_axi4_word<64>(s, w, tlast);
     }
 
@@ -198,6 +205,7 @@ struct FirCfg {
             }
         }
         self->ntaps = (ap_uint<32>)(x[4].range(31, 0));
+        self->cfg_id = (ap_uint<16>)(x[4].range(47, 32));
     }
 
     template<int word_bw>
@@ -237,6 +245,7 @@ struct FirCfg {
         }
         w = s.read();
         self->ntaps = (ap_uint<32>)(w.range(31, 0));
+        self->cfg_id = (ap_uint<16>)(w.range(47, 32));
     }
 
     template<int word_bw>
@@ -306,6 +315,11 @@ struct FirCfg {
             last = axis_word.last;
         }
         self->ntaps = (ap_uint<32>)(w.range(31, 0));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        self->cfg_id = (ap_uint<16>)(w.range(47, 32));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }
