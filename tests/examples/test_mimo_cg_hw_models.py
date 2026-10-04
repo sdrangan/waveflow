@@ -267,3 +267,66 @@ def test_python_simulation_takes_the_models_job_time(c):
     want = np.array([models.job_cycles(c, nit) for nit in jobs[1:]])
     extra = models.table[f"t0_extra|{c.mem_dw}"]["cycles"]
     assert np.diff(ends) == pytest.approx(want - extra, abs=0.5)
+
+
+# --- held-out validation (steps 5.7 and 5.8, AC5) ------------------------------------------------
+
+#: The model file as frozen in step 5.6, before any held-out build ran (plan §15).
+FROZEN_MODEL_SHA256 = "6450abe0889054c8bcb513fd52f6d38924303cd3d3827c6da1e4cb505ca5c513"
+
+
+def test_models_are_unchanged_since_they_were_frozen():
+    from examples.mimo_cg.hw import validate as V
+
+    assert V.model_sha256() == FROZEN_MODEL_SHA256
+
+
+def test_validation_tables_are_what_the_command_regenerates(tmp_path):
+    from examples.mimo_cg.hw import validate as V
+
+    V.validate(out_dir=tmp_path)
+    for name in ("model_validation.csv", "model_validation_metrics.csv"):
+        assert (tmp_path / name).read_bytes() == (MD.PAPER_DATA / name).read_bytes()
+
+
+def test_validation_scores_only_held_out_builds_of_the_split():
+    from examples.mimo_cg.hw.space import read_split
+    from examples.mimo_cg.mimo_cg import read_table
+
+    held = {b: t for b, t, role, _c in read_split() if role == "holdout"}
+    detail = read_table(MD.PAPER_DATA / "model_validation.csv")
+    assert {r["build"] for r in detail} == set(held)
+    blocks = {
+        (r["build"], r["scope"]) for r in detail if r["scope"].startswith("block:")
+    }
+    assert len(blocks) == 34  # 12 vector-unit, 12 matmul, and the glue of 10 detectors
+    designs = {r["build"] for r in detail if r["scope"] == "design"}
+    assert len(designs) == 10 and all(held[b] == "det" for b in designs)
+    jobs = [r for r in detail if r["quantity"].startswith("job_cycles")]
+    assert len(jobs) == 50  # five measured intervals per held-out detector
+
+
+def test_ac5_on_the_held_out_builds():
+    """AC5: DSP and BRAM exact on at least 90% of the held-out block configurations; LUT and FF
+    within 10% and job cycles within 5%, as mean absolute percentage errors, on the held-out
+    detectors.  The thresholds were fixed at gate 5.0, before any build."""
+    from examples.mimo_cg.mimo_cg import read_table
+
+    summary = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_metrics.csv")
+    }
+    gates = {m: r for m, r in summary.items() if r["threshold"]}
+    assert set(gates) == {
+        "blocks: DSP and BRAM both exact (%)",
+        "designs: LUT MAPE (%)",
+        "designs: FF MAPE (%)",
+        "designs: job cycles MAPE (%)",
+    }
+    assert float(gates["blocks: DSP and BRAM both exact (%)"]["value"]) >= 90.0
+    assert float(gates["designs: LUT MAPE (%)"]["value"]) <= 10.0
+    assert float(gates["designs: FF MAPE (%)"]["value"]) <= 10.0
+    assert float(gates["designs: job cycles MAPE (%)"]["value"]) <= 5.0
+    assert all(r["pass"] == "1" for r in gates.values())
+    assert gates["blocks: DSP and BRAM both exact (%)"]["n"] == "34"
+    assert gates["designs: LUT MAPE (%)"]["n"] == "10"

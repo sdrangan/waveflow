@@ -21,7 +21,7 @@ designs.  The tables also give per-block LUT and FF errors, block-span errors, a
 of every metric.
 
 ``python -m examples.mimo_cg.hw.validate`` writes ``paper_data/model_validation.csv`` (one row
-per build, scope and quantity), ``paper_data/model_validation_summary.csv`` (one row per metric)
+per build, scope and quantity), ``paper_data/model_validation_metrics.csv`` (one row per metric)
 and ``docs/examples/mimo_cg/images/model_validation.svg``.
 """
 
@@ -263,7 +263,7 @@ def validate(
         "model_validation", role=ROLE, model_sha256=model_sha256()[:16], part=MD.PART
     )
     write_table(Path(out_dir) / "model_validation.csv", detail, note)
-    write_table(Path(out_dir) / "model_validation_summary.csv", summary, note)
+    write_table(Path(out_dir) / "model_validation_metrics.csv", summary, note)
     return detail, summary
 
 

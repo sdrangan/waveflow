@@ -1,0 +1,21 @@
+# mimo_cg model_validation: numpy=2.5.3, base_seed=20260930, role=holdout, model_sha256=6450abe0889054c8, part=xczu48dr-ffvg1517-2-e
+metric,n,value,worst,threshold,pass
+blocks: DSP and BRAM both exact (%),34,1.000000e+02,,>= 90,1
+blocks: DSP exact (%),34,1.000000e+02,,,
+blocks: BRAM exact (%),34,1.000000e+02,,,
+designs: LUT MAPE (%),10,1.947000e+00,5.717000e+00,<= 10,1
+designs: FF MAPE (%),10,2.563000e+00,5.481000e+00,<= 10,1
+designs: job cycles MAPE (%),50,6.260000e-01,1.591000e+00,<= 5,1
+designs: DSP exact (%),10,1.000000e+02,,,
+designs: BRAM exact (%),10,1.000000e+02,,,
+designs: t_iter MAPE (%),10,6.510000e-01,1.616000e+00,,
+designs: t0 MAPE (%),10,5.080000e-01,2.074000e+00,,
+CgVec: LUT MAPE (%),12,1.682000e+00,3.698000e+00,,
+CgVec: FF MAPE (%),12,3.627000e+00,7.958000e+00,,
+CgMm: LUT MAPE (%),12,4.708000e+00,1.637000e+01,,
+CgMm: FF MAPE (%),12,2.785000e+00,8.845000e+00,,
+glue: LUT MAPE (%),10,1.792000e+00,9.225000e+00,,
+glue: FF MAPE (%),10,3.291000e+00,7.000000e+00,,
+unit builds: vec.iter span MAPE (%),12,7.440000e-01,1.412000e+00,,
+unit builds: vec.init span MAPE (%),12,1.270000e+00,3.680000e+00,,
+unit builds: mm.iter span MAPE (%),12,8.030000e-01,1.746000e+00,,
