@@ -514,3 +514,127 @@ def test_merge_writes_the_three_tables_for_the_asked_roles_only(tmp_path):
     # asking for the held-out builds before they are measured is an error, not a partial table
     with pytest.raises(FileNotFoundError, match="not measured yet"):
         C.merge(("fit", "holdout"), points_dir=points, out_dir=tmp_path)
+
+
+def test_which_records_a_build_files():
+    """Gate 5.0 decision 3: a block is calibrated from its own unit builds, the glue from detectors."""
+    assert M.files_record("vec", "CgVec") and not M.files_record("vec", "CgVecLoad")
+    assert not M.files_record("vec", "MemRStream") and not M.files_record("vec", "CgMm")
+    assert M.files_record("mm", "CgMm") and not M.files_record("mm", "CgMmStore")
+    assert not M.files_record("det", "CgVec") and not M.files_record("det", "CgMm")
+    for glue in ("CgCmdRx", "CgLoad", "CgCtrl", "CgStore", "MemRStream", "MemWStream"):
+        assert M.files_record("det", glue)
+
+
+@pytest.mark.xsi
+def test_filing_follows_the_per_block_protocol(default_builds, tmp_path):
+    """The store the models are fitted from: one block record per unit build; the glue and the
+    integration record, but neither block, from a detector build."""
+    import json
+
+    configs = {
+        "vec": _vec(4, 4, 12, 8),
+        "mm": _mm(4, 4, 4, 4, 12, 4),
+        "det": HwConfig(),
+    }
+    filed = {
+        top: M.file_records(
+            top,
+            c,
+            B.BUILD_ROOT / f"gate5_{top}_k4",
+            tool=default_builds[top]["tool"],
+            cost_seconds=1.0,
+            work_root=tmp_path,
+        )
+        for top, c in configs.items()
+    }
+    assert filed == {"vec": 1, "mm": 1, "det": 7}
+    recs = [
+        json.loads(line)
+        for f in tmp_path.rglob("records.jsonl")
+        for line in f.read_text().splitlines()
+    ]
+    by_origin = {
+        (r["target"], r["key"].split("-")[0], r["payload"].get("attributed_from"))
+        for r in recs
+    }
+    assert ("resource", "cg_vec", "cg_vec_unit") in by_origin
+    assert ("resource", "cg_mm", "cg_mm_unit") in by_origin
+    assert not any(
+        k in ("cg_vec", "cg_mm") and src == "cg_detector" for _t, k, src in by_origin
+    )
+    assert sum(r["target"] == "integration" for r in recs) == 1
+    assert all(r["provenance"]["tool"] == "vitis_hls 2024.1" for r in recs)
+
+
+# --- the committed campaign tables (steps 5.3 and 5.7) -----------------------------------------
+
+
+def _committed(name: str):
+    from examples.mimo_cg.hw import campaign as C
+    from examples.mimo_cg.mimo_cg import read_table
+
+    path = C.PAPER_DATA / f"{name}.csv"
+    header = path.read_text(encoding="utf-8").splitlines()[0]
+    return header, read_table(path)
+
+
+def test_committed_tables_hold_every_build_of_their_roles():
+    from examples.mimo_cg.hw import campaign as C
+
+    header, builds = _committed("hw_builds")
+    assert "tool=vitis_hls 2024.1" in header and "part=xczu48dr-ffvg1517-2-e" in header
+    roles = header.split("roles=")[1].split(",")[0].split("+")
+    assert roles in (["fit"], ["fit", "holdout"])
+    expected = [b for b, (_t, role, _c) in C.split().items() if role in roles]
+    assert [r["build"] for r in builds] == expected
+    for r in builds:
+        top, role, c = C.split()[r["build"]]
+        assert (r["top"], r["role"]) == (top, role)
+        assert all(int(r[k]) == getattr(c, k) for k in C.KNOBS)
+        assert (
+            r["error"] == "" and r["bit_exact"] == "1"
+        )  # every build ran and is bit-exact at RTL
+        assert float(r["est_ns"]) <= 4.0
+
+
+def test_committed_module_rows_add_up_to_the_build_totals():
+    _, builds = _committed("hw_builds")
+    _, modules = _committed("hw_modules")
+    assert {r["build"] for r in modules} == {r["build"] for r in builds}
+    for b in builds:
+        rows = [r for r in modules if r["build"] == b["build"]]
+        for k in ("lut", "ff", "dsp", "bram"):
+            assert sum(int(r[k]) for r in rows) == int(b[k]), (b["build"], k)
+        integ = [r for r in rows if r["kind"] != "module"]
+        for k in ("lut", "ff", "bram"):
+            assert sum(int(r[k]) for r in integ) == int(b[f"integ_{k}"])
+
+
+def test_committed_cycles_have_a_fit_and_a_clean_span_for_every_block():
+    _, builds = _committed("hw_builds")
+    _, cycles = _committed("hw_cycles")
+    kinds = {"vec": {"vec.init", "vec.iter", "vec.last"}, "mm": {"mm.iter"}}
+    kinds["det"] = kinds["vec"] | kinds["mm"]
+    for b in builds:
+        rows = {
+            r["quantity"]: r
+            for r in cycles
+            if r["build"] == b["build"] and r["quantity"] != "job_interval"
+        }
+        assert {"first_done", "t0", "t_iter", "max_resid"} <= set(rows)
+        assert kinds[b["top"]] <= set(rows)
+        for kind in kinds[b["top"]]:
+            assert rows[kind]["cycles"] != "", (
+                b["build"],
+                kind,
+            )  # at least one clean sample
+            assert int(rows[kind]["n"]) > int(rows[kind]["stalled"])
+        if b["top"] == "det":
+            # the blocks wait for each other, so their spans tile the loop exactly; the job
+            # overhead is the vector unit's start span plus a few cycles
+            t_iter, t0 = float(rows["t_iter"]["cycles"]), float(rows["t0"]["cycles"])
+            assert float(rows["max_resid"]["cycles"]) < 1e-3
+            loop = int(rows["mm.iter"]["cycles"]) + int(rows["vec.iter"]["cycles"])
+            assert loop == round(t_iter), b["build"]
+            assert 0 <= t0 - int(rows["vec.init"]["cycles"]) <= 8, b["build"]

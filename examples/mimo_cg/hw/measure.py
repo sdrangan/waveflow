@@ -289,10 +289,36 @@ def attribute(top: str, c: HwConfig, out_dir: Path) -> dict:
     }
 
 
+#: The block a unit build exists to measure (gate 5.0 decision 3).
+BLOCK_CLASS = {"vec": "CgVec", "mm": "CgMm"}
+
+
+def files_record(top: str, cls_name: str) -> bool:
+    """Whether a build of ``top`` files the record of a module of class ``cls_name``.
+
+    A block's models are fitted only on rows from that block's own unit builds, and the glue only on
+    detector builds (gate 5.0 decision 3).  So a unit build files its block and nothing else, and a
+    detector build files everything but the two blocks.
+    """
+    if top in BLOCK_CLASS:
+        return cls_name == BLOCK_CLASS[top]
+    return cls_name not in BLOCK_CLASS.values()
+
+
 def file_records(
-    top: str, c: HwConfig, out_dir: Path, *, tool: str, cost_seconds: float
+    top: str,
+    c: HwConfig,
+    out_dir: Path,
+    *,
+    tool: str,
+    cost_seconds: float,
+    work_root: Path | None = None,
 ) -> int:
-    """File the build's module and integration records into the work platform's store.
+    """File the build's records into the work platform's store; returns how many were filed.
+
+    Which module records a build files is :func:`files_record`.  A detector build also files its
+    integration record (the top minus its modules); a unit build's remainder belongs to a top that
+    is not part of the detector and is not filed.
 
     Called serially, and only for ``fit`` builds: a held-out build must never reach the store the
     models are fitted from.
@@ -309,19 +335,26 @@ def file_records(
     report = report_from_solution(
         comp, Path(out_dir) / f"{name}_proj" / "solution1", top_name=name
     )
-    platform = Platform.resolve(WORK_ROOT, PLATFORM, part=B.PART, clk_freq=CLK_FREQ)
+    platform = Platform.resolve(
+        work_root or WORK_ROOT, PLATFORM, part=B.PART, clk_freq=CLK_FREQ
+    )
     walked = list(walk_modules(comp))
+    identities = {i.key: i for _, m, i in walked if files_record(top, type(m).__name__)}
     filed = store_report(
         report,
         ModuleStore(platform.dir),
-        {i.key: i for _, _, i in walked},
+        identities,
         source="hls_estimate",
         part=B.PART,
         period_ns=B.PERIOD_NS,
         tool=tool,
         cost_seconds=cost_seconds,
-        top_identity=next((i for _p, m, i in walked if m is comp), None),
-        boundary=InterfaceResourceModel().get_params(comp),
+        top_identity=(
+            next((i for _p, m, i in walked if m is comp), None)
+            if top == "det"
+            else None
+        ),
+        boundary=InterfaceResourceModel().get_params(comp) if top == "det" else None,
     )
     return len(filed)
 
