@@ -89,15 +89,19 @@ demo("direct")["bit_exact"], demo("mm")["bit_exact"]      # (True, True)
 
 | top | what | II | estimated clock (10 ns target) |
 |---|---|---|---|
-| `markov_gen` | the generator; credit accounting in the body | 1 | 9.92 ns |
-| `markov_chain` | the chain core + the in-band memory writer | 1 | 6.8 ns (core) |
+| `markov_gen` | the generator; credit accounting in the body | 1 | 6.8 ns |
+| `markov_chain` | the chain core + the in-band memory writer | 1 | 6.6 ns (core) |
 | `mm_queue_writer_64_64` | the routed link's forward writer | -- | 7.3 ns |
 | `mm_credit_writer_64` | the routed link's credit writer | -- | 7.3 ns |
 
-Two bodies first missed the clock, and both fixes are the same lesson: do not decide, compute and
-commit in one firing. The generator admitted a write and drew its first sample in the same cycle
-(17.4 ns); admission now takes its own firing, one cycle per 64 draws. The chain tested a field of the
-header word it had just read (10.3 ns); the test moved to the next firing.
+Both bodies are written as the [command-response pattern](../../guide/patterns/command_response.md)
+reads: one firing is one job -- read the command, then per chunk a pipelined loop of one step per cycle
+(a word of draws read every four steps: the
+[lane loop, one element per iteration](../../guide/vectorization/hls/loop_optimization.md)), then the
+response. The generator checks credit between chunks, never inside the loop; the chain offers credit
+after each chunk. Their first versions were single-firing state machines; the loops read like the
+Python, close timing with more margin (the generator went from 9.9 to 6.8 ns), and run 4.7% faster at
+RTL -- these firings are long, so the drain at the end of each chunk costs little.
 
 `examples/markov/markov_xsi.py` puts all four under one generated top with AMD's crossbar (from the
 pysim crossbar: 4 SI, 3 MI), the adaptor views, and a BRAM as the shared memory. Each bus writer's
@@ -106,11 +110,11 @@ depends on where the other is placed. The C++ host is the pysim host on the test
 
 | | pysim | RTL |
 |---|---|---|
-| 4 jobs x 300 steps, 2 in flight | 1700 cycles | **2356 cycles** |
+| 4 jobs x 300 steps, 2 in flight | 1700 cycles | **2246 cycles** |
 | `x` | bit-exact | **bit-exact** |
 | host polls | 0 | **0** |
 
-pysim is 28% fast. The likely cause is in the link: the RTL queue writer gathers a whole write before
+pysim is 24% fast. The likely cause is in the link: the RTL queue writer gathers a whole write before
 it bursts, and nothing buffers the generator while it does -- neither is in the pysim model. That gap
 is open.
 

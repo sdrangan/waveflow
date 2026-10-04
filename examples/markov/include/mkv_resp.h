@@ -117,6 +117,29 @@ struct MkvResp {
     }
 
     template<int word_bw>
+    static void write_framed_stream_impl(word_bw_tag<word_bw>, const MkvResp* self, hls::stream<streamutils::framed_word<word_bw>> &s, bool tlast) {
+        static_assert(word_bw < 0, "Unsupported word_bw for write_framed_stream");
+        (void)self;
+        (void)s;
+        (void)tlast;
+    }
+
+    static void write_framed_stream_impl(word_bw_tag<64>, const MkvResp* self, hls::stream<streamutils::framed_word<64>> &s, bool tlast) {
+            ap_uint<64> w = 0;
+        w.range(31, 0) = self->n;
+        w.range(63, 32) = self->ones;
+        streamutils::write_boundary_word<streamutils::framed_word<64>, 64>(s, w, false);
+        w = 0;
+        w.range(15, 0) = self->tx_id;
+        streamutils::write_boundary_word<streamutils::framed_word<64>, 64>(s, w, tlast);
+    }
+
+    template<int word_bw>
+    void write_framed_stream(hls::stream<streamutils::framed_word<word_bw>> &s, bool tlast = true) const {
+        write_framed_stream_impl(word_bw_tag<word_bw>{}, this, s, tlast);
+    }
+
+    template<int word_bw>
     static void read_array_impl(word_bw_tag<word_bw>, MkvResp* self, const ap_uint<word_bw> x[]) {
         static_assert(word_bw < 0, "Unsupported word_bw for read_array");
         (void)self;
@@ -213,6 +236,66 @@ struct MkvResp {
     void read_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>> &s) {
         streamutils::tlast_status tl = streamutils::tlast_status::no_tlast;
         read_axi4_stream<word_bw>(s, tl);
+    }
+
+    template<int word_bw>
+    static void read_framed_stream_impl(word_bw_tag<word_bw>, MkvResp* self, hls::stream<streamutils::framed_word<word_bw>> &s, streamutils::tlast_status &tl) {
+        static_assert(word_bw < 0, "Unsupported word_bw for read_framed_stream");
+        (void)self;
+        (void)s;
+        (void)tl;
+    }
+
+    static void read_framed_stream_impl(word_bw_tag<64>, MkvResp* self, hls::stream<streamutils::framed_word<64>> &s, streamutils::tlast_status &tl) {
+            ap_uint<64> w = 0;
+            tl = streamutils::tlast_status::no_tlast;
+            bool last = false;
+        if (last) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        {
+            auto axis_word = s.read();
+            w = axis_word.data;
+            last = axis_word.last;
+        }
+        self->n = (ap_uint<32>)(w.range(31, 0));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        self->ones = (ap_uint<32>)(w.range(63, 32));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        if (last) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        {
+            auto axis_word = s.read();
+            w = axis_word.data;
+            last = axis_word.last;
+        }
+        self->tx_id = (ap_uint<16>)(w.range(15, 0));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            return;
+        }
+        if (last) {
+            tl = streamutils::tlast_status::tlast_at_end;
+        }
+    }
+
+    template<int word_bw>
+    void read_framed_stream(hls::stream<streamutils::framed_word<word_bw>> &s, streamutils::tlast_status &tl) {
+        read_framed_stream_impl(word_bw_tag<word_bw>{}, this, s, tl);
+    }
+
+    template<int word_bw>
+    void read_framed_stream(hls::stream<streamutils::framed_word<word_bw>> &s) {
+        streamutils::tlast_status tl = streamutils::tlast_status::no_tlast;
+        read_framed_stream<word_bw>(s, tl);
     }
 
 #ifdef WAVEFLOW_ENABLE_MKV_RESP_TB_H_MEMBERS

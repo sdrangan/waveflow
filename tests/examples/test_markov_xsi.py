@@ -28,9 +28,11 @@ from waveflow.toolchain.toolchain import find_vivado_path
 WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 
 #: The recorded RTL cycle count of the scenario (4 jobs x 300 steps, 2 in flight).  pysim says 1700:
-#: 28% fast, an open item in plans/mm_credit_stream.md (the queue writer is store-and-forward, and
-#: nothing buffers the generator while it bursts -- neither is in the pysim model).
-EXPECTED_CYCLES = 2356
+#: 24% fast, the open item of the markov-timing branch.
+#: History: 2356 with both kernel bodies single-firing state machines; 2246 once they were rewritten as
+#: straight-line loops per job (2026-10-04) -- long firings, so the per-chunk drain is small, and the
+#: per-cycle credit bookkeeping is gone.
+EXPECTED_CYCLES = 2246
 
 
 @pytest.fixture(scope="module")

@@ -3,23 +3,27 @@
 // markov_chain_core_task.h -- the chain of examples/markov (HAND-WRITTEN), the HLS twin of
 // ChainCore.run_iter.
 //
-// Per job, off s_u_fwd: one MkvCmd, then n draws packed four to a word.  ONE STEP PER FIRING:
+// ONE FIRING = ONE JOB, written as the Python reads (docs/guide/patterns/command_response.md):
 //
-//     t0 = u <  p01        (from state 0: go to 1)
-//     t1 = u >= p10        (from state 1: stay at 1)
-//     x  = x ? t1 : t0
+//   1. read the forwarded MkvCmd off s_u_fwd;
+//   2. per chunk of CHUNK steps: a MemWCmd(addr, len, 0) for the in-band memory writer, then a
+//      pipelined loop of ONE STEP PER CYCLE -- a word of draws read every four steps, the states
+//      packed eight to a word (the lane loop, one element per iteration;
+//      docs/guide/vectorization/hls/loop_optimization.md):
 //
-// Both compares depend only on u, so what is carried from firing to firing is the select -- which
-// is why this pipelines at II=1 despite the chain's recurrence.
+//          t0 = u <  p01        (from state 0: go to 1)
+//          t1 = u >= p10        (from state 1: stay at 1)
+//          x  = x ? t1 : t0
 //
-// The output, on the framed internal FIFO m_x to the in-band memory writer
-// (mem_w_stream_framed_done_task): per CHUNK draws, [MemWCmd(addr, len, 0) | x words] with x packed
-// eight to a word by the generated uint8 lane routine; then [MemWCmd(0, 0, 1) | MkvResp].  The writer
-// stores each chunk and only then forwards the response, so the host's response means "x is stored".
+//      Both compares depend only on u, so the dependency carried from step to step is the select --
+//      which is why the loop runs at II=1 despite the recurrence;
+//   3. MemWCmd(0, 0, 1) then the MkvResp: the writer forwards the response once x is stored.
 //
 // s_u is a credit stream: s_u_crd carries the CUMULATIVE count of words consumed, offered once at
-// least CRD_EVERY words are unreported (plans/mm_credit_stream.md D5), with write_nb -- the offer
-// never blocks (rule 2), and a refused one is simply retried on a later firing (rule 1: cumulative).
+// least CRD_EVERY words are unreported -- checked after each chunk.  The offer is a blocking write:
+// what reads it (the credit bus writer) coalesces and never waits on the bus (a credit-in write is
+// always taken), so it cannot hold the chain up -- and a dropped offer could leave a producer that is
+// waiting for exactly that credit waiting forever, since nothing more would arrive to prompt another.
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "streamutils_hls.h"
@@ -30,131 +34,79 @@
 #include "uint8_array_utils.h"
 
 template <int DW, int CRD_EVERY>
+static inline void markov_offer_credit(hls::stream<ap_uint<DW> >& crd, ap_uint<16> consumed,
+                                       ap_uint<16>& offered) {
+    if (ap_uint<16>(consumed - offered) >= CRD_EVERY) {
+        crd.write(ap_uint<DW>(consumed));
+        offered = consumed;
+    }
+}
+
+template <int DW, int CRD_EVERY>
 static void markov_chain_core_task(hls::stream<ap_uint<DW> >& s_u_fwd,
                                    hls::stream<ap_uint<DW> >& s_u_crd,
                                    hls::stream<streamutils::framed_word<DW> >& m_x) {
-#pragma HLS PIPELINE II=1
     const int CW = MkvCmd::nwords<DW>();
-    const int WC = MemWCmd::nwords<DW>();
-    const int RW = MkvResp::nwords<DW>();
-    const int OB = (WC > RW) ? WC : RW;
     const int PFU = uint16_array_utils::lane_capacity<DW>();    // draws per input word
     const int PFX = uint8_array_utils::lane_capacity<DW>();     // states per output word
     const int CHUNK = 64;
-    enum { HDR = 0, XCMD = 1, SAMP = 2, RCMD = 3, RESP = 4 };
-    static ap_uint<DW> cbuf[CW];
-    static ap_uint<DW> obuf[OB];
-    static uint16_array_utils::value_type ulane[PFU];
-    static uint8_array_utils::value_type xlane[PFX];
-    static ap_uint<3> state = HDR;
-    static ap_uint<3> ci = 0, oi = 0;
-    static bool built = false;           // obuf holds the words of the current XCMD/RCMD/RESP
-    static ap_uint<3> ui = 0;            // next draw of ulane; 0 = read a new word first
-    static ap_uint<4> xi = 0;            // states collected in xlane
-    static ap_uint<16> consumed = 0, offered = 0;
-    static ap_uint<32> nleft = 0, k0 = 0, ones = 0;
-    static ap_uint<8> c = 0, cleft = 0;
-    static ap_uint<64> dst = 0;
-    static ap_uint<16> tx_id = 0, p01 = 0, p10 = 0;
-    static ap_uint<32> n = 0;
-    static ap_uint<1> x = 0;
-#pragma HLS ARRAY_PARTITION variable=cbuf complete dim=1
-#pragma HLS ARRAY_PARTITION variable=obuf complete dim=1
+    static ap_uint<16> consumed = 0, offered = 0;               // survive from job to job
+
+    // 1. the command
+    MkvCmd cmd;
+    cmd.read_stream<DW>(s_u_fwd);
+    consumed += CW;
+    const ap_uint<32> n = cmd.n;
+    const ap_uint<16> p01 = cmd.p01, p10 = cmd.p10;
+    ap_uint<1> x = cmd.x0[0];
+    ap_uint<32> ones = 0;
+
+    // 2. the steps, a chunk per memory write
+    uint16_array_utils::value_type ulane[PFU];
+    uint8_array_utils::value_type xlane[PFX];
 #pragma HLS ARRAY_PARTITION variable=ulane complete dim=1
 #pragma HLS ARRAY_PARTITION variable=xlane complete dim=1
-
-    ap_uint<DW> w;
-    if (state == HDR) {
-        if (s_u_fwd.read_nb(w)) {
-            consumed++;
-            cbuf[ci] = w;
-            if (ci == CW - 1) {
-                ci = 0;
-                MkvCmd cmd;
-                cmd.read_array<DW>(cbuf);
-                n = cmd.n; nleft = cmd.n; k0 = 0; ones = 0;
-                x = cmd.x0[0];
-                dst = cmd.dstaddr; tx_id = cmd.tx_id; p01 = cmd.p01; p10 = cmd.p10;
-                state = XCMD;            // an empty job turns to RCMD next firing (timing: no
-                                         // compare on a field just read)
-            } else {
-                ci++;
+CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
+        const ap_uint<32> rem = n - k0;
+        const int c = (rem < CHUNK) ? (int)rem : CHUNK;
+        MemWCmd m;
+        m.addr = (cmd.dstaddr + k0) >> 3;                       // a word index: the writer's base is 0
+        m.len = (c + PFX - 1) / PFX;
+        m.fwd_bursts = 0;
+        m.write_framed_stream<DW>(m_x);
+    STEP: for (int k = 0; k < c; ++k) {
+#pragma HLS PIPELINE II=1
+            const int ju = k % PFU;
+            if (ju == 0) {                                      // a fresh word of draws
+                ap_uint<DW> w = s_u_fwd.read();
+                consumed++;
+                uint16_array_utils::read_array_lane<DW>(&w, ulane, (c - k < PFU) ? c - k : PFU);
             }
-        }
-    } else if (state == XCMD || state == RCMD || state == RESP) {
-        // Emit a small message one word per firing: build it on the first firing.
-        const int len = (state == RESP) ? RW : WC;
-        if (!built && state == XCMD && nleft == 0) {
-            state = RCMD;                // the job had no steps, or its last chunk is done
-        } else if (!built) {
-            if (state == RESP) {
-                MkvResp r;
-                r.n = n; r.ones = ones; r.tx_id = tx_id;
-                r.write_array<DW>(obuf);
-            } else {
-                MemWCmd m;
-                if (state == XCMD) {
-                    c = (nleft < CHUNK) ? ap_uint<8>(nleft) : ap_uint<8>(CHUNK);
-                    m.addr = (dst + k0) >> 3;                   // a word index: the writer's base is 0
-                    m.len = (c + PFX - 1) / PFX;
-                    m.fwd_bursts = 0;
-                } else {
-                    m.addr = 0; m.len = 0; m.fwd_bursts = 1;    // forward the response, write nothing
-                }
-                m.write_array<DW>(obuf);
-            }
-            built = true;
-            oi = 0;
-        } else {
-            streamutils::write_boundary_word<streamutils::framed_word<DW>, DW>(m_x, obuf[oi],
-                                                                             oi == len - 1);
-            if (oi == len - 1) {
-                built = false;
-                if (state == XCMD) { cleft = c; ui = 0; xi = 0; state = SAMP; }
-                else if (state == RCMD) state = RESP;
-                else state = HDR;
-            } else {
-                oi++;
-            }
-        }
-    } else {                             // SAMP
-        bool have = (ui != 0);
-        if (!have && s_u_fwd.read_nb(w)) {
-            consumed++;
-            uint16_array_utils::read_array_lane<DW>(&w, ulane, (cleft < PFU) ? (int)cleft : PFU);
-            have = true;
-        }
-        if (have) {
-            const ap_uint<16> u = ulane[ui];
+            const ap_uint<16> u = ulane[ju];
             const ap_uint<1> t0 = (u < p01) ? 1 : 0;
             const ap_uint<1> t1 = (u >= p10) ? 1 : 0;
             x = x ? t1 : t0;
-            xlane[xi] = x;
             ones += x;
-            cleft--;
-            ui = (ui == PFU - 1 || cleft == 0) ? ap_uint<3>(0) : ap_uint<3>(ui + 1);
-            if (xi == PFX - 1 || cleft == 0) {
+            const int jx = k % PFX;
+            xlane[jx] = x;
+            if (jx == PFX - 1 || k == c - 1) {                  // a word of states is full
                 ap_uint<DW> xw;
-                uint8_array_utils::write_array_lane<DW>(xlane, &xw, (int)xi + 1);
+                uint8_array_utils::write_array_lane<DW>(xlane, &xw, jx + 1);
                 streamutils::write_boundary_word<streamutils::framed_word<DW>, DW>(m_x, xw,
-                                                                                 cleft == 0);
-                xi = 0;
-            } else {
-                xi++;
-            }
-            if (cleft == 0) {
-                k0 += c;
-                nleft -= c;
-                state = XCMD;            // XCMD turns to RCMD when nleft is 0
+                                                                                 k == c - 1);
             }
         }
+        markov_offer_credit<DW, CRD_EVERY>(s_u_crd, consumed, offered);
     }
+    markov_offer_credit<DW, CRD_EVERY>(s_u_crd, consumed, offered);
 
-    // -- the credit offer: cumulative, batched, never blocking ------------------------------------
-    if (ap_uint<16>(consumed - offered) >= CRD_EVERY) {
-        ap_uint<DW> cw = consumed;
-        if (s_u_crd.write_nb(cw)) offered = consumed;
-    }
+    // 3. the response, forwarded by the writer once x is stored
+    MemWCmd fin;
+    fin.addr = 0; fin.len = 0; fin.fwd_bursts = 1;
+    fin.write_framed_stream<DW>(m_x);
+    MkvResp r;
+    r.n = n; r.ones = ones; r.tx_id = cmd.tx_id;
+    r.write_framed_stream<DW>(m_x);
 }
 
 #endif  // EXAMPLES_MARKOV_CHAIN_CORE_TASK_H
