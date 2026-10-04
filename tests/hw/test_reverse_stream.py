@@ -1067,8 +1067,8 @@ class TestTheBlockingWrite:
 
 
 class TestBatchedCredit:
-    """``crd_every`` batches the offers; draining the queue always offers, which is what keeps a
-    waiting producer live."""
+    """``crd_every`` batches the offers; the producer's ``max_write`` shrinks by ``crd_every - 1``,
+    which is what keeps a waiting producer live."""
 
     def test_offers_are_batched(self):
         sim, iface, m, s = _credit_batched(depth=64, crd_every=8, credit_depth=8)
@@ -1082,30 +1082,44 @@ class TestBatchedCredit:
             yield from m.poll_credit(8)
 
         _run(sim, body)
-        # One offer per 8 words, plus the one when the queue drained (it coincides with the last).
         assert s.n_offers == nwords // 8
         assert m.acked == nwords and m.outstanding == 0
 
-    def test_draining_the_queue_offers_even_below_the_batch(self):
-        """The liveness case: 3 words consumed, batch of 4 -- without the drain rule no credit is
-        ever sent, and a producer that needs those 3 words of room waits forever."""
-        sim, iface, m, s = _credit_batched(depth=4, crd_every=4)
-        done = []
+    def test_max_write_accounts_for_the_batch(self):
+        sim, iface, m, s = _credit_batched(depth=16, crd_every=4)
+        assert m.max_write == 16 - 1 - 3
+        caught = []
+
+        def body():
+            try:
+                yield from m.write(_w(*range(13)))
+            except ValueError as exc:
+                caught.append(exc)
+
+        _run(sim, body)
+        assert caught, "a write the batch could starve is refused"
+
+    def test_a_write_at_max_write_never_starves(self):
+        """The liveness case: the consumer sits on crd_every - 1 unreported words; a producer
+        writing max_write words at a time still always gets its room."""
+        sim, iface, m, s = _credit_batched(depth=8, crd_every=4)
+        assert m.max_write == 4
+        got: list[int] = []
+        nbursts = 12
 
         def producer():
-            yield from m.write(_w(1, 2, 3))                      # fills the 3 words of room
-            yield from m.write(_w(4, 5, 6))                      # needs the consumer's credit
-            done.append(sim.env.now)
+            for k in range(nbursts):
+                yield from m.write(_w(*range(4 * k, 4 * k + 4)))
 
         def consumer():
-            for _ in range(2):
-                yield from s.get()
+            for _ in range(nbursts):
+                d = yield from s.get()
+                got.extend(int(v) for v in np.asarray(d).reshape(-1))
 
         sim.env.process(producer())
         sim.env.process(consumer())
         sim.env.run()
-        assert done, "the producer never got the credit for a drained queue"
-        assert s.n_offers == 2
+        assert got == list(range(4 * nbursts))
 
     def test_credit_waits_survive_the_counter_wrap(self):
         sim = Simulation()
