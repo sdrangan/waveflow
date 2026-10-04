@@ -178,7 +178,12 @@ host <- mem        : x
   rather than a memory BFM -- the BFM slaves echo no AXI IDs, which a multi-master crossbar routes
   responses by.  The top is wired from the csynth'd modules' own port lists.  Gates
   (`tests/examples/test_markov_xsi.py`): bit-exact, no polls, **2356 cycles**.  `WANT_XSI_GATES` 145.
-- **Open: pysim is 28% fast at RTL** (1700 vs 2356).  Hypothesis, not yet probed: the RTL queue writer
+- **Rewrite (2026-10-04, branch markov-timing):** both bodies straight-line loops per job (the
+  command-response pattern) -- 6.8 / 6.6 ns, RTL 2356 -> **2246** cycles.
+- **Timing gap closed (branch markov-timing):** found with `markov_xsi` handshake probes -- two design
+  defects (no FIFO in front of the store-and-forward queue writer: `fwd_depth`; a credit window smaller
+  than the link's bandwidth-delay product: queue 64 -> 128) and two model gaps (each kernel's measured
+  per-chunk overhead).  RTL 2246 -> **1865**, pysim 1926 (+3.3%, gated within 5%).  WANT_XSI_GATES 146.  Hypothesis, not yet probed: the RTL queue writer
   gathers a whole write before bursting, and nothing buffers the generator while it bursts.
 - **Stage 5.**  `credit_stream.md` (over a shared bus; `write`, `max_write`, `crd_every`), the slave views
   page (credit in), `docs/examples/markov/index.md`.

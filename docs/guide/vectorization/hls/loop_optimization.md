@@ -114,6 +114,10 @@ message's header while the last results are still in the pipeline.
 | the loop: one packet per firing, the sample loop at II=1 | 618 |
 | the single-firing state machine | 520 |
 
+It goes the other way when firings are long. [markov](../../../examples/markov/index.md)'s kernels, 64
+steps a chunk, ran **4.7% faster** as loops (2356 -> 2246 cycles) than as state machines, which paid
+for their credit bookkeeping every cycle.
+
 Each firing of the loop pays its pipeline's fill and drain (the loop's latency, 11 cycles there) and a
 few cycles around it. With 16-element messages that is ~15%; with long ones it is noise. Write the
 loop; reach for the state machine when a measurement says the drain matters.
@@ -124,15 +128,17 @@ cycles.
 
 ## A timing rule: do not decide, compute and commit in one iteration
 
-A pipelined iteration has one clock period for its longest chain. Two Markov bodies first missed a
-10 ns clock for the same reason -- one iteration made a decision and then acted on it:
+A pipelined iteration has one clock period for its longest chain. The first versions of the two
+Markov bodies -- single-firing state machines -- both missed a 10 ns clock for the same reason: one
+iteration made a decision and then acted on it.
 
 | body | the chain in one iteration | fix | clock |
 |---|---|---|---|
 | generator | is there credit for the next write -> the chunk's size -> draw its first sample -> "write done" | admit the write in one iteration, draw from the next | 17.4 -> 9.9 ns |
 | chain | read the header's last word -> decode `n` -> test `n != 0` -> next state | test `n` on the following iteration | 10.3 -> 6.8 ns |
 
-The fix costs a cycle per message and buys the clock. The schedule report's critical path
+The fix costs a cycle per message and buys the clock. (The loop-style rewrites avoid the chain by
+construction -- admission happens before the loop, not in it -- and close at 6.8 and 6.6 ns.) The schedule report's critical path
 (`.autopilot/db/<fn>.verbose.sched.rpt`, "The critical path consists of the following") names the
 chain.
 

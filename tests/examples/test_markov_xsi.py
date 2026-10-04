@@ -27,10 +27,17 @@ from waveflow.toolchain.toolchain import find_vivado_path
 
 WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 
-#: The recorded RTL cycle count of the scenario (4 jobs x 300 steps, 2 in flight).  pysim says 1700:
-#: 28% fast, an open item in plans/mm_credit_stream.md (the queue writer is store-and-forward, and
-#: nothing buffers the generator while it bursts -- neither is in the pysim model).
-EXPECTED_CYCLES = 2356
+#: The recorded RTL cycle count of the scenario (4 jobs x 300 steps, 2 in flight).
+#: History (2026-10-04, branch markov-timing, found with markov_xsi's timing probes):
+#:   2356  both kernel bodies single-firing state machines;
+#:   2246  rewritten as straight-line loops per job (long firings: the per-chunk drain is small);
+#:   2015  a FIFO between the generator and its store-and-forward queue writer (the generator stalled
+#:         for every burst -- 103 cycles a 64-draw chunk -- because nothing buffered it);
+#:   1865  the chain's queue 64 -> 128 words: the credit window must cover the link's bandwidth-delay
+#:         product, or credit throttled the generator at every job start and starved the chain.
+EXPECTED_CYCLES = 1865
+#: pysim must stay within this of RTL (it is +3.3%, with the two per-chunk overheads it now charges).
+PYSIM_TOLERANCE = 0.05
 
 
 @pytest.fixture(scope="module")
@@ -74,3 +81,14 @@ def test_markov_rtl_host_never_polls(markov_run):
 @pytest.mark.xsi
 def test_markov_rtl_cycles(markov_run):
     assert parse_kv(markov_run, "DONE")["cycles"] == EXPECTED_CYCLES
+
+
+@pytest.mark.xsi
+def test_markov_pysim_tracks_rtl(markov_run):
+    """The timing model is calibrated against this RTL: pysim's total within PYSIM_TOLERANCE."""
+    from examples.markov.markov import MarkovSystem
+    sysm = MarkovSystem(jobs=scenario_jobs(), link="mm")
+    sysm.run()
+    pysim = sysm.sim.env.now / sysm.clk.period
+    rtl = parse_kv(markov_run, "DONE")["cycles"]
+    assert abs(pysim - rtl) <= PYSIM_TOLERANCE * rtl, f"pysim {pysim:.0f} vs RTL {rtl}"

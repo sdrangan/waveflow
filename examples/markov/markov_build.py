@@ -38,10 +38,11 @@ def gen_headers(root: Path = HERE) -> None:
     dag.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     dag.add(MemMgrStep(output_dir=INCLUDE_DIR))       # the generated tops include memmgr.hpp
     dag.add(MemStreamStep(output_dir=INCLUDE_DIR))    # the fixed in-band writer body
-    for cls in (MkvCmd, MkvResp):
-        dag.add(DataSchemaStep(cls, word_bw_supported=[DW], include_dir=INCLUDE_DIR))
-    # MemWCmd rides the chain's framed internal edge, so its header needs the framed_word methods.
-    dag.add(DataSchemaStep(MemWCmd, word_bw_supported=[DW], include_dir=INCLUDE_DIR, framed=True))
+    dag.add(DataSchemaStep(MkvCmd, word_bw_supported=[DW], include_dir=INCLUDE_DIR))
+    # MemWCmd and MkvResp ride the chain's framed internal edge (to the in-band memory writer), so
+    # their headers need the framed_word methods.
+    for cls in (MemWCmd, MkvResp):
+        dag.add(DataSchemaStep(cls, word_bw_supported=[DW], include_dir=INCLUDE_DIR, framed=True))
     for elem in (U16, U8):                            # u: four to a word; x: eight
         dag.add(ArrayUtilsStep(elem, [DW]))
     res = dag.run(BuildConfig(root_dir=root, params={}), force=True)

@@ -2,124 +2,93 @@
 #define EXAMPLES_MARKOV_GEN_TASK_H
 // markov_gen_task.h -- kernel 1 of examples/markov (HAND-WRITTEN), the HLS twin of MarkovGen.run_iter.
 //
-// Per job:
-//   HDR  reads one MkvCmd (CW words) off s_cmd;
-//   FWD  forwards it on m_u_fwd as one write (TLAST on its last word);
-//   GEN  draws n uniforms from xorshift32 -- the top 16 bits of each state -- ONE PER FIRING, packs
-//        them four to a word with the generated uint16 lane routine, and sends them in writes of
-//        CHUNK samples (TLAST on each write's last word).
+// ONE FIRING = ONE JOB, written as the Python reads (the command-response pattern,
+// docs/guide/patterns/command_response.md):
+//
+//   1. read the MkvCmd off s_cmd;
+//   2. forward it on m_u_fwd, as one write (TLAST on its last word);
+//   3. draw n uniforms from xorshift32 -- the top 16 bits of each state -- in writes of CHUNK draws:
+//      per chunk, wait for the credit, then a pipelined loop of ONE DRAW PER CYCLE, packing four draws
+//      to a word with the generated uint16 lane routine (the lane loop, one element per iteration --
+//      docs/guide/vectorization/hls/loop_optimization.md), TLAST on the chunk's last word.
 //
 // m_u is a credit stream (plans/mm_credit_stream.md): m_u_fwd forward, m_u_crd the consumer's
-// CUMULATIVE count of words consumed.  A write is admitted only when the credit says it fits
-// (avail = QDEPTH - RESP_WORDS - (written - acked), masked at 16 bits), and an admitted write runs to
-// its end without looking again -- so the forward channel never stalls the bus it crosses.  The
-// credit is read with read_nb, one value per firing (bounded: rule 3); cumulative, so the newest wins.
-// A write is never longer than QDEPTH - RESP_WORDS - (CRD_EVERY - 1) words, which is what keeps a
-// consumer that batches its credit live (CreditStreamMasterIF.max_write).
-//
-// A free-running hls::task body pipelined at II=1: every firing moves at most one word per stream.
+// CUMULATIVE count of words consumed.  Before each write the body waits until the write fits --
+// QDEPTH - RESP_WORDS - (written - acked) >= its words, masked at 16 bits -- reading the credit stream
+// (blocking, then a bounded drain to the newest value).  An admitted write runs to its end without
+// looking again, so the forward channel never stalls the bus it crosses.  Credit is also drained
+// (bounded, non-blocking) at each chunk even when there is room, so the credit FIFO never fills with
+// stale values.  A write is never longer than max_write = QDEPTH - RESP_WORDS - (CRD_EVERY - 1).
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "streamutils_hls.h"
 #include "mkv_cmd.h"
 #include "uint16_array_utils.h"
 
+template <int DW, int QDEPTH>
+static inline void markov_take_credit(hls::stream<ap_uint<DW> >& crd, ap_uint<16>& acked,
+                                      ap_uint<16> written, int nwords) {
+    const int ROOM = QDEPTH - 1;                     // RESP_WORDS = 1 reserved
+    ap_uint<DW> v;
+DRAIN0: for (int i = 0; i < 4; ++i) {                // bounded: take what is already there
+        if (!crd.read_nb(v)) break;
+        acked = v(15, 0);
+    }
+WAIT: while (ap_uint<16>(written - acked) > ap_uint<16>(ROOM - nwords)) {
+        acked = crd.read()(15, 0);                   // sleep until a value arrives ...
+    DRAIN: for (int i = 0; i < 4; ++i) {             // ... then catch up to the newest
+            if (!crd.read_nb(v)) break;
+            acked = v(15, 0);
+        }
+    }
+}
+
 template <int DW, int QDEPTH, int CRD_EVERY>
 static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
                             hls::stream<streamutils::axi4s_word<DW> >& m_u_fwd,
                             hls::stream<ap_uint<DW> >& m_u_crd) {
-#pragma HLS PIPELINE II=1
     const int CW = MkvCmd::nwords<DW>();
     const int PF = uint16_array_utils::lane_capacity<DW>();     // draws per word
     const int CHUNK = 64;                                       // draws per write
-    const int RESP_WORDS = 1;
-    static_assert((CHUNK + PF - 1) / PF <= QDEPTH - RESP_WORDS - (CRD_EVERY - 1),
+    static_assert((CHUNK + PF - 1) / PF <= QDEPTH - 1 - (CRD_EVERY - 1),
                   "a chunk is longer than the credit stream's max_write");
-    static_assert(CW <= QDEPTH - RESP_WORDS - (CRD_EVERY - 1), "the header exceeds max_write");
-    enum { HDR = 0, FWD = 1, GEN = 2 };
-    // Cross-firing state: `static` is what survives re-firing in an hls::task body.
-    static ap_uint<DW> cbuf[CW];
-    static uint16_array_utils::value_type lane[PF];
-    static ap_uint<2> state = HDR;
-    static ap_uint<3> ci = 0;
-    static ap_uint<3> li = 0;
-    static bool open = false;            // a write is admitted and in progress
-    static ap_uint<16> written = 0, acked = 0;
-    static ap_uint<32> nleft = 0;        // draws left in the job
-    static ap_uint<8> cleft = 0;         // draws left in the current write
-    static ap_uint<32> s = 1;            // the xorshift32 state
-#pragma HLS ARRAY_PARTITION variable=cbuf complete dim=1
+    static_assert(CW <= QDEPTH - 1 - (CRD_EVERY - 1), "the command exceeds max_write");
+    static ap_uint<16> written = 0, acked = 0;                  // survive from job to job
+
+    // 1. the command
+    MkvCmd cmd;
+    cmd.read_stream<DW>(s_cmd);
+    const ap_uint<32> n = cmd.n;
+    ap_uint<32> s = (cmd.seed == 0) ? ap_uint<32>(1) : ap_uint<32>(cmd.seed);
+
+    // 2. forward it
+    markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, CW);
+    cmd.write_axi4_stream<DW>(m_u_fwd);
+    written += CW;
+
+    // 3. the draws, a chunk per write, one draw per cycle
+    uint16_array_utils::value_type lane[PF];
 #pragma HLS ARRAY_PARTITION variable=lane complete dim=1
-
-    ap_uint<DW> cv;
-    if (m_u_crd.read_nb(cv)) acked = cv(15, 0);
-    const ap_uint<16> outstanding = written - acked;            // modular: exact below 2^16
-    const ap_uint<17> room = ap_uint<17>(QDEPTH - RESP_WORDS) - outstanding;
-
-    if (state == HDR) {
-        ap_uint<DW> w;
-        if (s_cmd.read_nb(w)) {
-            cbuf[ci] = w;
-            if (ci == CW - 1) {
-                ci = 0;
-                MkvCmd c;
-                c.read_array<DW>(cbuf);
-                nleft = c.n;
-                s = (c.seed == 0) ? ap_uint<32>(1) : ap_uint<32>(c.seed);
-                state = FWD;
-            } else {
-                ci++;
-            }
-        }
-    } else if (state == FWD) {
-        if (!open && room >= CW) open = true;
-        if (open) {
-            streamutils::write_boundary_word<streamutils::axi4s_word<DW>, DW>(m_u_fwd, cbuf[ci],
-                                                                            ci == CW - 1);
-            written++;
-            if (ci == CW - 1) {
-                ci = 0;
-                open = false;
-                state = (nleft != 0) ? GEN : HDR;
-            } else {
-                ci++;
-            }
-        }
-    } else {                             // GEN
-        // Admission and drawing are separate firings: deciding a write fits, then drawing its first
-        // sample in the same cycle, chains nleft -> chunk size -> cleft -> its decrement -> "write
-        // done" (measured 17.4 ns at a 10 ns target).  One cycle per CHUNK draws buys the clock.
-        if (!open) {
-            const ap_uint<8> c = (nleft < CHUNK) ? ap_uint<8>(nleft) : ap_uint<8>(CHUNK);
-            if (room >= (c + PF - 1) / PF) {
-                open = true;
-                cleft = c;
-                li = 0;
-            }
-        } else {
-            ap_uint<32> x = s;
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            s = x;
-            lane[li] = x(31, 16);
-            cleft--;
-            nleft--;
-            if (li == PF - 1 || cleft == 0) {
+CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
+        const ap_uint<32> rem = n - k0;
+        const int c = (rem < CHUNK) ? (int)rem : CHUNK;
+        const int cw = (c + PF - 1) / PF;
+        markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, cw);
+    GEN: for (int k = 0; k < c; ++k) {
+#pragma HLS PIPELINE II=1
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            const int j = k % PF;
+            lane[j] = s(31, 16);
+            if (j == PF - 1 || k == c - 1) {             // a word is full, or the chunk ends
                 ap_uint<DW> w;
-                uint16_array_utils::write_array_lane<DW>(lane, &w, (int)li + 1);
+                uint16_array_utils::write_array_lane<DW>(lane, &w, j + 1);
                 streamutils::write_boundary_word<streamutils::axi4s_word<DW>, DW>(m_u_fwd, w,
-                                                                                cleft == 0);
-                written++;
-                li = 0;
-                if (cleft == 0) {
-                    open = false;
-                    if (nleft == 0) state = HDR;
-                }
-            } else {
-                li++;
+                                                                                k == c - 1);
             }
         }
+        written += cw;
     }
 }
 
