@@ -233,3 +233,22 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   took 4–5 minutes, almost all of it in xelab; a small build takes about one.
 - **A 32-bit memory word doubles the done words.** `CgDesc` is two words at 32 bits, so
   the done log has two cycles per job; take the last.
+
+## Phase 5 (2026-10-04)
+
+- **The XSI harness runs exactly `n_cycles` cycles.** It has no early stop. The gate 5.0
+  probes asked for 4 million and paid for all of them (1–5 minutes each); with a budget
+  sized to the scenario the same runs take 10–30 seconds. Budget generously, check the
+  done count, and double on a miss.
+- **A stream-of-blocks writer only waits at the hand-over.** It writes its block freely;
+  the `_write` pulse is what waits for `i_full_n`. So an output stall shows as the channel
+  becoming free in the same cycle as the hand-over, not as a late first write.
+- **Depth 2 means one pending block.** `i_full_n` drops after a single hand-over and
+  rises when the reader releases that block.
+- **Take the smallest clean span.** A task that finds its input already waiting spends one
+  more cycle (its loop-back state) than a task that was idle. In the detector the blocks
+  wait for each other, so the idle figure is the one that composes: 208 + 985 = 1,193.
+- **The csynth FIFO table has no LUTs.** The summary counts them (468 for seven FIFOs);
+  the detail rows say 0. Keep the difference as its own row or the parts will not add up.
+- **A report has two "+ Detail" sections.** The latency one comes first and its Instance
+  table has a two-line header. Slice from "== Utilization Estimates".

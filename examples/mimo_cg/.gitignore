@@ -6,3 +6,4 @@ include/
 results/
 logs/
 hw/build/
+calib/work/

@@ -262,15 +262,19 @@ def generate_tb(out_dir: Path, top: str, tb, sim) -> dict:
     return sim.scenario()
 
 
-def run_xsi(out_dir: Path, top: str):
-    """Run the XSI harness (``run.sh`` / ``run.bat``) in ``<out_dir>/xsi``."""
+def run_xsi(out_dir: Path, top: str, *, trace: bool = False):
+    """Run the XSI harness (``run.sh`` / ``run.bat``) in ``<out_dir>/xsi``.
+
+    With ``trace``, the runner also elaborates ``xsi/vcd_dumper_<top>.v`` (written by
+    ``AddVcdTopStep``) and the run leaves a level-1 ``<top>_trace.vcd``; cycle counts are the same.
+    """
     import subprocess
 
     from waveflow.build.trace_steps import xsi_runner_cmd
 
     xsi = Path(out_dir) / "xsi"
     return subprocess.run(
-        xsi_runner_cmd(top, f"{top}_bfm_tb"),
+        xsi_runner_cmd(top, f"{top}_bfm_tb", trace=trace),
         cwd=xsi,
         capture_output=True,
         text=True,
