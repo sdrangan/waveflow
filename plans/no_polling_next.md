@@ -1,7 +1,7 @@
 # Plan: the rest of "no polling in the examples" -- ap_done as an interrupt, and kernel-to-kernel
 
-> **Status (2026-10-03): Part A BUILT** (branch `ap-done-irq`); Part B waits on the user's choice of
-> example.  Follows `plans/mm_irq.md` (built: `IrqIF`, queue interrupts, mm_fir with no polling).
+> **Status (2026-10-03): Part A BUILT** (branch `ap-done-irq`); Part B is superseded by
+> `plans/mm_credit_stream.md` (the Markov example, kernel-to-kernel links as a routed `CreditStreamIF`).  Follows `plans/mm_irq.md` (built: `IrqIF`, queue interrupts, mm_fir with no polling).
 > Departures from Part A are in **Built (Part A)** at the end.
 
 ## What still polls
