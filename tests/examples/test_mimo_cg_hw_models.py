@@ -503,7 +503,9 @@ def test_implementation_report_parser():
 
 
 def test_committed_implementation_check():
-    """The three default detectors, implemented by Vivado 2024.1 on xczu48dr at the 4 ns target."""
+    """Five detectors implemented by Vivado 2024.1 on xczu48dr at the 4 ns target: the default
+    knobs at K = 4, 8, 16 (step 5.9), a W = 8 design and the largest held-out design (step 5.9a).
+    Timing is met on all five."""
     from examples.mimo_cg.hw import impl_check as I
     from examples.mimo_cg.mimo_cg import read_table
 
@@ -511,11 +513,8 @@ def test_committed_implementation_check():
     header = path.read_text(encoding="utf-8").splitlines()[0]
     assert "part=xczu48dr-ffvg1517-2-e" in header and "period_ns=4" in header
     rows = read_table(path)
-    assert [r["build"] for r in rows] == list(I.BUILDS) and [r["K"] for r in rows] == [
-        "4",
-        "8",
-        "16",
-    ]
+    assert [r["build"] for r in rows] == list(I.BUILDS)
+    assert [r["K"] for r in rows] == ["4", "8", "16", "4", "4"]
     builds = {r["build"]: r for r in read_table(I.PAPER_DATA / "hw_builds.csv")}
     for r in rows:
         assert "Vivado v.2024.1" in r["tool"]
@@ -528,17 +527,32 @@ def test_committed_implementation_check():
             int(r["csynth_lut"]) / int(r["impl_lut"]), abs=1e-3
         )
         assert float(r["cp_required_ns"]) == 4.0
+        assert r["timing_met"] == "1" and float(r["cp_post_impl_ns"]) < 4.0
+        assert (
+            2.9 <= float(r["lut_ratio"]) <= 4.5
+        )  # csynth's LUT count is 3 to 4.4 times higher
+    assert max(float(r["cp_post_impl_ns"]) for r in rows) == pytest.approx(
+        3.738
+    )  # the largest
 
 
 def test_committed_implementation_check_per_module():
-    """Per module, csynth against the implemented instance: the rows add up to the build totals,
-    the eight tasks and the integration term are all there, and DSP differs only in the vector unit.
-    """
+    """Per module, csynth against the implemented instance.  The rows add up to the build totals.
+    DSP differs in two ways: at W = 12 the vector unit gets 4 more per lane (16 at 4 lanes, 64 at
+    16); at W = 8 it gets none, but the matmul gets most of the multiplies csynth built from LUTs
+    back into DSPs (32 by csynth, 60 implemented)."""
     from examples.mimo_cg.hw import impl_check as I
     from examples.mimo_cg.mimo_cg import read_table
 
     totals = {r["build"]: r for r in read_table(I.PAPER_DATA / "impl_check.csv")}
     rows = read_table(I.PAPER_DATA / "impl_check_modules.csv")
+    extra_dsp = {
+        I.BUILDS[0]: {"CgVec": 16},
+        I.BUILDS[1]: {"CgVec": 16},
+        I.BUILDS[2]: {"CgVec": 16},
+        I.BUILDS[3]: {"CgMm": 28},  # W = 8
+        I.BUILDS[4]: {"CgVec": 64},  # 16 lanes
+    }
     for build in I.BUILDS:
         mine = {r["module"]: r for r in rows if r["build"] == build}
         assert set(mine) == {*MD.DETECTOR_MODULES, "integration"}
@@ -553,15 +567,22 @@ def test_committed_implementation_check_per_module():
             totals[build]["impl_bram"]
         )
         # a LUT shared by two instances is counted in both, so the instances add up to a few more
-        assert (
-            0
-            <= sum(int(r["impl_lut"]) for r in mine.values())
-            - int(totals[build]["impl_lut"])
-            < 20
+        # (8 to 58 over these builds)
+        shared = sum(int(r["impl_lut"]) for r in mine.values()) - int(
+            totals[build]["impl_lut"]
         )
-        differ = {m for m, r in mine.items() if r["csynth_dsp"] != r["impl_dsp"]}
-        assert differ == {"CgVec"}
-        assert int(mine["CgVec"]["impl_dsp"]) - int(mine["CgVec"]["csynth_dsp"]) == 16
+        assert 0 <= shared < 100
+        differ = {
+            m: int(r["impl_dsp"]) - int(r["csynth_dsp"])
+            for m, r in mine.items()
+            if r["csynth_dsp"] != r["impl_dsp"]
+        }
+        assert differ == extra_dsp[build], build
+        # csynth's LUT estimate is closest for the channels and furthest for the matrix loader
+        assert (
+            float(mine["CgLoad"]["lut_ratio"]) > 19
+            and 0.75 < float(mine["integration"]["lut_ratio"]) < 1.1
+        )
 
 
 # --- the supplementary held-out set (step 5.8a, M5 review) ---------------------------------------

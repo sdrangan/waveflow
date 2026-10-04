@@ -299,3 +299,6 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **"Linear in nit with zero residual" is a property of the builds measured.** It held in
   every detector until one was fast enough to outrun its memory. Check the residual of
   every new design, and treat a non-zero one as a regime change, not noise.
+- **Vivado undoes part of what csynth reports at narrow widths.** csynth built the matmul's
+  8-bit multiplies from LUTs (32 DSPs); Vivado put most of them back into DSPs (60). The
+  DSP saving of a narrow format is real but smaller than csynth says.

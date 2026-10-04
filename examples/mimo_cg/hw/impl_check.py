@@ -30,11 +30,16 @@ from waveflow.toolchain import toolchain
 HERE = Path(__file__).resolve().parent
 PAPER_DATA = HERE.parent / "paper_data"
 TOP = B.DET_TOP
-#: The detectors checked: the Phase 4 default knobs at K = 4, 8 and 16 (campaign ``fit`` builds).
+#: The detectors checked (campaign builds, synthesized already).  The first three are the Phase 4
+#: default knobs at K = 4, 8 and 16 (step 5.9).  The last two were added at the M5 review, to see
+#: the edges the first three share nothing with: a W = 8 design, whose plain multiplies csynth builds
+#: from LUTs, and the largest held-out detector, with 16 lanes.
 BUILDS = (
     "det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2",
     "det_k8_l4_r8_c4_m4_w12g8_d64_s2_q2",
     "det_k16_l4_r16_c4_m4_w12g8_d64_s2_q2",
+    "det_k4_l4_r4_c4_m4_w8g8_d64_s2_q2",
+    "det_k4_l16_r2_c32_m3_w12g0_d64_s2_q8",
 )
 _TCL = f"""\
 open_project {TOP}_proj
@@ -245,10 +250,14 @@ def main(argv: list[str] | None = None) -> int:
         "--run", action="store_true", help="run Vivado implementation first (long)"
     )
     ap.add_argument("--jobs", type=int, default=3)
+    ap.add_argument(
+        "--force", action="store_true", help="re-run builds already implemented"
+    )
     args = ap.parse_args(argv)
     if args.run:
+        todo = [b for b in BUILDS if args.force or not report_path(b).is_file()]
         with ThreadPoolExecutor(args.jobs) as pool:
-            for res in pool.map(run_impl, BUILDS):
+            for res in pool.map(run_impl, todo):
                 print(res)
     path = write()
     print("wrote", path)
