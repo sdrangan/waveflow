@@ -804,7 +804,7 @@ def test_mm_fir_pages_quote_the_recorded_cycle_gates():
                                                 for t in node.targets):
             expected = ast.literal_eval(node.value)
     assert expected and set(expected) == {"per_view", "one_front"}, expected
-    for page in ("index.md", "pysim.md", "rtlsim.md"):
+    for page in ("protocol.md", "pysim.md", "rtlsim.md"):
         text = (DOCS / "examples" / "mm_fir" / page).read_text(encoding="utf-8")
         for topology, cycles in expected.items():
             assert re.search(rf"\b{cycles}\b", text), (
