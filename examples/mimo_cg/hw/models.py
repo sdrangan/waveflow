@@ -32,6 +32,12 @@ the tool binds it on this device.
   memory of its own.
 * **Registers.**  The matmul holds ``A`` in ``2·K²·W`` flip-flops.
 
+What the calibration does not cover (M5 review): the matmul's calibration builds have 1, 4 and 8
+lanes, so its LUT model extrapolates at 2 and 16 (:data:`MM_FIT_LANES`); the detector calibration
+builds have W ∈ {8, 12, 16} and no C = 32; and a block's row was measured with 64-bit memory words
+(with 32-bit words the two blocks' rows differ by up to 28 LUTs and 29 flip-flops, which the models
+ignore).
+
 *Fitted* terms are linear regressions (:class:`~waveflow.calib.calib.LinCalibModel`) of what is
 left, on terms read off each body's structure (:data:`TERMS`).
 
@@ -57,7 +63,7 @@ import pandas as pd
 
 from examples.mimo_cg.hw import build as B
 from examples.mimo_cg.hw.common import DEFAULT_N
-from examples.mimo_cg.hw.space import HwConfig
+from examples.mimo_cg.hw.space import HwConfig, is_valid
 from examples.mimo_cg.mimo_cg import read_table
 from waveflow.calib.calib import LinCalibModel
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
@@ -80,6 +86,10 @@ PLAIN_MULT_DSP_MIN_BITS = 12
 SDP_SHAPES = ((512, 36), (1024, 18), (2048, 9), (4096, 4), (8192, 2), (16384, 1))
 #: Below this many bits a stream-of-blocks memory is LUT RAM with an output register.
 SOB_BRAM_MIN_BITS = 1024
+#: The lane counts the matmul's calibration builds visit.  Its LUT model has a log2(L) term, so at the
+#: other lane counts of the space (2 and 16) it extrapolates: every 16-lane matmul row seen so far is
+#: under-predicted, by 2–16% (M5 review).  The matmul's DSP, BRAM and cycle models are not affected.
+MM_FIT_LANES = (1, 4, 8)
 
 
 def knobs(c) -> dict:
@@ -478,17 +488,29 @@ def calibrated() -> Models | None:
     return Models.load() if MODEL_FILE.is_file() else None
 
 
-def block_span(kind: str, fmt: int, **knob) -> float | None:
+def block_span(kind: str, fmt: int, N: int = N, **knob) -> float | None:
     """The calibrated span ``kind`` (``vec.init``, ``vec.iter`` or ``mm.iter``) in cycles, for a
-    block built with format id ``fmt`` and the given knobs; ``None`` when there is no model for it
-    (no model file, or a format outside the space, such as the stress set)."""
+    block built with format id ``fmt`` and the given knobs.
+
+    ``None`` when there is no model for it: no model file, a format outside the space (the stress
+    set), a block size other than the ``N`` the models were measured at, or knobs outside the
+    design space.  The caller then falls back to its own rough formula instead of extrapolating.
+    """
     from examples.mimo_cg.hw.common import ALL_FORMAT_NAMES, format_wg
 
     models = calibrated()
-    if models is None or not ALL_FORMAT_NAMES[int(fmt)].startswith("W"):
+    if models is None or int(N) != DEFAULT_N:
+        return None
+    if not ALL_FORMAT_NAMES[int(fmt)].startswith("W"):
         return None
     W, g = format_wg(fmt)
     k = knobs(HwConfig()) | {"W": W, "g_s": g} | {n: int(v) for n, v in knob.items()}
+    if kind.startswith(
+        "vec"
+    ):  # the vector unit does not see the array: any valid one will do
+        k |= {"R": k["K"], "C": max(4, k["L"])}
+    if not is_valid(HwConfig(**k)):
+        return None
     return models._reg(kind, TERMS[kind][0](k))
 
 
@@ -551,8 +573,16 @@ class CgResourceModel(ResourceModel):
         return {ctr: round(res[ctr]) for ctr in COUNTERS}
 
     def confidence_feat(self, row) -> Confidence:
+        """``INTERPOLATED`` inside the calibrated design space, ``EXTRAPOLATED`` outside it and for
+        the matmul at a lane count its calibration builds did not visit."""
+        full = knobs(HwConfig()) | dict(row)
+        inside = is_valid(HwConfig(**full))
+        if inside and self.cls == "CgMm" and full["L"] not in MM_FIT_LANES:
+            inside = False
         return Confidence(
-            level=ConfidenceLevel.INTERPOLATED,
+            level=(
+                ConfidenceLevel.INTERPOLATED if inside else ConfidenceLevel.EXTRAPOLATED
+            ),
             facts={
                 "summary": "calibrated on the fit builds of paper_data/hw_modules.csv"
             },

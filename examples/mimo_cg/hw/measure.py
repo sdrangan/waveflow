@@ -498,8 +498,9 @@ def summarize_spans(spans: dict) -> dict:
     """Per span kind: the block's span, and per regime how many clean samples back it.
 
     ``span`` is the smallest clean sample: the time from "input there and task free" to the
-    output's hand-over.  A back-to-back sample can be one cycle longer (the task's own loop-back
-    state), which a waiting task has already spent.  ``None`` when every sample was stalled.
+    output's hand-over.  A back-to-back sample is longer by the task's own loop-back states, which
+    a waiting task has already spent: 1 cycle in the vector unit, and 1, 3 or 7 in the matmul
+    (K = 4, 8, 16).  ``None`` when every sample was stalled.
     """
     out: dict = {}
     for kind, samples in spans.items():

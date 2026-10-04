@@ -102,7 +102,7 @@ def mm_cycles(
     if None not in (L, cmul, fmt):
         from examples.mimo_cg.hw.models import block_span
 
-        span = block_span("mm.iter", fmt, K=K, R=R, C=C, L=L, cmul=cmul)
+        span = block_span("mm.iter", fmt, N=N, K=K, R=R, C=C, L=L, cmul=cmul)
         if span is not None:
             return span
     return (K // R) * (N // C) * (K + R + C - 2) + 10

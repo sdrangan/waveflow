@@ -20,6 +20,16 @@ percentage error of at most 10% for LUT and for FF, and of at most 5% for job cy
 designs.  The tables also give per-block LUT and FF errors, block-span errors, and the worst case
 of every metric.
 
+Rows added at the M5 review (2026-10-04), after the results were known: they are disclosures,
+not AC5 gates, and carry no threshold.
+
+* *Blocks with BRAM > 0* and *channel memories* — most of the 34 exact block comparisons are
+  zero against zero, so the table also counts the blocks whose BRAM is not zero, and every
+  stream-of-blocks memory of the held-out builds against the counted rule.
+* *Disjoint from the fit* — a held-out unit build whose block also sits inside a ``fit`` detector,
+  and a held-out detector whose vector unit or matmul is also a ``fit`` unit build, are left out
+  (:func:`overlapping`), and the AC5 metrics are given again for what remains.
+
 ``python -m examples.mimo_cg.hw.validate`` writes ``paper_data/model_validation.csv`` (one row
 per build, scope and quantity), ``paper_data/model_validation_metrics.csv`` (one row per metric)
 and ``docs/examples/mimo_cg/images/model_validation.svg``.
@@ -248,6 +258,116 @@ def summary_rows(detail: list[dict]) -> list[dict]:
     return out
 
 
+def overlapping(data_dir: Path = PAPER_DATA) -> set[str]:
+    """Held-out builds that share a block with a ``fit`` build of the other kind of top."""
+    rows = read_table(data_dir / "hw_builds.csv")
+    knobs = HwConfig.__dataclass_fields__
+    cfg = {r["build"]: HwConfig(**{k: int(r[k]) for k in knobs}) for r in rows}
+    key = {"vec": HwConfig.vec_key, "mm": HwConfig.mm_key}
+
+    def keys(kind: str, top: str) -> set:
+        return {
+            key[kind](cfg[r["build"]])
+            for r in rows
+            if r["role"] == "fit" and r["top"] == top
+        }
+
+    fit_unit = {kind: keys(kind, kind) for kind in key}
+    fit_det = {kind: keys(kind, "det") for kind in key}
+    out = set()
+    for r in rows:
+        if r["role"] != ROLE:
+            continue
+        c = cfg[r["build"]]
+        if r["top"] in key and key[r["top"]](c) in fit_det[r["top"]]:
+            out.add(r["build"])
+        if r["top"] == "det" and any(key[kind](c) in fit_unit[kind] for kind in key):
+            out.add(r["build"])
+    return out
+
+
+def channel_exactness(data_dir: Path = PAPER_DATA) -> tuple[int, int, int]:
+    """``(memories, with BRAM > 0, reproduced exactly)`` over the held-out builds' channels."""
+    builds = {
+        r["build"]: r
+        for r in read_table(data_dir / "hw_builds.csv")
+        if r["role"] == ROLE
+    }
+    n = nonzero = exact = 0
+    for r in read_table(data_dir / "hw_modules.csv"):
+        if r["role"] != ROLE or r["kind"] != "memory":
+            continue
+        b = builds[r["build"]]
+        c = HwConfig(**{k: int(b[k]) for k in HwConfig.__dataclass_fields__})
+        name = r["name"].removesuffix("_U")
+        dual = {ch: d for ch, _w, _b, _k, d in MD.channels(c, r["top"])}[name]
+        want = MD.sob_memory(int(r["words"]), int(r["bits"]), int(r["banks"]), dual)
+        n += 1
+        nonzero += int(r["bram"]) > 0
+        exact += {k: int(r[k]) for k in ("bram", "lut", "ff")} == want
+    return n, nonzero, exact
+
+
+def disclosure_rows(detail: list[dict], data_dir: Path = PAPER_DATA) -> list[dict]:
+    """The rows added at the M5 review: what "exact" rests on, and the fit-disjoint subset."""
+    out = []
+
+    def add(metric: str, n: int, value: float, worst="") -> None:
+        out.append(
+            {
+                "metric": metric,
+                "n": n,
+                "value": round(value, 3),
+                "worst": "" if worst == "" else round(worst, 3),
+                "threshold": "",
+                "pass": "",
+            }
+        )
+
+    def both_exact(blocks: list) -> int:
+        return sum(
+            by[(*b, "bram")]["exact"] and by[(*b, "dsp")]["exact"] for b in blocks
+        )
+
+    by = {(r["build"], r["scope"], r["quantity"]): r for r in detail}
+    blocks = sorted(
+        {(r["build"], r["scope"]) for r in detail if r["scope"].startswith("block:")}
+    )
+    with_bram = [b for b in blocks if by[(*b, "bram")]["measured"] > 0]
+    add(
+        "blocks with BRAM > 0: DSP and BRAM both exact (%)",
+        len(with_bram),
+        100.0 * both_exact(with_bram) / len(with_bram),
+    )
+    n, nonzero, exact = channel_exactness(data_dir)
+    add("channel memories: BRAM, LUT and FF exact (%)", n, 100.0 * exact / n)
+    add("channel memories with BRAM > 0 (count)", n, nonzero)
+
+    skip = overlapping(data_dir)
+    kept = [b for b in blocks if b[0] not in skip]
+    add(
+        "disjoint from fit: blocks DSP and BRAM both exact (%)",
+        len(kept),
+        100.0 * both_exact(kept) / len(kept),
+    )
+    design = [r for r in detail if r["scope"] == "design" and r["build"] not in skip]
+    for label, rows in (
+        ("LUT", [r for r in design if r["quantity"] == "lut"]),
+        ("FF", [r for r in design if r["quantity"] == "ff"]),
+        ("job cycles", [r for r in design if r["quantity"].startswith("job_cycles")]),
+    ):
+        add(f"disjoint from fit: designs {label} MAPE (%)", len(rows), *_stats(rows))
+    return out
+
+
+def hls_tool(data_dir: Path = PAPER_DATA) -> str:
+    """The tool version the measurements were taken with (``hw_builds.csv``'s header)."""
+    import re
+
+    head = (data_dir / "hw_builds.csv").read_text(encoding="utf-8").splitlines()[0]
+    return re.search(r"tool=([^,]+)", head).group(1)
+
+
 def model_sha256() -> str:
     return hashlib.sha256(MD.MODEL_FILE.read_bytes()).hexdigest()
 
@@ -258,9 +378,13 @@ def validate(
     """Score the committed models on the held-out rows and write the two tables."""
     models = MD.Models.load()
     detail = detail_rows(models, data_dir)
-    summary = summary_rows(detail)
+    summary = summary_rows(detail) + disclosure_rows(detail, data_dir)
     note = provenance(
-        "model_validation", role=ROLE, model_sha256=model_sha256()[:16], part=MD.PART
+        "model_validation",
+        tool=hls_tool(data_dir),
+        role=ROLE,
+        model_sha256=model_sha256()[:16],
+        part=MD.PART,
     )
     write_table(Path(out_dir) / "model_validation.csv", detail, note)
     write_table(Path(out_dir) / "model_validation_metrics.csv", summary, note)

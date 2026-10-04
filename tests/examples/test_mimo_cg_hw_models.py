@@ -111,20 +111,25 @@ def test_committed_model_file_is_what_a_refit_gives(refit):
 
 
 def test_a_held_out_row_cannot_reach_the_fit(tmp_path, refit):
-    """The fit reads ``fit`` rows only: absurd rows of the other role change nothing."""
+    """The fit reads ``fit`` rows only: absurd rows of the other role change nothing, whichever
+    top they belong to.  (The committed tables now hold real held-out rows too, so the refit test
+    above is the same guard on real data.)"""
     from examples.mimo_cg.mimo_cg import read_table
 
     for name in ("hw_builds", "hw_modules", "hw_cycles"):
         src = MD.PAPER_DATA / f"{name}.csv"
         text = src.read_text(encoding="utf-8")
-        rows = read_table(src)
-        donor = next(r for r in rows if r["top"] == "det")
-        fake = dict(donor, build="det_fake_holdout", role="holdout")
-        for k in ("lut", "ff", "dsp", "bram", "cycles"):
-            if k in fake and fake[k] != "":
-                fake[k] = "999999"
+        rows = [r for r in read_table(src) if r["role"] == "fit"]
+        fakes = []
+        for top in ("vec", "mm", "det"):
+            for donor in [r for r in rows if r["top"] == top][:40]:
+                fake = dict(donor, build=f"{top}_fake_holdout", role="holdout")
+                for k in ("lut", "ff", "dsp", "bram", "cycles"):
+                    if k in fake and fake[k] != "":
+                        fake[k] = "999999"
+                fakes.append(",".join(fake.values()))
         (tmp_path / src.name).write_text(
-            text + ",".join(fake.values()) + "\n", encoding="utf-8"
+            text + "\n".join(fakes) + "\n", encoding="utf-8"
         )
     again = MD.fit(tmp_path)
     assert again.table == refit.table
@@ -133,7 +138,10 @@ def test_a_held_out_row_cannot_reach_the_fit(tmp_path, refit):
 
 
 def test_leave_one_out_errors_of_the_regressions(refit):
-    """Leave-one-out errors on the fit rows, as mean and worst percent of the predicted quantity."""
+    """Leave-one-out errors on the fit rows, as mean and worst percent of the predicted quantity,
+    for every regression.  The blocks and the cycle models are tight.  The loader, the store and
+    the framer's flip-flops are not (M5 review): few samples, small quantities, and errors of tens
+    of percent — which the glue's total hides because measured tables dominate it."""
     bounds = {
         "CgVec.lut": (2.0, 4.0),
         "CgVec.ff": (3.0, 9.0),
@@ -142,12 +150,25 @@ def test_leave_one_out_errors_of_the_regressions(refit):
         "vec.iter": (1.0, 3.0),
         "vec.init": (1.5, 4.0),
         "mm.iter": (1.0, 3.0),
+        "CgCmdRx.lut": (1.0, 3.0),
+        "CgCtrl.lut": (0.5, 1.0),
+        "CgCtrl.ff": (1.0, 3.0),
+        # the weak ones
+        "CgCmdRx.ff": (13.0, 52.0),
+        "load.lut": (12.0, 70.0),
+        "load.ff": (46.0, 205.0),
+        "store.lut": (11.0, 46.0),
+        "store.ff": (71.0, 161.0),
     }
+    assert set(bounds) == set(refit.report) == set(MD.TERMS)
     for name, (mean, worst) in bounds.items():
         r = refit.report[name]
         assert r["loo_mape_pct"] <= mean and r["loo_max_pct"] <= worst, (name, r)
+    for name in ("CgVec.lut", "CgVec.ff", "CgMm.lut", "CgMm.ff", "vec.iter", "mm.iter"):
+        r = refit.report[name]
         assert r["n"] >= 25 and r["terms"] <= r["n"] // 2
-    # the loaders and the store are small, and so are their absolute residuals
+    # the loader is a large part of a detector's csynth LUTs (22-35%), so its absolute residuals
+    # are what bound its effect on a design
     assert refit.report["load.lut"]["max_abs_residual"] < 500
     assert refit.report["store.lut"]["max_abs_residual"] < 150
 
@@ -216,6 +237,18 @@ def test_compose_walks_the_same_numbers():
         assert {k: est.total[k] for k in MD.COUNTERS} == models.resources(c)["total"]
         assert len(est.per_module) == 9  # the top's own term and its eight modules
         assert est.own == {k: round(v) for k, v in models.integration(c).items()}
+    # the matmul's LUT model was calibrated at 1, 4 and 8 lanes: elsewhere it says so
+    from waveflow.calib.confidence import ConfidenceLevel
+
+    def level(c):
+        top = elaborate(
+            M.comp_class("det"), M.elab_params("det", c), name="cg_detector"
+        )
+        return compose(top, model_for=MD.model_for(models)).level
+
+    assert level(HwConfig(L=4)) is ConfidenceLevel.INTERPOLATED
+    assert level(HwConfig(L=16, C=16)) is ConfidenceLevel.EXTRAPOLATED
+    assert level(HwConfig(L=2)) is ConfidenceLevel.EXTRAPOLATED
 
 
 # --- the Python block models use the calibrated spans (step 5.5) ---------------------------------
@@ -234,6 +267,14 @@ def test_block_cycles_come_from_the_models_inside_the_space():
     assert mm_cycles(8, 32, 4, 8, 4, 3, c.fmt) == pytest.approx(spans["mm.iter"])
     # outside the space (the stress format, or no format given) the rough fallback remains
     assert MD.block_span("vec.iter", 2, K=8, L=4) is None
+    # nor does a span extrapolate: another block size, or knobs outside the space, give None
+    assert MD.block_span("vec.iter", c.fmt, N=8, K=4, L=4) is None
+    assert MD.block_span("vec.iter", c.fmt, K=32, L=4) is None
+    assert MD.block_span("vec.iter", c.fmt, K=8, L=32) is None
+    assert MD.block_span("mm.iter", c.fmt, K=8, R=3, C=8, L=4, cmul=4) is None
+    assert vec_cycles(IterOp.ITER, 4, 8, 4, c.fmt) == 10 + 2 * (
+        12 + 80
+    )  # N = 8: the fallback
     assert (
         vec_cycles(IterOp.ITER, 8, 32, 4)
         == 10 + 8 * (24 + 80)
@@ -330,6 +371,81 @@ def test_ac5_on_the_held_out_builds():
     assert all(r["pass"] == "1" for r in gates.values())
     assert gates["blocks: DSP and BRAM both exact (%)"]["n"] == "34"
     assert gates["designs: LUT MAPE (%)"]["n"] == "10"
+
+
+def test_held_out_builds_that_share_a_block_with_a_fit_build():
+    """Three held-out builds share a block with a fit build of the other kind of top (M5 review).
+    No fitted model saw their rows, but the overlap is stated, and AC5 holds without them.
+    """
+    from examples.mimo_cg.hw import validate as V
+    from examples.mimo_cg.mimo_cg import read_table
+
+    assert V.overlapping() == {
+        "vec_k4_l4_w16g8",  # the vector unit of a fit detector
+        "det_k8_l4_r1_c4_m4_w12g4_d64_s2_q4",  # both hold the fit unit vec_k8_l4_w12g4
+        "det_k8_l4_r8_c32_m4_w12g4_d32_s4_q2",
+    }
+    rows = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_metrics.csv")
+    }
+    disjoint = {m: r for m, r in rows.items() if m.startswith("disjoint from fit")}
+    assert all(
+        r["threshold"] == "" for r in disjoint.values()
+    )  # disclosures, not gates
+    blocks = disjoint["disjoint from fit: blocks DSP and BRAM both exact (%)"]
+    assert (blocks["n"], float(blocks["value"])) == ("31", 100.0)
+    assert disjoint["disjoint from fit: designs LUT MAPE (%)"]["n"] == "8"
+    assert float(disjoint["disjoint from fit: designs LUT MAPE (%)"]["value"]) <= 10.0
+    assert float(disjoint["disjoint from fit: designs FF MAPE (%)"]["value"]) <= 10.0
+    assert (
+        float(disjoint["disjoint from fit: designs job cycles MAPE (%)"]["value"])
+        <= 5.0
+    )
+
+
+def test_what_exact_rests_on():
+    """Most of the 34 exact block comparisons are zero against zero, so the table also states the
+    non-trivial ones: blocks whose BRAM is not zero, and every held-out channel memory.
+    """
+    from examples.mimo_cg.mimo_cg import read_table
+
+    rows = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_metrics.csv")
+    }
+    nonzero = rows["blocks with BRAM > 0: DSP and BRAM both exact (%)"]
+    assert (nonzero["n"], float(nonzero["value"])) == ("11", 100.0)
+    mem = rows["channel memories: BRAM, LUT and FF exact (%)"]
+    assert (mem["n"], float(mem["value"])) == ("134", 100.0)
+    assert float(rows["channel memories with BRAM > 0 (count)"]["value"]) == 124
+
+
+def test_results_files_name_their_tool_version():
+    """Rules 10: every results file of Phase 5 records the tool version it was measured with."""
+    import json
+
+    for name in (
+        "hw_builds",
+        "hw_modules",
+        "hw_cycles",
+        "model_validation",
+        "model_validation_metrics",
+    ):
+        head = (
+            (MD.PAPER_DATA / f"{name}.csv").read_text(encoding="utf-8").splitlines()[0]
+        )
+        assert "tool=vitis_hls 2024.1" in head, name
+    for name in ("impl_check", "impl_check_modules"):
+        head = (
+            (MD.PAPER_DATA / f"{name}.csv").read_text(encoding="utf-8").splitlines()[0]
+        )
+        assert "Vivado v.2024.1" in head and "hls=vitis_hls 2024.1" in head, name
+    side = json.loads(
+        MD.MODEL_FILE.with_suffix(".provenance.json").read_text(encoding="utf-8")
+    )
+    assert side["sha256"] == FROZEN_MODEL_SHA256 and side["tool"] == "vitis_hls 2024.1"
+    assert side["fit_builds"] == MD.Models.load().meta["fit_builds"] == 67
 
 
 # --- the implementation reality check (step 5.9) -------------------------------------------------
@@ -436,7 +552,7 @@ def test_committed_implementation_check_per_module():
         assert sum(int(r["impl_bram"]) for r in mine.values()) == int(
             totals[build]["impl_bram"]
         )
-        # the per-instance LUTs miss only the top's own few
+        # a LUT shared by two instances is counted in both, so the instances add up to a few more
         assert (
             0
             <= sum(int(r["impl_lut"]) for r in mine.values())

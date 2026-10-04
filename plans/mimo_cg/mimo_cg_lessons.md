@@ -275,3 +275,20 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Raise `WANT_XSI_GATES` with every new `xsi` test.** `tests/conftest.py` records how
   many RTL gates the suite has, and a collection test fails when the number is stale.
   Phase 4 added seven gates without raising it; only a full-suite run shows it.
+
+## M5 review (2026-10-04)
+
+- **A uniform held-out draw can miss a corner.** With 12 draws from 225, no K = 16
+  vector-unit build came out (K = 16 is a third of the space). Stratify the draw on the
+  knobs that drive size, or fix a minimum per stratum, before the seed is set.
+- **Check which knob values a fit design skips, and write them down.** The matmul design
+  dropped two lane counts to stay at 26 builds, and its LUT model then extrapolated at 16
+  lanes (16% low) without saying so. A coverage test should state the gaps.
+- **"Exact on 34 of 34" needs its denominator explained.** Most of those comparisons were
+  zero against zero. Report how many cases were non-trivial.
+- **A held-out build can share a block with a fit build of another top.** Exclude block
+  keys across tops when drawing, or disclose the overlap and score without it.
+- **Run the whole fast suite at every milestone.** Running only this example's tests hid
+  a failure in a shared test for a whole phase.
+- **A reality check on one knob setting supports claims about that setting only.** Three
+  implemented designs with the same lanes and format say nothing about narrow formats.

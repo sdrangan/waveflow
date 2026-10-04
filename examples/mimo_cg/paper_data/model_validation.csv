@@ -1,4 +1,4 @@
-# mimo_cg model_validation: numpy=2.5.3, base_seed=20260930, role=holdout, model_sha256=6450abe0889054c8, part=xczu48dr-ffvg1517-2-e
+# mimo_cg model_validation: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, role=holdout, model_sha256=6450abe0889054c8, part=xczu48dr-ffvg1517-2-e
 build,top,scope,quantity,measured,predicted,error,error_pct,exact
 vec_k4_l2_w14g0,vec,block:CgVec,lut,7409,7549,140,1.889600e+00,0
 vec_k4_l2_w14g0,vec,block:CgVec,ff,4823,4620,-203,-4.209000e+00,0

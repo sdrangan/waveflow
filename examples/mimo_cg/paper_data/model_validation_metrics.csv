@@ -1,4 +1,4 @@
-# mimo_cg model_validation: numpy=2.5.3, base_seed=20260930, role=holdout, model_sha256=6450abe0889054c8, part=xczu48dr-ffvg1517-2-e
+# mimo_cg model_validation: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, role=holdout, model_sha256=6450abe0889054c8, part=xczu48dr-ffvg1517-2-e
 metric,n,value,worst,threshold,pass
 blocks: DSP and BRAM both exact (%),34,1.000000e+02,,>= 90,1
 blocks: DSP exact (%),34,1.000000e+02,,,
@@ -19,3 +19,10 @@ glue: FF MAPE (%),10,3.291000e+00,7.000000e+00,,
 unit builds: vec.iter span MAPE (%),12,7.440000e-01,1.412000e+00,,
 unit builds: vec.init span MAPE (%),12,1.270000e+00,3.680000e+00,,
 unit builds: mm.iter span MAPE (%),12,8.030000e-01,1.746000e+00,,
+blocks with BRAM > 0: DSP and BRAM both exact (%),11,1.000000e+02,,,
+"channel memories: BRAM, LUT and FF exact (%)",134,1.000000e+02,,,
+channel memories with BRAM > 0 (count),134,124,,,
+disjoint from fit: blocks DSP and BRAM both exact (%),31,1.000000e+02,,,
+disjoint from fit: designs LUT MAPE (%),8,2.356000e+00,5.717000e+00,,
+disjoint from fit: designs FF MAPE (%),8,2.580000e+00,5.481000e+00,,
+disjoint from fit: designs job cycles MAPE (%),40,6.880000e-01,1.591000e+00,,

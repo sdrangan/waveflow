@@ -117,7 +117,7 @@ def vec_cycles(op: IterOp, K: int, N: int, L: int, fmt: int | None = None) -> fl
         from examples.mimo_cg.hw.models import block_span
 
         kind = "vec.init" if op == IterOp.INIT else "vec.iter"
-        span = block_span(kind, fmt, K=K, L=L)
+        span = block_span(kind, fmt, N=N, K=K, L=L)
         if span is not None:
             return span
     if op == IterOp.INIT:

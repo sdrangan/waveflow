@@ -155,7 +155,9 @@ def parse_hierarchy(text: str) -> dict:
 
     Returns ``{module: {lut, ff, dsp, bram}}`` with ``bram`` in BRAM18 equivalents (a RAMB36 is
     two).  Everything in the top that is not one of the eight tasks — the stream-of-blocks
-    memories, the FIFOs, the bus adapters — is summed as ``integration``.
+    memories, the FIFOs, the bus adapters and the top's own logic — is summed as ``integration``.
+    Vivado counts a LUT shared by two instances in both, so the modules' LUTs add up to a few more
+    than the design's total.
     """
     rows = []
     for line in text.splitlines():
@@ -175,7 +177,7 @@ def parse_hierarchy(text: str) -> dict:
     ]  # wrapper, bd, hls_inst, inst, then the tasks
     out: dict = {"integration": {"lut": 0, "ff": 0, "dsp": 0, "bram": 0}}
     for depth, name, res in rows:
-        if depth != task_depth or name.startswith("("):
+        if depth != task_depth:
             continue
         base = re.sub(r"(_\d+)*_U0?$", "", name)
         module = _TASK_OF.get(base, "integration")
@@ -215,10 +217,19 @@ def module_rows(builds=BUILDS) -> list[dict]:
     return out
 
 
+def _hls_tool() -> str:
+    """The Vitis HLS version the csynth side was measured with (``hw_builds.csv``'s header)."""
+    head = (PAPER_DATA / "hw_builds.csv").read_text(encoding="utf-8").splitlines()[0]
+    return re.search(r"tool=([^,]+)", head).group(1)
+
+
 def write(builds=BUILDS) -> Path:
     path = PAPER_DATA / "impl_check.csv"
+    tools = sorted({r["tool"] for r in rows(builds)})
     note = provenance(
         "impl_check",
+        tool="+".join(tools),
+        hls=_hls_tool(),
         part=B.PART,
         period_ns=B.PERIOD_NS,
         flow="export_design -flow impl",

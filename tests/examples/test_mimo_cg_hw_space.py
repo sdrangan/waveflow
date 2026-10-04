@@ -113,23 +113,51 @@ def test_split_counts_validity_and_disjoint_roles():
     assert counts[("det", "holdout")] >= 5
 
 
-def test_fit_designs_exercise_every_knob_value():
-    """Each calibration design visits every value of every knob its block sees."""
+def test_what_the_fit_designs_visit():
+    """Which knob values each calibration design visits — and which it does not.
+
+    The vector-unit design visits every value of every knob the block sees.  The other two do not
+    (M5 review): the matmul design has 1, 4 and 8 lanes only, and the detector design has
+    W ∈ {8, 12, 16}, g_s ∈ {0, 8} and no C = 32.  A model evaluated at a value its design skipped
+    is extrapolating there.
+    """
     vec, mm, det = space.vec_fit(), space.mm_fit(), space.det_fit()
     assert {c.K for c in vec} == set(space.K_VALUES)
     assert {c.L for c in vec} == set(space.L_VALUES)
     assert {c.W for c in vec} == set(SPACE_W)
     assert {c.g_s for c in vec} == set(SPACE_G)
+
     assert {c.K for c in mm} == set(space.K_VALUES)
     assert {c.R for c in mm} == set(space.R_VALUES)
     assert {c.C for c in mm} == set(space.C_VALUES)
     assert {c.cmul for c in mm} == set(space.CMULS)
     assert {c.W for c in mm} == set(SPACE_W)
+    assert {c.L for c in mm} == {1, 4, 8}  # not 2, not 16
+
     assert {c.K for c in det} == set(space.K_VALUES)
     assert {c.L for c in det} == set(space.L_VALUES)
     assert {c.mem_dw for c in det} == set(space.MEM_DWS)
     assert {c.sob_depth for c in det} == set(space.SOB_DEPTHS)
     assert {c.cmd_depth for c in det} == set(space.CMD_DEPTHS)
+    assert {c.cmul for c in det} == set(space.CMULS)
+    assert {c.W for c in det} == {8, 12, 16}  # not 10, not 14
+    assert {c.g_s for c in det} == {0, 8}  # not 4
+    assert {c.C for c in det} == {4, 8, 16}  # not 32
+    assert {c.R for c in det} == {1, 4, 8, 16}  # not 2
+
+
+def test_what_the_held_out_draw_covers():
+    """The draw is uniform and seeded, and it came out thin at K = 16 (M5 review): no vector-unit
+    build, three matmul builds with small arrays, and one detector.  Recorded here so that the
+    coverage behind the AC5 numbers is stated wherever they are checked."""
+    vec, mm, det = (space.holdout(t) for t in space.TOPS)
+    assert sorted(c.K for c in vec).count(16) == 0
+    assert sorted(c.K for c in mm).count(16) == 3 and max(c.R for c in mm) == 4
+    assert sorted(c.K for c in det).count(16) == 1
+    assert {c.L for c in vec} == {1, 2, 4, 8, 16}
+    assert {c.L for c in mm} == {1, 2, 4, 8}  # no 16-lane matmul unit
+    assert {c.L for c in det} == {1, 2, 4, 16}
+    assert 10 not in {c.W for c in det}
 
 
 def test_committed_split_is_what_the_code_regenerates(tmp_path):
