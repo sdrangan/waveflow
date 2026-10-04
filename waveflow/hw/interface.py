@@ -753,9 +753,11 @@ class TypedCodecMixin:
         return out
 
     def _pack(self, elements, element_type, count=None, *, word_bw=None) -> Words:
-        """Elements -> hardware words: the element type's vectorized
-        :meth:`~waveflow.hw.dataschema.DataSchema.to_words_numpy` fast path, else the canonical
-        recursive serializer.  *count* — when given — selects the first *count* elements first."""
+        """Elements -> hardware words, by one rule: ``DataArray.specialize(element_type, n)(elements)
+        .serialize()``, whatever *elements* is.  The element type's vectorized
+        :meth:`~waveflow.hw.dataschema.DataSchema.to_words_numpy` is an optimization that must give
+        the same words; otherwise the canonical serializer.  *count* — when given — selects the first
+        *count* elements first."""
         bw = self._codec_word_bw(word_bw)
         if count is not None:
             elements = elements[:int(count)]

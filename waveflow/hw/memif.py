@@ -534,11 +534,14 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         m_axi buffered read at codegen time — the generated kernel fails loudly
         without it (each buffer declares its own bound; there is no fallback).
 
-        Accepts a ``np.ndarray`` (the vectorized fast path for any element type
-        that enables it via :meth:`DataSchema.to_words_numpy`) or a
-        :class:`~waveflow.hw.dataschema.DataArray` / array-like.  Packing is the
-        canonical :meth:`DataSchema.serialize` layout — there is no element-type
-        switch here; the element type decides whether it has a numpy fast path.
+        **One rule, whatever *elements* is:** the words written are
+        ``DataArray.specialize(element_type, n)(elements).serialize()`` -- a
+        ``DataArray``, a ``np.ndarray`` or a list all mean the same values, converted
+        by the ``DataArray`` constructor (which is where any policing of a bad
+        conversion belongs, not here).  Raw words go to :meth:`write`.  A
+        ``np.ndarray`` may take the element type's vectorized
+        :meth:`DataSchema.to_words_numpy` path, an optimization that must produce the
+        same words (``tests/hw/test_maxi_array_roundtrip.py`` checks it).
 
         *count* — when given — selects the first *count* elements before
         packing.  It exists so a synthesizable m_axi write carries an explicit

@@ -169,3 +169,31 @@ def test_a_partial_last_word_is_zero_padded():
 
     w = _run(sim, body)
     assert int(w[0]) == 0xFFFF_FFFF_FFFF_FFFF and int(w[1]) == 0xFFFF
+
+
+# ---------------------------------------------------------------------------
+# The rule: write_array(x, T) == DataArray.specialize(T, n)(x).serialize(), whatever x is
+# ---------------------------------------------------------------------------
+
+I8 = IntField.specialize(bitwidth=8, signed=True)
+I14 = IntField.specialize(bitwidth=14, signed=True)
+U8 = IntField.specialize(bitwidth=8, signed=False)
+
+
+@pytest.mark.parametrize("T,x", [
+    (I8, np.array([1.7, -1.7, 2.5, -2.5, 127.9])),            # floats into ints
+    (I8, np.array([127, 128, 300, -129], dtype=np.int32)),    # out of range: wraps
+    (U8, np.array([-1, 256], dtype=np.int64)),
+    (I14, np.array([8191, 8192, -8193, 3.7])),                # not whole bytes: no fast path
+    (ELEMS["f32"], np.array([1, 2, 3], dtype=np.int32)),      # ints into floats
+    (ELEMS["i16"], np.array([1.5, -0.5, 40000.0])),
+], ids=["f64->i8", "i32->i8 wrap", "i64->u8 wrap", "f64->i14", "i32->f32", "f64->i16"])
+@pytest.mark.parametrize("word_bw", [32, 64])
+def test_any_input_packs_as_its_dataarray(T, x, word_bw):
+    """The numpy fast path is an optimization of the DataArray conversion, never a second rule:
+    an ndarray of any dtype packs to exactly the words its DataArray does."""
+    ref = DataArray.specialize(T, max_shape=(len(x),))(x).serialize(word_bw=word_bw)
+    m = MMIFMaster(name="m", sim=Simulation(), bitwidth=word_bw)
+    for form in (x, list(x)):
+        assert np.array_equal(np.asarray(m._pack(form, T, word_bw=word_bw), dtype=np.uint64),
+                              np.asarray(ref, dtype=np.uint64))
