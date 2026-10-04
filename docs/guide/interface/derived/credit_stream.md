@@ -5,7 +5,7 @@ grand_parent: Interfaces
 nav_order: 3
 audience: python
 snippets: run
-summary: "CreditStreamIF — a forward stream plus a reverse credit channel, so a producer knows there is room before it commits. Built from two ordinary StreamIFs. Use it only when the producer cannot abandon a transaction partway; if it can simply block, a plain StreamIF is better and cheaper."
+summary: "CreditStreamIF — a forward stream plus a reverse credit channel, so a producer knows there is room before it commits. Built from two ordinary StreamIFs. Use it when the producer cannot abandon a transaction partway, or when the stream crosses a shared bus (where blocking stalls the bus) -- then MmCreditStreamIF routes the same endpoints over a crossbar.  If the producer can simply block on a point-to-point link, a plain StreamIF is better and cheaper."
 ---
 
 # Credit Stream
@@ -27,8 +27,16 @@ multi-word transaction it **cannot abandon partway**. A data converter is the mo
 presents samples whether or not the fabric is ready, so discovering halfway through a burst that
 there is no room is not a situation it can be in.
 
-**If your producer can simply block, it should.** Use a plain [`StreamIF`](../primitive/stream.md)
-and let `write` stall. Credit buys nothing there and costs you a second channel.
+**If your producer can simply block, it should** -- on a point-to-point link. Use a plain
+[`StreamIF`](../primitive/stream.md) and let `write` stall. Credit buys nothing there and costs you
+a second channel.
+
+**Unless the link crosses a shared bus.** A producer writing another kernel's queue over a crossbar
+cannot "simply block": a write into a full queue stalls the bus itself -- the crossbar path and the
+target's adaptor front, which serves every view behind it for every master, including the reads that
+would drain the queue. So a producer that is perfectly willing to wait still needs to know there is
+room *before* it writes. That is credit again, for a different reason; see
+[Over a shared bus](#over-a-shared-bus).
 
 The other reverse channel answers the opposite question: [Acked Stream](./acked_stream.md) reports
 *what became of what you sent* — after the fact, from the only party that can know.
@@ -80,6 +88,7 @@ site.
 | | `ctr_bits` | width of the cumulative counter (16), and therefore of the reverse channel |
 | `CreditStreamMasterIF` | `resp_words` | headroom reserved so a response can never be refused for room |
 | `CreditStreamSlaveIF` | `queue_size` | optional bound on the consumer's receive queue |
+| | `crd_every` | offer credit once this many words are unreported (default 1: after every read). Batching matters when every offer costs something -- a bus write |
 
 ## The methods
 
@@ -89,6 +98,8 @@ site.
 |---|---|
 | `poll_credit(n=1)` | take **up to** *n* credit values; returns how many were taken |
 | `write_nb(words)` | write if the accounting says it fits, else refuse. **Never blocks**; returns `bool` |
+| `write(words)` | for a producer that **may wait**: sleep on the credit channel until the burst fits, then write. The wait is on a credit *arriving* -- nothing is re-read -- and the write that follows cannot stall |
+| `max_write` | the longest burst `write` accepts: `depth - resp_words - (crd_every - 1)` |
 | `write_resp_nb(resp)` | write a response, drawing on the reserved headroom so room cannot refuse it |
 | `avail`, `depth` | what the accounting believes is free |
 
@@ -157,6 +168,55 @@ translation.
 fills and offers start dropping, the producer's view stops advancing and never recovers on its own,
 because nothing retransmits. Size `credit_depth` so that cannot happen; it is a sizing violation,
 not a transient.
+
+## Over a shared bus
+
+[`MmCreditStreamIF`](../../../../waveflow/hw/mm_credit.py) carries the same channel across a crossbar.
+The kernels keep their `CreditStreamMasterIF` / `CreditStreamSlaveIF` endpoints and their code; only
+the transport changes:
+
+| | `CreditStreamIF` (direct) | `MmCreditStreamIF` (routed) |
+|---|---|---|
+| forward | a stream into the consumer's FIFO | the producer's **bus writer** -> the consumer's **queue-in view** (`[len \| data]`) |
+| reverse | a stream of cumulative counts | the consumer's bus writer -> the producer's **credit-in view** |
+| the receiver's buffer | the stream FIFO | the queue-in view's FIFO, the same `depth` |
+
+The kernels declare the two views like any other memory-mapped view -- a `QueueIn` on the consumer's
+credit port, a `CreditIn` on the producer's -- so building each kernel's memory-mapped device joins
+each view to the right half of its endpoint. The channel then builds the two bus writers, whose
+`m_mem` ports go on the crossbar, and is placed once addresses are assigned:
+
+```text
+gen_dev   = build_mm_device(gen, ...)       # CreditIn("u_crd", port="m_u")
+chain_dev = build_mm_device(chain, ...)     # QueueIn("qu", port="s_u", depth=64)
+link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=64)
+link.bind("master", gen.m_u)
+link.bind("slave", chain.s_u)
+masters += link.bus_masters()               # the forward writer and the credit writer
+...                                         # crossbar, assign_address_ranges
+link.place(qin=chain_map["qu"], crd_in=gen_map["u_crd"])
+```
+
+Three things make it safe to put on a shared bus:
+
+- **The producer never stalls the bus.** Its credit counts every word not yet consumed -- in its
+  writer, on the bus, and in the queue -- so the queue always has room for what arrives. The queue-in
+  view counts any packet that did not fit (`nstall`); a credit-respecting producer keeps it zero.
+- **A credit write never waits.** The credit-in view is a latest-value register, not a queue: because
+  the count is cumulative, the newest value is the whole truth, so it may overwrite one the kernel has
+  not taken yet. (A register bank's COMMIT, by contrast, waits for the kernel to take the previous
+  config.) The same fact retires the fourth rule above -- a one-value register cannot saturate.
+- **Batched credit stays live.** Every offer is a bus write, so the consumer batches (`crd_every`).
+  A consumer may then sit on up to `crd_every - 1` unreported words indefinitely; the producer's
+  `max_write` shrinks by exactly that much, so a waiting producer always gets its room.
+
+**Several writers into one kernel** get one channel each -- one queue per writer, as NVMe gives each
+core its own submission queue -- and the receiving kernel round-robins over its inputs. Credits go
+back point to point, to the writer that used them, so nothing is broadcast and no two writers can race
+for the same slots.
+
+The worked example is [Markov](../../../examples/markov/index.md): two kernels on one crossbar, the
+link between them routed, the host waiting on interrupts.
 
 ## See also
 

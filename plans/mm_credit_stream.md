@@ -1,6 +1,9 @@
 # Plan: CreditStreamIF over the bus -- kernel-to-kernel flow control, and the Markov example
 
-> **Status (2026-10-03): proposed.**  Supersedes Part B of `plans/no_polling_next.md` (the two-kernel
+> **Status (2026-10-04): BUILT, Stages 0-5** (branch `mm-credit-stream`).  Departures are in **Built**
+> at the end; the open items are pysim's 28% timing gap at RTL and the two "Open" questions below.
+>
+> Was: **proposed (2026-10-03).**  Supersedes Part B of `plans/no_polling_next.md` (the two-kernel
 > example is this plan's gate).  Builds on `plans/mm_irq.md`, `plans/bus_address_map.md` (D6: a kernel
 > as bus master) and `waveflow/hw/reverse_stream.py` (`CreditStreamIF`, `plans/rf_samp_new.md` Stage 0).
 
@@ -144,3 +147,39 @@ host <- mem        : x
 - Whether `MmStreamWriter` lives inside the kernel's HLS (an `m_axi` port) or as a separate RTL block
   beside it.  The HLS route is simpler to generate; a separate block keeps the kernel streams-only.
   Decide at Stage 3.
+
+## Built
+
+- **Stage 0.**  `CreditStreamMasterIF.write` (blocking; sleeps on the credit channel) and
+  `CreditStreamSlaveIF.crd_every`.  **D5 changed:** the "flush when the queue drains" rule is gone --
+  right in pysim (burst-granular), but at RTL a queue fed one word every few cycles is momentarily
+  empty after nearly every read, and the flush would send a credit per word.  Liveness comes instead
+  from `max_write = depth - resp_words - (crd_every - 1)`: a producer writing no more than that always
+  gets its room.  `FramedCreditStreamMasterIF`: the forward boundary port gets a TLAST pin, which the
+  routed writer needs to frame a write.
+- **Stage 1.**  `waveflow/hw/mm_credit.py`: `MemSlaveCreditIn` (latest-value, a write never waits),
+  `MmStreamWriter` (queue / credit modes), `MmCreditStreamIF` (binds the same endpoints; `place` after
+  addresses).  Kernels declare `CreditIn` / `QueueIn` on their credit ports; `build_mm_device` joins the
+  right half.  `MemSlaveWStream.nstall` counts packets that stalled the bus (gate: 0; a producer told
+  the wrong depth is the negative control).
+- **Stage 2.**  `examples/markov`.  **D3 changed in detail:** the chain is a composite (core + the
+  framework's in-band `MemWStream`), so `x` goes out through an existing component and the response is
+  forwarded only once `x` is stored -- found by asking what already writes a stream to memory (the
+  search-first rule).  **D8 changed:** a writer's peer base is a stable input wire the system top drives,
+  not a host-set register -- still not compiled into the kernel.  Plain memories join the bases header
+  (`bus_memory = True`).
+- **Two framework defects found on the way**, both silent at one lane per word: the numpy array fast
+  path put one element per word (the serializer packs densely), and an `m_axi` array read charged one
+  word per element (up to 8x the words).  Fixed, with `tests/hw/test_dense_array_fast_path.py`.
+- **Stage 3.**  All four tops at II=1 inside 10 ns: `markov_gen` 9.92 ns (17.4 ns before admission and
+  the first draw were split into two firings), the chain core 6.8 ns (10.3 ns before the empty-job
+  test moved off the header read), the writers 7.3 ns.  A scalar `hls::task` argument csynths.
+- **Stage 4.**  Four masters on a generated 4x3 crossbar (`id_width=2`); the shared memory is a BRAM view
+  rather than a memory BFM -- the BFM slaves echo no AXI IDs, which a multi-master crossbar routes
+  responses by.  The top is wired from the csynth'd modules' own port lists.  Gates
+  (`tests/examples/test_markov_xsi.py`): bit-exact, no polls, **2356 cycles**.  `WANT_XSI_GATES` 145.
+- **Open: pysim is 28% fast at RTL** (1700 vs 2356).  Hypothesis, not yet probed: the RTL queue writer
+  gathers a whole write before bursting, and nothing buffers the generator while it bursts.
+- **Stage 5.**  `credit_stream.md` (over a shared bus; `write`, `max_write`, `crd_every`), the slave views
+  page (credit in), `docs/examples/markov/index.md`.
+
