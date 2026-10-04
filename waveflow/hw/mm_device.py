@@ -32,9 +32,11 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.mm_adaptor import VIEW_BYTES, MemSlaveAdaptor
 from waveflow.hw.mm_bram import MemSlaveBramWindow
+from waveflow.hw.mm_credit import MemSlaveCreditIn
 from waveflow.hw.mm_host import MemSlaveLayout, ViewEntry
 from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
 from waveflow.hw.mm_regbank import MemSlaveRegBank
+from waveflow.hw.reverse_stream import CreditStreamMasterIF, CreditStreamSlaveIF
 
 # ---------------------------------------------------------------------------
 # What a kernel type declares
@@ -73,6 +75,18 @@ class RegBank:
     status_type: type
     status_depth: int = 8
     view_kind: ClassVar[str] = "regbank"
+
+
+@dataclass(frozen=True)
+class CreditIn:
+    """A credit-in window feeding the credit half of the kernel's ``CreditStreamMasterIF`` *port*:
+    the producer end of a :class:`~waveflow.hw.mm_credit.MmCreditStreamIF`.  (The consumer end is an
+    ordinary :class:`QueueIn` on its ``CreditStreamSlaveIF``.)"""
+
+    name: str
+    port: str
+    ctr_bits: int = 16
+    view_kind: ClassVar[str] = "credit_in"
 
 
 @dataclass(frozen=True)
@@ -115,6 +129,8 @@ def layout_of(kernel_type, *, mem_dwidth: int = 64) -> MemSlaveLayout:
             out[sp.name] = ViewEntry(**common, cfg_type=sp.cfg_type, status_type=sp.status_type,
                                      ncfg=int(sp.cfg_type.nwords_per_inst(dw)),
                                      nstat=int(sp.status_type.nwords_per_inst(dw)))
+        elif sp.view_kind == "credit_in":
+            out[sp.name] = ViewEntry(**common)
         else:
             out[sp.name] = ViewEntry(**common, nelem=int(sp.nelem))
     return MemSlaveLayout(out, span=_span(len(specs)))
@@ -174,17 +190,23 @@ def build_mm_device(kernel, *, sim, clk: Clock, mem_dwidth: int = 64, one_front:
         si.bind(ep_name="slave", endpoint=slave)
         streams[name] = si
 
-    def port(name):
+    def port(name, half=None):
         ep = getattr(kernel, name, None)
         if ep is None:
             raise AttributeError(f"{type(kernel).__name__} has no port {name!r} (named in mm_views)")
+        # A credit endpoint is two streams; a view joins one of them (plans/mm_credit_stream.md).
+        if isinstance(ep, (CreditStreamMasterIF, CreditStreamSlaveIF)):
+            if half is None:
+                raise TypeError(f"{type(kernel).__name__}.{name} is a credit endpoint; only a "
+                                f"queue in (consumer) or a credit in (producer) can reach it")
+            return getattr(ep, half)
         return ep
 
     for sp in _specs(type(kernel)):
         vname = f"{prefix}{sp.name}"
         if sp.view_kind == "queue_in":
             v = MemSlaveWStream(name=vname, sim=sim, mem_dwidth=dw, depth=sp.depth, clk=clk)
-            join(f"k_{sp.name}", v.m_out, port(sp.port), sp.depth)
+            join(f"k_{sp.name}", v.m_out, port(sp.port, "fwd_ep"), sp.depth)
         elif sp.view_kind == "queue_out":
             v = MemSlaveRStream(name=vname, sim=sim, mem_dwidth=dw, depth=sp.depth, clk=clk)
             join(f"k_{sp.name}", port(sp.port), v.s_in, sp.depth)
@@ -193,6 +215,14 @@ def build_mm_device(kernel, *, sim, clk: Clock, mem_dwidth: int = 64, one_front:
                                 status_type=sp.status_type, mem_dwidth=dw, clk=clk)
             join(f"k_{sp.name}_cfg", v.m_cfg, port(sp.cfg_port), v.ncfg)
             join(f"k_{sp.name}_stat", port(sp.status_port), v.s_status, sp.status_depth)
+        elif sp.view_kind == "credit_in":
+            v = MemSlaveCreditIn(name=vname, sim=sim, mem_dwidth=dw, ctr_bits=sp.ctr_bits, clk=clk)
+            crd = port(sp.port, "crd_ep")
+            si = StreamIF(name=f"{prefix}k_{sp.name}", sim=sim, clk=clk, bitwidth=int(sp.ctr_bits),
+                          depth=2)
+            si.bind(ep_name="master", endpoint=v.m_out)
+            si.bind(ep_name="slave", endpoint=crd)
+            streams[f"k_{sp.name}"] = si
         else:
             v = MemSlaveBramWindow(name=vname, sim=sim, mem_dwidth=dw, nelem=sp.nelem, clk=clk)
         views[sp.name] = v
@@ -257,5 +287,5 @@ def bus_address_headers(xbar, *, system: str) -> dict[str, str]:
     return out
 
 
-__all__ = ["QueueIn", "QueueOut", "RegBank", "BramWindow", "layout_of", "MmSlaveDevice",
+__all__ = ["QueueIn", "QueueOut", "RegBank", "CreditIn", "BramWindow", "layout_of", "MmSlaveDevice",
            "build_mm_device", "bus_address_headers"]
