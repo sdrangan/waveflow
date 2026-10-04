@@ -212,3 +212,24 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Trace the top before guessing.** The VCD dumper (run.sh `trace`) shows each task's
   done count and each FIFO's full/empty state at the hang. Two pages of output named
   the culprit after two blind hypotheses had only narrowed it down.
+
+## Gate 5.0 (2026-10-04)
+
+- **A unit's job interval is not the block's time.** In a per-block unit, a fast block
+  waits for memory. Two of eight probes were memory-bound: the job interval was not even
+  linear in nit (residuals of 61–64 cycles). Measure a block from its own
+  stream-of-blocks handshakes in a level-1 trace.
+- **csynth's latency report is not the RTL's cycle count.** For the two CG blocks it
+  overstates the measured per-iteration cycles by a constant 85 at K = 4, 8 and 16.
+  Use it for nothing that will be quoted.
+- **A task's csynth row does not depend on the top.** The vector unit and the matmul have
+  identical rows in their unit builds and in the detector. So resources compose exactly
+  at the csynth level, and the integration term is only channels, FIFOs and adapters.
+- **Narrow multiplies leave the DSPs.** At W = 8 the vector unit has 3 DSPs for 12
+  multiplies. "One DSP per multiply" holds at W = 12 and above, not below.
+- **csynth and implementation disagree by a lot.** On the probe design: 805 → 340 LUT,
+  1,431 → 279 FF, 32 → 26 DSP. State which one a number is.
+- **The RTL run's cost is elaboration, not simulation.** A 6-job run of a 120k-LUT build
+  took 4–5 minutes, almost all of it in xelab; a small build takes about one.
+- **A 32-bit memory word doubles the done words.** `CgDesc` is two words at 32 bits, so
+  the done log has two cycles per job; take the last.
