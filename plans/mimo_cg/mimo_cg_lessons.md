@@ -266,3 +266,12 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   directories let the attribution gain detail after the campaign, for free.
 - **Unit jobs that are block-bound differ from waiting jobs by one cycle.** That is why the
   span is the smallest clean sample, and why it composes exactly in the detector.
+- **csynth LUTs are not implemented LUTs, and the ratio depends on the module.** On the
+  detector csynth is 3.4–3.7× high overall, but 20× high on the matrix loader and about
+  right on the channels. A model can match csynth to 2% and still mislead about where
+  the LUTs are. Check a few designs through place and route before ranking by LUT.
+- **`export_design -flow impl` reuses the csynth project.** Open the project and solution
+  without `-reset`; it took 15–17 minutes per detector, three at a time.
+- **Raise `WANT_XSI_GATES` with every new `xsi` test.** `tests/conftest.py` records how
+  many RTL gates the suite has, and a collection test fails when the number is stale.
+  Phase 4 added seven gates without raising it; only a full-suite run shows it.

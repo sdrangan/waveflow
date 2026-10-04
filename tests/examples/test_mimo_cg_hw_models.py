@@ -330,3 +330,119 @@ def test_ac5_on_the_held_out_builds():
     assert all(r["pass"] == "1" for r in gates.values())
     assert gates["blocks: DSP and BRAM both exact (%)"]["n"] == "34"
     assert gates["designs: LUT MAPE (%)"]["n"] == "10"
+
+
+# --- the implementation reality check (step 5.9) -------------------------------------------------
+
+_EXPORT_RPT = """\
+Implementation tool: Xilinx Vivado v.2024.1
+Project:             probe_proj
+Solution:            solution1
+Device target:       xczu48dr-ffvg1517-2-e
+Report date:         Sun Oct 04 12:10:39 EDT 2026
+
+#=== Post-Implementation Resource usage ===
+SLICE:            0
+LUT:            340
+FF:             279
+DSP:             26
+BRAM:             0
+URAM:             0
+LATCH:            0
+SRL:              0
+CLB:             51
+
+#=== Final timing ===
+CP required:                     4.000
+CP achieved post-synthesis:      1.548
+CP achieved post-implementation: 2.363
+Timing met
+"""
+
+
+def test_implementation_report_parser():
+    from examples.mimo_cg.hw.impl_check import parse_report
+
+    got = parse_report(_EXPORT_RPT)
+    assert (got["lut"], got["ff"], got["dsp"], got["bram"], got["srl"], got["clb"]) == (
+        340,
+        279,
+        26,
+        0,
+        0,
+        51,
+    )
+    assert (got["cp_required"], got["cp_post_synth"], got["cp_post_impl"]) == (
+        4.0,
+        1.548,
+        2.363,
+    )
+    assert got["timing_met"] == 1 and got["tool"] == "Xilinx Vivado v.2024.1"
+    assert (
+        parse_report(_EXPORT_RPT.replace("Timing met", "Timing not met"))["timing_met"]
+        == 0
+    )
+    with pytest.raises(ValueError, match="no 'dsp'"):
+        parse_report(_EXPORT_RPT.replace("DSP:", "D5P:"))
+
+
+def test_committed_implementation_check():
+    """The three default detectors, implemented by Vivado 2024.1 on xczu48dr at the 4 ns target."""
+    from examples.mimo_cg.hw import impl_check as I
+    from examples.mimo_cg.mimo_cg import read_table
+
+    path = I.PAPER_DATA / "impl_check.csv"
+    header = path.read_text(encoding="utf-8").splitlines()[0]
+    assert "part=xczu48dr-ffvg1517-2-e" in header and "period_ns=4" in header
+    rows = read_table(path)
+    assert [r["build"] for r in rows] == list(I.BUILDS) and [r["K"] for r in rows] == [
+        "4",
+        "8",
+        "16",
+    ]
+    builds = {r["build"]: r for r in read_table(I.PAPER_DATA / "hw_builds.csv")}
+    for r in rows:
+        assert "Vivado v.2024.1" in r["tool"]
+        assert all(
+            int(r[f"csynth_{k}"]) == int(builds[r["build"]][k])
+            for k in ("lut", "ff", "dsp", "bram")
+        )
+        assert int(r["impl_lut"]) > 0 and int(r["impl_ff"]) > 0
+        assert float(r["lut_ratio"]) == pytest.approx(
+            int(r["csynth_lut"]) / int(r["impl_lut"]), abs=1e-3
+        )
+        assert float(r["cp_required_ns"]) == 4.0
+
+
+def test_committed_implementation_check_per_module():
+    """Per module, csynth against the implemented instance: the rows add up to the build totals,
+    the eight tasks and the integration term are all there, and DSP differs only in the vector unit.
+    """
+    from examples.mimo_cg.hw import impl_check as I
+    from examples.mimo_cg.mimo_cg import read_table
+
+    totals = {r["build"]: r for r in read_table(I.PAPER_DATA / "impl_check.csv")}
+    rows = read_table(I.PAPER_DATA / "impl_check_modules.csv")
+    for build in I.BUILDS:
+        mine = {r["module"]: r for r in rows if r["build"] == build}
+        assert set(mine) == {*MD.DETECTOR_MODULES, "integration"}
+        for k in ("lut", "ff", "dsp", "bram"):
+            assert sum(int(r[f"csynth_{k}"]) for r in mine.values()) == int(
+                totals[build][f"csynth_{k}"]
+            )
+        assert sum(int(r["impl_dsp"]) for r in mine.values()) == int(
+            totals[build]["impl_dsp"]
+        )
+        assert sum(int(r["impl_bram"]) for r in mine.values()) == int(
+            totals[build]["impl_bram"]
+        )
+        # the per-instance LUTs miss only the top's own few
+        assert (
+            0
+            <= sum(int(r["impl_lut"]) for r in mine.values())
+            - int(totals[build]["impl_lut"])
+            < 20
+        )
+        differ = {m for m, r in mine.items() if r["csynth_dsp"] != r["impl_dsp"]}
+        assert differ == {"CgVec"}
+        assert int(mine["CgVec"]["impl_dsp"]) - int(mine["CgVec"]["csynth_dsp"]) == 16

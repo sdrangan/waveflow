@@ -1,0 +1,5 @@
+# mimo_cg impl_check: numpy=2.5.3, base_seed=20260930, part=xczu48dr-ffvg1517-2-e, period_ns=4, flow=export_design -flow impl
+build,K,csynth_lut,impl_lut,csynth_ff,impl_ff,csynth_dsp,impl_dsp,csynth_bram,impl_bram,lut_ratio,ff_ratio,impl_srl,impl_clb,csynth_est_ns,cp_required_ns,cp_post_synth_ns,cp_post_impl_ns,timing_met,impl_seconds,tool
+det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2,4,32991,9601,19791,12591,112,128,20,12,3.436000e+00,1.572000e+00,261,2126,3.352000e+00,4.000000e+00,1.974000e+00,3.473000e+00,1,8.812000e+02,Xilinx Vivado v.2024.1
+det_k8_l4_r8_c4_m4_w12g8_d64_s2_q2,8,41628,11201,24399,15785,176,192,26,32,3.716000e+00,1.546000e+00,260,2581,3.352000e+00,4.000000e+00,1.974000e+00,3.469000e+00,1,9.441000e+02,Xilinx Vivado v.2024.1
+det_k16_l4_r16_c4_m4_w12g8_d64_s2_q2,16,60770,17450,36046,24901,304,320,63,48,3.483000e+00,1.448000e+00,266,3959,3.352000e+00,4.000000e+00,2.021000e+00,3.589000e+00,1,1.046400e+03,Xilinx Vivado v.2024.1
