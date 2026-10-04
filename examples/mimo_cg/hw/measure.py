@@ -171,6 +171,31 @@ def cycles_bound(top: str, c: HwConfig, jobs: list[int]) -> int:
     return int(1.5 * (sum(jobs) * per_iter + len(jobs) * (per_iter + per_job))) + 5000
 
 
+#: A model-based budget is this much above the predicted run, plus :data:`BUDGET_SLACK` cycles.
+BUDGET_MARGIN = 1.25
+BUDGET_SLACK = 4000
+
+
+def cycles_budget(c: HwConfig, jobs: list[int]) -> int:
+    """A tight budget for a detector run, from the calibrated job time (falls back to
+    :func:`cycles_bound` when there is no model file).
+
+    A thousand-build campaign cannot afford :func:`cycles_bound`, which is three to seven times
+    what a run needs.  Here each job is budgeted at its predicted time, or at the time its matrices
+    take to cross the memory port when that is longer, with :data:`BUDGET_MARGIN` on top.  It is a
+    budget and nothing else: :func:`measure` checks the done count afterwards and runs again with
+    twice the cycles on a miss, so a budget cannot change a measured interval.
+    """
+    from examples.mimo_cg.hw import models as MD
+
+    models = MD.calibrated()
+    if models is None:
+        return cycles_bound("det", c, jobs)
+    words = (c.K * c.K + 2 * c.K * DEFAULT_N) * 32 // c.mem_dw  # A and B in, X out
+    need = sum(max(models.job_cycles(c, nit), words) for nit in jobs)
+    return int(BUDGET_MARGIN * need) + 3 * words + BUDGET_SLACK
+
+
 def _sim(top: str, c: HwConfig, problems, jobs, n_cycles: int):
     kw = elab_params(top, c) | {"n_cycles": n_cycles}
     kw.pop("N")
@@ -635,7 +660,8 @@ def measure(
         rec["resources"] = attribute(top, c, out_dir)
 
         problems, jobs = workload(top, c, build, steady)
-        n_cycles = cycles_bound(top, c, jobs)
+        tight = steady and top == "det"
+        n_cycles = cycles_budget(c, jobs) if tight else cycles_bound(top, c, jobs)
         if trace:
             _write_dumper(out_dir, top)
         started = time.perf_counter()

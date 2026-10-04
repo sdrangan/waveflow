@@ -530,6 +530,190 @@ def test_merge_writes_the_three_tables_for_the_asked_roles_only(tmp_path):
         C.merge(("fit", "holdout"), points_dir=points, out_dir=tmp_path)
 
 
+# --- the brute-force harness (plan step 6.3) ---------------------------------------------------
+
+
+def test_steady_job_list_issues_short_jobs_twice():
+    from examples.mimo_cg.hw.space import NITS
+
+    assert M.job_nits(4, steady=True) == [1, 1, 2, 2, 3, 3, 4, 4]
+    assert M.job_nits(8, steady=True) == [1, 1, 2, 2, 3, 3, 4, 4, 6, 8]
+    assert M.job_nits(16, steady=True) == [1, 1, 2, 2, 3, 3, 4, 4, 6, 8, 12, 16]
+    for (
+        K,
+        nits,
+    ) in NITS.items():  # every iteration count of the accuracy table, in rising order
+        jobs = M.job_nits(K, steady=True)
+        assert tuple(dict.fromkeys(jobs)) == nits and jobs == sorted(jobs)
+    assert M.job_nits(8) == [1, 2, 3, 8, 1, 2]  # the calibration list is unchanged
+    _problems, jobs = M.workload("det", HwConfig(K=8, R=8), "bf_x", steady=True)
+    assert jobs == M.job_nits(8, steady=True) and len(_problems) == len(jobs)
+
+
+def test_steady_intervals_take_the_last_job_of_each_count():
+    """A stream of equal jobs settles after the first; the job time is the second one's interval.
+    Here T0 = 100 and T_iter = 50, and the first job of each pair is 30 cycles late."""
+    jobs = M.job_nits(8, steady=True)
+    done, t, prev = [], 0, None
+    for n in jobs:
+        t += 100 + 50 * n + (30 if n != prev and n <= 4 else 0)
+        done.append(t)
+        prev = n
+    fit = M.job_intervals(done, jobs, steady=True)
+    assert fit["steady"] == {"1": 150, "2": 200, "3": 250, "4": 300, "6": 400, "8": 500}
+    assert fit["t0"] == pytest.approx(100) and fit["t_iter"] == pytest.approx(50)
+    assert fit["max_resid"] == pytest.approx(0, abs=1e-6)
+    # every interval is still recorded, the late ones included
+    assert (
+        fit["nit"] == jobs[1:]
+        and fit["interval"][1] == 230
+        and fit["interval"][2] == 200
+    )
+    # without the flag the same completions are one fit over all of them
+    plain = M.job_intervals(done, jobs)
+    assert "steady" not in plain and plain["max_resid"] > 10
+
+
+def test_model_budget_covers_every_measured_detector_run():
+    """The brute force budgets a run from the predicted job time.  Against the committed runs of
+    the 28 measured detectors it leaves at least 25% to spare, and it is at most half of the
+    model-free bound.  (A budget that is too small costs a second run, never a wrong number.)
+    """
+    from examples.mimo_cg.hw import campaign as C
+    from examples.mimo_cg.mimo_cg import read_table
+
+    need: dict = {}
+    for r in read_table(M.POINTS_DIR.parents[1] / "paper_data" / "hw_cycles.csv"):
+        if r["top"] == "det" and r["quantity"] in ("first_done", "job_interval"):
+            need[r["build"]] = need.get(r["build"], 0) + float(r["cycles"])
+    assert len(need) == 28
+    for build, last_done in need.items():
+        _top, _role, c = C.split()[build]
+        budget = M.cycles_budget(c, M.job_nits(c.K))
+        assert budget >= 1.25 * last_done, (build, budget, last_done)
+        assert budget <= 0.5 * M.cycles_bound("det", c, M.job_nits(c.K)), build
+    # the steady list is longer, and so is its budget
+    slow = HwConfig(K=16, L=1, R=1, C=4, W=16, g_s=8, mem_dw=32)
+    assert M.cycles_budget(slow, M.job_nits(16, steady=True)) > M.cycles_budget(
+        slow, M.job_nits(16)
+    )
+
+
+def test_prune_build_keeps_the_reports(tmp_path):
+    sol = tmp_path / "cg_detector_proj" / "solution1"
+    keep = [
+        sol / "syn" / "report" / "cg_detector_csynth.rpt",
+        tmp_path / "csynth.log",
+        tmp_path / "gen" / "cg_detector.cpp",
+        tmp_path / "xsi" / "vectors" / "s_done" / "cycles.bin",
+    ]
+    drop = [
+        sol / ".autopilot" / "db" / "a.bc",
+        sol / "impl" / "verilog" / "x.v",
+        sol / "syn" / "verilog" / "cg_detector.v",
+        tmp_path / "xsi" / "xsim.dir" / "work" / "lib.so",
+        tmp_path / "xsi" / "cg_detector_bfm.wdb",
+    ]
+    for path in keep + drop:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    M.prune_build(tmp_path, "cg_detector")
+    assert all(p.is_file() for p in keep) and not any(p.exists() for p in drop)
+    M.prune_build(tmp_path, "cg_detector")  # a second pass has nothing to do
+
+
+def test_campaign_keeps_the_brute_force_apart(tmp_path, monkeypatch):
+    """Its builds run the steady list without a waveform and are pruned; its tables are its own."""
+    import json
+
+    from examples.mimo_cg.hw import campaign as C
+    from examples.mimo_cg.mimo_cg import read_table
+
+    brute = [(b, c) for b, (_t, role, c) in C.split().items() if role == C.BRUTEFORCE]
+    assert len(brute) == 1440 and all(
+        t == "det" for t, r, _c in C.split().values() if r == C.BRUTEFORCE
+    )
+    build, c = brute[0]
+
+    calls = []
+    monkeypatch.setattr(
+        M, "measure", lambda *a, **kw: calls.append(kw) or {"build": a[0]}
+    )
+    monkeypatch.setattr(M, "POINTS_DIR", tmp_path)
+    C.HwPointStep(name="hw_point").run(None, build=build)
+    C.HwPointStep(name="hw_point").run(None, build="det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2")
+    assert calls[0] == {
+        "role": "bruteforce",
+        "steady": True,
+        "trace": False,
+        "prune": True,
+    }
+    assert calls[1] == {"role": "fit", "steady": False, "trace": True, "prune": False}
+    text = C.DryPointStep(name="hw_dry").run(None, build=build)["hw_dry"].read_text()
+    assert f"jobs={M.job_nits(c.K, steady=True)}" in text
+
+    points = tmp_path / "points"
+    points.mkdir()
+    for b, cfg in brute:
+        rec = _fake_record(b, "det", C.BRUTEFORCE, cfg)
+        rec["intervals"] |= {"steady": {"2": 210, "3": 310}}
+        del rec["spans"]
+        (points / f"{b}.json").write_text(json.dumps(rec))
+    out = C.merge((C.BRUTEFORCE,), points_dir=points, out_dir=tmp_path)
+    assert sorted(out) == [
+        "bruteforce_builds",
+        "bruteforce_cycles",
+        "bruteforce_modules",
+    ]
+    assert len(read_table(out["bruteforce_builds"])) == 1440
+    modules = read_table(out["bruteforce_modules"])
+    assert len(modules) == 1440 and {r["kind"] for r in modules} == {"module"}
+    cycles = read_table(out["bruteforce_cycles"])
+    times = [r for r in cycles if r["quantity"] == "job_time"]
+    assert len(times) == 2 * 1440 and {(r["nit"], r["cycles"]) for r in times} == {
+        ("2", "210"),
+        ("3", "310"),
+    }
+    assert "roles=bruteforce" in out["bruteforce_builds"].read_text().splitlines()[0]
+    assert not (tmp_path / "hw_builds.csv").exists()
+    with pytest.raises(ValueError, match="on its own"):
+        C.merge(("fit", C.BRUTEFORCE), points_dir=points, out_dir=tmp_path)
+
+
+@pytest.mark.xsi
+def test_steady_run_measures_the_job_time_of_a_stream():
+    """The brute-force mode on the K = 4 default detector, in real RTL: eight jobs, each count
+    twice, no waveform, the build pruned.  The loop is the bottleneck here, so both jobs of a pair
+    take the same time, and that time is the calibration run's: 75 + 1,193·nit."""
+    _require_tools()
+    c, name = HwConfig(), "gate6_det_k4_steady"
+    out_dir = B.BUILD_ROOT / name
+    rec = M.measure(name, "det", c, out_dir, steady=True, trace=False, prune=True)
+    assert "error" not in rec, rec.get("error")
+    assert rec["rtl"]["bit_exact"] and rec["rtl"]["jobs"] == [1, 1, 2, 2, 3, 3, 4, 4]
+    fit = rec["intervals"]
+    assert fit["steady"] == {"1": 1268, "2": 2461, "3": 3654, "4": 4847}
+    assert fit["interval"] == [1268, 2461, 2461, 3654, 3654, 4847, 4847]
+    assert fit["t0"] == pytest.approx(75) and fit["t_iter"] == pytest.approx(1193)
+    assert fit["max_resid"] == pytest.approx(0, abs=1e-6)
+    assert "spans" not in rec  # no waveform, so no block spans
+    total = rec["resources"]["total"]
+    assert (total["dsp"], total["lut"], total["ff"], total["bram"]) == (
+        112,
+        32991,
+        19791,
+        20,
+    )
+    # pruned: the tool's working files are gone, the report is not, and it can be read again
+    sol = out_dir / "cg_detector_proj" / "solution1"
+    assert (
+        not (sol / ".autopilot").exists()
+        and not (out_dir / "xsi" / "xsim.dir").exists()
+    )
+    assert (sol / "syn" / "report" / "cg_detector_csynth.rpt").is_file()
+    assert M.attribute("det", c, out_dir) == rec["resources"]
+
+
 def test_which_records_a_build_files():
     """Gate 5.0 decision 3: a block is calibrated from its own unit builds, the glue from detectors."""
     assert M.files_record("vec", "CgVec") and not M.files_record("vec", "CgVecLoad")

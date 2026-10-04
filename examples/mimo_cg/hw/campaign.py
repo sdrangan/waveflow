@@ -136,11 +136,13 @@ class DryPointStep(BuildStep):
 
         top, role, c = split()[kw["build"]]
         elaborate(M.comp_class(top), M.elab_params(top, c), name=M.TOP_NAME[top])
-        _problems, jobs = M.workload(top, c, kw["build"], role == BRUTEFORCE)
+        brute = role == BRUTEFORCE
+        _problems, jobs = M.workload(top, c, kw["build"], brute)
+        n_cycles = M.cycles_budget(c, jobs) if brute else M.cycles_bound(top, c, jobs)
         path = M.POINTS_DIR / "dry_point.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"{kw['build']} {role} jobs={jobs} n_cycles={M.cycles_bound(top, c, jobs)}\n",
+            f"{kw['build']} {role} jobs={jobs} n_cycles={n_cycles}\n",
             encoding="utf-8",
         )
         return {"hw_dry": path}

@@ -76,8 +76,9 @@ import pytest
 #: this number on 2026-10-01 and did not; the miss was caught by this file's own collection test at
 #: the Phase 5 regression run.  Phase 5 added five in ``test_mimo_cg_hw_measure.py``: the measurement
 #: harness on the three default builds (report rows, job intervals, block spans, record filing) and
-#: on a memory-bound unit.
-WANT_XSI_GATES = 139
+#: on a memory-bound unit.  Phase 6 added one there: the brute-force mode of the harness (the
+#: steady-state job list, no waveform, a pruned build) on the K = 4 default detector.
+WANT_XSI_GATES = 140
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
