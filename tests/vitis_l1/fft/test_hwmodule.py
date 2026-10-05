@@ -283,16 +283,18 @@ def test_kernel_task_hands_the_body_over_with_every_port_named():
         "member would leak its repr into generated C++")
 
 
-# -- S6: latency and II --------------------------------------------------------------------------
+# -- S6: the processing delay and the frame interval ----------------------------------------------
 #
-# The numbers below are *declared*, not measured — S3's RTL gate is what replaces them with
-# measurements.  What these gates check is that the module expresses latency and II as two
-# independent quantities, which a single sequential process cannot do.
-_LAT, _II = 41, 8           # II deliberately > L/R = 4, so the module paces, not the ports
+# The numbers below are *declared*, not measured -- the calibrated ones live on the platform
+# (``waveflow/calib/platforms/rfsoc4x2_bfm_250mhz``) and the example's XSI gate checks them.  What
+# these gates check is the model's shape: the processing delay and the frame interval are two
+# independent quantities, both ADDED to what the channels charge, never in place of it.
+_PROC, _II = 33, 8          # II deliberately > L/R = 4, so the module paces, not the ports
+_PL = 4                     # L/R at L=16: the cycles a frame's transfer takes on each channel
 
 
 def _timed_run(length, vectors, **kw):
-    kw = {"latency_cycles": _LAT, "ii_cycles": _II, **kw}
+    kw = {"proc_cycles": _PROC, "ii_cycles": _II, **kw}
     out, stamps, dut = _run_pysim(length, vectors, **kw)
     return out, [t / dut.clk.period for t in stamps], dut
 
@@ -302,35 +304,35 @@ def test_timing_is_opt_in_and_the_pair_is_required():
     plain = VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16)
     assert plain._timed is False, "timing must be off unless asked for"
 
-    for kw in ({"latency_cycles": 41}, {"ii_cycles": 8}):
+    for kw in ({"proc_cycles": 41}, {"ii_cycles": 8}):
         with pytest.raises(ValueError, match="one pair"):
             VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16, **kw)
     with pytest.raises(ValueError, match="max_inflight only means something"):
         VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16, max_inflight=4)
     with pytest.raises(ValueError, match="ii_cycles > 0"):
         VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16,
-                 latency_cycles=10, ii_cycles=0)
+                 proc_cycles=10, ii_cycles=0)
 
 
-def test_frames_in_flight_are_bounded_by_latency_over_II():
-    """The queue capacity is the model's third number, and it is not cosmetic.
+def test_frames_in_flight_are_bounded_by_proc_over_II():
+    """The slot count is the model's third number, and it is not cosmetic.
 
     Unbounded, the module would accept frames forever while its consumer is blocked, which no
-    hardware does. A finite queue plus explicit ready-times is also the *paced* form of a
-    free-running chain, which is what keeps this clear of the recorded deadlock.
+    hardware does. A finite bound is also the *paced* form of a free-running chain, which is what
+    keeps this clear of the recorded deadlock.
     """
     m = VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16,
-                 latency_cycles=_LAT, ii_cycles=_II)
-    assert m.max_inflight == -(-_LAT // _II) == 6
+                 proc_cycles=41, ii_cycles=_II)
+    assert m.max_inflight == -(-41 // _II) == 6
     assert m._slots.capacity == 6 and m._slots.level == 6
 
 
 def test_two_frames_back_to_back_are_II_paced_not_serialized():
-    """⚠️ The gate this stage exists for.
+    """The gate this stage exists for.
 
-    A single sequential ``run_iter`` is read-frame → delay → write-frame, so frame *k+1* waits for
+    A single sequential ``run_iter`` is read-frame -> delay -> write-frame, so frame *k+1* waits for
     frame *k* to be written and II collapses into latency. **One frame cannot tell a correct II
-    from a serialized one** — only back-to-back frames can, which is why this drives three.
+    from a serialized one** -- only back-to-back frames can, which is why this drives three.
     """
     rng = np.random.default_rng(7)
     vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(3)]
@@ -339,30 +341,29 @@ def test_two_frames_back_to_back_are_II_paced_not_serialized():
 
     assert deltas == [float(_II)] * len(deltas), (
         f"frames completed {deltas} cycles apart; the declared II is {_II}")
-    assert _II != _LAT, "pick II != latency or this gate cannot distinguish them"
-    assert all(d != _LAT for d in deltas), (
-        f"frames are {_LAT} cycles apart — that is the LATENCY, so the model has serialized and "
-        f"II has collapsed into it. This is the failure the two-process design prevents.")
+    residence = _PL + _PROC + _PL
+    assert all(d != residence for d in deltas), (
+        f"frames are {residence} cycles apart -- that is a frame's RESIDENCE, so the model has "
+        f"serialized and II has collapsed into it. This is the failure the two-process design "
+        f"prevents.")
 
 
-def test_latency_is_observable_on_the_first_frame():
-    """Latency is a frame's whole residence: first input word to last output word, which is what
-    cosim reports per transaction (``ap_start`` -> ``ap_done``).  The driver starts at t=0, so the
-    first frame finishes arriving at exactly ``latency_cycles``.  That it is *not* also paid per
-    frame is what the II gate above shows.
-    """
+def test_proc_is_added_to_what_the_channels_charge():
+    """The first frame's residence is its transfer in (the input channel's ``L/R`` cycles), the
+    processing delay, and its transfer out (the output channel's ``L/R``): each charged ONCE, by
+    whoever owns it.  The module never restates a channel's timing -- an earlier version re-charged
+    the input transfer inside ``run_iter`` and double-counted it."""
     rng = np.random.default_rng(11)
     vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(2)]
     _, cycles, dut = _timed_run(16, vectors)
-    per_lane = 16 // int(dut.R)
-    assert round(cycles[0], 6) == _LAT
+    assert round(cycles[0], 6) == _PL + _PROC + _PL
     untimed_cycles = _run_pysim(16, vectors)[1]
-    assert round(untimed_cycles[0] / dut.clk.period, 6) == per_lane + per_lane, (
-        "the untimed module must carry no latency at all — otherwise 'opt-in' is not true")
+    assert round(untimed_cycles[0] / dut.clk.period, 6) == _PL + _PL, (
+        "the untimed module must carry no delay at all -- otherwise 'opt-in' is not true")
 
 
 def test_timing_changes_when_data_appears_and_never_what_it_is():
-    """The bits are computed once, at intake; the emit side only releases them."""
+    """The bits are computed once, at intake; the deferred store only releases them."""
     g, vectors, want = _golden_case("fft_L16_R4_noscale_natural.json")
     timed, _, _ = _timed_run(16, vectors)
     assert _compare(timed, want, g["out_W"]) == 0, "timing perturbed the arithmetic"
@@ -372,16 +373,21 @@ def test_cycles_seed_is_offered_as_a_seed_not_a_measurement():
     """``cycles_seed`` gives the plan's ``II ~ L/R`` estimate and deliberately no latency."""
     seed = VitisFft.cycles_seed(1024)
     assert seed == {"ii_cycles": 256}
-    assert "latency_cycles" not in seed, (
-        "a latency nobody measured would be the one number most likely to be believed")
+    assert "proc_cycles" not in seed, (
+        "a processing delay nobody measured would be the one number most likely to be believed")
 
 
-def test_latency_below_the_frame_transfer_time_is_refused():
-    """``latency_cycles`` counts the frame's own read and write (``2*L/R``), so less is impossible
-    -- most likely a last-in-to-first-out number under the other definition."""
-    with pytest.raises(ValueError, match=r"less than 2\*L/R=8"):
+def test_negative_proc_is_refused():
+    with pytest.raises(ValueError, match="proc_cycles >= 0"):
         VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16,
-                 latency_cycles=7, ii_cycles=8)
+                 proc_cycles=-1, ii_cycles=8)
+
+
+def test_a_platform_on_another_clock_is_refused(tmp_path):
+    """The platform's models are cycles of ITS clock; reading them at another is the wrong time."""
+    (tmp_path / "platform.json").write_text('{"part": "x", "clk_freq_hz": 250000000.0}')
+    with pytest.raises(ValueError, match="calibrated at 250 MHz"):
+        VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16, platform_dir=tmp_path)
 
 
 def test_a_stalled_consumer_back_pressures_intake():
@@ -396,7 +402,7 @@ def test_a_stalled_consumer_back_pressures_intake():
 
     def taken_while_stalled(k):
         taken: list = []
-        _, cycles, _ = _run_pysim(16, vectors, latency_cycles=_LAT, ii_cycles=_II,
+        _, cycles, _ = _run_pysim(16, vectors, proc_cycles=41, ii_cycles=_II,
                                   max_inflight=k, hold=hold, drv_stamps=taken)
         assert len(cycles) == n, "every frame must still come out once the sink wakes"
         return sum(t < hold for t in taken)
@@ -408,17 +414,18 @@ def test_a_stalled_consumer_back_pressures_intake():
 
 
 def test_cosim_four_frames_back_to_back():
-    """The S6 acceptance gate: the measured cosim numbers in, the measured total out.
+    """The cosim numbers of the ``ap_ctrl_hs`` top, in this model's terms, reproduce its total.
 
-    ``verifyHwModule/results/cosim_cycles.json`` (``pipelined_tb``) at ``L=16``: latency 45,
-    interval 46, four frames back to back in 184 cycles.  The model puts the last word of frame 4
-    at ``3*46 + 45 = 183``; cosim's 184 counts to the ``ap_done`` after it, so within one cycle.
+    ``verifyHwModule/results/cosim_cycles.json`` (``pipelined_tb``, Zynq-7020) at ``L=16``: latency
+    45 (first input to last output), interval 46, four frames in 184 cycles.  As a processing delay
+    that latency is ``45 - 2 L/R = 37`` -- the two transfers are the channels'.  The model then puts
+    frame 4's last word at ``3*46 + 45 = 183``; cosim's 184 counts to the ``ap_done`` after it.
     """
     meas = json.loads((Path(__file__).resolve().parent / "verifyHwModule" / "results"
                        / "cosim_cycles.json").read_text())["pipelined_tb"]
     rng = np.random.default_rng(5)
     vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(4)]
-    _, cycles, _ = _timed_run(16, vectors, latency_cycles=meas["latency_min"],
+    _, cycles, _ = _timed_run(16, vectors, proc_cycles=meas["latency_min"] - 2 * _PL,
                               ii_cycles=meas["interval_min"])
     assert abs(round(cycles[-1]) - meas["total_execution"]) <= 1, (
         f"pysim finished 4 frames at {cycles[-1]:.0f} cycles; cosim measured "

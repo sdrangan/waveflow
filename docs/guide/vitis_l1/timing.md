@@ -3,7 +3,7 @@ title: Latency and II for a vendor block
 parent: Vitis L1 Blocks
 nav_order: 3
 audience: python
-api: [VitisFft, cycles_seed, timed_delay, call_after]
+api: [VitisFft, cycles_seed, timed_delay, call_after, TimingModel, LookupCalibModel]
 summary: "A bit-exact model predicts what comes out, not when. This page covers why a vendor FFT needs two timing numbers rather than one (latency and initiation interval), why a single sequential run_iter cannot express both, how VitisFft models it with run_iter plus a deferred write (SimObj.call_after) bounded by in-flight slots, and what the synthesized hardware actually measured — 45 and 46 cycles at L=16, meaning no frame overlap, against a plan estimate that would have promised six frames in flight. Also why C-synthesis cannot supply these numbers at all."
 ---
 
@@ -143,11 +143,22 @@ ports (`TVALID && TREADY`) off the waveform. On the RFSoC 4x2 at 250 MHz:
   `VitisFft` paces intake by the II, which reproduces the output timing and holds an upstream producer
   back slightly longer than the hardware would.
 
-So the module's numbers are **calibrated, with a stated error**: `ii_cycles` is the back-to-back
-interval (exact); `latency_cycles` is the mean over a sweep of arrival phases, because an LT model
-cannot know the phase; the measured spread is the error. `python -m examples.vitis_fft.vitis_fft_build
---measure` produces the table; against the RTL the pysim is unbiased (mean error ≤ 0.2 cycles) and
-within the spread on every frame. See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+So the module's timing is **calibrated on a platform, with a stated error**.  `VitisFft` is framework
+infrastructure, so its two delays are `TimingModel`s stored on
+`waveflow/calib/platforms/rfsoc4x2_bfm_250mhz` (part and clock), reloaded by any design on it:
+
+* **proc** -- last input word in to last output word out, the delay `run_iter` defers the write by;
+  the **mean** over a sweep of arrival phases, because an LT model cannot know the phase (the mean
+  minimizes the squared error), with the measured spread as its error;
+* **ii** -- the back-to-back interval, exact.
+
+Both are **added** to the channels' own transfer cost, which the residual fit subtracts out, so the
+module never restates a channel's timing.  Each is a **lookup per length**: the law
+`b0 + b1 L + b2 L log2 L` fits L = 16, 64, 256 exactly but predicts L = 1024 14-20% low, because Vitis
+changes the implementation between them.  An unmeasured length is refused, not extrapolated.  The
+fixture `waveflow/calib/fixtures/vitis_fft.py` measures, collects and refits to a fixed point; at
+convergence the pysim reproduces the RTL's mean proc span and interval at every calibrated length.
+See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
 
 ## C-synthesis cannot supply these
 

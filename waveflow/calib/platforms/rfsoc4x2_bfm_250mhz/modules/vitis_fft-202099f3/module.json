@@ -1,0 +1,14 @@
+{
+  "key": "vitis_fft-202099f3",
+  "cls_name": "VitisFft",
+  "cls_module": "waveflow.vitis_l1.hw",
+  "params": {
+    "L": 64,
+    "R": 4,
+    "in_i": 2,
+    "in_w": 16,
+    "tw_i": 2,
+    "tw_w": 18
+  },
+  "signature": "202099f3c0a2947524f6a724033c0b42c246e875056d31d46b41b1e995dcc9f8"
+}

@@ -140,9 +140,6 @@ Thumbs.db
 # a fresh clone, and the gate fails there while passing locally -- which is exactly what happened
 # to the goldens above.
 !tests/vitis_l1/fft/verifyHwModule/results/*.json
-# examples/vitis_fft: the RTL timing table --measure writes.  Tracked: reproducing it needs
-# Vitis + Vivado, and the pysim reads it.
-!examples/vitis_fft/measured/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/

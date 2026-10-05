@@ -473,7 +473,7 @@ the `axpy` FMA contraction are real findings and worth an issue each.
 
 ---
 
-## S6 — cycles  ✅ DONE (calibrated: `examples/vitis_fft/measured/vitis_fft_timing.json`)
+## S6 — cycles  ✅ DONE (calibrated on the platform `rfsoc4x2_bfm_250mhz`)
 
 > **Status (2026-10-05), RFSoC 4x2 @ 250 MHz.**  What RTL showed, and what the model became:
 >
@@ -484,10 +484,17 @@ the `axpy` FMA contraction are real findings and worth an issue each.
 > * **Latency depends on arrival phase**: the input transposer (`swap`) runs a commutator on a
 >   free-running cycle (40 cycles at L=64, restarting with no data); an out-of-step frame waits inside
 >   it.  Found by tracing the internal FIFO handshakes (`if_read && if_empty_n`) at full VCD depth.
-> * **Model = exact II + mean latency + stated spread.**  An LT model cannot know arrival phase, so
->   `latency_cycles` is the mean over a 48-frame phase sweep; the spread is the error.  Against the RTL
->   sweep: mean error <= 0.2 cycles, every frame within the spread (0 / -6..+12 / -29..+65), no drift.
-> * `vitis_fft_build --measure` regenerates the table; the XSI gate fails if it no longer matches RTL.
+> * **Model = two `TimingModel`s on the platform** (VitisFft is infra): `proc` (last input word in ->
+>   last output word out, the `call_after` delay; MEAN over a 48-frame phase sweep, because an LT model
+>   cannot know arrival phase -- the spread is the error) and `ii` (back to back, exact).  Both are
+>   ADDED to the channels' transfer cost (the residual fit subtracts it); the intake timer that
+>   re-charged the input transfer inside run_iter was a double count and is gone.
+> * **A lookup per L, not a law**: `[1, L, L log2 L]` fits 16/64/256 exactly, predicts 1024 14-20% low
+>   (Vitis changes the implementation: twiddle ROM, fifth stage).  `LookupCalibModel`; an unmeasured L
+>   is refused.  Fixture `waveflow/calib/fixtures/vitis_fft.py` measures, collects, refits to a fixed
+>   point (pysim == RTL spans within 0.5 cycles at every L).  XSI gate fails if the platform is stale.
+> * **Found on the way:** XSI did not load csynth's ROM `.dat` files (`$readmemh` is relative to the
+>   simulator's cwd), so L=1024 ran silently with zeroed twiddles; `render_rtl_f` now stages them.
 
 Bits are done; timing is not modelled at all.  The block *is* pipelined, so the obvious worry is
 that a single end-to-end number cannot represent it.  That worry is right, but the fix is smaller
