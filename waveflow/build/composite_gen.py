@@ -2674,6 +2674,16 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
     if stamp_sources:
         write_stamp(root, top_name)
+    # ROM initialization data.  csynth writes a constant table it maps to a ROM as a `.dat` beside the
+    # `.v`, loaded with `$readmemh("./<name>.dat")` -- a path relative to the SIMULATOR's working
+    # directory, which is `xsi/`, not the verilog dir.  Without the copy XSI loads nothing, the ROM
+    # reads as zero, and the run completes silently with wrong numbers: VitisFft at L=1024 (its
+    # twiddles move into a ROM there) produced 4 correct outputs of 1024 until this was added.
+    xsi = Path(root) / "xsi"
+    if xsi.is_dir():
+        import shutil
+        for dat in vdir.glob("*.dat"):
+            shutil.copyfile(dat, xsi / dat.name)
     return ("".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
             + "".join(f"{e}\n" for e in extra))
 
