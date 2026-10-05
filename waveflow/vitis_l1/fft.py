@@ -127,9 +127,15 @@ def _exp_table(tw_w: int, tw_i: int) -> tuple[Format, tuple, tuple]:
             tuple(fp.quantize_real(-np.sin(2.0 * np.pi * ei / R), ftw)))
 
 
-def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str,
-          tw_w: int = 18, tw_i: int = 2) -> tuple[list, list, Format]:
-    """One radix-4 butterfly.
+def _dft4(vr: np.ndarray, vi: np.ndarray, f: Format, first: bool, mode: str,
+          tw_w: int = 18, tw_i: int = 2) -> tuple[np.ndarray, np.ndarray, Format]:
+    """Every radix-4 butterfly of a stage, at once.
+
+    ``vr``/``vi`` have shape ``(R, ...)``: axis 0 is butterfly input ``j``, the trailing axes
+    index the butterflies.  The outputs have the same shape with axis 0 = butterfly output ``i``.
+    All butterflies of a stage share one set of formats, so each fixed-point step below is a
+    single vectorized call over the whole stage -- the same calls, in the same order, as one
+    butterfly at a time.
 
     ``hls_ssr_fft_parallel_fft_kernel.hpp:104-180`` declares three types, so a radix-4 stage
     carries *two* accumulator levels; the rotation is a ``complexMultiply`` into the product
@@ -140,29 +146,29 @@ def _dft4(vr: list, vi: list, f: Format, first: bool, mode: str,
     fprod, facc1, facc2 = _stage_formats(f, first, mode)
     ftw, ex_r, ex_i = _exp_table(tw_w, tw_i)
 
-    out_r, out_i = [], []
-    for i in range(R):
-        pr, pi = [], []
-        for j in range(R):
-            r, m = complex_multiply(vr[j], vi[j], f,
-                                    np.array([ex_r[(i * j) % R]]), np.array([ex_i[(i * j) % R]]),
-                                    ftw, fprod)
-            pr.append(r)
-            pi.append(m)
-        # A tree addition wraps at its OPERAND width, then converts into the declared
-        # accumulator format.  Both halves matter, for different modes:
-        #   * the wrap is what NO_SCALING needs -- measured: p2+p3 = +524288 (two ap_fixed<20,5>)
-        #     is stored as -524288, a wrap at 20 bits, though the accumulator is declared (21,6).
-        #   * the convert is what SCALE needs -- there the accumulator is the SAME width with one
-        #     more integer bit, so converting drops a fractional bit.  That is the per-stage
-        #     right shift, and _apply_overflow alone would silently skip it.
-        # For NO_SCALING / GROW the convert keeps the fraction and is exact, so one rule serves
-        # all three modes.
-        l1r = [_accumulate(pr[0], pr[1], fprod, facc1), _accumulate(pr[2], pr[3], fprod, facc1)]
-        l1i = [_accumulate(pi[0], pi[1], fprod, facc1), _accumulate(pi[2], pi[3], fprod, facc1)]
-        out_r.append(_accumulate(l1r[0], l1r[1], facc1, facc2))
-        out_i.append(_accumulate(l1i[0], l1i[1], facc1, facc2))
-    return out_r, out_i, facc2
+    # p[i, j, ...] = v[j, ...] * W_4^{i*j}
+    ij = (np.arange(R)[:, None] * np.arange(R)[None, :]) % R
+    w_shape = (R, R) + (1,) * (vr.ndim - 1)
+    pr, pi = complex_multiply(vr[None], vi[None], f,
+                              np.asarray(ex_r)[ij].reshape(w_shape),
+                              np.asarray(ex_i)[ij].reshape(w_shape), ftw, fprod)
+    pr = np.broadcast_to(pr, (R,) + vr.shape)
+    pi = np.broadcast_to(pi, (R,) + vr.shape)
+    # A tree addition wraps at its OPERAND width, then converts into the declared
+    # accumulator format.  Both halves matter, for different modes:
+    #   * the wrap is what NO_SCALING needs -- measured: p2+p3 = +524288 (two ap_fixed<20,5>)
+    #     is stored as -524288, a wrap at 20 bits, though the accumulator is declared (21,6).
+    #   * the convert is what SCALE needs -- there the accumulator is the SAME width with one
+    #     more integer bit, so converting drops a fractional bit.  That is the per-stage
+    #     right shift, and _apply_overflow alone would silently skip it.
+    # For NO_SCALING / GROW the convert keeps the fraction and is exact, so one rule serves
+    # all three modes.
+    l1r = (_accumulate(pr[:, 0], pr[:, 1], fprod, facc1),
+           _accumulate(pr[:, 2], pr[:, 3], fprod, facc1))
+    l1i = (_accumulate(pi[:, 0], pi[:, 1], fprod, facc1),
+           _accumulate(pi[:, 2], pi[:, 3], fprod, facc1))
+    return (_accumulate(l1r[0], l1r[1], facc1, facc2),
+            _accumulate(l1i[0], l1i[1], facc1, facc2), facc2)
 
 
 def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
@@ -179,30 +185,21 @@ def fft16(x_re: np.ndarray, x_im: np.ndarray, in_w: int, in_i: int,
     ftw = exp_table_format(tw_w, tw_i)
     tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
 
-    stage1 = {n2: _dft4([np.array([x_re[n2 + R * n1]]) for n1 in range(R)],
-                        [np.array([x_im[n2 + R * n1]]) for n1 in range(R)], fin, True, mode,
-                        tw_w, tw_i)
-              for n2 in range(R)}
-    f1 = stage1[0][2]                                   # (19,5)
+    # Stage 1: butterfly n2 takes x[n2 + R*n1] as its input n1 -> v[n1, n2].
+    v_re = np.asarray(x_re, dtype=np.int64).reshape(R, R)
+    v_im = np.asarray(x_im, dtype=np.int64).reshape(R, R)
+    s1_re, s1_im, f1 = _dft4(v_re, v_im, fin, True, mode, tw_w, tw_i)   # [k1, n2], (19,5)
 
-    rotated = {}
-    for n2 in range(R):
-        for k1 in range(R):
-            rotated[(n2, k1)] = complex_multiply(
-                stage1[n2][0][k1], stage1[n2][1][k1], f1,
-                np.array([tw_r[(n2 * k1) % length]]), np.array([tw_i_[(n2 * k1) % length]]),
-                ftw, f1)
+    # Rotation by W_16^{n2*k1}, preserving the stage-1 format.
+    tidx = (np.arange(R)[:, None] * np.arange(R)[None, :]) % length    # [k1, n2]
+    rot_re, rot_im = complex_multiply(s1_re, s1_im, f1,
+                                      np.asarray(tw_r)[tidx], np.asarray(tw_i_)[tidx], ftw, f1)
 
-    out_r = np.zeros(length, dtype=np.int64)
-    out_i = np.zeros(length, dtype=np.int64)
-    fo = f1
-    for k1 in range(R):
-        orr, oii, fo = _dft4([rotated[(n2, k1)][0] for n2 in range(R)],
-                             [rotated[(n2, k1)][1] for n2 in range(R)], f1, False, mode,
-                             tw_w, tw_i)
-        for k2 in range(R):
-            out_r[k1 + R * k2] = int(orr[k2][0])
-            out_i[k1 + R * k2] = int(oii[k2][0])
+    # Stage 2: butterfly k1 takes the rotated [k1, n2] as its input n2 -> v[n2, k1].
+    o_re, o_im, fo = _dft4(rot_re.T, rot_im.T, f1, False, mode, tw_w, tw_i)   # [k2, k1]
+    # X[k1 + R*k2] = o[k2, k1]: row-major flatten of [k2, k1].
+    out_r = np.ascontiguousarray(o_re, dtype=np.int64).reshape(length)
+    out_i = np.ascontiguousarray(o_im, dtype=np.int64).reshape(length)
 
     # Only NO_SCALING narrows at the end: its internal (22,7) is cast to the declared (21,7).
     # SCALE and GROW_TO_MAX_WIDTH already land on their output format -- measured, see
@@ -290,15 +287,19 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
 
     # Values live in a flat array indexed by output position as it is progressively resolved.
-    cur_re = [np.array([v]) for v in x_re]
-    cur_im = [np.array([v]) for v in x_im]
+    cur_re = np.array(x_re, dtype=np.int64)
+    cur_im = np.array(x_im, dtype=np.int64)
 
-    # `blocks` are the independent sub-transforms at this level; each is a list of indices into
-    # cur_*, in the order the sub-transform sees them.  Stage 1 has one block of the whole array.
-    blocks = [list(range(length))]
+    # `blocks[b]` is the b-th independent sub-transform at this level: the indices into cur_*,
+    # in the order the sub-transform sees them.  Stage 1 has one block of the whole array.
+    #
+    # Each stage is ONE vectorized pass -- every butterfly of every block at once, since they all
+    # share the stage's formats.  Per-butterfly calls on one-element arrays cost ~150x at L=1024
+    # for identical bits.
+    blocks = np.arange(length).reshape(1, length)
     for s in range(n_stages):
         f_in, _ = fmts[s]
-        sub_len = len(blocks[0])
+        n_blocks, sub_len = blocks.shape
         m_count = sub_len // R
         # ONE full-L table for every stage, with the index scaled -- `index = n * p_k` in
         # hls_ssr_fft.hpp:107 is an ap_uint<log2(t_L)>, i.e. always the L-length phase space.
@@ -306,44 +307,41 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
         # the quarter-wave reconstruction it does, because the two land on different LUT indices
         # and different axis-saturation cases.
         tw_scale = length // sub_len
-        new_blocks = []
-        for blk in blocks:
-            rotated: dict = {}
-            for m in range(m_count):
-                vr = [cur_re[blk[m + p * m_count]] for p in range(R)]
-                vi = [cur_im[blk[m + p * m_count]] for p in range(R)]
-                orr, oii, g = _dft4(vr, vi, f_in, s == 0, mode, tw_w, tw_i)
-                for q in range(R):
-                    if s == n_stages - 1:
-                        rotated[(q, m)] = (orr[q], oii[q])
-                    else:
-                        f_next = fmts[s + 1][0]
-                        idx = (m * q * tw_scale) % length
-                        # The stage output is narrowed to the NEXT stage's format BEFORE the
-                        # rotation, and the multiply then runs with that narrow type as its first
-                        # operand.  Narrowing inside the multiply instead -- the natural reading,
-                        # since complexMultiply takes a product type -- leaves 14 of 64 stage-3
-                        # inputs off by an LSB at L=64.  Measured, not deduced.
-                        a, b, op1 = orr[q], oii[q], g
-                        if (g.W, g.int_bits) != (f_next.W, f_next.int_bits):
-                            a = fp.quantize(a, g, f_next)
-                            b = fp.quantize(b, g, f_next)
-                            op1 = f_next
-                        rotated[(q, m)] = complex_multiply(
-                            a, b, op1,
-                            np.array([tw_r[idx]]), np.array([tw_i_[idx]]), ftw, f_next)
-            # X[q + R*u] -- element q of the butterfly starts the sub-transform for residue q
-            for q in range(R):
-                idxs = [blk[q + R * u] for u in range(m_count)]
-                for m in range(m_count):
-                    cur_re[idxs[m]], cur_im[idxs[m]] = rotated[(q, m)]
-                new_blocks.append(idxs)
-        blocks = new_blocks
+
+        # Butterfly m of block b takes blocks[b, m + p*m_count] as its input p -> v[p, b, m].
+        gather = blocks.reshape(n_blocks, R, m_count).transpose(1, 0, 2)
+        orr, oii, g = _dft4(cur_re[gather], cur_im[gather], f_in, s == 0, mode, tw_w, tw_i)
+        # orr[q, b, m] is output q of butterfly m in block b.
+
+        if s < n_stages - 1:
+            f_next = fmts[s + 1][0]
+            # The stage output is narrowed to the NEXT stage's format BEFORE the rotation, and
+            # the multiply then runs with that narrow type as its first operand.  Narrowing
+            # inside the multiply instead -- the natural reading, since complexMultiply takes a
+            # product type -- leaves 14 of 64 stage-3 inputs off by an LSB at L=64.  Measured,
+            # not deduced.
+            op1 = g
+            if (g.W, g.int_bits) != (f_next.W, f_next.int_bits):
+                orr, oii = fp.quantize(orr, g, f_next), fp.quantize(oii, g, f_next)
+                op1 = f_next
+            q = np.arange(R)[:, None, None]
+            m = np.arange(m_count)[None, None, :]
+            idx = (m * q * tw_scale) % length                       # [q, 1, m]
+            orr, oii = complex_multiply(orr, oii, op1,
+                                        np.asarray(tw_r)[idx], np.asarray(tw_i_)[idx],
+                                        ftw, f_next)
+
+        # X[q + R*u] -- element q of the butterfly starts the sub-transform for residue q, so the
+        # new block (b, q) is blocks[b, q + R*u], and its element m receives output q of
+        # butterfly m.
+        new_blocks = blocks.reshape(n_blocks, m_count, R).transpose(0, 2, 1)   # [b, q, u]
+        cur_re[new_blocks] = np.broadcast_to(orr, (R, n_blocks, m_count)).transpose(1, 0, 2)
+        cur_im[new_blocks] = np.broadcast_to(oii, (R, n_blocks, m_count)).transpose(1, 0, 2)
+        blocks = new_blocks.reshape(n_blocks * R, m_count)
 
     _, g_last = fmts[-1]
     fout = _f(g_last.W - 1, g_last.int_bits) if n_stages >= 2 else g_last
-    re = np.array([int(v[0]) for v in cur_re], dtype=np.int64)
-    im = np.array([int(v[0]) for v in cur_im], dtype=np.int64)
+    re, im = cur_re, cur_im
     if fout == g_last:
         return re, im, fout
     return fp.quantize(re, g_last, fout), fp.quantize(im, g_last, fout), fout
