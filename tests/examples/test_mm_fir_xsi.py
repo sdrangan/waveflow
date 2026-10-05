@@ -4,7 +4,7 @@ The system itself -- AMD's crossbar, the hand-written adaptor leaves and the csy
 kernel under one generated top, and the C++ host program -- is built by
 ``examples/mm_fir/mm_fir_xsi.py``; this file only runs it and checks it.  The host is the pysim
 ``FirHost`` on the C++ endpoints of ``xsi_mm_host.h`` (plans/mm_adaptor_host_endpoints.md Stage 2): a
-writer that commits each config and sends each packet behind a FirCmdHdr whose cfg_seq names the config
+writer that commits each config and sends each packet behind a FirCmdHdr whose cfg_id names the config
 it needs (plans/mm_fir_cfg_seq.md); and a reader that takes one output packet per input packet and its
 response.  The output must equal the numpy golden bit for bit, the status must show both configs taken,
 and every response must echo its packet's tx_id and intended config.
@@ -98,7 +98,7 @@ def test_mm_fir_rtl_cycles(fir_run):
 
 #: Recorded 2026-10-03, with NO polling (plans/mm_irq.md): the host waits on the queue views'
 #: interrupts -- queue in's for room, queue out's and the response FIFO's for data -- and reads the final
-#: status once (the kernel publishes it before each response).  Header + cfg_seq protocol, samples
+#: status once (the kernel publishes it before each response).  Header + cfg_id protocol, samples
 #: packed four to a word, bus master overlapping one read and one write.  per_view 520 / one_front 529,
 #: 67 bus ops, 0 polls.  pysim 498 / 545 (-4.2% / +3.0%).
 #:

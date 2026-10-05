@@ -188,9 +188,9 @@ class Writer : public XsiSimObj {
 };
 ```
 
-The `Writer` never waits for a config to be received: the header's `cfg_seq` makes the kernel wait. The
+The `Writer` never waits for a config to be received: the header's `cfg_id` makes the kernel wait. The
 `Reader` takes each packet's results, then its response from the response FIFO, and counts any
-response whose `tx_id` or `cfg_seq` is not what the schedule expects; after the last one it reads the
+response whose `tx_id` or `cfg_id` is not what the schedule expects; after the last one it reads the
 status once:
 
 ```cpp
@@ -202,7 +202,7 @@ status once:
         }
 ```
 
-The field positions and widths — where `tx_id` and `cfg_seq` sit in the response word — are read off
+The field positions and widths — where `tx_id` and `cfg_id` sit in the response word — are read off
 `FirRespHdr`'s own serializer and field types by `field_pos`, not written into the C++.
 
 ### The bus master: one read and one write at once
@@ -256,7 +256,7 @@ gate also checks pysim stays within 5%.
 
 | host program | `per_view` | `one_front` |
 |---|---|---|
-| this one: header + `cfg_seq` + responses, packed samples, the host on interrupts; the body straight-line per packet | **618** | **611** |
+| this one: header + `cfg_id` + responses, packed samples, the host on interrupts; the body straight-line per packet | **618** | **611** |
 | the same, the body a single-firing state machine (no drain between packets) | 520 | 529 |
 | the same, the host polling the counts | 768 | 783 |
 | the same, one sample per 64-bit word | 937 | 922 |

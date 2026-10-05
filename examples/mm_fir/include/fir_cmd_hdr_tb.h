@@ -29,8 +29,8 @@ inline void FirCmdHdr::dump_json(std::ostream& os, int indent, int level) const 
     os << ",";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
-    os << "\"cfg_seq\": ";
-    os << static_cast<unsigned long long>(this->cfg_seq);
+    os << "\"cfg_id\": ";
+    os << static_cast<unsigned long long>(this->cfg_id);
     os << "\n";
     for (int i = 0; i < (level) * step; ++i) { os << ' '; }
     os << "}";
@@ -40,7 +40,7 @@ inline void FirCmdHdr::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
     bool seen_root_nsamp = false;
     bool seen_root_tx_id = false;
-    bool seen_root_cfg_seq = false;
+    bool seen_root_cfg_id = false;
     bool first = true;
     while (true) {
     streamutils::json_skip_ws(json_text, pos);
@@ -62,9 +62,9 @@ inline void FirCmdHdr::load_json(const std::string& json_text, size_t& pos) {
         seen_root_tx_id = true;
         this->tx_id = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
-    else if (key == "cfg_seq") {
-        seen_root_cfg_seq = true;
-        this->cfg_seq = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    else if (key == "cfg_id") {
+        seen_root_cfg_id = true;
+        this->cfg_id = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
@@ -76,8 +76,8 @@ inline void FirCmdHdr::load_json(const std::string& json_text, size_t& pos) {
     if (!seen_root_tx_id) {
     throw std::runtime_error("Malformed JSON: missing required key 'tx_id'.");
     }
-    if (!seen_root_cfg_seq) {
-    throw std::runtime_error("Malformed JSON: missing required key 'cfg_seq'.");
+    if (!seen_root_cfg_id) {
+    throw std::runtime_error("Malformed JSON: missing required key 'cfg_id'.");
     }
 }
 

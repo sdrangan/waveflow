@@ -33,6 +33,11 @@ inline void FirCfg::dump_json(std::ostream& os, int indent, int level) const {
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
     os << "\"ntaps\": ";
     os << static_cast<unsigned long long>(this->ntaps);
+    os << ",";
+    os << "\n";
+    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
+    os << "\"cfg_id\": ";
+    os << static_cast<unsigned long long>(this->cfg_id);
     os << "\n";
     for (int i = 0; i < (level) * step; ++i) { os << ' '; }
     os << "}";
@@ -42,6 +47,7 @@ inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
     bool seen_root_coeffs = false;
     bool seen_root_ntaps = false;
+    bool seen_root_cfg_id = false;
     bool first = true;
     while (true) {
     streamutils::json_skip_ws(json_text, pos);
@@ -70,6 +76,10 @@ inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
         seen_root_ntaps = true;
         this->ntaps = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
+    else if (key == "cfg_id") {
+        seen_root_cfg_id = true;
+        this->cfg_id = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
     }
@@ -79,6 +89,9 @@ inline void FirCfg::load_json(const std::string& json_text, size_t& pos) {
     }
     if (!seen_root_ntaps) {
     throw std::runtime_error("Malformed JSON: missing required key 'ntaps'.");
+    }
+    if (!seen_root_cfg_id) {
+    throw std::runtime_error("Malformed JSON: missing required key 'cfg_id'.");
     }
 }
 

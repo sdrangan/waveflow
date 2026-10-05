@@ -24,6 +24,11 @@ inline void FirStatus::dump_json(std::ostream& os, int indent, int level) const 
     os << ",";
     os << "\n";
     for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
+    os << "\"cfg_id\": ";
+    os << static_cast<unsigned long long>(this->cfg_id);
+    os << ",";
+    os << "\n";
+    for (int i = 0; i < (level + 1) * step; ++i) { os << ' '; }
     os << "\"ncfg\": ";
     os << static_cast<unsigned long long>(this->ncfg);
     os << "\n";
@@ -34,6 +39,7 @@ inline void FirStatus::dump_json(std::ostream& os, int indent, int level) const 
 inline void FirStatus::load_json(const std::string& json_text, size_t& pos) {
     streamutils::json_expect_char(json_text, pos, '{');
     bool seen_root_nsamp = false;
+    bool seen_root_cfg_id = false;
     bool seen_root_ncfg = false;
     bool first = true;
     while (true) {
@@ -52,9 +58,13 @@ inline void FirStatus::load_json(const std::string& json_text, size_t& pos) {
         seen_root_nsamp = true;
         this->nsamp = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
+    else if (key == "cfg_id") {
+        seen_root_cfg_id = true;
+        this->cfg_id = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+    }
     else if (key == "ncfg") {
         seen_root_ncfg = true;
-        this->ncfg = static_cast<ap_uint<32>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
+        this->ncfg = static_cast<ap_uint<16>>(static_cast<unsigned long long>(streamutils::json_parse_number(json_text, pos)));
     }
     else {
         throw std::runtime_error("Malformed JSON: unexpected key for schema.");
@@ -62,6 +72,9 @@ inline void FirStatus::load_json(const std::string& json_text, size_t& pos) {
     }
     if (!seen_root_nsamp) {
     throw std::runtime_error("Malformed JSON: missing required key 'nsamp'.");
+    }
+    if (!seen_root_cfg_id) {
+    throw std::runtime_error("Malformed JSON: missing required key 'cfg_id'.");
     }
     if (!seen_root_ncfg) {
     throw std::runtime_error("Malformed JSON: missing required key 'ncfg'.");

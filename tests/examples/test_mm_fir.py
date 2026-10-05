@@ -2,7 +2,7 @@
 
 Rung 1: one tap set, bit-exact.  Rung 2: taps switched mid-stream, bit-exact, and every packet's
 response echoes its tx_id and the config it was meant to use.  Order between the config and the samples
-is carried by the header's ``cfg_seq`` (plans/mm_fir_cfg_seq.md): a config committed LATE is waited for
+is carried by the header's ``cfg_id`` (plans/mm_fir_cfg_seq.md): a config committed LATE is waited for
 (output still exact); the negative control is a host that tags its packets with the wrong config, which
 the responses must expose -- otherwise the rung-2 pass would not prove the echo checks anything.
 
@@ -73,7 +73,7 @@ def test_rung2_mid_stream_switch_bit_exact(switch_at, link, one_front):
 @pytest.mark.parametrize("link,one_front", WIRINGS, ids=WIRING_IDS)
 def test_a_config_committed_late_is_waited_for(link, one_front):
     """The second config is committed 32 samples AFTER the packets that need it went out.  They wait in
-    queue in until it arrives -- the header's cfg_seq makes the kernel wait -- so the output is still
+    queue in until it arrives -- the header's cfg_id makes the kernel wait -- so the output is still
     exact.  (Under the old apply_at protocol this was the negative control: the switch landed late.)"""
     x = _x()
     plan = [(0, TAPS_A), (96, TAPS_B)]
@@ -90,7 +90,7 @@ def test_a_config_committed_late_is_waited_for(link, one_front):
 @pytest.mark.parametrize("link,one_front", WIRINGS, ids=WIRING_IDS)
 def test_negative_control_a_wrong_tag_is_exposed_by_the_responses(link, one_front):
     """The host tags every packet with config 1 while meaning config 2 after the switch.  The kernel
-    obeys the tag -- it never takes config 2 -- and every response after the switch echoes cfg_seq 1
+    obeys the tag -- it never takes config 2 -- and every response after the switch echoes cfg_id 1
     where the host meant 2.  Without this run, an empty mismatch list could mean the echo works or that
     it checks nothing."""
     x = _x()
@@ -101,7 +101,7 @@ def test_negative_control_a_wrong_tag_is_exposed_by_the_responses(link, one_fron
     assert np.array_equal(y, fir_golden(x, [(0, TAPS_A)])), "taps A throughout, as tagged"
     assert int(s.host.final_status.ncfg) == 1
     after = [i for i, it in enumerate(it for it in s.host.schedule if it[0] == "pkt") if it[4] == 2]
-    assert [(t, f, e, g) for t, f, e, g in s.host.mismatches] == [(t, "cfg_seq", 2, 1) for t in after]
+    assert [(t, f, e, g) for t, f, e, g in s.host.mismatches] == [(t, "cfg_id", 2, 1) for t in after]
 
 
 def test_the_host_is_the_same_class_with_the_same_schedule_in_every_wiring():
@@ -142,8 +142,8 @@ def test_the_host_never_polls(one_front):
 
 def test_schedule_cuts_at_switches_and_tags_each_packet():
     sched = host_schedule(40, [(0, TAPS_A), (21, TAPS_B)], pkt=16)
-    assert sched == [("cfg", TAPS_A), ("pkt", 0, 16, 1, 1), ("pkt", 16, 21, 1, 1),
-                     ("cfg", TAPS_B), ("pkt", 21, 37, 2, 2), ("pkt", 37, 40, 2, 2)]
+    assert sched == [("cfg", TAPS_A, 1), ("pkt", 0, 16, 1, 1), ("pkt", 16, 21, 1, 1),
+                     ("cfg", TAPS_B, 2), ("pkt", 21, 37, 2, 2), ("pkt", 37, 40, 2, 2)]
 
 
 def test_one_front_needs_a_memory_mapped_link():
@@ -173,3 +173,49 @@ def test_the_rtl_crossbar_is_generated_from_the_pysim_one(topology):
         for addr in (v.base, v.base + v.window - 1):
             hits = [r for r in cfg.mi if r.base <= addr < r.base + r.size]
             assert len(hits) == 1, (v.name, hex(addr), hits)
+
+
+def test_a_host_that_lost_its_place_names_its_config():
+    """The config id is carried, not counted (plans/mm_fir_cfg_seq.md): a host that does not know how
+    many configs the kernel has taken commits one with any fresh id and tags its packet with it.  Here
+    two configs, named 5 and 9, wait in the register bank's stream; a packet asking for 9 makes the
+    kernel take both, filter with 9's taps, and echo 9."""
+    import numpy as np
+    from waveflow.hw.arrayutils import array
+    from waveflow.hw.clock import Clock
+    from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+    from waveflow.simulation.simulation import Simulation
+    from examples.mm_fir.mm_fir import (DW, QDEPTH, RDEPTH, S16, S64, FirCfg, FirCmdHdr, FirRespHdr,
+                                        MmFir, fir_golden)
+
+    sim, clk = Simulation(), Clock(freq=100e6)
+    fir = MmFir(name="fir", sim=sim, clk=clk)
+    cfg = StreamIFMaster(name="cfg", sim=sim, bitwidth=DW, has_tlast=True)
+    qin = StreamIFMaster(name="qin", sim=sim, bitwidth=DW, has_tlast=True)
+    qout = StreamIFSlave(name="qout", sim=sim, bitwidth=DW, has_tlast=False)
+    resp = StreamIFSlave(name="resp", sim=sim, bitwidth=DW, has_tlast=False)
+    stat = StreamIFSlave(name="stat", sim=sim, bitwidth=DW, has_tlast=True)
+    for name, m, s, d in (("c", cfg, fir.s_cfg, 2 * FirCfg.nwords_per_inst(DW)), ("i", qin, fir.s_in, QDEPTH),
+                          ("o", fir.m_out, qout, QDEPTH), ("r", fir.m_resp, resp, RDEPTH),
+                          ("s", fir.m_status, stat, 8)):
+        si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=d)
+        si.bind("master", m)
+        si.bind("slave", s)
+    x = np.arange(1, 17)
+    taps9 = [2, -1, 3]
+    out = {}
+
+    def host():
+        yield from cfg.write(make_cfg([7, 7], cfg_id=5))
+        yield from cfg.write(make_cfg(taps9, cfg_id=9))
+        yield from qin.write(FirCmdHdr(nsamp=len(x), tx_id=3, cfg_id=9))
+        yield from qin.write(array(S16, x))
+        y = yield from qout.get_array(S64, len(x))
+        out["y"] = [int(v) for v in y.val]
+        out["resp"] = yield from resp.get_schema(FirRespHdr)
+
+    done = sim.env.process(host())
+    sim.run_sim(until=done)                 # run_sim starts the kernel's process too
+    assert out["y"] == list(fir_golden(x, [(0, taps9)]))
+    assert (int(out["resp"].tx_id), int(out["resp"].cfg_id)) == (3, 9)
+    assert (fir.cfg_id, fir.ncfg) == (9, 2)

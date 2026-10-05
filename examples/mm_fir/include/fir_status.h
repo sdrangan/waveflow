@@ -12,7 +12,8 @@
 
 struct FirStatus {
     ap_uint<32> nsamp;  // samples filtered so far
-    ap_uint<32> ncfg;  // configs taken so far
+    ap_uint<16> cfg_id;  // the id of the config in force (0 = none yet)
+    ap_uint<16> ncfg;  // configs taken so far
 
     static constexpr int bitwidth = 64;
 
@@ -37,14 +38,16 @@ struct FirStatus {
     static ap_uint<bitwidth> pack_to_uint(const FirStatus& data) {
         ap_uint<bitwidth> res = 0;
         res.range(31, 0) = data.nsamp;
-        res.range(63, 32) = data.ncfg;
+        res.range(47, 32) = data.cfg_id;
+        res.range(63, 48) = data.ncfg;
         return res;
     }
 
     static FirStatus unpack_from_uint(const ap_uint<bitwidth>& packed) {
         FirStatus data;
         data.nsamp = (ap_uint<32>)(packed.range(31, 0));
-        data.ncfg = (ap_uint<32>)(packed.range(63, 32));
+        data.cfg_id = (ap_uint<16>)(packed.range(47, 32));
+        data.ncfg = (ap_uint<16>)(packed.range(63, 48));
         return data;
     }
 
@@ -58,7 +61,8 @@ struct FirStatus {
     static void write_array_impl(word_bw_tag<64>, const FirStatus* self, ap_uint<64> x[]) {
         x[0] = 0;
         x[0].range(31, 0) = self->nsamp;
-        x[0].range(63, 32) = self->ncfg;
+        x[0].range(47, 32) = self->cfg_id;
+        x[0].range(63, 48) = self->ncfg;
     }
 
     template<int word_bw>
@@ -76,7 +80,8 @@ struct FirStatus {
     static void write_stream_impl(word_bw_tag<64>, const FirStatus* self, hls::stream<ap_uint<64>> &s) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
-        w.range(63, 32) = self->ncfg;
+        w.range(47, 32) = self->cfg_id;
+        w.range(63, 48) = self->ncfg;
         s.write(w);
         w = 0;
     }
@@ -97,7 +102,8 @@ struct FirStatus {
     static void write_axi4_stream_impl(word_bw_tag<64>, const FirStatus* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->nsamp;
-        w.range(63, 32) = self->ncfg;
+        w.range(47, 32) = self->cfg_id;
+        w.range(63, 48) = self->ncfg;
         streamutils::write_axi4_word<64>(s, w, tlast);
         w = 0;
     }
@@ -116,7 +122,8 @@ struct FirStatus {
 
     static void read_array_impl(word_bw_tag<64>, FirStatus* self, const ap_uint<64> x[]) {
         self->nsamp = (ap_uint<32>)(x[0].range(31, 0));
-        self->ncfg = (ap_uint<32>)(x[0].range(63, 32));
+        self->cfg_id = (ap_uint<16>)(x[0].range(47, 32));
+        self->ncfg = (ap_uint<16>)(x[0].range(63, 48));
     }
 
     template<int word_bw>
@@ -135,7 +142,8 @@ struct FirStatus {
             ap_uint<64> w = 0;
         w = s.read();
         self->nsamp = (ap_uint<32>)(w.range(31, 0));
-        self->ncfg = (ap_uint<32>)(w.range(63, 32));
+        self->cfg_id = (ap_uint<16>)(w.range(47, 32));
+        self->ncfg = (ap_uint<16>)(w.range(63, 48));
     }
 
     template<int word_bw>
@@ -169,7 +177,12 @@ struct FirStatus {
             tl = streamutils::tlast_status::tlast_early;
             return;
         }
-        self->ncfg = (ap_uint<32>)(w.range(63, 32));
+        self->cfg_id = (ap_uint<16>)(w.range(47, 32));
+        if (tl != streamutils::tlast_status::no_tlast) {
+            tl = streamutils::tlast_status::tlast_early;
+            return;
+        }
+        self->ncfg = (ap_uint<16>)(w.range(63, 48));
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }

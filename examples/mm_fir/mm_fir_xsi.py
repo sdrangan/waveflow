@@ -198,10 +198,10 @@ def render_tb(dll: str, x, probes: bool = False) -> str:
     rows, tx = [], 0
     for item in host_schedule(len(x), PLAN, PKT):
         if item[0] == "cfg":
-            rows.append(f"    {{CFG, {{{hexes(make_cfg(item[1]).serialize(word_bw=DW))}}}, {{}}, 0u, 0u, 0u}},")
+            rows.append(f"    {{CFG, {{{hexes(make_cfg(item[1], cfg_id=item[2]).serialize(word_bw=DW))}}}, {{}}, 0u, 0u, 0u}},")
         else:
             _, n0, n1, tag, want = item
-            hdr = FirCmdHdr(nsamp=n1 - n0, tx_id=tx, cfg_seq=tag).serialize(word_bw=DW)
+            hdr = FirCmdHdr(nsamp=n1 - n0, tx_id=tx, cfg_id=tag).serialize(word_bw=DW)
             samples = array(S16, np.asarray(x[n0:n1], dtype=np.int64)).serialize(word_bw=DW)
             rows.append(f"    {{PKT, {{{hexes(hdr)}}}, {{{hexes(samples)}}}, {n1 - n0}u, {tx}u, {want}u}},")
             tx += 1
@@ -212,7 +212,7 @@ def render_tb(dll: str, x, probes: bool = False) -> str:
     f_nsamp = field_pos(FirStatus, "nsamp")
     f_ncfg = field_pos(FirStatus, "ncfg")
     f_tx = field_pos(FirRespHdr, "tx_id")
-    f_seq = field_pos(FirRespHdr, "cfg_seq")
+    f_seq = field_pos(FirRespHdr, "cfg_id")
 
     def fld(words: str, pos) -> str:
         return f"field({words}, {pos[0]}, {pos[1]}, {pos[2]})"
@@ -266,7 +266,7 @@ static uint32_t field(const std::vector<uint64_t>& w, int word, int bit, int wid
 }}
 
 /// Commits each config; sends each packet as two queue-in packets -- its header, then its samples.
-/// It never waits for a config to be received: the header's cfg_seq makes the kernel wait.  It waits
+/// It never waits for a config to be received: the header's cfg_id makes the kernel wait.  It waits
 /// for room in queue in on queue in's interrupt -- no polling.
 class Writer : public XsiSimObj {{
 public:

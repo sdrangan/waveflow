@@ -67,10 +67,11 @@ The body is declared, not extracted:
     FirCmdHdr h;
     h.read_stream<DW>(s_in);                         // 1. the header
 
-CFG: while (ncfg < h.cfg_seq) {                      // 2. the config this packet needs
+CFG: while (cfg_id != h.cfg_id) {                    // 2. the config this packet needs
         FirCfg c;
         c.read_stream<DW>(s_cfg);
         ...                                          //    load the taps
+        cfg_id = c.cfg_id;
         ncfg++;
     }
 
