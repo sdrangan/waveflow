@@ -2,7 +2,7 @@
 title: CG massive-MIMO detector
 parent: Examples
 nav_order: 11
-summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr — one Python model throughout. The accuracy design space is explored without Vitis; Vitis is spent only on hardware cost."
+summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr, and then through a full design-space exploration — one Python model throughout. Accuracy is explored exactly, without Vitis. Hardware cost comes from models calibrated on 86 builds, and their design choices match a 1,440-build brute force in 99.8% of the decisions."
 ---
 
 # CG massive-MIMO detector: what is built so far
@@ -11,12 +11,12 @@ The uplink base station has M antennas and serves K users. It must solve `(HᴴH
 every received vector. Conjugate gradient (CG) is the low-complexity alternative to a direct solve,
 and its iteration count is a natural accuracy-versus-latency knob. This study uses Waveflow to find
 the cheapest hardware that meets an accuracy target. The bit-exact Python model answers the accuracy
-side exactly and with no Vitis. Calibrated models will answer the cost side, with Vitis runs only
-where they are needed.
+side exactly and with no Vitis. Calibrated models answer the cost side, with Vitis runs only to
+calibrate them and to check them.
 
-**Status:** phases 0–4 are complete and reviewed (milestones M0–M4). Next are the performance models
-(Phase 5) and the full design-space exploration (Phase 6). The plan, with every decision and its
-evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
+**Status:** phases 0–5 are complete and reviewed (milestones M0–M5). Phase 6, the design-space
+exploration and its brute-force check, is complete and awaits its review (M6). The plan, with every
+decision and its evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
 
 ![The study](images/diagram_study.svg)
 
@@ -32,6 +32,11 @@ evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
 | What does it cost? | Detector: 112 / 176 / 304 DSP (2.6–7.1% of the xczu48dr) at K = 4 / 8 / 16 |
 | How fast is it? | 1,193 / 1,449 / 1,969 cycles per CG iteration for a block of 32 vectors at K = 4 / 8 / 16 |
 | Is it right? | The RTL output matches the Python golden bit for bit: K = 4, 8, 16 at every iteration count, and both frontier formats at K = 4 |
+| Can models stand in for synthesis? | For design choices, yes: fitted on 86 builds, they pick a design within 10% of the best in 2,587 of 2,592 decisions that a 1,440-build brute force settles |
+| How accurate are the models? | Over the 1,440 measured detectors: DSP and block RAM exact on every one; LUT 0.9%, FF 2.3%, job time 1.0% (mean errors) |
+| What does that save? | Calibration took 2.1 tool-hours. The brute-force sub-grid took 57. The whole space would take about 4,000 (projected: 28 days on this machine); the models price it in 15 s |
+| How many builds does calibration need? | About half: 45 builds give the same decisions in 19 of 20 random draws. With 30 or fewer it depends on the draw |
+| What are guard bits worth in hardware? | Without them the cheapest design needs 8% more LUTs, 15% more flip-flops and 24% more block RAM (medians, csynth), and for 52 of 216 questions no design fits at all |
 
 ## 1. The algorithm, as hardware sees it
 
@@ -247,8 +252,8 @@ csynth on `xczu48dr-ffvg1517-2-e`, 4 ns target, W = 12 bits with 8 guard bits:
 | Integrated detector | 4 / 8 / 16 | 3.35 ns | 112 / 176 / 304 | 20 / 26 / 63 | 33.0k / 41.6k / 60.8k |
 
 The detector's DSPs are exactly the two blocks' sum. LUTs and BRAM are not, because each per-block
-unit carries its own load and store tasks. Phase 5 will calibrate those from the per-task rows of
-the report.
+unit carries its own load and store tasks. Phase 5 calibrates those from the per-task rows of
+the report (section 6).
 
 ## 4. Verification: one golden, all bit-exact
 
@@ -297,14 +302,170 @@ cycles.
   reader before the writer has filled it. C-sim here therefore fires the task bodies in dependency
   order; RTL has the real ping-pong semantics.
 
-## 6. Next
+## 6. Performance models (Phase 5)
 
-> **Files:** none yet; phases 5 and 6 are specified in `plans/mimo_cg/mimo_cg_paper_sims.md`.
+> **Files** (in `examples/mimo_cg/hw/`): `space.py` (the design space, the calibration and held-out
+> builds), `measure.py` and `campaign.py` (one build: csynth, report attribution, RTL run),
+> `models.py` (the models), `estimate.py` (price one configuration), `validate.py`, `impl_check.py`.
+> The frozen model file is `examples/mimo_cg/calib/platforms/xczu48dr_250mhz/models/mimo_cg_hw.json`.
 
-- **Phase 5:** per-block cycle and resource models, calibrated from a small set of syntheses and
-  XSI runs. A hold-out split is fixed before any fitting.
-- **Phase 6:** sweep the whole cross-product in Python (accuracy, DSP, LUT, BRAM, latency) to get the
-  Pareto frontier, and check it against a brute-force Vitis subset.
+The hardware has ten synthesis-time knobs: K, the format (W and the guard), the vector unit's lanes,
+the matmul's rows and columns, its multiplier form, the memory word width and two buffer depths.
+That is 107,460 valid configurations. The models price any of them with no tool run:
+
+- **Counted, with no fitted parameter:** DSPs and block RAM. A body declares how many multiplies
+  and arrays it has, and a rule says how the tool binds each on this device (for example, a plain
+  multiply uses a DSP only from 12 bits).
+- **Fitted:** LUTs and flip-flops, as linear regressions per block on terms read off the block's
+  structure.
+- **Cycles:** a job of `nit` iterations takes `T0 + nit·T_iter`. Loops with a known trip count are
+  counted; only the overhead per tile is fitted. `T_iter` is the matmul's span plus the vector
+  unit's, exactly, because the two blocks wait for each other.
+
+Each block is calibrated from builds of that block alone, and the detector's glue from detector
+builds: 86 builds in all (35 minutes of wall time). The held-out builds were fixed, and committed,
+before any calibration build ran, and were built only after the models were frozen.
+
+![Held-out validation](images/model_validation.svg)
+
+| On 34 held-out builds (10 of them full detectors) | Result |
+|---|---|
+| DSP and block RAM | exact on all 34 |
+| LUT, full detectors | 0.7% mean error, 3.5% worst |
+| Flip-flops, full detectors | 2.3% mean, 4.3% worst |
+| Cycles per job (50 jobs) | 0.8% mean, 1.7% worst |
+
+Three things the calibration taught:
+
+- **csynth is not the implemented design.** Five detectors were placed and routed. Timing closes
+  at 4 ns on all five. csynth's LUT count is 2.9–4.4 times the implemented one, mostly because it
+  over-estimates the matrix loader; flip-flops are 1.3–1.7 times. The models predict csynth, because
+  that is what a sweep can afford to measure.
+- **A model is only as wide as its calibration builds.** The first matmul design had 1, 4 and 8
+  lanes, and its LUT model came out 15% low at 16. A second round of 19 builds fixed it (1.7% on
+  fresh held-out builds), and the report's per-loop rows showed where the lane count acts.
+- **The tool's loop merging is a threshold.** With one array row and as many lanes as columns, HLS
+  merges the tile loops into the sweep at 4 and 8 columns and not at 16. One extra build found the
+  boundary.
+
+## 7. The design-space exploration (Phase 6)
+
+> **Files** (in `examples/mimo_cg/hw/`): `dse.py` (the exploration), `fidelity.py` and
+> `fidelity_figure.py` (the brute-force comparison and the learning curve), `finding.py` (the design
+> finding), `finalists.py` (place and route of twelve designs); tables in
+> `examples/mimo_cg/paper_data/`.
+
+A **joint design** is a scenario (modulation, M, K), a hardware configuration and an iteration
+count. Its SNR loss is measured (section 2). Its resources and job time are predicted (section 6).
+There are 6,084,720 of them, and `python -m examples.mimo_cg.hw.dse` prices them all in 15 seconds.
+Within 0.5 dB of exact MMSE, each scenario's frontier of DSP, LUT, flip-flops, block RAM and job
+time has 107–330 designs.
+
+![Cheapest hardware against job time](images/dse_frontier.svg)
+
+### Do the models make the right choices?
+
+A sub-grid of 1,440 detectors was built and measured in full: csynth, then an RTL run that checks
+every output bit and times a steady stream of jobs. It took 57 tool-hours (9.7 hours on six
+processes); all 1,440 builds passed. Because the sub-grid is a full cross-product, the best design
+in it for any question is known.
+
+The questions are **decisions**: for a scenario, a loss budget and a job-time budget, which design
+is cheapest in one resource? The decision set (2,592 decisions, with the model's pick for each)
+and the scoring rule were committed before the first of the 1,440 builds ran. A pick is *right* if,
+measured, it meets the job-time budget within 2% and costs within 10% of the best.
+
+![Model's pick against the brute-force pick](images/decision_fidelity.svg)
+
+| Resource | Decisions right | Pick has exactly the best cost |
+|---|---|---|
+| DSP | 99.5% | 98.3% |
+| LUT | 99.8% | 86.0% |
+| Flip-flops | 99.8% | 86.9% |
+| Block RAM | 100% | 98.9% |
+
+Five decisions of 2,592 are not right. Four are budgets that fall within 1% of a design's job
+time, where a slightly slow prediction makes the model take a larger design. The fifth is a guard:
+the models make no latency claim for a design whose job is short enough for memory traffic to bind,
+so they pass over one that in fact measures fine.
+
+The same builds test the models directly. DSP and block RAM are exact on all 1,440. The mean error
+is 0.9% for LUTs, 2.3% for flip-flops and 1.0% for job time. One family is mispredicted: merged
+single-row arrays in the 3-multiply form are 7.6% slow, a combination no calibration build had.
+Elsewhere the worst job-time error is 2.5%.
+
+### How many builds does the calibration need?
+
+The models were refitted on random subsets of the 86 calibration builds and scored on the same
+decisions. With 45 builds, 19 of 20 subsets pass the 90% bar on every resource. With 30 or fewer,
+the outcome depends on which builds were drawn.
+
+![Learning curve](images/learning_curve.svg)
+
+### What it costs
+
+| | Builds | Tool-hours | Wall time |
+|---|---|---|---|
+| Calibration | 86 | 2.1 | 35 min |
+| Held-out validation | 46 | 1.0 | 21 min |
+| Exploring 6,084,720 joint designs in Python | 0 | 0 | 15 s |
+| Brute force of the 1,440-detector sub-grid | 1,440 | 57 | 9.7 h |
+| Brute force of the whole space (projected) | 107,460 | about 4,000 | about 28 days |
+
+### What the exploration says about the design
+
+- **Guard bits pay for themselves, mostly in registers.** For each scenario and job-time budget,
+  compare the cheapest design with guard bits on the two scalar accumulators against the cheapest
+  without. Leaving them out costs a median 8% in LUTs, 15% in flip-flops and 24% in block RAM, and
+  nothing in DSPs, because a 12-bit and a 16-bit multiply both take one DSP. The datapath is 4 bits
+  wider in most cases; in 28 of 164 the job also runs more iterations.
+- **Without guard bits, a quarter of the questions have no answer.** For 52 of 216 (43 of them
+  64-QAM) no design without guard reaches 0.5 dB within the 16-bit datapath.
+- **Speed comes from lanes first.** The cheapest design goes from 1 lane and a 4-element array at
+  the loosest job-time budget to 16 lanes at the tightest, with the array growing behind. The
+  vector unit stays about two thirds of an iteration. That buys a 17 times shorter job for 5 times
+  the LUTs and 24 times the DSPs.
+
+### The same comparison in placed-and-routed hardware
+
+Twelve designs were taken through Vivado: for 16-QAM with 64 antennas at each K, the cheapest
+design at the loosest and at the second-tightest job-time budget, once with guard bits and once
+without. The list was fixed before any of them was built. All twelve meet 4 ns (2.70–3.91 ns
+achieved) and are bit-exact at RTL. The table gives what leaving the guard bits out costs, as
+implemented:
+
+| K, job-time budget | With guard | Without | LUTs | Flip-flops | DSPs | Job time |
+|---|---|---|---|---|---|---|
+| 4, loose | W12, 2 iterations | W14, 4 iterations | +3% | +3% | same | +85% |
+| 4, tight | W12, 2 iterations | W16, 2 iterations | +2% | +15% | same | same |
+| 8, loose | W10, 3 iterations | W14, 4 iterations | +13% | +10% | same | +22% |
+| 8, tight | W12, 3 iterations | W14, 4 iterations | +18% | +18% | +27% | same |
+| 16, loose | W12, 4 iterations | W16, 4 iterations | +12% | +15% | same | same |
+| 16, tight | W12, 4 iterations | W16, 4 iterations | +8% | +17% | same | same |
+
+- **The models' ranking survives place and route.** csynth counts about three times the LUTs of
+  the implemented design, yet the order of the twelve designs by LUTs, and by flip-flops, is the
+  same before and after.
+- **Narrow formats save logic and registers, not DSPs.** Vivado uses four more DSPs per lane than
+  csynth reports, and at 10 bits it moves back into DSPs the multiplies that csynth builds from
+  LUTs. The 10-bit design has 28 DSPs, as many as its 14-bit counterpart, where csynth says 17
+  against 24.
+- **Without guard bits, small designs pay in time.** At K = 4 and K = 8 the cheapest design
+  without guard runs more iterations, so its job takes 85% and 22% longer.
+
+
+## 8. Limits
+
+> **Files:** the decision records are in `plans/mimo_cg/mimo_cg_paper_sims.md` (section 14).
+
+- Costs are csynth estimates, except for the placed-and-routed designs above.
+- The link is uncoded, with i.i.d. Rayleigh fading and perfect channel knowledge; `HᴴH` and `Hᴴy`
+  are formed in floating point, so the widths cover the CG only.
+- The block is 32 vectors, and registers are at most 16 bits wide (the memory format).
+- Job time is modelled where the CG loop is the bottleneck. Designs under twice the memory-transfer
+  floor are flagged, and no latency is claimed for them.
+- The brute force covers 1,440 of the 107,460 configurations: three lane counts, array rows of 1, 4
+  and K, and the smallest buffer depths.
 
 ## Where things are
 
@@ -314,6 +475,8 @@ cycles.
 | Bit-exact golden | `examples/mimo_cg/mimo_cg_fixed.py` (C++ reference: `examples/mimo_cg/cpp/cg_ref.h`) |
 | Accuracy sweep and analysis | `examples/mimo_cg/mimo_cg_accuracy_sweep.py`, `mimo_cg_accuracy_analysis.py` |
 | Hardware blocks, codegen, C-sim | `examples/mimo_cg/hw/` (`vec.py`, `mm.py`, `detector.py`, `build.py`, `csim.py`, `cpp/`) |
+| Design space, measurement, models | `examples/mimo_cg/hw/` (`space.py`, `measure.py`, `campaign.py`, `models.py`, `estimate.py`, `validate.py`) |
+| Exploration, brute-force comparison, finding | `examples/mimo_cg/hw/` (`dse.py`, `fidelity.py`, `finding.py`, `finalists.py`) |
 | Tests | `tests/examples/test_mimo_cg_*.py`: no markers for the fast checks, `-m vitis` for C-sim and csynth, `-m xsi` for RTL |
 | Paper data | `examples/mimo_cg/paper_data/*.csv` |
 
@@ -322,4 +485,7 @@ plots come from `python docs/examples/mimo_cg/make_results.py`. That script read
 tables and the Phase 4 csynth reports and XSI cycle logs, and snapshots the hardware numbers to
 `hw_csynth.csv` and `hw_rtl_cycles.csv` (next to the script) so the plots regenerate without
 Vitis. The `float_*` and
-`accuracy_*` figures come from the example's own build commands.
+`accuracy_*` figures come from the example's own build commands. The figures of sections 6 and 7
+come from `python -m examples.mimo_cg.hw.validate`, `python -m examples.mimo_cg.hw.fidelity`
+(add `--learning-curve` for the learning curve) and `python -m examples.mimo_cg.hw.finding`; each
+reads committed tables only, so none needs Vitis.

@@ -146,26 +146,36 @@ calibrate-from-runs structure as the resource model.
 
 ## Build-vs-have map
 
-Refreshed 2026-09-30. The executable plan for this paper's simulations is
+Refreshed 2026-10-05. The executable plan for this paper's simulations is
 [`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md): massive-MIMO uplink CG
-detection on `xczu48dr` with Vitis 2024.1, in phases from a floating-point link
-simulation to the full DSE and brute-force baseline.
+detection on `xczu48dr` with Vitis 2024.1. **All of its phases have run** (Phase 6 awaits its
+review); everything application-level lives in `examples/mimo_cg/`, and the framework gained no
+CG-specific code.
 
 | Paper piece | Status |
 |---|---|
-| Bit-exact functional (accuracy) | **built** — `FixedField` (`waveflow/hw/fixpoint.py`) and `ComplexField` (`waveflow/hw/complexfield.py`, including `cquantize`), proven against Vitis by the conformance harnesses in `examples/schemas/fixedpoint/` and `examples/schemas/complex/`. No division or reciprocal yet, which CG's α and β need (plan Phase 2) |
-| Vector unit (CG dots/AXPY) | **partial** — `examples/vmac` has complex fixed-point `scalar_mult`, `inner_prod` and `sum` over an AXI-MM queue, with a calibrated cycle model; it lacks per-column α and AXPY. No `vecunit` exists |
-| Shared memory + queue (CG state) | **built** — `MemoryMod` (`waveflow/hw/memory.py`, formerly `MemComponent`) + `AXIMMQueue` (`waveflow/hw/aximm_queue.py`) |
-| Systolic matmul block | **new** (application-level) — nothing systolic exists; `waveflow/vitis_l1` has a bit-exact, real-valued GEMV model only (`plans/vitis_l1_hwmodule.md`, S1 onward open) |
-| CG control | **new** (application-level) — the `plans/cg.md` sketch was corrected on 2026-09-30 |
-| Cycle-approximate model | **built** — `TimingModel`/`LinCalibModel` and the `CollectTimingStep`/`FitTimingStep` DAG steps, with per-example fits; every committed calibration platform is xc7z020 (the package's `zynq7020_bfm_100mhz`, plus the libraries in `examples/fir_block` and `examples/vecmult`), and none targets xczu48dr |
-| Resource-approximate model | **built** (`plans/resource_model.md`, phases A–E) — `InspectSynthStep`, per-part device rules (DSP48E1 and DSP48E2), `VitisResourceModel`, `compose`, held-out validation on `fir_block`. Uncertainty- or decision-aware sampling is not built |
-| DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli`, `SweepRunner`/`ParamGrid` (`waveflow/build/sweep.py`), the conformance harnesses |
+| Bit-exact functional (accuracy) | **built and used** — `FixedField` and `ComplexField`, plus the example's fixed-point CG golden (`examples/mimo_cg/mimo_cg_fixed.py`) with the division α and β need. Accuracy was swept over 27 scenarios, 7 widths, 3 guards and up to 8 iteration counts with no Vitis (plan Phases 2–3) |
+| Vector unit (CG dots/AXPY) | **built** — `examples/mimo_cg/hw/vec.py` and `cpp/cg_vec_task.h`: lanes as a knob, per-column α and β with one divider per lane |
+| Shared memory + queue (CG state) | **built** — `MemoryMod` and the framework's memory streams; the blocks exchange P and S through stream-of-blocks channels |
+| Systolic matmul block | **built** — `examples/mimo_cg/hw/mm.py` and `cpp/cg_mm_task.h`: an R × C array with a 3- or 4-multiply complex multiplier |
+| CG control | **built** — the free-running composite `CgDetector` (`examples/mimo_cg/hw/detector.py`), bit-exact at RTL for K = 4, 8, 16 |
+| Cycle-approximate model | **built for this design on xczu48dr** — `examples/mimo_cg/hw/models.py`: counted trip counts plus a fitted per-tile overhead; 1.0% mean job-time error over 8,807 measured jobs |
+| Resource-approximate model | **built for this design on xczu48dr** — the same file: DSP and block RAM counted (exact on 1,440 of 1,440 measured detectors), LUT and FF fitted per block (0.9% and 2.3% mean error). The framework's `compose` walks the same numbers |
+| DSE / build / conformance harness | **built and used** — `SweepRunner` drives the campaigns; `examples/mimo_cg/hw/dse.py` prices 6,084,720 joint designs in 15 s |
+| Brute-force baseline | **run** — 1,440 detectors, 57 tool-hours; the models' pick is right in 99.8% of 2,592 pre-registered decisions (`examples/mimo_cg/hw/fidelity.py`) |
+| Sampling experiment | **run as a learning curve** on existing data: 45 of the 86 calibration builds suffice in 19 of 20 random draws. Uncertainty- or decision-aware sampling is not built |
 
-Most *infrastructure* now exists; the new pieces are the **systolic block**,
-**CG control**, **fixed-point division**, and **decision-aware sampling** for the
-resource model. The paper *composes* — a far stronger position than "build
-everything."
+**Where the experimental structure stands.** (1) Calibrate: 86 builds, 2.1 tool-hours. (2) Validate:
+46 held-out builds fixed before calibration, then the 1,440-build sub-grid. (3) DSE: the whole
+cross-product in Python. (4) Baseline and finding: the brute force of the sub-grid took 57
+tool-hours and the whole space is projected at about 4,000; the design finding is what guard bits
+on two scalars are worth (a median 8% of LUTs and 15% of flip-flops, and feasibility itself for a
+quarter of the questions). The numbers and their caveats are in the plan's sections 14 to 16.
+
+**Reviewer risks, revisited.** The approximate models were validated on builds they never saw, and
+the weak spots are stated (one mispredicted family; csynth is not the implemented design). Resources
+did lead with DSP and block RAM, which are exact. The finding is modest in size and stated as such.
+The brute-force baseline exists.
 
 ## Related notes
 - `plans/fixedfield.md` — the bit-exact fixed-point foundation (accuracy model).
