@@ -302,3 +302,44 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Vivado undoes part of what csynth reports at narrow widths.** csynth built the matmul's
   8-bit multiplies from LUTs (32 DSPs); Vivado put most of them back into DSPs (60). The
   DSP saving of a narrow format is real but smaller than csynth says.
+
+## Gate 6.0 and Phase 6, steps 6.1–6.4 (2026-10-04)
+
+- **Check that an acceptance measure can fail before agreeing to it.** AC6's first form
+  asked whether the model finds the minimum-DSP design. DSP was counted exactly and the
+  question had no latency constraint, so the answer was always the smallest hardware and
+  the measure passed by construction. A prototype of the measure on predicted numbers,
+  before the gate, showed it.
+- **Size a gate's options with a scratch prototype.** Joining the accuracy table with the
+  estimator took an hour and settled three questions with numbers: the memory-bound regime
+  touches no accuracy-feasible design, every scenario has a design at W ≤ 16, and 23% of
+  the frontier sits where the matmul LUT model was weak.
+- **The report's sub-block rows say where a knob acts.** The lane count changes one loop
+  of the matmul (the one that rounds and writes S); the sweep and the rest do not move.
+  Three terms in the right place beat v1's three guessed ones (leave-one-out 7.3% → 2.2%).
+- **Count what has a trip count; fit only the rest.** The matmul's cycles are two passes
+  of K·N/L, a sweep of K + R + C − 2 per tile, and a per-tile overhead. Fitting the
+  trip counts too gave a sweep coefficient of 0.91 and nine parameters.
+- **The tool's loop merging is a threshold, not a rule you can assume.** HLS merged the
+  tile loops into the sweep at C = 4 and 8 and not at 16. One extra build at C = 8 found
+  the boundary; assuming it cost 28% at C = 16.
+- **A second calibration round can overlap an earlier held-out set.** Repeating the first
+  design's corners at 2 lanes made a calibration build out of the matmul of a supplementary
+  held-out detector. Check new calibration builds against held-out *blocks*, not only
+  against held-out builds of the same top.
+- **A refit can be worse somewhere.** v2's matmul span is 4.4% off on a held-out build
+  that v1 had within 0.5%. It was scored after the freeze, so it stays, and it is reported
+  beside the improvements.
+- **Write the scoring code before the data.** The rule for "right", its edge cases (a pick
+  that fails to build, a budget nobody meets, ties) and the tests on made-up measurements
+  were committed with the decision set, before the first brute-force build.
+- **A long campaign needs four things a short one does not:** builds pruned as they finish
+  (1,440 unpruned builds would not fit the disk), a simulation budget near what the run
+  needs (the model-free bound was 3–7× too long), builds that are skipped once measured
+  (so a pilot counts and a restart is free), and processes detached from the session.
+- **Pilot on a sample that visits every knob value.** A stride of 120 over the grid met
+  only one memory width and three of five word widths; a stride coprime to the grid's
+  inner loops (113) matched the grid's mean size within 1%.
+- **A file named `*summary*` is ignored by this repo.** It happened twice
+  (`model_validation_summary.csv`, `dse_summary.csv`). Check `git status` after writing
+  a new table.
