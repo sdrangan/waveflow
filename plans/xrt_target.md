@@ -96,7 +96,9 @@ On a Linux machine with Vitis and an XRT platform that supports `hw_emu`:
   both kernels in one `hw_emu`, protocol-detected completion, every job checked, one number
   confirmed from the waveform.
 - Keep the best run as the **XRT reference design** for Stages 2–6.
-- Record: `v++ -c` / `v++ -l` / `hw_emu` wall-clock, kernel launch overhead, `bo.sync` cost.
+- Record, for XSI and `hw_emu` on the same design: build time (`xelab` vs `v++ -c` + `v++ -l`),
+  per-run start-up time, and **simulated cycles per wall-clock second**. Also kernel launch
+  overhead and `bo.sync` cost.
 - **Verify the assumptions** under *Unverified* below.
 
 Exit: the hypothesis "AI struggles with multi-kernel HLS systems" is either dropped or has
@@ -193,6 +195,10 @@ calibrations stay valid for IPI realizations.
 - How the RF converters appear on Versal-RF platforms, and whether the DSP in the wireless arc goes
   to AIE rather than PL HLS. **This decides what a "kernel" is in the RF arc.**
 - `hw_emu` contention fidelity: how much of the interconnect is RTL vs TLM per platform.
+- How `hw_emu` accounts for **host software time**. Expected: an x86 host's compute between XRT
+  calls costs no simulated time; an embedded host in QEMU gets approximate time from the
+  QEMU/simulator co-simulation. If so, modeling software delays needs pysim (or an XSI host with
+  explicit delays), which belongs in the positioning.
 - `hw_emu` is Linux-only, so a Linux development machine (or VM) is needed.
 
 ## Not in scope
