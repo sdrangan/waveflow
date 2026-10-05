@@ -133,6 +133,60 @@ def test_container_helper_creates_container_with_capacity_and_init() -> None:
     assert c.level == 4
 
 
+def test_call_after_runs_later_and_does_not_block_the_caller() -> None:
+    """The deferred work starts after the delay, its own duration counts, and the caller runs on."""
+    sim = Simulation()
+    obj = SimObj(sim=sim)
+    log = []
+
+    def work(tag, dur):
+        log.append((tag, "start", obj.now))
+        yield obj.timeout(dur)
+        log.append((tag, "end", obj.now))
+
+    def caller():
+        obj.call_after(5.0, work, "a", 2.0)
+        log.append(("caller", "returned", obj.now))
+        yield obj.timeout(1.0)
+        obj.call_after(4.0, work, "b", 2.0)
+
+    sim.env.process(caller())
+    sim.env.run()
+    assert log == [("caller", "returned", 0.0),
+                   ("a", "start", 5.0), ("b", "start", 5.0),   # equal fire times: call order
+                   ("a", "end", 7.0), ("b", "end", 7.0)]
+    assert obj.processes == [], "deferred calls must not accumulate in SimObj.processes"
+
+
+def test_call_after_slot_bounds_work_in_flight() -> None:
+    """With a slot, the caller blocks once the slots are all held, and each finishing call frees
+    one -- so at most `capacity` deferred calls are outstanding."""
+    sim = Simulation()
+    obj = SimObj(sim=sim)
+    slots = obj.container(capacity=2, init=2)
+    issued = []
+
+    def work():
+        yield obj.timeout(1.0)
+
+    def caller():
+        for _ in range(4):
+            yield slots.get(1)
+            issued.append(obj.now)
+            obj.call_after(10.0, work, slot=slots)
+
+    sim.env.process(caller())
+    sim.env.run()
+    assert issued == [0.0, 0.0, 11.0, 11.0]
+    assert slots.level == 2
+
+
+def test_call_after_rejects_negative_delay() -> None:
+    obj = SimObj(sim=Simulation())
+    with pytest.raises(ValueError, match="delay must be non-negative"):
+        obj.call_after(-1.0, lambda: iter(()))
+
+
 def test_action_records_duration_and_validation() -> None:
     """Record action timing windows and validate action input arguments."""
     sim = Simulation()
