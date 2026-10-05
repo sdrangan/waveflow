@@ -37,6 +37,13 @@ Deferred from S0, deliberately:
 
 Found by the lint census: `vecmult` tracks a file inside `vec_mult_csim_proj/`.
 
+Found re-synthesizing rf_blk_delay / bram_access / rf_loopback: their per-example `CSynthStep`s
+consume only `gen/<top>.cpp` and the `.tcl`, so the DAG's mtime freshness never re-runs csynth for an
+edit under `src/` (nor, already, `include/`). The staleness guard catches it (loudly: the gate skips
+and the `-m xsi` session fails), but the build should not need `--force`. **S2, per example with a
+DAG csynth step:** make it consume `src/` (a directory artifact; `_path_mtime` already takes the newest
+file in a directory).
+
 ## Motivation
 
 An example's `include/` currently mixes three kinds of file, and nothing on disk says which is which:
