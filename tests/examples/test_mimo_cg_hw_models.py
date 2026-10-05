@@ -746,6 +746,44 @@ def test_second_held_out_set_judges_the_refit(tmp_path):
     assert set(by_lane) == {2, 16} and all(max(e) < 5.0 for e in by_lane.values())
 
 
+def test_the_first_models_scores_are_kept_beside_the_second():
+    """The first models (6450abe0…) were frozen before any held-out build ran, so their scores on
+    the first held-out set are the blind ones.  They are kept as tables (copied from the commit
+    before version 2) because the docs quote them beside version 2's."""
+    from examples.mimo_cg.mimo_cg import read_table
+
+    for name in (
+        "model_validation_v1_metrics",
+        "model_validation_v1_supplement_metrics",
+    ):
+        head = (
+            (MD.PAPER_DATA / f"{name}.csv").read_text(encoding="utf-8").splitlines()[0]
+        )
+        assert (
+            "model_sha256=6450abe0889054c8" in head and "tool=vitis_hls 2024.1" in head
+        )
+    v1 = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_v1_metrics.csv")
+    }
+    v2 = {
+        r["metric"]: r
+        for r in read_table(MD.PAPER_DATA / "model_validation_metrics.csv")
+    }
+    assert set(v1) == set(v2)
+    quoted = {
+        "designs: LUT MAPE (%)": ((1.947, 5.717), (0.732, 3.475)),
+        "designs: FF MAPE (%)": ((2.563, 5.481), (2.291, 4.252)),
+        "designs: job cycles MAPE (%)": ((0.626, 1.591), (0.751, 1.683)),
+    }
+    for metric, (first, second) in quoted.items():
+        assert (float(v1[metric]["value"]), float(v1[metric]["worst"])) == first
+        assert (float(v2[metric]["value"]), float(v2[metric]["worst"])) == second
+        assert v1[metric]["pass"] == v2[metric]["pass"] == "1"  # AC5 holds with both
+    both = "blocks: DSP and BRAM both exact (%)"
+    assert float(v1[both]["value"]) == float(v2[both]["value"]) == 100.0
+
+
 def _committed_cycles(build: str) -> dict:
     from examples.mimo_cg.mimo_cg import read_table
 

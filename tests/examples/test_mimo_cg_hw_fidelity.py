@@ -440,6 +440,7 @@ def test_ac6_the_models_pick_is_right_in_at_least_90_percent_of_the_decisions(
     for mine, was in zip(judged, committed, strict=True):
         keys = ("modulation", "M", "K", "job_budget", "resource", "problem", "pick")
         assert all(mine[k] == was[k] for k in keys)  # the committed picks, unchanged
+        assert float(mine["budget_db"]) == float(was["budget_db"])
     table = {(m["set"], m["resource"]): m for m in _table("decision_fidelity_metrics")}
     gates = {k: m for k, m in table.items() if m["threshold"]}
     assert set(gates) == {("all", r) for r in dse.RESOURCES}
@@ -459,6 +460,19 @@ def test_ac6_the_models_pick_is_right_in_at_least_90_percent_of_the_decisions(
     wrong = [r for r in judged if r["right"] != "1"]
     assert len(wrong) == 5 and all(
         r["met"] == "1" and r["measured"] == "1" for r in judged
+    )
+    # "met" allows 2%: 30 picks are over their budget, within it.  With no tolerance at all,
+    # 2,558 are right, and LUT is the lowest resource at 97.2% (M6 review)
+    over = [r for r in judged if float(r["m_job"]) > float(r["job_budget"])]
+    assert len(over) == 30
+    assert all(float(r["m_job"]) <= 1.02 * float(r["job_budget"]) for r in over)
+    strict = [r for r in judged if r["right"] == "1" and r not in over]
+    assert len(strict) == 2558
+    by_res = {
+        res: sum(r["resource"] == res for r in strict) / 648 for res in dse.RESOURCES
+    }
+    assert (
+        min(by_res, key=by_res.get) == "lut" and round(100 * by_res["lut"], 2) == 97.22
     )
     assert sorted(float(r["regret_pct"]) for r in wrong) == [
         12.0,
@@ -505,7 +519,7 @@ def test_model_errors_over_the_sub_grid():
         if r["quantity"] == "job" and r["guarded"] == "0":
             family = "_l4_r1_c4_m3_" in r["build"]
             err.setdefault(family, []).append(float(r["error_pct"]))
-    assert len(err[True]) == 540 and 7.0 < sum(err[True]) / 540 < 8.0
+    assert len(err[True]) == 540 and 7.4 < sum(err[True]) / 540 < 7.7  # 7.5%
     assert max(err[True]) < 10.0 and min(err[True]) > 4.0  # too slow, every time
     assert max(abs(e) for e in err[False]) < 2.5
     assert sum(abs(e) for e in err[False]) / len(err[False]) < 0.7
@@ -522,7 +536,7 @@ def test_predicted_frontiers_cover_the_measured_ones():
         }
         # exact membership is strict (one LUT apart is a miss); coverage within the decision
         # tolerances is the useful number
-        assert mean["precision_pct"] > 80 and mean["recall_pct"] > 80
+        assert mean["precision_pct"] > 83 and mean["recall_pct"] > 81
         assert mean["covered_pct"] > 99.9
     assert min(float(r["covered_pct"]) for r in rows) > 93
 

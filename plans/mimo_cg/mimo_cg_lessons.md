@@ -343,3 +343,37 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **A file named `*summary*` is ignored by this repo.** It happened twice
   (`model_validation_summary.csv`, `dse_summary.csv`). Check `git status` after writing
   a new table.
+
+## Phase 6, steps 6.5–6.9 and the M6 review (2026-10-05)
+
+- **Do not run the test suite beside Vivado.** Three place-and-route jobs and the fast suite
+  together left 262 MB free; one Vivado segfaulted and took a runner process with it.
+- **A tool's report file is not a completion marker.** `export_design` writes its report
+  early and fills it in at the end. Judge completion by the tool's return and its log.
+- **A long run's merge can destroy derived state.** Merging the brute force rebuilt the
+  calibration work store empty, because the store was rebuilt from "the calibration builds
+  in this merge" and there were none. A rebuild step should do nothing when it has no input.
+- **Record when a run started from its own start file, not from a later status check.**
+  The log said 21:34 for a run that started at 20:55, and a "committed before any result"
+  claim was false by 40 minutes.
+- **Push pre-registration commits before the run.** Locally the order is clear, but the
+  commits reached the remote together with the results, so nothing outside this machine
+  attests it.
+- **Code that scores must not change once any data exists, or the change must be shown
+  harmless.** Two additions went into the scoring module after the pilot; re-running the
+  module as pre-registered on the final data showed the same rows.
+- **Say what a headline covers wherever it is quoted.** "99.8% of the decisions" was a
+  1.3% slice of the space with 3 of 17 lane and column pairs; the summary, the results
+  table and the finding each needed that clause.
+- **A median hides a spread.** "Guard bits cost nothing in DSPs" was the median of pairs
+  of which 62 used more DSPs and 7 fewer. Give the range, and count the pairs that are the
+  same design twice.
+- **"None of these was seen before" needs a set difference, not a memory.** Seven of the
+  twelve finalists had the knobs of a brute-force build.
+- **Check a measure against a crude predictor.** The reviewer scored "cost = lanes" and
+  random costs (1–17% right) and noisy models (fail at 10% noise). That is what shows a
+  99.8% is not built in.
+- **Timing closure is a claim about the designs that were routed.** The largest routed
+  design had 384 csynth DSPs and 0.09 ns of slack; a fifth of the frontier is larger.
+- **A new assertion's bound should come from the data, then be stated.** Guessing "within
+  5%" for a value that was 5.08% failed the test; so did a hand-typed 7.6% for 7.55%.

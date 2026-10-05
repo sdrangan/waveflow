@@ -2,7 +2,7 @@
 title: CG massive-MIMO detector
 parent: Examples
 nav_order: 11
-summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr, and then through a full design-space exploration — one Python model throughout. Accuracy is explored exactly, without Vitis. Hardware cost comes from models calibrated on 86 builds, and their design choices match a 1,440-build brute force in 99.8% of the decisions."
+summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr, and then through a full design-space exploration — one Python model throughout. Accuracy is explored exactly, without Vitis. Hardware cost comes from models calibrated on 86 builds; on a 1,440-build brute-force slice of the space, the design they pick costs within 10% of the best in 99.8% of the decisions."
 ---
 
 # CG massive-MIMO detector: what is built so far
@@ -32,11 +32,11 @@ decision and its evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `p
 | What does it cost? | Detector: 112 / 176 / 304 DSP (2.6–7.1% of the xczu48dr) at K = 4 / 8 / 16 |
 | How fast is it? | 1,193 / 1,449 / 1,969 cycles per CG iteration for a block of 32 vectors at K = 4 / 8 / 16 |
 | Is it right? | The RTL output matches the Python golden bit for bit: K = 4, 8, 16 at every iteration count, and both frontier formats at K = 4 |
-| Can models stand in for synthesis? | For design choices, yes: fitted on 86 builds, they pick a design within 10% of the best in 2,587 of 2,592 decisions that a 1,440-build brute force settles |
-| How accurate are the models? | Over the 1,440 measured detectors: DSP and block RAM exact on every one; LUT 0.9%, FF 2.3%, job time 1.0% (mean errors) |
+| Can models stand in for csynth runs? | For design choices, yes: fitted on 86 builds, they pick a design within 10% of the best in 2,587 of 2,592 decisions that a 1,440-build brute force settles (a slice: 1.3% of the configurations) |
+| How accurate are the models? | Against csynth and RTL on the 1,440 measured detectors: DSP and block RAM exact on every one; LUT 0.9%, FF 2.3%, and job time 1.0% where the CG loop is the bottleneck (mean errors) |
 | What does that save? | Calibration took 2.1 tool-hours. The brute-force sub-grid took 57. The whole space would take about 4,000 (projected: 28 days on this machine); the models price it in 15 s |
-| How many builds does calibration need? | About half: 45 builds give the same decisions in 19 of 20 random draws. With 30 or fewer it depends on the draw |
-| What are guard bits worth in hardware? | Without them the cheapest design needs 8% more LUTs, 15% more flip-flops and 24% more block RAM (medians, csynth), and for 52 of 216 questions no design fits at all |
+| How many builds does calibration need? | About half: with 45 builds, 19 of 20 random subsets pass the same 90% bar. With 30 or fewer it depends on the draw |
+| What are guard bits worth in hardware? | Without them the cheapest design needs 8% more LUTs, 15% more flip-flops and 24% more block RAM (medians of the models' csynth numbers; LUTs range from 0 to 94%), and for 52 of 216 questions no design fits at all. Implemented, on six pairs: 2–18% more LUTs, 3–18% more flip-flops |
 
 ## 1. The algorithm, as hardware sees it
 
@@ -323,17 +323,22 @@ That is 107,460 valid configurations. The models price any of them with no tool 
   unit's, exactly, because the two blocks wait for each other.
 
 Each block is calibrated from builds of that block alone, and the detector's glue from detector
-builds: 86 builds in all (35 minutes of wall time). The held-out builds were fixed, and committed,
-before any calibration build ran, and were built only after the models were frozen.
+builds: 86 builds in all (35 minutes of wall time), in two rounds. Each round's held-out builds
+were fixed, and committed, before that round's calibration builds ran, and were built only after
+its models were frozen.
 
 ![Held-out validation](images/model_validation.svg)
 
-| On 34 held-out builds (10 of them full detectors) | Result |
-|---|---|
-| DSP and block RAM | exact on all 34 |
-| LUT, full detectors | 0.7% mean error, 3.5% worst |
-| Flip-flops, full detectors | 2.3% mean, 4.3% worst |
-| Cycles per job (50 jobs) | 0.8% mean, 1.7% worst |
+| On the first 34 held-out builds (10 of them full detectors) | First models, as frozen | Second models |
+|---|---|---|
+| DSP and block RAM | exact on all 34 | exact on all 34 |
+| LUT, full detectors | 1.9% mean error, 5.7% worst | 0.7% mean, 3.5% worst |
+| Flip-flops, full detectors | 2.6% mean, 5.5% worst | 2.3% mean, 4.3% worst |
+| Cycles per job (50 jobs) | 0.6% mean, 1.6% worst | 0.8% mean, 1.7% worst |
+
+Only the first column is a blind test. The second models were refitted after these builds had been
+scored, so their blind tests are six later held-out matmul builds (LUT 1.7% mean, 4.5% worst) and
+the brute force of section 7. The figure shows the second models.
 
 Three things the calibration taught:
 
@@ -368,7 +373,8 @@ time has 107–330 designs.
 A sub-grid of 1,440 detectors was built and measured in full: csynth, then an RTL run that checks
 every output bit and times a steady stream of jobs. It took 57 tool-hours (9.7 hours on six
 processes); all 1,440 builds passed. Because the sub-grid is a full cross-product, the best design
-in it for any question is known.
+in it for any question is known. It is a slice of the space: 1.3% of the configurations, with 3 of
+the 17 lane and column pairs, and 19% of the predicted frontier's designs are in it.
 
 The questions are **decisions**: for a scenario, a loss budget and a job-time budget, which design
 is cheapest in one resource? The decision set (2,592 decisions, with the model's pick for each)
@@ -387,18 +393,22 @@ measured, it meets the job-time budget within 2% and costs within 10% of the bes
 Five decisions of 2,592 are not right. Four are budgets that fall within 1% of a design's job
 time, where a slightly slow prediction makes the model take a larger design. The fifth is a guard:
 the models make no latency claim for a design whose job is short enough for memory traffic to bind,
-so they pass over one that in fact measures fine.
+so they pass over one that in fact measures fine. If the pick must meet the budget with no
+tolerance at all, 2,558 are right (97.2% for LUTs, the lowest).
 
-The same builds test the models directly. DSP and block RAM are exact on all 1,440. The mean error
-is 0.9% for LUTs, 2.3% for flip-flops and 1.0% for job time. One family is mispredicted: merged
-single-row arrays in the 3-multiply form are 7.6% slow, a combination no calibration build had.
-Elsewhere the worst job-time error is 2.5%.
+The same builds test the models directly, against csynth and the RTL run. DSP and block RAM are
+exact on all 1,440. The mean error is 0.9% for LUTs and 2.3% for flip-flops. Job time is 1.0% off
+on average over the 8,807 jobs where the CG loop is the bottleneck; the other 193, which the guard
+flags, are 5.4% off and up to 38%. One family is mispredicted: merged single-row arrays in the
+3-multiply form are 7.5% slow, a combination no calibration build had. Outside that family and
+the guard, the worst job-time error is 2.5%.
 
 ### How many builds does the calibration need?
 
 The models were refitted on random subsets of the 86 calibration builds and scored on the same
 decisions. With 45 builds, 19 of 20 subsets pass the 90% bar on every resource. With 30 or fewer,
-the outcome depends on which builds were drawn.
+the outcome depends on which builds were drawn; below 45, some regressions have fewer builds than
+parameters. Every subset keeps two detectors, one per memory word width.
 
 ![Learning curve](images/learning_curve.svg)
 
@@ -410,21 +420,23 @@ the outcome depends on which builds were drawn.
 | Held-out validation | 46 | 1.0 | 21 min |
 | Exploring 6,084,720 joint designs in Python | 0 | 0 | 15 s |
 | Brute force of the 1,440-detector sub-grid | 1,440 | 57 | 9.7 h |
-| Brute force of the whole space (projected) | 107,460 | about 4,000 | about 28 days |
+| Brute force of the whole space (projected from the sub-grid's build times) | 107,460 | about 4,000 | about 28 days |
 
 ### What the exploration says about the design
 
 - **Guard bits pay for themselves, mostly in registers.** For each scenario and job-time budget,
   compare the cheapest design with guard bits on the two scalar accumulators against the cheapest
-  without. Leaving them out costs a median 8% in LUTs, 15% in flip-flops and 24% in block RAM, and
-  nothing in DSPs, because a 12-bit and a 16-bit multiply both take one DSP. The datapath is 4 bits
-  wider in most cases; in 28 of 164 the job also runs more iterations.
+  without, by the models' csynth numbers. Leaving them out costs a median 8% in LUTs (from 0 to
+  94% across the 164 questions), 15% in flip-flops and 24% in block RAM. The median DSP cost is
+  nothing, because a 12-bit and a 16-bit multiply both take one DSP; where the missing guard
+  changes the iteration count or the architecture, DSPs move too (up in 62 cases, down in 7).
+  The datapath is 4 bits wider in most cases; in 28 of 164 the job also runs more iterations.
 - **Without guard bits, a quarter of the questions have no answer.** For 52 of 216 (43 of them
   64-QAM) no design without guard reaches 0.5 dB within the 16-bit datapath.
 - **Speed comes from lanes first.** The cheapest design goes from 1 lane and a 4-element array at
   the loosest job-time budget to 16 lanes at the tightest, with the array growing behind. The
-  vector unit stays about two thirds of an iteration. That buys a 17 times shorter job for 5 times
-  the LUTs and 24 times the DSPs.
+  vector unit stays between a half and three quarters of an iteration. That buys an 18 times
+  shorter job for 5 times the LUTs and 34 times the DSPs (medians over the 27 scenarios).
 
 ### The same comparison in placed-and-routed hardware
 
@@ -434,38 +446,46 @@ without. The list was fixed before any of them was built. All twelve meet 4 ns (
 achieved) and are bit-exact at RTL. The table gives what leaving the guard bits out costs, as
 implemented:
 
-| K, job-time budget | With guard | Without | LUTs | Flip-flops | DSPs | Job time |
-|---|---|---|---|---|---|---|
-| 4, loose | W12, 2 iterations | W14, 4 iterations | +3% | +3% | same | +85% |
-| 4, tight | W12, 2 iterations | W16, 2 iterations | +2% | +15% | same | same |
-| 8, loose | W10, 3 iterations | W14, 4 iterations | +13% | +10% | same | +22% |
-| 8, tight | W12, 3 iterations | W14, 4 iterations | +18% | +18% | +27% | same |
-| 16, loose | W12, 4 iterations | W16, 4 iterations | +12% | +15% | same | same |
-| 16, tight | W12, 4 iterations | W16, 4 iterations | +8% | +17% | same | same |
+| K, job-time budget | With guard | Without | LUTs | Flip-flops | DSPs | Block RAM | Job time |
+|---|---|---|---|---|---|---|---|
+| 4, loose | W12, 2 iterations | W14, 4 iterations | +3% | +3% | same | same | +85% |
+| 4, tight | W12, 2 iterations | W16, 2 iterations | +2% | +15% | same | same | same |
+| 8, loose | W10, 3 iterations | W14, 4 iterations | +13% | +10% | same | same | +22% |
+| 8, tight | W12, 3 iterations | W14, 4 iterations | +18% | +18% | +27% | same | same |
+| 16, loose | W12, 4 iterations | W16, 4 iterations | +12% | +15% | same | same | same |
+| 16, tight | W12, 4 iterations | W16, 4 iterations | +7% | +17% | same | +92% | same |
 
-- **The models' ranking survives place and route.** csynth counts about three times the LUTs of
-  the implemented design, yet the order of the twelve designs by LUTs, and by flip-flops, is the
-  same before and after.
+- **The models' ranking by LUTs and flip-flops survives place and route.** csynth counts about
+  three times the LUTs of the implemented design, yet the order of the twelve designs by LUTs, and
+  by flip-flops, is the same before and after. It is not the same by DSPs or by block RAM, which
+  the two tools bind differently.
 - **Narrow formats save logic and registers, not DSPs.** Vivado uses four more DSPs per lane than
   csynth reports, and at 10 bits it moves back into DSPs the multiplies that csynth builds from
   LUTs. The 10-bit design has 28 DSPs, as many as its 14-bit counterpart, where csynth says 17
   against 24.
 - **Without guard bits, small designs pay in time.** At K = 4 and K = 8 the cheapest design
-  without guard runs more iterations, so its job takes 85% and 22% longer.
+  without guard runs more iterations, so its job takes 85% and 22% longer. In the K = 8 tight
+  pair the extra iteration is paid with a larger array instead (27% more DSPs).
 
 
 ## 8. Limits
 
 > **Files:** the decision records are in `plans/mimo_cg/mimo_cg_paper_sims.md` (section 14).
 
-- Costs are csynth estimates, except for the placed-and-routed designs above.
+- Costs are csynth estimates, except for the placed-and-routed designs above. Seventeen designs
+  were placed and routed in all; the largest has 110k csynth LUTs and 384 csynth DSPs and closed
+  timing with 0.09 ns to spare. A fifth of the frontier's designs are larger than that, so the 4 ns
+  clock, and every job time, is an estimate at the fast end.
 - The link is uncoded, with i.i.d. Rayleigh fading and perfect channel knowledge; `HᴴH` and `Hᴴy`
   are formed in floating point, so the widths cover the CG only.
 - The block is 32 vectors, and registers are at most 16 bits wide (the memory format).
 - Job time is modelled where the CG loop is the bottleneck. Designs under twice the memory-transfer
   floor are flagged, and no latency is claimed for them.
-- The brute force covers 1,440 of the 107,460 configurations: three lane counts, array rows of 1, 4
-  and K, and the smallest buffer depths.
+- The brute force covers 1,440 of the 107,460 configurations: three lane counts with one array
+  width each, array rows of 1, 4 and K, and the smallest buffer depths. About a fifth of the
+  predicted frontier's designs are among them.
+- The whole-space figure of 4,000 tool-hours is a projection (other fits of the same data give
+  3,900 to 4,300), and the 28 days ignore that so many builds would not fit this machine's disk.
 
 ## Where things are
 

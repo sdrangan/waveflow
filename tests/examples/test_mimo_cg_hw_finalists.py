@@ -66,7 +66,7 @@ def test_twelve_designs_in_six_pairs(chosen):
 def test_a_pick_is_the_cheapest_in_luts_over_the_whole_space(chosen):
     hw, acc = dse.hw_table(), dse.accuracy()
     hw = hw[hw.cmd_depth == dse.FRONTIER_CMD_DEPTH]
-    for r in chosen[::5]:
+    for r in chosen:
         cands = dse.candidates(hw, acc, (r["modulation"], r["M"], r["K"]), FN.LOSS_DB)
         pool = cands[~cands.guarded & (cands.job <= r["job_budget"])]
         if r["guard"] == "no guard":
@@ -144,15 +144,35 @@ def test_every_finalist_is_implemented_meets_timing_and_is_bit_exact(chosen):
 
 
 def test_the_models_hold_on_the_finalists():
-    """None of the twelve is a calibration or brute-force build (they come from the whole space,
-    with 8 lanes and block depth 3 among them).  Against csynth: DSP and block RAM exact, LUT
-    within 2.1%, FF within 5.1%; against the RTL run: job time within 2.4%."""
-    for r in _impl():
+    """Against csynth: DSP and block RAM exact on all twelve, LUT within 2.1%, FF within 5.1%;
+    against the RTL run: job time within 2.4%.  Five of the twelve are configurations nothing had
+    built before (the four at K = 4 and the K = 8 tight design with guard); the other seven have
+    the knobs of a brute-force build, and their csynth numbers are that build's."""
+    grid = {space.bf_label(c).removeprefix("bf_") for c in space.bruteforce_grid()}
+    rows = _impl()
+    new = [r["name"] for r in rows if r["build"].removeprefix("fin_") not in grid]
+    assert new == [
+        "k4_loose_guard",
+        "k4_loose_no_guard",
+        "k4_tight_guard",
+        "k4_tight_no_guard",
+        "k8_tight_guard",
+    ]
+    sub_grid = {
+        r["build"]: r for r in read_table(FN.PAPER_DATA / "bruteforce_builds.csv")
+    }
+    for r in rows:
         assert int(r["model_dsp"]) == int(r["csynth_dsp"])
         assert int(r["model_bram"]) == int(r["csynth_bram"])
         assert abs(int(r["model_lut"]) / int(r["csynth_lut"]) - 1) < 0.021, r["name"]
         assert abs(int(r["model_ff"]) / int(r["csynth_ff"]) - 1) < 0.052, r["name"]
         assert abs(float(r["model_job"]) / float(r["rtl_job"]) - 1) < 0.024, r["name"]
+        twin = sub_grid.get(r["build"].replace("fin_", "bf_"))
+        if twin:  # the same design, built twice: csynth is deterministic
+            assert all(int(twin[k]) == int(r[f"csynth_{k}"]) for k in FN.COUNTERS)
+    # the LUT and FF worst cases are among the five new configurations
+    worst = max(rows, key=lambda r: abs(int(r["model_ff"]) / int(r["csynth_ff"]) - 1))
+    assert worst["name"] in new
 
 
 def test_what_place_and_route_changes():
@@ -166,6 +186,11 @@ def test_what_place_and_route_changes():
         by_model = sorted(rows, key=lambda r: int(r[f"model_{k}"]))
         by_impl = sorted(rows, key=lambda r: int(r[f"impl_{k}"]))
         assert [r["name"] for r in by_model] == [r["name"] for r in by_impl], k
+    # by block RAM it is not: Vivado binds memories by its own rules (31 -> 10, 79 -> 150)
+    by = {r["name"]: r for r in rows}
+    small, large = by["k4_tight_guard"], by["k16_tight_no_guard"]
+    assert (small["csynth_bram"], small["impl_bram"]) == ("31", "10")
+    assert (large["csynth_bram"], large["impl_bram"]) == ("79", "150")
     # DSPs: four more per lane than csynth counts from 12 bits up ...
     for r in rows:
         if int(r["W"]) >= 12:
@@ -174,7 +199,6 @@ def test_what_place_and_route_changes():
             )
     # ... and at 10 bits Vivado puts back in DSPs the multiplies csynth built from LUTs, so the
     # 10-bit design has as many DSPs as its 14-bit counterpart
-    by = {r["name"]: r for r in rows}
     narrow, wide = by["k8_loose_guard"], by["k8_loose_no_guard"]
     assert (narrow["W"], narrow["csynth_dsp"], wide["csynth_dsp"]) == ("10", "17", "24")
     assert narrow["impl_dsp"] == wide["impl_dsp"] == "28"
@@ -184,7 +208,7 @@ def test_what_guard_bits_are_worth_as_implemented():
     """Six pairs.  With guard bits the implemented design is smaller in LUTs and in flip-flops in
     every pair; the DSP saving csynth shows at 10 bits is not there."""
     pairs = read_table(FN.PAPER_DATA / "finalists_pairs.csv")
-    assert pairs == read_table(FN.PAPER_DATA / "finalists_pairs.csv")
+    # the pairs table is what pair_rows makes of the implemented table
     again = FN.pair_rows(
         [
             {
@@ -220,6 +244,20 @@ def test_what_guard_bits_are_worth_as_implemented():
     assert ff[0] > 3.0 and ff[-1] < 18.5 and 14.0 < (ff[2] + ff[3]) / 2 < 16.0
     k8 = next(p for p in pairs if (p["K"], p["speed"]) == ("8", "loose"))
     assert float(k8["csynth_dsp_pct"]) > 40 and float(k8["impl_dsp_pct"]) == 0
+    # implemented block RAM: equal in five pairs, +92% in one
+    assert sorted(float(p["impl_bram_pct"]) for p in pairs) == [0, 0, 0, 0, 0, 92.31]
+    # three designs without guard run more iterations; one pays in DSPs instead of time
+    more = [
+        (p["K"], p["speed"])
+        for p in pairs
+        if p["without"].split(" n")[1] > p["with"].split(" n")[1]
+    ]
+    assert more == [("4", "loose"), ("8", "loose"), ("8", "tight")]
+    k8t = next(p for p in pairs if (p["K"], p["speed"]) == ("8", "tight"))
+    assert (
+        float(k8t["impl_dsp_pct"]) == pytest.approx(27.27)
+        and abs(float(k8t["rtl_job_pct"])) < 1
+    )
     # where the guard is left out and the width is not raised enough, the job runs longer
     slow = {(p["K"], p["speed"]): float(p["rtl_job_pct"]) for p in pairs}
     assert slow[("4", "loose")] > 80 and slow[("8", "loose")] > 20

@@ -162,18 +162,22 @@ CG-specific code.
 | Cycle-approximate model | **built for this design on xczu48dr** — `examples/mimo_cg/hw/models.py`: counted trip counts plus a fitted per-tile overhead; 1.0% mean job-time error over 8,807 measured jobs |
 | Resource-approximate model | **built for this design on xczu48dr** — the same file: DSP and block RAM counted (exact on 1,440 of 1,440 measured detectors), LUT and FF fitted per block (0.9% and 2.3% mean error). The framework's `compose` walks the same numbers |
 | DSE / build / conformance harness | **built and used** — `SweepRunner` drives the campaigns; `examples/mimo_cg/hw/dse.py` prices 6,084,720 joint designs in 15 s |
-| Brute-force baseline | **run** — 1,440 detectors, 57 tool-hours; the models' pick is right in 99.8% of 2,592 pre-registered decisions (`examples/mimo_cg/hw/fidelity.py`) |
-| Sampling experiment | **run as a learning curve** on existing data: 45 of the 86 calibration builds suffice in 19 of 20 random draws. Uncertainty- or decision-aware sampling is not built |
+| Brute-force baseline | **run** on a slice — 1,440 detectors (1.3% of the configurations), 57 tool-hours; the models' pick is within 10% of the best in 99.8% of 2,592 pre-registered decisions (`examples/mimo_cg/hw/fidelity.py`) |
+| Sampling experiment | **run as a learning curve** on existing data: with 45 of the 86 calibration builds, 19 of 20 random subsets pass the same 90% bar. Uncertainty- or decision-aware sampling is not built |
 
 **Where the experimental structure stands.** (1) Calibrate: 86 builds, 2.1 tool-hours. (2) Validate:
-46 held-out builds fixed before calibration, then the 1,440-build sub-grid. (3) DSE: the whole
+46 held-out builds, each set fixed before the calibration round it tests (34 before the first, 12
+after it; the second models were refitted after 40 of them had been scored), then the 1,440-build
+sub-grid. (3) DSE: the whole
 cross-product in Python. (4) Baseline and finding: the brute force of the sub-grid took 57
 tool-hours and the whole space is projected at about 4,000; the design finding is what guard bits
-on two scalars are worth (a median 8% of LUTs and 15% of flip-flops, and feasibility itself for a
-quarter of the questions). The numbers and their caveats are in the plan's sections 14 to 16.
+on two scalars are worth (a median 8% of LUTs and 15% of flip-flops by the models' csynth numbers,
+2–18% and 3–18% as implemented on six pairs, and feasibility itself for a quarter of the
+questions). The numbers and their caveats are in the plan's sections 14 to 16.
 
 **Reviewer risks, revisited.** The approximate models were validated on builds they never saw, and
-the weak spots are stated (one mispredicted family; csynth is not the implemented design). Resources
+the weak spots are stated (one mispredicted family; csynth is not the implemented design; timing
+closure is shown up to 110k csynth LUTs only; the brute force is a slice). Resources
 did lead with DSP and block RAM, which are exact. The finding is modest in size and stated as such.
 The brute-force baseline exists.
 

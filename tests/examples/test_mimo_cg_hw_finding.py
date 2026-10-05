@@ -60,6 +60,16 @@ def test_what_guard_bits_are_worth():
     assert float(a["ff_median_pct"]) == pytest.approx(15.06)
     assert float(a["bram_median_pct"]) == pytest.approx(23.87)
     assert float(a["dsp_median_pct"]) == 0.0
+    # ... as a median: where the missing guard changes the iteration count or the architecture the
+    # DSPs move, up in 62 of the 164 pairs and down in 7; 24 pairs are the same design twice
+    both = [r for r in _table("dse_guard_pairs") if r["without_W"] != ""]
+    dsp = [float(r["dsp_pct"]) for r in both]
+    assert (len(both), sum(d > 0 for d in dsp), sum(d < 0 for d in dsp)) == (164, 62, 7)
+    knobs = ("W", "g_s", "nit", "L", "R", "C", "cmul", "mem_dw")
+    same = [r for r in both if all(r[f"with_{k}"] == r[f"without_{k}"] for k in knobs)]
+    assert len(same) == 24 and all(float(r["lut_pct"]) == 0 for r in same)
+    lut = sorted(float(r["lut_pct"]) for r in both)
+    assert (lut[0], lut[-1]) == (0.0, 93.56)
     assert float(a["wider_bits_median"]) == 4 and a["wider_by_4_or_more"] == "114"
     assert a["more_iterations"] == "28"
     # the higher the modulation, the more the guard matters
@@ -72,8 +82,8 @@ def test_what_guard_bits_are_worth():
 
 def test_speed_comes_from_lanes_first():
     """Along the job-time budget the cheapest design goes from 1 lane and 4 array elements to 16
-    lanes, with the array growing behind; the vector unit stays about two thirds of an
-    iteration, so both blocks are scaled together."""
+    lanes, with the array growing behind; the vector unit stays between a half and three quarters
+    of an iteration (medians 0.49–0.74), so both blocks are scaled together."""
     shape = {int(r["budget"]): r for r in _table("dse_shape")}
     assert sorted(shape) == list(range(8)) and all(
         r["scenarios"] == "27" for r in shape.values()
@@ -85,15 +95,26 @@ def test_speed_comes_from_lanes_first():
         float(shape[7]["array_pes_max"]) == 4 and float(shape[0]["array_pes_min"]) == 64
     )
     share = [float(r["vec_share_of_iteration_median"]) for r in shape.values()]
-    assert 0.45 < min(share) and max(share) < 0.75
+    assert (min(share), max(share)) == (0.491, 0.739)
     # the 3-multiply form and 32-bit memory words are the cheap choices in csynth LUTs
     assert shape[7]["three_multiply_form"] == shape[0]["three_multiply_form"] == "27"
     assert all(int(r["words_32_bit"]) >= 26 for r in shape.values())
-    # from the loosest budget to the tightest: 17 times faster for 5 times the LUTs
-    speed = float(shape[7]["job_us_median"]) / float(shape[0]["job_us_median"])
-    area = float(shape[0]["lut_median"]) / float(shape[7]["lut_median"])
-    assert 16 < speed < 18 and 5 < area < 5.5
-    assert float(shape[0]["dsp_median"]) / float(shape[7]["dsp_median"]) == 24
+    # from the loosest budget to the tightest, per scenario (medians of the 27 ratios):
+    # 17.6 times faster for 5.3 times the LUTs and 34 times the DSPs
+    import statistics
+
+    by: dict = {}
+    for r in _table("dse_guard_pairs"):
+        by.setdefault((r["modulation"], r["M"], r["K"]), {})[int(r["budget"])] = r
+    ratios = {
+        "speed": [
+            float(v[7]["with_job"]) / float(v[0]["with_job"]) for v in by.values()
+        ],
+        "lut": [int(v[0]["with_lut"]) / int(v[7]["with_lut"]) for v in by.values()],
+        "dsp": [int(v[0]["with_dsp"]) / int(v[7]["with_dsp"]) for v in by.values()],
+    }
+    med = {k: round(statistics.median(v), 1) for k, v in ratios.items()}
+    assert med == {"speed": 17.6, "lut": 5.3, "dsp": 33.9}
 
 
 def test_frontier_points_are_the_two_fronts():
