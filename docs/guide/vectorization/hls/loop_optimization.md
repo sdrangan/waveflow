@@ -5,7 +5,7 @@ grand_parent: Vectorization
 nav_order: 0.5
 audience: hls
 api: [lane_capacity, pf, read_array_lane, write_array_lane, read_stream_lane, write_stream_lane]
-summary: "The loop shapes an HLS kernel body is built from. Several samples packed into one bus word (int16 four to a 64-bit word): the LANE LOOP unpacks a word into elements -- either a whole word per iteration with the compute unrolled across the packing factor (PF samples per cycle), or one element per iteration reading a word every PF iterations (one sample per cycle, the compute not replicated). Then the body's shape: a straight-line loop per message, like the Python, versus a single-firing state machine, and what the pipeline drain between messages costs. And a timing rule: do not decide, compute and commit in one iteration. Independent of the interface -- stream, m_axi buffer or BRAM."
+summary: "The loop shapes an HLS kernel body is built from, including deciding once per chunk and pipelining inside it. Several samples packed into one bus word (int16 four to a 64-bit word): the LANE LOOP unpacks a word into elements -- either a whole word per iteration with the compute unrolled across the packing factor (PF samples per cycle), or one element per iteration reading a word every PF iterations (one sample per cycle, the compute not replicated). Then the body's shape: a straight-line loop per message, like the Python, versus a single-firing state machine, and what the pipeline drain between messages costs. And a timing rule: do not decide, compute and commit in one iteration. Independent of the interface -- stream, m_axi buffer or BRAM."
 ---
 
 # Design patterns for loop optimization
@@ -125,6 +125,36 @@ loop; reach for the state machine when a measurement says the drain matters.
 **What not to write:** a straight-line body with no pipelined loop, reading or writing a whole message
 per firing. It cannot run at II = 1 -- the first mm_fir body did that and filtered one sample per ten
 cycles.
+
+## Decide per chunk, pipeline inside
+
+Some work needs a **decision before it can start**: is there room in the consumer's queue, is a buffer
+free, where does this burst go. Making that decision on every iteration of a pipelined loop puts it on
+the loop's critical path, and often makes the loop's progress depend on something that may not be there
+yet. The pattern is to split the work into **chunks**: decide once per chunk, outside the loop, then
+run the chunk at II=1 without deciding again.
+
+```cpp
+CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
+    const int c = (n - k0 < CHUNK) ? (int)(n - k0) : CHUNK;   // the last chunk may be short
+    admit(c);                                                  // the decision: once per chunk
+LOOP: for (int k = 0; k < c; ++k) {
+#pragma HLS PIPELINE II=1
+        ...                                                    // the work: no decisions
+    }
+    commit(c);                                                 // record what the chunk did
+}
+```
+
+The chunk size is the trade-off: long enough that the decision and the loop's fill and drain are small
+against the chunk (a few cycles against 64 is ~10%), short enough for whatever the decision guards -- a
+credit window, a buffer, a burst limit.
+
+The common case is **credit**: a producer on a [credit stream](../../interface/axi_mm/credit_streams.md)
+waits until a chunk fits before writing it, and the framework's `credit::Producer` is exactly
+`admit` / `commit` -- `wait_room` and `sent`. The worked code is
+[Credit streams in HLS](../../interface/axi_mm/credit_streams_hls.md); the Markov generator below used to
+make the decision inside its loop, and missed the clock for it.
 
 ## A timing rule: do not decide, compute and commit in one iteration
 

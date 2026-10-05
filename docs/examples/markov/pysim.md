@@ -61,7 +61,7 @@ And the theory: over 20,000 steps the fraction of ones is within 0.03 of `p01 / 
 
 ## How close is the timing?
 
-The RTL takes **1865** cycles for this scenario; pysim says **1926**, 3.3% over. A gate keeps them
+The RTL takes **1870** cycles for this scenario; pysim says **1926**, 3.0% over. A gate keeps them
 within 5% ([RTL simulation](rtlsim.md)).
 
 pysim is a loosely-timed model, so its timing is only as good as what it charges. Here that is the HLS

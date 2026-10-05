@@ -152,6 +152,12 @@ Two sizes decide whether the link runs at the kernels' rate or slower. Both were
   rate, or credit, not compute, sets the pace. That is the **bandwidth-delay product**. Markov's
   64-word queue throttled the generator at every job start; 128 did not.
 
+## In HLS
+
+A kernel body writes the two ends with the framework's `credit::Producer` and `credit::Consumer`, in
+chunks: the producer admits each chunk before a pipelined loop, the consumer reports between chunks.
+That is the next page, [Credit streams in HLS: chunked writes](./credit_streams_hls.md).
+
 ## Several writers into one kernel
 
 Give each writer its own channel -- one queue per writer, as NVMe gives each CPU core its own
@@ -162,6 +168,7 @@ grant, or an atomic tail pointer), which is a different problem.
 
 ## See also
 
+- [Credit streams in HLS](./credit_streams_hls.md) -- writing the two ends in a kernel body, in chunks
 - [Credit stream](../derived/credit_stream.md) -- the interface itself: its methods, `write` and
   `write_nb`, and the four rules
 - [Slave adaptor views: credit in](./slave_views.md#credit-in) -- the credit-in view

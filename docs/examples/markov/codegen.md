@@ -33,14 +33,14 @@ answer. The generator:
     MkvCmd cmd;
     cmd.read_stream<DW>(s_cmd);                                   // 1. the command
     ...
-    markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, CW);  // 2. forward it, when it fits
+    crd.wait_room(m_u_crd, CW);                                 // 2. forward it, when it fits
     cmd.write_axi4_stream<DW>(m_u_fwd);
-    written += CW;
+    crd.sent(CW);
 
 CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {          // 3. the draws, a chunk per write
         const int c = (rem < CHUNK) ? (int)rem : CHUNK;
         const int cw = (c + PF - 1) / PF;
-        markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, cw);
+        crd.wait_room(m_u_crd, cw);                               //    admit the chunk
     GEN: for (int k = 0; k < c; ++k) {
 #pragma HLS PIPELINE II=1
             s ^= s << 13;  s ^= s >> 17;  s ^= s << 5;             //    xorshift32
@@ -51,15 +51,17 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {          // 3. the draws
                 write_boundary_word(m_u_fwd, w, k == c - 1);       //    TLAST ends the chunk
             }
         }
-        written += cw;
+        crd.sent(cw);
     }
 ```
 
-**Credit is checked between chunks, never inside the loop.** `markov_take_credit` waits until the
-chunk fits -- room = `QDEPTH − 1 − (written − acked)`, masked at 16 bits -- reading the credit stream
-(blocking, then a bounded drain to the newest value). Once a chunk is admitted, the loop runs to its end
-without looking again. The chain mirrors it: it offers its cumulative count after each chunk, once 32
-or more words are unreported.
+**Credit is checked between chunks, never inside the loop.** `crd` is the framework's
+`credit::Producer<QDEPTH>` (a `static`, so it survives the firings): `wait_room` waits until the chunk
+fits -- room = `QDEPTH − 1 − (written − acked)`, masked at 16 bits -- reading the credit stream
+(blocking, then a bounded drain to the newest value), and `sent` records the chunk. Once a chunk is
+admitted, the loop runs to its end without looking again. The chain mirrors it with a
+`credit::Consumer<32>`: `took` per word read, `offer` after each chunk. The pattern and the two types
+are [Credit streams in HLS](../../guide/interface/axi_mm/credit_streams_hls.md).
 
 **One step per cycle, despite the chain.** The chain's step loop is the
 [lane loop, one element per iteration](../../guide/vectorization/hls/loop_optimization.md): a word of

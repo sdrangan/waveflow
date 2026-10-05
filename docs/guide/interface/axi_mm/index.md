@@ -122,4 +122,6 @@ Either way the kernel is written the same way: it reads and writes streams, and 
   closely pysim matches RTL.
 - [MM-streams with credit](./credit_streams.md) — a stream between two kernels over the shared bus:
   why back-pressure cannot cross it, and the credit pattern that does.
+- [Credit streams in HLS](./credit_streams_hls.md) — the two ends in a kernel body
+  (`credit::Producer` / `credit::Consumer`), written in chunks.
 - [Register Maps](./regmap.md) — the AXI-Lite register file of a host-activated kernel.

@@ -2,7 +2,7 @@
 title: RTL simulation
 parent: Two kernels on a bus
 nav_order: 7
-summary: "The whole system as RTL under XSI: AMD's crossbar with four masters and three slaves, the two kernels' adaptors, a BRAM as the shared memory, the two csynth'd kernels and the credit link's two writers under one generated top, driven by the pysim host on C++ endpoints. The gates (bit-exact, no polls, 1865 cycles, pysim within 5%), the timing probes, and how they took the system from 2356 cycles to 1865 and pysim from 28% off to 3%."
+summary: "The whole system as RTL under XSI: AMD's crossbar with four masters and three slaves, the two kernels' adaptors, a BRAM as the shared memory, the two csynth'd kernels and the credit link's two writers under one generated top, driven by the pysim host on C++ endpoints. The gates (bit-exact, no polls, 1870 cycles, pysim within 5%), the timing probes, and how they took the system from 2356 cycles to 1865 and pysim from 28% off to 3%."
 ---
 
 # RTL simulation
@@ -58,7 +58,7 @@ pytest tests/examples/test_markov_xsi.py -m xsi             # the gates (needs V
 
 | | pysim | RTL |
 |---|---|---|
-| 4 jobs x 300 steps, 2 in flight | 1926 cycles | **1865 cycles** |
+| 4 jobs x 300 steps, 2 in flight | 1926 cycles | **1870 cycles** |
 | `x` | bit-exact | **bit-exact** |
 | host reads other than responses and `x` | 0 | **0** |
 
@@ -82,6 +82,7 @@ same events from pysim, they showed where the time went:
 | 2 | a chunk left the generator every **103 cycles** for 64 draws: the queue writer gathers a whole chunk before bursting it and reads nothing while it bursts, and nothing buffered the generator | a FIFO in front of the writer -- `fwd_depth`, two chunks | 2015 |
 | 3 | at every job start the generator stalled 70--110 cycles for credit, then the chain starved for ~60: the 63-word credit window was shorter than the link's round trip | the chain's queue 64 -> **128** words | **1865** |
 | 4 | the chain now the bottleneck at **79** cycles a chunk, the generator at **71**: 64 steps plus a fixed cost per chunk | pysim charges each kernel's measured `chunk_overhead` (15 and 7) | pysim 1700 -> 1926 |
+| 5 | -- | the credit handling moved into the framework's `credit::Producer` / `credit::Consumer` -- equivalent logic, scheduled slightly differently | 1870 |
 
 Steps 2 and 3 were defects in the **design** -- the RTL got faster -- and step 4 a gap in the
 **model**. The design lessons are general, and are on the guide page

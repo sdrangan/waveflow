@@ -6,7 +6,6 @@ has_children: true
 example_dir: examples/markov
 summary: "Two free-running kernels that talk over a shared bus, with no polling anywhere: a host sends commands and sleeps on interrupts; a generator kernel draws pseudo-random numbers and streams them to a Markov-chain kernel through a credit stream routed over the crossbar; the chain writes its states to shared memory and answers the host. The kernels are deliberately simple so that the example is about the links -- why a kernel writing another kernel's queue must hold credit, how the credit comes back without stalling the bus, and how the same kernels run joined directly. Bit-exact in pysim and at RTL with four bus masters on one crossbar, and pysim's timing within 3% of the RTL."
 ---
-
 # Two kernels on a bus
 
 In the [memory-mapped FIR](../mm_fir/index.md) the only bus master is the host. Here a **kernel** is a
@@ -31,8 +30,7 @@ In going through this example, you will learn how to:
   through a pipeline.
 - Implement an [MM-stream](../../guide/interface/axi_mm/credit_streams.md) with a reverse
   **credit stream** to avoid back-pressure across a shared bus (`MmCreditStreamIF`).
-- Declare the views a kernel is reached through -- a **queue in** for data, a **credit-in register**
-  for credit -- and route the link between two kernels' views.
+- Map the input queue and credit stream to views in a AXI-MM slave adaptor [`MemSlaveAdaptor`](../../guide/interface/axi_mm/slave.md) to provide access of the kernel via an AXI Slave port 
 - **Batch** the credit (one bus write per 32 words) without losing liveness (`max_write`).
 - **Size** a credit link: a FIFO in front of a store-and-forward writer, and a credit window that covers
   the link's bandwidth-delay product.
