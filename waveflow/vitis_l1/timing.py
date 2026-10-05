@@ -88,8 +88,13 @@ class VitisFftTimingModel(TimingModel):
         if self.law == "lookup":
             from waveflow.calib.calib import LookupCalibModel
             from waveflow.calib.timing_model import RESIDUAL
+            # Seeded with an EMPTY table: a configuration never calibrated predicts no extra delay
+            # and reports UNCALIBRATED -- what the fixture's first, zero-seed pysim pass expects (and
+            # what VitisFft refuses when require_calibrated).  Without a seed a new configuration
+            # could not even be calibrated.
             self._model = LookupCalibModel(basis=["L"], target=RESIDUAL, name=self.component,
-                                           path=self.calib_dir / "params.json")
+                                           path=self.calib_dir / "params.json",
+                                           seed={"basis": ["L"], "targets": [RESIDUAL], "table": []})
         elif self.law != "linear":
             raise ValueError(f"law must be 'lookup' or 'linear', got {self.law!r}")
 

@@ -88,3 +88,17 @@ def test_generate_writes_the_build_tree(tmp_path):
                  f"vcd_dumper_{TOP}.v"):
         assert (tmp_path / "xsi" / name).exists(), name
     assert (tmp_path / "xsi" / "vectors" / "s_in_3" / "words.bin").exists()
+
+
+def test_a_second_width_configuration_is_its_own_calibration():
+    """The worked extension: in_w=12 was calibrated at L=64 alone, with one fixture command.  It
+    resolves there -- under its own component keys, not the 16-bit ones -- and is refused at an L it
+    was not measured at, even though the 16-bit configuration has that L."""
+    from waveflow.hw.clock import Clock
+    from waveflow.vitis_l1.hw import VitisFft
+    narrow = VitisFft(name="m", sim=Simulation(), clk=Clock(freq=CLK_HZ), L=64, in_w=12, in_i=2,
+                      platform_dir=default_platform_dir())
+    assert narrow.timing_model.component.startswith("vitis_fft_task_12_2_18_2")
+    with pytest.raises(ValueError, match="no measurement at L=256"):
+        VitisFft(name="m", sim=Simulation(), clk=Clock(freq=CLK_HZ), L=256, in_w=12, in_i=2,
+                 platform_dir=default_platform_dir())

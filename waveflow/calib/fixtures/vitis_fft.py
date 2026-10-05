@@ -127,7 +127,7 @@ class VitisFftFixture(ComponentFixture):
 
     # -- the whole calibration ------------------------------------------------------------------
     def calibrate_platform(self, platform_dir, *, work_dir=None, remeasure: bool = False,
-                           fit_lengths=None, max_passes: int = 6,
+                           fit_lengths=None, max_passes: int = 10,
                            tol_cycles: float = 0.5) -> dict:
         """Collect RTL (measuring any length not already on the platform, or all with *remeasure*)
         and pysim for every length, then fit both models on *fit_lengths* (default: all)."""

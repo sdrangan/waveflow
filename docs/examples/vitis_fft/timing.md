@@ -119,7 +119,7 @@ The calibration that ships is deliberately **narrow**, and says so:
 |---|---|---|
 | platform | RFSoC 4x2 (`xczu48dr`), 250 MHz | another part or clock is another platform |
 | length `L` | 16, 64, 256, 1024, 4096 | timing refuses; resources report `UNCALIBRATED` |
-| widths | input `ap_fixed<16, 2>`, twiddles `<18, 2>` | a different configuration: refused until calibrated |
+| widths | input `ap_fixed<16, 2>`, twiddles `<18, 2>` at every L above; input `<12, 2>` at `L = 64` (the worked extension below) | a different configuration: refused until calibrated |
 | mode | `NO_SCALING`, natural order, `R = 4` | not modelled |
 
 Timing and resources both move with the widths in ways no formula here captures -- a multiply that
@@ -136,6 +136,8 @@ python -m waveflow.calib.fixtures.vitis_fft --work C:/w --lengths 16384
 # another width configuration: its own timing components and resource keys
 python -m waveflow.calib.fixtures.vitis_fft --work C:/w --lengths 64 256 --in-w 12 --in-i 2
 ```
+
+**A worked extension.** The second command above, at `L = 64` alone, is what added the 12-bit configuration: one synthesis and two XSI runs, every frame bit-exact -- the first check of the bit-exact model at a width other than 16. Against the 16-bit build at the same length, timing barely moves (processing span 116.6 against 117.1 cycles, interval 120 both) and LUT / FF fall 5 % / 9 % (DSP and BRAM unchanged). One data point, not a law -- which is the point.
 
 It adds, under the platform: `components/vitis_fft_task_<in_w>_<in_i>_<tw_w>_<tw_i>_0_0.proc/` and
 `.ii/` (the RTL firings, the pysim's, the joined corpus and the fitted lookup), and
