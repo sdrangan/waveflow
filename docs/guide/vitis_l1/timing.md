@@ -78,12 +78,12 @@ offers the plan's `II ≈ L/R` estimate, labelled a seed, and deliberately offer
 
 ## What the hardware measured
 
-From C/RTL co-simulation of the generated top at `L=16` (Vitis 2025.1, `xc7z020clg484-1`, 10 ns),
-recorded in `tests/vitis_l1/fft/verifyHwModule/results/cosim_cycles.json`:
+From C/RTL co-simulation of the `ap_ctrl_hs` top in `verifyHwModule/` at `L=16` (Vitis 2025.1,
+`xc7z020clg484-1`, 10 ns), recorded in `tests/vitis_l1/fft/verifyHwModule/results/cosim_cycles.json`:
 
 | | latency (min) | interval (min) |
 |---|---|---|
-| the generated top | **45** | **46** |
+| the `ap_ctrl_hs` top | **45** | **46** |
 | the array-port DUT in `verifyFFT16` | 41 | 42 |
 
 Two things follow, and both are measurements rather than estimates.
@@ -117,6 +117,29 @@ declared II of 8 reads as 16. Both the module and its test harness move all lane
 that reason. **A serialized testbench measures itself, not the module** — worth knowing before
 trusting any II out of a simulation.
 
+## The free-running top, at RTL
+
+The design top that `composite_top_spec` generates is different: `ap_ctrl_none`, the body running as
+an `hls::task`. Vitis cannot co-simulate it, so `examples/vitis_fft` drives it under XSI, four frames
+back to back, and the numbers are read off the waveform as `TVALID && TREADY`:
+
+| | latency | interval |
+|---|---|---|
+| the free-running top (XSI) | 44 | 42 |
+
+- **No adapter cost.** The interval equals the bare array-port core's 42: the 4 cycles above were
+  the `ap_ctrl_hs` top's per-call handshake, not the pumps.
+- **Still no overlap.** Frames leave every 42 cycles with a 44-cycle residence. The core processes one
+  frame at a time; `II ≈ L/R` remains a property of some other construction, not of this one.
+- **The input runs ahead.** The body's input lanes and their FIFOs take about two frames before the
+  core is free, so the hardware applies its interval at the core and the output, not at intake.
+  `VitisFft` paces intake by the II, which reproduces the output timing exactly and holds an
+  upstream producer back slightly longer than the hardware would.
+
+Configured with `latency_cycles=44, ii_cycles=42`, the pysim puts every one of the four frames on the
+RTL's cycle, up to a constant one-cycle start offset; the gate asserts exactly that. See
+[A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+
 ## C-synthesis cannot supply these
 
 The obvious source would be `csynthparse`, which pulls `PipelineII` and `Latency` per module out of
@@ -126,7 +149,7 @@ load-bearing rather than merely confirmatory.
 
 ## What is still open
 
-The numbers above are for this top as built, at `L=16`. Whether a different construction overlaps
-frames — a free-running `hls::task` body, or AMD's own wide-stream `fftStreamingKernel` — is
-untested, and would be the thing to try if a design needs the throughput. An XSI/BFM gate with an
-asserted cycle count is also open; these cycles come from Vitis co-simulation.
+The numbers above are for `L=16`. The free-running top does not overlap frames either, so a
+design that needs `II ≈ L/R` needs a different construction — AMD's own wide-stream
+`fftStreamingKernel` is the one to try — and its own measurement. The input buffering the RTL shows is
+not modelled; it would matter only for a producer whose timing depends on when the FFT releases it.

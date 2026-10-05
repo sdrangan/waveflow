@@ -3,8 +3,8 @@ title: Synthesizing a Vitis L1 block
 parent: Vitis L1 Blocks
 nav_order: 2
 audience: hls
-api: [kernel_task, KernelTask, VitisL1Step, vitis_fft_include_dir, render_tcl]
-summary: "How a Waveflow design ends up calling xf::dsp::fft::fft<> itself: kernel_task() hands the body over, VitisL1Step copies a hand-written header rather than generating one, and render_tcl(include_dirs=...) gives the build an include path to the vendor headers, which are never copied. Covers why the body is an adapter (the vendor wants an array of streams, Waveflow supplies separate ones), why OUT_W is a template argument, the measured RTL result, and the absolute-path trap that presents as a SIGSEGV."
+api: [kernel_task, KernelTask, VitisL1Step, vitis_fft_include_dir, render_tcl, composite_top_spec]
+summary: "How a Waveflow design ends up calling xf::dsp::fft::fft<> itself: kernel_task() hands the body over, VitisL1Step copies a hand-written header rather than generating one, and render_tcl(include_dirs=...) gives the build an include path to the vendor headers, which are never copied. Covers why the body is an adapter (the vendor wants an array of streams, Waveflow supplies separate ones), why OUT_W is a template argument, how composite_top_spec generates the free-running top (per-port widths, eight template arguments), the measured RTL result, and the path traps that present as a SIGSEGV or as missing headers."
 ---
 
 # Synthesizing a Vitis L1 block
@@ -31,9 +31,10 @@ pump processes in, the vendor core, `R` pump processes out, inside one `DATAFLOW
 
 AMD's own L2 `fftStreamingKernel` has exactly this shape — `convertSuperStreamToArray`, `fft<>`,
 `convertArrayToSuperStream` — but it takes a single *wide* stream per side, which is not this
-module's port group. So the adaptation belongs to us, and it is not free: it costs 4 cycles of both
-latency and interval at `L=16`, which is the `L/R = 4` words each pump moves. See
-[Latency and II for a vendor block](timing.md).
+module's port group. So the adaptation belongs to us. In the `ap_ctrl_hs` top that Vitis
+co-simulated, it cost 4 cycles of both latency and interval at `L=16`, the `L/R = 4` words each pump
+moves per call; in the free-running top the generator emits, it costs nothing measurable (interval
+42, the same as the bare core). See [Latency and II for a vendor block](timing.md).
 
 `R` is fixed at 4 in the body. A template cannot vary a function's arity, and 4 is the only radix
 the model covers — `VitisFft` refuses anything else, so the two agree.
@@ -53,16 +54,14 @@ library" is checked by the compiler. A wrong width is a build error instead of a
 
 ## The vendor headers are never copied
 
-They stay in the Vitis install and are reached with an `-I`. That was impossible until recently:
-`render_tcl` hardcoded
+They stay in the Vitis install and are reached with an `-I`. `render_tcl` emits a fixed include
+path (`-Isrc -Iinclude`, see `plans/source_layout.md`), and takes `include_dirs` for anything beyond
+it, **empty by default** so every existing generated top renders byte-for-byte as before — several
+are gated on exact RTL cycle counts, and a changed TCL is a changed build.
 
-```python
-set cf "-I{INCLUDE_DIR}"          # INCLUDE_DIR == "include", and that was all
-```
-
-with no parameter for an additional path. It now takes `include_dirs`, **empty by default** so
-every existing generated top renders byte-for-byte as before — several are gated on exact RTL
-cycle counts, and a changed TCL is a changed build.
+The extra paths are written with **forward slashes**. They sit inside a Tcl double-quoted string,
+where a Windows path's backslashes are escapes: `C:\Xilinx\2025.1\tps\...` reached the compiler
+mangled, and csynth reported missing vendor headers rather than a bad path.
 
 `vitis_fft_include_dir()` resolves the path: an explicit argument, then `$WF_VITIS_LIBS` (an
 environment variable someone set on purpose outranks a guess), then the Vitis install itself. Vitis
@@ -93,14 +92,28 @@ tree. A relative path opens nothing, the testbench then dereferences a NULL `FIL
 reports `CSim failed with errors` and `SIGSEGV` — naming neither the file nor the cause. `build.py`
 passes absolute paths and the testbench checks both handles.
 
-**The staleness digest hashes the copies.** `rtl_digest` hashes `include/*.{h,hpp,cpp}`, not
-`waveflow/build/*.h`. Editing the source body without the copy step re-running is the documented
-way to get a stale gate that still passes.
+**The staleness digest hashes the copies.** `rtl_digest` hashes `include/*.{h,hpp,cpp}` (and
+`src/`), not `waveflow/build/*.h`. Editing the source body without the copy step re-running is the
+documented way to get a stale gate that still passes; `examples/vitis_fft`'s gate regenerates
+before it asks.
 
-## What is still open
+## The generated top
 
-The top in `verifyHwModule/` is a **stand-in** for what the composite generator will emit: the same
-call with the same template arguments `kernel_task()` reports, but written by `build.py` rather
-than derived from the interface graph. Wiring `VitisFft` through the composite codegen, so
-`check(VitisFft)` passes the four codegen gates and the top is graph-derived, is the remaining
-work. What the package proves is that the body, the include path, the widths and the RTL are right.
+The top in `verifyHwModule/` was written by `build.py`. The design top is now **derived from the
+module**, like every other free-running kernel: `composite_top_spec(VitisFft(...))` emits an
+`ap_ctrl_none` function with one `hls::task` running the body, and `check(VitisFft,
+"composite_kernel")` passes. Three things had to be true for that:
+
+- **Each port has its own width.** The output word is 42 bits where the input is 32, because the
+  FFT's output format grows with `log2 L`. `composite_top_spec` takes
+  `port_widths={name: bits}` for that. It is opt-in rather than read off every endpoint, because
+  existing designs declare endpoints narrower than their design width (16-bit credit ports on a
+  64-bit design) and their RTL cycle counts are gated as emitted today.
+- **`kernel_task()` passes exactly the body's template arguments**, eight of them: `L, IN_W, IN_I,
+  TW_W, TW_I, SCALING, ORDER, OUT_W`. `R` is not one; the generated top passes the tuple through
+  verbatim, so a ninth argument would be a template error.
+- **The body is reachable by its bare name.** The generator also predicts the RTL instance name from
+  it, so it cannot carry a namespace; the header ends with `using vitis_fft_impl::vitis_fft_task;`.
+
+`examples/vitis_fft` is the worked build: generate, csynth, and an XSI gate that drives the RTL
+through four frames, bit-exact. See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
