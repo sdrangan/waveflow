@@ -339,3 +339,7 @@ examples/mm_fir/mm_fir_proj/
 
 # examples/markov: the figure step renders here; docs/examples/markov/images/ holds the committed copy.
 examples/markov/results/
+# examples/markov (plans/source_layout.md pilot): the hand-written bodies are in src/; include/ and gen/
+# (with the .tcl) are build output -- deleting them is a clean build, markov_build.generate() restores them.
+examples/markov/include/
+examples/markov/gen/

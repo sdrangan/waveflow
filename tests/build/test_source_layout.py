@@ -24,7 +24,7 @@ GENERATED_DIRS = ("include", "gen", "xsi")
 #: Examples that still track generated files (census 2026-10-05).  Remove an example when it
 #: migrates (plans/source_layout.md, S2); the list ends empty.
 NOT_YET_MIGRATED = frozenset({
-    "bram_access", "fir_block", "interleaver", "markov", "mem_copy", "mm_fir", "regmap", "rf_blk_delay",
+    "bram_access", "fir_block", "interleaver", "mem_copy", "mm_fir", "regmap", "rf_blk_delay",
     "rf_loopback", "rf_relayout", "rf_repeat_play", "rf_samp_buf_rx", "rf_samp_buf_tx",
     "rf_shot_rx", "rf_shot_tx", "state_toy", "vecmult",
 })

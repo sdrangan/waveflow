@@ -5,12 +5,15 @@ Stage 3).
     python -m examples.markov.markov_build --no-synth # generate only
     python -m examples.markov.markov_build --figures  # the docs figure (golden model, no toolchain)
 
-Each kernel's body is hand-written (``include/markov_gen_task.h``, ``include/markov_chain_core_task.h``
+Each kernel's body is hand-written (``src/markov_gen_task.h``, ``src/markov_chain_core_task.h``
 -- the HLS twins of ``MarkovGen.run_iter`` / ``ChainCore.run_iter``); everything around them is
 generated: the command / response structs from :class:`MkvCmd` / :class:`MkvResp`, the lane routines
 the bodies pack ``u`` and ``x`` with, the framework's in-band memory writer (copied, fixed), and each
 free-running ``ap_ctrl_none`` top from the module's own ports.  The memory-mapped side -- the views,
 the bus writers, the crossbar -- is RTL beside the kernels, wired in the XSI gate.
+
+``src/`` is the only C++ source here.  ``include/`` and ``gen/`` (with each top's ``.tcl``) are
+build output, untracked: delete them and :func:`generate` writes them back (``plans/source_layout.md``).
 """
 from __future__ import annotations
 
@@ -18,7 +21,14 @@ import argparse
 from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag
-from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
+from waveflow.build.composite_gen import (
+    GEN_DIR,
+    INCLUDE_DIR,
+    composite_top_spec,
+    render_tcl,
+    render_top,
+    tcl_path,
+)
 from waveflow.build.credit_hls import copy_credit_header
 from waveflow.build.mm_writer_gen import write_writer_project
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
@@ -62,15 +72,28 @@ def gen_top(cls, root: Path = HERE) -> Path:
     gen.mkdir(parents=True, exist_ok=True)
     cpp = gen / f"{spec.top_name}.cpp"
     cpp.write_text(render_top(spec), encoding="utf-8")
-    (root / f"{spec.top_name}.tcl").write_text(render_tcl(spec.top_name), encoding="utf-8")
+    tcl_path(root, spec.top_name).write_text(render_tcl(spec.top_name), encoding="utf-8")
     return cpp
+
+
+def generate(root: Path = HERE) -> list[str]:
+    """Everything before csynth -- headers, the two kernel tops, the two bus-writer tops, each with
+    its ``.tcl`` -- and the names of the four tops.  Python only, seconds, no toolchain.
+
+    The XSI gate calls this before it asks whether the RTL is stale: ``include/`` and ``gen/`` are
+    untracked copies, so only regenerating them makes a pulled change to a framework header, a schema
+    or a generator show up as a changed source (``trace_steps.rtl_staleness``)."""
+    gen_headers(root)
+    names = [gen_top(cls, root).stem for cls in TOPS]
+    names += [write_writer_project(root, mode, DW, maxp) for mode, maxp in WRITERS]
+    return names
 
 
 def synth(top: str, root: Path = HERE) -> str:
     from waveflow.build.rtl_digest import write_stamp
     from waveflow.toolchain.toolchain import run_vitis_hls
 
-    r = run_vitis_hls(root / f"{top}.tcl", work_dir=root)
+    r = run_vitis_hls(tcl_path(root, top), work_dir=root)
     out = (r.stdout or "") + (r.stderr or "")
     if "WAVEFLOW_CSYNTH_OK" not in out:
         raise RuntimeError(f"csynth of {top} failed:\n{out[-6000:]}")
@@ -102,14 +125,9 @@ def main() -> None:
         figures()
         print("figures synced to docs/examples/markov/images/")
         return
-    gen_headers()
-    names = []
-    for cls in TOPS:
-        print("generated", gen_top(cls).relative_to(HERE))
-        names.append(cls.cpp_kernel_name)
-    for mode, maxp in WRITERS:
-        names.append(write_writer_project(HERE, mode, DW, maxp))
-        print("generated", f"gen/{names[-1]}.cpp")
+    names = generate()
+    for top in names:
+        print("generated", f"{GEN_DIR}/{top}.cpp")
     if a.no_synth:
         return
     for top in names:

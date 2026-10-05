@@ -378,3 +378,34 @@ class TestShadowing:
         with pytest.raises(RuntimeError, match="different content"):
             run_vitis_hls(root / "gen" / f"{TOP}.tcl", work_dir=root)
 
+
+def test_regenerating_makes_an_upstream_change_visible(tmp_path):
+    """Why a gate regenerates ``include/`` before asking.
+
+    The stamp hashes the example's *copies*.  Once they are untracked, a pull that changes the
+    framework header they were copied from leaves them as they were, and the guard calls RTL built from
+    the old header clean.  Simulated here on the markov build: a copy is made "old" and stamped, the
+    guard is (wrongly) satisfied, and one ``generate()`` -- what the gate fixture runs -- restores the
+    checkout's header and turns that into a stale report.
+    """
+    from examples.markov.markov_build import TOPS, generate
+
+    root = tmp_path / "markov"
+    (root / "src").mkdir(parents=True)
+    for body in ("markov_gen_task.h", "markov_chain_core_task.h"):
+        (root / "src" / body).write_bytes((REPO / "examples" / "markov" / "src" / body).read_bytes())
+    generate(root)
+    top = TOPS[0].cpp_kernel_name
+    verilog = root / f"{top}_proj" / "solution1" / "syn" / "verilog"
+    verilog.mkdir(parents=True)
+    (verilog / f"{top}.v").write_text("module m; endmodule\n", encoding="utf-8")
+
+    copy = root / "include" / "memmgr.hpp"
+    copy.write_text(copy.read_text(encoding="utf-8") + "// an older framework header\n",
+                    encoding="utf-8")
+    write_stamp(root, top)                      # RTL "built" from the older header
+    assert rtl_staleness(root, top) is None     # the hole: nothing on disk has changed
+
+    generate(root)                              # the gate fixture's first step
+    why = rtl_staleness(root, top)
+    assert why is not None and why.startswith("include/memmgr.hpp has changed"), why
