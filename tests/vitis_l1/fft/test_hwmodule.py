@@ -56,6 +56,8 @@ class _Lanes(HwModule):
     stamps: list = field(default_factory=list)
     words_per_lane: int = 4
     n_frames: int = 1
+    #: sink only -- seconds to wait before reading anything: a stalled consumer.
+    hold: float = 0.0
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
     def __post_init__(self) -> None:
@@ -77,7 +79,10 @@ class _Lanes(HwModule):
                     yield from ep.write(np.asarray(words, dtype=np.uint64))
                 yield self.env.all_of([self.env.process(wr(e, w))
                                        for e, w in zip(self.eps, frame)])
+                self.stamps.append(self.now)      # when the DUT finished taking this frame
             return
+        if self.hold:
+            yield self.timeout(self.hold)
         for _ in range(self.n_frames):
             got: dict[int, np.ndarray] = {}
 
@@ -95,11 +100,13 @@ class _Lanes(HwModule):
 
 
 def _run_pysim(length: int, vectors: list[tuple[np.ndarray, np.ndarray]],
-               scaling_mode: ScalingMode = ScalingMode.NO_SCALING, **timing):
+               scaling_mode: ScalingMode = ScalingMode.NO_SCALING, *, hold: float = 0.0,
+               drv_stamps: list | None = None, **timing):
     """Drive every vector through one ``VitisFft`` and return ``[(re, im), ...]`` per vector.
 
     Inputs and outputs are interleaved across lanes exactly as the goldens' ``stream_layout``
-    says: sample ``n`` on lane ``n % R`` at time ``n // R``.
+    says: sample ``n`` on lane ``n % R`` at time ``n // R``.  *hold* stalls the sink before its
+    first read; *drv_stamps*, if given, receives when the DUT finished taking each input frame.
     """
     sim, clk = Simulation(), Clock(freq=100e6)
     dut = VitisFft(name="dut", sim=sim, clk=clk, L=length, scaling_mode=scaling_mode, **timing)
@@ -111,7 +118,7 @@ def _run_pysim(length: int, vectors: list[tuple[np.ndarray, np.ndarray]],
     drv = _Lanes(name="drv", sim=sim, clk=clk, n_lanes=r, bitwidth=in_w * 2,
                  as_master=True, frames=frames)
     snk = _Lanes(name="snk", sim=sim, clk=clk, n_lanes=r, bitwidth=out_w * 2,
-                 as_master=False, words_per_lane=per_lane, n_frames=len(vectors))
+                 as_master=False, words_per_lane=per_lane, n_frames=len(vectors), hold=hold)
 
     for j in range(r):
         ch = StreamIF(name=f"in_{j}", sim=sim, clk=clk, bitwidth=in_w * 2)
@@ -121,6 +128,8 @@ def _run_pysim(length: int, vectors: list[tuple[np.ndarray, np.ndarray]],
         ch2.bind("master", dut.m_out[j])
         ch2.bind("slave", snk.eps[j])
     sim.run_sim()
+    if drv_stamps is not None:
+        drv_stamps.extend(drv.stamps)
 
     assert len(snk.frames) == len(vectors), (
         f"collected {len(snk.frames)} frame(s) for {len(vectors)} vector(s) — the simulation "
@@ -313,7 +322,7 @@ def test_frames_in_flight_are_bounded_by_latency_over_II():
     m = VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16,
                  latency_cycles=_LAT, ii_cycles=_II)
     assert m.max_inflight == -(-_LAT // _II) == 6
-    assert m._inflight.capacity == 6 and m._inflight.capacity != float("inf")
+    assert m._slots.capacity == 6 and m._slots.level == 6
 
 
 def test_two_frames_back_to_back_are_II_paced_not_serialized():
@@ -337,16 +346,16 @@ def test_two_frames_back_to_back_are_II_paced_not_serialized():
 
 
 def test_latency_is_observable_on_the_first_frame():
-    """Latency shows up once, on the first frame: read it in, wait, write it out.
-
-    With the lanes concurrent a frame costs ``L/R`` cycles to move, so the first output lands at
-    ``L/R + latency + L/R``. That it is *not* also paid per frame is what the II gate above shows.
+    """Latency is a frame's whole residence: first input word to last output word, which is what
+    cosim reports per transaction (``ap_start`` -> ``ap_done``).  The driver starts at t=0, so the
+    first frame finishes arriving at exactly ``latency_cycles``.  That it is *not* also paid per
+    frame is what the II gate above shows.
     """
     rng = np.random.default_rng(11)
     vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(2)]
     _, cycles, dut = _timed_run(16, vectors)
     per_lane = 16 // int(dut.R)
-    assert round(cycles[0], 6) == per_lane + _LAT + per_lane
+    assert round(cycles[0], 6) == _LAT
     untimed_cycles = _run_pysim(16, vectors)[1]
     assert round(untimed_cycles[0] / dut.clk.period, 6) == per_lane + per_lane, (
         "the untimed module must carry no latency at all — otherwise 'opt-in' is not true")
@@ -365,3 +374,53 @@ def test_cycles_seed_is_offered_as_a_seed_not_a_measurement():
     assert seed == {"ii_cycles": 256}
     assert "latency_cycles" not in seed, (
         "a latency nobody measured would be the one number most likely to be believed")
+
+
+def test_latency_below_the_frame_transfer_time_is_refused():
+    """``latency_cycles`` counts the frame's own read and write (``2*L/R``), so less is impossible
+    -- most likely a last-in-to-first-out number under the other definition."""
+    with pytest.raises(ValueError, match=r"less than 2\*L/R=8"):
+        VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16,
+                 latency_cycles=7, ii_cycles=8)
+
+
+def test_a_stalled_consumer_back_pressures_intake():
+    """The slots are what make back-pressure real.  With the sink stalled, the module may take
+    only ``max_inflight`` frames plus what the FIFOs on either side hold -- not all of them, which
+    is what deferred writes with no bound would do.  Raising the bound lets more in, which shows it
+    is the slots doing the limiting and not something else in the harness."""
+    rng = np.random.default_rng(3)
+    n = 10
+    vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(n)]
+    hold = 1000 * 10e-9                                  # sink asleep for 1000 cycles
+
+    def taken_while_stalled(k):
+        taken: list = []
+        _, cycles, _ = _run_pysim(16, vectors, latency_cycles=_LAT, ii_cycles=_II,
+                                  max_inflight=k, hold=hold, drv_stamps=taken)
+        assert len(cycles) == n, "every frame must still come out once the sink wakes"
+        return sum(t < hold for t in taken)
+
+    # k frames holding slots, one in the stalled output FIFO (its store finished and released its
+    # slot), one waiting in the input FIFOs.
+    assert taken_while_stalled(2) == 2 + 2
+    assert taken_while_stalled(5) == 5 + 2
+
+
+def test_cosim_four_frames_back_to_back():
+    """The S6 acceptance gate: the measured cosim numbers in, the measured total out.
+
+    ``verifyHwModule/results/cosim_cycles.json`` (``pipelined_tb``) at ``L=16``: latency 45,
+    interval 46, four frames back to back in 184 cycles.  The model puts the last word of frame 4
+    at ``3*46 + 45 = 183``; cosim's 184 counts to the ``ap_done`` after it, so within one cycle.
+    """
+    meas = json.loads((Path(__file__).resolve().parent / "verifyHwModule" / "results"
+                       / "cosim_cycles.json").read_text())["pipelined_tb"]
+    rng = np.random.default_rng(5)
+    vectors = [(rng.integers(-2000, 2000, 16), rng.integers(-2000, 2000, 16)) for _ in range(4)]
+    _, cycles, _ = _timed_run(16, vectors, latency_cycles=meas["latency_min"],
+                              ii_cycles=meas["interval_min"])
+    assert abs(round(cycles[-1]) - meas["total_execution"]) <= 1, (
+        f"pysim finished 4 frames at {cycles[-1]:.0f} cycles; cosim measured "
+        f"{meas['total_execution']}")
+    assert [round(c - meas["latency_min"]) for c in cycles] == [0, 46, 92, 138]

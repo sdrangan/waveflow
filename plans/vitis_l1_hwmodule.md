@@ -487,8 +487,8 @@ own output, it is free to accept the next frame while earlier frames are still i
 
 ```python
 def run_iter(self):
-    x = yield from self._read_lanes(per_lane)       # all R lanes concurrently: L/R cycles
     yield self._slots.get(1)                        # blocks once max_inflight frames are in flight
+    x = yield from self._read_lanes(per_lane)       # all R lanes concurrently: >= L/R cycles
     y = self._transform(x)                          # bits, zero simulated time
     self.call_after(self._proc_time, self.store, y, slot=self._slots)
     yield self.timeout(self._ii_wait)               # II beyond the read time; 0 if read-bound
@@ -551,8 +551,8 @@ Rules, each with the reason it exists:
 
 | field | meaning | pysim use |
 |---|---|---|
-| `latency_cycles` | first input word to first output word | `_proc_time = (latency_cycles − L/R) × period`, counted from the last input word |
-| `ii_cycles` | frame start to frame start | `_ii_wait = max(0, ii_cycles − L/R) × period` |
+| `latency_cycles` | first input word to **last** output word (cosim's `ap_start` → `ap_done`) | the write starts at first word + `latency − L/R`; refused below `2·L/R` |
+| `ii_cycles` | frame start to frame start | next intake at first word + `II` |
 | `max_inflight` | frames inside the block at once | slot count; default `ceil(latency / II)` |
 
 All three or none.  None means untimed: bits only, `run_iter` writes inline, exactly the S1
@@ -572,14 +572,20 @@ latency **45** and interval **46**.  So the generated top does not overlap frame
 latency.  A testbench that queues frames back to back reproduces the same numbers, and runs four
 frames in 184 cycles.
 
-**Check what cosim's "latency" means before plugging it in.**  For a block-level top, cosim
-reports `ap_start` → `ap_done`, which is not necessarily first input word to first output word.
-Read both edges off the VCD once.  Note that a counter in a BFM is not the wire either: a previous
+**`latency_cycles` is defined as cosim reports it**, `ap_start` → `ap_done`, taken as first input
+word to last output word, so a measured number goes in unchanged.  That correspondence is still an
+assumption about this top's handshake: read both edges off the VCD once at S3.  Note that a counter in a BFM is not the wire either: a previous
 arc here read 191 where the VCD said 192, because a counter and `TVALID && TREADY` are different
 things.
 
 **Acceptance criterion:** the pysim run of the same **four frames back to back** predicts the
-measured 184 cycles, and the per-frame latency and interval within one cycle.  A single-frame gate
+measured 184 cycles, and the per-frame latency and interval within one cycle.  **Met:** the pysim
+lands frames at 45/91/137/183 (`test_cosim_four_frames_back_to_back`).
+
+**A trap met on the way:** the stream charges a burst on the *producer's* side, so a frame already
+waiting in the input FIFO reads in zero time.  Dating the frame's first word as "end of read minus
+L/R" then put it before intake was even ready, and the four frames came out at 171 instead of 183.
+Intake now waits until L/R cycles have passed since it started taking the frame.  A single-frame gate
 cannot tell a correct II from a serialized one, which is the whole failure this section exists to
 prevent.  Whether a free-running `hls::task` construction would overlap frames (II ≈ L/R) is a
 separate, open hardware question.  The model takes whatever numbers that build measures.

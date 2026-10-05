@@ -136,12 +136,16 @@ class VitisFft(FreeRunMod):
     # **Opt-in, and deliberately without defaults.**  A pipeline exists to decouple latency from
     # throughput, so a model carrying one number is wrong the moment the block sits in a chain —
     # which is the only reason to build it.  But a number nobody measured is worse than no number,
-    # and these have to come from a csynth report or an RTL run (see ``cycles_seed`` and S3 of
-    # ``plans/vitis_l1_hwmodule.md``).  Leave them unset and the module is untimed: bits only,
+    # and these have to come from an RTL run -- csynth reports ``undef`` for this DATAFLOW top (S6
+    # of ``plans/vitis_l1_hwmodule.md``).  Leave them unset and the module is untimed: bits only,
     # exactly as S1 behaved.
-    latency_cycles: int | None = None   # first input word to first output word
+    #
+    # ``latency_cycles`` is a frame's whole residence -- first input word to last output word --
+    # which is what C/RTL co-simulation reports per transaction (``ap_start`` -> ``ap_done``), so a
+    # measured number goes in unchanged.
+    latency_cycles: int | None = None   # first input word to last output word
     ii_cycles: int | None = None        # cycles between successive frame *starts*
-    max_inflight: int | None = None     # queue capacity; defaults to ceil(latency / II)
+    max_inflight: int | None = None     # frames in the block at once; default ceil(latency / II)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -187,9 +191,9 @@ class VitisFft(FreeRunMod):
 
         self._setup_timing()
 
-    # -- S6: latency and II, as two processes ----------------------------------------------------
+    # -- S6: latency and II, as run_iter + a deferred write -------------------------------------
     def _setup_timing(self) -> None:
-        """Validate the timing pair and size the in-flight queue.
+        """Validate the timing pair and size the in-flight slots.
 
         ``latency_cycles`` and ``ii_cycles`` are **one pair**: with only a latency the module
         serializes (II collapses into latency), and with only an II it emits instantly.  Either
@@ -211,22 +215,27 @@ class VitisFft(FreeRunMod):
             return
 
         lat, ii = int(self.latency_cycles), int(self.ii_cycles)
-        if lat < 0 or ii <= 0:
+        if ii <= 0:
             raise ValueError(
-                f"{type(self).__name__}: need latency_cycles >= 0 and ii_cycles > 0, "
-                f"got {lat} and {ii}.")
+                f"{type(self).__name__}: need ii_cycles > 0, got {ii}.")
+        # A frame cannot leave sooner than it takes to read it in and write it out.
+        min_lat = 2 * (int(self.L) // int(self.R))
+        if lat < min_lat:
+            raise ValueError(
+                f"{type(self).__name__}: latency_cycles={lat} is less than 2*L/R={min_lat}, the "
+                f"cycles a frame spends just entering and leaving. latency_cycles is first input "
+                f"word to LAST output word (cosim's ap_start -> ap_done).")
 
         # Frames in flight ~ ceil(latency / II).  This bound is what makes back-pressure correct:
         # unbounded, the module would accept frames forever while its consumer is blocked, which no
         # hardware does.  It is also what keeps this on the right side of the recorded
-        # free-running-chain deadlock — a finite queue plus explicit ready-times is the *paced*
-        # form, and the bound is the pacing.  Never float("inf").
+        # free-running-chain deadlock -- the slots are the pacing.  Never float("inf").
         cap = -(-lat // ii) if self.max_inflight is None else int(self.max_inflight)
         if cap < 1:
             raise ValueError(
                 f"{type(self).__name__}: max_inflight must be >= 1, got {cap}.")
         self.max_inflight = cap
-        self._inflight = self.transaction_queue(capacity=cap)
+        self._slots = self.container(capacity=cap, init=cap)
 
     @staticmethod
     def cycles_seed(length: int, radix: int = 4) -> dict[str, int]:
@@ -311,58 +320,72 @@ class VitisFft(FreeRunMod):
                                for ep, w in zip(self.m_out, lanes)])
 
     def run_iter(self):
-        """One firing = one transform.  The pysim golden; no arithmetic of its own."""
+        """One firing = one transform: read a frame, compute it, hand it to :meth:`store`.
+
+        Untimed, the frame is written inline.  Timed, the write is **deferred** with
+        :meth:`~waveflow.simulation.simobj.SimObj.call_after` and ``run_iter`` returns to accept the
+        next frame, so frames overlap the way the pipeline does.  A single sequential
+        read -> delay -> write loop cannot do that: frame *k+1* would wait for frame *k* to be
+        written, and II would collapse into latency.
+
+        Two pysim processes against one C++ task is not a divergence: ``kernel_task`` is the
+        realization hook and the generator never extracts ``run_iter``, so the pysim's process
+        structure is free.  They are the pysim expressing what Vitis implements with
+        ``#pragma HLS DATAFLOW`` inside a single call.
+        """
         L, R = int(self.L), int(self.R)
         per_lane = L // R
         x_re = np.zeros(L, dtype=np.int64)
         x_im = np.zeros(L, dtype=np.int64)
 
+        # A frame holds a slot from its first input word to its last output word -- the slots
+        # bound frames in flight, so a stalled consumer back-pressures intake.
+        if self._timed:
+            yield self._slots.get(1)
+
         # Sample n arrives on port n % R at time n // R, so lane j holds n = j, j+R, j+2R, ...
+        period = self.clk.period
+        t_start = self.now
         in_lanes = yield from self._read_lanes(per_lane)
+        if self._timed:
+            # The stream charges a burst on the PRODUCER's side, so a frame already sitting in the
+            # input FIFO reads in zero time.  The block still takes L/R cycles to bring it in;
+            # without this, the frame's first word would be dated before intake was even ready.
+            t_in = t_start + per_lane * period
+            if self.now < t_in:
+                yield self.timeout(t_in - self.now)
         for j, words in enumerate(in_lanes):
             x_re[j::R], x_im[j::R] = _unpack_complex(words, int(self.in_w))
 
+        # The bits are computed ONCE, here, in zero simulated time; store only releases them.
         y_re, y_im, _ = self._transform(x_re, x_im)
 
         out_w = int(self.out_fmt.W)
         out_lanes = [_pack_complex(y_re[j::R], y_im[j::R], out_w) for j in range(R)]
 
         if not self._timed:
-            yield from self._write_lanes(out_lanes)
+            yield from self.store(out_lanes)
             return
 
-        # Timed: the bits are computed ONCE, here, and the emit side only releases them.  Intake
-        # stays in run_iter because `_run_iter_forever` is what populates `firing_records` and
-        # drives `timed_delay`, so the calibration path keeps working unchanged.
-        period = self.clk.period
-        yield self._inflight.put((out_lanes, self.now + period * int(self.latency_cycles)))
-        # Pace the II.  `timed_delay` returns 0.0 with no model attached and the predicted delay
-        # with one, so adding it is safe unconditionally and keeps calibration live.
-        yield self.timeout(period * int(self.ii_cycles)
+        # Measured from the frame's first input word, which the R-lane read took L/R cycles to
+        # bring in.  The last output word must land `latency_cycles` after it, and the write takes
+        # L/R, so the write starts at latency - L/R.
+        t_first = self.now - per_lane * period
+        t_write = t_first + (int(self.latency_cycles) - per_lane) * period
+        self.call_after(max(0.0, t_write - self.now), self.store, out_lanes, slot=self._slots)
+
+        # Pace the II from the same first word.  `timed_delay` returns 0.0 with no model attached
+        # and the predicted delay with one, so adding it is safe unconditionally and keeps
+        # calibration live -- intake stays in run_iter so `_run_iter_forever` still records it.
+        t_next = t_first + int(self.ii_cycles) * period
+        yield self.timeout(max(0.0, t_next - self.now)
                            + self.timed_delay({"L": L, "R": R, "n_stages": int(self.n_stages)}))
 
-    def run_proc(self):
-        """Leaf behaviour, plus the emit process when timed.
+    def store(self, out_lanes: list[np.ndarray]):
+        """Write one computed frame out.  The deferred half of a timed firing.
 
-        A single sequential ``run_iter`` **cannot** express latency and II at once: its loop is
-        read-frame → delay → write-frame, so frame *k+1* is not accepted until frame *k* has been
-        written, back-to-back jobs serialize, and II collapses into latency.  That is wrong exactly
-        where it matters — a host issuing frames back to back.  Hence two processes with a bounded
-        queue between them, following :meth:`~waveflow.hw.rfdc.Rfdc.run_proc`.
-
-        Two pysim processes against one C++ task is not a divergence: ``kernel_task`` is the
-        realization hook and the generator never extracts ``run_iter``, so the pysim's process
-        structure is free. These two are the pysim expressing what Vitis implements with
-        ``#pragma HLS DATAFLOW`` inside a single call.
+        A pure function of its argument, as ``call_after`` requires: it touches only the output
+        ports, never state ``run_iter`` reads.  The FFT carries no state from one frame to the
+        next, so nothing else could be shared.
         """
-        if self._timed:
-            self.process(self._emit_proc())
-        return super().run_proc()
-
-    def _emit_proc(self):
-        """Release each computed frame at its ready time — this is where *latency* is observable."""
-        while True:
-            out_lanes, t_ready = yield self._inflight.get()
-            if self.now < t_ready:
-                yield self.timeout(t_ready - self.now)
-            yield from self._write_lanes(out_lanes)
+        yield from self._write_lanes(out_lanes)

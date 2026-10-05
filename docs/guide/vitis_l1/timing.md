@@ -3,8 +3,8 @@ title: Latency and II for a vendor block
 parent: Vitis L1 Blocks
 nav_order: 3
 audience: python
-api: [VitisFft, cycles_seed, timed_delay, transaction_queue]
-summary: "A bit-exact model predicts what comes out, not when. This page covers why a vendor FFT needs two timing numbers rather than one (latency and initiation interval), why a single sequential run_iter cannot express both, how VitisFft models it with two processes and a bounded queue, and what the synthesized hardware actually measured — 45 and 46 cycles at L=16, meaning no frame overlap, against a plan estimate that would have promised six frames in flight. Also why C-synthesis cannot supply these numbers at all."
+api: [VitisFft, cycles_seed, timed_delay, call_after]
+summary: "A bit-exact model predicts what comes out, not when. This page covers why a vendor FFT needs two timing numbers rather than one (latency and initiation interval), why a single sequential run_iter cannot express both, how VitisFft models it with run_iter plus a deferred write (SimObj.call_after) bounded by in-flight slots, and what the synthesized hardware actually measured — 45 and 46 cycles at L=16, meaning no frame overlap, against a plan estimate that would have promised six frames in flight. Also why C-synthesis cannot supply these numbers at all."
 ---
 
 # Latency and II for a vendor block
@@ -17,7 +17,9 @@ an `HwModule`: a module in a design also has to predict *when* data appears.
 
 A pipeline exists precisely to decouple two things:
 
-* **latency** — first input word to first output word;
+* **latency** — a frame's whole residence, first input word to last output word. That is what
+  C/RTL co-simulation reports per transaction (`ap_start` → `ap_done`), so a measured number goes in
+  unchanged;
 * **initiation interval (II)** — how often a new frame can *start*.
 
 A model carrying a single "the transform costs T" is wrong the moment the block sits in a chain
@@ -29,12 +31,29 @@ write-frame, so frame *k+1* is not accepted until frame *k* has been written: ba
 serialize and II collapses into latency. That is wrong exactly where it matters, with a host
 issuing frames back to back.
 
-So `VitisFft` uses **two processes and a bounded queue**, following `Rfdc.run_proc`:
+So `VitisFft` splits a firing in two. `run_iter` reads a frame, computes the bits **once** (in
+zero simulated time), and defers the write with `SimObj.call_after`; then it returns to accept the
+next frame while this one is still in flight:
 
-| | | records |
-|---|---|---|
-| **intake** — stays `run_iter` | accept a frame, compute the bits **once**, push `(frame, t_ready)` | the II firing |
-| **emit** — its own process | pop, wait until `t_ready`, write the frame out | the latency |
+```python
+def run_iter(self):
+    yield self._slots.get(1)                      # blocks once max_inflight frames are inside
+    x = yield from self._read_lanes(per_lane)     # L/R cycles
+    y = self._transform(x)                        # bits, zero time
+    self.call_after(t_write - self.now, self.store, y, slot=self._slots)
+    yield self.timeout(t_next - self.now)         # II, measured from the frame's first word
+
+def store(self, y):
+    yield from self._write_lanes(y)               # L/R cycles; the slot is released after
+```
+
+`t_write` is the frame's first input word plus `latency − L/R`, so the last output word lands
+exactly `latency` after the first input word; `t_next` is the first input word plus `II`.
+
+`store` is a second entry point into the module, so it is held to `call_after`'s contract: a pure
+function of its arguments, touching only the output ports and never state `run_iter` reads. The FFT
+carries nothing from one frame to the next, so it meets that trivially. A block whose output side
+updated state its input side reads would not, and should be two modules instead.
 
 Keeping intake as `run_iter` matters: `_run_iter_forever` is what populates `firing_records` and
 drives `timed_delay`, so the calibration path keeps working unchanged. Two pysim processes against
@@ -42,8 +61,9 @@ one C++ task is not a divergence — `kernel_task()` is the realization hook and
 extracts `run_iter`, so the pysim's process structure is free. The two processes are the pysim
 expressing what Vitis implements with `#pragma HLS DATAFLOW` inside a single call.
 
-**The queue capacity is the third number, and it is not cosmetic.** It bounds frames in flight —
-roughly `ceil(latency / II)` — and is what makes back-pressure correct when the consumer stalls.
+**The slot count is the third number, and it is not cosmetic.** `max_inflight` bounds frames in
+flight — by default `ceil(latency / II)` — and is what makes back-pressure correct when the
+consumer stalls: a frame holds its slot from before it is read until its last word is written.
 Unbounded, the module would accept frames forever while its consumer is blocked, which no hardware
 does. It is also the *paced* form of a free-running chain, which keeps the design clear of the
 recorded un-paced deadlock.
@@ -85,6 +105,11 @@ overlap frames whatever the hardware could do, so it could not tell "the design 
 (`verifyHwModule/src/tb_pipelined.cpp`) queues every frame's input up front and calls the top back
 to back with nothing drained between, and reports the **same** 45 and 46. The serialization is in
 the design as built, not in the measurement.
+
+**The pysim reproduces it.** Given the measured 45 and 46, `VitisFft` finishes the same four
+back-to-back frames at cycle 183, against cosim's 184 (which counts to the `ap_done` after the last
+word). `test_cosim_four_frames_back_to_back` in `tests/vitis_l1/fft/test_hwmodule.py` holds it to
+within one cycle.
 
 The same mistake is easy to make in the pysim, and was made here: with the `R` lanes transferred
 one after another instead of concurrently, a frame costs `L` cycles instead of `L/R`, and a
