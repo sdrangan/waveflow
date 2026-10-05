@@ -19,6 +19,7 @@ from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
+from waveflow.build.credit_hls import copy_credit_header
 from waveflow.build.mm_writer_gen import write_writer_project
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -50,6 +51,8 @@ def gen_headers(root: Path = HERE) -> None:
     bad = [k for k, r in res.items() if not r.success]
     if bad:
         raise RuntimeError(f"header generation failed: {bad}")
+    # The framework's credit-stream helpers both bodies use (credit::Producer / credit::Consumer).
+    copy_credit_header(root / INCLUDE_DIR)
 
 
 def gen_top(cls, root: Path = HERE) -> Path:

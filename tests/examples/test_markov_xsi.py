@@ -34,8 +34,10 @@ WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 #:   2015  a FIFO between the generator and its store-and-forward queue writer (the generator stalled
 #:         for every burst -- 103 cycles a 64-draw chunk -- because nothing buffered it);
 #:   1865  the chain's queue 64 -> 128 words: the credit window must cover the link's bandwidth-delay
-#:         product, or credit throttled the generator at every job start and starved the chain.
-EXPECTED_CYCLES = 1865
+#:         product, or credit throttled the generator at every job start and starved the chain;
+#:   1870  the credit handling moved into the framework's credit::Producer / credit::Consumer
+#:         (credit_stream_hls.h) -- equivalent logic, scheduled slightly differently (+5 cycles).
+EXPECTED_CYCLES = 1870
 #: pysim must stay within this of RTL (it is +3.3%, with the two per-chunk overheads it now charges).
 PYSIM_TOLERANCE = 0.05
 
