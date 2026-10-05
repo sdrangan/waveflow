@@ -160,7 +160,7 @@ Three things the pipeline form adds:
   in flight per stage ([interleaver: pacing](../../examples/interleaver/interleaver.md)).
 - **Between kernels on a shared bus, use credit.** A stage writing the next stage's queue over a bus
   must know there is room before it writes, or a full queue stalls the bus
-  ([Credit stream over a shared bus](../interface/derived/credit_stream.md#over-a-shared-bus)).
+  ([MM-streams with credit](../interface/axi_mm/credit_streams.md)).
 
 ## When it is not the right shape
 

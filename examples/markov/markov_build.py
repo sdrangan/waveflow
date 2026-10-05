@@ -3,6 +3,7 @@ Stage 3).
 
     python -m examples.markov.markov_build            # headers + tops + tcl, then csynth both
     python -m examples.markov.markov_build --no-synth # generate only
+    python -m examples.markov.markov_build --figures  # the docs figure (golden model, no toolchain)
 
 Each kernel's body is hand-written (``include/markov_gen_task.h``, ``include/markov_chain_core_task.h``
 -- the HLS twins of ``MarkovGen.run_iter`` / ``ChainCore.run_iter``); everything around them is
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
+from waveflow.build.credit_hls import copy_credit_header
 from waveflow.build.mm_writer_gen import write_writer_project
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -49,6 +51,8 @@ def gen_headers(root: Path = HERE) -> None:
     bad = [k for k, r in res.items() if not r.success]
     if bad:
         raise RuntimeError(f"header generation failed: {bad}")
+    # The framework's credit-stream helpers both bodies use (credit::Producer / credit::Consumer).
+    copy_credit_header(root / INCLUDE_DIR)
 
 
 def gen_top(cls, root: Path = HERE) -> Path:
@@ -74,11 +78,30 @@ def synth(top: str, root: Path = HERE) -> str:
     return out
 
 
+def figures(root: Path = HERE) -> None:
+    """Render the docs figure from the golden model and promote it into docs/ (two DAG steps)."""
+    from examples.markov.markov_figures import MarkovFiguresStep, SyncDocsFiguresStep
+
+    dag = BuildDag()
+    dag.add(MarkovFiguresStep(name="markov_figures"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
+    res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
+    bad = [k for k, r in res.items() if not r.success]
+    if bad:
+        raise RuntimeError(f"figure generation failed: {bad}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--no-synth", action="store_true")
     ap.add_argument("--only", help="csynth just this top")
+    ap.add_argument("--figures", action="store_true",
+                    help="only render the docs figure (golden model; no toolchain) and sync it")
     a = ap.parse_args()
+    if a.figures:
+        figures()
+        print("figures synced to docs/examples/markov/images/")
+        return
     gen_headers()
     names = []
     for cls in TOPS:

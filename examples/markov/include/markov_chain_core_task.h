@@ -20,7 +20,8 @@
 //   3. MemWCmd(0, 0, 1) then the MkvResp: the writer forwards the response once x is stored.
 //
 // s_u is a credit stream: s_u_crd carries the CUMULATIVE count of words consumed, offered once at
-// least CRD_EVERY words are unreported -- checked after each chunk.  The offer is a blocking write:
+// least CRD_EVERY words are unreported -- checked after each chunk, by the framework's
+// credit::Consumer (credit_stream_hls.h).  The offer is a blocking write:
 // what reads it (the credit bus writer) coalesces and never waits on the bus (a credit-in write is
 // always taken), so it cannot hold the chain up -- and a dropped offer could leave a producer that is
 // waiting for exactly that credit waiting forever, since nothing more would arrive to prompt another.
@@ -32,15 +33,7 @@
 #include "mem_w_cmd.h"
 #include "uint16_array_utils.h"
 #include "uint8_array_utils.h"
-
-template <int DW, int CRD_EVERY>
-static inline void markov_offer_credit(hls::stream<ap_uint<DW> >& crd, ap_uint<16> consumed,
-                                       ap_uint<16>& offered) {
-    if (ap_uint<16>(consumed - offered) >= CRD_EVERY) {
-        crd.write(ap_uint<DW>(consumed));
-        offered = consumed;
-    }
-}
+#include "credit_stream_hls.h"
 
 template <int DW, int CRD_EVERY>
 static void markov_chain_core_task(hls::stream<ap_uint<DW> >& s_u_fwd,
@@ -50,12 +43,12 @@ static void markov_chain_core_task(hls::stream<ap_uint<DW> >& s_u_fwd,
     const int PFU = uint16_array_utils::lane_capacity<DW>();    // draws per input word
     const int PFX = uint8_array_utils::lane_capacity<DW>();     // states per output word
     const int CHUNK = 64;
-    static ap_uint<16> consumed = 0, offered = 0;               // survive from job to job
+    static credit::Consumer<CRD_EVERY> crd;                     // survives from job to job
 
     // 1. the command
     MkvCmd cmd;
     cmd.read_stream<DW>(s_u_fwd);
-    consumed += CW;
+    crd.took(CW);
     const ap_uint<32> n = cmd.n;
     const ap_uint<16> p01 = cmd.p01, p10 = cmd.p10;
     ap_uint<1> x = cmd.x0[0];
@@ -79,7 +72,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
             const int ju = k % PFU;
             if (ju == 0) {                                      // a fresh word of draws
                 ap_uint<DW> w = s_u_fwd.read();
-                consumed++;
+                crd.took(1);
                 uint16_array_utils::read_array_lane<DW>(&w, ulane, (c - k < PFU) ? c - k : PFU);
             }
             const ap_uint<16> u = ulane[ju];
@@ -96,9 +89,9 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
                                                                                  k == c - 1);
             }
         }
-        markov_offer_credit<DW, CRD_EVERY>(s_u_crd, consumed, offered);
+        crd.offer(s_u_crd);                      // report: between chunks
     }
-    markov_offer_credit<DW, CRD_EVERY>(s_u_crd, consumed, offered);
+    crd.offer(s_u_crd);
 
     // 3. the response, forwarded by the writer once x is stored
     MemWCmd fin;

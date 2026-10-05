@@ -13,9 +13,10 @@
 //      docs/guide/vectorization/hls/loop_optimization.md), TLAST on the chunk's last word.
 //
 // m_u is a credit stream (plans/mm_credit_stream.md): m_u_fwd forward, m_u_crd the consumer's
-// CUMULATIVE count of words consumed.  Before each write the body waits until the write fits --
-// QDEPTH - RESP_WORDS - (written - acked) >= its words, masked at 16 bits -- reading the credit stream
-// (blocking, then a bounded drain to the newest value).  An admitted write runs to its end without
+// CUMULATIVE count of words consumed.  The producer end is the framework's credit::Producer
+// (credit_stream_hls.h, docs/guide/interface/axi_mm/credit_streams_hls.md): before each write
+// wait_room() blocks until the write fits, reading the credit stream (blocking, then a bounded drain to
+// the newest value).  An admitted write runs to its end without
 // looking again, so the forward channel never stalls the bus it crosses.  Credit is also drained
 // (bounded, non-blocking) at each chunk even when there is room, so the credit FIFO never fills with
 // stale values.  A write is never longer than max_write = QDEPTH - RESP_WORDS - (CRD_EVERY - 1).
@@ -24,24 +25,7 @@
 #include "streamutils_hls.h"
 #include "mkv_cmd.h"
 #include "uint16_array_utils.h"
-
-template <int DW, int QDEPTH>
-static inline void markov_take_credit(hls::stream<ap_uint<DW> >& crd, ap_uint<16>& acked,
-                                      ap_uint<16> written, int nwords) {
-    const int ROOM = QDEPTH - 1;                     // RESP_WORDS = 1 reserved
-    ap_uint<DW> v;
-DRAIN0: for (int i = 0; i < 4; ++i) {                // bounded: take what is already there
-        if (!crd.read_nb(v)) break;
-        acked = v(15, 0);
-    }
-WAIT: while (ap_uint<16>(written - acked) > ap_uint<16>(ROOM - nwords)) {
-        acked = crd.read()(15, 0);                   // sleep until a value arrives ...
-    DRAIN: for (int i = 0; i < 4; ++i) {             // ... then catch up to the newest
-            if (!crd.read_nb(v)) break;
-            acked = v(15, 0);
-        }
-    }
-}
+#include "credit_stream_hls.h"
 
 template <int DW, int QDEPTH, int CRD_EVERY>
 static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
@@ -53,7 +37,7 @@ static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
     static_assert((CHUNK + PF - 1) / PF <= QDEPTH - 1 - (CRD_EVERY - 1),
                   "a chunk is longer than the credit stream's max_write");
     static_assert(CW <= QDEPTH - 1 - (CRD_EVERY - 1), "the command exceeds max_write");
-    static ap_uint<16> written = 0, acked = 0;                  // survive from job to job
+    static credit::Producer<QDEPTH> crd;                        // survives from job to job
 
     // 1. the command
     MkvCmd cmd;
@@ -62,9 +46,9 @@ static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
     ap_uint<32> s = (cmd.seed == 0) ? ap_uint<32>(1) : ap_uint<32>(cmd.seed);
 
     // 2. forward it
-    markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, CW);
+    crd.wait_room(m_u_crd, CW);
     cmd.write_axi4_stream<DW>(m_u_fwd);
-    written += CW;
+    crd.sent(CW);
 
     // 3. the draws, a chunk per write, one draw per cycle
     uint16_array_utils::value_type lane[PF];
@@ -73,7 +57,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
         const ap_uint<32> rem = n - k0;
         const int c = (rem < CHUNK) ? (int)rem : CHUNK;
         const int cw = (c + PF - 1) / PF;
-        markov_take_credit<DW, QDEPTH>(m_u_crd, acked, written, cw);
+        crd.wait_room(m_u_crd, cw);                  // admit the chunk: outside the loop
     GEN: for (int k = 0; k < c; ++k) {
 #pragma HLS PIPELINE II=1
             s ^= s << 13;
@@ -88,7 +72,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
                                                                                 k == c - 1);
             }
         }
-        written += cw;
+        crd.sent(cw);
     }
 }
 
