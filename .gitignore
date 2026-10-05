@@ -349,3 +349,9 @@ examples/markov/results/
 # (with the .tcl) are build output -- deleting them is a clean build, markov_build.generate() restores them.
 examples/markov/include/
 examples/markov/gen/
+# examples/vitis_fft (born under plans/source_layout.md): no hand-written C++ at all -- include/, gen/
+# (with the .tcl), xsi/ and the pysim's vectors/ are build output; vitis_fft_build.generate() restores them.
+examples/vitis_fft/include/
+examples/vitis_fft/gen/
+examples/vitis_fft/xsi/
+examples/vitis_fft/vectors/
