@@ -388,6 +388,9 @@ _SKIP_IN_SOURCE = _SKIP_ALWAYS | {
     "build",
     "figs",
     "figures",
+    # Per-configuration build trees (examples/vitis_fft/work/L<n>/: one full include/gen/xsi copy
+    # each, hundreds of MB once traced).  Indexing them took the index build from ~2 s to ~5 s.
+    "work",
 }
 
 #: Vitis/Vivado project trees, sweep output and the like.  Matched as suffixes

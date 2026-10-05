@@ -1,0 +1,71 @@
+{
+ "part": "xczu48dr-ffvg1517-2-e",
+ "period_ns": 4.0,
+ "measured": "2026-10-05",
+ "how": "python -m examples.vitis_fft.vitis_fft_build --measure",
+ "sizes": {
+  "16": {
+   "ii_cycles": 41,
+   "ii_spread": [
+    41,
+    41
+   ],
+   "latency_mean": 43.0,
+   "latency_min": 43,
+   "latency_max": 43,
+   "frame0_latency": 43,
+   "n_samples": 47,
+   "b2b_done": [
+    43,
+    84,
+    125,
+    166,
+    207,
+    248
+   ],
+   "sweep_seed": 0
+  },
+  "64": {
+   "ii_cycles": 120,
+   "ii_spread": [
+    120,
+    120
+   ],
+   "latency_mean": 133.1,
+   "latency_min": 121,
+   "latency_max": 139,
+   "frame0_latency": 121,
+   "n_samples": 47,
+   "b2b_done": [
+    121,
+    241,
+    361,
+    481,
+    601,
+    721
+   ],
+   "sweep_seed": 0
+  },
+  "256": {
+   "ii_cycles": 480,
+   "ii_spread": [
+    480,
+    480
+   ],
+   "latency_mean": 518.8,
+   "latency_min": 454,
+   "latency_max": 548,
+   "frame0_latency": 391,
+   "n_samples": 47,
+   "b2b_done": [
+    391,
+    864,
+    1344,
+    1824,
+    2304,
+    2784
+   ],
+   "sweep_seed": 0
+  }
+ }
+}

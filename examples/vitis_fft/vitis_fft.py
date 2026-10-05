@@ -18,6 +18,7 @@ that the module's latency and its initiation interval (II) are separately visibl
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -44,15 +45,28 @@ R = 4
 IN_W, IN_I = 16, 2
 TW_W, TW_I = 18, 2
 N_FRAMES = 4
-CLK_HZ = 100e6
+#: The RFSoC 4x2 fabric clock the example is synthesized for (``RFSOC4X2_PERIOD_NS`` = 4 ns).
+CLK_HZ = 250e6
 
-#: The timing the pysim is configured with: first input word to last output word, and frame start
-#: to frame start, in cycles.  **Measured, not estimated**, on the free-running top this example
-#: builds, by reading TVALID && TREADY off the XSI waveform (2026-10-05): frame 0's first input beat
-#: to its last output beat is 44 cycles, and output frames leave every 42.  The ``ap_ctrl_hs`` top
-#: the cosim measured was 45 / 46 -- the 4-cycle difference in II is that top's per-call adapter.
-LATENCY_CYCLES = 44
-II_CYCLES = 42
+#: The RTL timing the pysim is configured with, per L: written by
+#: ``python -m examples.vitis_fft.vitis_fft_build --measure`` and tracked, because reproducing it needs
+#: Vitis and Vivado.  **Measured, not estimated** -- see :func:`measured_timing`.
+MEASURED = HERE / "measured" / "vitis_fft_timing.json"
+
+
+def measured_timing(length: int = L) -> dict | None:
+    """The calibrated timing for *length*, or ``None`` if it has not been measured.
+
+    ``ii_cycles`` is the back-to-back frame interval: exact, because a saturated core stays in step
+    with its internal commutator.  ``latency_mean`` is the mean residence of an **isolated** frame
+    over a sweep of arrival phases; ``latency_min``/``latency_max`` bound it.  The spread is real and
+    not reducible by an LT model: the vendor core's input transposer runs a commutator on a
+    free-running internal cycle, a frame waits for it by an amount set by its arrival phase, and an
+    LT model does not know that phase.  So the pysim uses the mean, and the bound is its stated error.
+    """
+    if not MEASURED.exists():
+        return None
+    return json.loads(MEASURED.read_text(encoding="utf-8"))["sizes"].get(str(length))
 
 
 @dataclass
@@ -87,20 +101,37 @@ class VitisFftTB(FreeRunMod):
     n_frames: int = N_FRAMES
     #: Cycles the XSI main runs for: comfortably past the last frame.
     n_cycles: int = 2000
-    latency_cycles: int | None = LATENCY_CYCLES
-    ii_cycles: int | None = II_CYCLES
+    #: The module's timing.  Left ``None``, both come from :func:`measured_timing` for ``length``
+    #: (the mean isolated-frame latency, rounded, and the back-to-back interval).
+    latency_cycles: int | None = None
+    ii_cycles: int | None = None
+    #: Bits only: no timing at all, as for the XSI runs that do the measuring.
+    untimed: bool = False
+    #: Idle cycles between frames on every input lane (both backends).  0 = back to back.
+    burst_gap_cycles: int = 0
+    #: Per-frame gaps (entry k: before frame k + 1), overriding ``burst_gap_cycles`` while they last.
+    burst_gaps: list = field(default_factory=list)
     root: Path | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=CLK_HZ))
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.untimed:
+            self.latency_cycles = self.ii_cycles = None
+        elif self.latency_cycles is None and self.ii_cycles is None:
+            t = measured_timing(self.length)
+            if t is not None:
+                self.latency_cycles = int(round(t["latency_mean"]))
+                self.ii_cycles = int(t["ii_cycles"])
         self.dut = VitisFft(name="vitis_fft", sim=self.sim, clk=self.clk, L=self.length,
                             in_w=IN_W, in_i=IN_I, tw_w=TW_W, tw_i=TW_I,
                             latency_cycles=self.latency_cycles, ii_cycles=self.ii_cycles)
         in_bw, out_bw = 2 * IN_W, 2 * int(self.dut.out_fmt.W)
         per_lane = self.length // R
         self.drivers = [StreamDriver(name=f"drv_{j}", sim=self.sim, bitwidth=in_bw,
-                                     has_tlast=True, in_bundle=f"vectors/s_in_{j}", root=self.root)
+                                     has_tlast=True, in_bundle=f"vectors/s_in_{j}", root=self.root,
+                                     burst_gap_cycles=int(self.burst_gap_cycles),
+                                     burst_gaps=[int(g) for g in self.burst_gaps])
                         for j in range(R)]
         self.sinks = [TimedSink(name=f"snk_{j}", sim=self.sim, bitwidth=out_bw, has_tlast=True,
                                 out_bundle=f"vectors/m_out_{j}",
