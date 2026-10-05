@@ -30,7 +30,7 @@ is a hook on the one module class.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +76,17 @@ class StreamDriver(HwModule):
     #: for a consumer that relays or reads whole bursts (``StreamIFSlave.get()`` with no count is only
     #: defined on a packet-delimited stream).  Default ``False`` keeps existing graphs unchanged.
     has_tlast: bool = False
+    #: Idle clock cycles between one burst's last word and the next burst's first.  A
+    #: :class:`DynParam` (the XSI ``AxisMaster`` holds TVALID low for the same count), so both
+    #: backends space the bursts identically.  The use: proving a pipelined block releases a frame
+    #: without the next one behind it -- a test that only ever plays bursts back to back cannot.
+    #: ``0`` (the default) emits nothing and plays back to back, as before.
+    burst_gap_cycles: DynParam[int] = 0
+    #: Per-burst gaps: entry ``k`` is the idle cycles before burst ``k + 1``.  Bursts past the end
+    #: of the list fall back to :attr:`burst_gap_cycles`.  A varied list is how a calibration run
+    #: spreads frame arrivals over every phase of a block's internal cadence; see
+    #: ``examples/vitis_fft/vitis_fft_build.py`` (``measure``).  Empty (the default) emits nothing.
+    burst_gaps: DynParam[list[int]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -98,8 +109,20 @@ class StreamDriver(HwModule):
         self.bursts = read_burst_bundle(p)
 
     def run_proc(self) -> ProcessGen[None]:
-        for b in self.bursts:
+        for k, b in enumerate(self.bursts):
+            gap = self.gap_before(k)
+            if gap:
+                yield self.timeout(gap / self.stream_ep.interface.clk.freq)
             yield from self.stream_ep.write(np.asarray(b))
+
+    def gap_before(self, k: int) -> int:
+        """Idle cycles before burst *k* (none before the first).  The C++ ``AxisMaster`` applies the
+        same rule."""
+        if k == 0:
+            return 0
+        if k - 1 < len(self.burst_gaps):
+            return int(self.burst_gaps[k - 1])
+        return int(self.burst_gap_cycles)
 
     def bfm_model(self):
         """XSI twin: an ``AxisMaster`` on the port ``stream_ep`` is wired to, constructed with empty

@@ -173,7 +173,7 @@ def test_the_timing_page_quotes_the_measured_cycles():
 
 
 def test_include_dirs_are_written_with_forward_slashes():
-    """The flags sit in a Tcl double-quoted string, where a Windows path's backslashes are escapes:
+    r"""The flags sit in a Tcl double-quoted string, where a Windows path's backslashes are escapes:
     ``C:\Xilinx\2025.1\tps`` reached the compiler as ``C:Xilinx5.1<TAB>ps`` and csynth found no
     vendor headers."""
     tcl = render_tcl("demo", include_dirs=(r"C:\Xilinx\2025.1\tps\xf_dsp",))

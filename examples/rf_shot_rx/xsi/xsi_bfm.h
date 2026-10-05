@@ -304,10 +304,29 @@ public:
 
     void sample() override { ready_ = d_.get1(P_ready); beat_ = (h_valid_ && ready_); }
 
+    //: Optional: idle cycles between one burst's last beat and the next burst's first -- TVALID is
+    //: held low for that many cycles.  The twin of the pysim StreamDriver.burst_gap_cycles DynParam.
+    //: Default 0 = bursts back to back, exactly as before.
+    int burst_gap_cycles = 0;
+    //: Optional: per-burst gaps -- entry k is the idle cycles before burst k + 1; bursts past the end
+    //: fall back to burst_gap_cycles.  The twin of StreamDriver.burst_gaps.  Empty = not used.
+    std::vector<int> burst_gaps;
+
     void update() override {
+        if (gap_left_ > 0) {
+            if (--gap_left_ == 0) h_valid_ = (widx_ < (int)words_.size()) ? 1u : 0u;
+            return;
+        }
         if (beat_ && widx_ < (int)words_.size()) {
             ++widx_;
-            h_valid_ = (widx_ < (int)words_.size()) ? 1u : 0u;
+            const bool more = widx_ < (int)words_.size();
+            const int gap = (more && is_last(widx_ - 1)) ? gap_before(++burst_idx_) : 0;
+            if (gap > 0) {
+                gap_left_ = gap;
+                h_valid_ = 0u;
+            } else {
+                h_valid_ = more ? 1u : 0u;
+            }
         }
     }
 
@@ -332,6 +351,12 @@ private:
     /// at the very end of a run, which reads as a design deadlock rather than as a missing file.
     void one_burst() { bounds_.assign(1, (uint64_t)words_.size()); }
 
+    /// Idle cycles before burst *k* (k >= 1) -- the same rule as StreamDriver.gap_before.
+    int gap_before(int k) const {
+        if (k - 1 < (int)burst_gaps.size()) return burst_gaps[k - 1];
+        return burst_gap_cycles;
+    }
+
     /// Is word *i* the last of its burst?  Linear in the number of bursts and evaluated once per
     /// cycle against a cursor that only moves forward, so it is O(1) amortised; a scan is the right
     /// shape here because the bounds are cumulative and monotone.
@@ -347,6 +372,8 @@ private:
     std::vector<uint64_t> bounds_;
     int P_data, P_valid, P_ready, P_last, P_keep, P_strb;
     int widx_ = 0;
+    int gap_left_ = 0;
+    int burst_idx_ = 0;                 // index of the burst currently being sent
     uint32_t h_valid_ = 0, ready_ = 0;
     bool beat_ = false;
 };
