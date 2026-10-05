@@ -257,7 +257,7 @@ bus. The consumer kernel's bus writer writes its **cumulative** count of words c
 producer kernel receives each new count on its credit stream and knows how much room the consumer's
 queue in has before it writes. You will rarely build one by hand: a kernel declares it, with
 `CreditIn("u_crd", port="m_u")` in its `mm_views`, and
-[`MmCreditStreamIF`](../derived/credit_stream.md#over-a-shared-bus) does the wiring.
+[`MmCreditStreamIF`](./credit_streams.md) does the wiring.
 
 ```python
 crd = MemSlaveCreditIn(name="u_crd", sim=sim, clk=clk)

@@ -120,4 +120,6 @@ Either way the kernel is written the same way: it reads and writes streams, and 
 - [Slave adaptor views](./slave_views.md) — each view's constructor, its kernel side and its bus side.
 - [Slave adaptor — how it works](./slave_howitworks.md) — the RTL modules, the front end, and how
   closely pysim matches RTL.
+- [MM-streams with credit](./credit_streams.md) — a stream between two kernels over the shared bus:
+  why back-pressure cannot cross it, and the credit pattern that does.
 - [Register Maps](./regmap.md) — the AXI-Lite register file of a host-activated kernel.

@@ -171,69 +171,16 @@ not a transient.
 
 ## Over a shared bus
 
-[`MmCreditStreamIF`](../../../../waveflow/hw/mm_credit.py) carries the same channel across a crossbar.
-The kernels keep their `CreditStreamMasterIF` / `CreditStreamSlaveIF` endpoints and their code; only
-the transport changes:
-
-| | `CreditStreamIF` (direct) | `MmCreditStreamIF` (routed) |
-|---|---|---|
-| forward | a stream into the consumer's FIFO | the producer's **bus writer** -> the consumer's **queue-in view** (`[len \| data]`) |
-| reverse | a stream of cumulative counts | the consumer's bus writer -> the producer's **credit-in view** |
-| the receiver's buffer | the stream FIFO | the queue-in view's FIFO, the same `depth` |
-
-The kernels declare the two views like any other memory-mapped view -- a `QueueIn` on the consumer's
-credit port, a `CreditIn` on the producer's -- so building each kernel's memory-mapped device joins
-each view to the right half of its endpoint. The channel then builds the two bus writers, whose
-`m_mem` ports go on the crossbar, and is placed once addresses are assigned:
-
-```text
-gen_dev   = build_mm_device(gen, ...)       # CreditIn("u_crd", port="m_u")
-chain_dev = build_mm_device(chain, ...)     # QueueIn("qu", port="s_u", depth=64)
-link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=64)
-link.bind("master", gen.m_u)
-link.bind("slave", chain.s_u)
-masters += link.bus_masters()               # the forward writer and the credit writer
-...                                         # crossbar, assign_address_ranges
-link.place(qin=chain_map["qu"], crd_in=gen_map["u_crd"])
-```
-
-Three things make it safe to put on a shared bus:
-
-- **The producer never stalls the bus.** Its credit counts every word not yet consumed -- in its
-  writer, on the bus, and in the queue -- so the queue always has room for what arrives. The queue-in
-  view counts any packet that did not fit (`nstall`); a credit-respecting producer keeps it zero.
-- **A credit write never waits.** The credit-in view is a latest-value register, not a queue: because
-  the count is cumulative, the newest value is the whole truth, so it may overwrite one the kernel has
-  not taken yet. (A register bank's COMMIT, by contrast, waits for the kernel to take the previous
-  config.) The same fact retires the fourth rule above -- a one-value register cannot saturate.
-- **Batched credit stays live.** Every offer is a bus write, so the consumer batches (`crd_every`).
-  A consumer may then sit on up to `crd_every - 1` unreported words indefinitely; the producer's
-  `max_write` shrinks by exactly that much, so a waiting producer always gets its room.
-
-Two sizes decide whether the link runs at the kernels' rate, both measured on
-[Markov](../../../examples/markov/index.md#finding-the-time):
-
-- **`fwd_depth` -- the FIFO in front of the forward writer.** The writer is store-and-forward: it needs
-  a write's length before its words, so it gathers a whole write, then bursts it, and reads nothing
-  while it bursts. Without a FIFO the producer stalls for every burst (103 cycles per 64-draw chunk
-  against 64). Give it at least one write's words; the RTL top instantiates it at this depth.
-- **The queue depth -- the credit window.** The producer can be at most `depth - resp_words` words ahead
-  of what the consumer has *reported*. A word's round trip -- through the FIFO, the writer, the queue,
-  up to `crd_every - 1` unreported words, and the credit path back -- has to fit in that window at the
-  link's rate, or credit, not compute, sets the pace: the **bandwidth-delay product**. Markov's 64-word
-  queue throttled the producer at every job start; 128 did not.
-
-**Several writers into one kernel** get one channel each -- one queue per writer, as NVMe gives each
-core its own submission queue -- and the receiving kernel round-robins over its inputs. Credits go
-back point to point, to the writer that used them, so nothing is broadcast and no two writers can race
-for the same slots.
-
-The worked example is [Markov](../../../examples/markov/index.md): two kernels on one crossbar, the
-link between them routed, the host waiting on interrupts.
+A credit stream can also run between two kernels **across a shared memory-mapped bus** -- the producer
+writing the consumer's queue-in view, the consumer writing its counts into a credit register on the
+producer's side -- with the kernels' endpoints and code unchanged. That is where credit stops being an
+option: over a bus, blocking on a full queue stalls the bus itself. The transport, how to build and size
+it, and why it is safe on a shared bus are on [MM-streams with credit](../axi_mm/credit_streams.md).
 
 ## See also
 
 - [Acked Stream](./acked_stream.md) — the other reverse channel, for *what became of what I sent*
 - [`StreamIF`](../primitive/stream.md) — the primitive both directions are built from, and the right
   answer when the producer can block
+- [MM-streams with credit](../axi_mm/credit_streams.md) — the same channel routed over a shared bus
 - [Derived interfaces](./index.md) — how a derived interface composes its primitives
