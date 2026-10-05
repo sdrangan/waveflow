@@ -129,7 +129,7 @@ def build(row: dict) -> dict:
         rec = M.measure(name, "det", c, role="finalist", steady=True, trace=False)
         if "error" in rec:
             return {"build": name, "ok": False, "seconds": 0, "error": rec["error"]}
-    if impl_check.report_path(name).is_file():
+    if impl_check.implemented(name):
         return {"build": name, "ok": True, "seconds": 0, "error": ""}
     return impl_check.run_impl(name) | {"error": ""}
 
@@ -221,7 +221,7 @@ def done(rows: list[dict] | None = None) -> list[str]:
         r["build"]
         for r in rows or read_finalists()
         if (M.POINTS_DIR / f"{r['build']}.json").is_file()
-        and impl_check.report_path(r["build"]).is_file()
+        and impl_check.implemented(r["build"])
     ]
 
 

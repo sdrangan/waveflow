@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -66,6 +67,20 @@ def report_path(build: str) -> Path:
     return sol / "impl" / "report" / "verilog" / f"{TOP}_export.rpt"
 
 
+def implemented(build: str) -> bool:
+    """Whether Vivado finished on ``build``.  The export report is not the sign of it: the tool
+    writes that file early and fills it in at the end.  :func:`run_impl` writes ``impl.seconds``
+    and ``impl.log`` when the tool returns, and the log says whether it succeeded."""
+    out = B.BUILD_ROOT / build
+    log = out / "impl.log"
+    return (
+        (out / "impl.seconds").is_file()
+        and log.is_file()
+        and "IMPL_OK" in log.read_text(encoding="utf-8", errors="replace")
+        and report_path(build).is_file()
+    )
+
+
 def run_impl(build: str) -> dict:
     """Run Vivado implementation on one synthesized build; returns ``{build, ok, seconds}``."""
     out = B.BUILD_ROOT / build
@@ -76,8 +91,13 @@ def run_impl(build: str) -> dict:
     tcl = out / "impl.tcl"
     tcl.write_text(_TCL, encoding="utf-8")
     started = time.perf_counter()
-    run = toolchain.run_vitis_hls(tcl, work_dir=out, capture_output=True)
-    log = (run.stdout or "") + (run.stderr or "")
+    try:
+        run = toolchain.run_vitis_hls(tcl, work_dir=out, capture_output=True)
+        log = (run.stdout or "") + (run.stderr or "")
+    except subprocess.CalledProcessError as exc:
+        # the tool exits non-zero when Vivado fails (a crash included): a failed run is a
+        # result to record, not a reason to stop the other builds
+        log = f"IMPL_FAILED: {exc}\n" + (exc.stdout or "") + (exc.stderr or "")
     (out / "impl.log").write_text(log, encoding="utf-8")
     seconds = round(time.perf_counter() - started, 1)
     (out / "impl.seconds").write_text(f"{seconds}\n", encoding="utf-8")
@@ -255,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     if args.run:
-        todo = [b for b in BUILDS if args.force or not report_path(b).is_file()]
+        todo = [b for b in BUILDS if args.force or not implemented(b)]
         with ThreadPoolExecutor(args.jobs) as pool:
             for res in pool.map(run_impl, todo):
                 print(res)

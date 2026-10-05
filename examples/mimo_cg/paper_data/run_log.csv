@@ -9,3 +9,4 @@ held-out validation,second supplement,3,6,136,step 6.1 (c)
 brute-force sub-grid,pilot,6,77,1952,step 6.4 (pilot)
 brute-force sub-grid,main run,6,1363,33113,step 6.4
 design-space exploration in Python,6084720 joint designs,1,0,15,step 6.2
+finalists,csynth RTL run and Vivado place and route (one run repeated),3,12,5580,step 6.7
