@@ -480,56 +480,109 @@ write-frame, so frame *k+1* is not accepted until frame *k* has been written: ba
 serialize and II collapses into latency.  That is wrong exactly where it matters — a host issuing
 frames back to back, which is the normal case.
 
-So the pysim needs **two processes and a bounded queue between them**:
-
-| | | records |
-|---|---|---|
-| **intake** — stays `run_iter` | accept a frame, compute the bits **once**, push `(frame, t_ready)` | the **II** firing |
-| **emit** — an extra process | pop, wait until `t_ready`, write the frame out | the **latency** |
-
-Keeping intake as `run_iter` matters: `_run_iter_forever` is what populates `firing_records` and
-drives `timed_delay`, so the calibration path keeps working unchanged.  The bits are computed once,
-at intake — the emit side only releases them.
-
-The framework already supports this and there is a precedent to copy: `Rfdc.run_proc`
-(`waveflow/hw/rfdc.py:503`) runs its DAC path as its own process and its ADC path inline —
+So intake and output are two processes **inside the one module**: `run_iter` reads a frame,
+computes the bits (zero time), and hands the result to a `store` generator scheduled to run
+later.  `store` waits out the processing time and writes.  Since `run_iter` never waits for its
+own output, it is free to accept the next frame while earlier frames are still in flight.
 
 ```python
-def run_proc(self):
-    self.process(self._emit_proc())      # SimObj.process — simobj.py:159
-    yield from super().run_proc()        # the _run_iter_forever loop; run_iter == intake
+def run_iter(self):
+    x = yield from self._read_lanes(per_lane)       # all R lanes concurrently: L/R cycles
+    yield self._slots.get(1)                        # blocks once max_inflight frames are in flight
+    y = self._transform(x)                          # bits, zero simulated time
+    self.call_after(self._proc_time, self.store, y, slot=self._slots)
+    yield self.timeout(self._ii_wait)               # II beyond the read time; 0 if read-bound
+
+def store(self, y):
+    yield from self._write_lanes(y)                 # all R lanes concurrently: L/R cycles
 ```
 
-and `SimObj.transaction_queue(capacity)` (`simobj.py:195`) is the SimPy `Store` to put between them.
+**Not a `StreamDelayIF`.**  A sim-only "stream with a delay" between two sub-modules was the
+first idea.  It works, but it adds an interface that codegen must be taught to refuse, and turns
+one vendor block into a composite.  Two processes in one leaf say the same thing with no new
+interface, and `kernel_task()` already keeps codegen out of the pysim's process structure.  The
+generator takes the descriptor and never extracts `run_iter` (`composite_gen.py:1030`).  The two
+processes are the pysim expressing what Vitis implements with `#pragma HLS DATAFLOW` inside a
+single call, so this is not a divergence.
 
-**The queue capacity is the model's third number, and it is not cosmetic.**  It bounds how many
-frames are in flight — roughly `ceil(latency / II)` — and it is what makes back-pressure correct
-when the downstream stalls.  Leave it unbounded and the module will happily accept frames forever
-while its consumer is blocked, which no hardware does.
+#### `SimObj.call_after` — the scheduling primitive
 
-This is also what keeps the design on the right side of the recorded deadlock law.  That law is
-about *un-paced* free-running chains; a **finite** queue plus explicit ready-times is the paced
-form, and the bound is the pacing.  So: finite and deliberate, never `float("inf")`.
+```python
+def call_after(self, delay: float, fn: Callable[..., ProcessGen], *args,
+               slot: simpy.Container | None = None) -> simpy.Process:
+    """Run ``fn(*args)`` as a new process after ``delay``; return without waiting.
 
-**Two pysim processes against one C++ task is not a divergence.**  `kernel_task()` is the
-realization hook — the generator takes the descriptor and never extracts `run_iter`
-(`composite_gen.py:1030`) — so the pysim's process structure is free.  The two processes are the
-pysim expressing what Vitis implements with `#pragma HLS DATAFLOW` inside a single call.
+    ``slot``, if given, is put back (``put(1)``) when ``fn`` finishes.  The caller takes it
+    (``yield slot.get(1)``) BEFORE calling, so the place intake blocks is visible in the caller.
+    """
+```
+
+It belongs on `SimObj`, not `HwModule`: scheduling deferred work is a simulation property
+(`timeout`, `process`, `transaction_queue` live there too), and it is equally useful to a
+software process or a channel model.  The name follows asyncio's `loop.call_later(delay, cb)`.
+`call_after` takes a generator function, not a plain callback, because the deferred work itself
+takes time.
+
+Rules, each with the reason it exists:
+
+* **It starts the process through `env.process`, not `SimObj.process`.**  `SimObj.process` keeps
+  every process it starts in `self.processes`.  One deferred call per frame would grow that list
+  for the whole simulation.
+* **`fn` is a pure function of its arguments.**  `fn` may touch only its arguments, the output
+  ports, and the slot.  It must read and write no other state on `self`.  This is the price of a
+  second entry point into the module: if `store` changed state that `run_iter` reads, behaviour
+  would depend on SimPy's ordering of same-time events.  The FFT carries no state from one frame
+  to the next, so it meets the rule trivially.  A block whose output side updates state the input
+  side reads (a running counter, an adaptive filter) does not, and should be two modules.
+* **The slot is mandatory for a module that can be back-pressured.**  Without it, a stalled
+  consumer leaves `store`s piling up while `run_iter` keeps accepting frames.  The module then
+  models infinite buffering, which no hardware has.  That is also the un-paced free-running
+  pattern this repo has recorded deadlocking.  The slot count is the model's **third number**,
+  `max_inflight`, defaulting to `ceil(latency / II)`.  It is finite and deliberate, never
+  `float("inf")`.
+* **Frame order holds while the delay is constant.**  Deferred calls with equal delays fire in
+  the order they were made, and concurrent `store`s queue on the output stream's bus in that same
+  order.  If the delay is ever made per-frame (from a fitted model), a later frame could overtake
+  an earlier one.  At that point, switch to one long-lived `store` process reading a bounded
+  `transaction_queue` of `(frame, t_ready)`.  That gives the same timing with order guaranteed by
+  construction, and is what the first `VitisFft` draft did.
+
+#### The three numbers
+
+| field | meaning | pysim use |
+|---|---|---|
+| `latency_cycles` | first input word to first output word | `_proc_time = (latency_cycles − L/R) × period`, counted from the last input word |
+| `ii_cycles` | frame start to frame start | `_ii_wait = max(0, ii_cycles − L/R) × period` |
+| `max_inflight` | frames inside the block at once | slot count; default `ceil(latency / II)` |
+
+All three or none.  None means untimed: bits only, `run_iter` writes inline, exactly the S1
+behaviour.  Either of `latency_cycles` and `ii_cycles` alone is refused, because each alone
+models something the hardware does not do.
+
+`run_iter` stays the intake, so `_run_iter_forever` still populates `firing_records`, and
+`timed_delay` can still be added to `_ii_wait` for calibration.
 
 ### Where the numbers come from
 
-`FreeRunMod.timed_delay(features)` (`hw_freerun.py:234`) predicts a firing's delay from an attached
-model and records the firing for calibration, returning `0.0` when uncalibrated — so
-`yield self.timeout(self.timed_delay({…}))` is safe to write unconditionally.
+**Co-simulation, not C-synthesis.**  The plan originally said to seed the numbers from
+`csynthparse` (`PipelineII` and `Latency` out of `csynth.xml`).  The student's S2 build showed that
+every one of those fields reads `undef` for this top, because it is a `DATAFLOW` region that Vitis
+does not bound statically.  The measured values at `L=16` (Vitis 2025.1, `xc7z020`, 10 ns) are
+latency **45** and interval **46**.  So the generated top does not overlap frames: interval >
+latency.  A testbench that queues frames back to back reproduces the same numbers, and runs four
+frames in 184 cycles.
 
-Seed both numbers from what you already produce: `waveflow/utils/csynthparse.py` pulls
-`PipelineII` and `Latency` per module out of `csynth.xml`.  Then let the S3 XSI gate falsify them —
-and make that gate **two frames back to back**, not one, because a single-frame gate cannot tell a
-correct II from a serialized one.  That is the whole failure this section exists to prevent.
+**Check what cosim's "latency" means before plugging it in.**  For a block-level top, cosim
+reports `ap_start` → `ap_done`, which is not necessarily first input word to first output word.
+Read both edges off the VCD once.  Note that a counter in a BFM is not the wire either: a previous
+arc here read 191 where the VCD said 192, because a counter and `TVALID && TREADY` are different
+things.
 
-**Acceptance criterion:** a predicted **latency and II** with a measured error bar, not a
-plausible-looking formula.  And note that a counter in a BFM is not the wire — a previous arc here
-read 191 where the VCD said 192, because a counter and `TVALID && TREADY` are different things.
+**Acceptance criterion:** the pysim run of the same **four frames back to back** predicts the
+measured 184 cycles, and the per-frame latency and interval within one cycle.  A single-frame gate
+cannot tell a correct II from a serialized one, which is the whole failure this section exists to
+prevent.  Whether a free-running `hls::task` construction would overlap frames (II ≈ L/R) is a
+separate, open hardware question.  The model takes whatever numbers that build measures.
 
 ---
 
