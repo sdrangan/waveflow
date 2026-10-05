@@ -1,0 +1,7 @@
+# mimo_cg dse_cost: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=d95510d337e992d3, measured_builds=1440, job_tolerance=0.02, cost_tolerance=0.1
+part,builds,designs,tool_hours,wall_hours,processes,kind
+calibration,86,86,2.083000e+00,5.810000e-01,1/4,measured
+held-out validation,46,46,1.043000e+00,3.480000e-01,3/4,measured
+brute-force sub-grid,1440,1440,5.698200e+01,9.740000e+00,6,measured
+design-space exploration in Python,0,6084720,0,4.170000e-03,1,measured
+brute force of the whole space,107460,6084720,3.994500e+03,6.828000e+02,6,projected

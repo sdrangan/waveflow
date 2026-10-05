@@ -726,10 +726,25 @@ def write_scores(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> dic
     return out
 
 
+IMAGES = (
+    Path(__file__).resolve().parents[3] / "docs" / "examples" / "mimo_cg" / "images"
+)
+
+
+def _typed(rows: list[dict]) -> list[dict]:
+    """Rows read back from a table, with the flags the figures test as integers."""
+    for r in rows:
+        for k in ("measured", "right", "builds", "draw"):
+            if k in r and r[k] != "":
+                r[k] = int(float(r[k]))
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write-decisions", action="store_true")
     ap.add_argument("--learning-curve", action="store_true", help="step 6.6")
+    ap.add_argument("--no-figure", action="store_true")
     args = ap.parse_args(argv)
     if args.learning_curve:
         path = write_learning_curve()
@@ -741,6 +756,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"(median {got[len(got) // 2]:6.2f}%, {len(got)} refits)"
             )
         print("wrote", path)
+        if not args.no_figure:
+            from examples.mimo_cg.hw.fidelity_figure import render_curve
+
+            print(
+                "wrote",
+                render_curve(_typed(read_table(path)), IMAGES / "learning_curve.svg"),
+            )
         return 0
     if args.write_decisions:
         path = write_decisions()
@@ -765,6 +787,12 @@ def main(argv: list[str] | None = None) -> int:
             f"{float(m['right_pct']):6.2f}%  same design {float(m['same_build_pct']):6.2f}%  "
             f"worst regret {m['regret_max_pct']}%{gate}"
         )
+    if not args.no_figure:
+        from examples.mimo_cg.hw.fidelity_figure import render_decisions
+
+        rows = _typed(read_table(out["decision_fidelity"]))
+        table = read_table(out["decision_fidelity_metrics"])
+        print("wrote", render_decisions(rows, table, IMAGES / "decision_fidelity.svg"))
     gates = [m for m in read_table(out["decision_fidelity_metrics"]) if m["threshold"]]
     return 0 if all(m["pass"] == "1" for m in gates) else 1
 

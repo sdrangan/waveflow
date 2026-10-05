@@ -383,3 +383,166 @@ def test_figures_are_deterministic(tmp_path, hw, acc, committed):
     ]
     a = FF.render_curve(curve, tmp_path / "c.svg").read_bytes()
     assert a == FF.render_curve(curve, tmp_path / "d.svg").read_bytes()
+
+
+# --- the brute force as measured, and AC6 (steps 6.4 and 6.5) ---------------------------------
+
+
+def _table(name: str) -> list[dict]:
+    return read_table(F.PAPER_DATA / f"{name}.csv")
+
+
+def test_the_brute_force_measured_every_build_of_the_grid():
+    """Step 6.4's exit: 1,440 of 1,440 builds measured, none failed, every one bit-exact at RTL,
+    with a steady-state job time at every iteration count of its K."""
+    builds = _table("bruteforce_builds")
+    grid = space.bruteforce_grid()
+    assert [r["build"] for r in builds] == [space.bf_label(c) for c in grid]
+    assert all(r["role"] == "bruteforce" and r["error"] == "" for r in builds)
+    assert all(r["bit_exact"] == "1" and float(r["est_ns"]) <= 4.0 for r in builds)
+    for r, c in zip(builds, grid, strict=True):
+        assert all(int(r[k]) == getattr(c, k) for k in dse.KNOBS)
+    head = (F.PAPER_DATA / "bruteforce_builds.csv").read_text().splitlines()[0]
+    assert "tool=vitis_hls 2024.1" in head and "roles=bruteforce" in head
+    measured = F.measured_table()
+    assert len(measured) == 1440
+    for c, build in zip(grid, measured.index, strict=True):
+        times = [measured.loc[build, f"job{n}"] for n in space.NITS[c.K]]
+        assert all(t > 0 for t in times) and times == sorted(times)
+    # 57 tool-hours, as the pilot projected (56)
+    n, secs = F.tool_seconds(F.PAPER_DATA / "bruteforce_builds.csv")
+    assert n == 1440 and 56.5 < secs / 3600 < 57.5
+
+
+def test_committed_scores_are_what_the_code_regenerates(tmp_path):
+    out = F.write_scores(out_dir=tmp_path)
+    assert sorted(out) == [
+        "bruteforce_error_metrics",
+        "bruteforce_errors",
+        "bruteforce_frontiers",
+        "decision_fidelity",
+        "decision_fidelity_metrics",
+        "dse_cost",
+    ]
+    for name, path in out.items():
+        assert path.read_bytes() == (F.PAPER_DATA / f"{name}.csv").read_bytes(), name
+        assert "model_sha256=d95510d337e992d3" in path.read_text().splitlines()[0]
+
+
+def test_ac6_the_models_pick_is_right_in_at_least_90_percent_of_the_decisions(
+    committed,
+):
+    """AC6, on the decision set committed before the brute force ran (step 6.3): for each of the
+    four resources the model's pick meets the job-time budget when measured and costs within 10%
+    of the brute-force pick in at least 90% of the decisions.  It does in 99.5–100%."""
+    judged = _table("decision_fidelity")
+    assert len(judged) == len(committed) == 2592
+    for mine, was in zip(judged, committed, strict=True):
+        keys = ("modulation", "M", "K", "job_budget", "resource", "problem", "pick")
+        assert all(mine[k] == was[k] for k in keys)  # the committed picks, unchanged
+    table = {(m["set"], m["resource"]): m for m in _table("decision_fidelity_metrics")}
+    gates = {k: m for k, m in table.items() if m["threshold"]}
+    assert set(gates) == {("all", r) for r in dse.RESOURCES}
+    for m in gates.values():
+        assert m["threshold"] == ">= 90" and m["pass"] == "1"
+        assert float(m["right_pct"]) >= F.MIN_RIGHT_PCT and m["decisions"] == "648"
+    right = {r: float(table[("all", r)]["right_pct"]) for r in (*dse.RESOURCES, "any")}
+    assert right == {
+        "dsp": 99.54,
+        "lut": 99.85,
+        "ff": 99.85,
+        "bram": 100.0,
+        "any": 99.81,
+    }
+    # what stands beside the gate: no pick missed its job-time budget, none failed to build,
+    # five were not right, and one of those is the memory guard's doing
+    wrong = [r for r in judged if r["right"] != "1"]
+    assert len(wrong) == 5 and all(
+        r["met"] == "1" and r["measured"] == "1" for r in judged
+    )
+    assert sorted(float(r["regret_pct"]) for r in wrong) == [
+        12.0,
+        16.667,
+        16.667,
+        18.619,
+        114.286,
+    ]
+    (guard,) = [r for r in wrong if r["resource"] == "lut"]
+    assert guard["pick"].replace("_d64_", "_d32_") == guard["bf_pick"]
+    any_ = table[("all", "any")]
+    assert float(any_["same_cost_pct"]) > 92 and float(any_["same_build_pct"]) > 90
+    assert float(any_["regret_p95_pct"]) < 1.0 and float(any_["missed_budget_pct"]) == 0
+    # the same holds for the distinct questions, without the calibration detectors, and without
+    # every build that shares a block configuration with a calibration build
+    for label in (
+        "distinct questions",
+        "without the calibration detectors",
+        "without builds that share a calibrated block",
+    ):
+        for res in dse.RESOURCES:
+            assert float(table[(label, res)]["right_pct"]) > 99.0, (label, res)
+    assert table[("distinct questions", "any")]["decisions"] == "1728"
+
+
+def test_model_errors_over_the_sub_grid():
+    """The counted resources are exact on all 1,440 builds; LUT, FF and job time are within a
+    few percent, except in one family the calibration never built."""
+    table = {m["metric"]: m for m in _table("bruteforce_error_metrics")}
+    for m in ("DSP exact (%)", "BRAM exact (%)"):
+        assert (table[m]["n"], float(table[m]["value"])) == ("1440", 100.0)
+    lut, ff = table["LUT MAPE (%)"], table["FF MAPE (%)"]
+    assert float(lut["value"]) < 1.0 and float(lut["worst"]) < 5.5
+    assert float(ff["value"]) < 2.5 and float(ff["worst"]) < 10.0
+    assert float(table["LUT MAPE (%), 16 lanes"]["value"]) < 1.5  # v1 was 15% low there
+    loop = table["job time MAPE (%), loop-dominated"]
+    assert loop["n"] == "8807" and float(loop["value"]) < 1.1
+    assert table["job time MAPE (%), under the guard"]["n"] == "193"
+    # the family: one row, as many lanes as columns (so the tool merges the tile loops), and
+    # the 3-multiply form.  The calibration's three merged builds all have the 4-multiply form,
+    # and the model adds the 3-multiply form's per-tile overhead where the merged loop has none.
+    err: dict = {}
+    for r in _table("bruteforce_errors"):
+        if r["quantity"] == "job" and r["guarded"] == "0":
+            family = "_l4_r1_c4_m3_" in r["build"]
+            err.setdefault(family, []).append(float(r["error_pct"]))
+    assert len(err[True]) == 540 and 7.0 < sum(err[True]) / 540 < 8.0
+    assert max(err[True]) < 10.0 and min(err[True]) > 4.0  # too slow, every time
+    assert max(abs(e) for e in err[False]) < 2.5
+    assert sum(abs(e) for e in err[False]) / len(err[False]) < 0.7
+
+
+def test_predicted_frontiers_cover_the_measured_ones():
+    rows = _table("bruteforce_frontiers")
+    assert len(rows) == 27 * 3 * 4
+    for res in dse.RESOURCES:
+        mine = [r for r in rows if r["resource"] == res]
+        mean = {
+            k: sum(float(r[k]) for r in mine) / len(mine)
+            for k in ("precision_pct", "recall_pct", "covered_pct")
+        }
+        # exact membership is strict (one LUT apart is a miss); coverage within the decision
+        # tolerances is the useful number
+        assert mean["precision_pct"] > 80 and mean["recall_pct"] > 80
+        assert mean["covered_pct"] > 99.9
+    assert min(float(r["covered_pct"]) for r in rows) > 93
+
+
+def test_cost_table():
+    rows = {r["part"]: r for r in _table("dse_cost")}
+    cal, sub = rows["calibration"], rows["brute-force sub-grid"]
+    full = rows["brute force of the whole space"]
+    assert (cal["builds"], sub["builds"], full["builds"]) == ("86", "1440", "107460")
+    assert float(cal["tool_hours"]) == pytest.approx(2.08, abs=0.01)
+    assert float(cal["wall_hours"]) == pytest.approx(
+        (1420 + 631 + 42) / 3600, abs=0.001
+    )
+    assert float(sub["tool_hours"]) == pytest.approx(56.98, abs=0.01)
+    assert float(sub["wall_hours"]) == pytest.approx((1952 + 33113) / 3600, abs=0.01)
+    assert full["kind"] == "projected" and 3900 < float(full["tool_hours"]) < 4100
+    assert all(r["kind"] == "measured" for p, r in rows.items() if r is not full)
+    py = rows["design-space exploration in Python"]
+    assert py["designs"] == "6084720" and float(
+        py["wall_hours"]
+    ) * 3600 == pytest.approx(15, abs=0.1)
+    # calibration is 27 times cheaper in tool time than the sub-grid alone
+    assert float(sub["tool_hours"]) / float(cal["tool_hours"]) > 27
