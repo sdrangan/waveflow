@@ -485,6 +485,11 @@ def run_vitis_hls(
     subprocess.CalledProcessError
         If Vitis returns a non-zero exit status (``check=True`` behavior).
     """
+    # Before anything runs: a src/ body shadowed by a different include/ copy means the include
+    # order decides which one is compiled (waveflow.build.rtl_digest.shadowed_sources).
+    from waveflow.build.rtl_digest import check_not_shadowed
+    check_not_shadowed(work_dir if work_dir is not None else Path(tcl_script).parent)
+
     cmd_list, default_work_dir = _build_vitis_hls_cmd(tcl_script=tcl_script, args=args)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
 

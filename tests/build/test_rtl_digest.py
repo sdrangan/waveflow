@@ -301,3 +301,80 @@ def test_line_endings_do_not_make_a_source_stale(tmp_path):
     other = tmp_path / "c.h"
     other.write_bytes(b"int x;\nint z;\n")
     assert _sha256(other) != _sha256(lf)
+
+
+# ---------------------------------------------------------------------------------------------------
+# src/ — the hand-written sources (plans/source_layout.md, S0).  These exist before any example moves
+# its bodies there: an edit the guard cannot see is a gate passing against an old kernel.
+# ---------------------------------------------------------------------------------------------------
+
+def _stamped_with_src(root: Path, files: dict[str, str]) -> Path:
+    """:func:`_tree` plus *files* under ``src/`` (relative paths), stamped as if just synthesized."""
+    _tree(root)
+    for rel, text in files.items():
+        p = root / "src" / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    write_stamp(root, TOP)
+    return root
+
+
+class TestSrcIsHashed:
+    @pytest.mark.parametrize("rel", ["body_task.h", "k_hook_impl.cpp", "k_hook_impl.tpp",
+                                     "sub/helper.hpp"])
+    def test_an_edit_under_src_is_stale(self, tmp_path, rel):
+        """Every suffix a hand-written source has -- ``.tpp`` (templated hook impls) was the one the
+        include/ glob never counted -- and subdirectories, which a flat scan would miss."""
+        root = _stamped_with_src(tmp_path, {rel: "int a;\n"})
+        assert rtl_staleness(root, TOP) is None
+        (root / "src" / rel).write_text("int b;\n", encoding="utf-8")
+        why = rtl_staleness(root, TOP)
+        assert why is not None and why.startswith(f"src/{rel} has changed"), why
+
+    def test_a_new_file_under_src_is_stale(self, tmp_path):
+        root = _stamped_with_src(tmp_path, {"a_task.h": "x\n"})
+        (root / "src" / "b_task.h").write_text("y\n", encoding="utf-8")
+        assert "src/b_task.h is new" in rtl_staleness(root, TOP)
+
+
+class TestShadowing:
+    """An old copy in ``include/`` beside the real body in ``src/``.
+
+    ``git rm --cached`` leaves the copy on disk, and every copy-step example already has one, so the
+    arrangement is the default after a migration -- not a corner case.  Generated TCL puts ``src/``
+    first, but whichever file the include order picks, the stamp cannot say which one csynth read.
+    """
+
+    def test_a_different_copy_is_reported(self, tmp_path):
+        from waveflow.build.rtl_digest import shadowed_sources
+        root = _stamped_with_src(tmp_path, {"body_task.h": "new body\n"})
+        (root / "include" / "body_task.h").write_text("old body\n", encoding="utf-8")
+        assert shadowed_sources(root) == ["body_task.h"]
+        why = rtl_staleness(root, TOP)
+        assert why is not None and "body_task.h differ between src/ and include/" in why
+        assert REFUSAL_TAIL in why
+
+    def test_an_identical_copy_is_harmless(self, tmp_path):
+        """The copy steps that still exist write exactly this; it cannot hide anything."""
+        from waveflow.build.rtl_digest import shadowed_sources
+        root = _stamped_with_src(tmp_path, {"body_task.h": "same\n"})
+        (root / "include" / "body_task.h").write_bytes(b"same\r\n")      # CRLF: still the same
+        assert shadowed_sources(root) == []
+        write_stamp(root, TOP)
+        assert rtl_staleness(root, TOP) is None
+
+    def test_the_stamp_refuses_to_vouch_for_a_shadowed_tree(self, tmp_path):
+        root = _stamped_with_src(tmp_path, {"body_task.h": "new\n"})
+        (root / "include" / "body_task.h").write_text("old\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="body_task.h exist in both src/ and include/"):
+            write_stamp(root, TOP)
+
+    def test_csynth_refuses_before_it_runs(self, tmp_path):
+        """The check is the first thing ``run_vitis_hls`` does -- before it even looks for Vitis, so
+        this holds on a machine without the toolchain."""
+        from waveflow.toolchain.toolchain import run_vitis_hls
+        root = _stamped_with_src(tmp_path, {"body_task.h": "new\n"})
+        (root / "include" / "body_task.h").write_text("old\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="different content"):
+            run_vitis_hls(root / "gen" / f"{TOP}.tcl", work_dir=root)
+

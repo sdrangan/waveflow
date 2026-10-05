@@ -45,6 +45,15 @@ class TestRenderTcl:
         assert "set part {xczu28dr-ffvg1517-2-e}" in tcl
         assert "create_clock -period 5" in tcl
 
+    def test_src_is_searched_before_include(self):
+        """A hand-written body in ``src/`` must win over a same-named leftover in ``include/``
+        (``plans/source_layout.md``): the include order is what decides which one csynth reads."""
+        assert 'set cf "-Isrc -Iinclude"' in render_tcl("mem_copy")
+
+    def test_the_script_is_written_beside_its_top_in_gen(self, tmp_path):
+        from waveflow.build.composite_gen import tcl_path
+        assert tcl_path(tmp_path, "mem_copy") == tmp_path / "gen" / "mem_copy.tcl"
+
     def test_fractional_period_is_kept(self):
         tcl = render_tcl("t", period_ns=1e9 / 300e6)
         assert "create_clock -period 3.33" in tcl

@@ -499,7 +499,7 @@ class ExtractBurstsStep(BuildStep):
 
 
 def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
-                  include_dir: str = "include") -> str | None:
+                  include_dir: str = "include", src_dir: str = "src") -> str | None:
     """``None`` if *top*'s synthesized RTL was built from the sources now on disk, otherwise a
     sentence naming the offending source.
 
@@ -531,12 +531,25 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     Deliberately a **predicate**, not an assertion or a rebuild.  A gate decides for itself whether
     to skip; rebuilding here would hide a 40-second csynth inside a test fixture, and a helper that
     silently runs the toolchain is its own kind of surprise.
+
+    **Regenerate the headers before asking.**  The digests are of the example's *copies* in
+    ``include/`` and ``gen/``, not of the framework headers, schemas and generators they came from.
+    Once those directories are untracked build output (``plans/source_layout.md``), a ``git pull``
+    that changes ``waveflow/build/memmgr.hpp`` never touches them, and this guard would call RTL built
+    from the old header clean.  So a gate fixture runs the example's Python-only codegen first
+    (seconds, no toolchain -- e.g. ``examples.markov.markov_build.generate``): the copies then
+    reflect the checkout, and a pulled change reads as a changed source.
+
+    A tree where ``src/`` and ``include/`` hold **different** files of the same name is reported as
+    stale too (:func:`~waveflow.build.rtl_digest.shadowed_sources`): which one csynth read depends
+    on the ``-I`` order, so no stamp can vouch for it.
     """
     from pathlib import Path
 
     from waveflow.build.rtl_digest import (
         first_mismatch,
         read_stamp,
+        shadowed_sources,
         source_digests,
         source_files,
     )
@@ -552,11 +565,16 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     tail = ("the synthesized design on disk is not this checkout's. Re-run the example's build "
             "--through csynth. Do NOT re-record a cycle count against RTL you did not produce.")
 
+    shadow = shadowed_sources(root, include_dir=include_dir, src_dir=src_dir)
+    if shadow:
+        return (f"{', '.join(shadow)} differ between {src_dir}/ and {include_dir}/, so which one csynth "
+                f"compiled depends on the include order — delete the {include_dir}/ copy, then {tail}")
+
     recorded = read_stamp(root, top)
     if recorded is not None:
-        current = source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir)
-        miss = first_mismatch(recorded, current, source_digests(
-            root, top, gen_dir=gen_dir, include_dir=include_dir, raw=True))
+        kw = dict(gen_dir=gen_dir, include_dir=include_dir, src_dir=src_dir)
+        current = source_digests(root, top, **kw)
+        miss = first_mismatch(recorded, current, source_digests(root, top, raw=True, **kw))
         if miss is None:
             return None
         rel, verb = miss
@@ -565,7 +583,7 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     # No stamp: this project was built before the digest existed.  Fall back to the mtime proxy,
     # which is what the guard was for years -- weaker, but never silently absent.
     newest_rtl = max(p.stat().st_mtime for p in rtl)
-    for src in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir):
+    for src in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir, src_dir=src_dir):
         if src.stat().st_mtime > newest_rtl + 1.0:     # 1 s slack: filesystem timestamp grain
             return (f"{src.relative_to(root).as_posix()} is newer than the newest RTL in "
                     f"{rtl_dir.relative_to(root).as_posix()} (no source stamp: this project "

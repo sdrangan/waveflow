@@ -15,8 +15,12 @@ measured nothing reads as success.  So the stamp records **content**: a SHA-256 
 written beside the Vitis project at csynth time by
 :func:`~waveflow.build.composite_gen.render_rtl_f`, and compared by ``rtl_staleness`` afterwards.
 
-The source set is exactly the one the mtime check read — ``gen/<top>.cpp`` plus
-``include/*.{h,hpp,cpp}`` — so behaviour changes *only* where mtime and content disagree.
+The source set is ``gen/<top>.cpp``, ``include/*`` (flat: build output) and ``src/**`` (recursive:
+the hand-written sources, ``plans/source_layout.md``), counting the suffixes in
+:data:`SOURCE_SUFFIXES`.  ``src/`` is first on the csynth include path, so a hand-written body there is
+what the compiler reads; :func:`shadowed_sources` refuses a tree where an ``include/`` file of the same
+name says something different, because that is the one arrangement in which "the guard hashed it" and
+"the compiler read it" can name different files.
 
 .. warning::
 
@@ -47,14 +51,23 @@ STAMP_NAME = "rtl_sources.json"
 #: the conservative direction: an unreadable stamp must never mean "clean".
 STAMP_VERSION = 1
 
-#: Extensions that count as a hand-written source under ``include/``.  Same set the mtime check
-#: read, kept here so the stamp and the guard cannot drift apart.
-SOURCE_SUFFIXES = (".h", ".hpp", ".cpp")
+#: Extensions that count as a C++ source under ``include/`` and ``src/``.  One set, kept here so the
+#: stamp and the guard cannot drift apart.  ``.tpp`` is a templated hook impl
+#: (``<kernel>_<hook>_impl.tpp``): leaving it out let an edit to one go unnoticed.
+SOURCE_SUFFIXES = (".h", ".hpp", ".tpp", ".cpp")
+
+#: The hand-written source directory every build puts first on its include path
+#: (:data:`waveflow.build.composite_gen.SRC_DIR`; repeated here because this module imports nothing
+#: from the build so the toolchain layer can use it).
+SRC_DIR = "src"
 
 
 def source_files(root, top: str, *, gen_dir: str = "gen",
-                 include_dir: str = "include") -> list[Path]:
+                 include_dir: str = "include", src_dir: str = SRC_DIR) -> list[Path]:
     """The sources *top*'s RTL is built from, sorted, as absolute paths.
+
+    ``include/`` is read flat (it is build output, written flat); ``src/`` recursively, because a
+    hand-written tree may grow subdirectories and an unhashed one is an edit the guard cannot see.
 
     Sorted so the stamp is byte-stable and so a mismatch report names the same file every run;
     ``iterdir`` order is a filesystem detail nobody should be able to observe through a gate.
@@ -67,7 +80,43 @@ def source_files(root, top: str, *, gen_dir: str = "gen",
     inc = root / include_dir
     if inc.is_dir():
         out += [p for p in inc.iterdir() if p.is_file() and p.suffix in SOURCE_SUFFIXES]
+    src = root / src_dir
+    if src.is_dir():
+        out += [p for p in src.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES]
     return sorted(out)
+
+
+def shadowed_sources(root, *, include_dir: str = "include", src_dir: str = SRC_DIR) -> list[str]:
+    """Basenames present in both ``src/`` and ``include/`` **with different content**, sorted.
+
+    ``#include "x.h"`` names a basename, so a file in each directory is two candidates for one
+    include and the ``-I`` order picks.  Generated TCL puts ``src/`` first, but a hand-built TCL may
+    not, and an old copy left in ``include/`` after a body moved to ``src/`` is exactly the file that
+    would win: the guard hashes the edit, csynth compiles the copy, the stamp agrees, and the gate
+    passes against the old body.  An *identical* copy is harmless (the copy steps that still exist
+    write one), so only a disagreement counts.  Line endings are normalized as in the digest.
+    """
+    root = Path(root)
+    inc, src = root / include_dir, root / src_dir
+    if not inc.is_dir() or not src.is_dir():
+        return []
+    out = []
+    for p in src.rglob("*"):
+        twin = inc / p.name
+        if p.is_file() and p.suffix in SOURCE_SUFFIXES and twin.is_file():
+            if _sha256(p) != _sha256(twin):
+                out.append(p.name)
+    return sorted(out)
+
+
+def check_not_shadowed(root, **kw) -> None:
+    """Raise :class:`RuntimeError` if :func:`shadowed_sources` finds anything.  Called before csynth."""
+    bad = shadowed_sources(root, **kw)
+    if bad:
+        raise RuntimeError(
+            f"{Path(root)}: {', '.join(bad)} exist in both src/ and include/ with different content. "
+            f"src/ is the source; the include/ copy is a leftover that a build with include/ first on "
+            f"its path would compile instead. Delete the include/ copy (include/ is build output).")
 
 
 def _sha256(path: Path, *, raw: bool = False) -> str:
@@ -85,7 +134,8 @@ def _sha256(path: Path, *, raw: bool = False) -> str:
 
 
 def source_digests(root, top: str, *, gen_dir: str = "gen",
-                   include_dir: str = "include", raw: bool = False) -> dict[str, str]:
+                   include_dir: str = "include", src_dir: str = SRC_DIR,
+                   raw: bool = False) -> dict[str, str]:
     """``{repo-relative posix path: sha256}`` for *top*'s source set.
 
     Keys are POSIX-spelled so a stamp written on Windows and read on Linux compares equal — the
@@ -93,7 +143,8 @@ def source_digests(root, top: str, *, gen_dir: str = "gen",
     """
     root = Path(root)
     return {p.relative_to(root).as_posix(): _sha256(p, raw=raw)
-            for p in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir)}
+            for p in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir,
+                                  src_dir=src_dir)}
 
 
 def stamp_path(root, top: str) -> Path:
@@ -102,21 +153,26 @@ def stamp_path(root, top: str) -> Path:
 
 
 def write_stamp(root, top: str, *, gen_dir: str = "gen",
-                include_dir: str = "include") -> Path | None:
+                include_dir: str = "include", src_dir: str = SRC_DIR) -> Path | None:
     """Record the current source digests as the ones *top*'s RTL was built from.
 
     Returns the stamp path, or ``None`` if there is no project directory to write into (nothing was
     synthesized, so there is nothing to vouch for).
 
     **Call this only after csynth.**  See the module warning.
+
+    Refuses (raises) on a shadowed tree (:func:`shadowed_sources`): the stamp would vouch for a
+    ``src/`` file the compiler may not have read.
     """
     proj = Path(root) / f"{top}_proj"
     if not proj.is_dir():
         return None
+    check_not_shadowed(root, include_dir=include_dir, src_dir=src_dir)
     payload = {
         "version": STAMP_VERSION,
         "top": top,
-        "files": source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir),
+        "files": source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir,
+                                src_dir=src_dir),
     }
     out = proj / STAMP_NAME
     out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
