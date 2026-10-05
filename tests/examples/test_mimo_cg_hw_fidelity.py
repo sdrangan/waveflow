@@ -248,3 +248,48 @@ def test_score_on_a_perfect_brute_force_is_all_right(hw, acc, committed):
     some = frozenset(hw.build[::7])
     again = F.score(hw, acc, meas, committed, exclude=some)
     assert len(again) == 2592 and not {r["pick"] for r in again} & some
+
+
+# --- the learning curve (step 6.6) -------------------------------------------------------------
+
+
+def test_curve_subsets_are_seeded_stratified_and_keep_the_core():
+    pool = F.calibration_builds()
+    assert {top: len(v) for top, v in pool.items()} == {"vec": 25, "mm": 45, "det": 16}
+    assert set(F.CURVE_CORE) <= set(pool["det"])
+    want = {10: (3, 5, 2), 20: (6, 10, 4), 30: (9, 16, 5), 45: (13, 24, 8)}
+    for n in F.CURVE_SIZES:
+        seen = set()
+        for draw in range(F.CURVE_DRAWS):
+            sub = F.curve_subset(n, draw, pool)
+            assert sub == F.curve_subset(n, draw, pool) and len(sub) == n
+            assert set(F.CURVE_CORE) <= sub
+            got = tuple(
+                sum(b in sub for b in pool[top]) for top in ("vec", "mm", "det")
+            )
+            assert got == want[n]
+            seen.add(sub)
+        assert len(seen) == F.CURVE_DRAWS  # twenty different subsets
+
+
+def test_a_refit_on_a_subset_reads_only_that_subset():
+    from examples.mimo_cg.hw import models as MD
+
+    pool = F.calibration_builds()
+    sub = F.curve_subset(30, 3, pool)
+    m = MD.fit(builds=sub, loo=False)
+    assert m.meta["fit_builds"] == 30
+    assert m.report["CgVec.lut"]["n"] == 9 and m.report["CgMm.lut"]["n"] == 16
+    assert "loo_mape_pct" not in m.report["CgVec.lut"]
+    # the two memory word widths can be priced, which is what the core detectors are for
+    assert {"MemRStream|32", "MemRStream|64", "adapters|32", "adapters|64"} <= set(
+        m.table
+    )
+    hw = F.subgrid_table(m)
+    assert len(hw) == 1440 and np.isfinite(hw[list(dse.RESOURCES)].to_numpy()).all()
+    # every build of the pool is the committed fit, whatever the leave-one-out switch
+    full = MD.fit(builds=frozenset(b for v in pool.values() for b in v), loo=False)
+    committed = MD.Models.load()
+    assert full.table == committed.table
+    for name, co in committed.coef.items():
+        assert full.coef[name] == pytest.approx(co, rel=1e-9, abs=1e-9)

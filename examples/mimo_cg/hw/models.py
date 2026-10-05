@@ -658,32 +658,37 @@ def model_for(models: Models):
 
 
 def _fit_tables(
-    data_dir: Path, roles: tuple[str, ...] = FIT_ROLES
+    data_dir: Path, roles: tuple[str, ...] = FIT_ROLES, builds: frozenset | None = None
 ) -> tuple[dict, list[dict], list[dict]]:
-    """The campaign tables, cut to the calibration builds (``roles``): ``(configs by build, module
-    rows, cycles)``."""
-    builds = {
-        r["build"]: r
-        for r in read_table(data_dir / "hw_builds.csv")
-        if r["role"] in roles
-    }
+    """The campaign tables, cut to the calibration builds (``roles``, and of those only
+    ``builds`` when given): ``(configs by build, module rows, cycles)``."""
+
+    def keep(r: dict) -> bool:
+        return r["role"] in roles and (builds is None or r["build"] in builds)
+
+    builds_ = {r["build"]: r for r in read_table(data_dir / "hw_builds.csv") if keep(r)}
     cfg = {
         b: {k: int(r[k]) for k in HwConfig.__dataclass_fields__}
-        for b, r in builds.items()
+        for b, r in builds_.items()
     }
-    modules = [r for r in read_table(data_dir / "hw_modules.csv") if r["role"] in roles]
-    cycles = [r for r in read_table(data_dir / "hw_cycles.csv") if r["role"] in roles]
+    modules = [r for r in read_table(data_dir / "hw_modules.csv") if keep(r)]
+    cycles = [r for r in read_table(data_dir / "hw_cycles.csv") if keep(r)]
     assert all(r["build"] in cfg for r in modules + cycles)
     return cfg, modules, cycles
 
 
 def _regress(
-    name: str, samples: list[tuple[dict, float]], *, scale: list[float] | None = None
+    name: str,
+    samples: list[tuple[dict, float]],
+    *,
+    scale: list[float] | None = None,
+    loo: bool = True,
 ) -> tuple[dict, dict]:
     """Fit regression ``name`` on ``(terms, target)`` samples; returns ``(coefficients, report)``.
 
     The report's errors are relative to ``scale`` (the full quantity, when the target had a counted
-    part taken out), so they read as errors of what is predicted.
+    part taken out), so they read as errors of what is predicted.  ``loo=False`` skips the
+    leave-one-out errors (a refit on a few builds may have too few rows to leave one out).
     """
     names = TERMS[name][1]
     df = pd.DataFrame(
@@ -694,18 +699,21 @@ def _regress(
     )
     model = _lin(name).fit(df)
     insample = [model.predict_feat(r) - r["y"] for r in df.to_dict("records")]
-    loo = []
-    for i in range(len(df)):
-        held = df.iloc[i].to_dict()
-        loo.append(_lin(name).fit(df.drop(index=i)).predict_feat(held) - held["y"])
-    rel = [abs(e) / f for e, f in zip(loo, full, strict=True) if f]
     report = {
         "n": len(df),
         "terms": len(names) + 1,
         "max_abs_residual": max(abs(e) for e in insample),
-        "loo_mape_pct": 100 * sum(rel) / len(rel),
-        "loo_max_pct": 100 * max(rel),
     }
+    if loo:
+        left = []
+        for i in range(len(df)):
+            held = df.iloc[i].to_dict()
+            left.append(_lin(name).fit(df.drop(index=i)).predict_feat(held) - held["y"])
+        rel = [abs(e) / f for e, f in zip(left, full, strict=True) if f]
+        report |= {
+            "loo_mape_pct": 100 * sum(rel) / len(rel),
+            "loo_max_pct": 100 * max(rel),
+        }
     co = model.coeffs
     return {**{t: co[t] for t in names}, "intercept": co["intercept"]}, report
 
@@ -720,9 +728,16 @@ def _single(rows: list[dict], what: str) -> dict:
     return dict(rows[0])
 
 
-def fit(data_dir: Path = PAPER_DATA) -> Models:
-    """Fit every model from the ``fit`` rows of the campaign tables in ``data_dir``."""
-    cfg, modules, cycles = _fit_tables(data_dir)
+def fit(
+    data_dir: Path = PAPER_DATA, builds: frozenset | None = None, loo: bool = True
+) -> Models:
+    """Fit every model from the calibration rows of the campaign tables in ``data_dir``.
+
+    ``builds`` restricts the fit to some of the calibration builds (the learning curve of plan
+    step 6.6); the committed models are fitted on all of them.
+    """
+    cfg, modules, cycles = _fit_tables(data_dir, builds=builds)
+    regress = functools.partial(_regress, loo=loo)
     m = Models(
         meta={
             "part": PART,
@@ -752,7 +767,7 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
                 for r in own
             ]
             name = f"{cls}.{ctr}"
-            m.coef[name], m.report[name] = _regress(
+            m.coef[name], m.report[name] = regress(
                 name, samples, scale=[val(r, ctr) for r in own]
             )
 
@@ -771,7 +786,7 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
         own = [r for r in det if r["name"] == cls]
         for ctr in ("lut", "ff"):
             name = f"{cls}.{ctr}"
-            m.coef[name], m.report[name] = _regress(
+            m.coef[name], m.report[name] = regress(
                 name, [(_small_terms(cfg[r["build"]]), val(r, ctr)) for r in own]
             )
     loaders = {
@@ -797,7 +812,7 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
                         val(sub[(r["build"], f"{cls}.{loop}")], ctr),
                     )
             name = f"{short}.{ctr}"
-            m.coef[name], m.report[name] = _regress(name, list(samples.values()))
+            m.coef[name], m.report[name] = regress(name, list(samples.values()))
         for mem_dw in sorted({cfg[r["build"]]["mem_dw"] for r in own}):
             rest = [
                 {
@@ -864,7 +879,7 @@ def fit(data_dir: Path = PAPER_DATA) -> Models:
     for name, top in (("vec.iter", "vec"), ("vec.init", "vec"), ("mm.iter", "mm")):
         got = span(top, name)
         counted = [mm_iter_counted(k) if name == "mm.iter" else 0 for k, _y in got]
-        m.coef[name], m.report[name] = _regress(
+        m.coef[name], m.report[name] = regress(
             name,
             [
                 (TERMS[name][0](k), y - cnt)

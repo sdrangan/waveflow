@@ -97,6 +97,21 @@ def shard(builds: list[str], spec: str) -> list[str]:
     return builds[i::n]
 
 
+def measured(build: str, c: HwConfig, points_dir: Path | None = None) -> bool:
+    """Whether ``build`` already has a complete brute-force record of configuration ``c``: no
+    error, the csynth resources, and a steady-state job time."""
+    path = (points_dir or M.POINTS_DIR) / f"{build}.json"
+    if not path.is_file():
+        return False
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    return (
+        "error" not in rec
+        and rec.get("config") == {k: getattr(c, k) for k in KNOBS}
+        and "resources" in rec
+        and bool(rec.get("intervals", {}).get("steady"))
+    )
+
+
 # --- the steps -------------------------------------------------------------------------------
 
 
@@ -112,9 +127,20 @@ class HwPointStep(BuildStep):
     def run(self, config: BuildConfig, **kw) -> dict:
         top, role, c = split()[kw["build"]]
         brute = role == BRUTEFORCE
-        rec = M.measure(
-            kw["build"], top, c, role=role, steady=brute, trace=not brute, prune=brute
-        )
+        if brute and measured(kw["build"], c):
+            # a brute-force build that is measured is not built again, whichever shard layout
+            # or pilot measured it: its record is the result
+            rec = {}
+        else:
+            rec = M.measure(
+                kw["build"],
+                top,
+                c,
+                role=role,
+                steady=brute,
+                trace=not brute,
+                prune=brute,
+            )
         if "error" in rec:
             raise RuntimeError(rec["error"])
         marker = M.POINTS_DIR / "last_point.txt"

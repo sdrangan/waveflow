@@ -651,6 +651,21 @@ def test_campaign_keeps_the_brute_force_apart(tmp_path, monkeypatch):
     assert calls[1] == {"role": "fit", "steady": False, "trace": True, "prune": False}
     text = C.DryPointStep(name="hw_dry").run(None, build=build)["hw_dry"].read_text()
     assert f"jobs={M.job_nits(c.K, steady=True)}" in text
+    # a measured brute-force build is not built again; an incomplete or failed record is
+    done = _fake_record(build, "det", C.BRUTEFORCE, c)
+    (tmp_path / f"{build}.json").write_text(json.dumps(done))
+    assert not C.measured(build, c)  # no steady-state job time in it
+    done["intervals"] |= {"steady": {"2": 210}}
+    (tmp_path / f"{build}.json").write_text(json.dumps(done))
+    assert C.measured(build, c) and not C.measured(build, brute[1][1])
+    C.HwPointStep(name="hw_point").run(None, build=build)
+    assert len(calls) == 2  # no third measurement
+    (tmp_path / f"{build}.json").write_text(
+        json.dumps(done | {"error": "csynth failed"})
+    )
+    assert not C.measured(build, c)
+    C.HwPointStep(name="hw_point").run(None, build=build)
+    assert len(calls) == 3
 
     points = tmp_path / "points"
     points.mkdir()
