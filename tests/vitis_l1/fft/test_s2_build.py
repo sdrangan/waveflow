@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 import waveflow.build.vitis_l1_step as _step_mod
-from waveflow.build.composite_gen import INCLUDE_DIR, render_tcl
+from waveflow.build.composite_gen import INCLUDE_DIR, SRC_DIR, render_tcl
 from waveflow.build.vitis_l1_step import VitisL1Step, vitis_fft_include_dir
 from waveflow.hw.clock import Clock
 from waveflow.simulation.simulation import Simulation
@@ -48,14 +48,14 @@ def test_step_copies_the_body_verbatim():
 def test_render_tcl_is_byte_identical_without_include_dirs():
     """The default must not move. Several generated tops are gated on exact RTL cycle counts, and
     a changed TCL is a changed build — so the new parameter has to be invisible when unused."""
-    assert f'set cf "-I{INCLUDE_DIR}"\n' in render_tcl("demo")
+    assert f'set cf "-I{SRC_DIR} -I{INCLUDE_DIR}"\n' in render_tcl("demo")
     assert render_tcl("demo") == render_tcl("demo", include_dirs=())
 
 
 def test_include_dirs_adds_only_cflags():
     """Extra ``-I`` paths appear in ``$cf`` and change nothing else about the script."""
     a, b = render_tcl("demo"), render_tcl("demo", include_dirs=("/x/one", "/y/two"))
-    assert f'set cf "-I{INCLUDE_DIR} -I/x/one -I/y/two"' in b
+    assert f'set cf "-I{SRC_DIR} -I{INCLUDE_DIR} -I/x/one -I/y/two"' in b
     assert [ln for ln in a.splitlines() if not ln.startswith("set cf")] == \
            [ln for ln in b.splitlines() if not ln.startswith("set cf")]
 
