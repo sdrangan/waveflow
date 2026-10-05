@@ -152,7 +152,7 @@ def test_the_timing_page_quotes_the_measured_cycles():
     import json
 
     rec = json.loads((PKG / "results" / "cosim_cycles.json").read_text(encoding="utf-8"))
-    page = (Path(__file__).resolve().parents[3] / "docs" / "guide" / "vitis_l1"
+    page = (Path(__file__).resolve().parents[3] / "docs" / "guide" / "vitis_l1" / "fft"
             / "timing.md").read_text(encoding="utf-8")
 
     lat, ii = rec["serial_tb"]["latency_min"], rec["serial_tb"]["interval_min"]

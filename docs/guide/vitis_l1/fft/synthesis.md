@@ -1,7 +1,8 @@
 ---
 title: Synthesizing a Vitis L1 block
-parent: Vitis L1 Blocks
-nav_order: 2
+parent: The Vitis FFT
+grand_parent: Vitis L1 Blocks
+nav_order: 4
 audience: hls
 api: [kernel_task, KernelTask, VitisL1Step, vitis_fft_include_dir, render_tcl, composite_top_spec]
 summary: "How a Waveflow design ends up calling xf::dsp::fft::fft<> itself: kernel_task() hands the body over, VitisL1Step copies a hand-written header rather than generating one, and render_tcl(include_dirs=...) gives the build an include path to the vendor headers, which are never copied. Covers why the body is an adapter (the vendor wants an array of streams, Waveflow supplies separate ones), why OUT_W is a template argument, how composite_top_spec generates the free-running top (per-port widths, eight template arguments), the measured RTL result, and the path traps that present as a SIGSEGV or as missing headers."
@@ -116,4 +117,4 @@ module**, like every other free-running kernel: `composite_top_spec(VitisFft(...
   it, so it cannot carry a namespace; the header ends with `using vitis_fft_impl::vitis_fft_task;`.
 
 `examples/vitis_fft` is the worked build: generate, csynth, and an XSI gate that drives the RTL
-through four frames, bit-exact. See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+through four frames, bit-exact. See [A vendor FFT, frames in and out](../../../examples/vitis_fft/index.md).

@@ -1,7 +1,8 @@
 ---
 title: Latency and II for a vendor block
-parent: Vitis L1 Blocks
-nav_order: 3
+parent: The Vitis FFT
+grand_parent: Vitis L1 Blocks
+nav_order: 5
 audience: python
 api: [VitisFft, cycles_seed, timed_delay, call_after, TimingModel, LookupCalibModel]
 summary: "A bit-exact model predicts what comes out, not when. This page covers why a vendor FFT needs two timing numbers rather than one (latency and initiation interval), why a single sequential run_iter cannot express both, how VitisFft models it with run_iter plus a deferred write (SimObj.call_after) bounded by in-flight slots, and what the synthesized hardware actually measured — 45 and 46 cycles at L=16, meaning no frame overlap, against a plan estimate that would have promised six frames in flight. Also why C-synthesis cannot supply these numbers at all."
@@ -158,7 +159,7 @@ module never restates a channel's timing.  Each is a **lookup per length**: the 
 changes the implementation between them.  An unmeasured length is refused, not extrapolated.  The
 fixture `waveflow/calib/fixtures/vitis_fft.py` measures, collects and refits to a fixed point; at
 convergence the pysim reproduces the RTL's mean proc span and interval at every calibrated length.
-See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+See [A vendor FFT, frames in and out](../../../examples/vitis_fft/index.md).
 
 ## C-synthesis cannot supply these
 
