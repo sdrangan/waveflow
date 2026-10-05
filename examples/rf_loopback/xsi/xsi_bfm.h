@@ -312,12 +312,22 @@ public:
     //: fall back to burst_gap_cycles.  The twin of StreamDriver.burst_gaps.  Empty = not used.
     std::vector<int> burst_gaps;
 
+    //: Optional: if set, post_sim dumps every accepted word with the cycle it was accepted (a capture
+    //: bundle, the twin of AxisSlave::out_bundle, on the same 1-based cycle count).  Together they
+    //: time a DUT at its ports from the BFMs alone -- no waveform dump, no VCD parse.
+    std::string accept_bundle;
+    void post_sim() override {
+        if (!accept_bundle.empty()) BurstBundle::write_capture(accept_bundle, acc_words_, acc_cycles_);
+    }
+
     void update() override {
+        ++cycle_;                                   // 1-based, the same count AxisSlave keeps
         if (gap_left_ > 0) {
             if (--gap_left_ == 0) h_valid_ = (widx_ < (int)words_.size()) ? 1u : 0u;
             return;
         }
         if (beat_ && widx_ < (int)words_.size()) {
+            if (!accept_bundle.empty()) { acc_words_.push_back(words_[widx_]); acc_cycles_.push_back(cycle_); }
             ++widx_;
             const bool more = widx_ < (int)words_.size();
             const int gap = (more && is_last(widx_ - 1)) ? gap_before(++burst_idx_) : 0;
@@ -374,6 +384,9 @@ private:
     int widx_ = 0;
     int gap_left_ = 0;
     int burst_idx_ = 0;                 // index of the burst currently being sent
+    long cycle_ = 0;                    // update() count -- the cycle now executing (1-based)
+    std::vector<uint64_t> acc_words_;   // accept_bundle capture
+    std::vector<long> acc_cycles_;
     uint32_t h_valid_ = 0, ready_ = 0;
     bool beat_ = false;
 };

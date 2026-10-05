@@ -87,6 +87,10 @@ class StreamDriver(HwModule):
     #: spreads frame arrivals over every phase of a block's internal cadence; see
     #: ``examples/vitis_fft/vitis_fft_build.py`` (``measure``).  Empty (the default) emits nothing.
     burst_gaps: DynParam[list[int]] = field(default_factory=list)
+    #: If set, the XSI ``AxisMaster`` dumps every accepted word with its acceptance cycle to this
+    #: bundle (the twin of :attr:`StreamSink.out_bundle`), so a DUT can be timed at its ports from the
+    #: BFMs alone, with no waveform.  pysim ignores it: its own timestamps are the simulation's.
+    accept_bundle: DynParam[str] = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
