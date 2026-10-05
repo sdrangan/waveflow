@@ -546,3 +546,69 @@ def test_cost_table():
     ) * 3600 == pytest.approx(15, abs=0.1)
     # calibration is 27 times cheaper in tool time than the sub-grid alone
     assert float(sub["tool_hours"]) / float(cal["tool_hours"]) > 27
+
+
+def test_committed_learning_curve():
+    """Step 6.6: 20 refits at each of 10, 20, 30 and 45 calibration builds, and the committed
+    models.  The whole table takes three minutes to regenerate, so three refits are redone here:
+    a small one, a mid one and the full one, which is the step 6.5 result."""
+    rows = _table("learning_curve")
+    assert len(rows) == (4 * F.CURVE_DRAWS + 1) * 5
+    ctx = F.curve_context()
+    for n, draw in ((10, 7), (45, 0), (86, 0)):
+        again = F.curve_point(n, draw, ctx)
+        mine = [r for r in rows if (int(r["builds"]), int(r["draw"])) == (n, draw)]
+        assert len(again) == len(mine) == 5
+        for a, b in zip(again, mine, strict=True):
+            assert a["resource"] == b["resource"]
+            for k in (
+                "right_pct",
+                "same_build_pct",
+                "lut_mape_pct",
+                "ff_mape_pct",
+                "job_mape_pct",
+            ):
+                assert float(a[k]) == pytest.approx(float(b[k]), abs=1e-6), (n, draw, k)
+    full = {r["resource"]: r for r in rows if r["builds"] == "86"}
+    table = {
+        m["resource"]: m
+        for m in _table("decision_fidelity_metrics")
+        if m["set"] == "all"
+    }
+    assert all(
+        float(full[r]["right_pct"]) == float(table[r]["right_pct"]) for r in full
+    )
+
+    def share(n: int) -> int:
+        """Refits on ``n`` builds that meet AC6's gate for all four resources."""
+        ok = 0
+        for draw in range(F.CURVE_DRAWS):
+            got = [
+                float(r["right_pct"])
+                for r in rows
+                if (int(r["builds"]), int(r["draw"])) == (n, draw)
+                and r["resource"] != "any"
+            ]
+            ok += all(v >= F.MIN_RIGHT_PCT for v in got)
+        return ok
+
+    # what the curve says: a tenth of the builds is a gamble, half of them is enough
+    assert [share(n) for n in F.CURVE_SIZES] == [4, 13, 12, 19]
+    med = {
+        n: sorted(
+            float(r["right_pct"])
+            for r in rows
+            if r["builds"] == str(n) and r["resource"] == "any"
+        )[10]
+        for n in F.CURVE_SIZES
+    }
+    assert med[10] < med[20] < med[30] < med[45] and med[45] > 99.5
+    lut = {
+        n: sorted(
+            float(r["lut_mape_pct"])
+            for r in rows
+            if r["builds"] == str(n) and r["resource"] == "any"
+        )[10]
+        for n in F.CURVE_SIZES
+    }
+    assert lut[10] > 20 and lut[45] < 2

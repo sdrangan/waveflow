@@ -537,18 +537,13 @@ def curve_subset(n: int, draw: int, pool: dict[str, list[str]]) -> frozenset:
     return frozenset(chosen)
 
 
-def learning_curve(data_dir: Path = PAPER_DATA) -> list[dict]:
-    """Refit the models on subsets of the calibration builds and judge every refit on the measured
-    sub-grid, with the committed job-time budgets: one row per subset size, draw and resource.
-    The last rows (all builds, draw 0) are the committed models'."""
+def curve_context(data_dir: Path = PAPER_DATA) -> dict:
+    """What every refit of the learning curve is judged with: the accuracy table, the measured
+    sub-grid, the committed decisions, the pool of calibration builds, and the jobs the committed
+    models call loop-dominated (job times are compared on those)."""
     from examples.mimo_cg.hw.space import NITS
 
     data_dir = Path(data_dir)
-    acc, measured = dse.accuracy(), measured_table(data_dir)
-    committed = read_table(DECISIONS)
-    pool = calibration_builds(data_dir)
-    everything = sum(len(v) for v in pool.values())
-    # job times are compared where the committed models call the job loop-dominated
     ref = subgrid_table()
     loop = {
         (r.build, nit)
@@ -556,40 +551,64 @@ def learning_curve(data_dir: Path = PAPER_DATA) -> list[dict]:
         for nit in NITS[r.K]
         if r.t0 + nit * r.t_iter >= dse.GUARD * dse.memory_floor(r.K, r.mem_dw)
     }
+    return {
+        "data_dir": data_dir,
+        "acc": dse.accuracy(),
+        "measured": measured_table(data_dir),
+        "committed": read_table(DECISIONS),
+        "pool": calibration_builds(data_dir),
+        "loop": loop,
+    }
+
+
+def curve_point(n: int, draw: int, ctx: dict) -> list[dict]:
+    """One refit: the models fitted on ``n`` calibration builds (draw ``draw``; every build when
+    ``n`` is the whole pool) and judged on the measured sub-grid.  One row per resource.
+    """
+    everything = sum(len(v) for v in ctx["pool"].values())
+    subset = None if n == everything else curve_subset(n, draw, ctx["pool"])
+    models = MD.fit(ctx["data_dir"], builds=subset, loo=False)
+    hw = subgrid_table(models)
+    errors = model_errors(hw, ctx["measured"])
+    mape = {}
+    for q in ("lut", "ff", "job"):
+        err = [
+            abs(e["error_pct"])
+            for e in errors
+            if e["quantity"] == q
+            and (q != "job" or (e["build"], e["nit"]) in ctx["loop"])
+        ]
+        mape[q] = round(sum(err) / len(err), 3)
+    judged = score(hw, ctx["acc"], ctx["measured"], ctx["committed"], check=False)
+    return [
+        {
+            "builds": n,
+            "draw": draw,
+            "resource": m["resource"],
+            "decisions": m["decisions"],
+            "right_pct": m["right_pct"],
+            "same_build_pct": m["same_build_pct"],
+            "missed_budget_pct": m["missed_budget_pct"],
+            "regret_p95_pct": m["regret_p95_pct"],
+            "regret_max_pct": m["regret_max_pct"],
+            "lut_mape_pct": mape["lut"],
+            "ff_mape_pct": mape["ff"],
+            "job_mape_pct": mape["job"],
+        }
+        for m in metrics(judged)
+    ]
+
+
+def learning_curve(data_dir: Path = PAPER_DATA) -> list[dict]:
+    """Refit the models on subsets of the calibration builds and judge every refit on the measured
+    sub-grid, with the committed job-time budgets: one row per subset size, draw and resource.
+    The last rows (all builds, draw 0) are the committed models'."""
+    ctx = curve_context(data_dir)
+    everything = sum(len(v) for v in ctx["pool"].values())
     rows = []
     for n in (*CURVE_SIZES, everything):
         for draw in range(1 if n == everything else CURVE_DRAWS):
-            subset = None if n == everything else curve_subset(n, draw, pool)
-            models = MD.fit(data_dir, builds=subset, loo=False)
-            hw = subgrid_table(models)
-            errors = model_errors(hw, measured)
-            mape = {}
-            for q in ("lut", "ff", "job"):
-                err = [
-                    abs(e["error_pct"])
-                    for e in errors
-                    if e["quantity"] == q
-                    and (q != "job" or (e["build"], e["nit"]) in loop)
-                ]
-                mape[q] = round(sum(err) / len(err), 3)
-            judged = score(hw, acc, measured, committed, check=False)
-            for m in metrics(judged):
-                rows.append(
-                    {
-                        "builds": n,
-                        "draw": draw,
-                        "resource": m["resource"],
-                        "decisions": m["decisions"],
-                        "right_pct": m["right_pct"],
-                        "same_build_pct": m["same_build_pct"],
-                        "missed_budget_pct": m["missed_budget_pct"],
-                        "regret_p95_pct": m["regret_p95_pct"],
-                        "regret_max_pct": m["regret_max_pct"],
-                        "lut_mape_pct": mape["lut"],
-                        "ff_mape_pct": mape["ff"],
-                        "job_mape_pct": mape["job"],
-                    }
-                )
+            rows += curve_point(n, draw, ctx)
     return rows
 
 
