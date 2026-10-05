@@ -293,3 +293,93 @@ def test_a_refit_on_a_subset_reads_only_that_subset():
     assert full.table == committed.table
     for name, co in committed.coef.items():
         assert full.coef[name] == pytest.approx(co, rel=1e-9, abs=1e-9)
+
+
+# --- beside the decisions: frontiers and errors, on made-up measurements -----------------------
+
+
+def _perfect(hw):
+    """A measured table that equals the predictions."""
+    import pandas as pd
+
+    meas = pd.DataFrame({"build": hw.build} | {k: hw[k] for k in dse.RESOURCES})
+    meas = meas.set_index("build")
+    for nits in space.NITS.values():
+        for nit in nits:
+            meas[f"job{nit}"] = (hw.t0 + nit * hw.t_iter).to_numpy()
+    return meas
+
+
+def test_frontier_overlap_is_total_when_measurement_equals_prediction(hw, acc):
+    rows = F.frontier_overlap(hw, acc, _perfect(hw))
+    assert len(rows) == 27 * 3 * 4
+    tight = [r for r in rows if r["budget_db"] < 1.0]  # no guarded candidate below 1 dB
+    assert all(
+        r["precision_pct"] == r["recall_pct"] == r["covered_pct"] == 100.0
+        for r in tight
+    )
+    assert all(r["predicted"] == r["measured"] == r["both"] for r in tight)
+    # at 1 dB the guard keeps a few fast designs off the predicted frontier: recall can drop,
+    # precision cannot rise above what is there, and nothing is predicted that is not real
+    loose = [r for r in rows if r["budget_db"] == 1.0]
+    assert all(r["both"] <= r["predicted"] <= r["candidates"] for r in loose)
+    assert min(r["recall_pct"] for r in loose) < 100.0
+
+
+def test_model_errors_and_their_summary(hw):
+    meas = _perfect(hw)
+    meas["lut"] = (
+        meas["lut"] * 1.10
+    )  # every LUT count measured 10% above the prediction
+    meas.iloc[0, meas.columns.get_loc("dsp")] += 1  # and one DSP count off by one
+    errors = F.model_errors(
+        hw, meas.drop(index=meas.index[5])
+    )  # one build not measured
+    builds = {e["build"] for e in errors}
+    assert len(builds) == 1439 and hw.build[5] not in builds
+    per_build = {K: 4 + len(n) for K, n in space.NITS.items()}
+    assert len(errors) == sum(per_build[K] for K in hw.K.drop(index=5))
+    table = {m["metric"]: m for m in F.error_metrics(errors)}
+    assert table["LUT MAPE (%)"]["value"] == pytest.approx(
+        100 * (1 / 1.1 - 1) * -1, abs=0.01
+    )
+    assert (
+        table["FF MAPE (%)"]["value"] == 0 and table["BRAM exact (%)"]["value"] == 100.0
+    )
+    assert table["DSP exact (%)"]["value"] == pytest.approx(
+        100 * 1438 / 1439, abs=0.001
+    )
+    assert table["job time MAPE (%), loop-dominated"]["value"] == pytest.approx(
+        0, abs=1e-3
+    )
+    # the guard's verdict is recorded per job, and the two kinds are summarised apart
+    guarded = [e for e in errors if e["quantity"] == "job" and e["guarded"]]
+    # 193 of the sub-grid's 9,000 jobs: 16-lane designs running at most three iterations
+    assert len(guarded) == 193 - sum(
+        e["guarded"]
+        for e in F.model_errors(hw[hw.build == hw.build[5]], _perfect(hw))
+        if e["quantity"] == "job"
+    )
+    assert all(e["L"] == 16 and e["nit"] <= 3 for e in guarded)
+    assert table["job time MAPE (%), under the guard"]["n"] == len(guarded)
+    assert {m for m in table if "lanes" in m} == {
+        f"LUT MAPE (%), {lanes} lanes" for lanes in (1, 4, 16)
+    }
+
+
+def test_figures_are_deterministic(tmp_path, hw, acc, committed):
+    from examples.mimo_cg.hw import fidelity_figure as FF
+
+    rows = F.score(hw, acc, _perfect(hw), committed)
+    table = F.metrics(rows)
+    a = FF.render_decisions(rows, table, tmp_path / "a.svg").read_bytes()
+    b = FF.render_decisions(rows, table, tmp_path / "b.svg").read_bytes()
+    assert a == b and a.startswith(b"<?xml")
+    curve = [
+        {"builds": n, "draw": d, "resource": res, "right_pct": 50 + n / 2 + d}
+        for n in (10, 20, 86)
+        for d in range(1 if n == 86 else 3)
+        for res in (*dse.RESOURCES, "any")
+    ]
+    a = FF.render_curve(curve, tmp_path / "c.svg").read_bytes()
+    assert a == FF.render_curve(curve, tmp_path / "d.svg").read_bytes()
