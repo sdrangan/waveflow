@@ -1,22 +1,24 @@
 ---
-title: Design
+title: Slave adaptor
 parent: A memory-mapped FIR
 nav_order: 0.5
-summary: "How the protocol is built: a memory-mapped slave adaptor in front of a stream-only kernel -- why it is needed, its views and what each is for, how the kernel declares them (mm_views) and build_mm_device constructs the adaptor, how the local memory map (the type's layout) and the global base give every view its address, and how the host reaches the views through endpoints and interrupts."
+summary: "The memory-mapped slave adaptor that carries the protocol, in front of a stream-only kernel: why it is needed, its views and what each is for, how the kernel declares them (mm_views) and build_mm_device constructs the adaptor, how the local memory map (the type's layout) and the global base give every view its address, and how the host reaches the views through endpoints and interrupts."
 ---
 
-# Design
+# Slave adaptor
 
-## The slave adaptor
+## Why a slave adaptor?
 
-**Why an adaptor.** Every kernel in this repo is **streams only**: a free-running Vitis kernel is an
+Every kernel in this repo is **streams only**: a free-running Vitis kernel is an
 `hls::task` whose ports are streams, and Vitis cannot generate the slave side of a memory-mapped bus for
 it. A host, though, talks to a peripheral by reading and writing addresses. So something has to map
 the host's memory-mapped accesses onto the kernel's streams -- that is the
 [memory-mapped slave adaptor](../../guide/interface/axi_mm/slave.md). It sits beside the kernel in the
 RTL top, and the kernel never sees an address.
 
-**What is inside it.** One AXI slave port, a front that serves one bus transaction at a time, and one
+## What is inside it
+
+One AXI slave port, a front that serves one bus transaction at a time, and one
 **view** per kind of traffic, each a 4 KB window of the slave's address range joined to one or two of
 the kernel's streams:
 

@@ -53,7 +53,7 @@ In going through this example, you will learn how to:
 - [Protocol](protocol.md) — what the host and the kernel say to each other: a config, then per packet a
   header naming its config and its samples, the results and a response; why the config id is needed,
   and what the example demonstrates.
-- [Design](design.md) — the slave adaptor that carries it: why it is needed, its views, constructing
+- [Slave adaptor](slave_adaptor.md) — the adaptor that carries it: why it is needed, its views, constructing
   it from the kernel's declaration, the local memory map and the global base, and reaching the views
   from the host.
 - [Python model](python.md) — the schemas, the kernel's `run_iter`, the host program, the golden.

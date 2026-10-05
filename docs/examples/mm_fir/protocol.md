@@ -19,7 +19,7 @@ flowchart LR
 A **host program** talks to the **FIR kernel** through an AXI interconnect and a **memory-mapped slave
 adaptor**. The adaptor turns the host's bus reads and writes into the streams the kernel reads and
 writes, and raises interrupts when the host has room to write or data to read -- how it does that is
-the [Design](design.md) page. This page is what the two ends say to each other.
+the [Slave adaptor](slave_adaptor.md) page. This page is what the two ends say to each other.
 
 The filter is an exact integer FIR: int16 samples (packed four to a 64-bit word by the serializer),
 up to 16 int16 taps, and the full sum as an int64. Nothing rounds, so the numpy golden is bit-exact by construction and any
