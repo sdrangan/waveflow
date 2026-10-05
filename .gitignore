@@ -336,3 +336,6 @@ tests/build/_xsi_work/
 # mm_fir (plans/mm_slave_adaptor.md witness): the Vitis project is build output; gen/, include/ and
 # the .tcl stay tracked (the staleness guard reads gen/ + include/).
 examples/mm_fir/mm_fir_proj/
+
+# examples/markov: the figure step renders here; docs/examples/markov/images/ holds the committed copy.
+examples/markov/results/
