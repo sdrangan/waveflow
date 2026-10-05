@@ -273,7 +273,9 @@ class VitisFft(FreeRunMod):
         return KernelTask(
             "vitis_fft_task", "vitis_fft_task.h",
             tuple([f"s_in_{i}" for i in range(R)] + [f"m_out_{i}" for i in range(R)]),
-            template_args=(int(self.L), R, int(self.in_w), int(self.in_i),
+            # Exactly the body's template parameters, in order.  R is NOT one: a template cannot
+            # vary a function's arity, so the body fixes R=4 (and __post_init__ refuses others).
+            template_args=(int(self.L), int(self.in_w), int(self.in_i),
                            int(self.tw_w), int(self.tw_i),
                            int(self.scaling_mode), int(self.output_order),
                            # The derived output width, passed so the C++ can static_assert it

@@ -1057,7 +1057,8 @@ def _kernel_task_of(sub, comp):
     return kt()
 
 
-def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
+def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
+                       port_widths: dict[str, int] | None = None) -> TopSpec:
     """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
 
     Reads four things off the built parent, nothing hand-written per top:
@@ -1075,7 +1076,15 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
 
     Because the args and channel decls come from the graph, the standalone kernel (one node, no
     edges), the memcpy composite (stream edges), and the SOBIF toy (a block edge) all fall out of this
-    *same* generator."""
+    *same* generator.
+
+    *port_widths* overrides *width* for the named AXIS boundary ports, for a design whose ports do not
+    share one word width -- ``VitisFft``'s output word is wider than its input, because the FFT's
+    output format grows with ``log2 L``.  It is opt-in rather than read off every endpoint's
+    ``bitwidth`` because existing designs declare endpoints narrower than the design width (credit
+    ports at 16 bits on a 64-bit design) and are gated on exact RTL cycle counts for the top as it is
+    emitted today.  A name that is not an AXIS boundary port is refused."""
+    port_widths = dict(port_widths or {})
     ep_arg: dict[int, str] = {}
 
     seen: dict[str, object] = {}
@@ -1102,7 +1111,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         bundle = bundles.get(name)
         ep_arg[id(ep)] = name
         _check_boundary_depth(comp, name, ep)
-        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle, ep))
+        kind = kind_of_endpoint(ep)
+        w = width
+        if name in port_widths:
+            if kind not in ("axis_in", "axis_out"):
+                raise LoweringError(
+                    f"composite_top_spec: port_widths names {name!r}, a {kind} port; only AXIS "
+                    f"boundary ports take a per-port width.")
+            w = int(port_widths.pop(name))
+        ports.append(_boundary_port(name, kind, w, bundle, ep))
+    if port_widths:
+        raise LoweringError(
+            f"composite_top_spec: port_widths names {sorted(port_widths)}, which are not boundary "
+            f"ports of {type(comp).__name__}.")
 
     # Tasks are built before channels so a channel can record WHICH task drives it: the producer
     # and consumer task indices are what turn a channel name into RTL net names
@@ -2764,7 +2785,10 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
     a changed TCL is a changed build."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
-    incs = "".join(f" -I{d}" for d in include_dirs)
+    # Forward slashes: the flags sit inside a Tcl double-quoted string, where a Windows path's
+    # backslashes are escapes (a path under C:/Xilinx/2025.1/tps reached the compiler mangled).
+    from pathlib import PureWindowsPath
+    incs = "".join(f" -I{PureWindowsPath(d).as_posix()}" for d in include_dirs)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\

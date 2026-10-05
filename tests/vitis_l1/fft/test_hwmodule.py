@@ -277,7 +277,7 @@ def test_kernel_task_hands_the_body_over_with_every_port_named():
     assert kt.signature == ("s_in_0", "s_in_1", "s_in_2", "s_in_3",
                             "m_out_0", "m_out_1", "m_out_2", "m_out_3")
     assert all(hasattr(m, nm) for nm in kt.signature)
-    assert kt.template_args == (1024, 4, 16, 2, 18, 2, 0, 0, 27)   # ..., OUT_W
+    assert kt.template_args == (1024, 16, 2, 18, 2, 0, 0, 27)   # L, ..., OUT_W; no R
     assert all(isinstance(v, int) and not isinstance(v, bool) for v in kt.template_args), (
         "template_args is typed tuple[int, ...] and feeds the task instance name; an IntEnum "
         "member would leak its repr into generated C++")

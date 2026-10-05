@@ -103,4 +103,8 @@ void vitis_fft_task(hls::stream<ap_uint<2 * IN_W> >& s_in_0,
 }
 
 }  // namespace vitis_fft_impl
+
+// The generated top calls the body by its bare name (composite_gen predicts the RTL instance
+// name from it, so it cannot carry a namespace qualifier); bring it into scope here.
+using vitis_fft_impl::vitis_fft_task;
 #endif

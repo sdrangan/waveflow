@@ -92,11 +92,12 @@ def test_the_body_and_the_module_agree_on_the_template_arguments():
 
     m = VitisFft(name="m", sim=Simulation(), clk=Clock(freq=100e6), L=16)
     args = m.kernel_task().template_args
-    assert len(args) == 9, "L, R, IN_W, IN_I, TW_W, TW_I, SCALING, ORDER, OUT_W"
-    assert args == (16, 4, 16, 2, 18, 2, 0, 0, 21)
-    # R is position 1 and is NOT a template argument of the body: a template cannot vary a
-    # function's arity, so the body fixes R=4 and VitisFft refuses anything else.
-    assert args[1] == 4 and "static const int WF_FFT_R = 4;" in body
+    assert len(args) == 8, "L, IN_W, IN_I, TW_W, TW_I, SCALING, ORDER, OUT_W"
+    assert args == (16, 16, 2, 18, 2, 0, 0, 21)
+    # R is NOT a template argument of the body: a template cannot vary a function's arity, so the
+    # body fixes R=4 and VitisFft refuses anything else.  The generated top passes template_args
+    # through verbatim, so a ninth argument would be a csynth template error.
+    assert "static const int WF_FFT_R = 4;" in body
     assert args[-1] == int(m.out_fmt.W), "the last argument is the derived output width"
     assert "static_assert(OUT_W ==" in body, (
         "the body must assert the derived width against the vendor's ssr_fft_output_type — that "
@@ -169,3 +170,25 @@ def test_the_timing_page_quotes_the_measured_cycles():
     assert "costs 4 cycles" in page
     # ceil(latency / II) is what bounds frames in flight, and the page says one.
     assert -(-lat // ii) == 1 and f"ceil({lat}/{ii}) = 1" in page
+
+
+def test_include_dirs_are_written_with_forward_slashes():
+    """The flags sit in a Tcl double-quoted string, where a Windows path's backslashes are escapes:
+    ``C:\Xilinx\2025.1\tps`` reached the compiler as ``C:Xilinx5.1<TAB>ps`` and csynth found no
+    vendor headers."""
+    tcl = render_tcl("demo", include_dirs=(r"C:\Xilinx\2025.1\tps\xf_dsp",))
+    assert f'set cf "-I{SRC_DIR} -I{INCLUDE_DIR} -IC:/Xilinx/2025.1/tps/xf_dsp"' in tcl
+
+
+def test_generated_top_gives_each_port_its_own_width():
+    """The FFT's output word is wider than its input; the generated top must say so per port."""
+    from waveflow.build.composite_gen import LoweringError, composite_top_spec, render_top
+
+    m = VitisFft(name="vitis_fft", sim=Simulation(), clk=Clock(freq=100e6), L=16)
+    widths = {f"s_in_{j}": 32 for j in range(4)} | {f"m_out_{j}": 42 for j in range(4)}
+    top = render_top(composite_top_spec(m, width=32, port_widths=widths))
+    assert "hls::stream<ap_uint<32> >& s_in_0" in top
+    assert "hls::stream<ap_uint<42> >& m_out_3" in top
+    assert "vitis_fft_task<16, 16, 2, 18, 2, 0, 0, 21>" in top, "8 template args, no R"
+    with pytest.raises(LoweringError, match="not boundary ports"):
+        composite_top_spec(m, width=32, port_widths={"nope": 8})
