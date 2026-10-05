@@ -29,9 +29,8 @@ In going through this example, you will learn how to:
 - Split a computation into **two kernels joined by a stream**, and pass the job's command down the
   pipeline ahead of its data -- the [command-response pattern](../../guide/patterns/command_response.md)
   through a pipeline.
-- See why **back-pressure does not cross a shared bus**, and use the pattern that does: an
-  [MM-stream with credit](../../guide/interface/axi_mm/credit_streams.md) -- a credit stream
-  (`CreditStreamIF`) routed over the crossbar (`MmCreditStreamIF`), with the kernels' code unchanged.
+- Implement an [MM-stream](../../guide/interface/axi_mm/credit_streams.md) with a reverse
+  **credit stream** to avoid back-pressure across a shared bus (`MmCreditStreamIF`).
 - Declare the views a kernel is reached through -- a **queue in** for data, a **credit-in register**
   for credit -- and route the link between two kernels' views.
 - **Batch** the credit (one bus write per 32 words) without losing liveness (`max_write`).
