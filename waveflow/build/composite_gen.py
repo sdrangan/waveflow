@@ -28,7 +28,11 @@ from waveflow.build.hwcodegen import LoweringError
 from waveflow.hw.hw_module import declares_hook
 from waveflow.hw.interface import DEFAULT_STREAM_DEPTH
 
-#: Output-directory convention shared by the generated tops and their csynth .tcl.
+#: Directory convention shared by the generated tops and their csynth .tcl
+#: (``plans/source_layout.md``): ``src/`` holds the hand-written sources and is tracked; ``include/``
+#: and ``gen/`` are build output -- untracked, and deleting them is a clean build.  ``gen/`` also
+#: holds each top's ``<top>.tcl`` (see :func:`tcl_path`).
+SRC_DIR = "src"
 INCLUDE_DIR = "include"
 GEN_DIR = "gen"
 DEFAULT_MEM_DW = 64
@@ -2712,6 +2716,15 @@ def tcl_target(config) -> tuple[str, float]:
     return part, period
 
 
+def tcl_path(root, top_name: str):
+    """Where *top_name*'s generated csynth script goes: ``<root>/gen/<top>.tcl``, beside its top.
+
+    In ``gen/`` so the script is deleted with the rest of the build output; run it with
+    ``work_dir=<root>`` (its paths, and ``<top>_proj/``, are relative to the example root)."""
+    from pathlib import Path
+    return Path(root) / GEN_DIR / f"{top_name}.tcl"
+
+
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
                solution_config: tuple[str, ...] = ()) -> str:
@@ -2735,13 +2748,18 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     csynth cannot resolve them.
 
     *part* / *period_ns* pin the synthesis target — pass :func:`tcl_target` of the build's config to
-    drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte."""
+    drive them from the selected platform; the defaults reproduce the historical part and clock.
+
+    The include path is ``-Isrc -Iinclude``, **``src/`` first**: a hand-written body in ``src/`` must
+    win over any same-named file in ``include/`` (build output -- a leftover copy there is exactly the
+    file that must never be compiled instead).  A ``src/`` that does not exist is harmless.  The
+    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`)."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
-set cf "-I{INCLUDE_DIR}"
+set cf "-I{SRC_DIR} -I{INCLUDE_DIR}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
 set_top {top_name}

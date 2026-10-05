@@ -176,7 +176,7 @@ class MarkovGen(FreeRunMod):
     chunk_overhead: int = 7
 
     def kernel_task(self):
-        """The hand-written HLS body, ``include/markov_gen_task.h``: the twin of :meth:`run_iter`,
+        """The hand-written HLS body, ``src/markov_gen_task.h``: the twin of :meth:`run_iter`,
         credit accounting included.  ``m_u`` is two ports (forward, credit) in that order."""
         from waveflow.hw.mem_stream import KernelTask
         return KernelTask("markov_gen_task", "markov_gen_task.h", ("s_cmd", "m_u"),
@@ -225,7 +225,7 @@ class ChainCore(FreeRunMod):
     chunk_overhead: int = 15
 
     def kernel_task(self):
-        """The hand-written HLS body, ``include/markov_chain_core_task.h``: the twin of
+        """The hand-written HLS body, ``src/markov_chain_core_task.h``: the twin of
         :meth:`run_iter`.  ``s_u`` is two ports (forward in, credit out) in that order."""
         from waveflow.hw.mem_stream import KernelTask
         return KernelTask("markov_chain_core_task", "markov_chain_core_task.h", ("s_u", "m_x"),

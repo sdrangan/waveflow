@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from examples.markov.markov import CHAIN_BASE, CHAIN_LAYOUT, MEM_BASE, markov_golden
+from examples.markov.markov_build import generate
 from examples.markov.markov_xsi import ROOT, TOPS, job_results, parse_kv, rtl_dir, run_xsi, scenario_jobs
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.toolchain.toolchain import find_vivado_path
@@ -46,6 +47,10 @@ PYSIM_TOLERANCE = 0.05
 def markov_run() -> str:
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado (create_ip + xsim)")
+    # include/ and gen/ are untracked build output: regenerate them (Python only, seconds) so the
+    # staleness check compares the RTL against THIS checkout's framework headers and schemas, not
+    # against whatever copies a previous build left behind (plans/source_layout.md).
+    generate(ROOT)
     for t in TOPS:
         if not rtl_dir(t).is_dir():
             pytest.skip(f"XSI gate prerequisite missing: no csynth RTL for {t} -- run "

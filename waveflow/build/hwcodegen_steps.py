@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from waveflow.build.build import BuildConfig, BuildStep
+from waveflow.build.rtl_digest import SRC_DIR
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwcodegen import extract_kernel
 from waveflow.build.hwgen import (
@@ -184,14 +185,14 @@ class TaskBodyStep(BuildStep):
 
     - ``<name>_task.h`` is **always rewritten** into ``output_dir`` (the example's ``include/``).  It
       is derived from ``run_iter``; editing it by hand would be lost, which the banner says.
-    - ``<name>_<hook>_impl.{cpp,tpp}`` lives in ``impl_dir`` (defaulting to ``output_dir``) and is
-      written **only if absent**.  The hook bodies are *hand-written source* — the generator emits a
-      ``TODO`` stub once and never touches it again, so edits survive rebuilds.
+    - ``<name>_<hook>_impl.{cpp,tpp}`` lives in ``impl_dir`` (default ``src/``, the example's
+      hand-written source directory) and is written **only if absent**.  The hook bodies are
+      *hand-written source* — the generator emits a ``TODO`` stub once and never touches it again, so
+      edits survive rebuilds.
 
-    Point ``impl_dir`` at the example root, where the other hand-written hooks already live
-    (``examples/shared_mem/hist_compute_impl.cpp``).  Do **not** leave it defaulting into a
-    regenerated ``gen/`` or ``include/`` directory: the sticky rule protects the file from *this*
-    step, not from whatever else cleans that directory.
+    Do **not** point ``impl_dir`` into a regenerated ``gen/`` or ``include/`` directory: the sticky
+    rule protects the file from *this* step, not from deleting the build output
+    (``plans/source_layout.md``).
 
     Emits the body only.  The composite top that instantiates it comes from
     :func:`~waveflow.build.composite_gen.composite_top_spec`, and the hook ``.cpp`` files must be
@@ -206,14 +207,14 @@ class TaskBodyStep(BuildStep):
     comp_class: type[HwModule]
     source_artifact: str
     output_dir: str = "."
-    impl_dir: str | None = None  # None = use output_dir
+    impl_dir: str | None = None  # None = SRC_DIR ("src")
     task_name: str | None = None  # None = f"{cpp_kernel_name}_task"
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self._kernel_name = cpp_kernel_name(self.comp_class)
         self._task_name = self.task_name or f"{self._kernel_name}_task"
-        self._impl_dir = self.impl_dir if self.impl_dir is not None else self.output_dir
+        self._impl_dir = self.impl_dir if self.impl_dir is not None else SRC_DIR
         self._hook_info = self._discover_hooks()
 
     def _discover_hooks(self) -> list[tuple[str, str]]:

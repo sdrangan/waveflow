@@ -11,8 +11,8 @@ summary: "What becomes Vitis HLS and how: four free-running tops -- the generato
 
 | top | what | written by hand | II | estimated clock (10 ns target) |
 |---|---|---|---|---|
-| `markov_gen` | the generator | its body, `include/markov_gen_task.h` | 1 | 6.8 ns |
-| `markov_chain` | the chain core + the in-band memory writer | the core's body, `include/markov_chain_core_task.h` | 1 | 6.6 ns (core) |
+| `markov_gen` | the generator | its body, `src/markov_gen_task.h` | 1 | 6.8 ns |
+| `markov_chain` | the chain core + the in-band memory writer | the core's body, `src/markov_chain_core_task.h` | 1 | 6.6 ns (core) |
 | `mm_queue_writer_64_128` | the credit link's queue writer | nothing (framework) | -- | 7.3 ns |
 | `mm_credit_writer_64` | the credit link's credit writer | nothing (framework) | -- | 7.3 ns |
 

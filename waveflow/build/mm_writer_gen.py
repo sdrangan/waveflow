@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from waveflow.build.composite_gen import GEN_DIR, render_tcl
+from waveflow.build.composite_gen import GEN_DIR, render_tcl, tcl_path
 
 #: The fixed body, copied into a design's ``include/`` beside its other task bodies.
 TASK_HEADER = Path(__file__).resolve().parent / "mm_stream_writer_task.h"
@@ -65,13 +65,13 @@ void {name}(
 
 
 def write_writer_project(root, mode: str, dw: int, maxp: int | None = None) -> str:
-    """Render the top into ``<root>/gen`` and its csynth script into ``<root>``; copy the fixed body
-    into ``<root>/include``.  Returns the top name."""
+    """Render the top and its csynth script into ``<root>/gen`` (run the script with ``work_dir=root``);
+    copy the fixed body into ``<root>/include``.  Returns the top name."""
     root = Path(root)
     name = writer_top_name(mode, dw, maxp)
     (root / GEN_DIR).mkdir(parents=True, exist_ok=True)
     (root / GEN_DIR / f"{name}.cpp").write_text(render_writer_top(mode, dw, maxp), encoding="utf-8")
-    (root / f"{name}.tcl").write_text(render_tcl(name), encoding="utf-8")
+    tcl_path(root, name).write_text(render_tcl(name), encoding="utf-8")
     inc = root / "include"
     inc.mkdir(parents=True, exist_ok=True)
     (inc / TASK_HEADER.name).write_text(TASK_HEADER.read_text(encoding="utf-8"), encoding="utf-8")
