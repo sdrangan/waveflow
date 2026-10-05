@@ -14,8 +14,8 @@ the cheapest hardware that meets an accuracy target. The bit-exact Python model 
 side exactly and with no Vitis. Calibrated models answer the cost side, with Vitis runs only to
 calibrate them and to check them.
 
-**Status:** phases 0–5 are complete and reviewed (milestones M0–M5). Phase 6, the design-space
-exploration and its brute-force check, is complete and awaits its review (M6). The plan, with every
+**Status:** all phases are complete and reviewed (milestones M0–M6), ending with the design-space
+exploration and its brute-force check. The plan, with every
 decision and its evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
 
 ![The study](images/diagram_study.svg)

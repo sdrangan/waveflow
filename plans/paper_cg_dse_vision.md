@@ -148,8 +148,8 @@ calibrate-from-runs structure as the resource model.
 
 Refreshed 2026-10-05. The executable plan for this paper's simulations is
 [`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md): massive-MIMO uplink CG
-detection on `xczu48dr` with Vitis 2024.1. **All of its phases have run** (Phase 6 awaits its
-review); everything application-level lives in `examples/mimo_cg/`, and the framework gained no
+detection on `xczu48dr` with Vitis 2024.1. **All of its phases have run and been reviewed**;
+everything application-level lives in `examples/mimo_cg/`, and the framework gained no
 CG-specific code.
 
 | Paper piece | Status |

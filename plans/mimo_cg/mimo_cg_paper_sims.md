@@ -167,8 +167,8 @@ Wilson intervals with seeds fixed in the test file (Rules 4).
   - cycle mean absolute percentage error is ≤ 5% on the full designs.
 
   Verify: `examples/mimo_cg/paper_data/model_validation.csv` and its generating command. *(Gate 5.0, 2026-10-04: targets kept as written; the split has 12 / 12 / 10 held-out vector-unit / matmul / detector configurations, and the table also reports per-block LUT and FF error and worst-case errors; §10 steps 5.1–5.8.)*
-- [ ] **AC6** (tightened at gate 6.0, 2026-10-04): The full DSE computes the predicted Pareto frontier (SNR loss against DSP, LUT, FF, BRAM and job time) over the whole cross-product (6,084,720 joint designs) in Python. A brute-force sub-grid of 1,440 detectors, fixed and committed before it runs, is measured with Vitis HLS and RTL simulation within the 48-hour budget. Fidelity is measured on *decisions*: a decision is a scenario × loss budget (0.25, 0.5, 1.0 dB) × job-time budget × resource (DSP, LUT, FF, BRAM). The model picks the sub-grid design of least predicted cost among those it predicts to meet both budgets. The pick is *right* if its measured job time does not exceed the budget by more than 2% and its measured cost is within 10% of the least measured cost among the designs measured to meet both budgets. **For each of the four resources, ≥ 90% of the decisions are right.** Reported without a threshold: the same-design rate, the regret distribution and its worst case, the share of picks that miss the job-time budget, the overlap of the predicted and measured frontiers, and the model errors over the sub-grid. A cost table (Vitis hours vs Waveflow minutes plus the calibration runs), the learning curve (step 6.6) and the design finding, stated in implemented numbers for the finalists (step 6.7), are in `paper_data/` and §16. Verify: the commands recorded in steps 6.2 and 6.5. *(Provisional text, replaced: “for ≥ 90% of the accuracy targets in that subset, the model's minimum-DSP design meeting the target either is the brute-force minimum-DSP design or is within 10% of its DSP count”. It passes by construction: §14, gate 6.0 decision record, item 5.)*
-- [ ] **AC-R**: No regressions.
+- [x] **AC6** (met 2026-10-05; §15 steps 6.2, 6.4, 6.5 and §16) (tightened at gate 6.0, 2026-10-04): The full DSE computes the predicted Pareto frontier (SNR loss against DSP, LUT, FF, BRAM and job time) over the whole cross-product (6,084,720 joint designs) in Python. A brute-force sub-grid of 1,440 detectors, fixed and committed before it runs, is measured with Vitis HLS and RTL simulation within the 48-hour budget. Fidelity is measured on *decisions*: a decision is a scenario × loss budget (0.25, 0.5, 1.0 dB) × job-time budget × resource (DSP, LUT, FF, BRAM). The model picks the sub-grid design of least predicted cost among those it predicts to meet both budgets. The pick is *right* if its measured job time does not exceed the budget by more than 2% and its measured cost is within 10% of the least measured cost among the designs measured to meet both budgets. **For each of the four resources, ≥ 90% of the decisions are right.** Reported without a threshold: the same-design rate, the regret distribution and its worst case, the share of picks that miss the job-time budget, the overlap of the predicted and measured frontiers, and the model errors over the sub-grid. A cost table (Vitis hours vs Waveflow minutes plus the calibration runs), the learning curve (step 6.6) and the design finding, stated in implemented numbers for the finalists (step 6.7), are in `paper_data/` and §16. Verify: the commands recorded in steps 6.2 and 6.5. *(Provisional text, replaced: “for ≥ 90% of the accuracy targets in that subset, the model's minimum-DSP design meeting the target either is the brute-force minimum-DSP design or is within 10% of its DSP count”. It passes by construction: §14, gate 6.0 decision record, item 5.)*
+- [x] **AC-R** (met 2026-10-05; §15 step 6.9, regression): No regressions.
   - `pytest -m "not vitis and not xsi" -p no:cacheprovider` fails only on the 7 pre-existing failures listed in §6.
   - Every **new** Python file passes `ruff check` and `black --check`.
   - Every **changed existing** file has no more `ruff check --output-format concise` findings than on `main`, and is not reformatted.
@@ -605,8 +605,8 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 | 6.6 | **Learning curve** (the sampling experiment, on existing data). Refit the models on random subsets of the calibration builds (10, 20, 30, 45 builds and all of them; 20 seeded draws each, seed stream 93, stratified by top) and score every refit on the brute-force sub-grid. The frozen v2 models are not touched | 6.5 | `paper_data/learning_curve.csv` (fidelity and error against the number of syntheses) and one figure; a regeneration is byte-identical | `pytest tests/examples/test_mimo_cg_hw_fidelity.py`; the script | commit | ☑ |
 | 6.7 ⚠️ cost | **Implement the finalists.** `paper_data/finalists.csv`: 12–16 detectors, chosen by a rule from the model's picks and committed before the run. Vivado implementation of each (`export_design -flow impl`), three at a time; approval at the start | 6.5 | Every finalist is implemented or its failure is recorded. The achieved clock is reported for each. `paper_data/finalists_impl.csv` gives csynth against implemented LUT, FF, DSP and BRAM, and says whether the model's ranking of the finalists holds in implemented numbers | `python -m examples.mimo_cg.hw.impl_check` on the finalists; the table | commit | ☑ |
 | 6.8 | **Finish.** The design finding (§14), in csynth numbers over the frontier and in implemented numbers for the finalists; the final figures; `paper_data/` complete. `docs/examples/mimo_cg/` pages and a `docs/examples/index.md` entry (the user reviews that diff). Refresh the `plans/paper_cg_dse_vision.md` status. Propose `CLAUDE.md` additions (the 2024.1 and venv notes) for the user to approve | 6.5–6.7 | Every number in the finding traces to a committed table and its generating command. The docs build has no new warning. The user has seen the `docs/examples/index.md` diff and the proposed `CLAUDE.md` text | the generating commands; the docs build | commit | ☑ |
-| 6.9 👁 | M6 review: the full regression, the reviewer agent, then the user | 6.1–6.8 | AC6 and AC-R met; the user approves | the fast suite; `pytest -m vitis -rs` and `pytest -m xsi -rs` with 0 skipped; `ruff check` and `black --check` on the new files | commit, pause | ☐ |
-| 6.10 | §16 completion report | 6.9 | §16 is filled in: every acceptance criterion with its evidence, the deviations, the reusable artifacts and the lessons | read-through | commit | ☐ |
+| 6.9 👁 | M6 review: the full regression, the reviewer agent, then the user | 6.1–6.8 | AC6 and AC-R met; the user approves | the fast suite; `pytest -m vitis -rs` and `pytest -m xsi -rs` with 0 skipped; `ruff check` and `black --check` on the new files | commit, pause | ☑ |
+| 6.10 | §16 completion report | 6.9 | §16 is filled in: every acceptance criterion with its evidence, the deviations, the reusable artifacts and the lessons | read-through | commit | ☑ |
 
 **Milestones:** M0 = 0.1–0.5 · M1 = 1.1–1.5 · M2 = 2.1–2.6 · M3 = 3.1–3.5 · M4 = 4.0–4.11 · M5 = 5.0–5.10 · M6 = 6.0–6.10. The user reviews at the end of each.
 
@@ -801,19 +801,104 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 | 2026-10-05 | 6.8 | **The design finding** is recorded in §14 (Finding, M6). `hw/finding.py` (`python -m examples.mimo_cg.hw.finding`, 25 s) writes `paper_data/dse_guard_pairs.csv` (216 rows: 27 scenarios × 8 job-time budgets at 0.5 dB, the cheapest design in LUTs with any guard and with none), `dse_guard.csv` and `dse_shape.csv`, and the figure `docs/examples/mimo_cg/images/dse_frontier.svg`. **Docs:** `docs/examples/mimo_cg/index.md` gains sections 6 (performance models), 7 (the exploration, the brute-force comparison, the learning curve, cost, the finding, the implemented comparison) and 8 (limits), six rows in its results table, and its front-matter summary is rewritten: that summary is the page's entry in `docs/examples/index.md`, which is generated from each example's front matter, so there is no separate index line to add. `model_validation.svg` is regenerated with the v2 models. **Vision:** the build-versus-have map of `plans/paper_cg_dse_vision.md` is refreshed (every piece built or run). **`CLAUDE.md`:** two notes are proposed to the user at the M6 review, not applied | `pytest tests/examples/test_mimo_cg_hw_finding.py`: 5 passed; `pytest tests/docs`: passed (2 skipped, as before) | The repo has no local docs build; the docs tests (markdown integrity, relative links, documented numbers) stand in for it. The summary diff and the `CLAUDE.md` text are shown to the user in the M6 review message |
 | 2026-10-05 | 6.9 (review) | **Independent reviewer agent** (read-only; it recomputed the tables, re-ran the scoring code as committed in `8948aa1`, and scored deliberately crude predictors): **0 blocking, 11 should-fix, 5 suggestions; AC6's gate holds.** What it established: the pre-registered scoring code gives the same 2,592 judged rows; crude predictors fail the gate (cost = lanes 1–17% right; random cost 7–15%; 10% noise on LUT and FF 71–92%; a 5% bias on job time 89%); the result does not depend on where the budgets sit (a budget on every measured job time, 54,496 decisions: DSP 91.9%, LUT 97.6%, FF 97.3%, block RAM 98.6%; 64 budgets: 98.8–99.8%); the cost tolerance matters below 2% (at 0%: LUT 87.7%, FF 88.0%). **Corrected:** (S1) the run started at 20:55, not 21:34, and the finalists' list was committed during the run, not before any result; (S2) seven of the twelve finalists have the knobs of a sub-grid build, so "none is a brute-force build" was false; (S3, S4) pre-registration rests on local history, and the scoring code gained two additions after the pilot; (S5) the sub-grid's coverage is now stated wherever 99.8% is quoted (1.3% of the configurations, 3 of 17 lane and column pairs, 19% of the predicted frontier's rows); (S6) the learning curve says "pass the 90% bar", with its three caveats; (S7) the guard finding gives the range, the identical pairs, the DSP spread and the implemented block RAM, and the ranking claim is scoped to LUTs and flip-flops; (S8) the docs and the vision note say which model version the held-out numbers belong to; (S9) job-time error is scoped to loop-dominated jobs; (S10) timing closure at the fast end is listed as not shown; (S11) nine number slips (among them the family error 7.5%, not 7.6%; +7.4%, not +7.5% or +8%; 34 times the DSPs per scenario, not 24). Tests: the vacuous assertion is replaced, the family error is bounded at 7.4–7.7%, all twelve picks are checked, and the strict-budget count is pinned. The reviewer's sensitivity numbers above are its own computations; the doer re-checked the pre-registered-code result, the strict-budget count, the coverage figures and every corrected number | the reviewer's report; `pytest tests/examples/test_mimo_cg_hw_{fidelity,finding,finalists}.py` | A `git push` of the branch happened on 2026-10-05 at 15:54 and 15:57 (`origin/paper/mimo-cg` at `3c69cd2`); the doer did not push |
 | 2026-10-05 | 6.9 (regression) | At `cecd7b2`, after the review corrections. `pytest -m "not vitis and not xsi" -p no:cacheprovider`: **7 failed (the 7 of §6), 3,689 passed, 37 skipped** (562 s; 67 more passing tests than at M5). `pytest -m vitis -rs` on the four conformance files of §11: 118 passed, 0 skipped (771 s); on the three Phase 4 hardware files: 47 passed, 0 skipped (809 s). `pytest -m xsi -rs` on the four mimo_cg hardware files: 13 passed, 0 skipped (550 s; one more gate than at M5, the brute-force harness mode). AC-R lint: the 50 Python files this branch adds pass `ruff check` and `black --check`; the 8 existing files it changes have the same number of ruff findings as on `main` and are not reformatted. `pytest tests/docs`: passed, 2 skipped as before | the four pytest runs; `ruff`; `black` | The toolchain runs were made at `4a9bec3`, one commit before the review corrections, which changed tests, docs and plan text only (`git diff --stat 4a9bec3 cecd7b2`); the fast suite was re-run after them |
+| 2026-10-05 | 6.9 | **The user approved M6**, having been shown the results, the review's findings and corrections, the deviations (the model-v2 changes beyond the LUT terms, the mispredicted family, timing not shown at the fast end, the crashed Vivado run, the push the doer did not make), the new front-matter summary that is the page's entry in the examples index, and the proposed `CLAUDE.md` notes. The user approved both notes; they were added in `5986455` | user approval | none |
+| 2026-10-05 | 6.10 | §16 filled in. AC6 and AC-R ticked. On AC6's "within the 48-hour budget": §2 words the budget as "about 48 hours of csynth on this machine"; the run took 9.74 h of wall time on this machine, 39.95 tool-hours of csynth and 56.98 tool-hours with the RTL runs. The user approved the run on the pilot's projection of 56 tool-hours and about 10 h. The docs page's status line and the vision note now say Phase 6 is reviewed. **The plan is complete** | read-through; `pytest tests/docs` | none |
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+Written 2026-10-05, after the user approved M6. Branch `paper/mimo-cg`; nothing here was pushed or
+merged by the doer.
 
 - **Changed:**
-- **Tested (commands and results):**
-- **Acceptance criteria:** AC0.1 … AC6, AC-R ✅/❌/⚠️ with evidence
-- **Decisions made:**
+  - `examples/mimo_cg/` (new): the link simulator and detectors (Phase 1); the bit-exact fixed-point
+    CG golden and its C++ reference (Phase 2); the accuracy sweep, its analysis and figures
+    (Phase 3); the hardware under `hw/` (Phase 4: vector unit, systolic matmul, the free-running
+    detector, code generation, C-sim and XSI runs); the design space, the measurement harness and
+    campaign driver, the calibrated models and their validation (Phase 5); the exploration, the
+    brute-force comparison, the learning curve, the design finding and the finalists (Phase 6).
+  - `examples/mimo_cg/paper_data/`: 43 tables, each with its tool version and, where a model is
+    involved, the model's hash. `examples/mimo_cg/calib/platforms/xczu48dr_250mhz/`: the frozen
+    model file (version 2, sha256 `d95510d3…95d9`).
+  - `tests/examples/test_mimo_cg_*.py` (new, 18 files) and `tests/conftest.py`
+    (`WANT_XSI_GATES` 127 → 140).
+  - Framework: `waveflow/hw/fixpoint.py` and `waveflow/utils/fixputils.py` gained fixed-point
+    division (Phase 2, shown to the user before commit). Nothing CG-specific went into `waveflow/`.
+  - Docs and notes: `docs/examples/mimo_cg/` (page, figures, scripts), `plans/cg.md` (superseded),
+    `plans/paper_cg_dse_vision.md` (status), `plans/mimo_cg/mimo_cg_lessons.md`, `CLAUDE.md` (two
+    notes, approved).
+- **Tested (commands and results), at the close:**
+  - `pytest -m "not vitis and not xsi" -p no:cacheprovider`: 7 failed (the 7 of §6), 3,689 passed,
+    37 skipped.
+  - `pytest -m vitis -rs` on the four conformance files of §11: 118 passed, 0 skipped; on the three
+    hardware files: 47 passed, 0 skipped.
+  - `pytest -m xsi -rs` on the four mimo_cg hardware files: 13 passed, 0 skipped.
+  - `ruff check` and `black --check` on the 50 new Python files: clean. The 8 changed existing
+    files have the same ruff findings as on `main`.
+  - `pytest tests/docs`: passed (2 skipped, as before).
+  - Independent reviewer agent at every milestone (M1–M6); every finding applied or recorded (§14, §15).
+- **Acceptance criteria:**
+
+  | Criterion | Status | Evidence |
+  |---|---|---|
+  | AC0.1, AC0.2 | ✅ | §15 steps 0.2–0.4: tools at 2024.1, the xczu48dr probe, `plans/cg.md` superseded |
+  | AC1.1–AC1.3 | ✅ | §15 steps 1.1, 1.2, 1.4: constellations and ZF against closed forms, CG against `numpy.linalg.solve`, byte-identical reruns |
+  | AC2.1–AC2.4 | ✅ | §14 gate 2.1 record; §15 steps 2.2–2.5: division and the CG golden bit-exact to Vitis 2024.1 C-sim |
+  | AC3.1–AC3.3 | ✅ | §15 steps 3.3–3.5: the 364-point sweep with no Vitis, the frontier, the M3 finding |
+  | AC4 | ✅ | §15 steps 4.4, 4.7, 4.10: every block and the detector bit-exact at RTL, clock ≤ 4 ns (est.) |
+  | AC5 | ✅ | §15 steps 5.1, 5.6–5.8: DSP and BRAM exact on 34 of 34 held-out blocks; LUT 1.9%, FF 2.6%, cycles 0.6% with the first models, frozen before any held-out build. With the second models: 0.7%, 2.3%, 0.8% |
+  | AC6 | ✅ | §15 steps 6.2–6.5: 6,084,720 joint designs priced; 1,440 detectors measured in 9.74 h; the pick is right in 99.5% (DSP), 99.8% (LUT), 99.8% (FF) and 100% (BRAM) of 2,592 pre-registered decisions, against a bar of 90%. Cost table `paper_data/dse_cost.csv`; finding in §14 (Finding, M6) |
+  | AC-R | ✅ | §15 step 6.9 (regression): only the 7 known failures; lint clean |
+
+  ⚠️ beside AC6's ✅: its "within the 48-hour budget" is met in wall time (9.74 h) and in csynth
+  tool-hours (39.95); counting the RTL runs the tool time is 56.98 h. §2 words the budget as
+  "about 48 hours of csynth on this machine", and the user approved the run at 56 tool-hours.
+- **Decisions made:** all in §14. The ones that shaped the result: uncoded i.i.d. Rayleigh uplink
+  at BER 1e-3 (planning); the fixed-point formats and the guard on the two scalar accumulators
+  (gate 2.1); a free-running composite with stream-of-blocks channels (gate 4.0); XSI as the cycle
+  ground truth, block-level calibration and a held-out split fixed first (gate 5.0); csynth for
+  the sweep and Vivado for the finalists, a 2× memory guard instead of a memory term, a
+  1,440-detector brute-force slice, and the constrained-decision measure that replaced a measure
+  which passed by construction (gate 6.0).
 - **Assumptions and not verified:**
+  - The models predict csynth. Place and route was run on 17 designs; the largest has 384 csynth
+    DSPs. The 4 ns clock is a csynth estimate for larger designs, a fifth of the frontier.
+  - The brute force covers 1.3% of the configurations: 3 of 17 lane and column pairs, no R = 2,
+    the smallest depths. 19% of the predicted frontier's designs are in it.
+  - Pre-registration (the decision set, the grid, the scoring rule, the held-out sets) is attested
+    by local commit history only.
+  - `HᴴH` and `Hᴴy` are formed in floating point; the widths cover the CG only. N = 32 and W ≤ 16
+    are fixed. The exact-μ genie makes 16- and 64-QAM CG slightly pessimistic at 2–3 iterations.
+  - The whole-space cost of about 4,000 tool-hours is a projection (3,860–4,300 by other fits).
 - **Remaining risks and issues:**
-- **Next steps:**
+  - One model family is wrong in job time: merged one-row arrays in the 3-multiply form, 7.5%
+    slow. The fix is one term (the 3-multiply overhead should not apply to a merged loop) and one
+    or two calibration builds; it was left because the models were frozen before the brute force.
+  - The matmul's per-tile overhead at two rows is over-estimated by the second models (4.4% on one
+    held-out build that the first models had within 0.5%).
+  - Job time is not modelled under twice the memory-transfer floor (193 of 9,000 sub-grid jobs).
+  - The finalists' implemented block RAM differs from csynth in both directions, and the models
+    do not predict it.
+  - The 7 failing tests of §6 predate this work and are untouched.
+- **Next steps (not started; each is the user's call):**
+  - Place and route two or three of the largest frontier designs, to show or refute 4 ns at the
+    fast end.
+  - A third model version with the merged 3-multiply term and an R = 2 term, tested on a second,
+    disjoint brute-force slice (for example 2 and 8 lanes), with the pre-registration pushed first.
+  - A per-module csynth-to-implementation correction, if the paper is to quote implemented
+    resources across the frontier and not for twelve designs.
+  - Decision-aware sampling of the calibration builds; the learning curve says about half of the
+    86 would do, but not which half.
+  - Merge or open a pull request for `paper/mimo-cg` when the user wants it.
 - **Reusable artifacts saved / tools that would have helped:**
+  - Saved: the measurement harness (`hw/measure.py`: csynth, report attribution, RTL run, job
+    intervals, block spans) and campaign driver (`hw/campaign.py`: shards, resume, skip-if-measured,
+    pruning); the generic pieces of `hw/dse.py` (`pareto`, `pick`) and `hw/fidelity.py` (`judge`,
+    the learning curve); `hw/impl_check.py` (place and route of a synthesized build and its
+    hierarchical report); the committed xczu48dr probe; `plans/mimo_cg/mimo_cg_lessons.md`.
+  - Would have helped: a parallel `SweepRunner` (campaigns ran as hand-made shards); an early-stop
+    in the XSI harness when every job is done (the fixed cycle budget cost hours); a memory-aware
+    job limit for Vivado runs; a pre-registration helper that commits, pushes and prints the hash
+    before a run may start; a check that a new table's name is not git-ignored.
 
 ## Checklist coverage
 
