@@ -134,6 +134,12 @@ Thumbs.db
 # blanket *.json rule drops them from a clone and every gate errors with FileNotFoundError
 # while still passing for whoever generated them.
 !tests/vitis_l1/fft/golden/*.json
+# And the recorded co-simulation cycle counts: the cosim reports are build artifacts, so the
+# measured latency/interval live here and docs/guide/vitis_l1/timing.md is gated against them.
+# Without this the blanket *.json above hides the file, the page's numbers become unverifiable in
+# a fresh clone, and the gate fails there while passing locally -- which is exactly what happened
+# to the goldens above.
+!tests/vitis_l1/fft/verifyHwModule/results/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/

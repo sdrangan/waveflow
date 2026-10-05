@@ -2727,7 +2727,8 @@ def tcl_path(root, top_name: str):
 
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
-               solution_config: tuple[str, ...] = ()) -> str:
+               solution_config: tuple[str, ...] = (),
+               include_dirs: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
@@ -2753,13 +2754,22 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     The include path is ``-Isrc -Iinclude``, **``src/`` first**: a hand-written body in ``src/`` must
     win over any same-named file in ``include/`` (build output -- a leftover copy there is exactly the
     file that must never be compiled instead).  A ``src/`` that does not exist is harmless.  The
-    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`)."""
+    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`).
+
+    *include_dirs* are additional ``-I`` paths appended to ``$cf``, for a body that includes
+    headers living outside the generated ``include/`` directory.  The case this exists for is
+    vendor IP: ``waveflow/vitis_l1`` wraps ``xf::dsp::fft::fft<>``, whose headers stay in the Vitis
+    install and are reached with an include path rather than copied
+    (:mod:`waveflow.build.vitis_l1_step` resolves it).  **Empty by default**, so every existing
+    generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
+    a changed TCL is a changed build."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
+    incs = "".join(f" -I{d}" for d in include_dirs)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
-set cf "-I{SRC_DIR} -I{INCLUDE_DIR}"
+set cf "-I{SRC_DIR} -I{INCLUDE_DIR}{incs}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
 set_top {top_name}
