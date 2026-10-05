@@ -120,25 +120,34 @@ trusting any II out of a simulation.
 ## The free-running top, at RTL
 
 The design top that `composite_top_spec` generates is different: `ap_ctrl_none`, the body running as
-an `hls::task`. Vitis cannot co-simulate it, so `examples/vitis_fft` drives it under XSI, four frames
-back to back, and the numbers are read off the waveform as `TVALID && TREADY`:
+an `hls::task`. Vitis cannot co-simulate it, so `examples/vitis_fft` drives it under XSI and reads the
+ports (`TVALID && TREADY`) off the waveform. On the RFSoC 4x2 at 250 MHz:
 
-| | latency | interval |
+| L | interval (back to back) | latency, isolated frame: mean (range) |
 |---|---|---|
-| the free-running top (XSI) | 44 | 42 |
+| 16 | 41 | 43 (43 – 43) |
+| 64 | 120 | 133 (121 – 139) |
+| 256 | 480 | 519 (454 – 548) |
 
-- **No adapter cost.** The interval equals the bare array-port core's 42: the 4 cycles above were
-  the `ap_ctrl_hs` top's per-call handshake, not the pumps.
-- **Still no overlap.** Frames leave every 42 cycles with a 44-cycle residence. The core processes one
-  frame at a time; `II ≈ L/R` remains a property of some other construction, not of this one.
-- **The input runs ahead.** The body's input lanes and their FIFOs take about two frames before the
-  core is free, so the hardware applies its interval at the core and the output, not at intake.
-  `VitisFft` paces intake by the II, which reproduces the output timing exactly and holds an
-  upstream producer back slightly longer than the hardware would.
+- **Frame-at-a-time, by the library's construction.** The interval is about the latency at every
+  size, including the vendor's bare array-port core (1477 / 1478 at `L = 1024`). Each process in the
+  core needs only ~2.5 `L/R` cycles per frame, but the stages are nested dataflow regions, so one frame
+  occupies the whole chain. Wrapping the core the way AMD's L2 kernel does -- the frame loop inside one
+  region -- does not change it. More throughput means parallel instances, or a flat chain of stage
+  modules.
+- **Latency depends on arrival phase.** The core's input transposer runs a commutator on a
+  free-running internal cycle; an isolated frame out of step with it waits up to a period inside the
+  transposer. Back to back, frames stay in step and the interval is exact. The first frame after reset
+  is in step by construction and is the fastest (391 at `L = 256`).
+- **The input runs ahead.** The body's input lanes take about two frames before the core is free.
+  `VitisFft` paces intake by the II, which reproduces the output timing and holds an upstream producer
+  back slightly longer than the hardware would.
 
-Configured with `latency_cycles=44, ii_cycles=42`, the pysim puts every one of the four frames on the
-RTL's cycle, up to a constant one-cycle start offset; the gate asserts exactly that. See
-[A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+So the module's numbers are **calibrated, with a stated error**: `ii_cycles` is the back-to-back
+interval (exact); `latency_cycles` is the mean over a sweep of arrival phases, because an LT model
+cannot know the phase; the measured spread is the error. `python -m examples.vitis_fft.vitis_fft_build
+--measure` produces the table; against the RTL the pysim is unbiased (mean error ≤ 0.2 cycles) and
+within the spread on every frame. See [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
 
 ## C-synthesis cannot supply these
 
@@ -149,7 +158,7 @@ load-bearing rather than merely confirmatory.
 
 ## What is still open
 
-The numbers above are for `L=16`. The free-running top does not overlap frames either, so a
-design that needs `II ≈ L/R` needs a different construction — AMD's own wide-stream
-`fftStreamingKernel` is the one to try — and its own measurement. The input buffering the RTL shows is
-not modelled; it would matter only for a producer whose timing depends on when the FFT releases it.
+A design that needs the FFT's nominal rate sustained needs a different construction: parallel
+instances (AMD's own approach), or an FFT written as a flat chain of free-running Waveflow stage
+modules -- the bit-exact model is already organised stage by stage. The input buffering the RTL shows
+is not modelled; it would matter only for a producer whose timing depends on when the FFT releases it.

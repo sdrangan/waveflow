@@ -473,7 +473,21 @@ the `axpy` FMA contraction are real findings and worth an issue each.
 
 ---
 
-## S6 — cycles  ✅ DONE (L=16; measured numbers in `examples/vitis_fft/vitis_fft.py`)
+## S6 — cycles  ✅ DONE (calibrated: `examples/vitis_fft/measured/vitis_fft_timing.json`)
+
+> **Status (2026-10-05), RFSoC 4x2 @ 250 MHz.**  What RTL showed, and what the model became:
+>
+> * **The vendor core is frame-at-a-time**: II ~ latency at every L (41/43, 120/133, 480/519 at
+>   L=16/64/256; the bare array-port core 1478/1477 at 1024).  Processes need ~2.5 L/R per frame, but
+>   the stages are nested DATAFLOW regions, so one frame occupies the chain.  Batching frames inside
+>   the region the way AMD's L2 kernel does changed nothing (tried, reverted; patch not kept).
+> * **Latency depends on arrival phase**: the input transposer (`swap`) runs a commutator on a
+>   free-running cycle (40 cycles at L=64, restarting with no data); an out-of-step frame waits inside
+>   it.  Found by tracing the internal FIFO handshakes (`if_read && if_empty_n`) at full VCD depth.
+> * **Model = exact II + mean latency + stated spread.**  An LT model cannot know arrival phase, so
+>   `latency_cycles` is the mean over a 48-frame phase sweep; the spread is the error.  Against the RTL
+>   sweep: mean error <= 0.2 cycles, every frame within the spread (0 / -6..+12 / -29..+65), no drift.
+> * `vitis_fft_build --measure` regenerates the table; the XSI gate fails if it no longer matches RTL.
 
 Bits are done; timing is not modelled at all.  The block *is* pipelined, so the obvious worry is
 that a single end-to-end number cannot represent it.  That worry is right, but the fix is smaller

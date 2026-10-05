@@ -140,9 +140,14 @@ class VitisFft(FreeRunMod):
     # of ``plans/vitis_l1_hwmodule.md``).  Leave them unset and the module is untimed: bits only,
     # exactly as S1 behaved.
     #
-    # ``latency_cycles`` is a frame's whole residence -- first input word to last output word --
-    # which is what C/RTL co-simulation reports per transaction (``ap_start`` -> ``ap_done``), so a
-    # measured number goes in unchanged.
+    # ``latency_cycles`` is a frame's whole residence -- first input word to last output word -- for
+    # a frame that finds the block idle.  For THIS block it is a mean, not a constant: the vendor
+    # core's input transposer runs a commutator on a free-running internal cycle, an isolated frame
+    # waits for it by an amount set by its arrival phase, and an LT model cannot know that phase.
+    # So it takes the mean over a sweep of phases, and the measured spread is its stated error
+    # (``examples/vitis_fft/measured/vitis_fft_timing.json``: 0 at L=16, -6..+12 at 64, -29..+65 at
+    # 256).  ``ii_cycles`` has no such spread: back to back, the core stays in step.  The core is
+    # frame-at-a-time -- II ~ latency, 7.5 L/R per frame at L >= 64 -- so ``max_inflight`` is 1-2.
     latency_cycles: int | None = None   # first input word to last output word
     ii_cycles: int | None = None        # cycles between successive frame *starts*
     max_inflight: int | None = None     # frames in the block at once; default ceil(latency / II)
