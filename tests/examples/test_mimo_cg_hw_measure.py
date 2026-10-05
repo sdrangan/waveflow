@@ -693,6 +693,14 @@ def test_campaign_keeps_the_brute_force_apart(tmp_path, monkeypatch):
     assert not (tmp_path / "hw_builds.csv").exists()
     with pytest.raises(ValueError, match="on its own"):
         C.merge(("fit", C.BRUTEFORCE), points_dir=points, out_dir=tmp_path)
+    # a merge of the brute force alone has no calibration build, and must not touch the
+    # calibration work store (it once rebuilt it empty)
+    store = tmp_path / "work" / M.PLATFORM / "modules"
+    store.mkdir(parents=True)
+    (store / "keep.txt").write_text("x")
+    monkeypatch.setattr(M, "WORK_ROOT", tmp_path / "work")
+    assert C.file_fit_records((C.BRUTEFORCE,), points_dir=points) == 0
+    assert (store / "keep.txt").is_file()
 
 
 @pytest.mark.xsi

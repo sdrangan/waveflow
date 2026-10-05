@@ -1,0 +1,11 @@
+# mimo_cg run_log: wall-clock times measured when each campaign ran (plans/mimo_cg/mimo_cg_paper_sims.md §15); machine: 8 cores, 31 GB; tool=vitis_hls 2024.1
+part,stage,processes,builds,wall_s,source
+calibration,first round (role fit),4,67,1420,step 5.3
+calibration,second round (role fit2),4,18,631,step 6.1 (b)
+calibration,one build added to the second round,1,1,42,step 6.1 (b)
+held-out validation,first held-out set (role holdout),4,34,736,step 5.7
+held-out validation,supplement,3,6,380,step 5.8a
+held-out validation,second supplement,3,6,136,step 6.1 (c)
+brute-force sub-grid,pilot,6,77,1952,step 6.4 (pilot)
+brute-force sub-grid,main run,6,1363,33113,step 6.4
+design-space exploration in Python,6084720 joint designs,1,0,15,step 6.2

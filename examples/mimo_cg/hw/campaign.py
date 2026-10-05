@@ -364,8 +364,11 @@ def file_fit_records(
     roles: tuple[str, ...] = ("fit",), points_dir: Path = M.POINTS_DIR
 ) -> int:
     """Rebuild the work platform's module store from the calibration builds among ``roles``
-    (never a held-out one)."""
+    (never a held-out one).  A merge without a calibration role leaves the store alone.
+    """
     roles = tuple(r for r in roles if r in FIT_ROLES)
+    if not roles:
+        return 0
     store = M.WORK_ROOT / M.PLATFORM / "modules"
     if store.is_dir():
         shutil.rmtree(
