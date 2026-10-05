@@ -301,6 +301,33 @@ stay hand-written and copied rather than generated."*
 names `vitis_fft_task.h` and whose `generate()` returns it from `waveflow/build/`.  That is about
 twenty lines, and `MemStreamStep` is the template.
 
+### Where the files go: `plans/source_layout.md`
+
+The repo's source layout changed while S2 was in flight (`plans/source_layout.md`, S0/S1 merged in
+PR #225).  The rule: **every generated directory is gitignored and deletable; everything authored
+lives outside them, hand-written HLS in `src/`.**  `render_tcl` now emits `-Isrc -Iinclude` (`src/`
+first), plus any `include_dirs`.  S2 already fits:
+
+| file | kind | where |
+|---|---|---|
+| `vitis_fft_task.h` | framework body | one home, `waveflow/build/`; `VitisL1Step` copies it into `include/` |
+| vendor `hls_ssr_fft.hpp` & co. | vendor IP | stays in the Vitis install, reached by `include_dirs` |
+| `verifyHwModule/src/tb*.cpp` | authored | `src/`, tracked |
+| `include/`, `gen/<top>.cpp`, `run.tcl`, `*_proj/` | generated | ignored (`verifyHwModule/.gitignore`) |
+
+Two things to carry forward:
+
+* **The worked example (`examples/vitis_fft/`) is born migrated.**  It never tracks `include/`,
+  `gen/` or `xsi/`, and anything hand-written goes in `src/`; `tests/build/test_source_layout.py`
+  lints `examples/` and has an allow-list of not-yet-migrated examples that may only shrink, so a
+  new example cannot join it.  Its csynth script goes where `composite_gen.tcl_path(root, top)`
+  puts it, `gen/<top>.tcl`; `verifyHwModule/build.py`'s root `run.tcl` predates that and is a
+  test fixture, so it can stay.
+* **The staleness guard now hashes `src/**` as well as `include/`** (`rtl_digest`), and refuses a
+  basename present in both with different content.  A copy step writing an *identical* copy is
+  fine.  The `VitisL1Step` docstring's note that the digest hashes only the `include/` copies is
+  still the trap it describes, for the framework body.
+
 ### The one thing neither path handles today
 
 The **vendor headers are not copied anywhere** — they stay in the Vitis install and are reached
