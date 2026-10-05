@@ -17,7 +17,8 @@ guard bits.
 ::
 
     python -m examples.mimo_cg.hw.finalists --write       # the list, before the run
-    python -m examples.mimo_cg.hw.finalists --run         # csynth + RTL, then Vivado (long)
+    python -m examples.mimo_cg.hw.finalists --run --shard 0/3   # csynth, RTL, Vivado (long);
+                                                                # one process per shard
     python -m examples.mimo_cg.hw.finalists               # (re)write paper_data/finalists_impl.csv
 """
 
@@ -25,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from examples.mimo_cg.hw import build as B
@@ -215,11 +215,26 @@ def write(out_dir: Path = PAPER_DATA) -> dict:
     return out
 
 
+def done(rows: list[dict] | None = None) -> list[str]:
+    """The finalists that are measured and implemented."""
+    return [
+        r["build"]
+        for r in rows or read_finalists()
+        if (M.POINTS_DIR / f"{r['build']}.json").is_file()
+        and impl_check.report_path(r["build"]).is_file()
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--write", action="store_true", help=f"write {FINALISTS.name}")
     ap.add_argument("--run", action="store_true", help="build and implement (long)")
-    ap.add_argument("--jobs", type=int, default=3)
+    ap.add_argument(
+        "--shard",
+        default="0/1",
+        help="i/n: every n-th finalist from the i-th, one after the other; run the n shards "
+        "as separate processes to build in parallel",
+    )
     args = ap.parse_args(argv)
     if args.write:
         path = write_finalists()
@@ -230,10 +245,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         print("wrote", path)
         return 0
+    rows = read_finalists()
     if args.run:
-        with ThreadPoolExecutor(args.jobs) as pool:
-            for res in pool.map(build, read_finalists()):
-                print(res)
+        i, n = (int(x) for x in args.shard.split("/"))
+        for row in rows[i::n]:
+            print(build(row), flush=True)
+    if len(done(rows)) < len(rows):
+        print(
+            f"{len(done(rows))} of {len(rows)} finalists implemented; no table written yet"
+        )
+        return 0
     for name, path in write().items():
         print(f"{name} -> {path}")
     return 0
