@@ -79,5 +79,7 @@ A Component's Python behavior is translated to Vitis HLS C++ via `BuildConfig` (
 
 - Python 3.10+ required.
 - Vitis HLS is optional and only needed for synthesis tests (`-m vitis`). The toolchain is auto-detected by `waveflow/toolchain/toolchain.py`.
+- Run everything inside the repo's virtual environment (`source .venv/bin/activate`). With Vivado 2024.1 the XSI flow depends on it: activation exports `XILINX_VIVADO` and puts `.venv/xsi_compat/` on `LD_LIBRARY_PATH`. Without it every XSI run fails with "Failed to Load up XSI".
+- A measured number belongs to a tool version. Vitis/Vivado 2024.1 does not reproduce every number recorded with 2025.1 (co-simulation of `examples/regmap` gives 49 cycles against 5), so name the version next to any measured number. The `examples/mimo_cg` study was measured entirely with 2024.1.
 - The project is early-stage research software; many planned features are not yet built.
 - Non-commercial use only under the Waveflow Research License.
