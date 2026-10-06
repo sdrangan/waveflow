@@ -12,8 +12,8 @@
 # WAVEFLOW_POLY_WIDTH (32 | 64, default 32) picks the kernel top -- poly or poly_bw64, both
 # in gen/poly.cpp -- the scenario data (data/w32 or data/w64) and the testbench's
 # -DPOLY_WORD_BW.  Each width builds in its own project, one directory deep
-# (waveflow_poly_w32/, waveflow_poly_w64/): Vitis 2025.1 drops the kernel from csim when a
-# project is nested deeper.
+# (waveflow_poly_w32_proj/, waveflow_poly_w64_proj/): Vitis 2025.1 drops the kernel from
+# csim when a project is nested deeper.
 #
 # The kernel boundary (gen/poly.cpp, gen/poly.hpp) is generated; the kernel body
 # (poly_body_impl.tpp, included from gen/poly.hpp) and the testbench (poly_tb.cpp) are
@@ -43,9 +43,9 @@ if {$width eq 32} {
     exit 1
 }
 if {$stage eq "vcd"} {
-    set proj waveflow_poly_vcd
+    set proj waveflow_poly_vcd_proj
 } else {
-    set proj waveflow_poly_w$width
+    set proj waveflow_poly_w${width}_proj
 }
 
 open_project -reset $proj

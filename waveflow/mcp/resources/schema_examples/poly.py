@@ -1,8 +1,10 @@
 """
 Curated schema definitions from the polynomial accelerator example.
 
-This file contains the data schemas for the polynomial accelerator,
-extracted from examples/stream_inband/poly_demo.py for use as teaching examples.
+These are the data schemas of examples/stream_inband/poly.py, for use as teaching examples.
+They follow that example's command-response contract: every DATA command header carries the
+coefficients it is evaluated with, the response header echoes the transaction ID, and the
+error codes are reported through the kernel's status registers -- never in a response footer.
 """
 from __future__ import annotations
 
@@ -22,17 +24,22 @@ NsampField = IntField.specialize(bitwidth=16, signed=False)
 Float32 = FloatField.specialize(bitwidth=32, include_dir=INCLUDE_DIR)
 
 # ---------------------------------------------------------------------------
-# Enum and enum field for accelerator error codes
+# Enums: the command type, and the error codes reported in the status registers
 # ---------------------------------------------------------------------------
+
+
+class PolyCmdType(IntEnum):
+    DATA = 0  # a command header followed by nsamp samples
+    END = 1   # ends the kernel run
+
+
+PolyCmdTypeField = EnumField.specialize(enum_type=PolyCmdType, include_dir=INCLUDE_DIR)
 
 
 class PolyError(IntEnum):
     NO_ERROR = 0
-    TLAST_EARLY_CMD_HDR = 1  # TLAST was asserted before the full command header was received
-    NO_TLAST_CMD_HDR = 2  # The full command header was received but TLAST was never asserted
-    TLAST_EARLY_SAMP_IN = 3  # TLAST was asserted before all input samples were received
-    NO_TLAST_SAMP_IN = 4  # All input samples were received but TLAST was never asserted
-    WRONG_NSAMP = 5  # The number of samples received does not match the expected number
+    TLAST_EARLY_SAMP_IN = 1  # TLAST arrived before the last sample word
+    NO_TLAST_SAMP_IN = 2     # the last sample word had no TLAST
 
 
 PolyErrorField = EnumField.specialize(enum_type=PolyError, include_dir=INCLUDE_DIR)
@@ -63,24 +70,27 @@ class CoeffArray(DataArray):
 
 class PolyCmdHdr(DataList):
     """
-    Command header sent to the accelerator, containing the transaction ID,
-    polynomial coefficients, and number of samples.
-    The accelerator expects to receive exactly ``nsamp`` input samples after
-    the command header, and will return ``nsamp`` output samples.
+    Command header sent to the accelerator on its input stream.  A DATA command carries its
+    transaction ID, the number of samples that follow, and the coefficients to evaluate them
+    with -- so every command is self-contained and nothing is configured over AXI-Lite.
     """
 
     elements = {
+        "cmd_type": {
+            "schema": PolyCmdTypeField,
+            "description": "DATA or END",
+        },
         "tx_id": {
             "schema": TxIdField,
-            "description": "Transaction ID",
-        },
-        "coeffs": {
-            "schema": CoeffArray,
-            "description": "Polynomial coefficients",
+            "description": "Command ID: echoed, or reported on error",
         },
         "nsamp": {
             "schema": NsampField,
-            "description": "Number of samples",
+            "description": "Sample count (0 for END)",
+        },
+        "coeffs": {
+            "schema": CoeffArray,
+            "description": "c0..c3, constant term first",
         },
     }
     include_dir = INCLUDE_DIR
@@ -90,33 +100,13 @@ class PolyRespHdr(DataList):
     """
     Response header sent back from the accelerator, containing an echo of the
     transaction ID from the command header.  This allows the host to correlate
-    responses with the commands that generated them, which is especially
-    important if the accelerator is processing multiple commands concurrently.
+    responses with the commands that generated them.
     """
 
     elements = {
         "tx_id": {
             "schema": TxIdField,
-            "description": "Echo of the transaction ID sent in the command",
-        },
-    }
-    include_dir = INCLUDE_DIR
-
-
-class PolyRespFtr(DataList):
-    """
-    Response footer sent back from the accelerator, containing the number of
-    samples read and any error codes.
-    """
-
-    elements = {
-        "nsamp_read": {
-            "schema": NsampField,
-            "description": "Number of samples returned in the response",
-        },
-        "error": {
-            "schema": PolyErrorField,
-            "description": "Error code indicating success or type of failure",
+            "description": "Echo of the DATA command's tx_id",
         },
     }
     include_dir = INCLUDE_DIR

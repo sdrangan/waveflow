@@ -22,7 +22,9 @@ when something goes wrong.  The same contract fits most streaming accelerators y
 
 ![The host sends commands on in_stream and receives responses on out_stream; AXI-Lite carries only ap_start, ap_done and the status registers](images/protocol.svg)
 
-The kernel has three interfaces:
+Control travels **in-band**: each command is a header ahead of its samples on the same stream, and
+the kernel runs one loop over the commands until an `END` command (or an error) ends the run.  The
+kernel has three interfaces:
 
 - **`in_stream`** (AXI4-Stream, host → kernel) carries **commands**.  A `DATA` command is a header
   -- its `tx_id`, the sample count `nsamp`, and the four coefficients -- followed by a burst of

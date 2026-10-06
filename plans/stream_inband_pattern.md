@@ -205,7 +205,7 @@ The generated top loses `float coeffs[4]` and its `s_axilite` pragma.  The regma
 `PolyAccel.param_supports = {"bw64": {"in_bw": 64, "out_bw": 64}}` is the mechanism `process.md`
 already tells agents to use.  The generator emits `poly` (32 bits) and `poly_bw64` (64 bits), both
 calling the same templated body.  Vitis builds each in its own project, one directory deep:
-`waveflow_poly_w32/` and `waveflow_poly_w64/`.  `run.tcl` reads `WAVEFLOW_POLY_WIDTH` (32 or 64) from
+`waveflow_poly_w32_proj/` and `waveflow_poly_w64_proj/`.  `run.tcl` reads `WAVEFLOW_POLY_WIDTH` (32 or 64) from
 the environment and uses it to set the top, the project and `-DPOLY_WORD_BW=<w>` on the testbench.
 
 ### Python
@@ -350,7 +350,7 @@ schemas; each moves to the frozen copy or the new schemas, depending on what the
 | `tests/examples/test_poly_demo.py` | new scenarios and errors; the worked `poly_eval` values stay; the timing assertion follows the new span; width cases 32 and 64 |
 | `tests/examples/test_poly_codegen.py` | no `coeffs` in the signature or the pragmas; `poly_bw64` is emitted |
 | `tests/poly/poly_timing_fixture.py`, `test_timing_analysis*.py`, `tests/fixtures/poly/timing/*.vcd` | regenerate the synthetic VCD with the longer header; `test_timing_analysis` also checks the decoded `coeffs` |
-| `tests/poly/test_timing_capture.py` | project path becomes `waveflow_poly_w32` |
+| `tests/poly/test_timing_capture.py` | project path becomes `waveflow_poly_w32_proj` |
 | `tests/mcp/test_usage_index.py`, `test_knowledge_corpus.py`, `test_retrieval_eval.py`, `test_server_smoke.py`, `test_kb_cli.py` | class and port names stay; the retrieval queries ("persistent loop END", "halted error tx_id") are re-checked against the new pages |
 | `tests/mcp/test_scaffold.py` | the anchors (section 10); the `WRONG_NSAMP` assertion becomes `TLAST_EARLY_SAMP_IN`; `VitisRegMap` still survives (status) |
 | `tests/examples/test_mcp_tools.py` | follows the replaced `schema_examples/poly.py` (section 10) |

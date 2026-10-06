@@ -382,7 +382,7 @@ class CSynthStep(BuildStep):
     @property
     def produces(self) -> dict:  # type: ignore[override]
         w = self.word_bw
-        return {f"report_dir_w{w}": Path(f"waveflow_poly_w{w}/solution1"),
+        return {f"report_dir_w{w}": Path(f"waveflow_poly_w{w}_proj/solution1"),
                 f"cosim_done_w{w}": Path(f"results/cosim_done_w{w}.txt")}
 
     def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
@@ -391,7 +391,7 @@ class CSynthStep(BuildStep):
         _run_vitis(config, "synth", w, live_output, clk_freq)
         done = root / "results" / f"cosim_done_w{w}.txt"
         done.write_text("timing\n", encoding="utf-8")
-        return {f"report_dir_w{w}": root / f"waveflow_poly_w{w}" / "solution1",
+        return {f"report_dir_w{w}": root / f"waveflow_poly_w{w}_proj" / "solution1",
                 f"cosim_done_w{w}": done}
 
 
@@ -434,7 +434,7 @@ class InspectSynthStep(BuildStep):
 class ErrorVcdStep(BuildStep):
     """The error-path waveform: cosim of ``early_tlast_vcd`` (32 bits), traced, as a VCD.
 
-    It runs in its own Vitis project, ``waveflow_poly_vcd``, so it never overwrites the
+    It runs in its own Vitis project, ``waveflow_poly_vcd_proj``, so it never overwrites the
     timing scenario's cosim report.  The scenario sends nothing after the bad burst, so the
     kernel leaves nothing unread for cosim to replay.  The co-simulated response is checked
     like every other stage, and the VCD lands in ``vcd/error_path.vcd``.
@@ -454,7 +454,7 @@ class ErrorVcdStep(BuildStep):
         problems = S.check(d, "cosim", ["early_tlast_vcd"])["early_tlast_vcd"]
         if problems:
             raise RuntimeError(f"cosim of early_tlast_vcd differs from the expected: {problems}")
-        vcd = run_xsim_vcd(top=TOPS[32], comp="waveflow_poly_vcd", out="error_path.vcd",
+        vcd = run_xsim_vcd(top=TOPS[32], comp="waveflow_poly_vcd_proj", out="error_path.vcd",
                            trace_level="port", workdir=root)
         return {"error_vcd": Path(vcd)}
 

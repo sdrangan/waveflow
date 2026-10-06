@@ -33,7 +33,7 @@ def test_list_schema_examples_returns_all_expected_ids():
     expected = {
         "poly_cmd_hdr",
         "poly_resp_hdr",
-        "poly_resp_ftr",
+        "poly_error",
         "hist_cmd",
         "hist_resp",
         "conv2d_cmd",
@@ -65,7 +65,7 @@ def test_list_schema_examples_each_entry_has_required_fields():
     [
         "poly_cmd_hdr",
         "poly_resp_hdr",
-        "poly_resp_ftr",
+        "poly_error",
         "hist_cmd",
         "hist_resp",
         "conv2d_cmd",
@@ -101,13 +101,12 @@ def test_get_schema_example_unknown_id_raises_value_error():
         get_schema_example("definitely_not_a_real_id")
 
 
-def test_get_schema_example_poly_resp_ftr_includes_enum_support():
-    result = get_schema_example("poly_resp_ftr")
+def test_get_schema_example_poly_error_includes_enum_support():
+    result = get_schema_example("poly_error")
     assert "PolyError" in result["supporting_symbols"]
-    assert "PolyErrorField" in result["supporting_symbols"]
-    # Source code should define the enum and the DataList
+    # Source code should define the enum and its field; errors are status, not a footer
     assert "PolyError" in result["source_code"]
-    assert "PolyRespFtr" in result["source_code"]
+    assert "PolyRespFtr" not in result["source_code"]
 
 
 # ---------------------------------------------------------------------------

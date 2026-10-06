@@ -28,7 +28,7 @@ Most Waveflow examples use this core sequence:
 From [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/run.tcl):
 
 ```tcl
-open_project -reset $proj                     ;# waveflow_poly_w32 or waveflow_poly_w64
+open_project -reset $proj                     ;# waveflow_poly_w32_proj or waveflow_poly_w64_proj
 set_top $top                                  ;# poly or poly_bw64
 add_files gen/poly.cpp -cflags "-I."
 add_files -tb poly_tb.cpp -cflags "-I. -DPOLY_WORD_BW=$width"

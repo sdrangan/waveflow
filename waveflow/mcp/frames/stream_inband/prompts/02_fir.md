@@ -12,9 +12,11 @@ clock, and it must **stream**: output starts long before the input burst
 ends. All arithmetic is integer, and every output must be **bit-exact** to
 the oracle.
 
-## 2. Register map parameters
+## 2. Command-header parameters
 
-These are written by the host before `ap_start`, with access RW:
+These travel in every `DATA` command header, after `cmd_type`, `tx_id` and
+`nsamp` (frame F3), so each command carries its own. Nothing is written over
+AXI-Lite but `ap_start`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -30,7 +32,8 @@ with `k >= ntaps` must be **ignored even if they are nonzero**.
   array utilities. `layout.md` must state which half holds the even sample,
   and what fills the unused half when `nsamp` is odd.
 - **Output samples `y`:** int16, packed the same way.
-- **Response footer, after `nsamp_read`:**
+- **Response footer**, after the data burst, sent only when the command
+  succeeds (frame F3):
 
   | Field | Type | Meaning |
   | --- | --- | --- |
@@ -60,10 +63,11 @@ Worked examples (all must hold exactly):
 
 ## 5. Scenarios
 
-Each scenario is one kernel run: register writes, then the listed commands.
+Each scenario is one kernel run: the listed commands, each `DATA` header
+carrying the parameters shown.
 Unless the scenario halts on an error, the run ends with `END`.
 
-| ID | Registers | Commands | Purpose |
+| ID | Parameters | Commands | Purpose |
 | --- | --- | --- | --- |
 | S1_impulse | ntaps=16, random taps | DATA x=[16384, 0 x 19] | output is the halved taps: checks tap order |
 | S2_random | ntaps=16, random taps with sum of \|h\| <= 32767 | DATA nsamp=1000, x uniform over int16 | general case, n_sat = 0 |
@@ -75,19 +79,20 @@ Unless the scenario halts on an error, the run ends with `END`.
 | S8_near_identity | ntaps=1, h[0]=32767 | DATA x over {-32768, -32767, -1, 0, 1, 32766, 32767} | the 1-LSB loss of Q1.15 "unity" |
 | E1_ntaps_0 | ntaps=0 | DATA nsamp=10 | halts BAD_PARAM, emits nothing |
 | E2_ntaps_17 | ntaps=17 | DATA nsamp=10 | halts BAD_PARAM, emits nothing |
-| E3_early_tlast | ntaps=4 | DATA nsamp=10 with TLAST on sample word 2 | halts code 3; 6 samples and footer emitted |
+| E3_early_tlast | ntaps=4 | DATA nsamp=10 with TLAST on sample word 2 | halts code 1; 6 samples emitted, the last with TLAST; no footer |
 | S_TIMING | ntaps=16, random taps | DATA nsamp=4096 random | timing only |
 
 ## 6. Acceptance
 
 **Functional:** frame F7, all three comparisons, bit-exact on every output
-word and every TLAST flag, and the register-map status equal to the oracle's.
+word and every TLAST flag, and the status registers equal to the oracle's.
 
 **Timing** (cosim of S_TIMING, measured from the VCD):
 
 - `T_total` is the number of cycles from the handshake (TVALID && TREADY)
   of the first command-header word to the handshake of the last footer word.
-  Required: `T_total <= 2048 + 80`.
+  Required: `T_total <= 2048 + 90` (the header carries `ntaps` and the 16
+  taps, about 9 more words than a header without parameters).
 - `L_first` is the number of cycles from the handshake of the first
   **sample** word in to the handshake of the first **data** word out.
   Required: `L_first <= 40`. This is the streaming requirement.

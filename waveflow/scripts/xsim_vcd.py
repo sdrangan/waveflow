@@ -38,7 +38,7 @@ Python API:
 
         out_path = run_xsim_vcd(
             top="poly",
-            comp="waveflow_poly_vcd",
+            comp="waveflow_poly_vcd_proj",
             out="dump.vcd",
         )
         print(f"VCD written to: {out_path}")

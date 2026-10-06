@@ -12,9 +12,11 @@ occurred and how many samples exceeded a threshold. The arithmetic is
 defines exactly what counts as correct, and that definition is part of the
 design.
 
-## 2. Register map parameters
+## 2. Command-header parameters
 
-This is written by the host before `ap_start`, with access RW:
+This travels in every `DATA` command header, after `cmd_type`, `tx_id` and
+`nsamp` (frame F3), so each command carries its own. Nothing is written over
+AXI-Lite but `ap_start`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -27,19 +29,20 @@ This is written by the host before `ap_start`, with access RW:
 
 - **Input sample `z = I + jQ`:** two float32 words, `I` then `Q`. Define it
   as a Waveflow `DataList` with fields `i` and `q`, and confirm the order in
-  `layout.md`. A burst has `2 * nsamp` words. Under frame F4's code 3, a
+  `layout.md`. A burst has `2 * nsamp` words. Under frame F4's code 1, a
   half-received sample (an `I` without its `Q`) is discarded.
 - **Input range:** every `I` and `Q` is either `+/-0.0` or satisfies
   `1e-15 <= |v| <= 1e15`. Within this range `I*I + Q*Q` neither overflows
   nor goes subnormal in float32. Behavior outside it is unspecified and
   untested.
 - **Output `m`:** one float32 word per processed sample.
-- **Response footer, after `nsamp_read`:**
+- **Response footer**, after the data burst, sent only when the command
+  succeeds (frame F3):
 
   | Field | Type | Meaning |
   | --- | --- | --- |
-  | `peak_idx` | uint16 | **first** index of the largest `m[k]`; `0xFFFF` if `nsamp_read = 0` |
-  | `peak_mag` | float32 | `m[peak_idx]`; `+0.0` if `nsamp_read = 0` |
+  | `peak_idx` | uint16 | **first** index of the largest `m[k]`; `0xFFFF` if `nsamp = 0` |
+  | `peak_mag` | float32 | `m[peak_idx]`; `+0.0` if `nsamp = 0` |
   | `n_above` | uint16 | processed samples with `m[k] > thresh` (strict) |
 
   The footer is computed from the kernel's **own** outputs `m[k]`.
@@ -61,10 +64,11 @@ that meets section 6. The oracle computes
 
 ## 5. Scenarios
 
-Each scenario is one kernel run: register writes, then the listed commands.
+Each scenario is one kernel run: the listed commands, each `DATA` header
+carrying the parameters shown.
 Unless the scenario halts on an error, the run ends with `END`.
 
-| ID | Registers | Commands | Purpose |
+| ID | Parameters | Commands | Purpose |
 | --- | --- | --- | --- |
 | S1_random | thresh=2.0 | DATA nsamp=1000, I and Q ~ N(0,1) | general case |
 | S2_exact | thresh=5.0 | DATA: the section 4 table | exact cases, signed zeros, a sample exactly at the threshold |
@@ -76,16 +80,16 @@ Unless the scenario halts on an error, the run ends with `END`.
 | E1_neg_thresh | thresh=-1.0 | DATA nsamp=10 | halts BAD_PARAM |
 | E2_nan_thresh | thresh=NaN | DATA nsamp=10 | halts BAD_PARAM |
 | E3_inf_thresh | thresh=+inf | DATA nsamp=10 | halts BAD_PARAM |
-| E4_early_mid | thresh=2.0 | DATA nsamp=10, TLAST on word 4 (an `I`) | halts code 3; nsamp_read = 2 |
-| E5_early_end | thresh=2.0 | DATA nsamp=10, TLAST on word 5 (a `Q`) | halts code 3; nsamp_read = 3 |
+| E4_early_mid | thresh=2.0 | DATA nsamp=10, TLAST on word 4 (an `I`) | halts code 1; 2 outputs emitted, the last with TLAST; no footer |
+| E5_early_end | thresh=2.0 | DATA nsamp=10, TLAST on word 5 (a `Q`) | halts code 1; 3 outputs emitted, the last with TLAST; no footer |
 | S_TIMING | thresh=2.0 | DATA nsamp=2048 N(0,1) | timing only |
 
 ## 6. Acceptance
 
 Let `tol = 4 * 2^-24`, which is about 2.4e-7.
 
-**Exact:** response headers, `nsamp_read`, every TLAST flag, the data-word
-count and the register-map status all match the oracle exactly.
+**Exact:** response headers, `nsamp`, every TLAST flag, the data-word
+count and the status registers all match the oracle exactly.
 
 **Data words:** if `m_ref[k] = 0`, then `m[k]` is exactly `+0.0`.
 Otherwise `|m[k] - m_ref[k]| <= tol * m_ref[k]`.

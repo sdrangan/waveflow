@@ -104,7 +104,7 @@ Things to notice:
 `run.tcl` is short; the part that matters is one project per width, and the stage switch:
 
 ```tcl
-set proj waveflow_poly_w$width                ;# waveflow_poly_w32, waveflow_poly_w64
+set proj waveflow_poly_w${width}_proj                ;# waveflow_poly_w32_proj, waveflow_poly_w64_proj
 open_project -reset $proj
 set_top $top                                  ;# poly or poly_bw64
 add_files gen/poly.cpp -cflags "-I."
@@ -139,7 +139,7 @@ class CSynthStep(BuildStep):
     @property
     def produces(self) -> dict:      # per width, so two instances never collide
         w = self.word_bw
-        return {f"report_dir_w{w}": Path(f"waveflow_poly_w{w}/solution1"),
+        return {f"report_dir_w{w}": Path(f"waveflow_poly_w{w}_proj/solution1"),
                 f"cosim_done_w{w}": Path(f"results/cosim_done_w{w}.txt")}
 
     def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
@@ -147,7 +147,7 @@ class CSynthStep(BuildStep):
         (width_dir(root, w) / "timing" / "cosim").mkdir(parents=True, exist_ok=True)
         _run_vitis(config, "synth", w, live_output, clk_freq)
         ...
-        return {f"report_dir_w{w}": root / f"waveflow_poly_w{w}" / "solution1",
+        return {f"report_dir_w{w}": root / f"waveflow_poly_w{w}_proj" / "solution1",
                 f"cosim_done_w{w}": done}
 ```
 
