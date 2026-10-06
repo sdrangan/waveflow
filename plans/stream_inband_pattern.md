@@ -1,13 +1,12 @@
 # `stream_inband`: teach the command-response pattern cleanly
 
-Status: **revision 2, for review.**  No code has changed.  Revision 2 follows the review of
-revision 1:
+Status: **implemented** on branch `stream-inband-pattern` (2026-10-06); outcome in section 14.
+Revision 2 followed the review of revision 1:
 
 - the coefficients travel in the `DATA` command header; there is no `CONFIG` command;
 - error testing is light: one kernel call per scenario, with no recovery activations;
-- the frame drops its footer.
-
-The questions still open are in section 11.
+- footers: `RespHdr | data`, plus an optional `RespFtr` (success only) for results known only
+  after the data.
 
 ## 1. What changes and why
 
@@ -205,7 +204,7 @@ The generated top loses `float coeffs[4]` and its `s_axilite` pragma.  The regma
 `PolyAccel.param_supports = {"bw64": {"in_bw": 64, "out_bw": 64}}` is the mechanism `process.md`
 already tells agents to use.  The generator emits `poly` (32 bits) and `poly_bw64` (64 bits), both
 calling the same templated body.  Vitis builds each in its own project, one directory deep:
-`waveflow_poly_w32_proj/` and `waveflow_poly_w64_proj/`.  `run.tcl` reads `WAVEFLOW_POLY_WIDTH` (32 or 64) from
+`w32_proj/` and `w64_proj/`.  `run.tcl` reads `WAVEFLOW_POLY_WIDTH` (32 or 64) from
 the environment and uses it to set the top, the project and `-DPOLY_WORD_BW=<w>` on the testbench.
 
 ### Python
@@ -350,7 +349,7 @@ schemas; each moves to the frozen copy or the new schemas, depending on what the
 | `tests/examples/test_poly_demo.py` | new scenarios and errors; the worked `poly_eval` values stay; the timing assertion follows the new span; width cases 32 and 64 |
 | `tests/examples/test_poly_codegen.py` | no `coeffs` in the signature or the pragmas; `poly_bw64` is emitted |
 | `tests/poly/poly_timing_fixture.py`, `test_timing_analysis*.py`, `tests/fixtures/poly/timing/*.vcd` | regenerate the synthetic VCD with the longer header; `test_timing_analysis` also checks the decoded `coeffs` |
-| `tests/poly/test_timing_capture.py` | project path becomes `waveflow_poly_w32_proj` |
+| `tests/poly/test_timing_capture.py` | project path becomes `w32_proj` |
 | `tests/mcp/test_usage_index.py`, `test_knowledge_corpus.py`, `test_retrieval_eval.py`, `test_server_smoke.py`, `test_kb_cli.py` | class and port names stay; the retrieval queries ("persistent loop END", "halted error tx_id") are re-checked against the new pages |
 | `tests/mcp/test_scaffold.py` | the anchors (section 10); the `WRONG_NSAMP` assertion becomes `TLAST_EARLY_SAMP_IN`; `VitisRegMap` still survives (status) |
 | `tests/examples/test_mcp_tools.py` | follows the replaced `schema_examples/poly.py` (section 10) |
@@ -457,3 +456,29 @@ On a branch `stream-inband-pattern`, one PR, with commits in this order:
 
 The report will give each step's result, the timing before and after at each width, and anything not
 done.
+
+## 14. Outcome
+
+Implemented as planned, with these differences:
+
+- **Project names are short and end in `_proj`** (`w32_proj`, `w64_proj`, `vcd_proj`).  The
+  MCP corpus skips directories with that suffix; without it, it indexed the Vitis trees (index
+  build 8 s, example card bloated).  The scaffold skips them via `frame.toml`.  Short, because
+  synthesis writes floating-point IP files ~150 characters below the project directory: with
+  `waveflow_poly_w64_proj`, the pytest build path reached 261 bytes and csynth failed on
+  Windows' 260-byte limit.  `process.md` now warns agents about it.
+- **pysim reads the raw sample burst.**  `get_pipelined` zero-pads a short burst to `count`, so
+  it cannot see an early TLAST; `PolyAccel.body` counts the words `get()` returns.  The guide's
+  skeleton that checked `len(samp_in)` after `get_pipelined` was corrected.
+- **The pysim testbench waits on the `ap_done` interrupt** (`rm.run(irq)`), not on its output
+  count, so the status it reads is the final one.
+- **No recalibration was needed.**  With the span matched (whole call on both sides), the
+  unchanged `proc_latency = 40` gives pysim 147 / cosim 152 at 32 bits and 94 / 94 at 64.
+- **The error-path cosim worked** (R3 did not materialize): `early_tlast_vcd` co-simulates
+  bit-exactly, TLAST close included, and the port trace carries the AXI-Lite traffic too, so the
+  figure shows the real `ap_start`, `ap_done` poll and status reads.
+- `vcd/dump.vcd` (old port names) was replaced by `vcd/error_path.vcd`; the notebook follows.
+- The FIR function spec's `T_total` budget grew by 10 cycles for its longer header.
+
+Resources (`xc7z020`, 10 ns): w32 15 DSP / 2273 FF / 3030 LUT (was 15 / 1814 / 2709);
+w64 30 DSP / 3986 FF / 5708 LUT.  Sample loop II = 1, depth 29, at both widths.

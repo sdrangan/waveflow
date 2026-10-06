@@ -13,7 +13,7 @@ every clock cycle.
 
 | Step | Produces | What it does |
 |------|----------|--------------|
-| `csynth_w32`, `csynth_w64` | `report_dir_w*` | Runs `run.tcl` with `WAVEFLOW_POLY_STAGE=synth` and that width: C synthesis, then RTL co-simulation of the timing scenario (see the next page), in `waveflow_poly_w32_proj/` or `waveflow_poly_w64_proj/` |
+| `csynth_w32`, `csynth_w64` | `report_dir_w*` | Runs `run.tcl` with `WAVEFLOW_POLY_STAGE=synth` and that width: C synthesis, then RTL co-simulation of the timing scenario (see the next page), in `w32_proj/` or `w64_proj/` |
 | `inspect_synth_w32`, `_w64` | `loop_df_w*`, `res_df_w*` | Parses `csynth.xml` with `waveflow.utils.csynthparse.CsynthParser`, prints the loop and resource tables, and **fails the build** if any loop has `PipelineII > 1` |
 
 ## The loops
@@ -54,7 +54,7 @@ python examples/stream_inband/poly_build.py --through inspect_synth_w32
 python examples/stream_inband/poly_build.py --through inspect_synth_w64
 ```
 
-Produces `waveflow_poly_w*_proj/solution1/syn/report/csynth.xml`, `results/loop_df_w*.csv`,
+Produces `w*_proj/solution1/syn/report/csynth.xml`, `results/loop_df_w*.csv`,
 `results/res_df_w*.csv`, and the tables on stdout.
 
 ## Check your understanding

@@ -64,7 +64,7 @@ name_token = "poly"
 # source.  Copying a worked run into a fresh project is how someone ends up
 # comparing their own design against the example's numbers.
 skip_dirs = ["__pycache__", "gen", "include", "logs", "results", "vcd", "data", "src",
-             "waveflow_poly_w32_proj", "waveflow_poly_w64_proj", "waveflow_poly_vcd_proj"]
+             "w32_proj", "w64_proj", "vcd_proj"]
 skip_suffixes = [".ipynb", ".bin", ".vcd", ".json", ".csv", ".log"]
 
 # The compute, named by anchor rather than found by pattern.

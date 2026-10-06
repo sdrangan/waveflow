@@ -165,6 +165,11 @@ reached and what limits it.
   fails with `undefined symbol: <kernel>(...)` -- a Vitis defect, not your
   code. To group projects, `cd` into the folder first, then
   `open_project w32`, and give `add_files` absolute paths.
+- **Keep project names and paths short on Windows.** C synthesis writes
+  floating-point IP files about 150 characters below the project directory;
+  a path over 260 bytes fails csynth with `Path length exceeds 260-Byte
+  maximum allowed by Windows`. Name projects like `w32_proj`, and keep the
+  checkout itself shallow.
 - A design is accepted only when **every comparison** of §F7 passes. When one
   fails, say **which layer** failed -- the function, the protocol model, the
   module, the C++ body -- before changing anything.

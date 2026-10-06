@@ -23,7 +23,7 @@ class CosimReportParser:
     Parameters
     ----------
     sol_path : str | Path | None
-        Path to the solution directory (e.g. ``waveflow_poly_w32_proj/solution1``).
+        Path to the solution directory (e.g. ``w32_proj/solution1``).
         The cosim report is discovered under ``<sol>/sim/report/``.
     report_path : str | Path | None
         Explicit path to the cosim report file.  Takes precedence over

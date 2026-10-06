@@ -204,8 +204,8 @@ class TestRunXsimVcdIsCrossPlatform:
 # ---------------------------------------------------------------------------
 
 _XSIM_AVAILABLE = (
-    Path("waveflow_poly_vcd_proj").exists()
-    or Path("examples/stream_inband/waveflow_poly_vcd_proj").exists()
+    Path("vcd_proj").exists()
+    or Path("examples/stream_inband/vcd_proj").exists()
 )
 
 requires_xsim = pytest.mark.skipif(
@@ -219,7 +219,7 @@ class TestRunXsimVcdIntegration:
     def test_generates_vcd_file(self, tmp_path: Path) -> None:
         out_path = run_xsim_vcd(
             top="poly",
-            comp="waveflow_poly_vcd_proj",
+            comp="vcd_proj",
             out="test_out.vcd",
             workdir=Path(__file__).resolve().parents[2] / "examples" / "stream_inband",
         )
