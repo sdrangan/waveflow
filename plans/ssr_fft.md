@@ -325,7 +325,22 @@ Vitis warns that rewind pipelines inside an `ap_ctrl_none`-style dataflow region
 patching the vendor's nested-dataflow structure stops here: each fix exposes the next interaction of
 per-call processes.  That is the argument for F1 onward, not for more patches.
 
-### F1 — the model, per stage
+### F1 — the model, per stage  ✅ DONE (2026-10-05)
+
+> **As built** (`waveflow/dsp/ssr_fft/{model,types,cycle_ref}.py`, `tests/dsp/ssr_fft/test_model.py`,
+> 30 tests): `fft_general` was **not** split; `model.stage` calls its internals (`_dft4`,
+> `complex_multiply`, `stage_formats`) on the wire-ordered frame, so the arithmetic has one source
+> and the vendor-reference module is untouched.  Stages take `(L/R, R)` stored-integer `re, im`
+> arrays rather than `DataArray` frames: the typed form belongs at the ports (F3), the numpy form is
+> what the stage computes on.  Bit-exact with `fft_general` at `L = 16 … 4096` on the first run,
+> extremes included (L=1024: ~11 ms a frame).  Block sizes and edge formats equal the vendor's csynth
+> hierarchy at L=1024.  The commutator task's algorithm (`cycle_ref.CommutatorTask`) settled one
+> design question: **ticks come in whole groups** (data, bubble or idle, decided at each group
+> boundary), because the switch slot is a function of the tick count -- bubbles inserted anywhere
+> else would put samples from two groups on the switch at once.  Back to back it moves one word a
+> tick; the last frame drains in `(R − 1)·D` ticks.
+>
+> Not done in F1: the inverse transform (needs a library golden first, as the scaling modes did).
 
 - Split `fft_general` into `stage(s, frame, …)`, plus the inter-stage rotation, plus the wire order
   of each edge.
