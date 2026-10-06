@@ -1,4 +1,4 @@
-"""The index is a timestamp, **at RTL** — ``plans/rf_shot_absolute.md``.
+"""The index is a timestamp, **at RTL** — PR #199.
 
 ``absolute_index`` is a template argument, so the two settings are two pieces of RTL rather than one
 design with a mode register in it.  A gate that only ever elaborated one of them would be asserting
@@ -121,7 +121,7 @@ WANT_DAC_WORDS = 358
 
 #: The cycle the last verdict reached its sink.  **271 and 500, against the default build's 273 and
 #: 502.**  Recorded rather than explained away, and the shape of the two-cycle difference is the same
-#: one ``plans/rf_shot_geometry.md`` measured: the player's body is a different body, so Vitis
+#: one PR #194 measured: the player's body is a different body, so Vitis
 #: schedules the poll that grants the loader's ACQUIRE a couple of cycles earlier and the whole
 #: response chain follows.  It is a property of THIS build; the default build's 273/502 are
 #: unchanged, and that is asserted where they live.

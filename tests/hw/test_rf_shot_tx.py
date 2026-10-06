@@ -1,7 +1,7 @@
-"""One shot transmitter, both play modes — ``plans/rf_shot_unify.md`` Stage A.
+"""One shot transmitter, both play modes — PR #181.
 
 The merge of a finite transmitter (``ShotPhase`` + ``rdy`` + ``done``, five tasks) and an infinite
-one (the lock, three tasks), both retired by ``plans/rf_shot_unify.md`` Stage B.  What is on trial
+one (the lock, three tasks), both retired by PR #181.  What is on trial
 is that one
 design does what both did, so the four gates are named for the four things the pair could do between
 them:
@@ -46,7 +46,7 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
-#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).
+#: Words the memory holds, which **is** the length of a shot (PR #194).
 #:
 #: **16, not 64**: it is what ``nword`` was before the shot became the buffer, so every played
 #: length, pass count and scenario timing in this file is unchanged by the geometry change and the
@@ -275,7 +275,7 @@ def test_the_shot_fills_the_whole_memory_and_the_region_is_all_of_it():
 
     This gate used to place the region at the top of the memory and check the words either side of
     it, because ``base + offset`` was the shape of the byte-versus-word bug ``bram_toy`` stayed green
-    through.  ``plans/rf_shot_geometry.md`` removed ``base``, so there is no placement to get wrong
+    through.  PR #194 removed ``base``, so there is no placement to get wrong
     and nothing outside the region to check — the region is the memory.
 
     What is left to assert is the half that still has content: the counted load pass writes **every**
@@ -424,7 +424,7 @@ def test_all_four_verdicts_plus_the_fence_in_one_stream():
     which is what makes ``tid`` 2 distinguishable from ``SHOT_BUSY``.  A build that reordered the two
     tests would return ``SHOT_BUSY`` for it and this scenario would say so.
 
-    **Four, where it was five.**  ``plans/rf_shot_geometry.md`` retired ``SHOT_ZERO_LEN``
+    **Four, where it was five.**  PR #194 retired ``SHOT_ZERO_LEN``
     (``nsamp == 0``) and the length half of ``SHOT_WRONG_LEN`` (``nsamp != nword * spw``) with the
     header field both read.  The verdict survives as ``SHOT_BAD_OPCODE`` — same wire value, named for
     the fault it reports — and it is what ``tid`` 2 now provokes.
@@ -503,7 +503,7 @@ def test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips():
     is the check becoming **unnecessary** rather than deleted on faith: it builds the geometry the
     old code refused, and shows the length survives the wire.
 
-    **The field it watches moved**, because ``plans/rf_shot_geometry.md`` removed the header's
+    **The field it watches moved**, because PR #194 removed the header's
     ``nsamp``: the only length on the wire now is the response's ``nsamp_loaded``, and it is still
     derived, still has to grow with the geometry, and still has to round-trip.  The failure it
     guards is unchanged in kind — a width that wrapped would report a *partial* load as a full one,
@@ -682,7 +682,7 @@ def test_the_player_polls_once_per_block():
 
 
 # ---------------------------------------------------------------------------
-# The index is a timestamp — ``plans/rf_shot_absolute.md``
+# The index is a timestamp — PR #199
 # ---------------------------------------------------------------------------
 #
 # The bench works in WORDS, and that is what makes these gates readable: a position in `bench.out`
@@ -829,7 +829,7 @@ def test_a_finite_shot_under_absolute_index_still_plays_EXACTLY_n_passes():
 class _CountsPassesWhilePlayingFiller(RfShotTx.player_cls):
     """The shipped player with ``nrep_left`` moved OUT of the ``playing`` guard — **the trap**.
 
-    One block instead of two, which is exactly the edit ``plans/rf_shot_absolute.md`` names as the
+    One block instead of two, which is exactly the edit PR #199 names as the
     natural one and the wrong one.
     """
 
@@ -945,7 +945,7 @@ class _WatchesTheGrant(RfShotTx.player_cls):
 def test_an_ACQUIRE_disarms_a_PENDING_shot_and_not_only_a_playing_one():
     """A stale arm must not survive a lock handover.
 
-    ``plans/rf_shot_absolute.md`` names this as the third trap, and it is the one whose *output* is
+    PR #199 names this as the third trap, and it is the one whose *output* is
     unobservable: every RELEASE in practice carries a fresh play command that overwrites ``pending``
     anyway, so a design that cleared only ``playing`` would produce the same samples right up until
     a handover that did not. That is what makes this gate white-box on purpose — it reads the two

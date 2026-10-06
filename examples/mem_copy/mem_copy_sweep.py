@@ -1,6 +1,6 @@
 """mem_copy_sweep.py — the writer's timing residual, measured rather than transcribed.
 
-P3b of ``plans/sweep_runner.md``: the sweep that proves :class:`~waveflow.build.sweep.Stage` serves
+P3b of the sweep_runner plan (commit 3d74877): the sweep that proves :class:`~waveflow.build.sweep.Stage` serves
 the **timing** axis and not only the resource one.
 
 What it fits is the writer's own *control* cost.  Each point runs the RTL through XSI and a pysim

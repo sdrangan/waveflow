@@ -1,6 +1,6 @@
 """rf_shot_tx_build.py — build the shot transmitter: pysim -> codegen -> csynth.
 
-``plans/rf_shot_unify.md`` Stage A.  The rungs, in the order a failure is cheapest to diagnose:
+PR #181.  The rungs, in the order a failure is cheapest to diagnose:
 
     pysim       -> both scenarios in SimPy: three passes then quiet, and a waveform switched mid-play
     codegen_dut -> the ap_ctrl_none top (three tasks, two ``mode=bram`` ports, a framed command port
@@ -84,7 +84,7 @@ from examples.rf_shot_tx.rf_shot_tx import (  # noqa: E402
 #: The generated kernel's name, and the wrapper's.
 TOP = "rf_shot_tx"
 WRAPPER = f"{TOP}_top"
-#: The **second build of the same design** — ``plans/rf_shot_absolute.md``.  One C++ body with an
+#: The **second build of the same design** — PR #199.  One C++ body with an
 #: ``ABS`` template argument Vitis folds, so this is a second *elaboration*, not a second source; it
 #: needs its own name only because a Vitis project, an xsim snapshot and a generated ports header are
 #: all keyed on the kernel's name and the two have to sit in one directory to be compared.
@@ -105,7 +105,7 @@ RTL_FILES_ABS = ("bram_t2p.v", f"{WRAPPER_ABS}.v")
 SOLUTION_CONFIG = ("config_rtl -reset state",)
 
 #: The gated geometry, stated rather than defaulted.  **Four numbers where there were six**: since
-#: ``plans/rf_shot_geometry.md`` the shot IS the buffer, so ``depth`` is the length as well as the
+#: PR #194 the shot IS the buffer, so ``depth`` is the length as well as the
 #: size and there is no ``nword`` and no ``base``.  What the removed placement used to exercise —
 #: ``base + offset`` — does not exist to be wrong; the wrap that replaced it is gated on the read
 #: port at RTL.
@@ -144,7 +144,7 @@ def generate_dut(out_dir: Path = HERE, *, comp_class=RfShotTx, top: str = TOP,
     inner.add(MemLockStep(output_dir=INCLUDE_DIR))
     inner.add(XsiHarnessStep(output_dir="xsi"))
     # THREE schema lists.  The header and the verdict are still rf_shot_tx's at Stage A -- see the
-    # ownership decision in plans/rf_shot_unify.md -- the lock's are the lock's, and the play command
+    # ownership decision in PR #181 -- the lock's are the lock's, and the play command
     # is the merged design's own.
 # The header/response pair for THIS geometry, not the module default: plans/rf_shot_wire_format.md
     # Part A derives nsamp_loaded's width from depth x samp_per_word, so the emitted C++ has to be the
@@ -295,7 +295,7 @@ class PySimStep(BuildStep):
                 "underrun": int(tb.dac_if.underrun),
                 "blocks_delivered": int(tb.dac_if.blocks_delivered),
             }
-            # THE SECOND BUILD, on the SAME scenario -- `plans/rf_shot_absolute.md`.  Toolchain-free,
+            # THE SECOND BUILD, on the SAME scenario -- PR #199.  Toolchain-free,
             # and the rung that should fail first if the mode regresses: the two gates the parameter
             # exists for are asserted here, and the default run above is their negative control.
             tb_abs = run_pysim(frames=frames, in_bundle=f"vectors/{name}", dut_cls=RfShotTxAbs)

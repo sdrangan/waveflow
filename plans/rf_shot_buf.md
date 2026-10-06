@@ -1,9 +1,8 @@
 # `RfShotBuf` — the finite sample buffer
 
-**Status: ONE STAGE LEFT.** Started 2026-08-24, rewritten 2026-09-02 by `plans/rf_shot_unify.md`
-Stage C. This file owns the **`RfShotBuf` family** — the finite sample buffer, its examples, and its
+**Status: ONE STAGE LEFT.** Started 2026-08-24, rewritten 2026-09-02 by [PR #182](https://github.com/sdrangan/waveflow/pull/182). This file owns the **`RfShotBuf` family** — the finite sample buffer, its examples, and its
 documentation. The streaming buffer is `plans/rf_samp_new.md`; the converter is
-`plans/adc_model.md`; the lock underneath both halves is `plans/t2p_lock_chan.md`.
+`plans/adc_model.md`; the lock underneath both halves is [PR #178](https://github.com/sdrangan/waveflow/pull/178).
 
 It exists as a separate plan rather than a section of `rf_samp_new.md` deliberately. That file is
 ~1200 lines of machinery — credit and ack channels, `time_compare`, the half-wrap contract, the
@@ -45,12 +44,12 @@ staleness margin, because there is nothing to arbitrate in the streaming sense �
 read and write the same words at the same instant.
 
 What replaced the family's original `ShotPhase`-and-`rdy` primitive is recorded in
-`plans/rf_shot_unify.md`. The short version: `ShotPhase` was **pysim-only by its own docstring**, so
+[PR #181](https://github.com/sdrangan/waveflow/pull/181). The short version: `ShotPhase` was **pysim-only by its own docstring**, so
 the safety claim never had an RTL witness; `LockedT2pMemIF` has a pysim guard *and* a measurement at
 RTL.
 
 **TX holds one region and RX holds two**, and that asymmetry is load-bearing rather than incidental —
-see `plans/rf_shot_unify.md` § *TX is a SINGLE-region design*. It is also why a two-region TX is
+see [PR #181](https://github.com/sdrangan/waveflow/pull/181) § *TX is a SINGLE-region design*. It is also why a two-region TX is
 recorded there as an open option.
 
 ## Why a BRAM here, when a BRAM failed there
@@ -63,7 +62,7 @@ cycles/word.
 
 Here there is no live reader to track. The lock answers *may I touch these addresses* once per
 handover, not once per word, and the poll that asks it sits **outside** the pipelined body — which is
-why every loop in both designs reaches II=1. The measurements are in `plans/rf_shot_unify.md` and on
+why every loop in both designs reaches II=1. The measurements are in [PR #181](https://github.com/sdrangan/waveflow/pull/181) and on
 `docs/guide/rf/rfshotbuf/tx_internal.md`.
 
 ### What `BramIF` requires of a design
@@ -322,8 +321,8 @@ a single terminal one is a lock doing very little.
 ## What happened to Stages A, B, D and E
 
 **Stage A** (the buffer primitive, `ShotPhase` + `rdy`) and **Stage B** (TX, five tasks on top of it)
-were built and RTL-gated in 2026-08. `plans/rf_shot_unify.md` **Stage B** (2026-09-02) then **deleted
-both**, along with the infinite-play sibling from `plans/t2p_lock_chan.md` S1, and replaced all three
+were built and RTL-gated in 2026-08. [PR #181](https://github.com/sdrangan/waveflow/pull/181) **Stage B** (2026-09-02) then **deleted
+both**, along with the infinite-play sibling from [PR #178](https://github.com/sdrangan/waveflow/pull/178), and replaced all three
 with one `RfShotTx` on the lock. Their measurements went with the designs; what those stages *found* —
 the byte-address bug, the framed boundary port, the converter-model beat count — is in
 [traps, carried forward](#traps-carried-forward) below, because those findings outlived the code.

@@ -1,4 +1,4 @@
-"""The index is a timestamp on the RECEIVE side, at RTL — ``plans/rf_shot_absolute.md`` S2.
+"""The index is a timestamp on the RECEIVE side, at RTL — PR #201.
 
 ``absolute_index`` is a template argument, so the two settings are two pieces of RTL rather than one
 design with a mode register in it.  A gate that only ever elaborated one of them would be asserting
@@ -15,8 +15,8 @@ What this run can prove, and what it cannot
 -------------------------------------------
 It **can** prove the mode synthesizes, keeps ``II=1``, keeps the converter fed, satisfies the
 absolute claim on the wire — and the part only an RTL run can say, that **two regions still keep the
-writer and the reader apart**.  That is the trap ``plans/rf_shot_absolute.md`` S2 names: absolute
-indexing moves *when* a region is claimed, and the property ``plans/t2p_lock_chan.md`` S2 established
+writer and the reader apart**.  That is the trap PR #201 names: absolute
+indexing moves *when* a region is claimed, and the property PR #179 established
 (both memory ports live together, never in the same region) is what makes the region enforced at RTL
 by construction rather than by an assertion nobody can hear.  So it is **re-measured here rather than
 inherited**.
@@ -24,7 +24,7 @@ inherited**.
 It **cannot** prove what a drop does to an address, because the only thing that loses samples on RX
 is a reader that dawdles, and ``stall_blocks`` is a pysim modelling field that reaches no template
 argument — a reader that dawdles is not a thing the RTL can be asked to do.  That is the same reason
-``plans/t2p_lock_chan.md`` S2 declined to ship a dirty RTL build, and it is recorded rather than
+PR #179 declined to ship a dirty RTL build, and it is recorded rather than
 glossed: the drop gates below therefore run in pysim, where the knob does, and the two controls live
 beside them in ``tests/hw/test_rf_shot_rx.py``.
 
@@ -269,7 +269,7 @@ def test_a_DROP_leaves_a_HOLE_and_not_a_SHIFT(pysim_runs):
     own absolute indices name — not shifted up by what was lost.
 
     It is in pysim because ``stall_blocks`` reaches no template argument: a reader that dawdles is
-    not a thing the RTL can be asked to do, which is the same reason ``plans/t2p_lock_chan.md`` S2
+    not a thing the RTL can be asked to do, which is the same reason PR #179
     shipped no dirty RTL build. The RTL half of this file proves the mode *is* the RTL; this proves
     what the mode is for.
 
@@ -331,7 +331,7 @@ def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK(
 
     That coarseness is not only a cost: it is what keeps an announced window from ever being part
     stale, and therefore what lets the header localize a hole with **no per-block valid mask**
-    (``plans/rf_shot_absolute.md`` S2, *what is in a hole*).
+    (PR #201, *what is in a hole*).
     """
     lost = {k: int(v["tb"].dut.n_dropped) for k, v in pysim_runs.items()}
     assert (lost["default"], lost["abs"]) == (160, 448), (
@@ -355,7 +355,7 @@ def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK(
 def test_both_ports_are_live_together_and_never_in_the_same_region(run):
     """**The property absolute indexing must not break, re-measured rather than inherited.**
 
-    ``plans/t2p_lock_chan.md`` S2's whole RTL claim: both memory ports are simultaneously live for
+    PR #179's whole RTL claim: both memory ports are simultaneously live for
     many cycles of this run, and on **every one of them** the writer and the reader are in different
     regions. That is what makes the region enforced at RTL *by construction* — Vitis still owns the
     port enable and still reads speculatively, and with disjoint regions that stops mattering.

@@ -1879,8 +1879,7 @@ class HwStmtExtractor:
 def _validate_leaf_is_flat(comp) -> None:
     """A leaf lowers to ONE kernel function, so it must not own a sub-graph.
 
-    The *structural* half of the component contract (``plans/codegen_check_family.md``
-    Stage 4); the body half is the rest of the extractor.  A leaf becomes a single C++
+    The *structural* half of the component contract (the codegen_check_family plan, Stage 4 (commit ddf60c8)); the body half is the rest of the extractor.  A leaf becomes a single C++
     function, and a single function has nowhere to put a sub-component or an internal
     channel between two of them.
 

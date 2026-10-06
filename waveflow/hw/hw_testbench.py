@@ -55,7 +55,7 @@ class SeqTB(NamedObject):
     That gate is a **gate, not a proof**.  It rejects the syntactic construct that certainly
     implies concurrency; it does not certify that a body which passes is sequential (semantic
     interleaving is undecidable in general).  See ``docs/guide/flows/`` and
-    ``plans/codegen_check_family.md`` Stage 3.
+    the codegen_check_family plan, Stage 3 (commit ddf60c8).
 
     Not a ``SimObj``: a ``SeqTB`` takes no ``sim=`` at construction — only ``name=`` (inherited from
     :class:`~waveflow.named.NamedObject`).

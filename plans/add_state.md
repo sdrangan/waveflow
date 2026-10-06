@@ -20,7 +20,7 @@
 
 The extractor **forbids reading mutable `self.X`** from a kernel body
 ([`_validate_no_implicit_capture`](../waveflow/build/hwcodegen.py), one of the four *meaning* rules —
-see [`codegen_check_family.md`](codegen_check_family.md)). The rule is right: the extractor cannot tell
+see the codegen_check_family plan ([commit ddf60c8](https://github.com/sdrangan/waveflow/commit/ddf60c8))). The rule is right: the extractor cannot tell
 a *constant baked into the design* from a *register someone must write*, and guessing either way is
 wrong. But the consequence is that **no module can carry state across firings** — both toys are
 deliberately stateless, and free-running state has been the standing open item since `FreeRunMod`
@@ -545,7 +545,7 @@ Stage 4 (templated extents) is still open and is what an `ntap` sweep would want
 
 ## Related
 
-- [`codegen_check_family.md`](codegen_check_family.md) — the rule family this adds an allow-list entry to
-- [`dyn_param.md`](dyn_param.md) — the sibling binding site, and the docstring contrast above
+- the codegen_check_family plan ([commit ddf60c8](https://github.com/sdrangan/waveflow/commit/ddf60c8)) — the rule family this adds an allow-list entry to
+- [PR #110](https://github.com/sdrangan/waveflow/pull/110) — the sibling binding site, and the docstring contrast above
 - [`../docs/guide/comp_codegen/extractor.md`](../docs/guide/comp_codegen/extractor.md) — the `self.X` ban
   as documented; needs an update in Stage 1

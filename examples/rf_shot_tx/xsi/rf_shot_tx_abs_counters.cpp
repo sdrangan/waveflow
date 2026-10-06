@@ -1,5 +1,5 @@
 // rf_shot_tx_abs_counters.cpp -- HAND-WRITTEN.  The SAME finite scenario, on the SAME design,
-// built with `absolute_index = 1` (plans/rf_shot_absolute.md).
+// built with `absolute_index = 1` (PR #199).
 //
 // WHY A SECOND SNAPSHOT AND NOT A SECOND MAIN.
 //

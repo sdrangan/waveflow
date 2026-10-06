@@ -2,7 +2,7 @@
 #define WAVEFLOW_PINGPONG_CAPTURE_TASK_H
 // pingpong_capture_task.h — take a block every firing; put it in a free region, or DROP it and say so.
 //
-// The continuous-capture receiver's owner (plans/t2p_lock_chan.md S2).  Its Python twin is
+// The continuous-capture receiver's owner (PR #179).  Its Python twin is
 // PingPongCapture.run_iter, which is the pysim golden and NOT the source of this file.
 //
 // THE OWNER HERE READS BEFORE IT WRITES, AND THAT IS THE OPPOSITE OF TX.
@@ -29,7 +29,7 @@
 // arrives and a word is stored in the same cycle -- which is what the pysim twin says by writing
 // with the anchor its read returned.
 //
-// `wp` IS EITHER A FILL POINTER OR A TIMESTAMP, AND `ABS` IS WHICH (plans/rf_shot_absolute.md S2).
+// `wp` IS EITHER A FILL POINTER OR A TIMESTAMP, AND `ABS` IS WHICH (PR #201).
 //
 // At ABS=0 -- the default, and every earlier version's behaviour -- `wp` is FILL-DRIVEN: it does not
 // advance on a drop, so an address says HOW FAR INTO THIS CAPTURE and a lost block shifts everything
@@ -60,7 +60,7 @@
 // AND THE TASK TRACKS `held_r` ITSELF, WHICH pysim DOES NOT HAVE TO.
 //
 // The pysim twin asks the lock endpoint (`may_touch`), because there the endpoint is also the GUARD
-// that raises on a violation.  There is no guard at RTL -- plans/t2p_lock_chan.md says so under
+// that raises on a violation.  There is no guard at RTL -- PR #178 says so under
 // "a grant is not a fence at RTL" -- so this body keeps the same fact in its own register.  The two
 // are twins in behaviour and not in mechanism, which is stated here rather than left to be noticed.
 #include "hls_stream.h"
@@ -88,7 +88,7 @@
 /// @tparam NR  regions the memory is split into.  Two at S2; three would need an allocator.
 /// @tparam BW  words per block: the pipelined loop's trip count AND the poll period, because they
 ///             are one boundary.  Must divide D/NR, so a block never straddles a region.
-/// @tparam ABS THE INDEX IS A TIMESTAMP (plans/rf_shot_absolute.md S2).  0 is every earlier
+/// @tparam ABS THE INDEX IS A TIMESTAMP (PR #201).  0 is every earlier
 ///             version's behaviour: `wp` is fill-driven and a drop shifts every address after it.
 ///             1 makes `wp` advance UNCONDITIONALLY and wrap at D, so it is this task's own word
 ///             count since reset and a drop leaves a HOLE at the addresses the lost blocks named.

@@ -208,5 +208,5 @@ AIE graphs (separate question, possibly larger); PCIe P2P between devices; delet
 ## Related
 
 `plans/mm_slave_adaptor.md`, `plans/mm_credit_stream.md`, `plans/mm_adaptor_host_endpoints.md`,
-`plans/interconnect_platform_model.md`, `plans/design_cut.md`, `plans/xsi_tb_codegen.md`,
+`plans/interconnect_platform_model.md`, `plans/design_cut.md`, the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)),
 `plans/board_packaging.md`, `docs/guide/ai_tooling/blind.md`.

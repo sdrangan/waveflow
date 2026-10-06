@@ -628,7 +628,7 @@ def _admit_blocking(ep: "QueuedTransferIFSlave", nwords: int) -> "ProcessGen[Non
     """Reserve room in *ep*'s RX queue for the burst, **waiting as long as it takes**.
 
     This is what makes a pysim producer feel its consumer.  Before
-    ``plans/pysim_burst_backpressure.md`` S2 the write path blocked for exactly **one** word
+    PR #185 the write path blocked for exactly **one** word
     (``nrx.put(1)``), filled whatever ``nrx`` happened to have free, and dumped the remainder into
     the unbounded ``ntx`` — so a 512-word burst into a 2-deep queue completed immediately and
     ``write()`` behaved almost exactly like ``offer()``.  The two are meant to be the answers to
@@ -968,7 +968,7 @@ class StreamIF(QueuedTransferIF):
         ``offer()`` keeps the old split — what fits goes in ``nrx``, the remainder in the
         **unbounded** ``ntx`` — and that is now the *difference* between the two paths rather than a
         shared implementation detail.  ``write()`` blocks on the whole burst
-        (``plans/pysim_burst_backpressure.md`` S2); ``offer()`` cannot, because the thing calling it
+        (PR #185); ``offer()`` cannot, because the thing calling it
         physically cannot wait.  So for a converter ``depth`` remains tolerance for a consumer
         *hiccup between bursts* rather than intra-burst capacity — a 64-word burst through a depth-2
         stream is legal here and always was.  A rule that clipped to the free space would therefore
@@ -1013,7 +1013,7 @@ class StreamIF(QueuedTransferIF):
         """Queue accounting for an accepted burst — **the split that only ``offer()`` still uses.**
 
         It used to be shared with :meth:`_push_to_endpoint`, "factored out so the blocking and
-        non-blocking paths cannot drift".  ``plans/pysim_burst_backpressure.md`` S2 made them differ
+        non-blocking paths cannot drift".  PR #185 made them differ
         **on purpose**, so the sharing is gone and this is now the whole of the non-blocking policy:
         put what fits in ``nrx``, dump the remainder in the unbounded ``ntx``, and never wait.
 

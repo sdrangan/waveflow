@@ -119,7 +119,7 @@ Two new pytest markers go in `pyproject.toml` beside the existing `vitis` / `xsi
 
 `board` tests are **opt-in only** — they must not run under a bare `pytest`, and they must fail
 loudly rather than skip silently when the board is expected (the `xsi` staleness lesson: a gate that
-skips quietly is a gate that is not there; see `plans/xsi_staleness_and_silent_skips.md`).
+skips quietly is a gate that is not there; see [PR #177](https://github.com/sdrangan/waveflow/pull/177)).
 
 ---
 
@@ -499,8 +499,8 @@ Recorded once in `docs/` and repeated per-overlay in `manifest.json`:
   clean-clone acceptance test. **Read it before S0.** This plan is its packaging half.
 - `plans/rf_lab_platform.md` — what the RF hardware is *for*; owns the host-API question (§14).
 - `plans/rtl_module.md` — `add_rtl_mod` and the wrapper that S4 packages.
-- `plans/resource_model.md` — the wrapper as the first scope an area number can be defined against;
+- the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)) — the wrapper as the first scope an area number can be defined against;
   S4's IP is that scope made physical.
-- `plans/xsi_staleness_and_silent_skips.md` — why a skipped gate is a missing gate (§3).
+- [PR #177](https://github.com/sdrangan/waveflow/pull/177) — why a skipped gate is a missing gate (§3).
 - `docs/guide/flows/bitstream_ipi.md` — the Flow 4 stub this plan fills in; un-hide it
   (`nav_exclude`) when S1 lands.

@@ -163,5 +163,5 @@ position than "build everything."
 
 ## Related notes
 - `plans/fixedfield.md` — the bit-exact fixed-point foundation (accuracy model).
-- `plans/fft_bit_exact_notes.md` — a sibling bit-exact-model idea (FFT); same harness.
+- the fft_bit_exact_notes plan ([commit 19005b5](https://github.com/sdrangan/waveflow/commit/19005b5)) — a sibling bit-exact-model idea (FFT); same harness.
 - cycle-model-training (project memory) — the cycle model's calibrate-from-cosim spine.

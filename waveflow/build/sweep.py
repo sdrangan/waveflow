@@ -13,7 +13,7 @@ sweep time.  The right analogue is ``ParameterGrid``, the iterator, plus a runne
 has no concept of because its estimators fit in milliseconds while these points cost ~45 seconds of
 Vitis each.
 
-See ``plans/sweep_runner.md``.
+See the sweep_runner plan (commit 3d74877).
 """
 from __future__ import annotations
 

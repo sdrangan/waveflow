@@ -2,7 +2,7 @@
 #define WAVEFLOW_MEM_LOCK_H
 // mem_lock.h — the lock channel's C++ half: the codes, the width, and the three moves.
 //
-// plans/t2p_lock_chan.md S1.  The twin of waveflow/hw/locked_mem.py, and NOT generated from it: the
+// PR #178.  The twin of waveflow/hw/locked_mem.py, and NOT generated from it: the
 // Python side is the pysim golden and this is the hardware, written independently to the same
 // contract so the gates can catch them diverging.  What IS shared is the bit layout — both ends
 // reach it through the generated mem_lock_cmd.h / mem_lock_resp.h, so no body here touches a range.

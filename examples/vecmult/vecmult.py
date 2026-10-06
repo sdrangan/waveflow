@@ -160,7 +160,7 @@ class VecMult(FreeRunMod):
         # calib/platforms/zynq7020_vecmult.  `tests/calib/test_key_stability.py` catches exactly that.
         # It carries no information `vlen` does not already, so it is a fair candidate for a
         # *deliberate* re-key -- with the store regenerated in the same commit.  See
-        # plans/key_stability.md.
+        # the key_stability plan (commit 40e8e00).
         self.vec_cls = vec_type(int(self.vlen))
 
     @property

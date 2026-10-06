@@ -34,7 +34,7 @@ leaf is the 1-task degenerate case of a composite, walked by the *same*
 :func:`~waveflow.build.composite_gen.composite_top_spec`.  So there is one DUT
 target, ``composite_kernel``.  ``concurrent_systemc_tb`` is gone too — the old
 Flow 3 (a SystemC concurrent TB) was refuted; the XSI BFM *is* the concurrent
-harness, so Flow 2 is "the concurrent flow" outright (see ``plans/xsi_tb_codegen.md``).
+harness, so Flow 2 is "the concurrent flow" outright (see the xsi_tb_codegen plan (commit 3052952)).
 
 Flows 1 **and 2 are built**: :data:`IMPLEMENTED_TARGETS` carries all four of their
 targets.  Flow 2's DUT lowers through ``composite_top_spec`` + the task-body

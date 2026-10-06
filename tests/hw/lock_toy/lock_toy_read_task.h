@@ -2,7 +2,7 @@
 #define WAVEFLOW_LOCK_TOY_READ_TASK_H
 // lock_toy_read_task.h — the OWNER, and the ordering everything turns on.
 //
-// The C++ half of the minimal consumer for plans/t2p_lock_chan.md S1, checkpoint 2.  It holds the
+// The C++ half of the minimal consumer for PR #178, checkpoint 2.  It holds the
 // whole memory, reads a chunk per firing, and polls the lock channel exactly once between chunks.
 //
 // THE POLL SITS OUTSIDE THE PIPELINED LOOP, AND THAT IS WHY II=1 SURVIVES.
@@ -32,7 +32,7 @@
 //
 // `rd` IS A RUNNING BASE, DELIBERATELY.
 //
-// `buf[rd + i]` with `rd` a static is the dynamic base addressing plans/t2p_lock_chan.md names as
+// `buf[rd + i]` with `rd` a static is the dynamic base addressing PR #178 names as
 // the silent-failure class this repo has already paid for once.  A body indexing `buf[i]` would
 // synthesize just as well and would measure nothing.
 #include "hls_stream.h"
@@ -52,7 +52,7 @@ static void lock_toy_read_task(ap_uint<W> buf[D],
                                hls::stream<ap_uint<W> >& s_out) {
     //: 1 while this task owns the region it is reading; 0 while it has yielded it.  ONE BIT is
     //: enough at S1 because the owner yields the WHOLE memory -- the region is enforcement in pysim
-    //: and documentation here, which plans/t2p_lock_chan.md says out loud rather than implying.
+    //: and documentation here, which PR #178 says out loud rather than implying.
     static ap_uint<1> playing = 1;
 #pragma HLS reset variable=playing
     //: The running read base.  See the header note on dynamic base addressing.

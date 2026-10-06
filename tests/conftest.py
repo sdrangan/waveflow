@@ -40,14 +40,14 @@ import pytest
 #: phase and transient per backend and scenario (4 each), agreement per scenario (2), and the
 #: derived-bound check (2).  A deliberate addition, which is the only reason this number ever moves.
 #:
-#: 97 -> 98 on 2026-09-07 (``plans/rf_shot_geometry.md``): the same file went 30 -> 31.  Removing
+#: 97 -> 98 on 2026-09-07 (PR #194): the same file went 30 -> 31.  Removing
 #: ``base`` removed the ``base + offset`` arithmetic its gate covered, and
 #: ``test_the_player_sweeps_the_whole_buffer_and_wraps`` gates what replaced it — the read pointer's
 #: wrap at ``depth``, which is the only address arithmetic the design still has.  No gate was lost:
 #: the two retired VERDICTS (``SHOT_ZERO_LEN`` and ``SHOT_WRONG_LEN``'s length half) were asserted
 #: inside gates that survive, not by gates of their own.
 #:
-#: 98 -> 115 on 2026-09-07 (``plans/rf_shot_absolute.md``): a new file,
+#: 98 -> 115 on 2026-09-07 (PR #199): a new file,
 #: ``test_rf_shot_tx_abs_xsi.py``, collects **17**.  ``absolute_index`` is a template argument, so
 #: the two settings are two pieces of RTL and the mode needs its own csynth and its own xsim
 #: snapshot — a gate that only ever elaborated the default would be asserting the mode's behaviour
@@ -58,10 +58,10 @@ import pytest
 #: is unchanged at 31: the default build is the negative control, so every one of its numbers had
 #: to keep its meaning, and every one did.
 #:
-#: 115 -> 127 on 2026-09-08 (``plans/rf_shot_absolute.md`` S2, the RECEIVE half): a new file,
+#: 115 -> 127 on 2026-09-08 (PR #201, the RECEIVE half): a new file,
 #: ``test_rf_shot_rx_abs_xsi.py``, collects **12**.  The same reason as S1's 17 — ``ABS`` is a
 #: template argument, so the mode is a second piece of RTL and needs its own csynth and its own xsim
-#: snapshot — plus one RX has and TX does not: ``plans/t2p_lock_chan.md`` S2's disjoint-region
+#: snapshot — plus one RX has and TX does not: PR #179's disjoint-region
 #: property is what makes the region enforced at RTL by construction, absolute indexing moves *when*
 #: a region is claimed, and that property can therefore only be **re-measured**, never inherited.
 #: The 12 are: the address-is-the-phase gate, the drop-leaves-a-hole gate and its negative control,

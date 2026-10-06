@@ -126,7 +126,7 @@ quietly been optimised back into a blocking read.
 
 `ShotTxLoader.region` is *"`[0, depth)` — the whole memory, which is the one region this design ever
 asks for"*. Writer and reader therefore **do** share addresses, in turn — all of them, since
-[`plans/rf_shot_geometry.md`](#) made the shot the buffer.
+[PR #194](https://github.com/sdrangan/waveflow/pull/194) made the shot the buffer.
 
 `play_chunk` is pipelined at II=1 and reads `buf[rd + i]` **unconditionally**, muxing the
 filler in afterwards (`shot_tx_player_task.h:132-136`). A register guard was measured **not** to quiet
@@ -158,7 +158,7 @@ scenario that never preempts.
 
 **"Disjoint regions are the mechanism" therefore covers RX and not TX.** The family is not uniformly
 protected. A two-region TX would fix it and would also make waveform switching gapless; it is
-recorded in `plans/rf_shot_unify.md` and is **not built**.
+recorded in [PR #181](https://github.com/sdrangan/waveflow/pull/181) and is **not built**.
 
 ## The merge, and where it actually is
 
@@ -265,7 +265,7 @@ would be a second author of one statement.
 one place that decides — the pysim twin, the generated C++ and the build's `DataSchemaStep` all take
 their pair from it, so they cannot disagree about the wire.
 
-Only the response varies now: since `plans/rf_shot_geometry.md` the header carries no length, so its
+Only the response varies now: since [PR #194](https://github.com/sdrangan/waveflow/pull/194) the header carries no length, so its
 layout is identical at every geometry.
 
 | schema | fields (bits) | total |
@@ -300,7 +300,7 @@ struct ShotTxHdr {
   design, so the largest value it can ever report fits by construction. The witness is
   `tests/hw/test_rf_shot_tx.py::test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips`,
   which builds the geometry the old code rejected and round-trips a 262144-sample length. It used to
-  watch the header's `nsamp`; `plans/rf_shot_geometry.md` moved it onto the response's field, which
+  watch the header's `nsamp`; [PR #194](https://github.com/sdrangan/waveflow/pull/194) moved it onto the response's field, which
   is the only length left on the wire and fails the same way if it wraps — reporting a partial load
   as a full one.
 * **The word stays 64 bits and the slack is a declared `_rsvd` field.** The point of deriving the
@@ -316,7 +316,7 @@ wire once. The padding is declared either way, so a narrower field would buy not
 
 ## `absolute_index`, and the one place the split matters
 
-`plans/rf_shot_absolute.md`. Three edits turn the read pointer into a timestamp, and they are the
+[PR #199](https://github.com/sdrangan/waveflow/pull/199). Three edits turn the read pointer into a timestamp, and they are the
 whole of the mode:
 
 1. **the advance is unconditional** — `rd` moves and wraps on every firing, filler included;
@@ -342,7 +342,7 @@ copied bodies would be two designs that drift.
 
 ### The same parameter on the receive side
 
-`plans/rf_shot_absolute.md` S2. `PingPongCapture` takes the same `absolute_index`, and the shape is
+[PR #201](https://github.com/sdrangan/waveflow/pull/201). `PingPongCapture` takes the same `absolute_index`, and the shape is
 the mirror image: `wp` was **fill-driven** — it did not advance on a drop — which is the only reason
 an RX address was relative, exactly as `rd = 0` on accept was the only reason a TX one was. Two edits:
 
@@ -443,7 +443,7 @@ simply stops writing when its passes run out. **Quiet is a value.**
 `base + offset` was the shape of the byte-versus-word addressing bug: consistently mis-scaled
 addressing round-trips *perfectly* right up to the point where the memory wraps, so the assertion was
 which elements the writer actually touched, not that the data came back.
-`plans/rf_shot_geometry.md` removed `base`, and its argument was that **the bug class disappears
+[PR #194](https://github.com/sdrangan/waveflow/pull/194) removed `base`, and its argument was that **the bug class disappears
 rather than going untested** — the loader writes `mem[i]`, the player reads `mem[i]`, and the only
 address arithmetic left is the read pointer's wrap at `depth`, which is a mask because `depth` is a
 power of two. So the write-range assertion stays (it is what says the counted load pass *fills* the
@@ -482,5 +482,5 @@ converter blocks: **640 words captured, 0 dropped**, window 516 words, last wind
 ## Next
 
 - [Transmit — `RfShotTx`](./tx.md) and [Receive — `RfShotRx`](./rx.md) — the user-facing pages.
-- `plans/rf_shot_unify.md` — how four designs became two, and what each stage measured.
-- `plans/t2p_lock_chan.md` — the lock itself, and what its two stages built.
+- [PR #181](https://github.com/sdrangan/waveflow/pull/181) — how four designs became two, and what each stage measured.
+- [PR #178](https://github.com/sdrangan/waveflow/pull/178) — the lock itself, and what its two stages built.

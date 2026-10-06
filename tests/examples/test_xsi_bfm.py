@@ -3,7 +3,7 @@
 **Why this file exists.**  These four cycle counts are the only evidence that the generated
 ``ap_ctrl_none`` tops, the hand-written framed/interleaver task bodies, and the BFM library are
 correct, and until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
-someone happened to re-run ``run.bat``.  ``plans/xsi_tb_codegen.md`` records them as Stage 1's gate;
+someone happened to re-run ``run.bat``.  the xsi_tb_codegen plan (commit 3052952) records them as Stage 1's gate;
 this makes the gate real.
 
 Run: ``pytest tests/examples/test_xsi_bfm.py -m xsi``  (needs Vivado xsim + mingw g++, and a prior
@@ -197,7 +197,7 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
         )
         assert f"cycles={want_cycles}" in out, (
             f"{top} cycle count moved (want {want_cycles}).  That is a real behaviour change: either a\n"
-            f"regression, or an improvement worth re-recording in plans/xsi_tb_codegen.md.\n{out[-2000:]}"
+            f"regression, or an improvement worth re-recording in this gate's expected count.\n{out[-2000:]}"
         )
 
 

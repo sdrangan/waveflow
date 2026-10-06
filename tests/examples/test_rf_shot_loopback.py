@@ -1,4 +1,4 @@
-"""The pair, closed through a converter — ``plans/rf_shot_absolute.md`` S3.
+"""The pair, closed through a converter — PR #202.
 
 **The headline: the channel delay is an address difference.** A sample the transmitter sent from
 ``mem[j]`` arrives at ``mem[(j + D) mod depth]``, so ``D`` is read off a window header and one sample
@@ -10,7 +10,7 @@ loosely-timed model, and both halves are already synthesized and RTL-gated by th
 this very ``absolute_index = 1``: ``test_rf_shot_tx_abs_xsi.py`` (17 gates) and
 ``test_rf_shot_rx_abs_xsi.py`` (12). Re-deriving the address correspondence through RTL would need a
 second locked memory inside one kernel and a C++ twin for the path's delay, and would restate a
-number two green gate sets already stand behind. See ``plans/rf_shot_absolute.md`` S3, *What S3
+number two green gate sets already stand behind. See PR #202, *What S3
 built*, for that decision and what it would take to change it.
 
 **This does not re-gate S1 or S2.** Every assertion below needs *both* ends: a transmitter phase

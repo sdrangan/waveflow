@@ -83,7 +83,7 @@ Between them every legal verdict is exercised — asserted by
 | `samp_rate` | 256 MSa/s | the converter's grid |
 
 **Two numbers, and it was four.** `nword` (64 words, one shot) and `base` (192, placing the region at
-the top of the memory) are gone — `plans/rf_shot_geometry.md` made the shot *be* the buffer, so
+the top of the memory) are gone — [PR #194](https://github.com/sdrangan/waveflow/pull/194) made the shot *be* the buffer, so
 `depth` is the length as well as the size and there is nowhere else a shot could sit. `depth` is 64
 rather than a rounder 256 deliberately: it is what `nword` was, so the played length is unchanged and
 every recorded number on these pages stayed comparable across the change.

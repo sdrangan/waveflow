@@ -1,4 +1,4 @@
-"""rf_shot_loopback.py — ``plans/rf_shot_absolute.md`` S3: **the delay is an address difference**.
+"""rf_shot_loopback.py — PR #202: **the delay is an address difference**.
 
 One converter, both directions, and a path between them::
 

@@ -1,6 +1,6 @@
 """Continuous capture: fill one half while a reader drains the other, and lose nothing.
 
-``plans/t2p_lock_chan.md`` S2, checkpoint 1 — the lock's **second** consumer, and the direction the
+PR #179, checkpoint 1 — the lock's **second** consumer, and the direction the
 region parameter was built for.  S1 proved a handover; this proves two regions, which is the only
 dimension S1 left unverified.
 
@@ -500,7 +500,7 @@ def test_the_first_window_is_CAP_OK_because_nothing_precedes_it():
 
 
 # ---------------------------------------------------------------------------
-# The index is a timestamp — ``plans/rf_shot_absolute.md`` S2
+# The index is a timestamp — PR #201
 # ---------------------------------------------------------------------------
 #
 # The bench source is a ramp of WORDS whose value IS its index (`np.arange(i*BLK_WORDS, ...)`), so
@@ -629,7 +629,7 @@ class _AdvancesOnDropButStillSearches(RfShotRx.capture_cls):
     """The shipped capture with the advance made unconditional and **the region search left alone**.
 
     The natural wrong edit, and the exact mirror of S1's ``_CountsPassesWhilePlayingFiller``: half
-    of ``plans/rf_shot_absolute.md`` S2 applied. ``wp`` now moves on a drop — that part is right —
+    of PR #201 applied. ``wp`` now moves on a drop — that part is right —
     but the placement decision is still *find any free region and restart at its beginning*, so the
     first block after a stall resets the pointer to a region base and everything the unconditional
     advance bought is thrown away on the spot.
@@ -691,7 +691,7 @@ def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK(
 
     That coarseness is not only a cost: it is what keeps an announced window from ever being part
     stale, and therefore what lets the header localize a hole with no per-block valid mask
-    (``plans/rf_shot_absolute.md`` S2, *what is in a hole*).
+    (PR #201, *what is in a hole*).
     """
     lo = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=0)
     hi = run_capture(stall_blocks=STALL, n_blocks=CONTROL_BLOCKS, absolute_index=1)

@@ -263,7 +263,7 @@ class RtlSimStep(BuildStep):
         That is not a hypothetical either.  The harness carries the scenario's arena size and its
         ``h.run(N)`` cycle bound, so a sweep silently ran every point under the committed gate's
         3400-cycle bound: the larger points were cut off mid-job and the missing firings read as a
-        *design stall* -- see ``plans/sweep_runner.md``.  Forcing the codegen step does not help,
+        *design stall* -- see the sweep_runner plan (commit 3d74877).  Forcing the codegen step does not help,
         because a step outside the closure is never consulted, forced or not.
     prepare : callable | None
         Called as ``prepare(xsi_dir, config)`` before the run, to materialize the scenario bundles the
