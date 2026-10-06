@@ -56,7 +56,7 @@ Acceptance for PR1 is "all non-Vitis tests pass and the Python pipeline runs cle
 
 In scope: Phases 5 and 6. Out of CI's reach; the developer with Vitis access opens this PR after PR1 lands, runs `pytest -m vitis tests/examples/test_poly_demo.py` locally to verify, and pushes.
 
-A separate plan file is not strictly needed — a follow-up issue can reference Phases 5–6 of this plan directly. When opening PR2, copy [Phase 5](#phase-5--c-kernel-examplespolypolycpp-polyhpp) and [Phase 6](#phase-6--c-testbench-examplespolypoly_tbcpp) from this document into the issue body for the implementer's convenience.
+A separate plan file is not strictly needed — a follow-up issue can reference Phases 5–6 of this plan directly. When opening PR2, copy Phase 5 and Phase 6 from this document into the issue body for the implementer's convenience.
 
 ---
 

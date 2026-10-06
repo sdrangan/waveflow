@@ -369,7 +369,7 @@ Renders a table suitable for inclusion in design docs:
 | 0x10   | —   | x            | RW     | 32    | Input operand                |
 | 0x18   | —   | a            | RW     | 32    | Multiply coefficient         |
 | 0x20   | —   | b            | RW     | 32    | Bias term                    |
-| 0x28   | —   | y            | R      | 32    | relu(a*x + b)                |
+| 0x28   | —   | y            | R      | 32    | `relu(a*x + b)`              |
 ```
 
 ### C header

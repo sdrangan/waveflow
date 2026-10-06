@@ -142,8 +142,9 @@ data -- a count of clipped samples, the index of a peak, a checksum -- has a val
 after the last sample.  It cannot go in the response header without buffering the whole burst first,
 which costs memory and a burst of latency.  That value goes in a **response footer**, after the data:
 
-```python
-class ClipRespFtr(DataList):          # a gain-and-clip kernel's footer
+```text
+# A sketch -- not part of this example: a gain-and-clip kernel's footer.
+class ClipRespFtr(DataList):
     elements = {
         "n_clip_lo": {"schema": U16, "description": "samples clipped at the lower bound"},
         "n_clip_hi": {"schema": U16, "description": "samples clipped at the upper bound"},

@@ -12,7 +12,9 @@ summary: "The command-response contract between a host and a streaming kernel, t
 What is the contract between a host and a command-driven streaming kernel?  This example
 answers it with a small accelerator that evaluates a polynomial
 
-$$y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$$
+$$
+y = c_0 + c_1 x + c_2 x^2 + c_3 x^3
+$$
 
 on bursts of float32 samples.  The arithmetic is deliberately trivial so that everything here is
 about the **protocol**: what crosses each interface, who is responsible for what, and what happens
