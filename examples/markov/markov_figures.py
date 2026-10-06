@@ -25,16 +25,18 @@ from typing import Any, ClassVar
 import numpy as np
 
 import matplotlib
+from matplotlib.backends.backend_svg import FigureCanvasSVG
+from matplotlib.figure import Figure
 
-matplotlib.use("svg")
 # Deterministic SVG: a stable hashsalt fixes the element ids matplotlib would otherwise randomize, so a
-# re-render only diffs when the figure truly changed.
-matplotlib.rcParams["svg.hashsalt"] = "markov_figures"
-import matplotlib.pyplot as plt  # noqa: E402
+# re-render only diffs when the figure truly changed.  The figure is laid out and saved on its own SVG
+# canvas with its own salt -- never through pyplot's process-wide backend or rcParams, which another
+# module's figures (in the same test session) may set: text measured by Agg moves the tight layout.
+_SALT = {"svg.hashsalt": "markov_figures"}
 
-from waveflow.build.build import BuildConfig, BuildStep  # noqa: E402
+from waveflow.build.build import BuildConfig, BuildStep
 
-from examples.markov.markov import UBITS, markov_golden  # noqa: E402
+from examples.markov.markov import UBITS, markov_golden
 
 FIGURE_MANIFEST = [
     {"name": "chain_output", "source": "results/chain_output.svg",
@@ -55,8 +57,11 @@ def stationary(p01: int, p10: int) -> float:
     return p01 / (p01 + p10)
 
 
+@matplotlib.rc_context(_SALT)
 def render_chain_output(path: Path) -> None:
-    fig, (top, bot) = plt.subplots(2, 1, figsize=(8, 5.6), gridspec_kw={"height_ratios": [1, 1.2]})
+    fig = Figure(figsize=(8, 5.6))
+    FigureCanvasSVG(fig)
+    top, bot = fig.subplots(2, 1, gridspec_kw={"height_ratios": [1, 1.2]})
     for i, (label, p01, p10, color) in enumerate(SETTINGS):
         x = markov_golden(dict(n=NLONG, x0=0, seed=SEED + i, p01=p01, p10=p10)).astype(float)
         off = 1.5 * (len(SETTINGS) - 1 - i)
@@ -87,7 +92,6 @@ def _save_svg(fig, path: Path) -> None:
     """Write a deterministic SVG (no embedded timestamp)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None})
-    plt.close(fig)
 
 
 def _sha256(path: Path) -> str:
