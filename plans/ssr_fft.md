@@ -422,7 +422,23 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
     the one construct the deadlock law covers);
   - the last frame of a burst drains completely.
 
-### F4 — all lengths, timing, resources
+### F4 — all lengths, timing, resources  ✅ DONE (2026-10-06, ping-pong reorder)
+
+> XSI + csynth, RFSoC 4x2 at 250 MHz, 8 frames back to back, every frame bit-exact, timing met at
+> every length (worst slack 0.00 ns at L = 4096 -- no margin there):
+>
+> | L | interval | `VitisFft` interval | DSP | BRAM | LUT | FF | `VitisFft` BRAM / LUT / FF |
+> |---|---|---|---|---|---|---|---|
+> | 16 | **4** | 41 | 12 | 5 | 5.9K | 4.9K | 0 / 8.0K / 4.7K |
+> | 64 | **16** | 120 | 24 | 0 | 10.6K | 8.6K | 0 / 13.0K / 8.5K |
+> | 256 | **64** | 480 | 36 | 14 | 15.2K | 13.6K | 28 / 19.3K / 13.0K |
+> | 1024 | **256** | 2556 | 48 | 50 | 21.6K | 25.0K | 40 / 23.1K / 19.2K |
+> | 4096 | **1024** | 10240 | 60 | 122 | 34.6K | 55.2K | 55 / 28.4K / 25.4K |
+>
+> The interval is `L/R` at every length -- 7.5 to 10 times the vendor core's -- with the same DSPs
+> (`12·(S−1)`).  What the throughput costs is memory at large `L`: at 4096 about twice the BRAM and
+> FF (the commutators' delay lines and the two-frame reorder buffer).  Builds were scratch
+> (`C:/Users/sdran/sxL*`); only L = 64 has a committed gate.
 
 - `L = 16 … 4096`.
 - **Gates:**
