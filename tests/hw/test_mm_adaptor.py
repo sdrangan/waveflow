@@ -21,8 +21,17 @@ def test_mm_fir_one_front_is_bit_exact_and_no_faster_than_per_view():
     assert b.adaptor.errors == []
     # The host has a writer and a reader process.  Behind separate fronts the reader's pops and the
     # writer's pushes overlap; behind one front they take turns -- that serialization is the
-    # ordering guarantee, and it costs time.
-    assert a.sim.env.now < b.sim.env.now
+    # ordering guarantee, and it costs time.  With the kernel's measured per-packet costs the kernel
+    # is the bottleneck (40 cycles a packet) and hides it, so one front is only no faster ...
+    assert a.sim.env.now <= b.sim.env.now
+    # ... and with those costs zeroed the bus is the bottleneck, and the serialization shows.
+    fast = []
+    for one_front in (False, True):
+        s = MmFirSystem(x=list(x), plan=plan, one_front=one_front)
+        s.fir.hdr_cycles = s.fir.tail_cycles = s.fir.restart_cycles = 0
+        assert np.array_equal(s.run(), fir_golden(x, plan))
+        fast.append(s.sim.env.now)
+    assert fast[0] < fast[1]
 
 
 def test_span_and_offsets():
