@@ -106,7 +106,9 @@ import pytest
 #:
 #: 146 -> 149 on 2026-10-05 (plans/vitis_l1_hwmodule.md S3): VitisFft at RTL -- the vendor FFT in a
 #: generated free-running top, bit-exact on four frames, its frame cycles, and the pysim matching them.
-WANT_XSI_GATES = 149
+#: 149 -> 155 on 2026-10-06 (plans/ssr_fft.md F3): SsrFft at RTL -- both reorders x bits, interval,
+#: timing (tests/dsp/ssr_fft/test_xsi.py).
+WANT_XSI_GATES = 155
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
