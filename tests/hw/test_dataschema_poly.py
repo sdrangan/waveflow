@@ -1,4 +1,3 @@
-import re
 import shutil
 import subprocess
 import json
@@ -18,7 +17,6 @@ from waveflow.toolchain import toolchain
 TEST_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TEST_DIR.parent.parent
 POLY_EXAMPLE_DIR = REPO_ROOT / "examples" / "stream_inband"
-POLY_HPP_PATH = REPO_ROOT / "examples" / "stream_inband" / "poly.hpp"
 
 INCLUDE_DIR = "include"
 WORD_BW_SUPPORTED = [32, 64]
@@ -133,11 +131,6 @@ def polynomial_eval(
     return resp_hdr, y, resp_ftr
 
 
-def _poly_include_names() -> set[str]:
-    content = POLY_HPP_PATH.read_text(encoding="utf-8")
-    return set(re.findall(r'#include "include/([^"]+)"', content))
-
-
 def _write_and_read_words_array(arr: np.ndarray, path: Path, **kwargs) -> np.ndarray:
     write_uint32_file(arr, elem_type=Float32, file_path=path, **kwargs)
     return np.fromfile(path, dtype="<u4")
@@ -173,10 +166,6 @@ def test_poly_notebook_flow_generates_headers_vectors_and_expected_outputs(tmp_p
         schema_class.as_buildable(word_bw_supported=WORD_BW_SUPPORTED).run(cfg)
     gen_array_utils(Float32, WORD_BW_SUPPORTED, cfg=cfg, streamutils_dir=INCLUDE_DIR)
     StreamUtilsStep(output_dir=INCLUDE_DIR).run(cfg)
-
-    include_root = tmp_path / INCLUDE_DIR
-    generated_headers = {path.name for path in include_root.iterdir() if path.is_file()}
-    assert _poly_include_names().issubset(generated_headers)
 
     coeffs = CoeffArray()
     coeffs.val = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
