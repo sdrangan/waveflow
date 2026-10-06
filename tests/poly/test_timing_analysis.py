@@ -49,6 +49,12 @@ class TestVcdLoading:
     def test_fixture_exists(self) -> None:
         assert FIXTURE_VCD.exists(), f"Fixture VCD not found: {FIXTURE_VCD}"
 
+    def test_fixture_is_what_the_generator_renders(self) -> None:
+        from tests.poly.poly_timing_fixture import render
+
+        assert FIXTURE_VCD.read_text(encoding="utf-8") == render(), (
+            "the poly timing fixture is stale: python -m tests.poly.poly_timing_fixture")
+
     def test_analyze_returns_result(self, result: PolyTimingResult) -> None:
         assert isinstance(result, PolyTimingResult)
 

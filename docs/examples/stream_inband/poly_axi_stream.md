@@ -134,7 +134,9 @@ tests/fixtures/poly/timing/poly_timing_fixture.vcd
 ```
 
 This fixture contains a 3-sample transaction (`nsamp=3`) and is **never
-overwritten** by regular demo runs.  To load it:
+overwritten** by regular demo runs.  It is synthetic, rendered from the current
+schema and model by `python -m tests.poly.poly_timing_fixture`; a test fails if
+the committed file drifts from what that renders.  To load it:
 
 ```python
 from pathlib import Path

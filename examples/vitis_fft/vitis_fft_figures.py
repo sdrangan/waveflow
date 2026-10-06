@@ -28,19 +28,22 @@ OUT = HERE.parents[1] / "docs" / "examples" / "vitis_fft" / "images"
 BLUE, ORANGE = "#2a78d6", "#eb6834"
 SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
-plt.rcParams.update({
+#: Applied per figure (plt.rc_context), never to the process: an import-time rcParams.update
+#: restyled -- and re-salted -- every figure rendered after it in the same process.
+STYLE = {
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
     "axes.edgecolor": GRID, "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2,
     "text.color": INK, "font.size": 10, "axes.grid": True, "grid.color": GRID,
     "grid.linewidth": 0.8, "axes.spines.top": False, "axes.spines.right": False,
     "svg.hashsalt": "vitis_fft", "svg.fonttype": "none",
-})
+}
 
 
 def _spans(model_dir: Path, length: int) -> pd.Series:
     return pd.read_csv(model_dir / "rtl" / f"L{length}" / "firings.csv")["span"].astype(float)
 
 
+@plt.rc_context(STYLE)
 def timing_per_sample(proc_dir: Path, ii_dir: Path, path: Path) -> None:
     """Cycles per L/R word, against L: the frame interval and the isolated-frame processing span
     (mean, with its min-max range across arrival phases).  One axis -- both are cycles per word."""
@@ -75,6 +78,7 @@ def timing_per_sample(proc_dir: Path, ii_dir: Path, path: Path) -> None:
     plt.close(fig)
 
 
+@plt.rc_context(STYLE)
 def phase_spread(proc_dir: Path, path: Path) -> None:
     """Every isolated frame's processing span, as a percentage off the mean at its length: the
     error the LT model's single number makes, frame by frame."""
@@ -109,6 +113,7 @@ def _resources(platform: Path) -> dict[int, dict]:
     return dict(sorted(out.items()))
 
 
+@plt.rc_context(STYLE)
 def resources(platform: Path, path: Path) -> None:
     """Small multiples, one counter per panel (different units, so never one shared axis)."""
     res = _resources(platform)

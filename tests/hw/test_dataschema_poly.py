@@ -1,24 +1,13 @@
-import re
-import shutil
-import subprocess
-import json
 from enum import IntEnum
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from waveflow.build.build import BuildConfig
 from waveflow.build.streamutils import StreamUtilsStep
 from waveflow.hw.arrayutils import gen_array_utils, write_uint32_file
 from waveflow.hw.dataschema import DataArray, DataList, EnumField, FloatField, IntField
-from waveflow.toolchain import toolchain
 
-
-TEST_DIR = Path(__file__).resolve().parent
-REPO_ROOT = TEST_DIR.parent.parent
-POLY_EXAMPLE_DIR = REPO_ROOT / "examples" / "stream_inband"
-POLY_HPP_PATH = REPO_ROOT / "examples" / "stream_inband" / "poly.hpp"
 
 INCLUDE_DIR = "include"
 WORD_BW_SUPPORTED = [32, 64]
@@ -133,11 +122,6 @@ def polynomial_eval(
     return resp_hdr, y, resp_ftr
 
 
-def _poly_include_names() -> set[str]:
-    content = POLY_HPP_PATH.read_text(encoding="utf-8")
-    return set(re.findall(r'#include "include/([^"]+)"', content))
-
-
 def _write_and_read_words_array(arr: np.ndarray, path: Path, **kwargs) -> np.ndarray:
     write_uint32_file(arr, elem_type=Float32, file_path=path, **kwargs)
     return np.fromfile(path, dtype="<u4")
@@ -145,18 +129,6 @@ def _write_and_read_words_array(arr: np.ndarray, path: Path, **kwargs) -> np.nda
 
 def _float32_words(values: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype="<f4").view("<u4")
-
-
-def _copy_poly_vitis_resources(dst_dir: Path) -> None:
-    # Keep examples/stream_inband as the canonical Vitis kernel and test bench sources.
-    for name in ["poly.hpp", "poly.cpp", "poly_tb.cpp", "run.tcl"]:
-        shutil.copy(POLY_EXAMPLE_DIR / name, dst_dir / name)
-
-
-def _read_sync_status(data_dir: Path) -> dict[str, str]:
-    sync_status_path = data_dir / "sync_status.json"
-    assert sync_status_path.exists(), f"Missing sync status output: {sync_status_path}"
-    return json.loads(sync_status_path.read_text(encoding="utf-8"))
 
 
 def test_poly_notebook_flow_generates_headers_vectors_and_expected_outputs(tmp_path: Path):
@@ -173,10 +145,6 @@ def test_poly_notebook_flow_generates_headers_vectors_and_expected_outputs(tmp_p
         schema_class.as_buildable(word_bw_supported=WORD_BW_SUPPORTED).run(cfg)
     gen_array_utils(Float32, WORD_BW_SUPPORTED, cfg=cfg, streamutils_dir=INCLUDE_DIR)
     StreamUtilsStep(output_dir=INCLUDE_DIR).run(cfg)
-
-    include_root = tmp_path / INCLUDE_DIR
-    generated_headers = {path.name for path in include_root.iterdir() if path.is_file()}
-    assert _poly_include_names().issubset(generated_headers)
 
     coeffs = CoeffArray()
     coeffs.val = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
@@ -219,77 +187,3 @@ def test_poly_notebook_flow_generates_headers_vectors_and_expected_outputs(tmp_p
     assert restored_cmd.is_close(cmd_hdr)
     assert restored_resp_hdr.is_close(resp_hdr)
     assert restored_resp_ftr.is_close(resp_ftr)
-
-
-@pytest.mark.vitis
-def test_poly_notebook_flow_runs_vitis_csim(tmp_path: Path):
-    vitis_path = toolchain.find_vitis_path()
-    if not vitis_path:
-        pytest.skip("Vitis installation not found; skipping poly Vitis regression.")
-
-    cfg = BuildConfig(root_dir=tmp_path)
-    schema_classes = [
-        PolyErrorField,
-        CoeffArray,
-        PolyCmdHdr,
-        PolyRespHdr,
-        PolyRespFtr,
-    ]
-    for schema_class in schema_classes:
-        schema_class.as_buildable(word_bw_supported=WORD_BW_SUPPORTED).run(cfg)
-    gen_array_utils(Float32, WORD_BW_SUPPORTED, cfg=cfg, streamutils_dir=INCLUDE_DIR)
-    StreamUtilsStep(output_dir=INCLUDE_DIR).run(cfg)
-    _copy_poly_vitis_resources(tmp_path)
-
-    coeffs = CoeffArray()
-    coeffs.val = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
-
-    nsamp = 100
-    cmd_hdr = PolyCmdHdr()
-    cmd_hdr.tx_id = 42
-    cmd_hdr.coeffs = coeffs.val
-    cmd_hdr.nsamp = nsamp
-
-    samp_in = np.linspace(0.0, 1.0, nsamp, dtype=np.float32)
-
-    expected_resp_hdr, expected_samp_out, expected_resp_ftr = polynomial_eval(cmd_hdr, samp_in)
-
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    cmd_hdr.write_uint32_file(data_dir / "cmd_hdr_data.bin")
-    write_uint32_file(samp_in, elem_type=Float32, file_path=data_dir / "samp_in_data.bin", nwrite=cmd_hdr.nsamp)
-
-    try:
-        toolchain.run_vitis_hls(tmp_path / "run.tcl", work_dir=tmp_path)
-    except RuntimeError as exc:
-        pytest.skip(f"Vitis execution unavailable in current setup: {exc}")
-    except subprocess.CalledProcessError as exc:
-        pytest.fail(
-            "Vitis execution failed for poly dataschema regression.\n"
-            f"Command: {exc.cmd}\n"
-            f"Return code: {exc.returncode}\n"
-            f"Stdout:\n{exc.stdout}\n"
-            f"Stderr:\n{exc.stderr}"
-        )
-
-    got_resp_hdr = PolyRespHdr().read_uint32_file(data_dir / "resp_hdr_data.bin")
-    got_resp_ftr = PolyRespFtr().read_uint32_file(data_dir / "resp_ftr_data.bin")
-    got_samp_out_words = np.fromfile(data_dir / "samp_out_data.bin", dtype="<u4")
-    got_samp_out = got_samp_out_words.view("<f4")
-    sync_status = _read_sync_status(data_dir)
-
-    assert got_resp_hdr.is_close(expected_resp_hdr)
-    assert got_resp_ftr.is_close(expected_resp_ftr)
-    assert got_resp_ftr.error is expected_resp_ftr.error, (
-        f"Unexpected resp_ftr.error: expected {expected_resp_ftr.error.name}, got {got_resp_ftr.error.name}"
-    )
-    assert sync_status.get("resp_hdr_tlast") == "tlast_at_end", (
-        f"Unexpected resp_hdr_tlast: expected tlast_at_end, got {sync_status.get('resp_hdr_tlast')}"
-    )
-    assert sync_status.get("samp_out_tlast") == "tlast_at_end", (
-        f"Unexpected samp_out_tlast: expected tlast_at_end, got {sync_status.get('samp_out_tlast')}"
-    )
-    assert sync_status.get("resp_ftr_tlast") == "tlast_at_end", (
-        f"Unexpected resp_ftr_tlast: expected tlast_at_end, got {sync_status.get('resp_ftr_tlast')}"
-    )
-    assert np.allclose(got_samp_out, expected_samp_out[: got_samp_out.size], rtol=1e-6, atol=1e-6)

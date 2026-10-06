@@ -27,13 +27,15 @@ OUT = HERE.parents[1] / "docs" / "examples" / "ssr_fft" / "images"
 BLUE, ORANGE = "#2a78d6", "#eb6834"
 SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
-plt.rcParams.update({
+#: Applied per figure (plt.rc_context), never to the process: an import-time rcParams.update
+#: restyled -- and re-salted -- every figure rendered after it in the same process.
+STYLE = {
     "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
     "axes.edgecolor": GRID, "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2,
     "text.color": INK, "font.size": 10, "axes.grid": True, "grid.color": GRID,
     "grid.linewidth": 0.8, "axes.spines.top": False, "axes.spines.right": False,
     "svg.hashsalt": "ssr_fft", "svg.fonttype": "none",
-})
+}
 
 
 def ssr_runs(reorder: str = "pingpong") -> dict[int, dict]:
@@ -66,6 +68,7 @@ def _xaxis(ax, xs) -> None:
     ax.minorticks_off()
 
 
+@plt.rc_context(STYLE)
 def interval(ssr: dict, vit: dict, path: Path) -> None:
     """Cycles a frame against L, log-log, both modules -- and L/R, which SsrFft sits on."""
     xs = [n for n in ssr if n in vit]
@@ -91,6 +94,7 @@ def interval(ssr: dict, vit: dict, path: Path) -> None:
     plt.close(fig)
 
 
+@plt.rc_context(STYLE)
 def resources(ssr: dict, vit: dict, path: Path) -> None:
     """Small multiples, one counter per panel (different units, so never one shared axis)."""
     xs = [n for n in ssr if n in vit]
