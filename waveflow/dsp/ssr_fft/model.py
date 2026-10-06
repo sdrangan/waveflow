@@ -20,8 +20,16 @@ Every commutator is the same operation, an ``R x R`` **block transpose**: cut th
 groups of ``R`` slots of ``D`` words; slot ``i`` lane ``j`` moves to slot ``j`` lane ``i``.  A group
 spans ``R*D <= L/R`` words, so a commutator never mixes frames.
 
-Scope: ``R = 4``, ``L = 4^S`` with ``S >= 2``, ``SSR_FFT_NO_SCALING``, forward transform -- what
-``fft_general`` has measured.
+**Inverse.**  ``Geometry(inverse=True)`` is the vendor's ``REVERSE_TRANSFORM`` arithmetic: the
+same pipeline with conjugated twiddles and radix-4 constants (both ROMs, so no hardware changes).
+Its ``1/L`` is where this design departs from the library, deliberately: the library divides by
+``L`` at the old resolution (truncating toward zero, so the low ``log2 L`` bits are always 0); here
+the bits are the unscaled transform's and only the binary point moves (``out_fmt`` has
+``log2 L`` fewer integer bits than :attr:`Geometry.raw_out_fmt`) -- exact and free.
+``waveflow.vitis_l1.fft.ifft_scale`` maps these bits onto the library's.
+
+Scope: ``R = 4``, ``L = 4^S`` with ``S >= 2``, ``SSR_FFT_NO_SCALING`` -- what ``fft_general`` has
+measured, in both directions.
 """
 from __future__ import annotations
 
@@ -43,7 +51,8 @@ R = 4
 class Geometry:
     """Everything about an SSR FFT that follows from ``L`` and the formats.
 
-    ``in_w, in_i`` is the input ``ap_fixed`` format; ``tw_w, tw_i`` the twiddle table's.
+    ``in_w, in_i`` is the input ``ap_fixed`` format; ``tw_w, tw_i`` the twiddle table's;
+    ``inverse`` selects the inverse transform (``1/L`` included, see the module docstring).
     """
     L: int
     in_w: int = 16
@@ -52,6 +61,7 @@ class Geometry:
     tw_i: int = 2
     mode: str = NO_SCALING
     R: int = R
+    inverse: bool = False
 
     def __post_init__(self) -> None:
         if self.R != R:
@@ -101,19 +111,29 @@ class Geometry:
         """The format stage ``s`` writes: the next stage's input, or the output for the last."""
         if s < self.S - 1:
             return self.stage_fmts[s + 1][0]
-        return self.out_fmt
+        return self.raw_out_fmt
+
+    @property
+    def raw_out_fmt(self) -> Format:
+        """What the last stage writes: the library's unscaled output format, either direction."""
+        g_last = self.stage_fmts[-1][1]
+        return _f(g_last.W - 1, g_last.int_bits)
 
     @property
     def out_fmt(self) -> Format:
-        g_last = self.stage_fmts[-1][1]
-        return _f(g_last.W - 1, g_last.int_bits)
+        """The output format: :attr:`raw_out_fmt`, with the inverse's ``1/L`` as ``log2 L`` fewer
+        integer bits -- the same stored bits, so the scaling costs nothing."""
+        f = self.raw_out_fmt
+        return _f(f.W, f.int_bits - _log(self.L, 2)) if self.inverse else f
 
     def edges(self) -> list[tuple[str, Format]]:
         """Every stream edge, in pipeline order, with the format it carries.
 
         ``in``, the transposer's ``tp*``, each stage's ``st*`` and commutator's ``cm*``, then the
         reorder's commutator ``rc`` and the natural-order ``out`` (the SOB between ``rc`` and
-        ``out`` is a block channel, not a stream edge).
+        ``out`` is a block channel, not a stream edge).  The last stage's edge carries
+        :attr:`raw_out_fmt`; ``rc`` onwards carries :attr:`out_fmt` -- for the inverse, ``rc``
+        reads the stage's words through the scaled type, which is where ``1/L`` happens.
         """
         out = [("in", self.in_fmt)]
         out += [(f"tp{k}", self.in_fmt) for k in range(self.S - 1)]
@@ -128,7 +148,7 @@ class Geometry:
     @cached_property
     def twiddles(self) -> tuple[np.ndarray, np.ndarray]:
         """``W_L^i`` as the hardware stores it, ``i = 0 .. L-1`` (quarter-wave reconstruction)."""
-        return twiddle_stored(self.L, self.tw_w, self.tw_i)
+        return twiddle_stored(self.L, self.tw_w, self.tw_i, self.inverse)
 
     def twiddle_index(self, s: int) -> np.ndarray:
         """``[word, lane q]`` -> index into :attr:`twiddles` for stage ``s``'s rotation.
@@ -241,7 +261,8 @@ def stage(geo: Geometry, s: int, re: np.ndarray, im: np.ndarray) -> tuple[np.nda
     """
     f_in, _ = geo.stage_fmts[s]
     # _dft4 takes axis 0 = butterfly input p; a word's lanes are exactly that.
-    orr, oii, g = _dft4(re.T, im.T, f_in, s == 0, geo.mode, geo.tw_w, geo.tw_i)   # [q, word]
+    orr, oii, g = _dft4(re.T, im.T, f_in, s == 0, geo.mode, geo.tw_w, geo.tw_i,
+                        geo.inverse)                                             # [q, word]
     if s < geo.S - 1:
         f_next = geo.stage_fmts[s + 1][0]
         op1 = g
@@ -253,7 +274,7 @@ def stage(geo: Geometry, s: int, re: np.ndarray, im: np.ndarray) -> tuple[np.nda
         orr, oii = complex_multiply(orr, oii, op1, np.asarray(tw_r)[idx], np.asarray(tw_i)[idx],
                                     exp_table_format(geo.tw_w, geo.tw_i), f_next)
     else:
-        fout = geo.out_fmt
+        fout = geo.raw_out_fmt
         if (g.W, g.int_bits) != (fout.W, fout.int_bits):
             orr, oii = fp.quantize(orr, g, fout), fp.quantize(oii, g, fout)
     return (np.ascontiguousarray(np.asarray(orr, dtype=np.int64).T),
@@ -281,13 +302,15 @@ def pipeline(geo: Geometry, re: np.ndarray, im: np.ndarray, *, natural: bool = T
 
 
 def ssr_fft(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int = 16, in_i: int = 2,
-            tw_w: int = 18, tw_i: int = 2) -> tuple[np.ndarray, np.ndarray, Format]:
+            tw_w: int = 18, tw_i: int = 2, inverse: bool = False
+            ) -> tuple[np.ndarray, np.ndarray, Format]:
     """Natural-order samples in, natural-order bins out -- ``fft_general``'s signature.
 
     Computed through :func:`pipeline`, so equality with ``fft_general`` checks the wire order of
-    every edge, not just the arithmetic.
+    every edge, not just the arithmetic.  For the inverse the bits equal
+    ``fft_general(..., inverse=True, exact_scale=True)``.
     """
-    geo = Geometry(length, in_w, in_i, tw_w, tw_i)
+    geo = Geometry(length, in_w, in_i, tw_w, tw_i, inverse=inverse)
     re, im = pipeline(geo, to_words(np.asarray(x_re, dtype=np.int64)),
                       to_words(np.asarray(x_im, dtype=np.int64)))
     return re.reshape(-1), im.reshape(-1), geo.out_fmt

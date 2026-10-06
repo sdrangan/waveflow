@@ -6,7 +6,7 @@ nav_order: 1
 audience: python
 api: [SsrFft, Geometry]
 snippets: run
-summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the boundary (one RadixWord port each way, or VitisFft's four lanes), the reorder implementation, the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
+summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the boundary (one RadixWord port each way, or VitisFft's four lanes), the reorder implementation, the direction (inverse=True, with an exact 1/L), the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
 ---
 
 # Parameters
@@ -85,6 +85,27 @@ print("reorder tasks:", [c.task.inst for c in pp.tasks if c.task.inst.startswith
 reorder tasks: ['rc', 'rp']
 ```
 
+`inverse=True` gives the inverse transform, `1/L` included. It is the same pipeline with conjugated
+twiddle ROMs (AMD's `REVERSE_TRANSFORM` arithmetic, bit for bit). The `1/L` costs nothing: the output
+words carry the same bits as the unscaled transform, read with `log2 L` fewer integer bits:
+
+```python
+fwd = SsrFft(name="fft", sim=Simulation(), clk=Clock(freq=250e6), L=1024)
+inv = SsrFft(name="ifft", sim=Simulation(), clk=Clock(freq=250e6), L=1024, inverse=True)
+for f in (fwd, inv):
+    o = f.out_fmt
+    print(f"{f.name}: out ap_fixed<{o.W},{o.int_bits}>, port {f.m_out.bitwidth} bits")
+```
+
+```text
+fft: out ap_fixed<27,13>, port 216 bits
+ifft: out ap_fixed<27,3>, port 216 bits
+```
+
+AMD's library divides at the old resolution instead, truncating toward zero, so the low `log2 L`
+bits of its inverse are always zero; `waveflow.vitis_l1.fft.ifft_scale` maps these outputs onto its
+bits exactly.
+
 ## Every parameter
 
 | parameter | type / binding | default | meaning |
@@ -96,6 +117,7 @@ reorder tasks: ['rc', 'rp']
 | `tw_w`, `tw_i` | `HwParam[int]` | 18, 2 | twiddle table `ap_fixed<tw_w, tw_i>` |
 | `reorder` | `str` | `"sob"` | the reorder's frame buffer: `"sob"` (a `stream_of_blocks` between two tasks) or `"pingpong"` (both halves in one task) |
 | `lanes` | `bool` | `False` | the boundary: one `RadixWord` port each way (`s_in`, `m_out`), or with `True` `VitisFft`'s four-lane group (`s_in_0..3`, `m_out_0..3`) |
+| `inverse` | `bool` | `False` | the inverse transform: conjugated twiddle ROMs, `1/L` as `log2 L` fewer integer bits on the output |
 | `timed` | `bool` | `True` | `False` gives exact bits in zero simulated time |
 
 `L` and the widths are `HwParam`s: they reach the C++ as the generated configuration (formats,

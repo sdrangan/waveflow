@@ -108,7 +108,8 @@ import pytest
 #: generated free-running top, bit-exact on four frames, its frame cycles, and the pysim matching them.
 #: 149 -> 155 on 2026-10-06 (plans/ssr_fft.md F3): SsrFft at RTL -- both reorders x bits, interval,
 #: timing (tests/dsp/ssr_fft/test_xsi.py).
-WANT_XSI_GATES = 155
+#: 155 -> 158 on 2026-10-06: the inverse SsrFft at RTL (pingpong-inverse x the same three).
+WANT_XSI_GATES = 158
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

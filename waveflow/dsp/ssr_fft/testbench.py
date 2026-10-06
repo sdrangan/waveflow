@@ -30,8 +30,10 @@ from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver
 from waveflow.utils import complexutils as cx
 from waveflow.utils.burst_io import read_burst_bundle, write_burst_bundle
+from waveflow.vitis_l1 import fft as fft_model
 from waveflow.vitis_l1.testbench import (CLK_HZ, IN_I, IN_W, TW_I, TW_W, TimedSink,
-                                         frames_from_lanes, golden, input_frames)
+                                         frames_from_lanes, input_frames)
+from waveflow.vitis_l1.testbench import golden as vitis_golden
 from waveflow.vitis_l1.testbench import write_scenario as write_lane_scenario
 
 from .hw import SsrFft
@@ -44,9 +46,20 @@ __all__ = ["SsrFftTB", "golden", "write_scenario", "run_pysim", "pysim_output",
            "pysim_frame_cycles", "frames_from_words", "port_names"]
 
 
+def golden(n_frames: int, length: int, seed: int = 0, *, inverse: bool = False, in_w: int = IN_W,
+           in_i: int = IN_I, tw_w: int = TW_W, tw_i: int = TW_I, **_):
+    """The expected output of every frame, ``[(re, im), ...]``: ``VitisFft``'s golden forward, and
+    for the inverse the library's arithmetic with the exact ``1/L`` (the bits unscaled)."""
+    if not inverse:
+        return vitis_golden(n_frames, length, seed, in_w=in_w, in_i=in_i, tw_w=tw_w, tw_i=tw_i)
+    return [fft_model.fft_general(x_re, x_im, length, in_w, in_i, tw_w, tw_i, inverse=True,
+                                  exact_scale=True)[:2]
+            for x_re, x_im in input_frames(n_frames, length, seed, in_w=in_w)]
+
+
 def _edges(length: int, in_w: int = IN_W, in_i: int = IN_I, tw_w: int = TW_W, tw_i: int = TW_I,
-           **_) -> tuple[EdgeType, EdgeType]:
-    geo = Geometry(length, in_w, in_i, tw_w, tw_i)
+           inverse: bool = False, **_) -> tuple[EdgeType, EdgeType]:
+    geo = Geometry(length, in_w, in_i, tw_w, tw_i, inverse=inverse)
     return EdgeType("in", geo.in_fmt, geo.R), EdgeType("out", geo.out_fmt, geo.R)
 
 
@@ -108,6 +121,7 @@ class SsrFftTB(FreeRunMod):
     timed: bool = True
     reorder: str = "sob"
     lanes: bool = False
+    inverse: bool = False
     burst_gap_cycles: int = 0
     burst_gaps: list = field(default_factory=list)
     capture_accepts: bool = False
@@ -118,7 +132,8 @@ class SsrFftTB(FreeRunMod):
         super().__post_init__()
         self.dut = SsrFft(name="ssr_fft", sim=self.sim, clk=self.clk, L=self.length,
                           in_w=self.in_w, in_i=self.in_i, tw_w=self.tw_w, tw_i=self.tw_i,
-                          timed=self.timed, reorder=self.reorder, lanes=self.lanes)
+                          timed=self.timed, reorder=self.reorder, lanes=self.lanes,
+                          inverse=self.inverse)
         ins, outs = port_names(self.lanes)
         d_in = self.dut.s_in if self.lanes else [self.dut.s_in]
         d_out = self.dut.m_out if self.lanes else [self.dut.m_out]
@@ -150,7 +165,8 @@ class SsrFftTB(FreeRunMod):
 
     @property
     def config(self) -> dict:
-        return {"in_w": self.in_w, "in_i": self.in_i, "tw_w": self.tw_w, "tw_i": self.tw_i}
+        return {"in_w": self.in_w, "in_i": self.in_i, "tw_w": self.tw_w, "tw_i": self.tw_i,
+                "inverse": self.inverse}
 
 
 def run_pysim(root, **kw) -> SsrFftTB:

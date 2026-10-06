@@ -167,3 +167,72 @@ def test_unsupported_configurations_are_refused():
         Geometry(32)
     with pytest.raises(NotImplementedError):
         Geometry(64, mode="SSR_FFT_SCALE")
+
+
+# -------------------------------------------------------------------------------------------
+# The inverse transform
+# -------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("length", LENGTHS)
+def test_inverse_is_fft_general_bit_for_bit(length):
+    """``inverse=True``: the library's REVERSE_TRANSFORM arithmetic through every block, with the
+    exact ``1/L`` (the bits unscaled, the binary point moved)."""
+    rng = np.random.default_rng(length + 1)
+    for xr, xi in _inputs(length, rng):
+        a_re, a_im, a_fmt = fft_general(xr, xi, length, 16, 2, inverse=True, exact_scale=True)
+        b_re, b_im, b_fmt = ssr_fft(xr, xi, length, inverse=True)
+        assert a_fmt == b_fmt == Geometry(length, inverse=True).out_fmt
+        assert np.array_equal(a_re, b_re) and np.array_equal(a_im, b_im)
+
+
+@pytest.mark.parametrize("length", (16, 64, 256, 1024))
+def test_inverse_maps_onto_the_vendor_golden(length):
+    """The vendor's own templates (``tests/vitis_l1/fft/golden/ifft_*``): its ``1/L`` truncates
+    toward zero at the old resolution, so the library's output is ``ifft_scale`` of ours."""
+    import json
+    from pathlib import Path
+    from waveflow.vitis_l1.fft import ifft_scale
+
+    g = json.loads((Path(__file__).resolve().parents[2] / "vitis_l1" / "fft" / "golden"
+                    / f"ifft_L{length}_R4_noscale_natural.json").read_text())
+    ow = g["out_W"]
+
+    def sgn(b, w):
+        b = np.asarray(b, dtype=np.int64)
+        return np.where(b >= (1 << (w - 1)), b - (1 << w), b)
+
+    geo = Geometry(length, inverse=True)
+    for vec in g["vectors"]:
+        xr = sgn([e["re"] for e in vec["input"]], g["in_W"])
+        xi = sgn([e["im"] for e in vec["input"]], g["in_W"])
+        re, im, _ = ssr_fft(xr, xi, length, inverse=True)
+        vr, vi, vf = ifft_scale(re, im, geo.raw_out_fmt, length)
+        assert (vf.W, vf.int_bits) == (ow, g["out_I"]) == (geo.out_fmt.W, geo.out_fmt.int_bits)
+        assert np.array_equal(vr, sgn([e["re"] for e in vec["output"]], ow))
+        assert np.array_equal(vi, sgn([e["im"] for e in vec["output"]], ow))
+
+
+def test_inverse_scales_only_the_output_edges():
+    """The last stage writes the unscaled format; ``rc`` onwards reads the same bits as
+    ``log2 L`` fewer integer bits.  Every other edge is the forward transform's."""
+    fwd = {e.name: e for e in edge_types(Geometry(1024))}
+    inv = {e.name: e for e in edge_types(Geometry(1024, inverse=True))}
+    for name in fwd:
+        want = (27, 3) if name in ("rc", "out") else (fwd[name].fmt.W, fwd[name].fmt.int_bits)
+        assert (inv[name].fmt.W, inv[name].fmt.int_bits) == want, name
+        assert inv[name].bitwidth == fwd[name].bitwidth
+
+
+def test_inverse_round_trip_recovers_the_input():
+    """ifft(fft(x)) ~ x: the two directions compose (a float check of the conventions -- the sign
+    of the exponent, the 1/L -- that the bit-exact tests take from the vendor)."""
+    rng = np.random.default_rng(7)
+    length, g = 256, 7                       # |X| <= L max|x| ~ 2^7.5: 2^-g brings it inside +-2
+    xr = rng.integers(-(1 << 13), 1 << 13, length)
+    xi = rng.integers(-(1 << 13), 1 << 13, length)
+    yr, yi, yf = ssr_fft(xr, xi, length)
+    shift = yf.frac_bits - 14 + g            # the spectrum / 2^g, back in ap_fixed<16, 2>
+    zr, zi, zf = ssr_fft(yr >> shift, yi >> shift, length, inverse=True)
+    got = (zr + 1j * zi) / 2.0 ** zf.frac_bits * 2.0 ** g
+    x = (xr + 1j * xi) / 2.0 ** 14
+    step = 2.0 ** (g - 14)                   # one input LSB of the inverse, in x's units
+    assert np.max(np.abs(got - x)) < 2 * step
