@@ -1,8 +1,8 @@
 # Plan: simulations for the CG massive-MIMO DSE paper
 
-**Status:** In progress (Phase 0 started 2026-09-30)
+**Status:** Phases 0–6 complete (2026-10-05). Phases 7–9 added 2026-10-06 at the user's request; not started
 **Complexity:** L3 Complex. Many components (link simulator, fixed-point division, bit-exact CG, three hardware blocks, performance models, DSE), several open design choices, and new tests throughout; everything is undoable with git. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
-**Created:** 2026-09-29 · **Updated:** 2026-10-05
+**Created:** 2026-09-29 · **Updated:** 2026-10-06
 **Plan file:** `plans/mimo_cg/mimo_cg_paper_sims.md` · **Lessons learned:** `plans/mimo_cg/mimo_cg_lessons.md` (created in step 0.1; both moved into `plans/mimo_cg/` on 2026-09-30)
 
 > **For the agent executing this plan:** read *Rules for the doer* first. The
@@ -28,7 +28,7 @@
    execute mode): investigate up to 2 tested hypotheses, then stop and report.
    **Never change a test's random seed, tolerance or confidence level to make it
    pass**; a statistical failure is investigated like any other.
-5. Pause for the user after each milestone (M0–M6), and on surprises. Steps
+5. Pause for the user after each milestone (M0–M9), and on surprises. Steps
    marked 👁 also wait for the user's review.
 6. Never perform an action listed in §12 as irreversible or costly without its
    backup in place and fresh approval from the user at that moment.
@@ -74,6 +74,11 @@ Vitis on a held-out subset, and report a concrete, non-obvious design finding
 a naive 16-bit, 8-iteration design"). Writing the manuscript is out of scope;
 this plan delivers the data, figures and code that back it.
 
+**Extension (Phases 7–9, added 2026-10-06).** Move the two compute blocks of Phase 4, the
+systolic matrix multiply and the CG vector unit, into Waveflow as reusable components, each with a
+bit-exact model, an HLS body, a standalone unit, a calibrated cost model, tests and a guide page;
+then rebuild this example on them. Waveflow gains only what those two components need.
+
 ## 2. Requirements and constraints
 
 | Type | Item |
@@ -100,6 +105,11 @@ this plan delivers the data, figures and code that back it.
 | Constraint | No deadline. |
 | Constraint | Brute-force Vitis baseline budget: at most about 48 hours of csynth on this machine (8 cores, 31 GB RAM). `SweepRunner` runs serially. |
 | Constraint | Vitis/Vivado 2024.1 for every number. Python 3.12 in `.venv/`. Follow the repo's conventions (§7) and `CLAUDE.md`. |
+| Must (Phases 7–9) | Two reusable Waveflow components, a complex fixed-point systolic matrix multiply and a CG vector unit. Each has a bit-exact Python model, a pysim module, an HLS body, a standalone unit, a calibrated cost model, tests at every level (Python, C-sim, csynth, RTL) and a guide page. |
+| Must (Phases 7–9) | Waveflow gains only what these two components need, in a form not specific to this example. The detector composite, the MIMO-specific formats and the study tooling stay in `examples/mimo_cg/` (user, 2026-10-06). |
+| Must (Phases 7–9) | `examples/mimo_cg/` is rebuilt on the components, keeps no copy of them, and its detector stays bit-exact at RTL. |
+| Must not (Phases 7–9) | Code under `waveflow/` that imports from `examples/`. |
+| Must not (Phases 7–9) | A change of behaviour of an existing Waveflow API for other parts or examples (for example `device_rules.dsp_per_mult`). Additions only, unless a gate approves a change and its callers are checked. |
 
 ## 3. Deliverables
 
@@ -119,11 +129,15 @@ this plan delivers the data, figures and code that back it.
 | Example docs pages | Markdown | `docs/examples/mimo_cg/` | readers of the docs site |
 | xczu48dr calibration platform | Waveflow calib library | `examples/mimo_cg/calib/platforms/xczu48dr_250mhz/` | performance models |
 | Corrected CG sketch and refreshed status table | Markdown edits | `plans/cg.md`, `plans/paper_cg_dse_vision.md` | the team |
+| Systolic matrix multiply and CG vector unit (Phases 7–8) | Python + C++ (HLS) | `waveflow/linalg/` and task bodies in `waveflow/build/` (home fixed at gate 7.0) | framework users |
+| Component tests (Phases 7–8) | pytest | `tests/linalg/` | CI |
+| Component cost models: fitted coefficients for `xczu48dr` at 250 MHz, 2024.1 (Phases 7–8) | Waveflow calib platform | `waveflow/calib/platforms/xczu48dr_250mhz/` | framework users |
+| Component guide pages (Phases 7–8) | Markdown | `docs/guide/` (section fixed at gate 7.0) | framework users |
 
 ## 4. Acceptance criteria
 
 The task is done when every box is ticked with the evidence named. The Phase
-4–6 criteria are provisional: gates 4.0, 5.0 and 6.0 may tighten them, and any
+4–9 criteria are provisional: gates 4.0–9.0 may tighten them, and any
 loosening needs the user's approval and a §14 entry. Statistical checks use 99.9%
 Wilson intervals with seeds fixed in the test file (Rules 4).
 
@@ -172,6 +186,25 @@ Wilson intervals with seeds fixed in the test file (Rules 4).
   - `pytest -m "not vitis and not xsi" -p no:cacheprovider` fails only on the 7 pre-existing failures listed in §6.
   - Every **new** Python file passes `ruff check` and `black --check`.
   - Every **changed existing** file has no more `ruff check --output-format concise` findings than on `main`, and is not reformatted.
+
+- [ ] **AC7** (Phase 7; provisional, tightened at gate 7.0): the systolic matrix multiply is a Waveflow component.
+  - It lives at the home fixed at gate 7.0. Neither it nor `tests/linalg/` imports anything from `examples/`.
+  - Its Python model equals the golden vectors frozen from the example's `mm_step` (every format set of the Phase 5 space and the stress set, K = 4, 8 and 16) and an independent exact reference on non-square shapes, both multiply forms and the conjugate transpose. Its HLS body equals the model in C-simulation, and so do two instances with different formats in one composite.
+  - csynth meets 4 ns (estimated) at the configurations fixed at gate 7.0, including R·C = 256.
+  - Its standalone unit is bit-exact at RTL (XSI) on jobs of different shapes run back to back from one build (if dimensions are run-time); every tag is echoed; a rejected job returns its status without disturbing the next; measured job times are within the cycle threshold below.
+  - Its cost model, on at least 10 held-out unit builds fixed before calibration, each at 3 or more job shapes: DSP and block RAM exact on ≥ 90% of them, LUT and FF mean absolute percentage error ≤ 10%, cycles ≤ 5%, on the unit and on the core's per-task rows.
+  - A guide page documents its interface, parameters, message format, cost model and limits.
+
+  Verify: `pytest tests/linalg/` with no marker, and with `-m vitis -rs` and `-m xsi -rs`, 0 skipped; the validation table and its generating command.
+- [ ] **AC8** (Phase 8; provisional, tightened at gate 8.0): the CG vector unit is a Waveflow component, to the same six criteria as AC7 (its golden vectors frozen from `vec_step` and `cg_init`). In addition, the CG model moved without changing a bit: every existing mimo_cg test passes unchanged, AC2.3's conformance passes again under `-m vitis` with 0 skipped, and the 30 accuracy points listed at gate 8.0 regenerate byte-identically.
+- [ ] **AC9** (Phase 9; provisional, tightened at gate 9.0): the example runs on the components, and Waveflow stays lean.
+  - `examples/mimo_cg/` builds its detector from the two Waveflow components; the code listed under "What Phase 9 retires" is gone.
+  - Every mimo_cg test that gate 9.0 did not retire passes (no marker; `-m vitis` and `-m xsi` with 0 skipped); the detector is bit-exact at RTL at K = 4, 8 and 16; `WANT_XSI_GATES` changed by exactly the retired RTL gates.
+  - The pure-Python study tooling regenerates its committed tables byte-identically at HEAD, and the commit that produced the Phase 1–6 data is recorded in §14.
+  - The two standalone units, wired to each other in pysim, solve CG bit-exact to the reference solve at K = 4, 8 and 16 with several jobs in flight.
+  - The 16 re-measured detectors meet gate 9.0's acceptance: bit-exact, and cycles and resources within its thresholds of the Phase 5 measurements, every difference explained.
+  - Waveflow gained only the files in the committed manifest of gates 7.0 and 8.0 (amended only with the user's approval). None of them imports from `examples/`, and a test finds in them none of the example's constants (`INT_BITS`, `DEFAULT_N`, part and clock) or plan paths.
+- [ ] **AC-R9** (Phase 9): AC-R holds again at the end of Phase 9, over every file Phases 7–9 add or change. If `KernelTask`, `composite_gen` or `streamutils` changed, `tests/build/` and the framework's XSI cycle gates (`mem_r_stream` 158, `mem_w_stream` 176, `mem_copy` 2908) pass too.
 
 ## 5. Context and sources of truth
 
@@ -249,6 +282,7 @@ Wilson intervals with seeds fixed in the test file (Rules 4).
   - RF part constants: `RFSOC4X2_PART` and the 4 ns clock in `waveflow/build/composite_gen.py`.
   - Matrix-multiply option: `waveflow.vitis_l1.gemv` (real only).
   - Example-level ignore pattern: `examples/stream_inband/.gitignore`.
+  - For Phases 7–9: the hook-component convention (`KernelTask` in `waveflow/hw/mem_stream.py`; the planned `VitisFft` in `plans/vitis_l1_hwmodule.md`; `waveflow/vitis_l1/` as the precedent for a domain subpackage); the composite generator `waveflow/build/composite_gen.py`; `complex_utils::cmult` in `waveflow/build/complex_utils.hpp` (the exact 4-multiply product, with its twin in `waveflow/utils/complexutils.py`); `ResourceModel` and `compose()` in `waveflow/calib/resource_model.py`; platform resolution in `waveflow/calib/platform.py`.
 - **Conventions to follow:**
   - `CLAUDE.md`.
   - Example layout: `examples/<name>/<name>.py` (model), `<name>_build.py` (DAG via `run_dag_cli`), tests in `tests/examples/`.
@@ -387,12 +421,18 @@ first.
 2. Make the detector bit-exact and prove it against Vitis C-simulation (Phase 2).
 3. Run the accuracy DSE, which needs no Vitis (Phase 3).
 4. Build the hardware blocks (Phase 4), calibrate per-block performance models (Phase 5), and close with the full DSE and brute-force baseline (Phase 6).
+5. Move the systolic matrix multiply (Phase 7) and the CG vector unit (Phase 8) into Waveflow as reusable components, and rebuild the example on them (Phase 9).
 
 This order gets a candidate design finding early and cheaply. It lets the
 accuracy results constrain which hardware configurations are worth building,
 and it touches Vitis early only where bit-exactness must be proven (Phase 2).
 Phases 4–6 are milestone-level on purpose. Their steps depend on the Phase 2
 decisions and are refined, with the user's approval, at gates 4.0, 5.0 and 6.0.
+
+The extension (Phases 7–9) puts the shared foundation and the matrix multiply first, because it is
+the more general block and the vector unit's tests need the foundation; the vector unit second; and
+the migration last, so the example keeps working until both components exist. Phases 7–9 are
+milestone-level too, and are refined at gates 7.0, 8.0 and 9.0.
 
 **Search before building:**
 - The Waveflow pieces in §7 are reused, including the existing fixed-point conformance harness for division.
@@ -494,8 +534,8 @@ designs.
 
 ## 10. Steps
 
-Phases 0–3 are step-level. Phases 4–6 are milestone-level and are refined into
-steps at their entry gates (4.0, 5.0, 6.0), with the user approving the plan
+Phases 0–3 are step-level. Phases 4–9 are milestone-level and are refined into
+steps at their entry gates (4.0–9.0), with the user approving the plan
 update. Every step's checkpoint is a commit on `paper/mimo-cg`, by the user's
 identity, with the trailer (Rules 9).
 
@@ -608,7 +648,238 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 | 6.9 👁 | M6 review: the full regression, the reviewer agent, then the user | 6.1–6.8 | AC6 and AC-R met; the user approves | the fast suite; `pytest -m vitis -rs` and `pytest -m xsi -rs` with 0 skipped; `ruff check` and `black --check` on the new files | commit, pause | ☑ |
 | 6.10 | §16 completion report | 6.9 | §16 is filled in: every acceptance criterion with its evidence, the deviations, the reusable artifacts and the lessons | read-through | commit | ☑ |
 
-**Milestones:** M0 = 0.1–0.5 · M1 = 1.1–1.5 · M2 = 2.1–2.6 · M3 = 3.1–3.5 · M4 = 4.0–4.11 · M5 = 5.0–5.10 · M6 = 6.0–6.10. The user reviews at the end of each.
+### Phases 7–9 — Reusable components in Waveflow (extension, added 2026-10-06)
+
+The user asked for these phases on 2026-10-06. They move the two compute blocks of Phase 4 into
+Waveflow as reusable components, a **complex fixed-point systolic matrix multiply** and a **CG
+vector unit**, and then rebuild this example on them. **Scope rule (user, 2026-10-06):** Waveflow
+gains only what the two components need in order to be built, tested, costed and documented, and
+only in a form that is not specific to this example. Everything else stays in `examples/mimo_cg/`.
+Like Phases 4–6, these phases are milestone-level and are refined into steps at their entry gates.
+The independent review of this extension (§15, 2026-10-06) is folded into the text below.
+
+**What moves into Waveflow** (provisional; gate 7.0 fixes the list as a committed manifest, which
+AC9 checks):
+
+| Moves | Notes |
+|---|---|
+| Lane groups: L complex values per word in `ComplexField` bit order (`cg_lanes.h`, and its Python twin `block_type`) | Every operand travels in L-lane groups, A included; Phase 4's K-lane rows of A go (their loader grew from 7.3k to 21.0k LUTs over K = 4–16, §14 notes for gate 5.0) |
+| Matrix (de)serialization between framed message words and lane-group blocks (`cg_io.h`), and its Python twin (`to_words`, `from_words`, `nwords`, `mem_array_type` in `hw/common.py`) | The element lane width becomes a parameter, at least the widest operand; it is not hard-wired to 16 bits |
+| The 3-multiply (Gauss) complex product | Added to `waveflow/build/complex_utils.hpp` beside the existing `cmult`, with its Python twin and a conformance test; or kept private inside the matrix-multiply body (gate 7.0). Not a new foundation item |
+| A build step (`Buildable`) that copies the components' task bodies into a design and renders each instance's types | The example's `cg_ref.h` conformance switches to the same renderer, so the type map exists once |
+| The systolic matrix multiply: core, standalone unit, bit-exact model, cost model | Phase 7 |
+| The CG vector unit: core, standalone unit, and its bit-exact model (the format set, the state, the start, the iteration step with its explicit-residual hook, a reference solve) | Phase 8 |
+| The block-RAM shape of a stream-of-blocks memory | Device geometry, so an addition to `waveflow/calib/device_rules.py`. The observation that csynth builds plain multiplies under 12 bits from LUTs is a 2024.1 binding on `xczu48dr`, not geometry: it goes in the platform data with its tool version |
+
+**What stays in `examples/mimo_cg/`:** the detector composite and its framer, loader, control and
+store; the format registry, the integer-bit defaults `INT_BITS`, `CgFormats.from_width()` and
+`.wide()` (kept by an example subclass of the moved format set), `DEFAULT_N = 32`, the "R = 0 means
+K" convention and the format-keyed `block_span`; the link simulator, the sweeps and the accuracy
+analysis; the study tooling (design space, campaign driver, the frozen study models, DSE, decision
+fidelity, finding, finalists, `impl_check.py`, block-span tracing); `cpp/cg_ref.h`; `hw/csim.py`
+(it is wired to the memory-mapped boundary of Phase 4, and each component body is C-simulated alone,
+which is sequential by construction); `paper_data/` and every figure.
+
+**What Phase 9 retires:** the example's copies of the moved code (`cg_mm_task.h`, `cg_vec_task.h`,
+`cg_lanes.h`, `cg_io.h`, `CgMm`, `CgVec`), Phase 4's per-unit framers, loaders and stores
+(`CgVecRx`/`Load`/`Store`, `CgMmRx`/`Load`/`Store`), and the study tooling that builds hardware
+with them, listed test by test at gate 9.0.
+
+### Phase 7 — Foundation and the systolic array in Waveflow (milestone M7, refined at gate 7.0)
+
+**Gate 7.0 decides** (the doer's recommendation first; the user decides at the gate):
+
+1. **Module home, before any code.** A module's import path is part of its structure signature
+   (`waveflow/build/elaborate.py`), so moving a module later stales the RTL of everything built
+   from it (`plans/vitis_l1_hwmodule.md` makes the same point). Recommended: a new subpackage
+   `waveflow/linalg/` for the Python side, following the `waveflow/vitis_l1/` precedent; task
+   bodies as top-level headers in `waveflow/build/` beside the existing hook-component bodies
+   (already package data); tests in `tests/linalg/`. Alternative: `waveflow/hw/` beside `Rfdc`,
+   which crowds `hw/`.
+2. **Component shape:** the framework's hook-component convention, as `MemRStream` and the planned
+   `VitisFft`: a `FreeRunMod` whose `run_iter` delegates all arithmetic to the bit-exact model in
+   the same package; an `HwParam` for every **integer** template argument; a `KernelTask` naming the
+   body; simulated time taken from the component's cycle model.
+3. **How formats reach C++.** An `HwParam` is stored as an integer, `KernelTask.template_args` are
+   integers that name task instances and calibration keys, and today's types live in one global
+   `namespace cg` per build, so a build can hold one format set only. Recommended: formats are plain
+   dataclass fields (precedents: `Rfdc.word`, the `vitis_l1` enums); the build step renders each
+   instance's formats into a types struct with a short name derived from its content, passed to the
+   body as one type template argument. `KernelTask`, the task-instance name and the calibration
+   `config_id` are extended by addition only. Two instances with different formats then share one
+   composite.
+4. **Two layers per component.** (a) A **core** with a fixed-width command (independent of any
+   memory word width) and stream-of-blocks data ports, for tight coupling inside one composite, as
+   the detector couples its two blocks today. (b) A **standalone unit** that speaks framed messages,
+   fed from memory through the framework's in-band `MemRStream`/`MemWStream`, or directly by another
+   unit. Alternative: a memory-mapped unit like Phase 4's `CgMmUnit`.
+5. **The message format, fixed once for both components** (a later change re-runs Phase 7's gates
+   and its calibration):
+   - the message word width is a parameter, independent of the memory word width;
+   - the element lane width is a parameter (decision table above);
+   - a header holds an opaque tag of at least 32 bits, echoed in the reply; the operation; the
+     problem dimensions; the payload length in words; and, for a job made of several messages, the
+     number of messages that follow;
+   - every reply carries a status. A message with out-of-range dimensions or an unexpected
+     operation is rejected with a status, and its payload is drained by its length. Nothing is
+     clamped (Phase 4's framers clamp `nit` silently).
+6. **Problem dimensions at run time, up to synthesis-time maxima**, decided per component from the
+   probe (the two components may differ). The array (R × C), the lanes (L) and the maxima are fixed
+   at synthesis; each job's dimensions come in its header, as multiples of the tile sizes. One build
+   then serves several problem sizes. A build whose minimum equals its maximum folds the dimensions
+   to constants. Alternative: dimensions fixed at synthesis, as in Phase 4.
+7. **Matrix-multiply scope.** `C = q(A·B)`, complex fixed point, A of M × K and B of K × N, the exact
+   sum rounded once to the output format, 3- or 4-multiply form; A held across a run of B's within
+   one job (load once, multiply many, which CG needs). Option, recommended if the probe shows it is
+   cheap: `C = q(Aᴴ·B)`, with A transposed at load (a reordering, which is exact) and conjugated
+   inside the multiply (negating a W-bit imaginary part would saturate at −2^(W−1)), so Gram
+   products need no other unit. Not included: a real-valued mode, accumulation into C, diagonal
+   loading.
+8. **Formats are parameters:** a component takes each operand's format explicitly (width, integer
+   bits, rounding, saturation), never an index into an example's registry.
+9. **Jobs are self-contained:** every job loads its own operands; nothing carries over from one job
+   to the next.
+10. **Cost model per component.**
+    - Resources are expressed as framework `ResourceModel`s, so `compose()` prices any composite
+      that uses a core: DSP and block RAM counted, LUT and FF fitted. They are validated on the
+      core's per-task rows as well as on the unit.
+    - Cycles: a service time per message, plus an input/output floor, `max(compute, words in,
+      words out)` (gate 6.0 found that a job-level law without a floor fails when memory binds).
+    - The model's form and counted rules live with the component; its fitted coefficients for
+      `xczu48dr` at 250 MHz go in a packaged platform under `waveflow/calib/platforms/`, with
+      provenance. The platform records its tool version (an additive manifest field, with a warning
+      on mismatch) or carries it in its name, and its name must not collide with
+      `examples/mimo_cg/calib/platforms/xczu48dr_250mhz/`, because a same-named platform in an
+      earlier search root shadows it.
+    - The calibration campaign runs from this example's tooling, which stays here.
+11. **Build and test harness:** the csynth, testbench and XSI drivers for the components' own tests
+    live in `tests/linalg/` as helpers built on `composite_gen`, with part and clock passed as
+    arguments. No `xczu48dr` or 4 ns constant goes under `waveflow/`. Nothing in `tests/linalg/`
+    imports from `examples/`.
+12. **Tests:** pure-Python tests with no marker; `-m vitis` for C-sim and csynth; `-m xsi` RTL
+    gates, raising `WANT_XSI_GATES` with each one.
+13. **Docs:** one guide page per component under `docs/guide/` (the section is chosen at the gate),
+    with limits stated: for example, untested under back-pressure unless the RTL gates add a stall
+    pattern (the XSI sink is always ready).
+14. **What "nothing changed" means for Phase 9** is set at gate 9.0 (see AC9).
+
+**The gate's probe** (scratch builds; nothing committed), at three configurations per body against
+the committed Phase 5 rows: the matrix-multiply and vector-unit bodies with run-time dimensions, with
+the index arithmetic (`g / NG`, `g % NG`, `(rt*R + i)*NG + …`) rewritten as counters so the probe
+does not measure dividers it would never ship; and the matrix multiply with the transposed load and
+the conjugating multiply. It reports the initiation interval, LUT, FF, DSP and block RAM deltas,
+the estimated clock and the cycles per product or iteration. About 45–60 minutes.
+
+**Steps** (provisional):
+
+- **7.0 👁 Entry gate:** re-run the readiness check (§8); run the probe; write the gate 7.0 decision
+  record in §14, with the file manifest; refine 7.1–7.7 into a step table. Exit: the user approves.
+- **7.1 Foundation:** lane groups and (de)serialization (C++ and Python), the message header and
+  status schema, the build step that renders per-instance types and copies bodies, and the
+  3-multiply product if it goes into `complex_utils`. Exit: the Python tests pass; a (de)serializer
+  round trip at two lane widths is bit-exact in C-sim (`-m vitis`, 0 skipped); the diff is shown to
+  the user before commit.
+- **7.2 Bit-exact model of the matrix multiply.** Golden vectors are frozen from the example's
+  `mm_step` at `6a2cdca` into `tests/linalg/` data (every format set of the Phase 5 space and the
+  stress set, at K = 4, 8 and 16, saturating cases included), so the reference survives Phase 9. An
+  independent exact reference (integer products, then `fixputils.quantize`) covers what `mm_step`
+  never did: non-square shapes, the 3-multiply form, the conjugate transpose, and imaginary parts
+  equal to −2^(W−1). Exit: the model equals both.
+- **7.3 The systolic core and its HLS body**, generalized from `cg_mm_task.h`. Exit: the pysim core
+  is bit-exact against the model; C-sim is bit-exact; two instances with different formats in one
+  composite are bit-exact in C-sim; csynth meets 4 ns (estimated) at the configurations fixed at
+  the gate, including the largest array (R·C = 256).
+- **7.4 The standalone unit and its RTL gate.** Exit: XSI is bit-exact on jobs of different shapes
+  and both multiply forms run back to back from one build (if dimensions are run-time); every tag is
+  echoed; a rejected job between two good ones returns its status and disturbs neither; measured job
+  times are within the cost model's cycle threshold.
+- **7.5 Cost model and calibration** (⚠️ cost if the campaign is expected to exceed 2 h). At least
+  10 held-out builds, each measured at 3 or more job shapes, fixed and committed before the campaign
+  runs. Exit: AC7's model thresholds on the held-out builds; coefficients committed with their tool
+  version and provenance.
+- **7.6 Guide page** for the systolic array: interface, parameters, message format, cost model,
+  limits.
+- **7.7 👁 M7 review:** the reviewer agent, then the user.
+
+### Phase 8 — The CG vector unit in Waveflow (milestone M8, refined at gate 8.0)
+
+**Gate 8.0 decides:**
+
+1. **What of the CG model moves:** the format set (without `from_width()` and `.wide()`, which an
+   example subclass keeps, so their 26 call sites do not change), `CgState`, `cg_init`, `vec_step`
+   with its `residual` hook, and a reference solve (start, then a matrix multiply and a vector step
+   per iteration). The model stays batched over leading dimensions. The example's
+   `mimo_cg_fixed.py` keeps the link-level code and the iterate capture.
+2. **Iteration count:** fixed per job (recommended: job time is then exact and data-independent, and
+   Phase 3 found that hardware should stop at the frontier's count), with the maximum iteration
+   count a synthesis-time parameter of its own (today the loops end at K). Option: a stopping rule
+   (stop when every column's `rz` is at most a threshold), which makes job time depend on the data.
+3. **Dividers:** L side by side (recommended, as now) or one shared.
+4. **Run-time dimensions:** K and N per job, if the probe of gate 7.0 supports it for this body.
+5. **References fixed before the move:** golden vectors from `vec_step` and `cg_init` at
+   `6a2cdca`, frozen into `tests/linalg/` data; and the list of 30 accuracy points that must
+   regenerate byte-identically, chosen here and including the stress set and the explicit-residual
+   form.
+6. **How the unit is tested alone:** its RTL gate feeds it `S` from the Python model, as Phase 4's
+   `CgVecUnit` did. CG closed around the systolic array is proven in Phase 9.
+
+**Steps** (provisional):
+
+- **8.0 👁 Entry gate:** decision record in §14 (with the manifest's additions); refine 8.1–8.6.
+  Exit: the user approves.
+- **8.1 Move the CG model** to Waveflow. Exit: every existing mimo_cg test passes unchanged; AC2.3's
+  conformance passes again under `-m vitis` with 0 skipped; the 30 points regenerate
+  byte-identically; the frozen golden vectors match.
+- **8.2 The vector core and its HLS body,** generalized from `cg_vec_task.h`. Exit: the pysim core
+  is bit-exact; C-sim is bit-exact, including two instances with different formats in one
+  composite; csynth meets 4 ns (estimated) at the configurations fixed at the gate (K up to 16, L up
+  to 16, widths 8–16).
+- **8.3 The standalone unit and its RTL gate.** Exit: as 7.4, over the shapes, formats and iteration
+  counts fixed at the gate.
+- **8.4 Cost model and calibration** (⚠️ cost if over 2 h), as 7.5. Exit: AC8's model thresholds.
+- **8.5 Guide page** for the CG vector unit.
+- **8.6 👁 M8 review:** the reviewer agent, then the user.
+
+### Phase 9 — The example on the Waveflow components (milestone M9, refined at gate 9.0)
+
+**Gate 9.0 decides,** before anything is deleted:
+
+1. **Every test that is retired or rewritten, and why,** listed one by one. Only tooling that builds
+   hardware with the retired classes may be retired; the pure-Python study tooling (the study
+   models, `estimate`, `dse`, decision-fidelity scoring, `finding`) keeps running at HEAD.
+   `WANT_XSI_GATES` changes by exactly the retired RTL gates, logged in §15.
+2. **The re-measure acceptance:** the 16 Phase 5 calibration detectors, rebuilt on the components,
+   are bit-exact; their per-job cycles and each resource are compared with the Phase 5
+   *measurements* of the same detectors and reported as the price of generality, within thresholds
+   set here (for example DSP equal, cycles within 5%, LUT and FF within 10%), every difference
+   explained.
+3. **How the provenance of the Phase 1–6 data is recorded.**
+
+**Steps** (provisional):
+
+- **9.0 👁 Entry gate:** decision record; refine 9.1–9.7. Exit: the user approves.
+- **9.1 Provenance.** The Phase 1–6 tables and figures were produced by the code at `6a2cdca` (the
+  end of Phase 6); §14 records this, and their regeneration commands in §15 that build hardware
+  apply at that commit. Since step 8.1, the module keys of the example's committed calibration
+  records no longer match HEAD (the format set's module path is part of the structure signature);
+  RTL staleness compares file contents and is unaffected.
+- **9.2 Rewire.** `CgDetector` composes the two Waveflow cores; the study's unit builds become the
+  components' standalone units; the code listed under "What Phase 9 retires" is deleted. Exit: no
+  copy of the components' bodies or models remains in `examples/mimo_cg/`.
+- **9.3 Unit-to-unit composition, in pysim (no Vitis).** The two standalone units are wired message
+  to message, with no core coupling. Exit: CG solves are bit-exact to the reference solve at K = 4,
+  8 and 16, with several jobs in flight.
+- **9.4 Regression.** Exit: every mimo_cg test that gate 9.0 did not retire passes (no marker;
+  `-m vitis` and `-m xsi` with 0 skipped); the detector is bit-exact at RTL at K = 4, 8 and 16; the
+  pure-Python study tooling regenerates its committed tables byte-identically; the re-measured
+  sample meets gate 9.0's acceptance (about 30 minutes).
+- **9.5 Docs.** The example page says the two blocks now come from Waveflow and links their guide
+  pages; the guide index lists them; a `CLAUDE.md` line for the new subpackage is proposed to the
+  user.
+- **9.6 👁 M9 review:** the full regression, the reviewer agent, then the user.
+- **9.7 Completion report** for Phases 7–9 (§16).
+
+**Milestones:** M0 = 0.1–0.5 · M1 = 1.1–1.5 · M2 = 2.1–2.6 · M3 = 3.1–3.5 · M4 = 4.0–4.11 · M5 = 5.0–5.10 · M6 = 6.0–6.10 · M7 = 7.0–7.7 · M8 = 8.0–8.6 · M9 = 9.0–9.7. The user reviews at the end of each.
 
 **Flags:** ⚠️ irreversible or costly (see §12) · 👁 the user reviews before continuing.
 
@@ -623,6 +894,7 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 - **Regression check:**
   - `pytest -m "not vitis and not xsi" -p no:cacheprovider`, expecting only the 7 pre-existing failures in §6.
   - From Phase 2 on, also `pytest -m vitis -rs tests/examples/test_mimo_cg_conformance.py tests/hw/test_fixpoint_vitis.py tests/examples/test_fixedpoint_conformance.py tests/examples/test_complex_conformance.py`, with 0 skipped.
+  - From Phase 7 on, also `pytest tests/linalg/`, and `pytest -m vitis -rs tests/linalg/` and `pytest -m xsi -rs tests/linalg/` with 0 skipped. If a step changes `KernelTask`, `composite_gen` or `streamutils`, also `pytest tests/build/` and the framework's XSI cycle gates (`pytest -m xsi -rs` on the `mem_r_stream`, `mem_w_stream` and `mem_copy` gates).
   - The AC-R lint rule.
 - **Independent review:**
   - The plan was reviewed by an independent reviewer subagent on 2026-09-29, and all its findings were applied (§15).
@@ -636,7 +908,8 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
   - the shared conformance harness (`examples/schemas/fixedpoint/`, `tests/hw/test_fixpoint*.py`);
   - any `pyproject.toml` or dependency change;
   - edits to other plans (`plans/cg.md`, `plans/paper_cg_dse_vision.md`);
-  - the docs index.
+  - the docs index;
+  - from Phase 7 on, everything added or changed under `waveflow/` (the new subpackage, the task bodies in `waveflow/build/`, `device_rules.py`, the new calibration platform) and under `docs/guide/`, `tests/conftest.py` (`WANT_XSI_GATES`), and any `pyproject.toml` package-data change.
 - **Irreversible or destructive actions:** none expected; git can undo every change. Long runs are costly, not irreversible:
 
   | Action | Step | Backup / recovery | Dry run | Approval |
@@ -645,6 +918,9 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
   | Accuracy sweep expected to exceed 2 h | 3.3 | `--resume` continues after interruption | `--dry-run --out results/dry_run.json` | at the time of the action |
   | Brute-force Vitis baseline (up to about 48 h; estimated 11 h) | 6.4 | `--resume`; the sub-grid is fixed in §14 and committed (6.3) first | `--dry-run`, then a 30-minute pilot | at the time of the action |
   | Vivado implementation of the finalists (about 2 h) | 6.7 | each run is independent and can be repeated; the list is committed first | one design first | at the time of the action |
+  | Gate 7.0 probe (about 45–60 min, scratch builds) | 7.0 | nothing committed | one build first | none (under 2 h) |
+  | Component calibration campaigns (estimated about 1 h each) | 7.5, 8.4 | `--resume`; the held-out builds are committed first | `--dry-run`, then a pilot | at the time of the action, if over 2 h |
+  | Re-measuring the 16 Phase 5 calibration detectors (about 30 min) | 9.4 | each build is independent | one build first | none (under 2 h) |
 
 - **Permissions:** read and write inside this repo only, plus the AMD tools' own state under the home directory. No installs outside `.venv/`, and none inside it without asking.
 - **Secrets:** none needed.
@@ -714,7 +990,9 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 | Decision | **Note for gate 6.0, from the supplementary set: the cycle model has no memory-bound regime.** The job-time law T0 + nit·T_iter holds while the CG loop is the bottleneck, which was the case in all 26 detectors of the calibration and first held-out sets. A design with a short loop (many lanes), large matrices (K = 16) and 32-bit memory words can finish a short job faster than its matrices load; the interval between completions is then set by memory traffic and by the neighbouring jobs, and the model is too fast (16.6% on the worst measured job, 6.4% at nit = 1). The error is one-sided: the model never exceeds the measurement by more than 0.4% there. For Phase 6 this bounds the latency axis from below: gate 6.0 should either add a memory term (a floor of the form max(compute, load + store), calibrated on a few detectors chosen for it and validated on fresh ones) or restrict the latency claims to designs and iteration counts where the loop dominates, and say which. Also from the supplement: the matmul LUT model is 15% low at 16 lanes, so a v2 fit with L = 2 and 16 calibration points is needed before LUT is used to rank 16-lane designs | doer, 2026-10-04 (step 5.8a); for gate 6.0 |
 | Decision | **Gate 6.0 decision record.** Evidence: §15 gate 6.0 row. (1) **Cost axis: csynth for the sweep, implementation for the finalists.** The DSE and the brute-force comparison use csynth numbers, which the Phase 5 models were validated against. The designs the finding quotes (12–16, chosen by a rule and committed before the run) are then implemented with Vivado, and the finding is stated in implemented LUT, FF, DSP and BRAM (step 6.7). Rejected: csynth only (the finding would rest on numbers that overstate the DSP saving of narrow formats); a per-module correction model (a second model with its own error, about 30 Vivado runs); an implemented brute force (about 150 designs in 48 h). (2) **Model v2: refit the matmul LUT model, guard the memory-bound regime.** The matmul calibration design gains builds at 2 and 16 lanes, with six fresh held-out matmul builds, all fixed and committed before they run; the models are re-frozen as v2 before the brute force (step 6.1) and not changed afterwards. No memory term is added. Instead the DSE computes the memory-transfer floor of each design, (K² + K·N)·32/MEM_DW cycles (the words one job reads, at one per cycle), and makes no latency claim for a design whose predicted job time is under 2× that floor: the design is flagged, and the model does not pick it in a decision. The brute-force pick is not restricted, so a flagged design that is really the best counts against the model. (3) **The full grid.** The 107,460 hardware configurations × the accuracy table's iteration counts (K = 4: 1–4; K = 8: 1, 2, 3, 4, 6, 8; K = 16: 1, 2, 3, 4, 6, 8, 12, 16) × the 27 scenarios: 6,084,720 joint designs, in the recurrence form, with N = 32 and a 4 ns clock. W = 18 and 20 are not in it, because the memory format is 16-bit and is not widened; the nine M3 frontier designs with W = 18 are listed as outside the hardware space, and every scenario still has a design within 0.5 dB at W ≤ 16. The command-queue depth is fixed at 2 in the frontier, because its predicted effect is at most 2 LUTs; the stream-of-blocks depth stays a knob (it trades up to 112 FFs for up to 12 block RAMs). (4) **Brute-force sub-grid: 1,440 detectors,** a full cross-product, so its true optimum is known: K ∈ {4, 8, 16}; all 15 formats; (L, C) ∈ {(1, 4), (4, 4), (16, 16)}; R ∈ {1, 4, K}; `cmul` ∈ {3, 4}; MEM_DW ∈ {32, 64}; both depths 2. Estimated at 43 tool-hours, about 11 h on 4 shards (±30%); a pilot of about 30 minutes measures the rate before the user approves the run (step 6.4). Eight of the 1,440 are calibration builds; the fidelity is reported with and without them, and with and without the detectors that share a block configuration with a calibration build. Rejected: 360 detectors (no g_s = 4, which most frontier designs use), and 2,400 or 3,840 (17 and 27 h). (5) **AC6's fidelity measure, tightened.** The provisional measure (the minimum-DSP design per accuracy target) passes by construction: DSP is counted exactly (40 of 40 held-out builds), and with no latency constraint the minimum-DSP design is always the smallest hardware. New measure: a decision is a scenario × loss budget (0.25, 0.5, 1.0 dB) × job-time budget × resource (DSP, LUT, FF, BRAM). The model picks the sub-grid design of least predicted cost among those it predicts to meet both budgets. The pick is right if its measured job time does not exceed the budget by more than 2% and its measured cost is within 10% of the least measured cost among the designs measured to meet both budgets. AC6 requires ≥ 90% right for each resource. The job-time budgets and the whole decision set are fixed from predicted values and committed before any brute-force build (step 6.3). Reported without a threshold: the same-design rate, the regret distribution and its worst case, the share of picks that miss the job-time budget, the overlap of the predicted and measured frontiers, and the model errors over all 1,440. Rejected: a 5% cost tolerance (the held-out LUT error was 5.7% at worst, so near-ties would fail a model that works as validated), and the measure as written. (6) **Sampling experiment (step 6.6): a learning curve on existing data.** The models are refitted on random subsets of the calibration builds, and each refit is scored on the brute-force sub-grid; no new tool time. Active or decision-aware sampling is not run. (7) **Steps:** 6.a–6.d are rewritten into steps 6.1–6.10 (§10) | user, 2026-10-04 (gate 6.0) |
 | Finding (M6) | **Phase 6 findings** (corrected at the M6 review). Sources: `paper_data/decision_fidelity*.csv`, `bruteforce_error_metrics.csv`, `dse_cost.csv`, `learning_curve.csv`, `dse_guard*.csv`, `dse_shape.csv`, `finalists_impl.csv`, `finalists_pairs.csv`; each regenerates from committed tables with the command in its step's §15 row, except the two finalists tables, whose inputs (build records and Vivado reports) are not tracked. Setting as in the M3 finding (uncoded uplink, i.i.d. Rayleigh, BER 1e-3, loss against floating-point exact MMSE); hardware on `xczu48dr` at 4 ns with Vitis HLS and Vivado 2024.1; N = 32. Resources are csynth estimates unless a number is called implemented. **(A) The method.** (1) Models calibrated on 86 builds (2.1 tool-hours, 35 minutes of wall time) make nearly the design choices of a brute force. On a slice of the space built and measured in full (1,440 detectors, 1.3% of the configurations, 57 tool-hours), the model's pick meets the job-time budget within 2% and costs within 10% of the best in 2,587 of 2,592 decisions (DSP 99.5%, LUT 99.8%, FF 99.8%, block RAM 100%). The decision set and the scoring rule were committed before the first of those builds. The pick has exactly the best cost in 92.5% of the decisions; regret is 0 at the median and 0.8% at the 95th percentile. With no tolerance on the job-time budget, 2,558 are right (LUT 97.2% at the lowest). (2) Over the same 1,440 builds DSP and block RAM are exact on every one, LUT is 0.9% off on average and FF 2.3%; job time is 1.0% off over the 8,807 jobs where the CG loop is the bottleneck. (3) The whole space, 6,084,720 joint designs, is priced in 15 s; its brute force is projected at about 4,000 tool-hours. (4) About half the calibration passes the same bar: with 45 builds, 19 of 20 random subsets are right in at least 90% of the decisions on every resource; with 30 or fewer it depends on the draw. **(B) The design** (model-predicted csynth unless stated). (5) Guard bits on the two scalar accumulators are worth a median 8% of the LUTs (quartiles 3.5% and 12.6%; range 0–94%), 15% of the flip-flops and 24% of the block RAM of the cheapest design, over 164 scenario-budget questions; in 24 of them the cheapest design has no guard bits anyway. The median DSP difference is nothing, because a 12-bit and a 16-bit multiply each take one DSP; but 62 of the 164 designs without guard use more DSPs and 7 fewer (mean +23%), where the lack of guard changes the iteration count or the architecture. For 52 of 216 questions (43 of them 64-QAM) there is no design without guard bits within the 16-bit datapath. (6) As implemented, on six pairs: leaving the guard out costs 1.5–17.6% of the LUTs and 3–18% of the flip-flops. Three of the six designs without guard run more iterations: two pay in job time (+22% and +85%), the third in a larger array (+27% DSPs). Implemented block RAM is equal in five pairs and +92% in one. (7) Speed comes from lanes first: the cheapest design goes from 1 lane and a 4-element array at the loosest job-time budget to 16 lanes at the tightest, the vector unit staying between a half and three quarters of an iteration. Per scenario, the tightest budget's design is 17.6 times faster for 5.3 times the LUTs and 34 times the DSPs (medians of the 27 ratios). **(C) csynth against implementation, on the twelve finalists.** (8) All twelve meet 4 ns (2.70–3.91 ns) and are bit-exact at RTL. csynth counts 2.7–3.9 times the implemented LUTs and 1.1–1.8 times the flip-flops, yet the order of the twelve by LUTs, and by flip-flops, is the same before and after. By DSPs and by block RAM it is not. (9) DSPs: Vivado uses four more per lane than csynth reports from 12 bits up, and at 10 bits it puts back into DSPs the multiplies csynth builds from LUTs, so the 10-bit design has 28 DSPs, as many as its 14-bit counterpart, against csynth's 17 and 24. A narrow format saves logic and registers, not DSPs. Block RAM differs in both directions. **Caveats.** (a) *What was measured.* The models predict csynth, not the implemented design; implemented numbers cover twelve designs, all 16-QAM with 64 antennas, and the csynth-over-implementation LUT ratio is not constant. Seven of the twelve have the knobs of a sub-grid build. (b) *Coverage of the brute force.* 1,440 of 107,460 configurations: 3 of the 17 lane and column pairs, array rows 1, 4 and K (no R = 2), the smallest depths; they pair 135 distinct vector units with 240 distinct matmuls. Only 19% of the predicted frontier's rows are sub-grid configurations (42% of them have 2 or 8 lanes). It is csynth and RTL, not implementation. (c) *Timing at the fast end.* The largest implemented design has 110k csynth LUTs and 384 csynth DSPs, and the slack was 0.09 ns at 98k LUTs; 21% of the frontier's rows have more DSPs than that. Every job time at the fast end, and the 17.6 times of (7), assumes a 4 ns clock that csynth estimates (3.39 ns at most) but place and route did not show there. (d) *The models' weak spots.* One family is mispredicted in job time (merged one-row arrays in the 3-multiply form, 7.5% slow, never calibrated); it cost no decision. No latency is claimed under twice the memory-transfer floor (193 of 9,000 sub-grid jobs, 5.4% off on average and up to 38%); that guard cost one decision. Four of the five wrong decisions are budgets within 1% of a design's job time. (e) *The decision count* includes repeats (1,728 distinct questions; 99.77% of those). (f) *The learning curve.* Two detectors are in every subset, without which no memory word width can be priced; at 10 and 20 builds the LUT regressions have fewer builds than parameters (the fit is then the minimum-norm one), and 45 is the first size at which every regression is over-determined; the number of subsets that pass is not monotone (4, 13, 12, 19); the refits keep v2's terms and merge threshold, which were chosen with all 86 builds. (g) *The refit.* The v2 models were refitted after the first two held-out sets had been scored with v1, one of which showed the matmul's weakness; v2's clean tests are the six held-out matmul builds drawn before the refit and the brute force. (h) *Pre-registration* is attested by local history: the commits that fix the decision set, the grid and the scoring rule (`8948aa1`) precede the first brute-force record by 2.5 minutes of file time, but they reached the remote together with the results. The finalists' list was committed while the brute force was running (258 builds measured, none read). The scoring code gained two additions after the pilot's 77 builds existed; the code as pre-registered gives the same judged rows. (i) *The projection* of about 4,000 tool-hours is a line fitted on the sub-grid's build times (other fits give 3,860–4,300); the 28 days it would take on this machine ignore that the pruned builds alone would need about 580 GB of disk | doer, 2026-10-05; corrected after the independent review (0 blocking, 11 should-fix, 5 suggestions) |
+| Decision | **Extension: Phases 7–9.** Added at the user's request: move the systolic matrix multiply and the CG vector unit into Waveflow as reusable components, then rebuild this example on them. Scope rule: Waveflow gains only what those two components need, in a form not specific to this example; the detector composite, the MIMO-specific formats and the study tooling stay in the example. What moves and what stays is listed at the head of Phase 7 and fixed at gate 7.0 | user, 2026-10-06 |
 | Open question | Step-level detail for Phases 4–6 | refined at gates 4.0, 5.0, 6.0 |
+| Open question | Step-level detail and the open choices of Phases 7–9 (module home, how formats reach C++, the message format, run-time dimensions per component, the conjugate-transpose option, the cost model and its platform, the test harness, the stopping rule, which tests Phase 9 retires, the re-measure thresholds) | gates 7.0, 8.0, 9.0 |
 
 ## 15. Progress log
 
@@ -803,8 +1081,12 @@ decision set before 6.4, and the finalists before 6.7. The models are not change
 | 2026-10-05 | 6.9 (regression) | At `cecd7b2`, after the review corrections. `pytest -m "not vitis and not xsi" -p no:cacheprovider`: **7 failed (the 7 of §6), 3,689 passed, 37 skipped** (562 s; 67 more passing tests than at M5). `pytest -m vitis -rs` on the four conformance files of §11: 118 passed, 0 skipped (771 s); on the three Phase 4 hardware files: 47 passed, 0 skipped (809 s). `pytest -m xsi -rs` on the four mimo_cg hardware files: 13 passed, 0 skipped (550 s; one more gate than at M5, the brute-force harness mode). AC-R lint: the 50 Python files this branch adds pass `ruff check` and `black --check`; the 8 existing files it changes have the same number of ruff findings as on `main` and are not reformatted. `pytest tests/docs`: passed, 2 skipped as before | the four pytest runs; `ruff`; `black` | The toolchain runs were made at `4a9bec3`, one commit before the review corrections, which changed tests, docs and plan text only (`git diff --stat 4a9bec3 cecd7b2`); the fast suite was re-run after them |
 | 2026-10-05 | 6.9 | **The user approved M6**, having been shown the results, the review's findings and corrections, the deviations (the model-v2 changes beyond the LUT terms, the mispredicted family, timing not shown at the fast end, the crashed Vivado run, the push the doer did not make), the new front-matter summary that is the page's entry in the examples index, and the proposed `CLAUDE.md` notes. The user approved both notes; they were added in `5986455` | user approval | none |
 | 2026-10-05 | 6.10 | §16 filled in. AC6 and AC-R ticked. On AC6's "within the 48-hour budget": §2 words the budget as "about 48 hours of csynth on this machine"; the run took 9.74 h of wall time on this machine, 39.95 tool-hours of csynth and 56.98 tool-hours with the RTL runs. The user approved the run on the pilot's projection of 56 tool-hours and about 10 h. The docs page's status line and the vision note now say Phase 6 is reviewed. **The plan is complete** | read-through; `pytest tests/docs` | none |
+| 2026-10-06 | planning (extension) | The user asked for new phases that move the systolic array and the CG vector unit into `waveflow/`, adding only reusable parts worth adding. Research: the example's hardware code (which parts carry CG- or example-specific types: `fmt` is an index into the example's registry, `mem_dwidth` sizes the command words, `cg_cmac` takes `cg::` types); the framework's hook-component convention and the warning in `plans/vitis_l1_hwmodule.md` that a module's home must be fixed before its first build; where task bodies ship (`waveflow/build/*.h`, package data); `device_rules.dsp_per_mult`, whose packing of narrow multiplies differs from what Phase 4 measured on `xczu48dr`. Added Phases 7–9 (milestone-level, gates 7.0, 8.0, 9.0), AC7, AC8, AC9 and AC-R9, and the matching rows in §1–§3, §9, §11, §12 and §14 | this revision | none |
+| 2026-10-06 | planning (extension, review) | At the user's request, an independent reviewer agent checked the extension before commit (read-only, against the code). Verdict: ready with fixes; 1 blocking, 10 should-fix, 6 suggestions, all folded in. Blocking: formats could not be "an `HwParam` for every template argument" (an `HwParam` is stored as an integer, task instances and calibration keys are named from integer template arguments, and the example's types live in one global `namespace cg`, so a build holds one format set); gate 7.0 now decides how formats reach C++ (a rendered per-instance types struct, framework APIs extended by addition only). Should-fix: a build step and test harness the components can use without the example's `build.py`; golden vectors frozen at `6a2cdca` and an independent exact reference, so the bit-exact reference survives Phase 9; a probe of both bodies with the index arithmetic as counters; the message format fixed once (tag, payload length, message count, status; no clamping) with a rejected-job RTL test; a unit-to-unit composition check (9.3); Phase 9 acceptance against the Phase 5 measurements, with retired tests listed first; a per-message cycle model with an input/output floor, `ResourceModel`s, ≥ 10 held-out builds at ≥ 3 job shapes, and a platform that records its tool version and does not collide with the example's; a leaner moves list (the 3-multiply product beside `complex_utils::cmult`, `hw/csim.py` stays, the LUT-multiply threshold goes in platform data); example details kept out (K-lane A rows, `nit ≤ K`, `N = 32`, `R = 0`); regression and diff-review gaps. Checked and confirmed by the doer in the code: the `HwParam` integer conversion, the integer task-instance names, the global types namespace, the existing `cmult`, the platform manifest with no tool version, and the always-ready XSI sink | the reviewer's report; this revision | none |
 
 ## 16. Completion report
+
+This report covers Phases 0–6. Phases 7–9 get their own report at the end of this section when they end.
 
 Written 2026-10-05, after the user approved M6. Branch `paper/mimo-cg`; nothing here was pushed or
 merged by the doer.
@@ -899,6 +1181,10 @@ merged by the doer.
     in the XSI harness when every job is done (the fixed cycle budget cost hours); a memory-aware
     job limit for Vivado runs; a pre-registration helper that commits, pushes and prints the hash
     before a run may start; a check that a new table's name is not git-ignored.
+
+### Completion report, Phases 7–9
+
+*Filled in when Phase 9 ends (step 9.6), with the same headings as above.*
 
 ## Checklist coverage
 
