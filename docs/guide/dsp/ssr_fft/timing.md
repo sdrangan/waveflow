@@ -36,15 +36,17 @@ Summed over the chain -- the transposer's commutators add `L/4 − 1` between th
 
 | L | tasks | first frame done (cycles from its first input word) | `19L/16 − 3` |
 |---|---|---|---|
-| 16 | 8 | 42 | 16 |
-| 64 | 11 | 111 | 73 |
-| 256 | 14 | 352 | 301 |
-| 1024 | 17 | 1278 | 1213 |
+| 16 | 7 | 40 | 16 |
+| 64 | 10 | 109 | 73 |
+| 256 | 13 | 350 | 301 |
+| 1024 | 16 | 1276 | 1213 |
+| 4096 | 19 | 4938 | 4861 |
 
 **It does not depend on arrival phase.** A commutator decides each group when its first word arrives,
 so an isolated frame finds every task in step. Measured at `L = 64`: 24 frames with random idle gaps
-of 150 to 400 cycles all took exactly 111 cycles from first word in to last word out -- the same as
-the first frame of a back-to-back run -- and exactly 96 from last word in to last word out.
+of 150 to 400 cycles all took exactly 109 cycles from first word in to last word out -- the same as
+the first frame of a back-to-back run -- and exactly 94 from last word in to last word out; every
+length measured shows the same (`examples/ssr_fft/measured.json`).
 `VitisFft`'s vendor core, whose commutators run a free-running window, spreads that second measure
 over 105 to 123 and needs a mean with a stated error ([its timing](../../vitis_l1/fft/timing.md)).
 
@@ -63,7 +65,7 @@ Two choices make it track the hardware:
 
 - **Cut-through, not store-and-forward.** The output starts `lat` cycles after the frame's *first*
   word (`write_pipelined` with a start time), not after its last. The hardware streams; a pysim that
-  waited for whole frames would charge every one of the 17 tasks a frame transfer, putting 17 frames
+  waited for whole frames would charge every one of the 16 tasks a frame transfer, putting 16 frames
   of latency on a chain that has about one.
 - **The write is deferred** (`call_after`), so a child reads its next frame while the previous one
   drains -- the interval comes out `L/R` by itself.
@@ -75,9 +77,10 @@ once by 2. Against the RTL:
 
 | L | pysim first frame | RTL first frame | interval, both |
 |---|---|---|---|
-| 16 | 41 | 42 | 4 |
-| 64 | 110 | 111 | 16 |
-| 1024 | 1274 | 1278 | 256 |
+| 16 | 40 | 40 | 4 |
+| 64 | 109 | 109 | 16 |
+| 256 | 349 | 350 | 64 |
+| 1024 | 1273 | 1276 | 256 |
 
 `tests/dsp/ssr_fft/test_hw.py` pins it: within 5 cycles at `L` = 16 ... 1024, the interval exact.
 
@@ -89,6 +92,6 @@ XSI run of the same four frames costs a 1.5-2 minute csynth and 10-20 s of simul
 
 - **A fused pysim.** A single process for the whole FFT, `VitisFft`-style -- same bits, the latency as
   one number -- for system simulations that do not need to see inside.
-- **The SOB reorder in the pysim** is timed with a fixed reader start-up (3 cycles), which gives an
-  interval of `L/R + 3` against the RTL's `L/R + 4`.
+- **The SOB reorder in the pysim** is timed with a fixed reader start-up matched to XSI (5 cycles),
+  which reproduces the RTL's `L/R + 5`; it is a constant fitted at one length (`L = 64`).
 - **Latencies at `L = 4096`** and for widths other than 16 bits are unmeasured against the pysim.

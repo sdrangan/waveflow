@@ -51,10 +51,36 @@ struct Dut {
     /// Resolve a port that is allowed to be absent (returns -1) — for optional/unused channels.
     int port_opt(const char* name) { return x.get_port_number(name); }
 
+    /// 32-bit logic words the port buffers hold: 2048 bits.  XSI's put/get_value read or write
+    /// ceil(width/32) of them -- as many as the PORT has, whatever the caller meant -- so a buffer
+    /// shorter than the port is a silent overrun.  The old 4-entry buffers were exactly that for
+    /// any port wider than 128 bits.
+    static const int LV_MAX = 64;
+
     void put1(int p, uint32_t b)  { LV v; v.aVal = b & 1u; v.bVal = 0; x.put_value(p, &v); }
-    void putW(int p, uint64_t val){ LV v[4]; for (int k=0;k<4;k++){ v[k].aVal=(uint32_t)(val>>(32*k)); v[k].bVal=0; } x.put_value(p, v); }
-    uint32_t get1(int p)          { LV v[4]; std::memset(v,0,sizeof(v)); x.get_value(p, v); return v[0].aVal & 1u; }
-    uint64_t getW(int p)          { LV v[4]; std::memset(v,0,sizeof(v)); x.get_value(p, v); return ((uint64_t)v[1].aVal<<32) | v[0].aVal; }
+    void putW(int p, uint64_t val){ uint64_t c[1] = {val}; putChunks(p, c, 1); }
+    uint32_t get1(int p)          { LV v[LV_MAX]; std::memset(v,0,sizeof(v)); x.get_value(p, v); return v[0].aVal & 1u; }
+    uint64_t getW(int p)          { uint64_t c[1]; getChunks(p, c, 1); return c[0]; }
+
+    /// A wide port as *k* uint64 chunks, chunk 0 the low 64 bits -- the bundles' and the pysim's
+    /// wide-word convention.  Bits above the port's width are ignored by XSI; bits of the port
+    /// above 64k are driven 0.
+    void putChunks(int p, const uint64_t* c, int k) {
+        LV v[LV_MAX];
+        std::memset(v, 0, sizeof(v));
+        for (int i = 0; i < k && 2 * i + 1 < LV_MAX; i++) {
+            v[2 * i].aVal = (uint32_t)c[i];
+            v[2 * i + 1].aVal = (uint32_t)(c[i] >> 32);
+        }
+        x.put_value(p, v);
+    }
+    void getChunks(int p, uint64_t* c, int k) {
+        LV v[LV_MAX];
+        std::memset(v, 0, sizeof(v));
+        x.get_value(p, v);
+        for (int i = 0; i < k; i++)
+            c[i] = (2 * i + 1 < LV_MAX) ? (((uint64_t)v[2 * i + 1].aVal << 32) | v[2 * i].aVal) : 0;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -276,10 +302,14 @@ private:
 /// thing that propagates into a comparison rather than into an error.  All-ones is "every byte of
 /// this beat is a real data byte", which is what a DMA drives for a contiguous transfer and the only
 /// thing this repo's designs ever mean.
+///
+/// WIDE PORTS.  A port wider than 64 bits takes *chunks* = ceil(W/64) uint64 per beat (low chunk
+/// first), in the ctor vector and in the bundle alike; the generator passes *chunks* only when it is
+/// not 1, so every narrower harness is unchanged.  A bundle whose word width disagrees is refused.
 class AxisMaster : public XsiSimObj {
 public:
-    AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words)
-        : d_(d), words_(std::move(words)) {
+    AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words, int chunks = 1)
+        : d_(d), words_(std::move(words)), k_(chunks < 1 ? 1 : chunks) {
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
@@ -287,7 +317,7 @@ public:
         P_keep  = d.port_opt((prefix + "_TKEEP").c_str());
         P_strb  = d.port_opt((prefix + "_TSTRB").c_str());
         one_burst();
-        h_valid_ = words_.empty() ? 0u : 1u;
+        h_valid_ = nwords() == 0 ? 0u : 1u;
     }
 
     //: Optional: if set, pre_sim (re)loads the presented words from this bundle instead of the ctor
@@ -295,11 +325,17 @@ public:
     std::string in_bundle;
     void pre_sim() override {
         if (in_bundle.empty()) return;
+        const int kb = BurstBundle::read_chunks(in_bundle);
+        if (kb != k_) {
+            std::fprintf(stderr, "FATAL: bundle %s holds %d-chunk words; this AxisMaster's port takes "
+                         "%d (64-bit chunks per beat)\n", in_bundle.c_str(), kb, k_);
+            std::exit(5);
+        }
         words_ = BurstBundle::read_words(in_bundle);
         bounds_ = BurstBundle::read_bounds(in_bundle);
         if (bounds_.empty()) one_burst();
         widx_ = 0;
-        h_valid_ = words_.empty() ? 0u : 1u;
+        h_valid_ = nwords() == 0 ? 0u : 1u;
     }
 
     void sample() override { ready_ = d_.get1(P_ready); beat_ = (h_valid_ && ready_); }
@@ -317,19 +353,23 @@ public:
     //: time a DUT at its ports from the BFMs alone -- no waveform dump, no VCD parse.
     std::string accept_bundle;
     void post_sim() override {
-        if (!accept_bundle.empty()) BurstBundle::write_capture(accept_bundle, acc_words_, acc_cycles_);
+        if (!accept_bundle.empty()) BurstBundle::write_capture(accept_bundle, acc_words_, acc_cycles_, k_);
     }
 
     void update() override {
         ++cycle_;                                   // 1-based, the same count AxisSlave keeps
         if (gap_left_ > 0) {
-            if (--gap_left_ == 0) h_valid_ = (widx_ < (int)words_.size()) ? 1u : 0u;
+            if (--gap_left_ == 0) h_valid_ = (widx_ < nwords()) ? 1u : 0u;
             return;
         }
-        if (beat_ && widx_ < (int)words_.size()) {
-            if (!accept_bundle.empty()) { acc_words_.push_back(words_[widx_]); acc_cycles_.push_back(cycle_); }
+        if (beat_ && widx_ < nwords()) {
+            if (!accept_bundle.empty()) {
+                acc_words_.insert(acc_words_.end(), words_.begin() + (size_t)widx_ * k_,
+                                  words_.begin() + (size_t)(widx_ + 1) * k_);
+                acc_cycles_.push_back(cycle_);
+            }
             ++widx_;
-            const bool more = widx_ < (int)words_.size();
+            const bool more = widx_ < nwords();
             const int gap = (more && is_last(widx_ - 1)) ? gap_before(++burst_idx_) : 0;
             if (gap > 0) {
                 gap_left_ = gap;
@@ -341,25 +381,36 @@ public:
     }
 
     void drive() override {
-        d_.putW(P_data, (widx_ < (int)words_.size()) ? words_[widx_] : 0);
+        if (widx_ < nwords()) {
+            d_.putChunks(P_data, &words_[(size_t)widx_ * k_], k_);
+        } else {
+            std::vector<uint64_t> z(k_, 0);
+            d_.putChunks(P_data, z.data(), k_);
+        }
         d_.put1(P_valid, h_valid_);
         if (P_last >= 0) d_.put1(P_last, is_last(widx_));
-        // All-ones, sized by the port itself: putW writes the low bits of a 64-bit value and the
-        // pin is one bit per payload byte, so ~0 is right at every width this repo uses.
-        if (P_keep >= 0) d_.putW(P_keep, ~(uint64_t)0);
-        if (P_strb >= 0) d_.putW(P_strb, ~(uint64_t)0);
+        // All-ones, sized by the port itself: one bit per payload byte, so k chunks of ~0 cover
+        // the pin at any width (XSI drops what the port does not have).
+        if (P_keep >= 0 || P_strb >= 0) {
+            std::vector<uint64_t> ones(k_, ~(uint64_t)0);
+            if (P_keep >= 0) d_.putChunks(P_keep, ones.data(), k_);
+            if (P_strb >= 0) d_.putChunks(P_strb, ones.data(), k_);
+        }
     }
 
-    bool done() const { return widx_ >= (int)words_.size(); }
+    bool done() const { return widx_ >= nwords(); }
     int  sent() const { return widx_; }
-    int  total() const { return (int)words_.size(); }
+    int  total() const { return nwords(); }
 
 private:
     /// One burst spanning every word — the ctor's vector, and the fallback for a bundle whose
     /// bounds.bin is missing.  A continuous stream is a single frame, never a frameless one: with
     /// no bound at all the last word would carry no TLAST and a kernel waiting for one would hang
     /// at the very end of a run, which reads as a design deadlock rather than as a missing file.
-    void one_burst() { bounds_.assign(1, (uint64_t)words_.size()); }
+    void one_burst() { bounds_.assign(1, (uint64_t)nwords()); }
+
+    /// Beats held: the vector's length in words of *k_* chunks.
+    int nwords() const { return (int)(words_.size() / (size_t)k_); }
 
     /// Idle cycles before burst *k* (k >= 1) -- the same rule as StreamDriver.gap_before.
     int gap_before(int k) const {
@@ -371,7 +422,7 @@ private:
     /// cycle against a cursor that only moves forward, so it is O(1) amortised; a scan is the right
     /// shape here because the bounds are cumulative and monotone.
     uint32_t is_last(int i) const {
-        if (i < 0 || i >= (int)words_.size()) return 0u;
+        if (i < 0 || i >= nwords()) return 0u;
         for (size_t k = 0; k < bounds_.size(); ++k)
             if ((uint64_t)i + 1 == bounds_[k]) return 1u;
         return 0u;
@@ -379,6 +430,7 @@ private:
 
     Dut& d_;
     std::vector<uint64_t> words_;
+    int k_;                             // uint64 chunks per beat (1 for a port of 64 bits or less)
     std::vector<uint64_t> bounds_;
     int P_data, P_valid, P_ready, P_last, P_keep, P_strb;
     int widx_ = 0;
@@ -392,9 +444,12 @@ private:
 };
 
 /// Always-ready sink for an AXIS master port of the kernel; collects every word it emits.
+/// A port wider than 64 bits takes *chunks* = ceil(W/64): every word is stored as that many uint64,
+/// low chunk first, and the capture bundle says so (word_bytes = 8 * chunks).
 class AxisSlave : public XsiSimObj {
 public:
-    AxisSlave(Dut& d, const std::string& prefix) : d_(d) {
+    AxisSlave(Dut& d, const std::string& prefix, int chunks = 1)
+        : d_(d), k_(chunks < 1 ? 1 : chunks), data_(k_, 0) {
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
@@ -407,7 +462,7 @@ public:
 
     void sample() override {
         valid_ = d_.get1(P_valid);
-        data_  = d_.getW(P_data);
+        d_.getChunks(P_data, data_.data(), k_);
         last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
         beat_  = (valid_ && d_ready_);
     }
@@ -423,8 +478,8 @@ public:
     void update() override {
         ++cycle_;                                   // 1-based: this is the cycle now executing
         if (beat_) {
-            words_.push_back(data_); beat_cycles_.push_back(cycle_);
-            if (P_last >= 0 && last_) bounds_.push_back((uint64_t)words_.size());
+            words_.insert(words_.end(), data_.begin(), data_.end()); beat_cycles_.push_back(cycle_);
+            if (P_last >= 0 && last_) bounds_.push_back((uint64_t)count());
         }
     }
 
@@ -449,16 +504,17 @@ public:
         // finding for the checker, not something to hide by not writing the tail.
         if (P_last >= 0) {
             std::vector<uint64_t> b = bounds_;
-            if (b.empty() || b.back() != (uint64_t)words_.size())
-                b.push_back((uint64_t)words_.size());
-            BurstBundle::write_capture(out_bundle, words_, beat_cycles_, b);
+            if (b.empty() || b.back() != (uint64_t)count())
+                b.push_back((uint64_t)count());
+            BurstBundle::write_capture(out_bundle, words_, beat_cycles_, b, k_);
         } else {
-            BurstBundle::write_capture(out_bundle, words_, beat_cycles_);
+            BurstBundle::write_capture(out_bundle, words_, beat_cycles_, k_);
         }
     }
 
     const std::vector<uint64_t>& words() const { return words_; }
-    size_t count() const { return words_.size(); }
+    /// Beats received (each `chunks` uint64 in `words()`).
+    size_t count() const { return words_.size() / (size_t)k_; }
     /// Cumulative word counts at each TLAST (empty for a port without the pin).
     const std::vector<uint64_t>& bounds() const { return bounds_; }
 
@@ -473,13 +529,14 @@ public:
 
 private:
     Dut& d_;
+    int k_;                             // uint64 chunks per beat; declared before data_ (init order)
+    std::vector<uint64_t> data_;        // this cycle's sampled beat, k_ chunks
     int P_data, P_valid, P_ready, P_last;
     std::vector<uint64_t> words_;
     std::vector<uint64_t> bounds_;
     std::vector<long> beat_cycles_;
     long cycle_ = 0;
     uint32_t h_ready_ = 1, d_ready_ = 1, valid_ = 0, last_ = 0;
-    uint64_t data_ = 0;
     bool beat_ = false;
 };
 

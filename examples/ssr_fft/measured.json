@@ -8,34 +8,140 @@
   "L16_pingpong": {
    "L": 16,
    "reorder": "pingpong",
+   "boundary": "radixword",
    "bits_exact": true,
    "interval": [
     4
    ],
-   "first_frame": 42,
+   "first_frame": 40,
    "isolated_latency": [
-    42
+    40
    ],
    "isolated_span": [
-    39
+    37
    ],
    "resources": {
     "bram": 5,
     "dsp": 12,
-    "ff": 4887,
-    "lut": 5936,
+    "ff": 4612,
+    "lut": 5752,
     "est_clock_ns": 2.81
    },
-   "csynth_s": 87,
-   "xsi_s": 15,
+   "csynth_s": 52,
+   "xsi_s": 13,
    "date": "2026-10-06"
   },
   "L64_pingpong": {
    "L": 64,
    "reorder": "pingpong",
+   "boundary": "radixword",
    "bits_exact": true,
    "interval": [
     16
+   ],
+   "first_frame": 109,
+   "isolated_latency": [
+    109
+   ],
+   "isolated_span": [
+    94
+   ],
+   "resources": {
+    "bram": 6,
+    "dsp": 24,
+    "ff": 8306,
+    "lut": 10396,
+    "est_clock_ns": 2.855
+   },
+   "csynth_s": null,
+   "xsi_s": 15,
+   "date": "2026-10-06"
+  },
+  "L256_pingpong": {
+   "L": 256,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    64
+   ],
+   "first_frame": 350,
+   "isolated_latency": [
+    350
+   ],
+   "isolated_span": [
+    287
+   ],
+   "resources": {
+    "bram": 14,
+    "dsp": 36,
+    "ff": 13335,
+    "lut": 15005,
+    "est_clock_ns": 2.901
+   },
+   "csynth_s": 83,
+   "xsi_s": 15,
+   "date": "2026-10-06"
+  },
+  "L1024_pingpong": {
+   "L": 1024,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    256
+   ],
+   "first_frame": 1276,
+   "isolated_latency": [
+    1276
+   ],
+   "isolated_span": [
+    1021
+   ],
+   "resources": {
+    "bram": 50,
+    "dsp": 48,
+    "ff": 24713,
+    "lut": 21400,
+    "est_clock_ns": 2.901
+   },
+   "csynth_s": 102,
+   "xsi_s": 16,
+   "date": "2026-10-06"
+  },
+  "L4096_pingpong": {
+   "L": 4096,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    1024
+   ],
+   "first_frame": 4938,
+   "isolated_latency": [
+    4938
+   ],
+   "isolated_span": [
+    3915
+   ],
+   "resources": {
+    "bram": 122,
+    "dsp": 60,
+    "ff": 54815,
+    "lut": 34458,
+    "est_clock_ns": 2.916
+   },
+   "csynth_s": null,
+   "xsi_s": 23,
+   "date": "2026-10-06"
+  },
+  "L64_sob": {
+   "L": 64,
+   "reorder": "sob",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    21
    ],
    "first_frame": 111,
    "isolated_latency": [
@@ -45,114 +151,14 @@
     96
    ],
    "resources": {
-    "bram": 6,
-    "dsp": 24,
-    "ff": 8597,
-    "lut": 10580,
-    "est_clock_ns": 2.855
-   },
-   "csynth_s": null,
-   "xsi_s": 13,
-   "date": "2026-10-06"
-  },
-  "L256_pingpong": {
-   "L": 256,
-   "reorder": "pingpong",
-   "bits_exact": true,
-   "interval": [
-    64
-   ],
-   "first_frame": 352,
-   "isolated_latency": [
-    352
-   ],
-   "isolated_span": [
-    289
-   ],
-   "resources": {
-    "bram": 14,
-    "dsp": 36,
-    "ff": 13642,
-    "lut": 15189,
-    "est_clock_ns": 2.901
-   },
-   "csynth_s": 118,
-   "xsi_s": 28,
-   "date": "2026-10-06"
-  },
-  "L1024_pingpong": {
-   "L": 1024,
-   "reorder": "pingpong",
-   "bits_exact": true,
-   "interval": [
-    256
-   ],
-   "first_frame": 1278,
-   "isolated_latency": [
-    1278
-   ],
-   "isolated_span": [
-    1023
-   ],
-   "resources": {
-    "bram": 50,
-    "dsp": 48,
-    "ff": 25036,
-    "lut": 21584,
-    "est_clock_ns": 2.901
-   },
-   "csynth_s": 115,
-   "xsi_s": 21,
-   "date": "2026-10-06"
-  },
-  "L4096_pingpong": {
-   "L": 4096,
-   "reorder": "pingpong",
-   "bits_exact": true,
-   "interval": [
-    1024
-   ],
-   "first_frame": 4940,
-   "isolated_latency": [
-    4940
-   ],
-   "isolated_span": [
-    3917
-   ],
-   "resources": {
-    "bram": 122,
-    "dsp": 60,
-    "ff": 55154,
-    "lut": 34642,
-    "est_clock_ns": 2.916
-   },
-   "csynth_s": 135,
-   "xsi_s": 27,
-   "date": "2026-10-06"
-  },
-  "L64_sob": {
-   "L": 64,
-   "reorder": "sob",
-   "bits_exact": true,
-   "interval": [
-    20
-   ],
-   "first_frame": 113,
-   "isolated_latency": [
-    113
-   ],
-   "isolated_span": [
-    98
-   ],
-   "resources": {
     "bram": 11,
     "dsp": 24,
-    "ff": 8564,
-    "lut": 10484,
+    "ff": 8272,
+    "lut": 10289,
     "est_clock_ns": 2.855
    },
    "csynth_s": null,
-   "xsi_s": 13,
+   "xsi_s": 15,
    "date": "2026-10-06"
   }
  }

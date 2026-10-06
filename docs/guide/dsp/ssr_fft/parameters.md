@@ -6,7 +6,7 @@ nav_order: 1
 audience: python
 api: [SsrFft, Geometry]
 snippets: run
-summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the reorder implementation, the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
+summary: "Constructing an SsrFft and every parameter it takes: the build-time HwParams (L and the input and twiddle widths), the boundary (one RadixWord port each way, or VitisFft's four lanes), the reorder implementation, the clock and whether the pysim is timed. What it derives through Geometry -- the stage count, the commutator block sizes, every edge's format, the task list and the ports -- and what it refuses."
 ---
 
 # Parameters
@@ -19,25 +19,37 @@ from waveflow.hw.clock import Clock
 from waveflow.simulation.simulation import Simulation
 
 fft = SsrFft(name="fft", sim=Simulation(), clk=Clock(freq=250e6), L=1024)
-print("ports per side:", len(fft.s_in), "in,", len(fft.m_out), "out")
-print("input word bits:", fft.s_in[0].bitwidth)
-print("output word bits:", fft.m_out[0].bitwidth)
+print("input port: s_in", fft.s_in.bitwidth, "bits")
+print("output port: m_out", fft.m_out.bitwidth, "bits")
 print("output format: ap_fixed<%d,%d>" % (fft.out_fmt.W, fft.out_fmt.int_bits))
 print("stages:", fft.geo.S)
 print("tasks:", len(fft.tasks), "->", " ".join(c.task.inst for c in fft.tasks))
 ```
 
 ```text
-ports per side: 4 in, 4 out
-input word bits: 32
-output word bits: 54
+input port: s_in 128 bits
+output port: m_out 216 bits
 output format: ap_fixed<27,13>
 stages: 5
-tasks: 18 -> lanes_in tp0 tp1 tp2 tp3 st0 cm0 st1 cm1 st2 cm2 st3 cm3 st4 rc rw rr lanes_out
+tasks: 17 -> in_reg tp0 tp1 tp2 tp3 st0 cm0 st1 cm1 st2 cm2 st3 cm3 st4 rc rw rr
 ```
 
-The ports and formats are `VitisFft`'s at the same parameters; the inside is one child per task --
-`tp*` the transposer, `st*` the stages, `cm*` their commutators, `rc`/`rw`/`rr` the reorder.
+One port each way, one `RadixWord` -- four complex samples -- a beat. Inside, one child per task:
+`in_reg` a one-word register at the input (for timing; see [Synthesis](synthesis.md)), `tp*` the
+transposer, `st*` the stages, `cm*` their commutators, `rc`/`rw`/`rr` the reorder.
+
+With `lanes=True` it presents `VitisFft`'s port group instead -- four ports each way, one sample a
+word -- and is a drop-in replacement for it:
+
+```python
+lf = SsrFft(name="fft", sim=Simulation(), clk=Clock(freq=250e6), L=1024, lanes=True)
+print("with lanes:", len(lf.s_in), "ports in of", lf.s_in[0].bitwidth, "bits,",
+      len(lf.m_out), "out of", lf.m_out[0].bitwidth)
+```
+
+```text
+with lanes: 4 ports in of 32 bits, 4 out of 54
+```
 
 Everything that follows from `L` and the formats lives in one object, `Geometry`, which the model,
 the module and the C++ generator all read:
@@ -83,6 +95,7 @@ reorder tasks: ['rc', 'rp']
 | `in_w`, `in_i` | `HwParam[int]` | 16, 2 | input `ap_fixed<in_w, in_i>`, per real/imaginary part |
 | `tw_w`, `tw_i` | `HwParam[int]` | 18, 2 | twiddle table `ap_fixed<tw_w, tw_i>` |
 | `reorder` | `str` | `"sob"` | the reorder's frame buffer: `"sob"` (a `stream_of_blocks` between two tasks) or `"pingpong"` (both halves in one task) |
+| `lanes` | `bool` | `False` | the boundary: one `RadixWord` port each way (`s_in`, `m_out`), or with `True` `VitisFft`'s four-lane group (`s_in_0..3`, `m_out_0..3`) |
 | `timed` | `bool` | `True` | `False` gives exact bits in zero simulated time |
 
 `L` and the widths are `HwParam`s: they reach the C++ as the generated configuration (formats,
@@ -100,8 +113,8 @@ structure. See [Timing](timing.md).
 - **`out_fmt`**, the output format -- read it rather than computing it.
 - **`tasks`**: the children, in pipeline order, each with its `kernel_task()` -- the generated wrapper
   it synthesizes to.
-- **The ports**: `s_in` / `m_out` (lists) and `s_in_0..3` / `m_out_0..3` (attributes) -- see
-  [Interfaces](interfaces.md).
+- **The ports**: `s_in` / `m_out`, one endpoint each; with `lanes=True`, `s_in` / `m_out` are lists
+  and `s_in_0..3` / `m_out_0..3` attributes -- see [Interfaces](interfaces.md).
 
 ## What it refuses
 

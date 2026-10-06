@@ -5,7 +5,7 @@ L = 64), driven by the BFM harness ``tb_top_spec`` derives from the testbench gr
 BFMs' capture bundles, for the RFSoC 4x2 at 250 MHz.  Both reorders:
 
 * every frame bit-exact with ``VitisFft``'s golden, and every frame out (the burst drains);
-* the frame interval: **L/R exactly** with the ping-pong reorder; L/R + 4 with the SOB pair, whose
+* the frame interval: **L/R exactly** with the ping-pong reorder; L/R + 5 with the SOB pair, whose
   reader re-fires once a frame;
 * timing met at 250 MHz on the real top (worst slack >= 0).
 
@@ -31,7 +31,7 @@ pytestmark = pytest.mark.xsi
 
 ROOT = Path(__file__).resolve().parents[3] / "work" / "ssr_fft"
 L, N_FRAMES = 64, 8
-EXPECTED_INTERVAL = {"pingpong": L // 4, "sob": L // 4 + 4}
+EXPECTED_INTERVAL = {"pingpong": L // 4, "sob": L // 4 + 5}
 
 
 @pytest.fixture(scope="module", params=["pingpong", "sob"])

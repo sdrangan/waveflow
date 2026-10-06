@@ -343,6 +343,19 @@ void ssr_fft_reorder_pingpong_task(hls::stream<ap_uint<E::W> >& s_in,
     }
 }
 
+// A one-word register between the boundary port and the first commutator: a raw copy, no
+// unpacking.  It exists for timing alone.  The commutator decides each group from its input's empty
+// flag; read straight off a top-level AXIS port, that decision missed 250 MHz by 0.16 ns (L = 64),
+// while every commutator fed from an internal FIFO met it.  This puts an internal FIFO in front.
+template <typename E>
+void ssr_fft_pass_task(hls::stream<ap_uint<E::W> >& s_in, hls::stream<ap_uint<E::W> >& s_out) {
+#pragma HLS INLINE
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        if (!s_in.empty()) s_out.write(s_in.read());
+    }
+}
+
 // The boundary: R lane ports, one complex sample per word each -- the port group of VitisFft, and of
 // the XSI BFMs (64-bit words) -- joined into one RadixWord stream on the way in, split on the way out.
 // Lane j carries samples j, j+R, j+2R, ... : word k of the RadixWord holds samples kR .. kR+R-1.

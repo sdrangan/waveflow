@@ -15,11 +15,11 @@ vendor core's are its own csynth records on the platform (the `VitisFft` example
 
 | L | DSP | BRAM (18K) | LUT | FF | `VitisFft` DSP / BRAM / LUT / FF |
 |---|---|---|---|---|---|
-| 16 | 12 | 5 | 5,936 | 4,887 | 12 / 0 / 7,998 / 4,679 |
-| 64 | 24 | 6 | 10,580 | 8,597 | 24 / 0 / 13,044 / 8,469 |
-| 256 | 36 | 14 | 15,189 | 13,642 | 36 / 28 / 19,262 / 12,952 |
-| 1024 | 48 | 50 | 21,584 | 25,036 | 48 / 40 / 23,069 / 19,237 |
-| 4096 | 60 | 122 | 34,642 | 55,154 | 60 / 55 / 28,388 / 25,356 |
+| 16 | 12 | 5 | 5,752 | 4,612 | 12 / 0 / 7,998 / 4,679 |
+| 64 | 24 | 6 | 10,396 | 8,306 | 24 / 0 / 13,044 / 8,469 |
+| 256 | 36 | 14 | 15,005 | 13,335 | 36 / 28 / 19,262 / 12,952 |
+| 1024 | 48 | 50 | 21,400 | 24,713 | 48 / 40 / 23,069 / 19,237 |
+| 4096 | 60 | 122 | 34,458 | 54,815 | 60 / 55 / 28,388 / 25,356 |
 
 ## What they say
 
@@ -44,6 +44,6 @@ Not attempted yet, and each is a measurable trade:
 
 - **The reorder buffer** can be one frame instead of two, with read and write address patterns that
   alternate frame by frame -- half the memory, the classic trick.
-- **The SOB reorder** already uses whole-frame blocks; its cost is the four cycles a frame, not memory.
+- **The SOB reorder** already uses whole-frame blocks; its cost is the five cycles a frame, not memory.
 - **Delay-line mapping**: the long delay lines could be steered to BRAM or SRLs explicitly rather
   than left to HLS.

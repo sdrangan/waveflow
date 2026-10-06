@@ -9,6 +9,7 @@ from waveflow.utils.burst_io import (
     META_NAME,
     WORDS_NAME,
     read_burst_bundle,
+    read_burst_meta,
     write_burst_bundle,
 )
 from waveflow.utils.vcd import AxisBurst
@@ -134,3 +135,23 @@ def test_axis_burst_from_dict_and_derived():
     assert b.n_transfers == 3
     assert b.n_beats == 5
     np.testing.assert_array_equal(b.data, [7, 8, 9])
+
+
+def test_wide_words_round_trip_as_chunks(tmp_path):
+    """A stream wider than 64 bits: (n, k) bursts of uint64 chunks, low chunk first -- the pysim's
+    wide-word convention and the XSI AxisMaster/AxisSlave's.  The manifest says word_bytes = 8k and
+    counts words, and bounds count words (beats), not chunks."""
+    a = [np.arange(12, dtype=np.uint64).reshape(4, 3), np.arange(6, dtype=np.uint64).reshape(2, 3)]
+    d = write_burst_bundle(a, tmp_path / "w", word_chunks=3)
+    meta = read_burst_meta(d)
+    assert (meta["word_bytes"], meta["n_words"], meta["n_bursts"]) == (24, 6, 2)
+    np.testing.assert_array_equal(np.fromfile(d / "bounds.bin", dtype="<u8"), [4, 6])
+    out = read_burst_bundle(d)
+    assert [o.shape for o in out] == [(4, 3), (2, 3)]
+    for o, w in zip(out, a):
+        np.testing.assert_array_equal(o, w)
+
+
+def test_wide_words_refuse_a_shape_that_does_not_match(tmp_path):
+    with pytest.raises(ValueError, match="needs \(n, 3\) bursts"):
+        write_burst_bundle([np.arange(6, dtype=np.uint64)], tmp_path / "bad", word_chunks=3)

@@ -199,14 +199,16 @@ class TaskInstance:
 REORDERS = ("sob", "pingpong")
 
 
-def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
-                   ) -> list[TaskInstance]:
-    """Every task of one SSR FFT, in pipeline order, from the boundary lanes in to the lanes out.
+def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob",
+                   lanes: bool = False) -> list[TaskInstance]:
+    """Every task of one SSR FFT, in pipeline order.
 
-    ``lanes_in`` -> the transposer's ``S - 1`` commutators -> per stage: the stage, then (all but
-    the last) its commutator -> with ``natural``, the reorder: its commutator ``rc``, then either
-    the SOB writer ``rw`` and reader ``rr`` (``reorder="sob"``) or one ping-pong task ``rp``
-    (``"pingpong"``) -> ``lanes_out``.
+    The transposer's ``S - 1`` commutators -> per stage: the stage, then (all but the last) its
+    commutator -> with ``natural``, the reorder: its commutator ``rc``, then either the SOB writer
+    ``rw`` and reader ``rr`` (``reorder="sob"``) or one ping-pong task ``rp`` (``"pingpong"``).
+    With ``lanes``, ``lanes_in`` and ``lanes_out`` join and split the ``R``-lane port group at the
+    two ends; without, a one-word register ``in_reg`` takes the ``RadixWord`` input port (for
+    timing) and the last task writes the output port directly.
     """
     if reorder not in REORDERS:
         raise ValueError(f"reorder={reorder!r}: one of {REORDERS}")
@@ -220,9 +222,15 @@ def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
     lane_in = [(f"s_in_{j}", stream("lane_in")) for j in range(geo.R)]
     lane_out = [(f"m_out_{j}", stream("lane_out")) for j in range(geo.R)]
     sob = f"hls::stream_of_blocks<ap_uint<{ns}::e_rc::W>[{geo.n_words}]>&"
-    out = [TaskInstance("lanes_in", "lanes_in",
-                        f"ssr_fft_hls::ssr_fft_lanes_in_task<{ns}::e_lane_in, {ns}::e_in>",
-                        (*lane_in, ("m_out", stream("in"))))]
+    if lanes:
+        out = [TaskInstance("lanes_in", "lanes_in",
+                            f"ssr_fft_hls::ssr_fft_lanes_in_task<{ns}::e_lane_in, {ns}::e_in>",
+                            (*lane_in, ("m_out", stream("in"))))]
+    else:
+        # The boundary RadixWord port goes through a one-word register first: see
+        # ssr_fft_pass_task for the timing reason.
+        out = [TaskInstance("in_reg", "pass", f"ssr_fft_hls::ssr_fft_pass_task<{ns}::e_in>",
+                            (("s_in", stream("in")), ("m_out", stream("in"))))]
     prev = "in"
     for k, d in enumerate(geo.transposer_ds):
         out.append(TaskInstance(f"tp{k}", "commutator",
@@ -259,9 +267,11 @@ def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
                 f"ssr_fft_hls::ssr_fft_reorder_read_task<{ns}::e_out, {geo.n_words}>",
                 (("s_blk", sob), ("m_out", stream("out")))))
         prev = "out"
-    out.append(TaskInstance("lanes_out", "lanes_out",
-                            f"ssr_fft_hls::ssr_fft_lanes_out_task<{ns}::e_{prev}, {ns}::e_lane_out>",
-                            (("s_in", stream(prev)), *lane_out)))
+    if lanes:
+        out.append(TaskInstance(
+            "lanes_out", "lanes_out",
+            f"ssr_fft_hls::ssr_fft_lanes_out_task<{ns}::e_{prev}, {ns}::e_lane_out>",
+            (("s_in", stream(prev)), *lane_out)))
     return out
 
 
@@ -269,7 +279,8 @@ def wrappers_header(geo: Geometry) -> str:
     return f"{config_namespace(geo)}_tasks.h"
 
 
-def render_wrappers(geo: Geometry, *, natural: bool = True, reorder: str = "sob") -> str:
+def render_wrappers(geo: Geometry, *, natural: bool = True, reorder: str = "sob",
+                    lanes: bool = False) -> str:
     """One plain function per task: what the generated top instantiates as an ``hls::task``."""
     ns = config_namespace(geo)
     guard = f"WAVEFLOW_{ns.upper()}_TASKS_H"
@@ -278,7 +289,7 @@ def render_wrappers(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
            "// One wrapper per task, so each RTL instance is <wrapper>_U0.",
            '#include "hls_stream.h"', '#include "hls_streamofblocks.h"',
            f'#include "{config_header(geo)}"', f'#include "{TASKS_H}"', ""]
-    for t in task_instances(geo, natural=natural, reorder=reorder):
+    for t in task_instances(geo, natural=natural, reorder=reorder, lanes=lanes):
         args = ", ".join(f"{ty} {nm}" for nm, ty in t.params)
         names = ", ".join(nm for nm, _ in t.params)
         out += [f"static void {ns}_{t.inst}({args}) {{", f"    {t.call}({names});", "}", ""]
@@ -287,7 +298,7 @@ def render_wrappers(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
 
 
 def write_sources(geo: Geometry, root: Path | str, include_dir: str = ".", *,
-                  natural: bool = True, reorder: str = "sob") -> Path:
+                  natural: bool = True, reorder: str = "sob", lanes: bool = False) -> Path:
     """Write everything the task bodies include into ``root/include_dir``: streamutils, every
     edge's array utils, the configuration header, the task wrappers, and the task bodies."""
     root = Path(root)
@@ -300,6 +311,6 @@ def write_sources(geo: Geometry, root: Path | str, include_dir: str = ".", *,
     for elem, ws in widths.items():
         gen_array_utils(elem, sorted(ws), cfg=BuildConfig(root_dir=inc))
     (inc / config_header(geo)).write_text(render_config(geo), encoding="utf-8")
-    (inc / wrappers_header(geo)).write_text(render_wrappers(geo, natural=natural, reorder=reorder), encoding="utf-8")
+    (inc / wrappers_header(geo)).write_text(render_wrappers(geo, natural=natural, reorder=reorder, lanes=lanes), encoding="utf-8")
     shutil.copy(SRC_DIR / TASKS_H, inc / TASKS_H)
     return inc

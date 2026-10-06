@@ -40,7 +40,7 @@ Measured in RTL (XSI, RFSoC 4x2 at 250 MHz, every frame bit-exact):
 - [Parameters](parameters.md) -- constructing an `SsrFft`, and every parameter.
 - [Interfaces](interfaces.md) -- the lane ports, the `RadixWord` streams inside, and wiring it.
 - [Including it in your design](build.md) -- the build steps, and where every file goes.
-- [Synthesis](synthesis.md) -- the task bodies, the two reorders, and two traps found at RTL.
+- [Synthesis](synthesis.md) -- the task bodies, the two reorders, and the traps found at RTL.
 - [Timing](timing.md) -- an interval by construction, a latency by addition, and the pysim against
   the RTL.
 

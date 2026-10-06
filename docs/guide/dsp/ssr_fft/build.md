@@ -74,20 +74,19 @@ fails silently past the Windows path limit.
 
 ## The FFT as your top, or inside it
 
-**As the top** (the reference build does this), its eight lanes are the boundary, and the output lanes
-are wider than the input lanes:
+**As the top** (the reference build does this), its two ports are the boundary, and the output port
+is wider than the input -- so each takes its own width:
 
 ```python
-widths = {f"s_in_{j}": ep.bitwidth for j, ep in enumerate(fft.s_in)}
-widths |= {f"m_out_{j}": ep.bitwidth for j, ep in enumerate(fft.m_out)}
-spec = composite_top_spec(fft, width=int(fft.s_in[0].bitwidth), port_widths=widths)
+widths = {name: int(ep.bitwidth) for name, ep in fft.boundary}     # s_in: 128, m_out: 216 at L=1024
+spec = composite_top_spec(fft, width=widths["s_in"], port_widths=widths)
 ```
 
 **Inside your own composite**, it is one child. `hls::task` has no hierarchy, so the generator
-flattens composites to their leaves (`kernel_tasks`): your top gets the FFT's tasks (18 at
-`L = 1024`) beside your own. Lanes between the FFT and its neighbours are internal channels, sized
-from their `StreamIF`s. A sketch -- **not yet exercised**: every build so far has the FFT as the top,
-so the first design that nests it is also the first test of the flattened channel names:
+flattens composites to their leaves (`kernel_tasks`): your top gets the FFT's tasks (17 at
+`L = 1024`) beside your own. The `RadixWord` between the FFT and its neighbour is one internal channel,
+sized from its `StreamIF`. A sketch -- **not yet exercised**: every build so far has the FFT as the
+top, so the first design that nests it is also the first test of the flattened channel names:
 
 <!-- snippet: skip -->
 ```python
@@ -96,19 +95,16 @@ class Spectrum(FreeRunMod):
     def __post_init__(self):
         super().__post_init__()
         self.fft = SsrFft(name="fft", sim=self.sim, clk=self.clk, L=1024, reorder="pingpong")
-        self.mag = Magnitude(name="mag", sim=self.sim, clk=self.clk)   # your module
+        self.mag = Magnitude(name="mag", sim=self.sim, clk=self.clk)   # your module: RadixWord in
         for c in (self.fft, self.mag):
             self.add_comp(c)
-        for j in range(4):                       # FFT lanes -> magnitude: internal channels
-            ch = StreamIF(name=f"x_{j}", sim=self.sim, clk=self.clk,
-                          bitwidth=self.fft.m_out[j].bitwidth)
-            ch.bind("master", self.fft.m_out[j])
-            ch.bind("slave", self.mag.s_in[j])
-            self.add_if(ch)
-        for j in range(4):                       # the FFT's input lanes are the design's input
-            setattr(self, f"s_in_{j}", self.fft.s_in[j])
+        ch = StreamIF(name="x", sim=self.sim, clk=self.clk, bitwidth=self.fft.m_out.bitwidth)
+        ch.bind("master", self.fft.m_out)        # FFT -> magnitude: an internal channel
+        ch.bind("slave", self.mag.s_in)
+        self.add_if(ch)
+        self.s_in = self.fft.s_in                # the FFT's input is the design's input
         self.m_out = self.mag.m_out
-        self.boundary = [f"s_in_{j}" for j in range(4)] + ["m_out"]
+        self.boundary = ["s_in", "m_out"]
 ```
 
 ## The reference build

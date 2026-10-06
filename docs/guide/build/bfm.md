@@ -199,6 +199,26 @@ once, in Python, and the C++ only plays and records it.
 This is what makes the concurrent flow structurally identical to the sequential one: Python writes the
 inputs, the kernel and testbench are generated, the toolchain runs them, and Python checks the outputs.
 
+### Ports wider than 64 bits {#wide-words}
+
+A stream word wider than 64 bits travels as `k = ceil(W/64)` little-endian `uint64` **chunks**, chunk 0
+the low 64 bits, in every layer -- the same convention the pysim uses for a wide stream (an `(n, k)`
+`Words` array):
+
+- **Bundles.** `write_burst_bundle(bursts, dir, word_chunks=k)` takes `(n, k)` bursts; `words.bin`
+  holds the chunks beat after beat, `meta.json` declares `word_bytes = 8k`, and `bounds.bin` and
+  `cycles.bin` count beats. `read_burst_bundle` hands `(n, k)` bursts back. `k = 1` is every bundle
+  written before wide words existed, byte for byte.
+- **Models.** `AxisMaster(..., chunks)` and `AxisSlave(..., chunks)` move `k` chunks a beat. The
+  generator passes `chunks` from the endpoint's width (`StreamDriver` / `StreamSink.bfm_model()`), and
+  only when it is not 1, so every narrower harness is emitted exactly as before. An `AxisMaster` refuses
+  a bundle whose `word_bytes` disagrees with its port.
+- **Pins.** `Dut::putChunks` / `getChunks` move a port of any width up to 2048 bits; the buffers are
+  sized for that, because XSI reads or writes as many 32-bit words as the *port* has.
+
+The first user is the SSR FFT, whose `RadixWord` ports are 128 to 232 bits
+([its interfaces](../dsp/ssr_fft/interfaces.md#wide-words-end-to-end)).
+
 ## Completion and throughput framing
 
 `AxisSlave` records the arrival cycle of every word, so completion timing is available off-line

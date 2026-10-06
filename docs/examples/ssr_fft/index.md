@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 9.565
 has_children: true
 example_dir: examples/ssr_fft
-summary: "Waveflow's own SSR FFT (SsrFft): four AXI-Stream lanes in, four out, a new frame every L/R cycles -- the rate the architecture is built for and 7.5 to 10 times AMD's Vitis L1 core as shipped -- bit-exact with that core. Built as free-running Waveflow modules: one hls::task per commutator, stage and buffer, the top generated from the module graph, the XSI testbench from the testbench graph. Measured at RTL on the RFSoC 4x2 from L = 16 to 4096: the interval, a latency that does not depend on arrival, the pysim against the RTL, and what the throughput costs in resources."
+summary: "Waveflow's own SSR FFT (SsrFft): one RadixWord stream in and out -- four complex samples a beat -- a new frame every L/R cycles -- the rate the architecture is built for and 7.5 to 10 times AMD's Vitis L1 core as shipped -- bit-exact with that core. Built as free-running Waveflow modules: one hls::task per commutator, stage and buffer, the top generated from the module graph, the XSI testbench from the testbench graph. Measured at RTL on the RFSoC 4x2 from L = 16 to 4096: the interval, a latency that does not depend on arrival, the pysim against the RTL, and what the throughput costs in resources."
 ---
 # Waveflow's FFT, at full rate
 
@@ -18,7 +18,7 @@ module.
 
 ## Learning objectives
 
-- Build a **streaming DSP block as a composite** of free-running tasks -- here 8 to 18 of them --
+- Build a **streaming DSP block as a composite** of free-running tasks -- here 7 to 20 of them --
   whose top is generated from the module graph, and whose pysim is one process per task.
 - See what makes a pipeline run at **one word per cycle without stopping**: no per-frame function
   to return from, frames visible only as a counter, and no blocking read at a loop head.
@@ -30,17 +30,20 @@ module.
 ## The design
 
 ```
-StreamDriver x 4  ->  SsrFft (L, R = 4)  ->  StreamSink x 4
+StreamDriver  ->  SsrFft (L, R = 4)  ->  StreamSink        one RadixWord a beat each way
 ```
 
-The testbench is the same graph as the [Vitis FFT example](../vitis_fft/index.md)'s, with the other
-DUT: the two modules share a port group, so they share the scenario files, the lane packing and the
-golden.
+The golden is the [Vitis FFT example](../vitis_fft/index.md)'s, on the same input frames: the bits
+are the vendor's. The ports are wider than 64 bits -- 128 in, 184 out at `L = 64` -- and travel
+through the pysim, the scenario files and the XSI BFMs as 64-bit chunks
+([wide words](../../guide/dsp/ssr_fft/interfaces.md#wide-words-end-to-end)). With
+`SsrFft(lanes=True)` the testbench becomes `VitisFft`'s four drivers and four sinks instead, and the
+scenario files are shared with it too.
 
 | | |
 |---|---|
-| input | `ap_fixed<16, 2>` complex, packed into 32-bit words (real in the low half) |
-| output | `ap_fixed<W, I>` complex, `W = 16 + log2 L + 1`: derived from the model |
+| input | `ap_fixed<16, 2>` complex, four a beat: a 128-bit `RadixWord` (real in each lane's low half) |
+| output | `ap_fixed<W, I>` complex, `W = 16 + log2 L + 1`, four a beat: derived from the model |
 | gated length | `L = 64`, both reorders (`tests/dsp/ssr_fft/test_xsi.py`); measured `L = 16 .. 4096` |
 | target | RFSoC 4x2, `xczu48dr-ffvg1517-2-e` at 250 MHz |
 

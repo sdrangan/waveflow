@@ -12,9 +12,9 @@ summary: "How SsrFft is built: the input transposer, the radix-4 stages and thei
 
 ```mermaid
 flowchart TB
-  subgraph IN["in: lanes to words"]
+  subgraph IN["in"]
     direction LR
-    sin(["s_in_0 .. s_in_3<br/>one sample each"]) --> li["lanes in<br/>4 samples → 1 RadixWord"]
+    sin(["s_in<br/>one RadixWord a beat"]) --> li["in_reg<br/>a one-word register"]
   end
   subgraph TP["input transposer: S − 1 commutators"]
     direction LR
@@ -29,9 +29,9 @@ flowchart TB
     direction LR
     sl["stage S − 1<br/>butterfly only"] --> rc["commutator<br/>D = L/16"] --> rb["frame buffer<br/>whole-word permutation"]
   end
-  subgraph OUT["out: words to lanes"]
+  subgraph OUT["out"]
     direction LR
-    lo["lanes out<br/>1 RadixWord → 4 samples"] --> mout(["m_out_0 .. m_out_3"])
+    mout(["m_out<br/>one RadixWord a beat"])
   end
   IN --> TP --> ST --> LS --> OUT
 ```
@@ -52,10 +52,12 @@ factor. The hard part is not the arithmetic but getting each butterfly's four in
   order takes one more commutator and a frame buffer -- see [the digit reversal](#the-digit-reversal).
 
 Every box is one `hls::task`; every arrow is a stream of one `RadixWord` a cycle. At `L = 1024`
-(`S = 5`) that unrolls to: lanes in, the transposer's commutators at `D` = 1, 4, 16, 64, then stage 0,
-commutator 64, stage 1, commutator 16, stage 2, commutator 4, stage 3, commutator 1, stage 4, the
-reorder's commutator (64) and buffer, lanes out -- 18 tasks with the SOB reorder (its buffer is a
-writer and a reader), 17 with the ping-pong one.
+(`S = 5`) that unrolls to: the input register, the transposer's commutators at `D` = 1, 4, 16, 64,
+then stage 0, commutator 64, stage 1, commutator 16, stage 2, commutator 4, stage 3, commutator 1,
+stage 4, the reorder's commutator (64) and buffer -- 17 tasks with the SOB reorder (its buffer is a
+writer and a reader), 16 with the ping-pong one. With `lanes=True` the register is replaced by a
+`lanes_in` adaptor (four sample ports joined into a `RadixWord`) and a `lanes_out` adaptor follows the
+buffer ([Interfaces](interfaces.md)).
 
 ## What a commutator is
 

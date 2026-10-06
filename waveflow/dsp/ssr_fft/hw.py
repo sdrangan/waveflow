@@ -69,7 +69,11 @@ def latency_cycles(t: hls.TaskInstance) -> int:
         return 3 * t.d + 3
     if t.kind == "reorder_pingpong":
         return t.d + 1                       # a whole frame in before its first word can leave
-    return {"stage": 3, "lanes_in": 0, "lanes_out": 0, "reorder_write": 0, "reorder_read": 3}[t.kind]
+    if t.kind == "pass":
+        return 0
+    # reorder_read: the SOB reader re-enters (and re-acquires its lock) once a frame; 5 is what XSI
+    # measures on the RadixWord boundary -- an interval of L/R + 5 (L/R + 4 with lanes=True).
+    return {"stage": 3, "lanes_in": 0, "lanes_out": 0, "reorder_write": 0, "reorder_read": 5}[t.kind]
 
 
 @dataclass
@@ -82,6 +86,9 @@ class SsrTask(FreeRunMod):
     task: hls.TaskInstance = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
     timed: bool = True
+    #: Which of this task's ports are the FFT's boundary: those carry frames as TLAST-delimited
+    #: bursts in pysim, as the testbench's drivers and sinks do.
+    boundary_ports: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -104,8 +111,8 @@ class SsrTask(FreeRunMod):
             return cls(name=f"{self.name}_{name}", sim=self.sim, element_type=block_type(self.geo))
         cls = StreamIFMaster if name.startswith("m_") else StreamIFSlave
         e = self._edge_of(ty)
-        lane = e.name.startswith("lane")
-        return cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=e.bitwidth, has_tlast=lane)
+        return cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=e.bitwidth,
+                   has_tlast=name in self.boundary_ports)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(f"{hls.config_namespace(self.geo)}_{self.task.inst}",
@@ -158,6 +165,9 @@ class SsrStream(SsrTask):
         e_in = self._edge_of(dict(self.task.params)["s_in"])
         e_out = self._edge_of(dict(self.task.params)["m_out"])
         words, t0 = yield from self._get_words(self.s_in, n)
+        if self.task.kind == "pass":
+            self._emit(self.m_out, words, t0)
+            return
         if self.task.kind == "reorder_pingpong":
             out = np.empty_like(words)
             out[m.reorder_word_perm(self.geo)] = words      # whole words: no unpacking needed
@@ -239,15 +249,17 @@ class SsrReorder(SsrTask):
 
 _KIND_CLASS = {"commutator": SsrStream, "stage": SsrStream, "lanes_in": SsrLanes,
                "lanes_out": SsrLanes, "reorder_write": SsrReorder, "reorder_read": SsrReorder,
-               "reorder_pingpong": SsrStream}
+               "reorder_pingpong": SsrStream, "pass": SsrStream}
 
 
 @dataclass
 class SsrFft(FreeRunMod):
     """A full-rate SSR FFT: ``R`` samples a cycle in and out, a new frame every ``L/R`` cycles.
 
-    Bit-exact with ``VitisFft`` (and so with AMD's library) for the same parameters, and the same
-    port group: ``s_in_0 .. s_in_{R-1}``, ``m_out_0 .. m_out_{R-1}``, one complex sample a word.
+    Bit-exact with ``VitisFft`` (and so with AMD's library) for the same parameters.  Its ports are
+    one ``RadixWord`` stream each way -- ``s_in`` and ``m_out``, ``R`` complex samples a beat, the
+    unit every internal edge carries -- or, with ``lanes=True``, ``VitisFft``'s ``R``-lane port group
+    (``s_in_0 .. s_in_{R-1}``, ``m_out_0 ..``, one sample a word, as lists ``s_in`` / ``m_out``).
     """
 
     cpp_kernel_name: ClassVar[str | None] = "ssr_fft"
@@ -261,6 +273,9 @@ class SsrFft(FreeRunMod):
     #: The reorder's frame buffer: ``"sob"`` -- a ``stream_of_blocks`` between a writer and a reader
     #: task -- or ``"pingpong"``, both halves inside one task.
     reorder: str = "sob"
+    #: ``False`` (default): one ``RadixWord`` port each way.  ``True``: ``VitisFft``'s ``R``-lane port
+    #: group, joined and split by two adaptor tasks -- a drop-in for ``VitisFft``.
+    lanes: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
     timed: bool = True
 
@@ -271,18 +286,28 @@ class SsrFft(FreeRunMod):
         self.R = self.geo.R
         self.out_fmt = self.geo.out_fmt
         self.tasks: list[SsrTask] = []
-        for t in hls.task_instances(self.geo, reorder=self.reorder):
+        tis = hls.task_instances(self.geo, reorder=self.reorder, lanes=self.lanes)
+        for k, t in enumerate(tis):
+            ports = tuple(n for n, _ in t.params
+                          if (k == 0 and n.startswith("s_in")) or
+                          (k == len(tis) - 1 and n.startswith("m_out")))
             c = _KIND_CLASS[t.kind](name=f"{self.name}_{t.inst}", sim=self.sim, geo=self.geo, task=t,
-                                    clk=self.clk, timed=self.timed)
+                                    clk=self.clk, timed=self.timed, boundary_ports=ports)
             self.tasks.append(c)
             self.add_comp(c)
         self._wire()
-        self.s_in = [getattr(self.tasks[0], f"s_in_{j}") for j in range(self.R)]
-        self.m_out = [getattr(self.tasks[-1], f"m_out_{j}") for j in range(self.R)]
-        for j in range(self.R):
-            setattr(self, f"s_in_{j}", self.s_in[j])
-            setattr(self, f"m_out_{j}", self.m_out[j])
-        self.boundary = [f"s_in_{j}" for j in range(self.R)] + [f"m_out_{j}" for j in range(self.R)]
+        if self.lanes:
+            self.s_in = [getattr(self.tasks[0], f"s_in_{j}") for j in range(self.R)]
+            self.m_out = [getattr(self.tasks[-1], f"m_out_{j}") for j in range(self.R)]
+            for j in range(self.R):
+                setattr(self, f"s_in_{j}", self.s_in[j])
+                setattr(self, f"m_out_{j}", self.m_out[j])
+            self.boundary = ([f"s_in_{j}" for j in range(self.R)]
+                             + [f"m_out_{j}" for j in range(self.R)])
+        else:
+            self.s_in = self.tasks[0].s_in
+            self.m_out = self.tasks[-1].m_out
+            self.boundary = ["s_in", "m_out"]
         self.extra_includes = ("hls_streamofblocks.h",)
 
     def _wire(self) -> None:

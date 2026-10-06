@@ -33,12 +33,11 @@ from waveflow.build.composite_gen import (
 from waveflow.build.streamutils import MemMgrStep, XsiHarnessStep
 from waveflow.build.trace_steps import AddVcdTopStep, xsi_runner_cmd
 from waveflow.simulation.simulation import Simulation
-from waveflow.utils.burst_io import read_burst_bundle
-from waveflow.vitis_l1.testbench import frames_from_lanes, golden, write_scenario
+from waveflow.vitis_l1.testbench import golden
 
 from . import hls
 from .hw import SsrFft
-from .testbench import R, SsrFftTB
+from .testbench import R, SsrFftTB, captured_frames, port_names, write_scenario
 
 TOP = "ssr_fft"
 XSI_DIR = "xsi"
@@ -54,7 +53,8 @@ def make_tb(length: int, n_frames: int = 8, burst_gaps=(), **kw) -> SsrFftTB:
 
 
 def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reorder: str = "sob",
-             part: str = RFSOC4X2_PART, period_ns: float = RFSOC4X2_PERIOD_NS) -> str:
+             lanes: bool = False, part: str = RFSOC4X2_PART,
+             period_ns: float = RFSOC4X2_PERIOD_NS) -> str:
     """Everything before csynth for an *length*-point build at *root*."""
     root = Path(root).resolve()
     dag = BuildDag()
@@ -68,12 +68,13 @@ def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reord
     if bad:
         raise RuntimeError(f"header generation failed: {bad}")
 
-    tb = make_tb(length, n_frames, burst_gaps, timed=False, reorder=reorder)
+    tb = make_tb(length, n_frames, burst_gaps, timed=False, reorder=reorder, lanes=lanes)
     dut = tb.dut
-    hls.write_sources(dut.geo, root, INCLUDE_DIR, reorder=reorder)
-    widths = {f"s_in_{j}": ep.bitwidth for j, ep in enumerate(dut.s_in)}
-    widths |= {f"m_out_{j}": ep.bitwidth for j, ep in enumerate(dut.m_out)}
-    spec = composite_top_spec(dut, width=int(dut.s_in[0].bitwidth), port_widths=widths)
+    hls.write_sources(dut.geo, root, INCLUDE_DIR, reorder=reorder, lanes=lanes)
+    # Every boundary port at its own width: the output grows with log2 L, and the RadixWord ports
+    # are R samples wide.
+    widths = {name: int(ep.bitwidth) for name, ep in dut.boundary}
+    spec = composite_top_spec(dut, width=next(iter(widths.values())), port_widths=widths)
     gen = root / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
     (gen / f"{spec.top_name}.cpp").write_text(render_top(spec), encoding="utf-8")
@@ -93,7 +94,7 @@ def write_tb(root: Path, tb: SsrFftTB) -> None:
     spec = tb_top_spec(tb)
     (xsi / f"{TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
     (xsi / f"{TB}.cpp").write_text(render_tb_main(spec, int(tb.n_cycles)), encoding="utf-8")
-    write_scenario(xsi, tb.n_frames, tb.length, **tb.config)
+    write_scenario(xsi, tb.n_frames, tb.length, lanes=tb.lanes, **tb.config)
 
 
 def synth(root: Path) -> str:
@@ -106,20 +107,44 @@ def synth(root: Path) -> str:
     out = (r.stdout or "") + (r.stderr or "")
     if "WAVEFLOW_CSYNTH_OK" not in out:
         raise RuntimeError(f"csynth of {TOP} failed:\n{out[-6000:]}")
+    _check_axis_ports(root)
     write_stamp(root, TOP)
     (root / XSI_DIR / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, root), encoding="utf-8")
     return out
 
 
+def _check_axis_ports(root: Path) -> None:
+    """Refuse a synthesis whose boundary ports did not come out as AXI-Stream.
+
+    Twice (2026-10-06) a csynth of an unchanged, correct top produced plain ``ap_fifo`` ports -- no
+    ``ap_rst_n``, so XSI later died on ``port 'ap_rst_n' not found`` -- and its log showed it had
+    analyzed a different ``gen/ssr_fft.cpp`` than the one on disk (the dataflow function at another
+    line).  Both times another build was running concurrently; a re-synthesis of the same files was
+    correct.  The cause is not isolated, so the symptom is checked here, where it is cheap and the
+    message can say what happened, rather than surfacing as a missing reset pin in the simulator.
+    """
+    log = (root / f"{TOP}_proj" / "solution1" / "solution1.log").read_text(encoding="utf-8",
+                                                                            errors="replace")
+    bad = [ln for ln in log.splitlines()
+           if "Setting interface mode on port" in ln and "to 'ap_fifo'" in ln]
+    if bad:
+        raise RuntimeError(
+            f"csynth of {TOP} in {root} produced ap_fifo boundary ports instead of axis:\n  "
+            + "\n  ".join(bad)
+            + "\nThe top declares them axis, so this synthesis did not compile the top on disk "
+              "(seen when another build ran concurrently).  Re-run the synthesis.")
+
+
 def run_xsi(root: Path, trace: bool = False) -> str:
     """Run the XSI testbench, clearing the previous capture first so a stale one cannot pass."""
     xsi = Path(root) / XSI_DIR
-    for j in range(R):
-        for name in (f"m_out_{j}", f"s_in_{j}_acc"):
-            d = xsi / "vectors" / name
-            if d.exists():
-                for f in d.iterdir():
-                    f.unlink()
+    ins, outs = port_names(True)
+    ins2, outs2 = port_names(False)
+    for name in outs + outs2 + [f"{n}_acc" for n in ins + ins2]:
+        d = xsi / "vectors" / name
+        if d.exists():
+            for f in d.iterdir():
+                f.unlink()
     p = subprocess.run(xsi_runner_cmd(TOP, TB, trace=trace), cwd=xsi, capture_output=True,
                        text=True, timeout=3600)
     if p.returncode != 0 or "XSI_EXITCODE=0" not in p.stdout:
@@ -128,40 +153,39 @@ def run_xsi(root: Path, trace: bool = False) -> str:
 
 
 def _out_w(length: int) -> int:
-    return int(SsrFft(name="w", sim=Simulation(), L=length, timed=False).out_fmt.W)
+    from .model import Geometry
+    return int(Geometry(length).out_fmt.W)
 
 
-def captured_frames(root: Path, length: int):
-    lanes = [np.concatenate(read_burst_bundle(Path(root) / XSI_DIR / "vectors" / f"m_out_{j}"))
-             for j in range(R)]
-    return frames_from_lanes(lanes, _out_w(length), length)
-
-
-def check_bits(root: Path, length: int, n_frames: int) -> list[bool]:
-    """Per frame: is the RTL's output the golden?  (Fewer entries than frames = frames missing.)"""
-    got, want = captured_frames(root, length), golden(n_frames, length)
+def check_bits(root: Path, length: int, n_frames: int, *, lanes: bool = False) -> list[bool]:
+    """Per frame: is the RTL's output the golden?  (Fewer entries than frames = frames missing.)
+    *lanes* says which boundary the build has -- the caller built it, so the caller knows."""
+    got = captured_frames(Path(root) / XSI_DIR, length, lanes)
+    want = golden(n_frames, length)
     mask = (1 << _out_w(length)) - 1
     return [bool(np.array_equal(g[0] & mask, w[0] & mask) and np.array_equal(g[1] & mask, w[1] & mask))
             for g, w in zip(got, want)]
 
 
-def capture_beats(root: Path) -> dict[str, list[int]]:
+def capture_beats(root: Path, *, lanes: bool = False) -> dict[str, list[int]]:
     """Each accepted input beat and each received output beat, on the BFMs' shared cycle count."""
     vec = Path(root) / XSI_DIR / "vectors"
     beats = {}
-    for j in range(R):
-        for port, name in ((f"s_in_{j}", f"s_in_{j}_acc"), (f"m_out_{j}", f"m_out_{j}")):
-            cyc = vec / name / "cycles.bin"
-            beats[port] = np.fromfile(cyc, dtype="<u8").astype(int).tolist() if cyc.exists() else []
+    ins, outs = port_names(lanes)
+    for port, name in [(i, f"{i}_acc") for i in ins] + [(o, o) for o in outs]:
+        cyc = vec / name / "cycles.bin"
+        beats[port] = np.fromfile(cyc, dtype="<u8").astype(int).tolist() if cyc.exists() else []
     return beats
 
 
-def frame_times(root: Path, length: int) -> list[dict]:
-    """Per frame: first input beat, last input beat, last output beat (cycles, port 0 / all lanes)."""
-    b = capture_beats(root)
+def frame_times(root: Path, length: int, *, lanes: bool = False) -> list[dict]:
+    """Per frame: first input beat, last input beat, last output beat (cycles; the first input
+    port, and every output port)."""
+    b = capture_beats(root, lanes=lanes)
     n = length // R
-    ins = b["s_in_0"]
-    outs = [max(b[f"m_out_{j}"][k] for j in range(R)) for k in range(len(b["m_out_0"]))]
+    in_ports, out_ports = port_names(lanes)
+    ins = b[in_ports[0]]
+    outs = [max(b[p][k] for p in out_ports) for k in range(len(b[out_ports[0]]))]
     frames = []
     for k in range(min(len(ins), len(outs)) // n):
         frames.append({"in": ins[k * n], "last_in": ins[(k + 1) * n - 1],

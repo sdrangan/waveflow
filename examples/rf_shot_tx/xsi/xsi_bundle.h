@@ -6,6 +6,12 @@
 // StreamDriver/StreamSink (and the memory arena) and the XSI testbench — a bundle written by Python
 // is read here, and a bundle written here is read back by Python, so neither side re-implements the
 // vectors.  x86 is little-endian, so a raw fread/fwrite of uint64 matches numpy's "<u8".
+//
+// WIDE WORDS.  A beat wider than 64 bits is stored as k = ceil(W/64) consecutive uint64 CHUNKS,
+// chunk 0 the low 64 bits -- the pysim's (n, k) uint64 convention for a wide stream, so the two
+// sides agree on the bytes.  meta.json's word_bytes is 8*k (data, not convention), bounds.bin
+// counts BEATS, and cycles.bin has one entry per beat.  k = 1 is every bundle written before this
+// existed, byte for byte.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -20,9 +26,32 @@
 namespace wfbfm {
 
 struct BurstBundle {
-    /// The flat words of *dir*'s stream (words.bin), one AXIS beat each.
+    /// The flat words of *dir*'s stream (words.bin): one AXIS beat each, or -- for a wide stream
+    /// -- read_chunks(dir) uint64 chunks per beat, low chunk first.
     static std::vector<uint64_t> read_words(const std::string& dir) {
         return read_u64(dir + "/words.bin");
+    }
+    /// uint64 chunks per beat: meta.json's word_bytes / 8, or 1 when the manifest does not say.
+    static int read_chunks(const std::string& dir) {
+        const long wb = read_meta_int(dir, "word_bytes", 8);
+        return wb > 8 ? (int)(wb / 8) : 1;
+    }
+    /// The integer value of *key* in meta.json, or *dflt* -- the unquoted-number twin of
+    /// read_meta_str below, under the same minimal-scan contract.
+    static long read_meta_int(const std::string& dir, const std::string& key, long dflt) {
+        FILE* f = std::fopen((dir + "/meta.json").c_str(), "rb");
+        if (!f) return dflt;
+        std::string txt;
+        char buf[512];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) txt.append(buf, n);
+        std::fclose(f);
+        const std::string pat = "\"" + key + "\"";
+        const size_t k = txt.find(pat);
+        if (k == std::string::npos) return dflt;
+        const size_t colon = txt.find(':', k + pat.size());
+        if (colon == std::string::npos) return dflt;
+        return std::strtol(txt.c_str() + colon + 1, 0, 10);
     }
     /// The cumulative burst end-indices (bounds.bin); burst k is words[bounds[k-1]:bounds[k]].
     static std::vector<uint64_t> read_bounds(const std::string& dir) {
@@ -79,7 +108,7 @@ struct BurstBundle {
     static void write(const std::string& dir,
                       const std::vector<uint64_t>& words,
                       const std::vector<uint64_t>& bounds,
-                      const char* extra_key = 0, const char* extra_val = 0) {
+                      const char* extra_key = 0, const char* extra_val = 0, int chunks = 1) {
         mkdirs(dir);
         write_u64(dir + "/words.bin", words);
         write_u64(dir + "/bounds.bin", bounds);
@@ -87,9 +116,9 @@ struct BurstBundle {
         FILE* f = std::fopen(meta.c_str(), "wb");
         if (!f) die(meta);
         std::fprintf(f,
-            "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": 8,\n"
+            "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": %d,\n"
             "  \"n_bursts\": %zu,\n  \"n_words\": %zu",
-            bounds.size(), words.size());
+            8 * chunks, bounds.size(), words.size() / (size_t)chunks);
         if (extra_key && extra_val) std::fprintf(f, ",\n  \"%s\": \"%s\"", extra_key, extra_val);
         std::fprintf(f, "\n}\n");
         std::fclose(f);
@@ -97,17 +126,18 @@ struct BurstBundle {
 
     /// Convenience: write a single-burst bundle (one burst spanning all of *words*) — e.g. a memory
     /// arena, or a continuous (has_tlast=false) stream.
-    static void write_one(const std::string& dir, const std::vector<uint64_t>& words) {
-        std::vector<uint64_t> bounds(1, (uint64_t)words.size());
-        write(dir, words, bounds);
+    static void write_one(const std::string& dir, const std::vector<uint64_t>& words,
+                          int chunks = 1) {
+        std::vector<uint64_t> bounds(1, (uint64_t)(words.size() / (size_t)chunks));
+        write(dir, words, bounds, 0, 0, chunks);
     }
 
     /// Write a captured output stream: the words bundle (words/bounds/meta) **plus** ``cycles.bin`` —
     /// the arrival cycle of each word (uint64, parallel to ``words``).  So the C++ side only records
     /// timing; Python reads ``cycles.bin`` and computes completion time (cycle_of_word) off-line.
     static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
-                              const std::vector<long>& cycles) {
-        write_one(dir, words);
+                              const std::vector<long>& cycles, int chunks = 1) {
+        write_one(dir, words, chunks);
         std::vector<uint64_t> c(cycles.begin(), cycles.end());
         write_u64(dir + "/cycles.bin", c);
     }
@@ -121,8 +151,8 @@ struct BurstBundle {
     /// has bounds passes them; a caller that has none says so by calling the other function.
     static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
                               const std::vector<long>& cycles,
-                              const std::vector<uint64_t>& bounds) {
-        write(dir, words, bounds);
+                              const std::vector<uint64_t>& bounds, int chunks = 1) {
+        write(dir, words, bounds, 0, 0, chunks);
         std::vector<uint64_t> c(cycles.begin(), cycles.end());
         write_u64(dir + "/cycles.bin", c);
     }

@@ -41,6 +41,13 @@ from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils.burst_io import read_burst_bundle
 
 
+def _chunk_args(bitwidth: int) -> tuple[str, ...]:
+    """The XSI model's ``chunks`` ctor argument -- ``ceil(W/64)`` uint64 per beat -- for a port wider
+    than 64 bits, and nothing otherwise, so every narrower harness is emitted exactly as before."""
+    k = -(-int(bitwidth) // 64)
+    return (str(k),) if k > 1 else ()
+
+
 @dataclass
 class StreamDriver(HwModule):
     """Plays a burst bundle onto a stream — a schema-blind, file-driven source.
@@ -134,7 +141,8 @@ class StreamDriver(HwModule):
         generator emits as a member assignment and the model loads in ``pre_sim`` — the same on-disk
         bundle this driver plays in pysim, so both drive from one source."""
         from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=("{}",))
+        return BfmModel("AxisMaster", ports=("stream_ep",),
+                        extra_args=("{}",) + _chunk_args(self.bitwidth))
 
 
 @dataclass
@@ -178,4 +186,4 @@ class StreamSink(HwModule):
         """XSI twin: an ``AxisSlave`` on the port ``stream_ep`` is wired to — always ready, keeps
         everything, and timestamps each word so the testbench can report completion time."""
         from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisSlave", ports=("stream_ep",))
+        return BfmModel("AxisSlave", ports=("stream_ep",), extra_args=_chunk_args(self.bitwidth))

@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 4
 audience: hls
 api: [SsrFft, write_sources, render_config, render_wrappers, task_instances, kernel_task]
-summary: "How SsrFft becomes RTL: generic hand-written task bodies (a stage, a commutator, the reorder, two lane adaptors) and a generated configuration per FFT (edge adaptors over the generated array utils, per-stage formats, twiddle ROMs, one wrapper per task). The stage body is AMD's arithmetic with its quantization points spelled out; the commutator ticks in whole groups decided by a one-bit flag; the reorder's frame buffer is a stream_of_blocks pair or a single ping-pong task, measured at L/R + 4 and L/R. Two traps found only at RTL -- a blocking read at a loop head strands a burst's tail, and a sample count in the commutator's decision broke timing -- and what csynth reports."
+summary: "How SsrFft becomes RTL: generic hand-written task bodies (a stage, a commutator, the reorder, an input register, two lane adaptors) and a generated configuration per FFT (edge adaptors over the generated array utils, per-stage formats, twiddle ROMs, one wrapper per task). The stage body is AMD's arithmetic with its quantization points spelled out; the commutator ticks in whole groups decided by a one-bit flag; the reorder's frame buffer is a stream_of_blocks pair or a single ping-pong task, measured at L/R + 5 and L/R. The traps found only at RTL -- a blocking read at a loop head strands a burst's tail, a sample count in the commutator's decision broke timing, and so did a commutator fed straight from a top-level port -- and what csynth reports."
 ---
 
 # Synthesizing the SSR FFT
@@ -15,7 +15,8 @@ summary: "How SsrFft becomes RTL: generic hand-written task bodies (a stage, a c
 The C++ splits along what changes with the configuration:
 
 - **Hand-written, generic** (`waveflow/dsp/ssr_fft/src/ssr_fft_tasks.h`): one body per *kind* of
-  task -- a stage, a commutator, the two reorder variants, the two lane adaptors -- each a template.
+  task -- a stage, a commutator, the two reorder variants, the input register, the two lane adaptors
+  (for `lanes=True`) -- each a template.
 - **Generated, per configuration** (`hls.py`, from the same `Geometry` the model uses):
   `ssr_fft_<config>.h` -- per edge an adaptor struct (`value_type`, width, `read`/`write` over the
   generated `<elem>_array_utils`), per stage a struct with its formats, its sub-transform length and
@@ -80,17 +81,18 @@ both run 500 frames back to back without a stall.
 
 | `reorder` | structure | measured interval (L = 64) |
 |---|---|---|
-| `"sob"` (default) | writer task `→ hls::stream_of_blocks<ap_uint<W>[L/R], 2> →` reader task | 20 = `L/R` + 4 |
+| `"sob"` (default) | writer task `→ hls::stream_of_blocks<ap_uint<W>[L/R], 2> →` reader task | 21 = `L/R` + 5 |
 | `"pingpong"` | one task holding both halves, a write side and a read side running every cycle | **16 = `L/R`** |
 
-The `stream_of_blocks` pair costs four cycles a frame because its bodies are **single-firing**: a
+The `stream_of_blocks` pair costs five cycles a frame (four with `lanes=True`, where the reader
+writes an internal FIFO rather than the output port) because its bodies are **single-firing**: a
 write or read lock is an RAII object scoped to one frame, so the reader is re-entered -- and its lock
 re-acquired -- once a frame. The ping-pong task has no lock and no per-frame entry; its two halves
-change hands on two flags. At `L = 1024` the difference is 1.6%; at `L = 64`, 25%.
+change hands on two flags. At `L = 1024` the difference is 2%; at `L = 64`, 31%.
 
-## Two traps found at RTL
+## Traps found at RTL
 
-Both passed csim. Both are general to free-running HLS, not to the FFT.
+Each passed csim. Each is general to free-running HLS, not to the FFT.
 
 - **A blocking read at a `while (1)` head strands the end of a burst.** Vitis implements these loops
   as stall-style pipelines: when the read at the head waits, the iterations already in flight freeze
@@ -101,6 +103,11 @@ Both passed csim. Both are general to free-running HLS, not to the FFT.
   head tests `empty()` and reads only when a word is there**, so an iteration with nothing to read
   does nothing and the pipeline keeps draining. Writes stay blocking: a full output must stall the
   task -- that is back-pressure.
+- **A commutator straight off a top-level port missed timing.** Its group decision reads its
+  input's empty flag; off an internal FIFO that meets 250 MHz with +0.44 ns to spare, but off the
+  top-level AXIS port it missed by 0.16 ns. So the `RadixWord` input goes through `in_reg`, a one-word
+  register task, first -- a raw copy that puts an internal FIFO in front of the first commutator, for
+  two cycles of latency.
 - **Csim is not a verdict on `hls::task` + `stream_of_blocks`.** With a commutator back-pressuring
   into the SOB writer, csim corrupted frames; the commutator alone under back-pressure, and the SOB
   pair alone behind other tasks, were each exact. The RTL was exact. The task chain without the SOB is

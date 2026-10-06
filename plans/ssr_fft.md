@@ -422,6 +422,25 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
     the one construct the deadlock law covers);
   - the last frame of a burst drains completely.
 
+### F3b — `RadixWord` ports, and wide words in XSI  ✅ DONE (2026-10-06)
+
+> The default boundary is now one `RadixWord` port each way (`s_in` 128 bits, `m_out` up to 232);
+> `SsrFft(lanes=True)` keeps `VitisFft`'s four-lane group.  That needed wide words in the XSI
+> testbench library, a framework change: `write_burst_bundle(..., word_chunks=k)` / `meta.json`
+> `word_bytes = 8k`; `AxisMaster` / `AxisSlave(..., chunks)`, passed by `StreamDriver` / `StreamSink`
+> only when the port is wider than 64 bits; `Dut::putChunks` / `getChunks` with 2048-bit buffers (the
+> old 4-entry `LV` buffers overran silently above 128 bits).  The full `-m xsi` suite: every other
+> gate unchanged (151 pass).
+>
+> Findings: (1) a commutator reading a top-level AXIS port directly missed 250 MHz by 0.16 ns, so an
+> `in_reg` pass-through task sits in front (2 cycles).  (2) The SOB reader costs 5 cycles a frame on
+> this boundary (4 with lanes).  (3) **Twice, a csynth of a correct top produced `ap_fifo` ports** --
+> its log showed it analyzed a different `gen/ssr_fft.cpp` than the one on disk -- both times while
+> another build (a pytest run generating a build tree) was running; the re-synthesis was correct.
+> Cause not isolated; `rtl.synth` now refuses `ap_fifo` boundary ports with that explanation.
+> Measured on the new boundary, every length: interval `L/R`, first frame 40 / 109 / 350 / 1276 /
+> 4938, pysim within 3 cycles (`examples/ssr_fft/measured.json`).
+
 ### F4 — all lengths, timing, resources  ✅ DONE (2026-10-06, ping-pong reorder)
 
 > XSI + csynth, RFSoC 4x2 at 250 MHz, 8 frames back to back, every frame bit-exact, timing met at

@@ -42,10 +42,10 @@ def _xml_resources(root: Path) -> dict:
             "est_clock_ns": period}
 
 
-def measure(length: int, reorder: str) -> dict:
-    root = REPO / "work" / "ssr_fft" / f"L{length}_{reorder}"
+def measure(length: int, reorder: str, lanes: bool = False) -> dict:
+    root = REPO / "work" / "ssr_fft" / f"L{length}_{reorder}{'_lanes' if lanes else ''}"
     root.mkdir(parents=True, exist_ok=True)
-    rtl.generate(root, length, n_frames=N_B2B, reorder=reorder)
+    rtl.generate(root, length, n_frames=N_B2B, reorder=reorder, lanes=lanes)
     synth_s = None
     if not (root / f"{rtl.TOP}_proj").is_dir() or rtl_staleness(root, rtl.TOP) is not None:
         t = time.time()
@@ -55,18 +55,18 @@ def measure(length: int, reorder: str) -> dict:
     t = time.time()
     rtl.run_xsi(root)
     xsi_s = round(time.time() - t)
-    b2b_bits = rtl.check_bits(root, length, N_B2B)
-    b2b = rtl.frame_times(root, length)
+    b2b_bits = rtl.check_bits(root, length, N_B2B, lanes=lanes)
+    b2b = rtl.frame_times(root, length, lanes=lanes)
 
     rng = np.random.default_rng(length)
     gaps = [int(g) for g in rng.integers(2 * length // 4 + 64, 2 * length + 400, N_ISO - 1)]
-    rtl.generate(root, length, n_frames=N_ISO, burst_gaps=gaps, reorder=reorder)
+    rtl.generate(root, length, n_frames=N_ISO, burst_gaps=gaps, reorder=reorder, lanes=lanes)
     rtl.run_xsi(root)
-    iso_bits = rtl.check_bits(root, length, N_ISO)
-    iso = rtl.frame_times(root, length)
+    iso_bits = rtl.check_bits(root, length, N_ISO, lanes=lanes)
+    iso = rtl.frame_times(root, length, lanes=lanes)
 
     return {
-        "L": length, "reorder": reorder,
+        "L": length, "reorder": reorder, "boundary": "lanes" if lanes else "radixword",
         "bits_exact": bool(all(b2b_bits) and len(b2b_bits) == N_B2B
                            and all(iso_bits) and len(iso_bits) == N_ISO),
         "interval": sorted({int(x) for x in np.diff([f["done"] for f in b2b])}),
@@ -82,14 +82,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--lengths", type=int, nargs="+", default=list(LENGTHS))
     ap.add_argument("--reorder", default="pingpong", choices=("pingpong", "sob"))
+    ap.add_argument("--lanes", action="store_true", help="VitisFft's four-lane port group")
     a = ap.parse_args()
     data = json.loads(MEASURED.read_text(encoding="utf-8")) if MEASURED.exists() else {
         "target": {"part": RFSOC4X2_PART, "period_ns": RFSOC4X2_PERIOD_NS, "board": "RFSoC 4x2"},
         "runs": {}}
     for n in a.lengths:
-        r = measure(n, a.reorder)
+        r = measure(n, a.reorder, a.lanes)
         r["date"] = date.today().isoformat()
-        data["runs"][f"L{n}_{a.reorder}"] = r
+        data["runs"][f"L{n}_{a.reorder}{'_lanes' if a.lanes else ''}"] = r
         print(json.dumps(r), flush=True)
         data["runs"] = dict(sorted(data["runs"].items(),
                                    key=lambda kv: (kv[1]["reorder"], kv[1]["L"])))

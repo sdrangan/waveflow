@@ -53,11 +53,11 @@ def test_example_pysim_is_bit_exact_at_the_measured_interval(tmp_path):
 
 
 def test_every_measured_run_is_bit_exact_at_l_over_r():
-    """What the docs claim of the RTL: bit-exact everywhere; ping-pong at L/R; SOB at L/R + 4; an
+    """What the docs claim of the RTL: bit-exact everywhere; ping-pong at L/R; SOB at L/R + 5; an
     isolated frame's latency a single value, equal to the first frame's."""
     for r in RUNS.values():
         assert r["bits_exact"], r
-        want = r["L"] // 4 + (4 if r["reorder"] == "sob" else 0)
+        want = r["L"] // 4 + (5 if r["reorder"] == "sob" else 0)
         assert r["interval"] == [want], r
         assert r["isolated_latency"] == [r["first_frame"]], r
         assert len(r["isolated_span"]) == 1, r
