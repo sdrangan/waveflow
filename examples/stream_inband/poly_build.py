@@ -25,6 +25,7 @@ Every step covers both stream widths, 32 and 64 bits, unless its name ends in ``
     extract_cosim_timing_w* / validate_timing_w*   cosim cycles vs the pysim estimate
     error_vcd        cosim of early_tlast_vcd with port tracing: the error-path waveform
     summary          every check, the synthesis reports and the timing verdicts
+    figures, sync_docs_figures   the docs figures, from the committed error-path VCD
 
 Every check compares against the same expected response, computed from each scenario's
 intent (scenarios.py) rather than from any implementation.
@@ -54,12 +55,14 @@ from waveflow.utils.burst_io import read_bursts, write_bursts
 
 try:
     from examples.stream_inband import scenarios as S
+    from examples.stream_inband.poly_figures import PolyFiguresStep, SyncDocsFiguresStep
     from examples.stream_inband.poly import (
         SCHEMA_CLASSES, WORD_BW_SUPPORTED, Float32, PolyAccel, PolyTB, connect,
         poly_stream_model,
     )
 except ModuleNotFoundError:  # run from inside the example directory
     import scenarios as S  # type: ignore[no-redef]
+    from poly_figures import PolyFiguresStep, SyncDocsFiguresStep  # type: ignore[no-redef]
     from poly import (  # type: ignore[no-redef]
         SCHEMA_CLASSES, WORD_BW_SUPPORTED, Float32, PolyAccel, PolyTB, connect,
         poly_stream_model,
@@ -532,6 +535,10 @@ def build_poly_dag() -> BuildDag:
                       done_artifacts=tuple(f"cosim_done_w{w}" for w in WIDTHS), only=("timing",)))
     dag.add(ErrorVcdStep(name="error_vcd"))
     dag.add(SummaryStep(name="summary"))
+
+    # Docs figures, from the committed vcd/error_path.vcd: no Vitis needed.
+    dag.add(PolyFiguresStep(name="figures"))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 

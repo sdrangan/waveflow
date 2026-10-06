@@ -1,153 +1,111 @@
 ---
 title: AXI4-Stream Timing Analysis
 parent: Streaming polynomial
-nav_order: 6
+nav_order: 10
 has_children: false
-summary: "Analysing the kernel's two AXI4-Stream interfaces from an existing VCD, without rerunning co-simulation: decoding the command header, the sample bursts and the response, and reading the per-burst timing off the waveform. The AXI-Lite register map is not in the VCD analysis — its status is observed at end of simulation from the JSON the run writes."
+summary: "How to read the protocol off a waveform: decoding a co-simulation VCD of the poly kernel, without rerunning co-simulation, into its commands (headers with their coefficients, sample bursts) and responses (headers, results), in order, at either word width -- including a run that ends in an error -- and plotting the bursts on a timing diagram."
 ---
 
-# Polynomial AXI4-Stream Timing Analysis
+# Reading the protocol off a waveform
 
-The polynomial demo includes functions to demonstrate how to perform the 
-timing analysis and waveform viewing of the AXI4-signals.  
-This guide explains how to analyze the AXI4-Stream timing of the `poly`
-Vitis HLS kernel from an existing VCD file — **without** rerunning RTL
-co-simulation.  
+How do you read this protocol off a waveform?  A co-simulation VCD holds every AXI4-Stream beat:
+the words, TVALID, TREADY and TLAST.  `timing_analysis.py` turns those beats back into the protocol's
+messages -- commands, responses, their fields -- and their timing, from a VCD you already have,
+without rerunning co-simulation.  It uses Waveflow's
+[AXI4-Stream VCD analysis tools](../../guide/timing/axistream.md).
 
-The source code for everything on this page lives in
-`examples/stream_inband/timing_analysis.py`. The demo uses
-Waveflow's [AXI4-stream VCD analysis tools](../../guide/timing/axistream.md). 
+The source is
+[`examples/stream_inband/timing_analysis.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/timing_analysis.py).
 
-## Overview
+## What it decodes
 
-The `poly` kernel communicates over two AXI4-Stream interfaces plus an AXI-Lite control/status block. The VCD timing analysis covers only the streams; the AXI-Lite register map is observed end-of-simulation via `regmap_status.json`.
+The analysis walks each stream in protocol order:
 
-- **Input stream**: a DATA command header followed by input sample data, then an END command header that terminates the kernel
-- **Output stream**: per-DATA-transaction response header followed by output sample data
+- **`s_in`** (`in_stream`): a `PolyCmdHdr`, then, for a `DATA` command with `nsamp > 0`, its sample
+  burst, and so on until `END` or the end of the capture.  A sample burst that ended early decodes
+  to the samples actually sent.
+- **`m_out`** (`out_stream`): for each `DATA` command, a `PolyRespHdr`, then its results.
 
-The timing analysis API:
-1. loads a VCD file
-2. discovers the clock and AXI4-Stream signals
-3. extracts individual bursts from each stream
-4. decodes the bursts into `PolyCmdHdr`, `PolyRespHdr`, and NumPy sample arrays
-5. returns everything in a `PolyTimingResult` instance
-
-## The `PolyTimingResult` class
+The status registers are on AXI-Lite and are not part of this decoding; the run's `status.json` has
+them.
 
 ```python
 class PolyTimingResult:
-    clk_name: str        # full VCD name of the clock signal
-    clk_period: float    # estimated clock period in nanoseconds
-    in_signals: dict     # AXI4-Stream signal names for the input stream
-    out_signals: dict    # AXI4-Stream signal names for the output stream
-    bursts_in: list      # raw burst dicts from the input stream
-    bursts_out: list     # raw burst dicts from the output stream
-    cmd_hdr: PolyCmdHdr  # decoded DATA command header
-    x: np.ndarray        # input sample array
-    resp_hdr: PolyRespHdr  # decoded response header
-    y: np.ndarray          # output sample array
+    clk_name: str               # full VCD name of the clock
+    clk_period: float           # nanoseconds
+    in_signals, out_signals     # AXI4-Stream signal names per stream
+    bursts_in, bursts_out       # raw bursts: data, beat_type, tstart, complete
+    commands: list[Command]     # each: hdr (PolyCmdHdr), x, hdr_burst, samp_burst, is_end
+    responses: list[Response]   # each: hdr (PolyRespHdr), y, hdr_burst, data_burst
+    cmd_hdr, x, resp_hdr, y     # shorthand: the first DATA command and its response
 ```
 
-Each `burst` dict has keys `data`, `beat_type`, `start_idx`, and `tstart`.
+## Decoding the error-path capture
 
-## Analyzing an existing VCD
+`vcd/error_path.vcd` is the co-simulation of `early_tlast_vcd`, the run drawn on
+[The error path](./error_path.md):
 
 ```python
 import sys
-sys.path.insert(0, "examples/stream_inband")   # make the sibling poly / timing_analysis modules importable
+sys.path.insert(0, "examples/stream_inband")   # the sibling poly / timing_analysis modules
 from timing_analysis import analyze_poly_vcd
 
-result = analyze_poly_vcd("vcd/dump.vcd")
-
-# Decoded command header
-print(f"cmd_type = {result.cmd_hdr.val['cmd_type']}")
-print(f"tx_id    = {result.cmd_hdr.val['tx_id']}")
-print(f"nsamp    = {result.cmd_hdr.val['nsamp']}")
-
-# Input / output sample arrays
-print(f"x = {result.x}")
-print(f"y = {result.y}")
-
-# Timing information
-print(f"clk_period = {result.clk_period} ns")
-print(f"Input bursts:  {len(result.bursts_in)}")
-print(f"Output bursts: {len(result.bursts_out)}")
+r = analyze_poly_vcd("examples/stream_inband/vcd/error_path.vcd")
+for c in r.commands:
+    print(f"cmd  tx_id={int(c.hdr.val['tx_id'])} nsamp={int(c.hdr.val['nsamp'])} "
+          f"coeffs={c.hdr.val['coeffs'].tolist()} samples_sent={len(c.x)}")
+for s in r.responses:
+    print(f"resp tx_id={int(s.hdr.val['tx_id'])} results={len(s.y)} "
+          f"closed={bool(s.data_burst['complete'])}")
 ```
 
-Expected output for a standard run with `nsamp=100`:
-
 ```
-cmd_type = 0
-tx_id    = 42
-nsamp    = 100
-x = [0.  0.010101 0.020202 ... 1.]
-y = [ 1.  0.9697... ... 0.]
-clk_period = 10.0 ns
-Input bursts:  3
-Output bursts: 2
+cmd  tx_id=71 nsamp=8 coeffs=[1.0, -2.0, -3.0, 4.0] samples_sent=8
+cmd  tx_id=72 nsamp=10 coeffs=[1.0, -2.0, -3.0, 4.0] samples_sent=6
+resp tx_id=71 results=8 closed=True
+resp tx_id=72 results=6 closed=True
 ```
 
-## Burst structure
+The coefficients come out of the command headers, because that is where they travel.  The second
+command announced 10 samples and sent 6, and its response has 6 results in a **closed** burst:
+rule 6, read straight off the wire.
 
-| Burst           | Stream | Contents |
-|-----------------|--------|----------|
-| `bursts_in[0]`  | input  | `PolyCmdHdr` (DATA) — cmd_type, tx_id, nsamp |
-| `bursts_in[1]`  | input  | `nsamp` input samples (float32) |
-| `bursts_in[2]`  | input  | `PolyCmdHdr` (END) — terminates the kernel loop |
-| `bursts_out[0]` | output | `PolyRespHdr` — tx_id echo |
-| `bursts_out[1]` | output | `nsamp` output samples (float32) |
-
-Coefficients no longer appear on the stream — they are configured via the AXI-Lite register map before launch. Halt status (`halted` / `error` / `tx_id`) is read from the regmap after the kernel returns, not from a streamed footer.
+For a 64-bit kernel, pass `word_bw=64, top="poly_bw64"`.
 
 ## Plotting the timing diagram
 
 ```python
 import matplotlib
 matplotlib.use("Agg")   # omit for interactive display
-
 from timing_analysis import analyze_poly_vcd, plot_poly_timing
 
-result = analyze_poly_vcd("vcd/dump.vcd")
-
-# Full-range timing diagram with color-coded bursts
-ax = plot_poly_timing(result, show=True)
+r = analyze_poly_vcd("examples/stream_inband/vcd/error_path.vcd")
+ax = plot_poly_timing(r, show=True)
+ax = plot_poly_timing(r, trange=(100, 500), show=True)    # zoom, in ns
 ```
 
-The plot colors:
+Headers are shaded orange and data bursts green, on every stream signal.
 
-- 🟠 **Orange** — header bursts (DATA cmd_hdr, END cmd_hdr, resp_hdr)
-- 🟢 **Green** — data bursts (input samples, output samples)
+## A stable test fixture
 
-To zoom into a specific time range, pass `trange=(t_start_ns, t_end_ns)`:
+`tests/fixtures/poly/timing/poly_timing_fixture.vcd` is a small **synthetic** VCD -- one `DATA`
+command with three samples, then `END` -- for tests.  It is rendered from the current schemas and
+model by `python -m tests.poly.poly_timing_fixture`, and a test fails if the committed file drifts
+from what that renders.  So a change to the wire format cannot leave it silently stale.
 
-```python
-ax = plot_poly_timing(result, trange=(0, 500), show=True)
-```
+## Capturing a fresh VCD
 
-## Stable test fixture
+The `error_vcd` build step does it for the error-path run (see [The error path](./error_path.md)).
+For any other run, co-simulate with `-trace_level port` and convert the trace with
+[`run_xsim_vcd`](../../guide/timing/vcd.md).
 
-A minimal VCD fixture is committed to the repository for use in tests and
-documentation examples:
+## Check your understanding
 
-```
-tests/fixtures/poly/timing/poly_timing_fixture.vcd
-```
+1. The decoder walks `s_in` header by header.  How does it know whether a sample burst follows a
+   header, and how long it is?
+2. Where in a VCD of this kernel would you look for the coefficients a command used?
+3. Why can the status registers not be read from the stream VCD?
 
-This fixture contains a 3-sample transaction (`nsamp=3`) and is **never
-overwritten** by regular demo runs.  It is synthetic, rendered from the current
-schema and model by `python -m tests.poly.poly_timing_fixture`; a test fails if
-the committed file drifts from what that renders.  To load it:
+---
 
-```python
-from pathlib import Path
-from timing_analysis import analyze_poly_vcd
-
-fixture = Path("tests/fixtures/poly/timing/poly_timing_fixture.vcd")
-result = analyze_poly_vcd(fixture)
-```
-
-## Generating a VCD
-
-See [RTL cosim timing verification](./05_cosim_timing.md) for how to
-capture a fresh VCD using the Python-callable `run_xsim_vcd` API or the
-CLI.
+Back to: [Streaming polynomial](./index.md)

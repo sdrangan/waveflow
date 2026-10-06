@@ -1,65 +1,68 @@
 ---
 title: C-Synth Resource Estimation
 parent: Streaming polynomial
-nav_order: 4
-summary: "Running C-synthesis and parsing the report into a per-loop pipeline and initiation-interval table plus a resource summary. The step fails the build when any reported loop has an initiation interval above 1, so a pipelining regression stops the build rather than being noticed later."
+nav_order: 8
+summary: "What synthesis built at each width, and whether every loop reaches II = 1: C synthesis of the poly and poly_bw64 tops, the report parsed into a per-loop pipeline table and a resource summary, and a build that fails if any loop's initiation interval is above 1. Doubling the word width doubles the DSPs, because two samples are evaluated per cycle."
 ---
 
-# C-synth resource estimation
+# C synthesis
 
-The fourth group runs Vitis HLS C-synthesis on the kernel (the generated boundary
-around the hand-written body) and parses the report into a per-loop pipeline / II table
-plus a total-resources summary.
+What did synthesis build, and does every loop reach II = 1?  C simulation says the kernel computes
+the right answer.  Synthesis says what hardware computes it, and whether it can take a sample word
+every clock cycle.
 
 | Step | Produces | What it does |
 |------|----------|--------------|
-| `csynth` | `report_dir` | Runs `run.tcl` with `WAVEFLOW_POLY_STAGE=synth`: C synthesis, then RTL co-simulation of the timing scenario (see the next page); populates `waveflow_poly_proj/solution1/` |
-| `inspect_synth` | `loop_df`, `res_df` | Parses `csynth.xml` via `waveflow.utils.csynthparse.CsynthParser`, prints the loop and resource tables, and fails the build if any reported loop has `PipelineII > 1` |
+| `csynth_w32`, `csynth_w64` | `report_dir_w*` | Runs `run.tcl` with `WAVEFLOW_POLY_STAGE=synth` and that width: C synthesis, then RTL co-simulation of the timing scenario (see the next page), in `waveflow_poly_w32/` or `waveflow_poly_w64/` |
+| `inspect_synth_w32`, `_w64` | `loop_df_w*`, `res_df_w*` | Parses `csynth.xml` with `waveflow.utils.csynthparse.CsynthParser`, prints the loop and resource tables, and **fails the build** if any loop has `PipelineII > 1` |
 
-## What gets reported
+## The loops
 
-The `InspectSynthStep` walks the synthesis report (`csynth.xml`) for
-every module in the solution and constructs two DataFrames:
+At both widths the sample loop -- the lane loop in `transaction()`, one input word per iteration --
+pipelines at **II = 1**, with a depth of 29 cycles: the float32 multiply-add chain of Horner's rule.
 
-- `loop_df` — one row per pipelined loop, columns:
-  `PipelineII`, `PipelineDepth`, `TripCountMin`, `TripCountMax`,
-  `LatencyMin`, `LatencyMax`.
-- `res_df` — per-module + total + available resource counts (BRAM,
-  DSP, FF, LUT, URAM).
+| Loop | II | Depth | What it is |
+|---|---|---|---|
+| sample loop (`poly_body_impl.tpp`, `for (int i = 0; i < nsamp; i += pf)`) | 1 | 29 | one sample word in, one result word out, per cycle |
+| coefficient unpack (generated `poly_cmd_hdr.h`, reading the header) | 1 | 1 | the header's coefficients, a word per cycle |
+| command loop (`while (true)` in `body`) | -- | -- | not pipelined: one command at a time |
 
-Both tables are printed during the build and written to `results/loop_df.csv` and
-`results/res_df.csv`; the final `summary` step collects them into `results/summary.json`.
-The sample loop pipelines at II = 1.
+A `PipelineII > 1` on any loop fails the build.  II discipline is worth catching with a build step
+rather than leaving it buried in a synthesis log.
 
-A reported `PipelineII > 1` on any loop fails the build immediately
-— II discipline is a property worth catching with a build-step rather
-than buried in a synthesis log.
+## The resources
 
-## Why it matters as a separate group
+On the `xc7z020` at 100 MHz:
 
-C-synthesis answers a different question from C-sim and from RTL
-cosim: *can the kernel meet its target* and *what does it cost*?
-Resource estimates are a first-class signal during exploration —
-they're what you watch when sweeping `unroll_factor`, `in_bw`, or
-`out_bw` looking for the Pareto front of throughput vs area.
+| Top | Samples per word | DSP | FF | LUT | BRAM |
+|---|---|---|---|---|---|
+| `poly` (32-bit words) | 1 | 15 | 2273 | 3030 | 0 |
+| `poly_bw64` (64-bit words) | 2 | 30 | 3986 | 5708 | 0 |
 
-The current `inspect_synth` step is the simplest useful consumer
-of the csynth report.  A natural extension is a **parametric sweep**
-step that drives `param_supports` variants through this group and
-collects the resulting `(latency, II, BRAM, DSP, FF, LUT)` rows
-into a single sweep table — see the kernel-variants plan for one
-implementation sketch.
+The 64-bit top evaluates two samples per cycle, so it has two copies of the Horner datapath and
+twice the DSPs.  It is also twice as fast on the sample burst (next page): width buys throughput
+with area.
+
+There is no BRAM, because the kernel stores nothing.  Each command's coefficients live in registers
+for the length of that command, which is what rule 4 ("nothing carries over") looks like in
+hardware.
 
 ## Run just this group
 
 ```bash
-python examples/stream_inband/poly_build.py --through inspect_synth
+python examples/stream_inband/poly_build.py --through inspect_synth_w32
+python examples/stream_inband/poly_build.py --through inspect_synth_w64
 ```
 
-Produces `waveflow_poly_proj/solution1/syn/report/csynth.xml`,
-`results/loop_df.csv`, `results/res_df.csv`, and the inline resource / latency tables in
-stdout.
+Produces `waveflow_poly_w*/solution1/syn/report/csynth.xml`, `results/loop_df_w*.csv`,
+`results/res_df_w*.csv`, and the tables on stdout.
+
+## Check your understanding
+
+1. Why does the 64-bit kernel use twice the DSPs of the 32-bit one?
+2. What would `PipelineII = 2` on the sample loop mean for the throughput of each width?
+3. The kernel has no BRAM.  Which rule of the contract makes that possible?
 
 ---
 
-Next: [RTL cosim timing verification →](./05_cosim_timing.md)
+Next: [RTL co-simulation timing →](./05_cosim_timing.md)
