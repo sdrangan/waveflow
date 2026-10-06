@@ -4,25 +4,27 @@
     python poly_build.py --through check_pysim       # Python only, no Vitis
     python poly_build.py --through summary           # everything, Vitis included
 
-The pipeline, in reading order:
+Every step covers both stream widths, 32 and 64 bits, unless its name ends in ``_w32`` or
+``_w64``.  The pipeline, in reading order:
 
     scenarios        write each scenario's stimulus and expected response (scenarios.py)
     py_model         run the pure bit-exact model on every scenario
     check_model      ...and compare it with the expected response
-    py_sim           run pysim (the timing model) on the well-formed scenarios
+    py_sim           run pysim (the timing model) on the scenarios a pysim stream can express
     check_pysim      ...compare
-    extract_py_timing  pysim's cycle count for the timing scenario
+    extract_py_timing_w*   pysim's cycle count for the timing scenario
     gen_include      schema headers, serializers and the stream/testbench helpers
     sources          the hand-written C++ in place (a build outside this directory)
-    gen_kernel       the kernel boundary (gen/poly.hpp, gen/poly.cpp); the body is
-                     the hand-written poly_body_impl.tpp
+    gen_kernel       the kernel boundary (gen/poly.hpp, gen/poly.cpp: tops poly and
+                     poly_bw64); the body is the hand-written poly_body_impl.tpp
     csim             Vitis C simulation, every scenario, hand-written poly_tb.cpp
     check_csim       ...compare
-    csynth           C synthesis, then RTL co-simulation of the timing scenario
-    inspect_synth    loops, II and resources from the synthesis report
-    check_cosim      the co-simulated response, compared
-    extract_cosim_timing / validate_timing   cosim cycles vs the pysim estimate
-    summary          every check, the synthesis report and the timing verdict
+    csynth_w*        C synthesis, then RTL co-simulation of the timing scenario
+    inspect_synth_w* loops, II and resources from the synthesis report
+    check_cosim      the co-simulated responses, compared
+    extract_cosim_timing_w* / validate_timing_w*   cosim cycles vs the pysim estimate
+    error_vcd        cosim of early_tlast_vcd with port tracing: the error-path waveform
+    summary          every check, the synthesis reports and the timing verdicts
 
 Every check compares against the same expected response, computed from each scenario's
 intent (scenarios.py) rather than from any implementation.
@@ -53,21 +55,32 @@ from waveflow.utils.burst_io import read_bursts, write_bursts
 try:
     from examples.stream_inband import scenarios as S
     from examples.stream_inband.poly import (
-        SCHEMA_CLASSES, WORD_BW_SUPPORTED, CoeffArray, Float32, PolyAccel, PolyTB,
-        connect, poly_stream_model,
+        SCHEMA_CLASSES, WORD_BW_SUPPORTED, Float32, PolyAccel, PolyTB, connect,
+        poly_stream_model,
     )
 except ModuleNotFoundError:  # run from inside the example directory
     import scenarios as S  # type: ignore[no-redef]
     from poly import (  # type: ignore[no-redef]
-        SCHEMA_CLASSES, WORD_BW_SUPPORTED, CoeffArray, Float32, PolyAccel, PolyTB,
-        connect, poly_stream_model,
+        SCHEMA_CLASSES, WORD_BW_SUPPORTED, Float32, PolyAccel, PolyTB, connect,
+        poly_stream_model,
     )
 
 _SOURCE_DIR = Path(__file__).resolve().parent
 
+#: The stream widths every step covers.
+WIDTHS = tuple(WORD_BW_SUPPORTED)
+
+#: The kernel top for each width (``param_supports`` names the 64-bit one).
+TOPS = {32: "poly", 64: "poly_bw64"}
+
 #: The hand-written sources Vitis needs beside the generated ones.  A build in another
 #: directory (the tests build in a temporary one) gets a copy.
 HAND_WRITTEN = ("run.tcl", "poly_tb.cpp", "poly_body_impl.tpp")
+
+
+def width_dir(root: Path, word_bw: int) -> Path:
+    """One width's scenario data: ``data/w32`` or ``data/w64``."""
+    return root / "data" / f"w{word_bw}"
 
 
 def _ensure_sources(root: Path) -> None:
@@ -115,6 +128,14 @@ def _write_status(path: Path, status: dict) -> None:
     path.write_text(json.dumps(status) + "\n", encoding="utf-8")
 
 
+def _names(root: Path, word_bw: int) -> list[str]:
+    return (width_dir(root, word_bw) / "scenarios.txt").read_text(encoding="utf-8").split()
+
+
+def _meta(root: Path, word_bw: int, name: str) -> dict:
+    return json.loads((width_dir(root, word_bw) / name / "scenario.json").read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------
 # Python: scenarios, the pure model, pysim
 # ---------------------------------------------------------------------------
@@ -122,15 +143,18 @@ def _write_status(path: Path, status: dict) -> None:
 
 @dataclass(kw_only=True)
 class ScenariosStep(BuildStep):
-    description = "Write every scenario's stimulus and expected response (scenarios.py)."
+    description = "Write every scenario's stimulus and expected response, at each width."
     consumes = ["poly_source", "scenarios_source"]
-    produces = {"data_dir": Path("data"), "scenario_list": Path("data/scenarios.txt")}
+    produces = {"scenario_list": Path("data/scenarios.txt")}
     params = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
-        data = config.root_dir / "data"
-        S.write_scenarios(data)
-        return {"data_dir": data, "scenario_list": data / "scenarios.txt"}
+        root = config.root_dir
+        for bw in WIDTHS:
+            S.write_scenarios(width_dir(root, bw), bw)
+        out = root / "data" / "scenarios.txt"
+        out.write_text("\n".join(S.scenarios()) + "\n", encoding="utf-8")
+        return {"scenario_list": out}
 
 
 @dataclass(kw_only=True)
@@ -140,108 +164,135 @@ class ModelStep(BuildStep):
     produces = {"model_done": Path("results/model_done.txt")}
     params = {}
 
-    def run(self, config: BuildConfig, scenario_list, **_) -> dict:
-        data = config.root_dir / "data"
-        names = Path(scenario_list).read_text(encoding="utf-8").split()
-        for name in names:
-            d = data / name
-            coeffs = CoeffArray().read_uint32_file(d / "coeffs.bin").val
-            res = poly_stream_model(read_bursts(d / "in"), coeffs)
-            write_bursts(res.out, d / "model")
-            _write_status(d / "model" / "status.json", res.status())
-        done = config.root_dir / "results" / "model_done.txt"
+    def run(self, config: BuildConfig, **_) -> dict:
+        root = config.root_dir
+        for bw in WIDTHS:
+            for name in _names(root, bw):
+                d = width_dir(root, bw) / name
+                res = poly_stream_model(read_bursts(d / "in"), word_bw=bw)
+                write_bursts(res.out, d / "model")
+                _write_status(d / "model" / "status.json", res.status())
+        done = root / "results" / "model_done.txt"
         done.parent.mkdir(parents=True, exist_ok=True)
-        done.write_text("\n".join(names) + "\n", encoding="utf-8")
+        done.write_text("done\n", encoding="utf-8")
         return {"model_done": done}
 
 
 @dataclass(kw_only=True)
 class PySimStep(BuildStep):
-    """pysim: the module's Python body with its timing model, on the well-formed scenarios.
+    """pysim: the module's Python body with its timing model.
 
+    Runs every scenario a pysim stream can express (all but a missing TLAST), at each width.
     The timing scenario's event log becomes the cycle estimate cosim is checked against.
     """
-    description = "Run pysim on the well-formed scenarios; log the timing scenario."
+    description = "Run pysim on every scenario it can express; log the timing scenario."
     consumes = ["scenario_list", "poly_source"]
-    produces = {"pysim_done": Path("results/pysim_done.txt"), "log": Path("results/sim_log.csv")}
+    produces = {"pysim_done": Path("results/pysim_done.txt"),
+                **{f"log_w{bw}": Path(f"results/sim_log_w{bw}.csv") for bw in WIDTHS}}
     params = {"clk_freq": 100e6, "unroll_factor": 1}
 
     def run(self, config: BuildConfig, clk_freq, unroll_factor, **_) -> dict:
-        data = config.root_dir / "data"
-        log_path = config.root_dir / "results" / "sim_log.csv"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        for name in S.WELL_FORMED:
-            d = data / name
-            sim = Simulation()
-            clk = Clock(freq=clk_freq)
-            logger = (Logger(name="poly_log", sim=sim, file_path=log_path, fields=["event", "job"])
-                      if name == "timing" else None)
-            accel = PolyAccel(name="poly_accel", sim=sim, clk=clk, unroll_factor=unroll_factor,
-                              **({"logger": logger} if logger else {}))
-            tb = PolyTB(name="poly_tb", sim=sim, stimulus=d / "in",
-                        coeffs=CoeffArray().read_uint32_file(d / "coeffs.bin").val,
-                        n_out=len(read_bursts(d / "expected")))
-            connect(sim, tb, accel, clk)
-            sim.run_sim()
-            write_bursts(tb.out, d / "pysim")
-            _write_status(d / "pysim" / "status.json", tb.status)
-        done = config.root_dir / "results" / "pysim_done.txt"
-        done.write_text("\n".join(S.WELL_FORMED) + "\n", encoding="utf-8")
-        return {"pysim_done": done, "log": log_path}
+        root = config.root_dir
+        out: dict = {}
+        for bw in WIDTHS:
+            log_path = root / "results" / f"sim_log_w{bw}.csv"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            for name in _names(root, bw):
+                if not _meta(root, bw, name)["pysim"]:
+                    continue
+                d = width_dir(root, bw) / name
+                sim = Simulation()
+                clk = Clock(freq=clk_freq)
+                logger = (Logger(name="poly_log", sim=sim, file_path=log_path,
+                                 fields=["event", "job"]) if name == "timing" else None)
+                accel = PolyAccel(name="poly_accel", sim=sim, clk=clk, in_bw=bw, out_bw=bw,
+                                  unroll_factor=unroll_factor,
+                                  **({"logger": logger} if logger else {}))
+                tb = PolyTB(name="poly_tb", sim=sim, stimulus=d / "in", word_bw=bw,
+                            n_out=len(read_bursts(d / "expected")))
+                connect(sim, tb, accel, clk)
+                sim.run_sim()
+                write_bursts(tb.out, d / "pysim")
+                _write_status(d / "pysim" / "status.json", tb.status)
+            out[f"log_w{bw}"] = log_path
+        done = root / "results" / "pysim_done.txt"
+        done.write_text("done\n", encoding="utf-8")
+        return {"pysim_done": done, **out}
 
 
 @dataclass(kw_only=True)
 class ExtractPyTimingStep(BuildStep):
-    """pysim's cycle count for the timing scenario: first sample read to last sample written."""
+    """pysim's cycle count for the timing scenario: one whole kernel call, ``ap_start`` to
+    return -- the same span the cosim report measures."""
+    word_bw: int
     description = "Extract the timing scenario's cycle count from the pysim event log."
-    consumes = ["log"]
-    produces = {"py_timing": Path("results/py_timing.json")}
     params = {"clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, log, clk_freq, **_) -> dict:
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [f"log_w{self.word_bw}"]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {f"py_timing_w{self.word_bw}": Path(f"results/py_timing_w{self.word_bw}.json")}
+
+    def run(self, config: BuildConfig, clk_freq, **art) -> dict:
+        log = art[f"log_w{self.word_bw}"]
         events: dict[str, float] = {}
         with open(log, newline="") as f:
             for row in csv.DictReader(f):
                 events.setdefault(row["event"], float(row["time"]))
-        t0, t1 = events.get("samp_read_begin"), events.get("samp_out_write_end")
+        t0, t1 = events.get("proc_begin"), events.get("proc_end")
         if t0 is None or t1 is None:
             raise RuntimeError(f"missing timing events in {log}: {sorted(events)}")
-        out = config.root_dir / "results" / "py_timing.json"
+        out = config.root_dir / "results" / f"py_timing_w{self.word_bw}.json"
         out.write_text(json.dumps({
             "transaction_cycles": int(round((t1 - t0) * clk_freq)),
             "transaction_seconds": t1 - t0,
             "clk_freq": float(clk_freq),
+            "word_bw": self.word_bw,
             "source": "py_sim",
-            "events": {"samp_read_begin": t0, "samp_out_write_end": t1},
+            "events": {"proc_begin": t0, "proc_end": t1},
         }, indent=2), encoding="utf-8")
-        return {"py_timing": out}
+        return {f"py_timing_w{self.word_bw}": out}
 
 
 @dataclass(kw_only=True)
 class CheckStep(BuildStep):
-    """Compare one stage's recorded responses with the expected ones (scenarios.check)."""
+    """Compare one stage's recorded responses with the expected ones (scenarios.check).
+
+    Checks every scenario the stage ran, at each width: ``which`` names a scenario.json
+    flag that selects them, and ``only`` lists them by name (neither: all).
+    """
     stage: str
-    done_artifact: str
+    done_artifacts: tuple[str, ...]
+    which: str | None = None
     only: tuple[str, ...] | None = None
     description = "Compare a stage's responses with the expected responses."
     params = {}
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return [self.done_artifact, "scenario_list"]
+        return [*self.done_artifacts, "scenario_list"]
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
         return {f"check_{self.stage}": Path(f"results/check_{self.stage}.json")}
 
     def run(self, config: BuildConfig, **_) -> dict:
-        report = S.check(config.root_dir / "data", self.stage,
-                         list(self.only) if self.only else None)
-        out = config.root_dir / "results" / f"check_{self.stage}.json"
+        root = config.root_dir
+        report: dict[str, list[str]] = {}
+        for bw in WIDTHS:
+            names = [n for n in _names(root, bw)
+                     if (self.which is None or _meta(root, bw, n)[self.which])
+                     and (self.only is None or n in self.only)]
+            for name, problems in S.check(width_dir(root, bw), self.stage, names).items():
+                report[f"w{bw}/{name}"] = problems
+        out = root / "results" / f"check_{self.stage}.json"
         out.write_text(json.dumps(report, indent=2), encoding="utf-8")
         failed = {k: v for k, v in report.items() if v}
         for name, problems in report.items():
-            print(f"    {self.stage:6s} {name:12s} {'PASS' if not problems else 'FAIL'}")
+            print(f"    {self.stage:6s} {name:20s} {'PASS' if not problems else 'FAIL'}")
             for p in problems:
                 print(f"        {p}")
         if failed:
@@ -279,66 +330,89 @@ class HlsGenIncludeStep(BuildStep):
         return {"include_dir": config.root_dir / self.include_dir}
 
 
-def _run_vitis(config: BuildConfig, stage: str, live_output: bool, clk_freq: float) -> None:
+def _run_vitis(config: BuildConfig, stage: str, word_bw: int, live_output: bool,
+               clk_freq: float) -> None:
     _ensure_sources(config.root_dir)
     # The stage goes in the environment: vitis-run 2025.1 has no --tclargs.
-    env = {"WAVEFLOW_POLY_STAGE": stage, "WAVEFLOW_POLY_CLK_PERIOD_NS": f"{1e9 / clk_freq:g}"}
+    env = {"WAVEFLOW_POLY_STAGE": stage, "WAVEFLOW_POLY_WIDTH": str(word_bw),
+           "WAVEFLOW_POLY_CLK_PERIOD_NS": f"{1e9 / clk_freq:g}"}
     try:
         result = toolchain.run_vitis_hls(config.root_dir / "run.tcl", work_dir=config.root_dir,
                                          capture_output=not live_output, env=env)
     except Exception as exc:  # CalledProcessError carries the Vitis log
         out = getattr(exc, "stdout", "") or ""
-        raise RuntimeError(f"Vitis {stage} failed: {exc}\n{out[-3000:]}") from exc
+        raise RuntimeError(f"Vitis {stage} (w{word_bw}) failed: {exc}\n{out[-3000:]}") from exc
     if not live_output and result.stdout:
         print(result.stdout[-2000:])
 
 
 @dataclass(kw_only=True)
 class CSimStep(BuildStep):
-    description = "Vitis C simulation of every scenario, with the hand-written poly_tb.cpp."
+    description = "Vitis C simulation of every scenario at each width, with poly_tb.cpp."
     consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "scenario_list"]
     produces = {"csim_done": Path("results/csim_done.txt")}
     params = {"live_output": False, "clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, scenario_list, live_output, clk_freq, **_) -> dict:
-        _require_real_body(config.root_dir)
-        names = Path(scenario_list).read_text(encoding="utf-8").split()
-        for name in names:
-            (config.root_dir / "data" / name / "csim").mkdir(parents=True, exist_ok=True)
-        _run_vitis(config, "csim", live_output, clk_freq)
-        done = config.root_dir / "results" / "csim_done.txt"
-        done.write_text("\n".join(names) + "\n", encoding="utf-8")
+    def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
+        root = config.root_dir
+        _require_real_body(root)
+        for bw in WIDTHS:
+            for name in _names(root, bw):
+                (width_dir(root, bw) / name / "csim").mkdir(parents=True, exist_ok=True)
+            _run_vitis(config, "csim", bw, live_output, clk_freq)
+        done = root / "results" / "csim_done.txt"
+        done.write_text("done\n", encoding="utf-8")
         return {"csim_done": done}
 
 
 @dataclass(kw_only=True)
 class CSynthStep(BuildStep):
+    """C synthesis of one width's top, then RTL co-simulation of the timing scenario."""
+    word_bw: int
     description = "Vitis C synthesis, then RTL co-simulation of the timing scenario."
-    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "check_csim"]
-    produces = {"report_dir": Path("waveflow_poly_proj/solution1"),
-                "cosim_done": Path("results/cosim_done.txt")}
     params = {"live_output": False, "clk_freq": 100e6}
 
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "check_csim"]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        w = self.word_bw
+        return {f"report_dir_w{w}": Path(f"waveflow_poly_w{w}/solution1"),
+                f"cosim_done_w{w}": Path(f"results/cosim_done_w{w}.txt")}
+
     def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
-        (config.root_dir / "data" / "timing" / "cosim").mkdir(parents=True, exist_ok=True)
-        _run_vitis(config, "synth", live_output, clk_freq)
-        done = config.root_dir / "results" / "cosim_done.txt"
+        root, w = config.root_dir, self.word_bw
+        (width_dir(root, w) / "timing" / "cosim").mkdir(parents=True, exist_ok=True)
+        _run_vitis(config, "synth", w, live_output, clk_freq)
+        done = root / "results" / f"cosim_done_w{w}.txt"
         done.write_text("timing\n", encoding="utf-8")
-        return {"report_dir": config.root_dir / "waveflow_poly_proj" / "solution1",
-                "cosim_done": done}
+        return {f"report_dir_w{w}": root / f"waveflow_poly_w{w}" / "solution1",
+                f"cosim_done_w{w}": done}
 
 
 @dataclass(kw_only=True)
 class InspectSynthStep(BuildStep):
+    word_bw: int
     description = "Parse the C-synthesis report: loop II, latency and resources."
-    consumes = ["report_dir"]
-    produces = {"loop_df": Path("results/loop_df.csv"), "res_df": Path("results/res_df.csv")}
     params = {}
 
-    def run(self, config: BuildConfig, report_dir, **_) -> dict:
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [f"report_dir_w{self.word_bw}"]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        w = self.word_bw
+        return {f"loop_df_w{w}": Path(f"results/loop_df_w{w}.csv"),
+                f"res_df_w{w}": Path(f"results/res_df_w{w}.csv")}
+
+    def run(self, config: BuildConfig, **art) -> dict:
         from waveflow.utils.csynthparse import CsynthParser
 
-        parser = CsynthParser(sol_path=str(report_dir))
+        w = self.word_bw
+        parser = CsynthParser(sol_path=str(art[f"report_dir_w{w}"]))
         parser.get_loop_pipeline_info()
         parser.get_resources()
         print(parser.loop_df.to_string() if not parser.loop_df.empty else "(no loops)")
@@ -348,22 +422,51 @@ class InspectSynthStep(BuildStep):
         if len(bad):
             raise RuntimeError(f"loops with PipelineII > 1:\n{bad.to_string()}")
         out = config.root_dir / "results"
-        parser.loop_df.to_csv(out / "loop_df.csv", index=False)
-        parser.res_df.to_csv(out / "res_df.csv", index=False)
-        return {"loop_df": out / "loop_df.csv", "res_df": out / "res_df.csv"}
+        parser.loop_df.to_csv(out / f"loop_df_w{w}.csv", index=False)
+        parser.res_df.to_csv(out / f"res_df_w{w}.csv", index=False)
+        return {f"loop_df_w{w}": out / f"loop_df_w{w}.csv", f"res_df_w{w}": out / f"res_df_w{w}.csv"}
+
+
+@dataclass(kw_only=True)
+class ErrorVcdStep(BuildStep):
+    """The error-path waveform: cosim of ``early_tlast_vcd`` (32 bits), traced, as a VCD.
+
+    It runs in its own Vitis project, ``waveflow_poly_vcd``, so it never overwrites the
+    timing scenario's cosim report.  The scenario sends nothing after the bad burst, so the
+    kernel leaves nothing unread for cosim to replay.  The co-simulated response is checked
+    like every other stage, and the VCD lands in ``vcd/error_path.vcd``.
+    """
+    description = "Cosim of early_tlast_vcd with port tracing; write vcd/error_path.vcd."
+    consumes = ["poly_cpp", "poly_hpp", "poly_body_impl", "include_dir", "check_csim"]
+    produces = {"error_vcd": Path("vcd/error_path.vcd")}
+    params = {"live_output": False, "clk_freq": 100e6}
+
+    def run(self, config: BuildConfig, live_output, clk_freq, **_) -> dict:
+        from waveflow.scripts.xsim_vcd import run_xsim_vcd
+
+        root = config.root_dir
+        d = width_dir(root, 32)
+        (d / "early_tlast_vcd" / "cosim").mkdir(parents=True, exist_ok=True)
+        _run_vitis(config, "vcd", 32, live_output, clk_freq)
+        problems = S.check(d, "cosim", ["early_tlast_vcd"])["early_tlast_vcd"]
+        if problems:
+            raise RuntimeError(f"cosim of early_tlast_vcd differs from the expected: {problems}")
+        vcd = run_xsim_vcd(top=TOPS[32], comp="waveflow_poly_vcd", out="error_path.vcd",
+                           trace_level="port", workdir=root)
+        return {"error_vcd": Path(vcd)}
 
 
 @dataclass(kw_only=True)
 class SummaryStep(BuildStep):
     """Everything in one place, and the target that runs every check.
 
-    ``--through`` runs only a step's ancestors, so a pipeline ending at the timing check
-    would skip the cosim response check and the synthesis report.  This step depends on
+    ``--through`` runs only a step's ancestors, so a pipeline ending at a timing check
+    would skip the cosim response check and the synthesis reports.  This step depends on
     all of them and writes ``results/summary.json``.
     """
-    description = "Collect every check, the synthesis report and the timing verdict."
-    consumes = ["check_model", "check_pysim", "check_csim", "check_cosim", "loop_df", "res_df",
-                "timing_verdict"]
+    description = "Collect every check, the synthesis reports and the timing verdicts."
+    consumes = ["check_model", "check_pysim", "check_csim", "check_cosim", "error_vcd",
+                *[f"{a}_w{w}" for w in WIDTHS for a in ("loop_df", "res_df", "timing_verdict")]]
     produces = {"summary": Path("results/summary.json")}
     params = {}
 
@@ -373,9 +476,12 @@ class SummaryStep(BuildStep):
         summary = {
             "checks": {k.removeprefix("check_"): {n: (not v) for n, v in load(k).items()}
                        for k in ("check_model", "check_pysim", "check_csim", "check_cosim")},
-            "timing": load("timing_verdict"),
-            "loops": Path(art["loop_df"]).read_text(encoding="utf-8"),
-            "resources": Path(art["res_df"]).read_text(encoding="utf-8"),
+            "timing": {f"w{w}": load(f"timing_verdict_w{w}") for w in WIDTHS},
+            "loops": {f"w{w}": Path(art[f"loop_df_w{w}"]).read_text(encoding="utf-8")
+                      for w in WIDTHS},
+            "resources": {f"w{w}": Path(art[f"res_df_w{w}"]).read_text(encoding="utf-8")
+                          for w in WIDTHS},
+            "error_vcd": str(art["error_vcd"]),
         }
         out = config.root_dir / "results" / "summary.json"
         out.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -394,11 +500,12 @@ def build_poly_dag() -> BuildDag:
     # Python: the model and pysim, checked against the expected responses.
     dag.add(ScenariosStep(name="scenarios"))
     dag.add(ModelStep(name="py_model"))
-    dag.add(CheckStep(name="check_model", stage="model", done_artifact="model_done"))
+    dag.add(CheckStep(name="check_model", stage="model", done_artifacts=("model_done",)))
     dag.add(PySimStep(name="py_sim"))
-    dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifact="pysim_done",
-                      only=S.WELL_FORMED))
-    dag.add(ExtractPyTimingStep(name="extract_py_timing"))
+    dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifacts=("pysim_done",),
+                      which="pysim"))
+    for w in WIDTHS:
+        dag.add(ExtractPyTimingStep(name=f"extract_py_timing_w{w}", word_bw=w))
 
     # Code generation: headers, and the kernel boundary around the hand-written body.
     dag.add(HlsGenIncludeStep(name="gen_include"))
@@ -408,15 +515,22 @@ def build_poly_dag() -> BuildDag:
 
     # Vitis: csim on every scenario, then synthesis and cosim of the timing scenario.
     dag.add(CSimStep(name="csim"))
-    dag.add(CheckStep(name="check_csim", stage="csim", done_artifact="csim_done"))
-    dag.add(CSynthStep(name="csynth"))
-    dag.add(InspectSynthStep(name="inspect_synth"))
-    dag.add(CheckStep(name="check_cosim", stage="cosim", done_artifact="cosim_done",
-                      only=("timing",)))
-    dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly",
-                                   report_dir_artifact="report_dir"))
-    dag.add(ValidateTimingStep(name="validate_timing", py_timing_artifact="py_timing",
-                               cosim_timing_artifact="cosim_timing", tolerance_cycles=20))
+    dag.add(CheckStep(name="check_csim", stage="csim", done_artifacts=("csim_done",)))
+    for w in WIDTHS:
+        dag.add(CSynthStep(name=f"csynth_w{w}", word_bw=w))
+        dag.add(InspectSynthStep(name=f"inspect_synth_w{w}", word_bw=w))
+        dag.add(ExtractCosimTimingStep(
+            name=f"extract_cosim_timing_w{w}", top=TOPS[w],
+            report_dir_artifact=f"report_dir_w{w}", cosim_timing_artifact=f"cosim_timing_w{w}",
+            output_path=f"results/cosim_timing_w{w}.json"))
+        dag.add(ValidateTimingStep(
+            name=f"validate_timing_w{w}", py_timing_artifact=f"py_timing_w{w}",
+            cosim_timing_artifact=f"cosim_timing_w{w}", tolerance_cycles=20,
+            output_path=f"results/timing_verdict_w{w}.json",
+            verdict_artifact=f"timing_verdict_w{w}"))
+    dag.add(CheckStep(name="check_cosim", stage="cosim",
+                      done_artifacts=tuple(f"cosim_done_w{w}" for w in WIDTHS), only=("timing",)))
+    dag.add(ErrorVcdStep(name="error_vcd"))
     dag.add(SummaryStep(name="summary"))
     return dag
 

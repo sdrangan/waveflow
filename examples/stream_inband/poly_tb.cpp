@@ -1,10 +1,16 @@
 // poly_tb.cpp -- the hand-written C++ testbench.
 //
-// Usage: poly_tb <data_dir> <stage> [scenario]
+// Usage: poly_tb <data_dir> <stage> [scenario]        (built with -DPOLY_WORD_BW=32 or 64)
 //
-// For every scenario named in <data_dir>/scenarios.txt (or just [scenario]), it plays the
-// stimulus <data_dir>/<scenario>/in into the kernel, runs it, and records the response
-// into <data_dir>/<scenario>/<stage>/ with the final register status in status.json.
+// <data_dir> is one width's scenario directory (data/w32 or data/w64).  For every scenario
+// named in <data_dir>/scenarios.txt (or just [scenario]) it runs the kernel once -- one
+// ap_start -- and records what came out:
+//
+//   1. poison the status registers, so a kernel that does not clear them (rule 5) fails;
+//   2. play the stimulus <data_dir>/<scenario>/in into fresh streams and call the kernel;
+//   3. record the response into <data_dir>/<scenario>/<stage>/, and the status in status.json;
+//   4. discard whatever a halted kernel left unread: the host's reset (rule 7).
+//
 // <stage> is "csim" or "cosim", so both runs keep their own results.  The output
 // directories must exist; the Python build step that runs this creates them.
 //
@@ -20,6 +26,17 @@
 #include <fstream>
 #include <string>
 
+#ifndef POLY_WORD_BW
+#define POLY_WORD_BW 32
+#endif
+#if POLY_WORD_BW == 32
+#define POLY_TOP poly
+#elif POLY_WORD_BW == 64
+#define POLY_TOP poly_bw64
+#else
+#error "POLY_WORD_BW must be 32 or 64"
+#endif
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr, "usage: poly_tb <data_dir> <stage> [scenario]\n");
@@ -28,6 +45,7 @@ int main(int argc, char** argv) {
     const std::string root = argv[1];
     const std::string stage = argv[2];
     const std::string only = (argc > 3) ? argv[3] : "";
+    constexpr int W = POLY_WORD_BW;
 
     std::ifstream list(root + "/scenarios.txt");
     std::string name;
@@ -36,23 +54,28 @@ int main(int argc, char** argv) {
         if (!only.empty() && name != only) continue;
         const std::string dir = root + "/" + name;
 
-        hls::stream<streamutils::axi4s_word<32>> s_in, m_out;
-        ap_uint<1> halted = 0;
-        ap_uint<8> error = 0;
-        ap_uint<16> tx_id = 0;
-        float coeffs[4] = {};
-        float32_array_utils::read_uint32_file_array(coeffs, (dir + "/coeffs.bin").c_str(), 4);
+        // 1. What a previous run would have left in the registers (poly.POISONED_STATUS).
+        ap_uint<1> halted = 1;
+        ap_uint<8> error = static_cast<unsigned int>(PolyError::NO_TLAST_SAMP_IN);
+        ap_uint<16> tx_id = 0xFFFF;
 
-        wf::play_stream<32>(dir + "/in", s_in);
-        poly(s_in, m_out, halted, error, tx_id, coeffs);
-        wf::record_stream<32>(m_out, dir + "/" + stage);
-        while (!s_in.empty()) s_in.read();   // a halted kernel leaves its input unread
+        // 2. One activation, on fresh streams.
+        hls::stream<streamutils::axi4s_word<W>> s_in, m_out;
+        wf::play_stream<W>(dir + "/in", s_in);
+        POLY_TOP(s_in, m_out, halted, error, tx_id);
 
+        // 3. The response and the status.
+        wf::record_stream<W>(m_out, dir + "/" + stage);
         std::ofstream st(dir + "/" + stage + "/status.json");
         st << "{\"halted\": " << (int)halted << ", \"error\": " << (int)error
            << ", \"tx_id\": " << (int)tx_id << "}\n";
-        std::printf("scenario %-14s halted=%d error=%d tx_id=%d\n", name.c_str(),
-                    (int)halted, (int)error, (int)tx_id);
+
+        // 4. The host resets the stream path: commands queued behind an error are dropped.
+        int dropped = 0;
+        while (!s_in.empty()) { s_in.read(); ++dropped; }
+
+        std::printf("w%d scenario %-16s halted=%d error=%d tx_id=%d unread_words=%d\n", W,
+                    name.c_str(), (int)halted, (int)error, (int)tx_id, dropped);
         ++run;
     }
     if (run == 0) {
