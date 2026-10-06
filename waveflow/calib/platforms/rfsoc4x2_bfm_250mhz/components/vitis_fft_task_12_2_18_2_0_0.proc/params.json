@@ -1,0 +1,49 @@
+{
+  "basis": [
+    "L"
+  ],
+  "targets": [
+    "residual"
+  ],
+  "table": [
+    {
+      "point": [
+        64.0
+      ],
+      "values": {
+        "residual": 100.61702127659575
+      }
+    }
+  ],
+  "_fit_summary": {
+    "features": [
+      "L"
+    ],
+    "ranges": {
+      "L": [
+        64.0,
+        64.0
+      ],
+      "L_log2L": [
+        384.0,
+        384.0
+      ],
+      "span_rtl": [
+        116.61702127659575,
+        116.61702127659575
+      ],
+      "span_pysim": [
+        116.61702127659566,
+        116.61702127659566
+      ],
+      "current_dly": [
+        100.61702127659566,
+        100.61702127659566
+      ]
+    },
+    "n_points": 1,
+    "max_abs_residual": 0.0,
+    "max_rel_residual": 0.0,
+    "n_free_params": 1
+  }
+}

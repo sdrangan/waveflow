@@ -29,8 +29,16 @@ directly (words are ``uint64``, matching the ``AxisMaster``'s ``std::vector<uint
 **Word width.**  A stream word is one AXI4-Stream beat, stored ``uint64``.  The schema packs its
 command at the stream's own ``bitwidth`` (``serialize(word_bw=mem_dwidth)``), so a 64-bit stream
 carries two 32-bit fields per word.  This is deliberately *not* the 32-bit
-``DataSchema.write_uint32_file`` convention (which serves the sequential flow's ``.bin`` files); a
-stream wider than 64 bits would need revisiting.
+``DataSchema.write_uint32_file`` convention (which serves the sequential flow's ``.bin`` files).
+
+**Wide words.**  A beat wider than 64 bits is ``k = ceil(W/64)`` ``uint64`` *chunks*, chunk 0 the low
+64 bits -- the pysim's ``(n, k)`` convention for a wide stream (:data:`~waveflow.hw.interface.Words`).
+A burst is then an ``(n, k)`` array, written with ``word_chunks=k``; ``words.bin`` holds the chunks
+beat after beat, ``meta.json``
+says ``word_bytes = 8 * k``, and ``bounds.bin`` counts **beats**.  :func:`read_burst_bundle` hands the
+same ``(n, k)`` bursts back.  ``k = 1`` is every bundle written before wide words existed, byte for
+byte, and reads back 1-D as before.  The C++ side (``xsi_bundle.h``, ``AxisMaster`` / ``AxisSlave``)
+uses the same layout.
 
 This is framework infra, not example code: nothing here knows any schema.  The testbench does the
 ``[c.serialize(bw) for c in cmds]`` conversion and hands the resulting word arrays to
@@ -106,13 +114,19 @@ def read_burst_tlast(bundle_dir: str | Path) -> list[bool]:
 
 
 def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | None = None,
-                       tlast: list[bool] | None = None) -> Path:
+                       tlast: list[bool] | None = None, word_chunks: int = 1) -> Path:
     """Write a list of word bursts to a bundle directory.
 
     Parameters
     ----------
     word_arrays : list of array-like
-        One entry per burst; each is flattened to a 1-D ``uint64`` word array.
+        One entry per burst.  With ``word_chunks = 1`` (the default) each is flattened to a 1-D
+        ``uint64`` word array, whatever its shape.  With ``word_chunks = k > 1`` each is an
+        ``(n, k)`` array: ``n`` words of ``k`` uint64 chunks, low chunk first.
+    word_chunks : int
+        ``uint64`` chunks per word: ``ceil(W/64)`` for a ``W``-bit stream.  **Explicit, not read off
+        the array's shape**, because a 2-D array has always meant "flatten me" here; a wide stream
+        says so.
     bundle_dir : path
         The bundle directory.  Created (with parents) as needed; its ``words.bin`` / ``bounds.bin`` /
         ``meta.json`` members are written.
@@ -139,10 +153,24 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
     d = Path(bundle_dir)
     d.mkdir(parents=True, exist_ok=True)
 
-    arrs = [np.asarray(b, dtype=_WORD_DTYPE).ravel() for b in word_arrays]
+    k = int(word_chunks)
+    if k < 1:
+        raise ValueError(f"bundle {d}: word_chunks={word_chunks}; a word is at least one chunk")
+    if k == 1:
+        arrs = [np.asarray(b, dtype=_WORD_DTYPE).ravel() for b in word_arrays]
+        beats = [a.size for a in arrs]
+    else:
+        raw = [np.asarray(b, dtype=_WORD_DTYPE).reshape(-1, k) if np.asarray(b).size
+               else np.zeros((0, k), dtype=_WORD_DTYPE) for b in word_arrays]
+        for b, a in zip(word_arrays, raw):
+            if np.asarray(b).ndim != 2 or np.asarray(b).shape[1] != k:
+                raise ValueError(f"bundle {d}: word_chunks={k} needs (n, {k}) bursts; got shape "
+                                 f"{np.asarray(b).shape}")
+        beats = [a.shape[0] for a in raw]
+        arrs = [a.reshape(-1) for a in raw]
     if arrs:
         words = np.concatenate(arrs)
-        bounds = np.cumsum([a.size for a in arrs]).astype(_WORD_DTYPE)
+        bounds = np.cumsum(beats).astype(_WORD_DTYPE)
     else:
         words = np.asarray([], dtype=_WORD_DTYPE)
         bounds = np.asarray([], dtype=_WORD_DTYPE)
@@ -159,9 +187,9 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
         (d / TLAST_NAME).unlink()   # a stale flag file would describe the previous bursts
     meta = {
         "format": _FORMAT,
-        "word_bytes": _WORD_BYTES,
+        "word_bytes": _WORD_BYTES * k,
         "n_bursts": int(len(arrs)),
-        "n_words": int(words.size),
+        "n_words": int(words.size // k),
     }
     clash = sorted(set(extra or {}) & set(meta))
     if clash:
@@ -205,18 +233,26 @@ def read_burst_bundle(bundle_dir: str | Path) -> list[np.ndarray]:
     words = np.fromfile(d / WORDS_NAME, dtype=_WORD_DTYPE)
     bounds = np.fromfile(d / BOUNDS_NAME, dtype=_WORD_DTYPE)
 
+    k = 1
     meta_path = d / META_NAME
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if int(meta.get("word_bytes", _WORD_BYTES)) != _WORD_BYTES:
+        wb = int(meta.get("word_bytes", _WORD_BYTES))
+        if wb < _WORD_BYTES or wb % _WORD_BYTES:
             raise ValueError(
-                f"bundle {d} declares word_bytes={meta.get('word_bytes')}, reader expects "
-                f"{_WORD_BYTES}"
-            )
-        if "n_words" in meta and int(meta["n_words"]) != int(words.size):
+                f"bundle {d} declares word_bytes={wb}; words are whole uint64 chunks "
+                f"({_WORD_BYTES} bytes each)")
+        k = wb // _WORD_BYTES
+        if words.size % k:
+            raise ValueError(f"bundle {d}: words.bin holds {int(words.size)} uint64, not a whole "
+                             f"number of {k}-chunk words")
+        if "n_words" in meta and int(meta["n_words"]) != int(words.size // k):
             raise ValueError(
-                f"bundle {d} manifest n_words={meta['n_words']} != words.bin size {int(words.size)}"
+                f"bundle {d} manifest n_words={meta['n_words']} != words.bin size "
+                f"{int(words.size // k)} words of {k} chunks"
             )
+    if k > 1:
+        words = words.reshape(-1, k)
 
     prev = 0
     out: list[np.ndarray] = []
@@ -227,8 +263,8 @@ def read_burst_bundle(bundle_dir: str | Path) -> list[np.ndarray]:
         out.append(words[prev:b])
         prev = b
 
-    if bounds.size and int(bounds[-1]) != int(words.size):
+    if bounds.size and int(bounds[-1]) != int(words.shape[0]):
         raise ValueError(
-            f"final bound {int(bounds[-1])} != word count {int(words.size)} in bundle {d}"
+            f"final bound {int(bounds[-1])} != word count {int(words.shape[0])} in bundle {d}"
         )
     return out

@@ -1057,7 +1057,8 @@ def _kernel_task_of(sub, comp):
     return kt()
 
 
-def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
+def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
+                       port_widths: dict[str, int] | None = None) -> TopSpec:
     """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
 
     Reads four things off the built parent, nothing hand-written per top:
@@ -1075,7 +1076,15 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
 
     Because the args and channel decls come from the graph, the standalone kernel (one node, no
     edges), the memcpy composite (stream edges), and the SOBIF toy (a block edge) all fall out of this
-    *same* generator."""
+    *same* generator.
+
+    *port_widths* overrides *width* for the named AXIS boundary ports, for a design whose ports do not
+    share one word width -- ``VitisFft``'s output word is wider than its input, because the FFT's
+    output format grows with ``log2 L``.  It is opt-in rather than read off every endpoint's
+    ``bitwidth`` because existing designs declare endpoints narrower than the design width (credit
+    ports at 16 bits on a 64-bit design) and are gated on exact RTL cycle counts for the top as it is
+    emitted today.  A name that is not an AXIS boundary port is refused."""
+    port_widths = dict(port_widths or {})
     ep_arg: dict[int, str] = {}
 
     seen: dict[str, object] = {}
@@ -1102,7 +1111,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         bundle = bundles.get(name)
         ep_arg[id(ep)] = name
         _check_boundary_depth(comp, name, ep)
-        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle, ep))
+        kind = kind_of_endpoint(ep)
+        w = width
+        if name in port_widths:
+            if kind not in ("axis_in", "axis_out"):
+                raise LoweringError(
+                    f"composite_top_spec: port_widths names {name!r}, a {kind} port; only AXIS "
+                    f"boundary ports take a per-port width.")
+            w = int(port_widths.pop(name))
+        ports.append(_boundary_port(name, kind, w, bundle, ep))
+    if port_widths:
+        raise LoweringError(
+            f"composite_top_spec: port_widths names {sorted(port_widths)}, which are not boundary "
+            f"ports of {type(comp).__name__}.")
 
     # Tasks are built before channels so a channel can record WHICH task drives it: the producer
     # and consumer task indices are what turn a channel name into RTL net names
@@ -2653,6 +2674,16 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
     if stamp_sources:
         write_stamp(root, top_name)
+    # ROM initialization data.  csynth writes a constant table it maps to a ROM as a `.dat` beside the
+    # `.v`, loaded with `$readmemh("./<name>.dat")` -- a path relative to the SIMULATOR's working
+    # directory, which is `xsi/`, not the verilog dir.  Without the copy XSI loads nothing, the ROM
+    # reads as zero, and the run completes silently with wrong numbers: VitisFft at L=1024 (its
+    # twiddles move into a ROM there) produced 4 correct outputs of 1024 until this was added.
+    xsi = Path(root) / "xsi"
+    if xsi.is_dir():
+        import shutil
+        for dat in vdir.glob("*.dat"):
+            shutil.copyfile(dat, xsi / dat.name)
     return ("".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
             + "".join(f"{e}\n" for e in extra))
 
@@ -2727,7 +2758,8 @@ def tcl_path(root, top_name: str):
 
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
-               solution_config: tuple[str, ...] = ()) -> str:
+               solution_config: tuple[str, ...] = (),
+               include_dirs: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
@@ -2753,13 +2785,25 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     The include path is ``-Isrc -Iinclude``, **``src/`` first**: a hand-written body in ``src/`` must
     win over any same-named file in ``include/`` (build output -- a leftover copy there is exactly the
     file that must never be compiled instead).  A ``src/`` that does not exist is harmless.  The
-    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`)."""
+    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`).
+
+    *include_dirs* are additional ``-I`` paths appended to ``$cf``, for a body that includes
+    headers living outside the generated ``include/`` directory.  The case this exists for is
+    vendor IP: ``waveflow/vitis_l1`` wraps ``xf::dsp::fft::fft<>``, whose headers stay in the Vitis
+    install and are reached with an include path rather than copied
+    (:mod:`waveflow.build.vitis_l1_step` resolves it).  **Empty by default**, so every existing
+    generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
+    a changed TCL is a changed build."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
+    # Forward slashes: the flags sit inside a Tcl double-quoted string, where a Windows path's
+    # backslashes are escapes (a path under C:/Xilinx/2025.1/tps reached the compiler mangled).
+    from pathlib import PureWindowsPath
+    incs = "".join(f" -I{PureWindowsPath(d).as_posix()}" for d in include_dirs)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
-set cf "-I{SRC_DIR} -I{INCLUDE_DIR}"
+set cf "-I{SRC_DIR} -I{INCLUDE_DIR}{incs}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
 set_top {top_name}

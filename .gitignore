@@ -134,6 +134,12 @@ Thumbs.db
 # blanket *.json rule drops them from a clone and every gate errors with FileNotFoundError
 # while still passing for whoever generated them.
 !tests/vitis_l1/fft/golden/*.json
+# And the recorded co-simulation cycle counts: the cosim reports are build artifacts, so the
+# measured latency/interval live here and docs/guide/vitis_l1/timing.md is gated against them.
+# Without this the blanket *.json above hides the file, the page's numbers become unverifiable in
+# a fresh clone, and the gate fails there while passing locally -- which is exactly what happened
+# to the goldens above.
+!tests/vitis_l1/fft/verifyHwModule/results/*.json
 
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/
@@ -343,3 +349,21 @@ examples/markov/results/
 # (with the .tcl) are build output -- deleting them is a clean build, markov_build.generate() restores them.
 examples/markov/include/
 examples/markov/gen/
+# examples/vitis_fft (born under plans/source_layout.md): no hand-written C++ at all -- include/, gen/
+# (with the .tcl), xsi/ and the pysim's vectors/ are build output; vitis_fft_build.generate() restores them.
+examples/vitis_fft/include/
+examples/vitis_fft/gen/
+examples/vitis_fft/xsi/
+examples/vitis_fft/vectors/
+examples/vitis_fft/work/
+/work/
+examples/vitis_fft/vitis_fft_proj/
+# examples/ssr_fft: the same -- no hand-written C++; ssr_fft_build.generate() restores all of these.
+examples/ssr_fft/include/
+examples/ssr_fft/gen/
+examples/ssr_fft/xsi/
+examples/ssr_fft/vectors/
+examples/ssr_fft/ssr_fft_proj/
+examples/ssr_fft/logs/
+# examples/ssr_fft/measured.json is RTL evidence the docs tables and figures are drawn from (tests/examples/test_ssr_fft.py).
+!examples/ssr_fft/measured.json

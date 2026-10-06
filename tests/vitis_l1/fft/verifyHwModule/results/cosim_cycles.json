@@ -1,0 +1,35 @@
+{
+  "note": "Vitis 2025.1 C/RTL co-simulation, xc7z020clg484-1, 10 ns. Written by hand from the cosim reports, which are build artifacts and not committed; the vitis-marked gate in tests/vitis_l1/fft/test_s2_build.py reproduces them.",
+  "config": {
+    "L": 16,
+    "R": 4,
+    "in_w": 16,
+    "in_i": 2,
+    "tw_w": 18,
+    "tw_i": 2,
+    "out_w": 21
+  },
+  "serial_tb": {
+    "latency_min": 45,
+    "latency_avg": 45,
+    "latency_max": 46,
+    "interval_min": 46,
+    "interval_avg": 46,
+    "interval_max": 47,
+    "total_execution": 552
+  },
+  "pipelined_tb": {
+    "latency_min": 45,
+    "latency_avg": 45,
+    "latency_max": 46,
+    "interval_min": 46,
+    "interval_avg": 46,
+    "interval_max": 47,
+    "total_execution": 184
+  },
+  "reference_array_port_dut": {
+    "source": "../verifyFFT16",
+    "latency_min": 41,
+    "interval_min": 42
+  }
+}

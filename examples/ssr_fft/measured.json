@@ -1,0 +1,165 @@
+{
+ "target": {
+  "part": "xczu48dr-ffvg1517-2-e",
+  "period_ns": 4.0,
+  "board": "RFSoC 4x2"
+ },
+ "runs": {
+  "L16_pingpong": {
+   "L": 16,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    4
+   ],
+   "first_frame": 40,
+   "isolated_latency": [
+    40
+   ],
+   "isolated_span": [
+    37
+   ],
+   "resources": {
+    "bram": 5,
+    "dsp": 12,
+    "ff": 4612,
+    "lut": 5752,
+    "est_clock_ns": 2.81
+   },
+   "csynth_s": 52,
+   "xsi_s": 13,
+   "date": "2026-10-06"
+  },
+  "L64_pingpong": {
+   "L": 64,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    16
+   ],
+   "first_frame": 109,
+   "isolated_latency": [
+    109
+   ],
+   "isolated_span": [
+    94
+   ],
+   "resources": {
+    "bram": 6,
+    "dsp": 24,
+    "ff": 8306,
+    "lut": 10396,
+    "est_clock_ns": 2.855
+   },
+   "csynth_s": null,
+   "xsi_s": 15,
+   "date": "2026-10-06"
+  },
+  "L256_pingpong": {
+   "L": 256,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    64
+   ],
+   "first_frame": 350,
+   "isolated_latency": [
+    350
+   ],
+   "isolated_span": [
+    287
+   ],
+   "resources": {
+    "bram": 14,
+    "dsp": 36,
+    "ff": 13335,
+    "lut": 15005,
+    "est_clock_ns": 2.901
+   },
+   "csynth_s": 83,
+   "xsi_s": 15,
+   "date": "2026-10-06"
+  },
+  "L1024_pingpong": {
+   "L": 1024,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    256
+   ],
+   "first_frame": 1276,
+   "isolated_latency": [
+    1276
+   ],
+   "isolated_span": [
+    1021
+   ],
+   "resources": {
+    "bram": 50,
+    "dsp": 48,
+    "ff": 24713,
+    "lut": 21400,
+    "est_clock_ns": 2.901
+   },
+   "csynth_s": 102,
+   "xsi_s": 16,
+   "date": "2026-10-06"
+  },
+  "L4096_pingpong": {
+   "L": 4096,
+   "reorder": "pingpong",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    1024
+   ],
+   "first_frame": 4938,
+   "isolated_latency": [
+    4938
+   ],
+   "isolated_span": [
+    3915
+   ],
+   "resources": {
+    "bram": 122,
+    "dsp": 60,
+    "ff": 54815,
+    "lut": 34458,
+    "est_clock_ns": 2.916
+   },
+   "csynth_s": null,
+   "xsi_s": 23,
+   "date": "2026-10-06"
+  },
+  "L64_sob": {
+   "L": 64,
+   "reorder": "sob",
+   "boundary": "radixword",
+   "bits_exact": true,
+   "interval": [
+    21
+   ],
+   "first_frame": 111,
+   "isolated_latency": [
+    111
+   ],
+   "isolated_span": [
+    96
+   ],
+   "resources": {
+    "bram": 11,
+    "dsp": 24,
+    "ff": 8272,
+    "lut": 10289,
+    "est_clock_ns": 2.855
+   },
+   "csynth_s": null,
+   "xsi_s": 15,
+   "date": "2026-10-06"
+  }
+ }
+}
