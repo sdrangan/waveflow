@@ -83,7 +83,7 @@ buffer.
 
 - **`"sob"`** (the default): an `hls::stream_of_blocks` between a writer task and a reader task. Its
   reader is a single-firing body, re-entered once a frame, and that costs **4 cycles a frame** in
-  RTL: an interval of `L/R + 4` (20 at `L = 64`, 260 at 1024).
+  RTL: an interval of `L/R + 4` (measured: 20 at `L = 64`).
 - **`"pingpong"`**: one task holding both halves, writing one at the permuted addresses while reading
   the other in order. This is the one that reaches `L/R`; the table above is measured with it.
 
