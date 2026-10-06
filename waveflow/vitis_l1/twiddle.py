@@ -109,7 +109,8 @@ def quarter_table_len(length: int, radix: int) -> int:
 
 
 def read_quarter_twiddle(index: int, tbl_im: np.ndarray, length: int,
-                         w: int = TWIDDLE_W, i: int = TWIDDLE_I) -> tuple[int, int]:
+                         w: int = TWIDDLE_W, i: int = TWIDDLE_I,
+                         inverse: bool = False) -> tuple[int, int]:
     """``readQuaterTwiddleTable`` (``hls_ssr_fft_twiddle_table.hpp:103-148``).
 
     Both the real and imaginary parts are read from the table's **imaginary** column (the
@@ -123,6 +124,10 @@ def read_quarter_twiddle(index: int, tbl_im: np.ndarray, length: int,
     That last case is why this cannot be replaced by quantizing ``cos``/``sin`` directly: at the
     axis points the hardware substitutes an exact ``-1``, and elsewhere it reuses one quarter of
     the wave, so a value read here can differ by an LSB from an independently quantized one.
+    *inverse* is ``readQuaterTwiddleTableReverse`` (lines 150-200): the same table and the same
+    real path, with the imaginary negation inverted -- ``conj(W)``, except where negating
+    saturates (``-(-1)`` at ``tw_i = 1``), which is why it is modelled as the hardware's
+    negation and not as a conjugate of the forward twiddle.
     Returns ``(re, im)`` as *signed* stored integers.
     """
     phase = int(np.log2(length))
@@ -132,7 +137,7 @@ def read_quarter_twiddle(index: int, tbl_im: np.ndarray, length: int,
     minus_one = -(1 << (w - i))                 # -1.0 in ap_fixed<w,i>
     fmt = twiddle_type(w, i).get_format()
 
-    def path(idx: int) -> int:
+    def path(idx: int, flip: bool = False) -> int:
         idx &= mask
         invert = (idx >> (phase - 2)) & 1
         negate = (idx >> (phase - 1)) & 1
@@ -141,16 +146,17 @@ def read_quarter_twiddle(index: int, tbl_im: np.ndarray, length: int,
         if invert:
             lut_index = (-lut_index) & lut_mask
         temp = minus_one if saturate else int(tbl_im[lut_index])
-        if negate:
+        if negate != flip:
             temp = int(fixputils._apply_overflow(np.array([-temp]), fmt)[0])
         return temp
 
-    return path(index + 3 * length // 4), path(index)
+    return path(index + 3 * length // 4), path(index, inverse)
 
 
-def quarter_twiddles(length: int, w: int = TWIDDLE_W, i: int = TWIDDLE_I
-                     ) -> tuple[np.ndarray, np.ndarray]:
-    """The full circle of twiddles as the hardware sees it -- via the quarter-wave path."""
+def quarter_twiddles(length: int, w: int = TWIDDLE_W, i: int = TWIDDLE_I,
+                     inverse: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """The full circle of twiddles as the hardware sees it -- via the quarter-wave path.
+    *inverse* reads it the way ``REVERSE_TRANSFORM`` does (see :func:`read_quarter_twiddle`)."""
     ext = quarter_table_len(length, 4)
     ideal = twiddle_ideal(length, ext)
     fmt = twiddle_type(w, i).get_format()
@@ -158,5 +164,5 @@ def quarter_twiddles(length: int, w: int = TWIDDLE_W, i: int = TWIDDLE_I
     re = np.zeros(length, dtype=np.int64)
     im = np.zeros(length, dtype=np.int64)
     for n in range(length):
-        re[n], im[n] = read_quarter_twiddle(n, tbl_im, length, w, i)
+        re[n], im[n] = read_quarter_twiddle(n, tbl_im, length, w, i, inverse)
     return re, im

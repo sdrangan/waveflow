@@ -340,7 +340,7 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 > else would put samples from two groups on the switch at once.  Back to back it moves one word a
 > tick; the last frame drains in `(R − 1)·D` ticks.
 >
-> Not done in F1: the inverse transform (needs a library golden first, as the scaling modes did).
+> Not done in F1: the inverse transform -- done in F6.
 
 - Split `fft_general` into `stage(s, frame, …)`, plus the inter-stage rotation, plus the wire order
   of each edge.
@@ -475,10 +475,44 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
   function-call structure.  It is the teaching example: same arithmetic, same bits, the measured
   throughput difference, and why.
 
+### F6 — the inverse transform  (2026-10-06, branch `ssr-ifft`)
+
+**How AMD does it.**  `transform_direction` is a template parameter threaded through the arithmetic:
+`REVERSE_TRANSFORM` conjugates the inter-stage twiddles (`readQuaterTwiddleTableReverse`: the same
+quarter-wave table, the imaginary negation inverted) and the radix-4 kernel's `±j`
+(`l_sign`, `hls_ssr_fft_parallel_fft_kernel.hpp:109`).  It is **not** the swap/conjugate-the-data
+trick.  Then `1/L`: the output type is `ap_fixed<W, I - log2 L>` (same width, binary point moved),
+but the value is computed as `x.real() / L` -- an `ap_fixed / int` whose quotient keeps `x`'s
+fractional bits and truncates toward zero -- before the cast.  So the low `log2 L` bits of every
+vendor IFFT output are always zero, and negative values round up.
+
+**Measured, not read.**  Goldens from the vendor's own templates (`tests/vitis_l1/fft/cpp/dump_ifft.cpp`,
+L = 16 / 64 / 256 / 1024): `fft_general(inverse=True)` is bit-exact at all four; floor truncation
+misses about half the samples, toward-zero misses none.
+
+**Swap trick ≠ vendor bits.**  `ifft(x) = swap(fft(swap(x)))/L` is an exact identity in real
+arithmetic, and it would cost only wires (and allow a per-frame direction).  But `complexMultiply`
+truncates every partial product, and `trunc(-x) != -trunc(x)`: conjugating the twiddle puts the
+minus sign inside a truncation, swapping puts it outside.  Measured: 4 / 27 / 106 / 425 samples off
+by an LSB at L = 16 / 64 / 256 / 1024.  Equally accurate, not the same bits -- so conjugated ROMs.
+
+**What Waveflow does.**  `Geometry(inverse=True)` / `SsrFft(inverse=True)`: the vendor's arithmetic
+(conjugated ROMs -- the HLS is table-driven, so no task changed), and an **exact** `1/L`: the last
+stage writes the unscaled bits, and the `rc` commutator reads them through the scaled edge type, so
+only the binary point moves.  No bits lost, no hardware.  `fft_general(inverse=True,
+exact_scale=True)` is its golden; `ifft_scale` maps it onto the vendor's bits (tested).  Separate
+configuration key (`_inv`), so a forward and an inverse share a design.
+
+Gates: model = `fft_general` at L = 16..4096 and = the vendor golden after `ifft_scale`; a float
+round trip; pysim composite bit-exact (16, 64, both boundaries); XSI at L = 64 (ping-pong): bits,
+interval, timing.
+
+Open: a runtime direction (per frame) would need the twiddle negation as a mux, or the swap trick
+with its different bits -- not needed until a design shares one FFT between directions.
+
 ### Then: the matched filter
 
-It needs the inverse transform (`direction` is a template parameter in AMD's arithmetic: conjugated
-twiddles; F1 must model it), and it is the first user of digit-reversed order.
+It needs the inverse transform (F6), and it is the first user of digit-reversed order.
 
 ---
 

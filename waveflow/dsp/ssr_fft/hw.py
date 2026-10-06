@@ -256,7 +256,8 @@ _KIND_CLASS = {"commutator": SsrStream, "stage": SsrStream, "lanes_in": SsrLanes
 class SsrFft(FreeRunMod):
     """A full-rate SSR FFT: ``R`` samples a cycle in and out, a new frame every ``L/R`` cycles.
 
-    Bit-exact with ``VitisFft`` (and so with AMD's library) for the same parameters.  Its ports are
+    Bit-exact with ``VitisFft`` (and so with AMD's library) for the same parameters; ``inverse=True``
+    is the library's inverse arithmetic with an exact ``1/L`` (see ``model.py``).  Its ports are
     one ``RadixWord`` stream each way -- ``s_in`` and ``m_out``, ``R`` complex samples a beat, the
     unit every internal edge carries -- or, with ``lanes=True``, ``VitisFft``'s ``R``-lane port group
     (``s_in_0 .. s_in_{R-1}``, ``m_out_0 ..``, one sample a word, as lists ``s_in`` / ``m_out``).
@@ -276,13 +277,16 @@ class SsrFft(FreeRunMod):
     #: ``False`` (default): one ``RadixWord`` port each way.  ``True``: ``VitisFft``'s ``R``-lane port
     #: group, joined and split by two adaptor tasks -- a drop-in for ``VitisFft``.
     lanes: bool = False
+    #: The inverse transform: conjugated twiddle ROMs, and ``1/L`` as a move of the output's binary
+    #: point (the output words carry the same bits, read as ``geo.out_fmt``).
+    inverse: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
     timed: bool = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.geo = m.Geometry(int(self.L), int(self.in_w), int(self.in_i), int(self.tw_w),
-                              int(self.tw_i))
+                              int(self.tw_i), inverse=bool(self.inverse))
         self.R = self.geo.R
         self.out_fmt = self.geo.out_fmt
         self.tasks: list[SsrTask] = []

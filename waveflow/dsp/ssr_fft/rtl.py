@@ -33,11 +33,10 @@ from waveflow.build.composite_gen import (
 from waveflow.build.streamutils import MemMgrStep, XsiHarnessStep
 from waveflow.build.trace_steps import AddVcdTopStep, xsi_runner_cmd
 from waveflow.simulation.simulation import Simulation
-from waveflow.vitis_l1.testbench import golden
 
 from . import hls
 from .hw import SsrFft
-from .testbench import R, SsrFftTB, captured_frames, port_names, write_scenario
+from .testbench import R, SsrFftTB, captured_frames, golden, port_names, write_scenario
 
 TOP = "ssr_fft"
 XSI_DIR = "xsi"
@@ -53,7 +52,7 @@ def make_tb(length: int, n_frames: int = 8, burst_gaps=(), **kw) -> SsrFftTB:
 
 
 def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reorder: str = "sob",
-             lanes: bool = False, part: str = RFSOC4X2_PART,
+             lanes: bool = False, inverse: bool = False, part: str = RFSOC4X2_PART,
              period_ns: float = RFSOC4X2_PERIOD_NS) -> str:
     """Everything before csynth for an *length*-point build at *root*."""
     root = Path(root).resolve()
@@ -68,7 +67,8 @@ def generate(root: Path, length: int, *, n_frames: int = 8, burst_gaps=(), reord
     if bad:
         raise RuntimeError(f"header generation failed: {bad}")
 
-    tb = make_tb(length, n_frames, burst_gaps, timed=False, reorder=reorder, lanes=lanes)
+    tb = make_tb(length, n_frames, burst_gaps, timed=False, reorder=reorder, lanes=lanes,
+                 inverse=inverse)
     dut = tb.dut
     hls.write_sources(dut.geo, root, INCLUDE_DIR, reorder=reorder, lanes=lanes)
     # Every boundary port at its own width: the output grows with log2 L, and the RadixWord ports
@@ -157,11 +157,12 @@ def _out_w(length: int) -> int:
     return int(Geometry(length).out_fmt.W)
 
 
-def check_bits(root: Path, length: int, n_frames: int, *, lanes: bool = False) -> list[bool]:
+def check_bits(root: Path, length: int, n_frames: int, *, lanes: bool = False,
+               inverse: bool = False) -> list[bool]:
     """Per frame: is the RTL's output the golden?  (Fewer entries than frames = frames missing.)
-    *lanes* says which boundary the build has -- the caller built it, so the caller knows."""
-    got = captured_frames(Path(root) / XSI_DIR, length, lanes)
-    want = golden(n_frames, length)
+    *lanes* and *inverse* say what the build is -- the caller built it, so the caller knows."""
+    got = captured_frames(Path(root) / XSI_DIR, length, lanes, inverse=inverse)
+    want = golden(n_frames, length, inverse=inverse)
     mask = (1 << _out_w(length)) - 1
     return [bool(np.array_equal(g[0] & mask, w[0] & mask) and np.array_equal(g[1] & mask, w[1] & mask))
             for g, w in zip(got, want)]

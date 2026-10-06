@@ -31,8 +31,10 @@ TASKS_H = "ssr_fft_tasks.h"
 
 
 def config_key(geo: Geometry) -> str:
-    """Identifies one configuration: ``L64_16_2_18_2`` (L, input format, twiddle format)."""
-    return f"L{geo.L}_{geo.in_w}_{geo.in_i}_{geo.tw_w}_{geo.tw_i}"
+    """Identifies one configuration: ``L64_16_2_18_2`` (L, input format, twiddle format), with
+    ``_inv`` for the inverse transform."""
+    key = f"L{geo.L}_{geo.in_w}_{geo.in_i}_{geo.tw_w}_{geo.tw_i}"
+    return key + "_inv" if geo.inverse else key
 
 
 def config_namespace(geo: Geometry) -> str:
@@ -101,7 +103,7 @@ def _stage_struct(geo: Geometry, s: int) -> str:
     f_in, _ = geo.stage_fmts[s]
     fprod, facc1, facc2 = _stage_formats(f_in, s == 0, geo.mode)
     ftw = exp_table_format(geo.tw_w, geo.tw_i)
-    _, ex_r, ex_i = _exp_table(geo.tw_w, geo.tw_i)
+    _, ex_r, ex_i = _exp_table(geo.tw_w, geo.tw_i, geo.inverse)
     rotate = s < geo.S - 1
     lines = [
         f"struct st{s} {{",

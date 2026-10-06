@@ -28,6 +28,25 @@ def test_composite_pysim_is_bit_exact(tmp_path, length, reorder, lanes):
         assert np.array_equal(g_re, w_re) and np.array_equal(g_im, w_im), f"frame {k}"
 
 
+@pytest.mark.parametrize("lanes", (False, True))
+@pytest.mark.parametrize("length", (16, 64))
+def test_inverse_composite_pysim_is_bit_exact(tmp_path, length, lanes):
+    tb = run_pysim(tmp_path, length=length, n_frames=3, reorder="pingpong", lanes=lanes,
+                   inverse=True)
+    assert tb.dut.out_fmt.int_bits == 3
+    out = pysim_output(tb)
+    assert len(out) == 3
+    for k, ((g_re, g_im), (w_re, w_im)) in enumerate(zip(out, golden(3, length, inverse=True))):
+        assert np.array_equal(g_re, w_re) and np.array_equal(g_im, w_im), f"frame {k}"
+
+
+def test_inverse_has_its_own_configuration():
+    """Its own headers and wrappers (``_inv``): a forward and an inverse can share a design."""
+    fwd, inv = Geometry(64), Geometry(64, inverse=True)
+    assert hls.config_key(inv) == hls.config_key(fwd) + "_inv"
+    assert hls.render_config(fwd) != hls.render_config(inv)
+
+
 @pytest.mark.parametrize("reorder,interval", (("sob", 21), ("pingpong", 16)))
 def test_composite_pysim_streams_frames_back_to_back(tmp_path, reorder, interval):
     """Frames leave one interval apart: the chain overlaps them.  With the ping-pong reorder the
