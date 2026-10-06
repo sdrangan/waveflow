@@ -109,13 +109,19 @@ class Geometry:
         return _f(g_last.W - 1, g_last.int_bits)
 
     def edges(self) -> list[tuple[str, Format]]:
-        """Every internal and boundary edge, in pipeline order, with the format it carries."""
+        """Every stream edge, in pipeline order, with the format it carries.
+
+        ``in``, the transposer's ``tp*``, each stage's ``st*`` and commutator's ``cm*``, then the
+        reorder's commutator ``rc`` and the natural-order ``out`` (the SOB between ``rc`` and
+        ``out`` is a block channel, not a stream edge).
+        """
         out = [("in", self.in_fmt)]
         out += [(f"tp{k}", self.in_fmt) for k in range(self.S - 1)]
         for s in range(self.S):
             out.append((f"st{s}", self.stage_out_fmt(s)))
             if s < self.S - 1:
                 out.append((f"cm{s}", self.stage_out_fmt(s)))
+        out += [("rc", self.out_fmt), ("out", self.out_fmt)]
         return out
 
     # -- tables ---------------------------------------------------------------------------
@@ -188,11 +194,40 @@ def transpose_in(geo: Geometry, frame: np.ndarray) -> np.ndarray:
     return frame
 
 
+def reorder_d(geo: Geometry) -> int:
+    """Block size of the reorder's commutator: ``L / R^2``, a transpose of the whole frame."""
+    return geo.L // geo.R ** 2
+
+
+def reorder_word_perm(geo: Geometry) -> np.ndarray:
+    """Where the reorder writes each word (after its commutator): natural word ``perm[b]``.
+
+    Keep the top base-``R`` digit of ``b`` and reverse the other ``S - 2``.  The identity at
+    ``L = 16, 64``.  The C++ writer computes the same digits; the test checks both against
+    :attr:`Geometry.natural_index`.
+    """
+    nd = geo.S - 1
+    b = np.arange(geo.n_words)
+    low = [(b // geo.R ** i) % geo.R for i in range(nd - 1)]           # LSD first
+    top = b // geo.R ** (nd - 1)
+    out = top * geo.R ** (nd - 1)
+    for i, dgt in enumerate(reversed(low)):
+        out = out + dgt * geo.R ** i
+    return out
+
+
 def reorder(geo: Geometry, frame: np.ndarray) -> np.ndarray:
-    """The digit-reversal reorder: the last stage's output -> natural order, ``R`` bins a word."""
-    out = np.empty_like(frame).reshape(-1)
-    out[geo.natural_index.reshape(-1)] = frame.reshape(-1)
-    return out.reshape(frame.shape)
+    """The digit-reversal reorder, as the hardware does it: a whole-frame block transpose (a
+    commutator, ``D = L/R^2``), then a whole-word permutation through a frame buffer (the SOB).
+
+    The digit reversal moves the ``R`` lanes of one word onto the *same* lane of ``R`` different
+    words, so it cannot be a word permutation alone; the transpose first puts every bin on its
+    final lane.
+    """
+    t = commute(frame, reorder_d(geo))
+    out = np.empty_like(t)
+    out[reorder_word_perm(geo)] = t
+    return out
 
 
 # -------------------------------------------------------------------------------------------

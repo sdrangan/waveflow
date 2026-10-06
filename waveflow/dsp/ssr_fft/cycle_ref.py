@@ -20,9 +20,14 @@ occupy ``R*D`` consecutive ticks.  At each group boundary the task decides what 
 
 * **data** if a word is waiting -- it then reads ``R*D`` words (blocking: a gap *inside* a group
   stalls every delay line in place, which is just a pause in tick time);
-* **bubble** if nothing is waiting but valid samples are still inside -- ``R*D`` ticks of invalid
-  samples push the tail out (it needs ``(R-1)*D < R*D``);
-* **idle** if nothing is waiting and nothing is inside -- no tick at all.
+* **bubble** if nothing is waiting and the previous group was data -- ``R*D`` ticks of invalid
+  samples push the tail out;
+* **idle** otherwise -- no tick at all.
+
+One bubble group is always enough: sample ``(slot i, lane j)`` of a group leaves at group tick
+``(j + R - 1)*D + e < (2R - 1)*D``, inside the following group.  So the task needs one flag, "the
+last group was data", not a count of samples inside -- which keeps the output path out of the
+decision's timing path (a counter there cost 1.3 ns of slack at 250 MHz).
 
 Every sample carries a valid bit; only valid words are written.  An output word's lanes all come
 from one group, so they are all valid or all not.  Nothing is written that was not read, which keeps
@@ -60,7 +65,7 @@ class CommutatorTask:
         self.group = r * d
         self.cnt = 0                 # tick within the current group
         self.mode = "idle"           # 'data' | 'bubble' | 'idle'
-        self.inside = 0              # valid words read and not yet written
+        self.flush = False           # the last group was data: one bubble group still owed
         self.in_dl = [_DelayLine(j * d) for j in range(r)]
         self.out_dl = [_DelayLine((r - 1 - j) * d) for j in range(r)]
 
@@ -69,10 +74,11 @@ class CommutatorTask:
         if self.cnt == 0:
             if fifo_in:
                 self.mode = "data"
-            elif self.inside > 0:
+            elif self.flush:
                 self.mode = "bubble"
             else:
                 self.mode = "idle"
+            self.flush = self.mode == "data"
         if self.mode == "idle":
             return False
         if self.mode == "data":
@@ -80,7 +86,6 @@ class CommutatorTask:
                 return False                          # blocking read: stall, no tick
             word = fifo_in.popleft()
             x = [(word[j], True) for j in range(self.r)]
-            self.inside += 1
         else:
             x = [(0, False)] * self.r
 
@@ -92,9 +97,13 @@ class CommutatorTask:
         if c[0][1]:
             assert all(v for _, v in c), "an output word mixed valid and invalid lanes"
             out.append([s for s, _ in c])
-            self.inside -= 1
         self.cnt = (self.cnt + 1) % self.group
         return True
+
+    @property
+    def busy(self) -> bool:
+        """Mid-group, or a bubble group still owed: the task has not settled to idle."""
+        return self.cnt != 0 or self.flush
 
 
 def run(words: np.ndarray, d: int, r: int = 4, *, gaps: dict[int, int] | None = None,
@@ -111,7 +120,7 @@ def run(words: np.ndarray, d: int, r: int = 4, *, gaps: dict[int, int] | None = 
     pending = list(range(len(words)))
     wait = gaps.get(0, 0)
     cycles = 0
-    while (pending or fifo or task.inside) and cycles < max_ticks:
+    while (pending or fifo or task.busy) and cycles < max_ticks:
         cycles += 1
         if pending:
             if wait > 0:

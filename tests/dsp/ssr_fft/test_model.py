@@ -54,10 +54,25 @@ def test_transposer_lines_up_each_butterflys_inputs(length):
 
 @pytest.mark.parametrize("length", LENGTHS)
 def test_reorder_is_a_permutation_into_natural_order(length):
+    """The hardware factoring -- a whole-frame transpose, then a word permutation -- puts every bin
+    where the index recursion of ``fft_general`` says it belongs."""
     geo = Geometry(length)
     idx = geo.natural_index.reshape(-1)
     assert np.array_equal(np.sort(idx), np.arange(length))
     assert np.array_equal(reorder(geo, geo.natural_index).reshape(-1), np.arange(length))
+
+
+@pytest.mark.parametrize("length", LENGTHS)
+def test_reorder_moves_whole_words_after_its_transpose(length):
+    """After the transpose every lane already holds its final lane's bins, so the SOB writer moves
+    whole words -- one write per cycle -- and the permutation is a digit reversal."""
+    from waveflow.dsp.ssr_fft.model import reorder_d, reorder_word_perm
+    geo = Geometry(length)
+    t = commute(geo.natural_index, reorder_d(geo))
+    assert np.array_equal(t % 4, np.broadcast_to(np.arange(4), t.shape))
+    assert np.array_equal(t // 4, np.repeat(reorder_word_perm(geo)[:, None], 4, axis=1))
+    if length <= 64:
+        assert np.array_equal(reorder_word_perm(geo), np.arange(geo.n_words))
 
 
 def test_block_sizes_match_the_vendor_build_at_L1024():
@@ -118,14 +133,14 @@ def test_cycle_commutator_moves_one_word_per_tick(d):
     fifo = __import__("collections").deque(np.arange(4 * n).reshape(n, 4))
     out: list = []
     first_out, ticks = None, 0
-    while fifo or task.inside:
+    while fifo or task.busy:
         ticks += 1
         assert task.step(fifo, out), "a tick was lost with data available"
         if out and first_out is None:
             first_out = ticks
     assert first_out == 3 * d + 1
-    # The last word leaves (R-1)*D ticks after the last read: the drain costs the latency, no more.
-    assert len(out) == n and ticks == n + 3 * d
+    # The last word leaves (R-1)*D ticks after the last read; the owed bubble group then runs out.
+    assert len(out) == n and ticks == n + 4 * d
 
 
 def test_block_transpose_is_an_involution():
