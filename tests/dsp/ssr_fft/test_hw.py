@@ -61,3 +61,18 @@ def test_generate_writes_the_build_tree(tmp_path):
         assert (inc / name).exists(), name
     for name in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp"):
         assert (tmp_path / "xsi" / name).exists(), name
+
+
+#: XSI, RFSoC 4x2 at 250 MHz, ping-pong reorder, 8 frames back to back (2026-10-06): the first
+#: frame's last output beat, in cycles from its first input beat.  The interval was exactly L/R.
+RTL_FIRST_FRAME = {16: 42, 64: 111, 256: 352, 1024: 1278}
+
+
+@pytest.mark.parametrize("length", sorted(RTL_FIRST_FRAME))
+def test_composite_pysim_tracks_the_rtl(tmp_path, length):
+    """The per-task latencies are analytic (``latency_cycles``) with one trim against XSI; the
+    first frame lands within 5 cycles of the RTL and frames follow every L/R, as in the RTL."""
+    tb = run_pysim(tmp_path, length=length, n_frames=3, reorder="pingpong")
+    cyc = pysim_frame_cycles(tb)
+    assert abs(cyc[0] - RTL_FIRST_FRAME[length]) <= 5, cyc
+    assert np.allclose(np.diff(cyc), length // 4), cyc

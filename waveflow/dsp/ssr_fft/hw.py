@@ -54,17 +54,22 @@ def block_type(geo: m.Geometry) -> type[DataArray]:
 
 
 def latency_cycles(t: hls.TaskInstance) -> int:
-    """First word in -> first word out, per task -- analytic, before calibration (F5).
+    """First word in -> first word out, per task -- analytic, trimmed once against RTL (F5).
+
+    The fixed terms were first csynth's pipeline depths (commutator +5, stage 5, lanes 2), which
+    put the first frame ~1.9 cycles per task late against XSI at L = 16, 64, 1024 -- the pysim's own
+    channel hop already charges some of it.  Trimmed by 2 each; the interval was exact before and
+    after.
 
     A commutator delays every sample ``(R-1)*D`` ticks (its definition), plus its pipeline; a stage
     and a lane adaptor are their pipeline depth (csynth: 3-5); the SOB reader starts a frame a few
     cycles after the writer commits it, which is what ``reorder_write``'s ``n_words`` charges.
     """
     if t.kind == "commutator":
-        return 3 * t.d + 5
+        return 3 * t.d + 3
     if t.kind == "reorder_pingpong":
-        return t.d + 3                       # a whole frame in before its first word can leave
-    return {"stage": 5, "lanes_in": 2, "lanes_out": 2, "reorder_write": 0, "reorder_read": 3}[t.kind]
+        return t.d + 1                       # a whole frame in before its first word can leave
+    return {"stage": 3, "lanes_in": 0, "lanes_out": 0, "reorder_write": 0, "reorder_read": 3}[t.kind]
 
 
 @dataclass
