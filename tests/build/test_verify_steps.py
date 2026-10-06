@@ -16,7 +16,7 @@ import pytest
 
 from waveflow.build.build import BuildConfig
 from waveflow.build.verify_steps import FunctionalVerifyStep
-from examples.stream_inband.poly import Float32, PolyCmdHdr, PolyRespHdr
+from tests.fixtures.poly_extracted.poly_schemas import Float32, PolyCmdHdr, PolyRespHdr
 
 
 pytestmark = pytest.mark.phase5

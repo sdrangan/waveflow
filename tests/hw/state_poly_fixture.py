@@ -29,7 +29,7 @@ from waveflow.hw.regmap import (
 from waveflow.hw.synth import synthesizable
 from waveflow.simulation.simobj import ProcessGen
 
-from examples.stream_inband.poly import (
+from tests.fixtures.poly_extracted.poly_schemas import (
     CoeffArray,
     Float32,
     PolyCmdHdr,

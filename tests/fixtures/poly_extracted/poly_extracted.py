@@ -5,8 +5,8 @@ command loop lowered to C++ by the extractor, a ``@synthesizable evaluate`` hook
 a ``SeqTB`` testbench generated from Python.  The example now uses a body-only kernel
 and a hand-written C++ testbench (plans/hook_first_flow.md).  The extractor and the
 SeqTB code generation are still supported, and these tests still exercise them, so
-the extracted variant lives here verbatim -- it imports the example's schemas, which
-did not change.  Its hand-written hook is ``poly_evaluate_impl.tpp`` beside this file.
+the extracted variant lives here verbatim, with its own frozen copy of the schemas
+(``poly_schemas.py``).  Its hand-written hook is ``poly_evaluate_impl.tpp`` beside this file.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from waveflow.simulation.simulation import Simulation
 
 
 
-from examples.stream_inband.poly import (  # noqa: F401 -- re-exported for the tests
+from tests.fixtures.poly_extracted.poly_schemas import (  # noqa: F401 -- re-exported for the tests
     INCLUDE_DIR,
     SCHEMA_CLASSES,
     WORD_BW_SUPPORTED,

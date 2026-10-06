@@ -18,7 +18,7 @@ import pytest
 from waveflow.build.hwgen import kernel_files_to_str
 from waveflow.toolchain import toolchain
 
-POLY_DIR = Path(__file__).resolve().parents[2] / "examples" / "stream_inband"
+POLY_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "poly_extracted"
 
 _TCL = """\
 open_project -reset waveflow_poly_state_proj
@@ -39,17 +39,11 @@ puts "WAVEFLOW_SUCCESS: poly_state csynth passed."
 def _stage(tmp_path: Path) -> Path:
     """Emit the state-backed poly kernel beside FRESHLY GENERATED headers + poly's hook body.
 
-    The headers are generated, not copied from ``examples/stream_inband/include``: those
-    committed copies are stale relative to the committed hook body (they predate the
-    ``*_lane`` array-utils API it calls), so copying them fails the build for reasons that have
-    nothing to do with ``add_state``.  This mirrors what ``poly_build.HlsGenIncludeStep`` does.
+    The headers are generated from the fixtures' frozen poly schemas, and the hook body is the
+    extracted fixture's ``poly_evaluate_impl.tpp``: ``add_state`` is a framework feature, tested
+    against the fixture rather than the example.
     """
-    from examples.stream_inband.poly import SCHEMA_CLASSES, WORD_BW_SUPPORTED, Float32
-    from waveflow.build.build import BuildConfig, BuildDag
-    from waveflow.build.streamutils import StreamUtilsStep
-    from waveflow.hw.arrayutils import ArrayUtilsStep
-    from waveflow.hw.dataschema import DataSchemaStep
-
+    from tests.fixtures.poly_extracted.poly_schemas import gen_headers
     from tests.hw.state_poly_fixture import PolyStateAccel
 
     for name, content in kernel_files_to_str(
@@ -57,15 +51,7 @@ def _stage(tmp_path: Path) -> Path:
     ).items():
         (tmp_path / name).write_text(content, encoding="utf-8")
 
-    cfg = BuildConfig(root_dir=tmp_path)
-    dag = BuildDag()
-    dag.add(StreamUtilsStep(output_dir="include"))
-    for cls in SCHEMA_CLASSES:
-        dag.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED, include_dir="include"))
-    dag.add(ArrayUtilsStep(Float32, WORD_BW_SUPPORTED))
-    results = dag.run(cfg)
-    failed = [n for n, r in results.items() if not r.success]
-    assert not failed, f"header generation failed: {failed}"
+    gen_headers(tmp_path)
     # The hook body is poly's, verbatim except for the namespace — the point of the retrofit is
     # that add_state changed where `coeffs` LIVES, not what the hook does with it.
     impl = (POLY_DIR / "poly_evaluate_impl.tpp").read_text(encoding="utf-8")

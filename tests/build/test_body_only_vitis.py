@@ -30,7 +30,7 @@ from typing import ClassVar
 
 import pytest
 
-from examples.stream_inband.poly_build import HlsGenIncludeStep
+from tests.fixtures.poly_extracted.poly_schemas import gen_headers
 from tests.fixtures.poly_extracted.poly_extracted import (
     PolyAccel,
     PolyTBHls,
@@ -107,7 +107,7 @@ def built(tmp_path_factory) -> Path:
     root = tmp_path_factory.mktemp("body_only")
     cfg = BuildConfig(root_dir=root)
     write_legacy_inputs(root, nsamp=100)
-    HlsGenIncludeStep(name="gen_include").run(cfg)
+    gen_headers(root)
     (root / "gen").mkdir(exist_ok=True)
 
     # The reference: the original extracted poly kernel and its hook.
