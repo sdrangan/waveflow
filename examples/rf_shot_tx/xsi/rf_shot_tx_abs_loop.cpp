@@ -1,7 +1,7 @@
 // rf_shot_tx_abs_loop.cpp -- HAND-WRITTEN.  The INFINITE scenario at `absolute_index = 1`, and it
 // is here to measure THE COST rather than the feature.
 //
-// `plans/rf_shot_absolute.md` states the price of deferral exactly: "The cost is latency, bounded by
+// PR #199 states the price of deferral exactly: "The cost is latency, bounded by
 // one pass."  In this scenario that bound BITES.  Every load in `vectors/cmd_loop` is preempted by
 // the next one before its deferred start arrives -- the gaps between accepts are shorter than one
 // pass at this geometry -- so under absolute indexing NOTHING is played and the whole run is filler.

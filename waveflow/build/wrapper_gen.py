@@ -10,7 +10,7 @@ half — it instantiates the kernel, instantiates each memory the graph declares
 1. **The design scope.**  What is inside the wrapper is what a resource estimate should count, and
    the memory *is* inside it.  ``csynth`` of the kernel alone reports **no BRAM at all** — the memory
    is invisible to it — so the wrapper is the first boundary an area number can even be defined
-   against (``plans/resource_model.md``).
+   against (the resource_model plan (commit b715f1d)).
 2. **The elaborated top.**  From here on the simulator elaborates the wrapper, not the kernel: the
    ``.f``, the snapshot and the shared library are all named for it.  What that buys is that the
    memory becomes *internal*, so a testbench sees only AXI-Stream — which is the whole reason S3 is

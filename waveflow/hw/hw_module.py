@@ -459,7 +459,7 @@ class HwModule(SimObj):
 
         **Declared, never derived.**  Nothing can extract a cycle-exact protocol FSM from Python
         behaviour, and re-deriving a hand-written, verified bus model would not be progress
-        (``plans/xsi_tb_codegen.md`` Stage 0).  So a module in that position simply *names* its model,
+        (the xsi_tb_codegen plan, Stage 0 (commit 3052952)).  So a module in that position simply *names* its model,
         exactly as an override of ``kernel_task()`` names a hand-written ``hls::task`` body.
 
         **The asymmetry to keep honest.**  ``composite_kernel`` is *derived* — gate 4 runs the real

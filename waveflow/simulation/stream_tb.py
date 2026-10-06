@@ -25,7 +25,7 @@ What did **not** change is the reason they are not kernels: a participant declar
 :meth:`~waveflow.hw.hw_module.HwModule.bfm_model`, not ``kernel_task``, so it is realized beside the
 top rather than inside it.  ``HwModule`` **is** a ``SimObj``, so ``pre_sim``/``run_proc`` are
 untouched — this buys structure, it does not change behaviour.  The question this settles was posed
-in ``plans/xsi_tb_codegen.md`` ("what kind is a TB participant"): the answer is *not a new kind* — it
+in the xsi_tb_codegen plan (commit 3052952) ("what kind is a TB participant"): the answer is *not a new kind* — it
 is a hook on the one module class.
 """
 from __future__ import annotations
@@ -163,7 +163,7 @@ class StreamSink(HwModule):
     #: `bind()` hands a slave the channel's depth only when the endpoint declared none — so a sink
     #: that says nothing would inherit `DEFAULT_STREAM_DEPTH` (2) and stall its producer on every
     #: multi-word frame.  64 is the historical default and covers every frame in the tree bar two;
-    #: a testbench receiving longer frames raises it (``plans/pysim_burst_backpressure.md`` S2).
+    #: a testbench receiving longer frames raises it (PR #185).
     #:
     #: It is a number rather than "unbounded" on purpose: a sink is *"always ready"* only until
     #: something is wrong, and a bound that can be exceeded is what makes a runaway producer visible

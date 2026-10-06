@@ -4,7 +4,7 @@
 ``tb_top_spec``).  S2 — the C++ primitive itself — is gated separately in ``test_xsi_channel.py``,
 because it compiles and runs with a plain ``g++`` and nothing here needs a toolchain either.
 
-The invariant all of this exists to protect is stated twice in ``plans/xsi_tb_codegen.md``:
+The invariant all of this exists to protect is stated twice in the xsi_tb_codegen plan (commit 3052952):
 
     "If those were participants, the pysim graph and the XSI graph would have different nodes and
      'one statement, two backends' breaks on the first example."

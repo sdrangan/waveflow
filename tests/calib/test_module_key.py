@@ -1,6 +1,6 @@
 """The A1 gate: a module key is content-addressed, stable, and structural.
 
-Four properties, each of which the resource store depends on being true (``plans/resource_model.md``):
+Four properties, each of which the resource store depends on being true (the resource_model plan (commit b715f1d)):
 
 1. **Same configuration -> same key**, however it was spelled.  This is the cache-hit property: two
    different system-level parameter vectors that induce the same module must reuse one synthesis.

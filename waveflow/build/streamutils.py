@@ -238,7 +238,7 @@ class RfShotBufStep(Buildable):
     :mod:`waveflow.hw.rf_relayout` is **framework**, so its ``hls::task`` bodies ship from
     ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles.
 
-    **It shipped six more bodies until ``plans/rf_shot_unify.md`` Stage B.**  Those were the
+    **It shipped six more bodies until PR #181.**  Those were the
     ``ShotPhase``-and-``rdy`` buffer primitive, the finite command layer on top of it, and the
     infinite-play sibling beside it — three designs that
     :class:`~waveflow.hw.rf_shot_tx.RfShotTx` now covers on one lock, and whose bodies went with
@@ -296,7 +296,7 @@ class RfShotBufStep(Buildable):
 class MemLockStep(Buildable):
     """Copy ``mem_lock.h`` — the C++ half of :mod:`waveflow.hw.locked_mem`.
 
-    ``plans/t2p_lock_chan.md`` S1.  A step of its own rather than a line in another one, because the
+    PR #178.  A step of its own rather than a line in another one, because the
     lock is a **primitive**: it is not the shot buffer's, not the streaming buffer's, and the RX
     consumer S2 builds will reach for the same header.  Folding it into
     :class:`RfShotBufStep` would file a general mechanism under its first user, which is the shape
@@ -334,7 +334,7 @@ class MemLockStep(Buildable):
 class RfPingPongStep(Buildable):
     """Copy the continuous-capture receiver's two hand-written ``hls::task`` bodies.
 
-    ``plans/t2p_lock_chan.md`` S2.  :mod:`waveflow.hw.rf_shot_rx` is **framework**, so its bodies
+    PR #179.  :mod:`waveflow.hw.rf_shot_rx` is **framework**, so its bodies
     ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles — the
     same mechanism :class:`RfShotBufStep` uses.
 
@@ -377,7 +377,7 @@ class RfPingPongStep(Buildable):
 class RfShotTxStep(Buildable):
     r"""Copy the shot transmitter's two hand-written ``hls::task`` bodies.
 
-    ``plans/rf_shot_unify.md`` Stage A.  :mod:`waveflow.hw.rf_shot_tx` is framework, so its
+    PR #181.  :mod:`waveflow.hw.rf_shot_tx` is framework, so its
     bodies ship from ``waveflow/build/`` and each example gets a copy beside the top Vitis compiles —
     the same mechanism :class:`RfShotBufStep` and :class:`RfPingPongStep` use.
 

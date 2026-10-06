@@ -632,7 +632,7 @@ class BramAccessTB(FreeRunMod):
         # SimPy event instead of stalling the driver word by word.  These are TESTBENCH channels —
         # one end is a DUT boundary port, and a top-level AXIS argument cannot carry a FIFO depth at
         # all, so the number is a pysim modelling choice and claims nothing about the RTL.  See
-        # plans/pysim_burst_backpressure.md S2 Task 0.
+        # PR #185 Task 0.
         self._join(f"{self.name}_cmd_w_if", self.cmd_w_drv.stream_ep, self.dut.wr.cmd_w, w,
                    depth=8)               # a write command is 4 words
         self._join(f"{self.name}_data_w_if", self.data_w_drv.stream_ep, self.dut.wr.data_w, w,

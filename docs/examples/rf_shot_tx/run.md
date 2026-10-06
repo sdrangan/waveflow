@@ -55,7 +55,7 @@ loader opens with a blocking read and inherits none of this.
 `playout_figure` renders from **pysim**, not from a VCD. A VCD-sourced figure needs Vivado to
 re-render, so in practice it is re-rendered rarely and goes stale quietly — which is what happened to
 an earlier hand-drawn figure in this area and why
-[`plans/rf_shot_unify.md`](../../guide/rf/rfshotbuf/) Stage C declined to add one it could not gate.
+[PR #182](https://github.com/sdrangan/waveflow/pull/182) declined to add one it could not gate.
 
 Two things make this one safe to commit:
 

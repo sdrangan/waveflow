@@ -43,7 +43,7 @@ design.
 {: .note }
 The one thing that could rescue the middle row is if variable length cost `II=1`, and it probably does
 not: the load loop can stay counted to `depth` with the store predicated, leaving only the *play*
-bound variable. Untested — `plans/rf_shot_geometry.md` claims the counted trip count for the **load**
+bound variable. Untested — [PR #194](https://github.com/sdrangan/waveflow/pull/194) claims the counted trip count for the **load**
 loop, and nobody has tried the other shape.
 
 **So the middle row is where the design is, not where it is going.** It is the right default anyway,

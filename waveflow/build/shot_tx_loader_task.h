@@ -2,7 +2,7 @@
 #define WAVEFLOW_SHOT_TX_LOADER_TASK_H
 // shot_tx_loader_task.h — read a frame, decide, take the region, write it, hand it back, answer.
 //
-// The shot transmitter's command layer (plans/rf_shot_unify.md).  Its Python twin is
+// The shot transmitter's command layer (PR #181).  Its Python twin is
 // ShotTxLoader.run_iter, which is the pysim golden and NOT the source of this file.
 //
 // IT IS shot_loop_load_task.h PLUS THE TWO THINGS THE FINITE PATH NEEDS.
@@ -72,7 +72,7 @@
 
 /// @tparam W     word width in bits -- the host port's and the memory's.
 /// @tparam D     memory depth in elements, AND the length of a shot: THE SHOT IS THE BUFFER
-///               (plans/rf_shot_geometry.md).  It is also the `mode=bram` array's size, which is
+///               (PR #194).  It is also the `mode=bram` array's size, which is
 ///               what makes the pragma take effect -- an unsized pointer degrades to an ap_vld
 ///               scalar port.
 ///
@@ -123,7 +123,7 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
     // repairs an opcode this design does not know.
     //
     // TWO TESTS, WHERE THERE WERE FOUR.  The other two read the header's `nsamp` -- zero-length and
-    // length-disagrees -- and plans/rf_shot_geometry.md removed the field they read.  What is left
+    // length-disagrees -- and PR #194 removed the field they read.  What is left
     // is the one thing a header can still be malformed about.
     // Sized from the RESPONSE's own field rather than a literal: plans/rf_shot_wire_format.md
     // Part A derives the message widths from the geometry, so a hard-coded width here would be a
@@ -148,7 +148,7 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
         ap_uint<28> lo = 0, hi = 0;
         // Bounded by the player's check_period -- that bound is the whole reason the player declares
         // one.  Implemented as a read_nb poll loop inside mem_lock_await; a plain blocking read here
-        // would be scheduled into the request's state and deadlock (plans/t2p_lock_chan.md S1).
+        // would be scheduled into the request's state and deadlock (PR #178).
         ap_uint<8> granted = memlock::mem_lock_await(resp_in, lo, hi);
         if (granted != LOCK_GRANTED) {
             // Unreachable: the region IS the memory, so there is no geometry left for the two ends
@@ -163,7 +163,7 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
             // flatten; `ended` is a data-dependent CONDITION inside the body, which is a different
             // thing and was measured at II=1.
             //
-            // FIXED LENGTH IS LOAD-BEARING and survived plans/rf_shot_geometry.md deliberately: the
+            // FIXED LENGTH IS LOAD-BEARING and survived PR #194 deliberately: the
             // counted trip count is what reaches II=1, and the pad needs a length to pad TO.
             //
             // LABELLED, and that is not decoration: Vitis names an unlabelled loop

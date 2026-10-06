@@ -1,6 +1,6 @@
 """The shot transmitter's **lowering**: what the merge becomes, and whether Vitis takes it.
 
-``plans/rf_shot_unify.md`` Stage A.  The pysim gates prove the merge behaves like both predecessors;
+PR #181.  The pysim gates prove the merge behaves like both predecessors;
 this proves the other half — that it reaches a generated top with the memory ports on the right side
 of the wrapper seam, and that both bodies synthesize at the II they claim.
 
@@ -35,7 +35,7 @@ from waveflow.toolchain import toolchain
 TOP = "rf_shot_tx"
 WORD_BW = 64
 SPW = 4
-#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).  64
+#: Words the memory holds, which **is** the length of a shot (PR #194).  64
 #: rather than 256, matching the example: it is what ``nword`` was, so the emitted template arguments
 #: stay comparable across the change.
 DEPTH = 64
@@ -90,11 +90,11 @@ def test_both_task_bodies_are_instantiated_from_one_geometry():
     region from its loader is a design whose two ends are each individually correct.
 
     **Two template arguments each, where there were four and five.**
-    ``plans/rf_shot_geometry.md`` removed ``NW`` and ``BASE`` from both bodies — the shot is the
+    PR #194 removed ``NW`` and ``BASE`` from both bodies — the shot is the
     buffer, so ``D`` is the length as well as the size, and there is no placement to pass.  That the
     *same* ``D`` reaches both is now structural rather than a thing to check.
 
-    The player then took a **third**, ``ABS`` (``plans/rf_shot_absolute.md``), and it is ``0`` here
+    The player then took a **third**, ``ABS`` (PR #199), and it is ``0`` here
     because ``0`` is the behaviour every gate in this family was recorded against.  It is spelled
     out rather than defaulted in the C++, because a template argument that a build forgets to pass
     is a design nobody chose.
@@ -160,7 +160,7 @@ def test_the_predecessors_are_gone():
     reason to gate their absence rather than simply enjoy it is that this module is where a
     reintroduction would land: :class:`RfShotTx` still carries the vocabulary both of them spoke, so
     re-adding either would import cleanly and quietly restore the two-designs-one-job state
-    ``plans/rf_shot_unify.md`` exists to end.
+    PR #181 exists to end.
     """
     import importlib
 
@@ -209,7 +209,7 @@ def _stage(tmp_path: Path) -> Path:
     dag.add(RfShotTxStep(output_dir=inc))
     dag.add(MemLockStep(output_dir=inc))
     # BOTH schema lists: the header and the verdict are still rf_shot_tx's at Stage A, and the play
-    # command is the merged design's own.  See the ownership decision in plans/rf_shot_unify.md.
+    # command is the merged design's own.  See the ownership decision in PR #181.
 # The header/response pair for THIS geometry, not the module default: plans/rf_shot_wire_format.md
     # Part A derives nsamp_loaded's width from depth x samp_per_word, so the emitted C++ has to be
     # the design's own pair or the twin would parse a different wire.

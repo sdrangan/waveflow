@@ -15,7 +15,7 @@ shape is the whole design: the finite path's trailing quiet is what ``SHOT_BUSY`
 loop path's gap is what a single-region handover costs.
 
 **The source is pysim, not a VCD, and that is deliberate.**
-``plans/rf_shot_unify.md`` Stage C declined to add a figure it could not gate, having watched
+PR #182 declined to add a figure it could not gate, having watched
 ``rf_interfaces.svg`` go stale for a whole arc.  Two things answer that objection here:
 
 * **It regenerates with no toolchain.**  A VCD-sourced figure needs Vivado to re-render, so in

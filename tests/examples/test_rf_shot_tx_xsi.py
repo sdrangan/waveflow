@@ -1,4 +1,4 @@
-"""One transmitter, both opcodes, at RTL — ``plans/rf_shot_unify.md`` Stage A, gates 1-4.
+"""One transmitter, both opcodes, at RTL — PR #181, gates 1-4.
 
 What xsim elaborates is the **wrapper** (``rf_shot_tx_top``): the kernel plus its
 hand-written ``bram_t2p`` memory, so the testbench sees only AXI-Stream and the converter model
@@ -126,7 +126,7 @@ SCENARIOS = (
 #: carry a full payload to drain.  The loop stream's 502 is longer because it *accepts* three of its
 #: six frames, and each acceptance pays the grant wait again.
 #:
-#: **269 -> 273 and 500 -> 502 at ``plans/rf_shot_geometry.md``, and the cause was measured rather
+#: **269 -> 273 and 500 -> 502 at PR #194, and the cause was measured rather
 #: than assumed.**  Three things were ruled out and one was found:
 #:
 #: * **not the scenario.**  The frames' word counts are unchanged (65,65,65,1,1 and 65,65,1,65,33,1)
@@ -189,7 +189,7 @@ WANT_PORT_OVERLAP_CYCLES = {"cmd": 18, "cmd_loop": 55}
 #: address ever *coincides* with the writer's is a matter of phase.  Read the docstring of
 #: :func:`test_the_handover_leaves_a_speculative_read_that_the_design_discards`.
 #:
-#: **``cmd_loop`` went 2 -> 0 at ``plans/rf_shot_geometry.md``, from the same cause as
+#: **``cmd_loop`` went 2 -> 0 at PR #194, from the same cause as
 #: :data:`WANT_RESP_LAST_CYCLE`, and that was measured too**: the old design rebuilt at the NEW
 #: geometry still collides twice (cycles 469 and 470, addresses 24 and 25), so moving the buffer did
 #: not move them.  The few-cycle re-timing of the response path did — it slid the writer's sweep past
@@ -202,7 +202,7 @@ WANT_RDW_COLLISIONS = {"cmd": 0, "cmd_loop": 0}
 
 #: The elements the writer actually touched — **the whole buffer, and nothing outside it**.
 #:
-#: It was ``(192, 255)`` before ``plans/rf_shot_geometry.md``: a 64-word shot placed at the top of a
+#: It was ``(192, 255)`` before PR #194: a 64-word shot placed at the top of a
 #: 256-word memory, so ``base + offset`` was exercised.  There is no ``base`` any more and no
 #: addition to exercise; what the range still says is that the counted load pass **fills the buffer**,
 #: which is the pad's claim and is what makes ``SHOT_SHORT``'s ``nsamp_loaded`` mean something.
@@ -240,12 +240,12 @@ GUARD = 0
 #: body — one blocking read of the response, right after the request — **deadlocks**: Vitis schedules
 #: two ops on two streams with no data dependency into one state, that state stalls on the empty
 #: response FIFO, and the request is therefore never sent.
-#: The names carry the TEMPLATE ARGUMENTS, so ``plans/rf_shot_geometry.md`` renamed four of these by
+#: The names carry the TEMPLATE ARGUMENTS, so PR #194 renamed four of these by
 #: removing two of them from each body: ``<64, 256, 64, 4, 192>`` became ``<64, 64, 4>`` and
 #: ``<64, 256, 64, 192, 16>`` became ``<64, 64, 16>``.  Verified against the report directory rather
 #: than predicted — a name that MISSES makes this gate skip, which reads as a pass.
 #:
-#: ``plans/rf_shot_absolute.md`` renamed the player's again — ``<64, 64, 16>`` became
+#: PR #199 renamed the player's again — ``<64, 64, 16>`` became
 #: ``<64, 64, 16, 0>`` — and **the zero is in the mangled name**, so the default build's module is
 #: ``shot_tx_player_task_64_64_16_0_...``.  That is the one thing about this edit that had to be
 #: measured rather than reasoned about: a first reading of the report directory said the name had
@@ -619,7 +619,7 @@ def test_shot_busy_answers_a_finite_shot_and_only_a_finite_shot(runs):
 def test_all_four_verdicts_and_the_fence_appear_across_the_two_streams(runs):
     """**Gate 4's other half.**  Every legal answer is exercised by one RTL, and none is a guess.
 
-    **Four, where it was five.**  ``plans/rf_shot_geometry.md`` retired ``SHOT_ZERO_LEN``
+    **Four, where it was five.**  PR #194 retired ``SHOT_ZERO_LEN``
     (``nsamp == 0``) and the length half of ``SHOT_WRONG_LEN`` (``nsamp != nword * spw``) along with
     the header field both read; the verdict itself survives as ``SHOT_BAD_OPCODE``, same wire value,
     named for the fault it actually reports.  So this gate asserts one fewer status because the
@@ -694,7 +694,7 @@ def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
     This gate used to be about ``base + offset``: the byte-versus-word bug had every BRAM design in
     this repo mis-addressed and ``bram_toy`` stayed green through it, because consistently mis-scaled
     addressing round-trips perfectly right up to the top of the address space.
-    ``plans/rf_shot_geometry.md`` removed ``base``, so that arithmetic no longer exists to be wrong.
+    PR #194 removed ``base``, so that arithmetic no longer exists to be wrong.
 
     What survives is the other half, and it is still worth measuring: the load pass is **counted**,
     so it writes ``depth`` elements whatever arrives, and a short frame is padded rather than leaving
@@ -714,7 +714,7 @@ def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
 def test_the_player_sweeps_the_whole_buffer_and_wraps(runs):
     """**The wrap, measured on the read port — the only address arithmetic this design has left.**
 
-    ``plans/rf_shot_geometry.md`` removed ``base``, and with it ``buf[BASE + rd + i]``.  What is left
+    PR #194 removed ``base``, and with it ``buf[BASE + rd + i]``.  What is left
     is ``buf[rd + i]`` with ``rd`` wrapping at ``depth``, and ``depth`` is a power of two, so at RTL
     that wrap is a **mask** rather than an addition.  The plan's argument for removing ``base`` was
     that the bug class disappears rather than going untested — so the one piece of arithmetic that
@@ -765,13 +765,13 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
 
     At RTL it buys something weaker, and this test records exactly what.  ``play_chunk`` is pipelined
     at II=1 and reads ``buf[rd + i]`` **unconditionally**, muxing the filler in afterwards; a
-    register guard was measured not to quiet the port (``plans/t2p_lock_chan.md``, *enable-gating is
+    register guard was measured not to quiet the port (PR #178, *enable-gating is
     closed*).  So a yielded player keeps driving its read address, and:
 
     * ``cmd``      — one grant, taken before anything has played: ``18`` cycles of both-ports-live on
       the region and **no** address collision.
     * ``cmd_loop`` — three grants, two of them mid-play: ``55`` cycles of overlap and, since
-      ``plans/rf_shot_geometry.md``, **no** cycle where the two addresses coincide.  It used to be
+      PR #194, **no** cycle where the two addresses coincide.  It used to be
       two, and the change is phase rather than substance — the old design rebuilt at the new geometry
       still collides twice, so what moved them was the few-cycle re-timing of the response path, not
       the buffer moving.  ``bram_t2p.v`` ``$error``\\ s on a collision and XSI throws the ``$error``

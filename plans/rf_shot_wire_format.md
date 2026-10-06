@@ -2,7 +2,7 @@
 
 **Status: SCOPED HERE, NOTHING BUILT.** Started 2026-09-06. Owns the two changes that are cheap now
 and expensive after a host driver exists: the message field widths, and the region count. Downstream
-of `plans/rf_shot_unify.md`, which produced the design this settles.
+of [PR #181](https://github.com/sdrangan/waveflow/pull/181), which produced the design this settles.
 
 ---
 
@@ -115,7 +115,7 @@ Three things already recorded as wanted, all falling out of the same change:
 * **The two read-during-write collisions go away by construction.** They are currently benign *by
   measurement* — proven harmless because pysim raises on a yielded read and the backends agree
   byte-for-byte. With disjoint regions the writer and reader never share an address and the question
-  does not arise. See `plans/t2p_lock_chan.md`, where this is recorded as the guarantee `RfShotRx` has
+  does not arise. See [PR #178](https://github.com/sdrangan/waveflow/pull/178), where this is recorded as the guarantee `RfShotRx` has
   and `RfShotTx` does not.
 * **TX and RX stop being structurally different** for no reason but the order they were built.
 

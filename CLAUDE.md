@@ -31,7 +31,7 @@ pytest -m vitis
 # compiler (the mingw g++ bundled with Vivado on Windows, the system g++ on Linux) AND a prior
 # csynth of each top (they skip loudly if the RTL is absent).  The flow is driven by run.bat on
 # Windows and run.sh on Linux -- see waveflow.build.trace_steps.xsi_runner_cmd and
-# plans/xsi_tb_codegen.md.
+# the xsi_tb_codegen plan (commit 3052952).
 pytest -m xsi
 
 # Lint / format

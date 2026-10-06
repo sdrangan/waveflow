@@ -1,4 +1,4 @@
-"""rf_shot_tx.py — ``plans/rf_shot_unify.md``: **one transmitter, both play modes**.
+"""rf_shot_tx.py — PR #181: **one transmitter, both play modes**.
 
 The user story two retired examples told *between* them — a finite play-set and an infinite one —
 told once by one design::
@@ -36,7 +36,7 @@ finite predecessor's example needed two for its own reason:
 ``tid`` 1 and 2 sit between the two loop loads deliberately: their payloads have to be drained, which
 buys waveform A airtime on the converter before B arrives.  Without them the switch would happen
 before A had played a block.  **Their word counts are what matters** — a header plus a full payload,
-then a bare header — so ``plans/rf_shot_geometry.md`` kept both shapes exactly when it changed what
+then a bare header — so PR #194 kept both shapes exactly when it changed what
 made them refusable.  The frames used to be malformed *lengths*; a length is not something a header
 can carry any more, so they are malformed *opcodes* instead, and the airtime is unchanged.
 
@@ -44,7 +44,7 @@ can carry any more, so they are malformed *opcodes* instead, and the airtime is 
 DAC cannot be told to wait — and the claim of *both* halves is that neither a handover nor the end of
 a finite shot makes it wait: it gets filler, on time, as real beats.
 
-**The shot IS the buffer** (``plans/rf_shot_geometry.md``): the loader writes ``mem[i]``, the player
+**The shot IS the buffer** (PR #194): the loader writes ``mem[i]``, the player
 reads ``mem[i]``, and the only address arithmetic left is the read pointer's wrap at ``depth`` — a
 mask, because ``depth`` is a power of two.  There used to be a ``base`` here, placed at the top of
 the memory so ``base + offset`` was exercised; the coverage that needed is not lost, the arithmetic
@@ -94,7 +94,7 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
 
-#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).
+#: Words the memory holds, which **is** the length of a shot (PR #194).
 #:
 #: **64, not 256, and that is deliberate.**  It is what ``nword`` was before the shot became the
 #: buffer, so the played length is unchanged and every recorded number in this example stays
@@ -300,7 +300,7 @@ def write_scenario(root, frames, name: str) -> None:
 class RfShotTxAbs(RfShotTx):
     r"""``RfShotTx`` with ``absolute_index = 1`` — a second **build**, not a second design.
 
-    ``plans/rf_shot_absolute.md``.  The body is the same body: one C++ template with ``if (ABS)``
+    PR #199.  The body is the same body: one C++ template with ``if (ABS)``
     branches Vitis folds, so the two settings are two pieces of RTL cut from one source rather than
     two sources that drift.  What this subclass exists for is the **name**: an XSI snapshot, a Vitis
     project and a generated ports header are all keyed on ``cpp_kernel_name``, so the two variants
@@ -386,7 +386,7 @@ class RfShotTxTB(FreeRunMod):
         # and nothing here reaches the RTL.  What the number does is decide whether pysim's producer
         # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
         # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
-        # still a hardware claim and still refused.  See plans/pysim_burst_backpressure.md S2 Task 0.
+        # still a hardware claim and still refused.  See PR #185 Task 0.
         cmd_words = int(self.depth) + 1          # one ShotTxHdr, then the payload
         blk_words = int(self.blksize) // SPW     # what the player hands over at once
         for nm, master, slave, depth in (

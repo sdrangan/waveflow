@@ -225,7 +225,7 @@ def _drives_rtl(text: str) -> bool:
 
 
 def test_every_xsi_gate_that_drives_rtl_checks_staleness():
-    """Defect 3 of ``plans/xsi_staleness_and_silent_skips.md``, kept closed.
+    """Defect 3 of PR #177, kept closed.
 
     Nine gate files, four guarded, was the measurement that started this: the other five would
     happily compare a cycle count against RTL from another branch and report the difference as a

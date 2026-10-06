@@ -1,6 +1,6 @@
 """``RfSampDelay`` — the **path** between two converter edges.
 
-``plans/rf_shot_absolute.md`` S3.  ``rf_sample_if``'s own module docstring reserves this job for a
+PR #202.  ``rf_sample_if``'s own module docstring reserves this job for a
 ``Channel`` block and states the bar: *"if the edge can only record a quantity and never apply it, it
 does not belong on the edge."*  This is the node that applies it.
 

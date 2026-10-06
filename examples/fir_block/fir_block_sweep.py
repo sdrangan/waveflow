@@ -1,6 +1,6 @@
 """fir_block_sweep.py — the B2 parameter sweep: one csynth per design point, records accumulated.
 
-Phase B2 of ``plans/resource_model.md``.  Drives the ``fir_block`` DAG through ``resources`` once per
+Phase B2 of the resource_model plan (commit b715f1d).  Drives the ``fir_block`` DAG through ``resources`` once per
 point in a ``ntap x samp_w x realization`` grid, so the module store ends up holding a real corpus for
 the priors (D1) and the composition fit (E1) to be tested against.
 

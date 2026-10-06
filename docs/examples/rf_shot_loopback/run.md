@@ -61,7 +61,7 @@ does not, and the reason is recorded rather than glossed:
 * closing the loop at RTL would need **a second locked memory inside one kernel** and **a C++ twin
   for the path's delay**, and would restate a number two green gate sets already stand behind.
 
-`plans/rf_shot_absolute.md` S3 carries the decision and what it would take to change it.
+[PR #202](https://github.com/sdrangan/waveflow/pull/202) carries the decision and what it would take to change it.
 
 ## The gates
 

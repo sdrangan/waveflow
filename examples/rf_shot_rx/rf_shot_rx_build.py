@@ -1,6 +1,6 @@
 """rf_shot_rx_build.py — build the continuous-capture receiver: pysim -> codegen -> csynth.
 
-``plans/t2p_lock_chan.md`` S2.  The rungs, in the order a failure is cheapest to diagnose:
+PR #179.  The rungs, in the order a failure is cheapest to diagnose:
 
     pysim       -> the scenario in SimPy, clean **and** stalled: windows alternate between the two
                    halves, the ramp comes back contiguous, and the stalled run loses samples and
@@ -79,7 +79,7 @@ from examples.rf_shot_rx.rf_shot_rx import (  # noqa: E402
 #: The generated kernel's name, and the wrapper's.  The wrapper is what a simulator elaborates.
 TOP = "rf_shot_rx"
 WRAPPER = f"{TOP}_top"
-#: The **second build of the same design** — ``plans/rf_shot_absolute.md`` S2.  One C++ body with an
+#: The **second build of the same design** — PR #201.  One C++ body with an
 #: ``ABS`` template argument Vitis folds, so this is a second *elaboration*, not a second source; it
 #: needs its own name only because a Vitis project, an xsim snapshot and a generated ports header are
 #: all keyed on the kernel's name and the two have to sit in one directory to be compared.
@@ -300,7 +300,7 @@ class PySimStep(BuildStep):
                 "words_written": int(tb.dut.capture.n_written),
                 "adc_overrun": int(tb.adc_if.overrun) if hasattr(tb.adc_if, "overrun") else None,
             }
-        # THE SECOND BUILD -- `plans/rf_shot_absolute.md` S2.  Toolchain-free, and the rung that
+        # THE SECOND BUILD -- PR #201.  Toolchain-free, and the rung that
         # should fail first if the mode regresses; the DEFAULT build on the same stalled scenario is
         # its negative control, and both are filed so a reader without Vivado has the pair.
         for name, stall, n_blk, cls in (

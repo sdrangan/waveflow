@@ -179,7 +179,7 @@ remain the per-design contracts and this one adds only the pair's claims:
 examples at this very `absolute_index = 1` — 17 gates for the transmitter, 12 for the receiver.
 Closing the loop at RTL would need a second locked memory inside one kernel and a C++ twin for the
 path's delay, and would re-derive a number two green gate sets already stand behind. The decision and
-what it would take to change it are recorded in `plans/rf_shot_absolute.md` S3.
+what it would take to change it are recorded in [PR #202](https://github.com/sdrangan/waveflow/pull/202).
 
 **And a fractional delay is not modelled.** The path shifts by whole samples. Interpolation is signal
 processing, and this example is about what an address means.

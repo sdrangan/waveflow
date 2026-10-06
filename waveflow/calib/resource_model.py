@@ -527,7 +527,7 @@ class InterfaceResourceModel(LookupResourceModel):
         """Fill :attr:`table` from the store when one is set, and return self.
 
         A no-op without a store, which is what lets a design whose measurements have not been filed
-        yet keep supplying a table directly -- see ``plans/integration_record.md`` on why the
+        yet keep supplying a table directly -- see the integration_record plan (commit 108501b) on why the
         transcribed constants must outlive the reader that replaces them.
         """
         if self.store is not None:

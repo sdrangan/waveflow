@@ -1,6 +1,6 @@
 """The lock channel's **lowering**: what a graph holding one becomes, in C++ and in Verilog.
 
-``plans/t2p_lock_chan.md`` S1, checkpoint 2.  Checkpoint 1 proved the protocol in pysim; this proves
+PR #178, checkpoint 2.  Checkpoint 1 proved the protocol in pysim; this proves
 the other half — that an interface holding four channels, two of which are not channels, reaches a
 generated top with the right ports on the right side of the wrapper seam, and that Vitis accepts the
 result at the II the design claims.

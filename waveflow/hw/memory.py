@@ -576,7 +576,7 @@ class MemoryMod(HwModule):
         NOTE: the XSI slave models are independent and un-arbitrated, whereas
         :class:`~waveflow.hw.memif.AXIMMCrossBarIF` models contention.  The two therefore describe
         different systems and should be expected to disagree on timing — see
-        ``plans/xsi_tb_codegen.md``.
+        the xsi_tb_codegen plan (commit 3052952).
         """
         from waveflow.build.composite_gen import BfmModel
         return BfmModel(

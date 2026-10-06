@@ -1,6 +1,6 @@
 r"""rf_shot_rx.py — **continuous capture**: fill one half while a reader drains the other.
 
-``plans/t2p_lock_chan.md`` S2, and the second consumer of
+PR #179, and the second consumer of
 :class:`~waveflow.hw.locked_mem.LockedT2pMemIF`.  The RX counterpart of
 :mod:`waveflow.hw.rf_shot_tx`, and the direction where the region parameter stops being an
 optimisation and starts being correctness::
@@ -41,7 +41,7 @@ back-pressured an ADC would be modelling something that cannot exist), and it wr
 into a region that is *free* — not yielded to the reader, and not still full of samples nobody has
 read.  When there is no such region the block is **discarded and counted**.
 
-That counter is the design's, not the interface's.  ``plans/t2p_lock_chan.md`` is explicit: *the count
+That counter is the design's, not the interface's.  PR #178 is explicit: *the count
 is the design's to produce and the gate's to assert; the interface does not supply it.*  See
 :attr:`PingPongCapture.n_dropped`, and :meth:`RfShotRx.assert_no_loss` for the verdict that makes
 it loud — because a dropped block is otherwise perfectly silent, in exactly the way sub-block loss
@@ -167,7 +167,7 @@ def split_windows(frames, bitwidth: int = WORD_BW):
 def window_abs_index(w: int, n_dropped: int, region_words: int) -> int:
     """The **absolute word index** of window *w*'s first sample, from its header alone.
 
-    ``plans/rf_shot_absolute.md`` S2, *what is in a hole*.  This is the arithmetic that makes a
+    PR #201, *what is in a hole*.  This is the arithmetic that makes a
     per-block valid mask unnecessary: every announced window is exactly ``region_words`` words —
     the design never announces a partially written region — and every word the capture could not
     place is counted in ``n_dropped``.  So the words the capture has *consumed* by the end of window
@@ -227,7 +227,7 @@ class PingPongCapture(FreeRunMod):
     #: because they are one boundary — a converter block is the quantum on the input edge, and a poll
     #: per block is the natural cadence for a grant.
     blk_words: HwParam[int] = 16
-    #: **The index is a timestamp** (``plans/rf_shot_absolute.md`` S2), and the mirror of
+    #: **The index is a timestamp** (PR #201), and the mirror of
     #: :attr:`~waveflow.hw.rf_shot_tx.ShotTxPlayer.absolute_index`.  ``0`` is the behaviour this
     #: design has always had: :attr:`wp` is **fill-driven** — it does not advance on a drop — so an
     #: address says *how far into this capture*, and a lost block shifts everything after it.
@@ -346,7 +346,7 @@ class PingPongCapture(FreeRunMod):
     def _place(self) -> bool:
         """Decide where this block goes — and whether it goes anywhere at all.
 
-        Two modes, and the difference is the whole of ``plans/rf_shot_absolute.md`` S2.
+        Two modes, and the difference is the whole of PR #201.
 
         **Default.**  Keep filling :attr:`cur` while it has room; otherwise *search* for a free
         region and restart at its beginning.  Where a block lands therefore depends on how many
@@ -401,7 +401,7 @@ class PingPongCapture(FreeRunMod):
             self.n_dropped += bw
             yield self.timeout(bw / float(self.clk.freq))
 
-        # THE ADVANCE, AND THE SPLIT `plans/rf_shot_absolute.md` S2 TURNS ON.
+        # THE ADVANCE, AND THE SPLIT PR #201 TURNS ON.
         #
         # Under `absolute_index` the pointer moves on EVERY firing, dropped blocks included -- that
         # is what makes it the absolute word index and a drop a HOLE rather than a shift.  What must
@@ -826,7 +826,7 @@ class RfShotRx(FreeRunMod):
           ``absolute_index`` a region is claimed at its first block and held for all of it, so a
           region is filled entirely or skipped entirely and loss arrives in units of one window.
           That is what keeps an announced window from ever being partially written, and it is why
-          this design needs no per-block valid mask (``plans/rf_shot_absolute.md`` S2).
+          this design needs no per-block valid mask (PR #201).
         * every window's ``base_addr`` is the address its own **absolute index** names —
           ``window_abs_index(...) % depth`` — rather than a function of when a reader drained.
 

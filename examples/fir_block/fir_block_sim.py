@@ -178,7 +178,7 @@ class FirBlockTB(FreeRunMod):
             self.add_comp(c)
 
         # depth 16: a FirCmd frame is 6 words and the driver presents it in one burst.  A testbench
-        # channel, so the depth is a pysim modelling choice (plans/pysim_burst_backpressure.md S2).
+        # channel, so the depth is a pysim modelling choice (PR #185).
         cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w,
                           depth=16)
         cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)

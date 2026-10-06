@@ -1,5 +1,5 @@
 // rf_shot_rx_abs_counters.cpp -- HAND-WRITTEN.  The SAME capture scenario, on the SAME design, built
-// with `absolute_index = 1` (plans/rf_shot_absolute.md S2).
+// with `absolute_index = 1` (PR #201).
 //
 // WHY A SECOND SNAPSHOT AND NOT A SECOND MAIN.
 //
@@ -19,7 +19,7 @@
 //
 // It CAN prove that the mode synthesizes, keeps II=1, keeps the converter fed, and satisfies the
 // absolute claim on the wire -- and, the part only an RTL run can say, that TWO REGIONS STILL KEEP
-// THE WRITER AND THE READER APART.  That property (plans/t2p_lock_chan.md S2: 140 cycles of both
+// THE WRITER AND THE READER APART.  That property (PR #179: 140 cycles of both
 // ports live, 0 of them in the same region) is what makes the region enforced at RTL by construction
 // rather than by an assertion nobody can hear, and absolute indexing moves WHEN a region is claimed
 // -- so it is re-measured here rather than inherited.
@@ -28,7 +28,7 @@
 // a reader that dawdles, and `stall_blocks` is a pysim modelling field that reaches no template
 // argument -- a reader that dawdles is not a thing the RTL can be asked to do.  That gate lives
 // where the knob does, in tests/hw/test_rf_shot_rx.py, exactly as this arc recorded when S2 of
-// plans/t2p_lock_chan.md declined to ship a dirty RTL build for the same reason.
+// PR #178 declined to ship a dirty RTL build for the same reason.
 //
 // Regenerate the harness, not this file.
 #include <cstdio>

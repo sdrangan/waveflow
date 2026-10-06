@@ -1,7 +1,7 @@
 # accel_mcp: progress
 
 Working branch: `accel-mcp` (branched from `main` at `19758f8`). Nothing pushed, no PR.
-Plan: [accel_mcp.md](accel_mcp.md). Work order: [accel_mcp_overnight_prompt.md](accel_mcp_overnight_prompt.md).
+Plan: [accel_mcp.md](accel_mcp.md). Work order: [PR #209](https://github.com/sdrangan/waveflow/pull/209).
 
 ---
 
@@ -285,7 +285,7 @@ Kept to the minimum the removals forced:
   plumbing.
 - `docs/guide/developer/headless.md` — two sentences that said "the RAG tools".
 
-No `examples/` source was modified. `plans/waveflow_issues.md` and
+No `examples/` source was modified. `plans/waveflow_issues.md` (since deleted; fixed in PR #207) and
 `plans/stream_array_alignment.md` are untouched and uncommitted.
 
 ## Next step

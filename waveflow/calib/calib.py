@@ -133,7 +133,7 @@ class CalibModel:
     #: model under a second name, so refactoring this class moved that module's content-addressed key
     #: and orphaned every measurement filed against it -- silently, because a missing key is
     #: indistinguishable from a configuration nobody measured.  A key that moves when a coefficient
-    #: moves is not addressing structure.  See ``plans/key_stability.md``.
+    #: moves is not addressing structure.  See the key_stability plan (commit 40e8e00).
     #: Must be an *unquoted* ``ClassVar`` annotation: under ``from __future__ import annotations`` a
     #: quoted one stringifies to ``'"ClassVar[bool]"'``, which ``dataclasses`` does not recognise --
     #: so it becomes a real field, and being declared first it shifts every positional argument.

@@ -1,4 +1,4 @@
-"""Continuous capture at RTL — ``plans/t2p_lock_chan.md`` S2, checkpoint 4.
+"""Continuous capture at RTL — PR #179, checkpoint 4.
 
 What xsim elaborates is the **wrapper** (``rf_shot_rx_top``): the kernel plus its hand-written
 ``bram_t2p`` memory, so the testbench sees only AXI-Stream and the converter model feeds it exactly
@@ -95,7 +95,7 @@ WANT_SAME_REGION_CYCLES = 0
 #: unlabelled loop ``VITIS_LOOP_<line>_1`` and nests that name into its children, so a comment edit
 #: renames the module — and a gate that looks the II up by name then MISSES and skips, which reads as
 #: a pass.
-#: ``plans/rf_shot_absolute.md`` S2 added ``ABS`` to the CAPTURE's template arguments and not to the
+#: PR #201 added ``ABS`` to the CAPTURE's template arguments and not to the
 #: window reader's, so ``pingpong_capture_task_64_256_2_16_*`` became ``..._64_256_2_16_0_*`` here
 #: and ``..._64_256_2_16_1_*`` in the absolute build, while the two window modules are untouched.
 #: **Read off the report directory, never predicted**: S1 lost a run to reading a name off RTL

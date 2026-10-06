@@ -1,4 +1,4 @@
-"""rf_shot_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
+"""rf_shot_rx.py — PR #179: **capture continuously and lose nothing**.
 
 The RX half of the story ``examples/rf_shot_tx`` tells on TX.  There the two regions were an
 optimisation nobody needed — a handover is a *gap*, and you had already accepted discontinuity when
@@ -132,7 +132,7 @@ def write_scenario(root, n_blk: int = N_BLK) -> None:
 class RfShotRxAbs(RfShotRx):
     r"""``RfShotRx`` with ``absolute_index = 1`` — a second **build**, not a second design.
 
-    ``plans/rf_shot_absolute.md`` S2, and the mirror of
+    PR #201, and the mirror of
     :class:`~examples.rf_shot_tx.rf_shot_tx.RfShotTxAbs`.  The body is the same body: one C++
     template with ``if (ABS)`` branches Vitis folds, so the two settings are two pieces of RTL cut
     from one source rather than two sources that drift.  What this subclass exists for is the

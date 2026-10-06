@@ -135,7 +135,7 @@ class MemCopyTB(FreeRunMod):
 
         # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master
         # crossbar.  NOTE: the crossbar models contention; the XSI slave models do not — see
-        # plans/xsi_tb_codegen.md.  The two describe different systems on purpose.
+        # the xsi_tb_codegen plan (commit 3052952).  The two describe different systems on purpose.
         xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
                                nports_master=2, nports_slave=1, bitwidth=w)
         xbar.bind("master_0", self.dut.m_in)          # MemRStream.m_mem (read)

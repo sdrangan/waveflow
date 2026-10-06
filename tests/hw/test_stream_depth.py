@@ -56,7 +56,7 @@ class TestPysimReadsDepth:
 
 
 class TestABurstWriteWaitsForRoom:
-    """``write()`` blocks until the burst can be admitted — ``plans/pysim_burst_backpressure.md`` S2.
+    """``write()`` blocks until the burst can be admitted — PR #185.
 
     Before S2 the write path blocked for exactly **one** word and dumped the remainder into the
     unbounded ``ntx``, so a producer was back-pressured almost not at all and ``write()`` behaved
