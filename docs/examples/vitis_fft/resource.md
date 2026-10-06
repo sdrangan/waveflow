@@ -1,6 +1,6 @@
 ---
 title: FFT resource results
-parent: A vendor FFT, frames in and out
+parent: Wrapping vendor IP: the Vitis FFT
 nav_order: 3
 summary: "What the vendor FFT costs in DSP, BRAM, LUT and FF on the RFSoC 4x2, L = 16 to 4096, read from the csynth reports the calibration builds produce and filed onto the platform's module store. DSP is exactly 12 per stage boundary; BRAM appears at L = 256; LUT and FF grow roughly linearly in the stage count. How the records are keyed and stored, and how they would grow into a resource model."
 ---

@@ -50,4 +50,4 @@ Three things, each supplied by `waveflow.vitis_l1`:
 | SSR FFT (`xf::dsp::fft::fft<>`) | [`VitisFft`](fft/index.md) | bit-exact model, module, synthesis, RTL gates, calibrated on the RFSoC 4x2 |
 | `gemv` (BLAS L1) | -- | bit-exact model only (`waveflow.vitis_l1.gemv`); the module is future work |
 
-The worked example is [A vendor FFT, frames in and out](../../examples/vitis_fft/index.md).
+The worked example is [Wrapping vendor IP: the Vitis FFT](../../examples/vitis_fft/index.md).

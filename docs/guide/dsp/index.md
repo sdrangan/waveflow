@@ -15,5 +15,5 @@ other route: blocks written in Waveflow -- a bit-exact Python model, one free-ru
 piece of hardware, a composite module that generates its own top -- which take what is good from a
 vendor library and rebuild what is not.
 
-- [The full-rate SSR FFT](ssr_fft.md) -- `SsrFft`: the Vitis FFT's arithmetic, bit for bit, at a new
+- [The full-rate SSR FFT](ssr_fft/index.md) -- `SsrFft`: the Vitis FFT's arithmetic, bit for bit, at a new
   frame every `L/R` cycles.

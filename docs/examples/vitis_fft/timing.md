@@ -1,6 +1,6 @@
 ---
 title: FFT timing results
-parent: A vendor FFT, frames in and out
+parent: Wrapping vendor IP: the Vitis FFT
 nav_order: 2
 summary: "What the RTL measured on the RFSoC 4x2, L = 16 to 4096: the vendor core as VitisFft connects it (fft<>) runs at a tenth of its architecture's rate -- and how that was found -- its per-sample cost steps from 7.5 to 10 cycles per L/R across an implementation change, and an isolated frame's latency depends on its arrival phase against a free-running commutator. How the timing model is calibrated on the platform -- an exact interval, a mean processing delay, the spread as its stated error, a lookup per length -- how well the pysim tracks the RTL, what an XSI run costs against it, and how to extend the calibration for a design-space exploration."
 ---

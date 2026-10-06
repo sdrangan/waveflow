@@ -391,8 +391,8 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 >
 > | | interval | first frame done | DSP | BRAM | LUT | FF |
 > |---|---|---|---|---|---|---|
-> | L = 64, ping-pong reorder | **16 = L/R** | 113 | 24 | -- | 10.6K | 8.6K |
-> | L = 64, SOB reorder | 20 | 115 | 24 | -- | 10.5K | 8.6K |
+> | L = 64, ping-pong reorder | **16 = L/R** | 113 | 24 | 6 | 10.6K | 8.6K |
+> | L = 64, SOB reorder | 20 | 115 | 24 | 11 | 10.5K | 8.6K |
 > | L = 64, `VitisFft` (for scale) | 120 | -- | 24 | 0 | 13.0K | 8.5K |
 > | L = 1024, ping-pong reorder | **256 = L/R** | 1280 | 48 | 50 | 21.6K | 25.0K |
 > | L = 1024, `VitisFft` | 2556 | -- | 48 | 40 | 23.1K | 19.2K |
@@ -430,7 +430,7 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 > | L | interval | `VitisFft` interval | DSP | BRAM | LUT | FF | `VitisFft` BRAM / LUT / FF |
 > |---|---|---|---|---|---|---|---|
 > | 16 | **4** | 41 | 12 | 5 | 5.9K | 4.9K | 0 / 8.0K / 4.7K |
-> | 64 | **16** | 120 | 24 | 0 | 10.6K | 8.6K | 0 / 13.0K / 8.5K |
+> | 64 | **16** | 120 | 24 | 6 | 10.6K | 8.6K | 0 / 13.0K / 8.5K |
 > | 256 | **64** | 480 | 36 | 14 | 15.2K | 13.6K | 28 / 19.3K / 13.0K |
 > | 1024 | **256** | 2556 | 48 | 50 | 21.6K | 25.0K | 40 / 23.1K / 19.2K |
 > | 4096 | **1024** | 10240 | 60 | 122 | 34.6K | 55.2K | 55 / 28.4K / 25.4K |
@@ -438,7 +438,9 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 > The interval is `L/R` at every length -- 7.5 to 10 times the vendor core's -- with the same DSPs
 > (`12·(S−1)`).  What the throughput costs is memory at large `L`: at 4096 about twice the BRAM and
 > FF (the commutators' delay lines and the two-frame reorder buffer).  Builds were scratch
-> (`C:/Users/sdran/sxL*`); only L = 64 has a committed gate.
+> (`C:/Users/sdran/sxL*`); only L = 64 has a committed gate.  Remeasured with
+> `examples/ssr_fft/ssr_fft_measure.py` into `examples/ssr_fft/measured.json` (the BRAM column of the
+> first version of this table was misread from the text report; the JSON reads csynth's XML).
 
 - `L = 16 … 4096`.
 - **Gates:**

@@ -1,12 +1,17 @@
 ---
-title: A vendor FFT, frames in and out
+title: Wrapping vendor IP: the Vitis FFT
 parent: Examples
 nav_order: 9.57
 has_children: true
 example_dir: examples/vitis_fft
-summary: "AMD's Vitis L1 SSR FFT used as a Waveflow module: four AXI-Stream lanes in, four out, the vendor's own xf::dsp::fft::fft<> as the hardware body and a bit-exact Python model as the simulation. The free-running top is generated from the module and the XSI testbench from the testbench graph; there is no hand-written C++ in the example. Bit-exact at RTL on the RFSoC 4x2. The example is also a worked calibration: the vendor core turns out to be frame-at-a-time with a phase-dependent latency, and the timing and resource models are measured on the platform, with their scope stated and a recipe to extend it."
+summary: "Wrapping vendor IP, worked end to end: AMD's Vitis L1 SSR FFT as a Waveflow module -- four AXI-Stream lanes in, four out, the vendor's xf::dsp::fft::fft<> as the hardware body and a bit-exact Python model as the simulation, bit-exact at RTL on the RFSoC 4x2. Also a worked calibration of a black box (a phase-dependent latency, its mean and its spread on the platform) and a cautionary tale: the module passed every functional test while running at a tenth of the rate AMD states, and how that was found. For an FFT in a design, use the SSR FFT example."
 ---
-# A vendor FFT, frames in and out
+# Wrapping vendor IP: the Vitis FFT
+
+> **Looking for an FFT to use? See [Waveflow's FFT, at full rate](../ssr_fft/index.md).** It computes
+> these same bits with the same ports at a new frame every `L/R` cycles -- 7.5 to 10 times this
+> module's rate. This example is about something else: putting a vendor block inside Waveflow, and
+> what measuring it at RTL taught us, including a 10x shortfall that passed every functional test.
 
 Every earlier example writes its own kernel. This one does not: the arithmetic is AMD's
 **Vitis L1 SSR FFT** (`xf::dsp::fft::fft<>`), and the example is about using a vendor block as an
@@ -26,6 +31,9 @@ example is the end-to-end run, and what measuring it at RTL taught us.
 - **Calibrate an LT model** for a block whose latency depends on something the model cannot see,
   state its error rather than hide it, and keep the calibration on the platform where every design
   can reuse it.
+- **Check a vendor block against the vendor's own stated performance.** This one passed bits, csynth,
+  XSI and its own calibration while running at a tenth of AMD's stated rate; the gap was explained
+  instead of compared ([how it was found](timing.md#how-this-was-found)).
 
 ## The design
 

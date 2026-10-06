@@ -358,3 +358,12 @@ examples/vitis_fft/vectors/
 examples/vitis_fft/work/
 /work/
 examples/vitis_fft/vitis_fft_proj/
+# examples/ssr_fft: the same -- no hand-written C++; ssr_fft_build.generate() restores all of these.
+examples/ssr_fft/include/
+examples/ssr_fft/gen/
+examples/ssr_fft/xsi/
+examples/ssr_fft/vectors/
+examples/ssr_fft/ssr_fft_proj/
+examples/ssr_fft/logs/
+# examples/ssr_fft/measured.json is RTL evidence the docs tables and figures are drawn from (tests/examples/test_ssr_fft.py).
+!examples/ssr_fft/measured.json

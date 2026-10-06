@@ -5,10 +5,15 @@ nav_order: 1
 has_children: true
 audience: python
 api: [VitisFft]
-summary: "AMD's Vitis L1 SSR (super-sample-rate) FFT as the Waveflow module VitisFft. What L and R mean; the architecture inside the vendor core -- the input transposer and its commutators, the radix-4 stages with their inter-stage twiddle rotations, the digit-reversal reorder; why VitisFft runs at a tenth of the rate the architecture allows (the fft<> wrapper, per-call commutators) and what reaches it; why an isolated frame's latency depends on when it arrives; where the arithmetic loses precision and how the output width grows; and what Waveflow adds around it."
+summary: "AMD's Vitis L1 SSR (super-sample-rate) FFT as the Waveflow module VitisFft: a case study in wrapping vendor IP. What L and R mean; the vendor's names for the SSR FFT's blocks (the architecture itself is explained on The SSR FFT page); why VitisFft runs at a tenth of the rate the architecture allows (the fft<> connection, per-call commutators, per-frame stage loops and reorder) and what reaches it; why an isolated frame's latency depends on when it arrives; where the arithmetic loses precision and how the output width grows; and what Waveflow adds around a vendor block."
 ---
 
 # The Vitis FFT
+
+> **For a design, use [`SsrFft`](../../dsp/ssr_fft/index.md)**: the same bits and the same ports,
+> a new frame every `L/R` cycles -- 7.5 to 10 times this module's rate, on the same DSPs.
+> `VitisFft` is kept as the vendor reference `SsrFft` is checked against, and as the worked case of
+> wrapping vendor IP -- including how a 10x shortfall passed every functional test.
 
 `VitisFft` (`waveflow.vitis_l1.hw`) wraps AMD's **SSR FFT** from the Vitis DSP Library
 (`xf::dsp::fft::fft<>`): a fixed-point, forward, natural-order FFT of length `L` that takes `R`
@@ -23,32 +28,20 @@ Sample `n` of a frame travels on lane `n % R` at word `n // R`, so a frame enter
 
 ## Inside the core
 
-```mermaid
-flowchart LR
-  in(["lanes in<br/>R samples / cycle"]) --> cast[cast]
-  cast --> swap["input transposer<br/>(swap: a chain of commutators)"]
-  swap --> s1[stage 1]
-  s1 --> s2[stage 2]
-  s2 -.-> sS[stage S]
-  sS --> dr["digit-reversal<br/>reorder"]
-  dr --> out(["lanes out<br/>R samples / cycle"])
-  stg["each stage:<br/>radix-4 butterflies<br/>+ twiddle rotation<br/>+ commutator"] -.- s1
-  stg -.- s2
-  stg -.- sS
-```
+The architecture is the SSR FFT's, and [The SSR FFT](../../dsp/ssr_fft/architecture.md)
+explains it in full -- the input transposer, the radix-4 stages and their twiddle rotations, the
+commutators between them (what a commutator actually is), and the digit-reversal reorder. In the
+vendor's code those are:
 
-With `S = log4 L` stages:
+| block | in `hls_ssr_fft*.hpp` |
+|---|---|
+| input transposer | `swap` / `InputTransposeChainStreaming`, a chain of `streamingDataCommutor` |
+| stages | `fftStage`, `fftStage_1`, ... -- nested; each a `fftStageKernelS2S` and a commutator |
+| last stage | `fftStageKernelLastStageS2S`: no twiddle rotation |
+| reorder | `digitReversedDataReOrder`: `cacheDataDR`, then `writeBackCacheDataDR` |
 
-- **The input transposer** (`swap`, `InputTransposeChainStreaming`). A radix-4 butterfly needs
-  samples that are a quarter-frame apart -- `x[m]`, `x[m + L/4]`, `x[m + 2L/4]`, `x[m + 3L/4]` -- but
-  they arrive on the four lanes in natural order. The transposer is a chain of **commutators**:
-  delay lines plus a rotating switch that move samples *between* the lanes over time, so a
-  butterfly's four inputs line up in the same cycle. This is the classic element of pipelined FFTs
-  (multi-path delay commutator designs).
-- **The stages.** Each applies the radix-4 butterflies (multiplies by `±1, ±j` only, so exact), then
-  rotates by the twiddle factors `W_L^{mq}` before the next stage -- the only lossy step -- and
-  reorders through its own commutator for the next stage's butterflies.
-- **The digit-reversal reorder** turns the FFT's digit-reversed output order into natural order.
+The arithmetic in those blocks is what `waveflow.vitis_l1.fft` models bit for bit -- and what
+`SsrFft` reuses. The data movement around it is what this page is about next.
 
 ### Why `VitisFft` is far below the architecture's rate
 

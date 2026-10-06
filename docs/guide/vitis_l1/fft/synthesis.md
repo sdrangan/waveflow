@@ -117,4 +117,4 @@ module**, like every other free-running kernel: `composite_top_spec(VitisFft(...
   it, so it cannot carry a namespace; the header ends with `using vitis_fft_impl::vitis_fft_task;`.
 
 `examples/vitis_fft` is the worked build: generate, csynth, and an XSI gate that drives the RTL
-through four frames, bit-exact. See [A vendor FFT, frames in and out](../../../examples/vitis_fft/index.md).
+through four frames, bit-exact. See [Wrapping vendor IP: the Vitis FFT](../../../examples/vitis_fft/index.md).

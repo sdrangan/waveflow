@@ -159,7 +159,7 @@ module never restates a channel's timing.  Each is a **lookup per length**: the 
 changes the implementation between them.  An unmeasured length is refused, not extrapolated.  The
 fixture `waveflow/calib/fixtures/vitis_fft.py` measures, collects and refits to a fixed point; at
 convergence the pysim reproduces the RTL's mean proc span and interval at every calibrated length.
-See [A vendor FFT, frames in and out](../../../examples/vitis_fft/index.md).
+See [Wrapping vendor IP: the Vitis FFT](../../../examples/vitis_fft/index.md).
 
 ## C-synthesis cannot supply these
 
