@@ -54,7 +54,8 @@ def exp_table_format(tw_w: int, tw_i: int) -> Format:
     return _f(tw_w, tw_i, QMode.AP_RND, OMode.AP_SAT)
 
 
-def twiddle_stored(length: int, tw_w: int, tw_i: int) -> tuple[np.ndarray, np.ndarray]:
+def twiddle_stored(length: int, tw_w: int, tw_i: int,
+                   inverse: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """``W_L^i`` as stored integers -- the inter-stage rotation table, **as the hardware reads it**.
 
     Not a direct quantization of ``cos``/``sin``: past ``L=16`` the design stores only a quarter
@@ -64,7 +65,7 @@ def twiddle_stored(length: int, tw_w: int, tw_i: int) -> tuple[np.ndarray, np.nd
     what kept ``L=64`` off by 14 values.  See ``twiddle.quarter_twiddles``.
     """
     from .twiddle import quarter_twiddles
-    return quarter_twiddles(length, tw_w, tw_i)
+    return quarter_twiddles(length, tw_w, tw_i, inverse)
 
 
 def _accumulate(a, b, operand: Format, target: Format):
@@ -110,7 +111,7 @@ def _stage_formats(f: Format, first: bool, mode: str) -> tuple[Format, Format, F
 
 
 @cache
-def _exp_table(tw_w: int, tw_i: int) -> tuple[Format, tuple, tuple]:
+def _exp_table(tw_w: int, tw_i: int, inverse: bool = False) -> tuple[Format, tuple, tuple]:
     """``ComplexExpTable`` -- the radix-R DFT constants ``W_R^k``, cached per format.
 
     ``initComplexExpTable`` (``hls_ssr_fft_complex_exp_table.hpp:70-86``) fills
@@ -119,16 +120,20 @@ def _exp_table(tw_w: int, tw_i: int) -> tuple[Format, tuple, tuple]:
     that is a consequence of the format, not a licence to hardcode it, which is what this
     function previously did (it built the table at a fixed ``<18,2>`` and silently ignored the
     caller's twiddle width).
+
+    *inverse* is ``REVERSE_TRANSFORM``: ``+sin`` in place of ``-sin``, i.e. ``{1, +j, -1, -j}``
+    (the radix-4 kernel's ``l_sign``, ``hls_ssr_fft_parallel_fft_kernel.hpp:109``).
     """
     ftw = exp_table_format(tw_w, tw_i)
     ei = np.arange(16, dtype=np.float64)
     return (ftw,
             tuple(fp.quantize_real(np.cos(2.0 * np.pi * ei / R), ftw)),
-            tuple(fp.quantize_real(-np.sin(2.0 * np.pi * ei / R), ftw)))
+            tuple(fp.quantize_real((1 if inverse else -1) * np.sin(2.0 * np.pi * ei / R), ftw)))
 
 
 def _dft4(vr: np.ndarray, vi: np.ndarray, f: Format, first: bool, mode: str,
-          tw_w: int = 18, tw_i: int = 2) -> tuple[np.ndarray, np.ndarray, Format]:
+          tw_w: int = 18, tw_i: int = 2,
+          inverse: bool = False) -> tuple[np.ndarray, np.ndarray, Format]:
     """Every radix-4 butterfly of a stage, at once.
 
     ``vr``/``vi`` have shape ``(R, ...)``: axis 0 is butterfly input ``j``, the trailing axes
@@ -144,7 +149,7 @@ def _dft4(vr: np.ndarray, vi: np.ndarray, f: Format, first: bool, mode: str,
     Tree additions wrap at their OPERAND width and widen on assignment -- see ``fft16``.
     """
     fprod, facc1, facc2 = _stage_formats(f, first, mode)
-    ftw, ex_r, ex_i = _exp_table(tw_w, tw_i)
+    ftw, ex_r, ex_i = _exp_table(tw_w, tw_i, inverse)
 
     # p[i, j, ...] = v[j, ...] * W_4^{i*j}
     ij = (np.arange(R)[:, None] * np.arange(R)[None, :]) % R
@@ -249,8 +254,10 @@ def stage_formats(in_w: int, in_i: int, n_stages: int,
 
 def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i: int,
                 tw_w: int = 18, tw_i: int = 2,
-                mode: str = NO_SCALING) -> tuple[np.ndarray, np.ndarray, Format]:
-    """Bit-exact model for any ``L = R^S`` (``R = 4``), natural output order, forward.
+                mode: str = NO_SCALING,
+                inverse: bool = False,
+                exact_scale: bool = False) -> tuple[np.ndarray, np.ndarray, Format]:
+    """Bit-exact model for any ``L = R^S`` (``R = 4``), natural output order, either direction.
 
     The recursive decimation-in-frequency the library implements::
 
@@ -272,6 +279,10 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     The split is not tidiness: the per-stage narrowing rule this function applies was measured
     for ``NO_SCALING``, and the other two modes demonstrably break it.  Rather than return a
     plausible-looking wrong answer, non-default modes raise.
+
+    ``inverse`` is the library's ``REVERSE_TRANSFORM``, ``1/L`` included (:func:`ifft_scale`).
+    ``exact_scale`` keeps every bit instead -- the same stored values as the unscaled transform,
+    in a format with ``log2 L`` fewer integer bits -- which is what ``waveflow.dsp.ssr_fft`` does.
     """
     if mode != NO_SCALING:
         raise NotImplementedError(
@@ -284,7 +295,7 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     n_stages = _log(length, R)
     fmts = stage_formats(in_w, in_i, n_stages, mode)
     ftw = exp_table_format(tw_w, tw_i)
-    tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i)
+    tw_r, tw_i_ = twiddle_stored(length, tw_w, tw_i, inverse)
 
     # Values live in a flat array indexed by output position as it is progressively resolved.
     cur_re = np.array(x_re, dtype=np.int64)
@@ -310,7 +321,8 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
 
         # Butterfly m of block b takes blocks[b, m + p*m_count] as its input p -> v[p, b, m].
         gather = blocks.reshape(n_blocks, R, m_count).transpose(1, 0, 2)
-        orr, oii, g = _dft4(cur_re[gather], cur_im[gather], f_in, s == 0, mode, tw_w, tw_i)
+        orr, oii, g = _dft4(cur_re[gather], cur_im[gather], f_in, s == 0, mode, tw_w, tw_i,
+                            inverse)
         # orr[q, b, m] is output q of butterfly m in block b.
 
         if s < n_stages - 1:
@@ -342,6 +354,33 @@ def fft_general(x_re: np.ndarray, x_im: np.ndarray, length: int, in_w: int, in_i
     _, g_last = fmts[-1]
     fout = _f(g_last.W - 1, g_last.int_bits) if n_stages >= 2 else g_last
     re, im = cur_re, cur_im
-    if fout == g_last:
-        return re, im, fout
-    return fp.quantize(re, g_last, fout), fp.quantize(im, g_last, fout), fout
+    if fout != g_last:
+        re, im = fp.quantize(re, g_last, fout), fp.quantize(im, g_last, fout)
+    if inverse:
+        re, im, fout = ifft_scale(re, im, fout, length, exact=exact_scale)
+    return re, im, fout
+
+
+def ifft_scale(re: np.ndarray, im: np.ndarray, f: Format, length: int, *, exact: bool = False
+               ) -> tuple[np.ndarray, np.ndarray, Format]:
+    """The ``1/L`` of ``REVERSE_TRANSFORM`` -- ``convertSuperStreamToArrayNScale``
+    (``hls_ssr_fft_fork_merge_utils.hpp:185-205``) and ``FFTScaledOutput`` (output traits 356).
+
+    The output type keeps the width and moves the binary point: ``ap_fixed<W, I - log2 L>``.
+    That alone would be an exact, free ``1/L``.  But the value is computed as ``x.real() / L``
+    -- ``ap_fixed`` divided by an ``int``, whose quotient keeps ``x``'s fractional bits and
+    **truncates toward zero** -- and only then cast into the wider-fraction type.  So the low
+    ``log2 L`` stored bits are always zero and a negative value rounds up.  Measured at
+    ``L = 16..1024`` (``cpp/dump_ifft.cpp``): toward-zero matches every sample, floor misses
+    about half.  ``exact=True`` is the move of the binary point alone (the bits unchanged).
+    """
+    k = _log(length, 2)
+    if exact:
+        return (np.asarray(re, dtype=np.int64), np.asarray(im, dtype=np.int64),
+                _f(f.W, f.int_bits - k))
+
+    def trunc0(v: np.ndarray) -> np.ndarray:
+        v = np.asarray(v, dtype=np.int64)
+        return (np.sign(v) * (np.abs(v) >> k)) << k
+
+    return trunc0(re), trunc0(im), _f(f.W, f.int_bits - k)
