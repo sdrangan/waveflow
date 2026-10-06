@@ -379,7 +379,38 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 - `SsrStage` and `SsrCommutator` task bodies.  Unit csim against `model.stage` on wire-ordered words.
 - **Gate:** bit-exact per stage; csynth II = 1 and timing met at 250 MHz on the RFSoC part.
 
-### F3 — the composite at one length, through XSI
+### F3 — the composite at one length, through XSI  ✅ DONE (2026-10-06)
+
+> **As built**: `waveflow/dsp/ssr_fft/{hw,testbench,rtl}.py`.  `SsrFft` is a `FreeRunMod` composite,
+> one child per `hls::task` (lane adaptors, commutators, stages, reorder), with `VitisFft`'s port
+> group -- the R-lane boundary is forced anyway: the XSI BFMs move 64-bit words, the internal
+> `RadixWord` streams are 128-232 bits.  The generated top instantiates one plain-named wrapper per
+> task.  Gate `tests/dsp/ssr_fft/test_xsi.py` (`-m xsi`, builds itself in `work/ssr_fft/`).
+>
+> **Measured, RFSoC 4x2 at 250 MHz, 8 frames back to back, every frame bit-exact:**
+>
+> | | interval | first frame done | DSP | BRAM | LUT | FF |
+> |---|---|---|---|---|---|---|
+> | L = 64, ping-pong reorder | **16 = L/R** | 113 | 24 | -- | 10.6K | 8.6K |
+> | L = 64, SOB reorder | 20 | 115 | 24 | -- | 10.5K | 8.6K |
+> | L = 64, `VitisFft` (for scale) | 120 | -- | 24 | 0 | 13.0K | 8.5K |
+> | L = 1024, ping-pong reorder | **256 = L/R** | 1280 | 48 | 50 | 21.6K | 25.0K |
+> | L = 1024, `VitisFft` | 2556 | -- | 48 | 40 | 23.1K | 19.2K |
+>
+> Ten times the vendor's throughput at L = 1024 for the same DSPs and comparable logic.
+>
+> Findings: (1) **a blocking read at a `while(1)` head strands a burst's tail**: the stall-style
+> pipeline freezes the iterations in flight when the read waits, so the last words of the last
+> frame never leave (8 frames in, 5 out; `st0` read 128, wrote 125).  `style=flp` is refused ("more
+> than one exit branch"); every loop head now tests `empty()` instead.  (2) **The SOB reorder costs
+> 4 cycles a frame**: its reader is a single-firing body, re-entered (and its lock re-acquired) once
+> a frame.  Both reorders are kept (`SsrFft(reorder="sob" | "pingpong")`); ping-pong is the one
+> that reaches L/R.  csim's SOB corruption (F2) did not reproduce in RTL.
+>
+> Stress, L = 64, both reorders (`work/ssr_fft/L64_*`): 64 frames with random 0-120-cycle gaps
+> between them -- all out, all bit-exact (the bubble/idle drain works); **500 frames back to back --
+> all out, all bit-exact, interval constant** (16 / 20).  No deadlock: the reorder SOB, the one
+> construct the deadlock law covers, holds at 500 frames.
 
 - `SsrFft` at `L = 64`: the generated top, the XSI harness (`ap_ctrl_none` cannot cosim, so XSI is
   the RTL rung), back-to-back frames.
