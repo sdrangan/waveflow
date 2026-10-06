@@ -135,17 +135,17 @@ Source class: [`BoundRegMap`](../../../waveflow/hw/regmap.py).
 
 ### Example (host-side testbench)
 
-From [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py), `PolyTB.run_proc`:
+From [`examples/regmap/simp_fun.py`](../../../examples/regmap/simp_fun.py), `SimpFunHost.run_proc`:
 
 ```python
-rm = self._regmap().bind_master(self.m_lite, base_addr=self.base_addr)
-
-yield from rm.set("coeffs", self.coeffs)
-yield from rm.start()
-
-self.halted       = yield from rm.get("halted")
-self.error        = yield from rm.get("error")
-self.tx_id_status = yield from rm.get("tx_id")
+rm = self._regmap().bind_master(self.master, base_addr=self.base_addr)
+yield from rm.set("x", self.case.x)
+yield from rm.set("a", self.case.a)
+yield from rm.set("b", self.case.b)
+# Enable the ap_done interrupt, launch, and sleep until the kernel's interrupt
+# line rises; then clear isr, which drops the line.  No ap_done reads.
+yield from rm.run(self.irq)
+self.y = yield from rm.get("y")
 ```
 
 This keeps host-side register access aligned with kernel-side ergonomics while preserving typed schema conversions.
@@ -201,18 +201,16 @@ class VitisRegMap(RegMap):
 Use site:
 
 ```python
-POLY_REGMAP = VitisRegMap({
-    "status_clear": RegField(Bit,            RegAccess.W1C, description="Clear halted/error"),
-    "halted":       RegField(Bit,            RegAccess.R,   description="1 = halted on error"),
-    "error":        RegField(PolyErrorField, RegAccess.R,   description="Last error code"),
-    "tx_id":        RegField(TxIdField,      RegAccess.R,   description="TX id of halted txn"),
-    "coeffs":       RegField(CoeffArray,     RegAccess.RW,  description="Default coefficients"),
+SIMP_FUN_REGMAP = VitisRegMap({          # examples/regmap/simp_fun.py
+    "x": RegField(Int32, RegAccess.RW, description="Input operand"),
+    "a": RegField(Int32, RegAccess.RW, description="Multiply coefficient"),
+    "b": RegField(Int32, RegAccess.RW, description="Bias term"),
+    "y": RegField(Int32, RegAccess.R,  description="relu(a*x + b)"),
 })
 # offset_of("ap_start") == 0x00 with bit_offset_of("ap_start") == 0
 # offset_of("ap_done")  == 0x00 with bit_offset_of("ap_done")  == 1
-# offset_of("status_clear") == 0x10 (input: 8 bytes)
-# offset_of("halted") == 0x18, "error" == 0x28, "tx_id" == 0x38 (outputs: 16 bytes each)
-# offset_of("coeffs") == 0x50 (16-byte region, 16-byte aligned)
+# offset_of("x") == 0x10, "a" == 0x18, "b" == 0x20 (inputs: 8 bytes each)
+# offset_of("y") == 0x28 (an output: 16 bytes, but nothing follows it)
 ```
 
 `VitisRegMap` requires `bitwidth=32` — the Vitis s_axilite control bus is 32 bits wide and the control block is defined on 4-byte words.
@@ -268,7 +266,7 @@ The line is **level**: high while `gier[0] && isr != 0`. A host that comes to wa
 `on_start` is the kernel body. It is expected to be a generator that runs until either:
 
 - It reaches an unrecoverable error condition, sets any user-defined status fields via `regmap.set(...)`, and `return`s. The slave will accept subsequent `ap_start` writes once it returns.
-- It is intentionally written as a long-running `while True:` loop that processes back-to-back transactions and only returns on error (the **persistent kernel** pattern, which matches the Vitis halt-on-error design we use for poly).
+- It is written as a `while True:` loop over in-band commands that returns on an `END` command or on the first error -- one run is a batch of commands. This is the [streaming polynomial](../../examples/stream_inband/index.md)'s design: it clears its status at the start, and on an error sets `halted` / `error` / `tx_id`, closes any output burst it has started, and returns; the host resets the stream path before the next `ap_start`.
 
 `on_start` must not be invoked from anywhere except the slave's launch path. Component authors do **not** write a `run_proc` for the kernel logic — there is no outer SimPy process waiting on a `start_event`. The slave is the sole entry point.
 
@@ -279,117 +277,65 @@ The line is **level**: high while `gier[0] && isr != 0`. A host that comes to wa
 
 ---
 
-## Worked example: poly accelerator
+## Worked example: a one-shot kernel
 
-The polynomial-evaluation kernel from [examples/stream_inband](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband) uses a `VitisRegMap` for control and status. The kernel implements the **persistent-kernel** pattern: the host writes `ap_start` once, the kernel processes transactions back-to-back from its AXI-Stream input, and only halts (returning) when an error is detected. On halt, the error code and offending transaction ID are latched into the register map for the host to read.
+The kernel from [`examples/regmap`](../../examples/regmap/index.md) computes `y = relu(a*x + b)`:
+the host writes the arguments, starts the kernel, waits for `ap_done`, and reads the result.
 
-### Field declarations
+### Field declarations and kernel side
 
-```python
-from enum import IntEnum
-from waveflow.hw.dataschema import IntField, EnumField, FloatField, DataArray
-from waveflow.hw.regmap import VitisRegMap, RegField, RegAccess
-
-class PolyError(IntEnum):
-    NO_ERROR             = 0
-    TLAST_EARLY_CMD_HDR  = 1
-    NO_TLAST_CMD_HDR     = 2
-    TLAST_EARLY_SAMP_IN  = 3
-    NO_TLAST_SAMP_IN     = 4
-    WRONG_NSAMP          = 5
-
-Bit             = IntField.specialize(bitwidth=1,  signed=False)
-TxIdField       = IntField.specialize(bitwidth=16, signed=False)
-PolyErrorField  = EnumField.specialize(enum_type=PolyError)
-Float32         = FloatField.specialize(bitwidth=32)
-
-class CoeffArray(DataArray):
-    ncoeff = 4
-    element_type = Float32
-    static = True
-    max_shape = (ncoeff,)
-
-# Only user-defined fields are declared; the Vitis control block (0x00-0x0f)
-# is added automatically, so these land from 0x10 up.
-POLY_REGMAP_FIELDS = {
-    "status_clear": RegField(Bit,            RegAccess.W1C, description="Clear halted/error"),
-    "halted":       RegField(Bit,            RegAccess.R,   description="1 = halted on error"),
-    "error":        RegField(PolyErrorField, RegAccess.R,   description="Last error code"),
-    "tx_id":        RegField(TxIdField,      RegAccess.R,   description="TX id of halted txn"),
-    "coeffs":       RegField(CoeffArray,     RegAccess.RW,  description="Default coefficients"),
-}
-```
-
-### Kernel side
-
-The component declares its endpoints and an `on_start` method. There is **no** `run_proc`, no `start_event`, and no post-construction hook wiring — the slave owns the launch lifecycle.
+The component declares its register map and an `on_start` method.  There is **no** `run_proc`,
+no `start_event`, and no post-construction hook wiring -- the slave owns the launch lifecycle.
 
 ```python
-from waveflow.hw.regmap import VitisRegMap, VitisRegMapMMIFSlave, RegField, RegAccess
-
 @dataclass
-class PolyAccel(HwModule):
-
+class SimpFun(HostActivated):
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.s_in  = StreamIFSlave (name=f'{self.name}_s_in',  sim=self.sim, bitwidth=self.in_bw)
-        self.m_out = StreamIFMaster(name=f'{self.name}_m_out', sim=self.sim, bitwidth=self.out_bw)
-
-        # Build a per-instance VitisRegMap with hooks bound to component methods.
+        # The Vitis control block (0x00-0x0f) is added automatically, so these
+        # land at 0x10, 0x18, 0x20, 0x28.
         self.regmap = VitisRegMap({
-            "status_clear": RegField(Bit, RegAccess.W1C, on_write=self._on_status_clear,
-                                     description="Clear halted/error"),
-            "halted":       RegField(Bit, RegAccess.R, description="1 = halted on error"),
-            "error":        RegField(PolyErrorField, RegAccess.R, description="Last error code"),
-            "tx_id":        RegField(TxIdField, RegAccess.R, description="TX id of halted txn"),
-            "coeffs":       RegField(CoeffArray, RegAccess.RW, description="Default coefficients"),
+            "x": RegField(Int32, RegAccess.RW, description="Input operand"),
+            "a": RegField(Int32, RegAccess.RW, description="Multiply coefficient"),
+            "b": RegField(Int32, RegAccess.RW, description="Bias term"),
+            "y": RegField(Int32, RegAccess.R,  description="relu(a*x + b)"),
         })
         self.s_lite = VitisRegMapMMIFSlave(
-            name=f'{self.name}_s_lite', sim=self.sim, bitwidth=32,
+            name=f"{self.name}_s_lite", sim=self.sim, bitwidth=32,
             regmap=self.regmap, on_start=self.on_start,
         )
-        for ep in (self.s_in, self.m_out, self.s_lite):
-            self.add_endpoint(ep)
-
-    def _on_status_clear(self, name, sub_word, value):
-        self.regmap.set("halted", 0)
-        self.regmap.set("error",  PolyError.NO_ERROR)
+        self.add_endpoint(self.s_lite)
 
     def on_start(self) -> ProcessGen[None]:
-        """Kernel body — invoked by VitisRegMapMMIFSlave on host ap_start write."""
-        while True:
-            cmd_hdr = yield from self.s_in.get_schema(PolyCmdHdr)
-            err = yield from self.evaluate(cmd_hdr, self.s_in, self.m_out)
-            if err != PolyError.NO_ERROR:
-                self.regmap.set("error",  err)
-                self.regmap.set("tx_id",  cmd_hdr.tx_id)
-                self.regmap.set("halted", 1)
-                return         # halt → slave goes idle; host can re-launch via ap_start
+        """Invoked by VitisRegMapMMIFSlave when the host writes ap_start.  ap_done is
+        cleared on the launch and set when this returns; the kernel writes only its result."""
+        yield self.timeout(self.latency_cycles * self.clk.period)
+        y = self.compute(self.regmap.get("x"), self.regmap.get("a"), self.regmap.get("b"))
+        self.regmap.set("y", y)
 ```
 
 ### Host side
 
 ```python
-# Configure default coefficients (one LITE transaction per word, auto-split)
-yield from cpu.write_schema(CoeffArray([1.0, 0.0, 0.5, 0.25]),
-                            addr=POLY_BASE + poly.regmap.offset_of("coeffs"))
-
-# Launch via the VitisRegMap convenience method
-yield from poly.regmap.start(cpu, base_addr=POLY_BASE)
-
-# ... time passes; host issues stream transactions on the data path ...
-
-# On suspected halt: read status
-halted = yield from cpu.read_schema(Bit, addr=POLY_BASE + poly.regmap.offset_of("halted"))
-if halted:
-    err   = yield from cpu.read_schema(PolyErrorField, addr=POLY_BASE + poly.regmap.offset_of("error"))
-    tx_id = yield from cpu.read_schema(TxIdField,      addr=POLY_BASE + poly.regmap.offset_of("tx_id"))
-    log.error(f"poly halted on tx {tx_id}: {err}")
-    yield from cpu.write_schema(Bit(1), addr=POLY_BASE + poly.regmap.offset_of("status_clear"))
-    yield from poly.regmap.start(cpu, base_addr=POLY_BASE)        # re-launch
+rm = accel.regmap.bind_master(host.master, base_addr=BASE)
+yield from rm.set("x", 5)
+yield from rm.set("a", 3)
+yield from rm.set("b", -4)
+yield from rm.run(host.irq)          # enable the ap_done interrupt, start, sleep until done
+y = yield from rm.get("y")           # 11
 ```
 
-The same `VitisRegMap` object drives the SimPy simulation and would drive the (planned) HLS pragma generation and host driver class — see below. Note that this is a single *declaration* of the fields, not a single source of the offsets: codegen emits no addresses, and Vitis assigns them from the `s_axilite` pragmas. `VitisRegMap` mirrors the layout Vitis documents; nothing yet checks the mirror — see [Fidelity](#fidelity-what-is-and-is-not-modelled).
+The same `VitisRegMap` object drives the SimPy simulation and would drive the (planned) HLS pragma generation and host driver class -- see below. Note that this is a single *declaration* of the fields, not a single source of the offsets: codegen emits no addresses, and Vitis assigns them from the `s_axilite` pragmas. `VitisRegMap` mirrors the layout Vitis documents; nothing yet checks the mirror -- see [Fidelity](#fidelity-what-is-and-is-not-modelled).
+
+### A streaming kernel: status only
+
+Here the register map carries the kernel's **arguments**, which is right for a one-shot kernel: one
+call, one set of arguments, nothing else in flight.  A kernel that processes a **stream of commands**
+is different.  If its configuration came over AXI-Lite while commands were queued on the stream, the
+two paths would race.  The [streaming polynomial](../../examples/stream_inband/index.md) therefore
+puts everything the kernel computes with on the stream, and its register map holds only status
+(`halted`, `error`, `tx_id`, all `R`).  Its [contract](../../examples/stream_inband/index.md#the-contract)
+and [Why this contract](../../examples/stream_inband/why_not.md) explain the split.
 
 ---
 
@@ -414,17 +360,16 @@ def to_markdown(self, *, title: str | None = None) -> str
 Renders a table suitable for inclusion in design docs:
 
 ```markdown
-### POLY register map
+### SIMP_FUN register map
 
 | Offset | Bit | Name         | Access | Width | Description                  |
 |--------|-----|--------------|--------|-------|------------------------------|
 | 0x00   | 0   | ap_start     | W1S    | 1     | Start kernel                 |
 | 0x00   | 1   | ap_done      | R      | 1     | Kernel finished              |
-| 0x10   | —   | status_clear | W1C    | 1     | Clear halted/error           |
-| 0x18   | —   | halted       | R      | 1     | 1 = halted on error          |
-| 0x28   | —   | error        | R      | 8     | Last error code              |
-| 0x38   | —   | tx_id        | R      | 16    | TX id of halted txn          |
-| 0x50   | —   | coeffs[4]    | RW     | 4×32  | Default coefficients         |
+| 0x10   | —   | x            | RW     | 32    | Input operand                |
+| 0x18   | —   | a            | RW     | 32    | Multiply coefficient         |
+| 0x20   | —   | b            | RW     | 32    | Bias term                    |
+| 0x28   | —   | y            | R      | 32    | relu(a*x + b)                |
 ```
 
 ### C header
@@ -436,16 +381,14 @@ def to_c_header(self, *, prefix: str) -> str
 Generates `#define`s for offsets and bit widths, plus a packed struct for composite fields:
 
 ```c
-/* Auto-generated from POLY_REGMAP — do not edit. */
-#define POLY_AP_CTRL_OFFSET      0x00u
-#define POLY_AP_START_BIT        0u
-#define POLY_AP_DONE_BIT         1u
-#define POLY_STATUS_CLEAR_OFFSET 0x10u
-#define POLY_HALTED_OFFSET       0x18u
-#define POLY_ERROR_OFFSET        0x20u
-#define POLY_TX_ID_OFFSET        0x28u
-#define POLY_COEFFS_OFFSET       0x30u
-#define POLY_COEFFS_COUNT        4u
+/* Auto-generated from SIMP_FUN_REGMAP — do not edit. */
+#define SIMP_FUN_AP_CTRL_OFFSET  0x00u
+#define SIMP_FUN_AP_START_BIT    0u
+#define SIMP_FUN_AP_DONE_BIT     1u
+#define SIMP_FUN_X_OFFSET        0x10u
+#define SIMP_FUN_A_OFFSET        0x18u
+#define SIMP_FUN_B_OFFSET        0x20u
+#define SIMP_FUN_Y_OFFSET        0x28u
 ```
 
 Such a generator would also be the natural place to diff the modelled layout against Vitis's `control.h` and fail loudly on drift.
@@ -459,18 +402,15 @@ def to_python_driver(self, *, class_name: str) -> str
 Generates a class that wraps an `MMIFMaster` with one accessor per field, returning deserialized Python values:
 
 ```python
-class PolyDriver:
+class SimpFunDriver:
     def __init__(self, master: MMIFMaster, base_addr: int) -> None: ...
 
     def write_ap_start(self) -> ProcessGen[None]: ...
-    def write_status_clear(self) -> ProcessGen[None]: ...
 
-    def read_halted(self) -> ProcessGen[bool]: ...
-    def read_error(self)  -> ProcessGen[PolyError]: ...
-    def read_tx_id(self)  -> ProcessGen[int]: ...
-
-    def write_coeffs(self, value: CoeffArray | list[float]) -> ProcessGen[None]: ...
-    def read_coeffs(self) -> ProcessGen[CoeffArray]: ...
+    def write_x(self, value: int) -> ProcessGen[None]: ...
+    def write_a(self, value: int) -> ProcessGen[None]: ...
+    def write_b(self, value: int) -> ProcessGen[None]: ...
+    def read_y(self) -> ProcessGen[int]: ...
 ```
 
 The driver is the single touchpoint for host-side firmware and software-in-the-loop tests. Because the same `RegMap` object also drives the simulation and the (eventual) HLS pragma generation, the offsets cannot drift between the three.

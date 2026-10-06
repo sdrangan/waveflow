@@ -33,31 +33,35 @@ result lane to `m_out`:
 
 ```cpp
 template <int in_bw, int out_bw>
-ap_uint<8> transaction(PolyCmdHdr cmd_hdr,
-                    hls::stream<streamutils::axi4s_word<in_bw>>& s_in,
-                    hls::stream<streamutils::axi4s_word<out_bw>>& m_out,
-                    float coeffs[4]) {
+ap_uint<8> transaction(const PolyCmdHdr& cmd_hdr,             // carries the coefficients
+                       hls::stream<streamutils::axi4s_word<in_bw>>& s_in,
+                       hls::stream<streamutils::axi4s_word<out_bw>>& m_out) {
+    ...                                                        // response header, coeffs[4]
     static const int pf = float32_array_utils::pf<in_bw>();
     float x_lane[pf], y_lane[pf];
 #pragma HLS ARRAY_PARTITION variable=x_lane complete dim=1
 #pragma HLS ARRAY_PARTITION variable=y_lane complete dim=1
 
-    for (int i = 0; i < cmd_hdr.nsamp && !read_done; i += pf) {
+    ap_uint<8> err = code(PolyError::NO_ERROR);
+    for (int i = 0; i < cmd_hdr.nsamp; i += pf) {
         const int nrem = cmd_hdr.nsamp - i;
         const int lane_count = (nrem < pf) ? nrem : pf;          // tail lane is short
+        const bool final_word = (nrem <= pf);
         streamutils::tlast_status lane_tlast = streamutils::tlast_status::no_tlast;
         float32_array_utils::read_axi4_stream_lane<in_bw>(s_in, x_lane, nrem, lane_tlast);
+        const bool in_tlast = (lane_tlast == streamutils::tlast_status::tlast_at_end);
 
         for (int k = 0; k < pf; ++k) {
 #pragma HLS UNROLL
             if (k < lane_count) y_lane[k] = eval_poly_horner(coeffs, x_lane[k]);
         }
 
-        const bool out_tlast = (nrem <= pf);                     // assert TLAST on the last lane
-        float32_array_utils::write_axi4_stream_lane<out_bw>(y_lane, m_out, out_tlast, nrem);
-        ...
+        // TLAST on the last lane -- or on this one, if the input burst ended early.
+        float32_array_utils::write_axi4_stream_lane<out_bw>(y_lane, m_out,
+                                                            final_word || in_tlast, nrem);
+        ...                                                    // the framing checks, below
     }
-    ...
+    return err;
 }
 ```
 
@@ -67,26 +71,34 @@ Three things distinguish this from the [block](./block.md) pattern's resident bu
   `m_axi` [complex](./complex.md) loop you never compute a word address.
 - **The tail lane is short.** `lane_count = min(nrem, pf)`; the `UNROLL`-ed compute guards `k <
   lane_count` so the partial final lane doesn't process junk.
-- **`TLAST` framing.** The read returns a `tlast_status`; the write asserts `TLAST` on the last lane
-  (`out_tlast`). A plain FIFO with no framing uses `read_stream_lane` / `write_stream_lane` instead
-  (no `TLAST` argument).
+- **`TLAST` framing.** The read returns a `tlast_status`; the write asserts `TLAST` on the last lane,
+  and also on the lane where an early input `TLAST` ends the burst, so the output burst is always
+  closed. A plain FIFO with no framing uses `read_stream_lane` / `write_stream_lane` instead (no
+  `TLAST` argument).
 
 ## Framing is validated, not assumed
 
 Because the stream carries framing, the hook **checks** it and returns an error status rather than
-trusting the producer — `TLAST` arriving early, never arriving, or the wrong sample count each map to
-a `PolyError`:
+trusting the producer.  `TLAST` arriving before the last sample word, or not arriving on it, each map
+to a `PolyError`, checked word by word inside the loop:
 
 ```cpp
-if (samp_in_tlast == streamutils::tlast_status::tlast_early) return (ap_uint<8>)PolyError::TLAST_EARLY_SAMP_IN;
-if (samp_in_tlast == streamutils::tlast_status::no_tlast)    return (ap_uint<8>)PolyError::NO_TLAST_SAMP_IN;
-if (nsamp_read != cmd_hdr.nsamp)                              return (ap_uint<8>)PolyError::WRONG_NSAMP;
-return (ap_uint<8>)PolyError::NO_ERROR;
+if (in_tlast && !final_word) {             // TLAST early: the burst was closed above;
+    err = code(PolyError::TLAST_EARLY_SAMP_IN);
+    break;                                 // read nothing more
+}
+if (final_word && !in_tlast) {             // the last sample word had no TLAST
+    err = code(PolyError::NO_TLAST_SAMP_IN);
+}
 ```
+
+The caller turns a non-zero code into the status registers and returns at once, without draining
+the input -- the example's [contract](../../examples/stream_inband/index.md#the-contract) (rules 6
+and 7) and [why it drains nothing](../../examples/stream_inband/why_not.md#draining-to-tlast-on-an-error).
 
 ## The hook is a `.tpp`
 
-`evaluate` is a **function template** over the stream widths (`in_bw`, `out_bw`) — its
+The body is a **function template** over the stream widths (`in_bw`, `out_bw`) — its
 `hls::stream<axi4s_word<in_bw>>&` arguments carry those `HwParam` widths. A template definition must
 be visible at the include site, so the hook lives in a `.tpp` the generated header includes (see
 [the `.cpp` vs `.tpp` rule](./writing.md#cpp-vs-tpp) and

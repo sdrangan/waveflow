@@ -28,47 +28,48 @@ Most Waveflow examples use this core sequence:
 From [`examples/stream_inband/run.tcl`](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/run.tcl):
 
 ```tcl
-open_project -reset waveflow_poly_proj
-set_top poly
+open_project -reset $proj                     ;# waveflow_poly_w32 or waveflow_poly_w64
+set_top $top                                  ;# poly or poly_bw64
 add_files gen/poly.cpp -cflags "-I."
-add_files -tb gen/poly_tb.cpp -cflags "-I."
+add_files -tb poly_tb.cpp -cflags "-I. -DPOLY_WORD_BW=$width"
 open_solution -reset "solution1"
 create_clock -period $clk_period_ns
-csim_design -argv "$data_dir"
+csim_design -argv "$data_dir csim"
 csynth_design
-cosim_design -argv "$data_dir" -trace_level $trace_level
+cosim_design -argv "$data_dir cosim timing" -trace_level $trace_level
 ```
 
-## The `COSIM` branch used by build steps
+## The stage switch used by build steps
 
-Waveflow build steps toggle environment variables before launching Vitis:
+The example's build steps set environment variables before launching Vitis, because
+`vitis-run` 2025.1 has no `--tclargs`:
 
-- `CSimStep` sets `..._COSIM=0`
-- `CSynthStep` sets `..._COSIM=1`
+- `CSimStep` sets `WAVEFLOW_POLY_STAGE=csim`;
+- `CSynthStep` sets `WAVEFLOW_POLY_STAGE=synth`;
+- both set `WAVEFLOW_POLY_WIDTH` (32 or 64), which picks the top, the project and the data.
 
-In TCL, that becomes a branch around `cosim_design`:
+In TCL, that becomes a branch around the design commands:
 
 ```tcl
-set do_cosim 0
-if {[info exists ::env(WAVEFLOW_POLY_COSIM)]} {
-    set do_cosim [expr {$::env(WAVEFLOW_POLY_COSIM) in {1 true TRUE yes YES}}]
+set stage $::env(WAVEFLOW_POLY_STAGE)
+if {$stage eq "csim"} {
+    csim_design -argv "$data_dir csim"
+    exit 0
 }
-
-csim_design -argv "$data_dir"
 csynth_design
-if {$do_cosim} {
-    cosim_design -argv "$data_dir" -trace_level $trace_level
-}
+cosim_design -argv "$data_dir cosim timing" -trace_level $trace_level
 ```
 
-This makes one `run.tcl` usable for both "compile/sim-only" and "full RTL cosim" runs.
+This makes one `run.tcl` usable for both "compile/sim-only" and "full RTL cosim" runs, at every
+width.
 
 ## Practical authoring checklist
 
 - Keep project/solution names stable (`open_project`, `open_solution`) so build steps can locate outputs predictably.
 - Add both generated kernel code and generated/hand-authored testbench files via `add_files` and `add_files -tb`.
 - Keep `set_top` aligned with the generated top function.
-- Prefer env-driven switches (`COSIM`, clock period, trace level) over hard-coding run variants in multiple scripts.
+- Prefer env-driven switches (stage, width, clock period) over hard-coding run variants in multiple scripts.
+- Keep each project one directory deep: Vitis HLS 2025.1 drops the kernel from csim in a nested project.
 
 ## See also
 

@@ -22,11 +22,11 @@ The Python half has five kinds of step:
 
 | Step | What it does | Writes |
 | --- | --- | --- |
-| `ScenariosStep` | each scenario's stimulus and **expected** response, from its intent | `data/<scenario>/in/`, `expected/` |
-| `ModelStep` | the pure bit-exact model on every scenario | `data/<scenario>/model/` |
-| `PySimStep` | pysim -- the module's Python body with its timing model | `data/<scenario>/pysim/`, the event log |
+| `ScenariosStep` | each scenario's stimulus and **expected** response, from its intent, at each width | `data/w<W>/<scenario>/in/`, `expected/` |
+| `ModelStep` | the pure bit-exact model on every scenario | `data/w<W>/<scenario>/model/` |
+| `PySimStep` | pysim -- the module's Python body with its timing model | `data/w<W>/<scenario>/pysim/`, the event logs |
 | `CheckStep` | one stage's recorded responses vs the expected ones | `results/check_<stage>.json` |
-| `ExtractPyTimingStep` | pysim's cycle count for the timing scenario | `results/py_timing.json` |
+| `ExtractPyTimingStep` | pysim's cycle count for the timing scenario, one instance per width | `results/py_timing_w<W>.json` |
 
 Every stage -- the model, pysim, and later csim and cosim -- writes its response **in the same
 format, beside the same stimulus**, and the same checker compares each with the expected
@@ -41,15 +41,20 @@ AI, can agree on the same mistake.
 ```python
 @dataclass(kw_only=True)
 class ScenariosStep(BuildStep):
-    description = "Write every scenario's stimulus and expected response (scenarios.py)."
+    description = "Write every scenario's stimulus and expected response, at each width."
     consumes = ["poly_source", "scenarios_source"]
-    produces = {"data_dir": Path("data"), "scenario_list": Path("data/scenarios.txt")}
+    produces = {"scenario_list": Path("data/scenarios.txt")}
     params = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
-        data = config.root_dir / "data"
-        S.write_scenarios(data)
-        return {"data_dir": data, "scenario_list": data / "scenarios.txt"}
+        root = config.root_dir
+        for bw in WIDTHS:
+            S.write_scenarios(width_dir(root, bw), bw)      # data/w32, data/w64
+        out = root / "data" / "scenarios.txt"
+        out.write_text("
+".join(S.scenarios()) + "
+", encoding="utf-8")
+        return {"scenario_list": out}
 ```
 
 - **`consumes` names the two source files**, though `run()` never reads them -- they are
@@ -72,18 +77,17 @@ class ModelStep(BuildStep):
     produces = {"model_done": Path("results/model_done.txt")}
     params = {}
 
-    def run(self, config: BuildConfig, scenario_list, **_) -> dict:
-        data = config.root_dir / "data"
-        names = Path(scenario_list).read_text(encoding="utf-8").split()
-        for name in names:
-            d = data / name
-            coeffs = CoeffArray().read_uint32_file(d / "coeffs.bin").val
-            res = poly_stream_model(read_bursts(d / "in"), coeffs)
-            write_bursts(res.out, d / "model")
-            _write_status(d / "model" / "status.json", res.status())
-        done = config.root_dir / "results" / "model_done.txt"
+    def run(self, config: BuildConfig, **_) -> dict:
+        root = config.root_dir
+        for bw in WIDTHS:                                   # 32 and 64
+            for name in _names(root, bw):
+                d = width_dir(root, bw) / name              # data/w32/<name>
+                res = poly_stream_model(read_bursts(d / "in"), word_bw=bw)
+                write_bursts(res.out, d / "model")
+                _write_status(d / "model" / "status.json", res.status())
+        done = root / "results" / "model_done.txt"
         done.parent.mkdir(parents=True, exist_ok=True)
-        done.write_text("\n".join(names) + "\n", encoding="utf-8")
+        done.write_text("done\n", encoding="utf-8")
         return {"model_done": done}
 ```
 
@@ -91,21 +95,24 @@ class ModelStep(BuildStep):
 testbench, a clock, and on the timing scenario a `Logger` -- and runs it:
 
 ```python
-        for name in S.WELL_FORMED:
-            d = data / name
-            sim = Simulation()
-            clk = Clock(freq=clk_freq)
-            logger = (Logger(name="poly_log", sim=sim, file_path=log_path, fields=["event", "job"])
-                      if name == "timing" else None)
-            accel = PolyAccel(name="poly_accel", sim=sim, clk=clk, unroll_factor=unroll_factor,
-                              **({"logger": logger} if logger else {}))
-            tb = PolyTB(name="poly_tb", sim=sim, stimulus=d / "in",
-                        coeffs=CoeffArray().read_uint32_file(d / "coeffs.bin").val,
-                        n_out=len(read_bursts(d / "expected")))
-            connect(sim, tb, accel, clk)
-            sim.run_sim()
-            write_bursts(tb.out, d / "pysim")
-            _write_status(d / "pysim" / "status.json", tb.status)
+        for bw in WIDTHS:
+            for name in _names(root, bw):
+                if not _meta(root, bw, name)["pysim"]:     # a pysim stream cannot omit TLAST
+                    continue
+                d = width_dir(root, bw) / name
+                sim = Simulation()
+                clk = Clock(freq=clk_freq)
+                logger = (Logger(name="poly_log", sim=sim, file_path=log_path,
+                                 fields=["event", "job"]) if name == "timing" else None)
+                accel = PolyAccel(name="poly_accel", sim=sim, clk=clk, in_bw=bw, out_bw=bw,
+                                  unroll_factor=unroll_factor,
+                                  **({"logger": logger} if logger else {}))
+                tb = PolyTB(name="poly_tb", sim=sim, stimulus=d / "in", word_bw=bw,
+                            n_out=len(read_bursts(d / "expected")))
+                connect(sim, tb, accel, clk)
+                sim.run_sim()
+                write_bursts(tb.out, d / "pysim")
+                _write_status(d / "pysim" / "status.json", tb.status)
 ```
 
 Things to copy:
@@ -113,9 +120,9 @@ Things to copy:
 - **A "done" marker file is the produced artifact.**  The real outputs are spread over
   `data/<scenario>/<stage>/`, one directory per scenario.  A single small file written last
   gives the DAG one thing to check for freshness, and lists what ran.
-- **pysim runs only the well-formed scenarios.**  The model is the reference for the
-  malformed ones -- an early TLAST, a missing TLAST.  pysim exists for the timing model,
-  and timing is only meaningful on transactions the kernel accepts.
+- **pysim runs every scenario its streams can express.**  Each scenario's `scenario.json`
+  says which.  A pysim stream can end a burst early, so the early-TLAST scenario runs, but it
+  cannot omit TLAST, so the missing-TLAST scenario is left to the model and the C++.
 - **Parameters arrive as keyword arguments.**  Every name in `params` is injected into
   `run()`, from `BuildConfig.params` or the default.  `**_` swallows the ones a step does
   not use; keep it, so adding a parameter never breaks a signature.
@@ -130,30 +137,35 @@ One step class checks every stage; the DAG gets one instance per stage:
 @dataclass(kw_only=True)
 class CheckStep(BuildStep):
     stage: str
-    done_artifact: str
-    only: tuple[str, ...] | None = None
+    done_artifacts: tuple[str, ...]
+    which: str | None = None              # a scenario.json flag selecting the scenarios
+    only: tuple[str, ...] | None = None   # or the scenarios by name
     params = {}
 
     @property
     def consumes(self) -> list:
-        return [self.done_artifact, "scenario_list"]
+        return [*self.done_artifacts, "scenario_list"]
 
     @property
     def produces(self) -> dict:
         return {f"check_{self.stage}": Path(f"results/check_{self.stage}.json")}
 
     def run(self, config: BuildConfig, **_) -> dict:
-        report = S.check(config.root_dir / "data", self.stage,
-                         list(self.only) if self.only else None)
+        report = {}
+        for bw in WIDTHS:
+            names = [...]                     # this width's scenarios, filtered by which / only
+            for name, problems in S.check(width_dir(config.root_dir, bw), self.stage,
+                                          names).items():
+                report[f"w{bw}/{name}"] = problems
         ...   # write the report, print PASS/FAIL per scenario
         if failed:
             raise RuntimeError(f"{self.stage}: {len(failed)} scenario(s) differ from the "
                                f"expected response: {sorted(failed)}")
         return {f"check_{self.stage}": out}
 
-dag.add(CheckStep(name="check_model", stage="model", done_artifact="model_done"))
-dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifact="pysim_done",
-                  only=S.WELL_FORMED))
+dag.add(CheckStep(name="check_model", stage="model", done_artifacts=("model_done",)))
+dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifacts=("pysim_done",),
+                  which="pysim"))
 ```
 
 - **`consumes` and `produces` are properties** here, because they depend on the instance.
@@ -170,24 +182,32 @@ dag.add(CheckStep(name="check_pysim", stage="pysim", done_artifact="pysim_done",
 ```python
 @dataclass(kw_only=True)
 class ExtractPyTimingStep(BuildStep):
+    """One whole kernel call, ap_start to return -- the span the cosim report measures."""
+    word_bw: int
     description = "Extract the timing scenario's cycle count from the pysim event log."
-    consumes = ["log"]
-    produces = {"py_timing": Path("results/py_timing.json")}
     params = {"clk_freq": 100e6}
 
-    def run(self, config: BuildConfig, log, clk_freq, **_) -> dict:
-        events: dict[str, float] = {}
-        with open(log, newline="") as f:
-            for row in csv.DictReader(f):
-                events.setdefault(row["event"], float(row["time"]))
-        t0, t1 = events.get("samp_read_begin"), events.get("samp_out_write_end")
-        if t0 is None or t1 is None:
-            raise RuntimeError(f"missing timing events in {log}: {sorted(events)}")
+    @property
+    def consumes(self) -> list:
+        return [f"log_w{self.word_bw}"]
+
+    @property
+    def produces(self) -> dict:
+        return {f"py_timing_w{self.word_bw}": Path(f"results/py_timing_w{self.word_bw}.json")}
+
+    def run(self, config: BuildConfig, clk_freq, **art) -> dict:
+        ...   # read the log; t0, t1 = the first "proc_begin" and "proc_end" events
         ...   # write {"transaction_cycles": round((t1 - t0) * clk_freq), ...}
-        return {"py_timing": out}
+        return {f"py_timing_w{self.word_bw}": out}
+
+for w in WIDTHS:
+    dag.add(ExtractPyTimingStep(name=f"extract_py_timing_w{w}", word_bw=w))
 ```
 
-The event names are the ones the module's Python body logs.  The result's format is the one
+The event names are the ones the module's Python body logs.  **Measure the span the RTL
+measures.**  The cosim report counts one kernel call, so the events bracket the whole body, not
+just its sample loop.  Otherwise a timing parameter silently absorbs the difference -- see the
+example's [calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-was-calibrated).  The result's format is the one
 the framework's `ValidateTimingStep` compares with the co-simulated count -- see
 [Vitis Pattern](./vitis.md#timing-pysim-against-cosim).
 

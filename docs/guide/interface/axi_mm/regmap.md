@@ -157,10 +157,10 @@ Fields are auto-assigned offsets in declaration order, packed tightly with bus-w
 
 ```python
 RegMap({
-    "ap_start": RegField(Bit,        RegAccess.W1S),  # 1 word  → offset 0x00
-    "halted":   RegField(Bit,        RegAccess.R),    # 1 word  → offset 0x04
-    "coeffs":   RegField(CoeffArray, RegAccess.RW),   # 4 words → offset 0x08, 0x0C, 0x10, 0x14
-    "error":    RegField(ErrorCode,  RegAccess.R),    # 1 word  → offset 0x18
+    "ap_start":   RegField(Bit,        RegAccess.W1S),  # 1 word  → offset 0x00
+    "halted":     RegField(Bit,        RegAccess.R),    # 1 word  → offset 0x04
+    "thresholds": RegField(Thresholds, RegAccess.RW),   # 4 words → offset 0x08, 0x0C, 0x10, 0x14
+    "error":      RegField(ErrorCode,  RegAccess.R),    # 1 word  → offset 0x18
 })
 ```
 
@@ -180,11 +180,9 @@ Manually-placed fields establish fixed positions; auto-placed fields fill the ga
 The owning component reads and writes fields using the deserialized Python value, not raw words:
 
 ```python
-self.regmap.set("error",  PolyError.TLAST_EARLY_CMD_HDR)
-self.regmap.set("tx_id",  cmd_hdr.tx_id)
-self.regmap.set("halted", 1)
-
-current_coeffs = self.regmap.get("coeffs")     # DataArray of Float32
+# examples/regmap/simp_fun.py, SimpFun.on_start
+y = self.compute(self.regmap.get("x"), self.regmap.get("a"), self.regmap.get("b"))
+self.regmap.set("y", y)
 ```
 
 Internally each field's backing store is a numpy array of `nwords_per_inst(bus_bw)` words. `get()` calls `schema().deserialize(buffer)`; `set()` calls `value.serialize()` (or wraps a raw value via `schema(value)` first) and stores. Host bus reads/writes touch the same underlying word buffer at the appropriate sub-word offset.
@@ -228,22 +226,22 @@ direct.bind("slave",  regmap_slave)
 Any `DataSchema` may be used as a field. Multi-word schemas occupy consecutive bus-word offsets; the host accesses individual words via LITE transactions, while the owner sees the deserialized value as a single Python object.
 
 ```python
-class CoeffArray(DataArray):
-    ncoeff = 4
-    element_type = Float32
+class Thresholds(DataArray):
+    nthresh = 4
+    element_type = Int32
     static = True
-    max_shape = (ncoeff,)
+    max_shape = (nthresh,)
 
 regmap = RegMap({
-    "coeffs": RegField(CoeffArray, RegAccess.RW),
+    "thresholds": RegField(Thresholds, RegAccess.RW),
 })
 
 # Owner: writes/reads the whole array as one schema instance
-self.regmap.set("coeffs", CoeffArray([1.0, 0.0, 0.5, 0.25]))
-arr = self.regmap.get("coeffs")           # DataArray of Float32, length 4
+self.regmap.set("thresholds", Thresholds([10, 20, 40, 80]))
+arr = self.regmap.get("thresholds")       # DataArray of Int32, length 4
 
 # Host: reads element 2 (one LITE transaction at offset 0x08)
-word2 = yield from master.read_schema(Float32, addr=regmap.offset_of("coeffs") + 0x08)
+word2 = yield from master.read_schema(Int32, addr=regmap.offset_of("thresholds") + 0x08)
 ```
 
 This matches Vitis HLS behavior for `s_axilite` arrays and structs: the host sees `nwords_per_inst` consecutive registers, and the kernel sees the field as a single typed object.
@@ -339,8 +337,8 @@ from waveflow.hw.regmap import RegMap, RegField, RegAccess, RegMapMMIFSlave
 | Declare a generic regmap    | `RegMap({"name": RegField(...), ...}, bitwidth=32)` |
 | Look up offset              | `regmap.offset_of("name")` |
 | Total size in bytes         | `regmap.total_size_bytes()` |
-| Owner-side write            | `regmap.set("error", PolyError.NO_TLAST)` |
-| Owner-side read             | `regmap.get("coeffs")` |
+| Owner-side write            | `regmap.set("y", 11)` |
+| Owner-side read             | `regmap.get("x")` |
 | Create generic slave        | `RegMapMMIFSlave(sim=sim, bitwidth=32, regmap=regmap)` |
 | Bind to crossbar            | `xbar.bind("slave_0", slave_ep, protocol=AXIMMProtocol.LITE)` |
 | Bind direct                 | `direct.bind("slave",  slave_ep)` |

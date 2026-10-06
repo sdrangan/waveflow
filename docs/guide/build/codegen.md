@@ -102,10 +102,11 @@ Schema dependencies must be added before the schemas that reference them. For th
 dag.add(StreamUtilsStep(output_dir="include"))
 
 # Leaves first (no schema dependencies):
-dag.add(DataSchemaStep(PolyErrorField, word_bw_supported=[32, 64], include_dir="include"))
-dag.add(DataSchemaStep(CoeffArray,     word_bw_supported=[32, 64], include_dir="include"))
+dag.add(DataSchemaStep(PolyErrorField,   word_bw_supported=[32, 64], include_dir="include"))
+dag.add(DataSchemaStep(PolyCmdTypeField, word_bw_supported=[32, 64], include_dir="include"))
+dag.add(DataSchemaStep(CoeffArray,       word_bw_supported=[32, 64], include_dir="include"))
 
-# Containers next:
+# Containers next (PolyCmdHdr carries the CoeffArray):
 dag.add(DataSchemaStep(PolyCmdHdr,  word_bw_supported=[32, 64], include_dir="include"))
 dag.add(DataSchemaStep(PolyRespHdr, word_bw_supported=[32, 64], include_dir="include"))
 ```
@@ -197,7 +198,7 @@ def gen_vitis_code(example_dir, include_dir="include"):
 
     schema_steps = [
         dag.add(DataSchemaStep(cls, word_bw_supported=[32, 64], include_dir=include_dir))
-        for cls in [PolyErrorField, CoeffArray, PolyCmdHdr, PolyRespHdr]
+        for cls in [PolyErrorField, PolyCmdTypeField, CoeffArray, PolyCmdHdr, PolyRespHdr]
     ]
 
     dag.add(ArrayUtilsStep(Float32, [32, 64]))

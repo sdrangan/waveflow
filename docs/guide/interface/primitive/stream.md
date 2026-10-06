@@ -154,12 +154,15 @@ def evaluate(self, cmd_hdr, s_in, m_out):
     yield from m_out.write_pipelined(
         array(Float32, y), t_out_start, ii=self.proc_ii
     )
-    if len(samp_in) != cmd_hdr.nsamp:
-        return PolyError.WRONG_NSAMP
-    return PolyError.NO_ERROR
 ```
 
 Set `proc_ii` and `proc_latency` on the component to match values reported by HLS synthesis for the `evaluate` loop.
+
+`get_pipelined` always returns `count` elements: if the burst ended early, the missing ones come
+back as zeros.  A body that must **detect** a short burst -- to report an early TLAST -- reads the
+raw words with `get(nwords_max=...)`, counts them, and unpacks with `read_array`, as
+`PolyAccel.body` in [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py)
+does.
 
 ### Example: point-to-point stream
 

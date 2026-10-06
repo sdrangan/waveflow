@@ -22,15 +22,26 @@ This keeps timing checks reproducible and machine-readable: build runs always pr
 
 ## Example
 
-From [`examples/stream_inband/poly_build.py`](../../../examples/stream_inband/poly_build.py), the timing-check segment wires the three-step chain:
+From [`examples/stream_inband/poly_build.py`](../../../examples/stream_inband/poly_build.py), the timing-check segment wires the three-step chain, once per stream width:
 
 ```python
-outer_dag.add(ExtractPyTimingStep(...))
-outer_dag.add(ExtractCosimTimingStep(top=top_name, report_dir_artifact="report_dir"))
-outer_dag.add(ValidateTimingStep(tolerance_cycles=timing_tol_cycles))
+for w in WIDTHS:
+    dag.add(ExtractPyTimingStep(name=f"extract_py_timing_w{w}", word_bw=w))
+    dag.add(ExtractCosimTimingStep(
+        name=f"extract_cosim_timing_w{w}", top=TOPS[w],
+        report_dir_artifact=f"report_dir_w{w}", cosim_timing_artifact=f"cosim_timing_w{w}",
+        output_path=f"results/cosim_timing_w{w}.json"))
+    dag.add(ValidateTimingStep(
+        name=f"validate_timing_w{w}", py_timing_artifact=f"py_timing_w{w}",
+        cosim_timing_artifact=f"cosim_timing_w{w}", tolerance_cycles=20,
+        output_path=f"results/timing_verdict_w{w}.json",
+        verdict_artifact=f"timing_verdict_w{w}"))
 ```
 
-On the poly reference run from PR #31, the recorded result reports a `delta=4` cycle difference between Python and RTL cosim.
+On that example pysim predicts 147 cycles against cosim's 152 at 32 bits (delta 5), and 94 against
+94 at 64 bits -- both measured over one whole kernel call.  The example's
+[calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-was-calibrated)
+shows why the two sides must measure the same span.
 
 ## Quick reference
 
