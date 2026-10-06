@@ -23,11 +23,18 @@ Sample `n` of a frame travels on lane `n % R` at word `n // R`, so a frame enter
 
 ## Inside the core
 
-```
-lanes in --> cast --> input transposer --> stage 1 --> stage 2 --> ... --> stage S --> digit-reversal --> lanes out
-                      (swap: a chain of       |  radix-4 butterflies    |                reorder
-                       commutators)           |  + twiddle rotation     |
-                                              |  + commutator           |
+```mermaid
+flowchart LR
+  in(["lanes in<br/>R samples / cycle"]) --> cast[cast]
+  cast --> swap["input transposer<br/>(swap: a chain of commutators)"]
+  swap --> s1[stage 1]
+  s1 --> s2[stage 2]
+  s2 -.-> sS[stage S]
+  sS --> dr["digit-reversal<br/>reorder"]
+  dr --> out(["lanes out<br/>R samples / cycle"])
+  stg["each stage:<br/>radix-4 butterflies<br/>+ twiddle rotation<br/>+ commutator"] -.- s1
+  stg -.- s2
+  stg -.- sS
 ```
 
 With `S = log4 L` stages:
