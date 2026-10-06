@@ -356,4 +356,5 @@ examples/vitis_fft/gen/
 examples/vitis_fft/xsi/
 examples/vitis_fft/vectors/
 examples/vitis_fft/work/
+/work/
 examples/vitis_fft/vitis_fft_proj/

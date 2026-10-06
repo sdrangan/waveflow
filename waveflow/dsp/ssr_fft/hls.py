@@ -13,6 +13,7 @@ So a format can never be written twice: Python derives it once and both backends
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from waveflow.build.build import BuildConfig
@@ -126,12 +127,35 @@ def _stage_struct(geo: Geometry, s: int) -> str:
     return "\n".join(lines)
 
 
+def lane_edges(geo: Geometry) -> list[EdgeType]:
+    """The boundary lanes: one complex sample per word, in (``lane_in``) and out (``lane_out``)."""
+    return [EdgeType("lane_in", geo.in_fmt, 1), EdgeType("lane_out", geo.out_fmt, 1)]
+
+
+def _lane_struct(e: EdgeType) -> str:
+    ns = _array_utils_namespace(e.elem)
+    return "\n".join([
+        f"struct e_{e.name} {{",
+        f"    typedef {ns}::value_type value_type;",
+        f"    static const int W = {e.bitwidth};",
+        "    static void read(hls::stream<ap_uint<W> >& s, value_type* x) {",
+        "#pragma HLS INLINE",
+        f"        {ns}::read_stream_lane<W>(s, x);",
+        "    }",
+        "    static void write(hls::stream<ap_uint<W> >& s, const value_type* y) {",
+        "#pragma HLS INLINE",
+        f"        {ns}::write_stream_lane<W>(y, s);",
+        "    }",
+        "};",
+    ])
+
+
 def render_config(geo: Geometry) -> str:
     """The whole configuration header for ``geo``."""
     edges = edge_types(geo)
     ns = config_namespace(geo)
     guard = f"WAVEFLOW_{ns.upper()}_H"
-    incs = sorted({_array_utils_filename(e.elem) for e in edges})
+    incs = sorted({_array_utils_filename(e.elem) for e in edges + lane_edges(geo)})
     out = [
         f"#ifndef {guard}",
         f"#define {guard}",
@@ -149,20 +173,133 @@ def render_config(geo: Geometry) -> str:
         "",
     ]
     out += [_edge_struct(e) + "\n" for e in edges]
+    out += [_lane_struct(e) + "\n" for e in lane_edges(geo)]
     out += [_stage_struct(geo, s) + "\n" for s in range(geo.S)]
     out += [f"}}  // namespace {ns}", "", f"#endif  // {guard}", ""]
     return "\n".join(out)
 
 
-def write_sources(geo: Geometry, root: Path | str, include_dir: str = ".") -> Path:
+@dataclass(frozen=True)
+class TaskInstance:
+    """One ``hls::task`` of the pipeline, in order.
+
+    ``inst`` names it (the wrapper is ``<namespace>_<inst>``, so the RTL instance is
+    ``<namespace>_<inst>_U0`` -- predictable, unlike a template instantiation's); ``kind`` is which
+    body; ``call`` the templated body it wraps; ``params`` its C++ parameters, in order, as
+    ``(name, type)``; ``d``/``s`` the commutator block size / stage index where they apply.
+    """
+    inst: str
+    kind: str
+    call: str
+    params: tuple[tuple[str, str], ...]
+    d: int = 0
+    s: int = -1
+
+
+REORDERS = ("sob", "pingpong")
+
+
+def task_instances(geo: Geometry, *, natural: bool = True, reorder: str = "sob"
+                   ) -> list[TaskInstance]:
+    """Every task of one SSR FFT, in pipeline order, from the boundary lanes in to the lanes out.
+
+    ``lanes_in`` -> the transposer's ``S - 1`` commutators -> per stage: the stage, then (all but
+    the last) its commutator -> with ``natural``, the reorder: its commutator ``rc``, then either
+    the SOB writer ``rw`` and reader ``rr`` (``reorder="sob"``) or one ping-pong task ``rp``
+    (``"pingpong"``) -> ``lanes_out``.
+    """
+    if reorder not in REORDERS:
+        raise ValueError(f"reorder={reorder!r}: one of {REORDERS}")
+    from .model import reorder_d
+
+    ns = config_namespace(geo)
+
+    def stream(edge: str) -> str:
+        return f"hls::stream<ap_uint<{ns}::e_{edge}::W> >&"
+
+    lane_in = [(f"s_in_{j}", stream("lane_in")) for j in range(geo.R)]
+    lane_out = [(f"m_out_{j}", stream("lane_out")) for j in range(geo.R)]
+    sob = f"hls::stream_of_blocks<ap_uint<{ns}::e_rc::W>[{geo.n_words}]>&"
+    out = [TaskInstance("lanes_in", "lanes_in",
+                        f"ssr_fft_hls::ssr_fft_lanes_in_task<{ns}::e_lane_in, {ns}::e_in>",
+                        (*lane_in, ("m_out", stream("in"))))]
+    prev = "in"
+    for k, d in enumerate(geo.transposer_ds):
+        out.append(TaskInstance(f"tp{k}", "commutator",
+                                f"ssr_fft_hls::ssr_fft_commutator_task<{ns}::e_tp{k}, {d}>",
+                                (("s_in", stream(prev)), ("m_out", stream(f"tp{k}"))), d=d))
+        prev = f"tp{k}"
+    for s in range(geo.S):
+        out.append(TaskInstance(f"st{s}", "stage", f"ssr_fft_hls::ssr_fft_stage_task<{ns}::st{s}>",
+                                (("s_in", stream(prev)), ("m_out", stream(f"st{s}"))), s=s))
+        prev = f"st{s}"
+        if s < geo.S - 1:
+            d = geo.stage_d(s)
+            out.append(TaskInstance(f"cm{s}", "commutator",
+                                    f"ssr_fft_hls::ssr_fft_commutator_task<{ns}::e_cm{s}, {d}>",
+                                    (("s_in", stream(prev)), ("m_out", stream(f"cm{s}"))), d=d))
+            prev = f"cm{s}"
+    if natural:
+        d = reorder_d(geo)
+        out.append(TaskInstance("rc", "commutator",
+                                f"ssr_fft_hls::ssr_fft_commutator_task<{ns}::e_rc, {d}>",
+                                (("s_in", stream(prev)), ("m_out", stream("rc"))), d=d))
+        if reorder == "pingpong":
+            out.append(TaskInstance(
+                "rp", "reorder_pingpong",
+                f"ssr_fft_hls::ssr_fft_reorder_pingpong_task<{ns}::e_rc, {geo.n_words}, {geo.S - 1}>",
+                (("s_in", stream("rc")), ("m_out", stream("out"))), d=geo.n_words))
+        else:
+            out.append(TaskInstance(
+                "rw", "reorder_write",
+                f"ssr_fft_hls::ssr_fft_reorder_write_task<{ns}::e_rc, {geo.n_words}, {geo.S - 1}>",
+                (("s_in", stream("rc")), ("m_blk", sob))))
+            out.append(TaskInstance(
+                "rr", "reorder_read",
+                f"ssr_fft_hls::ssr_fft_reorder_read_task<{ns}::e_out, {geo.n_words}>",
+                (("s_blk", sob), ("m_out", stream("out")))))
+        prev = "out"
+    out.append(TaskInstance("lanes_out", "lanes_out",
+                            f"ssr_fft_hls::ssr_fft_lanes_out_task<{ns}::e_{prev}, {ns}::e_lane_out>",
+                            (("s_in", stream(prev)), *lane_out)))
+    return out
+
+
+def wrappers_header(geo: Geometry) -> str:
+    return f"{config_namespace(geo)}_tasks.h"
+
+
+def render_wrappers(geo: Geometry, *, natural: bool = True, reorder: str = "sob") -> str:
+    """One plain function per task: what the generated top instantiates as an ``hls::task``."""
+    ns = config_namespace(geo)
+    guard = f"WAVEFLOW_{ns.upper()}_TASKS_H"
+    out = [f"#ifndef {guard}", f"#define {guard}",
+           f"// Generated by waveflow.dsp.ssr_fft.hls for {config_key(geo)} -- do not edit.",
+           "// One wrapper per task, so each RTL instance is <wrapper>_U0.",
+           '#include "hls_stream.h"', '#include "hls_streamofblocks.h"',
+           f'#include "{config_header(geo)}"', f'#include "{TASKS_H}"', ""]
+    for t in task_instances(geo, natural=natural, reorder=reorder):
+        args = ", ".join(f"{ty} {nm}" for nm, ty in t.params)
+        names = ", ".join(nm for nm, _ in t.params)
+        out += [f"static void {ns}_{t.inst}({args}) {{", f"    {t.call}({names});", "}", ""]
+    out += [f"#endif  // {guard}", ""]
+    return "\n".join(out)
+
+
+def write_sources(geo: Geometry, root: Path | str, include_dir: str = ".", *,
+                  natural: bool = True, reorder: str = "sob") -> Path:
     """Write everything the task bodies include into ``root/include_dir``: streamutils, every
-    edge's array utils, the configuration header, and a copy of the task bodies."""
+    edge's array utils, the configuration header, the task wrappers, and the task bodies."""
     root = Path(root)
     inc = root / include_dir
     inc.mkdir(parents=True, exist_ok=True)
     StreamUtilsStep(output_dir=include_dir).run(BuildConfig(root_dir=root))
-    for e in edge_types(geo):
-        gen_array_utils(e.elem, [e.bitwidth], cfg=BuildConfig(root_dir=inc))
+    widths: dict = {}
+    for e in edge_types(geo) + lane_edges(geo):
+        widths.setdefault(e.elem, set()).add(e.bitwidth)
+    for elem, ws in widths.items():
+        gen_array_utils(elem, sorted(ws), cfg=BuildConfig(root_dir=inc))
     (inc / config_header(geo)).write_text(render_config(geo), encoding="utf-8")
+    (inc / wrappers_header(geo)).write_text(render_wrappers(geo, natural=natural, reorder=reorder), encoding="utf-8")
     shutil.copy(SRC_DIR / TASKS_H, inc / TASKS_H)
     return inc

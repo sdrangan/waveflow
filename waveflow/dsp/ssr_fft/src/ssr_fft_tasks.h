@@ -27,16 +27,24 @@
 //   C::ex_re/ex_im(k)   the radix-4 constants W_4^k;  C::tw_re/tw_im(j)  the stage's twiddle ROM
 // A commutator takes its edge E and its block size D.
 //
-// RESET.  Every body begins each tick with a blocking read (or, in the commutator, idles until data
-// arrives), so nothing advances while the inputs are empty at reset; build with
-// `config_rtl -reset state` anyway, since the statics are otherwise only power-on values.
+// NO BLOCKING READ AT A LOOP HEAD.  Every `while (1)` loop tests `empty()` and reads only when a
+// word is there; an iteration with nothing to read does nothing.  A blocking read would freeze the
+// stall-style pipeline (`style = flp` is refused: "more than one exit branch") with the iterations
+// already in flight inside it -- so when a burst ends, its last words sit in a stage's pipeline
+// registers until more input comes, the next commutator waits mid-group for them, and the burst's
+// tail never leaves.  Measured in XSI at L = 64: 8 frames in, 5 out; st0 had read 128 words and
+// written 125.  Writes stay blocking: a full output must stall the task, that is back-pressure.
+//
+// RESET.  Nothing is written that was not read, so nothing advances while the inputs are empty at
+// reset; build with `config_rtl -reset state` anyway, since the statics are otherwise only
+// power-on values.
 #include <ap_fixed.h>
 #include <ap_int.h>
 #include <hls_stream.h>
 #include <hls_streamofblocks.h>
 #include <complex>
 
-namespace ssr_fft {
+namespace ssr_fft_hls {
 
 static const int R = 4;
 
@@ -99,17 +107,20 @@ inline void ssr_butterfly(const typename C::in_e::value_type x[R], typename C::o
 template <typename C>
 void ssr_fft_stage_task(hls::stream<ap_uint<C::in_e::W> >& s_in,
                         hls::stream<ap_uint<C::out_e::W> >& s_out) {
+#pragma HLS INLINE
     static int m = 0;                          // butterfly index within the sub-transform
     while (1) {
 #pragma HLS PIPELINE II = 1
-        typename C::in_e::value_type x[R];
+        if (!s_in.empty()) {                    // see "no blocking read at a loop head"
+            typename C::in_e::value_type x[R];
 #pragma HLS ARRAY_PARTITION variable = x complete
-        typename C::out_e::value_type y[R];
+            typename C::out_e::value_type y[R];
 #pragma HLS ARRAY_PARTITION variable = y complete
-        C::in_e::read(s_in, x);                 // BLOCKING, and first: see the reset note
-        ssr_butterfly<C>(x, y, m);
-        C::out_e::write(s_out, y);
-        m = (m == C::MC - 1) ? 0 : m + 1;
+            C::in_e::read(s_in, x);
+            ssr_butterfly<C>(x, y, m);
+            C::out_e::write(s_out, y);
+            m = (m == C::MC - 1) ? 0 : m + 1;
+        }
     }
 }
 
@@ -156,6 +167,7 @@ struct ssr_bits<1> {
 // path and cost 1.3 ns of slack at 250 MHz.
 template <typename E, int D>
 void ssr_fft_commutator_task(hls::stream<ap_uint<E::W> >& s_in, hls::stream<ap_uint<E::W> >& s_out) {
+#pragma HLS INLINE
     typedef typename E::value_type T;
     typedef ap_uint<ssr_bits<R * D>::value> cnt_t;
     typedef ap_uint<ssr_bits<3 * D>::value> ptr_t;
@@ -193,7 +205,9 @@ void ssr_fft_commutator_task(hls::stream<ap_uint<E::W> >& s_in, hls::stream<ap_u
         }
         data = dt;
         ticking = tk;
-        if (tk) {
+        // A data group with no word waiting skips the tick (cycle_ref: "stall, no tick"), so the
+        // iterations in flight still finish -- see "no blocking read at a loop head".
+        if (tk && (!dt || !s_in.empty())) {
             T x[R];
 #pragma HLS ARRAY_PARTITION variable = x complete
             if (dt) {
@@ -249,6 +263,7 @@ void ssr_fft_commutator_task(hls::stream<ap_uint<E::W> >& s_in, hls::stream<ap_u
 template <typename E, int NW, int ND>
 void ssr_fft_reorder_write_task(hls::stream<ap_uint<E::W> >& s_in,
                                 hls::stream_of_blocks<ap_uint<E::W>[NW]>& m_blk) {
+#pragma HLS INLINE
     hls::write_lock<ap_uint<E::W>[NW]> blk(m_blk);
     for (int b = 0; b < NW; b++) {
 #pragma HLS PIPELINE II = 1
@@ -266,6 +281,7 @@ void ssr_fft_reorder_write_task(hls::stream<ap_uint<E::W> >& s_in,
 template <typename E, int NW>
 void ssr_fft_reorder_read_task(hls::stream_of_blocks<ap_uint<E::W>[NW]>& s_blk,
                                hls::stream<ap_uint<E::W> >& s_out) {
+#pragma HLS INLINE
     hls::read_lock<ap_uint<E::W>[NW]> blk(s_blk);
     for (int w = 0; w < NW; w++) {
 #pragma HLS PIPELINE II = 1
@@ -273,6 +289,102 @@ void ssr_fft_reorder_read_task(hls::stream_of_blocks<ap_uint<E::W>[NW]>& s_blk,
     }
 }
 
-}  // namespace ssr_fft
+
+// The reorder's second half as ONE free-running task: a two-frame buffer inside the task instead of
+// a stream_of_blocks between two.  The write side fills one half at the natural word addresses
+// while the read side streams the other half out in order; a half changes hands when it is full /
+// empty.  Same buffer, same permutation as the SOB pair -- without a lock handover per frame, which
+// a single-firing reader pays every frame (csynth: L/R + 3 cycles).
+//
+// Both sides run every cycle they can: the read side whenever a full half is waiting, the write side
+// whenever a word is waiting and its half is not full.  Nothing is written that was not read.
+template <typename E, int NW, int ND>
+void ssr_fft_reorder_pingpong_task(hls::stream<ap_uint<E::W> >& s_in,
+                                   hls::stream<ap_uint<E::W> >& s_out) {
+#pragma HLS INLINE
+    static ap_uint<E::W> buf[2 * NW];
+#pragma HLS DEPENDENCE variable = buf type = inter false
+#pragma HLS DEPENDENCE variable = buf type = intra false
+    static ap_uint<ssr_bits<NW>::value + 1> wcnt = 0, rcnt = 0;
+    static bool whalf = false, rhalf = false;
+    static bool full0 = false, full1 = false;
+
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        bool wfull = whalf ? full1 : full0;
+        bool rfull = rhalf ? full1 : full0;
+        bool do_w = !wfull && !s_in.empty();
+        bool do_r = rfull;
+        if (do_r) {
+            s_out.write(buf[(rhalf ? NW : 0) + (int)rcnt]);
+        }
+        if (do_w) {
+            ap_uint<2 * ND> bi = (int)wcnt, wi = 0;
+            wi.range(2 * ND - 1, 2 * ND - 2) = bi.range(2 * ND - 1, 2 * ND - 2);
+            for (int i = 0; i < ND - 1; i++) {
+#pragma HLS UNROLL
+                wi.range(2 * i + 1, 2 * i) = bi.range(2 * (ND - 2 - i) + 1, 2 * (ND - 2 - i));
+            }
+            buf[(whalf ? NW : 0) + (int)wi] = s_in.read();
+        }
+        bool r_done = do_r && rcnt == NW - 1;
+        bool w_done = do_w && wcnt == NW - 1;
+        if (do_r) rcnt = r_done ? 0 : (int)rcnt + 1;
+        if (do_w) wcnt = w_done ? 0 : (int)wcnt + 1;
+        // A half empties (read done) and/or fills (write done); the two are different halves.
+        if (r_done) {
+            if (rhalf) full1 = false; else full0 = false;
+            rhalf = !rhalf;
+        }
+        if (w_done) {
+            if (whalf) full1 = true; else full0 = true;
+            whalf = !whalf;
+        }
+    }
+}
+
+// The boundary: R lane ports, one complex sample per word each -- the port group of VitisFft, and of
+// the XSI BFMs (64-bit words) -- joined into one RadixWord stream on the way in, split on the way out.
+// Lane j carries samples j, j+R, j+2R, ... : word k of the RadixWord holds samples kR .. kR+R-1.
+// EL is the lane's edge adaptor (W = one sample), EW the word's.
+template <typename EL, typename EW>
+void ssr_fft_lanes_in_task(hls::stream<ap_uint<EL::W> >& s_in_0, hls::stream<ap_uint<EL::W> >& s_in_1,
+                           hls::stream<ap_uint<EL::W> >& s_in_2, hls::stream<ap_uint<EL::W> >& s_in_3,
+                           hls::stream<ap_uint<EW::W> >& m_out) {
+#pragma HLS INLINE
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        typename EW::value_type x[R];
+#pragma HLS ARRAY_PARTITION variable = x complete
+        if (!s_in_0.empty() && !s_in_1.empty() && !s_in_2.empty() && !s_in_3.empty()) {
+            EL::read(s_in_0, &x[0]);
+            EL::read(s_in_1, &x[1]);
+            EL::read(s_in_2, &x[2]);
+            EL::read(s_in_3, &x[3]);
+            EW::write(m_out, x);
+        }
+    }
+}
+
+template <typename EW, typename EL>
+void ssr_fft_lanes_out_task(hls::stream<ap_uint<EW::W> >& s_in,
+                            hls::stream<ap_uint<EL::W> >& m_out_0, hls::stream<ap_uint<EL::W> >& m_out_1,
+                            hls::stream<ap_uint<EL::W> >& m_out_2, hls::stream<ap_uint<EL::W> >& m_out_3) {
+#pragma HLS INLINE
+    while (1) {
+#pragma HLS PIPELINE II = 1
+        typename EW::value_type y[R];
+#pragma HLS ARRAY_PARTITION variable = y complete
+        if (!s_in.empty()) {
+            EW::read(s_in, y);
+            EL::write(m_out_0, &y[0]);
+            EL::write(m_out_1, &y[1]);
+            EL::write(m_out_2, &y[2]);
+            EL::write(m_out_3, &y[3]);
+        }
+    }
+}
+
+}  // namespace ssr_fft_hls
 
 #endif  // WAVEFLOW_DSP_SSR_FFT_TASKS_H

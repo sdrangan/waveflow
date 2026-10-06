@@ -23,27 +23,17 @@ PART = "xczu48dr-ffvg1517-2-e"
 
 
 def chain_tasks(geo: Geometry, natural: bool = True) -> list[tuple[str, str, str]]:
-    """``(instance, function, out edge)`` per task, in order; each reads the previous one's edge.
+    """``(instance, wrapper, out edge)`` per task, in order; each reads the previous one's edge.
 
-    With ``natural``, the reorder follows the last stage: its commutator (edge ``rc``), the SOB
-    writer (into the block channel ``blk``) and the SOB reader (edge ``out``)."""
-    from waveflow.dsp.ssr_fft.model import reorder_d
+    The same generated wrappers the real top instantiates (:func:`hls.task_instances`), minus the
+    two lane adaptors: this harness drives the first word stream and reads the last directly.  With
+    ``natural``, the reorder follows: its commutator ``rc``, the SOB writer (into ``blk``) and the
+    reader (edge ``out``)."""
     ns = hls.config_namespace(geo)
     out = []
-    for k, d in enumerate(geo.transposer_ds):
-        out.append((f"t_tp{k}", f"ssr_fft::ssr_fft_commutator_task<{ns}::e_tp{k}, {d}>", f"tp{k}"))
-    for s in range(geo.S):
-        out.append((f"t_st{s}", f"ssr_fft::ssr_fft_stage_task<{ns}::st{s}>", f"st{s}"))
-        if s < geo.S - 1:
-            out.append((f"t_cm{s}",
-                        f"ssr_fft::ssr_fft_commutator_task<{ns}::e_cm{s}, {geo.stage_d(s)}>",
-                        f"cm{s}"))
-    if natural:
-        nw = geo.n_words
-        out.append(("t_rc", f"ssr_fft::ssr_fft_commutator_task<{ns}::e_rc, {reorder_d(geo)}>", "rc"))
-        out.append(("t_rw", f"ssr_fft::ssr_fft_reorder_write_task<{ns}::e_rc, {nw}, {geo.S - 1}>",
-                    "blk"))
-        out.append(("t_rr", f"ssr_fft::ssr_fft_reorder_read_task<{ns}::e_out, {nw}>", "out"))
+    for t in hls.task_instances(geo, natural=natural)[1:-1]:
+        edge = {"reorder_write": "blk", "reorder_read": "out"}.get(t.kind, t.inst)
+        out.append((f"t_{t.inst}", f"{ns}_{t.inst}", edge))
     return out
 
 
@@ -58,8 +48,7 @@ def render_top(geo: Geometry, name: str = "chain_top", natural: bool = True) -> 
     lines = [
         '#include "hls_task.h"',
         '#include "hls_streamofblocks.h"',
-        f'#include "{hls.config_header(geo)}"',
-        f'#include "{hls.TASKS_H}"',
+        f'#include "{hls.wrappers_header(geo)}"',
         "",
         f"void {name}(hls::stream<ap_uint<{ns}::e_in::W> >& s_in,",
         f"           hls::stream<ap_uint<{ns}::e_{last}::W> >& s_out) {{",
@@ -177,7 +166,7 @@ def frames(geo: Geometry, n_frames: int, seed: int = 0) -> tuple[np.ndarray, np.
 
 def write(geo: Geometry, root: Path, n_frames: int, *, csynth: bool, natural: bool = True) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    hls.write_sources(geo, root)
+    hls.write_sources(geo, root, natural=natural)
     (root / "top.cpp").write_text(render_top(geo, natural=natural), encoding="utf-8")
     (root / "tb.cpp").write_text(render_tb(geo, n_frames, natural=natural), encoding="utf-8")
     (root / "run.tcl").write_text(render_tcl(geo, csynth=csynth), encoding="utf-8")

@@ -357,7 +357,24 @@ per-call processes.  That is the argument for F1 onward, not for more patches.
 - **Gate:** composing the stages reproduces `fft_general` and every existing golden, bit for bit, at
   `L = 16 … 4096`; the existing `tests/vitis_l1/fft/` suite still passes unchanged.
 
-### F2 — one stage in HLS
+### F2 — one stage in HLS  ✅ DONE (2026-10-05)
+
+> **As built**: `waveflow/dsp/ssr_fft/src/ssr_fft_tasks.h` (generic bodies), `hls.py` (per-config
+> header: edge adaptors over the generated `<elem>_array_utils`, stage formats, twiddle ROMs, and
+> one plain-named wrapper per task so each RTL instance is `<wrapper>_U0`).  Gate
+> `tests/dsp/ssr_fft/test_hls_chain.py` (`-m vitis`): the whole chain, not one stage, bit-exact
+> frame after frame in csim at L = 16, 64, 1024; L = 64 csynth: every loop II = 1, worst slack
+> +0.06 ns at 250 MHz, 24 DSPs (the vendor's 12·(S−1)).
+>
+> Findings: (1) **the digit reversal is not a word permutation** -- a word's R lanes land on the
+> same lane of R different words -- so the reorder is a whole-frame commutator (`D = L/R²`) then a
+> word permutation (keep the top base-R digit, reverse the rest; identity at L = 16, 64).
+> (2) The commutator's count of samples inside put the output path in the group decision's timing
+> path (−1.29 ns); a one-bit "last group was data" flag replaces it (one bubble group always
+> suffices), +0.24 ns.  (3) **csim of the SOB reorder is unreliable**: frames corrupt only when a
+> commutator back-pressures into the SOB writer, though each part is exact alone -- judged at RTL.
+> (4) csynth puts the SOB reader at L/R + 3 cycles a frame (single-firing re-entry); a single-task
+> ping-pong (`ssr_fft_reorder_pingpong_task`) is written as the fallback.
 
 - `SsrStage` and `SsrCommutator` task bodies.  Unit csim against `model.stage` on wire-ordered words.
 - **Gate:** bit-exact per stage; csynth II = 1 and timing met at 250 MHz on the RFSoC part.
