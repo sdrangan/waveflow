@@ -2,14 +2,14 @@
 title: FFT timing results
 parent: A vendor FFT, frames in and out
 nav_order: 2
-summary: "What the RTL measured on the RFSoC 4x2, L = 16 to 4096: the vendor core processes one frame at a time, its per-sample cost steps from 7.5 to 10 cycles per L/R across an implementation change, and an isolated frame's latency depends on its arrival phase against a free-running commutator. How the timing model is calibrated on the platform -- an exact interval, a mean processing delay, the spread as its stated error, a lookup per length -- how well the pysim tracks the RTL, what an XSI run costs against it, and how to extend the calibration for a design-space exploration."
+summary: "What the RTL measured on the RFSoC 4x2, L = 16 to 4096: the vendor core as VitisFft connects it (fft<>) runs at a tenth of its architecture's rate -- and how that was found -- its per-sample cost steps from 7.5 to 10 cycles per L/R across an implementation change, and an isolated frame's latency depends on its arrival phase against a free-running commutator. How the timing model is calibrated on the platform -- an exact interval, a mean processing delay, the spread as its stated error, a lookup per length -- how well the pysim tracks the RTL, what an XSI run costs against it, and how to extend the calibration for a design-space exploration."
 ---
 
 # Timing
 
 All numbers are RTL, XSI, the RFSoC 4x2 target (`xczu48dr`) at 250 MHz, read at the ports.
 
-## A frame-at-a-time core
+## The core as `VitisFft` connects it
 
 ![Cycles per L/R words against L: the frame interval back to back, and the processing span of an isolated frame with its min-max range](images/timing_per_sample.svg)
 
@@ -27,12 +27,31 @@ sit near 1. This one sits at 7.5 to 10, and its frame interval is about its late
 (cycles; the processing span runs from a frame's last input word to its last output word, so it
 includes the output transfer.)
 
-**Frames do not overlap.** Each internal process needs only about `2.5 L/R` cycles per frame, but the
-core's stages are nested dataflow regions, so one frame occupies the whole chain
-([why](../../guide/vitis_l1/fft/index.md#one-frame-at-a-time)). The same holds for the vendor's bare
-array-port core co-simulated without any of our code, and wrapping it the way AMD's L2 kernel does
-changes nothing. A design that needs the nominal 4 samples per cycle *sustained* needs parallel
-instances, or a streaming FFT written as a flat chain of stage modules.
+**Frames barely overlap -- as this module connects the core.** `VitisFft` calls `fft<>`, the vendor
+guide's non-streaming connection, which serializes frames; the library's per-call commutators would
+floor even the streaming connection near 2.5 `L/R`
+([why](../../guide/vitis_l1/fft/index.md#why-vitisfft-is-far-below-the-architectures-rate)). The same
+arithmetic written as free-running tasks, `waveflow.dsp.ssr_fft.SsrFft`, takes a new frame every `L/R`
+cycles at every length below -- 256 instead of 2,556 at `L = 1024`, on the same 48 DSPs.
+
+### How this was found
+
+The first version of this page said the core is frame-at-a-time *by the library's construction*, and
+explained it: nested dataflow regions, one frame occupying the chain. The explanation fit the internal
+FIFO traces and was wrong.
+
+- **It passed everything.** The body was bit-exact with the vendor goldens, synthesized, ran under XSI,
+  and its timing model was calibrated to within a cycle of the RTL. None of that checks *rate*.
+- **The rate was 10 times the vendor's stated one.** AMD's L1 guide gives II = `L/R` (257 at
+  `L = 1024`); this measured 2,556. That gap is the bug report, and it was not read as one: the
+  measurement was explained instead of compared.
+- **What settled it** was a side-by-side cosim of the guide's two connections -- `fft<>` (what the
+  body used, written with AI assistance) against `innerFFT` in a DATAFLOW region -- then patching the
+  library's commutators to run until their frame is out: 2,556, then ~1,420, then 878 cycles a frame,
+  bit-exact throughout (`plans/witness/vitis_fft_streaming/`).
+
+The lesson is general: for vendor IP, write the stated performance next to the first measurement, and
+treat a large gap as a bug in the integration until it is disproved.
 
 **The cost steps across an implementation change.** From 256 to 1024 the per-sample cost rises from
 7.5 to 10 cycles per `L/R`, and stays at 10 at 4096: there Vitis moves the twiddles into a ROM and the

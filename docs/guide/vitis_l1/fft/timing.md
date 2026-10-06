@@ -130,12 +130,12 @@ ports (`TVALID && TREADY`) off the waveform. On the RFSoC 4x2 at 250 MHz:
 | 64 | 120 | 133 (121 – 139) |
 | 256 | 480 | 519 (454 – 548) |
 
-- **Frame-at-a-time, by the library's construction.** The interval is about the latency at every
-  size, including the vendor's bare array-port core (1477 / 1478 at `L = 1024`). Each process in the
-  core needs only ~2.5 `L/R` cycles per frame, but the stages are nested dataflow regions, so one frame
-  occupies the whole chain. Wrapping the core the way AMD's L2 kernel does -- the frame loop inside one
-  region -- does not change it. More throughput means parallel instances, or a flat chain of stage
-  modules.
+- **The interval is about the latency -- as `VitisFft` connects the core.** Its body calls
+  `fft<>`, the vendor guide's *non-streaming connection*, which serializes frames; the vendor's bare
+  array-port core does the same (1477 / 1478 at `L = 1024`). The *streaming connection* (`innerFFT`
+  in a DATAFLOW region) overlaps frames, but the library's per-call commutators still floor the
+  interval near 2.5 `L/R` -- see [why](index.md#why-vitisfft-is-far-below-the-architectures-rate).
+  `waveflow.dsp.ssr_fft.SsrFft`, the same arithmetic as free-running tasks, reaches `L/R`.
 - **Latency depends on arrival phase.** The core's input transposer runs a commutator on a
   free-running internal cycle; an isolated frame out of step with it waits up to a period inside the
   transposer. Back to back, frames stay in step and the interval is exact. The first frame after reset

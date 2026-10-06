@@ -63,7 +63,7 @@ python -m examples.vitis_fft.vitis_fft_figures               # redraw this examp
 ## The pages
 
 - [The testbench](test.md) -- the graph, the two scenarios, how the RTL is timed, the gates.
-- [Timing](timing.md) -- what the RTL measured, why the core is frame-at-a-time and its latency
+- [Timing](timing.md) -- what the RTL measured, why the core runs at a tenth of its rate and its latency
   depends on arrival phase, the calibrated model and its error, and what XSI costs against it.
 - [Resources](resource.md) -- what the core costs per length, and how resource records reach the
   platform.

@@ -477,10 +477,13 @@ the `axpy` FMA contraction are real findings and worth an issue each.
 
 > **Status (2026-10-05), RFSoC 4x2 @ 250 MHz.**  What RTL showed, and what the model became:
 >
-> * **The vendor core is frame-at-a-time**: II ~ latency at every L (41/43, 120/133, 480/519 at
->   L=16/64/256; the bare array-port core 1478/1477 at 1024).  Processes need ~2.5 L/R per frame, but
->   the stages are nested DATAFLOW regions, so one frame occupies the chain.  Batching frames inside
->   the region the way AMD's L2 kernel does changed nothing (tried, reverted; patch not kept).
+> * **II ~ latency, as `VitisFft` connects the core** (41/43, 120/133, 480/519 at L=16/64/256; the
+>   bare array-port core 1478/1477 at 1024).  **CORRECTED 2026-10-06:** this was first explained as
+>   "frame-at-a-time by the library's construction (nested DATAFLOW)" -- wrong.  The body's `fft<>`
+>   is the vendor guide's *non-streaming connection*, which serializes frames; the *streaming
+>   connection* (`innerFFT` in DATAFLOW) reaches ~5.5 L/R, and the library's per-call commutators
+>   floor it near 2.5 L/R.  AMD's guide states II = L/R.  See `plans/ssr_fft.md` (F0 evidence, and
+>   `SsrFft`, which reaches L/R) and `plans/witness/vitis_fft_streaming/`.
 > * **Latency depends on arrival phase**: the input transposer (`swap`) runs a commutator on a
 >   free-running cycle (40 cycles at L=64, restarting with no data); an out-of-step frame waits inside
 >   it.  Found by tracing the internal FIFO handshakes (`if_read && if_empty_n`) at full VCD depth.

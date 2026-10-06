@@ -5,7 +5,7 @@ nav_order: 1
 has_children: true
 audience: python
 api: [VitisFft]
-summary: "AMD's Vitis L1 SSR (super-sample-rate) FFT as the Waveflow module VitisFft. What L and R mean; the architecture inside the vendor core -- the input transposer and its commutators, the radix-4 stages with their inter-stage twiddle rotations, the digit-reversal reorder; why the core processes one frame at a time; why an isolated frame's latency depends on when it arrives; where the arithmetic loses precision and how the output width grows; and what Waveflow adds around it."
+summary: "AMD's Vitis L1 SSR (super-sample-rate) FFT as the Waveflow module VitisFft. What L and R mean; the architecture inside the vendor core -- the input transposer and its commutators, the radix-4 stages with their inter-stage twiddle rotations, the digit-reversal reorder; why VitisFft runs at a tenth of the rate the architecture allows (the fft<> wrapper, per-call commutators) and what reaches it; why an isolated frame's latency depends on when it arrives; where the arithmetic loses precision and how the output width grows; and what Waveflow adds around it."
 ---
 
 # The Vitis FFT
@@ -50,17 +50,35 @@ With `S = log4 L` stages:
   reorders through its own commutator for the next stage's butterflies.
 - **The digit-reversal reorder** turns the FFT's digit-reversed output order into natural order.
 
-### One frame at a time
+### Why `VitisFft` is far below the architecture's rate
 
-Every process runs at about one word per cycle and needs only about `2.5 L/R` cycles per frame, so a
-chain of them *could* overlap frames. It does not: the stages are **nested** dataflow regions
-(`fftStage` holds `fftStage_1` holds `fftStage_2` ...), and a process holding a nested region is not
-done until everything inside it is. One frame occupies the whole chain; the next starts when it
-leaves. Measured on the RFSoC 4x2, the frame interval is 7.5 `L/R` cycles at `L = 64, 256` and 10
-`L/R` from 1024 up -- a sustained 0.4-0.53 samples per cycle against a nominal 4. This is how the
-library is written, not a limit of HLS: AMD's own route to more throughput is several FFTs in
-parallel. Wrapping the core the way AMD's L2 kernel does (the frame loop inside one region) changes
-nothing.
+An SSR FFT with `R` lanes should take a new frame every `L/R` cycles: the commutators shuffle samples
+*across* frames, so frame `k+1` enters while frame `k` is still inside. AMD's L1 guide (2020.1) states
+exactly that, II = `L/R`. `VitisFft` measures 7.5 `L/R` at `L = 64, 256` and 10 `L/R` from 1024 up --
+2,556 cycles a frame at `L = 1024` against a nominal 256. Three things stack, and only the first is
+`VitisFft`'s own choice:
+
+1. **The connection.** `VitisFft`'s body calls `fft<>(in, out)`, the guide's *non-streaming
+   connection*, which wraps the core in buffer-to-stream blocks and serializes frames. The guide's
+   *streaming connection* -- `innerFFT` in a DATAFLOW region between producer and consumer
+   processes -- overlaps frames: measured in cosim at `L = 1024`, about 1,420 cycles a frame (5.5
+   `L/R`) instead of 2,556. Both compile, both are bit-exact, both synthesize; only a timing
+   measurement against the vendor's stated number tells them apart.
+2. **The commutators, as functions.** Each commutator in the 2025.1 library runs a fixed
+   `L/R + 2(R−1)·PF` iterations per call -- the frame plus a fill-and-drain window -- because an HLS
+   process in a dataflow region must return. The drain is paid every frame instead of overlapping the
+   next one, which floors the interval at about 2.5 `L/R` whatever the connection. (This window is
+   also why an isolated frame's latency depends on its arrival phase -- next section.)
+3. **The stage loops and the reorder.** Each stage re-enters its butterfly pipeline once per
+   sub-transform, and the digit-reversal reorder fills its buffer and then empties it, one after the
+   other.
+
+None of these is a limit of the FFT or of HLS. They are the "accelerate a function call" idiom applied
+to an architecture whose point is that nothing stops. Waveflow's own SSR FFT,
+`waveflow.dsp.ssr_fft.SsrFft`, keeps this library's arithmetic -- so it is bit-exact with `VitisFft` --
+and rebuilds the data movement as free-running tasks: it measures exactly `L/R` cycles a frame at every
+length from 16 to 4096, on the same DSPs. The evidence for (1)-(3), with every variant's cosim, is in
+`plans/witness/vitis_fft_streaming/`.
 
 ### Latency depends on when a frame arrives
 
