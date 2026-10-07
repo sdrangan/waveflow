@@ -10,23 +10,23 @@ its tasks plus its channels (:func:`predict_channels`): the three stream-of-bloc
 (counted), the FIFOs and, in a design fed from memory, the ``m_axi`` adapters (a block-RAM constant
 per word width, and LUT/FF fitted on the word width).
 
-One binding is a tool decision, not device geometry, and is kept here with its tool version:
-Vitis HLS 2024.1 builds a plain multiply whose operands are both narrower than
-:data:`PLAIN_MULT_DSP_MIN_BITS` from LUTs on ``xczu48dr``, while a pre-added product (the
-three-multiply form) always takes a DSP.
+Some rules are the tool's binding, not device geometry, and are kept here with their tool
+version (Vitis HLS 2024.1 on ``xczu48dr``, measured on the step 7.5 calibration builds): the
+four-multiply form's DSPs per element (:func:`form4_dsps_per_element`: narrow multiplies are packed),
+and the shapes of the stream-of-blocks buffers (:func:`buffer_blocks`).
 
 Cycles
 ------
-A message's time in a stream of messages is the larger of its compute and its input/output::
+A message's time in a stream of messages fed from memory is a sum of compute and transfer::
 
-    interval = max(c0 + c . compute,  d0 + d . io)
+    interval = c0 + c . (sweep, out, b_load, tiles, w_in, w_out, ah)
 
-with ``compute = (sweep, out, b_load, a_load, tiles)`` — the tiles' skewed sweeps
-``tiles·(k + R + C − 2)``, their outputs ``tiles·R·C/L``, the loads of ``B`` and ``A`` in lane
-groups and the tile count — and ``io = (w_in, w_out, ah)``, the words in and out and, for
-``Aᴴ``, the ``m·k`` values of the transposing load.  :func:`fit_message_model` fits the two linear
-parts by alternating assignment (:data:`FIT_ITERATIONS`).  A rejected request costs the
-input part alone, ``d0 + d1·w_in`` (its payload is drained).
+the tiles' skewed sweeps ``tiles·(k + R + C − 2)``, their outputs ``tiles·R·C/L``, the load of ``B``
+in lane groups, the tile count, the words in and out, and for ``Aᴴ`` the ``m·k`` values of the
+transposing load (:func:`fit_message_model`: least squares).  The terms add rather than overlap: in
+a design whose ``m_axi`` reader and writer share one generated top, their pointer FIFOs keep the
+memory transfers in step with the jobs.  A rejected request costs ``c0 + c_w_in·w_in`` (its payload
+is drained).
 
 The fitted numbers live in the packaged platform :data:`PLATFORM`: the task fits under
 ``models/<task>/params.json`` (the framework's resource-model layout), the channel model under
@@ -60,16 +60,10 @@ from waveflow.linalg.message import header_words
 PLATFORM = "xczu48dr_250mhz_vitis2024_1"
 PART = "xczu48dr-ffvg1517-2-e"
 CLK_HZ = 250e6
-#: Vitis HLS 2024.1 on xczu48dr: a plain multiply with both operands narrower than this is built
-#: from LUTs; a pre-added product always takes a DSP.
-PLAIN_MULT_DSP_MIN_BITS = 12
 #: Width of the run-time index products (m·k, k·n, m·n) the tasks compute.
 INDEX_BITS = 16
-#: Alternations of :func:`fit_message_model` at most.
-FIT_ITERATIONS = 20
 #: The message model's terms.
-COMPUTE_TERMS = ("sweep", "out", "b_load", "a_load", "tiles")
-IO_TERMS = ("w_in", "w_out", "ah")
+MESSAGE_TERMS = ("sweep", "out", "b_load", "tiles", "w_in", "w_out", "ah")
 
 
 def platform_dir() -> Path:
@@ -93,21 +87,33 @@ def _acc_bits(core) -> int:
 # --- the tasks' structures ----------------------------------------------------------------------
 
 
+def form4_dsps_per_element(Wa: int, Wb: int) -> int:
+    """DSP slices per element of the four-multiply form.  Vitis HLS 2024.1 on xczu48dr packs the
+    narrow products: 4 from 12 bits up, 3 at 10-11 bits, 2 at 9 bits and below (the narrower of
+    ``A`` and ``B``)."""
+    w = min(int(Wa), int(Wb))
+    return 4 if w >= 12 else (3 if w >= 10 else 2)
+
+
 def core_structure(core) -> DesignStructure:
-    """``SystolicCore``: the array's multipliers, the ``B`` store, and its fitted terms."""
+    """``SystolicCore``: the array's DSPs, the ``B`` store, and its fitted terms."""
     Wa, Wb = int(core.a.W), int(core.b.W)
     M, K, N = int(core.Mmax), int(core.Kmax), int(core.Nmax)
-    R, C, form = int(core.R), int(core.C), int(core.form)
+    R, C, L, form = int(core.R), int(core.C), int(core.L), int(core.form)
     p = R * C
     wba = Wb + 1  # B in the array, one bit wider for the edge negation
-    mults = [MultGroup(2, INDEX_BITS)]  # the run-time trip counts
-    plain_in_luts = 0
-    if form == 3:  # k1 = br (ar + ai), k2 = ar (bi - br), k3 = ai (br + bi): pre-added
-        mults.append(MultGroup(3 * p, max(Wa, wba) + 1))
-    elif min(Wa, wba) >= PLAIN_MULT_DSP_MIN_BITS:
-        mults.append(MultGroup(4 * p, max(Wa, wba)))
+    if (
+        form == 3
+    ):  # k1 = br (ar + ai), k2 = ar (bi - br), k3 = ai (br + bi): pre-added, 3 DSPs
+        per_element, packed = 3, 0
     else:
-        plain_in_luts = 4 * p
+        per_element = form4_dsps_per_element(Wa, Wb)
+        packed = 1 if per_element < 4 else 0
+    # Counted as DSP slices after the tool's packing; every operand fits one slice (<= 18 bits).
+    mults = [
+        MultGroup(2, INDEX_BITS),
+        MultGroup(per_element * p, max(Wa, wba) + (form == 3)),
+    ]
     b_rows = K * N // C
     mems = [MemArray(C, b_rows, Wb, name="b_re"), MemArray(C, b_rows, Wb, name="b_im")]
     form3 = 1 if form == 3 else 0
@@ -117,12 +123,19 @@ def core_structure(core) -> DesignStructure:
             p * _acc_bits(core),
             p * form3,
             p * form3 * (Wa + Wb),
-            plain_in_luts * Wa * wba,
+            p * packed,
+            p * packed * Wa,
             M * K * Wa,
             C * Wb,
+            R * L * Wa,
+            M * Wa * _log2(L),
+            M * L * Wa,
         ],
-        names=("pe", "pe_acc", "pe3", "pe3_w", "lut_mult", "a_store", "b_banks"),
-    )
+        names=(
+            "pe", "pe_acc", "pe3", "pe3_w", "packed", "packed_w", "a_store", "b_banks",
+            "lane_mux", "row_offset", "row_write",
+        ),
+    )  # fmt: skip
     return DesignStructure(multipliers=mults, memories=mems, lut_ff_basis=basis)
 
 
@@ -130,8 +143,7 @@ def load_structure(load) -> DesignStructure:
     """``SystolicLoad``: its run-time trip counts; groups shifted in, and the transposing load."""
     L, w = int(load.L), max(int(load.a.W), int(load.b.W))
     basis = LutFfBasis(
-        bases=[L * w, L * _log2(L) * w, int(load.word_bits)],
-        names=("lane_w", "lane_log_w", "word"),
+        bases=[L * w, L * _log2(L) * w, w], names=("lane_w", "lane_log_w", "w")
     )
     return DesignStructure(multipliers=[MultGroup(2, INDEX_BITS)], lut_ff_basis=basis)
 
@@ -145,7 +157,10 @@ def rx_structure(rx) -> DesignStructure:
 def store_structure(store) -> DesignStructure:
     """``SystolicStore``: ``C``'s element count; groups shifted out."""
     L, w = int(store.L), int(store.c.W)
-    basis = LutFfBasis(bases=[L * w, int(store.word_bits)], names=("lane_w", "word"))
+    basis = LutFfBasis(
+        bases=[L * w, L * _log2(L) * w, w, int(store.word_bits)],
+        names=("lane_w", "lane_log_w", "w", "word"),
+    )
     return DesignStructure(multipliers=[MultGroup(1, INDEX_BITS)], lut_ff_basis=basis)
 
 
@@ -162,22 +177,28 @@ def channel_memories(unit) -> list:
 
 def buffer_blocks(depth: int, bits: int, halves: int) -> int:
     """Block RAMs (18K) of one stream-of-blocks buffer: ``halves`` blocks of ``depth`` words of
-    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr: up to 18 bits wide, one 1024 x 18 block column per
-    half; wider, 512 x 36 block columns shared by the halves.  (Measured on the step 7.4 builds;
-    corrected only on calibration builds, before any held-out build runs.)"""
-    if bits <= 18:
-        return halves * math.ceil(depth / 1024)
+    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr: under 32 bits wide, ``ceil(bits/18)`` columns of
+    1024 x 18 per half; from 32 bits, ``ceil(bits/36)`` columns of 512 x 36 shared by the halves.
+    (Measured on the step 7.5 calibration builds.)"""
+    if bits < 32:
+        return halves * math.ceil(bits / 18) * math.ceil(depth / 1024)
     return math.ceil(bits / 36) * math.ceil(halves * depth / 512)
+
+
+#: The ``A`` buffer's blocks are multiplied by this with 32-bit message words (measured: the
+#: loader's one-value words make the tool split it four ways).
+A_BUFFER_SPLIT_32 = 4
 
 
 def channel_counted(unit) -> dict:
     """Block RAM of the unit's three stream-of-blocks buffers (``sob_depth`` halves each)."""
-    return {
-        "bram": sum(
-            buffer_blocks(m.depth, m.elem_bits, m.banks) for m in channel_memories(unit)
-        ),
-        "lutram_luts": 0,
-    }
+    total = 0
+    for m in channel_memories(unit):
+        blocks = buffer_blocks(m.depth, m.elem_bits, m.banks)
+        if m.name == "a_blk" and int(unit.word_bits) == 32:
+            blocks *= A_BUFFER_SPLIT_32
+        total += blocks
+    return {"bram": total, "lutram_luts": 0}
 
 
 def fit_channels(rows: list) -> dict:
@@ -232,11 +253,34 @@ TASKS = (
 CHANNELS = "systolic_unit_channels"
 
 
+class SystolicResourceModel(VitisResourceModel):
+    """The framework's model, fitting FF on every build.  The default drops, for every counter but
+    LUT, the builds where an array lands in distributed RAM; here that is the core's ``B`` store in
+    most builds, and it costs LUTs (priced by the device rule) but no flip-flops, so those builds
+    describe hardware the FF terms express (step 7.5: FF fitted without them was off by 60%).
+    """
+
+    def fit_rows(self, df, counter: str):
+        return df
+
+    def basis_for(self, comp, counter: str) -> list:
+        """Every term the task declares.  The default keeps only the terms that are non-zero for
+        the component it is asked about, which for a fit from samples is the first build -- and
+        dropped the three-multiply terms when that build had the four-multiply form."""
+        return list(comp.resource_structure().lut_ff_basis.labels())
+
+
+def new_model(name: str, comp_class=None) -> SystolicResourceModel:
+    return SystolicResourceModel(
+        name=name, part=PART, platform=platform(), comp_class=comp_class
+    )
+
+
 def resource_model(name: str, comp_class=None) -> VitisResourceModel:
     """The fitted model of task body ``name`` from the packaged platform; without a fit there,
     DSP and BRAM are still counted and LUT/FF report as uncalibrated."""
     plat = platform()
-    m = VitisResourceModel(name=name, part=PART, platform=plat, comp_class=comp_class)
+    m = new_model(name, comp_class)
     path = plat.dir / "models" / name / "params.json"
     if path.is_file():
         m.load_or_fit(path)
@@ -290,80 +334,27 @@ def message_features(unit, op: int, m: int, k: int, n: int) -> dict:
     }
 
 
-def _lin(coef: dict, feats: dict, terms) -> float:
-    return float(coef["intercept"]) + sum(
-        float(coef[t]) * float(feats[t]) for t in terms
-    )
-
-
 def message_interval(coef: dict, feats: dict) -> float:
-    """``max(compute, io)`` for one message, from fitted coefficients."""
-    return max(
-        _lin(coef["compute"], feats, COMPUTE_TERMS), _lin(coef["io"], feats, IO_TERMS)
+    """One served message's interval, from fitted coefficients."""
+    return float(coef["intercept"]) + sum(
+        float(coef[t]) * float(feats[t]) for t in MESSAGE_TERMS
     )
 
 
 def reject_interval(coef: dict, w_in: int) -> float:
     """A rejected request: its payload drained, nothing computed or written back."""
-    io = coef["io"]
-    return float(io["intercept"]) + float(io["w_in"]) * float(w_in)
+    return float(coef["intercept"]) + float(coef["w_in"]) * float(w_in)
 
 
-def _lstsq(rows: list, terms) -> dict:
-    X = np.array([[1.0] + [float(r[t]) for t in terms] for r in rows])
+def fit_message_model(rows: list) -> dict:
+    """Least squares of :data:`MESSAGE_TERMS` on measured rows (features plus ``interval``)."""
+    X = np.array([[1.0] + [float(r[t]) for t in MESSAGE_TERMS] for r in rows])
     y = np.array([float(r["interval"]) for r in rows])
     sol, *_ = np.linalg.lstsq(X, y, rcond=None)
     return {
         "intercept": float(sol[0]),
-        **{t: float(v) for t, v in zip(terms, sol[1:], strict=True)},
+        **dict(zip(MESSAGE_TERMS, map(float, sol[1:]), strict=True)),
     }
-
-
-def fit_message_model(rows: list) -> dict:
-    """Fit ``max(compute, io)`` on measured rows (features plus ``interval``).
-
-    The rows start split by the structural guess (compute terms against io terms); each part is
-    fitted by least squares on its rows, every row is reassigned to the part that predicts the
-    larger time, and this repeats until no row moves (at most :data:`FIT_ITERATIONS` times).  A
-    part left with fewer rows than terms + 1 keeps its previous fit.
-    """
-    side = [
-        (
-            "compute"
-            if r["sweep"] + r["out"] + r["b_load"] + r["a_load"]
-            >= r["w_in"] + r["w_out"] + r["ah"]
-            else "io"
-        )
-        for r in rows
-    ]
-    coef = {
-        "compute": {"intercept": 0.0, **dict.fromkeys(COMPUTE_TERMS, 1.0)},
-        "io": {"intercept": 0.0, **dict.fromkeys(IO_TERMS, 1.0)},
-    }
-    iterations = 0
-    for iterations in range(1, FIT_ITERATIONS + 1):
-        for part, terms in (("compute", COMPUTE_TERMS), ("io", IO_TERMS)):
-            sub = [r for r, s in zip(rows, side, strict=True) if s == part]
-            if len(sub) >= len(terms) + 1:
-                coef[part] = _lstsq(sub, terms)
-        new = [
-            (
-                "compute"
-                if _lin(coef["compute"], r, COMPUTE_TERMS)
-                >= _lin(coef["io"], r, IO_TERMS)
-                else "io"
-            )
-            for r in rows
-        ]
-        if new == side:
-            break
-        side = new
-    coef["meta"] = {
-        "iterations": iterations,
-        "n_compute": side.count("compute"),
-        "n_io": side.count("io"),
-    }
-    return coef
 
 
 @cache

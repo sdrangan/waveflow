@@ -8,7 +8,8 @@ every reply carries its request's tag, operation, dimensions and status, and a r
 disturbs neither neighbour.
 
 * pysim, at the centre and the smallest configuration of plan step 7.3;
-* XSI (``-m xsi``), the same jobs at RTL: csynth of the bench, then the generated testbench.  The
+* XSI (``-m xsi``), the same jobs at RTL: csynth of the bench, then the generated testbench, at
+  the two configurations and at lane groups of exactly one message word.  The
   cycle at which each reply arrives is written to ``job_cycles.json`` in the build directory for
   the cost model of step 7.5.
 """
@@ -47,6 +48,9 @@ def unit(M, K, N, R, C, L, W, form) -> dict:
 UNITS = {
     "centre": unit(8, 8, 32, 4, 8, 4, 12, 4),
     "smallest": unit(16, 16, 32, 1, 4, 1, 8, 3),
+    # A lane group of exactly one message word (L = 2, 64-bit words): the case whose full-width
+    # register shift synthesized to zeros (step 7.5).
+    "one_word_groups": unit(8, 8, 32, 4, 8, 2, 12, 4),
 }
 
 #: Per configuration: (op, m, k, n, edge, header overrides, the status expected).
@@ -71,6 +75,12 @@ JOBS = {
         (MUL_AH, 16, 16, 4, True, {}, Status.OK),
         (MUL, 4, 4, 6, False, {}, Status.BAD_DIMS),  # C = 4 does not divide n
         (MUL, 1, 1, 4, False, {}, Status.OK),
+    ],
+    "one_word_groups": [
+        (MUL, 8, 8, 32, False, {}, Status.OK),
+        (MUL_AH, 4, 8, 16, True, {}, Status.OK),
+        (7, 4, 4, 8, False, {}, Status.BAD_OP),
+        (MUL, 4, 2, 8, False, {}, Status.OK),
     ],
 }
 

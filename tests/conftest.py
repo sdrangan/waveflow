@@ -83,7 +83,11 @@ import pytest
 #: ``tests/linalg/test_systolic_unit.py``, collects **2** -- the standalone systolic unit of
 #: ``waveflow/linalg/`` at RTL, at two configurations (centre, smallest), each running good and
 #: rejected requests back to back from one build, bit-exact against the model.
-WANT_XSI_GATES = 142
+#:
+#: 142 -> 143 on 2026-10-07 (step 7.5): the same file gained a gate at lane groups of exactly one
+#: message word, after a calibration build showed that case synthesizing to zeros while
+#: C-simulation passed (a full-width shift, defined for ap_uint, undefined in synthesis).
+WANT_XSI_GATES = 143
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

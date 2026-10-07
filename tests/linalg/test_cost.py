@@ -54,16 +54,18 @@ def test_unit_dsp_and_buffers_as_measured():
     assert cost.channel_counted(smallest)["bram"] == 6
 
 
-def test_plain_multiplies_below_12_bits_are_luts():
-    narrow = unit(8, 8, 32, 4, 8, 4, 10, 4).core.resource_structure()
-    wide = unit(8, 8, 32, 4, 8, 4, 12, 4).core.resource_structure()
-    gauss = unit(8, 8, 32, 4, 8, 4, 10, 3).core.resource_structure()
-    assert sum(g.count for g in narrow.multipliers) == 2  # the index products only
-    assert (
-        dict(zip(narrow.lut_ff_basis.names, narrow.lut_ff_basis.bases))["lut_mult"] > 0
-    )
-    assert sum(g.count for g in wide.multipliers) == 2 + 4 * 32
-    assert sum(g.count for g in gauss.multipliers) == 2 + 3 * 32
+def test_form4_packs_narrow_products():
+    """Four-multiply form: 4 DSPs per element from 12 bits, 3 at 10, 2 at 8 (measured, 7.5)."""
+    m = cost.VitisResourceModel(name="t", part=cost.PART)
+    for W, per in ((8, 2), (10, 3), (12, 4), (16, 4)):
+        assert m.derived(unit(8, 8, 32, 4, 8, 4, W, 4).core)["dsp"] == 2 + per * 32
+    assert m.derived(unit(8, 8, 32, 4, 8, 4, 8, 3).core)["dsp"] == 2 + 3 * 32
+
+
+def test_buffers_at_32_bit_words():
+    """The ``A`` buffer is split four ways with 32-bit words (12 blocks for 96-bit groups)."""
+    u = unit(8, 8, 32, 4, 8, 4, 12, 4, word=32)
+    assert cost.channel_counted(u)["bram"] == 12 + 3 + 3
 
 
 def test_message_features():
@@ -77,28 +79,21 @@ def test_message_features():
     assert cost.message_features(u, MatmulOp.MUL_AH, 8, 8, 32)["ah"] == 64
 
 
-def test_fit_message_model_recovers_a_max_of_two_lines():
+def test_fit_message_model_recovers_a_sum():
     rng = np.random.default_rng(3)
-    true_c = {
-        "intercept": 30.0,
-        "sweep": 1.0,
-        "out": 1.0,
-        "b_load": 1.0,
-        "a_load": 1.0,
-        "tiles": 6.0,
+    true = {
+        "intercept": 46.0,
+        **dict(zip(cost.MESSAGE_TERMS, (1.0, 1.4, 0.6, 10.0, 1.2, 0.9, 1.3))),
     }
-    true_io = {"intercept": 12.0, "w_in": 1.05, "w_out": 0.0, "ah": 2.0}
     rows = []
-    for _ in range(120):
-        r = {
-            t: float(rng.integers(0, 400))
-            for t in (*cost.COMPUTE_TERMS, *cost.IO_TERMS)
-        }
-        r["interval"] = cost.message_interval({"compute": true_c, "io": true_io}, r)
+    for _ in range(60):
+        r = {t: float(rng.integers(0, 400)) for t in cost.MESSAGE_TERMS}
+        r["interval"] = cost.message_interval(true, r)
         rows.append(r)
     got = cost.fit_message_model(rows)
-    for r in rows:
-        assert cost.message_interval(got, r) == pytest.approx(r["interval"], rel=1e-6)
+    for t, value in true.items():
+        assert got[t] == pytest.approx(value, rel=1e-6, abs=1e-6)
+    assert cost.reject_interval(got, 100) == pytest.approx(46.0 + 120.0)
 
 
 def test_fit_channels_recovers_constants():
@@ -114,3 +109,15 @@ def test_fit_channels_recovers_constants():
     assert coef["lut"]["word"] == pytest.approx(10) and coef["ff"][
         "intercept"
     ] == pytest.approx(2000)
+
+
+def test_packaged_platform_prices_the_centre_build():
+    """The frozen step 7.5 models load from the package and price the centre calibration build
+    (measured: unit 24,339 LUT, 14,543 FF, 136 DSP, 17 BRAM; full A·B interval 720 cycles)."""
+    u = unit(8, 8, 32, 4, 8, 4, 12, 4)
+    pred = cost.predict_unit(u)["total"]
+    assert (pred["dsp"], pred["bram"]) == (136, 17)
+    assert pred["lut"] == pytest.approx(24339, rel=0.10)
+    assert pred["ff"] == pytest.approx(14543, rel=0.10)
+    feats = cost.message_features(u, MatmulOp.MUL, 8, 8, 32)
+    assert cost.message_interval(cost.message_model(), feats) == pytest.approx(720, rel=0.05)

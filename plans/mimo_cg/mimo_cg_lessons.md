@@ -416,4 +416,18 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Placement by a run-time lane index costs more than it looks.** Writing each value into
   lane `e % L` of a group cost 4k LUT per loop at II 2; shifting values through a group
   register cost 620 at II 1, bit for bit the same.
+- **C-simulation cannot see undefined behaviour that `ap_uint` defines.** A shift by a
+  register's full width is zero in C-sim and undefined in synthesis; the RTL wrote zeros
+  while every C-sim test passed. Only an RTL run at that configuration catches it, so a
+  calibration campaign that checks bit-exactness at RTL is also a test campaign.
+- **Read the framework's fit defaults before trusting a fit.** Two defaults, each sensible
+  elsewhere, broke this one: FF fitted without the builds whose arrays land in LUT RAM (most
+  of them), and only the terms non-zero for the first sample. A 60% error is a data problem
+  before it is a model problem.
+- **Let the data choose between max and sum before the held-out set runs.** The pre-registered
+  `max(compute, I/O)` was physically plausible and 14% off; the stages serialize in a
+  memory-fed design, and the sum is 2% off. One sign was free: `Aᴴ`'s extra load time showed
+  up even on compute-bound jobs.
+- **A rule copied from another datapath is a hypothesis.** "Plain multiplies under 12 bits are
+  LUTs" held for the example's matmul and not for this one, where the tool packs them.
 

@@ -1,0 +1,31 @@
+# linalg_builds.csv: step 7.5 of plans/mimo_cg/mimo_cg_paper_sims.md; tool=Vitis HLS / Vivado xsim 2024.1; part=xczu48dr-ffvg1517-2-e; period_ns=4
+build,role,M,K,N,R,C,L,W,form,word,est_ns,csynth_s,xsi_s,bit_exact,error,tool
+su_m16_k16_n32_r16_c16_l4_w10_f4_b64,fit,16,16,32,16,16,4,10,4,64,3.352,106.4,24.8,1,,Vitis HLS / Vivado xsim 2024.1
+su_m16_k16_n32_r16_c16_l4_w12_f3_b64,fit,16,16,32,16,16,4,12,3,64,3.392,147.4,37.9,1,,Vitis HLS / Vivado xsim 2024.1
+su_m16_k16_n32_r16_c16_l4_w16_f4_b64,fit,16,16,32,16,16,4,16,4,64,3.352,126.4,35.6,1,,Vitis HLS / Vivado xsim 2024.1
+su_m16_k16_n32_r1_c4_l1_w8_f3_b64,fit,16,16,32,1,4,1,8,3,64,3.392,31.1,13.1,1,,Vitis HLS / Vivado xsim 2024.1
+su_m16_k8_n32_r4_c8_l4_w12_f4_b64,fit,16,8,32,4,8,4,12,4,64,3.352,45.1,21.0,1,,Vitis HLS / Vivado xsim 2024.1
+su_m4_k16_n16_r2_c4_l2_w16_f3_b32,fit,4,16,16,2,4,2,16,3,32,3.392,33.5,11.5,1,,Vitis HLS / Vivado xsim 2024.1
+su_m4_k8_n32_r4_c8_l4_w12_f4_b64,fit,4,8,32,4,8,4,12,4,64,3.352,43.7,13.0,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k16_n32_r4_c8_l4_w12_f4_b64,fit,8,16,32,4,8,4,12,4,64,3.352,41.9,17.9,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k4_n32_r4_c8_l4_w12_f4_b64,fit,8,4,32,4,8,4,12,4,64,3.352,44.7,12.2,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n16_r4_c8_l4_w12_f4_b64,fit,8,8,16,4,8,4,12,4,64,3.352,45.6,14.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r1_c8_l4_w12_f4_b64,fit,8,8,32,1,8,4,12,4,64,3.352,34.6,19.0,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r2_c4_l2_w8_f4_b32,fit,8,8,32,2,4,2,8,4,32,3.352,35.1,10.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r2_c8_l4_w12_f4_b64,fit,8,8,32,2,8,4,12,4,64,3.352,35.4,18.5,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c16_l16_w12_f4_b64,fit,8,8,32,4,16,16,12,4,64,3.352,56.2,14.6,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c16_l4_w12_f4_b64,fit,8,8,32,4,16,4,12,4,64,3.352,44.5,21.3,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c32_l4_w12_f4_b64,fit,8,8,32,4,32,4,12,4,64,3.352,75.5,19.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c4_l4_w12_f4_b64,fit,8,8,32,4,4,4,12,4,64,3.352,35.4,18.5,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l1_w12_f4_b64,fit,8,8,32,4,8,1,12,4,64,3.352,39.3,13.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l2_w12_f4_b64,fit,8,8,32,4,8,2,12,4,64,3.352,33.1,13.5,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w10_f4_b64,fit,8,8,32,4,8,4,10,4,64,3.352,42.8,17.6,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w12_f3_b64,fit,8,8,32,4,8,4,12,3,64,3.392,44.7,15.4,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w12_f4_b32,fit,8,8,32,4,8,4,12,4,32,3.352,44.7,18.0,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w12_f4_b64,fit,8,8,32,4,8,4,12,4,64,3.352,34.0,15.2,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w14_f4_b64,fit,8,8,32,4,8,4,14,4,64,3.352,46.7,14.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w16_f4_b64,fit,8,8,32,4,8,4,16,4,64,3.352,45.3,17.9,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l4_w8_f4_b64,fit,8,8,32,4,8,4,8,4,64,3.352,45.3,14.3,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r4_c8_l8_w12_f4_b64,fit,8,8,32,4,8,8,12,4,64,3.352,45.2,16.9,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r8_c32_l16_w14_f3_b64,fit,8,8,32,8,32,16,14,3,64,3.392,167.2,28.7,1,,Vitis HLS / Vivado xsim 2024.1
+su_m8_k8_n32_r8_c8_l4_w12_f4_b64,fit,8,8,32,8,8,4,12,4,64,3.352,50.0,17.8,1,,Vitis HLS / Vivado xsim 2024.1

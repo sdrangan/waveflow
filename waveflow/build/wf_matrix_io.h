@@ -16,6 +16,25 @@
 #include "streamutils_hls.h"
 #include "wf_lanes.h"
 
+namespace wf_matrix_io {
+
+// A group register moved by SHIFT bits of its GW: a value shifted in at the top (in) or out at the
+// bottom.  When a group is exactly one word (SHIFT == GW) the register is replaced, never shifted:
+// a shift by the full width is defined for ap_uint in C-simulation but undefined in synthesis, and
+// the RTL computed zeros (step 7.5, L = 2 with 64-bit words).
+template <int GW, int SHIFT, bool WHOLE = (SHIFT >= GW)>
+struct shift {
+    static ap_uint<GW> in(const ap_uint<GW>& g, const ap_uint<GW>& top) { return (g >> SHIFT) | top; }
+    static ap_uint<GW> out(const ap_uint<GW>& g) { return g >> SHIFT; }
+};
+template <int GW, int SHIFT>
+struct shift<GW, SHIFT, true> {
+    static ap_uint<GW> in(const ap_uint<GW>&, const ap_uint<GW>& top) { return top; }
+    static ap_uint<GW> out(const ap_uint<GW>&) { return 0; }
+};
+
+}  // namespace wf_matrix_io
+
 // Deserialize the n elements of one burst into lane groups of register type T.  Every lane is fixed
 // wiring: when a group spans words (L >= LW), each word's values enter a group register from the
 // top, a full group is written, and a last group the burst does not fill is shifted into place
@@ -50,7 +69,7 @@ static void wf_load_matrix(hls::stream<streamutils::framed_word<WBW> >& s_in,
                 }
                 wf_lanes::set<T, L>(in, L - LW + i, re, im);
             }
-            grp = (grp >> (LW * VB)) | in;
+            grp = wf_matrix_io::shift<grp_t::width, LW * VB>::in(grp, in);
             if (q == WPG - 1) {
                 blk[g] = grp;
                 ++g;
@@ -156,7 +175,7 @@ static void wf_store_matrix(const typename wf_lanes::group<T, L>::type blk[MAXG]
                 buf[i] = typename MEM::value_type(re, im);
             }
             MEM::template write_framed_stream_lane<WBW>(buf, s_out, w == NW - 1, LW);
-            cur >>= LW * VB;
+            cur = wf_matrix_io::shift<grp_t::width, LW * VB>::out(cur);
             if (q == WPG - 1) {
                 q = 0;
                 ++g;

@@ -426,8 +426,6 @@ def _cycle_rows(recs: list[dict]) -> list[dict]:
 
 def _fit_all(recs: list[dict]) -> tuple[dict, dict, dict]:
     """Task resource models, the channel model and the message model from ``recs``."""
-    from waveflow.calib.vitis_model import VitisResourceModel
-
     samples: dict = {t: [] for t in cost.TASKS}
     chan_rows = []
     for rec in recs:
@@ -438,10 +436,7 @@ def _fit_all(recs: list[dict]) -> tuple[dict, dict, dict]:
         chan_rows.append({"unit": unit, **rows[cost.CHANNELS]})
     models = {}
     for task, smp in samples.items():
-        m = VitisResourceModel(
-            name=task, part=PART, platform=cost.platform(), comp_class=type(smp[0][0])
-        )
-        models[task] = m.fit(samples=smp)
+        models[task] = cost.new_model(task, type(smp[0][0])).fit(samples=smp)
     return (
         models,
         cost.fit_channels(chan_rows),
@@ -482,7 +477,7 @@ def fit() -> None:
     (pdir / "provenance.json").write_text(
         json.dumps(prov, indent=1) + "\n", encoding="utf-8"
     )
-    report = {"loo": _loo(recs), "message_meta": msg["meta"], "n_builds": len(recs)}
+    report = {"loo": _loo(recs), "n_builds": len(recs)}
     report["sha256"] = {
         str(f.relative_to(pdir)): hashlib.sha256(f.read_bytes()).hexdigest()
         for f in files
