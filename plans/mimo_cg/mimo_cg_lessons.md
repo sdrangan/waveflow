@@ -377,3 +377,19 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   design had 384 csynth DSPs and 0.09 ns of slack; a fifth of the frontier is larger.
 - **A new assertion's bound should come from the data, then be stated.** Guessing "within
   5%" for a value that was 5.08% failed the test; so did a hand-typed 7.6% for 7.55%.
+
+## Gate 7.0 and Phase 7 (2026-10-06)
+
+- **Probe a design question in the flow that made the committed numbers, and reproduce one
+  committed row first.** Swapping the core's body inside the example's own build answered
+  the four gate 7.0 questions in a few minutes of csynth (estimated 45–60), and the
+  unmodified body giving the committed `CgMm` row exactly showed the comparison was fair.
+- **Loop timing of a dataflow task is in the per-loop reports.** The top csynth report lists
+  no loops; `*_Pipeline_*_csynth.xml` has each loop's II and depth.
+- **A schema field must not share a name with the generated struct's API.** A header field
+  named `nwords` serialized fine in Python and broke C-sim: the generated struct already
+  has a static `nwords<W>()`. Building the C++ is the only check of the names.
+- **A type that only widens needs no rounding or saturation mode.** With the register's
+  modes, two registers that differ only in their modes made two memory element types of
+  identical bits; without them, they share one element type and one array-utils file.
+
