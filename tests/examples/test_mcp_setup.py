@@ -20,6 +20,7 @@ import pytest
 from waveflow.scripts.waveflow_mcp_setup import (
     main,
     render_mcp_config,
+    validate_python_interpreter,
     write_mcp_config,
 )
 
@@ -97,3 +98,16 @@ def test_main_dry_run_prints_and_writes_nothing(tmp_path, no_interpreter_probe, 
     assert not (tmp_path / ".vscode").exists()
     config = json.loads(capsys.readouterr().out)
     assert "waveflow" in config["servers"]
+
+
+def test_probe_names_the_fix_for_an_mcp_1_environment():
+    """An env with mcp 1.x fails the import probe with a bare ModuleNotFoundError."""
+    import subprocess
+
+    failed = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="",
+        stderr="ModuleNotFoundError: No module named 'mcp.server.mcpserver'",
+    )
+    with patch("waveflow.scripts.waveflow_mcp_setup.subprocess.run", return_value=failed):
+        with pytest.raises(RuntimeError, match=r'pip install -U "mcp>=2.3,<3"'):
+            validate_python_interpreter("python")
