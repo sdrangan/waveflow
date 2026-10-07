@@ -5,7 +5,9 @@ under a build directory (default ``examples/mimo_cg/hw/build/<top>_<config>/``, 
 
 * ``include/`` — the framework headers (streamutils, memmgr, the mem-stream bodies), the schema
   headers (the commands and descriptors), the generated array utils of the memory element types,
-  the generated ``cg_types.h``, and copies of the hand-written task bodies from ``hw/cpp/``;
+  the generated ``cg_types.h``, copies of the hand-written task bodies from ``hw/cpp/`` and, for a
+  design containing Waveflow's linear-algebra components, their headers (``waveflow.linalg.build``:
+  the helpers, the bodies, the rendered traits and the command schemas);
 * ``gen/<top>.cpp`` — the ``ap_ctrl_none`` composite top, one ``hls::task`` per child, walked
   from the Python graph;
 * ``<top>.tcl`` — csynth for ``xczu48dr-ffvg1517-2-e`` at 4 ns;
@@ -64,6 +66,7 @@ from waveflow.hw.complexfield import ComplexField
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.fixpoint import FixedField
 from waveflow.hw.mem_stream import WORD_BW_SUPPORTED, MemRCmd, MemWCmd
+from waveflow.linalg.build import collect_parts, gen_linalg_headers
 from waveflow.toolchain import toolchain
 
 HW_DIR = Path(__file__).resolve().parent
@@ -188,6 +191,16 @@ def generate_top(
     formats = hw_format(int(params["fmt"]))
     gen_headers(config, schemas, formats, int(params["K"]), mem_dw)
     comp = elaborate(comp_class, params, name=top)
+    parts = collect_parts(comp)
+    if parts.traits:  # Waveflow's components: their traits, bodies and command schemas
+        gen_linalg_headers(
+            out_dir,
+            parts.traits,
+            parts.bodies,
+            INCLUDE_DIR,
+            sorted({*WORD_BW_SUPPORTED, int(mem_dw)}),
+            parts.schemas,
+        )
     spec = composite_top_spec(comp, width=mem_dw)
     gen = out_dir / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
@@ -448,5 +461,5 @@ def generate_detector(
         "cmd_depth": cmd_depth,
         "sob_depth": sob_depth,
     }
-    schemas = [CgCmd, CgDesc, CgIterCmd, MemRCmd, MemWCmd]
+    schemas = [CgCmd, CgDesc, MemRCmd, MemWCmd]
     return generate_top(CgDetector, params, DET_TOP, Path(out_dir), schemas, mem_dw)
