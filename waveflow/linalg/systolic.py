@@ -283,7 +283,7 @@ class SystolicCore(FreeRunMod):
     def get_rm(cls, platform):
         from waveflow.linalg.cost import resource_model
 
-        return resource_model("systolic_core_task", cls)
+        return resource_model("systolic_core_task", cls, platform)
 
     def run_iter(self) -> ProcessGen[None]:
         cmd = yield from self.cmd_in.get_schema(SystolicCmd)
@@ -468,7 +468,7 @@ class SystolicRx(_UnitPart):
     def get_rm(cls, platform):
         from waveflow.linalg.cost import resource_model
 
-        return resource_model("systolic_rx_task", cls)
+        return resource_model("systolic_rx_task", cls, platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -547,7 +547,7 @@ class SystolicLoad(_UnitPart):
     def get_rm(cls, platform):
         from waveflow.linalg.cost import resource_model
 
-        return resource_model("systolic_load_task", cls)
+        return resource_model("systolic_load_task", cls, platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -613,7 +613,7 @@ class SystolicStore(_UnitPart):
     def get_rm(cls, platform):
         from waveflow.linalg.cost import resource_model
 
-        return resource_model("systolic_store_task", cls)
+        return resource_model("systolic_store_task", cls, platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -751,3 +751,11 @@ class SystolicUnit(FreeRunMod):
     @property
     def header_words(self) -> int:
         return header_words(int(self.word_bits))
+
+    @classmethod
+    def get_rm(cls, platform):
+        """The unit's own share, its channels (:class:`~waveflow.linalg.cost.UnitResourceModel`);
+        each task has its own model."""
+        from waveflow.linalg.cost import unit_model
+
+        return unit_model(platform)

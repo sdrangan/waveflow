@@ -113,11 +113,43 @@ def test_fit_channels_recovers_constants():
 
 def test_packaged_platform_prices_the_centre_build():
     """The frozen step 7.5 models load from the package and price the centre calibration build
-    (measured: unit 24,339 LUT, 14,543 FF, 136 DSP, 17 BRAM; full A·B interval 720 cycles)."""
+    (measured: unit 24,339 LUT, 14,543 FF, 136 DSP, 17 BRAM; full A·B interval 720 cycles).
+    """
     u = unit(8, 8, 32, 4, 8, 4, 12, 4)
     pred = cost.predict_unit(u)["total"]
     assert (pred["dsp"], pred["bram"]) == (136, 17)
     assert pred["lut"] == pytest.approx(24339, rel=0.10)
     assert pred["ff"] == pytest.approx(14543, rel=0.10)
     feats = cost.message_features(u, MatmulOp.MUL, 8, 8, 32)
-    assert cost.message_interval(cost.message_model(), feats) == pytest.approx(720, rel=0.05)
+    assert cost.message_interval(cost.message_model(), feats) == pytest.approx(
+        720, rel=0.05
+    )
+
+
+def test_compose_prices_the_unit_like_predict_unit():
+    """``add_rm`` then ``compose``: the four tasks plus the unit's own share (its channels) add up
+    to :func:`cost.predict_unit`'s total."""
+    from waveflow.calib.resource_model import compose
+
+    u = unit(8, 8, 32, 4, 8, 4, 12, 4)
+    u.add_rm(cost.platform())
+    est = compose(u)
+    want = cost.predict_unit(u)["total"]
+    for k in ("lut", "ff", "dsp", "bram"):
+        assert est.total[k] == pytest.approx(want[k], abs=1)
+    own = {path: res for path, _cls, res, _conf in est.per_module}
+    # the unit's own block RAM: its buffers and the 64-bit m_axi adapters
+    assert own["u"]["bram"] == cost.channel_counted(u)["bram"] + 8
+
+
+def test_models_refuse_another_platform():
+    from waveflow.calib.platform import Platform
+
+    other = Platform(name="other", dir=None, part="xc7z020clg400-1", clk_freq=100e6)
+    slower = Platform(name="slower", dir=None, part=cost.PART, clk_freq=200e6)
+    for plat in (other, slower):
+        with pytest.raises(ValueError, match="fitted for"):
+            SystolicUnit.get_rm(plat)
+        with pytest.raises(ValueError, match="fitted for"):
+            type(unit(8, 8, 32, 4, 8, 4, 12, 4).core).get_rm(plat)
+    assert SystolicUnit.get_rm(cost.platform()) is not None

@@ -25,8 +25,8 @@ the tiles' skewed sweeps ``tiles·(k + R + C − 2)``, their outputs ``tiles·R�
 in lane groups, the tile count, the words in and out, and for ``Aᴴ`` the ``m·k`` values of the
 transposing load (:func:`fit_message_model`: least squares).  The terms add rather than overlap: in
 a design whose ``m_axi`` reader and writer share one generated top, their pointer FIFOs keep the
-memory transfers in step with the jobs.  A rejected request costs ``c0 + c_w_in·w_in`` (its payload
-is drained).
+memory transfers in step with the jobs.  A rejected request costs ``r0 + r1·w_in`` (its payload
+is drained), fitted on rejected requests sent back to back (:func:`fit_reject_model`).
 
 The fitted numbers live in the packaged platform :data:`PLATFORM`: the task fits under
 ``models/<task>/params.json`` (the framework's resource-model layout), the channel model under
@@ -45,7 +45,9 @@ from pathlib import Path
 
 import numpy as np
 
+from waveflow.calib.confidence import Confidence, ConfidenceLevel
 from waveflow.calib.platform import Platform
+from waveflow.calib.resource_model import ResourceModel
 from waveflow.calib.vitis_model import (
     DesignStructure,
     LutFfBasis,
@@ -73,6 +75,23 @@ def platform_dir() -> Path:
 
 def platform() -> Platform:
     return Platform(name=PLATFORM, dir=platform_dir(), part=PART, clk_freq=CLK_HZ)
+
+
+def check_platform(plat) -> None:
+    """Refuse a platform these models do not describe (the contract of ``HwModule.get_rm``): they
+    are fitted for :data:`PART` at :data:`CLK_HZ`.  ``None``, or a platform that states neither,
+    passes."""
+    if plat is None:
+        return
+    part, clk = getattr(plat, "part", None), getattr(plat, "clk_freq", None)
+    if (part is not None and part != PART) or (
+        clk is not None and float(clk) != CLK_HZ
+    ):
+        mhz = "?" if clk is None else f"{float(clk) / 1e6:g}"
+        raise ValueError(
+            f"the systolic unit's models are fitted for {PART} at {CLK_HZ / 1e6:g} MHz "
+            f"({PLATFORM}), not for {part} at {mhz} MHz"
+        )
 
 
 def _log2(x: int) -> float:
@@ -287,9 +306,12 @@ def new_model(name: str, comp_class=None) -> SystolicResourceModel:
     )
 
 
-def resource_model(name: str, comp_class=None) -> VitisResourceModel:
+def resource_model(name: str, comp_class=None, for_platform=None) -> VitisResourceModel:
     """The fitted model of task body ``name`` from the packaged platform; without a fit there,
-    DSP and BRAM are still counted and LUT/FF report as uncalibrated."""
+    DSP and BRAM are still counted and LUT/FF report as uncalibrated.  ``for_platform`` (what
+    ``get_rm`` is asked for) must be one these models describe (:func:`check_platform`).
+    """
+    check_platform(for_platform)
     plat = platform()
     m = new_model(name, comp_class)
     path = plat.dir / "models" / name / "params.json"
@@ -306,6 +328,40 @@ def task_of(comp) -> str:
 def channel_model() -> dict | None:
     path = platform_dir() / "models" / CHANNELS / "params.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+class UnitResourceModel(ResourceModel):
+    """The unit's own share of a composed estimate (``compose``): its channels
+    (:func:`predict_channels`).  Its four tasks carry their own models, so ``compose(unit)`` adds
+    up to :func:`predict_unit`'s total.  As calibrated, the channels include the ``m_axi`` adapters
+    of the in-band memory streams that fed the unit."""
+
+    def declared_counters(self) -> tuple:
+        return ("lut", "ff", "dsp", "bram")
+
+    def predict(self, comp, **runtime) -> dict:
+        coef = channel_model()
+        if coef is None:
+            return {k: 0 for k in self.declared_counters()}
+        return {k: round(v) for k, v in predict_channels(comp, coef).items()}
+
+    def confidence(self, comp, **runtime) -> Confidence:
+        if channel_model() is None:
+            return Confidence.uncalibrated(f"{CHANNELS} has not been fitted")
+        return Confidence(
+            level=ConfidenceLevel.UNCALIBRATED,
+            facts={
+                "model": CHANNELS,
+                "summary": f"{CHANNELS}: block RAM counted; LUT and FF fitted on the word width, "
+                "with no retained fit summary, so the support region is unknown",
+            },
+        )
+
+
+def unit_model(for_platform=None) -> UnitResourceModel:
+    """The model of the unit's own share, for ``SystolicUnit.get_rm``."""
+    check_platform(for_platform)
+    return UnitResourceModel(name=CHANNELS, platform=platform())
 
 
 def predict_unit(unit) -> dict:
