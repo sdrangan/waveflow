@@ -205,11 +205,10 @@ def csynth_summary(build: Path, top: str) -> dict:
         out[tag] = int(res.findtext(tag))
     loops = {}
     for f in sorted(rep.glob("*_Pipeline_*_csynth.xml")):
-        r = ET.parse(f).getroot()
-        for loop in r.iter("Loop"):
-            ii = loop.findtext("PipelineII")
-            if ii is not None:
-                loops[f"{f.stem}:{loop.get('name', '')}"] = ii
+        # A pipelined loop is a module of its own; its initiation interval is the module's.
+        ii = ET.parse(f).getroot().findtext(".//PipelineII")
+        if ii is not None:
+            loops[f.stem.split("_Pipeline_")[-1].removesuffix("_csynth")] = ii
     out["loop_ii"] = loops
     return out
 

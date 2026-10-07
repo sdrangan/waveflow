@@ -18,5 +18,6 @@ Models:
 
 * :mod:`~waveflow.linalg.matmul` — the complex matrix multiply, exact before one rounding
   (the systolic array, :mod:`~waveflow.linalg.systolic`);
-* :mod:`~waveflow.linalg.cg` — fixed-point conjugate gradient, multi-RHS (the CG vector unit).
+* :mod:`~waveflow.linalg.cg` — fixed-point conjugate gradient, multi-RHS (the CG vector unit,
+  :mod:`~waveflow.linalg.cg_vector`).
 """
