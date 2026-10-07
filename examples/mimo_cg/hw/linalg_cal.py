@@ -63,6 +63,8 @@ HERE = Path(__file__).resolve().parent
 EX = HERE.parent
 PAPER = EX / "paper_data"
 SPLIT = PAPER / "linalg_split.csv"
+#: The second round (step 7.5, v2): more calibration builds and a fresh held-out set.
+SPLIT_V2 = PAPER / "linalg_split_v2.csv"
 POINTS = EX / "results" / "linalg_points"
 BUILDS = HERE / "build" / "linalg"
 RUN_7_4 = PAPER / "linalg_unit_7_4_cycles.csv"
@@ -84,7 +86,12 @@ MAX_PES = 256
 #: Job shapes per build, each issued this many times back to back.
 REPEATS = 4
 HOLDOUT_SEED = 75
+HOLDOUT2_SEED = 76
 N_HOLDOUT = 12
+#: A request the unit rejects (an unknown operation), measured in every second-round build.
+REJECT_OP = 7
+#: Per model version: the roles it is fitted on, and the held-out role it is judged on.
+VERSIONS = {1: (("fit",), "holdout"), 2: (("fit", "holdout", "fit2"), "holdout2")}
 #: AC7's thresholds.
 MIN_EXACT_PCT, MAX_AREA_MAPE, MAX_CYCLE_MAPE = 90.0, 10.0, 5.0
 
@@ -197,6 +204,53 @@ def holdout_set() -> list[UnitConfig]:
     return [rest[i] for i in picks]
 
 
+def fit2_set() -> list[UnitConfig]:
+    """The second round's calibration builds, by rule, where the first round's held-out builds
+    showed the gaps: C = 32 with each of R, L, W and the form varied; 16 lanes at C = 16 from other
+    array heights; 32-bit words across lanes and widths; narrow and tiny stream-of-blocks buffers.
+    """
+    U = UnitConfig
+    out = [
+        U(8, 8, 32, 1, 32, 4, 12, 4, 64), U(8, 8, 32, 2, 32, 4, 12, 4, 64),
+        U(8, 8, 32, 8, 32, 4, 12, 4, 64), U(8, 8, 32, 4, 32, 2, 12, 4, 64),
+        U(8, 8, 32, 4, 32, 16, 12, 4, 64), U(8, 8, 32, 4, 32, 4, 8, 4, 64),
+        U(8, 8, 32, 4, 32, 4, 16, 4, 64), U(8, 8, 32, 4, 32, 4, 12, 3, 64),
+        U(16, 16, 32, 1, 16, 16, 12, 4, 64), U(16, 16, 32, 8, 16, 16, 10, 3, 64),
+        U(8, 8, 32, 4, 8, 1, 12, 4, 32), U(8, 8, 32, 4, 8, 2, 10, 4, 32),
+        U(8, 8, 32, 4, 8, 8, 16, 4, 32), U(8, 8, 32, 4, 8, 4, 8, 3, 32),
+        U(16, 16, 32, 4, 16, 16, 14, 3, 32), U(4, 4, 16, 4, 4, 1, 8, 4, 64),
+        U(4, 4, 16, 4, 4, 1, 10, 3, 64), U(4, 8, 16, 2, 4, 1, 14, 4, 64),
+        U(8, 4, 16, 4, 4, 1, 16, 4, 32), U(16, 16, 32, 1, 4, 1, 12, 4, 32),
+    ]  # fmt: skip
+    seen = set(fit_set()) | set(holdout_set())
+    bad = [c.name for c in out if not valid(c) or c in seen]
+    if bad or len(set(out)) != len(out):
+        raise ValueError(
+            f"invalid, repeated or already measured second-round builds: {bad}"
+        )
+    return out
+
+
+def holdout2_set() -> list[UnitConfig]:
+    """A fresh held-out set: :data:`N_HOLDOUT` configurations drawn uniformly (seed
+    :data:`HOLDOUT2_SEED`) from the space without any first- or second-round build."""
+    seen = set(fit_set()) | set(holdout_set()) | set(fit2_set())
+    rest = [c for c in space() if c not in seen]
+    rng = np.random.default_rng(HOLDOUT2_SEED)
+    picks = sorted(int(i) for i in rng.choice(len(rest), size=N_HOLDOUT, replace=False))
+    return [rest[i] for i in picks]
+
+
+def split_v2_text() -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["role", "build", *VALUES])
+    for role, cfgs in (("fit2", fit2_set()), ("holdout2", holdout2_set())):
+        for c in cfgs:
+            w.writerow([role, c.name, *(getattr(c, k) for k in VALUES)])
+    return buf.getvalue()
+
+
 def split_text() -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
@@ -209,17 +263,21 @@ def split_text() -> str:
 
 def load_split() -> dict[str, list[UnitConfig]]:
     roles: dict[str, list[UnitConfig]] = {}
-    with SPLIT.open(encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            roles.setdefault(row["role"], []).append(
-                UnitConfig(*(int(row[k]) for k in VALUES))
-            )
+    for path in (SPLIT, SPLIT_V2):
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                roles.setdefault(row["role"], []).append(
+                    UnitConfig(*(int(row[k]) for k in VALUES))
+                )
     return roles
 
 
-def shapes(c: UnitConfig) -> list[tuple[int, int, int, int]]:
+def shapes(c: UnitConfig, reject: bool = False) -> list[tuple[int, int, int, int]]:
     """The four job shapes of a build: full ``A·B``, full ``Aᴴ``, one tile, and a short ``k``
-    with half the columns."""
+    with half the columns; with ``reject`` (second round), a fifth: a full-size request with an
+    unknown operation (:data:`REJECT_OP`), which the unit drains."""
     k_short = min(c.K, max(1, c.L // 2))
     n_half = max(c.C, (c.N // 2) // c.C * c.C)
     out = [
@@ -233,6 +291,8 @@ def shapes(c: UnitConfig) -> list[tuple[int, int, int, int]]:
             op, 1, m, k, n, Mmax=c.M, Kmax=c.K, Nmax=c.N, L=c.L, R=c.R, C=c.C
         )
         assert st == Status.OK, (c.name, op, m, k, n, st)
+    if reject:
+        out.append((REJECT_OP, c.M, c.K, c.N))
     return out
 
 
@@ -279,9 +339,19 @@ def measure(c: UnitConfig, role: str) -> dict:
         }
         rec["est_ns"] = _est_ns(out)
         rng = np.random.default_rng(zlib.crc32(c.name.encode()))
+        reject = role in ("fit2", "holdout2")
         jobs = [
-            UB.random_job(rng, unit_p, op, m, k, n, edge=(op == MatmulOp.MUL_AH))
-            for op, m, k, n in shapes(c)
+            UB.random_job(
+                rng,
+                unit_p,
+                MatmulOp.MUL if op == REJECT_OP else op,
+                m,
+                k,
+                n,
+                edge=(op == MatmulOp.MUL_AH),
+                override={"op": REJECT_OP} if op == REJECT_OP else None,
+            )
+            for op, m, k, n in shapes(c, reject)
             for _ in range(REPEATS)
         ]
         sim = UB.UnitBenchSim(unit_p, jobs, n_cycles=_cycle_budget(c, c.build()))
@@ -298,7 +368,7 @@ def measure(c: UnitConfig, role: str) -> dict:
             "reply_cycles": cycles,
         }
         rec["shapes"] = []
-        for i, (op, m, k, n) in enumerate(shapes(c)):
+        for i, (op, m, k, n) in enumerate(shapes(c, reject)):
             r = cycles[i * REPEATS : (i + 1) * REPEATS]
             rec["shapes"].append(
                 {
@@ -309,6 +379,7 @@ def measure(c: UnitConfig, role: str) -> dict:
                     "interval": r[-1] - r[-2],
                     "interval_prev": r[-2] - r[-3],
                     "first": r[0],
+                    "status": "BAD_OP" if op == REJECT_OP else "OK",
                 }
             )
     except Exception as e:  # noqa: BLE001 - a failed build is recorded, never dropped
@@ -415,12 +486,32 @@ def merge() -> None:
 
 
 def _cycle_rows(recs: list[dict]) -> list[dict]:
+    """The served shapes' features and steady intervals."""
     rows = []
     for rec in recs:
         unit = UnitConfig(**rec["config"]).build()
         for s in rec["shapes"]:
+            if s.get("status", "OK") != "OK":
+                continue
             feats = cost.message_features(unit, s["op"], s["m"], s["k"], s["n"])
             rows.append({**feats, "interval": s["interval"], "build": rec["build"]})
+    return rows
+
+
+def _reject_rows(recs: list[dict]) -> list[dict]:
+    """The rejected requests' words in (header and payload) and steady intervals."""
+    rows = []
+    for rec in recs:
+        unit = UnitConfig(**rec["config"]).build()
+        for s in rec["shapes"]:
+            if s.get("status", "OK") == "OK":
+                continue
+            w_in = cost.message_features(unit, MatmulOp.MUL, s["m"], s["k"], s["n"])[
+                "w_in"
+            ]
+            rows.append(
+                {"w_in": w_in, "interval": s["interval"], "build": rec["build"]}
+            )
     return rows
 
 
@@ -437,19 +528,20 @@ def _fit_all(recs: list[dict]) -> tuple[dict, dict, dict]:
     models = {}
     for task, smp in samples.items():
         models[task] = cost.new_model(task, type(smp[0][0])).fit(samples=smp)
-    return (
-        models,
-        cost.fit_channels(chan_rows),
-        cost.fit_message_model(_cycle_rows(recs)),
-    )
+    msg = cost.fit_message_model(_cycle_rows(recs))
+    rej = _reject_rows(recs)
+    if rej:
+        msg["reject"] = cost.fit_reject_model(rej)
+    return models, cost.fit_channels(chan_rows), msg
 
 
-def fit() -> None:
-    recs = [r for r in records("fit") if r["error"] is None]
-    if len(recs) != len(load_split()["fit"]):
-        raise SystemExit(
-            f"{len(recs)} clean calibration records of {len(load_split()['fit'])}"
-        )
+def fit(version: int = 2) -> None:
+    roles, _ = VERSIONS[version]
+    split = load_split()
+    recs = [r for role in roles for r in records(role) if r["error"] is None]
+    want = sum(len(split[role]) for role in roles)
+    if len(recs) != want:
+        raise SystemExit(f"{len(recs)} clean calibration records of {want}")
     models, chan, msg = _fit_all(recs)
     pdir = cost.platform_dir()
     pdir.mkdir(parents=True, exist_ok=True)
@@ -458,7 +550,12 @@ def fit() -> None:
         + "\n",
         encoding="utf-8",
     )
-    prov = {"tool": TOOL, "builds": [r["build"] for r in recs], "step": "7.5"}
+    prov = {
+        "tool": TOOL,
+        "builds": [r["build"] for r in recs],
+        "step": "7.5",
+        "version": version,
+    }
     files = []
     for task, m in models.items():
         path = pdir / "models" / task / "params.json"
@@ -477,12 +574,15 @@ def fit() -> None:
     (pdir / "provenance.json").write_text(
         json.dumps(prov, indent=1) + "\n", encoding="utf-8"
     )
-    report = {"loo": _loo(recs), "n_builds": len(recs)}
+    report = {"version": version, "loo": _loo(recs), "n_builds": len(recs)}
     report["sha256"] = {
         str(f.relative_to(pdir)): hashlib.sha256(f.read_bytes()).hexdigest()
         for f in files
     }
-    _write_kv(PAPER / "linalg_fit_report.csv", _flatten(report), "step 7.5c fit")
+    name = (
+        "linalg_fit_report.csv" if version == 1 else f"linalg_fit_report_v{version}.csv"
+    )
+    _write_kv(PAPER / name, _flatten(report), f"step 7.5 fit, model v{version}")
     print(json.dumps(report, indent=1))
 
 
@@ -537,11 +637,11 @@ def _predict(
 # --- scoring -------------------------------------------------------------------------------------
 
 
-def validate() -> dict:
-    """Score the packaged models on the held-out builds and on the step 7.4 runs (AC7)."""
+def score(role: str) -> tuple[dict, list, list]:
+    """The packaged models against the builds of ``role``: metrics, resource rows, cycle rows."""
     msg = cost.message_model()
-    rows, cyc = [], []
-    for rec in records("holdout"):
+    rows, cyc, rej = [], [], []
+    for rec in records(role):
         if rec["error"] is not None:
             rows.append({"build": rec["build"], "error": rec["error"][:200]})
             continue
@@ -564,6 +664,9 @@ def validate() -> dict:
                     "ape_pct": round(_ape(p, s["interval"]), 2),
                 }
             )
+        for s in _reject_rows([rec]):
+            p = cost.reject_interval(msg, s["w_in"])
+            rej.append(_ape(p, s["interval"]))
     ok = [r for r in rows if "error" not in r]
     metrics = {"n_builds": len(rows), "n_clean": len(ok)}
     for tag in ("unit", "core"):
@@ -576,6 +679,9 @@ def validate() -> dict:
             metrics[f"{tag}_{k}_max_pct"] = float(np.max(apes))
     metrics["interval_mape_pct"] = float(np.mean([c["ape_pct"] for c in cyc]))
     metrics["interval_max_pct"] = float(np.max([c["ape_pct"] for c in cyc]))
+    if rej:
+        metrics["reject_mape_pct"] = float(np.mean(rej))
+        metrics["reject_max_pct"] = float(np.max(rej))
     metrics["run_7_4"] = _score_7_4(msg)
     metrics["ac7"] = {
         "dsp_bram_exact": all(
@@ -593,16 +699,34 @@ def validate() -> dict:
             v["ape_pct"] <= MAX_CYCLE_MAPE for v in metrics["run_7_4"].values()
         ),
     }
+    return metrics, rows, cyc
+
+
+def validate(version: int = 2) -> dict:
+    """Score the packaged models (model ``version``) on its held-out builds and on the step 7.4
+    runs (AC7).  Version 2 is also scored, as not clean, on the first round's held-out builds.
+    """
+    _, role = VERSIONS[version]
+    metrics, rows, cyc = score(role)
+    if version == 2:
+        metrics["first_holdout_not_clean"] = {
+            k: v for k, v in score("holdout")[0].items() if k not in ("run_7_4", "ac7")
+        }
+    sfx = "" if version == 1 else f"_v{version}"
     for name, data in (
-        ("linalg_validation.csv", rows),
-        ("linalg_validation_cycles.csv", cyc),
+        (f"linalg_validation{sfx}.csv", rows),
+        (f"linalg_validation_cycles{sfx}.csv", cyc),
     ):
         with (PAPER / name).open("w", encoding="utf-8", newline="") as f:
             keys = list(dict.fromkeys(k for r in data for k in r))
             w = csv.DictWriter(f, fieldnames=keys, lineterminator="\n")
             w.writeheader()
             w.writerows(data)
-    _write_kv(PAPER / "linalg_validation_metrics.csv", _flatten(metrics), "step 7.5d")
+    _write_kv(
+        PAPER / f"linalg_validation_metrics{sfx}.csv",
+        _flatten(metrics),
+        f"step 7.5, model v{version}",
+    )
     print(json.dumps(metrics, indent=1))
     return metrics
 
@@ -680,31 +804,36 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("split")
     sp.add_argument("--check", action="store_true")
+    sp.add_argument("--version", type=int, default=1, choices=(1, 2))
     rp = sub.add_parser("run")
-    rp.add_argument("--role", required=True, choices=("fit", "holdout"))
+    rp.add_argument(
+        "--role", required=True, choices=("fit", "holdout", "fit2", "holdout2")
+    )
     rp.add_argument("--shard")
     sub.add_parser("merge")
-    sub.add_parser("fit")
-    sub.add_parser("validate")
+    for cmd in ("fit", "validate"):
+        sub.add_parser(cmd).add_argument(
+            "--version", type=int, default=2, choices=(1, 2)
+        )
     a = ap.parse_args(argv)
     if a.cmd == "split":
-        text = split_text()
-        if a.check:
-            same = SPLIT.read_text(encoding="utf-8") == text
-            print("linalg_split.csv:", "unchanged" if same else "DIFFERS")
-            return 0 if same else 1
-        SPLIT.write_text(text, encoding="utf-8")
-        print(
-            f"wrote {SPLIT.relative_to(EX)}: {len(fit_set())} fit, {len(holdout_set())} holdout"
+        path, text = (
+            (SPLIT, split_text()) if a.version == 1 else (SPLIT_V2, split_v2_text())
         )
+        if a.check:
+            same = path.read_text(encoding="utf-8") == text
+            print(f"{path.name}:", "unchanged" if same else "DIFFERS")
+            return 0 if same else 1
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path.relative_to(EX)}: {text.count(chr(10)) - 1} builds")
     elif a.cmd == "run":
         run(a.role, a.shard)
     elif a.cmd == "merge":
         merge()
     elif a.cmd == "fit":
-        fit()
+        fit(a.version)
     elif a.cmd == "validate":
-        validate()
+        validate(a.version)
     return 0
 
 

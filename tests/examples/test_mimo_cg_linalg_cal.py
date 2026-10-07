@@ -36,3 +36,14 @@ def test_run_7_4_record():
         runs["centre"]["jobs"][8]["n"] == 16
         and runs["centre"]["jobs"][8]["n_payload"] == 8
     )
+
+
+def test_second_round_split():
+    fit2, hold2 = LC.fit2_set(), LC.holdout2_set()
+    first = set(LC.fit_set()) | set(LC.holdout_set())
+    assert len(fit2) == 20 and len(hold2) == LC.N_HOLDOUT == 12
+    assert not (set(fit2) & first) and not (set(hold2) & (first | set(fit2)))
+    assert LC.SPLIT_V2.read_text(encoding="utf-8") == LC.split_v2_text()
+    for c in fit2 + hold2:
+        s = LC.shapes(c, reject=True)
+        assert len(s) == 5 and s[-1][0] == LC.REJECT_OP

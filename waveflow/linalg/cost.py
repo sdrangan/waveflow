@@ -342,8 +342,21 @@ def message_interval(coef: dict, feats: dict) -> float:
 
 
 def reject_interval(coef: dict, w_in: int) -> float:
-    """A rejected request: its payload drained, nothing computed or written back."""
+    """A rejected request: its payload drained, nothing computed or written back.  From the fitted
+    rejection model when the coefficients carry one, else the message model's input terms.
+    """
+    r = coef.get("reject")
+    if r is not None:
+        return float(r["intercept"]) + float(r["w_in"]) * float(w_in)
     return float(coef["intercept"]) + float(coef["w_in"]) * float(w_in)
+
+
+def fit_reject_model(rows: list) -> dict:
+    """Least squares of a rejected request's interval on its words in."""
+    X = np.array([[1.0, float(r["w_in"])] for r in rows])
+    y = np.array([float(r["interval"]) for r in rows])
+    sol, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return {"intercept": float(sol[0]), "w_in": float(sol[1])}
 
 
 def fit_message_model(rows: list) -> dict:
