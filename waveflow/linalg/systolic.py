@@ -1,0 +1,295 @@
+"""systolic.py — the systolic matrix multiply: its core, command and formats.
+
+:class:`SystolicCore` computes ``C = q_c(A·B)`` or ``C = q_c(Aᴴ·B)`` on complex fixed-point
+matrices, as an output-stationary array of ``R × C`` processing elements, bit for bit like
+:func:`~waveflow.linalg.matmul.matmul`.  Its body is ``waveflow/build/systolic_core_task.h``.
+
+The core
+--------
+One firing is one **job**, set by one :class:`SystolicCmd` on ``cmd_in``: the operation, the
+dimensions ``m``, ``k``, ``n`` and the number ``nb`` of ``B`` matrices.  The core reads an
+``m × k`` matrix ``X`` from ``a_blk``, then for each of the ``nb`` matrices ``B`` on ``b_blk``
+writes one ``C`` on ``c_blk``; ``X`` is held for the whole job.  For ``MUL``, ``X = A``.  For
+``MUL_AH``, ``X = Aᵀ``, transposed (not conjugated) by whoever wrote the block, and the core
+computes ``Aᴴ·B = conj(X·conj(B))``.  Every block holds a matrix as row-major lane groups of
+``L`` complex values (:mod:`~waveflow.linalg.lanes`).
+
+``C`` (``m × n``) is covered in ``(m/R)·(n/C)`` tiles.  ``X`` values shift right along the rows of
+the array and ``B`` values down its columns, with the usual skew; each element accumulates its
+entry of ``C`` exactly over ``k`` and the tile is rounded once.  ``form`` picks the complex
+product: four real multiplies, or three (the Gauss form,
+:func:`~waveflow.utils.complexutils.cmult3`).  For ``MUL_AH`` the exact imaginary sum is negated
+before the rounding, and ``conj(B)`` is taken as ``B`` enters the array (its imaginary part
+negated in one more bit, so ``-2^(W-1)`` is exact).
+
+The command is not checked by the core; :func:`cmd_status` says whether one is valid.  The
+dimensions are run-time values up to the maxima ``Mmax``, ``Kmax``, ``Nmax``; ``m`` is a
+multiple of ``R``, ``n`` of ``C``, and ``k`` is a multiple of ``L`` or divides it.
+
+Formats
+-------
+The formats of ``A``, ``B`` and ``C`` are plain fields.  They reach the body as one integer, the
+format id of :meth:`SystolicCore.traits`, which also carries the exact types the array needs:
+``ba_t`` (``B`` in the array, one bit wider for the negation), ``p_t`` (one complex product)
+and ``acc_t`` (a sum of ``Kmax`` products).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import ClassVar
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataList
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_module import HwParam
+from waveflow.hw.interface import SobIFMaster, SobIFSlave, StreamIFSlave
+from waveflow.hw.mem_stream import KernelTask
+from waveflow.linalg import matmul as mm
+from waveflow.linalg.build import LinalgParts
+from waveflow.linalg.formats import Traits
+from waveflow.linalg.lanes import block_type, n_groups
+from waveflow.linalg.message import U8, U16, Status
+from waveflow.simulation.simobj import ProcessGen
+from waveflow.utils import complexutils as cx
+from waveflow.utils.fixputils import Format
+
+#: The task body of the core, in ``waveflow/build/``.
+CORE_BODY = "systolic_core_task.h"
+#: The headers a design with the core copies from ``waveflow/build/``.
+CORE_HEADERS = (CORE_BODY, "complex_utils.hpp", "wf_cint.h")
+#: The traits family of the core.
+CORE_TRAITS = "wf_systolic_traits"
+#: Bits of the core's command stream: one :class:`SystolicCmd` per word.
+CMD_BITS = 64
+FORMS = mm.FORMS
+
+
+class MatmulOp(IntEnum):
+    """The operations of the matrix multiply (``0`` is not one, so a zeroed header is refused)."""
+
+    MUL = 1  # C = q(A·B)
+    MUL_AH = 2  # C = q(Aᴴ·B)
+
+
+class SystolicCmd(DataList):
+    """One job of the core: one ``A``, ``nb`` matrices ``B``, as many ``C``."""
+
+    include_filename: ClassVar[str | None] = "wf_systolic_cmd.h"
+    elements: ClassVar[dict] = {
+        "op": {"schema": U8, "description": "a MatmulOp"},
+        "nb": {"schema": U8, "description": "matrices B in the job (at least 1)"},
+        "m": {"schema": U16, "description": "rows of C"},
+        "k": {"schema": U16, "description": "the inner dimension"},
+        "n": {"schema": U16, "description": "columns of B and C"},
+    }
+
+
+def command(op: int, m: int, k: int, n: int, nb: int = 1) -> SystolicCmd:
+    """A :class:`SystolicCmd` with these fields."""
+    c = SystolicCmd()
+    c.op, c.nb, c.m, c.k, c.n = int(op), int(nb), int(m), int(k), int(n)
+    return c
+
+
+def core_traits(a: Format, b: Format, c: Format, Kmax: int) -> Traits:
+    """The traits of a core with these formats: the registers and the exact types of the array."""
+    ba = cx.conj_format(b)
+    return Traits(
+        CORE_TRAITS,
+        (
+            ("a_t", a),
+            ("b_t", b),
+            ("c_t", c),
+            ("ba_t", ba),
+            ("p_t", cx.cmult_format(a, ba)),
+            ("acc_t", mm.acc_format(a, ba, Kmax)),
+        ),
+    )
+
+
+def stored_shape(op: int, m: int, k: int) -> tuple[int, int]:
+    """The shape of ``A`` as a job states it: ``m × k``, or ``k × m`` for ``Aᴴ``.  (The core's
+    block always holds ``m × k``: ``A``, or ``Aᵀ``.)"""
+    return (int(k), int(m)) if int(op) == MatmulOp.MUL_AH else (int(m), int(k))
+
+
+def cmd_status(
+    op: int,
+    nb: int,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    Mmax: int,
+    Kmax: int,
+    Nmax: int,
+    L: int,
+    R: int,
+    C: int,
+) -> Status:
+    """Whether a core built with these maxima and this array can run a job: ``OK``, ``BAD_OP``
+    or ``BAD_DIMS``."""
+    if int(op) not in (MatmulOp.MUL, MatmulOp.MUL_AH):
+        return Status.BAD_OP
+    if not (1 <= nb and 1 <= m <= Mmax and 1 <= k <= Kmax and 1 <= n <= Nmax):
+        return Status.BAD_DIMS
+    if m % R or n % C or (k % L and L % k):
+        return Status.BAD_DIMS
+    return Status.OK
+
+
+#: Placeholder cycle constants, until the cost model of step 7.5 replaces them.
+_SWEEP_FILL = 8
+_OVERHEAD = 8
+
+
+def load_a_cycles(m: int, k: int, *, L: int) -> int:
+    """Rough cycles to load ``X``: a lane group per cycle."""
+    return _OVERHEAD + n_groups(m * k, L)
+
+
+def per_b_cycles(m: int, k: int, n: int, *, L: int, R: int, C: int) -> int:
+    """Rough cycles per ``B``: its load, then per tile the skewed sweep and the output."""
+    tiles = (m // R) * (n // C)
+    return k * n // L + tiles * (k + R + C - 2 + _SWEEP_FILL + R * C // L)
+
+
+def core_cycles(
+    op: int, nb: int, m: int, k: int, n: int, *, L: int, R: int, C: int
+) -> int:
+    """Rough cycles of one job.  A placeholder until step 7.5 calibrates the core."""
+    return load_a_cycles(m, k, L=L) + nb * per_b_cycles(m, k, n, L=L, R=R, C=C)
+
+
+@dataclass
+class SystolicCore(FreeRunMod):
+    """The systolic matrix multiply core (see the module doc)."""
+
+    cpp_kernel_name: ClassVar[str | None] = "systolic_core"
+    Mmax: HwParam[int] = 8
+    Kmax: HwParam[int] = 8
+    Nmax: HwParam[int] = 32
+    L: HwParam[int] = 4
+    R: HwParam[int] = 4
+    C: HwParam[int] = 8
+    form: HwParam[int] = 4
+    sob_depth: HwParam[int] = 2
+    a: Format | None = None
+    b: Format | None = None
+    c: Format | None = None
+    clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if None in (self.a, self.b, self.c):
+            raise ValueError(f"{self.name}: SystolicCore needs the formats a, b and c")
+        M, K, N = int(self.Mmax), int(self.Kmax), int(self.Nmax)
+        L, R, C = int(self.L), int(self.R), int(self.C)
+        if L < 1 or L & (L - 1):
+            raise ValueError(f"the lane count L = {L} is not a power of two")
+        if C % L or N % C or M % R:
+            raise ValueError(f"need L | C, C | Nmax and R | Mmax (L={L}, C={C}, R={R})")
+        if int(self.form) not in FORMS:
+            raise ValueError(f"form must be one of {FORMS}, got {self.form}")
+        self.traits = core_traits(self.a, self.b, self.c, K)
+        self.cmd_in = StreamIFSlave(
+            name=f"{self.name}_cmd_in", sim=self.sim, bitwidth=CMD_BITS, has_tlast=False
+        )
+        self.a_blk = SobIFSlave(
+            name=f"{self.name}_a_blk",
+            sim=self.sim,
+            element_type=block_type(self.a.W, n_groups(M * K, L), L),
+        )
+        self.b_blk = SobIFSlave(
+            name=f"{self.name}_b_blk",
+            sim=self.sim,
+            element_type=block_type(self.b.W, K * N // L, L),
+        )
+        self.c_blk = SobIFMaster(
+            name=f"{self.name}_c_blk",
+            sim=self.sim,
+            element_type=block_type(self.c.W, M * N // L, L),
+        )
+        for ep in (self.cmd_in, self.a_blk, self.b_blk, self.c_blk):
+            self.add_endpoint(ep)
+
+    def status(self, op: int, nb: int, m: int, k: int, n: int) -> Status:
+        """:func:`cmd_status` for this core."""
+        return cmd_status(
+            op,
+            nb,
+            m,
+            k,
+            n,
+            Mmax=int(self.Mmax),
+            Kmax=int(self.Kmax),
+            Nmax=int(self.Nmax),
+            L=int(self.L),
+            R=int(self.R),
+            C=int(self.C),
+        )
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask(
+            "systolic_core_task",
+            CORE_BODY,
+            ("cmd_in", "a_blk", "b_blk", "c_blk"),
+            template_args=(
+                int(self.Mmax),
+                int(self.Kmax),
+                int(self.Nmax),
+                int(self.L),
+                int(self.R),
+                int(self.C),
+                int(self.form),
+                int(self.sob_depth),
+                self.traits.id,
+            ),
+        )
+
+    def linalg_parts(self) -> LinalgParts:
+        """What a design with this core needs generated: its traits, body and command header."""
+        return LinalgParts((self.traits,), CORE_HEADERS, (SystolicCmd,))
+
+    def run_iter(self) -> ProcessGen[None]:
+        cmd = yield from self.cmd_in.get_schema(SystolicCmd)
+        op, nb = int(cmd.op), int(cmd.nb)
+        m, k, n = int(cmd.m), int(cmd.k), int(cmd.n)
+        st = self.status(op, nb, m, k, n)
+        if st != Status.OK:
+            raise RuntimeError(f"{self.name}: a command it cannot run ({st.name})")
+        adjoint = op == MatmulOp.MUL_AH
+        blk = yield from self.a_blk.acquire_read()
+        xr, xi = blk.payload
+        yield from self.a_blk.release_read()
+        if xr.shape != (m, k):
+            raise RuntimeError(f"{self.name}: X is {xr.shape}, the command says {m, k}")
+        ar, ai = (xr.T, xi.T) if adjoint else (xr, xi)  # A as the model takes it
+        L, R, C = int(self.L), int(self.R), int(self.C)
+        period = self.clk.period
+        yield self.timeout(load_a_cycles(m, k, L=L) * period)
+        for _ in range(nb):
+            blk = yield from self.b_blk.acquire_read()
+            br, bi = blk.payload
+            yield from self.b_blk.release_read()
+            if br.shape != (k, n):
+                raise RuntimeError(
+                    f"{self.name}: B is {br.shape}, the command says {k, n}"
+                )
+            cr, ci = mm.matmul(
+                ar,
+                ai,
+                self.a,
+                br,
+                bi,
+                self.b,
+                self.c,
+                adjoint=adjoint,
+                form=int(self.form),
+            )
+            yield self.timeout(per_b_cycles(m, k, n, L=L, R=R, C=C) * period)
+            out = yield from self.c_blk.acquire_write()
+            out.payload = (cr, ci)
+            yield from self.c_blk.commit_write(out)

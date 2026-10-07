@@ -392,4 +392,19 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **A type that only widens needs no rounding or saturation mode.** With the register's
   modes, two registers that differ only in their modes made two memory element types of
   identical bits; without them, they share one element type and one array-utils file.
+- **A probe answers the question it built.** Gate 7.0 measured the conjugate transpose with
+  the example's K-lane rows of `A`; with L-lane groups the same transpose ran csynth out of
+  memory. When a decision rests on a probe, list what the probe held fixed.
+- **csynth's memory, not the design, can be the limit.** Run-time-indexed writes into
+  partitioned arrays (a lane to any of 16 banks, a row to any slot) made csynth climb past
+  10 GB in minutes. Write every bank through constant indices with a fixed source, and watch
+  memory: a watchdog that kills at 8–10 GB turns a 27-minute crash into a 3-minute answer.
+- **Move work out of the hard place.** No in-core form of the transpose was both safe and
+  small; moving it to whoever writes the block made the core's load 1.1k LUT.
+- **Measure the clever version before keeping it.** Conjugating in the three-multiply
+  pre-adders saves a bit of width on paper and cost twice the LUTs of the array in csynth.
+- **`pytest tests/linalg/` runs the toolchain tests too.** Nothing deselects `vitis` by
+  default; the quick loop is `-m "not vitis and not xsi"`.
+- **`pkill -f` matches its own shell.** A pattern that appears in the command line kills the
+  command; kill by PID.
 

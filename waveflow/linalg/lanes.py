@@ -64,6 +64,39 @@ def unpack_group(g: int, W: int, L: int) -> tuple[list[int], list[int]]:
     return re, im
 
 
+def n_groups(n_elems: int, L: int) -> int:
+    """Lane groups holding ``n_elems`` complex values."""
+    return -(-int(n_elems) // int(L))
+
+
+def pack_matrix(re, im, W: int, L: int, n_grp: int | None = None) -> list[int]:
+    """A matrix (any shape, row-major) → its lane groups, the last one zero-padded, and then
+    zero groups up to ``n_grp`` (a block's size)."""
+    re = np.asarray(re, np.int64).reshape(-1)
+    im = np.asarray(im, np.int64).reshape(-1)
+    n = n_groups(re.size, L) if n_grp is None else int(n_grp)
+    if n * L < re.size:
+        raise ValueError(f"{re.size} values do not fit {n} groups of {L}")
+    pad = n * L - re.size
+    re, im = np.pad(re, (0, pad)), np.pad(im, (0, pad))
+    return [
+        pack_group(re[g * L : (g + 1) * L], im[g * L : (g + 1) * L], W)
+        for g in range(n)
+    ]
+
+
+def unpack_matrix(
+    groups, n_elems: int, W: int, L: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The stored integers of the first ``n_elems`` values in ``groups``, as flat arrays."""
+    re, im = [], []
+    for g in list(groups)[: n_groups(n_elems, L)]:
+        r, i = unpack_group(int(g), W, L)
+        re += r
+        im += i
+    return np.asarray(re[:n_elems], np.int64), np.asarray(im[:n_elems], np.int64)
+
+
 # --- message words -----------------------------------------------------------------------------
 
 

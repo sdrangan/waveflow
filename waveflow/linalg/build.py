@@ -6,14 +6,17 @@
 (:func:`~waveflow.linalg.formats.render_traits_header`), plus the array utilities of every memory
 element type those specializations use.
 
-The header schema of the messages (``wf_linalg_header.h``) and ``streamutils_hls.h`` come from the
-framework's own steps; :func:`linalg_headers_dag` puts the three together, which is what a design
-or a test that builds alone needs.
+The header schema of the messages (``wf_linalg_header.h``), the components' command schemas and
+``streamutils_hls.h`` come from the framework's own steps; :func:`linalg_headers_dag` puts them
+together, which is what a design or a test that builds alone needs.  A component says what it needs
+in a :class:`LinalgParts` (its ``linalg_parts()``), and :func:`collect_parts` gathers them from a
+design's tree.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from waveflow.build.build import Buildable, BuildConfig, BuildDag, BuildResult
@@ -33,6 +36,38 @@ from waveflow.linalg.message import LinalgHeader
 BUILD_DIR = Path(__file__).resolve().parents[1] / "build"
 #: The helper headers every linear-algebra design includes.
 HELPERS = ("wf_lanes.h", "wf_matrix_io.h", "wf_linalg_msg.h")
+
+
+@dataclass(frozen=True)
+class LinalgParts:
+    """What a linear-algebra component needs in its design's include directory: traits to
+    render, task bodies to copy (names in ``waveflow/build/``) and command schemas to generate.
+    """
+
+    traits: tuple[Traits, ...] = ()
+    bodies: tuple[str, ...] = ()
+    schemas: tuple[type, ...] = ()
+
+    def __add__(self, other: LinalgParts) -> LinalgParts:
+        def merged(x: tuple, y: tuple) -> tuple:
+            return tuple(dict.fromkeys((*x, *y)))
+
+        return LinalgParts(
+            merged(self.traits, other.traits),
+            merged(self.bodies, other.bodies),
+            merged(self.schemas, other.schemas),
+        )
+
+
+def collect_parts(comp) -> LinalgParts:
+    """The :class:`LinalgParts` of ``comp`` and every module below it, merged in order."""
+    parts = LinalgParts()
+    own = getattr(comp, "linalg_parts", None)
+    if callable(own):
+        parts = parts + own()
+    for sub in getattr(comp, "sub_comps", {}).values():
+        parts = parts + collect_parts(sub)
+    return parts
 
 
 class LinalgStep(Buildable):
@@ -103,19 +138,23 @@ def linalg_headers_dag(
     bodies: Iterable[str] = (),
     include_dir: str = "include",
     word_bits: Iterable[int] = WORD_BITS_SUPPORTED,
+    schemas: Iterable[type] = (),
 ) -> BuildDag:
-    """A DAG with ``streamutils_hls.h``, the message header schema and :class:`LinalgStep`."""
+    """A DAG with ``streamutils_hls.h``, the message header schema, the command ``schemas`` and
+    :class:`LinalgStep`.  The schemas are generated for every word width in ``word_bits`` and 64.
+    """
     word_bits = sorted(int(w) for w in word_bits)
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir=include_dir))
-    dag.add(
-        DataSchemaStep(
-            LinalgHeader,
-            word_bw_supported=word_bits,
-            include_dir=include_dir,
-            framed=True,
+    for cls in dict.fromkeys((LinalgHeader, *schemas)):
+        dag.add(
+            DataSchemaStep(
+                cls,
+                word_bw_supported=sorted({*word_bits, 64}),
+                include_dir=include_dir,
+                framed=True,
+            )
         )
-    )
     dag.add(LinalgStep(traits, bodies, include_dir, word_bits))
     return dag
 
@@ -126,12 +165,12 @@ def gen_linalg_headers(
     bodies: Iterable[str] = (),
     include_dir: str = "include",
     word_bits: Iterable[int] = WORD_BITS_SUPPORTED,
+    schemas: Iterable[type] = (),
 ) -> Path:
     """Run :func:`linalg_headers_dag` under ``root_dir``; returns the include directory."""
     config = BuildConfig(root_dir=Path(root_dir), params={})
-    results = linalg_headers_dag(traits, bodies, include_dir, word_bits).run(
-        config, force=True
-    )
+    dag = linalg_headers_dag(traits, bodies, include_dir, word_bits, schemas)
+    results = dag.run(config, force=True)
     failed = {name: r.message for name, r in results.items() if not r.success}
     if failed:
         raise RuntimeError(f"linalg header generation failed: {failed}")
