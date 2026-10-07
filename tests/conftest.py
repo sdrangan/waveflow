@@ -94,7 +94,12 @@ import pytest
 #: 144 -> 147 on 2026-10-07 (step 8.3): ``tests/linalg/test_cg_vector_unit.py`` collects **3** --
 #: the standalone CG vector unit at RTL (centre, smallest, stress), each running jobs and rejected
 #: requests back to back from one build, bit-exact against the model.
-WANT_XSI_GATES = 147
+#:
+#: 147 -> 144 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 9.2c, gate 9.0): the
+#: example's detector now runs on the two components above, and the RTL gates of its retired blocks
+#: went with them: ``test_mimo_cg_hw_vec.py`` (1) and ``test_mimo_cg_hw_mm.py`` (2).  The units'
+#: own gates in ``tests/linalg/`` cover what they tested.
+WANT_XSI_GATES = 144
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

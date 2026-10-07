@@ -31,14 +31,13 @@ testbench uses the same renderer, so the hardware and the proven C++ reference a
 from __future__ import annotations
 
 import functools
-from enum import IntEnum
 from typing import ClassVar
 
 import numpy as np
 
 from examples.mimo_cg.mimo_cg_fixed import CgFormats, accumulator_formats
 from waveflow.hw.complexfield import ComplexField
-from waveflow.hw.dataschema import DataArray, DataList, EnumField, IntField
+from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.fixpoint import FixedField
 from waveflow.utils import complexutils as cx
 from waveflow.utils.fixputils import Format
@@ -75,31 +74,6 @@ class CgDesc(DataList):
     elements: ClassVar[dict] = {
         "nit": {"schema": Word32, "description": "CG iterations (1..K)"},
         "x_off": {"schema": Word32, "description": "X (K x N) output word offset"},
-    }
-
-
-class IterOp(IntEnum):
-    """What one per-iteration command asks of a block."""
-
-    INIT = 0  #: start a job (the vector unit initializes from B, the matmul loads A)
-    ITER = 1  #: one CG iteration
-    LAST = 2  #: the job's final iteration (the vector unit then emits X, not P)
-
-
-IterOpField = EnumField.specialize(enum_type=IterOp, bitwidth=32)
-
-
-class CgIterCmd(DataList):
-    """One entry of a block's command queue (``cg_ctrl`` → ``cg_vec`` / ``cg_mm``): the op and the
-    iteration it belongs to (0 for ``INIT``)."""
-
-    include_filename: ClassVar[str | None] = "cg_iter_cmd.h"
-    elements: ClassVar[dict] = {
-        "op": {"schema": IterOpField, "description": "INIT, ITER or LAST"},
-        "it": {
-            "schema": Word32,
-            "description": "iteration number, 1..nit (0 for INIT)",
-        },
     }
 
 

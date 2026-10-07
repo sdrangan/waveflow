@@ -60,7 +60,7 @@ WORK_ROOT = HERE.parent / "calib" / "work"
 PLATFORM = "xczu48dr_250mhz"
 CLK_FREQ = 250e6
 
-TOP_NAME = {"vec": B.VEC_TOP, "mm": B.MM_TOP, "det": B.DET_TOP}
+TOP_NAME = {"vec": B.CG_UNIT_TOP, "mm": B.SYSTOLIC_UNIT_TOP, "det": B.DET_TOP}
 #: The lock events that open and close one span of a block: ``kind -> (task, input, output)``.
 SPAN_KINDS = {
     "mm.iter": ("cg_mm_task", "p_blk", "s_blk"),
@@ -77,15 +77,16 @@ _STALL_WINDOW = 3
 
 
 def comp_class(top: str):
-    """The top's component class."""
+    """The top's component class: a unit build is Waveflow's standalone unit in its bench (gate
+    9.0)."""
     if top == "vec":
-        from examples.mimo_cg.hw.vec import CgVecUnit
+        from tests.linalg._cg_unit_bench import CgUnitBench
 
-        return CgVecUnit
+        return CgUnitBench
     if top == "mm":
-        from examples.mimo_cg.hw.mm import CgMmUnit
+        from tests.linalg._unit_bench import UnitBench
 
-        return CgMmUnit
+        return UnitBench
     from examples.mimo_cg.hw.detector import CgDetector
 
     return CgDetector
@@ -93,14 +94,10 @@ def comp_class(top: str):
 
 def gen_kwargs(top: str, c: HwConfig) -> dict:
     """The keyword arguments of the top's ``generate_*`` function for this configuration."""
-    kw = {
-        "K": c.K,
-        "L": c.L,
-        "fmt": c.fmt,
-        "mem_dw": c.mem_dw,
-        "cmd_depth": c.cmd_depth,
-        "sob_depth": c.sob_depth,
-    }
+    kw = {"K": c.K, "L": c.L, "fmt": c.fmt, "mem_dw": c.mem_dw}
+    if top == "det":
+        kw["cmd_depth"] = c.cmd_depth  # the units' commands are not queued
+    kw["sob_depth"] = c.sob_depth
     if top != "vec":
         kw |= {"R": c.R, "C": c.C, "cmul": c.cmul}
     return kw
@@ -109,6 +106,8 @@ def gen_kwargs(top: str, c: HwConfig) -> dict:
 def elab_params(top: str, c: HwConfig) -> dict:
     """The elaboration parameters of the top (the names the component classes use)."""
     kw = gen_kwargs(top, c)
+    if top != "det":
+        return {"unit": tuple(B.unit_fields(top, **kw).items())}
     kw["mem_dwidth"] = kw.pop("mem_dw")
     return kw | {"N": DEFAULT_N}
 
@@ -199,12 +198,12 @@ def cycles_budget(c: HwConfig, jobs: list[int]) -> int:
 def _sim(top: str, c: HwConfig, problems, jobs, n_cycles: int):
     kw = elab_params(top, c) | {"n_cycles": n_cycles}
     kw.pop("N")
-    if top == "vec":
-        from examples.mimo_cg.hw.vec import CgVecUnitSim as Sim
-    elif top == "mm":
-        from examples.mimo_cg.hw.mm import CgMmUnitSim as Sim
-    else:
-        from examples.mimo_cg.hw.detector import CgDetectorSim as Sim
+    if top != "det":
+        raise NotImplementedError(
+            "the unit builds' workload on the components' units is plan step 9.4a"
+        )
+    from examples.mimo_cg.hw.detector import CgDetectorSim as Sim
+
     return Sim(problems, jobs, **kw)
 
 
@@ -649,8 +648,8 @@ def measure(
     try:
         started = time.perf_counter()
         {
-            "vec": B.generate_vec_unit,
-            "mm": B.generate_mm_unit,
+            "vec": B.generate_cg_unit,
+            "mm": B.generate_systolic_unit,
             "det": B.generate_detector,
         }[top](out_dir, **gen_kwargs(top, c))
         ok, _report, log = B.csynth(out_dir, name)
