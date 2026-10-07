@@ -71,58 +71,40 @@ def scenario(name: str, seed: int = 83) -> list:
         return UB.Message(op, k, n, nfollow, _noise(rng, fmt, pk or k, pn or n), fmt)
 
     k2 = 5 if K >= 8 else 3  # below Kmax, not a power of two
-    n2 = 2 * L if 2 * L < N else L
-    if name == "centre":
-        return [
-            job(3, K, N),
-            msg(7, 4, 8, 0),  # BAD_OP
-            job(
-                4,
-                k2,
-                n2,
-                zero=True,
-                inserts={
-                    1: [
-                        msg(
-                            STEP, k2, n2, 0, fmt=f.S
-                        ),  # BAD_SEQUENCE: nfollow should be 3
-                        msg(START, k2, n2, 2),
-                    ],  # BAD_SEQUENCE: a start inside a job
-                    2: [msg(STEP, k2, n2, 2, pn=n2 // 2, fmt=f.S)],  # BAD_LENGTH
-                },
-            ),
-            msg(START, 4, 8, K + 1),  # BAD_DIMS: nit > nitmax
-            msg(STEP, 4, 8, 0, fmt=f.S),  # BAD_SEQUENCE: no job
-            job(K, K, N // 2),
-            msg(START, K + 1, 8, 1, pk=4),  # BAD_DIMS: k > Kmax
-            msg(START, 4, 8, 1, pn=4),  # BAD_LENGTH
-            job(1, 3, L),
-        ]
-    if name == "smallest":
-        return [
-            job(K, K, N),
-            msg(0, 2, 2, 0),  # BAD_OP
-            job(2, 3, 5, zero=True, inserts={2: [msg(STEP, 3, 5, 0, pn=4, fmt=f.S)]}),
-            msg(START, 2, 4, K + 1),  # BAD_DIMS
-            msg(STEP, 2, 4, 0, fmt=f.S),  # BAD_SEQUENCE: no job
-            job(1, 1, 7),
-        ]
-    return [
-        job(K, K, N),
-        msg(STEP, 4, 4, 0, fmt=f.S),  # BAD_SEQUENCE: no job
+    n2 = 2 * L if 2 * L < N else L  # below Nmax
+    mid = max(2, K // 2)  # a middle iteration count
+    items = [
+        job(K, K, N),  # nitmax iterations at full size
+        msg(7, 4, n2, 0),  # BAD_OP
         job(
-            5,
-            7,
-            6,
+            mid,
+            k2,
+            n2,
             zero=True,
             inserts={
-                2: [msg(START, 7, 6, 1), msg(STEP, 7, 6, 3, pk=6, fmt=f.S)],
+                1: [
+                    msg(STEP, k2, n2, 0, fmt=f.S),  # BAD_SEQUENCE: the count disagrees
+                    msg(START, k2, n2, 2),  # BAD_SEQUENCE: a start inside a job
+                ],
+                2: [
+                    msg(STEP, k2, n2 + L, mid - 2, fmt=f.S),  # BAD_SEQUENCE: another n
+                    msg(
+                        STEP, k2, n2, mid - 2, pn=max(1, n2 // 2), fmt=f.S
+                    ),  # BAD_LENGTH
+                ],
             },
         ),
-        msg(9, 4, 4, 0),  # BAD_OP
-        msg(START, 4, 3, 2),  # BAD_DIMS: L does not divide n
-        job(2, 3, 2),
+        msg(START, 2, n2, K + 1),  # BAD_DIMS: nit > nitmax
+        msg(STEP, 2, n2, 0, fmt=f.S),  # BAD_SEQUENCE: no job
+        msg(START, K + 1, n2, 1, pk=2),  # BAD_DIMS: k > Kmax
+        msg(START, 2, N + L, 1, pn=L),  # BAD_DIMS: n > Nmax
+        job(1, 1, L),  # one iteration, one column group
+        msg(START, 2, n2, 1, pn=max(1, n2 // 2)),  # BAD_LENGTH between jobs
+        job(2, 3, n2),
     ]
+    if L > 1:
+        items.insert(-1, msg(START, 2, L + 1, 1))  # BAD_DIMS: L does not divide n
+    return items
 
 
 def make_sim(name: str, **kw) -> UB.CgUnitBenchSim:
@@ -155,12 +137,63 @@ def test_message_status():
     assert st(h(STEP, 8, 32, 0), None, **kw) == Status.BAD_SEQUENCE  # no job
 
 
-def test_scenarios_reach_every_status():
-    for name in UNITS:
-        sim = make_sim(name)
-        assert set(sim.statuses) == set(Status), (name, sorted(set(sim.statuses)))
-        served = sum(st == Status.OK for st in sim.statuses)
-        assert served > 0 and served < len(sim.statuses)
+def rejection_kinds(name: str) -> tuple[set, set]:
+    """The kinds of rejection a scenario sends, each tagged inside or between jobs, and the
+    iteration counts of its served jobs."""
+    p = UNITS[name]
+    sim = make_sim(name)
+    kinds, nits, job = set(), set(), None
+    for m, st in zip(sim.msgs, sim.statuses, strict=True):
+        where = "inside" if job is not None else "between"
+        if st == Status.OK:
+            if m.op == START:
+                job, _ = Job(m.k, m.n, m.nfollow), nits.add(m.nfollow)
+            else:
+                job = Job(m.k, m.n, job.left - 1) if job.left > 1 else None
+            continue
+        if st == Status.BAD_OP:
+            kind = "op"
+        elif st == Status.BAD_DIMS:
+            if not 1 <= m.nfollow <= p["nitmax"]:
+                kind = "dims_nit"
+            elif not 1 <= m.k <= p["Kmax"]:
+                kind = "dims_k"
+            else:
+                kind = "dims_n"
+        elif st == Status.BAD_SEQUENCE:
+            if job is None:
+                kind = "seq_no_job"
+            elif m.op == START:
+                kind = "seq_start_in_job"
+            elif (m.k, m.n) != (job.k, job.n):
+                kind = "seq_dims"
+            else:
+                kind = "seq_count"
+        else:
+            kind = "length"
+        kinds.add((kind, where))
+    return kinds, nits
+
+
+def test_every_gate_runs_the_whole_list():
+    """Each configuration's scenario (step 8.3, as §10 lists it): nit = 1, a middle count and
+    nitmax; every kind of rejection, between jobs and inside them."""
+    want = {
+        ("op", "between"),
+        ("dims_nit", "between"),
+        ("dims_k", "between"),
+        ("dims_n", "between"),
+        ("seq_no_job", "between"),
+        ("seq_start_in_job", "inside"),
+        ("seq_dims", "inside"),
+        ("seq_count", "inside"),
+        ("length", "between"),
+        ("length", "inside"),
+    }
+    for name, p in UNITS.items():
+        kinds, nits = rejection_kinds(name)
+        assert want <= kinds, (name, sorted(want - kinds))
+        assert {1, p["nitmax"]} <= nits and any(1 < n < p["nitmax"] for n in nits), nits
 
 
 def test_unit_refuses_bad_construction():

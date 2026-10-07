@@ -948,6 +948,8 @@ def test_cg_page_quotes_the_step_8_3_runs():
             f"measured ({float(m[c + '.ape_pct']):.1f}%)") in text
     for name in ("smallest", "stress"):
         assert f"{name} {float(m[f'run_8_3.{name}.ape_pct']):.1f}%" in text
+    lo, hi = float(m["first_message.over_steady_min"]), float(m["first_message.over_steady_max"])
+    assert f"it came {lo:.0f} to {hi:.0f} cycles after the model's steady `START` interval" in text
 
 
 def test_cg_page_quotes_the_measured_centre_build():

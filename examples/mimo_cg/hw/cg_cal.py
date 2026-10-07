@@ -630,6 +630,29 @@ def _score_8_3(msg: dict) -> dict:
     return out
 
 
+def _first_message(role: str, msg: dict) -> dict:
+    """Reported, not gated: the first reply after reset (a full-size ``START``), measured from the
+    simulation's start, against the model's steady interval for the same request."""
+    first, over = [], []
+    for rec in records(role):
+        if rec["error"] is not None:
+            continue
+        unit = CgConfig(**rec["config"]).build()
+        q = rec["requests"][0]
+        steady = cg_cost.message_interval(
+            msg, cg_cost.message_features(unit, q["op"], q["k"], q["n"])
+        )
+        first.append(q["reply_cycle"])
+        over.append(q["reply_cycle"] - steady)
+    return {
+        "n": len(first),
+        "cycles_min": int(min(first)),
+        "cycles_max": int(max(first)),
+        "over_steady_min": round(float(min(over)), 1),
+        "over_steady_max": round(float(max(over)), 1),
+    }
+
+
 def score(role: str) -> tuple[dict, list, list]:
     """The packaged models against the builds of ``role``: metrics, resource rows, cycle rows."""
     msg = cg_cost.message_model()
@@ -684,6 +707,7 @@ def score(role: str) -> tuple[dict, list, list]:
         if v:
             metrics[f"reject_{key}_mape_pct"] = float(np.mean(v))
             metrics[f"reject_{key}_max_pct"] = float(np.max(v))
+    metrics["first_message"] = _first_message(role, msg)
     metrics["run_8_3"] = _score_8_3(msg)
     metrics["ac8"] = {
         "dsp_bram_exact": all(

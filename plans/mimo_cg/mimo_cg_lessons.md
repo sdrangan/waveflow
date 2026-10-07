@@ -447,3 +447,24 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Validate parameters where the module is built.** Unsupported word widths, lanes too narrow
   for a register and unsigned formats each failed far from their cause (a serializer, the model,
   C++) until the constructors checked them.
+
+## Phase 8 (2026-10-07)
+
+- **Regenerate the baseline before relying on it.** The accuracy grid had not been regenerated
+  since the model was split into sub-steps; a 7-minute probe at gate 8.0 showed it byte-identical
+  and made the 30-point check a real reference instead of an assumption.
+- **A check that never fires looks like a pass.** The shared csynth summary never recorded loop
+  II (it searched the wrong XML element), so Phase 7's "every loop at II 1" rested on reading
+  reports by hand; asserting the value is what exposed it.
+- **Smoke-run the campaign before pre-registering its forms.** One centre build showed that
+  back-to-back rejections follow the previous request's drain, not their own payload, and the
+  form could be fixed before any calibration data existed.
+- **A loop costs per trip, not only per element.** The `START` form had rows but no per-group
+  term; the 69% misses were all on starts with many short groups, and one term fixed them.
+- **Check a tool's index base before sharding.** The campaign's shards count from 0; launching
+  1..4 skipped a quarter of the builds, which the rerun recovered because records are per build.
+- **A new test's tolerance needs a source before it is written.** The wide-register solve test's
+  first bound was a guess; the bound now cites the measured value and the documented accuracy.
+- **"Each gate runs the list" means each gate.** The RTL scenarios covered most rejection kinds
+  across the three gates but not each kind in each gate, and one receiver branch never ran at RTL;
+  the M8 review caught it.

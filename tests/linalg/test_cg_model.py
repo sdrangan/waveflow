@@ -113,9 +113,10 @@ def test_solve_reproduces_the_frozen_explicit_runs(golden):
             assert _same(seen[K], _state(arrays, f"k{K}_xK_out", j)), (K, name)
 
 
-#: The wide registers' documented accuracy: within 6e-5 of floating-point CG at 64 x 8 and up to
-#: 7.4e-4 at M/K = 2 (the example's AC2.4 and its M2 review), so 1e-3 separates a solve from a
-#: non-solve (errors of order 0.1) with margin.
+#: The bound on the largest absolute error against ``numpy.linalg.solve``.  The test's system
+#: measured 1.0e-4 (a first guess of 1e-5 was too tight); the bound rests on the wide registers'
+#: documented accuracy against floating-point CG (a different metric: up to 7.4e-4 at M/K = 2, the
+#: example's M2 review), and 1e-3 still separates a solve from a non-solve (errors of order 0.1).
 WIDE_TOL = 1e-3
 
 

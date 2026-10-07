@@ -397,14 +397,17 @@ All 12 were bit-exact at RTL. The scores (Vitis HLS / Vivado xsim 2024.1;
 | served intervals, mean error (worst) | 2.0% (30.8%) | |
 
 The three RTL runs of `tests/linalg/test_cg_vector_unit.py`, predicted as the sum of their
-requests' intervals: centre 12,322.7 cycles against 12,399 measured (0.6%), smallest 2.1%, stress
-1.7% (`paper_data/cg_unit_8_3_cycles.csv`). Every one of the 43 builds met 4 ns in synthesis
+requests' intervals: centre 14,007.5 cycles against 14,070 measured (0.4%), smallest 2.4%, stress
+1.8% (`paper_data/cg_unit_8_3_cycles.csv`). Every one of the 43 builds met 4 ns in synthesis
 (estimated 3.352 ns, `cg_builds.csv`). The study tooling is `examples/mimo_cg/hw/cg_cal.py`.
 
 ## Limits
 
 * **One tool version, one part, one clock.** The cost models describe Vitis HLS / Vivado xsim
   2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+* **Steady intervals only.** The model gives the time a message adds to a stream. The first reply
+  after reset comes later: on the held-out builds it came 38 to 115 cycles after the model's steady
+  `START` interval (`cg_validation_metrics.csv`).
 * **The calibrated range.** The calibration builds spanned `Kmax` in {4, 8, 16} with `nitmax =
   Kmax`, `Nmax` in {16, 32}, `L` in {1, 2, 4, 8, 16}, the example's formats with vector width `W` in
   {8, 10, 12, 14, 16} and guard `g` in {0, 4, 8} (`ps` and `rz` `W + g` bits, `g_div` 6) and its

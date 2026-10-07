@@ -373,6 +373,9 @@ _SOURCES = {
     "detectors_source": "detectors.py",
     "fixed_source": "mimo_cg_fixed.py",
     "sweep_source": "mimo_cg_accuracy_sweep.py",
+    # The bit-exact model moved into Waveflow (plan Phase 8): an edit there is an edit here.
+    "cg_model_source": "../../waveflow/linalg/cg.py",
+    "matmul_model_source": "../../waveflow/linalg/matmul.py",
 }
 
 

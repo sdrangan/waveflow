@@ -1,7 +1,7 @@
 """cg_cost.py — the cost model of the CG vector unit: resources and cycles.
 
 The CG twin of :mod:`waveflow.linalg.cost` (the systolic unit's), in the same packaged platform and
-with the same conventions; the forms are the step 8.4 design.
+with the same conventions.
 
 Resources
 ---------
@@ -9,10 +9,10 @@ Each task of :class:`~waveflow.linalg.cg_vector.CgVectorUnit` declares its struc
 block RAM are **counted**, LUT and FF are **fitted** on the terms it writes out.  The core holds
 twelve multiplies per lane (two in the start, two in pass 1, six in pass 2, two in pass 3), of which
 Vitis HLS 2024.1 on ``xczu48dr`` binds 12 to DSPs from 12-bit vectors up, 5 at 10 bits and 3 at
-8 bits (:func:`dsps_per_lane`; measured on the example's vector unit and the step 8.2 builds), and
+8 bits (:func:`dsps_per_lane`; measured on the calibration builds), and
 its six state arrays (``X``, ``R``, ``P``, real and imaginary, ``Kmax × Nmax/L`` per lane) by the
 device rule.  The receiver, the loader, the store and the core each compute one run-time index
-product (``k·n``).  The unit's channels are its four stream-of-blocks buffers (step 7.5's buffer
+product (``k·n``).  The unit's channels are its four stream-of-blocks buffers (the systolic unit's buffer
 rule, :func:`waveflow.linalg.cost.buffer_blocks`), the FIFOs and, in a design fed from memory, the
 ``m_axi`` adapters (a block-RAM constant per word width, LUT and FF fitted on the word width).
 
@@ -23,7 +23,7 @@ A message's time in a stream of messages fed from memory is a sum of compute and
     interval = c0 + c . (start, start_rows, start_groups, rows, groups, groups_div, w_in, w_out)
 
 ``start`` is 1 for a ``START``, ``start_rows = k·ng`` its pass over the rows and ``start_groups =
-ng`` its loop over the column groups (``ng = n/L``; added on the calibration builds, step 8.4c); for
+ng`` its loop over the column groups (``ng = n/L``; added on the calibration builds); for
 a ``STEP``, ``rows = k·ng`` (the three passes and the output), ``groups = ng`` and ``groups_div =
 ng × the dividend's width`` (the dividers' latency grows with it); ``w_in`` and ``w_out`` are the
 words in (header and payload) and out.  A rejected request costs ``q0 + q1·w_in`` right after a
@@ -180,7 +180,7 @@ def channel_memories(unit) -> list:
 
 
 def channel_counted(unit) -> dict:
-    """Block RAM of the unit's four stream-of-blocks buffers, by step 7.5's buffer rule."""
+    """Block RAM of the unit's four stream-of-blocks buffers, by the systolic unit's buffer rule."""
     word = int(unit.word_bits)
     total = sum(
         cost.buffer_blocks(m.depth, m.elem_bits, m.banks, word)

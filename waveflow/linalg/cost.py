@@ -106,7 +106,7 @@ def check_platform(plat) -> None:
         or (clk is not None and float(clk) != CLK_HZ)
     ):
         raise ValueError(
-            f"the systolic unit's models describe the packaged platform {PLATFORM} ({PART} at "
+            f"the linear-algebra models describe the packaged platform {PLATFORM} ({PART} at "
             f"{CLK_HZ / 1e6:g} MHz, {TOOL}), not {name!r} ({part} at {clk} Hz); attach them "
             "with add_rm(waveflow.linalg.cost.platform())"
         )
