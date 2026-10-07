@@ -1,7 +1,8 @@
-"""Steps 4.8–4.10 of plans/mimo_cg/mimo_cg_paper_sims.md: the integrated CG detector (AC4).
+"""Steps 4.8–4.10 of plans/mimo_cg/mimo_cg_paper_sims.md: the integrated CG detector (AC4), rebuilt
+on Waveflow's ``SystolicCore`` and ``CgVectorCore`` at steps 9.2a–9.2b (gate 9.0).
 
-Step 4.8 (no markers): the Python simulation of ``CgDetector`` — CG control, the vector unit and
-the systolic matmul in a feedback loop over stream-of-blocks — writes, for every job, the ``X`` of
+Step 4.8 (no markers): the Python simulation of ``CgDetector`` — CG control, the vector core and
+the systolic core in a feedback loop over stream-of-blocks — writes, for every job, the ``X`` of
 ``cg_fixed`` itself, bit for bit: every problem at every ``nit = 1 … K``, K ∈ {4, 8, 16}, W12g8 and
 W14g8, with many jobs in flight.
 
@@ -30,6 +31,8 @@ from examples.mimo_cg.hw.build import (
 from examples.mimo_cg.hw.detector import CgDetector, CgDetectorSim, detector_problems
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.hw.mem_stream import MemRStream, MemWStream
+from waveflow.linalg.cg_vector import CgVectorCore
+from waveflow.linalg.systolic import SystolicCore
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain
 from waveflow.utils.csynthparse import CsynthParser, synth_target
@@ -78,9 +81,23 @@ def test_detector_structure():
     assert isinstance(det.wstream, MemWStream) and det.wstream.emit_done
     names = [b[0] if isinstance(b, tuple) else b for b in det.boundary]
     assert names == ["s_cmd", "m_in", "m_out", "s_done"]
-    # the feedback loop: vec -> mm through p_blk, mm -> vec through s_blk
-    assert det.vec.p_blk.element_type is det.mm.p_blk.element_type
-    assert det.mm.s_blk.element_type is det.vec.s_blk.element_type
+    # the blocks are Waveflow's cores, sized by the detector's knobs (R = 0 means K)
+    assert isinstance(det.mm, SystolicCore) and isinstance(det.vec, CgVectorCore)
+    assert (int(det.mm.Mmax), int(det.mm.Kmax), int(det.mm.R)) == (4, 4, 4)
+    assert (int(det.vec.Kmax), int(det.vec.nitmax)) == (4, 4)
+    # every edge joins equal block types; the feedback loop: vec -> mm through p_blk (mm's B),
+    # mm -> vec through s_blk (mm's C)
+    for master, slave in (
+        (det.load.a_blk, det.mm.a_blk),
+        (det.load.b_blk, det.vec.b_blk),
+        (det.vec.p_blk, det.mm.b_blk),
+        (det.mm.c_blk, det.vec.s_blk),
+        (det.vec.x_blk, det.store.x_blk),
+    ):
+        assert master.element_type is slave.element_type
+    # one unframed 64-bit command per core per job
+    assert int(det.ctrl.mm_cmd.bitwidth) == int(det.mm.cmd_in.bitwidth) == 64
+    assert int(det.ctrl.vec_cmd.bitwidth) == int(det.vec.cmd_in.bitwidth) == 64
 
 
 # --- step 4.9: csynth (Vitis) ----------------------------------------------------------------

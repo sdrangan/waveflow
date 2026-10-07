@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+import numpy as np
 import pytest
 
 from examples.mimo_cg.hw import space
@@ -29,10 +30,10 @@ from examples.mimo_cg.hw.common import (
     hw_formats,
 )
 from examples.mimo_cg.hw.detector import CgDetectorSim, detector_problems
-from examples.mimo_cg.hw.mm import CgMmUnitSim
-from examples.mimo_cg.hw.vec import CgVecUnitSim
 from examples.mimo_cg.mimo_cg_accuracy_sweep import sweep_format
-from examples.mimo_cg.mimo_cg_conformance import CaseSetSpec, _problems
+from tests.linalg import _cg_unit_bench as CUB
+from tests.linalg import _unit_bench as SUB
+from waveflow.linalg.systolic import MatmulOp
 
 N = 32
 SPACE_FORMATS = [f"W{W}g{g}" for W in SPACE_W for g in SPACE_G]
@@ -325,17 +326,12 @@ def test_committed_split_is_what_the_code_regenerates(tmp_path):
 # --- the Python simulation at every format of the space --------------------------------------
 
 
-def _unit_jobs(kind: str, fmt: int, K: int, seed: int):
-    """8 random problems and the zero-residual one, with a nit per job cycling 1..K."""
-    probs = _problems(CaseSetSpec(kind, hw_format(fmt), K, N, K, False, seed))
-    probs = probs[:8] + probs[-1:]
-    return [(A, B, 64.0) for A, B, _ in probs], [(j % K) + 1 for j in range(len(probs))]
-
-
 @pytest.mark.parametrize("name", SPACE_FORMATS)
 def test_pysim_is_bit_exact_at_every_format(name):
-    """Detector (every nit), vector unit and matmul unit at K = 4: each ``run`` raises on a mismatch."""
+    """Detector (every nit) and, in place of the retired unit builds (gate 9.0), Waveflow's two
+    standalone units at K = 4 with the study's formats: each ``run`` raises on a mismatch."""
     K, fmt = 4, ALL_FORMAT_NAMES.index(name)
+    f = hw_format(fmt)
     probs = detector_problems(
         32, K, N, 5, seed=40 + fmt
     )  # the last is the zero-residual case
@@ -345,7 +341,13 @@ def test_pysim_is_bit_exact_at_every_format(name):
         K=K,
         fmt=fmt,
     ).run()
-    problems, jobs = _unit_jobs("vec", fmt, K, seed=60 + fmt)
-    CgVecUnitSim(problems, jobs, K=K, fmt=fmt).run()
-    problems, jobs = _unit_jobs("mm", fmt, K, seed=80 + fmt)
-    CgMmUnitSim(problems, jobs, K=K, fmt=fmt).run()
+    unit = {"word_bits": 64, "Nmax": N, "L": 4, "sob_depth": 2, "lane_bits": LANE_BITS}
+    rng = np.random.default_rng([60, fmt])
+    jobs = [CUB.random_job(rng, f, (j % K) + 1, K, N, zero_column=j == 8) for j in range(9)]
+    CUB.CgUnitBenchSim({**unit, "Kmax": K, "nitmax": K, "formats": f}, jobs).run()
+    mm = {**unit, "Mmax": K, "Kmax": K, "R": K, "C": 4, "form": 4, "a": f.A, "b": f.P, "c": f.S}
+    rng = np.random.default_rng([80, fmt])
+    jobs = [
+        SUB.random_job(rng, mm, MatmulOp.MUL, K, K, N, edge=j == 0) for j in range(4)
+    ]
+    SUB.UnitBenchSim(mm, jobs).run()

@@ -1,28 +1,30 @@
-"""detector.py — the integrated CG detector ``CgDetector``: CG control, shared memory and queues.
+"""detector.py — the integrated CG detector ``CgDetector``: CG control around Waveflow's two cores.
 
-Step 4.8 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` (gate 4.0 decision record, §14)::
+Step 4.8 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` built it on the example's own blocks; gate 9.0
+(§14) rebuilt it on the components of ``waveflow.linalg``::
 
-    s_cmd → cg_cmd_rx → MemRStream → cg_load ─a_blk→ cg_mm ─s_blk→ cg_vec ─x_blk→ cg_store → MemWStream → s_done
-                                        │  └─b_blk──────────────→ cg_vec ─p_blk→ cg_mm        ↑
-                                        └─desc→ cg_ctrl ─(queues)→ cg_vec, cg_mm ─desc───────┘
+    s_cmd → cg_cmd_rx → MemRStream → cg_load ─a_blk→ mm (SystolicCore) ─s_blk→ vec (CgVectorCore) ─x_blk→ cg_store → MemWStream → s_done
+                                        │  └─b_blk──────────────────────────→ vec ─p_blk→ mm                                ↑
+                                        └─desc→ cg_ctrl ─(queues)→ vec, mm ─desc─────────────────────────────────────────┘
 
 * ``cg_cmd_rx`` reads one :class:`~examples.mimo_cg.hw.common.CgCmd` and frames two reads, ``A``
   (relaying the job's ``CgDesc``) and ``B``.
-* ``cg_load`` lands ``A`` (K row elements, for the matmul) and ``B`` (lane groups, for the vector
-  unit) in blocks and passes the descriptor to the control.
-* ``cg_ctrl`` is **CG control**: per job it issues ``INIT``, then ``ITER`` … ``LAST`` (``nit``
-  commands) into each block's **command queue** (a FIFO, depth ``cmd_depth``) and passes the
-  descriptor on to the store.
-* ``cg_vec`` and ``cg_mm`` (the step 4.2 and 4.5 leaves, unchanged) exchange ``P`` and ``S``
-  through the ``p_blk`` / ``s_blk`` stream-of-blocks — the **shared memory**, ``sob_depth`` blocks
-  each — in a feedback loop: ``P₀`` from ``INIT``, then each ``Sₙ`` makes the next ``P``, and
-  ``LAST`` makes ``X`` instead.  Every firing of every task is one job, paced by its own command
-  or descriptor, so the loop carries a token per job.
+* ``cg_load`` lands ``A`` and ``B`` in blocks of L-lane groups and passes the descriptor to the
+  control.
+* ``cg_ctrl`` is **CG control**: per job it writes one command into each core's **command queue**
+  (a FIFO, depth ``cmd_depth``): a ``SystolicCmd`` of ``nb = nit`` matrices (``A`` once, then one
+  ``P`` in and one ``S`` out per iteration) and a ``CgVectorCmd`` of ``nit`` iterations.  It
+  passes the descriptor on to the store.
+* ``vec`` (:class:`~waveflow.linalg.cg_vector.CgVectorCore`) and ``mm``
+  (:class:`~waveflow.linalg.systolic.SystolicCore`) exchange ``P`` and ``S`` through the ``p_blk``
+  / ``s_blk`` stream-of-blocks — the **shared memory**, ``sob_depth`` blocks each — in a feedback
+  loop: ``P₀`` from ``B``, then each ``S`` makes the next ``P``, and the last makes ``X`` instead.
 * ``cg_store`` writes ``X`` and then a zero-length write whose echo is the job's done on
   ``s_done``: a job must write as often as it reads (two each), because HLS couples the reader's
   and writer's firing counts through the ``m_axi`` pointer FIFOs (plan §15, step 4.7).
 
-``nit`` is a runtime field (1 … K).  The Python bodies call the golden; timing is a placeholder.
+``nit`` is a runtime field (1 … K).  The cores' Python bodies call the bit-exact models and take
+their time from the components' calibrated cycle models.
 """
 
 from __future__ import annotations
@@ -40,21 +42,10 @@ from examples.mimo_cg.hw.common import (
     DEFAULT_N,
     CgCmd,
     CgDesc,
-    CgIterCmd,
-    IterOp,
     from_words,
     hw_format,
     nwords,
     to_words,
-)
-from examples.mimo_cg.hw.mm import DEFAULT_C, DEFAULT_CMUL, CgMm, a_block_type
-from examples.mimo_cg.hw.vec import (
-    DEFAULT_FMT,
-    DEFAULT_K,
-    DEFAULT_L,
-    CgVec,
-    _put,
-    block_type,
 )
 from examples.mimo_cg.mimo_cg_fixed import cg_fixed, quantize_inputs
 from waveflow.hw.clock import Clock
@@ -72,10 +63,35 @@ from waveflow.hw.interface import (
 from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemRStream, MemWCmd, MemWStream
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
+from waveflow.linalg import cg_vector, systolic
+from waveflow.linalg.cg_vector import CgVectorCore
+from waveflow.linalg.lanes import block_type, n_groups
+from waveflow.linalg.systolic import MatmulOp, SystolicCore
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.utils.burst_io import write_burst_bundle
+
+DEFAULT_K = 4
+DEFAULT_L = 4
+#: The default format id, ``HW_FORMAT_NAMES[0]`` = W12g8.
+DEFAULT_FMT = 0
+#: Default array: R = K rows (``R = 0``), C = 4 columns; 4 real multiplies per product.
+DEFAULT_C = 4
+DEFAULT_CMUL = 4
+#: The cores' command width: one unframed word per job.
+CMD_BITS = systolic.CMD_BITS
+assert cg_vector.CMD_BITS == CMD_BITS
+
+
+def matrix_block(W: int, rows: int, cols: int, L: int):
+    """The block type of a ``rows × cols`` register matrix: row-major L-lane groups."""
+    return block_type(W, n_groups(rows * cols, L), L)
+
+
+def _put(block, re: np.ndarray, im: np.ndarray):
+    block.payload = (np.array(re, np.int64), np.array(im, np.int64))
+    return block
 
 
 @dataclass
@@ -125,7 +141,8 @@ class CgCmdRx(FreeRunMod):
 
 @dataclass
 class CgLoad(FreeRunMod):
-    """Lands ``A`` and ``B`` in blocks and passes the job's descriptor to the control."""
+    """Lands ``A`` and ``B`` in blocks of L-lane groups and passes the job's descriptor to the
+    control."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_load"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -147,12 +164,14 @@ class CgLoad(FreeRunMod):
             name=f"{self.name}_desc_out", sim=self.sim, bitwidth=w, has_tlast=True
         )
         self.a_blk = SobIFMaster(
-            name=f"{self.name}_a_blk", sim=self.sim, element_type=a_block_type(f.A.W, K)
+            name=f"{self.name}_a_blk",
+            sim=self.sim,
+            element_type=matrix_block(f.A.W, K, K, L),
         )
         self.b_blk = SobIFMaster(
             name=f"{self.name}_b_blk",
             sim=self.sim,
-            element_type=block_type(f.B.W, K, N, L),
+            element_type=matrix_block(f.B.W, K, N, L),
         )
         for ep in (self.s_in, self.desc_out, self.a_blk, self.b_blk):
             self.add_endpoint(ep)
@@ -191,12 +210,13 @@ class CgLoad(FreeRunMod):
 
 @dataclass
 class CgCtrl(FreeRunMod):
-    """CG control: per job, ``INIT`` and then ``nit`` iteration commands into each block's
-    command queue, and the descriptor on to the store."""
+    """CG control: per job, one command into each core's command queue (``nit`` matrices for the
+    systolic core, ``nit`` iterations for the vector core), and the descriptor on to the store."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_ctrl"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
     K: HwParam[int] = DEFAULT_K
+    N: HwParam[int] = DEFAULT_N
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
@@ -206,10 +226,10 @@ class CgCtrl(FreeRunMod):
             name=f"{self.name}_desc_in", sim=self.sim, bitwidth=w, has_tlast=True
         )
         self.vec_cmd = StreamIFMaster(
-            name=f"{self.name}_vec_cmd", sim=self.sim, bitwidth=w, has_tlast=True
+            name=f"{self.name}_vec_cmd", sim=self.sim, bitwidth=CMD_BITS, has_tlast=False
         )
         self.mm_cmd = StreamIFMaster(
-            name=f"{self.name}_mm_cmd", sim=self.sim, bitwidth=w, has_tlast=True
+            name=f"{self.name}_mm_cmd", sim=self.sim, bitwidth=CMD_BITS, has_tlast=False
         )
         self.desc_out = StreamIFMaster(
             name=f"{self.name}_desc_out", sim=self.sim, bitwidth=w, has_tlast=True
@@ -222,21 +242,22 @@ class CgCtrl(FreeRunMod):
             "cg_ctrl_task",
             "cg_ctrl_task.h",
             ("desc_in", "vec_cmd", "mm_cmd", "desc_out"),
-            template_args=(int(self.mem_dwidth), int(self.K)),
+            template_args=(int(self.mem_dwidth), int(self.K), int(self.N)),
         )
 
     def run_iter(self) -> ProcessGen[None]:
-        w = int(self.mem_dwidth)
+        w, K, N = int(self.mem_dwidth), int(self.K), int(self.N)
         desc = yield from self.desc_in.get_schema(CgDesc)
         nit = int(desc.nit)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), np.uint64))
-        for n in range(nit + 1):
-            op = IterOp.INIT if n == 0 else (IterOp.LAST if n == nit else IterOp.ITER)
-            words = np.asarray(
-                CgIterCmd(op=int(op), it=n).serialize(word_bw=w), np.uint64
-            )
-            yield from self.vec_cmd.write(words)
-            yield from self.mm_cmd.write(words)
+        mm = systolic.command(MatmulOp.MUL, K, K, N, nb=nit)
+        vec = cg_vector.command(nit, K, N)
+        yield from self.mm_cmd.write(
+            np.asarray(mm.serialize(word_bw=CMD_BITS), np.uint64)
+        )
+        yield from self.vec_cmd.write(
+            np.asarray(vec.serialize(word_bw=CMD_BITS), np.uint64)
+        )
 
 
 @dataclass
@@ -263,7 +284,7 @@ class CgStore(FreeRunMod):
         self.x_blk = SobIFSlave(
             name=f"{self.name}_x_blk",
             sim=self.sim,
-            element_type=block_type(f.X.W, K, N, L),
+            element_type=matrix_block(f.X.W, K, N, L),
         )
         self.cmd_out = StreamIFMaster(
             name=f"{self.name}_cmd_out", sim=self.sim, bitwidth=w, has_tlast=True
@@ -320,16 +341,12 @@ class CgDetector(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.mem_dwidth)
-        kw = {"mem_dwidth": w, "K": int(self.K), "clk": self.clk}
-        kwn = {**kw, "N": int(self.N)}
-        kwf = {
-            **kwn,
-            "L": int(self.L),
-            "fmt": int(self.fmt),
-            "sob_depth": int(self.sob_depth),
-        }
-        self.rx = CgCmdRx(name=f"{self.name}_rx", sim=self.sim, **kwn)
+        w, K, N, L = int(self.mem_dwidth), int(self.K), int(self.N), int(self.L)
+        sd = int(self.sob_depth)
+        f = self.formats = hw_format(int(self.fmt))
+        kw = {"mem_dwidth": w, "K": K, "N": N, "clk": self.clk}
+        kwf = {**kw, "L": L, "fmt": int(self.fmt), "sob_depth": sd}
+        self.rx = CgCmdRx(name=f"{self.name}_rx", sim=self.sim, **kw)
         self.rstream = MemRStream(
             name=f"{self.name}_memr",
             sim=self.sim,
@@ -339,14 +356,32 @@ class CgDetector(FreeRunMod):
         )
         self.load = CgLoad(name=f"{self.name}_load", sim=self.sim, **kwf)
         self.ctrl = CgCtrl(name=f"{self.name}_ctrl", sim=self.sim, **kw)
-        self.vec = CgVec(name=f"{self.name}_vec", sim=self.sim, **kwf)
-        self.mm = CgMm(
+        self.vec = CgVectorCore(
+            name=f"{self.name}_vec",
+            sim=self.sim,
+            Kmax=K,
+            Nmax=N,
+            nitmax=K,
+            L=L,
+            sob_depth=sd,
+            formats=f,
+            clk=self.clk,
+        )
+        self.mm = SystolicCore(
             name=f"{self.name}_mm",
             sim=self.sim,
-            R=int(self.R),
+            Mmax=K,
+            Kmax=K,
+            Nmax=N,
+            L=L,
+            R=int(self.R) or K,
             C=int(self.C),
-            cmul=int(self.cmul),
-            **kwf,
+            form=int(self.cmul),
+            sob_depth=sd,
+            a=f.A,
+            b=f.P,
+            c=f.S,
+            clk=self.clk,
         )
         self.store = CgStore(name=f"{self.name}_store", sim=self.sim, **kwf)
         self.wstream = MemWStream(
@@ -370,14 +405,13 @@ class CgDetector(FreeRunMod):
         for c in comps:
             self.add_comp(c)
 
-        def _sif(name, master, slave, depth=None):
+        def _sif(name, master, slave):
             iface = StreamIF(
                 name=f"{self.name}_{name}_if",
                 sim=self.sim,
                 clk=self.clk,
                 bitwidth=w,
                 framed=True,
-                **({} if depth is None else {"depth": depth}),
             )
             iface.bind("master", master)
             iface.bind("slave", slave)
@@ -389,7 +423,19 @@ class CgDetector(FreeRunMod):
                 sim=self.sim,
                 clk=self.clk,
                 element_type=master.element_type,
-                depth=int(self.sob_depth),
+                depth=sd,
+            )
+            iface.bind("master", master)
+            iface.bind("slave", slave)
+            self.add_if(iface)
+
+        def _qif(name, master, slave):  # a command queue: one unframed word per job
+            iface = StreamIF(
+                name=f"{self.name}_{name}_if",
+                sim=self.sim,
+                clk=self.clk,
+                bitwidth=CMD_BITS,
+                depth=int(self.cmd_depth),
             )
             iface.bind("master", master)
             iface.bind("slave", slave)
@@ -399,13 +445,13 @@ class CgDetector(FreeRunMod):
         _sif("rdata", self.rstream.m_out, self.load.s_in)
         _sif("desc_lc", self.load.desc_out, self.ctrl.desc_in)
         _sif("desc_cs", self.ctrl.desc_out, self.store.desc_in)
-        _sif("vec_q", self.ctrl.vec_cmd, self.vec.cmd_in, depth=int(self.cmd_depth))
-        _sif("mm_q", self.ctrl.mm_cmd, self.mm.cmd_in, depth=int(self.cmd_depth))
+        _qif("vec_q", self.ctrl.vec_cmd, self.vec.cmd_in)
+        _qif("mm_q", self.ctrl.mm_cmd, self.mm.cmd_in)
         _sif("wdata", self.store.cmd_out, self.wstream.s_in)
         _sobif("a_blk", self.load.a_blk, self.mm.a_blk)
         _sobif("b_blk", self.load.b_blk, self.vec.b_blk)
-        _sobif("p_blk", self.vec.p_blk, self.mm.p_blk)
-        _sobif("s_blk", self.mm.s_blk, self.vec.s_blk)
+        _sobif("p_blk", self.vec.p_blk, self.mm.b_blk)
+        _sobif("s_blk", self.mm.c_blk, self.vec.s_blk)
         _sobif("x_blk", self.vec.x_blk, self.store.x_blk)
 
         self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]

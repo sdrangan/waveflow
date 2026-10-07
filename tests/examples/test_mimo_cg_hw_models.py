@@ -8,9 +8,9 @@ No toolchain is needed: the models are fitted from the committed campaign tables
 * The committed model file is what a refit gives, and a held-out row cannot change it.
 * On the 16 ``fit`` detectors the composed estimate has DSP and BRAM exact, and LUT, FF and cycles
   within the bounds below (the measured errors are in the plan's §15).
-* :func:`waveflow.calib.resource_model.compose` over an elaborated detector gives the same totals.
-* The Python simulation of the detector, whose blocks now wait their calibrated spans, takes the
-  model's job time.
+* The calibrated block spans are what the model gives inside the space, and none outside it.
+* The Python simulation of the detector, rebuilt on Waveflow's cores at step 9.2a, takes the cores'
+  own calibrated cycles (gate 9.0 retired the check that ``compose`` walked the old blocks).
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ import pytest
 from examples.mimo_cg.hw import estimate as E
 from examples.mimo_cg.hw import measure as M
 from examples.mimo_cg.hw import models as MD
-from examples.mimo_cg.hw.common import IterOp
 from examples.mimo_cg.hw.space import HwConfig, det_fit, full_space, replace
 
 # --- the counted rules -------------------------------------------------------------------------
@@ -230,70 +229,25 @@ def test_estimate_covers_the_whole_space_and_refuses_the_rest():
     assert E.estimate(HwConfig(W=8)).dsp < E.estimate(HwConfig(W=12)).dsp
 
 
-def test_compose_walks_the_same_numbers():
-    """The framework's composition over an elaborated detector equals the direct estimate."""
-    from waveflow.build.elaborate import elaborate
-    from waveflow.calib.resource_model import compose
-
-    models = MD.calibrated()
-    for c in (
-        det_fit()[0],
-        det_fit()[-1],
-        det_fit()[-2],
-        HwConfig(8, 8, 2, 16, 3, 10, 4, 32, 3, 4),
-    ):
-        top = elaborate(
-            M.comp_class("det"), M.elab_params("det", c), name="cg_detector"
-        )
-        est = compose(top, model_for=MD.model_for(models))
-        assert {k: est.total[k] for k in MD.COUNTERS} == models.resources(c)["total"]
-        assert len(est.per_module) == 9  # the top's own term and its eight modules
-        assert est.own == {k: round(v) for k, v in models.integration(c).items()}
-    # since version 2 the matmul is calibrated at every lane count, so nothing inside the space
-    # extrapolates (v1 said EXTRAPOLATED at 2 and 16 lanes)
-    from waveflow.calib.confidence import ConfidenceLevel
-
-    def level(c):
-        top = elaborate(
-            M.comp_class("det"), M.elab_params("det", c), name="cg_detector"
-        )
-        return compose(top, model_for=MD.model_for(models)).level
-
-    assert MD.MM_FIT_LANES == (1, 2, 4, 8, 16)
-    for c in (HwConfig(L=4), HwConfig(L=16, C=16), HwConfig(L=2)):
-        assert level(c) is ConfidenceLevel.INTERPOLATED
-
-
 # --- the Python block models use the calibrated spans (step 5.5) ---------------------------------
 
 
-def test_block_cycles_come_from_the_models_inside_the_space():
-    from examples.mimo_cg.hw.mm import mm_cycles
-    from examples.mimo_cg.hw.vec import vec_cycles
-
+def test_block_spans_come_from_the_models_inside_the_space():
     models = MD.calibrated()
     c = HwConfig(K=8, L=4, R=4, C=8, cmul=3, W=12, g_s=8)
     spans = models.spans(c)
-    assert vec_cycles(IterOp.ITER, 8, 32, 4, c.fmt) == pytest.approx(spans["vec.iter"])
-    assert vec_cycles(IterOp.LAST, 8, 32, 4, c.fmt) == pytest.approx(spans["vec.iter"])
-    assert vec_cycles(IterOp.INIT, 8, 32, 4, c.fmt) == pytest.approx(spans["vec.init"])
-    assert mm_cycles(8, 32, 4, 8, 4, 3, c.fmt) == pytest.approx(spans["mm.iter"])
-    # outside the space (the stress format, or no format given) the rough fallback remains
+    assert MD.block_span("vec.iter", c.fmt, K=8, L=4) == pytest.approx(spans["vec.iter"])
+    assert MD.block_span("vec.init", c.fmt, K=8, L=4) == pytest.approx(spans["vec.init"])
+    assert MD.block_span(
+        "mm.iter", c.fmt, K=8, R=4, C=8, L=4, cmul=3
+    ) == pytest.approx(spans["mm.iter"])
+    # outside the space (the stress format) there is no span
     assert MD.block_span("vec.iter", 2, K=8, L=4) is None
     # nor does a span extrapolate: another block size, or knobs outside the space, give None
     assert MD.block_span("vec.iter", c.fmt, N=8, K=4, L=4) is None
     assert MD.block_span("vec.iter", c.fmt, K=32, L=4) is None
     assert MD.block_span("vec.iter", c.fmt, K=8, L=32) is None
     assert MD.block_span("mm.iter", c.fmt, K=8, R=3, C=8, L=4, cmul=4) is None
-    assert vec_cycles(IterOp.ITER, 4, 8, 4, c.fmt) == 10 + 2 * (
-        12 + 80
-    )  # N = 8: the fallback
-    assert (
-        vec_cycles(IterOp.ITER, 8, 32, 4)
-        == 10 + 8 * (24 + 80)
-        == vec_cycles(IterOp.ITER, 8, 32, 4, 2)
-    )
-    assert mm_cycles(8, 32, 4, 8) == 2 * 4 * 18 + 10
 
 
 @pytest.mark.parametrize(
@@ -305,22 +259,38 @@ def test_block_cycles_come_from_the_models_inside_the_space():
     ],
     ids=["default", "k8_l2", "k16_l16_32bit"],
 )
-def test_python_simulation_takes_the_models_job_time(c):
-    """Bit-exact as before, and now cycle-approximate: the simulated interval between job
-    completions is the model's T0 + nit·T_iter, less the few cycles of job overhead the Python
-    glue does not model."""
+def test_python_simulation_takes_the_cores_cycle_models(c, monkeypatch):
+    """Bit-exact as before, and cycle-approximate by the components' own calibrated models: between
+    two job completions the vector core starts the job and runs ``nit`` iterations, each after one
+    matrix of the systolic core, so the interval is START + nit·(matrix + STEP)."""
     from examples.mimo_cg.hw.detector import CgDetectorSim, detector_problems
+    from waveflow.linalg import cg_cost, cost
+    from waveflow.linalg.cg_vector import CgOp
+    from waveflow.simulation.stream_tb import StreamSink
 
+    done_at: list[float] = []
+
+    def rx_proc(self, words):  # the sink, timestamping each done
+        done_at.append(self.now)
+        self.words.append(np.array(words, copy=True))
+        yield self.timeout(0)
+
+    monkeypatch.setattr(StreamSink, "rx_proc", rx_proc)
     jobs = M.job_nits(c.K)
     probs = detector_problems(64 if c.K > 4 else 32, c.K, 32, len(jobs), seed=5)
     kw = M.elab_params("det", c)
-    kw.pop("N")
+    N = kw.pop("N")
     tb = CgDetectorSim(probs, jobs, **kw).run()  # raises unless every X word is exact
-    ends = np.array([end for _start, end in tb.dut.vec.fire_log])
-    models = MD.calibrated()
-    want = np.array([models.job_cycles(c, nit) for nit in jobs[1:]])
-    extra = models.table[f"t0_extra|{c.mem_dw}"]["cycles"]
-    assert np.diff(ends) == pytest.approx(want - extra, abs=0.5)
+    det = tb.dut
+    ends = np.array(done_at) / det.clk.period
+    cg, mm = cg_cost.message_model(), cost.message_model()
+    start, step = (
+        cg_cost.core_interval(cg, op, c.K, N, L=c.L, formats=det.formats)
+        for op in (CgOp.START, CgOp.STEP)
+    )
+    matrix = cost.core_interval(mm, c.K, c.K, N, L=c.L, R=int(det.mm.R), C=c.C)
+    want = np.array([start + nit * (matrix + step) for nit in jobs[1:]])
+    assert np.diff(ends) == pytest.approx(want, abs=0.5)
 
 
 # --- held-out validation (steps 5.7 and 5.8, AC5) ------------------------------------------------
