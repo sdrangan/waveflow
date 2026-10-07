@@ -87,7 +87,10 @@ import pytest
 #: 142 -> 143 on 2026-10-07 (step 7.5): the same file gained a gate at lane groups of exactly one
 #: message word, after a calibration build showed that case synthesizing to zeros while
 #: C-simulation passed (a full-width shift, defined for ap_uint, undefined in synthesis).
-WANT_XSI_GATES = 143
+#:
+#: 143 -> 144 on 2026-10-07 (step 7.7, the M7 review): a gate at 32-bit message words, with lane
+#: groups of one word, so the framework's own tests cover the word width the unit offers.
+WANT_XSI_GATES = 144
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

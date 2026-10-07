@@ -835,6 +835,57 @@ def test_systolic_page_names_the_block_ram_misses_and_their_buffers():
             or f"counts {counted[1]} and {counted[0]} block RAMs" in text)
 
 
+def test_systolic_page_quotes_the_first_round_and_how_the_builds_were_chosen():
+    """The first model's held-out misses, and the three groups the 61 calibration builds came from."""
+    v1 = {r["metric"]: r["value"] for r in _linalg_rows("linalg_validation_metrics.csv")}
+    n = int(v1["n_builds"])
+    exact = round(float(v1["unit_bram_exact_pct"]) * n / 100)
+    roles = [r["role"] for r in _linalg_rows("linalg_builds.csv")]
+    text = _systolic_page()
+    assert (f"block RAM exact on {exact} of {n} units, core LUT error "
+            f"{float(v1['core_lut_mape_pct']):.1f}%") in text
+    assert (f"**{len(roles) - roles.count('holdout2')} builds**: {roles.count('fit')} by rule, the "
+            f"first round's {roles.count('holdout')} held-out builds, and {roles.count('fit2')} more "
+            "by rule") in text
+
+
+def test_systolic_page_quotes_the_model_figures_it_states_in_prose():
+    """Figures the prose states outside the example's output: pysim's share against the memory-fed
+    sum for the example's job, the adapters' block RAM, and the calibrated range."""
+    import json
+
+    from examples.mimo_cg.hw.linalg_cal import MAX_PES, VALUES
+    from waveflow.linalg import cost
+    from waveflow.linalg.systolic import MatmulOp, SystolicUnit
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.fixputils import Format, OMode, QMode
+
+    def reg(W: int, I: int) -> Format:
+        return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+    u = SystolicUnit(name="mm", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32, R=4, C=8, L=4, form=4,
+                     word_bits=64, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+    coef = cost.message_model()
+    share = cost.core_interval(coef, 8, 8, 32, L=4, R=4, C=8)
+    total = cost.message_interval(coef, cost.message_features(u, MatmulOp.MUL, 8, 8, 32))
+    text = _systolic_page()
+    assert (f"{round(share)} cycles for the job of the example, where the memory-fed sum is "
+            f"{round(total)}") in text
+
+    chan = json.loads((cost.platform_dir() / "models" / cost.CHANNELS / "params.json")
+                      .read_text(encoding="utf-8"))["adapters_bram"]
+    assert f"the `m_axi` adapters: {chan['64']} with 64-bit words, {chan['32']} with 32-bit" in text
+
+    def values(key: str) -> str:
+        return "{" + ", ".join(str(v) for v in VALUES[key]) + "}"
+
+    assert VALUES["M"] == VALUES["K"]
+    for phrase in (f"`Mmax` and `Kmax` in {values('M')}", f"`Nmax` in {values('N')}",
+                   f"`R` in {values('R')}", f"`C` in {values('C')} with `R·C` ≤ {MAX_PES}",
+                   f"`L` in {values('L')}", f"`W` in {values('W')}"):
+        assert phrase in text, f"systolic.md no longer states the calibrated range as {phrase!r}"
+
+
 def test_systolic_page_quotes_the_synthesis_timing_of_every_build():
     rows = _linalg_rows("linalg_builds.csv")
     ests = sorted({r["est_ns"] for r in rows})

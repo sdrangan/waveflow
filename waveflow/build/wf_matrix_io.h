@@ -21,7 +21,7 @@ namespace wf_matrix_io {
 // A group register moved by SHIFT bits of its GW: a value shifted in at the top (in) or out at the
 // bottom.  When a group is exactly one word (SHIFT == GW) the register is replaced, never shifted:
 // a shift by the full width is defined for ap_uint in C-simulation but undefined in synthesis, and
-// the RTL computed zeros (step 7.5, L = 2 with 64-bit words).
+// the RTL computed zeros (seen with L = 2 and 64-bit words).
 template <int GW, int SHIFT, bool WHOLE = (SHIFT >= GW)>
 struct shift {
     static ap_uint<GW> in(const ap_uint<GW>& g, const ap_uint<GW>& top) { return (g >> SHIFT) | top; }

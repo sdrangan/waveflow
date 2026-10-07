@@ -146,6 +146,8 @@ and the tool version that the numbers belong to:
 | `components/systolic_unit/params.json` | the systolic unit's cycle model, per message |
 | `provenance.json` | the tool, the step and model version, and the builds the models were fitted on |
 
-A model measured with one tool version describes that version only. To use these components on
-another part, clock or tool version, calibrate a new platform; the
-[systolic page](./systolic.md#the-cost-model) describes how this one was calibrated.
+A model measured with one tool version describes that version only. The components' `get_rm`
+refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost`
+reads only this one. Pricing another part, clock or tool version takes a new calibration and a
+platform of its own; the [systolic page](./systolic.md#calibration-and-accuracy) describes how
+this one was calibrated.

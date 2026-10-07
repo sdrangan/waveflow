@@ -58,10 +58,11 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
 from waveflow.linalg.cost import core_interval, message_model
-from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits
+from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits, mem_format
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
     block_type,
+    elems_per_word,
     from_words,
     n_groups,
     nwords,
@@ -186,6 +187,12 @@ def core_cycles(
     return load_a_cycles(m, k, L=L) + nb * per_b_cycles(m, k, n, L=L, R=R, C=C)
 
 
+def _check_signed(name: str, *formats: Format) -> None:
+    """The complex multiply takes signed formats only."""
+    if not all(f.signed for f in formats):
+        raise ValueError(f"{name}: the formats of A, B and C must be signed")
+
+
 @dataclass
 class SystolicCore(FreeRunMod):
     """The systolic matrix multiply core (see the module doc)."""
@@ -208,6 +215,7 @@ class SystolicCore(FreeRunMod):
         super().__post_init__()
         if None in (self.a, self.b, self.c):
             raise ValueError(f"{self.name}: SystolicCore needs the formats a, b and c")
+        _check_signed(self.name, self.a, self.b, self.c)
         M, K, N = int(self.Mmax), int(self.Kmax), int(self.Nmax)
         L, R, C = int(self.L), int(self.R), int(self.C)
         if L < 1 or L & (L - 1):
@@ -420,6 +428,10 @@ class _UnitPart(FreeRunMod):
         super().__post_init__()
         if None in (self.a, self.b, self.c):
             raise ValueError(f"{self.name}: the unit needs the formats a, b and c")
+        _check_signed(self.name, self.a, self.b, self.c)
+        elems_per_word(int(self.lane_bits), int(self.word_bits))  # a supported pair
+        for fmt in (self.a, self.b, self.c):
+            mem_format(fmt, int(self.lane_bits))  # each register fits a lane
         self.core_traits = core_traits(self.a, self.b, self.c, int(self.Kmax))
         self.io_traits = io_traits(self.a, self.b, self.c, int(self.lane_bits))
 
@@ -531,7 +543,9 @@ class SystolicRx(_UnitPart):
         r = reply(h, st, self._words(m * n) if st == Status.OK else 0)
         yield from self.store_cmd.write(np.asarray(r.serialize(word_bw=w), np.uint64))
         done = 0
-        while done < int(h.length):  # forward, or drain, the payload's bursts
+        # Forward, or drain, the payload's bursts.  pysim moves whole bursts, so a length that ends
+        # inside a burst drains to the burst's end, where the C++ reads exactly `length` words.
+        while done < int(h.length):
             burst = yield from self.s_in.get()
             done += len(burst)
             if st == Status.OK:

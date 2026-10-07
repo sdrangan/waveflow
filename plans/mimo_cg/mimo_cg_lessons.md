@@ -431,3 +431,19 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **A rule copied from another datapath is a hypothesis.** "Plain multiplies under 12 bits are
   LUTs" held for the example's matmul and not for this one, where the tool packs them.
 
+## M7 review (2026-10-07)
+
+- **Check what a table writer wrote before committing it.** A merge that failed on a new column
+  had already truncated `linalg_cycles.csv`, and the 14-line file went into `45cf513e`; the next
+  commit restored it. Writers now take their fieldnames from every row, and a row count belongs in
+  the check before a table is staged.
+- **A promise in a design record needs a test.** Step 7.5's design said `compose()` would price
+  designs containing the unit; it priced the tasks and left out the channels, and no test asked.
+  The guide page was where it surfaced, because writing a usage example runs the promise.
+- **A guard that scans every test catches the new bench.** The framework's check that no test
+  stamps the RTL source digest found the unit bench's `render_rtl_f` call in the first full fast
+  run after it was written. Run the whole fast suite at least once per phase, not only the
+  phase's own directory.
+- **Validate parameters where the module is built.** Unsupported word widths, lanes too narrow
+  for a register and unsigned formats each failed far from their cause (a serializer, the model,
+  C++) until the constructors checked them.

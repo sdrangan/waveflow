@@ -17,8 +17,9 @@ matrices on an output-stationary array of `R × C` processing elements:
 
 Every product and every sum is exact, and `C` is rounded and saturated **once**, to its own
 format. The bit-exact model is `waveflow.linalg.matmul.matmul`. The pysim modules call it, and the
-HLS body equals it in C-simulation and at RTL. For what the linear-algebra components share
-(formats, lane groups, messages, the build step), see [Linear Algebra](./index.md).
+HLS body equals it in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at
+RTL. For what the linear-algebra components share (formats, lane groups, messages, the build
+step), see [Linear Algebra](./index.md).
 
 ## What it computes
 
@@ -53,7 +54,7 @@ the two forms differ in DSPs and LUTs ([the cost model](#the-cost-model)).
 | `R`, `C` | 4, 8 | the array: `R` rows by `C` columns of processing elements | `L` divides `C` |
 | `L` | 4 | lanes: complex values per group, the columns touched per cycle | a power of two |
 | `form` | 4 | the complex product: 4 or 3 real multiplies | 3 or 4 |
-| `a`, `b`, `c` | required | the formats of `A`, `B` and `C` | each at most `lane_bits` wide (unit) |
+| `a`, `b`, `c` | required | the formats of `A`, `B` and `C` | signed; each at most `lane_bits` wide (unit) |
 | `sob_depth` | 2 | blocks in each stream-of-blocks buffer | |
 | `word_bits` | 64 | message word width (unit only) | 32 or 64 |
 | `lane_bits` | 16 | width of each part of a memory element (unit only) | `2·lane_bits` divides `word_bits` |
@@ -361,8 +362,9 @@ compose(top)                       # ... and compose it (waveflow.calib.resource
 ```
 
 With `add_rm`, every `SystolicRx`, `SystolicLoad`, `SystolicCore` and `SystolicStore` gets its
-task model, and the `SystolicUnit` itself carries the channels. `get_rm` refuses a platform with
-another part or clock.
+task model, and the `SystolicUnit` itself carries the channels. `get_rm` refuses any platform but
+the packaged one, even one with the same part and clock, because the models also belong to their
+tool version. Other modules in the same design are priced from that platform too.
 
 ### Cycles
 
@@ -397,17 +399,22 @@ job of the example, where the memory-fed sum is 724.
 
 ### Calibration and accuracy
 
-The models were fitted on **61 builds** of the unit, chosen by rule in two rounds: the centre,
-each parameter varied alone, the corners of the multiply forms, 16 lanes, 32-bit words, and,
-in the second round, the gaps the first held-out set exposed. Each build was synthesized at 4 ns
-for `xczu48dr-ffvg1517-2-e` and simulated at RTL. It ran four job shapes four times back to back
-(full `A·B`, full `Aᴴ·B`, one tile, a short `k`) and, in the second round, a fifth: a rejected
-request. Every reply was checked bit for bit.
+The calibration ran in two rounds. A first model was fitted on 29 builds chosen by rule (the
+centre, each parameter varied alone, the corners of the multiply forms, 16 lanes, 32-bit words)
+and scored on 12 held-out builds drawn at random. It missed: block RAM exact on 8 of 12 units, core
+LUT error 13.5% (`examples/mimo_cg/paper_data/linalg_validation_metrics.csv`). Those 12 builds
+then joined the calibration, with 20 more chosen by rule where they had shown gaps. So the models
+here were fitted on **61 builds**: 29 by rule, the first round's 12 held-out builds, and 20 more by
+rule.
+
+Each build was synthesized at 4 ns for `xczu48dr-ffvg1517-2-e` and simulated at RTL. It ran four
+job shapes four times back to back (full `A·B`, full `Aᴴ·B`, one tile, a short `k`) and, in the
+second round, a fifth: a rejected request. Every reply was checked bit for bit.
 
 The models were then frozen and scored on **12 held-out builds**. Their configurations were drawn
 at random, with a fixed seed, from the parameter space minus every earlier build, and were
 committed before any build of that round ran. All 12 were bit-exact at RTL. The scores (Vitis HLS
-/ Vivado xsim 2024.1; `examples/mimo_cg/paper_data/linalg_validation_metrics_v2.csv`, per build in
+/ Vivado xsim 2024.1; `linalg_validation_metrics_v2.csv`, per build in
 `linalg_validation_v2.csv`):
 
 | Quantity | Unit | Core |
@@ -426,9 +433,20 @@ measures, `merge` writes the tables, `fit` writes the packaged models, and `vali
 ## Limits
 
 * **One tool version, one part, one clock.** The cost models describe Vitis HLS / Vivado xsim
-  2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz. The calibration used operands of one width (`A`,
-  `B` and `C` all `W` bits, with 3, 4 and 5 integer bits); other combinations use each operand's
-  own width in the terms, but no build tested them.
+  2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+* **The calibrated range.** The calibration builds spanned `Mmax` and `Kmax` in {4, 8, 16}, `Nmax`
+  in {16, 32}, `R` in {1, 2, 4, 8, 16} and `C` in {4, 8, 16, 32} with `R·C` ≤ 256, `L` in
+  {1, 2, 4, 8, 16}, `W` in {8, 10, 12, 14, 16}, both forms and both word widths. Every build used
+  `lane_bits = 16`, `sob_depth = 2`, one matrix `B` per job, and operands of one width (`A`, `B`
+  and `C` all `W` bits, with 3, 4 and 5 integer bits). Other operand widths use each operand's own
+  width in the terms; nothing outside this range was measured, and the DSP rule assumes operands of
+  at most 18 bits.
+* **Signed formats only.** The unit refuses unsigned formats when it is built.
+* **C-simulation of a design with the core.** In Vitis HLS 2024.1's C-simulation, a
+  stream-of-blocks buffer hands a block to its reader as soon as the writer acquires it, so a
+  threaded C-simulation of a design containing the core can read blocks that are not yet written.
+  The tests C-simulate the task bodies one after another, in dependency order; the RTL has the
+  real ping-pong behaviour.
 * **Block RAM of a small, wide buffer with 32-bit words.** The two block RAM misses of the
   held-out builds both have `Mmax = Kmax = 4` and 32-bit words. Their `A` buffer (768 and 640 bits
   in all) went to distributed RAM, where the rule counts 12 and 18 block RAMs. No calibration build

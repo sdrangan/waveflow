@@ -492,8 +492,10 @@ def csynth(out_dir: Path) -> str:
     (out_dir / "csynth.log").write_text(log, encoding="utf-8")
     report = out_dir / f"{TOP}_proj" / "solution1" / "syn" / "report" / "csynth.xml"
     assert run.returncode == 0 and report.is_file(), log[-3000:]
+    # No source stamp: nothing here reads one, and tests/build/test_rtl_digest.py requires every
+    # call under tests/ to pass stamp_sources=False.
     (out_dir / "xsi" / f"rtl_{TOP}.f").write_text(
-        render_rtl_f(TOP, out_dir), encoding="utf-8"
+        render_rtl_f(TOP, out_dir, stamp_sources=False), encoding="utf-8"
     )
     return log
 

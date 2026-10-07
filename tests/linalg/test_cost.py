@@ -143,13 +143,34 @@ def test_compose_prices_the_unit_like_predict_unit():
 
 
 def test_models_refuse_another_platform():
+    """The models describe the packaged platform only: another part, another clock, or the same
+    part and clock under another name (another tool version, say) is refused."""
     from waveflow.calib.platform import Platform
 
     other = Platform(name="other", dir=None, part="xc7z020clg400-1", clk_freq=100e6)
     slower = Platform(name="slower", dir=None, part=cost.PART, clk_freq=200e6)
-    for plat in (other, slower):
-        with pytest.raises(ValueError, match="fitted for"):
+    newer = Platform(
+        name="xczu48dr_250mhz_vitis2025_1",
+        dir=None,
+        part=cost.PART,
+        clk_freq=cost.CLK_HZ,
+    )
+    for plat in (other, slower, newer):
+        with pytest.raises(ValueError, match="describe the packaged platform"):
             SystolicUnit.get_rm(plat)
-        with pytest.raises(ValueError, match="fitted for"):
+        with pytest.raises(ValueError, match="describe the packaged platform"):
             type(unit(8, 8, 32, 4, 8, 4, 12, 4).core).get_rm(plat)
     assert SystolicUnit.get_rm(cost.platform()) is not None
+
+
+def test_platform_identity_is_read_from_its_platform_json():
+    import json
+
+    ident = json.loads(
+        (cost.platform_dir() / "platform.json").read_text(encoding="utf-8")
+    )
+    assert (cost.PART, cost.CLK_HZ, cost.TOOL) == (
+        ident["part"],
+        ident["clk_freq_hz"],
+        ident["tool"],
+    )

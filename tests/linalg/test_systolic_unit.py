@@ -42,9 +42,9 @@ def reg(W: int, I: int) -> Format:
     return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
 
 
-def unit(M, K, N, R, C, L, W, form) -> dict:
+def unit(M, K, N, R, C, L, W, form, word=64) -> dict:
     return {
-        "word_bits": 64, "Mmax": M, "Kmax": K, "Nmax": N, "L": L, "R": R, "C": C,
+        "word_bits": word, "Mmax": M, "Kmax": K, "Nmax": N, "L": L, "R": R, "C": C,
         "form": form, "sob_depth": 2, "lane_bits": 16,
         "a": reg(W, 3), "b": reg(W, 4), "c": reg(W, 5),
     }  # fmt: skip
@@ -57,6 +57,9 @@ UNITS = {
     # A lane group of exactly one message word (L = 2, 64-bit words): the case whose full-width
     # register shift synthesized to zeros (step 7.5).
     "one_word_groups": unit(8, 8, 32, 4, 8, 2, 12, 4),
+    # 32-bit message words, with lane groups of one word (L = 1): three-word headers become five,
+    # and the full-width shift of the one-word group is the case wf_matrix_io::shift exists for.
+    "word32": unit(8, 8, 32, 4, 8, 1, 12, 3, word=32),
 }
 
 #: Per configuration: (op, m, k, n, edge, header overrides, the status expected).
@@ -87,6 +90,12 @@ JOBS = {
         (MUL_AH, 4, 8, 16, True, {}, Status.OK),
         (7, 4, 4, 8, False, {}, Status.BAD_OP),
         (MUL, 4, 2, 8, False, {}, Status.OK),
+    ],
+    "word32": [
+        (MUL, 8, 8, 32, False, {}, Status.OK),
+        (MUL_AH, 4, 8, 16, True, {}, Status.OK),
+        (MUL, 4, 4, 8, False, {"n": 16}, Status.BAD_LENGTH),
+        (MUL, 4, 3, 8, True, {}, Status.OK),  # any k with L = 1
     ],
 }
 
@@ -123,6 +132,20 @@ def test_request_status():
     statuses = [sim.status(h) for (*_, h, _a, _b) in sim.layout]
     assert statuses == [st for *_, st in JOBS["centre"]]
     assert request_words(8, 8, 32, p["lane_bits"], 64) == 32 + 128
+
+
+def test_construction_refuses_what_the_unit_cannot_carry():
+    """Checked when the unit is built, not later in a serializer, the model or C++."""
+    p = UNITS["centre"]
+    bad = [
+        {"a": reg(20, 3)},  # wider than the 16-bit lane
+        {"word_bits": 48},  # not a supported word width
+        {"lane_bits": 24},  # a 64-bit word does not hold whole 48-bit elements
+        {"b": Format(12, 4, False, QMode.AP_RND, OMode.AP_SAT)},  # unsigned
+    ]
+    for change in bad:
+        with pytest.raises(ValueError):
+            SystolicUnit(name="u", sim=Simulation(), **{**p, **change})
 
 
 class _TimedSink(StreamSink):

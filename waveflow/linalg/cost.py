@@ -11,7 +11,7 @@ its tasks plus its channels (:func:`predict_channels`): the three stream-of-bloc
 per word width, and LUT/FF fitted on the word width).
 
 Some rules are the tool's binding, not device geometry, and are kept here with their tool
-version (Vitis HLS 2024.1 on ``xczu48dr``, measured on the step 7.5 calibration builds): the
+version (Vitis HLS 2024.1 on ``xczu48dr``, measured on the calibration builds): the
 four-multiply form's DSPs per element (:func:`form4_dsps_per_element`: narrow multiplies are packed),
 and the shapes of the stream-of-blocks buffers (:func:`buffer_blocks`).
 
@@ -65,8 +65,18 @@ from waveflow.linalg.message import header_words
 
 #: The packaged calibration platform of these models.
 PLATFORM = "xczu48dr_250mhz_vitis2024_1"
-PART = "xczu48dr-ffvg1517-2-e"
-CLK_HZ = 250e6
+
+
+def platform_dir() -> Path:
+    """The packaged platform directory (``waveflow/calib/platforms/<PLATFORM>``)."""
+    return Path(__file__).resolve().parents[1] / "calib" / "platforms" / PLATFORM
+
+
+#: The platform's identity, from its ``platform.json``: the part, clock and tool it describes.
+_IDENTITY = json.loads((platform_dir() / "platform.json").read_text(encoding="utf-8"))
+PART = _IDENTITY["part"]
+CLK_HZ = float(_IDENTITY["clk_freq_hz"])
+TOOL = _IDENTITY["tool"]
 #: Width of the run-time index products (m·k, k·n, m·n) the tasks compute.
 INDEX_BITS = 16
 #: The message model's terms.
@@ -75,29 +85,30 @@ MESSAGE_TERMS = ("sweep", "out", "b_load", "tiles", "w_in", "w_out", "ah")
 COMPUTE_TERMS = ("sweep", "out", "b_load", "tiles")
 
 
-def platform_dir() -> Path:
-    """The packaged platform directory (``waveflow/calib/platforms/<PLATFORM>``)."""
-    return Path(__file__).resolve().parents[1] / "calib" / "platforms" / PLATFORM
-
-
 def platform() -> Platform:
     return Platform(name=PLATFORM, dir=platform_dir(), part=PART, clk_freq=CLK_HZ)
 
 
 def check_platform(plat) -> None:
-    """Refuse a platform these models do not describe (the contract of ``HwModule.get_rm``): they
-    are fitted for :data:`PART` at :data:`CLK_HZ`.  ``None``, or a platform that states neither,
-    passes."""
+    """Refuse a platform these models do not describe (the contract of ``HwModule.get_rm``).  They
+    describe exactly the packaged platform, its part, clock and tool version, so any other platform
+    is refused, even one with the same part and clock.  ``None`` passes."""
     if plat is None:
         return
+    name, pdir = getattr(plat, "name", None), getattr(plat, "dir", None)
     part, clk = getattr(plat, "part", None), getattr(plat, "clk_freq", None)
-    if (part is not None and part != PART) or (
-        clk is not None and float(clk) != CLK_HZ
+    ours = name == PLATFORM or (
+        pdir is not None and Path(pdir).resolve() == platform_dir()
+    )
+    if (
+        not ours
+        or (part is not None and part != PART)
+        or (clk is not None and float(clk) != CLK_HZ)
     ):
-        mhz = "?" if clk is None else f"{float(clk) / 1e6:g}"
         raise ValueError(
-            f"the systolic unit's models are fitted for {PART} at {CLK_HZ / 1e6:g} MHz "
-            f"({PLATFORM}), not for {part} at {mhz} MHz"
+            f"the systolic unit's models describe the packaged platform {PLATFORM} ({PART} at "
+            f"{CLK_HZ / 1e6:g} MHz, {TOOL}), not {name!r} ({part} at {clk} Hz); attach them "
+            "with add_rm(waveflow.linalg.cost.platform())"
         )
 
 
@@ -211,7 +222,7 @@ def buffer_blocks(
     depth: int, bits: int, halves: int, word_bits: int, per_half: bool = False
 ) -> int:
     """Block RAMs (18K) of one stream-of-blocks buffer: ``halves`` blocks of ``depth`` words of
-    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr, measured on the step 7.5 calibration builds:
+    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr, measured on the calibration builds:
     from 32 bits wide, ``ceil(bits/36)`` columns of 512 x 36 shared by the halves; under 32 bits,
     distributed RAM below :data:`LUTRAM_MAX_BITS` in all, else ``ceil(bits/18)`` columns of
     1024 x 18 per half with 64-bit message words (two values written per cycle) and shared
@@ -294,7 +305,7 @@ class SystolicResourceModel(VitisResourceModel):
     """The framework's model, fitting FF on every build.  The default drops, for every counter but
     LUT, the builds where an array lands in distributed RAM; here that is the core's ``B`` store in
     most builds, and it costs LUTs (priced by the device rule) but no flip-flops, so those builds
-    describe hardware the FF terms express (step 7.5: FF fitted without them was off by 60%).
+    describe hardware the FF terms express (FF fitted without them was off by 60%).
     """
 
     def fit_rows(self, df, counter: str):
