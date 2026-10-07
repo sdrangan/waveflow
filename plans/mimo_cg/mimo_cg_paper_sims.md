@@ -187,11 +187,11 @@ Wilson intervals with seeds fixed in the test file (Rules 4).
   - Every **new** Python file passes `ruff check` and `black --check`.
   - Every **changed existing** file has no more `ruff check --output-format concise` findings than on `main`, and is not reformatted.
 
-- [ ] **AC7** (Phase 7; provisional, tightened at gate 7.0): the systolic matrix multiply is a Waveflow component.
+- [ ] **AC7** (Phase 7; tightened at gate 7.0, 2026-10-06): the systolic matrix multiply is a Waveflow component, in `waveflow/linalg/` (configurations and shapes: §10, Phase 7).
   - It lives at the home fixed at gate 7.0. Neither it nor `tests/linalg/` imports anything from `examples/`.
   - Its Python model equals the golden vectors frozen from the example's `mm_step` (every format set of the Phase 5 space and the stress set, K = 4, 8 and 16) and an independent exact reference on non-square shapes, both multiply forms and the conjugate transpose. Its HLS body equals the model in C-simulation, and so do two instances with different formats in one composite.
-  - csynth meets 4 ns (estimated) at the configurations fixed at gate 7.0, including R·C = 256.
-  - Its standalone unit is bit-exact at RTL (XSI) on jobs of different shapes run back to back from one build (if dimensions are run-time); every tag is echoed; a rejected job returns its status without disturbing the next; measured job times are within the cycle threshold below.
+  - csynth meets 4 ns (estimated) at the four configurations fixed at gate 7.0 (centre, largest with R·C = 256, smallest, wide).
+  - Its standalone unit is bit-exact at RTL (XSI) on jobs of three or more shapes, plain and `Aᴴ`, run back to back from one build; every tag is echoed; a rejected job returns its status without disturbing the next; measured job times are within the cycle threshold below.
   - Its cost model, on at least 10 held-out unit builds fixed before calibration, each at 3 or more job shapes: DSP and block RAM exact on ≥ 90% of them, LUT and FF mean absolute percentage error ≤ 10%, cycles ≤ 5%, on the unit and on the core's per-task rows.
   - A guide page documents its interface, parameters, message format, cost model and limits.
 
@@ -687,119 +687,48 @@ with them, listed test by test at gate 9.0.
 
 ### Phase 7 — Foundation and the systolic array in Waveflow (milestone M7, refined at gate 7.0)
 
-**Gate 7.0 decides** (the doer's recommendation first; the user decides at the gate):
+Gate 7.0 (2026-10-06) settled the module home, how formats reach C++, run-time dimensions, the
+`Aᴴ` option, the standalone unit's interface, where the cost data live, the 3-multiply product and
+the docs: see the §14 gate 7.0 decision record. Python goes in `waveflow/linalg/`, task bodies in
+`waveflow/build/`, tests in `tests/linalg/`. **The framework diff of every step is shown to the user
+before it is committed** (§12).
 
-1. **Module home, before any code.** A module's import path is part of its structure signature
-   (`waveflow/build/elaborate.py`), so moving a module later stales the RTL of everything built
-   from it (`plans/vitis_l1_hwmodule.md` makes the same point). Recommended: a new subpackage
-   `waveflow/linalg/` for the Python side, following the `waveflow/vitis_l1/` precedent; task
-   bodies as top-level headers in `waveflow/build/` beside the existing hook-component bodies
-   (already package data); tests in `tests/linalg/`. Alternative: `waveflow/hw/` beside `Rfdc`,
-   which crowds `hw/`.
-2. **Component shape:** the framework's hook-component convention, as `MemRStream` and the planned
-   `VitisFft`: a `FreeRunMod` whose `run_iter` delegates all arithmetic to the bit-exact model in
-   the same package; an `HwParam` for every **integer** template argument; a `KernelTask` naming the
-   body; simulated time taken from the component's cycle model.
-3. **How formats reach C++.** An `HwParam` is stored as an integer, `KernelTask.template_args` are
-   integers that name task instances and calibration keys, and today's types live in one global
-   `namespace cg` per build, so a build can hold one format set only. Recommended: formats are plain
-   dataclass fields (precedents: `Rfdc.word`, the `vitis_l1` enums); the build step renders each
-   instance's formats into a types struct with a short name derived from its content, passed to the
-   body as one type template argument. `KernelTask`, the task-instance name and the calibration
-   `config_id` are extended by addition only. Two instances with different formats then share one
-   composite.
-4. **Two layers per component.** (a) A **core** with a fixed-width command (independent of any
-   memory word width) and stream-of-blocks data ports, for tight coupling inside one composite, as
-   the detector couples its two blocks today. (b) A **standalone unit** that speaks framed messages,
-   fed from memory through the framework's in-band `MemRStream`/`MemWStream`, or directly by another
-   unit. Alternative: a memory-mapped unit like Phase 4's `CgMmUnit`.
-5. **The message format, fixed once for both components** (a later change re-runs Phase 7's gates
-   and its calibration):
-   - the message word width is a parameter, independent of the memory word width;
-   - the element lane width is a parameter (decision table above);
-   - a header holds an opaque tag of at least 32 bits, echoed in the reply; the operation; the
-     problem dimensions; the payload length in words; and, for a job made of several messages, the
-     number of messages that follow;
-   - every reply carries a status. A message with out-of-range dimensions or an unexpected
-     operation is rejected with a status, and its payload is drained by its length. Nothing is
-     clamped (Phase 4's framers clamp `nit` silently).
-6. **Problem dimensions at run time, up to synthesis-time maxima**, decided per component from the
-   probe (the two components may differ). The array (R × C), the lanes (L) and the maxima are fixed
-   at synthesis; each job's dimensions come in its header, as multiples of the tile sizes. One build
-   then serves several problem sizes. A build whose minimum equals its maximum folds the dimensions
-   to constants. Alternative: dimensions fixed at synthesis, as in Phase 4.
-7. **Matrix-multiply scope.** `C = q(A·B)`, complex fixed point, A of M × K and B of K × N, the exact
-   sum rounded once to the output format, 3- or 4-multiply form; A held across a run of B's within
-   one job (load once, multiply many, which CG needs). Option, recommended if the probe shows it is
-   cheap: `C = q(Aᴴ·B)`, with A transposed at load (a reordering, which is exact) and conjugated
-   inside the multiply (negating a W-bit imaginary part would saturate at −2^(W−1)), so Gram
-   products need no other unit. Not included: a real-valued mode, accumulation into C, diagonal
-   loading.
-8. **Formats are parameters:** a component takes each operand's format explicitly (width, integer
-   bits, rounding, saturation), never an index into an example's registry.
-9. **Jobs are self-contained:** every job loads its own operands; nothing carries over from one job
-   to the next.
-10. **Cost model per component.**
-    - Resources are expressed as framework `ResourceModel`s, so `compose()` prices any composite
-      that uses a core: DSP and block RAM counted, LUT and FF fitted. They are validated on the
-      core's per-task rows as well as on the unit.
-    - Cycles: a service time per message, plus an input/output floor, `max(compute, words in,
-      words out)` (gate 6.0 found that a job-level law without a floor fails when memory binds).
-    - The model's form and counted rules live with the component; its fitted coefficients for
-      `xczu48dr` at 250 MHz go in a packaged platform under `waveflow/calib/platforms/`, with
-      provenance. The platform records its tool version (an additive manifest field, with a warning
-      on mismatch) or carries it in its name, and its name must not collide with
-      `examples/mimo_cg/calib/platforms/xczu48dr_250mhz/`, because a same-named platform in an
-      earlier search root shadows it.
-    - The calibration campaign runs from this example's tooling, which stays here.
-11. **Build and test harness:** the csynth, testbench and XSI drivers for the components' own tests
-    live in `tests/linalg/` as helpers built on `composite_gen`, with part and clock passed as
-    arguments. No `xczu48dr` or 4 ns constant goes under `waveflow/`. Nothing in `tests/linalg/`
-    imports from `examples/`.
-12. **Tests:** pure-Python tests with no marker; `-m vitis` for C-sim and csynth; `-m xsi` RTL
-    gates, raising `WANT_XSI_GATES` with each one.
-13. **Docs:** one guide page per component under `docs/guide/` (the section is chosen at the gate),
-    with limits stated: for example, untested under back-pressure unless the RTL gates add a stall
-    pattern (the XSI sink is always ready).
-14. **What "nothing changed" means for Phase 9** is set at gate 9.0 (see AC9).
+**Waveflow file manifest, Phase 7** (AC9 checks it; a file may be renamed within its row when its step
+writes it, and a new row needs the user's approval):
 
-**The gate's probe** (scratch builds; nothing committed), at three configurations per body against
-the committed Phase 5 rows: the matrix-multiply and vector-unit bodies with run-time dimensions, with
-the index arithmetic (`g / NG`, `g % NG`, `(rt*R + i)*NG + …`) rewritten as counters so the probe
-does not measure dividers it would never ship; and the matrix multiply with the transposed load and
-the conjugating multiply. It reports the initiation interval, LUT, FF, DSP and block RAM deltas,
-the estimated clock and the cycles per product or iteration. About 45–60 minutes.
+| Group | Files |
+|---|---|
+| Package | `waveflow/linalg/__init__.py` |
+| Formats | `waveflow/linalg/formats.py`: an operand format as a plain field; a content-derived format id; rendering of one traits specialization per id |
+| Lanes and messages | `waveflow/linalg/lanes.py` (lane groups and matrix (de)serialization, Python); `waveflow/linalg/message.py` (header, status and reply schemas) |
+| Build step | `waveflow/linalg/build.py`: a `Buildable` that copies the bodies into a design and renders the traits of every instance in it |
+| Matrix multiply | `waveflow/linalg/matmul.py` (bit-exact model); `waveflow/linalg/systolic.py` (`SystolicCore`, `SystolicUnit`) |
+| Cost model | `waveflow/linalg/cost.py` (the model forms); `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (`platform.json`, `components/<task>/`) |
+| C++ bodies and helpers | `waveflow/build/wf_lanes.h`, `wf_matrix_io.h`, `wf_linalg_msg.h`, `systolic_core_task.h`, and the unit's tasks `systolic_rx_task.h`, `systolic_load_task.h`, `systolic_store_task.h` |
+| Changed framework files | `waveflow/build/complex_utils.hpp` and `waveflow/utils/complexutils.py` (the 3-multiply product, added) |
+| Tests and data | `tests/linalg/` (tests, helpers, `data/*.npz` golden vectors); `tests/conftest.py` (`WANT_XSI_GATES`) |
+| Docs | `docs/guide/linalg/index.md`, `docs/guide/linalg/systolic.md` |
 
-**Steps** (provisional):
+**Configurations fixed for csynth and RTL** (maxima M, K, N; array R × C; lanes L; width W of A, B and
+C; multiply form), at 4 ns on `xczu48dr-ffvg1517-2-e`:
 
-- **7.0 👁 Entry gate:** re-run the readiness check (§8); run the probe; write the gate 7.0 decision
-  record in §14, with the file manifest; refine 7.1–7.7 into a step table. Exit: the user approves.
-- **7.1 Foundation:** lane groups and (de)serialization (C++ and Python), the message header and
-  status schema, the build step that renders per-instance types and copies bodies, and the
-  3-multiply product if it goes into `complex_utils`. Exit: the Python tests pass; a (de)serializer
-  round trip at two lane widths is bit-exact in C-sim (`-m vitis`, 0 skipped); the diff is shown to
-  the user before commit.
-- **7.2 Bit-exact model of the matrix multiply.** Golden vectors are frozen from the example's
-  `mm_step` at `6a2cdca` into `tests/linalg/` data (every format set of the Phase 5 space and the
-  stress set, at K = 4, 8 and 16, saturating cases included), so the reference survives Phase 9. An
-  independent exact reference (integer products, then `fixputils.quantize`) covers what `mm_step`
-  never did: non-square shapes, the 3-multiply form, the conjugate transpose, and imaginary parts
-  equal to −2^(W−1). Exit: the model equals both.
-- **7.3 The systolic core and its HLS body**, generalized from `cg_mm_task.h`. Exit: the pysim core
-  is bit-exact against the model; C-sim is bit-exact; two instances with different formats in one
-  composite are bit-exact in C-sim; csynth meets 4 ns (estimated) at the configurations fixed at
-  the gate, including the largest array (R·C = 256).
-- **7.4 The standalone unit and its RTL gate.** Exit: XSI is bit-exact on jobs of different shapes
-  and both multiply forms run back to back from one build (if dimensions are run-time); every tag is
-  echoed; a rejected job between two good ones returns its status and disturbs neither; measured job
-  times are within the cost model's cycle threshold.
-- **7.5 Cost model and calibration** (⚠️ cost if the campaign is expected to exceed 2 h). At least
-  10 held-out builds, each measured at 3 or more job shapes, fixed and committed before the campaign
-  runs. Exit: AC7's model thresholds on the held-out builds; coefficients committed with their tool
-  version and provenance.
-- **7.6 Guide page** for the systolic array: interface, parameters, message format, cost model,
-  limits.
-- **7.7 👁 M7 review:** the reviewer agent, then the user.
+| Name | Mmax, Kmax, Nmax | R × C | L | W | Form |
+|---|---|---|---|---|---|
+| centre | 8, 8, 32 | 4 × 8 | 4 | 12 | 4 |
+| largest | 16, 16, 32 | 16 × 16 | 4 | 16 | 4 |
+| smallest | 16, 16, 32 | 1 × 4 | 1 | 8 | 3 |
+| wide | 8, 8, 32 | 8 × 32 | 16 | 14 | 3 |
+
+| # | Step | Inputs | Exit condition (verifiable) | Verify with | Checkpoint | Status |
+|---|---|---|---|---|---|---|
+| 7.0 👁 | Entry gate: readiness re-run; the probe; the decisions; the manifest; this table | 6.10, the extension | The user approves the §14 gate 7.0 record and this table | user approval | commit | ☑ |
+| 7.1 | **Foundation.** `formats.py`, `lanes.py`, `message.py` and `build.py` in `waveflow/linalg/`; `wf_lanes.h`, `wf_matrix_io.h` and `wf_linalg_msg.h` (header parse and validation, the drain of a rejected payload, the reply); the 3-multiply product in `complex_utils` with its Python twin | 7.0 | The Python tests pass. A (de)serializer round trip is bit-exact in C-sim at lane widths 8 and 16 and message words of 32 and 64 bits. The 3-multiply product equals its twin and `cmult` in C-sim. Two format sets render two specializations in one header, and a format-id collision raises. No file under `waveflow/linalg/` or `tests/linalg/` imports from `examples/`. The diff is shown to the user | `pytest tests/linalg/`; `pytest -m vitis -rs tests/linalg/ tests/examples/test_complex_conformance.py` | commit after the user has seen the diff | ☐ |
+| 7.2 | **Bit-exact model of the matrix multiply** (`matmul.py`): `C = q(A·B)` and `C = q(Aᴴ·B)`, exact before one rounding, batched over leading dimensions. Golden vectors frozen from the example's `mm_step` at `6a2cdca` into `tests/linalg/data/mm_golden.npz` (every format set of the Phase 5 space and the stress set, K = 4, 8, 16, saturating cases included), by a script that records the commit. An independent exact reference: integer products, then `fixputils.quantize` | 7.1 | The model equals the golden vectors, and the reference on non-square shapes, both multiply forms, `Aᴴ`, and imaginary parts equal to −2^(W−1) | `pytest tests/linalg/test_matmul_model.py` | commit | ☐ |
+| 7.3 | **The systolic core** (`SystolicCore`, `systolic_core_task.h`), generalized from `cg_mm_task.h`: every operand in L-lane groups; run-time M, K and N up to the maxima, with index arithmetic as counters; `Aᴴ` as a transpose at load and conjugation at the edges; the format id; a fixed-width command | 7.2 | The pysim core is bit-exact against the model over several shapes. C-sim is bit-exact, including two instances with different formats in one composite. csynth meets 4 ns (estimated) at the four configurations above | `pytest -m vitis -rs tests/linalg/test_systolic_core.py` | commit | ☐ |
+| 7.4 | **The standalone unit and its RTL gate** (`SystolicUnit`): receive and validate (reject with a status, drain by length), load, the core, store (reply with the tag and the status). The test composite feeds it from memory through in-band `MemRStream`/`MemWStream` | 7.3 | XSI, at the centre and the smallest configuration: bit-exact on jobs of three or more shapes (non-square included), plain and `Aᴴ`, run back to back from one build; every tag echoed; a rejected job between two good ones returns its status and disturbs neither. Job times are recorded for 7.5. `WANT_XSI_GATES` is raised by the new gates | `pytest -m xsi -rs tests/linalg/test_systolic_unit.py` | commit | ☐ |
+| 7.5 ⚠️ cost | **Cost model and calibration** (`cost.py`): `ResourceModel`s for the core and the unit (DSP and block RAM counted, LUT and FF fitted); cycles per message plus an input/output floor. The calibration design and at least 10 held-out builds, each measured at 3 or more job shapes, are committed before the campaign runs. The campaign runs from the example's tooling, adapted to the unit; the fitted coefficients go to the new platform's `components/` with the tool version and provenance | 7.4 | AC7's thresholds on the held-out builds, on the unit and on the core's per-task rows; job times of 7.4 within the cycle threshold | the validation table and its command; `pytest tests/linalg/` | commit (pre-registration), commit (results) | ☐ |
+| 7.6 | **Guide pages** `docs/guide/linalg/index.md` and `systolic.md`: interface, parameters, message format, cost model, limits (among them: untested under back-pressure unless a stall pattern is added) | 7.5 | Every number on the pages traces to a committed table; the docs tests pass | `pytest tests/docs` | commit | ☐ |
+| 7.7 👁 | M7 review: the regression, the reviewer agent, then the user | 7.1–7.6 | AC7 met; the user approves | the fast suite; `pytest -m vitis -rs` and `-m xsi -rs` on `tests/linalg/`, 0 skipped; the framework XSI gates if `composite_gen` or `streamutils` changed; lint on the new files | commit, pause | ☐ |
 
 ### Phase 8 — The CG vector unit in Waveflow (milestone M8, refined at gate 8.0)
 
@@ -1014,6 +943,7 @@ the estimated clock and the cycles per product or iteration. About 45–60 minut
 | Finding (M6) | **Phase 6 findings** (corrected at the M6 review). Sources: `paper_data/decision_fidelity*.csv`, `bruteforce_error_metrics.csv`, `dse_cost.csv`, `learning_curve.csv`, `dse_guard*.csv`, `dse_shape.csv`, `finalists_impl.csv`, `finalists_pairs.csv`; each regenerates from committed tables with the command in its step's §15 row, except the two finalists tables, whose inputs (build records and Vivado reports) are not tracked. Setting as in the M3 finding (uncoded uplink, i.i.d. Rayleigh, BER 1e-3, loss against floating-point exact MMSE); hardware on `xczu48dr` at 4 ns with Vitis HLS and Vivado 2024.1; N = 32. Resources are csynth estimates unless a number is called implemented. **(A) The method.** (1) Models calibrated on 86 builds (2.1 tool-hours, 35 minutes of wall time) make nearly the design choices of a brute force. On a slice of the space built and measured in full (1,440 detectors, 1.3% of the configurations, 57 tool-hours), the model's pick meets the job-time budget within 2% and costs within 10% of the best in 2,587 of 2,592 decisions (DSP 99.5%, LUT 99.8%, FF 99.8%, block RAM 100%). The decision set and the scoring rule were committed before the first of those builds. The pick has exactly the best cost in 92.5% of the decisions; regret is 0 at the median and 0.8% at the 95th percentile. With no tolerance on the job-time budget, 2,558 are right (LUT 97.2% at the lowest). (2) Over the same 1,440 builds DSP and block RAM are exact on every one, LUT is 0.9% off on average and FF 2.3%; job time is 1.0% off over the 8,807 jobs where the CG loop is the bottleneck. (3) The whole space, 6,084,720 joint designs, is priced in 15 s; its brute force is projected at about 4,000 tool-hours. (4) About half the calibration passes the same bar: with 45 builds, 19 of 20 random subsets are right in at least 90% of the decisions on every resource; with 30 or fewer it depends on the draw. **(B) The design** (model-predicted csynth unless stated). (5) Guard bits on the two scalar accumulators are worth a median 8% of the LUTs (quartiles 3.5% and 12.6%; range 0–94%), 15% of the flip-flops and 24% of the block RAM of the cheapest design, over 164 scenario-budget questions; in 24 of them the cheapest design has no guard bits anyway. The median DSP difference is nothing, because a 12-bit and a 16-bit multiply each take one DSP; but 62 of the 164 designs without guard use more DSPs and 7 fewer (mean +23%), where the lack of guard changes the iteration count or the architecture. For 52 of 216 questions (43 of them 64-QAM) there is no design without guard bits within the 16-bit datapath. (6) As implemented, on six pairs: leaving the guard out costs 1.5–17.6% of the LUTs and 3–18% of the flip-flops. Three of the six designs without guard run more iterations: two pay in job time (+22% and +85%), the third in a larger array (+27% DSPs). Implemented block RAM is equal in five pairs and +92% in one. (7) Speed comes from lanes first: the cheapest design goes from 1 lane and a 4-element array at the loosest job-time budget to 16 lanes at the tightest, the vector unit staying between a half and three quarters of an iteration. Per scenario, the tightest budget's design is 17.6 times faster for 5.3 times the LUTs and 34 times the DSPs (medians of the 27 ratios). **(C) csynth against implementation, on the twelve finalists.** (8) All twelve meet 4 ns (2.70–3.91 ns) and are bit-exact at RTL. csynth counts 2.7–3.9 times the implemented LUTs and 1.1–1.8 times the flip-flops, yet the order of the twelve by LUTs, and by flip-flops, is the same before and after. By DSPs and by block RAM it is not. (9) DSPs: Vivado uses four more per lane than csynth reports from 12 bits up, and at 10 bits it puts back into DSPs the multiplies csynth builds from LUTs, so the 10-bit design has 28 DSPs, as many as its 14-bit counterpart, against csynth's 17 and 24. A narrow format saves logic and registers, not DSPs. Block RAM differs in both directions. **Caveats.** (a) *What was measured.* The models predict csynth, not the implemented design; implemented numbers cover twelve designs, all 16-QAM with 64 antennas, and the csynth-over-implementation LUT ratio is not constant. Seven of the twelve have the knobs of a sub-grid build. (b) *Coverage of the brute force.* 1,440 of 107,460 configurations: 3 of the 17 lane and column pairs, array rows 1, 4 and K (no R = 2), the smallest depths; they pair 135 distinct vector units with 240 distinct matmuls. Only 19% of the predicted frontier's rows are sub-grid configurations (42% of them have 2 or 8 lanes). It is csynth and RTL, not implementation. (c) *Timing at the fast end.* The largest implemented design has 110k csynth LUTs and 384 csynth DSPs, and the slack was 0.09 ns at 98k LUTs; 21% of the frontier's rows have more DSPs than that. Every job time at the fast end, and the 17.6 times of (7), assumes a 4 ns clock that csynth estimates (3.39 ns at most) but place and route did not show there. (d) *The models' weak spots.* One family is mispredicted in job time (merged one-row arrays in the 3-multiply form, 7.5% slow, never calibrated); it cost no decision. No latency is claimed under twice the memory-transfer floor (193 of 9,000 sub-grid jobs, 5.4% off on average and up to 38%); that guard cost one decision. Four of the five wrong decisions are budgets within 1% of a design's job time. (e) *The decision count* includes repeats (1,728 distinct questions; 99.77% of those). (f) *The learning curve.* Two detectors are in every subset, without which no memory word width can be priced; at 10 and 20 builds the LUT regressions have fewer builds than parameters (the fit is then the minimum-norm one), and 45 is the first size at which every regression is over-determined; the number of subsets that pass is not monotone (4, 13, 12, 19); the refits keep v2's terms and merge threshold, which were chosen with all 86 builds. (g) *The refit.* The v2 models were refitted after the first two held-out sets had been scored with v1, one of which showed the matmul's weakness; v2's clean tests are the six held-out matmul builds drawn before the refit and the brute force. (h) *Pre-registration* is attested by local history: the commits that fix the decision set, the grid and the scoring rule (`8948aa1`) precede the first brute-force record by 2.5 minutes of file time, but they reached the remote together with the results. The finalists' list was committed while the brute force was running (258 builds measured, none read). The scoring code gained two additions after the pilot's 77 builds existed; the code as pre-registered gives the same judged rows. (i) *The projection* of about 4,000 tool-hours is a line fitted on the sub-grid's build times (other fits give 3,860–4,300); the 28 days it would take on this machine ignore that the pruned builds alone would need about 580 GB of disk | doer, 2026-10-05; corrected after the independent review (0 blocking, 11 should-fix, 5 suggestions) |
 | Decision | **Extension: Phases 7–9.** Added at the user's request: move the systolic matrix multiply and the CG vector unit into Waveflow as reusable components, then rebuild this example on them. Scope rule: Waveflow gains only what those two components need, in a form not specific to this example; the detector composite, the MIMO-specific formats and the study tooling stay in the example. What moves and what stays is listed at the head of Phase 7 and fixed at gate 7.0 | user, 2026-10-06 |
 | Decision | **Phase 9 re-measures the study's hardware, not a sample:** all 132 Phase 5 builds and the 12 finalists are rebuilt on the Waveflow components and compared build by build with their old measurements, in new tables. The brute force is re-run only if gate 9.0's trigger fires | user, 2026-10-06 |
+| Decision | **Gate 7.0 decision record.** Evidence: §15 gate 7.0 row (the probe). (1) **Module home: `waveflow/linalg/`** for the Python side; task bodies as top-level headers in `waveflow/build/`; tests in `tests/linalg/`. (2) **Component shape:** the hook-component convention (a `FreeRunMod` whose `run_iter` delegates to the bit-exact model; an `HwParam` for every integer template argument; a `KernelTask`; simulated time from the cycle model). (3) **Formats reach C++ as an integer format id** derived from the formats' content; the build step renders one traits specialization per id, and a collision raises. Formats are plain fields, never an index into an example's registry. No framework API changes (task instances and calibration keys are already named from integer template arguments). (4) **Two layers:** a core (fixed-width command, stream-of-blocks data ports) and a standalone unit. (5) **The standalone unit speaks framed messages** in the framework's in-band style: a header burst holding a tag of 32 bits echoed in the reply, the operation, the dimensions, the payload length in words and the number of follow-on messages; then operand bursts. The message word width (32 or 64, the widths the generated command headers support) and the element lane width (default 16, at least the widest operand) are parameters. Every reply carries a status; a message with out-of-range dimensions or an unexpected operation is rejected and its payload drained by its length, never clamped. A later change to this format re-runs Phase 7's gates and its calibration. (6) **Problem dimensions at run time, both components,** up to synthesis-time maxima. Probe: +673 to +879 LUT, +353 to +373 FF and 1 DSP for the matrix multiply; −30 to +748 LUT, −384 to +454 FF and 1 DSP for the vector unit; clock and every loop's initiation interval unchanged. (7) **The matrix multiply offers `C = q(Aᴴ·B)`** as `conj(Aᵀ·conj(B))`: A transposed at load, B's imaginary part negated at the array's input edge in one more bit, the exact imaginary sum negated before the one rounding. Probe: +250 and +588 LUT, about 0 FF, 0 DSP, one more pipeline stage at R·C = 256. The same option inside every processing element cost +49% to +111% LUT and was rejected. (8) **Jobs are self-contained.** (9) **Cost model:** framework `ResourceModel`s for the core and the unit, cycles per message plus an input/output floor, at least 10 held-out builds at 3 or more job shapes each. **The fitted coefficients go in a new packaged platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/`** under `components/<task>/` (the slot platforms already have for reusable components); its name carries the tool version and does not collide with the example's platform. (10) **The 3-multiply product goes into `complex_utils`** beside `cmult`, with its Python twin and a conformance case. (11) **Test harness:** helpers in `tests/linalg/` built on `composite_gen`, part and clock as arguments; no part or clock constant under `waveflow/`. (12) **Docs:** a new guide section `docs/guide/linalg/`. (13) The Waveflow file manifest and the four csynth configurations are in §10, Phase 7. (14) Rejected: `waveflow/hw/` as the home; a C++ type template argument for formats; a memory-mapped standalone unit; dimensions fixed at synthesis; `Aᴴ` inside the processing elements; leaving the cost data in the example; the 3-multiply product private to the body; pages under an existing guide section | user, 2026-10-06 (gate 7.0) |
 | Open question | Step-level detail for Phases 4–6 | refined at gates 4.0, 5.0, 6.0 |
 | Open question | Step-level detail and the open choices of Phases 7–9 (module home, how formats reach C++, the message format, run-time dimensions per component, the conjugate-transpose option, the cost model and its platform, the test harness, the stopping rule, which tests Phase 9 retires, the re-measure thresholds, the brute-force trigger) | gates 7.0, 8.0, 9.0 |
 
@@ -1107,6 +1037,7 @@ the estimated clock and the cycles per product or iteration. About 45–60 minut
 | 2026-10-06 | planning (extension) | The user asked for new phases that move the systolic array and the CG vector unit into `waveflow/`, adding only reusable parts worth adding. Research: the example's hardware code (which parts carry CG- or example-specific types: `fmt` is an index into the example's registry, `mem_dwidth` sizes the command words, `cg_cmac` takes `cg::` types); the framework's hook-component convention and the warning in `plans/vitis_l1_hwmodule.md` that a module's home must be fixed before its first build; where task bodies ship (`waveflow/build/*.h`, package data); `device_rules.dsp_per_mult`, whose packing of narrow multiplies differs from what Phase 4 measured on `xczu48dr`. Added Phases 7–9 (milestone-level, gates 7.0, 8.0, 9.0), AC7, AC8, AC9 and AC-R9, and the matching rows in §1–§3, §9, §11, §12 and §14 | this revision | none |
 | 2026-10-06 | planning (extension, review) | At the user's request, an independent reviewer agent checked the extension before commit (read-only, against the code). Verdict: ready with fixes; 1 blocking, 10 should-fix, 6 suggestions, all folded in. Blocking: formats could not be "an `HwParam` for every template argument" (an `HwParam` is stored as an integer, task instances and calibration keys are named from integer template arguments, and the example's types live in one global `namespace cg`, so a build holds one format set); gate 7.0 now decides how formats reach C++ (a rendered per-instance types struct, framework APIs extended by addition only). Should-fix: a build step and test harness the components can use without the example's `build.py`; golden vectors frozen at `6a2cdca` and an independent exact reference, so the bit-exact reference survives Phase 9; a probe of both bodies with the index arithmetic as counters; the message format fixed once (tag, payload length, message count, status; no clamping) with a rejected-job RTL test; a unit-to-unit composition check (9.3); Phase 9 acceptance against the Phase 5 measurements, with retired tests listed first; a per-message cycle model with an input/output floor, `ResourceModel`s, ≥ 10 held-out builds at ≥ 3 job shapes, and a platform that records its tool version and does not collide with the example's; a leaner moves list (the 3-multiply product beside `complex_utils::cmult`, `hw/csim.py` stays, the LUT-multiply threshold goes in platform data); example details kept out (K-lane A rows, `nit ≤ K`, `N = 32`, `R = 0`); regression and diff-review gaps. Checked and confirmed by the doer in the code: the `HwParam` integer conversion, the integer task-instance names, the global types namespace, the existing `cmult`, the platform manifest with no tool version, and the always-ready XSI sink | the reviewer's report; this revision | none |
 | 2026-10-06 | planning (extension) | The user asked whether the whole example is re-tested after the move and compared with the old results. As committed in `89e79eb8`, Phase 9 re-ran every test and re-measured 16 detectors only. **The user chose** to re-measure the whole Phase 5 set (132 builds) and to re-implement the 12 finalists, each compared with its old measurement, and to re-run the brute force only if a trigger set at gate 9.0 fires (costs moving unevenly enough to change which designs are cheapest). Gate 9.0 items 1–4, step 9.4, AC9 and the §12 cost rows were updated; the measurement, campaign and place-and-route tooling is now adapted in Phase 9, not retired | user decision | none |
+| 2026-10-06 | 7.0 | Gate 7.0. Readiness re-run: READY (23 ready, 0 to check, 0 blocked; tree clean). **Probe** (scratch builds under the session scratchpad; nothing in the repo changed): unit builds generated by the example's flow with the core's body replaced, csynth only, compared with the committed build of the same configuration. A flow check (the unmodified body) gave the committed `CgMm` row exactly (9,955 LUT, 8,593 FF, 128 DSP). Results, LUT / FF / DSP against the committed row: matrix multiply with run-time M, K, N and the index arithmetic as counters, at `mm_k8_r4_c8_m4_w12_l4`, `mm_k8_r4_c8_m3_w12_l4` and `mm_k16_r16_c16_m4_w16_l4`: +673 / +353 / +1, +673 / +373 / +1, +879 / +370 / +1; vector unit with run-time K and N at `vec_k8_l4_w12g8`, `vec_k8_l1_w8g0` and `vec_k16_l16_w12g8`: +526 / +302 / +1, +748 / +454 / +1, −30 / −384 / +1 (the start's two loops are no longer flattened); `Aᴴ` inside every processing element, at the same three matrix-multiply configurations: +5,614 / −170 / 0, +4,686 / +2,885 / 0, +58,740 / −71 / 0; transpose at load alone: −306 / −309 / 0 and −620 / −534 / 0; `Aᴴ` as a transpose at load with conjugation at the edges: +250 / −13 / 0 and +588 / −888 / 0. Every estimated clock is unchanged (3.352 or 3.392 ns) and every loop keeps II = 1; the edge form adds one pipeline stage to the sweep at R·C = 256. csynth took 30–141 s per build (14 builds, four at a time, a few minutes in all, against the 45–60 minutes estimated). One probe body had a duplicate declaration, fixed and re-run. The variants are not functionally verified: the probe measures cost; bit-exactness is steps 7.2–7.4. **Found while preparing the decisions:** the framework names task instances (`TaskInst.inst_name`) and calibration keys (`module_key.config_id`, which calls `int()`) from integer template arguments, so an integer format id needs no API change where a type argument would; platforms already have `components/<comp>/` for reusable components' calibrations, and their manifest records only part and clock. **The user chose** every recommendation: `waveflow/linalg/`; the integer format id; run-time dimensions for both components; `Aᴴ` at the edges; framed messages; the packaged platform; the 3-multiply product in `complex_utils`; a new guide section | readiness output; the probe's tables (scratch); user approval | Phase 7's bullet steps rewritten as a step table with a file manifest and four csynth configurations |
 
 ## 16. Completion report
 
