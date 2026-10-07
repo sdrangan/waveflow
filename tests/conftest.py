@@ -78,7 +78,12 @@ import pytest
 #: harness on the three default builds (report rows, job intervals, block spans, record filing) and
 #: on a memory-bound unit.  Phase 6 added one there: the brute-force mode of the harness (the
 #: steady-state job list, no waveform, a pruned build) on the K = 4 default detector.
-WANT_XSI_GATES = 140
+#:
+#: 140 -> 142 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 7.4): a new file,
+#: ``tests/linalg/test_systolic_unit.py``, collects **2** -- the standalone systolic unit of
+#: ``waveflow/linalg/`` at RTL, at two configurations (centre, smallest), each running good and
+#: rejected requests back to back from one build, bit-exact against the model.
+WANT_XSI_GATES = 142
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

@@ -407,4 +407,13 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   default; the quick loop is `-m "not vitis and not xsi"`.
 - **`pkill -f` matches its own shell.** A pattern that appears in the command line kills the
   command; kill by PID.
+- **In one generated top, the in-band memory reader and writer must fire equally often.** The
+  `m_axi` pointer FIFOs couple their firing counts; a writer one firing short per job stalled
+  the RTL after eight jobs (its FIFO is 9 deep) while pysim ran on. Count firings per job when
+  a bench reads more often than it writes, and pad with empty writes.
+- **A gate that stops at a round number is a capacity, not a bug in the last job.** Bisecting
+  by content (reordering, ten identical jobs) showed the count, then the 9-deep FIFO.
+- **Placement by a run-time lane index costs more than it looks.** Writing each value into
+  lane `e % L` of a group cost 4k LUT per loop at II 2; shifting values through a group
+  register cost 620 at II 1, bit for bit the same.
 

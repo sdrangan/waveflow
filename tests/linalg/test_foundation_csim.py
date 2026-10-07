@@ -52,7 +52,7 @@ int main(int argc, char** argv) {{
     streamutils::tlast_status tl;
     const int n = {n};  // a run-time count
     wf_load_matrix<{wbw}, {L}, {maxg}, T, TR::a_mem>(s_in, blk, n, tl);
-    for (int g = 0; g < n / {L}; ++g) fprintf(f, "G %s\\n", blk[g].to_string(16).c_str());
+    for (int g = 0; g < (n + {L} - 1) / {L}; ++g) fprintf(f, "G %s\\n", blk[g].to_string(16).c_str());
     wf_store_matrix<{wbw}, {L}, {maxg}, T, TR::a_mem>(blk, s_out, n);
     while (!s_out.empty()) {{
         streamutils::framed_word<{wbw}> w = s_out.read();
@@ -72,6 +72,14 @@ int main(int argc, char** argv) {{
         (8, 64, 8, 2, 2, 38),  # 4 elements to a word: the final word is half filled
         (16, 32, 12, 3, 4, 40),
         (16, 64, 12, 3, 2, 38),  # 2 to a word: the final word is half filled
+        (
+            16,
+            64,
+            12,
+            3,
+            4,
+            38,
+        ),  # the final lane group is half filled (zeros in the rest)
     ],
 )
 def test_matrix_round_trip(tmp_path, lane_bits, word_bits, W, I, L, n):
@@ -96,9 +104,7 @@ def test_matrix_round_trip(tmp_path, lane_bits, word_bits, W, I, L, n):
     )
     out = run_csim(tmp_path / "csim", tb, inc).split("\n")
     groups = [int(x.split()[1], 16) for x in out if x.startswith("G ")]
-    assert groups == [
-        LN.pack_group(re[g : g + L], im[g : g + L], W) for g in range(0, n, L)
-    ]
+    assert groups == LN.pack_matrix(re, im, W, L)
     emitted = [x.split()[1:] for x in out if x.startswith("W ")]
     assert [int(w, 16) for w, _ in emitted] == [int(w) for w in words]
     assert [int(last) for _, last in emitted] == lasts
