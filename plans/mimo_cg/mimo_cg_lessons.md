@@ -481,3 +481,24 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
   because the subclass kept its module path.
 - **A rank test needs enough items in each group.** With 4 or 6 detectors at one K, a single swap
   drops Spearman's ρ below 0.95; a trigger is only as stable as its smallest group.
+
+## Phase 9, steps 9.1–9.4a (2026-10-07)
+
+- **Port names are not channel names.** The span extractor matched a reader to its producer by the
+  port name at both ends, which held while every block's ports were named after the composite's
+  channels; the systolic core reads `B` on the detector's `p_blk` channel.  Derive the map from the
+  generated top (each task call lists its channels in port order) rather than from a convention.
+- **Size a threshold where the judged builds are not.** The cycle bounds were set from probes of
+  fast configurations that only the brute force had measured, so no build the campaign judges was
+  seen before its bound was fixed.
+- **A fixed overhead breaks a relative bound on small numbers.** A few cycles per firing are 2–3%
+  of a long iteration and 6–15% of a short span; a bound with a relative and an absolute part
+  ("5% or 20 cycles") says what was meant.
+- **Run the comparison on as-predicted data before the campaign.** Feeding `compare` copies of the
+  old tables with the predicted DSP and block RAM passed all 1,074 checks, and showed that the
+  predicted channel changes alone bring one rank correlation to 0.968, close to the trigger's 0.95.
+- **A guard that classifies every committed table catches the next one.** The study-table check's
+  own test failed as soon as `migration_list.csv` existed without a stated origin.
+- **Move local artifacts aside before rebuilding over them.** The detector's RTL tests rebuild in
+  the Phase 4 build directories, which a docs script reads; moving them to `hw/build/pre_phase9/`
+  kept them for that script and for the comparison.
