@@ -468,3 +468,16 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **"Each gate runs the list" means each gate.** The RTL scenarios covered most rejection kinds
   across the three gates but not each kind in each gate, and one receiver branch never ran at RTL;
   the M8 review caught it.
+
+## Gate 9.0 (2026-10-07)
+
+- **Committed data can price a change before anything is built.** Matching the components'
+  calibration builds to the old builds of the same configuration gave the price of generality
+  (DSP, LUT, FF per block) in a minute of pandas, and showed that the plan's example threshold
+  (LUT within 10%) would have failed on most matrix-multiply blocks for a reason that is not a
+  defect: work had moved from one task to another.
+- **Check a plan's factual claim before building a step on it.** The provisional step 9.1 said the
+  module keys stopped matching at step 8.1; elaborating every build showed they still matched,
+  because the subclass kept its module path.
+- **A rank test needs enough items in each group.** With 4 or 6 detectors at one K, a single swap
+  drops Spearman's ρ below 0.95; a trigger is only as stable as its smallest group.
