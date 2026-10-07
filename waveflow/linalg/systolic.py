@@ -273,6 +273,18 @@ class SystolicCore(FreeRunMod):
         """What a design with this core needs generated: its traits, body and command header."""
         return LinalgParts((self.traits,), CORE_HEADERS, (SystolicCmd,))
 
+    def resource_structure(self):
+        """What the core contains, for its resource model (:func:`~waveflow.linalg.cost.core_structure`)."""
+        from waveflow.linalg.cost import core_structure
+
+        return core_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_core_task", cls)
+
     def run_iter(self) -> ProcessGen[None]:
         cmd = yield from self.cmd_in.get_schema(SystolicCmd)
         op, nb = int(cmd.op), int(cmd.nb)
@@ -447,6 +459,17 @@ class SystolicRx(_UnitPart):
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_rx"
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import rx_structure
+
+        return rx_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_rx_task", cls)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.s_in = self._framed(StreamIFSlave, "s_in")
@@ -515,6 +538,17 @@ class SystolicLoad(_UnitPart):
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_load"
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import load_structure
+
+        return load_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_load_task", cls)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         M, K, N = int(self.Mmax), int(self.Kmax), int(self.Nmax)
@@ -569,6 +603,17 @@ class SystolicStore(_UnitPart):
     (``systolic_store_task.h``)."""
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_store"
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import store_structure
+
+        return store_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_store_task", cls)
 
     def __post_init__(self) -> None:
         super().__post_init__()
