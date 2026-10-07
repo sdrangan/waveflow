@@ -121,19 +121,21 @@ def core_structure(core) -> DesignStructure:
         bases=[
             p,
             p * _acc_bits(core),
+            p * Wa,
             p * form3,
             p * form3 * (Wa + Wb),
             p * packed,
             p * packed * Wa,
             M * K * Wa,
             C * Wb,
+            C * Wb * _log2(C // L),
             R * L * Wa,
             M * Wa * _log2(L),
             M * L * Wa,
         ],
         names=(
-            "pe", "pe_acc", "pe3", "pe3_w", "packed", "packed_w", "a_store", "b_banks",
-            "lane_mux", "row_offset", "row_write",
+            "pe", "pe_acc", "pe_w", "pe3", "pe3_w", "packed", "packed_w", "a_store", "b_banks",
+            "b_place", "lane_mux", "row_offset", "row_write",
         ),
     )  # fmt: skip
     return DesignStructure(multipliers=mults, memories=mems, lut_ff_basis=basis)
@@ -175,29 +177,38 @@ def channel_memories(unit) -> list:
     ]
 
 
-def buffer_blocks(depth: int, bits: int, halves: int) -> int:
+#: A buffer under 32 bits wide and under this many bits in all is distributed RAM.
+LUTRAM_MAX_BITS = 2048
+
+
+def buffer_blocks(
+    depth: int, bits: int, halves: int, word_bits: int, per_half: bool = False
+) -> int:
     """Block RAMs (18K) of one stream-of-blocks buffer: ``halves`` blocks of ``depth`` words of
-    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr: under 32 bits wide, ``ceil(bits/18)`` columns of
-    1024 x 18 per half; from 32 bits, ``ceil(bits/36)`` columns of 512 x 36 shared by the halves.
-    (Measured on the step 7.5 calibration builds.)"""
-    if bits < 32:
+    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr, measured on the step 7.5 calibration builds:
+    from 32 bits wide, ``ceil(bits/36)`` columns of 512 x 36 shared by the halves; under 32 bits,
+    distributed RAM below :data:`LUTRAM_MAX_BITS` in all, else ``ceil(bits/18)`` columns of
+    1024 x 18 per half with 64-bit message words (two values written per cycle) and shared
+    36-bit columns with 32-bit words.  ``per_half`` forces the per-half columns at any width.
+    """
+    if per_half or (
+        bits < 32 and int(word_bits) == 64 and halves * depth * bits >= LUTRAM_MAX_BITS
+    ):
         return halves * math.ceil(bits / 18) * math.ceil(depth / 1024)
+    if bits < 32 and halves * depth * bits < LUTRAM_MAX_BITS:
+        return 0
     return math.ceil(bits / 36) * math.ceil(halves * depth / 512)
 
 
-#: The ``A`` buffer's blocks are multiplied by this with 32-bit message words (measured: the
-#: loader's one-value words make the tool split it four ways).
-A_BUFFER_SPLIT_32 = 4
-
-
 def channel_counted(unit) -> dict:
-    """Block RAM of the unit's three stream-of-blocks buffers (``sob_depth`` halves each)."""
+    """Block RAM of the unit's three stream-of-blocks buffers (``sob_depth`` halves each).  The
+    ``A`` buffer with 32-bit words and lane groups of two or more takes per-half columns (the
+    transposing loader's read-modify-write of a group, one value per word)."""
+    word = int(unit.word_bits)
     total = 0
     for m in channel_memories(unit):
-        blocks = buffer_blocks(m.depth, m.elem_bits, m.banks)
-        if m.name == "a_blk" and int(unit.word_bits) == 32:
-            blocks *= A_BUFFER_SPLIT_32
-        total += blocks
+        per_half = m.name == "a_blk" and word == 32 and int(unit.L) >= 2
+        total += buffer_blocks(m.depth, m.elem_bits, m.banks, word, per_half)
     return {"bram": total, "lutram_luts": 0}
 
 
