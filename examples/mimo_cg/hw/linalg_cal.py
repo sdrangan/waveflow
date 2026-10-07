@@ -476,7 +476,8 @@ def merge() -> None:
             f.write(
                 f"# {name}: step 7.5 of plans/mimo_cg/mimo_cg_paper_sims.md; tool={TOOL}; part={PART}; period_ns={PERIOD_NS}\n"
             )
-            w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
+            keys = list(dict.fromkeys(k for r in rows for k in r))
+            w = csv.DictWriter(f, fieldnames=keys, restval="", lineterminator="\n")
             w.writeheader()
             w.writerows(rows)
         print(f"wrote paper_data/{name}: {len(rows)} rows")
