@@ -1,5 +1,5 @@
 ---
-title: Wrapping vendor IP: the Vitis FFT
+title: "Wrapping vendor IP: the Vitis FFT"
 parent: Examples
 nav_order: 9.57
 has_children: true

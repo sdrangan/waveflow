@@ -1,6 +1,6 @@
 ---
 title: FFT testbench
-parent: Wrapping vendor IP: the Vitis FFT
+parent: "Wrapping vendor IP: the Vitis FFT"
 nav_order: 1
 summary: "VitisFftTB, the testbench graph that both the pysim and the XSI harness are built from: four stream drivers, the FFT, four sinks. The two scenarios -- frames back to back, and isolated frames whose gaps sweep arrival phase -- the per-burst gaps that make the second possible in both backends, how the RTL is timed at its ports from the BFMs themselves with no waveform, how every run checks every frame's bits, and the gates."
 ---
