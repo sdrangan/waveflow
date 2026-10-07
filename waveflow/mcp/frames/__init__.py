@@ -145,7 +145,8 @@ def waveflow_get_process(frame: str | None = None) -> dict[str, Any]:
     """
     # `None` rather than a default string: the registry declares these schemas
     # strict, which makes every property required, so a client that wants the
-    # default sends null.  A bare `str` annotation makes FastMCP reject that
+    # default sends null.  A bare `str` annotation makes MCPServer reject that
+    # (a pydantic "Input should be a valid string" error, still true in mcp 2)
     # before the function is ever called.
     frame = frame or DEFAULT_FRAME
     found = load_frame(frame)

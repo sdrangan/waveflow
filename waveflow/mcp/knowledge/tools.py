@@ -2,7 +2,7 @@
 
 CLI first, MCP as a thin wrapper: each of these is an ordinary Python function
 returning JSON-able data, reachable from a terminal through ``waveflow kb`` and
-registered with FastMCP by one line in ``registry.py``.  An agent with no MCP
+registered with the MCP server by one line in ``registry.py``.  An agent with no MCP
 support at all can still use every one of them.
 
 **Find in chunks, read whole.**  :func:`waveflow_search` returns pointers --
@@ -60,7 +60,7 @@ def _prior(path: str, kind: str) -> float:
 def _idx():
     """The process-wide index.
 
-    Deliberately takes no argument.  FastMCP builds each tool's JSON-Schema
+    Deliberately takes no argument.  MCPServer builds each tool's JSON-Schema
     from its **signature**, so anything these functions accept becomes a knob
     the model can turn -- and a directory parameter would let it repoint the
     index anywhere on the machine.  Tests and the CLI select a tree with the

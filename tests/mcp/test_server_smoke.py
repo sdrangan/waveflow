@@ -2,7 +2,7 @@
 
 Everything else in ``tests/mcp/`` calls the tool functions directly.  That
 misses the whole layer this exercises: a tool whose JSON-Schema the registry
-declares wrongly, or whose return value FastMCP cannot serialize, passes every
+declares wrongly, or whose return value MCPServer cannot serialize, passes every
 direct test and then fails the first time a client touches it.  The only way
 to catch that is to be a client.
 
@@ -96,7 +96,7 @@ async def _drive() -> tuple[set[str], str, list[tuple[str, str]]]:
                 text = "".join(
                     getattr(c, "text", "") for c in response.content
                 )
-                results.append((tool, text if not response.isError else f"ERROR: {text}"))
+                results.append((tool, text if not response.is_error else f"ERROR: {text}"))
     return names, instructions, results
 
 

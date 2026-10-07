@@ -60,6 +60,13 @@ def validate_python_interpreter(python_path: str) -> None:
     stderr = (completed.stderr or "").strip()
     stdout = (completed.stdout or "").strip()
     details = stderr or stdout or "Unknown error while importing waveflow.mcp.server"
+    if "mcp.server.mcpserver" in details:
+        # mcp 1.x in that environment, typically installed after waveflow by a pinned
+        # requirements file.  The bare ModuleNotFoundError does not say so.
+        details += (
+            "\nThat interpreter has mcp 1.x; waveflow needs mcp 2: "
+            'pip install -U "mcp>=2.3,<3"'
+        )
     raise RuntimeError(
         "The selected Python interpreter cannot import waveflow.mcp.server: "
         f"{python_path}\n{details}"
