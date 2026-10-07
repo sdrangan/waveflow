@@ -3,7 +3,7 @@ title: Linear Algebra
 parent: Guide
 nav_order: 13.5
 has_children: true
-summary: "Reusable hardware for complex fixed-point linear algebra in waveflow.linalg. Each component is a bit-exact Python model, a pysim module, a Vitis HLS task body, a standalone unit that speaks framed messages, and a cost model calibrated on a packaged platform. This page covers what the components share: operand formats and the integer format id that carries them to C++, lane groups and message words, the message header and its statuses, the build step, and where the cost data live. The component here is the systolic matrix multiply."
+summary: "Reusable hardware for complex fixed-point linear algebra in waveflow.linalg. Each component is a bit-exact Python model, a pysim module, a Vitis HLS task body, a standalone unit that speaks framed messages, and a cost model calibrated on a packaged platform. This page covers what the components share: operand formats and the integer format id that carries them to C++, lane groups and message words, the message header and its statuses, the build step, and where the cost data live. The components are the systolic matrix multiply and the CG vector unit."
 ---
 
 # Linear Algebra
@@ -22,6 +22,7 @@ Each component comes in five forms, and the first four agree bit for bit:
 | Component | Computes | Page |
 |---|---|---|
 | Systolic matrix multiply | `C = q(A·B)` and `C = q(Aᴴ·B)` | [Systolic Matrix Multiply](./systolic.md) |
+| CG vector unit | the vector steps of conjugate gradient on `A X = B`, multi-RHS | [CG Vector Unit](./cg_vector.md) |
 
 ## Two layers: core and unit
 
@@ -142,12 +143,12 @@ and the tool version that the numbers belong to:
 |---|---|
 | `platform.json` | the part (`xczu48dr-ffvg1517-2-e`), the clock (250 MHz) and the tool (Vitis HLS / Vivado xsim 2024.1) |
 | `models/<task>/params.json` | each task's fitted resource model, in the framework's layout, so a composed estimate (`add_rm`, then `compose()`) prices a design that contains the task |
-| `models/systolic_unit_channels/params.json` | the systolic unit's channels: its stream-of-blocks buffers, FIFOs and memory adapters |
-| `components/systolic_unit/params.json` | the systolic unit's cycle model, per message |
-| `provenance.json` | the tool, the step and model version, and the builds the models were fitted on |
+| `models/systolic_unit_channels/params.json`, `models/cg_vector_unit_channels/params.json` | each unit's channels: its stream-of-blocks buffers, FIFOs and memory adapters |
+| `components/systolic_unit/params.json`, `components/cg_vector_unit/params.json` | each unit's cycle model, per message |
+| `provenance.json` | per component, the tool, the step and model version, and the builds the models were fitted on |
 
 A model measured with one tool version describes that version only. The components' `get_rm`
-refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost`
-reads only this one. Pricing another part, clock or tool version takes a new calibration and a
-platform of its own; the [systolic page](./systolic.md#calibration-and-accuracy) describes how
-this one was calibrated.
+refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost` and
+`cg_cost` read only this one. Pricing another part, clock or tool version takes a new calibration and a
+platform of its own; the component pages ([systolic](./systolic.md#calibration-and-accuracy),
+[CG](./cg_vector.md#calibration-and-accuracy)) describe how this one was calibrated.
