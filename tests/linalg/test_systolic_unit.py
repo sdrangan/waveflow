@@ -24,9 +24,15 @@ import pytest
 
 from tests.linalg import _unit_bench as UB
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis
-from waveflow.linalg.message import Status
-from waveflow.linalg.systolic import MatmulOp, request_words
+from waveflow.hw.interface import StreamIF
+from waveflow.linalg import cost
+from waveflow.linalg.lanes import to_words
+from waveflow.linalg.message import Status, header
+from waveflow.linalg.systolic import MatmulOp, SystolicUnit, request_words, stored_shape
+from waveflow.simulation.simulation import Simulation
+from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.toolchain import toolchain
+from waveflow.utils.burst_io import write_burst_bundle
 from waveflow.utils.fixputils import Format, OMode, QMode
 
 MUL, MUL_AH = MatmulOp.MUL, MatmulOp.MUL_AH
@@ -117,6 +123,48 @@ def test_request_status():
     statuses = [sim.status(h) for (*_, h, _a, _b) in sim.layout]
     assert statuses == [st for *_, st in JOBS["centre"]]
     assert request_words(8, 8, 32, p["lane_bits"], 64) == 32 + 128
+
+
+class _TimedSink(StreamSink):
+    """A sink that also records when each burst arrives."""
+
+    def rx_proc(self, words):
+        self.times = [*getattr(self, "times", []), self.env.now]
+        yield from super().rx_proc(words)
+
+
+@pytest.mark.parametrize("op", [MUL, MUL_AH])
+def test_pysim_time_is_the_calibrated_core_share(op, tmp_path):
+    """Requests sent straight to ``s_in``, back to back: in pysim the steady interval is the core's
+    calibrated share of a message (``cost.core_interval``), which the transfers overlap.
+    """
+    sim = Simulation()
+    u = SystolicUnit(name="u", sim=sim, **UNITS["centre"])
+    m, k, n = 8, 8, 32
+    rng = np.random.default_rng(5)
+    ar, ai = rng.integers(-2048, 2048, (2, *stored_shape(op, m, k)))
+    br, bi = rng.integers(-2048, 2048, (2, k, n))
+    aw, bw = to_words(ar, ai, u.a), to_words(br, bi, u.b)
+    bursts = []
+    for tag in range(3):
+        h = header(tag, op, m=m, k=k, n=n, length=len(aw) + len(bw))
+        bursts += [np.asarray(h.serialize(word_bw=64), np.uint64), aw, bw]
+    write_burst_bundle(bursts, tmp_path / "req")
+    drv = StreamDriver(
+        name="drv", sim=sim, has_tlast=True, in_bundle="req", root=tmp_path
+    )
+    sink = _TimedSink(name="sink", sim=sim, has_tlast=True, queue_size=256)
+    for name, src, dst in (
+        ("in", drv.stream_ep, u.s_in),
+        ("out", u.s_out, sink.stream_ep),
+    ):
+        link = StreamIF(name=name, sim=sim, clk=u.clk, bitwidth=64, framed=True)
+        link.bind("master", src)
+        link.bind("slave", dst)
+    sim.run_sim()
+    replies = [t / u.clk.period for t in sink.times[0::2]]  # each reply's header
+    want = cost.core_interval(cost.message_model(), m, k, n, L=u.L, R=u.R, C=u.C)
+    assert replies[2] - replies[1] == pytest.approx(want, abs=1e-6)
 
 
 # --- XSI ------------------------------------------------------------------------------------------

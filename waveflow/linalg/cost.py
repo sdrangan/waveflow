@@ -28,6 +28,11 @@ a design whose ``m_axi`` reader and writer share one generated top, their pointe
 memory transfers in step with the jobs.  A rejected request costs ``r0 + r1·w_in`` (its payload
 is drained), fitted on rejected requests sent back to back (:func:`fit_reject_model`).
 
+pysim takes its time from the same model: the core spends the intercept and the compute terms
+(:func:`core_interval`) per matrix ``B``, and the loader ``c_ah·m·k`` on a transposing load.  Its
+transfers take a word per cycle and overlap the compute, so a stream of messages sent straight to
+the unit runs at the core's share, not at the memory-fed sum above.
+
 The fitted numbers live in the packaged platform :data:`PLATFORM`: the task fits under
 ``models/<task>/params.json`` (the framework's resource-model layout), the channel model under
 ``models/systolic_unit_channels/params.json`` and the message model under
@@ -66,6 +71,8 @@ CLK_HZ = 250e6
 INDEX_BITS = 16
 #: The message model's terms.
 MESSAGE_TERMS = ("sweep", "out", "b_load", "tiles", "w_in", "w_out", "ah")
+#: The core's own terms: what pysim's core takes per matrix ``B`` (:func:`core_interval`).
+COMPUTE_TERMS = ("sweep", "out", "b_load", "tiles")
 
 
 def platform_dir() -> Path:
@@ -381,20 +388,40 @@ def predict_unit(unit) -> dict:
 # --- cycles --------------------------------------------------------------------------------------
 
 
+def compute_features(m: int, k: int, n: int, *, L: int, R: int, C: int) -> dict:
+    """The compute terms of one ``m × k`` by ``k × n`` product on an ``R × C`` array of ``L``
+    lanes."""
+    tiles = (int(m) // int(R)) * (int(n) // int(C))
+    return {
+        "sweep": tiles * (int(k) + int(R) + int(C) - 2),
+        "out": tiles * int(R) * int(C) // int(L),
+        "b_load": int(k) * int(n) // int(L),
+        "tiles": tiles,
+    }
+
+
+def core_interval(
+    coef: dict, m: int, k: int, n: int, *, L: int, R: int, C: int
+) -> float:
+    """The core's share of one message's interval: the message model's intercept and compute
+    terms.  This is the time the pysim core takes per matrix ``B``; the transfers in and out, and
+    the transposing load of ``Aᴴ``, are the other tasks' share."""
+    feats = compute_features(m, k, n, L=L, R=R, C=C)
+    return float(coef["intercept"]) + sum(
+        float(coef[t]) * feats[t] for t in COMPUTE_TERMS
+    )
+
+
 def message_features(unit, op: int, m: int, k: int, n: int) -> dict:
     """The terms of one served message's interval on ``unit``."""
     from waveflow.linalg.systolic import MatmulOp, reply_words, request_words
 
     R, C, L = int(unit.R), int(unit.C), int(unit.L)
     lb, wb = int(unit.lane_bits), int(unit.word_bits)
-    tiles = (m // R) * (n // C)
     hw = header_words(wb)
     return {
-        "sweep": tiles * (k + R + C - 2),
-        "out": tiles * R * C // L,
-        "b_load": k * n // L,
+        **compute_features(m, k, n, L=L, R=R, C=C),
         "a_load": n_groups(m * k, L),
-        "tiles": tiles,
         "w_in": hw + request_words(m, k, n, lb, wb),
         "w_out": hw + reply_words(m, n, lb, wb),
         "ah": m * k if int(op) == MatmulOp.MUL_AH else 0,

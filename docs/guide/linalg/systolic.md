@@ -260,8 +260,9 @@ print(np.array_equal(cr, want_r.ravel()) and np.array_equal(ci, want_i.ravel()))
 True
 ```
 
-The cost model prices this configuration per task, plus the unit's channels, and gives the cycles
-per message for this job and for a rejected request of the same length:
+The cost model prices this configuration per task, plus the unit's channels. It then gives the
+cycles per message for this job, the core's share of them, and the cycles of a rejected request of
+the same length:
 
 ```python
 from waveflow.linalg import cost
@@ -270,7 +271,9 @@ for task, row in cost.predict_unit(unit).items():
     print(f"{task:22} " + " ".join(f"{key}={row[key]:5.0f}" for key in ("lut", "ff", "dsp", "bram")))
 coef = cost.message_model()
 feats = cost.message_features(unit, MatmulOp.MUL, m, k, n)
-print(round(cost.message_interval(coef, feats)), round(cost.reject_interval(coef, feats["w_in"])))
+share = cost.core_interval(coef, m, k, n, L=unit.L, R=unit.R, C=unit.C)
+print(round(cost.message_interval(coef, feats)), round(share),
+      round(cost.reject_interval(coef, feats["w_in"])))
 ```
 
 ```text
@@ -280,7 +283,7 @@ systolic_core_task     lut=12956 ff= 8856 dsp=  130 bram=    0
 systolic_store_task    lut= 1063 ff=  550 dsp=    1 bram=    0
 systolic_unit_channels lut= 2629 ff= 2613 dsp=    0 bram=   17
 total                  lut=23365 ff=14347 dsp=  136 bram=   17
-724 203
+724 400 203
 ```
 
 This configuration was one of the calibration builds. Measured with Vitis HLS / Vivado xsim
@@ -386,6 +389,12 @@ request costs `r0 + r1·w_in`. `cost.message_features`, `cost.message_interval` 
 `cost.reject_interval` evaluate it; `cost.message_model()` loads the coefficients. The latency of
 the first message after reset is not modelled.
 
+**Simulated time.** pysim takes its time from the same model. The core spends its share of each
+message, the intercept and the compute terms (`cost.core_interval`), and the loader spends
+`c_ah·m·k` cycles on a transposing load. Transfers take one word per cycle and overlap the
+compute, so requests sent straight to the unit run at the core's share in pysim: 400 cycles for the
+job of the example, where the memory-fed sum is 724.
+
 ### Calibration and accuracy
 
 The models were fitted on **61 builds** of the unit, chosen by rule in two rounds: the centre,
@@ -442,8 +451,10 @@ measures, `merge` writes the tables, `fit` writes the packaged models, and `vali
   stalled consumer is untested.
 * **Dimensions.** `m` must be a multiple of `R`, `n` of `C`, and `k` a multiple of `L` or a divisor
   of it; anything else is refused with `BAD_DIMS`. Pad with zeros instead.
-* **Simulated time.** The pysim core times a job with rough placeholder constants, not the
-  calibrated model. Use `cost.message_interval` for cycle estimates.
+* **Simulated time.** pysim overlaps transfers with compute ([Cycles](#cycles)), so it gives the
+  core's share of a message, while the memory-fed RTL adds the transfers. How a unit fed straight
+  from a stream behaves at RTL is untested. For a design fed from memory, use
+  `cost.message_interval`.
 * **Reported confidence.** `compose` reports the fitted LUT and FF of these models as
   `UNCALIBRATED`. The framework's saved Vitis models keep their coefficients but no fit summary,
   so their support region is unknown to it. The held-out scores above are the evidence for these

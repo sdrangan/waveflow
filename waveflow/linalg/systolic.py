@@ -57,6 +57,7 @@ from waveflow.hw.interface import (
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
+from waveflow.linalg.cost import core_interval, message_model
 from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
@@ -160,7 +161,7 @@ def cmd_status(
     return Status.OK
 
 
-#: Placeholder cycle constants, until the cost model of step 7.5 replaces them.
+#: Constants of the rough cycle counts below, which are not calibrated.
 _SWEEP_FILL = 8
 _OVERHEAD = 8
 
@@ -179,7 +180,9 @@ def per_b_cycles(m: int, k: int, n: int, *, L: int, R: int, C: int) -> int:
 def core_cycles(
     op: int, nb: int, m: int, k: int, n: int, *, L: int, R: int, C: int
 ) -> int:
-    """Rough cycles of one job.  A placeholder until step 7.5 calibrates the core."""
+    """Rough cycles of one job, not calibrated: a budget for a run's length, and pysim's timing
+    when no calibrated model is packaged (:func:`waveflow.linalg.cost.message_model`).
+    """
     return load_a_cycles(m, k, L=L) + nb * per_b_cycles(m, k, n, L=L, R=R, C=C)
 
 
@@ -301,7 +304,9 @@ class SystolicCore(FreeRunMod):
         ar, ai = (xr.T, xi.T) if adjoint else (xr, xi)  # A as the model takes it
         L, R, C = int(self.L), int(self.R), int(self.C)
         period = self.clk.period
-        yield self.timeout(load_a_cycles(m, k, L=L) * period)
+        coef = message_model()
+        if coef is None:
+            yield self.timeout(load_a_cycles(m, k, L=L) * period)
         for _ in range(nb):
             blk = yield from self.b_blk.acquire_read()
             br, bi = blk.payload
@@ -321,7 +326,11 @@ class SystolicCore(FreeRunMod):
                 adjoint=adjoint,
                 form=int(self.form),
             )
-            yield self.timeout(per_b_cycles(m, k, n, L=L, R=R, C=C) * period)
+            if coef is None:
+                cycles = per_b_cycles(m, k, n, L=L, R=R, C=C)
+            else:  # the calibrated share of a message (X's load is in the intercept)
+                cycles = core_interval(coef, m, k, n, L=L, R=R, C=C)
+            yield self.timeout(cycles * period)
             out = yield from self.c_blk.acquire_write()
             out.payload = (cr, ci)
             yield from self.c_blk.commit_write(out)
@@ -587,7 +596,10 @@ class SystolicLoad(_UnitPart):
         ar, ai = yield from self._matrix(self.a, *stored_shape(op, m, k))
         if op == MatmulOp.MUL_AH:
             ar, ai = ar.T.copy(), ai.T.copy()
-            yield self.timeout(m * k * self.clk.period)  # a value per cycle
+            # the calibrated transposing load, else a value per cycle
+            coef = message_model()
+            per_value = 1.0 if coef is None else float(coef["ah"])
+            yield self.timeout(per_value * m * k * self.clk.period)
         blk = yield from self.a_blk.acquire_write()
         blk.payload = (ar, ai)
         yield from self.a_blk.commit_write(blk)
