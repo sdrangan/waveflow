@@ -34,6 +34,12 @@ The brute force (plan steps 6.3 and 6.4) is the role ``bruteforce``: the 1,440 d
 are pruned afterwards (:func:`~examples.mimo_cg.hw.measure.measure`), and ``--merge bruteforce``
 writes its own tables, ``bruteforce_builds.csv``, ``bruteforce_modules.csv`` (module rows only) and
 ``bruteforce_cycles.csv`` (with one ``job_time`` row per iteration count).
+
+The re-measurement of plan step 9.4 is the role ``migration``: the 132 builds above, rebuilt on
+Waveflow's components (:mod:`examples.mimo_cg.hw.migration`, whose list is committed first), each
+labelled ``mig_<old label>`` and seeded by its old build's name.  Its records go to
+``results/migration_points/``, its builds are traced and then pruned, and ``--merge migration``
+writes ``migration_builds.csv``, ``migration_modules.csv`` and ``migration_cycles.csv``.
 """
 
 from __future__ import annotations
@@ -69,10 +75,27 @@ COUNTERS = ("lut", "ff", "dsp", "bram", "uram")
 #: held-out set of the M5 review.  ``fit2`` and ``supplement2`` are the second round (step 6.1): more
 #: matmul calibration builds, and their own held-out set.  Only the calibration roles
 #: (:data:`~examples.mimo_cg.hw.space.FIT_ROLES`) are ever filed into the calibration store.
-ROLES = ("fit", "holdout", "supplement", "fit2", "supplement2", "bruteforce")
+ROLES = (
+    "fit",
+    "holdout",
+    "supplement",
+    "fit2",
+    "supplement2",
+    "bruteforce",
+    "migration",
+)
 #: The role measured for the decision comparison: steady-state jobs, no waveform, pruned builds,
 #: and tables of its own.
 BRUTEFORCE = "bruteforce"
+#: The re-measurement on the components (plan step 9.4): traced, pruned, tables and records apart.
+MIGRATION = "migration"
+
+
+def records_dir(roles: tuple[str, ...]) -> Path:
+    """Where the records of ``roles`` are: the migration's apart from the study's."""
+    from examples.mimo_cg.hw import migration
+
+    return migration.POINTS if MIGRATION in roles else M.POINTS_DIR
 
 
 def split() -> dict[str, tuple[str, str, HwConfig]]:
@@ -80,7 +103,10 @@ def split() -> dict[str, tuple[str, str, HwConfig]]:
     supplementary held-out set (role ``supplement``, M5 review), the second calibration round
     (roles ``fit2`` and ``supplement2``, step 6.1) and the brute-force sub-grid (role
     ``bruteforce``, step 6.3), each when its file is there."""
+    from examples.mimo_cg.hw import migration
+
     builds = [*read_split(), *read_supplement(), *read_v2(), *read_bruteforce()]
+    builds += migration.campaign_builds()
     return {b: (t, r, c) for b, t, r, c in builds}
 
 
@@ -131,6 +157,19 @@ class HwPointStep(BuildStep):
             # a brute-force build that is measured is not built again, whichever shard layout
             # or pilot measured it: its record is the result
             rec = {}
+        elif role == MIGRATION:
+            from examples.mimo_cg.hw import migration
+
+            rec = M.measure(
+                kw["build"],
+                top,
+                c,
+                role=role,
+                trace=True,
+                prune=True,
+                points_dir=migration.POINTS,
+                workload_label=migration.old_label(kw["build"]),
+            )
         else:
             rec = M.measure(
                 kw["build"],
@@ -163,7 +202,12 @@ class DryPointStep(BuildStep):
         top, role, c = split()[kw["build"]]
         elaborate(M.comp_class(top), M.elab_params(top, c), name=M.TOP_NAME[top])
         brute = role == BRUTEFORCE
-        _problems, jobs = M.workload(top, c, kw["build"], brute)
+        seed = kw["build"]
+        if role == MIGRATION:
+            from examples.mimo_cg.hw import migration
+
+            seed = migration.old_label(seed)
+        _problems, jobs = M.workload(top, c, seed, brute)
         n_cycles = M.cycles_budget(c, jobs) if brute else M.cycles_bound(top, c, jobs)
         path = M.POINTS_DIR / "dry_point.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,19 +355,22 @@ def cycle_rows(recs: list[dict]) -> list[dict]:
 def merge(
     roles: tuple[str, ...],
     *,
-    points_dir: Path = M.POINTS_DIR,
+    points_dir: Path | None = None,
     out_dir: Path = PAPER_DATA,
 ) -> dict:
     """Write the three tables for the builds of ``roles``; returns ``{table: path}``.
 
     The brute force is merged on its own, into ``bruteforce_*.csv``: its builds ran a different
-    job list, and its module table keeps the module rows only.
+    job list, and its module table keeps the module rows only.  So is the migration, into
+    ``migration_*.csv``.
     """
     brute = BRUTEFORCE in roles
     if brute and len(roles) > 1:
         raise ValueError("merge the brute force on its own: --merge bruteforce")
-    stem = BRUTEFORCE if brute else "hw"
-    recs = _records(roles, points_dir)
+    if MIGRATION in roles and len(roles) > 1:
+        raise ValueError("merge the migration on its own: --merge migration")
+    stem = BRUTEFORCE if brute else (MIGRATION if MIGRATION in roles else "hw")
+    recs = _records(roles, points_dir or records_dir(roles))
     tools = sorted({r["tool"] for r in recs})
     note = {
         "tool": "+".join(tools),
@@ -342,12 +389,13 @@ def merge(
     return out
 
 
-def reattribute(roles: tuple[str, ...], points_dir: Path = M.POINTS_DIR) -> int:
+def reattribute(roles: tuple[str, ...], points_dir: Path | None = None) -> int:
     """Re-read the csynth reports of measured builds into their records (no tool runs).
 
     For when the attribution gains detail: the reports are still on disk, so the ``resources`` of
     each record are refreshed in place.  Returns how many records were refreshed.
     """
+    points_dir = points_dir or records_dir(roles)
     n = 0
     for rec in _records(roles, points_dir):
         if "resources" not in rec:

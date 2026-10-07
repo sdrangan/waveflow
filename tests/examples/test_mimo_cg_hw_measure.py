@@ -1,8 +1,10 @@
-"""Step 5.2 of plans/mimo_cg/mimo_cg_paper_sims.md: the measurement harness.
+"""Step 5.2 of plans/mimo_cg/mimo_cg_paper_sims.md: the measurement harness, adapted at step 9.4a to
+the detector on Waveflow's cores and to unit builds that are the components' standalone units.
 
 Without markers: the extraction is checked on synthetic events, on a committed excerpt of a real
-trace (``tests/fixtures/mimo_cg/cg_mm_unit_k4_locks.vcd``: the clock and the stream-of-blocks lock
-nets of the K = 4 matmul unit, 1,700 cycles) and on an excerpt of a real report.
+trace (``tests/fixtures/mimo_cg/systolic_unit_k4_locks.vcd``: the clock, the stream-of-blocks lock
+nets and the channels' ``i_full_n`` nets of the K = 4 systolic unit, six requests, 2,520 cycles; cut
+from a step 9.4a scratch run, Vivado xsim 2024.1) and on an excerpt of a real report.
 
 Under ``-m xsi`` (needs Vitis HLS and Vivado xsim): the harness takes the three Phase 4 default builds
 at K = 4 and a memory-bound matmul unit through csynth and a traced RTL run, and must reproduce the
@@ -24,7 +26,7 @@ FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "fixtures"
     / "mimo_cg"
-    / "cg_mm_unit_k4_locks.vcd"
+    / "systolic_unit_k4_locks.vcd"
 )
 
 
@@ -61,11 +63,11 @@ def test_job_intervals_take_the_last_word_of_a_two_word_done():
 def _mm_events(p_avail, mm_reads, mm_writes, s_free=()):
     return {
         "pulses": {
-            ("cg_mm_load_task", "p_blk", "write"): list(p_avail),
-            ("cg_mm_task", "p_blk", "read"): list(mm_reads),
-            ("cg_mm_task", "s_blk", "write"): list(mm_writes),
+            ("systolic_load_task", "b_blk", "write"): list(p_avail),
+            ("systolic_core_task", "b_blk", "read"): list(mm_reads),
+            ("systolic_core_task", "c_blk", "write"): list(mm_writes),
         },
-        "free": {"s_blk": list(s_free)},
+        "free": {"c_blk": list(s_free)},
     }
 
 
@@ -97,62 +99,80 @@ def test_block_spans_mark_a_span_that_waited_for_its_output_channel():
 
 
 def test_block_spans_of_the_vector_unit_name_init_iter_and_last():
-    # one job of two iterations: B → P0, S1 → P1, S2 → X
+    # one job of two iterations: B → P0, S1 → P1, S2 → X.  S is the systolic core's c_blk port
+    # on the detector's s_blk channel, which the channel map says.
     ev = {
         "pulses": {
             ("cg_load_task", "b_blk", "write"): [10],
-            ("cg_mm_task", "s_blk", "write"): [200, 700],
-            ("cg_vec_task", "b_blk", "read"): [40],
-            ("cg_vec_task", "p_blk", "write"): [80, 500],
-            ("cg_vec_task", "s_blk", "read"): [460, 960],
-            ("cg_vec_task", "x_blk", "write"): [1000],
+            ("systolic_core_task", "c_blk", "write"): [200, 700],
+            ("cg_vector_task", "b_blk", "read"): [40],
+            ("cg_vector_task", "p_blk", "write"): [80, 500],
+            ("cg_vector_task", "s_blk", "read"): [460, 960],
+            ("cg_vector_task", "x_blk", "write"): [1000],
         },
         "free": {},
     }
-    spans = M.block_spans(ev)
+    channels = {
+        ("systolic_core_task", "c_blk"): "s_blk",
+        ("systolic_core_task", "b_blk"): "p_blk",
+    }
+    spans = M.block_spans(ev, channels)
     assert [s["span"] for s in spans["vec.init"]] == [70]
     assert [(s["span"], s["regime"]) for s in spans["vec.iter"]] == [(300, "wait")]
     assert [(s["span"], s["regime"]) for s in spans["vec.last"]] == [(300, "wait")]
     assert (
         "mm.iter" in spans and spans["mm.iter"] == []
-    )  # the matmul is traced, with no P pulses here
+    )  # the systolic core is traced, with no B pulses here
+    # without the map, S's producer is not found: no iteration span
+    assert M.block_spans(ev)["vec.iter"] == []
+
+
+def test_the_channel_map_follows_the_generated_top():
+    c = HwConfig()
+    det = M.block_channels("det", c)
+    assert det[("systolic_core_task", "b_blk")] == "p_blk"
+    assert det[("systolic_core_task", "c_blk")] == "s_blk"
+    assert det[("cg_vector_task", "p_blk")] == "p_blk"
+    assert det[("cg_load_task", "a_blk")] == det[("systolic_core_task", "a_blk")]
+    unit = M.block_channels("mm", c)
+    assert (
+        unit[("systolic_load_task", "b_blk")] == unit[("systolic_core_task", "b_blk")]
+    )
+    assert (
+        unit[("systolic_core_task", "c_blk")] == unit[("systolic_store_task", "c_blk")]
+    )
+    vec = M.block_channels("vec", _vec(4, 4, 12, 8))
+    assert vec[("cg_vector_load_task", "s_blk")] == vec[("cg_vector_task", "s_blk")]
 
 
 def test_lock_events_and_spans_of_the_committed_trace():
     ev = M.lock_events(FIXTURE)
     assert set(ev["pulses"]) == {
-        ("cg_mm_load_task", "a_blk", "write"),
-        ("cg_mm_load_task", "p_blk", "write"),
-        ("cg_mm_task", "a_blk", "read"),
-        ("cg_mm_task", "p_blk", "read"),
-        ("cg_mm_task", "s_blk", "write"),
-        ("cg_mm_store_task", "s_blk", "read"),
+        ("systolic_load_task", "a_blk", "write"),
+        ("systolic_load_task", "a_blk", "read"),
+        ("systolic_load_task", "b_blk", "write"),
+        ("systolic_core_task", "a_blk", "read"),
+        ("systolic_core_task", "b_blk", "read"),
+        ("systolic_core_task", "c_blk", "write"),
+        ("systolic_store_task", "c_blk", "read"),
     }
-    assert ev["pulses"][("cg_mm_task", "s_blk", "write")] == [
-        337,
-        553,
-        761,
-        977,
-        1185,
-        1393,
-        1609,
+    assert ev["pulses"][("systolic_core_task", "c_blk", "write")] == [
+        352,
+        763,
+        1174,
+        1585,
+        1996,
+        2407,
     ]
-    assert ev["free"]["s_blk"][:2] == [
-        409,
-        625,
-    ]  # the store released S: free one cycle later
-    spans = M.block_spans(ev)
+    # the store released C at 444: the channel is free one cycle later
+    assert ev["free"]["unit_c"][:2] == [445, 856]
+    spans = M.block_spans(ev, M.block_channels("mm", HwConfig()))
     assert list(spans) == ["mm.iter"]
-    assert [(s["span"], s["regime"]) for s in spans["mm.iter"]] == [
-        (208, "wait"),
-        (209, "b2b"),
-        (208, "b2b"),
-        (209, "b2b"),
-        (208, "b2b"),
-        (208, "b2b"),
-        (209, "b2b"),
-    ]
-    assert M.summarize_spans(spans)["mm.iter"]["span"] == 208
+    # each request reloads A, so the core is idle when its B arrives: every span waits
+    assert [(s["span"], s["regime"], s["stalled"]) for s in spans["mm.iter"]] == [
+        (220, "wait", False)
+    ] * 6
+    assert M.summarize_spans(spans)["mm.iter"]["span"] == 220
 
 
 # --- the report tables and the build helpers ---------------------------------------------------
@@ -171,7 +191,7 @@ _RPT = """\
     +----------------+---------------+---------+----+-----+-----+-----+
     |    Instance    |     Module    | BRAM_18K| DSP|  FF | LUT | URAM|
     +----------------+---------------+---------+----+-----+-----+-----+
-    |cg_mm_task_U0   |cg_mm_task_s   |        0|  64| 4000| 4779|    0|
+    |core_U0         |core_s         |        0|  64| 4000| 4779|    0|
     |gmem0_m_axi_U   |gmem0_m_axi    |        4|   0|  725|  823|    0|
     +----------------+---------------+---------+----+-----+-----+-----+
     |Total           |               |        4|  64| 4725| 5602|    0|
@@ -205,8 +225,8 @@ _RPT = """\
 
 
 def test_channel_rows_read_the_utilization_tables_only(tmp_path):
-    (tmp_path / "cg_mm_unit_csynth.rpt").write_text(_RPT, encoding="utf-8")
-    rows = M.channel_rows(tmp_path, "cg_mm_unit", {"cg_mm_task_s"})
+    (tmp_path / "unit_bench_csynth.rpt").write_text(_RPT, encoding="utf-8")
+    rows = M.channel_rows(tmp_path, "unit_bench", {"core_s"})
     assert [(r["name"], r["kind"]) for r in rows] == [
         ("a_blk_U", "memory"),
         ("p_blk_U", "memory"),
@@ -233,33 +253,62 @@ def test_build_parameters_and_workload():
         "K": 8, "L": 8, "fmt": c.fmt, "mem_dw": 32, "cmd_depth": 4, "sob_depth": 3,
         "R": 4, "C": 8, "cmul": 3,
     }  # fmt: skip
-    assert "R" not in M.gen_kwargs("vec", c)
+    # a unit build sees no command queue, and the vector unit no array
+    assert M.gen_kwargs("vec", c) == {
+        "K": 8, "L": 8, "fmt": c.fmt, "mem_dw": 32, "sob_depth": 3
+    }  # fmt: skip
     assert M.elab_params("det", c)[
         "mem_dwidth"
     ] == 32 and "mem_dw" not in M.elab_params("det", c)
+    # a unit build elaborates the component's unit in its bench, with the study's registers
+    mm = dict(M.elab_params("mm", c)["unit"])
+    assert (mm["Mmax"], mm["Kmax"], mm["R"], mm["C"], mm["form"]) == (8, 8, 4, 8, 3)
+    assert (mm["word_bits"], mm["L"], mm["sob_depth"], mm["lane_bits"]) == (
+        32,
+        8,
+        3,
+        16,
+    )
+    f = B.hw_format(c.fmt)
+    assert (mm["a"], mm["b"], mm["c"]) == (f.A, f.P, f.S)
+    vec = dict(M.elab_params("vec", c)["unit"])
+    assert (vec["Kmax"], vec["nitmax"], vec["formats"]) == (8, 8, f)
     assert M.job_nits(16) == [1, 2, 3, 16, 1, 2]
     for top in ("vec", "mm", "det"):
         problems, jobs = M.workload(top, HwConfig(), "some_build")
         again, _ = M.workload(top, HwConfig(), "some_build")
-        assert len(problems) == len(jobs) == 6
-        assert all(
-            (a[0] == b[0]).all() and (a[1] == b[1]).all()
-            for a, b in zip(problems, again, strict=True)
-        )
-        assert (
-            problems[-1][1][:, 2] == 0
-        ).all()  # the zero-residual problem: column 2 of B is zero
+        assert jobs == [1, 2, 3, 4, 1, 2]
+        if top == "det":
+            assert len(problems) == len(jobs)
+            assert all(
+                (a[0] == b[0]).all() and (a[1] == b[1]).all()
+                for a, b in zip(problems, again, strict=True)
+            )
+            assert (problems[-1][1][:, 2] == 0).all()  # the zero-residual problem
+        elif top == "vec":
+            # one CG job per entry of the list, the last with a zero column
+            assert [j.nit for j in problems] == jobs
+            assert all(
+                (a.b[0] == b.b[0]).all() for a, b in zip(problems, again, strict=True)
+            )
+            assert (problems[-1].b[0][:, 0] == 0).all() and (
+                problems[-1].b[1][:, 0] == 0
+            ).all()
+        else:  # one matrix request per iteration of the list
+            assert len(problems) == sum(jobs)
+            assert all(
+                (a.a[0] == b.a[0]).all() for a, b in zip(problems, again, strict=True)
+            )
 
 
 def test_cycle_budget_covers_the_measured_default_runs():
-    """The budget is only an upper bound; these are the cycles the K = 4 default runs needed."""
+    """The budget is only an upper bound; these are the cycles the K = 4 default runs needed on the
+    components (step 9.4a, scratch runs, Vivado xsim 2024.1): the last done of the detector, and the
+    last reply of the two units."""
     jobs = M.job_nits(4)
-    assert (
-        M.cycles_bound("det", HwConfig(), jobs)
-        > 1513 + 2461 + 3654 + 4847 + 1268 + 2461
-    )
-    assert M.cycles_bound("vec", _vec(4, 4, 12, 8), jobs) > 14_000
-    assert M.cycles_bound("mm", _mm(4, 4, 4, 4, 12, 4), jobs) > 3_000
+    assert M.cycles_bound("det", HwConfig(), jobs) > 16_893
+    assert M.cycles_bound("vec", _vec(4, 4, 12, 8), jobs) > 16_657
+    assert M.cycles_bound("mm", _mm(8, 4, 8, 4, 12, 4), M.job_nits(8)) > 12_309
     slow = HwConfig(K=16, L=1, R=1, C=4, W=16, g_s=8, mem_dw=32)
     assert M.cycles_bound("det", slow, M.job_nits(16)) > M.cycles_bound(
         "det", HwConfig(), jobs
@@ -391,10 +440,10 @@ def test_campaign_grid_roles_and_shards():
     from examples.mimo_cg.hw import campaign as C
 
     labels = list(C.split())
-    # the split's 101, the 6 supplementary builds, the second round's 19 + 6 (step 6.1), and the
-    # brute-force sub-grid's 1,440 (step 6.3)
+    # the split's 101, the 6 supplementary builds, the second round's 19 + 6 (step 6.1), the
+    # brute-force sub-grid's 1,440 (step 6.3), and the 132 rebuilt on the components (step 9.4)
     roles = [role for _t, role, _c in C.split().values()]
-    assert len(C.grid()) == len(labels) == 132 + 1440
+    assert len(C.grid()) == len(labels) == 132 + 1440 + 132
     assert [
         b for b, r in zip(labels, roles, strict=True) if r == "supplement"
     ] == labels[101:107]
@@ -404,8 +453,14 @@ def test_campaign_grid_roles_and_shards():
     assert [
         b for b, r in zip(labels, roles, strict=True) if r == "supplement2"
     ] == labels[126:132]
-    assert set(roles[132:]) == {C.BRUTEFORCE} and C.BRUTEFORCE not in roles[:132]
-    assert all(b.startswith("bf_det_") for b in labels[132:])
+    assert set(roles[132:1572]) == {C.BRUTEFORCE} and C.BRUTEFORCE not in roles[:132]
+    assert all(b.startswith("bf_det_") for b in labels[132:1572])
+    # the migration: the first 132 again, in their order, each under its new label
+    assert set(roles[1572:]) == {C.MIGRATION}
+    assert labels[1572:] == [f"mig_{b}" for b in labels[:132]]
+    assert [C.split()[f"mig_{b}"][2] for b in labels[:132]] == [
+        C.split()[b][2] for b in labels[:132]
+    ]
     fit = [b for b in labels if C.split()[b][1] == "fit"]
     assert len(fit) == 67
     shards = [C.shard(fit, f"{i}/4") for i in range(4)]
@@ -432,6 +487,8 @@ def test_campaign_dry_run_needs_no_toolchain(tmp_path, monkeypatch):
         "vec_k8_l4_w12g8",
         "mm_k16_r16_c16_m4_w16_l4",
         "det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2",
+        "mig_mm_k16_r16_c16_m4_w16_l4",
+        "mig_det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2",
     ):
         out = C.DryPointStep(name="hw_dry").run(None, build=build)
         text = out["hw_dry"].read_text()
@@ -441,9 +498,9 @@ def test_campaign_dry_run_needs_no_toolchain(tmp_path, monkeypatch):
 def _fake_record(build: str, top: str, role: str, c) -> dict:
     mods = [
         {
-            "cls": "CgVec",
+            "cls": "CgVectorCore",
             "key": "k",
-            "rtl_module": "cg_vec_task_s",
+            "rtl_module": "cg_vector_task_s",
             "lut": 100,
             "ff": 50,
             "dsp": 12,
@@ -649,6 +706,23 @@ def test_campaign_keeps_the_brute_force_apart(tmp_path, monkeypatch):
         "prune": True,
     }
     assert calls[1] == {"role": "fit", "steady": False, "trace": True, "prune": False}
+    # a migration build: traced, pruned, its records apart, seeded by its old build
+    from examples.mimo_cg.hw import migration
+
+    C.HwPointStep(name="hw_point").run(
+        None, build="mig_det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2"
+    )
+    assert calls.pop() == {
+        "role": "migration",
+        "trace": True,
+        "prune": True,
+        "points_dir": migration.POINTS,
+        "workload_label": "det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2",
+    }
+    assert C.records_dir((C.MIGRATION,)) == migration.POINTS
+    assert C.records_dir(("fit",)) == M.POINTS_DIR
+    with pytest.raises(ValueError, match="on its own"):
+        C.merge(("fit", C.MIGRATION), points_dir=tmp_path, out_dir=tmp_path)
     text = C.DryPointStep(name="hw_dry").run(None, build=build)["hw_dry"].read_text()
     assert f"jobs={M.job_nits(c.K, steady=True)}" in text
     # a measured brute-force build is not built again; an incomplete or failed record is
@@ -738,11 +812,16 @@ def test_steady_run_measures_the_job_time_of_a_stream():
 
 
 def test_which_records_a_build_files():
-    """Gate 5.0 decision 3: a block is calibrated from its own unit builds, the glue from detectors."""
-    assert M.files_record("vec", "CgVec") and not M.files_record("vec", "CgVecLoad")
-    assert not M.files_record("vec", "MemRStream") and not M.files_record("vec", "CgMm")
-    assert M.files_record("mm", "CgMm") and not M.files_record("mm", "CgMmStore")
-    assert not M.files_record("det", "CgVec") and not M.files_record("det", "CgMm")
+    """Gate 5.0 decision 3: a block is calibrated from its own unit builds, the glue from detectors
+    (the blocks are the components' cores since gate 9.0)."""
+    assert M.files_record("vec", "CgVectorCore")
+    assert not M.files_record("vec", "CgVectorLoad")
+    assert not M.files_record("vec", "MemRStream")
+    assert not M.files_record("vec", "SystolicCore")
+    assert M.files_record("mm", "SystolicCore")
+    assert not M.files_record("mm", "SystolicStore")
+    assert not M.files_record("det", "CgVectorCore")
+    assert not M.files_record("det", "SystolicCore")
     for glue in ("CgCmdRx", "CgLoad", "CgCtrl", "CgStore", "MemRStream", "MemWStream"):
         assert M.files_record("det", glue)
 

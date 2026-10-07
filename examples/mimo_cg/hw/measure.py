@@ -33,6 +33,13 @@ loop: one iteration takes exactly ``mm.iter + vec.iter`` cycles.  A task writes 
 freely and only the hand-over (the ``_write`` pulse) waits for the channel to be free, so a span whose
 output channel became free just before the hand-over is marked stalled and left out.
 
+Since gate 9.0 (plan §14) the detector's blocks are Waveflow's ``SystolicCore`` and
+``CgVectorCore``, and a unit build is the component's standalone unit in the ``tests/linalg/`` bench
+its calibration used: its workload is the bench's requests and its RTL check the bench's (every
+reply against the model).  A lock net is named by the task's *port* and a free net by the
+*channel*; in the detector the systolic core's ``b_blk`` and ``c_blk`` ports sit on the ``p_blk``
+and ``s_blk`` channels, so :func:`block_channels` maps one to the other from the generated top.
+
 ``python -m examples.mimo_cg.hw.measure --build <label>`` measures one build of the split.
 """
 
@@ -61,12 +68,14 @@ PLATFORM = "xczu48dr_250mhz"
 CLK_FREQ = 250e6
 
 TOP_NAME = {"vec": B.CG_UNIT_TOP, "mm": B.SYSTOLIC_UNIT_TOP, "det": B.DET_TOP}
-#: The lock events that open and close one span of a block: ``kind -> (task, input, output)``.
+#: The lock events that open and close one span of a block: ``kind -> (task, input port, output
+#: port)``.  The kinds keep Phase 5's names: ``mm.iter`` is one matrix of the systolic core, the
+#: ``vec.*`` spans the CG core's start, iteration and last iteration.
 SPAN_KINDS = {
-    "mm.iter": ("cg_mm_task", "p_blk", "s_blk"),
-    "vec.init": ("cg_vec_task", "b_blk", "p_blk"),
-    "vec.iter": ("cg_vec_task", "s_blk", "p_blk"),
-    "vec.last": ("cg_vec_task", "s_blk", "x_blk"),
+    "mm.iter": ("systolic_core_task", "b_blk", "c_blk"),
+    "vec.init": ("cg_vector_task", "b_blk", "p_blk"),
+    "vec.iter": ("cg_vector_task", "s_blk", "p_blk"),
+    "vec.last": ("cg_vector_task", "s_blk", "x_blk"),
 }
 #: A writer whose output channel became free at most this many cycles before it handed its block
 #: over was waiting for the channel: that span is stalled.
@@ -135,7 +144,13 @@ def job_nits(K: int, steady: bool = False) -> list[int]:
 
 
 def workload(top: str, c: HwConfig, build: str, steady: bool = False):
-    """``(problems, jobs)`` of the build's scenario; the last problem is the zero-residual one."""
+    """``(problems, jobs)`` of the build's scenario, seeded by the build's name.
+
+    A detector's problems are ``(A, B, scale)`` per job, the last the zero-residual one.  A unit
+    build's are the bench's requests (gate 9.0): a vector unit runs the job list as CG jobs (a
+    ``START`` and ``nit`` ``STEP`` requests each, ``S`` from the model; the last job's ``B`` has a
+    zero column), and a matmul unit one ``MUL`` request per iteration of the job list.
+    """
     jobs = job_nits(c.K, steady)
     seed = zlib.crc32(build.encode()) & 0xFFFF
     if top == "det":
@@ -144,13 +159,25 @@ def workload(top: str, c: HwConfig, build: str, steady: bool = False):
         problems = detector_problems(
             64 if c.K > 4 else 32, c.K, DEFAULT_N, len(jobs), seed
         )
-    else:
-        from examples.mimo_cg.mimo_cg_conformance import CaseSetSpec, _problems
+    elif top == "vec":
+        from tests.linalg._cg_unit_bench import random_job
 
-        spec = CaseSetSpec(top, hw_format(c.fmt), c.K, DEFAULT_N, c.K, False, seed)
-        probs = _problems(spec)
-        probs = probs[: len(jobs) - 1] + probs[-1:]
-        problems = [(A, Bm, 64.0) for A, Bm, _ in probs]
+        rng = np.random.default_rng([seed, c.K])
+        f = hw_format(c.fmt)
+        problems = [
+            random_job(rng, f, nit, c.K, DEFAULT_N, zero_column=i == len(jobs) - 1)
+            for i, nit in enumerate(jobs)
+        ]
+    else:
+        from tests.linalg._unit_bench import random_job
+        from waveflow.linalg.systolic import MatmulOp
+
+        rng = np.random.default_rng([seed, c.K])
+        unit = B.unit_fields("mm", **gen_kwargs("mm", c))
+        problems = [
+            random_job(rng, unit, MatmulOp.MUL, c.K, c.K, DEFAULT_N, edge=i == 0)
+            for i in range(sum(jobs))
+        ]
     return problems, jobs
 
 
@@ -195,16 +222,52 @@ def cycles_budget(c: HwConfig, jobs: list[int]) -> int:
     return int(BUDGET_MARGIN * need) + 3 * words + BUDGET_SLACK
 
 
-def _sim(top: str, c: HwConfig, problems, jobs, n_cycles: int):
-    kw = elab_params(top, c) | {"n_cycles": n_cycles}
-    kw.pop("N")
-    if top != "det":
-        raise NotImplementedError(
-            "the unit builds' workload on the components' units is plan step 9.4a"
-        )
-    from examples.mimo_cg.hw.detector import CgDetectorSim as Sim
+def _bench(top: str):
+    """The ``tests/linalg/`` bench module of a unit build."""
+    if top == "vec":
+        from tests.linalg import _cg_unit_bench as bench
+    else:
+        from tests.linalg import _unit_bench as bench
+    return bench
 
-    return Sim(problems, jobs, **kw)
+
+def _sim(top: str, c: HwConfig, problems, jobs, n_cycles: int):
+    if top == "det":
+        from examples.mimo_cg.hw.detector import CgDetectorSim
+
+        kw = elab_params(top, c) | {"n_cycles": n_cycles}
+        kw.pop("N")
+        return CgDetectorSim(problems, jobs, **kw)
+    unit = B.unit_fields(top, **gen_kwargs(top, c))
+    bench = _bench(top)
+    sim_class = bench.CgUnitBenchSim if top == "vec" else bench.UnitBenchSim
+    return sim_class(unit, problems, n_cycles=n_cycles)
+
+
+def block_channels(top: str, c: HwConfig) -> dict:
+    """``{(task, port): channel}`` for every stream-of-blocks port of the build's top, from the
+    generated top's task calls (a task's arguments are its ports' channels, in its port order).
+    """
+    from waveflow.build.composite_gen import composite_top_spec
+    from waveflow.build.elaborate import elaborate
+
+    comp = elaborate(comp_class(top), elab_params(top, c), name=TOP_NAME[top])
+    calls = {
+        t.task_fn: t.args for t in composite_top_spec(comp, width=int(c.mem_dw)).tasks
+    }
+    out: dict = {}
+    stack = [comp]
+    while stack:
+        m = stack.pop()
+        subs = list(getattr(m, "sub_comps", {}).values())
+        stack.extend(subs)
+        if subs or not hasattr(m, "kernel_task"):
+            continue
+        kt = m.kernel_task()
+        for port, chan in zip(kt.signature, calls.get(kt.task_fn, ()), strict=False):
+            if port.endswith("_blk"):
+                out[(kt.task_fn, port)] = chan
+    return out
 
 
 # --- resources: the report, attributed -------------------------------------------------------
@@ -342,8 +405,9 @@ def attribute(top: str, c: HwConfig, out_dir: Path) -> dict:
     }
 
 
-#: The block a unit build exists to measure (gate 5.0 decision 3).
-BLOCK_CLASS = {"vec": "CgVec", "mm": "CgMm"}
+#: The block a unit build exists to measure (gate 5.0 decision 3; the components' cores since
+#: gate 9.0).
+BLOCK_CLASS = {"vec": "CgVectorCore", "mm": "SystolicCore"}
 
 
 def files_record(top: str, cls_name: str) -> bool:
@@ -452,17 +516,17 @@ def job_intervals(
 # --- cycles: block spans from the trace ------------------------------------------------------
 
 _LOCK = re.compile(
-    r"\.(?P<task>cg_[a-z_]+?_task)_[0-9_]+_U0_(?P<chan>[a-z]_blk)_(?P<kind>read|write)$"
+    r"\.(?P<task>[a-z_]+?_task)_[0-9_]+_U0_(?P<port>[a-z]_blk)_(?P<kind>read|write)$"
 )
-_FULL = re.compile(r"\.(?P<chan>[a-z]_blk)_i_full_n$")
+_FULL = re.compile(r"\.(?P<chan>\w+?)_i_full_n$")
 _CLK = re.compile(r"\.ap_clk$")
 
 
 def lock_events(vcd_path: Path) -> dict:
     """The stream-of-blocks lock events of a level-1 trace, in clock cycles.
 
-    Returns ``{"pulses": {(task, chan, kind): [cycle, ...]}, "free": {chan: [cycle, ...]}}``:
-    the rising edges of every ``<task>_<chan>_read`` / ``_write`` net, and the cycles at which each
+    Returns ``{"pulses": {(task, port, kind): [cycle, ...]}, "free": {chan: [cycle, ...]}}``:
+    the rising edges of every ``<task>_<port>_read`` / ``_write`` net, and the cycles at which each
     channel's ``i_full_n`` rose after the start (the channel became free for its writer again).
     """
     from vcdvcd import VCDVCD
@@ -489,43 +553,52 @@ def lock_events(vcd_path: Path) -> dict:
     for s in want:
         m = _LOCK.search(core[s])
         if m:
-            pulses[(m["task"], m["chan"], m["kind"])] = rises(s)
+            pulses[(m["task"], m["port"], m["kind"])] = rises(s)
         else:
             free[_FULL.search(core[s])["chan"]] = rises(s)
     return {"pulses": pulses, "free": free}
 
 
-def block_spans(events: dict) -> dict:
+def block_spans(events: dict, channels: dict | None = None) -> dict:
     """Every span of :data:`SPAN_KINDS` found in the trace.
 
-    Returns ``{kind: [{"span", "regime", "stalled", "start", "end"}, ...]}`` in time order.
+    ``channels`` (:func:`block_channels`) gives the channel of each ``(task, port)``; a port it does
+    not name is its own channel.  Returns ``{kind: [{"span", "regime", "stalled", "start", "end"},
+    ...]}`` in time order.
     """
     pulses, free = events["pulses"], events["free"]
-    producer = {c: v for (t, c, k), v in pulses.items() if k == "write"}
+    channels = channels or {}
+
+    def chan_of(task: str, port: str) -> str:
+        return channels.get((task, port), port)
+
+    producer = {chan_of(t, p): v for (t, p, k), v in pulses.items() if k == "write"}
     tasks = {t for t, _, _ in pulses}
     out: dict = {kind: [] for kind, (task, _, _) in SPAN_KINDS.items() if task in tasks}
     for task in tasks:
         own = sorted(
-            (cyc, kind, chan)
-            for (t, chan, kind), cycles in pulses.items()
+            (cyc, kind, port)
+            for (t, port, kind), cycles in pulses.items()
             if t == task
             for cyc in cycles
         )
         seen: dict = {}
-        for i, (cyc, kind, chan) in enumerate(own):
+        for i, (cyc, kind, port) in enumerate(own):
             if kind != "read":
                 continue
+            chan = chan_of(task, port)
             j = seen.get(chan, 0)
             seen[chan] = j + 1
-            nxt = next(((t, c) for t, k, c in own[i + 1 :] if k == "write"), None)
+            nxt = next(((t, p) for t, k, p in own[i + 1 :] if k == "write"), None)
             if nxt is None:
                 continue
-            end, out_chan = nxt
+            end, out_port = nxt
+            out_chan = chan_of(task, out_port)
             span_kind = next(
                 (
                     name
-                    for name, (tk, cin, cout) in SPAN_KINDS.items()
-                    if (tk, cin, cout) == (task, chan, out_chan)
+                    for name, (tk, pin, pout) in SPAN_KINDS.items()
+                    if (tk, pin, pout) == (task, port, out_port)
                 ),
                 None,
             )
@@ -624,12 +697,16 @@ def measure(
     steady: bool = False,
     trace: bool = True,
     prune: bool = False,
+    points_dir: Path | None = None,
+    workload_label: str | None = None,
 ) -> dict:
     """Take one build through csynth, attribution, the traced RTL run and the extraction.
 
-    Returns the build's record and writes it to ``results/hw_points/<build>.json``.  A step that
-    fails is recorded in ``error`` with whatever was measured before it; nothing is raised for a
-    failed build, so a campaign keeps its other points.
+    Returns the build's record and writes it to ``<points_dir>/<build>.json`` (default
+    :data:`POINTS_DIR`).  A step that fails is recorded in ``error`` with whatever was measured
+    before it; nothing is raised for a failed build, so a campaign keeps its other points.
+    ``workload_label`` seeds the scenario instead of ``build`` (a re-measured build keeps its old
+    build's problems).
 
     ``steady`` runs the steady-state job list (:func:`job_nits`).  ``trace=False`` runs the RTL
     without a waveform, for when only the job intervals are wanted: there are then no block spans.
@@ -658,7 +735,7 @@ def measure(
             raise RuntimeError("csynth failed: " + log[-600:])
         rec["resources"] = attribute(top, c, out_dir)
 
-        problems, jobs = workload(top, c, build, steady)
+        problems, jobs = workload(top, c, workload_label or build, steady)
         tight = steady and top == "det"
         n_cycles = cycles_budget(c, jobs) if tight else cycles_bound(top, c, jobs)
         if trace:
@@ -666,7 +743,12 @@ def measure(
         started = time.perf_counter()
         for _attempt in range(3):
             sim = _sim(top, c, problems, jobs, n_cycles)
-            scenario = B.generate_tb(out_dir, name, sim.tb, sim)
+            if top == "det":
+                scenario = B.generate_tb(out_dir, name, sim.tb, sim)
+                want = int(scenario["done_words"])
+            else:  # the bench's own testbench: one reply header per request on s_done
+                scenario = _bench(top).generate_tb(out_dir, sim)
+                want = sum(len(d) for d in scenario["done"])
             proc = B.run_xsi(out_dir, name, trace=trace)
             if proc.returncode != 0:
                 raise RuntimeError(
@@ -675,24 +757,27 @@ def measure(
             done = np.fromfile(
                 out_dir / "xsi" / "vectors" / "s_done" / "cycles.bin", dtype="<u8"
             )
-            if len(done) >= int(scenario["done_words"]):
+            if len(done) >= want:
                 break
             n_cycles *= 2  # the budget was too small: not every job finished
-        cycles = B.check_xsi_outputs(
-            out_dir, scenario
-        )  # raises unless bit-exact and complete
+        # raises unless bit-exact and complete
+        if top == "det":
+            cycles = B.check_xsi_outputs(out_dir, scenario)
+        else:
+            cycles = _bench(top).check_xsi(out_dir, scenario, int(c.mem_dw))
         rec["xsi_seconds"] = round(time.perf_counter() - started, 1)
-        rec["rtl"] = {
-            "bit_exact": True,
-            "n_cycles": n_cycles,
-            "jobs": jobs,
-            "done_words_per_job": CgDesc.nwords_per_inst(c.mem_dw),
-            "done_cycles": cycles,
-        }
-        rec["intervals"] = job_intervals(cycles, jobs, steady)
+        rec["rtl"] = {"bit_exact": True, "n_cycles": n_cycles, "jobs": jobs}
+        if top == "det":
+            rec["rtl"] |= {
+                "done_words_per_job": CgDesc.nwords_per_inst(c.mem_dw),
+                "done_cycles": cycles,
+            }
+            rec["intervals"] = job_intervals(cycles, jobs, steady)
+        else:  # a unit's job time is its wrapper's, and is not compared (gate 9.0)
+            rec["rtl"]["reply_cycles"] = cycles
         if trace:
             vcd = out_dir / "xsi" / f"{name}_trace.vcd"
-            spans = block_spans(lock_events(vcd))
+            spans = block_spans(lock_events(vcd), block_channels(top, c))
             rec["spans"] = summarize_spans(spans)
             rec["span_samples"] = {
                 k: [[s["span"], s["regime"], int(s["stalled"])] for s in v]
@@ -706,8 +791,9 @@ def measure(
         prune and "error" not in rec
     ):  # a failed build keeps everything, for the post-mortem
         prune_build(out_dir, name)
-    POINTS_DIR.mkdir(parents=True, exist_ok=True)
-    (POINTS_DIR / f"{build}.json").write_text(
+    points = Path(points_dir) if points_dir else POINTS_DIR
+    points.mkdir(parents=True, exist_ok=True)
+    (points / f"{build}.json").write_text(
         json.dumps(rec, indent=1) + "\n", encoding="utf-8"
     )
     return rec

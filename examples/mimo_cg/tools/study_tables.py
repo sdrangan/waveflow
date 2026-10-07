@@ -159,6 +159,7 @@ ELSEWHERE: dict[str, str] = {
     "model_validation_v1_supplement_metrics": "frozen copy of model v1's scores (step 6.1)",
     "linalg_*": "systolic unit calibration (hw/linalg_cal.py), Vitis HLS / Vivado xsim 2024.1",
     "cg_*": "CG vector unit calibration (hw/cg_cal.py), Vitis HLS / Vivado xsim 2024.1",
+    "migration_*": "the re-measurement on Waveflow's components (hw/migration.py, step 9.4)",
 }
 
 
