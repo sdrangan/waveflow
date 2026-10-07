@@ -249,15 +249,17 @@ def channel_counted(unit) -> dict:
     return {"bram": total, "lutram_luts": 0}
 
 
-def fit_channels(rows: list) -> dict:
+def fit_channels(rows: list, counted=None) -> dict:
     """The channel model from measured rows (``unit``, and the remainder ``lut``, ``ff``,
     ``bram`` of a memory-fed design: top minus every module).  Block RAM: the buffers' counted
-    blocks plus one constant per word width for the ``m_axi`` adapters (the median of what is
-    left).  LUT (after the buffers' LUT RAM) and FF: least squares on the word width."""
+    blocks (``counted(unit)``, default :func:`channel_counted`) plus one constant per word width
+    for the ``m_axi`` adapters (the median of what is left).  LUT (after the buffers' LUT RAM) and
+    FF: least squares on the word width."""
+    counted = channel_counted if counted is None else counted
     out: dict = {"adapters_bram": {}}
     by_word: dict = {}
     for r in rows:
-        c = channel_counted(r["unit"])
+        c = counted(r["unit"])
         by_word.setdefault(int(r["unit"].word_bits), []).append(
             int(r["bram"]) - c["bram"]
         )
@@ -267,8 +269,7 @@ def fit_channels(rows: list) -> dict:
         X = np.array([[1.0, float(r["unit"].word_bits)] for r in rows])
         y = np.array(
             [
-                float(r[k])
-                - (channel_counted(r["unit"])["lutram_luts"] if k == "lut" else 0.0)
+                float(r[k]) - (counted(r["unit"])["lutram_luts"] if k == "lut" else 0.0)
                 for r in rows
             ]
         )
@@ -277,8 +278,9 @@ def fit_channels(rows: list) -> dict:
     return out
 
 
-def predict_channels(unit, coef: dict) -> dict:
-    c = channel_counted(unit)
+def predict_channels(unit, coef: dict, counted=None) -> dict:
+    """The channels' resources from the model ``coef`` (``counted`` as in :func:`fit_channels`)."""
+    c = (channel_counted if counted is None else counted)(unit)
     w = int(unit.word_bits)
     return {
         "dsp": 0.0,

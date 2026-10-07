@@ -61,6 +61,8 @@ from waveflow.hw.interface import (
     StreamOfBlocksIF,
 )
 from waveflow.hw.mem_stream import KernelTask
+from waveflow.linalg import cg_cost
+from waveflow.linalg import cost as _cost
 from waveflow.linalg.build import LinalgParts
 from waveflow.linalg.cg import CgFormats, accumulator_formats, cg_init, vec_step
 from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits, mem_format
@@ -256,6 +258,13 @@ class CgVectorCore(FreeRunMod):
         """What a design with this core needs generated: its traits, body and command header."""
         return LinalgParts((self.traits,), CORE_HEADERS, (CgVectorCmd,))
 
+    def resource_structure(self):
+        return cg_cost.core_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        return _cost.resource_model("cg_vector_task", cls, platform)
+
     def run_iter(self) -> ProcessGen[None]:
         cmd = yield from self.cmd_in.get_schema(CgVectorCmd)
         nit, k, n = int(cmd.nit), int(cmd.k), int(cmd.n)
@@ -269,7 +278,14 @@ class CgVectorCore(FreeRunMod):
         if br.shape != (k, n):
             raise RuntimeError(f"{self.name}: B is {br.shape}, the command says {k, n}")
         state = cg_init(br, bi, f)
-        yield self.timeout(start_cycles(k, n, L=L) * period)
+        coef = (
+            cg_cost.message_model()
+        )  # the calibrated share of each message, else rough counts
+        if coef is None:
+            yield self.timeout(start_cycles(k, n, L=L) * period)
+        else:
+            share = cg_cost.core_interval(coef, CgOp.START, k, n, L=L, formats=f)
+            yield self.timeout(share * period)
         yield from self._write(self.p_blk, state.pr, state.pi)
         for it in range(1, nit + 1):
             blk = yield from self.s_blk.acquire_read()
@@ -280,7 +296,11 @@ class CgVectorCore(FreeRunMod):
                     f"{self.name}: S is {sr.shape}, the command says {k, n}"
                 )
             state, _ = vec_step(state, sr, si, f)
-            yield self.timeout(iter_cycles(k, n, L=L) * period)
+            if coef is None:
+                yield self.timeout(iter_cycles(k, n, L=L) * period)
+            else:
+                share = cg_cost.core_interval(coef, CgOp.STEP, k, n, L=L, formats=f)
+                yield self.timeout(share * period)
             if it < nit:
                 yield from self._write(self.p_blk, state.pr, state.pi)
             else:
@@ -441,6 +461,13 @@ class CgVectorRx(_UnitPart):
 
     cpp_kernel_name: ClassVar[str | None] = "cg_vector_rx"
 
+    def resource_structure(self):
+        return cg_cost.rx_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        return _cost.resource_model("cg_vector_rx_task", cls, platform)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         self.s_in = self._framed(StreamIFSlave, "s_in")
@@ -516,6 +543,13 @@ class CgVectorLoad(_UnitPart):
 
     cpp_kernel_name: ClassVar[str | None] = "cg_vector_load"
 
+    def resource_structure(self):
+        return cg_cost.load_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        return _cost.resource_model("cg_vector_load_task", cls, platform)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         f = self.formats
@@ -559,6 +593,13 @@ class CgVectorStore(_UnitPart):
     step, for a served request (``cg_vector_store_task.h``)."""
 
     cpp_kernel_name: ClassVar[str | None] = "cg_vector_store"
+
+    def resource_structure(self):
+        return cg_cost.store_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        return _cost.resource_model("cg_vector_store_task", cls, platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -683,3 +724,9 @@ class CgVectorUnit(FreeRunMod):
     @property
     def header_words(self) -> int:
         return header_words(int(self.word_bits))
+
+    @classmethod
+    def get_rm(cls, platform):
+        """The unit's own share, its channels (:class:`~waveflow.linalg.cg_cost.CgUnitResourceModel`);
+        each task has its own model."""
+        return cg_cost.unit_model(platform)
