@@ -13,4 +13,10 @@ Shared pieces:
 * :mod:`~waveflow.linalg.build` — the headers a design built from these components needs.
 
 The C++ helpers are ``waveflow/build/wf_lanes.h``, ``wf_matrix_io.h`` and ``wf_linalg_msg.h``.
+
+Models:
+
+* :mod:`~waveflow.linalg.matmul` — the complex matrix multiply, exact before one rounding
+  (the systolic array, :mod:`~waveflow.linalg.systolic`);
+* :mod:`~waveflow.linalg.cg` — fixed-point conjugate gradient, multi-RHS (the CG vector unit).
 """
