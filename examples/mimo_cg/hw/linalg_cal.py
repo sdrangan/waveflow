@@ -719,6 +719,7 @@ def validate(version: int = 2) -> dict:
         (f"linalg_validation_cycles{sfx}.csv", cyc),
     ):
         with (PAPER / name).open("w", encoding="utf-8", newline="") as f:
+            f.write(f"# {name}: step 7.5, model v{version}; tool={TOOL}\n")
             keys = list(dict.fromkeys(k for r in data for k in r))
             w = csv.DictWriter(f, fieldnames=keys, lineterminator="\n")
             w.writeheader()

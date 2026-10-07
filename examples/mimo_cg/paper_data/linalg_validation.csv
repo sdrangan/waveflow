@@ -1,3 +1,4 @@
+# linalg_validation.csv: step 7.5, model v1; tool=Vitis HLS / Vivado xsim 2024.1
 build,unit_lut,unit_lut_pred,unit_ff,unit_ff_pred,unit_dsp,unit_dsp_pred,unit_bram,unit_bram_pred,core_lut,core_lut_pred,core_ff,core_ff_pred,core_dsp,core_dsp_pred,core_bram,core_bram_pred
 su_m16_k16_n32_r1_c16_l16_w8_f3_b64,35223,32355.0,13930,16296.0,56,56.0,32,32.0,18191,14277.0,7267,8679.0,50,50.0,0,0.0
 su_m16_k16_n32_r2_c8_l4_w10_f4_b32,23687,24098.0,10684,11144.0,56,56.0,20,22.0,15011,14719.0,5517,5780.0,50,50.0,0,0.0

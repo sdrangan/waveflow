@@ -1,3 +1,4 @@
+# linalg_validation_cycles.csv: step 7.5, model v1; tool=Vitis HLS / Vivado xsim 2024.1
 build,interval,pred,ape_pct
 su_m16_k16_n32_r1_c16_l16_w8_f3_b64,2124,2166.4,1.99
 su_m16_k16_n32_r1_c16_l16_w8_f3_b64,2493,2488.7,0.17
