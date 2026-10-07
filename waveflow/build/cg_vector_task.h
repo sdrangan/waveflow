@@ -36,6 +36,9 @@
 
 namespace wf_cg {
 
+// The operations of the standalone unit's messages (waveflow.linalg.cg_vector.CgOp).
+enum Op { START = 1, STEP = 2 };
+
 // Lane groups of a block of ROWS x COLS values (COLS a multiple of L).
 template <int ROWS, int COLS, int L>
 struct blk {

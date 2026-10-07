@@ -90,7 +90,11 @@ import pytest
 #:
 #: 143 -> 144 on 2026-10-07 (step 7.7, the M7 review): a gate at 32-bit message words, with lane
 #: groups of one word, so the framework's own tests cover the word width the unit offers.
-WANT_XSI_GATES = 144
+#:
+#: 144 -> 147 on 2026-10-07 (step 8.3): ``tests/linalg/test_cg_vector_unit.py`` collects **3** --
+#: the standalone CG vector unit at RTL (centre, smallest, stress), each running jobs and rejected
+#: requests back to back from one build, bit-exact against the model.
+WANT_XSI_GATES = 147
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.
