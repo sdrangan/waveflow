@@ -19,7 +19,8 @@ an [array](./dataarrays.md) or a nested `DataList`.
 ## Example
 
 From the [polynomial example](../../../examples/stream_inband/), a command header carrying a
-transaction id, a coefficient array, and a sample count:
+command type, a transaction id, a sample count, and the coefficients the command is evaluated
+with:
 
 ```python
 class CoeffArray(DataArray):
@@ -31,17 +32,19 @@ class CoeffArray(DataArray):
 
 class PolyCmdHdr(DataList):
     elements = {
-        "tx_id":  {"schema": IntField.specialize(bitwidth=16, signed=False),
-                   "description": "Transaction ID"},
-        "coeffs": {"schema": CoeffArray,
-                   "description": "Polynomial coefficients"},
-        "nsamp":  {"schema": IntField.specialize(bitwidth=16, signed=False),
-                   "description": "Number of samples"},
+        "cmd_type": {"schema": PolyCmdTypeField,     # an EnumField: DATA or END
+                     "description": "DATA or END"},
+        "tx_id":    {"schema": IntField.specialize(bitwidth=16, signed=False),
+                     "description": "Command ID: echoed, or reported on error"},
+        "nsamp":    {"schema": IntField.specialize(bitwidth=16, signed=False),
+                     "description": "Sample count (0 for END)"},
+        "coeffs":   {"schema": CoeffArray,
+                     "description": "c0..c3, constant term first"},
     }
 ```
 
-A `DataList` entry can be a simple field (`tx_id`, `nsamp` are `IntField`s) or a whole nested
-schema (`coeffs` is a `DataArray`). Every bit width is explicit and shared between the Python
+A `DataList` entry can be a simple field (`tx_id`, `nsamp` are `IntField`s, `cmd_type` an
+`EnumField`) or a whole nested schema (`coeffs` is a `DataArray`). Every bit width is explicit and shared between the Python
 model and the generated C++ — there is no separate, hand-maintained struct to drift out of
 sync.
 
@@ -51,6 +54,7 @@ Each named entry becomes an attribute on the instance — read and write it by n
 
 ```python
 cmd = PolyCmdHdr()
+cmd.cmd_type = PolyCmdType.DATA
 cmd.tx_id  = 42
 cmd.coeffs = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
 cmd.nsamp  = 100

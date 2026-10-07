@@ -41,7 +41,7 @@ class PolyAccel(HostActivated):
         super().__post_init__()
         self.s_in  = StreamIFSlave( name=..., sim=self.sim, bitwidth=self.in_bw)
         self.m_out = StreamIFMaster(name=..., sim=self.sim, bitwidth=self.out_bw)
-        self.regmap = VitisRegMap({"halted": ..., "error": ..., "tx_id": ..., "coeffs": ...})
+        self.regmap = VitisRegMap({"halted": ..., "error": ..., "tx_id": ...})   # status only
         ...
 
     def body(self) -> ProcessGen[None]:
@@ -56,12 +56,12 @@ kernel's own order -- streams, register fields, then any `m_axi` pointers:
 ```cpp
 void poly(hls::stream<streamutils::axi4s_word<32>>& s_in,
           hls::stream<streamutils::axi4s_word<32>>& m_out,
-          ap_uint<1>& halted, ap_uint<8>& error, ap_uint<16>& tx_id, float coeffs[4]) {
+          ap_uint<1>& halted, ap_uint<8>& error, ap_uint<16>& tx_id) {
 #pragma HLS INTERFACE axis port=s_in
 #pragma HLS INTERFACE axis port=m_out
 #pragma HLS INTERFACE s_axilite port=halted       bundle=control
 ...
-    poly_impl::body(s_in, m_out, halted, error, tx_id, coeffs);
+    poly_impl::body(s_in, m_out, halted, error, tx_id);
 }
 ```
 

@@ -127,13 +127,13 @@ returns, as the producer/consumer does here).
 ## Worked example: the poly accelerator
 
 [`examples/stream_inband/poly.py`](../../../examples/stream_inband/poly.py) wires a testbench
-(`PolyTB`) to an accelerator (`PolyAccel`) over two `StreamIF`s and one `DirectMMIF` (the
-AXI-Lite control link) — exactly the `bind` pattern above, collected into an example-local
+(`PolyTB`) to an accelerator (`PolyAccel`) over two `StreamIF`s, one `DirectMMIF` (the
+AXI-Lite control and status link) and one `IrqIF` (the `ap_done` interrupt) — exactly the `bind` pattern above, collected into an example-local
 `connect(sim, tb, accel, clk)` helper (it is a convenience in that file, *not* a framework API). The
 run itself lives in [`poly_build.py`](../../../examples/stream_inband/poly_build.py)'s `PySimStep`:
 it builds the `Simulation`, a `Clock`, a [`Logger`](./logging.md), the accelerator and testbench,
-calls `connect(...)`, then `sim.run_sim()` — and reads `tb.resp_hdr` / `tb.samp_out` and the regmap
-status off the objects afterward. Running a simulation inside a `BuildStep` like this is covered in
+calls `connect(...)`, then `sim.run_sim()` — and reads the recorded response bursts (`tb.out`)
+and the status registers (`tb.status`) off the objects afterward. Running a simulation inside a `BuildStep` like this is covered in
 [Build System](../build/python.md).
 
 ## See also

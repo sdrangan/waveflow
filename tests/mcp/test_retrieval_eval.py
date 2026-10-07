@@ -39,8 +39,11 @@ from waveflow.mcp.knowledge import waveflow_search
 QUERIES: list[tuple[str, tuple[str, ...]]] = [
     # --- the protocol and the stream -----------------------------------
     ("error when TLAST arrives early", ("docs/guide/custom_hooks/stream.md",)),
-    ("persistent loop END command", ("docs/examples/stream_inband/index.md",)),
+    ("kernel loops over commands until an END command", ("docs/examples/stream_inband/index.md",)),
     ("in-band command header ahead of the samples", ("docs/examples/stream_inband/",)),
+    ("why not write configuration registers over AXI-Lite while commands stream",
+     ("docs/examples/stream_inband/why_not.md",)),
+    ("drain the input stream to TLAST after an error", ("docs/examples/stream_inband/why_not.md",)),
     (
         "AXI4-Stream master and slave ports on a module",
         ("docs/guide/interface/", "docs/guide/comp_codegen/interface.md"),

@@ -110,8 +110,8 @@ class TestBurstCounts:
         assert len(result.bursts_out) >= 2
 
     def test_cmd_hdr_burst_nwords(self, result: PolyTimingResult) -> None:
-        # PolyCmdHdr = cmd_type(1) + tx_id(1) + nsamp(1) packed = 1 word
-        assert len(result.bursts_in[0]["data"]) >= 1
+        # PolyCmdHdr at 32 bits: tx_id|cmd_type, nsamp, four coefficients = 6 words
+        assert len(result.bursts_in[0]["data"]) == 6
 
     def test_resp_hdr_burst_nwords(self, result: PolyTimingResult) -> None:
         # PolyRespHdr = tx_id(1) = 1 word
@@ -136,6 +136,13 @@ class TestCommandHeader:
     def test_cmd_type_is_data(self, result: PolyTimingResult) -> None:
         # The first input burst is the DATA command header.
         assert int(result.cmd_hdr.val["cmd_type"]) == 0
+
+    def test_coeffs_travel_in_the_header(self, result: PolyTimingResult) -> None:
+        np.testing.assert_array_equal(result.cmd_hdr.val["coeffs"], [1.0, -2.0, -3.0, 4.0])
+
+    def test_commands_in_order(self, result: PolyTimingResult) -> None:
+        assert [c.is_end for c in result.commands] == [False, True]
+        assert len(result.responses) == 1
 
 
 # ---------------------------------------------------------------------------

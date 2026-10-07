@@ -1,11 +1,11 @@
 """The poly timing fixture: a minimal VCD rendered from the current schema and model.
 
 ``tests/fixtures/poly/timing/poly_timing_fixture.vcd`` is synthetic, not an xsim capture: one
-DATA transaction (tx_id 42, x = [0, 0.5, 1]) and END on ``in_stream``, the kernel's response on
-``out_stream``, one beat per 10 ns cycle, under the signal names Vitis cosim uses.  The stimulus
-comes from :func:`scenarios.stimulus` and the response from :func:`poly.poly_stream_model`, so a
-change to the stream layout changes the fixture -- and ``test_timing_analysis`` fails until it is
-re-rendered:
+DATA command (tx_id 42, x = [0, 0.5, 1], its header carrying coefficients A) and END on
+``s_in``, the kernel's response on ``m_out``, one beat per 10 ns cycle, under the signal names
+Vitis cosim uses.  The stimulus comes from :func:`scenarios.stimulus` and the response from
+:func:`poly.poly_stream_model`, so a change to the stream layout changes the fixture -- and
+``test_timing_analysis`` fails until it is re-rendered:
 
     python -m tests.poly.poly_timing_fixture
 """
@@ -26,10 +26,10 @@ _HALF_PERIOD_PS = 5000
 _WORD_BW = 32
 
 # (id, width, name) per stream: tdata, tvalid, tready, tlast.
-_IN = (("b", 32, "in_stream_TDATA[31:0]"), ("c", 1, "in_stream_TVALID"),
-       ("d", 1, "in_stream_TREADY"), ("e", 1, "in_stream_TLAST[0:0]"))
-_OUT = (("f", 32, "out_stream_TDATA[31:0]"), ("g", 1, "out_stream_TVALID"),
-        ("h", 1, "out_stream_TREADY"), ("i", 1, "out_stream_TLAST[0:0]"))
+_IN = (("b", 32, "s_in_TDATA[31:0]"), ("c", 1, "s_in_TVALID"),
+       ("d", 1, "s_in_TREADY"), ("e", 1, "s_in_TLAST[0:0]"))
+_OUT = (("f", 32, "m_out_TDATA[31:0]"), ("g", 1, "m_out_TVALID"),
+        ("h", 1, "m_out_TREADY"), ("i", 1, "m_out_TLAST[0:0]"))
 
 
 def _beats(bursts) -> list[tuple[int, int]]:
@@ -44,8 +44,8 @@ def _value(vid: str, width: int, v: int) -> str:
 
 def render() -> str:
     """The fixture's text: the input beats, one idle cycle, then the output beats."""
-    stim = S.stimulus([S.Tx(TX_ID, X)])
-    resp = poly_stream_model(stim, S.COEFFS, word_bw=_WORD_BW).out
+    stim = S.stimulus(S.Scenario([S.Tx(TX_ID, X, S.A)]), _WORD_BW)
+    resp = poly_stream_model(stim, word_bw=_WORD_BW).out
     # Per cycle: (in beat or None, out beat or None).
     ins, outs = _beats(stim), _beats(resp)
     cycles = [(b, None) for b in ins] + [(None, None)] + [(None, b) for b in outs] + [(None, None)]

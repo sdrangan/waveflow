@@ -43,8 +43,8 @@ vp = VcdParser(vcd)
 You can add signals to the parser as:
 
 ```python
-sig_name = 'apatb_poly_top.AESL_inst_poly.in_stream_TDATA[31:0]'
-short_name = 'in_stream_TDATA'
+sig_name = 'apatb_poly_top.AESL_inst_poly.s_in_TDATA[31:0]'
+short_name = 's_in_TDATA'
 
 vp.add_signal(name=sig_name, short_name=short_name)
 ```

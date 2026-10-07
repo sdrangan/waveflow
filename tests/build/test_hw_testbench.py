@@ -295,7 +295,7 @@ def test_phase3_dut_run_with_args_is_rejected():
 # Phase 4 — push/pop + file IO + status JSON
 # ---------------------------------------------------------------------------
 
-from examples.stream_inband.poly import CoeffArray, PolyCmdHdr, PolyRespHdr, Float32
+from tests.fixtures.poly_extracted.poly_schemas import CoeffArray, PolyCmdHdr, PolyRespHdr, Float32
 from waveflow.hw.dataschema import DataArray
 
 

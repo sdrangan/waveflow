@@ -34,13 +34,13 @@ Next, you will have to identify the following parameters.
 | `workdir`    | CWD               | Working directory containing the `comp` folder |
 
 
-You can get the component and solution names from the directory structure created by Vitis. Running RTL co-simulation creates directories of the form `<comp>/<soln>`. For example, in the [polynomial example](../../examples/stream_inband/), the RTL simulation generates:
+You can get the component and solution names from the directory structure created by Vitis. Running RTL co-simulation creates directories of the form `<comp>/<soln>`. For example, in the [polynomial example](../../examples/stream_inband/), the error-path co-simulation generates:
 
 ```bash
-waveflow_poly_proj/solution1
+vcd_proj/solution1
 ```
 
-So `comp` is `waveflow_poly_proj` and `soln` is `solution1`.
+So `comp` is `vcd_proj` and `soln` is `solution1`.
 
 
 The value of `top` should match the top function used in the RTL simulation. In the polynomial example, the Tcl file contains `set_top poly`, so `top` is `poly`.
@@ -57,18 +57,18 @@ To generate the VCD file from the CLI, first activate the virtual environment wh
 For the polynomial example this would be:
 
 ```bash
-(env) xsim_vcd --top poly --comp waveflow_poly_proj --soln solution1 --out dump_poly.vcd
+(env) xsim_vcd --top poly --comp vcd_proj --soln solution1 --out error_path.vcd
 ```
 If you want the smaller port-only trace, use:
 
 ```bash
-(env) xsim_vcd --top poly --comp waveflow_poly_proj --soln solution1 --out dump_poly.vcd --trace_level port
+(env) xsim_vcd --top poly --comp vcd_proj --soln solution1 --out error_path.vcd --trace_level port
 ```
 
 After running the script, the VCD file for the example above will be written to:
 
 ```bash
-poly/vcd/dump_poly.vcd
+examples/stream_inband/vcd/error_path.vcd
 ```
 
 ## Python API
@@ -81,8 +81,9 @@ from pathlib import Path
 
 vcd_path = run_xsim_vcd(
     top="poly",
-    comp="waveflow_poly_proj",
-    out="dump.vcd",
+    comp="vcd_proj",
+    out="error_path.vcd",
+    trace_level="port",
     workdir=Path("examples/stream_inband"),
 )
 print(f"VCD written to: {vcd_path}")

@@ -194,7 +194,7 @@ def test_the_framing_is_not_removed(project: Path) -> None:
     python = (project / "gain_clip.py").read_text(encoding="utf-8")
     cpp = (project / "gain_clip_body_impl.tpp").read_text(encoding="utf-8")
 
-    assert "WRONG_NSAMP" in python
+    assert "NO_TLAST_SAMP_IN" in python
     assert "TLAST_EARLY_SAMP_IN" in python
     assert "VitisRegMap" in python
     assert "tlast_status" in cpp

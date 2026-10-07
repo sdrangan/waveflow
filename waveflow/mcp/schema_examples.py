@@ -25,9 +25,9 @@ _EXAMPLES: dict[str, dict[str, Any]] = {
         "id": "poly_cmd_hdr",
         "title": "Polynomial accelerator command header",
         "description": (
-            "Command header sent to the polynomial accelerator containing a "
-            "transaction ID, an array of polynomial coefficients, and the number "
-            "of input samples to process."
+            "Command header sent to the polynomial accelerator containing the "
+            "command type, a transaction ID, the number of input samples to process, "
+            "and the polynomial coefficients the command is evaluated with."
         ),
         "features": [
             "DataList",
@@ -38,7 +38,8 @@ _EXAMPLES: dict[str, dict[str, Any]] = {
         ],
         "file": "poly.py",
         "primary_symbol": "PolyCmdHdr",
-        "supporting_symbols": ["TxIdField", "NsampField", "Float32", "CoeffArray"],
+        "supporting_symbols": ["PolyCmdType", "PolyCmdTypeField", "TxIdField", "NsampField",
+                               "Float32", "CoeffArray"],
     },
     "poly_resp_hdr": {
         "id": "poly_resp_hdr",
@@ -56,22 +57,21 @@ _EXAMPLES: dict[str, dict[str, Any]] = {
         "primary_symbol": "PolyRespHdr",
         "supporting_symbols": ["TxIdField"],
     },
-    "poly_resp_ftr": {
-        "id": "poly_resp_ftr",
-        "title": "Polynomial accelerator response footer",
+    "poly_error": {
+        "id": "poly_error",
+        "title": "Polynomial accelerator error codes",
         "description": (
-            "Response footer returned by the polynomial accelerator containing the "
-            "number of samples processed and an enum error code."
+            "The error codes the polynomial accelerator reports in its halted/error/tx_id "
+            "status registers when a command fails: an IntEnum wrapped as an EnumField."
         ),
         "features": [
-            "DataList",
             "enum field",
             "IntEnum error codes",
             "EnumField specialization",
         ],
         "file": "poly.py",
-        "primary_symbol": "PolyRespFtr",
-        "supporting_symbols": ["NsampField", "PolyError", "PolyErrorField"],
+        "primary_symbol": "PolyErrorField",
+        "supporting_symbols": ["PolyError"],
     },
     "hist_cmd": {
         "id": "hist_cmd",

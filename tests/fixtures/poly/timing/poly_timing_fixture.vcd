@@ -4,14 +4,14 @@ $timescale 1ps $end
 $scope module apatb_poly_top $end
   $scope module AESL_inst_poly $end
     $var wire 1  a ap_clk $end
-    $var wire 32 b in_stream_TDATA[31:0] $end
-    $var wire 1  c in_stream_TVALID $end
-    $var wire 1  d in_stream_TREADY $end
-    $var wire 1  e in_stream_TLAST[0:0] $end
-    $var wire 32 f out_stream_TDATA[31:0] $end
-    $var wire 1  g out_stream_TVALID $end
-    $var wire 1  h out_stream_TREADY $end
-    $var wire 1  i out_stream_TLAST[0:0] $end
+    $var wire 32 b s_in_TDATA[31:0] $end
+    $var wire 1  c s_in_TVALID $end
+    $var wire 1  d s_in_TREADY $end
+    $var wire 1  e s_in_TLAST[0:0] $end
+    $var wire 32 f m_out_TDATA[31:0] $end
+    $var wire 1  g m_out_TVALID $end
+    $var wire 1  h m_out_TREADY $end
+    $var wire 1  i m_out_TLAST[0:0] $end
   $upscope $end
 $upscope $end
 $enddefinitions $end
@@ -38,74 +38,110 @@ b00000000000000000000000001010100 b
 #20000
 0a
 b00000000000000000000000000000011 b
-1e
 #25000
 1a
 #30000
 0a
-b00000000000000000000000000000000 b
-0e
+b00111111100000000000000000000000 b
 #35000
 1a
 #40000
 0a
-b00111111000000000000000000000000 b
+b11000000000000000000000000000000 b
 #45000
 1a
 #50000
 0a
-b00111111100000000000000000000000 b
-1e
+b11000000010000000000000000000000 b
 #55000
 1a
 #60000
 0a
-b00000000000000000000000000000001 b
-0e
+b01000000100000000000000000000000 b
+1e
 #65000
 1a
 #70000
 0a
 b00000000000000000000000000000000 b
-1e
+0e
 #75000
 1a
 #80000
 0a
-0c
-0d
-0e
+b00111111000000000000000000000000 b
 #85000
 1a
 #90000
+0a
+b00111111100000000000000000000000 b
+1e
+#95000
+1a
+#100000
+0a
+b00000000000000000000000000000001 b
+0e
+#105000
+1a
+#110000
+0a
+b00000000000000000000000000000000 b
+#115000
+1a
+#120000
+0a
+#125000
+1a
+#130000
+0a
+#135000
+1a
+#140000
+0a
+#145000
+1a
+#150000
+0a
+1e
+#155000
+1a
+#160000
+0a
+0c
+0d
+0e
+#165000
+1a
+#170000
 0a
 b00000000000000000000000000101010 f
 1g
 1h
 1i
-#95000
+#175000
 1a
-#100000
+#180000
 0a
 b00111111100000000000000000000000 f
 0i
-#105000
+#185000
 1a
-#110000
+#190000
 0a
 b10111110100000000000000000000000 f
-#115000
+#195000
 1a
-#120000
+#200000
 0a
 b00000000000000000000000000000000 f
 1i
-#125000
+#205000
 1a
-#130000
+#210000
 0a
 0g
 0h
 0i
-#135000
+#215000
 1a

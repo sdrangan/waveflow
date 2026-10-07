@@ -28,16 +28,20 @@ def test_kernel_name_is_poly() -> None:
     assert cpp_kernel_name(PolyAccel) == "poly"
 
 
-def test_signature_has_the_raw_coeffs_array() -> None:
+def test_signature_is_streams_and_status_only() -> None:
+    """The coefficients arrive on the stream, so they are not a kernel argument (rule 2)."""
     sig = kernel_signature(PolyAccel(name="poly", sim=Simulation()))
-    assert "float coeffs[4]" in sig and "CoeffArray& coeffs" not in sig
+    assert "coeffs" not in sig
+    for arg in ("& s_in", "& m_out", "ap_uint<1>& halted", "ap_uint<8>& error",
+                "ap_uint<16>& tx_id"):
+        assert arg in sig, arg
 
 
 def test_top_is_the_boundary_and_one_call_to_the_body(tmp_path: Path) -> None:
     hpp, cpp = _gen(tmp_path)
     assert "#pragma HLS INTERFACE axis port=s_in" in cpp
-    assert "#pragma HLS INTERFACE s_axilite port=coeffs" in cpp
-    assert "poly_impl::body(s_in, m_out, halted, error, tx_id, coeffs);" in cpp
+    assert "s_axilite port=coeffs" not in cpp
+    assert "poly_impl::body(s_in, m_out, halted, error, tx_id);" in cpp
     assert "while" not in cpp                      # the loop is the body's, not extracted
     assert '#include "../poly_body_impl.tpp"' in hpp
     assert "ap_uint<1>& halted" in hpp             # status reaches the body by reference
@@ -59,3 +63,10 @@ def test_source_tree_is_hand_written_body_and_testbench() -> None:
     assert "PolyTBHls" not in build and "is_testbench=True" not in build
     tb = (POLY_ROOT / "poly_tb.cpp").read_text(encoding="utf-8")
     assert "wf::play_stream" in tb and "wf::record_stream" in tb
+
+
+def test_param_supports_adds_the_64_bit_top(tmp_path: Path) -> None:
+    """One templated body, two tops: poly (32-bit words) and poly_bw64 (64-bit words)."""
+    hpp, cpp = _gen(tmp_path)
+    assert "void poly_bw64(" in cpp and "axi4s_word<64>" in cpp
+    assert cpp.count("poly_impl::body(s_in, m_out, halted, error, tx_id);") == 2

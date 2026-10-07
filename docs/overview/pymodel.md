@@ -23,19 +23,20 @@ trimmed to its skeleton:
 
 ```python
 # 1. DATA — typed schemas for what crosses the interface
+class CoeffArray(DataArray):                # the polynomial coefficients
+    element_type = Float32
+    max_shape = (4,)
+
 class PolyCmdHdr(DataList):                 # a command header
     elements = {
         "cmd_type": {"schema": PolyCmdTypeField},   # DATA or END
         "tx_id":    {"schema": TxIdField},          # transaction id
         "nsamp":    {"schema": NsampField},         # sample count
+        "coeffs":   {"schema": CoeffArray},         # each command carries its own
     }
 
-class CoeffArray(DataArray):                # the polynomial coefficients
-    element_type = Float32
-    max_shape = (4,)
-
 @dataclass
-class PolyAccel(HwModule):
+class PolyAccel(HostActivated):
     # 3. PARAMETERS — the knobs that size the hardware
     in_bw:  HwParam[int] = 32
     out_bw: HwParam[int] = 32
@@ -43,25 +44,25 @@ class PolyAccel(HwModule):
 
     def __post_init__(self):
         # 2. INTERFACES — typed ports, with direction
-        self.s_in   = StreamIFSlave(...)    # command + samples in
-        self.m_out  = StreamIFMaster(...)   # response + samples out
-        self.s_lite = VitisRegMapMMIFSlave(..., regmap={"coeffs": ...})  # AXI-Lite config
+        self.s_in   = StreamIFSlave(...)    # commands + samples in
+        self.m_out  = StreamIFMaster(...)   # responses + results out
+        self.s_lite = VitisRegMapMMIFSlave(..., regmap=...)  # AXI-Lite: start, done, status
 
     # 4. HOOK — the behavior, as plain Python over the typed values
-    @synthesizable
-    def evaluate(self, cmd_hdr, s_in, m_out, coeffs):
-        samp_in = yield from s_in.get_array(Float32, count=cmd_hdr.nsamp)
-        y, power = np.zeros_like(samp_in), np.ones_like(samp_in)
-        for c in coeffs.val:                # y = c0 + c1·x + c2·x² + ...
-            y += c * power
-            power *= samp_in
-        yield from m_out.write(array(Float32, y))
+    def body(self):
+        while True:
+            cmd_hdr = yield from self.s_in.get_schema(PolyCmdHdr)
+            if cmd_hdr.cmd_type == PolyCmdType.END:
+                return
+            ...                                       # response header, then:
+            y = poly_eval(cmd_hdr.coeffs, samp_in)    # y = c0 + c1·x + c2·x² + c3·x³
+            yield from self.m_out.write(array(Float32, y))
 ```
 
 Read it top to bottom and the four parts are right there: **typed data** (`PolyCmdHdr`, `CoeffArray`), a
-**declared interface** (a stream in, a stream out, an AXI-Lite register map), **parameters** (`in_bw`,
-`out_bw`, the clock), and a **compute hook** (`evaluate`) that is just NumPy over the typed values. Nothing
-here is a magic kernel — it is a description a machine can read.
+**declared interface** (a stream in, a stream out, an AXI-Lite register map for control and status),
+**parameters** (`in_bw`, `out_bw`, the clock), and a **compute hook** (`body`) that is just Python and NumPy
+over the typed values. Nothing here is a magic kernel — it is a description a machine can read.
 
 ## "Isn't that a lot of boilerplate for a three-line function?"
 

@@ -5,16 +5,22 @@ Provides a reusable API for analyzing an existing VCD file captured from
 the ``poly`` Vitis HLS kernel.  The analysis can run from a pre-captured
 VCD without rerunning RTL co-simulation.
 
+It reads the protocol off the wire: every command on ``s_in`` (its header, with the
+coefficients, and its sample burst) and every response on ``m_out`` (the response header
+and the results), in order.  The status registers are on AXI-Lite and are not in the
+stream VCD; the run's ``status.json`` has them.
+
 Typical usage
 -------------
 >>> from timing_analysis import analyze_poly_vcd, plot_poly_timing
->>> result = analyze_poly_vcd("vcd/dump.vcd")
->>> print(result.cmd_hdr.val)
+>>> result = analyze_poly_vcd("vcd/error_path.vcd")
+>>> for c in result.commands: print(c.hdr.val)
 >>> plot_poly_timing(result)
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -27,10 +33,35 @@ from waveflow.utils.vcd import VcdParser
 from waveflow.utils.timing import TimingDiagram
 
 # Import poly schemas (sibling module)
-from poly import Float32, PolyCmdHdr, PolyRespHdr
+from poly import Float32, PolyCmdHdr, PolyCmdType, PolyRespHdr, samples_per_word
 
-_WORD_BW = 32
-_TOP_NAME = "AESL_inst_poly"
+#: The generated top's stream ports (``PolyAccel.s_in`` / ``PolyAccel.m_out``).
+IN_PORT = "s_in"
+OUT_PORT = "m_out"
+
+
+@dataclass
+class Command:
+    """One command read off ``s_in``: its header, and its samples if it is a DATA."""
+
+    hdr: PolyCmdHdr
+    hdr_burst: dict
+    x: np.ndarray | None = None
+    samp_burst: dict | None = None
+
+    @property
+    def is_end(self) -> bool:
+        return int(self.hdr.val["cmd_type"]) == PolyCmdType.END
+
+
+@dataclass
+class Response:
+    """One response read off ``m_out``: the response header, and the results if any."""
+
+    hdr: PolyRespHdr
+    hdr_burst: dict
+    y: np.ndarray | None = None
+    data_burst: dict | None = None
 
 
 class PolyTimingResult:
@@ -43,22 +74,17 @@ class PolyTimingResult:
         Full VCD signal name of the clock.
     clk_period : float
         Estimated clock period in nanoseconds.
-    in_signals : dict[str, str]
-        AXI4-Stream signal name mapping for the input stream.
-    out_signals : dict[str, str]
-        AXI4-Stream signal name mapping for the output stream.
-    bursts_in : list[dict]
-        Raw burst dictionaries extracted from the input stream.
-    bursts_out : list[dict]
-        Raw burst dictionaries extracted from the output stream.
-    cmd_hdr : PolyCmdHdr
-        Decoded DATA command header (cmd_type, tx_id, nsamp).
-    x : numpy.ndarray
-        Input sample array decoded from the input data burst.
-    resp_hdr : PolyRespHdr
-        Decoded response header (tx_id echo).
-    y : numpy.ndarray
-        Output sample array decoded from the output data burst.
+    in_signals, out_signals : dict[str, str]
+        AXI4-Stream signal name mapping for each stream.
+    bursts_in, bursts_out : list[dict]
+        Raw burst dictionaries extracted from each stream.
+    commands : list[Command]
+        Every command on ``s_in``, in order (the END command included, if it was sent).
+    responses : list[Response]
+        Every response on ``m_out``, in order.
+    cmd_hdr, x, resp_hdr, y
+        The first DATA command's header and samples, and its response's header and results:
+        shorthand for the common one-command capture.
     vp : VcdParser
         The underlying VCD parser instance (for advanced use).
     """
@@ -70,6 +96,8 @@ class PolyTimingResult:
         self.out_signals: dict = {}
         self.bursts_in: list = []
         self.bursts_out: list = []
+        self.commands: list[Command] = []
+        self.responses: list[Response] = []
         self.cmd_hdr: PolyCmdHdr | None = None
         self.x: np.ndarray | None = None
         self.resp_hdr: PolyRespHdr | None = None
@@ -77,25 +105,34 @@ class PolyTimingResult:
         self.vp: VcdParser | None = None
 
 
-def analyze_poly_vcd(vcd_path: str | Path) -> PolyTimingResult:
+def _samples(burst: dict, nsamp: int, word_bw: int) -> np.ndarray:
+    """A sample burst's values: ``nsamp`` of them, or fewer if the burst ended early."""
+    n = min(nsamp, len(burst["data"]) * samples_per_word(word_bw))
+    return read_array(packed=burst["data"], word_bw=word_bw, elem_type=Float32, shape=(n,)).val
+
+
+def analyze_poly_vcd(vcd_path: str | Path, word_bw: int = 32,
+                     top: str = "poly") -> PolyTimingResult:
     """
     Analyze a VCD file captured from the poly Vitis HLS kernel.
 
-    Loads the VCD, extracts the AXI4-Stream input and output signals,
-    extracts bursts, decodes the DATA command header, input samples,
-    response header, and output samples, and returns all results in a
-    :class:`PolyTimingResult`. Halt status now lives in the AXI-Lite
-    register map and is not visible on the stream.
+    Loads the VCD, extracts the AXI4-Stream input and output signals and their bursts, and
+    decodes them in protocol order: on ``s_in``, a command header, then -- for a DATA with
+    ``nsamp > 0`` -- its sample burst, until END or the end of the capture; on ``m_out``, a
+    response header, then its results.
 
     Parameters
     ----------
     vcd_path : str | Path
         Path to the VCD file to analyze.
+    word_bw : int
+        Stream word width the kernel was built for (32 or 64).
+    top : str
+        The kernel top (``poly`` or ``poly_bw64``); the VCD scope is ``AESL_inst_<top>``.
 
     Returns
     -------
     PolyTimingResult
-        Structured result containing decoded headers, samples, and timing info.
 
     Raises
     ------
@@ -109,74 +146,60 @@ def analyze_poly_vcd(vcd_path: str | Path) -> PolyTimingResult:
         raise FileNotFoundError(f"VCD file not found: {vcd_path}")
 
     result = PolyTimingResult()
-
-    # Parse VCD
     vcd = VCDVCD(str(vcd_path), signals=None, store_tvs=True)
-
-    # Set up VCD parser
     vp = VcdParser(vcd)
     result.vp = vp
-
-    # Discover clock signal
     result.clk_name = vp.add_clock_signal()
 
-    # Discover AXI4-Stream signals
-    in_stream_name = f"{_TOP_NAME}.in_stream_"
-    out_stream_name = f"{_TOP_NAME}.out_stream_"
+    inst = f"AESL_inst_{top}"
+    result.in_signals, _ = vp.add_axiss_signals(
+        name=f"{inst}.{IN_PORT}_", short_name_prefix=IN_PORT, ignore_multiple=True)
+    result.out_signals, _ = vp.add_axiss_signals(
+        name=f"{inst}.{OUT_PORT}_", short_name_prefix=OUT_PORT, ignore_multiple=True)
+    result.bursts_in, result.clk_period = vp.extract_axis_bursts(result.clk_name,
+                                                                 result.in_signals)
+    result.bursts_out, _ = vp.extract_axis_bursts(result.clk_name, result.out_signals)
+    if not result.bursts_in or not result.bursts_out:
+        raise ValueError(f"no bursts found: {len(result.bursts_in)} in, "
+                         f"{len(result.bursts_out)} out")
 
-    result.in_signals, _in_bw = vp.add_axiss_signals(
-        name=in_stream_name,
-        short_name_prefix="in_stream",
-        ignore_multiple=True,
-    )
-    result.out_signals, _out_bw = vp.add_axiss_signals(
-        name=out_stream_name,
-        short_name_prefix="out_stream",
-        ignore_multiple=True,
-    )
+    # s_in: header [, samples], ... -- each header is its own burst (TLAST on its last word).
+    k = 0
+    while k < len(result.bursts_in):
+        hdr = PolyCmdHdr()
+        hdr.deserialize(word_bw=word_bw, packed=result.bursts_in[k]["data"])
+        cmd = Command(hdr=hdr, hdr_burst=result.bursts_in[k])
+        k += 1
+        nsamp = int(hdr.val["nsamp"])
+        if not cmd.is_end and nsamp and k < len(result.bursts_in):
+            cmd.samp_burst = result.bursts_in[k]
+            cmd.x = _samples(cmd.samp_burst, nsamp, word_bw)
+            k += 1
+        result.commands.append(cmd)
+        if cmd.is_end:
+            break
 
-    # Extract bursts (get_values() is called internally)
-    result.bursts_in, result.clk_period = vp.extract_axis_bursts(
-        result.clk_name, result.in_signals
-    )
-    result.bursts_out, _ = vp.extract_axis_bursts(
-        result.clk_name, result.out_signals
-    )
+    # m_out: one response per DATA command, in the same order.
+    data_cmds = [c for c in result.commands if not c.is_end]
+    k = 0
+    for cmd in data_cmds:
+        if k >= len(result.bursts_out):
+            break
+        hdr = PolyRespHdr()
+        hdr.deserialize(word_bw=word_bw, packed=result.bursts_out[k]["data"])
+        resp = Response(hdr=hdr, hdr_burst=result.bursts_out[k])
+        k += 1
+        nsamp = int(cmd.hdr.val["nsamp"])
+        if nsamp and k < len(result.bursts_out):
+            resp.data_burst = result.bursts_out[k]
+            resp.y = _samples(resp.data_burst, nsamp, word_bw)
+            k += 1
+        result.responses.append(resp)
 
-    if len(result.bursts_in) < 2:
-        raise ValueError(
-            f"Expected at least 2 input bursts (DATA cmd_hdr + samples), got {len(result.bursts_in)}"
-        )
-    if len(result.bursts_out) < 2:
-        raise ValueError(
-            f"Expected at least 2 output bursts (resp_hdr + samples), got {len(result.bursts_out)}"
-        )
-
-    # Decode DATA command header from burst 0
-    result.cmd_hdr = PolyCmdHdr()
-    result.cmd_hdr.deserialize(word_bw=_WORD_BW, packed=result.bursts_in[0]["data"])
-
-    # Decode input samples from burst 1
-    nsamp = int(result.cmd_hdr.val["nsamp"])
-    result.x = read_array(
-        packed=result.bursts_in[1]["data"],
-        word_bw=_WORD_BW,
-        elem_type=Float32,
-        shape=(nsamp,),
-    )
-
-    # Decode response header from output burst 0
-    result.resp_hdr = PolyRespHdr()
-    result.resp_hdr.deserialize(word_bw=_WORD_BW, packed=result.bursts_out[0]["data"])
-
-    # Decode output samples from output burst 1
-    result.y = read_array(
-        packed=result.bursts_out[1]["data"],
-        word_bw=_WORD_BW,
-        elem_type=Float32,
-        shape=(nsamp,),
-    )
-
+    if data_cmds:
+        result.cmd_hdr, result.x = data_cmds[0].hdr, data_cmds[0].x
+    if result.responses:
+        result.resp_hdr, result.y = result.responses[0].hdr, result.responses[0].y
     return result
 
 
@@ -187,7 +210,7 @@ def plot_poly_timing(
 ) -> plt.Axes:
     """
     Plot the AXI4-Stream timing diagram from a :class:`PolyTimingResult`,
-    with input and output bursts color-coded by type.
+    with headers and data bursts color-coded.
 
     Parameters
     ----------
@@ -206,48 +229,35 @@ def plot_poly_timing(
     """
     from matplotlib.patches import Patch
 
-    vp = result.vp
-    sig_list = vp.get_td_signals()
-
     td = TimingDiagram()
-    td.add_signals(sig_list)
-
-    ax = td.plot_signals(
-        add_clk_grid=True,
-        trange=trange,
-        text_scale_factor=1e4,
-        text_mode="never",
-    )
+    td.add_signals(result.vp.get_td_signals())
+    ax = td.plot_signals(add_clk_grid=True, trange=trange, text_scale_factor=1e4,
+                         text_mode="never")
     ax.set_xlabel("Time [ns]")
 
-    def _color_burst(sig_name, burst, color, clk_period):
-        t0 = burst["tstart"]
-        t1 = t0 + len(burst["beat_type"]) * clk_period
-        td.add_patch(sig_name=sig_name, time=[t0, t1], color=color, alpha=0.3)
-
-    hdr_color = "orange"
-    data_color = "green"
     cp = result.clk_period
 
-    _color_burst("in_stream_TDATA", result.bursts_in[0], hdr_color, cp)
-    _color_burst("in_stream_TDATA", result.bursts_in[1], data_color, cp)
-    if len(result.bursts_in) >= 3:
-        _color_burst("in_stream_TDATA", result.bursts_in[2], hdr_color, cp)
-    _color_burst("out_stream_TDATA", result.bursts_out[0], hdr_color, cp)
-    _color_burst("out_stream_TDATA", result.bursts_out[1], data_color, cp)
+    def _color(sig_name, burst, color):
+        if burst is None:
+            return
+        t0 = burst["tstart"]
+        t1 = t0 + len(burst["beat_type"]) * cp
+        td.add_patch(sig_name=sig_name, time=[t0, t1], color=color, alpha=0.3)
+
+    hdr_color, data_color = "orange", "green"
+    for c in result.commands:
+        _color(f"{IN_PORT}_TDATA", c.hdr_burst, hdr_color)
+        _color(f"{IN_PORT}_TDATA", c.samp_burst, data_color)
+    for r in result.responses:
+        _color(f"{OUT_PORT}_TDATA", r.hdr_burst, hdr_color)
+        _color(f"{OUT_PORT}_TDATA", r.data_burst, data_color)
 
     legend_elements = [
-        Patch(facecolor="orange", edgecolor="black", alpha=0.3, label="header"),
-        Patch(facecolor="green", edgecolor="black", alpha=0.3, label="data"),
+        Patch(facecolor=hdr_color, edgecolor="black", alpha=0.3, label="header"),
+        Patch(facecolor=data_color, edgecolor="black", alpha=0.3, label="data"),
     ]
-    ax.legend(
-        handles=legend_elements,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        borderaxespad=0.0,
-    )
-
+    ax.legend(handles=legend_elements, loc="center left", bbox_to_anchor=(1.02, 0.5),
+              borderaxespad=0.0)
     if show:
         plt.show()
-
     return ax

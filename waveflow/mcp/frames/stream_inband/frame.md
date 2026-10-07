@@ -3,8 +3,14 @@
 This file is the part of every accelerator spec that stays the same from one
 design to the next: the protocol, the error behavior, the build flow and the
 process. Each function spec (`01_gain_clip.md`, ...) supplies only its own
-register fields, footer fields, function, tests and targets. Where the
-function spec and this frame disagree, the function spec wins.
+command-header parameters, footer fields, function, tests and targets. Where
+the function spec and this frame disagree, the function spec wins.
+
+The protocol is the **command-response contract** of `stream_inband`: read its
+seven numbered rules, and the reason for each, in
+`docs/examples/stream_inband/index.md` (`waveflow_get_doc`) before anything
+else. `docs/examples/stream_inband/decisions.md` lists the decisions your
+Stage 1 spec must state.
 
 ## F1. Reference design and flow
 
@@ -15,12 +21,12 @@ particular:
 
 | Piece | In `stream_inband` | Yours | Written by |
 | --- | --- | --- | --- |
-| schemas | `PolyCmdHdr`, `PolyRespHdr`, `PolyError`, `CoeffArray` (`DataList` / `EnumField` / `DataArray`) | per the function spec | you |
+| schemas | `PolyCmdHdr` (carrying the `CoeffArray`), `PolyRespHdr`, `PolyError` (`DataList` / `EnumField` / `DataArray`) | per the function spec, plus a `RespFtr` if it has per-command results | you |
 | the function | `poly_eval`: the arithmetic, in float32, in the C++ operation order | per the function spec | you |
 | the protocol model | `poly_stream_model`: the whole kernel as a pure function of its input stream | same structure | you |
 | scenarios | `scenarios.py`: intents, stimulus, expected responses, the checker | per the function spec | you |
-| the module | `PolyAccel(HostActivated)`, body-only (`cpp_body = "body"`): ports and `VitisRegMap` | same structure | you |
-| kernel boundary | `gen/poly.hpp`, `gen/poly.cpp`: prototype, pragmas, register map, one call to the body | -- | **Waveflow** |
+| the module | `PolyAccel(HostActivated)`, body-only (`cpp_body = "body"`): ports and a status-only `VitisRegMap` | same structure | you |
+| kernel boundary | `gen/poly.hpp`, `gen/poly.cpp`: prototype, pragmas, status registers, one call to the body | -- | **Waveflow** |
 | kernel body | `poly_body_impl.tpp`: the whole kernel, in C++ | same structure | you |
 | pysim model | `PolyAccel.body()`: a port wrapper around the function, plus `proc_latency` / `proc_ii` | calibrated to your RTL (F7) | you |
 | C++ testbench | `poly_tb.cpp`: plays each scenario's stimulus, records the response | same structure | you |
@@ -48,83 +54,90 @@ utilities, in Python and in C++ alike.
 
 ## F3. Protocol
 
-This is the same as `stream_inband`, with the additions marked **(new)**.
+This is `stream_inband`'s contract, with the additions marked **(new)**.
 
-1. The host writes the function's parameters into the **register map**, then
-   writes `ap_start`. The parameters stay fixed for the whole kernel run.
-2. The kernel loops, reading one **command header** per iteration from the
-   input stream:
+1. The host writes `ap_start`. **Nothing else is written over AXI-Lite**:
+   the function's parameters travel in every `DATA` command header (rule 2),
+   and the register map holds only the status.
+2. The kernel clears its status, then loops, reading one **command header**
+   per iteration from the input stream:
 
    | Field | Type | Meaning |
    | --- | --- | --- |
    | `cmd_type` | enum `DATA = 0`, `END = 1` | |
-   | `tx_id` | uint16 | transaction ID |
+   | `tx_id` | uint16 | command ID |
    | `nsamp` | uint16 | number of input samples (0 for `END`) |
+   | *parameters* | per the function spec | the function's parameters for this command; zeros, and ignored, on `END` |
 
-3. On `END` the kernel returns cleanly, with `halted = 0` and `error = 0`.
-4. On `DATA` the kernel **first checks the parameters (new)**. If they are
-   illegal, it halts with `BAD_PARAM` (F4) and emits nothing for this
-   transaction.
-5. Otherwise, for each `DATA` transaction the host then sends the sample
-   burst, TLAST on its last word, if `nsamp > 0`. The kernel writes, in order:
+3. On `END` the kernel returns cleanly, with `halted = 0`, `error = 0` and
+   `tx_id = 0`.
+4. On `DATA` the kernel **first checks the parameters in the header (new)**.
+   If they are illegal, it halts with `BAD_PARAM` (F4) and writes nothing for
+   this command.
+5. Otherwise the host sends the sample burst, TLAST on its last word, if
+   `nsamp > 0`. The kernel writes, in order:
    1. the **response header** (`tx_id` echo), TLAST on its last word;
-   2. the **data burst**, one output per processed sample. TLAST goes on
-      its **last emitted word, including when the input burst ended early
-      (new)**. The burst is omitted entirely when zero samples were processed;
-   3. **(new)** the **response footer**, TLAST on its last word. It carries
-      `nsamp_read` (uint16, samples processed) followed by the function
-      spec's per-transaction results.
-
-   A footer is used rather than register fields because the loop handles
-   many transactions per run, and a register can hold only the last one's
-   results.
-6. Parameters and state (for example, a filter's history) **do not carry
-   from one `DATA` transaction to the next**, unless the function spec says
-   otherwise.
+   2. the **data burst**, one output per processed sample, TLAST on its last
+      word. The burst is omitted entirely when `nsamp = 0`;
+   3. **(new)** the **response footer**, if the function spec defines one,
+      TLAST on its last word. It holds only per-command results that are known
+      after the data (a count, a peak). **It is sent only when the command
+      succeeds**, never after an error.
+6. Nothing carries over from one `DATA` command to the next -- parameters,
+   state (for example, a filter's history), anything -- unless the function
+   spec says otherwise.
 
 ## F4. Errors and halting
 
-Register map status fields, as in `stream_inband`: `halted` (bit),
-`error` (the error enum) and `tx_id` (the offending transaction). The error
-enum keeps `PolyError`'s codes and adds one:
+Status registers, as in `stream_inband`: `halted` (bit), `error` (the error
+enum) and `tx_id` (the command that failed). The error enum keeps
+`PolyError`'s codes and adds one:
 
-| Code | Name | Detected? |
+| Code | Name | Raised when |
 | --- | --- | --- |
 | 0 | `NO_ERROR` | |
-| 1 | `TLAST_EARLY_CMD_HDR` | reserved, not detected (the generated header read discards TLAST) |
-| 2 | `NO_TLAST_CMD_HDR` | reserved, not detected |
-| 3 | `TLAST_EARLY_SAMP_IN` | yes |
-| 4 | `NO_TLAST_SAMP_IN` | yes |
-| 5 | `WRONG_NSAMP` | yes, as in `stream_inband` |
-| 6 | `BAD_PARAM` | **(new)** yes, with the conditions set by the function spec |
+| 1 | `TLAST_EARLY_SAMP_IN` | TLAST arrives before the last sample word |
+| 2 | `NO_TLAST_SAMP_IN` | the last sample word has no TLAST |
+| 3 | `BAD_PARAM` | **(new)** the header's parameters are illegal, per the function spec |
 
-On any detected error the kernel sets `halted = 1`, `error` and `tx_id`,
-then **returns without flushing** the input, as `stream_inband` does. Before
-halting on codes 3 to 5, it still emits the response header, the samples it
-processed, and the footer (step 5 of F3). On code 6 it emits nothing.
+On any error the kernel (rule 6 of the contract):
 
-- **Code 3.** TLAST arrived on sample word `j`, before the last expected
-  word. Every sample in words `0..j` is processed, capped at `nsamp`. Where a
-  sample spans two words, a half-received sample is discarded.
-- **Code 4.** The last expected sample word arrived without TLAST. All
-  `nsamp` samples are processed.
+1. sets `halted = 1`, `error` and `tx_id`;
+2. puts TLAST on the last word it wrote, if it had started an output burst --
+   so a burst that ends early is still closed;
+3. returns at once, **reading nothing more** from the input stream. It does
+   not drain to the next TLAST and writes no footer.
 
-In the error scenarios, the host sends exactly these words:
+After an error the contents of the input stream are undefined (rule 7): the
+host resets the stream path before the next `ap_start`.
+
+- **Code 1.** TLAST arrived on sample word `j`, before the last expected
+  word. Every sample in words `0..j` is processed, capped at `nsamp`, and the
+  output word for word `j` carries TLAST. Where a sample spans two words, a
+  half-received sample is discarded.
+- **Code 2.** The last expected sample word arrived without TLAST. All
+  `nsamp` samples are processed; the last output word carries TLAST.
+- **Code 3.** Detected from the header, before anything is written for the
+  command. The command's sample burst is never read.
+
+In the error scenarios, the host sends exactly these words for the failing
+command, and may queue further commands behind it:
 
 - **Early TLAST on word `j`:** words `0..j` only.
 - **Missing TLAST:** exactly the expected number of sample words, none with TLAST.
 - **`BAD_PARAM`:** the full sample burst, which the kernel never reads.
 
-A halted run can therefore leave input unread. A leftover-data warning from
-csim in these scenarios is expected and is not a failure. The check is the
-output stream plus the register-map status.
+A halted run therefore leaves input unread. The C++ testbench discards it
+after the kernel returns -- that is the host's reset -- so a leftover-data
+warning from csim is expected and is not a failure. The check is the output
+stream plus the status registers.
 
 ## F5. Stage 1: the specification (then STOP for review)
 
 Stage 1 writes down **what** the accelerator must do, in executable form:
 
-- **The schemas,** in `<name>.py`: command header, response header, footer,
-  error enum, register-map parameter types.
+- **The schemas,** in `<name>.py`: command header (with the function's
+  parameters), response header, footer (if any), error enum.
 - **The function, `<name>_eval`,** in `<name>.py`: the spec's arithmetic as a
   pure function, in the exact operation order and precision the C++ will use
   (that is what lets every comparison be bit-exact).  Pin it down with the
@@ -138,6 +151,9 @@ Stage 1 writes down **what** the accelerator must do, in executable form:
 - **`layout.md`:** the word-by-word layout of every header, footer and burst,
   obtained by **serializing instances with Waveflow**, not by reasoning about
   the schema.
+- **The decisions** of `docs/examples/stream_inband/decisions.md`, each
+  answered in one line: zero-length commands, error precedence, packing,
+  rounding and saturation, what `tx_id` means, the footer.
 
 Then show the checker **rejecting** at least two wrong outputs of your
 choosing (for example, the right function with the wrong rounding, or an

@@ -53,8 +53,15 @@ waveflow_get_example("stream_inband", file="scenarios.py")     # intents, expect
 waveflow_get_example("stream_inband", file="poly_body_impl.tpp")  # the kernel body
 waveflow_get_example("stream_inband", file="poly_tb.cpp")      # the C++ testbench
 waveflow_get_example("stream_inband", file="poly_build.py")    # the BuildDag
-waveflow_get_doc("docs/examples/stream_inband/index.md")       # the tutorial
+waveflow_get_doc("docs/examples/stream_inband/index.md")       # the contract: rules 1-7
+waveflow_get_doc("docs/examples/stream_inband/decisions.md")   # what your spec must decide
+waveflow_get_doc("docs/examples/stream_inband/why_not.md")     # the designs not to build
 ```
+
+**The contract is not negotiable.**  Configuration travels in the command
+header, never over AXI-Lite; on an error the kernel closes its output burst
+and returns, with no drain and no footer.  If you find yourself writing
+configuration registers or a recovery path, reread `why_not.md`.
 
 Examples that `waveflow_list_examples()` does not return are **not** models to
 copy, whatever else is in the tree.
@@ -68,8 +75,9 @@ you may read and must never edit.
 
 `frame.md` §F5 says exactly what each piece must contain.
 
-1. **The schemas**, in `<name>.py`: command header, response header, footer,
-   error enum, register-map parameter types.
+1. **The schemas**, in `<name>.py`: command header (carrying the function's
+   parameters), response header, footer (only if the spec has per-command
+   results), error enum.  The register map holds only the status.
    - `waveflow_search("DataList schema definition")`,
      `waveflow_find_usage("DataList")` for real declarations
    - validate each with `waveflow_validate_schema` before moving on
@@ -85,7 +93,8 @@ you may read and must never edit.
    - a missing TLAST is a `StreamBurst(words, tlast=False)` in the stimulus
 4. **`layout.md`**: the word layout of every header, footer and burst, from
    **serializing instances with Waveflow** -- not from reasoning about the
-   schema; that is where hand-packing bugs enter.
+   schema; that is where hand-packing bugs enter.  Below it, one line for each
+   item of `decisions.md`: how your design answers it.
 
 Then:
 
@@ -110,7 +119,7 @@ reached and what limits it.
    calling `<name>_eval` for the arithmetic.
    - `waveflow_get_example("stream_inband", file="poly.py")` (`poly_stream_model`)
 2. **The module**: a body-only `HostActivated` (`cpp_body = "body"`) declaring
-   its ports and `VitisRegMap`. Its Python `body()` is a thin port wrapper
+   its ports and a status-only `VitisRegMap` (`halted`, `error`, `tx_id`). Its Python `body()` is a thin port wrapper
    around `<name>_eval`, with the timing model (`proc_latency`, `proc_ii`).
    - `waveflow_search("body-only kernel cpp_body")`, `waveflow_find_usage("cpp_body")`
    - **More than one word width?** Do not write a second module: add
@@ -156,6 +165,11 @@ reached and what limits it.
   fails with `undefined symbol: <kernel>(...)` -- a Vitis defect, not your
   code. To group projects, `cd` into the folder first, then
   `open_project w32`, and give `add_files` absolute paths.
+- **Keep project names and paths short on Windows.** C synthesis writes
+  floating-point IP files about 150 characters below the project directory;
+  a path over 260 bytes fails csynth with `Path length exceeds 260-Byte
+  maximum allowed by Windows`. Name projects like `w32_proj`, and keep the
+  checkout itself shallow.
 - A design is accepted only when **every comparison** of §F7 passes. When one
   fails, say **which layer** failed -- the function, the protocol model, the
   module, the C++ body -- before changing anything.

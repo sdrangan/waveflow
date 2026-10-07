@@ -10,9 +10,11 @@ the result to a programmable range `[lo, hi]`, and report per transaction how
 many samples were clipped at each end. All arithmetic is integer, and every
 output must be **bit-exact** to the oracle.
 
-## 2. Register map parameters
+## 2. Command-header parameters
 
-These are written by the host before `ap_start`, with access RW:
+These travel in every `DATA` command header, after `cmd_type`, `tx_id` and
+`nsamp` (frame F3), so each command carries its own. Nothing is written over
+AXI-Lite but `ap_start`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -28,7 +30,8 @@ These are written by the host before `ap_start`, with access RW:
   array utilities. `layout.md` must state which half holds the even sample,
   and what fills the unused half when `nsamp` is odd.
 - **Output samples `y`:** int16, packed the same way.
-- **Response footer, after `nsamp_read`:**
+- **Response footer**, after the data burst, sent only when the command
+  succeeds (frame F3):
 
   | Field | Type | Meaning |
   | --- | --- | --- |
@@ -63,10 +66,11 @@ Worked examples (all must hold exactly). "full" means `lo = -32768, hi = 32767`.
 
 ## 5. Scenarios
 
-Each scenario is one kernel run: register writes, then the listed commands.
+Each scenario is one kernel run: the listed commands, each `DATA` header
+carrying the parameters shown.
 Unless the scenario halts on an error, the run ends with `END`.
 
-| ID | Registers | Commands | Purpose |
+| ID | Parameters | Commands | Purpose |
 | --- | --- | --- | --- |
 | S1_random | g=384 (1.5), lo=-20000, hi=20000 | DATA nsamp=1000, x uniform over int16 | general case, clipping both ways |
 | S2_ties | g=128, full | DATA: x = every odd value in [-255, 255] | every product is a rounding tie |
@@ -75,14 +79,14 @@ Unless the scenario halts on an error, the run ends with `END`.
 | S5_lo_eq_hi | g=256, lo=hi=7 | DATA nsamp=100 random | every output is 7 |
 | S6_multi | g=384, lo=-20000, hi=20000 | DATA nsamp=1, DATA nsamp=7, DATA nsamp=0, DATA nsamp=200 | odd-count padding, empty transaction, per-transaction footers |
 | E1_bad_param | lo=10, hi=-10 | DATA nsamp=10 | halts BAD_PARAM with tx_id, emits nothing |
-| E2_early_tlast | full | DATA nsamp=10 with TLAST on sample word 2 | halts code 3; 6 samples and footer emitted |
-| E3_no_tlast | full | DATA nsamp=10 with no TLAST on the last word | halts code 4; 10 samples and footer emitted |
+| E2_early_tlast | full | DATA nsamp=10 with TLAST on sample word 2 | halts code 1; 6 samples emitted, the last with TLAST; no footer |
+| E3_no_tlast | full | DATA nsamp=10 with no TLAST on the last word | halts code 2; 10 samples emitted; no footer |
 | S_TIMING | g=384, full | DATA nsamp=4096 random | timing only |
 
 ## 6. Acceptance
 
 **Functional:** frame F7, all three comparisons, bit-exact on every output
-word and every TLAST flag, and the register-map status equal to the oracle's.
+word and every TLAST flag, and the status registers equal to the oracle's.
 
 **Timing** (cosim of S_TIMING, measured from the VCD):
 

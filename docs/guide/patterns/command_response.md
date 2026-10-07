@@ -23,9 +23,9 @@ end to end; each section links to the layer page that has the details.
 
 | | [poly](../../examples/stream_inband/index.md) | [vecmult](../../examples/vecmult/index.md) | [mm_fir](../../examples/mm_fir/index.md) | [markov](../../examples/markov/index.md) |
 |---|---|---|---|---|
-| command | `PolyCmdHdr(cmd_type, tx_id, nsamp)`, in-band | `VecCmd(tx_id, n)`, in-band ahead of both vectors | `FirCmdHdr(nsamp, tx_id, cfg_id)`, in-band | `MkvCmd(tx_id, n, ...)` |
+| command | `PolyCmdHdr(cmd_type, tx_id, nsamp, coeffs)`, in-band -- configuration included | `VecCmd(tx_id, n)`, in-band ahead of both vectors | `FirCmdHdr(nsamp, tx_id, cfg_id)`, in-band | `MkvCmd(tx_id, n, ...)` |
 | the work | evaluate a polynomial on `nsamp` samples | multiply two `n`-vectors element-wise | filter `nsamp` samples | `n` steps of a Markov chain |
-| response | status + `tx_id` | `VecResp(tx_id)`, after the results on the same stream | `FirRespHdr(nsamp, tx_id, cfg_id)` | `MkvResp(tx_id, n, ones)` -- only once `x` is stored |
+| response | `PolyRespHdr(tx_id)`, then the results; status registers on an error | `VecResp(tx_id)`, after the results on the same stream | `FirRespHdr(nsamp, tx_id, cfg_id)` | `MkvResp(tx_id, n, ones)` -- only once `x` is stored |
 
 ## The messages
 
@@ -55,8 +55,12 @@ The fields that keep coming back, and why:
 - **`tx_id`** -- a job id the response **echoes**. It is how the host pairs a response with the job it
   sent, and how it notices a dropped or reordered one. Cheap, and worth having from the first version.
 - **`status`** -- what happened: `OK`, or an error code (below).
-- **An id for configuration** (mm_fir's `cfg_id`) -- when the configuration travels on a
-  different path from the data, the host names each configuration, the command names the one it needs,
+- **The configuration itself, in the command** (poly's coefficients) -- the simplest choice when it
+  is small: every command is self-contained, and there is no second path to keep in order.  See
+  [the stream_inband contract](../../examples/stream_inband/index.md#the-contract) and
+  [why configuration over AXI-Lite races](../../examples/stream_inband/why_not.md#configuration-over-axi-lite).
+- **An id for configuration** (mm_fir's `cfg_id`) -- when the configuration is too large to repeat
+  and travels on a different path from the data, the host names each configuration, the command names the one it needs,
   the kernel waits for it, and the response echoes the one it used. That carries the order two
   separate paths cannot. Put the id **in** the configuration rather than counting commits at both ends:
   a count drifts the first time a host restarts or a message is lost, and nothing can tell.
@@ -136,8 +140,12 @@ A response is where a problem gets reported instead of becoming a hang or a corr
 - **A status code** for anything the kernel can detect -- a bad parameter, an overflow.
 - **Framing checks** when the data carries packet boundaries: `TLAST` early, `TLAST` missing, or a count
   that does not match `n` each map to their own code ([poly's framing checks](../custom_hooks/stream.md#framing-is-validated-not-assumed)).
-- **Halt or carry on** is a design choice: poly halts on an error and waits for the host to clear it;
-  a kernel that can resynchronize on the next header may answer with the error and continue.
+- **Halt or carry on** is a design choice.  For a host-activated kernel that runs a batch of
+  commands, **halt** is the default: poly sets `halted` / `error` / `tx_id`, closes the output burst
+  it had started with `TLAST`, and returns without draining; the host resets the stream path and
+  starts again ([the error path](../../examples/stream_inband/error_path.md)).  A kernel that must
+  keep running through bad input -- a free-running one -- needs a protocol it can resynchronize on,
+  and may answer with the error and continue; [why poly does not](../../examples/stream_inband/why_not.md#a-response-footer-with-recovery).
 
 ## Through a pipeline: the command travels with the data
 
