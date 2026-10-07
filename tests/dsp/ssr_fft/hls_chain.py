@@ -20,18 +20,23 @@ from waveflow.dsp.ssr_fft import hls
 from waveflow.dsp.ssr_fft.model import Geometry, pipeline, to_words
 
 PART = "xczu48dr-ffvg1517-2-e"
+# Task kinds that only adapt the top's boundary ports; the chain starts and ends without them.
+BOUNDARY_KINDS = ("pass", "lanes_in", "lanes_out")
 
 
 def chain_tasks(geo: Geometry, natural: bool = True) -> list[tuple[str, str, str]]:
     """``(instance, wrapper, out edge)`` per task, in order; each reads the previous one's edge.
 
     The same generated wrappers the real top instantiates (:func:`hls.task_instances`), minus the
-    two lane adaptors: this harness drives the first word stream and reads the last directly.  With
-    ``natural``, the reorder follows: its commutator ``rc``, the SOB writer (into ``blk``) and the
-    reader (edge ``out``)."""
+    boundary tasks (the ``in_reg`` register, or the lane adaptors): this harness drives the first
+    word stream and reads the last directly.  They are dropped by kind, not by position -- which
+    ones exist depends on the boundary.  With ``natural``, the reorder follows: its commutator
+    ``rc``, the SOB writer (into ``blk``) and the reader (edge ``out``)."""
     ns = hls.config_namespace(geo)
     out = []
-    for t in hls.task_instances(geo, natural=natural)[1:-1]:
+    for t in hls.task_instances(geo, natural=natural):
+        if t.kind in BOUNDARY_KINDS:
+            continue
         edge = {"reorder_write": "blk", "reorder_read": "out"}.get(t.kind, t.inst)
         out.append((f"t_{t.inst}", f"{ns}_{t.inst}", edge))
     return out
