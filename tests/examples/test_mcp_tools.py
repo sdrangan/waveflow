@@ -3,6 +3,7 @@ Tests for waveflow MCP tools: schema_examples, registry, server, and mode-aware 
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -279,9 +280,9 @@ def test_registry_dispatch_unknown_tool_raises_value_error():
 
 
 def test_registry_register_all_adds_tools_to_mcp():
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
-    fresh_mcp = FastMCP("test_server")
+    fresh_mcp = MCPServer("test_server")
     fresh_registry = ToolRegistry()
     fresh_registry.add(
         name="test_tool",
@@ -290,14 +291,14 @@ def test_registry_register_all_adds_tools_to_mcp():
         fn=lambda: {"ok": True},
     )
     fresh_registry.register_all(fresh_mcp)
-    # FastMCP doesn't expose a public tool list, but registration should not raise
-    # and the tool should be dispatchable via our registry
+    assert "test_tool" in {t.name for t in asyncio.run(fresh_mcp.list_tools())}
+    # ... and stays dispatchable via our registry
     result = fresh_registry.dispatch("test_tool", {})
     assert result == {"ok": True}
 
 
 def test_registry_register_all_respects_profile():
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     fresh_registry = ToolRegistry()
     fresh_registry.add(
@@ -315,13 +316,13 @@ def test_registry_register_all_respects_profile():
         profiles={"headless"},
     )
 
-    workspace_mcp = FastMCP("ws")
+    workspace_mcp = MCPServer("ws")
     fresh_registry.register_all(workspace_mcp, profile="workspace")
     ws_schemas = {s["function"]["name"] for s in fresh_registry.tool_schemas(profile="workspace")}
     assert "workspace_only_tool" in ws_schemas
     assert "headless_only_tool" not in ws_schemas
 
-    headless_mcp = FastMCP("hl")
+    headless_mcp = MCPServer("hl")
     fresh_registry.register_all(headless_mcp, profile="headless")
     hl_schemas = {s["function"]["name"] for s in fresh_registry.tool_schemas(profile="headless")}
     assert "headless_only_tool" in hl_schemas
@@ -357,14 +358,14 @@ def test_build_mcp_headless_without_work_dir_raises():
         build_mcp(mode="headless")
 
 
-def test_build_mcp_workspace_returns_fastmcp(tmp_path):
+def test_build_mcp_workspace_returns_mcpserver(tmp_path):
     from waveflow.mcp.server import build_mcp
 
     mcp_inst = build_mcp(mode="workspace")
     assert mcp_inst.name == "waveflow"
 
 
-def test_build_mcp_headless_returns_fastmcp(tmp_path):
+def test_build_mcp_headless_returns_mcpserver(tmp_path):
     from waveflow.mcp.server import build_mcp
 
     mcp_inst = build_mcp(mode="headless", work_dir=tmp_path)

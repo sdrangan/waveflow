@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-from waveflow.mcp.registry import REGISTRY
+from waveflow.mcp.registry import REGISTRY, anticipated_as_tool_errors
 
 #: Injected into the model's context by most MCP clients, before it has called
 #: anything.  It is the only text guaranteed to be read, so it carries the two
@@ -26,7 +26,7 @@ Two rules that hold everywhere: anything a tool tags as **generated** is code-ge
 def build_mcp(
     mode: str = "workspace",
     work_dir: str | os.PathLike[str] | None = None,
-) -> FastMCP:
+) -> MCPServer:
     """Create and configure a waveflow MCP server for the given *mode*.
 
     Parameters
@@ -49,7 +49,7 @@ def build_mcp(
 
     Returns
     -------
-    FastMCP
+    MCPServer
         A fully configured MCP server instance ready to be run with
         ``mcp.run(transport="stdio")``.
 
@@ -66,7 +66,7 @@ def build_mcp(
     if mode == "headless" and work_dir is None:
         raise ValueError("work_dir is required for headless mode")
 
-    mcp_instance = FastMCP("waveflow", instructions=INSTRUCTIONS)
+    mcp_instance = MCPServer("waveflow", instructions=INSTRUCTIONS)
     REGISTRY.register_all(mcp_instance, profile=mode)
 
     if mode == "headless":
@@ -83,14 +83,14 @@ def build_mcp(
                 "List files and directories under a path within the configured "
                 "work directory. path defaults to the work directory root."
             ),
-        )(list_files_fn)
+        )(anticipated_as_tool_errors(list_files_fn))
         mcp_instance.tool(
             name="read_file",
             description=(
                 "Read the UTF-8 text content of a file within the configured "
                 "work directory."
             ),
-        )(read_file_fn)
+        )(anticipated_as_tool_errors(read_file_fn))
         mcp_instance.tool(
             name="write_file",
             description=(
@@ -98,7 +98,7 @@ def build_mcp(
                 "work directory. Parent directories are created automatically. "
                 "Existing files are overwritten."
             ),
-        )(write_file_fn)
+        )(anticipated_as_tool_errors(write_file_fn))
         mcp_instance.tool(
             name="edit_file",
             description=(
@@ -106,7 +106,7 @@ def build_mcp(
                 "within the configured work directory. Fails if old_str is not "
                 "found or appears more than once."
             ),
-        )(edit_file_fn)
+        )(anticipated_as_tool_errors(edit_file_fn))
 
     return mcp_instance
 

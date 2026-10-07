@@ -29,9 +29,11 @@ Blind-user harness (all tools)::
 """
 from __future__ import annotations
 
+import functools
 from typing import Any, Callable
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from waveflow.mcp.components import get_components
 from waveflow.mcp.frames import waveflow_get_process, waveflow_list_frames
@@ -43,8 +45,35 @@ from waveflow.mcp.knowledge import (
     waveflow_list_examples,
     waveflow_search,
 )
-from waveflow.mcp.scaffold import waveflow_new_accel_project
+from waveflow.mcp.knowledge.roots import RootNotFound
+from waveflow.mcp.scaffold import ScaffoldError, waveflow_new_accel_project
 from waveflow.mcp.schema_tools import validate_schema_from_file
+
+#: Exceptions a tool raises on purpose, with a message written for the model:
+#: a bad argument (``ValueError``), a project the scaffold cannot write
+#: (``ScaffoldError``), no checkout to index (``RootNotFound``).  Since mcp 2 the
+#: model reads the message of a ``ToolError`` and nothing else -- any other
+#: exception reaches it as just "Error executing tool <name>" -- so these are
+#: re-raised as ``ToolError``.  Everything else is a crash and stays generic, as
+#: mcp 2 intends; the server still logs its traceback.
+ANTICIPATED_ERRORS: tuple[type[Exception], ...] = (ValueError, ScaffoldError, RootNotFound)
+
+
+def anticipated_as_tool_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap *fn* so an :data:`ANTICIPATED_ERRORS` reaches the model as a ``ToolError``.
+
+    ``functools.wraps`` keeps the signature, which is what ``MCPServer`` builds
+    the tool's JSON-Schema from.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except ANTICIPATED_ERRORS as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -85,8 +114,10 @@ class ToolRegistry:
     Responsibilities
     ----------------
     * Store tool definitions (name, description, JSON-Schema parameters, callable).
-    * Register tools with a :class:`~mcp.server.fastmcp.FastMCP` instance,
-      optionally filtered by *profile* (``"workspace"`` or ``"headless"``).
+    * Register tools with a :class:`~mcp.server.mcpserver.MCPServer` instance,
+      optionally filtered by *profile* (``"workspace"`` or ``"headless"``),
+      passing their anticipated errors on to the model (see
+      :data:`ANTICIPATED_ERRORS`).
     * Return OpenAI ``function``-call style schemas for use in the blind-user harness.
     * Dispatch tool calls by name.
     """
@@ -134,13 +165,16 @@ class ToolRegistry:
             profiles=resolved_profiles,
         )
 
-    def register_all(self, mcp: FastMCP, profile: str | None = None) -> None:
+    def register_all(self, mcp: MCPServer, profile: str | None = None) -> None:
         """Register tools with *mcp*, optionally filtered by *profile*.
+
+        Each tool is registered through :func:`anticipated_as_tool_errors`, so
+        the messages its anticipated errors carry reach the model.
 
         Parameters
         ----------
         mcp:
-            The :class:`~mcp.server.fastmcp.FastMCP` instance to register
+            The :class:`~mcp.server.mcpserver.MCPServer` instance to register
             tools with.
         profile:
             When given (``"workspace"`` or ``"headless"``), only tools whose
@@ -149,9 +183,11 @@ class ToolRegistry:
         """
         for tool in self._tools.values():
             if profile is None or profile in tool.profiles:
-                # FastMCP.tool() can be used as a decorator factory; we apply it
+                # MCPServer.tool() can be used as a decorator factory; we apply it
                 # manually so the function stays importable as a plain callable.
-                mcp.tool(name=tool.name, description=tool.description)(tool.fn)
+                mcp.tool(name=tool.name, description=tool.description)(
+                    anticipated_as_tool_errors(tool.fn)
+                )
 
     # ------------------------------------------------------------------
     # OpenAI / function-call schema export

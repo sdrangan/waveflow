@@ -1,8 +1,8 @@
 """The knowledge index: one object holding the corpus, BM25 and the usage map.
 
-Built once per process at server start, in memory, from the live checkout.  The
-whole build is around a second warm and a few seconds cold, so there is nothing
-to persist and nothing to invalidate.
+Built once per process, in memory, from the live checkout, by the first tool
+call that needs it.  The whole build is around a second warm and a few seconds
+cold, so there is nothing to persist and nothing to invalidate.
 
 The BM25 field weights encode the plan's split between the two ways of finding
 things.  Browsing hands the *model* every page's ``title`` + ``summary`` and
@@ -13,6 +13,7 @@ longest page that happens to mention it.
 """
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,12 +86,20 @@ def _build(root: Path | None, refresh: bool) -> KnowledgeIndex:
 
 _INDEX: dict[str, KnowledgeIndex] = {}
 
+#: mcp 2 runs each synchronous tool on a worker thread and serves requests
+#: concurrently, so two first calls arriving together would otherwise both build
+#: the index (and the corpus beneath it) -- seconds of duplicated work, and a
+#: ``refresh`` could clear the dict under a reader.  One lock around the build;
+#: once built, the index is only ever read.
+_INDEX_LOCK = threading.Lock()
+
 
 def get_index(root: Path | None = None, *, refresh: bool = False) -> KnowledgeIndex:
     """The process-wide index for *root*, built on first use."""
     key = str(Path(root).resolve()) if root is not None else ""
-    if refresh:
-        _INDEX.clear()
-    if key not in _INDEX:
-        _INDEX[key] = _build(root, refresh)
-    return _INDEX[key]
+    with _INDEX_LOCK:
+        if refresh:
+            _INDEX.clear()
+        if key not in _INDEX:
+            _INDEX[key] = _build(root, refresh)
+        return _INDEX[key]

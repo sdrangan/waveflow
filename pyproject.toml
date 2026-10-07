@@ -13,10 +13,12 @@ dependencies = [
     "pandas>=2.0",
     "simpy>=4.1",
     "scikit-learn>=1.3",
-    # Upper-bounded on purpose: waveflow.mcp imports `mcp.server.fastmcp.FastMCP`, which the 2.x
-    # line removed.  Unbounded, a fresh install resolves to 2.x and every MCP entry point fails to
-    # import.  Lift the bound only together with a port to the 2.x server API.
-    "mcp[cli]>=1.0,<2.0",
+    # Upper-bounded on purpose: each mcp major has removed the server API the one before ran on
+    # (2.x dropped `mcp.server.fastmcp.FastMCP` for `mcp.server.mcpserver.MCPServer` and changed
+    # what a raised exception shows the model), so a 3.x resolved unbounded could leave every MCP
+    # entry point failing to import.  Lift the bound only together with a port to that API.
+    # No `[cli]` extra: nothing here uses the `mcp` command line.
+    "mcp>=2.3.0,<3",
     "openai>=1.0",
     "platformdirs>=4.0",
     # Imported at module scope by waveflow.utils.vcd / .timing (matplotlib) and
