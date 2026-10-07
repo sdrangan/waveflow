@@ -1,0 +1,19 @@
+# cg_fit_report.csv: step 8.4 fit, model v1; tool=Vitis HLS / Vivado xsim 2024.1
+metric,value
+loo.unit_lut.mean_pct,3.2876299883338835
+loo.unit_lut.max_pct,8.622267412303
+loo.unit_ff.mean_pct,2.8158615239703564
+loo.unit_ff.max_pct,8.14992663732162
+loo.core_lut.mean_pct,2.094269286648285
+loo.core_lut.max_pct,10.604658337189573
+loo.core_ff.mean_pct,3.8277874154847393
+loo.core_ff.max_pct,13.612099644128115
+loo.interval.mean_pct,2.1972382387569236
+loo.interval.max_pct,38.13400655641364
+n_builds,31
+sha256.models/cg_vector_task/params.json,2292a9caddb2005a251f4e456fffcc07efbac1c90766780987f4ac147be202af
+sha256.models/cg_vector_rx_task/params.json,9c52c27e842ccec320a9b8a73bfb29331793bb474e6141f9ba3fe927a93070e6
+sha256.models/cg_vector_load_task/params.json,640639eead9eca7246b9cc66fb9067bc428282094e9aee4663b444c64e07e2f8
+sha256.models/cg_vector_store_task/params.json,72f7d422a333e10fff90139fb515c7b053e3c16dde3785050c7368e039d87adf
+sha256.models/cg_vector_unit_channels/params.json,f2e0dc081ba24dda00cc187fc5c0870a7443d99ed556d4020d87a467899edae1
+sha256.components/cg_vector_unit/params.json,db41221df2f84e9a9ff70fe733bc9b8125ebbc788c8af73e7f555b29c449d278

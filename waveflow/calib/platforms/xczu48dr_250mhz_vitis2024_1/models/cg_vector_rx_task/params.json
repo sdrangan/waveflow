@@ -1,0 +1,28 @@
+{
+  "model": "cg_vector_rx_task",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "counters": {
+    "lut": {
+      "basis": [
+        "word"
+      ],
+      "params": {
+        "coeffs": [
+          0.8765285326086957
+        ],
+        "intercept": 1034.0760869565217
+      }
+    },
+    "ff": {
+      "basis": [
+        "word"
+      ],
+      "params": {
+        "coeffs": [
+          -0.403702445652174
+        ],
+        "intercept": 510.7934782608696
+      }
+    }
+  }
+}

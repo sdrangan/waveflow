@@ -54,8 +54,9 @@ def test_message_features():
     u = unit(8, 32, 4, cg_formats(12, 8))
     s = cg_cost.message_features(u, CgOp.START, 8, 32)
     t = cg_cost.message_features(u, CgOp.STEP, 8, 16)
-    assert (s["start"], s["start_rows"], s["rows"], s["groups"]) == (1, 64, 0, 0)
-    assert (t["start"], t["start_rows"], t["rows"], t["groups"]) == (0, 0, 32, 4)
+    assert (s["start"], s["start_rows"], s["start_groups"], s["rows"]) == (1, 64, 8, 0)
+    assert (t["start"], t["start_rows"], t["start_groups"], t["rows"]) == (0, 0, 0, 32)
+    assert t["groups"] == 4
     assert t["groups_div"] == 4 * (20 + 6)  # rz (20 bits) widened by g_div = 6
     assert s["w_in"] == s["w_out"] == 3 + 128 and t["w_in"] == 3 + 64
 
@@ -64,7 +65,7 @@ def test_fit_message_model_recovers_a_sum():
     rng = np.random.default_rng(4)
     true = {
         "intercept": 40.0,
-        **dict(zip(cg_cost.MESSAGE_TERMS, (60, 1.1, 3.2, 9, 0.4, 1.0, 1.2))),
+        **dict(zip(cg_cost.MESSAGE_TERMS, (60, 1.1, 5.0, 3.2, 9, 0.4, 1.0, 1.2))),
     }
     rows = []
     for _ in range(80):
@@ -91,3 +92,29 @@ def test_models_refuse_another_platform():
     for cls in (type(u), type(u.core), type(u.rx), type(u.load), type(u.store)):
         with pytest.raises(ValueError, match="describe the packaged platform"):
             cls.get_rm(other)
+
+
+def test_packaged_platform_prices_the_centre_build():
+    """The frozen step 8.4 models load from the package and price the centre calibration build
+    (measured: unit 24,224 LUT, 14,482 FF, 52 DSP, 20 BRAM; a STEP of 8 x 32 every 1,411-1,413
+    cycles)."""
+    u = unit(8, 32, 4, cg_formats(12, 8))
+    pred = cg_cost.predict_unit(u)["total"]
+    assert (pred["dsp"], pred["bram"]) == (52, 20)
+    assert pred["lut"] == pytest.approx(24224, rel=0.10)
+    assert pred["ff"] == pytest.approx(14482, rel=0.10)
+    feats = cg_cost.message_features(u, CgOp.STEP, 8, 32)
+    assert cg_cost.message_interval(cg_cost.message_model(), feats) == pytest.approx(
+        1412, rel=0.05
+    )
+
+
+def test_compose_prices_the_unit_like_predict_unit():
+    from waveflow.calib.resource_model import compose
+
+    u = unit(8, 32, 4, cg_formats(12, 8))
+    u.add_rm(cost.platform())
+    est = compose(u)
+    want = cg_cost.predict_unit(u)["total"]
+    for k in ("lut", "ff", "dsp", "bram"):
+        assert est.total[k] == pytest.approx(want[k], abs=1)

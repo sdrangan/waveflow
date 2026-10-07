@@ -64,5 +64,43 @@
   "su_m8_k8_n32_r8_c32_l4_w12_f4_b64"
  ],
  "step": "7.5",
- "version": 2
+ "version": 2,
+ "cg_vector": {
+  "tool": "Vitis HLS / Vivado xsim 2024.1",
+  "builds": [
+   "cg_k16_n16_l2_w10_g4_b64",
+   "cg_k16_n32_l16_w16_g8_b64",
+   "cg_k16_n32_l2_stress_b64",
+   "cg_k16_n32_l4_w12_g8_b64",
+   "cg_k16_n32_l8_w12_g4_b64",
+   "cg_k16_n32_l8_w14_g8_b64",
+   "cg_k4_n16_l1_w8_g0_b32",
+   "cg_k4_n16_l2_w10_g4_b32",
+   "cg_k4_n16_l4_w12_g8_b32",
+   "cg_k4_n16_l8_w12_g8_b32",
+   "cg_k4_n32_l1_w8_g0_b64",
+   "cg_k4_n32_l2_w14_g0_b64",
+   "cg_k4_n32_l4_w12_g8_b64",
+   "cg_k8_n16_l1_w12_g8_b64",
+   "cg_k8_n16_l4_w12_g8_b64",
+   "cg_k8_n16_l4_w8_g0_b32",
+   "cg_k8_n32_l16_w10_g4_b64",
+   "cg_k8_n32_l16_w12_g8_b64",
+   "cg_k8_n32_l1_w12_g8_b64",
+   "cg_k8_n32_l2_w12_g8_b64",
+   "cg_k8_n32_l2_w16_g0_b32",
+   "cg_k8_n32_l4_stress_b32",
+   "cg_k8_n32_l4_w10_g8_b64",
+   "cg_k8_n32_l4_w12_g0_b64",
+   "cg_k8_n32_l4_w12_g4_b64",
+   "cg_k8_n32_l4_w12_g8_b32",
+   "cg_k8_n32_l4_w12_g8_b64",
+   "cg_k8_n32_l4_w14_g8_b64",
+   "cg_k8_n32_l4_w16_g8_b64",
+   "cg_k8_n32_l4_w8_g8_b64",
+   "cg_k8_n32_l8_w12_g8_b64"
+  ],
+  "step": "8.4",
+  "version": 1
+ }
 }

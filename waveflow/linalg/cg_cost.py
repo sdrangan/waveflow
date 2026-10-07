@@ -20,9 +20,10 @@ Cycles
 ------
 A message's time in a stream of messages fed from memory is a sum of compute and transfer::
 
-    interval = c0 + c . (start, start_rows, rows, groups, groups_div, w_in, w_out)
+    interval = c0 + c . (start, start_rows, start_groups, rows, groups, groups_div, w_in, w_out)
 
-``start`` is 1 for a ``START`` and ``start_rows = k·ng`` its pass over the rows (``ng = n/L``); for
+``start`` is 1 for a ``START``, ``start_rows = k·ng`` its pass over the rows and ``start_groups =
+ng`` its loop over the column groups (``ng = n/L``; added on the calibration builds, step 8.4c); for
 a ``STEP``, ``rows = k·ng`` (the three passes and the output), ``groups = ng`` and ``groups_div =
 ng × the dividend's width`` (the dividers' latency grows with it); ``w_in`` and ``w_out`` are the
 words in (header and payload) and out.  A rejected request costs ``q0 + q1·w_in`` right after a
@@ -67,6 +68,7 @@ COMPONENT = "cg_vector_unit"
 MESSAGE_TERMS = (
     "start",
     "start_rows",
+    "start_groups",
     "rows",
     "groups",
     "groups_div",
@@ -74,7 +76,7 @@ MESSAGE_TERMS = (
     "w_out",
 )
 #: The core's own terms: what pysim's core takes (:func:`core_interval`).
-COMPUTE_TERMS = ("start", "start_rows", "rows", "groups", "groups_div")
+COMPUTE_TERMS = ("start", "start_rows", "start_groups", "rows", "groups", "groups_div")
 #: Multiplies per lane of the core.
 MULTS_PER_LANE = 12
 #: The operand width of one full DSP slice (``xczu48dr``'s narrow port).
@@ -261,6 +263,7 @@ def compute_features(op: int, k: int, n: int, *, L: int, formats) -> dict:
     return {
         "start": 1 if start else 0,
         "start_rows": rows if start else 0,
+        "start_groups": ng if start else 0,
         "rows": 0 if start else rows,
         "groups": 0 if start else ng,
         "groups_div": 0 if start else ng * wdiv,
