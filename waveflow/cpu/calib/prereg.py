@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -89,7 +89,9 @@ class SweepPlan:
             raise PreregistrationError(f"{key} is not in {self.path.name}") from None
 
     @staticmethod
-    def write(path: str | Path, rows: list[tuple[str, Mapping[str, Any], str]]) -> Path:
+    def write(
+        path: str | Path, rows: Sequence[tuple[str, Mapping[str, Any], str]]
+    ) -> Path:
         """Write a plan file from ``(kernel, point, role)`` rows (it still has to be committed)."""
         df = pd.DataFrame(
             [
