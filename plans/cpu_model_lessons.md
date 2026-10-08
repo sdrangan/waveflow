@@ -46,3 +46,11 @@ Appended as the work teaches something. Newest last.
   rare input. Widen to int64 before adding.
 - **A test that a gate fails is part of the gate.** Pointing `WAVEFLOW_GEM5_ROOT` at nothing must turn
   `-m gem5` red (it does: 9 of 9 skipped, exit 1); otherwise "9 passed" means nothing.
+- **Fit the criterion you will be judged by.** Ordinary least squares on a corpus spanning five decades
+  of cycles fits the largest points and fails the small ones; the acceptance metric was relative error,
+  and weighting each point by 1/measured^2 fixed every validation miss without changing a model's form.
+- **A validation pass at a few sizes does not cover the sizes between them.** Validation at
+  n = 3/12/48 passed; test at n = 6/24 and dispatch n = 32 missed the max bound by up to 39 %. Small
+  operations carry microarchitectural effects (branch-predictor training, pipeline fill) that counters
+  from a Python twin cannot see, and two seeds per size is thin. Register denser held-out sizes where a
+  family's cost is small.
