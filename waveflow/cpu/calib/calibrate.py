@@ -44,6 +44,35 @@ MAX_BOUND = 0.25
 TARGETS = ("cycles", "energy_pj")
 
 
+@dataclass
+class RelLinCalibModel(LinCalibModel):
+    """A :class:`LinCalibModel` fitted to minimize **relative** error.
+
+    Ordinary least squares minimizes absolute error, so a corpus spanning four or five decades of
+    cycles is fitted to its largest points: on ``cdot_q15`` the first fit bought its 8.5M-cycle DRAM
+    points with a 2,083-cycle intercept, 13x off on a 148-cycle point.  The acceptance criterion is
+    relative (``plans/cpu_model.md`` section 2), so the fit weights each point by ``1 / measured**2``,
+    which makes the weighted squared error the squared relative error.  Only the fit differs: the
+    parameters, the artifact and prediction are a plain :class:`LinCalibModel`'s.
+    """
+
+    def fit(self, data=None) -> RelLinCalibModel:
+        import sklearn.linear_model as sklm  # type: ignore[import-untyped]
+
+        df = self._frame(self._fit_data(data))
+        y = self.target_column(df)
+        if np.any(y <= 0):
+            raise ValueError(f"{self.name}: relative fitting needs positive targets")
+        reg = sklm.LinearRegression(fit_intercept=self.fit_intercept).fit(
+            self.design(df), y, sample_weight=1.0 / (y * y)
+        )
+        self._coef = np.asarray(reg.coef_, dtype=float)
+        self._intercept = float(reg.intercept_) if self.fit_intercept else 0.0
+        self._fitted = True
+        self._record_fit_summary(df)
+        return self
+
+
 def _gather_features(row: dict) -> dict:
     """``gather_hist``'s basis: increments, and increments weighted by the share of the working set
     beyond L1 and beyond L2 -- the expected misses of a uniform random access, from regime features
@@ -75,7 +104,7 @@ class Family:
         return df
 
     def model(self, target: str) -> LinCalibModel:
-        return LinCalibModel(
+        return RelLinCalibModel(
             basis=list(self.basis),
             target=target,
             name=f"{self.name}.{target}",
@@ -362,7 +391,7 @@ def _area_features(row: dict) -> dict:
 
 
 def area_model(target: str) -> LinCalibModel:
-    return LinCalibModel(
+    return RelLinCalibModel(
         basis=["n_cores", "core_l1_kb", "l2_kb"],
         target=target,
         name=f"area.{target}",
