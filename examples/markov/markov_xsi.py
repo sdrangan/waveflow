@@ -12,16 +12,13 @@ Stage 4 of ``plans/mm_credit_stream.md``.  Everything is real RTL under one Veri
   ``target`` -- its peer view's bus word index -- is a constant the top drives, so neither kernel's RTL
   depends on placement.
 
-Nothing about that system is restated here (``plans/xsi_system_top.md``):
-
-* the **top** is walked from the pysim system (:func:`system_spec`, ``waveflow.build.system_top``) with
-  the two kernels and the memory as the cut;
-* the **host** is :class:`~examples.markov.markov.MarkovHost`'s own C++ realization, ``markov_host.h``
-  beside it, named by its ``bfm_model()`` -- a writer that sends each command on ``qcmd`` (room
-  interrupt) while at most ``MAX_IN_FLIGHT`` jobs are out, and a reader that takes each response on
-  ``qresp`` (data interrupt) and then reads that job's ``x`` from the memory.  Nothing polls.  It runs
-  the **scenario bundle** the Python host writes;
-* the **harness** is generated (``system_tb_spec`` / ``render_system_tb``).
+Nothing about that system is restated here: :func:`run_xsi` hands the pysim system object to
+``waveflow.build.system_xsi.run_system_xsi``, which walks it to the top (the two kernels and the memory
+are the cut), generates the harness around the host's C++ twin -- ``MarkovHostModel`` in
+``markov_host.h``: a producer thread sending commands while at most ``max_in_flight`` jobs are out, a
+consumer thread taking each response and reading that job's ``x`` back, on generated endpoints
+(``plans/host_runtime.md``) -- runs it from the scenario the Python host writes, and checks the host
+against pysim.  Nothing polls.
 
 The C++ host reports its bus timing (``DONE``, ``JOBT``, ``OP``); the data -- the responses and each
 job's ``x`` -- comes back as **traces**, decoded here (:func:`trace_report`) into the ``JOB`` lines.
@@ -29,28 +26,16 @@ job's ``x`` -- comes back as **traces**, decoded here (:func:`trace_report`) int
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 
 import numpy as np
 
 from examples.markov.markov import DW, QDEPTH, U8, MarkovSystem, MkvResp, default_jobs
-from waveflow.build.axi_xbar import AxiXbarConfig, generate_axi_xbar
-from waveflow.build.mm_adaptor_gen import leaf_sources
+from waveflow.build.axi_xbar import AxiXbarConfig
 from waveflow.build.mm_writer_gen import writer_top_name
-from waveflow.build.system_top import (
-    SystemTopSpec,
-    beat,
-    last,
-    render_system_tb,
-    render_system_top,
-    system_tb_spec,
-    system_top_spec,
-)
-from waveflow.build.xsi_workspace import XsiWorkspace
+from waveflow.build.system_top import SystemTopSpec, beat, last, system_top_spec
+from waveflow.build.system_xsi import XsiRun, run_system_xsi
 from waveflow.hw.arrayutils import read_array
-from waveflow.hw.mm_device import bus_address_headers
-from waveflow.toolchain.toolchain import find_vitis_include_dir
 from waveflow.utils.burst_io import read_burst_bundle
 
 ROOT = Path(__file__).resolve().parent
@@ -112,26 +97,6 @@ def xbar_config() -> AxiXbarConfig:
     return system_spec().xbar
 
 
-def address_headers() -> dict[str, str]:
-    """The headers the C++ host includes, found by walking the pysim crossbar: the two kernel types'
-    layouts and this system's bases (the memory included)."""
-    return bus_address_headers(system().xbar, system="markov")
-
-
-def workspace(work_dir, probes: bool = False) -> Path:
-    return Path(work_dir).resolve() / ("markov_probes" if probes else "markov")
-
-
-def scenario_path(work_dir, probes: bool = False) -> Path:
-    """The scenario bundle both hosts run -- written into the workspace by :func:`run_xsi`."""
-    return workspace(work_dir, probes) / "scenario"
-
-
-def trace_dir(work_dir, probes: bool = False) -> Path:
-    """Where the C++ host dumps its endpoints' traces (one bundle per endpoint)."""
-    return workspace(work_dir, probes) / "traces"
-
-
 def trace_report(out: str, traces) -> str:
     """One ``JOB <tx> ones=<n> t=<cycle> X <words>`` line per job: the response and the ``x`` words
     from the traces -- the k-th region read follows the k-th response -- and the completion cycle
@@ -181,38 +146,20 @@ def job_results(out: str) -> dict[int, dict]:
     return res
 
 
-def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> str:
-    """Generate the crossbar, the top and the testbench, and run XSI.  Returns the host's report
-    followed by :func:`trace_report`.  Needs Vivado and the four csynth'd tops
+def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> XsiRun:
+    """The system at RTL (``waveflow.build.system_xsi.run_system_xsi``): its top, its host's C++ twin
+    and the harness generated from the pysim system, run under XSI, and the host checked against pysim
+    on the same scenario (``run.trace_mismatches``).  The returned output carries the host's report
+    plus :func:`trace_report`'s ``JOB`` lines.  Needs Vivado and the four csynth'd tops
     (``python -m examples.markov.markov_build``)."""
-    for t in TOPS:
-        if not rtl_dir(t).is_dir():
-            raise FileNotFoundError(f"no csynth RTL for {t}: run python -m examples.markov.markov_build")
-    work_dir = Path(work_dir).resolve()        # Vivado runs in the IP directory: no relative paths
     sysm = system()
-    spec = system_spec(sysm)
-    ip = generate_axi_xbar(spec.xbar, work_dir / "ip")
-    ws = XsiWorkspace(workspace(work_dir, probes), top=spec.top)
-    host = sysm.host
-    host.scenario = scenario_path(work_dir, probes).as_posix()
-    host.trace_dir = trace_dir(work_dir, probes).as_posix()
-    host.write_scenario(host.scenario)
-    shutil.rmtree(host.trace_dir, ignore_errors=True)        # a stale trace would describe another run
-    prb = timing_probes(sysm) if probes else None
-    tb = system_tb_spec(spec, sysm.xbar, [host], probes=list(prb or ()))
-    main, tb_files = render_system_tb(spec, tb)
-    rtl = [f for t in spec.modules for f in sorted(rtl_dir(t).glob("*.v"))]
-    ws.prepare(rtl_files=ip.sim_files + leaf_sources() + rtl + [f"{spec.top}.v"],
-               include_dirs=ip.include_dirs, tb_name="markov_tb", tb_cpp=main,
-               # The host reads MkvResp typed: the generated header, and Vitis's ap_int.h under it.
-               tb_include_dirs=[find_vitis_include_dir(), ROOT / "include"],
-               extra_files={f"{spec.top}.v": render_system_top(spec, prb or None),
-                            **tb_files, **address_headers()})
-    out = ws.run(timeout=timeout)
-    return out + trace_report(out, host.trace_dir)
+    run = run_system_xsi(sysm, work_dir, top="markov_top", xbar_name=XBAR_NAME, workspace="markov",
+                         probes=timing_probes(sysm) if probes else None, timeout=timeout)
+    run.output += trace_report(run.output, run.traces)
+    return run
 
 
 if __name__ == "__main__":
     import sys
-    out = run_xsi(Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "xsi_work")
-    print(out[-4000:])
+    run = run_xsi(Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "xsi_work")
+    print(run.output[-4000:])

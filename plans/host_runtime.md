@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-Stages 1-4 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 5 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-5 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 6 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -187,6 +187,33 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 5 -- `run_system_xsi(sysm)`: DONE, without the derived build (2026-10-08)
+
+- **`waveflow/build/system_xsi.py`**: `run_system_xsi(sysm, work_dir, top=..., xbar_name=, inside=,
+  root=, probes=, workspace=, compare_pysim=True)` takes the pysim system object and nothing else:
+  `discover` finds its one crossbar and one `SwHost` among the simulation's objects and the default cut
+  (each kernel whose device is a crossbar slave, then each memory on it); it checks every module's RTL
+  is present and not stale; generates the crossbar IP, the top, the harness with the host's C++ twin,
+  and the scenario; runs XSI; parses `DONE` / `OP`; and, by default, runs the same system in pysim from
+  the same scenario and compares every endpoint's trace (`compare_traces`).  Returns an `XsiRun`
+  (output, cycles, polls, ops, workspace / scenario / trace paths, `pysim_cycles`, `trace_mismatches`).
+- **`SwHost.write_scenario`** is generic now (a host defines `scenario_bursts`); both hosts lost theirs.
+- **No address headers.**  The generated endpoint headers carry each view's absolute address, so
+  `address_headers()` is gone from both examples.
+- **The examples' `run_xsi` are ten lines each**: `run_system_xsi(system(), ...)` plus the example's own
+  trace decoding (`trace_report`, the lines the gates parse).  The trace gates now assert
+  `run.trace_mismatches == []` (the comparison moved into the framework), and the pysim-tracking gates
+  use `run.pysim_cycles`.  `mm_fir_xsi.py` 150 lines, `markov_xsi.py` 165 (from 417 / 464 before
+  `xsi_system_top`); what is left is constants, the system, the probes and the result decoding.
+- **Gate: mm_fir 8 passed and markov 5 passed, 0 skipped** -- 618 / 611 / 1870, bit-exact, traces
+  identical.  `tests/build/test_system_xsi.py`: discovery on both systems, the refusal for a non-bus
+  system, `compare_traces`.
+- **Not done: the derived build.**  `run_system_xsi` checks the RTL and names the `*_build` script when
+  it is missing or stale; it does not build.  Deriving the build from the system needs each kernel to
+  declare the headers its HLS body includes (schemas, array utilities, framework bodies) and the build
+  to own csynth + the staleness stamp -- a step of its own (proposed: a separate plan), not a corner of
+  this one.
 
 ### Stage 4 -- markov, two threads: DONE (2026-10-08)
 

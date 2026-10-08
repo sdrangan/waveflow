@@ -462,11 +462,6 @@ class FirHost(SwHost):
                 tx += 1
         return out
 
-    def write_scenario(self, path) -> None:
-        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
-        from waveflow.utils.burst_io import write_burst_bundle
-        write_burst_bundle(self.scenario_bursts(), path)
-
     def pre_sim(self) -> None:
         super().pre_sim()
         if self.scenario:

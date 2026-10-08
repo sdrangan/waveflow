@@ -97,7 +97,7 @@ def test_the_generated_fir_testbench_compiles(label, gxx, tmp_path):
     sysm.host.scenario, sysm.host.trace_dir = "scenario", "traces"
     main, files = render_system_tb(spec, system_tb_spec(spec, sysm.xbar, [sysm.host]))
     (tmp_path / "main.cpp").write_text(main, encoding="utf-8")
-    for name, text in {**files, **X.address_headers()}.items():
+    for name, text in files.items():               # no address headers: the views carry addresses
         (tmp_path / name).write_text(text, encoding="utf-8")
     env = dict(os.environ, PATH=f"{gxx.parent}{os.pathsep}{os.environ.get('PATH', '')}")
     r = subprocess.run([str(gxx), "-std=c++14", "-fsyntax-only", "-Wall", f"-I{XSI_SRC}", f"-I{inc}",

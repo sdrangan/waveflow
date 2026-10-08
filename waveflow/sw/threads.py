@@ -270,6 +270,18 @@ class SwHost(HwModule):
     def run_proc(self) -> ProcessGen[None]:
         yield from self.main()
 
+    # -- the scenario both realizations run ------------------------------------------------------------
+
+    def scenario_bursts(self) -> list:  # pragma: no cover - a host with a C++ twin overrides it
+        """The host's scenario as word messages, one burst per item -- the layout is the host's own."""
+        raise NotImplementedError(f"{type(self).__name__} defines no scenario_bursts()")
+
+    def write_scenario(self, path) -> None:
+        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both realizations run
+        (the C++ one always, the Python one when :attr:`scenario` names it)."""
+        from waveflow.utils.burst_io import write_burst_bundle
+        write_burst_bundle(self.scenario_bursts(), path)
+
     # -- traces --------------------------------------------------------------------------------------
 
     def post_sim(self) -> None:
