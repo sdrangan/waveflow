@@ -36,6 +36,11 @@
 
 namespace wfbfm {
 
+// Typed messages -- a generated DataSchema struct instead of words.  Defined in xsi_sw_schema.h (which
+// needs Vitis's ap_int.h); declared here so the typed calls below cost nothing until a host uses them.
+template <class T, int BW> T decode_words(const std::vector<uint64_t>& w);
+template <class T, int BW> std::vector<uint64_t> encode_words(const T& t);
+
 /// The host end of an interrupt line, for a thread: wait() returns when the line is high (at once if
 /// it already is).  Level-sensitive, as IrqIFSink.
 class SwIrq {
@@ -81,6 +86,9 @@ public:
     SwIrq& room_irq(uint32_t n) { s_.uses(this); until_op(ep_.arm_threshold(n)); return irq(); }
     /// One packet, without waiting for room.
     void push(const std::vector<uint64_t>& w) { s_.uses(this); until_op(ep_.push(w)); }
+    /// A typed message, serialized as the Python serializer does (needs xsi_sw_schema.h).
+    template <class T, int BW = 64> void write(const T& m) { write(encode_words<T, BW>(m)); }
+    template <class T, int BW = 64> void push(const T& m) { push(encode_words<T, BW>(m)); }
 
 private:
     SwIrq& irq() {
@@ -111,6 +119,13 @@ public:
         if (!ops.empty()) until_op(ops.back());
         return ep_.finish_pop(ops);
     }
+    /// One typed message, waiting for it / without waiting (needs xsi_sw_schema.h).
+    template <class T, int BW = 64> T get() {
+        return decode_words<T, BW>(get((uint32_t)T::template nwords<BW>()));
+    }
+    template <class T, int BW = 64> T pop() {
+        return decode_words<T, BW>(pop((uint32_t)T::template nwords<BW>()));
+    }
 
 private:
     SwIrq& irq() {
@@ -126,6 +141,7 @@ class RegCfg : public SwEndpoint<MmRegBankCfg> {
 public:
     using SwEndpoint::SwEndpoint;
     void write(const std::vector<uint64_t>& w) { s_.uses(this); ep_.start(w); until_idle(); }
+    template <class T, int BW = 64> void write(const T& m) { write(encode_words<T, BW>(m)); }
 };
 
 /// A register bank's status: the latest status words.
@@ -133,6 +149,7 @@ class StatusReader : public SwEndpoint<MmStatusReader> {
 public:
     using SwEndpoint::SwEndpoint;
     std::vector<uint64_t> read() { s_.uses(this); ep_.start(0); until_idle(); return ep_.words; }
+    template <class T, int BW = 64> T read() { return decode_words<T, BW>(read()); }
 };
 
 /// Plain bus reads and writes of memory that is not a view -- recorded like an endpoint.

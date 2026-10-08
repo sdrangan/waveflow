@@ -26,7 +26,7 @@ _SRC = Path(__file__).resolve().parent / "xsi"
 
 #: The harness files every run needs beside the testbench (the same set XsiHarnessStep copies).
 HARNESS_FILES = ("xsi_bfm.h", "xsi_simobj.h", "xsi_channel.h", "xsi_bundle.h", "xsi_loader.h",
-                 "xsi_mm_host.h", "xsi_fiber.h", "xsi_sw.h",
+                 "xsi_mm_host.h", "xsi_fiber.h", "xsi_sw.h", "xsi_sw_schema.h",
                  "xsi_loader.cpp", "xsi_shared_lib.h", "xsi_rf_block.h", "xsi_rfdc_samp.h",
                  "xsi_rfdc.h", "run.bat", "run.sh")
 
@@ -56,8 +56,13 @@ class XsiWorkspace:
         return f"xsim.dir/{self.top}/xsimk.{'dll' if os.name == 'nt' else 'so'}"
 
     def prepare(self, rtl_files, tb_name: str, tb_cpp: str, include_dirs=(),
-                extra_files: dict[str, str] | None = None) -> None:
+                extra_files: dict[str, str] | None = None, tb_include_dirs=()) -> None:
         """Copy the harness, write ``rtl_<top>.f`` and ``<tb_name>.cpp``, and clear stale outputs.
+
+        *tb_include_dirs* are extra ``-I`` directories for compiling the **testbench** (not the RTL):
+        a software host that reads typed messages includes generated schema headers, which need
+        Vitis's ``ap_int.h`` (``plans/host_runtime.md`` S3).  Passed to the run script as
+        ``WF_TB_CXXFLAGS``.
 
         A cached ``xsim.dir/<top>`` or testbench binary is removed: xelab would otherwise reuse a
         design elaborated from different RTL, and the run would prove nothing about this one.
@@ -75,11 +80,20 @@ class XsiWorkspace:
         for stale in (f"{tb_name}.exe", f"{tb_name}.o", tb_name):
             (self.work_dir / stale).unlink(missing_ok=True)
         self._tb = tb_name
+        import os
+        q = '"' if os.name == "nt" else ""         # cmd keeps quotes; bash would pass them literally
+        self._tb_cxxflags = " ".join(f"-I{q}{Path(d).resolve().as_posix()}{q}" for d in tb_include_dirs)
 
     def run(self, timeout: int = 1800) -> str:
         """Compile, elaborate and run.  Returns the combined output; raises unless it completed."""
+        import os
+        env = dict(os.environ)
+        if getattr(self, "_tb_cxxflags", ""):
+            env["WF_TB_CXXFLAGS"] = self._tb_cxxflags
+        else:
+            env.pop("WF_TB_CXXFLAGS", None)
         r = subprocess.run(xsi_runner_cmd(self.top, self._tb), cwd=str(self.work_dir),
-                           capture_output=True, text=True, timeout=timeout)
+                           capture_output=True, text=True, timeout=timeout, env=env)
         out = (r.stdout or "") + (r.stderr or "")
         if "XSI_EXITCODE=0" not in out:
             raise XsiRunError(f"{self.top}: XSI run did not complete cleanly:\n{out[-4000:]}")

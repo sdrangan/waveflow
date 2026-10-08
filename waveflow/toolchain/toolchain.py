@@ -197,6 +197,19 @@ def _vivado_siblings(vitis_exe: Path, binary_name: str) -> List[Path]:
     return [p for p in candidates if _is_tool_binary(p, binary_name)]
 
 
+def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Optional[Path]:
+    """Vitis's C++ include directory -- ``ap_int.h``, ``hls_stream.h`` -- or ``None``.
+
+    The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
+    ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
+    is ``<install>/bin/vitis-run[.bat]``."""
+    exe = find_vitis_path(top_dir)
+    if not exe:
+        return None
+    inc = Path(exe).resolve().parent.parent / "include"
+    return inc if (inc / "ap_int.h").is_file() else None
+
+
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:
     """
     Locate the Vivado executable used for RTL simulation, synthesis, and implementation.

@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-Stages 1-2 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 3 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-3 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 4 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -171,10 +171,12 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    system `g++` on Linux, where available): a fixed interleaving log, identical every run.  **Gate: 618 / 611 unchanged, bit-exact, trace gate passes** -- same host program, so
    the bus behaviour must not move; a count that moves is a scheduling difference to find.
 3. **Host-side schemas** -- `pop<T>()` / `status<T>()`.  Gate: a round-trip test per schema the hosts read.
-4. **markov, two threads then one.**  First the two-thread port (gate: 1870, traces identical).  Then the
-   **single-thread driver** above -- a different program, so its bus-op order and cycle count may
-   differ: record the new count with the reason (probes), and only with the user's agreement replace
-   `EXPECTED_CYCLES`; the trace gate (per endpoint) must still pass between its Python and C++ forms.
+4. **markov, two threads.**  `MarkovHost`'s C++ twin on the runtime, reading responses as typed
+   `MkvResp` (Stage 3) instead of a bit position handed in.  Gate: 1870, bit-exact, traces identical.
+   *Revised 2026-10-08 with the user:* the host stays **two threads** -- a producer (commands) and a
+   consumer (responses, then the results) -- because that is how this host would be written anyway;
+   the single-thread driver is not ported.  (It remains as a pysim test of the bus primitives,
+   `tests/sw/test_threads.py`.)
 5. **`run_xsi(sysm)`.**  Gate: full `pytest -m xsi`, 0 skipped; each example's RTL gate is
    `run_xsi(System(...))`, and `*_xsi.py` keeps only its scenario and probes, if anything.
 6. **Channels between threads.**  `SwLock`, `SwQueue` exercised by a small two-thread host (e.g. a
@@ -185,6 +187,21 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 3 -- typed host messages: DONE (2026-10-08)
+
+- **`xsi_sw_schema.h`**: `decode_words<T, BW>` / `encode_words<T, BW>` through the generated DataSchema
+  structs (`read_array` / `write_array`), and typed endpoint calls in `xsi_sw.h` --
+  `qresp.get<MkvResp>()`, `pop<T>()`, `status.read<FirStatus>()`, `write(const T&)`, `push(const T&)` --
+  declared against forward-declared templates, so a host that does not use them needs no `ap_int.h`.
+- **The testbench compile can take extra include dirs**: `run.bat` / `run.sh` add `WF_TB_CXXFLAGS` to
+  the testbench line only (unset, the line is exactly as before -- no other gate changes);
+  `XsiWorkspace.prepare(tb_include_dirs=...)` sets it.  `toolchain.find_vitis_include_dir()` (new)
+  finds `ap_int.h` (`find_vitis_path` returns the launcher script, not the install root).
+- **GCC 6.2 compiles the Vitis headers in host code** (Stage 0 had only tried 9.5): no toolchain change.
+- **Gate: `tests/build/test_sw_schema.py`** -- headers generated fresh, MinGW 6.2: Python -> C++
+  (`MkvResp`, `FirStatus`, `FirRespHdr` decode to the fields serialized) and C++ -> Python (`MkvCmd`,
+  `FirCmdHdr` encode to the Python serializer's words exactly).  PASS.
 
 ### Stage 2 -- the C++ runtime, on mm_fir: DONE (2026-10-08)
 
