@@ -28,10 +28,7 @@ import numpy as np
 from examples.mm_fir.mm_fir import (
     DW,
     MmFirSystem,
-    QDEPTH,
-    RDEPTH,
     S16,
-    FirCfg,
     FirCmdHdr,
     FirRespHdr,
     FirStatus,
@@ -41,22 +38,9 @@ from examples.mm_fir.mm_fir import (
 )
 from waveflow.hw.arrayutils import array
 from waveflow.hw.mm_device import bus_address_headers
-from waveflow.build.axi_xbar import (
-    AxiXbarConfig,
-    axi_port_decls,
-    axi_signals,
-    axi_wire_decls,
-    generate_axi_xbar,
-    render_xbar_instance,
-)
-from waveflow.build.mm_adaptor_gen import (
-    QueueView,
-    RegBankView,
-    leaf_sources,
-    mi_wire_signals,
-    render_adaptor_slot,
-    render_view_slot,
-)
+from waveflow.build.axi_xbar import AxiXbarConfig, generate_axi_xbar
+from waveflow.build.mm_adaptor_gen import leaf_sources
+from waveflow.build.system_top import SystemTopSpec, render_system_top, system_top_spec
 from waveflow.build.xsi_workspace import XsiWorkspace
 
 ROOT = Path(__file__).resolve().parent
@@ -68,15 +52,10 @@ RTL = ROOT / "mm_fir_proj" / "solution1" / "syn" / "verilog"
 #:                crossbar.  MI1 is a stub nothing addresses: a 1x1 crossbar is degenerate (create_ip
 #:                generates an inconsistent 2-MI IP for it -- see AxiXbarConfig), and a real system has
 #:                more than one slave anyway.
-#: Their crossbars' IP names.  The ranges are NOT written here: :func:`xbar_config` reads them off the
-#: pysim system's crossbar, where ``assign_address_ranges`` set them (``plans/bus_address_map.md`` D4).
+#: Their crossbars' IP names.  Nothing else about the top is written here: :func:`system_spec` walks
+#: the pysim system (``waveflow.build.system_top``, ``plans/xsi_system_top.md`` S3) -- the crossbar's
+#: ranges are where ``assign_address_ranges`` set them (``plans/bus_address_map.md`` D4).
 XBAR_NAMES = {"per_view": "xbar_mm4_1x4", "one_front": "xbar_mm1_1x2"}
-NCFG = FirCfg.nwords_per_inst(DW)
-NSTAT = FirStatus.nwords_per_inst(DW)
-VIEWS = [RegBankView("regs", ncfg=NCFG, nstat=NSTAT, cfg_axis="k_cfg", status_axis="k_stat"),
-         QueueView("qin", "in", axis="k_in", depth=QDEPTH),
-         QueueView("qout", "out", axis="k_out", depth=QDEPTH),
-         QueueView("qresp", "out", axis="k_resp", depth=RDEPTH)]
 
 NSAMP, SWITCH_AT, PKT, POLL = 200, 101, 16, 8
 
@@ -95,73 +74,35 @@ PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
 
 
 #: Timing probes: one-bit handshakes the top exposes as outputs when built with ``probes=True``; the
-#: testbench samples them every cycle and prints the cycles each fired.  Off for the gate.
+#: testbench samples them every cycle and prints the cycles each fired.  Off for the gate.  The nets
+#: are the pysim system's stream channels, by name (``build_mm_device``: ``k_<view>``).
 PROBES = {
-    "in": "k_in_TVALID && k_in_TREADY",          # the kernel takes a word from queue in (header or samples)
-    "cfg": "k_cfg_TVALID && k_cfg_TREADY",       # ... a config word
-    "out": "k_out_TVALID && k_out_TREADY",       # a result into queue out
-    "resp": "k_resp_TVALID && k_resp_TREADY",    # a response word
-    "stat": "k_stat_TVALID && k_stat_TREADY",    # a status word
-    "out_full": "k_out_TVALID && !k_out_TREADY",  # the kernel held up by a full queue out
+    "in": "k_qin_TVALID && k_qin_TREADY",              # the kernel takes a word from queue in
+    "cfg": "k_regs_cfg_TVALID && k_regs_cfg_TREADY",   # ... a config word
+    "out": "k_qout_TVALID && k_qout_TREADY",           # a result into queue out
+    "resp": "k_qresp_TVALID && k_qresp_TREADY",        # a response word
+    "stat": "k_regs_stat_TVALID && k_regs_stat_TREADY",  # a status word
+    "out_full": "k_qout_TVALID && !k_qout_TREADY",     # the kernel held up by a full queue out
 }
+
+
+def system_spec(topology: str) -> SystemTopSpec:
+    """The RTL top for *topology*, walked from the pysim system: the kernel is the cut, so its device
+    (views, adaptor) is inside, and the host's bus master and interrupt lines are top ports."""
+    if topology not in XBAR_NAMES:
+        raise ValueError(f"topology must be one of {sorted(XBAR_NAMES)}, got {topology!r}")
+    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    return system_top_spec(sysm.xbar, [sysm.fir], top="mm_fir_top", xbar_name=XBAR_NAMES[topology])
 
 
 def xbar_config(topology: str) -> AxiXbarConfig:
     """The RTL crossbar for *topology*, generated from the pysim system's own crossbar -- the same
     slaves at the same ranges, so an address is written once (``MM_BASE`` + the type's layout)."""
-    if topology not in XBAR_NAMES:
-        raise ValueError(f"topology must be one of {sorted(XBAR_NAMES)}, got {topology!r}")
-    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
-    return AxiXbarConfig.from_crossbar(sysm.xbar, XBAR_NAMES[topology])
+    return system_spec(topology).xbar
 
 
 def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
-
-
-def render_top(top: str, topology: str, probes: bool = False) -> str:
-    xbar = xbar_config(topology)
-    dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
-    ports = ["input wire ap_clk", "input wire ap_rst_n"]
-    ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
-    # The queue views' interrupts, for the host (plans/mm_irq.md): the testbench samples these pins.
-    ports += [f"output wire irq_{v.name}" for v in VIEWS if isinstance(v, QueueView)]
-    if probes:
-        ports += [f"output wire probe_{n}" for n in PROBES]
-    mi = [f"mi{k}_axi" for k in range(len(xbar.mi))]
-    body = []
-    for p in mi:
-        body += ["  " + d for d in axi_wire_decls(p, mi_wire_signals(dw, aw, idw))]
-    for g in ("k_cfg", "k_stat", "k_in", "k_out", "k_resp"):
-        body += [f"  wire [{dw - 1}:0] {g}_TDATA;", f"  wire {g}_TVALID, {g}_TREADY, {g}_TLAST;"]
-    # The kernel's ports carry no TLAST (it filters sample by sample and reads a fixed-size config),
-    # so the TLASTs the leaves drive go nowhere, and the ones they read are tied low: the status bank
-    # completes a message on its NSTAT-th word, and a queue out ignores TLAST.
-    body += ["  assign k_stat_TLAST = 1'b0;", "  assign k_out_TLAST = 1'b0;",
-             "  assign k_resp_TLAST = 1'b0;"]
-    body.append(render_xbar_instance(xbar, "u_xbar", ["s0_axi"], mi))
-    if topology == "one_front":
-        body.append(render_adaptor_slot("fir_mm", VIEWS, mi[0], dw, aw, idw))
-        # The stub on MI1: every slave-driven signal held low.  Never addressed in this test.
-        body += [f"  assign {mi[1]}_{name} = 0;" for name, _w, m2s in mi_wire_signals(dw, aw, idw)
-                 if not m2s]
-    else:
-        for view, p in zip(VIEWS, mi):
-            body.append(render_view_slot(view, p, dw, aw, idw))
-    body += [f"  assign irq_{v.name} = {v.name}_irq;" for v in VIEWS if isinstance(v, QueueView)]
-    if probes:
-        body += [f"  assign probe_{n} = {e};" for n, e in PROBES.items()]
-    body.append("""  mm_fir u_fir (
-    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),
-    .s_cfg_TDATA(k_cfg_TDATA), .s_cfg_TVALID(k_cfg_TVALID), .s_cfg_TREADY(k_cfg_TREADY),
-    .s_in_TDATA(k_in_TDATA), .s_in_TVALID(k_in_TVALID), .s_in_TREADY(k_in_TREADY),
-    .m_out_TDATA(k_out_TDATA), .m_out_TVALID(k_out_TVALID), .m_out_TREADY(k_out_TREADY),
-    .m_resp_TDATA(k_resp_TDATA), .m_resp_TVALID(k_resp_TVALID), .m_resp_TREADY(k_resp_TREADY),
-    .m_status_TDATA(k_stat_TDATA), .m_status_TVALID(k_stat_TVALID), .m_status_TREADY(k_stat_TREADY)
-  );""")
-    return (f"// {top}.v -- GENERATED by examples/mm_fir/mm_fir_xsi.py (mm_fir, {topology}).\n"
-            f"`timescale 1ns/1ps\nmodule {top} (\n  " + ",\n  ".join(ports) + "\n);\n"
-            + "\n".join(body) + "\nendmodule\n")
 
 
 def field_pos(schema, name: str) -> tuple[int, int, int]:
@@ -407,11 +348,12 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600, probes: bool = False) 
     if not RTL.is_dir():
         raise FileNotFoundError(f"no csynth RTL at {RTL}: run python -m examples.mm_fir.mm_fir_build")
     work_dir = Path(work_dir)
-    ip = generate_axi_xbar(xbar_config(topology), work_dir / "ip")
+    spec = system_spec(topology)
+    ip = generate_axi_xbar(spec.xbar, work_dir / "ip")
     ws = XsiWorkspace(work_dir / f"mm_fir_{topology}{'_probes' if probes else ''}", top="mm_fir_top")
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + ["mm_fir_top.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb",
                tb_cpp=render_tb(ws.design_dll, scenario_x(), probes=probes),
-               extra_files={"mm_fir_top.v": render_top("mm_fir_top", topology, probes=probes),
+               extra_files={"mm_fir_top.v": render_system_top(spec, PROBES if probes else None),
                             **address_headers()})
     return ws.run(timeout=timeout)

@@ -74,9 +74,14 @@ hand-written framework bodies, copied in by `MemStreamStep`.
 
 **Assemble the RTL top.** For `mem_copy` there is nothing to assemble: it has no RTL modules, so the
 RTL top *is* the Vitis kernel. A design with RTL modules gets a generated wrapper instead —
-`wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)) — and a design reached
-over a bus adds a [memory-mapped adaptor](../interface/axi_mm/slave.md) and AMD's crossbar, as in
-[mm_fir](../../examples/mm_fir/).
+`wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)). A **system** — several
+kernels reached over a bus, each behind a [memory-mapped adaptor](../interface/axi_mm/slave.md), with
+AMD's crossbar and an on-chip memory — gets its top from
+[`system_top`](../../../waveflow/build/system_top.py), which walks the pysim system: name the cut
+(`system_top_spec(xbar, [kernels..., memory])`) and every crossbar slot, adaptor, stream net, credit
+link writer and interrupt output follows from the graph. [mm_fir](../../examples/mm_fir/rtlsim.md) and
+[markov](../../examples/markov/rtlsim.md) are the worked cases; their cycle counts (618 / 611 and
+1870) were unchanged when their hand-rendered tops were replaced by it.
 
 **Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,
 checks that every BFM module has a C++ BFM and every port of the RTL top is covered, and
@@ -103,5 +108,6 @@ file list and the harness and invokes the same `run.bat` / `run.sh`.
 
 **Source of truth:** `waveflow/build/composite_gen.py` (`composite_top_spec`, `render_top`,
 `tb_top_spec`, `render_tb_harness`), `waveflow/build/wrapper_gen.py` (the RTL top, when there is one),
+`waveflow/build/system_top.py` (a system's RTL top),
 `waveflow/build/hwcodegen_steps.py` (`TaskBodyStep`), `waveflow/build/streamutils.py`
 (`MemStreamStep`), `tests/examples/test_xsi_bfm.py` (the cycle gates).

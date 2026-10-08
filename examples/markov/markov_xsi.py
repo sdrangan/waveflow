@@ -11,10 +11,10 @@ Stage 4 of ``plans/mm_credit_stream.md``.  Everything is real RTL under one gene
   the queue writer and the credit writer (``waveflow/build/mm_writer_gen.py``).  Each writer's ``target`` -- its peer view's bus
   word index -- is a constant the top drives, so neither kernel's RTL depends on placement.
 
-The top is wired from the csynth'd modules' own port lists (:func:`module_ports`), not from a table of
-pin names: an ``m_axi`` pin the crossbar has is joined to its SI slot, one it lacks is tied off (an
-input) or left open (an output), and every ``s_axi_control`` input is tied low -- the ``m_axi`` base
-register stays 0, so a bus address is the address.
+The top is not written here: :func:`system_spec` walks the pysim system
+(:mod:`waveflow.build.system_top`, ``plans/xsi_system_top.md`` S3) with the two kernels and the memory
+as the cut.  Each kernel's pins come from the same ``TopSpec`` its csynth top was built from, and the
+tie-off rules (``s_axi_control`` low, crossbar-less ``m_axi`` pins, IDs) are the framework's.
 
 The host (:func:`render_tb`) is the pysim :class:`~examples.markov.markov.MarkovHost` on the C++
 endpoints of ``xsi_mm_host.h``: a writer that sends each command on ``qcmd`` (room interrupt) while at
@@ -23,22 +23,15 @@ interrupt) and then reads that job's ``x`` from the memory.  Nothing polls.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
 
 from examples.markov.markov import (
-    CDEPTH,
-    CHAIN_LAYOUT,
-    CHAIN_BASE,
     DW,
-    GEN_BASE,
-    GEN_LAYOUT,
     MAX_IN_FLIGHT,
     MEM_BASE,
     QDEPTH,
-    RDEPTH,
     REGION_BYTES,
     U8,
     MarkovSystem,
@@ -46,24 +39,10 @@ from examples.markov.markov import (
     MkvResp,
     default_jobs,
 )
-from waveflow.build.axi_xbar import (
-    AxiXbarConfig,
-    axi_port_decls,
-    axi_signals,
-    axi_wire_decls,
-    generate_axi_xbar,
-    render_xbar_instance,
-)
-from waveflow.build.mm_adaptor_gen import (
-    BramView,
-    CreditInView,
-    QueueView,
-    leaf_sources,
-    mi_wire_signals,
-    render_adaptor_slot,
-    render_view_slot,
-)
+from waveflow.build.axi_xbar import AxiXbarConfig, generate_axi_xbar
+from waveflow.build.mm_adaptor_gen import leaf_sources
 from waveflow.build.mm_writer_gen import writer_top_name
+from waveflow.build.system_top import SystemTopSpec, render_system_top, system_top_spec
 from waveflow.build.xsi_workspace import XsiWorkspace
 from waveflow.hw.arrayutils import get_nwords
 from waveflow.hw.mm_device import bus_address_headers
@@ -81,33 +60,27 @@ def rtl_dir(top: str) -> Path:
 
 
 XBAR_NAME = "xbar_markov_4x3"
-#: Four masters need two ID bits to route responses back.
-ID_WIDTH = 2
 #: The testbench scenario: four jobs of 300 steps (two in flight at a time).
 NJOBS, NSTEPS = 4, 300
 POLL = 8
 
-GEN_VIEWS = [QueueView("qcmd", "in", axis="k_cmd", depth=CDEPTH), CreditInView("u_crd", axis="k_ucrd")]
-CHAIN_VIEWS = [QueueView("qu", "in", axis="k_u", depth=QDEPTH),
-               QueueView("qresp", "out", axis="k_resp", depth=RDEPTH)]
-MEM_VIEW = BramView("mem", kport="memb", baw=9)            # 512 words = the 4 KB window
-
-
 #: Timing probes (plans: markov-timing): one-bit handshakes the top exposes as outputs when built with
-#: ``probes=True``, and the testbench samples every cycle.  Off for the gate.
+#: ``probes=True``, and the testbench samples every cycle.  Off for the gate.  The nets are the pysim
+#: system's channels, by name: a view's ``<kernel>_k_<view>``, the credit link's ``u_fwd`` (``_q`` past
+#: its FIFO) and ``u_crd``; the SI slots are the crossbar's master order.
 PROBES = {
-    "cmd": "k_cmd_TVALID && k_cmd_TREADY",                  # host's command reaches the generator
-    "ufwd": "k_ufwd_TVALID && k_ufwd_TREADY",               # generator -> its queue writer, a word
-    "ufwd_last": "k_ufwd_TVALID && k_ufwd_TREADY && k_ufwd_TLAST",
+    "cmd": "gen_k_qcmd_TVALID && gen_k_qcmd_TREADY",        # host's command reaches the generator
+    "ufwd": "u_fwd_TVALID && u_fwd_TREADY",                 # generator -> its queue writer, a word
+    "ufwd_last": "u_fwd_TVALID && u_fwd_TREADY && u_fwd_TLAST",
     "wr1_aw": "si1_axi_AWVALID && si1_axi_AWREADY",          # queue writer: a burst issued
     "wr1_b": "si1_axi_BVALID && si1_axi_BREADY",             # ... and acknowledged
-    "u": "k_u_TVALID && k_u_TREADY",                         # chain takes a word from its queue in
-    "crd": "k_crd_TVALID && k_crd_TREADY",                   # chain offers credit
+    "u": "chain_k_qu_TVALID && chain_k_qu_TREADY",           # chain takes a word from its queue in
+    "crd": "u_crd_TVALID && u_crd_TREADY",                   # chain offers credit
     "wr2_aw": "si2_axi_AWVALID && si2_axi_AWREADY",          # credit writer: a credit write
-    "ucrd": "k_ucrd_TVALID && k_ucrd_TREADY",                # generator takes a credit value
+    "ucrd": "gen_k_u_crd_TVALID && gen_k_u_crd_TREADY",      # generator takes a credit value
     "wr3_aw": "si3_axi_AWVALID && si3_axi_AWREADY",          # chain's memory writer: a burst
     "wr3_b": "si3_axi_BVALID && si3_axi_BREADY",
-    "resp": "k_resp_TVALID && k_resp_TREADY",                # a response word into qresp
+    "resp": "chain_k_qresp_TVALID && chain_k_qresp_TREADY",  # a response word into qresp
 }
 
 
@@ -119,123 +92,17 @@ def system() -> MarkovSystem:
     return MarkovSystem(jobs=scenario_jobs(), link="mm")
 
 
+def system_spec() -> SystemTopSpec:
+    """The RTL top, walked from the pysim system with the two kernels and the shared memory as the cut:
+    their adaptors and the credit link's two writers come with them; the host is outside."""
+    sysm = system()
+    return system_top_spec(sysm.xbar, [sysm.gen, sysm.chain, sysm.mem], top="markov_top",
+                           xbar_name=XBAR_NAME)
+
+
 def xbar_config() -> AxiXbarConfig:
     """The RTL crossbar, generated from the pysim crossbar: the same slaves at the same ranges."""
-    return AxiXbarConfig.from_crossbar(system().xbar, XBAR_NAME, id_width=ID_WIDTH)
-
-
-def module_ports(top: str) -> list[tuple[str, str]]:
-    """``(direction, name)`` of every port of the csynth'd module *top*, from its Verilog."""
-    src = (rtl_dir(top) / f"{top}.v").read_text(encoding="utf-8", errors="replace")
-    body = src[src.index(f"module {top}"):]
-    body = body[:body.index("endmodule")]
-    return [(m[1], m[2]) for m in re.finditer(r"^\s*(input|output)\s+(?:wire\s+)?(?:\[[^\]]*\]\s*)?(\w+)\s*;",
-                                              body, re.M)]
-
-
-_STREAM_SUFFIXES = ("TDATA", "TVALID", "TREADY", "TLAST", "TKEEP", "TSTRB")
-
-
-def _stream_wires(net: str) -> list[str]:
-    return [f"  wire [{DW - 1}:0] {net}_TDATA;", f"  wire {net}_TVALID, {net}_TREADY, {net}_TLAST;",
-            f"  wire [{DW // 8 - 1}:0] {net}_TKEEP, {net}_TSTRB;"]
-
-
-def _instance(top: str, inst: str, streams: dict[str, str], si: str | None = None,
-              target: int | None = None) -> str:
-    """Instantiate *top*, connecting each port by rule: clock/reset; a stream port group to the net
-    ``streams[<port prefix>]``; ``m_axi_gmem0_*`` to the SI wires *si* (IDs: ours are driven 0 outside,
-    the kernel's BID/RID take bit 0; a pin the crossbar lacks is tied 0 / left open); every
-    ``s_axi_control`` input tied 0; ``target`` to the constant."""
-    si_sigs = {name for name, _w, _m in axi_signals(DW, 32, ID_WIDTH)}
-    conns = []
-    for d, name in module_ports(top):
-        if name in ("ap_clk", "ap_rst_n"):
-            conns.append(f".{name}({name})")
-        elif name == "target":
-            conns.append(f".target(32'd{int(target)})")
-        elif name.startswith("s_axi_control_"):
-            conns.append(f".{name}({'0' if d == 'input' else ''})")
-        elif name.startswith("m_axi_gmem0_"):
-            sig = name[len("m_axi_gmem0_"):]
-            if si is None or sig not in si_sigs:
-                conns.append(f".{name}({'0' if d == 'input' else ''})")
-            elif sig in ("AWID", "ARID"):
-                conns.append(f".{name}()")                    # driven 0 on the SI side instead
-            elif sig in ("BID", "RID"):
-                conns.append(f".{name}({si}_{sig}[0])")
-            else:
-                conns.append(f".{name}({si}_{sig})")
-        else:
-            for prefix, net in streams.items():
-                if name.startswith(prefix + "_") and name[len(prefix) + 1:] in _STREAM_SUFFIXES:
-                    conns.append(f".{name}({net}_{name[len(prefix) + 1:]})")
-                    break
-            else:
-                conns.append(f".{name}({'0' if d == 'input' else ''})")    # interrupt etc.
-    return f"  {top} {inst} (\n    " + ",\n    ".join(conns) + "\n  );"
-
-
-def render_top(top: str = "markov_top", probes: bool = False) -> str:
-    xbar = xbar_config()
-    dw, aw, idw = xbar.data_width, xbar.addr_width, xbar.id_width
-    gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
-    bpw = DW // 8
-    ports = ["input wire ap_clk", "input wire ap_rst_n"]
-    ports += axi_port_decls("s0_axi", axi_signals(dw, aw, idw), facing="slave")
-    ports += ["output wire irq_qcmd", "output wire irq_qresp"]
-    if probes:
-        ports += [f"output wire probe_{n}" for n in PROBES]
-    si = ["s0_axi", "si1_axi", "si2_axi", "si3_axi"]
-    mi = ["mi0_axi", "mi1_axi", "mi2_axi"]
-    body = []
-    for p in si[1:]:
-        body += ["  " + d for d in axi_wire_decls(p, axi_signals(dw, aw, idw))]
-        body += [f"  assign {p}_AWID = 0;", f"  assign {p}_ARID = 0;"]
-    for p in mi:
-        body += ["  " + d for d in axi_wire_decls(p, mi_wire_signals(dw, aw, idw))]
-    for net in ("k_cmd", "k_ucrd", "k_ufwd", "k_wr1", "k_u", "k_crd", "k_resp"):
-        body += _stream_wires(net)
-    # The forward FIFO: generator -> FIFO -> queue writer, at the depth the pysim channel declares (the
-    # writer is store-and-forward; without it the generator stalls for every burst).
-    depth = int(system().u_link.fwd_depth)
-    body += [
-        f"  wire [{dw}:0] ufifo_dout; wire ufifo_full, ufifo_empty; wire [$clog2({depth}):0] ufifo_count;",
-        f"  mm_sync_fifo #(.W({dw + 1}), .DEPTH({depth})) u_ufifo (",
-        "    .clk(ap_clk), .rst_n(ap_rst_n),",
-        "    .push(k_ufwd_TVALID && !ufifo_full), .din({k_ufwd_TLAST, k_ufwd_TDATA}),",
-        "    .pop(k_wr1_TVALID && k_wr1_TREADY), .dout(ufifo_dout),",
-        "    .full(ufifo_full), .empty(ufifo_empty), .count(ufifo_count));",
-        "  assign k_ufwd_TREADY = !ufifo_full;",
-        "  assign k_wr1_TVALID = !ufifo_empty;",
-        f"  assign k_wr1_TDATA = ufifo_dout[{dw - 1}:0];",
-        f"  assign k_wr1_TLAST = ufifo_dout[{dw}];",
-        f"  assign k_wr1_TKEEP = {{{dw // 8}{{1'b1}}}};",
-        f"  assign k_wr1_TSTRB = {{{dw // 8}{{1'b1}}}};",
-    ]
-    # The queue out reads a TLAST the chain's response port does not have (it is unframed).
-    body.append("  assign k_resp_TLAST = 1'b0;")
-    body.append(render_xbar_instance(xbar, "u_xbar", si, mi))
-    body.append(render_adaptor_slot("gen_mm", GEN_VIEWS, mi[0], dw, aw, idw))
-    body.append(render_adaptor_slot("chain_mm", CHAIN_VIEWS, mi[1], dw, aw, idw))
-    # The shared memory: a BRAM window whose kernel port (B) nothing uses.
-    body += ["  wire [31:0] memb_addr = 0; wire memb_en = 1'b0; wire [1:0] memb_we = 2'b0;",
-             f"  wire [{dw - 1}:0] memb_din = 0; wire [{dw - 1}:0] memb_dout;"]
-    body.append(render_view_slot(MEM_VIEW, mi[2], dw, aw, idw))
-    body += ["  assign irq_qcmd = qcmd_irq;", "  assign irq_qresp = qresp_irq;"]
-    if probes:
-        body += [f"  assign probe_{n} = {e};" for n, e in PROBES.items()]
-    body.append(_instance("markov_gen", "u_gen",
-                          {"s_cmd": "k_cmd", "m_u_fwd": "k_ufwd", "m_u_crd": "k_ucrd"}))
-    body.append(_instance("markov_chain", "u_chain",
-                          {"s_u_fwd": "k_u", "s_u_crd": "k_crd", "m_resp": "k_resp"}, si="si3_axi"))
-    body.append(_instance(QWRITER, "u_fwd_wr", {"s_in": "k_wr1"}, si="si1_axi",
-                          target=cmap["qu"].base // bpw))
-    body.append(_instance(CWRITER, "u_crd_wr", {"s_in": "k_crd"}, si="si2_axi",
-                          target=gmap["u_crd"].base // bpw))
-    return (f"// {top}.v -- GENERATED by examples/markov/markov_xsi.py.\n"
-            f"`timescale 1ns/1ps\nmodule {top} (\n  " + ",\n  ".join(ports) + "\n);\n"
-            + "\n".join(body) + "\nendmodule\n")
+    return system_spec().xbar
 
 
 def address_headers() -> dict[str, str]:
@@ -256,6 +123,7 @@ def field_pos(schema, name: str) -> tuple[int, int, int]:
 
 def render_tb(dll: str, probes: bool = False) -> str:
     jobs = scenario_jobs()
+    irq = {view: port for port, view in system_spec().irqs}
     includes = "\n".join(f'#include "{h}"' for h in address_headers())
     rows = []
     for j, job in enumerate(jobs):
@@ -374,7 +242,7 @@ private:
 int main() {{
     XsiSim sim("{dll}", "markov.wdb");
     AxiMmMaster host(sim.dut(), "s0_axi", 8, 0, /*overlap_rw=*/true);
-    IrqPin irq_qcmd(sim.dut(), "irq_qcmd"), irq_qresp(sim.dut(), "irq_qresp");
+    IrqPin irq_qcmd(sim.dut(), "{irq["gen_qcmd"]}"), irq_qresp(sim.dut(), "{irq["chain_qresp"]}");
 {probe_decl}
     Reader rd(host, irq_qresp);
     Writer wr(host, irq_qcmd);
@@ -447,13 +315,14 @@ def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> str:
         if not rtl_dir(t).is_dir():
             raise FileNotFoundError(f"no csynth RTL for {t}: run python -m examples.markov.markov_build")
     work_dir = Path(work_dir).resolve()        # Vivado runs in the IP directory: no relative paths
-    ip = generate_axi_xbar(xbar_config(), work_dir / "ip")
+    spec = system_spec()
+    ip = generate_axi_xbar(spec.xbar, work_dir / "ip")
     ws = XsiWorkspace(work_dir / ("markov_probes" if probes else "markov"), top="markov_top")
-    rtl = [f for t in TOPS for f in sorted(rtl_dir(t).glob("*.v"))]
+    rtl = [f for t in spec.modules for f in sorted(rtl_dir(t).glob("*.v"))]
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + rtl + ["markov_top.v"],
                include_dirs=ip.include_dirs, tb_name="markov_tb",
                tb_cpp=render_tb(ws.design_dll, probes=probes),
-               extra_files={"markov_top.v": render_top("markov_top", probes=probes),
+               extra_files={"markov_top.v": render_system_top(spec, PROBES if probes else None),
                             **address_headers()})
     return ws.run(timeout=timeout)
 

@@ -174,3 +174,34 @@ Baseline before any change: `pytest tests/examples/test_mm_fir_xsi.py tests/exam
   member.
 - Docs: `bfm_model.md` "A model beside the example".
 - Stages 1 and 2 share edits to `composite_gen.py`, so they are one commit.
+
+### Stage 3 -- generate the RTL top: DONE
+
+- `waveflow/build/system_top.py`: `system_top_spec(xbar, inside, top=, xbar_name=, id_width=)` walks
+  the pysim system from its crossbar; `render_system_top(spec, probes=)` emits the Verilog.  `inside`
+  is the **set** cut: kernels + on-chip memories.  A kernel's device (views / adaptor) and a routed
+  credit link's two writers come with it; a crossbar master not owned by an inside module becomes a
+  top AXI4 slave group `s<k>_axi`; an interrupt line whose sink is outside becomes `irq_<view>`.
+- Kernel pins come from `composite_top_spec` on a **fresh** instance (exactly what `<ex>_build.gen_top`
+  csynth'd -- the in-system instance refuses, its boundary channels carry depths) plus Vitis's fixed
+  `m_axi` / `s_axi_control` pin set (`VITIS_MAXI_PINS`); writers from `mm_writer_gen.writer_rtl`
+  (new; `MmCreditStreamIF.place` now records `fwd_writer.max_packet`, the queue depth the writer top
+  is specialized on).  `test_system_top.py` checks the derived pins **equal the csynth'd `.v` port
+  lists** for all five modules (markov's four + mm_fir) -- they do, exactly.
+- Tie-off rules live once in `system_top.py` (module docstring).  The ID-width rule
+  `max(1, ceil(log2 n_si))` reproduces both hand choices (1 for mm_fir, 2 for markov).
+- Net names are now the pysim channel names (`k_qin`, `k_regs_cfg`, `gen_k_qcmd`, `u_fwd`, ...), so the
+  examples' `PROBES` were renamed; markov's top interrupt outputs are `irq_gen_qcmd` /
+  `irq_chain_qresp` (were `irq_qcmd` / `irq_qresp`) and its `render_tb` takes them from the spec.
+- Hand `render_top`s deleted (plus markov's `module_ports`, `_instance`, `_stream_wires`, view tables,
+  `ID_WIDTH`; mm_fir's `VIEWS`).  `xbar_config()` kept in both, now `system_spec(...).xbar`.
+- **Before running RTL**, the generated tops were diffed against the hand tops (sorted lines, nets
+  renamed): identical but for net/instance names, pin order and some extra (unused) `TKEEP/TSTRB`
+  wires; the crossbar configs compare equal (same IP digest).
+- **Gate:** `pytest tests/examples/test_mm_fir_xsi.py tests/examples/test_markov_xsi.py -m xsi` --
+  **10 passed, 0 skipped**: mm_fir **618 / 611**, markov **1870**, bit-exact.  Checked that each
+  workspace's top is the generated one and its `xsimk.dll` was rebuilt after it.
+- Docs: `concurrent_flowsteps.md` (a system's top comes from `system_top`), `examples/mm_fir/rtlsim.md`,
+  `examples/markov/rtlsim.md`.
+- Not done (open): an off-chip memory (a `FlatMemory` beside the top) and a BRAM window shared with a
+  kernel are refused with a named error rather than wired -- neither example needs them.
