@@ -1,0 +1,14 @@
+# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
+metric,n,value,worst
+DSP exact (%),1440,8.750000e+01,
+BRAM exact (%),1440,1.000000e+02,
+LUT MAPE (%),1440,1.125100e+01,4.762600e+01
+FF MAPE (%),1440,9.047000e+00,4.614300e+01
+"job time MAPE (%), loop-dominated",8817,1.924000e+00,8.928000e+00
+"job time MAPE (%), under the guard",183,7.581000e+00,3.358900e+01
+"LUT MAPE (%), 1 lanes",480,2.671900e+01,4.762600e+01
+"LUT MAPE (%), 4 lanes",480,3.856000e+00,1.320300e+01
+"LUT MAPE (%), 16 lanes",480,3.177000e+00,1.051200e+01
+"job time MAPE (%), loop-dominated, K = 4",1440,2.458000e+00,7.923000e+00
+"job time MAPE (%), loop-dominated, K = 8",3180,1.971000e+00,8.928000e+00
+"job time MAPE (%), loop-dominated, K = 16",4197,1.707000e+00,8.188000e+00
