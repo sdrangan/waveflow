@@ -50,7 +50,7 @@ out_str_sigs, out_bw = vp.add_axiss_signals(name=out_stream_name, short_name_pre
 print(out_str_sigs)
 ```
 
-Note that we use the `short_prefix_name` so that the signal will have a smaller display name on the timinng diagram.  Running this code, will load the `TDATA`, `TVALID`, `TREADY`, and, if used, a `TLAST` signal for each stream.
+Note that we use the `short_name_prefix` so that the signal will have a smaller display name on the timing diagram.  Running this code will load the `TDATA`, `TVALID`, `TREADY`, and, if used, a `TLAST` signal for each stream.
 
 ## Plotting the Timing Diagram
 We can then plot the timing diagram as:
@@ -68,10 +68,10 @@ ax = td.plot_signals(add_clk_grid=True, trange=trange,
 _ = ax.set_xlabel('Time [ns]')
 ```
 
-## Extracting AXI4-Strea Bursts
+## Extracting AXI4-Stream Bursts
 
 AXI4-Streams arrive in **bursts** that end on each `TLAST`.  
-You can indentify explicit transfer bursts in the stream:
+You can identify explicit transfer bursts in the stream:
 
 ```python
 # Extract the AXI-Stream bursts and print the burst information for the input
@@ -90,6 +90,20 @@ for i, burst in enumerate(bursts_out):
     nbeats_transfer = sum(1 for bt in burst['beat_type'] if bt == 0)
     print(f"Burst {i}: tstart = {burst['tstart']}, bt={burst['beat_type']}, nbeats_transfer = {nbeats_transfer}")
 ```
+
+Each burst is a dict. The fields you will use most:
+
+- `burst['data']` -- the accepted `TDATA` words, one per beat, as a NumPy array in the signal's
+  dtype. For `TDATA` that is **signed** `int64`, so a word with its top bit set prints negative. Pass
+  it to `deserialize` / `read_array` as it is: they mask each word to `word_bw` bits. A Python list
+  of the words also works, signed or not, but there is no need to convert.
+- `burst['complete']` -- `True` when an observed `TLAST` closed the burst. The capture can end in the
+  middle of a message; that trailing burst comes back with `complete=False`. Skip it, or decode it as a
+  partial message:
+
+  ```python
+  bursts_in = [b for b in bursts_in if b['complete']]
+  ```
 
 
 ## Deserializing Burst Data
@@ -110,7 +124,15 @@ and sends 6.  The bursts are:
 
 The status registers (`halted`, `error`, `tx_id`) are on AXI-Lite, not on these streams.
 
-We can deserialize each burst to the corresponding Waveflow schema:
+We can deserialize each burst to the corresponding Waveflow schema. Two things to get right when
+decoding:
+
+- **Several samples per word.** At `word_bw = 64`, each word carries two `float32` samples, element 0
+  in the **low** 32 bits. So a burst of `n` words holds up to `n * (word_bw // 32)` samples, not `n`.
+- **The word layout.** A header that contains an array (here the coefficients) follows the [word
+  layout rule](../schema/hls/serialization.md#the-word-layout-rule): the array starts on a fresh word,
+  and the field after it starts on a fresh word too. `deserialize` applies the rule for you, at every
+  `word_bw`, and so does the generated C++.
 
 ```python
 word_bw = 32
@@ -122,7 +144,8 @@ for k in range(2):                      # the two DATA commands, in order
         print(f"    {f}: {v}")
     # The burst may end early: decode the samples actually sent.
     nsamp = int(cmd_hdr.val['nsamp'])
-    nsent = min(nsamp, len(bursts_in[2 * k + 1]['data']))
+    samples_per_word = word_bw // 32         # float32 samples in one word
+    nsent = min(nsamp, len(bursts_in[2 * k + 1]['data']) * samples_per_word)
     x = read_array(packed=bursts_in[2 * k + 1]['data'], word_bw=word_bw, elem_type=Float32,
                    shape=(nsent,))
     print(f"  x ({nsent} of {nsamp} sent): {x.val}")

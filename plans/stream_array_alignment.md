@@ -1,9 +1,52 @@
 # `stream_array_alignment` — generated C++ and Python pack a DataList with an array differently at word_bw=64
 
-**Status: DIAGNOSED, NOT FIXED.** Found 2026-09-29 while building
+**Status: FIXED (2026-10-08), array-aligned.** Found 2026-09-29 while building
 `hwdesign/demos/stream/poly`. That demo's kernel and testbench are
 unaffected, since both use the C++ packing. Only its Python decoder of the
-co-simulation VCD disagrees.
+co-simulation VCD disagreed.
+
+## Resolution
+
+**Layout: array-aligned.** An array field starts on a fresh word and closes
+its last word, so the field after it starts on a fresh word too. Python
+`serialize` / `deserialize` and `nwords` moved to the C++ stream and array
+paths, not the other way round, because:
+
+- every kernel, every recorded RTL co-simulation and the XSI cycle gates
+  already use it, so no kernel's layout changes and no RTL needs
+  regenerating for the layout itself;
+- it is the layout the lane loop and the generated `<elem>_array_utils`
+  routines assume (element 0 in lane 0 of a word), which keeps the array
+  loops at II=1 with no per-element bit offset;
+- the recorded p64tmp command header now decodes with the fixed Python,
+  without rebuilding the kernel.
+
+`pack_to_uint` keeps its flat layout. It is a register image, not a word
+stream, and the guide now says so. It is still how a sub-word composite
+array element is packed in its lane.
+
+The diagnosis below understated the bug:
+
+- **It was not 64-bit only.** At `word_bw=32`, an array of sub-word
+  elements in a `DataList` disagreed too: `u16, int8[5], u16` was 2 words
+  in Python, 3 in C++.
+- **An array last can hide it.** `u16, float32[4]` at 64 bits was 3 words
+  on both sides with different bits.
+- **TLAST.** `gen_write` gave `tlast` to the last textual
+  `write_axi4_word` line. When a message ends with an array, that line is in
+  the array loop, so `write_axi4_stream(s, true)` asserted TLAST on every
+  array beat. Now only the final beat carries it (`tlast && <final-beat
+  condition>`), for 1-D, multi-dimensional and wide-element arrays.
+
+The rule is documented in `docs/guide/schema/hls/serialization.md` ("The
+word layout rule"). The tests are `tests/hw/test_stream_array_alignment.py`.
+They include a compiled cross-check: Vivado's MinGW builds the generated
+headers, and every writer and reader at 32 and 64 bits must reproduce
+Python's words, with TLAST on the last beat only and no write past `nwords`.
+
+`examples/stream_inband/poly.py` at `word_bw=64` was right before and is
+still right: its 33 header bits leave no room for a coefficient in word 0,
+so the array starts on a fresh word either way.
 
 ---
 
@@ -141,6 +184,14 @@ packing the fields that follow an array.
 
 ## Secondary: `read_array` corrupts 64-bit words passed as a Python list
 
+**Fixed (2026-10-08).** `deserialize` converts a list one Python int at a
+time and masks it, and `read_array` no longer calls `np.asarray` first.
+`from_words_numpy` does the same for a list and reinterprets a signed
+array's bit pattern. Only an unsigned list at 64 bits was wrong: a signed
+list became `int64` and decoded correctly. A plain `dtype=np.uint64` would
+have broken signed lists, since NumPy 2.4 raises `OverflowError` on a
+negative Python int.
+
 `waveflow.hw.arrayutils.read_array(packed, ...)` given a **list** of Python
 ints for `word_bw=64` loses the low bits of some words. If the list mixes
 values above and below 2**63, `np.array(list)` picks `float64`, which has
@@ -166,19 +217,22 @@ convert with an explicit unsigned dtype for the word width, such as
 infer the dtype from a list. A list is the natural thing to build from VCD
 samples or a socket, so it will be passed. Add the snippet above as a test.
 
-## A related papercut, not a bug
+## Signed TDATA: not a bug
 
 `VcdParser.add_axiss_signals` adds TDATA through `add_signal`, whose
-default `numeric_type` is `'int'` (signed). So a 32- or 64-bit TDATA word
-with its top bit set comes back negative, and every caller has to mask it
-before unpacking. TDATA is a bag of bits, so `add_axiss_signals` should
-probably add it as `'uint'`. Check the callers of `extract_axis_bursts`
-before changing it.
+default `numeric_type` is `'int'` (signed). A 32- or 64-bit TDATA word with
+its top bit set comes back negative. An earlier version of this note said
+every caller has to mask it before unpacking. That is wrong for decoding:
+`burst["data"]` has been a signed `int64` ndarray since 8acdf67
+(2026-07-20), and `deserialize` masks each word, so the raw words decode
+correctly. TDATA stays `'int'`; `docs/guide/timing/axistream.md` now says
+the words decode as they are.
 
 ## Downstream
 
-`hwdesign/demos/stream/poly/poly_timing.py` works around the secondary
-issue and the papercut: it masks each word and passes a `uint64` array.
-Its check of the decoded command header fails at `WORD_BW=64` until the
-main bug is fixed. That demo's kernel and testbench need no change either
-way, since they use the generated C++ throughout.
+`hwdesign/demos/stream/poly/poly_timing.py` masks each word and passes a
+`uint64` array. Neither is needed any more: a signed array or a list
+decodes correctly. Its check of the decoded command header at `WORD_BW=64`
+should pass with the fixed Python. That demo's kernel and testbench need
+no change, since they use the generated C++ throughout. Regenerating the
+kernel only zeroes the unused bits after `nsamp`.
