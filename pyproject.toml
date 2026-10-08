@@ -92,6 +92,9 @@ include-package-data = true
 # MANIFEST.in (whose `recursive-include waveflow` covers only *.json/*.yaml/*.yml/*.txt/*.md), so a
 # pip-installed non-editable waveflow had every hook component fail on a missing source file.
 "waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
+# The processor model's calibration kernels are C programs (plus their shared header) that the gem5
+# runner compiles; without this a pip-installed waveflow could not calibrate a new platform.
+"waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h"]
 # The SSR FFT's hand-written task bodies (waveflow.dsp.ssr_fft.hls copies them into a build).
 "waveflow.dsp.ssr_fft" = ["src/*.h"]
 
