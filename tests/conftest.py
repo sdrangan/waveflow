@@ -112,7 +112,9 @@ import pytest
 #: 158 -> 160 on 2026-10-07 (plans/xsi_system_top.md S4): the mm_fir host conformance gate
 #: (test_mm_fir_host_traces_match_pysim) x per_view / one_front.
 #: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
-WANT_XSI_GATES = 161
+#: 161 -> 162 on 2026-10-08 (plans/host_runtime.md S6): a host whose threads meet through a SwQueue,
+#: at RTL (test_sw_channels_xsi.py).
+WANT_XSI_GATES = 162
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

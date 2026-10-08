@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-Stages 1-5 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 6 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-6 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 7 (docs) next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -187,6 +187,18 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 6 -- channels between threads: DONE (2026-10-08)
+
+- The channels exist on both sides (Python S1: `SwEvent` / `SwSemaphore` / `SwLock` / `SwQueue` /
+  `wait_any`; C++ S4, unit-tested for same-tick wake under three compilers).  The gate here is at RTL.
+- **`tests/examples/test_sw_channels_xsi.py`**: `QueuedFirHost` is `FirHost` with its writer split into a
+  *packer* thread and a *sender* thread joined by a `SwQueue(capacity=2)`; its C++ twin is a test-local
+  header (`tests/examples/xsi_local/queued_fir_host.h`).  Software events take no time on either side,
+  so the bus behaviour must be FirHost's exactly.  **Result: 618 cycles (unchanged), bit-exact, status
+  and responses right, traces identical to its own pysim run** -- and in pysim the same cycles and
+  outputs as `FirHost`.  A scheduler that woke a waiter a cycle late would have moved the count.
+- `WANT_XSI_GATES` 161 -> 162.
 
 ### Stage 5 -- `run_system_xsi(sysm)`: DONE, without the derived build (2026-10-08)
 
