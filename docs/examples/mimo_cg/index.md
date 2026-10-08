@@ -15,8 +15,10 @@ side exactly and with no Vitis. Calibrated models answer the cost side, with Vit
 calibrate them and to check them.
 
 **Status:** all phases are complete and reviewed (milestones M0–M6), ending with the design-space
-exploration and its brute-force check. The plan, with every
-decision and its evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
+exploration and its brute-force check. In Phases 7–9 the two compute blocks became reusable Waveflow
+components and the detector was rebuilt on them (section 9). Sections 3–7 describe the hardware as
+built in Phase 4 and measured up to commit `6a2cdca`. The plan, with every decision and its
+evidence, is `plans/mimo_cg/mimo_cg_paper_sims.md` on branch `paper/mimo-cg`.
 
 ![The study](images/diagram_study.svg)
 
@@ -113,6 +115,11 @@ the narrowest design at each iteration count (second).
 > **Files** (in `examples/mimo_cg/hw/`): `common.py` (types, commands, memory format), `vec.py`,
 > `mm.py`, `detector.py` (the modules), `cpp/*.h` (the HLS bodies), `build.py` (codegen, csynth,
 > XSI).
+
+> **Since Phase 9** the matrix multiply and the vector unit are Waveflow's `SystolicCore` and
+> `CgVectorCore` (section 9). `vec.py`, `mm.py`, `csim.py`, the blocks' HLS bodies, `cg_lanes.h`,
+> `cg_io.h` and the per-block test units named in this section were retired; they are at commit
+> `6a2cdca`, which produced every number in sections 3–7.
 
 The detector is a free-running composite of `hls::task`s. It sits on the same framework memory
 streams as the other examples, and its parts map onto the paper's fixed architecture:
@@ -487,6 +494,61 @@ implemented:
 - The whole-space figure of 4,000 tool-hours is a projection (other fits of the same data give
   3,900 to 4,300), and the 28 days ignore that so many builds would not fit this machine's disk.
 
+## 9. The detector on Waveflow's components (Phases 7–9)
+
+> **Files:** the components in `waveflow/linalg/` (guide: [linear algebra](../../guide/linalg/index.md),
+> [systolic matrix multiply](../../guide/linalg/systolic.md), [CG vector unit](../../guide/linalg/cg_vector.md));
+> here `hw/detector.py`, `hw/cpp/cg_{cmd_rx,load,ctrl,store}_task.h`, `hw/migration.py` and
+> `hw/migration_models.py`; tables `paper_data/migration_*.csv`.
+
+The two compute blocks of section 3 are now reusable Waveflow components: `SystolicCore` with its
+standalone `SystolicUnit`, and `CgVectorCore` with `CgVectorUnit`. Each has a bit-exact model, a
+calibrated cost model and RTL tests of its own. The example's copies were retired.
+
+The detector keeps its host interface (`CgCmd`, the memory layout, the done echo) and its framer,
+loader, control and store, and composes the two cores:
+
+- `A` and `B` land in blocks of L-lane groups (Waveflow's `wf_load_matrix`); `A` no longer travels
+  as K-lane rows.
+- CG control writes one command per core per job, a matrix multiply of `nit` matrices and a CG job
+  of `nit` iterations, instead of one command per iteration.
+- The cores exchange `P` and `S` through the same `p_blk` and `s_blk` stream-of-blocks.
+
+The study's unit builds are now the components' standalone units, fed from memory by the benches
+their own calibrations used.
+
+**Re-measured.** All 132 builds the Phase 5 models were fitted and tested on, and the 12 finalists,
+were rebuilt on the components and compared with their old measurements (Vitis HLS and Vivado
+2024.1, `paper_data/migration_compare.csv`). The bounds of the comparison were fixed before any of
+the builds ran.
+
+| What | Result |
+|---|---|
+| Bit-exact at RTL | 132 of 132 builds, 12 of 12 finalists |
+| Clock | 132 of 132 within 4 ns in csynth; every finalist meets 4 ns after place and route (2.69–3.87 ns) |
+| DSP | +3 per detector (index arithmetic in the two cores), as predicted, except one detector with R = 1 and C = L, where HLS merges the tile loops and adds three more |
+| Block RAM | As predicted on every build. The `A` buffer now holds lane groups: at K = 16 with four 12-bit lanes it takes 3 block RAMs instead of 11 |
+| Detector LUTs (csynth) | Median −9%, from −32% to +14%: the old loader's K-lane rows are gone, and the cores' run-time dimensions cost a few thousand LUTs |
+| Detector flip-flops | Median +3.7%, from −26% to +15% |
+| Time per CG iteration | +1.1% to +5.4% (median +2.4%) |
+| Per-job overhead | The CG start takes 4.5–6.9 more cycles per group of L columns: +9 to +10 cycles at 16 lanes, +158 to +220 at one lane |
+| Finalists, implemented | LUTs −35% to +38%, flip-flops −49% to +26%, block RAM lower on all twelve, job time +2.5% to +4.8% |
+| Guard bits, implemented | Every pair keeps its sign: leaving the guard bits out still costs more LUTs and flip-flops |
+
+Bit-exactness, the clock, block RAM and the finalists' job times held their bounds. The rest of
+the differences are attributed module by module in `migration_compare.csv`: the CG start at few
+lanes, a few cycles per tile in short matrix multiplies, the one DSP case, and the finalists'
+implemented resources, which Vivado optimizes differently from csynth.
+
+**Provenance.** Sections 3–7 describe the hardware as built in Phase 4 and measured up to commit
+`6a2cdca`, the end of Phase 6; every number and figure there comes from that commit. The commands
+that build or read hardware reproduce those numbers only at that commit: the campaign,
+`measure`, `impl_check`, `finalists`, the snapshot in `make_results.py` and the Phase 4–6 RTL
+tests (for example in a worktree: `git worktree add ../mimo_cg_phase6 6a2cdca`). The pure-Python
+tools regenerate their tables at HEAD, and two commands check them byte for byte:
+`python -m examples.mimo_cg.tools.study_tables --check` and
+`python -m examples.mimo_cg.tools.accuracy_points --check`.
+
 ## Where things are
 
 | What | Where |
@@ -494,9 +556,10 @@ implemented:
 | Link simulator, detectors, floating-point sweep | `examples/mimo_cg/mimo_link.py`, `detectors.py`, `mimo_cg.py` |
 | Bit-exact golden | `examples/mimo_cg/mimo_cg_fixed.py` (C++ reference: `examples/mimo_cg/cpp/cg_ref.h`) |
 | Accuracy sweep and analysis | `examples/mimo_cg/mimo_cg_accuracy_sweep.py`, `mimo_cg_accuracy_analysis.py` |
-| Hardware blocks, codegen, C-sim | `examples/mimo_cg/hw/` (`vec.py`, `mm.py`, `detector.py`, `build.py`, `csim.py`, `cpp/`) |
+| The detector on Waveflow's components, codegen | `examples/mimo_cg/hw/` (`detector.py`, `build.py`, `cpp/`); the components in `waveflow/linalg/` |
 | Design space, measurement, models | `examples/mimo_cg/hw/` (`space.py`, `measure.py`, `campaign.py`, `models.py`, `estimate.py`, `validate.py`) |
 | Exploration, brute-force comparison, finding | `examples/mimo_cg/hw/` (`dse.py`, `fidelity.py`, `finding.py`, `finalists.py`) |
+| Re-measurement on the components | `examples/mimo_cg/hw/` (`migration.py`, `migration_models.py`); `examples/mimo_cg/tools/study_tables.py` |
 | Tests | `tests/examples/test_mimo_cg_*.py`: no markers for the fast checks, `-m vitis` for C-sim and csynth, `-m xsi` for RTL |
 | Paper data | `examples/mimo_cg/paper_data/*.csv` |
 

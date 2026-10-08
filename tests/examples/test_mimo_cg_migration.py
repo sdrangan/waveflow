@@ -188,3 +188,104 @@ def test_the_migration_merges_into_its_own_tables(tmp_path):
     rows = read_table(out["migration_builds"])
     assert len(rows) == 132 and all(r["build"].startswith("mig_") for r in rows)
     assert "roles=migration" in out["migration_builds"].read_text().splitlines()[0]
+
+
+# --- the example page's section 9 quotes the committed tables ---------------------------------
+
+
+def _pct(new, old) -> list[float]:
+    return [100.0 * (n / o - 1.0) for n, o in zip(new, old, strict=True)]
+
+
+def _signed(x: float, digits: int = 0) -> str:
+    """As the page writes a change: a true minus sign, a plus sign otherwise."""
+    text = f"{abs(x):.{digits}f}"
+    return ("−" if x < 0 else "+") + text
+
+
+def test_the_example_page_quotes_the_migration_tables():
+    import statistics
+
+    page = (
+        MG.EXAMPLE.parents[1] / "docs" / "examples" / "mimo_cg" / "index.md"
+    ).read_text(encoding="utf-8")
+    section = page[page.index("## 9. The detector on Waveflow's components") :]
+    old = {r["build"]: r for r in read_table(MG.PAPER_DATA / "hw_builds.csv")}
+    new = {
+        MG.old_label(r["build"]): r
+        for r in read_table(MG.PAPER_DATA / "migration_builds.csv")
+    }
+    dets = [b for b, r in old.items() if r["top"] == "det"]
+    assert all(r["bit_exact"] == "1" for r in new.values()) and len(new) == 132
+    fin = read_table(MG.PAPER_DATA / "migration_finalists.csv")
+    assert all(r["bit_exact"] == "1" and r["timing_met"] == "1" for r in fin)
+    assert "132 of 132 builds, 12 of 12 finalists" in section
+    cp = [float(r["cp_post_impl_ns"]) for r in fin]
+    assert f"({min(cp):.2f}–{max(cp):.2f} ns)" in section
+    # detector totals
+    for ctr, text in (
+        ("lut", "Median {m}%, from {lo}% to {hi}%"),
+        ("ff", "Median {m}%, from {lo}% to {hi}%"),
+    ):
+        p = _pct([float(new[b][ctr]) for b in dets], [float(old[b][ctr]) for b in dets])
+        digits = 0 if ctr == "lut" else 1
+        want = text.format(
+            m=_signed(statistics.median(p), digits),
+            lo=_signed(min(p)),
+            hi=_signed(max(p)),
+        )
+        assert want in section, (ctr, want)
+    d_dsp = sorted({int(new[b]["dsp"]) - int(old[b]["dsp"]) for b in dets})
+    assert (
+        d_dsp == [3, 6]
+        and sum(int(new[b]["dsp"]) - int(old[b]["dsp"]) == 6 for b in dets) == 1
+    )
+    # cycles per iteration and the start
+    rows = {
+        s: [
+            r
+            for r in read_table(MG.PAPER_DATA / f"{s}_cycles.csv")
+            if r["top"] == "det"
+        ]
+        for s in ("hw", "migration")
+    }
+
+    def q(s: str, quantity: str) -> dict:
+        return {
+            MG.old_label(r["build"]): float(r["cycles"])
+            for r in rows[s]
+            if r["quantity"] == quantity
+        }
+
+    t_old, t_new = q("hw", "t_iter"), q("migration", "t_iter")
+    p = _pct([t_new[b] for b in dets], [t_old[b] for b in dets])
+    want = f"{_signed(min(p), 1)}% to {_signed(max(p), 1)}% (median {_signed(statistics.median(p), 1)}%)"
+    assert want in section, want
+    s_old, s_new = q("hw", "vec.init"), q("migration", "vec.init")
+    by_lanes: dict = {}
+    for b in dets:
+        by_lanes.setdefault(int(old[b]["L"]), []).append(round(s_new[b] - s_old[b]))
+    per_group = [
+        d / (32 / L) for L, deltas in by_lanes.items() for d in deltas
+    ]  # N = 32 columns
+    lo16, hi16, lo1, hi1 = (
+        min(by_lanes[16]),
+        max(by_lanes[16]),
+        min(by_lanes[1]),
+        max(by_lanes[1]),
+    )
+    assert (
+        f"{min(per_group):.1f}–{max(per_group):.1f} more cycles per group of L columns: "
+        f"+{lo16} to +{hi16} cycles at 16 lanes, +{lo1} to +{hi1} at one lane"
+    ) in section
+    # the finalists, implemented
+    was = {r["build"]: r for r in read_table(MG.PAPER_DATA / "finalists_impl.csv")}
+    for ctr, words in (("impl_lut", "LUTs"), ("impl_ff", "flip-flops")):
+        p = _pct([float(r[ctr]) for r in fin], [float(was[r["old"]][ctr]) for r in fin])
+        assert f"{words} {_signed(min(p))}% to {_signed(max(p))}%" in section, ctr
+    p = _pct(
+        [float(r["rtl_job"]) for r in fin],
+        [float(was[r["old"]]["rtl_job"]) for r in fin],
+    )
+    assert f"job time {_signed(min(p), 1)}% to {_signed(max(p), 1)}%" in section
+    assert all(int(r["impl_bram"]) < int(was[r["old"]]["impl_bram"]) for r in fin)
