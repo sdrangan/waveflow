@@ -34,6 +34,7 @@ from typing import Any
 import simpy
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig
+from waveflow.cpu.report import CpuReport, build_report
 from waveflow.cpu.task import SwFunction, TaskRecord, eval_cycles
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
@@ -85,11 +86,20 @@ class Processor(SimObj):
         self._ready: list[tuple[int, int, _Task]] = []
         self._seq = itertools.count()
         self._cores = [_Core(i) for i in range(self.config.n_cores)]
-        self._free: list[int] = list(
-            range(self.config.n_cores)
-        )  # a heap: lowest index first
+        # A heap of free core indices: the lowest-numbered free core is granted first.
+        self._free: list[int] = list(range(self.config.n_cores))
         #: One record per finished task, in completion order.
         self.records: list[TaskRecord] = []
+
+    def report(self, elapsed_s: float | None = None) -> CpuReport:
+        """Utilization, latency, queueing and confidence over the run so far.
+
+        *elapsed_s* is the horizon utilization is measured over; it defaults to the current time.
+        A segment still running counts only once it ends.
+        """
+        elapsed = self.now if elapsed_s is None else float(elapsed_s)
+        busy = [c.busy_s for c in self._cores]
+        return build_report(self.config.name, elapsed, busy, self.records)
 
     # ------------------------------------------------------------------
     # Submitting software

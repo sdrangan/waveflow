@@ -7,6 +7,7 @@ the calls over its cores and charges the cycles in one timed event each.  See ``
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig, CycleCost
 from waveflow.cpu.processor import Processor
+from waveflow.cpu.report import CpuReport, FunctionStats
 from waveflow.cpu.task import (
     SwFunction,
     TaskRecord,
@@ -18,7 +19,9 @@ from waveflow.cpu.task import (
 __all__ = [
     "IRQ_PRIO",
     "CpuConfig",
+    "CpuReport",
     "CycleCost",
+    "FunctionStats",
     "Processor",
     "SwFunction",
     "TaskRecord",
