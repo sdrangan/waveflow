@@ -455,9 +455,10 @@ def test_campaign_grid_roles_and_shards():
 
     labels = list(C.split())
     # the split's 101, the 6 supplementary builds, the second round's 19 + 6 (step 6.1), the
-    # brute-force sub-grid's 1,440 (step 6.3), and the 132 rebuilt on the components (step 9.4)
+    # brute-force sub-grid's 1,440 (step 6.3), the 132 rebuilt on the components (step 9.4), and
+    # the sub-grid rebuilt on them (step 9.4e)
     roles = [role for _t, role, _c in C.split().values()]
-    assert len(C.grid()) == len(labels) == 132 + 1440 + 132
+    assert len(C.grid()) == len(labels) == 132 + 1440 + 132 + 1440
     assert [
         b for b, r in zip(labels, roles, strict=True) if r == "supplement"
     ] == labels[101:107]
@@ -470,8 +471,10 @@ def test_campaign_grid_roles_and_shards():
     assert set(roles[132:1572]) == {C.BRUTEFORCE} and C.BRUTEFORCE not in roles[:132]
     assert all(b.startswith("bf_det_") for b in labels[132:1572])
     # the migration: the first 132 again, in their order, each under its new label
-    assert set(roles[1572:]) == {C.MIGRATION}
-    assert labels[1572:] == [f"mig_{b}" for b in labels[:132]]
+    assert set(roles[1572:1704]) == {C.MIGRATION}
+    assert labels[1572:1704] == [f"mig_{b}" for b in labels[:132]]
+    assert set(roles[1704:]) == {C.MIGRATION_BRUTEFORCE}
+    assert labels[1704:] == [f"mig_{b}" for b in labels[132:1572]]
     assert [C.split()[f"mig_{b}"][2] for b in labels[:132]] == [
         C.split()[b][2] for b in labels[:132]
     ]

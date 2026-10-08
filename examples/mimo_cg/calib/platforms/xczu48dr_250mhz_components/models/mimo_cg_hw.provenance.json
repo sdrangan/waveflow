@@ -1,0 +1,12 @@
+{
+ "fit_data_sha256": {
+  "migration_builds": "d2718f14dc5e107e42a1ef8c4a141b53c87abc2951083666d468c6459f651b58",
+  "migration_cycles": "d1b5619ae38e7410e39ca8a7f2cbc9caa72c76c567d399e44a680b664fa01262",
+  "migration_list": "71992e210f360a54bd05b84e8799fc282f79b88caaa04c5a4a1c690888b81f70",
+  "migration_modules": "5b30dd69e1fcc6e56027b4163728c7656449c3c0545d1e912d8dcfb462f332ea"
+ },
+ "sha256": "8f4a342f28dfcf2c5e0ae480d4b4f0c65769c57eda74782a1c500a10c84f2ac3",
+ "step": "9.4e",
+ "tool": "vitis_hls 2024.1",
+ "version": "components-1"
+}

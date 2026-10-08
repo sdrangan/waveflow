@@ -83,19 +83,25 @@ ROLES = (
     "supplement2",
     "bruteforce",
     "migration",
+    "migration_bruteforce",
 )
 #: The role measured for the decision comparison: steady-state jobs, no waveform, pruned builds,
 #: and tables of its own.
 BRUTEFORCE = "bruteforce"
 #: The re-measurement on the components (plan step 9.4): traced, pruned, tables and records apart.
 MIGRATION = "migration"
+#: The brute force on the components (plan step 9.4e): as the brute force, records apart.
+MIGRATION_BRUTEFORCE = "migration_bruteforce"
+#: The roles measured as the brute force is: steady-state jobs, no waveform, pruned builds.
+STEADY_ROLES = (BRUTEFORCE, MIGRATION_BRUTEFORCE)
 
 
 def records_dir(roles: tuple[str, ...]) -> Path:
     """Where the records of ``roles`` are: the migration's apart from the study's."""
     from examples.mimo_cg.hw import migration
 
-    return migration.POINTS if MIGRATION in roles else M.POINTS_DIR
+    apart = MIGRATION in roles or MIGRATION_BRUTEFORCE in roles
+    return migration.POINTS if apart else M.POINTS_DIR
 
 
 def split() -> dict[str, tuple[str, str, HwConfig]]:
@@ -103,10 +109,11 @@ def split() -> dict[str, tuple[str, str, HwConfig]]:
     supplementary held-out set (role ``supplement``, M5 review), the second calibration round
     (roles ``fit2`` and ``supplement2``, step 6.1) and the brute-force sub-grid (role
     ``bruteforce``, step 6.3), each when its file is there."""
-    from examples.mimo_cg.hw import migration
+    from examples.mimo_cg.hw import migration, migration_models
 
     builds = [*read_split(), *read_supplement(), *read_v2(), *read_bruteforce()]
     builds += migration.campaign_builds()
+    builds += migration_models.bruteforce_builds()
     return {b: (t, r, c) for b, t, r, c in builds}
 
 
@@ -157,6 +164,23 @@ class HwPointStep(BuildStep):
             # a brute-force build that is measured is not built again, whichever shard layout
             # or pilot measured it: its record is the result
             rec = {}
+        elif role == MIGRATION_BRUTEFORCE:
+            from examples.mimo_cg.hw import migration
+
+            if measured(kw["build"], c, migration.POINTS):
+                rec = {}
+            else:
+                rec = M.measure(
+                    kw["build"],
+                    top,
+                    c,
+                    role=role,
+                    steady=True,
+                    trace=False,
+                    prune=True,
+                    points_dir=migration.POINTS,
+                    workload_label=migration.old_label(kw["build"]),
+                )
         elif role == MIGRATION:
             from examples.mimo_cg.hw import migration
 
@@ -201,9 +225,9 @@ class DryPointStep(BuildStep):
 
         top, role, c = split()[kw["build"]]
         elaborate(M.comp_class(top), M.elab_params(top, c), name=M.TOP_NAME[top])
-        brute = role == BRUTEFORCE
+        brute = role in STEADY_ROLES
         seed = kw["build"]
-        if role == MIGRATION:
+        if role in (MIGRATION, MIGRATION_BRUTEFORCE):
             from examples.mimo_cg.hw import migration
 
             seed = migration.old_label(seed)
@@ -364,12 +388,11 @@ def merge(
     job list, and its module table keeps the module rows only.  So is the migration, into
     ``migration_*.csv``.
     """
-    brute = BRUTEFORCE in roles
-    if brute and len(roles) > 1:
-        raise ValueError("merge the brute force on its own: --merge bruteforce")
-    if MIGRATION in roles and len(roles) > 1:
-        raise ValueError("merge the migration on its own: --merge migration")
-    stem = BRUTEFORCE if brute else (MIGRATION if MIGRATION in roles else "hw")
+    brute = any(r in STEADY_ROLES for r in roles)
+    apart = {BRUTEFORCE, MIGRATION, MIGRATION_BRUTEFORCE} & set(roles)
+    stem = min(apart) if apart else "hw"
+    if apart and len(roles) > 1:
+        raise ValueError(f"merge {stem} on its own: --merge {stem}")
     recs = _records(roles, points_dir or records_dir(roles))
     tools = sorted({r["tool"] for r in recs})
     note = {
