@@ -50,6 +50,7 @@ from waveflow.build.system_top import (
 from waveflow.build.xsi_workspace import XsiWorkspace
 from waveflow.hw.arrayutils import read_array
 from waveflow.hw.mm_device import bus_address_headers
+from waveflow.toolchain.toolchain import find_vitis_include_dir
 from waveflow.utils.burst_io import read_burst_bundle
 
 ROOT = Path(__file__).resolve().parent
@@ -139,7 +140,7 @@ def trace_report(out: str, traces) -> str:
     t = {int(m[1]): int(m[2]) for m in re.finditer(r"^JOBT (\d+) t=(\d+)", out, re.M)}
     resp = [MkvResp().deserialize(np.asarray(b, dtype=np.uint64), word_bw=DW)
             for b in read_burst_bundle(traces / "qresp")]
-    xs = read_burst_bundle(traces / "mem")
+    xs = read_burst_bundle(traces / "mem_reader")
     lines = []
     for r, x in zip(resp, xs):
         tx = int(r.tx_id)
@@ -203,6 +204,8 @@ def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> str:
     rtl = [f for t in spec.modules for f in sorted(rtl_dir(t).glob("*.v"))]
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + rtl + [f"{spec.top}.v"],
                include_dirs=ip.include_dirs, tb_name="markov_tb", tb_cpp=main,
+               # The host reads MkvResp typed: the generated header, and Vitis's ap_int.h under it.
+               tb_include_dirs=[find_vitis_include_dir(), ROOT / "include"],
                extra_files={f"{spec.top}.v": render_system_top(spec, prb or None),
                             **tb_files, **address_headers()})
     out = ws.run(timeout=timeout)

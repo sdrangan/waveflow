@@ -56,7 +56,7 @@ from waveflow.hw.mem_stream import MemWCmd, MemWStream
 from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_credit import MmCreditStreamIF
 from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
-from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout, write_trace
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
 from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
 from waveflow.simulation.simulation import Simulation
 from waveflow.sw import SwHost, SwSemaphore
@@ -332,7 +332,7 @@ def default_jobs(njobs: int = 4, n: int = 300, seed: int = 11) -> list[dict]:
 
 #: The host's endpoints that record a trace (memory-mapped wiring), in the order they are dumped:
 #: the command queue, the response queue, and the reads of each job's x from the shared memory.
-HOST_ENDPOINTS = ("qcmd", "qresp", "mem")
+HOST_ENDPOINTS = ("qcmd", "qresp", "mem_reader")
 
 
 def _u64(words) -> np.ndarray:
@@ -349,8 +349,8 @@ class MarkovHost(SwHost):
     queue's data interrupt.  ``x`` is read with ``mem_read`` -- a bus read (memory-mapped) or a
     direct read of the memory (direct).
 
-    **Two realizations** (``plans/xsi_system_top.md``): :meth:`bfm_model` names the C++ one,
-    ``MarkovHostModel`` in ``markov_host.h`` beside this file.  Both run **one scenario**, one burst per
+    **Two realizations** (``plans/host_runtime.md``): the C++ one is ``MarkovHostModel`` in
+    ``markov_host.h`` beside this file -- the same two threads on the generated endpoints.  Both run **one scenario**, one burst per
     job (:meth:`scenario_bursts`): ``[x address, x words, <MkvCmd words>]`` -- from :attr:`scenario` when
     set (the bundle :meth:`write_scenario` wrote), else the same bursts built in memory.  With
     :attr:`trace_dir` set, the three memory-mapped endpoints' traces (:data:`HOST_ENDPOINTS`) are dumped
@@ -360,10 +360,12 @@ class MarkovHost(SwHost):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: Cycles between polls, should an endpoint poll (none does: they wait on interrupts).
     poll_cycles: int = 8
-    #: The scenario bundle both hosts run (``write_scenario``); empty: built from ``jobs``.
-    scenario: DynParam[str] = ""
-    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
-    trace_dir: DynParam[str] = ""
+    #: Jobs outstanding at most.  A DynParam, so the C++ realization reads the same value.
+    max_in_flight: DynParam[int] = MAX_IN_FLIGHT
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "MarkovHostModel"
+    cpp_header: ClassVar[str | None] = "markov_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -379,7 +381,7 @@ class MarkovHost(SwHost):
         self.done = self.env.event()
         self.results: dict[int, dict] = {}
         #: Jobs that may still be sent: the writer takes one, the reader gives it back.
-        self.slots = SwSemaphore(self, MAX_IN_FLIGHT, name="slots")
+        self.slots = SwSemaphore(self, int(self.max_in_flight), name="slots")
 
     def _dst(self, j: int) -> int:
         """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
@@ -413,13 +415,6 @@ class MarkovHost(SwHost):
         #: The decoded scenario, per job: (x address, x words, command words).
         self.items = [(int(b[0]), int(b[1]), np.asarray(b[2:], dtype=np.uint64)) for b in bursts]
 
-    def post_sim(self) -> None:
-        super().post_sim()
-        if self.trace_dir:
-            from pathlib import Path
-            for name, ep in (("qcmd", self.qcmd), ("qresp", self.qresp), ("mem", self.mem_reader)):
-                write_trace(ep, Path(self.trace_dir) / name)
-
     # -- the host program -----------------------------------------------------------------------------
 
     def _writer(self):
@@ -449,21 +444,6 @@ class MarkovHost(SwHost):
         run."""
         self.start(self._writer)
         yield from self._reader()
-
-    def bfm_model(self):
-        """The C++ realization: ``MarkovHostModel`` in ``markov_host.h`` beside this file -- the same
-        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.  It
-        spans the bus master and the two interrupt pins.  Its arguments are this host's settings and
-        what it must read out of a response -- the ``tx_id`` field's position, from ``MkvResp``'s own
-        serializer -- never restated in the C++."""
-        from waveflow.build.composite_gen import BfmModel
-        from waveflow.build.system_top import field_position
-
-        word, bit, width = field_position(MkvResp, "tx_id", DW)
-        return BfmModel("MarkovHostModel", ports=("m", "irq_qcmd", "irq_qresp"),
-                        extra_args=(str(int(self.poll_cycles)), str(MAX_IN_FLIGHT),
-                                    str(MkvResp.nwords_per_inst(DW)), str(word), str(bit), str(width)),
-                        header="markov_host.h")
 
 
 @dataclass

@@ -52,7 +52,7 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwParam
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
@@ -62,7 +62,6 @@ from waveflow.hw.mm_host import (
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveLayout,
-    write_trace,
 )
 from waveflow.simulation.simulation import Simulation
 from waveflow.sw import SwHost
@@ -484,13 +483,6 @@ class FirHost(SwHost):
             else:
                 nsamp, tx, want, nhdr = (int(v) for v in b[1:5])
                 self.items.append(("pkt", nsamp, tx, want, b[5:5 + nhdr], b[5 + nhdr:]))
-
-    def post_sim(self) -> None:
-        super().post_sim()
-        if self.trace_dir:
-            from pathlib import Path
-            for name in HOST_ENDPOINTS:
-                write_trace(getattr(self, name), Path(self.trace_dir) / name)
 
     # -- the host program ---------------------------------------------------------------------------
 

@@ -69,7 +69,8 @@ echo "xelab errorlevel=$?"
 
 echo "--- g++ BFM tb ($TB) ---"
 g++ -I"$VIV/data/xsim/include" -O3 -c -o xsi_loader.o xsi_loader.cpp
-g++ -I"$VIV/data/xsim/include" -O3 -c -o "$TB.o" "$TB.cpp"
+# WF_TB_CXXFLAGS: extra flags for the testbench only (see run.bat); unset, nothing.
+g++ -I"$VIV/data/xsim/include" ${WF_TB_CXXFLAGS:-} -O3 -c -o "$TB.o" "$TB.cpp"
 g++ -o "$TB.bin" "$TB.o" xsi_loader.o -ldl
 echo "gpp errorlevel=$?"
 

@@ -75,6 +75,12 @@ def host_layout(host) -> dict:
     return {"bus": bus[0], "irqs": irqs, "endpoints": eps}
 
 
+def traced_endpoints(host) -> list[tuple[str, object]]:
+    """``(attribute, endpoint)`` of every endpoint whose trace a host dumps -- the generated header's
+    ``traced(...)`` list, so both realizations name their traces alike."""
+    return [(attr, getattr(host, attr)) for attr, *_ in host_layout(host)["endpoints"]]
+
+
 def host_ports(host) -> tuple[str, ...]:
     """The C++ model's ports, in constructor order: the bus master, then every interrupt input."""
     lay = host_layout(host)
@@ -142,4 +148,4 @@ def render_host_endpoints_h(host) -> str:
 
 
 __all__ = ["endpoints_class", "endpoints_header", "host_layout", "host_ports",
-           "render_host_endpoints_h"]
+           "render_host_endpoints_h", "traced_endpoints"]

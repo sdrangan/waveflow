@@ -239,6 +239,87 @@ private:
     long ticks_ = 0;
 };
 
+// ---------------------------------------------------------------------------
+// Channels between threads -- the C++ twins of waveflow.sw's SwEvent / SwSemaphore / SwLock / SwQueue.
+// Each blocking call is a wait_until on the channel's state; the scheduler's settle pass wakes a
+// waiter in the same cycle the state changes, as SimPy would.
+// ---------------------------------------------------------------------------
+
+/// A flag: set() wakes every waiter and stays set until clear().
+class SwEvent {
+public:
+    explicit SwEvent(SwScheduler& s) : s_(s) {}
+    void set() { set_ = true; }
+    void clear() { set_ = false; }
+    bool is_set() const { return set_; }
+    void wait() { s_.wait_until([this] { return set_; }); }
+    bool ready() const { return set_; }
+
+private:
+    SwScheduler& s_;
+    bool set_ = false;
+};
+
+/// A counting semaphore: acquire() waits for a count and takes it; release() returns one.
+class SwSemaphore {
+public:
+    SwSemaphore(SwScheduler& s, long count) : s_(s), count_(count) {}
+    void acquire() { s_.wait_until([this] { return count_ > 0; }); --count_; }
+    void release() { ++count_; }
+    long count() const { return count_; }
+    bool ready() const { return count_ > 0; }
+
+private:
+    SwScheduler& s_;
+    long count_;
+};
+
+/// A mutex: a semaphore of one; releasing a lock that is not held is an error.
+class SwLock : public SwSemaphore {
+public:
+    explicit SwLock(SwScheduler& s) : SwSemaphore(s, 1) {}
+    void release() {
+        if (count() >= 1) { std::fprintf(stderr, "FATAL: SwLock released while not held\n"); std::exit(6); }
+        SwSemaphore::release();
+    }
+};
+
+/// A software message queue: put() waits for room (capacity 0 = unbounded), get() for a message.
+template <class T>
+class SwQueue {
+public:
+    explicit SwQueue(SwScheduler& s, size_t capacity = 0) : s_(s), cap_(capacity) {}
+    void put(const T& m) {
+        s_.wait_until([this] { return cap_ == 0 || items_.size() < cap_; });
+        items_.push_back(m);
+    }
+    T get() {
+        s_.wait_until([this] { return !items_.empty(); });
+        T m = items_.front();
+        items_.erase(items_.begin());
+        return m;
+    }
+    bool ready() const { return !items_.empty(); }
+    size_t size() const { return items_.size(); }
+
+private:
+    SwScheduler& s_;
+    size_t cap_;
+    std::vector<T> items_;
+};
+
+/// Wait until any of *ready* holds; return the index of the first that does, in order.  At once,
+/// with no switch, if one already holds.  (Pass [&]{ return x.ready(); } for channels, or
+/// [&]{ return irq.level(); } for an interrupt.)
+inline size_t wait_any(SwScheduler& s, const std::vector<std::function<bool()> >& ready) {
+    size_t k = 0;
+    s.wait_until([&] {
+        for (k = 0; k < ready.size(); ++k) if (ready[k]()) return true;
+        return false;
+    });
+    return k;
+}
+
 }  // namespace wfbfm
 
 #endif  // WAVEFLOW_XSI_FIBER_H

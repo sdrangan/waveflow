@@ -117,3 +117,64 @@ def test_scheduler_interleaving_is_simpy_order(label, gxx, tmp_path):
         assert run.returncode == 0, f"{label}: run failed:\n{run.stdout}{run.stderr}"
         outs.add(run.stdout.strip().replace("\r\n", "\n"))
     assert outs == {EXPECTED}, f"{label}:\n" + "\n---\n".join(outs)
+
+
+CHANNELS = r"""
+#include "xsi_fiber.h"
+#include <cstdio>
+#include <string>
+using namespace wfbfm;
+static SwScheduler S;
+static void note(const char* s) { std::printf("%ld %s\n", S.ticks(), s); }
+int main() {
+    SwSemaphore slots(S, 1);
+    SwQueue<int> q(S, 1);
+    SwEvent go(S);
+    S.start("producer", [&] {                      // takes the slot, hands work over a queue
+        for (int k = 0; k < 2; ++k) {
+            slots.acquire(); note("producer took slot");
+            q.put(k); note("producer put");
+        }
+        go.set();
+    });
+    S.start("consumer", [&] {                      // gives the slot back after 3 ticks per item
+        for (int k = 0; k < 2; ++k) {
+            int m = q.get(); (void)m; note("consumer got");
+            S.wait_ticks(3);
+            slots.release(); note("consumer released");
+        }
+        size_t i = wait_any(S, {[&] { return go.ready(); }}); (void)i;
+        note("consumer saw go");
+    });
+    for (int c = 0; c < 30 && !S.all_done(); ++c) S.tick();
+    return S.all_done() ? 0 : 1;
+}
+"""
+
+# The release at tick 4 wakes the producer -- started EARLIER -- in the same tick (the settle pass).
+EXPECTED_CHANNELS = """\
+1 producer took slot
+1 producer put
+1 consumer got
+4 consumer released
+4 producer took slot
+4 producer put
+4 consumer got
+7 consumer released
+7 consumer saw go"""
+
+
+@pytest.mark.skipif(not COMPILERS, reason="no g++ found")
+@pytest.mark.parametrize("label,gxx", COMPILERS, ids=[c[0] for c in COMPILERS])
+def test_channels_wake_in_the_same_tick(label, gxx, tmp_path):
+    src = tmp_path / "ch.cpp"
+    src.write_text(CHANNELS, encoding="utf-8")
+    exe = tmp_path / "ch.exe"
+    env = dict(os.environ, PATH=f"{gxx.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    std = "-std=c++14" if "6.2" in label else "-std=c++17"
+    r = subprocess.run([str(gxx), std, "-O2", "-Wall", f"-I{XSI_SRC}", str(src), "-o", str(exe)],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr[-3000:]
+    run = subprocess.run([str(exe)], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 0 and run.stdout.strip().replace("\r\n", "\n") == EXPECTED_CHANNELS, \
+        f"{label}:\n{run.stdout}"

@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-Stages 1-3 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 4 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-4 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 5 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -187,6 +187,34 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 4 -- markov, two threads: DONE (2026-10-08)
+
+- **`markov_host.h`: 174 -> 79 lines, the program only** -- `writer()` (acquire a slot, `qcmd.write`),
+  `reader()` (`qresp.get<MkvResp>()`, `mem_reader.read`, release the slot), the scenario decode and a
+  `report()` of each job's completion cycle.  No bit position: responses are read typed (Stage 3).
+- **Host settings travel as DynParams.**  `MarkovHost.max_in_flight: DynParam[int]` replaces the extra
+  constructor arguments; the harness assigns the C++ member of the same name before the threads start.
+  `MarkovHost` declares only `cpp_model` / `cpp_header`; its hand-written `bfm_model()` and
+  `field_position` use are gone.
+- **One trace dump for every host.**  `SwHost.post_sim` dumps each traced endpoint under its attribute
+  name (`sw_host_gen.traced_endpoints`, the generated header's own list) -- `FirHost` and `MarkovHost`
+  lost their copies; markov's memory-read trace is now `mem_reader` (was `mem`).
+- **C++ channels** in `xsi_fiber.h`: `SwEvent`, `SwSemaphore`, `SwLock`, `SwQueue<T>`, `wait_any`.
+  `test_xsi_fiber.py::test_channels_wake_in_the_same_tick` (MinGW 6.2 / 9.5 / PATH g++): a release
+  wakes an earlier-started waiter in the same tick.
+- The typed read needs the example's generated `include/` and Vitis's include dir at testbench compile
+  time: `markov_xsi.run_xsi` passes them (`tb_include_dirs`).
+- **Gate: `test_markov_xsi.py -m xsi` 5 passed, 0 skipped -- 1870 unchanged, bit-exact, no polls, pysim
+  within 5%, traces byte-identical.**  The workspace was checked to hold the generated
+  `MarkovHost_endpoints.h` and the new program.
+- **Docs not yet updated**: `docs/examples/markov/xsi.md` and `docs/examples/mm_fir/rtlsim.md` still show
+  the state-machine C++ and `field_position` -- Stage 7.
+- **Caught by the full suite, from Stage 3:** the committed copies of `run.bat` / `run.sh` in 15
+  examples' `xsi/` directories had drifted from the framework source (`test_xsi_workspace_copies`,
+  `test_rf_dut_synth`) -- refreshed.  Full `pytest -m xsi`: **161 passed, 0 skipped**; the
+  committed-copy gates bram_access and mem_copy re-run with the refreshed copies: 20 passed.  Fast suite:
+  only the marginal knowledge-index timing test fails (it fails on a clean checkout too).
 
 ### Stage 3 -- typed host messages: DONE (2026-10-08)
 

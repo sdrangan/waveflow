@@ -270,6 +270,20 @@ class SwHost(HwModule):
     def run_proc(self) -> ProcessGen[None]:
         yield from self.main()
 
+    # -- traces --------------------------------------------------------------------------------------
+
+    def post_sim(self) -> None:
+        """With :attr:`trace_dir` set, dump every memory-mapped endpoint's trace -- what crossed it --
+        as a burst bundle named after the endpoint's attribute, as the C++ realization does."""
+        super().post_sim()
+        if self.trace_dir:
+            from pathlib import Path
+
+            from waveflow.build.sw_host_gen import traced_endpoints
+            from waveflow.hw.mm_host import write_trace
+            for name, ep in traced_endpoints(self):
+                write_trace(ep, Path(self.trace_dir) / name)
+
     # -- the C++ realization --------------------------------------------------------------------------
 
     def bfm_model(self):
