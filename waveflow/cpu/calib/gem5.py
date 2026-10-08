@@ -57,6 +57,38 @@ STATS = {
     "dram_writes": "system.mem_ctrls.writeReqs",
 }
 
+_CPU = "system.cpu_cluster.cpus"
+#: The activity McPAT is driven by (``waveflow.cpu.calib.mcpat``), kept on every row with an ``s_``
+#: prefix so the corpus alone can re-run the energy model -- no gem5 output directory needed.
+MCPAT_STATS = {
+    "s_int_insts": f"{_CPU}.commitStats0.numIntInsts",
+    "s_fp_insts": f"{_CPU}.commitStats0.numFpInsts",
+    "s_vec_insts": f"{_CPU}.commitStats0.numVecInsts",
+    "s_load_insts": f"{_CPU}.commitStats0.numLoadInsts",
+    "s_store_insts": f"{_CPU}.commitStats0.numStoreInsts",
+    "s_calls": f"{_CPU}.commitStats0.functionCalls",
+    "s_branches": f"{_CPU}.branchPred.committed_0::total",
+    "s_mispredicts": f"{_CPU}.branchPred.mispredicted_0::total",
+    "s_int_mult": f"{_CPU}.commitStats0.committedInstType::IntMult",
+    "s_int_div": f"{_CPU}.commitStats0.committedInstType::IntDiv",
+    "s_ialu": f"{_CPU}.executeStats0.numIntAluAccesses",
+    "s_fpalu": f"{_CPU}.executeStats0.numFpAluAccesses",
+    "s_vecalu": f"{_CPU}.executeStats0.numVecAluAccesses",
+    "s_int_rf_reads": f"{_CPU}.executeStats0.numIntRegReads",
+    "s_int_rf_writes": f"{_CPU}.executeStats0.numIntRegWrites",
+    "s_fp_rf_reads": f"{_CPU}.executeStats0.numFpRegReads",
+    "s_fp_rf_writes": f"{_CPU}.executeStats0.numFpRegWrites",
+    "s_icache_reads": f"{_CPU}.icache.ReadReq.accesses::total",
+    "s_icache_read_misses": f"{_CPU}.icache.ReadReq.misses::total",
+    "s_dcache_reads": f"{_CPU}.dcache.ReadReq.accesses::total",
+    "s_dcache_read_misses": f"{_CPU}.dcache.ReadReq.misses::total",
+    "s_dcache_writes": f"{_CPU}.dcache.WriteReq.accesses::total",
+    "s_dcache_write_misses": f"{_CPU}.dcache.WriteReq.misses::total",
+    "s_l2_accesses": "system.cpu_cluster.l2.overallAccesses::total",
+    "s_l2_misses": "system.cpu_cluster.l2.overallMisses::total",
+    "s_l2_writebacks": "system.cpu_cluster.l2.WritebackDirty.accesses::total",
+}
+
 _BLOCK = "---------- Begin Simulation Statistics ----------"
 
 
@@ -88,7 +120,10 @@ def roi_stats(text: str) -> dict[str, float]:
 
 
 def pick_stats(stats: Mapping[str, float]) -> dict[str, float]:
-    return {k: float(stats.get(name, 0.0)) for k, name in STATS.items()}
+    """The row's statistics -- :data:`STATS` and :data:`MCPAT_STATS` -- with absent as zero."""
+    return {
+        k: float(stats.get(name, 0.0)) for k, name in {**STATS, **MCPAT_STATS}.items()
+    }
 
 
 def symbol_sizes(nm: str, exe: Path, kernel: Kernel) -> dict[str, int]:
@@ -404,6 +439,8 @@ class Gem5Runner:
         row["code_bytes"] = self.code_bytes(self.build(kernel), kernel)
         row["kernel_sig"] = self.kernel_sig(kernel)
         row["prereg_commit"] = prereg
-        row["rundir"] = str(rundir)
+        row["run_id"] = (
+            rundir.name
+        )  # under the runner's workdir; no home path in committed data
         row.update(self.provenance())
         return row
