@@ -1,0 +1,39 @@
+# McPAT @ 74d4759f output for the idle reference A53 (1 core, 32K/32K L1, 1 MiB L2, 22 nm, 1.2 GHz),
+# first 40 lines: the processor summary and the start of the core breakdown.
+McPAT (version 1.3 of Feb, 2015) is computing the target processor...
+ 
+
+McPAT (version 1.3 of Feb, 2015) results (current print level is 1, please increase print level to see the details in components): 
+*****************************************************************************************
+  Technology 22 nm
+  Using Long Channel Devices When Appropriate
+  Interconnect metal projection= conservative interconnect technology projection
+  Core clock Rate(MHz) 1200
+
+*****************************************************************************************
+Processor: 
+  Area = 3.24105 mm^2
+  Peak Power = 1.16674 W
+  Total Leakage = 0.0969237 W
+  Peak Dynamic = 1.06982 W
+  Subthreshold Leakage = 0.0946296 W
+  Gate Leakage = 0.00229409 W
+  Runtime Dynamic = 0 W
+
+  Total Cores: 1 cores 
+  Device Type= ITRS low operating power device type
+    Area = 1.03377 mm^2
+    Peak Dynamic = 0.598563 W
+    Subthreshold Leakage = 0.0462806 W
+    Gate Leakage = 0.00111145 W
+    Runtime Dynamic = 0 W
+
+  Total L2s: 
+  Device Type= ITRS high performance device type
+    Area = 2.20728 mm^2
+    Peak Dynamic = 0.471255 W
+    Subthreshold Leakage = 0.048349 W
+    Gate Leakage = 0.00118264 W
+    Runtime Dynamic = 0 W
+
+*****************************************************************************************

@@ -118,7 +118,8 @@ WANT_XSI_GATES = 161
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
 #: collects at least this many.  To update: ``pytest -m gem5 --collect-only -q``.
 #: 0 -> 9 on 2026-10-08 (plans/cpu_model.md step 9): the runner's end-to-end gates.
-WANT_GEM5_GATES = 9
+#: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
+WANT_GEM5_GATES = 11
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}

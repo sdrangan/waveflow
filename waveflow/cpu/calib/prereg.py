@@ -43,6 +43,21 @@ def _git(repo: Path, *args: str) -> str:
     return run.stdout.strip()
 
 
+def require_committed(path: str | Path) -> str:
+    """The commit that added *path*; a :class:`PreregistrationError` unless git tracks it unmodified."""
+    path = Path(path).resolve()
+    repo = Path(_git(path.parent, "rev-parse", "--show-toplevel"))
+    rel = str(path.relative_to(repo))
+    if not _git(repo, "ls-files", "--", rel):
+        raise PreregistrationError(
+            f"{rel} is not tracked: commit the plan before measuring"
+        )
+    if _git(repo, "status", "--porcelain", "--", rel):
+        raise PreregistrationError(f"{rel} has uncommitted changes: commit them first")
+    added = _git(repo, "log", "--diff-filter=A", "--format=%H", "--", rel).splitlines()
+    return added[-1] if added else ""
+
+
 @dataclass
 class SweepPlan:
     """A committed ``sweep_plan.csv``: columns ``kernel``, ``point`` (JSON) and ``role``."""
@@ -56,19 +71,8 @@ class SweepPlan:
     def load(cls, path: str | Path) -> SweepPlan:
         """Read *path*, refusing it unless git tracks it and it is unmodified."""
         path = Path(path).resolve()
-        repo = Path(_git(path.parent, "rev-parse", "--show-toplevel"))
-        rel = str(path.relative_to(repo))
-        if not _git(repo, "ls-files", "--", rel):
-            raise PreregistrationError(
-                f"{rel} is not tracked: commit the plan before measuring"
-            )
-        if _git(repo, "status", "--porcelain", "--", rel):
-            raise PreregistrationError(
-                f"{rel} has uncommitted changes: commit them first"
-            )
-        added = _git(
-            repo, "log", "--diff-filter=A", "--format=%H", "--", rel
-        ).splitlines()
+        commit = require_committed(path)
+        rel = path.name
         df = pd.read_csv(path)
         roles: dict[str, str] = {}
         for row in df.itertuples(index=False):
@@ -78,7 +82,7 @@ class SweepPlan:
             if key in roles:
                 raise PreregistrationError(f"{key} is registered twice in {rel}")
             roles[key] = row.role
-        return cls(path=path, commit=added[-1] if added else "", roles=roles)
+        return cls(path=path, commit=commit, roles=roles)
 
     def role(self, kernel: str, point: Mapping[str, Any]) -> str:
         """The registered role of *point*, or a :class:`PreregistrationError`."""
