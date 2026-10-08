@@ -23,3 +23,15 @@ Appended as the work teaches something. Newest last.
   own cost, so subtracting it (step 9) is not optional for the scheduler operations.
 - **Budget the gem5 build for a shared machine.** `build/ARM/gem5.opt` took 88 min at `-j6` with the
   machine's load around 16; it is a one-off, but don't plan a step around the 30–60 min estimate.
+
+## M1: the processor model
+
+- **An unconfigured `DirectMMIF` charges no time.** It adds only `latency_write` / `latency_read`
+  (default 0); per-word time is the slave's to model. A test of "bus time is charged once" first saw
+  zero bus time and so proved nothing. Configure the link and the slave before measuring the bus.
+- **The heap ready queue holds its rate under a burst.** 37k tasks/s with 20,000 tasks queued at
+  once, against 218/s measured for `simpy.PriorityResource` in planning. Streaming arrivals give 40k/s.
+  Both were on a machine at load ~9 of 8 threads.
+- **Hand-computed timelines at 1 Hz caught nothing, and were still worth it.** With one cycle per
+  second every expected time is an integer, so the preemption rule (floor, partial switch lost,
+  original `(prio, seq)` kept) is pinned exactly rather than approximately.
