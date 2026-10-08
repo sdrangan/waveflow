@@ -80,3 +80,28 @@ def test_a_twin_runs_as_a_sw_function(make_run):
     rec = run.cpu.records[0]
     assert rec.feats["n_scanned"] == 26 and rec.feats["n_moved"] == 18
     assert rec.feats["ws"] == 8.0 * 11
+
+
+# ---------------------------------------------------------------------------
+# AC5 on every registered point (step 11), against the host build.
+# ---------------------------------------------------------------------------
+
+from waveflow.cpu.calib.sweep import sweep_rows
+
+REGISTERED = [(k, p) for k, p, _ in sweep_rows()]
+
+
+def test_the_twin_equals_the_c_program_at_every_registered_point(host_bins):
+    bad = []
+    for name, point in REGISTERED:
+        k = KERNELS[name]
+        run = subprocess.run(
+            [str(host_bins[name]), *k.argv(point)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if json.loads(run.stdout) != k.run_twin(point):
+            bad.append((name, point))
+    assert len(REGISTERED) == 305
+    assert not bad, bad

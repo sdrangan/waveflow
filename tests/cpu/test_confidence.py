@@ -60,3 +60,43 @@ def test_area_from_a_seeded_model_reads_the_configuration():
     est = model.estimate(CpuConfig(n_cores=4, l2_bytes=512 * 1024))
     assert est["area_mm2"].value == 0.2 + 0.5 * 4 + 0.01 * 512
     assert est["area_mm2"].level == ConfidenceLevel.UNCALIBRATED
+
+
+# ---------------------------------------------------------------------------
+# Calibrated part (step 11): the A53 platform's fitted models.
+# ---------------------------------------------------------------------------
+
+
+def _fit_rows(platform, family):
+    from waveflow.cpu.calib.calibrate import FAMILIES, load_corpus
+
+    fam = next(f for f in FAMILIES if f.name == family)
+    df = fam.select(load_corpus(platform.dir / "cpu"))
+    return df[df["role"] == "fit"]
+
+
+def test_a_calibrated_model_is_interpolated_inside_and_extrapolated_outside():
+    from waveflow.cpu.platform import CpuPlatform
+
+    p = CpuPlatform.load()
+    m = p.model("sched_ops.add", "cycles")
+    inside = {"n_tasks": 100, "n_scanned": 50, "n_moved": 49}
+    assert m.confidence_feat(inside).level in (
+        ConfidenceLevel.INTERPOLATED,
+        ConfidenceLevel.EXACT,
+    )
+    outside = {"n_tasks": 5000, "n_scanned": 2500, "n_moved": 2499}
+    conf = m.confidence_feat(outside)
+    assert conf.level == ConfidenceLevel.EXTRAPOLATED
+    assert "n_tasks" in conf.facts["outside"]
+
+
+def test_no_fitted_energy_model_claims_exact():
+    # Energy is fitted in pJ so the absolute exactness tolerance (1e-9) cannot be met by accident.
+    from waveflow.cpu.platform import CpuPlatform
+
+    p = CpuPlatform.load()
+    for family in p.families:
+        m = p.model(family, "energy_pj")
+        row = _fit_rows(p, family).iloc[0].to_dict()
+        assert m.confidence_feat(row).level != ConfidenceLevel.EXACT, family
