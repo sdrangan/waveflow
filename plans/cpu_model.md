@@ -112,7 +112,7 @@ resource models already are.
 |---|---|---|---|
 | Processor model package | Python | `waveflow/cpu/` | waveflow users; the DSE plan |
 | Calibration kernels, gem5/McPAT harness, gem5 config script | C + Python | `waveflow/cpu/calib/` | whoever calibrates a new platform |
-| The A53 calibration platform: corpus, fitted params, pre-registration, accuracy tables | CSV / JSON | `waveflow/calib/platforms/a53_hpi_1333mhz_gem5v25_1/cpu/` (suggested name; step 1 confirms the clock, step 10 fixes the name) | the DSE plan |
+| The A53 calibration platform: corpus, fitted params, pre-registration, accuracy tables | CSV / JSON | `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu/` (clock confirmed in step 1; step 10 fixes the name) | the DSE plan |
 | Micro-scheduler example | Python | `examples/cpu_sched/` | users; the DSE plan as its seed |
 | Tests | pytest | `tests/cpu/`, `tests/examples/test_cpu_sched*.py` | CI and reviewers |
 | Guide and example docs | Markdown (Jekyll front matter) | `docs/guide/cpu/`, `docs/examples/cpu_sched/` | waveflow users |
@@ -125,7 +125,7 @@ resource models already are.
 The task is done when every box is ticked with the evidence named. Every command runs from the
 clone root `/home/wirelesslab914/ali/waveflow-cpu` with the clone's venv activated (§6).
 `$PLATFORM` ("the platform") is the new platform directory from step 10, e.g.
-`waveflow/calib/platforms/a53_hpi_1333mhz_gem5v25_1`. `$A53_CLK` is the A53 clock confirmed in step 1.
+`waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1`. `$A53_CLK` is the A53 clock confirmed in step 1: 1.2GHz (speed grade -1).
 
 - [ ] **AC1**: `waveflow/cpu/` exports `Processor`, `CpuConfig`, the task and cost types, and the area
   and footprint estimators, and imports nothing from `examples/` or `specsense`. Verify:
@@ -440,7 +440,7 @@ change in §14.
 class CpuConfig:                      # one DSE point
     name: str = "a53"
     n_cores: int = 1
-    f_clk_hz: float = 1.333e9         # confirm from DS926 in step 1
+    f_clk_hz: float = 1.2e9           # DS926 F_APUMAX at speed grade -1 (step 1)
     l1i_bytes: int = 32 * 1024        # confirm from UG1085 in step 1
     l1d_bytes: int = 32 * 1024
     l2_bytes: int = 1024 * 1024
@@ -489,7 +489,7 @@ Alternatives considered:
 | # | Step | Inputs | Exit condition (verifiable) | Verify with | Checkpoint | Status |
 |---|---|---|---|---|---|---|
 | 0 | In the clone: create the branch, create the venv, commit this plan, record the test baseline | the clone's `main`; this plan file | Clone on `feat/cpu-model`; the plan committed as `cpu(0)`; `.venv` installed; `waveflow` imports from the clone; baseline counts in §15 | `git branch --show-current`; `git log --oneline -1`; `python -c "import waveflow; print(waveflow.__file__)"`; `pytest -m "not vitis and not xsi" -q` | commit (the plan) | ☐ |
-| 1 | Confirm the facts the model is configured from | DS926, UG1085, gem5 `HPI.py` / `starter_se.py`, McPAT README and `mcpat.mk` | A53 clock (xczu48dr speed grade), L1/L2 sizes, PS DRAM type and the closest gem5 DRAM model, HPI defaults, how `starter_se.py` sets clock, caches and DRAM (`-P` overrides or a config script), McPAT's minimum node; each with a citation in §14 | The §14 rows with links | commit (§14 edit) | ☐ |
+| 1 | Confirm the facts the model is configured from | DS926, UG1085, gem5 `HPI.py` / `starter_se.py`, McPAT README and `mcpat.mk` | A53 clock (xczu48dr speed grade), L1/L2 sizes, PS DRAM type and the closest gem5 DRAM model, HPI defaults, how `starter_se.py` sets clock, caches and DRAM (`-P` overrides or a config script), McPAT's minimum node; each with a citation in §14 | The §14 rows with links | commit (§14 edit) | ☑ |
 | 2 | Build gem5 v25.1.0.1 (`ARM`), `libm5.a` for arm64, and McPAT in Docker under `~/ali/tools/` | §5 sources, step 1 | `hello` runs under HPI in SE mode at the step-1 clock and prints `hi`; `stats.txt` has `simTicks` and the core's cycle count; an m5-marked region dumps a stats block; McPAT runs its shipped ARM example | The commands in *Step details*; outputs pasted in §15 | — (outside the repo) | ☐ |
 | 3 | Package skeleton: `waveflow/cpu/` with `CpuConfig`, `SwFunction`, `Processor` (heap ready queue, core tokens, one core, run-to-completion), `TaskRecord`; the no-example-imports test | §7 reuse list; §9 sketch | One task on one core charges exactly `switch + cycles`; imports are clean (AC1) | `pytest tests/cpu/test_skeleton.py tests/cpu/test_no_example_imports.py` | commit | ☐ |
 | 4 | Scheduling: N cores, priority, FIFO ties, switch charge by core identity, queueing delay, utilization, `report()` with lazily computed confidence | step 3 | ≥ 8 hand-computed timelines pass (AC2, first part) | `pytest tests/cpu/test_scheduling.py` | commit | ☐ |
@@ -650,7 +650,7 @@ function `__attribute__((noinline))`):
 
 **Step 10: pre-registration** (👁):
 - **Platform:** create it with `Platform.resolve(waveflow/calib/platforms, name, part="cortex-a53 (gem5 HPI)", clk_freq=$A53_CLK, res_types=("area_mm2", "leak_mw"))`.
-  Suggested name: `a53_hpi_1333mhz_gem5v25_1`, with the clock part changed if step 1 finds a different
+  Suggested name: `a53_hpi_1200mhz_gem5v25_1`, with the clock part changed if step 1 finds a different
   A53 clock.
 - **Sweep plan:** `cpu/sweep_plan.csv` has one row per (kernel, feature point, data seed, role ∈ {fit,
   validation, test}).
@@ -809,10 +809,10 @@ function `__attribute__((noinline))`):
 | Risk | The interrupt entry latency constant has no verified source. | Flagged in code and docs; `UNCALIBRATED` if no public source is found |
 | Open question | Where and on what was tracerspecsense's scheduler-delay table (`specsense/scheduler.py:1319`) measured? Useful as a sanity check on step 13's magnitudes; not blocking. | user |
 | Open question | Does the later DSE need shared-L2 and memory contention between cores? | the DSE plan's owner |
-| Fact (step 1) | A53 maximum clock for the xczu48dr's speed grade. | filled in by the doer from DS926 |
-| Fact (step 1) | APU L1I / L1D / L2 sizes, PS DRAM type, gem5 DRAM model chosen. | filled in by the doer from UG1085 and gem5 |
-| Fact (step 1) | HPI defaults and how `starter_se.py` sets clock, caches and DRAM. | filled in by the doer from gem5 v25.1.0.1 |
-| Fact (step 1) | McPAT's minimum node and in-order setting. | filled in by the doer from the McPAT README |
+| Fact (step 1) | **The RFSoC 4x2 carries `XCZU48DR-1FFVG1517E`, speed grade -1**, not the -2 this plan expected ([fpgadeveloper board page](https://boards.fpgadeveloper.com/boards/RFSoC-4x2); DigiKey's part listing). DS926 Table 1: `F_APUMAX` = **1200 MHz at -1**, 1333 MHz at -2 ([DS926 PS performance](https://docs.amd.com/r/en-US/ds926-zynq-ultrascale-plus-rfsoc/Processor-System-PS-Performance-Characteristics)). So `$A53_CLK` = **1.2 GHz** and the platform name becomes `a53_hpi_1200mhz_gem5v25_1`. Note: the repo's `rfsoc4x2_bfm_250mhz` platform and 40 other references use the part string `xczu48dr-ffvg1517-2-e` (-2); that is a pre-existing mismatch, reported to the user, not changed here. | doer, 2026-10-08 |
+| Fact (step 1) | APU caches (UG1085 v2.5): L1I 32 KB 2-way and L1D 32 KB 4-way per core, L2 1 MB 16-way shared ([UG1085](https://docs.amd.com/r/en-US/ug1085-zynq-ultrascale-trm)). PS DRAM: DDR4, single 64-bit controller, max 2400 Mb/s at -1E (DS926 Table 3). gem5 model chosen: `DDR4_2400_8x8`, `--mem-channels 1` (the board's DRAM device organization is not confirmed; x8 is an assumption). | doer, 2026-10-08 |
+| Fact (step 1) | gem5 v25.1.0.1 `HPI.py`: `HPI_ICache` 32 KiB 2-way (1/1/1-cycle latencies), `HPI_DCache` 32 KiB 4-way with a `StridePrefetcher`, `HPI_L2` 1024 KiB 16-way (13/13/5): **identical to UG1085's A53 caches**, so no cache override is needed for the reference configuration. `starter_se.py`: `--cpu hpi`, `--cpu-freq` (default **4GHz**, always set it), `--num-cores` (1), `--mem-type` (default `DDR3_1600_8x8`), `--mem-channels` (default 2), `--mem-size` (2GiB); **no cache-size options**, so other cache configurations (step 15, area grid) need `-P` overrides or `gem5_cfg/a53_se.py`. `util/m5/README.md`: `scons arm64.CROSS_COMPILE=<prefix> build/arm64/out/m5`; arm64's default m5op call type is `instruction`. | doer, 2026-10-08 |
+| Fact (step 1) | McPAT @ `74d4759f`: `cacti/technology.cc` supports 180/90/65/45/32/**22 nm** (the 16 nm branch is commented out), so energy and area are reported at 22 nm. `mcpat.mk` lines 25–26 set `CXX = g++ -m32`, `CC = gcc -m32` (override confirmed needed). `ARM_A9_2GHz.xml`: `number_of_L2s=0`, `core_tech_node=40`, `clock_rate=2000`, `machine_type=0` (to change to 1 for in-order). | doer, 2026-10-08 |
 
 ## 15. Progress log
 
@@ -823,6 +823,7 @@ function `__attribute__((noinline))`):
 | 2026-10-08 | plan | The user approved the written plan; status set to Ready. No branch, worktree or tool install was made during planning. | the user's approval | none |
 | 2026-10-08 | plan | After approval, the planner noticed the plan file is absent on `main`, so the worktree wouldn't have it. With the user's yes, step 0 now copies the plan into the worktree and commits it first. | the user's answer | none |
 | 2026-10-08 | plan | The user moved the work to a separate clone (another agent is working in the original checkout). The plan was moved to the clone and adapted: clone instead of worktree, a clone-local venv (the user's choice, because `main` now needs `mcp>=2.3`), base `main` @ `12350fa4`. That `main` brought `plans/host_runtime.md`, which overlaps this plan; its alignment is a decision for the M0 pause, before M1. | the user's instructions; §14 | the readiness gate is re-run with the clone's paths in step 0 |
+| 2026-10-08 | 1 | Facts confirmed and recorded in §14. Surprise: the RFSoC 4x2 is speed grade -1, so the A53 clock is 1.2 GHz (not 1.333) and the platform is `a53_hpi_1200mhz_gem5v25_1`; the repo's `-2` part strings are a pre-existing mismatch, left alone. gem5 HPI caches equal UG1085's A53 caches. | §14 Fact rows with links | clock and platform name changed (as the plan allowed) |
 
 ## 16. Completion report
 
