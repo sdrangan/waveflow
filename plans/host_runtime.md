@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
-**Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); not
-started.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+**Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
+done (2026-10-08), Stage 1 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -168,6 +168,39 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
 7. **Docs.**  A guide page for software threads (the table above, side by side); `xsi_system.md`;
    `bfm_model.md` (a host no longer writes a model); the markov pages.  And a **blind test**: a fresh agent
    writes the host for a new small system from the docs alone.
+
+## Progress log
+
+### Stage 0 -- feasibility: DONE, all three pass (2026-10-08)
+
+Prototypes lived in a scratch directory; no framework code changed.
+
+- **(a) GCC 9.5 runs the XSI flow unchanged.**  A copy of `run.bat` with `MINGW` pointed at
+  `tps/mingw/10.0.0` (GCC 9.5.0, `x86_64-msvcrt-posix-seh`), run against copies of the real
+  workspaces: mm_fir (`per_view`) **618** and markov **1870**, and the **complete testbench output is
+  identical** to the 6.2 build (68 and 19 lines -- every bus operation with its cycle stamps).  The
+  binary was confirmed as a 9.5 build (its embedded `GCC:` string); it loads 9.5's `libstdc++-6.dll` /
+  `libgcc_s_seh-1.dll` from `PATH` beside `xsimk.dll` with no clash.  GCC 6.2 cannot even compile
+  `<condition_variable>` threading (`unique_lock` undeclared), so the switch is required, not optional.
+- **(b) A cooperative scheduler over OS threads is deterministic.**  ~100 lines: the cycle loop and each
+  thread hand a baton back and forth (only one runs at a time); each cycle the loop resumes, in a fixed
+  order, every thread whose wait completed.  Two threads interacting through timed waits and an event
+  produce the **same log on 100 of 100 runs**, in the order SimPy would.  **Cost: ~12 us per hand-off**
+  steady state (20,000 hand-offs, one condition variable *per party* with `notify_one`); a single shared
+  condition variable with `notify_all` was 4-5x slower.  A hand-off happens per bus operation or event,
+  not per cycle, so it is about the cost of simulating one RTL cycle -- negligible for markov's 14 bus
+  operations, ~1 s per 10^5.
+- **(c) The generated HLS schema headers work in host code -- no plain-C++ flavor needed.**  `mkv_resp.h`
+  compiled under GCC 9.5 with `-I Vitis/include` (Vitis's header-only `ap_int.h`, `hls_stream.h`), with
+  no errors or warnings, in one translation unit with `xsi_bfm.h` / `xsi_mm_host.h`; `read_array<64>` on
+  the two words Python serialized for `MkvResp(n=300, ones=257, tx_id=2)` returned exactly those fields.
+  Compile time unchanged (~5 s, same as today's `markov_tb.cpp`).  So Stage 3 reuses the existing
+  structs; the host build needs the Vitis include path (found by `waveflow/toolchain`).
+
+**Consequences for the next stages.**  Stage 2 switches `run.bat`'s MinGW to 9.5 for *every* XSI gate,
+so it must run the full `pytest -m xsi` (161, 0 skipped) -- (a) says the counts will not move, but only
+two of the 161 were tried.  The scheduler's shape is settled: per-party condition variables, baton
+passing, resume in registration order.  Linux (`run.sh`, system `g++`) has threads already.
 
 ## Non-goals
 
