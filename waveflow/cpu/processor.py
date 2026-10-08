@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,6 +55,8 @@ class _Task:
     result: Any = None
     #: Compute cycles still to run (a preemption leaves the remainder here).
     left: float = 0.0
+    #: In the ready queue (as opposed to holding a core, or finished).
+    queued: bool = True
 
 
 @dataclass(eq=False)
@@ -69,6 +72,8 @@ class _Core:
     seg_start: float = 0.0
     seg_switch: float = 0.0
     busy_s: float = 0.0
+    #: An interrupt has been sent to this core's segment and not yet delivered.
+    preempt_pending: bool = False
 
 
 @dataclass(kw_only=True, eq=False)
@@ -143,7 +148,37 @@ class Processor(SimObj):
         )
         heapq.heappush(self._ready, (prio, seq, task))
         self._dispatch()
+        if task.queued and (is_irq or self.config.preemptive):
+            self._preempt_for(task)
         return task
+
+    def _preempt_for(self, task: _Task) -> None:
+        """Interrupt the least urgent running task, if *task* is strictly more urgent than it.
+
+        Strictly: an equal priority never preempts, which keeps equal priorities first-come first-
+        served.  One arrival preempts at most one core, and a core already being preempted is not
+        chosen twice.  The freed core goes to whatever is most urgent when it is released -- normally
+        *task*; if another core frees first and takes *task*, the preemption still happens (the
+        victim re-queues and loses only its switch), which is the price of deciding at arrival.
+        """
+        victim = None
+        for core in self._cores:
+            run = core.running
+            if run is None or core.preempt_pending or core.proc is None:
+                continue
+            if not core.proc.is_alive:
+                continue
+            if victim is None or (run.prio, run.seq) > (
+                victim.running.prio,  # type: ignore[union-attr]
+                victim.running.seq,  # type: ignore[union-attr]
+            ):
+                victim = core
+        if victim is None or victim.running is None:
+            return
+        if victim.running.prio <= task.prio:
+            return
+        victim.preempt_pending = True
+        victim.proc.interrupt("preempt")  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -154,6 +189,7 @@ class Processor(SimObj):
         while self._free and self._ready:
             core = self._cores[heapq.heappop(self._free)]
             _, _, task = heapq.heappop(self._ready)
+            task.queued = False
             core.running = task
             core.proc = self.env.process(self._segment(core, task))
 
@@ -177,10 +213,46 @@ class Processor(SimObj):
         core.seg_start = self.now
         core.seg_switch = switch
         core.work_start = self.now + switch * cfg.period
-        yield self.env.timeout((switch + task.left) * cfg.period)
+        try:
+            yield self.env.timeout((switch + task.left) * cfg.period)
+        except simpy.Interrupt:
+            self._preempted(core, task)
+            return
         rec.switch_cycles += switch
         task.left = 0.0
         self._finish(core, task)
+
+    def _preempted(self, core: _Core, task: _Task) -> None:
+        """Re-queue *task* with the cycles it has left; free *core*.
+
+        ``executed = floor((now - work_start) * f_clk)`` whole cycles count as done (a fraction of a
+        cycle is not progress; the time it took is still busy time).  A preemption that lands during
+        the switch executes nothing, and the part of the switch already spent is lost -- the core is
+        left holding no one's context, so whoever runs next pays a full switch.  A tolerance of
+        ``1e-6`` cycles absorbs floating-point error, so an interrupt delivered at the very instant
+        the work would have ended completes the task instead of re-queueing a zero-length remainder.
+        """
+        f = self.config.f_clk_hz
+        rec = task.rec
+        now = self.now
+        if now >= core.work_start:
+            executed = math.floor((now - core.work_start) * f + 1e-6)
+            rec.switch_cycles += core.seg_switch
+            core.last_seq = task.seq
+        else:
+            executed = 0
+            rec.switch_cycles += (now - core.seg_start) * f
+            core.last_seq = -1
+        task.left = max(0.0, task.left - executed)
+        if task.left <= 1e-6:
+            task.left = 0.0
+            self._finish(core, task)
+            return
+        self._account(core, rec)
+        rec.n_preempted += 1
+        task.queued = True
+        heapq.heappush(self._ready, (task.prio, task.seq, task))
+        self._release(core)
 
     def _finish(self, core: _Core, task: _Task) -> None:
         rec = task.rec
@@ -201,5 +273,6 @@ class Processor(SimObj):
     def _release(self, core: _Core) -> None:
         core.running = None
         core.proc = None
+        core.preempt_pending = False
         heapq.heappush(self._free, core.index)
         self._dispatch()
