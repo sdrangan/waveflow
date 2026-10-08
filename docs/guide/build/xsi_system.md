@@ -107,6 +107,14 @@ with their schemas and compare against the scenario. The C++ never holds a field
 it must *act* on (which job a response answers), and that position is handed to it from the schema's
 own serializer (`field_position`).
 
+## Timing probes
+
+Once a system runs, `render_system_top(spec, probes)` adds one-bit probe outputs a testbench samples
+every cycle. A probe names the **pysim object** it watches — `beat(sysm.gen.s_cmd)`,
+`stall(sysm.fir.m_out)`, `last(ep)`, `beat(writer.m_mem, "AW")` — and the spec resolves it to the
+top's net or crossbar slot (`spec.probe_expr`), so no one has to know what the walk named a net.
+`system_tb_spec(..., probes=names)` adds a `ProbePin` per probe to the harness.
+
 ## What it does not do yet
 
 - An **off-chip memory** — a `FlatMemory` BFM beside the top, as mem_copy's — and a BRAM window

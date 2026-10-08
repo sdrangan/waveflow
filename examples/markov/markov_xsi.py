@@ -40,6 +40,8 @@ from waveflow.build.mm_adaptor_gen import leaf_sources
 from waveflow.build.mm_writer_gen import writer_top_name
 from waveflow.build.system_top import (
     SystemTopSpec,
+    beat,
+    last,
     render_system_tb,
     render_system_top,
     system_tb_spec,
@@ -66,24 +68,26 @@ XBAR_NAME = "xbar_markov_4x3"
 #: The testbench scenario: four jobs of 300 steps (two in flight at a time).
 NJOBS, NSTEPS = 4, 300
 
-#: Timing probes (plans: markov-timing): one-bit handshakes the top exposes as outputs when built with
-#: ``probes=True``, and the testbench samples every cycle.  Off for the gate.  The nets are the pysim
-#: system's channels, by name: a view's ``<kernel>_k_<view>``, the credit link's ``u_fwd`` (``_q`` past
-#: its FIFO) and ``u_crd``; the SI slots are the crossbar's master order.
-PROBES = {
-    "cmd": "gen_k_qcmd_TVALID && gen_k_qcmd_TREADY",        # host's command reaches the generator
-    "ufwd": "u_fwd_TVALID && u_fwd_TREADY",                 # generator -> its queue writer, a word
-    "ufwd_last": "u_fwd_TVALID && u_fwd_TREADY && u_fwd_TLAST",
-    "wr1_aw": "si1_axi_AWVALID && si1_axi_AWREADY",          # queue writer: a burst issued
-    "wr1_b": "si1_axi_BVALID && si1_axi_BREADY",             # ... and acknowledged
-    "u": "chain_k_qu_TVALID && chain_k_qu_TREADY",           # chain takes a word from its queue in
-    "crd": "u_crd_TVALID && u_crd_TREADY",                   # chain offers credit
-    "wr2_aw": "si2_axi_AWVALID && si2_axi_AWREADY",          # credit writer: a credit write
-    "ucrd": "gen_k_u_crd_TVALID && gen_k_u_crd_TREADY",      # generator takes a credit value
-    "wr3_aw": "si3_axi_AWVALID && si3_axi_AWREADY",          # chain's memory writer: a burst
-    "wr3_b": "si3_axi_BVALID && si3_axi_BREADY",
-    "resp": "chain_k_qresp_TVALID && chain_k_qresp_TREADY",  # a response word into qresp
-}
+def timing_probes(sysm: MarkovSystem) -> dict:
+    """Timing probes (plans: markov-timing): one-bit handshakes the top exposes as outputs when built
+    with ``probes=True``, and the testbench samples every cycle.  Off for the gate.  Each names the
+    pysim object it watches -- a kernel's port, or a bus master and an AXI channel -- and the system
+    top resolves the net."""
+    gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
+    return {
+        "cmd": beat(gen.s_cmd),                          # host's command reaches the generator
+        "ufwd": beat(gen.m_u.fwd_ep),                    # generator -> its queue writer, a word
+        "ufwd_last": last(gen.m_u.fwd_ep),               # ... the last word of a chunk
+        "wr1_aw": beat(link.fwd_writer.m_mem, "AW"),     # queue writer: a burst issued
+        "wr1_b": beat(link.fwd_writer.m_mem, "B"),       # ... and acknowledged
+        "u": beat(chain.s_u.fwd_ep),                     # chain takes a word from its queue in
+        "crd": beat(chain.s_u.crd_ep),                   # chain offers credit
+        "wr2_aw": beat(link.crd_writer.m_mem, "AW"),     # credit writer: a credit write
+        "ucrd": beat(gen.m_u.crd_ep),                    # generator takes a credit value
+        "wr3_aw": beat(chain.m_mem, "AW"),               # chain's memory writer: a burst
+        "wr3_b": beat(chain.m_mem, "B"),
+        "resp": beat(chain.m_resp),                      # a response word into qresp
+    }
 
 
 def scenario_jobs() -> list[dict]:
@@ -193,12 +197,13 @@ def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> str:
     host.trace_dir = trace_dir(work_dir, probes).as_posix()
     host.write_scenario(host.scenario)
     shutil.rmtree(host.trace_dir, ignore_errors=True)        # a stale trace would describe another run
-    tb = system_tb_spec(spec, sysm.xbar, [host], probes=list(PROBES) if probes else ())
+    prb = timing_probes(sysm) if probes else None
+    tb = system_tb_spec(spec, sysm.xbar, [host], probes=list(prb or ()))
     main, tb_files = render_system_tb(spec, tb)
     rtl = [f for t in spec.modules for f in sorted(rtl_dir(t).glob("*.v"))]
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + rtl + [f"{spec.top}.v"],
                include_dirs=ip.include_dirs, tb_name="markov_tb", tb_cpp=main,
-               extra_files={f"{spec.top}.v": render_system_top(spec, PROBES if probes else None),
+               extra_files={f"{spec.top}.v": render_system_top(spec, prb or None),
                             **tb_files, **address_headers()})
     out = ws.run(timeout=timeout)
     return out + trace_report(out, host.trace_dir)

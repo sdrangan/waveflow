@@ -40,8 +40,10 @@ from waveflow.build.axi_xbar import AxiXbarConfig, generate_axi_xbar
 from waveflow.build.mm_adaptor_gen import leaf_sources
 from waveflow.build.system_top import (
     SystemTopSpec,
+    beat,
     render_system_tb,
     render_system_top,
+    stall,
     system_tb_spec,
     system_top_spec,
 )
@@ -68,17 +70,19 @@ TAPS_A = [3, -1, 4, 1, -5]
 TAPS_B = [2, 7, 1, -8, 2, 8, 1, -8]
 PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
 
-#: Timing probes: one-bit handshakes the top exposes as outputs when built with ``probes=True``; the
-#: testbench samples them every cycle and prints the cycles each fired.  Off for the gate.  The nets
-#: are the pysim system's stream channels, by name (``build_mm_device``: ``k_<view>``).
-PROBES = {
-    "in": "k_qin_TVALID && k_qin_TREADY",              # the kernel takes a word from queue in
-    "cfg": "k_regs_cfg_TVALID && k_regs_cfg_TREADY",   # ... a config word
-    "out": "k_qout_TVALID && k_qout_TREADY",           # a result into queue out
-    "resp": "k_qresp_TVALID && k_qresp_TREADY",        # a response word
-    "stat": "k_regs_stat_TVALID && k_regs_stat_TREADY",  # a status word
-    "out_full": "k_qout_TVALID && !k_qout_TREADY",     # the kernel held up by a full queue out
-}
+def timing_probes(sysm: MmFirSystem) -> dict:
+    """Timing probes: one-bit handshakes the top exposes as outputs when built with ``probes=True``;
+    the testbench samples them every cycle and prints the cycles each fired.  Off for the gate.  Each
+    names the kernel port it watches; the system top resolves the net."""
+    fir = sysm.fir
+    return {
+        "in": beat(fir.s_in),             # the kernel takes a word from queue in (header or samples)
+        "cfg": beat(fir.s_cfg),           # ... a config word
+        "out": beat(fir.m_out),           # a result into queue out
+        "resp": beat(fir.m_resp),         # a response word
+        "stat": beat(fir.m_status),       # a status word
+        "out_full": stall(fir.m_out),     # the kernel held up by a full queue out
+    }
 
 
 def scenario_x() -> np.ndarray:
@@ -186,10 +190,11 @@ def run_xsi(topology: str, work_dir, timeout: int = 3600, probes: bool = False) 
     host.trace_dir = trace_dir(topology, work_dir, probes).as_posix()
     host.write_scenario(host.scenario)
     shutil.rmtree(host.trace_dir, ignore_errors=True)        # a stale trace would describe another run
-    tb = system_tb_spec(spec, sysm.xbar, [host], probes=list(PROBES) if probes else ())
+    prb = timing_probes(sysm) if probes else None
+    tb = system_tb_spec(spec, sysm.xbar, [host], probes=list(prb or ()))
     main, tb_files = render_system_tb(spec, tb)
     ws.prepare(rtl_files=ip.sim_files + leaf_sources() + sorted(RTL.glob("*.v")) + [f"{spec.top}.v"],
                include_dirs=ip.include_dirs, tb_name="mm_fir_tb", tb_cpp=main,
-               extra_files={f"{spec.top}.v": render_system_top(spec, PROBES if probes else None),
+               extra_files={f"{spec.top}.v": render_system_top(spec, prb or None),
                             **tb_files, **address_headers()})
     return ws.run(timeout=timeout) + trace_report(host.trace_dir)

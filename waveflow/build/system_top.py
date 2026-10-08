@@ -180,6 +180,17 @@ class SystemTopSpec:
     axis_nets: tuple[tuple[str, str, str], ...] = ()
     #: An on-chip memory's unused kernel ports, by BramView.kport.
     idle_memory_ports: tuple[str, ...] = ()
+    #: ``id(endpoint) -> net`` for every stream endpoint on a net inside the top, and
+    #: ``id(bus master) -> its SI prefix`` -- what lets a :class:`Probe` name a pysim object instead
+    #: of a net.  Identities of the graph the spec was walked from: resolve probes against that graph.
+    ep_nets: tuple[tuple[int, str], ...] = ()
+    ep_si: tuple[tuple[int, str], ...] = ()
+
+    def probe_expr(self, probe: "Probe | str") -> str:
+        """The one-bit Verilog expression for *probe* over this top's nets (a string passes through)."""
+        if isinstance(probe, str):
+            return probe
+        return probe.expr(dict(self.ep_nets), dict(self.ep_si))
 
     @property
     def host_axi(self) -> tuple[str, ...]:
@@ -335,6 +346,7 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
     # --- the crossbar -------------------------------------------------------------------------------
     si: list[tuple[str, bool]] = []
     maxi_si: list[tuple[str, str, str]] = []
+    ep_si: list[tuple[int, str]] = []
     for kk in range(n_si):
         ep = xbar.endpoints.get(f"master_{kk}")
         hit = port_of.get(id(ep))
@@ -343,6 +355,7 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
         else:
             si.append((f"si{kk}_axi", False))
             maxi_si.append((hit[0].inst, hit[1].name, f"si{kk}_axi"))
+        ep_si.append((id(ep), si[-1][0]))
 
     mi: list[MiSlot] = []
     idle_mem: list[str] = []
@@ -383,7 +396,72 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
 
     return SystemTopSpec(top=top, xbar=cfg, si=tuple(si), mi=tuple(mi), nets=tuple(nets),
                          kernels=tuple(rtl), irqs=tuple(irqs), maxi_si=tuple(maxi_si),
-                         axis_nets=tuple(axis_nets), idle_memory_ports=tuple(idle_mem))
+                         axis_nets=tuple(axis_nets), idle_memory_ports=tuple(idle_mem),
+                         ep_nets=tuple(net_of.items()), ep_si=tuple(ep_si))
+
+
+# ---------------------------------------------------------------------------
+# Timing probes, named by the pysim object they watch
+# ---------------------------------------------------------------------------
+
+_AXI_CHANNELS = ("AW", "W", "B", "AR", "R")
+
+
+@dataclass(frozen=True)
+class Probe:
+    """A one-bit timing probe on a pysim endpoint -- resolved to the top's nets by the spec, so the
+    user names *what* to watch (``sysm.gen.s_cmd``) and never a net.
+
+    * a **stream endpoint** (a kernel's or a view's port inside the top): the net it is on --
+      the producer's side of a FIFO'd link for the producer, the consumer's side for the consumer;
+    * a **bus master** (``MMIFMaster``) on the crossbar: its SI slot, on one AXI channel
+      (``"AW"``, ``"W"``, ``"B"``, ``"AR"``, ``"R"``).
+
+    Build them with :func:`beat`, :func:`stall` and :func:`last`."""
+
+    ep: object
+    kind: str = "beat"                 # "beat" | "stall" | "last"
+    channel: str | None = None         # AXI channel, for a bus master
+
+    def expr(self, ep_nets: dict, ep_si: dict) -> str:
+        name = getattr(self.ep, "name", self.ep)
+        if id(self.ep) in ep_si:
+            if self.channel not in _AXI_CHANNELS:
+                raise LoweringError(f"probe on bus master {name!r}: name its AXI channel, one of "
+                                    f"{_AXI_CHANNELS} (e.g. beat(m, 'AW'))")
+            pre = f"{ep_si[id(self.ep)]}_{self.channel}"
+        elif id(self.ep) in ep_nets:
+            if self.channel is not None:
+                raise LoweringError(f"probe on stream endpoint {name!r}: a stream has no AXI channel")
+            pre = f"{ep_nets[id(self.ep)]}_T"
+        else:
+            raise LoweringError(f"probe on {name!r}: it is not a stream endpoint on a net inside the "
+                                f"top, nor a bus master on its crossbar")
+        v, r = f"{pre}VALID", f"{pre}READY"
+        if self.kind == "beat":
+            return f"{v} && {r}"
+        if self.kind == "stall":
+            return f"{v} && !{r}"
+        if self.kind == "last":
+            if self.channel not in (None, "W", "R"):
+                raise LoweringError(f"probe on {name!r}: only a stream, W or R carries LAST")
+            return f"{v} && {r} && {pre}LAST" if self.channel else f"{v} && {r} && {pre[:-1]}TLAST"
+        raise LoweringError(f"probe kind must be beat, stall or last, got {self.kind!r}")
+
+
+def beat(ep, channel: str | None = None) -> Probe:
+    """High on every cycle a word moves: ``VALID && READY`` on *ep*'s net (or its *channel*)."""
+    return Probe(ep, "beat", channel)
+
+
+def stall(ep, channel: str | None = None) -> Probe:
+    """High on every cycle *ep*'s producer offers a word nobody takes: ``VALID && !READY``."""
+    return Probe(ep, "stall", channel)
+
+
+def last(ep, channel: str | None = None) -> Probe:
+    """High on the beat that ends a packet: ``VALID && READY && LAST``."""
+    return Probe(ep, "last", channel)
 
 
 def _stream_wires(net: str, dw: int) -> list[str]:
@@ -450,12 +528,13 @@ def _instance(k: KernelRtl, spec: SystemTopSpec, dw: int, aw: int, idw: int) -> 
     return f"  {k.module} {k.inst} (\n    " + ",\n    ".join(conns) + "\n  );"
 
 
-def render_system_top(spec: SystemTopSpec, probes: dict[str, str] | None = None) -> str:
-    """Emit the Verilog top *spec* describes.  *probes* -- ``{name: one-bit expression}`` over the
-    top's nets -- become outputs ``probe_<name>`` (timing probes a testbench samples every cycle)."""
+def render_system_top(spec: SystemTopSpec, probes: dict | None = None) -> str:
+    """Emit the Verilog top *spec* describes.  *probes* -- ``{name: Probe}`` (:func:`beat`,
+    :func:`stall`, :func:`last` on a pysim endpoint) or ``{name: one-bit expression}`` over the top's
+    nets -- become outputs ``probe_<name>`` (timing probes a testbench samples every cycle)."""
     cfg = spec.xbar
     dw, aw, idw = cfg.data_width, cfg.addr_width, cfg.id_width
-    probes = dict(probes or {})
+    probes = {n: spec.probe_expr(e) for n, e in (probes or {}).items()}
     ports = ["input wire ap_clk", "input wire ap_rst_n"]
     for p in spec.host_axi:
         ports += axi_port_decls(p, axi_signals(dw, aw, idw), facing="slave")
@@ -648,6 +727,6 @@ def render_system_tb(spec: SystemTopSpec, tb, n_max: int = 1_000_000) -> tuple[s
     return main, files
 
 
-__all__ = ["KernelRtl", "MiSlot", "StreamNet", "SystemTopSpec", "VITIS_MAXI_PINS",
-           "default_id_width", "field_position", "kernel_pins", "render_system_ports_h", "render_system_tb",
-           "render_system_top", "system_tb_spec", "system_top_spec"]
+__all__ = ["KernelRtl", "MiSlot", "Probe", "StreamNet", "SystemTopSpec", "VITIS_MAXI_PINS", "beat",
+           "default_id_width", "field_position", "kernel_pins", "last", "render_system_ports_h",
+           "render_system_tb", "render_system_top", "stall", "system_tb_spec", "system_top_spec"]

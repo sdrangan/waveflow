@@ -286,20 +286,36 @@ pytest tests/examples/test_markov_xsi.py -m xsi
 ## After it works: timing probes
 
 Only once the gates pass is the cycle count worth explaining. `run_xsi(work_dir, probes=True)` builds
-the top with one-bit **probes** — named handshake expressions over the top's nets:
+the top with one-bit **probes** on the handshakes you name. You name them by the **pysim object** you
+want to watch, never by a net:
 
 ```python
-PROBES = {
-    "cmd": "gen_k_qcmd_TVALID && gen_k_qcmd_TREADY",        # host's command reaches the generator
-    "ufwd": "u_fwd_TVALID && u_fwd_TREADY",                 # generator -> its queue writer, a word
-    "wr1_aw": "si1_axi_AWVALID && si1_axi_AWREADY",          # queue writer: a burst issued
-    ...
-}
+def timing_probes(sysm: MarkovSystem) -> dict:
+    gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
+    return {
+        "cmd": beat(gen.s_cmd),                          # host's command reaches the generator
+        "ufwd": beat(gen.m_u.fwd_ep),                    # generator -> its queue writer, a word
+        "ufwd_last": last(gen.m_u.fwd_ep),               # ... the last word of a chunk
+        "wr1_aw": beat(link.fwd_writer.m_mem, "AW"),     # queue writer: a burst issued
+        "wr1_b": beat(link.fwd_writer.m_mem, "B"),       # ... and acknowledged
+        ...
+        "resp": beat(chain.m_resp),                      # a response word into qresp
+    }
 ```
 
-Each becomes an output `probe_<name>` of the top and a `ProbePin` in the harness, which prints the
-cycles it fired (`PROBE <name> start+len ...`); `probe_runs(out)` parses them. The net names are the
-pysim channels' (`spec.nets`), and the SI slots follow the crossbar's master order. How the probes took
+| helper | on a stream endpoint | on a bus master, channel `"AW"`/`"W"`/`"B"`/`"AR"`/`"R"` |
+|---|---|---|
+| `beat(ep)` | a word moves: `TVALID && TREADY` | a transfer on that channel |
+| `stall(ep)` | offered, not taken: `TVALID && !TREADY` | the same, on that channel |
+| `last(ep)` | the word that ends a packet | `W` / `R` only: the burst's last beat |
+
+The system top resolves each one: a stream endpoint to the net its `StreamIF` became (the producer's
+side of a FIFO'd link for the producer, the consumer's side for the consumer), a bus master to its
+crossbar slot. A probe on something that is not in the top is refused with the reason. (A raw Verilog
+string over the top's nets still works, for anything the helpers do not cover.)
+
+Each probe becomes an output `probe_<name>` of the top and a `ProbePin` in the harness, which prints
+the cycles it fired (`PROBE <name> start+len ...`); `probe_runs(out)` parses them. How the probes took
 this system from 2356 cycles to 1870 is [Finding the time](rtlsim.md#finding-the-time).
 
 ## Doing this for another system

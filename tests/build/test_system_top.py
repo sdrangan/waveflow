@@ -130,3 +130,36 @@ def test_derived_pins_are_the_csynth_modules_ports(system):
         checked += 1
     if not checked:
         pytest.skip(f"no csynth RTL for {system} -- run its *_build")
+
+
+# ---------------------------------------------------------------------------------------------
+# Timing probes are named by the pysim object they watch; the spec resolves the net.
+# ---------------------------------------------------------------------------------------------
+
+def test_probes_resolve_from_pysim_objects():
+    from examples.markov.markov_xsi import timing_probes
+    from waveflow.build.system_top import beat, last, stall
+
+    sysm, spec = _markov()
+    got = {n: spec.probe_expr(p) for n, p in timing_probes(sysm).items()}
+    assert got["cmd"] == "gen_k_qcmd_TVALID && gen_k_qcmd_TREADY"      # a view -> kernel net
+    assert got["ufwd_last"] == "u_fwd_TVALID && u_fwd_TREADY && u_fwd_TLAST"
+    assert got["wr3_b"] == "si3_axi_BVALID && si3_axi_BREADY"           # a bus master's SI slot
+    # The writer's side of the FIFO'd link is the consumer net.
+    assert spec.probe_expr(beat(sysm.u_link.fwd_writer.s_in)) == "u_fwd_q_TVALID && u_fwd_q_TREADY"
+    assert spec.probe_expr(stall(sysm.chain.m_resp)) == \
+        "chain_k_qresp_TVALID && !chain_k_qresp_TREADY"
+    # The host's own master is outside the cut, but it is still a crossbar slot: the top's port.
+    assert spec.probe_expr(beat(sysm.host.m, "AR")) == "s0_axi_ARVALID && s0_axi_ARREADY"
+    assert spec.probe_expr(last(sysm.chain.m_mem, "W")).endswith("si3_axi_WLAST")
+    assert "probe_cmd" in render_system_top(spec, timing_probes(sysm))
+
+
+def test_a_probe_that_names_nothing_in_the_top_is_refused():
+    from waveflow.build.system_top import beat
+
+    sysm, spec = _markov()
+    with pytest.raises(LoweringError, match="AXI channel"):
+        spec.probe_expr(beat(sysm.chain.m_mem))                        # a master needs a channel
+    with pytest.raises(LoweringError, match="not a stream endpoint"):
+        spec.probe_expr(beat(sysm.host.irq_qcmd))                      # not on any net
