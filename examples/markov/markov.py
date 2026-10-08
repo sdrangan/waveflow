@@ -48,10 +48,10 @@ from waveflow.hw.arrayutils import array, get_nwords, read_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwModule
+from waveflow.hw.hw_module import DynParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mem_stream import MemWCmd, MemWStream
 from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_credit import MmCreditStreamIF
@@ -59,6 +59,7 @@ from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout, write_trace
 from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
 from waveflow.simulation.simulation import Simulation
+from waveflow.sw import SwHost, SwSemaphore
 
 DW = 64
 #: Bits of each uniform draw, and the Q-format of p01 / p10.
@@ -340,7 +341,7 @@ def _u64(words) -> np.ndarray:
 
 
 @dataclass
-class MarkovHost(HwModule):
+class MarkovHost(SwHost):
     """The host program: a **writer** that sends each job's command once a slot is free, and a
     **reader** that takes each response, reads that job's ``x`` from memory and frees the slot.
     At most :data:`MAX_IN_FLIGHT` jobs are outstanding.  Nothing polls: over the bus the command
@@ -366,23 +367,19 @@ class MarkovHost(HwModule):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW)
+        self.add_bus_master("m", bitwidth=DW)
         self.qcmd: StreamIFMaster | None = None
         self.qresp: StreamIFSlave | None = None
         #: The host's ends of the two queues' interrupt lines (memory-mapped wiring binds them).
-        self.irq_qcmd = IrqIFSink(name=f"{self.name}_irq_qcmd", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq: dict[str, IrqIFSink] = {"qcmd": self.irq_qcmd, "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qcmd, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qcmd", "qresp")}
         #: The reads of x from the shared memory, recorded (memory-mapped wiring).
         self.mem_reader = BusReader(self.m)
         self.mem: MemoryMod | None = None
         self.mem_bus_base: int | None = None       # None: read the memory directly
         self.done = self.env.event()
         self.results: dict[int, dict] = {}
-        self._slots = MAX_IN_FLIGHT
-        self._slot_free = None
+        #: Jobs that may still be sent: the writer takes one, the reader gives it back.
+        self.slots = SwSemaphore(self, MAX_IN_FLIGHT, name="slots")
 
     def _dst(self, j: int) -> int:
         """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
@@ -427,10 +424,7 @@ class MarkovHost(HwModule):
 
     def _writer(self):
         for _xaddr, _xwords, cmd in self.items:
-            while self._slots == 0:
-                self._slot_free = self.env.event()
-                yield self._slot_free
-            self._slots -= 1
+            yield from self.slots.acquire()
             yield from self.qcmd.write(cmd)
 
     def _reader(self):
@@ -447,13 +441,13 @@ class MarkovHost(HwModule):
                                           shape=n).val)
             self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
                                    t=self.env.now)
-            self._slots += 1
-            if self._slot_free is not None and not self._slot_free.triggered:
-                self._slot_free.succeed()
+            self.slots.release()
         self.done.succeed()
 
-    def run_proc(self):
-        self.env.process(self._writer())
+    def main(self):
+        """Two threads: the writer, started here, and the reader, which is this thread and ends the
+        run."""
+        self.start(self._writer)
         yield from self._reader()
 
     def bfm_model(self):

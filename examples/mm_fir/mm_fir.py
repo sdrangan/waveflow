@@ -52,10 +52,10 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwModule, HwParam
+from waveflow.hw.hw_module import DynParam, HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
@@ -65,6 +65,7 @@ from waveflow.hw.mm_host import (
     write_trace,
 )
 from waveflow.simulation.simulation import Simulation
+from waveflow.sw import SwHost
 
 DW = 64
 NTAP_MAX = 16
@@ -372,7 +373,7 @@ HOST_ENDPOINTS = ("cfg", "qin", "qout", "qresp", "status")
 
 
 @dataclass
-class FirHost(HwModule):
+class FirHost(SwHost):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
 
     Two processes, as stream code is written: a **writer** that commits each config and sends each
@@ -424,8 +425,9 @@ class FirHost(HwModule):
     def __post_init__(self) -> None:
         super().__post_init__()
         #: The bus master, when the system is memory-mapped (unbound when it is direct).
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW,
-                            max_outstanding=HOST_MAX_OUTSTANDING, issue_cycles=HOST_ISSUE_CYCLES)
+        #: The bus master, when the system is memory-mapped (unbound when it is direct).
+        self.add_bus_master("m", bitwidth=DW, max_outstanding=HOST_MAX_OUTSTANDING,
+                            issue_cycles=HOST_ISSUE_CYCLES)
         self.cfg: StreamIFMaster | None = None
         self.qin: StreamIFMaster | None = None
         self.qout: StreamIFSlave | None = None
@@ -434,13 +436,7 @@ class FirHost(HwModule):
         #: The host's ends of the queue views' interrupt lines (memory-mapped wiring binds them; direct
         #: wiring leaves them unbound).  Attributes rather than only a dict, because a BFM model names
         #: its ports by attribute.
-        self.irq_qin = IrqIFSink(name=f"{self.name}_irq_qin", sim=self.sim)
-        self.irq_qout = IrqIFSink(name=f"{self.name}_irq_qout", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq: dict[str, IrqIFSink] = {"qin": self.irq_qin, "qout": self.irq_qout,
-                                          "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qin, self.irq_qout, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qin", "qout", "qresp")}
         self.done = self.env.event()
         self.y: list[int] = []
         #: Every response, as ``(tx_id, cfg_id)``.
@@ -542,8 +538,10 @@ class FirHost(HwModule):
         return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
                         extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
 
-    def run_proc(self):
-        self.env.process(self._writer())
+    def main(self):
+        """Two threads, as stream code is written: the writer, started here, and the reader, which is
+        this thread and ends the run."""
+        self.start(self._writer)
         yield from self._reader()
 
 

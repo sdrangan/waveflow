@@ -89,6 +89,39 @@ class IrqIFSink(InterfaceEndpoint):
         while not self.interface.level:      # a rise undone in the same instant: wait for the next
             yield self.interface._rise_event()
 
+    #: How many times in a row ``wait()`` may return at once at one simulated instant before it is
+    #: called a spin.  Level-sensitive: a handler that waits again without clearing the cause returns
+    #: at once, forever, at the same time -- pysim would hang with no diagnostic.
+    SPIN_LIMIT = 10_000
+
+    def wait(self) -> ProcessGen[None]:
+        """A software thread's wait on this interrupt (``plans/host_runtime.md``): return when the line
+        is high -- **at once, without yielding**, if it already is, as the C++ thread continues without a
+        switch.  A thread that keeps finding the line high at one instant has not cleared its cause,
+        and is stopped with that diagnosis."""
+        if self.interface is None:
+            raise RuntimeError(f"{self.name} is not bound to an interrupt line")
+        if self.interface.level:
+            now = self.env.now
+            if getattr(self, "_spin_at", None) == now:
+                self._spin_n += 1
+                if self._spin_n > self.SPIN_LIMIT:
+                    raise RuntimeError(
+                        f"{self.name}: waited on {self.SPIN_LIMIT} times at t={now} and the line was "
+                        f"already high every time -- the thread never clears the interrupt's cause "
+                        f"(drain the queue, or re-arm the threshold) before waiting again")
+            else:
+                self._spin_at, self._spin_n = now, 1
+            return
+        yield from self.wait_high()
+
+    # The waitable protocol (waveflow.sw.wait_any): ready now, and an event that fires when it may be.
+    def _sw_ready(self) -> bool:
+        return self.level
+
+    def _sw_change(self):
+        return self.interface._rise_event()
+
 
 @dataclass
 class IrqIF(Interface):

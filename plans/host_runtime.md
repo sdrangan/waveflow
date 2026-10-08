@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 1 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+and Stage 1 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 2 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -25,9 +25,9 @@ transactions.  Software is not hardware, so its model is different from a kernel
 |---|---|---|
 | a thread | a **SimPy process** -- a Python generator, not an OS thread | a **fiber** -- its own stack, switched to cooperatively (below) |
 | code between waits | runs in **zero simulated time** | runs between two clock edges -- zero cycles |
-| waiting on an event (an interrupt, a lock, a message) | a SimPy event: `yield self.irq.wait()` | blocks the thread: `irq.wait()` |
+| waiting on an event (an interrupt, a lock, a message) | a SimPy event: `yield from self.irq.wait()` | blocks the thread: `irq.wait()` |
 | a bus transaction | an `MMIFMaster` transaction, timed by the bus model | an `AxiMmMaster` transaction, timed by the RTL |
-| software execution time | `yield self.compute(cycles)` -- an explicit timer | `compute(cycles)` -- the same timer |
+| software execution time | `yield from self.compute(cycles)` -- an explicit timer | `compute(cycles)` -- the same timer |
 
 So the simple Markov host becomes **one thread** that issues commands and pends on interrupts -- a
 driver, not two processes standing in for one:
@@ -39,11 +39,12 @@ class MarkovHost(SwHost):                         # owns the bus master and the 
         while done < len(self.jobs):
             while sent < len(self.jobs) and sent - done < MAX_IN_FLIGHT:
                 yield from self.qcmd.write(self.cmd(sent)); sent += 1   # 2 x 3 words: always fits
-            yield self.qresp.data_irq(1).wait()   # pend: a response is ready
+            irq = yield from self.qresp.data_irq(RESP_WORDS)   # arm: a response is ready
+            yield from irq.wait()                              # pend
             resp = yield from self.qresp.pop(MkvResp)
             x = yield from self.bus.read(self.xaddr(resp.tx_id), self.xwords(resp.tx_id))
             self.record(resp, x); done += 1
-            yield self.compute(HOST_HANDLER_CYCLES)   # optional: what the handler costs
+            yield from self.compute(HOST_HANDLER_CYCLES)   # optional: what the handler costs
 ```
 
 ```cpp
@@ -51,7 +52,7 @@ void main() override {                            // MarkovHost's C++ twin -- th
     int sent = 0, done = 0;
     while (done < njobs()) {
         while (sent < njobs() && sent - done < MAX_IN_FLIGHT) { qcmd.write(cmd(sent)); ++sent; }
-        qresp.data_irq(1).wait();
+        qresp.data_irq(RESP_WORDS).wait();
         MkvResp resp = qresp.pop<MkvResp>();
         auto x = bus.read(xaddr(resp.tx_id), xwords(resp.tx_id));
         record(resp, x); ++done;
@@ -68,17 +69,17 @@ added by adding a row: a Python class over SimPy events, and its C++ class over 
 
 | primitive | Python (pysim) | C++ (XSI runtime) | waits for |
 |---|---|---|---|
-| interrupt line in | `yield irq.wait()` (level: returns at once if high) | `irq.wait()` | the line high |
-| any of several | `yield wait_any(a, b, ...)` | `wait_any(a, b, ...)` | the first to fire |
-| software time | `yield self.compute(cycles)` | `compute(cycles)` | the timer |
-| event between threads | `ev = SwEvent(); yield ev.wait(); ev.set()` | `SwEvent` | `set()` |
-| lock | `SwLock`: `yield lk.acquire()`, `lk.release()` | `SwLock` | the lock free |
-| counting semaphore | `SwSemaphore` | `SwSemaphore` | a count > 0 |
-| software message queue | `SwQueue`: `yield q.put(m)`, `m = yield q.get()` | `SwQueue<T>` | room / a message |
-| bus: queue-in view | `yield from qcmd.write(words or schema)` | `qcmd.write(...)` | the bus writes done |
-| bus: queue-out view | `qresp.data_irq(n)`; `yield from qresp.pop(T or n)` | same | the bus reads done |
+| interrupt line in | `yield from irq.wait()` (level: returns at once if high) | `irq.wait()` | the line high |
+| any of several | `k = yield from wait_any(a, b, ...)` | `k = wait_any(a, b, ...)` | the first ready (its index) |
+| software time | `yield from self.compute(cycles)` | `compute(cycles)` | the timer |
+| event between threads | `ev = SwEvent(host)`; `yield from ev.wait()`; `ev.set()` | `SwEvent` | `set()` |
+| lock | `SwLock(host)`: `yield from lk.acquire()`, `lk.release()` | `SwLock` | the lock free |
+| counting semaphore | `SwSemaphore(host, n)`: `acquire` / `release` | `SwSemaphore` | a count > 0 |
+| software message queue | `SwQueue(host, cap)`: `yield from q.put(m)`, `m = yield from q.get()` | `SwQueue<T>` | room / a message |
+| bus: queue-in view | `irq = yield from qcmd.room_irq(n)`; `yield from qcmd.push(words or schema)` | same | the bus writes done |
+| bus: queue-out view | `irq = yield from qresp.data_irq(n)`; `yield from qresp.pop(T or n)` | same | the bus reads done |
 | bus: register bank | `yield from regs.commit(cfg)`; `yield from regs.status(T)` | same | the bus ops done |
-| bus: plain memory | `yield from bus.read(addr, n)` / `write(addr, words)` | same | the transaction done |
+| bus: plain memory | `BusReader(m)`: `yield from rd.read(n, addr)` / `write(words, addr)` | same | the transaction done |
 
 **Bus calls block only for the bus transaction, never for a condition.**  Waiting for data or room is
 the thread's business, and it is spelled out (`data_irq(n).wait()`, `room_irq(n).wait()`), because a
@@ -184,6 +185,34 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 1 -- the Python runtime: DONE (2026-10-08)
+
+- **`waveflow/sw/`** (new package): `SwHost` (an `HwModule`; `add_bus_master` / `add_irq` create and
+  register what software physically has; `main()` is the first thread, `start(fn)` starts more, each a
+  `SwThread` with `join()`; `compute(cycles)` in host clock cycles), `wait_any`, and the channels
+  `SwEvent`, `SwSemaphore`, `SwLock`, `SwQueue` over one small waitable protocol (`_sw_ready` /
+  `_sw_change`).  Every blocking primitive is a generator used with `yield from`, like every endpoint
+  call -- the table above now spells them that way.
+- **`IrqIFSink.wait()`**: returns at once, *without yielding*, when the line is high (as the C++ thread
+  will continue without a switch); after 10,000 such returns at one instant it raises "never clears the
+  interrupt's cause" -- otherwise a level-sensitive spin hangs pysim with no diagnostic.  The existing
+  `wait_high()` (which yields a zero timeout) is unchanged, because the blocking endpoints' timing
+  depends on it.
+- **Bus primitives that block only for the transaction**, beside the existing blocking calls (which stay
+  as they are -- pysim's calibrated counts depend on them): `MmStreamIFMaster` (new; what
+  `stream_master` now returns for a queue in) `room_irq(n)` / `push(data)`; `MmStreamIFSlave`
+  `data_irq(n)` / `pop(n | schema)`; `BusReader.write`.  `push` / `pop` record the same trace messages
+  as `write` / `pull`.  The plan said "the existing endpoints rebuilt on them"; not done, deliberately --
+  same reason.
+- **Ported** `FirHost` and `MarkovHost` to `SwHost`, keeping their two-thread structure; markov's
+  in-flight slots are now a `SwSemaphore`.  **Gate: pysim unchanged** -- markov 1811 (direct) / 1926
+  (bus), mm_fir 635 / 635, bit-exact.
+- **Tests** `tests/sw/test_threads.py`: the channels, `wait_any`, interrupt waits and the spin
+  diagnosis, and **the single-thread Markov driver** this plan sketches (`room_irq`/`push`,
+  `data_irq`/`pop`, the memory read) -- bit-exact, and, a small surprise, also **1926** pysim cycles,
+  the same as the two-thread host: with at most two jobs in flight the order of bus operations does not
+  change the critical path in pysim.  Whether it does at RTL is Stage 4's question.
 
 ### Stage 0 -- feasibility: DONE, all three pass (2026-10-08)
 

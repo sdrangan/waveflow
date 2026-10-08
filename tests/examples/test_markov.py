@@ -92,7 +92,7 @@ def test_the_host_never_polls():
 
 def test_admission_bounds_the_jobs_in_flight():
     sysm, jobs, res = _run("mm", njobs=8, n=200)
-    assert sysm.host._slots == MAX_IN_FLIGHT and len(res) == 8
+    assert sysm.host.slots.count == MAX_IN_FLIGHT and len(res) == 8
 
 
 def test_the_fraction_of_ones_approaches_the_stationary_probability():
