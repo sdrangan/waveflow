@@ -54,9 +54,19 @@ opposite role on the same protocol. That pairing is one table,
 [`BFM_DUALS`](../build/bfm.md#bfm-duals), and a new model has to name the row it
 fills.
 
-Two entries in that table are **holes**, and they bound what this hook can do today: nothing
-implements AXI4-Lite (so a `HostActivated` DUT cannot be driven at RTL at all), and nothing masters
-an `m_axi` bus *into* a DUT (in this flow the kernel is always the master).
+A **host** is a participant too. When the RTL top is a system — kernels behind adaptors and AMD's
+crossbar — the top presents an AXI-MM *slave* port (the crossbar's SI) and one interrupt output per
+queue view. The host's bus master faces the first and is answered by `AxiMmMaster`; each of its
+`IrqIFSink`s faces an `irq_out` pin and is answered by `IrqPin`
+([`xsi_mm_host.h`](../../../waveflow/build/xsi/xsi_mm_host.h)). So a host module resolves:
+
+```python
+>>> check(host, "xsi_bfm_model")      # a FirHost declaring AxiMmMaster + three IrqPins
+(True, None)
+```
+
+One entry in that table is a **hole** that bounds what this hook can do today: nothing implements
+AXI4-Lite, so a `HostActivated` DUT cannot be driven at RTL at all.
 
 ## The five phases, and why `sample` and `update` are split
 
@@ -196,6 +206,31 @@ def bfm_model(self):
 `ports` are **attribute names**, in the C++ constructor's order — that order is a fact about the C++
 and nothing else records it. Each is validated against the module's `add_endpoint` registry at
 elaboration time, so a renamed port is an error where you can see it rather than deep inside the walk.
+
+## A model beside the example {#local-header}
+
+A model need not live in the framework library. Some C++ is per-example by nature — a **host
+program** is the case that matters: what it sends and what it checks belong to one design, not to
+`xsi_bfm.h`. Such a model goes in a header beside the Python module that declares it:
+
+```python
+def bfm_model(self):
+    from waveflow.build.composite_gen import BfmModel
+    return BfmModel("CountingSink", ports=("stream_ep",), header="xsi_local/counting_sink.h")
+```
+
+`header` is relative to the directory of the file defining the module's class. Three things change
+when it is set:
+
+- **`check` looks the class up in that header**, not in the library — so a library class of the same
+  name cannot answer for a typo in the local one, and a missing file is named.
+- **The class is the participant's on every port it spans.** Each port's dual is still checked to
+  exist (a port with no dual is refused), but the class is not taken from the dual table.
+- **The harness includes it by file name**, and `TbSpec.local_headers` carries its path so whoever
+  builds the workspace copies it beside the harness.
+
+The conformance obligation is unchanged — a local model is a model, and the same gate applies.
+`tests/build/test_xsi_system_top.py` resolves and compiles a trivial one.
 
 ## See also
 

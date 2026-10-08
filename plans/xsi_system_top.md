@@ -133,3 +133,44 @@ system object, a host `.h`, and a call.
 - **Trace format.** Reuse burst bundles (one per endpoint) or a single tagged log? Bundles, if the
   existing writer/reader cover a host endpoint's shape.
 - **vmac** builds its own top too (`vmac_build.py`); fold it in after markov, or leave it.
+
+## Progress log (autonomous run, branch `feature/xsi-system-top`, started 2026-10-07)
+
+Baseline before any change: `pytest tests/examples/test_mm_fir_xsi.py tests/examples/test_markov_xsi.py
+-m xsi` -- **10 passed, 0 skipped** (mm_fir 618 / 611, markov 1870).
+
+### Stage 1 -- fill the duals: DONE
+
+- `BFM_DUALS["mm_slave"]` -> `AxiMmMaster` (the stale "none is planned" comment rewritten).
+- The interrupt kind is **two** kinds, named like the AXIS pair: `irq_out` (a DUT's interrupt output,
+  `IrqIFSource.boundary_kind`) -> `IrqPin`; `irq_in` (`IrqIFSink.boundary_kind`, a DUT that would
+  *take* an interrupt) -> a **hole row** (`model=None`), because `test_every_declared_boundary_kind_has_a_row`
+  requires every declared kind to have a row.  The plan said "an `irq` kind"; one string could not
+  name both directions.
+- `xsi_mm_host.h` joined `_XSI_MODEL_HEADERS` (`IrqPin` lives there).
+- A bare `MMIFMaster` (kind `None`: a kernel pointer must say const-or-not) faces `mm_slave` when it
+  sits *outside* the cut -- `AxiMmMaster` carries both directions.  Done in `_facing_kinds`, not by
+  giving `MMIFMaster` a kind, so kernel lowering still refuses it.
+- `FirHost` is now an `HwModule` that owns and registers its bus master and its three `IrqIFSink`s
+  (`irq_qin` / `irq_qout` / `irq_qresp`; `host.irq` stays as a dict view of them).  `MmFirSystem`
+  binds them instead of creating sinks.
+- **Gate:** `tests/build/test_xsi_system_top.py::test_check_resolves_mm_fir_host_ports` --
+  `check(host, "xsi_bfm_model") == (True, None)` for mm_fir's host declaring `AxiMmMaster` + three
+  `IrqPin`s; an uncovered irq is named.  PASS.
+- Docs: `bfm_model.md` (the host is a participant; one hole left, AXI4-Lite), `build/bfm.md` dual
+  table, `comp_codegen/endpoint_kinds.md` (its snippet prints the table -- the snippet gate caught it).
+
+### Stage 2 -- `BfmModel(header=...)`: DONE
+
+- `BfmModel.header`: relative to the directory of the file defining the module's class.
+  `resolve_bfm_model` looks the class up **in that header only** (`header_model_classes`); a missing
+  file and a class the header lacks are both named.  `tb_top_spec` uses the participant's class on a
+  local model's ports (the dual is still checked), and `TbSpec.local_headers` carries the paths;
+  `render_tb_harness` includes them by file name.
+- **Gate:** `tests/build/xsi_local/counting_sink.h` (a trivial AXIS sink) swapped in for mem_copy's
+  `StreamSink`: resolves, a library-name typo is refused against the local header, and the generated
+  harness **compiles** (`g++ -fsyntax-only` with Vivado's `xsi.h`).  PASS.  The compile caught a real
+  contract point: the sink's `out_bundle` DynParam is emitted blind, so the local model must carry the
+  member.
+- Docs: `bfm_model.md` "A model beside the example".
+- Stages 1 and 2 share edits to `composite_gen.py`, so they are one commit.

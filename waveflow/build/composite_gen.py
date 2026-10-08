@@ -23,6 +23,7 @@ edges), and a SOBIF toy (a block edge) all fall out of this *same* generator.  P
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePath
 
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.hw.hw_module import declares_hook
@@ -153,11 +154,21 @@ class BfmModel:
 
     A single ``BfmModel`` whose ports are all boundary ports resolves precisely as it always did,
     which is every design that existed before this generalization.
+
+    * ``header`` — the model lives **beside the example**, not in the framework library
+      (``plans/xsi_system_top.md`` S2).  A path relative to the directory of the file that defines
+      the module's class (or absolute).  ``check`` then looks ``cls`` up in *that* header instead of
+      the framework's, the harness includes it by file name, and :attr:`TbSpec.local_headers` carries
+      its path so a workspace can copy it in.  The use: a host program, whose C++ is per-example by
+      nature, as a ``.h`` beside its Python twin rather than C++ in a Python string.  A local model is
+      the participant's own class on every port it spans -- each port's BFM dual is still checked to
+      exist, but the class is not looked up from it.
     """
     cls: str
     ports: tuple[str | tuple[str, ...], ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
+    header: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1274,11 +1285,19 @@ BFM_DUALS: dict[str, BfmDual] = {
     "axis_out":      BfmDual("AXI4-Stream", "slave", "AxisSlave", participant_declares=True),
     "maxi_read":     BfmDual("AXI4-MM", "read slave", "AxiMmReadSlave"),
     "maxi_write":    BfmDual("AXI4-MM", "write slave", "AxiMmWriteSlave"),
-    # A port that is an AXI-MM *slave* would need the testbench to MASTER the bus into it.  No model
-    # does that, and none is planned: in this flow the kernel is always the m_axi master and the
-    # testbench always supplies the memory.  The row exists so a module that would need it gets that
-    # sentence instead of a KeyError.
-    "mm_slave":      BfmDual("AXI4-MM", "master", None),
+    # A DUT port that is an AXI-MM *slave* -- a system top's crossbar SI, reached by a host
+    # (plans/xsi_system_top.md S1).  The testbench masters the bus into it with `AxiMmMaster`, which
+    # carries both directions on one port; a host program's queue / register endpoints
+    # (`xsi_mm_host.h`) issue their reads and writes through it.  Once "none is planned" -- stale since
+    # the mm_fir and markov gates drove their system tops this way.
+    "mm_slave":      BfmDual("AXI4-MM", "master", "AxiMmMaster"),
+    # A DUT's interrupt OUTPUT (an `IrqIFSource` crossing the cut -- a queue view's `irq`): a one-bit
+    # level the testbench samples every cycle.  `IrqPin` (`xsi_mm_host.h`) is the C++ end of an
+    # `IrqIF`, as `IrqIFSink` is the pysim end.
+    "irq_out":       BfmDual("interrupt", "sampler", "IrqPin"),
+    # The other direction -- a DUT that TAKES an interrupt (an `IrqIFSink` inside the cut) -- would
+    # need a model that drives the line.  None does: no design has one.  A hole, recorded as a row.
+    "irq_in":        BfmDual("interrupt", "driver", None),
     # THE KNOWN GAP.  A regmap / HostActivated DUT presents an AXI4-Lite control slave, and no model
     # in waveflow/build/xsi/ answers it — so such a DUT cannot be XSI-lowered at all today.  Recorded
     # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
@@ -1393,6 +1412,10 @@ class TbSpec:
     #: Behavioral edges — one per TB interface with **neither** endpoint on the DUT boundary.  Empty
     #: for every design that has only boundary edges, which is every design built before this existed.
     channels: tuple[ChannelInst, ...] = ()
+    #: Absolute paths of the example-local model headers (:attr:`BfmModel.header`) this harness
+    #: includes, in first-use order.  The harness names them by file name; whoever builds the
+    #: workspace copies these files beside it.
+    local_headers: tuple[str, ...] = ()
 
 
 def _find_dut(tb):
@@ -1456,7 +1479,10 @@ _XSI_BFM_HEADER = "xsi_bfm.h"
 #: holds the converters, which bind both.  Scanning the set rather than one file is what keeps that
 #: split from silently shrinking the registry — a model in the "wrong" header would otherwise be
 #: reported as not existing.
-_XSI_MODEL_HEADERS = ("xsi_bfm.h", "xsi_rf_block.h", "xsi_rfdc.h")
+#: ``xsi_mm_host.h`` holds the host side of a memory-mapped system -- ``IrqPin``, the one model there
+#: that is a participant on its own (the queue / register endpoints are not models of their own: they
+#: are stepped by a host program).
+_XSI_MODEL_HEADERS = ("xsi_bfm.h", "xsi_rf_block.h", "xsi_rfdc.h", "xsi_mm_host.h")
 
 
 def xsi_model_classes() -> frozenset[str]:
@@ -1471,16 +1497,40 @@ def xsi_model_classes() -> frozenset[str]:
     simulator and its handle, not participants, and naming one as a ``bfm_model()`` would compile
     into nonsense rather than a model.
     """
-    import re
     from pathlib import Path
 
     xsi = Path(__file__).resolve().parent / "xsi"
     found: set[str] = set()
     for name in _XSI_MODEL_HEADERS:
-        text = (xsi / name).read_text(encoding="utf-8")
-        found |= set(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
-                                text, re.M))
+        found |= header_model_classes(xsi / name)
     return frozenset(found)
+
+
+def header_model_classes(path) -> frozenset[str]:
+    """The ``XsiSimObj`` subclasses one C++ header defines -- the rule :func:`xsi_model_classes`
+    applies to the framework library, applied to any header (an example-local model's)."""
+    import re
+    from pathlib import Path
+
+    text = Path(path).read_text(encoding="utf-8")
+    return frozenset(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
+                                text, re.M))
+
+
+def bfm_model_header(mod, bm: "BfmModel"):
+    """The absolute path of *bm*'s example-local header (:attr:`BfmModel.header`), or ``None``.
+
+    A relative path resolves against the directory of the file defining *mod*'s class -- "beside the
+    example" -- so the declaration means the same wherever the build runs from."""
+    import inspect
+    from pathlib import Path
+
+    if bm.header is None:
+        return None
+    p = Path(bm.header)
+    if not p.is_absolute():
+        p = Path(inspect.getfile(type(mod))).resolve().parent / p
+    return p
 
 
 def _xsi_type_headers() -> dict[str, str]:
@@ -1570,6 +1620,23 @@ def resolve_bfm_model(mod, crossing=None):
 
     known = xsi_model_classes()
     for bm in models:
+        hdr = bfm_model_header(mod, bm)
+        if hdr is not None:
+            # An example-local model is looked up in ITS header, never the framework's -- a library
+            # class of the same name would otherwise answer for a typo in the local one.
+            if not hdr.is_file():
+                raise LoweringError(
+                    f"{name}.bfm_model() names {bm.cls!r} in header {bm.header!r}, but there is no "
+                    f"such file ({hdr}). A relative header resolves beside the file that defines "
+                    f"{name}."
+                )
+            local = header_model_classes(hdr)
+            if bm.cls not in local:
+                raise LoweringError(
+                    f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj "
+                    f"in {hdr.name}. Classes it defines: {sorted(local)}."
+                )
+            continue
         if bm.cls not in known:
             raise LoweringError(
                 f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj in "
@@ -1750,6 +1817,7 @@ _FACING_KINDS: dict[str, tuple[str, ...]] = {
     "maxi_read": ("mm_slave",),      # an m_axi master outside the cut would need the TB to be a slave
     "maxi_write": ("mm_slave",),
     "axilite_slave": ("axilite_slave",),
+    "irq_in": ("irq_out",),          # a host's IrqIFSink faces the DUT's interrupt output
 }
 
 
@@ -1760,6 +1828,14 @@ def _facing_kinds(ep, mod, attr: str) -> tuple[str, ...]:
     kernel walk and wrong here: "this endpoint type has no BFM" is precisely the answer
     ``xsi_bfm_model`` exists to give, so the refusal is re-framed rather than propagated.
     """
+    from waveflow.hw.memif import MMIFMaster
+
+    # A bare (read+write) MMIFMaster OUTSIDE the cut is a host's bus master.  Its kind is declared
+    # `None` because a *kernel* pointer must say whether it is const; that question does not arise
+    # for a model beside the top -- `AxiMmMaster` carries both directions -- so it faces an AXI-MM
+    # slave port, as a directional master does.
+    if _declared_boundary_kind(ep) is None and isinstance(ep, MMIFMaster):
+        return _FACING_KINDS["maxi_read"]
     try:
         kind = kind_of_endpoint(ep)
     except LoweringError as e:
@@ -2166,6 +2242,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
 
     dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
     ports_ns = f"{dut.cpp_kernel_name}_ports"
+    local_headers: list[str] = []
 
     # endpoint identity -> (participant, the model spanning it, that model's identity).  Built over
     # EVERY declared model, so a module with one and a module with three walk the same path.
@@ -2258,7 +2335,15 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         if key in emitted:
             continue          # this boundary port is covered by a model already constructed
         binds, prefix, chan = _resolve_model_binding(part, bm, ports_ns, boundary_of, channel_of)
-        models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, prefix or port.xsi_prefix,
+        # The dual is resolved either way (a port with no dual is refused), but an example-local
+        # model is the participant's own class on every port it spans.
+        cls = bfm_dual_class(kind, bm.cls)
+        if bm.header is not None:
+            cls = bm.cls
+            hdr = str(bfm_model_header(part, bm))
+            if hdr not in local_headers:
+                local_headers.append(hdr)
+        models.append(BfmInst(cls, name, prefix or port.xsi_prefix,
                               bm.extra_args, dyn, channel=chan, binds=binds))
         emitted.add(key)
         claimed_eps.update(id(_bfm_port_endpoint(part, a)) for a in _bfm_port_attrs(bm))
@@ -2282,7 +2367,8 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         emitted[nm] = kind
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
-                  models=tuple(models), channels=tuple(channels))
+                  models=tuple(models), channels=tuple(channels),
+                  local_headers=tuple(local_headers))
 
 
 def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
@@ -2345,6 +2431,9 @@ def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
     # remembered to.
     for hdr in _harness_extra_includes(spec):
         lines.append(f'#include "{hdr}"')
+    # Example-local models (BfmModel.header), by file name: the workspace holds them beside this one.
+    for hdr in spec.local_headers:
+        lines.append(f'#include "{PurePath(hdr).name}"')
     lines += [
         f'#include "{ports_ns}.h"',
         "",

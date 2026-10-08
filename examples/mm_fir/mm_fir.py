@@ -52,7 +52,7 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_module import HwModule, HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
@@ -63,7 +63,6 @@ from waveflow.hw.mm_host import (
     LatestValueIFSlave,
     MemSlaveLayout,
 )
-from waveflow.simulation.simobj import SimObj
 from waveflow.simulation.simulation import Simulation
 
 DW = 64
@@ -360,7 +359,7 @@ def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0, stale_tag: bool = Fa
 
 
 @dataclass
-class FirHost(SimObj):
+class FirHost(HwModule):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
 
     Two processes, as stream code is written: a **writer** that commits each config and sends each
@@ -401,8 +400,16 @@ class FirHost(SimObj):
         self.qout: StreamIFSlave | None = None
         self.qresp: StreamIFSlave | None = None
         self.status = None
-        #: The host's ends of the queue views' interrupt lines, by view (memory-mapped wiring only).
-        self.irq: dict[str, IrqIFSink] = {}
+        #: The host's ends of the queue views' interrupt lines (memory-mapped wiring binds them; direct
+        #: wiring leaves them unbound).  Attributes rather than only a dict, because a BFM model names
+        #: its ports by attribute.
+        self.irq_qin = IrqIFSink(name=f"{self.name}_irq_qin", sim=self.sim)
+        self.irq_qout = IrqIFSink(name=f"{self.name}_irq_qout", sim=self.sim)
+        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
+        self.irq: dict[str, IrqIFSink] = {"qin": self.irq_qin, "qout": self.irq_qout,
+                                          "qresp": self.irq_qresp}
+        for ep in (self.m, self.irq_qin, self.irq_qout, self.irq_qresp):
+            self.add_endpoint(ep)
         self.done = self.env.event()
         self.y: list[int] = []
         #: Every response, as ``(tx_id, cfg_id)``.
@@ -534,7 +541,6 @@ class MmFirSystem:
         for v in (self.qin, self.qout, self.qresp):
             line = IrqIF(name=f"{v.name}_irq", sim=sim)
             line.bind("source", v.m_irq)
-            self.host.irq[v.name] = IrqIFSink(name=f"host_{v.name}_irq", sim=sim)
             line.bind("sink", self.host.irq[v.name])
         self.host.qin = mm.stream_master("qin", irq=self.host.irq["qin"])
         self.host.qout = mm.stream_slave("qout", irq=self.host.irq["qout"])

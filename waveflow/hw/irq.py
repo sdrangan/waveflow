@@ -27,6 +27,7 @@ until the device says so, instead of asking it again and again.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from waveflow.hw.interface import Interface, InterfaceEndpoint
 from waveflow.simulation.simobj import ProcessGen
@@ -40,6 +41,9 @@ class IrqIFSource(InterfaceEndpoint):
     listening -- as an RTL output left unconnected."""
 
     type_name = "irq_if_source"
+    #: At a cut, a one-bit output pin of the RTL top (``plans/xsi_system_top.md`` S1).  Its BFM dual
+    #: is ``IrqPin``.
+    boundary_kind: ClassVar[str] = "irq_out"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -62,6 +66,9 @@ class IrqIFSink(InterfaceEndpoint):
     """The host's end of an interrupt line."""
 
     type_name = "irq_if_sink"
+    #: The host's end: outside the cut it faces a DUT's ``irq_out`` pin, and is realized as an
+    #: ``IrqPin``.
+    boundary_kind: ClassVar[str] = "irq_in"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
