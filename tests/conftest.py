@@ -114,21 +114,37 @@ import pytest
 #: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
 WANT_XSI_GATES = 161
 
+#: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
+#: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
+#: collects at least this many.  To update: ``pytest -m gem5 --collect-only -q``.
+#: 0 -> 9 on 2026-10-08 (plans/cpu_model.md step 9): the runner's end-to-end gates.
+WANT_GEM5_GATES = 9
+
+#: Each gated marker, the floor its full session must collect, and how its messages name it.
+_GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}
+
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
-#: write and read it are plain functions.
-_XSI_SELECTED: set[str] = set()
-_XSI_SKIPPED: dict[str, str] = {}
+#: write and read it are plain functions.  Keyed by marker: at most one is active per session.
+_SELECTED: dict[str, set[str]] = {m: set() for m in _GATES}
+_SKIPPED: dict[str, dict[str, str]] = {m: {} for m in _GATES}
+#: The XSI names other code and docs refer to.
+_XSI_SELECTED = _SELECTED["xsi"]
+_XSI_SKIPPED = _SKIPPED["xsi"]
+
+
+def _is_gate_session(items, marker: str) -> bool:
+    """True when this session is *about* one gate family -- every collected test carries *marker*.
+
+    That is what ``-m xsi`` (or ``-m gem5``) produces, and what a targeted run of a single gate file
+    under it produces.  A plain ``pytest`` over the whole tree is not a gate session even though it
+    collects these tests, and must not be failed for skipping them: someone without Vivado or gem5
+    installed is entitled to run the suite and see the toolchain gates step aside.
+    """
+    return bool(items) and all(i.get_closest_marker(marker) for i in items)
 
 
 def _is_xsi_session(items) -> bool:
-    """True when this session is *about* the XSI gates -- every collected test is one.
-
-    That is what ``-m xsi`` produces, and what a targeted run of a single gate file under ``-m xsi``
-    produces.  A plain ``pytest`` over the whole tree is not an XSI session even though it collects
-    these tests, and must not be failed for skipping them: someone without Vivado installed is
-    entitled to run the suite and see the toolchain gates step aside.
-    """
-    return bool(items) and all(i.get_closest_marker("xsi") for i in items)
+    return _is_gate_session(items, "xsi")
 
 
 def _is_narrowed(config) -> bool:
@@ -149,21 +165,23 @@ def _is_narrowed(config) -> bool:
 
 
 def pytest_collection_finish(session):
-    """Record the xsi gates that survived collection *and* deselection.
+    """Record the gates that survived collection *and* deselection.
 
     ``pytest_collection_finish`` rather than ``pytest_collection_modifyitems`` because the ``-m``
     expression does its deselecting in the latter, and hook order between plugins is not something
     to depend on: this one is handed the final list.
     """
-    _XSI_SELECTED.clear()
-    _XSI_SKIPPED.clear()
-    if _is_xsi_session(session.items):
-        _XSI_SELECTED.update(i.nodeid for i in session.items)
+    for marker in _GATES:
+        _SELECTED[marker].clear()
+        _SKIPPED[marker].clear()
+        if _is_gate_session(session.items, marker):
+            _SELECTED[marker].update(i.nodeid for i in session.items)
 
 
 def pytest_runtest_logreport(report):
-    if report.nodeid in _XSI_SELECTED and report.skipped:
-        _XSI_SKIPPED.setdefault(report.nodeid, _skip_reason(report))
+    for marker in _GATES:
+        if report.nodeid in _SELECTED[marker] and report.skipped:
+            _SKIPPED[marker].setdefault(report.nodeid, _skip_reason(report))
 
 
 def _skip_reason(report) -> str:
@@ -177,20 +195,23 @@ def _skip_reason(report) -> str:
 
 def _problems(config) -> list[str]:
     """The session-level failures, as lines to print.  Empty when the run really did measure."""
-    if not _XSI_SELECTED:
-        return []
     out: list[str] = []
-    if _XSI_SKIPPED:
-        out.append(f"{len(_XSI_SKIPPED)} of {len(_XSI_SELECTED)} XSI gates SKIPPED -- this session "
-                   f"measured less than it appears to have:")
-        for nodeid, why in sorted(_XSI_SKIPPED.items()):
-            out.append(f"  {nodeid}")
-            out.append(f"      {why}")
-    if not _is_narrowed(config) and len(_XSI_SELECTED) < WANT_XSI_GATES:
-        out.append(f"only {len(_XSI_SELECTED)} XSI gates collected, expected at least "
-                   f"{WANT_XSI_GATES} (tests/conftest.py::WANT_XSI_GATES). A gate file that fails "
-                   f"to import produces no FAILED line at all -- check the collection errors above "
-                   f"before adjusting the number.")
+    for marker, (want, label) in _GATES.items():
+        selected, skipped = _SELECTED[marker], _SKIPPED[marker]
+        if not selected:
+            continue
+        if skipped:
+            out.append(f"{len(skipped)} of {len(selected)} {label} gates SKIPPED -- this session "
+                       f"measured less than it appears to have:")
+            for nodeid, why in sorted(skipped.items()):
+                out.append(f"  {nodeid}")
+                out.append(f"      {why}")
+        if not _is_narrowed(config) and len(selected) < want:
+            const = "WANT_XSI_GATES" if marker == "xsi" else f"WANT_{marker.upper()}_GATES"
+            out.append(f"only {len(selected)} {label} gates collected, expected at least "
+                       f"{want} (tests/conftest.py::{const}). A gate file that fails "
+                       f"to import produces no FAILED line at all -- check the collection errors above "
+                       f"before adjusting the number.")
     return out
 
 
@@ -198,7 +219,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     problems = _problems(config)
     if not problems:
         return
-    terminalreporter.write_sep("=", "XSI SESSION GATE FAILED", red=True, bold=True)
+    label = next((lbl for m, (_, lbl) in _GATES.items() if _SELECTED[m]), "XSI")
+    terminalreporter.write_sep("=", f"{label} SESSION GATE FAILED", red=True, bold=True)
     for line in problems:
         terminalreporter.write_line(line)
 

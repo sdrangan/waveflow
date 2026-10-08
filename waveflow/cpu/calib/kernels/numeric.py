@@ -67,3 +67,8 @@ def ctx_switch(k: int = 64) -> dict:
 def swapcontext(k: int = 64) -> dict:
     """As :func:`ctx_switch`, for the informational libc variant."""
     return {"kernel": "swapcontext", "n_switches": 2 * k, "count": k}
+
+
+def empty() -> dict:
+    """The empty measured region prints only its name."""
+    return {"kernel": "empty"}

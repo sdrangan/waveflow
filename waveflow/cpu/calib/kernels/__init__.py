@@ -47,6 +47,8 @@ class Kernel:
     smoke: tuple[dict, ...] = field(default_factory=tuple)
     #: Measured for information only; never a platform cost.
     informational: bool = False
+    #: The measured code's symbols in the static binary; their summed sizes are its code bytes.
+    symbols: tuple[str, ...] = ()
 
     @property
     def source(self) -> Path:
@@ -84,6 +86,7 @@ KERNELS: dict[str, Kernel] = {
     for k in (
         Kernel(
             name="sched_ops",
+            symbols=("run_op", "tg_insert", "tg_remove", "tg_sort"),
             twin=sched_ops,
             args=("op", "n", "seed"),
             counters=("n_tasks", "n_scanned", "n_moved"),
@@ -97,6 +100,7 @@ KERNELS: dict[str, Kernel] = {
         ),
         Kernel(
             name="cdot_q15",
+            symbols=("cdot",),
             twin=numeric.cdot_q15,
             args=("n", "seed"),
             counters=("n",),
@@ -107,6 +111,7 @@ KERNELS: dict[str, Kernel] = {
         ),
         Kernel(
             name="gather_hist",
+            symbols=("gather",),
             twin=numeric.gather_hist,
             args=("n", "m", "seed"),
             counters=("n", "m"),
@@ -123,6 +128,7 @@ KERNELS: dict[str, Kernel] = {
         ),
         Kernel(
             name="dispatch",
+            symbols=("dispatch", "h0", "h1", "h2"),
             twin=numeric.dispatch,
             args=("n", "seed"),
             counters=("n_dispatch",),
@@ -130,6 +136,7 @@ KERNELS: dict[str, Kernel] = {
         ),
         Kernel(
             name="ctx_switch",
+            symbols=("pingpong", "wf_switch", "co_entry"),
             twin=numeric.ctx_switch,
             args=("k",),
             counters=("n_switches",),
@@ -137,6 +144,7 @@ KERNELS: dict[str, Kernel] = {
         ),
         Kernel(
             name="swapcontext",
+            symbols=("pingpong", "co_entry"),
             twin=numeric.swapcontext,
             args=("k",),
             counters=("n_switches",),
@@ -146,4 +154,8 @@ KERNELS: dict[str, Kernel] = {
     )
 }
 
-__all__ = ["KERNELS", "KERNEL_DIR", "Kernel"]
+#: The empty measured region: the markers' own cost, subtracted from every point.  Not a kernel of
+#: the suite (it has no counters and no model), so it is kept out of :data:`KERNELS`.
+EMPTY = Kernel(name="empty", twin=numeric.empty, args=(), counters=(), smoke=({},))
+
+__all__ = ["EMPTY", "KERNELS", "KERNEL_DIR", "Kernel"]

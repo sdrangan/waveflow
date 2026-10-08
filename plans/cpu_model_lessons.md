@@ -35,3 +35,14 @@ Appended as the work teaches something. Newest last.
 - **Hand-computed timelines at 1 Hz caught nothing, and were still worth it.** With one cycle per
   second every expected time is an integer, so the preemption rule (floor, partial switch lost,
   original `(prio, seq)` kept) is pinned exactly rather than approximately.
+
+## M2: calibration harness
+
+- **GCC renames the functions it specializes.** At `-O2` the aarch64 build turned `tg_remove` into
+  `tg_remove.isra.0` (IPA-SRA). Code bytes counted by exact symbol name miss it; count every symbol
+  whose name before the first dot is the function's.
+- **Two int16 products can overflow int32 when summed.** `(-32768)^2 * 2 = 2^31`. The Q15 kernel's
+  first draft did exactly that, which is undefined behaviour in C and would have broken the twin on a
+  rare input. Widen to int64 before adding.
+- **A test that a gate fails is part of the gate.** Pointing `WAVEFLOW_GEM5_ROOT` at nothing must turn
+  `-m gem5` red (it does: 9 of 9 skipped, exit 1); otherwise "9 passed" means nothing.
