@@ -52,19 +52,19 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwModule, HwParam
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveLayout,
-    write_trace,
 )
 from waveflow.simulation.simulation import Simulation
+from waveflow.sw import SwHost
 
 DW = 64
 NTAP_MAX = 16
@@ -372,7 +372,7 @@ HOST_ENDPOINTS = ("cfg", "qin", "qout", "qresp", "status")
 
 
 @dataclass
-class FirHost(HwModule):
+class FirHost(SwHost):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
 
     Two processes, as stream code is written: a **writer** that commits each config and sends each
@@ -416,16 +416,17 @@ class FirHost(HwModule):
     #: Cycles between polls, should an endpoint poll (none does here: they wait on interrupts).  One
     #: setting for both hosts: the bus endpoints' ``poll_cycles`` and the C++ model's argument.
     poll_cycles: int = 8
-    #: The scenario bundle both hosts run (``write_scenario``); empty: built from x / plan / pkt.
-    scenario: DynParam[str] = ""
-    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
-    trace_dir: DynParam[str] = ""
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "FirHostModel"
+    cpp_header: ClassVar[str | None] = "mm_fir_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
         #: The bus master, when the system is memory-mapped (unbound when it is direct).
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW,
-                            max_outstanding=HOST_MAX_OUTSTANDING, issue_cycles=HOST_ISSUE_CYCLES)
+        #: The bus master, when the system is memory-mapped (unbound when it is direct).
+        self.add_bus_master("m", bitwidth=DW, max_outstanding=HOST_MAX_OUTSTANDING,
+                            issue_cycles=HOST_ISSUE_CYCLES)
         self.cfg: StreamIFMaster | None = None
         self.qin: StreamIFMaster | None = None
         self.qout: StreamIFSlave | None = None
@@ -434,13 +435,7 @@ class FirHost(HwModule):
         #: The host's ends of the queue views' interrupt lines (memory-mapped wiring binds them; direct
         #: wiring leaves them unbound).  Attributes rather than only a dict, because a BFM model names
         #: its ports by attribute.
-        self.irq_qin = IrqIFSink(name=f"{self.name}_irq_qin", sim=self.sim)
-        self.irq_qout = IrqIFSink(name=f"{self.name}_irq_qout", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq: dict[str, IrqIFSink] = {"qin": self.irq_qin, "qout": self.irq_qout,
-                                          "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qin, self.irq_qout, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qin", "qout", "qresp")}
         self.done = self.env.event()
         self.y: list[int] = []
         #: Every response, as ``(tx_id, cfg_id)``.
@@ -467,11 +462,6 @@ class FirHost(HwModule):
                 tx += 1
         return out
 
-    def write_scenario(self, path) -> None:
-        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
-        from waveflow.utils.burst_io import write_burst_bundle
-        write_burst_bundle(self.scenario_bursts(), path)
-
     def pre_sim(self) -> None:
         super().pre_sim()
         if self.scenario:
@@ -488,13 +478,6 @@ class FirHost(HwModule):
             else:
                 nsamp, tx, want, nhdr = (int(v) for v in b[1:5])
                 self.items.append(("pkt", nsamp, tx, want, b[5:5 + nhdr], b[5 + nhdr:]))
-
-    def post_sim(self) -> None:
-        super().post_sim()
-        if self.trace_dir:
-            from pathlib import Path
-            for name in HOST_ENDPOINTS:
-                write_trace(getattr(self, name), Path(self.trace_dir) / name)
 
     # -- the host program ---------------------------------------------------------------------------
 
@@ -529,21 +512,18 @@ class FirHost(HwModule):
         self.done.succeed()
 
     def bfm_model(self):
-        """The C++ realization: ``FirHostModel`` in ``mm_fir_host.h`` beside this file -- the same
-        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.
-
-        It spans the bus master (an ``AxiMmMaster``, one read and one write in flight -- what
-        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``) and the three interrupt pins it waits on."""
-        from waveflow.build.composite_gen import BfmModel
-
+        """The C++ realization, ``FirHostModel`` in ``mm_fir_host.h`` (``SwHost.bfm_model``), checked
+        first: its bus master keeps one read and one write in flight, which is what
+        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``."""
         if int(self.m.max_outstanding) != 1:
             raise ValueError(f"FirHostModel's AxiMmMaster keeps one read and one write in flight; "
                              f"{self.name}.m.max_outstanding is {self.m.max_outstanding}")
-        return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
-                        extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
+        return super().bfm_model()
 
-    def run_proc(self):
-        self.env.process(self._writer())
+    def main(self):
+        """Two threads, as stream code is written: the writer, started here, and the reader, which is
+        this thread and ends the run."""
+        self.start(self._writer)
         yield from self._reader()
 
 

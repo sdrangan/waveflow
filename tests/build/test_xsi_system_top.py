@@ -234,8 +234,9 @@ def test_markov_host_resolves_its_own_model():
     bm = host.bfm_model()
     assert (bm.cls, bm.header, bm.ports) == ("MarkovHostModel", "markov_host.h",
                                             ("m", "irq_qcmd", "irq_qresp"))
-    # tx_id's position is handed to the C++, read off MkvResp's serializer: word 1, bits 0..15.
-    assert bm.extra_args[-3:] == ("1", "0", "16")
+    # No arguments: the host's settings travel as DynParams (max_in_flight), and the C++ reads its
+    # responses typed (qresp.get<MkvResp>()) -- no bit position is handed over (host_runtime S3/S4).
+    assert bm.extra_args == ()
 
 
 def test_markov_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):

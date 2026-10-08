@@ -1421,6 +1421,9 @@ class TbSpec:
     #: that stops there is not the drain-tail-as-latency mistake ``run``'s note warns about -- the
     #: host's completion IS the measurement (``plans/xsi_system_top.md``).
     stop_on: str | None = None
+    #: Generated files the harness needs beside it, ``(file name, text)`` -- a software host's
+    #: ``<Host>_endpoints.h``.
+    extra_files: tuple[tuple[str, str], ...] = ()
 
 
 def _find_dut(tb):
@@ -1518,8 +1521,11 @@ def header_model_classes(path) -> frozenset[str]:
     from pathlib import Path
 
     text = Path(path).read_text(encoding="utf-8")
-    return frozenset(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
-                                text, re.M))
+    # A software host's model derives from its generated <Host>_endpoints (or SwHostModel directly),
+    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.
+    return frozenset(re.findall(
+        r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(?:XsiSimObj|SwHostModel|\w+_endpoints)\b",
+        text, re.M))
 
 
 def bfm_model_header(mod, bm: "BfmModel"):

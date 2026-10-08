@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
-**Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); not
-started.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+**Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
+Stages 1-6 and Stage 7's docs done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); the blind test is open.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -23,11 +23,11 @@ transactions.  Software is not hardware, so its model is different from a kernel
 
 | | Python (pysim) | C++ (XSI) |
 |---|---|---|
-| a thread | a **SimPy process** -- not an OS thread | an **OS thread**, scheduled cooperatively (below) |
+| a thread | a **SimPy process** -- a Python generator, not an OS thread | a **fiber** -- its own stack, switched to cooperatively (below) |
 | code between waits | runs in **zero simulated time** | runs between two clock edges -- zero cycles |
-| waiting on an event (an interrupt, a lock, a message) | a SimPy event: `yield self.irq.wait()` | blocks the thread: `irq.wait()` |
+| waiting on an event (an interrupt, a lock, a message) | a SimPy event: `yield from self.irq.wait()` | blocks the thread: `irq.wait()` |
 | a bus transaction | an `MMIFMaster` transaction, timed by the bus model | an `AxiMmMaster` transaction, timed by the RTL |
-| software execution time | `yield self.compute(cycles)` -- an explicit timer | `compute(cycles)` -- the same timer |
+| software execution time | `yield from self.compute(cycles)` -- an explicit timer | `compute(cycles)` -- the same timer |
 
 So the simple Markov host becomes **one thread** that issues commands and pends on interrupts -- a
 driver, not two processes standing in for one:
@@ -39,11 +39,12 @@ class MarkovHost(SwHost):                         # owns the bus master and the 
         while done < len(self.jobs):
             while sent < len(self.jobs) and sent - done < MAX_IN_FLIGHT:
                 yield from self.qcmd.write(self.cmd(sent)); sent += 1   # 2 x 3 words: always fits
-            yield self.qresp.data_irq(1).wait()   # pend: a response is ready
+            irq = yield from self.qresp.data_irq(RESP_WORDS)   # arm: a response is ready
+            yield from irq.wait()                              # pend
             resp = yield from self.qresp.pop(MkvResp)
             x = yield from self.bus.read(self.xaddr(resp.tx_id), self.xwords(resp.tx_id))
             self.record(resp, x); done += 1
-            yield self.compute(HOST_HANDLER_CYCLES)   # optional: what the handler costs
+            yield from self.compute(HOST_HANDLER_CYCLES)   # optional: what the handler costs
 ```
 
 ```cpp
@@ -51,7 +52,7 @@ void main() override {                            // MarkovHost's C++ twin -- th
     int sent = 0, done = 0;
     while (done < njobs()) {
         while (sent < njobs() && sent - done < MAX_IN_FLIGHT) { qcmd.write(cmd(sent)); ++sent; }
-        qresp.data_irq(1).wait();
+        qresp.data_irq(RESP_WORDS).wait();
         MkvResp resp = qresp.pop<MkvResp>();
         auto x = bus.read(xaddr(resp.tx_id), xwords(resp.tx_id));
         record(resp, x); ++done;
@@ -68,17 +69,17 @@ added by adding a row: a Python class over SimPy events, and its C++ class over 
 
 | primitive | Python (pysim) | C++ (XSI runtime) | waits for |
 |---|---|---|---|
-| interrupt line in | `yield irq.wait()` (level: returns at once if high) | `irq.wait()` | the line high |
-| any of several | `yield wait_any(a, b, ...)` | `wait_any(a, b, ...)` | the first to fire |
-| software time | `yield self.compute(cycles)` | `compute(cycles)` | the timer |
-| event between threads | `ev = SwEvent(); yield ev.wait(); ev.set()` | `SwEvent` | `set()` |
-| lock | `SwLock`: `yield lk.acquire()`, `lk.release()` | `SwLock` | the lock free |
-| counting semaphore | `SwSemaphore` | `SwSemaphore` | a count > 0 |
-| software message queue | `SwQueue`: `yield q.put(m)`, `m = yield q.get()` | `SwQueue<T>` | room / a message |
-| bus: queue-in view | `yield from qcmd.write(words or schema)` | `qcmd.write(...)` | the bus writes done |
-| bus: queue-out view | `qresp.data_irq(n)`; `yield from qresp.pop(T or n)` | same | the bus reads done |
+| interrupt line in | `yield from irq.wait()` (level: returns at once if high) | `irq.wait()` | the line high |
+| any of several | `k = yield from wait_any(a, b, ...)` | `k = wait_any(a, b, ...)` | the first ready (its index) |
+| software time | `yield from self.compute(cycles)` | `compute(cycles)` | the timer |
+| event between threads | `ev = SwEvent(host)`; `yield from ev.wait()`; `ev.set()` | `SwEvent` | `set()` |
+| lock | `SwLock(host)`: `yield from lk.acquire()`, `lk.release()` | `SwLock` | the lock free |
+| counting semaphore | `SwSemaphore(host, n)`: `acquire` / `release` | `SwSemaphore` | a count > 0 |
+| software message queue | `SwQueue(host, cap)`: `yield from q.put(m)`, `m = yield from q.get()` | `SwQueue<T>` | room / a message |
+| bus: queue-in view | `irq = yield from qcmd.room_irq(n)`; `yield from qcmd.push(words or schema)` | same | the bus writes done |
+| bus: queue-out view | `irq = yield from qresp.data_irq(n)`; `yield from qresp.pop(T or n)` | same | the bus reads done |
 | bus: register bank | `yield from regs.commit(cfg)`; `yield from regs.status(T)` | same | the bus ops done |
-| bus: plain memory | `yield from bus.read(addr, n)` / `write(addr, words)` | same | the transaction done |
+| bus: plain memory | `BusReader(m)`: `yield from rd.read(n, addr)` / `write(words, addr)` | same | the transaction done |
 
 **Bus calls block only for the bus transaction, never for a condition.**  Waiting for data or room is
 the thread's business, and it is spelled out (`data_irq(n).wait()`, `room_irq(n).wait()`), because a
@@ -104,22 +105,34 @@ host's attributes, set by the system wiring as today.
 overlap, as on a multi-core host.  A single-core contention model (a CPU resource the timers draw on)
 is a later refinement, and does not change the API.
 
-### How C++ threads run under XSI: cooperative, one at a time
+### How C++ threads run under XSI: fibers, one at a time
 
-Each `SwThread` is an OS thread, but **only one runs at a time**, handed control by the cycle loop:
-every blocking call parks the thread and wakes the scheduler; in each `update()` the scheduler resumes,
-in a fixed order, every thread whose wait completed, and each runs until its next blocking call.  This
-is SimPy's discipline, so the run is deterministic and the trace gate compares like with like.  Truly
-concurrent threads would make the bus-op order depend on the OS scheduler, and the gate meaningless.
+A **fiber** is a thread the program schedules itself: it has its own stack (its locals, its call chain,
+the point where it stopped), but it runs only when some code explicitly switches to it -- a switch saves
+the CPU registers, stack pointer included, and loads the other fiber's, with no OS involvement.  That is
+the C++ form of a SimPy process (a generator is a fiber whose switch points are its `yield`s), and the
+same idea as stackful coroutines or green threads.  Windows provides them (`CreateFiber` /
+`SwitchToFiber`); Linux has `ucontext` (`makecontext` / `swapcontext`).  The runtime hides both behind
+one small `Fiber` type.
 
-Where the thread resumes is the timing contract: the bus endpoints' existing state machines
-(`MmQueueWriter::step` ...) do the cycle work; a thread's next transaction is issued in the cycle its
-previous one completed -- exactly what today's hand-written state machines do.
+Each `SwThread` is a fiber.  The XSI cycle loop runs on the main fiber; every blocking call
+(`irq.wait()`, `qcmd.write(...)`, `compute(n)`) records what the thread waits for and switches back to
+the loop; in each `update()` the scheduler checks every parked thread's wait (a few ns each, no switch)
+and switches, in a fixed order, into every thread whose wait completed, which runs until its next
+blocking call.  This is SimPy's discipline, so the run is deterministic **by construction** -- no OS
+scheduler exists to reorder anything -- and the trace gate compares like with like.  A wait already
+satisfied when called (an interrupt already high) returns without a switch.
 
-**Toolchain constraint (found 2026-10-08).**  `run.bat` compiles with Vivado's MinGW **GCC 6.2**
-(win32 threads): no `std::thread`, no C++20 coroutines.  Vivado 2025.1 also ships MinGW **GCC 9.5**
-with POSIX threads (`tps/mingw/10.0.0`); Linux uses the system `g++`.  Stage 0 decides.  Fallback:
-stackless macro coroutines (`WF_AWAIT`), which run on 6.2 but cannot keep locals across a wait.
+**Rule: only the loop fiber calls the XSI API.**  A thread's bus call only queues an operation on the
+framework endpoint; the endpoint's state machine (`MmQueueWriter::step` ...) does the cycle work from
+the loop.  Where the thread resumes is the timing contract: a thread's next transaction is issued in the
+cycle its previous one completed -- exactly what today's hand-written state machines do.
+
+**Why fibers and not OS threads** (measured in Stage 0): a switch costs **~0.05-0.2 us** against
+**~12 us** for a thread hand-off and **~1.2-1.7 us** for a SimPy resumption; they build on Vivado's
+**GCC 6.2** as well as 9.5, so `run.bat`'s toolchain does not change; and determinism is structural
+rather than the result of careful baton passing.  What they give up -- running on another core, calling
+blocking OS APIs from a host thread -- nothing in this plan needs.
 
 ### What is generated, and what the user writes
 
@@ -147,19 +160,23 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
 0. **Feasibility, no framework code.**  (a) Build mm_fir's XSI testbench with GCC 9.5 -- gate numbers
    unchanged; (b) a 50-line cooperative scheduler with two OS threads under that toolchain,
    deterministic over 100 runs; (c) compile a generated schema header with `ap_int.h` there.  **Stop and
-   report** if (a) or (b) fails.
+   report** if (a) or (b) fails.  *(Done; it also measured fibers, which replaced threads.)*
 1. **Python `SwThread` / `SwHost`.**  The primitives in the table over SimPy, the bus calls that block only
    for the transaction, `data_irq` / `room_irq`, `wait_any`, `compute`; the existing endpoints rebuilt on
    them.  Port `FirHost` and `MarkovHost` **keeping their current process structure** (two threads each).
    Gate: all pysim tests unchanged, and pysim cycle counts identical (635 / 635, 1926).
-2. **C++ runtime, mm_fir.**  `xsi_sw.h`, the generated `<host>_endpoints.h`, `FirHost`'s C++ twin as
-   thread bodies.  **Gate: 618 / 611 unchanged, bit-exact, trace gate passes** -- same host program, so
+2. **C++ runtime, mm_fir.**  `xsi_sw.h` (the `Fiber` type with its Windows and `ucontext` backends,
+   the scheduler, the primitives), the generated `<host>_endpoints.h`, `FirHost`'s C++ twin as thread
+   bodies.  First a unit test of the scheduler alone, compiled with **both** MinGW 6.2 and 9.5 (and the
+   system `g++` on Linux, where available): a fixed interleaving log, identical every run.  **Gate: 618 / 611 unchanged, bit-exact, trace gate passes** -- same host program, so
    the bus behaviour must not move; a count that moves is a scheduling difference to find.
 3. **Host-side schemas** -- `pop<T>()` / `status<T>()`.  Gate: a round-trip test per schema the hosts read.
-4. **markov, two threads then one.**  First the two-thread port (gate: 1870, traces identical).  Then the
-   **single-thread driver** above -- a different program, so its bus-op order and cycle count may
-   differ: record the new count with the reason (probes), and only with the user's agreement replace
-   `EXPECTED_CYCLES`; the trace gate (per endpoint) must still pass between its Python and C++ forms.
+4. **markov, two threads.**  `MarkovHost`'s C++ twin on the runtime, reading responses as typed
+   `MkvResp` (Stage 3) instead of a bit position handed in.  Gate: 1870, bit-exact, traces identical.
+   *Revised 2026-10-08 with the user:* the host stays **two threads** -- a producer (commands) and a
+   consumer (responses, then the results) -- because that is how this host would be written anyway;
+   the single-thread driver is not ported.  (It remains as a pysim test of the bus primitives,
+   `tests/sw/test_threads.py`.)
 5. **`run_xsi(sysm)`.**  Gate: full `pytest -m xsi`, 0 skipped; each example's RTL gate is
    `run_xsi(System(...))`, and `*_xsi.py` keeps only its scenario and probes, if anything.
 6. **Channels between threads.**  `SwLock`, `SwQueue` exercised by a small two-thread host (e.g. a
@@ -169,12 +186,206 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    `bfm_model.md` (a host no longer writes a model); the markov pages.  And a **blind test**: a fresh agent
    writes the host for a new small system from the docs alone.
 
+## Progress log
+
+### Stage 7 -- docs: DONE; the blind test NOT run (2026-10-08)
+
+- **New guide page `docs/guide/build/sw_threads.md`** ("Software threads"): the model, the primitive
+  table side by side (Python / C++), writing a host in both languages, what is generated, the scheduler's
+  ordering rules, and the trace gate.  Listed in the Build System index.
+- Updated for the runtime: `guide/build/xsi_system.md` (the host section, a "Running it" section on
+  `run_system_xsi`, the table of generated pieces -- the address headers are gone); `guide/custom_hooks/
+  bfm_model.md` (a host declares `cpp_model` / `cpp_header`; no model is written); `guide/flows/
+  concurrent_flowsteps.md`; `examples/markov/host.md` (`SwHost`, `add_bus_master` / `add_irq`, the
+  slots as a `SwSemaphore`, threads); `examples/markov/xsi.md` (in Stage 5); `examples/mm_fir/rtlsim.md`
+  (the host program, the bus master).
+- `tests/docs` + `tests/mcp`: 200 passed.
+- **The blind test is not run** -- a fresh agent, given only the docs, writing a host for a new small
+  system.  It is a long and costly run; left for the user to start.
+
+### Stage 6 -- channels between threads: DONE (2026-10-08)
+
+- The channels exist on both sides (Python S1: `SwEvent` / `SwSemaphore` / `SwLock` / `SwQueue` /
+  `wait_any`; C++ S4, unit-tested for same-tick wake under three compilers).  The gate here is at RTL.
+- **`tests/examples/test_sw_channels_xsi.py`**: `QueuedFirHost` is `FirHost` with its writer split into a
+  *packer* thread and a *sender* thread joined by a `SwQueue(capacity=2)`; its C++ twin is a test-local
+  header (`tests/examples/xsi_local/queued_fir_host.h`).  Software events take no time on either side,
+  so the bus behaviour must be FirHost's exactly.  **Result: 618 cycles (unchanged), bit-exact, status
+  and responses right, traces identical to its own pysim run** -- and in pysim the same cycles and
+  outputs as `FirHost`.  A scheduler that woke a waiter a cycle late would have moved the count.
+- `WANT_XSI_GATES` 161 -> 162.
+
+### Stage 5 -- `run_system_xsi(sysm)`: DONE, without the derived build (2026-10-08)
+
+- **`waveflow/build/system_xsi.py`**: `run_system_xsi(sysm, work_dir, top=..., xbar_name=, inside=,
+  root=, probes=, workspace=, compare_pysim=True)` takes the pysim system object and nothing else:
+  `discover` finds its one crossbar and one `SwHost` among the simulation's objects and the default cut
+  (each kernel whose device is a crossbar slave, then each memory on it); it checks every module's RTL
+  is present and not stale; generates the crossbar IP, the top, the harness with the host's C++ twin,
+  and the scenario; runs XSI; parses `DONE` / `OP`; and, by default, runs the same system in pysim from
+  the same scenario and compares every endpoint's trace (`compare_traces`).  Returns an `XsiRun`
+  (output, cycles, polls, ops, workspace / scenario / trace paths, `pysim_cycles`, `trace_mismatches`).
+- **`SwHost.write_scenario`** is generic now (a host defines `scenario_bursts`); both hosts lost theirs.
+- **No address headers.**  The generated endpoint headers carry each view's absolute address, so
+  `address_headers()` is gone from both examples.
+- **The examples' `run_xsi` are ten lines each**: `run_system_xsi(system(), ...)` plus the example's own
+  trace decoding (`trace_report`, the lines the gates parse).  The trace gates now assert
+  `run.trace_mismatches == []` (the comparison moved into the framework), and the pysim-tracking gates
+  use `run.pysim_cycles`.  `mm_fir_xsi.py` 150 lines, `markov_xsi.py` 165 (from 417 / 464 before
+  `xsi_system_top`); what is left is constants, the system, the probes and the result decoding.
+- **Gate: mm_fir 8 passed and markov 5 passed, 0 skipped** -- 618 / 611 / 1870, bit-exact, traces
+  identical.  `tests/build/test_system_xsi.py`: discovery on both systems, the refusal for a non-bus
+  system, `compare_traces`.
+- **Not done: the derived build.**  `run_system_xsi` checks the RTL and names the `*_build` script when
+  it is missing or stale; it does not build.  Deriving the build from the system needs each kernel to
+  declare the headers its HLS body includes (schemas, array utilities, framework bodies) and the build
+  to own csynth + the staleness stamp -- a step of its own (proposed: a separate plan), not a corner of
+  this one.
+
+### Stage 4 -- markov, two threads: DONE (2026-10-08)
+
+- **`markov_host.h`: 174 -> 79 lines, the program only** -- `writer()` (acquire a slot, `qcmd.write`),
+  `reader()` (`qresp.get<MkvResp>()`, `mem_reader.read`, release the slot), the scenario decode and a
+  `report()` of each job's completion cycle.  No bit position: responses are read typed (Stage 3).
+- **Host settings travel as DynParams.**  `MarkovHost.max_in_flight: DynParam[int]` replaces the extra
+  constructor arguments; the harness assigns the C++ member of the same name before the threads start.
+  `MarkovHost` declares only `cpp_model` / `cpp_header`; its hand-written `bfm_model()` and
+  `field_position` use are gone.
+- **One trace dump for every host.**  `SwHost.post_sim` dumps each traced endpoint under its attribute
+  name (`sw_host_gen.traced_endpoints`, the generated header's own list) -- `FirHost` and `MarkovHost`
+  lost their copies; markov's memory-read trace is now `mem_reader` (was `mem`).
+- **C++ channels** in `xsi_fiber.h`: `SwEvent`, `SwSemaphore`, `SwLock`, `SwQueue<T>`, `wait_any`.
+  `test_xsi_fiber.py::test_channels_wake_in_the_same_tick` (MinGW 6.2 / 9.5 / PATH g++): a release
+  wakes an earlier-started waiter in the same tick.
+- The typed read needs the example's generated `include/` and Vitis's include dir at testbench compile
+  time: `markov_xsi.run_xsi` passes them (`tb_include_dirs`).
+- **Gate: `test_markov_xsi.py -m xsi` 5 passed, 0 skipped -- 1870 unchanged, bit-exact, no polls, pysim
+  within 5%, traces byte-identical.**  The workspace was checked to hold the generated
+  `MarkovHost_endpoints.h` and the new program.
+- **Docs not yet updated**: `docs/examples/markov/xsi.md` and `docs/examples/mm_fir/rtlsim.md` still show
+  the state-machine C++ and `field_position` -- Stage 7.
+- **Caught by the full suite, from Stage 3:** the committed copies of `run.bat` / `run.sh` in 15
+  examples' `xsi/` directories had drifted from the framework source (`test_xsi_workspace_copies`,
+  `test_rf_dut_synth`) -- refreshed.  Full `pytest -m xsi`: **161 passed, 0 skipped**; the
+  committed-copy gates bram_access and mem_copy re-run with the refreshed copies: 20 passed.  Fast suite:
+  only the marginal knowledge-index timing test fails (it fails on a clean checkout too).
+
+### Stage 3 -- typed host messages: DONE (2026-10-08)
+
+- **`xsi_sw_schema.h`**: `decode_words<T, BW>` / `encode_words<T, BW>` through the generated DataSchema
+  structs (`read_array` / `write_array`), and typed endpoint calls in `xsi_sw.h` --
+  `qresp.get<MkvResp>()`, `pop<T>()`, `status.read<FirStatus>()`, `write(const T&)`, `push(const T&)` --
+  declared against forward-declared templates, so a host that does not use them needs no `ap_int.h`.
+- **The testbench compile can take extra include dirs**: `run.bat` / `run.sh` add `WF_TB_CXXFLAGS` to
+  the testbench line only (unset, the line is exactly as before -- no other gate changes);
+  `XsiWorkspace.prepare(tb_include_dirs=...)` sets it.  `toolchain.find_vitis_include_dir()` (new)
+  finds `ap_int.h` (`find_vitis_path` returns the launcher script, not the install root).
+- **GCC 6.2 compiles the Vitis headers in host code** (Stage 0 had only tried 9.5): no toolchain change.
+- **Gate: `tests/build/test_sw_schema.py`** -- headers generated fresh, MinGW 6.2: Python -> C++
+  (`MkvResp`, `FirStatus`, `FirRespHdr` decode to the fields serialized) and C++ -> Python (`MkvCmd`,
+  `FirCmdHdr` encode to the Python serializer's words exactly).  PASS.
+
+### Stage 2 -- the C++ runtime, on mm_fir: DONE (2026-10-08)
+
+- **`xsi_fiber.h`** (standard library + the OS fiber API, no `xsi.h`): `Fiber` (Windows fibers;
+  `ucontext` elsewhere, untested here) and `SwScheduler` -- threads in start order; each tick steps a
+  thread's endpoints just before running it, then **settles**: further passes run every thread whose
+  wait was satisfied during the tick, so a software event wakes its waiter in the same cycle, as in
+  SimPy.  **Found by the unit test:** the first version lacked the settle pass and woke an
+  earlier-started waiter one cycle late; the expected log (written as SimPy would order it) caught it.
+  `tests/build/test_xsi_fiber.py` checks the exact interleaving under MinGW 6.2, MinGW 9.5 and the
+  `g++` on PATH -- identical on all three.
+- **`xsi_sw.h`**: blocking endpoints over `xsi_mm_host.h` -- `QueueWriter` (`write`, `room_irq`, `push`),
+  `QueueReader` (`get`, `data_irq`, `pop`), `RegCfg`, `StatusReader`, `BusRw` -- plus `SwIrq` and
+  `SwHostModel` (the bus master, pins, scheduler, scenario, cycle count, `DONE` / `OP` report, traces).
+  The endpoints gained small public transaction primitives (`arm_threshold`, `push`, `pop`).
+- **`waveflow/build/sw_host_gen.py`** generates `<Host>_endpoints.h` from the wired host: each endpoint
+  named as in Python, on its view (absolute address, sizes, poll period) with its interrupt.
+  `SwHost.bfm_model()` is now derived (a host sets `cpp_model` / `cpp_header`); `SwHost` owns the
+  `scenario` / `trace_dir` DynParams; the system harness emits the generated header
+  (`TbSpec.extra_files`); `xsi_fiber.h` / `xsi_sw.h` ship with the workspace.  `run.bat` keeps GCC 6.2.
+- **`mm_fir_host.h`: 174 -> ~80 lines, and what is left is the program** -- `writer()`, `reader()` and
+  the scenario decode, line for line with `FirHost`.  No BFM, no pins, no addresses, no state machine.
+- **Gate: `test_mm_fir_xsi.py -m xsi` 8 passed, 0 skipped -- 618 / 611 unchanged, bit-exact, no polls,
+  traces byte-identical to pysim.**  Checked the workspaces were built from the generated header and
+  the fiber runtime.  `tests/build/test_sw_host_gen.py`: layout, ports, refusals, and the generated
+  testbench compiling cleanly (`-Wall`, no warnings) under MinGW 6.2 and 9.5.
+
+### Stage 1 -- the Python runtime: DONE (2026-10-08)
+
+- **`waveflow/sw/`** (new package): `SwHost` (an `HwModule`; `add_bus_master` / `add_irq` create and
+  register what software physically has; `main()` is the first thread, `start(fn)` starts more, each a
+  `SwThread` with `join()`; `compute(cycles)` in host clock cycles), `wait_any`, and the channels
+  `SwEvent`, `SwSemaphore`, `SwLock`, `SwQueue` over one small waitable protocol (`_sw_ready` /
+  `_sw_change`).  Every blocking primitive is a generator used with `yield from`, like every endpoint
+  call -- the table above now spells them that way.
+- **`IrqIFSink.wait()`**: returns at once, *without yielding*, when the line is high (as the C++ thread
+  will continue without a switch); after 10,000 such returns at one instant it raises "never clears the
+  interrupt's cause" -- otherwise a level-sensitive spin hangs pysim with no diagnostic.  The existing
+  `wait_high()` (which yields a zero timeout) is unchanged, because the blocking endpoints' timing
+  depends on it.
+- **Bus primitives that block only for the transaction**, beside the existing blocking calls (which stay
+  as they are -- pysim's calibrated counts depend on them): `MmStreamIFMaster` (new; what
+  `stream_master` now returns for a queue in) `room_irq(n)` / `push(data)`; `MmStreamIFSlave`
+  `data_irq(n)` / `pop(n | schema)`; `BusReader.write`.  `push` / `pop` record the same trace messages
+  as `write` / `pull`.  The plan said "the existing endpoints rebuilt on them"; not done, deliberately --
+  same reason.
+- **Ported** `FirHost` and `MarkovHost` to `SwHost`, keeping their two-thread structure; markov's
+  in-flight slots are now a `SwSemaphore`.  **Gate: pysim unchanged** -- markov 1811 (direct) / 1926
+  (bus), mm_fir 635 / 635, bit-exact.
+- **Tests** `tests/sw/test_threads.py`: the channels, `wait_any`, interrupt waits and the spin
+  diagnosis, and **the single-thread Markov driver** this plan sketches (`room_irq`/`push`,
+  `data_irq`/`pop`, the memory read) -- bit-exact, and, a small surprise, also **1926** pysim cycles,
+  the same as the two-thread host: with at most two jobs in flight the order of bus operations does not
+  change the critical path in pysim.  Whether it does at RTL is Stage 4's question.
+
+### Stage 0 -- feasibility: DONE, all three pass (2026-10-08)
+
+Prototypes lived in a scratch directory; no framework code changed.
+
+- **(a) GCC 9.5 runs the XSI flow unchanged.**  A copy of `run.bat` with `MINGW` pointed at
+  `tps/mingw/10.0.0` (GCC 9.5.0, `x86_64-msvcrt-posix-seh`), run against copies of the real
+  workspaces: mm_fir (`per_view`) **618** and markov **1870**, and the **complete testbench output is
+  identical** to the 6.2 build (68 and 19 lines -- every bus operation with its cycle stamps).  The
+  binary was confirmed as a 9.5 build (its embedded `GCC:` string); it loads 9.5's `libstdc++-6.dll` /
+  `libgcc_s_seh-1.dll` from `PATH` beside `xsimk.dll` with no clash.  GCC 6.2 cannot even compile
+  `<condition_variable>` threading (`unique_lock` undeclared), so the switch is required, not optional.
+- **(b) A cooperative scheduler over OS threads is deterministic.**  ~100 lines: the cycle loop and each
+  thread hand a baton back and forth (only one runs at a time); each cycle the loop resumes, in a fixed
+  order, every thread whose wait completed.  Two threads interacting through timed waits and an event
+  produce the **same log on 100 of 100 runs**, in the order SimPy would.  **Cost: ~12 us per hand-off**
+  steady state (20,000 hand-offs, one condition variable *per party* with `notify_one`); a single shared
+  condition variable with `notify_all` was 4-5x slower.  A hand-off happens per bus operation or event,
+  not per cycle, so it is about the cost of simulating one RTL cycle -- negligible for markov's 14 bus
+  operations, ~1 s per 10^5.
+- **(c) The generated HLS schema headers work in host code -- no plain-C++ flavor needed.**  `mkv_resp.h`
+  compiled under GCC 9.5 with `-I Vitis/include` (Vitis's header-only `ap_int.h`, `hls_stream.h`), with
+  no errors or warnings, in one translation unit with `xsi_bfm.h` / `xsi_mm_host.h`; `read_array<64>` on
+  the two words Python serialized for `MkvResp(n=300, ones=257, tx_id=2)` returned exactly those fields.
+  Compile time unchanged (~5 s, same as today's `markov_tb.cpp`).  So Stage 3 reuses the existing
+  structs; the host build needs the Vitis include path (found by `waveflow/toolchain`).
+
+**Then: fibers instead of threads.**  The same baton-passing scheduler written on Windows fibers
+(`CreateFiber` / `SwitchToFiber`), same 20,000-hand-off benchmark: **~0.05-0.2 us per hand-off** -- about
+100x cheaper than the OS threads and about 10x cheaper than SimPy itself (measured on the same machine:
+**~1.2 us** per resumption of a `timeout`, **~1.7 us** for a fresh event created, triggered and
+resumed).  It builds and runs under **GCC 6.2 and 9.5 alike**.  Decided with the user (2026-10-08): C++
+`SwThread`s are fibers.
+
+**Consequences for the next stages.**  `run.bat` keeps GCC 6.2 -- no toolchain switch, so no
+re-validation of the 161 XSI gates on a new compiler (finding (a) stays as evidence that 9.5 would also
+work).  The scheduler's shape is settled: one fiber per `SwThread`, the cycle loop on the main fiber,
+resume in registration order, only the loop calls XSI.  Linux needs the `ucontext` backend -- not
+testable on this machine; Stage 2 builds it and the Linux CI (if any) or a later Linux run checks it.
+Finding (c) is unaffected: host-side schemas use the existing generated headers.
+
 ## Non-goals
 
 - **Driving XSI from the Python host** -- deferred by the user (2026-10-08): two realizations per module
   is the model; the runtime does not preclude it later.
 - **Generating the C++ from Python** -- still rejected; the trace gate ties the two together.
-- Preemptive scheduling, priorities, a real OS model.  Threads are cooperative; time is explicit.
+- Preemptive scheduling, priorities, a real OS model, OS threads.  Threads are cooperative fibers;
+  time is explicit.
 - AXI-Lite / `HostActivated` DUTs, RF converters, several crossbars.
 
 ## Open questions

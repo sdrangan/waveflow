@@ -36,7 +36,9 @@ if /I "%3"=="trace" (
 echo xelab errorlevel=%ERRORLEVEL%
 echo --- g++ BFM tb (%TB%) ---
 call %MINGW%\bin\g++.exe -I%VIV%\data\xsim\include -O3 -c -o xsi_loader.o xsi_loader.cpp
-call %MINGW%\bin\g++.exe -I%VIV%\data\xsim\include -O3 -c -o %TB%.o %TB%.cpp
+rem WF_TB_CXXFLAGS: extra flags for the testbench only (a software host's schema headers need
+rem Vitis's include dir -- waveflow.build.xsi_workspace sets it); unset, it expands to nothing.
+call %MINGW%\bin\g++.exe -I%VIV%\data\xsim\include %WF_TB_CXXFLAGS% -O3 -c -o %TB%.o %TB%.cpp
 call %MINGW%\bin\g++.exe -o %TB%.exe %TB%.o xsi_loader.o
 echo gpp errorlevel=%ERRORLEVEL%
 echo --- run ---

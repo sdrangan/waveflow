@@ -20,16 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import (
-    HOST_ENDPOINTS,
-    QIN,
-    QOUT,
-    QRESP,
-    REGS,
-    MmFirSystem,
-    fir_golden,
-    host_schedule,
-)
+from examples.mm_fir.mm_fir import QIN, QOUT, QRESP, REGS, fir_golden, host_schedule
 from examples.mm_fir.mm_fir_xsi import (
     NSAMP,
     PKT,
@@ -39,10 +30,7 @@ from examples.mm_fir.mm_fir_xsi import (
     output_words,
     parse_kv,
     run_xsi,
-    scenario_path,
     scenario_x,
-    system,
-    trace_dir,
 )
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.toolchain.toolchain import find_vivado_path
@@ -51,7 +39,7 @@ WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 
 
 @pytest.fixture(scope="module", params=["per_view", "one_front"])
-def fir_run(request) -> tuple[str, str]:
+def fir_run(request):
     topology = request.param
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado (create_ip + xsim)")
@@ -66,7 +54,8 @@ def fir_run(request) -> tuple[str, str]:
 
 @pytest.mark.xsi
 def test_mm_fir_rtl_bit_exact(fir_run):
-    _topology, fir_run = fir_run
+    _topology, run = fir_run
+    fir_run = run.output
     done = parse_kv(fir_run, "DONE")
     assert done["done"] == 1, fir_run[-3000:]
     st = parse_kv(fir_run, "STATUS")
@@ -83,7 +72,8 @@ def test_mm_fir_rtl_host_never_polls(fir_run):
     """The host waits on the views' interrupts (plans/mm_irq.md): among every bus operation the
     testbench host issued, no read of queue in's vacancy or of a queue out's occupancy, and the status
     read exactly once."""
-    _topology, out = fir_run
+    _topology, run = fir_run
+    out = run.output
     reads = [int(m[1], 16) for m in re.finditer(r"OP R 0x([0-9a-f]+)", out)]
     counts = [a for a in reads if QIN <= a < QIN + 0x1000 or QOUT + 0x800 <= a < QOUT + 0x1000
               or QRESP + 0x800 <= a < QRESP + 0x1000]
@@ -93,31 +83,24 @@ def test_mm_fir_rtl_host_never_polls(fir_run):
 
 
 @pytest.mark.xsi
-def test_mm_fir_host_traces_match_pysim(fir_run, tmp_path):
+def test_mm_fir_host_traces_match_pysim(fir_run):
     """The host conformance gate (plans/xsi_system_top.md): FirHost and its C++ realization,
     FirHostModel, run the SAME scenario bundle, and every host endpoint's trace -- each config
     committed, each packet sent, the words each read took, the status read -- is byte-identical
     between the pysim run and the RTL run.  Per endpoint, not globally: the interleaving across
-    endpoints is timing, and pysim is loosely timed."""
-    topology, _out = fir_run
-    sysm = system(topology)
-    sysm.host.scenario = scenario_path(topology, WORK).as_posix()
-    sysm.host.trace_dir = tmp_path.as_posix()
-    sysm.run()
-    rtl = trace_dir(topology, WORK)
-    for ep in HOST_ENDPOINTS:
-        for f in ("words.bin", "bounds.bin", "meta.json"):
-            assert (tmp_path / ep / f).read_bytes() == (rtl / ep / f).read_bytes(), (
-                f"{topology}: host endpoint {ep!r} saw different messages in pysim and at RTL ({f})")
+    endpoints is timing, and pysim is loosely timed.  ``run_system_xsi`` runs the pysim side and
+    compares (``run.trace_mismatches``)."""
+    topology, run = fir_run
+    assert run.pysim_traces is not None and sorted(p.name for p in run.traces.iterdir()) == \
+        ["cfg", "qin", "qout", "qresp", "status"]
+    assert run.trace_mismatches == [], f"{topology}: {run.trace_mismatches}"
 
 
 @pytest.mark.xsi
 def test_mm_fir_rtl_cycles(fir_run):
-    topology, fir_run = fir_run
-    done = parse_kv(fir_run, "DONE")
-    sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT, one_front=topology == "one_front")
-    sysm.run()
-    pysim_cycles = sysm.sim.env.now / sysm.clk.period
+    topology, run = fir_run
+    done = parse_kv(run.output, "DONE")
+    pysim_cycles = run.pysim_cycles            # the same system, run in pysim by run_system_xsi
     print({"topology": topology, "rtl": done, "pysim_cycles": pysim_cycles})
     assert done["cycles"] == EXPECTED_CYCLES[topology], (
         f"{topology}: cycle count moved: {done} (pysim {pysim_cycles})")

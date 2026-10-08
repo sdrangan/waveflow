@@ -22,7 +22,6 @@ import pytest
 
 from examples.markov.markov import CHAIN_BASE, CHAIN_LAYOUT, MEM_BASE, markov_golden
 from examples.markov.markov_build import generate
-from examples.markov.markov import HOST_ENDPOINTS
 from examples.markov.markov_xsi import (
     ROOT,
     TOPS,
@@ -31,9 +30,6 @@ from examples.markov.markov_xsi import (
     rtl_dir,
     run_xsi,
     scenario_jobs,
-    scenario_path,
-    system,
-    trace_dir,
 )
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.toolchain.toolchain import find_vivado_path
@@ -56,7 +52,7 @@ PYSIM_TOLERANCE = 0.05
 
 
 @pytest.fixture(scope="module")
-def markov_run() -> str:
+def markov_run():
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado (create_ip + xsim)")
     # include/ and gen/ are untracked build output: regenerate them (Python only, seconds) so the
@@ -70,14 +66,14 @@ def markov_run() -> str:
         stale = rtl_staleness(ROOT, t)
         if stale is not None:
             pytest.skip(f"XSI gate prerequisite missing: {stale}")
-    return run_xsi(WORK)
+    return run_xsi(WORK)          # an XsiRun: .output, .cycles, .pysim_cycles, .trace_mismatches
 
 
 @pytest.mark.xsi
 def test_markov_rtl_bit_exact(markov_run):
-    done = parse_kv(markov_run, "DONE")
-    assert done["done"] == 1, markov_run[-3000:]
-    res = job_results(markov_run)
+    done = parse_kv(markov_run.output, "DONE")
+    assert done["done"] == 1, markov_run.output[-3000:]
+    res = job_results(markov_run.output)
     jobs = scenario_jobs()
     assert sorted(res) == list(range(len(jobs)))
     for j, job in enumerate(jobs):
@@ -91,39 +87,31 @@ def test_markov_rtl_host_never_polls(markov_run):
     """Every host read is a response pop (qresp's lower half) or an x read (the memory): no vacancy,
     no occupancy -- both queue endpoints sleep on interrupts."""
     qresp = CHAIN_LAYOUT.at(CHAIN_BASE)["qresp"]
-    reads = [int(m[1], 16) for m in re.finditer(r"OP R 0x([0-9a-f]+)", markov_run)]
+    reads = [int(m[1], 16) for m in re.finditer(r"OP R 0x([0-9a-f]+)", markov_run.output)]
     bad = [a for a in reads if not (a >= MEM_BASE or qresp.base <= a < qresp.base + qresp.window // 2)]
     assert reads and bad == [], [hex(a) for a in bad]
-    assert parse_kv(markov_run, "DONE")["polls"] == 0
+    assert parse_kv(markov_run.output, "DONE")["polls"] == 0
 
 
 @pytest.mark.xsi
 def test_markov_rtl_cycles(markov_run):
-    assert parse_kv(markov_run, "DONE")["cycles"] == EXPECTED_CYCLES
+    assert parse_kv(markov_run.output, "DONE")["cycles"] == EXPECTED_CYCLES
 
 
 @pytest.mark.xsi
 def test_markov_pysim_tracks_rtl(markov_run):
-    """The timing model is calibrated against this RTL: pysim's total within PYSIM_TOLERANCE."""
-    from examples.markov.markov import MarkovSystem
-    sysm = MarkovSystem(jobs=scenario_jobs(), link="mm")
-    sysm.run()
-    pysim = sysm.sim.env.now / sysm.clk.period
-    rtl = parse_kv(markov_run, "DONE")["cycles"]
+    """The timing model is calibrated against this RTL: pysim's total within PYSIM_TOLERANCE.  The
+    pysim run is the same system object, run by run_system_xsi from the same scenario."""
+    pysim = markov_run.pysim_cycles
+    rtl = parse_kv(markov_run.output, "DONE")["cycles"]
     assert abs(pysim - rtl) <= PYSIM_TOLERANCE * rtl, f"pysim {pysim:.0f} vs RTL {rtl}"
 
 
 @pytest.mark.xsi
-def test_markov_host_traces_match_pysim(markov_run, tmp_path):
+def test_markov_host_traces_match_pysim(markov_run):
     """The host conformance gate (plans/xsi_system_top.md): MarkovHost and MarkovHostModel run the
     SAME scenario bundle, and each host endpoint's trace -- the commands sent, the responses taken,
-    the x regions read back -- is byte-identical between the pysim run and the RTL run."""
-    sysm = system()
-    sysm.host.scenario = scenario_path(WORK).as_posix()
-    sysm.host.trace_dir = tmp_path.as_posix()
-    sysm.run()
-    rtl = trace_dir(WORK)
-    for ep in HOST_ENDPOINTS:
-        for f in ("words.bin", "bounds.bin", "meta.json"):
-            assert (tmp_path / ep / f).read_bytes() == (rtl / ep / f).read_bytes(), (
-                f"host endpoint {ep!r} saw different messages in pysim and at RTL ({f})")
+    the x regions read back -- is byte-identical between the pysim run and the RTL run
+    (``run_system_xsi`` runs the pysim side and compares)."""
+    assert sorted(p.name for p in markov_run.traces.iterdir()) == ["mem_reader", "qcmd", "qresp"]
+    assert markov_run.trace_mismatches == [], markov_run.trace_mismatches

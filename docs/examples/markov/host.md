@@ -12,9 +12,11 @@ collects the results. In this example it is
 [`MarkovHost`](../../../examples/markov/markov.py), and this page goes through it as a recipe: if you
 write a host for your own system, these are the pieces you need.
 
-A host is a module **outside the synthesized cut**. It is never turned into hardware; at RTL it is a
-testbench model (see [XSI testbench](xsi.md)). In Python it is an ordinary
-[`HwModule`](../../guide/flows/modules.md) with a `run_proc` — a SimPy process that runs the program.
+A host is a module **outside the synthesized cut**. It is never turned into hardware; at RTL its C++
+twin runs beside the top (see [XSI testbench](xsi.md)). In Python it is a
+[`SwHost`](../../guide/build/sw_threads.md): software that runs as **threads** -- SimPy processes whose
+code between waits takes no simulated time -- and owns what software physically has: a bus master and
+the interrupt lines it waits on.
 
 ## The rule: endpoints, not addresses
 
@@ -36,35 +38,33 @@ results are written to.
 
 ```python
 @dataclass
-class MarkovHost(HwModule):
+class MarkovHost(SwHost):
     jobs: list = field(default_factory=list)
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     poll_cycles: int = 8
+    #: Jobs outstanding at most -- a DynParam, so the C++ twin reads the same value.
+    max_in_flight: DynParam[int] = MAX_IN_FLIGHT
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW)
+        self.add_bus_master("m", bitwidth=DW)            # creates and registers self.m
         self.qcmd: StreamIFMaster | None = None          # set by the system
         self.qresp: StreamIFSlave | None = None          # set by the system
-        self.irq_qcmd = IrqIFSink(name=f"{self.name}_irq_qcmd", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq = {"qcmd": self.irq_qcmd, "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qcmd, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq = {v: self.add_irq(f"irq_{v}") for v in ("qcmd", "qresp")}   # self.irq_qcmd, ...
         self.mem_reader = BusReader(self.m)
         self.mem: MemoryMod | None = None
         self.mem_bus_base: int | None = None             # None: read the memory directly
         self.done = self.env.event()
         self.results: dict[int, dict] = {}
-        self._slots = MAX_IN_FLIGHT
-        self._slot_free = None
+        #: Jobs that may still be sent: the writer takes one, the reader gives it back.
+        self.slots = SwSemaphore(self, int(self.max_in_flight), name="slots")
 ```
 
 Two kinds of endpoint, and the difference matters:
 
 - **What the host physically has** — its bus master `m` and the host ends of the interrupt lines it
-  waits on (`IrqIFSink`s) — it **creates and registers** (`add_endpoint`). These are its pins: if the
-  host is ever replaced by a C++ model at RTL, these are what that model binds to.
+  waits on (`IrqIFSink`s) — it **creates and registers** with `add_bus_master` / `add_irq`. These are
+  its pins: when the host is replaced by its C++ twin at RTL, these are what that twin binds to.
 - **What the host programs against** — `qcmd`, `qresp` — the system **gives** it, because only the
   system knows whether they are bus views or plain streams. They start as `None`.
 
@@ -103,15 +103,16 @@ looks like an extra step, and for Python alone it is; it is what lets the host's
 `uint64` — `np.concatenate` of a Python `int` list with a `uint64` array promotes to `float64` and
 silently corrupts 64-bit words.
 
-## Step 3: the program — two processes
+## Step 3: the program — two threads
 
 ```python
-    def run_proc(self):
-        self.env.process(self._writer())
-        yield from self._reader()
+    def main(self):
+        self.start(self._writer)              # a second thread
+        yield from self._reader()             # this thread
 ```
 
-The host is **two processes**, a writer and a reader, sharing one bus master — the shape of a real
+`main()` is the host's first thread (`SwHost.run_proc` runs it); `start()` starts another. The host is
+**two threads**, a writer and a reader, sharing one bus master — the shape of a real
 host driver too. Each blocks on its own thing: the writer on a free slot (and on room in the command
 queue), the reader on the next response. A single process would have to choose which to wait for
 first; whatever it chose, it could not also be doing the other, so jobs would stop overlapping, and a
@@ -119,15 +120,13 @@ host whose queues can fill — a long burst of commands, a kernel waiting for it
 deadlock outright. Two processes keep both directions moving and never wait for each other except
 through what they share: the slots.
 
-**The writer** sends each job's command, but never more than `MAX_IN_FLIGHT = 2` jobs at a time:
+**The writer** sends each job's command, but never more than `max_in_flight = 2` jobs at a time -- the
+slots are a `SwSemaphore`, a channel between the two threads:
 
 ```python
     def _writer(self):
         for _xaddr, _xwords, cmd in self.items:
-            while self._slots == 0:                   # two jobs out: wait for the reader
-                self._slot_free = self.env.event()
-                yield self._slot_free
-            self._slots -= 1
+            yield from self.slots.acquire()           # two jobs out: wait for the reader
             yield from self.qcmd.write(cmd)           # one command = one queue-in packet
 ```
 
@@ -149,9 +148,7 @@ frees a slot:
                                           shape=n).val)
             self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
                                    t=self.env.now)
-            self._slots += 1
-            if self._slot_free is not None and not self._slot_free.triggered:
-                self._slot_free.succeed()
+            self.slots.release()                      # a slot back to the writer
         self.done.succeed()
 ```
 
@@ -191,22 +188,24 @@ everything" is what ends the simulation.
 
 ## Writing your own host: the checklist
 
-1. **Subclass `HwModule`.** Create and `add_endpoint` what the host physically has: its bus master
-   (`MMIFMaster`) and an `IrqIFSink` per interrupt it waits on, as attributes.
+1. **Subclass `SwHost`.** Create what the host physically has with `add_bus_master` and `add_irq`
+   (one per interrupt it waits on).
 2. **Leave the program's endpoints to the system** — `StreamIFMaster` / `StreamIFSlave` /
    `LatestValueIFSlave` attributes set to `None`, which the system fills by view name.
 3. **Name no address** except the data regions the host hands out (and tell the kernels about them in
    the commands).
 4. **Encode the jobs as items in `pre_sim`**, so the program walks a list of word messages.
-5. **One process per direction** — a writer and a reader — joined by what they share (here the
-   in-flight slots), never one process that waits for both.
+5. **One thread per direction** — `main()` plus `start()`ed threads, a writer and a reader — joined by
+   a channel for what they share (here a `SwSemaphore` of in-flight slots), never one thread that
+   waits for both.
 6. **Match responses by an id the command carried**; read exactly the words you expect.
 7. **Never poll**: wait on the endpoints, which wait on interrupts.
 8. **Signal completion** with an event the system can run until, and keep the results on the object.
 
-That is a complete host for pysim. Three more members — `scenario`, `trace_dir` and `bfm_model()` —
-exist so the *same* host can be checked against its C++ twin at RTL; they do nothing in a pure
-Python run and are explained in [XSI testbench](xsi.md#the-host-in-c).
+That is a complete host for pysim. For RTL it adds two class attributes, `cpp_model` and
+`cpp_header`, naming its C++ twin; and `SwHost`'s `scenario` / `trace_dir` fields let the *same* host
+be checked against that twin. They do nothing in a pure Python run and are explained in
+[XSI testbench](xsi.md#the-host-in-c) and [Software threads](../../guide/build/sw_threads.md).
 
 Next: [The system](system.md) — how `MarkovSystem` builds the kernels, the memory and the host, and
 wires the host's endpoints either straight to the kernels or across the bus.
