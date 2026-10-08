@@ -47,6 +47,13 @@ stages should run concurrently — anything that benefits from pipelining rather
 - **−** No Vitis co-sim — verification is at RTL through a hand-built (but *generated*) XSI harness.
 - **−** More machinery: internal channels, per-job tokens, and the RTL/XSI toolchain (xsim).
 
+## The shape of a free-running design
+
+Every module in a free-running design is **stream-only**: its logic reads and writes streams, and
+memory, bus masters and interrupts reach it through adaptors (`MemRStream` / `MemWStream`, a
+`MemSlaveAdaptor`, an `IrqIF`). One event model for every module, and logic decoupled from transport
+-- see [Stream-only modules and adaptors](../patterns/stream_only.md).
+
 ## How to read this flow
 
 - **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
