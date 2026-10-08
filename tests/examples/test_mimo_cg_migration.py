@@ -289,3 +289,45 @@ def test_the_example_page_quotes_the_migration_tables():
     )
     assert f"job time {_signed(min(p), 1)}% to {_signed(max(p), 1)}%" in section
     assert all(int(r["impl_bram"]) < int(was[r["old"]]["impl_bram"]) for r in fin)
+
+
+def test_the_example_page_quotes_the_brute_force_on_the_components():
+    page = (
+        MG.EXAMPLE.parents[1] / "docs" / "examples" / "mimo_cg" / "index.md"
+    ).read_text(encoding="utf-8")
+    section = page[page.index("**The brute force, repeated on the components.**") :]
+    section = section[: section.index("**Provenance.**")]
+    new = {
+        r["resource"]: float(r["right_pct"])
+        for r in read_table(MG.PAPER_DATA / "migration_bruteforce_fidelity_metrics.csv")
+    }
+    old = {
+        r["resource"]: float(r["right_pct"])
+        for r in read_table(MG.PAPER_DATA / "decision_fidelity_metrics.csv")
+        if r["set"] == "all"
+    }
+    order = ("dsp", "lut", "ff", "bram")
+    row = " | ".join(f"{new[k]:.1f}%" for k in order)
+    assert f"| On the components | {row} |" in section
+    row = " | ".join(f"{old[k]:.1f}%" for k in order)
+    assert f"| On the Phase 4 hardware (section 7) | {row} |" in section
+    assert min(new[k] for k in order) >= 95.0  # "in at least 95% of the decisions"
+    rows = read_table(MG.PAPER_DATA / "migration_bruteforce_decisions.csv")
+    assert len(rows) == 2592 and not any(
+        r["measured"] == "1" and r["met"] == "0" for r in rows
+    )  # no chosen design misses its job-time budget
+    err = {
+        r["metric"]: float(r["value"])
+        for r in read_table(MG.PAPER_DATA / "migration_bruteforce_error_metrics.csv")
+    }
+    for metric, text in (
+        ("DSP exact (%)", "DSP is exact on {:.1f}%"),
+        ("BRAM exact (%)", "block RAM on {:.1f}%"),
+        ("LUT MAPE (%)", "LUT error averages {:.1f}%"),
+        ("LUT MAPE (%), 1 lanes", "({:.1f}% at one lane"),
+        ("FF MAPE (%)", "flip-flops {:.1f}%"),
+        ("job time MAPE (%), loop-dominated", "job time {:.1f}%"),
+    ):
+        assert text.format(err[metric]) in " ".join(section.split()), metric
+    builds = read_table(MG.PAPER_DATA / "migration_bruteforce_builds.csv")
+    assert len(builds) == 1440 and all(r["bit_exact"] == "1" for r in builds)

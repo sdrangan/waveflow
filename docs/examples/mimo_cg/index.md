@@ -2,7 +2,7 @@
 title: CG massive-MIMO detector
 parent: Examples
 nav_order: 11
-summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr, and then through a full design-space exploration — one Python model throughout. Accuracy is explored exactly, without Vitis. Hardware cost comes from models calibrated on 86 builds; on a 1,440-build brute-force slice of the space, the design they pick costs within 10% of the best in 99.8% of the decisions."
+summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink, taken from link-level BER to bit-exact fixed point to synthesized, RTL-verified hardware on the RFSoC xczu48dr, and then through a full design-space exploration — one Python model throughout. Accuracy is explored exactly, without Vitis. Hardware cost comes from models calibrated on 86 builds; on a 1,440-build brute-force slice of the space, the design they pick costs within 10% of the best in 99.8% of the decisions. Rebuilt on Waveflow's reusable systolic and CG components, the detector stays bit-exact and the refitted models still choose within 10% of the best in 95–99.7% of the decisions."
 ---
 
 # CG massive-MIMO detector: what is built so far
@@ -539,6 +539,26 @@ Bit-exactness, the clock, block RAM and the finalists' job times held their boun
 the differences are attributed module by module in `migration_compare.csv`: the CG start at few
 lanes, a few cycles per tile in short matrix multiplies, the one DSP case, and the finalists'
 implemented resources, which Vivado optimizes differently from csynth.
+
+**The brute force, repeated on the components.** The re-measurement changed the order of the K = 4
+detectors by LUTs (rank correlation 0.94, against a bar of 0.95 set before the builds ran), which
+was the agreed trigger to repeat section 7's comparison on the new hardware. The study's models were
+refitted on the 86 re-measured calibration builds with their forms unchanged; only the cores' DSP
+and block RAM come from the components' own counted rules (`hw/migration_models.py`). All 1,440
+detectors of the sub-grid were rebuilt on the components (61 tool-hours, every one bit-exact), and
+the 2,592 committed decisions were re-made with the refitted models and judged as in section 7:
+
+| Decisions right | DSP | LUT | Flip-flops | Block RAM |
+|---|---|---|---|---|
+| On the components | 96.9% | 99.7% | 99.4% | 95.4% |
+| On the Phase 4 hardware (section 7) | 99.5% | 99.8% | 99.8% | 100.0% |
+
+The refitted models are less exact than the study's own. Over the 1,440 builds, DSP is exact on
+87.5% of them and block RAM on 100.0%. The LUT error averages 11.3% (26.7% at one lane, where the
+study's forms have no term for the CG start's cost per column group), flip-flops 9.0%, and job
+time 1.9% where the CG loop is the bottleneck. They still choose a design within 10% of the best
+in at least 95% of the decisions for every resource, and no chosen design misses its job-time
+budget.
 
 **Provenance.** Sections 3–7 describe the hardware as built in Phase 4 and measured up to commit
 `6a2cdca`, the end of Phase 6; every number and figure there comes from that commit. The commands
