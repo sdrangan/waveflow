@@ -133,3 +133,156 @@ system object, a host `.h`, and a call.
 - **Trace format.** Reuse burst bundles (one per endpoint) or a single tagged log? Bundles, if the
   existing writer/reader cover a host endpoint's shape.
 - **vmac** builds its own top too (`vmac_build.py`); fold it in after markov, or leave it.
+
+## Progress log (autonomous run, branch `feature/xsi-system-top`, started 2026-10-07)
+
+Baseline before any change: `pytest tests/examples/test_mm_fir_xsi.py tests/examples/test_markov_xsi.py
+-m xsi` -- **10 passed, 0 skipped** (mm_fir 618 / 611, markov 1870).
+
+### Stage 1 -- fill the duals: DONE
+
+- `BFM_DUALS["mm_slave"]` -> `AxiMmMaster` (the stale "none is planned" comment rewritten).
+- The interrupt kind is **two** kinds, named like the AXIS pair: `irq_out` (a DUT's interrupt output,
+  `IrqIFSource.boundary_kind`) -> `IrqPin`; `irq_in` (`IrqIFSink.boundary_kind`, a DUT that would
+  *take* an interrupt) -> a **hole row** (`model=None`), because `test_every_declared_boundary_kind_has_a_row`
+  requires every declared kind to have a row.  The plan said "an `irq` kind"; one string could not
+  name both directions.
+- `xsi_mm_host.h` joined `_XSI_MODEL_HEADERS` (`IrqPin` lives there).
+- A bare `MMIFMaster` (kind `None`: a kernel pointer must say const-or-not) faces `mm_slave` when it
+  sits *outside* the cut -- `AxiMmMaster` carries both directions.  Done in `_facing_kinds`, not by
+  giving `MMIFMaster` a kind, so kernel lowering still refuses it.
+- `FirHost` is now an `HwModule` that owns and registers its bus master and its three `IrqIFSink`s
+  (`irq_qin` / `irq_qout` / `irq_qresp`; `host.irq` stays as a dict view of them).  `MmFirSystem`
+  binds them instead of creating sinks.
+- **Gate:** `tests/build/test_xsi_system_top.py::test_check_resolves_mm_fir_host_ports` --
+  `check(host, "xsi_bfm_model") == (True, None)` for mm_fir's host declaring `AxiMmMaster` + three
+  `IrqPin`s; an uncovered irq is named.  PASS.
+- Docs: `bfm_model.md` (the host is a participant; one hole left, AXI4-Lite), `build/bfm.md` dual
+  table, `comp_codegen/endpoint_kinds.md` (its snippet prints the table -- the snippet gate caught it).
+
+### Stage 2 -- `BfmModel(header=...)`: DONE
+
+- `BfmModel.header`: relative to the directory of the file defining the module's class.
+  `resolve_bfm_model` looks the class up **in that header only** (`header_model_classes`); a missing
+  file and a class the header lacks are both named.  `tb_top_spec` uses the participant's class on a
+  local model's ports (the dual is still checked), and `TbSpec.local_headers` carries the paths;
+  `render_tb_harness` includes them by file name.
+- **Gate:** `tests/build/xsi_local/counting_sink.h` (a trivial AXIS sink) swapped in for mem_copy's
+  `StreamSink`: resolves, a library-name typo is refused against the local header, and the generated
+  harness **compiles** (`g++ -fsyntax-only` with Vivado's `xsi.h`).  PASS.  The compile caught a real
+  contract point: the sink's `out_bundle` DynParam is emitted blind, so the local model must carry the
+  member.
+- Docs: `bfm_model.md` "A model beside the example".
+- Stages 1 and 2 share edits to `composite_gen.py`, so they are one commit.
+
+### Stage 3 -- generate the RTL top: DONE
+
+- `waveflow/build/system_top.py`: `system_top_spec(xbar, inside, top=, xbar_name=, id_width=)` walks
+  the pysim system from its crossbar; `render_system_top(spec, probes=)` emits the Verilog.  `inside`
+  is the **set** cut: kernels + on-chip memories.  A kernel's device (views / adaptor) and a routed
+  credit link's two writers come with it; a crossbar master not owned by an inside module becomes a
+  top AXI4 slave group `s<k>_axi`; an interrupt line whose sink is outside becomes `irq_<view>`.
+- Kernel pins come from `composite_top_spec` on a **fresh** instance (exactly what `<ex>_build.gen_top`
+  csynth'd -- the in-system instance refuses, its boundary channels carry depths) plus Vitis's fixed
+  `m_axi` / `s_axi_control` pin set (`VITIS_MAXI_PINS`); writers from `mm_writer_gen.writer_rtl`
+  (new; `MmCreditStreamIF.place` now records `fwd_writer.max_packet`, the queue depth the writer top
+  is specialized on).  `test_system_top.py` checks the derived pins **equal the csynth'd `.v` port
+  lists** for all five modules (markov's four + mm_fir) -- they do, exactly.
+- Tie-off rules live once in `system_top.py` (module docstring).  The ID-width rule
+  `max(1, ceil(log2 n_si))` reproduces both hand choices (1 for mm_fir, 2 for markov).
+- Net names are now the pysim channel names (`k_qin`, `k_regs_cfg`, `gen_k_qcmd`, `u_fwd`, ...), so the
+  examples' `PROBES` were renamed; markov's top interrupt outputs are `irq_gen_qcmd` /
+  `irq_chain_qresp` (were `irq_qcmd` / `irq_qresp`) and its `render_tb` takes them from the spec.
+- Hand `render_top`s deleted (plus markov's `module_ports`, `_instance`, `_stream_wires`, view tables,
+  `ID_WIDTH`; mm_fir's `VIEWS`).  `xbar_config()` kept in both, now `system_spec(...).xbar`.
+- **Before running RTL**, the generated tops were diffed against the hand tops (sorted lines, nets
+  renamed): identical but for net/instance names, pin order and some extra (unused) `TKEEP/TSTRB`
+  wires; the crossbar configs compare equal (same IP digest).
+- **Gate:** `pytest tests/examples/test_mm_fir_xsi.py tests/examples/test_markov_xsi.py -m xsi` --
+  **10 passed, 0 skipped**: mm_fir **618 / 611**, markov **1870**, bit-exact.  Checked that each
+  workspace's top is the generated one and its `xsimk.dll` was rebuilt after it.
+- Docs: `concurrent_flowsteps.md` (a system's top comes from `system_top`), `examples/mm_fir/rtlsim.md`,
+  `examples/markov/rtlsim.md`.
+- Not done (open): an off-chip memory (a `FlatMemory` beside the top) and a BRAM window shared with a
+  kernel are refused with a named error rather than wired -- neither example needs them.
+
+### Stage 4 -- the host as a hooked module, mm_fir: DONE
+
+- `FirHost.bfm_model()` -> `BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
+  extra_args=(poll_cycles,), header="mm_fir_host.h")`.  ONE model spans the bus master and the three
+  interrupt sinks, so the C++ is the host program itself: `examples/mm_fir/mm_fir_host.h` (the
+  Writer / Reader that were in the f-string, unchanged in behaviour, forwarding the five phases in the
+  hand TB's participant order: pins, bus master, reader, writer).
+- **No scenario in the C++.**  `FirHost.scenario_bursts()` is the schedule as word messages, one burst
+  per item (`[CFG, cfg words]` / `[PKT, nsamp, tx_id, want, nhdr, hdr, samples]`); `write_scenario`
+  writes it, and both hosts run from it -- `FirHostModel` always, `FirHost` when its `scenario`
+  DynParam is set (else the same bursts in memory).  FirHost's writer/reader now send those words.
+  **Trap hit:** `np.concatenate` of a Python int list with uint64 arrays promotes to float64 and
+  corrupts 64-bit words (the first pysim run was wrong) -- the encoder now builds every piece as uint64.
+- **Traces, both sides, in the framework:** `mm_host.py`'s four view interfaces record each message
+  (`_MmViewIF.trace`, `write_trace`); `xsi_mm_host.h`'s `MmEndpoint` records the same messages
+  (`record`, `write_trace`).  The host dumps five bundles (`HOST_ENDPOINTS`) to its `trace_dir`.
+- Checks moved out of C++: `mm_fir_xsi.trace_report` decodes the traces with the schemas (responses vs
+  the scenario's expected `tx_id`/`cfg_id`, final `FirStatus`, the outputs) into the `RESP` / `STATUS`
+  / `Y` lines the gate already parsed -- so `field_pos` and every bit position left the C++.  The C++
+  reports only `DONE` and the `OP` lines.
+- **Generated harness:** `system_tb_spec(spec, xbar, participants, probes=)` binds each model port to the
+  top port it faces (bus master -> `s<k>_axi`, IrqIFSink -> `irq_<view>`), `render_system_ports_h`,
+  `render_system_tb` (harness + ports header + local headers + a 10-line `main`).  `TbSpec.stop_on` adds
+  `Harness::run_until(n_max)` -- the hand loop's stop test (only emitted when set, so every existing
+  harness is byte-identical).  `ProbePin` moved into `xsi_mm_host.h` (markov's private copy removed).
+- `mm_fir_xsi.py` now holds no Verilog and no C++: the system object, `mm_fir_host.h`, and calls.
+- **Surprise:** the first trace-gate run failed on `meta.json` only -- Python wrote it with CRLF on
+  Windows, the C++ with LF.  `write_burst_bundle` now writes LF everywhere, so a bundle is the same
+  bytes whichever side wrote it.
+- **Gate:** `pytest tests/examples/test_mm_fir_xsi.py -m xsi` -- **8 passed, 0 skipped**: bit-exact,
+  no polls, **618 / 611**, and `test_mm_fir_host_traces_match_pysim` (new): all five endpoints'
+  traces byte-identical between pysim and RTL, both topologies (2 configs, 28 queue-in packets,
+  200 output words, 14 responses, 1 status).  markov re-run after the `xsi_mm_host.h` change: 4 passed,
+  1870.  Probe builds of both (not in the gate) re-run by hand: 618 / 1870, same probe counts.
+- Docs: `bfm_model.md` "A host is a hooked module" (+ the trace gate), `concurrent_flowsteps.md` (the
+  host is a hooked module, its harness generated), `examples/mm_fir/rtlsim.md` + `python.md`.
+
+**Final verification (Stage 4 tree, 2026-10-07):** fast suite 3971 passed + the session gate after
+`WANT_XSI_GATES` 158 -> 160 (the two new trace-gate tests -- a deliberate raise, recorded in
+`tests/conftest.py`); `-m xsi` mm_fir + markov **12 passed, 0 skipped** (618 / 611 / 1870).  A full
+`pytest -m xsi` of the other gates was NOT run tonight (only mm_fir and markov depend on this work, plus
+`xsi_mm_host.h` / `burst_io` changes that any other bus-host gate also reads -- worth a full run).
+Commits: S1-S2 `f63a827`, S3 `ace36b0`, S4 (this one).  Nothing pushed.
+
+### Stage 5 -- markov's host: DONE (2026-10-08)
+
+- `MarkovHost` is an `HwModule` owning its bus master and two `IrqIFSink`s; `bfm_model()` ->
+  `MarkovHostModel` in `examples/markov/markov_host.h` (the f-string Writer/Reader, moved).  Scenario:
+  one burst per job, `[x address, x words, <MkvCmd words>]`.
+- The x read-back is a bus read of plain memory (no view), so it needed a recorder on both sides:
+  `mm_host.BusReader` (Python) and `MmBusReader` (C++); `write_trace` accepts either.  Endpoints traced:
+  `qcmd`, `qresp`, `mem`.
+- The C++ must act on one response field (`tx_id` picks which region to read), so its position is a
+  model argument from `system_top.field_position(MkvResp, "tx_id", DW)` -- the per-example `field_pos`
+  copies are gone.  `ones` and `x` are decoded from the traces in Python (`trace_report` -> `JOB` lines;
+  the C++ prints only `DONE`, `JOBT <j> t=` and `OP`).
+- `markov_xsi.py` now holds no Verilog and no C++.  pysim unchanged (1926 cycles; mm_fir 635 / 635).
+- **Gate:** `pytest tests/examples/test_markov_xsi.py -m xsi` -- **5 passed, 0 skipped**: bit-exact,
+  no polls, **1870**, pysim within 5%, and `test_markov_host_traces_match_pysim` (new; 4 commands,
+  4 responses, 4 regions of 38 words, byte-identical).  Probe build re-run: 1870, same probe counts.
+  `WANT_XSI_GATES` 160 -> 161.
+
+### Stage 6 -- docs: DONE
+
+- New guide page `docs/guide/build/xsi_system.md` ("XSI System Simulation"), listed in the Build System
+  index and linked from `patterns/stream_only.md` (after the adaptor table), `bfm_model.md` and
+  `concurrent_flowsteps.md`.  `examples/markov/rtlsim.md` describes the hooked host and its gate.
+
+**Done-when check:** `markov_xsi.py` and `mm_fir_xsi.py` contain no Verilog and no C++ in Python strings
+-- the system object, a host `.h`, and calls.  `vmac_build.py` (open question) was not folded in.
+
+### Still open
+
+- `system_top` refuses an off-chip memory beside the top and a BRAM window shared with a kernel;
+  `system_tb_spec` binds only crossbar masters and interrupt sinks.
+- vmac's own top (`vmac_build.py`) -- not folded in.
+
+**Final verification (Stages 5-6 tree, 2026-10-08):** fast suite 3974 passed (4 non-XSI skips); the
+**full** `pytest -m xsi` -- every gate in the repo, not only mm_fir and markov -- **161 passed,
+0 skipped** (= `WANT_XSI_GATES`).

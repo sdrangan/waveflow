@@ -35,6 +35,8 @@ axilite_slave
 axis_in
 axis_out
 bram
+irq_in
+irq_out
 maxi_read
 maxi_write
 mm_slave
@@ -46,12 +48,15 @@ mm_slave
 | `axis_out` | `hls::stream<axi4s_word<bw>>&` | `AxisSlave` |
 | `maxi_read` | `const ap_uint<bw>*` + `#pragma HLS stable` | `AxiMmReadSlave` |
 | `maxi_write` | `ap_uint<bw>*` | `AxiMmWriteSlave` |
-| `mm_slave` | *not a kernel port* | **none, and none planned** |
+| `mm_slave` | *not a kernel port* — a system top's crossbar SI | `AxiMmMaster` |
+| `irq_out` | *not a kernel port* — a queue view's interrupt pin | `IrqPin` |
+| `irq_in` | *not a kernel port* | **none — no design takes an interrupt in** |
 | `axilite_slave` | `s_axilite` + `ap_ctrl_hs` | **none — a known gap** |
 | `bram` | `ap_uint<bw> buf[N]` + `mode=bram` | **none needed** |
 
-The bottom three rows are the interesting ones, and they are three *different* answers rather than
-one absence. See [the holes are rows](#the-holes-are-rows-not-silence).
+`mm_slave` and the two `irq` kinds are pins of a **system** top (kernels behind adaptors and AMD's
+crossbar, `plans/xsi_system_top.md`), which a host faces. The bottom two rows are the interesting
+ones, and they are two *different* answers rather than one absence. See [the holes are rows](#the-holes-are-rows-not-silence).
 
 ## Where a kind is declared
 
@@ -123,7 +128,7 @@ for kind in ("maxi_read", "mm_slave", "axilite_slave", "bram"):
 
 ```text
 maxi_read      model=AxiMmReadSlave     needs_model=True
-mm_slave       model=None               needs_model=True
+mm_slave       model=AxiMmMaster        needs_model=True
 axilite_slave  model=None               needs_model=True
 bram           model=None               needs_model=False
 ```
@@ -131,9 +136,8 @@ bram           model=None               needs_model=False
 `needs_model` is what separates a **gap** from a **non-requirement** — the distinction a bare `None`
 cannot express:
 
-* **`mm_slave`** — a port that is an AXI-MM *slave* would need the testbench to master the bus into
-  it. No model does that and none is planned: in this flow the kernel is always the master and the
-  testbench always supplies the memory.
+* **`mm_slave`** — once a hole, now filled: a system top presents its crossbar's SI as an AXI-MM
+  *slave* port, and the testbench masters the bus into it with `AxiMmMaster` — the host's bus master.
 * **`axilite_slave`** — **the known gap.** A regmap / `HostActivated` DUT presents an AXI4-Lite
   control slave and nothing in `waveflow/build/xsi/` answers it, so such a DUT cannot be XSI-lowered
   at all today.

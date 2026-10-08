@@ -27,6 +27,25 @@ def writer_top_name(mode: str, dw: int, maxp: int | None = None) -> str:
     raise ValueError(f"mode must be 'queue' or 'credit', got {mode!r}")
 
 
+def writer_rtl(writer):
+    """A placed :class:`~waveflow.hw.mm_credit.MmStreamWriter`'s csynth'd module, as a system top
+    instantiates it (:mod:`waveflow.build.system_top`): ``(module, ports, scalars)``.
+
+    The ports are the ones :func:`render_writer_top` declares -- ``s_in`` (AXIS, with the side
+    channels in queue mode), ``m_mem`` (``m_axi`` on ``gmem0``) -- and the one scalar is ``target``,
+    the view's bus **word** index (the writer holds its byte address)."""
+    from waveflow.build.composite_gen import _axis_port, _maxi_port
+
+    dw = int(writer.mem_dwidth)
+    if writer.target is None:
+        raise ValueError(f"{writer.name}: not placed (MmCreditStreamIF.place) -- no target address")
+    maxp = getattr(writer, "max_packet", None) if writer.mode == "queue" else None
+    module = writer_top_name(writer.mode, dw, maxp)
+    ports = (_axis_port("s_in", dw, kind="axis_in", axi4s=writer.mode == "queue"),
+             _maxi_port("m_mem", dw, const=False, bundle="gmem0"))
+    return module, ports, (("target", 32, int(writer.target) // (dw // 8)),)
+
+
 def render_writer_top(mode: str, dw: int, maxp: int | None = None) -> str:
     """The top ``.cpp``: ``s_in`` (AXIS -- with a TLAST pin in queue mode, where it delimits a
     packet), ``m_mem`` (``m_axi`` on ``gmem0``, base register left at 0), ``target`` (``ap_none``,

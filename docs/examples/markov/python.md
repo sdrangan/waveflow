@@ -2,7 +2,7 @@
 title: Python model
 parent: Two kernels on a bus
 nav_order: 3
-summary: "The Markov example in Python: the command and response schemas, the golden model (xorshift32 and the chain), the generator kernel, and the chain -- a composite of the chain core and the framework's in-band memory writer, so the response goes out only once the states are stored. Each kernel's run_iter is one job, the twin of its HLS body."
+summary: "The Markov example in Python: the command and response schemas, the golden model (xorshift32 and the chain), the generator kernel, and the chain -- a composite of the chain core and the framework's in-band memory writer, so the response goes out only once the states are stored. Each kernel's run_iter is one job, the twin of its HLS body. The host and the system have pages of their own."
 ---
 
 # Python model
@@ -141,16 +141,11 @@ class MarkovChain(FreeRunMod):
         self.m_resp = self.writer.s_done
 ```
 
-## The host
+## The host and the system
 
-The host is two processes on one bus master: a **writer** that sends a command whenever fewer than
-`MAX_IN_FLIGHT = 2` jobs are outstanding, and a **reader** that takes each response, reads that job's
-`x` from memory, and frees a slot. Both endpoints wait on interrupts. The host never names an address
-but the memory regions it hands out in each command.
+The rest of the Python side has a page each:
 
-## Two wirings, the same kernels
-
-`MarkovSystem(link="mm")` puts everything on one crossbar -- the routed link is on
-[The credit link](credit_link.md). `MarkovSystem(link="direct")` joins the two kernels with a plain
-`CreditStreamIF` and the host straight to them. The kernels' code is identical in both; only the
-wiring differs. See [Python simulation](pysim.md).
+- [The host](host.md) -- `MarkovHost`, the program that sends the jobs and collects the results, read
+  as a recipe for writing a host;
+- [The system](system.md) -- `MarkovSystem`, which builds the kernels, the memory and the host and
+  wires them, directly or across one bus, step by step.

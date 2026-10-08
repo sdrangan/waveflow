@@ -223,11 +223,12 @@ def test_every_declared_boundary_kind_has_a_row():
     from waveflow.hw.bram import BramIFMaster
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
     from waveflow.hw.memif import MMIFReadMaster, MMIFSlave, MMIFWriteMaster
+    from waveflow.hw.irq import IrqIFSink, IrqIFSource
     from waveflow.hw.regmap import RegMapMMIFSlave
 
     declared = {cls.boundary_kind for cls in (
         StreamIFSlave, StreamIFMaster, MMIFSlave, MMIFReadMaster, MMIFWriteMaster,
-        RegMapMMIFSlave, BramIFMaster)}
+        RegMapMMIFSlave, BramIFMaster, IrqIFSource, IrqIFSink)}
     missing = sorted(declared - set(BFM_DUALS))
     assert not missing, (
         f"boundary kinds with no BFM_DUALS row: {missing}. A kind with no row is a KeyError "

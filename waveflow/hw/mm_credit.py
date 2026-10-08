@@ -311,6 +311,9 @@ class MmCreditStreamIF(Interface):
                              f"resp_words={m.resp_words} is reserved")
         self.fwd_writer.target = int(qin.base)
         self.fwd_writer.max_burst = int(qin.max_burst)
+        #: The longest packet the forward writer carries -- the receiving queue's depth, which is
+        #: what its csynth'd top is specialized on (``mm_writer_gen.writer_top_name``).
+        self.fwd_writer.max_packet = self.depth
         self.crd_writer.target = int(crd_in.base)
 
 

@@ -49,13 +49,20 @@ In going through this example, you will learn how to:
 - [Protocol](protocol.md) — every message and the order it flows in: command, forwarded command and
   draws, credit, states to memory, the response.
 - [Python model](python.md) — the schemas, the golden model, the generator and the chain (a composite
-  with the framework's memory writer), the host.
+  with the framework's memory writer).
+- [The host](host.md) — `MarkovHost`, step by step: what a host owns, what the system hands it, its two
+  processes, and a checklist for writing your own.
+- [The system](system.md) — `MarkovSystem`, step by step: the modules, the memory regions, the direct
+  wiring, and the bus wiring (devices, the routed credit link, the crossbar, interrupts, the host's
+  endpoints).
 - [The credit link](credit_link.md) — how the generator's stream reaches the chain across the bus: the
   views, the routing, the numbers that size it, and what the RTL taught.
 - [Python simulation](pysim.md) — both wirings, the results, what the gates check, the chain's output,
   and how close the timing is.
 - [Code generation](codegen.md) — the four synthesized tops, the two hand-written bodies as loops, and
   the timing they close at.
+- [XSI testbench](xsi.md) — `markov_xsi.py` section by section: the generated top, the host's C++
+  twin, the generated harness, running it, reading the traces back, and the gates.
 - [RTL simulation](rtlsim.md) — the four-master system under XSI, the gates, and finding the time with
   probes.
 

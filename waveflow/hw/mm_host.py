@@ -315,6 +315,14 @@ class _MmViewIF(Interface):
         super().__post_init__()
         if self.master is None or self.view is None or self.clk is None:
             raise ValueError(f"{type(self).__name__} needs master, view and clk")
+        #: What crossed this endpoint, one word array per call -- a packet sent, a config committed,
+        #: the words a read took, a status read.  The C++ endpoints (``xsi_mm_host.h``) record the
+        #: same messages; :func:`write_trace` dumps either as a burst bundle, so the host conformance
+        #: gate (``plans/xsi_system_top.md``) compares bytes, endpoint by endpoint.
+        self.trace: list[np.ndarray] = []
+
+    def _record(self, words) -> None:
+        self.trace.append(np.array(words, dtype=self._dtype).reshape(-1))
 
     @property
     def _dtype(self) -> np.dtype:
@@ -373,6 +381,7 @@ class MmQueueInIF(_MmViewIF):
 
     def write(self, words: Words, tstart: float | None = None) -> ProcessGen[None]:
         words = np.asarray(words, dtype=self._dtype)
+        self._record(words)
         n, depth = len(words), int(self.view.depth)
         head = np.asarray([n], dtype=self._dtype)
         if self.irq is not None:
@@ -453,6 +462,7 @@ class MmRegBankCfgIF(_MmViewIF):
 
     def write(self, words: Words, tstart: float | None = None) -> ProcessGen[None]:
         words = np.asarray(words, dtype=self._dtype)
+        self._record(words)
         if len(words) != self.view.ncfg:
             raise ValueError(f"{self.name}: a config for '{self.view.name}' is {self.view.ncfg} "
                              f"words, got {len(words)}")
@@ -541,6 +551,11 @@ class MmQueueOutIF(_MmViewIF):
         return (yield from self.master.read(n, self.view.base))
 
     def pull(self, nwords_max) -> ProcessGen[Words]:
+        words = yield from self._pull(nwords_max)
+        self._record(words)
+        return words
+
+    def _pull(self, nwords_max) -> ProcessGen[Words]:
         n = self._need(nwords_max)
         got: list[Words] = []
         have = 0
@@ -694,8 +709,42 @@ class MmStatusIF(_MmViewIF):
 
     def read_latest(self) -> ProcessGen[Any]:
         words = yield from self.master.read(self.view.nstat, self.view.status_addr)
+        self._record(words)
         return self.view.status_type().deserialize(np.asarray(words, dtype=self._dtype),
                                                    word_bw=self.view.mem_dwidth)
+
+
+class BusReader:
+    """Plain bus reads by a host -- memory that is not a view, such as a shared buffer it reads its
+    results from -- recorded like a view endpoint: one word array per read.  The pysim twin of
+    ``MmBusReader`` (``xsi_mm_host.h``), so the host conformance gate covers these reads too."""
+
+    def __init__(self, master: MMIFMaster) -> None:
+        self.master = master
+        self.trace: list[np.ndarray] = []
+
+    def read(self, nwords: int, addr: int) -> ProcessGen[Words]:
+        """*nwords* bus words at byte address *addr* -- ``MMIFMaster.read``, recorded."""
+        words = yield from self.master.read(int(nwords), int(addr))
+        dt = np.uint32 if int(self.master.bitwidth) <= 32 else np.uint64
+        self.trace.append(np.array(words, dtype=dt).reshape(-1))
+        return words
+
+
+def write_trace(endpoint, bundle_dir) -> None:
+    """Dump what crossed a host *endpoint* (one from :class:`BoundMemSlaveAdaptor`, or a
+    :class:`BusReader`) as a burst bundle at *bundle_dir* -- one burst per message, as
+    ``MmEndpoint::write_trace`` does on the C++ side."""
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    if isinstance(endpoint, BusReader):
+        write_burst_bundle(list(endpoint.trace), bundle_dir)
+        return
+    iface = getattr(endpoint, "interface", None)
+    if not isinstance(iface, _MmViewIF):
+        raise TypeError(f"{getattr(endpoint, 'name', endpoint)!r} is not a memory-mapped host "
+                        f"endpoint, so it has no trace")
+    write_burst_bundle(list(iface.trace), bundle_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -813,6 +862,8 @@ __all__ = [
     "MemSlaveLayout",
     "bases_to_cpp_header",
     "MmQueueInIF",
+    "write_trace",
+    "BusReader",
     "MmRegBankCfgIF",
     "MmQueueOutIF",
     "MmStreamIFSlave",

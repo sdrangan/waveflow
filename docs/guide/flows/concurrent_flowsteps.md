@@ -74,9 +74,14 @@ hand-written framework bodies, copied in by `MemStreamStep`.
 
 **Assemble the RTL top.** For `mem_copy` there is nothing to assemble: it has no RTL modules, so the
 RTL top *is* the Vitis kernel. A design with RTL modules gets a generated wrapper instead —
-`wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)) — and a design reached
-over a bus adds a [memory-mapped adaptor](../interface/axi_mm/slave.md) and AMD's crossbar, as in
-[mm_fir](../../examples/mm_fir/).
+`wrapper_gen` joins the kernel's `bram` ports to the memories its graph declares (worked in [A memory reached three ways](../../examples/bram_access/)). A **system** — several
+kernels reached over a bus, each behind a [memory-mapped adaptor](../interface/axi_mm/slave.md), with
+AMD's crossbar and an on-chip memory — gets its top from
+[`system_top`](../../../waveflow/build/system_top.py), which walks the pysim system: name the cut
+(`system_top_spec(xbar, [kernels..., memory])`) and every crossbar slot, adaptor, stream net, credit
+link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/rtlsim.md) and
+[markov](../../examples/markov/rtlsim.md) are the worked cases; their cycle counts (618 / 611 and
+1870) were unchanged when their hand-rendered tops were replaced by it.
 
 **Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,
 checks that every BFM module has a C++ BFM and every port of the RTL top is covered, and
@@ -86,9 +91,14 @@ the harness only wires them. (The code calls the XSI simulation top the testbenc
 `TbSpec` — so read `tb` there as "XSI simulation top".) The full walk is the
 [XSI testbench](../comp_codegen/xsi_tb.md) page.
 
-One kind of BFM module is not generated today: a host *program* — one that reads a status register
-and decides what to write next. It is written by hand as a C++ state machine over the `AxiMmMaster`
-BFM; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
+A host *program* — one that reads a status register and decides what to write next — is a BFM
+module too, and its C++ is written by hand, not generated: it is the host's **pre-written
+realization**, named by its [`bfm_model()`](../custom_hooks/bfm_model.md#host) hook and kept in a
+header beside the example, as a kernel's HLS body is named by `kernel_task()`. What *is* generated is
+its harness: `system_tb_spec` binds the model's ports to the system top's (`s0_axi`, `irq_<view>`) and
+`render_system_tb` emits the harness and the `main`. The two realizations run the same scenario file,
+and the gate is that every host endpoint's trace is byte-identical between pysim and RTL;
+[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
 
 **XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a
 bit-exact result *and* an exact cycle count (`mem_copy` = 2908 cycles for 16 jobs), so a count that
@@ -103,5 +113,6 @@ file list and the harness and invokes the same `run.bat` / `run.sh`.
 
 **Source of truth:** `waveflow/build/composite_gen.py` (`composite_top_spec`, `render_top`,
 `tb_top_spec`, `render_tb_harness`), `waveflow/build/wrapper_gen.py` (the RTL top, when there is one),
+`waveflow/build/system_top.py` (a system's RTL top),
 `waveflow/build/hwcodegen_steps.py` (`TaskBodyStep`), `waveflow/build/streamutils.py`
 (`MemStreamStep`), `tests/examples/test_xsi_bfm.py` (the cycle gates).

@@ -44,7 +44,9 @@ caveat in prose:
 | `axis_out` | AXI4-Stream | slave | `AxisSlave` * |
 | `maxi_read` | AXI4-MM | read slave | `AxiMmReadSlave` |
 | `maxi_write` | AXI4-MM | write slave | `AxiMmWriteSlave` |
-| `mm_slave` | AXI4-MM | master | **none** — in this flow the kernel is always the master |
+| `mm_slave` | AXI4-MM | master | `AxiMmMaster` — a host reaching a system top's crossbar |
+| `irq_out` | interrupt | sampler | `IrqPin` — a host waiting on a queue view's interrupt |
+| `irq_in` | interrupt | driver | **none** — no design takes an interrupt in |
 | `axilite_slave` | AXI4-Lite | master | **none** — so a `HostActivated` DUT cannot be driven at RTL |
 
 \* On AXI-Stream the role fixes the direction but not the class, so the **participant** names it: a

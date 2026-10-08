@@ -198,7 +198,9 @@ def write_burst_bundle(word_arrays: list, bundle_dir: str | Path, extra: dict | 
             f"({sorted(meta)}). Those four describe the binaries and are checked against them on "
             f"read; a caller redefining one would make the check test the caller's claim instead.")
     meta.update(extra or {})
-    (d / META_NAME).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    # LF on every platform: the C++ writer (xsi_bundle.h) emits LF, and a bundle is the same bytes
+    # whichever side wrote it -- the host conformance gate (plans/xsi_system_top.md) compares them.
+    (d / META_NAME).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n")
     return d
 
 
