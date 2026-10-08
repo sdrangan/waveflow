@@ -91,9 +91,14 @@ the harness only wires them. (The code calls the XSI simulation top the testbenc
 `TbSpec` — so read `tb` there as "XSI simulation top".) The full walk is the
 [XSI testbench](../comp_codegen/xsi_tb.md) page.
 
-One kind of BFM module is not generated today: a host *program* — one that reads a status register
-and decides what to write next. It is written by hand as a C++ state machine over the `AxiMmMaster`
-BFM; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
+A host *program* — one that reads a status register and decides what to write next — is a BFM
+module too, and its C++ is written by hand, not generated: it is the host's **pre-written
+realization**, named by its [`bfm_model()`](../custom_hooks/bfm_model.md#host) hook and kept in a
+header beside the example, as a kernel's HLS body is named by `kernel_task()`. What *is* generated is
+its harness: `system_tb_spec` binds the model's ports to the system top's (`s0_axi`, `irq_<view>`) and
+`render_system_tb` emits the harness and the `main`. The two realizations run the same scenario file,
+and the gate is that every host endpoint's trace is byte-identical between pysim and RTL;
+[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
 
 **XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a
 bit-exact result *and* an exact cycle count (`mem_copy` = 2908 cycles for 16 jobs), so a count that

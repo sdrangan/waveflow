@@ -27,11 +27,19 @@
 // finds too little re-issues `poll` cycles later (the pysim `sleep(poll_cycles)`); every other next
 // operation is issued at once.
 //
+// **The trace** (plans/xsi_system_top.md, the host conformance gate): every endpoint records what
+// crossed it -- each packet a queue writer sent, each config a register bank took, the words each
+// queue read and each status read returned -- one burst per call, and write_trace(dir) dumps it as a
+// burst bundle.  The pysim endpoints (waveflow/hw/mm_host.py) record the same messages, so the same
+// scenario through both backends must give byte-identical bundles, endpoint by endpoint.
+//
 // Header-only and standard-library only beyond xsi_bfm.h.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "xsi_bfm.h"
@@ -77,6 +85,32 @@ inline MmView at(const MmViewLayout& l, uint64_t base) {
     return MmView{l.name, l.kind, base + l.offset, l.window, l.bpw, l.depth, l.ncfg, l.nstat, l.nelem};
 }
 
+/// A timing probe: a one-bit output of the top, sampled every cycle; post_sim() prints the cycles it
+/// was high, as runs "start+len", on a line "PROBE <name> ..." (plans: markov-timing).
+class ProbePin : public XsiSimObj {
+public:
+    ProbePin(Dut& d, const char* port, const char* name) : d_(d), p_(d.port(port)), name_(name) {}
+    void sample() override {
+        if (d_.get1(p_)) {
+            if (!runs_.empty() && runs_.back().first + runs_.back().second == cyc_) ++runs_.back().second;
+            else runs_.push_back({cyc_, 1});
+        }
+        ++cyc_;
+    }
+    void post_sim() override {
+        std::printf("PROBE %s", name_);
+        for (auto& r : runs_) std::printf(" %ld+%ld", r.first, r.second);
+        std::printf("\n");
+    }
+
+private:
+    Dut& d_;
+    int p_;
+    const char* name_;
+    long cyc_ = 0;
+    std::vector<std::pair<long, long> > runs_;
+};
+
 /// One interrupt pin of the DUT, sampled every cycle -- the C++ end of an IrqIF.  Put it in the
 /// participant list with the endpoints that wait on it.
 class IrqPin : public XsiSimObj {
@@ -105,8 +139,15 @@ public:
     void use_irq(const IrqPin& pin) { irq_ = &pin; }
     /// Bus operations this endpoint issued that were polls (reads that found too little).
     long polls = 0;
+    /// Dump the trace -- one burst per message that crossed this endpoint -- as a burst bundle.
+    void write_trace(const std::string& dir) const { BurstBundle::write(dir, trace_words_, trace_bounds_); }
 
 protected:
+    /// Record one message that crossed this endpoint (the pysim twin records the same one).
+    void record(const std::vector<uint64_t>& w) {
+        trace_words_.insert(trace_words_.end(), w.begin(), w.end());
+        trace_bounds_.push_back(trace_words_.size());
+    }
     void read(uint64_t a, uint32_t n, long delay) { op_ = m_.read(a, n, m_.cycle() + delay); }
     void write(uint64_t a, std::vector<uint64_t> w) { op_ = m_.write(a, std::move(w)); }
     bool op_done() const { return m_.op(op_).done(); }
@@ -136,6 +177,7 @@ protected:
     int state_ = 0;
     const IrqPin* irq_ = nullptr;
     uint64_t thr_ = 0;          ///< the threshold last written (the view resets it to 0)
+    std::vector<uint64_t> trace_words_, trace_bounds_;
 };
 
 /// Queue in: one start() is one packet.
@@ -145,6 +187,7 @@ public:
         : MmEndpoint(m, v, poll, MmKind::QueueIn, "MmQueueWriter") {}
 
     void start(std::vector<uint64_t> words) {
+        record(words);
         pkt_ = std::move(words); sent_ = 0;
         if (irq_) {
             const uint64_t n = pkt_.size();
@@ -222,7 +265,7 @@ public:
                 words.insert(words.end(), rdata().begin(), rdata().end());
                 if (left_ > 0) pop_next();
                 else if (words.size() < want_) chunk();
-                else state_ = 0;
+                else { state_ = 0; record(words); }
             }
             return;
         }
@@ -236,7 +279,7 @@ public:
         }
         words.insert(words.end(), rdata().begin(), rdata().end());
         if (words.size() < want_) { read(v_.status_addr(), 1, 0); state_ = POLL; }
-        else state_ = 0;
+        else { state_ = 0; record(words); }
     }
     /// The words taken by the last start(n), once busy() is false.
     std::vector<uint64_t> words;
@@ -264,6 +307,7 @@ public:
         : MmEndpoint(m, v, poll, MmKind::RegBank, "MmRegBankCfg") {}
 
     void start(const std::vector<uint64_t>& words) {
+        record(words);
         if (words.size() != v_.ncfg) {
             std::fprintf(stderr, "FATAL: config for '%s' is %u words, got %zu\n", v_.name, v_.ncfg,
                          words.size());
@@ -288,7 +332,7 @@ public:
     /// *delay* holds the read back that many cycles -- a host re-checking the status after a sleep.
     void start(long delay = 0) { read(v_.status_addr(), v_.nstat, delay); state_ = 1; }
     void step() {
-        if (state_ && op_done()) { words = rdata(); state_ = 0; }
+        if (state_ && op_done()) { words = rdata(); state_ = 0; record(words); }
     }
     /// The status words read by the last start(), once busy() is false.
     std::vector<uint64_t> words;

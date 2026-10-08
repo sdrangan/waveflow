@@ -209,19 +209,22 @@ What to read in it:
 The system gives it those endpoints, either through the adaptor or joined straight to the kernel
 ([Python simulation](pysim.md) shows both), so the same class runs over the bus and without it.
 
-It runs as two processes, laid out by `host_schedule`. The **writer** commits each config and sends
-each packet — its header, then its samples:
+It runs as two processes, over its **scenario**: `host_schedule`'s configs and packets as word
+messages — a config's words, or a packet's `FirCmdHdr` and its samples as the serializer packs them
+(`scenario_bursts`). The same messages can be written to a file (`write_scenario`) and read back from
+it (the `scenario` field), which is how the host's C++ twin runs the same scenario at RTL — see
+[RTL simulation](rtlsim.md#the-host-program). The **writer** commits each config and sends each
+packet — its header, then its samples:
 
 ```python
     def _writer(self):
-        for item in self.schedule:
+        for item in self.items:
             if item[0] == "cfg":
-                yield from self.cfg.write(make_cfg(item[1]))
+                yield from self.cfg.write(item[1])
             else:
-                _, n0, n1, tag, _want = item
-                yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
-                                                    cfg_id=tag))
-                yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
+                _, _nsamp, _tx, _want, hdr, samples = item
+                yield from self.qin.write(hdr)
+                yield from self.qin.write(samples)
 ```
 
 It never asks whether a config has arrived: the header's `cfg_id` makes the kernel wait. Packets are
@@ -233,21 +236,21 @@ The **reader** takes one output packet per input packet, then its response, and 
 
 ```python
     def _reader(self):
-        for item in self.schedule:
+        for item in self.items:
             if item[0] == "pkt":
-                _, n0, n1, _tag, want = item
-                y = yield from self.qout.get_array(S64, n1 - n0)
+                _, nsamp, tx, want, _hdr, _samples = item
+                y = yield from self.qout.get_array(S64, nsamp)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
                 got = (int(resp.tx_id), int(resp.cfg_id))
                 self.responses.append(got)
-                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_id", want, got[1])):
+                for name, exp, val in (("tx_id", tx, got[0]), ("cfg_id", want, got[1])):
                     if exp != val:
                         self.mismatches.append((got[0], name, exp, val))
 ```
 
 Queue out is unframed — the bus cannot see where the kernel's packets end — so the reader names how
-many results it wants, and it knows because it reads the same schedule.
+many results it wants, and it knows because it reads the same scenario.
 
 **Nothing polls.** Over the bus, the queue endpoints sleep on the views'
 [interrupts](../../guide/interface/axi_mm/slave.md#interrupts): queue in's for room, queue out's and

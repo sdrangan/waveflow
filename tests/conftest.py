@@ -109,7 +109,9 @@ import pytest
 #: 149 -> 155 on 2026-10-06 (plans/ssr_fft.md F3): SsrFft at RTL -- both reorders x bits, interval,
 #: timing (tests/dsp/ssr_fft/test_xsi.py).
 #: 155 -> 158 on 2026-10-06: the inverse SsrFft at RTL (pingpong-inverse x the same three).
-WANT_XSI_GATES = 158
+#: 158 -> 160 on 2026-10-07 (plans/xsi_system_top.md S4): the mm_fir host conformance gate
+#: (test_mm_fir_host_traces_match_pysim) x per_view / one_front.
+WANT_XSI_GATES = 160
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

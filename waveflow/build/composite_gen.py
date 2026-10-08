@@ -1416,6 +1416,11 @@ class TbSpec:
     #: includes, in first-use order.  The harness names them by file name; whoever builds the
     #: workspace copies these files beside it.
     local_headers: tuple[str, ...] = ()
+    #: The model whose ``done()`` ends the run, or ``None``.  Set, the harness also has
+    #: ``run_until(n_max)``: a **host program** knows when it has everything it asked for, and a run
+    #: that stops there is not the drain-tail-as-latency mistake ``run``'s note warns about -- the
+    #: host's completion IS the measurement (``plans/xsi_system_top.md``).
+    stop_on: str | None = None
 
 
 def _find_dut(tb):
@@ -2525,6 +2530,28 @@ def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
         "        post_sim();                      // participants dump results / collect metrics",
         "    }",
         "",
+    ]
+    if spec.stop_on is not None:
+        lines += [
+            f"    /// Run until {spec.stop_on}.done() -- the host has taken everything it asked for -- or",
+            "    /// *n_max* cycles.  Returns the cycles run: the loop of run(), with the stop test.",
+            "    long run_until(long n_max) {",
+            "        pre_sim();",
+            "        sim.reset([this]{ drive(); });",
+            "        long c = 0;",
+            f"        for (; c < n_max && !{spec.stop_on}.done(); ++c) {{",
+            "            sim.clock_low();",
+            "            sample();",
+            "            sim.clock_high();",
+            "            update();",
+            "            drive();",
+            "        }",
+            "        post_sim();",
+            "        return c;",
+            "    }",
+            "",
+        ]
+    lines += [
         "    void close() { sim.close(); }",
         "};",
         "",

@@ -20,7 +20,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import QIN, QOUT, QRESP, REGS, MmFirSystem, fir_golden, host_schedule
+from examples.mm_fir.mm_fir import (
+    HOST_ENDPOINTS,
+    QIN,
+    QOUT,
+    QRESP,
+    REGS,
+    MmFirSystem,
+    fir_golden,
+    host_schedule,
+)
 from examples.mm_fir.mm_fir_xsi import (
     NSAMP,
     PKT,
@@ -30,7 +39,10 @@ from examples.mm_fir.mm_fir_xsi import (
     output_words,
     parse_kv,
     run_xsi,
+    scenario_path,
     scenario_x,
+    system,
+    trace_dir,
 )
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.toolchain.toolchain import find_vivado_path
@@ -78,6 +90,25 @@ def test_mm_fir_rtl_host_never_polls(fir_run):
     assert reads and counts == [], [hex(a) for a in counts]
     assert reads.count(REGS + 0xC00) == 1
     assert parse_kv(out, "DONE")["polls"] == 0
+
+
+@pytest.mark.xsi
+def test_mm_fir_host_traces_match_pysim(fir_run, tmp_path):
+    """The host conformance gate (plans/xsi_system_top.md): FirHost and its C++ realization,
+    FirHostModel, run the SAME scenario bundle, and every host endpoint's trace -- each config
+    committed, each packet sent, the words each read took, the status read -- is byte-identical
+    between the pysim run and the RTL run.  Per endpoint, not globally: the interleaving across
+    endpoints is timing, and pysim is loosely timed."""
+    topology, _out = fir_run
+    sysm = system(topology)
+    sysm.host.scenario = scenario_path(topology, WORK).as_posix()
+    sysm.host.trace_dir = tmp_path.as_posix()
+    sysm.run()
+    rtl = trace_dir(topology, WORK)
+    for ep in HOST_ENDPOINTS:
+        for f in ("words.bin", "bounds.bin", "meta.json"):
+            assert (tmp_path / ep / f).read_bytes() == (rtl / ep / f).read_bytes(), (
+                f"{topology}: host endpoint {ep!r} saw different messages in pysim and at RTL ({f})")
 
 
 @pytest.mark.xsi

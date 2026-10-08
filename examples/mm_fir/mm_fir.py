@@ -52,7 +52,7 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import HwModule, HwParam
+from waveflow.hw.hw_module import DynParam, HwModule, HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
@@ -62,6 +62,7 @@ from waveflow.hw.mm_host import (
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveLayout,
+    write_trace,
 )
 from waveflow.simulation.simulation import Simulation
 
@@ -358,6 +359,18 @@ def host_schedule(nsamp: int, plan, pkt: int, lag: int = 0, stale_tag: bool = Fa
     return out
 
 
+def _u64(words) -> np.ndarray:
+    """Words as uint64 -- every piece of a scenario burst, so a concatenation cannot promote to float
+    (numpy turns int64 + uint64 into float64, which loses the low bits of a 64-bit word)."""
+    return np.asarray([int(w) for w in np.asarray(words).reshape(-1)], dtype=np.uint64)
+
+
+#: A scenario item's kind -- the first word of each burst of a host scenario bundle.
+CFG, PKT = 0, 1
+#: The host's endpoints that record a trace (memory-mapped wiring), in the order they are dumped.
+HOST_ENDPOINTS = ("cfg", "qin", "qout", "qresp", "status")
+
+
 @dataclass
 class FirHost(HwModule):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
@@ -378,6 +391,17 @@ class FirHost(HwModule):
     * ``qout`` -- a ``StreamIFSlave``, unframed: reads name their size;
     * ``qresp`` -- a ``StreamIFSlave``, unframed: one :class:`FirRespHdr` per packet;
     * ``status`` -- a :class:`~waveflow.hw.mm_host.LatestValueIFSlave`: the latest status.
+
+    **Two realizations** (``plans/xsi_system_top.md``).  This class is the Python one; its
+    :meth:`bfm_model` names the C++ one, ``FirHostModel`` in ``mm_fir_host.h`` beside this file, which
+    an XSI system top's generated harness instantiates.  Both run **one scenario**: the schedule as
+    word messages, one burst per item (:meth:`scenario_bursts`) -- ``[CFG, <config words>]`` or
+    ``[PKT, nsamp, tx_id, want, nhdr, <header words>, <sample words>]``.  Given :attr:`scenario` (a
+    bundle :meth:`write_scenario` wrote), this host runs from that file, as the C++ one does;
+    otherwise from the same bursts built in memory.  Given :attr:`trace_dir`, each memory-mapped
+    endpoint's trace -- what crossed it -- is dumped there after the run, one bundle per endpoint
+    (:data:`HOST_ENDPOINTS`); the C++ host dumps the same five, and the conformance gate compares
+    them byte for byte.
     """
 
     x: list = field(default_factory=list)
@@ -389,6 +413,13 @@ class FirHost(HwModule):
     #: Negative control: tag every packet with config 1, so config 2 is never taken.
     stale_tag: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Cycles between polls, should an endpoint poll (none does here: they wait on interrupts).  One
+    #: setting for both hosts: the bus endpoints' ``poll_cycles`` and the C++ model's argument.
+    poll_cycles: int = 8
+    #: The scenario bundle both hosts run (``write_scenario``); empty: built from x / plan / pkt.
+    scenario: DynParam[str] = ""
+    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
+    trace_dir: DynParam[str] = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -419,40 +450,97 @@ class FirHost(HwModule):
         self.status_reads = 0
         self.schedule = host_schedule(len(self.x), self.plan, self.pkt, self.lag, self.stale_tag)
 
+    # -- the scenario: the schedule as word messages, one burst per item ---------------------------
+
+    def scenario_bursts(self) -> list[np.ndarray]:
+        """The schedule as the words both hosts send -- see the class docstring for the layout."""
+        out, tx = [], 0
+        for item in self.schedule:
+            if item[0] == "cfg":
+                words = make_cfg(item[1], cfg_id=item[2]).serialize(word_bw=DW)
+                out.append(np.concatenate([_u64([CFG]), _u64(words)]))
+            else:
+                _, n0, n1, tag, want = item
+                hdr = _u64(FirCmdHdr(nsamp=n1 - n0, tx_id=tx & 0xFFFF, cfg_id=tag).serialize(word_bw=DW))
+                smp = _u64(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)).serialize(word_bw=DW))
+                out.append(np.concatenate([_u64([PKT, n1 - n0, tx & 0xFFFF, want, len(hdr)]), hdr, smp]))
+                tx += 1
+        return out
+
+    def write_scenario(self, path) -> None:
+        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
+        from waveflow.utils.burst_io import write_burst_bundle
+        write_burst_bundle(self.scenario_bursts(), path)
+
+    def pre_sim(self) -> None:
+        super().pre_sim()
+        if self.scenario:
+            from waveflow.utils.burst_io import read_burst_bundle
+            bursts = read_burst_bundle(self.scenario)
+        else:
+            bursts = self.scenario_bursts()
+        #: The decoded scenario: ("cfg", words) or ("pkt", nsamp, tx_id, want, header, samples).
+        self.items: list[tuple] = []
+        for b in bursts:
+            b = np.asarray(b, dtype=np.uint64)
+            if int(b[0]) == CFG:
+                self.items.append(("cfg", b[1:]))
+            else:
+                nsamp, tx, want, nhdr = (int(v) for v in b[1:5])
+                self.items.append(("pkt", nsamp, tx, want, b[5:5 + nhdr], b[5 + nhdr:]))
+
+    def post_sim(self) -> None:
+        super().post_sim()
+        if self.trace_dir:
+            from pathlib import Path
+            for name in HOST_ENDPOINTS:
+                write_trace(getattr(self, name), Path(self.trace_dir) / name)
+
+    # -- the host program ---------------------------------------------------------------------------
+
     def _read_status(self):
         self.status_reads += 1
         return (yield from self.status.read())
 
     def _writer(self):
-        for item in self.schedule:
+        for item in self.items:
             if item[0] == "cfg":
-                yield from self.cfg.write(make_cfg(item[1], cfg_id=item[2]))
+                yield from self.cfg.write(item[1])
             else:
-                _, n0, n1, tag, _want = item
-                yield from self.qin.write(FirCmdHdr(nsamp=n1 - n0, tx_id=self._tx_id(n0),
-                                                    cfg_id=tag))
-                yield from self.qin.write(array(S16, np.asarray(self.x[n0:n1], dtype=np.int64)))
-
-    def _tx_id(self, n0: int) -> int:
-        """A packet's id: its index among the packets, mod 2**16."""
-        return [it[1] for it in self.schedule if it[0] == "pkt"].index(n0) & 0xFFFF
+                _, _nsamp, _tx, _want, hdr, samples = item
+                yield from self.qin.write(hdr)
+                yield from self.qin.write(samples)
 
     def _reader(self):
-        for item in self.schedule:
+        for item in self.items:
             if item[0] == "pkt":
-                _, n0, n1, _tag, want = item
-                y = yield from self.qout.get_array(S64, n1 - n0)
+                _, nsamp, tx, want, _hdr, _samples = item
+                y = yield from self.qout.get_array(S64, nsamp)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
                 got = (int(resp.tx_id), int(resp.cfg_id))
                 self.responses.append(got)
-                for name, exp, val in (("tx_id", self._tx_id(n0), got[0]), ("cfg_id", want, got[1])):
+                for name, exp, val in (("tx_id", tx, got[0]), ("cfg_id", want, got[1])):
                     if exp != val:
                         self.mismatches.append((got[0], name, exp, val))
         # The kernel publishes its status before each response, so after the last response the
         # status is final: one read, no waiting for it.
         self.final_status = yield from self._read_status()
         self.done.succeed()
+
+    def bfm_model(self):
+        """The C++ realization: ``FirHostModel`` in ``mm_fir_host.h`` beside this file -- the same
+        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.
+
+        It spans the bus master (an ``AxiMmMaster``, one read and one write in flight -- what
+        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``) and the three interrupt pins it waits on."""
+        from waveflow.build.composite_gen import BfmModel
+
+        if int(self.m.max_outstanding) != 1:
+            raise ValueError(f"FirHostModel's AxiMmMaster keeps one read and one write in flight; "
+                             f"{self.name}.m.max_outstanding is {self.m.max_outstanding}")
+        return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
+                        extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
 
     def run_proc(self):
         self.env.process(self._writer())
@@ -535,7 +623,7 @@ class MmFirSystem:
             self.xbar.bind(f"slave_{k}", ep)
         assign_address_ranges(slaves, ranges)
         self.slave_map = self.device.layout.at(MM_BASE)
-        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m)
+        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
         self.host.cfg = mm.stream_master("regs")
         # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.
         for v in (self.qin, self.qout, self.qresp):

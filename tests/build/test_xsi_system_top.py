@@ -6,11 +6,24 @@ testbench masters a system top's crossbar SI) and an interrupt output is answere
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
 
 from waveflow.build.codegen_check import check
-from waveflow.build.composite_gen import BFM_DUALS, BfmModel, bfm_dual_class, xsi_model_classes
+from waveflow.build.composite_gen import (
+    BFM_DUALS,
+    BfmModel,
+    bfm_dual_class,
+    render_tb_harness,
+    tb_top_spec,
+    xsi_model_classes,
+)
 from waveflow.hw.codegen_targets import XSI_BFM_MODEL
+from waveflow.simulation.stream_tb import StreamSink
 
 from examples.mm_fir.mm_fir import FirHost, MmFirSystem
 
@@ -61,14 +74,6 @@ def test_an_uncovered_irq_is_named():
 # Stage 2: BfmModel(header=...) -- a model class beside the example, not in the framework library.
 # ---------------------------------------------------------------------------------------------
 
-import shutil
-import subprocess
-from pathlib import Path
-
-import pytest
-
-from waveflow.build.composite_gen import render_tb_harness, tb_top_spec
-from waveflow.simulation.stream_tb import StreamSink
 
 _XSI_SRC = Path(__file__).resolve().parents[2] / "waveflow" / "build" / "xsi"
 _GXX = shutil.which("g++")
@@ -164,3 +169,55 @@ def test_the_harness_with_a_local_model_compiles(tmp_path):
                         f"-I{tmp_path}", str(tmp_path / "main.cpp")],
                        check=False, capture_output=True, text=True)
     assert r.returncode == 0, f"the harness with a local model does not compile:\n{r.stderr[-4000:]}"
+
+
+# ---------------------------------------------------------------------------------------------
+# Stage 4: the host is a hooked module -- mm_fir's FirHost and its C++ twin, FirHostModel.
+# ---------------------------------------------------------------------------------------------
+
+def test_fir_host_resolves_its_own_model():
+    """FirHost names FirHostModel, in mm_fir_host.h beside it -- and the class really is there."""
+    sysm = MmFirSystem(x=[0], plan=[(0, [1])])
+    assert check(sysm.host, XSI_BFM_MODEL) == (True, None)
+    bm = sysm.host.bfm_model()
+    assert (bm.cls, bm.header, bm.ports) == ("FirHostModel", "mm_fir_host.h", HOST_PORTS)
+
+
+def test_the_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
+    """The same scenario, from memory and from the bundle the C++ host reads: the same outputs, and
+    every endpoint's trace the same bytes."""
+    import numpy as np
+
+    from examples.mm_fir.mm_fir import HOST_ENDPOINTS
+    from examples.mm_fir.mm_fir_xsi import PKT, PLAN, scenario_x
+
+    def run(scenario: str, traces):
+        sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT)
+        sysm.host.scenario = scenario
+        sysm.host.trace_dir = str(traces)
+        return sysm.run(), sysm
+
+    y0, sysm = run("", tmp_path / "mem")
+    sysm.host.write_scenario(tmp_path / "scenario")
+    y1, _ = run(str(tmp_path / "scenario"), tmp_path / "file")
+    assert np.array_equal(y0, y1)
+    for ep in HOST_ENDPOINTS:
+        for f in ("words.bin", "bounds.bin", "meta.json"):
+            assert (tmp_path / "mem" / ep / f).read_bytes() == (tmp_path / "file" / ep / f).read_bytes()
+    assert (tmp_path / "mem" / "qout" / "words.bin").stat().st_size == 8 * len(y0)
+
+
+def test_the_system_harness_binds_the_host_to_the_top():
+    from examples.mm_fir.mm_fir_xsi import system, system_spec
+    from waveflow.build.system_top import render_system_tb, system_tb_spec
+
+    sysm = system("one_front")
+    spec = system_spec("one_front", sysm)
+    tb = system_tb_spec(spec, sysm.xbar, [sysm.host])
+    (m,) = tb.models
+    assert m.cls == "FirHostModel" and tb.stop_on == "host"
+    assert m.binds == tuple(x for p in ("s0_axi", "irq_qin", "irq_qout", "irq_qresp")
+                            for x in ("sim.dut()", f"mm_fir_top_ports::{p}"))
+    main, files = render_system_tb(spec, tb)
+    assert "h.run_until(" in main and "mm_fir_host.h" in files
+    assert "long run_until(long n_max)" in files["mm_fir_top_tb_harness.h"]
