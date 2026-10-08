@@ -47,6 +47,9 @@ flowchart LR
 | to *be reached* by a host or another master | a [`MemSlaveAdaptor`](../interface/axi_mm/slave.md) of views -- queue in, queue out, register bank, BRAM window | an RTL module, beside the kernel | Vitis HLS cannot generate an AXI4-full slave |
 | to tell a host something is ready | an [`IrqIF`](../interface/axi_mm/slave.md#interrupts), driven by a queue view's threshold -- the adaptor raises it, not the module | a wire out of the adaptor | the host waits on it instead of polling |
 
+At RTL, a system of modules and their adaptors is simulated as a whole -- kernels, adaptors, AMD's
+crossbar and a host -- from the same pysim object: see [XSI system simulation](../build/xsi_system.md).
+
 Where an adaptor lives is decided by what Vitis HLS can generate
 ([AXI-MM: what decides the realization](../interface/axi_mm/index.md#what-decides-the-realization-what-vitis-hls-can-generate)),
 not by the module: from the inside, a reader and a slave adaptor look the same -- a stream.

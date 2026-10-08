@@ -47,11 +47,21 @@ from the graph:
 - **The forward FIFO** sits between the generator and its queue writer, at the depth the pysim link
   declares (`fwd_depth`).
 
-The **host** is the pysim `MarkovHost` written against the C++ endpoints of `xsi_mm_host.h`: a writer
-sending commands on room interrupts and a reader taking responses on data interrupts, two jobs in
-flight, and no address in the program but the memory regions it hands out. Its includes -- each kernel
-type's layout and the system's bases -- come from a walk of the pysim crossbar
-(`bus_address_headers`).
+The **host** has two realizations: the pysim `MarkovHost`, and its C++ twin `MarkovHostModel` in
+[`markov_host.h`](../../../examples/markov/markov_host.h), named by `MarkovHost.bfm_model()` (see
+[A host is a hooked module](../../guide/custom_hooks/bfm_model.md#host)). Both are a writer sending
+commands on room interrupts and a reader taking responses on data interrupts, then reading each job's
+`x` back from the memory -- two jobs in flight, nothing polled. Both run **one scenario bundle**
+(`MarkovHost.write_scenario`: per job, where its `x` lands, how many words it is, and the command), so
+the C++ holds no job and no address but those. Its includes -- each kernel type's layout and the
+system's bases -- come from a walk of the pysim crossbar (`bus_address_headers`), and the one field it
+must read out of a response, `tx_id`, is handed its position from `MkvResp`'s serializer. The harness
+is generated (`system_tb_spec`, `render_system_tb`).
+
+Every host endpoint records what crossed it -- the commands, the responses, and (`BusReader` /
+`MmBusReader`) the `x` regions read back -- and the gate requires those three traces to be
+**byte-identical** between pysim and RTL (`test_markov_host_traces_match_pysim`). The `ones` and `x`
+in the results below are decoded from the traces in Python.
 
 ## Running it
 
@@ -69,8 +79,8 @@ pytest tests/examples/test_markov_xsi.py -m xsi             # the gates (needs V
 | host reads other than responses and `x` | 0 | **0** |
 
 The gates ([`tests/examples/test_markov_xsi.py`](../../../tests/examples/test_markov_xsi.py)) check each
-job's `x` and `ones` against the golden, that the host never reads a count, the cycle count, and that
-pysim stays within 5% of it. The staleness guard refuses to run them against RTL that was not built from
+job's `x` and `ones` against the golden, that the host never reads a count, the cycle count, that
+pysim stays within 5% of it, and that the host's three traces are identical between the two. The staleness guard refuses to run them against RTL that was not built from
 the sources on disk.
 
 ## Finding the time

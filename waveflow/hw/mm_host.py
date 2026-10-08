@@ -714,11 +714,32 @@ class MmStatusIF(_MmViewIF):
                                                    word_bw=self.view.mem_dwidth)
 
 
+class BusReader:
+    """Plain bus reads by a host -- memory that is not a view, such as a shared buffer it reads its
+    results from -- recorded like a view endpoint: one word array per read.  The pysim twin of
+    ``MmBusReader`` (``xsi_mm_host.h``), so the host conformance gate covers these reads too."""
+
+    def __init__(self, master: MMIFMaster) -> None:
+        self.master = master
+        self.trace: list[np.ndarray] = []
+
+    def read(self, nwords: int, addr: int) -> ProcessGen[Words]:
+        """*nwords* bus words at byte address *addr* -- ``MMIFMaster.read``, recorded."""
+        words = yield from self.master.read(int(nwords), int(addr))
+        dt = np.uint32 if int(self.master.bitwidth) <= 32 else np.uint64
+        self.trace.append(np.array(words, dtype=dt).reshape(-1))
+        return words
+
+
 def write_trace(endpoint, bundle_dir) -> None:
-    """Dump what crossed a host *endpoint* (one from :class:`BoundMemSlaveAdaptor`) as a burst bundle
-    at *bundle_dir* -- one burst per message, as ``MmEndpoint::write_trace`` does on the C++ side."""
+    """Dump what crossed a host *endpoint* (one from :class:`BoundMemSlaveAdaptor`, or a
+    :class:`BusReader`) as a burst bundle at *bundle_dir* -- one burst per message, as
+    ``MmEndpoint::write_trace`` does on the C++ side."""
     from waveflow.utils.burst_io import write_burst_bundle
 
+    if isinstance(endpoint, BusReader):
+        write_burst_bundle(list(endpoint.trace), bundle_dir)
+        return
     iface = getattr(endpoint, "interface", None)
     if not isinstance(iface, _MmViewIF):
         raise TypeError(f"{getattr(endpoint, 'name', endpoint)!r} is not a memory-mapped host "
@@ -842,6 +863,7 @@ __all__ = [
     "bases_to_cpp_header",
     "MmQueueInIF",
     "write_trace",
+    "BusReader",
     "MmRegBankCfgIF",
     "MmQueueOutIF",
     "MmStreamIFSlave",

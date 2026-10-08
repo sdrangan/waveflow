@@ -44,10 +44,11 @@ from typing import ClassVar
 
 import numpy as np
 
-from waveflow.hw.arrayutils import array
+from waveflow.hw.arrayutils import array, get_nwords, read_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_module import DynParam, HwModule
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
@@ -55,9 +56,8 @@ from waveflow.hw.mem_stream import MemWCmd, MemWStream
 from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_credit import MmCreditStreamIF
 from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
-from waveflow.hw.mm_host import BoundMemSlaveAdaptor, MemSlaveLayout
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout, write_trace
 from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
-from waveflow.simulation.simobj import SimObj
 from waveflow.simulation.simulation import Simulation
 
 DW = 64
@@ -329,24 +329,54 @@ def default_jobs(njobs: int = 4, n: int = 300, seed: int = 11) -> list[dict]:
     return jobs
 
 
+#: The host's endpoints that record a trace (memory-mapped wiring), in the order they are dumped:
+#: the command queue, the response queue, and the reads of each job's x from the shared memory.
+HOST_ENDPOINTS = ("qcmd", "qresp", "mem")
+
+
+def _u64(words) -> np.ndarray:
+    """Words as uint64 -- every piece of a scenario burst (numpy turns int64 + uint64 into float64)."""
+    return np.asarray([int(w) for w in np.asarray(words).reshape(-1)], dtype=np.uint64)
+
+
 @dataclass
-class MarkovHost(SimObj):
+class MarkovHost(HwModule):
     """The host program: a **writer** that sends each job's command once a slot is free, and a
     **reader** that takes each response, reads that job's ``x`` from memory and frees the slot.
     At most :data:`MAX_IN_FLIGHT` jobs are outstanding.  Nothing polls: over the bus the command
     endpoint sleeps on the command queue's room interrupt and the response endpoint on the response
     queue's data interrupt.  ``x`` is read with ``mem_read`` -- a bus read (memory-mapped) or a
-    direct read of the memory (direct)."""
+    direct read of the memory (direct).
+
+    **Two realizations** (``plans/xsi_system_top.md``): :meth:`bfm_model` names the C++ one,
+    ``MarkovHostModel`` in ``markov_host.h`` beside this file.  Both run **one scenario**, one burst per
+    job (:meth:`scenario_bursts`): ``[x address, x words, <MkvCmd words>]`` -- from :attr:`scenario` when
+    set (the bundle :meth:`write_scenario` wrote), else the same bursts built in memory.  With
+    :attr:`trace_dir` set, the three memory-mapped endpoints' traces (:data:`HOST_ENDPOINTS`) are dumped
+    there after the run; the C++ host dumps the same three."""
 
     jobs: list = field(default_factory=list)
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Cycles between polls, should an endpoint poll (none does: they wait on interrupts).
+    poll_cycles: int = 8
+    #: The scenario bundle both hosts run (``write_scenario``); empty: built from ``jobs``.
+    scenario: DynParam[str] = ""
+    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
+    trace_dir: DynParam[str] = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW)
         self.qcmd: StreamIFMaster | None = None
         self.qresp: StreamIFSlave | None = None
-        self.irq: dict[str, IrqIFSink] = {}
+        #: The host's ends of the two queues' interrupt lines (memory-mapped wiring binds them).
+        self.irq_qcmd = IrqIFSink(name=f"{self.name}_irq_qcmd", sim=self.sim)
+        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
+        self.irq: dict[str, IrqIFSink] = {"qcmd": self.irq_qcmd, "qresp": self.irq_qresp}
+        for ep in (self.m, self.irq_qcmd, self.irq_qresp):
+            self.add_endpoint(ep)
+        #: The reads of x from the shared memory, recorded (memory-mapped wiring).
+        self.mem_reader = BusReader(self.m)
         self.mem: MemoryMod | None = None
         self.mem_bus_base: int | None = None       # None: read the memory directly
         self.done = self.env.event()
@@ -358,25 +388,63 @@ class MarkovHost(SimObj):
         """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
         return j * REGION_BYTES
 
-    def _writer(self):
+    # -- the scenario --------------------------------------------------------------------------------
+
+    def scenario_bursts(self) -> list[np.ndarray]:
+        """One burst per job: where its x lands (the address the host reads it back from), how many
+        words x is, and the command words."""
+        out = []
         for j, job in enumerate(self.jobs):
+            dst = self._dst(j) + (self.mem_bus_base or 0)
+            cmd = MkvCmd(**job, dstaddr=dst).serialize(word_bw=DW)
+            out.append(np.concatenate([_u64([dst, get_nwords(U8, word_bw=DW, shape=job["n"])]),
+                                       _u64(cmd)]))
+        return out
+
+    def write_scenario(self, path) -> None:
+        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
+        from waveflow.utils.burst_io import write_burst_bundle
+        write_burst_bundle(self.scenario_bursts(), path)
+
+    def pre_sim(self) -> None:
+        super().pre_sim()
+        if self.scenario:
+            from waveflow.utils.burst_io import read_burst_bundle
+            bursts = read_burst_bundle(self.scenario)
+        else:
+            bursts = self.scenario_bursts()
+        #: The decoded scenario, per job: (x address, x words, command words).
+        self.items = [(int(b[0]), int(b[1]), np.asarray(b[2:], dtype=np.uint64)) for b in bursts]
+
+    def post_sim(self) -> None:
+        super().post_sim()
+        if self.trace_dir:
+            from pathlib import Path
+            for name, ep in (("qcmd", self.qcmd), ("qresp", self.qresp), ("mem", self.mem_reader)):
+                write_trace(ep, Path(self.trace_dir) / name)
+
+    # -- the host program -----------------------------------------------------------------------------
+
+    def _writer(self):
+        for _xaddr, _xwords, cmd in self.items:
             while self._slots == 0:
                 self._slot_free = self.env.event()
                 yield self._slot_free
             self._slots -= 1
-            dst = self._dst(j) + (self.mem_bus_base or 0)
-            yield from self.qcmd.write(MkvCmd(**job, dstaddr=dst))
+            yield from self.qcmd.write(cmd)
 
     def _reader(self):
-        for _ in self.jobs:
+        for _ in self.items:
             resp = yield from self.qresp.get_schema(MkvResp)
             j = int(resp.tx_id)
             n = int(resp.n)
             if self.mem_bus_base is None:
                 x = np.asarray(self.mem.read_array(self._dst(j), U8, n))
             else:
-                x = np.asarray((yield from self.m.read_array(U8, n, self.mem_bus_base + self._dst(j),
-                                                             word_bw=DW)))
+                xaddr, xwords, _cmd = self.items[j]
+                words = yield from self.mem_reader.read(xwords, xaddr)
+                x = np.asarray(read_array(np.asarray(words, dtype=np.uint64), U8, word_bw=DW,
+                                          shape=n).val)
             self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
                                    t=self.env.now)
             self._slots += 1
@@ -387,6 +455,21 @@ class MarkovHost(SimObj):
     def run_proc(self):
         self.env.process(self._writer())
         yield from self._reader()
+
+    def bfm_model(self):
+        """The C++ realization: ``MarkovHostModel`` in ``markov_host.h`` beside this file -- the same
+        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.  It
+        spans the bus master and the two interrupt pins.  Its arguments are this host's settings and
+        what it must read out of a response -- the ``tx_id`` field's position, from ``MkvResp``'s own
+        serializer -- never restated in the C++."""
+        from waveflow.build.composite_gen import BfmModel
+        from waveflow.build.system_top import field_position
+
+        word, bit, width = field_position(MkvResp, "tx_id", DW)
+        return BfmModel("MarkovHostModel", ports=("m", "irq_qcmd", "irq_qresp"),
+                        extra_args=(str(int(self.poll_cycles)), str(MAX_IN_FLIGHT),
+                                    str(MkvResp.nwords_per_inst(DW)), str(word), str(bit), str(width)),
+                        header="markov_host.h")
 
 
 @dataclass
@@ -470,10 +553,12 @@ class MarkovSystem:
             v = dev.views[name]
             line = IrqIF(name=f"{v.name}_irq", sim=sim)
             line.bind("source", v.m_irq)
-            host.irq[name] = IrqIFSink(name=f"host_{name}_irq", sim=sim)
             line.bind("sink", host.irq[name])
-        host.qcmd = BoundMemSlaveAdaptor(gmap, host.m).stream_master("qcmd", irq=host.irq["qcmd"])
-        host.qresp = BoundMemSlaveAdaptor(cmap, host.m).stream_slave("qresp", irq=host.irq["qresp"])
+        poll = host.poll_cycles
+        host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
+            "qcmd", irq=host.irq["qcmd"])
+        host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
+            "qresp", irq=host.irq["qresp"])
         host.mem_bus_base = MEM_BASE
 
     def run(self) -> dict[int, dict]:

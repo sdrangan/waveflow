@@ -515,6 +515,20 @@ def render_system_top(spec: SystemTopSpec, probes: dict[str, str] | None = None)
 # The harness: the models beside the top (plans/xsi_system_top.md S4)
 # ---------------------------------------------------------------------------
 
+def field_position(schema, name: str, word_bw: int) -> tuple[int, int, int]:
+    """``(word, bit, width)`` of field *name* in *schema*'s *word_bw*-bit serialization -- read off
+    the schema's own serializer and the field's type, so a host model that must pick one field out of
+    a message (which job a response answers) is handed its position rather than restating it."""
+    import numpy as np
+
+    words = np.asarray(schema(**{name: 1}).serialize(word_bw=int(word_bw)), dtype=np.uint64)
+    width = int(schema.elements[name]["schema"].bitwidth)
+    for i, w in enumerate(words):
+        if int(w):
+            return i, int(w).bit_length() - 1, width
+    raise LoweringError(f"{schema.__name__}.{name}: setting it to 1 set no bit")
+
+
 def system_tb_spec(spec: SystemTopSpec, xbar, participants, probes=()) -> "TbSpec":
     """The XSI harness for a system top: one model per participant's ``bfm_model()``, each port bound
     to the top port it faces.
@@ -635,5 +649,5 @@ def render_system_tb(spec: SystemTopSpec, tb, n_max: int = 1_000_000) -> tuple[s
 
 
 __all__ = ["KernelRtl", "MiSlot", "StreamNet", "SystemTopSpec", "VITIS_MAXI_PINS",
-           "default_id_width", "kernel_pins", "render_system_ports_h", "render_system_tb",
+           "default_id_width", "field_position", "kernel_pins", "render_system_ports_h", "render_system_tb",
            "render_system_top", "system_tb_spec", "system_top_spec"]

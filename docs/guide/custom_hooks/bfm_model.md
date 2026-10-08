@@ -245,7 +245,7 @@ and the hook joins them the way `kernel_task()` joins a kernel to its HLS body:
 | generated | the top, the wiring | the system top, the harness |
 | the gate | same vectors, bit-exact output | same scenario, identical per-endpoint traces |
 
-[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program)'s `FirHost` is the worked case:
+[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program)'s `FirHost` is the worked case ([markov](../../examples/markov/rtlsim.md)'s `MarkovHost` the second; the whole flow is [XSI system simulation](../build/xsi_system.md)):
 
 ```python
 def bfm_model(self):
@@ -267,7 +267,7 @@ Two rules keep the two realizations comparable:
   `FirHost` a burst bundle of word messages (`write_scenario`, the `scenario` DynParam). A scenario
   baked into the C++ would be a second copy, and there would be nothing to compare.
 - **Every host endpoint records what crossed it** — each packet sent, each config committed, the words
-  each read took, each status read — on both sides: the Python interfaces of `mm_host.py` and the C++
+  each read took, each status read, each region read back from memory (`BusReader`) — on both sides: the Python interfaces of `mm_host.py` and the C++
   `MmEndpoint`s. Each dumps one burst bundle per endpoint (`write_trace`, the `trace_dir` DynParam).
 
 The **host conformance gate** then discharges the obligation above for a host: run the same scenario

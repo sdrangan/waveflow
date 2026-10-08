@@ -22,6 +22,7 @@ The flow forks only at the final RTL-exercising rung, based on top execution mod
 |---|---|
 | single-kernel top (`ap_ctrl_hs`, register-map launched) | [Vitis cosim](./vitis.md) |
 | composite free-running task-network top (`ap_ctrl_none`) | [XSI + BFM](./xsi.md) |
+| a memory-mapped system: kernels, adaptors, crossbar, host | [XSI system simulation](./xsi_system.md) |
 
 That fork is two realizations of one flow, not two separate flows.
 
@@ -43,6 +44,8 @@ That fork is two realizations of one flow, not two separate flows.
 - [Vitis Pattern](./vitis.md) — recipe for invoking Vitis HLS C-sim / C-synth and parsing the resulting reports.
 - [Authoring `run.tcl`](./tcl.md) — the Vitis script shared by both single-kernel and composite flows.
 - [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
+- [XSI System Simulation](./xsi_system.md) — a whole memory-mapped system at RTL, from the pysim
+  system object: the generated top, the host as a hooked module, and the trace conformance gate.
 - [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
   lifecycle, assembled from the testbench graph or by hand.
 - [Sweeping a design](./sweep.md) — running the DAG at every point of a parameter grid to build a

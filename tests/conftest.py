@@ -111,7 +111,8 @@ import pytest
 #: 155 -> 158 on 2026-10-06: the inverse SsrFft at RTL (pingpong-inverse x the same three).
 #: 158 -> 160 on 2026-10-07 (plans/xsi_system_top.md S4): the mm_fir host conformance gate
 #: (test_mm_fir_host_traces_match_pysim) x per_view / one_front.
-WANT_XSI_GATES = 160
+#: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
+WANT_XSI_GATES = 161
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

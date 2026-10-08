@@ -22,7 +22,19 @@ import pytest
 
 from examples.markov.markov import CHAIN_BASE, CHAIN_LAYOUT, MEM_BASE, markov_golden
 from examples.markov.markov_build import generate
-from examples.markov.markov_xsi import ROOT, TOPS, job_results, parse_kv, rtl_dir, run_xsi, scenario_jobs
+from examples.markov.markov import HOST_ENDPOINTS
+from examples.markov.markov_xsi import (
+    ROOT,
+    TOPS,
+    job_results,
+    parse_kv,
+    rtl_dir,
+    run_xsi,
+    scenario_jobs,
+    scenario_path,
+    system,
+    trace_dir,
+)
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.toolchain.toolchain import find_vivado_path
 
@@ -99,3 +111,19 @@ def test_markov_pysim_tracks_rtl(markov_run):
     pysim = sysm.sim.env.now / sysm.clk.period
     rtl = parse_kv(markov_run, "DONE")["cycles"]
     assert abs(pysim - rtl) <= PYSIM_TOLERANCE * rtl, f"pysim {pysim:.0f} vs RTL {rtl}"
+
+
+@pytest.mark.xsi
+def test_markov_host_traces_match_pysim(markov_run, tmp_path):
+    """The host conformance gate (plans/xsi_system_top.md): MarkovHost and MarkovHostModel run the
+    SAME scenario bundle, and each host endpoint's trace -- the commands sent, the responses taken,
+    the x regions read back -- is byte-identical between the pysim run and the RTL run."""
+    sysm = system()
+    sysm.host.scenario = scenario_path(WORK).as_posix()
+    sysm.host.trace_dir = tmp_path.as_posix()
+    sysm.run()
+    rtl = trace_dir(WORK)
+    for ep in HOST_ENDPOINTS:
+        for f in ("words.bin", "bounds.bin", "meta.json"):
+            assert (tmp_path / ep / f).read_bytes() == (rtl / ep / f).read_bytes(), (
+                f"host endpoint {ep!r} saw different messages in pysim and at RTL ({f})")

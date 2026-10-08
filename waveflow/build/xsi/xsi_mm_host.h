@@ -299,6 +299,33 @@ private:
     uint32_t want_ = 0, k_ = 0, left_ = 0;
 };
 
+/// Plain bus reads -- memory that is not a view, such as a shared buffer a host reads its results
+/// from.  Not an MmEndpoint (there is no view to check), but recorded like one: one burst per read.
+/// The C++ twin of waveflow.hw.mm_host.BusReader.
+class MmBusReader {
+public:
+    explicit MmBusReader(AxiMmMaster& m) : m_(m) {}
+    /// Read *nwords* bus words at byte address *addr*.
+    void start(uint64_t addr, uint32_t nwords) { op_ = m_.read(addr, nwords, m_.cycle()); state_ = 1; }
+    void step() {
+        if (state_ && m_.op(op_).done()) {
+            words = m_.op(op_).rdata; state_ = 0;
+            trace_words_.insert(trace_words_.end(), words.begin(), words.end());
+            trace_bounds_.push_back(trace_words_.size());
+        }
+    }
+    bool busy() const { return state_ != 0; }
+    /// The words the last start() read, once busy() is false.
+    std::vector<uint64_t> words;
+    void write_trace(const std::string& dir) const { BurstBundle::write(dir, trace_words_, trace_bounds_); }
+
+private:
+    AxiMmMaster& m_;
+    size_t op_ = 0;
+    int state_ = 0;
+    std::vector<uint64_t> trace_words_, trace_bounds_;
+};
+
 /// Register bank, config: one start() is one config message (the shadow, then COMMIT).  As in pysim,
 /// the COMMIT can stall the bus if the kernel has not taken the previous config.
 class MmRegBankCfg : public MmEndpoint {

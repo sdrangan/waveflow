@@ -243,20 +243,46 @@ Baseline before any change: `pytest tests/examples/test_mm_fir_xsi.py tests/exam
 - Docs: `bfm_model.md` "A host is a hooked module" (+ the trace gate), `concurrent_flowsteps.md` (the
   host is a hooked module, its harness generated), `examples/mm_fir/rtlsim.md` + `python.md`.
 
-### Not done tonight / next
-
-- **Stage 5 (markov host)** not started (out of tonight's scope).  `markov_xsi.render_tb` is still a C++
-  f-string; the top is generated (S3), so S5 is the host + scenario + traces, as for mm_fir.
-  `MarkovHost` is still a `SimObj`; it reads `x` regions with `m.read_array` -- a "regions read" trace
-  (the bus master itself, not a view endpoint) has no recorder yet on either side.
-- **Stage 6 docs** beyond the two pages named: a guide page for system XSI simulation; the
-  `patterns/stream_only.md` adaptor table link.
-- `system_top` refuses (named errors) an off-chip memory beside the top and a BRAM window shared with
-  a kernel; `system_tb_spec` resolves only crossbar masters and interrupt sinks.
-
 **Final verification (Stage 4 tree, 2026-10-07):** fast suite 3971 passed + the session gate after
 `WANT_XSI_GATES` 158 -> 160 (the two new trace-gate tests -- a deliberate raise, recorded in
 `tests/conftest.py`); `-m xsi` mm_fir + markov **12 passed, 0 skipped** (618 / 611 / 1870).  A full
 `pytest -m xsi` of the other gates was NOT run tonight (only mm_fir and markov depend on this work, plus
 `xsi_mm_host.h` / `burst_io` changes that any other bus-host gate also reads -- worth a full run).
 Commits: S1-S2 `f63a827`, S3 `ace36b0`, S4 (this one).  Nothing pushed.
+
+### Stage 5 -- markov's host: DONE (2026-10-08)
+
+- `MarkovHost` is an `HwModule` owning its bus master and two `IrqIFSink`s; `bfm_model()` ->
+  `MarkovHostModel` in `examples/markov/markov_host.h` (the f-string Writer/Reader, moved).  Scenario:
+  one burst per job, `[x address, x words, <MkvCmd words>]`.
+- The x read-back is a bus read of plain memory (no view), so it needed a recorder on both sides:
+  `mm_host.BusReader` (Python) and `MmBusReader` (C++); `write_trace` accepts either.  Endpoints traced:
+  `qcmd`, `qresp`, `mem`.
+- The C++ must act on one response field (`tx_id` picks which region to read), so its position is a
+  model argument from `system_top.field_position(MkvResp, "tx_id", DW)` -- the per-example `field_pos`
+  copies are gone.  `ones` and `x` are decoded from the traces in Python (`trace_report` -> `JOB` lines;
+  the C++ prints only `DONE`, `JOBT <j> t=` and `OP`).
+- `markov_xsi.py` now holds no Verilog and no C++.  pysim unchanged (1926 cycles; mm_fir 635 / 635).
+- **Gate:** `pytest tests/examples/test_markov_xsi.py -m xsi` -- **5 passed, 0 skipped**: bit-exact,
+  no polls, **1870**, pysim within 5%, and `test_markov_host_traces_match_pysim` (new; 4 commands,
+  4 responses, 4 regions of 38 words, byte-identical).  Probe build re-run: 1870, same probe counts.
+  `WANT_XSI_GATES` 160 -> 161.
+
+### Stage 6 -- docs: DONE
+
+- New guide page `docs/guide/build/xsi_system.md` ("XSI System Simulation"), listed in the Build System
+  index and linked from `patterns/stream_only.md` (after the adaptor table), `bfm_model.md` and
+  `concurrent_flowsteps.md`.  `examples/markov/rtlsim.md` describes the hooked host and its gate.
+
+**Done-when check:** `markov_xsi.py` and `mm_fir_xsi.py` contain no Verilog and no C++ in Python strings
+-- the system object, a host `.h`, and calls.  `vmac_build.py` (open question) was not folded in.
+
+### Still open
+
+- `system_top` refuses an off-chip memory beside the top and a BRAM window shared with a kernel;
+  `system_tb_spec` binds only crossbar masters and interrupt sinks.
+- vmac's own top (`vmac_build.py`) -- not folded in.
+
+**Final verification (Stages 5-6 tree, 2026-10-08):** fast suite 3974 passed (4 non-XSI skips); the
+**full** `pytest -m xsi` -- every gate in the repo, not only mm_fir and markov -- **161 passed,
+0 skipped** (= `WANT_XSI_GATES`).

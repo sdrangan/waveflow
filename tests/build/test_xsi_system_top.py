@@ -221,3 +221,37 @@ def test_the_system_harness_binds_the_host_to_the_top():
     main, files = render_system_tb(spec, tb)
     assert "h.run_until(" in main and "mm_fir_host.h" in files
     assert "long run_until(long n_max)" in files["mm_fir_top_tb_harness.h"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Stage 5: markov's host -- two kernels, four masters, a credit link; the host also reads x back.
+# ---------------------------------------------------------------------------------------------
+
+def test_markov_host_resolves_its_own_model():
+    from examples.markov.markov_xsi import system
+    host = system().host
+    assert check(host, XSI_BFM_MODEL) == (True, None)
+    bm = host.bfm_model()
+    assert (bm.cls, bm.header, bm.ports) == ("MarkovHostModel", "markov_host.h",
+                                            ("m", "irq_qcmd", "irq_qresp"))
+    # tx_id's position is handed to the C++, read off MkvResp's serializer: word 1, bits 0..15.
+    assert bm.extra_args[-3:] == ("1", "0", "16")
+
+
+def test_markov_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
+    from examples.markov.markov import HOST_ENDPOINTS
+    from examples.markov.markov_xsi import system
+
+    def run(scenario: str, traces):
+        sysm = system()
+        sysm.host.scenario = scenario
+        sysm.host.trace_dir = str(traces)
+        return sysm.run(), sysm
+
+    r0, sysm = run("", tmp_path / "mem")
+    sysm.host.write_scenario(tmp_path / "scenario")
+    r1, _ = run(str(tmp_path / "scenario"), tmp_path / "file")
+    assert sorted(r0) == sorted(r1) and all((r0[j]["x"] == r1[j]["x"]).all() for j in r0)
+    for ep in HOST_ENDPOINTS:
+        for f in ("words.bin", "bounds.bin", "meta.json"):
+            assert (tmp_path / "mem" / ep / f).read_bytes() == (tmp_path / "file" / ep / f).read_bytes()

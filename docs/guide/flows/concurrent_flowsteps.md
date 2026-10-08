@@ -79,7 +79,7 @@ kernels reached over a bus, each behind a [memory-mapped adaptor](../interface/a
 AMD's crossbar and an on-chip memory — gets its top from
 [`system_top`](../../../waveflow/build/system_top.py), which walks the pysim system: name the cut
 (`system_top_spec(xbar, [kernels..., memory])`) and every crossbar slot, adaptor, stream net, credit
-link writer and interrupt output follows from the graph. [mm_fir](../../examples/mm_fir/rtlsim.md) and
+link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/rtlsim.md) and
 [markov](../../examples/markov/rtlsim.md) are the worked cases; their cycle counts (618 / 611 and
 1870) were unchanged when their hand-rendered tops were replaced by it.
 
