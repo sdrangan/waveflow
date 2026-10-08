@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-done (2026-10-08), Stage 1 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 1 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -23,7 +23,7 @@ transactions.  Software is not hardware, so its model is different from a kernel
 
 | | Python (pysim) | C++ (XSI) |
 |---|---|---|
-| a thread | a **SimPy process** -- not an OS thread | an **OS thread**, scheduled cooperatively (below) |
+| a thread | a **SimPy process** -- a Python generator, not an OS thread | a **fiber** -- its own stack, switched to cooperatively (below) |
 | code between waits | runs in **zero simulated time** | runs between two clock edges -- zero cycles |
 | waiting on an event (an interrupt, a lock, a message) | a SimPy event: `yield self.irq.wait()` | blocks the thread: `irq.wait()` |
 | a bus transaction | an `MMIFMaster` transaction, timed by the bus model | an `AxiMmMaster` transaction, timed by the RTL |
@@ -104,22 +104,34 @@ host's attributes, set by the system wiring as today.
 overlap, as on a multi-core host.  A single-core contention model (a CPU resource the timers draw on)
 is a later refinement, and does not change the API.
 
-### How C++ threads run under XSI: cooperative, one at a time
+### How C++ threads run under XSI: fibers, one at a time
 
-Each `SwThread` is an OS thread, but **only one runs at a time**, handed control by the cycle loop:
-every blocking call parks the thread and wakes the scheduler; in each `update()` the scheduler resumes,
-in a fixed order, every thread whose wait completed, and each runs until its next blocking call.  This
-is SimPy's discipline, so the run is deterministic and the trace gate compares like with like.  Truly
-concurrent threads would make the bus-op order depend on the OS scheduler, and the gate meaningless.
+A **fiber** is a thread the program schedules itself: it has its own stack (its locals, its call chain,
+the point where it stopped), but it runs only when some code explicitly switches to it -- a switch saves
+the CPU registers, stack pointer included, and loads the other fiber's, with no OS involvement.  That is
+the C++ form of a SimPy process (a generator is a fiber whose switch points are its `yield`s), and the
+same idea as stackful coroutines or green threads.  Windows provides them (`CreateFiber` /
+`SwitchToFiber`); Linux has `ucontext` (`makecontext` / `swapcontext`).  The runtime hides both behind
+one small `Fiber` type.
 
-Where the thread resumes is the timing contract: the bus endpoints' existing state machines
-(`MmQueueWriter::step` ...) do the cycle work; a thread's next transaction is issued in the cycle its
-previous one completed -- exactly what today's hand-written state machines do.
+Each `SwThread` is a fiber.  The XSI cycle loop runs on the main fiber; every blocking call
+(`irq.wait()`, `qcmd.write(...)`, `compute(n)`) records what the thread waits for and switches back to
+the loop; in each `update()` the scheduler checks every parked thread's wait (a few ns each, no switch)
+and switches, in a fixed order, into every thread whose wait completed, which runs until its next
+blocking call.  This is SimPy's discipline, so the run is deterministic **by construction** -- no OS
+scheduler exists to reorder anything -- and the trace gate compares like with like.  A wait already
+satisfied when called (an interrupt already high) returns without a switch.
 
-**Toolchain constraint (found 2026-10-08).**  `run.bat` compiles with Vivado's MinGW **GCC 6.2**
-(win32 threads): no `std::thread`, no C++20 coroutines.  Vivado 2025.1 also ships MinGW **GCC 9.5**
-with POSIX threads (`tps/mingw/10.0.0`); Linux uses the system `g++`.  Stage 0 decides.  Fallback:
-stackless macro coroutines (`WF_AWAIT`), which run on 6.2 but cannot keep locals across a wait.
+**Rule: only the loop fiber calls the XSI API.**  A thread's bus call only queues an operation on the
+framework endpoint; the endpoint's state machine (`MmQueueWriter::step` ...) does the cycle work from
+the loop.  Where the thread resumes is the timing contract: a thread's next transaction is issued in the
+cycle its previous one completed -- exactly what today's hand-written state machines do.
+
+**Why fibers and not OS threads** (measured in Stage 0): a switch costs **~0.05-0.2 us** against
+**~12 us** for a thread hand-off and **~1.2-1.7 us** for a SimPy resumption; they build on Vivado's
+**GCC 6.2** as well as 9.5, so `run.bat`'s toolchain does not change; and determinism is structural
+rather than the result of careful baton passing.  What they give up -- running on another core, calling
+blocking OS APIs from a host thread -- nothing in this plan needs.
 
 ### What is generated, and what the user writes
 
@@ -147,13 +159,15 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
 0. **Feasibility, no framework code.**  (a) Build mm_fir's XSI testbench with GCC 9.5 -- gate numbers
    unchanged; (b) a 50-line cooperative scheduler with two OS threads under that toolchain,
    deterministic over 100 runs; (c) compile a generated schema header with `ap_int.h` there.  **Stop and
-   report** if (a) or (b) fails.
+   report** if (a) or (b) fails.  *(Done; it also measured fibers, which replaced threads.)*
 1. **Python `SwThread` / `SwHost`.**  The primitives in the table over SimPy, the bus calls that block only
    for the transaction, `data_irq` / `room_irq`, `wait_any`, `compute`; the existing endpoints rebuilt on
    them.  Port `FirHost` and `MarkovHost` **keeping their current process structure** (two threads each).
    Gate: all pysim tests unchanged, and pysim cycle counts identical (635 / 635, 1926).
-2. **C++ runtime, mm_fir.**  `xsi_sw.h`, the generated `<host>_endpoints.h`, `FirHost`'s C++ twin as
-   thread bodies.  **Gate: 618 / 611 unchanged, bit-exact, trace gate passes** -- same host program, so
+2. **C++ runtime, mm_fir.**  `xsi_sw.h` (the `Fiber` type with its Windows and `ucontext` backends,
+   the scheduler, the primitives), the generated `<host>_endpoints.h`, `FirHost`'s C++ twin as thread
+   bodies.  First a unit test of the scheduler alone, compiled with **both** MinGW 6.2 and 9.5 (and the
+   system `g++` on Linux, where available): a fixed interleaving log, identical every run.  **Gate: 618 / 611 unchanged, bit-exact, trace gate passes** -- same host program, so
    the bus behaviour must not move; a count that moves is a scheduling difference to find.
 3. **Host-side schemas** -- `pop<T>()` / `status<T>()`.  Gate: a round-trip test per schema the hosts read.
 4. **markov, two threads then one.**  First the two-thread port (gate: 1870, traces identical).  Then the
@@ -197,17 +211,27 @@ Prototypes lived in a scratch directory; no framework code changed.
   Compile time unchanged (~5 s, same as today's `markov_tb.cpp`).  So Stage 3 reuses the existing
   structs; the host build needs the Vitis include path (found by `waveflow/toolchain`).
 
-**Consequences for the next stages.**  Stage 2 switches `run.bat`'s MinGW to 9.5 for *every* XSI gate,
-so it must run the full `pytest -m xsi` (161, 0 skipped) -- (a) says the counts will not move, but only
-two of the 161 were tried.  The scheduler's shape is settled: per-party condition variables, baton
-passing, resume in registration order.  Linux (`run.sh`, system `g++`) has threads already.
+**Then: fibers instead of threads.**  The same baton-passing scheduler written on Windows fibers
+(`CreateFiber` / `SwitchToFiber`), same 20,000-hand-off benchmark: **~0.05-0.2 us per hand-off** -- about
+100x cheaper than the OS threads and about 10x cheaper than SimPy itself (measured on the same machine:
+**~1.2 us** per resumption of a `timeout`, **~1.7 us** for a fresh event created, triggered and
+resumed).  It builds and runs under **GCC 6.2 and 9.5 alike**.  Decided with the user (2026-10-08): C++
+`SwThread`s are fibers.
+
+**Consequences for the next stages.**  `run.bat` keeps GCC 6.2 -- no toolchain switch, so no
+re-validation of the 161 XSI gates on a new compiler (finding (a) stays as evidence that 9.5 would also
+work).  The scheduler's shape is settled: one fiber per `SwThread`, the cycle loop on the main fiber,
+resume in registration order, only the loop calls XSI.  Linux needs the `ucontext` backend -- not
+testable on this machine; Stage 2 builds it and the Linux CI (if any) or a later Linux run checks it.
+Finding (c) is unaffected: host-side schemas use the existing generated headers.
 
 ## Non-goals
 
 - **Driving XSI from the Python host** -- deferred by the user (2026-10-08): two realizations per module
   is the model; the runtime does not preclude it later.
 - **Generating the C++ from Python** -- still rejected; the trace gate ties the two together.
-- Preemptive scheduling, priorities, a real OS model.  Threads are cooperative; time is explicit.
+- Preemptive scheduling, priorities, a real OS model, OS threads.  Threads are cooperative fibers;
+  time is explicit.
 - AXI-Lite / `HostActivated` DUTs, RF converters, several crossbars.
 
 ## Open questions
