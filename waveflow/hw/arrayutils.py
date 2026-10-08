@@ -240,7 +240,7 @@ def read_array(
         static=True,
     )
     array_obj = array_cls()
-    array_obj.deserialize(np.asarray(packed), word_bw=word_bw)
+    array_obj.deserialize(packed, word_bw=word_bw)   # no np.asarray: a list of words must not be dtype-inferred
     return array_obj
 
 

@@ -12,6 +12,8 @@ its ``run(cfg)`` method is invoked.
 
 from __future__ import annotations
 
+import contextvars
+import itertools
 import json
 import os
 from abc import ABC, abstractmethod
@@ -40,6 +42,61 @@ from waveflow.build.build import Buildable, BuildConfig, BuildResult
 # is why this only bites at C-synthesis).  Large buffers must be accessed
 # element-wise / by burst (``array_utils``) rather than packed whole.
 HLS_AP_UINT_MAX_BITWIDTH = 8191
+
+# TLAST placement for a message whose last field is an array (``gen_write``, axi4_stream).  The
+# array emitter cannot know it is last, so while ``gen_write`` runs it tags each of its beats'
+# ``last`` argument ``false/*@last<id>:<cond>*/``, ``<cond>`` true on the array's final beat;
+# ``gen_write`` turns the final array's tags into ``tlast && <cond>`` and strips the rest.
+_TLAST_MARKS: contextvars.ContextVar = contextvars.ContextVar("_TLAST_MARKS", default=None)
+_TLAST_MARK_RE = re.compile(r"false/\*@last(\d+):(.*?)\*/")
+
+
+#: Tag on the ``w = 0;`` an array emits after itself so the next field packs into a clean word.
+#: ``gen_write`` drops it when nothing follows the array, and strips the tag otherwise.
+_WCLR = "/*@wclr*/"
+
+
+def _drop_trailing_wclr(lines: list[str]) -> list[str]:
+    """Drop an array's ``w = 0;`` when it is the message's last statement, and untag the rest."""
+    out = list(lines)
+    for idx in range(len(out) - 1, -1, -1):
+        stripped = out[idx].strip()
+        if stripped == "}" or not stripped:
+            continue
+        if stripped == f"w = 0;{_WCLR}":
+            del out[idx]
+        break
+    return [line.replace(_WCLR, "") for line in out]
+
+
+def _array_beat_last(aid: int | None, cond: str) -> str:
+    """The ``last`` argument of an array's AXI4-Stream beat: ``false``, tagged under ``gen_write``."""
+    return "false" if aid is None else f"false/*@last{aid}:{cond}*/"
+
+
+def _place_tlast(lines: list[str], marker: str) -> list[str]:
+    """Give the message's final beat ``tlast``: the last beat-writing line, or, when the message
+    ends in an array, that array's tagged beats (``tlast && <final-beat condition>``)."""
+    last_idx = None
+    for idx in range(len(lines) - 1, -1, -1):
+        if marker in lines[idx] or "/*@last" in lines[idx]:
+            last_idx = idx
+            break
+    out = list(lines)
+    if last_idx is not None:
+        m = _TLAST_MARK_RE.search(out[last_idx])
+        if m:
+            aid = m.group(1)
+
+            def repl(mm: re.Match) -> str:
+                if mm.group(1) != aid:
+                    return "false"
+                return "tlast" if mm.group(2) == "true" else f"tlast && {mm.group(2)}"
+
+            out = [_TLAST_MARK_RE.sub(repl, line) for line in out]
+        else:
+            out[last_idx] = out[last_idx].replace(", false);", ", tlast);")
+    return [_TLAST_MARK_RE.sub("false", line) for line in out]
 
 
 
@@ -357,23 +414,51 @@ class DataSchema(ABC):
     ) -> tuple[int, int]:
         raise NotImplementedError(f"{self.__class__.__name__} does not implement serialization.")
 
+    # -- flat bit layout (C++ ``pack_to_uint``) ---------------------------------
+    # The flat layout concatenates the leaves LSB-first with no word boundaries.  It is the layout
+    # of a sub-word array element in a word (see ``DataArray._serialize_recursive``), which the C++
+    # packs with ``pack_to_uint``.  The default packs a leaf through the word serializer with one
+    # word as wide as the leaf; containers override to concatenate their children.
+    def _to_flat_bits(self) -> int:
+        bw = self.__class__.get_bitwidth()
+        words: list[int] = [0]
+        self._serialize_recursive(word_bw=bw, words=words, ipos0=0, iword0=0)
+        return words[0] & ((1 << bw) - 1)
+
+    def _from_flat_bits(self, bits: int) -> None:
+        bw = self.__class__.get_bitwidth()
+        self._deserialize_recursive(word_bw=bw, words=[bits & ((1 << bw) - 1)], ipos0=0, iword0=0)
+
+    @staticmethod
+    def _packed_to_words(packed: Words, word_bw: int) -> list[int]:
+        """Packed 1-D words (``word_bw <= 64``) as masked Python ints.
+
+        A list or tuple is converted element by element: ``np.asarray`` would infer the dtype,
+        and a list mixing 64-bit words above and below ``2**63`` becomes ``float64``, losing the
+        low bits.  Signed values (``int64`` from a VCD's TDATA, negative Python ints) are masked
+        to their unsigned bit pattern.
+        """
+        mask = (1 << word_bw) - 1
+        if isinstance(packed, (list, tuple)):
+            return [int(value) & mask for value in packed]
+        arr = np.asarray(packed)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        elif arr.ndim != 1:
+            raise ValueError("For word_bw <= 64, packed must be a 1D array-like.")
+        return [int(value) & mask for value in arr]
+
     def deserialize(self, packed: Words, word_bw: int = 32) -> DataSchema:
         """Deserialize packed hardware words into this runtime value."""
         if word_bw <= 0:
             raise ValueError("word_bw must be positive.")
 
-        arr = np.asarray(packed)
         words: list[int] = []
 
         if word_bw <= 64:
-            if arr.ndim == 0:
-                arr = arr.reshape(1)
-            elif arr.ndim != 1:
-                raise ValueError("For word_bw <= 64, packed must be a 1D array-like.")
-
-            mask = (1 << word_bw) - 1
-            words = [int(value) & mask for value in arr]
+            words = self._packed_to_words(packed, word_bw)
         else:
+            arr = np.asarray(packed, dtype=object) if isinstance(packed, (list, tuple)) else np.asarray(packed)
             chunks_per_word = math.ceil(word_bw / 64)
             if arr.ndim != 2:
                 raise ValueError("For word_bw > 64, packed must be a 2D array-like.")
@@ -383,10 +468,11 @@ class DataSchema(ABC):
                 )
 
             mask = (1 << word_bw) - 1
+            mask64 = (1 << 64) - 1
             for row in arr:
                 word = 0
                 for chunk_idx, chunk in enumerate(row):
-                    word |= int(np.uint64(chunk)) << (64 * chunk_idx)
+                    word |= (int(chunk) & mask64) << (64 * chunk_idx)
                 words.append(word & mask)
 
         if not words:
@@ -557,24 +643,26 @@ class DataSchema(ABC):
             if dst_type != "array":
                 lines.append(f"{i2}ap_uint<{bw}> w = 0;")
 
-            final_lines, final_ipos, _ = cls._gen_write_recursive(
-                word_bw=bw,
-                dst_type=dst_type,
-                target=target,
-                ipos0=0,
-                iword0=0,
-                prefix="self->",
-            )
+            token = _TLAST_MARKS.set(itertools.count() if dst_type == "axi4_stream" else None)
+            try:
+                final_lines, final_ipos, _ = cls._gen_write_recursive(
+                    word_bw=bw,
+                    dst_type=dst_type,
+                    target=target,
+                    ipos0=0,
+                    iword0=0,
+                    prefix="self->",
+                )
+            finally:
+                _TLAST_MARKS.reset(token)
 
-            if dst_type == "axi4_stream" and final_ipos == 0:
-                marker = f"streamutils::write_axi4_word<{bw}>({target}, w, "
-                for line_idx in range(len(final_lines) - 1, -1, -1):
-                    if marker in final_lines[line_idx]:
-                        final_lines[line_idx] = final_lines[line_idx].replace(
-                            ", false);",
-                            ", tlast);",
-                        )
-                        break
+            final_lines = _drop_trailing_wclr(final_lines)
+            if dst_type == "axi4_stream":
+                if final_ipos == 0:
+                    marker = f"streamutils::write_axi4_word<{bw}>({target}, w, "
+                    final_lines = _place_tlast(final_lines, marker)
+                else:
+                    final_lines = [_TLAST_MARK_RE.sub("false", line) for line in final_lines]
 
             for line in final_lines:
                 if line.startswith("    "):
@@ -1090,6 +1178,15 @@ class DataField(DataSchema):
         lanes = _dense_lanes(cls, elem_dtype, word_bw)
         if lanes is None:
             return None
+        if word_bw <= 64:
+            # Never let numpy infer the dtype of a list of words (see DataSchema._packed_to_words).
+            word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
+            if isinstance(words, (list, tuple)):
+                words = np.array(DataSchema._packed_to_words(words, word_bw), dtype=word_dtype)
+            else:
+                words = np.asarray(words)
+                if words.dtype != word_dtype and words.dtype.kind in "iu":
+                    words = words.astype(word_dtype)      # signed words: their bit pattern
         if lanes > 1:                         # the dense layout: see to_words_numpy
             word_dtype = np.dtype(np.uint32 if word_bw <= 32 else np.uint64)
             return np.ascontiguousarray(words, dtype=word_dtype).view(elem_dtype)[:count].copy()
@@ -2774,6 +2871,21 @@ class DataList(DataSchema):
 
         return curr_ipos, curr_iword
 
+    def _to_flat_bits(self) -> int:
+        bits = 0
+        pos = 0
+        for name, schema_cls in self.__class__._iter_element_schemas():
+            bits |= self._children[name]._to_flat_bits() << pos
+            pos += schema_cls.get_bitwidth()
+        return bits
+
+    def _from_flat_bits(self, bits: int) -> None:
+        pos = 0
+        for name, schema_cls in self.__class__._iter_element_schemas():
+            width = schema_cls.get_bitwidth()
+            self._children[name]._from_flat_bits((bits >> pos) & ((1 << width) - 1))
+            pos += width
+
     def get_bitwidth_active(self) -> int:
         """Return the active bitwidth: sum of each child's active bitwidth.
 
@@ -3312,22 +3424,41 @@ class DataArray(DataSchema):
             raise ValueError("word_bw must be positive.")
 
         shape = cls._normalized_shape()
+        if shape:
+            return cls._array_layout(word_bw)[2]
+
+        curr_ipos, curr_iword = cls._element_type()()._serialize_recursive(
+            word_bw=word_bw, words=[0], ipos0=0, iword0=0
+        )
+        return curr_iword + (1 if curr_ipos > 0 else 0)
+
+    @classmethod
+    def _array_layout(cls, word_bw: int) -> tuple[int, int, int]:
+        """``(pf, words_per_elem, nwords)`` of this array's word layout at ``word_bw``.
+
+        The array layout rule, shared by the Python serializer and the generated C++
+        (``write_array`` / ``write_stream`` / ``write_axi4_stream`` and their readers):
+
+        - the array starts on a fresh word and its last word is closed, so the field after
+          it starts on a fresh word too;
+        - an element no wider than a word sits in a lane: ``pf = word_bw // elem_bw``
+          elements per word, element ``k`` in word ``k // pf`` at bit ``(k % pf) * elem_bw``,
+          element 0 in the low bits.  A composite element is packed flat in its lane
+          (``pack_to_uint``'s layout);
+        - an element wider than a word (``pf == 0``) takes ``words_per_elem`` whole words,
+          serialized on its own.
+        """
+        shape = cls._normalized_shape()
         n_elem = 1
         for dim in shape:
             n_elem *= dim
-
-        child = cls._element_type()()
-        curr_ipos = 0
-        curr_iword = 0
-        for _ in range(n_elem):
-            curr_ipos, curr_iword = child._serialize_recursive(
-                word_bw=word_bw,
-                words=[0],
-                ipos0=curr_ipos,
-                iword0=curr_iword,
-            )
-
-        return curr_iword + (1 if curr_ipos > 0 else 0)
+        elem_type = cls._element_type()
+        elem_bw = elem_type.get_bitwidth()
+        pf = word_bw // elem_bw if elem_bw > 0 else 0
+        if pf >= 1:
+            return pf, 1, -(-n_elem // pf)
+        words_per_elem = elem_type.nwords_per_inst(word_bw)
+        return 0, words_per_elem, n_elem * words_per_elem
 
     @classmethod
     def get_dependencies(cls) -> list[type[DataSchema]]:
@@ -3714,6 +3845,8 @@ class DataArray(DataSchema):
         elem_expr = cls._element_expr(prefix=prefix, member_name=member_name, idx_names=idx_names)
         elem_uint_expr = elem_type.to_uint_value_expr(elem_expr)
         lines = list(pre_lines)
+        marks = _TLAST_MARKS.get()
+        aid = next(marks) if marks is not None and dst_type == "axi4_stream" else None
 
         for d in range(ndims):
             if cls.static:
@@ -3749,9 +3882,12 @@ class DataArray(DataSchema):
                     lines.append(f"        {target}.write(w);")
                     lines.append("        out_idx++;")
                 else:
-                    lines.append(f"        streamutils::write_axi4_word<{word_bw}>({target}, w, false);")
+                    beat_last = _array_beat_last(aid, f"(i + {pf} >= {n0_eff})")
+                    lines.append(f"        streamutils::write_axi4_word<{word_bw}>({target}, w, {beat_last});")
                     lines.append("        out_idx++;")
                 lines.append("    }")
+                if dst_type != "array":
+                    lines.append(f"    w = 0;{_WCLR}")      # the next field starts a fresh, clean word
                 next_iword = start_iword + cls.nwords_per_inst(word_bw) if cls.static else iword0
                 return cls._scope_local_lines(lines), 0, next_iword
 
@@ -3781,7 +3917,8 @@ class DataArray(DataSchema):
                 lines.append(f"{body_indent}    w = 0;")
                 lines.append(f"{body_indent}    out_idx++;")
             else:
-                lines.append(f"{body_indent}    streamutils::write_axi4_word<{word_bw}>({target}, w, false);")
+                beat_last = _array_beat_last(aid, f"(elem_idx == {n_total_expr})")
+                lines.append(f"{body_indent}    streamutils::write_axi4_word<{word_bw}>({target}, w, {beat_last});")
                 lines.append(f"{body_indent}    w = 0;")
                 lines.append(f"{body_indent}    out_idx++;")
             lines.append(f"{body_indent}}}")
@@ -3793,8 +3930,10 @@ class DataArray(DataSchema):
             elif dst_type == "stream":
                 lines.append(f"        {target}.write(w);")
             else:
-                lines.append(f"        streamutils::write_axi4_word<{word_bw}>({target}, w, false);")
+                lines.append(f"        streamutils::write_axi4_word<{word_bw}>({target}, w, {_array_beat_last(aid, 'true')});")
             lines.append("    }")
+            if dst_type != "array":
+                lines.append(f"    w = 0;{_WCLR}")
             next_iword = start_iword + cls.nwords_per_inst(word_bw) if cls.static else iword0
             return cls._scope_local_lines(lines), 0, next_iword
 
@@ -3811,11 +3950,14 @@ class DataArray(DataSchema):
                 lines.append(f"{body_indent}{target}.write(w);")
                 lines.append(f"{body_indent}out_idx++;")
             else:
+                beat_last = _array_beat_last(aid, f"(out_idx == ({n_total_expr}) - 1)")
                 lines.append(f"{body_indent}w = {elem_uint_expr};")
-                lines.append(f"{body_indent}streamutils::write_axi4_word<{word_bw}>({target}, w, false);")
+                lines.append(f"{body_indent}streamutils::write_axi4_word<{word_bw}>({target}, w, {beat_last});")
                 lines.append(f"{body_indent}out_idx++;")
             for d in range(ndims):
                 lines.append(f"{'    ' * (ndims - d)}}}")
+            if dst_type != "array":
+                lines.append(f"    w = 0;{_WCLR}")
             next_iword = start_iword + cls.nwords_per_inst(word_bw) if cls.static else iword0
             return cls._scope_local_lines(lines), 0, next_iword
 
@@ -3836,7 +3978,8 @@ class DataArray(DataSchema):
             lines.append(f"{body_indent}{elem_expr}.template write_stream<{word_bw}>({target});")
             lines.append(f"{body_indent}out_idx += {words_per_elem};")
         else:
-            lines.append(f"{body_indent}{elem_expr}.template write_axi4_stream<{word_bw}>({target}, false);")
+            beat_last = _array_beat_last(aid, f"(out_idx == (({n_total_expr}) - 1) * {words_per_elem})")
+            lines.append(f"{body_indent}{elem_expr}.template write_axi4_stream<{word_bw}>({target}, {beat_last});")
             lines.append(f"{body_indent}out_idx += {words_per_elem};")
         for d in range(ndims):
             lines.append(f"{'    ' * (ndims - d)}}}")
@@ -4411,10 +4554,22 @@ class DataArray(DataSchema):
             child.val = data
             return child._serialize_recursive(word_bw, words, curr_ipos, curr_iword)
 
-        for idxs in np.ndindex(shape):
+        # The array layout rule: see _array_layout.
+        pf, words_per_elem, nwords = self.__class__._array_layout(word_bw)
+        start = curr_iword + (1 if curr_ipos > 0 else 0)
+        while len(words) < start + nwords:
+            words.append(0)
+        elem_bw = self.__class__._element_type().get_bitwidth()
+        flat = pf >= 1 and not isinstance(child, DataField)
+        for k, idxs in enumerate(np.ndindex(shape)):
             child.val = get_elem(data, idxs)
-            curr_ipos, curr_iword = child._serialize_recursive(word_bw, words, curr_ipos, curr_iword)
-        return curr_ipos, curr_iword
+            if pf == 0:
+                child._serialize_recursive(word_bw, words, 0, start + k * words_per_elem)
+            elif flat:
+                words[start + k // pf] |= child._to_flat_bits() << ((k % pf) * elem_bw)
+            else:
+                child._serialize_recursive(word_bw, words, (k % pf) * elem_bw, start + k // pf)
+        return 0, start + nwords
 
     def _deserialize_recursive(
         self,
@@ -4441,11 +4596,24 @@ class DataArray(DataSchema):
             self._val = child.val
             return curr_ipos, curr_iword
 
-        for idxs in np.ndindex(shape):
-            curr_ipos, curr_iword = child._deserialize_recursive(word_bw, words, curr_ipos, curr_iword)
+        # The array layout rule: see _array_layout.
+        pf, words_per_elem, nwords = self.__class__._array_layout(word_bw)
+        start = curr_iword + (1 if curr_ipos > 0 else 0)
+        elem_bw = self.__class__._element_type().get_bitwidth()
+        elem_mask = (1 << elem_bw) - 1
+        flat = pf >= 1 and not isinstance(child, DataField)
+        for k, idxs in enumerate(np.ndindex(shape)):
+            if pf == 0:
+                child._deserialize_recursive(word_bw, words, 0, start + k * words_per_elem)
+            elif flat:
+                iword = start + k // pf
+                word = words[iword] if iword < len(words) else 0
+                child._from_flat_bits((word >> ((k % pf) * elem_bw)) & elem_mask)
+            else:
+                child._deserialize_recursive(word_bw, words, (k % pf) * elem_bw, start + k // pf)
             set_elem(data, idxs, child.val)
         self._val = data
-        return curr_ipos, curr_iword
+        return 0, start + nwords
 
     def is_close(
         self,
