@@ -1,9 +1,9 @@
 # Plan: generated XSI system tops, and the host as a hooked module
 
-**Status:** drafted 2026-10-07, not started. **Conditional on un-freezing XSI**: `plans/xrt_target.md`
-froze IPI/XSI (no new features), and this plan is a new XSI feature. The freeze is being reconsidered —
-keep the Waveflow vocabulary, with XRT as a target for designs that fit its subset — and this plan
-assumes that outcome. Decide that first (Stage 0).
+**Status:** drafted 2026-10-07; Stage 0 done, Stage 1 next. `plans/xrt_target.md` had frozen IPI/XSI;
+on 2026-10-07 that was replaced by **two targets** — the Waveflow vocabulary is the general one, XRT
+realizes the subset its rules allow, IPI/XSI realizes all of it — and XSI is unfrozen for this plan's
+scope.
 
 ## Motivation
 
@@ -94,8 +94,8 @@ pysim is loosely timed. The RTL cycle count stays an exact gate of its own, as t
 
 ## Stages
 
-0. **Decide the freeze.** Record the XRT decision in `plans/xrt_target.md`. Stop here if XSI stays
-   frozen.
+0. **Decide the freeze. — DONE 2026-10-07: two targets** (option B). `plans/xrt_target.md` now has
+   "Two targets: XRT and IPI / XSI"; XSI is unfrozen for this plan's scope.
 1. **Fill the duals.** `BFM_DUALS["mm_slave"] → AxiMmMaster` (rewrite the stale "none is planned"
    comment); add an `irq` kind → `IrqPin`. Gate: `check()` resolves mm_fir's host ports.
 2. **`BfmModel(header=...)`.** A model class may live beside the example; `check` looks it up in that

@@ -3,8 +3,12 @@
 > **Status (2026-10-04): DRAFT, nothing built.** For review. Comes out of a discussion on whether
 > the IPI / XSI system flow duplicates what AMD's XRT flow (`v++` link + `hw_emu` + XRT host code)
 > already provides. AMD's teaching board (AUD-Z3) and the wireless line (Versal-RF) are both XRT
-> platforms, so XRT is the long-term system target. This plan makes it one: **a new target, not a
+> platforms, so XRT must be a system target. This plan makes it one: **a new target, not a
 > rewrite.**
+>
+> **Decided 2026-10-07: two targets, not a pivot.** The Waveflow vocabulary is the general one. XRT
+> realizes the subset its rules allow; IPI / XSI realizes all of it and is **no longer frozen** — see
+> [Two targets](#two-targets-xrt-and-ipi--xsi).
 
 ## Why
 
@@ -20,7 +24,9 @@ already provides the system layer:
 | host | XSI C++ host on generated endpoints | XRT host code, run as is |
 | timing before building | pysim | **pysim** (nothing in XRT does this) |
 
-Under XRT's rules XSI has no layer left. Pysim does, and it's the part worth investing in.
+Under XRT's rules XSI has no layer left. Pysim does, and it's the part worth investing in. (A design
+that stays within XRT's rules needs no XSI; one that uses the rest of the vocabulary still does — see
+[Two targets](#two-targets-xrt-and-ipi--xsi).)
 
 ## Positioning: Waveflow's value next to XRT
 
@@ -56,7 +62,7 @@ Waveflow drives and checks itself against.
 Kernels declare **transactional intent**; the target chooses the **realization**; pysim models the
 **realization** (push and pull have different timing, so the realization is what gets timed).
 
-| Intent (what the kernel or host declares) | IPI realization (frozen) | XRT realization |
+| Intent (what the kernel or host declares) | IPI realization | XRT realization |
 |---|---|---|
 | kernel → kernel stream (`StreamIF`) | `axis` port / `hls::stream` | `stream_connect` (`sc=`) between top-level kernels; `hls::stream` inside a kernel |
 | credit / acked stream | `axis` forward + reverse | two `sc=` lines |
@@ -169,11 +175,35 @@ rules), XRT terminology in docstrings, and process text in the MCP server pointi
 **No renames**: names stay intent-level (`StreamIF`, not `StreamConnectIF`), so one name keeps
 lowering differently by position and target.
 
-## The IPI / XSI flow: frozen
+## Two targets: XRT and IPI / XSI
 
-Kept green for the lab deliverables over the next year (RFSoC 4x2 under PYNQ is an IPI system).
-No new features. Its gates remain the cycle-exact reference until Stage 6 exists, and its
-calibrations stay valid for IPI realizations.
+*Decided 2026-10-07; this section replaces "The IPI / XSI flow: frozen".*
+
+The Waveflow vocabulary is the general one, and each target realizes part or all of it:
+
+- **XRT** realizes the subset its [legality rules](#legality-rules-xrt-target) allow: streams,
+  movers, host-launched kernels, `run.wait()` for completion. A design inside that subset should use
+  it — `hw_emu` is AMD's, and nothing in Waveflow needs to re-verify it.
+- **IPI / XSI** realizes all of it, including what XRT kernels cannot express: slave-push adaptors
+  (`MemSlaveAdaptor`, `MmCreditStreamIF`, `LatestValueIF`), interrupts raised by an adaptor, and the RF
+  converters. Its gates remain the cycle-exact reference.
+
+Why not freeze IPI / XSI, as this plan first proposed:
+
+- **IPI is needed under XRT anyway.** Stage 8 puts the adaptor and the RF converters in an
+  extensible platform built in IPI, so an IPI system flow exists either way. The question was only
+  whether it can be verified without per-example scripts.
+- **The lab deliverables are IPI** (RFSoC 4x2 under PYNQ), and they need exactly the multi-kernel,
+  adaptor-facing verification that is missing today.
+- **`hw_emu` is Linux-only**, and its accounting of host software time is unverified (see below).
+
+**The unfreeze is scoped.** XSI gets the generated system top and the host as a hooked module
+(`plans/xsi_system_top.md`); any further XSI feature needs its own plan and reason. The cost being
+bounded is two system flows to keep green.
+
+The two plans share a design point: a host is **one intent with several realizations** — pysim,
+the XSI C++ host (`xsi_system_top.md`), the pyxrt backend (Stage 5) — and the per-endpoint
+transaction-trace gate from `xsi_system_top.md` is the check that ties any two of them together.
 
 ## Decisions for review
 
