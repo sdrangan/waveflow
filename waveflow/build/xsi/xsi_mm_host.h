@@ -142,6 +142,13 @@ public:
     /// Dump the trace -- one burst per message that crossed this endpoint -- as a burst bundle.
     void write_trace(const std::string& dir) const { BurstBundle::write(dir, trace_words_, trace_bounds_); }
 
+    /// Software-thread primitive (xsi_sw.h): write the view's interrupt threshold if it changed.
+    /// Returns the bus operation to wait for, or NO_OP when nothing was written.
+    static constexpr size_t NO_OP = static_cast<size_t>(-1);
+    size_t arm_threshold(uint64_t value) { return set_threshold(value) ? op_ : NO_OP; }
+    /// The view this endpoint reaches.
+    const MmView& view() const { return v_; }
+
 protected:
     /// Record one message that crossed this endpoint (the pysim twin records the same one).
     void record(const std::vector<uint64_t>& w) {
@@ -232,6 +239,23 @@ public:
         else state_ = 0;
     }
 
+    /// Software-thread primitive: one packet ``[len | words]`` written now, without waiting for room
+    /// (the caller's room interrupt said it fits).  Recorded like start().  Returns the last bus
+    /// operation, which completes after all of them.
+    size_t push(const std::vector<uint64_t>& w) {
+        if (w.size() > v_.depth) {
+            std::fprintf(stderr, "FATAL: MmQueueWriter::push on '%s': a %zu-word packet cannot fit\n",
+                         v_.name, w.size());
+            std::exit(5);
+        }
+        record(w);
+        std::vector<uint64_t> pkt; pkt.reserve(w.size() + 1);
+        pkt.push_back(w.size()); pkt.insert(pkt.end(), w.begin(), w.end());
+        write_bursts(v_.base, pkt);
+        room_ = room_ > w.size() ? room_ - w.size() : 0;
+        return op_;
+    }
+
 private:
     enum { POLL = 1, WRITE = 2, THR = 3, WAIT = 4 };
     void send() {
@@ -283,6 +307,24 @@ public:
     }
     /// The words taken by the last start(n), once busy() is false.
     std::vector<uint64_t> words;
+
+    /// Software-thread primitive: read n words now, without waiting for them (the caller's data
+    /// interrupt said they are there).  Returns the bus operations, in order; once the last is done,
+    /// finish_pop() collects the words and records them.
+    std::vector<size_t> pop(uint32_t n) {
+        std::vector<size_t> ops;
+        for (uint32_t i = 0; i < n; i += v_.max_burst()) {
+            read(v_.base, std::min<uint32_t>(v_.max_burst(), n - i), 0);
+            ops.push_back(op_);
+        }
+        return ops;
+    }
+    std::vector<uint64_t> finish_pop(const std::vector<size_t>& ops) {
+        std::vector<uint64_t> w;
+        for (size_t op : ops) w.insert(w.end(), m_.op(op).rdata.begin(), m_.op(op).rdata.end());
+        record(w);
+        return w;
+    }
 
 private:
     enum { POLL = 1, POP = 2, THR = 3, WAIT = 4 };

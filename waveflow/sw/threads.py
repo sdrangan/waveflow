@@ -29,12 +29,12 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import simpy
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_module import DynParam, HwModule
 from waveflow.simulation.simobj import ProcessGen
 
 
@@ -222,6 +222,16 @@ class SwHost(HwModule):
     """
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: The scenario bundle both realizations run (a host writes it with its own ``write_scenario``);
+    #: empty: the host builds its scenario in memory.
+    scenario: DynParam[str] = ""
+    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
+    trace_dir: DynParam[str] = ""
+
+    #: The C++ realization: the class name, and its header -- beside the module defining the host.
+    #: The class derives from the generated ``<Host>_endpoints`` (``waveflow/build/sw_host_gen.py``).
+    cpp_model: ClassVar[str | None] = None
+    cpp_header: ClassVar[str | None] = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -259,6 +269,20 @@ class SwHost(HwModule):
 
     def run_proc(self) -> ProcessGen[None]:
         yield from self.main()
+
+    # -- the C++ realization --------------------------------------------------------------------------
+
+    def bfm_model(self):
+        """The C++ twin (``cpp_model`` in ``cpp_header``), spanning the bus master and every interrupt
+        input -- derived, so a host declares only the two names."""
+        from waveflow.build.composite_gen import BfmModel
+        from waveflow.build.hwcodegen import LoweringError
+        from waveflow.build.sw_host_gen import host_ports
+
+        if not self.cpp_model or not self.cpp_header:
+            raise LoweringError(f"{type(self).__name__} names no C++ realization: set cpp_model and "
+                                f"cpp_header on the class")
+        return BfmModel(self.cpp_model, ports=host_ports(self), header=self.cpp_header)
 
     # -- software time ------------------------------------------------------------------------------
 

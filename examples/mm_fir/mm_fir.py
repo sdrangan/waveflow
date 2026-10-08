@@ -417,10 +417,10 @@ class FirHost(SwHost):
     #: Cycles between polls, should an endpoint poll (none does here: they wait on interrupts).  One
     #: setting for both hosts: the bus endpoints' ``poll_cycles`` and the C++ model's argument.
     poll_cycles: int = 8
-    #: The scenario bundle both hosts run (``write_scenario``); empty: built from x / plan / pkt.
-    scenario: DynParam[str] = ""
-    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
-    trace_dir: DynParam[str] = ""
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "FirHostModel"
+    cpp_header: ClassVar[str | None] = "mm_fir_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -525,18 +525,13 @@ class FirHost(SwHost):
         self.done.succeed()
 
     def bfm_model(self):
-        """The C++ realization: ``FirHostModel`` in ``mm_fir_host.h`` beside this file -- the same
-        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.
-
-        It spans the bus master (an ``AxiMmMaster``, one read and one write in flight -- what
-        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``) and the three interrupt pins it waits on."""
-        from waveflow.build.composite_gen import BfmModel
-
+        """The C++ realization, ``FirHostModel`` in ``mm_fir_host.h`` (``SwHost.bfm_model``), checked
+        first: its bus master keeps one read and one write in flight, which is what
+        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``."""
         if int(self.m.max_outstanding) != 1:
             raise ValueError(f"FirHostModel's AxiMmMaster keeps one read and one write in flight; "
                              f"{self.name}.m.max_outstanding is {self.m.max_outstanding}")
-        return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
-                        extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
+        return super().bfm_model()
 
     def main(self):
         """Two threads, as stream code is written: the writer, started here, and the reader, which is

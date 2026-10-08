@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-and Stage 1 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 2 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-2 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 3 next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -185,6 +185,32 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 2 -- the C++ runtime, on mm_fir: DONE (2026-10-08)
+
+- **`xsi_fiber.h`** (standard library + the OS fiber API, no `xsi.h`): `Fiber` (Windows fibers;
+  `ucontext` elsewhere, untested here) and `SwScheduler` -- threads in start order; each tick steps a
+  thread's endpoints just before running it, then **settles**: further passes run every thread whose
+  wait was satisfied during the tick, so a software event wakes its waiter in the same cycle, as in
+  SimPy.  **Found by the unit test:** the first version lacked the settle pass and woke an
+  earlier-started waiter one cycle late; the expected log (written as SimPy would order it) caught it.
+  `tests/build/test_xsi_fiber.py` checks the exact interleaving under MinGW 6.2, MinGW 9.5 and the
+  `g++` on PATH -- identical on all three.
+- **`xsi_sw.h`**: blocking endpoints over `xsi_mm_host.h` -- `QueueWriter` (`write`, `room_irq`, `push`),
+  `QueueReader` (`get`, `data_irq`, `pop`), `RegCfg`, `StatusReader`, `BusRw` -- plus `SwIrq` and
+  `SwHostModel` (the bus master, pins, scheduler, scenario, cycle count, `DONE` / `OP` report, traces).
+  The endpoints gained small public transaction primitives (`arm_threshold`, `push`, `pop`).
+- **`waveflow/build/sw_host_gen.py`** generates `<Host>_endpoints.h` from the wired host: each endpoint
+  named as in Python, on its view (absolute address, sizes, poll period) with its interrupt.
+  `SwHost.bfm_model()` is now derived (a host sets `cpp_model` / `cpp_header`); `SwHost` owns the
+  `scenario` / `trace_dir` DynParams; the system harness emits the generated header
+  (`TbSpec.extra_files`); `xsi_fiber.h` / `xsi_sw.h` ship with the workspace.  `run.bat` keeps GCC 6.2.
+- **`mm_fir_host.h`: 174 -> ~80 lines, and what is left is the program** -- `writer()`, `reader()` and
+  the scenario decode, line for line with `FirHost`.  No BFM, no pins, no addresses, no state machine.
+- **Gate: `test_mm_fir_xsi.py -m xsi` 8 passed, 0 skipped -- 618 / 611 unchanged, bit-exact, no polls,
+  traces byte-identical to pysim.**  Checked the workspaces were built from the generated header and
+  the fiber runtime.  `tests/build/test_sw_host_gen.py`: layout, ports, refusals, and the generated
+  testbench compiling cleanly (`-Wall`, no warnings) under MinGW 6.2 and 9.5.
 
 ### Stage 1 -- the Python runtime: DONE (2026-10-08)
 
