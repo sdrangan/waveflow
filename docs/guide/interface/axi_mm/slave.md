@@ -22,7 +22,8 @@ kernel *driving* the bus, is the [master side](./master.md). The rule that makes
 
 A kernel facing raw registers, a raw FIFO and a raw memory at once has no defined order between them.
 A stream message has one — it arrives, in order, once — so each view states what one bus access
-becomes *as a message*.
+becomes *as a message*. The rule is not specific to the bus: it is the one every free-running module
+follows ([Stream-only modules and adaptors](../../patterns/stream_only.md)).
 
 This topic has three pages. This one says what an adaptor is, how to build one, and what it
 guarantees. [Slave adaptor views](./slave_views.md) describes each view: its constructor, what the

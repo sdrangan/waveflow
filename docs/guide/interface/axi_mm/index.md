@@ -104,7 +104,9 @@ The two adaptors sit in different places for one reason — what HLS can generat
   hand-written Verilog in the RTL top, turning bus transactions into the stream messages the kernel
   reads. See [Slave side](./slave.md).
 
-Either way the kernel is written the same way: it reads and writes streams, and never an address.
+Either way the kernel is written the same way: it reads and writes streams, and never an address. This
+is one instance of the rule every free-running design follows -- see
+[Stream-only modules and adaptors](../../patterns/stream_only.md).
 
 ## Pages
 

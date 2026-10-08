@@ -28,6 +28,10 @@ host launching a kernel -- because a job that is named, bounded and answered is 
 The other three are real and have their place; they are listed so a design that is not a sequence of
 jobs is recognized as such, not forced into one.
 
+One rule sits *under* every free-running pattern: a module's own logic reads and writes only streams,
+and memory, bus masters and interrupts reach it through adaptors --
+[Stream-only modules and adaptors](./stream_only.md).
+
 Two choices sit *inside* every pattern and have pages of their own:
 
 - **How the kernel body loops** -- the lane loop for packed samples, a straight-line loop per message
