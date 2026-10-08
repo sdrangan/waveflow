@@ -1,0 +1,83 @@
+# mimo_cg migration_compare: numpy=2.5.3, base_seed=20260930, part=xczu48dr-ffvg1517-2-e, period_ns=4
+kind,name,n,value,fires
+criterion,block:bram,104,104,
+criterion,block:dsp,104,101,
+criterion,cycles:interval,140,134,
+criterion,cycles:t0,28,20,
+criterion,cycles:t_iter,28,26,
+criterion,rtl:bit_exact,132,132,
+criterion,span:mm.iter,93,76,
+criterion,span:vec.init,67,15,
+criterion,span:vec.iter,67,67,
+criterion,span:vec.last,67,67,
+criterion,total:bram,28,28,
+criterion,total:dsp,28,27,
+criterion,total:est_ns,132,132,
+criterion,total:ff,28,27,
+criterion,total:lut,28,26,
+criterion,finalist csynth:bram,12,12,
+criterion,finalist csynth:dsp,12,12,
+criterion,finalist cycles:job,12,12,
+criterion,finalist impl:bram,12,0,
+criterion,finalist impl:cp_post_impl_ns,12,12,
+criterion,finalist impl:dsp,12,12,
+criterion,finalist impl:ff,12,7,
+criterion,finalist impl:lut,12,4,
+criterion,finalist rtl:bit_exact,12,12,
+trigger,detectors: lut,28,9.529030e-01,0
+trigger,detectors: ff,28,9.879420e-01,0
+trigger,detectors: dsp,28,1.000000e+00,0
+trigger,detectors: bram,28,9.680490e-01,0
+trigger,detectors: job_at_K,28,9.979340e-01,0
+trigger,detectors K=4: lut,18,9.379520e-01,1
+trigger,detectors K=4: ff,18,9.917010e-01,0
+trigger,detectors K=4: dsp,18,1.000000e+00,0
+trigger,detectors K=4: bram,18,9.978980e-01,0
+trigger,detectors K=4: job_at_K,18,9.920650e-01,0
+trigger,vec blocks: lut,39,9.997980e-01,0
+trigger,vec blocks: ff,39,9.985830e-01,0
+trigger,vec blocks: dsp,39,1.000000e+00,0
+trigger,vec blocks: bram,39,1.000000e+00,0
+trigger,vec blocks: vec.iter,39,9.999490e-01,0
+trigger,mm blocks: lut,65,9.868990e-01,0
+trigger,mm blocks: ff,65,9.767050e-01,0
+trigger,mm blocks: dsp,65,9.977440e-01,0
+trigger,mm blocks: bram,65,1.000000e+00,0
+trigger,mm blocks: mm.iter,65,9.976370e-01,0
+trigger,finalists K=4: impl_lut: k4_loose_guard / k4_loose_no_guard,2,3.197000e+00,0
+trigger,finalists K=4: impl_lut: k4_loose_guard / k4_tight_guard,2,2.421240e+02,0
+trigger,finalists K=4: impl_lut: k4_loose_guard / k4_tight_no_guard,2,2.473360e+02,0
+trigger,finalists K=4: impl_lut: k4_loose_no_guard / k4_tight_guard,2,2.315250e+02,0
+trigger,finalists K=4: impl_lut: k4_loose_no_guard / k4_tight_no_guard,2,2.365750e+02,0
+trigger,finalists K=4: impl_lut: k4_tight_guard / k4_tight_no_guard,2,1.523000e+00,0
+trigger,finalists K=8: impl_lut: k8_loose_guard / k8_loose_no_guard,2,1.313600e+01,0
+trigger,finalists K=8: impl_lut: k8_tight_guard / k8_loose_guard,2,2.520730e+02,0
+trigger,finalists K=8: impl_lut: k8_tight_guard / k8_loose_no_guard,2,2.111940e+02,0
+trigger,finalists K=8: impl_lut: k8_tight_guard / k8_tight_no_guard,2,1.758400e+01,0
+trigger,finalists K=8: impl_lut: k8_tight_no_guard / k8_loose_guard,2,3.139810e+02,0
+trigger,finalists K=8: impl_lut: k8_tight_no_guard / k8_loose_no_guard,2,2.659150e+02,0
+trigger,finalists K=16: impl_lut: k16_loose_guard / k16_loose_no_guard,2,1.181500e+01,0
+trigger,finalists K=16: impl_lut: k16_tight_guard / k16_loose_guard,2,1.958460e+02,0
+trigger,finalists K=16: impl_lut: k16_tight_guard / k16_loose_no_guard,2,1.645860e+02,0
+trigger,finalists K=16: impl_lut: k16_tight_guard / k16_tight_no_guard,2,7.447000e+00,0
+trigger,finalists K=16: impl_lut: k16_tight_no_guard / k16_loose_guard,2,2.178780e+02,0
+trigger,finalists K=16: impl_lut: k16_tight_no_guard / k16_loose_no_guard,2,1.842900e+02,0
+trigger,finalists K=4: impl_ff: k4_loose_guard / k4_loose_no_guard,2,3.294000e+00,0
+trigger,finalists K=4: impl_ff: k4_loose_guard / k4_tight_guard,2,1.796640e+02,0
+trigger,finalists K=4: impl_ff: k4_loose_guard / k4_tight_no_guard,2,2.212470e+02,0
+trigger,finalists K=4: impl_ff: k4_loose_no_guard / k4_tight_guard,2,1.707460e+02,0
+trigger,finalists K=4: impl_ff: k4_loose_no_guard / k4_tight_no_guard,2,2.110040e+02,0
+trigger,finalists K=4: impl_ff: k4_tight_guard / k4_tight_no_guard,2,1.486900e+01,0
+trigger,finalists K=8: impl_ff: k8_loose_guard / k8_loose_no_guard,2,9.766000e+00,0
+trigger,finalists K=8: impl_ff: k8_tight_guard / k8_loose_guard,2,2.172720e+02,0
+trigger,finalists K=8: impl_ff: k8_tight_guard / k8_loose_no_guard,2,1.890450e+02,0
+trigger,finalists K=8: impl_ff: k8_tight_guard / k8_tight_no_guard,2,1.803500e+01,0
+trigger,finalists K=8: impl_ff: k8_tight_no_guard / k8_loose_guard,2,2.744930e+02,0
+trigger,finalists K=8: impl_ff: k8_tight_no_guard / k8_loose_no_guard,2,2.411750e+02,0
+trigger,finalists K=16: impl_ff: k16_loose_guard / k16_loose_no_guard,2,1.474000e+01,0
+trigger,finalists K=16: impl_ff: k16_tight_guard / k16_loose_guard,2,1.399260e+02,0
+trigger,finalists K=16: impl_ff: k16_tight_guard / k16_loose_no_guard,2,1.091050e+02,0
+trigger,finalists K=16: impl_ff: k16_tight_guard / k16_tight_no_guard,2,1.651000e+01,0
+trigger,finalists K=16: impl_ff: k16_tight_no_guard / k16_loose_guard,2,1.795360e+02,0
+trigger,finalists K=16: impl_ff: k16_tight_no_guard / k16_loose_no_guard,2,1.436270e+02,0
+trigger,fires,56,,1

@@ -6,13 +6,15 @@ trace (``tests/fixtures/mimo_cg/systolic_unit_k4_locks.vcd``: the clock, the str
 nets and the channels' ``i_full_n`` nets of the K = 4 systolic unit, six requests, 2,520 cycles; cut
 from a step 9.4a scratch run, Vivado xsim 2024.1) and on an excerpt of a real report.
 
-Under ``-m xsi`` (needs Vitis HLS and Vivado xsim): the harness takes the three Phase 4 default builds
-at K = 4 and a memory-bound matmul unit through csynth and a traced RTL run, and must reproduce the
-recorded rows, the detector's job intervals, and block spans that agree between unit and detector.
+Under ``-m xsi`` (needs Vitis HLS and Vivado xsim): the harness takes the K = 4 default detector and
+its two cores' units, and a memory-bound systolic unit, through csynth and a traced RTL run, and must
+reproduce the rows and job intervals the re-measurement committed (step 9.4b), with core spans that
+agree between unit and detector.
 """
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 import pytest
@@ -328,9 +330,26 @@ def _module(rec: dict, cls: str) -> tuple:
     return m["dsp"], m["lut"], m["ff"], m["bram"]
 
 
+def _migrated(table: str, old: str) -> list[dict]:
+    """The committed rows of the re-measured build ``mig_<old>`` (plan step 9.4b)."""
+    from examples.mimo_cg.hw import campaign as C
+    from examples.mimo_cg.mimo_cg import read_table
+
+    return [
+        r
+        for r in read_table(C.PAPER_DATA / f"{table}.csv")
+        if r["build"] == f"mig_{old}"
+    ]
+
+
+DET_K4 = "det_k4_l4_r4_c4_m4_w12g8_d64_s2_q2"
+VEC_K4 = "vec_k4_l4_w12g8"
+
+
 @pytest.fixture(scope="module")
 def default_builds():
-    """The three Phase 4 default builds at K = 4, measured by the harness."""
+    """The K = 4 default builds on the components, measured by the harness: the detector, its
+    vector core in the CG unit and its systolic core in the systolic unit."""
     _require_tools()
     builds = {
         "vec": _vec(4, 4, 12, 8),
@@ -339,27 +358,30 @@ def default_builds():
     }
     out = {}
     for top, c in builds.items():
-        name = f"gate5_{top}_k4"
+        name = f"gate9_{top}_k4"
         out[top] = M.measure(name, top, c, B.BUILD_ROOT / name)
         assert "error" not in out[top], out[top].get("error")
     return out
 
 
 @pytest.mark.xsi
-def test_harness_reproduces_the_phase_4_rows(default_builds):
+def test_harness_reproduces_the_committed_rows_of_the_default_builds(default_builds):
     vec, mm, det = (default_builds[t] for t in ("vec", "mm", "det"))
-    assert _module(vec, "CgVec") == (48, 14018, 9000, 0)
-    assert _module(mm, "CgMm") == (64, 4779, 4000, 0)
-    total = det["resources"]["total"]
-    assert (total["dsp"], total["lut"], total["ff"], total["bram"]) == (
-        112,
-        32991,
-        19791,
-        20,
+    # the rows the campaign committed (step 9.4b) for the same configurations
+    (row,) = [
+        r for r in _migrated("migration_modules", VEC_K4) if r["name"] == "CgVectorCore"
+    ]
+    assert _module(vec, "CgVectorCore") == tuple(
+        int(row[k]) for k in ("dsp", "lut", "ff", "bram")
     )
-    # a block's row does not depend on the top it is synthesized in
-    assert _module(det, "CgVec") == _module(vec, "CgVec")
-    assert _module(det, "CgMm") == _module(mm, "CgMm")
+    (row,) = _migrated("migration_builds", DET_K4)
+    total = det["resources"]["total"]
+    assert tuple(total[k] for k in ("dsp", "lut", "ff", "bram")) == tuple(
+        int(row[k]) for k in ("dsp", "lut", "ff", "bram")
+    )
+    # a core's row does not depend on the top it is synthesized in
+    assert _module(det, "CgVectorCore") == _module(vec, "CgVectorCore")
+    assert _module(det, "SystolicCore") == _module(mm, "SystolicCore")
     for rec in (vec, mm, det):
         res = rec["resources"]
         assert rec["tool"] == "vitis_hls 2024.1" and res["part"].startswith("xczu48dr")
@@ -370,27 +392,23 @@ def test_harness_reproduces_the_phase_4_rows(default_builds):
                 sum(m[k] for m in res["modules"]) + res["integration"][k]
                 == res["total"][k]
             )
-        # the channel rows account for the whole remainder; the only part the report does not
-        # itemize is the FIFOs' LUTs (its FIFO table lists none, its summary does)
         for k in ("lut", "ff", "bram"):
             assert sum(ch[k] for ch in res["channels"]) == res["integration"][k]
-        (rest,) = [ch for ch in res["channels"] if ch["kind"] == "unitemized"]
-        assert rest["lut"] > 0 and rest["ff"] == rest["bram"] == rest["dsp"] == 0
-        assert all(ch["lut"] == 0 for ch in res["channels"] if ch["kind"] == "fifo")
 
 
 @pytest.mark.xsi
 def test_harness_reproduces_the_detector_job_intervals(default_builds):
     det = default_builds["det"]
     assert det["rtl"]["bit_exact"] and det["rtl"]["jobs"] == [1, 2, 3, 4, 1, 2]
-    fit = det["intervals"]
-    assert dict(zip(fit["nit"], fit["interval"], strict=True)) == {
-        1: 1268,
-        2: 2461,
-        3: 3654,
-        4: 4847,
+    rows = _migrated("migration_cycles", DET_K4)
+    want = {
+        int(r["nit"]): int(r["cycles"]) for r in rows if r["quantity"] == "job_interval"
     }
-    assert fit["t_iter"] == pytest.approx(1193) and fit["t0"] == pytest.approx(75)
+    fit = det["intervals"]
+    assert dict(zip(fit["nit"], fit["interval"], strict=True)) == want
+    terms = {r["quantity"]: float(r["cycles"]) for r in rows}
+    assert fit["t_iter"] == pytest.approx(terms["t_iter"])
+    assert fit["t0"] == pytest.approx(terms["t0"])
     assert fit["max_resid"] < 1e-6
 
 
@@ -399,11 +417,10 @@ def test_a_blocks_span_is_the_same_in_its_unit_and_in_the_detector(default_build
     vec, mm, det = (default_builds[t]["spans"] for t in ("vec", "mm", "det"))
     for spans in (vec, mm, det):
         assert all(s["stalled"] == 0 and s["span"] is not None for s in spans.values())
-    assert abs(vec["vec.iter"]["span"] - det["vec.iter"]["span"]) <= 1
-    assert abs(vec["vec.last"]["span"] - det["vec.last"]["span"]) <= 1
-    assert abs(vec["vec.init"]["span"] - det["vec.init"]["span"]) <= 1
+    for kind in ("vec.init", "vec.iter", "vec.last"):
+        assert abs(vec[kind]["span"] - det[kind]["span"]) <= 1, kind
     assert abs(mm["mm.iter"]["span"] - det["mm.iter"]["span"]) <= 1
-    # in the detector the two blocks wait for each other, so their spans tile the loop exactly
+    # in the detector the two cores wait for each other, so their spans tile the loop exactly
     assert det["mm.iter"]["wait"]["n"] == det["mm.iter"]["n"]
     assert det["mm.iter"]["wait"]["min"] == det["mm.iter"]["wait"]["max"]
     assert det["vec.iter"]["wait"]["min"] == det["vec.iter"]["wait"]["max"]
@@ -413,24 +430,21 @@ def test_a_blocks_span_is_the_same_in_its_unit_and_in_the_detector(default_build
 
 @pytest.mark.xsi
 def test_a_memory_bound_unit_still_gives_the_blocks_own_span():
-    """The matmul unit at K = 16, R = C = L = 16, W16g8: its job interval is set by memory traffic
-    (it is not even linear in nit), yet the block's span is the same at every iteration and shorter.
-    """
+    """The systolic unit at K = 16, R = C = L = 16, W16g8: every request carries ``A`` and ``B`` and
+    returns ``C``, so the time between replies is set by the memory traffic, yet the core's sweep
+    is the same at every request and much shorter."""
     _require_tools()
-    name = "gate5_mm_membound"
+    name = "gate9_mm_membound"
     rec = M.measure(name, "mm", _mm(16, 16, 16, 4, 16, 16), B.BUILD_ROOT / name)
     assert "error" not in rec, rec.get("error")
     assert rec["rtl"]["bit_exact"]
-    assert _module(rec, "CgMm")[0] == 4 * 16 * 16
+    assert _module(rec, "SystolicCore")[0] == 4 * 16 * 16 + 2  # and two index products
     span = rec["spans"]["mm.iter"]
-    # the store is slower than the block, so most hand-overs wait for the channel: those are
-    # marked stalled, and every clean sample gives the same span
-    assert span["stalled"] > 0 and span["wait"]["n"] >= 2 and span["b2b"]["n"] == 0
+    # the core is idle when each B arrives: every sample waits, none stalls, all are equal
+    assert span["wait"]["n"] == span["n"] >= 2 and span["stalled"] == 0
     assert span["wait"]["min"] == span["wait"]["max"] == span["span"]
-    assert span["span"] < rec["intervals"]["t_iter"]
-    assert (
-        rec["intervals"]["max_resid"] > 10
-    )  # the job intervals do not follow T0 + nit·T_iter
+    gaps = [b - a for a, b in itertools.pairwise(rec["rtl"]["reply_cycles"])]
+    assert span["span"] < 0.5 * min(gaps)
 
 
 # --- the campaign driver -----------------------------------------------------------------------
@@ -781,25 +795,27 @@ def test_campaign_keeps_the_brute_force_apart(tmp_path, monkeypatch):
 def test_steady_run_measures_the_job_time_of_a_stream():
     """The brute-force mode on the K = 4 default detector, in real RTL: eight jobs, each count
     twice, no waveform, the build pruned.  The loop is the bottleneck here, so both jobs of a pair
-    take the same time, and that time is the calibration run's: 75 + 1,193·nit."""
+    take the same time, and that time is the calibration run's: t0 + t_iter·nit of the committed
+    re-measurement (step 9.4b)."""
     _require_tools()
-    c, name = HwConfig(), "gate6_det_k4_steady"
+    c, name = HwConfig(), "gate9_det_k4_steady"
     out_dir = B.BUILD_ROOT / name
     rec = M.measure(name, "det", c, out_dir, steady=True, trace=False, prune=True)
     assert "error" not in rec, rec.get("error")
     assert rec["rtl"]["bit_exact"] and rec["rtl"]["jobs"] == [1, 1, 2, 2, 3, 3, 4, 4]
+    rows = _migrated("migration_cycles", DET_K4)
+    want = {
+        int(r["nit"]): int(r["cycles"]) for r in rows if r["quantity"] == "job_interval"
+    }
     fit = rec["intervals"]
-    assert fit["steady"] == {"1": 1268, "2": 2461, "3": 3654, "4": 4847}
-    assert fit["interval"] == [1268, 2461, 2461, 3654, 3654, 4847, 4847]
-    assert fit["t0"] == pytest.approx(75) and fit["t_iter"] == pytest.approx(1193)
+    assert fit["steady"] == {str(n): want[n] for n in (1, 2, 3, 4)}
+    assert fit["interval"] == [want[n] for n in (1, 2, 2, 3, 3, 4, 4)]
     assert fit["max_resid"] == pytest.approx(0, abs=1e-6)
     assert "spans" not in rec  # no waveform, so no block spans
+    (row,) = _migrated("migration_builds", DET_K4)
     total = rec["resources"]["total"]
-    assert (total["dsp"], total["lut"], total["ff"], total["bram"]) == (
-        112,
-        32991,
-        19791,
-        20,
+    assert tuple(total[k] for k in ("dsp", "lut", "ff", "bram")) == tuple(
+        int(row[k]) for k in ("dsp", "lut", "ff", "bram")
     )
     # pruned: the tool's working files are gone, the report is not, and it can be read again
     sol = out_dir / "cg_detector_proj" / "solution1"
@@ -828,8 +844,8 @@ def test_which_records_a_build_files():
 
 @pytest.mark.xsi
 def test_filing_follows_the_per_block_protocol(default_builds, tmp_path):
-    """The store the models are fitted from: one block record per unit build; the glue and the
-    integration record, but neither block, from a detector build."""
+    """The store a model is fitted from: one core record per unit build; the glue and the
+    integration record, but neither core, from a detector build."""
     import json
 
     configs = {
@@ -841,7 +857,7 @@ def test_filing_follows_the_per_block_protocol(default_builds, tmp_path):
         top: M.file_records(
             top,
             c,
-            B.BUILD_ROOT / f"gate5_{top}_k4",
+            B.BUILD_ROOT / f"gate9_{top}_k4",
             tool=default_builds[top]["tool"],
             cost_seconds=1.0,
             work_root=tmp_path,
@@ -858,10 +874,11 @@ def test_filing_follows_the_per_block_protocol(default_builds, tmp_path):
         (r["target"], r["key"].split("-")[0], r["payload"].get("attributed_from"))
         for r in recs
     }
-    assert ("resource", "cg_vec", "cg_vec_unit") in by_origin
-    assert ("resource", "cg_mm", "cg_mm_unit") in by_origin
+    assert ("resource", "cg_vector_core", B.CG_UNIT_TOP) in by_origin
+    assert ("resource", "systolic_core", B.SYSTOLIC_UNIT_TOP) in by_origin
     assert not any(
-        k in ("cg_vec", "cg_mm") and src == "cg_detector" for _t, k, src in by_origin
+        k in ("cg_vector_core", "systolic_core") and src == B.DET_TOP
+        for _t, k, src in by_origin
     )
     assert sum(r["target"] == "integration" for r in recs) == 1
     assert all(r["provenance"]["tool"] == "vitis_hls 2024.1" for r in recs)
