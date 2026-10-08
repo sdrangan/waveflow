@@ -26,11 +26,15 @@ if TYPE_CHECKING:
 SwResult = tuple[Any, Mapping[str, float]]
 
 
-def eval_cycles(cost: CycleCost, feats: Mapping[str, float]) -> float:
-    """Cycles for *cost* at *feats*: a number is itself, a model is its prediction (never below 0)."""
+def eval_cost(cost: CycleCost, feats: Mapping[str, float]) -> float:
+    """*cost* at *feats*: a number is itself, a model is its prediction, never below zero."""
     if isinstance(cost, (int, float)):
-        return float(cost)
+        return max(0.0, float(cost))
     return max(0.0, float(cost.predict_feat(feats)))
+
+
+#: The cycle-valued use of :func:`eval_cost`, named for what the processor asks it.
+eval_cycles = eval_cost
 
 
 def regime_features(ws_bytes: float, config: CpuConfig) -> dict[str, float]:
@@ -111,6 +115,8 @@ class TaskRecord:
     #: Switch cycles paid, including any cut short by a preemption.
     switch_cycles: float = 0.0
     busy_s: float = 0.0
+    #: Dynamic energy of the task's compute, in pJ (0 when its function has no energy model).
+    energy_pj: float = 0.0
     n_preempted: int = 0
     is_irq: bool = False
     #: The model inputs, kept so confidence can be computed when a report asks, not per task.

@@ -36,7 +36,7 @@ import simpy
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig
 from waveflow.cpu.report import CpuReport, build_report
-from waveflow.cpu.task import SwFunction, TaskRecord, eval_cycles
+from waveflow.cpu.task import SwFunction, TaskRecord, eval_cost, eval_cycles
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
@@ -104,7 +104,14 @@ class Processor(SimObj):
         """
         elapsed = self.now if elapsed_s is None else float(elapsed_s)
         busy = [c.busy_s for c in self._cores]
-        return build_report(self.config.name, elapsed, busy, self.records)
+        return build_report(
+            self.config.name,
+            elapsed,
+            busy,
+            self.records,
+            static_power_mw=self.config.static_power_mw,
+            config=self.config,
+        )
 
     # ------------------------------------------------------------------
     # Submitting software
@@ -207,6 +214,8 @@ class Processor(SimObj):
                 cycles += eval_cycles(cfg.irq_entry_cycles, {})
             task.left = cycles
             rec.cycles = cycles
+            if task.func.energy_pj is not None:
+                rec.energy_pj = eval_cost(task.func.energy_pj, rec.feats)
         switch = (
             0.0 if core.last_seq == task.seq else eval_cycles(cfg.switch_cycles, {})
         )
