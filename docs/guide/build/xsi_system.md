@@ -3,7 +3,7 @@ title: XSI System Simulation
 parent: Build System
 nav_order: 6.5
 audience: python
-summary: "Simulating a whole memory-mapped system at RTL -- several csynth'd kernels behind their adaptors, AMD's crossbar, an on-chip memory, and a host -- from the pysim system object, with nothing restated. Name the cut and system_top_spec walks the graph to the Verilog top (crossbar slots, adaptors, stream nets, credit-link writers, interrupt outputs, tie-offs); the host is a hooked module whose C++ realization lives in a header beside the example; system_tb_spec / render_system_tb generate the harness. Both hosts run one scenario file, every host endpoint records what crossed it, and the conformance gate is byte-identical per-endpoint traces plus an exact cycle count. Worked on mm_fir (618 / 611) and markov (1870)."
+summary: "Simulating a whole memory-mapped system at RTL -- several csynth'd kernels behind their adaptors, AMD's crossbar, an on-chip memory, and a host -- from the pysim system object, with nothing restated: run_system_xsi(sysm). It walks the graph to the Verilog top (crossbar slots, adaptors, stream nets, credit-link writers, interrupt outputs, tie-offs), generates the harness around the host's C++ twin (its threads on generated endpoints), runs it, and checks the host against pysim: both run one scenario file, every host endpoint records what crossed it, and the traces must be byte-identical; the cycle count is an exact gate of its own. Worked on mm_fir (618 / 611) and markov (1870)."
 ---
 
 # XSI system simulation
@@ -19,9 +19,10 @@ so the RTL simulation is derived from it rather than written:
 |---|---|---|
 | the Verilog top | a walk of the pysim graph, cut at a set of modules | `system_top_spec`, `render_system_top` |
 | the crossbar IP | the pysim crossbar's ranges | `generate_axi_xbar(spec.xbar, ...)` |
-| the host's C++ | the host's `bfm_model()` — a header beside the example | (hand-written, once) |
-| the harness and `main` | the host's model ports, bound to the top's ports | `system_tb_spec`, `render_system_tb` |
-| the address map the host uses | a walk of the crossbar | `bus_address_headers` |
+| the host's C++ | its threads, in a header beside the example ([Software threads](sw_threads.md)) | (hand-written, once) |
+| the host's endpoints | the wired host: each endpoint's view, address and interrupt | `render_host_endpoints_h` |
+| the harness and `main` | the host's ports, bound to the top's ports | `system_tb_spec`, `render_system_tb` |
+| all of the above, run | the system object | **`run_system_xsi(sysm, ...)`** |
 
 The two worked cases are [mm_fir](../../examples/mm_fir/rtlsim.md) (one kernel, a register bank and
 three queues, two adaptor shapes) and [markov](../../examples/markov/rtlsim.md) (two kernels joined by a
@@ -66,26 +67,41 @@ nothing. The spec is answerable before it is rendered — `spec.si`, `spec.mi`, 
 ## The host is a hooked module
 
 A kernel has two realizations joined by a hook — its Python model, and the HLS body `kernel_task()`
-names. A host is the same: its Python `run_proc` over the bus endpoints, and an `XsiSimObj` that
-`bfm_model()` names, **in a header beside the example** (`BfmModel(header=...)`). One model spans the
-host's bus master and the interrupt pins it waits on, so its C++ is the host program itself, written on
-the C++ endpoints of [`xsi_mm_host.h`](../../../waveflow/build/xsi/xsi_mm_host.h) — which read line for
-line like the Python ones. See [A host is a hooked module](../custom_hooks/bfm_model.md#host).
+names. A host is the same: a `SwHost` whose threads run as SimPy processes in pysim, and a C++ class of
+the same threads -- **in a header beside the example** -- that `cpp_model` / `cpp_header` name. The C++
+is the program only: it derives from a **generated** `<Host>_endpoints` that declares every endpoint
+on its view, with its interrupt, and runs on the software-thread runtime, where each thread is a fiber
+and every bus call blocks. [Software threads](sw_threads.md) is the full API, side by side with Python;
+[A host is a hooked module](../custom_hooks/bfm_model.md#host) is the hook.
+
+The harness runs until the host's `done()` -- every thread finished -- says it has everything it asked
+for (`Harness::run_until`). That completion is the measured cycle count; the host reports it, with
+every bus operation it issued.
+
+## Running it
 
 ```python
-from waveflow.build.system_top import system_tb_spec, render_system_tb
+from waveflow.build.system_xsi import run_system_xsi
 
-host = sysm.host
-host.scenario = scenario_path          # DynParams: emitted into the harness
-host.trace_dir = traces_path
-host.write_scenario(host.scenario)
-tb = system_tb_spec(spec, sysm.xbar, [host])          # resolves host.bfm_model() against the top
-main, files = render_system_tb(spec, tb)              # main .cpp; ports header, harness, host .h
+run = run_system_xsi(MarkovSystem(jobs=jobs, link="mm"), work_dir, top="markov_top")
+run.cycles, run.trace_mismatches          # 1870, []
 ```
 
-The harness runs until the host's `done()` says it has everything it asked for
-(`Harness::run_until`). That completion is the measured cycle count — the host reports it, with every
-bus operation it issued.
+[`run_system_xsi`](../../../waveflow/build/system_xsi.py) takes the system object -- not yet run -- and
+nothing else:
+
+1. **discovers** the crossbar and the `SwHost` among the simulation's objects, and the default cut (each
+   kernel whose device is a crossbar slave, then each memory on it; `inside=` overrides);
+2. **checks the RTL** of every module the top instantiates is synthesized and not stale, naming the
+   build to run if not;
+3. **generates** the crossbar IP (cached by its configuration), the top, the harness with the host's C++
+   and its generated endpoints, and the scenario the host writes;
+4. **runs** it under XSI and parses the host's report;
+5. **checks the host**: runs the same system in pysim from the same scenario and compares every
+   endpoint's trace (below).
+
+It returns an `XsiRun`: the output, `done`, `cycles`, `polls`, `nops`, the bus `ops`, the workspace,
+scenario and trace paths, `pysim_cycles` and `trace_mismatches`. `probes=` adds timing probes.
 
 ## One scenario, and the conformance gate
 
@@ -103,9 +119,8 @@ way kernels are — by a gate on data:
   is loosely timed. The RTL cycle count is an exact gate of its own.
 
 Because the data comes back as traces, the checks are Python: decode the response and status traces
-with their schemas and compare against the scenario. The C++ never holds a field position — except one
-it must *act* on (which job a response answers), and that position is handed to it from the schema's
-own serializer (`field_position`).
+with their schemas and compare against the scenario. Where the C++ must *act* on a field (which job a
+response answers), it reads the generated struct by name -- `qresp.get<MkvResp>().tx_id`.
 
 ## Timing probes
 
@@ -121,6 +136,8 @@ top's net or crossbar slot (`spec.probe_expr`), so no one has to know what the w
   *shared with a kernel* are refused with a named error rather than wired.
 - `system_tb_spec` binds host ports that are crossbar masters or interrupt sinks; a host that also
   streams straight into a kernel is not resolved.
+- `run_system_xsi` does not **build**: synthesizing the kernels stays each example's `*_build` script,
+  which it names when the RTL is missing or stale.
 - AXI4-Lite / `HostActivated` DUTs remain out of reach at RTL (`BFM_DUALS["axilite_slave"]`).
 
 **Source of truth:** [`waveflow/build/system_top.py`](../../../waveflow/build/system_top.py),

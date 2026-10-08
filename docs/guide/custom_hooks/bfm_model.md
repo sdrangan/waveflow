@@ -234,46 +234,54 @@ The conformance obligation is unchanged — a local model is a model, and the sa
 
 ## A host is a hooked module {#host}
 
-A host program is the module this hook was missing. Like a kernel it has two realizations — the
-Python one (its `run_proc`, over the bus endpoints of `BoundMemSlaveAdaptor`) and a pre-written one —
-and the hook joins them the way `kernel_task()` joins a kernel to its HLS body:
+A host program is the module this hook was missing. Like a kernel it has two realizations -- the Python
+one and a pre-written one -- and the hook joins them the way `kernel_task()` joins a kernel to its HLS
+body:
 
 | | kernel | host |
 |---|---|---|
-| Python realization | `run_iter` / `run_proc` | `run_proc` over the host endpoints |
-| pre-written realization | `kernel_task()` → an `hls::task` body | `bfm_model()` → an `XsiSimObj` in a `.h` beside the example |
-| generated | the top, the wiring | the system top, the harness |
+| Python realization | `run_iter` / `run_proc` | a `SwHost`'s threads (SimPy processes) |
+| pre-written realization | `kernel_task()` → an `hls::task` body | `cpp_model` / `cpp_header` → the same threads in C++, in a `.h` beside the example |
+| generated | the top, the wiring | the system top, the host's endpoints, the harness |
 | the gate | same vectors, bit-exact output | same scenario, identical per-endpoint traces |
 
-[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program)'s `FirHost` is the worked case ([markov](../../examples/markov/rtlsim.md)'s `MarkovHost` the second; the whole flow is [XSI system simulation](../build/xsi_system.md)):
+A host is a [`SwHost`](../build/sw_threads.md), and **it does not write `bfm_model()` -- or a model**. It
+declares its C++ class and header, and `SwHost.bfm_model()` derives the rest: one model spanning the
+host's bus master and every interrupt input it created (`add_bus_master`, `add_irq`):
 
 ```python
-def bfm_model(self):
-    return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
-                    extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
+class FirHost(SwHost):
+    cpp_model: ClassVar[str | None] = "FirHostModel"
+    cpp_header: ClassVar[str | None] = "mm_fir_host.h"
 ```
 
-One model spans the host's bus master and the three interrupt sinks it waits on, so its C++ is the
-host program itself — two `XsiSimObj`s on [`xsi_mm_host.h`](../../../waveflow/build/xsi/xsi_mm_host.h)'s
-endpoints, which read line for line like the Python ones. Its ports resolve against the **system top**
+The C++ class derives from `<Host>_endpoints`, a header **generated** from the wired host
+([`sw_host_gen.py`](../../../waveflow/build/sw_host_gen.py)), and holds only the host's threads, written
+with blocking calls on the software-thread runtime -- see [Software threads](../build/sw_threads.md).
+`check(host, "xsi_bfm_model")` looks the class up in that header (a class deriving from
+`<Host>_endpoints` counts). Its ports resolve against the **system top**
 ([`system_top`](../../../waveflow/build/system_top.py)): the bus master to the crossbar slot it is bound
-to (`s0_axi`), each interrupt sink to the output of the view its line comes from (`irq_qin`, …), and
-`system_tb_spec` / `render_system_tb` generate the harness. The run ends when the host's `done()` says
-it has everything it asked for (`TbSpec.stop_on`); that completion is the measured cycle count.
+to (`s0_axi`), each interrupt input to the output of the view its line comes from (`irq_qin`, ...). The
+run ends when the host's `done()` -- every thread finished -- says it has everything it asked for; that
+completion is the measured cycle count. Worked cases: [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program)
+and [markov](../../examples/markov/xsi.md#the-host-in-c); the whole flow is
+[XSI system simulation](../build/xsi_system.md).
 
 Two rules keep the two realizations comparable:
 
-- **No scenario in the C++.** What the host sends comes from a file both realizations read — for
-  `FirHost` a burst bundle of word messages (`write_scenario`, the `scenario` DynParam). A scenario
-  baked into the C++ would be a second copy, and there would be nothing to compare.
-- **Every host endpoint records what crossed it** — each packet sent, each config committed, the words
-  each read took, each status read, each region read back from memory (`BusReader`) — on both sides: the Python interfaces of `mm_host.py` and the C++
-  `MmEndpoint`s. Each dumps one burst bundle per endpoint (`write_trace`, the `trace_dir` DynParam).
+- **No scenario in the C++.** What the host sends comes from a file both realizations read -- the host's
+  `scenario_bursts()`, written by `write_scenario` to the `scenario` DynParam. A scenario baked into the
+  C++ would be a second copy, and there would be nothing to compare. Settings the C++ needs are
+  `DynParam`s too.
+- **Every host endpoint records what crossed it** -- each packet sent, each config committed, the words
+  each read took, each status read, each region read back from memory -- on both sides, and dumps one
+  burst bundle per endpoint to the `trace_dir` DynParam.
 
 The **host conformance gate** then discharges the obligation above for a host: run the same scenario
-through pysim and through RTL, and require **each endpoint's trace to be byte-identical**. Per endpoint,
-not globally — the interleaving across endpoints is timing, and pysim is loosely timed. The RTL cycle
-count is an exact gate of its own. (`tests/examples/test_mm_fir_xsi.py::test_mm_fir_host_traces_match_pysim`.)
+through pysim and through RTL, and require **each endpoint's trace to be byte-identical** --
+`run_system_xsi` does it and reports `run.trace_mismatches`. Per endpoint, not globally: the
+interleaving across endpoints is timing, and pysim is loosely timed. The RTL cycle count is an exact
+gate of its own.
 
 ## See also
 

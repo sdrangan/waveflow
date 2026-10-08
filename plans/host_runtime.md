@@ -1,7 +1,7 @@
 # Plan: software threads -- one host program shape, two realizations, no BFM
 
 **Status:** drafted 2026-10-08, revised the same day around `SwThread` (the user's abstraction); Stage 0
-Stages 1-6 done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); Stage 7 (docs) next.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
+Stages 1-6 and Stage 7's docs done (2026-10-08); C++ threads are **fibers** (decided after Stage 0); the blind test is open.  Follows `plans/xsi_system_top.md` (S1-S6, merged in PR #236), which made the host a hooked
 module with a C++ twin and a per-endpoint trace gate.  This plan replaces the hand-written C++ twin's
 BFM work with a **software-thread runtime** in both languages, and finishes `run_xsi(sysm)`.
 
@@ -187,6 +187,21 @@ element types its HLS body includes); crossbar IP, top, harness, scenario, run; 
    writes the host for a new small system from the docs alone.
 
 ## Progress log
+
+### Stage 7 -- docs: DONE; the blind test NOT run (2026-10-08)
+
+- **New guide page `docs/guide/build/sw_threads.md`** ("Software threads"): the model, the primitive
+  table side by side (Python / C++), writing a host in both languages, what is generated, the scheduler's
+  ordering rules, and the trace gate.  Listed in the Build System index.
+- Updated for the runtime: `guide/build/xsi_system.md` (the host section, a "Running it" section on
+  `run_system_xsi`, the table of generated pieces -- the address headers are gone); `guide/custom_hooks/
+  bfm_model.md` (a host declares `cpp_model` / `cpp_header`; no model is written); `guide/flows/
+  concurrent_flowsteps.md`; `examples/markov/host.md` (`SwHost`, `add_bus_master` / `add_irq`, the
+  slots as a `SwSemaphore`, threads); `examples/markov/xsi.md` (in Stage 5); `examples/mm_fir/rtlsim.md`
+  (the host program, the bus master).
+- `tests/docs` + `tests/mcp`: 200 passed.
+- **The blind test is not run** -- a fresh agent, given only the docs, writing a host for a new small
+  system.  It is a long and costly run; left for the user to start.
 
 ### Stage 6 -- channels between threads: DONE (2026-10-08)
 

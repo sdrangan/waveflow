@@ -46,6 +46,8 @@ That fork is two realizations of one flow, not two separate flows.
 - [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
 - [XSI System Simulation](./xsi_system.md) — a whole memory-mapped system at RTL, from the pysim
   system object: the generated top, the host as a hooked module, and the trace conformance gate.
+- [Software Threads](./sw_threads.md) — the host as threads, with one API in Python (SimPy) and C++
+  (fibers): the primitives side by side, writing a host's C++ twin, and the gate that checks they agree.
 - [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
   lifecycle, assembled from the testbench graph or by hand.
 - [Sweeping a design](./sweep.md) — running the DAG at every point of a parameter grid to build a
