@@ -57,7 +57,7 @@ The config refuses what the IP would get wrong:
   cross a 4 KB boundary, so a smaller window could split one.
 - **No 1 × 1 crossbar.** `create_ip` silently generates an inconsistent two-slave IP for it, whose
   simulation crashes. A design with one slave gives the crossbar a second, unused slot, as
-  [mm_fir](../../../examples/mm_fir/rtlsim.md#two-topologies-one-address-map) does.
+  [mm_fir](../../../examples/mm_fir/synth.md#two-topologies-one-address-map) does.
 
 **IDs.** The crossbar puts the issuing master's index in the ID it forwards, so every slave must echo
 `AWID` / `ARID` on `BID` / `RID`. With `id_width = 1` and two masters, master *k* is ID *k*.

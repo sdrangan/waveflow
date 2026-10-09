@@ -215,7 +215,7 @@ It runs as two processes, over its **scenario**: `host_schedule`'s configs and p
 messages — a config's words, or a packet's `FirCmdHdr` and its samples as the serializer packs them
 (`scenario_bursts`). The same messages can be written to a file (`write_scenario`) and read back from
 it (the `scenario` field), which is how the host's C++ twin runs the same scenario at RTL — see
-[RTL simulation](rtlsim.md#the-host-program). The **writer** commits each config and sends each
+[RTL simulation](xsi.md#the-host-program). The **writer** commits each config and sends each
 packet — its header, then its samples:
 
 ```python

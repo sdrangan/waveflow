@@ -79,8 +79,8 @@ kernels reached over a bus, each behind a [memory-mapped adaptor](../interface/a
 AMD's crossbar and an on-chip memory — gets its top from
 [`system_top`](../../../waveflow/build/system_top.py), which walks the pysim system: name the cut
 (`system_top_spec(xbar, [kernels..., memory])`) and every crossbar slot, adaptor, stream net, credit
-link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/rtlsim.md) and
-[markov](../../examples/markov/rtlsim.md) are the worked cases; their cycle counts (618 / 611 and
+link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/synth.md) and
+[markov](../../examples/markov/synth.md) are the worked cases; their cycle counts (618 / 611 and
 1870) were unchanged when their hand-rendered tops were replaced by it.
 
 **Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,
@@ -103,7 +103,7 @@ host's ports to the system top's (`s0_axi`, `irq_<view>`) and `render_system_tb`
 the `main`; the [system_xsi](../build/xsi_system.md#system-xsi) step of a system's build DAG
 (`add_system_steps(dag, sysm)`) does all of it from the system object. The two realizations run the
 same scenario file, and the gate is that every host endpoint's trace is byte-identical between pysim
-and RTL; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) and
+and RTL; [mm_fir](../../examples/mm_fir/xsi.md#the-host-program) and
 [markov](../../examples/markov/xsi.md) are the worked cases.
 
 **XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a

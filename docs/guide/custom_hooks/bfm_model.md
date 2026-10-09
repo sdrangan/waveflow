@@ -263,7 +263,7 @@ with blocking calls on the software-thread runtime -- see [Software threads](../
 ([`system_top`](../../../waveflow/build/system_top.py)): the bus master to the crossbar slot it is bound
 to (`s0_axi`), each interrupt input to the output of the view its line comes from (`irq_qin`, ...). The
 run ends when the host's `done()` -- every thread finished -- says it has everything it asked for; that
-completion is the measured cycle count. Worked cases: [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program)
+completion is the measured cycle count. Worked cases: [mm_fir](../../examples/mm_fir/xsi.md#the-host-program)
 and [markov](../../examples/markov/xsi.md#the-host-in-c); the whole flow is
 [XSI system simulation](../build/xsi_system.md).
 

@@ -484,6 +484,15 @@ found and fixed: the knowledge index walked `examples/markov/xsi_work/` (the CLI
 crossbar IP Verilog, harness, traces).  `waveflow/mcp/knowledge/corpus.py` now skips `xsi_work` as it
 skips `work`.
 
+**mm_fir, the same split** (the user's follow-up): `docs/examples/mm_fir/` gains `build.md` (Build
+flow: the DAG with both topologies, its own figure) at 2.5 and `synth.md` (Synthesis, Fig. 2: csynth of
+the kernel, the crossbar IP, the top, the two topologies, the generated decoder, joining the kernel) at
+3.4. `xsi.md` (XSI testbench, Fig. 3: the host program, the conformance gate, the overlapping bus
+master) is at 3.7. `codegen.md` gains Fig. 1, and its csynth numbers move to Synthesis.
+`rtlsim.md` keeps the results: `test_mm_fir_pages_quote_the_recorded_cycle_gates` reads 618 / 611
+there.  Links into the sections that moved were repointed (`bfm_model.md`, `concurrent_flowsteps.md`,
+`crossbar.md`, `python.md`, `slave_adaptor.md`).  Docs only; docs tests green.
+
 ### Open after this plan
 
 * **Narrow the source stamp** (Stage 2's finding): a body edit re-synthesizes every top.
