@@ -80,3 +80,32 @@ def test_each_test_point_was_evaluated_once(accuracy):
     )
     assert keys.is_unique
     assert accuracy["evaluated_at"].nunique() == 1
+
+
+# ---------------------------------------------------------------------------
+# AC8: area and leakage against McPAT on the held-out configurations (step 12).
+# ---------------------------------------------------------------------------
+
+
+def test_area_and_leakage_pass_on_the_test_configurations():
+    acc = pd.read_csv(CPU / "area" / "accuracy.csv")
+    s = summarize(acc)
+    assert set(s["target"]) == {"area_mm2", "leak_mw"}
+    assert (s["n"] == 8).all()
+    assert (s["median"] <= MEDIAN_BOUND).all() and (s["max"] <= MAX_BOUND).all(), s
+    assert set(acc["level"]) <= {"INTERPOLATED", "EXACT"}
+
+
+def test_the_platform_prices_static_power_from_its_leakage_model():
+    from waveflow.cpu.platform import CpuPlatform
+
+    p = CpuPlatform.load()
+    one, four = p.cpu_config(n_cores=1), p.cpu_config(n_cores=4)
+    assert (
+        50 < one.static_power_mw < 200
+    )  # McPAT 22 nm: ~97 mW for one core and its 1 MiB L2
+    assert (
+        four.static_power_mw * 4 > one.static_power_mw
+    )  # four cores leak more in total
+    area = p.area_model().estimate(one)["area_mm2"]
+    assert area.level.value in ("INTERPOLATED", "EXACT") and 2 < area.value < 5

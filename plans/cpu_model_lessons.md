@@ -54,3 +54,9 @@ Appended as the work teaches something. Newest last.
   operations carry microarchitectural effects (branch-predictor training, pipeline fill) that counters
   from a Python twin cannot see, and two seeds per size is thin. Register denser held-out sizes where a
   family's cost is small.
+- **Append to a module above its `__main__` guard, never below.** The area stages were appended after
+  `if __name__ == "__main__": raise SystemExit(main())`, so the CLI ran `main()` before they existed
+  (`NameError`); imports and tests were unaffected, which is why it surfaced only on the command line.
+- **McPAT cannot size a TLB for a virtual address wider than 32 bits** (at `74d4759f`): every width
+  above 32 fails with "no valid data array organizations found". Bisecting the description from the
+  shipped template, one change at a time, found it in five runs.
