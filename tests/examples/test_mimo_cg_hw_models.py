@@ -21,7 +21,7 @@ import pytest
 from examples.mimo_cg.hw import estimate as E
 from examples.mimo_cg.hw import measure as M
 from examples.mimo_cg.hw import models as MD
-from examples.mimo_cg.hw.space import HwConfig, det_fit, full_space, replace
+from examples.mimo_cg.hw.space import HwConfig, full_space, replace
 
 # --- the counted rules -------------------------------------------------------------------------
 
@@ -236,11 +236,15 @@ def test_block_spans_come_from_the_models_inside_the_space():
     models = MD.calibrated()
     c = HwConfig(K=8, L=4, R=4, C=8, cmul=3, W=12, g_s=8)
     spans = models.spans(c)
-    assert MD.block_span("vec.iter", c.fmt, K=8, L=4) == pytest.approx(spans["vec.iter"])
-    assert MD.block_span("vec.init", c.fmt, K=8, L=4) == pytest.approx(spans["vec.init"])
-    assert MD.block_span(
-        "mm.iter", c.fmt, K=8, R=4, C=8, L=4, cmul=3
-    ) == pytest.approx(spans["mm.iter"])
+    assert MD.block_span("vec.iter", c.fmt, K=8, L=4) == pytest.approx(
+        spans["vec.iter"]
+    )
+    assert MD.block_span("vec.init", c.fmt, K=8, L=4) == pytest.approx(
+        spans["vec.init"]
+    )
+    assert MD.block_span("mm.iter", c.fmt, K=8, R=4, C=8, L=4, cmul=3) == pytest.approx(
+        spans["mm.iter"]
+    )
     # outside the space (the stress format) there is no span
     assert MD.block_span("vec.iter", 2, K=8, L=4) is None
     # nor does a span extrapolate: another block size, or knobs outside the space, give None

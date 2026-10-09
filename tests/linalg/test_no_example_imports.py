@@ -142,7 +142,3 @@ def test_the_new_files_carry_none_of_the_examples_constants():
             code = code.replace(_tokens(allowed), "")
         bad += [f"{name}: {m.group(0)}" for m in FORBIDDEN.finditer(code)]
     assert not bad, bad
-    # the DSP binding is code that names no part
-    from waveflow.linalg import cg_cost
-
-    assert callable(cg_cost.dsps_per_lane)

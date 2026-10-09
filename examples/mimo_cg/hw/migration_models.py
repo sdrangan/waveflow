@@ -490,6 +490,7 @@ def score(data_dir: Path = PAPER_DATA, models: ComponentModels | None = None) ->
 def write_scores(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> dict:
     note = provenance(
         "migration_bruteforce_scores",
+        tool=_tool(Path(data_dir) / f"{STEM}_builds.csv"),
         model_sha256=model_sha256()[:16],
         model=VERSION,
         part=MD.PART,
@@ -500,6 +501,25 @@ def write_scores(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> dic
         out[name] = Path(out_dir) / f"{name}.csv"
         write_table(out[name], rows, note)
     return out
+
+
+def _tool(table: Path) -> str:
+    """The tool a merged table was measured with (its header's ``tool=``)."""
+    import re
+
+    head = Path(table).read_text(encoding="utf-8").splitlines()[0]
+    return re.search(r"tool=([^,]+)", head).group(1)
+
+
+def write_validation(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> Path:
+    path = Path(out_dir) / "migration_model_validation.csv"
+    note = provenance(
+        "migration_model_validation",
+        tool=_tool(Path(data_dir) / "migration_builds.csv"),
+        model_sha256=model_sha256()[:16],
+    )
+    write_table(path, validate(data_dir), note)
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -520,14 +540,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{r['loo_mape_pct']:8.2f}% {r['loo_max_pct']:7.2f}%"
             )
     if args.validate:
-        rows = validate()
-        path = PAPER_DATA / "migration_model_validation.csv"
-        write_table(
-            path,
-            rows,
-            provenance("migration_model_validation", model_sha256=model_sha256()[:16]),
-        )
-        print("wrote", path)
+        print("wrote", write_validation())
     if args.score:
         for name, path in write_scores().items():
             print(f"{name} -> {path}")

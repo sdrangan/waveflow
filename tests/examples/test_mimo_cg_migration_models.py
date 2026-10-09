@@ -86,6 +86,7 @@ def test_the_role_is_measured_as_the_brute_force(tmp_path, monkeypatch):
         M, "measure", lambda *a, **kw: calls.append(kw) or {"build": a[0]}
     )
     monkeypatch.setattr(MG, "POINTS", tmp_path)
+    monkeypatch.setattr(M, "POINTS_DIR", tmp_path)  # where the dry run writes its note
     build = MM.bruteforce_builds()[0][0]
     C.HwPointStep(name="hw_point").run(None, build=build)
     assert calls == [

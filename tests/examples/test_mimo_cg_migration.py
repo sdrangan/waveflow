@@ -99,6 +99,10 @@ def _as_predicted(tmp_path):
             r["name"] = {"CgMm": "SystolicCore", "CgVec": "CgVectorCore"}[r["name"]]
             if p["top"] != "det":
                 r["dsp"], r["bram"] = p["pred_dsp"], p["pred_bram"]
+            elif r["name"] == "SystolicCore":  # the cores hold the rules' sum
+                r["dsp"], r["bram"] = p["new_block_dsp"], p["new_block_bram"]
+            else:
+                r["dsp"], r["bram"] = "0", "0"
         modules.append(r)
     cycles = [
         r | {"build": plan[r["build"]]["build"]}
@@ -169,6 +173,18 @@ def test_each_criterion_catches_a_number_past_its_bound(tmp_path):
     _edit(cycles, new_det, {"quantity": "t0"}, cycles=75 + 100)
     _edit(cycles, new_mm, {"quantity": "mm.iter"}, cycles=349 + 20)
     assert _failed(tmp_path) == []
+
+
+def test_every_difference_in_the_committed_comparison_has_its_cause():
+    rows = read_table(MG.PAPER_DATA / "migration_compare.csv")
+    changed = [
+        r
+        for r in rows
+        if r["pass"] == "0" or (r["delta"] != "" and float(r["delta"]) != 0.0)
+    ]
+    assert len(changed) > 1000
+    assert all(r["cause"] for r in changed)
+    assert not [r for r in rows if r["cause"] == MG.CAUSES["other"]]
 
 
 def test_the_migration_merges_into_its_own_tables(tmp_path):
@@ -261,13 +277,23 @@ def test_the_example_page_quotes_the_migration_tables():
     p = _pct([t_new[b] for b in dets], [t_old[b] for b in dets])
     want = f"{_signed(min(p), 1)}% to {_signed(max(p), 1)}% (median {_signed(statistics.median(p), 1)}%)"
     assert want in section, want
-    s_old, s_new = q("hw", "vec.init"), q("migration", "vec.init")
+    # the CG start over every build's span, and in the detectors; N = 32 columns
+    starts = [
+        r
+        for r in read_table(MG.PAPER_DATA / "migration_compare.csv")
+        if r["quantity"] == "vec.init"
+    ]
     by_lanes: dict = {}
-    for b in dets:
-        by_lanes.setdefault(int(old[b]["L"]), []).append(round(s_new[b] - s_old[b]))
-    per_group = [
-        d / (32 / L) for L, deltas in by_lanes.items() for d in deltas
-    ]  # N = 32 columns
+    for r in starts:
+        lanes = int(old[r["build"]]["L"])
+        by_lanes.setdefault(lanes, []).append(round(float(r["delta"])))
+    every = [d / (32 / L) for L, deltas in by_lanes.items() for d in deltas]
+    in_dets = [
+        float(r["delta"]) / (32 / int(old[r["build"]]["L"]))
+        for r in starts
+        if r["top"] == "det"
+    ]
+    assert len(starts) == 67 and len(in_dets) == 28
     lo16, hi16, lo1, hi1 = (
         min(by_lanes[16]),
         max(by_lanes[16]),
@@ -275,7 +301,8 @@ def test_the_example_page_quotes_the_migration_tables():
         max(by_lanes[1]),
     )
     assert (
-        f"{min(per_group):.1f}–{max(per_group):.1f} more cycles per group of L columns: "
+        f"{min(every):.1f}–{max(every):.1f} more cycles per group of L columns "
+        f"({min(in_dets):.1f}–{max(in_dets):.1f} in the detectors): "
         f"+{lo16} to +{hi16} cycles at 16 lanes, +{lo1} to +{hi1} at one lane"
     ) in section
     # the finalists, implemented

@@ -1,4 +1,4 @@
-# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
+# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
 set,resource,decisions,problems,right_pct,threshold,pass,same_build_pct,same_cost_pct,missed_budget_pct,unmeasured,regret_median_pct,regret_p95_pct,regret_max_pct,regret_min_pct
 all,dsp,648,432,9.691000e+01,>= 90,1,7.515000e+01,9.321000e+01,0.000000e+00,1,0.000000e+00,4.762000e+00,8.571400e+01,0.000000e+00
 all,lut,648,432,9.969000e+01,>= 90,1,0.000000e+00,0.000000e+00,0.000000e+00,1,2.061000e+00,4.411000e+00,1.478800e+01,-3.013400e+01

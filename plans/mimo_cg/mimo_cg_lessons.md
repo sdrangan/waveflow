@@ -502,3 +502,24 @@ approach, a tool quirk, or a rule worth reusing. Newest entries go at the bottom
 - **Move local artifacts aside before rebuilding over them.** The detector's RTL tests rebuild in
   the Phase 4 build directories, which a docs script reads; moving them to `hw/build/pre_phase9/`
   kept them for that script and for the comparison.
+
+## Phase 9, steps 9.4b–9.6 and the M9 review (2026-10-08)
+
+- **A lookup with a default hides a renamed key.** The comparison renamed the core modules to
+  `mm` and `vec` for display before looking up their cause by class name, so 168 rows fell through
+  to the default cause, "other", and every test still passed. A test that the default is never
+  used on the committed table now guards it.
+- **"Every difference attributed" needs a test over the committed table, not over synthetic
+  data.** The as-predicted fixture had no differences to attribute; the timing rows and the
+  finalists' rows lacked causes until a test read the real table.
+- **Quote a range with its population.** "4.5–6.9 cycles per column group" was true for the
+  detectors and not for all 67 spans (4.0); "+8.8%" was the largest of the spans first looked at,
+  not of all 17. The page tests now compute both ranges from the committed table.
+- **The project's `addopts` already has `-q`.** A second `-q` hides pytest's summary line; read the
+  exit code, or keep the log and count.
+- **A detached run outlives the session; a background shell does not.** The session's end killed
+  the brute force's shards, started as background commands; restarted with `setsid nohup` and the
+  campaign's `--resume`, they ran to the end. Wait on a process ID, not on `pgrep -f`, which
+  matches its own command line.
+- **`black -q --check` prints nothing either way.** Read its exit code; an earlier "clean" verdict
+  read from its silence was wrong on five files.

@@ -1,4 +1,4 @@
-# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
+# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
 build,K,L,R,W,quantity,nit,guarded,measured,predicted,error_pct,exact
 bf_det_k4_l1_r1_c4_m3_w8g0_d32_s2_q2,4,1,1,8,dsp,,,1.800000e+01,1.800000e+01,0.000000e+00,1
 bf_det_k4_l1_r1_c4_m3_w8g0_d32_s2_q2,4,1,1,8,lut,,,1.421600e+04,1.804400e+04,2.692700e+01,0

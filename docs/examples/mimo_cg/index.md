@@ -527,24 +527,27 @@ the builds ran.
 | Bit-exact at RTL | 132 of 132 builds, 12 of 12 finalists |
 | Clock | 132 of 132 within 4 ns in csynth; every finalist meets 4 ns after place and route (2.69–3.87 ns) |
 | DSP | +3 per detector (index arithmetic in the two cores), as predicted, except one detector with R = 1 and C = L, where HLS merges the tile loops and adds three more |
-| Block RAM | As predicted on every build. The `A` buffer now holds lane groups: at K = 16 with four 12-bit lanes it takes 3 block RAMs instead of 11 |
+| Block RAM | As predicted on every build in csynth. The `A` buffer now holds lane groups: at K = 16 with four 12-bit lanes it takes 3 block RAMs instead of 11 |
 | Detector LUTs (csynth) | Median −9%, from −32% to +14%: the old loader's K-lane rows are gone, and the cores' run-time dimensions cost a few thousand LUTs |
 | Detector flip-flops | Median +3.7%, from −26% to +15% |
 | Time per CG iteration | +1.1% to +5.4% (median +2.4%) |
-| Per-job overhead | The CG start takes 4.5–6.9 more cycles per group of L columns: +9 to +10 cycles at 16 lanes, +158 to +220 at one lane |
+| Per-job overhead | The CG start takes 4.0–6.9 more cycles per group of L columns (4.5–6.9 in the detectors): +8 to +10 cycles at 16 lanes, +158 to +220 at one lane |
 | Finalists, implemented | LUTs −35% to +38%, flip-flops −49% to +26%, block RAM lower on all twelve, job time +2.5% to +4.8% |
 | Guard bits, implemented | Every pair keeps its sign: leaving the guard bits out still costs more LUTs and flip-flops |
 
-Bit-exactness, the clock, block RAM and the finalists' job times held their bounds. The rest of
-the differences are attributed module by module in `migration_compare.csv`: the CG start at few
-lanes, a few cycles per tile in short matrix multiplies, the one DSP case, and the finalists'
-implemented resources, which Vivado optimizes differently from csynth.
+Bit-exactness, the clock, block RAM in csynth and the finalists' job times held their bounds. The
+rest of the differences are attributed module by module in `migration_compare.csv`: the CG start at
+few lanes, a few cycles per tile in the matrix multiply's sweep, the one DSP case, and the
+finalists' implemented resources, which Vivado optimizes differently from csynth (their
+implemented block RAM fell on all twelve; `migration_finalists_modules.csv` has them by module).
 
 **The brute force, repeated on the components.** The re-measurement changed the order of the K = 4
 detectors by LUTs (rank correlation 0.94, against a bar of 0.95 set before the builds ran), which
 was the agreed trigger to repeat section 7's comparison on the new hardware. The study's models were
-refitted on the 86 re-measured calibration builds with their forms unchanged; only the cores' DSP
-and block RAM come from the components' own counted rules (`hw/migration_models.py`). All 1,440
+refitted on the 86 re-measured calibration builds with their forms unchanged except where the
+hardware changed: the cores' DSP and block RAM come from the components' own counted rules, the
+loader deserializes `A` in lane groups, and the `A` channel holds lane groups
+(`hw/migration_models.py`). All 1,440
 detectors of the sub-grid were rebuilt on the components (61 tool-hours, every one bit-exact), and
 the 2,592 committed decisions were re-made with the refitted models and judged as in section 7:
 
@@ -558,7 +561,9 @@ The refitted models are less exact than the study's own. Over the 1,440 builds, 
 study's forms have no term for the CG start's cost per column group), flip-flops 9.0%, and job
 time 1.9% where the CG loop is the bottleneck. They still choose a design within 10% of the best
 in at least 95% of the decisions for every resource, and no chosen design misses its job-time
-budget.
+budget. In one problem (QPSK, M = 128, K = 4, 1 dB, a 330-cycle job budget) the refitted models
+find no design at all, where the measured sub-grid has designs that meet it (318 and 322
+cycles); its four decisions count as wrong (the metrics table lists them as `unmeasured`).
 
 **Provenance.** Sections 3–7 describe the hardware as built in Phase 4 and measured up to commit
 `6a2cdca`, the end of Phase 6; every number and figure there comes from that commit. The commands

@@ -161,6 +161,9 @@ _TASK_OF = {
     "cg_mm_task": "CgMm",
     "cg_store_task": "CgStore",
     "mem_w_stream_framed_done_task": "MemWStream",
+    # the detector on Waveflow's components (plan step 9.4): the two cores in the blocks' place
+    "cg_vector_task": "CgVectorCore",
+    "systolic_core_task": "SystolicCore",
 }
 
 
@@ -229,7 +232,7 @@ def module_rows(builds=BUILDS) -> list[dict]:
             row = csynth.setdefault(name, {"lut": 0, "ff": 0, "dsp": 0, "bram": 0})
             for k in row:
                 row[k] += int(r[k])
-        for name in (*_TASK_OF.values(), "integration"):
+        for name in [*(m for m in _TASK_OF.values() if m in impl), "integration"]:
             row = {"build": build, "module": name}
             for k in ("lut", "ff", "dsp", "bram"):
                 row |= {f"csynth_{k}": csynth[name][k], f"impl_{k}": impl[name][k]}

@@ -329,7 +329,8 @@ def test_committed_split_is_what_the_code_regenerates(tmp_path):
 @pytest.mark.parametrize("name", SPACE_FORMATS)
 def test_pysim_is_bit_exact_at_every_format(name):
     """Detector (every nit) and, in place of the retired unit builds (gate 9.0), Waveflow's two
-    standalone units at K = 4 with the study's formats: each ``run`` raises on a mismatch."""
+    standalone units at K = 4 with the study's formats: each ``run`` raises on a mismatch.
+    """
     K, fmt = 4, ALL_FORMAT_NAMES.index(name)
     f = hw_format(fmt)
     probs = detector_problems(
@@ -343,9 +344,21 @@ def test_pysim_is_bit_exact_at_every_format(name):
     ).run()
     unit = {"word_bits": 64, "Nmax": N, "L": 4, "sob_depth": 2, "lane_bits": LANE_BITS}
     rng = np.random.default_rng([60, fmt])
-    jobs = [CUB.random_job(rng, f, (j % K) + 1, K, N, zero_column=j == 8) for j in range(9)]
+    jobs = [
+        CUB.random_job(rng, f, (j % K) + 1, K, N, zero_column=j == 8) for j in range(9)
+    ]
     CUB.CgUnitBenchSim({**unit, "Kmax": K, "nitmax": K, "formats": f}, jobs).run()
-    mm = {**unit, "Mmax": K, "Kmax": K, "R": K, "C": 4, "form": 4, "a": f.A, "b": f.P, "c": f.S}
+    mm = {
+        **unit,
+        "Mmax": K,
+        "Kmax": K,
+        "R": K,
+        "C": 4,
+        "form": 4,
+        "a": f.A,
+        "b": f.P,
+        "c": f.S,
+    }
     rng = np.random.default_rng([80, fmt])
     jobs = [
         SUB.random_job(rng, mm, MatmulOp.MUL, K, K, N, edge=j == 0) for j in range(4)

@@ -252,9 +252,10 @@ def block_channels(top: str, c: HwConfig) -> dict:
     from waveflow.build.elaborate import elaborate
 
     comp = elaborate(comp_class(top), elab_params(top, c), name=TOP_NAME[top])
-    calls = {
-        t.task_fn: t.args for t in composite_top_spec(comp, width=int(c.mem_dw)).tasks
-    }
+    tasks = composite_top_spec(comp, width=int(c.mem_dw)).tasks
+    calls = {t.task_fn: t.args for t in tasks}
+    if len(calls) != len(tasks):  # two instances of one task would share a key
+        raise ValueError(f"{top}: a task is called twice; its channels are ambiguous")
     out: dict = {}
     stack = [comp]
     while stack:
@@ -264,7 +265,9 @@ def block_channels(top: str, c: HwConfig) -> dict:
         if subs or not hasattr(m, "kernel_task"):
             continue
         kt = m.kernel_task()
-        for port, chan in zip(kt.signature, calls.get(kt.task_fn, ()), strict=False):
+        if kt.task_fn not in calls:
+            continue
+        for port, chan in zip(kt.signature, calls[kt.task_fn], strict=True):
             if port.endswith("_blk"):
                 out[(kt.task_fn, port)] = chan
     return out
@@ -347,7 +350,7 @@ def channel_rows(report_dir: Path, top_name: str, module_rtl: set[str]) -> list[
 
 
 def _loop_label(rtl_name: str) -> str:
-    """The loop a sub-block row belongs to: ``cg_mm_task_64_4_…_Pipeline_SWEEP`` → ``SWEEP``."""
+    """The loop a sub-block row belongs to: ``systolic_core_task_…_Pipeline_SWEEP`` → ``SWEEP``."""
     return rtl_name.split("_Pipeline_", 1)[-1]
 
 

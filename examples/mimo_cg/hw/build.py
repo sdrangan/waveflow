@@ -358,7 +358,8 @@ def unit_fields(
 ) -> dict:
     """The fields of the standalone unit a ``vec`` or ``mm`` build of the study is (``R = 0``
     means ``R = K``), with the study's registers: the vector core gets the whole format set, the
-    systolic core its ``A``, ``P`` and ``S`` as ``a``, ``b`` and ``c``, as in the detector."""
+    systolic core its ``A``, ``P`` and ``S`` as ``a``, ``b`` and ``c``, as in the detector.
+    """
     f = hw_format(fmt)
     common = {
         "word_bits": int(mem_dw),

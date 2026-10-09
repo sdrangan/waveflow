@@ -85,7 +85,32 @@ def _finalists(d: Path) -> object:
     return finalists.write_finalists(d / "finalists.csv")
 
 
-#: (what, the tables it writes, the writer into a directory), in the study's order.
+def _migration_list(d: Path) -> object:
+    from examples.mimo_cg.hw import migration
+
+    return migration.write_list(d / "migration_list.csv")
+
+
+def _migration_compare(d: Path) -> object:
+    from examples.mimo_cg.hw import migration
+
+    return migration.write_compare(out_dir=d)
+
+
+def _migration_validation(d: Path) -> object:
+    from examples.mimo_cg.hw import migration_models
+
+    return migration_models.write_validation(out_dir=d)
+
+
+def _migration_scores(d: Path) -> object:
+    from examples.mimo_cg.hw import migration_models
+
+    return migration_models.write_scores(out_dir=d)
+
+
+#: (what, the tables it writes, the writer into a directory), in the study's order; the last four
+#: are the re-measurement on Waveflow's components (plan step 9.4).
 TABLES: tuple[tuple[str, tuple[str, ...], Callable[[Path], object]], ...] = (
     ("space: split", ("holdout_split",), _space("holdout_split", "write_split")),
     (
@@ -131,9 +156,33 @@ TABLES: tuple[tuple[str, tuple[str, ...], Callable[[Path], object]], ...] = (
     ("fidelity: learning curve", ("learning_curve",), _curve),
     ("finding", ("dse_guard_pairs", "dse_guard", "dse_shape"), _finding),
     ("finalists: the list", ("finalists",), _finalists),
+    ("migration: the list", ("migration_list",), _migration_list),
+    (
+        "migration: comparison",
+        ("migration_compare", "migration_metrics"),
+        _migration_compare,
+    ),
+    (
+        "migration: model validation",
+        ("migration_model_validation",),
+        _migration_validation,
+    ),
+    (
+        "migration: brute-force scores",
+        (
+            "migration_bruteforce_decisions",
+            "migration_bruteforce_fidelity_metrics",
+            "migration_bruteforce_errors",
+            "migration_bruteforce_error_metrics",
+        ),
+        _migration_scores,
+    ),
 )
 
 _BUILT = "built with Vitis HLS / Vivado 2024.1 at 6a2cdca; regenerated at that commit"
+_ON_COMPONENTS = (
+    "built on Waveflow's components (step 9.4, Vitis HLS / Vivado xsim 2024.1)"
+)
 
 #: Every other committed table (a name ending in ``*`` is a prefix), and where it comes from.
 ELSEWHERE: dict[str, str] = {
@@ -159,7 +208,15 @@ ELSEWHERE: dict[str, str] = {
     "model_validation_v1_supplement_metrics": "frozen copy of model v1's scores (step 6.1)",
     "linalg_*": "systolic unit calibration (hw/linalg_cal.py), Vitis HLS / Vivado xsim 2024.1",
     "cg_*": "CG vector unit calibration (hw/cg_cal.py), Vitis HLS / Vivado xsim 2024.1",
-    "migration_*": "the re-measurement on Waveflow's components (hw/migration.py, step 9.4)",
+    "migration_builds": _ON_COMPONENTS,
+    "migration_modules": _ON_COMPONENTS,
+    "migration_cycles": _ON_COMPONENTS,
+    "migration_finalists": _ON_COMPONENTS
+    + "; Vivado v.2024.1, read from the build trees",
+    "migration_finalists_modules": _ON_COMPONENTS + "; Vivado's hierarchical reports",
+    "migration_bruteforce_builds": _ON_COMPONENTS,
+    "migration_bruteforce_modules": _ON_COMPONENTS,
+    "migration_bruteforce_cycles": _ON_COMPONENTS,
 }
 
 

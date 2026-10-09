@@ -211,7 +211,8 @@ class CgLoad(FreeRunMod):
 @dataclass
 class CgCtrl(FreeRunMod):
     """CG control: per job, one command into each core's command queue (``nit`` matrices for the
-    systolic core, ``nit`` iterations for the vector core), and the descriptor on to the store."""
+    systolic core, ``nit`` iterations for the vector core), and the descriptor on to the store.
+    """
 
     cpp_kernel_name: ClassVar[str | None] = "cg_ctrl"
     mem_dwidth: HwParam[int] = DEFAULT_MEM_DW
@@ -226,7 +227,10 @@ class CgCtrl(FreeRunMod):
             name=f"{self.name}_desc_in", sim=self.sim, bitwidth=w, has_tlast=True
         )
         self.vec_cmd = StreamIFMaster(
-            name=f"{self.name}_vec_cmd", sim=self.sim, bitwidth=CMD_BITS, has_tlast=False
+            name=f"{self.name}_vec_cmd",
+            sim=self.sim,
+            bitwidth=CMD_BITS,
+            has_tlast=False,
         )
         self.mm_cmd = StreamIFMaster(
             name=f"{self.name}_mm_cmd", sim=self.sim, bitwidth=CMD_BITS, has_tlast=False

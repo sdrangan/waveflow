@@ -1,4 +1,4 @@
-# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
+# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
 modulation,M,K,budget_db,job_budget,resource,problem,pick,m_cost,m_job,bf_pick,bf_cost,bf_job,measured,met,regret_pct,right,same_build,same_cost,void
 16qam,32,4,2.500000e-01,1180,dsp,0,bf_det_k4_l16_r4_c16_m3_w14g4_d32_s2_q2,387,1123,bf_det_k4_l16_r4_c16_m3_w14g4_d32_s2_q2,387,1123,1,1,0.000000e+00,1,1,1,0
 16qam,32,4,2.500000e-01,1180,lut,1,bf_det_k4_l16_r4_c16_m4_w14g4_d64_s2_q2,88753,1117,bf_det_k4_l16_r4_c16_m4_w12g8_d32_s2_q2,85686,1165,1,1,3.579000e+00,1,0,0,0

@@ -15,7 +15,7 @@ def committed() -> set[str]:
 
 def test_every_committed_table_is_checked_or_has_an_origin():
     checked = ST.checked_names()
-    assert len(checked) == len(set(checked)) == 24
+    assert len(checked) == len(set(checked)) == 32
     assert set(checked) <= committed()
     assert not [n for n in checked if ST.origin(n) is not None]
     assert sorted(n for n in committed() - set(checked) if ST.origin(n) is None) == []

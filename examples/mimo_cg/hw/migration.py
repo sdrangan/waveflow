@@ -93,7 +93,16 @@ CAUSES = {
     "queue": "one command per core per job (64-bit words, unframed)",
     "t0": "the per-job work of the cores: the CG core's start and the systolic core's A load",
     "t_iter": "the cores' per-iteration loops (the spans mm.iter and vec.iter)",
+    "integration": "the top's channels, FIFOs and adapters: the A channel's shape and the "
+    "64-bit command queues",
+    "placed": "a module the migration did not change: Vivado optimizes across module "
+    "boundaries, so its implemented size moves with its neighbours",
     "other": "not expected to change; investigated and logged in the plan's §15",
+    "total": "the sum of this build's module and channel rows (their own causes)",
+    "impl": "the sum of this finalist's implemented module rows (their own causes)",
+    "csynth": "the cores, the loader's A and the A channel, as in the detectors' module rows",
+    "timing": "the critical path moves with synthesis and placement; it is checked against the "
+    "clock, not against the old value",
 }
 
 
@@ -355,7 +364,23 @@ def write_finalists(out_dir: Path = PAPER_DATA) -> Path:
     )
     path = Path(out_dir) / "migration_finalists.csv"
     write_table(path, rows, note)
+    write_table(Path(out_dir) / FINALIST_MODULES, finalist_module_rows(), note)
     return path
+
+
+def _tools(data_dir: Path) -> str:
+    """The tools the compared measurements carry: Vitis HLS (the builds) and Vivado (the
+    finalists' implementation), from the merged tables' headers."""
+    import re
+
+    tools = []
+    for name in ("migration_builds.csv", "migration_finalists.csv"):
+        path = Path(data_dir) / name
+        if path.is_file():
+            head = path.read_text(encoding="utf-8").splitlines()[0]
+            if m := re.search(r"tool=([^,]+)", head):
+                tools.append(m.group(1))
+    return "+".join(tools)
 
 
 def _hls_tool() -> str:
@@ -403,11 +428,16 @@ def _row(build, top, role, scope, quantity, old, new, *, pred="", ok="", cause="
     }
 
 
+def _timing(old: str, new: str) -> str:
+    """The cause of a clock row: none when the path did not move."""
+    return CAUSES["timing"] if old != new else ""
+
+
 def _scope_of(name: str, kind: str) -> str:
     """The cause key of a module or channel row of a detector."""
-    if name in ("CgMm", "SystolicCore"):
+    if name in ("mm", "CgMm", "SystolicCore"):
         return "mm"
-    if name in ("CgVec", "CgVectorCore"):
+    if name in ("vec", "CgVec", "CgVectorCore"):
         return "vec"
     if name in ("CgLoad", "CgStore", "CgCtrl"):
         return name
@@ -415,7 +445,16 @@ def _scope_of(name: str, kind: str) -> str:
         return "a_blk"
     if name.startswith(("vec_q", "mm_q")):
         return "queue"
+    if name == "integration":
+        return "integration"
     return "other"
+
+
+def _placed(name: str) -> str:
+    """The cause key of an implemented module row: as :func:`_scope_of`, and a module the
+    migration did not change is placed with the rest (:data:`CAUSES` ``placed``)."""
+    key = _scope_of(name, "module")
+    return "placed" if key == "other" else key
 
 
 def _modules(path: Path) -> dict:
@@ -489,21 +528,54 @@ def compare(data_dir: Path = PAPER_DATA) -> tuple[list[dict], dict]:
                 float(ob["est_ns"]),
                 float(nb["est_ns"]),
                 ok=float(nb["est_ns"]) <= CLOCK_NS,
+                cause=_timing(ob["est_ns"], nb["est_ns"]),
             )
         )
         if top == "det":
             for k in COUNTERS:
                 o, n = int(ob[k]), int(nb[k])
+                cause = CAUSES["total"] if o != n else ""
                 if k in ("dsp", "bram"):
                     pred = int(p[f"pred_{k}"])
                     rows.append(
-                        _row(old, top, role, "total", k, o, n, pred=pred, ok=n == pred)
+                        _row(
+                            old,
+                            top,
+                            role,
+                            "total",
+                            k,
+                            o,
+                            n,
+                            pred=pred,
+                            ok=n == pred,
+                            cause=cause,
+                        )
                     )
                 else:
                     ok = abs(n - o) <= LUT_FF_PCT / 100 * o
-                    rows.append(_row(old, top, role, "total", k, o, n, ok=ok))
+                    rows.append(
+                        _row(old, top, role, "total", k, o, n, ok=ok, cause=cause)
+                    )
             # the attribution: every module and channel, old against new
             om, nm = old_m[old], new_m[old]
+            for k in ("dsp", "bram"):  # the cores' own rows against their counted rules
+                o = om[("mm", "module")][k] + om[("vec", "module")][k]
+                n = nm[("mm", "module")][k] + nm[("vec", "module")][k]
+                pred = int(p[f"new_block_{k}"])
+                rows.append(
+                    _row(
+                        old,
+                        top,
+                        role,
+                        "cores",
+                        k,
+                        o,
+                        n,
+                        pred=pred,
+                        ok=n == pred,
+                        cause=CAUSES["mm"] + "; " + CAUSES["vec"],
+                    )
+                )
             for key in sorted(set(om) | set(nm)):
                 name, kind = key
                 for k in COUNTERS:
@@ -522,7 +594,6 @@ def compare(data_dir: Path = PAPER_DATA) -> tuple[list[dict], dict]:
                             )
                         )
         else:  # a unit build: its block's row
-            blk = OLD_BLOCK[top]
             nblk = "mm" if top == "mm" else "vec"
             o_row, n_row = old_m[old][(nblk, "module")], new_m[old][(nblk, "module")]
             for k in COUNTERS:
@@ -534,7 +605,7 @@ def compare(data_dir: Path = PAPER_DATA) -> tuple[list[dict], dict]:
                         old,
                         top,
                         role,
-                        f"block:{blk}",
+                        f"block:{NEW_BLOCK[top]}",
                         k,
                         o,
                         n,
@@ -618,6 +689,8 @@ def _finalist_compare(data_dir: Path, plan: dict) -> list[dict]:
         for k in COUNTERS:
             oc, nc = int(o[f"csynth_{k}"]), int(n[f"csynth_{k}"])
             oi, ni = int(o[f"impl_{k}"]), int(n[f"impl_{k}"])
+            c_cause = CAUSES["csynth"] if oc != nc else ""
+            i_cause = CAUSES["impl"] if oi != ni else ""
             if k in ("dsp", "bram"):
                 pred = int(p[f"pred_{k}"])
                 rows.append(
@@ -631,14 +704,36 @@ def _finalist_compare(data_dir: Path, plan: dict) -> list[dict]:
                         nc,
                         pred=pred,
                         ok=nc == pred,
+                        cause=c_cause,
                     )
                 )
                 ok = abs(ni - oi) <= abs(nc - oc)
-                rows.append(_row(b, "det", "finalist", "impl", k, oi, ni, ok=ok))
+                rows.append(
+                    _row(b, "det", "finalist", "impl", k, oi, ni, ok=ok, cause=i_cause)
+                )
             else:
-                rows.append(_row(b, "det", "finalist", "csynth", k, oc, nc))
+                rows.append(
+                    _row(b, "det", "finalist", "csynth", k, oc, nc, cause=c_cause)
+                )
                 ok = abs(ni - oi) <= LUT_FF_PCT / 100 * oi
-                rows.append(_row(b, "det", "finalist", "impl", k, oi, ni, ok=ok))
+                rows.append(
+                    _row(b, "det", "finalist", "impl", k, oi, ni, ok=ok, cause=i_cause)
+                )
+        for name, (om, nm) in _impl_modules(data_dir).get(b, {}).items():
+            for k in COUNTERS:
+                if om[k] != nm[k]:
+                    rows.append(
+                        _row(
+                            b,
+                            "det",
+                            "finalist",
+                            f"impl-module:{name}",
+                            k,
+                            om[k],
+                            nm[k],
+                            cause=CAUSES[_placed(name)],
+                        )
+                    )
         oj, nj = float(o["rtl_job"]), float(n["rtl_job"])
         rows.append(
             _row(
@@ -663,9 +758,47 @@ def _finalist_compare(data_dir: Path, plan: dict) -> list[dict]:
                 float(o["cp_post_impl_ns"]),
                 float(n["cp_post_impl_ns"]),
                 ok=n["timing_met"] == "1" and float(n["cp_post_impl_ns"]) <= CLOCK_NS,
+                cause=_timing(o["cp_post_impl_ns"], n["cp_post_impl_ns"]),
             )
         )
     return rows
+
+
+FINALIST_MODULES = "migration_finalists_modules.csv"
+
+
+def finalist_module_rows() -> list[dict]:
+    """Per finalist and implemented module, the old and the new row, from Vivado's hierarchical
+    utilization reports (the build trees, local; :func:`examples.mimo_cg.hw.impl_check.
+    parse_hierarchy`), the blocks and the cores under one name each (``mm``, ``vec``).
+    """
+    from examples.mimo_cg.hw import impl_check
+
+    rename = {"CgMm": "mm", "SystolicCore": "mm", "CgVec": "vec", "CgVectorCore": "vec"}
+    out = []
+    for f in [r for r in read_list() if r["role"] == "finalist"]:
+        got = {}
+        for side, build in (("old", f["old"]), ("new", f["build"])):
+            h = impl_check.parse_hierarchy(impl_check.hier_path(build).read_text())
+            got[side] = {rename.get(m, m): v for m, v in h.items()}
+        for name in sorted(set(got["old"]) | set(got["new"])):
+            row = {"build": f["old"], "module": name}
+            for side in ("old", "new"):
+                v = got[side].get(name, dict.fromkeys(COUNTERS, 0))
+                row |= {f"{side}_{k}": v[k] for k in COUNTERS}
+            out.append(row)
+    return out
+
+
+def _impl_modules(data_dir: Path) -> dict:
+    """``{finalist: {module: (old counters, new counters)}}`` from :data:`FINALIST_MODULES`."""
+    path = Path(data_dir) / FINALIST_MODULES
+    out: dict = {}
+    for r in read_table(path) if path.is_file() else []:
+        out.setdefault(r["build"], {})[r["module"]] = tuple(
+            {k: int(r[f"{side}_{k}"]) for k in COUNTERS} for side in ("old", "new")
+        )
+    return out
 
 
 def trigger(data_dir: Path = PAPER_DATA, plan: dict | None = None) -> list[dict]:
@@ -768,7 +901,12 @@ def summarize(rows: list[dict], data_dir: Path, plan: dict) -> dict:
 
 def write_compare(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> dict:
     rows, summary = compare(data_dir)
-    note = provenance("migration_compare", part=B.PART, period_ns=B.PERIOD_NS)
+    note = provenance(
+        "migration_compare",
+        tool=_tools(Path(data_dir)),
+        part=B.PART,
+        period_ns=B.PERIOD_NS,
+    )
     out = {
         "migration_compare": Path(out_dir) / "migration_compare.csv",
         "migration_metrics": Path(out_dir) / "migration_metrics.csv",
@@ -800,7 +938,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--check", action="store_true", help="regenerate and compare")
     p = sub.add_parser("finalists", help="csynth, RTL and Vivado of the 12 (long)")
     p.add_argument("--shard", default="0/1")
-    sub.add_parser("finalists-table", help="write migration_finalists.csv")
+    sub.add_parser(
+        "finalists-table", help="write migration_finalists.csv and its module rows"
+    )
     sub.add_parser("compare", help="write migration_compare.csv and _metrics.csv")
     args = ap.parse_args(argv)
     if args.cmd == "list":

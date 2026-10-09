@@ -73,7 +73,8 @@ class PairHost(HwModule):
         self.mm_rep = ep(StreamIFSlave, "mm_rep")
         self.x: dict = {}  # (unit, job) -> (xr, xi)
         self.tags: list = []  # (request tag, reply tag, reply status) of every reply
-        self.mm_jobs: list = []  # the (unit, job) of each matmul request, in the order sent
+        # the (unit, job) of each matmul request, in the order sent
+        self.mm_jobs: list = []
 
     def run_proc(self) -> ProcessGen[None]:
         env = self.sim.env
@@ -116,9 +117,7 @@ class PairHost(HwModule):
         job, f, w = self.jobs[u][j], self.formats, self.word_bits
         b = to_words(*job.b, f.B, LANE, w)
         tag = (u << 16) | (j << 8)
-        h = header(
-            tag, CgOp.START, k=job.k, n=job.n, length=len(b), nfollow=job.nit
-        )
+        h = header(tag, CgOp.START, k=job.k, n=job.n, length=len(b), nfollow=job.nit)
         yield from self._send(u, h, b)
         return tag
 

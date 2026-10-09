@@ -1,4 +1,4 @@
-# mimo_cg migration_model_validation: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c
+# mimo_cg migration_model_validation: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=8f4a342f28dfcf2c
 build,role,scope,quantity,measured,predicted,error_pct
 det_k16_l16_r8_c16_m3_w10g0_d32_s3_q2,supplement,detector,lut,9.911100e+04,1.010800e+05,1.987000e+00
 det_k16_l16_r8_c16_m3_w10g0_d32_s3_q2,supplement,detector,ff,5.946300e+04,5.549300e+04,-6.676000e+00

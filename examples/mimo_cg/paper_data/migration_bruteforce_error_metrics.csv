@@ -1,4 +1,4 @@
-# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
+# mimo_cg migration_bruteforce_scores: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=8f4a342f28dfcf2c, model=components-1, part=xczu48dr-ffvg1517-2-e, period_ns=4
 metric,n,value,worst
 DSP exact (%),1440,8.750000e+01,
 BRAM exact (%),1440,1.000000e+02,
