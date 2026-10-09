@@ -332,13 +332,13 @@ def golden_case(cfg: StructCfg, case) -> dict:
     post = mem.copy()
     dst = apply_golden(accel, cmd, post)  # mutates `post` (writes dst region)
     exp_re, exp_im = oracle(cfg, op, reduce, a, b, alpha)
-    got_re, got_im = np.asarray(dst.val["re"]), np.asarray(dst.val["im"])
+    got_re, got_im = dst.val["re"], dst.val["im"]
     oracle_ok = np.array_equal(got_re, exp_re) and np.array_equal(got_im, exp_im)
 
     mem_exp_words = _mem_words(post, in_elem, cfg.mem_dwidth)
     return {
         "label": label,
-        "n_cols": int(cmd.n_cols),
+        "n_cols": cmd.n_cols,
         "oracle_ok": bool(oracle_ok),
         "cmd_words": cmd_words,
         "mem_in_words": mem_in_words,
@@ -663,22 +663,24 @@ def _tput_vectors(cfg: StructCfg):
     post = mem.copy()
     apply_golden(cfg.accel(), cmd, post)
     in_elem = cfg.in_elem()
+    # Rendered with str() into the C++ TB call: the enum and the bools need int() (a bool
+    # prints "True"); the numpy ints already print as plain numbers.
     scalars = [
         int(cmd.op),
         int(cmd.reduce),
-        int(cmd.n_rows),
-        int(cmd.n_cols),
-        int(cmd.a.addr),
-        int(cmd.a.row_stride),
-        int(cmd.b.addr),
-        int(cmd.b.row_stride),
-        int(cmd.y.addr),
-        int(cmd.y.row_stride),
+        cmd.n_rows,
+        cmd.n_cols,
+        cmd.a.addr,
+        cmd.a.row_stride,
+        cmd.b.addr,
+        cmd.b.row_stride,
+        cmd.y.addr,
+        cmd.y.row_stride,
         int(cmd.alpha.direct),
         int(cx.re_of(cmd.alpha.imm)),
         int(cx.im_of(cmd.alpha.imm)),
-        int(cmd.alpha.addr),
-        int(cmd.alpha.stride),
+        cmd.alpha.addr,
+        cmd.alpha.stride,
     ]
     return (
         scalars,

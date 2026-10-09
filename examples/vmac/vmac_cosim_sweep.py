@@ -111,12 +111,13 @@ def _reduce_cmd(accel, n_rows, n_cols, a_addr, b_addr, y_addr):
 
 
 def _scalars(cmd) -> list[int]:
+    # str()'d into the C++ TB call: the enum and the bools need int() (a bool prints "True").
     return [
-        int(cmd.op), int(cmd.reduce), int(cmd.n_rows), int(cmd.n_cols),
-        int(cmd.a.addr), int(cmd.a.row_stride), int(cmd.b.addr), int(cmd.b.row_stride),
-        int(cmd.y.addr), int(cmd.y.row_stride), int(cmd.alpha.direct),
+        int(cmd.op), int(cmd.reduce), cmd.n_rows, cmd.n_cols,
+        cmd.a.addr, cmd.a.row_stride, cmd.b.addr, cmd.b.row_stride,
+        cmd.y.addr, cmd.y.row_stride, int(cmd.alpha.direct),
         int(cx.re_of(cmd.alpha.imm)), int(cx.im_of(cmd.alpha.imm)),
-        int(cmd.alpha.addr), int(cmd.alpha.stride),
+        cmd.alpha.addr, cmd.alpha.stride,
     ]
 
 
