@@ -60,3 +60,8 @@ Appended as the work teaches something. Newest last.
 - **McPAT cannot size a TLB for a virtual address wider than 32 bits** (at `74d4759f`): every width
   above 32 fails with "no valid data array organizations found". Bisecting the description from the
   shipped template, one change at a time, found it in five runs.
+- **`pytest ... | tail -1 && git commit` commits on red.** A pipe's exit status is the last command's,
+  so the commit went in with two failing tests. Write test output to a file and check `$?` before
+  committing.
+- **A new directory under a glob changes what a test reads.** `cpu/*/corpus.csv` silently started
+  including `cpu/area/corpus.csv`. Name the files a test is about.

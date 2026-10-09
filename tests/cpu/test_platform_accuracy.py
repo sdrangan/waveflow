@@ -43,9 +43,13 @@ def summary(accuracy):
 
 
 def test_twins_every_measured_output_equals_its_python_twin():
-    for path in sorted(CPU.glob("*/corpus.csv")):
-        df = pd.read_csv(path)
-        assert df["output_matches_twin"].all(), path.parent.name
+    from waveflow.cpu.calib.kernels import KERNELS
+
+    for (
+        kernel
+    ) in KERNELS:  # the kernel corpora by name: cpu/area/ holds McPAT-only rows
+        df = pd.read_csv(CPU / kernel / "corpus.csv")
+        assert df["output_matches_twin"].all(), kernel
 
 
 def test_cycles_every_median_is_within_bound(summary):

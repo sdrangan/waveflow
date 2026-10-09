@@ -43,9 +43,11 @@ COLUMNS = (
 
 
 def _corpus() -> pd.DataFrame:
-    return pd.concat(
-        [pd.read_csv(p) for p in sorted(CPU.glob("*/corpus.csv"))], ignore_index=True
-    )
+    from waveflow.cpu.calib.calibrate import load_corpus
+
+    return load_corpus(
+        CPU
+    )  # the kernel corpora by name: cpu/area/ holds McPAT-only rows
 
 
 def test_every_row_carries_every_provenance_column():
