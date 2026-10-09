@@ -1,7 +1,7 @@
 """mimo_cg_build.py — Phase 1's build: floating-point BER, ZF crossings, ranges and figures.
 
 Step 1.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md``.  Tables go to ``paper_data/`` (committed);
-figures go to ``docs/examples/mimo_cg/images/`` (committed).  Run from the repo root::
+figures go to ``results/figures/`` (not committed).  Run from the repo root::
 
     python -m examples.mimo_cg.mimo_cg_build --list-steps
     python -m examples.mimo_cg.mimo_cg_build --through float_figures
@@ -132,7 +132,7 @@ class FloatRangesStep(BuildStep):
 
 @dataclass(kw_only=True)
 class FloatFiguresStep(BuildStep):
-    description = "Render the BER figures into docs/examples/mimo_cg/images/."
+    description = "Render the BER figures into results/figures/."
     consumes: ClassVar[list] = [
         "float_ber",
         "float_ranges",
@@ -146,7 +146,7 @@ class FloatFiguresStep(BuildStep):
         from examples.mimo_cg.mimo_cg_figures import write_figures
 
         root = Path(config.root_dir)
-        images = root.parents[1] / "docs" / "examples" / "mimo_cg" / "images"
+        images = root / "results" / "figures"
         written = write_figures(float_ber, images, zf_crossings_csv=zf_crossings)
         manifest = root / "results" / "float_figures.txt"
         manifest.parent.mkdir(parents=True, exist_ok=True)

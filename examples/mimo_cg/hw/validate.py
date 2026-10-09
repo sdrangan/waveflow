@@ -32,7 +32,7 @@ not AC5 gates, and carry no threshold.
 
 ``python -m examples.mimo_cg.hw.validate`` writes ``paper_data/model_validation.csv`` (one row
 per build, scope and quantity), ``paper_data/model_validation_metrics.csv`` (one row per metric)
-and ``docs/examples/mimo_cg/images/model_validation.svg``.
+and ``results/figures/model_validation.svg`` (not committed).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from examples.mimo_cg.mimo_cg import provenance, read_table, write_table
 
 HERE = Path(__file__).resolve().parent
 PAPER_DATA = MD.PAPER_DATA
-IMAGES = HERE.parents[2] / "docs" / "examples" / "mimo_cg" / "images"
+IMAGES = HERE.parent / "results" / "figures"
 ROLE = "holdout"
 GLUE = tuple(m for m in MD.DETECTOR_MODULES if m not in ("CgVec", "CgMm"))
 #: AC5's thresholds (kept as written at gate 5.0).
@@ -435,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_figure and args.role == ROLE:
         from examples.mimo_cg.hw.validate_figure import render
 
+        IMAGES.mkdir(parents=True, exist_ok=True)
         print("wrote", render(detail, IMAGES / "model_validation.svg"))
     return 0 if all(r["pass"] in ("", 1) for r in summary) else 1
 

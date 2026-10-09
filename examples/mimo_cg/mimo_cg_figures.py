@@ -1,7 +1,7 @@
 """mimo_cg_figures.py — Phase 1's BER figures, rendered deterministically as SVG.
 
 Step 1.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md``.  Reads ``paper_data/float_ber.csv`` and
-writes, to ``docs/examples/mimo_cg/images/``:
+writes, to ``examples/mimo_cg/results/figures/``:
 
 * ``float_ber_default.svg`` — the default configuration (M = 64, K = 8, 16-QAM);
 * ``float_ber_<modulation>.svg`` — a 3 × 3 grid of small multiples (rows M, columns K).

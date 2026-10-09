@@ -18,7 +18,7 @@ Step 3.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` (AC3.2).  Reads the merged s
   marks a design within 2σ of the budget, and ``contender`` rows are designs just outside it
   that would replace the headline (see :func:`frontier_rows`).
 * the figures, rendered by :mod:`examples.mimo_cg.mimo_cg_accuracy_figures` into
-  ``docs/examples/mimo_cg/images/``.
+  ``results/figures/``.
 
 Every reference is from the same paired samples: the MMSE and float-CG curves come from the
 sweep itself, not Phase 1's table.  The exact-μ unbiasing is a simulation-side genie that makes
@@ -336,7 +336,7 @@ class AccuracyFrontierStep(BuildStep):
 
 @dataclass(kw_only=True)
 class AccuracyFiguresStep(BuildStep):
-    description = "Render the accuracy figures into docs/examples/mimo_cg/images/."
+    description = "Render the accuracy figures into results/figures/."
     consumes: ClassVar[list] = [
         "accuracy_grid",
         "accuracy_losses",
@@ -354,7 +354,7 @@ class AccuracyFiguresStep(BuildStep):
 
         root = Path(config.root_dir)
         repo = root.parents[1]
-        images = repo / "docs" / "examples" / "mimo_cg" / "images"
+        images = root / "results" / "figures"
         written = write_accuracy_figures(accuracy_grid, accuracy_losses, images)
         manifest = root / "results" / "accuracy_figures.txt"
         manifest.parent.mkdir(parents=True, exist_ok=True)

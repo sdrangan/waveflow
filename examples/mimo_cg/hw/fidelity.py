@@ -745,9 +745,8 @@ def write_scores(data_dir: Path = PAPER_DATA, out_dir: Path = PAPER_DATA) -> dic
     return out
 
 
-IMAGES = (
-    Path(__file__).resolve().parents[3] / "docs" / "examples" / "mimo_cg" / "images"
-)
+#: Where the figures go: the example's build outputs, not committed.
+IMAGES = Path(__file__).resolve().parents[1] / "results" / "figures"
 
 
 def _typed(rows: list[dict]) -> list[dict]:
@@ -778,6 +777,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_figure:
             from examples.mimo_cg.hw.fidelity_figure import render_curve
 
+            IMAGES.mkdir(parents=True, exist_ok=True)
             print(
                 "wrote",
                 render_curve(_typed(read_table(path)), IMAGES / "learning_curve.svg"),
@@ -809,6 +809,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_figure:
         from examples.mimo_cg.hw.fidelity_figure import render_decisions
 
+        IMAGES.mkdir(parents=True, exist_ok=True)
         rows = _typed(read_table(out["decision_fidelity"]))
         table = read_table(out["decision_fidelity_metrics"])
         print("wrote", render_decisions(rows, table, IMAGES / "decision_fidelity.svg"))

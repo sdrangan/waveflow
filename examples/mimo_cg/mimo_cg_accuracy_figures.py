@@ -1,7 +1,7 @@
 """mimo_cg_accuracy_figures.py — Phase 3's accuracy figures, rendered deterministically as SVG.
 
 Step 3.4 of ``plans/mimo_cg/mimo_cg_paper_sims.md``.  Reads ``paper_data/accuracy_grid.csv`` and
-``paper_data/accuracy_losses.csv`` and writes, to ``docs/examples/mimo_cg/images/``:
+``paper_data/accuracy_losses.csv`` and writes, to ``examples/mimo_cg/results/figures/``:
 
 * ``accuracy_ber_<M>x<K>_<modulation>.svg`` — BER families of the fixed-point CG at
   ``nit = K``, one panel per guard g_s, against float CG and float exact MMSE on the same
