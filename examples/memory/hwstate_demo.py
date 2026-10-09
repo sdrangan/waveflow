@@ -71,9 +71,8 @@ class RunningTotal(FreeRunMod):
     def accumulate(self, x: Pair, total: HwState) -> Pair:
         """The pysim twin of the hand-written hook.  ``total.val`` delegates to the wrapped array,
         so the ``HwState`` wrapper is invisible to the arithmetic."""
-        total.val[:] = (np.asarray(total.val, dtype=np.uint64)
-                        + np.asarray(x.val, dtype=np.uint64)) & 0xFFFFFFFF
-        return Pair(np.asarray(total.val).copy())
+        total.val[:] = total.val + x.val        # uint32 arrays wrap mod 2**32, like the hardware add
+        return Pair(total.val.copy())
 
 
 def show_pysim() -> list[list[int]]:
@@ -84,7 +83,7 @@ def show_pysim() -> list[list[int]]:
     seen = []
     for _ in range(3):
         out = dut.accumulate(Pair(np.array([1, 10], dtype=np.uint64)), dut.total)
-        seen.append([int(v) for v in np.asarray(out.val)])
+        seen.append(out.val.tolist())
     print(f"pysim: three firings of [1, 10] -> {seen}")
     return seen
 
