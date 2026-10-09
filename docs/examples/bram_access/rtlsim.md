@@ -139,12 +139,12 @@ sc = scenario_zero()
 cyc = np.fromfile(Path("examples/bram_access/xsi/vectors/data_r/cycles.bin"), dtype="<u8")
 i = 0
 for c in sc.cmd_r:
-    n = 0 if int(c.raddr) + int(c.nsamp) > DEPTH else int(c.nsamp)
+    n = 0 if c.raddr + c.nsamp > DEPTH else c.nsamp
     if n:
         g = cyc[i:i + n]; i += n
-        print(f"tid={int(c.tid):2d} n={n:3d} @{int(c.raddr):4d}: {int(g[0])}..{int(g[-1])}")
+        print(f"tid={c.tid:2d} n={n:3d} @{c.raddr:4d}: {g[0]}..{g[-1]}")
     else:
-        print(f"tid={int(c.tid):2d} n={int(c.nsamp):3d} @{int(c.raddr):4d}: REFUSED, no data")
+        print(f"tid={c.tid:2d} n={c.nsamp:3d} @{c.raddr:4d}: REFUSED, no data")
 ```
 
 ```
