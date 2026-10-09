@@ -116,8 +116,14 @@ def run_dag_cli(
         for entry in dag.results_status(config):
             age = f"{(now - entry['mtime']) / 3600:.1f}h ago" if entry["mtime"] else "—"
             exists_mark = "✓" if entry["exists"] else "✗"
-            stale_note = (f"  STALE ({', '.join(entry['stale_because'])} newer)"
-                          if entry["stale"] else "")
+            if not entry["stale"]:
+                stale_note = ""
+            elif entry["stale_because"]:
+                stale_note = f"  STALE ({', '.join(entry['stale_because'])} newer)"
+            elif entry.get("hook") is False:
+                stale_note = "  STALE (its content check)"
+            else:
+                stale_note = "  STALE (missing)"
             print(f"  {entry['artifact']:<16} {entry['produced_by']:<22} "
                   f"{exists_mark}  {age:<12}{stale_note}")
         return

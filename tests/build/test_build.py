@@ -1,6 +1,8 @@
 """Tests for BuildConfig, BuildResult, BuildStep, Buildable, and BuildDag."""
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from waveflow.build.build import (
     BuildStep,
     FileArtifact,
     ObjectArtifact,
+    SourceStep,
     source_artifact,
 )
 
@@ -564,3 +567,186 @@ class TestBuildDagArtifacts:
         assert info[1]["consumes"] == ["x"]
         assert info[1]["params"] == {"k": 0}
         assert "optional" not in info[0]
+
+
+# ---------------------------------------------------------------------------
+# The late freshness hook (BuildStep.is_fresh; plans/system_dag.md Stage 1)
+# ---------------------------------------------------------------------------
+
+def _bump(path: Path, dt: float = 10.0) -> None:
+    """Push *path*'s mtime *dt* seconds later, so the mtime rule calls it newer than its neighbours."""
+    t = path.stat().st_mtime + dt
+    os.utime(path, (t, t))
+
+
+class _Gen(BuildStep):
+    """Rewrites ``gen.txt`` from ``spec.txt`` -- the same bytes whenever the spec says the same."""
+    consumes = ["spec"]
+    produces = {"gen": Path("gen.txt")}
+    calls = 0
+
+    def run(self, config, spec, **kwargs):
+        out = config.root_dir / "gen.txt"
+        out.write_text(Path(spec).read_text().upper())
+        self.calls += 1
+        return {"gen": out}
+
+
+class _Synth(BuildStep):
+    """The csynth stand-in: records the digest of what it read as its output, and its hook says fresh
+    while that digest still matches."""
+    consumes = ["gen"]
+    produces = {"rtl": Path("rtl.txt")}
+    calls = 0
+    asked = 0
+    hook_enabled = True
+
+    def run(self, config, gen, **kwargs):
+        out = config.root_dir / "rtl.txt"
+        out.write_text(hashlib.sha256(Path(gen).read_bytes()).hexdigest())
+        self.calls += 1
+        return {"rtl": out}
+
+    def is_fresh(self, config, paths):
+        if not self.hook_enabled:
+            return None
+        self.asked += 1
+        rtl, gen = paths["rtl"], paths["gen"]
+        if not rtl.is_file():
+            return False
+        return rtl.read_text() == hashlib.sha256(gen.read_bytes()).hexdigest()
+
+
+class _Sim(BuildStep):
+    """Downstream of the hooked step, on the plain mtime rule."""
+    consumes = ["rtl"]
+    produces = {"trace": Path("trace.txt")}
+    calls = 0
+
+    def run(self, config, rtl, **kwargs):
+        out = config.root_dir / "trace.txt"
+        out.write_text("ran " + Path(rtl).read_text())
+        self.calls += 1
+        return {"trace": out}
+
+
+def _hook_dag(tmp_path, *, hook=True):
+    (tmp_path / "spec.txt").write_text("abc")
+    gen, synth, sim = _Gen(name="gen"), _Synth(name="synth"), _Sim(name="sim")
+    synth.hook_enabled = hook
+    dag = BuildDag()
+    dag.add(SourceStep(artifact="spec", path=Path("spec.txt")))
+    for s in (gen, synth, sim):
+        dag.add(s)
+    cfg = BuildConfig(root_dir=tmp_path)
+    dag.run(cfg)                                          # the first build: everything runs
+    assert (gen.calls, synth.calls, sim.calls) == (1, 1, 1)
+    return dag, cfg, gen, synth, sim
+
+
+class TestFreshnessHook:
+    def test_identical_bytes_upstream_rewrite_skips_the_step(self, tmp_path):
+        """The central case: the spec is touched, so gen runs and rewrites gen.txt with IDENTICAL
+        bytes; the cascade marks synth, but its hook -- asked after gen ran -- says fresh."""
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        _bump(tmp_path / "spec.txt")
+        res = dag.run(cfg)
+        assert gen.calls == 2 and not res["gen"].skipped
+        assert synth.calls == 1 and res["synth"].skipped and res["synth"].success
+        assert res["synth"].artifacts["rtl"] == tmp_path / "rtl.txt"
+
+    def test_the_cascade_stops_at_a_fresh_step(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        _bump(tmp_path / "spec.txt")
+        res = dag.run(cfg)
+        assert sim.calls == 1 and res["sim"].skipped
+
+    def test_a_changed_byte_runs_it_and_its_downstream(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        (tmp_path / "spec.txt").write_text("abd")
+        _bump(tmp_path / "spec.txt")
+        res = dag.run(cfg)
+        assert (gen.calls, synth.calls, sim.calls) == (2, 2, 2)
+        assert not res["synth"].skipped and not res["sim"].skipped
+
+    def test_the_hook_is_asked_after_upstream_ran(self, tmp_path):
+        """A spec change reaches gen.txt only when gen runs: the hook must see the new content."""
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        (tmp_path / "spec.txt").write_text("xyz")
+        _bump(tmp_path / "spec.txt")
+        seen = []
+        orig = synth.is_fresh
+        synth.is_fresh = lambda config, paths: (seen.append(paths["gen"].read_text()),
+                                                orig(config, paths))[1]
+        dag.run(cfg)
+        assert seen == ["XYZ"]
+
+    def test_force_wins_over_the_hook(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        dag.run(cfg, force=True)
+        assert (gen.calls, synth.calls, sim.calls) == (2, 2, 2)
+        res = dag.run(cfg, force=["synth"])
+        assert synth.calls == 3 and not res["synth"].skipped
+        assert gen.calls == 2                                # not forced, and fresh by mtime
+
+    def test_a_forced_step_is_not_asked(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        asked = synth.asked
+        dag.run(cfg, force=["synth"])
+        assert synth.asked == asked
+
+    def test_hook_false_runs_a_step_the_mtime_rule_calls_fresh(self, tmp_path):
+        """The content disagrees while the mtimes agree (an older file restored): the hook's False
+        runs the step, and the cascade carries on from it."""
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        (tmp_path / "rtl.txt").write_text("not the digest")
+        t = (tmp_path / "gen.txt").stat().st_mtime + 5
+        os.utime(tmp_path / "rtl.txt", (t, t))
+        _bump(tmp_path / "trace.txt", 20)
+        res = dag.run(cfg)
+        assert gen.calls == 1 and res["gen"].skipped
+        assert synth.calls == 2 and not res["synth"].skipped
+        assert sim.calls == 2 and not res["sim"].skipped
+
+    def test_on_step_begin_reports_the_late_decision(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        _bump(tmp_path / "spec.txt")
+        will = {}
+        dag.run(cfg, on_step_begin=lambda s, w, p: will.__setitem__(s.name, w))
+        assert will == {"spec": False, "gen": True, "synth": False, "sim": False}
+
+    def test_hook_none_keeps_the_mtime_rule_and_the_cascade(self, tmp_path):
+        """No hook: the identical-bytes rewrite re-runs synth and sim, exactly as before the hook."""
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path, hook=False)
+        _bump(tmp_path / "spec.txt")
+        res = dag.run(cfg)
+        assert (gen.calls, synth.calls, sim.calls) == (2, 2, 2)
+        assert not any(r.skipped for n, r in res.items() if n != "spec")
+
+    def test_hook_none_matches_the_pre_run_answer(self, tmp_path):
+        """With no hook answering, the late decision is the pre-run must-run set, step for step."""
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path, hook=False)
+        for touch in ("spec.txt", "gen.txt", "rtl.txt", "trace.txt"):
+            _bump(tmp_path / touch, 30)
+            pre = dag._determine_must_run(dag.steps(), dag.artifact_paths(cfg), set())
+            will = {}
+            dag.run(cfg, on_step_begin=lambda s, w, p: will.__setitem__(s.name, w))
+            assert {n for n, w in will.items() if w} == pre, touch
+
+    def test_status_honours_the_hook(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path)
+        _bump(tmp_path / "gen.txt")                       # newer than rtl.txt, the same bytes
+        by = {e["artifact"]: e for e in dag.results_status(cfg)}
+        assert by["rtl"]["stale"] is False and by["rtl"]["hook"] is True
+        assert by["trace"]["stale"] is False              # not stale through a fresh step
+        (tmp_path / "gen.txt").write_text("CHANGED")
+        by = {e["artifact"]: e for e in dag.results_status(cfg)}
+        assert by["rtl"]["stale"] is True and by["rtl"]["hook"] is False
+        assert by["trace"]["stale"] is True and by["trace"]["stale_because"] == ["rtl"]
+
+    def test_status_without_a_hook_is_unchanged(self, tmp_path):
+        dag, cfg, gen, synth, sim = _hook_dag(tmp_path, hook=False)
+        _bump(tmp_path / "gen.txt")
+        by = {e["artifact"]: e for e in dag.results_status(cfg)}
+        assert by["rtl"]["stale"] is True and by["rtl"]["stale_because"] == ["gen"]
+        assert by["rtl"]["hook"] is None

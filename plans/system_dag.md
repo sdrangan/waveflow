@@ -209,4 +209,36 @@ check); the other guide pages that name `run_system_xsi` or the `*_xsi.py` files
 
 ## Progress log
 
-(empty)
+### Stage 1 -- the freshness hook (2026-10-09)
+
+`BuildStep.is_fresh(config, paths)` (default None); `paths` is the step's consumed and produced file
+artifacts.  `BuildDag.run` keeps its pre-run must-run set exactly as before and revisits it just before
+each step (`BuildDag._decide_late`):
+
+* forced or a legacy `Buildable`: runs, the hook is not asked;
+* the hook says True: skipped, even when the mtime rule or the cascade marked it; False: runs;
+* None: the pre-run answer, except that a step marked **only** by the cascade is skipped when none of
+  its upstream actually ran -- which only a hook can cause, so with no hook answering the late answer
+  *is* the pre-run answer (`test_hook_none_matches_the_pre_run_answer` checks it step for step).
+
+`results_status` asks the hook too (a new `hook` key per entry), so a fresh step does not make its
+consumers stale.  Tests: `tests/build/test_build.py::TestFreshnessHook` (12); the 48 existing BuildDag
+tests unchanged.
+
+Deviations:
+
+* **`Buildable.is_fresh` already existed**, with another signature (`(config, results)`), for its
+  own callers.  Kept; the DAG never asks a `Buildable` (rule 2 always runs it), so the two cannot
+  meet.  Documented on the method.
+* **The hook's False is honoured too**, not only True: a step the mtime rule calls fresh runs when
+  its hook says stale, and the cascade carries on from it (`test_hook_false_runs_a_step_...`).  The plan
+  only described True; without this a csynth whose stamp disagrees but whose mtimes look old (a file
+  restored by an older copy) would be skipped.
+* **`waveflow/build/cli.py` changed** (one line of `--status` output): a step stale by its hook prints
+  `STALE (its content check)`, a missing artifact `STALE (missing)` (it printed `STALE ( newer)`).
+* **`--status` crashes under a cp1252 console** (`✓`), before this change too; run with
+  `PYTHONIOENCODING=utf-8`.  Not fixed here.
+
+Gate: `pytest -m "not vitis and not xsi"` green except `tests/mcp/test_knowledge_corpus.py::test_index_builds_in_under_three_seconds`, a wall-clock test that failed the same way on the
+untouched baseline while other work loaded the machine, and passes alone.  It recurs below as "the
+timing flake".
