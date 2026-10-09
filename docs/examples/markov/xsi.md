@@ -1,112 +1,52 @@
 ---
 title: XSI testbench
 parent: Two kernels on a bus
-nav_order: 6.5
-summary: "markov_xsi.py, section by section: how the whole system is simulated at RTL from the same MarkovSystem object pysim runs. Prerequisites (the four csynth'd tops, Vivado); the scenario and the system; the Verilog top, walked from the graph with the kernels and the memory as the cut; the host's C++ twin in markov_host.h -- two threads on generated endpoints, the same program as MarkovHost -- run from the same scenario file; run_xsi, which is one call to run_system_xsi; reading the results back from the host's traces; the gates, including the byte-identical trace gate; and, only after it works, the timing probes. A checklist for doing the same for another system."
+nav_order: 6.6
+summary: "The last four steps of the build flow -- scenario, pysim, system_xsi and compare -- put the RTL from Synthesis under a testbench and check it against pysim (Fig. 3). The host's C++ twin in markov_host.h -- two threads on generated endpoints, the same program as MarkovHost -- runs from the same scenario file as the pysim host; the generated harness binds it to the top's ports; XSI compiles and runs it; and every host endpoint's trace must be byte-identical between the two runs. Reading the results back from report.json and the traces; the gates, which run the DAG with synth=check; and, only after it works, the timing probes. A checklist for doing the same for another system."
 ---
 
 # XSI testbench
 
-[`examples/markov/markov_xsi.py`](../../../examples/markov/markov_xsi.py) runs the whole system at RTL:
-the csynth'd kernels, their adaptors, AMD's crossbar and a BRAM under one Verilog top, simulated by
-Vivado's `xsim` through XSI, and driven by a C++ host. The point of the file is what it does **not**
-contain: no Verilog and no C++ in Python strings, and no plumbing. It hands the same `MarkovSystem`
-pysim runs ([The system](system.md)) to one framework call, `run_system_xsi`, which walks it to the top,
-generates the harness around `MarkovHost`'s C++ twin, runs it and checks the host against pysim. This
-page goes through the file in the order you need it. The results and the timing story are on
-[RTL simulation](rtlsim.md); the general flow is the guide page
-[XSI system simulation](../../guide/build/xsi_system.md).
+The last steps of the [build flow](build.md) put the Verilog from [Synthesis](synth.md) under a
+testbench and check it against pysim. The testbench is not written: at RTL the host has to act on pins
+every clock cycle, so `MarkovHost` has a C++ twin. The framework generates the harness that binds the
+twin to the top's ports, compiles it with the RTL, and runs it in Vivado's `xsim` through XSI. pysim
+runs the same system from the same scenario file, and the two hosts' traces must agree byte for byte.
+The results and the timing story are on [RTL simulation](rtlsim.md); the general flow is the guide page
+[XSI system simulation](../../guide/build/xsi_system.md#running-it).
 
 ```mermaid
 flowchart LR
-  sys["MarkovSystem<br/>(pysim object)"] --> top["system_top_spec<br/>-> markov_top.v"]
-  sys --> ip["crossbar IP<br/>(create_ip)"]
-  host["MarkovHost<br/>-> MarkovHost_endpoints.h + markov_host.h"] --> tb["system_tb_spec<br/>-> harness + main"]
-  sys --> scen["scenario bundle"]
-  top --> ws["XsiWorkspace<br/>xvlog / xelab / xsim"]
-  ip --> ws
-  tb --> ws
-  scen --> ws
-  ws --> out["DONE / OP lines<br/>+ traces"] --> py["Python: decode,<br/>check, compare"]
+  scen[("scenario<br/>MarkovHost.write_scenario")] --> host
+  subgraph tb["the harness: markov_top_tb, generated"]
+    host["MarkovHostModel<br/>markov_host.h, on the generated<br/>MarkovHost_endpoints.h"]
+    top["markov_top.v<br/>and every file in rtl.json"]
+    host -- "s0_axi" --> top
+    top -- "irq_gen_qcmd, irq_chain_qresp" --> host
+  end
+  host --> traces[("traces/<br/>report.json")]
+  scen --> pysim["pysim<br/>MarkovSystem.run()"] --> ptraces[("pysim_traces/<br/>pysim.json")]
+  traces --> compare{"compare"}
+  ptraces --> compare
+  classDef here fill:#f59f00,stroke:#9c5b00,color:#1a1a1a
+  classDef earlier fill:#a5d8ff,stroke:#1864ab,color:#1a1a1a
+  classDef data fill:#e9ecef,stroke:#adb5bd,color:#495057
+  class host,compare here
+  class top earlier
+  class scen,traces,ptraces,pysim data
 ```
 
-## Before you start
+*Fig. 3 -- the system under its testbench. Orange: what this page adds -- the host's C++ twin (the one
+hand-written piece; its endpoints and the harness around it are generated), and the comparison. Blue:
+the RTL from [Synthesis](synth.md), compiled as `rtl.json` lists it. Grey: the files the two runs share
+and leave, and the pysim run they are checked against.*
 
-- **pysim works.** Everything here derives from `MarkovSystem(link="mm")`; if it does not run bit-exact
-  in Python ([Python simulation](pysim.md)), nothing below will.
-- **The four tops are synthesized:** `python -m examples.markov.markov_build` generates every header and
-  top and runs csynth on `markov_gen`, `markov_chain` and the credit link's two writers
-  ([Code generation](codegen.md)). Their Verilog lands in `<top>_proj/solution1/syn/verilog/`.
-- **Vivado** (`create_ip` for the crossbar, `xsim` for the simulation) and a C++ compiler — the mingw
-  `g++` that ships with Vivado on Windows, the system `g++` on Linux.
-
-## The scenario and the system
-
-```python
-ROOT = Path(__file__).resolve().parent
-QWRITER = writer_top_name("queue", DW, QDEPTH)
-CWRITER = writer_top_name("credit", DW)
-TOPS = ("markov_gen", "markov_chain", QWRITER, CWRITER)
-
-def rtl_dir(top: str) -> Path:
-    return ROOT / f"{top}_proj" / "solution1" / "syn" / "verilog"
-
-XBAR_NAME = "xbar_markov_4x3"
-NJOBS, NSTEPS = 4, 300
-
-def scenario_jobs() -> list[dict]:
-    return default_jobs(NJOBS, NSTEPS)
-
-def system() -> MarkovSystem:
-    return MarkovSystem(jobs=scenario_jobs(), link="mm")
-```
-
-`TOPS` names the csynth'd modules and `rtl_dir` where each one's Verilog is; the writers' names are
-derived the way `markov_build` derives them, never typed. `system()` is the **same object pysim runs**,
-on the gate's scenario: four jobs of 300 steps. Everything below starts from it.
-
-## The Verilog top: walked from the graph
-
-```python
-def system_spec(sysm: MarkovSystem | None = None) -> SystemTopSpec:
-    sysm = sysm or system()
-    return system_top_spec(sysm.xbar, [sysm.gen, sysm.chain, sysm.mem], top="markov_top",
-                           xbar_name=XBAR_NAME)
-```
-
-`system_top_spec` ([`waveflow/build/system_top.py`](../../../waveflow/build/system_top.py)) walks the
-pysim graph out from the crossbar. The list is **the cut** — what is synthesized into the top: the two
-kernels and the memory. What belongs to them comes along: each kernel's adaptor and views (Step 4 of
-[The system](system.md#step-4-each-kernels-memory-mapped-device)), and the credit link's two writers
-(Step 5). Everything else — the host — stays outside, and what it was bound to becomes a port of the
-top:
-
-| in the pysim graph | in `markov_top.v` |
+| step | what it does |
 |---|---|
-| `host.m` on crossbar master 0 | the top's AXI4 slave port `s0_axi` |
-| the writers' and the chain's masters (1, 2, 3) | crossbar SI slots on internal wires `si1_axi` .. `si3_axi` |
-| each device's port, the memory | MI slots: two adaptors (`render_adaptor_slot`) and a BRAM window |
-| each `StreamIF` | stream nets named after it (`gen_k_qcmd`, `u_fwd`, `chain_k_qu`, ...) |
-| `u_fwd`, 32 deep, between two kernels | an `mm_sync_fifo` |
-| the two writers | their csynth'd tops, each with its `target` (the peer view's word address) |
-| the `IrqIF`s to the host | outputs `irq_gen_qcmd`, `irq_chain_qresp` |
-
-Each kernel's pins come from the same `TopSpec` its csynth top was rendered from, and the tie-offs
-(unused `s_axi_control` inputs low, ID widths, unframed ports' `TLAST`) are the framework's rules. The
-spec can be asked before it is rendered — `spec.si`, `spec.mi`, `spec.nets`, `spec.irqs`,
-`spec.modules` — and `render_system_top(spec)` emits the Verilog.
-
-```python
-def xbar_config() -> AxiXbarConfig:
-    return system_spec().xbar
-```
-
-The crossbar's configuration — four SI, three MI at the ranges `assign_address_ranges` set — is part of
-the spec, so the IP AMD generates decodes the same addresses pysim did.
-
-`run_xsi` does not even call `system_spec`: `run_system_xsi` finds the crossbar and the host among the
-simulation's objects and takes the same cut by default — every kernel whose device is a crossbar slave,
-then every memory on the crossbar. `system_spec` stays for asking about the top without running it.
+| [scenario](../../guide/build/xsi_system.md#scenario) | `MarkovHost` writes its four jobs as a burst bundle: the one file both hosts read, so no job is restated in C++ |
+| [pysim](../../guide/build/xsi_system.md#pysim) | the same system object in pysim, from that file: the host's traces and its cycle count |
+| [system_xsi](../../guide/build/xsi_system.md#system-xsi) | the harness, compiled with the RTL (`xvlog` / `xelab` for the Verilog, `g++` for the testbench) and run; the host's report to `report.json` |
+| [compare](../../guide/build/xsi_system.md#compare) | every host endpoint's trace, RTL against pysim, file for file; any difference fails the run |
 
 ## The host, in C++ {#the-host-in-c}
 
@@ -180,35 +120,23 @@ Everything else is generated or framework:
 | `yield from self.qresp.get_schema(MkvResp)` | `qresp.get<MkvResp>()` |
 | `yield from self.mem_reader.read(n, addr)` | `mem_reader.read(addr, n)` |
 
-## Running it: `run_xsi`
+## Running it
 
-```python
-def run_xsi(work_dir, timeout: int = 3600, probes: bool = False) -> XsiRun:
-    sysm = system()
-    run = run_system_xsi(sysm, work_dir, top="markov_top", xbar_name=XBAR_NAME, workspace="markov",
-                         probes=timing_probes(sysm) if probes else None, timeout=timeout)
-    run.output += trace_report(run.output, run.traces)
-    return run
+```bash
+python -m examples.markov.markov_build                     # the whole build flow, through compare
+python -m examples.markov.markov_build --through pysim     # the pysim side alone (no Vivado)
 ```
 
-[`run_system_xsi`](../../../waveflow/build/system_xsi.py) does the rest, from the system object alone:
-
-1. **Discover** the crossbar, the software host and the cut among the simulation's objects.
-2. **Check the RTL**: every module the top instantiates must be synthesized and not stale; if not, it
-   says so and names the build to run.
-3. **Generate** the crossbar IP (cached by its configuration), the top, the harness with
-   `MarkovHost_endpoints.h` and `markov_host.h`, and the scenario the host writes.
-4. **Run** under XSI (`xvlog` / `xelab` build the RTL, `g++` the testbench), and parse the host's report.
-5. **Check the host**: run the same system in pysim from the same scenario file, and compare every
-   endpoint's trace, file for file (`run.trace_mismatches`, empty when they agree).
-
-The returned `XsiRun` carries the output, `cycles`, `polls`, `nops`, the bus `ops`, the paths of the
-workspace, scenario and traces, and `pysim_cycles`.
+The run lands in `xsi_work/markov/`: `report.json` (the host's report: `DONE`, the bus operations),
+`pysim.json`, `compare.json`, the scenario and both sets of traces. `system_xsi.load_run(...)` reads them
+back as an `XsiRun` -- the output, `cycles`, `polls`, `nops`, the bus `ops`, `pysim_cycles` and
+`trace_mismatches`.
 
 ## Reading the results
 
-The C++ host reports what the bus did; the data comes back as **traces**, which the example decodes
-with the schemas themselves:
+The C++ host reports what the bus did; the data comes back as **traces**, which the gate test
+([`test_markov_xsi.py`](../../../tests/examples/test_markov_xsi.py)) decodes with the schemas
+themselves:
 
 ```python
 def trace_report(out: str, traces) -> str:
@@ -223,17 +151,19 @@ The k-th region read follows the k-th response, so each response is paired with 
 `job_results(run.output)` turns the `JOB` lines into `{job: {"ones", "t", "x"}}`.
 
 ```python
-run = run_xsi("xsi_work")                        # or: python -m examples.markov.markov_xsi xsi_work
-run.cycles, run.polls, run.trace_mismatches      # 1870, 0, []
-job_results(run.output)[2]["ones"]               # 257
+run = load_run("examples/markov/xsi_work/markov")    # after python -m examples.markov.markov_build
+run.output += trace_report(run.output, run.traces)
+run.cycles, run.polls, run.trace_mismatches          # 1870, 0, []
+job_results(run.output)[2]["ones"]                   # 257
 ```
 
 ## The gates
 
-[`tests/examples/test_markov_xsi.py`](../../../tests/examples/test_markov_xsi.py) runs `run_xsi` once
-(a module fixture) and checks the `XsiRun`. The fixture first regenerates the headers and tops
-(`markov_build.generate`, seconds) and refuses to run against RTL that was not built from the sources on
-disk -- a skipped XSI test counts as a failure (`pytest -m xsi` requires every gate to run).
+[`tests/examples/test_markov_xsi.py`](../../../tests/examples/test_markov_xsi.py) runs the example's DAG
+once (a module fixture) through `compare`, with `synth="check"`, and checks what `load_run` reads back.
+Its `codegen` regenerates the headers and tops first (seconds), so the stamp check compares the RTL
+against this checkout's sources. In check mode a missing or stale top **fails** the gate, naming it --
+a gate never synthesizes, and never runs against RTL that was not built from the sources on disk.
 
 | gate | checks |
 |---|---|
@@ -244,9 +174,9 @@ disk -- a skipped XSI test counts as a failure (`pytest -m xsi` requires every g
 | `test_markov_host_traces_match_pysim` | the host's three traces **byte-identical** between pysim and RTL |
 
 The last one is what ties the two hosts together. Nothing static can show that `MarkovHostModel`
-behaves like `MarkovHost`, so `run_system_xsi` runs the pysim system **from the same scenario file** and
-compares each endpoint's trace -- the commands, the responses, the `x` regions -- file for file. Per
-endpoint, not as one log: the interleaving across endpoints is timing, and pysim is loosely timed.
+behaves like `MarkovHost`, so the DAG's `pysim` step runs the system **from the same scenario file** and
+its `compare` step compares each endpoint's trace -- the commands, the responses, the `x` regions --
+file for file. Per endpoint, not as one log: the interleaving across endpoints is timing, and pysim is loosely timed.
 
 ```bash
 pytest tests/examples/test_markov_xsi.py -m xsi
@@ -254,9 +184,11 @@ pytest tests/examples/test_markov_xsi.py -m xsi
 
 ## After it works: timing probes
 
-Only once the gates pass is the cycle count worth explaining. `run_xsi(work_dir, probes=True)` builds
-the top with one-bit **probes** on the handshakes you name. You name them by the **pysim object** you
-want to watch, never by a net:
+Only once the gates pass is the cycle count worth explaining.
+`python -m examples.markov.markov_build --probes` (or `build_dag(probes=True)`) builds the top with
+one-bit **probes** on the handshakes `timing_probes` names, in its own workspace
+(`xsi_work/markov_probes/`). `timing_probes` lives in `markov.py`, beside `MarkovSystem`. You name each
+probe by the **pysim object** you want to watch, never by a net:
 
 ```python
 def timing_probes(sysm: MarkovSystem) -> dict:
@@ -284,18 +216,22 @@ crossbar slot. A probe on something that is not in the top is refused with the r
 string over the top's nets still works, for anything the helpers do not cover.)
 
 Each probe becomes an output `probe_<name>` of the top and a `ProbePin` in the harness, which prints
-the cycles it fired (`PROBE <name> start+len ...`); `probe_runs(out)` parses them. How the probes took
-this system from 2356 cycles to 1870 is [Finding the time](rtlsim.md#finding-the-time).
+the cycles it fired (`PROBE <name> start+len ...`); the gate test's `probe_runs(out)` parses them. How
+the probes took this system from 2356 cycles to 1870 is [Finding the time](rtlsim.md#finding-the-time).
 
 ## Doing this for another system
 
 1. Get the system running bit-exact in pysim, with the host as a `SwHost` that creates its bus master
    and interrupt inputs (`add_bus_master`, `add_irq`; [The host](host.md)) and the bus wiring built as
    in [The system](system.md).
-2. Build and synthesize every kernel (the `*_build` script).
+2. Write the `codegen` step: every kernel's headers and top, and each bus writer's top
+   (`write_writer_project`), with their `.tcl`.
 3. Give the host `scenario_bursts()` (its jobs as word messages) and `cpp_model` / `cpp_header`, and
    write that C++ class: derive it from the generated `<Host>_endpoints`, override `main()`, and write
    each Python thread as a C++ function on the same endpoints. Settings it needs are `DynParam`s.
-4. Call `run_system_xsi(system, work_dir, top=...)`, and decode the traces into whatever results your
-   gates check.
-5. Gate it: bit-exact, the exact cycle count, and `run.trace_mismatches == []`.
+4. Build the DAG ([Build flow](build.md)) -- `codegen`, then `add_system_steps(dag, system,
+   work_dir=...)` -- and hand it to `run_dag_cli`. csynth, the system's RTL, the scenario, pysim, the
+   XSI run and the comparison come with that call.
+5. Gate it: run the DAG with `synth="check"`, read the run back with `load_run`, decode the traces into
+   whatever results your gates check, and require bit-exact results, the exact cycle count and
+   `run.trace_mismatches == []`.

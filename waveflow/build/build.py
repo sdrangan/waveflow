@@ -321,6 +321,19 @@ class BuildStep(ABC):
         """
         return {}
 
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool | None:
+        """True / False to decide this step's freshness by content; ``None`` (default) for the mtime rule.
+
+        Asked **late**: :meth:`BuildDag.run` calls it just before the step would run -- after its
+        upstream has run -- so a step whose inputs were rewritten with identical bytes can see that
+        and answer True.  The DAG then skips the step even though the mtime rule or the cascade marked
+        it, and steps downstream see it as not having run.  False runs it.  ``force`` wins over both.
+        :meth:`BuildDag.results_status` asks it too.
+
+        *paths* maps the step's consumed and produced file artifacts to their resolved paths.
+        """
+        return None
+
     @abstractmethod
     def run(self, config: BuildConfig, **kwargs) -> dict[str, Any]:
         """Execute the step.
@@ -409,8 +422,11 @@ class Buildable(BuildStep):
         """Return the generated file content for *key* as a string."""
         ...
 
-    def is_fresh(self, config: BuildConfig, results: dict[str, BuildResult]) -> bool:
-        """True when all output files exist and are newer than every dep FileArtifact."""
+    def is_fresh(self, config: BuildConfig, results: dict[str, BuildResult]) -> bool:  # type: ignore[override]
+        """True when all output files exist and are newer than every dep FileArtifact.
+
+        Not the :meth:`BuildStep.is_fresh` hook (a different signature, kept for its callers): a
+        ``Buildable`` always runs in a ``BuildDag``, which never asks it."""
         for rel_path in self.build_outputs.values():
             out_path = config.root_dir / rel_path
             if not out_path.exists():
@@ -596,22 +612,25 @@ class BuildDag:
                 raise ValueError(f"Unknown step name(s) in force: {sorted(unknown)}")
 
         all_paths = self.artifact_paths(config)
-        must_run = self._determine_must_run(order, all_paths, forced)
+        must_run, direct, demanded = self._must_run_reasons(order, all_paths, forced)
+        in_order = {s.name for s in order}
         artifact_store: dict[str, Any] = {}
         results: dict[str, BuildResult] = {}
         failed: set[str] = set()
+        ran: set[str] = set()
 
         for step in order:
             if failed:
                 # A previous step failed — halt the build.
                 break
 
-            will_run = step.name in must_run
+            will_run = self._decide_late(step, config, all_paths, must_run, direct, demanded,
+                                         forced, ran, in_order)
             step_paths = {n: all_paths[n] for n in step.produces if n in all_paths}
             if on_step_begin is not None:
                 on_step_begin(step, will_run, step_paths)
 
-            if step.name not in must_run:
+            if not will_run:
                 skip_artifacts: dict[str, Any] = {}
                 for name in step.produces:
                     p = all_paths.get(name)
@@ -627,6 +646,7 @@ class BuildDag:
                 # history of actual runs than from any estimate, and one nothing can reconstruct
                 # after the fact if it was never measured.
                 started = time.perf_counter()
+                ran.add(step.name)
                 try:
                     produced = self._call_run(step, config, artifact_store)
                     results[step.name] = BuildResult(
@@ -664,8 +684,22 @@ class BuildDag:
            consumed by a step that must run.
 
         Rules 4 and 5 are propagated to a fixed point so the answer is stable.
+
+        This is the **pre-run** answer.  :meth:`run` revisits it step by step (:meth:`_decide_late`)
+        with each step's :meth:`BuildStep.is_fresh` hook; when no hook answers, the two agree.
         """
+        return self._must_run_reasons(order, all_paths, forced)[0]
+
+    def _must_run_reasons(
+        self,
+        order: list[BuildStep],
+        all_paths: dict[str, Path],
+        forced: set[str],
+    ) -> tuple[set[str], set[str], set[str]]:
+        """``(must_run, direct, demanded)``: :meth:`_determine_must_run`'s set, the steps in it for a
+        reason of their own (rules 1-3), and those in it for in-memory demand (rule 5)."""
         must_run: set[str] = set()
+        demanded: set[str] = set()
 
         # Phase 1: direct conditions (1), (2), (3)
         for step in order:
@@ -673,6 +707,7 @@ class BuildDag:
                 must_run.add(step.name)
             elif self._files_stale(step, all_paths):
                 must_run.add(step.name)
+        direct = set(must_run)
 
         # Phase 2: propagate cascade (4) and in-memory demand (5) until stable
         in_order = {s.name for s in order}
@@ -697,10 +732,47 @@ class BuildDag:
                 for downstream in order:
                     if downstream.name in must_run and in_mem_outputs & set(downstream.consumes):
                         must_run.add(step.name)
+                        demanded.add(step.name)
                         changed = True
                         break
 
-        return must_run
+        return must_run, direct, demanded
+
+    def _decide_late(
+        self,
+        step: BuildStep,
+        config: BuildConfig,
+        all_paths: dict[str, Path],
+        must_run: set[str],
+        direct: set[str],
+        demanded: set[str],
+        forced: set[str],
+        ran: set[str],
+        in_order: set[str],
+    ) -> bool:
+        """Whether *step* runs, decided just before it would: after its upstream has run or skipped.
+
+        * forced, or a legacy ``Buildable``: runs (the hook is not asked);
+        * the hook (:meth:`BuildStep.is_fresh`) answers True: skips -- even if the mtime rule or the
+          cascade marked it; False: runs;
+        * the hook answers None: the pre-run answer, except that a step marked **only** by the
+          cascade (rule 4) skips when none of its upstream actually ran -- which can only happen
+          when a hook skipped one, so with no hook answering this is exactly the pre-run answer.
+        """
+        if step.name in forced or isinstance(step, Buildable):
+            return True
+        fresh = step.is_fresh(config, self._step_paths(step, all_paths))
+        if fresh is not None:
+            return not fresh
+        upstream_ran = any(d.name in ran for d in step._deps if d.name in in_order)
+        if step.name in must_run:
+            return step.name in direct or step.name in demanded or upstream_ran
+        return upstream_ran
+
+    @staticmethod
+    def _step_paths(step: BuildStep, all_paths: dict[str, Path]) -> dict[str, Path]:
+        """The resolved paths of *step*'s consumed and produced file artifacts (its hook's *paths*)."""
+        return {n: all_paths[n] for n in (*step.consumes, *step.produces) if n in all_paths}
 
     def _files_stale(self, step: BuildStep, all_paths: dict[str, Path]) -> bool:
         """True if step's produced files are missing or older than its consumed files.
@@ -818,9 +890,13 @@ class BuildDag:
         ``expected_paths()`` overrides), then checks existence, mtime, and
         staleness relative to consumed file artifacts.
 
+        A step's :meth:`BuildStep.is_fresh` hook, when it answers, decides instead: True reads fresh
+        whatever the mtimes say (so its consumers are not marked stale through it), False stale.
+
         Returns a list of dicts, one per file artifact:
         ``artifact``, ``produced_by``, ``path``, ``exists``, ``mtime``
-        (float | None), ``stale`` (bool), ``stale_because`` (list[str]).
+        (float | None), ``stale`` (bool), ``stale_because`` (list[str]), ``hook``
+        (the step's ``is_fresh`` answer: True / False / None).
         """
         all_paths = self.artifact_paths(config)
         order = self._topological_sort()
@@ -828,6 +904,8 @@ class BuildDag:
         entries: list[dict] = []
 
         for step in order:
+            hook = None if isinstance(step, Buildable) else step.is_fresh(
+                config, self._step_paths(step, all_paths))
             for artifact_name in step.produces:
                 path = all_paths.get(artifact_name)
                 if path is None:
@@ -851,6 +929,8 @@ class BuildDag:
                         elif dep["mtime"] is not None and dep["mtime"] > mtime:
                             stale_because.append(dep_name)
                     stale = bool(stale_because)
+                if hook is not None:
+                    stale, stale_because = not hook, ([] if hook else stale_because)
 
                 entry = {
                     "artifact": artifact_name,
@@ -860,6 +940,7 @@ class BuildDag:
                     "mtime": mtime,
                     "stale": stale,
                     "stale_because": stale_because,
+                    "hook": hook,
                 }
                 file_status[artifact_name] = entry
                 entries.append(entry)

@@ -173,7 +173,7 @@ class MarkovGen(FreeRunMod):
     #: Cycles per draw (the HLS body's II).
     proc_ii: int = 1
     #: Cycles a chunk costs beyond its draws: the credit check before the loop, the loop's fill and
-    #: drain.  MEASURED at RTL (markov_xsi probes: a chunk leaves every 71 cycles for 64 draws).
+    #: drain.  MEASURED at RTL (the system top's timing probes: a chunk leaves every 71 cycles for 64 draws).
     chunk_overhead: int = 7
 
     def kernel_task(self):
@@ -221,7 +221,7 @@ class ChainCore(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     proc_ii: int = 1
     #: Cycles a chunk costs beyond its steps: the MemWCmd words, the step loop's fill and drain (its
-    #: depth is 5), the credit offer.  MEASURED at RTL (markov_xsi probes: x leaves for memory every
+    #: depth is 5), the credit offer.  MEASURED at RTL (the system top's timing probes: x leaves for memory every
     #: 79 cycles for 64 steps).
     chunk_overhead: int = 15
 
@@ -531,6 +531,30 @@ class MarkovSystem:
     def run(self) -> dict[int, dict]:
         self.sim.run_sim(until=self.host.done)
         return self.host.results
+
+
+def timing_probes(sysm: MarkovSystem) -> dict:
+    """Timing probes (plans: markov-timing): one-bit handshakes the system top exposes as outputs when
+    built with probes (``markov_build.build_dag(probes=True)``, or ``--probes``), and the testbench
+    samples every cycle.  Off for the gate.  Each names the pysim object it watches -- a kernel's port,
+    or a bus master and an AXI channel -- and the system top resolves the net."""
+    from waveflow.build.system_top import beat, last
+
+    gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
+    return {
+        "cmd": beat(gen.s_cmd),                          # host's command reaches the generator
+        "ufwd": beat(gen.m_u.fwd_ep),                    # generator -> its queue writer, a word
+        "ufwd_last": last(gen.m_u.fwd_ep),               # ... the last word of a chunk
+        "wr1_aw": beat(link.fwd_writer.m_mem, "AW"),     # queue writer: a burst issued
+        "wr1_b": beat(link.fwd_writer.m_mem, "B"),       # ... and acknowledged
+        "u": beat(chain.s_u.fwd_ep),                     # chain takes a word from its queue in
+        "crd": beat(chain.s_u.crd_ep),                   # chain offers credit
+        "wr2_aw": beat(link.crd_writer.m_mem, "AW"),     # credit writer: a credit write
+        "ucrd": beat(gen.m_u.crd_ep),                    # generator takes a credit value
+        "wr3_aw": beat(chain.m_mem, "AW"),               # chain's memory writer: a burst
+        "wr3_b": beat(chain.m_mem, "B"),
+        "resp": beat(chain.m_resp),                      # a response word into qresp
+    }
 
 
 def demo(link: str = "mm", njobs: int = 4, n: int = 300) -> dict:

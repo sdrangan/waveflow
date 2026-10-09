@@ -13,6 +13,7 @@ import re
 import pytest
 
 from waveflow.build.hwcodegen import LoweringError
+from waveflow.build.system_dag import rtl_rel
 from waveflow.build.system_top import (
     default_id_width,
     kernel_pins,
@@ -23,13 +24,13 @@ from waveflow.build.system_top import (
 
 def _fir(topology: str):
     from examples.mm_fir.mm_fir import MmFirSystem
-    from examples.mm_fir.mm_fir_xsi import PLAN
+    from examples.mm_fir.mm_fir_build import PLAN
     sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
     return sysm, system_top_spec(sysm.xbar, [sysm.fir], top="mm_fir_top")
 
 
 def _markov():
-    from examples.markov.markov_xsi import system
+    from examples.markov.markov_build import system
     sysm = system()
     return sysm, system_top_spec(sysm.xbar, [sysm.gen, sysm.chain, sysm.mem], top="markov_top")
 
@@ -115,12 +116,13 @@ def _csynth_ports(rtl_dir, top):
 @pytest.mark.parametrize("system", ["markov", "mm_fir"])
 def test_derived_pins_are_the_csynth_modules_ports(system):
     if system == "markov":
-        from examples.markov.markov_xsi import rtl_dir
+        from examples.markov.markov_build import HERE
         _sysm, spec = _markov()
+        rtl_dir = lambda t: HERE / rtl_rel(t)          # noqa: E731
     else:
-        from examples.mm_fir.mm_fir_xsi import RTL
+        from examples.mm_fir.mm_fir_build import HERE
         _sysm, spec = _fir("per_view")
-        rtl_dir = lambda _t: RTL                       # noqa: E731
+        rtl_dir = lambda t: HERE / rtl_rel(t)          # noqa: E731
     checked = 0
     for k in spec.kernels:
         want = _csynth_ports(rtl_dir(k.module), k.module)
@@ -137,7 +139,7 @@ def test_derived_pins_are_the_csynth_modules_ports(system):
 # ---------------------------------------------------------------------------------------------
 
 def test_probes_resolve_from_pysim_objects():
-    from examples.markov.markov_xsi import timing_probes
+    from examples.markov.markov import timing_probes
     from waveflow.build.system_top import beat, last, stall
 
     sysm, spec = _markov()

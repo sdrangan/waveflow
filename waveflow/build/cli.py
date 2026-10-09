@@ -20,10 +20,10 @@ from waveflow.build.build import BuildConfig, BuildDag
 
 
 def run_dag_cli(
-    dag_factory: Callable[[], BuildDag],
+    dag_factory: Callable[[], BuildDag] | Callable[[argparse.Namespace], BuildDag],
     *,
     description: str,
-    default_through: str,
+    default_through: str | None,
     root_dir: Path,
     extra_args: Iterable[tuple[tuple, dict]] = (),
     params_from_args: Callable[[argparse.Namespace], dict] | None = None,
@@ -34,11 +34,14 @@ def run_dag_cli(
     Parameters
     ----------
     dag_factory:
-        Zero-arg callable returning the assembled :class:`BuildDag`.
+        Callable returning the assembled :class:`BuildDag`: zero-arg, or taking the parsed
+        ``argparse`` namespace when the DAG's *shape* depends on an ``extra_args`` knob (e.g. a
+        ``--probes`` flag that adds timing probes to a system top).
     description:
         ``argparse`` description (the example's one-liner).
     default_through:
-        Default ``--through`` target when none is given.
+        Default ``--through`` target when none is given; ``None`` runs the whole DAG (a DAG with
+        more than one sink, e.g. two systems' ``compare`` steps).
     root_dir:
         Build root for the :class:`BuildConfig`.
     extra_args:
@@ -73,7 +76,8 @@ def run_dag_cli(
                         help="Force a specific step to rebuild (repeatable).")
     args = parser.parse_args()
 
-    dag = dag_factory()
+    import inspect
+    dag = dag_factory(args) if inspect.signature(dag_factory).parameters else dag_factory()
 
     if args.list_steps:
         for name in dag.step_names():
@@ -116,8 +120,14 @@ def run_dag_cli(
         for entry in dag.results_status(config):
             age = f"{(now - entry['mtime']) / 3600:.1f}h ago" if entry["mtime"] else "—"
             exists_mark = "✓" if entry["exists"] else "✗"
-            stale_note = (f"  STALE ({', '.join(entry['stale_because'])} newer)"
-                          if entry["stale"] else "")
+            if not entry["stale"]:
+                stale_note = ""
+            elif not entry["exists"]:
+                stale_note = "  STALE (missing)"
+            elif entry["stale_because"]:
+                stale_note = f"  STALE ({', '.join(entry['stale_because'])} newer)"
+            else:                                   # the step's is_fresh hook said so
+                stale_note = "  STALE (the step's own check)"
             print(f"  {entry['artifact']:<16} {entry['produced_by']:<22} "
                   f"{exists_mark}  {age:<12}{stale_note}")
         return

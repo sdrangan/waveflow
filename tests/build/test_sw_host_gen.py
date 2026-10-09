@@ -20,7 +20,7 @@ XSI_SRC = Path(__file__).resolve().parents[2] / "waveflow" / "build" / "xsi"
 
 
 def _fir(topology="per_view"):
-    from examples.mm_fir.mm_fir_xsi import system
+    from examples.mm_fir.mm_fir_build import system
     return system(topology)
 
 
@@ -46,7 +46,7 @@ def test_the_header_names_views_by_address_never_by_hand():
 
 
 def test_markov_host_layout_includes_its_memory_reads():
-    from examples.markov.markov_xsi import system
+    from examples.markov.markov_build import system
     lay = host_layout(system().host)
     assert [(a, k) for a, k, *_ in lay["endpoints"]] == [
         ("qcmd", "QueueWriter"), ("qresp", "QueueReader"), ("mem_reader", "BusRw")]
@@ -86,14 +86,14 @@ def test_the_generated_fir_testbench_compiles(label, gxx, tmp_path):
     mm_fir_host.h on the fiber runtime -- is well-formed C++ (syntax-only: xsi.h is Vivado's)."""
     import os
 
-    from examples.mm_fir import mm_fir_xsi as X
-    from waveflow.build.system_top import render_system_tb, system_tb_spec
+    from examples.mm_fir.mm_fir_build import SYSTEM_TOP, XBAR_NAMES, system
+    from waveflow.build.system_top import render_system_tb, system_tb_spec, system_top_spec
 
     inc = _vivado_xsim_include()
     if gxx is None or inc is None:
         pytest.skip("needs g++ and Vivado's data/xsim/include")
-    sysm = X.system("one_front")
-    spec = X.system_spec("one_front", sysm)
+    sysm = system("one_front")
+    spec = system_top_spec(sysm.xbar, [sysm.fir], top=SYSTEM_TOP, xbar_name=XBAR_NAMES["one_front"])
     sysm.host.scenario, sysm.host.trace_dir = "scenario", "traces"
     main, files = render_system_tb(spec, system_tb_spec(spec, sysm.xbar, [sysm.host]))
     (tmp_path / "main.cpp").write_text(main, encoding="utf-8")

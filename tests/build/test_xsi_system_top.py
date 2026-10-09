@@ -189,7 +189,7 @@ def test_the_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
     import numpy as np
 
     from examples.mm_fir.mm_fir import HOST_ENDPOINTS
-    from examples.mm_fir.mm_fir_xsi import PKT, PLAN, scenario_x
+    from examples.mm_fir.mm_fir_build import PKT, PLAN, scenario_x
 
     def run(scenario: str, traces):
         sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT)
@@ -208,11 +208,11 @@ def test_the_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
 
 
 def test_the_system_harness_binds_the_host_to_the_top():
-    from examples.mm_fir.mm_fir_xsi import system, system_spec
-    from waveflow.build.system_top import render_system_tb, system_tb_spec
+    from examples.mm_fir.mm_fir_build import SYSTEM_TOP, XBAR_NAMES, system
+    from waveflow.build.system_top import render_system_tb, system_tb_spec, system_top_spec
 
     sysm = system("one_front")
-    spec = system_spec("one_front", sysm)
+    spec = system_top_spec(sysm.xbar, [sysm.fir], top=SYSTEM_TOP, xbar_name=XBAR_NAMES["one_front"])
     tb = system_tb_spec(spec, sysm.xbar, [sysm.host])
     (m,) = tb.models
     assert m.cls == "FirHostModel" and tb.stop_on == "host"
@@ -228,7 +228,7 @@ def test_the_system_harness_binds_the_host_to_the_top():
 # ---------------------------------------------------------------------------------------------
 
 def test_markov_host_resolves_its_own_model():
-    from examples.markov.markov_xsi import system
+    from examples.markov.markov_build import system
     host = system().host
     assert check(host, XSI_BFM_MODEL) == (True, None)
     bm = host.bfm_model()
@@ -241,7 +241,7 @@ def test_markov_host_resolves_its_own_model():
 
 def test_markov_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
     from examples.markov.markov import HOST_ENDPOINTS
-    from examples.markov.markov_xsi import system
+    from examples.markov.markov_build import system
 
     def run(scenario: str, traces):
         sysm = system()

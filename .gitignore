@@ -345,6 +345,8 @@ tests/build/_xsi_work/
 # mm_fir (plans/mm_slave_adaptor.md witness): the Vitis project is build output; gen/, include/ and
 # the .tcl stay tracked (the staleness guard reads gen/ + include/).
 examples/mm_fir/mm_fir_proj/
+# the build DAG's RTL runs (plans/system_dag.md): crossbar IP, the XSI workspaces, traces, report.json.
+examples/mm_fir/xsi_work/
 
 # examples/markov: the figure step renders here; docs/examples/markov/images/ holds the committed copy.
 examples/markov/results/
@@ -352,6 +354,8 @@ examples/markov/results/
 # (with the .tcl) are build output -- deleting them is a clean build, markov_build.generate() restores them.
 examples/markov/include/
 examples/markov/gen/
+# the build DAG's RTL runs (plans/system_dag.md).
+examples/markov/xsi_work/
 # examples/vitis_fft (born under plans/source_layout.md): no hand-written C++ at all -- include/, gen/
 # (with the .tcl), xsi/ and the pysim's vectors/ are build output; vitis_fft_build.generate() restores them.
 examples/vitis_fft/include/

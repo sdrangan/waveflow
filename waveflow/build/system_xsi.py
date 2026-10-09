@@ -14,14 +14,20 @@
    compare every host endpoint's trace, file for file -- the conformance gate of
    ``plans/xsi_system_top.md``.
 
+Since ``plans/system_dag.md`` each of those is a step of a ``BuildDag``
+(:func:`waveflow.build.system_dag.add_system_steps`: ``csynth`` in check mode, ``system_rtl``,
+``scenario``, ``pysim``, ``system_xsi``, ``compare``), and :func:`run_system_xsi` is a thin wrapper that builds that
+DAG, runs it and reads the result back (:func:`load_run`).  An example's own build DAG runs the same
+steps, with ``csynth`` allowed to build.
+
 The result is an :class:`XsiRun`: the raw output, the parsed ``DONE`` numbers, the bus operations, the
 paths of the workspace, the scenario and both sets of traces, and the trace mismatches (empty: pass).
 """
 from __future__ import annotations
 
 import inspect
+import json
 import re
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,12 +84,47 @@ def _rtl_dir(root: Path, module: str) -> Path:
     return root / f"{module}_proj" / "solution1" / "syn" / "verilog"
 
 
-def _parse(out: str, run: XsiRun) -> None:
+def parse_output(out: str, run: XsiRun) -> None:
+    """Fill *run*'s ``DONE`` numbers and bus operations from the host's report *out*."""
     m = re.search(r"^DONE done=(\d+) cycles=(-?\d+) polls=(-?\d+) nops=(\d+)", out, re.M)
     if m:
         run.done, run.cycles, run.polls, run.nops = bool(int(m[1])), int(m[2]), int(m[3]), int(m[4])
     run.ops = [(k == "W", int(a, 16), int(n), int(s), int(e)) for k, a, n, s, e in
                re.findall(r"^OP ([RW]) 0x([0-9a-f]+) n=(\d+) s=(-?\d+) e=(-?\d+)", out, re.M)]
+
+
+_parse = parse_output          # the name before plans/system_dag.md
+
+
+def write_report(run: XsiRun, path) -> Path:
+    """The RTL half of *run* -- the raw output, the ``DONE`` numbers, the bus operations, the paths --
+    as JSON at *path* (``system_xsi``'s ``report.json``).  :func:`load_run` reads it back."""
+    path = Path(path)
+    path.write_text(json.dumps({
+        "output": run.output, "workspace": Path(run.workspace).as_posix(),
+        "scenario": Path(run.scenario).as_posix(), "traces": Path(run.traces).as_posix(),
+        "done": run.done, "cycles": run.cycles, "polls": run.polls, "nops": run.nops,
+        "ops": [list(op) for op in run.ops],
+    }, indent=1) + "\n", encoding="utf-8")
+    return path
+
+
+def load_run(work) -> XsiRun:
+    """The :class:`XsiRun` a system DAG left in workspace *work*: ``report.json`` (the RTL run), and
+    when the host was checked, ``pysim.json`` and ``compare.json``."""
+    work = Path(work)
+    r = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    run = XsiRun(output=r["output"], workspace=Path(r["workspace"]), scenario=Path(r["scenario"]),
+                 traces=Path(r["traces"]), done=r["done"], cycles=r["cycles"], polls=r["polls"],
+                 nops=r["nops"], ops=[tuple(op) for op in r["ops"]])
+    if (work / "pysim.json").is_file():
+        run.pysim_traces = work / "pysim_traces"
+        run.pysim_cycles = json.loads((work / "pysim.json").read_text(encoding="utf-8"))["cycles"]
+    if (work / "compare.json").is_file():
+        run.trace_mismatches = json.loads(
+            (work / "compare.json").read_text(encoding="utf-8"))["trace_mismatches"]
+    return run
+
 
 
 def compare_traces(a: Path, b: Path) -> list[str]:
@@ -109,72 +150,33 @@ def run_system_xsi(sysm, work_dir, *, top: str, xbar_name: str | None = None, in
     example directory holding the csynth projects (default: the directory of the first kernel's
     module).  *workspace* names the run's directory under *work_dir* (default *top*, ``_probes`` added
     with probes).  *probes* -- ``{name: beat(...)}`` -- adds timing probes.  ``compare_pysim=False`` skips the
-    host check (and leaves *sysm* un-run)."""
-    from waveflow.build.axi_xbar import generate_axi_xbar
-    from waveflow.build.mm_adaptor_gen import leaf_sources
-    from waveflow.build.system_top import (
-        render_system_tb,
-        render_system_top,
-        system_tb_spec,
-        system_top_spec,
-    )
-    from waveflow.build.trace_steps import rtl_staleness
-    from waveflow.build.xsi_workspace import XsiWorkspace
-    from waveflow.hw.memory import MemoryMod
-    from waveflow.toolchain.toolchain import find_vitis_include_dir
+    host check (and leaves *sysm* un-run).
 
-    xbar, host, cut = discover(sysm)
-    inside = list(inside) if inside is not None else cut
-    kernels = [m for m in inside if not isinstance(m, MemoryMod)]
+    A thin wrapper over the system DAG (:func:`waveflow.build.system_dag.add_system_steps`), run with
+    ``synth="check"`` -- it never synthesizes; a missing or stale top fails, naming it -- through
+    ``compare`` (``system_xsi`` without the host check), and read back with :func:`load_run`."""
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.system_dag import add_system_steps
+    from waveflow.hw.memory import MemoryMod
+
+    _xbar, _host, cut = discover(sysm)
     if root is None:
+        kernels = [m for m in (list(inside) if inside is not None else cut)
+                   if not isinstance(m, MemoryMod)]
         if not kernels:
             raise LoweringError(f"{type(sysm).__name__}: no kernel inside the cut")
         root = Path(inspect.getfile(type(kernels[0]))).resolve().parent
-    root = Path(root)
-    spec = system_top_spec(xbar, inside, top=top, xbar_name=xbar_name)
-
-    # 2. The RTL: present, and built from these sources.
-    for module in spec.modules:
-        d = _rtl_dir(root, module)
-        if not d.is_dir():
-            raise FileNotFoundError(f"no csynth RTL for {module} at {d}: build the example first "
-                                    f"(its *_build script)")
-        stale = rtl_staleness(root, module)
-        if stale is not None:
-            raise RuntimeError(f"{module}: the RTL on disk was not built from these sources -- {stale}")
-
-    # 3. Generate.
-    work_dir = Path(work_dir).resolve()
-    ip = generate_axi_xbar(spec.xbar, work_dir / "ip")
-    ws = XsiWorkspace(work_dir / ((workspace or top) + ("_probes" if probes else "")), top=spec.top)
-    ws.work_dir.mkdir(parents=True, exist_ok=True)
-    scenario, traces = ws.work_dir / "scenario", ws.work_dir / "traces"
-    host.scenario, host.trace_dir = scenario.as_posix(), traces.as_posix()
-    host.write_scenario(scenario)
-    shutil.rmtree(traces, ignore_errors=True)            # a stale trace would describe another run
-    tb = system_tb_spec(spec, xbar, [host], probes=list(probes or ()))
-    main, tb_files = render_system_tb(spec, tb)
-    rtl = [f for m in spec.modules for f in sorted(_rtl_dir(root, m).glob("*.v"))]
-    tb_inc = [d for d in (find_vitis_include_dir(), root / "include") if d is not None and Path(d).is_dir()]
-    ws.prepare(rtl_files=ip.sim_files + leaf_sources() + rtl + [f"{spec.top}.v"],
-               include_dirs=ip.include_dirs, tb_name=f"{spec.top}_tb", tb_cpp=main,
-               extra_files={f"{spec.top}.v": render_system_top(spec, probes), **tb_files},
-               tb_include_dirs=tb_inc)
-
-    # 4. Run.
-    out = ws.run(timeout=timeout)
-    run = XsiRun(output=out, workspace=ws.work_dir, scenario=scenario, traces=traces)
-    _parse(out, run)
-
-    # 5. The host check: the same system in pysim, from the same scenario file.
-    if compare_pysim:
-        run.pysim_traces = ws.work_dir / "pysim_traces"
-        shutil.rmtree(run.pysim_traces, ignore_errors=True)
-        host.trace_dir = run.pysim_traces.as_posix()
-        sysm.run()
-        run.pysim_cycles = sysm.sim.env.now / host.clk.period
-        run.trace_mismatches = compare_traces(traces, run.pysim_traces)
-    return run
+    dag = BuildDag()
+    xsi = add_system_steps(dag, sysm, work_dir=Path(work_dir).resolve(), top=top,
+                           xbar_name=xbar_name, inside=inside, probes=probes,
+                           workspace=workspace or top, timeout=timeout)
+    config = BuildConfig(root_dir=Path(root), params={"synth": "check"})
+    results = dag.run(config, through=xsi.a("compare") if compare_pysim else xsi.name)
+    for name, res in results.items():
+        if not res.success and name != xsi.a("compare"):     # compare's verdict is the run's data
+            raise RuntimeError(f"{name}: {res.message}")
+    return load_run(xsi.work_dir(config))
 
 
-__all__ = ["XsiRun", "compare_traces", "discover", "run_system_xsi"]
+__all__ = ["XsiRun", "compare_traces", "discover", "load_run", "parse_output", "run_system_xsi",
+           "write_report"]

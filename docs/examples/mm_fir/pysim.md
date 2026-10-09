@@ -93,7 +93,7 @@ kernel is free-running, and its idle loop would otherwise keep the simulation go
 
 ```python
 from examples.mm_fir.mm_fir import MmFirSystem, fir_golden
-from examples.mm_fir.mm_fir_xsi import PKT, PLAN, scenario_x
+from examples.mm_fir.mm_fir_build import PKT, PLAN, scenario_x
 
 x = scenario_x()                      # 200 int16 samples
 sysm = MmFirSystem(x=list(x), plan=PLAN, pkt=PKT)
@@ -142,7 +142,7 @@ it within 5%.
 **The kernel is the bottleneck, and the body's shape sets its cost.** Since the body became
 straight-line per packet ([codegen](codegen.md#why-it-is-shaped-like-this)) a packet costs the kernel
 40 cycles at RTL for 16 samples. Handshake probes on the kernel's streams
-(`mm_fir_xsi.run_xsi(topology, work_dir, probes=True)`) show where -- packet 2:
+(`python -m examples.mm_fir.mm_fir_build --probes`, the probes `timing_probes` names) show where -- packet 2:
 
 | cycle | event | |
 |---|---|---|

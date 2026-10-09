@@ -3,20 +3,45 @@ title: Code generation
 parent: A memory-mapped FIR
 nav_order: 3
 has_children: false
-summary: "What becomes the Vitis kernel, and what does not. The message structs and the free-running top are generated; the task body is hand-written and declared with kernel_task(). The memory-mapped side is not in the kernel at all — it is RTL beside it. And the lessons of the body: a first version with no pipelined loop ran at one sample per ten cycles; a single-firing state machine reached II=1 and never drained between packets; the body now is straight-line per packet with a pipelined sample loop -- the twin of run_iter -- at a measured ~15% cost on short packets."
+summary: "The codegen step: what each pysim object generates (Fig. 1). What becomes the Vitis kernel, and what does not. The message structs and the free-running top are generated; the task body is hand-written and declared with kernel_task(). The memory-mapped side is not in the kernel at all — it is RTL beside it. And the lessons of the body: a first version with no pipelined loop ran at one sample per ten cycles; a single-firing state machine reached II=1 and never drained between packets; the body now is straight-line per packet with a pipelined sample loop -- the twin of run_iter -- at a measured ~15% cost on short packets."
 ---
 
 # Code generation
 
-```
-python -m examples.mm_fir.mm_fir_build             # headers + top + tcl, then csynth
-python -m examples.mm_fir.mm_fir_build --no-synth  # generate only
+The first step of the [build flow](build.md), `codegen`, turns the one pysim object that becomes HLS --
+the kernel -- into C++ for Vitis. It is Python only and takes seconds:
+`python -m examples.mm_fir.mm_fir_build --through codegen`. Fig. 1 is the system's pysim graph, with
+what `codegen` generates for each object.
+
+```mermaid
+flowchart LR
+  host["FirHost"] --> xbar(("crossbar"))
+  xbar --> regs["regs view<br/>register bank"]
+  xbar --> qin["qin view<br/>queue in"]
+  xbar --> qout["qout view<br/>queue out"]
+  xbar --> qresp["qresp view<br/>queue out"]
+  regs -- "cfg" --> fir["MmFir<br/>gen/mm_fir.cpp, mm_fir.tcl<br/>body: include/mm_fir_task.h"]
+  qin -- "header + samples" --> fir
+  fir -- "status" --> regs
+  fir -- "results" --> qout
+  fir -- "responses" --> qresp
+  schemas["FirCfg, FirStatus, FirCmdHdr, FirRespHdr, Taps,<br/>int16 / int64 lanes<br/>include/fir_cfg.h, fir_status.h, fir_cmd_hdr.h,<br/>fir_resp_hdr.h, int16_array.h, *_array_utils.h"] -.-> fir
+  classDef here fill:#f59f00,stroke:#9c5b00,color:#1a1a1a
+  classDef off fill:#e9ecef,stroke:#adb5bd,color:#495057
+  class fir,schemas here
+  class host,xbar,regs,qin,qout,qresp off
 ```
 
-[`mm_fir_build.py`](../../../examples/mm_fir/mm_fir_build.py) produces the **Vitis kernel** — one of the
-[components of the XSI simulation](../../guide/flows/concurrent_layers.md), and the only one Vitis builds. The
-register bank and the queues are **not** in it: Vitis cannot generate an AXI slave, so they are RTL
-beside the kernel, joined in the [RTL top](rtlsim.md). What the kernel sees of them is four streams.
+*Fig. 1 -- what `codegen` generates. Orange: the kernel's top and its script, from `MmFir`'s ports, and
+the headers, from the schemas; only the task body is written by hand. Grey: nothing to generate here.
+The crossbar and the four views (the [slave adaptor](slave_adaptor.md)) become Verilog in
+[Synthesis](synth.md) -- Vitis cannot generate an AXI slave -- and the host becomes C++ in
+[XSI testbench](xsi.md).*
+
+So the **Vitis kernel** is the one component of the
+[XSI simulation](../../guide/flows/concurrent_layers.md) that Vitis builds. The register bank and the
+queues are **not** in it: they are RTL beside the kernel, joined in the [system top](synth.md). What the
+kernel sees of them is five streams.
 
 | artifact | produced how | from |
 |---|---|---|
@@ -134,9 +159,7 @@ when a measurement says the drain matters; the loop is the pattern.
 
 ## csynth
 
-The build targets `xc7z020clg484-1` at 100 MHz (the default `render_tcl` emits). The sample loop pipelines at
-II = 1 with latency 11; the kernel uses 16 DSP, 2190 LUT and 2690 FF, and closes timing at an estimated
-6.8 ns. After csynth the build writes a source stamp beside the project, so the
-[XSI gate](rtlsim.md) can refuse RTL that was not built from the sources on disk.
+The next step, [csynth](synth.md#csynth), synthesizes `gen/mm_fir.cpp` to Verilog; the resources and the
+timing it closes at are there.
 
-Next: [RTL simulation](rtlsim.md).
+Next: [Synthesis](synth.md).
