@@ -119,7 +119,8 @@ WANT_XSI_GATES = 161
 #: collects at least this many.  To update: ``pytest -m gem5 --collect-only -q``.
 #: 0 -> 9 on 2026-10-08 (plans/cpu_model.md step 9): the runner's end-to-end gates.
 #: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
-WANT_GEM5_GATES = 11
+#: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
+WANT_GEM5_GATES = 12
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}
