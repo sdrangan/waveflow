@@ -367,10 +367,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 # ---------------------------------------------------------------------------
 # area
 # ---------------------------------------------------------------------------
@@ -526,3 +522,7 @@ def evaluate_area_test(
             f"area {target:9s} test n {s['n']:2d} med {s['median']:.4f} max {s['max']:.4f} {'PASS' if ok else 'FAIL'}"
         )
     return acc
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
