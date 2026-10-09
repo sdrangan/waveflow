@@ -34,6 +34,12 @@ pytest -m vitis
 # the xsi_tb_codegen plan (commit 3052952).
 pytest -m xsi
 
+# Run only the processor-model ground-truth gates (plans/cpu_model.md): gem5 v25.1 HPI in Docker
+# (ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1) from a build at WAVEFLOW_GEM5_ROOT, McPAT at
+# WAVEFLOW_MCPAT_ROOT, the Vitis 2024.1 aarch64 gcc.  Like -m xsi, a skip fails the session.
+# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5"
+pytest -m gem5
+
 # Lint / format
 ruff check waveflow/
 black waveflow/
@@ -59,6 +65,12 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 ### Subsystems
 
 - **`waveflow/build/`** — Code generation for Vitis HLS (C++ API, stream utilities, TCL scripts).
+- **`waveflow/cpu/`** — A loosely-timed, calibrated general-purpose processor for software beside
+  the hardware: `Processor` (N cores, priority ready queue, context switches, optional preemption),
+  `SwFunction` (Python that reports work counters, priced by calibrated cycle / pJ models), `CpuReport`,
+  and `CpuPlatform` for the shipped Cortex-A53 platform `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/`
+  (gem5 v25.1 HPI + McPAT 22 nm). Calibration harness in `waveflow/cpu/calib/`; tests in `tests/cpu/`;
+  guide in `docs/guide/cpu/`; example `examples/cpu_sched/`.
 - **`waveflow/toolchain/`** — Vitis HLS / Vivado toolchain detection and integration.
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.

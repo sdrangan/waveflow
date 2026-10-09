@@ -809,3 +809,93 @@ def test_mm_fir_pages_quote_the_recorded_cycle_gates():
         for topology, cycles in expected.items():
             assert re.search(rf"\b{cycles}\b", text), (
                 f"docs/examples/mm_fir/{page} does not quote the {topology} gate ({cycles} cycles)")
+
+
+# ---------------------------------------------------------------------------
+# The processor model (plans/cpu_model.md) — docs/guide/cpu/ and docs/examples/cpu_sched/
+# ---------------------------------------------------------------------------
+
+CPU_PLATFORM = REPO / "waveflow" / "calib" / "platforms" / "a53_hpi_1200mhz_gem5v25_1" / "cpu"
+
+
+def _cpu_page(rel: str) -> str:
+    p = DOCS / rel
+    assert p.is_file(), f"{rel} is missing"  # these pages are the plan's deliverable: not a skip
+    return p.read_text(encoding="utf-8")
+
+
+def _pct(x: float) -> str:
+    return f"{100 * x:.1f} %"
+
+
+def test_cpu_accuracy_table_matches_the_one_time_test():
+    """`calibration.md`'s table, cell by cell, against the committed `accuracy.csv`."""
+    import pandas as pd
+
+    from waveflow.cpu.calib.calibrate import summarize
+
+    s = summarize(pd.read_csv(CPU_PLATFORM / "accuracy.csv"))
+    text = _cpu_page("guide/cpu/calibration.md")
+    rows = {
+        fam: cells
+        for fam, cells in re.findall(r"^\| `([\w.]+)` \|(.+)\|\s*$", text, flags=re.MULTILINE)
+    }
+    checked = 0
+    for fam in s[~s["informational"]]["family"].unique():
+        assert fam in rows, f"calibration.md has no row for {fam}"
+        cells = [c.strip().strip("*") for c in rows[fam].split("|")]
+        cyc = s[(s["family"] == fam) & (s["target"] == "cycles")].iloc[0]
+        en = s[(s["family"] == fam) & (s["target"] == "energy_pj")].iloc[0]
+        assert cells == [_pct(cyc["median"]), _pct(cyc["max"]), _pct(en["median"]), _pct(en["max"])], fam
+        checked += 1
+    assert checked == 8
+
+
+def test_cpu_area_and_leakage_figures_match():
+    import pandas as pd
+
+    from waveflow.cpu.calib.calibrate import summarize
+
+    s = summarize(pd.read_csv(CPU_PLATFORM / "area" / "accuracy.csv")).set_index("target")
+    want = (
+        f"area\nmedian {_pct(s.loc['area_mm2', 'median'])}, max {_pct(s.loc['area_mm2', 'max'])}; "
+        f"leakage median {_pct(s.loc['leak_mw', 'median'])}, max {_pct(s.loc['leak_mw', 'max'])}"
+    )
+    assert " ".join(want.split()) in " ".join(_cpu_page("guide/cpu/calibration.md").split())
+
+
+def test_cpu_replay_figures_match_the_recorded_replay():
+    import json
+
+    rec = json.loads((REPO / "examples" / "cpu_sched" / "replay_result.json").read_text())
+    measured = f"{rec['total_mode']['measured_total_cycles']:,.0f}"
+    predicted = f"{rec['model_total_cycles']:,.0f}"
+    err = f"{100 * rec['total_mode']['total_rel_err']:.1f} %"
+    for page in ("guide/cpu/calibration.md", "examples/cpu_sched/index.md"):
+        text = " ".join(_cpu_page(page).split())
+        assert measured in text and predicted in text and err in text, page
+    hot = rec["per_op"]["in_context_marker_cycles_median"]
+    assert "8 when it is hot" in _cpu_page("guide/cpu/calibration.md") and hot == 8.0
+
+
+def test_cpu_cross_configuration_figures_match():
+    import pandas as pd
+
+    df = pd.read_csv(CPU_PLATFORM / "cross_config.csv")
+    g = df[df["family"] == "gather_hist"]
+    slow = f"{(g['measured'] / g['measured_at_reference']).median():.2f}x slower"
+    within = f"within {100 * g['rel_err'].max():.1f} % (median {100 * g['rel_err'].median():.1f} %)"
+    text = " ".join(_cpu_page("guide/cpu/dse.md").split())
+    assert slow in text and within in text
+
+
+def test_cpu_example_report_matches_a_fresh_run():
+    from examples.cpu_sched.cpu_sched import run
+
+    res = run(200, 2)
+    rep = res.report
+    text = _cpu_page("examples/cpu_sched/index.md")
+    assert f"200 jobs in {res.sim_s * 1e6:.1f} us simulated; all correct: True" in text
+    assert f"CPU utilization [{rep.utilization[0]:.3f}]; energy {rep.total_pj / 1e6:.3f} uJ" in text
+    levels = rep.functions["sched_ops.add"].levels
+    assert f"exactly the {levels['EXTRAPOLATED']} arrivals" in " ".join(text.split())
