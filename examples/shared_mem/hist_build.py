@@ -549,16 +549,12 @@ class HistCase:
         """Compare the C-sim outputs against the golden; returns (passed, detail)."""
         data_dir = Path(data_dir)
         resp = HistResp().read_uint32_file(str(data_dir / "resp_data.bin"))
-        if int(resp.status) != int(self.expected_status):
-            return False, (f"status {int(resp.status)} != expected "
-                           f"{int(self.expected_status)}")
+        if resp.status != self.expected_status:
+            return False, f"status {resp.status} != expected {self.expected_status}"
         if self.expected_status != HistError.NO_ERROR:
-            return True, f"status={int(resp.status)} (expected error)"
-        counts = np.asarray(
-            read_uint32_file(str(data_dir / "counts_array.bin"),
-                             elem_type=Uint32Field, shape=self.nbins),
-            dtype=np.uint32,
-        )
+            return True, f"status={resp.status} (expected error)"
+        counts = read_uint32_file(str(data_dir / "counts_array.bin"),
+                                  elem_type=Uint32Field, shape=self.nbins).val
         gold = golden_counts(data, edges, self.nbins)
         if not np.array_equal(counts, gold):
             return False, f"counts {counts.tolist()} != golden {gold.tolist()}"
