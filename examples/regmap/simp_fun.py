@@ -113,6 +113,7 @@ class SimpFun(HostActivated):
 
     @synthesizable
     def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
+        # int: the golden is plain-Python a*x + b, which overflows int32
         return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 
 
@@ -249,7 +250,7 @@ def simulate_case(
         raise RuntimeError("Simulation completed without producing y/ap_done.")
     return SimpFunSimResult(
         case=case,
-        y=int(host.y),
+        y=int(host.y),                     # int: to_dict() goes to json.dumps
         ap_done=int(host.ap_done),
         passed=bool(host.passed),
     )
