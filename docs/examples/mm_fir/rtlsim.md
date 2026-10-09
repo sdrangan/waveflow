@@ -25,6 +25,7 @@ example's. The rest is framework: `add_system_steps` is called once per topology
 `per_view_` or `one_front_`. The two share one `codegen` and one
 [csynth](../../guide/build/xsi_system.md#csynth), since the kernel's RTL does not depend on the bus,
 and csynth re-runs only when the kernel's sources change. Each topology has its own
+[system_rtl](../../guide/build/xsi_system.md#system-rtl) (its own crossbar, its own top),
 [scenario](../../guide/build/xsi_system.md#scenario), [pysim](../../guide/build/xsi_system.md#pysim),
 [system_xsi](../../guide/build/xsi_system.md#system-xsi) and
 [compare](../../guide/build/xsi_system.md#compare), running in `xsi_work/mm_fir_<topology>/`;

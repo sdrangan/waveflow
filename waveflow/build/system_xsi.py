@@ -15,8 +15,8 @@
    ``plans/xsi_system_top.md``.
 
 Since ``plans/system_dag.md`` each of those is a step of a ``BuildDag``
-(:func:`waveflow.build.system_dag.add_system_steps`: ``csynth`` in check mode, ``scenario``,
-``pysim``, ``system_xsi``, ``compare``), and :func:`run_system_xsi` is a thin wrapper that builds that
+(:func:`waveflow.build.system_dag.add_system_steps`: ``csynth`` in check mode, ``system_rtl``,
+``scenario``, ``pysim``, ``system_xsi``, ``compare``), and :func:`run_system_xsi` is a thin wrapper that builds that
 DAG, runs it and reads the result back (:func:`load_run`).  An example's own build DAG runs the same
 steps, with ``csynth`` allowed to build.
 

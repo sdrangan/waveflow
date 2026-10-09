@@ -59,10 +59,14 @@ In going through this example, you will learn how to:
   views, the routing, the numbers that size it, and what the RTL taught.
 - [Python simulation](pysim.md) — both wirings, the results, what the gates check, the chain's output,
   and how close the timing is.
-- [Code generation](codegen.md) — the four synthesized tops, the two hand-written bodies as loops, and
-  the timing they close at.
-- [XSI testbench](xsi.md) — the build DAG (`markov_build.py`), section by section: which steps are the
-  example's, the generated top, the host's C++ twin, running it, reading the traces back, and the gates.
+- [Build flow](build.md) — the build DAG (`markov_build.py`): which steps are the example's (codegen and
+  the scenario), which are the framework's, the CLI, and what a second run skips.
+- [Code generation](codegen.md) — what each pysim object generates (Fig. 1), the four tops, the two
+  hand-written bodies as loops, and the timing they close at.
+- [Synthesis](synth.md) — csynth of the four tops, the crossbar IP, and the Verilog top walked from the
+  graph (Fig. 2).
+- [XSI testbench](xsi.md) — the RTL under a testbench (Fig. 3): the host's C++ twin, the generated
+  harness, the run against pysim, reading the traces back, and the gates.
 - [RTL simulation](rtlsim.md) — the four-master system under XSI, the gates, and finding the time with
   probes.
 

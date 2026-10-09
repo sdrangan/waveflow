@@ -450,6 +450,40 @@ Fast suite: exit 0 (4044 passed, 4 skipped).
 Gate: docs tests green; the fast suite run for Stage 5 already had every docs edit in the tree, with
 no code change since (exit 0, 4044 passed, 4 skipped).
 
+### After Stage 6 -- `system_rtl`, and the markov pages split by step (2026-10-09, the user's request)
+
+Reviewing the docs, the user asked for the markov pages to follow the flow with one figure each:
+codegen (what each pysim object generates), synthesis (what each becomes in RTL), the XSI testbench.
+On those pages, "synthesis" spanned two DAG steps: csynth, and the first half of `system_xsi` (the
+crossbar IP and the system top). So the DAG was changed to match, with the user's agreement:
+
+* **`system_rtl`**, a new outer step between csynth and `system_xsi` (`SystemRtlStep`): an inner DAG of
+  `xbar_ip` and `system_top`, writing `<work>/<top>.v` and `<work>/rtl.json` (every Verilog file the
+  top compiles, and the IP's include directories).  It consumes the csynth'd tops' RTL;
+  `system_xsi` (`SystemXsiStep`, now harness + run) consumes `rtl.json` and the scenario.  csynth and
+  `system_rtl` are everything that makes Verilog, and `--through system_rtl` builds all of a system's
+  RTL without simulating it.  `system_xsi` passes `XsiWorkspace.prepare` the same file list as before;
+  the top is now written by `system_rtl` and no longer passed through `extra_files`.
+* `add_system_steps` still returns the `system_xsi` step (`.rtl` is the `system_rtl` step), so
+  `run_system_xsi` is unchanged.
+* Docs: `docs/examples/markov/` gains `build.md` (Build flow: the DAG, the example's steps vs the
+  framework's, the CLI) and `synth.md` (Synthesis: csynth, the crossbar IP, the top walked from the graph,
+  Fig. 2). `codegen.md` gains Fig. 1, and `xsi.md` is now the testbench only (Fig. 3).  Pages run Build
+  flow (6), Code generation (6.2), Synthesis (6.4), XSI testbench (6.6), RTL simulation (7).  The figures are
+  one Mermaid graph of the pysim objects, the same layout each time, coloured by what the page
+  produces (`classDef` with explicit text colours, so they read in both themes).  The guide gains
+  `#system-rtl`; mm_fir's rtlsim and the step lists in docstrings name the new step.
+
+Gate: the markov, mm_fir and queued-host XSI gates after the split: **14 passed, 0 skipped** (1870,
+618 / 611, 618, traces identical).  `--through system_rtl` on markov: csynth UP-TO-DATE, `rtl.json` with
+57 files.  Docs tests green.  Fast suite: exit 1 on two MCP wall-clock tests,
+`test_index_builds_in_under_three_seconds` and `test_no_tool_call_stalls_inside_the_server` (the
+latter passes alone).  The index build took 10-15 s on this branch, but **8-9.5 s on `main` at the same
+time**, against under 3 s that morning, so the machine was slow, not the branch.  One real effect was
+found and fixed: the knowledge index walked `examples/markov/xsi_work/` (the CLI's run directory --
+crossbar IP Verilog, harness, traces).  `waveflow/mcp/knowledge/corpus.py` now skips `xsi_work` as it
+skips `work`.
+
 ### Open after this plan
 
 * **Narrow the source stamp** (Stage 2's finding): a body edit re-synthesizes every top.

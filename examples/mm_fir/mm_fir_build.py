@@ -22,7 +22,7 @@ side is not in this top at all -- the adaptor is RTL beside it, in the system to
   (MI1 is a stub nothing addresses: a 1x1 crossbar is degenerate -- see ``AxiXbarConfig``).
 
 Both share one ``codegen`` and one ``csynth`` (the kernel's RTL does not depend on the bus); each has
-its own ``<topology>_scenario`` / ``_pysim`` / ``_system_xsi`` / ``_compare``, running in
+its own ``<topology>_system_rtl`` / ``_scenario`` / ``_pysim`` / ``_system_xsi`` / ``_compare``, running in
 ``xsi_work/mm_fir_<topology>/``.  The gates are ``tests/examples/test_mm_fir_xsi.py``.
 """
 from __future__ import annotations

@@ -298,10 +298,12 @@ def test_add_system_steps_derives_the_tops_and_the_defaults():
     dag = BuildDag()
     xsi = add_system_steps(dag, _markov(), work_dir="xsi_work")
     assert dag.step_names()[-1] == "compare"
-    assert set(dag.step_names()) == {"include", "gen", "csynth", "scenario", "pysim", "system_xsi",
-                                     "compare"}
-    assert xsi.top == "markov_system" and xsi.spec.xbar.name == "xbar_markov_system"
-    assert xsi.work == Path("xsi_work") / "markov_system"
+    assert set(dag.step_names()) == {"include", "gen", "csynth", "system_rtl", "scenario", "pysim",
+                                     "system_xsi", "compare"}
+    assert xsi.rtl.top == "markov_system" and xsi.rtl.spec.xbar.name == "xbar_markov_system"
+    assert xsi.work == xsi.rtl.work == Path("xsi_work") / "markov_system"
+    assert dag.artifact_owners()["rtl"] == "system_rtl"
+    assert "rtl" in xsi.consumes and not any(c.startswith("rtl_") for c in xsi.consumes)
     from examples.markov.markov_build import top_names
     csynth = next(s for s in dag.steps() if s.name == "csynth")
     assert sorted(csynth.tops) == sorted(top_names())     # the cut brings the two writers
@@ -315,8 +317,8 @@ def test_two_systems_share_codegen_and_csynth():
                          workspace=f"mm_fir_{topo}")
     names = dag.step_names()
     assert [n for n in names if "csynth" in n] == ["csynth"]
-    assert {"per_view_system_xsi", "one_front_system_xsi", "per_view_compare",
-            "one_front_compare"} <= set(names)
+    assert {"per_view_system_rtl", "one_front_system_rtl", "per_view_system_xsi",
+            "one_front_system_xsi", "per_view_compare", "one_front_compare"} <= set(names)
     owners = dag.artifact_owners()
     assert owners["rtl_mm_fir"] == "csynth"
     assert owners["one_front_report"] == "one_front_system_xsi"
@@ -333,22 +335,20 @@ def test_through_pysim_on_the_system_dag_needs_no_toolchain(tmp_path):
 
 @pytest.mark.parametrize("which", sorted(SYSTEMS))
 def test_the_top_and_harness_do_not_depend_on_pysim_having_run(tmp_path, which):
-    """In the DAG, pysim may run the system object before system_xsi walks it (run_system_xsi did the
-    opposite): the generated top and harness must be the same text either way."""
-    from waveflow.build.system_dag import SystemXsiStep
+    """In the DAG, pysim may run the system object before system_rtl / system_xsi walk it
+    (run_system_xsi did the opposite): the generated top and harness must be the same text either way."""
+    from waveflow.build.system_dag import HarnessStep, SystemRtlStep, SystemTopStep, SystemXsiStep
     cfg = BuildConfig(root_dir=tmp_path)
 
     def render(sysm, run_first):
-        xsi = SystemXsiStep(sysm=sysm, work=Path("w"), top="t")
+        rtl = SystemRtlStep(sysm=sysm, work=Path("w"), top="t")
+        xsi = SystemXsiStep(sysm=sysm, work=Path("w"), rtl=rtl)
         if run_first:
             dag = _pysim_dag(sysm, Path("w"))
             dag.run(cfg)
-        top = xsi.inner_dag(tmp_path / "w" / "scenario").steps()
-        out = {}
-        for step in top:
-            if step.name in ("system_top", "harness"):
-                out.update(step.run(cfg, scenario=tmp_path / "w" / "scenario"))
-        return out
+        top_v = SystemTopStep(owner=rtl).run(cfg)["top_v"].read_text(encoding="utf-8")
+        harness = HarnessStep(owner=xsi).run(cfg, scenario=tmp_path / "w" / "scenario")["harness"]
+        return top_v, harness
 
     assert render(SYSTEMS[which](), False) == render(SYSTEMS[which](), True)
 

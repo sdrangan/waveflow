@@ -19,7 +19,8 @@ the bus writers, the crossbar -- is RTL beside the kernels, wired in the XSI gat
 every step after codegen is the framework's (:func:`~waveflow.build.system_dag.add_system_steps`):
 ``csynth`` with one inner step per top in the system's cut -- the two kernels and the two bus writers
 the routed credit link brings -- each re-run only when the sources its stamp recorded changed;
-``scenario``, ``pysim``, ``system_xsi`` (the whole system at RTL under XSI, the host on its C++ twin)
+``system_rtl`` (the crossbar IP and the Verilog top); ``scenario``, ``pysim``, ``system_xsi`` (the whole
+system at RTL under XSI, the host on its C++ twin)
 and ``compare`` (the host's traces, RTL against pysim).  The run lands in ``xsi_work/markov/``
 (``report.json``, the traces); the gates are ``tests/examples/test_markov_xsi.py``.
 
@@ -156,8 +157,8 @@ class MarkovCodegenStep(BuildStep):
 
 
 def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
-    """``codegen``, then the framework's system steps for :func:`system` (``csynth`` -> ``scenario`` /
-    ``pysim`` / ``system_xsi`` -> ``compare``), and the docs figure beside them.  *probes* builds the
+    """``codegen``, then the framework's system steps for :func:`system` (``csynth`` -> ``system_rtl``;
+    ``scenario`` / ``pysim``; ``system_xsi`` -> ``compare``), and the docs figure beside them.  *probes* builds the
     system top with :func:`~examples.markov.markov.timing_probes` (workspace ``markov_probes``)."""
     from examples.markov.markov_figures import MarkovFiguresStep, SyncDocsFiguresStep
 

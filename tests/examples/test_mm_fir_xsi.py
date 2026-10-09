@@ -2,8 +2,8 @@
 
 The system itself -- AMD's crossbar, the hand-written adaptor leaves and the csynth'd ``mm_fir``
 kernel under one generated top, and the C++ host program -- is run by the example's build DAG
-(``examples/mm_fir/mm_fir_build.py``: codegen, then the framework's csynth and, per topology, scenario
-/ pysim / system_xsi / compare); this file runs that DAG and checks what it left.  The host is the
+(``examples/mm_fir/mm_fir_build.py``: codegen, then the framework's csynth and, per topology, system_rtl
+/ scenario / pysim / system_xsi / compare); this file runs that DAG and checks what it left.  The host is the
 pysim ``FirHost`` on the C++ endpoints of ``xsi_mm_host.h`` (plans/mm_adaptor_host_endpoints.md Stage
 2): a writer that commits each config and sends each packet behind a FirCmdHdr whose cfg_id names the
 config it needs (plans/mm_fir_cfg_seq.md); and a reader that takes one output packet per input packet

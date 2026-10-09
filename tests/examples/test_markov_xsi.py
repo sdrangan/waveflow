@@ -3,7 +3,7 @@
 Four bus masters on AMD's crossbar -- the host, the generator's queue writer, the chain's credit writer
 and the chain's memory writer -- two csynth'd kernels joined by a routed credit stream, and a BRAM as
 the shared memory, all run by the example's build DAG (``examples/markov/markov_build.py``: codegen,
-then the framework's csynth / scenario / pysim / system_xsi / compare).  The host is the pysim
+then the framework's csynth / system_rtl / scenario / pysim / system_xsi / compare).  The host is the pysim
 ``MarkovHost`` on the C++ endpoints: commands on ``qcmd`` (room interrupt), responses on ``qresp``
 (data interrupt), then a read of each job's ``x``.
 

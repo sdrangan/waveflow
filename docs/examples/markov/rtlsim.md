@@ -49,8 +49,9 @@ from the graph:
 
 The **host** is `MarkovHost`'s C++ twin, `MarkovHostModel` in
 [`markov_host.h`](../../../examples/markov/markov_host.h), run from the same scenario file as the pysim
-host and checked against it trace by trace. How the DAG builds all of this -- which steps are the
-example's, the top, the host, the harness, the run -- is [XSI testbench](xsi.md).
+host and checked against it trace by trace. How the DAG builds all of this is three pages:
+[Build flow](build.md) (which steps are the example's), [Synthesis](synth.md) (the tops, the crossbar,
+the Verilog top) and [XSI testbench](xsi.md) (the host, the harness, the run).
 
 ## Running it
 

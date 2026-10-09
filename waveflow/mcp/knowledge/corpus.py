@@ -391,6 +391,9 @@ _SKIP_IN_SOURCE = _SKIP_ALWAYS | {
     # Per-configuration build trees (examples/vitis_fft/work/L<n>/: one full include/gen/xsi copy
     # each, hundreds of MB once traced).  Indexing them took the index build from ~2 s to ~5 s.
     "work",
+    # A system build DAG's RTL runs (plans/system_dag.md: examples/<ex>/xsi_work/): the crossbar IP's
+    # generated Verilog, XSI workspaces, traces.  Indexing one took the index build from ~2 s to ~11 s.
+    "xsi_work",
 }
 
 #: Vitis/Vivado project trees, sweep output and the like.  Matched as suffixes
