@@ -103,10 +103,9 @@ class FirRespHdr(DataList):
 class FirCfg(DataList):
     """One configuration: ``ntaps`` taps from ``coeffs``.
 
-    ``coeffs`` comes FIRST on purpose.  At 64 bits Python packs a DataList densely, while the
-    generated C++ starts an array on a fresh word (``plans/stream_array_alignment.md``, not fixed
-    yet).  Sixteen int16 taps are exactly four 64-bit words, so with the array first both layouts
-    agree; with ``ntaps`` first the C++ read the taps 32 bits late.
+    An array starts on a fresh word and the field after it does too (the word layout rule,
+    ``docs/guide/schema/hls/serialization.md``), so at 64 bits this is four words of taps, then
+    ``ntaps`` and ``cfg_id`` in a fifth.
     """
 
     elements = {

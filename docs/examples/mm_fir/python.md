@@ -68,11 +68,13 @@ class FirStatus(DataList):
 | `FirCfg` | `s_cfg`, from the register bank | 5 — the bank's `NCFG` |
 | `FirStatus` | `m_status`, to the register bank | 1 — the bank's `NSTAT` |
 
-**Why `coeffs` comes first in `FirCfg`.** At 64 bits, Python packs a `DataList` densely, while the
-generated C++ starts an array on a fresh word — a known disagreement
-(`plans/stream_array_alignment.md`, not fixed yet). With `ntaps` first, the RTL read the taps 32 bits
-late; the RTL gate caught it on its first run. Sixteen int16 taps are exactly four 64-bit words, so
-with the array first both layouts agree.
+**Where `coeffs` sits in `FirCfg`.** An array starts on a fresh word, and the field after it does
+too: the [word layout rule](../../guide/schema/hls/serialization.md#the-word-layout-rule), which
+Python and the generated C++ share. At 64 bits, the sixteen int16 taps fill four words, and `ntaps`
+and `cfg_id` share a fifth. `coeffs` comes first because of a disagreement this layout once had:
+Python packed the taps straight after `ntaps`, the C++ started them on a fresh word, and the RTL gate
+caught the taps arriving 32 bits late. Both sides now follow the rule, so the field order no longer
+matters for agreement.
 
 ## The golden
 
