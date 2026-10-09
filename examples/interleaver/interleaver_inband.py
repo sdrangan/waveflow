@@ -140,16 +140,16 @@ class CmdRxInband(FreeRunMod):
         w = int(self.mem_dwidth)
         cmd = yield from self.s_cmd.get_schema(InterleaverCmd)
         t0 = self.now
-        n = int(cmd.n)
+        n = cmd.n
         nw = _nw_of(n, self.lw)                     # runtime word count
-        desc = IlDesc(n=n, y_off=int(cmd.y_off))
+        desc = IlDesc(n=n, y_off=cmd.y_off)
         # TWO reads to the transactional MemRStream (arbiter model): P (relaying the descriptor as a
         # header, fwd=1) then X (relay nothing, fwd=0).  P first so il_load fills p_blk before x_blk
         # (il_compute read-locks p_blk first).  The fwd=0 second read needs the reader's `nfwd>0` relay
         # guard — without it the RTL reader mis-relays a phantom word and deadlocks (the pysim for-loop
         # relay was always correct, which is why this pysim passed while the RTL wedged).
-        memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=1)
-        memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=0)
+        memr_p = MemRCmd(addr=cmd.p_off, len=nw, fwd_bursts=1)
+        memr_x = MemRCmd(addr=cmd.x_off, len=nw, fwd_bursts=0)
         yield from self.cmd_out.write(np.asarray(memr_p.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(memr_x.serialize(word_bw=w), dtype=np.uint64))
@@ -191,7 +191,7 @@ class IlLoadInband(FreeRunMod):
         w = int(self.mem_dwidth)
         desc = yield from self.s_in.get_schema(IlDesc)          # descriptor (header)
         t0 = self.now
-        n = int(desc.n)
+        n = desc.n
         nw = _nw_of(n, self.lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         # Two bursts on rdata (the reader's two firings): P then X, nw words each.  DESERIALIZE each burst
@@ -258,7 +258,7 @@ class IlComputeInband(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get_schema(IlDesc)
-        n = int(desc.n)
+        n = desc.n
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
@@ -309,13 +309,13 @@ class IlStoreInband(FreeRunMod):
         w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get_schema(IlDesc)
         t0 = self.now
-        n = int(desc.n)
+        n = desc.n
         nw = _nw_of(n, self.lw)
         yblock = yield from self.y_blk.acquire_read()
         # Frame the writer's stream: descriptor (addr=y_off, nw words), echo the IlDesc (emitted on
         # s_done after the store), then the Y data — SERIALIZED from the n gathered elements to nw words
         # (write_framed_stream_lane's job).
-        memw = MemWCmd(addr=int(desc.y_off), len=nw, fwd_bursts=1)
+        memw = MemWCmd(addr=desc.y_off, len=nw, fwd_bursts=1)
         yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(_elems_to_words(yblock[:n], w), dtype=np.uint64))
