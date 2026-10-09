@@ -139,16 +139,21 @@ class CpuPlatform:
     def cpu_config(self, n_cores: int = 1, **kw: Any) -> CpuConfig:
         """A configuration at the platform's clock, with its switch cost and static power.
 
-        Static power is the leakage model's whole-configuration figure divided by *n_cores* (the
-        report charges ``n_cores x static_power_mw``); without an area model it is 0.
+        Any keyword in *kw* is a :class:`CpuConfig` field and overrides the platform's default for
+        it (``name``, ``f_clk_hz`` and ``switch_cycles`` included).  Static power is the leakage
+        model's whole-configuration figure divided by *n_cores* (the report charges
+        ``n_cores x static_power_mw``), unless *kw* gives ``static_power_mw``; without an area
+        model it is 0.
         """
-        cfg = CpuConfig(
-            name=self.name,
-            n_cores=n_cores,
-            f_clk_hz=self.f_clk_hz,
-            switch_cycles=self.switch_cycles(),
-            **kw,
-        )
+        fields: dict[str, Any] = {
+            "name": self.name,
+            "f_clk_hz": self.f_clk_hz,
+            "switch_cycles": self.switch_cycles(),
+        }
+        fields.update(kw)
+        cfg = CpuConfig(n_cores=n_cores, **fields)
+        if "static_power_mw" in kw:
+            return cfg
         try:
             leak = self.area_model().estimate(cfg)["leak_mw"].value
         except FileNotFoundError:

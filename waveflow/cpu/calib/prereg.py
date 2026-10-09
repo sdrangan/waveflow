@@ -44,7 +44,8 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def require_committed(path: str | Path) -> str:
-    """The commit that added *path*; a :class:`PreregistrationError` unless git tracks it unmodified."""
+    """The commit holding *path*'s contents; a :class:`PreregistrationError` unless git tracks it
+    unmodified."""
     path = Path(path).resolve()
     repo = Path(_git(path.parent, "rev-parse", "--show-toplevel"))
     rel = str(path.relative_to(repo))
@@ -54,8 +55,17 @@ def require_committed(path: str | Path) -> str:
         )
     if _git(repo, "status", "--porcelain", "--", rel):
         raise PreregistrationError(f"{rel} has uncommitted changes: commit them first")
-    added = _git(repo, "log", "--diff-filter=A", "--format=%H", "--", rel).splitlines()
-    return added[-1] if added else ""
+    # The commit that holds the registered contents: the last one to touch the (unmodified) file.
+    # Not the commit that first added it -- a plan edited later would then stamp a registration
+    # that is not the one measured under.  In a shallow clone this is the graft commit; see
+    # :func:`history_available`.
+    return _git(repo, "log", "-n1", "--format=%H", "--", rel)
+
+
+def history_available(path: str | Path) -> bool:
+    """False in a shallow clone, where the commit a plan was registered at may not exist locally."""
+    repo = Path(_git(Path(path).resolve().parent, "rev-parse", "--show-toplevel"))
+    return _git(repo, "rev-parse", "--is-shallow-repository") != "true"
 
 
 @dataclass

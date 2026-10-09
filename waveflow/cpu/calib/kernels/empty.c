@@ -1,7 +1,7 @@
 /* empty.c -- an empty measured region: the cost of the markers themselves.
  *
  * WF_ROI_BEGIN immediately followed by WF_ROI_END.  The gem5 runner measures this once per core
- * configuration and subtracts it from every kernel point (94 cycles on HPI at 1.2 GHz, step 2 of
+ * configuration and subtracts it from every kernel point (94 cycles on gem5 v25.1.0.1's HPI at 1.2 GHz, step 2 of
  * plans/cpu_model.md), because for the smallest scheduler operations it is most of the reading.
  *
  * No counters.   Twin: kernels/numeric.py (empty).

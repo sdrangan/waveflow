@@ -13,9 +13,10 @@
  * compares with the trace (the Python run's counters) before comparing any cycles.
  *
  * Every measured region is followed by an EMPTY region.  The markers' own cost depends on their
- * state: a calibration program enters its single region with the m5 code cold (94 cycles on HPI at
- * 1.2 GHz, matching empty.c), but back-to-back regions run it hot and far cheaper.  So the replay
- * measures the overhead in context and the harness subtracts each region's following empty one.
+ * state: a calibration program enters its single region with the m5 code cold (94 cycles on gem5
+ * v25.1.0.1's HPI at 1.2 GHz, matching empty.c), but back-to-back regions run it hot and far
+ * cheaper.  So the replay measures the overhead in context and the harness subtracts each region's
+ * following empty one.
  *
  * mode=total instead puts ONE region around the whole replay and no per-operation markers: the
  * marker-free total (per-operation markers perturb what they measure by tens of cycles).

@@ -75,7 +75,22 @@ REPLAY = Kernel(
 )
 
 
+def replayable(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*trace* without the aging calls that found nothing to promote (``gid`` -1).
+
+    Such a call changes no list, so there is nothing to replay.  They are dropped here rather than
+    taught to ``sched_replay.c``: a branch for them in ``apply()`` costs every operation a few cycles
+    and moved the recorded 63,266-cycle total by 7 %.
+    """
+    return [t for t in trace if not (t["op"] == "reprio" and t["gid"] < 0)]
+
+
 def trace_text(trace: list[dict[str, Any]]) -> str:
+    """The C replay's input, one ``<op> <gid> <prio>`` line per operation (see ``replayable``)."""
+    if any(t["gid"] < 0 for t in trace):
+        raise ValueError(
+            "a no-op aging call cannot be replayed: pass replayable(trace)"
+        )
     return "".join(
         f"{_CODE[t['op']]} {t['gid']} {t.get('tg_prio', 0)}\n" for t in trace
     )
@@ -148,7 +163,7 @@ def replay(
     platform: CpuPlatform | None = None,
 ) -> tuple[ReplayResult, list[dict[str, Any]]]:
     """Run the replay on gem5 and compare; return the summary and the per-operation rows."""
-    trace = trace if trace is not None else load_trace()
+    trace = replayable(trace if trace is not None else load_trace())
     runner = runner or Gem5Runner()
     platform = platform or CpuPlatform.load()
     why = runner.unavailable()
@@ -257,7 +272,7 @@ def replay_total(
     themselves -- so the total is measured once more without them.  It still includes the replay
     loop's own few instructions per operation, which no model prices.
     """
-    trace = trace if trace is not None else load_trace()
+    trace = replayable(trace if trace is not None else load_trace())
     runner = runner or Gem5Runner()
     out, _, rundir = runner.run(
         REPLAY,

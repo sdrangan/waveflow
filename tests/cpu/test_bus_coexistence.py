@@ -83,7 +83,11 @@ def _run(with_bus: bool):
 
 def test_bus_time_is_charged_once_and_cpu_cycles_do_not_change():
     quiet, busy = _run(False), _run(True)
-    assert quiet["records"] == busy["records"]
+    # Names, cycles and switch cycles exactly; busy time to float precision (the two runs start the
+    # segment at different absolute times, so `now - seg_start` rounds differently).
+    assert [r[:3] for r in quiet["records"]] == [r[:3] for r in busy["records"]]
+    for q, b in zip(quiet["records"], busy["records"]):
+        assert q[3] == pytest.approx(b[3], rel=1e-12)
     bus_s = busy["t_bus1"] - busy["t_bus0"]
     assert bus_s > 0, "the bus model must charge the transfer"
     assert quiet["t_bus1"] == quiet["t_bus0"]

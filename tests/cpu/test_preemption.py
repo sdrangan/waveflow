@@ -93,3 +93,75 @@ def test_a_preempted_task_resumes_ahead_of_later_equals(make_run):
     run.submit(1, fixed("b", 2), prio=1).run()
     assert [r.name for r in run.cpu.records] == ["b", "a", "e"]
     assert (run.rec("a").t_end, run.rec("e").t_end) == (12, 14)
+
+
+# ---------------------------------------------------------------------------
+# Step 18 (code-review fixes): thread identity, affinity, interrupts under run-to-completion.
+# ---------------------------------------------------------------------------
+
+
+def _thread(run, at, *calls):
+    """One process (one software thread) making *calls* back to back, starting at *at*."""
+
+    def proc():
+        if at:
+            yield run.sim.env.timeout(at)
+        for func, prio in calls:
+            yield from run.cpu.execute(func, prio=prio)
+
+    run.sim.env.process(proc())
+
+
+def test_back_to_back_calls_of_one_thread_pay_one_switch(make_run):
+    # One thread: f (switch 2 + 5 = 0..7), then g on the same core with its context: 7..10.
+    run = make_run(switch_cycles=2)
+    _thread(run, 0, (fixed("f", 5), 0), (fixed("g", 3), 0))
+    run.run()
+    assert (run.rec("f").switch_cycles, run.rec("f").t_end) == (2, 7)
+    assert (run.rec("g").switch_cycles, run.rec("g").t_start, run.rec("g").t_end) == (
+        0,
+        7,
+        10,
+    )
+
+
+def test_a_threads_next_call_prefers_the_core_holding_its_context(make_run):
+    # Q takes core 0 and P core 1 at t=0; both idle by t=20, when P calls again.  P's context is on
+    # core 1, so it runs there and pays no switch (core 0 would have cost one).
+    run = make_run(n_cores=2, switch_cycles=2)
+    _thread(run, 0, (fixed("q", 3), 0))
+
+    def p():
+        yield from run.cpu.execute(fixed("p1", 3))
+        yield run.sim.env.timeout(20)
+        yield from run.cpu.execute(fixed("p2", 3))
+
+    run.sim.env.process(p())
+    run.run()
+    assert run.rec("q").core == 0 and run.rec("p1").core == 1
+    assert (run.rec("p2").core, run.rec("p2").switch_cycles) == (1, 0)
+
+
+def test_an_interrupt_under_run_to_completion_resumes_its_victim_first(make_run):
+    # No preemption, switch 0: a (prio 5, 10 cycles) runs from 0.  b (prio 1) arrives at 2 and waits.
+    # The isr (2 cycles) at 4 takes a's core; a has done 4, 6 left.  After the isr (4..6) a resumes on
+    # its core (6..12) -- an interrupt is not a scheduling decision -- and only then b runs (12..15).
+    run = make_run(preemptive=False, switch_cycles=0)
+    run.submit(0, fixed("a", 10), prio=5).submit(2, fixed("b", 3), prio=1)
+    run.submit(4, fixed("isr", 2), irq=True).run()
+    a, b, isr = run.rec("a"), run.rec("b"), run.rec("isr")
+    assert (isr.t_start, isr.t_end) == (4, 6)
+    assert (a.t_end, a.n_preempted) == (12, 1)
+    assert (b.t_start, b.t_end) == (12, 15)
+
+
+def test_a_zero_cycle_task_preempted_mid_switch_finishes_only_after_its_switch(
+    make_run,
+):
+    # switch 4.  z (0 cycles) switches in 0..4; an isr (3 cycles) at 1 cuts the switch (1 cycle spent,
+    # lost).  isr: switch 1..5, work 5..8.  z resumes: a full switch 8..12, nothing else: ends at 12.
+    run = make_run(preemptive=False, switch_cycles=4)
+    run.submit(0, fixed("z", 0)).submit(1, fixed("isr", 3), irq=True).run()
+    z = run.rec("z")
+    assert (z.t_end, z.switch_cycles, z.n_preempted) == (12, 5, 1)
+    assert run.rec("isr").t_end == 8

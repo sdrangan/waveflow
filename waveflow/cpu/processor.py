@@ -9,11 +9,17 @@ timestamps are modelled.
 
 WHY NOT A SIMPY RESOURCE.  ``simpy.PriorityResource`` keeps its waiters in a ``SortedQueue`` that
 re-sorts the whole queue on every request, so a burst of N submissions costs O(N² log N): measured
-in planning, 218 tasks/s with 20,000 queued.  It also has no notion of *which* core a request got,
-and the context-switch charge depends on exactly that (a core resuming the task it ran last pays
-nothing).  So the ready queue is a ``heapq`` keyed ``(prio, seq)`` — lower ``prio`` is more urgent,
-SimPy's convention, and ``seq`` keeps equal priorities first-come first-served — and each core is a
-token that remembers the last task it ran.
+in planning, 218 tasks/s with 20,000 queued (SimPy 4.1.2, Python 3.12.3).  It also has no notion of
+*which* core a request got, and the context-switch charge depends on exactly that (a core that
+already holds the calling thread's context pays nothing).  So the ready queue is a ``heapq`` keyed
+``(prio, seq)`` — lower ``prio`` is more urgent, SimPy's convention, and ``seq`` keeps equal
+priorities first-come first-served — and each core is a token that remembers whose context it holds.
+
+WHOSE CONTEXT.  A software thread is the SimPy process that submits the calls.  A core pays
+``switch_cycles`` when it starts a call of a different thread than the one whose context it holds,
+and a free core that already holds the caller's context is granted first.  An interrupt handler is a
+thread of its own.  Under run-to-completion an interrupt still takes the core at once; the call it
+interrupted resumes on that core after the handler, before anything queued.
 
 WHY THE RESULT WAITS.  The body runs at first grant, so its side effects (a write to a Python
 structure, say) happen then; but the *result* is handed back only when the charged time has elapsed.
@@ -26,6 +32,7 @@ hardware is split at each interaction — one ``execute`` per stretch of pure co
 
 from __future__ import annotations
 
+import bisect
 import heapq
 import itertools
 import math
@@ -51,6 +58,10 @@ class _Task:
     kw: dict
     rec: TaskRecord
     done: simpy.Event
+    #: The software thread the call belongs to: the SimPy process that submitted it (a fresh object
+    #: for an interrupt, or for a call made outside any process).  A core switching between owners
+    #: pays a context switch; consecutive calls of one owner on one core do not.
+    owner: object = None
     started: bool = False
     result: Any = None
     #: Compute cycles still to run (a preemption leaves the remainder here).
@@ -61,10 +72,11 @@ class _Task:
 
 @dataclass(eq=False)
 class _Core:
-    """A core token: what it is running and the last task it ran (for the switch charge)."""
+    """A core token: what it runs, whose context it holds (for the switch charge), what waits on it."""
 
     index: int
-    last_seq: int = -1
+    #: The owner whose context the core holds; ``None`` after a switch cut short (no one's).
+    last_owner: object = None
     running: _Task | None = None
     proc: simpy.Process | None = None
     #: When the running segment's compute (after its switch) begins.
@@ -74,6 +86,10 @@ class _Core:
     busy_s: float = 0.0
     #: An interrupt has been sent to this core's segment and not yet delivered.
     preempt_pending: bool = False
+    #: The interrupt handler that will take this core when the interrupt is delivered.
+    irq_pending: _Task | None = None
+    #: Run-to-completion victims of interrupts, resumed on this core after their handlers (LIFO).
+    resume: list[_Task] = field(default_factory=list)
 
 
 @dataclass(kw_only=True, eq=False)
@@ -91,7 +107,8 @@ class Processor(SimObj):
         self._ready: list[tuple[int, int, _Task]] = []
         self._seq = itertools.count()
         self._cores = [_Core(i) for i in range(self.config.n_cores)]
-        # A heap of free core indices: the lowest-numbered free core is granted first.
+        # Free core indices, kept sorted: the lowest-numbered free core is granted first, unless a
+        # free core still holds the task's owner's context (no switch to pay there).
         self._free: list[int] = list(range(self.config.n_cores))
         #: One record per finished task, in completion order.
         self.records: list[TaskRecord] = []
@@ -145,9 +162,12 @@ class Processor(SimObj):
     def _submit(
         self, func: SwFunction, args: tuple, kw: dict, prio: int, is_irq: bool
     ) -> _Task:
+        env = self.env
         seq = next(self._seq)
+        # The software thread is the calling process; an interrupt is always a context of its own.
+        owner = object() if is_irq else (env.active_process or object())
         rec = TaskRecord(
-            name=func.name, prio=prio, t_submit=self.now, is_irq=is_irq, func=func
+            name=func.name, prio=prio, t_submit=float(env.now), is_irq=is_irq, func=func
         )
         task = _Task(
             seq=seq,
@@ -156,7 +176,8 @@ class Processor(SimObj):
             args=args,
             kw=kw,
             rec=rec,
-            done=self.env.event(),
+            done=env.event(),
+            owner=owner,
         )
         heapq.heappush(self._ready, (prio, seq, task))
         self._dispatch()
@@ -190,6 +211,12 @@ class Processor(SimObj):
         if victim.running.prio <= task.prio:
             return
         victim.preempt_pending = True
+        if task.rec.is_irq:
+            # An interrupt is taken on the core it interrupts, not through the queue: it leaves the
+            # ready queue here (lazily -- its heap entry is skipped) and starts when the
+            # preemption is delivered.
+            task.queued = False
+            victim.irq_pending = task
         victim.proc.interrupt("preempt")  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
@@ -198,20 +225,39 @@ class Processor(SimObj):
 
     def _dispatch(self) -> None:
         """Hand free cores to the most urgent ready tasks."""
-        while self._free and self._ready:
-            core = self._cores[heapq.heappop(self._free)]
-            _, _, task = heapq.heappop(self._ready)
-            task.queued = False
-            core.running = task
-            core.proc = self.env.process(self._segment(core, task))
+        while self._ready:
+            _, _, task = self._ready[0]
+            if not task.queued:  # an interrupt taken directly on its victim's core
+                heapq.heappop(self._ready)
+                continue
+            if not self._free:
+                return
+            heapq.heappop(self._ready)
+            # Prefer a free core that still holds this owner's context; else the lowest-numbered.
+            free, owner = self._free, task.owner
+            index = free[0]
+            if len(free) > 1 and self._cores[index].last_owner is not owner:
+                for i in free:
+                    if self._cores[i].last_owner is owner:
+                        index = i
+                        break
+            free.remove(index)
+            self._start(self._cores[index], task)
+
+    def _start(self, core: _Core, task: _Task) -> None:
+        task.queued = False
+        core.running = task
+        core.proc = self.env.process(self._segment(core, task))
 
     def _segment(self, core: _Core, task: _Task) -> ProcessGen[None]:
         """Hold *core* for *task*'s switch and remaining compute, then finish the task."""
         cfg = self.config
         rec = task.rec
+        env = self.env
+        now = float(env.now)
         if not task.started:
             task.started = True
-            rec.t_start = self.now
+            rec.t_start = now
             task.result, counters = task.func.fn(*task.args, **task.kw)
             rec.feats = task.func.features(counters, cfg)
             cycles = eval_cycles(task.func.cycles, rec.feats)
@@ -221,23 +267,25 @@ class Processor(SimObj):
             rec.cycles = cycles
             if task.func.energy_pj is not None:
                 rec.energy_pj = eval_cost(task.func.energy_pj, rec.feats)
-        switch = (
-            0.0 if core.last_seq == task.seq else eval_cycles(cfg.switch_cycles, {})
-        )
-        core.seg_start = self.now
+        same = core.last_owner is not None and core.last_owner is task.owner
+        switch = 0.0 if same else eval_cycles(cfg.switch_cycles, {})
+        core.seg_start = now
         core.seg_switch = switch
-        core.work_start = self.now + switch * cfg.period
+        core.work_start = now + switch * cfg.period
         try:
-            yield self.env.timeout((switch + task.left) * cfg.period)
+            yield env.timeout((switch + task.left) * cfg.period)
         except simpy.Interrupt:
             self._preempted(core, task)
             return
         rec.switch_cycles += switch
         task.left = 0.0
-        self._finish(core, task)
+        self._complete(core, task)
+        self._release(core)
+        task.done.succeed(task.result)
 
     def _preempted(self, core: _Core, task: _Task) -> None:
-        """Re-queue *task* with the cycles it has left; free *core*.
+        """Take *core* from *task*: re-queue it with the cycles it has left, or (an interrupt under
+        run-to-completion scheduling) park it to resume on this core after the handler.
 
         ``executed = floor((now - work_start) * f_clk)`` whole cycles count as done (a fraction of a
         cycle is not progress; the time it took is still busy time).  A preemption that lands during
@@ -245,42 +293,61 @@ class Processor(SimObj):
         left holding no one's context, so whoever runs next pays a full switch.  A tolerance of
         ``1e-6`` cycles absorbs floating-point error, so an interrupt delivered at the very instant
         the work would have ended completes the task instead of re-queueing a zero-length remainder.
+        A task is complete only once its switch is done, so one with no work left still resumes to
+        finish its switch.
         """
         f = self.config.f_clk_hz
         rec = task.rec
         now = self.now
-        if now >= core.work_start:
+        switch_done = now >= core.work_start
+        if switch_done:
             executed = math.floor((now - core.work_start) * f + 1e-6)
             rec.switch_cycles += core.seg_switch
-            core.last_seq = task.seq
+            core.last_owner = task.owner
         else:
             executed = 0
             rec.switch_cycles += (now - core.seg_start) * f
-            core.last_seq = -1
+            core.last_owner = None
         task.left = max(0.0, task.left - executed)
-        if task.left <= 1e-6:
+        isr, core.irq_pending = core.irq_pending, None
+        core.preempt_pending = False
+        if switch_done and task.left <= 1e-6:
             task.left = 0.0
-            self._finish(core, task)
+            self._complete(core, task)
+            if isr is not None:
+                self._start(core, isr)
+            else:
+                self._release(core)
+            task.done.succeed(task.result)
             return
-        self._account(core, rec)
+        self._account(core, rec, now)
         rec.n_preempted += 1
+        if isr is not None and not self.config.preemptive:
+            # An interrupt is not a scheduling decision: the victim resumes here after the handler,
+            # ahead of anything that became ready meanwhile.
+            core.resume.append(task)
+            self._start(core, isr)
+            return
         task.queued = True
         heapq.heappush(self._ready, (task.prio, task.seq, task))
-        self._release(core)
+        if isr is not None:
+            self._start(core, isr)
+        else:
+            self._release(core)
 
-    def _finish(self, core: _Core, task: _Task) -> None:
+    def _complete(self, core: _Core, task: _Task) -> None:
+        """Record *task* as finished on *core* (the caller then frees or reuses the core)."""
         rec = task.rec
-        self._account(core, rec)
-        core.last_seq = task.seq
-        rec.t_end = self.now
+        now = float(self.env.now)
+        self._account(core, rec, now)
+        core.last_owner = task.owner
+        rec.t_end = now
         rec.core = core.index
         self.records.append(rec)
-        self._release(core)
-        task.done.succeed(task.result)
 
-    def _account(self, core: _Core, rec: TaskRecord) -> None:
-        """Charge the segment that just ended to the task and to the core."""
-        dt = self.now - core.seg_start
+    def _account(self, core: _Core, rec: TaskRecord, now: float) -> None:
+        """Charge the segment that just ended (at *now*) to the task and to the core."""
+        dt = now - core.seg_start
         rec.busy_s += dt
         core.busy_s += dt
 
@@ -288,5 +355,10 @@ class Processor(SimObj):
         core.running = None
         core.proc = None
         core.preempt_pending = False
-        heapq.heappush(self._free, core.index)
+        if (
+            core.resume
+        ):  # an interrupted run-to-completion task takes its core back first
+            self._start(core, core.resume.pop())
+            return
+        bisect.insort(self._free, core.index)
         self._dispatch()

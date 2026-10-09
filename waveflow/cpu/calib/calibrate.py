@@ -49,11 +49,12 @@ class RelLinCalibModel(LinCalibModel):
     """A :class:`LinCalibModel` fitted to minimize **relative** error.
 
     Ordinary least squares minimizes absolute error, so a corpus spanning four or five decades of
-    cycles is fitted to its largest points: on ``cdot_q15`` the first fit bought its 8.5M-cycle DRAM
-    points with a 2,083-cycle intercept, 13x off on a 148-cycle point.  The acceptance criterion is
-    relative (``plans/cpu_model.md`` section 2), so the fit weights each point by ``1 / measured**2``,
-    which makes the weighted squared error the squared relative error.  Only the fit differs: the
-    parameters, the artifact and prediction are a plain :class:`LinCalibModel`'s.
+    cycles is fitted to its largest points: on ``cdot_q15`` (measured with gem5 v25.1.0.1) the first
+    fit bought its 8.5M-cycle DRAM points with a 2,083-cycle intercept, 13x off on a 148-cycle point.
+    The acceptance criterion is relative (``plans/cpu_model.md`` section 2), so the fit weights each
+    point by ``1 / measured**2``, which makes the weighted squared error the squared relative error.
+    Only the fit differs: the parameters, the artifact and prediction are a plain
+    :class:`LinCalibModel`'s.
     """
 
     def fit(self, data=None) -> RelLinCalibModel:
@@ -151,6 +152,20 @@ def load_corpus(cpu_dir: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def measured_correctly(corpus: pd.DataFrame, log=print) -> pd.DataFrame:
+    """The rows whose gem5-run program printed exactly what its Python twin computes.
+
+    A row that disagrees is kept in the corpus as evidence, but never fitted or scored: its cycles
+    belong to counters the simulation will not reproduce.
+    """
+    if corpus.empty or "output_matches_twin" not in corpus:
+        return corpus
+    ok = corpus["output_matches_twin"].astype(bool)
+    if (~ok).any():
+        log(f"dropping {int((~ok).sum())} row(s) whose output does not match the twin")
+    return corpus[ok]
+
+
 def rel_errors(model: LinCalibModel, df: pd.DataFrame, target: str) -> np.ndarray:
     pred = np.array([model.predict_feat(r) for r in df.to_dict("records")], dtype=float)
     meas = df[target].to_numpy(dtype=float)
@@ -221,10 +236,27 @@ def _summ(errs: np.ndarray) -> dict[str, float]:
     }
 
 
+class ModelsAlreadyTested(RuntimeError):
+    """The models were scored on the test set; changing them needs a fresh registration."""
+
+
+def _refuse_after_test(accuracy: Path, what: str) -> None:
+    if accuracy.exists():
+        raise ModelsAlreadyTested(
+            f"{accuracy} exists: the {what} models were evaluated on the test set, and refitting "
+            "would leave that evaluation describing models that no longer exist. Register a fresh "
+            "test set first (plans/cpu_model.md rule 11)."
+        )
+
+
 def fit_and_validate(platform_dir: str | Path, *, log=print) -> pd.DataFrame:
-    """Fit every family on its fit rows, save the models, return (and write) the validation report."""
+    """Fit every family on its fit rows, save the models, return (and write) the validation report.
+
+    Refuses once ``accuracy.csv`` exists: the test evaluation describes the saved models.
+    """
     cpu_dir = Path(platform_dir) / "cpu"
-    corpus = load_corpus(cpu_dir)
+    _refuse_after_test(cpu_dir / "accuracy.csv", "cycle and energy")
+    corpus = measured_correctly(load_corpus(cpu_dir), log)
     rows = []
     for fam in FAMILIES:
         df = fam.select(corpus)
@@ -282,7 +314,7 @@ def evaluate_test(
     out = cpu_dir / "accuracy.csv"
     if out.exists():
         raise TestAlreadyEvaluated(f"{out} exists: the test set was already evaluated")
-    corpus = load_corpus(cpu_dir)
+    corpus = measured_correctly(load_corpus(cpu_dir), log)
     rows = []
     for fam in FAMILIES:
         test = fam.select(corpus)
@@ -450,6 +482,7 @@ def area_campaign(
 def fit_area(platform_dir: str | Path, *, log=print) -> pd.DataFrame:
     """Fit area and leakage on the fit configurations; write ``cpu/area/validation.csv``."""
     cpu_dir = Path(platform_dir) / "cpu"
+    _refuse_after_test(cpu_dir / "area" / "accuracy.csv", "area and leakage")
     df = pd.read_csv(cpu_dir / "area" / "corpus.csv")
     fit, val = df[df["role"] == "fit"], df[df["role"] == "validation"]
     rows = []

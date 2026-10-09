@@ -115,6 +115,28 @@ def test_the_platform_prices_static_power_from_its_leakage_model():
     assert area.level.value in ("INTERPOLATED", "EXACT") and 2 < area.value < 5
 
 
+def test_cpu_config_keywords_override_the_platform_defaults():
+    """Review fix: a keyword naming a platform default overrode nothing -- it raised TypeError --
+    and an explicit ``static_power_mw`` was silently replaced by the leakage model's."""
+    from waveflow.cpu.platform import CpuPlatform
+
+    p = CpuPlatform.load()
+    cfg = p.cpu_config(
+        n_cores=2,
+        name="mine",
+        f_clk_hz=1.0e9,
+        switch_cycles=10,
+        static_power_mw=5.0,
+        l2_bytes=512 * 1024,
+    )
+    assert (cfg.name, cfg.f_clk_hz, cfg.switch_cycles) == ("mine", 1.0e9, 10)
+    assert cfg.static_power_mw == 5.0 and cfg.l2_bytes == 512 * 1024
+    default = p.cpu_config(n_cores=2, l2_bytes=512 * 1024)
+    assert default.name == p.name and default.switch_cycles == p.switch_cycles()
+    leak = p.area_model().estimate(default)["leak_mw"].value
+    assert default.static_power_mw == pytest.approx(leak / 2)
+
+
 # ---------------------------------------------------------------------------
 # Step 15 (informational): the A53 models at a second cache configuration, without refitting.
 # ---------------------------------------------------------------------------
@@ -129,3 +151,17 @@ def test_the_cross_configuration_table_is_complete_and_measured_correctly():
     g = df[df["family"] == "gather_hist"]
     assert (g["measured"] / g["measured_at_reference"]).median() > 1.3
     assert g["rel_err"].max() <= MAX_BOUND
+
+
+def test_the_tested_models_cannot_be_refitted_silently():
+    """Rule 11: once the test set scored the saved models, refitting them is refused."""
+    from waveflow.cpu.calib.calibrate import (
+        ModelsAlreadyTested,
+        fit_and_validate,
+        fit_area,
+    )
+
+    with pytest.raises(ModelsAlreadyTested):
+        fit_and_validate(CPU.parent)
+    with pytest.raises(ModelsAlreadyTested):
+        fit_area(CPU.parent)

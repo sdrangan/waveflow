@@ -56,8 +56,9 @@ class CpuConfig:
     #: constant (see ``plans/cpu_model.md`` §14) until a source or a measurement replaces it.
     irq_entry_cycles: CycleCost = 0
     #: Static (leakage) power of one powered core, in mW.  Every core is powered for the whole run,
-    #: so a report charges ``n_cores * static_power_mw * elapsed``.  Normally taken from a calibrated
-    #: :class:`~waveflow.cpu.area.CpuAreaModel` (its ``leak_mw``) for this configuration.
+    #: so a report charges ``n_cores * static_power_mw * elapsed``.  Normally a calibrated
+    #: :class:`~waveflow.cpu.area.CpuAreaModel`'s ``leak_mw`` for this configuration -- the whole
+    #: configuration's leakage -- divided by ``n_cores``, as :meth:`CpuPlatform.cpu_config` does.
     static_power_mw: float = 0.0
 
     def __post_init__(self) -> None:

@@ -30,7 +30,12 @@ def config_features(config: CpuConfig) -> dict[str, float]:
 
 @dataclass(kw_only=True)
 class CpuAreaModel:
-    """Area (mm²) and static power (mW per core) of a configuration, each a number or a model."""
+    """Area (mm²) and static power (mW) of a whole configuration, each a number or a model.
+
+    ``leak_mw`` is the leakage of every core and the shared L2 together;
+    :meth:`CpuPlatform.cpu_config <waveflow.cpu.platform.CpuPlatform.cpu_config>` divides it by
+    ``n_cores`` for :attr:`CpuConfig.static_power_mw <waveflow.cpu.config.CpuConfig.static_power_mw>`.
+    """
 
     area_mm2: CycleCost
     leak_mw: CycleCost

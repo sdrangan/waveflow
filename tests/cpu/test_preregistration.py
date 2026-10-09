@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from waveflow.cpu.calib.calibrate import FAMILIES, load_corpus
-from waveflow.cpu.calib.prereg import SweepPlan, require_committed
+from waveflow.cpu.calib.prereg import SweepPlan, history_available, require_committed
 
 ROOT = Path(__file__).resolve().parents[2]
 CPU = ROOT / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu"
@@ -32,6 +32,18 @@ def test_every_row_is_registered_with_its_role(corpus):
     assert len(corpus) == len(plan.roles) == 305
     for row in corpus.itertuples():
         assert plan.role(row.kernel, json.loads(row.point)) == row.role
+
+
+def _need_history():
+    if not history_available(CPU / "sweep_plan.csv"):
+        pytest.skip(
+            "shallow clone: the registration commit is not in the local history"
+        )
+
+
+def test_every_row_was_measured_under_the_registration_commit(corpus):
+    _need_history()
+    plan = SweepPlan.load(CPU / "sweep_plan.csv")
     assert set(corpus["prereg_commit"]) == {plan.commit}
 
 
@@ -49,6 +61,7 @@ def test_each_model_saw_only_its_fit_rows(corpus):
 
 
 def test_the_test_evaluation_descends_from_the_registration():
+    _need_history()
     acc = pd.read_csv(CPU / "accuracy.csv")
     (evaluated,) = set(acc["evaluated_at"])
     registered = require_committed(CPU / "sweep_plan.csv")

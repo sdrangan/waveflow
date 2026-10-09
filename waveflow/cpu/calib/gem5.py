@@ -10,7 +10,7 @@ What a row records, and why:
 * the **counters** the program printed, which must equal the Python twin's (``output_matches_twin``)
   — a cost model fitted on counters the simulation would not reproduce is fitted on fiction;
 * ``cycles_raw`` and ``cycles`` = ``cycles_raw - empty_region_cycles``: the markers cost 94 cycles on
-  HPI at 1.2 GHz, which is most of a small scheduler operation;
+  gem5 v25.1.0.1's HPI at 1.2 GHz, which is most of a small scheduler operation;
 * ``code_bytes``: the measured functions' symbol sizes in the very binary that ran;
 * provenance — gem5 tag and commit, compiler and its version, flags, core, cache and DRAM
   configuration, and the pre-registration commit — because a measured number belongs to its tools.
@@ -377,9 +377,13 @@ class Gem5Runner:
         caller streams ``m5out/stats.txt`` itself) and the returned dict is empty.
         """
         exe = self.build(kernel)
-        tag = hashlib.sha256(
-            json.dumps(dict(point), sort_keys=True).encode()
-        ).hexdigest()[:12]
+        # The run directory is keyed by the point AND the extra files' contents: two replays of
+        # different traces (same point, ``trace=/run/trace.txt``) must not share a directory.
+        key = json.dumps(
+            {"point": dict(point), "files": dict(sorted((extra_files or {}).items()))},
+            sort_keys=True,
+        )
+        tag = hashlib.sha256(key.encode()).hexdigest()[:12]
         rundir = self.workdir / "runs" / f"{exe.name}-{tag}"
         if rundir.exists():
             shutil.rmtree(rundir)

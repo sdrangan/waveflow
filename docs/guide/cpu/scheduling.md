@@ -5,7 +5,7 @@ nav_order: 1
 audience: python
 snippets: run
 api: [Processor.execute, Processor.interrupt, Processor.compute, Processor.report, CpuConfig, TaskRecord, CpuReport, FunctionStats]
-summary: "How a Processor runs software: N cores sharing one priority ready queue (lower number is more urgent, first-come first-served among equals), a context switch charged when a core starts a different task, optional preemption with an exact remaining-cycles rule, interrupts as the most urgent tasks, and the report: latency, queueing delay, utilization, energy, footprint and confidence per function."
+summary: "How a Processor runs software: N cores sharing one priority ready queue (lower number is more urgent, first-come first-served among equals), a context switch charged when a core changes software thread, optional preemption with an exact remaining-cycles rule, interrupts as the most urgent tasks, and the report: latency, queueing delay, utilization, energy, footprint and confidence per function."
 ---
 
 # Scheduling
@@ -20,15 +20,20 @@ has elapsed, so nothing downstream sees an answer before the processor could hav
 - **Priority.** `execute(func, *args, prio=p)`: a lower `p` is more urgent (SimPy's convention), and
   equal priorities are first-come first-served. `prio` is the call's *scheduling* priority and is
   consumed by `execute`; a function that needs its own priority argument must name it something else.
-- **Context switch.** `CpuConfig.switch_cycles` is charged whenever a core starts a task other than
-  the one it ran last — including its first task.
+- **Context switch.** A software thread is the SimPy process that makes the calls.
+  `CpuConfig.switch_cycles` is charged whenever a core starts a call of a different thread than the
+  one whose context it holds — including its first call. A thread making call after call on the same
+  core pays one switch, and a free core that already holds the caller's context is granted first.
 - **Preemption** (`CpuConfig(preemptive=True)`). A strictly more urgent arrival interrupts the least
   urgent running task. The victim keeps `floor((now - work_start) * f_clk)` whole cycles as done; a
   fraction of a cycle is busy time, not progress. Preempted during its switch, it has done nothing
-  and the part of the switch already spent is lost. It re-enters the queue at its original priority
-  and arrival order, and pays a switch when it resumes.
+  and the part of the switch already spent is lost — even a call of zero cycles is finished only
+  once its switch is. It re-enters the queue at its original priority and arrival order, and pays a
+  switch when it resumes.
 - **Interrupts.** `cpu.interrupt(handler)` runs at the most urgent priority, with
-  `CpuConfig.irq_entry_cycles` added, and preempts even when the processor does not.
+  `CpuConfig.irq_entry_cycles` added, as a thread of its own, and preempts even when the processor
+  does not. Under run-to-completion the call it interrupted resumes on the same core right after the
+  handler, ahead of anything queued.
 - **Decide inside the call.** The body runs at grant, possibly long after the call was made, so any
   choice about shared state — which job is at the head of a list — belongs in the body. A choice the
   caller made beforehand is stale by then; the [example](../../examples/cpu_sched/index.md) found two
@@ -94,7 +99,8 @@ weakest level alone can hide that it was one call in two hundred, which is what 
 
 ## Speed
 
-Each task is a handful of SimPy events. On an 8-thread i7-7700K under load, 4 cores ran about 40,000
-tasks per wall-clock second with streaming arrivals and about 37,000 with 20,000 queued at once
-(`python -m waveflow.cpu.bench`). The ready queue is a heap: SimPy's own priority resource re-sorts
-its queue on every request and managed a few hundred per second at that depth.
+Each task is a handful of SimPy events. On an otherwise idle 8-thread i7-7700K (Python 3.12.3,
+SimPy 4.1.2), 4 cores ran about 73,000 tasks per wall-clock second with streaming arrivals and about
+75,000 with 20,000 queued at once (`python -m waveflow.cpu.bench`); with the machine under load,
+about 40,000 and 37,000. The ready queue is a heap: SimPy's own priority resource re-sorts its queue
+on every request and managed a few hundred per second at that depth.

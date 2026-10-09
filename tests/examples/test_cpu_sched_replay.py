@@ -16,7 +16,13 @@ import time
 
 import pytest
 
-from examples.cpu_sched.replay import _model_wall_s, load_trace, replay_total
+from examples.cpu_sched.replay import (
+    _model_wall_s,
+    load_trace,
+    replay_total,
+    replayable,
+    trace_text,
+)
 from waveflow.cpu.calib.gem5 import Gem5Runner
 from waveflow.cpu.platform import CpuPlatform
 
@@ -53,3 +59,16 @@ def test_the_replay_matches_the_trace_and_the_model_within_the_accepted_miss(tmp
 
     # AC11: pricing the trace through a Processor is at least 1,000x faster than gem5 running it.
     assert gem5_wall / _model_wall_s(platform, trace) >= 1000
+
+
+def test_a_no_op_aging_call_is_not_replayed():
+    """Review fix: an aging call that found nothing to promote (``gid`` -1) reached the C replay as
+    ``r -1``, which parses as 0xFFFFFFFF and re-inserts a job that does not exist.  It is dropped
+    before the trace is written, and ``trace_text`` refuses one."""
+    trace = load_trace()
+    noop = {"op": "reprio", "gid": -1, "n_tasks": 3.0, "n_scanned": 0.0, "n_moved": 0.0}
+    with_noop = trace[:5] + [noop] + trace[5:]
+    assert replayable(with_noop) == trace
+    assert trace_text(replayable(with_noop)) == trace_text(trace)
+    with pytest.raises(ValueError, match="no-op"):
+        trace_text(with_noop)

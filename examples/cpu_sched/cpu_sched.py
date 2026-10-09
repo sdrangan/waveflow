@@ -76,7 +76,7 @@ class MicroScheduler(SimObj):
     cpu: Processor
     platform: CpuPlatform
     n_jobs: int = 100
-    mean_interarrival_s: float = 0.3e-6
+    mean_interarrival_s: float = 0.6e-6
     aging_period_s: float = 10e-6
     seed: int = 1
 
@@ -189,11 +189,18 @@ class MicroScheduler(SimObj):
                 t_arrive=self.now,
             )
             self.jobs[gid] = job
-            yield from self.cpu.execute(
-                self.funcs["sched_ops.add"], gid=gid, tg_prio=job.prio
-            )
-            self._arrived += 1
-            yield self._work.put(gid)
+            # Admission runs in its own process: the arrival stream must not wait for the CPU, or
+            # the CPU's load would throttle the very arrivals it is serving.
+            self.env.process(self._admit(job))
+
+    def _admit(self, job: Job) -> ProcessGen[None]:
+        """Add one arriving job to the ready list (on the CPU), then signal a dispatcher."""
+        assert self._work is not None
+        yield from self.cpu.execute(
+            self.funcs["sched_ops.add"], gid=job.gid, tg_prio=job.prio
+        )
+        self._arrived += 1
+        yield self._work.put(job.gid)
 
     def _dispatcher(self, i: int) -> ProcessGen[None]:
         _accel, rm, sink = self.accels[i]
@@ -243,10 +250,14 @@ def run(
     *,
     n_cores: int = 1,
     seed: int = 1,
-    mean_interarrival_s: float = 0.3e-6,
+    mean_interarrival_s: float = 0.6e-6,
     platform: CpuPlatform | None = None,
 ) -> RunResult:
     """Build the system, run it to completion, and return the report, jobs and trace."""
+    if n_accels < 1:
+        raise ValueError(
+            f"n_accels must be >= 1 (no accelerator would ever take a job): {n_accels}"
+        )
     platform = platform or CpuPlatform.load()
     sim = Simulation()
     cpu = Processor(name="cpu", sim=sim, config=platform.cpu_config(n_cores=n_cores))
