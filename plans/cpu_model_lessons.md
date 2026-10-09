@@ -99,3 +99,35 @@ Appended as the work teaches something. Newest last.
 - **gem5 v25.1 has no command-line parameter override, and starter_se.py no cache options.** A small
   config script that subclasses the HPI cache classes and calls starter_se's `main()` keeps every
   other behaviour identical.
+
+## M4: docs and close-out
+
+- **A throttled input looks healthy.** The example's arrival loop called `add` itself, so it drew
+  the next arrival only after the previous add had finished: the stream configured at 0.3 µs arrived
+  every 0.6 µs, and the report (utilization 0.76, plausible latencies) gave no sign of it. Every test
+  passed. Measure a generated input against its specification (here, the mean inter-arrival), and
+  give each arrival its own process so the system under test cannot pace its own load.
+- **Charge a context switch per thread, not per call.** The switch was keyed on the call's sequence
+  number, so every `execute` paid one, even back-to-back calls of one thread: 49,886 of the replay's
+  cycles were switches against 75,656 of compute. Every hand-computed timeline had one call per
+  thread, so none could see it. Name the software thread (here, the SimPy process that submits the
+  call) and add a timeline where one thread calls twice.
+- **Guard what an evaluation scored, not only its report.** The once-only test refused to rewrite
+  `accuracy.csv`, but `fit` would silently refit and overwrite the models that file scored. The
+  refusal now sits on the fit stages too.
+- **`--diff-filter=A` names the commit that added a file, not the one that holds its contents.** A
+  registration edited later would still be stamped with the first version. Stamp the last commit
+  that changed it, and let tests that need history skip in a shallow clone.
+- **Throughput belongs to a load as well as a tool version.** The same code ran the bench at 40,000
+  tasks/s at load average ~9 and 72,000 on an idle machine. Record the load next to the number.
+- **A speed ratio against a short run measures start-up.** The AC11 gate divides gem5's
+  `mode=total` wall time (~10 s, mostly fixed start-up) by the model's ~9 ms: about 1,100x against a
+  1,000x bound. An 11 % slower rewrite failed it. Gate on a ratio with real margin, or measure the
+  long run the claim is about.
+- **A pinned ground-truth number guards the measured code, not only the model.** Teaching the C
+  replay a no-op operation added one compare-and-branch to its per-operation `apply()`, and gem5's
+  total for the same trace moved from 63,266 to 67,844 cycles (+7 %) although the branch was never
+  taken: far more than one compare costs, so the code layout moved with it. Keep a measured binary's
+  hot path frozen; filter its input on the host.
+- **Independent review earns its cost at the end.** Twenty findings after every test was green; two
+  of them (the throttled arrivals and the per-call switch) changed published numbers.

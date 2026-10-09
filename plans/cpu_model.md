@@ -1,6 +1,7 @@
 # Plan: a reusable, calibrated general-purpose processor model (`waveflow/cpu/`)
 
-**Status:** Ready (approved by the user 2026-10-08) <!-- Ready only after the user approves this written plan -->
+**Status:** Done (2026-10-08). All steps complete; AC6 and AC10 not met as written and accepted by the
+user with their misses documented (§16).
 **Complexity:** L3 Complex. A new subpackage plus a calibration flow on two tools not yet installed
 (gem5, McPAT), with open design choices and accuracy that only new measurements can prove; nothing is
 irreversible. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
@@ -127,81 +128,83 @@ clone root `/home/wirelesslab914/ali/waveflow-cpu` with the clone's venv activat
 `$PLATFORM` ("the platform") is the new platform directory from step 10, e.g.
 `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1`. `$A53_CLK` is the A53 clock confirmed in step 1: 1.2GHz (speed grade -1).
 
-- [ ] **AC1**: `waveflow/cpu/` exports `Processor`, `CpuConfig`, the task and cost types, and the area
+- [x] **AC1**: `waveflow/cpu/` exports `Processor`, `CpuConfig`, the task and cost types, and the area
   and footprint estimators, and imports nothing from `examples/` or `specsense`. Verify:
   `python -c "from waveflow.cpu import Processor, CpuConfig"` and
   `pytest tests/cpu/test_no_example_imports.py`. *(Step 3.)*
-- [ ] **AC2**: Scheduling semantics are exact. At least 12 hand-computed timelines pass, asserting each
+- [x] **AC2**: Scheduling semantics are exact. At least 12 hand-computed timelines pass, asserting each
   task's start, end, **queueing delay**, core and switch charge. They cover:
   - one and several cores, priority order, FIFO tie-breaking, utilization;
   - preemptive mode: the remaining-cycles rule of step 5 with its rounding, a preemption during a
     switch, a switch charged on resume, an interrupt as a task.
 
   Verify: `pytest tests/cpu/test_scheduling.py tests/cpu/test_preemption.py`. *(Steps 4–5.)*
-- [ ] **AC3**: No double charge. A task that issues `MMIFMaster` traffic gets bus time from the bus
+- [x] **AC3**: No double charge. A task that issues `MMIFMaster` traffic gets bus time from the bus
   model only, and its CPU cycles are the same with and without that traffic. Verify:
   `pytest tests/cpu/test_bus_coexistence.py`. *(Step 7.)*
-- [ ] **AC4**: Confidence is honest.
+- [x] **AC4**: Confidence is honest.
   - A seeded function reports `UNCALIBRATED`.
   - A calibrated function reports `INTERPOLATED` inside its fitted feature range (or `EXACT` when its
     fit has zero residual) and `EXTRAPOLATED` outside.
   - The fitted energy models (pJ) don't report `EXACT`.
 
   Verify: `pytest tests/cpu/test_confidence.py`. *(Seeded part step 6; calibrated part step 11.)*
-- [ ] **AC5**: Each Python twin equals its C kernel bit for bit, in outputs **and** work counters:
+- [x] **AC5**: Each Python twin equals its C kernel bit for bit, in outputs **and** work counters:
   - against the **host-gcc** build, on every registered point (`pytest tests/cpu/test_kernel_twins.py`);
   - against the **gem5-run** binary's output, on every measured point, recorded in the corpus column
     `output_matches_twin` (`pytest tests/cpu/test_platform_accuracy.py -k twins`).
 
   *(Smoke grid in step 8; all points in step 11.)*
-- [ ] **AC6**: Cycle accuracy against gem5 on the **test** set: per kernel family, median |rel err|
+- [ ] ⚠️ **AC6** *(not met as written; the user accepted the documented miss, §14)*: Cycle accuracy
+  against gem5 on the **test** set: per kernel family, median |rel err|
   ≤ 10 % and max ≤ 25 %. For the overhead microbenchmarks (constant models), the test runs at other
   repetition counts and data placements meet the same bounds against the constant fitted on the fit
   runs. Verify: `$PLATFORM/cpu/accuracy.csv` and `pytest tests/cpu/test_platform_accuracy.py -k cycles`.
   *(Step 11.)*
-- [ ] **AC7**: Energy.
+- [x] **AC7**: Energy.
   - Dynamic energy (pJ) against McPAT on the test set meets the same bounds:
     `pytest tests/cpu/test_platform_accuracy.py -k energy`.
   - `Processor.report()`'s total energy equals dynamic + static power × elapsed time for each powered
     core, exactly, on a hand-computed case: `pytest tests/cpu/test_report.py`.
 
   *(Steps 6 and 11.)*
-- [ ] **AC8**: The area and leakage models against McPAT on the test configurations, with the same
+- [x] **AC8**: The area and leakage models against McPAT on the test configurations, with the same
   bounds. Verify: `pytest tests/cpu/test_platform_accuracy.py -k area`. *(Step 12.)*
-- [ ] **AC9**: Footprint.
+- [x] **AC9**: Footprint.
   - Each kernel's `code_bytes` in the corpus equals its `noinline` symbol's size in the static binary.
     A gem5-marked test rebuilds and compares with `aarch64-linux-gnu-nm -S`.
   - The cache-regime flag is correct on both sides of the L1D and L2 boundaries.
 
   Verify: `pytest tests/cpu/test_footprint.py` and `pytest -m gem5 tests/cpu/test_footprint_binary.py`.
   *(Steps 6 and 9.)*
-- [ ] **AC10**: Scheduler replay. On the example's recorded trace:
+- [ ] ⚠️ **AC10** *(not met as written; the user accepted the documented miss, §14)*: Scheduler
+  replay. On the example's recorded trace:
   - the model's total scheduler cycles are within 10 % of gem5's;
   - over the measured operations (each in its own measured region, step 14), median |rel err| ≤ 10 %
     and max ≤ 25 %.
 
   Verify: `pytest -m gem5 tests/examples/test_cpu_sched_replay.py`. *(Step 14.)*
-- [ ] **AC11**: Speed.
+- [x] **AC11**: Speed.
   - `python -m waveflow.cpu.bench --pattern stream --tasks 100000` and
     `python -m waveflow.cpu.bench --pattern burst --tasks 20000` each report ≥ 20,000 tasks/s.
   - The replay's wall time is ≥ 1,000× below gem5's.
 
   All three are recorded in §15 with the machine (8-core, Ubuntu 24.04.4). *(Steps 7 and 14.)*
-- [ ] **AC12**: Provenance and pre-registration.
+- [x] **AC12**: Provenance and pre-registration.
   - Every corpus row carries `source`, the gem5 tag and commit, the compiler and its version and
     flags, the core, cache and DRAM configuration, the McPAT commit and node where relevant, and
     `prereg_commit`, which equals the commit that added `sweep_plan.csv`.
   - No validation or test row is in any fit.
 
   Verify: `pytest tests/cpu/test_provenance.py tests/cpu/test_preregistration.py`. *(Steps 9–11.)*
-- [ ] **AC13**: Docs.
+- [x] **AC13**: Docs.
   - `docs/guide/cpu/` (concept, scheduling, cost models and calibration, use in a DSE) and
     `docs/examples/cpu_sched/` exist with front matter, checked by a test that lists the expected pages.
   - Any number the new docs quote is guarded by `tests/docs/test_documented_numbers.py`.
   - `CLAUDE.md` gains the `gem5` marker command and the `waveflow/cpu/` architecture line.
 
   Verify: `pytest tests/docs tests/cpu/test_docs_present.py`. *(Step 16.)*
-- [ ] **AC14**: No regression and clean code.
+- [x] **AC14**: No regression and clean code.
   - `pytest -m "not vitis and not xsi and not gem5"` has no failures beyond the step-0 baseline.
   - `pytest -m gem5` passes with **0 skipped**.
   - `ruff check waveflow/cpu examples/cpu_sched tests/cpu`.
@@ -506,7 +509,7 @@ Alternatives considered:
 | 15 | Cross-configuration report (informational): predict a second cache configuration without re-fitting, compare with gem5 | steps 11, 14 | Errors tabulated in `$PLATFORM/cpu/cross_config.csv` and summarized in the docs | The table; no threshold | commit | ☑ |
 | 16 | Docs: `docs/guide/cpu/`, `docs/examples/cpu_sched/`; update `docs/overview/status.md`, the `timing_model` and `shared_mem` cross-links, `CLAUDE.md`, and the documented-numbers guard | all prior | AC13 holds | `pytest tests/docs tests/cpu/test_docs_present.py` | commit | ☑ |
 | 17 | Regression and lint | all prior | AC14 holds against the step-0 baseline | The AC14 commands, output in §15 | commit (fixes only) | ☑ |
-| 18 | Independent code review, agreed fixes, completion report, lessons | all prior | Review findings answered; §16 written; status set | The review output; §16 | commit | ☐ |
+| 18 | Independent code review, agreed fixes, completion report, lessons | all prior | Review findings answered; §16 written; status set | The review output; §16 | commit | ☑ |
 
 Milestones (each ends with a pause for the user's review and go):
 - **M0 = steps 0–2:** environment and ground-truth tools.
@@ -850,19 +853,98 @@ function `__attribute__((noinline))`):
 | 2026-10-08 | 15 | **Correction:** commit `52abcbed` went in with `test_gem5_runner.py::test_the_core_configuration_reaches_starter_se` failing: it still expected non-HPI cache sizes to be refused, which step 15 deliberately changed. The command again did not gate the commit on pytest's exit code. Fixed: the test now checks that HPI's caches run `starter_se.py` with no cache options and other sizes run `/wfcfg/a53_se.py` with them. Commits from here are gated on `rc=$?`. `tests/cpu` + example tests: exit 0. | the exit code | a failing commit, corrected in the next one |
 | 2026-10-08 | 16 | Docs: `docs/guide/cpu/` -- `index.md` (Processor Model, nav 12.75), `scheduling.md` (rules, the preemption rule, decide-inside-the-call, the report; **`snippets: run`**: a preemption timeline executed and diffed), `calibration.md` (ground truth, kernels, pre-registration, the relative-error fit, the accuracy table, the two documented misses, recalibration commands), `dse.md` (`CpuPlatform`, other cache sizes, reading confidence, the limits, host_runtime alignment; **`snippets: run`**) -- and `docs/examples/cpu_sched/index.md` (the system, its report, the two races, the gem5 replay). Cross-links from `docs/guide/timing_model/index.md` and `docs/examples/shared_mem/pysim.md`; `docs/overview/status.md`'s general-purpose processor bullet points at the guide; `CLAUDE.md` gains the `pytest -m gem5` command (and `not gem5` in the dev loop) and the `waveflow/cpu/` architecture entry. `tests/docs/test_documented_numbers.py` recomputes every load-bearing figure on the new pages from committed data (accuracy table cell by cell, area/leakage, replay totals and 19.6 %, cross-configuration, the example's report from a fresh run); `tests/cpu/test_docs_present.py` checks the pages and their front matter. The plan's own markdown tripped `test_table_rows_have_no_eaten_spaces` (`-32768^2*2` in a table), now a code span. `pytest tests/docs tests/cpu -m 'not gem5'`: exit 0 (the 2 skips are the pre-existing RF ones, as at baseline). | the exit code | none |
 | 2026-10-08 | 17 | **AC14.** `pytest -m "not vitis and not xsi and not gem5"`: 4,122 collected; **the same 6 failures as the step-0 baseline** (rtl_module line endings, the two markov figures, vitis_fft headers, the two MCP generated-file tests) and the same 40 skips; no new failure. The first run had 3 more, all in `tests/mcp/test_knowledge_corpus.py`: it pins the docs' TOC examples (`TOC_EXAMPLES`), and the new `docs/examples/cpu_sched/` page added one; `cpu_sched` added to the set, as earlier example commits did (shared test file, flagged). **`pytest -m gem5`: 12 passed, 0 skipped (exit 0).** `-m xsi` still collects 161. `ruff check`, `black --check` (new files only) and `mypy --follow-imports=silent waveflow/cpu`: clean. `git diff --stat main -- waveflow/calib/platforms waveflow/calib/record_store.py`: only `a53_hpi_1200mhz_gem5v25_1/` (35 new files). Shared files changed vs `main`: `CLAUDE.md`, `pyproject.toml`, `tests/conftest.py`, `tests/docs/test_documented_numbers.py`, `tests/mcp/test_knowledge_corpus.py`, `docs/overview/status.md`, `docs/guide/timing_model/index.md`, `docs/examples/shared_mem/pysim.md`. | the commands' output | none |
+| 2026-10-08 | 18 | **Independent code review** (a reviewer subagent at `017a1beb`): 20 findings, each checked against the code; two confirmed by measurement: the example's arrivals came every 0.599 µs against the configured 0.3, and a context switch charged on every call made 49,886 of the replay trace's priced cycles switches, against 75,656 of compute. The user chose three of four groups to fix; the fourth (efficiency and duplication) and the area split are recorded in §16. **Model and example:** `Processor` charges a switch when a core changes *software thread* (the SimPy process that submitted the call), grants a free core that already holds the caller's context first, resumes an interrupt's victim on its own core after the handler under run-to-completion, and finishes a zero-cycle call only once its switch is done; queued entries are deleted lazily and the free cores are a sorted list. The example gives each arrival's `add` a process of its own, raises on `n_accels < 1`, and now defaults to 0.6 µs (at 0.3 µs the system cannot keep up: the list grows to 173 jobs and draining takes 298 µs); an aging call that found nothing to promote (`gid` -1) is dropped before the trace reaches the C replay, which parsed it as job 0xFFFFFFFF (a first fix taught `sched_replay.c` a no-op op instead, and the pinned gem5 gate caught it: one more branch in `apply()` moved the replay total from 63,266 to **67,844** cycles, +7 %; the C code is back to what was measured, only a comment changed); the runner's run directory hashes the extra files. **Calibration integrity:** `fit` and `area-fit` refuse once the test set has scored the saved models (`ModelsAlreadyTested`); fit and test drop rows whose output differs from the twin; `require_committed` stamps the last commit that changed the plan (for the shipped plan the same `76dd3655`, its only commit); the history-dependent registration tests skip in a shallow clone. **API and docs:** `cpu_config(**kw)` overrides any default and keeps an explicit `static_power_mw`; `leak_mw` documented as the whole configuration's; tool versions named beside the numbers in five source comments. Tests: 4 timelines in `test_preemption.py` (one thread pays one switch, affinity, interrupt resume under run-to-completion, zero-cycle call preempted mid-switch), the refit refusal, the `cpu_config` overrides. Docs: the switch and interrupt rules and the speed figures on the scheduling page; the example's new report and its third race. Example now: 200 jobs in 158.1 µs, utilization 0.749, 19.277 µJ, 30 `EXTRAPOLATED` adds (the empty-list arrivals). **Speed:** the rewrite first priced the replay trace 11 % slower (9.75 against 8.8 ms), and the AC11 gate failed at **986x** against its 1,000x bound (gem5 `mode=total` takes ~10 s); trimming property lookups and a generator from `_submit`, `_dispatch` and the accounting restored parity (9.0 ms). Bench on an idle machine (load average < 1): stream **73,008**, burst **75,080** tasks/s; the step-17 code measures 72,046 and 74,284 there, so step 7's 40,259 / 37,115 reflected the machine's load (~9), not the code (AC11 still met). **Regression** `pytest -m "not vitis and not xsi and not gem5"` (final tree): 4,130 collected, 4,076 passed, **the same 6 baseline failures**, 40 skipped, 6 xfailed, 2 xpassed. **`pytest -m gem5`: 12 passed, 0 skipped (exit 0, 67 s)**, the replay at 63,266 cycles. ruff, black (new files), mypy: clean. | the review report; the commands' output | the default inter-arrival changed (0.3 -> 0.6 µs) |
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+Written 2026-10-08 at the end of step 18, on `feat/cpu-model` in the clone
+`/home/wirelesslab914/ali/waveflow-cpu` (not merged, not pushed).
 
-- **Changed:** —
-- **Tested (commands and results):** —
-- **Acceptance criteria:** —
-- **Decisions made:** —
-- **Assumptions and not verified:** —
-- **Remaining risks and issues:** —
-- **Next steps:** —
-- **Reusable artifacts saved / tools that would have helped:** —
+- **Changed:**
+  - `waveflow/cpu/` (new): `Processor` (N cores, a heap ready queue, a context switch per change of
+    software thread with core affinity, optional preemption with the exact remaining-cycles rule,
+    interrupts), `CpuConfig`, `SwFunction`, `TaskRecord`, `CpuReport` / `FunctionStats` (latency,
+    queueing, utilization, dynamic and static energy, footprint, confidence computed at report time
+    with per-level counts), `CpuAreaModel`, `CpuPlatform` and `bench`.
+  - `waveflow/cpu/calib/` (new): six C kernels with bit-exact Python twins, the gem5 runner (Docker,
+    m5 markers, provenance, code size), pre-registration (`SweepPlan`), the registered grids, the
+    campaign, the McPAT driver, the relative-error fit and the staged CLI (`energy`, `fit`, `test`,
+    `area`, `area-fit`, `area-test`, `cross`), and a gem5 config script for other cache sizes.
+  - The platform `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/` (new): 305 measured kernel
+    points, 96 McPAT configurations, the fitted models, validation, accuracy and cross-configuration
+    tables.
+  - `examples/cpu_sched/` (new): the micro-scheduler, the gem5 replay (C and Python) and its
+    recorded result.
+  - Tests: `tests/cpu/` (18 files), `tests/examples/test_cpu_sched.py`,
+    `tests/examples/test_cpu_sched_replay.py`, three fixtures. Docs: `docs/guide/cpu/` (4 pages),
+    `docs/examples/cpu_sched/`.
+  - Shared files: `CLAUDE.md`, `pyproject.toml`, `tests/conftest.py`,
+    `tests/docs/test_documented_numbers.py`, `tests/mcp/test_knowledge_corpus.py`,
+    `docs/overview/status.md`, `docs/guide/timing_model/index.md`, `docs/examples/shared_mem/pysim.md`.
+- **Tested (commands and results):** at the final commit, from the clone with its venv:
+  - `pytest -m "not vitis and not xsi and not gem5"`: 4,130 collected, 4,076 passed, the 6 baseline
+    failures and nothing else, 40 skipped, 6 xfailed, 2 xpassed.
+  - `pytest -m gem5`: 12 passed, 0 skipped (exit 0), the replay at exactly 63,266 cycles.
+  - `pytest tests/cpu tests/examples/test_cpu_sched.py tests/docs -m "not gem5"`: exit 0.
+  - `ruff check waveflow/cpu examples/cpu_sched tests/cpu`, `black --check` on the new files and
+    `mypy --follow-imports=silent waveflow/cpu`: clean.
+  - `python -m waveflow.cpu.bench`: stream 73,008 and burst 75,080 tasks/s on an idle i7-7700K
+    (Python 3.12.3, SimPy 4.1.2); 40,259 and 37,115 at load average ~9 (step 7).
+- **Acceptance criteria:** AC1–AC5, AC7–AC9 and AC11–AC14 met (§4, evidence in §15). Two were not
+  met as written, and the user accepted each with its miss documented (§14):
+  - **AC6:** 3 of 9 cycle families miss the 25 % max bound on their smallest test points
+    (`sched_ops.add` 39.3 %, `dispatch` 38.1 %, `sched_ops.delete` 29.0 %); every median is within
+    10 %.
+  - **AC10:** the model over-predicts the back-to-back replay by 19.6 % (75,656 against 63,266
+    cycles).
+- **Decisions made** (§14 and §15): a separate clone with its own venv; `host_runtime` alignment
+  left for an adapter; the A53 at 1.2 GHz (speed grade -1); McPAT at 22 nm with a 32-bit virtual
+  address; the relative-error fit (hypothesis 1 of the deviation policy, settled on validation
+  data); the aging policy promotes the list's tail; the job priority travels as `tg_prio`; AC6 and
+  AC10 accepted; three of the four review groups fixed; the example's default inter-arrival moved
+  from 0.3 to 0.6 µs.
+- **Assumptions and not verified:**
+  - gem5's HPI stands for the A53 class. Nothing was compared with silicon: "accuracy" means
+    agreement with gem5 v25.1.0.1.
+  - Syscall emulation has no operating system: no OS scheduler or interrupt latency is in the
+    numbers.
+  - McPAT at 22 nm, not the A53's 16 nm, with no DRAM energy.
+  - Cores are independent: no shared-L2 or memory contention between them. All cycle models were
+    measured on one core.
+- **Remaining risks and issues:**
+  - The two accepted misses: small single operations can be off by up to about 40 %, and
+    back-to-back sequences are over-priced by about 20 %.
+  - Review findings left open by the user's choice (efficiency and duplication):
+    - `CpuPlatform.model()` re-reads a model's JSON on every call (about 610 loads per replay).
+    - `kernel_sig` and the provenance spawn `gcc --version` and `git rev-parse` per measured row
+      (about 1,500 subprocesses per campaign).
+    - `campaign.append_row` rewrites a kernel's whole corpus per row (O(N²)).
+    - The example re-implements pieces of `CpuPlatform.sw_function` (models, code size, the
+      `sched_ops` working set), and `replay._expected` copies the dispatch handlers.
+    - `RelLinCalibModel.fit` duplicates `LinCalibModel.fit` except for `sample_weight`.
+  - Review finding kept as a documented limitation: the area validation and test sets alternate in
+    `itertools.product` order, so the split follows L2. Validation saw only 512 and 1,024 KiB, the
+    test only 768 and 1,536 KiB. The test passed (area max 6.3 %, leakage 0.9 %), but structure
+    decisions never saw the test's L2 sizes. A re-registration should stratify.
+  - The AC11 speed gate in `tests/examples/test_cpu_sched_replay.py` has about 10 % margin: gem5's
+    `mode=total` run takes ~10 s, mostly fixed start-up, and the model prices the trace in ~9 ms
+    (~1,100x against the 1,000x bound). A model 10 % slower fails it, as the first step-18 rewrite
+    did (986x). The 72,252x recorded in `replay_result.json` is the per-operation run (657 s).
+  - Pre-existing, not touched: the 6 baseline failures on `main`, and the repo's `-2` speed-grade
+    part strings against the board's `-1` part.
+- **Next steps:**
+  - Calibrate small operations as batches of back-to-back calls: the measured cause of both misses.
+  - The `SwThread` adapter, once `plans/host_runtime.md` lands.
+  - Shared-L2 and DRAM contention between cores, before a DSE ranks multi-core configurations.
+  - The efficiency fixes above, before a larger campaign; a stratified area re-registration.
+  - The DSE plan that uses this model.
+- **Reusable artifacts saved / tools that would have helped:**
+  - Under `~/ali/tools/`: gem5 v25.1.0.1 `build/ARM/gem5.opt`, the arm64 `libm5.a`, and McPAT
+    `74d4759`, all built in `ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1`.
+  - In the repo: `Gem5Runner`, `SweepPlan`, `RelLinCalibModel`, the per-marker session gate in
+    `tests/conftest.py`, and the documented-numbers guards for the new pages.
+  - Would have helped: a gem5 command-line parameter override (v25.1 has none), and a harness that
+    measures operations in back-to-back batches.
 
 ## Checklist coverage
 
