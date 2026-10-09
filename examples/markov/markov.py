@@ -197,8 +197,8 @@ class MarkovGen(FreeRunMod):
     def run_iter(self):
         cmd = yield from self.s_cmd.get_schema(MkvCmd)
         yield from self.m_u.write(cmd)
-        n = int(cmd.n)
-        u = uniforms(int(cmd.seed), n)
+        n = cmd.n
+        u = uniforms(cmd.seed, n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             # The credit check, then one draw per proc_ii (markov_gen_task.h).
@@ -243,12 +243,12 @@ class ChainCore(FreeRunMod):
 
     def run_iter(self):
         cmd = yield from self.s_u.get_schema(MkvCmd)
-        n, x = int(cmd.n), int(cmd.x0) & 1
-        dst, ones = int(cmd.dstaddr), 0
+        n, x = cmd.n, cmd.x0 & 1
+        dst, ones = cmd.dstaddr, 0
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             u = yield from self.s_u.get_array(U16, c)
-            xs = chain_golden(np.asarray(u.val), x, int(cmd.p01), int(cmd.p10))
+            xs = chain_golden(u.val, x, cmd.p01, cmd.p10)
             x = int(xs[-1])
             ones += int(xs.sum())
             yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
@@ -258,7 +258,7 @@ class ChainCore(FreeRunMod):
             yield from self.m_x.write(MemWCmd(addr=(dst + k0) // 8, len=len(xw), fwd_bursts=0))
             yield from self.m_x.write(np.asarray(xw, dtype=np.uint64))
         yield from self.m_x.write(MemWCmd(addr=0, len=0, fwd_bursts=1))
-        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=int(cmd.tx_id)))
+        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
         self.njobs += 1
 
 
@@ -420,17 +420,15 @@ class MarkovHost(SwHost):
     def _reader(self):
         for _ in self.items:
             resp = yield from self.qresp.get_schema(MkvResp)
-            j = int(resp.tx_id)
-            n = int(resp.n)
+            j = resp.tx_id
+            n = resp.n
             if self.mem_bus_base is None:
-                x = np.asarray(self.mem.read_array(self._dst(j), U8, n))
+                x = self.mem.read_array(self._dst(j), U8, n).val
             else:
                 xaddr, xwords, _cmd = self.items[j]
                 words = yield from self.mem_reader.read(xwords, xaddr)
-                x = np.asarray(read_array(np.asarray(words, dtype=np.uint64), U8, word_bw=DW,
-                                          shape=n).val)
-            self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
-                                   t=self.env.now)
+                x = read_array(words, U8, word_bw=DW, shape=n).val
+            self.results[j] = dict(n=n, ones=resp.ones, x=x, t=self.env.now)
             self.slots.release()
         self.done.succeed()
 

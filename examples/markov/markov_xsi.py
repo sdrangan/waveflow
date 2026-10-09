@@ -103,13 +103,13 @@ def trace_report(out: str, traces) -> str:
     from the host's ``JOBT`` line."""
     traces = Path(traces)
     t = {int(m[1]): int(m[2]) for m in re.finditer(r"^JOBT (\d+) t=(\d+)", out, re.M)}
-    resp = [MkvResp().deserialize(np.asarray(b, dtype=np.uint64), word_bw=DW)
+    resp = [MkvResp().deserialize(b, word_bw=DW)
             for b in read_burst_bundle(traces / "qresp")]
     xs = read_burst_bundle(traces / "mem_reader")
     lines = []
     for r, x in zip(resp, xs):
-        tx = int(r.tx_id)
-        lines.append(f"JOB {tx} ones={int(r.ones)} t={t.get(tx, -1)} X"
+        tx = r.tx_id
+        lines.append(f"JOB {tx} ones={r.ones} t={t.get(tx, -1)} X"
                      + "".join(f" {int(w):x}" for w in np.asarray(x, dtype=np.uint64)))
     return "\n".join(lines) + "\n"
 
@@ -140,8 +140,8 @@ def job_results(out: str) -> dict[int, dict]:
         parts = head.split()
         j = int(parts[1])
         kv = dict(p.split("=") for p in parts[2:])
-        words = np.array([int(h, 16) for h in xs.split()], dtype=np.uint64)
-        x = np.asarray(read_array(words, U8, word_bw=DW, shape=jobs[j]["n"]).val, dtype=np.uint8)
+        words = [int(h, 16) for h in xs.split()]
+        x = read_array(words, U8, word_bw=DW, shape=jobs[j]["n"]).val
         res[j] = {"ones": int(kv["ones"]), "t": int(kv["t"]), "x": x}
     return res
 
