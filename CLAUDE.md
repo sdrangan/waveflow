@@ -63,7 +63,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
   the systolic matrix multiply (`SystolicCore`, `SystolicUnit`) and the CG vector
   unit (`CgVectorCore`, `CgVectorUnit`). Each is a bit-exact Python model, a pysim
   module, a Vitis HLS task body in `waveflow/build/` (`systolic_*_task.h`,
-  `cg_vector_*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
+  `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
   platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (Vitis 2024.1).
   Tests in `tests/linalg/`; guide in `docs/guide/linalg/`.
 - **`waveflow/toolchain/`** — Vitis HLS / Vivado toolchain detection and integration.
