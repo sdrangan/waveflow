@@ -281,3 +281,101 @@ def test_compare_passes_equal_traces_and_fails_on_a_difference(tmp_path, corrupt
     bad = json.loads((tmp_path / "work" / "compare.json").read_text())["trace_mismatches"]
     assert res["compare"].success is (not corrupt)
     assert (bad != []) is corrupt
+
+
+# ---------------------------------------------------------------------------------------------------
+# add_system_steps, system_xsi, the run_system_xsi wrapper (Stage 4): no Vivado
+# ---------------------------------------------------------------------------------------------------
+
+def test_snake_names_a_system_class():
+    from waveflow.build.system_dag import snake
+    assert snake("MarkovSystem") == "markov_system"
+    assert snake("MmFirSystem") == "mm_fir_system"
+
+
+def test_add_system_steps_derives_the_tops_and_the_defaults():
+    from waveflow.build.system_dag import add_system_steps
+    dag = BuildDag()
+    xsi = add_system_steps(dag, _markov(), work_dir="xsi_work")
+    assert dag.step_names()[-1] == "compare"
+    assert set(dag.step_names()) == {"include", "gen", "csynth", "scenario", "pysim", "system_xsi",
+                                     "compare"}
+    assert xsi.top == "markov_system" and xsi.spec.xbar.name == "xbar_markov_system"
+    assert xsi.work == Path("xsi_work") / "markov_system"
+    from examples.markov.markov_build import top_names
+    csynth = next(s for s in dag.steps() if s.name == "csynth")
+    assert sorted(csynth.tops) == sorted(top_names())     # the cut brings the two writers
+
+
+def test_two_systems_share_codegen_and_csynth():
+    from waveflow.build.system_dag import add_system_steps
+    dag = BuildDag()
+    for topo in ("per_view", "one_front"):
+        add_system_steps(dag, _fir(topo), work_dir="w", top="mm_fir_top", prefix=f"{topo}_",
+                         workspace=f"mm_fir_{topo}")
+    names = dag.step_names()
+    assert [n for n in names if "csynth" in n] == ["per_view_csynth"]
+    assert {"per_view_system_xsi", "one_front_system_xsi", "per_view_compare",
+            "one_front_compare"} <= set(names)
+    owners = dag.artifact_owners()
+    assert owners["rtl_mm_fir"] == "per_view_csynth"
+    assert owners["one_front_report"] == "one_front_system_xsi"
+
+
+def test_through_pysim_on_the_system_dag_needs_no_toolchain(tmp_path):
+    from waveflow.build.system_dag import add_system_steps
+    dag = BuildDag()
+    add_system_steps(dag, _markov(), work_dir="w", top="markov_top")
+    res = dag.run(BuildConfig(root_dir=tmp_path), through="pysim")
+    assert set(res) == {"scenario", "pysim"} and all(r.success for r in res.values())
+    assert (tmp_path / "w" / "markov_top" / "pysim.json").is_file()
+
+
+@pytest.mark.parametrize("which", sorted(SYSTEMS))
+def test_the_top_and_harness_do_not_depend_on_pysim_having_run(tmp_path, which):
+    """In the DAG, pysim may run the system object before system_xsi walks it (run_system_xsi did the
+    opposite): the generated top and harness must be the same text either way."""
+    from waveflow.build.system_dag import SystemXsiStep
+    cfg = BuildConfig(root_dir=tmp_path)
+
+    def render(sysm, run_first):
+        xsi = SystemXsiStep(sysm=sysm, work=Path("w"), top="t")
+        if run_first:
+            dag = _pysim_dag(sysm, Path("w"))
+            dag.run(cfg)
+        top = xsi.inner_dag(tmp_path / "w" / "scenario").steps()
+        out = {}
+        for step in top:
+            if step.name in ("system_top", "harness"):
+                out.update(step.run(cfg, scenario=tmp_path / "w" / "scenario"))
+        return out
+
+    assert render(SYSTEMS[which](), False) == render(SYSTEMS[which](), True)
+
+
+def test_report_round_trips(tmp_path):
+    from waveflow.build.system_xsi import XsiRun, load_run, parse_output, write_report
+    out = "DONE done=1 cycles=618 polls=0 nops=3\nOP W 0x40000000 n=2 s=5 e=9\nOP R 0x10 n=1 s=12 e=20\n"
+    run = XsiRun(output=out, workspace=tmp_path, scenario=tmp_path / "scenario",
+                 traces=tmp_path / "traces")
+    parse_output(out, run)
+    write_report(run, tmp_path / "report.json")
+    (tmp_path / "pysim.json").write_text('{"cycles": 635.0}')
+    (tmp_path / "compare.json").write_text('{"trace_mismatches": ["qin/words.bin"]}')
+    back = load_run(tmp_path)
+    assert (back.done, back.cycles, back.polls, back.nops) == (True, 618, 0, 3)
+    assert back.ops == [(True, 0x40000000, 2, 5, 9), (False, 0x10, 1, 12, 20)]
+    assert back.output == out and back.traces == tmp_path / "traces"
+    assert back.pysim_cycles == 635.0 and back.pysim_traces == tmp_path / "pysim_traces"
+    assert back.trace_mismatches == ["qin/words.bin"]
+
+
+def test_run_system_xsi_checks_and_never_synthesizes(tmp_path, fake_vitis):
+    """The wrapper runs csynth in check mode: no RTL under the root is a failure naming the top, and
+    the toolchain is never called."""
+    from waveflow.build.system_xsi import run_system_xsi
+    for d in ("include", "gen"):
+        (tmp_path / d).mkdir()
+    with pytest.raises(RuntimeError, match="no csynth RTL for markov_gen"):
+        run_system_xsi(_markov(), tmp_path / "w", top="markov_top", root=tmp_path)
+    assert fake_vitis == []

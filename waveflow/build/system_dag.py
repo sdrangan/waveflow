@@ -21,6 +21,13 @@ the sources on disk (:func:`~waveflow.build.trace_steps.rtl_staleness`), so a ``
 Who may run csynth is the ``synth`` param: ``"build"`` (the CLI default) synthesizes a stale top and
 stamps it; ``"check"`` (the gate tests, ``run_system_xsi``) **fails** on a stale or missing top, naming
 it and the source that changed, and never runs the toolchain.
+
+**scenario**, **pysim**, **system_xsi** and **compare** (:class:`ScenarioStep`, :class:`PysimStep`,
+:class:`SystemXsiStep` -- itself an inner DAG of crossbar IP, system top, host harness and XSI run --
+and :class:`CompareStep`) are never fresh: each reads Python and C++ the DAG cannot see, and each is
+seconds.  pysim and XSI read the same scenario file; ``--through pysim`` needs no Vivado.
+:func:`add_system_steps` adds all of them for one system object; the run is read back with
+:func:`waveflow.build.system_xsi.load_run`.
 """
 from __future__ import annotations
 
@@ -306,14 +313,229 @@ class CompareStep(_SystemStep):
 
         from waveflow.build.system_xsi import compare_traces
 
+        out = self.work_dir(config) / "compare.json"
+        out.unlink(missing_ok=True)                      # a previous verdict must not outlive this run
         bad = compare_traces(Path(inputs[self.a(self.traces_from)]),
                              Path(inputs[self.a("pysim_traces")]))
-        out = self.work_dir(config) / "compare.json"
         out.write_text(json.dumps({"trace_mismatches": bad}, indent=2) + "\n", encoding="utf-8")
         if bad:
             raise RuntimeError(f"the host's RTL traces differ from pysim's: {bad}")
         return {self.a("compare"): out}
 
 
+
+# ---------------------------------------------------------------------------------------------------
+# system_xsi and add_system_steps (plans/system_dag.md Stage 4)
+# ---------------------------------------------------------------------------------------------------
+
+def snake(name: str) -> str:
+    """``MarkovSystem`` -> ``markov_system``."""
+    import re
+
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name).lower()
+
+
+@dataclass(kw_only=True)
+class _XsiInner(BuildStep):
+    """One step of ``system_xsi``'s inner DAG; *owner* is the :class:`SystemXsiStep` holding the
+    system, its spec and its workspace.  In-memory products, never fresh: seconds, and the run after
+    them re-runs anyway."""
+
+    params: ClassVar[dict] = {}
+    owner: Any
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        return False
+
+
+@dataclass(kw_only=True)
+class XbarIpStep(_XsiInner):
+    """The crossbar IP (``axi_xbar.generate_axi_xbar``; cached by its config digest under
+    ``<work_dir>/ip``)."""
+
+    description = "The crossbar IP, generated from the pysim crossbar (cached by its config digest)."
+    produces: ClassVar[dict] = {"xbar_ip": None}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        from waveflow.build.axi_xbar import generate_axi_xbar
+
+        return {"xbar_ip": generate_axi_xbar(self.owner.spec.xbar, self.owner.ip_dir(config))}
+
+
+@dataclass(kw_only=True)
+class SystemTopStep(_XsiInner):
+    """The Verilog system top (``system_top.render_system_top``), with the timing probes if any."""
+
+    description = "The Verilog system top, walked from the pysim system."
+    produces: ClassVar[dict] = {"top_v": None}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        from waveflow.build.system_top import render_system_top
+
+        return {"top_v": render_system_top(self.owner.spec, self.owner.probes)}
+
+
+@dataclass(kw_only=True)
+class HarnessStep(_XsiInner):
+    """The host harness: the testbench ``main`` around the host's C++ twin and its generated endpoints
+    (``system_top.render_system_tb``), pointed at the scenario and the RTL trace directory."""
+
+    description = "The testbench: the host's C++ twin on its generated endpoints."
+    consumes: ClassVar[list] = ["scenario"]
+    produces: ClassVar[dict] = {"harness": None}
+
+    def run(self, config: BuildConfig, scenario, **_: Any) -> dict[str, Any]:
+        from waveflow.build.system_top import render_system_tb, system_tb_spec
+
+        o = self.owner
+        o.host.scenario, o.host.trace_dir = Path(scenario).as_posix(), o.traces(config).as_posix()
+        tb = system_tb_spec(o.spec, o.xbar, [o.host], probes=list(o.probes or ()))
+        return {"harness": render_system_tb(o.spec, tb)}
+
+
+@dataclass(kw_only=True)
+class XsiRunStep(_XsiInner):
+    """Prepare the XSI workspace (the RTL file list, the top, the testbench) and run it; the host's
+    report, parsed, to ``<work>/report.json``."""
+
+    description = "Compile, elaborate and run under XSI; the host's report to report.json."
+    consumes: ClassVar[list] = ["xbar_ip", "top_v", "harness", "scenario"]
+    produces: ClassVar[dict] = {"traces": None, "report": None}
+
+    def run(self, config: BuildConfig, xbar_ip, top_v, harness, scenario, **_: Any) -> dict[str, Any]:
+        import shutil
+
+        from waveflow.build.mm_adaptor_gen import leaf_sources
+        from waveflow.build.system_xsi import XsiRun, parse_output, write_report
+        from waveflow.build.xsi_workspace import XsiWorkspace
+        from waveflow.toolchain.toolchain import find_vitis_include_dir
+
+        o, root = self.owner, Path(config.root_dir)
+        spec = o.spec
+        ws = XsiWorkspace(o.work_dir(config), top=spec.top)
+        ws.work_dir.mkdir(parents=True, exist_ok=True)
+        traces = o.traces(config)
+        shutil.rmtree(traces, ignore_errors=True)        # a stale trace would describe another run
+        main, tb_files = harness
+        rtl = [f for m in spec.modules for f in sorted((root / rtl_rel(m)).glob("*.v"))]
+        tb_inc = [d for d in (find_vitis_include_dir(), root / "include")
+                  if d is not None and Path(d).is_dir()]
+        ws.prepare(rtl_files=xbar_ip.sim_files + leaf_sources() + rtl + [f"{spec.top}.v"],
+                   include_dirs=xbar_ip.include_dirs, tb_name=f"{spec.top}_tb", tb_cpp=main,
+                   extra_files={f"{spec.top}.v": top_v, **tb_files}, tb_include_dirs=tb_inc)
+        out = ws.run(timeout=o.timeout)
+        run = XsiRun(output=out, workspace=ws.work_dir, scenario=Path(scenario), traces=traces)
+        parse_output(out, run)
+        report = write_report(run, ws.work_dir / "report.json")
+        return {"traces": traces, "report": report}
+
+
+@dataclass(kw_only=True)
+class SystemXsiStep(_SystemStep):
+    """``system_xsi``: the system at RTL under XSI -- an inner DAG of the crossbar IP, the system top,
+    the host harness and the XSI run.  Consumes the scenario and every csynth'd top's RTL (the cut's
+    modules, ``system_top_spec(...).modules``); produces ``<work>/traces/`` and ``<work>/report.json``
+    (the :class:`~waveflow.build.system_xsi.XsiRun` fields; :func:`~waveflow.build.system_xsi.load_run`
+    reads them back).  The crossbar IP cache is ``ip/`` beside the workspace."""
+
+    description = "The system at RTL under XSI: crossbar IP, system top, host harness, run."
+    step_name: ClassVar[str] = "system_xsi"
+
+    top: str
+    xbar_name: str | None = None
+    inside: Any = None
+    probes: dict | None = None
+    timeout: int = 3600
+
+    def __post_init__(self) -> None:
+        from waveflow.build.system_top import system_top_spec
+        from waveflow.build.system_xsi import discover
+
+        super().__post_init__()
+        self.xbar, self.host, cut = discover(self.sysm)
+        self.inside = list(self.inside) if self.inside is not None else cut
+        self.spec = system_top_spec(self.xbar, self.inside, top=self.top, xbar_name=self.xbar_name)
+
+    @property
+    def tops(self) -> tuple[str, ...]:
+        """The HLS tops this system instantiates: the cut's kernels and the bus writers it brings."""
+        return tuple(self.spec.modules)
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("scenario")] + [rtl_artifact(t) for t in self.tops]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("traces"): self.work / "traces", self.a("report"): self.work / "report.json"}
+
+    def traces(self, config: BuildConfig) -> Path:
+        return self.work_dir(config) / "traces"
+
+    def ip_dir(self, config: BuildConfig) -> Path:
+        return self.work_dir(config).parent / "ip"
+
+    def inner_dag(self, scenario: Path) -> BuildDag:
+        """The inner DAG: the scenario as a source, then crossbar IP, system top, harness, XSI run."""
+        dag = BuildDag()
+        dag.add(SourceStep(artifact="scenario", path=Path(scenario)))
+        dag.add(XbarIpStep(name="xbar_ip", owner=self))
+        dag.add(SystemTopStep(name="system_top", owner=self))
+        dag.add(HarnessStep(name="harness", owner=self))
+        dag.add(XsiRunStep(name="xsi_run", owner=self))
+        return dag
+
+    def run(self, config: BuildConfig, **inputs: Any) -> dict[str, Any]:
+        inner = BuildConfig(root_dir=config.root_dir, vitis_version=config.vitis_version,
+                            params=dict(config.params))
+        results = self.inner_dag(Path(inputs[self.a("scenario")])).run(inner)
+        bad = [f"{n}: {r.message}" for n, r in results.items() if not r.success]
+        if bad:
+            raise RuntimeError("; ".join(bad))
+        return {self.a("traces"): self.traces(config),
+                self.a("report"): self.work_dir(config) / "report.json"}
+
+
+def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
+                     xbar_name: str | None = None, inside=None, probes: dict | None = None,
+                     prefix: str = "", workspace: str | None = None,
+                     sources: tuple[str, ...] = ("include", "gen"),
+                     tcls: dict[str, Path] | None = None, timeout: int = 3600) -> SystemXsiStep:
+    """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
+    the cut), ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.  Returns the ``system_xsi`` step.
+
+    *sysm* is the pysim system object, not yet run.  csynth consumes the artifacts *sources* -- the
+    example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
+    the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
+    -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
+    the cut; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
+    script (``{top: path relative to the root}``).
+
+    The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
+    probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
+    *prefix* names a second system in the same DAG: its steps and artifacts are prefixed, and a top an
+    earlier system's csynth already builds is consumed from it, not built twice -- so two topologies
+    of one kernel share one ``codegen`` and one ``csynth``.
+    """
+    top = top or snake(type(sysm).__name__)
+    work_dir = Path(work_dir)
+    work = work_dir / ((workspace or f"{prefix}{top}") + ("_probes" if probes else ""))
+    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, top=top, xbar_name=xbar_name,
+                        inside=inside, probes=probes, timeout=timeout)
+    owners = dag.artifact_owners()
+    for name in sources:
+        if name not in owners:
+            dag.add(SourceStep(artifact=name, path=Path(name)))
+    new = [t for t in xsi.tops if rtl_artifact(t) not in owners]
+    if new:
+        dag.add(CsynthTopsStep(name=prefix + "csynth", tops=new, tcls=dict(tcls or {}),
+                               sources=tuple(sources)))
+    dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
+    dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix))
+    dag.add(xsi)
+    dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))
+    return xsi
+
+
 __all__ = ["CompareStep", "CsynthStep", "CsynthTopsStep", "PysimStep", "SYNTH_MODES", "ScenarioStep",
-           "rtl_artifact", "rtl_problem", "rtl_rel"]
+           "SystemXsiStep", "add_system_steps", "rtl_artifact", "rtl_problem", "rtl_rel", "snake"]

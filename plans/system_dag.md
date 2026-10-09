@@ -326,3 +326,45 @@ Gate:
   sequence (spec walk, scenario, harness render, `sysm.run()`), for all three systems, cycle count
   included.  Compare passes equal traces and fails a corrupted one.
 * Fast suite: exit 0 (4035 passed, 4 skipped by the progress dots).
+
+### Stage 4 -- `SystemXsiStep` and `add_system_steps` (2026-10-09)
+
+`SystemXsiStep` (`system_xsi`) is an inner DAG `xbar_ip` -> `system_top` -> `harness` -> `xsi_run`,
+the scenario entering as a `SourceStep`.  Each inner step hands the next an in-memory value, and
+`xsi_run` calls `XsiWorkspace.prepare` with exactly the arguments `run_system_xsi` used.  The run is
+written to `<work>/report.json` (`system_xsi.write_report`: the `XsiRun` fields) and read back by
+`system_xsi.load_run`, together with `pysim.json` and `compare.json`.  `add_system_steps(dag, sysm,
+work_dir=, top=, xbar_name=, inside=, probes=, prefix=, workspace=, sources=, tcls=, timeout=)`:
+
+* `top` defaults to the class name in snake case (`MarkovSystem` -> `markov_system`), `xbar_name` to
+  `xbar_<top>` (via `system_top_spec`);
+* the csynth set is `system_top_spec(...).modules`, which for markov is the four tops `markov_build`
+  generates, the two writers included (tested);
+* a top whose `rtl_<top>` an earlier system's csynth already produces is consumed from it, so with
+  `prefix` two topologies share one `codegen` and one `csynth` (`per_view_csynth` only; tested);
+* a `sources` artifact with no producer in the DAG becomes a `SourceStep` under the root -- which is
+  how `run_system_xsi` gets `include/` / `gen/` without a codegen step.
+
+`run_system_xsi` is the thin wrapper: the DAG with `synth="check"`, through `compare` (or `system_xsi`
+with `compare_pysim=False`), raising on any failed step but `compare` (whose mismatches are data:
+`compare.json` is written before it fails, and is cleared at its start so a stale verdict cannot
+outlive a crashed comparison).  Its signature and callers are unchanged.
+
+Deviations:
+
+* **`workspace` is a parameter of `add_system_steps`** (the plan's signature lacks it): mm_fir's two
+  topologies share a top name, and the existing workspaces (`markov`, `mm_fir_per_view`, ...) keep
+  their names.  Default `<prefix><top>`, `_probes` appended with probes, as `run_system_xsi` did.
+* **pysim may now run before `system_xsi` walks the same system object** (the topological order puts
+  `pysim` first; `run_system_xsi` walked, ran XSI, then ran pysim).  Guarded by
+  `test_the_top_and_harness_do_not_depend_on_pysim_having_run` (all three systems: the generated top
+  and harness are the same text either way) and by the gates below.
+* Errors from a missing or stale top are now `RuntimeError` from the csynth check
+  (`"markov_gen: no csynth RTL for markov_gen at ..."`); a missing top was a `FileNotFoundError`.
+
+Gate (`-m xsi`, through the wrapper): `test_markov_xsi.py`, `test_mm_fir_xsi.py` and
+`test_sw_channels_xsi.py` (also a `run_system_xsi` caller): **14 passed, 0 skipped** -- markov 1870,
+mm_fir 618 / 611, the queued host 618, bit-exact, traces identical; `report.json`, `pysim.json`,
+`compare.json` in each workspace.  Fast suite: green but for the timing flake, which also failed on
+the untouched baseline.  It passes alone 3 times out of 3 and fails only inside the full ~4000-test
+process, so it is pre-existing and not from this branch.  `tests/build/test_system_dag.py`: 28.
