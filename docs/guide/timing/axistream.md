@@ -143,7 +143,7 @@ for k in range(2):                      # the two DATA commands, in order
     for f, v in cmd_hdr.val.items():
         print(f"    {f}: {v}")
     # The burst may end early: decode the samples actually sent.
-    nsamp = int(cmd_hdr.val['nsamp'])
+    nsamp = cmd_hdr.nsamp
     samples_per_word = word_bw // 32         # float32 samples in one word
     nsent = min(nsamp, len(bursts_in[2 * k + 1]['data']) * samples_per_word)
     x = read_array(packed=bursts_in[2 * k + 1]['data'], word_bw=word_bw, elem_type=Float32,

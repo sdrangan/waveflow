@@ -77,7 +77,7 @@ The kernel is a free-running module whose `run_iter` is one job:
 ```python
 def run_iter(self):
     hdr = yield from self.s_in.get_schema(CmdHdr)                  # 1. the command
-    n = int(hdr.n)
+    n = hdr.n
     x, tstart = yield from self.s_in.get_pipelined(S16, n)          # 2. n elements in ...
     y = golden(x.val)                                               #    ... the work, vectorized ...
     t_out = tstart + self.proc_latency * self.clk.period
