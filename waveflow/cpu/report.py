@@ -60,6 +60,9 @@ class FunctionStats:
     ws_max: float | None = None
     #: The weakest call's cycle confidence (``None`` until the report fills it in).
     confidence: Confidence | None = None
+    #: How many calls had each cycle-confidence level: the weakest level alone hides whether it was
+    #: one call (an empty list on the first arrival) or all of them.
+    levels: dict[str, int] = field(default_factory=dict)
     #: The weakest call's energy confidence (``None`` when the function has no energy model).
     energy_confidence: Confidence | None = None
     #: Where :attr:`ws_max` lives under the run's configuration: ``"l1"``, ``"l2"``, ``"dram"``.
@@ -154,7 +157,9 @@ def build_report(
         if func is None:
             continue
         st.code_bytes = func.code_bytes
-        st.confidence = _weaker(st.confidence, conf_of(func.cycles, rec.feats))
+        conf = conf_of(func.cycles, rec.feats)
+        st.confidence = _weaker(st.confidence, conf)
+        st.levels[conf.level.value] = st.levels.get(conf.level.value, 0) + 1
         if func.energy_pj is not None:
             st.energy_confidence = _weaker(
                 st.energy_confidence, conf_of(func.energy_pj, rec.feats)

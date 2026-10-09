@@ -120,7 +120,12 @@ class Processor(SimObj):
     def execute(
         self, func: SwFunction, *args: Any, prio: int = 0, **kw: Any
     ) -> ProcessGen[Any]:
-        """Run *func* on a core and return its result once the charged time has elapsed."""
+        """Run *func* on a core and return its result once the charged time has elapsed.
+
+        ``prio`` is the call's **scheduling** priority (lower is more urgent) and is consumed here; it
+        never reaches *func*.  A function that needs its own priority argument must name it
+        something else (``examples/cpu_sched`` passes a job's priority as ``tg_prio``).
+        """
         task = self._submit(func, args, kw, prio, is_irq=False)
         result = yield task.done
         return result

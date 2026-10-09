@@ -144,3 +144,20 @@ def test_a_fixed_cost_reports_uncalibrated(make_run):
     run = make_run().submit(0, fixed("a", 1)).run()
     conf = run.cpu.report().functions["a"].confidence
     assert conf.level == ConfidenceLevel.UNCALIBRATED
+
+
+def test_report_counts_calls_per_confidence_level(make_run):
+    fitted = LinCalibModel(basis=["n"], target="cycles")
+    fitted.fit(pd.DataFrame({"n": [1, 2, 3, 4], "cycles": [11, 12.2, 12.9, 14.1]}))
+    func = SwFunction(name="f", fn=lambda n: (None, {"n": n}), cycles=fitted)
+    run = make_run()
+
+    def proc():
+        for n in (2, 3, 40):  # two inside the fit, one outside
+            yield from run.cpu.execute(func, n)
+
+    run.sim.env.process(proc())
+    run.run()
+    st = run.cpu.report().functions["f"]
+    assert st.levels == {"INTERPOLATED": 2, "EXTRAPOLATED": 1}
+    assert st.confidence.level == ConfidenceLevel.EXTRAPOLATED

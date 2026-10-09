@@ -65,3 +65,15 @@ Appended as the work teaches something. Newest last.
   committing.
 - **A new directory under a glob changes what a test reads.** `cpu/*/corpus.csv` silently started
   including `cpu/area/corpus.csv`. Name the files a test is about.
+
+## M3: the example and system validation
+
+- **With the body run at grant, decide inside the call.** A `Processor` task's Python body runs when
+  the call first holds a core, possibly long after it was submitted. Any choice about shared state
+  (which job is the head, which one to age) made by the caller beforehand is stale by then: two
+  dispatchers took the same head, and aging re-inserted a dispatched job. Make the choice in the body,
+  and check the invariant (each job dispatched exactly once) at the end of every run.
+- **`execute`'s `prio` is the call's scheduling priority.** A function argument of the same name never
+  reaches the function. Name application priorities something else.
+- **A family's weakest confidence can be one call.** `sched_ops.add` read EXTRAPOLATED because 35 of
+  200 arrivals found an empty list; per-level call counts make that visible.
