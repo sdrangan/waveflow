@@ -277,7 +277,7 @@ class RepeatPlayHost(HwModule):
 
     def take_resp(self) -> ProcessGen[tuple[int, int, int]]:
         r = yield from self.resp_in.get_schema(TxResp)
-        out = (int(r.tid), int(r.status), int(r.samp_start))
+        out = (int(r.tid), int(r.status), int(r.samp_start))  # int: base - late_by, json
         self.resps.append(out)
         return out
 
@@ -287,7 +287,7 @@ class RepeatPlayHost(HwModule):
             got = yield from self.resp_in.get_schema_nb(TxResp)
             if got is None:
                 return
-            self.resps.append((int(got.tid), int(got.status), int(got.samp_start)))
+            self.resps.append((int(got.tid), int(got.status), int(got.samp_start)))  # int: as above
 
     @property
     def outstanding(self) -> int:
