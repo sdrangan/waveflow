@@ -149,7 +149,7 @@ class BlockScale(HwModule):
         Pure over the materialized array — no port access.  The Python body is
         the bit-exact golden; the C++ contract it must match is the hand-written
         impl file."""
-        return block_affine(np.asarray(x)[:int(n)])
+        return block_affine(x[:n])
         yield  # unreachable — makes this a generator (ProcessGen)
 
 
@@ -203,7 +203,7 @@ def run_sim(x: np.ndarray, *, clk_freq: float = 1e9) -> np.ndarray:
     sim.run_sim()
     # Read the result back after the run completes (no response stream to wait on).
     assert ctrl.y_addr is not None
-    return np.asarray(mem.read_array(ctrl.y_addr, Int32, count=len(x)), dtype=np.int32)
+    return mem.read_array(ctrl.y_addr, Int32, count=len(x)).val
 
 
 # ---------------------------------------------------------------------------

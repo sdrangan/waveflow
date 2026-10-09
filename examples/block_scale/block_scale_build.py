@@ -140,8 +140,7 @@ class PySimStep(BuildStep):
 
 def _check_output(config: BuildConfig, seed: int) -> tuple[bool, str]:
     data_dir = config.root_dir / "data"
-    y = np.asarray(read_uint32_file(str(data_dir / "y_array.bin"), elem_type=Int32, shape=DEFAULT_N),
-                   dtype=np.int32)
+    y = read_uint32_file(str(data_dir / "y_array.bin"), elem_type=Int32, shape=DEFAULT_N).val
     gold = block_affine(_gen_x(seed))
     if not np.array_equal(y, gold):
         return False, f"y {y.tolist()} != golden {gold.tolist()}"
