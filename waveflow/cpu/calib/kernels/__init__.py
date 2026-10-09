@@ -49,10 +49,12 @@ class Kernel:
     informational: bool = False
     #: The measured code's symbols in the static binary; their summed sizes are its code bytes.
     symbols: tuple[str, ...] = ()
+    #: A source outside this directory (an example's own program); default ``<KERNEL_DIR>/<name>.c``.
+    source_path: Path | None = None
 
     @property
     def source(self) -> Path:
-        return KERNEL_DIR / f"{self.name}.c"
+        return self.source_path or KERNEL_DIR / f"{self.name}.c"
 
     def argv(self, point: Mapping[str, Any]) -> list[str]:
         """The program's ``key=value`` arguments for *point*."""

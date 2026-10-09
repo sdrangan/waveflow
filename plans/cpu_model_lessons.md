@@ -77,3 +77,17 @@ Appended as the work teaches something. Newest last.
   reaches the function. Name application priorities something else.
 - **A family's weakest confidence can be one call.** `sched_ops.add` read EXTRAPOLATED because 35 of
   200 arrivals found an empty list; per-level call counts make that visible.
+- **An m5 marker pair costs 94 cycles cold and 8 hot.** Calibration programs enter their one region
+  with the marker code cold, and the standalone empty program measures that cold cost; back-to-back
+  regions run it hot. Subtracting the cold figure from a hot region made dispatches negative.
+- **Markers around an operation perturb it by tens of cycles, the size of the operation.** The same
+  dispatch nets agree across contexts, but scheduler operations moved by ~85 cycles depending on what
+  preceded the region. Short operations cannot be timed to 10 % one region each; time a whole
+  sequence in one region and compare totals.
+- **Isolated-call calibration over-prices back-to-back execution.** Each calibration point is one
+  call after one warm-up; a real scheduler runs operations back to back, with predictors and pipeline
+  in a steady state. The model over-predicted the example's 610 back-to-back regions by 19.6 % in
+  total (marker-free), with a roughly constant per-call excess. Calibrating small operations as
+  batches of back-to-back calls would measure the steady state.
+- **gem5's stats-URI help shows `;` between options; use `&`.** Python 3.10+ query parsing no longer
+  splits on `;`, so gem5 failed on `desc=False;spaces=False`.

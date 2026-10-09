@@ -119,6 +119,28 @@ def roi_stats(text: str) -> dict[str, float]:
     return blocks[0]
 
 
+def stat_series(path: Path, name: str) -> list[float]:
+    """One statistic's value in every block of a (possibly very large) ``stats.txt``, streamed.
+
+    A block that does not print *name* (gem5 omits counters that never incremented) gives 0.
+    """
+    out: list[float] = []
+    current: float | None = None
+    in_block = False
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("---------- Begin"):
+                in_block, current = True, None
+            elif line.startswith("---------- End"):
+                out.append(0.0 if current is None else current)
+                in_block = False
+            elif in_block and line.startswith(name):
+                parts = line.split()
+                if parts and parts[0] == name:
+                    current = float(parts[1])
+    return out
+
+
 def pick_stats(stats: Mapping[str, float]) -> dict[str, float]:
     """The row's statistics -- :data:`STATS` and :data:`MCPAT_STATS` -- with absent as zero."""
     return {
@@ -316,9 +338,21 @@ class Gem5Runner:
     # ------------------------------------------------------------------
 
     def run(
-        self, kernel: Kernel, point: Mapping[str, Any]
+        self,
+        kernel: Kernel,
+        point: Mapping[str, Any],
+        *,
+        extra_files: Mapping[str, str] | None = None,
+        compact_stats: bool = False,
+        parse: bool = True,
     ) -> tuple[dict, dict[str, float], Path]:
-        """Run *kernel* at *point* on gem5; return its printed JSON, region stats, run directory."""
+        """Run *kernel* at *point* on gem5; return its printed JSON, region stats, run directory.
+
+        *extra_files* (``{name: text}``) are written into the run directory, which the program sees
+        as ``/run``.  *compact_stats* writes ``stats.txt`` without descriptions or padding -- for a
+        program that dumps hundreds of regions.  With ``parse=False`` the stats are not read (the
+        caller streams ``m5out/stats.txt`` itself) and the returned dict is empty.
+        """
         exe = self.build(kernel)
         tag = hashlib.sha256(
             json.dumps(dict(point), sort_keys=True).encode()
@@ -328,7 +362,14 @@ class Gem5Runner:
             shutil.rmtree(rundir)
         rundir.mkdir(parents=True)
         shutil.copy2(exe, rundir / "prog")
+        for name, text in (extra_files or {}).items():
+            (rundir / name).write_text(text)
         command = " ".join(["/run/prog", *kernel.argv(point)])
+        stats_opt = (
+            ["--stats-file=text://stats.txt?desc=False&spaces=False"]
+            if compact_stats
+            else []
+        )
         cmd = [
             "docker",
             "run",
@@ -346,6 +387,7 @@ class Gem5Runner:
             "-q",
             "-d",
             "/run/m5out",
+            *stats_opt,
             "/gem5/configs/example/arm/starter_se.py",
             *self.config.starter_args(),
             command,
@@ -361,6 +403,8 @@ class Gem5Runner:
             raise RuntimeError(
                 f"expected one JSON line from {kernel.name}, got {len(lines)}"
             )
+        if not parse:
+            return json.loads(lines[0]), {}, rundir
         stats = roi_stats((rundir / "m5out" / "stats.txt").read_text())
         (rundir / "roi_stats.json").write_text(json.dumps(stats))
         return json.loads(lines[0]), stats, rundir
