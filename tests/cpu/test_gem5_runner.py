@@ -68,8 +68,21 @@ def test_the_core_configuration_reaches_starter_se():
         "--mem-channels",
         "1",
     ]
-    with pytest.raises(NotImplementedError):
-        Gem5Config(l2_bytes=512 * 1024)
+    # HPI's own caches run starter_se.py unchanged; other sizes go through a53_se.py (step 15).
+    assert (
+        Gem5Config().script().endswith("starter_se.py")
+        and Gem5Config().cache_args() == []
+    )
+    small = Gem5Config(l1d_bytes=16 * 1024, l2_bytes=512 * 1024)
+    assert small.script() == "/wfcfg/a53_se.py"
+    assert small.cache_args() == [
+        "--l1i-size",
+        "32KiB",
+        "--l1d-size",
+        "16KiB",
+        "--l2-size",
+        "512KiB",
+    ]
 
 
 def _git(repo, *args):
