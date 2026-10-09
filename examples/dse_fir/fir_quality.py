@@ -220,8 +220,7 @@ def quantize_taps(h: np.ndarray, scale: float, samp_w: int, samp_i: int) -> np.n
     to prevent.
     """
     cls = tap_format(samp_w, samp_i)
-    return np.asarray(from_real(np.asarray(h, dtype=np.float64) * float(scale), cls),
-                      dtype=np.int64)
+    return from_real(np.asarray(h, dtype=np.float64) * float(scale), cls).val  # int64 codes
 
 
 def design_quantized(spec: FirSpec, ntap: int, samp_w: int, samp_i: int,
