@@ -41,11 +41,11 @@ _SOURCE_DIR = Path(__file__).resolve().parent
 
 
 def _int_bits(da: DataArray, W: int) -> list[int]:
-    return [int(b) for b in np.atleast_1d(to_bits(np.asarray(da), W))]
+    return [int(b) for b in np.atleast_1d(to_bits(da.val, W))]
 
 
 def _f32_bits(da: DataArray) -> list[int]:
-    return [int(u) for u in np.asarray(da).astype(np.float32).view(np.uint32)]
+    return [int(u) for u in da.val.view(np.uint32)]
 
 
 def _case(name, kernel, a, b, c, expected) -> dict:
