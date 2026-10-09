@@ -1,0 +1,57 @@
+family,point,l1d,l2,measured,measured_at_reference,predicted,rel_err,level,output_matches_twin,gem5_tag,compiler_version
+sched_ops.add,"{""n"": 6, ""op"": ""add"", ""seed"": 201}",16384,524288,157.0,157.0,218.7606550211054,0.3933799682872956,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 6, ""op"": ""add"", ""seed"": 202}",16384,524288,158.0,157.0,218.7606550211054,0.38456110772851526,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 24, ""op"": ""add"", ""seed"": 202}",16384,524288,304.0,305.0,235.21198052057468,0.22627637986653065,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 24, ""op"": ""add"", ""seed"": 201}",16384,524288,457.0,457.0,462.6990130970853,0.012470488177429538,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 96, ""op"": ""add"", ""seed"": 201}",16384,524288,686.0,686.0,716.9729232826863,0.045150033939776006,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 96, ""op"": ""add"", ""seed"": 202}",16384,524288,1154.0,1154.0,1210.9654128244933,0.04936344265554016,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 384, ""op"": ""add"", ""seed"": 201}",16384,524288,2532.0,2532.0,2616.5726671343646,0.03340152730425141,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.add,"{""n"": 384, ""op"": ""add"", ""seed"": 202}",16384,524288,3130.0,3130.0,3247.785292660009,0.03763108391693577,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 6, ""op"": ""delete"", ""seed"": 201}",16384,524288,129.0,129.0,113.85224756441002,0.11742443748519363,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 6, ""op"": ""delete"", ""seed"": 202}",16384,524288,132.0,131.0,126.71241965825413,0.040057426831408074,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 24, ""op"": ""delete"", ""seed"": 201}",16384,524288,367.0,366.0,261.64432603774986,0.28707268109604944,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 24, ""op"": ""delete"", ""seed"": 202}",16384,524288,382.0,382.0,271.289455108133,0.2898181803452016,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 96, ""op"": ""delete"", ""seed"": 201}",16384,524288,786.0,785.0,791.7268224853497,0.007286033696373611,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 96, ""op"": ""delete"", ""seed"": 202}",16384,524288,913.0,913.0,942.833844588018,0.032676719154455636,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 384, ""op"": ""delete"", ""seed"": 201}",16384,524288,3321.0,3321.0,3397.528304818364,0.023043753332840766,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.delete,"{""n"": 384, ""op"": ""delete"", ""seed"": 202}",16384,524288,3179.0,3180.0,3246.4212827156957,0.02120833051767717,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 6, ""op"": ""reprio"", ""seed"": 201}",16384,524288,213.0,213.0,205.13202482503925,0.03693885058667018,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 6, ""op"": ""reprio"", ""seed"": 202}",16384,524288,199.0,199.0,194.47714069472113,0.022727936207431514,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 24, ""op"": ""reprio"", ""seed"": 202}",16384,524288,520.0,520.0,434.1916430535317,0.16501607105090055,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 24, ""op"": ""reprio"", ""seed"": 201}",16384,524288,478.0,478.0,398.47394118794546,0.1663725079750095,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 96, ""op"": ""reprio"", ""seed"": 201}",16384,524288,1369.0,1369.0,1366.0671482809346,0.0021423314237146904,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 96, ""op"": ""reprio"", ""seed"": 202}",16384,524288,2031.0,2031.0,2058.85244692049,0.013713661703835506,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 384, ""op"": ""reprio"", ""seed"": 201}",16384,524288,8258.0,8258.0,8349.659668497938,0.011099499697013524,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.reprio,"{""n"": 384, ""op"": ""reprio"", ""seed"": 202}",16384,524288,6082.0,6083.0,6195.749455370093,0.018702639817509473,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 6, ""op"": ""sort"", ""seed"": 201}",16384,524288,284.0,286.0,234.22655988568442,0.17525859195181542,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 6, ""op"": ""sort"", ""seed"": 202}",16384,524288,325.0,325.0,295.0222834991522,0.09223912769491632,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 24, ""op"": ""sort"", ""seed"": 201}",16384,524288,2367.0,2367.0,2154.2062709559646,0.08990018126068249,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 24, ""op"": ""sort"", ""seed"": 202}",16384,524288,2087.0,2087.0,1874.6556729686579,0.10174620365660858,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 96, ""op"": ""sort"", ""seed"": 201}",16384,524288,27491.0,27491.0,27646.451744997616,0.005654641337078156,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 96, ""op"": ""sort"", ""seed"": 202}",16384,524288,26830.0,26830.0,26996.591529929454,0.006209151320516356,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 384, ""op"": ""sort"", ""seed"": 201}",16384,524288,396917.0,396918.0,406798.4184221685,0.024895427563365963,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+sched_ops.sort,"{""n"": 384, ""op"": ""sort"", ""seed"": 202}",16384,524288,415815.0,415816.0,426331.09507802635,0.025290321604623096,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 512, ""seed"": 201}",16384,524288,5701.0,5701.0,5562.879868527589,0.024227351600142295,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 3800, ""seed"": 201}",16384,524288,44281.0,41939.0,43076.54408606823,0.02720028711934626,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 4500, ""seed"": 201}",16384,524288,52646.0,51039.0,51364.440673895806,0.024342957225699846,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 120000, ""seed"": 201}",16384,524288,1941368.0,1435785.0,1786118.596916668,0.07996907494268583,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 150000, ""seed"": 201}",16384,524288,2427997.0,2428527.0,2343604.4223389355,0.03475810623368334,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+cdot_q15,"{""n"": 400000, ""seed"": 201}",16384,524288,6485011.0,6485096.0,6989319.6341911685,0.07776527043534212,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 512, ""n"": 50000, ""seed"": 201}",16384,524288,400677.0,400677.0,428242.79831008415,0.06879805506700946,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 7500, ""n"": 4096, ""seed"": 201}",16384,524288,64112.0,37725.0,64972.459734869524,0.013421196263874537,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 9000, ""n"": 50000, ""seed"": 201}",16384,524288,847259.0,554189.0,871026.7628023821,0.028052535059978255,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 240000, ""n"": 4096, ""seed"": 201}",16384,524288,267573.0,92332.0,274623.906597379,0.02635133812970297,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 290000, ""n"": 50000, ""seed"": 201}",16384,524288,3860323.0,1902428.0,3800425.5333482465,0.01551618003253964,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+gather_hist,"{""m"": 2000000, ""n"": 50000, ""seed"": 201}",16384,524288,5780942.0,5465858.0,5623187.898598955,0.02728864973927173,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 32, ""seed"": 201}",16384,524288,995.0,995.0,616.1005579415756,0.3808034593552004,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 32, ""seed"": 202}",16384,524288,977.0,977.0,616.1005579415756,0.36939553946614573,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 512, ""seed"": 201}",16384,524288,9365.0,9365.0,9364.674191668364,3.4789998039073805e-05,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 512, ""seed"": 202}",16384,524288,9431.0,9431.0,9364.674191668364,0.007032743964758342,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 3000, ""seed"": 201}",16384,524288,54043.0,54044.0,54711.44752648555,0.012368808661353923,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+dispatch,"{""n"": 3000, ""seed"": 202}",16384,524288,54223.0,54224.0,54711.44752648555,0.00900812434733508,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+ctx_switch,"{""k"": 2}",16384,524288,370.0,370.0,367.33975969179687,0.007189838670819267,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+ctx_switch,"{""k"": 12}",16384,524288,2289.0,2289.0,2002.9608879675366,0.12496247795214654,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+ctx_switch,"{""k"": 48}",16384,524288,7858.0,7858.0,7891.1969497601995,0.004224605467065342,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+ctx_switch,"{""k"": 200}",16384,524288,32482.0,32482.0,32752.63809955144,0.008331940753384674,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+swapcontext,"{""k"": 8}",16384,524288,3104.0,3104.0,3172.8206519754613,0.022171601796218188,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0
+swapcontext,"{""k"": 32}",16384,524288,12224.0,12224.0,12183.512167198165,0.0033121590970087438,INTERPOLATED,True,v25.1.0.1,aarch64-xilinx-linux-gcc.real (GCC) 12.2.0

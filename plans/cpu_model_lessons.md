@@ -91,3 +91,11 @@ Appended as the work teaches something. Newest last.
   batches of back-to-back calls would measure the steady state.
 - **gem5's stats-URI help shows `;` between options; use `&`.** Python 3.10+ query parsing no longer
   splits on `;`, so gem5 failed on `desc=False;spaces=False`.
+- **Regime features carry a model across cache sizes.** Halving L1D and L2 made `gather_hist` 1.61x
+  slower, and the unchanged model -- its features recomputed for the new sizes -- predicted it within
+  6.9 %, better than at the configuration it was fitted on. Features expressed against the
+  configuration, not absolute sizes, are what make a DSE over cache sizes possible without
+  recalibrating every point.
+- **gem5 v25.1 has no command-line parameter override, and starter_se.py no cache options.** A small
+  config script that subclasses the HPI cache classes and calls starter_se's `main()` keeps every
+  other behaviour identical.

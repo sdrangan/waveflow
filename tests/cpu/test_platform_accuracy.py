@@ -113,3 +113,19 @@ def test_the_platform_prices_static_power_from_its_leakage_model():
     )  # four cores leak more in total
     area = p.area_model().estimate(one)["area_mm2"]
     assert area.level.value in ("INTERPOLATED", "EXACT") and 2 < area.value < 5
+
+
+# ---------------------------------------------------------------------------
+# Step 15 (informational): the A53 models at a second cache configuration, without refitting.
+# ---------------------------------------------------------------------------
+
+
+def test_the_cross_configuration_table_is_complete_and_measured_correctly():
+    df = pd.read_csv(CPU / "cross_config.csv")
+    assert len(df) == 56  # every registered test point
+    assert set(df["l1d"]) == {16 * 1024} and set(df["l2"]) == {512 * 1024}
+    assert df["output_matches_twin"].all()
+    # The cache-sensitive kernel really moved, and its regime features carried the model with it.
+    g = df[df["family"] == "gather_hist"]
+    assert (g["measured"] / g["measured_at_reference"]).median() > 1.3
+    assert g["rel_err"].max() <= MAX_BOUND

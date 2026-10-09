@@ -343,7 +343,8 @@ def summarize(acc: pd.DataFrame) -> pd.DataFrame:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
-        "stage", choices=("energy", "fit", "test", "area", "area-fit", "area-test")
+        "stage",
+        choices=("energy", "fit", "test", "area", "area-fit", "area-test", "cross"),
     )
     ap.add_argument("--platform-dir", required=True, type=Path)
     ap.add_argument("--workers", type=int, default=4)
@@ -362,8 +363,10 @@ def main(argv: list[str] | None = None) -> int:
         area_campaign(args.platform_dir, workers=args.workers, log=log)
     elif args.stage == "area-fit":
         fit_area(args.platform_dir, log=log)
-    else:
+    elif args.stage == "area-test":
         evaluate_area_test(args.platform_dir, commit=args.commit, log=log)
+    else:
+        cross_config(args.platform_dir, workers=args.workers, log=log)
     return 0
 
 
@@ -522,6 +525,92 @@ def evaluate_area_test(
             f"area {target:9s} test n {s['n']:2d} med {s['median']:.4f} max {s['max']:.4f} {'PASS' if ok else 'FAIL'}"
         )
     return acc
+
+
+# ---------------------------------------------------------------------------
+# cross-configuration (informational)
+# ---------------------------------------------------------------------------
+
+
+def cross_config(
+    platform_dir: str | Path,
+    *,
+    l1d_bytes: int = 16 * 1024,
+    l2_bytes: int = 512 * 1024,
+    workers: int = 4,
+    log=print,
+) -> pd.DataFrame:
+    """Predict a second cache configuration with the unchanged models; compare with gem5.
+
+    The registered **test** points are re-measured at the new configuration (same programs, same
+    inputs) and predicted with the platform's models, whose regime features are recomputed for the
+    new cache sizes -- nothing is refitted.  Informational: it says how far the A53 calibration
+    carries to a cache configuration a DSE might pick, and has no acceptance bound.
+    """
+    from waveflow.cpu.calib.gem5 import Gem5Config
+    from waveflow.cpu.calib.prereg import SweepPlan
+
+    cpu_dir = Path(platform_dir) / "cpu"
+    plan = SweepPlan.load(cpu_dir / "sweep_plan.csv")
+    runner = Gem5Runner(config=Gem5Config(l1d_bytes=l1d_bytes, l2_bytes=l2_bytes))
+    corpus = load_corpus(cpu_dir)
+    test = corpus[corpus["role"] == "test"]
+    points = [(r.kernel, json.loads(r.point)) for r in test.itertuples()]
+    for name in sorted({k for k, _ in points}):
+        runner.build(KERNELS[name])
+    empty = runner.empty_region_cycles()
+    log(
+        f"{len(points)} test points at L1D {l1d_bytes // 1024} KiB, L2 {l2_bytes // 1024} KiB; "
+        f"empty region {empty:g} cycles"
+    )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        rows = list(
+            pool.map(
+                lambda kp: runner.measure(
+                    KERNELS[kp[0]], kp[1], empty_cycles=empty, plan=plan
+                ),
+                points,
+            )
+        )
+    out = []
+    for row in rows:
+        for fam in FAMILIES:
+            if fam.kernel != row["kernel"]:
+                continue
+            if fam.op is not None and json.loads(row["point"]).get("op") != fam.op:
+                continue
+            model = fam.model("cycles")
+            model.load_model(cpu_dir / "models" / fam.name / "cycles.json")
+            ref = test[
+                (test["kernel"] == row["kernel"]) & (test["point"] == row["point"])
+            ]
+            pred = model.predict_feat(row)
+            out.append(
+                {
+                    "family": fam.name,
+                    "point": row["point"],
+                    "l1d": l1d_bytes,
+                    "l2": l2_bytes,
+                    "measured": row["cycles"],
+                    "measured_at_reference": float(ref["cycles"].iloc[0]),
+                    "predicted": pred,
+                    "rel_err": abs(pred - row["cycles"]) / row["cycles"],
+                    "level": model.confidence_feat(row).level.value,
+                    "output_matches_twin": row["output_matches_twin"],
+                    "gem5_tag": row["gem5_tag"],
+                    "compiler_version": row["compiler_version"],
+                }
+            )
+    df = pd.DataFrame(out)
+    df.to_csv(cpu_dir / "cross_config.csv", index=False)
+    for fam, g in df.groupby("family", sort=False):
+        s_ = _summ(g["rel_err"].to_numpy())
+        moved = float((g["measured"] / g["measured_at_reference"]).median())
+        log(
+            f"{fam:18s} n {s_['n']:2d} med {s_['median']:.3f} max {s_['max']:.3f}  "
+            f"(measured / reference config: median x{moved:.2f})"
+        )
+    return df
 
 
 if __name__ == "__main__":

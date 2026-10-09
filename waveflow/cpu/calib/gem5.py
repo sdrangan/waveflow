@@ -57,6 +57,12 @@ STATS = {
     "dram_writes": "system.mem_ctrls.writeReqs",
 }
 
+#: HPI's cache sizes (L1I, L1D, L2), which equal UG1085's A53.
+HPI_CACHES = (32 * 1024, 32 * 1024, 1024 * 1024)
+#: ``a53_se.py``: starter_se.py with the cache sizes overridable (gem5 v25.1 has no param override).
+CFG_DIR = Path(__file__).resolve().parent / "gem5_cfg"
+CFG_MOUNT = "/wfcfg"
+
 _CPU = "system.cpu_cluster.cpus"
 #: The activity McPAT is driven by (``waveflow.cpu.calib.mcpat``), kept on every row with an ``s_``
 #: prefix so the corpus alone can re-run the energy model -- no gem5 output directory needed.
@@ -203,12 +209,29 @@ class Gem5Config:
     l1d_bytes: int = 32 * 1024
     l2_bytes: int = 1024 * 1024
 
-    def __post_init__(self) -> None:
-        hpi = (32 * 1024, 32 * 1024, 1024 * 1024)
-        if (self.l1i_bytes, self.l1d_bytes, self.l2_bytes) != hpi:
-            raise NotImplementedError(
-                "non-default cache sizes need -P overrides (plan step 15)"
-            )
+    @property
+    def is_hpi_default(self) -> bool:
+        """HPI's own caches (which equal UG1085's A53): ``starter_se.py`` runs unchanged."""
+        return (self.l1i_bytes, self.l1d_bytes, self.l2_bytes) == HPI_CACHES
+
+    def script(self) -> str:
+        """The gem5 configuration script inside the container."""
+        if self.is_hpi_default:
+            return "/gem5/configs/example/arm/starter_se.py"
+        return f"{CFG_MOUNT}/a53_se.py"
+
+    def cache_args(self) -> list[str]:
+        """The cache-size options of ``a53_se.py`` (none for HPI's defaults)."""
+        if self.is_hpi_default:
+            return []
+        return [
+            "--l1i-size",
+            f"{self.l1i_bytes // 1024}KiB",
+            "--l1d-size",
+            f"{self.l1d_bytes // 1024}KiB",
+            "--l2-size",
+            f"{self.l2_bytes // 1024}KiB",
+        ]
 
     def starter_args(self) -> list[str]:
         return [
@@ -379,6 +402,8 @@ class Gem5Runner:
             "-v",
             f"{self.gem5_root}:/gem5:ro",
             "-v",
+            f"{CFG_DIR}:{CFG_MOUNT}:ro",
+            "-v",
             f"{rundir}:/run",
             "-w",
             "/run",
@@ -388,7 +413,8 @@ class Gem5Runner:
             "-d",
             "/run/m5out",
             *stats_opt,
-            "/gem5/configs/example/arm/starter_se.py",
+            self.config.script(),
+            *self.config.cache_args(),
             *self.config.starter_args(),
             command,
         ]

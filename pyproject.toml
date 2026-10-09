@@ -94,7 +94,7 @@ include-package-data = true
 "waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
 # The processor model's calibration kernels are C programs (plus their shared header) that the gem5
 # runner compiles; without this a pip-installed waveflow could not calibrate a new platform.
-"waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h"]
+"waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h", "calib/gem5_cfg/*.py"]
 # The SSR FFT's hand-written task bodies (waveflow.dsp.ssr_fft.hls copies them into a build).
 "waveflow.dsp.ssr_fft" = ["src/*.h"]
 
