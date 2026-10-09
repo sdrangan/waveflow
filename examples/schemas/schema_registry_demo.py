@@ -138,7 +138,7 @@ def decode(burst: np.ndarray, word_bw: int = 32) -> tuple[int, DataList]:
     which is valid for all fixed-size schemas.
     """
     hdr = PacketHeader().deserialize(burst[:HDR_NWORDS], word_bw=word_bw)
-    schema_id  = int(hdr.schema_id)
+    schema_id  = hdr.schema_id
     schema_cls = sensor_reg.get_class(schema_id)
     nwords     = schema_cls.nwords_per_inst(word_bw)
     payload    = schema_cls().deserialize(burst[HDR_NWORDS: HDR_NWORDS + nwords], word_bw=word_bw)
@@ -153,21 +153,21 @@ temp = TemperaturePacket(temp_raw=-42, sensor_id=7)
 burst = encode(sensor_reg.get_id(TemperaturePacket), temp)
 sid, rx = decode(burst)
 print(f"TemperaturePacket  schema_id={sid}  temp_raw={rx.temp_raw}  sensor_id={rx.sensor_id}")
-assert sid == 1 and int(rx.temp_raw) == -42 and int(rx.sensor_id) == 7
+assert sid == 1 and rx.temp_raw == -42 and rx.sensor_id == 7
 
 # Accelerometer (auto-assigned ID=3)
 accel = AccelPacket(ax=100, ay=-200, az=980)
 burst = encode(sensor_reg.get_id(AccelPacket), accel)
 sid, rx = decode(burst)
 print(f"AccelPacket        schema_id={sid}  ax={rx.ax}  ay={rx.ay}  az={rx.az}")
-assert sid == 3 and int(rx.ax) == 100 and int(rx.ay) == -200 and int(rx.az) == 980
+assert sid == 3 and rx.ax == 100 and rx.ay == -200 and rx.az == 980
 
 # Diagnostics (auto-assigned ID=4)
 diag = DiagnosticsPacket(uptime_s=3600, error_flags=0)
 burst = encode(sensor_reg.get_id(DiagnosticsPacket), diag)
 sid, rx = decode(burst)
 print(f"DiagnosticsPacket  schema_id={sid}  uptime_s={rx.uptime_s}  error_flags={rx.error_flags}")
-assert sid == 4 and int(rx.uptime_s) == 3600 and int(rx.error_flags) == 0
+assert sid == 4 and rx.uptime_s == 3600 and rx.error_flags == 0
 
 
 # ---------------------------------------------------------------------------

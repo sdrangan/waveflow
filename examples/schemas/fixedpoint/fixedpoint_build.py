@@ -100,12 +100,12 @@ def _reals_text(values) -> str:
 
 
 def _bits_text(da, W: int) -> str:
-    bits = np.atleast_1d(to_bits(np.asarray(da), W))
+    bits = np.atleast_1d(to_bits(da.val, W))
     return "\n".join(str(int(b)) for b in bits) + "\n"
 
 
 def _expected(da, W: int) -> list[int]:
-    return [int(b) for b in np.atleast_1d(to_bits(np.asarray(da), W))]
+    return [int(b) for b in np.atleast_1d(to_bits(da.val, W))]
 
 
 def _case(name, kernel, in_a, in_b, expected) -> dict:
