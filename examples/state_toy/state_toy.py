@@ -123,9 +123,8 @@ class StateAccum(FreeRunMod):
     @synthesizable
     def accumulate(self, x: Vec4, total: HwState) -> Vec4:
         """Add ``x`` into the running total and emit it.  The pysim twin of the hand-written hook."""
-        total.val[:] = (np.asarray(total.val, dtype=np.uint64)
-                        + np.asarray(x.val, dtype=np.uint64)) & 0xFFFFFFFF
-        return Vec4(np.asarray(total.val).copy())
+        total.val[:] = total.val + x.val  # uint32 arrays wrap mod 2**32, like the ap_uint<32> add
+        return Vec4(total.val.copy())
 
 
 @dataclass
