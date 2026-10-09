@@ -182,10 +182,10 @@ def render_error_path(path: Path, vcd_path: Path = ERROR_VCD) -> None:
 
     # in_stream: each command's header, then its samples.
     for c in res.commands:
-        tx = int(c.hdr.val["tx_id"])
+        tx = c.hdr.tx_id
         burst(2.4, c.hdr_burst, HDR, f"hdr\n{tx}")
         if c.samp_burst is not None:
-            n, nsamp = len(c.x), int(c.hdr.val["nsamp"])
+            n, nsamp = len(c.x), c.hdr.nsamp
             short = n < nsamp
             t0, t1 = burst(2.4, c.samp_burst, ERR if short else DATA,
                            f"{n} of {nsamp}" if short else f"x[{nsamp}]")
@@ -194,7 +194,7 @@ def render_error_path(path: Path, vcd_path: Path = ERROR_VCD) -> None:
                             fontsize=8, color=ERR, arrowprops=dict(arrowstyle="->", color=ERR))
     # out_stream: each response's header, then its results.
     for r in res.responses:
-        tx = int(r.hdr.val["tx_id"])
+        tx = r.hdr.tx_id
         burst(1.4, r.hdr_burst, HDR, f"resp\n{tx}")
         if r.data_burst is not None:
             t0, t1 = burst(1.4, r.data_burst, DATA, f"y[{len(r.y)}]")

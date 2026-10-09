@@ -51,7 +51,7 @@ class Command:
 
     @property
     def is_end(self) -> bool:
-        return int(self.hdr.val["cmd_type"]) == PolyCmdType.END
+        return self.hdr.cmd_type == PolyCmdType.END
 
 
 @dataclass
@@ -170,7 +170,7 @@ def analyze_poly_vcd(vcd_path: str | Path, word_bw: int = 32,
         hdr.deserialize(word_bw=word_bw, packed=result.bursts_in[k]["data"])
         cmd = Command(hdr=hdr, hdr_burst=result.bursts_in[k])
         k += 1
-        nsamp = int(hdr.val["nsamp"])
+        nsamp = hdr.nsamp
         if not cmd.is_end and nsamp and k < len(result.bursts_in):
             cmd.samp_burst = result.bursts_in[k]
             cmd.x = _samples(cmd.samp_burst, nsamp, word_bw)
@@ -189,7 +189,7 @@ def analyze_poly_vcd(vcd_path: str | Path, word_bw: int = 32,
         hdr.deserialize(word_bw=word_bw, packed=result.bursts_out[k]["data"])
         resp = Response(hdr=hdr, hdr_burst=result.bursts_out[k])
         k += 1
-        nsamp = int(cmd.hdr.val["nsamp"])
+        nsamp = cmd.hdr.nsamp
         if nsamp and k < len(result.bursts_out):
             resp.data_burst = result.bursts_out[k]
             resp.y = _samples(resp.data_burst, nsamp, word_bw)
