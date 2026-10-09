@@ -195,12 +195,12 @@ def test_a_failed_csynth_reports_the_vitis_log(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------------------------------
 
 def _markov():
-    from examples.markov.markov_xsi import system
+    from examples.markov.markov_build import system
     return system()
 
 
 def _fir(topology):
-    from examples.mm_fir.mm_fir_xsi import system
+    from examples.mm_fir.mm_fir_build import system
     return system(topology)
 
 
@@ -314,11 +314,11 @@ def test_two_systems_share_codegen_and_csynth():
         add_system_steps(dag, _fir(topo), work_dir="w", top="mm_fir_top", prefix=f"{topo}_",
                          workspace=f"mm_fir_{topo}")
     names = dag.step_names()
-    assert [n for n in names if "csynth" in n] == ["per_view_csynth"]
+    assert [n for n in names if "csynth" in n] == ["csynth"]
     assert {"per_view_system_xsi", "one_front_system_xsi", "per_view_compare",
             "one_front_compare"} <= set(names)
     owners = dag.artifact_owners()
-    assert owners["rtl_mm_fir"] == "per_view_csynth"
+    assert owners["rtl_mm_fir"] == "csynth"
     assert owners["one_front_report"] == "one_front_system_xsi"
 
 

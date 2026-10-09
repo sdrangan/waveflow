@@ -166,8 +166,10 @@ def test_the_rtl_crossbar_is_generated_from_the_pysim_one(topology):
     every view address the host uses (MM_BASE + the type's layout) decodes to exactly one slot, and
     the slot is the one pysim routes it to."""
     from examples.mm_fir.mm_fir import MM_BASE, MM_LAYOUT
-    from examples.mm_fir.mm_fir_xsi import xbar_config
-    cfg = xbar_config(topology)
+    from examples.mm_fir.mm_fir_build import SYSTEM_TOP, XBAR_NAMES, system
+    from waveflow.build.system_top import system_top_spec
+    sysm = system(topology)
+    cfg = system_top_spec(sysm.xbar, [sysm.fir], top=SYSTEM_TOP, xbar_name=XBAR_NAMES[topology]).xbar
     assert len(cfg.mi) == (4 if topology == "per_view" else 2)
     for v in MM_LAYOUT.at(MM_BASE).views.values():
         for addr in (v.base, v.base + v.window - 1):

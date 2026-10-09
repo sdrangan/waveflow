@@ -18,21 +18,10 @@ import numpy as np
 import pytest
 
 from examples.mm_fir.mm_fir import FirHost
-from examples.mm_fir.mm_fir_xsi import (
-    NSAMP,
-    PLAN,
-    ROOT,
-    RTL,
-    XBAR_NAMES,
-    output_words,
-    parse_kv,
-    scenario_x,
-    system,
-    trace_report,
-)
 from examples.mm_fir.mm_fir import fir_golden
+from examples.mm_fir.mm_fir_build import NSAMP, PLAN, SYSTEM_TOP, XBAR_NAMES, scenario_x, system
+from tests.examples.test_mm_fir_xsi import output_words, parse_kv, trace_report
 from waveflow.build.system_xsi import run_system_xsi
-from waveflow.build.trace_steps import rtl_staleness
 from waveflow.sw import SwQueue
 from waveflow.toolchain.toolchain import find_vivado_path
 
@@ -82,11 +71,11 @@ def test_queued_host_runs_like_fir_host_in_pysim():
 def test_queued_host_at_rtl_matches_fir_host():
     if not find_vivado_path():
         pytest.skip("XSI gate prerequisite missing: Vivado")
-    if not RTL.is_dir() or rtl_staleness(ROOT, "mm_fir") is not None:
-        pytest.skip("XSI gate prerequisite missing: mm_fir's csynth RTL (python -m examples.mm_fir.mm_fir_build)")
+    # No staleness pre-check: run_system_xsi runs csynth in check mode, so a missing or stale mm_fir
+    # top fails this test, naming it (python -m examples.mm_fir.mm_fir_build --through csynth).
     sysm = system("per_view")
     sysm.host.__class__ = QueuedFirHost
-    run = run_system_xsi(sysm, WORK, top="mm_fir_top", xbar_name=XBAR_NAMES["per_view"],
+    run = run_system_xsi(sysm, WORK, top=SYSTEM_TOP, xbar_name=XBAR_NAMES["per_view"],
                          workspace="mm_fir_queued")
     out = run.output + trace_report(run.traces)
     assert run.done and run.cycles == 618, (run.cycles, out[-2000:])

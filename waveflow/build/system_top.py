@@ -2,8 +2,8 @@
 
 ``plans/xsi_system_top.md`` Stage 3.  A single composite kernel's top is :func:`composite_gen.render_top`;
 a *system* -- several csynth'd kernels, their memory-mapped adaptors, AMD's crossbar and an on-chip
-memory, reached by a host -- had its top restated by hand in each example (``render_top`` in
-``markov_xsi.py`` / ``mm_fir_xsi.py``).  The pysim system already holds every fact that top needs, so
+memory, reached by a host -- had its top restated by hand in each example (a ``render_top`` in
+markov's and mm_fir's ``*_xsi.py``, since retired by ``plans/system_dag.md``).  The pysim system already holds every fact that top needs, so
 this module derives it:
 
 ====================================  ===============================================================

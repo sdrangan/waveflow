@@ -94,8 +94,10 @@ port lists are generated rather than typed:
 | `axi_wire_decls(prefix, signals)` | wires for an AXI connection inside the top |
 | `render_xbar_instance(cfg, inst, si_prefixes, mi_prefixes)` | the crossbar instance, its SI ports joined to `si_prefixes` and its MI ports to `mi_prefixes` |
 
-[mm_fir's `render_top`](../../../../examples/mm_fir/mm_fir_xsi.py) is a complete example: one AXI port
-for the host, the crossbar, and the slave adaptor's views on its master-side ports.
+[`render_system_top`](../../../../waveflow/build/system_top.py) uses all of them to emit a complete
+system top from the pysim system -- for mm_fir, one AXI port for the host, the crossbar, and the slave
+adaptor's views on its master-side ports (the `system_xsi` step of
+[`mm_fir_build.py`](../../../../examples/mm_fir/mm_fir_build.py) renders it).
 
 **Driving it from a testbench.** A host on an SI port is a `wfbfm::AxiMmMaster` (in `xsi_bfm.h`): it
 issues bursts from a queue, one transaction at a time — or one read and one write at a time with

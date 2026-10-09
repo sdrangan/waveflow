@@ -235,7 +235,8 @@ Deviations:
   only described True; without this a csynth whose stamp disagrees but whose mtimes look old (a file
   restored by an older copy) would be skipped.
 * **`waveflow/build/cli.py` changed** (one line of `--status` output): a step stale by its hook prints
-  `STALE (its content check)`, a missing artifact `STALE (missing)` (it printed `STALE ( newer)`).
+  `STALE (the step's own check)`, a missing artifact `STALE (missing)` (it printed `STALE ( newer)`).
+  (Wording settled in Stage 5.)
 * **`--status` crashes under a cp1252 console** (`✓`), before this change too; run with
   `PYTHONIOENCODING=utf-8`.  Not fixed here.
 
@@ -368,3 +369,59 @@ mm_fir 618 / 611, the queued host 618, bit-exact, traces identical; `report.json
 `compare.json` in each workspace.  Fast suite: green but for the timing flake, which also failed on
 the untouched baseline.  It passes alone 3 times out of 3 and fails only inside the full ~4000-test
 process, so it is pre-existing and not from this branch.  `tests/build/test_system_dag.py`: 28.
+
+### Stage 5 -- the examples on their DAGs; `*_xsi.py` retired (2026-10-09)
+
+`markov_build.build_dag(probes=False, work_dir="xsi_work")`: `codegen`, then `add_system_steps(dag,
+system(), top="markov_top", xbar_name="xbar_markov_4x3", workspace="markov")`, and the figure steps;
+`run_dag_cli(..., default_through="compare")`.  `mm_fir_build.build_dag(...)`: `codegen`, then
+`add_system_steps` per topology with `prefix="per_view_"` / `"one_front_"` (workspaces
+`mm_fir_per_view` / `mm_fir_one_front`, so the generated IP caches and the docs hold), sharing one
+`csynth`.  Both CLIs take `--synth build|check` and `--probes`.  `markov_xsi.py` and `mm_fir_xsi.py` are
+deleted:
+
+| was in `*_xsi.py` | now |
+|---|---|
+| `TOPS`, `QWRITER`/`CWRITER`, `rtl_dir`, `RTL`, `system_spec`, `xbar_config`, `run_xsi` | gone: derived (`system_top_spec`, `rtl_rel`), or the DAG |
+| `system()`, `scenario_jobs()`, `NJOBS`/`NSTEPS`; mm_fir's `system(topology)`, `scenario_x`, `PLAN`, `PKT`, `NSAMP`, `XBAR_NAMES` | `markov_build.py` / `mm_fir_build.py` |
+| `timing_probes` | `markov.py` / `mm_fir.py`, next to the system class |
+| `trace_report`, `job_results`, `parse_kv`, `probe_runs`, `output_words` | the gate tests |
+
+The gate tests run the example's DAG with `synth="check"` through `compare` (mm_fir: through
+`<topology>_compare`), read the run with `load_run`, and decode it.  A csynth check failure is now
+`pytest.fail`, no longer a skip: a stale or missing top fails the gate and names it.  The DAG's
+`codegen` runs first, so the mm_fir gate now regenerates its headers before the stamp check, as the
+markov gate already did (the hole Stage 2 found).
+
+Also updated: `tests/build/test_system_top.py`, `test_sw_host_gen.py`, `test_xsi_system_top.py`,
+`test_system_xsi.py`, `test_system_dag.py`, `tests/examples/test_mm_fir.py`, and
+**`tests/examples/test_sw_channels_xsi.py`**.  The plan's list missed that one: it imported `mm_fir_xsi`
+and calls `run_system_xsi`.  It now takes the scenario from `mm_fir_build` and the decoders from
+`test_mm_fir_xsi`.  It drops its staleness pre-check, since the wrapper's check mode fails a stale top.
+`tests/docs/test_documented_numbers.py` needed no change (it reads `EXPECTED_CYCLES` from the gate file,
+which kept it), but its symbol check fails while the example pages name `system_spec` / `xbar_config`,
+and `test_markdown_integrity` fails on their links to the deleted files.  So the four pages it named
+(`docs/examples/markov/xsi.md`, `markov/rtlsim.md`, `mm_fir/rtlsim.md`,
+`guide/interface/axi_mm/crossbar.md`) go in with this stage, already rewritten.  So does the
+guide page their links point into, `docs/guide/build/xsi_system.md`, whose new per-step anchors they
+use.  Each commit stays green; Stage 6 is the remaining pages.
+
+Framework changes:
+
+* **`run_dag_cli` passes the parsed arguments to a `dag_factory` that takes one**, so a knob that
+  changes the DAG's shape (`--probes`) can reach it; a zero-arg factory is called as before.
+  `default_through=None` runs the whole DAG (mm_fir has two sinks).
+* **The first csynth is named `csynth`**, not `<prefix>csynth`, so mm_fir's shared one reads as shared.
+* `--status` wording: a missing artifact reads `STALE (missing)` before anything else; a hook's False
+  reads `STALE (the step's own check)` (the always-run steps answer False without checking content).
+* `examples/{markov,mm_fir}/xsi_work/` are gitignored.
+
+Open question settled: **writer codegen stays the example's** (one `write_writer_project` call per
+writer in `generate()`).  The csynth set is derived from the cut, so an example that forgot a writer
+fails `csynth` on its missing `.tcl`.  Moving the writer codegen into `add_system_steps` would have it
+write into the example's `gen/` from outside the example's `codegen` step, which is two writers of one
+directory.  Revisit if a third example repeats the lines.
+
+Gate: full `pytest -m xsi`: **162 passed, 0 skipped** (`WANT_XSI_GATES` unchanged at 162; no test
+merged or removed).  Markov 1870, mm_fir 618 / 611, the queued host 618, bit-exact, traces identical.
+Fast suite: exit 0 (4044 passed, 4 skipped).

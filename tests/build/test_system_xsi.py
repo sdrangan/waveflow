@@ -1,7 +1,7 @@
 """``waveflow/build/system_xsi.py`` -- the fast half (plans/host_runtime.md S5).
 
-The RTL half is the example gates (test_mm_fir_xsi.py, test_markov_xsi.py), which run
-``run_system_xsi``.  Here: discovery from a bare system object, and the trace comparison.
+The RTL half is the example gates (test_mm_fir_xsi.py, test_markov_xsi.py), which run the
+examples' system DAGs; ``run_system_xsi`` is a thin wrapper over the same steps.  Here: discovery from a bare system object, and the trace comparison.
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from waveflow.utils.burst_io import write_burst_bundle
 
 
 def test_discover_finds_the_crossbar_the_host_and_the_cut():
-    from examples.markov.markov_xsi import system
-    from examples.mm_fir.mm_fir_xsi import system as fir_system
+    from examples.markov.markov_build import system
+    from examples.mm_fir.mm_fir_build import system as fir_system
 
     s = system()
     xbar, host, inside = discover(s)

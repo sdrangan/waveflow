@@ -135,7 +135,7 @@ MM_BASE = 0x0000
 #: AXI's read and write channels are independent and AMD's crossbar routes them in parallel, so a host
 #: whose writer and reader run concurrently overlaps them -- but each process waits for its own
 #: transaction before the next.  ONE setting for both backends: pysim's ``MMIFMaster.max_outstanding``
-#: and the XSI testbench's ``AxiMmMaster(..., overlap_rw=true)`` (``mm_fir_xsi``) both read it.
+#: and the XSI testbench's ``AxiMmMaster(..., overlap_rw=true)`` (the system harness) both read it.
 HOST_MAX_OUTSTANDING = 1
 
 #: The host's own pacing: cycles between a process asking for its next transaction and the master
@@ -216,7 +216,7 @@ class MmFir(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
     #: Timing of the HLS body -- one packet per firing, the sample loop pipelined at II=1 -- MEASURED at
-    #: RTL with mm_fir_xsi's handshake probes (packet 2: header read at 88, samples from 92, results
+    #: RTL with the system top's handshake probes (packet 2: header read at 88, samples from 92, results
     #: 101..116, status and response at 126, next header at 128 -- 40 cycles for 16 samples):
     #:
     #: * ``hdr_cycles``: from the header to the first sample the loop can take (the header, the config
@@ -242,7 +242,7 @@ class MmFir(FreeRunMod):
         self.s_cfg = StreamIFSlave(name=f"{self.name}_s_cfg", sim=self.sim, bitwidth=DW, has_tlast=True)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=DW, has_tlast=True)
         # Unframed: queue out carries no packet boundary to the bus, and the RTL kernel has no
-        # TLAST pin on this port (mm_fir_xsi.render_top ties it off).
+        # TLAST pin on this port (the system top ties it off).
         self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=DW,
                                     has_tlast=False)
         # The response FIFO: one FirRespHdr per packet.  Unframed, as any queue out is.
@@ -617,6 +617,24 @@ class MmFirSystem:
     def run(self) -> np.ndarray:
         self.sim.run_sim(until=self.host.done)
         return np.asarray(self.host.y, dtype=np.int64)
+
+
+def timing_probes(sysm: MmFirSystem) -> dict:
+    """Timing probes: one-bit handshakes the system top exposes as outputs when built with probes
+    (``mm_fir_build.build_dag(probes=True)``, or ``--probes``); the testbench samples them every cycle
+    and prints the cycles each fired.  Off for the gate.  Each names the kernel port it watches; the
+    system top resolves the net."""
+    from waveflow.build.system_top import beat, stall
+
+    fir = sysm.fir
+    return {
+        "in": beat(fir.s_in),             # the kernel takes a word from queue in (header or samples)
+        "cfg": beat(fir.s_cfg),           # ... a config word
+        "out": beat(fir.m_out),           # a result into queue out
+        "resp": beat(fir.m_resp),         # a response word
+        "stat": beat(fir.m_status),       # a status word
+        "out_full": stall(fir.m_out),     # the kernel held up by a full queue out
+    }
 
 
 def demo(seed: int = 7, nsamp: int = 200, switch_at: int = 96) -> dict:

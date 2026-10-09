@@ -515,7 +515,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
     *prefix* names a second system in the same DAG: its steps and artifacts are prefixed, and a top an
     earlier system's csynth already builds is consumed from it, not built twice -- so two topologies
-    of one kernel share one ``codegen`` and one ``csynth``.
+    of one kernel share one ``codegen`` and one ``csynth``.  The first csynth is named ``csynth``; one
+    a later system needs for tops of its own is ``<prefix>csynth``.
     """
     top = top or snake(type(sysm).__name__)
     work_dir = Path(work_dir)
@@ -528,8 +529,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
             dag.add(SourceStep(artifact=name, path=Path(name)))
     new = [t for t in xsi.tops if rtl_artifact(t) not in owners]
     if new:
-        dag.add(CsynthTopsStep(name=prefix + "csynth", tops=new, tcls=dict(tcls or {}),
-                               sources=tuple(sources)))
+        name = "csynth" if "csynth" not in dag.step_names() else prefix + "csynth"
+        dag.add(CsynthTopsStep(name=name, tops=new, tcls=dict(tcls or {}), sources=tuple(sources)))
     dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
     dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix))
     dag.add(xsi)
