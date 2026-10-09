@@ -1,10 +1,13 @@
 """``waveflow/build/system_dag.py`` -- the fast half (``plans/system_dag.md``).
 
 The RTL half is the example gates (``tests/examples/test_markov_xsi.py``, ``test_mm_fir_xsi.py``).
-Here: csynth's freshness and its two modes, with a stand-in for Vitis.
+Here: csynth's freshness and its two modes, with a stand-in for Vitis; and scenario / pysim /
+compare without Vivado -- the pysim traces byte-identical to the ones ``run_system_xsi`` wrote
+before the DAG.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -13,8 +16,11 @@ import pytest
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.system_dag import (
+    CompareStep,
     CsynthStep,
     CsynthTopsStep,
+    PysimStep,
+    ScenarioStep,
     rtl_problem,
     rtl_rel,
 )
@@ -181,3 +187,97 @@ def test_a_failed_csynth_reports_the_vitis_log(tmp_path, monkeypatch):
     res = dag.run(BuildConfig(root_dir=tmp_path))
     assert not res["csynth"].success
     assert "csynth of a failed" in res["csynth"].message and "boom" in res["csynth"].message
+
+
+
+# ---------------------------------------------------------------------------------------------------
+# scenario / pysim / compare (Stage 3): no Vivado
+# ---------------------------------------------------------------------------------------------------
+
+def _markov():
+    from examples.markov.markov_xsi import system
+    return system()
+
+
+def _fir(topology):
+    from examples.mm_fir.mm_fir_xsi import system
+    return system(topology)
+
+
+SYSTEMS = {"markov": _markov, "per_view": lambda: _fir("per_view"),
+           "one_front": lambda: _fir("one_front")}
+
+
+def _legacy_pysim(sysm, ws: Path):
+    """What run_system_xsi did before the DAG, minus Vivado: the spec walk, the scenario, the harness
+    render, then the pysim run from the same scenario file."""
+    from waveflow.build.system_top import render_system_tb, render_system_top, system_tb_spec, \
+        system_top_spec
+    from waveflow.build.system_xsi import discover
+
+    xbar, host, cut = discover(sysm)
+    spec = system_top_spec(xbar, cut, top="t")
+    scenario, traces = ws / "scenario", ws / "traces"
+    host.scenario, host.trace_dir = scenario.as_posix(), traces.as_posix()
+    host.write_scenario(scenario)
+    render_system_tb(spec, system_tb_spec(spec, xbar, [host], probes=[]))
+    render_system_top(spec, None)
+    host.trace_dir = (ws / "pysim_traces").as_posix()
+    sysm.run()
+    return sysm.sim.env.now / host.clk.period
+
+
+def _pysim_dag(sysm, work):
+    dag = BuildDag()
+    dag.add(ScenarioStep(sysm=sysm, work=work))
+    dag.add(PysimStep(sysm=sysm, work=work))
+    return dag
+
+
+@pytest.mark.parametrize("which", sorted(SYSTEMS))
+def test_through_pysim_matches_the_pre_dag_run_byte_for_byte(tmp_path, which):
+    from waveflow.build.system_xsi import compare_traces
+
+    legacy = _legacy_pysim(SYSTEMS[which](), tmp_path / "legacy")
+    res = _pysim_dag(SYSTEMS[which](), Path("work")).run(BuildConfig(root_dir=tmp_path),
+                                                       through="pysim")
+    assert all(r.success for r in res.values()), {n: r.message for n, r in res.items()}
+    new = tmp_path / "work"
+    assert compare_traces(new / "pysim_traces", tmp_path / "legacy" / "pysim_traces") == []
+    for f in ("words.bin", "bounds.bin", "meta.json"):
+        assert (new / "scenario" / f).read_bytes() == (tmp_path / "legacy" / "scenario" / f).read_bytes()
+    assert json.loads((new / "pysim.json").read_text())["cycles"] == legacy
+
+
+class _FakeTraces(BuildStep):
+    """Stands in for system_xsi: the pysim traces copied, one word appended when ``corrupt``."""
+    consumes = ["pysim_traces"]
+    produces = {"traces": Path("rtl_traces")}
+
+    def is_fresh(self, config, paths):
+        return False
+
+    def run(self, config, pysim_traces, **_):
+        import shutil
+        src = Path(pysim_traces)
+        dst = Path(config.root_dir) / "rtl_traces"
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(src, dst)
+        if self.corrupt:
+            f = next(dst.iterdir()) / "words.bin"
+            f.write_bytes(f.read_bytes() + b"\0" * 8)
+        return {"traces": dst}
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_compare_passes_equal_traces_and_fails_on_a_difference(tmp_path, corrupt):
+    sysm = _markov()
+    dag = _pysim_dag(sysm, Path("work"))
+    fake = _FakeTraces(name="fake")
+    fake.corrupt = corrupt
+    dag.add(fake)
+    dag.add(CompareStep(sysm=sysm, work=Path("work")))
+    res = dag.run(BuildConfig(root_dir=tmp_path))
+    bad = json.loads((tmp_path / "work" / "compare.json").read_text())["trace_mismatches"]
+    assert res["compare"].success is (not corrupt)
+    assert (bad != []) is corrupt

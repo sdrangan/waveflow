@@ -292,3 +292,37 @@ Gates:
   `--status` reads a stamped top fresh under a newer `gen/`, the Vitis log on failure.
 * Fast suite: exit 0, 3958 passed, 4 skipped (the timing flake passed this time).  This checkout's
   pytest prints no final count line; the exit code and the progress dots are the record.
+
+### Stage 3 -- scenario, pysim, compare (2026-10-09)
+
+`ScenarioStep` (`host.write_scenario` -> `<work>/scenario/`), `PysimStep` (the system run from that
+file; `<work>/pysim_traces/` and `<work>/pysim.json` holding the cycle count in host clocks) and
+`CompareStep` (`compare_traces` -> `<work>/compare.json`).  Each takes the system object, its
+workspace and a `prefix` for its step and artifact names.
+
+Deviations:
+
+* **These steps are never fresh** (`is_fresh` returns False), and neither will `system_xsi` be.  The
+  plan says a composite "returns None and always enters", but in this code None means the mtime rule,
+  which skips a step whose outputs are newer than its inputs.  It would skip pysim after an edit to
+  `markov.py`, because the DAG cannot see the Python a run reads.  False is what "always enters" needs.
+  Every one of these is seconds, and the XSI run re-runs anyway.  csynth is the one outer step that
+  decides freshness by content, and `CsynthTopsStep.is_fresh` is "every top fresh", not None, so a run
+  with nothing to synthesize does not enter it.  The plan's "entering costs milliseconds" holds either
+  way.
+* **`compare` fails on a mismatch** after writing `compare.json`, so a CLI run whose host disagrees
+  does not print PASSED.  `run_system_xsi` (Stage 4) reads `compare.json` and returns the mismatches
+  as before, without raising.
+* The pysim cycle count is a file of its own (`pysim.json`): the step that measures it is not the one
+  that writes `report.json`.
+
+Gate:
+
+* `--through pysim` needs no Vivado, and its traces are **byte-identical** to the ones `run_system_xsi`
+  wrote on main this morning (`tests/build/_xsi_work/{markov,mm_fir_per_view,mm_fir_one_front}/
+  pysim_traces`, copied before any run on this branch).  The scenario bundles are identical too, and
+  so are the RTL traces from those runs.
+* `tests/build/test_system_dag.py`: the same comparison without the snapshot, against today's
+  sequence (spec walk, scenario, harness render, `sysm.run()`), for all three systems, cycle count
+  included.  Compare passes equal traces and fails a corrupted one.
+* Fast suite: exit 0 (4035 passed, 4 skipped by the progress dots).
