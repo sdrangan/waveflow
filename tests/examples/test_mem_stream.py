@@ -12,22 +12,25 @@ from pathlib import Path
 
 
 def test_mrcmd_schema_single_source():
-    """MRCmd / MWCmd pack {addr, len, xfer_len, xfer_msg[max_xfer_len]} (LSB-first): word0 =
-    addr | (len<<32), word1 = xfer_len | (xfer_msg[0]<<32), remaining words carry xfer_msg[1:]."""
+    """MRCmd / MWCmd pack {addr, len, xfer_len, xfer_msg[max_xfer_len]} (LSB-first) by the word
+    layout rule: word0 = addr | (len<<32), word1 = xfer_len, and xfer_msg starts on a fresh word
+    (two to a word at 64 bits) -- where the generated C++ reads it (``in_idx = 2``)."""
     from waveflow.hw.mem_stream import MRCmd, MWCmd
     import numpy as np
 
-    assert MRCmd.nwords_per_inst(64) == 6            # 2 (addr/len, xfer_len/msg[0]) + 4 (msg[1:8])
+    assert MRCmd.nwords_per_inst(64) == 6            # 2 (addr/len, xfer_len) + 4 (msg[0:8])
     assert MRCmd.nwords_per_inst(32) == 11
     xfer_msg = np.zeros(8, dtype=np.uint32)
     xfer_msg[0] = 42
-    c = MRCmd(addr=100, len=128, xfer_len=1, xfer_msg=xfer_msg)
+    xfer_msg[1] = 43
+    c = MRCmd(addr=100, len=128, xfer_len=2, xfer_msg=xfer_msg)
     w = c.serialize(word_bw=64)
     assert int(w[0]) == 100 | (128 << 32)          # addr low, len high
-    assert int(w[1]) == 1 | (42 << 32)             # xfer_len low, xfer_msg[0] high
+    assert int(w[1]) == 2                          # xfer_len alone: the array starts a fresh word
+    assert int(w[2]) == 42 | (43 << 32)            # xfer_msg[0] low, xfer_msg[1] high
     d = MRCmd().deserialize(w, word_bw=64)
-    assert int(d.addr) == 100 and int(d.len) == 128 and int(d.xfer_len) == 1
-    assert int(np.array(d.xfer_msg)[0]) == 42
+    assert int(d.addr) == 100 and int(d.len) == 128 and int(d.xfer_len) == 2
+    assert list(np.array(d.xfer_msg)[:2]) == [42, 43]
     # mirror schema
     assert MWCmd.nwords_per_inst(64) == 6
 
