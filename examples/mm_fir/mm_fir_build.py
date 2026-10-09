@@ -1,23 +1,29 @@
-"""mm_fir_build.py — generate and synthesize the mm_fir kernel (rung 3 of plans/mm_slave_adaptor.md).
+"""mm_fir_build.py — the mm_fir example's build DAG: generate and synthesize the kernel (rung 3 of
+plans/mm_slave_adaptor.md, ``plans/system_dag.md``).
 
-    python -m examples.mm_fir.mm_fir_build            # headers + top + tcl, then csynth
-    python -m examples.mm_fir.mm_fir_build --no-synth # generate only
+    python -m examples.mm_fir.mm_fir_build                    # codegen, then csynth if stale
+    python -m examples.mm_fir.mm_fir_build --through codegen  # generate only
+    python -m examples.mm_fir.mm_fir_build --status           # what is stale, and why
 
 The kernel's body is hand-written (``include/mm_fir_task.h``, the HLS twin of ``MmFir.run_iter``);
 everything around it is generated: the config / status structs from :class:`FirCfg` /
 :class:`FirStatus` (so neither side hand-packs a word), and the free-running ``ap_ctrl_none`` top from
-the module's own ports via :func:`~waveflow.build.composite_gen.composite_top_spec`.  The memory-mapped
+the module's own ports via :func:`~waveflow.build.composite_gen.composite_top_spec`.  ``codegen`` is this
+example's step; ``csynth`` the framework's (:class:`~waveflow.build.system_dag.CsynthTopsStep`), re-run
+only when the sources its stamp recorded changed.  The memory-mapped
 side is not in this top at all -- the adaptor is RTL beside it, wired in the XSI gate
 (``tests/examples/test_mm_fir_xsi.py``).
 """
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, ClassVar
 
-from waveflow.build.build import BuildConfig, BuildDag
+from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
+from waveflow.build.system_dag import CsynthTopsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
@@ -54,27 +60,44 @@ def gen_top(root: Path = HERE) -> Path:
     return cpp
 
 
-def synth(root: Path = HERE) -> None:
-    from waveflow.build.rtl_digest import write_stamp
-    from waveflow.toolchain.toolchain import run_vitis_hls
-
-    r = run_vitis_hls(root / f"{TOP}.tcl", work_dir=root)
-    out = (r.stdout or "") + (r.stderr or "")
-    if "WAVEFLOW_CSYNTH_OK" not in out:
-        raise RuntimeError(f"csynth of {TOP} failed:\n{out[-4000:]}")
-    write_stamp(root, TOP)
+def generate(root: Path = HERE) -> list[str]:
+    """Everything before csynth -- the headers, the top and its ``.tcl`` -- and the name of the one top.
+    Python only, seconds, no toolchain."""
+    gen_headers(root)
+    return [gen_top(root).stem]
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--no-synth", action="store_true")
-    a = ap.parse_args()
-    gen_headers()
-    print("generated", gen_top().relative_to(HERE))
-    if not a.no_synth:
-        synth()
-        print("csynth OK")
+@dataclass(kw_only=True)
+class MmFirCodegenStep(BuildStep):
+    """``codegen``: :func:`generate`.  Never fresh: its inputs are Python and framework headers the DAG
+    cannot see, and the rewrite is cheap; csynth after it decides by content."""
+
+    description = "Generate the headers, the kernel top and its .tcl."
+    params: ClassVar[dict] = {}
+    produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        return False
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        root = Path(config.root_dir)
+        generate(root)
+        return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
+
+
+def build_dag() -> BuildDag:
+    """``codegen`` -> ``csynth`` (the one top, its ``.tcl`` at the example root)."""
+    dag = BuildDag()
+    dag.add(MmFirCodegenStep(name="codegen"))
+    dag.add(CsynthTopsStep(name="csynth", tops=(TOP,), tcls={TOP: Path(f"{TOP}.tcl")}))
+    return dag
 
 
 if __name__ == "__main__":
-    main()
+    from waveflow.build.cli import run_dag_cli
+
+    run_dag_cli(build_dag, description=__doc__.splitlines()[0], default_through="csynth",
+                root_dir=HERE,
+                extra_args=[(("--synth",), dict(choices=("build", "check"), default="build",
+                             help="build: csynth a stale top; check: fail on one instead"))],
+                params_from_args=lambda a: {"synth": a.synth})

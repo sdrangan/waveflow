@@ -123,6 +123,7 @@ struct FirCfg {
                 s.write(w);
                 out_idx++;
             }
+            w = 0;
         }
         w.range(31, 0) = self->ntaps;
         w.range(47, 32) = self->cfg_id;
@@ -165,6 +166,7 @@ struct FirCfg {
                 streamutils::write_axi4_word<64>(s, w, false);
                 out_idx++;
             }
+            w = 0;
         }
         w.range(31, 0) = self->ntaps;
         w.range(47, 32) = self->cfg_id;

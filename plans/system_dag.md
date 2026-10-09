@@ -242,3 +242,53 @@ Deviations:
 Gate: `pytest -m "not vitis and not xsi"` green except `tests/mcp/test_knowledge_corpus.py::test_index_builds_in_under_three_seconds`, a wall-clock test that failed the same way on the
 untouched baseline while other work loaded the machine, and passes alone.  It recurs below as "the
 timing flake".
+
+### Stage 2 -- csynth as a step (2026-10-09)
+
+`waveflow/build/system_dag.py`: `CsynthStep(top)` (`run_vitis_hls` + `write_stamp`; `is_fresh` =
+`rtl_problem(root, top) is None`, which is `rtl_staleness` with a missing RTL made a problem too, since
+`rtl_staleness` leaves absence to its caller) and the composite `CsynthTopsStep` (`csynth`), one inner
+`CsynthStep` per top, its consumed `include` / `gen` entering the inner DAG as `SourceStep`s, the inner
+DAG run without `force`.  `synth="build" | "check"` is a `BuildConfig` param; in check mode a stale or
+missing top raises (`"<top>: <why> (synth='check' does not run csynth: ...)"`) and the toolchain is
+never called.  A failed csynth now carries the Vitis log tail (it was a bare `CalledProcessError`).
+
+`markov_build.py` and `mm_fir_build.py` are DAGs on `run_dag_cli` (`codegen` -> `csynth`, default
+`--through csynth`, `--synth build|check`); `generate()` stays callable (mm_fir gained one).  Markov's
+docs figure is on its DAG too: `--through sync_docs_figures` replaces `--figures`, and
+`MarkovFiguresStep.is_fresh` is False (it draws from Python the DAG cannot see).  `--no-synth` is
+`--through codegen`; `--only <top>` is gone (inner step names on the CLI: the plan's open question).
+mm_fir keeps its tracked `mm_fir.tcl` at the example root (`tcls={"mm_fir": "mm_fir.tcl"}`).
+
+Gates:
+
+* **Fresh tree** (a copy of `examples/markov` with only `src/`): all four tops synthesized, 123 s.
+  **Second run**: `csynth` skipped whole (its hook: every top fresh), 0 s; codegen rewrote `include/`
+  and `gen/` with identical bytes.  **A kernel body touched with identical bytes**: skipped.
+* **"Touching one kernel body re-runs that top only" does not hold, and cannot with today's stamp.**
+  A byte edit of `src/markov_chain_core_task.h` makes all four tops stale -- `markov_gen` and both
+  writers too -- because a top's stamp hashes all of `src/**` and `include/*`
+  (`rtl_digest.source_files`), not the files it includes.  The plan's "Narrower stamps" open question
+  names `include/` only; `src/` has the same reach.  What does re-run one top only is a change to that
+  top's own `gen/<top>.cpp` (`test_csynth_reruns_only_the_top_whose_source_changed`).  **Proposed:**
+  narrow the stamp to each top's transitive `#include` closure (or let csynth record the files Vitis
+  read); until then, an edit to one body costs every csynth (2 min for markov).  Not done here.
+* **A fresh-tree csynth under a long path fails silently**: from the scratchpad
+  (`C:/Users/.../AppData/Local/Temp/claude/<130 chars>/markov_fresh`) Vitis stopped after scheduling
+  the queue writer's `GATHER` loop with `Synthesis failed.` and no error text; the same tree at
+  `C:/wf_fresh_mkv` built.  Windows path length is the likely cause (Vitis's per-module paths are deep
+  and the writer's module names long).  Not a DAG issue; noted for whoever builds in a deep directory.
+* **mm_fir's tracked headers had drifted from their generators.**  The first `mm_fir_build` run
+  regenerated `include/fir_cfg.h` (`w = 0;` after a full word), `include/int16_array.h` (TLAST only on
+  the last word) and `mm_fir.tcl` (`-Isrc`): PR #240's array-aligned layout had never been regenerated
+  into mm_fir's tracked copies, and the mm_fir gate never regenerates before its staleness check (the
+  markov gate does).  The stamp saw the change and csynth rebuilt `mm_fir` (the plan's flow working as
+  intended).  The regenerated files are committed with this stage.
+* **XSI gates** (`test_markov_xsi.py`, `test_mm_fir_xsi.py`, `-m xsi`): 13 passed, 0 skipped --
+  markov 1870, mm_fir 618 / 611 on the rebuilt `mm_fir` RTL, bit-exact, traces identical.
+* Fast tests: `tests/build/test_system_dag.py` (11, Vitis replaced by a stand-in): fresh tree then
+  skip, one top's source re-runs only it, a shared header re-runs all, check mode fails stale and
+  missing tops without synthesizing and passes a fresh tree, a missing stamp falls back to mtime,
+  `--status` reads a stamped top fresh under a newer `gen/`, the Vitis log on failure.
+* Fast suite: exit 0, 3958 passed, 4 skipped (the timing flake passed this time).  This checkout's
+  pytest prints no final count line; the exit code and the progress dots are the record.

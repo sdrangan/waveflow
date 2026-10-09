@@ -27,7 +27,7 @@ def test_the_committed_figure_is_what_the_build_renders(tmp_path):
     committed = REPO / "docs/examples/markov/images/chain_output.svg"
     assert out.read_bytes() == committed.read_bytes(), (
         "docs/examples/markov/images/chain_output.svg is stale: "
-        "python -m examples.markov.markov_build --figures")
+        "python -m examples.markov.markov_build --through sync_docs_figures")
 
 
 def test_the_pages_embed_it():

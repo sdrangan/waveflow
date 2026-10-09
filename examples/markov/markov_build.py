@@ -1,9 +1,10 @@
-"""markov_build.py — generate and synthesize the two Markov kernels (``plans/mm_credit_stream.md``
-Stage 3).
+"""markov_build.py — the Markov example's build DAG: generate and synthesize the two kernels and the
+two bus writers (``plans/mm_credit_stream.md`` Stage 3, ``plans/system_dag.md``).
 
-    python -m examples.markov.markov_build            # headers + tops + tcl, then csynth both
-    python -m examples.markov.markov_build --no-synth # generate only
-    python -m examples.markov.markov_build --figures  # the docs figure (golden model, no toolchain)
+    python -m examples.markov.markov_build                               # codegen, then csynth what is stale
+    python -m examples.markov.markov_build --through codegen             # generate only
+    python -m examples.markov.markov_build --status                      # what is stale, and why
+    python -m examples.markov.markov_build --through sync_docs_figures   # the docs figure (no toolchain)
 
 Each kernel's body is hand-written (``src/markov_gen_task.h``, ``src/markov_chain_core_task.h``
 -- the HLS twins of ``MarkovGen.run_iter`` / ``ChainCore.run_iter``); everything around them is
@@ -12,15 +13,21 @@ the bodies pack ``u`` and ``x`` with, the framework's in-band memory writer (cop
 free-running ``ap_ctrl_none`` top from the module's own ports.  The memory-mapped side -- the views,
 the bus writers, the crossbar -- is RTL beside the kernels, wired in the XSI gate.
 
+``codegen`` is this example's step; ``csynth`` is the framework's
+(:class:`~waveflow.build.system_dag.CsynthTopsStep`): one inner step per top, each re-run only when the
+sources its stamp recorded changed, so a ``codegen`` that rewrites identical bytes re-synthesizes
+nothing.
+
 ``src/`` is the only C++ source here.  ``include/`` and ``gen/`` (with each top's ``.tcl``) are
 build output, untracked: delete them and :func:`generate` writes them back (``plans/source_layout.md``).
 """
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, ClassVar
 
-from waveflow.build.build import BuildConfig, BuildDag
+from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.composite_gen import (
     GEN_DIR,
     INCLUDE_DIR,
@@ -31,7 +38,9 @@ from waveflow.build.composite_gen import (
 )
 from waveflow.build.credit_hls import copy_credit_header
 from waveflow.build.mm_writer_gen import write_writer_project
+from waveflow.build.mm_writer_gen import writer_top_name
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
+from waveflow.build.system_dag import CsynthTopsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.mem_stream import MemWCmd
@@ -89,53 +98,49 @@ def generate(root: Path = HERE) -> list[str]:
     return names
 
 
-def synth(top: str, root: Path = HERE) -> str:
-    from waveflow.build.rtl_digest import write_stamp
-    from waveflow.toolchain.toolchain import run_vitis_hls
-
-    r = run_vitis_hls(tcl_path(root, top), work_dir=root)
-    out = (r.stdout or "") + (r.stderr or "")
-    if "WAVEFLOW_CSYNTH_OK" not in out:
-        raise RuntimeError(f"csynth of {top} failed:\n{out[-6000:]}")
-    write_stamp(root, top)
-    return out
+def top_names() -> list[str]:
+    """The four HLS tops :func:`generate` writes, in its order -- named as it names them."""
+    return ([cls.cpp_kernel_name for cls in TOPS]
+            + [writer_top_name(mode, DW, maxp) for mode, maxp in WRITERS])
 
 
-def figures(root: Path = HERE) -> None:
-    """Render the docs figure from the golden model and promote it into docs/ (two DAG steps)."""
+@dataclass(kw_only=True)
+class MarkovCodegenStep(BuildStep):
+    """``codegen``: :func:`generate` -- headers, the four tops, their ``.tcl``.  Python only, seconds.
+
+    Never fresh (:meth:`is_fresh`): its inputs are Python and framework headers the DAG cannot see, and
+    the rewrite is cheap.  The csynth after it decides by content, so identical bytes re-run nothing."""
+
+    description = "Generate the headers, the two kernel tops and the two bus-writer tops, with their .tcl."
+    params: ClassVar[dict] = {}
+    produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        return False
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        root = Path(config.root_dir)
+        generate(root)
+        return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
+
+
+def build_dag() -> BuildDag:
+    """``codegen`` -> ``csynth`` (one inner step per top), and the docs figure beside them."""
     from examples.markov.markov_figures import MarkovFiguresStep, SyncDocsFiguresStep
 
     dag = BuildDag()
+    dag.add(MarkovCodegenStep(name="codegen"))
+    dag.add(CsynthTopsStep(name="csynth", tops=top_names()))
     dag.add(MarkovFiguresStep(name="markov_figures"))
     dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
-    res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
-    bad = [k for k, r in res.items() if not r.success]
-    if bad:
-        raise RuntimeError(f"figure generation failed: {bad}")
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--no-synth", action="store_true")
-    ap.add_argument("--only", help="csynth just this top")
-    ap.add_argument("--figures", action="store_true",
-                    help="only render the docs figure (golden model; no toolchain) and sync it")
-    a = ap.parse_args()
-    if a.figures:
-        figures()
-        print("figures synced to docs/examples/markov/images/")
-        return
-    names = generate()
-    for top in names:
-        print("generated", f"{GEN_DIR}/{top}.cpp")
-    if a.no_synth:
-        return
-    for top in names:
-        if a.only and top != a.only:
-            continue
-        synth(top)
-        print(f"csynth {top} OK")
+    return dag
 
 
 if __name__ == "__main__":
-    main()
+    from waveflow.build.cli import run_dag_cli
+
+    run_dag_cli(build_dag, description=__doc__.splitlines()[0], default_through="csynth",
+                root_dir=HERE,
+                extra_args=[(("--synth",), dict(choices=("build", "check"), default="build",
+                             help="build: csynth a stale top; check: fail on one instead"))],
+                params_from_args=lambda a: {"synth": a.synth})
