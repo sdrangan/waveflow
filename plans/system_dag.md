@@ -425,3 +425,35 @@ directory.  Revisit if a third example repeats the lines.
 Gate: full `pytest -m xsi`: **162 passed, 0 skipped** (`WANT_XSI_GATES` unchanged at 162; no test
 merged or removed).  Markov 1870, mm_fir 618 / 611, the queued host 618, bit-exact, traces identical.
 Fast suite: exit 0 (4044 passed, 4 skipped).
+
+### Stage 6 -- docs (2026-10-09)
+
+* `docs/guide/build/xsi_system.md` (committed with Stage 5, see there): "Running it" is now the system on
+  a build DAG -- the shape, `add_system_steps`, one section per framework step with its own anchor
+  (`#csynth`, `#scenario`, `#pysim`, `#system-xsi`, `#compare`), build vs check, the freshness hook, and
+  `load_run` / `run_system_xsi` as the one-call wrapper; "What it does not do yet" now lists the
+  coarse stamp and the writer codegen, and drops "does not build".
+* `docs/examples/markov/xsi.md` (Stage 5) is a walkthrough of the DAG, no longer of `markov_xsi.py`.
+  It says which steps are the example's (`codegen`, the scenario), gives a table of the framework
+  steps, each linked to its guide section, and covers the CLI (`--through pysim`, `--through csynth`,
+  `--status`, `--synth check`, `--probes`), `load_run`, gates that run the DAG in check mode, and
+  probes from `markov.py`.  Its two "Step 4" / "Step 5" references now name and link the sections of
+  The system.  `markov/rtlsim.md`, `mm_fir/rtlsim.md` and `axi_mm/crossbar.md` (Stage 5) follow suit.
+* This stage: `markov/codegen.md`, `index.md`, `pysim.md`, `theory.md` (`--figures` ->
+  `--through sync_docs_figures`); `mm_fir/codegen.md` (`--no-synth` -> `--through codegen`),
+  `mm_fir/pysim.md` (the scenario from `mm_fir_build`, probes via `--probes`);
+  `guide/build/sw_threads.md`, `guide/custom_hooks/bfm_model.md`,
+  `guide/flows/concurrent_flowsteps.md` (the pysim / compare / system_xsi steps, linked, where they
+  said `run_system_xsi`).  `axi_mm/slave_howitworks.md` names only the gate test file, which stays:
+  no change.
+
+Gate: docs tests green; the fast suite run for Stage 5 already had every docs edit in the tree, with
+no code change since (exit 0, 4044 passed, 4 skipped).
+
+### Open after this plan
+
+* **Narrow the source stamp** (Stage 2's finding): a body edit re-synthesizes every top.
+* `--force` re-enters `csynth`, but its inner DAG runs without force, so a fresh top is not
+  re-synthesized.  To force one, delete its `<top>_proj/rtl_sources.json`.  Inner step names on the
+  CLI (`--force-step csynth_markov_chain`) would be the clean way.
+* A deep working directory (long Windows paths) can fail csynth with no error text (Stage 2).

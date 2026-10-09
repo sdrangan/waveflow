@@ -9,11 +9,12 @@ summary: "What becomes the Vitis kernel, and what does not. The message structs 
 # Code generation
 
 ```
-python -m examples.mm_fir.mm_fir_build             # headers + top + tcl, then csynth
-python -m examples.mm_fir.mm_fir_build --no-synth  # generate only
+python -m examples.mm_fir.mm_fir_build --through csynth    # headers + top + tcl, then csynth if stale
+python -m examples.mm_fir.mm_fir_build --through codegen   # generate only
 ```
 
-[`mm_fir_build.py`](../../../examples/mm_fir/mm_fir_build.py) produces the **Vitis kernel** — one of the
+The `codegen` and [csynth](../../guide/build/xsi_system.md#csynth) steps of
+[`mm_fir_build.py`](../../../examples/mm_fir/mm_fir_build.py) produce the **Vitis kernel** — one of the
 [components of the XSI simulation](../../guide/flows/concurrent_layers.md), and the only one Vitis builds. The
 register bank and the queues are **not** in it: Vitis cannot generate an AXI slave, so they are RTL
 beside the kernel, joined in the [RTL top](rtlsim.md). What the kernel sees of them is four streams.

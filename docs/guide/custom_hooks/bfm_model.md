@@ -279,7 +279,7 @@ Two rules keep the two realizations comparable:
 
 The **host conformance gate** then discharges the obligation above for a host: run the same scenario
 through pysim and through RTL, and require **each endpoint's trace to be byte-identical** --
-`run_system_xsi` does it and reports `run.trace_mismatches`. Per endpoint, not globally: the
+the system DAG's [compare](../build/xsi_system.md#compare) step does it (`run.trace_mismatches`). Per endpoint, not globally: the
 interleaving across endpoints is timing, and pysim is loosely timed. The RTL cycle count is an exact
 gate of its own.
 

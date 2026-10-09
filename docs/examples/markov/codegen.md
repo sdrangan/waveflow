@@ -7,7 +7,8 @@ summary: "What becomes Vitis HLS and how: four free-running tops -- the generato
 
 # Code generation
 
-`python -m examples.markov.markov_build` generates every header and top, and synthesizes four:
+The `codegen` step of `python -m examples.markov.markov_build` generates every header and top, and its
+[csynth](../../guide/build/xsi_system.md#csynth) step synthesizes four (`--through csynth` stops there):
 
 | top | what | written by hand | II | estimated clock (10 ns target) |
 |---|---|---|---|---|

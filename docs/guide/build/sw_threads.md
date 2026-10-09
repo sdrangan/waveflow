@@ -130,7 +130,7 @@ What the framework supplies, so the C++ holds only the program:
 - **`bfm_model()`** is derived from `cpp_model` / `cpp_header` and the host's bus master and interrupt
   inputs; `check(host, "xsi_bfm_model")` verifies the class exists in that header.
 
-Run it with [`run_system_xsi`](xsi_system.md#running-it).
+Run it on a build DAG with [`add_system_steps`](xsi_system.md#running-it) -- or in one call, `run_system_xsi`.
 
 ## How the C++ threads are scheduled
 
@@ -158,8 +158,9 @@ Nothing static can show that a C++ host behaves like its Python twin, so a run c
   `write_scenario`;
 - **every endpoint records what crossed it** -- each message written, each read, each region read back --
   in Python (`mm_host.py`) and in C++ (`xsi_mm_host.h`), and dumps it as a burst bundle per endpoint;
-- `run_system_xsi` runs the same system in pysim from the same file and compares the bundles **byte for
-  byte, per endpoint** (`run.trace_mismatches`). Per endpoint, because the interleaving across
+- the system DAG's [pysim](xsi_system.md#pysim) step runs the same system in pysim from the same file,
+  and its [compare](xsi_system.md#compare) step compares the bundles **byte for byte, per endpoint**
+  (`run.trace_mismatches`). Per endpoint, because the interleaving across
   endpoints is timing, and pysim is loosely timed. The RTL cycle count is a gate of its own.
 
 `tests/examples/test_sw_channels_xsi.py` is the scheduler's sharpest test: `FirHost` with its writer

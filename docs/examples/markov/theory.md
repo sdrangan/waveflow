@@ -63,7 +63,7 @@ longer the chain remembers where it started.
 *Two chains from the example's golden model -- which the RTL reproduces bit for bit. The sticky one
 (p01 = p10 = 0.015) holds a state for over a hundred steps and its fraction of ones wanders before it
 settles at 0.50; the jumpy one flips constantly and settles at 0.60 within a few hundred. The figure is
-a build step: `python -m examples.markov.markov_build --figures`.*
+a build step: `python -m examples.markov.markov_build --through sync_docs_figures`.*
 
 ## Simulating one step
 

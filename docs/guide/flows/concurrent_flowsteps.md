@@ -100,7 +100,8 @@ example, as a kernel's HLS body is named by `kernel_task()` -- but it is the pro
 endpoints are a generated header, and its calls block on a fiber runtime, so it holds no BFM, no
 address and no state machine. What is generated around it is the harness: `system_tb_spec` binds the
 host's ports to the system top's (`s0_axi`, `irq_<view>`) and `render_system_tb` emits the harness and
-the `main`; `run_system_xsi(sysm)` does all of it from the system object. The two realizations run the
+the `main`; the [system_xsi](../build/xsi_system.md#system-xsi) step of a system's build DAG
+(`add_system_steps(dag, sysm)`) does all of it from the system object. The two realizations run the
 same scenario file, and the gate is that every host endpoint's trace is byte-identical between pysim
 and RTL; [mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) and
 [markov](../../examples/markov/xsi.md) are the worked cases.

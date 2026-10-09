@@ -61,8 +61,8 @@ In going through this example, you will learn how to:
   and how close the timing is.
 - [Code generation](codegen.md) — the four synthesized tops, the two hand-written bodies as loops, and
   the timing they close at.
-- [XSI testbench](xsi.md) — `markov_xsi.py` section by section: the generated top, the host's C++
-  twin, the generated harness, running it, reading the traces back, and the gates.
+- [XSI testbench](xsi.md) — the build DAG (`markov_build.py`), section by section: which steps are the
+  example's, the generated top, the host's C++ twin, running it, reading the traces back, and the gates.
 - [RTL simulation](rtlsim.md) — the four-master system under XSI, the gates, and finding the time with
   probes.
 
