@@ -631,12 +631,12 @@ def _resps(sink, cls, w):
     """
     if not sink.words:
         return []
-    flat = np.concatenate(sink.words).astype(np.uint64)
+    flat = np.concatenate(sink.words)
     n = cls.nwords_per_inst(w)
     out = []
     for i in range(0, flat.size, n):
         r = cls().deserialize(flat[i:i + n], word_bw=w)
-        out.append(tuple(int(getattr(r, f)) for f in cls.elements))
+        out.append(tuple(int(getattr(r, f)) for f in cls.elements))  # int: json.dumps (build)
     return out
 
 
