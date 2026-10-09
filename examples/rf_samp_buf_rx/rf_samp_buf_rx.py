@@ -339,7 +339,7 @@ def captured_words(tb: "RfSampBufRxTB") -> np.ndarray:
     """The raw AXIS words the sink collected — ``samp_per_word`` samples in each."""
     if not tb.out_sink.words:
         return np.zeros(0, dtype=np.uint64)
-    return np.concatenate(tb.out_sink.words).astype(np.uint64)
+    return np.concatenate(tb.out_sink.words)
 
 
 def captured_samples(tb: "RfSampBufRxTB") -> np.ndarray:
@@ -360,10 +360,10 @@ def responses(tb: "RfSampBufRxTB") -> list[tuple[int, int, int]]:
     if not tb.resp_sink.words:
         return []
     w = int(tb.rfdc.axis_bitwidth)
-    flat = np.concatenate(tb.resp_sink.words).astype(np.uint64)
+    flat = np.concatenate(tb.resp_sink.words)
     n = RxResp.nwords_per_inst(w)
     out = []
     for i in range(0, flat.size, n):
         r = RxResp().deserialize(flat[i:i + n], word_bw=w)
-        out.append((int(r.tid), int(r.status), int(r.nsent)))
+        out.append((int(r.tid), int(r.status), int(r.nsent)))  # int: json.dumps (build)
     return out

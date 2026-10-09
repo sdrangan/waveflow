@@ -110,7 +110,7 @@ A filter needs a way to say "start this block from silence" — the first block 
 discontinuity. The tempting answer is to lean on `ap_rst`. This design does not:
 
 ```python
-prev = np.zeros(t - 1, dtype=np.int64) if zero_state else np.asarray(carry.val, dtype=np.int64)
+prev = np.zeros(t - 1, dtype=np.int64) if zero_state else carry.val
 ```
 
 `zero_state` is a field on the command, so **resetting the history is a documented operation of the

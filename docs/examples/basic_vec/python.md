@@ -70,9 +70,9 @@ import numpy as np
 from waveflow.utils.fixputils import to_bits
 
 # integer / fixed: stored W-bit integers
-int_bits = [int(x) for x in to_bits(np.asarray(y), 8)]
+int_bits = [int(x) for x in to_bits(y.val, 8)]
 # float: raw IEEE bits
-float_bits = [int(u) for u in np.asarray(y).astype(np.float32).view(np.uint32)]
+float_bits = [int(u) for u in y.val.view(np.uint32)]
 ```
 
 These golden bit-vectors go into `expected.json`; the kernel's output is compared against

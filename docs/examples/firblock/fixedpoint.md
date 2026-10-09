@@ -39,8 +39,7 @@ instance* rather than from a type annotation — an annotation could only name t
 The one place a fixed-point design usually goes wrong is the accumulator. Here nothing is hand-sized:
 
 ```python
-prod = mult(_as_fixed(win, self.samp_cls),
-            _as_fixed(np.asarray(taps.val, dtype=np.int64), self.samp_cls))
+prod = mult(_as_fixed(win, self.samp_cls), _as_fixed(taps.val, self.samp_cls))
 acc = fixed_sum(prod, axis=1)                 # +ceil(log2 T) integer bits, NOT +T
 y = quantize(acc, self.samp_cls)
 ```

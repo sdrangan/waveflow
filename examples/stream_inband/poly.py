@@ -183,7 +183,6 @@ def poly_stream_model(bursts: list[StreamBurst], word_bw: int = 32) -> PolyStrea
     pf = samples_per_word(word_bw)
     words = [(int(w), i + 1 == len(b.words) and b.tlast)
              for b in bursts for i, w in enumerate(np.asarray(b.words, dtype=np.uint64))]
-    word_t = np.uint32 if word_bw == 32 else np.uint64
     hdr_words = PolyCmdHdr().serialize(word_bw=word_bw).size
     out: list[tuple[int, bool]] = []
     res = PolyStreamResult(out=[])
@@ -191,26 +190,24 @@ def poly_stream_model(bursts: list[StreamBurst], word_bw: int = 32) -> PolyStrea
     while True:
         if pos + hdr_words > len(words):
             raise ValueError("the stimulus ends before an END command: the kernel would block")
-        hdr = PolyCmdHdr().deserialize(
-            np.array([w for w, _ in words[pos:pos + hdr_words]], dtype=word_t), word_bw=word_bw)
+        hdr = PolyCmdHdr().deserialize([w for w, _ in words[pos:pos + hdr_words]], word_bw=word_bw)
         pos += hdr_words
-        if int(hdr.cmd_type) == PolyCmdType.END:
+        if hdr.cmd_type == PolyCmdType.END:
             break
         resp = PolyRespHdr()
-        resp.tx_id = int(hdr.tx_id)
+        resp.tx_id = hdr.tx_id
         rw = resp.serialize(word_bw=word_bw)
         out += [(int(w), i + 1 == rw.size) for i, w in enumerate(rw)]
 
-        coeffs = np.asarray(hdr.coeffs, dtype=np.float32)
-        nsamp, err = int(hdr.nsamp), PolyError.NO_ERROR
+        coeffs = hdr.coeffs
+        nsamp, err = hdr.nsamp, PolyError.NO_ERROR
         for i in range(0, nsamp, pf):
             if pos >= len(words):
                 raise ValueError("the stimulus ends inside a sample burst: the kernel would block")
             w, last = words[pos]
             pos += 1
             nlane = min(pf, nsamp - i)
-            x = read_array(np.array([w], dtype=word_t), elem_type=Float32,
-                           word_bw=word_bw, shape=nlane).val
+            x = read_array([w], elem_type=Float32, word_bw=word_bw, shape=nlane).val
             y = write_array(poly_eval(coeffs, x), elem_type=Float32, word_bw=word_bw)
             final = i + pf >= nsamp
             out.append((int(y[0]), final or last))
@@ -220,7 +217,7 @@ def poly_stream_model(bursts: list[StreamBurst], word_bw: int = 32) -> PolyStrea
             if final and not last:
                 err = PolyError.NO_TLAST_SAMP_IN
         if err != PolyError.NO_ERROR:
-            res.halted, res.error, res.tx_id = 1, int(err), int(hdr.tx_id)
+            res.halted, res.error, res.tx_id = 1, int(err), int(hdr.tx_id)  # int: status() -> json
             break
 
     cur: list[int] = []
@@ -320,12 +317,12 @@ class PolyAccel(HostActivated):
 
             # The burst ends at TLAST, so the words that arrived say whether it came early.
             pf = samples_per_word(self.in_bw)
-            nwords_max = -(-int(cmd_hdr.nsamp) // pf)
+            nwords_max = -(-int(cmd_hdr.nsamp) // pf)    # int: -n of an unsigned wraps
             words = yield from self.s_in.get(nwords_max=nwords_max)
             nwords = len(words)
             tstart = self.env.now - (nwords - 1) * self.clk.period    # first word's arrival
             samp_in = read_array(words, elem_type=Float32, word_bw=self.in_bw,
-                                 shape=min(int(cmd_hdr.nsamp), nwords * pf)).val
+                                 shape=min(cmd_hdr.nsamp, nwords * pf)).val
             y = poly_eval(cmd_hdr.coeffs, samp_in)
 
             t_out_start = tstart + self.proc_latency * self.clk.period
@@ -337,7 +334,7 @@ class PolyAccel(HostActivated):
             self._job += 1
 
             if len(samp_in) != cmd_hdr.nsamp:   # TLAST came early: halt, read nothing more
-                self._halt(PolyError.TLAST_EARLY_SAMP_IN, int(cmd_hdr.tx_id))
+                self._halt(PolyError.TLAST_EARLY_SAMP_IN, cmd_hdr.tx_id)
                 self.logger.log(event='proc_end', job=self._job)
                 return
 
@@ -389,7 +386,7 @@ class PolyTB(SimObj):
         yield from rm.run(self.irq)              # enable ap_done irq, start, sleep until done
         yield reader
         for f in ("halted", "error", "tx_id"):
-            self.status[f] = int((yield from rm.get(f)))
+            self.status[f] = int((yield from rm.get(f)))    # int: written as JSON
 
     def _write_all(self) -> ProcessGen[None]:
         word_t = np.uint32 if self.word_bw <= 32 else np.uint64

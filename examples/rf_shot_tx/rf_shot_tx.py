@@ -266,17 +266,17 @@ def expected_responses(frames) -> list[tuple[int, int, int]]:
     out: list[tuple[int, int, int]] = []
     busy = False
     for f in frames:
-        h = HDR().deserialize(np.asarray(f, dtype=np.uint64)[:hn], word_bw=WORD_BW)
+        h = HDR().deserialize(f[:hn], word_bw=WORD_BW)
         took = min(int(np.asarray(f).size) - hn, DEPTH)
-        op = int(h.opcode)
+        op = h.opcode
         if op == SHOT_END:
-            out.append((int(h.tid), SHOT_LOADED, 0))
+            out.append((h.tid, SHOT_LOADED, 0))
         elif op not in (SHOT_LOAD, SHOT_LOOP):
-            out.append((int(h.tid), SHOT_BAD_OPCODE, 0))
+            out.append((h.tid, SHOT_BAD_OPCODE, 0))
         elif busy:
-            out.append((int(h.tid), SHOT_BUSY, 0))
+            out.append((h.tid, SHOT_BUSY, 0))
         else:
-            out.append((int(h.tid), SHOT_LOADED if took == DEPTH else SHOT_SHORT, took * SPW))
+            out.append((h.tid, SHOT_LOADED if took == DEPTH else SHOT_SHORT, took * SPW))
             busy = op == SHOT_LOAD
     return out
 
@@ -468,7 +468,7 @@ def responses(tb: RfShotTxTB) -> list[tuple[int, int, int]]:
     out = []
     for i in range(0, words.size - n + 1, n):
         r = RESP().deserialize(words[i:i + n], word_bw=WORD_BW)
-        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
+        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))  # int: lands in json.dumps
     return out
 
 

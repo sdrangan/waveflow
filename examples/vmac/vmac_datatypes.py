@@ -232,7 +232,7 @@ class VmacFormats:
             im = np.full((n_rows, n_cols), int(cx.im_of(sc.imm)), dtype=np.int64)
             M = cx.make_complex(re, im, in_fmt)
         else:
-            col = np.asarray(alpha_arr).reshape(n_rows)  # (n_rows,) structured complex
+            col = alpha_arr.reshape(n_rows)  # (n_rows,) structured complex
             M = np.broadcast_to(col[:, None], (n_rows, n_cols)).copy()
         return self.operand(M)
 
@@ -250,7 +250,7 @@ class VmacFormats:
         ``F_acc`` depends only on the op, which is what makes the requantize shift derivable (see
         :meth:`output_format` / :meth:`derived_shift`)."""
         in_fmt = self.in_format()
-        op = OpCode(int(cmd.op))
+        op = cmd.op
         if op is OpCode.scalar_mult:
             acc = cx.cmult_format(in_fmt, in_fmt)  # alpha · A
         elif op is OpCode.inner_prod:
@@ -258,6 +258,7 @@ class VmacFormats:
         else:  # sum
             acc = add_format(in_fmt, in_fmt)  # A + B (aligned, +1 int bit)
         if bool(cmd.reduce):
+            # int: sum_format calls n_terms.bit_length(), which numpy ints lack
             acc = sum_format(acc, int(cmd.n_rows))  # + ceil(log2 n_rows) int bits
         return acc
 

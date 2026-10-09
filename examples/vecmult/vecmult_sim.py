@@ -69,9 +69,9 @@ class VecCapture(SimObj):
 
     def run_proc(self) -> ProcessGen[None]:
         vec = yield from self.stream_ep.get_array(Samp, count=int(self.n))
-        self.got = np.asarray(vec.val).copy()
+        self.got = vec.val.copy()
         resp = yield from self.stream_ep.get_schema(VecResp)
-        self.tx_id = int(resp.tx_id)
+        self.tx_id = resp.tx_id
 
 
 @dataclass

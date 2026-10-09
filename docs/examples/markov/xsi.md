@@ -213,7 +213,7 @@ with the schemas themselves:
 ```python
 def trace_report(out: str, traces) -> str:
     t = {int(m[1]): int(m[2]) for m in re.finditer(r"^JOBT (\d+) t=(\d+)", out, re.M)}
-    resp = [MkvResp().deserialize(np.asarray(b, dtype=np.uint64), word_bw=DW)
+    resp = [MkvResp().deserialize(b, word_bw=DW)
             for b in read_burst_bundle(traces / "qresp")]
     xs = read_burst_bundle(traces / "mem_reader")
     ...                                          # one "JOB <tx> ones=<n> t=<cycle> X <words>" per job

@@ -99,15 +99,15 @@ def trace_report(traces) -> str:
     traces = Path(traces)
     expected = [(int(b[2]), int(b[3])) for b in read_burst_bundle(Path(traces).parent / "scenario")
                 if int(b[0]) == _ITEM_PKT]
-    resp = [FirRespHdr().deserialize(np.asarray(b, dtype=np.uint64), word_bw=64)
+    resp = [FirRespHdr().deserialize(b, word_bw=64)
             for b in read_burst_bundle(traces / "qresp")]
     bad = sum(1 for r, (tx, want) in zip(resp, expected)
-              if (int(r.tx_id), int(r.cfg_id)) != (tx, want)) + abs(len(resp) - len(expected))
+              if (r.tx_id, r.cfg_id) != (tx, want)) + abs(len(resp) - len(expected))
     lines = [f"RESP n={len(resp)} mismatches={bad}"]
     status = read_burst_bundle(traces / "status")
     if status:
-        st = FirStatus().deserialize(np.asarray(status[-1], dtype=np.uint64), word_bw=64)
-        lines.append(f"STATUS nsamp={int(st.nsamp)} ncfg={int(st.ncfg)}")
+        st = FirStatus().deserialize(status[-1], word_bw=64)
+        lines.append(f"STATUS nsamp={st.nsamp} ncfg={st.ncfg}")
     y = [int(w) for b in read_burst_bundle(traces / "qout") for w in np.asarray(b, dtype=np.uint64)]
     lines.append("Y" + "".join(f" {w:x}" for w in y))
     return "\n".join(lines) + "\n"

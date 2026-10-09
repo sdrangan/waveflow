@@ -79,6 +79,7 @@ def on_start(self) -> ProcessGen[None]:
 
 @synthesizable
 def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
+    # int: the golden is plain-Python a*x + b, which overflows int32
     return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 ```
 

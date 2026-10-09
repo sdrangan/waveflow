@@ -33,7 +33,7 @@ def fa(vals):
 
 a, b, c = fa([1.5, 2.5, -3.0]), fa([2.0, -1.5, 0.5]), fa([0.25, 1.0, -0.5])
 y = a * b + c
-np.asarray(y)                                            # array([ 3.25, -2.75, -2.  ], dtype=float32)
+y.val                                                    # array([ 3.25, -2.75, -2.  ], dtype=float32)
 y.element_type.get_bitwidth()                            # 32  (no growth — float32 in, float32 out)
 ```
 
@@ -69,7 +69,7 @@ To compare against the kernel you look at the **raw IEEE bits**, not the printed
 decimal — reinterpret the `float32` array as `uint32`:
 
 ```python
-[int(u) for u in np.asarray(a).astype(np.float32).view(np.uint32)]
+[int(u) for u in a.val.view(np.uint32)]
 # [1069547520, 1075838976, 3225419776]
 ```
 

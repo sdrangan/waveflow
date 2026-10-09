@@ -60,8 +60,6 @@ import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-import numpy as np
-
 from examples.vmac.vmac_datatypes import OpCode, VmacCmd, VmacFormats
 from waveflow.hw.clock import Clock
 from waveflow.hw.complexfield import cadd, cmult, conj, csum
@@ -231,19 +229,19 @@ class VmacAccel(HwModule):
         on a no-``sim`` accelerator; the flat-memory twin for the build / cosim vector generators is
         ``vmac_golden_mem.apply_golden``.  All formats are read off :attr:`types`."""
         fmt = self.types
-        n, m = int(cmd.n_rows), int(cmd.n_cols)
+        n, m = cmd.n_rows, cmd.n_cols
         out_cls = fmt.output_format(cmd)  # fail-loud config guards (acc_bw / out_bw)
-        A = fmt.operand(np.asarray(a).reshape(n, m))
+        A = fmt.operand(a.reshape(n, m))
 
         # element-wise op -> R[i, j]
-        op = OpCode(int(cmd.op))
+        op = cmd.op
         if op is OpCode.scalar_mult:
             t = cmult(fmt.alpha(cmd.alpha, n, m, alpha), A)  # alpha[i] · A
         elif op is OpCode.inner_prod:
-            B = fmt.operand(np.asarray(b).reshape(n, m))
+            B = fmt.operand(b.reshape(n, m))
             t = cmult(A, conj(B))  # A · conj(B)
         else:  # sum
-            B = fmt.operand(np.asarray(b).reshape(n, m))
+            B = fmt.operand(b.reshape(n, m))
             t = cadd(A, B)  # A + B
 
         # optional row reduction (wide accumulator)
@@ -292,13 +290,13 @@ class VmacAccel(HwModule):
         dequeue time, so per-command latency is unchanged — and because this body is not
         extracted, the (non-synthesizable) ``yield self.timeout`` pad is excluded for free."""
         t_entry = self.now  # == dequeue_t (run_proc dispatches on the dequeue tick)
-        n, m = int(cmd.n_rows), int(cmd.n_cols)
+        n, m = cmd.n_rows, cmd.n_cols
         nm = n * m
-        op = OpCode(int(cmd.op))
+        op = cmd.op
         need_b = op in (OpCode.inner_prod, OpCode.sum)
         # ab_eq: B aliases A — skip B's read (not needed by the golden; the suppressed bus beat
         # is the point).  alpha_indirect: per-row alpha lives in memory, not the immediate.
-        ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+        ab_eq = need_b and cmd.b.addr == cmd.a.addr
         alpha_indirect = op is OpCode.scalar_mult and not bool(cmd.alpha.direct)
         cmd_idx = self._cmd_idx
 
@@ -310,21 +308,21 @@ class VmacAccel(HwModule):
         data.on_transfer = self._txn_recorder(data, cmd_idx, ab_eq)
 
         # timed operand reads — one whole-matrix LT block each (on_transfer records each)
-        a = yield from data.read_slice(int(cmd.a.addr), int(cmd.a.addr) + nm)
+        a = yield from data.read_slice(cmd.a.addr, cmd.a.addr + nm)
         b = None
         if need_b and not ab_eq:
-            b = yield from data.read_slice(int(cmd.b.addr), int(cmd.b.addr) + nm)
+            b = yield from data.read_slice(cmd.b.addr, cmd.b.addr + nm)
         elif ab_eq:
             b = a
         alpha = None
         if alpha_indirect:
-            alpha = yield from data.read_slice(int(cmd.alpha.addr), int(cmd.alpha.addr) + n)
+            alpha = yield from data.read_slice(cmd.alpha.addr, cmd.alpha.addr + n)
 
         # the bit-exact golden computes R / reduce / requantize (pure math)
         dst = self.execute(cmd, a, b, alpha)
 
         # timed Y writeback — one LT block (element type is dst's, the output format)
-        yield from data.write_slice(int(cmd.y.addr), dst, element_type=type(dst).element_type)
+        yield from data.write_slice(cmd.y.addr, dst, element_type=type(dst).element_type)
 
         # II-decoupling: advance to the calibrated pipeline-schedule completion time.  The
         # transfers above already moved `now` (their bus occupancy is real); pad the remainder so
@@ -387,11 +385,12 @@ class VmacAccel(HwModule):
         datapath returns, reading the dequeue time stashed by :meth:`_record_dequeue`."""
         dequeue_t = self._dequeue_t
         complete_t = self.now
-        op = OpCode(int(cmd.op))
+        op = cmd.op
         need_b = op in (OpCode.inner_prod, OpCode.sum)
-        ab_eq = need_b and int(cmd.b.addr) == int(cmd.a.addr)
+        ab_eq = need_b and cmd.b.addr == cmd.a.addr
         self.cmd_records.append({
             "cmd_idx": self._cmd_idx, "op": op.name, "ab_eq": bool(ab_eq),
+            # int: these records reach json.dumps (VmacQueueSim.emit_timeline)
             "n_rows": int(cmd.n_rows), "n_cols": int(cmd.n_cols),
             "dequeue_t": float(dequeue_t), "complete_t": float(complete_t),
             "latency": float(complete_t - dequeue_t),

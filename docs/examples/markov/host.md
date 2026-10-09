@@ -137,17 +137,15 @@ frees a slot:
     def _reader(self):
         for _ in self.items:
             resp = yield from self.qresp.get_schema(MkvResp)
-            j = int(resp.tx_id)                       # which job this answers
-            n = int(resp.n)
+            j = resp.tx_id                       # which job this answers
+            n = resp.n
             if self.mem_bus_base is None:             # direct wiring: read the memory itself
-                x = np.asarray(self.mem.read_array(self._dst(j), U8, n))
+                x = self.mem.read_array(self._dst(j), U8, n).val
             else:                                     # over the bus
                 xaddr, xwords, _cmd = self.items[j]
                 words = yield from self.mem_reader.read(xwords, xaddr)
-                x = np.asarray(read_array(np.asarray(words, dtype=np.uint64), U8, word_bw=DW,
-                                          shape=n).val)
-            self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
-                                   t=self.env.now)
+                x = read_array(words, U8, word_bw=DW, shape=n).val
+            self.results[j] = dict(n=n, ones=resp.ones, x=x, t=self.env.now)
             self.slots.release()                      # a slot back to the writer
         self.done.succeed()
 ```

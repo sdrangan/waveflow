@@ -94,7 +94,7 @@ self.resp = HistResp().deserialize(resp_words, word_bw=bw)
 
 # Read the kernel-produced counts back.
 out = yield from self.mem.m_mm.read_array(Uint32Field, nbins, self.count_addr, word_bw=bw)
-self.counts = np.asarray(out, dtype=np.uint32)
+self.counts = out.val
 ```
 
 The details that matter:

@@ -142,15 +142,15 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         hdr = yield from self.s_in.get_schema(FirCmdHdr)
         # The order the two streams cannot give, carried in the header: wait for this packet's
         # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
-        while self.cfg_id != int(hdr.cfg_id):
+        while self.cfg_id != hdr.cfg_id:
             cfg = yield from self.s_cfg.get_schema(FirCfg)
-            self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
-            self.cfg_id = int(cfg.cfg_id)
+            self.taps = cfg.coeffs[:cfg.ntaps]
+            self.cfg_id = cfg.cfg_id
             self.ncfg += 1
-        n = int(hdr.nsamp)
+        n = hdr.nsamp
         if n:
             x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
-            y = self._filter(np.asarray(x.val, dtype=np.int64))
+            y = self._filter(x.val)
             # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
             # sample arrived, and one result follows every proc_ii cycles.
             t_out_start = tstart + self.proc_latency * self.clk.period
@@ -161,7 +161,7 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
-        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_id=self.cfg_id))
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=hdr.tx_id, cfg_id=self.cfg_id))
 ```
 
 `_filter` is the golden itself, run over the filter's history and the packet:
@@ -244,7 +244,7 @@ The **reader** takes one output packet per input packet, then its response, and 
                 y = yield from self.qout.get_array(S64, nsamp)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
-                got = (int(resp.tx_id), int(resp.cfg_id))
+                got = (resp.tx_id, resp.cfg_id)
                 self.responses.append(got)
                 for name, exp, val in (("tx_id", tx, got[0]), ("cfg_id", want, got[1])):
                     if exp != val:

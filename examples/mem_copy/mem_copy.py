@@ -181,9 +181,9 @@ class Sequencer(FreeRunMod):
         it holds no cross-firing state (the ``tx_id`` comes from the command)."""
         w = int(self.mem_dwidth)
         cmd: CopyCmd = yield from self.s_cmd.get_schema(CopyCmd)
-        memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
-        memw = MemWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), fwd_bursts=1)
-        resp = CopyResp(tx_id=int(cmd.tx_id))
+        memr = MemRCmd(addr=cmd.src_off, len=cmd.n_words, fwd_bursts=2)
+        memw = MemWCmd(addr=cmd.dst_off, len=cmd.n_words, fwd_bursts=1)
+        resp = CopyResp(tx_id=cmd.tx_id)
         yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(resp.serialize(word_bw=w), dtype=np.uint64))

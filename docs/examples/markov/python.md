@@ -78,8 +78,8 @@ class MarkovGen(FreeRunMod):
     def run_iter(self):
         cmd = yield from self.s_cmd.get_schema(MkvCmd)
         yield from self.m_u.write(cmd)                   # forward the command
-        n = int(cmd.n)
-        u = uniforms(int(cmd.seed), n)
+        n = cmd.n
+        u = uniforms(cmd.seed, n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
@@ -102,19 +102,19 @@ The chain is a **composite** of two parts:
 class ChainCore(FreeRunMod):
     def run_iter(self):
         cmd = yield from self.s_u.get_schema(MkvCmd)
-        n, x = int(cmd.n), int(cmd.x0) & 1
-        dst, ones = int(cmd.dstaddr), 0
+        n, x = cmd.n, cmd.x0 & 1
+        dst, ones = cmd.dstaddr, 0
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             u = yield from self.s_u.get_array(U16, c)            # credit goes back from here
-            xs = chain_golden(np.asarray(u.val), x, int(cmd.p01), int(cmd.p10))
+            xs = chain_golden(u.val, x, cmd.p01, cmd.p10)
             x, ones = int(xs[-1]), ones + int(xs.sum())
             yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
             xw = array(U8, xs).serialize(word_bw=DW)
             yield from self.m_x.write(MemWCmd(addr=(dst + k0) // 8, len=len(xw), fwd_bursts=0))
             yield from self.m_x.write(np.asarray(xw, dtype=np.uint64))
         yield from self.m_x.write(MemWCmd(addr=0, len=0, fwd_bursts=1))
-        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=int(cmd.tx_id)))
+        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
 ```
 
 The core talks to the writer in **frames**: per chunk `[MemWCmd(addr, len) | x words]` -- "write these

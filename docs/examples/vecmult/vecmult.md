@@ -141,12 +141,12 @@ name or its parameter order. `run_iter` stays as the **pysim golden**:
 ```python
 def run_iter(self) -> ProcessGen[None]:
     cmd = yield from self.s_in.get_schema(VecCmd)
-    n = int(cmd.n)
+    n = cmd.n
     x = yield from self.s_in.get_array(Samp, count=n)
     y = yield from self.s_in.get_array(Samp, count=n)
-    z = golden(np.asarray(x.val), np.asarray(y.val))
+    z = golden(x.val, y.val)
     yield from self.z_out.write(DataArray.specialize(Samp, max_shape=(n,), static=True)(z))
-    yield from self.z_out.write(VecResp(tx_id=int(cmd.tx_id)))
+    yield from self.z_out.write(VecResp(tx_id=cmd.tx_id))
 ```
 
 The output array is specialized at **`n`**, the runtime length — not at `vlen`. In fact `vlen` never

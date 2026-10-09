@@ -373,7 +373,7 @@ class Scale(FreeRunMod):
     def run_iter(self):
         if self.gain is None:                          # first firing: the config
             cfg = yield from self.s_cfg.get_schema(Cfg)
-            self.gain = int(cfg.gain)
+            self.gain = cfg.gain
             return
         pkt = yield from self.s_in.get()               # one packet of samples (TLAST = its end)
         self.nsamp += len(pkt)
@@ -403,7 +403,7 @@ class Host(SimObj):
         y = yield from self.qout.get(nwords_max=4)                          # waits for all four
         print("results:", [int(w) for w in y])
         st = yield from self.status.read()
-        print("status: nsamp =", int(st.nsamp))
+        print("status: nsamp =", st.nsamp)
 ```
 
 The wiring: the three views behind one adaptor port at `0x0000`, `0x1000` and `0x2000`, their kernel

@@ -101,6 +101,7 @@ class SystemSimStep(BuildStep):
     def run(self, config: BuildConfig, x_in, a_in, b_in, clk_freq, latency_cycles, **_) -> dict:
         # Read the vector back from the input files the rest of the DAG uses, so the system sim
         # and the SeqTB golden are driven by identical stimulus.
+        # int: plain Python for relu_affine (a*x + b overflows int32) and the JSON summary
         x = int(Int32().read_uint32_file(x_in).val)
         a = int(Int32().read_uint32_file(a_in).val)
         b = int(Int32().read_uint32_file(b_in).val)

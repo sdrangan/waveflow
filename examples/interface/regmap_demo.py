@@ -185,7 +185,7 @@ class CPU(SimObj):
 
     def _read_halted(self) -> ProcessGen[int]:
         val = yield from self.master.read_schema(Bit, addr=self._addr("halted"))
-        return int(val.val)
+        return val.val
 
     def _read_error(self) -> ProcessGen[DemoError]:
         val = yield from self.master.read_schema(DemoErrorField, addr=self._addr("error"))

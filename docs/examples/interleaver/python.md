@@ -73,8 +73,8 @@ that its input is *two* buffers — the indices `P` and the source `X` — so `c
 stream as **two reads**:
 
 ```python
-memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=1)   # read P, relay 1 burst (the descriptor)
-memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=0)   # read X, relay nothing
+memr_p = MemRCmd(addr=cmd.p_off, len=nw, fwd_bursts=1)   # read P, relay 1 burst (the descriptor)
+memr_x = MemRCmd(addr=cmd.x_off, len=nw, fwd_bursts=0)   # read X, relay nothing
 yield from self.cmd_out.write(...memr_p...)                   # [ MemRCmd(P,fwd=1)
 yield from self.cmd_out.write(...desc...)                     #   | IlDesc
 yield from self.cmd_out.write(...memr_x...)                   #   | MemRCmd(X,fwd=0) ]
@@ -118,13 +118,13 @@ class IlComputeInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         desc = yield from self.desc_in.get_schema(IlDesc)
-        n = int(desc.n)
+        n = desc.n
         yield from self.desc_out.write(...desc...)          # forward the descriptor
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
         yblock = yield from self.y_blk.acquire_write()
         yblock.val[:n] = xblock.val[pblock.val[:n]]         # the gather, vectorized: Y[i] = X[P[i]]
-        cycles = float(self.timing.predict({"n": n}))       # its own fitted loop-timing model
+        cycles = float(self.compute_timing.predict_feat({"n": n}))   # its own fitted loop-timing model
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         ...
 ```

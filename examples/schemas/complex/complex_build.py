@@ -265,7 +265,7 @@ def gen_case_sources(case_dict: dict, work_dir: Path) -> Path:
 
     in_cf, out_cf = c.in_cf, c.out_cf
     wbi, wbo = _wbw(in_cf), _wbw(out_cf)
-    n = int(np.asarray(c.a.val).shape[0])
+    n = c.a.val.shape[0]
 
     # generated support headers
     cfg = BuildConfig(root_dir=work_dir)
