@@ -1,8 +1,9 @@
-# PySilicon DSE paper — vision notes (CG matrix inverse)
+# Waveflow DSE paper — vision notes (CG matrix inverse)
 
-**Status: VISION NOTES, not a plan.** The north-star paper that ties the PySilicon
-program together. Captured from discussion; turn into concrete plans as the pieces
-land (`FixedField` → `ComplexField` → blocks → models).
+**Status: VISION NOTES, not yet a plan.** Written 2026-07-04, revised 2026-10-10 after the
+`mcp_frames` blind tests and the timing instrumentation (PR #244). The north-star paper that ties
+the program together. Most of its infrastructure now exists (see the build-vs-have map); "Path to
+a plan" at the end lists what turns these notes into staged work.
 
 ## Thesis / contribution
 
@@ -17,9 +18,42 @@ the honest framing: **exact** accuracy, **approximate** performance. Headline re
 *explore N design points with K ≪ N full Vitis runs, and show the DSE conclusions
 match brute-force-Vitis ground truth on a held-out subset.*
 
-Positioning vs prior HLS-DSE: existing work either puts the **HLS tool in the loop**
-(accurate but slow — what we avoid) or uses **pure analytical models** (fast but not
-functionally exact). PySilicon's angle is the **combination from one source**.
+### Why this holds when code is cheap
+
+AI makes *writing* hardware code cheap. A with/without-Waveflow blind test (Oct 2026, a
+two-kernel bus system) showed it plainly: an agent with no framework hand-wrote a crossbar, its
+slave ports, two HLS kernels and an RTL testbench, and reached a bit-exact RTL simulation with
+fewer tokens than the agent using Waveflow. A contribution that rests on saving coding effort
+does not survive that.
+
+This one does not rest on it. AI does nothing to make *evaluating* a design cheap, and the cost
+of evaluation is what bounds a design search. Measured on the examples
+(`docs/guide/build/timing_events.md`):
+
+| evaluation | cost per point |
+| --- | --- |
+| pysim of a whole system | ~0.1 s |
+| csynth | 20–60 s per top |
+| XSI from scratch | 20–30 s (≈1% of it simulating) |
+| Vitis cosim | ~3 min (a harness rebuilt every run) |
+
+An agent writing from scratch pays the right-hand column at every design point. The thesis is
+about not paying it, and about being able to *trust* the cheap answer: exact accuracy by
+construction, performance with a stated, validated error. Lead with that, not with
+productivity.
+
+## Positioning
+
+- **vs HLS-DSE.** Existing work either puts the **HLS tool in the loop** (accurate but slow —
+  what we avoid) or uses **pure analytical models** (fast but not functionally exact).
+  Waveflow's angle is the **combination from one source**, with a calibration method that says
+  when the approximate model can be believed.
+- **vs LLM-for-hardware.** Most of that work asks whether a model can *write* RTL that passes a
+  testbench. Our blind tests suggest that bar is close to met for small designs. The open
+  problems are **trusting** the result (an implementation checked by a testbench from the same
+  author is self-consistent, not verified) and **exploring** the design space at a cost a search
+  can afford. This paper addresses both; it is complementary to code generation, not in
+  competition with it.
 
 ## The vehicle: conjugate-gradient matrix inverse (wireless)
 
@@ -43,12 +77,32 @@ Not "explore all architectures" — explore the **parameters of one fixed archit
 - **Shared memory + queue** — CG state exchange between the two blocks.
 - **CG control** — the iteration loop tying them together.
 
+In today's terms this is a **`bus_system`** (`docs/guide/ai_tooling/frames.md`): free-running
+kernels and an on-chip memory on one crossbar, command-response jobs, a host that never polls —
+the shape `markov` proves, verified by the system DAG and its trace gate. That frame's rules
+(stream-only kernels, credit on routed links, addresses from `assign_address_ranges`) apply as
+written.
+
 ## Parameters & metrics
 
 - **Parameters:** bit widths (accuracy↔DSP), memory-access width (throughput↔BRAM/
   routing), queue sizes (stall behavior), #CG iterations (accuracy↔latency), array
   size.
 - **Metrics:** accuracy (BER/MSE), resources (DSP/BRAM/LUT/FF), throughput/latency.
+
+### Design parameters vs workload parameters
+
+The parameters do not all cost the same at RTL, and the brute-force baseline must count them
+honestly:
+
+- **Design parameters** — bit widths, array size, memory width, queue depths — change the RTL.
+  Each new point pays csynth of the changed blocks, then elaboration: minutes. **The K ≪ N
+  claim lives here.**
+- **Workload parameters** — make **#iterations** a field of the CG command, not a build
+  parameter. Then sweeping it needs no new RTL: with an incremental XSI runner
+  (`plans/incremental_xsi.md`), each point costs the simulation alone. Its *accuracy* sweep
+  needs no performance model at all. Claiming a speedup over Vitis on this axis would be
+  claiming against a straw man.
 
 ## The two-model approach
 
@@ -80,6 +134,11 @@ The fixed, memory-decoupled blocks let you:
 → You synthesize **O(Σ per-block parameter ranges)** (≈ linear per parameter) and
 **predict the entire cross-product** from the summed block models. You never synthesize
 the cross-product.
+
+This composition now exists in the resource model (`docs/guide/resource_model/`): every module
+has a model, a composite's estimate is its own interface term plus the sum of its children's,
+and every prediction carries a confidence. What the paper adds is the *active* part below —
+when to spend a synthesis — and its validation.
 
 **Don't learn known physics — analytical prior + learned residual.** Per (resource ×
 block):
@@ -116,23 +175,38 @@ memory choice is good). The handful of full-design runs catch any cross-block su
 ## Cycle model (same calibrate-from-runs spine)
 
 Cycles are more tractable than resources: analytically modelable (II × loop bounds +
-burst transfer + queue stalls) and calibrated per block from cosim — the existing
-**cycle-model-training** approach (fit `latency_*` params from RTL cosim). CG cycles ≈
+burst transfer + queue stalls) and calibrated per block from RTL runs. CG cycles ≈
 #iters × (matmul + vector + memory + queue-stall) per-block cycles. Same per-block,
 calibrate-from-runs structure as the resource model.
 
+**Calibrate with XSI, not cosim.** A cosim run carries ~3 min of fixed cost (its testbench
+harness is regenerated and re-elaborated every run); an XSI run of a free-running block is
+20–30 s from scratch, and should be ~simulation time once the runner reuses its snapshot
+(`plans/incremental_xsi.md`). The evidence that the calibrated pysim tracks RTL already exists
+for the system flow: `markov` within 3.3%, `mm_fir` 4.4%, the blind-test `scale_sum` 1.7–4%,
+`memcpy`'s per-job period within 3%.
+
 ## Experimental structure
 
-1. **Calibrate** — per-block syntheses/cosims to fit the resource + cycle models.
+1. **Calibrate** — per-block syntheses and XSI runs to fit the resource + cycle models.
 2. **Validate** — held-out design points: show predicted vs actual cycles/resources are
    accurate *across the space*, not just at calibration points. (This is the make-or-
    break rigor.)
 3. **DSE** — sweep the full parameter cross-product in Python (exact accuracy +
    predicted performance); produce the accuracy/resource/throughput Pareto frontier.
-4. **Baseline + finding** — (a) quantify the win: brute-force Vitis at every point =
-   X compute-days vs PySilicon = Y minutes + K calibration runs, conclusions matching
-   ground truth on the validation subset; (b) a concrete **design finding** (e.g.
-   "12-bit + 8 iterations hits target BER at half the DSPs of naive 16-bit/12-iter").
+4. **Baseline + finding** — (a) quantify the win: brute-force Vitis at every *design* point
+   (csynth + RTL, counted per the design/workload split above) = X compute-days vs Waveflow =
+   Y minutes + K calibration runs, conclusions matching ground truth on the validation subset;
+   (b) a concrete **design finding** (e.g. "12-bit + 8 iterations hits target BER at half the
+   DSPs of naive 16-bit/12-iter").
+5. **Optional — an agent in the loop.** Keep the core result agent-free: an agent adds variance
+   and would confound the method. As a separate experiment, give an agent the DSE task with and
+   without the calibrated model, using the blind-test harness (`docs/guide/ai_tooling/blind.md`)
+   and the timing events. Measure how many RTL evaluations each spends, and whether each reaches
+   the right Pareto points. This speaks directly to the LLM-for-hardware audience.
+
+Every evaluation in steps 1–5 is a timing span (`waveflow.events`), so the cost side of the
+baseline comes from the runs' own logs (`analyze_events`), not from estimates.
 
 ## Reviewer risks / make-or-break
 
@@ -142,26 +216,54 @@ calibrate-from-runs structure as the resource model.
    that LUT/FF is coarser/learned.
 3. **Need a *finding*, not just a method** — the DSE must reveal a non-obvious design
    point.
-4. **Need the brute-force-Vitis baseline** — the speedup + conclusion-fidelity claim.
+4. **Need the brute-force-Vitis baseline** — the speedup + conclusion-fidelity claim, counted
+   per design point, not per workload point.
+5. **"Why not just have an LLM write it?"** — answer with the evaluation-cost table and, if
+   step 5 is run, the agent comparison.
 
-## Build-vs-have map
+## Build-vs-have map (as of 2026-10-10)
 
 | Paper piece | Status |
 |---|---|
-| Bit-exact functional (accuracy) | `FixedField`/`ComplexField` — in progress; conformance harness = the "matches hardware" proof |
-| Vector unit (CG dots/AXPY) | roadmap #4 (`vecunit`) |
-| Shared memory + queue (CG state) | **built** — `MemComponent` + AXI-MM queue |
+| Bit-exact functional (accuracy) | **built** — `FixedField` (`waveflow/hw/fixpoint.py`), `ComplexField` (`waveflow/hw/complexfield.py`) |
+| Shared memory + queue (CG state) | **built** — `MemoryMod`, the memory-mapped views (`build_mm_device`), credit links, the crossbar |
+| System verification at RTL | **built** — the system DAG (`add_system_steps`), XSI, the host-trace gate (`markov`, `mm_fir`) |
+| Cycle-approximate model | **built for the existing blocks** — calibrated pysim within 2–5% of RTL on the system examples; per-block calibration of new blocks to do |
+| Resource-approximate model | **built: prediction and composition** — `docs/guide/resource_model/` (per-module models, hierarchical composition, confidence, fitting from sweeps). **To do:** the active, decision-aware sampling and its validation |
+| Sweeps, calibration storage | **built** — `SweepRunner` (`waveflow/build/sweep.py`), the calibration library |
+| Timing / cost accounting | **built** — `waveflow.events`, `analyze_events` |
+| Vector unit (CG dots / AXPY) | **new — a complete rewrite.** `examples/vecunit` is older work on the retired API (`Packet`, `HwObj`) and is not a starting point; `vecmult` (element-wise, command-response) is the nearest curated kernel to model it on |
 | Systolic matmul block | **new** (application-level) |
-| CG control | **new** (application-level) |
-| Cycle-approximate model | partial — timing extraction + cycle-model-training |
-| Resource-approximate model | **new** — `csynthparse`/`InspectSynthStep` give actual resources; the predictive/active model is the contribution |
-| DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli` + cosim rig |
+| CG control + the CG system | **new** (application-level) |
+| Incremental RTL (cheap workload points, cheap calibration) | **planned** — `plans/incremental_xsi.md` |
 
-Most *infrastructure* exists or is roadmapped; the new pieces are the **systolic block**,
-**CG control**, and the **active resource model**. The paper *composes* — a far stronger
-position than "build everything."
+The infrastructure largely exists. The new work is the **application** (systolic block, vector
+unit, CG control, the CG system) and the **active resource-sampling method** with its held-out
+validation. The paper *composes*.
+
+## Path to a plan
+
+What would turn these notes into staged work, in order:
+
+1. **The CG system in pysim, bit-exact.** Golden model, BER/MSE-vs-SNR from the bit-exact
+   model alone, #iterations as a command field. This already yields the accuracy half of the
+   result, with no Vitis at all.
+2. **The blocks at RTL.** The vector unit, then the systolic array, each a free-running kernel;
+   the system in the `bus_system` shape; the trace gate passing.
+3. **Calibration** of cycles and resources per block, over each block's own parameters.
+4. **The held-out validation** — the make-or-break experiment, before any DSE claim.
+5. **The active sampling method**, and its comparison against random and grid sampling at
+   equal synthesis budget.
+6. **The DSE and the finding**; then, optionally, the agent experiment.
+
+Prerequisites from other plans: `plans/incremental_xsi.md` (cheap RTL calibration and workload
+points), `plans/maxi_pointer_fifo.md` (the CG blocks read and write shared memory through
+free-running tasks, the exact structure that deadlock affects).
 
 ## Related notes
-- `plans/fixedfield.md` — the bit-exact fixed-point foundation (accuracy model).
+- `docs/guide/schema/python/fixpoint.md`, `complex.md` — the bit-exact fixed-point and complex
+  fields (the accuracy model's foundation).
 - the fft_bit_exact_notes plan ([commit 19005b5](https://github.com/sdrangan/waveflow/commit/19005b5)) — a sibling bit-exact-model idea (FFT); same harness.
-- cycle-model-training (project memory) — the cycle model's calibrate-from-cosim spine.
+- `docs/guide/resource_model/` — the resource model the active method builds on.
+- `docs/guide/build/timing_events.md` — the measured evaluation costs.
+- `plans/mcp_frames.md` — the blind tests, including the with/without-Waveflow comparison.
