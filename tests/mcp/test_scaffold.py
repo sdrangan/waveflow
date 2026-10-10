@@ -241,8 +241,9 @@ def test_a_nonempty_directory_is_not_clobbered(tmp_path) -> None:
     dest = tmp_path / "taken"
     dest.mkdir()
     (dest / "mine.txt").write_text("keep me")
-    with pytest.raises(ScaffoldError, match="not empty"):
+    with pytest.raises(ScaffoldError, match="not empty") as info:
         new_accel("gain_clip", frame="stream_inband", dest=dest)
+    assert "new subdirectory" in str(info.value)
     assert (dest / "mine.txt").read_text() == "keep me"
 
 

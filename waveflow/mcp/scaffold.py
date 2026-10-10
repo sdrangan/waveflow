@@ -282,9 +282,13 @@ def new_accel(
     out_dir = Path(dest) if dest is not None else Path.cwd() / name
     out_dir = out_dir.resolve()
     if out_dir.exists() and any(out_dir.iterdir()) and not force:
+        # Name the way out a tool caller has: the MCP tool takes no `force`,
+        # and an agent's own folder always holds its spec.  A blind test
+        # spent two calls retrying this before finding the subdirectory.
         raise ScaffoldError(
-            f"{out_dir} already exists and is not empty; pass force=True to "
-            "write into it anyway"
+            f"{out_dir} already exists and is not empty; scaffold into a new "
+            f"subdirectory instead, e.g. directory={str(out_dir / name)!r} "
+            "(from Python, force=True writes into it anyway)"
         )
 
     # The token the example's identifiers are built from.  `examples/mem_copy`
