@@ -1,0 +1,1633 @@
+{
+  "schema_version": "fir-first-trials-v1",
+  "note": "Real DeepSeek HTTP trials; compact snapshots, not synthetic model outputs. Original SSE SHA256 values are recorded per trial.",
+  "trials": [
+    {
+      "label": "before_compact_view",
+      "score": {
+        "schema_version": "fir-trial-score-v1",
+        "passed": false,
+        "checks": {
+          "completed": false,
+          "runtime_locked": true,
+          "tool_boundary": true,
+          "context_first": true,
+          "recommendation_parsed": true,
+          "candidate_exists": true,
+          "params_match": true,
+          "feasibility_supported": false,
+          "evidence_cited": false,
+          "citations_valid": true,
+          "objective_matches": true
+        },
+        "runtime": {
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "route_source": "raw_request",
+          "requested": {
+            "provider": "deepseek",
+            "model": "deepseek-flash"
+          },
+          "model_lock": "confirmed"
+        },
+        "turn_exit_reason": "max_iterations_reached(8/8)",
+        "tool_call_count": 40,
+        "usage": {
+          "input_tokens": 514369,
+          "output_tokens": 3767,
+          "total_tokens": 518136,
+          "runtime": {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "route_source": "raw_request",
+            "requested": {
+              "provider": "deepseek",
+              "model": "deepseek-flash"
+            },
+            "model_lock": "confirmed"
+          }
+        },
+        "budget": {
+          "limits": {
+            "pysim": 64,
+            "predict_resource": 64,
+            "synth": 8,
+            "rtlsim": 2
+          },
+          "spent": {
+            "pysim": 24,
+            "predict_resource": 8,
+            "synth": 8,
+            "rtlsim": 0
+          },
+          "remaining": {
+            "pysim": 40,
+            "predict_resource": 56,
+            "synth": 0,
+            "rtlsim": 2
+          }
+        },
+        "recommendation": {
+          "recommended_candidate_id": "074bd1c4cdc58b6424347d29fd722055da7921870f92292f5f981ad80adc2031",
+          "params": {
+            "ntap": 16,
+            "samp_w": 16,
+            "samp_i": 2,
+            "unroll_lane": false,
+            "mem_dwidth": 32
+          },
+          "evaluation_ids": [
+            "978811740817e2b930c5070e47d3f6d9b91b24884cd8cba2ccd91bb880d06a8e",
+            "aad15d7c209975e20138c0a951e0f46239943010fe612519cf09a7282a7ae5ec"
+          ],
+          "objective_value": 34.83834,
+          "feasible": true,
+          "limitations": [
+            "No synth (HLS replay) evidence exists for this candidate: the 8-query synth budget was exhausted on ntap=32 screening, and the final synth request returned status budget_exhausted with empty metrics.",
+            "Resource feasibility (DSP 16, LUT ~7726, FF ~8142, BRAM 2) comes from dse_predict_resource, a composed/interpolated model, not synthesis evidence. LUT has an unknown predictive interval with up to 22.5% residual on the calibration corpus.",
+            "Objective value is from fixed-point Python pysim, not hardware measurement; stopband_rej_db is a gain-normalized periodic waveform metric, not a worst-bin guarantee.",
+            "Throughput 1.0 is a closed-form II=1 kernel rate, not board throughput.",
+            "Plausible tie within resolution: ntap=16/samp_w=24/false scored 34.83722 and samp_w=12/false scored 34.78926; the top pick leads by <0.002 dB and should be treated as a near-tie tie-break, not a decisive margin.",
+            "rtlsim was unavailable (no per-candidate RTL evidence), so no RTL or physical validation backs this recommendation.",
+            "Not proven globally optimal. ntap=64 and 128 are outside the task's scored space; within the scored space the full 24-point grid was evaluated and feasible alternatives are bounded by the observed ntap=32 DSP violations.",
+            "Samp_w=24 and samp_w=8 unrolled variants also exceed useful/available headroom or resource envelopes and were not competitive on the objective."
+          ]
+        },
+        "experiment_id": "ab3f5491d19a91a7d2ca3391bd6332efe863efc2515e4388644cdd95968eda78",
+        "raw_sse_sha256": "9559fbf28f6e4e0c0aa47b411f57c327d6ce4cef1fde8e9832881d2094320648",
+        "spillover_occurrences": 4,
+        "limitations": [
+          "Single-trial functional test, not a model ranking or statistical estimate.",
+          "Verdict checks structured recommendation; narrative claims require review."
+        ],
+        "search_score": {
+          "best_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+          "best_params": {
+            "mem_dwidth": 32,
+            "ntap": 32,
+            "samp_i": 2,
+            "samp_w": 16,
+            "unroll_lane": false
+          },
+          "quality_db": 55.32082157015257,
+          "regret_db": 0.0,
+          "optimum_found": true,
+          "budget": {
+            "limits": {
+              "pysim": 64,
+              "predict_resource": 64,
+              "synth": 8,
+              "rtlsim": 2
+            },
+            "spent": {
+              "pysim": 24,
+              "predict_resource": 8,
+              "synth": 8,
+              "rtlsim": 0
+            },
+            "remaining": {
+              "pysim": 40,
+              "predict_resource": 56,
+              "synth": 0,
+              "rtlsim": 2
+            }
+          },
+          "experiment_id": "ab3f5491d19a91a7d2ca3391bd6332efe863efc2515e4388644cdd95968eda78",
+          "scope": "best evidenced candidate found, not necessarily agent final selection"
+        }
+      },
+      "candidates": [
+        {
+          "candidate_id": "074bd1c4cdc58b6424347d29fd722055da7921870f92292f5f981ad80adc2031",
+          "params": {
+            "mem_dwidth": 32,
+            "ntap": 16,
+            "samp_i": 2,
+            "samp_w": 16,
+            "unroll_lane": false
+          },
+          "observations": {
+            "pysim": {
+              "evaluation_id": "978811740817e2b930c5070e47d3f6d9b91b24884cd8cba2ccd91bb880d06a8e",
+              "status": "ok"
+            },
+            "predict_resource": {
+              "evaluation_id": "aad15d7c209975e20138c0a951e0f46239943010fe612519cf09a7282a7ae5ec",
+              "status": "ok"
+            },
+            "synth": {
+              "evaluation_id": "e71dea243b65011197219b25c8ca83c64829a9498f4d2a9cb9d526b44e22a7ba",
+              "status": "budget_exhausted"
+            }
+          },
+          "quality": {
+            "dc_bias": -7.483363151550293e-05,
+            "passband_ripple_db": 0.7915134494277853,
+            "passband_sndr_db": 31.27015311188957,
+            "stopband_atten_db": 27.456970740082323,
+            "stopband_rej_db": 34.83834083929924,
+            "throughput_samp_per_cyc": 1.0
+          },
+          "resources": null,
+          "feasible": null,
+          "discrepancies": {}
+        },
+        {
+          "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+          "params": {
+            "mem_dwidth": 32,
+            "ntap": 32,
+            "samp_i": 2,
+            "samp_w": 16,
+            "unroll_lane": false
+          },
+          "observations": {
+            "pysim": {
+              "evaluation_id": "44685eaa56e0fb8211781886a51738e6968084ad80f1c52e98b5e8baca694b75",
+              "status": "ok"
+            },
+            "synth": {
+              "evaluation_id": "329745845b2428ef671a0ccf7acbbbe6c450ef881afebb5bd7a84db7163d65f7",
+              "status": "ok"
+            },
+            "predict_resource": {
+              "evaluation_id": "1bb0381a304f5fbd2776bed77bd8bea2ea76bf3c46980021e9c742810743e1e2",
+              "status": "ok"
+            }
+          },
+          "quality": {
+            "dc_bias": -8.803606033325195e-05,
+            "passband_ripple_db": 0.11513975920705022,
+            "passband_sndr_db": 55.95403762058357,
+            "stopband_atten_db": 42.319236551926494,
+            "stopband_rej_db": 55.32082157015257,
+            "throughput_samp_per_cyc": 1.0
+          },
+          "resources": {
+            "top_bram": 2,
+            "top_dsp": 32,
+            "top_ff": 11347,
+            "top_lut": 8674
+          },
+          "feasible": true,
+          "discrepancies": {
+            "top_bram": {
+              "predicted": 2,
+              "replayed": 2,
+              "delta": 0
+            },
+            "top_dsp": {
+              "predicted": 32,
+              "replayed": 32,
+              "delta": 0
+            },
+            "top_ff": {
+              "predicted": 11453,
+              "replayed": 11347,
+              "delta": -106
+            },
+            "top_lut": {
+              "predicted": 9336,
+              "replayed": 8674,
+              "delta": -662
+            }
+          }
+        }
+      ],
+      "tool_calls": [
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_dse_context",
+          "preview": null,
+          "args": {},
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 25,
+          "ts": 1790010752.4058352
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_results",
+          "preview": null,
+          "args": {
+            "limit": 100
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 117,
+          "ts": 1790010757.8181515
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 119,
+          "ts": 1790010757.8444896
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 121,
+          "ts": 1790010760.0728889
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 123,
+          "ts": 1790010760.3104177
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 125,
+          "ts": 1790010760.5593226
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 127,
+          "ts": 1790010760.8224957
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 129,
+          "ts": 1790010761.0838344
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 131,
+          "ts": 1790010761.4374547
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 133,
+          "ts": 1790010761.6719003
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 135,
+          "ts": 1790010761.9348955
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 137,
+          "ts": 1790010762.200097
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 139,
+          "ts": 1790010762.4520278
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 141,
+          "ts": 1790010762.6877935
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 143,
+          "ts": 1790010762.9342268
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 145,
+          "ts": 1790010763.166683
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 147,
+          "ts": 1790010763.4116132
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 8,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 149,
+          "ts": 1790010763.6517675
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 151,
+          "ts": 1790010763.9075556
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 153,
+          "ts": 1790010764.0968251
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 155,
+          "ts": 1790010764.3231468
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 16,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 157,
+          "ts": 1790010764.6013134
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 8,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 159,
+          "ts": 1790010764.8469558
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 12,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 161,
+          "ts": 1790010764.9879122
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 16,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 163,
+          "ts": 1790010765.2493517
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 24,
+              "samp_i": 2,
+              "mem_dwidth": 32,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 165,
+          "ts": 1790010765.4630325
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_synth",
+          "preview": null,
+          "args": {
+            "params": [
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 24,
+                "unroll_lane": true
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 24,
+                "unroll_lane": false
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 16,
+                "unroll_lane": true
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 16,
+                "unroll_lane": false
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 12,
+                "unroll_lane": true
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 12,
+                "unroll_lane": false
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 8,
+                "unroll_lane": true
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 8,
+                "unroll_lane": false
+              }
+            ]
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 332,
+          "ts": 1790010769.5428636
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 334,
+          "ts": 1790010770.2069633
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 336,
+          "ts": 1790010770.864151
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 338,
+          "ts": 1790010770.9976952
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 340,
+          "ts": 1790010771.157965
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 464,
+          "ts": 1790010773.9287117
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 466,
+          "ts": 1790010774.100081
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 12,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 468,
+          "ts": 1790010774.2617064
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 8,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 470,
+          "ts": 1790010774.4251747
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_synth",
+          "preview": null,
+          "args": {
+            "params": [
+              {
+                "mem_dwidth": 32,
+                "ntap": 16,
+                "samp_i": 2,
+                "samp_w": 16,
+                "unroll_lane": false
+              }
+            ]
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 652,
+          "ts": 1790010777.1985872
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_results",
+          "preview": null,
+          "args": {
+            "limit": 5,
+            "offset": 0
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 654,
+          "ts": 1790010777.2342646
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_dse_context",
+          "preview": null,
+          "args": {},
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 776,
+          "ts": 1790010779.6780896
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_results",
+          "preview": null,
+          "args": {
+            "limit": 1
+          },
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 798,
+          "ts": 1790010781.2336123
+        },
+        {
+          "message_id": "msg_741d9c54371848db897b4d3f4814e14b",
+          "tool_name": "mcp__waveflow__dse_get_dse_context",
+          "preview": null,
+          "args": {},
+          "session_id": "api_1790010750_92ce52bd",
+          "run_id": "run_6a52bc0156bb4aab865485abcb03e3d8",
+          "seq": 819,
+          "ts": 1790010782.8800123
+        }
+      ]
+    },
+    {
+      "label": "after_compact_view",
+      "score": {
+        "schema_version": "fir-trial-score-v1",
+        "passed": true,
+        "checks": {
+          "completed": true,
+          "runtime_locked": true,
+          "tool_boundary": true,
+          "context_first": true,
+          "recommendation_parsed": true,
+          "candidate_exists": true,
+          "params_match": true,
+          "feasibility_supported": true,
+          "evidence_cited": true,
+          "citations_valid": true,
+          "objective_matches": true
+        },
+        "runtime": {
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "route_source": "raw_request",
+          "requested": {
+            "provider": "deepseek",
+            "model": "deepseek-flash"
+          },
+          "model_lock": "confirmed"
+        },
+        "turn_exit_reason": null,
+        "tool_call_count": 22,
+        "usage": {
+          "input_tokens": 117935,
+          "output_tokens": 3157,
+          "total_tokens": 121092,
+          "runtime": {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "route_source": "raw_request",
+            "requested": {
+              "provider": "deepseek",
+              "model": "deepseek-flash"
+            },
+            "model_lock": "confirmed"
+          }
+        },
+        "budget": {
+          "limits": {
+            "pysim": 64,
+            "predict_resource": 64,
+            "synth": 8,
+            "rtlsim": 2
+          },
+          "spent": {
+            "pysim": 9,
+            "predict_resource": 9,
+            "synth": 4,
+            "rtlsim": 0
+          },
+          "remaining": {
+            "pysim": 55,
+            "predict_resource": 55,
+            "synth": 4,
+            "rtlsim": 2
+          }
+        },
+        "recommendation": {
+          "recommended_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+          "params": {
+            "ntap": 32,
+            "samp_w": 16,
+            "samp_i": 2,
+            "unroll_lane": false,
+            "mem_dwidth": 32
+          },
+          "evaluation_ids": {
+            "pysim": "44685eaa56e0fb8211781886a51738e6968084ad80f1c52e98b5e8baca694b75",
+            "predict_resource": "1bb0381a304f5fbd2776bed77bd8bea2ea76bf3c46980021e9c742810743e1e2",
+            "synth": "329745845b2428ef671a0ccf7acbbbe6c450ef881afebb5bd7a84db7163d65f7"
+          },
+          "objective_value": {
+            "stopband_rej_db": 55.32082157015257,
+            "stopband_atten_db": 42.319236551926494,
+            "passband_ripple_db": 0.11513975920705022,
+            "passband_sndr_db": 55.95403762058357,
+            "throughput_samp_per_cyc": 1.0
+          },
+          "feasible": true,
+          "limitations": "Feasibility rests on replayed Vitis HLS estimates, not physical implementation or board validation; rtlsim unavailable in this corpus. pysim quality is a gain-normalized fixed-point waveform metric, not a worst-bin guarantee. Throughput is closed-form II=1 kernel rate, not board throughput. Search covered 12 of 24 scored points (both unroll_lane values across all ntap x samp_w tiers sampled selectively); ntap=32 clearly dominates ntap=16/8 on the objective, but exhaustive enumeration of all 24 points was not performed, so global optimality is not claimed. samp_w=24 at ntap=32 has a marginally higher objective (55.3333 vs 55.3208 dB) but is infeasible (64 DSP > 48 max)."
+        },
+        "experiment_id": "ab3f5491d19a91a7d2ca3391bd6332efe863efc2515e4388644cdd95968eda78",
+        "raw_sse_sha256": "e0ae934373be8d0fcf71e7d5844d5a484abc607fb47f807aa63cf4068305fdc3",
+        "spillover_occurrences": 0,
+        "limitations": [
+          "Single-trial functional test, not a model ranking or statistical estimate.",
+          "Verdict checks structured recommendation; narrative claims require review."
+        ],
+        "search_score": {
+          "best_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+          "best_params": {
+            "mem_dwidth": 32,
+            "ntap": 32,
+            "samp_i": 2,
+            "samp_w": 16,
+            "unroll_lane": false
+          },
+          "quality_db": 55.32082157015257,
+          "regret_db": 0.0,
+          "optimum_found": true,
+          "budget": {
+            "limits": {
+              "pysim": 64,
+              "predict_resource": 64,
+              "synth": 8,
+              "rtlsim": 2
+            },
+            "spent": {
+              "pysim": 9,
+              "predict_resource": 9,
+              "synth": 4,
+              "rtlsim": 0
+            },
+            "remaining": {
+              "pysim": 55,
+              "predict_resource": 55,
+              "synth": 4,
+              "rtlsim": 2
+            }
+          },
+          "experiment_id": "ab3f5491d19a91a7d2ca3391bd6332efe863efc2515e4388644cdd95968eda78",
+          "scope": "best evidenced candidate found, not necessarily agent final selection"
+        }
+      },
+      "candidates": [
+        {
+          "candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+          "params": {
+            "mem_dwidth": 32,
+            "ntap": 32,
+            "samp_i": 2,
+            "samp_w": 16,
+            "unroll_lane": false
+          },
+          "observations": {
+            "pysim": {
+              "evaluation_id": "44685eaa56e0fb8211781886a51738e6968084ad80f1c52e98b5e8baca694b75",
+              "status": "ok"
+            },
+            "predict_resource": {
+              "evaluation_id": "1bb0381a304f5fbd2776bed77bd8bea2ea76bf3c46980021e9c742810743e1e2",
+              "status": "ok"
+            },
+            "synth": {
+              "evaluation_id": "329745845b2428ef671a0ccf7acbbbe6c450ef881afebb5bd7a84db7163d65f7",
+              "status": "ok"
+            }
+          },
+          "quality": {
+            "dc_bias": -8.803606033325195e-05,
+            "passband_ripple_db": 0.11513975920705022,
+            "passband_sndr_db": 55.95403762058357,
+            "stopband_atten_db": 42.319236551926494,
+            "stopband_rej_db": 55.32082157015257,
+            "throughput_samp_per_cyc": 1.0
+          },
+          "resources": {
+            "top_bram": 2,
+            "top_dsp": 32,
+            "top_ff": 11347,
+            "top_lut": 8674
+          },
+          "feasible": true,
+          "discrepancies": {
+            "top_bram": {
+              "predicted": 2,
+              "replayed": 2,
+              "delta": 0
+            },
+            "top_dsp": {
+              "predicted": 32,
+              "replayed": 32,
+              "delta": 0
+            },
+            "top_ff": {
+              "predicted": 11453,
+              "replayed": 11347,
+              "delta": -106
+            },
+            "top_lut": {
+              "predicted": 9336,
+              "replayed": 8674,
+              "delta": -662
+            }
+          }
+        }
+      ],
+      "tool_calls": [
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_get_dse_context",
+          "preview": null,
+          "args": {},
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 15,
+          "ts": 1790011012.883529
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_get_results",
+          "preview": null,
+          "args": {},
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 130,
+          "ts": 1790011014.9059584
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 24,
+              "samp_i": 2,
+              "unroll_lane": false,
+              "mem_dwidth": 32
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 132,
+          "ts": 1790011014.946062
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 24,
+              "samp_i": 2,
+              "unroll_lane": true,
+              "mem_dwidth": 32
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 134,
+          "ts": 1790011016.9491084
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 16,
+              "samp_i": 2,
+              "unroll_lane": false,
+              "mem_dwidth": 32
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 136,
+          "ts": 1790011017.1910555
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "ntap": 32,
+              "samp_w": 12,
+              "samp_i": 2,
+              "unroll_lane": false,
+              "mem_dwidth": 32
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 138,
+          "ts": 1790011017.4549341
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 8,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 222,
+          "ts": 1790011020.1147504
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 224,
+          "ts": 1790011020.3752217
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 226,
+          "ts": 1790011020.6423032
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 8,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 228,
+          "ts": 1790011021.0226653
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 230,
+          "ts": 1790011021.2835603
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 232,
+          "ts": 1790011022.0749507
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 234,
+          "ts": 1790011022.2254152
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 12,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 395,
+          "ts": 1790011025.128112
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 8,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 397,
+          "ts": 1790011025.2708163
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 24,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 399,
+          "ts": 1790011025.4152126
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 16,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": false
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 401,
+          "ts": 1790011025.5581014
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_pysim",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 403,
+          "ts": 1790011025.7070172
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 16,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 405,
+          "ts": 1790011025.9578235
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_predict_resource",
+          "preview": null,
+          "args": {
+            "params": {
+              "mem_dwidth": 32,
+              "ntap": 32,
+              "samp_i": 2,
+              "samp_w": 12,
+              "unroll_lane": true
+            }
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 407,
+          "ts": 1790011026.1228063
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_synth",
+          "preview": null,
+          "args": {
+            "params": [
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 16,
+                "unroll_lane": false
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 24,
+                "unroll_lane": false
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 32,
+                "samp_i": 2,
+                "samp_w": 16,
+                "unroll_lane": true
+              },
+              {
+                "mem_dwidth": 32,
+                "ntap": 16,
+                "samp_i": 2,
+                "samp_w": 24,
+                "unroll_lane": false
+              }
+            ]
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 582,
+          "ts": 1790011028.465703
+        },
+        {
+          "message_id": "msg_b77974725ac649bdadc497aa18de2600",
+          "tool_name": "mcp__waveflow__dse_get_results",
+          "preview": null,
+          "args": {
+            "limit": 5
+          },
+          "session_id": "api_1790011010_8c40bbf7",
+          "run_id": "run_096a3396985c4b05b241cedf056750ee",
+          "seq": 765,
+          "ts": 1790011030.7201774
+        }
+      ]
+    }
+  ],
+  "baselines": {
+    "cheap_screened": {
+      "best_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+      "best_params": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": false
+      },
+      "optimum_found": true,
+      "prediction_queries": 24,
+      "pysim_queries": 24,
+      "quality_db": 55.32082157015257,
+      "regret_db": 0.0,
+      "rule": "quality/throughput/predicted-resource filter, quality descending",
+      "synth_queries": 8
+    },
+    "full_grid": {
+      "best_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+      "best_params": {
+        "mem_dwidth": 32,
+        "ntap": 32,
+        "samp_i": 2,
+        "samp_w": 16,
+        "unroll_lane": false
+      },
+      "optimum_found": true,
+      "pysim_queries": 24,
+      "quality_db": 55.32082157015257,
+      "regret_db": 0.0,
+      "synth_queries": 24
+    },
+    "grid_prefix": {
+      "best_candidate_id": "0db30076a556cf59e7a90b1885fb88684833e04b719c45f18bb6912c91a1f079",
+      "best_params": {
+        "mem_dwidth": 32,
+        "ntap": 8,
+        "samp_i": 2,
+        "samp_w": 24,
+        "unroll_lane": false
+      },
+      "optimum_found": false,
+      "ordering": "ntap,samp_w,unroll_lane ascending",
+      "pysim_queries": 8,
+      "quality_db": 27.08011156944977,
+      "regret_db": 28.240710000702798,
+      "synth_queries": 8
+    },
+    "random": {
+      "feasible_found_rate": 1.0,
+      "mean_regret_db_when_feasible": 9.711072167867378,
+      "optimum_found_rate": 0.346,
+      "pysim_queries": 8,
+      "sampling": "uniform without replacement; equal expensive-query budget",
+      "seeds": [
+        0,
+        999
+      ],
+      "synth_queries": 8,
+      "trials": 1000
+    }
+  },
+  "grid_size": 24,
+  "feasible_count": 19
+}
