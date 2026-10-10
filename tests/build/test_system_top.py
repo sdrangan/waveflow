@@ -84,7 +84,7 @@ def test_markov_rendered_rules():
     assert "assign chain_k_qresp_TLAST = 1'b0;" in v          # unframed response port
     assert "assign u_fwd_q_TKEEP = {8{1'b1}};" in v            # past the FIFO: every byte valid
     assert ".m_axi_gmem0_BID(si3_axi_BID[0])" in v             # a 1-bit Vitis ID on a 2-bit SI
-    assert ".s_axi_control_AWVALID(0)" in v
+    assert "s_axi_control" not in v                     # offset=off pointers: no control slave
     assert ".target(32'd" in v
 
 

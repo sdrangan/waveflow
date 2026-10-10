@@ -81,8 +81,11 @@ def test_inband_codegen_shape(tmp_path):
     cpp = generate_inband(out_dir=tmp_path, mem_dwidth=64, n=256)
     src = cpp.read_text()
     assert "#pragma HLS INTERFACE ap_ctrl_none port=return" in src
-    assert "#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0" in src
-    assert "#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1" in src
+    # both pointers stable + offset=off: no per-task pointer FIFOs (plans/maxi_pointer_fifo.md)
+    assert "#pragma HLS stable variable=m_in" in src and "#pragma HLS stable variable=m_out" in src
+    assert "offset=slave" not in src
     # framework mem-streams wired around the custom stages.  The custom stages template on N = element
     # count (256), not nw — the SOB blocks are 32-bit ELEMENT blocks now (typed-SOB refactor).
     for body in ("il_cmd_rx_framed_task<64>", "mem_r_stream_framed_task<64>",

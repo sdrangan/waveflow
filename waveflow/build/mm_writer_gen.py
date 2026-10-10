@@ -74,7 +74,8 @@ void {name}(
     ap_uint<32> target
 ) {{
 #pragma HLS INTERFACE axis port=s_in
-#pragma HLS INTERFACE m_axi port=m_mem offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_mem offset=off bundle=gmem0 depth=8192
+#pragma HLS stable variable=m_mem
 #pragma HLS INTERFACE ap_none port=target
 #pragma HLS stable variable=target
 #pragma HLS INTERFACE ap_ctrl_none port=return

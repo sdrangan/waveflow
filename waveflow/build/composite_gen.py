@@ -535,12 +535,25 @@ def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = Fa
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
     """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
     with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
-    ``const`` (the ``@port_read`` capability -> a stray write is a compile error) and gets
-    ``#pragma HLS stable``; the write owner is plain."""
+    ``const`` (the ``@port_read`` capability -> a stray write is a compile error); the write owner is
+    plain.
+
+    **``offset=off`` + ``stable``, on every pointer -- not ``offset=slave``.**  UG1399 (HLS Task
+    Library) supports an ``m_axi`` pointer passed to an ``hls::task`` only as a ``stable`` argument
+    with ``offset=off``.  With ``offset=slave`` Vitis 2025.1 still synthesizes it, but hands each task
+    its pointer through a small FIFO of its own, refilled by one ``entry_proc`` that writes every such
+    FIFO together; a task pops its FIFO each firing.  A reader that fires more often per job than the
+    writer drains its FIFO while the writer's fills, the entry process blocks, and the pipeline stops
+    -- at RTL only, after a number of jobs set by the FIFO depth (``interleaver_inband``: 6 jobs, then
+    a hang; ``plans/maxi_pointer_fifo.md``).  ``stable`` alone does not remove the FIFOs (measured);
+    ``offset=off`` does: no entry process, no pointer FIFOs, no ``s_axi_control`` slave.
+
+    The cost is the relocatable base: the bus address is the command's word coordinate times the
+    word size, from 0.  Every flow already ran that way -- the XSI testbenches and the system top
+    pinned the base register to 0."""
     qual = "const " if const else ""
-    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle={bundle} depth=8192"]
-    if const:
-        pragmas.append(f"#pragma HLS stable variable={name}")
+    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=off bundle={bundle} depth=8192",
+               f"#pragma HLS stable variable={name}"]
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
                    width=width)
@@ -2581,12 +2594,19 @@ _MAXI_UNDRIVEN = {
 }
 
 #: The AXI-Lite control slave Vitis creates for `offset=slave` m_axi ports.  Pinning it quiescent is
-#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.
+#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.  A
+#: free-running top's pointers are `offset=off` (see :func:`_maxi_port`) and have no such slave.
 _CONTROL_UNDRIVEN = (
     "s_axi_control_AWVALID", "s_axi_control_AWADDR", "s_axi_control_WVALID", "s_axi_control_WDATA",
     "s_axi_control_WSTRB", "s_axi_control_ARVALID", "s_axi_control_ARADDR", "s_axi_control_RREADY",
     "s_axi_control_BREADY",
 )
+
+
+def has_control_slave(ports) -> bool:
+    """Whether a kernel with these boundary *ports* has the ``s_axi_control`` slave: Vitis creates it
+    for an ``m_axi`` port with ``offset=slave``, so it is read off the pragmas, not assumed."""
+    return any("offset=slave" in pr for p in ports for pr in p.pragmas)
 
 
 def render_ports_h(spec: TopSpec) -> str:
@@ -2640,7 +2660,7 @@ def render_ports_h(spec: TopSpec) -> str:
         lines.append(f'static const char* const {p.name:<8} = "{p.xsi_prefix}";   // {comment}')
 
     zero: list[str] = []
-    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.pin_ports):
+    if has_control_slave(spec.pin_ports):
         zero.extend(_CONTROL_UNDRIVEN)
     for p in spec.pin_ports:
         for ch in _MAXI_UNDRIVEN.get(p.kind, ()):

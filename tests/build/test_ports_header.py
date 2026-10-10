@@ -7,6 +7,8 @@ port the TB is supposed to drive would deadlock the run).
 """
 from __future__ import annotations
 
+import dataclasses
+
 from waveflow.build.composite_gen import (
     TopSpec,
     _axis_port,
@@ -83,11 +85,16 @@ def test_pin_low_set_is_the_complement_of_what_the_bfm_drives():
         assert f'"{pinned}"' in write_h
 
 
-def test_control_slave_pinned_only_when_an_maxi_exists():
+def test_control_slave_pinned_only_when_an_offset_slave_maxi_exists():
     """The s_axi_control slave exists because of `offset=slave` on an m_axi port. Pinning it
-    quiescent is what makes every offset register read 0 — i.e. element coords == byte addr / BPW."""
-    with_maxi = render_ports_h(_spec(ports=[_maxi_port("m_in", 64, const=True, bundle="gmem0")]))
-    assert '"s_axi_control_AWVALID"' in with_maxi
+    quiescent is what makes every offset register read 0 — i.e. element coords == byte addr / BPW.
+    A free-running top's pointers are `offset=off` (plans/maxi_pointer_fifo.md), so they have none."""
+    maxi = _maxi_port("m_in", 64, const=True, bundle="gmem0")
+    assert "s_axi_control" not in render_ports_h(_spec(ports=[maxi]))
+
+    legacy = dataclasses.replace(maxi, pragmas=tuple(
+        pr.replace("offset=off", "offset=slave") for pr in maxi.pragmas))
+    assert '"s_axi_control_AWVALID"' in render_ports_h(_spec(ports=[legacy]))
 
     stream_only = render_ports_h(_spec(ports=[_axis_port("s_cmd", 64, kind="axis_in")]))
     assert "s_axi_control" not in stream_only, "a stream-only kernel has no control slave to pin"
