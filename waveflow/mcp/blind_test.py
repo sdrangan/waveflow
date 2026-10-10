@@ -115,9 +115,12 @@ def baseline_allowed(allowed) -> list[str]:
     return [a for a in allowed if "waveflow" not in a.lower()]
 
 
+#: Names no frame and no example: choosing the architecture from the spec is part of
+#: what a blind test measures (plans/mcp_frames.md).  A spec that wants a particular
+#: one names it itself; ``--message`` can still name one for a run.
 WAVEFLOW_FIRST = (
     "Build the accelerator specified in {spec}, in this folder, with Waveflow: its MCP "
-    "server is available, and its stream_inband example is the reference design to follow."
+    "server is available."
 )
 
 NO_WAVEFLOW_FIRST = (
@@ -964,6 +967,61 @@ def _login_note(api_key_source: str | None) -> str:
     return f"Login: API key (`{api_key_source}`). **Every token is billed.**"
 
 
+def _choice(
+    calls: list[tuple[int, str, dict[str, Any]]],
+    folder: Path,
+    repo: Path | None,
+    toc: set[str],
+) -> list[str]:
+    """The summary's lead: how the agent chose its architecture.
+
+    Choosing is the first part of building from a spec, so the report opens
+    with it: whether the menu (frames or example cards) was consulted before
+    the first write, which frame the process was fetched for, which reference
+    designs were read, and whether -- and in which frame -- a scaffold was
+    asked for.
+    """
+    def tool(n: str) -> str:
+        return n.removeprefix("mcp__waveflow__")
+
+    writes = [i for i, (_, n, a) in enumerate(calls) if n in ("Write", "Edit")]
+    first_write = writes[0] if writes else len(calls)
+
+    def before_write(name: str) -> str:
+        at = [i for i, (_, n, _) in enumerate(calls) if tool(n) == name]
+        if not at:
+            return "**never called**"
+        return "before the first write" if at[0] < first_write else "**only after the first write**"
+
+    frames = [a.get("frame") for _, n, a in calls if tool(n) == "waveflow_get_process"]
+    scaffolds = [a.get("frame") for _, n, a in calls if tool(n) == "waveflow_new_accel_project"]
+    refs: dict[str, None] = {}
+    for _, n, a in calls:
+        if tool(n) == "waveflow_get_example" and a.get("name"):
+            refs.setdefault(str(a["name"]), None)
+        elif n == "Read" and repo is not None:
+            path = a.get("file_path") or ""
+            if _classify_read(path, folder, repo, toc) == "repo example (TOC)":
+                rel = Path(path).resolve().relative_to(repo).as_posix()
+                refs.setdefault(f"{rel.split('/')[1]} (read from the checkout)", None)
+
+    def frame_name(f: Any) -> str:
+        return "generic (no frame)" if not f else f"`{f}`"
+
+    L = ["## Choice", ""]
+    L.append(f"- first write: tool call #{first_write + 1} of {len(calls)}"
+             if writes else "- first write: **none**")
+    L.append(f"- `waveflow_list_frames`: {before_write('waveflow_list_frames')}")
+    L.append(f"- `waveflow_list_examples`: {before_write('waveflow_list_examples')}")
+    L.append("- `waveflow_get_process`: " + (
+        ", ".join(frame_name(f) for f in frames) if frames else "**never called**"))
+    L.append("- references read: " + (", ".join(f"`{r}`" for r in refs) if refs else "none"))
+    L.append("- scaffold: " + (
+        ", ".join(frame_name(f) for f in scaffolds) if scaffolds else "not requested"))
+    L.append("")
+    return L
+
+
 def summarize(
     phases: list[dict[str, Any]],
     *,
@@ -1014,15 +1072,14 @@ def summarize(
     L.append("")
 
     wf_calls = [(ph, n, a) for ph, n, a in calls if n.startswith("mcp__waveflow")]
-    counts = Counter(n.removeprefix("mcp__waveflow__") for _, n, a in wf_calls)
+    L += _choice(calls, folder, repo, toc)
+
     L += ["## Waveflow tools", ""]
     if not wf_calls:
         L.append("**None were called.**")
     else:
         first = next(i for i, (_, n, _) in enumerate(calls) if n.startswith("mcp__waveflow"))
         L.append(f"First Waveflow call at tool call #{first + 1} of {len(calls)}.")
-        for key in ("waveflow_get_process", "waveflow_new_accel_project"):
-            L.append(f"- `{key}`: {'called' if counts[key] else '**never called**'}")
         L += ["", "| # | Phase | Tool | Arguments |", "| --- | --- | --- | --- |"]
         for i, (ph, n, a) in enumerate(wf_calls, 1):
             L.append(f"| {i} | {ph} | `{n.removeprefix('mcp__waveflow__')}` | {_short(a, 90)} |")

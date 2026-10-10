@@ -16,7 +16,7 @@ from waveflow.mcp import blind_test as bt
 
 
 def _write_transcript(path: Path, folder: Path, repo: Path) -> None:
-    def tool(name, **inp):
+    def tool(name, /, **inp):
         return {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": name, "input": inp}]}}
 
@@ -25,7 +25,10 @@ def _write_transcript(path: Path, folder: Path, repo: Path) -> None:
             "Read", "mcp__waveflow__waveflow_get_process"],
          "mcp_servers": [{"name": "waveflow", "status": "connected"}]},
         tool("Read", file_path=str(folder / "spec.md")),
+        tool("mcp__waveflow__waveflow_list_examples"),
         tool("mcp__waveflow__waveflow_get_process", frame="stream_inband"),
+        tool("mcp__waveflow__waveflow_get_example", name="stream_inband"),
+        tool("Read", file_path=str(repo / "examples" / "good" / "a.py")),
         tool("Read", file_path=str(repo / "plans" / "secret.md")),
         tool("Read", file_path=str(repo / "examples" / "old_thing" / "x.py")),
         tool("Write", file_path=str(folder / "gen" / "k.cpp"), content="x"),
@@ -52,8 +55,14 @@ def test_summary_reports_leaks_generated_edits_and_denials(tmp_path):
              "result": bt._result_record(t)}
     s = bt.summarize([phase], folder=folder, repo=repo, copied=["spec.md"], allowed=["Read"])
 
-    assert "`waveflow_get_process`: called" in s
-    assert "`waveflow_new_accel_project`: **never called**" in s
+    # The summary leads with the choice.
+    assert s.index("## Choice") < s.index("## Waveflow tools")
+    assert "- `waveflow_get_process`: `stream_inband`" in s
+    assert "- `waveflow_list_frames`: **never called**" in s
+    assert "- `waveflow_list_examples`: before the first write" in s
+    assert "- first write: tool call #8 of 9" in s
+    assert "- references read: `stream_inband`, `good (read from the checkout)`" in s
+    assert "- scaffold: not requested" in s
     assert "LEAK: repo plans/" in s
     assert "repo example NOT in TOC" in s
     assert "hand-edited a generated file" in s
@@ -61,6 +70,14 @@ def test_summary_reports_leaks_generated_edits_and_denials(tmp_path):
     assert "python build.py --through csim" in s
     assert "claude-x" in s and "90.0k (90.0k)" in s and "1.5k" in s
     assert "$" not in s.split("## Waveflow tools")[0]
+
+
+def test_the_default_first_message_names_no_frame_or_example():
+    from waveflow.mcp.frames import list_frames
+    from waveflow.mcp.knowledge import get_index
+
+    for name in [*list_frames(), *get_index().cards]:
+        assert name not in bt.WAVEFLOW_FIRST, name
 
 
 def test_companions_are_the_linked_markdown_beside_the_spec(tmp_path):
@@ -211,7 +228,7 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
     bt.run_blind_test(spec, tmp_path / "wf", silent=True)
     assert "waveflow" in seen["mcp"]["mcpServers"] and "mcp__waveflow" in seen["config"]["allowed"]
     # The same spec file; the arm is in the first message only.
-    assert "with Waveflow" in seen["first"] and "stream_inband" in seen["first"]
+    assert "with Waveflow" in seen["first"] and "stream_inband" not in seen["first"]
 
 
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):
