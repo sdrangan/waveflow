@@ -30,8 +30,8 @@ from waveflow.build.composite_gen import (
     tcl_path,
 )
 from waveflow.build.streamutils import MemMgrStep, XsiHarnessStep
-from waveflow.build.trace_steps import AddVcdTopStep, xsi_runner_cmd
-from waveflow.build.trace_steps import run_xsi as run_xsi_timed
+from waveflow.build.trace_steps import AddVcdTopStep
+from waveflow.build.xsi_snapshot import XsiSnapshot
 from waveflow.simulation.simulation import Simulation
 
 from . import hls
@@ -145,11 +145,12 @@ def run_xsi(root: Path, trace: bool = False) -> str:
         if d.exists():
             for f in d.iterdir():
                 f.unlink()
-    p = run_xsi_timed(xsi_runner_cmd(TOP, TB, trace=trace), cwd=xsi, capture_output=True,
-                      text=True, timeout=3600)
-    if p.returncode != 0 or "XSI_EXITCODE=0" not in p.stdout:
-        raise RuntimeError(f"XSI run failed\n{p.stdout[-3000:]}\n{p.stderr[-2000:]}")
-    return p.stdout
+    # Incremental: compile, elaborate and the testbench build are skipped when their inputs are
+    # unchanged (waveflow.build.xsi_snapshot), so a repeated run costs the simulation alone.
+    out = XsiSnapshot(xsi, TOP, TB, trace=trace).run(check=False, timeout=3600)
+    if "XSI_EXITCODE=0" not in out:
+        raise RuntimeError(f"XSI run failed\n{out[-5000:]}")
+    return out
 
 
 def _out_w(length: int) -> int:

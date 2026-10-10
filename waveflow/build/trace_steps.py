@@ -51,6 +51,8 @@ def xsi_runner_cmd(
     tb: str,
     trace: bool = False,
     os_name: str | None = None,
+    verb: str | None = None,
+    vectors_dir: str | None = None,
 ) -> list[str]:
     """
     Build the argv that drives one XSI run, for whichever platform this is.
@@ -70,6 +72,12 @@ def xsi_runner_cmd(
     os_name : str | None, optional
         Override the platform, in :data:`os.name` spelling. Exists so both forms stay testable
         from either host; leave it ``None`` in production callers.
+    verb : str | None, optional
+        The phases to run: ``rtl``, ``tb``, ``build``, ``run`` or ``all``.  ``None`` passes none,
+        which the runner reads as ``all`` -- every phase, unconditionally.  Which phases are
+        *needed* is :class:`~waveflow.build.xsi_snapshot.XsiSnapshot`'s decision, not the runner's.
+    vectors_dir : str | None, optional
+        A run's vectors directory, replacing the testbench's ``vectors/`` (``WF_VECTORS_DIR``).
 
     Returns
     -------
@@ -77,7 +85,8 @@ def xsi_runner_cmd(
         Argument vector to hand to :func:`subprocess.run`, with ``cwd`` set to the ``xsi/`` dir.
     """
     runner = xsi_runner_name(os_name)
-    args = [top, tb] + (["trace"] if trace else [])
+    args = ([top, tb] + (["trace"] if trace else []) + ([verb] if verb else [])
+            + ([str(vectors_dir)] if vectors_dir else []))
     if (os_name or os.name) == "nt":
         return ["cmd", "/c", f".\\{runner}"] + args
     return ["bash", runner] + args
@@ -293,9 +302,12 @@ class RtlSimStep(BuildStep):
     """Run the RTL through XSI **with tracing on**, producing ``<top>_trace.vcd``.
 
     A thin wrapper over the example's ``xsi/run.bat``, which already does the whole flow
-    (``xvlog`` -> ``xelab -dll`` -> ``g++`` the BFM main -> execute).  Its third argument ``trace``
-    additionally elaborates the :class:`AddVcdTopStep` dumper as a second top, leaving the DUT and
-    every BFM port number untouched -- the cycle counts are identical either way.
+    (``xvlog`` -> ``xelab -dll`` -> ``g++`` the BFM main -> execute), driven through
+    :class:`~waveflow.build.xsi_snapshot.XsiSnapshot` so the phases whose inputs did not change are
+    skipped: every point of a workload sweep pays only the simulation.  Its ``trace`` argument
+    additionally elaborates the :class:`AddVcdTopStep` dumper as a second top (the snapshot
+    ``<top>_trace``), leaving the DUT and every BFM port number untouched -- the cycle counts are
+    identical either way.
 
     **This step asserts nothing.**  It runs and produces an artifact; correctness stays with the
     ``-m xsi`` gate in ``tests/examples/test_xsi_bfm.py``, which calls ``run.bat`` directly and
@@ -367,18 +379,18 @@ class RtlSimStep(BuildStep):
         if self.prepare is not None:
             self.prepare(xsi, config)
 
-        # Delete first, then require it to reappear.  Re-running the built .exe does NOT regenerate
-        # the VCD -- only the full run.bat path, which re-elaborates, does -- so without this guard
-        # a failed or skipped run leaves the PREVIOUS trace on disk and everything downstream is
-        # silently measured from the wrong run.  Not hypothetical: it yielded an identical period
-        # at five different job sizes before it was caught.
+        # Delete first, then require it to reappear: without this guard a failed or skipped run
+        # leaves the PREVIOUS trace on disk and everything downstream is silently measured from the
+        # wrong run.  Not hypothetical: it yielded an identical period at five different job sizes
+        # before it was caught.  (The dump comes from the elaborated snapshot, so it is the TRACED
+        # snapshot that writes it -- every run of that one does, a run of the untraced one never.)
         vcd.unlink(missing_ok=True)
 
-        r = run_xsi(xsi_runner_cmd(self.top, self.tb, trace=True),
-                    cwd=xsi, capture_output=True, text=True, timeout=1800)
-        out = (r.stdout or "") + (r.stderr or "")
-        if "XSI_EXITCODE=0" not in out:
-            raise RuntimeError(f"{self.top}: XSI run did not complete cleanly:\n{out[-3000:]}")
+        from waveflow.build.xsi_snapshot import XsiRunError, XsiSnapshot
+        try:
+            XsiSnapshot(xsi, self.top, self.tb, trace=True).run(timeout=1800)
+        except XsiRunError as e:
+            raise RuntimeError(str(e)) from None
         if not vcd.exists():
             raise RuntimeError(
                 f"{self.top}: {XSI_RUNNER} completed but wrote no {vcd.name}. Is "

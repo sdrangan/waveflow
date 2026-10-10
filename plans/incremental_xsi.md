@@ -1,6 +1,6 @@
 # Plan: an incremental XSI runner, and cheap workload sweeps at RTL
 
-**Status:** drafted 2026-10-10.
+**Status:** drafted 2026-10-10; Stages 0-3 done 2026-10-10 (branch `incremental-xsi`).
 
 ## Motivation
 
@@ -96,4 +96,78 @@ them.
 
 ## Progress log
 
-(empty)
+**Stage 0 -- the re-run exit code (2026-10-10).**  Not the testbench, not the environment: the
+**scenario**.  `mem_r_stream` and `mem_w_stream` share one workspace (`examples/interleaver/xsi`) and
+both write `vectors/cmd` and `vectors/golden`.  Whichever gate ran last owns them, so a bare re-run of
+`mem_r_bfm_tb.exe` after the `mem_w_stream` gate read mem_w's command and golden: it still
+collected 128 words in 158 cycles, but checked them against mem_w's golden -- `FAILED test: 128
+mismatches` -> exit 1.  After
+`write_mem_r_xsi_bundles`, the same bare re-run printed `PASSED` and exited 0.  This is D4's case
+exactly, found before D4 was built: two runs sharing one `vectors/` overwrite each other.
+
+**Stage 1 -- build / run split (D1, D2, D3).**  `run.bat` / `run.sh` take
+`[trace] [all|build|rtl|tb|run] [vectors_dir]` in any order; no verb is `all`, so every existing
+caller and every gate is unchanged.  Each phase deletes its own outputs (the snapshot directory, the
+testbench `.o` and binary) before rebuilding, so a failed phase cannot leave an old artifact behind.
+`trace` elaborates into its own snapshot `<top>_trace`.
+
+*Deviation from D2, deliberate:* the scripts do not hash.  Content hashing in `cmd` means
+`certutil` per file inside `for /f` loops with delayed expansion -- the trap the script's own comments
+already warn about -- and a second implementation of the same rule in bash.  The stamps are computed
+in Python (`XsiSnapshot`, Stage 3), the one caller that decides; the scripts only *invalidate* them
+(each phase deletes the stamp that vouches for the outputs it is about to replace), so a by-hand
+`run.bat` that rebuilt from other inputs can never leave a stamp that still matches.  The design's
+stamp lives inside `xsim.dir/<snapshot>/`, so a gate that deletes the snapshot to force a clean build
+deletes its stamp with it.
+
+*D3 without regenerating any testbench:* every testbench opens `ports::DESIGN_DLL`, a literal
+`xsim.dir/<top>/xsimk.dll`.  `XsiSim` (the one place a design is opened) now honours
+`WF_XSI_DESIGN`, which the runner sets for a traced run.  One testbench binary serves both snapshots.
+
+*A stale comment corrected:* `run.bat` and `RtlSimStep` said re-running the built executable does
+NOT regenerate the VCD.  It does -- when the snapshot it loads is the traced one.  The observation
+behind the comment was a re-run against an untraced snapshot.  Measured: two consecutive runs of the
+traced `mem_copy` snapshot each wrote a fresh 1.0 MB VCD; a run of the untraced one wrote none.
+
+Measured on `mem_r_stream`: cold build 10.9 s; a no-change build 6 ms; editing one RTL file -> only
+`rtl` stale (rebuild 7.6 s); editing the testbench -> only `tb` (5.9 s); run 0.14 s, `cycles=158`.
+
+**Stage 2 -- the vectors directory (D4).**  *Deviation, deliberate:* no generator change.  All
+bundle I/O goes through one header (`xsi_bundle.h`), and every bundle path a testbench names starts
+`vectors/` (checked across all 45 committed mains).  So `BurstBundle` maps a leading `vectors` to
+`WF_VECTORS_DIR` when set -- the runner sets it from its vectors-directory argument -- and
+hand-written and generated testbenches honour it alike, with nothing regenerated.  `XsiSim` puts the
+run's `.wdb` there too.
+
+Open question answered -- **parallel runs on one snapshot are safe.**  At run time xsim writes only
+`xsim.dir/<snapshot>/xsimkernel.log` and the `.wdb` (now per run).  Eight concurrent runs of
+`mem_copy` into eight directories took 0.27 s in total, and every `out` / `s_done` bundle (with
+`cycles.bin`) was byte-identical to a single run's.
+
+**Stage 3 -- `XsiSnapshot` (D5).**  `waveflow/build/xsi_snapshot.py`: `.stale()`, `.build()`,
+`.run(vectors_dir)`.  Stamps hash the runner, `rtl_<top>.f`, every listed file and every file of
+each `--include` directory (and the dumper, traced); the testbench's hash the runner, `<tb>.cpp`,
+`xsi_loader.cpp`, every quoted include transitively (resolved like the compiler would: beside the
+includer, the workspace, then `-I` dirs), and `WF_TB_CXXFLAGS`.  A stamp is written only after a
+phase succeeds *and* if its inputs did not change while it ran.  Routed through it: `XsiWorkspace`
+(so `system_xsi` too -- its forced `rmtree` of the snapshot is gone, the stamps replace it),
+`RtlSimStep`, and the `ssr_fft` / `vitis_l1` RTL runners.  `run_xsi` stays the timing wrapper the
+snapshot itself calls.  The `-m xsi` gates in `tests/examples/` still call the runner directly with
+no verb -- a full, forced build -- by design: "routing a green gate through new code is how a gate
+quietly stops meaning what it meant" (`RtlSimStep`'s docstring).
+
+Gates: `tests/build/test_xsi_snapshot.py` (fast; the runner faked: every skip decision),
+`tests/build/test_xsi_snapshot_xsi.py` (`-m xsi`, `mem_r_stream`: a no-change rebuild's events are
+`simulate` alone; an RTL edit is seen and undone by content; four parallel runs into separate
+directories byte-identical to a single run; traced and untraced coexist).  `WANT_XSI_GATES`
+163 -> 167.  The `rtl_digest` lint now counts `XsiSnapshot` as driving RTL.
+
+*Full `-m xsi` after Stage 3: 162 passed, 1 failed, 1 error, 2 skipped -- all three explained, then
+fixed and re-run green.*  The skips were mine (a scratch script had deleted `mem_copy_trace.vcd`).
+The failure and the error were the same finding: **xelab exits 1 after a successful build** when it
+cannot delete its scratch `obj/` (`Could not remove the obj directory ... being used by another
+process`, `xsim_N.c` still held open on Windows), with `Built XSI simulation shared library` printed
+just before.  The runner never looked at xelab's status, so this was always happening and always
+harmless; `XsiSnapshot` reads it, so it surfaced.  The build now accepts exactly that case (library
+built, that message, no `ERROR:` line) and still fails on a real elaboration error
+(`test_xelab_failing_only_its_obj_cleanup_is_a_built_design`).

@@ -25,6 +25,23 @@
 
 namespace wfbfm {
 
+/// Where a testbench's bundle path *p* lives on disk.  Testbenches name their bundles
+/// "vectors/<port>", relative to the run directory; when WF_VECTORS_DIR is set (run.bat / run.sh's
+/// vectors-directory argument, plans/incremental_xsi.md D4) the leading "vectors" is replaced by
+/// it, so two runs of one built testbench can read and write separate directories.  Unset, or a
+/// path not under "vectors", is returned unchanged -- every run before this existed.
+///
+/// Resolved HERE, at the one place bundle files are opened, rather than in each generated main:
+/// the hand-written and the generated testbenches then honour it alike, with no regeneration.
+inline std::string vectors_path(const std::string& p) {
+    const char* root = std::getenv("WF_VECTORS_DIR");
+    if (!root || !*root) return p;
+    if (p == "vectors") return root;
+    if (p.size() >= 8 && p.compare(0, 7, "vectors") == 0 && (p[7] == '/' || p[7] == '\\'))
+        return std::string(root) + p.substr(7);
+    return p;
+}
+
 struct BurstBundle {
     /// The flat words of *dir*'s stream (words.bin): one AXIS beat each, or -- for a wide stream
     /// -- read_chunks(dir) uint64 chunks per beat, low chunk first.
@@ -39,7 +56,7 @@ struct BurstBundle {
     /// The integer value of *key* in meta.json, or *dflt* -- the unquoted-number twin of
     /// read_meta_str below, under the same minimal-scan contract.
     static long read_meta_int(const std::string& dir, const std::string& key, long dflt) {
-        FILE* f = std::fopen((dir + "/meta.json").c_str(), "rb");
+        FILE* f = std::fopen(vectors_path(dir + "/meta.json").c_str(), "rb");
         if (!f) return dflt;
         std::string txt;
         char buf[512];
@@ -73,7 +90,7 @@ struct BurstBundle {
     /// default — see rf_require_bundle_kind().
     static std::string read_meta_str(const std::string& dir, const std::string& key,
                                      const std::string& dflt = std::string()) {
-        FILE* f = std::fopen((dir + "/meta.json").c_str(), "rb");
+        FILE* f = std::fopen(vectors_path(dir + "/meta.json").c_str(), "rb");
         if (!f) return dflt;
         std::string txt;
         char buf[512];
@@ -113,7 +130,7 @@ struct BurstBundle {
         write_u64(dir + "/words.bin", words);
         write_u64(dir + "/bounds.bin", bounds);
         const std::string meta = dir + "/meta.json";
-        FILE* f = std::fopen(meta.c_str(), "wb");
+        FILE* f = std::fopen(vectors_path(meta).c_str(), "wb");
         if (!f) die(meta);
         std::fprintf(f,
             "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": %d,\n"
@@ -160,7 +177,8 @@ struct BurstBundle {
 private:
     /// Create *dir* and any missing parents (like Python's write_burst_bundle), ignoring
     /// already-exists.  No std::filesystem — it does not link with the run.bat mingw.
-    static void mkdirs(const std::string& dir) {
+    static void mkdirs(const std::string& d) {
+        const std::string dir = vectors_path(d);
         for (size_t i = 1; i <= dir.size(); ++i) {
             if (i == dir.size() || dir[i] == '/' || dir[i] == '\\') {
                 std::string sub = dir.substr(0, i);
@@ -174,7 +192,7 @@ private:
     }
 
     static std::vector<uint64_t> read_u64(const std::string& path) {
-        FILE* f = std::fopen(path.c_str(), "rb");
+        FILE* f = std::fopen(vectors_path(path).c_str(), "rb");
         if (!f) die(path);
         std::fseek(f, 0, SEEK_END);
         long n = std::ftell(f);
@@ -185,7 +203,7 @@ private:
         return v;
     }
     static void write_u64(const std::string& path, const std::vector<uint64_t>& v) {
-        FILE* f = std::fopen(path.c_str(), "wb");
+        FILE* f = std::fopen(vectors_path(path).c_str(), "wb");
         if (!f) die(path);
         if (!v.empty() && std::fwrite(v.data(), 8, v.size(), f) != v.size()) die(path);
         std::fclose(f);

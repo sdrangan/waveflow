@@ -812,13 +812,27 @@ private:
 #  define WAVEFLOW_XSI_ENGINE "libxv_simulator_kernel.so"
 #endif
 
+/// The design library a run opens: *design* (the testbench's ports::DESIGN_DLL), unless
+/// WF_XSI_DESIGN names another.  run.bat / run.sh set it for a traced run, whose snapshot is
+/// xsim.dir/<top>_trace (plans/incremental_xsi.md D3): one built testbench then runs against either
+/// elaboration, and the two coexist rather than each invalidating the other.
+inline std::string xsi_design_path(const std::string& design) {
+    const char* d = std::getenv("WF_XSI_DESIGN");
+    return (d && *d) ? std::string(d) : design;
+}
+
 class XsiSim {
 public:
+    /// *wdb* is relative to the run's vectors directory when one is set (WF_VECTORS_DIR): xsim
+    /// rewrites the waveform database on every run, so two runs sharing one directory for it would
+    /// collide.
     XsiSim(const std::string& design, const std::string& wdb,
            const std::string& engine = WAVEFLOW_XSI_ENGINE)
-        : xsi_(design, engine), d_(xsi_) {
+        : xsi_(xsi_design_path(design), engine), d_(xsi_) {
         s_xsi_setup_info info; std::memset(&info, 0, sizeof(info));
-        std::vector<char> wdbbuf(wdb.begin(), wdb.end()); wdbbuf.push_back('\0');
+        const char* vd = std::getenv("WF_VECTORS_DIR");
+        const std::string wdb_path = (vd && *vd) ? std::string(vd) + "/" + wdb : wdb;
+        std::vector<char> wdbbuf(wdb_path.begin(), wdb_path.end()); wdbbuf.push_back('\0');
         info.wdbFileName = wdbbuf.data();
         xsi_.open(&info);
         P_clk_   = d_.port("ap_clk");
