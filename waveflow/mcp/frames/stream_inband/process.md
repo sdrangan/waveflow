@@ -69,7 +69,8 @@ Then:
 - show the checker **rejecting** at least two wrong outputs you construct.
   Name each and give the checker's output.
 
-**Stop here.** Summarize Stage 1 and wait for approval. Do not write the
+**Stop here.** Summarize Stage 1 and end your turn -- even in a
+non-interactive session; the approval is the next message. Do not write the
 accelerator yet.
 
 ---

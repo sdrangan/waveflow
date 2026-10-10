@@ -65,7 +65,8 @@ pipeline form) and `docs/guide/patterns/stream_only.md`, and
 
 Run the worked examples and show the output.
 
-**Stop here.** Summarize Stage 1 and wait for approval. Do not write the
+**Stop here.** Summarize Stage 1 and end your turn -- even in a
+non-interactive session; the approval is the next message. Do not write the
 pipeline yet.
 
 ---
@@ -105,6 +106,12 @@ Each of these has cost a debugging session here:
   two depend on each other: use `read_nb` (`docs/guide/patterns/stream_only.md`).
 - **An `hls::task` that writes before it reads counts as in reset**
   (`docs/guide/rf/rfshotbuf/tx_internal.md`, "The reset trap").
+- **Fire the memory reader and writer the same number of times per job.**
+  Vitis hands each `m_axi` task its base pointer through a small per-firing
+  FIFO, and one entry process refills them together; a job that fires the
+  reader twice and the writer once deadlocks a few jobs later.  pysim does
+  not model those FIFOs, so only the RTL run shows it -- balance the
+  firings (a zero-length `MemWCmd` is a legal write).
 - **A deadlock at RTL looks like a hang, or like success**: the gate
   asserts counts -- responses received, words written -- not just "it
   finished".

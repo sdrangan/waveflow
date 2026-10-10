@@ -47,6 +47,11 @@ you may read and must never edit.
 
 ## The rules
 
+- **Stop after Stage 1, even when nobody seems to be there.** Ending your
+  turn with the Stage 1 summary *is* the stop. In a scripted or
+  non-interactive session the approval arrives as the next message; a
+  session that ends there has done what was asked. Never approve your own
+  Stage 1 and carry on.
 - **Never hand-pack words.** Every header, footer and sample burst goes
   through its Waveflow schema or the Waveflow array utilities, in Python and
   in C++ alike.

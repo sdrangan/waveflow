@@ -59,7 +59,8 @@ Then the pattern pages: `docs/guide/patterns/command_response.md` and
 
 Run the worked examples and show the output.
 
-**Stop here.** Summarize Stage 1 and wait for approval. Do not write the
+**Stop here.** Summarize Stage 1 and end your turn -- even in a
+non-interactive session; the approval is the next message. Do not write the
 system yet.
 
 ---
