@@ -1076,6 +1076,133 @@ def runs_toolchain(command: str) -> bool:
     return bool(_TOOLCHAIN_CALL.search(_QUOTED.sub('""', command)))
 
 
+
+# ---------------------------------------------------------------------------
+# Where the time went
+# ---------------------------------------------------------------------------
+
+#: The time categories, most specific first: where two overlap, the earlier wins.
+TIME_CATEGORIES = ("synth", "rtl sim", "pysim", "other build / test", "build (unsplit)",
+                   "other tools")
+
+#: A shell command's category, first match wins.  A build that runs several kinds of work
+#: in one call (a DAG through `compare`) is "build (unsplit)" unless the project's step log
+#: (`.waveflow/build_steps.jsonl`, written by run_dag_cli) splits it.
+_COMMAND_TIME_RULES = (
+    ("rtl sim", r"\bxsim\b|\bxelab\b|\bxvlog\b|run_sim\.py|run\.bat|_bfm_tb|--through\s+"
+                r"(system_xsi|check_cosim|cosim\w*|rtlsim|rtl_timing|xsi)\b"),
+    ("synth", r"--through\s+(csynth\w*|system_rtl)\b|run_hls\.tcl|csynth|vitis-run|vitis_hls"),
+    ("pysim", r"--through\s+(pysim|py_sim|check_pysim|check_model)\b|pysim"),
+    ("build (unsplit)", r"_build\.py(?!\s+--through\s+(codegen|gen_\w+|golden|report|figures)\b)"),
+    ("other build / test", r"pytest|python\s|g\+\+|--through"),
+)
+
+#: A build step's category, from its name.
+_STEP_TIME_RULES = (
+    ("synth", r"csynth|synth|system_rtl|impl"),
+    ("rtl sim", r"xsi|cosim|rtlsim|rtl_sim|xsim|rtl_timing"),
+    ("pysim", r"pysim|py_sim"),
+)
+
+
+def _time_category(text: str, rules) -> str | None:
+    for cat, pat in rules:
+        if re.search(pat, text, re.IGNORECASE):
+            return cat
+    return None
+
+
+def _stamp(r: dict[str, Any]):
+    import datetime as dt
+
+    t = r.get("timestamp")
+    try:
+        return dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None
+    except ValueError:
+        return None
+
+
+def _time_split(phases: list[dict[str, Any]], folder: Path) -> list[str]:
+    """Where the wall clock went: synthesis, RTL simulation, pysim, other tools, the agent.
+
+    Each tool call is the interval from its issue to its result.  A background command
+    returns at once, so it is charged from its launch to the ``end_time`` of its task.
+    Builds run through ``run_dag_cli`` log each step (``.waveflow/build_steps.jsonl``),
+    which splits a build that ran synthesis, pysim and RTL in one call.  Every second is
+    charged once, to the most specific category running then; a second in which no tool
+    ran is the agent's own.
+    """
+    intervals: list[tuple[float, float, str]] = []
+    first = last = None
+    for p in phases:
+        uses: dict[str, tuple[float | None, str, dict[str, Any]]] = {}
+        launched: dict[str, tuple[float, str]] = {}
+        task_of: dict[str, str] = {}
+        for r in _records(Path(p["transcript"])):
+            kind, sub = r.get("type"), r.get("subtype")
+            if kind == "system" and sub == "task_started":
+                task_of[r.get("task_id")] = r.get("tool_use_id")
+            elif kind == "system" and sub == "task_updated":
+                end = (r.get("patch") or {}).get("end_time")
+                use = task_of.get(r.get("task_id"))
+                if end and use in launched:
+                    t0, cat = launched.pop(use)
+                    intervals.append((t0, end / 1000, cat))
+                    last = max(last or 0, end / 1000)
+            when = _stamp(r)
+            if when is not None:
+                first = when if first is None else first
+                last = when if last is None else max(last, when)
+            content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
+            if not isinstance(content, list):
+                continue
+            for c in content:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "tool_use":
+                    uses[c.get("id", "")] = (when, c.get("name", ""), c.get("input") or {})
+                elif c.get("type") == "tool_result" and c.get("tool_use_id") in uses:
+                    t0, name, inp = uses.pop(c["tool_use_id"])
+                    cat = "other tools"
+                    if name in ("Bash", "PowerShell"):
+                        cat = _time_category(str(inp.get("command", "")), _COMMAND_TIME_RULES) or cat
+                        if inp.get("run_in_background") and t0 is not None:
+                            launched[c["tool_use_id"]] = (t0, cat)
+                            cat = "other tools"
+                    if t0 is not None and when is not None and when > t0:
+                        intervals.append((t0, when, cat))
+
+    for log in folder.rglob("build_steps.jsonl") if folder.is_dir() else ():
+        if log.parent.name != ".waveflow":
+            continue
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cat = _time_category(str(e.get("step", "")), _STEP_TIME_RULES) or "other build / test"
+            if first is not None and e.get("start", 0) >= first - 60:
+                intervals.append((float(e["start"]), float(e["end"]), cat))
+
+    L = ["## Where the time went", ""]
+    if first is None or last is None or last <= first:
+        return L + ["(the transcript has no timestamps)", ""]
+    order = list(TIME_CATEGORIES)
+    total = {k: 0.0 for k in order}
+    edges = sorted({x for a, b, _ in intervals for x in (a, b)} | {first, last})
+    for a, b in zip(edges, edges[1:]):
+        live = [c for s, e, c in intervals if s <= a and e >= b]
+        if live:
+            total[min(live, key=order.index)] += b - a
+    wall = last - first
+    total["agent (no tool running)"] = max(0.0, wall - sum(total.values()))
+    L += ["| | minutes | share |", "| --- | --- | --- |"]
+    for k, v in total.items():
+        if v >= 1 or k.startswith("agent"):
+            L.append(f"| {k} | {v / 60:.1f} | {100 * v / wall:.0f}% |")
+    L += [f"| **wall** | **{wall / 60:.1f}** | |", ""]
+    return L
+
 def summarize(
     phases: list[dict[str, Any]],
     *,
@@ -1127,6 +1254,7 @@ def summarize(
 
     wf_calls = [(ph, n, a) for ph, n, a in calls if n.startswith("mcp__waveflow")]
     L += _choice(calls, folder, repo, toc)
+    L += _time_split(phases, folder)
 
     L += ["## Waveflow tools", ""]
     if not wf_calls:

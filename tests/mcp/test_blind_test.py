@@ -303,3 +303,42 @@ def test_a_phase_with_several_results_is_summed(tmp_path):
 def test_direct_toolchain_calls_are_told_apart_from_mentions(command, runs):
     """The Choice section flags an agent that left the Waveflow flow for the vendor's."""
     assert bt.runs_toolchain(command) is runs
+
+
+def test_time_split_charges_background_builds_and_splits_them_by_step(tmp_path):
+    """Where the wall clock went: the agent's own time, and a background build split by step."""
+    folder = tmp_path / "trial"
+    (folder / ".waveflow").mkdir(parents=True)
+    T0 = 1_800_000_000.0
+
+    def at(s):
+        import datetime as dt
+        return dt.datetime.fromtimestamp(T0 + s, tz=dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    recs = [
+        {"type": "user", "timestamp": at(0), "message": {"content": "go"}},
+        # 0-60 s: the agent thinks.  60 s: it starts the build in the background.
+        {"type": "assistant", "timestamp": at(60), "message": {"content": [
+            {"type": "tool_use", "id": "b1", "name": "Bash",
+             "input": {"command": "python x_build.py --through compare", "run_in_background": True}}]}},
+        {"type": "user", "timestamp": at(61), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "running in background"}]}},
+        {"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "b1"},
+        {"type": "system", "subtype": "task_updated", "task_id": "t1",
+         "patch": {"status": "completed", "end_time": (T0 + 660) * 1000}},
+        {"type": "assistant", "timestamp": at(720), "message": {"content": [{"type": "text", "text": "done"}]}},
+    ]
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
+    # The build's own step log: 400 s of csynth, then 200 s of XSI.
+    steps = [{"step": "csynth", "start": T0 + 60, "end": T0 + 460, "success": True},
+             {"step": "system_xsi", "start": T0 + 460, "end": T0 + 660, "success": True}]
+    (folder / ".waveflow" / "build_steps.jsonl").write_text(
+        "\n".join(json.dumps(s) for s in steps), encoding="utf-8")
+
+    text = "\n".join(bt._time_split([{"transcript": str(t)}], folder))
+    assert "| synth | 6.7 |" in text            # 400 s
+    assert "| rtl sim | 3.3 |" in text          # 200 s
+    assert "| agent (no tool running) | 2.0 |" in text   # 0-60 and 660-720
+    assert "build (unsplit)" not in text        # the step log split the whole build
+    assert "| **wall** | **12.0** |" in text

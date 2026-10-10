@@ -146,8 +146,12 @@ def run_dag_cli(
             print("    RUNNING...")
 
     def on_step_end(step, result):
+        # The elapsed time is on the status line so a log -- or a blind test's transcript of
+        # one -- says where a build's wall clock went, step by step (`csynth` vs `system_xsi`).
+        took = f"({result.elapsed_seconds:.1f} s)"
+        _log_step_time(config.root_dir, step.name, result)
         if not result.success:
-            print(f"    FAILED: {result.message}")
+            print(f"    FAILED {took}: {result.message}")
             # The message is str(exc); for a toolchain error that is often a bare string with no
             # file or line.  Print the traceback too so the failure is actionable.
             if result.traceback:
@@ -155,7 +159,30 @@ def run_dag_cli(
         elif result.skipped:
             print("    UP-TO-DATE")
         else:
-            print("    PASSED")
+            print(f"    PASSED {took}")
 
     dag.run(config, through=args.through, force=force,
             on_step_begin=on_step_begin, on_step_end=on_step_end)
+
+
+#: Where :func:`run_dag_cli` appends one line per step it ran: name, start, end, outcome.
+#: Read by ``waveflow blind-test``'s summary to split a build's wall clock into synthesis,
+#: RTL simulation and pysim; harmless anywhere else.
+STEP_LOG = Path(".waveflow") / "build_steps.jsonl"
+
+
+def _log_step_time(root_dir, name: str, result) -> None:
+    """Append one step's timing to ``<root>/.waveflow/build_steps.jsonl``; never fail a build."""
+    if result.skipped:
+        return
+    import json
+
+    end = time.time()
+    try:
+        path = Path(root_dir) / STEP_LOG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"step": name, "start": end - result.elapsed_seconds, "end": end,
+                                "success": bool(result.success)}) + "\n")
+    except OSError:
+        pass
