@@ -446,8 +446,8 @@ from waveflow.hw.aximm import (
 
 ## How it lowers
 
-An `MMIFReadMaster` is a `maxi_read` boundary port (`const T*` + `#pragma HLS stable`), an
-`MMIFWriteMaster` a `maxi_write` one (plain `T*`). A bare `MMIFMaster` is **refused** rather than
+An `MMIFReadMaster` is a `maxi_read` boundary port (`const T*`), an `MMIFWriteMaster` a `maxi_write`
+one (plain `T*`); both `offset=off` + `#pragma HLS stable`. A bare `MMIFMaster` is **refused** rather than
 guessed — the direction is the type. An `MMIFSlave` is `mm_slave`: a real kind, but never a kernel
 boundary port in this flow, because the kernel is always the master.
 

@@ -106,12 +106,12 @@ Each of these has cost a debugging session here:
   two depend on each other: use `read_nb` (`docs/guide/patterns/stream_only.md`).
 - **An `hls::task` that writes before it reads counts as in reset**
   (`docs/guide/rf/rfshotbuf/tx_internal.md`, "The reset trap").
-- **Fire the memory reader and writer the same number of times per job.**
-  Vitis hands each `m_axi` task its base pointer through a small per-firing
-  FIFO, and one entry process refills them together; a job that fires the
-  reader twice and the writer once deadlocks a few jobs later.  pysim does
-  not model those FIFOs, so only the RTL run shows it -- balance the
-  firings (a zero-length `MemWCmd` is a legal write).
+- **The memory reader and writer may fire different numbers of times per
+  job** (two reads, one write is fine): the generated top passes its `m_axi`
+  pointers `offset=off`, which has no per-task pointer FIFOs to fall out of
+  step.  A top with `offset=slave` pointers does, and deadlocks a few jobs in
+  (`docs/guide/comp_codegen/freerunning_composite.md`, "How a pointer
+  reaches a task").
 - **A deadlock at RTL looks like a hang, or like success**: the gate
   asserts counts -- responses received, words written -- not just "it
   finished".
