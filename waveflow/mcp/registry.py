@@ -451,8 +451,8 @@ REGISTRY.add(
             "name": {
                 "type": "string",
                 "description": (
-                    "Example name from waveflow_list_examples, e.g. "
-                    "'stream_inband'."
+                    "Example name exactly as waveflow_list_examples "
+                    "returns it."
                 ),
             },
             "file": {
@@ -506,11 +506,16 @@ REGISTRY.add(
 REGISTRY.add(
     name="waveflow_list_frames",
     description=(
-        "List the accelerator architectures Waveflow can guide you through "
-        "building ('frames'). Each entry gives the frame's name, what it is "
-        "for, the reference example it is modelled on, and the example "
-        "function specs that come with it. Call this if you do not already "
-        "know which frame you were asked for."
+        "The architecture menu: the accelerator architectures ('frames') "
+        "Waveflow has a build process for. Each entry gives the frame's "
+        "pattern (the host-kernel contract), shape (one kernel, a pipeline of "
+        "tasks, several kernels on a bus), flow (how it is verified), a "
+        "one-line 'choose_when', its reference examples, whether "
+        "waveflow_new_accel_project can scaffold it, and its example specs. "
+        "Call this when asked to build from a spec that does not name a "
+        "frame: pick the frame that matches the spec on all three axes, then "
+        "call waveflow_get_process(frame). If none matches, use "
+        "waveflow_list_examples to pick the closest reference."
     ),
     parameters={
         "type": "object",
@@ -525,12 +530,15 @@ REGISTRY.add(
 REGISTRY.add(
     name="waveflow_get_process",
     description=(
-        "Get the build process for an accelerator frame: the ordered steps, "
-        "which tool to use at each one, the two-stage freeze rule, and the "
-        "rules about generated files and hand-packing. Returns the frame's "
-        "specification alongside it. **Call this first** when asked to build "
-        "an accelerator, before reading any source or writing anything -- it "
-        "is the same text the scaffold writes as the project's AGENTS.md."
+        "Get the build process. With a frame: the ordered steps for that "
+        "architecture, which tool to use at each one, the two-stage freeze "
+        "rule and the rules about generated files and hand-packing, with the "
+        "frame's specification (frame.md) alongside -- the same text the "
+        "scaffold writes as the project's AGENTS.md. With frame null: the "
+        "generic process -- how to choose a frame, the frame menu, and how to "
+        "follow a reference example when no frame fits. Call it with the "
+        "frame the spec names, or the one you chose from "
+        "waveflow_list_frames, before writing anything."
     ),
     parameters={
         "type": "object",
@@ -538,8 +546,8 @@ REGISTRY.add(
             "frame": {
                 "type": ["string", "null"],
                 "description": (
-                    "Frame name from waveflow_list_frames. Defaults to "
-                    "'stream_inband'."
+                    "Frame name from waveflow_list_frames, or null for the "
+                    "generic process and the frame menu."
                 ),
             },
         },
@@ -554,7 +562,8 @@ REGISTRY.add(
 REGISTRY.add(
     name="waveflow_new_accel_project",
     description=(
-        "Scaffold a new accelerator project that runs before it is edited: "
+        "Scaffold a new accelerator project, in a frame that has a scaffold "
+        "(waveflow_list_frames: has_scaffold), that runs before it is edited: "
         "the reference example for the frame, renamed, with the compute "
         "stubbed to an identity pass-through and spec/ stubs added. Writes "
         "AGENTS.md (the frame's process) and a copy of frame.md into the "
@@ -576,7 +585,11 @@ REGISTRY.add(
             },
             "frame": {
                 "type": ["string", "null"],
-                "description": "Frame name. Defaults to 'stream_inband'.",
+                "description": (
+                    "Frame name; required in effect: null is refused with "
+                    "the frames that have a scaffold. A frame without one "
+                    "is refused with a pointer to its reference example."
+                ),
             },
             "directory": {
                 "type": ["string", "null"],
