@@ -8,7 +8,7 @@
 
 int main() {
     mem_copy_tb::Harness h("mem_copy_bfm.wdb");
-    h.run(3400);
+    h.run(wfbfm::run_param("n_cycles", 3400));
     h.close();
     return 0;
 }

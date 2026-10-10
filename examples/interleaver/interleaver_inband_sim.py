@@ -85,7 +85,7 @@ class InterleaverInbandTB(FreeRunMod):
             self.mem.s_mm.bus_timing = BusCalib(self.platform_dir, clk_freq=self.clk.freq).bus_timing()
         self.mem.alloc(int(self.mem.nwords_tot))
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
+        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
         self._nwords_tot = int(self.mem.nwords_tot)
 
         self.dut = InterleaverInband(name=f"{self.name}_il", sim=self.sim, mem_dwidth=w, n=n_max,

@@ -123,8 +123,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: m_axi pointer-FIFO wall (test_interleaver_inband_xsi.py).
 #: 163 -> 167 on 2026-10-10 (plans/incremental_xsi.md): test_xsi_snapshot_xsi.py -- a no-change rebuild
 #: only simulates, an RTL edit is seen and undone, separate vectors dirs match a single run, and the
-#: traced snapshot coexists with the untraced one.
-WANT_XSI_GATES = 167
+#: traced snapshot coexists with the untraced one.  167 -> 168 (Stage 4): one mem_copy testbench serves
+#: every workload, its arena and cycle bound read from vectors/run.json.
+WANT_XSI_GATES = 168
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

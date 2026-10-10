@@ -12,6 +12,7 @@ manifest x real waveform check is `test_binds_against_the_real_trace` at the bot
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -225,22 +226,46 @@ class TestComponentView:
 # The drift gate: manifest x real waveform.
 # ---------------------------------------------------------------------------
 
+_MC = Path(__file__).resolve().parents[2] / "examples" / "mem_copy"
+
+
+@pytest.fixture(scope="module")
+def gate_trace(tmp_path_factory) -> Path:
+    """A traced run of mem_copy's GATE scenario (16 x 128), made here rather than read off disk.
+
+    The VCD in the workspace is whatever the last traced run left -- a workload sweep's last point,
+    say -- and these counts are the gate scenario's.  With the snapshot built, this costs about the
+    simulation (``waveflow.build.xsi_snapshot``).  The scenario goes to a directory of its own; the
+    VCD's name is fixed by the dumper, so it is still written into the workspace.
+    """
+    from examples.mem_copy.mem_copy import check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles
+    from waveflow.build.xsi_snapshot import XsiSnapshot
+
+    xsi = _MC / "xsi"
+    rtl = _MC / "mem_copy_proj" / "solution1" / "syn" / "verilog"
+    if not rtl.is_dir() or not (xsi / "vcd_dumper_mem_copy.v").is_file():
+        pytest.skip("no csynth RTL / VCD dumper for mem_copy -- build it --through vcd_dumper, csynth")
+    point = tmp_path_factory.mktemp("mem_copy_gate")
+    write_mem_copy_xsi_bundles(point)
+    vcd = xsi / "mem_copy_trace.vcd"
+    vcd.unlink(missing_ok=True)
+    XsiSnapshot(xsi, "mem_copy", "mem_copy_bfm_tb", trace=True).run(point / "vectors")
+    check_mem_copy_xsi_outputs(point, 2908)
+    assert vcd.is_file(), "the traced run wrote no VCD"
+    return vcd
+
 @pytest.mark.xsi
-def test_binds_against_the_real_trace():
+def test_binds_against_the_real_trace(gate_trace):
     """Every net the manifest names must exist in a real traced run.
 
     This is the gate that catches a new Vitis release renaming its dataflow channel nets -- which
     would otherwise surface as a silently empty timing model rather than a build failure.  The
     counts are the ones measured by hand from the same waveform.
     """
-    from pathlib import Path
 
     from examples.mem_copy.mem_copy import MemCopy
 
-    vcd = Path(__file__).resolve().parents[2] / "examples/mem_copy/xsi/mem_copy_trace.vcd"
-    if not vcd.exists():
-        pytest.skip(f"no traced run at {vcd} -- run examples/mem_copy/xsi/run_trace.bat "
-                    f"(swap it for run.bat) to produce one")
+    vcd = gate_trace
 
     man = composite_top_spec(
         MemCopy(name="mc", sim=Simulation(), mem_dwidth=64), width=64).trace_manifest()
@@ -265,7 +290,7 @@ def test_binds_against_the_real_trace():
 
 
 @pytest.mark.xsi
-def test_firing_window_is_ap_done_anchored_not_last_output():
+def test_firing_window_is_ap_done_anchored_not_last_output(gate_trace):
     """The writer's firing does NOT end at its last stream output.
 
     `m_axi` stores are posted: they retire when the adapter accepts the word, so MemWStream keeps
@@ -273,13 +298,10 @@ def test_firing_window_is_ap_done_anchored_not_last_output():
     firing is 183 -- a 15% under-count that made the bottleneck look like the faster stage.  This
     pins the corrected anchor against the real trace.
     """
-    from pathlib import Path
 
     from examples.mem_copy.mem_copy import MemCopy
 
-    vcd = Path(__file__).resolve().parents[2] / "examples/mem_copy/xsi/mem_copy_trace.vcd"
-    if not vcd.exists():
-        pytest.skip(f"no traced run at {vcd} -- run.bat mem_copy mem_copy_bfm_tb trace")
+    vcd = gate_trace
 
     man = composite_top_spec(
         MemCopy(name="mc", sim=Simulation(), mem_dwidth=64), width=64).trace_manifest()

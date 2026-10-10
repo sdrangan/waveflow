@@ -270,3 +270,28 @@ def read_burst_bundle(bundle_dir: str | Path) -> list[np.ndarray]:
             f"final bound {int(bounds[-1])} != word count {int(words.shape[0])} in bundle {d}"
         )
     return out
+
+
+#: A run's scenario-sized constants, beside its bundles: ``<vectors>/run.json``.
+RUN_PARAMS_FILE = "run.json"
+
+
+def write_run_params(vectors_dir: str | Path, **params: int) -> Path:
+    """Write the scenario-sized constants a run's testbench reads at run time: ``<vectors_dir>/run.json``.
+
+    The C++ half is ``wfbfm::run_param(key, generated_default)`` (``xsi_bundle.h``): the generated
+    main reads ``n_cycles`` (its ``h.run`` bound) and a :class:`~waveflow.hw.memory.MemoryMod`
+    arena reads ``mem_words``.  A key not written keeps the value the testbench was generated with,
+    so the file is optional -- but a scenario writer that owns a ``vectors/`` should write it (empty
+    if need be): a run reads whatever ``run.json`` is in its directory, including one a previous
+    scenario left.  Values must be integers; the reader is a minimal scan, not a JSON parser.
+    """
+    for k, v in params.items():
+        if not isinstance(v, (int, np.integer)) or isinstance(v, bool):
+            raise TypeError(f"run param {k!r} must be an integer, got {v!r}")
+    d = Path(vectors_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / RUN_PARAMS_FILE
+    path.write_text(json.dumps({k: int(v) for k, v in params.items()}, indent=1) + "\n",
+                    encoding="utf-8")
+    return path

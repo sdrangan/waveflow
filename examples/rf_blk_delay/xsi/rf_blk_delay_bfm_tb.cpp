@@ -8,7 +8,7 @@
 
 int main() {
     rf_blk_delay_tb::Harness h("rf_blk_delay_bfm.wdb");
-    h.run(60000);
+    h.run(wfbfm::run_param("n_cycles", 60000));
     h.close();
     return 0;
 }

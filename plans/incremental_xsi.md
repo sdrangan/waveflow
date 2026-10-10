@@ -1,6 +1,6 @@
 # Plan: an incremental XSI runner, and cheap workload sweeps at RTL
 
-**Status:** drafted 2026-10-10; Stages 0-3 done 2026-10-10 (branch `incremental-xsi`).
+**Status:** drafted 2026-10-10; Stages 0-5 done 2026-10-10 (branch `incremental-xsi`).
 
 ## Motivation
 
@@ -171,3 +171,67 @@ just before.  The runner never looked at xelab's status, so this was always happ
 harmless; `XsiSnapshot` reads it, so it surfaced.  The build now accepts exactly that case (library
 built, that message, no `ERROR:` line) and still fails on a real elaboration error
 (`test_xelab_failing_only_its_obj_cleanup_is_a_built_design`).
+
+**Stage 4 -- a workload sweep at RTL.**  The plan's premise -- "the testbenches already read their
+scenario from files under `vectors/`" -- was *half* true, and the false half was the expensive one.
+The data came from files; the scenario's **sizes** did not.  mem_copy's generated testbench baked in
+`h.run(3400)` and the arena `mem(24640, 8)` (and a dump of `{0, 24640}`), and `CodegenTbStep`
+regenerated them per point -- so every point of the old sweep was a new testbench, 5 s of g++ on top
+of the simulation even with the snapshot reused.
+
+Fixed generically: `wfbfm::run_param(key, generated_default)` (`xsi_bundle.h`) reads the run's
+`vectors/run.json` (`waveflow.utils.burst_io.write_run_params`) and prints any override
+(`WF_RUN_PARAM`).  `render_tb_main` emits `h.run(wfbfm::run_param("n_cycles", N))`;
+`MemoryMod.bfm_model` emits the arena as `wfbfm::run_param("mem_words", N)`; a whole-arena dump is
+`MemSeg(0, 0, ...)` -- `len 0` = "to the end", as `len 0` already meant "the whole bundle" for a load
+(fir_block, interleaver_inband and mem_copy all dump the whole arena).  The 18 committed generated
+mains and 3 harnesses were rewritten to the new emission (mechanically; the codegen tests that compare
+committed against generated agree).  mem_copy's `CodegenTbStep` no longer takes the scenario: the
+testbench is generated for the design once, and `MemCopySim.write_scenario` -- the one scenario writer
+for both backends -- writes `run.json` at every scenario, the default too, so a previous point's sizes
+cannot outlive it.
+
+Demonstration: `examples/mem_copy/mem_copy_workload_sweep.py`, through `SweepRunner`, 50 job lengths
+(16..800 words x 4 jobs), each point pysim + traced RTL + `RtlCheckStep` (bit-exact, and the RTL
+completion cycle recorded beside the pysim's).  Per point, from the sweep's own events:
+
+| step | first point | median | max |
+| --- | --- | --- | --- |
+| `pysim` | 0.66 s | 0.10 s | 0.66 s |
+| `rtlsim` | 0.19 s | 0.49 s | 1.36 s |
+| of which `simulate` | 0.10 s | 0.33 s | 0.75 s |
+
+All 50 clean in 36 s; **no compile, elaborate or testbench phase ran at any point** (the snapshot was
+built by the two-point trial before it -- which also re-ran mem_copy's csynth once, its RTL having been
+stale by mtime).  An RTL point costs its simulation plus ~0.15 s (runner start, hashing, the VCD
+check), against 20-30 s when every run rebuilt -- the gate.  The RTL is the larger cost per point
+here only because these traces are long (up to 3728 cycles traced) and pysim is uncalibrated (no
+platform: `pysim_end_cycles` is end-of-simulation without the bus law, so it is *not* comparable to
+`rtl_done_cycle` -- the calibration sweep is `mem_copy_sweep.py`).
+
+Gate: `test_one_mem_copy_testbench_serves_every_workload` (`-m xsi`) -- one build, three scenarios
+(the gate's 16x128 at its 2908, 4x1024 whose 33344-word arena exceeds the generated 24640, 4x16),
+each `simulate` alone and bit-exact.  `WANT_XSI_GATES` 167 -> 168.
+
+**Stage 5 -- docs.**  `docs/guide/build/xsi.md`: "Building once, running many times" (the verbs, the
+stamps, `XsiSnapshot`, vectors directories, `run.json`) replaces the stale "Automation status" section
+(which still called the XSI rung a standalone script with no BuildStep).  `timing_events.md`: "Today
+this is done by hand" is now how it is done, with the measured costs.  `sweep.md`: workload axes at
+RTL.  `timing/trace_steps.md`: the VCD warning corrected (only the traced snapshot writes it).
+
+## Still open
+
+- **Vivado's own incremental compile** -- not evaluated.  The content stamps make a no-change build
+  free; what remains is a *one-module* change paying a full elaborate (7-13 s).  Worth measuring
+  `xelab`'s incremental options only if a design-parameter sweep makes that the bottleneck.
+- **Vitis cosim harness reuse** -- untouched, as planned.
+- **The other sweeps** (`fir_block`, `vecmult`) are build-axis sweeps; nothing to share at RTL.
+- A traced run's VCD name is fixed in the dumper (`<top>_trace.vcd` in the workspace), so *traced*
+  runs of one snapshot cannot run in parallel; untraced ones can.
+- **`tests/utils/test_trace.py` reads whatever `examples/mem_copy/xsi/mem_copy_trace.vcd` is on
+  disk.**  The second full `-m xsi` after Stage 4 failed its two tests because the 50-point sweep had
+  left its *last* point's trace (4x800) there; restoring the gate scenario's traced run (2908) made
+  them pass, and the other 166 gates were green.  Pre-existing fragility, not new -- any traced run of
+  another scenario does it -- but the cheap workload sweep makes it more likely.  **Fixed:** the two
+  tests now produce their own trace through a module fixture (`gate_trace`: the gate scenario into a
+  temp vectors dir, a traced `XsiSnapshot` run, checked at 2908) -- ~0.2 s with the snapshot built.

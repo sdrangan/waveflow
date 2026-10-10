@@ -122,3 +122,39 @@ def test_traced_and_untraced_snapshots_coexist(snap, tmp_path):
         dumper.unlink(missing_ok=True)
         vcd.unlink(missing_ok=True)
         shutil.rmtree(traced.design_dir, ignore_errors=True)
+
+
+MC_ROOT = ROOT.parent / "mem_copy"
+MC_XSI = MC_ROOT / "xsi"
+
+
+def test_one_mem_copy_testbench_serves_every_workload(tmp_path):
+    """Stage 4: the scenario's sizes ride in ``vectors/run.json``, so one compiled testbench runs
+    every workload -- including one whose arena (33344 words) is larger than the 24640 it was
+    generated with.  Each run is checked bit-exact; the gate scenario keeps its 2908."""
+    from examples.mem_copy.mem_copy import (
+        XSI_N, XSI_NUM_CMDS, check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles, xsi_jobs,
+        xsi_run_cycles,
+    )
+
+    if not (MC_ROOT / "mem_copy_proj" / "solution1" / "syn" / "verilog").is_dir():
+        pytest.skip("XSI gate prerequisite missing: no csynth RTL for mem_copy")
+    why = rtl_staleness(MC_ROOT, "mem_copy")
+    if why is not None:
+        pytest.skip(f"XSI gate prerequisite missing: {why}")
+    (MC_XSI / "rtl_mem_copy.f").write_text(render_rtl_f("mem_copy", MC_ROOT, stamp_sources=False),
+                                           encoding="utf-8")
+    snap = XsiSnapshot(MC_XSI, "mem_copy", "mem_copy_bfm_tb")
+    snap.build()
+    for n, k in [(XSI_N, XSI_NUM_CMDS), (1024, 4), (16, 4)]:
+        default = (n, k) == (XSI_N, XSI_NUM_CMDS)
+        point = tmp_path / f"n{n}x{k}"
+        write_mem_copy_xsi_bundles(point, jobs=xsi_jobs(n, k),
+                                   n_cycles=None if default else xsi_run_cycles(n, k))
+        with events.collect() as evs:
+            out = snap.run(point / "vectors")
+        assert [e["name"] for e in evs if e["kind"] == "phase"] == ["simulate"], f"n={n} rebuilt"
+        cyc = check_mem_copy_xsi_outputs(point, 2908 if default else None, jobs=xsi_jobs(n, k))
+        assert cyc > 0
+        if n == 1024:
+            assert "WF_RUN_PARAM mem_words=33344" in out, out[-2000:]

@@ -482,8 +482,9 @@ class MemSeg:
     """One memory region tied to a burst bundle — mirrors the C++ ``wfbfm::MemSeg``.
 
     For a **load**, the bundle's words go to ``[off, off+len)`` (``length`` ignored — the bundle's own
-    length is used).  For a **dump**, ``[off, off+length)`` is written to ``bundle``.  ``off``/``length``
-    are word indices; ``bundle`` is a path rooted by the run dir (e.g. ``"vectors/mem_in"``).
+    length is used).  For a **dump**, ``[off, off+length)`` is written to ``bundle``; ``length=0`` is
+    "to the end of the arena".  ``off``/``length`` are word indices; ``bundle`` is a path rooted by
+    the run dir (e.g. ``"vectors/mem_in"``).
     """
     off: int = 0
     length: int = 0
@@ -571,7 +572,11 @@ class MemoryMod(HwModule):
         will be driven.
 
         The C++ arguments come from this component's own fields, so nothing example-specific leaks
-        into the framework.
+        into the framework.  The arena's size is the generated DEFAULT: a run's ``vectors/run.json``
+        may override it as ``mem_words`` (``wfbfm::run_param``), because a scenario sizes its arena
+        and a workload sweep should not recompile the testbench per point
+        (``plans/incremental_xsi.md`` Stage 4).  A whole-arena dump says ``MemSeg(off, 0, ...)``,
+        "to the end", so it follows.
 
         NOTE: the XSI slave models are independent and un-arbitrated, whereas
         :class:`~waveflow.hw.memif.AXIMMCrossBarIF` models contention.  The two therefore describe
@@ -582,7 +587,8 @@ class MemoryMod(HwModule):
         return BfmModel(
             "FlatMemory",
             ports=("s_mm",),
-            extra_args=(str(int(self.nwords_tot)), str(int(self.word_size) // 8)),
+            extra_args=(f'wfbfm::run_param("mem_words", {int(self.nwords_tot)})',
+                        str(int(self.word_size) // 8)),
             shared="mem",
         )
 

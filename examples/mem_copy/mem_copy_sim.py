@@ -26,7 +26,7 @@ from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
-from waveflow.utils.burst_io import write_burst_bundle
+from waveflow.utils.burst_io import write_burst_bundle, write_run_params
 
 
 @dataclass
@@ -98,7 +98,7 @@ class MemCopyTB(FreeRunMod):
         # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
         # MemoryMod.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
+        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
                            calib_dir=self.calib_dir, platform_dir=self.platform_dir)
@@ -158,9 +158,10 @@ class MemCopySim:
 
     def __init__(self, jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
                  mem_dwidth: int = 64, name: str = "tb", calib_dir: "str | None" = None,
-                 platform_dir: "str | None" = None) -> None:
+                 platform_dir: "str | None" = None, n_cycles: "int | None" = None) -> None:
+        kw = {} if n_cycles is None else {"n_cycles": int(n_cycles)}
         self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth,
-                            calib_dir=calib_dir, platform_dir=platform_dir)
+                            calib_dir=calib_dir, platform_dir=platform_dir, **kw)
         #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
         self.expected: list[np.ndarray] = []
 
@@ -195,6 +196,11 @@ class MemCopySim:
         write_burst_bundle(tb.cmd_words, vdir / "s_cmd")
         write_burst_bundle([mem_in], vdir / "mem_in")
         write_burst_bundle([golden], vdir / "golden")
+        # The scenario's sizes, read by the XSI testbench at run time (wfbfm::run_param): so a
+        # testbench generated for one scenario runs any other -- a workload sweep compiles it once.
+        # Written at every scenario, the default too: a run reads whatever run.json its vectors/
+        # holds, and a previous point's must not outlive it.
+        write_run_params(vdir, n_cycles=int(tb.n_cycles), mem_words=int(tb._nwords_tot))
         tb.driver.root = root
         tb.mem.root = root
 

@@ -33,7 +33,7 @@ struct Harness {
 
     explicit Harness(const std::string& wdb)
       : sim(interleaver_inband_ports::DESIGN_DLL, wdb),
-        mem(4672, 8),
+        mem(wfbfm::run_param("mem_words", 4672), 8),
         s_cmd(sim.dut(), interleaver_inband_ports::s_cmd, {}),
         m_in(sim.dut(), interleaver_inband_ports::m_in, mem),
         m_out(sim.dut(), interleaver_inband_ports::m_out, mem),
@@ -51,7 +51,7 @@ struct Harness {
         participants_.push_back(&s_done);
         // Init-time config (DynParams): each is a knob the pysim participant
         // carries, emitted here as a member assignment (e.g. a model's bundle).
-        mem.dump_segs = { {0, 4672, "vectors/out"} };
+        mem.dump_segs = { {0, 0, "vectors/out"} };
         mem.load_segs = { {0, 0, "vectors/mem_in"} };
         s_cmd.in_bundle = "vectors/s_cmd";
         s_done.out_bundle = "vectors/s_done";

@@ -208,3 +208,16 @@ def test_xelab_failing_only_its_obj_cleanup_is_a_built_design(tmp_path, tail, ok
     else:
         with pytest.raises(XsiRunError):
             s.build()
+
+
+def test_run_params_are_flat_integers(tmp_path):
+    """The C++ reader (wfbfm::run_param) is a minimal scan for integers; refuse anything else."""
+    import json
+
+    from waveflow.utils.burst_io import write_run_params
+
+    p = write_run_params(tmp_path / "vectors", n_cycles=5000, mem_words=33344)
+    assert json.loads(p.read_text(encoding="utf-8")) == {"n_cycles": 5000, "mem_words": 33344}
+    for bad in (1.5, "7", True):
+        with pytest.raises(TypeError):
+            write_run_params(tmp_path / "v2", n_cycles=bad)

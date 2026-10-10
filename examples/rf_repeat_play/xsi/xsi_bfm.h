@@ -93,7 +93,7 @@ struct Dut {
 /// new modes (more segments, later cycle-by-cycle logging) are just more entries, no config file.
 struct MemSeg {
     size_t off = 0;          ///< first word index of the region
-    size_t len = 0;          ///< words (dump only; a load uses the bundle's length)
+    size_t len = 0;          ///< words (dump only, 0 = to the end; a load uses the bundle's length)
     std::string bundle;      ///< bundle directory, relative to the xsi/ run dir
 };
 
@@ -114,9 +114,12 @@ struct FlatMemory : public XsiSimObj {
         }
     }
     void post_sim() override {
+        // len 0 = to the end of the arena: a whole-arena dump then follows an arena sized at run
+        // time (run_param), instead of naming the size it was generated with.
         for (const MemSeg& s : dump_segs) {
+            const size_t len = s.len ? s.len : (s.off < w.size() ? w.size() - s.off : 0);
             BurstBundle::write_one(s.bundle,
-                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + s.len));
+                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + len));
         }
     }
 

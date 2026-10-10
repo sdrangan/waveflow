@@ -104,15 +104,20 @@ single measurements, not benchmarks.
 | csynth of one small top | 20–60 s | paid again only for a top whose sources changed |
 | an XSI run from scratch | 20–30 s | compile RTL 4–5 s, elaborate 11–16 s, compile the testbench 5–6 s, **simulate 0.2–0.3 s** |
 | re-running the built XSI testbench | 0.1 s | the simulation, plus loading the snapshot |
+| an XSI rebuild with nothing changed | 6 ms | hashing the inputs; no phase runs |
+| one RTL point of a 50-point workload sweep | 0.5 s (median) | simulate 0.3 s, of a traced run |
 | a Vitis cosim run of a small kernel | about 3 min | generate the harness ~30 s, compile ~30 s, **elaborate ~70 s**, simulate ~5 s |
 
 For short simulations, RTL is dominated by fixed costs, not by simulating. That splits a design
 search in two:
 
 - **Many workloads on a fixed design** (job lengths, traffic, scenarios) need not be slow at RTL:
-  the testbenches read their scenarios from files, so a compiled snapshot can be re-run with new
-  vectors for about a tenth of a second. Today this is done by hand; the XSI build step always
-  runs the whole runner.
+  the testbenches read their scenarios — sizes included — from files, so a compiled snapshot can
+  be re-run with new vectors for about a tenth of a second plus the simulated cycles.
+  [`XsiSnapshot`](./xsi.md#building-once-running-many-times) does this for every XSI caller: it
+  rebuilds only the phases whose inputs changed, by content, and runs each scenario from its own
+  directory. `mem_copy`'s workload sweep (`examples/mem_copy/mem_copy_workload_sweep.py`) runs
+  fifty job lengths at RTL and in pysim in 36 s, printing these costs from its own events.
 - **Changing the design** (a bus width, a FIFO depth, another kernel) pays csynth of the changed
   tops, then elaboration and compilation: minutes per point. This is where pysim earns its
   place, at seconds per point.

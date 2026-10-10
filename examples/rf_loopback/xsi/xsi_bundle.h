@@ -42,6 +42,33 @@ inline std::string vectors_path(const std::string& p) {
     return p;
 }
 
+/// A scenario-sized constant of this run: *key*'s integer in "vectors/run.json" (resolved like every
+/// bundle, so per run), or *dflt* -- the value the testbench was generated with -- when the file or
+/// the key is absent.
+///
+/// A testbench is compiled for a DESIGN; a workload sweep varies the SCENARIO.  Values that size the
+/// scenario but sit in compiled code (the cycle bound of `h.run(N)`, a memory arena's words) would
+/// otherwise make every workload point a different testbench, paying g++ for nothing
+/// (plans/incremental_xsi.md Stage 4).  The file is flat JSON of integers, written by
+/// waveflow.utils.burst_io.write_run_params; an override is printed, so a log says what ran.
+inline long run_param(const char* key, long dflt) {
+    FILE* f = std::fopen(vectors_path("vectors/run.json").c_str(), "rb");
+    if (!f) return dflt;
+    std::string txt;
+    char buf[512];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) txt.append(buf, n);
+    std::fclose(f);
+    const std::string pat = std::string("\"") + key + "\"";
+    const size_t k = txt.find(pat);
+    if (k == std::string::npos) return dflt;
+    const size_t colon = txt.find(':', k + pat.size());
+    if (colon == std::string::npos) return dflt;
+    const long v = std::strtol(txt.c_str() + colon + 1, 0, 10);
+    std::printf("WF_RUN_PARAM %s=%ld (generated %ld)\n", key, v, dflt);
+    return v;
+}
+
 struct BurstBundle {
     /// The flat words of *dir*'s stream (words.bin): one AXIS beat each, or -- for a wide stream
     /// -- read_chunks(dir) uint64 chunks per beat, low chunk first.

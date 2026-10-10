@@ -8,7 +8,7 @@
 
 int main() {
     rf_loopback_tb::Harness h("rf_loopback_tb.wdb");
-    h.run(16000);
+    h.run(wfbfm::run_param("n_cycles", 16000));
     h.close();
     return 0;
 }

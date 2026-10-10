@@ -98,6 +98,14 @@ This is not bookkeeping. Utilization does not depend on workload at all —
 timing corpus is mostly workload points against one build. A sweep that could not tell them apart
 would re-synthesize for a change in `nwords`.
 
+At RTL the same split goes one level further down. A workload point leaves the elaborated XSI
+snapshot and the compiled testbench untouched, so a stage that runs
+[`RtlSimStep`](../timing/trace_steps.md) pays, after the first point, only the simulation —
+[`XsiSnapshot`](./xsi.md#building-once-running-many-times) skips the rest by content. For that to
+hold, the point's scenario must live in its vectors, sizes included (`vectors/run.json`), never in
+the generated testbench. `examples/mem_copy/mem_copy_workload_sweep.py` is the worked case: fifty
+job lengths, each checked bit-exact at RTL, in 36 s.
+
 ## `SweepRunner` — running them
 
 ```python
