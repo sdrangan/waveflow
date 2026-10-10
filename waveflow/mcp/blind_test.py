@@ -1044,8 +1044,36 @@ def _choice(
     L.append("- references read: " + (", ".join(f"`{r}`" for r in refs) if refs else "none"))
     L.append("- scaffold: " + (
         ", ".join(frame_name(f) for f in scaffolds) if scaffolds else "not requested"))
+    # Both arms are told where Vitis and Vivado are.  A Waveflow-arm agent that
+    # calls them itself has left the Waveflow flow for the vendor's -- worth
+    # seeing at the top, not buried in the command list.
+    direct = [a.get("command", "") for _, n, a in calls
+              if n in ("Bash", "PowerShell") and runs_toolchain(a.get("command", ""))]
+    L.append(f"- direct Vitis / Vivado commands: {len(direct)}" if direct
+             else "- direct Vitis / Vivado commands: none")
+    for c in direct[:5]:
+        L.append(f"    - `{_short(c, 120)}`")
     L.append("")
     return L
+
+
+#: A command that runs a Vitis or Vivado tool itself, rather than through a build
+#: script.  Reading or grepping a generated script that mentions one does not count.
+_TOOLCHAIN_CALL = re.compile(
+    # In command position (start, or after ; & | ( ), optionally by full path,
+    # and not a file name that merely starts with the tool's (`xsim.dir/`).
+    r"(?:^|[;&|(])\s*(?:[\w:./\\-]*[/\\])?"
+    r"(?:vitis-run|vitis_hls|vivado|xvlog|xvhdl|xelab|xsim)(?:\.bat)?(?![\w.\-])",
+    re.IGNORECASE,
+)
+
+#: Quoted text: a grep pattern or an echo, never a command being run.
+_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def runs_toolchain(command: str) -> bool:
+    """Whether *command* runs a Vitis or Vivado tool itself."""
+    return bool(_TOOLCHAIN_CALL.search(_QUOTED.sub('""', command)))
 
 
 def summarize(

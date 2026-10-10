@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from waveflow.mcp import blind_test as bt
 
 
@@ -63,6 +65,7 @@ def test_summary_reports_leaks_generated_edits_and_denials(tmp_path):
     assert "- first write: tool call #8 of 9" in s
     assert "- references read: `stream_inband`, `good (read from the checkout)`" in s
     assert "- scaffold: not requested" in s
+    assert "- direct Vitis / Vivado commands: none" in s
     assert "LEAK: repo plans/" in s
     assert "repo example NOT in TOC" in s
     assert "hand-edited a generated file" in s
@@ -284,3 +287,19 @@ def test_a_phase_with_several_results_is_summed(tmp_path):
     r = bt._result_record(t)
     assert r["num_turns"] == 66 and r["duration_ms"] == 332000 and r["result_records"] == 2
     assert bt._tokens(r) == (100 + 2502945 + 90790 + 72784 + 479, 2502945 + 90790, 33965)
+
+
+@pytest.mark.parametrize("command,runs", [
+    ("vitis-run --mode hls --tcl run.tcl", True),
+    ("/c/Xilinx/2025.1/Vivado/bin/xelab.bat -debug all top", True),
+    ("cd xsi && xvlog top.v", True),
+    ("vivado -mode batch -source bd.tcl", True),
+    (r"C:\Xilinx\2025.1\Vivado\bin\xsim.bat top -R", True),
+    (r'grep -n "xelab\|xvlog" xsi/run.bat', False),
+    ("python build.py --through csynth", False),
+    ('cmd //c "run.bat x y"', False),
+    ("rm -rf xsim.dir/x", False),
+])
+def test_direct_toolchain_calls_are_told_apart_from_mentions(command, runs):
+    """The Choice section flags an agent that left the Waveflow flow for the vendor's."""
+    assert bt.runs_toolchain(command) is runs
