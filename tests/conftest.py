@@ -119,7 +119,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
 #: 161 -> 162 on 2026-10-08 (plans/host_runtime.md S6): a host whose threads meet through a SwQueue,
 #: at RTL (test_sw_channels_xsi.py).
-WANT_XSI_GATES = 162
+#: 162 -> 163 on 2026-10-10 (plans/maxi_pointer_fifo.md S4): the 12-job in-band interleaver, past the
+#: m_axi pointer-FIFO wall (test_interleaver_inband_xsi.py).
+WANT_XSI_GATES = 163
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.

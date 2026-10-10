@@ -546,6 +546,30 @@ def check_xsi_outputs(xsi_dir: Path, width: int = DEFAULT_MEM_DW, sizes=(256,)) 
         f"interleaver_inband: s_done has {len(s_done)} words, expected {len(sizes)}*{dw}")
 
 
+#: The multi-job XSI gate's scenario (``tests/examples/test_interleaver_inband_xsi.py``).  Twelve jobs,
+#: because the interleaver fires its reader twice per job and its writer once: before the generated
+#: top's pointers were ``offset=off`` that imbalance wedged the RTL after **6** jobs (the writer's
+#: per-task pointer FIFO, depth 7, full; the reader's empty -- ``plans/maxi_pointer_fifo.md``).  Any
+#: count past 6 catches its return; one or two jobs, the old RTL tests, never could.
+XSI_GATE_SIZES = (64,) * 12
+XSI_GATE_N_CYCLES = 20000
+
+
+def build_xsi_gate_rtl(root: Path = _HERE, width: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> None:
+    """Generate the DUT into *root* and csynth it (``<root>/interleaver_inband_proj``), stamping its
+    sources and writing ``xsi/rtl_interleaver_inband.f`` -- the prerequisite of the multi-job XSI gate.
+    Needs Vitis HLS."""
+    from waveflow.build.composite_gen import render_rtl_f
+    from waveflow.toolchain.toolchain import run_vitis_hls
+
+    root = Path(root)
+    generate_inband(out_dir=root, mem_dwidth=width, n=n)
+    res = run_vitis_hls(root / f"{_TOP}.tcl", work_dir=root)
+    if "WAVEFLOW_CSYNTH_OK" not in ((res.stdout or "") + (res.stderr or "")):
+        raise RuntimeError(f"csynth of {_TOP} failed")
+    (root / "xsi" / f"rtl_{_TOP}.f").write_text(render_rtl_f(_TOP, root), encoding="utf-8")
+
+
 def generate_tb(out_dir: Path = _HERE, width: int = DEFAULT_MEM_DW, sizes=(256,),
                 n_cycles: "int | None" = None) -> dict:
     """Generate the XSI testbench: the scenario constants + the BFM harness + the two-line main, all
