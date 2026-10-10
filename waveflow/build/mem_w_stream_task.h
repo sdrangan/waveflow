@@ -12,8 +12,9 @@
 #include "m_w_cmd.h"
 
 // stream->AXI: dequeue one MWCmd, pure-write len words. addr is an element/word coordinate
-// (m_mem is already a word pointer, so no byte<->word conversion — the offset=slave base + AXI HW
-// turn m_mem[addr] into AWADDR = base + addr*(MEM_DW/8)). Word rate.
+// (m_mem is already a word pointer, so no byte<->word conversion — the AXI HW turns m_mem[addr] into
+// AWADDR = addr*(MEM_DW/8).  There is no base register: the generated top passes m_mem offset=off
+// (the only form Vitis supports for an m_axi pointer on an hls::task; plans/maxi_pointer_fifo.md)). Word rate.
 template <int MEM_DW>
 static void mem_w_stream_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
                               hls::stream<ap_uint<MEM_DW> >& s_in,
