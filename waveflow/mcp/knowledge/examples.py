@@ -67,12 +67,27 @@ class ExampleCard:
             "hook_files": list(self.hook_files),
             "build_script": self.build_script,
             "doc_pages": list(self.doc_pages),
+            "frames": frames_using(self.name),
         }
         if with_files:
             out["files"] = list(self.files)
         else:
             out["n_files"] = len(self.files)
         return out
+
+
+def frames_using(example: str) -> list[str]:
+    """The frames that name *example* as a reference, primary users first.
+
+    A card is the fallback when no frame fits a spec; when one does, the card
+    says so, so an agent that started from the examples still finds the
+    process built around its reference.
+    """
+    from waveflow.mcp.frames import list_frames
+
+    users = [(f.reference_examples.index(example), name)
+             for name, f in list_frames().items() if example in f.reference_examples]
+    return [name for _, name in sorted(users)]
 
 
 #: Extensions a hand-written C++ hook body can have.  Which of them actually

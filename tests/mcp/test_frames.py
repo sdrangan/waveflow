@@ -88,6 +88,16 @@ def test_reference_examples_are_real_toc_examples() -> None:
             )
 
 
+def test_example_cards_name_the_frames_that_use_them() -> None:
+    from waveflow.mcp.knowledge.tools import waveflow_list_examples
+
+    cards = {c["name"]: c for c in waveflow_list_examples()["examples"]}
+    for name, frame in list_frames().items():
+        for example in frame.reference_examples:
+            assert name in cards[example]["frames"], (name, example)
+    assert cards["regmap"]["frames"] == []
+
+
 def test_list_frames_tool() -> None:
     result = waveflow_list_frames()
     names = {f["name"] for f in result["frames"]}
