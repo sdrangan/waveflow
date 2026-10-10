@@ -92,3 +92,50 @@ It reports:
 The [blind-test summary](../ai_tooling/blind.md) uses the same events, together with the agent's
 transcript, to report where a run's wall clock went: synthesis, RTL simulation, pysim, other
 tools, and the agent's own reasoning.
+
+## What the numbers have shown
+
+Measured on the examples and the blind tests, on one Windows machine with Vitis 2025.1. These are
+single measurements, not benchmarks.
+
+| what | time | where it goes |
+| --- | --- | --- |
+| a whole-system pysim (two kernels, a crossbar, a host) | 0.1 s | |
+| csynth of one small top | 20–60 s | paid again only for a top whose sources changed |
+| an XSI run from scratch | 20–30 s | compile RTL 4–5 s, elaborate 11–16 s, compile the testbench 5–6 s, **simulate 0.2–0.3 s** |
+| re-running the built XSI testbench | 0.1 s | the simulation, plus loading the snapshot |
+| a Vitis cosim run of a small kernel | about 3 min | generate the harness ~30 s, compile ~30 s, **elaborate ~70 s**, simulate ~5 s |
+
+For short simulations, RTL is dominated by fixed costs, not by simulating. That splits a design
+search in two:
+
+- **Many workloads on a fixed design** (job lengths, traffic, scenarios) need not be slow at RTL:
+  the testbenches read their scenarios from files, so a compiled snapshot can be re-run with new
+  vectors for about a tenth of a second. Today this is done by hand; the XSI build step always
+  runs the whole runner.
+- **Changing the design** (a bus width, a FIFO depth, another kernel) pays csynth of the changed
+  tops, then elaboration and compilation: minutes per point. This is where pysim earns its
+  place, at seconds per point.
+
+Vitis cosim is slow for a different reason. It builds a general SystemVerilog harness from your C
+testbench on every run: transactors for each port, an AXI VIP for the control port, deadlock and
+dataflow monitors. It suits one check at the end of a flow, not a loop.
+
+## Concurrent writers
+
+A build, the MCP server and a second build can all append to one log at the same time. Append
+mode alone does not make that safe on Windows, which emulates append as a seek to the end
+followed by a write: two processes can seek to the same end, and the second overwrites the first.
+Each event is therefore written with one unbuffered write of the whole line, under a thread lock
+and an OS file lock (`msvcrt.locking` on Windows, `flock` elsewhere). If the lock cannot be had
+within ten seconds, the event is dropped rather than the build failed. `tests/test_events.py` has
+four processes of four threads each append 2,400 lines at once, and checks every line arrives
+whole.
+
+## Environment
+
+| variable | effect |
+| --- | --- |
+| `WAVEFLOW_EVENTS=off` | record nothing (the test suite sets it) |
+| `WAVEFLOW_EVENTS_FILE` | log to this file instead of the project's |
+| `WAVEFLOW_EVENT_PARENT` | the span a child process's spans nest under; `waveflow.events.child_env()` sets both for a subprocess |

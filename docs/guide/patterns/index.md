@@ -29,7 +29,7 @@ The other three are real and have their place; they are listed so a design that 
 jobs is recognized as such, not forced into one.
 
 **Building with an AI assistant?** The MCP server's
-[frames](../ai_tooling/search.md#asking-for-an-accelerator) are these
+[frames](../ai_tooling/frames.md) are these
 patterns, each in one system shape and one verification flow. Command–response
 has three: one host-launched kernel (`stream_inband`), a pipeline of
 free-running tasks (`freerun_pipeline`) and several kernels on a bus

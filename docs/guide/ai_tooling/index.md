@@ -44,7 +44,7 @@ The MCP server gives the assistant what it is missing:
 | --- | --- |
 | `waveflow_browse`, `waveflow_search`, `waveflow_get_doc` | **The guide.** It can browse the page tree by title and summary, search it, and read any page or section in full. |
 | `waveflow_list_examples`, `waveflow_get_example`, `waveflow_find_usage` | **The reference examples**, meaning only those listed under [Examples](../../examples/). It can find every place a Waveflow class or function is actually used, then read the whole file. |
-| `waveflow_list_frames`, `waveflow_get_process` | **The architecture menu, then the process.** Each *frame* is a design pattern in one system shape and one verification flow -- one host-launched kernel (`stream_inband`), a pipeline of free-running tasks (`freerun_pipeline`), several kernels on a bus (`bus_system`). The assistant chooses the frame that matches the spec, then follows its ordered steps and rules. The main rule: freeze the specification and the tests before writing the design. |
+| `waveflow_list_frames`, `waveflow_get_process` | **The architecture menu, then the process.** Each *frame* is a design pattern in one system shape and one verification flow -- one host-launched kernel (`stream_inband`), a pipeline of free-running tasks (`freerun_pipeline`), several kernels on a bus (`bus_system`). The assistant chooses the frame that matches the spec, then follows its ordered steps and rules ([Frames](./frames.md)). The main rule: freeze the specification and the tests before writing the design. |
 | `waveflow_new_accel_project` | **A starting point**, for a frame that has a scaffold (today `stream_inband`): a new project copied from the frame's reference design, which builds and passes C simulation *before* you change anything. |
 | `waveflow_validate_schema`, `waveflow_get_components` | **Checks** on the schemas it writes. |
 
@@ -68,6 +68,9 @@ Three properties matter in practice:
   Code.
 - [Searching the Guide and Examples](./search.md): the search and read tools
   in detail, and the `waveflow kb` command line.
+- [Frames](./frames.md): how an assistant asked for an accelerator chooses an
+  architecture from the spec and follows its process -- the three frames, the stop for review
+  between specification and build, and how to add a frame.
 - [Blind Testing the MCP Server](./blind.md): run a fresh agent on a spec
   with nothing but the Waveflow tools, and get a report of what it did.
 - [VS Code Extension](./vscode.md): building the Waveflow VS Code extension.

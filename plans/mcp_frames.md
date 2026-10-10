@@ -311,3 +311,23 @@ does).  Name steps and link them; never "Step N".
   **Remaining for Stage 7:** the approved (two-phase) runs, so a full run goes through the review
   stop; `freerun_pipeline` re-tested with the stop fix; prompts 02/03 of each frame; the
   `blind.md` worked example re-recorded (it still shows the one-frame menu of the old output).
+
+**2026-10-10, same branch -- follow-ups.**
+
+* **Docs:** `docs/guide/ai_tooling/frames.md`, a page of its own (the menu, choose-then-follow,
+  the two stages and the stop, inside a frame, the lint, adding a frame); `search.md` now points
+  there.
+* **A with/without-Waveflow comparison** on a neutral bus spec (`examples/mcp_test/scale_sum_func.md`):
+  both arms reached a bit-exact RTL simulation.  Without Waveflow: 16.6 min, 4.2M tokens in, a
+  hand-written AXI crossbar, slave ports and FIFOs, credit by polling a "popped" counter, and a
+  95%-stall test that caught a Vitis hoisting bug.  With Waveflow: 19.1 min, 14.4M tokens in
+  (mostly reading the references), the vendor crossbar IP, pushed credit, a C++ host, pysim
+  within 1.7% of RTL.  Read: on a small simplified spec, invention is cheaper than reading
+  infrastructure; the case for Waveflow is verified parts, the traps, reuse, and above all the
+  cost of evaluating a changed design (DSE).
+* **Timing instrumentation** (`waveflow.events`, `docs/guide/build/timing_events.md`): every
+  build, step, toolchain run, XSI phase and MCP call is a nested span in the project's
+  `.waveflow/events.jsonl`; `--timing`, `analyze_events`; the blind-test summary reads it.
+  Measured: an XSI run is ~1% simulation (the rest compile and elaborate), a re-run of the built
+  testbench is 0.1 s, a small cosim ~3 min.  Open: an incremental XSI runner (skip compile and
+  elaborate on unchanged RTL; a re-run-with-new-vectors path), and why a bare re-run exits 1.

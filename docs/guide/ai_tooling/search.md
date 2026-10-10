@@ -53,29 +53,10 @@ looking something up but building something:
 | `waveflow_list_frames()` | the architecture menu: each frame's pattern, shape, flow, references, and when to choose it |
 | `waveflow_get_process(frame)` | the ordered steps for one frame, which tool to use at each, and the rules; with no frame, the generic process |
 
-A **frame** is a [design pattern](../patterns/index.md) realized in one
-system shape and one verification flow, with a reference example that proves
-it:
-
-| Frame | Shape | Flow | References |
-| --- | --- | --- | --- |
-| `stream_inband` | one host-launched kernel, in-band commands | csim / cosim | [stream_inband](../../examples/stream_inband/index.md) |
-| `freerun_pipeline` | a composite of free-running tasks, memory through stream adaptors | XSI testbench from the testbench graph, exact cycles | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) |
-| `bus_system` | several free-running kernels and a memory on one crossbar, a software host | the system DAG, the host's traces at RTL | [markov](../../examples/markov/index.md), [mm_fir](../../examples/mm_fir/index.md) |
-
-**Choose, then follow.** The server's MCP `instructions` — which most clients
-inject before the model has called anything — tell the assistant to choose
-the architecture before writing anything. A spec that names a frame is
-followed straight away. One that does not is matched against the menu on all
-three axes. If no frame fits, the assistant picks the closest reference from
-the example cards (each card names the frames that use it) and follows the
-generic process, `waveflow_get_process()` with no frame.
-
-`waveflow_get_process(frame)` returns the process text and the frame's
-specification (`frame.md`: what the frame fixes, and what a spec must
-decide). The part of the process every frame shares is one file, joined to
-each frame's own steps when it is read, so the frames cannot drift apart; the
-scaffold writes the same text as the project's `AGENTS.md`.
+A **frame** is a [design pattern](../patterns/index.md) realized in one system shape and one
+verification flow, with a reference example that proves it. The server's instructions tell the
+assistant to choose a frame from the spec, then follow its process; [Frames](./frames.md) covers
+the menu, what a frame contains, and how to add one.
 
 ## From the command line
 
