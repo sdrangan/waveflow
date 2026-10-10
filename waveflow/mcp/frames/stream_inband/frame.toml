@@ -32,6 +32,11 @@ this frame."""
 # it first; every departure from it is a likely failure point.
 reference_examples = ["stream_inband"]
 
+# Names frame.md asks a design to create that its reference does not have.
+# The frame lint (tests/mcp/test_frames.py) accepts these; every other
+# backticked name in the frame's text must exist in waveflow/ or examples/.
+introduces = ["BAD_PARAM", "RespFtr"]
+
 # The architecture, in the terms `waveflow_find_usage` will answer for.
 module_kind = "HostActivated"
 testbench_kind = "SeqTB"

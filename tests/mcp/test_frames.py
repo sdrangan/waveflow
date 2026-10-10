@@ -212,6 +212,124 @@ def test_process_still_states_the_rule(process: str, rule: str, needle: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# The frame lint (plan D5): frames are text that names code
+# ---------------------------------------------------------------------------
+#
+# A frame tells an agent which file to read, which page, which class.  When
+# the code moves and the frame does not, the agent is sent after something
+# that is not there -- and, worse, believes the frame over what it finds.
+# So every name a frame states is checked against the tree.
+
+import re
+import subprocess
+from functools import lru_cache
+
+#: ``waveflow_get_example("name", file="x")`` and ``waveflow_get_example("name")``
+_GET_EXAMPLE = re.compile(
+    r"""waveflow_get_example\(\s*["'](?P<name>[\w-]+)["']"""
+    r"""(?:\s*,\s*file\s*=\s*["'](?P<file>[^"']+)["'])?\s*\)"""
+)
+#: Repository paths: docs pages, plans, example sources.
+_PATH = re.compile(r"(?<![\w/])((?:docs|plans|examples|waveflow)/[\w./-]+\.(?:md|py|h|hpp|cpp|tpp|toml))")
+#: A backticked span that is one identifier, optionally called or qualified.
+_TICKED = re.compile(r"`([A-Za-z_][\w]*(?:(?:\.|::)[A-Za-z_]\w*)*)(?:\(\))?`")
+#: Identifiers in code: what a backticked name must be one of.
+_WORD = re.compile(r"[A-Za-z_]\w*")
+#: Suffixes that make a dotted span a file name rather than a symbol.
+_FILE_SUFFIXES = (".py", ".md", ".h", ".hpp", ".cpp", ".tpp", ".toml", ".tcl", ".json")
+_CODE_SUFFIXES = (".py", ".h", ".hpp", ".cpp", ".tpp", ".toml", ".tcl")
+
+
+def _frame_texts() -> list[tuple[str, str, frozenset[str]]]:
+    """(label, text, names it may introduce) for every file the lint reads."""
+    out = [
+        ("_common/process.md", (COMMON_DIR / "process.md").read_text(encoding="utf-8"), frozenset()),
+        ("_common/unframed.md", (COMMON_DIR / "unframed.md").read_text(encoding="utf-8"), frozenset()),
+    ]
+    for name, frame in list_frames().items():
+        new = frozenset(frame.meta.get("introduces", ()))
+        out.append((f"{name}/process.md", frame.own_process, new))
+        out.append((f"{name}/frame.md", frame.specification, new))
+    return out
+
+
+@lru_cache(maxsize=1)
+def _code_words() -> frozenset[str]:
+    """Every identifier in the tracked Waveflow package and examples.
+
+    A superset of what ``waveflow_find_usage`` answers for (which indexes only
+    names an example imported from Waveflow) and of what the package exports:
+    a frame may name a schema field or a build target of its reference too.
+    """
+    files = subprocess.run(
+        ["git", "ls-files", "waveflow", "examples"],
+        cwd=REPO, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    words: set[str] = set()
+    for f in files:
+        if f.endswith(_CODE_SUFFIXES):
+            try:
+                words.update(_WORD.findall((REPO / f).read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+    return frozenset(words)
+
+
+def test_frame_text_names_real_things() -> None:
+    """Every example file, doc path, tool and backticked name a frame states exists."""
+    from waveflow.mcp.knowledge import get_index
+    from waveflow.mcp.knowledge.tools import waveflow_get_example
+    from waveflow.mcp.registry import REGISTRY
+
+    cards = get_index().cards
+    tools = {s["function"]["name"] for s in REGISTRY.tool_schemas()}
+    words = _code_words()
+    problems: list[str] = []
+
+    for label, text, introduced in _frame_texts():
+        for m in _GET_EXAMPLE.finditer(text):
+            name, file = m.group("name"), m.group("file")
+            if name not in cards:
+                problems.append(f"{label}: no example {name!r}")
+            elif file is not None and "error" in waveflow_get_example(name, file=file):
+                problems.append(f"{label}: example {name!r} has no file {file!r}")
+
+        for path in set(_PATH.findall(text)):
+            if not (REPO / path).is_file():
+                problems.append(f"{label}: no file {path}")
+
+        for m in _TICKED.finditer(text):
+            span = m.group(1)
+            if span.endswith(_FILE_SUFFIXES):
+                continue
+            if span.startswith("waveflow_"):
+                if span not in tools and span not in words:
+                    problems.append(f"{label}: no tool {span}")
+                continue
+            # The last part of a qualified name (`wf::play_stream`,
+            # `self.add_state`) is the one that has to exist.
+            leaf = re.split(r"\.|::", span)[-1]
+            if leaf in introduced or span in cards or span in list_frames():
+                continue
+            if leaf not in words:
+                problems.append(f"{label}: `{span}` is not a name in waveflow/ or examples/")
+
+    assert not problems, "frame text names things that do not exist:\n  " + "\n  ".join(
+        sorted(set(problems))
+    )
+
+
+def test_every_frame_reference_is_a_curated_example() -> None:
+    """The examples a frame points at, by name anywhere in its text, are on the list."""
+    from waveflow.mcp.knowledge import get_index
+
+    cards = get_index().cards
+    for label, text, _ in _frame_texts():
+        for m in _GET_EXAMPLE.finditer(text):
+            assert m.group("name") in cards, f"{label}: {m.group('name')!r} is not curated"
+
+
+# ---------------------------------------------------------------------------
 # Packaging
 # ---------------------------------------------------------------------------
 

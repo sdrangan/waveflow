@@ -117,6 +117,6 @@ reached and what limits it.
   plays a scenario's whole stimulus, then drains the outputs. No scenario may
   make an input depend on an earlier output. A design that needs that wants a
   `FreeRunMod` with the concurrent BFM testbench, which is a different frame
-  (`freerun_pipeline` or `bus_system`).
+  (`waveflow_list_frames()`).
 - A design in this frame is accepted only when every comparison of §F7
   passes.
