@@ -28,6 +28,14 @@ host launching a kernel -- because a job that is named, bounded and answered is 
 The other three are real and have their place; they are listed so a design that is not a sequence of
 jobs is recognized as such, not forced into one.
 
+**Building with an AI assistant?** The MCP server's
+[frames](../ai_tooling/search.md#asking-for-an-accelerator) are these
+patterns, each in one system shape and one verification flow. Command–response
+has three: one host-launched kernel (`stream_inband`), a pipeline of
+free-running tasks (`freerun_pipeline`) and several kernels on a bus
+(`bus_system`). The other patterns have no frame yet; an assistant reaches
+them through the example cards.
+
 One rule sits *under* every free-running pattern: a module's own logic reads and writes only streams,
 and memory, bus masters and interrupts reach it through adaptors --
 [Stream-only modules and adaptors](./stream_only.md).
