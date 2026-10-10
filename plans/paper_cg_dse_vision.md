@@ -174,10 +174,15 @@ memory choice is good). The handful of full-design runs catch any cross-block su
 
 ## Cycle model (same calibrate-from-runs spine)
 
-Cycles are more tractable than resources: analytically modelable (II × loop bounds +
-burst transfer + queue stalls) and calibrated per block from RTL runs. CG cycles ≈
-#iters × (matmul + vector + memory + queue-stall) per-block cycles. Same per-block,
-calibrate-from-runs structure as the resource model.
+Each block's own cycles are tractable: analytically modelable (II × loop bounds + burst
+transfer) and calibrated per block from RTL runs. **But the system's cycles are not a sum.**
+Data alternates between the vector unit and the systolic array through shared memory, and the
+stalls -- two blocks contending for the memory, a queue filling, credit running out -- are
+*emergent*: they depend on how the blocks interleave, which no per-block formula gives. That is
+why the performance model is a discrete-event simulation (pysim, loosely timed) of the
+interaction, calibrated per block, rather than an analytical sum. It is also the strongest form
+of the claim: there is no other fast way to get the contention, and multi-block RTL is the slow
+way.
 
 **Calibrate with XSI, not cosim.** A cosim run carries ~3 min of fixed cost (its testbench
 harness is regenerated and re-elaborated every run); an XSI run of a free-running block is
