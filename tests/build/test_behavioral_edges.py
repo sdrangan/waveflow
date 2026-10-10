@@ -528,13 +528,18 @@ def _committed_tbs():
     fails for reasons that have nothing to do with this change — that is how the first draft of this
     test failed.
     """
-    from examples.interleaver.interleaver_inband import make_xsi_tb as il_tb
+    # The committed interleaver harness is the multi-job XSI gate's scenario.
+    from examples.interleaver.interleaver_inband import (
+        XSI_GATE_N_CYCLES,
+        XSI_GATE_SIZES,
+        make_xsi_tb as il_tb,
+    )
     from examples.mem_copy.mem_copy import make_xsi_tb as mc_tb
     from examples.state_toy.state_toy import StateAccumTB
 
     return [
         ("mem_copy", mc_tb()),
-        ("interleaver_inband", il_tb()),
+        ("interleaver_inband", il_tb(sizes=XSI_GATE_SIZES, n_cycles=XSI_GATE_N_CYCLES)),
         # state_toy's generator builds the TB inline; nvec/n_cycles are its committed defaults.
         ("state_accum", StateAccumTB(name="tb", sim=Simulation(), nvec=5, n_cycles=400)),
     ]
