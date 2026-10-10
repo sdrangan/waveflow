@@ -162,6 +162,17 @@ def _vitis_bin() -> Path | None:
     return Path(exe).parent if exe else None
 
 
+def _vivado_bin() -> Path | None:
+    """The Vivado ``bin`` directory (``xvlog``, ``xelab``, ``xsim``), or None."""
+    try:
+        from waveflow.toolchain.toolchain import find_vivado_path
+
+        exe = find_vivado_path()
+    except Exception:
+        return None
+    return Path(exe).parent if exe else None
+
+
 def vitis_allowed() -> list[str]:
     """Allow ``vitis-run`` however the agent spells it.
 
@@ -171,18 +182,25 @@ def vitis_allowed() -> list[str]:
     ``/c/Xilinx/2025.1/Vitis/bin/vitis-run.bat``.  The Waveflow arm never noticed,
     because its builds start Vitis from ``python``.
     """
-    b = _vitis_bin()
-    if b is None:
-        return []
     rules = []
-    for name in ("vitis-run", "vitis-run.bat", "vitis_hls", "vitis_hls.bat"):
-        win = str(b / name)
-        fwd = win.replace("\\", "/")
-        drive = fwd[0].lower()
-        msys = f"/{drive}{fwd[2:]}" if fwd[1:2] == ":" else fwd
-        for spelled in {win, fwd, msys, name}:
-            rules += [f"Bash({spelled}:*)", f"PowerShell({spelled}:*)"]
+    for b, tools in ((_vitis_bin(), _VITIS_TOOLS), (_vivado_bin(), _VIVADO_TOOLS)):
+        if b is None:
+            continue
+        for tool in tools:
+            for name in (tool, tool + ".bat"):
+                win = str(b / name)
+                fwd = win.replace("\\", "/")
+                drive = fwd[0].lower()
+                msys = f"/{drive}{fwd[2:]}" if fwd[1:2] == ":" else fwd
+                for spelled in {win, fwd, msys, name}:
+                    rules += [f"Bash({spelled}:*)", f"PowerShell({spelled}:*)"]
     return sorted(set(rules))
+
+
+_VITIS_TOOLS = ("vitis-run", "vitis_hls")
+#: Vivado's RTL simulator and the tool itself: a system-level spec cannot be checked
+#: at RTL without them, and the baseline arm has no other way to reach them.
+_VIVADO_TOOLS = ("vivado", "xvlog", "xvhdl", "xelab", "xsim")
 
 
 def harness_note() -> str:
@@ -190,8 +208,13 @@ def harness_note() -> str:
     b = _vitis_bin()
     if b is None:
         return HARNESS_NOTE
-    return (HARNESS_NOTE + f" Vitis HLS is installed and its bin directory ({b}) is on "
+    note = (HARNESS_NOTE + f" Vitis HLS is installed and its bin directory ({b}) is on "
             "PATH: run it as `vitis-run --mode hls --tcl <script>`.")
+    vb = _vivado_bin()
+    if vb is not None:
+        note += (f" Vivado is installed and its bin directory ({vb}) is on PATH too "
+                 "(`vivado`, and its simulator `xvlog` / `xelab` / `xsim`).")
+    return note
 
 
 #: How many times one run may be put back to work after a killed background
@@ -299,10 +322,13 @@ def _agent_env(no_waveflow: bool = False) -> dict[str, str]:
     rather than trusting whatever ``python`` the operator's shell resolves.
     """
     env = dict(os.environ)
-    # Both arms: Vitis on PATH, like a student who has sourced the Vitis settings.
-    vb = _vitis_bin()
-    if vb is not None:
-        env["PATH"] = str(vb) + os.pathsep + env.get("PATH", "")
+    # Both arms: Vitis and Vivado on PATH, like a student who has sourced the Xilinx
+    # settings.  Vivado matters to the baseline arm: a system-level spec needs its
+    # simulator (xvlog / xelab / xsim), and the Waveflow arm reaches it through the
+    # toolchain finder whatever PATH says.
+    for b in (_vivado_bin(), _vitis_bin()):
+        if b is not None:
+            env["PATH"] = str(b) + os.pathsep + env.get("PATH", "")
     if not no_waveflow:
         bindir = str(Path(sys.executable).parent)
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")

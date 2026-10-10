@@ -233,6 +233,7 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
 
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):
     monkeypatch.setattr(bt, "_vitis_bin", lambda: None)   # Vitis's own PATH entry: next test
+    monkeypatch.setattr(bt, "_vivado_bin", lambda: None)
     monkeypatch.setenv("PATH", "OPERATOR")
     assert bt._agent_env(True)["PATH"] == "OPERATOR"
     assert bt._agent_env(False)["PATH"].endswith("OPERATOR")
@@ -249,6 +250,16 @@ def test_vitis_is_on_path_and_allowed_however_it_is_spelled(tmp_path, monkeypatc
     for arm in (True, False):
         assert bt._agent_env(arm)["PATH"].split(os.pathsep).count(str(vb)) == 1
     assert str(vb) in bt.harness_note() and "vitis-run" in bt.harness_note()
+
+    # Vivado likewise: a system-level spec needs its simulator.
+    vv = tmp_path / "Xilinx" / "2025.1" / "Vivado" / "bin"
+    monkeypatch.setattr(bt, "_vivado_bin", lambda: vv)
+    rules = bt.vitis_allowed()
+    for spelled in (str(vv / "xsim.bat"), (vv / "xelab.bat").as_posix(), "xvlog"):
+        assert f"Bash({spelled}:*)" in rules
+    for arm in (True, False):
+        assert bt._agent_env(arm)["PATH"].split(os.pathsep).count(str(vv)) == 1
+    assert str(vv) in bt.harness_note() and "xsim" in bt.harness_note()
 
     spec = tmp_path / "s.md"
     spec.write_text("x", encoding="utf-8")
