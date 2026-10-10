@@ -374,3 +374,6 @@ examples/ssr_fft/ssr_fft_proj/
 examples/ssr_fft/logs/
 # examples/ssr_fft/measured.json is RTL evidence the docs tables and figures are drawn from (tests/examples/test_ssr_fft.py).
 !examples/ssr_fft/measured.json
+
+# Per-step build timings written by run_dag_cli (waveflow/build/cli.py STEP_LOG)
+.waveflow/

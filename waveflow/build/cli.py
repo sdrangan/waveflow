@@ -11,11 +11,13 @@ extracts that once; an example supplies its DAG factory, root directory, default
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from textwrap import indent
 from typing import Callable, Iterable
 
+from waveflow import events
 from waveflow.build.build import BuildConfig, BuildDag
 
 
@@ -28,7 +30,7 @@ def run_dag_cli(
     extra_args: Iterable[tuple[tuple, dict]] = (),
     params_from_args: Callable[[argparse.Namespace], dict] | None = None,
     config_from_args: Callable[[argparse.Namespace], dict] | None = None,
-) -> None:
+) -> list[dict] | None:
     """Run an example's ``BuildDag`` with the standard introspection CLI.
 
     Parameters
@@ -56,6 +58,12 @@ def run_dag_cli(
         Params alone could not express this: a platform is not a knob the steps read, it is where a
         calibrated build *files what it measured*.  Without this hook no example CLI could target a
         platform at all, so a single point of a calibration sweep could only be run by the sweep.
+
+    Returns
+    -------
+    The build's timing spans (:mod:`waveflow.events`): the command, each step, and every nested
+    step and toolchain run inside them, as also appended to ``<root_dir>/.waveflow/events.jsonl``.
+    ``None`` for the listing flags, which build nothing.  ``--timing`` prints them as a tree.
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--through", metavar="STEP", default=default_through,
@@ -74,6 +82,9 @@ def run_dag_cli(
                         help="Force all steps to rebuild.")
     parser.add_argument("--force-step", metavar="STEP", action="append", default=[],
                         help="Force a specific step to rebuild (repeatable).")
+    parser.add_argument("--timing", action="store_true",
+                        help="After the build, print every step's time, nested steps and the "
+                             "toolchain runs inside them included.")
     args = parser.parse_args()
 
     import inspect
@@ -146,8 +157,11 @@ def run_dag_cli(
             print("    RUNNING...")
 
     def on_step_end(step, result):
+        # The elapsed time is on the status line so a log -- or a blind test's transcript of
+        # one -- says where a build's wall clock went, step by step (`csynth` vs `system_xsi`).
+        took = f"({result.elapsed_seconds:.1f} s)"
         if not result.success:
-            print(f"    FAILED: {result.message}")
+            print(f"    FAILED {took}: {result.message}")
             # The message is str(exc); for a toolchain error that is often a bare string with no
             # file or line.  Print the traceback too so the failure is actionable.
             if result.traceback:
@@ -155,7 +169,17 @@ def run_dag_cli(
         elif result.skipped:
             print("    UP-TO-DATE")
         else:
-            print("    PASSED")
+            print(f"    PASSED {took}")
 
-    dag.run(config, through=args.through, force=force,
-            on_step_begin=on_step_begin, on_step_end=on_step_end)
+    # The whole command is one timing span, its steps (and their nested DAGs and toolchain runs)
+    # beneath it -- logged to <root>/.waveflow/events.jsonl and handed back to the caller.
+    command = Path(sys.argv[0]).name or "build"
+    with (events.logging_to(config.root_dir), events.collect() as spans,
+          events.span("build", command, through=args.through)):
+        dag.run(config, through=args.through, force=force,
+                on_step_begin=on_step_begin, on_step_end=on_step_end)
+    if args.timing:
+        print("timing:")
+        print(indent(events.format_tree(spans), "    "))
+    return spans
+

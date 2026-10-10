@@ -11,7 +11,6 @@ project path is long enough to hit the Windows path limit (measured from a deep 
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +33,7 @@ from waveflow.build.composite_gen import (
 )
 from waveflow.build.streamutils import MemMgrStep, XsiHarnessStep
 from waveflow.build.trace_steps import AddVcdTopStep, xsi_runner_cmd
+from waveflow.build.trace_steps import run_xsi as run_xsi_timed
 from waveflow.build.vitis_l1_step import VitisL1Step, vitis_fft_include_dir
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils.burst_io import read_burst_bundle
@@ -137,8 +137,8 @@ def run_xsi(root: Path, trace: bool = False) -> str:
             if d.exists():
                 for f in d.iterdir():
                     f.unlink()
-    p = subprocess.run(xsi_runner_cmd(TOP, TB, trace=trace), cwd=xsi, capture_output=True,
-                       text=True, timeout=3600)
+    p = run_xsi_timed(xsi_runner_cmd(TOP, TB, trace=trace), cwd=xsi, capture_output=True,
+                      text=True, timeout=3600)
     if p.returncode != 0 or "XSI_EXITCODE=0" not in p.stdout:
         raise RuntimeError(f"XSI run failed\n{p.stdout[-3000:]}\n{p.stderr[-2000:]}")
     return p.stdout

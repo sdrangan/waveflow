@@ -21,18 +21,34 @@ from pathlib import Path
 import pytest
 
 from waveflow.mcp.frames import (
-    DEFAULT_FRAME,
+    COMMON_DIR,
     FRAMES_DIR,
+    generic_process,
     list_frames,
+    load_frame,
+    scaffold_frames,
     waveflow_get_process,
     waveflow_list_frames,
 )
 
 REPO = Path(__file__).resolve().parents[2]
 
+#: The lab's frame.  Its prompts name it, so it must stay, under this name.
+LAB_FRAME = "stream_inband"
 
-def test_the_default_frame_exists() -> None:
-    assert DEFAULT_FRAME in list_frames()
+#: The axes every frame declares in ``frame.toml`` (plan D2).
+AXES = ("pattern", "shape", "flow", "choose_when")
+
+
+def test_the_lab_frame_exists_and_scaffolds() -> None:
+    assert LAB_FRAME in list_frames()
+    assert LAB_FRAME in scaffold_frames()
+
+
+def test_underscore_directories_are_not_frames() -> None:
+    assert COMMON_DIR.is_dir()
+    assert not any(name.startswith("_") for name in list_frames())
+    assert all(not f.directory.name.startswith("_") for f in list_frames().values())
 
 
 def test_every_frame_has_its_four_parts() -> None:
@@ -42,6 +58,17 @@ def test_every_frame_has_its_four_parts() -> None:
         assert (frame.directory / "frame.toml").is_file(), f"{name}: no frame.toml"
         assert frame.synopsis, f"{name}: no synopsis"
         assert frame.reference_examples, f"{name}: names no reference example"
+
+
+def test_every_frame_declares_its_axes() -> None:
+    """The menu is only a menu if every entry says what it is for."""
+    for name, frame in list_frames().items():
+        entry = frame.to_dict()
+        for axis in AXES:
+            assert entry[axis], f"{name}: frame.toml has no {axis}"
+        assert (REPO / frame.pattern_doc).is_file(), (
+            f"{name}: pattern {frame.pattern!r} has no page {frame.pattern_doc}"
+        )
 
 
 def test_reference_examples_are_real_toc_examples() -> None:
@@ -61,30 +88,90 @@ def test_reference_examples_are_real_toc_examples() -> None:
             )
 
 
+def test_example_cards_name_the_frames_that_use_them() -> None:
+    from waveflow.mcp.knowledge.tools import waveflow_list_examples
+
+    cards = {c["name"]: c for c in waveflow_list_examples()["examples"]}
+    for name, frame in list_frames().items():
+        for example in frame.reference_examples:
+            assert name in cards[example]["frames"], (name, example)
+    assert cards["regmap"]["frames"] == []
+
+
 def test_list_frames_tool() -> None:
     result = waveflow_list_frames()
     names = {f["name"] for f in result["frames"]}
-    assert DEFAULT_FRAME in names
-    entry = next(f for f in result["frames"] if f["name"] == DEFAULT_FRAME)
+    assert names == set(list_frames())
+    entry = next(f for f in result["frames"] if f["name"] == LAB_FRAME)
+    assert entry["has_scaffold"] is True
     assert entry["prompts"], "the frame ships no example function specs"
     for prompt in entry["prompts"]:
         assert prompt["synopsis"]
+    assert "waveflow_get_process" in result["hint"]
 
 
-def test_get_process_defaults_and_returns_both_documents() -> None:
-    default = waveflow_get_process()
-    assert default["frame"] == DEFAULT_FRAME
-    explicit = waveflow_get_process(DEFAULT_FRAME)
-    assert default == explicit
-    assert waveflow_get_process(None) == explicit
+def test_get_process_without_a_frame_is_the_generic_process() -> None:
+    """No default frame: with none named, the agent gets the menu, not stream_inband."""
+    generic = waveflow_get_process()
+    assert generic == waveflow_get_process(None)
+    assert generic["frame"] is None
+    assert {f["name"] for f in generic["frames"]} == set(list_frames())
+    text = generic["process"]
+    assert text == generic_process()
+    assert "Choose the architecture first" in text
+    # Every frame is on the menu, and the fallback is the example cards.
+    for name in list_frames():
+        assert f"`{name}`" in text
+    assert "waveflow_list_examples()" in text
+    assert "Your reference design is" not in text
+    assert "<!--" not in text, "a slot was left unfilled"
 
-    assert default["process"].strip()
-    assert default["specification"].strip()
+
+def test_get_process_with_a_frame_returns_both_documents() -> None:
+    explicit = waveflow_get_process(LAB_FRAME)
+    assert explicit["frame"] == LAB_FRAME
+    assert explicit["process"].strip()
+    assert explicit["specification"].strip()
+    assert "<!--" not in explicit["process"], "a slot was left unfilled"
 
 
 def test_get_process_miss_lists_the_frames() -> None:
     result = waveflow_get_process("freerun_bfm")
-    assert "error" in result and DEFAULT_FRAME in result["known"]
+    assert "error" in result and LAB_FRAME in result["known"]
+
+
+def test_the_shared_process_is_in_every_frame() -> None:
+    """Plan D1: one shared text, composed at load time, so it cannot drift."""
+    shared_rules = ("Never hand-pack words", "Never edit a generated file",
+                    "Before you start: learn the machinery")
+    for name, frame in list_frames().items():
+        for needle in shared_rules:
+            assert needle in frame.process, f"{name}: lost {needle!r}"
+        assert frame.own_process.strip() in frame.process
+        for needle in shared_rules:
+            assert needle not in frame.own_process, (
+                f"{name}: process.md repeats the shared {needle!r}; it belongs "
+                "in _common/process.md only"
+            )
+
+
+#: The section headings ``stream_inband``'s AGENTS.md carried before the
+#: shared process was split out of it; the composed text keeps each one.
+_LAB_SECTIONS = (
+    "## Before you start: learn the machinery",
+    "## Stage 1: the specification",
+    "## Stage 2: the accelerator",
+    "## The rules",
+)
+
+
+def test_the_lab_process_keeps_its_sections() -> None:
+    text = load_frame(LAB_FRAME).process
+    positions = [text.find(h) for h in _LAB_SECTIONS]
+    assert all(p >= 0 for p in positions), (
+        f"missing: {[h for h, p in zip(_LAB_SECTIONS, positions) if p < 0]}"
+    )
+    assert positions == sorted(positions), "the sections are out of order"
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +181,7 @@ def test_get_process_miss_lists_the_frames() -> None:
 
 @pytest.fixture(scope="module")
 def process() -> str:
-    return waveflow_get_process()["process"]
+    return waveflow_get_process(LAB_FRAME)["process"]
 
 
 def test_process_names_the_tools_it_tells_the_agent_to_call(process: str) -> None:
@@ -132,6 +219,124 @@ def test_process_names_the_tools_it_tells_the_agent_to_call(process: str) -> Non
 )
 def test_process_still_states_the_rule(process: str, rule: str, needle: str) -> None:
     assert needle in process, f"the process no longer states: {rule}"
+
+
+# ---------------------------------------------------------------------------
+# The frame lint (plan D5): frames are text that names code
+# ---------------------------------------------------------------------------
+#
+# A frame tells an agent which file to read, which page, which class.  When
+# the code moves and the frame does not, the agent is sent after something
+# that is not there -- and, worse, believes the frame over what it finds.
+# So every name a frame states is checked against the tree.
+
+import re
+import subprocess
+from functools import lru_cache
+
+#: ``waveflow_get_example("name", file="x")`` and ``waveflow_get_example("name")``
+_GET_EXAMPLE = re.compile(
+    r"""waveflow_get_example\(\s*["'](?P<name>[\w-]+)["']"""
+    r"""(?:\s*,\s*file\s*=\s*["'](?P<file>[^"']+)["'])?\s*\)"""
+)
+#: Repository paths: docs pages, plans, example sources.
+_PATH = re.compile(r"(?<![\w/])((?:docs|plans|examples|waveflow)/[\w./-]+\.(?:md|py|h|hpp|cpp|tpp|toml))")
+#: A backticked span that is one identifier, optionally called or qualified.
+_TICKED = re.compile(r"`([A-Za-z_][\w]*(?:(?:\.|::)[A-Za-z_]\w*)*)(?:\(\))?`")
+#: Identifiers in code: what a backticked name must be one of.
+_WORD = re.compile(r"[A-Za-z_]\w*")
+#: Suffixes that make a dotted span a file name rather than a symbol.
+_FILE_SUFFIXES = (".py", ".md", ".h", ".hpp", ".cpp", ".tpp", ".toml", ".tcl", ".json")
+_CODE_SUFFIXES = (".py", ".h", ".hpp", ".cpp", ".tpp", ".toml", ".tcl")
+
+
+def _frame_texts() -> list[tuple[str, str, frozenset[str]]]:
+    """(label, text, names it may introduce) for every file the lint reads."""
+    out = [
+        ("_common/process.md", (COMMON_DIR / "process.md").read_text(encoding="utf-8"), frozenset()),
+        ("_common/unframed.md", (COMMON_DIR / "unframed.md").read_text(encoding="utf-8"), frozenset()),
+    ]
+    for name, frame in list_frames().items():
+        new = frozenset(frame.meta.get("introduces", ()))
+        out.append((f"{name}/process.md", frame.own_process, new))
+        out.append((f"{name}/frame.md", frame.specification, new))
+    return out
+
+
+@lru_cache(maxsize=1)
+def _code_words() -> frozenset[str]:
+    """Every identifier in the tracked Waveflow package and examples.
+
+    A superset of what ``waveflow_find_usage`` answers for (which indexes only
+    names an example imported from Waveflow) and of what the package exports:
+    a frame may name a schema field or a build target of its reference too.
+    """
+    files = subprocess.run(
+        ["git", "ls-files", "waveflow", "examples"],
+        cwd=REPO, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    words: set[str] = set()
+    for f in files:
+        if f.endswith(_CODE_SUFFIXES):
+            try:
+                words.update(_WORD.findall((REPO / f).read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+    return frozenset(words)
+
+
+def test_frame_text_names_real_things() -> None:
+    """Every example file, doc path, tool and backticked name a frame states exists."""
+    from waveflow.mcp.knowledge import get_index
+    from waveflow.mcp.knowledge.tools import waveflow_get_example
+    from waveflow.mcp.registry import REGISTRY
+
+    cards = get_index().cards
+    tools = {s["function"]["name"] for s in REGISTRY.tool_schemas()}
+    words = _code_words()
+    problems: list[str] = []
+
+    for label, text, introduced in _frame_texts():
+        for m in _GET_EXAMPLE.finditer(text):
+            name, file = m.group("name"), m.group("file")
+            if name not in cards:
+                problems.append(f"{label}: no example {name!r}")
+            elif file is not None and "error" in waveflow_get_example(name, file=file):
+                problems.append(f"{label}: example {name!r} has no file {file!r}")
+
+        for path in set(_PATH.findall(text)):
+            if not (REPO / path).is_file():
+                problems.append(f"{label}: no file {path}")
+
+        for m in _TICKED.finditer(text):
+            span = m.group(1)
+            if span.endswith(_FILE_SUFFIXES):
+                continue
+            if span.startswith("waveflow_"):
+                if span not in tools and span not in words:
+                    problems.append(f"{label}: no tool {span}")
+                continue
+            # The last part of a qualified name (`wf::play_stream`,
+            # `self.add_state`) is the one that has to exist.
+            leaf = re.split(r"\.|::", span)[-1]
+            if leaf in introduced or span in cards or span in list_frames():
+                continue
+            if leaf not in words:
+                problems.append(f"{label}: `{span}` is not a name in waveflow/ or examples/")
+
+    assert not problems, "frame text names things that do not exist:\n  " + "\n  ".join(
+        sorted(set(problems))
+    )
+
+
+def test_every_frame_reference_is_a_curated_example() -> None:
+    """The examples a frame points at, by name anywhere in its text, are on the list."""
+    from waveflow.mcp.knowledge import get_index
+
+    cards = get_index().cards
+    for label, text, _ in _frame_texts():
+        for m in _GET_EXAMPLE.finditer(text):
+            assert m.group("name") in cards, f"{label}: {m.group('name')!r} is not curated"
 
 
 # ---------------------------------------------------------------------------

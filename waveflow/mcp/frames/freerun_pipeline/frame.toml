@@ -1,0 +1,47 @@
+# The freerun_pipeline frame: one accelerator built as a composite of
+# free-running tasks that stream to each other and reach memory through the
+# framework's stream adaptors.
+#
+# A frame is a bundle with no code of its own -- this file, frame.md (what the
+# frame fixes and what a spec must decide), process.md (the frame's own steps;
+# joined with ../_common/process.md, they are what `waveflow_get_process`
+# returns) and prompts/ (example specs).  No [template] (plan D4).
+
+name = "freerun_pipeline"
+synopsis = """One accelerator built as a composite FreeRunMod: a pipeline of \
+free-running tasks (hls::task at RTL) that stream to each other, with memory \
+reached only through the framework's MemRStream / MemWStream adaptors, whose \
+timing models ship pre-fit.  A command carrying n and a tx_id enters the first \
+stage and travels with the data; the last stage answers.  Verified bit-exact in \
+pysim, then at RTL by an XSI testbench generated from the same testbench graph, \
+with an exact cycle gate; Vitis cannot co-simulate free-running tasks, so XSI is \
+the only RTL check."""
+
+pattern = "command_response"
+shape = "a composite of free-running tasks streaming to each other, reading and writing memory through MemRStream / MemWStream"
+flow = "free-running: pysim from the testbench graph, DUT and testbench codegen, csynth, the generated XSI testbench at RTL with an exact cycle gate"
+choose_when = """one accelerator built from several stages that stream to each other, \
+reading its input from memory and writing its results to memory, started by a \
+command stream -- with no host program on a bus.  For several kernels or a host \
+on a bus, choose bus_system."""
+
+# Primary first: memcpy is the whole flow with no compute; interleaver adds
+# compute stages and on-chip random access (stream-of-blocks).
+reference_examples = ["memcpy", "interleaver"]
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_scale_copy.md"
+synopsis = "Read a vector, scale it, write it: memcpy plus one compute stage."
+
+[[prompts]]
+file = "02_gather.md"
+synopsis = "A permutation by an index vector, on chip: the interleaver shape with a different access."
+
+[[prompts]]
+file = "03_block_stats.md"
+synopsis = "Per block of n: min, max and sum, written to memory; a stage with state across a block."

@@ -52,9 +52,12 @@ fi
 export LD_LIBRARY_PATH="$PWD/xsim.dir/$TOP:$VIV/lib/lnx64.o:$LD_LIBRARY_PATH"
 export PATH="$VIV/bin:$PATH"
 
+# WF_PHASE lines time each phase (waveflow.build.trace_steps.run_xsi).
+echo "WF_PHASE compile_rtl $(date +%s.%N)"
 echo "--- xvlog RTL ($TOP) ---"
 "$VIV/bin/xvlog" -f "rtl_$TOP.f"
 echo "xvlog errorlevel=$?"
+echo "WF_PHASE elaborate $(date +%s.%N)"
 
 if [ "${TRACE,,}" = "trace" ]; then
     echo "--- xvlog vcd_dumper_$TOP ---"
@@ -66,6 +69,7 @@ else
     "$VIV/bin/xelab" "work.$TOP" -dll -s "$TOP" -debug typical
 fi
 echo "xelab errorlevel=$?"
+echo "WF_PHASE compile_tb $(date +%s.%N)"
 
 echo "--- g++ BFM tb ($TB) ---"
 g++ -I"$VIV/data/xsim/include" -O3 -c -o xsi_loader.o xsi_loader.cpp
@@ -74,6 +78,8 @@ g++ -I"$VIV/data/xsim/include" ${WF_TB_CXXFLAGS:-} -O3 -c -o "$TB.o" "$TB.cpp"
 g++ -o "$TB.bin" "$TB.o" xsi_loader.o -ldl
 echo "gpp errorlevel=$?"
 
+echo "WF_PHASE simulate $(date +%s.%N)"
 echo "--- run ---"
 "./$TB.bin"
 echo "XSI_EXITCODE=$?"
+echo "WF_PHASE end $(date +%s.%N)"

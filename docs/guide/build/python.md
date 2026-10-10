@@ -258,8 +258,10 @@ def main() -> None:
 ```
 
 It provides `--through STEP`, `--force`, `--force-step STEP`, `--list-steps`,
-`--list-steps-verbose`, `--list-artifacts` and `--status`, plus whatever `extra_args` adds,
-packed into `BuildConfig.params` by `params_from_args`.
+`--list-steps-verbose`, `--list-artifacts`, `--status` and `--timing`, plus whatever `extra_args`
+adds, packed into `BuildConfig.params` by `params_from_args`.  Each step's status line carries its
+time (`PASSED (18.3 s)`); `--timing` prints the whole build as a tree, nested steps and toolchain
+runs included, and `run_dag_cli` returns the same spans -- see [Timing Events](./timing_events.md).
 
 **`--through` runs only the target's ancestors.**  A step that is not upstream of the target
 does not run, even if it is stale -- `--through gen_kernel` does not regenerate `include/`,

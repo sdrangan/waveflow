@@ -263,4 +263,71 @@ does).  Name steps and link them; never "Step N".
 
 ## Progress log
 
-(empty)
+**2026-10-09/10, branch `feature/mcp-frames`.**
+
+* **Stage 1** done.  `_common/process.md` with a `<!-- FRAME -->` slot; a frame's `process.md` holds
+  only its own steps.  The no-frame text is a second shared file, `_common/unframed.md` (how to
+  choose, a generated menu, the follow-a-reference steps) -- D1's "one file" is the shared part; the
+  unframed filler is not shared by any frame.  `frame.toml` axes: `pattern` (a page stem under
+  `docs/guide/patterns/`), `shape`, `flow`, `choose_when`; `has_scaffold` derived from `[template]`.
+  D6: the lab prompts in `stream_inband/prompts/` and `examples/mcp_test/rotate.md` name their
+  frame; `rotate_func.md` deliberately does not (it is shared with the no-Waveflow arm) and is left so.
+  The course lab's own prompts live outside this repo and were not checked.
+* **Stage 2** done.  INSTRUCTIONS name no frame and no example (a smoke test asserts it).
+* **Stage 3** done.  The lint passed on `stream_inband` with one addition: names a frame asks a
+  design to *create* (`BAD_PARAM`, `RespFtr`) are declared in `frame.toml` as `introduces`.
+  "Exists" = the identifier occurs in tracked `waveflow/` or `examples/` code (a superset of
+  `waveflow_find_usage`, which indexes only names an example imported).
+* **Stage 4** done.  Corrections to this plan's names: there is no framework `decode()` (the host
+  run is read back with `load_run`); the crossbar is `AXIMMCrossBarIF`.
+* **Stage 5** done.  The memcpy card is `memcpy` (directory `examples/mem_copy`).  There are no
+  framed MemR/WStream classes (`inband=True`); `FlatMemory` is the C++ twin of `MemoryMod`; the
+  interleaver has no build script and is out of the exact-cycle gates, so the frame points at its
+  model, testbench-graph and compute-body files only, and at `memcpy` for the gate.
+* **Plan item 5** done: each example card has `frames` (the frames that use it).
+* **Stage 6** done; **Stage 8** done.
+* **Stage 7, first round** (`--no-approve`, Opus 5.5):
+
+  | spec | frame chosen | first write | outcome | tokens in / wall |
+  |---|---|---|---|---|
+  | `bus_system/01_scale_sum`, frame line removed | `bus_system` (list_frames -> get_process) | #49 of 105 | **reached RTL**: traces identical, 0 polls, 7469 cycles, pysim -3.95% | 13.2M / 23 min |
+  | `freerun_pipeline/01_scale_copy`, frame line removed | `freerun_pipeline` | #49 of 162 | **reached RTL**: bit-exact, exact gate 2229, period -2.98% (after re-fitting the mem-stream timing on its own sweep) | 30.4M / 40 min |
+  | `examples/mcp_test/rotate.md` (names stream_inband) | `stream_inband`, scaffolded | #35 of 136 | full flow, report written | 20.0M / 76 min |
+
+  Both new frames were chosen correctly from an unnamed spec, and each reached its RTL gate.  Stalls
+  and fixes: (1) **none of the three stopped after Stage 1** -- each froze its own spec because "the
+  session was non-interactive"; the shared rules and every stop line now say ending the turn is the
+  stop.  (2) scale_copy hit an **undocumented RTL-only deadlock**: Vitis feeds each `m_axi` task its
+  base pointer through a per-firing FIFO refilled by one entry process, so unequal reader/writer
+  firings per job deadlock a few jobs on; pysim cannot see it.  Now a trap in `freerun_pipeline`;
+  worth a guide page and maybe a codegen check.  (3) rotate spent two calls on the scaffold's "pass
+  force=True" (the tool has no `force`); the error now names a subdirectory.
+
+  **Re-test** of fix (1) on the same unnamed `scale_sum` prompt: `bus_system` chosen again, and the
+  agent **stopped after Stage 1** -- 3.6 min, 1.7M tokens in (vs 23 min / 13.2M), its final message
+  citing "a review stop ... even in a non-interactive session", with its open decisions listed for
+  review (credit window, no shared memory, the bus width).
+
+  **Remaining for Stage 7:** the approved (two-phase) runs, so a full run goes through the review
+  stop; `freerun_pipeline` re-tested with the stop fix; prompts 02/03 of each frame; the
+  `blind.md` worked example re-recorded (it still shows the one-frame menu of the old output).
+
+**2026-10-10, same branch -- follow-ups.**
+
+* **Docs:** `docs/guide/ai_tooling/frames.md`, a page of its own (the menu, choose-then-follow,
+  the two stages and the stop, inside a frame, the lint, adding a frame); `search.md` now points
+  there.
+* **A with/without-Waveflow comparison** on a neutral bus spec (`examples/mcp_test/scale_sum_func.md`):
+  both arms reached a bit-exact RTL simulation.  Without Waveflow: 16.6 min, 4.2M tokens in, a
+  hand-written AXI crossbar, slave ports and FIFOs, credit by polling a "popped" counter, and a
+  95%-stall test that caught a Vitis hoisting bug.  With Waveflow: 19.1 min, 14.4M tokens in
+  (mostly reading the references), the vendor crossbar IP, pushed credit, a C++ host, pysim
+  within 1.7% of RTL.  Read: on a small simplified spec, invention is cheaper than reading
+  infrastructure; the case for Waveflow is verified parts, the traps, reuse, and above all the
+  cost of evaluating a changed design (DSE).
+* **Timing instrumentation** (`waveflow.events`, `docs/guide/build/timing_events.md`): every
+  build, step, toolchain run, XSI phase and MCP call is a nested span in the project's
+  `.waveflow/events.jsonl`; `--timing`, `analyze_events`; the blind-test summary reads it.
+  Measured: an XSI run is ~1% simulation (the rest compile and elaborate), a re-run of the built
+  testbench is 0.1 s, a small cosim ~3 min.  Open: an incremental XSI runner (skip compile and
+  elaborate on unchanged RTL; a re-run-with-new-vectors path), and why a bare re-run exits 1.

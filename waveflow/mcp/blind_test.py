@@ -115,9 +115,12 @@ def baseline_allowed(allowed) -> list[str]:
     return [a for a in allowed if "waveflow" not in a.lower()]
 
 
+#: Names no frame and no example: choosing the architecture from the spec is part of
+#: what a blind test measures (plans/mcp_frames.md).  A spec that wants a particular
+#: one names it itself; ``--message`` can still name one for a run.
 WAVEFLOW_FIRST = (
     "Build the accelerator specified in {spec}, in this folder, with Waveflow: its MCP "
-    "server is available, and its stream_inband example is the reference design to follow."
+    "server is available."
 )
 
 NO_WAVEFLOW_FIRST = (
@@ -159,6 +162,17 @@ def _vitis_bin() -> Path | None:
     return Path(exe).parent if exe else None
 
 
+def _vivado_bin() -> Path | None:
+    """The Vivado ``bin`` directory (``xvlog``, ``xelab``, ``xsim``), or None."""
+    try:
+        from waveflow.toolchain.toolchain import find_vivado_path
+
+        exe = find_vivado_path()
+    except Exception:
+        return None
+    return Path(exe).parent if exe else None
+
+
 def vitis_allowed() -> list[str]:
     """Allow ``vitis-run`` however the agent spells it.
 
@@ -168,18 +182,25 @@ def vitis_allowed() -> list[str]:
     ``/c/Xilinx/2025.1/Vitis/bin/vitis-run.bat``.  The Waveflow arm never noticed,
     because its builds start Vitis from ``python``.
     """
-    b = _vitis_bin()
-    if b is None:
-        return []
     rules = []
-    for name in ("vitis-run", "vitis-run.bat", "vitis_hls", "vitis_hls.bat"):
-        win = str(b / name)
-        fwd = win.replace("\\", "/")
-        drive = fwd[0].lower()
-        msys = f"/{drive}{fwd[2:]}" if fwd[1:2] == ":" else fwd
-        for spelled in {win, fwd, msys, name}:
-            rules += [f"Bash({spelled}:*)", f"PowerShell({spelled}:*)"]
+    for b, tools in ((_vitis_bin(), _VITIS_TOOLS), (_vivado_bin(), _VIVADO_TOOLS)):
+        if b is None:
+            continue
+        for tool in tools:
+            for name in (tool, tool + ".bat"):
+                win = str(b / name)
+                fwd = win.replace("\\", "/")
+                drive = fwd[0].lower()
+                msys = f"/{drive}{fwd[2:]}" if fwd[1:2] == ":" else fwd
+                for spelled in {win, fwd, msys, name}:
+                    rules += [f"Bash({spelled}:*)", f"PowerShell({spelled}:*)"]
     return sorted(set(rules))
+
+
+_VITIS_TOOLS = ("vitis-run", "vitis_hls")
+#: Vivado's RTL simulator and the tool itself: a system-level spec cannot be checked
+#: at RTL without them, and the baseline arm has no other way to reach them.
+_VIVADO_TOOLS = ("vivado", "xvlog", "xvhdl", "xelab", "xsim")
 
 
 def harness_note() -> str:
@@ -187,8 +208,13 @@ def harness_note() -> str:
     b = _vitis_bin()
     if b is None:
         return HARNESS_NOTE
-    return (HARNESS_NOTE + f" Vitis HLS is installed and its bin directory ({b}) is on "
+    note = (HARNESS_NOTE + f" Vitis HLS is installed and its bin directory ({b}) is on "
             "PATH: run it as `vitis-run --mode hls --tcl <script>`.")
+    vb = _vivado_bin()
+    if vb is not None:
+        note += (f" Vivado is installed and its bin directory ({vb}) is on PATH too "
+                 "(`vivado`, and its simulator `xvlog` / `xelab` / `xsim`).")
+    return note
 
 
 #: How many times one run may be put back to work after a killed background
@@ -296,10 +322,13 @@ def _agent_env(no_waveflow: bool = False) -> dict[str, str]:
     rather than trusting whatever ``python`` the operator's shell resolves.
     """
     env = dict(os.environ)
-    # Both arms: Vitis on PATH, like a student who has sourced the Vitis settings.
-    vb = _vitis_bin()
-    if vb is not None:
-        env["PATH"] = str(vb) + os.pathsep + env.get("PATH", "")
+    # Both arms: Vitis and Vivado on PATH, like a student who has sourced the Xilinx
+    # settings.  Vivado matters to the baseline arm: a system-level spec needs its
+    # simulator (xvlog / xelab / xsim), and the Waveflow arm reaches it through the
+    # toolchain finder whatever PATH says.
+    for b in (_vivado_bin(), _vitis_bin()):
+        if b is not None:
+            env["PATH"] = str(b) + os.pathsep + env.get("PATH", "")
     if not no_waveflow:
         bindir = str(Path(sys.executable).parent)
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
@@ -964,6 +993,214 @@ def _login_note(api_key_source: str | None) -> str:
     return f"Login: API key (`{api_key_source}`). **Every token is billed.**"
 
 
+def _choice(
+    calls: list[tuple[int, str, dict[str, Any]]],
+    folder: Path,
+    repo: Path | None,
+    toc: set[str],
+) -> list[str]:
+    """The summary's lead: how the agent chose its architecture.
+
+    Choosing is the first part of building from a spec, so the report opens
+    with it: whether the menu (frames or example cards) was consulted before
+    the first write, which frame the process was fetched for, which reference
+    designs were read, and whether -- and in which frame -- a scaffold was
+    asked for.
+    """
+    def tool(n: str) -> str:
+        return n.removeprefix("mcp__waveflow__")
+
+    writes = [i for i, (_, n, a) in enumerate(calls) if n in ("Write", "Edit")]
+    first_write = writes[0] if writes else len(calls)
+
+    def before_write(name: str) -> str:
+        at = [i for i, (_, n, _) in enumerate(calls) if tool(n) == name]
+        if not at:
+            return "**never called**"
+        return "before the first write" if at[0] < first_write else "**only after the first write**"
+
+    frames = [a.get("frame") for _, n, a in calls if tool(n) == "waveflow_get_process"]
+    scaffolds = [a.get("frame") for _, n, a in calls if tool(n) == "waveflow_new_accel_project"]
+    refs: dict[str, None] = {}
+    for _, n, a in calls:
+        if tool(n) == "waveflow_get_example" and a.get("name"):
+            refs.setdefault(str(a["name"]), None)
+        elif n == "Read" and repo is not None:
+            path = a.get("file_path") or ""
+            if _classify_read(path, folder, repo, toc) == "repo example (TOC)":
+                rel = Path(path).resolve().relative_to(repo).as_posix()
+                refs.setdefault(f"{rel.split('/')[1]} (read from the checkout)", None)
+
+    def frame_name(f: Any) -> str:
+        return "generic (no frame)" if not f else f"`{f}`"
+
+    L = ["## Choice", ""]
+    L.append(f"- first write: tool call #{first_write + 1} of {len(calls)}"
+             if writes else "- first write: **none**")
+    L.append(f"- `waveflow_list_frames`: {before_write('waveflow_list_frames')}")
+    L.append(f"- `waveflow_list_examples`: {before_write('waveflow_list_examples')}")
+    L.append("- `waveflow_get_process`: " + (
+        ", ".join(frame_name(f) for f in frames) if frames else "**never called**"))
+    L.append("- references read: " + (", ".join(f"`{r}`" for r in refs) if refs else "none"))
+    L.append("- scaffold: " + (
+        ", ".join(frame_name(f) for f in scaffolds) if scaffolds else "not requested"))
+    # Both arms are told where Vitis and Vivado are.  A Waveflow-arm agent that
+    # calls them itself has left the Waveflow flow for the vendor's -- worth
+    # seeing at the top, not buried in the command list.
+    direct = [a.get("command", "") for _, n, a in calls
+              if n in ("Bash", "PowerShell") and runs_toolchain(a.get("command", ""))]
+    L.append(f"- direct Vitis / Vivado commands: {len(direct)}" if direct
+             else "- direct Vitis / Vivado commands: none")
+    for c in direct[:5]:
+        L.append(f"    - `{_short(c, 120)}`")
+    L.append("")
+    return L
+
+
+#: A command that runs a Vitis or Vivado tool itself, rather than through a build
+#: script.  Reading or grepping a generated script that mentions one does not count.
+_TOOLCHAIN_CALL = re.compile(
+    # In command position (start, or after ; & | ( ), optionally by full path,
+    # and not a file name that merely starts with the tool's (`xsim.dir/`).
+    r"(?:^|[;&|(])\s*(?:[\w:./\\-]*[/\\])?"
+    r"(?:vitis-run|vitis_hls|vivado|xvlog|xvhdl|xelab|xsim)(?:\.bat)?(?![\w.\-])",
+    re.IGNORECASE,
+)
+
+#: Quoted text: a grep pattern or an echo, never a command being run.
+_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def runs_toolchain(command: str) -> bool:
+    """Whether *command* runs a Vitis or Vivado tool itself."""
+    return bool(_TOOLCHAIN_CALL.search(_QUOTED.sub('""', command)))
+
+
+
+# ---------------------------------------------------------------------------
+# Where the time went
+# ---------------------------------------------------------------------------
+
+#: The time categories, most specific first: where two overlap, the earlier wins.
+TIME_CATEGORIES = ("synth", "rtl sim", "pysim", "other build / test", "build (unsplit)",
+                   "other tools")
+
+#: A shell command's category, first match wins.  A build that runs several kinds of work
+#: in one call (a DAG through `compare`) is "build (unsplit)" unless the project's timing
+#: events (`.waveflow/events.jsonl`, waveflow.events) split it.
+_COMMAND_TIME_RULES = (
+    ("rtl sim", r"\bxsim\b|\bxelab\b|\bxvlog\b|run_sim\.py|run\.bat|_bfm_tb|--through\s+"
+                r"(system_xsi|check_cosim|cosim\w*|rtlsim|rtl_timing|xsi)\b"),
+    ("synth", r"--through\s+(csynth\w*|system_rtl)\b|run_hls\.tcl|csynth|vitis-run|vitis_hls"),
+    ("pysim", r"--through\s+(pysim|py_sim|check_pysim|check_model)\b|pysim"),
+    ("build (unsplit)", r"_build\.py(?!\s+--through\s+(codegen|gen_\w+|golden|report|figures)\b)"),
+    ("other build / test", r"pytest|python\s|g\+\+|--through"),
+)
+
+#: waveflow.events' categories, in the summary's words.
+_EVENT_CATEGORY = {"synth": "synth", "rtl sim": "rtl sim", "pysim": "pysim",
+                   "other build": "other build / test", "mcp": "other tools"}
+
+
+def _time_category(text: str, rules) -> str | None:
+    for cat, pat in rules:
+        if re.search(pat, text, re.IGNORECASE):
+            return cat
+    return None
+
+
+def _stamp(r: dict[str, Any]):
+    import datetime as dt
+
+    t = r.get("timestamp")
+    try:
+        return dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None
+    except ValueError:
+        return None
+
+
+def _time_split(phases: list[dict[str, Any]], folder: Path) -> list[str]:
+    """Where the wall clock went: synthesis, RTL simulation, pysim, other tools, the agent.
+
+    Each tool call is the interval from its issue to its result.  A background command
+    returns at once, so it is charged from its launch to the ``end_time`` of its task.
+    The project's timing events (:mod:`waveflow.events`, ``.waveflow/events.jsonl``)
+    split a build that ran synthesis, pysim and RTL in one call.  Every second is
+    charged once, to the most specific category running then; a second in which no tool
+    ran is the agent's own.
+    """
+    intervals: list[tuple[float, float, str]] = []
+    first = last = None
+    for p in phases:
+        uses: dict[str, tuple[float | None, str, dict[str, Any]]] = {}
+        launched: dict[str, tuple[float, str]] = {}
+        task_of: dict[str, str] = {}
+        for r in _records(Path(p["transcript"])):
+            kind, sub = r.get("type"), r.get("subtype")
+            if kind == "system" and sub == "task_started":
+                task_of[r.get("task_id")] = r.get("tool_use_id")
+            elif kind == "system" and sub == "task_updated":
+                end = (r.get("patch") or {}).get("end_time")
+                use = task_of.get(r.get("task_id"))
+                if end and use in launched:
+                    t0, cat = launched.pop(use)
+                    intervals.append((t0, end / 1000, cat))
+                    last = max(last or 0, end / 1000)
+            when = _stamp(r)
+            if when is not None:
+                first = when if first is None else first
+                last = when if last is None else max(last, when)
+            content = (r.get("message") or {}).get("content") if isinstance(r.get("message"), dict) else None
+            if not isinstance(content, list):
+                continue
+            for c in content:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "tool_use":
+                    uses[c.get("id", "")] = (when, c.get("name", ""), c.get("input") or {})
+                elif c.get("type") == "tool_result" and c.get("tool_use_id") in uses:
+                    t0, name, inp = uses.pop(c["tool_use_id"])
+                    cat = "other tools"
+                    if name in ("Bash", "PowerShell"):
+                        cat = _time_category(str(inp.get("command", "")), _COMMAND_TIME_RULES) or cat
+                        if inp.get("run_in_background") and t0 is not None:
+                            launched[c["tool_use_id"]] = (t0, cat)
+                            cat = "other tools"
+                    if t0 is not None and when is not None and when > t0:
+                        intervals.append((t0, when, cat))
+
+    # The project's timing events (waveflow.events): every build step, nested step and toolchain
+    # run, so a build that did synthesis, pysim and RTL in one call is split exactly.  MCP spans
+    # are left out -- the transcript already has those calls.
+    if folder.is_dir():
+        from waveflow import events as wf_events
+
+        evs = [e for e in wf_events.load_events(folder) if e.get("kind") != "mcp"]
+        by_id = {e["id"]: e for e in evs if "id" in e}
+        for e in evs:
+            if first is not None and e["start"] >= first - 60 and e["end"] > e["start"]:
+                intervals.append((float(e["start"]), float(e["end"]),
+                                  _EVENT_CATEGORY[wf_events.category(e, by_id)]))
+
+    L = ["## Where the time went", ""]
+    if first is None or last is None or last <= first:
+        return L + ["(the transcript has no timestamps)", ""]
+    order = list(TIME_CATEGORIES)
+    total = {k: 0.0 for k in order}
+    edges = sorted({x for a, b, _ in intervals for x in (a, b)} | {first, last})
+    for a, b in zip(edges, edges[1:]):
+        live = [c for s, e, c in intervals if s <= a and e >= b]
+        if live:
+            total[min(live, key=order.index)] += b - a
+    wall = last - first
+    total["agent (no tool running)"] = max(0.0, wall - sum(total.values()))
+    L += ["| | minutes | share |", "| --- | --- | --- |"]
+    for k, v in total.items():
+        if v >= 1 or k.startswith("agent"):
+            L.append(f"| {k} | {v / 60:.1f} | {100 * v / wall:.0f}% |")
+    L += [f"| **wall** | **{wall / 60:.1f}** | |", ""]
+    return L
+
 def summarize(
     phases: list[dict[str, Any]],
     *,
@@ -1014,15 +1251,15 @@ def summarize(
     L.append("")
 
     wf_calls = [(ph, n, a) for ph, n, a in calls if n.startswith("mcp__waveflow")]
-    counts = Counter(n.removeprefix("mcp__waveflow__") for _, n, a in wf_calls)
+    L += _choice(calls, folder, repo, toc)
+    L += _time_split(phases, folder)
+
     L += ["## Waveflow tools", ""]
     if not wf_calls:
         L.append("**None were called.**")
     else:
         first = next(i for i, (_, n, _) in enumerate(calls) if n.startswith("mcp__waveflow"))
         L.append(f"First Waveflow call at tool call #{first + 1} of {len(calls)}.")
-        for key in ("waveflow_get_process", "waveflow_new_accel_project"):
-            L.append(f"- `{key}`: {'called' if counts[key] else '**never called**'}")
         L += ["", "| # | Phase | Tool | Arguments |", "| --- | --- | --- | --- |"]
         for i, (ph, n, a) in enumerate(wf_calls, 1):
             L.append(f"| {i} | {ph} | `{n.removeprefix('mcp__waveflow__')}` | {_short(a, 90)} |")

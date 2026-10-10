@@ -119,6 +119,10 @@ def test_server_sends_instructions(session) -> None:
     assert "waveflow_get_process" in instructions, (
         "the instructions must say which call starts an accelerator"
     )
+    # Choose, then follow: the menu is named, and no frame or example is
+    # pushed on a spec that did not ask for it.
+    assert "waveflow_list_frames" in instructions
+    assert "stream_inband" not in instructions
     assert "generated" in instructions
 
 

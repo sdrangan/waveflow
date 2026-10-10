@@ -52,6 +52,9 @@ That fork is two realizations of one flow, not two separate flows.
   lifecycle, assembled from the testbench graph or by hand.
 - [Sweeping a design](./sweep.md) — running the DAG at every point of a parameter grid to build a
   calibration corpus: `ParamGrid`, `Stage`, `SweepRunner` and `sweep_cli`.
+- [Timing Events](./timing_events.md) — where a build's wall clock goes: every step, nested step,
+  toolchain run, XSI phase and MCP call as a timing span; `--timing`, `analyze_events`, and what
+  each fidelity costs.
 
 ## Quick example
 

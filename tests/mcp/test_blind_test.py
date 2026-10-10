@@ -12,11 +12,13 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from waveflow.mcp import blind_test as bt
 
 
 def _write_transcript(path: Path, folder: Path, repo: Path) -> None:
-    def tool(name, **inp):
+    def tool(name, /, **inp):
         return {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": name, "input": inp}]}}
 
@@ -25,7 +27,10 @@ def _write_transcript(path: Path, folder: Path, repo: Path) -> None:
             "Read", "mcp__waveflow__waveflow_get_process"],
          "mcp_servers": [{"name": "waveflow", "status": "connected"}]},
         tool("Read", file_path=str(folder / "spec.md")),
+        tool("mcp__waveflow__waveflow_list_examples"),
         tool("mcp__waveflow__waveflow_get_process", frame="stream_inband"),
+        tool("mcp__waveflow__waveflow_get_example", name="stream_inband"),
+        tool("Read", file_path=str(repo / "examples" / "good" / "a.py")),
         tool("Read", file_path=str(repo / "plans" / "secret.md")),
         tool("Read", file_path=str(repo / "examples" / "old_thing" / "x.py")),
         tool("Write", file_path=str(folder / "gen" / "k.cpp"), content="x"),
@@ -52,8 +57,15 @@ def test_summary_reports_leaks_generated_edits_and_denials(tmp_path):
              "result": bt._result_record(t)}
     s = bt.summarize([phase], folder=folder, repo=repo, copied=["spec.md"], allowed=["Read"])
 
-    assert "`waveflow_get_process`: called" in s
-    assert "`waveflow_new_accel_project`: **never called**" in s
+    # The summary leads with the choice.
+    assert s.index("## Choice") < s.index("## Waveflow tools")
+    assert "- `waveflow_get_process`: `stream_inband`" in s
+    assert "- `waveflow_list_frames`: **never called**" in s
+    assert "- `waveflow_list_examples`: before the first write" in s
+    assert "- first write: tool call #8 of 9" in s
+    assert "- references read: `stream_inband`, `good (read from the checkout)`" in s
+    assert "- scaffold: not requested" in s
+    assert "- direct Vitis / Vivado commands: none" in s
     assert "LEAK: repo plans/" in s
     assert "repo example NOT in TOC" in s
     assert "hand-edited a generated file" in s
@@ -61,6 +73,14 @@ def test_summary_reports_leaks_generated_edits_and_denials(tmp_path):
     assert "python build.py --through csim" in s
     assert "claude-x" in s and "90.0k (90.0k)" in s and "1.5k" in s
     assert "$" not in s.split("## Waveflow tools")[0]
+
+
+def test_the_default_first_message_names_no_frame_or_example():
+    from waveflow.mcp.frames import list_frames
+    from waveflow.mcp.knowledge import get_index
+
+    for name in [*list_frames(), *get_index().cards]:
+        assert name not in bt.WAVEFLOW_FIRST, name
 
 
 def test_companions_are_the_linked_markdown_beside_the_spec(tmp_path):
@@ -211,11 +231,12 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
     bt.run_blind_test(spec, tmp_path / "wf", silent=True)
     assert "waveflow" in seen["mcp"]["mcpServers"] and "mcp__waveflow" in seen["config"]["allowed"]
     # The same spec file; the arm is in the first message only.
-    assert "with Waveflow" in seen["first"] and "stream_inband" in seen["first"]
+    assert "with Waveflow" in seen["first"] and "stream_inband" not in seen["first"]
 
 
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):
     monkeypatch.setattr(bt, "_vitis_bin", lambda: None)   # Vitis's own PATH entry: next test
+    monkeypatch.setattr(bt, "_vivado_bin", lambda: None)
     monkeypatch.setenv("PATH", "OPERATOR")
     assert bt._agent_env(True)["PATH"] == "OPERATOR"
     assert bt._agent_env(False)["PATH"].endswith("OPERATOR")
@@ -232,6 +253,16 @@ def test_vitis_is_on_path_and_allowed_however_it_is_spelled(tmp_path, monkeypatc
     for arm in (True, False):
         assert bt._agent_env(arm)["PATH"].split(os.pathsep).count(str(vb)) == 1
     assert str(vb) in bt.harness_note() and "vitis-run" in bt.harness_note()
+
+    # Vivado likewise: a system-level spec needs its simulator.
+    vv = tmp_path / "Xilinx" / "2025.1" / "Vivado" / "bin"
+    monkeypatch.setattr(bt, "_vivado_bin", lambda: vv)
+    rules = bt.vitis_allowed()
+    for spelled in (str(vv / "xsim.bat"), (vv / "xelab.bat").as_posix(), "xvlog"):
+        assert f"Bash({spelled}:*)" in rules
+    for arm in (True, False):
+        assert bt._agent_env(arm)["PATH"].split(os.pathsep).count(str(vv)) == 1
+    assert str(vv) in bt.harness_note() and "xsim" in bt.harness_note()
 
     spec = tmp_path / "s.md"
     spec.write_text("x", encoding="utf-8")
@@ -256,3 +287,62 @@ def test_a_phase_with_several_results_is_summed(tmp_path):
     r = bt._result_record(t)
     assert r["num_turns"] == 66 and r["duration_ms"] == 332000 and r["result_records"] == 2
     assert bt._tokens(r) == (100 + 2502945 + 90790 + 72784 + 479, 2502945 + 90790, 33965)
+
+
+@pytest.mark.parametrize("command,runs", [
+    ("vitis-run --mode hls --tcl run.tcl", True),
+    ("/c/Xilinx/2025.1/Vivado/bin/xelab.bat -debug all top", True),
+    ("cd xsi && xvlog top.v", True),
+    ("vivado -mode batch -source bd.tcl", True),
+    (r"C:\Xilinx\2025.1\Vivado\bin\xsim.bat top -R", True),
+    (r'grep -n "xelab\|xvlog" xsi/run.bat', False),
+    ("python build.py --through csynth", False),
+    ('cmd //c "run.bat x y"', False),
+    ("rm -rf xsim.dir/x", False),
+])
+def test_direct_toolchain_calls_are_told_apart_from_mentions(command, runs):
+    """The Choice section flags an agent that left the Waveflow flow for the vendor's."""
+    assert bt.runs_toolchain(command) is runs
+
+
+def test_time_split_charges_background_builds_and_splits_them_by_step(tmp_path):
+    """Where the wall clock went: the agent's own time, and a background build split by step."""
+    folder = tmp_path / "trial"
+    (folder / ".waveflow").mkdir(parents=True)
+    T0 = 1_800_000_000.0
+
+    def at(s):
+        import datetime as dt
+        return dt.datetime.fromtimestamp(T0 + s, tz=dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    recs = [
+        {"type": "user", "timestamp": at(0), "message": {"content": "go"}},
+        # 0-60 s: the agent thinks.  60 s: it starts the build in the background.
+        {"type": "assistant", "timestamp": at(60), "message": {"content": [
+            {"type": "tool_use", "id": "b1", "name": "Bash",
+             "input": {"command": "python x_build.py --through compare", "run_in_background": True}}]}},
+        {"type": "user", "timestamp": at(61), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "running in background"}]}},
+        {"type": "system", "subtype": "task_started", "task_id": "t1", "tool_use_id": "b1"},
+        {"type": "system", "subtype": "task_updated", "task_id": "t1",
+         "patch": {"status": "completed", "end_time": (T0 + 660) * 1000}},
+        {"type": "assistant", "timestamp": at(720), "message": {"content": [{"type": "text", "text": "done"}]}},
+    ]
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
+    # The project's timing events: 400 s of csynth (a vitis-run inside), then 200 s of XSI.
+    steps = [{"id": "a", "parent": None, "kind": "step", "name": "csynth",
+              "start": T0 + 60, "end": T0 + 460, "elapsed": 400, "ok": True},
+             {"id": "v", "parent": "a", "kind": "tool", "name": "vitis-run",
+              "start": T0 + 61, "end": T0 + 459, "elapsed": 398, "ok": True},
+             {"id": "b", "parent": None, "kind": "step", "name": "system_xsi",
+              "start": T0 + 460, "end": T0 + 660, "elapsed": 200, "ok": True}]
+    (folder / ".waveflow" / "events.jsonl").write_text(
+        "\n".join(json.dumps(s) for s in steps), encoding="utf-8")
+
+    text = "\n".join(bt._time_split([{"transcript": str(t)}], folder))
+    assert "| synth | 6.7 |" in text            # 400 s
+    assert "| rtl sim | 3.3 |" in text          # 200 s
+    assert "| agent (no tool running) | 2.0 |" in text   # 0-60 and 660-720
+    assert "build (unsplit)" not in text        # the step log split the whole build
+    assert "| **wall** | **12.0** |" in text

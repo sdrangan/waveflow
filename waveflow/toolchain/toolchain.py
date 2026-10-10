@@ -511,15 +511,20 @@ def run_vitis_hls(
         final_env = os.environ.copy()
         final_env.update(env)
 
-    return subprocess.run(
-        final_cmd,
-        cwd=work_dir or default_work_dir,
-        shell=use_shell,
-        check=True,
-        text=True,
-        capture_output=capture_output,
-        env=final_env,
-    )
+    # One timing span per Vitis run (waveflow.events); a csim, csynth or cosim is told apart by
+    # the build step it runs inside.
+    from waveflow import events
+
+    with events.span("tool", "vitis-run", script=Path(tcl_script).name):
+        return subprocess.run(
+            final_cmd,
+            cwd=work_dir or default_work_dir,
+            shell=use_shell,
+            check=True,
+            text=True,
+            capture_output=capture_output,
+            env=final_env,
+        )
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:

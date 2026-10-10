@@ -204,8 +204,11 @@ def generate_axi_xbar(cfg: AxiXbarConfig, out_dir: str | Path, vivado: str | Non
     work.mkdir(parents=True, exist_ok=True)
     tcl = work / "gen_xbar.tcl"
     tcl.write_text(cfg.tcl((work / "ip").as_posix()), encoding="utf-8")
-    r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-nolog", "-source", tcl.name],
-                       cwd=str(work), capture_output=True, text=True, timeout=900)
+    from waveflow import events
+
+    with events.span("tool", "vivado", script=tcl.name):
+        r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-nolog", "-source", tcl.name],
+                           cwd=str(work), capture_output=True, text=True, timeout=900)
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or "XBAR_FILE" not in out:
         raise RuntimeError(f"axi_crossbar generation failed for {cfg.name}:\n{out[-3000:]}")
