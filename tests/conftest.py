@@ -24,9 +24,14 @@ one removes the *false* skips; this makes a *true* skip visible.  Both are neede
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Timing events (waveflow.events) are off for the suite: thousands of test builds would
+# otherwise each leave a .waveflow/events.jsonl behind.  tests/test_events.py turns them on.
+os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 
 #: How many ``xsi``-marked tests a full ``-m xsi`` run collects.  Recorded the way a gate's
 #: ``WANT_CYCLES`` is: a measured number, updated **only** when gates are deliberately added or

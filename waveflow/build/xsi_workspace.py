@@ -16,11 +16,10 @@ invoke xsim.
 from __future__ import annotations
 
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from waveflow.build.trace_steps import xsi_runner_cmd
+from waveflow.build.trace_steps import run_xsi, xsi_runner_cmd
 
 _SRC = Path(__file__).resolve().parent / "xsi"
 
@@ -92,8 +91,8 @@ class XsiWorkspace:
             env["WF_TB_CXXFLAGS"] = self._tb_cxxflags
         else:
             env.pop("WF_TB_CXXFLAGS", None)
-        r = subprocess.run(xsi_runner_cmd(self.top, self._tb), cwd=str(self.work_dir),
-                           capture_output=True, text=True, timeout=timeout, env=env)
+        r = run_xsi(xsi_runner_cmd(self.top, self._tb), cwd=self.work_dir,
+                    capture_output=True, text=True, timeout=timeout, env=env)
         out = (r.stdout or "") + (r.stderr or "")
         if "XSI_EXITCODE=0" not in out:
             raise XsiRunError(f"{self.top}: XSI run did not complete cleanly:\n{out[-4000:]}")

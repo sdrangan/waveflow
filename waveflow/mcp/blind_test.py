@@ -1086,8 +1086,8 @@ TIME_CATEGORIES = ("synth", "rtl sim", "pysim", "other build / test", "build (un
                    "other tools")
 
 #: A shell command's category, first match wins.  A build that runs several kinds of work
-#: in one call (a DAG through `compare`) is "build (unsplit)" unless the project's step log
-#: (`.waveflow/build_steps.jsonl`, written by run_dag_cli) splits it.
+#: in one call (a DAG through `compare`) is "build (unsplit)" unless the project's timing
+#: events (`.waveflow/events.jsonl`, waveflow.events) split it.
 _COMMAND_TIME_RULES = (
     ("rtl sim", r"\bxsim\b|\bxelab\b|\bxvlog\b|run_sim\.py|run\.bat|_bfm_tb|--through\s+"
                 r"(system_xsi|check_cosim|cosim\w*|rtlsim|rtl_timing|xsi)\b"),
@@ -1097,12 +1097,9 @@ _COMMAND_TIME_RULES = (
     ("other build / test", r"pytest|python\s|g\+\+|--through"),
 )
 
-#: A build step's category, from its name.
-_STEP_TIME_RULES = (
-    ("synth", r"csynth|synth|system_rtl|impl"),
-    ("rtl sim", r"xsi|cosim|rtlsim|rtl_sim|xsim|rtl_timing"),
-    ("pysim", r"pysim|py_sim"),
-)
+#: waveflow.events' categories, in the summary's words.
+_EVENT_CATEGORY = {"synth": "synth", "rtl sim": "rtl sim", "pysim": "pysim",
+                   "other build": "other build / test", "mcp": "other tools"}
 
 
 def _time_category(text: str, rules) -> str | None:
@@ -1127,8 +1124,8 @@ def _time_split(phases: list[dict[str, Any]], folder: Path) -> list[str]:
 
     Each tool call is the interval from its issue to its result.  A background command
     returns at once, so it is charged from its launch to the ``end_time`` of its task.
-    Builds run through ``run_dag_cli`` log each step (``.waveflow/build_steps.jsonl``),
-    which splits a build that ran synthesis, pysim and RTL in one call.  Every second is
+    The project's timing events (:mod:`waveflow.events`, ``.waveflow/events.jsonl``)
+    split a build that ran synthesis, pysim and RTL in one call.  Every second is
     charged once, to the most specific category running then; a second in which no tool
     ran is the agent's own.
     """
@@ -1172,17 +1169,18 @@ def _time_split(phases: list[dict[str, Any]], folder: Path) -> list[str]:
                     if t0 is not None and when is not None and when > t0:
                         intervals.append((t0, when, cat))
 
-    for log in folder.rglob("build_steps.jsonl") if folder.is_dir() else ():
-        if log.parent.name != ".waveflow":
-            continue
-        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            cat = _time_category(str(e.get("step", "")), _STEP_TIME_RULES) or "other build / test"
-            if first is not None and e.get("start", 0) >= first - 60:
-                intervals.append((float(e["start"]), float(e["end"]), cat))
+    # The project's timing events (waveflow.events): every build step, nested step and toolchain
+    # run, so a build that did synthesis, pysim and RTL in one call is split exactly.  MCP spans
+    # are left out -- the transcript already has those calls.
+    if folder.is_dir():
+        from waveflow import events as wf_events
+
+        evs = [e for e in wf_events.load_events(folder) if e.get("kind") != "mcp"]
+        by_id = {e["id"]: e for e in evs if "id" in e}
+        for e in evs:
+            if first is not None and e["start"] >= first - 60 and e["end"] > e["start"]:
+                intervals.append((float(e["start"]), float(e["end"]),
+                                  _EVENT_CATEGORY[wf_events.category(e, by_id)]))
 
     L = ["## Where the time went", ""]
     if first is None or last is None or last <= first:

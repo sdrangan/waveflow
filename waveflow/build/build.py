@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from waveflow import events
+
 
 # ---------------------------------------------------------------------------
 # BuildConfig
@@ -611,6 +613,12 @@ class BuildDag:
             if unknown:
                 raise ValueError(f"Unknown step name(s) in force: {sorted(unknown)}")
 
+        # Every step is a timing span (waveflow.events), logged to this build's project; a DAG run
+        # from inside another DAG's step nests under that step and logs to the outer project.
+        with events.logging_to(config.root_dir):
+            return self._run_steps(config, order, forced, on_step_begin, on_step_end)
+
+    def _run_steps(self, config, order, forced, on_step_begin, on_step_end) -> dict[str, BuildResult]:
         all_paths = self.artifact_paths(config)
         must_run, direct, demanded = self._must_run_reasons(order, all_paths, forced)
         in_order = {s.name for s in order}
@@ -640,6 +648,7 @@ class BuildDag:
                 results[step.name] = BuildResult(
                     success=True, skipped=True, artifacts=skip_artifacts
                 )
+                events.record("step", step.name, skipped=True)
             else:
                 # Wall-clock is recorded for every step, success or failure.  It is the raw fact
                 # behind "what does a calibration point cost?" — an answer better derived from a
@@ -647,20 +656,22 @@ class BuildDag:
                 # after the fact if it was never measured.
                 started = time.perf_counter()
                 ran.add(step.name)
-                try:
-                    produced = self._call_run(step, config, artifact_store)
-                    results[step.name] = BuildResult(
-                        success=True, artifacts=produced,
-                        elapsed_seconds=time.perf_counter() - started)
-                except Exception as exc:
-                    # Keep the traceback, not just str(exc).  A toolchain failure often stringifies
-                    # to a bare message with no file, line or call site; without this the caller has
-                    # no way to recover where it came from.
-                    results[step.name] = BuildResult(
-                        success=False, message=str(exc),
-                        traceback=traceback.format_exc(),
-                        elapsed_seconds=time.perf_counter() - started)
-                    failed.add(step.name)
+                with events.span("step", step.name) as ev:
+                    try:
+                        produced = self._call_run(step, config, artifact_store)
+                        results[step.name] = BuildResult(
+                            success=True, artifacts=produced,
+                            elapsed_seconds=time.perf_counter() - started)
+                    except Exception as exc:
+                        # Keep the traceback, not just str(exc).  A toolchain failure often
+                        # stringifies to a bare message with no file, line or call site; without
+                        # this the caller has no way to recover where it came from.
+                        results[step.name] = BuildResult(
+                            success=False, message=str(exc),
+                            traceback=traceback.format_exc(),
+                            elapsed_seconds=time.perf_counter() - started)
+                        failed.add(step.name)
+                        ev["ok"] = False
 
             if on_step_end is not None:
                 on_step_end(step, results[step.name])

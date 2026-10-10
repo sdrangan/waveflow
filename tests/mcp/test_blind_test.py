@@ -330,10 +330,14 @@ def test_time_split_charges_background_builds_and_splits_them_by_step(tmp_path):
     ]
     t = tmp_path / "t.jsonl"
     t.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
-    # The build's own step log: 400 s of csynth, then 200 s of XSI.
-    steps = [{"step": "csynth", "start": T0 + 60, "end": T0 + 460, "success": True},
-             {"step": "system_xsi", "start": T0 + 460, "end": T0 + 660, "success": True}]
-    (folder / ".waveflow" / "build_steps.jsonl").write_text(
+    # The project's timing events: 400 s of csynth (a vitis-run inside), then 200 s of XSI.
+    steps = [{"id": "a", "parent": None, "kind": "step", "name": "csynth",
+              "start": T0 + 60, "end": T0 + 460, "elapsed": 400, "ok": True},
+             {"id": "v", "parent": "a", "kind": "tool", "name": "vitis-run",
+              "start": T0 + 61, "end": T0 + 459, "elapsed": 398, "ok": True},
+             {"id": "b", "parent": None, "kind": "step", "name": "system_xsi",
+              "start": T0 + 460, "end": T0 + 660, "elapsed": 200, "ok": True}]
+    (folder / ".waveflow" / "events.jsonl").write_text(
         "\n".join(json.dumps(s) for s in steps), encoding="utf-8")
 
     text = "\n".join(bt._time_split([{"transcript": str(t)}], folder))

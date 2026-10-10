@@ -36,6 +36,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from waveflow.mcp.components import get_components
+from waveflow import events
 from waveflow.mcp.frames import waveflow_get_process, waveflow_list_frames
 from waveflow.mcp.knowledge import (
     waveflow_browse,
@@ -68,10 +69,13 @@ def anticipated_as_tool_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        try:
-            return fn(*args, **kwargs)
-        except ANTICIPATED_ERRORS as exc:
-            raise ToolError(str(exc)) from exc
+        # Each call is a timing span in the workspace's event log (waveflow.events), beside
+        # the builds the agent runs there.
+        with events.span("mcp", fn.__name__):
+            try:
+                return fn(*args, **kwargs)
+            except ANTICIPATED_ERRORS as exc:
+                raise ToolError(str(exc)) from exc
 
     return wrapper
 

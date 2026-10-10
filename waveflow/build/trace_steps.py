@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,61 @@ def xsi_runner_cmd(
     if (os_name or os.name) == "nt":
         return ["cmd", "/c", f".\\{runner}"] + args
     return ["bash", runner] + args
+
+
+#: ``WF_PHASE <name> <time>``, printed by run.bat / run.sh at the start of each phase and at the
+#: end.  run.bat prints ``%time%`` (``H:MM:SS.cc``, the decimal separator per locale); run.sh
+#: prints epoch seconds.
+_PHASE_LINE = re.compile(r"^WF_PHASE (\w+) +(\S+)\s*$", re.MULTILINE)
+
+
+def _phase_seconds(stamp: str) -> float | None:
+    """A WF_PHASE stamp as seconds: epoch seconds, or seconds since midnight for ``H:MM:SS.cc``."""
+    stamp = stamp.replace(",", ".")
+    if ":" not in stamp:
+        try:
+            return float(stamp)
+        except ValueError:
+            return None
+    try:
+        h, m, sec = stamp.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+    except ValueError:
+        return None
+
+
+def xsi_phases(output: str) -> list[tuple[str, float]]:
+    """``[(phase, seconds), ...]`` from a runner's output: compile_rtl, elaborate, compile_tb, simulate."""
+    marks = [(name, _phase_seconds(t)) for name, t in _PHASE_LINE.findall(output)]
+    marks = [(name, t) for name, t in marks if t is not None]
+    out = []
+    for (name, t0), (_, t1) in zip(marks, marks[1:]):
+        dt = t1 - t0
+        if dt < 0:                       # %time% wrapped past midnight
+            dt += 24 * 3600
+        out.append((name, dt))
+    return out
+
+
+def run_xsi(cmd: list[str], *, cwd: str | os.PathLike[str], name: str = "xsi",
+            **kwargs: Any) -> subprocess.CompletedProcess:
+    """:func:`subprocess.run` of an XSI runner, timed: one ``tool`` span, one child per phase.
+
+    The phases come from the runner's ``WF_PHASE`` lines, so the split -- how much of an XSI run
+    was compiling and elaborating, and how much was simulating -- is measured by the runner
+    itself, not inferred.  Everything else is :func:`subprocess.run`'s, unchanged.
+    """
+    from waveflow import events
+
+    with events.span("tool", name, cwd=str(cwd)) as ev:
+        r = subprocess.run(cmd, cwd=str(cwd), **kwargs)
+        out = (r.stdout or "") if isinstance(r.stdout, str) else ""
+        ev["ok"] = "XSI_EXITCODE=0" in out
+        at = ev["start"]
+        for phase, seconds in xsi_phases(out):
+            events.record("phase", phase, elapsed=seconds, start=at)
+            at += seconds
+    return r
 
 
 #: The dumper module.  One line of Verilog does the work; the comment is most of it, because the
@@ -318,8 +374,8 @@ class RtlSimStep(BuildStep):
         # at five different job sizes before it was caught.
         vcd.unlink(missing_ok=True)
 
-        r = subprocess.run(xsi_runner_cmd(self.top, self.tb, trace=True),
-                           cwd=str(xsi), capture_output=True, text=True, timeout=1800)
+        r = run_xsi(xsi_runner_cmd(self.top, self.tb, trace=True),
+                    cwd=xsi, capture_output=True, text=True, timeout=1800)
         out = (r.stdout or "") + (r.stderr or "")
         if "XSI_EXITCODE=0" not in out:
             raise RuntimeError(f"{self.top}: XSI run did not complete cleanly:\n{out[-3000:]}")

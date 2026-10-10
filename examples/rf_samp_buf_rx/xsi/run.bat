@@ -19,9 +19,13 @@ set MINGW=%VIV%\tps\mingw\6.2.0\win64.o\nt
 set TOP=%1
 set TB=%2
 set PATH=%~dp0xsim.dir\%TOP%;%MINGW%\bin;%VIV%\lib\win64.o;%VIV%\bin;%PATH%
+rem WF_PHASE lines time each phase (waveflow.build.trace_steps.run_xsi).  They sit outside every
+rem if/else block: %time% inside a block is expanded once, when the block is parsed.
+echo WF_PHASE compile_rtl %time%
 echo --- xvlog RTL (%TOP%) ---
 call %VIV%\bin\xvlog -f rtl_%TOP%.f
 echo xvlog errorlevel=%ERRORLEVEL%
+echo WF_PHASE elaborate %time%
 rem The two xelab lines are spelled out rather than built in a variable: setting one inside an
 rem if/else block needs delayed expansion, which is a classic cmd trap.
 if /I "%3"=="trace" (
@@ -34,6 +38,7 @@ if /I "%3"=="trace" (
   call %VIV%\bin\xelab work.%TOP% -dll -s %TOP% -debug typical
 )
 echo xelab errorlevel=%ERRORLEVEL%
+echo WF_PHASE compile_tb %time%
 echo --- g++ BFM tb (%TB%) ---
 call %MINGW%\bin\g++.exe -I%VIV%\data\xsim\include -O3 -c -o xsi_loader.o xsi_loader.cpp
 rem WF_TB_CXXFLAGS: extra flags for the testbench only (a software host's schema headers need
@@ -41,6 +46,8 @@ rem Vitis's include dir -- waveflow.build.xsi_workspace sets it); unset, it expa
 call %MINGW%\bin\g++.exe -I%VIV%\data\xsim\include %WF_TB_CXXFLAGS% -O3 -c -o %TB%.o %TB%.cpp
 call %MINGW%\bin\g++.exe -o %TB%.exe %TB%.o xsi_loader.o
 echo gpp errorlevel=%ERRORLEVEL%
+echo WF_PHASE simulate %time%
 echo --- run ---
 .\%TB%.exe
 echo XSI_EXITCODE=%ERRORLEVEL%
+echo WF_PHASE end %time%
