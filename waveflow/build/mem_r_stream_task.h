@@ -14,8 +14,9 @@
 #include "m_r_cmd.h"
 
 // AXI->stream: dequeue one MRCmd, burst len words out. addr is an element/word coordinate
-// (m_mem is already a word pointer, so no byte<->word conversion — the offset=slave base + AXI HW
-// turn m_mem[addr] into ARADDR = base + addr*(MEM_DW/8)). Word rate.
+// (m_mem is already a word pointer, so no byte<->word conversion — the AXI HW turns m_mem[addr] into
+// ARADDR = addr*(MEM_DW/8).  There is no base register: the generated top passes m_mem offset=off
+// (the only form Vitis supports for an m_axi pointer on an hls::task; plans/maxi_pointer_fifo.md)). Word rate.
 template <int MEM_DW>
 static void mem_r_stream_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
                               const ap_uint<MEM_DW>* m_mem,

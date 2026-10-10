@@ -130,6 +130,9 @@ class CsynthStep(BuildStep):
         log = (r.stdout or "") + (r.stderr or "")
         if "WAVEFLOW_CSYNTH_OK" not in log:
             raise RuntimeError(f"csynth of {self.top} failed:\n{log[-6000:]}")
+        from waveflow.build.composite_gen import check_maxi_lowered
+
+        check_maxi_lowered(root, self.top)
         write_stamp(root, self.top)
         return out
 

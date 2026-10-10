@@ -38,9 +38,10 @@ endpoint, to either a boundary port or an internal channel; `render_top` emits i
 void interleaver_inband(hls::stream<ap_uint<64> >& s_cmd, const ap_uint<64>* m_in,
                         ap_uint<64>* m_out, hls::stream<ap_uint<64> >& s_done) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in  offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in  offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_in
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<64> > cmd_rd;   // cmd_rx  -> reader

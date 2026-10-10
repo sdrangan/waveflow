@@ -71,7 +71,8 @@ class CopyCmd(DataList):
     """One :class:`MemCopy` app command (host -> ``s_cmd``): copy ``n_words`` packed words from the
     source word offset ``src_off`` to the destination word offset ``dst_off``.  All three are
     **element/word coordinates** relative to their buffer bases (the addressing convention —
-    ``plans/component.md``; the physical bases live in the two ``offset=slave`` registers)."""
+    ``plans/component.md``).  The top's pointers are ``offset=off``, so the bases are 0 and an
+    offset is the bus word address."""
     elements = {
         "src_off": {"schema": Word32, "description": "source element/word offset"},
         "dst_off": {"schema": Word32, "description": "destination element/word offset"},

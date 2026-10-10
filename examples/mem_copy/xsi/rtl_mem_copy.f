@@ -1,8 +1,4 @@
 ../mem_copy_proj/solution1/syn/verilog/mem_copy.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_control_s_axi.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_entry_proc.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_fifo_w64_d3_S.v
-../mem_copy_proj/solution1/syn/verilog/mem_copy_fifo_w64_d4_S.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_fifo_w65_d2_S.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_flow_control_loop_pipe_sequential_init.v
 ../mem_copy_proj/solution1/syn/verilog/mem_copy_gmem0_m_axi.v

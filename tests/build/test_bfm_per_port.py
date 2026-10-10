@@ -397,11 +397,16 @@ class TestExistingDesignsUnchanged:
     """Every design that predates this generalization must emit the same bytes."""
 
     def _committed(self):
-        from examples.interleaver.interleaver_inband import make_xsi_tb as il
+        # The committed interleaver harness is the multi-job XSI gate's scenario.
+        from examples.interleaver.interleaver_inband import (
+            XSI_GATE_N_CYCLES,
+            XSI_GATE_SIZES,
+            make_xsi_tb as il,
+        )
         from examples.mem_copy.mem_copy import make_xsi_tb as mc
         from examples.state_toy.state_toy import StateAccumTB
 
-        return [("mem_copy", mc()), ("interleaver_inband", il()),
+        return [("mem_copy", mc()), ("interleaver_inband", il(sizes=XSI_GATE_SIZES, n_cycles=XSI_GATE_N_CYCLES)),
                 ("state_accum", StateAccumTB(name="tb", sim=Simulation(), nvec=5, n_cycles=400))]
 
     def test_the_committed_harnesses_regenerate_identically(self):

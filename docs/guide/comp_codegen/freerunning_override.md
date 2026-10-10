@@ -25,8 +25,9 @@ it over.
 
 That is a **scope boundary, not a law of HLS** — a free-running task may carry `m_axi`, and the
 framework's own `mem_r_stream_task.h` does. The emitter simply has not answered what an `m_axi` body
-needs (bundle naming, depth, who owns the `offset=slave` register), so it refuses rather than emit
-something unreviewed.
+needs (bundle naming, depth), so it refuses rather than emit something unreviewed. How the pointer
+reaches the task is settled -- `offset=off` + `stable`, no base register
+([why](./freerunning_composite.md#how-a-pointer-reaches-a-task)).
 
 **The body is outside the extractor's vocabulary.** Constructing descriptors, driving a `framed_word`
 channel, holding stream-of-blocks locks — none of that is in the

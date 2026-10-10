@@ -1,9 +1,9 @@
 set part {xc7z020clg484-1}
 set cf "-Isrc -Iinclude"
-puts "WAVEFLOW_INFO: mem_r_stream"
-open_project -reset mem_r_stream_proj
-set_top mem_r_stream
-add_files gen/mem_r_stream.cpp -cflags $cf
+puts "WAVEFLOW_INFO: interleaver_inband"
+open_project -reset interleaver_inband_proj
+set_top interleaver_inband
+add_files gen/interleaver_inband.cpp -cflags $cf
 open_solution -reset "solution1"
 set_part $part
 create_clock -period 10

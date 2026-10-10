@@ -16,7 +16,7 @@ void mem_r_stream(
     hls::stream<ap_uint<64> >& m_out
 ) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_mem offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_mem offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_mem
 #pragma HLS INTERFACE axis port=m_out
 #pragma HLS INTERFACE ap_ctrl_none port=return

@@ -66,14 +66,11 @@ def render_top(top: str) -> str:
     ports += axis_port_decls("k_in", dw, kernel_reads=True)
     body = ["  " + d for d in axi_wire_decls("s0_axi", axi_signals(dw, aw, idw))]
     body += ["  " + d for d in axi_wire_decls("mi0_axi", mi_wire_signals(dw, aw, idw))]
-    # The HLS master on SI0.  Its control port (the m_axi base-offset register) is tied to zero:
-    # base 0, as every existing mem_w_stream XSI gate runs it.
+    # The HLS master on SI0.  Its pointer is offset=off (no base register, no control slave): the
+    # bus address is the command's word coordinate times the word size.
     conns = ["    .ap_clk(ap_clk)", "    .ap_rst_n(ap_rst_n)",
              "    .s_cmd_TDATA(s_cmd_TDATA)", "    .s_cmd_TVALID(s_cmd_TVALID)", "    .s_cmd_TREADY(s_cmd_TREADY)",
              "    .s_in_TDATA(s_in_TDATA)", "    .s_in_TVALID(s_in_TVALID)", "    .s_in_TREADY(s_in_TREADY)"]
-    for sig in ("AWVALID", "AWADDR", "WVALID", "WDATA", "WSTRB", "ARVALID", "ARADDR", "RREADY",
-                "BREADY"):
-        conns.append(f"    .s_axi_control_{sig}(0)")
     for name, _w, m2s in axi_signals(dw, aw, idw):
         net = f"s0_axi_{name}"
         if name in _HLS_TO_XBAR and m2s:

@@ -58,7 +58,9 @@ What the walk emits, element by element:
 | an `IrqIF` leaving the cut | a top output |
 
 The **tie-off rules** live once, in [`system_top.py`](../../../waveflow/build/system_top.py): a kernel's
-`s_axi_control` inputs low (the `m_axi` base stays 0, so a bus address is the address); an `m_axi` pin
+`m_axi` pointers are `offset=off`, so a bus address is the address (a kernel that still has an
+`s_axi_control` slave has its inputs tied low --
+[why `offset=off`](../comp_codegen/freerunning_composite.md#how-a-pointer-reaches-a-task)); an `m_axi` pin
 the crossbar lacks tied low or left open; a Vitis master's one-bit IDs against the crossbar's wider ones;
 a stream input nothing drives (`TLAST` low, `TKEEP`/`TSTRB` all ones); padded crossbar slots answering
 nothing. The spec is answerable before it is rendered — `spec.si`, `spec.mi`, `spec.nets`,

@@ -31,8 +31,8 @@ BFM beside the top, and every endpoint bound to it becomes a top port.
 
 **The tie-off rules**, stated once:
 
-* a kernel's ``s_axi_control`` inputs are tied low -- its ``m_axi`` base register stays 0, so a bus
-  address is the address;
+* a kernel's ``m_axi`` pointers are ``offset=off`` (no base register), so a bus address is the
+  address; a kernel that still has an ``s_axi_control`` slave has its inputs tied low;
 * an ``m_axi`` pin the crossbar's SI lacks is tied low (an input) or left open (an output); the
   kernel's AWID/ARID are left open and the SI's driven 0, and BID/RID take the SI's bit 0 -- a
   Vitis master's IDs are one bit, the crossbar's are ``id_width``;
@@ -55,7 +55,7 @@ from waveflow.build.axi_xbar import (
     axi_wire_decls,
     render_xbar_instance,
 )
-from waveflow.build.composite_gen import ExtPort, _CONTROL_UNDRIVEN
+from waveflow.build.composite_gen import ExtPort, _CONTROL_UNDRIVEN, has_control_slave
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.mm_adaptor_gen import (
     BramView,
@@ -112,10 +112,9 @@ def kernel_pins(k: KernelRtl) -> list[tuple[str, str]]:
 
     The rules are Vitis's, for the port kinds a free-running top has: an AXIS port has
     TDATA/TVALID/TREADY, plus TLAST/TKEEP/TSTRB when it carries the side channels (``axi4s``); an
-    ``m_axi`` port has :data:`VITIS_MAXI_PINS` under ``m_axi_<bundle>_`` and brings the
-    ``s_axi_control`` slave with it; a scalar is one input."""
+    ``m_axi`` port has :data:`VITIS_MAXI_PINS` under ``m_axi_<bundle>_``, and an ``offset=slave`` one
+    brings the ``s_axi_control`` slave with it; a scalar is one input."""
     pins = [("input", "ap_clk"), ("input", "ap_rst_n")]
-    maxi = False
     for p in k.ports:
         if p.kind in ("axis_in", "axis_out"):
             fwd = "input" if p.kind == "axis_in" else "output"
@@ -123,12 +122,11 @@ def kernel_pins(k: KernelRtl) -> list[tuple[str, str]]:
             sigs = ["TDATA", "TVALID"] + (["TLAST", "TKEEP", "TSTRB"] if p.axi4s else [])
             pins += [(fwd, f"{p.name}_{s}") for s in sigs] + [(back, f"{p.name}_TREADY")]
         elif p.kind in ("maxi_read", "maxi_write"):
-            maxi = True
             pins += [("input" if i else "output", f"{p.xsi_prefix}_{s}") for s, i in VITIS_MAXI_PINS]
         else:
             raise LoweringError(f"{k.module}: port {p.name!r} is kind {p.kind!r}, which a system top "
                                 f"has no rule to wire")
-    if maxi:
+    if has_control_slave(k.ports):
         pins += [("input", n) for n in _CONTROL_UNDRIVEN]
         pins += [("output", f"s_axi_control_{s}") for s in _CONTROL_OUTPUTS]
     pins += [("input", n) for n, _w, _v in k.scalars]

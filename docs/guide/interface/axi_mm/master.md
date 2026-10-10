@@ -53,7 +53,8 @@ class MRCmd(ParamSchema):
 ```
 
 **Addressing — element coordinates, not bytes.** `addr` and `len` are **word/element** coordinates
-relative to a buffer base set once with `bind_base()` (mirroring the `offset=slave` AXI register). Every
+relative to a buffer base set once with `bind_base()` (0 in hardware: a free-running top's pointers are
+`offset=off`, so there is no base register -- [why](../../comp_codegen/freerunning_composite.md#how-a-pointer-reaches-a-task)). Every
 command afterward is base-relative and unit-agnostic, and because `m_mem` is already a word pointer in
 the generated C++, no byte↔word conversion happens in the kernel — unlike a byte-addressed `m_axi` port
 (see [Endpoint interfaces](../../comp_codegen/interface.md)).
