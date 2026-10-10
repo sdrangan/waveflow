@@ -1,9 +1,11 @@
 # The stream_inband frame: one architecture an AI can be asked to build in.
 #
 # A frame is a bundle with no code of its own -- this file, frame.md (the
-# specification), process.md (the ordered steps, also written as AGENTS.md by
-# the scaffold) and prompts/ (example function specs).  Every tool that reads
-# frames is frame-agnostic; adding one is adding a directory.
+# specification), process.md (the frame's own steps; joined with
+# ../_common/process.md, they are what `waveflow_get_process` returns and
+# the scaffold writes as AGENTS.md) and prompts/ (example function specs).
+# Every tool that reads frames is frame-agnostic; adding one is adding a
+# directory.
 
 name = "stream_inband"
 synopsis = """A host-launched streaming accelerator built on the command-response \
@@ -15,8 +17,19 @@ parameter error the kernel closes its output burst with TLAST and returns; the h
 resets and restarts.  Verified against an independent oracle, against csim/cosim, \
 and on cycle count against the pysim timing model."""
 
-# The example this frame is modeled on.  An agent should read it first; every
-# departure from it is a likely failure point.
+# The three axes an agent chooses a frame on (see plans/mcp_frames.md):
+# the guide pattern page (docs/guide/patterns/<pattern>.md), the system shape,
+# and the realization flow.  `choose_when` is the one line the menu shows.
+pattern = "command_response"
+shape = "one host-launched kernel, AXI-Stream in and out, AXI-Lite for control and status"
+flow = "host-launched: C++ testbench, Vitis csim and cosim, pysim timing against cosim"
+choose_when = """one kernel that a host starts and feeds over a stream, each command \
+carrying its own parameters, and nothing more -- no second kernel, no memory, no \
+host program on a bus.  A lab prompt that gives a function to put on a stream is \
+this frame."""
+
+# The examples this frame is modeled on, primary first.  An agent should read
+# it first; every departure from it is a likely failure point.
 reference_examples = ["stream_inband"]
 
 # The architecture, in the terms `waveflow_find_usage` will answer for.

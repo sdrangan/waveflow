@@ -1,10 +1,10 @@
-# Building a streaming in-band accelerator with Waveflow
+## The frame: `stream_inband`
 
-You are building a hardware accelerator with Waveflow, in the `stream_inband`
-frame. This file is the process: what to do, in what order, and which tool to
-use at each step. `frame.md` in this directory is the **specification** the
-design must meet -- protocol, errors, the comparisons, the report. Read this
-first, then `frame.md`, then the function spec you were given.
+You are building in the `stream_inband` frame: a host-launched streaming
+accelerator on the in-band command-response contract. `frame.md` in this
+directory is the **specification** the design must meet -- protocol, errors,
+the comparisons, the report. Read this first, then `frame.md`, then the
+function spec you were given.
 
 The design is **hook-first**. Waveflow generates the mechanical parts -- the
 schemas' C++ headers and serializers, and the kernel's boundary (prototype,
@@ -14,34 +14,7 @@ testbench. If you started from `waveflow new-accel`, every one of those files
 already exists, renamed from the reference design, with the arithmetic
 stubbed to an identity; it builds and passes as generated.
 
-The work has two stages, and the boundary between them is the point:
-
-- **Stage 1 writes down what the accelerator must do** -- schemas, the
-  function, the scenarios and their expected responses. Then you **stop** for
-  review.
-- **Stage 2 builds it** against that frozen specification.
-
-An accelerator that agrees with a model you wrote at the same time proves
-nothing. Stage 1 exists so that Stage 2 has something to be wrong against.
-
----
-
-## Before you start: learn the machinery
-
-Waveflow is probably not in your training data. Do not guess at its API --
-every name below is one call away.
-
-| To find out | Call |
-| --- | --- |
-| what the docs cover | `waveflow_browse()`, then `waveflow_browse("guide")` |
-| how Waveflow does *X* | `waveflow_search("X")` -- best with Waveflow's own words |
-| what Waveflow calls *X* | `waveflow_browse(section)` and read the summaries |
-| who uses a name, and how | `waveflow_find_usage("cpp_body")` |
-| which example to copy | `waveflow_list_examples()` |
-| a whole file from one | `waveflow_get_example("stream_inband", file="poly.py")` |
-| a whole doc page | `waveflow_get_doc(path)` |
-
-All of these are also `waveflow kb <cmd>` on the command line.
+## The reference design
 
 **Your reference design is `stream_inband`.** Read it before writing
 anything:
@@ -62,12 +35,6 @@ waveflow_get_doc("docs/examples/stream_inband/why_not.md")     # the designs not
 header, never over AXI-Lite; on an error the kernel closes its output burst
 and returns, with no drain and no footer.  If you find yourself writing
 configuration registers or a recovery path, reread `why_not.md`.
-
-Examples that `waveflow_list_examples()` does not return are **not** models to
-copy, whatever else is in the tree.
-
-Anything a tool tags as generated -- `gen/`, every header under `include/` --
-you may read and must never edit.
 
 ---
 
@@ -144,32 +111,12 @@ reached and what limits it.
    - `waveflow_search("pysim vs cosim timing tolerance")`
 7. **`results/report.md`**: the criteria table of `frame.md` §F8.
 
----
+## Rules for this frame
 
-## The rules
-
-- **Never hand-pack words.** Every header, footer and sample burst goes
-  through its Waveflow schema or the Waveflow array utilities, in Python and
-  in C++ alike.
-- **Never edit a generated file.** If the machinery cannot express something
-  you need, **stop and report it** with the exact error you saw.
-- **Never write your own PASS column.** A criterion passes when a check step
-  or the build says so.
 - **Scenarios are pre-loaded**, because Vitis csim requires it: the testbench
   plays a scenario's whole stimulus, then drains the outputs. No scenario may
   make an input depend on an earlier output. A design that needs that wants a
-  `FreeRunMod` with the concurrent BFM testbench, which is a different frame.
-- **Keep each Vitis project one directory deep.** Vitis HLS 2025.1 records a
-  design file's path relative to a one-level project, so
-  `open_project vitis/w32` silently drops the kernel from csim and the link
-  fails with `undefined symbol: <kernel>(...)` -- a Vitis defect, not your
-  code. To group projects, `cd` into the folder first, then
-  `open_project w32`, and give `add_files` absolute paths.
-- **Keep project names and paths short on Windows.** C synthesis writes
-  floating-point IP files about 150 characters below the project directory;
-  a path over 260 bytes fails csynth with `Path length exceeds 260-Byte
-  maximum allowed by Windows`. Name projects like `w32_proj`, and keep the
-  checkout itself shallow.
-- A design is accepted only when **every comparison** of §F7 passes. When one
-  fails, say **which layer** failed -- the function, the protocol model, the
-  module, the C++ body -- before changing anything.
+  `FreeRunMod` with the concurrent BFM testbench, which is a different frame
+  (`freerun_pipeline` or `bus_system`).
+- A design in this frame is accepted only when every comparison of §F7
+  passes.
