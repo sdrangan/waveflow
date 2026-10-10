@@ -398,3 +398,24 @@ def test_the_two_refusals_are_different_diagnoses():
     assert "MMIFReadMaster or MMIFWriteMaster" in str(under.value)
     assert "is not a kernel boundary port" in str(absent.value)
     assert "does not declare a direction" not in str(absent.value)
+
+
+def test_csynth_that_dropped_an_maxi_adapter_is_refused(tmp_path):
+    """A csynth that lowered an m_axi pointer to a register port (seen twice, plans/maxi_pointer_fifo.md)
+    must not be stamped as good: every declared bundle needs its `<top>_<bundle>_m_axi.v`."""
+    import pytest
+
+    from waveflow.build.composite_gen import check_maxi_lowered
+
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "gen" / "k.cpp").write_text(
+        "#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0 depth=8192\n"
+        "#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192\n")
+    vdir = tmp_path / "k_proj" / "solution1" / "syn" / "verilog"
+    vdir.mkdir(parents=True)
+    (vdir / "k.v").write_text("")
+    (vdir / "k_gmem0_m_axi.v").write_text("")
+    with pytest.raises(RuntimeError, match=r"\['gmem1'\]"):
+        check_maxi_lowered(tmp_path, "k")
+    (vdir / "k_gmem1_m_axi.v").write_text("")
+    check_maxi_lowered(tmp_path, "k")

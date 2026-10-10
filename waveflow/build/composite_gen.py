@@ -2765,6 +2765,34 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def check_maxi_lowered(root, top_name: str) -> None:
+    """Refuse a csynth result whose ``m_axi`` ports were not lowered to AXI masters.
+
+    **Seen twice (Vitis 2025.1, 2026-10-10), never reproduced on demand.**  csynth of a top whose
+    pragmas declare ``m_axi`` (``offset=off`` + ``stable``) reported success with every pointer lowered
+    to a plain register port -- ``HLS 214-450 Ignore address on register port 'm_mem'``, no
+    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  Nothing downstream
+    says so until XSI fails to bind a port (``FATAL: port 'ap_rst_n' not found``), or worse, never
+    binds it at all.  So right after csynth, before the stamp vouches for it: every ``m_axi`` bundle the
+    top's source declares must have its adapter in the RTL.  ``plans/maxi_pointer_fifo.md``.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
+    if not src.is_file():
+        return
+    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
+                             src.read_text(encoding="utf-8")))
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    missing = sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+    if missing:
+        raise RuntimeError(
+            f"csynth of {top_name} declared m_axi bundle(s) {missing} but produced no AXI master for "
+            f"them -- Vitis lowered the pointer to a register port (look for HLS 214-450 in the log). "
+            f"Re-run csynth; see composite_gen.check_maxi_lowered.")
+
+
 def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
                  stamp_sources: bool = True) -> str:
     """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
@@ -2815,6 +2843,7 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
     if not names:
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
     if stamp_sources:
+        check_maxi_lowered(root, top_name)
         write_stamp(root, top_name)
     # ROM initialization data.  csynth writes a constant table it maps to a ROM as a `.dat` beside the
     # `.v`, loaded with `$readmemh("./<name>.dat")` -- a path relative to the SIMULATOR's working
