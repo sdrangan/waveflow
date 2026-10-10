@@ -2709,7 +2709,9 @@ def render_tb_main(spec: TbSpec, n_cycles: int, ns: str | None = None,
         "",
         "int main() {",
         f'    {ns}::Harness h("{wdb}");',
-        f"    h.run({int(n_cycles)});",
+        # The bound is the GENERATED default; a run's vectors/run.json may override it (a workload
+        # sweep's points then share one compiled testbench -- wfbfm::run_param, xsi_bundle.h).
+        f'    h.run(wfbfm::run_param("n_cycles", {int(n_cycles)}));',
         "    h.close();",
         "    return 0;",
         "}",

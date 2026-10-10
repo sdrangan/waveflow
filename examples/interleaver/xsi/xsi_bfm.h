@@ -93,7 +93,7 @@ struct Dut {
 /// new modes (more segments, later cycle-by-cycle logging) are just more entries, no config file.
 struct MemSeg {
     size_t off = 0;          ///< first word index of the region
-    size_t len = 0;          ///< words (dump only; a load uses the bundle's length)
+    size_t len = 0;          ///< words (dump only, 0 = to the end; a load uses the bundle's length)
     std::string bundle;      ///< bundle directory, relative to the xsi/ run dir
 };
 
@@ -114,9 +114,12 @@ struct FlatMemory : public XsiSimObj {
         }
     }
     void post_sim() override {
+        // len 0 = to the end of the arena: a whole-arena dump then follows an arena sized at run
+        // time (run_param), instead of naming the size it was generated with.
         for (const MemSeg& s : dump_segs) {
+            const size_t len = s.len ? s.len : (s.off < w.size() ? w.size() - s.off : 0);
             BurstBundle::write_one(s.bundle,
-                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + s.len));
+                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + len));
         }
     }
 
@@ -812,13 +815,27 @@ private:
 #  define WAVEFLOW_XSI_ENGINE "libxv_simulator_kernel.so"
 #endif
 
+/// The design library a run opens: *design* (the testbench's ports::DESIGN_DLL), unless
+/// WF_XSI_DESIGN names another.  run.bat / run.sh set it for a traced run, whose snapshot is
+/// xsim.dir/<top>_trace (plans/incremental_xsi.md D3): one built testbench then runs against either
+/// elaboration, and the two coexist rather than each invalidating the other.
+inline std::string xsi_design_path(const std::string& design) {
+    const char* d = std::getenv("WF_XSI_DESIGN");
+    return (d && *d) ? std::string(d) : design;
+}
+
 class XsiSim {
 public:
+    /// *wdb* is relative to the run's vectors directory when one is set (WF_VECTORS_DIR): xsim
+    /// rewrites the waveform database on every run, so two runs sharing one directory for it would
+    /// collide.
     XsiSim(const std::string& design, const std::string& wdb,
            const std::string& engine = WAVEFLOW_XSI_ENGINE)
-        : xsi_(design, engine), d_(xsi_) {
+        : xsi_(xsi_design_path(design), engine), d_(xsi_) {
         s_xsi_setup_info info; std::memset(&info, 0, sizeof(info));
-        std::vector<char> wdbbuf(wdb.begin(), wdb.end()); wdbbuf.push_back('\0');
+        const char* vd = std::getenv("WF_VECTORS_DIR");
+        const std::string wdb_path = (vd && *vd) ? std::string(vd) + "/" + wdb : wdb;
+        std::vector<char> wdbbuf(wdb_path.begin(), wdb_path.end()); wdbbuf.push_back('\0');
         info.wdbFileName = wdbbuf.data();
         xsi_.open(&info);
         P_clk_   = d_.port("ap_clk");

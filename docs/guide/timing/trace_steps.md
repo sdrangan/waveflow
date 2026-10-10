@@ -110,18 +110,21 @@ The manifest is the artifact the loader ([`waveflow/utils/trace.py`](https://git
 
 ## `RtlSimStep` — run it, tracing
 
-A thin wrapper over the example's XSI runner, passing its third argument `trace`. Which script that
-is comes from `xsi_runner_cmd()` — `cmd /c run.bat` on Windows, `bash run.sh` on Linux. It
+A thin wrapper over the example's XSI runner, passing its `trace` argument, through
+[`XsiSnapshot`](../build/xsi.md#building-once-running-many-times): the traced design is its own
+snapshot, `<top>_trace`, and compile, elaborate and the testbench build are skipped when their
+inputs are unchanged, so each point of a workload sweep pays only its simulation. Which script runs
+comes from `xsi_runner_cmd()` — `cmd /c run.bat` on Windows, `bash run.sh` on Linux. It
 **asserts nothing**: it runs and produces `xsi/<top>_trace.vcd`. Correctness — the exact cycle
 count — stays with the `-m xsi` gate, which calls the runner directly. Two callers of one script is deliberate; routing a
 green gate through new code is how a gate quietly stops meaning what it meant.
 
 {: .warning }
-> **Re-running the built binary does not regenerate the VCD.** Only the full runner path does,
-> because the dump comes from the *elaborated snapshot*. A driver that re-ran the binary per data
-> point once silently re-measured the **previous** trace and reported an identical result at five
-> different inputs. `RtlSimStep` deletes the VCD first and fails if it does not reappear — copy that
-> discipline in any hand-rolled sweep.
+> **Only the traced snapshot writes the VCD.** The dump comes from the *elaborated snapshot*: every
+> run of `<top>_trace` writes a fresh one, and a run of the untraced `<top>` writes none — so a run
+> against the wrong snapshot leaves the **previous** trace on disk. A driver once did exactly that and
+> reported an identical result at five different inputs. `RtlSimStep` deletes the VCD first and
+> fails if it does not reappear — copy that discipline in any hand-rolled sweep.
 
 It is toolchain-gated (needs Vitis-synthesized RTL plus Vivado `xsim` and a MinGW `g++`), and takes
 a `prepare` hook to materialize the scenario the BFM reads — the scenario is an *input* to the run,

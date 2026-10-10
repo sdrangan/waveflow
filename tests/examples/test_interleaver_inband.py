@@ -68,7 +68,7 @@ def test_inband_tb_codegen(tmp_path):
               "interleaver_inband_tb_harness.h", "interleaver_inband_bfm_tb.cpp"):
         assert (xsi / f).exists(), f
     main = (xsi / "interleaver_inband_bfm_tb.cpp").read_text()
-    assert "interleaver_inband_tb::Harness h" in main and "h.run(4000)" in main
+    assert "interleaver_inband_tb::Harness h" in main and 'h.run(wfbfm::run_param("n_cycles", 4000))' in main
     assert (xsi / "vectors" / "s_cmd").exists() and (xsi / "vectors" / "mem_in").exists()
 
 

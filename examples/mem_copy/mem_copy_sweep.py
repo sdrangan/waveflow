@@ -10,8 +10,10 @@ the bus term is accounted for -- see :mod:`waveflow.calib.timing_model`.
 **Every axis here is a workload axis.**  ``n_words`` is a runtime field of the copy command, so the
 hardware is identical at every point: one csynth serves the whole sweep.  That is why the stage
 names the steps to force instead of forcing everything -- see :class:`~waveflow.build.sweep.Stage`.
-It is also why this sweep is minutes rather than hours: ~20 s a point against ~45 s of one-time
-synthesis.
+It is also why this sweep is cheap: one-time synthesis (~45 s) and one XSI build (~20 s), then
+each point's RTL run costs its simulation -- under a second -- because the snapshot and the
+compiled testbench are reused (``plans/incremental_xsi.md``; the scenario's sizes ride in
+``vectors/run.json``).
 
     python -m examples.mem_copy.mem_copy_sweep --dry-run    # pysim only, no toolchain
     python -m examples.mem_copy.mem_copy_sweep              # the three points
@@ -42,7 +44,8 @@ from examples.mem_copy.mem_copy_build import CLK_FREQ, PART, build_mem_copy_dag 
 #: 1024 was held out for a while on the belief that its RTL stalled.  It never did: ``rtlsim`` did
 #: not depend on the step that GENERATES the harness, so every point ran under the committed gate's
 #: 3400-cycle bound and the large ones were simply cut off mid-job.  With that edge in place
-#: (``RtlSimStep.tb_artifact``) each point gets its own ``xsi_run_cycles`` bound and 1024 completes.
+#: each point gets its own ``xsi_run_cycles`` bound and 1024 completes.  (The bound now travels in the
+#: point's ``vectors/run.json``, written by ``rtlsim``'s ``prepare``, not in a regenerated harness.)
 N_WORDS = (128, 256, 512, 1024)
 
 #: Jobs per point, the same at every size.  It could be a second axis -- more small jobs sharpen a
@@ -76,8 +79,8 @@ _TIMING_STEPS = ["pysim", "codegen_tb", "trace_manifest", "rtlsim"]
 #:
 #: The second pass re-runs ``rtlsim`` rather than reusing the first pass's waveform: the trace
 #: artifacts are single-slot (``results/mem_copy_timing.json``), so after the barrier what is on disk
-#: belongs to the *last* point.  That doubles the RTL time, which at ~16 s a point is the cheaper
-#: half of being correct.
+#: belongs to the *last* point.  That doubles the RTL time, which at under a second a point (the
+#: snapshot is reused) is the cheaper half of being correct.
 #: The collect pass stops at ``collect_timing``, short of the fit, and that is the whole point.
 #:
 #: ``fit_timing`` writes ``params.json``; the next point's pysim loads it and charges the predicted

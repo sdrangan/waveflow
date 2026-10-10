@@ -33,7 +33,7 @@ struct Harness {
 
     explicit Harness(const std::string& wdb)
       : sim(mem_copy_ports::DESIGN_DLL, wdb),
-        mem(24640, 8),
+        mem(wfbfm::run_param("mem_words", 24640), 8),
         s_cmd(sim.dut(), mem_copy_ports::s_cmd, {}),
         m_in(sim.dut(), mem_copy_ports::m_in, mem),
         m_out(sim.dut(), mem_copy_ports::m_out, mem),
@@ -51,7 +51,7 @@ struct Harness {
         participants_.push_back(&s_done);
         // Init-time config (DynParams): each is a knob the pysim participant
         // carries, emitted here as a member assignment (e.g. a model's bundle).
-        mem.dump_segs = { {0, 24640, "vectors/out"} };
+        mem.dump_segs = { {0, 0, "vectors/out"} };
         mem.load_segs = { {0, 0, "vectors/mem_in"} };
         s_cmd.in_bundle = "vectors/s_cmd";
         s_done.out_bundle = "vectors/s_done";

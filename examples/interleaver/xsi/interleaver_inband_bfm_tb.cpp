@@ -8,7 +8,7 @@
 
 int main() {
     interleaver_inband_tb::Harness h("interleaver_inband_bfm.wdb");
-    h.run(20000);
+    h.run(wfbfm::run_param("n_cycles", 20000));
     h.close();
     return 0;
 }

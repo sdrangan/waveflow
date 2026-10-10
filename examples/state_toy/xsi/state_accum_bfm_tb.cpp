@@ -8,7 +8,7 @@
 
 int main() {
     state_accum_tb::Harness h("state_accum_bfm.wdb");
-    h.run(400);
+    h.run(wfbfm::run_param("n_cycles", 400));
     h.close();
     return 0;
 }
