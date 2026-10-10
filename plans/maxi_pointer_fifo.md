@@ -175,5 +175,4 @@ zero-length `MemWCmd` removed from `sc_scale_task.h` and its pysim twin, regener
 16/16 responses and the whole 3068-word output image bit-exact, last response at cycle **2163** against
 the amended design's recorded 2229 -- the five balancing writer firings cost 66 cycles, and are no longer
 needed.  (Its exact-cycle gate failed on that move, as it should; the blind-test directory itself was
-not touched.)  **Not done:** the comment in `waveflow/build/mem_{r,w}_stream_task.h` still mentions "the offset=slave base" (left,
-because editing a copied body stales every example's RTL stamp).
+not touched.)  The comments in `waveflow/build/mem_{r,w}_stream_task.h` (and `hwgen._reject_m_axi_task`, `freerunning_override.md`) no longer mention an `offset=slave` base; the copies were refreshed and every top hashing them re-synthesized -- `pytest -m xsi` 163 passed, 0 skipped.
