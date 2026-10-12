@@ -16,7 +16,9 @@ Modules:
 
 * :mod:`~waveflow.rfenv.paths` -- :class:`PathSet`, the channel file and its manifest;
 * :mod:`~waveflow.rfenv.apply` -- :class:`ChannelApplier`, the channel applied block by block, and
-  :func:`taps`, the discrete taps a receiver sees.
+  :func:`taps`, the discrete taps a receiver sees;
+* :mod:`~waveflow.rfenv.waveforms` -- what a transmitter sends (tone, Zadoff-Chu, PN, a user's array);
+* :mod:`~waveflow.rfenv.noise` -- power conversions, dBFS, and thermal noise drawn by sample index.
 """
 
 from waveflow.rfenv.apply import ChannelApplier, reference_apply, taps
