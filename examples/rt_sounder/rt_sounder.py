@@ -412,6 +412,10 @@ SOURCE_NOISE_FIGURE_DB = 7.0
 #: the XSI workspace holds other scenarios.
 IN_BUNDLE_SRC = "vectors/rt_src"
 OUT_BUNDLE_SRC = "vectors/rt_out"
+#: The source-mode testbench's name, in both backends.  Not cosmetic: the source's noise stream is
+#: keyed by its node's name, so a pysim graph and an XSI graph named differently would render
+#: different bundles.
+SOURCE_TB_NAME = "src_tb"
 
 
 def source_gain_db(paths: PathSet) -> float:
@@ -528,7 +532,7 @@ def run_source_mode(
     ``(tb, rendered blocks, captured blocks)``."""
     from waveflow.simulation.rf_tb import read_rf_bundle
 
-    tb = RtSourceTB(name="src_tb", sim=Simulation(), **kw)
+    tb = RtSourceTB(name=SOURCE_TB_NAME, sim=Simulation(), **kw)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(root or tmp)
         sent = write_source_scenario(tb, base)

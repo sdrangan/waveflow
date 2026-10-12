@@ -1,0 +1,116 @@
+"""rt_sounder_xsi.py — source mode at RTL: the ray-traced received signal replayed through real Verilog.
+
+``plans/sionna_rt/sionna_rt.md``, steps 16–18 (AC6).  :class:`~examples.rt_sounder.rt_sounder.
+RtSourceTB` lowered to an XSI harness: :class:`~waveflow.rfenv.nodes.RtSignalSource`'s twin is
+``RfFileSource`` replaying the bundle :meth:`~waveflow.rfenv.nodes.RtSignalSource.render_bundle`
+wrote, the converters are the two ``xsi_rfdc.h`` models in I/Q mode, and the DUT is
+``examples/rf_loopback``'s ``rf_pass_through`` -- its RTL, built there, word-agnostic, so this
+workspace synthesizes nothing.
+
+**Its own workspace** (``examples/rt_sounder/xsi/``), so ``examples/rf_loopback`` does not change:
+the XSI library, the DUT's ports header and a file list pointing at the loopback's RTL are generated
+here, beside this testbench's harness, main and hand-written counters main.
+
+The geometry is the loopback I/Q gate's (128 MSa/s, 256-sample blocks, 8 blocks, the same
+``h.run`` budget), so that gate's recorded transient and drops are this gate's expectations.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from examples.rf_loopback.rf_dut_build import XSI_NWORDS_BLK, XSI_WORD_BW
+from examples.rf_loopback.rf_loopback import RfSampPassThrough
+from examples.rf_loopback.rf_loopback_xsi import TOP, XSI_N_CYCLES
+from examples.rt_sounder.rt_sounder import (
+    SOURCE_TB_NAME,
+    RtSourceTB,
+    write_source_scenario,
+)
+from waveflow.build.build import BuildConfig, BuildDag
+from waveflow.build.composite_gen import (
+    composite_top_spec,
+    render_ports_h,
+    render_rtl_f,
+    render_tb_harness,
+    render_tb_main,
+    tb_top_spec,
+)
+from waveflow.simulation.simulation import Simulation
+
+HERE = Path(__file__).resolve().parent
+#: The example that owns ``rf_pass_through``'s RTL (``<LOOPBACK>/rf_pass_through_proj``).
+LOOPBACK = HERE.parent / "rf_loopback"
+#: Namespace / file stem for this testbench.
+TB_NS = "rt_sounder_src_tb"
+#: The hand-written main the gate runs (``xsi/rt_sounder_src_counters.cpp``).
+COUNTERS = "rt_sounder_src_counters"
+
+
+def make_xsi_tb() -> RtSourceTB:
+    """The graph the harness is generated from: the pysim run's class and name (the name keys the
+    source's noise, so the two backends replay the same bytes)."""
+    return RtSourceTB(name=SOURCE_TB_NAME, sim=Simulation())
+
+
+def rtl_file_list() -> str:
+    """``rtl_rf_pass_through.f`` for this workspace: the loopback's list, re-rooted.
+
+    :func:`~waveflow.build.composite_gen.render_rtl_f` emits paths relative to the RTL owner's
+    ``xsi/``; this workspace is another directory, so each ``../`` becomes the path from here.
+    """
+    rel = Path(os.path.relpath(LOOPBACK, HERE / "xsi")).as_posix()
+    lines = render_rtl_f(TOP, LOOPBACK, stamp_sources=False).splitlines()
+    out = [f"{rel}/{ln[3:]}" if ln.startswith("../") else ln for ln in lines]
+    return "\n".join(out) + "\n"
+
+
+def generate_tb(out_dir: Path = HERE, n_cycles: int = XSI_N_CYCLES) -> RtSourceTB:
+    """Generate the workspace: the XSI library, the DUT's ports header, the harness and main, the
+    RTL file list (csynth must have run in ``examples/rf_loopback``), and the rendered bundle.
+    Returns the testbench whose source rendered it."""
+    from waveflow.build.elaborate import elaborate
+    from waveflow.build.streamutils import XsiHarnessStep
+
+    lib = BuildDag()
+    lib.add(XsiHarnessStep(output_dir="xsi"))
+    results = lib.run(BuildConfig(root_dir=out_dir, params={}), force=True)
+    failed = [n for n, r in results.items() if not r.success]
+    if failed:
+        raise RuntimeError(f"XSI library copy failed: {failed}")
+
+    xsi = out_dir / "xsi"
+    xsi.mkdir(parents=True, exist_ok=True)
+    # The DUT's port map, generated as rf_dut_build generates it (the same elaboration).
+    dut = elaborate(
+        RfSampPassThrough,
+        {"bitwidth": XSI_WORD_BW, "nwords_blk": XSI_NWORDS_BLK},
+        name=TOP,
+    )
+    dut_spec = composite_top_spec(dut, width=XSI_WORD_BW)
+    (xsi / f"{TOP}_ports.h").write_text(render_ports_h(dut_spec), encoding="utf-8")
+
+    tb = make_xsi_tb()
+    spec = tb_top_spec(tb)
+    (xsi / f"{TB_NS}_harness.h").write_text(
+        render_tb_harness(spec, ns=TB_NS), encoding="utf-8"
+    )
+    (xsi / f"{TB_NS}_bfm_tb.cpp").write_text(
+        render_tb_main(
+            spec,
+            n_cycles,
+            ns=TB_NS,
+            harness_header=f"{TB_NS}_harness.h",
+            wdb=f"{TB_NS}.wdb",
+        ),
+        encoding="utf-8",
+    )
+    (xsi / f"rtl_{TOP}.f").write_text(rtl_file_list(), encoding="utf-8")
+    write_source_scenario(tb, xsi)
+    return tb
+
+
+if __name__ == "__main__":
+    generate_tb()
+    print(f"generated xsi/{TB_NS}_harness.h + xsi/{TB_NS}_bfm_tb.cpp + xsi/rtl_{TOP}.f")

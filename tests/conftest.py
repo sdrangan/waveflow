@@ -165,7 +165,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #:
 #: 178 + 7 -> 185 on 2026-10-11: ``main`` merged into ``feat/cpu-model``; ``pytest -m xsi
 #: --collect-only -q`` counts 185.
-WANT_XSI_GATES = 185
+#:
+#: 185 -> 186 on 2026-10-12 (plans/sionna_rt/sionna_rt.md step 18, AC6): the ray-traced source's
+#: rendered bundle replayed through ``rf_pass_through`` at RTL (test_rt_sounder_xsi.py).
+WANT_XSI_GATES = 186
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
