@@ -186,7 +186,9 @@ WANT_GEM5_GATES = 12
 #: Sionna's own, SISO and 1x4 (tests/rfenv/test_sionna_reference.py).
 #: 13 -> 14 on 2026-10-12 (step 9): a real trace cached, reused, and retraced when the scene changes
 #: (tests/rfenv/test_cache.py).
-WANT_SIONNA_GATES = 14
+#: 14 -> 16 on 2026-10-12 (step 10): tracing each committed reference channel again reproduces it
+#: (tests/rfenv/test_reference.py).
+WANT_SIONNA_GATES = 16
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

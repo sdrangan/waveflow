@@ -129,6 +129,12 @@ Thumbs.db
 !**/mcp/resources/*.json
 # P0 equivalence snapshots (plans/harmonize_calib.md) � committed so the refactor has a bar to clear.
 !tests/calib/golden/*.json
+# Ray-traced channel files (waveflow.rfenv, plans/sionna_rt/): a channel is <stem>.npz plus its
+# <stem>.json manifest, and the committed ones let tests and the example run without Sionna RT.
+# Without these lines the blanket *.json rule drops every manifest from a clone, and loading the
+# channel fails with "channel file part missing".
+!tests/rfenv/data/*.json
+!examples/rt_sounder/data/*.json
 # Same reason for the Vitis L1 conformance goldens: they are produced by the vendor's own
 # code and checked in so the gates need neither Vitis nor a compiler.  Without this the
 # blanket *.json rule drops them from a clone and every gate errors with FileNotFoundError
