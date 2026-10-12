@@ -23,6 +23,8 @@ def test_cases_cover_every_inner_and_op():
     # cmult headline: fixed (signed), int, float (the edge); NOT unsigned fixed
     assert "cmult_s8_4" in names and "cmult_i8" in names and "cmult_f32" in names
     assert "cmult_u8_4" not in names                     # cmult is signed-inner only
+    # cmult3 (the three-multiply form): fixed and int, never float (it rounds differently there)
+    assert "cmult3_s8_4" in names and "cmult3_i8" in names and "cmult3_f32" not in names
     # cadd / csub / conj coverage
     assert {"cadd_s8_4", "csub_s8_4", "conj_s8_4", "cadd_u8_4"} <= names
     assert {"cadd_i16", "csub_i16", "conj_i16"} <= names

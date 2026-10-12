@@ -112,7 +112,42 @@ import pytest
 #: 158 -> 160 on 2026-10-07 (plans/xsi_system_top.md S4): the mm_fir host conformance gate
 #: (test_mm_fir_host_traces_match_pysim) x per_view / one_front.
 #: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
-WANT_XSI_GATES = 161
+#:
+#: In parallel on ``paper/mimo-cg`` (its count also started from 127):
+#: 127 -> 139 on 2026-10-04 (``plans/mimo_cg/mimo_cg_paper_sims.md``): four new files collect **12**.
+#: Phase 4 (AC4) added seven RTL gates of the CG detector's blocks, each bit-exact against the Python
+#: golden: ``test_mimo_cg_hw_vec.py`` 1, ``test_mimo_cg_hw_mm.py`` 2 (both multiply forms) and
+#: ``test_mimo_cg_hw_detector.py`` 4 (K = 4 at two formats, K = 8, K = 16).  They should have raised
+#: this number on 2026-10-01 and did not; the miss was caught by this file's own collection test at
+#: the Phase 5 regression run.  Phase 5 added five in ``test_mimo_cg_hw_measure.py``: the measurement
+#: harness on the three default builds (report rows, job intervals, block spans, record filing) and
+#: on a memory-bound unit.  Phase 6 added one there: the brute-force mode of the harness (the
+#: steady-state job list, no waveform, a pruned build) on the K = 4 default detector.
+#:
+#: 140 -> 142 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 7.4): a new file,
+#: ``tests/linalg/test_systolic_unit.py``, collects **2** -- the standalone systolic unit of
+#: ``waveflow/linalg/`` at RTL, at two configurations (centre, smallest), each running good and
+#: rejected requests back to back from one build, bit-exact against the model.
+#:
+#: 142 -> 143 on 2026-10-07 (step 7.5): the same file gained a gate at lane groups of exactly one
+#: message word, after a calibration build showed that case synthesizing to zeros while
+#: C-simulation passed (a full-width shift, defined for ap_uint, undefined in synthesis).
+#:
+#: 143 -> 144 on 2026-10-07 (step 7.7, the M7 review): a gate at 32-bit message words, with lane
+#: groups of one word, so the framework's own tests cover the word width the unit offers.
+#:
+#: 144 -> 147 on 2026-10-07 (step 8.3): ``tests/linalg/test_cg_vector_unit.py`` collects **3** --
+#: the standalone CG vector unit at RTL (centre, smallest, stress), each running jobs and rejected
+#: requests back to back from one build, bit-exact against the model.
+#:
+#: 147 -> 144 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 9.2c, gate 9.0): the
+#: example's detector now runs on the two components above, and the RTL gates of its retired blocks
+#: went with them: ``test_mimo_cg_hw_vec.py`` (1) and ``test_mimo_cg_hw_mm.py`` (2).  The units'
+#: own gates in ``tests/linalg/`` cover what they tested.
+#:
+#: 161 + 17 -> 178 on 2026-10-11: ``paper/mimo-cg`` merged into ``feat/cpu-model``.  Both lines of
+#: gates above survive the merge; ``pytest -m xsi --collect-only -q`` counts 178.
+WANT_XSI_GATES = 178
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

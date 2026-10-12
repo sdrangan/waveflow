@@ -146,20 +146,40 @@ calibrate-from-runs structure as the resource model.
 
 ## Build-vs-have map
 
+Refreshed 2026-10-05. The executable plan for this paper's simulations is
+[`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md): massive-MIMO uplink CG
+detection on `xczu48dr` with Vitis 2024.1. **All of its phases have run and been reviewed**;
+everything application-level lives in `examples/mimo_cg/`, and the framework gained no
+CG-specific code.
+
 | Paper piece | Status |
 |---|---|
-| Bit-exact functional (accuracy) | `FixedField`/`ComplexField` — in progress; conformance harness = the "matches hardware" proof |
-| Vector unit (CG dots/AXPY) | roadmap #4 (`vecunit`) |
-| Shared memory + queue (CG state) | **built** — `MemComponent` + AXI-MM queue |
-| Systolic matmul block | **new** (application-level) |
-| CG control | **new** (application-level) |
-| Cycle-approximate model | partial — timing extraction + cycle-model-training |
-| Resource-approximate model | **new** — `csynthparse`/`InspectSynthStep` give actual resources; the predictive/active model is the contribution |
-| DSE / build / conformance harness | **built** — `build_dag` + `run_dag_cli` + cosim rig |
+| Bit-exact functional (accuracy) | **built and used** — `FixedField` and `ComplexField`, plus the example's fixed-point CG golden (`examples/mimo_cg/mimo_cg_fixed.py`) with the division α and β need. Accuracy was swept over 27 scenarios, 7 widths, 3 guards and up to 8 iteration counts with no Vitis (plan Phases 2–3) |
+| Vector unit (CG dots/AXPY) | **built** — `examples/mimo_cg/hw/vec.py` and `cpp/cg_vec_task.h`: lanes as a knob, per-column α and β with one divider per lane |
+| Shared memory + queue (CG state) | **built** — `MemoryMod` and the framework's memory streams; the blocks exchange P and S through stream-of-blocks channels |
+| Systolic matmul block | **built** — `examples/mimo_cg/hw/mm.py` and `cpp/cg_mm_task.h`: an R × C array with a 3- or 4-multiply complex multiplier |
+| CG control | **built** — the free-running composite `CgDetector` (`examples/mimo_cg/hw/detector.py`), bit-exact at RTL for K = 4, 8, 16 |
+| Cycle-approximate model | **built for this design on xczu48dr** — `examples/mimo_cg/hw/models.py`: counted trip counts plus a fitted per-tile overhead; 1.0% mean job-time error over 8,807 measured jobs |
+| Resource-approximate model | **built for this design on xczu48dr** — the same file: DSP and block RAM counted (exact on 1,440 of 1,440 measured detectors), LUT and FF fitted per block (0.9% and 2.3% mean error). The framework's `compose` walks the same numbers |
+| DSE / build / conformance harness | **built and used** — `SweepRunner` drives the campaigns; `examples/mimo_cg/hw/dse.py` prices 6,084,720 joint designs in 15 s |
+| Brute-force baseline | **run** on a slice — 1,440 detectors (1.3% of the configurations), 57 tool-hours; the models' pick is within 10% of the best in 99.8% of 2,592 pre-registered decisions (`examples/mimo_cg/hw/fidelity.py`) |
+| Sampling experiment | **run as a learning curve** on existing data: with 45 of the 86 calibration builds, 19 of 20 random subsets pass the same 90% bar. Uncertainty- or decision-aware sampling is not built |
 
-Most *infrastructure* exists or is roadmapped; the new pieces are the **systolic block**,
-**CG control**, and the **active resource model**. The paper *composes* — a far stronger
-position than "build everything."
+**Where the experimental structure stands.** (1) Calibrate: 86 builds, 2.1 tool-hours. (2) Validate:
+46 held-out builds, each set fixed before the calibration round it tests (34 before the first, 12
+after it; the second models were refitted after 40 of them had been scored), then the 1,440-build
+sub-grid. (3) DSE: the whole
+cross-product in Python. (4) Baseline and finding: the brute force of the sub-grid took 57
+tool-hours and the whole space is projected at about 4,000; the design finding is what guard bits
+on two scalars are worth (a median 8% of LUTs and 15% of flip-flops by the models' csynth numbers,
+2–18% and 3–18% as implemented on six pairs, and feasibility itself for a quarter of the
+questions). The numbers and their caveats are in the plan's sections 14 to 16.
+
+**Reviewer risks, revisited.** The approximate models were validated on builds they never saw, and
+the weak spots are stated (one mispredicted family; csynth is not the implemented design; timing
+closure is shown up to 110k csynth LUTs only; the brute force is a slice). Resources
+did lead with DSP and block RAM, which are exact. The finding is modest in size and stated as such.
+The brute-force baseline exists.
 
 ## Related notes
 - `plans/fixedfield.md` — the bit-exact fixed-point foundation (accuracy model).

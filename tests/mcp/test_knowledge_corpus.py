@@ -33,6 +33,7 @@ TOC_EXAMPLES = {
     "interleaver",
     "markov",
     "memcpy",
+    "mimo_cg",
     "mm_fir",
     "regmap",
     "rf_loopback",

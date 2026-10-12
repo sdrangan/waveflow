@@ -6,7 +6,8 @@ the bits the Python integer-backed model (``fixputils`` / ``DataArray[FixedField
 produces — **bit-for-bit, zero LSB disagreement**.  Covers (a) **quantization**
 (reals → format, curated configs × modes) and (b) **vector arithmetic** — ``mult``,
 ``add``, ``quantize`` (requantize), and a **sum-of-products** — the full-precision
-intermediate + quantize-on-assign model vs the generated kernels.
+intermediate + quantize-on-assign model vs the generated kernels — and **division**
+(``div``, with Waveflow's zero guard ``x / 0 = 0``), exact and quantized in all four modes.
 
 If Python and Vitis ever differ the Python model is wrong, not Vitis: fix it, never
 loosen the comparison.  Built on the shared ``BuildDag`` + :func:`run_dag_cli`
@@ -29,17 +30,25 @@ import numpy as np
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
-from waveflow.hw.fixpoint import FixedField, add, fixed_sum, from_real, mult, quantize
+from waveflow.hw.fixpoint import (
+    FixedField,
+    add,
+    div,
+    fixed_sum,
+    from_real,
+    mult,
+    quantize,
+)
 from waveflow.toolchain import toolchain
 from waveflow.utils.fixputils import OMode, QMode, to_bits
 
 try:
     from examples.schemas.fixedpoint.kernels import (
-        render_binop, render_dot, render_quantize_real, render_requant,
+        render_binop, render_div, render_dot, render_quantize_real, render_requant,
     )
 except ModuleNotFoundError:  # direct execution from the example dir
     from kernels import (  # type: ignore[no-redef]
-        render_binop, render_dot, render_quantize_real, render_requant,
+        render_binop, render_div, render_dot, render_quantize_real, render_requant,
     )
 
 _SOURCE_DIR = Path(__file__).resolve().parent
@@ -189,6 +198,73 @@ def build_cases() -> list[dict]:
                    target.cpp_type, target.bitwidth),
         _bits_text(a, 24), _bits_text(b, 24), _expected(pyq, target.bitwidth)))
 
+    cases.extend(div_cases())
+    return cases
+
+
+# --- division (plans/mimo_cg/mimo_cg_paper_sims.md, step 2.2) -------------------
+#: Random operand pairs per division case, on top of the curated edges.
+DIV_RANDOM_PAIRS = 200
+
+
+def _div_operands(A: FixedConfig, B: FixedConfig, seed: int) -> tuple[list[float], list[float]]:
+    """Dividend/divisor reals (exactly representable): random full-range pairs, plus edges
+    — zero divisors, +/-1 and tiny-LSB divisors, extreme dividends, every sign pattern."""
+    rng = np.random.default_rng(seed)
+
+    def span(cfg: FixedConfig) -> tuple[int, int]:
+        if cfg.signed:
+            return -(1 << (cfg.W - 1)), (1 << (cfg.W - 1)) - 1
+        return 0, (1 << cfg.W) - 1
+
+    (alo, ahi), (blo, bhi) = span(A), span(B)
+    sa = list(rng.integers(alo, ahi + 1, size=DIV_RANDOM_PAIRS))
+    sb = list(rng.integers(blo, bhi + 1, size=DIV_RANDOM_PAIRS))
+    tiny = [1, 2, 3, 7] + ([-1, -2, -3, -7] if B.signed else [])
+    edges_b = [0, 0, bhi, blo if B.signed else 1, *tiny]
+    edges_a = [ahi, alo, 1, ahi // 3, alo // 5 if A.signed else ahi // 5, -1 if A.signed else 2, 0, ahi]
+    for x in edges_a:
+        for y in edges_b:
+            sa.append(x)
+            sb.append(y)
+    fa, fb = 2.0 ** -(A.W - A.int_bits), 2.0 ** -(B.W - B.int_bits)
+    return [int(v) * fa for v in sa], [int(v) * fb for v in sb]
+
+
+def div_cases() -> list[dict]:
+    """Division cases: exact quotient format (no rounding) for five format pairs, including the
+    CG wide references (r^H r / p^H A p, r'^H r' / r^H r), and a narrow alpha-like target in all
+    four (Q, O) modes, where tiny divisors force overflow so WRAP and SAT differ."""
+    cases: list[dict] = []
+    exact = [
+        ("div_s8_4", FixedConfig("s8_4", 8, 4), FixedConfig("s8_4", 8, 4), 11),
+        ("div_s16_6_by_s12_3", FixedConfig("s16_6", 16, 6), FixedConfig("s12_3", 12, 3), 12),
+        ("div_u8_4", FixedConfig("u8_4", 8, 4, False), FixedConfig("u8_4", 8, 4, False), 13),
+        ("div_rz_by_ps_wide", FixedConfig("s33_9", 33, 9), FixedConfig("s34_10", 34, 10), 14),
+        ("div_rz_by_rz_wide", FixedConfig("s33_9", 33, 9), FixedConfig("s33_9", 33, 9), 15),
+    ]
+    for name, A, B, seed in exact:
+        va, vb = _div_operands(A, B, seed)
+        a, b = from_real(va, A.fixed_cls), from_real(vb, B.fixed_cls)
+        q = div(a, b)
+        qf = q.element_type
+        cases.append(_case(
+            name,
+            render_div(A.cpp_type, A.W, B.cpp_type, B.W, qf.cpp_type, qf.bitwidth),
+            _bits_text(a, A.W), _bits_text(b, B.W), _expected(q, qf.bitwidth)))
+    # alpha-like: a widened dividend over a scalar divisor, quantized to a narrow target.
+    A, B = FixedConfig("s20_9", 20, 9), FixedConfig("s16_10", 16, 10)
+    va, vb = _div_operands(A, B, 16)
+    a, b = from_real(va, A.fixed_cls), from_real(vb, B.fixed_cls)
+    q = div(a, b)
+    for qm in (QMode.AP_TRN, QMode.AP_RND):
+        for om in (OMode.AP_WRAP, OMode.AP_SAT):
+            target = FixedField.specialize(12, 5, q_mode=qm, o_mode=om)
+            pyq = quantize(q, target)
+            cases.append(_case(
+                f"div_s20_9_by_s16_10_to_s12_5_{qm.value[3:].lower()}_{om.value[3:].lower()}",
+                render_div(A.cpp_type, A.W, B.cpp_type, B.W, target.cpp_type, target.bitwidth),
+                _bits_text(a, A.W), _bits_text(b, B.W), _expected(pyq, target.bitwidth)))
     return cases
 
 

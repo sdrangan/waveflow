@@ -709,6 +709,309 @@ def test_the_rf_guide_names_the_part_its_examples_target():
 
 
 # ---------------------------------------------------------------------------
+# guide/linalg/systolic.md — the cost model's measured accuracy and the limits it quotes
+# ---------------------------------------------------------------------------
+#
+# The page's accuracy table is the evidence for a cost model a reader will price designs with, so it
+# is read back cell by cell from the tables the calibration study committed
+# (examples/mimo_cg/paper_data/), not from its build records, which are not committed.
+
+_LINALG_DATA = REPO / "examples" / "mimo_cg" / "paper_data"
+
+
+def _linalg_rows(name: str) -> list:
+    import csv
+
+    with (_LINALG_DATA / name).open(encoding="utf-8") as f:
+        return list(csv.DictReader(line for line in f if not line.startswith("#")))
+
+
+def _linalg_metrics() -> dict:
+    return {r["metric"]: r["value"] for r in _linalg_rows("linalg_validation_metrics_v2.csv")}
+
+
+def _systolic_page() -> str:
+    """The page with its line breaks folded, so a quoted figure may wrap."""
+    return " ".join(_page("guide/linalg/systolic.md").split())
+
+
+def test_systolic_page_quotes_the_held_out_scores():
+    """Every cell of the accuracy table, and the build counts above it."""
+    m = _linalg_metrics()
+
+    def pct(key: str) -> str:
+        return f"{float(m[key]):.1f}%"
+
+    def whole(key: str) -> str:
+        return f"{float(m[key]):.0f}%"
+
+    n = int(m["n_builds"])
+    assert int(m["n_clean"]) == n, "a held-out build is not clean; the page says all were bit-exact"
+    bram_exact = round(float(m["unit_bram_exact_pct"]) * n / 100)
+    rows = [
+        f"| DSP exact | {whole('unit_dsp_exact_pct')} of builds | {whole('core_dsp_exact_pct')} of builds |",
+        (f"| block RAM exact | {pct('unit_bram_exact_pct')} of builds ({bram_exact} of {n}) "
+         f"| {whole('core_bram_exact_pct')} of builds |"),
+        (f"| LUT, mean error (worst) | {pct('unit_lut_mape_pct')} ({pct('unit_lut_max_pct')}) "
+         f"| {pct('core_lut_mape_pct')} ({pct('core_lut_max_pct')}) |"),
+        (f"| FF, mean error (worst) | {pct('unit_ff_mape_pct')} ({pct('unit_ff_max_pct')}) "
+         f"| {pct('core_ff_mape_pct')} ({pct('core_ff_max_pct')}) |"),
+        (f"| steady interval, mean error (worst), {len(_linalg_rows('linalg_validation_cycles_v2.csv'))} "
+         f"job shapes | {pct('interval_mape_pct')} ({pct('interval_max_pct')}) | |"),
+        (f"| rejected requests back to back, mean error (worst) | {pct('reject_mape_pct')} "
+         f"({pct('reject_max_pct')}) | |"),
+    ]
+    text = _systolic_page()
+    for row in rows:
+        assert row in text, f"systolic.md's accuracy table no longer has the row {row!r}"
+    assert f"(worst held-out error {pct('core_lut_max_pct')})" in text
+
+    roles = [r["role"] for r in _linalg_rows("linalg_builds.csv")]
+    n_cal = sum(r in ("fit", "holdout", "fit2") for r in roles)
+    assert f"**{n_cal} builds**" in text and f"**{roles.count('holdout2')} held-out builds**" in text
+
+
+def test_systolic_page_quotes_the_measured_centre_build():
+    """The example's configuration as measured: the unit's resources and its full-size interval."""
+    build = "su_m8_k8_n32_r4_c8_l4_w12_f4_b64"
+    unit = next(r for r in _linalg_rows("linalg_modules.csv")
+                if r["build"] == build and r["what"] == "unit")
+    full = next(r for r in _linalg_rows("linalg_cycles.csv")
+                if r["build"] == build and r["op"] == "1" and (r["m"], r["k"], r["n"]) == ("8", "8", "32"))
+    want = (f"{int(unit['lut']):,} LUT, {int(unit['ff']):,} FF, {unit['dsp']} DSP and {unit['bram']} "
+            f"block RAM, and {full['interval']} cycles per `8 × 8 × 32` message")
+    assert want in _systolic_page(), f"systolic.md no longer quotes the measured centre build: {want!r}"
+
+
+def test_systolic_page_quotes_the_isolated_rejections_and_the_run_they_spoil():
+    """A rejected request alone between served jobs: one reply gap whatever its length, and the
+    recorded run whose prediction it spoils."""
+    import itertools
+
+    rows = _linalg_rows("linalg_unit_7_4_cycles.csv")
+    gaps = {int(cur["reply_cycle"]) - int(prev["reply_cycle"])
+            for prev, cur in itertools.pairwise(rows)
+            if prev["run"] == cur["run"] and cur["status"] != "OK"}
+    assert len(gaps) == 1, f"the isolated rejections no longer take one time: {sorted(gaps)}"
+    m = _linalg_metrics()
+    centre = [r for r in rows if r["run"] == "centre"]
+    words = {4: "four", 10: "ten"}
+    text = _systolic_page()
+    assert f"every such reply came {gaps.pop()} cycles after the previous one" in text
+    assert (f"one recorded run of {words[len(centre)]} jobs, "
+            f"{words[sum(r['status'] != 'OK' for r in centre)]} of them rejected, was predicted at "
+            f"{float(m['run_7_4.centre.predicted']):,.0f} cycles against "
+            f"{int(m['run_7_4.centre.measured']):,} measured") in text
+
+
+def test_systolic_page_names_the_block_ram_misses_and_their_buffers():
+    """The two held-out block RAM misses: which builds, and the buffer the rule over-counts."""
+    from waveflow.linalg import cost
+    from waveflow.linalg.systolic import SystolicUnit
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.fixputils import Format, OMode, QMode
+
+    misses = [r["build"] for r in _linalg_rows("linalg_validation_v2.csv")
+              if int(r["unit_bram"]) != round(float(r["unit_bram_pred"]))]
+    assert len(misses) == 2, f"the page explains two block RAM misses, the table has {misses}"
+    bits, counted = [], []
+    for name in misses:
+        p = dict(re.findall(r"_([a-z])(\d+)", name))
+        assert (p["m"], p["k"], p["b"]) == ("4", "4", "32"), f"{name} is not the case the page names"
+
+        def reg(W: int, I: int) -> Format:
+            return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+        W = int(p["w"])
+        u = SystolicUnit(name="u", sim=Simulation(), Mmax=4, Kmax=4, Nmax=int(p["n"]), R=int(p["r"]),
+                         C=int(p["c"]), L=int(p["l"]), form=int(p["f"]), word_bits=32,
+                         a=reg(W, 3), b=reg(W, 4), c=reg(W, 5))
+        a_buf = next(mem for mem in cost.channel_memories(u) if mem.name == "a_blk")
+        bits.append(a_buf.banks * a_buf.depth * a_buf.elem_bits)
+        counted.append(cost.buffer_blocks(a_buf.depth, a_buf.elem_bits, a_buf.banks, 32, True))
+    text = _systolic_page()
+    assert f"({bits[0]} and {bits[1]} bits in all)" in text or f"({bits[1]} and {bits[0]} bits in all)" in text
+    assert (f"counts {counted[0]} and {counted[1]} block RAMs" in text
+            or f"counts {counted[1]} and {counted[0]} block RAMs" in text)
+
+
+def test_systolic_page_quotes_the_first_round_and_how_the_builds_were_chosen():
+    """The first model's held-out misses, and the three groups the 61 calibration builds came from."""
+    v1 = {r["metric"]: r["value"] for r in _linalg_rows("linalg_validation_metrics.csv")}
+    n = int(v1["n_builds"])
+    exact = round(float(v1["unit_bram_exact_pct"]) * n / 100)
+    roles = [r["role"] for r in _linalg_rows("linalg_builds.csv")]
+    text = _systolic_page()
+    assert (f"block RAM exact on {exact} of {n} units, core LUT error "
+            f"{float(v1['core_lut_mape_pct']):.1f}%") in text
+    assert (f"**{len(roles) - roles.count('holdout2')} builds**: {roles.count('fit')} by rule, the "
+            f"first round's {roles.count('holdout')} held-out builds, and {roles.count('fit2')} more "
+            "by rule") in text
+
+
+def test_systolic_page_quotes_the_model_figures_it_states_in_prose():
+    """Figures the prose states outside the example's output: pysim's share against the memory-fed
+    sum for the example's job, the adapters' block RAM, and the calibrated range."""
+    import json
+
+    from examples.mimo_cg.hw.linalg_cal import MAX_PES, VALUES
+    from waveflow.linalg import cost
+    from waveflow.linalg.systolic import MatmulOp, SystolicUnit
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.fixputils import Format, OMode, QMode
+
+    def reg(W: int, I: int) -> Format:
+        return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+    u = SystolicUnit(name="mm", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32, R=4, C=8, L=4, form=4,
+                     word_bits=64, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+    coef = cost.message_model()
+    share = cost.core_interval(coef, 8, 8, 32, L=4, R=4, C=8)
+    total = cost.message_interval(coef, cost.message_features(u, MatmulOp.MUL, 8, 8, 32))
+    text = _systolic_page()
+    assert (f"{round(share)} cycles for the job of the example, where the memory-fed sum is "
+            f"{round(total)}") in text
+
+    chan = json.loads((cost.platform_dir() / "models" / cost.CHANNELS / "params.json")
+                      .read_text(encoding="utf-8"))["adapters_bram"]
+    assert f"the `m_axi` adapters: {chan['64']} with 64-bit words, {chan['32']} with 32-bit" in text
+
+    def values(key: str) -> str:
+        return "{" + ", ".join(str(v) for v in VALUES[key]) + "}"
+
+    assert VALUES["M"] == VALUES["K"]
+    for phrase in (f"`Mmax` and `Kmax` in {values('M')}", f"`Nmax` in {values('N')}",
+                   f"`R` in {values('R')}", f"`C` in {values('C')} with `R·C` ≤ {MAX_PES}",
+                   f"`L` in {values('L')}", f"`W` in {values('W')}"):
+        assert phrase in text, f"systolic.md no longer states the calibrated range as {phrase!r}"
+
+
+def test_systolic_page_quotes_the_synthesis_timing_of_every_build():
+    rows = _linalg_rows("linalg_builds.csv")
+    ests = sorted({r["est_ns"] for r in rows})
+    assert all(float(e) <= 4.0 for e in ests)
+    assert (f"Every one of the {len(rows)} builds met 4 ns in synthesis (estimated {' or '.join(ests)} ns"
+            in _systolic_page())
+
+
+# ---------------------------------------------------------------------------
+# guide/linalg/cg_vector.md — the CG unit's cost model, measured runs and limits
+# ---------------------------------------------------------------------------
+
+
+def _cg_page() -> str:
+    return " ".join(_page("guide/linalg/cg_vector.md").split())
+
+
+def _cg_metrics() -> dict:
+    return {r["metric"]: r["value"] for r in _linalg_rows("cg_validation_metrics.csv")}
+
+
+def test_cg_page_quotes_the_held_out_scores():
+    """Every cell of the accuracy table, the build counts, and the rejection figures."""
+    m = _cg_metrics()
+
+    def pct(key: str) -> str:
+        return f"{float(m[key]):.1f}%"
+
+    def whole(key: str) -> str:
+        return f"{float(m[key]):.0f}%"
+
+    assert int(m["n_clean"]) == int(m["n_builds"])
+    rows = [
+        f"| DSP exact | {whole('unit_dsp_exact_pct')} of builds | {whole('core_dsp_exact_pct')} of builds |",
+        f"| block RAM exact | {whole('unit_bram_exact_pct')} of builds | {whole('core_bram_exact_pct')} of builds |",
+        (f"| LUT, mean error (worst) | {pct('unit_lut_mape_pct')} ({pct('unit_lut_max_pct')}) "
+         f"| {pct('core_lut_mape_pct')} ({pct('core_lut_max_pct')}) |"),
+        (f"| FF, mean error (worst) | {pct('unit_ff_mape_pct')} ({pct('unit_ff_max_pct')}) "
+         f"| {pct('core_ff_mape_pct')} ({pct('core_ff_max_pct')}) |"),
+        (f"| served intervals, mean error (worst) | {pct('interval_mape_pct')} "
+         f"({pct('interval_max_pct')}) | |"),
+    ]
+    text = _cg_page()
+    for row in rows:
+        assert row in text, f"cg_vector.md's accuracy table no longer has the row {row!r}"
+    roles = [r["role"] for r in _linalg_rows("cg_builds.csv")]
+    assert f"**{roles.count('fit')} builds**" in text
+    assert f"**{roles.count('holdout')} held-out builds**" in text
+    after_reject = (f"off by {float(m['reject_after_reject_mape_pct']):.0f}% on average and "
+                    f"{float(m['reject_after_reject_max_pct']):.0f}% at worst")
+    assert after_reject in text
+    assert f"a rejection was off by {pct('reject_after_served_mape_pct')} on average" in text
+
+
+def test_cg_page_quotes_the_step_8_3_runs():
+    m = _cg_metrics()
+    c = "run_8_3.centre"
+    text = _cg_page()
+    assert (f"centre {float(m[c + '.predicted']):,.1f} cycles against {int(m[c + '.measured']):,} "
+            f"measured ({float(m[c + '.ape_pct']):.1f}%)") in text
+    for name in ("smallest", "stress"):
+        assert f"{name} {float(m[f'run_8_3.{name}.ape_pct']):.1f}%" in text
+    lo, hi = float(m["first_message.over_steady_min"]), float(m["first_message.over_steady_max"])
+    assert f"it came {lo:.0f} to {hi:.0f} cycles after the model's steady `START` interval" in text
+
+
+def test_cg_page_quotes_the_measured_centre_build():
+    build = "cg_k8_n32_l4_w12_g8_b64"
+    unit = next(r for r in _linalg_rows("cg_modules.csv")
+                if r["build"] == build and r["what"] == "unit")
+    steps = [int(r["interval"]) for r in _linalg_rows("cg_cycles.csv")
+             if r["build"] == build and r["op"] == "2" and r["status"] == "OK"
+             and r["prev_status"] == "OK" and (r["k"], r["n"]) == ("8", "32")]
+    want = (f"{int(unit['lut']):,} LUT, {int(unit['ff']):,} FF, {unit['dsp']} DSP and {unit['bram']} "
+            f"block RAM, and its `8 × 32` steps came {min(steps):,} to {max(steps):,} cycles apart")
+    assert want in _cg_page(), f"cg_vector.md no longer quotes the measured centre build: {want!r}"
+
+
+def test_cg_page_quotes_the_figures_it_states_in_prose():
+    """pysim's share against the memory-fed sum, the adapters, the calibrated range, the synthesis
+    timing and the golden vectors."""
+    import json
+
+    from examples.mimo_cg.hw.cg_cal import VALUES
+    from waveflow.linalg import cg, cg_cost, cost
+    from waveflow.linalg.cg_vector import CgOp, CgVectorUnit
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.fixputils import Format, OMode, QMode
+
+    def reg(W: int, I: int) -> Format:
+        return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+    f = cg.CgFormats(A=reg(12, 3), B=reg(12, 4), P=reg(12, 4), R=reg(12, 4), S=reg(12, 5),
+                     X=reg(12, 3), ps=reg(20, 10), rz=reg(20, 9), alpha=reg(12, 5),
+                     beta=reg(12, 3), g_div=6)
+    u = CgVectorUnit(name="cg", sim=Simulation(), Kmax=8, Nmax=32, nitmax=8, L=4, formats=f)
+    coef = cg_cost.message_model()
+    share = cg_cost.core_interval(coef, CgOp.STEP, 8, 32, L=4, formats=f)
+    total = cg_cost.message_interval(coef, cg_cost.message_features(u, CgOp.STEP, 8, 32))
+    text = _cg_page()
+    assert (f"{round(share):,} cycles per step for the job of the example, where the memory-fed sum "
+            f"is {round(total):,}") in text
+
+    chan = json.loads((cost.platform_dir() / "models" / cg_cost.CHANNELS / "params.json")
+                      .read_text(encoding="utf-8"))["adapters_bram"]
+    assert f"the `m_axi` adapters: {chan['64']} with 64-bit words, {chan['32']} with 32-bit" in text
+
+    def values(key: str) -> str:
+        return "{" + ", ".join(str(v) for v in VALUES[key]) + "}"
+
+    for phrase in (f"`Kmax` in {values('K')}", f"`Nmax` in {values('N')}", f"`L` in {values('L')}",
+                   f"`W` in {values('W')}", f"`g` in {values('g')}"):
+        assert phrase in text, f"cg_vector.md no longer states the calibrated range as {phrase!r}"
+
+    builds = _linalg_rows("cg_builds.csv")
+    ests = sorted({r["est_ns"] for r in builds})
+    assert all(float(e) <= 4.0 for e in ests)
+    assert f"Every one of the {len(builds)} builds met 4 ns in synthesis (estimated {' or '.join(ests)} ns" in text
+
+    with np.load(REPO / "tests" / "linalg" / "data" / "cg_golden.npz", allow_pickle=False) as z:
+        meta = json.loads(str(z["meta"]))
+    assert f"{len(meta['cases'])} golden cases" in text
+    assert f"{len(meta['sets'])} format sets" in text
+
+
+# ---------------------------------------------------------------------------
 # The guard on the guard
 # ---------------------------------------------------------------------------
 

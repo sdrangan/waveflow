@@ -1,0 +1,14 @@
+# mimo_cg migration_finalists: numpy=2.5.3, base_seed=20260930, tool=Xilinx Vivado v.2024.1, hls=vitis_hls 2024.1, part=xczu48dr-ffvg1517-2-e, period_ns=4, flow=export_design -flow impl
+name,build,old,nit,csynth_lut,impl_lut,csynth_ff,impl_ff,csynth_dsp,impl_dsp,csynth_bram,impl_bram,rtl_job,bit_exact,csynth_est_ns,cp_post_impl_ns,timing_met,impl_seconds,tool
+k4_loose_guard,mig_fin_det_k4_l1_r1_c4_m3_w12g4_d32_s3_q2,fin_det_k4_l1_r1_c4_m3_w12g4_d32_s3_q2,2,14903,5676,9766,7614,27,31,15,10,8993,1,3.392000e+00,2.867000e+00,1,5.277000e+02,Xilinx Vivado v.2024.1
+k4_loose_no_guard,mig_fin_det_k4_l1_r1_c4_m3_w14g0_d32_s3_q2,fin_det_k4_l1_r1_c4_m3_w14g0_d32_s3_q2,4,14864,5785,9866,7720,27,31,15,10,16459,1,3.392000e+00,3.097000e+00,1,4.270000e+02,Xilinx Vivado v.2024.1
+k4_tight_guard,mig_fin_det_k4_l8_r4_c16_m3_w12g4_d32_s3_q2,fin_det_k4_l8_r4_c16_m3_w12g4_d32_s3_q2,2,55102,21670,35332,24147,291,323,34,2,1213,1,3.392000e+00,3.384000e+00,1,1.118100e+03,Xilinx Vivado v.2024.1
+k4_tight_no_guard,mig_fin_det_k4_l8_r4_c16_m3_w16g0_d32_s2_q2,fin_det_k4_l8_r4_c16_m3_w16g0_d32_s2_q2,2,60064,22753,42085,28356,291,323,44,2,1201,1,3.392000e+00,3.685000e+00,1,1.284800e+03,Xilinx Vivado v.2024.1
+k8_loose_guard,mig_fin_det_k8_l1_r1_c4_m3_w10g8_d32_s2_q2,fin_det_k8_l1_r1_c4_m3_w10g8_d32_s2_q2,3,16067,6146,9800,7584,20,31,15,10,18815,1,3.392000e+00,2.793000e+00,1,5.865000e+02,Xilinx Vivado v.2024.1
+k8_loose_no_guard,mig_fin_det_k8_l1_r1_c4_m3_w14g0_d32_s2_q2,fin_det_k8_l1_r1_c4_m3_w14g0_d32_s2_q2,4,15684,6473,10025,7881,27,31,15,10,23019,1,3.392000e+00,2.972000e+00,1,6.104000e+02,Xilinx Vivado v.2024.1
+k8_tight_guard,mig_fin_det_k8_l16_r2_c16_m3_w12g4_d32_s2_q2,fin_det_k8_l16_r2_c16_m3_w12g4_d32_s2_q2,3,82679,28528,51251,31208,291,355,59,2,1901,1,3.392000e+00,3.867000e+00,1,1.460400e+03,Xilinx Vivado v.2024.1
+k8_tight_no_guard,mig_fin_det_k8_l16_r4_c16_m3_w14g0_d32_s2_q2,fin_det_k8_l16_r4_c16_m3_w14g0_d32_s2_q2,4,89572,35234,60990,38708,387,451,69,2,1881,1,3.392000e+00,3.799000e+00,1,1.611400e+03,Xilinx Vivado v.2024.1
+k16_loose_guard,mig_fin_det_k16_l1_r1_c4_m3_w12g4_d32_s2_q2,fin_det_k16_l1_r1_c4_m3_w12g4_d32_s2_q2,4,17011,6158,10089,7914,27,31,27,18,40763,1,3.392000e+00,2.686000e+00,1,6.152000e+02,Xilinx Vivado v.2024.1
+k16_loose_no_guard,mig_fin_det_k16_l1_r1_c4_m3_w16g0_d32_s2_q2,fin_det_k16_l1_r1_c4_m3_w16g0_d32_s2_q2,4,17161,6475,10553,8232,27,31,27,18,40475,1,3.392000e+00,2.758000e+00,1,6.559000e+02,Xilinx Vivado v.2024.1
+k16_tight_guard,mig_fin_det_k16_l16_r4_c16_m3_w12g4_d32_s2_q2,fin_det_k16_l16_r4_c16_m3_w12g4_d32_s2_q2,4,93003,32473,60456,38726,387,451,59,46,3253,1,3.392000e+00,3.794000e+00,1,1.662200e+03,Xilinx Vivado v.2024.1
+k16_tight_no_guard,mig_fin_det_k16_l16_r4_c16_m3_w16g0_d32_s2_q2,fin_det_k16_l16_r4_c16_m3_w16g0_d32_s2_q2,4,103440,35399,72719,45489,387,451,79,62,3243,1,3.392000e+00,3.715000e+00,1,1.911700e+03,Xilinx Vivado v.2024.1

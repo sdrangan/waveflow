@@ -1,0 +1,8 @@
+# mimo_cg holdout_supplement: numpy=2.5.3, base_seed=20260930, stream=91
+build,top,role,stratum,K,L,R,C,cmul,W,g_s,mem_dw,sob_depth,cmd_depth
+vec_k16_l1_w14g8,vec,supplement,vec: K = 16,16,1,16,4,4,14,8,64,2,2
+vec_k16_l8_w14g0,vec,supplement,vec: K = 16,16,8,16,8,4,14,0,64,2,2
+mm_k16_r2_c32_m4_w14_l16,mm,supplement,mm: 16 lanes,16,16,2,32,4,14,8,64,2,2
+mm_k16_r8_c4_m4_w16_l1,mm,supplement,mm: R >= 8,16,1,8,4,4,16,8,64,2,2
+det_k16_l16_r8_c16_m3_w10g0_d32_s3_q2,det,supplement,"det: K = 16, 16 lanes",16,16,8,16,3,10,0,32,3,2
+det_k16_l2_r16_c16_m4_w8g0_d32_s4_q4,det,supplement,"det: K = 16, R >= 8",16,2,16,16,4,8,0,32,4,4

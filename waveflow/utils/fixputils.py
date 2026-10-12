@@ -93,8 +93,10 @@ def truncate(
     mask = (1 << wid) - 1
     y = (arr.astype(np.int64) & mask)
     if signed:
+        # Sign-extend as (y ^ s) - s: every intermediate stays inside int64, even at
+        # wid == 63, where the textbook ``y - (1 << wid)`` overflows.
         signbit = 1 << (wid - 1)
-        y = np.where(y >= signbit, y - (1 << wid), y)
+        y = (y ^ signbit) - signbit
     return y
 
 
@@ -207,6 +209,20 @@ def shift_format(a: Format, n: int) -> Format:
     return Format(a.W, a.int_bits + n, a.signed, a.q_mode, a.o_mode)
 
 
+def div_format(a: Format, b: Format) -> Format:
+    """``ap_fixed`` division: ``<Sb + Wa + max(Fb, 0), Sb + Ia + Fb>``, signed if either.
+
+    The rule of Vitis 2024.1 ``ap_fixed_base.h`` (``RType::div``, non-``__SC_COMPATIBLE__``;
+    ``Sb`` = 1 for a signed divisor).  The quotient keeps the **dividend's** fraction bits
+    (``F = Fa`` for ``Fb >= 0``).  For a more precise quotient, widen the dividend first:
+    quantize it to more fraction bits, which is exact.
+    """
+    _require_same_sign(a, b)
+    sb = 1 if b.signed else 0
+    fb = b.frac_bits
+    return Format(sb + a.W + max(fb, 0), sb + a.int_bits + fb, a.signed or b.signed)
+
+
 def sum_format(a: Format, n_terms: int) -> Format:
     """Reduction of ``n_terms`` values: grow integer bits by ``ceil(log2(n_terms))``."""
     if n_terms < 1:
@@ -235,6 +251,40 @@ def sub(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format
     aa = np.asarray(sa).astype(r.dtype) << (r.frac_bits - a.frac_bits)
     bb = np.asarray(sb).astype(r.dtype) << (r.frac_bits - b.frac_bits)
     return (aa - bb).astype(r.dtype), r
+
+
+def div(sa: NDArray, a: Format, sb: NDArray, b: Format) -> tuple[NDArray, Format]:
+    """``ap_fixed`` division with a zero guard.
+
+    Vitis computes ``(a << max(Fb, 0)) / b`` as an integer division that truncates toward
+    zero (``sdiv``/``udiv`` in ``ap_fixed_base.h``); the result has :func:`div_format`.
+    ``ap_fixed`` leaves ``x / 0`` undefined, so Waveflow defines it as **0**: generated or
+    hand-written C++ must guard the same way, ``(b == 0) ? 0 : a / b``.
+
+    One Vitis C-simulation detail is reproduced exactly: the integer division runs at the
+    shifted dividend's width ``max(Wa + max(Fb, 0), Wb)``, not at the wider result type, so
+    the single overflowing case, the most negative dividend over a divisor of −1 LSB, wraps
+    back to the most negative value.  This is C-simulation behaviour: the synthesis branch of
+    ``ap_fixed_base.h`` leaves the case undefined, so RTL may differ.  (It cannot arise in the
+    CG solve, whose dividends ``rᴴr`` are never negative.)
+    """
+    r = div_format(a, b)
+    num = np.asarray(sa).astype(r.dtype) << max(b.frac_bits, 0)
+    den = np.asarray(sb).astype(r.dtype)
+    num, den = np.broadcast_arrays(num, den)
+    zero = den == 0
+    safe = np.where(zero, 1, den)
+    if r.signed:
+        # Truncation toward zero from floor division plus a remainder test: no abs(), which
+        # overflows at -2**63 (a 64-bit signed divisor).  |num| <= 2**62, so neither
+        # floor_divide nor remainder can overflow.
+        floor = np.floor_divide(num, safe)
+        inexact = np.remainder(num, safe) != 0
+        quot = floor + (inexact & ((num < 0) != (safe < 0)))
+        quot = truncate(quot, max(a.W + max(b.frac_bits, 0), b.W), signed=True)
+    else:
+        quot = num // safe
+    return np.where(zero, 0, quot).astype(r.dtype), r
 
 
 def shift(sa: NDArray, a: Format, n: int) -> tuple[NDArray, Format]:

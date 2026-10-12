@@ -36,7 +36,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from waveflow.utils.fixputils import (
-    Format, add, add_format, mult, mult_format, sub, sub_format,
+    Format, add, add_format, mult, mult_format, quantize, sub, sub_format,
 )
 
 
@@ -133,6 +133,29 @@ def cmult(va: NDArray, a: Format, vb: NDArray, b: Format) -> tuple[NDArray, Form
     re, r = sub(p_rr, p, p_ii, p)       # ar*br - ai*bi  -> sub_format(P, P)
     im, _ = add(p_ri, p, p_ir, p)       # ar*bi + ai*br  -> add_format(P, P) (== r, signed)
     return make_complex(re, im, r), r
+
+
+def cmult3(va: NDArray, a: Format, vb: NDArray, b: Format) -> tuple[NDArray, Format]:
+    """The same exact product as :func:`cmult`, in the three-multiply (Gauss) form.
+
+    ``k1 = br(ar + ai)``, ``k2 = ar(bi - br)``, ``k3 = ai(br + bi)``; ``re = k1 - k3``,
+    ``im = k1 + k2``.  Every term is exact, so the values equal :func:`cmult`'s, and they are
+    returned in :func:`cmult_format`, which holds them exactly -- the twin of ``cmult3`` in
+    ``complex_utils.hpp``."""
+    _require_signed(a, "multiply")
+    _require_signed(b, "multiply")
+    ar, ai = re_of(va), im_of(va)
+    br, bi = re_of(vb), im_of(vb)
+    s1, f1 = add(ar, a, ai, a)          # ar + ai
+    k1, g1 = mult(br, b, s1, f1)        # br (ar + ai)
+    s2, f2 = sub(bi, b, br, b)          # bi - br
+    k2, g2 = mult(ar, a, s2, f2)        # ar (bi - br)
+    s3, f3 = add(br, b, bi, b)          # br + bi
+    k3, g3 = mult(ai, a, s3, f3)        # ai (br + bi)
+    re, fr = sub(k1, g1, k3, g3)
+    im, fi = add(k1, g1, k2, g2)
+    r = cmult_format(a, b)
+    return make_complex(quantize(re, fr, r), quantize(im, fi, r), r), r
 
 
 def conj(va: NDArray, a: Format) -> tuple[NDArray, Format]:
