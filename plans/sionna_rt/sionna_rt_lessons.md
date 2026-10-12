@@ -167,3 +167,18 @@ keeping. Newest section last. Every measured number names its tool versions.
   Rebuild each phrase from its source, as the example page already did.
 - **A Must in the requirements needs its own test, even when it obviously works.** Tracing a user's
   XML scene was only ever hashed, never traced; the gate costs a second.
+
+## Closing (2026-10-12)
+
+- **What made an unfamiliar library at a new major version tractable:** a CPU spike before any code
+  (variant, units, the amplitude convention, `normalize_delays`), a design note the user approved,
+  and closed-form references (Friis, the image method, P.2040, v·cos θ/λ) rather than Sionna checked
+  against itself.
+- **What the milestone reviews were worth:** every one found real defects (wrong numbers in the log,
+  a weak test, a false description, an unsupported Python), and two reviewers once agreed on a wrong
+  convention. Independent review catches what the doer cannot see; the repo's own lints catch what
+  a reviewer assumes.
+- **Optional dependencies want a blocker, not a skip.** Running every non-Sionna test with the imports
+  blocked, in a subprocess that refuses skips, kept "Sionna is optional" true across 22 steps.
+- **Declare latency, never fit it.** The sounder's 384 samples is a sum of what the nodes declare;
+  the test that only the declared latency passes is what makes the tap comparison mean something.

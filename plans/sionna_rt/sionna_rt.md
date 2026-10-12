@@ -1,6 +1,6 @@
 # Plan: a ray-traced RF environment (Sionna RT) for Waveflow
 
-**Status:** In progress (M6 complete 2026-10-12; step 22 next)
+**Status:** Done (2026-10-12)
 **Complexity:** L3 Complex. A new framework package, an example, docs and tests; open design choices; an unfamiliar library at a new major version, run CPU-only. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
 **Created:** 2026-10-12 · **Updated:** 2026-10-12 (revised after the independent plan review)
 **Plan file:** `plans/sionna_rt/sionna_rt.md` · **Lessons learned:** `plans/sionna_rt/sionna_rt_lessons.md` (created at step 1)
@@ -132,17 +132,17 @@ approval after the plan review the same day. A change needs the user's
 approval, recorded in §14. "Relative error" means the norm-wise
 ‖x − y‖₂ / ‖y‖₂ over the compared samples.
 
-- [ ] **AC1 Free space.** An empty scene (`load_scene()` with no file) with one transmitter and one receiver, both arrays a single `iso` element with `V` polarization, at 3.5 GHz and 100 m apart, gives exactly one path. With absolute delays (`normalize_delays=False`), its delay equals d/c within 1 ps and its power gain |a|² equals Friis, (λ/4πd)², within 0.01 dB. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k free_space`.
-- [ ] **AC2 Single reflector.** A scene with one finite plate of documented material and thickness (read from the scene, not assumed), with the specular point inside the plate, gives the line-of-sight path plus the specular reflection. Path count and delays match the image-method geometry within 1 ps. The reflected path's power gain matches the closed-form reference for that material within 0.5 dB, at a stated polarization (TE or TM): a perfect conductor has |R| = 1; a dielectric uses the ITU-R P.2040 slab formula at the plate's thickness. Step 2 picks the scene (built-in `simple_reflector` is metallic) and records it in §14. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k reflector`.
-- [ ] **AC3 Block continuity and accuracy.** Applying a channel block by block equals applying it to the whole signal at once with the same filter, with relative error ≤ 1e-12, for `blksize` ∈ {1, 7, 64, 1024}. With the default filter (length and window fixed in step 3), a signal whose occupied bandwidth is at most 0.8·fs/2, through one path with a sub-sample delay, matches the analytically delayed signal with error power ≤ −60 dB relative to the signal, excluding the filter's edge transients at the start and end. Verify: `pytest tests/rfenv/test_apply.py`.
-- [ ] **AC4 Doppler.** Sign convention as in Sionna's docs, f_Δ = (1/λ)(v₀ᵀk̂₀ − v_{n+1}ᵀk̂_n + Σ…): for a receiver moving at speed v, θ is the angle between its velocity and the direction back along the arriving path (−k̂_n), so an approaching receiver sees a positive shift f_D = v·cos θ / λ. A tone through a path with shift f_D comes out shifted by f_D within 0.1 Hz, continuously across blocks, measured by a least-squares fit of the unwrapped phase slope (not an FFT bin). Verify: `pytest tests/rfenv/test_apply.py -k doppler` (synthetic path) and `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k doppler` (Sionna's `doppler` for a traced path equals v·cos θ / λ within 0.1 Hz).
-- [ ] **AC5 Cross-check with Sionna.** For the same traced paths, with absolute delays on both sides (`normalize_delays=False`), `rfenv.taps()` matches Sionna's `Paths.taps()` (same bandwidth, sampling frequency and lag range) with relative error ≤ 1e-3, a bound set by Sionna's single-precision phase at about 7,000 rad of carrier phase. Run for a SISO case and a 1×4 receive-array case. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k taps`.
-- [ ] **AC6 Source on the interface, and XSI replay.** `RtSignalSource` feeds an `Rfdc` ADC (I/Q word) in a pysim graph for at least 64 blocks with clean counters (`RFSampIF.assert_clean(startup_blocks=…)` with the declared startup). In the XSI run of the same scenario, with the source replaced by `RfFileSource` replaying the rendered bundle (the same bytes pysim renders), **the first data block that reaches the sink is bit-identical to pysim's first data block, and every word that reaches the sink is bit-identical to the matching word of the ADC-quantized source, in order**, the source words skipped between them being no more than the ADC dropped (*restated at step 18 with the user's approval*: the pass-through drops ADC words at RTL by design, so the later data blocks are spliced across source blocks and cannot match block for block). The startup transient, the drops and the data-block count are asserted against stated expectations, the way `tests/examples/test_rf_loopback_xsi.py` gates the loopback. Verify: `pytest tests/rfenv/test_nodes.py -k source` and `pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py` (0 skipped).
-- [ ] **AC7 Channel sounder.** In `examples/rt_sounder`, with noise off and the converter level set by `gain_db` so the strongest tap sits at −10 dBFS, the circular correlation of the capture with the known Zadoff-Chu sequence, after subtracting the declared loop latency (the converter hop plus `RtChannel.latency_samp`, D = `filt_len`/2, which *is* the filter's group delay, counted once; summed as `rf_shot_loopback`'s `loop_blk_latency` does; wording corrected at the M4 review), is compared with `rfenv.taps(pathset, bandwidth = sample rate)` at integer lags. For every tap stronger than −30 dB relative to the strongest: the same lag, and |ĥ|² within 0.5 dB. Verify: `pytest tests/examples/test_rt_sounder.py -k channel_mode` (*selector corrected at the M5 review: `-k sounder` matched the module name and selected the whole file*).
-- [ ] **AC8 Live mode.** On the same install (same sionna-rt, Mitsuba and Dr.Jit versions and the same CPU variant), running a node in live mode (tracing at `pre_sim`) gives the same output samples as a channel file written by that install for the same scene specification, with relative error ≤ 1e-6. Verify: `pytest -m sionna -rs tests/rfenv/test_live.py`.
-- [ ] **AC9 Install without Sionna.** With `sionna`, `mitsuba` and `drjit` imports blocked by a pytest plugin (`tests/rfenv/_block_sionna.py`), in a subprocess: `import waveflow.rfenv` works, committed channel files load, and `RtChannel` and `RtSignalSource` run in cached mode; live mode raises a message naming `pip install -e ".[sionna]"`; and **every non-`sionna` test in `tests/rfenv/` and `tests/examples/test_rt_sounder.py` passes under the blocker**. Verify: `python -m pytest -p tests.rfenv._block_sionna -m "not sionna" tests/rfenv/ tests/examples/test_rt_sounder.py` (and `tests/rfenv/test_no_sionna.py`, which runs that in a subprocess).
-- [ ] **AC10 Regression.** The fast suite shows no failures beyond the 6 recorded on 2026-10-11 (§11). `pytest -m sionna -rs` runs with 0 skipped and collects at least `WANT_SIONNA_GATES`. New files pass `ruff check` and `black --check` (black's default line length, 88; the repo has no black config); changed existing files have no more ruff findings than on `main`. Verify: the commands in §11.
-- [ ] **AC11 Docs.** The guide page `docs/guide/rf/rfenv/index.md` (`parent: RF converters`, `snippets: run`, so `tests/docs/test_doc_snippets.py` executes its snippet) and the example page `docs/examples/rt_sounder/index.md` exist and are linked. Every number on the two pages has an entry in `tests/docs/test_documented_numbers.py` tying it to a committed file or test. `CLAUDE.md` gains a `waveflow/rfenv/` bullet and its curated-example count goes from twenty to twenty-one, approved by the user. Verify: `pytest tests/docs tests/mcp/test_knowledge_corpus.py` and the user's approval in §15.
+- [x] **AC1 Free space.** An empty scene (`load_scene()` with no file) with one transmitter and one receiver, both arrays a single `iso` element with `V` polarization, at 3.5 GHz and 100 m apart, gives exactly one path. With absolute delays (`normalize_delays=False`), its delay equals d/c within 1 ps and its power gain |a|² equals Friis, (λ/4πd)², within 0.01 dB. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k free_space`.
+- [x] **AC2 Single reflector.** A scene with one finite plate of documented material and thickness (read from the scene, not assumed), with the specular point inside the plate, gives the line-of-sight path plus the specular reflection. Path count and delays match the image-method geometry within 1 ps. The reflected path's power gain matches the closed-form reference for that material within 0.5 dB, at a stated polarization (TE or TM): a perfect conductor has |R| = 1; a dielectric uses the ITU-R P.2040 slab formula at the plate's thickness. Step 2 picks the scene (built-in `simple_reflector` is metallic) and records it in §14. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k reflector`.
+- [x] **AC3 Block continuity and accuracy.** Applying a channel block by block equals applying it to the whole signal at once with the same filter, with relative error ≤ 1e-12, for `blksize` ∈ {1, 7, 64, 1024}. With the default filter (length and window fixed in step 3), a signal whose occupied bandwidth is at most 0.8·fs/2, through one path with a sub-sample delay, matches the analytically delayed signal with error power ≤ −60 dB relative to the signal, excluding the filter's edge transients at the start and end. Verify: `pytest tests/rfenv/test_apply.py`.
+- [x] **AC4 Doppler.** Sign convention as in Sionna's docs, f_Δ = (1/λ)(v₀ᵀk̂₀ − v_{n+1}ᵀk̂_n + Σ…): for a receiver moving at speed v, θ is the angle between its velocity and the direction back along the arriving path (−k̂_n), so an approaching receiver sees a positive shift f_D = v·cos θ / λ. A tone through a path with shift f_D comes out shifted by f_D within 0.1 Hz, continuously across blocks, measured by a least-squares fit of the unwrapped phase slope (not an FFT bin). Verify: `pytest tests/rfenv/test_apply.py -k doppler` (synthetic path) and `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k doppler` (Sionna's `doppler` for a traced path equals v·cos θ / λ within 0.1 Hz).
+- [x] **AC5 Cross-check with Sionna.** For the same traced paths, with absolute delays on both sides (`normalize_delays=False`), `rfenv.taps()` matches Sionna's `Paths.taps()` (same bandwidth, sampling frequency and lag range) with relative error ≤ 1e-3, a bound set by Sionna's single-precision phase at about 7,000 rad of carrier phase. Run for a SISO case and a 1×4 receive-array case. Verify: `pytest -m sionna -rs tests/rfenv/test_sionna_reference.py -k taps`.
+- [x] **AC6 Source on the interface, and XSI replay.** `RtSignalSource` feeds an `Rfdc` ADC (I/Q word) in a pysim graph for at least 64 blocks with clean counters (`RFSampIF.assert_clean(startup_blocks=…)` with the declared startup). In the XSI run of the same scenario, with the source replaced by `RfFileSource` replaying the rendered bundle (the same bytes pysim renders), **the first data block that reaches the sink is bit-identical to pysim's first data block, and every word that reaches the sink is bit-identical to the matching word of the ADC-quantized source, in order**, the source words skipped between them being no more than the ADC dropped (*restated at step 18 with the user's approval*: the pass-through drops ADC words at RTL by design, so the later data blocks are spliced across source blocks and cannot match block for block). The startup transient, the drops and the data-block count are asserted against stated expectations, the way `tests/examples/test_rf_loopback_xsi.py` gates the loopback. Verify: `pytest tests/rfenv/test_nodes.py -k source` and `pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py` (0 skipped).
+- [x] **AC7 Channel sounder.** In `examples/rt_sounder`, with noise off and the converter level set by `gain_db` so the strongest tap sits at −10 dBFS, the circular correlation of the capture with the known Zadoff-Chu sequence, after subtracting the declared loop latency (the converter hop plus `RtChannel.latency_samp`, D = `filt_len`/2, which *is* the filter's group delay, counted once; summed as `rf_shot_loopback`'s `loop_blk_latency` does; wording corrected at the M4 review), is compared with `rfenv.taps(pathset, bandwidth = sample rate)` at integer lags. For every tap stronger than −30 dB relative to the strongest: the same lag, and |ĥ|² within 0.5 dB. Verify: `pytest tests/examples/test_rt_sounder.py -k channel_mode` (*selector corrected at the M5 review: `-k sounder` matched the module name and selected the whole file*).
+- [x] **AC8 Live mode.** On the same install (same sionna-rt, Mitsuba and Dr.Jit versions and the same CPU variant), running a node in live mode (tracing at `pre_sim`) gives the same output samples as a channel file written by that install for the same scene specification, with relative error ≤ 1e-6. Verify: `pytest -m sionna -rs tests/rfenv/test_live.py`.
+- [x] **AC9 Install without Sionna.** With `sionna`, `mitsuba` and `drjit` imports blocked by a pytest plugin (`tests/rfenv/_block_sionna.py`), in a subprocess: `import waveflow.rfenv` works, committed channel files load, and `RtChannel` and `RtSignalSource` run in cached mode; live mode raises a message naming `pip install -e ".[sionna]"`; and **every non-`sionna` test in `tests/rfenv/` and `tests/examples/test_rt_sounder.py` passes under the blocker**. Verify: `python -m pytest -p tests.rfenv._block_sionna -m "not sionna" tests/rfenv/ tests/examples/test_rt_sounder.py` (and `tests/rfenv/test_no_sionna.py`, which runs that in a subprocess).
+- [x] **AC10 Regression.** The fast suite shows no failures beyond the 6 recorded on 2026-10-11 (§11). `pytest -m sionna -rs` runs with 0 skipped and collects at least `WANT_SIONNA_GATES`. New files pass `ruff check` and `black --check` (black's default line length, 88; the repo has no black config); changed existing files have no more ruff findings than on `main`. Verify: the commands in §11.
+- [x] **AC11 Docs.** The guide page `docs/guide/rf/rfenv/index.md` (`parent: RF converters`, `snippets: run`, so `tests/docs/test_doc_snippets.py` executes its snippet) and the example page `docs/examples/rt_sounder/index.md` exist and are linked. Every number on the two pages has an entry in `tests/docs/test_documented_numbers.py` tying it to a committed file or test. `CLAUDE.md` gains a `waveflow/rfenv/` bullet and its curated-example count goes from twenty to twenty-one, approved by the user. Verify: `pytest tests/docs tests/mcp/test_knowledge_corpus.py` and the user's approval in §15.
 
 ## 5. Context and sources of truth
 
@@ -313,7 +313,7 @@ approval at the time). No step is irreversible (§12).
 | 20 👁 | **Example page and registry**: `docs/examples/rt_sounder/index.md` (front matter: `title`, `parent: Examples`, `nav_order`, `example_dir: examples/rt_sounder`, `summary`); documented-number entries; `rt_sounder` in `TOC_EXAMPLES` (`tests/mcp/test_knowledge_corpus.py`); the `CLAUDE.md` bullet and the curated-example count (twenty → twenty-one). | step 19 | AC11 passes | `pytest tests/docs tests/mcp/test_knowledge_corpus.py` | commit | ☑ |
 | 21 | **Regression and close-out**: §11's regression check; review every AC with evidence. | all | AC9 and AC10 pass; every AC has evidence for §16 | §11 commands | commit | ☑ |
 | | **Milestone M6** (steps 19–21): reviewer agent on the whole branch; pause for the user. | | | | | |
-| 22 | **Completion report** (§16) and the final lessons entry; status set to *Done*, *Partially done* or *Blocked*. | all | §16 filled in | the user reads it | commit | ☐ |
+| 22 | **Completion report** (§16) and the final lessons entry; status set to *Done*, *Partially done* or *Blocked*. | all | §16 filled in | the user reads it | commit | ☑ |
 
 Milestones: M1 = steps 1–3 (environment, spike, design note) · M2 = 4–6 (NumPy core) · M3 = 7–10 (Sionna backend, references, cache) · M4 = 11–13 (nodes and live mode) · M5 = 14–18 (example and XSI) · M6 = 19–21 (docs and regression), then 22.
 
@@ -430,19 +430,128 @@ Milestones: M1 = steps 1–3 (environment, spike, design note) · M2 = 4–6 (Nu
 | 2026-10-12 | 20 | `docs/examples/rt_sounder/index.md` (*A channel sounder in a ray-traced street*; `parent: Examples`, `nav_order: 10.5`, `example_dir: examples/rt_sounder`, `summary`, `snippets: run`): the commands, the street (the path table, the cluster and the echo), channel mode (the graph, the declared latency 256 + 128, the ZC and the level; its python fence runs `main()` and the output fence is AC7's table, checked by `test_doc_snippets`), why `filt_len` is 256, source mode and the RTL replay (the drops, the gaps, the word-level gate), the files. The guide page now links it. `tests/docs/test_documented_numbers.py`: `_rt_sounder_phrases()` rebuilds every figure from its source (the committed channel file for the paths, distance, spread and lags; the example's constants; the windowed-sinc study recomputed through `ChannelApplier` on an impulse — 1.49 dB at 64, 0.125 dB at 256; the gates' `WANT_*`), checks each phrase on the page, and allows no prose number outside them; ruff findings equal `main`'s. `rt_sounder` added to `TOC_EXAMPLES` (`tests/mcp/test_knowledge_corpus.py`). `CLAUDE.md`: the `waveflow/rfenv/` bullet and the curated count twenty → twenty-one (**approved by the user**, 2026-10-12). `pytest tests/docs tests/mcp/test_knowledge_corpus.py`: 86 passed, 1 failed (the baseline `test_cpu_replay_figures_match_the_recorded_replay`) | `pytest tests/docs tests/mcp/test_knowledge_corpus.py` | — |
 | 2026-10-12 | 21 | **Regression (§11), on the final tree (`88402b25`)**, run sequentially: fast suite `-m "not vitis and not xsi and not gem5 and not sionna"` 4,981 passed, **5 failed**, 26 skipped, 8 xfailed, 1 xpassed (464.9 s) — the 5 are baseline failures (`test_cpu_replay_figures_match_the_recorded_replay`, the two `test_markov_figures` tests, `test_vitis_fft::test_generate_writes_the_build_tree`, `test_retrieval_eval::test_generated_code_is_excluded_by_default`); the sixth baseline failure, `test_usage_index::test_generated_files_are_excluded_from_usage_by_default`, now passes. **The first run found a regression of this plan's**: `tests/build/test_source_layout.py::test_no_generated_file_is_tracked`, from step 18's committed `xsi/` workspace — fixed (§14, `88402b25`, the `.gitignore` line approved). Without Sionna (`-p tests.rfenv._block_sionna -m "not sionna"` over `tests/rfenv/` and both sounder files): 160 passed, 0 skipped. `pytest -m sionna -rs`: 21 passed, 0 skipped (= `WANT_SIONNA_GATES`). `pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py`: 1 passed, 0 skipped, from a deleted `xsi/`; `rtl_staleness(rf_pass_through)` None. `pytest tests/docs tests/mcp`: 245 passed, 2 failed (both baseline). Lint: `ruff check` and `black --check` clean on `waveflow/rfenv`, `tests/rfenv`, `examples/rt_sounder` and both sounder test files; the existing Python files the plan changed (`tests/conftest.py`, `tests/docs/test_documented_numbers.py`, `tests/mcp/test_knowledge_corpus.py`) have the findings they had before it (1, 8, 1). `rf_loopback`/`rf_shot_loopback` tests (`-m "not vitis and not xsi"`): 91 passed. **AC evidence review:** AC1, AC2, AC4 (Sionna side), AC5 — step 8 (`-m sionna`, re-run here: 21 passed); AC3, AC4 (synthetic) — step 5 (in the fast suite); AC6 — steps 12, 16, 18 (pysim 64 blocks clean; the word-level RTL gate, re-run here); AC7 — step 15 (worst 0.124 dB, re-run here); AC8 — step 13 (re-run in `-m sionna`); AC9 — `test_no_sionna.py` and the blocker run here; AC10 — this entry; AC11 — steps 19 and 20 (the pages, their numbers' tests, the `CLAUDE.md` approval) | the logs in the doer's scratchpad (`m6/reg/`) | the source-layout fix (§14) |
 | 2026-10-12 | M6 review | Independent reviewer agent on the whole branch (`0f026747..0e3e33b8`): done with fixes, 0 blocking, 6 should-fix, 12 nits; every AC met by a test that enforces it (re-run: `-m sionna` 21/0 skipped, the rfenv and sounder files 180, the XSI gate, the blocker run 157, docs/corpus/layout 88 + the baseline failure). **Fixed:** S1 `trace()` used `datetime.UTC` (Python 3.11) under a 3.10 floor — now `datetime.timezone.utc`, and the plan's files pass `ruff --target-version py310`; S2 a `sionna` gate traces a user's Mitsuba XML scene (floor_wall's own file, by path) and gets the built-in's paths under its own identity — `WANT_SIONNA_GATES` 21 → 22 (pre-approved bump); S3 the guide's numbers are tied as phrases rebuilt from their sources (`_rfenv_guide_phrases`; the review's swaps 64→256, 1e-6→1e-3, 64-bit→32-bit, 0.01→0.5, 17→16 now fail); S4 the A6 and XML-identity notes; S5 an *Arrays and several devices* section (`ArraySpec`, device- then antenna-major order, pattern-major dual polarization, per-antenna power, one sequence on every antenna or an `ArrayWaveform` row each) and setup (system libLLVM, `DRJIT_LIBLLVM_PATH`, `WAVEFLOW_SIONNA_VARIANT`); S6 the single-precision limit restated (the 1e-3 is a bound; the measured agreement is far closer). Nits: N1 the package map; N2 `RtSignalSource.pre_sim` re-resolves its channel, as `RtChannel` does (test); N3 docstrings and seven black-wrapped comments; N4 noise streams differ by name; N5 the source counts blocks from zero; N6 the 64-bit beat; N7 mypy in `waveflow/rfenv` 10 → 1 (the framework's `DynParam` pattern, §14); N8 `pre_sim` refuses a waveform whose `n_ch` is not the channel's (test); N9 `CLAUDE.md` Commands gain `pytest -m sionna` and the dev-loop exclusion; N10 the M3 lesson (only the `.npz` is byte-reproducible); N11 the example page and build docstring say another tracer version retraces and rewrites the committed file; N12 noted for §16 | the reviewer's report; the re-runs in this entry's commit | — |
+| 2026-10-12 | 22 | Completion report written (§16); AC1–AC11 ticked; status *Done*; the lessons file gains its closing entry | §16 | — |
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+*Written 2026-10-12 at step 22. Status: **Done** — every acceptance criterion met; the limits below
+are scope, not shortfalls.*
 
-- **Changed:**
-- **Tested (commands and results):**
-- **Acceptance criteria:** AC1 … AC11 ✅/❌/⚠️ with evidence
-- **Decisions made:**
+- **Changed:** 52 files, +7,232 lines, at `523f3ded`; 30 commits on `feat/sionna-prod` from
+  `0f026747`, this report's included.
+  - **New package `waveflow/rfenv/`** (8 modules, about 1,900 lines). `PathSet` (the channel
+    file) and `taps`. `ChannelApplier` (each path's fractional delay as a Kaiser-windowed sinc with a
+    declared delay D = `filt_len`/2, Doppler by absolute sample index, block-size independent) and
+    `reference_apply`. Waveforms (`Tone`, `ZadoffChu`, `Pn`, `ArrayWaveform`). Noise (kTBF keyed by
+    stream, channel and chunk). `sionna_backend` (`SceneSpec` and friends, `trace`; Sionna imported
+    only inside functions). `cache` (`load_or_trace`, `TraceChannelStep`). `nodes`: `RtChannel` and
+    `RtSignalSource` on `RFSampIF` edges, cached or live; the source's XSI twin is `RfFileSource`
+    replaying `render_bundle()`.
+  - **New example `examples/rt_sounder/`.** A street canyon traced into a committed channel file;
+    channel mode (ZC → `Rfdc` DAC → `RtChannel` → ADC, AC7); source mode (`RtSignalSource` →
+    `rf_loopback`'s pass-through, pysim and RTL, AC6); `rt_sounder_build.py`, `rt_sounder_xsi.py`,
+    and the authored counters main in `src/`.
+  - **Tests.** `tests/rfenv/` (16 modules, two committed reference channels, the Sionna import
+    blocker); `tests/examples/test_rt_sounder.py` and `test_rt_sounder_xsi.py`; documented-number
+    ties in `tests/docs/test_documented_numbers.py`; `rt_sounder` in `TOC_EXAMPLES`.
+  - **Docs.** The guide page `docs/guide/rf/rfenv/index.md` (linked from the RF index and
+    `sampling.md`) and the example page `docs/examples/rt_sounder/index.md`.
+  - **Configuration.** `pyproject.toml` (the `sionna` extra and marker); `tests/conftest.py`
+    (`WANT_SIONNA_GATES` = 22, `WANT_XSI_GATES` = 186); `.gitignore` (two re-includes for channel
+    manifests, the sounder's `xsi/`); `CLAUDE.md` (the `waveflow/rfenv/` bullet, twenty-one curated
+    examples, `pytest -m sionna`).
+- **Tested (commands and results, final tree):**
+  - **Fast suite.** `pytest -m "not vitis and not xsi and not gem5 and not sionna"`: 4,981 passed at
+    step 21. The final run on `523f3ded` fails only the 5 recorded baseline tests, all environment-
+    or data-related. The sixth baseline failure passes, for a reason outside this plan (§15 step 1).
+  - **Sionna gates.** `pytest -m sionna -rs`: 22 passed, 0 skipped (= `WANT_SIONNA_GATES`).
+  - **Without Sionna.** The import blocker over `tests/rfenv/` and both sounder files: 160 passed,
+    0 skipped; `test_no_sionna.py` passes.
+  - **RTL.** `pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py`: 1 passed, 0 skipped, from a
+    deleted `xsi/`, on `rf_pass_through` RTL rebuilt with Vitis HLS 2024.1 (csynth 15.8 s) and run on
+    Vivado 2024.1 xsim. `pytest -m xsi --collect-only` counts 186.
+  - **Docs and corpus.** `pytest tests/docs tests/mcp`: only the baseline failures.
+  - **Lint.** `ruff check` (also with `--target-version py310`) and `black --check` clean on every
+    new path; the three existing Python files the plan changed keep their ruff counts (1, 8, 1).
+- **Acceptance criteria:**
+  - **AC1 ✅** Free space at 100 m: Δτ −0.007 ps (bound 1 ps), Δgain 3.7e-7 dB (bound 0.01 dB).
+    Evidence: §15 step 8; `test_sionna_reference.py`.
+  - **AC2 ✅** Plates, materials read from the scene: concrete |R|² −12.4484 dB against P.2040
+    −12.4485 dB; metal −0.0024 against −0.0024 dB (bound 0.5 dB); delays within 0.005 ps of the
+    image method. Evidence: step 8.
+  - **AC3 ✅** Block by block against the whole signal: 3.0e-16 (bound 1e-12). Sub-sample delay:
+    −86.2 / −76.5 / −86.2 dB (bound −60 dB). Evidence: step 5.
+  - **AC4 ✅** Synthetic: 2.3e-8 Hz. Sionna's Doppler: worst 3.1e-4 Hz (bound 0.1 Hz). Evidence:
+    steps 5 and 8.
+  - **AC5 ✅** `taps()` against Sionna's: SISO 4.8e-7, 1×4 2.0e-7 relative (bound 1e-3). Evidence:
+    step 8.
+  - **AC6 ✅** (restated at step 18 with the user's approval).
+    - pysim: 64 blocks into an I/Q `Rfdc` ADC, clean.
+    - RTL: the same bundle bytes; the first data block whole; every sink word the matching
+      quantized source word, in order; the exact drop pattern pinned (9 gaps, 164 words); the
+      counters equal the loopback I/Q gate's `WANT_IQ_*`.
+    - Evidence: steps 12, 16, 18 and the M5 review.
+  - **AC7 ✅** All 17 taps within 30 dB at Sionna's lags; worst 0.124 dB (bound 0.5 dB); only the
+    declared latency passes within ±256 samples. Evidence: step 15 and the M5 review.
+  - **AC8 ✅** Live mode against a file traced by the same install: bit-identical (bound 1e-6).
+    Evidence: step 13.
+  - **AC9 ✅** Under the blocker: 160 passed, 0 skipped; live mode raises the install hint.
+    Evidence: step 21.
+  - **AC10 ✅** As above. Evidence: step 21.
+  - **AC11 ✅** Both pages exist, are linked, and run their snippets. Every prose number is tied to
+    its source by phrase. `CLAUDE.md` changes approved. Evidence: steps 19 and 20 and the M6
+    review.
+- **Decisions made** (all in §14, with who decided):
+  - **Defaults.** Precomputed and cached channels with an optional live mode; static scenes plus
+    Doppler; SISO first, arrays supported; complex baseband in √W; absolute delays by default;
+    D = `filt_len`/2 declared once.
+  - **Restated criteria.** AC5 relative error ≤ 1e-3 with absolute delays; AC7 as taps at integer
+    lags after the declared latency; AC6 restated at word level because the pass-through drops ADC
+    words.
+  - **The example.** `filt_len` = 256 (the default 64 is 1.49 dB off on the far taps); the source
+    mode at the loopback I/Q gate's geometry; the cross-example import from `rf_loopback` kept.
+  - **The repo.** The sounder's `xsi/` as build output (`src/` for the authored main); the
+    `.gitignore` re-includes; gate floors 22 and 186.
 - **Assumptions and not verified:**
+  - Only the CPU path (`llvm_ad_mono_polarized`, LLVM 20) was run; a GPU variant is untested.
+  - Python 3.10 was checked by lint, not by a run; the venv is 3.12.
+  - The Windows XSI flow (`run.bat`) was not run for the sounder.
+  - Committed channel files are sionna-rt 2.2.0 / Mitsuba 3.9.1 / Dr.Jit 1.5.0; other versions
+    retrace them under `if_stale`, and the recorded figures may move.
+  - Two more tests were collected at step 1 than the baseline accounts for; not traced.
 - **Remaining risks and issues:**
+  - **Scope limits** (on the guide page):
+    - static geometry with first-order Doppler only (delays, gains and the set of paths fixed during
+      a run);
+    - paths flat across the band (coefficients at the carrier);
+    - single precision in Sionna;
+    - thermal noise only (no phase noise, CFO or interference);
+    - transmitter and receiver on one epoch.
+  - `RtChannel` has no XSI model; only the source reaches RTL, through its bundle.
+  - **The RTL gate depends on `examples/rf_loopback`.** It needs that example's csynth and reuses its
+    `WANT_IQ_*`, and its drop pattern is pinned to that RTL and the converter model of
+    Vitis/Vivado 2024.1.
+  - Speed is about 18 M path-samples/s (NumPy, one convolution per path), not gated.
+  - The default `filt_len` = 64 is too short for 30 dB tap comparisons.
+  - `cache.py`'s staleness logic is Sionna-specific.
+  - **Framework issue outside this plan** (M5 review, N11): a build DAG can call csynth UP-TO-DATE
+    while `rtl_staleness` calls the RTL stale.
+  - The 5 baseline failures remain.
 - **Next steps:**
+  - The nice-to-haves not built: retracing along a trajectory, an OFDM waveform, IF edges, a figure of
+    the scene's paths.
+  - The XSI workspace reading `src/` (`plans/source_layout.md` S0.7), which would replace the
+    sounder's own copy step.
+  - A faster applier (FFT overlap-save or a compiled kernel) if long multipath runs need it.
+  - A GPU variant check.
+  - The DAG/stamp freshness issue.
 - **Reusable artifacts saved / tools that would have helped:**
+  - **Artifacts.** The Sionna import blocker plugin (`tests/rfenv/_block_sionna.py`) and its
+    subprocess no-skip check; the `sionna` gate marker and floor; the committed reference channels
+    with their regeneration script (`python -m tests.rfenv._reference`); the phrase-based
+    documented-number ties; the word-level replay check for a loss-tolerant DUT.
+  - **Tools.** Running the repo-wide lints (`tests/build/`) at each step rather than only at the
+    close-out would have caught the `xsi/` layout at step 18.
 
 ## Checklist coverage
 
