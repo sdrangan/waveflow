@@ -100,6 +100,14 @@ def test_a_bad_specification_is_refused(kw, match):
         SceneSpec(**args)
 
 
+def test_coordinates_become_plain_float_triples():
+    d = DeviceSpec("rx", np.array([1, 2, 3]), velocity=(np.float32(-1.5), 0, 0))
+    assert d.position == (1.0, 2.0, 3.0) and type(d.position[0]) is float
+    assert type(d.velocity[0]) is float
+    with pytest.raises(ValueError, match="3 values"):
+        DeviceSpec("rx", (1.0, 2.0))
+
+
 def test_orientation_and_look_at_are_exclusive():
     with pytest.raises(ValueError, match="not both"):
         DeviceSpec(

@@ -182,7 +182,9 @@ WANT_GEM5_GATES = 12
 #: 0 on 2026-10-12 (step 1): the marker exists; the gates arrive from step 7 on.
 #: 0 -> 4 on 2026-10-12 (step 7): the backend traces a built-in scene, twice identically, and a 1x4
 #: array with and without the synthetic array (tests/rfenv/test_sionna_backend.py).
-WANT_SIONNA_GATES = 4
+#: 4 -> 13 on 2026-10-12 (step 8): free space, two plates, four Doppler cases and the taps against
+#: Sionna's own, SISO and 1x4 (tests/rfenv/test_sionna_reference.py).
+WANT_SIONNA_GATES = 13
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

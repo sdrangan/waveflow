@@ -84,6 +84,15 @@ class DeviceSpec:
             raise ValueError(
                 f"device {self.name!r}: give orientation or look_at, not both"
             )
+        # plain float triples: Mitsuba's Point3f refuses numpy scalars, and JSON needs plain numbers
+        for name in ("position", "orientation", "look_at", "velocity"):
+            v = getattr(self, name)
+            if v is not None:
+                if len(v) != 3:
+                    raise ValueError(
+                        f"device {self.name!r}: {name} needs 3 values, got {v!r}"
+                    )
+                object.__setattr__(self, name, tuple(float(x) for x in v))
 
 
 @dataclass(frozen=True)
@@ -252,6 +261,11 @@ def _array(rt, a: ArraySpec):
 
 def trace(spec: SceneSpec) -> PathSet:
     """Trace ``spec`` with Sionna RT and return its channel as a :class:`PathSet`."""
+    return trace_with_paths(spec)[0]
+
+
+def build_scene(spec: SceneSpec):
+    """The Sionna ``Scene`` for ``spec``: loaded, at its carrier, with its arrays and devices."""
     rt, mi = import_sionna()
     scene = _load(rt, spec)
     scene.frequency = float(spec.frequency_hz)
@@ -261,6 +275,17 @@ def trace(spec: SceneSpec) -> PathSet:
         [_device(rt.Transmitter, mi, d) for d in spec.transmitters]
         + [_device(rt.Receiver, mi, d) for d in spec.receivers]
     )
+    return scene
+
+
+def trace_with_paths(spec: SceneSpec):
+    """``(PathSet, paths)``: the channel file and Sionna's own ``Paths`` it came from.
+
+    For checking the channel against Sionna's outputs (``Paths.taps``, ``Paths.cir``); everything
+    else needs only the :class:`PathSet`.
+    """
+    rt, mi = import_sionna()
+    scene = build_scene(spec)
     s = spec.solver
     t0 = time.perf_counter()
     paths = rt.PathSolver(deterministic=True)(
@@ -305,13 +330,14 @@ def trace(spec: SceneSpec) -> PathSet:
         "created": datetime.datetime.now(datetime.UTC).date().isoformat(),
         "trace_seconds": round(seconds, 3),
     }
-    return PathSet(
+    pathset = PathSet(
         a=a.reshape(flat),
         tau=tau.reshape(flat),
         doppler=doppler.reshape(flat),
         valid=valid.reshape(flat),
         manifest=manifest,
     )
+    return pathset, paths
 
 
 def _per_antenna(x: np.ndarray, full: tuple[int, ...]) -> np.ndarray:
