@@ -175,8 +175,19 @@ WANT_XSI_GATES = 185
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
 WANT_GEM5_GATES = 12
 
+#: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
+#: environment's tests that trace a scene (``plans/sionna_rt/sionna_rt.md``).  The same two rules:
+#: none may skip, and a full run collects at least this many.  To update:
+#: ``pytest -m sionna --collect-only -q``.
+#: 0 on 2026-10-12 (step 1): the marker exists; the gates arrive from step 7 on.
+WANT_SIONNA_GATES = 0
+
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
-_GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}
+_GATES = {
+    "xsi": (WANT_XSI_GATES, "XSI"),
+    "gem5": (WANT_GEM5_GATES, "gem5"),
+    "sionna": (WANT_SIONNA_GATES, "Sionna RT"),
+}
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.  Keyed by marker: at most one is active per session.
