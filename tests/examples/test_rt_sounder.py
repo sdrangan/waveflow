@@ -9,8 +9,22 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
-from examples.rt_sounder.rt_sounder import SAMP_RATE, SPEC, channel
+from examples.rt_sounder.rt_sounder import (
+    BLKSIZE,
+    FULL_SCALE,
+    SAMP_RATE,
+    SPEC,
+    TAP_WINDOW_DB,
+    TARGET_DBFS,
+    ZC_AMPLITUDE,
+    adc_samples,
+    channel,
+    compare_taps,
+    estimate_taps,
+    run_channel_mode,
+)
 from waveflow.rfenv.apply import taps
 
 
@@ -29,3 +43,55 @@ def test_the_channel_has_a_cluster_and_a_distant_echo():
     strong = np.flatnonzero(db > -30).tolist()
     assert strong == list(range(23, 38)) + [43, 44]
     assert int(np.argmax(np.abs(h))) in (30, 31)
+
+
+# ---------------------------------------------------------------------------
+# Channel mode (step 15, AC7): ZC -> Rfdc DAC -> RtChannel -> Rfdc ADC -> correlation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def sounded():
+    return run_channel_mode()
+
+
+def test_channel_mode_the_loop_ran_clean(sounded):
+    """Nothing lost: the ADC edge underran only for the declared converter hop, every grid block
+    reached the sink, and no sample sat at the converter's rail."""
+    tb = sounded
+    tb.dac_if.assert_clean()
+    tb.adc_if.assert_clean(startup_blocks=tb.loop_blk_latency)
+    tb.chan.assert_ran()
+    assert tb.chan.dropped_blocks == 0
+    assert tb.dac_axis.dropped == 0 and tb.adc_axis.dropped == 0
+    y = adc_samples(tb)
+    assert y.size == tb.n_blk * BLKSIZE
+    assert max(np.abs(y.real).max(), np.abs(y.imag).max()) < FULL_SCALE
+
+
+def test_channel_mode_the_strongest_tap_sits_at_the_target_level(sounded):
+    """AC7's setting: ``gain_db`` puts the strongest tap's share of the ZC at −10 dBFS."""
+    tb = sounded
+    h = estimate_taps(tb)
+    # The strongest tap's share at the ADC, in sqrt(W): the DAC's amplitude through the tap and gain.
+    amp = 10 ** (tb.gain_db / 20) * np.abs(h).max() * ZC_AMPLITUDE * FULL_SCALE
+    level = 20 * math.log10(amp / FULL_SCALE)
+    assert abs(level - TARGET_DBFS) <= 0.5
+
+
+def test_channel_mode_recovers_the_ray_traced_taps(sounded):
+    """AC7: every tap within 30 dB of the strongest at the same lag, |h|^2 within 0.5 dB."""
+    cmp = compare_taps(sounded.paths, estimate_taps(sounded))
+    print("\n" + cmp.table())
+    assert [r[0] for r in cmp.rows] == list(range(23, 38)) + [43, 44]
+    assert cmp.peak_lags[0] == cmp.peak_lags[1]
+    assert cmp.worst_db <= 0.5, cmp.table()
+    # The same lags both ways: nothing the estimate puts above the window (with the same 0.5 dB)
+    # sits at a lag where Sionna has no such tap.
+    assert cmp.spurious[1] <= -TAP_WINDOW_DB + 0.5, cmp.table()
+
+
+def test_channel_mode_a_one_sample_latency_error_fails_ac7(sounded):
+    """The comparison has teeth: the same estimate read one lag late is rejected."""
+    cmp = compare_taps(sounded.paths, np.roll(estimate_taps(sounded), 1))
+    assert cmp.worst_db > 0.5
