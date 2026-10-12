@@ -15,15 +15,20 @@ from examples.rt_sounder.rt_sounder import (
     BLKSIZE,
     FULL_SCALE,
     SAMP_RATE,
+    SOURCE_BLKSIZE,
+    SOURCE_NBLK,
+    SOURCE_SAMP_RATE,
     SPEC,
     TAP_WINDOW_DB,
     TARGET_DBFS,
     ZC_AMPLITUDE,
+    adc_quantized,
     adc_samples,
     channel,
     compare_taps,
     estimate_taps,
     run_channel_mode,
+    run_source_mode,
 )
 from waveflow.rfenv.apply import taps
 
@@ -95,3 +100,50 @@ def test_channel_mode_a_one_sample_latency_error_fails_ac7(sounded):
     """The comparison has teeth: the same estimate read one lag late is rejected."""
     cmp = compare_taps(sounded.paths, np.roll(estimate_taps(sounded), 1))
     assert cmp.worst_db > 0.5
+
+
+# ---------------------------------------------------------------------------
+# Source mode (step 16, AC6's pysim side at the XSI geometry): RtSignalSource -> ADC ->
+# rf_pass_through -> DAC -> sink
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def source_run():
+    return run_source_mode()
+
+
+def test_source_mode_runs_clean(source_run):
+    """The ADC edge, fed straight from the source, never underran; the DAC edge underran exactly
+    for the declared loop (the ADC's hop and the DUT's block)."""
+    tb, sent, got = source_run
+    tb.adc_if.assert_clean()
+    tb.dac_if.assert_clean(startup_blocks=tb.loop_blk_latency)
+    assert tb.loop_blk_latency == 2
+    assert len(sent) == len(got) == tb.n_blk == SOURCE_NBLK
+    assert tb.dut.n_blk == tb.n_blk
+
+
+def test_source_mode_the_bundle_reads_back_as_the_sources_blocks(source_run):
+    """The rendered bundle is the source's own computation, bit for bit, noise included."""
+    tb, sent, _ = source_run
+    gen = tb.source.blocks(SOURCE_BLKSIZE, SOURCE_SAMP_RATE)
+    for k, blk in enumerate(sent):
+        assert np.array_equal(blk, next(gen)), f"block {k}"
+    # Thermal noise is on: before the first path's interpolator span reaches the receiver, the
+    # block holds noise and nothing else.
+    first = math.floor(tb.paths.min_delay() * SOURCE_SAMP_RATE)
+    assert first > 0 and np.all(sent[0][0, :first] != 0)
+
+
+def test_source_mode_the_capture_is_the_quantized_source_shifted_by_the_declared_latency(
+    source_run,
+):
+    """The sink's block k is the ADC-quantized source block k - L, exactly; the first L are the
+    DAC's startup zero-fill."""
+    tb, sent, got = source_run
+    n_lat = tb.loop_blk_latency
+    for k in range(n_lat):
+        assert not np.any(got[k]), f"block {k} is inside the startup transient"
+    for k in range(n_lat, len(got)):
+        assert np.array_equal(got[k], adc_quantized(sent[k - n_lat])), f"block {k}"

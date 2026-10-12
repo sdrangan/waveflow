@@ -35,6 +35,13 @@ from typing import ClassVar
 
 import numpy as np
 
+from examples.rf_loopback.rf_loopback import RfSampPassThrough
+from examples.rf_loopback.rf_loopback_xsi import (
+    XSI_BLKSIZE,
+    XSI_IQ_SAMP_RATE,
+    XSI_IQ_WORD,
+    XSI_NBLK,
+)
 from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
@@ -43,14 +50,15 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_sample_if import RFSampIF
 from waveflow.hw.rfdc import Rfdc
-from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord, pack, unpack
+from waveflow.hw.rfdc_samp_word import pack, unpack
 from waveflow.rfenv.apply import taps
 from waveflow.rfenv.cache import load_or_trace
-from waveflow.rfenv.nodes import RtChannel
-from waveflow.rfenv.noise import gain_db_for_dbfs
+from waveflow.rfenv.nodes import RtChannel, RtSignalSource
+from waveflow.rfenv.noise import dbm_to_w, gain_db_for_dbfs
 from waveflow.rfenv.paths import PathSet
 from waveflow.rfenv.sionna_backend import DeviceSpec, SceneSpec, SolverSpec
 from waveflow.rfenv.waveforms import ZadoffChu
+from waveflow.simulation.rf_tb import RfDataSink
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 
@@ -70,8 +78,8 @@ SPEC = SceneSpec(
 #: Channel mode's grid: the plan's default test case, 122.88 MSa/s.
 SAMP_RATE = 122.88e6
 BLKSIZE = 256
-#: The 4x2's I/Q word: 2 complex samples a 64-bit beat.
-WORD = Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True)
+#: The 4x2's I/Q word: 2 complex samples a 64-bit beat -- the loopback I/Q gate's word.
+WORD = XSI_IQ_WORD
 #: The converter's amplitude reference, both directions.
 FULL_SCALE = 1.0
 #: The interpolator length (see the module doc) and its declared delay.
@@ -101,17 +109,24 @@ def channel() -> PathSet:
     return load_or_trace(SPEC, CHANNEL, retrace="never")
 
 
-def channel_taps(paths: PathSet, n_lags: int) -> np.ndarray:
+def channel_taps(
+    paths: PathSet, n_lags: int, samp_rate: float = SAMP_RATE
+) -> np.ndarray:
     """Sionna's taps of ``paths`` at lags ``0 .. n_lags - 1`` (bandwidth = the sample rate), 1-D."""
-    return taps(paths, SAMP_RATE, 0, int(n_lags) - 1)[0, 0, 0]
+    return taps(paths, samp_rate, 0, int(n_lags) - 1)[0, 0, 0]
+
+
+def gain_for_target(paths: PathSet, samp_rate: float, tx_amplitude: float) -> float:
+    """The receive gain (amplitude dB) that puts the strongest tap's share of a constant-envelope
+    waveform of ``tx_amplitude`` (sqrt(W)) at :data:`TARGET_DBFS`."""
+    n = math.ceil(paths.max_delay() * samp_rate) + 8
+    h_max = float(np.abs(channel_taps(paths, n, samp_rate)).max())
+    return gain_db_for_dbfs((h_max * tx_amplitude) ** 2, TARGET_DBFS, FULL_SCALE)
 
 
 def sounder_gain_db(paths: PathSet) -> float:
-    """The receive gain that puts the strongest tap's share of the ZC at :data:`TARGET_DBFS`."""
-    n = math.ceil(paths.max_delay() * SAMP_RATE) + 8
-    h_max = float(np.abs(channel_taps(paths, n)).max())
-    p_w = (h_max * ZC_AMPLITUDE * FULL_SCALE) ** 2
-    return gain_db_for_dbfs(p_w, TARGET_DBFS, FULL_SCALE)
+    """Channel mode's gain: the DAC drives the ZC at :data:`ZC_AMPLITUDE` of full scale."""
+    return gain_for_target(paths, SAMP_RATE, ZC_AMPLITUDE * FULL_SCALE)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +388,160 @@ def compare_taps(paths: PathSet, h_est: np.ndarray) -> TapComparison:
         spurious=(int(lags[j]), float(g_db[j])),
         peak_lags=(int(lags[np.argmax(want)]), int(lags[np.argmax(got)])),
     )
+
+
+# ---------------------------------------------------------------------------
+# Source mode: RtSignalSource -> ADC -> pass-through -> DAC -> sink
+# ---------------------------------------------------------------------------
+#
+# What a receiver in the street hears, fed to the RF loopback's fabric.  The geometry is the loopback
+# I/Q gate's (plan §14, M4 review), so the XSI replay drives the RTL that gate already built and is
+# judged against the transient and drops it recorded.
+
+#: Source mode's sample rate: the I/Q gate's, half the real loopback's (see ``XSI_IQ_SAMP_RATE``).
+SOURCE_SAMP_RATE = XSI_IQ_SAMP_RATE
+#: Source mode's block and run length: the I/Q gate's.
+SOURCE_BLKSIZE = XSI_BLKSIZE
+SOURCE_NBLK = XSI_NBLK
+#: The transmitter: the ZC at 30 dBm (1 W), the street canyon's rooftop.
+SOURCE_TX_POWER_DBM = 30.0
+#: The receiver's noise figure: thermal noise on, so the ADC sees a real received signal (about
+#: 36 dB SNR here) and the replay has to carry the noise bit for bit too.
+SOURCE_NOISE_FIGURE_DB = 7.0
+#: The source's rendered bundle and the sink's capture, relative to the run root.  Their own names:
+#: the XSI workspace holds other scenarios.
+IN_BUNDLE_SRC = "vectors/rt_src"
+OUT_BUNDLE_SRC = "vectors/rt_out"
+
+
+def source_gain_db(paths: PathSet) -> float:
+    """Source mode's gain: the strongest tap's share of the 30 dBm ZC at :data:`TARGET_DBFS`."""
+    amp = math.sqrt(dbm_to_w(SOURCE_TX_POWER_DBM))
+    return gain_for_target(paths, SOURCE_SAMP_RATE, amp)
+
+
+@dataclass
+class RtSourceTB(FreeRunMod):
+    """Source mode: the ray-traced received signal through the RF loopback's fabric::
+
+        RtSignalSource --RFSampIF--> Rfdc.rx_rf | rx_streams[0] --StreamIF--> RfSampPassThrough
+                                                                                    |
+        RfDataSink     <--RFSampIF-- Rfdc.tx_rf | tx_streams[0] <--StreamIF---------+
+
+    ``examples/rf_loopback``'s ``RfLoopbackTB`` with :class:`~waveflow.rfenv.nodes.RtSignalSource`
+    in place of ``RfDataSource`` (that class builds its own source, and existing examples do not
+    change).  The DUT is ``rf_pass_through``, imported: its RTL is word-agnostic, so the replay
+    needs no RTL of its own.
+    """
+
+    #: Blocks the RF grids run for, and the source sends.
+    n_blk: int = SOURCE_NBLK
+    blksize: int = SOURCE_BLKSIZE
+    samp_rate: float = SOURCE_SAMP_RATE
+    #: The source's rendered bundle (the XSI twin replays it) and the sink's capture.
+    in_bundle: str = IN_BUNDLE_SRC
+    out_bundle: str = OUT_BUNDLE_SRC
+    #: Receiver queue depth at the sink, in blocks (the loopback's).
+    sink_depth: int = 2
+    axis_clk: Clock = field(default_factory=lambda: Clock(freq=RFSOC4X2_CLK_HZ))
+
+    potential_targets: ClassVar[frozenset[str]] = frozenset()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=RFSOC4X2_CLK_HZ)
+        self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
+        self.blk_period = int(self.blksize) / float(self.samp_rate)
+        #: The channel the source applies (the committed file).
+        self.paths = channel()
+
+        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=1, word=WORD,
+                         full_scale=FULL_SCALE, t0_rx=0.0, t0_tx=0.0)  # fmt: skip
+        w = self.rfdc.axis_bitwidth
+        self.nwords_blk = int(self.blksize) // int(WORD.samp_per_word)
+        self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w, n_ch=1,
+                                     nwords_blk=self.nwords_blk, clk=self.axis_clk)  # fmt: skip
+        #: Block periods from the ADC edge to the DAC edge: the ADC's hop plus the DUT's own --
+        #: the DAC edge's entitled startup transient (as ``RfLoopbackTB``).
+        self.loop_blk_latency = 1 + int(self.dut.blk_latency)
+        self.source = RtSignalSource(
+            name=f"{self.name}_src",
+            sim=self.sim,
+            in_bundle=str(self.in_bundle),
+            waveform=ZC,
+            tx_power_dbm=SOURCE_TX_POWER_DBM,
+            pathset=self.paths,
+            filt_len=FILT_LEN,
+            gain_db=source_gain_db(self.paths),
+            noise_figure_db=SOURCE_NOISE_FIGURE_DB,
+            n_blk=int(self.n_blk),
+        )
+        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim,
+                               out_bundle=str(self.out_bundle),
+                               depth=int(self.sink_depth))  # fmt: skip
+        for c in (self.dut, self.rfdc, self.source, self.sink):
+            self.add_comp(c)
+
+        self.adc_if = RFSampIF(name=f"{self.name}_adc_if", sim=self.sim, samp_clk=self.samp_clk,
+                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk),
+                               complex_samp=True)  # fmt: skip
+        self.adc_if.bind("tx", self.source.rf_ep)
+        self.adc_if.bind("rx", self.rfdc.rx_rf)
+        self.add_if(self.adc_if)
+        self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
+                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk),
+                               complex_samp=True)  # fmt: skip
+        self.dac_if.bind("tx", self.rfdc.tx_rf)
+        self.dac_if.bind("rx", self.sink.rf_ep)
+        self.add_if(self.dac_if)
+
+        # The PL domain, as RfLoopbackTB: no depth on the ADC side (it becomes the DUT's top-level
+        # port, which cannot carry one), a block and slack on the DAC side (a testbench channel).
+        self.adc_axis = StreamIF(name=f"{self.name}_adc_axis", sim=self.sim, clk=self.axis_clk,
+                                 bitwidth=w)  # fmt: skip
+        self.adc_axis.bind("master", self.rfdc.rx_streams[0])
+        self.adc_axis.bind("slave", self.dut.s_ins[0])
+        self.add_if(self.adc_axis)
+        self.dac_axis = StreamIF(name=f"{self.name}_dac_axis", sim=self.sim, clk=self.axis_clk,
+                                 bitwidth=w, depth=2 * self.nwords_blk)  # fmt: skip
+        self.dac_axis.bind("master", self.dut.s_outs[0])
+        self.dac_axis.bind("slave", self.rfdc.tx_streams[0])
+        self.add_if(self.dac_axis)
+
+
+def write_source_scenario(tb: RtSourceTB, root) -> list[np.ndarray]:
+    """Render the source's bundle into ``<root>/<in_bundle>`` and point both RF peers at ``root``;
+    returns the blocks written.  The single writer for both backends."""
+    from waveflow.simulation.rf_tb import read_rf_bundle
+
+    root = Path(root)
+    tb.source.render_bundle(root / tb.in_bundle)
+    tb.source.root = root
+    tb.sink.root = root
+    return read_rf_bundle(root / tb.in_bundle, 1, int(tb.blksize), complex_samp=True)
+
+
+def run_source_mode(
+    root=None, **kw
+) -> tuple[RtSourceTB, list[np.ndarray], list[np.ndarray]]:
+    """Render, run the source-mode graph, read the capture back; returns
+    ``(tb, rendered blocks, captured blocks)``."""
+    from waveflow.simulation.rf_tb import read_rf_bundle
+
+    tb = RtSourceTB(name="src_tb", sim=Simulation(), **kw)
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(root or tmp)
+        sent = write_source_scenario(tb, base)
+        tb.sim.run_sim()
+        got = read_rf_bundle(
+            base / tb.out_bundle, 1, int(tb.blksize), complex_samp=True
+        )
+    return tb, sent, got
+
+
+def adc_quantized(block: np.ndarray) -> np.ndarray:
+    """What the ADC makes of an RF block and the DAC plays back: quantized, in sqrt(W)."""
+    return _dequantize(_quantize(np.asarray(block) / FULL_SCALE)) * FULL_SCALE
 
 
 def main() -> None:
