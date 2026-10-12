@@ -4,6 +4,11 @@
   :class:`~waveflow.simulation.rf_tb.RfSampDelay`, at multipath fidelity: every path's amplitude,
   sub-sample delay and Doppler shift, per antenna pair, plus thermal noise.  Between an ``Rfdc``'s
   ``tx_rf`` and ``rx_rf`` it is the air between the antennas.
+* :class:`RtSignalSource` -- what a receiver hears: a waveform (:mod:`waveflow.rfenv.waveforms`) at
+  a transmit power, through the channel, plus noise, onto an edge, like
+  :class:`~waveflow.simulation.rf_tb.RfDataSource`.  Its XSI twin is ``RfDataSource``'s
+  ``RfFileSource``, replaying the bundle :meth:`RtSignalSource.render_bundle` writes from the same
+  computation -- no new C++, and the same bytes in both backends.
 
 Both read their channel from one of three places (:func:`resolve_channel`): a
 :class:`~waveflow.rfenv.paths.PathSet` handed over directly, a channel file, or a
@@ -31,17 +36,19 @@ from pathlib import Path
 
 import numpy as np
 
-from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_module import DynParam, HwModule
 from waveflow.hw.rf_sample_if import DEFAULT_RF_RX_DEPTH, RFSampIFRx, RFSampIFTx
 from waveflow.rfenv.apply import DEFAULT_BETA, DEFAULT_FILT_LEN, ChannelApplier
 from waveflow.rfenv.noise import (
     ThermalNoise,
     amplitude_gain,
+    dbm_to_w,
     stream_tag,
     thermal_noise_power,
 )
 from waveflow.rfenv.paths import PathSet
 from waveflow.rfenv.sionna_backend import SceneSpec
+from waveflow.rfenv.waveforms import Waveform
 from waveflow.simulation.simobj import ProcessGen
 
 #: Where a channel comes from.
@@ -231,3 +238,152 @@ class RtChannel(HwModule):
                 f"{where}RtChannel '{self.name}' took {self.n_in} block(s) and emitted "
                 f"{self.n_out}; at most one may be in flight when the horizon closes"
             )
+
+
+@dataclass
+class RtSignalSource(HwModule):
+    """A waveform through a channel, at a power, with noise: what the receiving antennas deliver.
+
+    Endpoint ``rf_ep`` (the producer of a complex edge whose ``n_ch`` is the channel's receive
+    channel count).  It computes block ``k`` from absolute sample ``(k - 1) * blksize`` on: the
+    waveform at that index, scaled to ``tx_power_dbm`` (per transmit channel), through the channel,
+    plus thermal noise, times ``gain_db``.  The same computation, offline, is
+    :meth:`render_bundle`, so pysim and the XSI replay of the bundle carry the same samples.
+
+    **Only** ``in_bundle`` **is a** :class:`~waveflow.hw.hw_module.DynParam`: the XSI generator
+    emits every non-default ``DynParam`` as a member assignment on the C++ model, and
+    ``RfFileSource`` has that one field (``plans/sionna_rt/sionna_rt.md``, Rule 13).
+    """
+
+    #: The rendered bundle the XSI twin replays (:meth:`render_bundle` writes it).
+    in_bundle: DynParam[str] = ""
+    #: Anchor for a relative ``channel``.
+    root: Path | None = None
+    #: What each transmit channel sends; ``None`` is a carrier at the centre frequency.
+    waveform: Waveform | None = None
+    #: Transmit power per transmit channel, dBm (the built-in waveforms have unit power).
+    tx_power_dbm: float = 0.0
+    #: The channel: exactly one of these, as for :class:`RtChannel`.
+    pathset: PathSet | None = None
+    channel: str | Path | None = None
+    spec: SceneSpec | None = None
+    mode: str = "cached"
+    filt_len: int = DEFAULT_FILT_LEN
+    beta: float = DEFAULT_BETA
+    delay_mode: str = "absolute"
+    #: The receive chain's gain onto the edge's units (amplitude dB), after the noise.
+    gain_db: float = 0.0
+    #: Receiver noise figure in dB; ``None`` turns thermal noise off.
+    noise_figure_db: float | None = None
+    temperature_k: float = 290.0
+    seed: int = 0
+    #: Blocks to send, then stop; ``None`` sends until the run ends.
+    n_blk: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.rf_ep = RFSampIFTx(sim=self.sim)
+        self.add_endpoint(self.rf_ep)
+        #: The channel applied, set in ``pre_sim`` (or by :meth:`render_bundle`).
+        self.paths: PathSet | None = None
+        self.n_out = 0
+
+    @property
+    def latency_samp(self) -> int:
+        """Samples every path is delayed beyond its own delay: ``filt_len / 2``."""
+        return int(self.filt_len) // 2
+
+    def _resolve(self) -> PathSet:
+        if self.paths is None:
+            self.paths = resolve_channel(
+                pathset=self.pathset,
+                channel=self.channel,
+                spec=self.spec,
+                mode=self.mode,
+                root=self.root,
+                who=f"RtSignalSource '{self.name}'",
+            )
+        return self.paths
+
+    def blocks(self, blksize: int, samp_rate: float):
+        """Yield the source's blocks, ``(n_rx_ch, blksize)`` each, from sample 0 on, forever."""
+        ps = self._resolve()
+        app = ChannelApplier(
+            ps,
+            float(samp_rate),
+            filt_len=int(self.filt_len),
+            beta=float(self.beta),
+            delay_mode=self.delay_mode,
+            start_n0=0,
+        )
+        noise = None
+        if self.noise_figure_db is not None:
+            p = thermal_noise_power(
+                float(samp_rate), float(self.noise_figure_db), float(self.temperature_k)
+            )
+            noise = ThermalNoise(p, seed=int(self.seed), tag=stream_tag(self.name))
+        amp = float(np.sqrt(dbm_to_w(self.tx_power_dbm)))
+        g = amplitude_gain(self.gain_db)
+        n0 = 0
+        while True:
+            x = self._transmitted(n0, int(blksize), float(samp_rate), ps.n_tx_ch)
+            y = app.process(amp * x, n0)
+            if noise is not None:
+                y = y + noise.samples(y.shape[0], n0, y.shape[1])
+            yield g * y
+            n0 += int(blksize)
+
+    def _transmitted(
+        self, n0: int, count: int, samp_rate: float, n_tx: int
+    ) -> np.ndarray:
+        if self.waveform is None:
+            return np.ones((n_tx, count), dtype=np.complex128)
+        x = np.asarray(self.waveform.samples(n0, count, samp_rate), dtype=np.complex128)
+        if x.ndim == 1:
+            return np.broadcast_to(x, (n_tx, count))
+        if x.shape[0] != n_tx:
+            raise ValueError(
+                f"RtSignalSource '{self.name}': the waveform has {x.shape[0]} channels, the "
+                f"channel {n_tx} transmit channels"
+            )
+        return x
+
+    def pre_sim(self) -> None:
+        ps = self._resolve()
+        ep = self.rf_ep
+        if not ep.complex_samp:
+            raise ValueError(
+                f"RtSignalSource '{self.name}': the edge must be complex baseband"
+            )
+        if int(ep.n_ch) != ps.n_rx_ch:
+            raise ValueError(
+                f"RtSignalSource '{self.name}': the channel has {ps.n_rx_ch} receive channels, "
+                f"the edge carries {ep.n_ch}"
+            )
+
+    def run_proc(self) -> ProcessGen[None]:
+        gen = self.blocks(int(self.rf_ep.blksize), float(self.rf_ep.samp_rate))
+        while self.n_blk is None or self.n_out < int(self.n_blk):
+            yield from self.rf_ep.put(next(gen))
+            self.n_out += 1
+
+    def render_bundle(
+        self, bundle_dir: str | Path, n_blk: int, blksize: int, samp_rate: float
+    ) -> Path:
+        """Write the first ``n_blk`` blocks as a complex RF bundle -- what the XSI twin replays."""
+        from waveflow.simulation.rf_tb import write_rf_bundle
+
+        gen = self.blocks(int(blksize), float(samp_rate))
+        blocks = [next(gen) for _ in range(int(n_blk))]
+        return write_rf_bundle(blocks, bundle_dir, complex_samp=True)
+
+    def bfm_model(self):
+        """XSI twin: ``RfFileSource`` replaying ``in_bundle``, sized as ``RfDataSource`` sizes it.
+
+        One block in **components** (a complex sample is two doubles) and the element kind, which
+        the C++ model checks against the bundle's manifest.
+        """
+        from waveflow.build.composite_gen import BfmModel
+
+        comps = int(self.rf_ep.n_ch) * int(self.rf_ep.blksize) * 2
+        return BfmModel("RfFileSource", ports=("rf_ep",), extra_args=(str(comps), "1"))

@@ -13,17 +13,31 @@ import pytest
 from tests.rfenv._pathsets import pathset, random_pathset
 from tests.rfenv._reference import DATA
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_module import HwModule
+from waveflow.hw.hw_module import HwModule, discover_dyn_params
+from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_sample_if import RFSampIF, RFSampIFRx, RFSampIFTx
+from waveflow.hw.rfdc import Rfdc
+from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.rfenv.apply import reference_apply
-from waveflow.rfenv.nodes import RtChannel, resolve_channel
-from waveflow.rfenv.noise import amplitude_gain, thermal_noise_power
+from waveflow.rfenv.nodes import RtChannel, RtSignalSource, resolve_channel
+from waveflow.rfenv.noise import (
+    amplitude_gain,
+    dbm_to_w,
+    gain_db_for_dbfs,
+    thermal_noise_power,
+)
+from waveflow.rfenv.paths import PathSet
 from waveflow.rfenv.sionna_backend import DeviceSpec, SceneSpec
+from waveflow.rfenv.waveforms import ArrayWaveform, Tone, ZadoffChu
+from waveflow.simulation.rf_tb import read_rf_bundle
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
+from waveflow.simulation.stream_tb import StreamSink
 
 BLK = 64
 FS = 122.88e6
+#: The 4x2's I/Q word: 2 complex samples a 64-bit beat (examples/rf_loopback/rf_loopback_xsi.py).
+IQ_WORD = Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True)
 
 
 class _Src(HwModule):
@@ -222,3 +236,115 @@ def test_the_channel_source_is_exactly_one(kw, match):
     } | kw
     with pytest.raises(ValueError, match=match):
         resolve_channel(who="t", **args)
+
+
+# --- RtSignalSource (step 12) -----------------------------------------------------------------
+
+
+def source_graph(n_ch: int, n_blk: int, **src_kw):
+    sim = Simulation()
+    clk = Clock(name="samp", freq=FS)
+    src = RtSignalSource(sim=sim, name="src", n_blk=n_blk, **src_kw)
+    snk = _Snk(sim=sim, name="snk")
+    e = RFSampIF(name="edge", sim=sim, samp_clk=clk, n_ch=n_ch, blksize=BLK, n_blk=n_blk,
+                 complex_samp=True)  # fmt: skip
+    e.bind("tx", src.rf_ep)
+    e.bind("rx", snk.rf_ep)
+    return sim, src, snk, e
+
+
+def test_the_source_plays_what_it_renders(tmp_path):
+    """The pysim blocks equal the bundle the XSI twin will replay, bit for bit."""
+    kw = {
+        "channel": DATA / "floor_wall_siso",
+        "waveform": Tone(freq_hz=1.0e6),
+        "tx_power_dbm": 30.0,
+        "gain_db": 60.0,
+        "noise_figure_db": 7.0,
+        "seed": 3,
+    }
+    sim, src, snk, e = source_graph(1, 8, **kw)
+    run(sim, 10)
+    played = np.concatenate(snk.got, axis=1)
+    bundle = src.render_bundle(tmp_path / "rf", n_blk=8, blksize=BLK, samp_rate=FS)
+    rendered = np.concatenate(read_rf_bundle(bundle, 1, BLK, complex_samp=True), axis=1)
+    assert played.shape == rendered.shape == (1, 8 * BLK)
+    np.testing.assert_array_equal(played, rendered)
+    e.assert_clean()
+
+
+def test_the_source_is_the_channel_applied_to_the_waveform():
+    ps = random_pathset(2, 1, 4, seed=26)
+    w = ZadoffChu(length=139, root=5)
+    sim, _, snk, _ = source_graph(2, 6, pathset=ps, waveform=w, tx_power_dbm=10.0)
+    run(sim, 8)
+    x = np.sqrt(dbm_to_w(10.0)) * w.samples(0, 6 * BLK, FS)[None, :]
+    want = reference_apply(ps, x, FS)
+    assert rel_err(np.concatenate(snk.got, axis=1), want) <= 1e-12
+
+
+def test_the_source_feeds_an_adc_cleanly():
+    """64 blocks into an Rfdc ADC with the I/Q word: the edge is clean, and the words the ADC
+    emits decode to the source's samples to within the converter's quantization."""
+    n_blk = 64
+    ps = PathSet.load(DATA / "floor_wall_siso")
+    p_rx = float(ps.power_gain().sum()) * dbm_to_w(30.0)
+    gain = gain_db_for_dbfs(p_rx, target_dbfs=-10.0, full_scale=1.0)
+    sim = Simulation()
+    samp_clk, axis_clk = Clock(name="samp", freq=FS), Clock(name="axis", freq=250e6)
+    src = RtSignalSource(sim=sim, name="src", pathset=ps, waveform=Tone(freq_hz=2.0e6),
+                         tx_power_dbm=30.0, gain_db=gain, n_blk=n_blk)  # fmt: skip
+    rfdc = Rfdc(name="rfdc", sim=sim, word=IQ_WORD, n_rx=1, n_tx=0, full_scale=1.0)
+    snk = StreamSink(
+        name="axis_snk", sim=sim, bitwidth=rfdc.axis_bitwidth, has_tlast=True
+    )
+    adc = RFSampIF(name="adc_if", sim=sim, samp_clk=samp_clk, n_ch=1, blksize=BLK, n_blk=n_blk,
+                   complex_samp=True)  # fmt: skip
+    adc.bind("tx", src.rf_ep)
+    adc.bind("rx", rfdc.rx_rf)
+    axis = StreamIF(name="axis", sim=sim, clk=axis_clk, bitwidth=rfdc.axis_bitwidth)
+    axis.bind("master", rfdc.rx_streams[0])
+    axis.bind("slave", snk.stream_ep)
+    run(sim, n_blk + 4)
+    adc.assert_clean()
+    words = np.concatenate([np.asarray(w).reshape(-1) for w in snk.words])
+    got = rfdc._unpack(words[None, :]) * 1.0  # the exact inverse of the ADC's quantizer
+    want = np.concatenate(
+        [b for b, _ in zip(src.blocks(BLK, FS), range(n_blk), strict=False)], axis=1
+    )
+    n = got.shape[1]
+    assert n == n_blk * BLK
+    assert rel_err(got, want[:, :n]) <= 1e-3
+
+
+def test_rule_13_in_bundle_is_the_only_dyn_param():
+    src = RtSignalSource(sim=Simulation(), name="src", in_bundle="vectors/rt_in",
+                         pathset=random_pathset(1, 1, 1, seed=1), tx_power_dbm=5.0)  # fmt: skip
+    assert discover_dyn_params(src) == {"in_bundle": "vectors/rt_in"}
+
+
+def test_the_xsi_twin_is_rf_file_source():
+    src = source_graph(2, 2, pathset=random_pathset(2, 1, 1, seed=1))[1]
+    m = src.bfm_model()
+    assert m.cls == "RfFileSource" and m.ports == ("rf_ep",)
+    assert m.extra_args == (str(2 * BLK * 2), "1")
+
+
+@pytest.mark.parametrize(
+    ("kw", "match"),
+    [
+        ({"waveform": ArrayWaveform(data=np.ones((3, 4)))}, "3 channels"),
+    ],
+)
+def test_a_waveform_with_the_wrong_channel_count_is_refused(kw, match):
+    src = RtSignalSource(
+        sim=Simulation(), name="src", pathset=random_pathset(1, 2, 1, 1), **kw
+    )
+    with pytest.raises(ValueError, match=match):
+        next(src.blocks(BLK, FS))
+
+
+def test_a_source_edge_that_disagrees_is_refused():
+    src = source_graph(3, 2, pathset=random_pathset(2, 1, 1, seed=1))[1]
+    with pytest.raises(ValueError, match="2 receive channels"):
+        src.pre_sim()
