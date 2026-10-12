@@ -21,6 +21,8 @@ Modules:
 * :mod:`~waveflow.rfenv.noise` -- power conversions, dBFS, and thermal noise drawn by sample index.
 * :mod:`~waveflow.rfenv.sionna_backend` -- :class:`SceneSpec` and :func:`trace`: a scene traced by
   Sionna RT into a :class:`PathSet` (imports Sionna only when it traces; not imported here).
+* :mod:`~waveflow.rfenv.cache` -- :func:`load_or_trace` and :class:`TraceChannelStep`: trace once,
+  reuse the channel file while it still describes the scene.
 """
 
 from waveflow.rfenv.apply import ChannelApplier, reference_apply, taps

@@ -174,7 +174,7 @@ class PathSet:
 
     def save(self, stem: str | Path) -> tuple[Path, Path]:
         """Write ``<stem>.npz`` and ``<stem>.json``; return their paths."""
-        npz, js = _file_names(stem)
+        npz, js = file_names(stem)
         npz.parent.mkdir(parents=True, exist_ok=True)
         np.savez(npz, **{name: getattr(self, name) for name in _ARRAYS})
         js.write_text(
@@ -186,7 +186,7 @@ class PathSet:
     @classmethod
     def load(cls, stem: str | Path) -> PathSet:
         """Read a channel file written by :meth:`save`.  ``stem`` may name either file or neither."""
-        npz, js = _file_names(stem)
+        npz, js = file_names(stem)
         for p in (npz, js):
             if not p.is_file():
                 raise FileNotFoundError(f"channel file part missing: {p}")
@@ -199,7 +199,7 @@ class PathSet:
         return cls(manifest=manifest, **arrays)
 
 
-def _file_names(stem: str | Path) -> tuple[Path, Path]:
+def file_names(stem: str | Path) -> tuple[Path, Path]:
     """``<stem>.npz`` and ``<stem>.json``.  Only a ``.npz``/``.json`` suffix is stripped from ``stem``,
     so a dotted name (``sounder_3.5ghz``, ``chan.v2``) keeps every character."""
     stem = Path(stem)

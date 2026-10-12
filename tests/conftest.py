@@ -184,7 +184,9 @@ WANT_GEM5_GATES = 12
 #: array with and without the synthetic array (tests/rfenv/test_sionna_backend.py).
 #: 4 -> 13 on 2026-10-12 (step 8): free space, two plates, four Doppler cases and the taps against
 #: Sionna's own, SISO and 1x4 (tests/rfenv/test_sionna_reference.py).
-WANT_SIONNA_GATES = 13
+#: 13 -> 14 on 2026-10-12 (step 9): a real trace cached, reused, and retraced when the scene changes
+#: (tests/rfenv/test_cache.py).
+WANT_SIONNA_GATES = 14
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {
