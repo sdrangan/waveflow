@@ -1202,3 +1202,90 @@ def test_cpu_example_report_matches_a_fresh_run():
     assert f"CPU utilization [{rep.utilization[0]:.3f}]; energy {rep.total_pj / 1e6:.3f} uJ" in text
     levels = rep.functions["sched_ops.add"].levels
     assert f"exactly the {levels['EXTRAPOLATED']} arrivals" in " ".join(text.split())
+
+
+# ---------------------------------------------------------------------------
+# The RF environment (plans/sionna_rt/sionna_rt.md) — docs/guide/rf/rfenv/
+# ---------------------------------------------------------------------------
+#
+# AC11 asks that *every* number on these pages be tied to a committed file or test, so the check runs
+# both ways: each number in the prose must have an entry below (a new number fails until it is tied),
+# and each entry must still hold.  The fenced blocks are left out: the python fences are code, and
+# their output fences are checked by tests/docs/test_doc_snippets.py, which runs them.
+
+
+def _prose_numbers(text: str) -> list[str]:
+    """The numbers a page's prose and tables state: front matter, fences, inline code and link
+    targets removed; identifiers such as ``AC7``, ``4x2`` or ``P.2040`` are not numbers."""
+    text = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL)
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`\n]*`", "", text)
+    text = re.sub(r"\]\([^)]*\)", "]", text)
+    return re.findall(r"(?<![\w.])[−-]?\d+(?:[.,]\d+)*(?:e[−-]?\d+)?(?!\w)", text)
+
+
+def _src(rel: str) -> str:
+    return (REPO / rel).read_text(encoding="utf-8")
+
+
+def _rfenv_page(rel: str) -> str:
+    p = DOCS / rel
+    assert p.is_file(), f"{rel} is missing"  # the plan's deliverable: not a skip
+    return p.read_text(encoding="utf-8")
+
+
+#: Each number on ``docs/guide/rf/rfenv/index.md``, and the committed source that states it: a file
+#: and a pattern that must match there.  The measured ones (0.124, 17) are recomputed below.
+RFENV_GUIDE_TIES = {
+    "2": ("waveflow/rfenv/nodes.py", r"int\(self\.filt_len\) // 2"),  # D = filt_len / 2
+    "64": ("waveflow/rfenv/apply.py", r"^DEFAULT_FILT_LEN = 64$"),
+    "−60": ("tests/rfenv/test_apply.py", r"err_db <= -60\.0"),
+    "0.8": ("tests/rfenv/test_apply.py", r"uniform\(-0\.4, 0\.4"),  # |f| <= 0.4 fs: 0.8 of fs/2
+    "30": ("examples/rt_sounder/rt_sounder.py", r"^TAP_WINDOW_DB = 30\.0$"),
+    "256": ("examples/rt_sounder/rt_sounder.py", r"^FILT_LEN = 256$"),
+    "−10": ("docs/guide/rf/rfenv/index.md", r"gain_db_for_dbfs\(p_strongest, -10\.0,"),
+    "1": ("tests/rfenv/test_sionna_reference.py", r"abs\(tau\[0\] - d / C\) <= 1e-12"),  # 1 ps
+    "0.01": ("tests/rfenv/test_sionna_reference.py", r"friis_db\(d\)\) <= 0\.01"),
+    "0.5": ("tests/rfenv/test_sionna_reference.py", r"abs\(measured - expected\) <= 0\.5"),
+    "1e-12": ("tests/rfenv/test_apply.py", r"rel_err\(got, want\) <= 1e-12"),
+    "0.1": ("tests/rfenv/test_sionna_reference.py", r"abs\(doppler\[0\] - v / LAM\) <= 0\.1"),
+    "1e-3": ("tests/rfenv/test_sionna_reference.py", r"rel_err\(mine, theirs\) <= 1e-3"),
+    "1e-6": ("tests/rfenv/test_live.py", r"rel_err\(y_live, y_cached\) <= 1e-6"),
+    "0.124": None,
+    "17": None,
+}
+
+
+def test_rfenv_guide_states_no_untied_number():
+    text = _rfenv_page("guide/rf/rfenv/index.md")
+    untied = sorted(set(_prose_numbers(text)) - set(RFENV_GUIDE_TIES))
+    assert not untied, (
+        f"docs/guide/rf/rfenv/index.md states {untied} with no entry in RFENV_GUIDE_TIES")
+
+
+def test_rfenv_guide_numbers_are_the_sources():
+    for number, tie in RFENV_GUIDE_TIES.items():
+        if tie is None:
+            continue
+        rel, pattern = tie
+        assert re.search(pattern, _src(rel), flags=re.MULTILINE), (
+            f"the guide's {number} is tied to /{pattern}/ in {rel}, which no longer matches")
+    # The sounder's AC7 bound is the test's.
+    assert re.search(r"cmp\.worst_db <= 0\.5", _src("tests/examples/test_rt_sounder.py"))
+
+
+def test_rfenv_guide_quotes_the_sounders_measured_taps():
+    """The sounder's worst tap difference and tap count, recomputed from a fresh channel-mode run."""
+    from examples.rt_sounder.rt_sounder import (
+        compare_taps,
+        estimate_taps,
+        run_channel_mode,
+    )
+
+    tb = run_channel_mode()
+    cmp = compare_taps(tb.paths, estimate_taps(tb))
+    text = " ".join(_rfenv_page("guide/rf/rfenv/index.md").split())
+    assert (
+        f"The sounder's measured worst case is {cmp.worst_db:.3f} dB, over {len(cmp.rows)} taps."
+        in text
+    )
