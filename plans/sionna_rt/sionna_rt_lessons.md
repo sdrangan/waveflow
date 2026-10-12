@@ -44,3 +44,15 @@ keeping. Newest section last. Every measured number names its tool versions.
   channel to the key.
 - **Sionna pads invalid paths with τ = −1 and a = 0.** Every minimum, maximum or causality check on
   delays must mask them first.
+
+## M2: the numpy core (2026-10-12)
+
+- **`np.sinc(k)` is not 0 at a nonzero integer** (about 1e-17), so a sinc interpolator at zero
+  fractional delay is not an exact pass-through. Special-case `mu == 0` to an impulse: then a
+  whole-sample delay moves samples bit-exactly, which is what an integer-delay test expects.
+- **Key everything on the absolute sample index.** Giving `process()` the block's absolute start
+  index, rather than counting calls, made block continuity (3e-16), run-start independence and
+  dropped-block handling one mechanism instead of three.
+- **A per-path numpy convolve is about 18 M path-samples/s here**: fine for test-sized runs, slow
+  for long multi-antenna ones. Batching paths that share a transmit channel into one FIR per link
+  is the obvious speed-up if a run needs it.

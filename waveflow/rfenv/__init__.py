@@ -14,9 +14,12 @@ channel file runs anywhere, and the XSI testbench can replay what a source rende
 
 Modules:
 
-* :mod:`~waveflow.rfenv.paths` -- :class:`PathSet`, the channel file and its manifest.
+* :mod:`~waveflow.rfenv.paths` -- :class:`PathSet`, the channel file and its manifest;
+* :mod:`~waveflow.rfenv.apply` -- :class:`ChannelApplier`, the channel applied block by block, and
+  :func:`taps`, the discrete taps a receiver sees.
 """
 
+from waveflow.rfenv.apply import ChannelApplier, reference_apply, taps
 from waveflow.rfenv.paths import PathSet
 
-__all__ = ["PathSet"]
+__all__ = ["ChannelApplier", "PathSet", "reference_apply", "taps"]
