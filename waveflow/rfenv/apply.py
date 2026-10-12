@@ -82,6 +82,7 @@ class ChannelApplier:
         filt_len: int = DEFAULT_FILT_LEN,
         beta: float = DEFAULT_BETA,
         delay_mode: str = "absolute",
+        start_n0: int | None = None,
     ) -> None:
         if samp_rate <= 0:
             raise ValueError(f"samp_rate must be positive, got {samp_rate}")
@@ -106,7 +107,10 @@ class ChannelApplier:
         #: reads (x[n0 - K - j] with j up to D, so K + D samples before the block).
         self.history_len = int(max_k) + self.group_delay_samp
         self._hist = np.zeros((pathset.n_tx_ch, self.history_len), dtype=np.complex128)
-        self._next_n0: int | None = None
+        #: Where the input is expected to start.  ``None`` takes the first block as the start; an
+        #: index (a node passes 0) makes a first block that arrives later a gap, zero-filled and
+        #: counted like any other dropped stretch.
+        self._next_n0: int | None = None if start_n0 is None else int(start_n0)
         #: Input samples zero-filled because their block never arrived.
         self.dropped_samples = 0
 

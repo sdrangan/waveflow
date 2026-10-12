@@ -173,6 +173,21 @@ def test_a_dropped_block_is_zero_filled_and_counted():
         np.testing.assert_allclose(y, want[:, i : i + 64], rtol=0, atol=1e-15)
 
 
+def test_input_missing_before_the_first_block_is_a_counted_gap():
+    """A node starts its applier at sample 0, so a first block that arrives later (the receiver
+    dropped the ones before it) is a gap like any other: zero-filled and counted."""
+    ps = random_pathset(1, 1, 3, seed=17)
+    x = noise((1, 256), seed=18)
+    app = ChannelApplier(ps, FS, start_n0=0)
+    y = app.process(x[:, 128:], 128)
+    assert app.dropped_samples == 128
+    x_gap = x.copy()
+    x_gap[:, :128] = 0
+    np.testing.assert_allclose(
+        y, reference_apply(ps, x_gap, FS)[:, 128:], rtol=0, atol=1e-15
+    )
+
+
 def test_blocks_must_arrive_in_order():
     app = ChannelApplier(pathset([[[1.0]]], [[[1e-7]]]), FS)
     app.process(np.zeros((1, 64)), 64)
