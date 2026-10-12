@@ -91,3 +91,22 @@ keeping. Newest section last. Every measured number names its tool versions.
   reproduce a channel file byte for byte, so regenerating it is not a spurious diff.
 - **Sionna's variant is fixed at `import sionna.rt`.** Switching afterwards fails deep inside
   ("Plugin 'itu-radio-material' not found"); check `sys.modules` and say so up front.
+
+## M4: the nodes and live mode (2026-10-12)
+
+- **The `-k` trap again**: steps 11 and 12 verified with `-k channel` and `-k source`, which missed
+  five tests. A prefix in every test name (`test_channel_*`, `test_source_*`) and a selector on the
+  prefix is the fix that holds; the lesson from M3 was written but not applied.
+- **One field name, one meaning.** `root` anchored the channel file on the new nodes and the bundle on
+  `RfDataSource`; a harness copying the loopback's `tb.source.root = root` would have resolved the
+  channel inside the scenario directory. `channel_root` says which.
+- **Render the geometry you will replay.** A bundle rendered at one rate and replayed on another edge
+  carries wrong delays and Doppler, and the C++ replay checks only the size. Take the geometry from
+  the bound edge and refuse a mismatch.
+- **"Same samples on the same install" needs a file from that install.** Comparing live mode with the
+  committed reference fails wherever the reference was traced elsewhere; tracing the comparison file
+  into a temporary directory is AC8's literal wording and works anywhere.
+- **A path node that skips a dropped block shifts its output grid.** Emitting the channel's response
+  to zero input for the missing block keeps the output edge on time and is what the air would do.
+- **Exact beats tolerant when exact is available.** The ADC check went from relative error ≤ 1e-3 to
+  word-for-word equality with the converter's own quantizer.

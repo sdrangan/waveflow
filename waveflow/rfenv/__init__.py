@@ -23,6 +23,8 @@ Modules:
   Sionna RT into a :class:`PathSet` (imports Sionna only when it traces; not imported here).
 * :mod:`~waveflow.rfenv.cache` -- :func:`load_or_trace` and :class:`TraceChannelStep`: trace once,
   reuse the channel file while it still describes the scene.
+* :mod:`~waveflow.rfenv.nodes` -- :class:`RtChannel` and :class:`RtSignalSource`, the pysim nodes on
+  ``RFSampIF`` edges.
 """
 
 from waveflow.rfenv.apply import ChannelApplier, reference_apply, taps
