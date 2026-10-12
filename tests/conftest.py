@@ -180,7 +180,9 @@ WANT_GEM5_GATES = 12
 #: none may skip, and a full run collects at least this many.  To update:
 #: ``pytest -m sionna --collect-only -q``.
 #: 0 on 2026-10-12 (step 1): the marker exists; the gates arrive from step 7 on.
-WANT_SIONNA_GATES = 0
+#: 0 -> 4 on 2026-10-12 (step 7): the backend traces a built-in scene, twice identically, and a 1x4
+#: array with and without the synthetic array (tests/rfenv/test_sionna_backend.py).
+WANT_SIONNA_GATES = 4
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

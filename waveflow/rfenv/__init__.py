@@ -19,6 +19,8 @@ Modules:
   :func:`taps`, the discrete taps a receiver sees;
 * :mod:`~waveflow.rfenv.waveforms` -- what a transmitter sends (tone, Zadoff-Chu, PN, a user's array);
 * :mod:`~waveflow.rfenv.noise` -- power conversions, dBFS, and thermal noise drawn by sample index.
+* :mod:`~waveflow.rfenv.sionna_backend` -- :class:`SceneSpec` and :func:`trace`: a scene traced by
+  Sionna RT into a :class:`PathSet` (imports Sionna only when it traces; not imported here).
 """
 
 from waveflow.rfenv.apply import ChannelApplier, reference_apply, taps
