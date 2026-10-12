@@ -188,7 +188,9 @@ WANT_GEM5_GATES = 12
 #: (tests/rfenv/test_cache.py).
 #: 14 -> 16 on 2026-10-12 (step 10): tracing each committed reference channel again reproduces it
 #: (tests/rfenv/test_reference.py).
-WANT_SIONNA_GATES = 16
+#: 16 -> 19 on 2026-10-12 (M3 review): the variant requested after and before the import, and a
+#: dual-polarized array's channel order (tests/rfenv/test_sionna_backend.py).
+WANT_SIONNA_GATES = 19
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

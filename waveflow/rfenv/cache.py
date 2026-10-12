@@ -65,16 +65,22 @@ def load_or_trace(
     if retrace not in RETRACE:
         raise ValueError(f"retrace must be one of {RETRACE}, got {retrace!r}")
     npz, js = file_names(stem)
-    if retrace != "always" and npz.is_file() and js.is_file():
-        ps = PathSet.load(stem)
-        if retrace == "never":
-            if ps.manifest["spec_hash"] != spec.hash():
-                raise ValueError(
-                    f"{js} is not the trace of this specification (its spec_hash differs), and "
-                    f"retrace='never' forbids tracing it again"
-                )
-            return ps
-        if describes(ps, spec):
+    if retrace == "never":
+        ps = PathSet.load(stem)  # a missing part is a FileNotFoundError, never a trace
+        if ps.manifest["spec_hash"] != spec.hash():
+            raise ValueError(
+                f"{js} is not the trace of this specification (its spec_hash differs), and "
+                f"retrace='never' forbids tracing it again"
+            )
+        return ps
+    if retrace == "if_stale" and npz.is_file() and js.is_file():
+        try:
+            ps = PathSet.load(stem)
+        except (
+            ValueError
+        ):  # written by another schema version, or damaged: trace it again
+            ps = None
+        if ps is not None and describes(ps, spec):
             return ps
     from waveflow.rfenv.sionna_backend import trace
 
@@ -121,7 +127,13 @@ class TraceChannelStep(BuildStep):
         npz, js = file_names(self._stem(config))
         if self.retrace == "always" or not (npz.is_file() and js.is_file()):
             return False
-        return describes(PathSet.load(self._stem(config)), self.spec)
+        try:
+            ps = PathSet.load(self._stem(config))
+        except ValueError:
+            return False
+        if self.retrace == "never":  # the hash decides; versions do not
+            return ps.manifest["spec_hash"] == self.spec.hash()
+        return describes(ps, self.spec)
 
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         load_or_trace(self.spec, self._stem(config), retrace=self.retrace)

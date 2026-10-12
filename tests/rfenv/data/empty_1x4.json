@@ -38,6 +38,7 @@
    "sionna-rt": "2.2.0"
   }
  },
+ "scene_path": "empty",
  "schema_version": 1,
  "spec": {
   "frequency_hz": 3500000000.0,
@@ -69,6 +70,7 @@
   "scene": "empty",
   "solver": {
    "diffraction": false,
+   "diffraction_lit_region": true,
    "diffuse_reflection": false,
    "edge_diffraction": false,
    "los": true,
@@ -106,6 +108,5 @@
    "vertical_spacing": 0.5
   }
  },
- "spec_hash": "ade3f1f05babb261546b08850dc69e2219ae02b1393b8cd1c35cf8b63de54a05",
- "trace_seconds": 0.102
+ "spec_hash": "2af8597fc3d4c413aab3214663ff699d8fd144329858ecbc5475cbd82c43067c"
 }

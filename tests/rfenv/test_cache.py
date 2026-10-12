@@ -83,12 +83,10 @@ def test_a_missing_file_is_traced(tmp_path, tracer):
     assert tracer == [spec().hash()] and (tmp_path / "sub" / "chan.npz").is_file()
 
 
-@pytest.mark.skipif(
-    installed_tracer_versions() is None, reason="needs the tracer's versions"
-)
-def test_a_file_traced_by_other_versions_is_traced_again(tmp_path, tracer):
-    old = dict(installed_tracer_versions(), **{"sionna-rt": "2.1.0"})
-    fake_trace(spec(), old).save(tmp_path / "chan")
+def test_a_file_traced_by_other_versions_is_traced_again(tmp_path, tracer, monkeypatch):
+    here = {"sionna-rt": "2.2.0", "mitsuba": "3.9.1", "drjit": "1.5.0"}
+    monkeypatch.setattr(cache, "installed_tracer_versions", lambda: here)
+    fake_trace(spec(), dict(here, **{"sionna-rt": "2.1.0"})).save(tmp_path / "chan")
     load_or_trace(spec(), tmp_path / "chan")
     assert tracer == [spec().hash()]
 
@@ -108,6 +106,58 @@ def test_never_uses_a_matching_file_and_refuses_a_different_one(tmp_path, tracer
     with pytest.raises(ValueError, match="retrace='never'"):
         load_or_trace(spec(z=9.0), tmp_path / "chan", retrace="never")
     assert tracer == []
+
+
+def test_never_refuses_a_missing_part_without_tracing(tmp_path, tracer):
+    fake_trace(spec(), {}).save(tmp_path / "chan")
+    (tmp_path / "chan.json").unlink()
+    with pytest.raises(FileNotFoundError, match=r"chan\.json"):
+        load_or_trace(spec(), tmp_path / "chan", retrace="never")
+    with pytest.raises(FileNotFoundError):
+        load_or_trace(spec(), tmp_path / "nothing", retrace="never")
+    assert tracer == [] and not (tmp_path / "chan.json").exists()
+
+
+def test_a_file_from_another_schema_is_traced_again(tmp_path, tracer):
+    import json
+
+    _, js = fake_trace(spec(), installed_tracer_versions()).save(tmp_path / "chan")
+    m = json.loads(js.read_text())
+    m["schema_version"] = 99
+    js.write_text(json.dumps(m))
+    load_or_trace(spec(), tmp_path / "chan")
+    assert tracer == [spec().hash()]
+
+
+def test_the_never_step_is_fresh_whatever_the_versions(tmp_path, tracer):
+    fake_trace(spec(), {"sionna-rt": "0.0"}).save(tmp_path / "chan")
+    step = TraceChannelStep(
+        name="t", spec=spec(), stem=tmp_path / "chan", retrace="never"
+    )
+    assert step.is_fresh(BuildConfig(root_dir=tmp_path), {}) is True
+
+
+def test_the_blocker_hides_the_tracer_from_package_metadata():
+    """Under the blocker the cache sees what a real install without the extra shows."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import tests.rfenv._block_sionna as b; b.install()\n"
+        "from waveflow.rfenv.cache import installed_tracer_versions\n"
+        "print('versions:', installed_tracer_versions())\n"
+    )
+    repo = Path(__file__).resolve().parents[2]
+    run = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "versions: None" in run.stdout
 
 
 def test_always_traces(tmp_path, tracer):

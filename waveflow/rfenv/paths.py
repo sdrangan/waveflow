@@ -176,7 +176,7 @@ class PathSet:
         """Write ``<stem>.npz`` and ``<stem>.json``; return their paths."""
         npz, js = file_names(stem)
         npz.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(npz, **{name: getattr(self, name) for name in _ARRAYS})
+        _write_npz(npz, {name: getattr(self, name) for name in _ARRAYS})
         js.write_text(
             json.dumps(self.manifest, indent=1, sort_keys=True, allow_nan=False) + "\n",
             encoding="utf-8",
@@ -197,6 +197,21 @@ class PathSet:
                 raise ValueError(f"channel file {npz} lacks arrays {missing}")
             arrays = {n: z[n] for n in _ARRAYS}
         return cls(manifest=manifest, **arrays)
+
+
+def _write_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    """``np.savez`` without the clock: every zip entry carries the same fixed timestamp, so saving
+    the same arrays twice gives the same bytes (a regenerated channel file is not a spurious diff).
+    """
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for name, arr in arrays.items():
+            buf = io.BytesIO()
+            np.lib.format.write_array(buf, np.asarray(arr), allow_pickle=False)
+            info = zipfile.ZipInfo(f"{name}.npy", date_time=(1980, 1, 1, 0, 0, 0))
+            zf.writestr(info, buf.getvalue())
 
 
 def file_names(stem: str | Path) -> tuple[Path, Path]:

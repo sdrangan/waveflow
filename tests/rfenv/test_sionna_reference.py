@@ -123,7 +123,7 @@ def plate_material(scene_name: str, obj: str) -> tuple[float, float, float]:
 @pytest.mark.parametrize(
     ("scene", "obj"), [("floor_wall", "floor"), ("simple_reflector", "merged-shapes")]
 )
-def test_a_plate_reflects_as_its_material_says(scene, obj):
+def test_a_single_reflector_reflects_as_its_material_says(scene, obj):
     ps = trace(plate_spec(scene))
     tau, gain_db, _ = valid_paths(ps)
     d_los, d_ref = 20.0, math.hypot(20.0, 20.0)

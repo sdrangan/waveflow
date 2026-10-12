@@ -53,11 +53,15 @@ def test_a_reference_drives_the_applier_without_sionna(name):
 @pytest.mark.sionna
 @pytest.mark.parametrize("name", sorted(REFERENCES))
 def test_tracing_again_reproduces_the_reference(name):
-    """Bit for bit on the install that traced it; within float32's 1e-3 on another."""
+    """Bit for bit on the install (versions and variant) that traced it; within float32's 1e-3 on
+    another."""
     pytest.importorskip("sionna.rt")
     ref = reference(name)
     new = trace(REFERENCES[name])
-    if describes(ref, REFERENCES[name]):
+    same_variant = (
+        ref.manifest["generator"]["variant"] == new.manifest["generator"]["variant"]
+    )
+    if describes(ref, REFERENCES[name]) and same_variant:
         for field in ("a", "tau", "doppler", "valid"):
             assert np.array_equal(getattr(new, field), getattr(ref, field)), field
     else:

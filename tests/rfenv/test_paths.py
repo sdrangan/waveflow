@@ -178,3 +178,11 @@ def test_the_package_imports_without_sionna():
     )
     assert run.returncode == 0, run.stderr
     assert "blocked: sionna No module named 'sionna'" in run.stdout
+
+
+def test_saving_twice_gives_the_same_bytes(tmp_path):
+    """No clock in the zip: a regenerated channel file is not a spurious diff."""
+    ps = random_pathset(2, 1, 3, seed=2)
+    a, _ = ps.save(tmp_path / "a")
+    b, _ = ps.save(tmp_path / "b")
+    assert a.read_bytes() == b.read_bytes()

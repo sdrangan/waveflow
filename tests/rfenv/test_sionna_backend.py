@@ -67,18 +67,40 @@ def test_the_hash_follows_every_setting():
     assert len({base.hash(), *(s.hash() for s in changed)}) == 5
 
 
-def test_an_xml_scene_is_hashed_by_its_bytes(tmp_path):
-    xml = tmp_path / "room.xml"
-    xml.write_text("<scene version='2.1.0'/>")
-    spec = SceneSpec(
-        scene=str(xml),
+def xml_spec(path) -> SceneSpec:
+    return SceneSpec(
+        scene=str(path),
         frequency_hz=3.5e9,
         transmitters=(DeviceSpec("tx", (0.0, 0.0, 1.0)),),
         receivers=(DeviceSpec("rx", (1.0, 0.0, 1.0)),),
     )
-    h = spec.hash()
-    xml.write_text("<scene version='2.1.0'><!-- edited --></scene>")
-    assert spec.hash() != h
+
+
+ROOM = """<scene version="2.1.0">
+  <shape type="ply"><string name="filename" value="meshes/floor.ply"/></shape>
+</scene>"""
+
+
+def test_an_xml_scene_is_hashed_by_its_bytes_and_its_meshes(tmp_path, monkeypatch):
+    (tmp_path / "meshes").mkdir()
+    (tmp_path / "meshes" / "floor.ply").write_bytes(b"ply v1")
+    xml = tmp_path / "room.xml"
+    xml.write_text(ROOM)
+    h = xml_spec(xml).hash()
+    monkeypatch.chdir(tmp_path)
+    assert xml_spec("room.xml").hash() == h  # relative or absolute: one identity
+    (tmp_path / "meshes" / "floor.ply").write_bytes(b"ply v2")
+    assert xml_spec(xml).hash() != h  # editing a mesh changes it
+    (tmp_path / "meshes" / "floor.ply").unlink()
+    with pytest.raises(FileNotFoundError):
+        xml_spec(xml).hash()
+
+
+def test_an_integer_frequency_is_the_same_scene():
+    a = floor_wall(frequency_hz=3_500_000_000)
+    assert a.frequency_hz == 3.5e9 and type(a.frequency_hz) is float
+    assert a.hash() == floor_wall().hash()
+    assert SceneSpec.from_dict(a.to_dict()).hash() == a.hash()
 
 
 @pytest.mark.parametrize(
@@ -180,3 +202,53 @@ def test_an_array_flattens_to_one_channel_per_antenna(sionna, synthetic):
     phases = np.angle(ps.a[:, 0, :][v])
     assert np.ptp(np.unwrap(phases)) > 0.1  # off broadside, the antennas differ
     assert np.allclose(ps.doppler[:, 0, :][v], 5.0 / (299_792_458.0 / 3.5e9), rtol=1e-5)
+
+
+@pytest.mark.sionna
+def test_a_variant_requested_after_import_is_a_clear_error(sionna, monkeypatch):
+    from waveflow.rfenv.sionna_backend import VARIANT_ENV, import_sionna
+
+    import_sionna()  # sionna.rt is now imported
+    monkeypatch.setenv(VARIANT_ENV, "scalar_rgb")
+    with pytest.raises(RuntimeError, match="already imported"):
+        import_sionna()
+
+
+@pytest.mark.sionna
+def test_a_variant_requested_before_import_is_used(sionna):
+    code = (
+        "from tests.rfenv.test_sionna_backend import floor_wall\n"
+        "from waveflow.rfenv.sionna_backend import trace\n"
+        "print('variant:', trace(floor_wall()).manifest['generator']['variant'])\n"
+    )
+    env = {
+        **__import__("os").environ,
+        "WAVEFLOW_SIONNA_VARIANT": "llvm_ad_mono_polarized",
+    }
+    run = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert "variant: llvm_ad_mono_polarized" in run.stdout
+
+
+@pytest.mark.sionna
+def test_a_dual_polarized_array_is_ordered_pattern_major(sionna):
+    """A 1x2 "VH" receive array is 4 channels: positions 0-1 with V, then 0-1 with H.  A V-polarized
+    transmitter in free space reaches the V elements and (almost) not the H ones."""
+    spec = SceneSpec(
+        scene="empty",
+        frequency_hz=3.5e9,
+        transmitters=(DeviceSpec("tx", (0.0, 0.0, 10.0)),),
+        receivers=(DeviceSpec("rx", (60.0, 80.0, 10.0)),),
+        rx_array=ArraySpec(num_rows=1, num_cols=2, polarization="VH"),
+    )
+    ps = trace(spec)
+    assert ps.n_rx_ch == 4
+    gain = np.abs(ps.a[:, 0, :]).max(axis=-1)
+    assert np.all(gain[:2] > 1e-6) and np.all(gain[2:] < 1e-12)

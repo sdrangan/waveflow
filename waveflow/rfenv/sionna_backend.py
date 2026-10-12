@@ -22,6 +22,9 @@ file's bytes, not only its name.
   Without it they come per antenna pair.  Either way the result is flattened to
   ``[rx * rx_ant, tx * tx_ant, p]``: one channel per (device, antenna), named in the manifest.
 * Unused path slots are padded (``tau = -1``, ``a = 0``) and marked invalid.
+* A dual-polarized array (``"VH"``, ``"cross"``) has two elements per position, and Sionna orders a
+  device's antennas **pattern-major**: the first ``num_rows * num_cols`` channels are the first
+  polarization, the next as many the second.  The channel map's ``antenna`` index is that order.
 * Sionna computes in single precision: about 3.6e-4 rad of carrier phase at 100 m and 3.5 GHz.  The
   arrays are widened to float64/complex128 for application; the precision is still float32's.
 
@@ -37,7 +40,7 @@ import datetime
 import hashlib
 import importlib.metadata
 import os
-import time
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -106,11 +109,6 @@ class ArraySpec:
     pattern: str = "iso"
     polarization: str = "V"
 
-    @property
-    def n_ant(self) -> int:
-        """Antennas per array (single-polarized patterns)."""
-        return int(self.num_rows) * int(self.num_cols)
-
 
 @dataclass(frozen=True)
 class SolverSpec:
@@ -126,6 +124,7 @@ class SolverSpec:
     refraction: bool = True
     diffraction: bool = False
     edge_diffraction: bool = False
+    diffraction_lit_region: bool = True
     seed: int = 42
 
 
@@ -148,16 +147,27 @@ class SceneSpec:
             )
         if not float(self.frequency_hz) > 0:
             raise ValueError(f"frequency_hz must be positive, got {self.frequency_hz}")
+        object.__setattr__(
+            self, "frequency_hz", float(self.frequency_hz)
+        )  # 3.5e9 == 3_500_000_000
         names = [d.name for d in (*self.transmitters, *self.receivers)]
         if len(set(names)) != len(names):
             raise ValueError(f"device names must be unique, got {names}")
 
     def to_dict(self) -> dict[str, Any]:
-        """Canonical, JSON-ready form: plain lists and numbers.  An XML scene adds its file's hash."""
-        d = _plain(asdict(self))
+        """Canonical, JSON-ready form: plain lists and numbers (what :meth:`from_dict` reads)."""
+        return _plain(asdict(self))
+
+    def identity(self) -> dict[str, Any]:
+        """What the channel depends on, and nothing else: :meth:`to_dict`, except that an XML scene
+        is named by the SHA-256 of its bytes and of every file it references (``filename`` values,
+        resolved against the XML's directory), not by its path.  So the same scene reached by a
+        relative or an absolute path has one identity, and editing a mesh changes it."""
+        d = self.to_dict()
         path = Path(self.scene)
         if path.suffix == ".xml":
-            d["scene_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            d["scene"] = "xml"
+            d["scene_sha256"] = xml_scene_sha256(path)
         return d
 
     @classmethod
@@ -184,8 +194,34 @@ class SceneSpec:
         )
 
     def hash(self) -> str:
-        """The cache key: :func:`~waveflow.rfenv.paths.spec_hash` of :meth:`to_dict`."""
-        return spec_hash(self.to_dict())
+        """The cache key: :func:`~waveflow.rfenv.paths.spec_hash` of :meth:`identity`."""
+        return spec_hash(self.identity())
+
+
+def xml_scene_sha256(path: Path) -> str:
+    """SHA-256 over a Mitsuba XML scene and every file it references, in a fixed order.
+
+    A referenced file is a ``value`` whose element is ``name="filename"`` (Mitsuba's meshes);
+    relative values resolve against the XML's directory.  A missing one is an error: the scene
+    could not be traced either.
+    """
+    import xml.etree.ElementTree as ET
+
+    path = Path(path)
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    refs = sorted(
+        {
+            el.get("value")
+            for el in ET.parse(path).iter()
+            if el.get("name") == "filename" and el.get("value")
+        }
+    )
+    for ref in refs:
+        f = Path(ref) if Path(ref).is_absolute() else path.parent / ref
+        h.update(ref.encode("utf-8"))
+        h.update(f.read_bytes())
+    return h.hexdigest()
 
 
 def _plain(x):
@@ -222,6 +258,13 @@ def import_sionna():
 
         want = os.environ.get(VARIANT_ENV)
         if want and mi.variant() != want:
+            if "sionna.rt" in sys.modules:
+                # Sionna registers its plugins for the variant active at import; switching later
+                # fails deep inside (\"Plugin 'itu-radio-material' not found\").  Say so here.
+                raise RuntimeError(
+                    f"{VARIANT_ENV}={want!r}, but sionna.rt was already imported with the "
+                    f"variant {mi.variant()!r}; set the variable before anything imports sionna.rt"
+                )
             mi.set_variant(want)
         from sionna import rt
     except ImportError as e:
@@ -287,7 +330,6 @@ def trace_with_paths(spec: SceneSpec):
     rt, mi = import_sionna()
     scene = build_scene(spec)
     s = spec.solver
-    t0 = time.perf_counter()
     paths = rt.PathSolver(deterministic=True)(
         scene,
         max_depth=s.max_depth,
@@ -300,9 +342,9 @@ def trace_with_paths(spec: SceneSpec):
         refraction=s.refraction,
         diffraction=s.diffraction,
         edge_diffraction=s.edge_diffraction,
+        diffraction_lit_region=s.diffraction_lit_region,
         seed=s.seed,
     )
-    seconds = time.perf_counter() - t0
     a, tau = paths.cir(normalize_delays=False, out_type="numpy")
     a = np.asarray(a)[..., 0]  # [rx, rx_ant, tx, tx_ant, p] at time step 0
     full = a.shape
@@ -311,7 +353,7 @@ def trace_with_paths(spec: SceneSpec):
     valid = _per_antenna(np.asarray(paths.valid), full)
     n_rx, n_rx_ant, n_tx, n_tx_ant, n_p = full
     flat = (n_rx * n_rx_ant, n_tx * n_tx_ant, n_p)
-    d = spec.to_dict()
+    d = spec.identity()
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "carrier_hz": float(spec.frequency_hz),
@@ -327,8 +369,8 @@ def trace_with_paths(spec: SceneSpec):
         },
         "spec": d,
         "spec_hash": spec_hash(d),
+        "scene_path": str(spec.scene),
         "created": datetime.datetime.now(datetime.UTC).date().isoformat(),
-        "trace_seconds": round(seconds, 3),
     }
     pathset = PathSet(
         a=a.reshape(flat),

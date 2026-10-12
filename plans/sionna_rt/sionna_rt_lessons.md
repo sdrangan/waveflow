@@ -66,3 +66,28 @@ keeping. Newest section last. Every measured number names its tool versions.
   pass in a real install and fail under the blocker, or the reverse.
 - **Cache a periodic waveform's period.** Rebuilding a degree-16 m-sequence per block was 25 ms a block,
   13× the channel applier; built once it is 14 µs.
+
+## M3: the Sionna backend, references and cache (2026-10-12)
+
+- **Mitsuba's `Point3f` refuses numpy scalars** ("Item assignment failed"). A specification that
+  normalizes its coordinates to plain float triples protects every caller, and JSON wants plain
+  numbers anyway.
+- **The repo's blanket `*.json` ignore hides committed data.** A channel file's manifest was
+  invisible to git until `.gitignore` re-included its directory, the same trap that left the markov
+  and cpu_sched JSON files out of every commit. Check `git check-ignore` before relying on a new data
+  file being committed.
+- **A `-k` selector can quietly skip a parametrized case.** AC2's `-k reflector` matched only
+  `simple_reflector`, so the concrete-slab case never ran under the plan's own verify command. Name
+  a test after what the selector says, and collect with `--collect-only -k …` to see it.
+- **"Never retrace" must not have a path that traces.** A missing half of a committed file fell
+  through to tracing and rewriting `tests/rfenv/data/`.
+- **Blocking an import is not hiding a package.** `importlib.metadata.version("sionna-rt")` still
+  answered under the blocker, so the cache's staleness check behaved as if Sionna were installed.
+  The blocker now hides the metadata too; the zero-skip assertion in the AC9 harness then caught a
+  test that had been skipping on it.
+- **A content hash must not include a path.** The same XML scene by a relative and an absolute path
+  gave two cache keys, and its meshes were not hashed at all.
+- **`np.savez` stamps the clock into the zip.** Writing entries with a fixed timestamp makes a retrace
+  reproduce a channel file byte for byte, so regenerating it is not a spurious diff.
+- **Sionna's variant is fixed at `import sionna.rt`.** Switching afterwards fails deep inside
+  ("Plugin 'itu-radio-material' not found"); check `sys.modules` and say so up front.

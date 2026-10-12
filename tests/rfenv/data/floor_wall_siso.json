@@ -26,6 +26,7 @@
    "sionna-rt": "2.2.0"
   }
  },
+ "scene_path": "floor_wall",
  "schema_version": 1,
  "spec": {
   "frequency_hz": 3500000000.0,
@@ -57,6 +58,7 @@
   "scene": "floor_wall",
   "solver": {
    "diffraction": false,
+   "diffraction_lit_region": true,
    "diffuse_reflection": false,
    "edge_diffraction": false,
    "los": true,
@@ -94,6 +96,5 @@
    "vertical_spacing": 0.5
   }
  },
- "spec_hash": "cdf7ddd5704e091b4e3a8aeca91abc53b99259545c4648c583abeeeecf23601a",
- "trace_seconds": 0.073
+ "spec_hash": "5105c0c924418a39a0ce10990a0ce77da76b2321c0c1f11e25940ba2637aaa30"
 }

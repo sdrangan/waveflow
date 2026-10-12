@@ -14,6 +14,7 @@ a test module that imported Sionna at module scope fails to collect instead of q
 from __future__ import annotations
 
 import importlib.abc
+import importlib.metadata
 import sys
 
 #: The top-level packages an install without the ``sionna`` extra does not have.
@@ -35,13 +36,40 @@ class SionnaBlocker(importlib.abc.MetaPathFinder):
             )
 
 
+#: The distributions an install without the extra does not have (package metadata names).
+BLOCKED_DISTS = ("sionna-rt", "sionna", "mitsuba", "drjit")
+
+
+def _hidden(name: str) -> bool:
+    return name.lower().replace("_", "-") in BLOCKED_DISTS
+
+
+def _wrap(fn):
+    def wrapped(name, *a, **kw):
+        if _hidden(name):
+            raise importlib.metadata.PackageNotFoundError(name)
+        return fn(name, *a, **kw)
+
+    wrapped._sionna_blocker = True
+    return wrapped
+
+
 def install() -> None:
-    """Drop already-imported copies and put the blocker first.  Idempotent."""
+    """Drop already-imported copies, put the blocker first, and hide the packages' metadata.
+
+    Hiding the metadata matters as much as refusing the import: code that asks
+    ``importlib.metadata.version("sionna-rt")`` (the cache does, to decide staleness) must see what a
+    real install without the extra shows -- no such package.  Idempotent.
+    """
     for name in list(sys.modules):
         if name.split(".")[0] in BLOCKED:
             del sys.modules[name]
     if not any(isinstance(f, SionnaBlocker) for f in sys.meta_path):
         sys.meta_path.insert(0, SionnaBlocker())
+    for attr in ("version", "distribution", "metadata"):
+        fn = getattr(importlib.metadata, attr)
+        if not getattr(fn, "_sionna_blocker", False):
+            setattr(importlib.metadata, attr, _wrap(fn))
 
 
 def pytest_configure(config) -> None:
