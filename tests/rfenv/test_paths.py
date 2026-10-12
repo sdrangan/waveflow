@@ -28,6 +28,26 @@ def test_a_channel_file_round_trips_bit_for_bit(tmp_path):
         assert back.manifest == ps.manifest
 
 
+@pytest.mark.parametrize("name", ["sounder_3.5ghz", "chan.v2"])
+def test_a_dotted_stem_keeps_every_character(tmp_path, name):
+    a = pathset([[[1e-3]]], [[[1e-6]]], tag=name)
+    b = pathset([[[2e-3]]], [[[1e-6]]], tag=name + "x")
+    npz, js = a.save(tmp_path / name)
+    b.save(tmp_path / (name + "x"))
+    assert (npz.name, js.name) == (name + ".npz", name + ".json")
+    assert PathSet.load(tmp_path / name).a[0, 0, 0] == 1e-3
+    assert PathSet.load(npz).a[0, 0, 0] == 1e-3
+
+
+def test_a_float32_carrier_is_accepted_as_a_plain_float():
+    m = manifest(1, 1, carrier_hz=np.float32(3.5e9))
+    ps = PathSet(
+        a=[[[1e-3]]], tau=[[[1e-6]]], doppler=[[[0.0]]], valid=[[[True]]], manifest=m
+    )
+    assert type(ps.carrier_hz) is float and type(ps.manifest["carrier_hz"]) is float
+    json.dumps(ps.manifest)
+
+
 def test_arrays_are_canonical_and_read_only():
     ps = pathset([[[1e-3]]], [[[1e-6]]])
     assert ps.a.dtype == np.complex128 and ps.tau.dtype == np.float64
@@ -79,7 +99,8 @@ def test_padding_may_hold_anything():
         (lambda m: m.pop("generator"), r"lacks \['generator'\]"),
         (lambda m: m.update(schema_version=99), "schema_version 99"),
         (lambda m: m.update(delays="relative"), "must be 'absolute'"),
-        (lambda m: m.update(carrier_hz=0), "carrier_hz must be positive"),
+        (lambda m: m.update(carrier_hz=0), "carrier_hz must be a positive number"),
+        (lambda m: m.update(carrier_hz=True), "carrier_hz must be a positive number"),
         (
             lambda m: m["channels"]["rx"].append({"device": "x", "antenna": 0}),
             "channel map",
@@ -91,6 +112,19 @@ def test_a_bad_manifest_is_refused(edit, match):
     m = manifest(1, 1)
     edit(m)
     with pytest.raises(ValueError, match=match):
+        PathSet(
+            a=[[[1e-3]]],
+            tau=[[[1e-6]]],
+            doppler=[[[0.0]]],
+            valid=[[[True]]],
+            manifest=m,
+        )
+
+
+def test_a_channel_map_that_is_not_a_dict_is_a_type_error():
+    m = manifest(1, 1)
+    m["channels"] = ["rx0"]
+    with pytest.raises(TypeError, match="channel map must be a dict"):
         PathSet(
             a=[[[1e-3]]],
             tau=[[[1e-6]]],
@@ -130,8 +164,8 @@ def test_the_package_imports_without_sionna():
         "random_pathset(2, 1, 3, seed=0)\n"
         "try:\n"
         "    import sionna.rt\n"
-        "except ImportError as e:\n"
-        "    print('blocked:', e)\n"
+        "except ModuleNotFoundError as e:\n"
+        "    print('blocked:', e.name, e)\n"
         "else:\n"
         "    raise SystemExit('sionna imported despite the blocker')\n"
     )
@@ -143,4 +177,4 @@ def test_the_package_imports_without_sionna():
         check=False,
     )
     assert run.returncode == 0, run.stderr
-    assert "blocked: sionna is blocked" in run.stdout
+    assert "blocked: sionna No module named 'sionna'" in run.stdout

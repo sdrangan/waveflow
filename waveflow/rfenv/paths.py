@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import numbers
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -173,9 +174,8 @@ class PathSet:
 
     def save(self, stem: str | Path) -> tuple[Path, Path]:
         """Write ``<stem>.npz`` and ``<stem>.json``; return their paths."""
-        stem = Path(stem)
-        stem.parent.mkdir(parents=True, exist_ok=True)
-        npz, js = stem.with_suffix(".npz"), stem.with_suffix(".json")
+        npz, js = _file_names(stem)
+        npz.parent.mkdir(parents=True, exist_ok=True)
         np.savez(npz, **{name: getattr(self, name) for name in _ARRAYS})
         js.write_text(
             json.dumps(self.manifest, indent=1, sort_keys=True, allow_nan=False) + "\n",
@@ -186,10 +186,7 @@ class PathSet:
     @classmethod
     def load(cls, stem: str | Path) -> PathSet:
         """Read a channel file written by :meth:`save`.  ``stem`` may name either file or neither."""
-        stem = Path(stem)
-        if stem.suffix in (".npz", ".json"):
-            stem = stem.with_suffix("")
-        npz, js = stem.with_suffix(".npz"), stem.with_suffix(".json")
+        npz, js = _file_names(stem)
         for p in (npz, js):
             if not p.is_file():
                 raise FileNotFoundError(f"channel file part missing: {p}")
@@ -200,6 +197,15 @@ class PathSet:
                 raise ValueError(f"channel file {npz} lacks arrays {missing}")
             arrays = {n: z[n] for n in _ARRAYS}
         return cls(manifest=manifest, **arrays)
+
+
+def _file_names(stem: str | Path) -> tuple[Path, Path]:
+    """``<stem>.npz`` and ``<stem>.json``.  Only a ``.npz``/``.json`` suffix is stripped from ``stem``,
+    so a dotted name (``sounder_3.5ghz``, ``chan.v2``) keeps every character."""
+    stem = Path(stem)
+    if stem.suffix in (".npz", ".json"):
+        stem = stem.with_name(stem.stem)
+    return stem.with_name(stem.name + ".npz"), stem.with_name(stem.name + ".json")
 
 
 def _check_manifest(m: dict[str, Any], shape: tuple[int, ...]) -> dict[str, Any]:
@@ -220,16 +226,24 @@ def _check_manifest(m: dict[str, Any], shape: tuple[int, ...]) -> dict[str, Any]
             f"PathSet delays must be {ABSOLUTE_DELAYS!r} (never normalized to the first path); "
             f"the manifest says {m['delays']!r}"
         )
-    if not (isinstance(m["carrier_hz"], (int, float)) and m["carrier_hz"] > 0):
-        raise ValueError(
-            f"PathSet carrier_hz must be positive, got {m['carrier_hz']!r}"
-        )
-    ch = m["channels"]
+    carrier = m["carrier_hz"]
     if (
-        not isinstance(ch, dict)
-        or len(ch.get("rx", ())) != shape[0]
-        or len(ch.get("tx", ())) != shape[1]
+        isinstance(carrier, bool)
+        or not isinstance(carrier, numbers.Real)
+        or not carrier > 0
     ):
+        raise ValueError(
+            f"PathSet carrier_hz must be a positive number, got {carrier!r}"
+        )
+    m["carrier_hz"] = float(
+        carrier
+    )  # plain float: a generator's float32 must serialize to JSON
+    ch = m["channels"]
+    if not isinstance(ch, dict):
+        raise TypeError(
+            f"PathSet channel map must be a dict with 'rx' and 'tx' lists, got {ch!r}"
+        )
+    if len(ch.get("rx", ())) != shape[0] or len(ch.get("tx", ())) != shape[1]:
         raise ValueError(
             f"PathSet channel map names {len(ch.get('rx', ()))} rx and "
             f"{len(ch.get('tx', ()))} tx channels, but the arrays have {shape[0]} and {shape[1]}"

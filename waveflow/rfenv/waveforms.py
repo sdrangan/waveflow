@@ -15,7 +15,7 @@ A waveform returns ``(count,)`` samples, which a source sends on every transmit 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -33,10 +33,24 @@ class Waveform:
 
 
 class PeriodicWaveform(Waveform):
-    """A waveform that repeats one period of :meth:`period` samples."""
+    """A waveform that repeats one period of :meth:`period` samples.
+
+    The period is built once and kept (read-only): a PN register is a Python loop, and rebuilding it
+    for every block cost 25 ms per block at degree 16 (M2 review).
+    """
+
+    def _make_period(self) -> np.ndarray:
+        raise NotImplementedError
 
     def period(self) -> np.ndarray:
-        raise NotImplementedError
+        cached = self.__dict__.get(
+            "_period"
+        )  # set past the frozen dataclass's __setattr__
+        if cached is None:
+            cached = np.asarray(self._make_period(), dtype=np.complex128)
+            cached.setflags(write=False)
+            self.__dict__["_period"] = cached
+        return cached
 
     def samples(self, n0: int, count: int, samp_rate: float) -> np.ndarray:
         seq = self.period()
@@ -77,7 +91,7 @@ class ZadoffChu(PeriodicWaveform):
                 f"{self.length}, root {self.root}"
             )
 
-    def period(self) -> np.ndarray:
+    def _make_period(self) -> np.ndarray:
         n = np.arange(self.length, dtype=np.float64)
         return np.exp(-1j * np.pi * self.root * n * (n + self.length % 2) / self.length)
 
@@ -116,7 +130,7 @@ class Pn(PeriodicWaveform):
                 f"Pn degree must be one of {sorted(_MSEQ_TAPS)}, got {self.degree}"
             )
 
-    def period(self) -> np.ndarray:
+    def _make_period(self) -> np.ndarray:
         taps = _MSEQ_TAPS[self.degree]
         state = [1] * self.degree
         bits = np.empty(2**self.degree - 1, dtype=np.float64)
@@ -129,11 +143,15 @@ class Pn(PeriodicWaveform):
         return (1.0 - 2.0 * bits).astype(np.complex128)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ArrayWaveform(PeriodicWaveform):
-    """A user's samples, ``(L,)`` or ``(n_ch, L)``, repeated with period ``L``; played as given."""
+    """A user's samples, ``(L,)`` or ``(n_ch, L)``, repeated with period ``L``; played as given.
 
-    data: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.complex128))
+    ``data`` has no default (an all-zero waveform would hide a forgotten argument), and two
+    waveforms are equal only if they are the same object (``==`` on arrays is elementwise).
+    """
+
+    data: np.ndarray
 
     def __post_init__(self) -> None:
         d = np.array(self.data, dtype=np.complex128)
@@ -148,7 +166,7 @@ class ArrayWaveform(PeriodicWaveform):
     def n_ch(self) -> int | None:  # type: ignore[override]
         return None if self.data.ndim == 1 else int(self.data.shape[0])
 
-    def period(self) -> np.ndarray:
+    def _make_period(self) -> np.ndarray:
         return self.data
 
     @classmethod

@@ -48,11 +48,21 @@ keeping. Newest section last. Every measured number names its tool versions.
 ## M2: the numpy core (2026-10-12)
 
 - **`np.sinc(k)` is not 0 at a nonzero integer** (about 1e-17), so a sinc interpolator at zero
-  fractional delay is not an exact pass-through. Special-case `mu == 0` to an impulse: then a
-  whole-sample delay moves samples bit-exactly, which is what an integer-delay test expects.
+  fractional delay is not an exact pass-through. Special-case `mu == 0` to an impulse.
+- **…and `k / f_s * f_s` is not always `k`.** For 87 of k in [1, 2000) it lands 6e-14 below, so the
+  fraction is 1 − 6e-14 and the impulse special case never fires; the first test passed only because
+  k = 17 happens to round-trip. Snap delays within 1e-9 samples of a whole number (M2 review).
 - **Key everything on the absolute sample index.** Giving `process()` the block's absolute start
   index, rather than counting calls, made block continuity (3e-16), run-start independence and
   dropped-block handling one mechanism instead of three.
-- **A per-path numpy convolve is about 18 M path-samples/s here**: fine for test-sized runs, slow
-  for long multi-antenna ones. Batching paths that share a transmit channel into one FIR per link
-  is the obvious speed-up if a run needs it.
+- **A per-path numpy convolve is about 18 M path-samples/s here** (numpy 2.5.3, i7-7700K): fine for
+  test-sized runs, slow for long multi-antenna ones. Paths of one link can share one FIR only when
+  their Doppler shifts are equal; with per-path Doppler the rotation stays per path, and a gathered
+  einsum over paths is the way to vectorize it (the first version of this lesson was wrong; M2 review).
+- **`Path.with_suffix` eats a dotted name.** `sounder_3.5ghz` became `sounder_3.npz`, and `chan.v2`
+  and `chan.v3` overwrote each other. Strip only the suffixes you own and append the rest.
+- **A blocker should fail the way the real thing fails.** A plain `ImportError` from the test blocker
+  was not the `ModuleNotFoundError` of a real missing package; code that caught the narrower one would
+  pass in a real install and fail under the blocker, or the reverse.
+- **Cache a periodic waveform's period.** Rebuilding a degree-16 m-sequence per block was 25 ms a block,
+  13× the channel applier; built once it is 14 µs.

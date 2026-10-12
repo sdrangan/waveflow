@@ -17,7 +17,9 @@ metronome changes.  The cost is a declared, constant latency (:attr:`ChannelAppl
 that a loop adds to its own -- the way ``RfSampDelay.blk_latency`` is declared rather than hidden.
 
 **Why the output does not depend on blksize.**  The interpolator reads a history buffer that carries
-the last ``ceil(max tau * f_s) + filt_len`` input samples across block boundaries, and the Doppler
+the last ``floor(max tau * f_s + D) + D`` input samples across block boundaries -- exactly what the
+latest path's interpolator reaches back to, and at most ``ceil(max tau * f_s) + filt_len`` -- and the
+Doppler
 phase is computed from the absolute sample index, not from a per-block counter.  Feeding the same
 samples in blocks of 1 or of 1024 gives the same output (AC3); :func:`reference_apply` evaluates the
 same formula on a whole signal at once, by a different code path, to show it.
@@ -100,8 +102,9 @@ class ChannelApplier:
             pathset, self.samp_rate, self.filt_len, self.beta, self.bulk_delay_s
         )
         max_k = max((p[2] for p in self._paths), default=self.group_delay_samp)
-        #: Input samples kept across blocks: enough for the latest path plus the interpolator.
-        self.history_len = int(max_k) + self.filt_len
+        #: Input samples kept across blocks: exactly as far back as the latest path's interpolator
+        #: reads (x[n0 - K - j] with j up to D, so K + D samples before the block).
+        self.history_len = int(max_k) + self.group_delay_samp
         self._hist = np.zeros((pathset.n_tx_ch, self.history_len), dtype=np.complex128)
         self._next_n0: int | None = None
         #: Input samples zero-filled because their block never arrived.
@@ -160,14 +163,28 @@ class ChannelApplier:
         )
 
 
+#: A delay within this many samples of a whole number is that whole number: tau * f_s in floating
+#: point lands a few ulps off an integer (k/f_s * f_s = k - 6e-14), which would turn the exact
+#: impulse of :func:`fractional_delay_kernel` into a sinc of almost-zero fraction.
+SNAP_SAMPLES = 1e-9
+
+
+def split_delay(tau_s: float, fs: float, half: int) -> tuple[int, float]:
+    """``(K, mu)`` with ``tau_s * fs + half = K + mu``, ``mu`` in [0, 1), snapped to whole samples."""
+    s = tau_s * fs + half
+    r = round(s)
+    if abs(s - r) < SNAP_SAMPLES:
+        return int(r), 0.0
+    k = math.floor(s)
+    return k, s - k
+
+
 def _compile(pathset, fs, filt_len, beta, bulk):
     """Per valid path: (rx, tx, K, taps, a, f_D), with K + j the whole-sample part of the delay."""
     half = filt_len // 2
     out = []
     for r, t, p in zip(*np.nonzero(pathset.valid), strict=True):
-        s = (float(pathset.tau[r, t, p]) - bulk) * fs + half
-        k = math.floor(s)
-        mu = s - k
+        k, mu = split_delay(float(pathset.tau[r, t, p]) - bulk, fs, half)
         out.append(
             (
                 int(r),
@@ -223,9 +240,8 @@ def reference_apply(
     j = np.arange(-half + 1, half + 1)
     y = np.zeros((pathset.n_rx_ch, n_out), dtype=np.complex128)
     for r, t, p in zip(*np.nonzero(pathset.valid), strict=True):
-        s = (float(pathset.tau[r, t, p]) - bulk) * fs + half
-        k = math.floor(s)
-        c = fractional_delay_kernel(s - k, filt_len, beta)
+        k, mu = split_delay(float(pathset.tau[r, t, p]) - bulk, fs, half)
+        c = fractional_delay_kernel(mu, filt_len, beta)
         m = n[:, None] - k - j[None, :]  # input index (relative to n0) of every tap
         taps_in = np.where(m >= 0, x[t, np.clip(m, 0, None)], 0.0)
         phase = np.exp(2j * np.pi * pathset.doppler[r, t, p] * (n0 + n - half) / fs)

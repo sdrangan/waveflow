@@ -18,7 +18,7 @@ from waveflow.rfenv.noise import (
     thermal_noise_power,
     w_to_dbm,
 )
-from waveflow.rfenv.waveforms import ArrayWaveform, Pn, Tone, ZadoffChu
+from waveflow.rfenv.waveforms import _MSEQ_TAPS, ArrayWaveform, Pn, Tone, ZadoffChu
 from waveflow.simulation.rf_tb import write_rf_bundle
 
 FS = 122.88e6
@@ -46,7 +46,7 @@ def test_zadoff_chu_refuses_a_root_sharing_a_factor():
         ZadoffChu(length=1024, root=2)
 
 
-@pytest.mark.parametrize("degree", [3, 7, 10])
+@pytest.mark.parametrize("degree", sorted(_MSEQ_TAPS))
 def test_pn_is_an_m_sequence(degree):
     x = Pn(degree=degree).period()
     n = 2**degree - 1
@@ -77,6 +77,15 @@ def test_a_user_array_repeats_as_given_on_its_channels():
     np.testing.assert_array_equal(w.samples(2, 4, FS), data[:, [2, 0, 1, 2]])
     with pytest.raises(ValueError):
         ArrayWaveform(data=np.zeros((1, 1, 1)))
+    with pytest.raises(TypeError):
+        ArrayWaveform()  # no silent all-zero default
+    assert w in [w] and w != ArrayWaveform(data=data)  # identity, not elementwise
+
+
+def test_a_period_is_built_once():
+    pn = Pn(degree=16)
+    assert pn.period() is pn.period()
+    assert not pn.period().flags.writeable
 
 
 def test_a_bundle_plays_as_a_waveform(tmp_path):

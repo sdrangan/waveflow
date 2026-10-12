@@ -11,6 +11,7 @@ from waveflow.rfenv.apply import (
     ChannelApplier,
     fractional_delay_kernel,
     reference_apply,
+    split_delay,
     taps,
 )
 
@@ -73,7 +74,9 @@ def tones(n: np.ndarray, freqs: np.ndarray, phases: np.ndarray) -> np.ndarray:
 def test_a_sub_sample_delay_is_accurate_to_60_db(delay_samp):
     """40 tones within |f| <= 0.4 f_s through one path; the error excludes the start-up transient."""
     rng = np.random.default_rng(7)
-    freqs = rng.uniform(-0.4, 0.4, 40) * FS
+    freqs = (
+        np.concatenate([[-0.4, 0.4], rng.uniform(-0.4, 0.4, 38)]) * FS
+    )  # both band edges
     phases = rng.uniform(0, 1, 40)
     n = np.arange(8192, dtype=np.float64)
     ps = pathset([[[1.0]]], [[[delay_samp / FS]]])
@@ -88,14 +91,28 @@ def test_a_sub_sample_delay_is_accurate_to_60_db(delay_samp):
     assert err_db <= -60.0, err_db
 
 
-def test_a_whole_sample_delay_is_exact():
-    ps = pathset([[[0.5 - 0.25j]]], [[[17 / FS]]])
-    x = noise((1, 300), seed=8)
+@pytest.mark.parametrize("k", [17, 69, 1234])
+def test_a_whole_sample_delay_is_exact(k):
+    """k / FS * FS lands a few ulps off k for some k (69 and 1234 do); the delay is snapped, so the
+    samples pass through bit for bit."""
+    ps = pathset([[[0.5 - 0.25j]]], [[[k / FS]]])
+    x = noise((1, k + 300), seed=8)
     app = ChannelApplier(ps, FS)
     y = app.process(x, 0)[0]
-    lag = 17 + app.group_delay_samp
-    assert np.allclose(y[lag:], (0.5 - 0.25j) * x[0, :-lag], rtol=0, atol=1e-12)
+    lag = k + app.group_delay_samp
+    np.testing.assert_array_equal(y[lag:], (0.5 - 0.25j) * x[0, :-lag])
     assert np.all(y[:lag] == 0)
+
+
+def test_whole_sample_delays_snap_across_a_range():
+    for k in range(1, 2000):
+        assert split_delay(k / FS, FS, 32) == (k + 32, 0.0), k
+
+
+def test_the_history_is_exactly_what_the_latest_path_reads():
+    """A 200.9-sample path: K = floor(200.9 + 32) = 232, and the interpolator reads K + 32 back."""
+    app = ChannelApplier(pathset([[[1.0]]], [[[200.9 / FS]]]), FS)
+    assert app.history_len == 232 + 32
 
 
 def test_the_kernel_at_zero_delay_is_an_impulse():
@@ -104,6 +121,23 @@ def test_the_kernel_at_zero_delay_is_an_impulse():
 
 
 # --- AC4: Doppler -----------------------------------------------------------------------------
+
+
+def test_the_doppler_phase_is_taken_at_n_minus_d():
+    """Design note A1: y(n) = y_ref(n - D), so the rotation is exp(j2pi f_D (n - D) / f_s).  At 1 MHz
+    the two readings differ by 1.64 rad, so a code that used n would fail here."""
+    f_d, k, a = 1.0e6, 5, 0.3 + 0.4j
+    ps = pathset([[[a]]], [[[k / FS]]], doppler=[[[f_d]]])
+    x = noise((1, 512), seed=16)
+    app = ChannelApplier(ps, FS)
+    y = run_blocks(app, x, 64)[0]
+    d = app.group_delay_samp
+    n = np.arange(512)
+    want = np.zeros(512, dtype=complex)
+    want[k + d :] = (
+        a * np.exp(2j * np.pi * f_d * (n[k + d :] - d) / FS) * x[0, : 512 - k - d]
+    )
+    np.testing.assert_allclose(y, want, rtol=0, atol=1e-13)
 
 
 def test_doppler_shifts_a_tone_by_f_d_across_blocks():
@@ -219,6 +253,17 @@ def test_taps_follow_sionnas_formula():
         rtol=0,
         atol=1e-15,
     )
+
+
+def test_taps_rotate_at_the_sampling_frequency_not_the_bandwidth():
+    """W sets the sinc's lag spacing; f_s sets the time steps.  Swapping them must fail."""
+    w, fs, tau, f_d = 100e6, 200e6, 12.3e-9, 2.0e5
+    ps = pathset([[[1.0]]], [[[tau]]], doppler=[[[f_d]]])
+    h = taps(ps, w, -2, 5, sampling_frequency=fs, num_time_steps=4)
+    lags = np.arange(-2, 6)
+    for n in range(4):
+        want = np.exp(2j * np.pi * f_d * n / fs) * np.sinc(lags - w * tau)
+        np.testing.assert_allclose(h[0, 0, n], want, rtol=0, atol=1e-15)
 
 
 def test_taps_ignore_padding_whatever_it_holds():

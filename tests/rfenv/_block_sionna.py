@@ -25,9 +25,13 @@ class SionnaBlocker(importlib.abc.MetaPathFinder):
 
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split(".")[0] in BLOCKED:
-            raise ImportError(
-                f"{fullname} is blocked by tests.rfenv._block_sionna (an install without the "
-                f"'sionna' extra)"
+            # ModuleNotFoundError, as a real install without the package raises, so code that
+            # catches it behaves the same here.  (importlib.util.find_spec still raises rather than
+            # returning None; probe for Sionna with try/import, as waveflow.rfenv does.)
+            raise ModuleNotFoundError(
+                f"No module named {fullname!r} (blocked by tests.rfenv._block_sionna: an "
+                f"install without the 'sionna' extra)",
+                name=fullname,
             )
 
 
