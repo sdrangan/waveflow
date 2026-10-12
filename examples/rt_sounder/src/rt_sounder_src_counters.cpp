@@ -6,7 +6,8 @@
 // same DUT, the same geometry and the same cycle budget, so the counters are directly comparable
 // with that gate's recorded expectations.  What differs is only what the source replays.
 //
-// Regenerate the harness (rt_sounder_xsi.py), not this file.
+// Authored, so it lives in src/ (plans/source_layout.md): rt_sounder_xsi.generate_tb copies it into
+// xsi/, which is generated and gitignored.  Regenerate the harness, not this file.
 #include <cstdio>
 
 #include "rt_sounder_src_tb_harness.h"

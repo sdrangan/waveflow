@@ -128,7 +128,7 @@ gate checks that the replayed bundle is pysim's, bit for bit.
 | `rt_sounder_build.py` | the trace rung |
 | `rt_sounder_xsi.py` | the XSI workspace generator |
 | `data/street_canyon.*` | the committed channel file |
-| `xsi/rt_sounder_src_counters.cpp` | the hand-written counters main |
+| `src/rt_sounder_src_counters.cpp` | the hand-written counters main (copied into the generated `xsi/`) |
 
 Tests: `tests/examples/test_rt_sounder.py` (the channel file, channel mode, source mode) and
 `tests/examples/test_rt_sounder_xsi.py` (the RTL replay).

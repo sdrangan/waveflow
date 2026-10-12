@@ -49,6 +49,7 @@ from tests.examples.test_rf_loopback_xsi import (
     WANT_IQ_SINK_LAST_BLOCK_CYCLE,
 )
 from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from waveflow.toolchain.toolchain import find_vivado_path
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rt_sounder"
 XSI = ROOT / "xsi"
@@ -110,7 +111,7 @@ def test_source_mode_counters_main_names_real_harness_members():
     from waveflow.build.composite_gen import render_tb_harness, tb_top_spec
 
     h = render_tb_harness(tb_top_spec(make_xsi_tb()), ns=TB_NS)
-    main = (XSI / f"{COUNTERS}.cpp").read_text(encoding="utf-8")
+    main = (ROOT / "src" / f"{COUNTERS}.cpp").read_text(encoding="utf-8")
     used = set(re.findall(r"\bh\.(\w+)\.", main))
     assert used, "the counters main reads no harness members"
     for member in sorted(used):
@@ -129,7 +130,7 @@ def test_source_mode_replays_through_the_rtl_word_for_word():
     """AC6's RTL half: the same bytes in both backends, the first block whole, every word that
     reaches the sink the matching quantized source word, and the I/Q gate's accounting.
     """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
+    _require(bool(find_vivado_path()), "Vivado (xvlog/xelab/xsim)")
     _require(
         PROJ.is_dir(),
         f"no csynth RTL at {PROJ} -- run "
@@ -137,7 +138,10 @@ def test_source_mode_replays_through_the_rtl_word_for_word():
     )
     _require(rtl_staleness(LOOPBACK, TOP) is None, rtl_staleness(LOOPBACK, TOP) or "")
 
+    # xsi/ is untracked build output (plans/source_layout.md): regenerate it (Python only), the
+    # runner script included, then run.
     generate_tb(ROOT)
+    assert (XSI / XSI_RUNNER).is_file(), f"generate_tb wrote no {XSI_RUNNER}"
     shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
     # Never pass on the last run's output.
     shutil.rmtree(XSI / OUT_BUNDLE_SRC, ignore_errors=True)
