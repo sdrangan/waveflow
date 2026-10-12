@@ -27,10 +27,20 @@ keeping. Newest section last. Every measured number names its tool versions.
 - **Doppler is in Hz, positive when approaching**, and `cir(num_time_steps=…)` rotates `a` by
   2π·f_D/f_s per step: 30 m/s toward the transmitter gives +350.2423 Hz (v/λ = 350.2423 Hz).
 - **`deterministic=True` makes two traces bit-identical.**
-- **Sionna 2.x reflects off a slab, and it matches ITU-R P.2040 to 0.002 dB.** `floor_wall`'s
-  concrete floor (ε′ = 5.24, σ = 0.123 S/m, 0.1 m thick) at 45° incidence, vertical polarization
-  (TM, in the plane of incidence): Sionna −12.446 dB, the P.2040 slab formula −12.448 dB, a single
-  Fresnel interface −11.619 dB. `simple_reflector` is a 1 m metal plate and gives |R|² = 1 exactly.
+- **Sionna 2.x reflects off a slab, and matches ITU-R P.2040 because it uses P.2040's equations.**
+  `floor_wall`'s concrete floor (ε′ = 5.24, σ = 0.123 S/m, 0.1 m thick) at 45° incidence, vertical
+  polarization (TM, in the plane of incidence): Sionna −12.448 dB, the P.2040 slab formula −12.4485
+  dB, a single Fresnel interface −11.619 dB. `simple_reflector` is a 1 m metal plate: −0.002 dB.
+- **Measure a reflection coefficient against free space on the unfolded path, never against another
+  reflection.** The first recording subtracted the metal plate's reflected gain instead of the
+  free-space loss over 28.284 m and was 0.002 dB off on both numbers; the reviewer caught it.
 - **Traces are fast on the CPU for small scenes**: 0.08–0.8 s for the empty and reflector scenes,
   1.25 s for the first trace of `simple_street_canyon` and 0.14 s for the next (the first call pays
   the LLVM compilation).
+- **Keep the spike's evidence in the repo.** The plan cited a scratch file in `/tmp` as evidence;
+  the M1 review asked for it, and it now lives in `plans/sionna_rt/spike/`.
+- **`SeedSequence(seed, spawn_key=(k,))` is `SeedSequence(seed).spawn()[k]`.** Keying noise chunks
+  that way collides with any other stream spawned from the same seed; add a stream tag and the
+  channel to the key.
+- **Sionna pads invalid paths with τ = −1 and a = 0.** Every minimum, maximum or causality check on
+  delays must mask them first.

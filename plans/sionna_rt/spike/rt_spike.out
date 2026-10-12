@@ -1,0 +1,57 @@
+
+======== versions and variant ========
+sionna.rt 2.2.0 mitsuba 3.9.1 drjit 1.5.0 variant llvm_ad_mono_polarized
+
+======== free space, empty scene, iso V, 100 m ========
+trace s 0.109 a shape (1, 1, 1, 1, 1, 1) dtype complex64 tau shape (1, 1, 1) tau dtype float32
+valid shape (1, 1, 1) n valid 1
+paths 1 tau [3.335641e-07] d/c 3.3356409519815204e-07 dtau ps [0.]
+|a|^2 dB [-83.32915] Friis dB -83.32914410888888 diff dB [1.0354386e-06]
+phase of a relative to exp(-j2pi f d/c) [rad] [0.00036069] (float64 carrier phase 7335.457576830885 rad)
+doppler (static) [[[0.]]]
+normalize_delays=True: tau [0.] a phase [0.]
+
+======== determinism ========
+deterministic=True identical: True
+
+======== 1x4 receive array, synthetic_array True / False ========
+synthetic True a (1, 4, 1, 1, 1, 1) tau (1, 1, 1) doppler (1, 1, 1) trace s 0.076
+synthetic False a (1, 4, 1, 1, 1, 1) tau (1, 4, 1, 1, 1) doppler (1, 4, 1, 1, 1) trace s 0.59
+
+======== Doppler: receiver moving toward the transmitter at 30 m/s ========
+doppler [350.24234] expected +v/lambda 350.2422999580596 shape (1, 1, 1)
+cir over time shape (1, 1, 1, 1, 1, 4)
+phase step per 1 ms [2.2006378 2.2006378 2.200637 ] expected 2.200637273049266
+
+======== scene simple_reflector ========
+ object merged-shapes ITURadioMaterial {'name': 'reflector-mat', 'itu_type': 'metal', 'thickness': '[0.01]', 'relative_permittivity': '[1]', 'conductivity': '[1e+07]', 'scattering_coefficient': '[0]'} bbox BoundingBox3f[
+  min = [-0.5, -0.5, 0],
+  max = [0.5, 0.5, 0]
+]
+ trace s 0.819 a (1, 1, 1, 1, 2, 1) tau (1, 1, 2) paths 2 tau ns [66.7128 94.3462] |a|^2 dB [-69.35  -72.362]
+ interactions [0 1]
+
+======== scene floor_wall ========
+ object wall ITURadioMaterial {'name': 'brick', 'itu_type': 'brick', 'thickness': '[0.1]', 'relative_permittivity': '[3.91]', 'conductivity': '[0.0290822]', 'scattering_coefficient': '[0]'} bbox BoundingBox3f[
+  min = [-4.37114e-08, -1.75, 0.9],
+  max = [4.37114e-08, 1.75, 2.9]
+]
+ object floor ITURadioMaterial {'name': 'concrete', 'itu_type': 'concrete', 'thickness': '[0.1]', 'relative_permittivity': '[5.24]', 'conductivity': '[0.123087]', 'scattering_coefficient': '[0]'} bbox BoundingBox3f[
+  min = [-2, -2, 0],
+  max = [2, 2, 0]
+]
+ trace s 0.77 a (1, 1, 1, 1, 2, 1) tau (1, 1, 2) paths 2 tau ns [66.7128 94.3462] |a|^2 dB [-69.35  -84.808]
+ interactions [0 1]
+
+======== scene double_reflector ========
+ object merged-shapes ITURadioMaterial {'name': 'metal', 'itu_type': 'metal', 'thickness': '[0.1]', 'relative_permittivity': '[1]', 'conductivity': '[1e+07]', 'scattering_coefficient': '[0]'} bbox BoundingBox3f[
+  min = [-20, -10, 0],
+  max = [0.5, 10, 10]
+]
+ trace s 0.686 a (1, 1, 1, 1, 2, 1) tau (1, 1, 2) paths 2 tau ns [66.7128 94.3462] |a|^2 dB [-69.35  -72.362]
+ interactions [0 1]
+
+======== timing: simple_street_canyon, max_depth 3 ========
+trace s 1.25 paths 5
+second trace s 0.14
+{"done": true}
