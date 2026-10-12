@@ -210,7 +210,7 @@ adc_if.bind("tx", chan.rf_out)
 adc_if.bind("rx", rfdc.rx_rf)
 ```
 
-The channel sounder (`examples/rt_sounder/`) builds both graphs whole.
+The [channel sounder](../../../examples/rt_sounder/index.md) builds both graphs whole.
 
 ### At RTL
 
@@ -253,5 +253,5 @@ The sounder's measured worst case is 0.124 dB, over 17 taps.
 - **Trace time** grows with the scene; tests and examples use small scenes and committed channel
   files.
 
-**Source of truth:** `waveflow/rfenv/`; tests in `tests/rfenv/`; the worked example is the channel
-sounder, `examples/rt_sounder/`.
+**Source of truth:** `waveflow/rfenv/`; tests in `tests/rfenv/`; the worked example is
+[the channel sounder](../../../examples/rt_sounder/index.md).
