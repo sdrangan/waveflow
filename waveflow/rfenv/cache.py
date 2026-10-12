@@ -74,14 +74,14 @@ def load_or_trace(
             )
         return ps
     if retrace == "if_stale" and npz.is_file() and js.is_file():
+        cached: PathSet | None
         try:
-            ps = PathSet.load(stem)
-        except (
-            ValueError
-        ):  # written by another schema version, or damaged: trace it again
-            ps = None
-        if ps is not None and describes(ps, spec):
-            return ps
+            cached = PathSet.load(stem)
+        except ValueError:
+            # written by another schema version, or damaged: trace it again
+            cached = None
+        if cached is not None and describes(cached, spec):
+            return cached
     from waveflow.rfenv.sionna_backend import trace
 
     ps = trace(spec)
@@ -117,7 +117,9 @@ class TraceChannelStep(BuildStep):
 
     def _stem(self, config: BuildConfig) -> Path:
         return (
-            self.stem if self.stem.is_absolute() else Path(config.root_dir) / self.stem
+            self.stem
+            if self.stem.is_absolute()
+            else Path(config.root_dir or ".") / self.stem
         )
 
     def expected_paths(self, config: BuildConfig) -> dict[str, Path]:

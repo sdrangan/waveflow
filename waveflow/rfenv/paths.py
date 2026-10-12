@@ -245,14 +245,13 @@ def _check_manifest(m: dict[str, Any], shape: tuple[int, ...]) -> dict[str, Any]
     if (
         isinstance(carrier, bool)
         or not isinstance(carrier, numbers.Real)
-        or not carrier > 0
+        or not float(carrier) > 0
     ):
         raise ValueError(
             f"PathSet carrier_hz must be a positive number, got {carrier!r}"
         )
-    m["carrier_hz"] = float(
-        carrier
-    )  # plain float: a generator's float32 must serialize to JSON
+    # A plain float: a generator's float32 must serialize to JSON.
+    m["carrier_hz"] = float(carrier)
     ch = m["channels"]
     if not isinstance(ch, dict):
         raise TypeError(

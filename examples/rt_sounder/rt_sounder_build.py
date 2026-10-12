@@ -3,8 +3,9 @@
 The rungs, in the order a failure is cheapest to diagnose:
 
     trace_channel   -> the street canyon traced with Sionna RT into data/street_canyon.{npz,json}
-                       (skipped while the committed file still describes the scene: no Sionna
-                       needed after the first trace)
+                       (skipped while the committed file still describes the scene and the
+                       installed tracer; another sionna-rt, Mitsuba or Dr.Jit version retraces it
+                       and rewrites the committed file, a change to review)
 
 Run it with::
 

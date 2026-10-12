@@ -37,8 +37,13 @@ pytest -m xsi
 # Run only the processor-model ground-truth gates (plans/cpu_model.md): gem5 v25.1 HPI in Docker
 # (ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1) from a build at WAVEFLOW_GEM5_ROOT, McPAT at
 # WAVEFLOW_MCPAT_ROOT, the Vitis 2024.1 aarch64 gcc.  Like -m xsi, a skip fails the session.
-# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5"
+# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5 and not sionna"
 pytest -m gem5
+
+# Run only the ray-traced RF environment's Sionna gates (plans/sionna_rt/sionna_rt.md): the tests that
+# trace a scene with Sionna RT, which needs pip install -e ".[sionna]" (CPU is fine).  Like -m xsi, a
+# skip fails the session, and a full run must collect WANT_SIONNA_GATES.
+pytest -m sionna
 
 # Lint / format
 ruff check waveflow/

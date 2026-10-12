@@ -43,9 +43,8 @@ class PeriodicWaveform(Waveform):
         raise NotImplementedError
 
     def period(self) -> np.ndarray:
-        cached = self.__dict__.get(
-            "_period"
-        )  # set past the frozen dataclass's __setattr__
+        # Kept in __dict__, past the frozen dataclass's __setattr__.
+        cached = self.__dict__.get("_period")
         if cached is None:
             cached = np.asarray(self._make_period(), dtype=np.complex128)
             cached.setflags(write=False)

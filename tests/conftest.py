@@ -195,7 +195,9 @@ WANT_GEM5_GATES = 12
 #: dual-polarized array's channel order (tests/rfenv/test_sionna_backend.py).
 #: 19 -> 21 on 2026-10-12 (step 13): a live channel and a live source give the cached samples
 #: (tests/rfenv/test_live.py).
-WANT_SIONNA_GATES = 21
+#: 21 -> 22 on 2026-10-12 (M6 review): a user's Mitsuba XML scene, by path, traces as its built-in
+#: twin (tests/rfenv/test_sionna_backend.py).
+WANT_SIONNA_GATES = 22
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

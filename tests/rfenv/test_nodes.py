@@ -327,6 +327,29 @@ def test_source_a_waveform_with_the_wrong_channel_count_is_refused():
         next(src.blocks(BLK, FS))
 
 
+def test_source_a_waveform_with_the_wrong_channel_count_is_refused_at_pre_sim():
+    """The waveform's declared channel count is checked against the channel before the run."""
+    _, src, _, _ = source_graph(
+        1,
+        2,
+        pathset=random_pathset(1, 2, 1, 1),
+        waveform=ArrayWaveform(data=np.ones((3, 4))),
+    )
+    with pytest.raises(ValueError, match="3 transmit channels"):
+        src.pre_sim()
+
+
+def test_source_pre_sim_applies_the_current_channel(tmp_path):
+    """A channel changed after a render is the one the run applies, as for RtChannel."""
+    first, second = random_pathset(1, 1, 2, 1), random_pathset(1, 1, 2, 2)
+    _, src, _, _ = source_graph(1, 2, pathset=first)
+    src.render_bundle(tmp_path / "rf")
+    assert src.paths is first
+    src.pathset = second
+    src.pre_sim()
+    assert src.paths is second
+
+
 def test_source_an_edge_that_disagrees_is_refused():
     src = source_graph(3, 2, pathset=random_pathset(2, 1, 1, seed=1))[1]
     with pytest.raises(ValueError, match="2 receive channels"):

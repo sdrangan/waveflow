@@ -14,7 +14,7 @@ The worked example for the [RF environment](../../guide/rf/rfenv/index.md): the 
 experiment, run through the converter model, with the air between the antennas ray traced.
 
 ```bash
-python -m examples.rt_sounder.rt_sounder_build                 # trace the scene (the file is committed)
+python -m examples.rt_sounder.rt_sounder_build                 # trace the scene, if the file is stale
 python -m examples.rt_sounder.rt_sounder                       # channel mode: the tap table
 pytest tests/examples/test_rt_sounder.py
 python -m examples.rf_loopback.rf_dut_build --through csynth   # source mode at RTL: the DUT's RTL
@@ -24,8 +24,11 @@ pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py
 ## The street
 
 Sionna RT's `simple_street_canyon` at 3.5 GHz, with the transmitter 20 m up over an open cross
-street and the receiver at street level in the canyon, 72.6 m away. `rt_sounder_build.py` traces it
-once into `examples/rt_sounder/data/street_canyon.{npz,json}`; after that, nothing here needs Sionna.
+street and the receiver at street level in the canyon, 72.6 m away. `rt_sounder_build.py` traced it
+into the committed `examples/rt_sounder/data/street_canyon.{npz,json}`, and nothing else here needs
+Sionna. The build skips the trace while the file still describes the scene and the installed tracer;
+on another version of sionna-rt, Mitsuba or Dr.Jit it traces again and rewrites the committed file,
+which then shows as a change to review.
 
 | path | delay | gain |
 |---|---|---|

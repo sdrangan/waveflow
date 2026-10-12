@@ -74,9 +74,8 @@ def tones(n: np.ndarray, freqs: np.ndarray, phases: np.ndarray) -> np.ndarray:
 def test_a_sub_sample_delay_is_accurate_to_60_db(delay_samp):
     """40 tones within |f| <= 0.4 f_s through one path; the error excludes the start-up transient."""
     rng = np.random.default_rng(7)
-    freqs = (
-        np.concatenate([[-0.4, 0.4], rng.uniform(-0.4, 0.4, 38)]) * FS
-    )  # both band edges
+    # Both band edges, and 38 tones between them.
+    freqs = np.concatenate([[-0.4, 0.4], rng.uniform(-0.4, 0.4, 38)]) * FS
     phases = rng.uniform(0, 1, 40)
     n = np.arange(8192, dtype=np.float64)
     ps = pathset([[[1.0]]], [[[delay_samp / FS]]])

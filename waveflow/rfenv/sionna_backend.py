@@ -1,6 +1,7 @@
 """sionna_backend.py -- a scene traced by NVIDIA Sionna RT into a :class:`~waveflow.rfenv.paths.PathSet`.
 
-**The only module that imports Sionna**, and only inside :func:`trace`: the rest of
+**The only module that imports Sionna**, and only inside functions (:func:`import_sionna`, which
+:func:`trace`, :func:`build_scene` and :func:`trace_with_paths` call): the rest of
 :mod:`waveflow.rfenv` -- applying a channel, the nodes in cached mode -- runs on a channel file and
 numpy alone, so the ``sionna`` extra stays optional (``plans/sionna_rt/sionna_rt.md`` §2).
 
@@ -147,9 +148,8 @@ class SceneSpec:
             )
         if not float(self.frequency_hz) > 0:
             raise ValueError(f"frequency_hz must be positive, got {self.frequency_hz}")
-        object.__setattr__(
-            self, "frequency_hz", float(self.frequency_hz)
-        )  # 3.5e9 == 3_500_000_000
+        # A plain float, so 3.5e9 and 3_500_000_000 are one specification.
+        object.__setattr__(self, "frequency_hz", float(self.frequency_hz))
         names = [d.name for d in (*self.transmitters, *self.receivers)]
         if len(set(names)) != len(names):
             raise ValueError(f"device names must be unique, got {names}")
@@ -212,9 +212,9 @@ def xml_scene_sha256(path: Path) -> str:
     h.update(path.read_bytes())
     refs = sorted(
         {
-            el.get("value")
+            value
             for el in ET.parse(path).iter()
-            if el.get("name") == "filename" and el.get("value")
+            if el.get("name") == "filename" and (value := el.get("value"))
         }
     )
     for ref in refs:
@@ -266,7 +266,7 @@ def import_sionna():
                     f"variant {mi.variant()!r}; set the variable before anything imports sionna.rt"
                 )
             mi.set_variant(want)
-        from sionna import rt
+        from sionna import rt  # type: ignore[import-untyped]
     except ImportError as e:
         raise ImportError(INSTALL_HINT) from e
     return rt, mi
@@ -370,7 +370,7 @@ def trace_with_paths(spec: SceneSpec):
         "spec": d,
         "spec_hash": spec_hash(d),
         "scene_path": str(spec.scene),
-        "created": datetime.datetime.now(datetime.UTC).date().isoformat(),
+        "created": datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
     }
     pathset = PathSet(
         a=a.reshape(flat),

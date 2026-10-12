@@ -129,9 +129,8 @@ def test_a_single_reflector_reflects_as_its_material_says(scene, obj):
     d_los, d_ref = 20.0, math.hypot(20.0, 20.0)
     assert tau.size == 2
     assert abs(tau[0] - d_los / C) <= 1e-12 and abs(tau[1] - d_ref / C) <= 1e-12
-    measured = gain_db[1] - friis_db(
-        d_ref
-    )  # |R|^2 against free space on the unfolded path
+    # |R|^2: the reflected path against free space over the unfolded path.
+    measured = gain_db[1] - friis_db(d_ref)
     expected = slab_tm_db(*plate_material(scene, obj), theta=math.radians(45.0))
     assert abs(measured - expected) <= 0.5, (measured, expected)
 
@@ -205,7 +204,6 @@ def test_taps_match_sionnas_on_the_same_trace(spec):
             out_type="numpy",
         )
     )
-    theirs = theirs.reshape(
-        mine.shape
-    )  # [rx, rx_ant, tx, tx_ant, t, l] -> [rx_ch, tx_ch, t, l]
+    # [rx, rx_ant, tx, tx_ant, t, l] -> [rx_ch, tx_ch, t, l]
+    theirs = theirs.reshape(mine.shape)
     assert rel_err(mine, theirs) <= 1e-3

@@ -163,7 +163,8 @@ class RtChannel(HwModule):
     noise_figure_db: float | None = None
     #: Noise temperature in kelvin.
     temperature_k: float = 290.0
-    #: Noise seed; the node's name tags its stream, so two channels never share one.
+    #: Noise seed; the node's name tags its stream, so two differently named channels never share
+    #: one (and two nodes of the same name and seed draw the same noise, as a replay needs).
     seed: int = 0
     #: Block periods added beyond the interpolator's delay: zero, and declared (as ``RfSampDelay``).
     blk_latency: int = 0
@@ -231,6 +232,9 @@ class RtChannel(HwModule):
         """The output blocks for an input block at grid index ``idx``: one per grid period from the
         last block seen, the missing ones computed from zero input.  ``run_proc``'s body, without
         the edges, so a gap can be exercised directly."""
+        app = self._applier
+        if app is None:
+            raise RuntimeError(f"RtChannel '{self.name}': step() before pre_sim")
         blksize = int(np.asarray(data).shape[1])
         g_in, g_out = amplitude_gain(self.tx_gain_db), amplitude_gain(self.gain_db)
         out = []
@@ -243,7 +247,7 @@ class RtChannel(HwModule):
             if k != int(idx):
                 self.dropped_blocks += 1
             n0 = (k - 1) * blksize
-            y = self._applier.process(g_in * np.asarray(x), n0)
+            y = app.process(g_in * np.asarray(x), n0)
             if self._noise is not None:
                 y = y + self._noise.samples(y.shape[0], n0, y.shape[1])
             out.append(g_out * y)
@@ -323,7 +327,9 @@ class RtSignalSource(HwModule):
         super().__post_init__()
         self.rf_ep = RFSampIFTx(sim=self.sim)
         self.add_endpoint(self.rf_ep)
-        #: The channel applied, set in ``pre_sim`` (or by :meth:`render_bundle`).
+        #: The channel applied: resolved by :meth:`blocks` / :meth:`render_bundle` when first needed,
+        #: and again at every ``pre_sim``, so a run always applies the node's current fields (as
+        #: :class:`RtChannel` does).
         self.paths: PathSet | None = None
         self.n_out = 0
 
@@ -389,11 +395,18 @@ class RtSignalSource(HwModule):
             raise ValueError(
                 f"RtSignalSource '{self.name}': the edge must be complex baseband"
             )
+        self.paths = None  # re-resolve: the fields may have changed since a render
         ps = self._resolve()
         if int(ep.n_ch) != ps.n_rx_ch:
             raise ValueError(
                 f"RtSignalSource '{self.name}': the channel has {ps.n_rx_ch} receive channels, "
                 f"the edge carries {ep.n_ch}"
+            )
+        n_wave = None if self.waveform is None else self.waveform.n_ch
+        if n_wave is not None and int(n_wave) != ps.n_tx_ch:
+            raise ValueError(
+                f"RtSignalSource '{self.name}': the waveform carries {n_wave} transmit channels, "
+                f"the channel has {ps.n_tx_ch}"
             )
 
     def run_proc(self) -> ProcessGen[None]:

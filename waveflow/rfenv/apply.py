@@ -19,8 +19,7 @@ that a loop adds to its own -- the way ``RfSampDelay.blk_latency`` is declared r
 **Why the output does not depend on blksize.**  The interpolator reads a history buffer that carries
 the last ``floor(max tau * f_s + D) + D`` input samples across block boundaries -- exactly what the
 latest path's interpolator reaches back to, and at most ``ceil(max tau * f_s) + filt_len`` -- and the
-Doppler
-phase is computed from the absolute sample index, not from a per-block counter.  Feeding the same
+Doppler phase is computed from the absolute sample index, not from a per-block counter.  Feeding the same
 samples in blocks of 1 or of 1024 gives the same output (AC3); :func:`reference_apply` evaluates the
 same formula on a whole signal at once, by a different code path, to show it.
 

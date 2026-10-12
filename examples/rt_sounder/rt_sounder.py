@@ -2,8 +2,8 @@
 
 The worked example for :mod:`waveflow.rfenv` (``plans/sionna_rt/sionna_rt.md``, M5).  A transmitter
 20 m up over an open cross street and a receiver at street level in the canyon, 72.6 m apart, in
-Sionna RT's ``simple_street_canyon`` at 3.5 GHz, traced once into a committed channel file; then the classic sounding experiment through the RF
-chain Waveflow already models:
+Sionna RT's ``simple_street_canyon`` at 3.5 GHz, traced once into a committed channel file; then
+the classic sounding experiment through the RF chain Waveflow already models:
 
 * **channel mode** -- a known Zadoff-Chu sequence played into an ``Rfdc`` DAC, through
   :class:`~waveflow.rfenv.nodes.RtChannel` (the air), back through the ``Rfdc`` ADC, and correlated:
@@ -15,7 +15,8 @@ chain Waveflow already models:
 Four arrive within 13.2 ns -- the strongest (the line of sight) at 242.1 ns, one 10.5 ns later
 3.3 dB down, two weaker ones at −17.2 and −19.4 dB -- and spread over lags 23 to 37 at 122.88 MSa/s
 (8.14 ns a sample); the fifth, at 355.0 ns and 24.6 dB down, is a separate echo at lags 43-44,
-112.9 ns (13.9 samples) after the first path and inside AC7's −30 dB window.  So the sounder must resolve both a dense cluster and a distant tap.
+112.9 ns (13.9 samples) after the first path and inside AC7's −30 dB window.  So the sounder must
+resolve both a dense cluster and a distant tap.
 
 **Why ``FILT_LEN = 256``.**  A path at a fractional delay spreads into sinc sidelobes, so a channel
 has taps above −30 dB well away from its paths.  The node realizes each delay with a Kaiser-windowed

@@ -181,6 +181,19 @@ def test_two_traces_of_one_specification_are_identical(sionna):
 
 
 @pytest.mark.sionna
+def test_a_users_xml_scene_traces_as_its_built_in_twin(sionna):
+    """A Mitsuba XML file by path -- here floor_wall's own -- traces to the built-in's paths, under
+    its own identity (the file's bytes and meshes, not a name)."""
+    xml = floor_wall(scene=str(sionna.scene.floor_wall))
+    assert Path(xml.scene).suffix == ".xml"
+    a, b = trace(floor_wall()), trace(xml)
+    for name in ("a", "tau", "doppler", "valid"):
+        assert np.array_equal(getattr(a, name), getattr(b, name)), name
+    assert int(b.valid.sum()) == 2
+    assert b.manifest["spec_hash"] != a.manifest["spec_hash"]
+
+
+@pytest.mark.sionna
 @pytest.mark.parametrize("synthetic", [True, False])
 def test_an_array_flattens_to_one_channel_per_antenna(sionna, synthetic):
     """A 1x4 receive array off the transmitter's broadside: four channels, the same paths, and the

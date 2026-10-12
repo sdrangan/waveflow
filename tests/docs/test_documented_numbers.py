@@ -1234,61 +1234,91 @@ def _rfenv_page(rel: str) -> str:
     return p.read_text(encoding="utf-8")
 
 
-#: Each number on ``docs/guide/rf/rfenv/index.md``, and the committed source that states it: a file
-#: and a pattern that must match there.  The measured ones (0.124, 17) are recomputed below.
-RFENV_GUIDE_TIES = {
-    "2": ("waveflow/rfenv/nodes.py", r"int\(self\.filt_len\) // 2"),  # D = filt_len / 2
-    "64": ("waveflow/rfenv/apply.py", r"^DEFAULT_FILT_LEN = 64$"),
-    "−60": ("tests/rfenv/test_apply.py", r"err_db <= -60\.0"),
-    "0.8": ("tests/rfenv/test_apply.py", r"uniform\(-0\.4, 0\.4"),  # |f| <= 0.4 fs: 0.8 of fs/2
-    "30": ("examples/rt_sounder/rt_sounder.py", r"^TAP_WINDOW_DB = 30\.0$"),
-    "256": ("examples/rt_sounder/rt_sounder.py", r"^FILT_LEN = 256$"),
-    "−10": ("docs/guide/rf/rfenv/index.md", r"gain_db_for_dbfs\(p_strongest, -10\.0,"),
-    "1": ("tests/rfenv/test_sionna_reference.py", r"abs\(tau\[0\] - d / C\) <= 1e-12"),  # 1 ps
-    "0.01": ("tests/rfenv/test_sionna_reference.py", r"friis_db\(d\)\) <= 0\.01"),
-    "0.5": ("tests/rfenv/test_sionna_reference.py", r"abs\(measured - expected\) <= 0\.5"),
-    "1e-12": ("tests/rfenv/test_apply.py", r"rel_err\(got, want\) <= 1e-12"),
-    "0.1": ("tests/rfenv/test_sionna_reference.py", r"abs\(doppler\[0\] - v / LAM\) <= 0\.1"),
-    "1e-3": ("tests/rfenv/test_sionna_reference.py", r"rel_err\(mine, theirs\) <= 1e-3"),
-    "1e-6": ("tests/rfenv/test_live.py", r"rel_err\(y_live, y_cached\) <= 1e-6"),
-    "0.124": None,
-    "17": None,
-}
+def _bound(rel: str, pattern: str) -> str:
+    """The number a committed source states, captured by *pattern*'s one group."""
+    m = re.search(pattern, _src(rel), flags=re.MULTILINE)
+    assert m, f"/{pattern}/ no longer matches in {rel}"
+    return m.group(1)
+
+
+def _rfenv_guide_phrases() -> list[str]:
+    """Each figure on ``docs/guide/rf/rfenv/index.md``, rebuilt from what states it into the phrase
+    the page uses: a number swapped for another, even one the page states elsewhere, fails."""
+    from examples.rt_sounder import rt_sounder as rs
+    from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
+    from waveflow.rfenv.apply import DEFAULT_FILT_LEN
+
+    ref, app, live = (
+        "tests/rfenv/test_sionna_reference.py",
+        "tests/rfenv/test_apply.py",
+        "tests/rfenv/test_live.py",
+    )
+
+    def ps(s: str) -> str:  # a bound in seconds, quoted in picoseconds
+        return f"{float(s) * 1e12:g} ps"
+
+    d_div = _bound("waveflow/rfenv/nodes.py", r"int\(self\.filt_len\) // (\d+)")
+    floor_db = float(_bound(app, r"err_db <= (-\d+\.\d+)"))
+    band = 2 * float(_bound(app, r"rng\.uniform\(-(0\.\d+), "))  # |f| <= x fs, of fs/2
+    sounder_bound = _bound("tests/examples/test_rt_sounder.py", r"cmp\.worst_db <= (\d\.\d+)")
+    iq_bits = int(Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True).bitwidth)
+    assert int(Rfsoc4x2SampWord.specialize(samp_per_word=4).bitwidth) == iq_bits
+    snippet_dbfs = float(
+        _bound("docs/guide/rf/rfenv/index.md", r"gain_db_for_dbfs\(p_strongest, (-\d+\.\d+),")
+    )
+    taps_bound = _bound(ref, r"rel_err\(mine, theirs\) <= (\S+)$")
+    los_s = _bound(ref, r"abs\(tau\[0\] - d / C\) <= (\S+)$")
+    friis_db = _bound(ref, r"friis_db\(d\)\) <= (\S+)$")
+    reflect_s = _bound(ref, r"abs\(tau\[0\] - d_los / C\) <= (\S+) and")
+    reflect_db = _bound(ref, r"abs\(measured - expected\) <= (\S+),")
+    blocks_rel = _bound(app, r"rel_err\(got, want\) <= (\S+)$")
+    doppler_hz = _bound(ref, r"abs\(doppler\[0\] - v / LAM\) <= (\S+)$")
+    live_rel = _bound(live, r"rel_err\(y_live, y_cached\) <= (\S+)$")
+
+    tb = rs.run_channel_mode()
+    cmp = rs.compare_taps(tb.paths, rs.estimate_taps(tb))
+    return [
+        f"**D = `filt_len` / {d_div}** samples",
+        (
+            f"The default, {DEFAULT_FILT_LEN}, keeps a sub-sample delay's error at or below "
+            f"{_neg(floor_db, '.0f')} dB of a signal that occupies up to {band:g} of the Nyquist band"
+        ),
+        f"to compare taps {rs.TAP_WINDOW_DB:.0f} dB down with Sionna's",
+        f"(the sounder uses {rs.FILT_LEN})",
+        f"two complex samples in a {iq_bits}-bit beat, the width of the real word with four samples",
+        f"A source on an ADC, with the strongest tap at {_neg(snippet_dbfs, '.0f')} dBFS:",
+        f"| free space | d/c and Friis | {ps(los_s)}; {friis_db} dB |",
+        (
+            f"| one reflector | the image method; the ITU-R P.2040 slab | "
+            f"{ps(reflect_s)}; {reflect_db} dB |"
+        ),
+        f"| block by block | the whole signal at once | relative error {blocks_rel} |",
+        f"| sub-sample delay | the analytically delayed signal | {_neg(floor_db, '.0f')} dB |",
+        f"| Doppler | v·cos θ / λ, Sionna's sign | {doppler_hz} Hz |",
+        f"| `taps()` | Sionna's `Paths.taps()` | relative error {taps_bound} |",
+        f"| live mode | a channel file traced by the same install | relative error {live_rel} |",
+        (
+            f"| the sounder | `taps()`, every tap within {rs.TAP_WINDOW_DB:.0f} dB of the strongest | "
+            f"{sounder_bound} dB |"
+        ),
+        f"The sounder's measured worst case is {cmp.worst_db:.3f} dB, over {len(cmp.rows)} taps.",
+        f"agree far more closely than the {taps_bound} above",
+    ]
+
+
+def test_rfenv_guide_quotes_its_sources():
+    text = " ".join(_rfenv_page("guide/rf/rfenv/index.md").split())
+    missing = [p for p in _rfenv_guide_phrases() if " ".join(p.split()) not in text]
+    assert not missing, "docs/guide/rf/rfenv/index.md no longer states:\n  " + "\n  ".join(missing)
 
 
 def test_rfenv_guide_states_no_untied_number():
     text = _rfenv_page("guide/rf/rfenv/index.md")
-    untied = sorted(set(_prose_numbers(text)) - set(RFENV_GUIDE_TIES))
+    tied = {n for p in _rfenv_guide_phrases() for n in _prose_numbers(p)}
+    untied = sorted(set(_prose_numbers(text)) - tied)
     assert not untied, (
-        f"docs/guide/rf/rfenv/index.md states {untied} with no entry in RFENV_GUIDE_TIES")
-
-
-def test_rfenv_guide_numbers_are_the_sources():
-    for number, tie in RFENV_GUIDE_TIES.items():
-        if tie is None:
-            continue
-        rel, pattern = tie
-        assert re.search(pattern, _src(rel), flags=re.MULTILINE), (
-            f"the guide's {number} is tied to /{pattern}/ in {rel}, which no longer matches")
-    # The sounder's AC7 bound is the test's.
-    assert re.search(r"cmp\.worst_db <= 0\.5", _src("tests/examples/test_rt_sounder.py"))
-
-
-def test_rfenv_guide_quotes_the_sounders_measured_taps():
-    """The sounder's worst tap difference and tap count, recomputed from a fresh channel-mode run."""
-    from examples.rt_sounder.rt_sounder import (
-        compare_taps,
-        estimate_taps,
-        run_channel_mode,
-    )
-
-    tb = run_channel_mode()
-    cmp = compare_taps(tb.paths, estimate_taps(tb))
-    text = " ".join(_rfenv_page("guide/rf/rfenv/index.md").split())
-    assert (
-        f"The sounder's measured worst case is {cmp.worst_db:.3f} dB, over {len(cmp.rows)} taps."
-        in text
-    )
+        f"docs/guide/rf/rfenv/index.md states {untied}, which no phrase in "
+        f"_rfenv_guide_phrases() ties to a source")
 
 
 # ---------------------------------------------------------------------------

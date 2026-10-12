@@ -88,7 +88,9 @@ keeping. Newest section last. Every measured number names its tool versions.
 - **A content hash must not include a path.** The same XML scene by a relative and an absolute path
   gave two cache keys, and its meshes were not hashed at all.
 - **`np.savez` stamps the clock into the zip.** Writing entries with a fixed timestamp makes a retrace
-  reproduce a channel file byte for byte, so regenerating it is not a spurious diff.
+  reproduce a channel file's `.npz` byte for byte, so regenerating it is not a spurious diff. (The
+  `.json` manifest records the trace's date, so a retrace on another day changes that one line;
+  *corrected at the M6 review*.)
 - **Sionna's variant is fixed at `import sionna.rt`.** Switching afterwards fails deep inside
   ("Plugin 'itu-radio-material' not found"); check `sys.modules` and say so up front.
 
@@ -139,3 +141,29 @@ keeping. Newest section last. Every measured number names its tool versions.
   the authority; `--force-step csynth` (15.8 s) settled it before any number was read off the RTL.
 - **`-k <name>` also matches the module name.** `-k sounder` selects every test in
   `test_rt_sounder.py`. Harmless when it over-selects; the M3/M4 trap was under-selection.
+
+## M6: the docs and the regression (2026-10-12)
+
+- **Copy the newest convention, not the nearest example.** Step 18 committed the sounder's `xsi/`
+  workspace because `rf_loopback` and `rf_blk_delay` do, and the M5 reviewer agreed; both are on
+  `test_source_layout.py`'s not-yet-migrated list, and only the full regression saw it. Before copying
+  a layout, check which examples were born under the current plan (`vitis_fft`, `ssr_fft`) and run the
+  repo-wide lints (`tests/build/`) at the step, not at the close-out.
+- **A gate that regenerates must not skip on what it generates.** The replay gate required `xsi/run.sh`
+  before calling `generate_tb`, so untracking the workspace turned it into a skip. Skip only for what
+  the test cannot make (Vivado, the RTL); generate, then assert the rest.
+- **"Every number is tied" is a two-way check.** One direction rebuilds each figure from its source and
+  looks for the phrase; the other refuses any prose number no phrase accounts for, so a number added
+  later fails until it is tied. Output fences are left to the snippet harness, which runs them.
+- **An example page's table can be the example's own output.** Running `main()` under `snippets: run`
+  makes AC7's table on the page a checked artifact instead of a pasted one.
+- **Never run `git stash` as a reflex.** One slipped into a check command and shelved the working tree;
+  `git stash pop` restored it at once. Commands that touch the tree need the same care as commits.
+- **A version floor is a test target.** `datetime.UTC` (3.11) slipped into a repo that declares 3.10,
+  in the one function no test runs without Sionna; `ruff check --target-version py310` and a grep for
+  3.11-only names are cheap at every milestone.
+- **"Set membership" is not a tie.** Checking that each number on a page is *some* sourced number let
+  a swap between two of them through (the review swapped the filter default 64 for 256 and passed).
+  Rebuild each phrase from its source, as the example page already did.
+- **A Must in the requirements needs its own test, even when it obviously works.** Tracing a user's
+  XML scene was only ever hashed, never traced; the gate costs a second.

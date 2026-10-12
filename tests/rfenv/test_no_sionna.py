@@ -47,6 +47,5 @@ def test_every_non_sionna_test_passes_without_sionna():
     passed = re.search(r"(\d+) passed", out)
     assert passed and int(passed.group(1)) > 50, out[-2000:]
     assert " failed" not in out and " error" not in out, out[-2000:]
-    assert "skipped" not in out, out[
-        -2000:
-    ]  # a module-level importorskip would hide here
+    # A module-level importorskip would hide here.
+    assert "skipped" not in out, out[-2000:]
