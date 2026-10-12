@@ -287,7 +287,7 @@ struct Int16Array {
                 if (i + 3 < n0_eff) {
                     w.range(63, 48) = self->data[i + 3];
                 }
-                streamutils::write_axi4_word<64>(s, w, tlast);
+                streamutils::write_axi4_word<64>(s, w, tlast && (i + 4 >= n0_eff));
                 out_idx++;
             }
         }

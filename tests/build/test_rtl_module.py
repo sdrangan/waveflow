@@ -93,30 +93,40 @@ def test_one_interface_becomes_fourteen_nets_an_a_b_pair_of_seven():
                          for s in ("Addr", "EN", "Din", "Dout", "WEN", "Clk", "Rst")}
 
 
-def test_shipped_memory_is_the_witness_plus_the_published_latency():
-    """ACCEPTANCE: the Verilog placed for a 1024x16 buffer **is** the witness's memory.
+def _verilog_statements(path) -> list[str]:
+    """The non-comment, non-blank lines of a Verilog file, whitespace-normalized."""
+    out = []
+    for ln in Path(path).read_text(encoding="utf-8").splitlines():
+        code = ln.split("//", 1)[0].strip()
+        if code:
+            out.append(" ".join(code.split()))
+    return out
 
-    The witness ran.  So the artifact is a copy, and the only permitted difference is the block that
-    publishes ``READ_LATENCY`` — the line that makes the C++ pragma derivable from the file instead
-    of authored beside it.  Removing that block must recover the witness byte for byte, line endings
-    included.
+
+def test_shipped_memory_is_the_witness_recoded_for_block_ram():
+    """ACCEPTANCE: the Verilog placed for a buffer does what the witness's memory did.
+
+    The witness ran, and is kept as it ran.  The shipped memory differs from it in two deliberate
+    ways and no others: it publishes ``READ_LATENCY`` (the line that makes the C++ pragma derivable
+    from the file instead of authored beside it), and each port is its own ``always`` block --
+    Vivado's true-dual-port template, so the memory is block RAM (the witness's single block built a
+    512 x 64 instance from 32832 flip-flops; ``plans/system_resources.md``).  So: the same module
+    header and ports, every one of the witness's per-port statements, read-first, latency 1.  The
+    behaviour is gated by every XSI example that runs it.
     """
-    import difflib
-
-    shipped = (RTL_SRC_DIR / "bram_t2p.v").read_bytes().decode().splitlines(keepends=True)
-    witness = (WITNESS / "bram_t2p.v").read_bytes().decode().splitlines(keepends=True)
-
-    changes = [op for op in difflib.SequenceMatcher(None, witness, shipped).get_opcodes()
-               if op[0] != "equal"]
-    assert len(changes) == 1 and changes[0][0] == "insert", (
-        f"the shipped memory must differ from the witness by ONE insertion, got {changes}")
-    added = shipped[changes[0][3]:changes[0][4]]
-    assert any("localparam READ_LATENCY = 1;" in ln for ln in added)
-    assert all(ln.strip() == "" or ln.lstrip().startswith("//") or "localparam" in ln
-               for ln in added), (
-        "the insertion may publish the latency and explain itself, and do nothing else: "
-        f"{added}")
-    assert all(ln.endswith("\r\n") for ln in added), "line endings match the file it was added to"
+    shipped = _verilog_statements(RTL_SRC_DIR / "bram_t2p.v")
+    witness = _verilog_statements(WITNESS / "bram_t2p.v")
+    header = witness[:witness.index("reg [DW-1:0] mem [0:(1<<AW)-1];")]
+    assert shipped[:len(header)] == header, "the same module header and ports as the witness"
+    port_statements = [s for s in witness
+                       if s.startswith(("if (a_en)", "if (|a_we)", "a_dout <=", "if (b_en)",
+                                        "if (|b_we)", "b_dout <=", "if (a_en && |a_we"))]
+    assert len(port_statements) == 7
+    for s in port_statements:
+        assert s in shipped, f"the witness's statement {s!r} is missing"
+    assert "localparam READ_LATENCY = 1;" in shipped
+    assert shipped.count("always @(posedge clk) begin") == 3, "one block per port, one for the check"
+    assert '(* ram_style = "block" *) reg [DW-1:0] mem [0:(1<<AW)-1];' in shipped
 
 
 def test_the_read_during_write_assertion_survived_becoming_an_artifact():

@@ -13,7 +13,7 @@ Two shapes:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from waveflow.hw.mm_adaptor import VIEW_BYTES
@@ -41,6 +41,9 @@ class QueueView:
     axis: str
     depth: int = 512
     law: int = 12
+    #: The pysim object this view realizes (its ``MemSlave*`` module) -- what the instance inventory
+    #: records as the leaf's owner.  Not part of the view's value.
+    owner: object = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.kind not in ("in", "out"):
@@ -54,6 +57,13 @@ class QueueView:
     @property
     def module(self) -> str:
         return "mm_queue_in" if self.kind == "in" else "mm_queue_out"
+
+    @property
+    def inst(self) -> str:
+        return f"u_{self.name}"
+
+    def leaf_params(self, dw: int) -> dict[str, int]:
+        return {"DW": dw, "LAW": self.law, "DEPTH": self.depth}
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,7 @@ class RegBankView:
     cfg_axis: str
     status_axis: str
     law: int = 12
+    owner: object = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.law < 12:
@@ -77,6 +88,13 @@ class RegBankView:
             raise ValueError("a register bank needs at least one config and one status word")
 
     module = "mm_regbank"
+
+    @property
+    def inst(self) -> str:
+        return f"u_{self.name}"
+
+    def leaf_params(self, dw: int) -> dict[str, int]:
+        return {"DW": dw, "LAW": self.law, "NCFG": self.ncfg, "NSTAT": self.nstat}
 
     def commit_offset(self) -> int:
         return 1 << (self.law - 1)
@@ -94,12 +112,20 @@ class CreditInView:
     name: str
     axis: str
     law: int = 12
+    owner: object = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.law < 12:
             raise ValueError("a credit window is at least 4 KB (law >= 12)")
 
     module = "mm_credit_in"
+
+    @property
+    def inst(self) -> str:
+        return f"u_{self.name}"
+
+    def leaf_params(self, dw: int) -> dict[str, int]:
+        return {"DW": dw, "LAW": self.law}
 
 
 @dataclass(frozen=True)
@@ -114,6 +140,7 @@ class BramView:
     kport: str
     baw: int = 9
     law: int = 12
+    owner: object = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.law < 12:
@@ -122,6 +149,22 @@ class BramView:
             raise ValueError("a BRAM needs at least one address bit")
 
     module = "mm_bram_port"
+    mem_module = "bram_t2p"
+
+    @property
+    def inst(self) -> str:
+        return f"u_{self.name}"
+
+    @property
+    def mem_inst(self) -> str:
+        """The memory itself: a second instance, brought by the view."""
+        return f"u_{self.name}_mem"
+
+    def leaf_params(self, dw: int) -> dict[str, int]:
+        return {"DW": dw, "LAW": self.law, "BAW": self.baw, "LAT": bram_read_latency()}
+
+    def mem_params(self, dw: int) -> dict[str, int]:
+        return {"DW": dw, "AW": self.baw}
 
 
 def bram_read_latency() -> int:
@@ -134,11 +177,43 @@ def bram_read_latency() -> int:
     return lat
 
 
+#: Every hand-written leaf (``<module>.v`` in :data:`RTL_DIR`) -> the leaves it instantiates.
+LEAF_DEPS: dict[str, tuple[str, ...]] = {
+    "mm_sync_fifo": (), "axi_slave_front": (), "mm_queue_in": ("mm_sync_fifo",),
+    "mm_queue_out": ("mm_sync_fifo",), "mm_regbank": (), "mm_bram_port": (), "bram_t2p": (),
+    "mm_credit_in": (),
+}
+
+
+def leaf_module_sources(module: str) -> tuple[Path, ...]:
+    """The sources one instance of leaf *module* needs: its own file, then the files of every leaf
+    it instantiates (transitively)."""
+    if module not in LEAF_DEPS:
+        raise KeyError(f"{module!r} is not a hand-written leaf in {RTL_DIR}")
+    mods = [module]
+    for m in mods:
+        mods += [d for d in LEAF_DEPS[m] if d not in mods]
+    return tuple(RTL_DIR / f"{m}.v" for m in mods)
+
+
 def leaf_sources() -> list[Path]:
-    """Every hand-written adaptor source, for an xvlog file list (order-independent)."""
-    return [RTL_DIR / f for f in ("mm_sync_fifo.v", "axi_slave_front.v", "mm_queue_in.v",
-                                  "mm_queue_out.v", "mm_regbank.v", "mm_bram_port.v", "bram_t2p.v",
-                                  "mm_credit_in.v")]
+    """Every hand-written adaptor source, for an xvlog file list (order-independent).  A system top
+    compiles only the ones its instances use (``SystemTopSpec.sources``)."""
+    return [RTL_DIR / f"{m}.v" for m in LEAF_DEPS]
+
+
+def front_inst(n: str) -> str:
+    """The instance name of the ``axi_slave_front`` serving view or adaptor *n*."""
+    return f"u_{n}_front"
+
+
+def front_params(dw: int, addr_width: int, id_width: int, law: int) -> dict[str, int]:
+    return {"DW": dw, "AW": addr_width, "IDW": id_width, "LAW": law}
+
+
+def verilog_params(params: dict[str, int]) -> str:
+    """``#(.K(v), ...)``: an instance's parameter list, from the dict the inventory records."""
+    return "#(" + ", ".join(f".{k}({v})" for k, v in params.items()) + ")"
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +248,8 @@ def _req_wires(n: str, law: int, dw: int) -> list[str]:
 
 def _front_inst(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: int) -> list[str]:
     """``axi_slave_front`` behind the AXI4 nets ``<axi>_<SIG>``, driving the request bus ``<n>_req_*``."""
-    lines = [f"  axi_slave_front #(.DW({dw}), .AW({addr_width}), .IDW({id_width}), .LAW({law})) "
-             f"u_{n}_front (", "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),"]
+    lines = [f"  axi_slave_front {verilog_params(front_params(dw, addr_width, id_width, law))} "
+             f"{front_inst(n)} (", "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),"]
     lines += [f"    .s_axi_{s}({axi}_{s})," for s in _FRONT_SIGS]
     lines += _req_conns(n)
     lines.append("  );")
@@ -184,9 +259,11 @@ def _front_inst(n: str, law: int, axi: str, dw: int, addr_width: int, id_width: 
 def _leaf_inst(view, dw: int) -> list[str]:
     """The view's hand-written leaf on the request bus ``<view.name>_req_*``."""
     n = view.name
+    if not isinstance(view, (QueueView, CreditInView, RegBankView, BramView)):
+        raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
+    head = f"  {view.module} {verilog_params(view.leaf_params(dw))} {view.inst} ("
     if isinstance(view, QueueView):
         side = "m_axis" if view.kind == "in" else "s_axis"
-        head = f"  {view.module} #(.DW({dw}), .LAW({view.law}), .DEPTH({view.depth})) u_{n} ("
         # The interrupt (plans/mm_irq.md): the net <view>_irq, for the top to route to its host.
         streams = [_axis_conns(side, view.axis) + ",", f"    .irq({n}_irq)"]
         req = _req_conns(n)
@@ -194,33 +271,26 @@ def _leaf_inst(view, dw: int) -> list[str]:
         return [f"  wire {n}_irq;", head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req,
                 *streams, "  );"]
     elif isinstance(view, CreditInView):
-        head = f"  mm_credit_in #(.DW({dw}), .LAW({view.law})) u_{n} ("
         streams = [_axis_conns("m_axis", view.axis)]
     elif isinstance(view, RegBankView):
-        head = (f"  mm_regbank #(.DW({dw}), .LAW({view.law}), .NCFG({view.ncfg}), "
-                f".NSTAT({view.nstat})) u_{n} (")
         streams = [_axis_conns("m_cfg", view.cfg_axis) + ",", _axis_conns("s_status", view.status_axis)]
-    elif isinstance(view, BramView):
+    else:
         k = view.kport
         mem = [
             f"  wire [31:0] {n}_a_addr; wire {n}_a_en; wire [1:0] {n}_a_we;",
             f"  wire [{dw - 1}:0] {n}_a_din, {n}_a_dout;",
-            f"  bram_t2p #(.DW({dw}), .AW({view.baw})) u_{n}_mem (",
+            f"  {view.mem_module} {verilog_params(view.mem_params(dw))} {view.mem_inst} (",
             "    .clk(ap_clk),",
             f"    .a_addr({n}_a_addr), .a_en({n}_a_en), .a_din({n}_a_din), .a_we({n}_a_we), "
             f".a_dout({n}_a_dout),",
             f"    .b_addr({k}_addr), .b_en({k}_en), .b_din({k}_din), .b_we({k}_we), .b_dout({k}_dout)",
             "  );",
         ]
-        head = (f"  mm_bram_port #(.DW({dw}), .LAW({view.law}), .BAW({view.baw}), "
-                f".LAT({bram_read_latency()})) u_{n} (")
         streams = [f"    .bram_addr({n}_a_addr), .bram_en({n}_a_en), .bram_we({n}_a_we),",
                    f"    .bram_din({n}_a_din), .bram_dout({n}_a_dout)"]
         req = _req_conns(n)
         req[-1] += ","
         return [*mem, head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req, *streams, "  );"]
-    else:
-        raise TypeError(f"no adaptor leaf for view type {type(view).__name__}")
     req = _req_conns(n)
     req[-1] += ","
     return [head, "    .ap_clk(ap_clk), .ap_rst_n(ap_rst_n),", *req, *streams, "  );"]

@@ -126,7 +126,7 @@ self.slave_map = self.device.layout.at(MM_BASE)      # every view at base + offs
 
 At RTL the same two halves become two C++ headers -- the type's layout and the system's bases -- that
 the testbench host combines as `at(mm_fir_layout::qin, FIR)`
-([RTL simulation](rtlsim.md)). A second FIR at another base would share the layout and differ only in
+([XSI testbench](xsi.md#the-host-program)). A second FIR at another base would share the layout and differ only in
 its base.
 
 ## Reaching the views from the host

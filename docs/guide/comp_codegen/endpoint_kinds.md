@@ -46,8 +46,8 @@ mm_slave
 |---|---|---|
 | `axis_in` | `hls::stream<axi4s_word<bw>>&` | `AxisMaster` |
 | `axis_out` | `hls::stream<axi4s_word<bw>>&` | `AxisSlave` |
-| `maxi_read` | `const ap_uint<bw>*` + `#pragma HLS stable` | `AxiMmReadSlave` |
-| `maxi_write` | `ap_uint<bw>*` | `AxiMmWriteSlave` |
+| `maxi_read` | `const ap_uint<bw>*`, `offset=off` + `#pragma HLS stable` | `AxiMmReadSlave` |
+| `maxi_write` | `ap_uint<bw>*`, `offset=off` + `#pragma HLS stable` | `AxiMmWriteSlave` |
 | `mm_slave` | *not a kernel port* — a system top's crossbar SI | `AxiMmMaster` |
 | `irq_out` | *not a kernel port* — a queue view's interrupt pin | `IrqPin` |
 | `irq_in` | *not a kernel port* | **none — no design takes an interrupt in** |

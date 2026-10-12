@@ -1,9 +1,5 @@
 ../fir_block_proj/solution1/syn/verilog/fir_block.v
-../fir_block_proj/solution1/syn/verilog/fir_block_control_s_axi.v
-../fir_block_proj/solution1/syn/verilog/fir_block_entry_proc.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fifo_w33_d2_S.v
-../fir_block_proj/solution1/syn/verilog/fir_block_fifo_w64_d3_S.v
-../fir_block_proj/solution1/syn/verilog/fir_block_fifo_w64_d5_S.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fir_cmd_rx_task_32_s.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_serial_task_32_Pipeline_FIR.v
 ../fir_block_proj/solution1/syn/verilog/fir_block_fir_compute_serial_task_32_Pipeline_LOAD.v

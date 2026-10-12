@@ -41,7 +41,7 @@ the middle. Over 300 steps a chain this short has not fully converged; the long 
 ![The chain's state over its first steps, and the running fraction of ones converging to the stationary probability](images/chain_output.svg)
 
 *From the golden model, which the RTL reproduces bit for bit. Rendered by a build step,
-`python -m examples.markov.markov_build --figures`; a test re-renders it and fails if the committed copy
+`python -m examples.markov.markov_build --through sync_docs_figures`; a test re-renders it and fails if the committed copy
 is stale.*
 
 ## What the gates check

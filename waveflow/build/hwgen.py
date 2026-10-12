@@ -953,8 +953,9 @@ def _reject_m_axi_task(comp) -> None:
     """Refuse task-body emission for a component that owns an ``m_axi`` port.
 
     Not a law of HLS — a free-running task may carry ``m_axi``; ``mem_r_stream_task.h`` does.  It is
-    a scope boundary: this emitter has not answered what an m_axi body needs (bundle naming, depth,
-    who owns the ``offset=slave`` register), so it refuses rather than emit something unreviewed.
+    a scope boundary: this emitter has not answered what an m_axi body needs (bundle naming, depth),
+    so it refuses rather than emit something unreviewed.  How the pointer reaches the task is settled
+    -- ``offset=off`` + ``stable``, no base register (``composite_gen._maxi_port``).
     The m_axi-owning bodies stay hand-written.
     """
     mm = _discover_mm_masters(comp)

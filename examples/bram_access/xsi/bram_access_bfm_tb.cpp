@@ -8,7 +8,7 @@
 
 int main() {
     bram_access_tb::Harness h("bram_access_bfm.wdb");
-    h.run(4000);
+    h.run(wfbfm::run_param("n_cycles", 4000));
     h.close();
     return 0;
 }

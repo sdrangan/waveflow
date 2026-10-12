@@ -33,7 +33,7 @@ def ia(vals):
 
 a, b, c = ia([3, -4, 5, 7]), ia([6, 7, -8, 2]), ia([1, -1, 2, -3])
 y = a * b + c
-np.asarray(y)                                            # array([ 19, -29, -38,  11])
+y.val                                                    # array([ 19, -29, -38,  11])
 ```
 
 This is the integer case of [`examples/basic_vec`](../../../examples/basic_vec/) — one

@@ -9,8 +9,8 @@ summary: "The whole system as RTL under XSI: AMD's crossbar with four masters an
 
 ## The system at RTL
 
-[`examples/markov/markov_xsi.py`](../../../examples/markov/markov_xsi.py) builds one Verilog top around
-the four synthesized tops and runs it under XSI:
+The example's build DAG, [`examples/markov/markov_build.py`](../../../examples/markov/markov_build.py),
+synthesizes the four tops, builds one Verilog top around them and runs it under XSI:
 
 ```mermaid
 flowchart LR
@@ -49,15 +49,23 @@ from the graph:
 
 The **host** is `MarkovHost`'s C++ twin, `MarkovHostModel` in
 [`markov_host.h`](../../../examples/markov/markov_host.h), run from the same scenario file as the pysim
-host and checked against it trace by trace. How the file builds all of this -- the top, the host, the
-harness, the run -- is [XSI testbench](xsi.md).
+host and checked against it trace by trace. How the DAG builds all of this is three pages:
+[Build flow](build.md) (which steps are the example's), [Synthesis](synth.md) (the tops, the crossbar,
+the Verilog top) and [XSI testbench](xsi.md) (the host, the harness, the run).
 
 ## Running it
 
 ```bash
-python -m examples.markov.markov_build                      # headers, tops, csynth of all four
+python -m examples.markov.markov_build                      # codegen, csynth what is stale, pysim, RTL, compare
+python -m examples.markov.markov_build --through pysim      # the pysim side alone (no Vivado)
+python -m examples.markov.markov_build --status             # what is stale, and why
 pytest tests/examples/test_markov_xsi.py -m xsi             # the gates (needs Vivado)
 ```
+
+The [csynth](../../guide/build/xsi_system.md#csynth) step re-synthesizes a top only when the sources its
+stamp recorded have changed, so after the first build a run costs the XSI simulation and seconds of
+generation. [compare](../../guide/build/xsi_system.md#compare) fails the run if the host's RTL traces
+differ from pysim's.
 
 ## Results
 
@@ -69,13 +77,14 @@ pytest tests/examples/test_markov_xsi.py -m xsi             # the gates (needs V
 
 The gates ([`tests/examples/test_markov_xsi.py`](../../../tests/examples/test_markov_xsi.py)) check each
 job's `x` and `ones` against the golden, that the host never reads a count, the cycle count, that
-pysim stays within 5% of it, and that the host's three traces are identical between the two. The staleness guard refuses to run them against RTL that was not built from
-the sources on disk.
+pysim stays within 5% of it, and that the host's three traces are identical between the two. They run
+the DAG with `synth="check"`: a top whose RTL was not built from the sources on disk fails the gates,
+named, and is never synthesized by them.
 
 ## Finding the time
 
 The first RTL run took 2356 cycles; pysim said 1700. Instead of guessing,
-`run_xsi(work_dir, probes=True)` builds the top with one-bit **probes** on the handshake of every link
+`python -m examples.markov.markov_build --probes` builds the top with one-bit **probes** on the handshake of every link
 -- the generator's words to its writer, each writer's bursts and acknowledgements, the chain's reads,
 credit offered and taken, responses -- and the testbench prints the cycles each fired. Lined up with the
 same events from pysim, they showed where the time went:
@@ -95,5 +104,6 @@ Steps 2 and 3 were defects in the **design** -- the RTL got faster -- and step 4
 stage needs a buffer in front of it the size of what it gathers, and a credit window must cover the
 link's bandwidth-delay product. Applied here they are [The credit link](credit_link.md)'s numbers.
 
-The probes stay in the build: `run_xsi(..., probes=True)` reproduces the gate's cycle count exactly, so
-they can be switched on whenever the timing moves.
+The probes stay in the build: `--probes` (`build_dag(probes=True)`, its own workspace
+`xsi_work/markov_probes/`) reproduces the gate's cycle count exactly, so they can be switched on whenever
+the timing moves.

@@ -12,6 +12,7 @@ starting a server.
     waveflow kb example stream_inband --file poly.py
     waveflow kb doc docs/guide/custom_hooks/writing.md
     waveflow frames
+    waveflow process                 # the generic process: choose a frame
     waveflow process stream_inband
     waveflow new-accel gain_clip --frame stream_inband
     waveflow blind-test --prompt examples/mcp_test/tiny_test.md
@@ -107,7 +108,12 @@ def _render(cmd: str, data: dict[str, Any]) -> str:
         return data["content"]
     elif cmd == "frames":
         for frame in data["frames"]:
-            out.append(f"{frame['name']:<18} {frame['synopsis']}")
+            scaffold = "  [scaffold]" if frame["has_scaffold"] else ""
+            out.append(f"{frame['name']:<18} {frame['choose_when']}{scaffold}")
+            out.append(f"    pattern: {frame['pattern']}  references: "
+                       + ", ".join(frame["reference_examples"]))
+            out.append(f"    shape: {frame['shape']}")
+            out.append(f"    flow:  {frame['flow']}")
             for prompt in frame["prompts"]:
                 out.append(f"    {prompt['file']:<22} {prompt['synopsis']}")
     elif cmd == "process":
@@ -181,14 +187,16 @@ def build_parser() -> argparse.ArgumentParser:
     process = sub.add_parser(
         "process", help="the ordered steps for building in a frame"
     )
-    process.add_argument("frame", nargs="?", default="stream_inband")
+    process.add_argument("frame", nargs="?", default=None,
+                         help="omit for the generic process and the frame menu")
     process.add_argument("--text", action="store_true")
 
     accel = sub.add_parser(
         "new-accel", help="scaffold an accelerator project that runs as generated"
     )
     accel.add_argument("name", help="lower_snake_case; becomes the module and kernel name")
-    accel.add_argument("--frame", default=None, help="default: stream_inband")
+    accel.add_argument("--frame", default=None,
+                       help="required: a frame with a scaffold (see `waveflow frames`)")
     accel.add_argument("--dir", dest="directory", help="default: ./<name>")
     accel.add_argument("--text", action="store_true")
 

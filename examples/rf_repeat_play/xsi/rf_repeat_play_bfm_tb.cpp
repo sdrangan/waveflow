@@ -8,7 +8,7 @@
 
 int main() {
     rf_repeat_play_tb::Harness h("rf_repeat_play_bfm.wdb");
-    h.run(60000);
+    h.run(wfbfm::run_param("n_cycles", 60000));
     h.close();
     return 0;
 }

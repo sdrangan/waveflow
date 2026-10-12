@@ -89,8 +89,8 @@ def _measured() -> dict[str, Any]:
     frames = window_frames(tb)
     rx = np.full(NSAMP, np.nan)
     for w, (hdr, codes) in enumerate(windows_as_codes(frames)):
-        k = window_abs_index(w, int(hdr.n_dropped), REGION_WORDS)
-        for off, v in enumerate(np.asarray(codes, dtype=np.int64).tolist()):
+        k = window_abs_index(w, hdr.n_dropped, REGION_WORDS)
+        for off, v in enumerate(codes.tolist()):
             if CODE_A <= v < CODE_A + NSAMP:
                 rx[(k * SPW + off) % NSAMP] = v
     return {"tx": waveform(CODE_A).astype(float),

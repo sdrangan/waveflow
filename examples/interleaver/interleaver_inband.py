@@ -140,16 +140,16 @@ class CmdRxInband(FreeRunMod):
         w = int(self.mem_dwidth)
         cmd = yield from self.s_cmd.get_schema(InterleaverCmd)
         t0 = self.now
-        n = int(cmd.n)
+        n = cmd.n
         nw = _nw_of(n, self.lw)                     # runtime word count
-        desc = IlDesc(n=n, y_off=int(cmd.y_off))
+        desc = IlDesc(n=n, y_off=cmd.y_off)
         # TWO reads to the transactional MemRStream (arbiter model): P (relaying the descriptor as a
         # header, fwd=1) then X (relay nothing, fwd=0).  P first so il_load fills p_blk before x_blk
         # (il_compute read-locks p_blk first).  The fwd=0 second read needs the reader's `nfwd>0` relay
         # guard — without it the RTL reader mis-relays a phantom word and deadlocks (the pysim for-loop
         # relay was always correct, which is why this pysim passed while the RTL wedged).
-        memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=1)
-        memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=0)
+        memr_p = MemRCmd(addr=cmd.p_off, len=nw, fwd_bursts=1)
+        memr_x = MemRCmd(addr=cmd.x_off, len=nw, fwd_bursts=0)
         yield from self.cmd_out.write(np.asarray(memr_p.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(memr_x.serialize(word_bw=w), dtype=np.uint64))
@@ -191,7 +191,7 @@ class IlLoadInband(FreeRunMod):
         w = int(self.mem_dwidth)
         desc = yield from self.s_in.get_schema(IlDesc)          # descriptor (header)
         t0 = self.now
-        n = int(desc.n)
+        n = desc.n
         nw = _nw_of(n, self.lw)
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         # Two bursts on rdata (the reader's two firings): P then X, nw words each.  DESERIALIZE each burst
@@ -258,7 +258,7 @@ class IlComputeInband(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get_schema(IlDesc)
-        n = int(desc.n)
+        n = desc.n
         yield from self.desc_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
@@ -309,13 +309,13 @@ class IlStoreInband(FreeRunMod):
         w = int(self.mem_dwidth)
         desc = yield from self.desc_in.get_schema(IlDesc)
         t0 = self.now
-        n = int(desc.n)
+        n = desc.n
         nw = _nw_of(n, self.lw)
         yblock = yield from self.y_blk.acquire_read()
         # Frame the writer's stream: descriptor (addr=y_off, nw words), echo the IlDesc (emitted on
         # s_done after the store), then the Y data — SERIALIZED from the n gathered elements to nw words
         # (write_framed_stream_lane's job).
-        memw = MemWCmd(addr=int(desc.y_off), len=nw, fwd_bursts=1)
+        memw = MemWCmd(addr=desc.y_off, len=nw, fwd_bursts=1)
         yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(_elems_to_words(yblock[:n], w), dtype=np.uint64))
@@ -544,6 +544,30 @@ def check_xsi_outputs(xsi_dir: Path, width: int = DEFAULT_MEM_DW, sizes=(256,)) 
     dw = _done_words(width)
     assert len(s_done) == len(sizes) * dw, (
         f"interleaver_inband: s_done has {len(s_done)} words, expected {len(sizes)}*{dw}")
+
+
+#: The multi-job XSI gate's scenario (``tests/examples/test_interleaver_inband_xsi.py``).  Twelve jobs,
+#: because the interleaver fires its reader twice per job and its writer once: before the generated
+#: top's pointers were ``offset=off`` that imbalance wedged the RTL after **6** jobs (the writer's
+#: per-task pointer FIFO, depth 7, full; the reader's empty -- ``plans/maxi_pointer_fifo.md``).  Any
+#: count past 6 catches its return; one or two jobs, the old RTL tests, never could.
+XSI_GATE_SIZES = (64,) * 12
+XSI_GATE_N_CYCLES = 20000
+
+
+def build_xsi_gate_rtl(root: Path = _HERE, width: int = DEFAULT_MEM_DW, n: int = DEFAULT_N) -> None:
+    """Generate the DUT into *root* and csynth it (``<root>/interleaver_inband_proj``), stamping its
+    sources and writing ``xsi/rtl_interleaver_inband.f`` -- the prerequisite of the multi-job XSI gate.
+    Needs Vitis HLS."""
+    from waveflow.build.composite_gen import render_rtl_f
+    from waveflow.toolchain.toolchain import run_vitis_hls
+
+    root = Path(root)
+    generate_inband(out_dir=root, mem_dwidth=width, n=n)
+    res = run_vitis_hls(root / f"{_TOP}.tcl", work_dir=root)
+    if "WAVEFLOW_CSYNTH_OK" not in ((res.stdout or "") + (res.stderr or "")):
+        raise RuntimeError(f"csynth of {_TOP} failed")
+    (root / "xsi" / f"rtl_{_TOP}.f").write_text(render_rtl_f(_TOP, root), encoding="utf-8")
 
 
 def generate_tb(out_dir: Path = _HERE, width: int = DEFAULT_MEM_DW, sizes=(256,),

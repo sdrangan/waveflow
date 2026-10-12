@@ -8,17 +8,20 @@ from mcp.server.mcpserver import MCPServer
 from waveflow.mcp.registry import REGISTRY, anticipated_as_tool_errors
 
 #: Injected into the model's context by most MCP clients, before it has called
-#: anything.  It is the only text guaranteed to be read, so it carries the two
+#: anything.  It is the only text guaranteed to be read, so it carries the
 #: facts an agent cannot recover on its own: that Waveflow is probably not in
-#: its training data, and which single call starts an accelerator.
+#: its training data, and how to start an accelerator -- choose the
+#: architecture from the spec, then follow its process.  It names no frame and
+#: no example: a spec that names one is followed, and one that does not is
+#: matched against the menu.
 INSTRUCTIONS = """Waveflow is a Python-native hardware design platform: one Python source is the single source of truth for simulation, the Vitis HLS kernel, its testbench, the firmware and the docs.
 
 Waveflow is recent and specialised, so assume you do not know its API. Do not guess at a name -- look it up. The tools fall into four families:
 
-- **Process.** `waveflow_get_process(frame)` returns the ordered steps for   building an accelerator, and `waveflow_list_frames()` says which   architectures exist. **Asked to build an accelerator? Call   `waveflow_get_process` first**, before reading source or writing anything.
-- **Search and browse.** `waveflow_search` for Waveflow's own words   (`DataList`, `TLAST`, `VitisRegMap`, `cosim`); `waveflow_browse` when you   know what you want to do but not what Waveflow calls it -- it returns each   page's summary so you can match on meaning.
-- **Read.** `waveflow_get_doc` for a whole page, `waveflow_list_examples` and   `waveflow_get_example` for the reference designs, `waveflow_find_usage` to   see a name used in real code. Search returns pointers; read whole files   before writing anything that depends on them.
-- **Schemas.** `waveflow_get_components` for the vocabulary,   `waveflow_validate_schema` to check one you drafted.
+- **Process.** Asked to build an accelerator, **choose the architecture, then follow its process**, before writing anything. If the spec names a frame, call `waveflow_get_process(frame)` and follow it. Otherwise call `waveflow_list_frames()` -- the architecture menu -- and pick the frame whose pattern, shape and flow match the spec; if none does, call `waveflow_list_examples()`, pick the closest reference design, and follow `waveflow_get_process()` (no frame: the generic process). Say which you chose and why.
+- **Search and browse.** `waveflow_search` for Waveflow's own words (`DataList`, `TLAST`, `VitisRegMap`, `cosim`); `waveflow_browse` when you know what you want to do but not what Waveflow calls it -- it returns each page's summary so you can match on meaning.
+- **Read.** `waveflow_get_doc` for a whole page, `waveflow_list_examples` and `waveflow_get_example` for the reference designs, `waveflow_find_usage` to see a name used in real code. Search returns pointers; read whole files before writing anything that depends on them.
+- **Schemas.** `waveflow_get_components` for the vocabulary, `waveflow_validate_schema` to check one you drafted.
 
 Two rules that hold everywhere: anything a tool tags as **generated** is code-generation output that must never be hand-edited, and headers, footers and sample bursts are always serialized through their schema or the Waveflow array utilities, never packed into words by hand. If the machinery cannot express something, stop and report it rather than working around it.
 """

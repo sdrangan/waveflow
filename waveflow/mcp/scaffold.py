@@ -31,7 +31,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from waveflow.mcp.frames import DEFAULT_FRAME, Frame, load_frame
+from waveflow.mcp.frames import Frame, list_frames, load_frame, scaffold_frames
 from waveflow.mcp.knowledge.corpus import load_corpus
 from waveflow.mcp.knowledge.roots import repo_root
 
@@ -240,11 +240,26 @@ def new_accel(
             "lower_snake_case starting with a letter"
         )
 
-    frame_name = frame or DEFAULT_FRAME
+    # No default: the frame is the architecture, and choosing it is the
+    # agent's first decision, not something the scaffold makes for it.
+    if not frame:
+        raise ScaffoldError(
+            "name the frame to scaffold; frames with a scaffold: "
+            f"{scaffold_frames()}. Choose one with waveflow_list_frames() first."
+        )
+    frame_name = frame
     found = load_frame(frame_name)
     if found is None:
         raise ScaffoldError(
-            f"no frame {frame_name!r}; known frames: {sorted(__import__('waveflow.mcp.frames', fromlist=['x']).list_frames())}"
+            f"no frame {frame_name!r}; known frames: {sorted(list_frames())}"
+        )
+    if not found.has_scaffold:
+        primary = _template_example(found)
+        raise ScaffoldError(
+            f"frame {frame_name!r} has no scaffold; build from its reference "
+            f"instead: read waveflow_get_example({primary!r}) and its doc pages "
+            f"in order, and follow waveflow_get_process({frame_name!r}). "
+            f"Frames with a scaffold: {scaffold_frames()}."
         )
 
     template = found.meta.get("template", {})
@@ -267,9 +282,13 @@ def new_accel(
     out_dir = Path(dest) if dest is not None else Path.cwd() / name
     out_dir = out_dir.resolve()
     if out_dir.exists() and any(out_dir.iterdir()) and not force:
+        # Name the way out a tool caller has: the MCP tool takes no `force`,
+        # and an agent's own folder always holds its spec.  A blind test
+        # spent two calls retrying this before finding the subdirectory.
         raise ScaffoldError(
-            f"{out_dir} already exists and is not empty; pass force=True to "
-            "write into it anyway"
+            f"{out_dir} already exists and is not empty; scaffold into a new "
+            f"subdirectory instead, e.g. directory={str(out_dir / name)!r} "
+            "(from Python, force=True writes into it anyway)"
         )
 
     # The token the example's identifiers are built from.  `examples/mem_copy`

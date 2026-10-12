@@ -52,10 +52,10 @@ from timing_analysis import analyze_poly_vcd
 
 r = analyze_poly_vcd("examples/stream_inband/vcd/error_path.vcd")
 for c in r.commands:
-    print(f"cmd  tx_id={int(c.hdr.val['tx_id'])} nsamp={int(c.hdr.val['nsamp'])} "
+    print(f"cmd  tx_id={c.hdr.tx_id} nsamp={c.hdr.nsamp} "
           f"coeffs={c.hdr.val['coeffs'].tolist()} samples_sent={len(c.x)}")
 for s in r.responses:
-    print(f"resp tx_id={int(s.hdr.val['tx_id'])} results={len(s.y)} "
+    print(f"resp tx_id={s.hdr.tx_id} results={len(s.y)} "
           f"closed={bool(s.data_burst['complete'])}")
 ```
 

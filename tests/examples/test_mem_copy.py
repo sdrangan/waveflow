@@ -80,8 +80,11 @@ def test_mem_copy_codegen_shape(tmp_path: Path):
     assert "while" not in src                        # single-firing; the hls::task runtime re-fires
 
     # two m_axi bundles (read const on gmem0, write plain on gmem1) + two AXIS boundary ports.
-    assert "#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0" in src
-    assert "#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0" in src
+    assert "#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1" in src
+    # both pointers stable + offset=off: no per-task pointer FIFOs (plans/maxi_pointer_fifo.md)
+    assert "#pragma HLS stable variable=m_in" in src and "#pragma HLS stable variable=m_out" in src
+    assert "offset=slave" not in src
     assert "const ap_uint<64>* m_in" in src         # @port_read -> const pointer
     assert "ap_uint<64>* m_out" in src and "const ap_uint<64>* m_out" not in src
     assert "#pragma HLS INTERFACE axis port=s_cmd" in src

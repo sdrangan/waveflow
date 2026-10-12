@@ -1,0 +1,47 @@
+# The bus_system frame: several free-running kernels and an on-chip memory on
+# one crossbar, driven by a software host that never polls.
+#
+# A frame is a bundle with no code of its own -- this file, frame.md (what the
+# frame fixes and what a spec must decide), process.md (the frame's own steps;
+# joined with ../_common/process.md, they are what `waveflow_get_process`
+# returns) and prompts/ (example specs).  No [template]: a bus system does not
+# reduce to "stub one function" (plan D4), so an agent builds from the
+# references.
+
+name = "bus_system"
+synopsis = """A system of free-running kernels that talk over one AXI-MM crossbar, \
+with an on-chip memory and a software host.  Every kernel's own logic reads and \
+writes only streams; the bus reaches it through generated slave views (queues, a \
+register bank, a credit counter).  Jobs are commands carrying n and a tx_id, \
+answered by a response that echoes them.  The host sleeps on interrupts and never \
+polls.  Verified bit-exact in pysim, then through the system DAG at RTL under XSI, \
+with the host's bus traces byte-identical between the two and pysim's cycle count \
+within 5% of the RTL."""
+
+pattern = "command_response"
+shape = "several free-running kernels and an on-chip memory on one AXI-MM crossbar, a software host (SwHost) with one bus master"
+flow = "system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare; the host's traces identical at RTL and pysim, cycles within 5%"
+choose_when = """the design has more than one kernel, or a host program that reaches a \
+kernel over a bus (queues, a register bank written mid-stream), or kernels that share \
+a memory.  Not for off-chip (DDR) memory yet."""
+
+# Primary first: markov is two kernels, a routed credit link and shared memory;
+# mm_fir is one kernel reached over the bus, with a register bank.
+reference_examples = ["markov", "mm_fir"]
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_scale_sum.md"
+synopsis = "Two kernels: a job's samples scaled, then summed.  Joined directly, then routed over the bus with credit."
+
+[[prompts]]
+file = "02_threshold_cfg.md"
+synopsis = "One kernel reached over the bus: a level detector whose threshold the host changes mid-stream through a register bank."
+
+[[prompts]]
+file = "03_pipeline_histogram.md"
+synopsis = "Generate, filter, histogram into the shared memory, read back by the host; credit on the routed link; two jobs in flight."

@@ -50,19 +50,13 @@ looking something up but building something:
 
 | Tool | What it answers |
 | --- | --- |
-| `waveflow_list_frames()` | which accelerator architectures it can be asked to build in |
-| `waveflow_get_process(frame)` | the ordered steps for one, which tool to use at each, and the rules |
+| `waveflow_list_frames()` | the architecture menu: each frame's pattern, shape, flow, references, and when to choose it |
+| `waveflow_get_process(frame)` | the ordered steps for one frame, which tool to use at each, and the rules; with no frame, the generic process |
 
-A **frame** is one architecture — `stream_inband` is a host-launched
-streaming kernel with its parameters in a register map and a persistent loop
-over in-band commands. `waveflow_get_process` returns that frame's process
-text and its specification, and the scaffold writes the same process text as
-the project's `AGENTS.md`, so the tool and the file in the project cannot
-drift apart.
-
-The server's MCP `instructions` — which most clients inject before the model
-has called anything — say to call `waveflow_get_process` first when asked for
-an accelerator.
+A **frame** is a [design pattern](../patterns/index.md) realized in one system shape and one
+verification flow, with a reference example that proves it. The server's instructions tell the
+assistant to choose a frame from the spec, then follow its process; [Frames](./frames.md) covers
+the menu, what a frame contains, and how to add one.
 
 ## From the command line
 
@@ -78,6 +72,7 @@ waveflow kb examples
 waveflow kb example stream_inband --file poly.py
 waveflow kb doc docs/guide/custom_hooks/writing.md
 waveflow frames
+waveflow process                 # the generic process: choose a frame
 waveflow process stream_inband
 ```
 

@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parents[2]
 @pytest.fixture(scope="module")
 def project(tmp_path_factory) -> Path:
     out = tmp_path_factory.mktemp("scaffold") / "gain_clip"
-    new_accel("gain_clip", dest=out)
+    new_accel("gain_clip", frame="stream_inband", dest=out)
     return out
 
 
@@ -223,7 +223,7 @@ def test_a_stub_that_stops_matching_is_loud(project: Path, monkeypatch, tmp_path
         lambda name: type(frame)(name=frame.name, directory=frame.directory, meta=broken),
     )
     with pytest.raises(ScaffoldError, match="no longer match"):
-        new_accel("broken_accel", dest=tmp_path / "broken")
+        new_accel("broken_accel", frame="stream_inband", dest=tmp_path / "broken")
 
 
 # ---------------------------------------------------------------------------
@@ -234,20 +234,21 @@ def test_a_stub_that_stops_matching_is_loud(project: Path, monkeypatch, tmp_path
 @pytest.mark.parametrize("name", ["GainClip", "gain-clip", "1gain", "", "gain clip"])
 def test_a_bad_project_name_is_refused(name: str, tmp_path) -> None:
     with pytest.raises(ScaffoldError):
-        new_accel(name, dest=tmp_path / "x")
+        new_accel(name, frame="stream_inband", dest=tmp_path / "x")
 
 
 def test_a_nonempty_directory_is_not_clobbered(tmp_path) -> None:
     dest = tmp_path / "taken"
     dest.mkdir()
     (dest / "mine.txt").write_text("keep me")
-    with pytest.raises(ScaffoldError, match="not empty"):
-        new_accel("gain_clip", dest=dest)
+    with pytest.raises(ScaffoldError, match="not empty") as info:
+        new_accel("gain_clip", frame="stream_inband", dest=dest)
+    assert "new subdirectory" in str(info.value)
     assert (dest / "mine.txt").read_text() == "keep me"
 
 
 def test_the_tool_returns_errors_as_data(tmp_path) -> None:
-    result = waveflow_new_accel_project("NotValid", frame=None, directory=str(tmp_path))
+    result = waveflow_new_accel_project("NotValid", frame="stream_inband", directory=str(tmp_path))
     assert "error" in result
 
     result = waveflow_new_accel_project(
@@ -256,9 +257,33 @@ def test_the_tool_returns_errors_as_data(tmp_path) -> None:
     assert "error" in result and "freerun_bfm" in result["error"]
 
 
+def test_no_frame_is_refused_with_the_scaffold_frames_named(tmp_path) -> None:
+    """No default frame: the scaffold does not choose the architecture."""
+    result = waveflow_new_accel_project("demo_accel", frame=None, directory=str(tmp_path / "d"))
+    assert "error" in result and "stream_inband" in result["error"]
+    assert not (tmp_path / "d").exists()
+
+
+def test_a_frame_without_a_scaffold_is_refused(tmp_path, monkeypatch) -> None:
+    """A frame with no [template] points at its reference instead."""
+    import waveflow.mcp.scaffold as scaffold
+
+    frame = load_frame("stream_inband")
+    bare = {k: v for k, v in frame.meta.items() if k != "template"}
+    monkeypatch.setattr(
+        scaffold,
+        "load_frame",
+        lambda name: type(frame)(name="bare", directory=frame.directory, meta=bare),
+    )
+    with pytest.raises(ScaffoldError, match="has no scaffold") as info:
+        new_accel("demo_accel", frame="bare", dest=tmp_path / "d")
+    assert "waveflow_get_example('stream_inband')" in str(info.value)
+    assert not (tmp_path / "d").exists()
+
+
 def test_the_tool_names_what_to_read_first(tmp_path) -> None:
     result = waveflow_new_accel_project(
-        "demo_accel", frame=None, directory=str(tmp_path / "demo")
+        "demo_accel", frame="stream_inband", directory=str(tmp_path / "demo")
     )
     assert result["read_first"] == ["AGENTS.md", "frame.md"]
     assert "--through check_pysim" in result["next"]

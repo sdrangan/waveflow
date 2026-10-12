@@ -38,7 +38,7 @@ from waveflow.hw.fixpoint import FixedField, from_real, to_real
 
 Q8_4 = FixedField.specialize(8, 4)                 # ap_fixed<8, 4>
 da = from_real([1.5, -2.0, 0.0625, 1.53], Q8_4)
-np.asarray(da)        # array([ 24, -32,   1,  24])   <- stored ints (1.53 -> 1.5)
+da.val                # array([ 24, -32,   1,  24])   <- stored ints (1.53 -> 1.5)
 to_real(da)           # array([ 1.5 , -2.  ,  0.0625, 1.5 ])
 ```
 

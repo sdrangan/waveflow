@@ -7,6 +7,8 @@ port the TB is supposed to drive would deadlock the run).
 """
 from __future__ import annotations
 
+import dataclasses
+
 from waveflow.build.composite_gen import (
     TopSpec,
     _axis_port,
@@ -83,11 +85,16 @@ def test_pin_low_set_is_the_complement_of_what_the_bfm_drives():
         assert f'"{pinned}"' in write_h
 
 
-def test_control_slave_pinned_only_when_an_maxi_exists():
+def test_control_slave_pinned_only_when_an_offset_slave_maxi_exists():
     """The s_axi_control slave exists because of `offset=slave` on an m_axi port. Pinning it
-    quiescent is what makes every offset register read 0 — i.e. element coords == byte addr / BPW."""
-    with_maxi = render_ports_h(_spec(ports=[_maxi_port("m_in", 64, const=True, bundle="gmem0")]))
-    assert '"s_axi_control_AWVALID"' in with_maxi
+    quiescent is what makes every offset register read 0 — i.e. element coords == byte addr / BPW.
+    A free-running top's pointers are `offset=off` (plans/maxi_pointer_fifo.md), so they have none."""
+    maxi = _maxi_port("m_in", 64, const=True, bundle="gmem0")
+    assert "s_axi_control" not in render_ports_h(_spec(ports=[maxi]))
+
+    legacy = dataclasses.replace(maxi, pragmas=tuple(
+        pr.replace("offset=off", "offset=slave") for pr in maxi.pragmas))
+    assert '"s_axi_control_AWVALID"' in render_ports_h(_spec(ports=[legacy]))
 
     stream_only = render_ports_h(_spec(ports=[_axis_port("s_cmd", 64, kind="axis_in")]))
     assert "s_axi_control" not in stream_only, "a stream-only kernel has no control slave to pin"
@@ -391,3 +398,24 @@ def test_the_two_refusals_are_different_diagnoses():
     assert "MMIFReadMaster or MMIFWriteMaster" in str(under.value)
     assert "is not a kernel boundary port" in str(absent.value)
     assert "does not declare a direction" not in str(absent.value)
+
+
+def test_csynth_that_dropped_an_maxi_adapter_is_refused(tmp_path):
+    """A csynth that lowered an m_axi pointer to a register port (seen twice, plans/maxi_pointer_fifo.md)
+    must not be stamped as good: every declared bundle needs its `<top>_<bundle>_m_axi.v`."""
+    import pytest
+
+    from waveflow.build.composite_gen import check_maxi_lowered
+
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "gen" / "k.cpp").write_text(
+        "#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0 depth=8192\n"
+        "#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192\n")
+    vdir = tmp_path / "k_proj" / "solution1" / "syn" / "verilog"
+    vdir.mkdir(parents=True)
+    (vdir / "k.v").write_text("")
+    (vdir / "k_gmem0_m_axi.v").write_text("")
+    with pytest.raises(RuntimeError, match=r"\['gmem1'\]"):
+        check_maxi_lowered(tmp_path, "k")
+    (vdir / "k_gmem1_m_axi.v").write_text("")
+    check_maxi_lowered(tmp_path, "k")

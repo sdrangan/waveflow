@@ -27,8 +27,11 @@ folder holding only a specification, with the Waveflow tools as its only
 source of Waveflow knowledge. It runs to completion without anyone helping.
 Afterwards a report shows what it actually did, including:
 
-- whether it found the build process (`waveflow_get_process`) and the
-  scaffold (`waveflow_new_accel_project`) on its own;
+- how it chose the architecture: whether it consulted the frame menu
+  (`waveflow_list_frames`) or the example cards (`waveflow_list_examples`)
+  before writing anything, which frame it fetched the process for
+  (`waveflow_get_process`), which reference designs it read, and whether it
+  asked for a scaffold (`waveflow_new_accel_project`);
 - which guide pages and examples it read, and whether it wandered into parts
   of the repository a user should not depend on;
 - whether it hand-edited generated files;
@@ -125,7 +128,7 @@ review, run with `--no-approve`, read the agent's work, and continue by hand.
 
 | Option | Effect |
 | --- | --- |
-| `--message "…"` | the first message (default: *Build the accelerator specified in `<spec>`, in this folder, with Waveflow: its MCP server is available, and its stream_inband example is the reference design to follow.*) |
+| `--message "…"` | the first message (default: *Build the accelerator specified in `<spec>`, in this folder, with Waveflow: its MCP server is available.* It names no frame and no example, so choosing the architecture is part of the test; a spec that wants one names it, and `--message` can name one for a run) |
 | `--model <name>` | the Claude model (default: Claude Code's default) |
 | `--allow "<tool>"` | add a tool to the allowlist, e.g. `--allow "Bash(make:*)"`; repeatable |
 | `--timeout <hours>` | limit on each run (default 4) |

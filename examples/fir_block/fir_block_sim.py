@@ -74,14 +74,14 @@ def _tap_set(idx: int, ntap: int, samp_cls) -> np.ndarray:
         real = 0.5 ** (1.0 + k / 4.0)
     else:
         real = np.cos(np.pi * k / ntap) / (1.0 + k)
-    return np.asarray(from_real(real, samp_cls)).astype(np.int64)
+    return from_real(real, samp_cls).val
 
 
 def _stimulus(nsamp: int, seed: int, samp_cls) -> np.ndarray:
     """A deterministic block of samples as stored integers (no RNG state, so both backends agree)."""
     i = np.arange(nsamp, dtype=np.float64)
     real = 0.7 * np.sin(0.13 * i + 0.31 * seed) + 0.2 * np.cos(0.57 * i + seed)
-    return np.asarray(from_real(real, samp_cls)).astype(np.int64)
+    return from_real(real, samp_cls).val
 
 
 @dataclass
@@ -156,7 +156,7 @@ class FirBlockTB(FreeRunMod):
             self.mem.s_mm.bus_timing = BusCalib(self.platform_dir, clk_freq=self.clk.freq).bus_timing()
         self.mem.alloc(int(self.mem.nwords_tot))
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
+        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
         self._nwords_tot = int(self.mem.nwords_tot)
 
         self.dut = FirBlock(name=f"{self.name}_fir", sim=self.sim, mem_dwidth=w, ntap=t,
@@ -246,7 +246,7 @@ class FirBlockSim:
                 g = base[bi] + i                       # index into the global signal
                 win = np.array([sig[g - k] if g - k >= 0 else 0 for k in range(t)], dtype=np.int64)
                 acc = fixed_sum(mult(_as_fixed(win, samp_cls), h))
-                ys[i] = int(np.asarray(quantize(acc, samp_cls)).reshape(-1)[0])
+                ys[i] = int(quantize(acc, samp_cls).val.reshape(-1)[0])
             out.append(ys)
         return out
 
@@ -321,7 +321,7 @@ class FirBlockSim:
         assert len(bursts) == len(tb._steps), (
             f"fir_block: {len(bursts)} completions on s_done, expected {len(tb._steps)} "
             f"(one per command, LOAD_TAPS included)")
-        got_ids = [int(FirDesc().deserialize(np.asarray(b), word_bw=w).tx_id) for b in bursts]
+        got_ids = [FirDesc().deserialize(b, word_bw=w).tx_id for b in bursts]
         assert got_ids == list(range(len(tb._steps))), (
             f"fir_block: s_done tx_ids {got_ids} != issue order {list(range(len(tb._steps)))}")
         print(f"[fir_block] program={tb._program} blk={tb.blk} ntap={int(tb.ntap)} "

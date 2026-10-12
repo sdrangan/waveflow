@@ -64,9 +64,10 @@ void mem_copy(
     hls::stream<ap_uint<64> >& s_done
 ) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_in
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<64> > cmd;
@@ -148,11 +149,42 @@ pointer for a port that gets written.
 
 `bundle=gmem0` and `bundle=gmem1` are not in the Python. Bundle assignment is the *assembler's*
 policy — how the ports are grouped onto AXI interfaces — kept separate from direction, which is the
-endpoint's type. `offset=slave` means the pointer's base address is not a port; it arrives in an
-AXI-Lite register the host writes.
+endpoint's type. `offset=off` + `stable` is not a choice: it is the only form in which Vitis
+supports an `m_axi` pointer passed to an `hls::task` -- the next section is what happens otherwise.
 
 Note this top carries `m_axi` **and** is `ap_ctrl_none`. That combination is fine at the top level;
 the constraint that bites is one level down, in the [task bodies](./freerunning.md).
+
+## How a pointer reaches a task
+
+A task's pointer argument is not a wire. With `offset=slave` (the pointer's base address in an
+AXI-Lite register the host writes) Vitis 2025.1 synthesizes the top anyway, and gives **each task
+that takes a pointer a small FIFO of its own**, refilled by one generated `entry_proc` that writes
+*all* of these FIFOs together, one round at a time. A task pops its FIFO **each time it fires**.
+`#pragma HLS stable` on the pointer does not remove them (measured).
+
+That is harmless while every pointer-owning task fires the same number of times per job, and a
+deadlock when they do not. The in-band interleaver reads twice per job (`P`, then `X`) and writes
+once. The reader drains its FIFO twice as fast as the writer drains its own; the writer's FIFO (depth
+7 there) fills, the entry process blocks on it, so it stops refilling the reader's, and the pipeline
+stops. It ran 6 jobs bit-exact and then nothing, with every bus idle -- at RTL only. pysim and csim
+have no such FIFOs, and a short RTL test never fills one.
+
+The rule, which predicted both cases measured (the interleaver at 6 jobs, and a `scale_copy` design
+whose reader fired twice only for some jobs, at job 11): a task pops when a firing *begins*, which
+waits for its first input word; the pipeline wedges at the first reader firing whose pop count exceeds
+the writer's pops so far plus the writer's FIFO depth. Vitis sized the FIFOs at the task's position
+plus two (`m_in_c` depth 3 for the first task, `m_out_c` depth 7 for the fifth).
+
+UG1399 (*HLS Task Library*) supports an `m_axi` pointer on a task only as a `stable` argument with
+**`offset=off`**, and that removes the structure entirely: no entry process, no pointer FIFOs, no
+`s_axi_control` slave. So that is what the generator emits, for every pointer. The interleaver then
+ran 12 of 12 jobs, and its first five jobs completed on the same cycles as before.
+
+**What it costs.** No base register: the bus address is the command's word coordinate times the word
+size, from address 0. Every flow already behaved that way -- the XSI testbenches and the
+[system top](../build/xsi_system.md) tied the control slave off, so the base was 0 -- but a host that
+wants to relocate a buffer now does it in the command's address, not in a register.
 
 ## Which task may own what
 

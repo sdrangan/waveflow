@@ -178,7 +178,8 @@ The body dispatches on the opcode:
 
 ```python
 cmd = yield from self.cmd_w.get_schema(WriteComputeCmd)
-wp, n, op = int(cmd.waddr), int(cmd.nsamp), BramOp(int(cmd.opcode))
+wp, op = cmd.waddr, cmd.opcode
+n = int(cmd.nsamp)                   # int: depth - n below
 ok = n <= int(self.depth) and wp <= int(self.depth) - n
 if op is BramOp.WRITE:
     if n:
@@ -238,7 +239,8 @@ if not self.armed:
     yield from _word(self.go_in)
     self.armed = True
 cmd = yield from self.cmd_r.get_schema(ReadCmd)
-rp, n = int(cmd.raddr), int(cmd.nsamp)
+rp = cmd.raddr
+n = int(cmd.nsamp)                   # int: depth - n below
 ok = n <= int(self.depth) and rp <= int(self.depth) - n
 if ok and n:
     y, tstart = yield from self.buf_r.read_pipelined(self.buf_r.element_type, n, rp)

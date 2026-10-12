@@ -24,9 +24,14 @@ one removes the *false* skips; this makes a *true* skip visible.  Both are neede
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Timing events (waveflow.events) are off for the suite: thousands of test builds would
+# otherwise each leave a .waveflow/events.jsonl behind.  tests/test_events.py turns them on.
+os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 
 #: How many ``xsi``-marked tests a full ``-m xsi`` run collects.  Recorded the way a gate's
 #: ``WANT_CYCLES`` is: a measured number, updated **only** when gates are deliberately added or
@@ -147,7 +152,20 @@ import pytest
 #:
 #: 161 + 17 -> 178 on 2026-10-11: ``paper/mimo-cg`` merged into ``feat/cpu-model``.  Both lines of
 #: gates above survive the merge; ``pytest -m xsi --collect-only -q`` counts 178.
-WANT_XSI_GATES = 178
+#:
+#: In parallel on ``main``, after 161 (merged 2026-10-11 at ``372a34d9``):
+#: 161 -> 162 on 2026-10-08 (plans/host_runtime.md S6): a host whose threads meet through a SwQueue,
+#: at RTL (test_sw_channels_xsi.py).
+#: 162 -> 163 on 2026-10-10 (plans/maxi_pointer_fifo.md S4): the 12-job in-band interleaver, past the
+#: m_axi pointer-FIFO wall (test_interleaver_inband_xsi.py).
+#: 163 -> 167 on 2026-10-10 (plans/incremental_xsi.md): test_xsi_snapshot_xsi.py -- a no-change rebuild
+#: only simulates, an RTL edit is seen and undone, separate vectors dirs match a single run, and the
+#: traced snapshot coexists with the untraced one.  167 -> 168 (Stage 4): one mem_copy testbench serves
+#: every workload, its arena and cycle bound read from vectors/run.json.
+#:
+#: 178 + 7 -> 185 on 2026-10-11: ``main`` merged into ``feat/cpu-model``; ``pytest -m xsi
+#: --collect-only -q`` counts 185.
+WANT_XSI_GATES = 185
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

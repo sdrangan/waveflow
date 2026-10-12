@@ -59,9 +59,15 @@ In going through this example, you will learn how to:
 - [Python model](python.md) — the schemas, the kernel's `run_iter`, the host program, the golden.
 - [Python simulation](pysim.md) — the system wired in pysim, the tap switch, the negative control, and how
   close pysim's timing is.
-- [Code generation](codegen.md) — the generated top and headers, the hand-written HLS body, and why
-  it had to change to pipeline.
-- [RTL simulation](rtlsim.md) — the RTL top (crossbar, adaptor, kernel), the C++ host program, the two
-  topologies, and the results.
+- [Build flow](build.md) — the build DAG (`mm_fir_build.py`) for both topologies: which steps are the
+  example's (codegen and the scenario), which are the framework's, the CLI, and what a second run skips.
+- [Code generation](codegen.md) — what each pysim object generates (Fig. 1), the generated top and
+  headers, the hand-written HLS body, and why it had to change to pipeline.
+- [Synthesis](synth.md) — csynth of the kernel, the crossbar IP, and the Verilog top walked from the
+  graph in both topologies, with the generated decoder (Fig. 2).
+- [XSI testbench](xsi.md) — the RTL under a testbench (Fig. 3): the C++ host program, the conformance
+  gate, and the bus master that overlaps a read and a write.
+- [RTL simulation](rtlsim.md) — the results: both topologies bit-exact, 618 and 611 cycles, and how the
+  numbers got there.
 
 The code is in [`examples/mm_fir`](../../../examples/mm_fir).

@@ -36,9 +36,10 @@ void fir_block(
     hls::stream<ap_uint<32> >& s_done
 ) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_in
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<32> > cmd_rd;

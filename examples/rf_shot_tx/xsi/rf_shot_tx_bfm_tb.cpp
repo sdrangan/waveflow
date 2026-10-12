@@ -8,7 +8,7 @@
 
 int main() {
     rf_shot_tx_tb::Harness h("rf_shot_tx_bfm.wdb");
-    h.run(1400);
+    h.run(wfbfm::run_param("n_cycles", 1400));
     h.close();
     return 0;
 }

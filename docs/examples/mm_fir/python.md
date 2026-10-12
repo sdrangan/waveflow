@@ -68,11 +68,13 @@ class FirStatus(DataList):
 | `FirCfg` | `s_cfg`, from the register bank | 5 — the bank's `NCFG` |
 | `FirStatus` | `m_status`, to the register bank | 1 — the bank's `NSTAT` |
 
-**Why `coeffs` comes first in `FirCfg`.** At 64 bits, Python packs a `DataList` densely, while the
-generated C++ starts an array on a fresh word — a known disagreement
-(`plans/stream_array_alignment.md`, not fixed yet). With `ntaps` first, the RTL read the taps 32 bits
-late; the RTL gate caught it on its first run. Sixteen int16 taps are exactly four 64-bit words, so
-with the array first both layouts agree.
+**Where `coeffs` sits in `FirCfg`.** An array starts on a fresh word, and the field after it does
+too: the [word layout rule](../../guide/schema/hls/serialization.md#the-word-layout-rule), which
+Python and the generated C++ share. At 64 bits, the sixteen int16 taps fill four words, and `ntaps`
+and `cfg_id` share a fifth. `coeffs` comes first because of a disagreement this layout once had:
+Python packed the taps straight after `ntaps`, the C++ started them on a fresh word, and the RTL gate
+caught the taps arriving 32 bits late. Both sides now follow the rule, so the field order no longer
+matters for agreement.
 
 ## The golden
 
@@ -140,15 +142,15 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         hdr = yield from self.s_in.get_schema(FirCmdHdr)
         # The order the two streams cannot give, carried in the header: wait for this packet's
         # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
-        while self.cfg_id != int(hdr.cfg_id):
+        while self.cfg_id != hdr.cfg_id:
             cfg = yield from self.s_cfg.get_schema(FirCfg)
-            self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
-            self.cfg_id = int(cfg.cfg_id)
+            self.taps = cfg.coeffs[:cfg.ntaps]
+            self.cfg_id = cfg.cfg_id
             self.ncfg += 1
-        n = int(hdr.nsamp)
+        n = hdr.nsamp
         if n:
             x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
-            y = self._filter(np.asarray(x.val, dtype=np.int64))
+            y = self._filter(x.val)
             # Timing, as the HLS body: the first result leaves proc_latency cycles after the first
             # sample arrived, and one result follows every proc_ii cycles.
             t_out_start = tstart + self.proc_latency * self.clk.period
@@ -159,7 +161,7 @@ One firing of `run_iter` is one packet — the in-band header pattern of
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
-        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_id=self.cfg_id))
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=hdr.tx_id, cfg_id=self.cfg_id))
 ```
 
 `_filter` is the golden itself, run over the filter's history and the packet:
@@ -213,7 +215,7 @@ It runs as two processes, over its **scenario**: `host_schedule`'s configs and p
 messages — a config's words, or a packet's `FirCmdHdr` and its samples as the serializer packs them
 (`scenario_bursts`). The same messages can be written to a file (`write_scenario`) and read back from
 it (the `scenario` field), which is how the host's C++ twin runs the same scenario at RTL — see
-[RTL simulation](rtlsim.md#the-host-program). The **writer** commits each config and sends each
+[RTL simulation](xsi.md#the-host-program). The **writer** commits each config and sends each
 packet — its header, then its samples:
 
 ```python
@@ -242,7 +244,7 @@ The **reader** takes one output packet per input packet, then its response, and 
                 y = yield from self.qout.get_array(S64, nsamp)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
-                got = (int(resp.tx_id), int(resp.cfg_id))
+                got = (resp.tx_id, resp.cfg_id)
                 self.responses.append(got)
                 for name, exp, val in (("tx_id", tx, got[0]), ("cfg_id", want, got[1])):
                     if exp != val:

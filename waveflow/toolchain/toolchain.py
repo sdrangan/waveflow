@@ -197,6 +197,19 @@ def _vivado_siblings(vitis_exe: Path, binary_name: str) -> List[Path]:
     return [p for p in candidates if _is_tool_binary(p, binary_name)]
 
 
+def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Optional[Path]:
+    """Vitis's C++ include directory -- ``ap_int.h``, ``hls_stream.h`` -- or ``None``.
+
+    The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
+    ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
+    is ``<install>/bin/vitis-run[.bat]``."""
+    exe = find_vitis_path(top_dir)
+    if not exe:
+        return None
+    inc = Path(exe).resolve().parent.parent / "include"
+    return inc if (inc / "ap_int.h").is_file() else None
+
+
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:
     """
     Locate the Vivado executable used for RTL simulation, synthesis, and implementation.
@@ -498,15 +511,20 @@ def run_vitis_hls(
         final_env = os.environ.copy()
         final_env.update(env)
 
-    return subprocess.run(
-        final_cmd,
-        cwd=work_dir or default_work_dir,
-        shell=use_shell,
-        check=True,
-        text=True,
-        capture_output=capture_output,
-        env=final_env,
-    )
+    # One timing span per Vitis run (waveflow.events); a csim, csynth or cosim is told apart by
+    # the build step it runs inside.
+    from waveflow import events
+
+    with events.span("tool", "vitis-run", script=Path(tcl_script).name):
+        return subprocess.run(
+            final_cmd,
+            cwd=work_dir or default_work_dir,
+            shell=use_shell,
+            check=True,
+            text=True,
+            capture_output=capture_output,
+            env=final_env,
+        )
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:

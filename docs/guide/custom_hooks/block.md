@@ -38,7 +38,7 @@ def run_proc(self) -> ProcessGen[None]:
 
 @synthesizable
 def compute(self, x: BlockBuf, n: int) -> ProcessGen[BlockBuf]:
-    return block_affine(np.asarray(x)[:int(n)])       # == the golden; C++ is hand-written
+    return block_affine(x[:n])                        # == the golden; C++ is hand-written
     yield                                              # unreachable — makes this a generator
 ```
 

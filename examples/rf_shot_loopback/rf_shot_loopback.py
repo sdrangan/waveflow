@@ -213,10 +213,8 @@ def expected_responses(frames) -> list[tuple[int, int]]:
     """``(tid, status)`` the transmitter must answer, **derived from the frames**."""
     out = []
     for f in frames:
-        h = HDR().deserialize(np.asarray(f, dtype=np.uint64).ravel()[:HDR.nwords_per_inst(WORD_BW)],
-                              word_bw=WORD_BW)
-        out.append((int(h.tid),
-                    SHOT_LOADED if int(h.opcode) == SHOT_LOOP else SHOT_BAD_OPCODE))
+        h = HDR().deserialize(f[:HDR.nwords_per_inst(WORD_BW)], word_bw=WORD_BW)
+        out.append((h.tid, SHOT_LOADED if h.opcode == SHOT_LOOP else SHOT_BAD_OPCODE))
     return out
 
 
@@ -432,7 +430,7 @@ def run_pysim(root=None, frames=None, **kw) -> RfShotLoopbackTB:
 
 def window_frames(tb: RfShotLoopbackTB) -> list[np.ndarray]:
     """The raw window frames the host sink collected — header **and** samples."""
-    return [np.asarray(b, dtype=np.uint64).ravel() for b in tb.win_snk.words]
+    return [np.asarray(b).ravel() for b in tb.win_snk.words]
 
 
 def responses(tb: RfShotLoopbackTB) -> list[tuple[int, int]]:
@@ -442,7 +440,7 @@ def responses(tb: RfShotLoopbackTB) -> list[tuple[int, int]]:
     out = []
     for i in range(0, words.size - n + 1, n):
         r = RESP().deserialize(words[i:i + n], word_bw=WORD_BW)
-        out.append((int(r.tid), int(r.status)))
+        out.append((r.tid, r.status))
     return out
 
 
@@ -458,9 +456,8 @@ def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
     out = []
     for hdr, words in split_windows(frames, WORD_BW):
         n = int(words.size) * SPW
-        vals = read_array(np.asarray(words, dtype=np.uint64), elem_type=dense_elem_type(WORD),
-                          word_bw=WORD_BW, shape=n)
-        out.append((hdr, np.asarray(getattr(vals, "val", vals), dtype=np.int64).ravel()))
+        vals = read_array(words, elem_type=dense_elem_type(WORD), word_bw=WORD_BW, shape=n)
+        out.append((hdr, vals.val))
     return out
 
 
@@ -486,8 +483,8 @@ def address_differences(frames) -> dict[int, int]:
     """
     got: dict[int, int] = {}
     for w, (hdr, codes) in enumerate(windows_as_codes(frames)):
-        k = window_abs_index(w, int(hdr.n_dropped), REGION_WORDS)
-        for off, v in enumerate(np.asarray(codes, dtype=np.int64).tolist()):
+        k = window_abs_index(w, hdr.n_dropped, REGION_WORDS)
+        for off, v in enumerate(codes.tolist()):
             if v == 0:
                 continue
             base = next((b for b in KNOWN_BASES if b <= v < b + NSAMP), None)
@@ -594,13 +591,13 @@ def check_both_waveforms_reached_the_air(frames, *, where: str = "") -> int:
     seen = set()
     n_a = 0
     for hdr, codes in windows_as_codes(frames):
-        for v in np.asarray(codes, dtype=np.int64).tolist():
+        for v in codes.tolist():
             if v == 0:
                 continue
             b = next((b for b in KNOWN_BASES if b <= v < b + NSAMP), None)
             if b is not None:
                 seen.add(b)
-        if any(CODE_A <= v < CODE_A + NSAMP for v in np.asarray(codes).tolist()):
+        if any(CODE_A <= v < CODE_A + NSAMP for v in codes.tolist()):
             n_a += 1
     missing = set(KNOWN_BASES) - seen
     if missing:
@@ -625,8 +622,8 @@ def check_every_window_is_whole_and_announced_clean(frames, *, where: str = "") 
     if sizes != {REGION_SAMPLES}:
         raise AssertionError(
             f"{where}windows of {sorted(sizes)} samples, expected only {REGION_SAMPLES}.")
-    bad = [(i, int(h.status), int(h.n_dropped)) for i, (h, _c) in enumerate(wins)
-           if int(h.status) != CAP_OK or int(h.n_dropped)]
+    bad = [(i, h.status, h.n_dropped) for i, (h, _c) in enumerate(wins)
+           if h.status != CAP_OK or h.n_dropped]
     if bad:
         raise AssertionError(f"{where}window(s) {bad} carry a loss verdict (index, status, "
                              f"n_dropped); the addresses below would then name a hole.")
@@ -641,7 +638,7 @@ def leading_silent_windows(frames) -> int:
     """
     n = 0
     for _hdr, codes in windows_as_codes(frames):
-        if np.any(np.asarray(codes) != 0):
+        if np.any(codes != 0):
             break
         n += 1
     return n

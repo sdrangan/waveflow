@@ -8,7 +8,7 @@
 
 int main() {
     rf_samp_buf_tx_tb::Harness h("rf_samp_buf_tx_bfm.wdb");
-    h.run(40000);
+    h.run(wfbfm::run_param("n_cycles", 40000));
     h.close();
     return 0;
 }

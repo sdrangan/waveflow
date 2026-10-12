@@ -58,7 +58,8 @@ def test_one_crossbar_becomes_two_slaves_sharing_one_arena():
     assert len(spec.shared) == 1
     cls, name, args, _dyn = spec.shared[0]
     assert cls == "FlatMemory" and name == "mem"
-    assert args == ("2624", "8"), "arena size/bpw come from the MemoryMod's own fields"
+    assert args == ('wfbfm::run_param("mem_words", 2624)', "8"), (
+        "arena size/bpw come from the MemoryMod's own fields (the size a run-time-overridable default)")
 
     slaves = [m for m in spec.models if m.cls.startswith("AxiMm")]
     assert len(slaves) == 2

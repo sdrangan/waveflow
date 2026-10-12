@@ -221,7 +221,7 @@ UNGUARDED_XSI_GATES = {
 
 def _drives_rtl(text: str) -> bool:
     """A file that launches the XSI runner is grading real RTL, and owes the question."""
-    return "xsi_runner_cmd" in text or "run.bat" in text
+    return "xsi_runner_cmd" in text or "run.bat" in text or "XsiSnapshot" in text
 
 
 def test_every_xsi_gate_that_drives_rtl_checks_staleness():

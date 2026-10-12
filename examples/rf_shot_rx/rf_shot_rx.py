@@ -274,7 +274,7 @@ def run_pysim(root=None, **kw) -> RfShotRxTB:
 
 def frames_from_sink(tb: RfShotRxTB) -> list[np.ndarray]:
     """The raw frames the sink collected — header **and** samples, as a host would see them."""
-    return [np.asarray(b, dtype=np.uint64).ravel() for b in tb.win_snk.words]
+    return [np.asarray(b).ravel() for b in tb.win_snk.words]
 
 
 def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
@@ -294,9 +294,8 @@ def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
         from waveflow.hw.rf_relayout import dense_elem_type
 
         n = int(words.size) * SPW
-        vals = read_array(np.asarray(words, dtype=np.uint64), elem_type=dense_elem_type(WORD),
-                          word_bw=WORD_BW, shape=n)
-        out.append((hdr, np.asarray(getattr(vals, "val", vals), dtype=np.int64).ravel()))
+        vals = read_array(words, elem_type=dense_elem_type(WORD), word_bw=WORD_BW, shape=n)
+        out.append((hdr, vals.val))
     return out
 
 
@@ -331,8 +330,8 @@ def check_windows(frames, *, where: str = "", expect_loss: bool = False) -> np.n
             f"{where}the windows are not contiguous: sample {i} is {int(flat[i])} and sample "
             f"{i + 1} is {int(flat[i + 1])}, a jump of {int(step[i])}. That gap is capture the "
             f"design lost, and it is invisible in every other reading of this run.")
-    bad_hdr = [(i, int(h.status), int(h.n_dropped)) for i, (h, _c) in enumerate(wins)
-               if int(h.status) != CAP_OK or int(h.n_dropped)]
+    bad_hdr = [(i, h.status, h.n_dropped) for i, (h, _c) in enumerate(wins)
+               if h.status != CAP_OK or h.n_dropped]
     if bad_hdr:
         i, st, n = bad_hdr[0]
         raise AssertionError(
@@ -371,11 +370,11 @@ def check_addresses_are_the_phase(frames, *, where: str = "") -> list[int]:
     nsamp = int(DEPTH) * SPW
     out = []
     for w, (hdr, codes) in enumerate(wins):
-        base = int(hdr.base_addr)
-        k = window_abs_index(w, int(hdr.n_dropped), REGION_WORDS)
+        base = hdr.base_addr
+        k = window_abs_index(w, hdr.n_dropped, REGION_WORDS)
         out.append(k)
         want = (np.arange(int(codes.size), dtype=np.int64) + base * SPW) % nsamp
-        got = (np.asarray(codes, dtype=np.int64) - CODE_BASE) % nsamp
+        got = (codes - CODE_BASE) % nsamp
         if not np.array_equal(got, want):
             i = int(np.flatnonzero(got != want)[0])
             raise AssertionError(

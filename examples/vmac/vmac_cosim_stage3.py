@@ -108,12 +108,13 @@ def _reduce_cmd(accel, a_addr, b_addr, y_addr):
 
 
 def _scalars(cmd) -> list[int]:
+    # str()'d into the C++ TB call: the enum and the bools need int() (a bool prints "True").
     return [
-        int(cmd.op), int(cmd.reduce), int(cmd.n_rows), int(cmd.n_cols),
-        int(cmd.a.addr), int(cmd.a.row_stride), int(cmd.b.addr), int(cmd.b.row_stride),
-        int(cmd.y.addr), int(cmd.y.row_stride), int(cmd.alpha.direct),
+        int(cmd.op), int(cmd.reduce), cmd.n_rows, cmd.n_cols,
+        cmd.a.addr, cmd.a.row_stride, cmd.b.addr, cmd.b.row_stride,
+        cmd.y.addr, cmd.y.row_stride, int(cmd.alpha.direct),
         int(cx.re_of(cmd.alpha.imm)), int(cx.im_of(cmd.alpha.imm)),
-        int(cmd.alpha.addr), int(cmd.alpha.stride),
+        cmd.alpha.addr, cmd.alpha.stride,
     ]
 
 
@@ -172,8 +173,8 @@ def gen_scenario(tdir: Path, ab_eq: bool) -> dict:
     data.mkdir(parents=True, exist_ok=True)
     (data / "mem_in.txt").write_text("\n".join(str(w) for w in mem_in_w) + "\n", encoding="utf-8")
     (data / "mem_exp.txt").write_text("\n".join(str(w) for w in mem_exp_w) + "\n", encoding="utf-8")
-    return {"cmd": cmd, "nmem": nmem, "a_addr": int(cmd.a.addr), "b_addr": int(cmd.b.addr),
-            "y_addr": int(cmd.y.addr), "ab_eq": ab_eq}
+    return {"cmd": cmd, "nmem": nmem, "a_addr": cmd.a.addr, "b_addr": cmd.b.addr,
+            "y_addr": cmd.y.addr, "ab_eq": ab_eq}
 
 
 def _burst_words(burst) -> int:

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from waveflow.build.build import BuildConfig
-from waveflow.hw.arrayutils import gen_array_utils, get_nwords, read_uint32_file, write_array, write_uint32_file
+from waveflow.hw.arrayutils import gen_array_utils, get_nwords, read_array, read_uint32_file, write_array, write_uint32_file
 from waveflow.hw.dataschema import DataArray, FloatField, IntField
 
 
@@ -101,6 +101,15 @@ def test_nwords_matches_serialized_length_float_matrix() -> None:
     packed = np.asarray(write_array(data, elem_type=F32, word_bw=64))
 
     assert get_nwords(elem_type=F32, word_bw=64, shape=data.shape) == int(packed.shape[0])
+
+
+@pytest.mark.parametrize("n", [np.uint32(5), np.int64(5), np.uint64(5)])
+def test_shape_accepts_a_numpy_integer(n) -> None:
+    """A count read from a schema field is a numpy integer; ``shape=`` takes it as it takes an int."""
+    data = np.arange(5, dtype=np.int16)
+    packed = write_array(data, elem_type=S16, word_bw=32)
+    assert get_nwords(elem_type=S16, word_bw=32, shape=n) == get_nwords(elem_type=S16, word_bw=32, shape=5)
+    assert np.array_equal(read_array(packed, elem_type=S16, word_bw=32, shape=n).val, data)
 
 
 def test_gen_array_utils_writes_companion_tb_header(tmp_path: Path):

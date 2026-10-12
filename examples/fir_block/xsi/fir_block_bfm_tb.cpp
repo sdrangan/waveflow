@@ -8,7 +8,7 @@
 
 int main() {
     fir_block_tb::Harness h("fir_block_bfm.wdb");
-    h.run(8000);
+    h.run(wfbfm::run_param("n_cycles", 8000));
     h.close();
     return 0;
 }

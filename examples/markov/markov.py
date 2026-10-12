@@ -48,17 +48,18 @@ from waveflow.hw.arrayutils import array, get_nwords, read_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwModule
+from waveflow.hw.hw_module import DynParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mem_stream import MemWCmd, MemWStream
 from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_credit import MmCreditStreamIF
 from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
-from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout, write_trace
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
 from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
 from waveflow.simulation.simulation import Simulation
+from waveflow.sw import SwHost, SwSemaphore
 
 DW = 64
 #: Bits of each uniform draw, and the Q-format of p01 / p10.
@@ -172,7 +173,7 @@ class MarkovGen(FreeRunMod):
     #: Cycles per draw (the HLS body's II).
     proc_ii: int = 1
     #: Cycles a chunk costs beyond its draws: the credit check before the loop, the loop's fill and
-    #: drain.  MEASURED at RTL (markov_xsi probes: a chunk leaves every 71 cycles for 64 draws).
+    #: drain.  MEASURED at RTL (the system top's timing probes: a chunk leaves every 71 cycles for 64 draws).
     chunk_overhead: int = 7
 
     def kernel_task(self):
@@ -196,8 +197,8 @@ class MarkovGen(FreeRunMod):
     def run_iter(self):
         cmd = yield from self.s_cmd.get_schema(MkvCmd)
         yield from self.m_u.write(cmd)
-        n = int(cmd.n)
-        u = uniforms(int(cmd.seed), n)
+        n = cmd.n
+        u = uniforms(cmd.seed, n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             # The credit check, then one draw per proc_ii (markov_gen_task.h).
@@ -220,7 +221,7 @@ class ChainCore(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     proc_ii: int = 1
     #: Cycles a chunk costs beyond its steps: the MemWCmd words, the step loop's fill and drain (its
-    #: depth is 5), the credit offer.  MEASURED at RTL (markov_xsi probes: x leaves for memory every
+    #: depth is 5), the credit offer.  MEASURED at RTL (the system top's timing probes: x leaves for memory every
     #: 79 cycles for 64 steps).
     chunk_overhead: int = 15
 
@@ -242,12 +243,12 @@ class ChainCore(FreeRunMod):
 
     def run_iter(self):
         cmd = yield from self.s_u.get_schema(MkvCmd)
-        n, x = int(cmd.n), int(cmd.x0) & 1
-        dst, ones = int(cmd.dstaddr), 0
+        n, x = cmd.n, cmd.x0 & 1
+        dst, ones = cmd.dstaddr, 0
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
             u = yield from self.s_u.get_array(U16, c)
-            xs = chain_golden(np.asarray(u.val), x, int(cmd.p01), int(cmd.p10))
+            xs = chain_golden(u.val, x, cmd.p01, cmd.p10)
             x = int(xs[-1])
             ones += int(xs.sum())
             yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
@@ -257,7 +258,7 @@ class ChainCore(FreeRunMod):
             yield from self.m_x.write(MemWCmd(addr=(dst + k0) // 8, len=len(xw), fwd_bursts=0))
             yield from self.m_x.write(np.asarray(xw, dtype=np.uint64))
         yield from self.m_x.write(MemWCmd(addr=0, len=0, fwd_bursts=1))
-        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=int(cmd.tx_id)))
+        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
         self.njobs += 1
 
 
@@ -331,7 +332,7 @@ def default_jobs(njobs: int = 4, n: int = 300, seed: int = 11) -> list[dict]:
 
 #: The host's endpoints that record a trace (memory-mapped wiring), in the order they are dumped:
 #: the command queue, the response queue, and the reads of each job's x from the shared memory.
-HOST_ENDPOINTS = ("qcmd", "qresp", "mem")
+HOST_ENDPOINTS = ("qcmd", "qresp", "mem_reader")
 
 
 def _u64(words) -> np.ndarray:
@@ -340,7 +341,7 @@ def _u64(words) -> np.ndarray:
 
 
 @dataclass
-class MarkovHost(HwModule):
+class MarkovHost(SwHost):
     """The host program: a **writer** that sends each job's command once a slot is free, and a
     **reader** that takes each response, reads that job's ``x`` from memory and frees the slot.
     At most :data:`MAX_IN_FLIGHT` jobs are outstanding.  Nothing polls: over the bus the command
@@ -348,8 +349,8 @@ class MarkovHost(HwModule):
     queue's data interrupt.  ``x`` is read with ``mem_read`` -- a bus read (memory-mapped) or a
     direct read of the memory (direct).
 
-    **Two realizations** (``plans/xsi_system_top.md``): :meth:`bfm_model` names the C++ one,
-    ``MarkovHostModel`` in ``markov_host.h`` beside this file.  Both run **one scenario**, one burst per
+    **Two realizations** (``plans/host_runtime.md``): the C++ one is ``MarkovHostModel`` in
+    ``markov_host.h`` beside this file -- the same two threads on the generated endpoints.  Both run **one scenario**, one burst per
     job (:meth:`scenario_bursts`): ``[x address, x words, <MkvCmd words>]`` -- from :attr:`scenario` when
     set (the bundle :meth:`write_scenario` wrote), else the same bursts built in memory.  With
     :attr:`trace_dir` set, the three memory-mapped endpoints' traces (:data:`HOST_ENDPOINTS`) are dumped
@@ -359,30 +360,28 @@ class MarkovHost(HwModule):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: Cycles between polls, should an endpoint poll (none does: they wait on interrupts).
     poll_cycles: int = 8
-    #: The scenario bundle both hosts run (``write_scenario``); empty: built from ``jobs``.
-    scenario: DynParam[str] = ""
-    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
-    trace_dir: DynParam[str] = ""
+    #: Jobs outstanding at most.  A DynParam, so the C++ realization reads the same value.
+    max_in_flight: DynParam[int] = MAX_IN_FLIGHT
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "MarkovHostModel"
+    cpp_header: ClassVar[str | None] = "markov_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW)
+        self.add_bus_master("m", bitwidth=DW)
         self.qcmd: StreamIFMaster | None = None
         self.qresp: StreamIFSlave | None = None
         #: The host's ends of the two queues' interrupt lines (memory-mapped wiring binds them).
-        self.irq_qcmd = IrqIFSink(name=f"{self.name}_irq_qcmd", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq: dict[str, IrqIFSink] = {"qcmd": self.irq_qcmd, "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qcmd, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qcmd", "qresp")}
         #: The reads of x from the shared memory, recorded (memory-mapped wiring).
         self.mem_reader = BusReader(self.m)
         self.mem: MemoryMod | None = None
         self.mem_bus_base: int | None = None       # None: read the memory directly
         self.done = self.env.event()
         self.results: dict[int, dict] = {}
-        self._slots = MAX_IN_FLIGHT
-        self._slot_free = None
+        #: Jobs that may still be sent: the writer takes one, the reader gives it back.
+        self.slots = SwSemaphore(self, int(self.max_in_flight), name="slots")
 
     def _dst(self, j: int) -> int:
         """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
@@ -401,11 +400,6 @@ class MarkovHost(HwModule):
                                        _u64(cmd)]))
         return out
 
-    def write_scenario(self, path) -> None:
-        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
-        from waveflow.utils.burst_io import write_burst_bundle
-        write_burst_bundle(self.scenario_bursts(), path)
-
     def pre_sim(self) -> None:
         super().pre_sim()
         if self.scenario:
@@ -416,60 +410,33 @@ class MarkovHost(HwModule):
         #: The decoded scenario, per job: (x address, x words, command words).
         self.items = [(int(b[0]), int(b[1]), np.asarray(b[2:], dtype=np.uint64)) for b in bursts]
 
-    def post_sim(self) -> None:
-        super().post_sim()
-        if self.trace_dir:
-            from pathlib import Path
-            for name, ep in (("qcmd", self.qcmd), ("qresp", self.qresp), ("mem", self.mem_reader)):
-                write_trace(ep, Path(self.trace_dir) / name)
-
     # -- the host program -----------------------------------------------------------------------------
 
     def _writer(self):
         for _xaddr, _xwords, cmd in self.items:
-            while self._slots == 0:
-                self._slot_free = self.env.event()
-                yield self._slot_free
-            self._slots -= 1
+            yield from self.slots.acquire()
             yield from self.qcmd.write(cmd)
 
     def _reader(self):
         for _ in self.items:
             resp = yield from self.qresp.get_schema(MkvResp)
-            j = int(resp.tx_id)
-            n = int(resp.n)
+            j = resp.tx_id
+            n = resp.n
             if self.mem_bus_base is None:
-                x = np.asarray(self.mem.read_array(self._dst(j), U8, n))
+                x = self.mem.read_array(self._dst(j), U8, n).val
             else:
                 xaddr, xwords, _cmd = self.items[j]
                 words = yield from self.mem_reader.read(xwords, xaddr)
-                x = np.asarray(read_array(np.asarray(words, dtype=np.uint64), U8, word_bw=DW,
-                                          shape=n).val)
-            self.results[j] = dict(n=n, ones=int(resp.ones), x=np.asarray(x, dtype=np.uint8),
-                                   t=self.env.now)
-            self._slots += 1
-            if self._slot_free is not None and not self._slot_free.triggered:
-                self._slot_free.succeed()
+                x = read_array(words, U8, word_bw=DW, shape=n).val
+            self.results[j] = dict(n=n, ones=resp.ones, x=x, t=self.env.now)
+            self.slots.release()
         self.done.succeed()
 
-    def run_proc(self):
-        self.env.process(self._writer())
+    def main(self):
+        """Two threads: the writer, started here, and the reader, which is this thread and ends the
+        run."""
+        self.start(self._writer)
         yield from self._reader()
-
-    def bfm_model(self):
-        """The C++ realization: ``MarkovHostModel`` in ``markov_host.h`` beside this file -- the same
-        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.  It
-        spans the bus master and the two interrupt pins.  Its arguments are this host's settings and
-        what it must read out of a response -- the ``tx_id`` field's position, from ``MkvResp``'s own
-        serializer -- never restated in the C++."""
-        from waveflow.build.composite_gen import BfmModel
-        from waveflow.build.system_top import field_position
-
-        word, bit, width = field_position(MkvResp, "tx_id", DW)
-        return BfmModel("MarkovHostModel", ports=("m", "irq_qcmd", "irq_qresp"),
-                        extra_args=(str(int(self.poll_cycles)), str(MAX_IN_FLIGHT),
-                                    str(MkvResp.nwords_per_inst(DW)), str(word), str(bit), str(width)),
-                        header="markov_host.h")
 
 
 @dataclass
@@ -564,6 +531,30 @@ class MarkovSystem:
     def run(self) -> dict[int, dict]:
         self.sim.run_sim(until=self.host.done)
         return self.host.results
+
+
+def timing_probes(sysm: MarkovSystem) -> dict:
+    """Timing probes (plans: markov-timing): one-bit handshakes the system top exposes as outputs when
+    built with probes (``markov_build.build_dag(probes=True)``, or ``--probes``), and the testbench
+    samples every cycle.  Off for the gate.  Each names the pysim object it watches -- a kernel's port,
+    or a bus master and an AXI channel -- and the system top resolves the net."""
+    from waveflow.build.system_top import beat, last
+
+    gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
+    return {
+        "cmd": beat(gen.s_cmd),                          # host's command reaches the generator
+        "ufwd": beat(gen.m_u.fwd_ep),                    # generator -> its queue writer, a word
+        "ufwd_last": last(gen.m_u.fwd_ep),               # ... the last word of a chunk
+        "wr1_aw": beat(link.fwd_writer.m_mem, "AW"),     # queue writer: a burst issued
+        "wr1_b": beat(link.fwd_writer.m_mem, "B"),       # ... and acknowledged
+        "u": beat(chain.s_u.fwd_ep),                     # chain takes a word from its queue in
+        "crd": beat(chain.s_u.crd_ep),                   # chain offers credit
+        "wr2_aw": beat(link.crd_writer.m_mem, "AW"),     # credit writer: a credit write
+        "ucrd": beat(gen.m_u.crd_ep),                    # generator takes a credit value
+        "wr3_aw": beat(chain.m_mem, "AW"),               # chain's memory writer: a burst
+        "wr3_b": beat(chain.m_mem, "B"),
+        "resp": beat(chain.m_resp),                      # a response word into qresp
+    }
 
 
 def demo(link: str = "mm", njobs: int = 4, n: int = 300) -> dict:

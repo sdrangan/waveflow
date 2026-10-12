@@ -409,7 +409,8 @@ class BramWriteCompute(FreeRunMod):
         instead would invent two transfers that do not exist and charge for them.
         """
         cmd = yield from self.cmd_w.get_schema(WriteComputeCmd)
-        wp, n, op = int(cmd.waddr), int(cmd.nsamp), BramOp(int(cmd.opcode))
+        wp, op = cmd.waddr, cmd.opcode
+        n = int(cmd.nsamp)                           # int: depth - n below
         ok = n <= int(self.depth) and wp <= int(self.depth) - n
         if op is BramOp.WRITE:
             if n:
@@ -493,7 +494,8 @@ class BramReadCmd(FreeRunMod):
             yield from _word(self.go_in)
             self.armed = True
         cmd = yield from self.cmd_r.get_schema(ReadCmd)
-        rp, n = int(cmd.raddr), int(cmd.nsamp)
+        rp = cmd.raddr
+        n = int(cmd.nsamp)                           # int: depth - n below
         ok = n <= int(self.depth) and rp <= int(self.depth) - n
         if ok and n:
             y, tstart = yield from self.buf_r.read_pipelined(self.buf_r.element_type, n, rp)
@@ -958,7 +960,7 @@ def write_scenario(root, sc: Scenario | None = None, bitwidth: int = WORD_BW) ->
     words = np.asarray(sc.data_w, dtype=np.uint64)
     # WRITEs only.  Read the opcode rather than assuming every command carries payload -- a COMPUTE
     # consumes none, and framing against it would hand every later WRITE the previous one's data.
-    nsamps = [int(c.nsamp) for c in sc.cmd_w if BramOp(int(c.opcode)) is BramOp.WRITE]
+    nsamps = [c.nsamp for c in sc.cmd_w if c.opcode is BramOp.WRITE]
     ends = np.cumsum(nsamps) if nsamps else np.zeros(0, dtype=np.int64)
     total = int(ends[-1]) if ends.size else 0
     if total != words.size:
@@ -990,7 +992,7 @@ def check_outputs(resp_w, data_r, resp_r, sc: Scenario | None = None, where: str
     for got, want, schema, name in ((resp_w, sc.want_resp_w, WriteResp, "resp_w"),
                                     (resp_r, sc.want_resp_r, ReadResp, "resp_r")):
         per = schema.nwords_per_inst(bw)
-        raw = np.asarray(got, dtype=np.uint64).ravel()
+        raw = np.asarray(got, dtype=np.uint64).ravel()   # uint64: Python ints >= 2**63 would go float64
         if raw.size != per * len(want):
             raise AssertionError(
                 f"{where}{name}: {raw.size} words = {raw.size / per:g} responses, expected "
@@ -999,10 +1001,10 @@ def check_outputs(resp_w, data_r, resp_r, sc: Scenario | None = None, where: str
                 f"which is what reading through the schema exists to make impossible.")
         for i, exp in enumerate(want):
             obj = schema().deserialize(raw[i * per:(i + 1) * per], word_bw=bw)
-            if int(obj.tid) != int(exp.tid) or int(obj.status) != int(exp.status):
+            if obj.tid != exp.tid or obj.status != exp.status:
                 raise AssertionError(
-                    f"{where}{name}[{i}]: tid={int(obj.tid)} status={BramStatus(int(obj.status))!r}"
-                    f", expected tid={int(exp.tid)} status={BramStatus(int(exp.status))!r}")
+                    f"{where}{name}[{i}]: tid={obj.tid} status={obj.status!r}"
+                    f", expected tid={exp.tid} status={exp.status!r}")
 
     g = np.asarray(data_r, dtype=np.uint64).ravel()
     w = np.asarray(sc.want_data_r, dtype=np.uint64).ravel()

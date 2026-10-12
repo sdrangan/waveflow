@@ -535,12 +535,25 @@ def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = Fa
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
     """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
     with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
-    ``const`` (the ``@port_read`` capability -> a stray write is a compile error) and gets
-    ``#pragma HLS stable``; the write owner is plain."""
+    ``const`` (the ``@port_read`` capability -> a stray write is a compile error); the write owner is
+    plain.
+
+    **``offset=off`` + ``stable``, on every pointer -- not ``offset=slave``.**  UG1399 (HLS Task
+    Library) supports an ``m_axi`` pointer passed to an ``hls::task`` only as a ``stable`` argument
+    with ``offset=off``.  With ``offset=slave`` Vitis 2025.1 still synthesizes it, but hands each task
+    its pointer through a small FIFO of its own, refilled by one ``entry_proc`` that writes every such
+    FIFO together; a task pops its FIFO each firing.  A reader that fires more often per job than the
+    writer drains its FIFO while the writer's fills, the entry process blocks, and the pipeline stops
+    -- at RTL only, after a number of jobs set by the FIFO depth (``interleaver_inband``: 6 jobs, then
+    a hang; ``plans/maxi_pointer_fifo.md``).  ``stable`` alone does not remove the FIFOs (measured);
+    ``offset=off`` does: no entry process, no pointer FIFOs, no ``s_axi_control`` slave.
+
+    The cost is the relocatable base: the bus address is the command's word coordinate times the
+    word size, from 0.  Every flow already ran that way -- the XSI testbenches and the system top
+    pinned the base register to 0."""
     qual = "const " if const else ""
-    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle={bundle} depth=8192"]
-    if const:
-        pragmas.append(f"#pragma HLS stable variable={name}")
+    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=off bundle={bundle} depth=8192",
+               f"#pragma HLS stable variable={name}"]
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
                    width=width)
@@ -1421,6 +1434,9 @@ class TbSpec:
     #: that stops there is not the drain-tail-as-latency mistake ``run``'s note warns about -- the
     #: host's completion IS the measurement (``plans/xsi_system_top.md``).
     stop_on: str | None = None
+    #: Generated files the harness needs beside it, ``(file name, text)`` -- a software host's
+    #: ``<Host>_endpoints.h``.
+    extra_files: tuple[tuple[str, str], ...] = ()
 
 
 def _find_dut(tb):
@@ -1518,8 +1534,11 @@ def header_model_classes(path) -> frozenset[str]:
     from pathlib import Path
 
     text = Path(path).read_text(encoding="utf-8")
-    return frozenset(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
-                                text, re.M))
+    # A software host's model derives from its generated <Host>_endpoints (or SwHostModel directly),
+    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.
+    return frozenset(re.findall(
+        r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(?:XsiSimObj|SwHostModel|\w+_endpoints)\b",
+        text, re.M))
 
 
 def bfm_model_header(mod, bm: "BfmModel"):
@@ -2575,12 +2594,19 @@ _MAXI_UNDRIVEN = {
 }
 
 #: The AXI-Lite control slave Vitis creates for `offset=slave` m_axi ports.  Pinning it quiescent is
-#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.
+#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.  A
+#: free-running top's pointers are `offset=off` (see :func:`_maxi_port`) and have no such slave.
 _CONTROL_UNDRIVEN = (
     "s_axi_control_AWVALID", "s_axi_control_AWADDR", "s_axi_control_WVALID", "s_axi_control_WDATA",
     "s_axi_control_WSTRB", "s_axi_control_ARVALID", "s_axi_control_ARADDR", "s_axi_control_RREADY",
     "s_axi_control_BREADY",
 )
+
+
+def has_control_slave(ports) -> bool:
+    """Whether a kernel with these boundary *ports* has the ``s_axi_control`` slave: Vitis creates it
+    for an ``m_axi`` port with ``offset=slave``, so it is read off the pragmas, not assumed."""
+    return any("offset=slave" in pr for p in ports for pr in p.pragmas)
 
 
 def render_ports_h(spec: TopSpec) -> str:
@@ -2634,7 +2660,7 @@ def render_ports_h(spec: TopSpec) -> str:
         lines.append(f'static const char* const {p.name:<8} = "{p.xsi_prefix}";   // {comment}')
 
     zero: list[str] = []
-    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.pin_ports):
+    if has_control_slave(spec.pin_ports):
         zero.extend(_CONTROL_UNDRIVEN)
     for p in spec.pin_ports:
         for ch in _MAXI_UNDRIVEN.get(p.kind, ()):
@@ -2683,7 +2709,9 @@ def render_tb_main(spec: TbSpec, n_cycles: int, ns: str | None = None,
         "",
         "int main() {",
         f'    {ns}::Harness h("{wdb}");',
-        f"    h.run({int(n_cycles)});",
+        # The bound is the GENERATED default; a run's vectors/run.json may override it (a workload
+        # sweep's points then share one compiled testbench -- wfbfm::run_param, xsi_bundle.h).
+        f'    h.run(wfbfm::run_param("n_cycles", {int(n_cycles)}));',
         "    h.close();",
         "    return 0;",
         "}",
@@ -2739,6 +2767,34 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def check_maxi_lowered(root, top_name: str) -> None:
+    """Refuse a csynth result whose ``m_axi`` ports were not lowered to AXI masters.
+
+    **Seen twice (Vitis 2025.1, 2026-10-10), never reproduced on demand.**  csynth of a top whose
+    pragmas declare ``m_axi`` (``offset=off`` + ``stable``) reported success with every pointer lowered
+    to a plain register port -- ``HLS 214-450 Ignore address on register port 'm_mem'``, no
+    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  Nothing downstream
+    says so until XSI fails to bind a port (``FATAL: port 'ap_rst_n' not found``), or worse, never
+    binds it at all.  So right after csynth, before the stamp vouches for it: every ``m_axi`` bundle the
+    top's source declares must have its adapter in the RTL.  ``plans/maxi_pointer_fifo.md``.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
+    if not src.is_file():
+        return
+    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
+                             src.read_text(encoding="utf-8")))
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    missing = sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+    if missing:
+        raise RuntimeError(
+            f"csynth of {top_name} declared m_axi bundle(s) {missing} but produced no AXI master for "
+            f"them -- Vitis lowered the pointer to a register port (look for HLS 214-450 in the log). "
+            f"Re-run csynth; see composite_gen.check_maxi_lowered.")
+
+
 def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
                  stamp_sources: bool = True) -> str:
     """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
@@ -2789,6 +2845,7 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
     if not names:
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
     if stamp_sources:
+        check_maxi_lowered(root, top_name)
         write_stamp(root, top_name)
     # ROM initialization data.  csynth writes a constant table it maps to a ROM as a `.dat` beside the
     # `.v`, loaded with `$readmemh("./<name>.dat")` -- a path relative to the SIMULATOR's working

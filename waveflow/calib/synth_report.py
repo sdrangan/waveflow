@@ -139,6 +139,26 @@ def _classify(prefix: str, rows: dict) -> "tuple[str | None, dict]":
     return task_row, subblocks
 
 
+def _claim_taskless_top(path: str, ident: ModuleIdentity, rows: dict, top_name: str,
+                        claimed: set) -> ModuleResources:
+    """The record of a top with no :class:`KernelTask` and no children (a host-activated kernel, a
+    bus writer): its body is the top's one function row if it has exactly one besides the top row --
+    a writer's ``mm_queue_writer_task_<..>_s`` -- else the top row itself.  ``_Pipeline_*`` rows are
+    breakdown.  What the body row leaves out of the top (the ``m_axi`` / ``s_axilite`` adapters, which
+    csynth reports no figures for) stays integration; when the top row is claimed, the adapters ride
+    inside it and the integration term is zero."""
+    bodies = [n for n in rows if n != top_name and SUBBLOCK_MARKER not in n]
+    row = bodies[0] if len(bodies) == 1 else top_name
+    if row not in rows:
+        raise UnmappedModuleError(f"{ident.cls_name} ({path}): a top with no kernel task, and no "
+                                  f"row for it -- RTL rows present: {sorted(rows)}")
+    subblocks = {n: rows[n] for n in rows if SUBBLOCK_MARKER in n}
+    claimed.add(row)
+    claimed.update(subblocks)
+    return ModuleResources(key=ident.key, path=path, cls_name=ident.cls_name, rtl_module=row,
+                           resources=rows[row], subblocks=subblocks)
+
+
 def attribute_resources(top_comp: Any, parser: Any, *, top_name: str | None = None) -> SynthReport:
     """Attribute *parser*'s per-module figures to the modules of the elaborated *top_comp*.
 
@@ -169,6 +189,9 @@ def attribute_resources(top_comp: Any, parser: Any, *, top_name: str | None = No
         try:
             kt = comp.kernel_task()
         except Exception:
+            if comp is top_comp and not getattr(comp, "sub_comps", None):
+                # A top with no task and no children: a host-activated kernel (or a bus writer).
+                modules.append(_claim_taskless_top(path, ident, rows, top_name, claimed))
             # A composite has no task of its own — it *is* the top row, already accounted for.
             continue
         prefix = rtl_prefix(kt)
@@ -207,7 +230,7 @@ def store_report(report: SynthReport, store: Any, identities: "dict[str, ModuleI
                  source: str = "hls_estimate", part: str = "", period_ns: float = 0.0,
                  tool: str = "", cost_seconds: float = 0.0,
                  top_identity: "ModuleIdentity | None" = None,
-                 boundary: "dict | None" = None) -> list:
+                 boundary: "dict | None" = None, extra: "dict | None" = None) -> list:
     """File *report*'s figures into a :class:`~waveflow.calib.record_store.ModuleStore`.
 
     Both durable halves of the attribution:
@@ -230,6 +253,8 @@ def store_report(report: SynthReport, store: Any, identities: "dict[str, ModuleI
     that happen to agree, which is the point: the invariance across compute parameters becomes
     *derivable from the store* rather than asserted in a docstring, and a point that broke it would
     appear as a second value instead of silently contradicting a comment.
+
+    *extra* is merged into every record's payload (a system's ``owner`` label, say).
     """
     from waveflow.calib.record_store import integration_record, resource_record
 
@@ -241,7 +266,8 @@ def store_report(report: SynthReport, store: Any, identities: "dict[str, ModuleI
             continue
         rec = resource_record(ident, m.resources, source=source, part=part, period_ns=period_ns,
                               tool=tool, cost_seconds=share,
-                              extra={"rtl_module": m.rtl_module, "attributed_from": report.top_name})
+                              extra={"rtl_module": m.rtl_module, "attributed_from": report.top_name,
+                                     **(extra or {})})
         store.append(rec, identity=ident)
         written.append(rec)
 

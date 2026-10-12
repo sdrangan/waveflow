@@ -26,15 +26,6 @@ static const char* const s_done   = "s_done";   // axis_out
 // are skipped at bind time (XsiSim::pin_low), so this may name channels a given kernel
 // does not expose.
 static const char* const ZERO_PORTS[] = {
-    "s_axi_control_AWVALID",
-    "s_axi_control_AWADDR",
-    "s_axi_control_WVALID",
-    "s_axi_control_WDATA",
-    "s_axi_control_WSTRB",
-    "s_axi_control_ARVALID",
-    "s_axi_control_ARADDR",
-    "s_axi_control_RREADY",
-    "s_axi_control_BREADY",
     "m_axi_gmem0_AWREADY",
     "m_axi_gmem0_WREADY",
     "m_axi_gmem0_BVALID",

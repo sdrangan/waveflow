@@ -435,6 +435,32 @@ class MmQueueInIF(_MmViewIF):
         raise TypeError(f"{self.name}: offer() is for a producer that cannot wait; a bus master "
                         f"writing a queue in can, so use write()")
 
+    # -- software-thread primitives (plans/host_runtime.md): the bus transaction only --------------
+
+    def room_irq(self, n: int) -> ProcessGen[IrqIFSink]:
+        """Arm the view's interrupt for room for *n* words -- write the threshold if it changed (a bus
+        write) -- and return the host's end of the line, to ``wait()`` on or pass to ``wait_any``."""
+        if self.irq is None:
+            raise RuntimeError(f"{self.name}: no interrupt line was given (irq=), so there is "
+                               f"nothing to arm")
+        yield from self._set_threshold(int(n))
+        return self.irq
+
+    def push(self, words: Words) -> ProcessGen[None]:
+        """Write one packet ``[len | words]`` **without** waiting for room: the caller has made sure
+        it fits (its room interrupt fired).  A packet that does not fit stalls the bus, as it would at
+        RTL.  Recorded in the trace like :meth:`write`."""
+        words = np.asarray(words, dtype=self._dtype)
+        n = len(words)
+        if n > int(self.view.depth):
+            raise ValueError(f"{self.name}: a {n}-word packet cannot fit queue '{self.view.name}' "
+                             f"(depth {self.view.depth}); push() never splits a packet")
+        self._record(words)
+        yield from self._write_bursts(np.concatenate([np.asarray([n], dtype=self._dtype), words]),
+                                      self.view.base)
+        if hasattr(self, "_room"):
+            self._room = max(0, self._room - n)
+
 
 @dataclass
 class MmRegBankCfgIF(_MmViewIF):
@@ -493,6 +519,27 @@ class _InterfacePull(QueuedTransferIFSlave):
 
 
 @dataclass
+class MmStreamIFMaster(StreamIFMaster):
+    """A ``StreamIFMaster`` onto a queue-in view over the bus: ``write`` (wait for room, then send),
+    plus the software-thread primitives -- ``room_irq(n)`` and ``push(data)``, which waits for nothing
+    but the bus (``plans/host_runtime.md``)."""
+
+    type_name = "mm_stream_if_master"
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def room_irq(self, n: int) -> ProcessGen[IrqIFSink]:
+        return (yield from self.interface.room_irq(n))
+
+    def push(self, data) -> ProcessGen[None]:
+        """One packet, a schema instance or raw words, written without waiting for room."""
+        from waveflow.hw.dataschema import DataSchema
+        words = data.serialize(word_bw=self.bitwidth) if isinstance(data, DataSchema) else data
+        yield from self.interface.push(words)
+
+
+@dataclass
 class MmStreamIFSlave(StreamIFSlave, _InterfacePull):
     """A ``StreamIFSlave`` whose words come from a queue-out view over the bus.
 
@@ -521,6 +568,19 @@ class MmStreamIFSlave(StreamIFSlave, _InterfacePull):
     def get_array_nb(self, element_type, count):
         words = yield from self.interface.try_pull(self._typed_nwords(element_type, count))
         return None if words is None else self._unpack(words, element_type, count)
+
+    # -- software-thread primitives (plans/host_runtime.md): the bus transaction only --------------
+
+    def data_irq(self, n: int) -> ProcessGen[IrqIFSink]:
+        return (yield from self.interface.data_irq(n))
+
+    def pop(self, what, count: int | None = None):
+        """Read without waiting for the data: *what* is a word count, or a schema type (one
+        instance, or *count* of them as an array) decoded as ``get_schema`` / ``get_array`` do."""
+        if isinstance(what, int):
+            return (yield from self.interface.pop(what))
+        words = yield from self.interface.pop(self._typed_nwords(what, count))
+        return self._unpack(words, what, count)
 
 
 @dataclass
@@ -580,6 +640,27 @@ class MmQueueOutIF(_MmViewIF):
             got.append(np.asarray((yield from self._pop(k)), dtype=self._dtype))
             have += k
         return np.concatenate(got) if got else np.zeros(0, dtype=self._dtype)
+
+    def data_irq(self, n: int) -> ProcessGen[IrqIFSink]:
+        """Arm the view's interrupt for *n* words ready -- write the threshold if it changed (a bus
+        write) -- and return the host's end of the line, to ``wait()`` on or pass to ``wait_any``."""
+        if self.irq is None:
+            raise RuntimeError(f"{self.name}: no interrupt line was given (irq=), so there is "
+                               f"nothing to arm")
+        yield from self._set_threshold(min(int(n), int(self.view.depth)))
+        return self.irq
+
+    def pop(self, n: int) -> ProcessGen[Words]:
+        """Read exactly *n* words **without** waiting for them: the caller has made sure they are
+        there (its data interrupt fired).  Recorded in the trace like :meth:`pull`."""
+        n = int(n)
+        got = []
+        for i in range(0, n, self.view.max_burst):
+            m = min(self.view.max_burst, n - i)
+            got.append(np.asarray((yield from self._pop(m)), dtype=self._dtype))
+        words = np.concatenate(got) if got else np.zeros(0, dtype=self._dtype)
+        self._record(words)
+        return words
 
     def try_pull(self, nwords_max) -> ProcessGen[Words | None]:
         n = self._need(nwords_max)
@@ -730,6 +811,13 @@ class BusReader:
         self.trace.append(np.array(words, dtype=dt).reshape(-1))
         return words
 
+    def write(self, words: Words, addr: int) -> ProcessGen[None]:
+        """*words* to byte address *addr* -- ``MMIFMaster.write``, recorded like a read."""
+        dt = np.uint32 if int(self.master.bitwidth) <= 32 else np.uint64
+        words = np.asarray(words, dtype=dt).reshape(-1)
+        self.trace.append(np.array(words, dtype=dt))
+        yield from self.master.write(words, int(addr))
+
 
 def write_trace(endpoint, bundle_dir) -> None:
     """Dump what crossed a host *endpoint* (one from :class:`BoundMemSlaveAdaptor`, or a
@@ -818,8 +906,9 @@ class BoundMemSlaveAdaptor:
                 raise TypeError(f"stream_master({name!r}): only a queue in has an interrupt")
             iface = self._iface(MmQueueInIF if v.kind == "queue_in" else MmRegBankCfgIF, v,
                                 "tx" if v.kind == "queue_in" else "cfg", irq)
-            ep = StreamIFMaster(name=f"{iface.name}_ep", sim=self.master.sim,
-                                bitwidth=v.mem_dwidth, has_tlast=True)
+            cls = MmStreamIFMaster if v.kind == "queue_in" else StreamIFMaster
+            ep = cls(name=f"{iface.name}_ep", sim=self.master.sim,
+                     bitwidth=v.mem_dwidth, has_tlast=True)
             iface.bind("master", ep)
             self._cache[key] = ep
         return self._cache[key]
@@ -866,6 +955,7 @@ __all__ = [
     "BusReader",
     "MmRegBankCfgIF",
     "MmQueueOutIF",
+    "MmStreamIFMaster",
     "MmStreamIFSlave",
     "MmStatusIF",
     "LatestValueIF",

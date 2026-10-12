@@ -52,19 +52,19 @@ from waveflow.hw.arrayutils import array
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataArray, DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam, HwModule, HwParam
+from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
-from waveflow.hw.memif import AXIMMCrossBarIF, MMIFMaster, assign_address_ranges
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.mm_device import QueueIn, QueueOut, RegBank, build_mm_device
 from waveflow.hw.mm_host import (
     BoundMemSlaveAdaptor,
     LatestValueIF,
     LatestValueIFSlave,
     MemSlaveLayout,
-    write_trace,
 )
 from waveflow.simulation.simulation import Simulation
+from waveflow.sw import SwHost
 
 DW = 64
 NTAP_MAX = 16
@@ -103,10 +103,9 @@ class FirRespHdr(DataList):
 class FirCfg(DataList):
     """One configuration: ``ntaps`` taps from ``coeffs``.
 
-    ``coeffs`` comes FIRST on purpose.  At 64 bits Python packs a DataList densely, while the
-    generated C++ starts an array on a fresh word (``plans/stream_array_alignment.md``, not fixed
-    yet).  Sixteen int16 taps are exactly four 64-bit words, so with the array first both layouts
-    agree; with ``ntaps`` first the C++ read the taps 32 bits late.
+    An array starts on a fresh word and the field after it does too (the word layout rule,
+    ``docs/guide/schema/hls/serialization.md``), so at 64 bits this is four words of taps, then
+    ``ntaps`` and ``cfg_id`` in a fifth.
     """
 
     elements = {
@@ -136,7 +135,7 @@ MM_BASE = 0x0000
 #: AXI's read and write channels are independent and AMD's crossbar routes them in parallel, so a host
 #: whose writer and reader run concurrently overlaps them -- but each process waits for its own
 #: transaction before the next.  ONE setting for both backends: pysim's ``MMIFMaster.max_outstanding``
-#: and the XSI testbench's ``AxiMmMaster(..., overlap_rw=true)`` (``mm_fir_xsi``) both read it.
+#: and the XSI testbench's ``AxiMmMaster(..., overlap_rw=true)`` (the system harness) both read it.
 HOST_MAX_OUTSTANDING = 1
 
 #: The host's own pacing: cycles between a process asking for its next transaction and the master
@@ -217,7 +216,7 @@ class MmFir(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     ntap_max: HwParam[int] = NTAP_MAX
     #: Timing of the HLS body -- one packet per firing, the sample loop pipelined at II=1 -- MEASURED at
-    #: RTL with mm_fir_xsi's handshake probes (packet 2: header read at 88, samples from 92, results
+    #: RTL with the system top's handshake probes (packet 2: header read at 88, samples from 92, results
     #: 101..116, status and response at 126, next header at 128 -- 40 cycles for 16 samples):
     #:
     #: * ``hdr_cycles``: from the header to the first sample the loop can take (the header, the config
@@ -243,7 +242,7 @@ class MmFir(FreeRunMod):
         self.s_cfg = StreamIFSlave(name=f"{self.name}_s_cfg", sim=self.sim, bitwidth=DW, has_tlast=True)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=DW, has_tlast=True)
         # Unframed: queue out carries no packet boundary to the bus, and the RTL kernel has no
-        # TLAST pin on this port (mm_fir_xsi.render_top ties it off).
+        # TLAST pin on this port (the system top ties it off).
         self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=DW,
                                     has_tlast=False)
         # The response FIFO: one FirRespHdr per packet.  Unframed, as any queue out is.
@@ -279,17 +278,17 @@ class MmFir(FreeRunMod):
         hdr = yield from self.s_in.get_schema(FirCmdHdr)
         # The order the two streams cannot give, carried in the header: wait for this packet's
         # config.  A config committed for a LATER packet stays in s_cfg until one asks for it.
-        while self.cfg_id != int(hdr.cfg_id):
+        while self.cfg_id != hdr.cfg_id:
             cfg = yield from self.s_cfg.get_schema(FirCfg)
-            self.taps = np.asarray(cfg.coeffs, dtype=np.int64)[:int(cfg.ntaps)]
-            self.cfg_id = int(cfg.cfg_id)
+            self.taps = cfg.coeffs[:cfg.ntaps]
+            self.cfg_id = cfg.cfg_id
             self.ncfg += 1
-        n = int(hdr.nsamp)
+        n = hdr.nsamp
         T = self.clk.period
         t_loop = self.env.now + self.hdr_cycles * T          # the earliest the sample loop starts
         if n:
             x, tstart = yield from self.s_in.get_pipelined(S16, n)      # the serializer unpacks
-            y = self._filter(np.asarray(x.val, dtype=np.int64))
+            y = self._filter(x.val)
             # Timing, as the HLS body: the loop takes its first sample once the header is handled and
             # the sample has arrived; the first result leaves proc_latency cycles later, then one per
             # proc_ii cycles.
@@ -302,7 +301,7 @@ class MmFir(FreeRunMod):
         # status already counts it, and reads the final status once instead of waiting for it.
         yield from self._publish()
         # The response: which packet, and which config it was ACTUALLY filtered with.
-        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=int(hdr.tx_id), cfg_id=self.cfg_id))
+        yield from self.m_resp.write(FirRespHdr(nsamp=n, tx_id=hdr.tx_id, cfg_id=self.cfg_id))
         yield self.timeout(self.restart_cycles * T)
 
 
@@ -372,7 +371,7 @@ HOST_ENDPOINTS = ("cfg", "qin", "qout", "qresp", "status")
 
 
 @dataclass
-class FirHost(HwModule):
+class FirHost(SwHost):
     """The host program: configure, stream samples, switch taps mid-stream, collect the results.
 
     Two processes, as stream code is written: a **writer** that commits each config and sends each
@@ -416,16 +415,17 @@ class FirHost(HwModule):
     #: Cycles between polls, should an endpoint poll (none does here: they wait on interrupts).  One
     #: setting for both hosts: the bus endpoints' ``poll_cycles`` and the C++ model's argument.
     poll_cycles: int = 8
-    #: The scenario bundle both hosts run (``write_scenario``); empty: built from x / plan / pkt.
-    scenario: DynParam[str] = ""
-    #: Where each endpoint's trace is dumped after the run; empty: not dumped.
-    trace_dir: DynParam[str] = ""
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "FirHostModel"
+    cpp_header: ClassVar[str | None] = "mm_fir_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
         #: The bus master, when the system is memory-mapped (unbound when it is direct).
-        self.m = MMIFMaster(name=f"{self.name}_m", sim=self.sim, bitwidth=DW,
-                            max_outstanding=HOST_MAX_OUTSTANDING, issue_cycles=HOST_ISSUE_CYCLES)
+        #: The bus master, when the system is memory-mapped (unbound when it is direct).
+        self.add_bus_master("m", bitwidth=DW, max_outstanding=HOST_MAX_OUTSTANDING,
+                            issue_cycles=HOST_ISSUE_CYCLES)
         self.cfg: StreamIFMaster | None = None
         self.qin: StreamIFMaster | None = None
         self.qout: StreamIFSlave | None = None
@@ -434,13 +434,7 @@ class FirHost(HwModule):
         #: The host's ends of the queue views' interrupt lines (memory-mapped wiring binds them; direct
         #: wiring leaves them unbound).  Attributes rather than only a dict, because a BFM model names
         #: its ports by attribute.
-        self.irq_qin = IrqIFSink(name=f"{self.name}_irq_qin", sim=self.sim)
-        self.irq_qout = IrqIFSink(name=f"{self.name}_irq_qout", sim=self.sim)
-        self.irq_qresp = IrqIFSink(name=f"{self.name}_irq_qresp", sim=self.sim)
-        self.irq: dict[str, IrqIFSink] = {"qin": self.irq_qin, "qout": self.irq_qout,
-                                          "qresp": self.irq_qresp}
-        for ep in (self.m, self.irq_qin, self.irq_qout, self.irq_qresp):
-            self.add_endpoint(ep)
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qin", "qout", "qresp")}
         self.done = self.env.event()
         self.y: list[int] = []
         #: Every response, as ``(tx_id, cfg_id)``.
@@ -467,11 +461,6 @@ class FirHost(HwModule):
                 tx += 1
         return out
 
-    def write_scenario(self, path) -> None:
-        """Write :meth:`scenario_bursts` as a burst bundle at *path* -- the file both hosts run."""
-        from waveflow.utils.burst_io import write_burst_bundle
-        write_burst_bundle(self.scenario_bursts(), path)
-
     def pre_sim(self) -> None:
         super().pre_sim()
         if self.scenario:
@@ -488,13 +477,6 @@ class FirHost(HwModule):
             else:
                 nsamp, tx, want, nhdr = (int(v) for v in b[1:5])
                 self.items.append(("pkt", nsamp, tx, want, b[5:5 + nhdr], b[5 + nhdr:]))
-
-    def post_sim(self) -> None:
-        super().post_sim()
-        if self.trace_dir:
-            from pathlib import Path
-            for name in HOST_ENDPOINTS:
-                write_trace(getattr(self, name), Path(self.trace_dir) / name)
 
     # -- the host program ---------------------------------------------------------------------------
 
@@ -518,7 +500,7 @@ class FirHost(HwModule):
                 y = yield from self.qout.get_array(S64, nsamp)
                 self.y += [int(v) for v in y.val]
                 resp = yield from self.qresp.get_schema(FirRespHdr)
-                got = (int(resp.tx_id), int(resp.cfg_id))
+                got = (resp.tx_id, resp.cfg_id)
                 self.responses.append(got)
                 for name, exp, val in (("tx_id", tx, got[0]), ("cfg_id", want, got[1])):
                     if exp != val:
@@ -529,21 +511,18 @@ class FirHost(HwModule):
         self.done.succeed()
 
     def bfm_model(self):
-        """The C++ realization: ``FirHostModel`` in ``mm_fir_host.h`` beside this file -- the same
-        writer and reader on ``xsi_mm_host.h``'s endpoints, run from the same scenario bundle.
-
-        It spans the bus master (an ``AxiMmMaster``, one read and one write in flight -- what
-        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``) and the three interrupt pins it waits on."""
-        from waveflow.build.composite_gen import BfmModel
-
+        """The C++ realization, ``FirHostModel`` in ``mm_fir_host.h`` (``SwHost.bfm_model``), checked
+        first: its bus master keeps one read and one write in flight, which is what
+        ``HOST_MAX_OUTSTANDING`` means for ``MMIFMaster``."""
         if int(self.m.max_outstanding) != 1:
             raise ValueError(f"FirHostModel's AxiMmMaster keeps one read and one write in flight; "
                              f"{self.name}.m.max_outstanding is {self.m.max_outstanding}")
-        return BfmModel("FirHostModel", ports=("m", "irq_qin", "irq_qout", "irq_qresp"),
-                        extra_args=(str(int(self.poll_cycles)),), header="mm_fir_host.h")
+        return super().bfm_model()
 
-    def run_proc(self):
-        self.env.process(self._writer())
+    def main(self):
+        """Two threads, as stream code is written: the writer, started here, and the reader, which is
+        this thread and ends the run."""
+        self.start(self._writer)
         yield from self._reader()
 
 
@@ -640,6 +619,24 @@ class MmFirSystem:
         return np.asarray(self.host.y, dtype=np.int64)
 
 
+def timing_probes(sysm: MmFirSystem) -> dict:
+    """Timing probes: one-bit handshakes the system top exposes as outputs when built with probes
+    (``mm_fir_build.build_dag(probes=True)``, or ``--probes``); the testbench samples them every cycle
+    and prints the cycles each fired.  Off for the gate.  Each names the kernel port it watches; the
+    system top resolves the net."""
+    from waveflow.build.system_top import beat, stall
+
+    fir = sysm.fir
+    return {
+        "in": beat(fir.s_in),             # the kernel takes a word from queue in (header or samples)
+        "cfg": beat(fir.s_cfg),           # ... a config word
+        "out": beat(fir.m_out),           # a result into queue out
+        "resp": beat(fir.m_resp),         # a response word
+        "stat": beat(fir.m_status),       # a status word
+        "out_full": stall(fir.m_out),     # the kernel held up by a full queue out
+    }
+
+
 def demo(seed: int = 7, nsamp: int = 200, switch_at: int = 96) -> dict:
     """Rung 2: two tap sets, switched at ``switch_at``.  Returns the run's facts for a caller."""
     rng = np.random.default_rng(seed)
@@ -655,5 +652,5 @@ if __name__ == "__main__":
     r = demo()
     ok = np.array_equal(r["y"], r["golden"])
     st = r["status"]
-    print(f"bit-exact={ok}  nsamp={int(st.nsamp)} ncfg={int(st.ncfg)} late={int(st.late)}  "
+    print(f"bit-exact={ok}  nsamp={st.nsamp} ncfg={st.ncfg}  "
           f"cycles={r['cycles']:.0f}")

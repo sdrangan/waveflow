@@ -144,6 +144,37 @@ class Platform:
     #: The resource counters this technology is measured in.  ``None`` means the Vitis/FPGA default
     #: (:data:`VITIS_RES_TYPES`) — see :attr:`res_types`.
     res_types_stored: "tuple[str, ...] | None" = None
+    #: The build's primary (writable) platform root, when :meth:`resolve` found the platform in a
+    #: read-only fallback: what this build measures is filed under ``<write_root>/<name>`` (the work
+    #: tier), never into the fallback.  ``None``: the platform lives in the primary, ``dir`` is written.
+    write_root: "Path | None" = None
+    #: Every directory holding a platform of this name, in resolution order (``dir`` first among the
+    #: ones that exist) -- the tiers a lookup reads.
+    read_dirs: "tuple[Path, ...]" = ()
+
+    @property
+    def write_dir(self) -> Path:
+        """Where records this build measures are filed: the primary root's copy of the platform."""
+        return self.dir if self.write_root is None else Path(self.write_root) / self.name
+
+    def module_store(self):
+        """The platform's :class:`~waveflow.calib.record_store.LayeredModuleStore`: written in
+        :attr:`write_dir`, read there first and then in every other copy of the platform
+        (:attr:`read_dirs`) -- so a lookup sees what the build just filed, and a published library
+        still answers for everything the build did not measure.  The work tier's manifest is seeded
+        from this platform's on the first write."""
+        from waveflow.calib.record_store import LayeredModuleStore
+
+        def seed() -> None:
+            manifest = self.write_dir / PLATFORM_MANIFEST
+            if not manifest.is_file():
+                self.write_dir.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(self.manifest_path.read_text(encoding="utf-8"),
+                                    encoding="utf-8")
+
+        reads = [self.write_dir, self.dir, *self.read_dirs]
+        return LayeredModuleStore(self.write_dir, reads,
+                                  on_first_write=seed if self.write_dir != self.dir else None)
 
     @property
     def res_types(self) -> "tuple[str, ...]":
@@ -213,6 +244,7 @@ class Platform:
         alone.
         """
         roots = [Path(platforms_root)] + [Path(f) for f in (fallbacks or [])]
+        found = tuple(r / name for r in roots if (r / name / PLATFORM_MANIFEST).is_file())
         for root in roots:
             pdir = root / name
             manifest = pdir / PLATFORM_MANIFEST
@@ -235,7 +267,8 @@ class Platform:
                         msg + " Set allow_platform_mismatch=True to reuse it anyway.")
                 warnings.warn(msg, PlatformMismatchWarning, stacklevel=2)
             return cls(name=name, dir=pdir, part=stored_part, clk_freq=stored_freq,
-                       res_types_stored=tuple(data["res_types"]) if data.get("res_types") else None)
+                       res_types_stored=tuple(data["res_types"]) if data.get("res_types") else None,
+                       write_root=None if root == roots[0] else roots[0], read_dirs=found)
 
         # Not found in any root — create it in the primary (never a read-only fallback).
         pdir = Path(platforms_root) / name

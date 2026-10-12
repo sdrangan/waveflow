@@ -12,7 +12,7 @@ The data is the golden model (``markov_golden``) -- which the RTL reproduces bit
 ``docs/examples/markov/images/`` with a provenance record, so a committed figure changes only when you
 mean it to:
 
-    python -m examples.markov.markov_build --figures
+    python -m examples.markov.markov_build --through sync_docs_figures
 """
 from __future__ import annotations
 
@@ -116,6 +116,11 @@ class MarkovFiguresStep(BuildStep):
     @property
     def produces(self) -> dict:  # type: ignore[override]
         return {f"{e['name']}_svg": Path(e["source"]) for e in FIGURE_MANIFEST}
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        """Never: the figure is drawn from the golden model, Python the DAG cannot see.  A render is
+        cheap, and the docs test compares it byte for byte with the committed copy."""
+        return False
 
     def run(self, config: BuildConfig, **_) -> dict[str, Any]:
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()

@@ -38,12 +38,12 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
 from waveflow.build.cosim_steps import ExtractCosimTimingStep, ValidateTimingStep
 from waveflow.build.hwcodegen_steps import HlsCodegenStep
+from waveflow.build.resource_steps import InspectSynthStep
 from waveflow.build.streamutils import StreamUtilsStep
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.clock import Clock
@@ -396,41 +396,6 @@ class CSynthStep(BuildStep):
 
 
 @dataclass(kw_only=True)
-class InspectSynthStep(BuildStep):
-    word_bw: int
-    description = "Parse the C-synthesis report: loop II, latency and resources."
-    params = {}
-
-    @property
-    def consumes(self) -> list:  # type: ignore[override]
-        return [f"report_dir_w{self.word_bw}"]
-
-    @property
-    def produces(self) -> dict:  # type: ignore[override]
-        w = self.word_bw
-        return {f"loop_df_w{w}": Path(f"results/loop_df_w{w}.csv"),
-                f"res_df_w{w}": Path(f"results/res_df_w{w}.csv")}
-
-    def run(self, config: BuildConfig, **art) -> dict:
-        from waveflow.utils.csynthparse import CsynthParser
-
-        w = self.word_bw
-        parser = CsynthParser(sol_path=str(art[f"report_dir_w{w}"]))
-        parser.get_loop_pipeline_info()
-        parser.get_resources()
-        print(parser.loop_df.to_string() if not parser.loop_df.empty else "(no loops)")
-        print(parser.res_df.to_string() if not parser.res_df.empty else "(no resources)")
-        bad = parser.loop_df[parser.loop_df["PipelineII"].apply(
-            lambda v: isinstance(v, (int, np.integer)) and v > 1)] if not parser.loop_df.empty else []
-        if len(bad):
-            raise RuntimeError(f"loops with PipelineII > 1:\n{bad.to_string()}")
-        out = config.root_dir / "results"
-        parser.loop_df.to_csv(out / f"loop_df_w{w}.csv", index=False)
-        parser.res_df.to_csv(out / f"res_df_w{w}.csv", index=False)
-        return {f"loop_df_w{w}": out / f"loop_df_w{w}.csv", f"res_df_w{w}": out / f"res_df_w{w}.csv"}
-
-
-@dataclass(kw_only=True)
 class ErrorVcdStep(BuildStep):
     """The error-path waveform: cosim of ``early_tlast_vcd`` (32 bits), traced, as a VCD.
 
@@ -469,7 +434,7 @@ class SummaryStep(BuildStep):
     """
     description = "Collect every check, the synthesis reports and the timing verdicts."
     consumes = ["check_model", "check_pysim", "check_csim", "check_cosim", "error_vcd",
-                *[f"{a}_w{w}" for w in WIDTHS for a in ("loop_df", "res_df", "timing_verdict")]]
+                *[f"{a}_w{w}" for w in WIDTHS for a in ("loop_df", "resources", "timing_verdict")]]
     produces = {"summary": Path("results/summary.json")}
     params = {}
 
@@ -482,8 +447,7 @@ class SummaryStep(BuildStep):
             "timing": {f"w{w}": load(f"timing_verdict_w{w}") for w in WIDTHS},
             "loops": {f"w{w}": Path(art[f"loop_df_w{w}"]).read_text(encoding="utf-8")
                       for w in WIDTHS},
-            "resources": {f"w{w}": Path(art[f"res_df_w{w}"]).read_text(encoding="utf-8")
-                          for w in WIDTHS},
+            "resources": {f"w{w}": load(f"resources_w{w}") for w in WIDTHS},
             "error_vcd": str(art["error_vcd"]),
         }
         out = config.root_dir / "results" / "summary.json"
@@ -521,7 +485,15 @@ def build_poly_dag() -> BuildDag:
     dag.add(CheckStep(name="check_csim", stage="csim", done_artifacts=("csim_done",)))
     for w in WIDTHS:
         dag.add(CSynthStep(name=f"csynth_w{w}", word_bw=w))
-        dag.add(InspectSynthStep(name=f"inspect_synth_w{w}", word_bw=w))
+        # The framework's step: the report attributed (and filed, with a platform), the loop table
+        # written, and the build failed on a pipelined loop at II > 1.
+        dag.add(InspectSynthStep(
+            name=f"inspect_synth_w{w}", comp_class=PolyAccel, top_name=TOPS[w],
+            elaborate_params=("in_bw", "out_bw"), params={"in_bw": w, "out_bw": w},
+            report_artifact=f"report_dir_w{w}", seconds_artifact=None,
+            output=Path(f"results/resources_w{w}.json"), output_artifact=f"resources_w{w}",
+            require_ii1=True, loop_csv=Path(f"results/loop_df_w{w}.csv"),
+            loop_artifact=f"loop_df_w{w}"))
         dag.add(ExtractCosimTimingStep(
             name=f"extract_cosim_timing_w{w}", top=TOPS[w],
             report_dir_artifact=f"report_dir_w{w}", cosim_timing_artifact=f"cosim_timing_w{w}",

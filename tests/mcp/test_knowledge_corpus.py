@@ -45,6 +45,7 @@ TOC_EXAMPLES = {
     "stream_inband",
     "vecmult",
     "vitis_fft",
+    "xbar_profile",
 }
 
 #: The two whose directory is not their page name -- the reason the key exists.

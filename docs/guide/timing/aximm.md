@@ -260,8 +260,7 @@ The hex form is often easier to compare against bus waveforms, while the decimal
 For example, if a read burst returns 32-bit float payload words, you can deserialize the decimal `data` list directly:
 
 ```python
-words = np.asarray(read_bursts[0]['data'], dtype=np.uint32)
-values = read_array(words, elem_type=Float32, word_bw=32, shape=(16,))
+values = read_array(read_bursts[0]['data'], elem_type=Float32, word_bw=32, shape=(16,))
 print(values)
 ```
 

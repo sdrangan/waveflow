@@ -39,8 +39,10 @@ Three properties this file is responsible for, all enforced rather than hoped fo
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from waveflow.build.elaborate import elaborate, structure_signature
@@ -186,6 +188,21 @@ def boundary_endpoint_ids(top: Any) -> frozenset:
             ids.add(id(entry[1]))
         except (TypeError, IndexError):
             continue
+    # A top with no children (a host-activated kernel synthesized alone) declares no boundary: every
+    # port it has faces outside the design, so every one is on it.
+    if not getattr(top, "sub_comps", None):
+        ids.update(id(ep) for ep in (getattr(top, "endpoints", {}) or {}).values())
+    # A two-half endpoint (a credit stream's ``fwd_ep`` / ``crd_ep``) whose halves are on the boundary
+    # is on it too: the boundary lists the halves, and the wrapper -- bound to a routed channel that
+    # sets no depth -- would otherwise read as unbound.
+    stack = list((getattr(top, "sub_comps", {}) or {}).values())
+    while stack:
+        comp = stack.pop()
+        for ep in (getattr(comp, "endpoints", {}) or {}).values():
+            halves = (getattr(ep, "fwd_ep", None), getattr(ep, "crd_ep", None))
+            if any(h is not None and id(h) in ids for h in halves):
+                ids.add(id(ep))
+        stack += list((getattr(comp, "sub_comps", {}) or {}).values())
     return frozenset(ids)
 
 
@@ -234,6 +251,25 @@ def identify_instance(comp: Any, *, require_bound: bool = True,
         params=resolved_params(comp),
         signature=digest,
     )
+
+
+def identify_rtl(module: str, params: dict[str, Any], sources) -> ModuleIdentity:
+    """The :class:`ModuleIdentity` of a hand-written Verilog *module* instantiated with *params*.
+
+    A Verilog leaf is not an ``HwModule``, so there is no structure to elaborate: its identity is the
+    module name, its parameters and a digest of every source it compiles from (line endings
+    normalized, as for the RTL staleness stamp).  Editing a source moves the key, so records measured
+    on the old text become unreachable rather than silently wrong -- the rule ``ModuleStore``'s
+    provenance check applies to modules.  The digest is of content, not of paths, so a checkout
+    anywhere keys the same.
+    """
+    from waveflow.build.rtl_digest import _sha256
+
+    files = {Path(s).name: _sha256(Path(s)) for s in sources}
+    blob = json.dumps({"module": module, "params": params, "sources": files}, sort_keys=True)
+    sig = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return ModuleIdentity(key=f"{module}-{sig[:KEY_DIGEST_CHARS]}", cls_name=module,
+                          cls_module="verilog", params=dict(params), signature=sig)
 
 
 def identify(comp_class: type, params: dict[str, Any] | None = None, *,

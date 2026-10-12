@@ -28,13 +28,17 @@ flowchart LR
     KM["kernel modules"]
     RM["RTL modules"]
     BM["BFM modules"]
+    IF["interfaces<br/>(crossbar, adaptors, FIFOs)"]
   end
 
   KM -->|"composite_top_spec<br/>+ render_top"| HLS["Vitis kernel<br/>(HLS C++)"]
   HLS -->|"csynth"| KV["Vitis kernel<br/>(Verilog)"]
   RM -->|"rtl_module()<br/>(the .v, as is)"| HV["hand-written<br/>Verilog"]
+  IF -->|"system_top_spec"| HV
+  IF -->|"generate_axi_xbar"| IP["vendor IP<br/>(axi_crossbar)"]
   KV --> RT["RTL top<br/>(Verilog)"]
   HV --> RT
+  IP --> RT
   BM -->|"tb_top_spec<br/>+ render_tb_harness"| HARN["harness<br/>(C++ BFMs + cycle loop)"]
 
   RT --> XSI["XSI simulation<br/>(xsim, cycle by cycle)"]
@@ -79,9 +83,13 @@ kernels reached over a bus, each behind a [memory-mapped adaptor](../interface/a
 AMD's crossbar and an on-chip memory — gets its top from
 [`system_top`](../../../waveflow/build/system_top.py), which walks the pysim system: name the cut
 (`system_top_spec(xbar, [kernels..., memory])`) and every crossbar slot, adaptor, stream net, credit
-link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/rtlsim.md) and
-[markov](../../examples/markov/rtlsim.md) are the worked cases; their cycle counts (618 / 611 and
-1870) were unchanged when their hand-rendered tops were replaced by it.
+link writer and interrupt output follows from the graph ([XSI system simulation](../build/xsi_system.md)). [mm_fir](../../examples/mm_fir/synth.md) and
+[markov](../../examples/markov/synth.md) are the worked cases; their cycle counts (618 / 611 and
+1870) were unchanged when their hand-rendered tops were replaced by it.  Most of a system's RTL is
+brought by **interfaces**, not modules -- the crossbar (vendor IP), each adaptor's hand-written
+leaves, a deep link's FIFO -- so its resources come from three places: each kernel's csynth report,
+the out-of-context library of leaf and IP configurations, and a synthesis of the whole top; see
+[Systems](../resource/systems.md).
 
 **Generate the harness** (target `sequential_xsi_tb`). `tb_top_spec` walks the XSI simulation top,
 checks that every BFM module has a C++ BFM and every port of the RTL top is covered, and
@@ -92,13 +100,19 @@ the harness only wires them. (The code calls the XSI simulation top the testbenc
 [XSI testbench](../comp_codegen/xsi_tb.md) page.
 
 A host *program* — one that reads a status register and decides what to write next — is a BFM
-module too, and its C++ is written by hand, not generated: it is the host's **pre-written
-realization**, named by its [`bfm_model()`](../custom_hooks/bfm_model.md#host) hook and kept in a
-header beside the example, as a kernel's HLS body is named by `kernel_task()`. What *is* generated is
-its harness: `system_tb_spec` binds the model's ports to the system top's (`s0_axi`, `irq_<view>`) and
-`render_system_tb` emits the harness and the `main`. The two realizations run the same scenario file,
-and the gate is that every host endpoint's trace is byte-identical between pysim and RTL;
-[mm_fir](../../examples/mm_fir/rtlsim.md#the-host-program) is the worked case.
+module too, written as [software threads](../build/sw_threads.md): a `SwHost` whose threads are SimPy
+processes in pysim, and the same threads in C++ under XSI. The C++ is written by hand -- it is the
+host's **pre-written realization**, named by `cpp_model` / `cpp_header` (the
+[`bfm_model()`](../custom_hooks/bfm_model.md#host) hook, derived) and kept in a header beside the
+example, as a kernel's HLS body is named by `kernel_task()` -- but it is the program only: its
+endpoints are a generated header, and its calls block on a fiber runtime, so it holds no BFM, no
+address and no state machine. What is generated around it is the harness: `system_tb_spec` binds the
+host's ports to the system top's (`s0_axi`, `irq_<view>`) and `render_system_tb` emits the harness and
+the `main`; the [system_xsi](../build/xsi_system.md#system-xsi) step of a system's build DAG
+(`add_system_steps(dag, sysm)`) does all of it from the system object. The two realizations run the
+same scenario file, and the gate is that every host endpoint's trace is byte-identical between pysim
+and RTL; [mm_fir](../../examples/mm_fir/xsi.md#the-host-program) and
+[markov](../../examples/markov/xsi.md) are the worked cases.
 
 **XSI simulation.** The harness drives the RTL top in `xsim`, cycle by cycle. The gate is **exact**: a
 bit-exact result *and* an exact cycle count (`mem_copy` = 2908 cycles for 16 jobs), so a count that

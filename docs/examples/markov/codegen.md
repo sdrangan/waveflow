@@ -1,13 +1,45 @@
 ---
 title: Code generation
 parent: Two kernels on a bus
-nav_order: 6
-summary: "What becomes Vitis HLS and how: four free-running tops -- the generator, the chain (its core plus the framework's in-band memory writer), and the credit link's two bus writers -- with every header and top generated and only the two kernel bodies hand-written. Both bodies are straight-line loops per job, one step per cycle at II=1, with credit handled between chunks; the timing they close at, and the two timing fixes their first versions needed."
+nav_order: 6.2
+summary: "The codegen step: which pysim objects become C++ and what each generates (Fig. 1). What becomes Vitis HLS and how: four free-running tops -- the generator, the chain (its core plus the framework's in-band memory writer), and the credit link's two bus writers -- with every header and top generated and only the two kernel bodies hand-written. Both bodies are straight-line loops per job, one step per cycle at II=1, with credit handled between chunks; the timing they close at, and the two timing fixes their first versions needed."
 ---
 
 # Code generation
 
-`python -m examples.markov.markov_build` generates every header and top, and synthesizes four:
+The first step of the [build flow](build.md), `codegen`, turns the pysim objects that become hardware
+into C++ for Vitis HLS. It is Python only and takes seconds:
+`python -m examples.markov.markov_build --through codegen`. Fig. 1 is the system's pysim graph (the
+objects of [The system](system.md)), with what `codegen` generates for each object.
+
+```mermaid
+flowchart LR
+  host["MarkovHost"] --> xbar(("crossbar"))
+  xbar --> gdev["generator's device<br/>views qcmd, u_crd"] --> gen["MarkovGen<br/>gen/markov_gen.cpp<br/>body: src/markov_gen_task.h"]
+  xbar --> cdev["chain's device<br/>views qu, qresp"] --> chain["MarkovChain<br/>gen/markov_chain.cpp<br/>body: src/markov_chain_core_task.h"]
+  xbar --> mem[("shared memory")]
+  gen --> fifo["u_fwd FIFO"] --> qw["queue writer<br/>gen/mm_queue_writer_64_128.cpp"] --> xbar
+  chain --> cw["credit writer<br/>gen/mm_credit_writer_64.cpp"] --> xbar
+  chain -- "memory writer" --> xbar
+  schemas["MkvCmd, MkvResp, MemWCmd, u, x<br/>include/mkv_cmd.h, mkv_resp.h, mem_w_cmd.h,<br/>uint16_array_utils.h, uint8_array_utils.h"] -.-> gen
+  schemas -.-> chain
+  classDef here fill:#f59f00,stroke:#9c5b00,color:#1a1a1a
+  classDef fw fill:#ffe3a3,stroke:#9c5b00,color:#1a1a1a
+  classDef off fill:#e9ecef,stroke:#adb5bd,color:#495057
+  class gen,chain,schemas here
+  class qw,cw fw
+  class host,xbar,gdev,cdev,mem,fifo off
+```
+
+*Fig. 1 -- what `codegen` generates. Orange: from the example's own modules and schemas (only the two
+kernel bodies are written by hand, in `src/`). Light orange: the credit link's two bus writers, framework
+templates the routed link brings with it. Grey: nothing to generate here -- the crossbar, the devices,
+the FIFO and the memory become Verilog in [Synthesis](synth.md), and the host becomes C++ in
+[XSI testbench](xsi.md).*
+
+Each `.cpp` comes with a `.tcl` beside it in `gen/`, the script csynth runs. `include/` and `gen/` are
+build output, so deleting them makes a clean build. Four tops, then, which the next step
+([csynth](synth.md#csynth)) synthesizes:
 
 | top | what | written by hand | II | estimated clock (10 ns target) |
 |---|---|---|---|---|

@@ -8,7 +8,7 @@
 
 int main() {
     rf_relayout_tb::Harness h("rf_relayout_bfm.wdb");
-    h.run(2000);
+    h.run(wfbfm::run_param("n_cycles", 2000));
     h.close();
     return 0;
 }

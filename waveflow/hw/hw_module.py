@@ -589,7 +589,7 @@ class HwModule(SimObj):
             self._resource_model = rm
             return
 
-        from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.record_store import platform_store
         from waveflow.calib.resource_model import LookupResourceModel
 
         if platform is None:
@@ -600,7 +600,7 @@ class HwModule(SimObj):
             return
         self._resource_model = LookupResourceModel(
             name=f"{type(self).__name__}:measured",
-            store=ModuleStore(platform.dir), platform=platform)
+            store=platform_store(platform), platform=platform)
 
     def resource_structure(self):
         """What this module physically **contains** — multiplier groups, partitioned arrays, and the

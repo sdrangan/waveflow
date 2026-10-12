@@ -62,9 +62,10 @@ from waveflow.simulation.simobj import ProcessGen
 # --- command field types --------------------------------------------------------------------------
 # ``addr`` is an **element / word coordinate** relative to the bound buffer base, NOT a byte
 # address — the addressing convention (plans/component.md): ``m_mem`` is already a word pointer, so a
-# word-index command needs no byte<->word conversion in generated logic; the physical base lives in
-# the ``offset=slave`` register (set once, via :meth:`bind_base`) and ``Region._word_bytes`` + the AXI
-# hardware absorb byte-vs-word.  So the command is unit-agnostic.
+# word-index command needs no byte<->word conversion in generated logic; the physical base is
+# :meth:`bind_base`'s (0 in the generated top, whose pointers are ``offset=off`` -- no base register,
+# ``docs/guide/comp_codegen/freerunning_composite.md``) and ``Region._word_bytes`` + the AXI hardware
+# absorb byte-vs-word.  So the command is unit-agnostic.
 Word32 = IntField.specialize(bitwidth=32, signed=False)   # word / element coordinate or count
 
 # ``MRCmd``/``MWCmd``/``MemComplete`` are ``ParamSchema``s parametrized only by ``max_xfer_len`` (the
@@ -332,7 +333,7 @@ class MemRStream(FreeRunMod):
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
-        #: Physical base of the bound buffer (the ``offset=slave`` register value, host domain) —
+        #: Physical base of the bound buffer (host domain; 0 behind an ``offset=off`` pointer) —
         #: set once via :meth:`bind_base`.  Default 0: the single-arena / flat-array mode (sim & BFM),
         #: where the command frame is base-relative so "base 0" holds in the command coordinate system.
         self._base = 0
@@ -353,7 +354,8 @@ class MemRStream(FreeRunMod):
                 clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
-        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain).
+        """Set the bound buffer's physical base (host domain; the generated top's ``offset=off`` pointer
+        has no base register, so there it is 0).
 
         The addressing convention (plans/component.md): the host writes the buffer's physical base
         **once**, then issues commands in **word offsets** within it.  The base is a native-unit
@@ -527,7 +529,7 @@ class MemWStream(FreeRunMod):
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
-        #: Physical base of the bound buffer (the ``offset=slave`` register value) — see
+        #: Physical base of the bound buffer (0 behind an ``offset=off`` pointer) — see
         #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
         self._base = 0
         self.transfer_spans: list[float] = []
@@ -547,7 +549,7 @@ class MemWStream(FreeRunMod):
                 clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
-        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the
+        """Set the bound buffer's physical base (host domain; 0 behind an ``offset=off`` pointer) — the
         mirror of :meth:`MemRStream.bind_base`.  Commands then carry word offsets within it."""
         self._base = int(base)
 

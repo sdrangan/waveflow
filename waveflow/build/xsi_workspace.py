@@ -12,30 +12,29 @@ invoke xsim.
     ws = XsiWorkspace(work_dir, top="mm_witness")
     ws.prepare(rtl_files=[...], include_dirs=[...], tb_name="mm_witness_tb", tb_cpp=text)
     out = ws.run()          # raises XsiRunError unless the run printed XSI_EXITCODE=0
+
+The run goes through :class:`~waveflow.build.xsi_snapshot.XsiSnapshot`, so a second ``prepare`` +
+``run`` with unchanged RTL and testbench skips compile, elaborate and the testbench build -- decided
+by content, not by timestamp -- and only simulates.
 """
 from __future__ import annotations
 
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from waveflow.build.trace_steps import xsi_runner_cmd
+from waveflow.build.xsi_snapshot import XsiRunError, XsiSnapshot  # noqa: F401  (XsiRunError re-exported)
 
 _SRC = Path(__file__).resolve().parent / "xsi"
 
 #: The harness files every run needs beside the testbench (the same set XsiHarnessStep copies).
 HARNESS_FILES = ("xsi_bfm.h", "xsi_simobj.h", "xsi_channel.h", "xsi_bundle.h", "xsi_loader.h",
-                 "xsi_mm_host.h",
+                 "xsi_mm_host.h", "xsi_fiber.h", "xsi_sw.h", "xsi_sw_schema.h",
                  "xsi_loader.cpp", "xsi_shared_lib.h", "xsi_rf_block.h", "xsi_rfdc_samp.h",
                  "xsi_rfdc.h", "run.bat", "run.sh")
 
 #: Hand-written RTL shipped with the framework (``bram_t2p.v``, the adaptor leaves).
 RTL_DIR = Path(__file__).resolve().parent / "rtl"
-
-
-class XsiRunError(RuntimeError):
-    """The XSI run did not complete (compile, elaborate, or the testbench exited non-zero)."""
 
 
 @dataclass
@@ -56,11 +55,18 @@ class XsiWorkspace:
         return f"xsim.dir/{self.top}/xsimk.{'dll' if os.name == 'nt' else 'so'}"
 
     def prepare(self, rtl_files, tb_name: str, tb_cpp: str, include_dirs=(),
-                extra_files: dict[str, str] | None = None) -> None:
-        """Copy the harness, write ``rtl_<top>.f`` and ``<tb_name>.cpp``, and clear stale outputs.
+                extra_files: dict[str, str] | None = None, tb_include_dirs=()) -> None:
+        """Copy the harness, write ``rtl_<top>.f`` and ``<tb_name>.cpp``.
 
-        A cached ``xsim.dir/<top>`` or testbench binary is removed: xelab would otherwise reuse a
-        design elaborated from different RTL, and the run would prove nothing about this one.
+        *tb_include_dirs* are extra ``-I`` directories for compiling the **testbench** (not the RTL):
+        a software host that reads typed messages includes generated schema headers, which need
+        Vitis's ``ap_int.h`` (``plans/host_runtime.md`` S3).  Passed to the run script as
+        ``WF_TB_CXXFLAGS``.
+
+        A cached ``xsim.dir/<top>`` or testbench binary is reused only if its content stamp matches
+        what was just written (:class:`~waveflow.build.xsi_snapshot.XsiSnapshot`): a design
+        elaborated from different RTL is rebuilt, never reused -- the run would prove nothing about
+        this one.
         """
         self.work_dir.mkdir(parents=True, exist_ok=True)
         for name in HARNESS_FILES:
@@ -71,16 +77,13 @@ class XsiWorkspace:
         (self.work_dir / f"{tb_name}.cpp").write_text(tb_cpp, encoding="utf-8")
         for name, text in (extra_files or {}).items():
             (self.work_dir / name).write_text(text, encoding="utf-8")
-        shutil.rmtree(self.work_dir / "xsim.dir" / self.top, ignore_errors=True)
-        for stale in (f"{tb_name}.exe", f"{tb_name}.o", tb_name):
-            (self.work_dir / stale).unlink(missing_ok=True)
-        self._tb = tb_name
+        import os
+        q = '"' if os.name == "nt" else ""         # cmd keeps quotes; bash would pass them literally
+        self.snapshot = XsiSnapshot(
+            self.work_dir, self.top, tb_name,
+            tb_cxxflags=" ".join(f"-I{q}{Path(d).resolve().as_posix()}{q}" for d in tb_include_dirs))
 
-    def run(self, timeout: int = 1800) -> str:
-        """Compile, elaborate and run.  Returns the combined output; raises unless it completed."""
-        r = subprocess.run(xsi_runner_cmd(self.top, self._tb), cwd=str(self.work_dir),
-                           capture_output=True, text=True, timeout=timeout)
-        out = (r.stdout or "") + (r.stderr or "")
-        if "XSI_EXITCODE=0" not in out:
-            raise XsiRunError(f"{self.top}: XSI run did not complete cleanly:\n{out[-4000:]}")
-        return out
+    def run(self, timeout: int = 1800, vectors_dir=None) -> str:
+        """Build what changed (:meth:`XsiSnapshot.build`), then run.  Returns the combined output;
+        raises :class:`XsiRunError` unless it completed."""
+        return self.snapshot.run(vectors_dir, timeout=timeout)

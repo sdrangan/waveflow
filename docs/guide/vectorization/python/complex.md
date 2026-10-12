@@ -105,7 +105,6 @@ field, since complex arithmetic composes that field. Take the grown result's com
 `quantize` each with [`FixedField`](../../schema/python/fixpoint.md)'s `quantize`, then recombine:
 
 ```python
-import numpy as np
 from waveflow.hw.fixpoint import FixedField, quantize
 
 Q = FixedField.specialize(16, 8)
@@ -113,8 +112,7 @@ prod = ax * bx                              # ap_fixed<33, 17> components
 G    = prod.element_type.inner_type         # the grown inner format
 re_q = quantize(DataArray.specialize(G, max_shape=(2,))(prod.val["re"]), Q)
 im_q = quantize(DataArray.specialize(G, max_shape=(2,))(prod.val["im"]), Q)
-out  = DataArray.specialize(CFix, max_shape=(2,))(
-    cx.make_complex(list(np.asarray(re_q)), list(np.asarray(im_q)), Format(16, 8, True)))
+out  = DataArray.specialize(CFix, max_shape=(2,))(cx.make_complex(re_q.val, im_q.val, Format(16, 8, True)))
 ```
 
 ## Worked example: a radix-2 FFT butterfly

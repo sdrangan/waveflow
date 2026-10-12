@@ -388,10 +388,10 @@ def responses(tb: "RfSampBufTxTB") -> list[tuple[int, int, int]]:
     if not tb.resp_sink.words:
         return []
     w = int(tb.rfdc.axis_bitwidth)
-    flat = np.concatenate(tb.resp_sink.words).astype(np.uint64)
+    flat = np.concatenate(tb.resp_sink.words)
     n = TxResp.nwords_per_inst(w)
     out = []
     for i in range(0, flat.size, n):
         r = TxResp().deserialize(flat[i:i + n], word_bw=w)
-        out.append((int(r.tid), int(r.status), int(r.nloaded)))
+        out.append((int(r.tid), int(r.status), int(r.nloaded)))  # int: json.dumps (build)
     return out

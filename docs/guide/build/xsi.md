@@ -42,7 +42,7 @@ Concretely:
 |---|---|---|
 | `solution1/syn/verilog/*.v` | Vitis csynth | Fully generated; do not hand-edit. |
 | `rtl_<top>.f` | you today (future step later) | Mostly listing generated `.v` paths. |
-| `xsi_loader.*`, `xsi_shared_lib.h`, `run.bat` | boilerplate per project | Usually copied/adapted (mostly path/version edits). |
+| `xsi_loader.*`, `xsi_shared_lib.h`, `run.bat` / `run.sh` | framework (`waveflow/build/xsi/`) | Copied into each workspace by the build; do not hand-edit. |
 | `*_bfm_tb.cpp` | generated, or you | Generated from the testbench graph when the TB is declared as a component graph (`mem_copy`); hand-assembled for the interleaver tops. Either way it composes framework bus models — it contains no per-cycle handshake code. |
 
 The bus models themselves (`AxisMaster`, `AxiMmReadSlave`, …) are framework code in
@@ -53,7 +53,8 @@ The bus models themselves (`AxisMaster`, `AxiMmReadSlave`, …) are framework co
 
 From [`examples/interleaver/xsi/run.bat`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/xsi/run.bat):
 
-- The script typically runs `xvlog`, then `xelab -dll`, then `g++`, then executes the BFM EXE.
+- With no verb the script runs `xvlog`, then `xelab -dll`, then `g++`, then executes the BFM EXE; a
+  verb selects phases (see [Building once, running many times](#building-once-running-many-times)).
 - `PATH` must include Vivado `bin`, xsim DLL locations, and MinGW toolchain paths.
 - Use Windows invocation conventions (for example `.\run.bat <top> <tb_basename>`).
 - If running from MSYS/Git Bash, set `MSYS_NO_PATHCONV=1` to avoid path rewriting surprises.
@@ -65,13 +66,79 @@ From [`examples/interleaver/xsi/run.bat`](https://github.com/sdrangan/waveflow/t
 
 Codegen defines *what* gets built; this rung defines *how that RTL is executed and checked*.
 
-## Automation status (current and future)
+## Building once, running many times
 
-Be explicit about maturity:
+An XSI run is four phases: compile the RTL (`xvlog`), elaborate it into a design library (`xelab
+-dll`), compile the testbench (`g++`), and simulate. On the examples the first three take 20–30 s
+together and the simulation a fraction of a second — so re-running a design that has not changed
+should cost only the last one. Three pieces make it so.
 
-- `csim` / `csynth` / `cosim` are represented as documented build-step patterns in the BuildDag flow.
-- The XSI rung is currently a standalone script flow (`run.bat` + BFM), not a full BuildDag `BuildStep` equivalent yet.
-- A future `XsiStep` is a reasonable direction (generate `.f`, invoke `xvlog`/`xelab`/compiler, run BFM), but that is aspirational.
+**The runner takes a verb.** `run.bat` / `run.sh` accept, in any order after the top and testbench
+names, `trace`, one of the verbs below, and a vectors directory:
+
+| verb | phases |
+|---|---|
+| `rtl` | compile the RTL and elaborate the snapshot |
+| `tb` | compile and link the testbench |
+| `build` | `rtl` + `tb` |
+| `run` | run the testbench that is built, against the snapshot that is elaborated |
+| `all` (or none) | every phase, unconditionally — what the `-m xsi` gates use |
+
+```bat
+.\run.bat mem_copy mem_copy_bfm_tb build
+.\run.bat mem_copy mem_copy_bfm_tb run runs\p3
+```
+
+Each phase deletes its own outputs before it rebuilds them, so a failed phase cannot leave an older
+artifact behind. With `trace`, the design is elaborated with the VCD dumper as a second top into
+its own snapshot, `xsim.dir/<top>_trace`, so a traced and an untraced build coexist. Every run of
+the traced snapshot writes `<top>_trace.vcd`; a run of the untraced one never does.
+
+**`XsiSnapshot` decides what to rebuild.** The runner never decides whether a phase is needed;
+[`waveflow.build.xsi_snapshot.XsiSnapshot`](https://github.com/sdrangan/waveflow/tree/main/waveflow/build/xsi_snapshot.py)
+does, by content:
+
+```python
+from waveflow.build.xsi_snapshot import XsiSnapshot
+
+snap = XsiSnapshot(xsi_dir, top="mem_copy", tb="mem_copy_bfm_tb")
+snap.stale()        # ["rtl", "tb"], a subset, or [] -- what a build would run
+snap.build()        # runs only the stale phases; returns them
+out = snap.run(vectors_dir=xsi_dir / "runs" / "p3")   # build (incrementally), then run
+```
+
+After a phase succeeds it writes a stamp: a SHA-256 of every input the phase read. For the design,
+that is the runner script, `rtl_<top>.f`, every file it lists and every file of each `--include`
+directory (and, traced, the dumper). For the testbench, it is the runner, `<tb>.cpp`,
+`xsi_loader.cpp`, every quoted `#include` they reach, and `WF_TB_CXXFLAGS`. A phase is skipped only
+when its stamp matches and its output exists. Timestamps are not used: a regenerated file with
+identical bytes is still fresh, and an edit that is undone is fresh again.
+
+The design's stamp lives inside `xsim.dir/<snapshot>/`, so deleting the snapshot — which the gates
+do to force a clean build — deletes its stamp too. [`RtlSimStep`](../timing/trace_steps.md),
+`XsiWorkspace` (and with it [`system_xsi`](./xsi_system.md)), and the vendor-block RTL runners all
+go through `XsiSnapshot`.
+
+**A run reads its scenario from a directory you choose.** Testbenches name their bundles
+`vectors/<port>`. With a vectors directory — the runner's last argument, or `run(vectors_dir=...)`
+— the BFM library reads and writes those bundles there instead (`WF_VECTORS_DIR`, resolved in
+`xsi_bundle.h`), and puts the run's waveform database there too. So two runs of one snapshot do not
+overwrite each other's outputs, and they can run in parallel: build once, then call
+`run(d, build=False)` from several threads. Eight parallel `mem_copy` runs took 0.27 s in total, and
+each wrote outputs byte-identical to a single run's.
+
+A scenario's *sizes* are part of the scenario too. The cycle bound of the generated `main` and the
+size of a memory arena are compiled into the testbench as defaults, and a run's `vectors/run.json`
+overrides them (`wfbfm::run_param`; written by `waveflow.utils.burst_io.write_run_params`). A run
+that overrides one prints `WF_RUN_PARAM <key>=<value>`. This is what lets one compiled testbench
+serve every workload: [`mem_copy`'s workload sweep](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/mem_copy_workload_sweep.py)
+runs fifty job lengths at RTL in 36 s, each point checked bit-exact, at about 0.5 s a point
+(0.3 s of it simulating) — against 20–30 s a point when every run rebuilt everything.
+
+{: .note }
+> A run reads whatever `run.json` its vectors directory holds. A scenario writer that owns a
+> `vectors/` should therefore write one every time, even at the default scenario, so a previous
+> point's sizes cannot outlive it — `MemCopySim.write_scenario` does.
 
 ## See also
 

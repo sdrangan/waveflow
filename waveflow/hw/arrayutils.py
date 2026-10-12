@@ -69,7 +69,8 @@ def array(elem_type: type[T], data, static: bool = False) -> DataArray:
 
 
 def _normalize_array_shape(shape: int | tuple[int, ...] | list[int]) -> tuple[int, ...]:
-    if isinstance(shape, int):
+    # A count read from a schema field is a numpy integer: it is a 1-D shape, like an int.
+    if isinstance(shape, (int, np.integer)):
         norm_shape = (int(shape),)
     else:
         norm_shape = tuple(int(dim) for dim in shape)
@@ -240,7 +241,7 @@ def read_array(
         static=True,
     )
     array_obj = array_cls()
-    array_obj.deserialize(np.asarray(packed), word_bw=word_bw)
+    array_obj.deserialize(packed, word_bw=word_bw)   # no np.asarray: a list of words must not be dtype-inferred
     return array_obj
 
 

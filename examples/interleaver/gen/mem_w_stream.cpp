@@ -17,7 +17,8 @@ void mem_w_stream(
 ) {
 #pragma HLS INTERFACE axis port=s_cmd
 #pragma HLS INTERFACE axis port=s_in
-#pragma HLS INTERFACE m_axi port=m_mem offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_mem offset=off bundle=gmem0 depth=8192
+#pragma HLS stable variable=m_mem
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::task t0(mem_w_stream_task<64>, s_cmd, s_in, m_mem);
 }

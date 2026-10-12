@@ -401,6 +401,67 @@ class ModuleStore:
         return total
 
 
+class LayeredModuleStore(ModuleStore):
+    """A platform's records across its tiers: **writes go to the work tier, reads search the work tier
+    first, then each published copy** (``plans/system_resources.md``, store consistency).
+
+    A build files what it measured into its own (work-tier) platform, while a model may read a
+    published library of the same name; with one store each, a record a build just filed was invisible
+    to the next lookup.  Layering is per ``(key, target)``: the first tier holding *any* record for it
+    answers, so a re-measurement in the work tier shadows the published one rather than merging with
+    it (two tiers' records of one key are not one population).  ``keys`` is the union.
+
+    *on_first_write* runs once before the first append -- the platform uses it to seed the work tier's
+    manifest, so a work tier exists only once something has been filed into it.
+    """
+
+    def __init__(self, write_dir: str | Path, read_dirs: "Iterable[str | Path]" = (),
+                 on_first_write=None) -> None:
+        super().__init__(write_dir)
+        dirs: list[Path] = []
+        for d in (Path(write_dir), *map(Path, read_dirs)):
+            if d not in dirs:
+                dirs.append(d)
+        self.tiers = [ModuleStore(d) for d in dirs]
+        self._on_first_write = on_first_write
+
+    def keys(self) -> list[str]:
+        return sorted({k for t in self.tiers for k in t.keys()})
+
+    def get_identity(self, key: str) -> ModuleIdentity | None:
+        for t in self.tiers:
+            ident = t.get_identity(key)
+            if ident is not None:
+                return ident
+        return None
+
+    def tier_of(self, key: str, target: str) -> "ModuleStore | None":
+        """The tier answering for ``(key, target)``: the first holding a record for it."""
+        for t in self.tiers:
+            if t.records_path(key, target).is_file():
+                return t
+        return None
+
+    def read(self, key: str, target: str, **kw) -> list[Record]:
+        t = self.tier_of(key, target)
+        return t.read(key, target, **kw) if t is not None else []
+
+    def append(self, record: Record, *, identity: ModuleIdentity | None = None) -> Path:
+        if self._on_first_write is not None:
+            self._on_first_write()
+            self._on_first_write = None
+        return super().append(record, identity=identity)
+
+
+def platform_store(platform) -> ModuleStore:
+    """*platform*'s store: its :meth:`~waveflow.calib.platform.Platform.module_store` (work tier,
+    then published), or a plain :class:`ModuleStore` on its ``dir`` for a platform-like object
+    without tiers."""
+    if hasattr(platform, "module_store"):
+        return platform.module_store()
+    return ModuleStore(platform.dir)
+
+
 def merge_payloads(records: Iterable[Record]) -> dict[str, int]:
     """Sum the resource counters across *records* — the raw Σ-modules term.
 

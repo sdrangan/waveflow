@@ -164,7 +164,7 @@ du_rx = SensorDU().deserialize(words, word_bw=32)
 
 print(type(du_rx.payload))   # → AccelPacket
 print(du_rx.schema_id)       # → 3
-print(int(du_rx.payload.ax)) # → 100
+print(du_rx.payload.ax)      # → 100
 ```
 
 Deserializing a word array whose `schema_id` is not in the registry raises `ValueError`.

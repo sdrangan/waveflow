@@ -8,7 +8,7 @@
 
 int main() {
     rf_pass_through_tb::Harness h("rf_pass_through_bfm.wdb");
-    h.run(2000);
+    h.run(wfbfm::run_param("n_cycles", 2000));
     h.close();
     return 0;
 }
