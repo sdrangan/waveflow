@@ -1,8 +1,8 @@
 """rt_sounder.py — a channel sounder in a ray-traced street canyon.
 
 The worked example for :mod:`waveflow.rfenv` (``plans/sionna_rt/sionna_rt.md``, M5).  A transmitter
-on a rooftop and a receiver at street level in Sionna RT's ``simple_street_canyon``, 3.5 GHz,
-traced once into a committed channel file; then the classic sounding experiment through the RF
+20 m up over an open cross street and a receiver at street level in the canyon, 72.6 m apart, in
+Sionna RT's ``simple_street_canyon`` at 3.5 GHz, traced once into a committed channel file; then the classic sounding experiment through the RF
 chain Waveflow already models:
 
 * **channel mode** -- a known Zadoff-Chu sequence played into an ``Rfdc`` DAC, through
@@ -12,10 +12,10 @@ chain Waveflow already models:
   loopback example's I/Q pass-through, replayed at RTL from its rendered bundle (AC6).
 
 **Why this scene and these positions** (step 14): five paths (sionna-rt 2.2.0, ``max_depth = 3``).
-Four arrive within 13 ns -- the strongest at 242.1 ns, one 10.6 ns later 3.3 dB down, two weaker
-ones at −17 and −19 dB -- and spread over lags 23 to 37 at 122.88 MSa/s (8.14 ns a sample); the
-fifth, at 355.0 ns and 24.7 dB down, is a separate echo at lags 43-44, 13 samples after the cluster
-and inside AC7's −30 dB window.  So the sounder must resolve both a dense cluster and a distant tap.
+Four arrive within 13.2 ns -- the strongest (the line of sight) at 242.1 ns, one 10.5 ns later
+3.3 dB down, two weaker ones at −17.2 and −19.4 dB -- and spread over lags 23 to 37 at 122.88 MSa/s
+(8.14 ns a sample); the fifth, at 355.0 ns and 24.6 dB down, is a separate echo at lags 43-44,
+112.9 ns (13.9 samples) after the first path and inside AC7's −30 dB window.  So the sounder must resolve both a dense cluster and a distant tap.
 
 **Why ``FILT_LEN = 256``.**  A path at a fractional delay spreads into sinc sidelobes, so a channel
 has taps above −30 dB well away from its paths.  The node realizes each delay with a Kaiser-windowed
@@ -66,7 +66,8 @@ HERE = Path(__file__).resolve().parent
 #: The committed channel file's stem (``.npz`` + ``.json``).
 CHANNEL = HERE / "data" / "street_canyon"
 
-#: The scene: Sionna RT's street canyon, a rooftop transmitter and a street-level receiver.
+#: The scene: Sionna RT's street canyon; a transmitter 20 m up over an open cross street, a receiver
+#: at street level in the canyon.
 SPEC = SceneSpec(
     scene="simple_street_canyon",
     frequency_hz=3.5e9,
@@ -274,21 +275,8 @@ def run_channel_mode(root=None, **kw) -> RtSounderTB:
         write_scenario(base, tb.n_blk, name=Path(tb.in_bundle).name)
         tb.drv.root = base
         tb.snk.root = base
-        sim = tb.sim
-        for obj in sim._sim_objs:
-            obj.pre_sim()
-        for obj in sim._sim_objs:
-            proc = obj.run_proc()
-            if proc is not None:
-                sim.env.process(proc)
-        try:
-            sim.env.run(until=tb.run_until)
-        except Exception:
-            for obj in sim._sim_objs:
-                obj.error_cleanup()
-            raise
-        for obj in sim._sim_objs:
-            obj.post_sim()
+        # Both converters are free-running event sources, so the run needs a horizon.
+        tb.sim.run_sim(until=tb.run_until)
     return tb
 
 
@@ -403,10 +391,10 @@ SOURCE_SAMP_RATE = XSI_IQ_SAMP_RATE
 #: Source mode's block and run length: the I/Q gate's.
 SOURCE_BLKSIZE = XSI_BLKSIZE
 SOURCE_NBLK = XSI_NBLK
-#: The transmitter: the ZC at 30 dBm (1 W), the street canyon's rooftop.
+#: The transmitter: the ZC at 30 dBm (1 W), from :data:`SPEC`'s transmitter.
 SOURCE_TX_POWER_DBM = 30.0
-#: The receiver's noise figure: thermal noise on, so the ADC sees a real received signal (about
-#: 36 dB SNR here) and the replay has to carry the noise bit for bit too.
+#: The receiver's noise figure: thermal noise on, so the ADC sees a real received signal (the noise
+#: at −46.1 dBFS, 36 dB under the strongest tap) and the replay has to carry the noise bit for bit.
 SOURCE_NOISE_FIGURE_DB = 7.0
 #: The source's rendered bundle and the sink's capture, relative to the run root.  Their own names:
 #: the XSI workspace holds other scenarios.
@@ -436,6 +424,11 @@ class RtSourceTB(FreeRunMod):
     in place of ``RfDataSource`` (that class builds its own source, and existing examples do not
     change).  The DUT is ``rf_pass_through``, imported: its RTL is word-agnostic, so the replay
     needs no RTL of its own.
+
+    **The testbench's name is part of the scenario**: the source's thermal noise is keyed by its
+    node's name (``<tb name>_src``), so two graphs named differently render different bundles.  Both
+    backends use :data:`SOURCE_TB_NAME`, and the XSI gate checks the replayed bundle against pysim's
+    render bit for bit.
     """
 
     #: Blocks the RF grids run for, and the source sends.

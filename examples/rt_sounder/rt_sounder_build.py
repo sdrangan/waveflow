@@ -10,6 +10,14 @@ Run it with::
 
     python -m examples.rt_sounder.rt_sounder_build --list-steps
     python -m examples.rt_sounder.rt_sounder_build                  # every rung
+
+The two modes after it need no rung of their own: channel mode is ``python -m
+examples.rt_sounder.rt_sounder`` (prints AC7's tap table).  Source mode at RTL replays through
+``examples/rf_loopback``'s ``rf_pass_through``, so its RTL comes from that example::
+
+    python -m examples.rf_loopback.rf_dut_build --through csynth   # the RTL (Vitis HLS)
+    python -m examples.rt_sounder.rt_sounder_xsi                   # this workspace: xsi/
+    pytest -m xsi -rs tests/examples/test_rt_sounder_xsi.py        # the replay gate (Vivado xsim)
 """
 
 from __future__ import annotations

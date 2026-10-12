@@ -96,10 +96,16 @@ def test_channel_mode_recovers_the_ray_traced_taps(sounded):
     assert cmp.spurious[1] <= -TAP_WINDOW_DB + 0.5, cmp.table()
 
 
-def test_channel_mode_a_one_sample_latency_error_fails_ac7(sounded):
-    """The comparison has teeth: the same estimate read one lag late is rejected."""
-    cmp = compare_taps(sounded.paths, np.roll(estimate_taps(sounded), 1))
-    assert cmp.worst_db > 0.5
+def test_channel_mode_only_the_declared_latency_passes_ac7(sounded):
+    """The comparison has teeth: read at any other latency within a block either way -- one sample
+    early or late, or a whole converter hop -- the same estimate fails AC7."""
+    h = estimate_taps(sounded)
+    passing = [
+        s
+        for s in range(-BLKSIZE, BLKSIZE + 1)
+        if compare_taps(sounded.paths, np.roll(h, s)).worst_db <= 0.5
+    ]
+    assert passing == [0]
 
 
 # ---------------------------------------------------------------------------

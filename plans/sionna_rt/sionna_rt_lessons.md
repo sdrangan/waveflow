@@ -110,3 +110,32 @@ keeping. Newest section last. Every measured number names its tool versions.
   to zero input for the missing block keeps the output edge on time and is what the air would do.
 - **Exact beats tolerant when exact is available.** The ADC check went from relative error ≤ 1e-3 to
   word-for-word equality with the converter's own quantizer.
+
+## M5: the channel sounder (2026-10-12)
+
+- **An accuracy bound chooses the filter, and the default is not the example's.** AC7's 0.5 dB on
+  every tap within 30 dB of the strongest reaches the sinc sidelobes far from the paths, where the
+  node's Kaiser window departs from Sionna's exact sinc: 1.49 dB at the default 64 taps, 0.125 dB at
+  256. Measuring the windowed-against-exact difference before the sounder existed made it a parameter
+  choice recorded in §14, not a tolerance argument after a failure.
+- **Seeded by name means the name is part of the scenario.** `RtSignalSource` keys its noise by its
+  node's name, so the XSI graph (`xsi_tb_rt`) rendered a different bundle from the pysim one
+  (`src_tb`). One constant names the testbench in both backends; "the same bytes in both backends" is
+  checked, not assumed.
+- **A loss-tolerant DUT changes the grain of bit-exactness, not its strength.** `rf_pass_through`
+  drops ADC words while it writes, so only the first block reaches the sink whole. Distinct source
+  words (noise makes all 1024 unique) let every sink word be placed in the source stream, in order.
+  That is stronger than a first-block check and true, where the block-for-block wording was neither.
+- **A bound that the measurement does not reach is slack, not a check.** "Skipped ≤ the ADC's drops"
+  left 30 words of room (drops after the last delivered word), so an RTL losing words of its own would
+  have passed. The gaps do not depend on the data, so the gate pins them exactly (M5 review, S1).
+- **Check a description against the geometry, not the intent.** "A rooftop transmitter" was what the
+  position was meant to be; ray casts showed open floor below it and no wall beside it (M5 review).
+- **A hand-written main that names generated members fails only under `-m xsi`.** Renaming the
+  testbench broke the counters main at the C++ compile. A toolchain-free test now checks every
+  `h.<member>` the main reads against the generated harness.
+- **"UP-TO-DATE" and "fresh" are different questions.** The DAG called csynth up to date while
+  `rtl_staleness` (content stamps) showed the RTL was built from other bytes of a header. The stamp is
+  the authority; `--force-step csynth` (15.8 s) settled it before any number was read off the RTL.
+- **`-k <name>` also matches the module name.** `-k sounder` selects every test in
+  `test_rt_sounder.py`. Harmless when it over-selects; the M3/M4 trap was under-selection.

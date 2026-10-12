@@ -6,12 +6,14 @@ replayed by ``RfFileSource`` into the I/Q ``Rfdc`` ADC model, through ``examples
 so the transient and the drops are judged against that gate's recorded expectations
 (``tests/examples/test_rf_loopback_xsi.py``, ``WANT_IQ_*``).
 
-**What is bit-exact, and at what grain.**  ``rf_pass_through`` reads a whole block before it writes
-one, so while the DAC paces the write the ADC's words have nowhere to go and are dropped (pattern A,
-``WANT_ADC_DROPPED_IS_STRUCTURAL``).  The first data block survives whole; every later one is spliced
-across source blocks at the drops.  So the claim is made per **word**: every word that reaches the
-sink is the matching word of the ADC-quantized source, in order, and the words skipped between them
-are no more than the ADC dropped.  The first data block is also asserted whole, as the I/Q gate does.
+**What is bit-exact, and at what grain.**  ``rf_pass_through`` reads a whole block of its own --
+64 words (``XSI_NWORDS_BLK``), half an RF block of this I/Q geometry -- before it writes one, so
+while the DAC paces the write the ADC's words have nowhere to go and are dropped (pattern A,
+``WANT_ADC_DROPPED_IS_STRUCTURAL``): about 15 words in each write phase, two phases per RF block.
+The first data block survives whole; every later one is spliced across source blocks at the drops.
+So the claim is made per **word**: every word that reaches the sink is the matching word of the
+ADC-quantized source, in order, and the words skipped between them are exactly the recorded gaps
+(:data:`WANT_SRC_GAPS`).  The first data block is also asserted whole, as the I/Q gate does.
 
 The two tests without a marker need no toolchain and run under the Sionna blocker too
 (``tests/rfenv/test_no_sionna.py``).
@@ -55,6 +57,30 @@ LOOPBACK = ROOT.parent / "rf_loopback"
 PROJ = LOOPBACK / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 #: Samples per AXIS word (the I/Q word: two complex samples).
 SPW = 2
+
+#: **The drop pattern, recorded** (Vivado 2024.1 xsim, ``rf_pass_through`` csynth'd with Vitis HLS
+#: 2024.1 on 2026-10-12): the source words skipped between delivered ones, as ``(first skipped
+#: word, count)``.  Pinned exactly rather than bounded by the ADC's drop count: the 30 drops after the
+#: last delivered word would otherwise leave room for an RTL that lost words of its own.  The pattern
+#: is a property of the RTL and the converter model's input FIFO, not of the data -- the loopback
+#: I/Q gate's random scenario drops the same words (M5 review) -- so it moves only with one of those,
+#: and a change wants diagnosing, like :data:`WANT_IQ_SINK_LAST_BLOCK_CYCLE`, before re-recording.
+WANT_SRC_GAPS = (
+    (194, 14),
+    (272, 16),
+    (352, 14),
+    (430, 15),
+    (509, 15),
+    (588, 15),
+    (667, 16),
+    (747, 14),
+    (825, 15),
+)
+#: Words the ADC dropped in all: the gaps' 134 plus 30 after the last word that reached the sink.
+WANT_ADC_DROPPED = 164
+#: The grid periods at the sink that carry data (zero-fill between them: the relay cannot sustain
+#: the DAC's rate).
+WANT_DATA_PERIODS = (1, 2, 4, 5, 6, 7)
 
 
 def _require(cond: bool, why: str) -> None:
@@ -151,7 +177,9 @@ def test_source_mode_replays_through_the_rtl_word_for_word():
     assert len(rtl) == WANT_IQ_SINK_BLOCKS
     for k in range(RTL_STARTUP_BLOCKS):
         assert not np.any(rtl[k]), f"block {k} is inside the RTL startup transient"
-    data = [b for b in rtl if np.any(b)]
+    periods = tuple(k for k, b in enumerate(rtl) if np.any(b))
+    assert periods == WANT_DATA_PERIODS
+    data = [rtl[k] for k in periods]
     assert len(data) == WANT_IQ_DATA_BLOCKS_OUT, (
         f"{len(data)} of {len(rtl)} grid periods carried data, the I/Q gate records "
         f"{WANT_IQ_DATA_BLOCKS_OUT}"
@@ -174,11 +202,14 @@ def test_source_mode_replays_through_the_rtl_word_for_word():
     assert pos[0] == 0 and all(
         b > a for a, b in itertools.pairwise(pos)
     ), "words out of order"
-    skipped = pos[-1] + 1 - len(pos)
-    assert 0 < skipped <= counters["ADC_DROPPED"], (
-        f"{skipped} source words were skipped between delivered ones; the ADC dropped "
-        f"{counters['ADC_DROPPED']}"
+    gaps = tuple((a + 1, b - a - 1) for a, b in itertools.pairwise(pos) if b > a + 1)
+    assert gaps == WANT_SRC_GAPS, (
+        f"the source words skipped between delivered ones are {gaps}, recorded {WANT_SRC_GAPS}. "
+        f"Extra or longer gaps are words lost beyond the ADC's; check the counters before "
+        f"re-recording."
     )
+    assert counters["ADC_DROPPED"] == WANT_ADC_DROPPED
+    assert sum(n for _, n in gaps) <= counters["ADC_DROPPED"]
 
     # --- 5) The accounting is the I/Q gate's ----------------------------------------------------
     assert counters["ADC_WORDS_SENT"] + counters["ADC_DROPPED"] == WANT_IQ_ADC_WORDS
