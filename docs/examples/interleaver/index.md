@@ -53,7 +53,7 @@ The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
   the `Y = X[P]` golden check.
 - [DUT codegen](./codegen_dut.md) — how the graph becomes the `ap_ctrl_none` `hls::task` top, and why every
   task body is hand-written.
-- [Testbench codegen](./codegen_tb.md) — the generated C++ BFM harness that drives the RTL through XSI.
+- [The system](./system.md) — the testbench graph cut at the kernel, and the top, harness and scenario the system flow derives from it.
 - [RTL simulation](./rtlsim.md) — running the harness in `xsim`: no deadlock, and bit-exact through real
   RTL.
 - [The timing model](./timing_model.md) — declaring `il_compute`'s own loop model: where it plugs into the

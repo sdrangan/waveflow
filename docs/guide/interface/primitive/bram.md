@@ -222,19 +222,22 @@ would have printed.
 The cost was concrete: five shipped XSI gates asserted `"read-during-write collision" not in out`,
 a string that could never appear, and each read as positive evidence. All five have been removed.
 
-**So check the condition, not the message.** A traced run (`run.bat <top> <tb> trace`) dumps
-`<top>_trace.vcd`, and the memory's address, enable and write-enable wires are declared in the
-*wrapper's* own scope — exactly what a level-1 `$dumpvars` captures:
+**So check the condition, not the message.** A traced system run (`add_system_steps(...,
+trace=True)`) dumps `<top>_trace.vcd`. The memory's address, enable and write-enable wires are
+declared in the *wrapper's* own scope, which is exactly what the run's level-1 `$dumpvars` of that
+scope captures. The run's `hazards.json` holds the wrapper's manifest with that `scope`:
 
 ```python
-from waveflow.build.wrapper_gen import bram_hazard_manifest
+import json
 from waveflow.utils.bram_trace import find_read_during_write
 
-hazards = find_read_during_write("bram_access_top_trace.vcd", bram_hazard_manifest(comp, spec))
+work = "examples/bram_access/xsi_work/bram_access_system"
+(manifest,) = json.load(open(f"{work}/hazards.json"))
+hazards = find_read_during_write(f"{work}/bram_access_system_trace.vcd", manifest)
 assert not hazards            # ...but see the next paragraph
 ```
 
-`bram_hazard_manifest` names which net carries each term rather than matching by substring, for the
+The manifest is `bram_hazard_manifest`'s, from the wrapper the system top renders. It names which net carries each term rather than matching by substring, for the
 reason [the trace manifest](../../comp_codegen/rtl_module.md) exists at all: codegen chose
 those names, so binding is exact and a name that has moved fails loudly.
 

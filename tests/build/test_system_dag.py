@@ -299,7 +299,7 @@ def test_add_system_steps_derives_the_tops_and_the_defaults():
     xsi = add_system_steps(dag, _markov(), work_dir="xsi_work")
     assert dag.step_names()[-1] == "compare"
     assert set(dag.step_names()) == {"include", "gen", "csynth", "system_rtl", "kernel_resources",
-                                     "system_synth", "leaf_resources", "resource_report",
+                                     "system_synth", "ip_package", "block_design", "leaf_resources", "resource_report",
                                      "scenario", "pysim", "system_xsi", "compare"}
     assert dag.artifact_owners()["report_markov_gen"] == "csynth"
     assert xsi.rtl.top == "markov_system" and xsi.rtl.spec.xbar.name == "xbar_markov_system"
@@ -381,3 +381,26 @@ def test_run_system_xsi_checks_and_never_synthesizes(tmp_path, fake_vitis):
     with pytest.raises(RuntimeError, match="no csynth RTL for markov_gen"):
         run_system_xsi(_markov(), tmp_path / "w", top="markov_top", root=tmp_path)
     assert fake_vitis == []
+
+
+def test_rom_initializers_reach_the_simulator_directory(tmp_path):
+    """csynth maps a large constant table to a ROM loaded by ``$readmemh("./<name>.dat")``, relative to
+    the simulator's directory.  The manifest lists the ``.dat`` (not as RTL to compile) and the
+    workspace copies it there: without it the ROM reads X and the run finishes on time with wrong
+    numbers -- SsrFft at L >= 256, whose first stage's twiddles become ROMs there."""
+    from waveflow.build.system_dag import SystemRtlStep
+    from waveflow.build.xsi_workspace import XsiWorkspace
+    from waveflow.dsp.ssr_fft.rtl import SsrFftSystem
+
+    d = tmp_path / rtl_rel("ssr_fft")
+    d.mkdir(parents=True)
+    (d / "ssr_fft.v").write_text("module ssr_fft; endmodule\n", encoding="utf-8")
+    (d / "ssr_fft_t_ROM_AUTO_1R.dat").write_text("00\n01\n", encoding="utf-8")
+    step = SystemRtlStep(sysm=SsrFftSystem(length=256), work=Path("w"), top="t")
+    m = json.loads(Path(step.run(BuildConfig(root_dir=tmp_path))[step.a("rtl")]).read_text())
+    assert [Path(f).name for f in m["init_files"]] == ["ssr_fft_t_ROM_AUTO_1R.dat"]
+    assert not any(f.endswith(".dat") for f in m["rtl_files"])
+
+    ws = XsiWorkspace(tmp_path / "ws", top="t")
+    ws.prepare(rtl_files=m["rtl_files"], tb_name="t_tb", tb_cpp="", init_files=m["init_files"])
+    assert (ws.work_dir / "ssr_fft_t_ROM_AUTO_1R.dat").read_text(encoding="utf-8") == "00\n01\n"

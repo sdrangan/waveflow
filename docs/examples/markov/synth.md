@@ -129,15 +129,81 @@ pysim object. After `system_synth` (xc7z020, 10 ns) the measured total sits besi
 
 | row | LUT | FF | BRAM18 |
 |---|---:|---:|---:|
-| `chain` (`MarkovChain`) | 2,032 | 3,115 | 0 |
-| `u` (`MmCreditStreamIF`: two writers and a FIFO) | 1,377 | 1,658 | 2 |
+| `chain` (`MarkovChain`) | 2,031 | 3,115 | 0 |
+| `u` (`MmCreditStreamIF`: two writers and a FIFO) | 1,355 | 1,658 | 2 |
 | `gen` (`MarkovGen`) | 1,193 | 1,298 | 0 |
 | `xbar` (the crossbar) | 849 | 680 | 0 |
-| `chain_mm`, `gen_mm` (the adaptors) | 732 | 395 | 0 |
-| `mem` (`MemoryMod`: the BRAM window and its memory) | 140 | 39 | 2 |
-| system integration | −36 | 2 | 0 |
-| **total** | **6,287** | **7,187** | **4** |
+| `chain_mm`, `gen_mm` (the adaptors) | 719 | 395 | 0 |
+| `mem` (`MemoryMod`: the BRAM window and its memory) | 132 | 39 | 2 |
+| system integration | 2 | 2 | 0 |
+| **total** | **6,281** | **7,187** | **4** |
 
 The kernels are the cost, and each is about half what its csynth report estimated. The memory is one
 RAMB36 -- since `bram_t2p` was recoded with one `always` block per port: the first synthesis found it
 built from flip-flops, 8,769 LUT and 32,832 FF of a 18,593 / 40,130 total.
+
+## Two routes to the board: global or per device {#routes}
+
+On its way to a board the system is [packaged as IP, one per device](../../guide/build/ipi.md), and
+that leaves a choice of how Vivado synthesizes it
+([Toward the board](../../guide/flows/bitstream_ipi.md)). markov has four parts:
+
+| part | holds | why there |
+|---|---|---|
+| generator device (`u_gen_sub`) | `MarkovGen`, its `qcmd` queue and `u_crd` credit counter, its AXI front, **the forward writer** | the forward writer carries the generator's data into the chain's queue: it is the generator's bus master |
+| chain device (`u_chain_sub`) | `MarkovChain` (its memory writer included), its `qu` and `qresp` queues, its AXI front, **the credit writer** | the credit writer returns credit to the generator: it is the chain's bus master |
+| memory (`u_mem_sub`) | the BRAM window and `bram_t2p` | one IP, its kernel port tied idle |
+| crossbar (`u_xbar`) | `axi_crossbar` | AMD's IP, configured |
+
+Each bus writer sits with the kernel it acts for, so every link between parts is AXI4 or an
+interrupt. **Global** synthesizes the system top in one run and then runs `opt_design`. **Per
+device** synthesizes each device and the memory out of context, then the crossbar and the glue
+against black boxes, links the netlists, and runs `opt_design`
+([per device](../../guide/resource/systems.md#per-device)). One step runs both, each cached by
+content:
+
+```bash
+python -m examples.markov.markov_build --through sync_routes_figure   # minutes of Vivado cold
+```
+
+![markov synthesized globally and per device](images/routes.svg)
+
+*Fig. 3 -- markov synthesized both ways, on xc7z020 at 10 ns (a stand-in: the board's xczu48dr
+needs a Vivado license this machine lacks). Left: LUT after `opt_design`, the per-device parts
+stacked, the link term below zero. Right: the Vivado seconds each rebuild costs, from the runs' own
+timers, start-up excluded.*
+
+**Area.** Synthesizing apart costs almost nothing:
+
+| | LUT | FF | BRAM18 |
+|---|---:|---:|---:|
+| generator device, alone | 2,299 | 2,560 | 2 |
+| chain device, alone | 3,028 | 3,934 | 0 |
+| memory, alone | 103 | 39 | 2 |
+| crossbar and glue, alone | 1,292 | 808 | 0 |
+| link term | −472 | −242 | 0 |
+| **per device, linked** | **6,250** | **7,099** | **4** |
+| **global** | **6,228** | **7,091** | **4** |
+
+The parts plus the measured link term are the linked total exactly. The link term is mostly the
+crossbar's: 1,292 LUT alone against 849 in the global synthesis (the resources table above). Against global
+synthesis, per device costs **22 LUT (+0.35%)** and 8 FF: what Vivado can no longer optimize across
+a device's boundary. The memory's tie-off is inside its own module, so it prunes alone, and the
+BRAM is the same.
+
+**Time.** The two routes win on different rebuilds:
+
+| rebuild | global | per device |
+|---|---:|---:|
+| cold | 132 s | 226 s |
+| one device changed | 132 s | 56-84 s |
+| nothing changed | none | 24 s (the link) |
+
+Cold, per device pays one run per part, each with its own fixed overhead. After a change to one
+device it re-synthesizes that device and re-links; global synthesizes everything again. So global
+is the default for a bitstream, and per device is for a loop that changes one device at a time,
+such as a design-space search. Packaging is per device either way.
+
+These numbers are not typed in. `markov_routes` writes them to `results/routes.json` with the
+figure, and `sync_routes_figure` copies both to `images/`. A test holds this page's tables to that
+record, and another holds the record's area to a fresh run.

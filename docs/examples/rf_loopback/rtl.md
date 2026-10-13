@@ -3,8 +3,8 @@ title: Taking it to RTL
 parent: RF loopback
 nav_order: 3
 audience: hls
-api: [RfSampPassThrough, kernel_task, bfm_model, check, potential_targets, sim_only]
-summary: "Step 7: the digital logic becomes hardware. What check says about each module in the graph, the DUT synthesized cut alone between generic AXI-Stream BFMs, one task body generated and one handed over, what each verification layer actually proves, and the recorded XSI cycle gate."
+api: [RfSampPassThrough, kernel_task, bfm_model, check, potential_targets, sim_only, RfLoopbackSystem, recording_check, reports_counters]
+summary: "Step 7: the digital logic becomes hardware. What check says about each module in the graph, the DUT synthesized cut alone between generic AXI-Stream BFMs, one task body generated and one handed over, what each verification layer actually proves, the recorded XSI cycle gate, and the same gate through the system flow -- the RFDC in the testbench, its models' loss counters gathered as a recording."
 ---
 
 # Taking it to RTL
@@ -12,8 +12,9 @@ summary: "Step 7: the digital logic becomes hardware. What check says about each
 Step 7, and the first page here that needs a toolchain:
 
 ```bash
-pytest -m vitis tests/examples/test_rf_dut_synth.py     # Vitis HLS
-pytest -m xsi  tests/examples/test_xsi_bfm.py           # Vivado xsim
+pytest -m vitis tests/examples/test_rf_dut_synth.py         # Vitis HLS
+pytest -m xsi  tests/examples/test_rf_dut_system_xsi.py     # the DUT alone, Vivado xsim
+pytest -m xsi  tests/examples/test_rf_loopback_xsi.py       # the loopback, converters included
 ```
 
 ## What `check` says about these modules
@@ -127,8 +128,9 @@ and with two tasks there are now two things that could vanish.
 
 ## The gate
 
-8 bursts × 64 words = 512 words, relayed bit-identically, with the last word landing at cycle
-**1066**.
+The DUT alone first, between a generic stream driver and sink (`RfPassThroughSystem`, run by
+`python -m examples.rf_loopback.rf_dut_system_build`): 8 bursts × 64 words = 512 words, relayed
+bit-identically, with the last word landing at cycle **1066**.
 
 Synthesized for the **RFSoC 4x2** (`xczu48dr-ffvg1517-2-e`) at 250 MHz — the fabric clock every
 number in [the RF guide](../../guide/rf/) is written against.
@@ -150,7 +152,7 @@ before it has received one.
 What changed is *where the stall lands*. Here it lands on a driver that waits, so it is invisible; in
 the loopback it lands on a converter that cannot, which is where the change is measured — the ADC
 went from dropping 72 words to dropping none. Both numbers live in
-`tests/examples/test_xsi_bfm.py` and `tests/examples/test_rf_loopback_xsi.py`.
+`tests/examples/test_rf_dut_system_xsi.py` and `tests/examples/test_rf_loopback_xsi.py`.
 
 > **Correction (2026-08-17): "dropping none" was measured against a DAC that could not refuse.**
 > `RfdcDacSlave` used to drive `TREADY` high unconditionally, so the fabric could run arbitrarily far
@@ -167,6 +169,74 @@ went from dropping 72 words to dropping none. Both numbers live in
 > the same converters. Do not quote 62 as a design constant; it depends on the model's input-FIFO
 > depth, and the gate asserts only the sign.
 
+## The loopback, through the system flow {#system-flow}
+
+The loopback runs through the [system flow](../../guide/flows/concurrent_system.md), as an
+`HwSystem`:
+
+```bash
+python -m examples.rf_loopback.rf_loopback_system_build --synth check
+pytest -m xsi tests/examples/test_rf_loopback_xsi.py
+```
+
+`RfLoopbackSystem` (in `rf_loopback.py`) cuts the same graph differently in words, not in effect. The
+**DUT is the pass-through kernel alone.** The RFDC cannot be brought into the DUT as vendor IP, so it
+is **testbench**:
+
+- in pysim, the `Rfdc` model;
+- under XSI, its two C++ models, `RfdcAdcMaster` and `RfdcDacSlave`;
+- on the board, the RFDC IP, a cell of the block design beside the DUT's IP.
+
+Each converter model **spans the cut**. Its fabric side drives or answers a stream port of the top.
+Its RF side talks over a behavioral edge, a `BlockChannel`, to the RF data source or sink. The
+harness has one model per participant, each the participant's own declared twin, and one channel
+per RF edge.
+
+The same system runs the other two tiles of `rf_loopback_xsi.py` as variants:
+`RfLoopbackSystem(variant="2ch")` drives a two-channel tile through the two-lane pass-through, and
+`variant="iq"` drives interleaved I/Q through the unchanged one-channel pass-through. Each is its own
+system top and its own run.
+
+Two things are checked by this example rather than compared against pysim, because the two backends
+legitimately disagree. pysim paces the RF side on the edge and cannot see sub-block sample loss (see
+[the fidelity boundary](../../guide/rf/rfdc/fidelity.md)).
+
+**The sink's capture.** The sink declares `recording_check = "example"`, so the system flow gathers
+`vectors/rf_out` from both runs but does not compare them. `check_xsi` asserts on the RTL capture:
+- the startup period is zero-fill;
+- the first data block is bit-exact;
+- 7 of the 63 collected periods carry data.
+
+**The loss counters.** These are not registers. They are each testbench model's own bookkeeping:
+- the ADC model counts words the fabric was not ready for, which it had to discard;
+- the DAC model counts grid periods it had nothing to play;
+- each RF channel counts its transfers and drops;
+- the source and sink count blocks.
+
+In the system flow, each of these models writes its counters as JSON at the end of the run, to
+`vectors/counters/<model>.json`. Its declaration says it keeps them (`reports_counters`), and the
+harness tells it where to write. The run gathers that directory as one more recording. `check_counters`
+then asserts the kernel gate's counter claims in Python:
+
+| claim | measured |
+|---|---|
+| the ADC accounts for every word: sent + dropped = 512 | 450 + 62 |
+| the ADC drops some: this relay cannot keep up while the DAC paces its writes | 62 |
+| the DAC emits on its grid for the whole run | 64 periods |
+| every period without a surviving data block is zero-fill | 57 = 64 − 7 |
+| words the fabric took but the DAC did not are still inside the DUT, under one block | 2 |
+| the RF edges themselves drop nothing; the loss is at the fabric boundary | 0 and 0 |
+
+The converter models also record the ports they bound (`n_ch`), each port's counts, and the sample
+format they were built with (`fmt_*`). That is what the two-channel and I/Q gates read to check that
+one model spans every port of its direction and that the I/Q rules reached it. No hand-written C++
+reads anything.
+
+Counters a model keeps are verification instrumentation: they say what the *testbench* saw. A design
+that must report loss on the board needs observability of its own: status registers in a device
+that the host reads, or the RFDC IP's own status interface. That is design work, not a way to pass
+this gate.
+
 ## See also
 
 - [The fidelity boundary](../../guide/rf/rfdc/fidelity.md) — why that 72-word loss was invisible in pysim,
@@ -174,5 +244,6 @@ went from dropping 72 words to dropping none. Both numbers live in
 - [Overriding a free-running body](../../guide/comp_codegen/freerunning_override.md) — the
   `kernel_task()` hook.
 
-**Source of truth:** `examples/rf_loopback/rf_dut_build.py`,
-`tests/examples/test_rf_dut_synth.py`, `tests/examples/test_xsi_bfm.py`.
+**Source of truth:** `examples/rf_loopback/rf_dut_build.py`, `rf_dut_system_build.py`,
+`rf_loopback_system_build.py`; `tests/examples/test_rf_dut_synth.py`,
+`tests/examples/test_rf_dut_system_xsi.py`, `tests/examples/test_rf_loopback_xsi.py`.

@@ -172,23 +172,31 @@ def test_a_probe_that_names_nothing_in_the_top_is_refused():
 # ---------------------------------------------------------------------------------------------
 
 _INST = re.compile(r"^  (\w+) (?:#\((.*)\) )?(u_\w+) \($", re.M)
+_MODULE = re.compile(r"^module (\w+) \(.*?^endmodule$", re.M | re.S)
 
 
-def _rendered_instances(v: str) -> dict[str, tuple[str, dict]]:
-    """``inst -> (module, params)`` read off the rendered Verilog -- here and only here."""
+def _rendered_instances(v: str) -> dict[str, tuple[str, dict, str]]:
+    """``inst -> (module, params, enclosing module)`` read off the rendered Verilog -- here and only
+    here."""
     out = {}
-    for module, params, inst in _INST.findall(v):
-        assert inst not in out, f"instance {inst} rendered twice"
-        out[inst] = (module, {k: int(x) for k, x in re.findall(r"\.(\w+)\((\d+)\)", params or "")})
+    for m in _MODULE.finditer(v):
+        for module, params, inst in _INST.findall(m.group(0)):
+            assert inst not in out, f"instance {inst} rendered twice"
+            out[inst] = (module, {k: int(x) for k, x in re.findall(r"\.(\w+)\((\d+)\)", params or "")},
+                         m.group(1))
     return out
 
 
 @pytest.mark.parametrize("which", ["markov", "per_view", "one_front"])
 def test_the_inventory_is_what_the_top_instantiates(which):
+    """Every inventory instance is rendered once, in the module its ``sub`` names; the only other
+    instances are the sub-tops themselves, each in the system top."""
     _sysm, spec = _markov() if which == "markov" else _fir(which)
     inv = spec.instances()
-    got = {i.inst: (i.module, {} if i.kind != "leaf" else i.params) for i in inv}
-    assert len(got) == len(inv), "instance names must be unique"
+    module_of = {s.inst: s.module for s in spec.subs} | {"": spec.top}
+    got = {i.inst: (i.module, {} if i.kind != "leaf" else i.params, module_of[i.sub]) for i in inv}
+    got |= {s.inst: (s.module, {}, spec.top) for s in spec.subs}
+    assert len(got) == len(inv) + len(spec.subs), "instance names must be unique"
     assert got == _rendered_instances(render_system_top(spec))
     for i in inv:
         assert i.owner is not None, i.inst
@@ -219,6 +227,60 @@ def test_markov_inventory_owners_are_pysim_objects():
     assert by["u_gen_mm_front"].identity != by["u_mem_front"].identity        # LAW 13 vs 12
 
 
+# ---------------------------------------------------------------------------------------------
+# Devices (plans/ip_packaging_routes.md Stage 0): every instance in one device, the memory or the top.
+# ---------------------------------------------------------------------------------------------
+
+def test_markov_falls_into_four_groups_each_instance_once():
+    """Two devices, the memory and the crossbar.  Each bus writer is in the device of the kernel it
+    acts for: the forward writer (and its FIFO) with the sender, the credit writer with the
+    receiver."""
+    sysm, spec = _markov()
+    assert [(s.name, s.kind, s.inst) for s in spec.subs] == [
+        ("gen", "device", "u_gen_sub"), ("chain", "device", "u_chain_sub"),
+        ("mem", "memory", "u_mem_sub")]
+    assert spec.subs[0].owner is sysm.gen and spec.subs[2].owner is sysm.mem
+    groups: dict[str, set] = {}
+    for i in spec.instances():
+        groups.setdefault(i.sub, set()).add(i.inst)
+    assert groups == {
+        "u_gen_sub": {"u_gen", "u_gen_mm_front", "u_gen_qcmd", "u_gen_u_crd", "u_u_fwd_wr",
+                      "u_u_fwd_ff"},
+        "u_chain_sub": {"u_chain", "u_chain_mm_front", "u_chain_qu", "u_chain_qresp", "u_u_crd_wr"},
+        "u_mem_sub": {"u_mem_front", "u_mem_mem", "u_mem"},
+        "": {"u_xbar"},
+    }
+    assert sum(map(len, groups.values())) == len(spec.instances()) == 15
+    by = {i.inst: i for i in spec.instances()}
+    assert by["u_u_fwd_wr"].path == "u_gen_sub/u_u_fwd_wr" and by["u_xbar"].path == "u_xbar"
+    # Every link between the sub-tops is the bus: no stream net crosses one.
+    assert all(n.group for n in spec.nets)
+
+
+@pytest.mark.parametrize("topology", ["per_view", "one_front"])
+def test_mm_fir_is_one_device(topology):
+    _sysm, spec = _fir(topology)
+    assert [(s.name, s.kind) for s in spec.subs] == [("fir", "device")]
+    subs = {i.sub for i in spec.instances() if i.kind != "ip"}
+    assert subs == {"u_fir_sub"}
+    assert [i.inst for i in spec.instances() if not i.sub] == ["u_xbar"]
+
+
+def test_markov_sub_tops_meet_only_at_the_bus():
+    """A device's ports are clock, reset, AXI4 groups (its MI slot, its masters' SI slots), its
+    interrupt lines and its probes -- nothing else crosses."""
+    sysm, spec = _markov()
+    from examples.markov.markov import timing_probes
+    v = render_system_top(spec, timing_probes(sysm))
+    gen = re.search(r"^module markov_top_gen \((.*?)\);", v, re.M | re.S).group(1)
+    names = [d.split()[-1] for d in gen.split(",")]
+    other = [n for n in names if not re.match(r"(ap_clk|ap_rst_n|mi0_axi_|si1_axi_|irq_|probe_)", n)]
+    assert other == []
+    assert "irq_gen_qcmd" in names and "probe_ufwd" in names
+    # A probe on a bus master's SI is computed in the top, not in a device.
+    assert "assign probe_wr1_aw = si1_axi_AWVALID && si1_axi_AWREADY;" in v.split("module markov_top (")[1]
+
+
 @pytest.mark.parametrize("which", ["markov", "per_view"])
 def test_leaf_sources_are_only_the_used_ones(which):
     from waveflow.build.mm_adaptor_gen import leaf_sources
@@ -246,3 +308,141 @@ def test_a_leaf_identity_moves_with_its_source_not_its_line_endings(tmp_path):
     assert identify_rtl("leaf", {"W": 8}, [src]) == a
     src.write_bytes(b"module leaf; wire x;\nendmodule\n")              # an edit
     assert identify_rtl("leaf", {"W": 8}, [src]).key != a.key
+
+
+def test_from_system_is_the_walk_with_add_system_steps_defaults():
+    """``SystemTopSpec.from_system(sysm)`` finds the crossbar and the default cut itself, and
+    ``render_verilog`` is ``render_system_top``: the object form and the function form agree."""
+    from waveflow.build.system_top import SystemTopSpec
+
+    sysm, spec = _markov()
+    obj = SystemTopSpec.from_system(sysm, top="markov_top")
+    assert obj == spec
+    assert obj.render_verilog() == render_system_top(spec)
+    assert SystemTopSpec.from_system(sysm).top == "markov_system"        # the class, snake case
+    only = SystemTopSpec.from_system(sysm, inside=[sysm.gen, sysm.chain, sysm.mem], top="t")
+    assert [s.name for s in only.subs] == ["gen", "chain", "mem"]
+
+
+# ---------------------------------------------------------------------------------------------
+# The DUT tree (plans/system_model.md S1): devices are composites, the grouping is read from them.
+# ---------------------------------------------------------------------------------------------
+
+def test_each_device_holds_its_kernel_views_and_the_writer_acting_for_it():
+    """``build_mm_device`` returns a composite; binding the routed credit stream puts the forward
+    writer (and the FIFO feeding it) in the sender's device and the credit writer in the receiver's,
+    even though the receiver's endpoint belongs to a child of the composite kernel."""
+    sysm, _spec = _markov()
+    gen, chain = sysm.gen_dev, sysm.chain_dev
+    assert list(gen.sub_comps) == ["gen", "gen_qcmd", "gen_u_crd", "gen_mm", "u_fwd_wr"]
+    assert list(chain.sub_comps) == ["chain", "chain_qu", "chain_qresp", "chain_mm", "u_crd_wr"]
+    assert sysm.u_link.fwd_writer.parent is gen and sysm.u_link.crd_writer.parent is chain
+    assert "u_fwd" in gen.interfaces and "u_crd" in chain.interfaces
+    assert sysm.gen.parent is gen and sysm.dut().sub_comps["gen_dev"] is gen
+
+
+def test_the_grouping_is_read_from_the_tree_not_derived():
+    """Move the credit writer to the generator's device by hand: the sub-tops follow the tree.  (The
+    stream-feeding rule would have put it with the chain.)"""
+    from waveflow.build.system_top import SystemTopSpec
+
+    sysm, _spec = _markov()
+    w = sysm.u_link.crd_writer
+    del sysm.chain_dev.sub_comps[w.name]
+    sysm.gen_dev.add_comp(w)
+    spec = SystemTopSpec.from_system(sysm, top="markov_top")
+    by = {i.inst: i.sub for i in spec.instances()}
+    assert by["u_u_crd_wr"] == "u_gen_sub"
+    assert any(n.name == "u_crd" and not n.group for n in spec.nets)    # its link now crosses
+    v = spec.render_verilog()                                          # ...as a port of each
+    chain_ports = re.search(r"^module markov_top_chain \((.*?)\);", v, re.M | re.S).group(1)
+    gen_ports = re.search(r"^module markov_top_gen \((.*?)\);", v, re.M | re.S).group(1)
+    assert re.search(r"output\s+wire \[\d+:0\] u_crd_TDATA", chain_ports)      # the chain drives it
+    assert re.search(r"input\s+wire u_crd_TVALID", gen_ports)                  # the writer reads it
+
+
+# ---------------------------------------------------------------------------------------------
+# Interfaces realize themselves (plans/system_model.md S2)
+# ---------------------------------------------------------------------------------------------
+
+def test_each_interface_states_its_rtl_realization():
+    """The crossbar is a vendor IP configured from its own ports and ranges; a stream is a FIFO only
+    between two kernels and above the default depth; a routed credit stream is its two writers."""
+    import inspect
+
+    from waveflow.build import system_top
+
+    sysm, spec = _markov()
+    assert sysm.xbar.rtl_config(spec.xbar.name, id_width=spec.xbar.id_width) == spec.xbar
+    fwd = next(i for i in sysm.sim._sim_objs if getattr(i, "name", None) == "u_fwd")
+    assert fwd.rtl_fifo_depth(between_kernels=True) == int(sysm.u_link.fwd_depth)
+    assert fwd.rtl_fifo_depth(between_kernels=False) == 0             # a view's link is its FIFO
+    assert sysm.u_link.writers() == (sysm.u_link.fwd_writer, sysm.u_link.crd_writer)
+    # The walk asks; it no longer configures the crossbar or applies the depth rule itself.
+    src = inspect.getsource(system_top.system_top_spec)
+    assert "from_crossbar" not in src and "DEFAULT_STREAM_DEPTH" not in src
+
+
+# ---------------------------------------------------------------------------------------------
+# A sub-top alone (plans/system_model.md S5): the unit a per-device synthesis or IP is built from.
+# ---------------------------------------------------------------------------------------------
+
+def test_a_sub_top_renders_alone_with_its_own_compile_list():
+    """Each sub-top's standalone file is exactly the module the system top holds for it, and its
+    compile list is only what it instantiates.  (That it elaborates alone is the XSI gate
+    test_markov_each_sub_top_elaborates_alone.)"""
+    _sysm, spec = _markov()
+    whole = render_system_top(spec)
+    for sub in spec.subs:
+        alone = spec.render_sub_verilog(sub.name)
+        module = alone[alone.index(f"module {sub.module} ("):]
+        assert alone.count("\nmodule ") == 1 and module in whole
+    leaves, kernels = spec.sources_of("gen")
+    assert kernels == ("markov_gen", "mm_queue_writer_64_128")
+    assert {p.name for p in leaves} == {"axi_slave_front.v", "mm_queue_in.v", "mm_credit_in.v",
+                                        "mm_sync_fifo.v"}
+    assert spec.sources_of("mem") == (spec.sources_of("mem")[0], ())          # no kernel in it
+    with pytest.raises(LoweringError, match="no sub-top 'xbar'"):
+        spec.render_sub_verilog("xbar")
+
+
+# ---------------------------------------------------------------------------------------------
+# A system with no bus (plans/system_model.md S3a)
+# ---------------------------------------------------------------------------------------------
+
+def test_mem_copy_is_a_system_with_no_crossbar():
+    """The DUT is the kernel alone; its streams and m_axi bundles leave the top as ports of their own
+    kind, each facing a testbench model -- and the crossbar that models contention in pysim stays
+    in the testbench."""
+    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from waveflow.build.system_top import SystemTopSpec
+
+    sysm = MemCopySystem()
+    spec = SystemTopSpec.from_system(sysm)
+    assert spec.xbar is None and spec.si == () and spec.mi == ()
+    assert spec.ext_streams == (("tb_cmd_if", "in"), ("tb_done_if", "out"))
+    assert spec.maxi_ext == (("u_tb_copier", "m_in", "m0_axi"), ("u_tb_copier", "m_out", "m1_axi"))
+    assert [i.path for i in spec.instances()] == ["u_tb_copier_sub/u_tb_copier"]
+    v = spec.render_verilog()
+    top = re.search(r"^module mem_copy_system \((.*?)\);", v, re.M | re.S).group(1)
+    assert "input  wire tb_cmd_if_TVALID" in top and "output wire tb_done_if_TVALID" in top
+    assert "output wire m0_axi_ARVALID" in top and "output wire m1_axi_AWVALID" in top
+    assert "u_xbar" not in v and "_RID[0]" not in v                    # 1 ID bit: a scalar, no index
+
+
+def test_the_direct_wired_markov_renders_its_kernel_link_as_ports():
+    """With no bus, the credit link between the two kernels runs between their sub-tops; the host's
+    streams and the chain's memory master leave the top.  The memory has to be testbench: an on-chip
+    memory reached directly is refused, not silently dropped."""
+    from examples.markov.markov import MarkovSystem, default_jobs
+    from waveflow.build.system_top import SystemTopSpec
+
+    s = MarkovSystem(jobs=default_jobs(1, 16), link="direct")
+    with pytest.raises(LoweringError, match="inside the cut but on no crossbar"):
+        SystemTopSpec.from_system(s)
+    spec = SystemTopSpec.from_system(s, inside=[s.gen, s.chain], top="markov_direct")
+    assert spec.ext_streams == (("k_cmd", "in"), ("k_resp", "out"))
+    assert spec.maxi_ext == (("u_chain", "m_mem", "m0_axi"),)
+    between = {n.name: (n.prod_group, n.cons_group) for n in spec.nets if not n.ext}
+    assert between == {"u_fwd": ("gen", "chain"), "u_crd": ("chain", "gen")}
+    assert spec.render_verilog().count("\nmodule ") == 3              # two sub-tops and the top

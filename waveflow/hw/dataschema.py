@@ -117,6 +117,63 @@ def _dense_lanes(cls, elem_dtype, word_bw: int) -> int | None:
         return None
     return lanes
 
+
+def _pack_lanes(bits: np.ndarray, pf: int, elem_bw: int, nwords: int, word_bw: int) -> list[int]:
+    """Words holding *bits* ``pf`` to a word, element ``k`` in word ``k // pf`` at bit
+    ``(k % pf) * elem_bw`` -- ``DataArray._array_layout``'s lanes -- as Python ints."""
+    lanes = np.zeros(nwords * pf, dtype=np.uint64)
+    lanes[:bits.size] = bits
+    lanes = lanes.reshape(nwords, pf)
+    if word_bw <= 64:
+        acc = np.zeros(nwords, dtype=np.uint64)
+        for j in range(pf):
+            acc |= lanes[:, j] << np.uint64(j * elem_bw)
+        return acc.tolist()
+    acc = np.zeros(nwords, dtype=object)
+    for j in range(pf):
+        acc |= lanes[:, j].astype(object) << (j * elem_bw)
+    return acc.tolist()
+
+
+def _lanes_to_chunks(bits: np.ndarray, pf: int, elem_bw: int, nwords: int, k: int) -> np.ndarray:
+    """:func:`_pack_lanes` straight into ``(nwords, k)`` 64-bit chunks, chunk 0 the low bits -- no
+    Python ints.  A lane that straddles a chunk boundary is split across the two."""
+    lanes = np.zeros(nwords * pf, dtype=np.uint64)
+    lanes[:bits.size] = bits
+    lanes = lanes.reshape(nwords, pf)
+    out = np.zeros((nwords, k), dtype=np.uint64)
+    for j in range(pf):
+        c, s = divmod(j * elem_bw, 64)
+        out[:, c] |= lanes[:, j] << np.uint64(s)
+        if s + elem_bw > 64:
+            out[:, c + 1] |= lanes[:, j] >> np.uint64(64 - s)
+    return out
+
+
+def _chunks_to_lanes(chunks: np.ndarray, pf: int, elem_bw: int, n_elem: int) -> np.ndarray:
+    """The inverse of :func:`_lanes_to_chunks`: the first *n_elem* lanes as ``uint64``."""
+    mask = np.uint64((1 << elem_bw) - 1)
+    lanes = []
+    for j in range(pf):
+        c, s = divmod(j * elem_bw, 64)
+        v = chunks[:, c] >> np.uint64(s)
+        if s + elem_bw > 64:
+            v = v | (chunks[:, c + 1] << np.uint64(64 - s))
+        lanes.append(v & mask)
+    return np.stack(lanes, axis=1).reshape(-1)[:n_elem]
+
+
+def _unpack_lanes(words: list[int], pf: int, elem_bw: int, n_elem: int, word_bw: int) -> np.ndarray:
+    """The inverse of :func:`_pack_lanes`: the first *n_elem* lanes of *words* as ``uint64``."""
+    mask = (1 << elem_bw) - 1
+    if word_bw <= 64:
+        w = np.array(words, dtype=np.uint64)
+        lanes = [(w >> np.uint64(j * elem_bw)) & np.uint64(mask) for j in range(pf)]
+    else:
+        w = np.array(words, dtype=object)
+        lanes = [((w >> (j * elem_bw)) & mask).astype(np.uint64) for j in range(pf)]
+    return np.stack(lanes, axis=1).reshape(-1)[:n_elem]
+
 class DataSchema(ABC):
     """Abstract base class for schema nodes.
 
@@ -263,11 +320,34 @@ class DataSchema(ABC):
         return self.from_dict(json.loads(raw))
 
     @classmethod
+    def _layout_memo(cls) -> dict:
+        """A per-class memo for value-independent layout answers (word counts, cursor steps).
+
+        Those were computed by serializing a default instance on every call -- per transfer, in a
+        pysim.  Keyed on the identity of the attributes a layout derives from, so a class whose
+        structure is changed recomputes."""
+        token = (getattr(cls, "elements", None), getattr(cls, "bitwidth", None),
+                 getattr(cls, "max_shape", None), getattr(cls, "element_type", None),
+                 getattr(cls, "static", None))
+        memo = cls.__dict__.get("_layout_memo_cache")
+        if memo is None or memo[0] != token:          # tuple ==: identity first, element by element
+            memo = (token, {})
+            cls._layout_memo_cache = memo
+        return memo[1]
+
+    @classmethod
     def nwords_per_inst(cls, word_bw: int) -> int:
         """Return the number of packed words needed for one instance at ``word_bw``."""
         if word_bw <= 0:
             raise ValueError("word_bw must be positive.")
+        memo = cls._layout_memo()
+        key = ("nwords", word_bw)
+        if key not in memo:
+            memo[key] = cls._nwords_per_inst_uncached(word_bw)
+        return memo[key]
 
+    @classmethod
+    def _nwords_per_inst_uncached(cls, word_bw: int) -> int:
         packed = np.asarray(cls().serialize(word_bw=word_bw))
         if packed.ndim == 0:
             return 1
@@ -361,10 +441,14 @@ class DataSchema(ABC):
         :class:`VarDataArray` overrides this to simulate max-length layout.
         :class:`DataList` overrides this to walk its children's max steps.
         """
-        words: list[int] = [0]
-        return cls()._serialize_recursive(
-            word_bw=word_bw, words=words, ipos0=ipos0, iword0=iword0
-        )
+        memo = cls._layout_memo()
+        key = ("step", word_bw, ipos0, iword0)
+        if key not in memo:
+            words: list[int] = [0]
+            memo[key] = cls()._serialize_recursive(
+                word_bw=word_bw, words=words, ipos0=ipos0, iword0=iword0
+            )
+        return memo[key]
 
     def serialize(self, word_bw: int = 32) -> Words:
         """Serialize this runtime value into packed hardware words."""
@@ -385,24 +469,19 @@ class DataSchema(ABC):
 
         words = words[:n_words]
 
-        if word_bw <= 32:
-            return np.array(
-                [np.uint32(word & ((1 << min(word_bw, 32)) - 1)) for word in words],
-                dtype=np.uint32,
-            )
-
         if word_bw <= 64:
-            return np.array(
-                [np.uint64(word & ((1 << word_bw) - 1)) for word in words],
-                dtype=np.uint64,
-            )
+            mask = (1 << word_bw) - 1
+            dtype = np.uint32 if word_bw <= 32 else np.uint64
+            if n_words <= 32:                  # a message: a list is cheaper than an object array
+                return np.array([w & mask for w in words], dtype=dtype)
+            return (np.array(words, dtype=object) & mask).astype(dtype)
+        w = np.array(words, dtype=object)      # Python ints: shifted and masked a column at a time
 
         chunks_per_word = math.ceil(word_bw / 64)
         out = np.zeros((n_words, chunks_per_word), dtype=np.uint64)
         mask64 = (1 << 64) - 1
-        for row_idx, word in enumerate(words):
-            for chunk_idx in range(chunks_per_word):
-                out[row_idx, chunk_idx] = np.uint64((word >> (64 * chunk_idx)) & mask64)
+        for chunk_idx in range(chunks_per_word):
+            out[:, chunk_idx] = ((w >> (64 * chunk_idx)) & mask64).astype(np.uint64)
         return out
 
     def _serialize_recursive(
@@ -446,6 +525,10 @@ class DataSchema(ABC):
             arr = arr.reshape(1)
         elif arr.ndim != 1:
             raise ValueError("For word_bw <= 64, packed must be a 1D array-like.")
+        if arr.dtype.kind in "iu":                 # signed words: their bit pattern
+            if arr.size <= 32:                     # a message: Python ints directly
+                return [v & mask for v in arr.tolist()]
+            return (arr.astype(np.uint64) & np.uint64(mask)).tolist()
         return [int(value) & mask for value in arr]
 
     def deserialize(self, packed: Words, word_bw: int = 32) -> DataSchema:
@@ -469,11 +552,17 @@ class DataSchema(ABC):
 
             mask = (1 << word_bw) - 1
             mask64 = (1 << 64) - 1
-            for row in arr:
-                word = 0
-                for chunk_idx, chunk in enumerate(row):
-                    word |= (int(chunk) & mask64) << (64 * chunk_idx)
-                words.append(word & mask)
+            if arr.dtype.kind in "iu":           # a column at a time; signed chunks are their bits
+                acc = np.zeros(arr.shape[0], dtype=object)
+                for chunk_idx in range(chunks_per_word):
+                    acc |= arr[:, chunk_idx].astype(np.uint64).astype(object) << (64 * chunk_idx)
+                words = (acc & mask).tolist()
+            else:
+                for row in arr:
+                    word = 0
+                    for chunk_idx, chunk in enumerate(row):
+                        word |= (int(chunk) & mask64) << (64 * chunk_idx)
+                    words.append(word & mask)
 
         if not words:
             words = [0]
@@ -504,6 +593,20 @@ class DataSchema(ABC):
     def from_words_numpy(cls, words: Any, count: int, word_bw: int) -> np.ndarray | None:
         """Vectorized unpack of ``count`` ``cls`` elements from ``words``, or ``None`` for
         no fast path (the caller then falls back to the recursive deserializer)."""
+        return None
+
+    # -- vectorized flat bits (the DataArray lane fast path) --------------------
+    # ``DataArray`` serializes an ndarray value by asking its element type for every element's flat
+    # bits at once (``_to_flat_bits`` vectorized) and shifting them into lanes itself.  ``None``
+    # means no vectorized path: the array falls back to its per-element loop.
+    @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The flat bit pattern of each stored value in *values* (1-D) as ``uint64``, or ``None``."""
+        return None
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        """The stored values of ``uint64`` flat bit patterns (1-D), or ``None``."""
         return None
 
     def write_uint32_file(self, file_path: str | Path) -> Path:
@@ -1108,7 +1211,20 @@ class DataField(DataSchema):
     cpp_type: ClassVar[str | None] = None
 
     def __init__(self, value: Any = None):
-        self._val = self.__class__.init_value()
+        cls = self.__class__
+        # A numpy scalar initial value is immutable, so one per class serves every instance --
+        # a message builds a field per element each time it is made or parsed.
+        init = cls.__dict__.get("_init_scalar")
+        if init is None or init[0] != cls.bitwidth:
+            v = cls.init_value()
+            if not isinstance(v, np.generic) or isinstance(v, np.void):   # a void can be a view
+                self._val = v
+                if value is not None:
+                    self.val = value
+                return
+            init = (cls.bitwidth, v)
+            cls._init_scalar = init
+        self._val = init[1]
         if value is not None:
             self.val = value
 
@@ -1514,6 +1630,24 @@ class IntField(DataField):
         return np.dtype(np.int64 if signed else np.uint64)
 
     @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The low ``W`` bits of each value: the wrap ``_convert`` applies."""
+        bw = cls.get_bitwidth()
+        if bw > 64 or values.dtype.kind not in "iub":
+            return None
+        return values.astype(np.uint64) & np.uint64((1 << bw) - 1)
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        bw = cls.get_bitwidth()
+        if bw > 64:
+            return None
+        if not cls.signed:
+            return bits
+        sh = np.uint64(64 - bw)                        # sign-extend: up as unsigned, down signed
+        return (bits << sh).view(np.int64) >> sh.astype(np.int64)
+
+    @classmethod
     @defer_if_symbolic
     def specialize(
         cls,
@@ -1582,20 +1716,25 @@ class IntField(DataField):
                 f"Cannot assign non-integer value {value!r} to {self.__class__.__name__}."
             )
 
-        bitwidth = self.__class__.get_bitwidth()
-        signed = self.__class__.signed
+        cls = self.__class__
+        bitwidth = cls.get_bitwidth()
+        signed = cls.signed
 
         if bitwidth <= 64:
-            mask = (1 << bitwidth) - 1
+            # The width's constants once per class (every message field is converted on each
+            # assignment, and a pysim assigns per transfer); rebuilt if the class's width changes.
+            conv = cls.__dict__.get("_int_conv")
+            if conv is None or conv[0] != bitwidth or conv[1] != signed:
+                ctor = (np.int32 if bitwidth <= 32 else np.int64) if signed else \
+                    (np.uint32 if bitwidth <= 32 else np.uint64)
+                conv = (bitwidth, signed, (1 << bitwidth) - 1,
+                        (1 << (bitwidth - 1)) if signed else 0, 1 << bitwidth, ctor)
+                cls._int_conv = conv
+            _, _, mask, sign_bit, full, ctor = conv
             wrapped = int(value) & mask
-
-            if signed:
-                sign_bit = 1 << (bitwidth - 1)
-                if wrapped & sign_bit:
-                    wrapped -= 1 << bitwidth
-                return np.int32(wrapped) if bitwidth <= 32 else np.int64(wrapped)
-
-            return np.uint32(wrapped) if bitwidth <= 32 else np.uint64(wrapped)
+            if sign_bit and wrapped & sign_bit:
+                wrapped -= full
+            return ctor(wrapped)
 
         num_words = math.ceil(bitwidth / 64)
 
@@ -1923,6 +2062,21 @@ class FloatField(DataField):
     @classmethod
     def _numpy_elem_dtype(cls) -> np.dtype | None:
         return np.dtype(np.float64 if cls.get_bitwidth() == 64 else np.float32)
+
+    @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The IEEE bits of each value (``_value_to_field_bits``)."""
+        bw = cls.get_bitwidth()
+        if bw not in (32, 64):
+            return None
+        return np.asarray(values, dtype=f"f{bw // 8}").view(f"u{bw // 8}").astype(np.uint64)
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        bw = cls.get_bitwidth()
+        if bw not in (32, 64):
+            return None
+        return bits.astype(f"u{bw // 8}").view(f"f{bw // 8}")
 
     @classmethod
     @defer_if_symbolic
@@ -2359,21 +2513,32 @@ class DataList(DataSchema):
         }
 
     @classmethod
-    def _iter_elements(cls) -> list[tuple[str, dict[str, type[DataSchema] | str | None]]]:
-        items = list(cls.elements.items())
+    def _element_cache(cls) -> tuple:
+        """``(normalized definitions, (name, schema) pairs)``, computed once per ``elements`` dict.
+
+        Every message instance, serialization and parse walks its class's elements, and normalizing
+        them each time was a large part of a small message's pysim cost.  Keyed on the identity of
+        ``cls.elements``: resolving a parameterized schema assigns a new dict, which recomputes."""
+        elements = cls.elements
+        cache = cls.__dict__.get("_elements_cache")
+        if cache is not None and cache[0] is elements:
+            return cache[1], cache[2]
         normalized: list[tuple[str, dict[str, type[DataSchema] | str | None]]] = []
-        for name, _ in items:
+        for name in elements:
             if not isinstance(name, str):
                 raise TypeError(f"{cls.__name__}.elements keys must be strings.")
             normalized.append((name, cls._normalize_element_definition(name)))
-        return normalized
+        schemas = tuple((name, definition["schema"]) for name, definition in normalized)
+        cls._elements_cache = (elements, tuple(normalized), schemas)
+        return cls._elements_cache[1], schemas
+
+    @classmethod
+    def _iter_elements(cls) -> list[tuple[str, dict[str, type[DataSchema] | str | None]]]:
+        return list(cls._element_cache()[0])
 
     @classmethod
     def _iter_element_schemas(cls) -> list[tuple[str, type[DataSchema]]]:
-        return [
-            (name, definition["schema"])
-            for name, definition in cls._iter_elements()
-        ]
+        return list(cls._element_cache()[1])
 
     @classmethod
     def get_element_schema(cls, name: str) -> type[DataSchema]:
@@ -2831,6 +2996,45 @@ class DataList(DataSchema):
         """Return the initial nested Python representation for this aggregate."""
         return {name: schema_cls.init_value() for name, schema_cls in cls._iter_element_schemas()}
 
+    @classmethod
+    def _field_plan(cls, word_bw: int):
+        """This message's layout at *word_bw*, for a start at bit 0 of a word: ``(fields, end_ipos,
+        end_iword)``, ``fields`` as ``(name, iword, ipos, mask)``; ``None`` unless every element is a
+        scalar field that fits a word and serializes the standard way (a nested list, a complex
+        field or a wide integer keeps the recursion).
+
+        The same positions :meth:`DataField._serialize_recursive` computes field by field -- a field
+        that does not fit what is left of a word starts the next one -- once per class and width
+        rather than once per message: a small message's pysim cost was mostly that recursion."""
+        cache = cls.__dict__.get("_plan_cache")
+        if cache is None or cache[0] is not cls.elements:
+            cache = (cls.elements, {})
+            cls._plan_cache = cache
+        plans = cache[1]
+        if word_bw in plans:
+            return plans[word_bw]
+        standard_ser = (DataField._serialize_recursive, IntField._serialize_recursive)
+        standard_des = (DataField._deserialize_recursive, IntField._deserialize_recursive)
+        fields, ipos, iword, plan = [], 0, 0, None
+        for name, schema_cls in cls._element_cache()[1]:
+            if not (issubclass(schema_cls, DataField)
+                    and schema_cls._serialize_recursive in standard_ser
+                    and schema_cls._deserialize_recursive in standard_des):
+                break
+            bw = schema_cls.get_bitwidth()
+            if bw > word_bw:
+                break
+            if ipos + bw > word_bw:
+                iword, ipos = iword + 1, 0
+            fields.append((name, iword, ipos, (1 << bw) - 1))
+            ipos += bw
+            if ipos == word_bw:
+                iword, ipos = iword + 1, 0
+        else:
+            plan = (tuple(fields), ipos, iword)
+        plans[word_bw] = plan
+        return plan
+
     def _serialize_recursive(
         self,
         word_bw: int,
@@ -2838,6 +3042,19 @@ class DataList(DataSchema):
         ipos0: int = 0,
         iword0: int = 0,
     ) -> tuple[int, int]:
+        plan = self.__class__._field_plan(word_bw) if ipos0 == 0 else None
+        if plan is not None:
+            fields, end_ipos, end_iword = plan
+            children = self._children
+            if fields:
+                need = iword0 + fields[-1][1] + 1
+                if len(words) < need:
+                    words.extend([0] * (need - len(words)))
+            for name, iw, pos, mask in fields:
+                child = children[name]
+                words[iword0 + iw] |= (child._value_to_field_bits(child.val) & mask) << pos
+            return end_ipos, iword0 + end_iword
+
         curr_ipos = ipos0
         curr_iword = iword0
 
@@ -2858,6 +3075,17 @@ class DataList(DataSchema):
         ipos0: int = 0,
         iword0: int = 0,
     ) -> tuple[int, int]:
+        plan = self.__class__._field_plan(word_bw) if ipos0 == 0 else None
+        if plan is not None:                                 # see _field_plan
+            fields, end_ipos, end_iword = plan
+            children = self._children
+            nwords = len(words)
+            for name, iw, pos, mask in fields:
+                i = iword0 + iw
+                child = children[name]
+                child.val = child._field_bits_to_value(((words[i] if i < nwords else 0) >> pos) & mask)
+            return end_ipos, iword0 + end_iword
+
         curr_ipos = ipos0
         curr_iword = iword0
 
@@ -2929,6 +3157,10 @@ class DataList(DataSchema):
         """
         if word_bw <= 0:
             raise ValueError("word_bw must be positive.")
+        memo = cls._layout_memo()
+        key = ("nwords", word_bw)
+        if key in memo:
+            return memo[key]
         curr_ipos = 0
         curr_iword = 0
         for _, schema_cls in cls._iter_element_schemas():
@@ -2936,7 +3168,8 @@ class DataList(DataSchema):
                 word_bw=word_bw, ipos0=curr_ipos, iword0=curr_iword
             )
         n = curr_iword + (1 if curr_ipos > 0 else 0)
-        return n if n > 0 else 1
+        memo[key] = n if n > 0 else 1
+        return memo[key]
 
     @classmethod
     def _max_cursor_step(
@@ -3202,9 +3435,15 @@ class DataArray(DataSchema):
 
     @classmethod
     def _normalized_shape(cls) -> tuple[int, ...]:
-        shape = tuple(int(dim) for dim in cls.max_shape)
+        max_shape = cls.max_shape
+        cache = cls.__dict__.get("_shape_cache")
+        if cache is not None and cache[0] is max_shape:      # asked per transfer: once per class
+            return cache[1]
+        shape = tuple(int(dim) for dim in max_shape)
         if any(dim < 0 for dim in shape):
             raise ValueError("max_shape dimensions must be non-negative.")
+        if isinstance(max_shape, tuple):                     # a list could change in place
+            cls._shape_cache = (max_shape, shape)
         return shape
 
     @classmethod
@@ -3272,6 +3511,12 @@ class DataArray(DataSchema):
         cpp_storage: str = "struct",
         **kwargs: Any,
     ) -> type[DataArray]:
+        if not kwargs and type(member_name) is str:          # made before: validated then
+            cached = cls._specializations.get(
+                (cls, element_type, tuple(int(dim) for dim in max_shape), bool(static), cpp_storage,
+                 (("member_name", member_name),)))
+            if cached is not None:
+                return cached
         if not isinstance(element_type, type) or not issubclass(element_type, DataSchema):
             raise TypeError("element_type must be a DataSchema subclass.")
         shape = tuple(int(dim) for dim in max_shape)
@@ -4531,6 +4776,56 @@ class DataArray(DataSchema):
         out_words.tofile(out_path)
         return out_path
 
+    # -- the whole-array fast path: lanes straight to 64-bit chunks, no Python ints ----------------
+    def _numpy_lane_layout(self, word_bw: int):
+        """``(pf, nwords, k)`` when this array can move as numpy lanes at *word_bw*, else ``None``:
+        an ndarray value of the full shape and an element type with a flat-bits method."""
+        if word_bw <= 0 or not self.__class__._normalized_shape():
+            return None
+        pf, _, nwords = self.__class__._array_layout(word_bw)
+        if pf < 1:
+            return None
+        return pf, nwords, -(-word_bw // 64) if word_bw > 64 else 1
+
+    def serialize(self, word_bw: int = 32) -> Words:
+        layout = self._numpy_lane_layout(word_bw)
+        data = self.val
+        if layout is not None and isinstance(data, np.ndarray) and \
+                data.shape == self.__class__._normalized_shape():
+            elem = self.__class__._element_type()
+            bits = elem._flat_bits_numpy(data.reshape(-1))
+            if bits is not None:
+                pf, nwords, k = layout
+                chunks = _lanes_to_chunks(bits, pf, elem.get_bitwidth(), max(nwords, 1), k)
+                if word_bw > 64:
+                    return chunks
+                return chunks[:, 0].astype(np.uint32) if word_bw <= 32 else chunks[:, 0]
+        return super().serialize(word_bw)
+
+    def deserialize(self, packed: Words, word_bw: int = 32) -> DataSchema:
+        layout = self._numpy_lane_layout(word_bw)
+        data = self.__class__.init_value()
+        if layout is not None and isinstance(packed, np.ndarray) and packed.dtype.kind in "iu" \
+                and isinstance(data, np.ndarray) and data.shape == self.__class__._normalized_shape():
+            pf, nwords, k = layout
+            arr = packed.astype(np.uint64)                   # signed words: their bit pattern
+            if word_bw > 64:
+                ok = arr.ndim == 2 and arr.shape[1] == k
+            else:
+                ok = arr.ndim == 1
+                arr = arr.reshape(-1, 1)
+            if ok:
+                if arr.shape[0] < nwords:                    # missing words read as zero
+                    arr = np.vstack([arr, np.zeros((nwords - arr.shape[0], arr.shape[1]), np.uint64)])
+                elem = self.__class__._element_type()
+                bits = _chunks_to_lanes(arr[:nwords], pf, elem.get_bitwidth(), data.size)
+                vals = elem._from_flat_bits_numpy(bits)
+                if vals is not None:
+                    data[...] = vals.reshape(data.shape)
+                    self._val = data
+                    return self
+        return super().deserialize(packed, word_bw)
+
     def _serialize_recursive(
         self,
         word_bw: int,
@@ -4560,6 +4855,12 @@ class DataArray(DataSchema):
         while len(words) < start + nwords:
             words.append(0)
         elem_bw = self.__class__._element_type().get_bitwidth()
+        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+            bits = self.__class__._element_type()._flat_bits_numpy(data.reshape(-1))
+            if bits is not None:
+                for i, w in enumerate(_pack_lanes(bits, pf, elem_bw, nwords, word_bw)):
+                    words[start + i] |= w
+                return 0, start + nwords
         flat = pf >= 1 and not isinstance(child, DataField)
         for k, idxs in enumerate(np.ndindex(shape)):
             child.val = get_elem(data, idxs)
@@ -4601,6 +4902,14 @@ class DataArray(DataSchema):
         start = curr_iword + (1 if curr_ipos > 0 else 0)
         elem_bw = self.__class__._element_type().get_bitwidth()
         elem_mask = (1 << elem_bw) - 1
+        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+            ws = words[start:start + nwords]
+            bits = _unpack_lanes(ws + [0] * (nwords - len(ws)), pf, elem_bw, data.size, word_bw)
+            vals = self.__class__._element_type()._from_flat_bits_numpy(bits)
+            if vals is not None:
+                data[...] = vals.reshape(shape)
+                self._val = data
+                return 0, start + nwords
         flat = pf >= 1 and not isinstance(child, DataField)
         for k, idxs in enumerate(np.ndindex(shape)):
             if pf == 0:

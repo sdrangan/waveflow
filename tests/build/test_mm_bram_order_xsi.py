@@ -142,6 +142,7 @@ int main() {
     XsiSim sim("__DLL__", "bram_order.wdb");
     AxiMmMaster h0(sim.dut(), "s0_axi", 8, 0), h1(sim.dut(), "s1_axi", 8, 1);
     AxisSlave out(sim.dut(), "k_out");
+    out.allow_xz = true;          // per_view is the negative control: it MUST read unwritten (X) words
     std::vector<uint64_t> data;
     for (int i = 0; i < __NW__; ++i) data.push_back(0xD000 + (uint64_t)i);
     size_t wd = h0.write(0x1000, data, 1);           // the data: one 256-beat burst into the window
@@ -154,8 +155,8 @@ int main() {
         sim.clock_low();  for (auto* p : all) p->sample();
         sim.clock_high(); for (auto* p : all) p->update(); drive();
     }
-    // The reader emits word N-1 first.  A word read before the burst wrote it is 0 (the memory's
-    // initial contents), never 0xD000+i.
+    // The reader emits word N-1 first.  A word read before the burst wrote it is the memory's
+    // initial contents (X at RTL, read as 1s), never 0xD000+i.
     int stale = 0;
     for (size_t j = 0; j < out.count(); ++j)
         if (out.words()[j] != data[__NW__ - 1 - j]) ++stale;

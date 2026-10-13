@@ -376,7 +376,9 @@ checks this against the *actual* generated RTL. **Rung 6 for this stage must wri
 aliasing point** — a board test that only touches the low quarter of the memory proves nothing.
 
 **9.4 Which memory on hardware?** The hand-written `bram_t2p.v` infers a block RAM, so it can go to
-the board as-is; `blk_mem_gen` is the alternative. Staying with the committed `.v` keeps the board
+the board as-is; `blk_mem_gen` is the alternative.  (True only since PR #250: until then both ports
+were written in one `always` block and Vivado built the memory from flip-flops -- see
+`plans/system_resources.md`.)  For multi-kernel systems, see `plans/ip_packaging_routes.md`. Staying with the committed `.v` keeps the board
 design and the XSI gate on the *same* RTL, which is worth more than using the vendor generator.
 
 **Gates:** rungs 1–6, with rung 6 exercising the full address range.

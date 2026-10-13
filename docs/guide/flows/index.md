@@ -44,8 +44,10 @@ The sequential flow stays. It is the shortest path from a Python function to a v
 where the examples start, and a control-driven kernel is the right realization for work a host
 genuinely launches one call at a time.
 
-A third path — the full system on the fabric (an FPGA `bitstream` via Vivado IPI, no testbench, host
-software drives it) — is future work; it is not one of the two simulation flows above.
+What follows either flow on the way to a board is not a third flow: [Toward the
+board](./bitstream_ipi.md) packages a verified system as IP, one per device, and wires it in a Vivado
+block design from the same spec the XSI system top is rendered from. The processor, the board and
+the bitstream come next.
 
 ## Two targets that are not flows
 

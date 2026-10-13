@@ -33,9 +33,6 @@ missing.
 """
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -52,24 +49,16 @@ from examples.rf_shot_rx.rf_shot_rx import (
     expected_bases,
     windows_as_codes,
 )
-from examples.rf_shot_rx.rf_shot_rx_build import (
-    RTL_FILES,
-    TOP,
-    WRAPPER,
-    generate_tb,
-)
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_shot_rx import rf_shot_rx_system_build as sysb
+from examples.rf_shot_rx.rf_shot_rx_build import TOP
+from tests.examples._system_run import (WORK, compared_clean, recorded_names, system_run,
+                                        trace_of)
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_rx"
-XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
 
-#: The hand-written main.  One, because a capture is asked nothing — there is no command scenario to
-#: split and no second run to compare against.
-TB = f"{TOP}_counters"
 
 #: Words the converter handed over, and words it could not.  **``ADC_DROPPED`` must be zero**: that
 #: is the OTHER loss — a word the fabric would not take, gone before the capture ever saw it — and a
@@ -118,76 +107,18 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines a counters main prints."""
-    vals: dict[str, int] = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
 @pytest.fixture(scope="module")
-def run(tmp_path_factory) -> dict:
-    """One traced RTL run, shared by the assertions below.
-
-    Everything the previous run left is removed first — the snapshot, the built TB, the capture
-    bundle and the waveform.  A cached snapshot plus a stale bundle is how a broken build passes on
-    old output, and a stale VCD is how a scan reports the *previous* run's addresses.
-    """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_shot_rx_build.py --through csynth")
-    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it did
-    # not produce reports "a real behaviour change" when the truth is a stale artifact.
-    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
-    # The hazard manifest is `*.json` and therefore gitignored like every other build artifact, so it
-    # is a prerequisite rather than a checked-in file — and a missing one must SKIP loudly rather
-    # than raise.
-    for f in (*RTL_FILES, f"vcd_dumper_{WRAPPER}.v", f"{TOP}_hazard.json"):
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_rx_build.py")
-
-    # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
-    (XSI / f"rtl_{WRAPPER}.f").write_text(
-        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
-    shutil.rmtree(XSI / "xsim.dir" / WRAPPER, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (XSI / stale).unlink(missing_ok=True)
-    shutil.rmtree(XSI / "vectors" / "win", ignore_errors=True)
-    trace = XSI / f"{WRAPPER}_trace.vcd"
-    trace.unlink(missing_ok=True)
-    generate_tb(ROOT)
-
-    r = subprocess.run(xsi_runner_cmd(WRAPPER, TB, trace=True), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    text = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in text, f"the RTL run did not complete cleanly:\n{text[-3000:]}"
-    assert trace.is_file(), (
-        f"the traced run produced no {trace.name}. Is vcd_dumper_{WRAPPER}.v present in {XSI}, and "
-        f"did {XSI_RUNNER} get the `trace` argument?")
-
-    keep = tmp_path_factory.mktemp("rf_shot_rx_xsi") / "trace.vcd"
-    shutil.copyfile(trace, keep)
-    return {
-        "counters": _counters(text),
-        "frames": _frames(),
-        "vcd": keep,
-        "manifest": json.loads((XSI / f"{TOP}_hazard.json").read_text(encoding="utf-8")),
-    }
-
-
-def _frames() -> list[np.ndarray]:
-    """The window frames the sink captured — header **and** samples, as a host would see them."""
-    from waveflow.utils.burst_io import read_burst_bundle
-
-    d = XSI / "vectors" / "win"
-    if not d.is_dir():
-        return []
-    return [np.asarray(b, dtype=np.uint64).ravel() for b in read_burst_bundle(d)]
+def run() -> dict:
+    """One traced RTL run, shared by the assertions below: the system run of the 'default' build
+    (``examples/rf_shot_rx/rf_shot_rx_system_build.py``) -- the receiver is the DUT (its wrapper:
+    the kernel and its ``bram_t2p``), the RFDC's ADC model spans the cut.  The waveform is the
+    wrapper's scope inside the system top, the manifest names its nets there, and the counters are
+    the ones the converter model writes as a recording, under the names the old main printed."""
+    work = system_run(sysb.build_dag('default', work_dir=WORK), sysb.HERE, sysb.BUILDS['default'][1])
+    assert compared_clean(work) and recorded_names(work) == ["counters", "win"]
+    vcd, manifest = trace_of(work)
+    return {"counters": sysb.counters(work), "frames": sysb.frames(work), "vcd": vcd,
+            "manifest": manifest}
 
 
 def _both_live(vcd: Path, manifest: dict):

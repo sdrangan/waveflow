@@ -59,7 +59,7 @@ def runs():
     # include/, gen/ and xsi/ are untracked build output: regenerate (Python only) so the staleness
     # check compares the RTL against THIS checkout's sources (plans/source_layout.md).
     rtl.generate(ROOT, L)
-    if not (ROOT / f"{rtl.TOP}_proj").is_dir() or not (ROOT / rtl.XSI_DIR / f"rtl_{rtl.TOP}.f").exists():
+    if not (ROOT / f"{rtl.TOP}_proj").is_dir():
         pytest.skip("XSI gate prerequisite missing: no csynth RTL -- run "
                     "python -m examples.vitis_fft.vitis_fft_build")
     stale = rtl_staleness(ROOT, rtl.TOP)

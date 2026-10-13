@@ -301,17 +301,6 @@ def test_the_rendered_wrapper_is_verilog_the_witness_would_recognize():
     assert text.count(".buf_w_") == 7 and text.count(".buf_r_") == 14
 
 
-def test_the_committed_wrapper_matches_what_the_generator_emits():
-    """The committed artifact is a build output, and a build output nobody checks drifts."""
-    from examples.bram_access.bram_access_build import wrapper_text
-
-    committed = (Path(__file__).resolve().parents[2] / "examples" / "bram_access" / "xsi" /
-                 "bram_access_top.v")
-    assert committed.read_text(encoding="utf-8").replace("\r\n", "\n") == wrapper_text(), (
-        "examples/bram_access/xsi/bram_access_top.v has drifted — regenerate it "
-        "(bram_access_build.py --through codegen_dut)")
-
-
 # ---------------------------------------------------------------------------
 # The elaborated top is the wrapper
 # ---------------------------------------------------------------------------

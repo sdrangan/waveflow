@@ -32,6 +32,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.hw.rf_samp_buf import (  # noqa: E402
     BUF_DEPTH,  # noqa: F401  (re-exported: the RX default, for comparison)
@@ -261,8 +262,10 @@ class RfSampBufTxTB(FreeRunMod):
         self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
         self.blk_period = int(self.blksize) / float(self.samp_rate)
 
+        # The DAC's first words at RTL carry bits the design has not driven yet -- the startup
+        # transient the XSI gates account for -- so the DAC model accepts X instead of stopping.
         self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1,
-                         word=self.word)
+                         word=self.word, allow_xz=True)
         w = self.rfdc.axis_bitwidth
         self.dut = RfSampBufTx(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
                                samp_per_word=int(self.word.samp_per_word), depth=int(self.depth),
@@ -320,6 +323,30 @@ class RfSampBufTxTB(FreeRunMod):
         resp_axis.bind("master", self.dut.s_resp)
         resp_axis.bind("slave", self.resp_sink.stream_ep)
         self.add_if(resp_axis)
+
+
+@dataclass
+class RfSampBufTxSystem(GraphSystem):
+    """The playout buffer as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfSampBufTxTB` graph, the cut :class:`RfSampBufTx` alone -- its ``bram_t2p`` inside it,
+    so the system top instantiates its **wrapper**.  The RFDC is testbench.
+
+    The RF sink's recording is the example's to check (``recording_check``): pysim's player is not
+    paced by ``TREADY``, so the loaded ramp lands at a different offset -- what both must show is
+    the ramp unbroken and in order."""
+
+    n_cycles: int = 40000
+
+    def graph(self) -> RfSampBufTxTB:
+        g = RfSampBufTxTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+        g.sink.recording_check = "example"
+        return g
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, samp_per_word=int(self.tb.word.samp_per_word))
 
 
 def write_scenario(root, samp_per_word: int = 1, cmds=GATE_COMMANDS) -> None:

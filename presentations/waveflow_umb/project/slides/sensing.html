@@ -1,0 +1,24 @@
+<section id="sensing" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Our work · Sensing and robotics</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Locating a transmitter from one RF snapshot</h2>
+<div style="background:#FCFBFE;border:1px solid #D9CCE5;border-radius:16px;padding:20px;display:flex;justify-content:center">
+<img src="/_blob/7446914e5af3eb2c8eb2d9d24bd07008" alt="MAGNETAR pipeline: two-channel IQ snapshot, multipath angle and SNR estimates, pose hypotheses on the known layout, feature maps, a U-Net scorer, and a spatial posterior over transmitter position and heading" style="width:1620px;height:420px;object-fit:contain">
+</div>
+<div style="display:flex;gap:32px">
+<div style="flex:1;border-left:6px solid #57068C;padding:4px 0px 4px 24px;display:flex;flex-direction:column;gap:6px">
+<h3 style="font-size:30px;font-weight:600">The platform</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Two-channel Pi-Radio FR3 SDR at 10 GHz on a mobile robot</p>
+</div>
+<div style="flex:1;border-left:6px solid #57068C;padding:4px 0px 4px 24px;display:flex;flex-direction:column;gap:6px">
+<h3 style="font-size:30px;font-weight:600">The output</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">A joint posterior over position and heading, not a point estimate</p>
+</div>
+<div style="flex:1;border-left:6px solid #57068C;padding:4px 0px 4px 24px;display:flex;flex-direction:column;gap:6px">
+<h3 style="font-size:30px;font-weight:600">The data</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Real-to-sim calibrated ray tracing, plus robot measurements</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">MAGNETAR: multipath-guided spatial posteriors for transmitter pose inference in the upper mid-band · arXiv:2609.20670</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Directional FR3 antennas mean a receiver sees both where a transmitter is and which way it faces; one snapshot is consistent with several poses, so the method outputs a posterior a robot can act on and fuse over time. Trained mostly on a real-to-sim calibrated simulator with 1,800 measured records; evaluated on 24,000 held-out measurements.</aside>
+</section>

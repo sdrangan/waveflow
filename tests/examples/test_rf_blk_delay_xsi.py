@@ -25,9 +25,6 @@ Five things are gated, and they fail in different ways:
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -39,18 +36,14 @@ from examples.rf_blk_delay.rf_blk_delay import (
     SAMP_BW,
     SRC_NBLK,
     ramp_samples,
-    write_scenario,
 )
-from examples.rf_blk_delay.rf_blk_delay_build import RTL_FILES, TOP, WRAPPER
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_blk_delay import rf_blk_delay_system_build as sysb
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 from waveflow.hw.rf_samp_buf import RF_SAMP_BUF_OK, RxResp
 from waveflow.hw.rf_samp_buf_tx import TxResp
 
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_blk_delay"
-#: The hand-written main: the generated one runs and dumps, this one also prints the model counters,
-#: and this design's two most important numbers live only on the converter models.
-TB = "rf_blk_delay_counters"
+#: Where the system run's testbench read and recorded (``tests/examples/_system_run.py``).
+VECTORS = WORK / sysb.TOP / "xsi_run" / "vectors"
 
 #: Word width on the wire — four 16-bit samples, ``Rfdc``'s ceiling.
 WORD_BW = 64
@@ -103,62 +96,24 @@ RTL_GRID_SKEW = 0
 WANT_DAC_BLOCKS_OUT = 234
 
 
-def _require(cond: bool, why: str) -> None:
-    """Skip loudly — a silent skip on a gate this expensive reads as 'passed' in a summary line."""
-    if not cond:
-        pytest.skip(f"XSI gate prerequisite missing: {why}")
-
-
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines the counters main prints."""
-    vals = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
 @pytest.fixture(scope="module")
 def run() -> tuple[dict[str, int], str]:
-    """One RTL run, shared by the assertions below."""
-    xsi = ROOT / "xsi"
-    _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
-    proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
-    _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_blk_delay_build.py --through csynth")
-    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
-    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
-    # when the truth is a stale artifact. See rtl_staleness().
-    _require(rtl_staleness(ROOT, 'rf_blk_delay') is None, rtl_staleness(ROOT, 'rf_blk_delay') or "")
-    for f in RTL_FILES:
-        _require((xsi / f).is_file(), f"{xsi / f} — run rf_blk_delay_build.py --through codegen_dut")
-
-    # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
-    (xsi / f"rtl_{WRAPPER}.f").write_text(
-        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
-    # Force a clean elaboration of the WRAPPER: a cached snapshot proves nothing about this design.
-    shutil.rmtree(xsi / "xsim.dir" / WRAPPER, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (xsi / stale).unlink(missing_ok=True)
-    for od in ("rf_out", "rxresp", "txresp"):
-        shutil.rmtree(xsi / "vectors" / od, ignore_errors=True)
-    write_scenario(xsi)
-
-    r = subprocess.run(xsi_runner_cmd(WRAPPER, TB), cwd=str(xsi),
-                       capture_output=True, text=True, timeout=1800)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"the RTL run did not complete cleanly:\n{out[-3000:]}"
-    return _counters(out), out
+    """One RTL run, shared by the assertions below: the system run
+    (``examples/rf_blk_delay/rf_blk_delay_system_build.py``) -- the loop is the DUT (its wrapper:
+    the kernel and both buffers' ``bram_t2p``), the RFDC's ADC and DAC models span the cut.  The
+    counters are the ones the converter models write as a recording (``vectors/counters/``), read
+    under the names the old hand-written main printed; the text is the run's report."""
+    work = system_run(sysb.build_dag(work_dir=WORK), sysb.HERE, sysb.TOP)
+    assert compared_clean(work)
+    assert recorded_names(work) == ["counters", "rf_out", "rxresp", "txresp"]
+    return sysb.counters(work), (work / "report.json").read_text(encoding="utf-8")
 
 
 def _played() -> np.ndarray:
     """The samples the RF sink captured, as unsigned 16-bit words — the far side of the DAC."""
     from waveflow.simulation.rf_tb import read_rf_bundle
 
-    d = ROOT / "xsi" / "vectors" / "rf_out"
+    d = VECTORS / "rf_out"
     if not d.is_dir():
         return np.zeros(0, dtype=np.uint64)
     blocks = read_rf_bundle(d, 1, BLKSIZE)
@@ -176,7 +131,7 @@ def _resps(name: str, cls) -> list[tuple[int, ...]]:
     """
     from waveflow.utils.burst_io import read_burst_bundle
 
-    d = ROOT / "xsi" / "vectors" / name
+    d = VECTORS / name
     if not d.is_dir():
         return []
     flat = np.concatenate(read_burst_bundle(d)).astype(np.uint64)

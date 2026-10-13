@@ -55,6 +55,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <string>
+#include "xsi_bundle.h"
 #include "xsi_simobj.h"
 
 namespace wfbfm {
@@ -130,6 +132,15 @@ public:
     long transferred = 0;
     long dropped = 0;
     long starved = 0;
+
+    //: If set, ``post_sim`` writes the counters above as JSON to this path -- what a system run
+    //: gathers as a recording (``BurstBundle::write_counters``).  Empty: nothing written.
+    std::string counters_out;
+    void post_sim() override {
+        if (counters_out.empty()) return;
+        BurstBundle::write_counters(counters_out, {
+            {"transferred", transferred}, {"dropped", dropped}, {"starved", starved}});
+    }
 
 private:
     std::size_t depth_;

@@ -41,6 +41,9 @@ class OocSynth:
     wns_ns: float | None = None
     tool: str = ""
     seconds: float = 0.0
+    #: The synthesized netlist (``design.dcp``) when the run was asked to keep one -- what a link
+    #: step reads into the cell this module fills (``system_ooc``).  Empty otherwise.
+    checkpoint: str = ""
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -58,7 +61,63 @@ def clock_port(source: str | Path, module: str) -> str:
     raise ValueError(f"{module}: no ap_clk / clk / aclk input in {source}")
 
 
-def ooc_tcl(module: str, params: dict, sources: list[str], *, part: str) -> str:
+def module_header(source: str | Path, module: str) -> tuple[dict[str, str], list[tuple]]:
+    """*module*'s ANSI header in *source*: ``({parameter: default}, [(direction, kind, msb, lsb,
+    name)])`` -- the bounds as written (expressions over the parameters), ``None`` for a scalar."""
+    text = re.sub(r"//[^\n]*", "", Path(source).read_text(encoding="utf-8"))
+    m = re.search(rf"\bmodule\s+{re.escape(module)}\s*(?:#\s*\((?P<p>.*?)\))?\s*\((?P<q>.*?)\);",
+                  text, re.S)
+    if m is None:
+        raise ValueError(f"no ANSI header for module {module} in {source}")
+    params = {d.group(1): d.group(2).strip() for d in
+              re.finditer(r"parameter\s+(?:integer\s+)?(\w+)\s*=\s*([^,]+)", m.group("p") or "")}
+    ports, prev = [], ("input", "wire", None, None)
+    for piece in m.group("q").split(","):
+        d = re.match(r"\s*(?:(input|output|inout)\s+)?(?:(wire|reg)\s+)?"
+                     r"(?:\[([^:\]]+):([^\]]+)\]\s*)?(\w+)\s*$", piece)
+        if d is None:
+            raise ValueError(f"{module}: cannot read port declaration {piece.strip()!r}")
+        if d.group(1):
+            prev = (d.group(1), d.group(2) or "wire", d.group(3), d.group(4))
+        ports.append((*prev, d.group(5)))
+    return params, ports
+
+
+def _const(expr: str, params: dict) -> int:
+    """A port bound over the parameters, evaluated: ``DW-1`` with ``DW=64`` is 63."""
+    e = re.sub(r"\b[A-Za-z_]\w*\b", lambda m: str(params[m.group(0)]), expr)
+    if not re.fullmatch(r"[0-9+\-*/()<> ]+", e):
+        raise ValueError(f"port bound {expr!r} is not constant arithmetic")
+    return int(eval(e, {"__builtins__": {}}))        # noqa: S307 -- checked arithmetic only
+
+
+def tied_wrapper(module: str, params: dict, ties, source: str | Path) -> str:
+    """A top ``<module>_tied`` around *module* with *params*, its *ties* applied: a tied input
+    driven by its value, a tied output left open, every other port passed through -- the leaf as a
+    system that ties it off holds it, so out of context it synthesizes to what it does there."""
+    defaults, ports = module_header(source, module)
+    values = {**defaults, **{k: str(v) for k, v in params.items()}}
+    values = {k: _const(v, {}) if re.fullmatch(r"[0-9+\-*/()<> ]+", v) else v
+              for k, v in values.items()}
+    tied = dict(ties)
+    unknown = sorted(set(tied) - {p[4] for p in ports})
+    if unknown:
+        raise ValueError(f"{module}: no ports {unknown} to tie")
+    decls, conns = [], []
+    for direction, _kind, msb, lsb, name in ports:
+        rng = "" if msb is None else f"[{_const(msb, values)}:{_const(lsb, values)}] "
+        if name in tied:
+            conns.append(f".{name}({tied[name]})")
+            continue
+        decls.append(f"{direction} wire {rng}{name}")
+        conns.append(f".{name}({name})")
+    gen = ", ".join(f".{k}({v})" for k, v in params.items())
+    return (f"module {module}_tied (\n  " + ",\n  ".join(decls) + "\n);\n"
+            f"  {module} #({gen}) u (\n    " + ",\n    ".join(conns) + "\n  );\nendmodule\n")
+
+
+def ooc_tcl(module: str, params: dict, sources: list[str], *, part: str,
+            checkpoint: bool = False) -> str:
     gen = " ".join(f"-generic {k}={v}" for k, v in params.items())
     lines = [
         f"create_project -in_memory -part {part}",
@@ -70,6 +129,7 @@ def ooc_tcl(module: str, params: dict, sources: list[str], *, part: str) -> str:
         "report_utilization -file util_synth.rpt",
         "set s [get_timing_paths -quiet -max_paths 1 -nworst 1 -setup]",
         'if {[llength $s]} { puts "WF_WNS_synth [get_property SLACK $s]" }',
+        *(["write_checkpoint -force design.dcp"] if checkpoint else []),
         'puts "WF_SECONDS [expr {($t1 - $t0) / 1000.0}]"',
         'puts "WF_VERSION [version -short]"',
         'puts "WF_DONE 1"',
@@ -79,19 +139,23 @@ def ooc_tcl(module: str, params: dict, sources: list[str], *, part: str) -> str:
 
 def synth_rtl_ooc(module: str, params: dict, sources, *, part: str, period_ns: float,
                   out_dir: str | Path, identity=None, vivado: str | None = None,
-                  force: bool = False) -> OocSynth:
+                  force: bool = False, checkpoint: bool = False, ties=()) -> OocSynth:
     """Synthesize Verilog *module* with *params* from *sources* out of context on *part*, cached under
     ``out_dir/<key>_<part>_<period>ns/result.json`` (*identity* defaults to
-    :func:`~waveflow.calib.module_key.identify_rtl` of the three)."""
+    :func:`~waveflow.calib.module_key.identify_rtl` of the three).  *checkpoint* also keeps the
+    netlist (``design.dcp`` beside the result; :attr:`OocSynth.checkpoint`); a cached result without
+    one is re-run when one is asked for.  *ties* (``RtlInstance.ties``) synthesize the leaf inside
+    :func:`tied_wrapper`, as a system that ties those ports off holds it."""
     from waveflow import events
     from waveflow.calib.module_key import identify_rtl
     from waveflow.utils.vivado_report import parse_markers, parse_utilization
 
     sources = [Path(s) for s in sources]
-    ident = identity or identify_rtl(module, params, sources)
+    ident = identity or identify_rtl(module, params, sources, ties)
     work = Path(out_dir) / f"{ident.key}_{part}_{period_ns:g}ns"
     stamp = work / "result.json"
-    if stamp.exists() and not force:
+    dcp = work / "design.dcp"
+    if stamp.exists() and not force and (dcp.exists() or not checkpoint):
         return OocSynth(**json.loads(stamp.read_text(encoding="utf-8")))
     if vivado is None:
         from waveflow.toolchain.toolchain import find_vivado_path
@@ -105,7 +169,13 @@ def synth_rtl_ooc(module: str, params: dict, sources, *, part: str, period_ns: f
     (work / "clocks.xdc").write_text(f"create_clock -period {period_ns:g} -name {clk} "
                                      f"[get_ports {clk}]\n", encoding="utf-8")
     tcl = work / "synth_ooc.tcl"
-    tcl.write_text(ooc_tcl(module, params, [s.resolve().as_posix() for s in sources], part=part),
+    files, top, generics = [s.resolve().as_posix() for s in sources], module, params
+    if ties:
+        (work / "tied.v").write_text(tied_wrapper(module, params, ties, sources[0]),
+                                     encoding="utf-8")
+        files.append((work / "tied.v").resolve().as_posix())
+        top, generics = f"{module}_tied", {}
+    tcl.write_text(ooc_tcl(top, generics, files, part=part, checkpoint=checkpoint),
                    encoding="utf-8")
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
@@ -121,7 +191,8 @@ def synth_rtl_ooc(module: str, params: dict, sources, *, part: str, period_ns: f
                    counters=parse_utilization((work / "util_synth.rpt").read_text(encoding="utf-8")),
                    wns_ns=float(mk["WNS_synth"]) if mk.get("WNS_synth") else None,
                    tool=f"vivado {mk.get('VERSION', '')}".strip(),
-                   seconds=float(mk.get("SECONDS") or 0.0))
+                   seconds=float(mk.get("SECONDS") or 0.0),
+                   checkpoint=dcp.resolve().as_posix() if checkpoint else "")
     stamp.write_text(json.dumps(res.to_json(), indent=2), encoding="utf-8")
     return res
 
@@ -169,7 +240,8 @@ def measure_instances(spec, store, *, part: str, period_ns: float, out_dir: str 
                             store.append(rec, identity=i.identity)
                 else:
                     res = synth_rtl_ooc(i.module, i.params, i.sources, part=part,
-                                        period_ns=period_ns, out_dir=out_dir, identity=i.identity)
+                                        period_ns=period_ns, out_dir=out_dir, identity=i.identity,
+                                        ties=i.ties)
                     if store is not None:
                         store.append(ooc_record(i, res), identity=i.identity)
                 entry["status"] = "measured"
@@ -181,4 +253,5 @@ def measure_instances(spec, store, *, part: str, period_ns: float, out_dir: str 
     return out
 
 
-__all__ = ["OocSynth", "clock_port", "measure_instances", "ooc_record", "ooc_tcl", "synth_rtl_ooc"]
+__all__ = ["OocSynth", "clock_port", "measure_instances", "module_header", "ooc_record",
+           "ooc_tcl", "synth_rtl_ooc", "tied_wrapper"]

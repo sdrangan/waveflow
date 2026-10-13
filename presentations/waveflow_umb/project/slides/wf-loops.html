@@ -1,0 +1,54 @@
+<section id="wf-loops" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:16px">
+<svg aria-label="Forward build pipeline arrows" style="position:absolute;left:128px;top:250px;width:1664px;height:680px" width="1664" height="680" viewBox="128 250 1664 680"><polygon points="548,515 618,515 618,503 638,525 618,547 618,535 548,535" fill="#57068C"/><polygon points="918,515 988,515 988,503 1008,525 988,547 988,535 918,535" fill="#57068C"/><polygon points="1288,515 1358,515 1358,503 1378,525 1358,547 1358,535 1288,535" fill="#57068C"/></svg>
+<svg aria-label="Functional verification paths: simulator and RTL into verification, fixes back to the Python model" data-build-in="fade order 1" style="position:absolute;left:128px;top:250px;width:1664px;height:680px" width="1664" height="680" viewBox="128 250 1664 680"><defs><marker id="vb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#138A80"/></marker></defs><g fill="none" stroke="#138A80" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M826 600 V640 Q826 650 836 650 H975 Q985 650 985 660 V716" marker-end="url(#vb)"/><path d="M1460 600 V640 Q1460 650 1450 650 H1127 Q1117 650 1117 660 V716" marker-end="url(#vb)"/><path d="M967 876 V886 Q967 896 957 896 H329 Q319 896 319 886 V604" marker-end="url(#vb)"/></g></svg>
+<svg aria-label="Outer loop: RTL into calibration, calibration into the timing model, timing model into the simulator" data-build-in="fade order 2" style="position:absolute;left:128px;top:250px;width:1664px;height:680px" width="1664" height="680" viewBox="128 250 1664 680"><defs><marker id="ob" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#138A80"/></marker></defs><g fill="none" stroke="#138A80" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M1515 450 V332 Q1515 322 1505 322 H1398" marker-end="url(#ob)"/><path d="M1104 322 H954" marker-end="url(#ob)"/><path d="M775 390 V446" marker-end="url(#ob)"/></g></svg>
+<svg aria-label="Inner loop: simulator results into agentic exploration, which refines the Python model" data-build-in="fade order 3" style="position:absolute;left:128px;top:250px;width:1664px;height:680px" width="1664" height="680" viewBox="128 250 1664 680"><defs><marker id="ib" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#138A80"/></marker></defs><g fill="none" stroke="#138A80" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M720 600 V650 Q720 660 710 660 H563 Q553 660 553 670 V716" marker-end="url(#ib)"/><path d="M456 720 V630 Q456 620 446 620 H396 Q386 620 386 610 V604" marker-end="url(#ib)"/></g></svg>
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Waveflow · A platform to study reconfigurable, interconnected systems</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1;width:1000px">Waveflow: two loops around one model</h2>
+<div style="position:absolute;left:270px;top:450px;width:270px;height:150px;background:#EEE6F3;border:3px solid #57068C;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#57068C">Python model</p>
+<p style="font-size:24px;color:#423A4F">partitioned</p>
+<p style="font-size:24px;font-weight:600;color:#57068C">Built</p>
+</div>
+<div style="position:absolute;left:640px;top:450px;width:270px;height:150px;background:#EEE6F3;border:3px solid #57068C;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#57068C">SimPy DES</p>
+<p style="font-size:24px;color:#423A4F">bit-exact, timed</p>
+<p style="font-size:24px;font-weight:600;color:#57068C">Built</p>
+</div>
+<div style="position:absolute;left:1010px;top:450px;width:270px;height:150px;background:#EEE6F3;border:3px solid #57068C;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#57068C">HLS codegen</p>
+<p style="font-size:24px;color:#423A4F">typed interfaces</p>
+<p style="font-size:24px;font-weight:600;color:#57068C">Built</p>
+</div>
+<div style="position:absolute;left:1380px;top:450px;width:270px;height:150px;background:#EEE6F3;border:3px solid #57068C;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#57068C">RTL synth / sim</p>
+<p style="font-size:24px;color:#423A4F">cycle-exact</p>
+<p style="font-size:24px;font-weight:600;color:#57068C">Built</p>
+</div>
+<div data-build-in="fade order 1" style="position:absolute;left:878px;top:720px;width:340px;height:156px;background:#E1F3F1;border:3px solid #138A80;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#0C5E57;line-height:1.15">Functional verification</p>
+<p style="font-size:24px;color:#423A4F">golden vs. RTL</p>
+<p style="font-size:24px;font-weight:600;color:#0C5E57">Built · 177 RTL gates</p>
+</div>
+<div data-build-in="fade order 2" style="position:absolute;left:600px;top:266px;width:350px;height:124px;background:#FCFBFE;border:4px solid #B4570F;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#0C5E57">Timing model</p>
+<p style="font-size:24px;color:#423A4F">per-block delays</p>
+<p style="font-size:24px;font-weight:600;color:#8A430B">Partial</p>
+</div>
+<div data-build-in="fade order 2" style="position:absolute;left:1104px;top:266px;width:290px;height:124px;background:#FCFBFE;border:4px solid #B4570F;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#0C5E57">Calibration</p>
+<p style="font-size:24px;color:#423A4F">fit from RTL runs</p>
+<p style="font-size:24px;font-weight:600;color:#8A430B">Partial</p>
+</div>
+<p data-build-in="fade order 2" style="position:absolute;left:1532px;top:330px;width:260px;font-size:24px;line-height:1.3;color:#0C5E57;font-weight:600">Outer loop<br>slow, sparse</p>
+<div data-build-in="fade order 3" style="position:absolute;left:369px;top:720px;width:280px;height:150px;background:#F7F5FA;border:3px dashed #9A8DA8;border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:28px;font-weight:600;color:#0C5E57">Agentic DSE</p>
+<p style="font-size:24px;color:#423A4F">fast exploration</p>
+<p style="font-size:24px;font-weight:600;color:#5E5468">Not built</p>
+</div>
+<p data-build-in="fade order 3" style="position:absolute;left:128px;top:640px;width:180px;font-size:24px;line-height:1.3;color:#0C5E57;font-weight:600">Inner loop<br>fast</p>
+<p data-build-in="fade order 4" style="position:absolute;left:986px;top:396px;width:120px;height:44px;font-size:24px;font-weight:600;color:#57068C;background:#FCFBFE;border:3px solid #B4570F;border-radius:22px;text-align:center;line-height:1.2;padding:4px 0px 0px 0px">AI</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">github.com/sdrangan/waveflow · Border: solid = built, amber = partial, dashed = not built</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Walk it in four steps; in Present mode each step fades in. 1. The build pipeline: one Python model, simulated, turned into HLS, then RTL. 2. Functional verification: the simulator's output is the golden; RTL must match it bit for bit, and a mismatch is a model or codegen bug fixed in the Python. This is built, with 177 RTL gates. 3. The outer loop, slow and sparse: RTL runs calibrate a timing and resource model per block, which the simulator uses. Partial: a few kernels. 4. The inner loop, fast: explore designs in the simulator alone. Not built. The AI chip marks agent-assisted codegen: the tooling exists, its value is unmeasured.</aside>
+</section>

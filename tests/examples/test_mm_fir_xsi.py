@@ -190,3 +190,17 @@ def test_mm_fir_rtl_cycles(fir_run):
 EXPECTED_CYCLES = {"per_view": 618, "one_front": 611}
 #: pysim 635 / 635 -- +2.8% / +3.9% -- once it charges the loop body's measured per-packet costs.
 PYSIM_TOLERANCE = 0.05
+
+
+@pytest.mark.xsi
+def test_mm_fir_device_elaborates_alone(fir_run):
+    """``plans/system_model.md`` S5: the FIR's device, rendered as a module of its own, compiles and
+    elaborates with nothing around it (its leaves and the kernel's csynth Verilog only)."""
+    from examples.mm_fir.mm_fir_build import system
+    from waveflow.build.system_top import SystemTopSpec
+    from waveflow.build.system_xsi import elaborate_sub_top
+
+    topology, _run = fir_run
+    spec = SystemTopSpec.from_system(system(topology), top="mm_fir_top")
+    work = elaborate_sub_top(spec, "fir", root=HERE, work_dir=WORK / f"sub_tops_{topology}")
+    assert (work / "xsim.dir" / "mm_fir_top_fir_elab").is_dir()

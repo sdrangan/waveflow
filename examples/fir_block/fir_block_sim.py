@@ -35,6 +35,7 @@ from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.fixpoint import fixed_sum, from_real, mult, quantize
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
@@ -327,6 +328,29 @@ class FirBlockSim:
         print(f"[fir_block] program={tb._program} blk={tb.blk} ntap={int(tb.ntap)} "
               f"W={int(tb.samp_w)} blocks_ok={len(self.expected)} completions={len(bursts)}")
         return tb.dut
+
+
+@dataclass
+class FirBlockSystem(GraphSystem):
+    """fir_block as a **system** (``plans/system_model.md`` S3e): the :class:`FirBlockTB` graph, the
+    cut the :class:`FirBlock` kernel alone.  The crossbar that models the two ``m_axi`` bundles'
+    contention in pysim is testbench, so both bundles are top ports facing the memory model."""
+
+    program: tuple = DEFAULT_PROGRAM
+    blk: int = DEFAULT_BLK
+
+    def graph(self) -> FirBlockTB:
+        self.runner = FirBlockSim(program=tuple(self.program), blk=int(self.blk), name="xsi_tb")
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        self.runner.write_scenario(root)
+
+    def check(self) -> FirBlock:
+        return self.runner.check()
 
 
 def run_and_check() -> bool:

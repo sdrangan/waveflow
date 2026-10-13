@@ -1,0 +1,19 @@
+{
+  "_note": "Slides reference images as /_blob/<id>, which resolve only inside the published deck. This maps each id to its source file here, so a new deck can re-upload them.",
+  "30a5ad4054de80e69a0e0ff5bb8ea116": "coverage_snr_maps.png",
+  "c7f1ee1721a16043c7cacceca2aca142": "capacity_rate_cdf.png",
+  "392319307d947c5279e6589ab33be611": "satellite_interference.png",
+  "906d96e1b7933c0634b89af2fa5d5ec1": "nulling_beam_pattern.png",
+  "a6a4b74a92aad7c1f6758ac48f38e647": "multiband_sensing_testbed.png",
+  "b08e6fbe442180b9bf445e7cb1c6614c": "piradio_fr3_sdr.png",
+  "0f0f40f56593c960e139eca69194d3f4": "oran_oai_setup.png",
+  "484a273a023892f3d067942f5c887fcc": "umb_global_map.png",
+  "7d13241255e66e78ce10fd42ff6e3823": "rfic_rx_layout.png",
+  "6190099ae193a2afecb3e84957450e5d": "rfic_pa_layouts.png",
+  "7446914e5af3eb2c8eb2d9d24bd07008": "magnetar_overview.png",
+  "a78fe36ecb758961445027da11199006": "nyu_wireless_white.png",
+  "f9b1959454cffb1de7e0b2b971324f9e": "nyu_wireless_violet.png",
+  "a1f1003e2b7baddf9eab82454526e553": "nyu_wireless_affiliates.png",
+  "7b1b1ef48233b9c2c0d12f258820e929": "nsf_logo.png",
+  "a0c102fb0d21c5511560ec42983cbe58": "ntia_logo.jpg"
+}

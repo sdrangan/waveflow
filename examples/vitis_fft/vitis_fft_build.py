@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 from waveflow.vitis_l1 import rtl
-from waveflow.vitis_l1.rtl import TB, TOP, XSI_DIR  # noqa: F401  (re-exported for the gate)
+from waveflow.vitis_l1.rtl import TOP  # noqa: F401  (re-exported for the gate)
 
 from examples.vitis_fft.vitis_fft import L
 
@@ -38,7 +38,7 @@ def main() -> None:
     ap.add_argument("--no-synth", action="store_true")
     a = ap.parse_args()
     top = generate()
-    print(f"generated gen/{top}.cpp, gen/{top}.tcl and {XSI_DIR}/")
+    print(f"generated gen/{top}.cpp and gen/{top}.tcl")
     if a.no_synth:
         return
     synth()

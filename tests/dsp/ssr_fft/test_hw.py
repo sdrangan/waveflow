@@ -86,8 +86,9 @@ def test_generate_writes_the_build_tree(tmp_path):
     for name in ("ssr_fft_tasks.h", "ssr_fft_L64_16_2_18_2.h", "ssr_fft_L64_16_2_18_2_tasks.h",
                  "complex__fixed16_2_array_utils.h", "complex__fixed23_9_array_utils.h"):
         assert (inc / name).exists(), name
-    for name in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp"):
-        assert (tmp_path / "xsi" / name).exists(), name
+    # The RTL run is the system flow's (rtl.run_xsi): generate records the scenario it builds.
+    from waveflow.dsp.ssr_fft.rtl import SCENARIO_JSON
+    assert (tmp_path / SCENARIO_JSON).is_file()
 
 
 #: XSI, RFSoC 4x2 at 250 MHz, ping-pong reorder, 8 frames back to back (2026-10-06): the first
@@ -106,3 +107,32 @@ def test_composite_pysim_tracks_the_rtl(tmp_path, length, lanes):
     cyc = pysim_frame_cycles(tb)
     assert abs(cyc[0] - RTL_FIRST_FRAME[(length, lanes)]) <= 5, cyc
     assert np.allclose(np.diff(cyc), length // 4), cyc
+
+
+def _observed(tb):
+    """Everything a flat pysim must reproduce: each sink's frames (when, in cycles, and what)."""
+    p = tb.clk.period
+    return [([round(float(t) / p, 6) for t in s.stamps], [np.asarray(w).tolist() for w in s.words])
+            for s in tb.sinks]
+
+
+@pytest.mark.parametrize("gaps", ((), (0, 37, 0, 120, 5)))
+@pytest.mark.parametrize("inverse", (False, True))
+@pytest.mark.parametrize("lanes", (False, True))
+@pytest.mark.parametrize("length", (16, 64))
+def test_flat_pysim_is_the_task_chain(tmp_path, length, lanes, inverse, gaps):
+    """``pysim="flat"`` -- one process for the FFT -- reproduces the per-task chain's frames: the
+    same bits at the same cycles, back to back and with idle gaps between frames."""
+    kw = dict(length=length, n_frames=6, reorder="pingpong", lanes=lanes, inverse=inverse,
+              burst_gaps=list(gaps))
+    tasks = run_pysim(tmp_path / "tasks", pysim="tasks", **kw)
+    flat = run_pysim(tmp_path / "flat", pysim="flat", **kw)
+    assert _observed(flat) == _observed(tasks)
+    assert len(flat.dut.tasks) == len(tasks.dut.tasks)       # the children still exist, passive
+
+
+def test_flat_pysim_refuses_the_sob_reorder():
+    """The stream-of-blocks reader is slower than its input (L/R + 5 a frame), so frames queue
+    inside the chain; the flat model would not reproduce that queue, and says so."""
+    with pytest.raises(ValueError, match="ping-pong reorder only"):
+        SsrFft(name="f", sim=Simulation(), L=16, reorder="sob", pysim="flat")

@@ -24,7 +24,9 @@ The flow forks only at the final RTL-exercising rung, based on top execution mod
 | composite free-running task-network top (`ap_ctrl_none`) | [XSI + BFM](./xsi.md) |
 | a memory-mapped system: kernels, adaptors, crossbar, host | [XSI system simulation](./xsi_system.md) |
 
-That fork is two realizations of one flow, not two separate flows.
+That fork is two realizations of one flow, not two separate flows. A system then goes toward a
+board as IP, one per device, wired in a block design ([IP packaging](./ipi.md)): a realization,
+not a verification rung.
 
 ## Why it's useful
 
@@ -43,9 +45,13 @@ That fork is two realizations of one flow, not two separate flows.
 - [Python Simulation Pattern](./python.md) — recipe for writing a step that runs a SimPy simulation and produces in-memory or file artifacts.
 - [Vitis Pattern](./vitis.md) — recipe for invoking Vitis HLS C-sim / C-synth and parsing the resulting reports.
 - [Authoring `run.tcl`](./tcl.md) — the Vitis script shared by both single-kernel and composite flows.
-- [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
+- [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end;
+  also `SvSimStep`, for a hand-written SystemVerilog testbench with no HLS in it.
 - [XSI System Simulation](./xsi_system.md) — a whole memory-mapped system at RTL, from the pysim
   system object: the generated top, the host as a hooked module, and the trace conformance gate.
+- [IP Packaging and Block Design](./ipi.md) — a system packaged as Vivado IP, one per device,
+  then wired in a validated block design from the same spec as the XSI system top: the two steps,
+  the interfaces each IP declares, the address map, and the gates.
 - [Software Threads](./sw_threads.md) — the host as threads, with one API in Python (SimPy) and C++
   (fibers): the primitives side by side, writing a host's C++ twin, and the gate that checks they agree.
 - [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
@@ -55,6 +61,16 @@ That fork is two realizations of one flow, not two separate flows.
 - [Timing Events](./timing_events.md) — where a build's wall clock goes: every step, nested step,
   toolchain run, XSI phase and MCP call as a timing span; `--timing`, `analyze_events`, and what
   each fidelity costs.
+
+Steps documented outside this section:
+
+- [System resources](../resource/systems.md) — the steps `add_system_steps` adds after the RTL:
+  `kernel_resources`, `system_synth` (`SystemSynthStep`, one Vivado synthesis of the system top),
+  `leaf_resources` (`LeafResourcesStep`) and `resource_report` (`ResourceReportStep`).
+- [A module realized as Verilog](../comp_codegen/rtl_module.md#the-two-build-steps) — `GenRtlStep`
+  and `GenWrapperStep`, for a kernel beside hand-written RTL.
+- [Code Generation Steps](./codegen.md#framework-task-body-headers) — the steps that copy the
+  framework's hand-written task bodies (`MemStreamStep`, the RF buffer steps, `MemLockStep`).
 
 ## Quick example
 

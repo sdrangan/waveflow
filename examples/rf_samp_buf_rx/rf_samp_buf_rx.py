@@ -27,6 +27,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.hw.rf_samp_buf import (  # noqa: E402
     BUF_DEPTH,
@@ -288,6 +289,25 @@ class RfSampBufRxTB(FreeRunMod):
         resp_axis.bind("master", self.dut.s_resp)
         resp_axis.bind("slave", self.resp_sink.stream_ep)
         self.add_if(resp_axis)
+
+
+@dataclass
+class RfSampBufRxSystem(GraphSystem):
+    """The capture buffer as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfSampBufRxTB` graph, the cut :class:`RfSampBufRx` alone -- its ``bram_t2p`` inside it,
+    so the system top instantiates its **wrapper**.  The RFDC is testbench, its ADC model spanning
+    the cut."""
+
+    n_cycles: int = 40000
+
+    def graph(self) -> RfSampBufRxTB:
+        return RfSampBufRxTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, samp_per_word=int(self.tb.word.samp_per_word))
 
 
 def write_scenario(root, samp_per_word: int = 1, cmds=None) -> None:

@@ -90,6 +90,7 @@ to report.
 | `word` | plain field | 4 × 16-bit | the sample geometry, as a type — see above |
 | `full_scale` | plain field | 1.0 | the amplitude reference quantization is relative to |
 | `t0_rx`, `t0_tx` | plain field | 0.0 | when each tile's sample counter starts |
+| `allow_xz` | `DynParam[bool]` | `False` | XSI only: the DAC model accepts a word with undriven (X/Z) bits instead of stopping the run -- for a design whose startup transient plays memory it has not written yet |
 
 **`word` is a plain field for a mechanical reason, not a judgement.** `HwModule.__post_init__` wraps
 every `HwParam` value in `HwParamValue(int(value))`, so a *type*-valued parameter cannot be one.

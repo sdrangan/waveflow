@@ -42,8 +42,9 @@ StreamDriver x 4  ->  VitisFft (L, R = 4)  ->  StreamSink x 4
 ```
 
 The testbench is a **graph** (`VitisFftTB`, in `waveflow/vitis_l1/testbench.py`): the same object runs
-the pysim and, through `tb_top_spec`, generates the XSI harness that drives the RTL. Both read their
-stimulus from the same burst bundles and are checked against the same golden.
+the pysim and, cut at the FFT by `VitisFftSystem` (`waveflow/vitis_l1/rtl.py`), is the system whose
+derived top and harness drive the RTL. Both read their stimulus from the same burst bundles and are
+checked against the same golden.
 
 | | |
 |---|---|

@@ -60,7 +60,11 @@ python -m examples.ssr_fft.ssr_fft_build                 # generate, then csynth
 pytest tests/dsp/ssr_fft/test_xsi.py -m xsi              # the RTL gates (needs Vivado)
 python -m examples.ssr_fft.ssr_fft_measure               # measure every length at RTL -> measured.json
 python -m examples.ssr_fft.ssr_fft_figures               # redraw this example's figures
+python -m examples.ssr_fft.ssr_fft_runtime --rtl         # untimed vs pysim vs RTL, per frame
 ```
+
+What each of these costs per frame, against an untimed model and the RTL, is measured in
+[Evaluation: the SSR FFT](../../evaluation/sim_speed/fft.md).
 
 ## The pages
 

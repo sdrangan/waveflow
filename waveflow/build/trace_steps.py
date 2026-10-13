@@ -173,6 +173,19 @@ endmodule
 '''
 
 
+def render_vcd_dumper(top: str, scopes: "list[str] | None" = None) -> str:
+    """``vcd_dumper_<top>.v``: the second top whose ``$dumpvars`` writes ``<top>_trace.vcd``.
+
+    *scopes* are the hierarchical scopes dumped, each at level 1 (its own nets); the default is
+    *top* itself.  A system top names the scopes the waveform claims read -- a wrapper's, inside a
+    sub-top -- because its own level-1 nets are only the wiring between sub-tops."""
+    text = _DUMPER_TEMPLATE.format(top=top)
+    if scopes is None:
+        return text
+    dumps = "".join(f"        $dumpvars(1, {s});\n" for s in scopes)
+    return text.replace(f"        $dumpvars(1, {top});\n", dumps)
+
+
 @dataclass(kw_only=True)
 class AddVcdTopStep(BuildStep):
     """Write ``vcd_dumper_<top>.v`` -- the second elaborated top that dumps the waveform.

@@ -396,16 +396,12 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         if self.issue_cycles:
             yield self.timeout(float(self.issue_cycles) / self.interface.clk.freq)
         if self.max_outstanding is None:
-            proc = self.process(transfer)
-            yield proc
-            return proc.value
+            return (yield from transfer)
         if direction not in self._slots:
             self._slots[direction] = simpy.Resource(self.env, capacity=int(self.max_outstanding))
         with self._slots[direction].request() as req:
             yield req
-            proc = self.process(transfer)
-            yield proc
-            return proc.value
+            return (yield from transfer)
 
     def _check_bound(self) -> None:
         if self.interface is None:
@@ -761,20 +757,42 @@ class _DirectionalMMIFMaster(MMIFMaster):
     #: ``'R'`` or ``'W'`` — set by the concrete subclass.
     port_dir: ClassVar[str] = 'RW'
 
-    def __getattribute__(self, name: str):
-        attr = super().__getattribute__(name)
-        if name.startswith('_'):
-            return attr
-        want = object.__getattribute__(self, '__class__').port_dir
-        got = _classify_port_dir(name, attr)
-        if got is not None and got != want:
-            raise AttributeError(
-                f"{type(self).__name__}.{name} is a "
-                f"{'read' if got == 'R' else 'write'} operation, but this endpoint declares "
-                f"port_dir={want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
-                f"the direction is the type, so codegen can lower it without being told separately."
-            )
-        return attr
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Refuse the wrong direction's methods once, when the class is made.
+
+        Each method the classifier says belongs to the other direction is replaced on the class by a
+        :class:`_WrongDirection` descriptor, so reading it from an instance raises.  Checking in
+        ``__getattribute__`` instead ran on every attribute access of every transfer -- a measurable
+        share of a memory transaction's pysim cost -- to answer a question fixed by the class."""
+        super().__init_subclass__(**kwargs)
+        want = cls.port_dir
+        for name in dir(cls):
+            if name.startswith('_'):
+                continue
+            attr = getattr(cls, name)
+            if isinstance(attr, _WrongDirection):
+                continue
+            got = _classify_port_dir(name, attr)
+            if got is not None and got != want:
+                setattr(cls, name, _WrongDirection(name, got, want, attr))
+
+
+class _WrongDirection:
+    """A method a directional master's type forbids (see :class:`_DirectionalMMIFMaster`): reading it
+    from an instance raises ``AttributeError``; from the class, it is the method (for introspection)."""
+
+    def __init__(self, name: str, got: str, want: str, func) -> None:
+        self.name, self.got, self.want, self.func = name, got, want, func
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self.func
+        raise AttributeError(
+            f"{type(obj).__name__}.{self.name} is a "
+            f"{'read' if self.got == 'R' else 'write'} operation, but this endpoint declares "
+            f"port_dir={self.want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
+            f"the direction is the type, so codegen can lower it without being told separately."
+        )
 
 
 class MMIFReadMaster(_DirectionalMMIFMaster):
@@ -1169,6 +1187,15 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     # Bind
     # ------------------------------------------------------------------
 
+    def rtl_config(self, name: str, *, id_width: int = 1):
+        """The RTL realization of this crossbar inside a DUT (``plans/system_model.md`` D3): AMD's
+        ``axi_crossbar`` IP, configured from this crossbar's ports and the address ranges bound to
+        its slaves (:meth:`~waveflow.build.axi_xbar.AxiXbarConfig.from_crossbar`; addresses must be
+        assigned first).  *name* is the IP's module name; *id_width* the AXI ID bits it routes."""
+        from waveflow.build.axi_xbar import AxiXbarConfig
+
+        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width)
+
     def bind(
         self,
         ep_name: str,
@@ -1271,7 +1298,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if dly > 0:
                     yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
 
         elif protocol == AXIMMProtocol.FULL:
             # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
@@ -1288,7 +1315,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             with slave_ep.write_channel.request() as req:
                 yield req
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
 
         else:  # LITE — one word per transaction
             word_step = self._word_step()
@@ -1301,12 +1328,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.write_channel.request() as req:
                     yield req
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(
-                            slave_ep.rx_write_proc(
-                                words[i : i + 1],
-                                local_addr + i * word_step,
-                            )
-                        )
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step, )
 
         # the watched word may have changed — wake any pollers on this slave
         self._notify_write(ep_name)
@@ -1331,9 +1353,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if req_dly > 0:
                     yield self.timeout(req_dly)
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
                 ret_dly = (
@@ -1351,9 +1371,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             with slave_ep.read_channel.request() as req:
                 yield req
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
 
@@ -1378,11 +1396,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.read_channel.request() as req:
                     yield req
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step)
-                        )
-                        yield proc
-                        result[i] = proc.value[0]
+                        result[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
 
             return result
 
@@ -1416,9 +1430,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if req_dly > 0:
                     yield self.timeout(req_dly)
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
                 ret_dly = (
@@ -1434,10 +1446,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step))
-                        yield proc
-                        words[i] = proc.value[0]
+                        words[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
             # Occupy the channel out to the full span (anchored).
             t0 = anchor
             t1 = max(anchor + span, self.env.now)
@@ -1480,7 +1489,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if dly > 0:
                     yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
             else:  # LITE — one word per transaction
                 word_step = self._word_step()
                 for i in range(nwords):
@@ -1490,8 +1499,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(slave_ep.rx_write_proc(
-                            words[i : i + 1], local_addr + i * word_step))
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step)
             # the watched word may have changed — wake any pollers on this slave
             self._notify_write(ep_name)
             # Occupy the channel out to the full span (anchored); remember the busy-until so the
@@ -1603,7 +1611,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.write_channel.request() as req:
             yield req
             if slave_ep.rx_write_proc is not None:
-                yield self.env.process(slave_ep.rx_write_proc(words, addr))
+                yield from slave_ep.rx_write_proc(words, addr)
         # wake any pollers waiting on this slave (point-to-point: single bus)
         self._notify_write('slave')
 
@@ -1620,9 +1628,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.read_channel.request() as req:
             yield req
             if slave_ep.rx_read_proc is not None:
-                proc = self.env.process(slave_ep.rx_read_proc(nwords, addr))
-                yield proc
-                words = proc.value
+                words = yield from slave_ep.rx_read_proc(nwords, addr)
             else:
                 words = np.zeros(nwords, dtype=dtype)
 

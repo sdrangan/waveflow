@@ -187,9 +187,9 @@ hooks live in their own `.cpp` would need each added here.)
 python -m examples.fir_block.fir_block_build --through csynth
 ```
 
-That step also re-emits `xsi/rtl_fir_block.f` from the RTL that was just built, so the file list can
-never name a stale design — the failure mode being a `.f` that no longer matches plus a cached
-`xsimk.dll`, which makes an XSI run go green while proving nothing.
+That step also stamps the sources the RTL was built from. The RTL run (the system flow's) checks
+the stamp against the sources on disk and refuses RTL built from anything else, so it can never grade
+a stale design.
 
 ## Where to next
 

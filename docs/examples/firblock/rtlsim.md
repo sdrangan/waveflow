@@ -6,33 +6,29 @@ summary: "The rung that answers what nothing earlier can: does the state actuall
 ---
 # RTL simulation — does the state actually survive?
 
-The generated BFM harness drives the synthesized RTL through real handshakes, one clock at a time, in
-Vivado `xsim`. For this design it answers a question nothing earlier in the flow can.
+The system flow drives the synthesized RTL through real handshakes, one clock at a time, in Vivado
+`xsim`. For this design it answers a question nothing earlier in the flow can.
 
 C-synthesis can say the emitted `static` compiles and infers a memory. It **cannot** say the value
 survives between firings: a static swept by `ap_rst` would csynth identically and then quietly zero
 itself every job, and the design would look right and be wrong. Only a real RTL run can tell.
 
-And that is not the only thing this rung is for. A free-running `ap_ctrl_none` composite has no
-scheduler, so a token-count bug does not produce a wrong answer — it **hangs**, or silently drops a
+That is not the only thing this rung is for. A free-running `ap_ctrl_none` composite has no
+scheduler, so a token-count bug does not produce a wrong answer: it **hangs**, or silently drops a
 job. The [pysim](./testbench.md) can miss that class entirely; the RTL cannot.
 
 ## Running it
 
-Toolchain-gated: it needs Vitis HLS to C-synthesize the top, plus Vivado `xsim` and a MinGW `g++` to
-elaborate and drive it.
+It needs Vitis HLS to C-synthesize the top, and Vivado `xsim` with a C++ compiler to run it:
 
 ```bash
 python -m examples.fir_block.fir_block_build --through csynth   # produces the RTL
-pytest -m xsi tests/examples/test_fir_block_xsi.py              # elaborates, runs, checks
+python -m examples.fir_block.fir_block_system_build             # the system flow, end to end
+pytest -m xsi tests/examples/test_fir_block_xsi.py              # the gate
 ```
 
-The gate skips **loudly** when the RTL or the XSI workspace is absent, rather than passing on nothing:
-
-```python
-if not (ROOT / "fir_block_proj").is_dir():
-    pytest.skip(f"no csynth RTL at {ROOT / 'fir_block_proj'} — run fir_block.tcl first")
-```
+The gate runs the system flow with `synth="check"`: a missing or stale csynth fails the run and
+names it, rather than passing on RTL the gate did not produce.
 
 To check the other realization, rebuild and rerun:
 
@@ -41,68 +37,56 @@ python -m examples.fir_block.fir_block_build --through csynth --unroll-lane
 pytest -m xsi tests/examples/test_fir_block_xsi.py
 ```
 
-## The harness comes from the testbench graph
+## The system: the testbench graph, cut at the kernel
 
-The [`FirBlockTB`](./testbench.md#the-testbench-is-a-graph) composite is walkable, so the same
-structure that runs in pysim also generates the C++ harness:
+The [`FirBlockTB`](./testbench.md#the-testbench-is-a-graph) graph is what pysim runs. For the RTL it
+is wrapped in a system that states the **cut**: the `FirBlock` kernel is the design under test, and
+everything else is testbench. That includes the driver, the sink, the memory, and the crossbar that
+models the two `m_axi` bundles' contention in pysim.
 
 ```python
-tb = make_xsi_tb(...)                       # the FirBlockTB graph
-spec = tb_top_spec(tb)
-(xsi / "fir_block_tb_harness.h").write_text(render_tb_harness(spec))
-(xsi / "fir_block_bfm_tb.cpp").write_text(render_tb_main(spec, tb.n_cycles))
-write_xsi_bundles(xsi, ...)                 # the scenario, from the same writer pysim uses
+@dataclass
+class FirBlockSystem(GraphSystem):                 # examples/fir_block/fir_block_sim.py
+    program: tuple = DEFAULT_PROGRAM
+    blk: int = DEFAULT_BLK
+
+    def graph(self) -> FirBlockTB:                 # the testbench graph pysim runs
+        self.runner = FirBlockSim(program=tuple(self.program), blk=int(self.blk), name="xsi_tb")
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:              # the cut: the kernel alone
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:          # the scenario: the one writer pysim uses
+        self.runner.write_scenario(root)
+
+    def check(self) -> FirBlock:                   # the golden, on a pysim run
+        return self.runner.check()
 ```
+
+From that, the system flow derives the rest:
+
+- **the system top**: the csynth'd kernel inside it, with `s_cmd` / `s_done` as stream ports and the
+  two `m_axi` bundles as AXI4 master groups;
+- **the harness**: each testbench participant's BFM model bound to those ports, so the stream driver
+  and sink, and a flat memory behind both bundles;
+- **the scenario**: `vectors/s_cmd`, `vectors/mem_in`, `vectors/golden`, and the cycle bound in
+  `vectors/run.json`.
 
 That is the point of building the testbench as a graph rather than a script: **one statement, two
-backends.** pysim builds the graph and runs it; the XSI generator builds the same graph and emits a BFM
-harness from it. They cannot end up describing different tests, because there is only one description.
+backends.** The pysim run and the RTL run are walks of the same graph, so they cannot describe
+different tests. The [mem_copy system page](../memcpy/system.md) walks the same derivation in detail.
 
-Three pieces are emitted:
-
-- **`fir_block_vectors.h`** — the scenario constants read off the graph: `MEM_DW`, the arena size,
-  `NUM_CMDS`, and `DONE_WORDS`. The per-job offsets are *not* baked here; they ride the `s_cmd`
-  bundle, so the RTL stays scenario-independent.
-- **`fir_block_tb_harness.h`** — the BFM harness, which `#include`s the DUT's `fir_block_ports.h`
-  (hence codegen order: DUT first).
-- **`fir_block_bfm_tb.cpp`** — a two-line `main`.
-
-The BFM drives the boundary: the `s_cmd` command stream in, the two `m_axi` bundles against a flat
-memory model, and `s_done` out. Every value crossing the boundary is a burst bundle written *before*
-the run (`vectors/s_cmd`, `vectors/mem_in`, `vectors/golden`) and read *back* after
-(`vectors/out`, `vectors/s_done`).
-
-## Under the hood: `run.bat`
-
-Four steps — the standard XSI recipe:
-
-1. **`xvlog`** compiles the C-synthesized Verilog named by `rtl_fir_block.f`;
-2. **`xelab -dll`** elaborates the top into `xsim.dir/fir_block/xsimk.dll`;
-3. **`g++`** builds the BFM harness `main` against that DLL;
-4. **`xsim`** runs the executable, stepping the clock for a fixed bound.
-
-The file list is regenerated by the `csynth` step from the RTL actually on disk. That is not
-housekeeping: a stale `.f` plus a cached `xsimk.dll` is precisely how an XSI run goes green while
-proving nothing — `xvlog` compiles a file set that no longer matches the design, and `xelab` reuses
-what it already built.
-
-The test clears the previous run's dumps for the same reason:
-
-```python
-generate_tb(ROOT)
-for name in ("out", "s_done"):
-    d = XSI / "vectors" / name
-    if d.exists():
-        for f in d.iterdir():
-            f.unlink()
-```
-
-Without that, a broken build passes on last run's output.
+Each run starts from a fresh copy of the scenario, so a broken build cannot pass on the last run's
+output. A cached elaboration is reused only if its content stamp matches the RTL just written: a
+stale file list plus a cached simulation library is how an XSI run goes green while proving nothing.
+After the run, `compare` checks that the sink's completions and the memory's final arena hold the
+same words at RTL as in pysim.
 
 ## What the gate asserts
 
-Exit code zero proves nothing here, so `check_xsi_outputs` reads the dumped bundles and checks two
-things:
+Exit code zero proves nothing here, so `check_xsi_outputs` reads the RTL run's recordings (the
+memory's arena in `vectors/out`, the sink's completions in `vectors/s_done`) and checks two things:
 
 ```python
 for j, step in enumerate(s for s in tb._steps if s["op"] == FirOp.FILTER):
@@ -123,13 +107,6 @@ both flavours of state survived in real hardware, across a mid-stream tap reload
 
 **One completion per command**, `LOAD_TAPS` included. Without this a dropped no-output job would look
 like a pass: the blocks that *did* run would still match.
-
-The test also refuses to proceed if the run produced no dump at all:
-
-```python
-assert (XSI / "vectors" / "out").exists(), (
-    f"the XSI run produced no memory dump — it did not complete\n{proc.stdout[-2000:]}")
-```
 
 ## What it found
 

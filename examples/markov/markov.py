@@ -59,6 +59,7 @@ from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
 from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
 from waveflow.simulation.simulation import Simulation
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.sw import SwHost, SwSemaphore
 
 DW = 64
@@ -440,7 +441,7 @@ class MarkovHost(SwHost):
 
 
 @dataclass
-class MarkovSystem:
+class MarkovSystem(HwSystem):
     """Everything wired.  ``link="mm"``: host, generator writer, chain credit writer and chain memory
     master on one crossbar, with the two kernels' views and the memory as slaves.  ``link="direct"``:
     a ``CreditStreamIF`` between the kernels and plain streams to the host."""
@@ -490,6 +491,8 @@ class MarkovSystem:
         self.mem_link = DirectMMIF(name="k_mem", sim=sim, clk=self.clk)
         self.mem_link.bind("master", self.chain.m_mem)
         self.mem_link.bind("slave", self.mem.s_mm)
+        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen, self.chain, self.mem],
+                                 ifs=[self.u_link, self.mem_link])
 
     def _wire_mm(self) -> None:
         sim, clk, host = self.sim, self.clk, self.host
@@ -527,6 +530,13 @@ class MarkovSystem:
         host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
             "qresp", irq=host.irq["qresp"])
         host.mem_bus_base = MEM_BASE
+        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen_dev, self.chain_dev, self.mem],
+                                 ifs=[self.xbar, self.u_link])
+
+    def dut(self) -> DutTop:
+        """The default DUT: the two kernels' devices and the shared memory, with the crossbar and
+        the routed credit stream between them."""
+        return self.dut_top
 
     def run(self) -> dict[int, dict]:
         self.sim.run_sim(until=self.host.done)

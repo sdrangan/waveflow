@@ -140,6 +140,42 @@ class ComplexField(DataField):
         out["re"], out["im"] = rf.val, imf.val
         return out[()]
 
+    # --- vectorized flat bits: re in the low half, im in the high, by the inner's hook ----------
+    @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        inner = cls.inner_type
+        bw = inner.get_bitwidth()
+        if 2 * bw > 64:
+            return None
+        if cls.kind == "float":
+            re, im = values.real, values.imag
+        elif values.dtype.names:
+            re, im = values["re"], values["im"]
+        else:
+            return None
+        re_b, im_b = inner._flat_bits_numpy(re), inner._flat_bits_numpy(im)
+        if re_b is None or im_b is None:
+            return None
+        return re_b | (im_b << np.uint64(bw))
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        inner = cls.inner_type
+        bw = inner.get_bitwidth()
+        if 2 * bw > 64:
+            return None
+        re = inner._from_flat_bits_numpy(bits & np.uint64((1 << bw) - 1))
+        im = inner._from_flat_bits_numpy(bits >> np.uint64(bw))
+        if re is None or im is None:
+            return None
+        if cls.kind == "float":
+            out = np.empty(bits.shape, dtype=cls._np_complex_type())
+            out.real, out.imag = re, im
+            return out
+        out = np.empty(bits.shape, dtype=complex_dtype(cls.inner_format()))
+        out["re"], out["im"] = re, im
+        return out
+
     # --- interleaved I/Q (de)serialization, composing the inner field ---------
     def _inner_fields(self) -> tuple[DataField, DataField]:
         cls = type(self)

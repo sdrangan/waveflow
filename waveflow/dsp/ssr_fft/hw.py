@@ -89,6 +89,12 @@ class SsrTask(FreeRunMod):
     #: Which of this task's ports are the FFT's boundary: those carry frames as TLAST-delimited
     #: bursts in pysim, as the testbench's drivers and sinks do.
     boundary_ports: tuple[str, ...] = ()
+    #: Run no process: the parent's flat pysim (``SsrFft(pysim="flat")``) does this task's work.
+    #: The task still exists -- its ports, its wrapper, its place in the generated top.
+    passive: bool = False
+
+    def run_proc(self):
+        return None if self.passive else super().run_proc()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -186,31 +192,45 @@ class SsrLanes(SsrTask):
     """The boundary: ``R`` sample lanes joined into words (``lanes_in``), or split (``lanes_out``)."""
 
     def run_iter(self):
-        from waveflow.vitis_l1.hw import _pack_complex, _unpack_complex
-        n, R = self.geo.n_words, self.geo.R
+        n = self.geo.n_words
         yield self._slots.get(1)
         if self.task.kind == "lanes_in":
-            got: dict = {}
-
-            def lane(j):
-                got[j] = yield from self._get_words(getattr(self, f"s_in_{j}"), n)
-
-            yield self.env.all_of([self.env.process(lane(j)) for j in range(R)])
-            t0 = min(got[j][1] for j in range(R))
-            re = np.zeros((n, R), dtype=np.int64)
-            im = np.zeros((n, R), dtype=np.int64)
-            for j in range(R):
-                re[:, j], im[:, j] = _unpack_complex(got[j][0], self.geo.in_w)
+            re, im, t0 = yield from self._read_lanes()
             self._emit(self.m_out, self._pack(re, im, self._edges["in"]), t0)
         else:
             e_in = self._edge_of(dict(self.task.params)["s_in"])
             words, t0 = yield from self._get_words(self.s_in, n)
             re, im = self._unpack(words, e_in)
-            w = self.geo.out_fmt.W
-            lanes = [_pack_complex(re[:, j], im[:, j], w) for j in range(R)]
             start = t0 + self.lat * self.clk.period if self.timed else self.now
-            self.call_after(0, self._store_lanes, [getattr(self, f"m_out_{j}") for j in range(R)],
-                            lanes, start, self._wlock, slot=self._slots)
+            self.call_after(0, self._store_lanes, self._lane_ports(), self._lane_words(re, im),
+                            start, self._wlock, slot=self._slots)
+
+    def _read_lanes(self):
+        """``lanes_in``: one frame off each of the ``R`` lanes, joined -- ``(re, im, t0)``, ``t0``
+        the earliest lane's first word."""
+        from waveflow.vitis_l1.hw import _unpack_complex
+        n, R = self.geo.n_words, self.geo.R
+        got: dict = {}
+
+        def lane(j):
+            got[j] = yield from self._get_words(getattr(self, f"s_in_{j}"), n)
+
+        yield self.env.all_of([self.env.process(lane(j)) for j in range(R)])
+        t0 = min(got[j][1] for j in range(R))
+        re = np.zeros((n, R), dtype=np.int64)
+        im = np.zeros((n, R), dtype=np.int64)
+        for j in range(R):
+            re[:, j], im[:, j] = _unpack_complex(got[j][0], self.geo.in_w)
+        return re, im, t0
+
+    def _lane_ports(self) -> list:
+        return [getattr(self, f"m_out_{j}") for j in range(self.geo.R)]
+
+    def _lane_words(self, re: np.ndarray, im: np.ndarray) -> list:
+        """``lanes_out``: a frame split into one word stream per lane, at the output width."""
+        from waveflow.vitis_l1.hw import _pack_complex
+        w = self.geo.out_fmt.W
+        return [_pack_complex(re[:, j], im[:, j], w) for j in range(self.geo.R)]
 
     @staticmethod
     def _store_lanes(eps, lanes, start: float, lock: simpy.Resource):
@@ -282,9 +302,26 @@ class SsrFft(FreeRunMod):
     inverse: bool = False
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
     timed: bool = True
+    #: The pysim's granularity.  ``"tasks"`` (default): one process per ``hls::task``, every
+    #: internal edge a timed stream -- the hardware's structure, each child's timing visible.
+    #: ``"flat"``: one process for the whole FFT -- read a frame at the boundary, run every block's
+    #: model function in order, write it at the boundary -- the children built but passive.  Its
+    #: frame timing is the per-task chain's exactly when the chain never stalls: the ping-pong
+    #: reorder (a new frame every ``L/R`` cycles) with an output that is not back-pressured, since
+    #: the chain buffers more frames than one process does.  Not offered for ``"sob"``, whose reader
+    #: is slower than its input (``L/R + 5``), so its frames queue and that queue is the timing.
+    pysim: str = "tasks"
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.pysim not in ("tasks", "flat"):
+            raise ValueError(f"SsrFft.pysim must be 'tasks' or 'flat', got {self.pysim!r}")
+        if self.pysim == "flat" and self.reorder != "pingpong":
+            raise ValueError(
+                f"SsrFft(pysim='flat') models the ping-pong reorder only, not {self.reorder!r}: the "
+                f"stream-of-blocks reader takes L/R + 5 cycles a frame against L/R in, so frames "
+                f"queue inside the chain and the flat model would not reproduce that queue.  Use "
+                f"pysim='tasks'.")
         self.geo = m.Geometry(int(self.L), int(self.in_w), int(self.in_i), int(self.tw_w),
                               int(self.tw_i), inverse=bool(self.inverse))
         self.R = self.geo.R
@@ -296,7 +333,8 @@ class SsrFft(FreeRunMod):
                           if (k == 0 and n.startswith("s_in")) or
                           (k == len(tis) - 1 and n.startswith("m_out")))
             c = _KIND_CLASS[t.kind](name=f"{self.name}_{t.inst}", sim=self.sim, geo=self.geo, task=t,
-                                    clk=self.clk, timed=self.timed, boundary_ports=ports)
+                                    clk=self.clk, timed=self.timed, boundary_ports=ports,
+                                    passive=self.pysim == "flat")
             self.tasks.append(c)
             self.add_comp(c)
         self._wire()
@@ -313,6 +351,62 @@ class SsrFft(FreeRunMod):
             self.m_out = self.tasks[-1].m_out
             self.boundary = ["s_in", "m_out"]
         self.extra_includes = ("hls_streamofblocks.h",)
+        if self.pysim == "flat":
+            # First word in -> start of the output write, as the per-task chain composes it: each
+            # hop's writer starts `lat` after its frame's first word, and the next task sees that
+            # frame's first word one cycle after the start (the burst completes `n` cycles after
+            # it, and the reader back-dates its first word `n - 1` cycles).  So every task but the
+            # last adds `lat + 1`, the last adds `lat`.
+            self._flat_lat = (sum(t.lat + 1 for t in self.tasks[:-1]) + self.tasks[-1].lat) \
+                * self.clk.period
+            # As many frames in flight as the chain could hold, so intake never throttles first.
+            cap = MAX_INFLIGHT * len(self.tasks)
+            self._flat_slots = simpy.Container(self.sim.env, init=cap, capacity=cap)
+            self._flat_wlock = simpy.Resource(self.sim.env, capacity=1)
+
+    # -- the flat pysim (pysim="flat") ----------------------------------------------------------
+    def run_proc(self):
+        if self.pysim != "flat":
+            return super().run_proc()
+        return self._flat_forever()
+
+    def _flat_forever(self):
+        while True:
+            yield from self._flat_frame()
+
+    def _flat_frame(self):
+        """One frame: the boundary read, every block's model function in task order, the boundary
+        write -- what the children do, without the internal edges between them."""
+        first, last = self.tasks[0], self.tasks[-1]
+        yield self._flat_slots.get(1)
+        if self.lanes:
+            re, im, t0 = yield from first._read_lanes()
+        else:
+            words, t0 = yield from first._get_words(first.s_in, self.geo.n_words)
+            re, im = first._unpack(words, first._edge_of(dict(first.task.params)["s_in"]))
+        edge = None                              # the edge the last word-moving block packs at
+        for t in self.tasks:
+            kind = t.task.kind
+            if kind == "stage":
+                re, im = m.stage(self.geo, t.task.s, re, im)
+            elif kind == "commutator":
+                re, im = m.commute(re, t.task.d), m.commute(im, t.task.d)
+            elif kind == "reorder_pingpong":     # whole words move: its input edge's packing stays
+                perm = m.reorder_word_perm(self.geo)
+                r2, i2 = np.empty_like(re), np.empty_like(im)
+                r2[perm], i2[perm] = re, im
+                re, im = r2, i2
+                edge = t._edge_of(dict(t.task.params)["s_in"])
+                continue
+            if "m_out" in dict(t.task.params):
+                edge = t._edge_of(dict(t.task.params)["m_out"])
+        start = t0 + self._flat_lat if self.timed else self.now
+        if self.lanes:
+            self.call_after(0, SsrLanes._store_lanes, last._lane_ports(), last._lane_words(re, im),
+                            start, self._flat_wlock, slot=self._flat_slots)
+        else:
+            self.call_after(0, SsrTask._store, last.m_out, last._pack(re, im, edge), start,
+                            self._flat_wlock, slot=self._flat_slots)
 
     def _wire(self) -> None:
         """One interface per edge: each child's master to the next child's slave."""

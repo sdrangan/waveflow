@@ -168,6 +168,13 @@ public:
     std::uint64_t blocks_out = 0;
     std::size_t   samples() const { return samples_.size(); }
 
+    //: If set, ``post_sim`` writes ``blocks_out`` as JSON to this path (a system run's recording).
+    std::string counters_out;
+    void post_sim() override {
+        if (!counters_out.empty())
+            BurstBundle::write_counters(counters_out, {{"blocks_out", (long long)blocks_out}});
+    }
+
 private:
     RfChannel&          ch_;
     std::size_t         blk_;
@@ -215,7 +222,14 @@ public:
         // rather than a guess.
         if (!out_bundle.empty())
             BurstBundle::write(out_bundle, words_, bounds_, RF_ELEMENT_KEY, rf_element(complex_));
+        if (!counters_out.empty())
+            BurstBundle::write_counters(counters_out, {
+                {"blocks_in", (long long)blocks_in},
+                {"last_block_cycle", (long long)last_block_cycle}});
     }
+
+    //: If set, ``post_sim`` also writes the counters below as JSON to this path (a recording).
+    std::string counters_out;
 
     /// Blocks taken off the edge.
     std::uint64_t blocks_in = 0;

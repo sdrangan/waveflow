@@ -8,9 +8,9 @@ summary: "What is generated for the csim rung and what deliberately is not. The 
 
 # Testbench codegen — what is generated, and what is not
 
-`memcpy` generates its whole XSI harness by walking the testbench graph
-([Testbench codegen](../memcpy/codegen_tb.md)): each participant maps to a BFM twin, and the harness
-is derivable because the *test* is a graph. This example does not work that way, and the difference
+`memcpy` derives its whole XSI harness from its testbench graph, cut at the kernel
+([The system](../memcpy/system.md)): each participant maps to a BFM twin, and the harness is
+derivable because the *test* is a graph. This example does not work that way, and the difference
 is worth stating rather than leaving a reader to notice the missing page.
 
 **`vec_mult_tb.cpp` is hand-written and committed.** A csim testbench is a `main()` that reads two

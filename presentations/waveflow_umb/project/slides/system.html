@@ -1,0 +1,68 @@
+<section id="system" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:328px;top:290px;width:1180px;height:520px;background:#EEE6F3;border-radius:20px"></div>
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">SALSA · System</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Tasks flow through PEs over a NoC</h2>
+<p style="position:absolute;left:352px;top:302px;width:400px;font-size:24px;color:#57068C;font-weight:600">Network on chip</p>
+<div style="position:absolute;left:128px;top:350px;width:170px;height:410px;background:#2A0D45;border-radius:14px;padding:20px;display:flex;flex-direction:column;justify-content:center;gap:8px">
+<p style="font-size:28px;font-weight:600;color:#F7F5FA">RF tiles</p>
+<p style="font-size:24px;color:#D9CCE5">IQ data, all antennas</p>
+</div>
+<div style="position:absolute;left:368px;top:350px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">FIR</p>
+<p style="font-size:24px;color:#57068C">T1 · filter</p>
+</div>
+<div style="position:absolute;left:658px;top:350px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">FFT</p>
+<p style="font-size:24px;color:#57068C">T1 · OFDM</p>
+</div>
+<div style="position:absolute;left:948px;top:350px;width:230px;height:140px;background:#FCFBFE;border:3px solid #2A0D45;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Systolic</p>
+<p style="font-size:24px;color:#57068C">T1 · projection</p>
+<p style="font-size:24px;color:#8A430B">T2 · covariance</p>
+</div>
+<div style="position:absolute;left:1238px;top:350px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Vector</p>
+<p style="font-size:24px;color:#57068C">T1 · equalize</p>
+</div>
+<div style="position:absolute;left:368px;top:620px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">FIR</p>
+<p style="font-size:24px;color:#8A430B">T2 · filter</p>
+</div>
+<div style="position:absolute;left:658px;top:620px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">FFT</p>
+<p style="font-size:24px;color:#8A430B">T2 · SRS</p>
+</div>
+<div style="position:absolute;left:948px;top:620px;width:230px;height:140px;background:#F7F5FA;border:2px dashed #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600;color:#6E6478">Systolic</p>
+<p style="font-size:24px;color:#6E6478">idle</p>
+</div>
+<div style="position:absolute;left:1238px;top:620px;width:230px;height:140px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Vector</p>
+<p style="font-size:24px;color:#8A430B">T2 · LT weights</p>
+</div>
+<div style="position:absolute;left:1568px;top:350px;width:224px;height:140px;background:#E4DAEC;border:2px dashed #57068C;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:26px;font-weight:600">LDPC</p>
+<p style="font-size:24px;color:#423A4F">off chip</p>
+</div>
+<div style="position:absolute;left:1568px;top:620px;width:224px;height:140px;background:#E4DAEC;border:2px dashed #57068C;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:26px;font-weight:600">Host / ARM</p>
+<p style="font-size:24px;color:#423A4F">off chip</p>
+</div>
+<x-connector x1="298" y1="420" x2="368" y2="420" head="end" style="color:#57068C;border-width:4px"></x-connector>
+<x-connector x1="598" y1="420" x2="658" y2="420" head="end" style="color:#57068C;border-width:4px"></x-connector>
+<x-connector x1="888" y1="420" x2="948" y2="420" head="end" style="color:#57068C;border-width:4px"></x-connector>
+<x-connector x1="1178" y1="420" x2="1238" y2="420" head="end" style="color:#57068C;border-width:4px"></x-connector>
+<x-connector x1="1468" y1="420" x2="1568" y2="420" head="end" style="color:#57068C;border-width:4px"></x-connector>
+<x-connector x1="298" y1="690" x2="368" y2="690" head="end" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="598" y1="690" x2="658" y2="690" head="end" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="790" y1="620" x2="1030" y2="555" route="vh" head="none" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="1030" y1="555" x2="1030" y2="490" head="end" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="1110" y1="490" x2="1330" y2="575" route="vh" head="none" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="1330" y1="575" x2="1330" y2="620" head="end" style="color:#B4570F;border-width:4px"></x-connector>
+<x-connector x1="1468" y1="690" x2="1568" y2="690" head="end" style="color:#B4570F;border-width:4px"></x-connector>
+<p style="position:absolute;left:128px;top:840px;width:820px;font-size:24px;color:#57068C;font-weight:600">T1 · data plane: filter → OFDM → projection → equalize</p>
+<p style="position:absolute;left:968px;top:840px;width:824px;font-size:24px;color:#8A430B;font-weight:600">T2 · long-term BF: filter → SRS → covariance → weights</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">The host writes each PE's tasklet code and task→tasklet map · the shared systolic PE runs one tasklet from each task</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Two tasks share the chip. The data plane runs every slot; the long-term beamforming update runs every few milliseconds and lands on the same systolic PE. When it does, queueing on that PE delays the data plane: this is where timing depends on interactions, not on fixed block delays. Mapping, priorities and queue depths are the design questions.</aside>
+</section>

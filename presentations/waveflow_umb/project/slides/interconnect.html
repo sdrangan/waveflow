@@ -1,0 +1,22 @@
+<section id="interconnect" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Distributed processing · The lesson</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Interconnect, not compute, dominates</h2>
+<div style="display:flex;gap:40px;flex:1">
+<div style="flex:1;background:#EEE6F3;border-radius:16px;padding:48px;display:flex;flex-direction:column;gap:20px">
+<p style="font-size:28px;font-weight:600;color:#57068C">Compute per tile</p>
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:120px;font-weight:600;line-height:1">~5 TOPS</p>
+<p style="font-size:36px;color:#423A4F">≈ 5 mm² · 100 mW</p>
+<p style="font-size:26px;color:#6E6478">TSMC 16 nm</p>
+</div>
+<div style="flex:1;background:#2A0D45;color:#F7F5FA;border-radius:16px;padding:48px;display:flex;flex-direction:column;gap:20px">
+<p style="font-size:28px;font-weight:600;color:#F0A35E">Inter-tile communication</p>
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:120px;font-weight:600;line-height:1">380 GBps</p>
+<p style="font-size:36px;color:#D9CCE5">≈ 6 W · 20 mm²</p>
+<p style="font-size:26px;color:#B7A6C8">SerDes at 16 nm</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#423A4F">The partition, not the arithmetic, sets the power. That makes it the design decision to get right first.</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">First-order estimates from the SALSA design study</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Expect challenges here, and welcome them. Have ready: the MAC energy assumed, the SerDes pJ per bit, and whether the 380 GBps assumes the daisy chain. A 60x gap in power between compute and interconnect is the headline; the exact numbers will move.</aside>
+</section>

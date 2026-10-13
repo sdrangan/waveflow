@@ -107,6 +107,10 @@ static void shot_tx_loader_task(hls::stream<streamutils::axi4s_word<W> >& s_in,
 
     ShotTxResp r;
     r.tid = h.tid;
+    // The schema says "reserved, must be zero", and an unassigned member is not zero at RTL: csynth
+    // left it a register nothing writes, which came out of reset as 1 on every response.  Decoding
+    // through the schema hid it; the system flow's word-for-word RTL-vs-pysim comparison did not.
+    r._rsvd = 0;
 
     if (h.opcode == SHOT_OP_END) {
         // A FENCE, not a halt.  An hls::task has no loop to break, so what END is worth is what its

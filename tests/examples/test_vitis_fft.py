@@ -84,10 +84,8 @@ def test_generate_writes_the_build_tree(tmp_path):
     assert "ap_ctrl_none" in cpp
     assert "xczu48dr" in (tmp_path / "gen" / f"{TOP}.tcl").read_text(encoding="utf-8")
     assert (tmp_path / "include" / "vitis_fft_task.h").exists()
-    for name in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp", "run.bat",
-                 f"vcd_dumper_{TOP}.v"):
-        assert (tmp_path / "xsi" / name).exists(), name
-    assert (tmp_path / "xsi" / "vectors" / "s_in_3" / "words.bin").exists()
+    # No xsi/ workspace: the RTL run is the system flow's (rtl.run_xsi), which builds its own.
+    assert not (tmp_path / "xsi").exists()
 
 
 def test_a_second_width_configuration_is_its_own_calibration():

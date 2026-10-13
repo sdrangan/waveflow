@@ -54,15 +54,28 @@ memory, bus masters and interrupts reach it through adaptors (`MemRStream` / `Me
 `MemSlaveAdaptor`, an `IrqIF`). One event model for every module, and logic decoupled from transport
 -- see [Stream-only modules and adaptors](../patterns/stream_only.md).
 
+## Two scales: a kernel, and a system
+
+The flow works at two scales. **One kernel** is a single Vitis top, a leaf or a composite of tasks,
+driven at RTL by BFMs on its ports; `mem_copy` is the worked case. **A system** is several kernels
+reached over a bus, each with its memory-mapped device, plus an on-chip memory, AMD's crossbar and a
+host program; markov and mm_fir are the worked cases. A system is a `HwSystem`: its DUT is a tree of
+**devices**, its testbench is everything else, and the Verilog top (a `SystemTopSpec`) is derived
+from it. [Systems and the cut](./concurrent_system.md) has the picture.
+
 ## How to read this flow
 
 - **[Writing it in Python](./concurrent_python.md)** — how to describe the module: a leaf's
   `run_iter` (one firing) versus a composite's graph, and carrying state across firings.
+- **[Systems and the cut](./concurrent_system.md)** — the bigger picture: a system of kernels behind
+  a bus, its three scopes (System, DUT, device), the cut as a build choice, and how each part becomes
+  hardware.
 - **[XSI simulation components](./concurrent_layers.md)** — Python DES versus XSI simulation, and
   what an XSI simulation is made of: an XSI simulation top whose kernel modules and RTL modules make
   the RTL top, and whose BFM modules make the testbench; which pysim object usually plays which role.
 - The **[flow steps](./concurrent_flowsteps.md)** page is the recipe — from the XSI simulation top
-  to a generated Vitis kernel, the RTL top, a generated harness, and an exact cycle-count check.
+  to a generated Vitis kernel, the RTL top, a generated harness, and an exact cycle-count check; then
+  [a system's steps](./concurrent_flowsteps.md#a-systems-steps).
 - The **[mem_copy example](../../examples/memcpy/)** is the full worked walkthrough: the composite
   (`Sequencer → MemRStream → MemWStream`), the generated `ap_ctrl_none` top, the generated XSI
   testbench, and the RTL/XSI verification.

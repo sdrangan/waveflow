@@ -74,7 +74,8 @@ pytest tests/examples/test_rf_loopback.py tests/hw/test_rf_sample_if.py
 | the RF environment | `waveflow/simulation/rf_tb.py` | `RfDataSource` / `RfDataSink` — framework, bundle-backed |
 | the converter | `waveflow/hw/rfdc.py` | `Rfdc` |
 | logic + graph | `examples/rf_loopback/rf_loopback.py` | `RfSampPassThrough`, `RfLoopbackTB`, `RfLoopbackSim` |
-| the RTL build | `examples/rf_loopback/rf_dut_build.py` | the DUT cut alone, between generic AXI-Stream BFMs |
+| the RTL build | `examples/rf_loopback/rf_dut_build.py` | the DUT's codegen and csynth |
+| the RTL runs | `rf_dut_system_build.py`, `rf_loopback_system_build.py` | the DUT alone between generic AXI-Stream BFMs; the loopback with the converter models |
 | the figures | `examples/rf_loopback/rf_loopback_figures.py` | every plot on these pages, rendered from a run |
 
 The digital logic is [synthesized and proved at RTL](./rtl.md) — cut **alone**, between generic

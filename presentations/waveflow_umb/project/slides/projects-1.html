@@ -1,0 +1,27 @@
+<section id="projects-1" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Project ideas · Applications driving the architecture</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">What the hardware has to do</h2>
+<div style="display:flex;gap:28px;flex:1">
+<div style="flex:1;background:#EEE6F3;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#57068C;line-height:1">1</p>
+<h3 style="font-size:32px;font-weight:600">Distributed massive MIMO</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">How should processing be split across tiles, and what does each split cost?</p>
+<p style="font-size:24px;line-height:1.4;color:#423A4F"><b>Measure:</b> inter-tile bandwidth and power vs. SINR loss; chain vs. hub</p>
+</div>
+<div style="flex:1;background:#EEE6F3;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#57068C;line-height:1">2</p>
+<h3 style="font-size:32px;font-weight:600">Integrated sensing and communication</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Which processing elements can sensing and communication share on a reconfigurable chip?</p>
+<p style="font-size:24px;line-height:1.4;color:#423A4F"><b>Measure:</b> throughput lost per sensing update rate; area of sensing-only blocks</p>
+</div>
+<div style="flex:1;background:#EEE6F3;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#57068C;line-height:1">3</p>
+<h3 style="font-size:32px;font-weight:600">Resilience and spectrum sharing</h3>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">What structures let a radio detect interference and react fast: null, hop, re-partition?</p>
+<p style="font-size:24px;line-height:1.4;color:#423A4F"><b>Measure:</b> time to mitigate; capacity under interference; compute held in reserve</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">Project ideas, 1 of 2</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Each is a broad area for a 6 to 12 month study, with a paper as the first deliverable. 1: follows from the budget, where interconnect dominates; the low-rank long-term projection is itself a way to compress inter-tile traffic. 2: on the tasklet machine, sensing is another task stream sharing PEs: FFTs for OFDM and range-Doppler, systolic arrays for beamforming in both; detection and tracking are sensing-only. 3: sensing in service of the link rather than as a service; builds on our satellite nulling, anti-jamming and learned-denoiser work, and gives microsecond reconfiguration a reason to exist. Method for all three: tasklet mapping and scheduling, and PE design (queues, tasklet slots, packet granularity).</aside>
+</section>

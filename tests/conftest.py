@@ -165,7 +165,35 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #:
 #: 178 + 7 -> 185 on 2026-10-11: ``main`` merged into ``feat/cpu-model``; ``pytest -m xsi
 #: --collect-only -q`` counts 185.
-WANT_XSI_GATES = 185
+#:
+#: In parallel on ``main``, after 168:
+#: 168 -> 173 on 2026-10-12 (plans/system_model.md S5): each markov / mm_fir sub-top elaborates
+#: alone (test_markov_xsi.py x3, test_mm_fir_xsi.py x2).  173 -> 174 (S3a): mem_copy's system top,
+#: no crossbar, elaborates (test_xsi_bfm.py).  174 -> 176 (S3c): mem_copy through the system flow --
+#: recordings match pysim, golden at 2908 (test_mem_copy_system_xsi.py).  176 -> 178 (S3d):
+#: rf_loopback through the system flow, the RFDC in the testbench (test_rf_loopback_system_xsi.py).
+#: 178 -> 179: its loss counters, written by the models as a recording.
+#: 179 -> 227 on 2026-10-12 (S3e): the twelve single-kernel examples through the system flow, each
+#: beside its kernel-flow gate.
+#: 227 -> 177 on 2026-10-12 (S3f) -- DELIBERATELY LOWERED, and nothing it measured went with it: each
+#: example's gate file now runs its design through the system flow (traced where its claims read a
+#: waveform), so the duplicate S3e system gates were folded into it, and test_xsi_bfm.py's mem_copy /
+#: rf_pass_through rows (with their .f drift checks) moved to test_mem_copy_system_xsi.py /
+#: test_rf_dut_system_xsi.py.  Every claim and every recorded number is still asserted once.
+#: 177 -> 183 on 2026-10-12 (plans/ip_packaging_routes.md Stage 3): markov packaged as IP, one per
+#: device (test_markov_ip.py) -- VLNVs, interfaces, the clock association, the cache, and each IP
+#: carrying exactly the files the XSI gates verified.
+#: 183 -> 190 on 2026-10-13 (Stages 4-5): markov's block design (test_markov_bd.py) -- validated,
+#: read back against the system top (its ports, links, address map and crossbar), and set to
+#: synthesize globally.
+#: 190 -> 195 on 2026-10-13 (Stages 2 and 6): markov's tied memory priced as one RAMB36 and the
+#: composed BRAM equal to the measured (test_markov_tieoffs.py); both synthesis routes run fresh
+#: against the record the docs quote (test_markov_routes.py).
+#:
+#: 195 + 17 -> 212 on 2026-10-13: ``origin/main`` merged into ``feat/cpu-model``.  This branch's
+#: 17 gates beyond 168 (the ``paper/mimo-cg`` line above) on top of main's 195;
+#: ``pytest -m xsi --collect-only -q`` counts 212.
+WANT_XSI_GATES = 212
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

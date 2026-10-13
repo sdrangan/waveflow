@@ -22,6 +22,7 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
@@ -247,3 +248,37 @@ def run_and_check() -> bool:
 
 if __name__ == "__main__":
     run_and_check()
+
+
+@dataclass
+class MemCopySystem(GraphSystem):
+    """mem_copy as a **system** (``plans/system_model.md`` S3): the :class:`MemCopyTB` graph, with
+    the cut stated as a DUT tree rather than implied by a testbench class.
+
+    The DUT is the :class:`MemCopy` kernel alone -- no bus inside it.  Everything else the graph holds
+    is the testbench: the command driver, the completion sink, the memory, and the crossbar that
+    models the two ``m_axi`` bundles' contention in pysim.  That crossbar is *outside* the cut, so the
+    kernel's two ``m_axi`` bundles are top ports facing the memory model, and its two streams are top
+    ports facing the driver and the sink.
+
+    The scenario is :class:`MemCopySim`'s -- the command bursts, the source arena, the golden, and
+    its ``run.json`` (the arena size beside the bound); :meth:`check` is its golden check.
+    """
+
+    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
+    mem_dwidth: int = 64
+
+    def graph(self) -> MemCopyTB:
+        self.runner = MemCopySim(jobs=tuple(self.jobs), mem_dwidth=int(self.mem_dwidth))
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        self.runner.write_scenario(root)
+
+    def check(self) -> "MemCopy":
+        return self.runner.check()
+
+

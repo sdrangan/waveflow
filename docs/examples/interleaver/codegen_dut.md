@@ -140,10 +140,9 @@ It runs without the toolchain up to the csynth call; the RTL-timing build
 first step. It generates:
 
 - `gen/interleaver_inband.cpp` — the top above;
-- `interleaver_inband.tcl` — drives Vitis HLS C-synthesis (the `csynth` step, which produces the RTL the
-  [RTL-timing rung](./rtltiming.md) drives);
-- `xsi/interleaver_inband_ports.h` — the DUT's port map, which the generated
-  [testbench harness](./codegen_tb.md) includes;
+- `interleaver_inband.tcl` — drives Vitis HLS C-synthesis (the `csynth` step, which produces the RTL
+  the [system flow](./system.md) instantiates inside its top, and the [RTL-timing rung](./rtltiming.md)
+  traces);
 
 plus, via `gen_headers`, the command structs, `streamutils` / `memmgr`, the block element type's
 array-utils (`read_framed_stream_lane`), and the six copied task bodies. Everything generated carries a
@@ -160,5 +159,5 @@ is `ap_ctrl_none`, csynth is where the C++ is checked — the *behaviour* is ver
 
 ## Next
 
-[Testbench codegen](./codegen_tb.md) — how the `InterleaverInbandTB` graph becomes the XSI BFM harness
-that drives this top.
+[The system](./system.md) — the testbench graph cut at this kernel, and the top and harness the system
+flow derives to drive it.

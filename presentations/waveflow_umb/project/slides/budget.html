@@ -1,0 +1,18 @@
+<section id="budget" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:28px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Distributed processing · Budget</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Compute and communication per tile</h2>
+<p style="font-size:24px;color:#423A4F;background:#EEE6F3;padding:14px 20px;border-radius:8px">4 CCs × 100 MHz · 122.88 Msps per CC (983 Msps total, 2× oversampled) · 1024 antennas · 64 UEs × 2 streams · 128 distributed tiles of 8 antennas · 4 common tiles</p>
+<table style="font-size:24px;color:#2A0D45">
+<tr><th style="width:22%">Task</th><th style="width:20%">Operation</th><th style="width:16%">TMAC per tile</th><th style="width:42%">Tile communication</th></tr>
+<tr><td>RX filtering</td><td>Multi-stage FIR</td><td>1.55 (dist.)</td><td></td></tr>
+<tr><td>OFDM</td><td>FFT</td><td>0.31 (dist.)</td><td></td></tr>
+<tr><td>Long-term BF inverse</td><td>Matrix inverse</td><td>0.26 (common)</td><td>SRS up: 6.5 MBps per tile; 209 MBps at common</td></tr>
+<tr><td>Long-term BF matrix</td><td>Outer + matrix product</td><td>0.32 (common)</td><td>Down: 6.5 MBps per tile; 209 MBps from common</td></tr>
+<tr style="background:#F3E6D8"><td>Long-term BF projection</td><td>Matrix–matrix</td><td>3.0 (dist.)</td><td><b>Tile to tile (daisy chain): 380 GBps</b></td></tr>
+<tr><td>Equalizer calculation</td><td>Least squares</td><td>0.01 (dist.)</td><td></td></tr>
+<tr><td>Spatial equalization</td><td>Matrix–matrix</td><td>0.006 (dist.)</td><td></td></tr>
+</table>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">SALSA design-study estimates · dist. = distributed tile</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Know the derivation of each line before presenting: what MAC precision, what utilization. The highlighted row is the one that matters. The control-plane traffic (SRS up, projections down) is small; the data-plane daisy chain is 380 GBps between antenna tiles.</aside>
+</section>

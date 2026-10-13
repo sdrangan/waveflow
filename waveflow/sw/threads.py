@@ -300,15 +300,18 @@ class SwHost(HwModule):
 
     def bfm_model(self):
         """The C++ twin (``cpp_model`` in ``cpp_header``), spanning the bus master and every interrupt
-        input -- derived, so a host declares only the two names."""
+        input -- derived, so a host declares only the two names.  The generated
+        ``<Host>_endpoints.h`` its header includes is declared here too (``generated_files``)."""
         from waveflow.build.composite_gen import BfmModel
         from waveflow.build.hwcodegen import LoweringError
-        from waveflow.build.sw_host_gen import host_ports
+        from waveflow.build.sw_host_gen import endpoints_header, host_ports, render_host_endpoints_h
 
         if not self.cpp_model or not self.cpp_header:
             raise LoweringError(f"{type(self).__name__} names no C++ realization: set cpp_model and "
                                 f"cpp_header on the class")
-        return BfmModel(self.cpp_model, ports=host_ports(self), header=self.cpp_header)
+        return BfmModel(self.cpp_model, ports=host_ports(self), header=self.cpp_header,
+                        generated_files=((endpoints_header(self),
+                                          lambda: render_host_endpoints_h(self)),))
 
     # -- software time ------------------------------------------------------------------------------
 

@@ -58,6 +58,7 @@ HERE = Path(__file__).resolve().parent
 from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.hw_module import HwModule  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
@@ -662,3 +663,28 @@ def run_circ_pysim(root=None, **kw) -> RfCircPlayTB:
         for obj in sim._sim_objs:
             obj.post_sim()
     return tb
+
+
+@dataclass
+class RfCircPlaySystem(GraphSystem):
+    """The circular player as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfCircPlayTB` graph, the cut :class:`RfRepeatPlay` alone.  The RFDC is testbench, as in
+    ``rf_loopback``: its DAC model spans the cut.
+
+    The sink's recording is the example's to check (``recording_check``): pysim runs to the
+    metronome's horizon and the RTL to a cycle bound, so the two playouts differ in length."""
+
+    n_cycles: int = 60000
+
+    def graph(self) -> RfCircPlayTB:
+        g = RfCircPlayTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+        g.sink.recording_check = "example"
+        return g
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_wave_scenario(root, nsamp=int(self.tb.nsamp))
+
+

@@ -33,11 +33,8 @@ three gates whose negative controls were never committed; this is the plan refus
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from examples.rf_shot_tx.rf_shot_tx import (
@@ -48,7 +45,6 @@ from examples.rf_shot_tx.rf_shot_tx import (
     NREPEAT,
     NSAMP,
     RfShotTxAbs,
-    blocks_to_codes,
     check_address_is_the_phase,
     check_finite_playout,
     check_responses,
@@ -60,17 +56,11 @@ from examples.rf_shot_tx.rf_shot_tx import (
     segments,
     transients,
 )
-from examples.rf_shot_tx.rf_shot_tx_build import (
-    RTL_FILES_ABS,
-    TOP_ABS,
-    WRAPPER_ABS,
-    generate_tb,
-)
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_shot_tx import rf_shot_tx_system_build as sysb
+from examples.rf_shot_tx.rf_shot_tx_build import TOP_ABS
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_tx"
-XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP_ABS}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP_ABS}_proj" / "solution1" / "syn" / "report"
 
@@ -155,78 +145,21 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines a counters main prints."""
-    vals: dict[str, int] = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
-def _responses(bundle: str) -> list[tuple[int, int, int]]:
-    """``(tid, status, nsamp_loaded)`` off the response **stream**, in arrival order."""
-    from examples.rf_shot_tx.rf_shot_tx import RESP
-    from waveflow.utils.burst_io import read_burst_bundle
-
-    d = XSI / "vectors" / bundle
-    if not d.is_dir():
-        return []
-    words = np.concatenate(read_burst_bundle(d)).ravel()
-    n = RESP.nwords_per_inst(64)
-    out = []
-    for i in range(0, words.size - n + 1, n):
-        r = RESP().deserialize(words[i:i + n], word_bw=64)
-        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
-    return out
-
-
-def _played(bundle: str) -> np.ndarray:
-    """The samples the RF sink captured, as signed converter codes."""
-    from waveflow.simulation.rf_tb import read_rf_bundle
-
-    d = XSI / "vectors" / bundle
-    if not d.is_dir():
-        return np.zeros(0, dtype=np.int64)
-    return blocks_to_codes(read_rf_bundle(d, 1, BLKSIZE))
-
-
 @pytest.fixture(scope="module")
 def runs() -> dict:
-    """Both scenarios, once, against the SAME snapshot of the absolute-index build.
-
-    Untraced: every assertion here reads the RF capture or the counters, and the memory's own pins
-    are already gated on the default build — ``absolute_index`` changes when the player reads, never
-    which addresses exist.
-    """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_shot_tx_build.py --through csynth_abs")
-    _require(rtl_staleness(ROOT, TOP_ABS) is None, rtl_staleness(ROOT, TOP_ABS) or "")
-    for f in RTL_FILES_ABS:
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_tx_build.py")
-    generate_tb(ROOT, RfShotTxAbs)
-    (XSI / f"rtl_{WRAPPER_ABS}.f").write_text(
-        render_rtl_f(TOP_ABS, ROOT, extra=RTL_FILES_ABS, stamp_sources=False), encoding="utf-8")
-    shutil.rmtree(XSI / "xsim.dir" / WRAPPER_ABS, ignore_errors=True)
-
+    """Both scenarios, once each: the system runs of the 'abs' build
+    (``examples/rf_shot_tx/rf_shot_tx_system_build.py``), one system per frame stream -- the
+    transmitter is the DUT (its wrapper: the kernel and its ``bram_t2p``), the RFDC's DAC model
+    spans the cut.  The counters are the ones the DAC model writes as a
+    recording, under the names the old hand-written main printed."""
     out: dict[str, dict] = {}
-    for name, tb, resp_b, rf_b, frames in SCENARIOS:
-        for od in (resp_b, rf_b):
-            shutil.rmtree(XSI / "vectors" / od, ignore_errors=True)
-        for stale in (f"{tb}.exe", f"{tb}.bin", f"{tb}.o"):
-            (XSI / stale).unlink(missing_ok=True)
-        r = subprocess.run(xsi_runner_cmd(WRAPPER_ABS, tb), cwd=str(XSI),
-                           capture_output=True, text=True, timeout=1800)
-        text = (r.stdout or "") + (r.stderr or "")
-        assert "XSI_EXITCODE=0" in text, (
-            f"the {tb} RTL run did not complete cleanly:\n{text[-3000:]}")
-        out[name] = {"counters": _counters(text), "played": _played(rf_b),
-                     "responses": _responses(resp_b), "frames": frames}
+    for name, _tb, _resp_b, _rf_b, frames, *check in SCENARIOS:
+        work = system_run(sysb.build_dag('abs', name, work_dir=WORK), sysb.HERE,
+                          sysb.top('abs', name))
+        assert compared_clean(work) and recorded_names(work) == ["counters", "resp", "rf_out"]
+        out[name] = {"counters": sysb.counters(work), "played": sysb.played(work),
+                     "responses": sysb.responses(work), "frames": frames,
+                     "check": check[0] if check else None}
     return out
 
 
@@ -434,9 +367,12 @@ def test_every_header_is_answered_in_order_with_its_own_verdict(runs, name):
     """
     check_responses(runs[name]["responses"], runs[name]["frames"], where=f"RTL abs {name}: ")
     c = runs[name]["counters"]
-    assert c["CMD_SENT"] == c["CMD_TOTAL"], (
-        f"{name}: the driver placed {c['CMD_SENT']} of {c['CMD_TOTAL']} words — the design stopped "
-        f"taking the command stream, which is a stall rather than a wrong answer.")
+    # One verdict per header, the closing fence's included: headers are answered strictly in order,
+    # so the fence's answer says the whole stream was taken -- a stall leaves it unanswered.  (The
+    # old hand-written main counted the driver's words to say the same thing.)
+    assert len(runs[name]["responses"]) == sum(1 for _f in runs[name]["frames"]), (
+        f"{name}: {len(runs[name]['responses'])} verdicts for {len(runs[name]['frames'])} headers "
+        f"-- the design stopped taking the command stream, which is a stall, not a wrong answer.")
     assert c["RESP_LAST_CYCLE"] == WANT_RESP_LAST_CYCLE[name], (
         f"{name}: the last response landed at cycle {c['RESP_LAST_CYCLE']}, gate expects "
         f"{WANT_RESP_LAST_CYCLE[name]}. This build's own number — the default build's 273/502 are "

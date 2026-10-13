@@ -15,7 +15,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 #ifdef _WIN32
 #include <direct.h>     // _mkdir  (std::filesystem does not link with the run.bat mingw)
@@ -199,6 +201,35 @@ struct BurstBundle {
         write(dir, words, bounds, 0, 0, chunks);
         std::vector<uint64_t> c(cycles.begin(), cycles.end());
         write_u64(dir + "/cycles.bin", c);
+    }
+
+    /// Write a model's **counters** -- its own bookkeeping, not a stream -- as a flat JSON object at
+    /// *path* (``{"dropped": 62, ...}``), creating the parent directory.  A testbench model that
+    /// counts what crossed it (a converter's dropped words, a channel's transfers) writes these in
+    /// ``post_sim`` when its ``counters_out`` is set, so a system run gathers them as a recording and
+    /// Python checks them -- no hand-written main reading the fields (``plans/system_model.md`` S3d).
+    static void write_counters(const std::string& path,
+                               std::initializer_list<std::pair<const char*, long long>> kv) {
+        std::vector<std::pair<std::string, long long>> v;
+        for (const auto& p : kv) v.emplace_back(p.first, p.second);
+        write_counters(path, v);
+    }
+
+    /// The same, for counters whose names are built at run time (one per channel).
+    static void write_counters(const std::string& path,
+                               const std::vector<std::pair<std::string, long long>>& kv) {
+        const size_t slash = path.find_last_of("/\\");
+        if (slash != std::string::npos) mkdirs(path.substr(0, slash));
+        FILE* f = std::fopen(vectors_path(path).c_str(), "wb");
+        if (!f) die(path);
+        std::fputs("{", f);
+        bool first = true;
+        for (const auto& p : kv) {
+            std::fprintf(f, "%s\"%s\": %lld", first ? "" : ", ", p.first.c_str(), p.second);
+            first = false;
+        }
+        std::fputs("}\n", f);
+        std::fclose(f);
     }
 
 private:

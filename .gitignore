@@ -237,50 +237,43 @@ examples/*/xsi/*.wdb
 # Generated XSI test-vector bundles (written at gate time; data is *.bin, ignored above).
 examples/*/xsi/vectors/
 
-# state_toy (the add_state XSI gate): csynth project + generated top/headers.  The Python source,
-# the hand-written hook, and the generated XSI harness/ports stay tracked.
+# state_toy (the add_state XSI gate): csynth project + generated top/headers.  The Python source
+# and the hand-written hook stay tracked; the RTL run is the system flow's (xsi_work/).
 examples/state_toy/state_accum_proj/
 examples/state_toy/gen/
 examples/state_toy/include/
-examples/state_toy/xsi/vectors/
 
 # fir_block (the block FIR -- add_state's motivating design): csynth project + generated
 # top/headers.  The Python source, the two HAND-WRITTEN task bodies (fir_cmd_rx_task.h,
-# fir_compute_task.h -- sticky at the example root, copied into include/ by the build), and the
-# generated XSI harness/ports stay tracked.
+# fir_compute_task.h -- sticky at the example root, copied into include/ by the build) stay tracked;
+# the RTL run is the system flow's (xsi_work/).
 examples/fir_block/fir_block_proj/
 examples/fir_block/gen/
 examples/fir_block/include/
-examples/fir_block/xsi/vectors/
 
 # bram_access (the shared-memory example, which retired bram_toy into it): the csynth project and
-# the rendered timing figures are build output.  Its gen/, include/ and xsi/ stay TRACKED, unlike
-# most examples -- the generated kernel, the wrapper and the port header are what
-# tests/build/test_wrapper_gen.py checks for drift, and a wrapper whose diff nobody reads is the
-# artifact the whole rtl_module path exists to produce.  (xsi/vectors/ and xsi/*.vcd are already
-# covered by the examples/*/xsi rules above.)
+# the rendered timing figures are build output.  Its gen/ and include/ stay TRACKED, unlike most
+# examples -- the generated kernel is what tests/build/test_wrapper_gen.py checks for drift.  The RTL
+# run, traced, is the system flow's (xsi_work/): it renders the wrapper into the system top.
 examples/bram_access/bram_access_proj/
 examples/bram_access/results/
 
 # rf_samp_buf_rx (the RX capture demo): csynth project + generated top/headers, same convention as
 # state_toy / fir_block / bram_access.  The two hand-written task bodies are FRAMEWORK now and live in
 # waveflow/build/, copied into include/ by RfSampBufStep -- so include/ is entirely build output.
-# The Python source, the hand-written counters main and the generated XSI workspace stay tracked.
+# The Python source stays tracked; the RTL run is the system flow's (xsi_work/).
 examples/rf_samp_buf_rx/rf_samp_buf_rx_proj/
 examples/rf_samp_buf_rx/gen/
 examples/rf_samp_buf_rx/include/
 examples/rf_samp_buf_rx/results/
-examples/rf_samp_buf_rx/xsi/vectors/
 
 # rf_samp_buf_tx (the TX playout demo): same convention.  The two hand-written task bodies are
 # framework and live in waveflow/build/, copied into include/ by RfSampBufStep -- so include/ is
-# entirely build output.  The Python source, the hand-written counters main and the generated XSI
-# workspace stay tracked.
+# entirely build output.  The Python source stays tracked; the RTL run is the system flow's.
 examples/rf_samp_buf_tx/rf_samp_buf_tx_proj/
 examples/rf_samp_buf_tx/gen/
 examples/rf_samp_buf_tx/include/
 examples/rf_samp_buf_tx/results/
-examples/rf_samp_buf_tx/xsi/vectors/
 
 # rf_blk_delay (the pattern-B loop): same convention, with one difference worth stating -- this
 # example has a src/ of its own, and it is TRACKED.  The four RfSampBuf task bodies are framework
@@ -291,7 +284,6 @@ examples/rf_blk_delay/gen/
 examples/rf_blk_delay/include/
 examples/rf_blk_delay/results/
 examples/rf_blk_delay/logs/
-examples/rf_blk_delay/xsi/vectors/
 
 # rf_repeat_play (Stage 1 of plans/rf_samp_new.md, the streaming transmitter): csynth project plus
 # the generated harness and headers.  Same convention as rf_samp_buf_rx above -- the two hand-written
@@ -304,7 +296,6 @@ examples/rf_repeat_play/include/
 examples/rf_repeat_play/results/
 examples/rf_repeat_play/logs/
 examples/rf_repeat_play/dfx_runtime.txt
-examples/rf_repeat_play/xsi/vectors/
 
 
 # rf_shot_rx (PR #179; renamed from rf_pingpong_rx by PR #181
@@ -317,7 +308,6 @@ examples/rf_shot_rx/include/
 examples/rf_shot_rx/results/
 examples/rf_shot_rx/logs/
 examples/rf_shot_rx/dfx_runtime.txt
-examples/rf_shot_rx/xsi/vectors/
 
 # rf_shot_loopback (PR #202): the two designs closed through one converter,
 # where the channel delay is a difference of memory addresses.  It has NO generated top and no
@@ -328,15 +318,13 @@ examples/rf_shot_loopback/results/
 
 # rf_shot_tx (PR #181): one transmitter, both opcodes, on the lock.  Same treatment
 # as every other example -- the generated top, the copied framework headers, the logs, the results
-# and BOTH scenarios' vectors are derivable from the two committed .py files, the two hand-written
-# mains in xsi/, and one `pytest`.
+# and BOTH scenarios' vectors are derivable from the two committed .py files and one `pytest`.
 examples/rf_shot_tx/rf_shot_tx_proj/
 examples/rf_shot_tx/gen/
 examples/rf_shot_tx/include/
 examples/rf_shot_tx/results/
 examples/rf_shot_tx/logs/
 examples/rf_shot_tx/dfx_runtime.txt
-examples/rf_shot_tx/xsi/vectors/
 
 # Self-contained XSI gates over framework RTL (waveflow.build.xsi_workspace): generated crossbar IP,
 # xsim.dir, binaries.  All regenerated by `pytest -m xsi`.
@@ -356,6 +344,21 @@ examples/markov/include/
 examples/markov/gen/
 # the build DAG's RTL runs (plans/system_dag.md).
 examples/markov/xsi_work/
+# mem_copy through the system flow (examples/mem_copy/mem_copy_system_build.py): its system workspace.
+examples/mem_copy/xsi_work/
+# rf_loopback through the system flow (examples/rf_loopback/rf_loopback_system_build.py).
+examples/rf_loopback/xsi_work/
+examples/state_toy/xsi_work/
+examples/fir_block/xsi_work/
+examples/interleaver/xsi_work/
+examples/rf_relayout/xsi_work/
+examples/rf_repeat_play/xsi_work/
+examples/bram_access/xsi_work/
+examples/rf_blk_delay/xsi_work/
+examples/rf_samp_buf_rx/xsi_work/
+examples/rf_samp_buf_tx/xsi_work/
+examples/rf_shot_rx/xsi_work/
+examples/rf_shot_tx/xsi_work/
 # examples/vitis_fft (born under plans/source_layout.md): no hand-written C++ at all -- include/, gen/
 # (with the .tcl), xsi/ and the pysim's vectors/ are build output; vitis_fft_build.generate() restores them.
 examples/vitis_fft/include/
@@ -377,3 +380,8 @@ examples/ssr_fft/logs/
 
 # Per-step build timings written by run_dag_cli (waveflow/build/cli.py STEP_LOG)
 .waveflow/
+
+# FFT RTL runs through the system flow, and the profiler's kernel-as-top workspace (plans/system_model.md S3f).
+examples/vitis_fft/system/
+examples/vitis_fft/xsi_profile/
+examples/ssr_fft/system/

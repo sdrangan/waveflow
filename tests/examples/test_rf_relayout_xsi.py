@@ -17,25 +17,22 @@ And :func:`test_the_gated_build_is_not_the_identity` guards the premise: with
 ``bits_per_samp == bits_per_samp_pack`` the design under test is a pair of wires and both numbers
 above would be meaningless while still being green.
 
-No wrapper here — the re-layout holds no state and reaches no memory, so what xsim elaborates is the
-kernel itself.
+No wrapper here — the re-layout holds no state and reaches no memory.  The run goes through the
+system flow (``examples/rf_relayout/rf_relayout_system_build.py``): the two conversions are the DUT,
+the driver and the sink answer through their own models.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from examples.rf_relayout.rf_relayout import NWORD, WORD, check_xsi_outputs
-from examples.rf_relayout.rf_relayout_build import TOP, generate_tb
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_relayout.rf_relayout import WORD
+from examples.rf_relayout.rf_relayout_build import TOP
+from examples.rf_relayout import rf_relayout_system_build as sysb
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_relayout"
-XSI = ROOT / "xsi"
-TB = f"{TOP}_bfm_tb"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
 
@@ -105,32 +102,30 @@ def test_both_directions_reach_ii_1():
             f"samp_per_word * f_axis / {ii}), not a number to re-record.")
 
 
+def test_the_system_runs_the_same_identity():
+    """The system the RTL gate runs passes the loopback identity in pysim."""
+    sysb.system().run()
+
+
+@pytest.fixture(scope="module")
+def rtl_run() -> Path:
+    """One RTL run of the system, shared by the gates below."""
+    return system_run(sysb.build_dag(work_dir=WORK), sysb.HERE, sysb.TOP)
+
+
 @pytest.mark.xsi
-def test_the_relayout_survives_real_rtl_byte_for_byte():
+def test_the_relayout_survives_real_rtl_byte_for_byte(rtl_run):
     """Because a clean report is not evidence about the bits.
 
     The claim is the loopback identity: every converter word driven in comes back unchanged, through
     a 14-bit dense layout in between.  Graded against the **stimulus**, so no second implementation
     of the conversion is involved on this side at all.
     """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(), f"no csynth RTL at {VERILOG} — run rf_relayout_build.py --through csynth")
-    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
-    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
-    # rtl_staleness().
-    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
+    sysb.check_xsi(rtl_run, WANT_CYCLES)
 
-    (XSI / f"rtl_{TOP}.f").write_text(
-        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
-    shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (XSI / stale).unlink(missing_ok=True)
-    shutil.rmtree(XSI / "vectors" / "out", ignore_errors=True)
-    generate_tb(ROOT)
 
-    r = subprocess.run(xsi_runner_cmd(TOP, TB), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"rf_relayout XSI run did not complete cleanly:\n{out[-3000:]}"
+@pytest.mark.xsi
+def test_the_rtl_recording_matches_pysim(rtl_run):
+    """What the sink recorded at RTL is what it recorded in pysim, word for word."""
+    assert compared_clean(rtl_run) and recorded_names(rtl_run) == ["out"]
 
-    check_xsi_outputs(XSI, NWORD, WANT_CYCLES)

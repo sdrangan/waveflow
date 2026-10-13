@@ -1,0 +1,27 @@
+<section id="projects-2" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#B4570F;font-weight:600">Project ideas · Methods, with SALSA as the test case</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">How agents could help design it</h2>
+<div style="display:flex;gap:28px;flex:1">
+<div style="flex:1;background:#2A0D45;color:#F7F5FA;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#F0A35E;line-height:1">4</p>
+<h3 style="font-size:32px;font-weight:600">Encapsulation and multiple agents</h3>
+<p style="font-size:26px;line-height:1.4;color:#D9CCE5">Does typed encapsulation let agents split a system and cut the context each one needs?</p>
+<p style="font-size:24px;line-height:1.4;color:#D9CCE5"><b>Measure:</b> tokens per agent, build success and interface defects as blocks grow</p>
+</div>
+<div style="flex:1;background:#2A0D45;color:#F7F5FA;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#F0A35E;line-height:1">5</p>
+<h3 style="font-size:32px;font-weight:600">Agentic design-space exploration</h3>
+<p style="font-size:26px;line-height:1.4;color:#D9CCE5">Can agents explore architectural options, not just parameters, using a fast simulator?</p>
+<p style="font-size:24px;line-height:1.4;color:#D9CCE5"><b>Measure:</b> best design per hour, token and toolchain run; simulator vs. RTL-only loop</p>
+</div>
+<div style="flex:1;background:#2A0D45;color:#F7F5FA;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;color:#F0A35E;line-height:1">6</p>
+<h3 style="font-size:32px;font-weight:600">Agentic verification</h3>
+<p style="font-size:26px;line-height:1.4;color:#D9CCE5">Does a model partitioned like the chip help agents verify complex systems?</p>
+<p style="font-size:24px;line-height:1.4;color:#D9CCE5"><b>Measure:</b> detection and false-pass rates on seeded bugs as designs deepen</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">Project ideas, 2 of 2 · each question is general; Waveflow is the test vehicle</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>These follow the three open problems on the agents slide. The boundaries: encapsulation is how the work is divided, exploration is which designs to try, verification is how to trust the result. 4: baselines are one agent with the whole codebase, or several agents without typed interfaces. 5: the harder question is architectural moves, such as moving a tasklet or re-partitioning across tiles; use a design space small enough to evaluate exhaustively as ground truth. A timed simulator within 3 to 4 times an untimed model is the prerequisite. 6: agents verify RTL with seeded bugs using an end-to-end golden, a hand-aligned model, or Waveflow; end-to-end metrics hide bugs behind saturation, averaging and decoding. The contribution is about structure, not a gap in today's models, so it should not age as models improve. This is also the Qualcomm lesson: systems models partitioned like the ASIC.</aside>
+</section>

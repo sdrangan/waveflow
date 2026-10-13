@@ -15,69 +15,39 @@ toolchain; skips loudly rather than passing when either is missing.
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
-import numpy as np
 import pytest
 
-from examples.interleaver.interleaver_inband import (
-    XSI_GATE_N_CYCLES,
-    XSI_GATE_SIZES,
-    check_xsi_outputs,
-    generate_tb,
-    write_xsi_bundles,
-)
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
-
-TOP = "interleaver_inband"
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "interleaver"
-XSI = ROOT / "xsi"
-
-#: Cycle of the last ``s_done`` word.  98 cycles a job at n=64 after a 222-cycle first job; exact, like
-#: the other XSI gates, so a move gets a human look.  Before the fix the first five completions were
-#: the same cycles (222 .. 614) and the sixth was already 26 cycles late -- the FIFO throttling -- and
-#: there was no seventh.
-WANT_LAST_DONE_CYCLE = 1300
+from examples.interleaver.interleaver_inband_system_build import (HERE, TOP, WANT_LAST_DONE_CYCLE,
+                                                                  build_dag, check_xsi, system)
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
 
-def _require_toolchain() -> None:
-    if not (XSI / XSI_RUNNER).exists():
-        pytest.skip(f"XSI gate prerequisite missing: {XSI / XSI_RUNNER}")
-    if not (ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog").is_dir():
-        pytest.skip(f"XSI gate prerequisite missing: no csynth RTL at {ROOT / f'{TOP}_proj'} -- run "
-                    f"examples.interleaver.interleaver_inband.build_xsi_gate_rtl()")
-    why = rtl_staleness(ROOT, TOP)
-    if why is not None:
-        pytest.skip(f"XSI gate prerequisite missing: {why}")
+def test_the_system_runs_the_same_golden():
+    """The system the RTL gate runs passes the golden check in pysim."""
+    system().run()
+
+
+@pytest.fixture(scope="module")
+def rtl_run() -> Path:
+    """One RTL run of the twelve-job system, through
+    ``examples/interleaver/interleaver_inband_system_build.py``: the kernel is the DUT; the driver,
+    the sink and the memory answer through their own models."""
+    return system_run(build_dag(work_dir=WORK), HERE, TOP)
 
 
 @pytest.mark.xsi
-def test_twelve_jobs_past_the_pointer_fifo_wall():
-    """Twelve jobs, every Y region bit-exact, one completion each, the last at an exact cycle."""
-    _require_toolchain()
-    sizes = XSI_GATE_SIZES
-    # Regenerate the scenario and the file list; clear the last run's dumps and the cached dll, so a
-    # run that does not complete fails on the read instead of passing on old output.
-    generate_tb(ROOT, sizes=sizes, n_cycles=XSI_GATE_N_CYCLES)
-    write_xsi_bundles(XSI, sizes=sizes)
-    (XSI / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
-    for od in ("out", "s_done"):
-        shutil.rmtree(XSI / "vectors" / od, ignore_errors=True)
-    shutil.rmtree(XSI / "xsim.dir" / TOP, ignore_errors=True)
+def test_twelve_jobs_past_the_pointer_fifo_wall(rtl_run):
+    """Twelve jobs, every Y region bit-exact, one completion each, the last at an exact cycle
+    (:data:`~examples.interleaver.interleaver_inband_system_build.WANT_LAST_DONE_CYCLE`: 98 cycles a
+    job at n=64 after a 222-cycle first job; before the fix the sixth was already 26 cycles late --
+    the FIFO throttling -- and there was no seventh).  Fewer than twelve completions is the m_axi
+    pointer-FIFO deadlock: did the generated top's m_axi go back to offset=slave?"""
+    assert check_xsi(rtl_run) == WANT_LAST_DONE_CYCLE
 
-    r = subprocess.run(xsi_runner_cmd(TOP, f"{TOP}_bfm_tb"), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"{TOP} XSI run did not complete cleanly:\n{out[-3000:]}"
 
-    cycles = np.fromfile(XSI / "vectors" / "s_done" / "cycles.bin", dtype=np.uint64)
-    assert len(cycles) == len(sizes), (
-        f"{len(cycles)} of {len(sizes)} jobs completed -- 6 is the m_axi pointer-FIFO deadlock "
-        f"(plans/maxi_pointer_fifo.md): did the generated top's m_axi go back to offset=slave?")
-    check_xsi_outputs(XSI, sizes=sizes)
-    assert int(cycles[-1]) == WANT_LAST_DONE_CYCLE, (
-        f"last completion at cycle {int(cycles[-1])}, want {WANT_LAST_DONE_CYCLE}: a real behaviour "
-        f"change -- a regression, or an improvement to re-record here.  All: {cycles.tolist()}")
+@pytest.mark.xsi
+def test_rtl_recordings_match_pysim(rtl_run):
+    """The sink's completions and the memory's arena at RTL are pysim's, word for word."""
+    assert compared_clean(rtl_run) and recorded_names(rtl_run) == ["out", "s_done"]

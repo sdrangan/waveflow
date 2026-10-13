@@ -90,14 +90,12 @@ def truncate(
     arr = np.asarray(x)
     if wid >= MAX_WIDTH:
         return arr                              # already within the 64-bit dtype
-    mask = (1 << wid) - 1
-    y = (arr.astype(np.int64) & mask)
+    y = arr.astype(np.int64, copy=False)
     if signed:
-        # Sign-extend as (y ^ s) - s: every intermediate stays inside int64, even at
-        # wid == 63, where the textbook ``y - (1 << wid)`` overflows.
-        signbit = 1 << (wid - 1)
-        y = (y ^ signbit) - signbit
-    return y
+        # Up as unsigned (no signed overflow), back down arithmetically: the low wid bits,
+        # sign-extended -- two whole-array ops instead of a mask, a compare and a select.
+        return (y.view(np.uint64) << np.uint64(64 - wid)).view(np.int64) >> np.int64(64 - wid)
+    return y & ((1 << wid) - 1)
 
 
 def saturate(

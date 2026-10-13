@@ -39,19 +39,29 @@ they fit together.
 
 ## What an XSI simulation is made of
 
-An XSI simulation has a single composite `FreeRunMod` that defines the **XSI simulation top**. In
-the [mem_copy example](../../examples/memcpy/), for instance, the XSI simulation top is `MemCopyTB`.
-Its components fall into two groups:
+An XSI simulation runs a **DUT** and a **testbench** around it, cut from one Python graph:
 
-- **The RTL top** — one Verilog module, the design under test, and what `xsim` elaborates. These
-  modules are what will actually be synthesized: the same hardware can be packaged as one or more IP
-  kernels and included in, say, a Vivado project.
-- **The testbench** — every BFM around the RTL top, each driving or answering some of its pins. These
-  modules are generally not intended for synthesis.
+- **The DUT** is what will be synthesized. Its Verilog, the **RTL top**, is one module, and it is
+  what `xsim` elaborates. The same hardware can later be packaged as one or more IP blocks and
+  included in, say, a Vivado project.
+- **The testbench** is every model around the DUT, each driving or answering some of its pins. These
+  modules are not synthesized.
 
-Which children are inside the RTL top is decided per build — that is the
-[cut](./modules.md#the-cut). How the composite becomes a running simulation is the
-[flow steps](./concurrent_flowsteps.md) page.
+![mem_copy as a system with no crossbar. A dotted box, the HwSystem MemCopySystem, holds everything. Inside it, a solid box is the DUT: the MemCopy kernel alone, one sub-top in a dashed box, made of three blue Vitis HLS tasks -- a Sequencer feeding a MemRStream and a MemWStream, with a data stream from the reader to the writer. Outside the DUT, in tan, the testbench: a command driver (StreamDriver) whose stream enters the Sequencer, a completion sink (StreamSink) fed by the MemWStream, and a memory (MemoryMod) answering the reader's m0_axi and the writer's m1_axi. A caption says each port leaving the DUT is answered by a testbench model: AxisMaster and AxisSlave for the driver and sink, one FlatMemory behind both m_axi groups.](./figures/kernel_cut.svg)
+
+The picture is mem_copy, the kernel-scale twin of the system picture in
+[Systems and the cut](./concurrent_system.md), in the same colours. At either scale the graph is an
+`HwSystem` whose `dut()` names the DUT, and everything else is testbench. mem_copy is one kernel and
+no crossbar: its kernel's four ports (two streams, two `m_axi` bundles) leave the top, and each is
+answered by a testbench model. It runs through the system flow (`mem_copy_system_build.py`) and
+reproduces the single-kernel gate exactly: 2908 cycles.
+
+Most single-kernel examples still describe their graph the older way: one composite `FreeRunMod`
+testbench class, such as `MemCopyTB`, whose children the cut splits. The roles below are the same in
+both. Folding those examples into `HwSystem` is open work (`plans/system_model.md`).
+
+Which modules are inside the DUT is decided per build: that is the [cut](./modules.md#the-cut). How
+the graph becomes a running simulation is the [flow steps](./concurrent_flowsteps.md) page.
 
 ### Three kinds of module
 

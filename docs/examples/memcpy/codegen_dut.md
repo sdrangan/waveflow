@@ -92,12 +92,13 @@ generated DUT gen\mem_copy.cpp + mem_copy.tcl + xsi/mem_copy_ports.h
     PASSED
 ```
 
-`gen/mem_copy.cpp` is the top above; `mem_copy.tcl` drives Vitis HLS C-synthesis (the `csynth` step,
-which needs Vitis and produces the RTL the [RTL rung](./rtlsim.md) drives); `xsi/mem_copy_ports.h` is
-the DUT's port map, which the generated [testbench harness](./codegen_tb.md) includes. Anything
-generated carries a banner and a regenerate overwrites a hand-edit — so don't hand-edit them.
+`gen/mem_copy.cpp` is the top above, and `mem_copy.tcl` drives Vitis HLS C-synthesis. The
+system flow's `csynth` step runs it (it needs Vitis), producing the RTL that the
+[RTL rung](./rtlsim.md) instantiates inside the system top. (`xsi/mem_copy_ports.h` is the kernel's
+own port map; the system flow writes one for the system top instead.) Anything generated carries a
+banner, and a regenerate overwrites a hand-edit, so don't hand-edit them.
 
 ## Next
 
-[Testbench codegen](./codegen_tb.md) — how the `MemCopyTB` graph becomes the XSI BFM harness that
-drives this top.
+[The system](./system.md) — the cut that puts this kernel inside a system top, and the harness the
+system flow derives to drive it.

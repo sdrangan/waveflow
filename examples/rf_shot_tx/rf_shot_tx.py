@@ -63,6 +63,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_relayout import to_dense
 from waveflow.hw.rf_sample_if import RFSampIF
@@ -329,8 +330,8 @@ class RfShotTxTB(FreeRunMod):
     samp_rate: float = SAMP_RATE
     axis_freq: float = RFSOC4X2_CLK_HZ
     word: type[Rfsoc4x2SampWord] = WORD
-    #: Which scenario the pysim run and the generated XSI main drive.  The second scenario reassigns
-    #: the bundle names in its own hand-written main.
+    #: Which scenario the pysim run drives.  At RTL each frame stream is a system of its own
+    #: (``RfShotTxSystem``, ``rf_shot_tx_system_build.py``).
     in_bundle: str = "vectors/cmd"
     n_cycles: int = XSI_N_CYCLES
     #: Which of the two builds this graph wraps — :class:`RfShotTx` or :class:`RfShotTxAbs`.  ONE
@@ -417,6 +418,36 @@ class RfShotTxTB(FreeRunMod):
         """How hard the DAC leans on the fabric — the same quantity the XSI converter model is
         constructed with, so a rate changed here cannot leave the two backends at different speeds."""
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
+
+
+@dataclass
+class RfShotTxSystem(GraphSystem):
+    """The shot transmitter as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfShotTxTB` graph, the cut the transmitter alone -- its memory inside it, so the system
+    top instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+    (:class:`RfShotTx` or :class:`RfShotTxAbs`) and *scenario* the frame stream (``"cmd"`` or
+    ``"cmd_loop"``), each its own run.
+
+    The RF sink's recording is the example's to check (``recording_check``): pysim's player runs
+    ahead by its loosely-timed lead, so the playouts align only after each backend's own startup
+    transient (``plans/lt_transient.md``)."""
+
+    dut_cls: type = RfShotTx
+    scenario: str = "cmd"
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> RfShotTxTB:
+        self.frames = dict(SCENARIOS)[self.scenario]
+        g = RfShotTxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
+                       in_bundle=f"vectors/{self.scenario}", n_cycles=int(self.n_cycles))
+        g.sink.recording_check = "example"
+        return g
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, self.frames, self.scenario)
 
 
 # ---------------------------------------------------------------------------

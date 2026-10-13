@@ -55,8 +55,12 @@ class XsiWorkspace:
         return f"xsim.dir/{self.top}/xsimk.{'dll' if os.name == 'nt' else 'so'}"
 
     def prepare(self, rtl_files, tb_name: str, tb_cpp: str, include_dirs=(),
-                extra_files: dict[str, str] | None = None, tb_include_dirs=()) -> None:
+                extra_files: dict[str, str] | None = None, tb_include_dirs=(),
+                trace: bool = False, init_files=()) -> None:
         """Copy the harness, write ``rtl_<top>.f`` and ``<tb_name>.cpp``.
+
+        *init_files* are memory initializers the RTL loads with ``$readmemh("./<name>")`` (csynth's
+        ROM ``.dat`` files): copied into the workspace, the simulator's working directory.
 
         *tb_include_dirs* are extra ``-I`` directories for compiling the **testbench** (not the RTL):
         a software host that reads typed messages includes generated schema headers, which need
@@ -77,10 +81,12 @@ class XsiWorkspace:
         (self.work_dir / f"{tb_name}.cpp").write_text(tb_cpp, encoding="utf-8")
         for name, text in (extra_files or {}).items():
             (self.work_dir / name).write_text(text, encoding="utf-8")
+        for f in init_files:
+            shutil.copyfile(f, self.work_dir / Path(f).name)
         import os
         q = '"' if os.name == "nt" else ""         # cmd keeps quotes; bash would pass them literally
         self.snapshot = XsiSnapshot(
-            self.work_dir, self.top, tb_name,
+            self.work_dir, self.top, tb_name, trace=trace,
             tb_cxxflags=" ".join(f"-I{q}{Path(d).resolve().as_posix()}{q}" for d in tb_include_dirs))
 
     def run(self, timeout: int = 1800, vectors_dir=None) -> str:

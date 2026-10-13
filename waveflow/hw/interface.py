@@ -452,23 +452,31 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
             yield self.env.timeout(0)
             return
         while True:
+            words = yield from self._take_burst()
+            yield from self.rx_proc(words)
+
+    def _take_burst(self) -> ProcessGen[Words]:
+        """The next burst off the buffer, its words retired from ``ntx`` then ``nrx`` -- without an
+        event for any step that need not wait (see ``_bus_take`` in this module)."""
+        ok, words = _store_get(self.data_buffer)
+        if not ok:
             words = yield self.data_buffer.get()
-            nwords = words.shape[0]
+        nwords = words.shape[0]
 
-            btx = min(nwords, self.ntx.level)
-            if btx > 0:
-                yield self.ntx.get(btx)
+        btx = min(nwords, self.ntx.level)
+        if btx > 0 and not _level_get(self.ntx, btx):
+            yield self.ntx.get(btx)
 
-            brx = nwords - btx
-            if brx > 0:
-                if self.nrx.level < brx:
-                    raise RuntimeError(
-                        f"Not enough words in RX queue to read {nwords} words. "
-                        f"RX queue level: {self.nrx.level}, TX queue level: {self.ntx.level}"
-                    )
+        brx = nwords - btx
+        if brx > 0:
+            if self.nrx.level < brx:
+                raise RuntimeError(
+                    f"Not enough words in RX queue to read {nwords} words. "
+                    f"RX queue level: {self.nrx.level}, TX queue level: {self.ntx.level}"
+                )
+            if not _level_get(self.nrx, brx):
                 yield self.nrx.get(brx)
-
-            yield self.env.process(self.rx_proc(words))
+        return words
 
     def get(self, nwords_max: int | None = None) -> ProcessGen[Words]:
         """Pull the next word burst from the buffer (pull model).
@@ -486,21 +494,7 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
             *nwords_max* indicates an early TLAST; a burst that was truncated
             (original length > *nwords_max*) indicates a late/missing TLAST.
         """
-        words = yield self.data_buffer.get()
-        nwords = words.shape[0]
-
-        btx = min(nwords, self.ntx.level)
-        if btx > 0:
-            yield self.ntx.get(btx)
-
-        brx = nwords - btx
-        if brx > 0:
-            if self.nrx.level < brx:
-                raise RuntimeError(
-                    f"Not enough words in RX queue to read {nwords} words. "
-                    f"RX queue level: {self.nrx.level}, TX queue level: {self.ntx.level}"
-                )
-            yield self.nrx.get(brx)
+        words = yield from self._take_burst()
 
         if nwords_max is not None:
             words = words[:nwords_max]
@@ -548,7 +542,7 @@ class QueuedTransferIFMaster(InterfaceEndpoint):
             raise RuntimeError(
                 f"Cannot write: {type(self).__name__} is not bound to an interface"
             )
-        yield self.process(self._make_write_call(words))
+        yield from self._make_write_call(words)
 
 
 @dataclass
@@ -612,16 +606,108 @@ class QueuedTransferIF(Interface):
         """
         cycles = self.latency_init + words.shape[0]
 
-        with ep.bus.request() as req:
-            yield req
-            dly = cycles / self.clk.freq
-            if tstart is not None:
-                dly = max(0.0, dly + (tstart - self.env.now))
-            if dly > 0:
-                yield self.timeout(dly)
+        bus = ep.bus
+        hold = _bus_take(bus)                   # a free bus: taken now, no request event
+        if hold is None:
+            with bus.request() as req:
+                yield req
+                yield from self._transfer(ep, words, cycles, tstart)
+            return
+        try:
+            yield from self._transfer(ep, words, cycles, tstart)
+        except GeneratorExit:                   # as a request's __exit__: no release at cleanup
+            raise
+        except BaseException:
+            _bus_drop(bus, hold)
+            raise
+        _bus_drop(bus, hold)
 
-            yield from _admit_blocking(ep, int(words.shape[0]))
+    def _transfer(self, ep: QueuedTransferIFSlave, words: Words, cycles,
+                  tstart: float | None) -> ProcessGen[None]:
+        """The hop with the bus held: the transfer time, room in the queue, the burst handed over."""
+        dly = cycles / self.clk.freq
+        if tstart is not None:
+            dly = max(0.0, dly + (tstart - self.env.now))
+        if dly > 0:
+            yield self.timeout(dly)
+
+        yield from _admit_blocking(ep, int(words.shape[0]))
+        if not _store_put(ep.data_buffer, words):
             yield ep.data_buffer.put(words)
+
+
+# -- the stream hop without events where none is needed ---------------------------------------------
+#
+# A SimPy resource decides a request when it is MADE: one that can be satisfied is granted on the
+# spot, and its event only makes the requester resume at a later step of the SAME instant.  A
+# stream hop made five such requests -- the bus, room in `nrx`, the burst into `data_buffer`, and
+# on the read side the burst and its words back out -- each an event with nothing to wait for.
+# These helpers do what the grant does, and wake whoever was waiting exactly as the grant's callback
+# would; a request that would have to wait still takes the event.  Simulated times and the order
+# of grants are unchanged.  Only the order of steps within one instant can differ.
+
+class _BusHold:
+    """Stands in ``bus.users`` for a writer that took a free bus without a request event."""
+
+    __slots__ = ()
+
+
+def _bus_take(bus: simpy.Resource) -> "_BusHold | None":
+    """Take *bus* now if it is free and nobody is queued for it; ``None`` if the caller must wait."""
+    if bus.users or bus.put_queue:
+        return None
+    hold = _BusHold()
+    bus.users.append(hold)
+    return hold
+
+
+def _bus_drop(bus: simpy.Resource, hold: "_BusHold") -> None:
+    """Release a :func:`_bus_take`, granting the next queued request as a release event would."""
+    bus.users.remove(hold)
+    if bus.put_queue:
+        bus._trigger_put(None)
+
+
+def _level_put(c: simpy.Container, amount) -> bool:
+    """Add *amount* to *c* now if it fits and no put is queued ahead; wakes queued gets."""
+    if c.put_queue or c._capacity - c._level < amount:
+        return False
+    c._level += amount
+    if c.get_queue:
+        c._trigger_get(None)
+    return True
+
+
+def _level_get(c: simpy.Container, amount) -> bool:
+    """Take *amount* from *c* now if it is there and no get is queued ahead; wakes queued puts."""
+    if c.get_queue or c._level < amount:
+        return False
+    c._level -= amount
+    if c.put_queue:
+        c._trigger_put(None)
+    return True
+
+
+def _store_put(s: simpy.Store, item) -> bool:
+    """Put *item* into a plain ``simpy.Store`` now if there is room; wakes a queued get.  A
+    subclass (``mm_queue``'s notifying store) keeps its events -- it acts on them."""
+    if type(s) is not simpy.Store or s.put_queue or len(s.items) >= s._capacity:
+        return False
+    s.items.append(item)
+    if s.get_queue:
+        s._trigger_get(None)
+    return True
+
+
+def _store_get(s: simpy.Store):
+    """``(True, item)`` from a plain ``simpy.Store`` now if one is there; ``(False, None)`` if the
+    caller must wait."""
+    if type(s) is not simpy.Store or s.get_queue or not s.items:
+        return False, None
+    item = s.items.pop(0)
+    if s.put_queue:
+        s._trigger_put(None)
+    return True, item
 
 
 def _admit_blocking(ep: "QueuedTransferIFSlave", nwords: int) -> "ProcessGen[None]":
@@ -673,11 +759,13 @@ def _admit_blocking(ep: "QueuedTransferIFSlave", nwords: int) -> "ProcessGen[Non
         return
     cap = ep.nrx.capacity
     want = nwords if cap == math.inf else min(int(nwords), int(cap))
-    yield ep.nrx.put(int(want))
+    if not _level_put(ep.nrx, int(want)):      # room now: no event (see _bus_take's note)
+        yield ep.nrx.put(int(want))
     rem = int(nwords) - int(want)
     if rem > 0:
         # Only reachable when the burst is larger than the whole queue.  See the table above.
-        yield ep.ntx.put(rem)
+        if not _level_put(ep.ntx, rem):
+            yield ep.ntx.put(rem)
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +982,14 @@ class StreamIF(QueuedTransferIF):
         #: When the most recent drop happened.  A count alone cannot separate a startup transient
         #: from a steady-state fault, which is the same reason ``RFSampIF`` keeps its index.
         self.last_drop_time = 0.0
+
+    def rtl_fifo_depth(self, *, between_kernels: bool) -> int:
+        """The RTL realization of this link inside a DUT (``plans/system_model.md`` D3): the depth of
+        the ``mm_sync_fifo`` it becomes, or 0 for plain nets.  Between two kernels, a depth above the
+        default is a real FIFO, as it is in pysim; a link with a view at one end is that view's FIFO
+        already, so it is nets."""
+        depth = int(self.depth or DEFAULT_STREAM_DEPTH)
+        return depth if between_kernels and depth > DEFAULT_STREAM_DEPTH else 0
 
     def write(self, words: Words, tstart: float | None = None) -> ProcessGen[None]:
         """
@@ -1340,7 +1436,7 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
                 f"Cannot write: {type(self).__name__} '{self.name}' "
                 "is not bound to an interface"
             )
-        yield self.process(self._make_write_call(raw_words))
+        yield from self._make_write_call(raw_words)
 
     @port_write
     def offer(self, data, word_rate: float | None = None) -> ProcessGen[int]:
@@ -1400,7 +1496,7 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
                 f"Cannot write: {type(self).__name__} '{self.name}' "
                 "is not bound to an interface"
             )
-        yield self.process(self.interface.write(raw_words, tstart=t_out_start))
+        yield from self.interface.write(raw_words, tstart=t_out_start)
 
     # ----------------------------------------------------------------
     # The sequential-testbench vocabulary — SOURCE, not a simulation API.

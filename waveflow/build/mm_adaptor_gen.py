@@ -150,6 +150,10 @@ class BramView:
 
     module = "mm_bram_port"
     mem_module = "bram_t2p"
+    #: The memory's port B -- the kernel's -- tied off, when no kernel holds it (an on-chip memory
+    #: reached only over the bus): its inputs low, its read data left open.  What the system top
+    #: renders, stated here so the memory's identity can carry it (``RtlInstance.ties``).
+    IDLE_TIES = (("b_addr", "0"), ("b_en", "0"), ("b_din", "0"), ("b_we", "0"), ("b_dout", ""))
 
     @property
     def inst(self) -> str:

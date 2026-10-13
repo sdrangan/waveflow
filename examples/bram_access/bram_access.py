@@ -88,6 +88,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL, SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.simulation.simobj import ProcessGen
@@ -294,7 +295,7 @@ class ReadResp(DataList):
 #: integer literals.
 SCHEMA_CLASSES = [BramStatusField, BramOpField, WriteComputeCmd, WriteResp, ReadCmd, ReadResp]
 
-#: A fixed run bound for the generated XSI main — a testbench constant, not a latency.  The sink
+#: A fixed run bound for the XSI run — a testbench constant, not a latency.  The sink
 #: timestamps the real completion, and ``WANT_CYCLES`` in the XSI test is that measurement.
 XSI_N_CYCLES = 4000
 
@@ -588,7 +589,7 @@ class BramAccessTB(FreeRunMod):
     small: the elaborated design's only pins are AXI-Stream, so the BFM library needs no memory
     model.  **There is no BRAM XSI object anywhere in this repo**, and that is the stronger story: in
     XSI the memory is ``bram_t2p.v`` itself, compiled into the simulation beside the synthesized
-    kernel and named in ``rtl_bram_access_top.f``.  There is no second implementation that could
+    kernel and named on the system top's compile list.  There is no second implementation that could
     disagree with the first — which is ``docs/guide/interface/primitive/bram.md``'s point that a hand-written
     memory is *more* verifiable than an emulated one.
     """
@@ -1084,6 +1085,38 @@ def run_pysim(root=None, sc: Scenario | None = None, *, bitwidth: int = WORD_BW,
             drv.root = root
         tb.sim.run_sim()
     return tb
+
+
+@dataclass
+class BramAccessSystem(GraphSystem):
+    """bram_access as a **system** (``plans/system_model.md`` S3e): the :class:`BramAccessTB` graph,
+    the cut :class:`BramAccess` alone.  Its memory is hand-written RTL beside the kernel
+    (``add_rtl_mod``), so the system top instantiates the DUT as its **wrapper** -- the kernel and
+    ``bram_t2p`` joined -- whose ports are the six AXI-Stream ones.
+
+    *scenario* is ``"zero"`` (:func:`scenario_zero`, the gate) or ``"collision"``
+    (:func:`collision_scenario`, the deliberate read-during-write the waveform scan must find)."""
+
+    scenario_name: str = "zero"
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> BramAccessTB:
+        from waveflow.simulation.simulation import Simulation
+
+        self.scenario: Scenario = {"zero": scenario_zero,
+                                   "collision": collision_scenario}[self.scenario_name]()
+        return BramAccessTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, self.scenario)
+
+    def check(self) -> BramAccessTB:
+        """The acceptance check on what the sinks captured."""
+        check_outputs(*captured(self.tb), sc=self.scenario, where="pysim: ")
+        return self.tb
 
 
 def captured(tb: BramAccessTB) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

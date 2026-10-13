@@ -58,6 +58,11 @@ class FixedField(IntField):
         **kwargs: Any,
     ) -> type[FixedField]:
         """Return a cached ``FixedField`` for ``ap_fixed<W, I, q, o>`` (one per format)."""
+        if not kwargs and type(W) is int and type(I) is int:    # a format made before: validated
+            cached = cls._specializations.get(
+                (cls, int(W), int(I), bool(signed), q_mode, o_mode, ()))
+            if cached is not None:
+                return cached
         Format(W, I, signed, q_mode, o_mode)        # validates + fires the >64-bit guard
 
         overrides = cls.validate_specialize_kwargs(kwargs)

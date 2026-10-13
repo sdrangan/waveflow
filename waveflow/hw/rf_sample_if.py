@@ -530,4 +530,4 @@ class RFSampIF(Interface):
         # specialization, and naming the alias would make the registry lookup fail for a class that
         # plainly exists.  Spelling the specialization keeps the emitted C++ identical either way.
         return ChannelModel("BlockChannel<RfBlockMsg>", peers=("tx", "rx"),
-                            extra_args=(str(int(self.depth)),))
+                            extra_args=(str(int(self.depth)),), reports_counters=True)
