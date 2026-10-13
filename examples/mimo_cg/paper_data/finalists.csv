@@ -1,0 +1,14 @@
+# mimo_cg finalists: numpy=2.5.3, base_seed=20260930, model_sha256=d95510d337e992d3, loss_db=0.5
+name,build,modulation,M,speed,guard,job_budget,nit,loss_db,K,L,R,C,cmul,W,g_s,mem_dw,sob_depth,cmd_depth,model_lut,model_ff,model_dsp,model_bram,model_job
+k4_loose_guard,fin_det_k4_l1_r1_c4_m3_w12g4_d32_s3_q2,16qam,64,loose,guard,17262,2,3.682000e-01,4,1,1,4,3,12,4,32,3,2,14611,9102,24,17,8.472800e+03
+k4_loose_no_guard,fin_det_k4_l1_r1_c4_m3_w14g0_d32_s3_q2,16qam,64,loose,no guard,17262,4,4.936000e-01,4,1,1,4,3,14,0,32,3,2,14922,9445,24,18,1.569240e+04
+k4_tight_guard,fin_det_k4_l8_r4_c16_m3_w12g4_d32_s3_q2,16qam,64,tight,guard,1178,2,3.682000e-01,4,8,4,16,3,12,4,32,3,2,52398,31783,288,31,1.155000e+03
+k4_tight_no_guard,fin_det_k4_l8_r4_c16_m3_w16g0_d32_s2_q2,16qam,64,tight,no guard,1178,2,3.637000e-01,4,8,4,16,3,16,0,32,2,2,58838,38908,288,40,1.161300e+03
+k8_loose_guard,fin_det_k8_l1_r1_c4_m3_w10g8_d32_s2_q2,16qam,64,loose,guard,24420,3,3.189000e-01,8,1,1,4,3,10,8,32,2,2,18262,10301,17,19,1.825430e+04
+k8_loose_no_guard,fin_det_k8_l1_r1_c4_m3_w14g0_d32_s2_q2,16qam,64,loose,no guard,24420,4,4.844000e-01,8,1,1,4,3,14,0,32,2,2,19083,11197,24,21,2.219970e+04
+k8_tight_guard,fin_det_k8_l16_r2_c16_m3_w12g4_d32_s2_q2,16qam,64,tight,guard,2035,3,1.988000e-01,8,16,2,16,3,12,4,32,2,2,82869,45742,288,54,1.864900e+03
+k8_tight_no_guard,fin_det_k8_l16_r4_c16_m3_w14g0_d32_s2_q2,16qam,64,tight,no guard,2035,4,4.844000e-01,8,16,4,16,3,14,0,32,2,2,91055,54521,384,63,1.849900e+03
+k16_loose_guard,fin_det_k16_l1_r1_c4_m3_w12g4_d32_s2_q2,16qam,64,loose,guard,47548,4,4.903000e-01,16,1,1,4,3,12,4,32,2,2,28038,15883,24,37,3.926810e+04
+k16_loose_no_guard,fin_det_k16_l1_r1_c4_m3_w16g0_d32_s2_q2,16qam,64,loose,no guard,47548,4,4.767000e-01,16,1,1,4,3,16,0,32,2,2,31293,18868,24,41,3.927790e+04
+k16_tight_guard,fin_det_k16_l16_r4_c16_m3_w12g4_d32_s2_q2,16qam,64,tight,guard,3648,4,4.903000e-01,16,16,4,16,3,12,4,32,2,2,97252,55760,384,59,3.208900e+03
+k16_tight_no_guard,fin_det_k16_l16_r4_c16_m3_w16g0_d32_s2_q2,16qam,64,tight,no guard,3648,4,4.767000e-01,16,16,4,16,3,16,0,32,2,2,110305,68834,384,79,3.221100e+03

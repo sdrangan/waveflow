@@ -1,0 +1,11 @@
+{
+  "key": "cg_cmd_rx-6d7d32f4",
+  "cls_name": "CgCmdRx",
+  "cls_module": "examples.mimo_cg.hw.detector",
+  "params": {
+    "K": 4,
+    "N": 32,
+    "mem_dwidth": 32
+  },
+  "signature": "6d7d32f470b96f92ac34e18cd9faa5647eac9208ba14926e830f620e7d3e884f"
+}

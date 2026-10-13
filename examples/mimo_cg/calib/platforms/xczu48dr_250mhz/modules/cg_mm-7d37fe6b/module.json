@@ -1,0 +1,17 @@
+{
+  "key": "cg_mm-7d37fe6b",
+  "cls_name": "CgMm",
+  "cls_module": "examples.mimo_cg.hw.mm",
+  "params": {
+    "C": 8,
+    "K": 4,
+    "L": 4,
+    "N": 32,
+    "R": 4,
+    "cmul": 4,
+    "fmt": 0,
+    "mem_dwidth": 64,
+    "sob_depth": 2
+  },
+  "signature": "7d37fe6ba40ed1b19b05f77d08e7ec494f46073ea87c70a04fc5247079c19f9b"
+}

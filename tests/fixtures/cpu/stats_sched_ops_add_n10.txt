@@ -1,0 +1,33 @@
+# Trimmed from a gem5 v25.1.0.1 run of sched_ops op=add n=10 seed=3 (HPI, 1.2 GHz,
+# DDR4_2400_8x8 x1): the measured region's block and the exit block, key scalar lines only.
+---------- Begin Simulation Statistics ----------
+simTicks                                       253232                       # Number of ticks simulated (Tick)
+simInsts                                          178                       # Number of instructions simulated (Count)
+system.cpu_cluster.cpus.numCycles                 304                       # Number of cpu cycles simulated (Cycle)
+system.cpu_cluster.cpus.cpi                  1.707865                       # CPI: cycles per instruction (core level) ((Cycle/Count))
+system.cpu_cluster.cpus.ipc                  0.585526                       # IPC: instructions per cycle (core level) ((Count/Cycle))
+system.cpu_cluster.cpus.commitStats0.numInsts          178                       # Number of instructions committed (thread level) (Count)
+system.cpu_cluster.cpus.commitStats0.numOps          192                       # Number of ops (including micro ops) committed (thread level) (Count)
+system.cpu_cluster.cpus.dcache.overallAccesses::total           41                       # number of overall (read+write) accesses (Count)
+system.cpu_cluster.cpus.icache.overallAccesses::total           97                       # number of overall (read+write) accesses (Count)
+system.mem_ctrls.readReqs                           1                       # Number of read requests accepted (Count)
+system.mem_ctrls.writeReqs                          0                       # Number of write requests accepted (Count)
+---------- End Simulation Statistics   ----------
+---------- Begin Simulation Statistics ----------
+simTicks                                     25613917                       # Number of ticks simulated (Tick)
+simInsts                                         7188                       # Number of instructions simulated (Count)
+system.cpu_cluster.cpus.numCycles               30749                       # Number of cpu cycles simulated (Cycle)
+system.cpu_cluster.cpus.cpi                  4.277824                       # CPI: cycles per instruction (core level) ((Cycle/Count))
+system.cpu_cluster.cpus.ipc                  0.233764                       # IPC: instructions per cycle (core level) ((Count/Cycle))
+system.cpu_cluster.cpus.commitStats0.numInsts         7188                       # Number of instructions committed (thread level) (Count)
+system.cpu_cluster.cpus.commitStats0.numOps         8392                       # Number of ops (including micro ops) committed (thread level) (Count)
+system.cpu_cluster.cpus.dcache.overallMisses::total           65                       # number of overall misses (Count)
+system.cpu_cluster.cpus.dcache.overallAccesses::total         2777                       # number of overall (read+write) accesses (Count)
+system.cpu_cluster.cpus.dcache.overallMissRate::total     0.023407                       # miss rate for overall accesses (Ratio)
+system.cpu_cluster.cpus.icache.overallMisses::total          238                       # number of overall misses (Count)
+system.cpu_cluster.cpus.icache.overallAccesses::total         2699                       # number of overall (read+write) accesses (Count)
+system.cpu_cluster.l2.overallMisses::total          279                       # number of overall misses (Count)
+system.cpu_cluster.l2.overallAccesses::total          288                       # number of overall (read+write) accesses (Count)
+system.mem_ctrls.readReqs                         279                       # Number of read requests accepted (Count)
+system.mem_ctrls.writeReqs                          0                       # Number of write requests accepted (Count)
+---------- End Simulation Statistics   ----------

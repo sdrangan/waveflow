@@ -1,0 +1,133 @@
+# Lessons learned: the general-purpose processor model (`plans/cpu_model.md`)
+
+Appended as the work teaches something. Newest last.
+
+## M0: environment and ground-truth tools
+
+- **Check the physical board's part number, not the repo's.** Every `xczu48dr` platform in the repo
+  says `-2` (`xczu48dr-ffvg1517-2-e`), but the RFSoC 4x2 carries `XCZU48DR-1FFVG1517E`. For the A53
+  that is 1200 MHz, not 1333 (DS926 `F_APUMAX`). The FPGA synthesis target and the silicon on the
+  desk are different facts; a processor model must take the second.
+- **gem5's HPI caches are the A53's caches.** `HPI_ICache` / `HPI_DCache` / `HPI_L2` (32 KiB 2-way,
+  32 KiB 4-way, 1 MiB 16-way) match UG1085 exactly, so the reference configuration needs no cache
+  override. Only `starter_se.py`'s clock (default 4 GHz) and DRAM (default DDR3, 2 channels) must be set.
+- **`scons` ignores `CROSS_COMPILE` from the environment.** `util/m5` takes it as a build variable:
+  `scons arm64.CROSS_COMPILE=<prefix> build/arm64/out/libm5.a`. The Vitis 2024.1 cross compiler runs
+  inside the gem5 dependency image when `/tools/Xilinx` is mounted read-only.
+- **McPAT at `74d4759f` builds 64-bit with `make CXX=g++ CC=gcc`.** Its `mcpat.mk` hardcodes `-m32`;
+  overriding both variables on the command line is enough, with no source change.
+- **A long background test run can die with the session.** The first baseline stopped at 18 % when the
+  session restarted, with no summary. Write test output to a file and check it before trusting it.
+  With `-q -rfE` this suite printed no "N passed" line; count the progress characters instead.
+- **An empty m5-marked region costs 94 cycles on HPI at 1.2 GHz.** Larger than many tiny kernels'
+  own cost, so subtracting it (step 9) is not optional for the scheduler operations.
+- **Budget the gem5 build for a shared machine.** `build/ARM/gem5.opt` took 88 min at `-j6` with the
+  machine's load around 16; it is a one-off, but don't plan a step around the 30–60 min estimate.
+
+## M1: the processor model
+
+- **An unconfigured `DirectMMIF` charges no time.** It adds only `latency_write` / `latency_read`
+  (default 0); per-word time is the slave's to model. A test of "bus time is charged once" first saw
+  zero bus time and so proved nothing. Configure the link and the slave before measuring the bus.
+- **The heap ready queue holds its rate under a burst.** 37k tasks/s with 20,000 tasks queued at
+  once, against 218/s measured for `simpy.PriorityResource` in planning. Streaming arrivals give 40k/s.
+  Both were on a machine at load ~9 of 8 threads.
+- **Hand-computed timelines at 1 Hz caught nothing, and were still worth it.** With one cycle per
+  second every expected time is an integer, so the preemption rule (floor, partial switch lost,
+  original `(prio, seq)` kept) is pinned exactly rather than approximately.
+
+## M2: calibration harness
+
+- **GCC renames the functions it specializes.** At `-O2` the aarch64 build turned `tg_remove` into
+  `tg_remove.isra.0` (IPA-SRA). Code bytes counted by exact symbol name miss it; count every symbol
+  whose name before the first dot is the function's.
+- **Two int16 products can overflow int32 when summed.** `(-32768)^2 * 2 = 2^31`. The Q15 kernel's
+  first draft did exactly that, which is undefined behaviour in C and would have broken the twin on a
+  rare input. Widen to int64 before adding.
+- **A test that a gate fails is part of the gate.** Pointing `WAVEFLOW_GEM5_ROOT` at nothing must turn
+  `-m gem5` red (it does: 9 of 9 skipped, exit 1); otherwise "9 passed" means nothing.
+- **Fit the criterion you will be judged by.** Ordinary least squares on a corpus spanning five decades
+  of cycles fits the largest points and fails the small ones; the acceptance metric was relative error,
+  and weighting each point by 1/measured^2 fixed every validation miss without changing a model's form.
+- **A validation pass at a few sizes does not cover the sizes between them.** Validation at
+  n = 3/12/48 passed; test at n = 6/24 and dispatch n = 32 missed the max bound by up to 39 %. Small
+  operations carry microarchitectural effects (branch-predictor training, pipeline fill) that counters
+  from a Python twin cannot see, and two seeds per size is thin. Register denser held-out sizes where a
+  family's cost is small.
+- **Append to a module above its `__main__` guard, never below.** The area stages were appended after
+  `if __name__ == "__main__": raise SystemExit(main())`, so the CLI ran `main()` before they existed
+  (`NameError`); imports and tests were unaffected, which is why it surfaced only on the command line.
+- **McPAT cannot size a TLB for a virtual address wider than 32 bits** (at `74d4759f`): every width
+  above 32 fails with "no valid data array organizations found". Bisecting the description from the
+  shipped template, one change at a time, found it in five runs.
+- **`pytest ... | tail -1 && git commit` commits on red.** A pipe's exit status is the last command's,
+  so the commit went in with two failing tests. Write test output to a file and check `$?` before
+  committing.
+- **A new directory under a glob changes what a test reads.** `cpu/*/corpus.csv` silently started
+  including `cpu/area/corpus.csv`. Name the files a test is about.
+
+## M3: the example and system validation
+
+- **With the body run at grant, decide inside the call.** A `Processor` task's Python body runs when
+  the call first holds a core, possibly long after it was submitted. Any choice about shared state
+  (which job is the head, which one to age) made by the caller beforehand is stale by then: two
+  dispatchers took the same head, and aging re-inserted a dispatched job. Make the choice in the body,
+  and check the invariant (each job dispatched exactly once) at the end of every run.
+- **`execute`'s `prio` is the call's scheduling priority.** A function argument of the same name never
+  reaches the function. Name application priorities something else.
+- **A family's weakest confidence can be one call.** `sched_ops.add` read EXTRAPOLATED because 35 of
+  200 arrivals found an empty list; per-level call counts make that visible.
+- **An m5 marker pair costs 94 cycles cold and 8 hot.** Calibration programs enter their one region
+  with the marker code cold, and the standalone empty program measures that cold cost; back-to-back
+  regions run it hot. Subtracting the cold figure from a hot region made dispatches negative.
+- **Markers around an operation perturb it by tens of cycles, the size of the operation.** The same
+  dispatch nets agree across contexts, but scheduler operations moved by ~85 cycles depending on what
+  preceded the region. Short operations cannot be timed to 10 % one region each; time a whole
+  sequence in one region and compare totals.
+- **Isolated-call calibration over-prices back-to-back execution.** Each calibration point is one
+  call after one warm-up; a real scheduler runs operations back to back, with predictors and pipeline
+  in a steady state. The model over-predicted the example's 610 back-to-back regions by 19.6 % in
+  total (marker-free), with a roughly constant per-call excess. Calibrating small operations as
+  batches of back-to-back calls would measure the steady state.
+- **gem5's stats-URI help shows `;` between options; use `&`.** Python 3.10+ query parsing no longer
+  splits on `;`, so gem5 failed on `desc=False;spaces=False`.
+- **Regime features carry a model across cache sizes.** Halving L1D and L2 made `gather_hist` 1.61x
+  slower, and the unchanged model -- its features recomputed for the new sizes -- predicted it within
+  6.9 %, better than at the configuration it was fitted on. Features expressed against the
+  configuration, not absolute sizes, are what make a DSE over cache sizes possible without
+  recalibrating every point.
+- **gem5 v25.1 has no command-line parameter override, and starter_se.py no cache options.** A small
+  config script that subclasses the HPI cache classes and calls starter_se's `main()` keeps every
+  other behaviour identical.
+
+## M4: docs and close-out
+
+- **A throttled input looks healthy.** The example's arrival loop called `add` itself, so it drew
+  the next arrival only after the previous add had finished: the stream configured at 0.3 µs arrived
+  every 0.6 µs, and the report (utilization 0.76, plausible latencies) gave no sign of it. Every test
+  passed. Measure a generated input against its specification (here, the mean inter-arrival), and
+  give each arrival its own process so the system under test cannot pace its own load.
+- **Charge a context switch per thread, not per call.** The switch was keyed on the call's sequence
+  number, so every `execute` paid one, even back-to-back calls of one thread: 49,886 of the replay's
+  cycles were switches against 75,656 of compute. Every hand-computed timeline had one call per
+  thread, so none could see it. Name the software thread (here, the SimPy process that submits the
+  call) and add a timeline where one thread calls twice.
+- **Guard what an evaluation scored, not only its report.** The once-only test refused to rewrite
+  `accuracy.csv`, but `fit` would silently refit and overwrite the models that file scored. The
+  refusal now sits on the fit stages too.
+- **`--diff-filter=A` names the commit that added a file, not the one that holds its contents.** A
+  registration edited later would still be stamped with the first version. Stamp the last commit
+  that changed it, and let tests that need history skip in a shallow clone.
+- **Throughput belongs to a load as well as a tool version.** The same code ran the bench at 40,000
+  tasks/s at load average ~9 and 72,000 on an idle machine. Record the load next to the number.
+- **A speed ratio against a short run measures start-up.** The AC11 gate divides gem5's
+  `mode=total` wall time (~10 s, mostly fixed start-up) by the model's ~9 ms: about 1,100x against a
+  1,000x bound. An 11 % slower rewrite failed it. Gate on a ratio with real margin, or measure the
+  long run the claim is about.
+- **A pinned ground-truth number guards the measured code, not only the model.** Teaching the C
+  replay a no-op operation added one compare-and-branch to its per-operation `apply()`, and gem5's
+  total for the same trace moved from 63,266 to 67,844 cycles (+7 %) although the branch was never
+  taken: far more than one compare costs, so the code layout moved with it. Keep a measured binary's
+  hot path frozen; filter its input on the host.
+- **Independent review earns its cost at the end.** Twenty findings after every test was green; two
+  of them (the throttled arrivals and the per-call switch) changed published numbers.

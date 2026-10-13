@@ -23,8 +23,8 @@ array access, and codegen for free. This is the case that most needs the
 rounds on assignment, so working through `.val` by hand is easy to get wrong. The
 operators (`*`, `+`, `-`) are sugar over the **free functions** in
 [`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) (not methods — the
-container stays a plain container): `mult`, `add`, `sub`, `shift`, `fixed_sum`, and
-`quantize`. They run entirely in the **integer domain** and match the Vitis `ap_fixed`
+container stays a plain container): `mult`, `add`, `sub`, `div`, `shift`, `fixed_sum`,
+and `quantize`. They run entirely in the **integer domain** and match the Vitis `ap_fixed`
 datapath bit-for-bit.
 
 ## Arrays of fixed-point values
@@ -55,6 +55,7 @@ C++).
 | `mult(a, b)` | `<Wa+Wb, Ia+Ib>` | exact product (fraction bits add) |
 | `add(a, b)` | `<max(Ia,Ib)+1+max(Fa,Fb), max(Ia,Ib)+1>` | fractions aligned; one carry bit |
 | `sub(a, b)` | like `add`, **signed** | subtraction may go negative |
+| `div(a, b)` | `<Sb+Wa+max(Fb,0), Sb+Ia+Fb>` | truncates toward zero and keeps the dividend's fraction bits; `x / 0 = 0` (see [Division](../../schema/python/fixpoint.md#division)) |
 | `shift(a, n)` | `<Wa, Ia+n>` | lossless point-move (bits unchanged), value ×2ⁿ |
 | `fixed_sum(a)` | integer bits grow by `ceil(log2 N)` | full-precision reduction |
 | `quantize(a, target)` | `target` | **the lossy step** — rounding (`QMode`) + overflow (`OMode`) |

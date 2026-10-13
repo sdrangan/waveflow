@@ -226,27 +226,53 @@ baseline comes from the runs' own logs (`analyze_events`), not from estimates.
 5. **"Why not just have an LLM write it?"** — answer with the evaluation-cost table and, if
    step 5 is run, the agent comparison.
 
-## Build-vs-have map (as of 2026-10-10)
+## Build-vs-have map (as of 2026-10-11)
+
+Refreshed 2026-10-11, combining the MIMO-CG results (2026-10-05) with main's revision of
+2026-10-10. The executable plan for this paper's simulations is
+[`plans/mimo_cg/mimo_cg_paper_sims.md`](mimo_cg/mimo_cg_paper_sims.md): massive-MIMO uplink CG
+detection on `xczu48dr` with Vitis 2024.1. **All of its phases have run and been reviewed**;
+everything application-level lives in `examples/mimo_cg/`, and the framework gained no
+CG-specific code.
 
 | Paper piece | Status |
 |---|---|
-| Bit-exact functional (accuracy) | **built** — `FixedField` (`waveflow/hw/fixpoint.py`), `ComplexField` (`waveflow/hw/complexfield.py`) |
-| Shared memory + queue (CG state) | **built** — `MemoryMod`, the memory-mapped views (`build_mm_device`), credit links, the crossbar |
+| Bit-exact functional (accuracy) | **built and used** — `FixedField` (`waveflow/hw/fixpoint.py`) and `ComplexField` (`waveflow/hw/complexfield.py`), plus the example's fixed-point CG golden (`examples/mimo_cg/mimo_cg_fixed.py`) with the division α and β need. Accuracy was swept over 27 scenarios, 7 widths, 3 guards and up to 8 iteration counts with no Vitis (plan Phases 2–3) |
+| Vector unit (CG dots / AXPY) | **built** — first in `examples/mimo_cg/hw/`, since Phases 7–9 the reusable CG vector unit of `waveflow/linalg/` (`CgVectorCore`, `CgVectorUnit`; HLS bodies `waveflow/build/cg_vector*_task.h`), which the detector runs on: lanes as a knob, per-column α and β with one divider per lane |
+| Systolic matmul block | **built** — likewise now the systolic matrix multiply of `waveflow/linalg/` (`SystolicCore`, `SystolicUnit`; `waveflow/build/systolic_*_task.h`): an R × C array with a 3- or 4-multiply complex multiplier |
+| CG control + the CG system | **built** — the free-running composite `CgDetector` (`examples/mimo_cg/hw/detector.py`), bit-exact at RTL for K = 4, 8, 16 |
+| Shared memory + queue (CG state) | **built** — `MemoryMod`, the memory-mapped views (`build_mm_device`), credit links, the crossbar; in the CG detector the blocks exchange P and S through stream-of-blocks channels |
 | System verification at RTL | **built** — the system DAG (`add_system_steps`), XSI, the host-trace gate (`markov`, `mm_fir`) |
-| Cycle-approximate model | **built for the existing blocks** — calibrated pysim within 2–5% of RTL on the system examples; per-block calibration of new blocks to do |
-| Resource-approximate model | **built: prediction and composition** — `docs/guide/resource_model/` (per-module models, hierarchical composition, confidence, fitting from sweeps). **To do:** the active, decision-aware sampling and its validation |
+| Cycle-approximate model | **built** — calibrated pysim within 2–5% of RTL on the system examples; for the CG detector on xczu48dr, `examples/mimo_cg/hw/models.py`: counted trip counts plus a fitted per-tile overhead, 1.0% mean job-time error over 8,807 measured jobs |
+| Resource-approximate model | **built: prediction and composition** — `docs/guide/resource_model/` (per-module models, hierarchical composition, confidence, fitting from sweeps); for the CG detector, the same models file: DSP and block RAM counted (exact on 1,440 of 1,440 measured detectors), LUT and FF fitted per block (0.9% and 2.3% mean error), composed by the framework's `compose`. **To do:** the active, decision-aware sampling and its validation |
 | Sweeps, calibration storage | **built** — `SweepRunner` (`waveflow/build/sweep.py`), the calibration library |
+| DSE / build / conformance harness | **built and used** — `SweepRunner` drives the campaigns; `examples/mimo_cg/hw/dse.py` prices 6,084,720 joint designs in 15 s |
 | Timing / cost accounting | **built** — `waveflow.events`, `analyze_events` |
-| Vector unit (CG dots / AXPY) | **new — a complete rewrite.** `examples/vecunit` is older work on the retired API (`Packet`, `HwObj`) and is not a starting point; `vecmult` (element-wise, command-response) is the nearest curated kernel to model it on |
-| Systolic matmul block | **new** (application-level) |
-| CG control + the CG system | **new** (application-level) |
+| Brute-force baseline | **run** on a slice — 1,440 detectors (1.3% of the configurations), 57 tool-hours; the models' pick is within 10% of the best in 99.8% of 2,592 pre-registered decisions (`examples/mimo_cg/hw/fidelity.py`) |
+| Sampling experiment | **run as a learning curve** on existing data: with 45 of the 86 calibration builds, 19 of 20 random subsets pass the same 90% bar. Uncertainty- or decision-aware sampling is not built |
 | Incremental RTL (cheap workload points, cheap calibration) | **planned** — `plans/incremental_xsi.md` |
 
-The infrastructure largely exists. The new work is the **application** (systolic block, vector
-unit, CG control, the CG system) and the **active resource-sampling method** with its held-out
-validation. The paper *composes*.
+**Where the experimental structure stands.** (1) Calibrate: 86 builds, 2.1 tool-hours. (2) Validate:
+46 held-out builds, each set fixed before the calibration round it tests (34 before the first, 12
+after it; the second models were refitted after 40 of them had been scored), then the 1,440-build
+sub-grid. (3) DSE: the whole
+cross-product in Python. (4) Baseline and finding: the brute force of the sub-grid took 57
+tool-hours and the whole space is projected at about 4,000; the design finding is what guard bits
+on two scalars are worth (a median 8% of LUTs and 15% of flip-flops by the models' csynth numbers,
+2–18% and 3–18% as implemented on six pairs, and feasibility itself for a quarter of the
+questions). The numbers and their caveats are in the plan's sections 14 to 16.
+
+**Reviewer risks, revisited.** The approximate models were validated on builds they never saw, and
+the weak spots are stated (one mispredicted family; csynth is not the implemented design; timing
+closure is shown up to 110k csynth LUTs only; the brute force is a slice). Resources
+did lead with DSP and block RAM, which are exact. The finding is modest in size and stated as such.
+The brute-force baseline exists.
 
 ## Path to a plan
+
+*Since this section was written, `plans/mimo_cg/mimo_cg_paper_sims.md` has carried out steps
+1–4 and the DSE and finding of step 6 (merged into `feat/cpu-model` on 2026-10-11); step 5,
+the active sampling method, and the optional agent experiment are still open.*
 
 What would turn these notes into staged work, in order:
 

@@ -83,6 +83,35 @@ static inline auto cmult(const CA& a, const CB& b) {
     return cu_make<CA>(re, im);
 }
 
+// --- cmult3: the same exact product as cmult, with three multiplies (the Gauss form) ----------
+//   k1 = br (ar + ai),  k2 = ar (bi - br),  k3 = ai (br + bi);  re = k1 - k3,  im = k1 + k2.
+// Every term is exact (the native operators widen), so re and im equal cmult's bit for bit, and
+// cmult3 returns them in cmult's own result type, which holds them exactly.  For fixed-point and
+// integer elements only: in floating point the three-multiply form rounds differently.
+// cmult3_parts works on separate real and imaginary parts, for datapaths that keep them apart
+// (the processing elements of a systolic array); the caller's R must hold the exact product.
+// Python twin: complexutils.cmult3.
+template <typename TA, typename TB, typename R>
+static inline void cmult3_parts(const TA& ar, const TA& ai, const TB& br, const TB& bi, R& re,
+                                R& im) {
+#pragma HLS INLINE
+    auto k1 = br * (ar + ai);
+    auto k2 = ar * (bi - br);
+    auto k3 = ai * (br + bi);
+    re = k1 - k3;
+    im = k1 + k2;
+}
+
+template <typename CA, typename CB>
+static inline auto cmult3(const CA& a, const CB& b) {
+#pragma HLS INLINE
+    auto p = cu_re(a) * cu_re(b);
+    auto r = p - p;  // only for its type: cmult's result type, sub_format(P, P)
+    decltype(r) re, im;
+    cmult3_parts(cu_re(a), cu_im(a), cu_re(b), cu_im(b), re, im);
+    return cu_make<CA>(re, im);
+}
+
 // --- cadd: (ar+br) + j(ai+bi) (add_format: int bits +1; inner signedness rule) --
 template <typename CA, typename CB>
 static inline auto cadd(const CA& a, const CB& b) {

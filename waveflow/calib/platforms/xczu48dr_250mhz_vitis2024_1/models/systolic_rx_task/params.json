@@ -1,0 +1,28 @@
+{
+  "model": "systolic_rx_task",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "counters": {
+    "lut": {
+      "basis": [
+        "word"
+      ],
+      "params": {
+        "coeffs": [
+          -0.3585236378205128
+        ],
+        "intercept": 896.5496794871794
+      }
+    },
+    "ff": {
+      "basis": [
+        "word"
+      ],
+      "params": {
+        "coeffs": [
+          -3.910807291666667
+        ],
+        "intercept": 576.1458333333334
+      }
+    }
+  }
+}

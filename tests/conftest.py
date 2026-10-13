@@ -117,6 +117,43 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 158 -> 160 on 2026-10-07 (plans/xsi_system_top.md S4): the mm_fir host conformance gate
 #: (test_mm_fir_host_traces_match_pysim) x per_view / one_front.
 #: 160 -> 161 on 2026-10-08 (plans/xsi_system_top.md S5): the markov host conformance gate.
+#:
+#: In parallel on ``paper/mimo-cg`` (its count also started from 127):
+#: 127 -> 139 on 2026-10-04 (``plans/mimo_cg/mimo_cg_paper_sims.md``): four new files collect **12**.
+#: Phase 4 (AC4) added seven RTL gates of the CG detector's blocks, each bit-exact against the Python
+#: golden: ``test_mimo_cg_hw_vec.py`` 1, ``test_mimo_cg_hw_mm.py`` 2 (both multiply forms) and
+#: ``test_mimo_cg_hw_detector.py`` 4 (K = 4 at two formats, K = 8, K = 16).  They should have raised
+#: this number on 2026-10-01 and did not; the miss was caught by this file's own collection test at
+#: the Phase 5 regression run.  Phase 5 added five in ``test_mimo_cg_hw_measure.py``: the measurement
+#: harness on the three default builds (report rows, job intervals, block spans, record filing) and
+#: on a memory-bound unit.  Phase 6 added one there: the brute-force mode of the harness (the
+#: steady-state job list, no waveform, a pruned build) on the K = 4 default detector.
+#:
+#: 140 -> 142 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 7.4): a new file,
+#: ``tests/linalg/test_systolic_unit.py``, collects **2** -- the standalone systolic unit of
+#: ``waveflow/linalg/`` at RTL, at two configurations (centre, smallest), each running good and
+#: rejected requests back to back from one build, bit-exact against the model.
+#:
+#: 142 -> 143 on 2026-10-07 (step 7.5): the same file gained a gate at lane groups of exactly one
+#: message word, after a calibration build showed that case synthesizing to zeros while
+#: C-simulation passed (a full-width shift, defined for ap_uint, undefined in synthesis).
+#:
+#: 143 -> 144 on 2026-10-07 (step 7.7, the M7 review): a gate at 32-bit message words, with lane
+#: groups of one word, so the framework's own tests cover the word width the unit offers.
+#:
+#: 144 -> 147 on 2026-10-07 (step 8.3): ``tests/linalg/test_cg_vector_unit.py`` collects **3** --
+#: the standalone CG vector unit at RTL (centre, smallest, stress), each running jobs and rejected
+#: requests back to back from one build, bit-exact against the model.
+#:
+#: 147 -> 144 on 2026-10-07 (``plans/mimo_cg/mimo_cg_paper_sims.md`` step 9.2c, gate 9.0): the
+#: example's detector now runs on the two components above, and the RTL gates of its retired blocks
+#: went with them: ``test_mimo_cg_hw_vec.py`` (1) and ``test_mimo_cg_hw_mm.py`` (2).  The units'
+#: own gates in ``tests/linalg/`` cover what they tested.
+#:
+#: 161 + 17 -> 178 on 2026-10-11: ``paper/mimo-cg`` merged into ``feat/cpu-model``.  Both lines of
+#: gates above survive the merge; ``pytest -m xsi --collect-only -q`` counts 178.
+#:
+#: In parallel on ``main``, after 161 (merged 2026-10-11 at ``372a34d9``):
 #: 161 -> 162 on 2026-10-08 (plans/host_runtime.md S6): a host whose threads meet through a SwQueue,
 #: at RTL (test_sw_channels_xsi.py).
 #: 162 -> 163 on 2026-10-10 (plans/maxi_pointer_fifo.md S4): the 12-job in-band interleaver, past the
@@ -125,6 +162,11 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: only simulates, an RTL edit is seen and undone, separate vectors dirs match a single run, and the
 #: traced snapshot coexists with the untraced one.  167 -> 168 (Stage 4): one mem_copy testbench serves
 #: every workload, its arena and cycle bound read from vectors/run.json.
+#:
+#: 178 + 7 -> 185 on 2026-10-11: ``main`` merged into ``feat/cpu-model``; ``pytest -m xsi
+#: --collect-only -q`` counts 185.
+#:
+#: In parallel on ``main``, after 168:
 #: 168 -> 173 on 2026-10-12 (plans/system_model.md S5): each markov / mm_fir sub-top elaborates
 #: alone (test_markov_xsi.py x3, test_mm_fir_xsi.py x2).  173 -> 174 (S3a): mem_copy's system top,
 #: no crossbar, elaborates (test_xsi_bfm.py).  174 -> 176 (S3c): mem_copy through the system flow --
@@ -147,23 +189,45 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 190 -> 195 on 2026-10-13 (Stages 2 and 6): markov's tied memory priced as one RAMB36 and the
 #: composed BRAM equal to the measured (test_markov_tieoffs.py); both synthesis routes run fresh
 #: against the record the docs quote (test_markov_routes.py).
-WANT_XSI_GATES = 195
+#:
+#: 195 + 17 -> 212 on 2026-10-13: ``origin/main`` merged into ``feat/cpu-model``.  This branch's
+#: 17 gates beyond 168 (the ``paper/mimo-cg`` line above) on top of main's 195;
+#: ``pytest -m xsi --collect-only -q`` counts 212.
+WANT_XSI_GATES = 212
+
+#: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
+#: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
+#: collects at least this many.  To update: ``pytest -m gem5 --collect-only -q``.
+#: 0 -> 9 on 2026-10-08 (plans/cpu_model.md step 9): the runner's end-to-end gates.
+#: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
+#: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
+WANT_GEM5_GATES = 12
+
+#: Each gated marker, the floor its full session must collect, and how its messages name it.
+_GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
-#: write and read it are plain functions.
-_XSI_SELECTED: set[str] = set()
-_XSI_SKIPPED: dict[str, str] = {}
+#: write and read it are plain functions.  Keyed by marker: at most one is active per session.
+_SELECTED: dict[str, set[str]] = {m: set() for m in _GATES}
+_SKIPPED: dict[str, dict[str, str]] = {m: {} for m in _GATES}
+#: The XSI names other code and docs refer to.
+_XSI_SELECTED = _SELECTED["xsi"]
+_XSI_SKIPPED = _SKIPPED["xsi"]
+
+
+def _is_gate_session(items, marker: str) -> bool:
+    """True when this session is *about* one gate family -- every collected test carries *marker*.
+
+    That is what ``-m xsi`` (or ``-m gem5``) produces, and what a targeted run of a single gate file
+    under it produces.  A plain ``pytest`` over the whole tree is not a gate session even though it
+    collects these tests, and must not be failed for skipping them: someone without Vivado or gem5
+    installed is entitled to run the suite and see the toolchain gates step aside.
+    """
+    return bool(items) and all(i.get_closest_marker(marker) for i in items)
 
 
 def _is_xsi_session(items) -> bool:
-    """True when this session is *about* the XSI gates -- every collected test is one.
-
-    That is what ``-m xsi`` produces, and what a targeted run of a single gate file under ``-m xsi``
-    produces.  A plain ``pytest`` over the whole tree is not an XSI session even though it collects
-    these tests, and must not be failed for skipping them: someone without Vivado installed is
-    entitled to run the suite and see the toolchain gates step aside.
-    """
-    return bool(items) and all(i.get_closest_marker("xsi") for i in items)
+    return _is_gate_session(items, "xsi")
 
 
 def _is_narrowed(config) -> bool:
@@ -184,21 +248,23 @@ def _is_narrowed(config) -> bool:
 
 
 def pytest_collection_finish(session):
-    """Record the xsi gates that survived collection *and* deselection.
+    """Record the gates that survived collection *and* deselection.
 
     ``pytest_collection_finish`` rather than ``pytest_collection_modifyitems`` because the ``-m``
     expression does its deselecting in the latter, and hook order between plugins is not something
     to depend on: this one is handed the final list.
     """
-    _XSI_SELECTED.clear()
-    _XSI_SKIPPED.clear()
-    if _is_xsi_session(session.items):
-        _XSI_SELECTED.update(i.nodeid for i in session.items)
+    for marker in _GATES:
+        _SELECTED[marker].clear()
+        _SKIPPED[marker].clear()
+        if _is_gate_session(session.items, marker):
+            _SELECTED[marker].update(i.nodeid for i in session.items)
 
 
 def pytest_runtest_logreport(report):
-    if report.nodeid in _XSI_SELECTED and report.skipped:
-        _XSI_SKIPPED.setdefault(report.nodeid, _skip_reason(report))
+    for marker in _GATES:
+        if report.nodeid in _SELECTED[marker] and report.skipped:
+            _SKIPPED[marker].setdefault(report.nodeid, _skip_reason(report))
 
 
 def _skip_reason(report) -> str:
@@ -212,20 +278,23 @@ def _skip_reason(report) -> str:
 
 def _problems(config) -> list[str]:
     """The session-level failures, as lines to print.  Empty when the run really did measure."""
-    if not _XSI_SELECTED:
-        return []
     out: list[str] = []
-    if _XSI_SKIPPED:
-        out.append(f"{len(_XSI_SKIPPED)} of {len(_XSI_SELECTED)} XSI gates SKIPPED -- this session "
-                   f"measured less than it appears to have:")
-        for nodeid, why in sorted(_XSI_SKIPPED.items()):
-            out.append(f"  {nodeid}")
-            out.append(f"      {why}")
-    if not _is_narrowed(config) and len(_XSI_SELECTED) < WANT_XSI_GATES:
-        out.append(f"only {len(_XSI_SELECTED)} XSI gates collected, expected at least "
-                   f"{WANT_XSI_GATES} (tests/conftest.py::WANT_XSI_GATES). A gate file that fails "
-                   f"to import produces no FAILED line at all -- check the collection errors above "
-                   f"before adjusting the number.")
+    for marker, (want, label) in _GATES.items():
+        selected, skipped = _SELECTED[marker], _SKIPPED[marker]
+        if not selected:
+            continue
+        if skipped:
+            out.append(f"{len(skipped)} of {len(selected)} {label} gates SKIPPED -- this session "
+                       f"measured less than it appears to have:")
+            for nodeid, why in sorted(skipped.items()):
+                out.append(f"  {nodeid}")
+                out.append(f"      {why}")
+        if not _is_narrowed(config) and len(selected) < want:
+            const = "WANT_XSI_GATES" if marker == "xsi" else f"WANT_{marker.upper()}_GATES"
+            out.append(f"only {len(selected)} {label} gates collected, expected at least "
+                       f"{want} (tests/conftest.py::{const}). A gate file that fails "
+                       f"to import produces no FAILED line at all -- check the collection errors above "
+                       f"before adjusting the number.")
     return out
 
 
@@ -233,7 +302,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     problems = _problems(config)
     if not problems:
         return
-    terminalreporter.write_sep("=", "XSI SESSION GATE FAILED", red=True, bold=True)
+    label = next((lbl for m, (_, lbl) in _GATES.items() if _SELECTED[m]), "XSI")
+    terminalreporter.write_sep("=", f"{label} SESSION GATE FAILED", red=True, bold=True)
     for line in problems:
         terminalreporter.write_line(line)
 

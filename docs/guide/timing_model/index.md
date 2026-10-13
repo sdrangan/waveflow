@@ -72,6 +72,10 @@ Two methods, and which one you want depends on how much of the cost the LT sim *
   bandwidth a poll loop steals from the bus it shares, and the discovery latency between the
   watched event and the next poll. Reached through an interface, but it is a timing model.
 
+Software is timed the same way, on a processor rather than a component: a
+[processor model](../cpu/index.md) prices a Python function's work counters with models calibrated
+on gem5.
+
 ### The two-level split: bus vs component {#the-two-level-split-bus-vs-component}
 
 For a component that moves data over `m_axi`, the residual method leans on a split. The run's cost is:

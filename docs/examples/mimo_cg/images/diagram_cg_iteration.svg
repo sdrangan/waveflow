@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="560" viewBox="0 0 1180 560">
+<defs><marker id="ah2a78d6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/></marker><marker id="ah4a3aa7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a3aa7"/></marker><marker id="ah52514e" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#52514e"/></marker></defs>
+<rect width="1180" height="560" fill="#fcfcfb"/>
+<text x="24" y="34" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="20" font-weight="bold" text-anchor="start" fill="#0b0b0b">One CG iteration, bit-exact, split across two hardware blocks</text>
+<text x="24" y="56" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13.5" font-weight="normal" text-anchor="start" fill="#52514e">multi-RHS conjugate gradient on (A/M) X = B/M — every column of B has its own α and β</text>
+<rect x="24" y="92" width="230" height="150" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="38" y="118" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="start" fill="#0b0b0b">Per coherence block</text>
+<text x="38" y="144.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">A = HᴴH + σ²I,  K × K</text>
+<text x="38" y="160.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">B = HᴴY,  K × N  (N = 32)</text>
+<text x="38" y="177.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">formed in floating point,</text>
+<text x="38" y="194.625" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">÷ M, quantized to A, B formats</text>
+<rect x="24" y="272" width="230" height="132" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="38" y="298" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="start" fill="#0b0b0b">Start (in the vector unit)</text>
+<text x="38" y="324.0" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">X = 0</text>
+<text x="38" y="340.875" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">R = q_R(B),  P = q_P(R)</text>
+<text x="38" y="357.75" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">rz = q_rz(Σ_k |R|²)</text>
+<path d="M 139 242 L 139 270" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="290" y="84" width="640" height="380" rx="14" fill="#ffffff" stroke="#52514e" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="306" y="108" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13" font-weight="bold" text-anchor="start" fill="#52514e">repeat nit times  (nit ≤ K, a runtime field)</text>
+<rect x="318" y="126" width="270" height="108" rx="8" fill="#e3eefb" stroke="#2a78d6" stroke-width="1.5"/>
+<text x="334" y="152" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#1c5cab">Matrix-multiply block</text>
+<text x="334" y="180" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="13.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">1  S = q_S(A · P)</text>
+<text x="334" y="206.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">systolic R × C array, exact sums</text>
+<text x="334" y="222.2" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">one rounding per entry</text>
+<rect x="318" y="268" width="590" height="180" rx="8" fill="#e9e6f7" stroke="#4a3aa7" stroke-width="1.5"/>
+<text x="334" y="294" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#4a3aa7">Vector unit (per column, L columns in parallel)</text>
+<text x="334" y="324" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">2  ps = q_ps(Σ Re(conj(P)·S))</text>
+<text x="334" y="350" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">3  α  = q_α(rz/ps),  0 if ps = 0</text>
+<text x="334" y="376" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">4  X  = q_X(X + P·α)</text>
+<text x="334" y="402" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">5  R  = q_R(R − S·α)</text>
+<text x="614" y="324" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">6  rz' = q_rz(Σ |R|²)</text>
+<text x="614" y="350" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">7  β   = q_β(rz'/rz),  0 if rz = 0</text>
+<text x="614" y="376" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">8  rz  = rz'</text>
+<text x="614" y="402" xml:space="preserve" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="12.5" font-weight="normal" text-anchor="start" fill="#0b0b0b">9  P   = q_P(R + P·β)</text>
+<path d="M 254 338 L 316 338" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<path d="M 588 168 L 760 168 L 760 266" fill="none" stroke="#2a78d6" stroke-width="2.2" marker-end="url(#ah2a78d6)" stroke-linejoin="round"/>
+<text x="770" y="200" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#2a78d6">S</text>
+<text x="770" y="220" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12" font-weight="normal" text-anchor="start" fill="#52514e">(K × N)</text>
+<path d="M 420 268 L 420 236" fill="none" stroke="#4a3aa7" stroke-width="2.2" marker-end="url(#ah4a3aa7)" stroke-linejoin="round"/>
+<text x="430" y="258" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="15" font-weight="bold" text-anchor="start" fill="#4a3aa7">P</text>
+<path d="M 254 172 L 316 172" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<text x="270" y="164" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#52514e">A</text>
+<rect x="960" y="268" width="196" height="180" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.5"/>
+<text x="974" y="294" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="start" fill="#0b0b0b">After nit iterations</text>
+<text x="974" y="320.0" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">X  (K × N estimates)</text>
+<text x="974" y="336.875" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">÷ μ  (MMSE unbiasing)</text>
+<text x="974" y="353.75" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">QAM slicer → bits</text>
+<text x="974" y="370.625" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="12.5" font-weight="normal" text-anchor="start" fill="#52514e">→ BER at 1e-3</text>
+<path d="M 908 358 L 958 358" fill="none" stroke="#52514e" stroke-width="1.8" marker-end="url(#ah52514e)" stroke-linejoin="round"/>
+<rect x="24" y="482" width="1132" height="62" rx="8" fill="#f0efec" stroke="#f0efec" stroke-width="1.5"/>
+<text x="40" y="506" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13" font-weight="normal" text-anchor="start" fill="#52514e">Exact arithmetic between registers; the only rounding is the assignment q_V (ap_fixed AP_RND, AP_SAT).  Vectors are W bits wide; the two quadratic forms</text>
+<text x="40" y="528" xml:space="preserve" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13" font-weight="normal" text-anchor="start" fill="#52514e">ps and rz get g_s guard bits.  Python golden: mm_step (step 1), vec_step (steps 2–9), cg_init — cg_fixed composes them, and the hardware splits the same way.</text>
+</svg>

@@ -50,7 +50,8 @@ Three SimObjs share one `Simulation` and one `Clock`:
   so its accesses take simulated time on the clock.
 - **`HistAccel`** is the [accelerator](python.md) under test.
 - **`HistController`** is the host stand-in — the SimObj that plays the CPU
-  driver.
+  driver. Only its bus transfers take simulated time; to time the software itself, run it on a
+  [processor model](../../guide/cpu/index.md).
 
 ## The controller — one transaction, end to end
 

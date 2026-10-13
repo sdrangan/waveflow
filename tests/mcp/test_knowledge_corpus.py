@@ -28,10 +28,12 @@ from waveflow.mcp.knowledge.roots import repo_root
 TOC_EXAMPLES = {
     "basic_vec",
     "bram_access",
+    "cpu_sched",
     "firblock",
     "interleaver",
     "markov",
     "memcpy",
+    "mimo_cg",
     "mm_fir",
     "regmap",
     "rf_loopback",
