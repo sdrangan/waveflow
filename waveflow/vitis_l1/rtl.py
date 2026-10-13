@@ -4,13 +4,16 @@ The RTL half of the module's calibration (``waveflow/calib/fixtures/vitis_fft.py
 example (``examples/vitis_fft``).  Nothing here is C++ someone maintains: the task body is the
 framework's ``waveflow/build/vitis_fft_task.h`` (copied by ``VitisL1Step``), the vendor FFT stays in the
 Vitis install (an include path), the ``ap_ctrl_none`` top comes from ``composite_top_spec`` on the module,
-and the XSI harness from ``tb_top_spec`` on the testbench graph.
+and the RTL run is the **system flow** (``plans/system_model.md`` S3f): :class:`VitisFftSystem` cuts
+the testbench graph at the FFT, and ``add_system_steps`` derives the system top, the harness of the
+drivers' and sinks' BFM models, and the scenario.
 
 **Build in a short directory.**  csynth fails *silently* -- "Synthesis failed", no error -- when the
 project path is long enough to hit the Windows path limit (measured from a deep temp directory).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -22,27 +25,22 @@ from waveflow.build.composite_gen import (
     RFSOC4X2_PART,
     RFSOC4X2_PERIOD_NS,
     composite_top_spec,
-    render_ports_h,
-    render_rtl_f,
-    render_tb_harness,
-    render_tb_main,
     render_tcl,
     render_top,
-    tb_top_spec,
     tcl_path,
 )
-from waveflow.build.streamutils import MemMgrStep, XsiHarnessStep
-from waveflow.build.trace_steps import AddVcdTopStep
-from waveflow.build.xsi_snapshot import XsiSnapshot
+from waveflow.build.streamutils import MemMgrStep
 from waveflow.build.vitis_l1_step import VitisL1Step, vitis_fft_include_dir
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils.burst_io import read_burst_bundle
 from waveflow.vitis_l1.hw import VitisFft
 from waveflow.vitis_l1.testbench import R, VitisFftTB, frames_from_lanes, golden, write_scenario
 
 TOP = "vitis_fft"
-XSI_DIR = "xsi"
-TB = f"{TOP}_bfm_tb"
+#: The system top an RTL run elaborates, and where under a build root its run lives.
+SYSTEM_TOP = "vitis_fft_system"
+SYSTEM_DIR = "system"
 
 
 def make_tb(length: int, n_frames: int = 4, burst_gaps=(), **kw) -> VitisFftTB:
@@ -58,15 +56,12 @@ def make_tb(length: int, n_frames: int = 4, burst_gaps=(), **kw) -> VitisFftTB:
 def generate(root: Path, length: int, part: str = RFSOC4X2_PART,
              period_ns: float = RFSOC4X2_PERIOD_NS, config: dict | None = None) -> str:
     """Everything before csynth for an *length*-point build at *root*: headers, the top and its
-    ``.tcl``, the XSI workspace with its VCD dumper, and a default scenario.  Python only."""
+    ``.tcl``.  Python only."""
     root = Path(root).resolve()
     dag = BuildDag()
     dag.add(SourceStep(artifact="vitis_fft_hw", path=Path(__file__).with_name("hw.py")))
     dag.add(MemMgrStep(output_dir=INCLUDE_DIR))       # the generated top includes memmgr.hpp
     dag.add(VitisL1Step(output_dir=INCLUDE_DIR))      # the body, copied verbatim
-    dag.add(XsiHarnessStep(output_dir=XSI_DIR))       # framework BFMs + loader + run scripts
-    dag.add(AddVcdTopStep(name="vcd_top", comp_class=VitisFft, source_artifact="vitis_fft_hw",
-                          output_dir=XSI_DIR))
     res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
     bad = [k for k, r in res.items() if not r.success]
     if bad:
@@ -85,20 +80,45 @@ def generate(root: Path, length: int, part: str = RFSOC4X2_PART,
     tcl_path(root, spec.top_name).write_text(
         render_tcl(spec.top_name, include_dirs=(str(vitis_fft_include_dir()),),
                    part=part, period_ns=period_ns), encoding="utf-8")
-    xsi = root / XSI_DIR
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    write_tb(root, make_tb(length, untimed=True, **cfg))
     return spec.top_name
 
 
-def write_tb(root: Path, tb: VitisFftTB) -> None:
-    """The XSI harness + main for *tb*, and its scenario bundles."""
-    xsi = Path(root) / XSI_DIR
-    spec = tb_top_spec(tb)
-    (xsi / f"{TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / f"{TB}.cpp").write_text(render_tb_main(spec, int(tb.n_cycles)), encoding="utf-8")
-    write_scenario(xsi, tb.n_frames, tb.length, **tb.config)
+@dataclass
+class VitisFftSystem(GraphSystem):
+    """One RTL scenario of ``VitisFft`` as a **system**: :class:`VitisFftTB` cut at the FFT, the
+    lane drivers (each recording the cycle every beat was accepted) and sinks its testbench.  The
+    run's bound is the graph's ``n_cycles`` (:func:`make_tb`)."""
+
+    length: int = 16
+    n_frames: int = 4
+    burst_gaps: list = field(default_factory=list)
+    config: dict = field(default_factory=dict)
+
+    def graph(self) -> VitisFftTB:
+        return make_tb(self.length, self.n_frames, self.burst_gaps, untimed=True, **self.config)
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, self.tb.n_frames, self.tb.length, **self.tb.config)
+
+
+def system_dag(root: Path, sysm: VitisFftSystem, trace: bool = False) -> BuildDag:
+    """The system flow for *sysm*, built under *root* (where :func:`generate` and :func:`synth`
+    put the kernel)."""
+    from waveflow.build.system_dag import add_system_steps
+
+    root = Path(root).resolve()
+    dag = BuildDag()
+    add_system_steps(dag, sysm, work_dir=root / SYSTEM_DIR, top=SYSTEM_TOP,
+                     tcls={TOP: tcl_path(root, TOP).relative_to(root)}, trace=trace)
+    return dag
+
+
+def vectors_dir(root: Path) -> Path:
+    """Where the last RTL run's testbench read and recorded."""
+    return Path(root).resolve() / SYSTEM_DIR / SYSTEM_TOP / "xsi_run" / "vectors"
 
 
 def synth(root: Path) -> str:
@@ -113,7 +133,6 @@ def synth(root: Path) -> str:
     if "WAVEFLOW_CSYNTH_OK" not in out:
         raise RuntimeError(f"csynth of {TOP} failed:\n{out[-6000:]}")
     write_stamp(root, TOP)
-    (root / XSI_DIR / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, root), encoding="utf-8")
     return out
 
 
@@ -127,40 +146,38 @@ def ensure_built(root: Path, length: int, config: dict | None = None) -> None:
         synth(root)
 
 
-def run_xsi(root: Path, trace: bool = False) -> str:
-    """Run the XSI testbench in ``<root>/xsi``, clearing the previous capture first so a stale one
-    cannot pass for this run's."""
-    xsi = Path(root) / XSI_DIR
-    for j in range(R):
-        for name in (f"m_out_{j}", f"s_in_{j}_acc"):
-            d = xsi / "vectors" / name
-            if d.exists():
-                for f in d.iterdir():
-                    f.unlink()
-    # Incremental: compile, elaborate and the testbench build are skipped when their inputs are
-    # unchanged (waveflow.build.xsi_snapshot), so a repeated run costs the simulation alone.
-    out = XsiSnapshot(xsi, TOP, TB, trace=trace).run(check=False, timeout=3600)
-    if "XSI_EXITCODE=0" not in out:
-        raise RuntimeError(f"XSI run failed\n{out[-5000:]}")
-    return out
+def run_xsi(root: Path, sysm: VitisFftSystem, trace: bool = False) -> Path:
+    """Run *sysm* at RTL through the system flow; return the run's vectors directory.
+    ``synth="check"``: the csynth'd RTL must be current (:func:`synth`), never built here.  Each run
+    starts from a fresh scenario copy, so a stale capture cannot pass; compile, elaborate and the
+    testbench build are skipped when their inputs are unchanged, so a repeated run costs the
+    simulation alone."""
+    root = Path(root).resolve()
+    res = system_dag(root, sysm, trace).run(
+        BuildConfig(root_dir=root, params={"synth": "check"}), through="system_xsi")
+    bad = {n: r.message for n, r in res.items() if not r.success}
+    if bad:
+        raise RuntimeError(f"the {SYSTEM_TOP} run at {root} failed: {bad}")
+    return vectors_dir(root)
 
 
 def _out_w(length: int, config: dict | None = None) -> int:
     return int(VitisFft(name="w", sim=Simulation(), L=length, **(config or {})).out_fmt.W)
 
 
-def captured_frames(root: Path, length: int, config: dict | None = None):
-    """What the RTL emitted, from the sinks' capture bundles, as ``[(re, im), ...]``."""
-    lanes = [np.concatenate(read_burst_bundle(Path(root) / XSI_DIR / "vectors" / f"m_out_{j}"))
-             for j in range(R)]
+def captured_frames(root: Path, length: int, config: dict | None = None, vec: Path | None = None):
+    """What the RTL emitted, from the sinks' capture bundles, as ``[(re, im), ...]``.  *vec* is
+    the run's vectors directory (default: the last system run's, :func:`vectors_dir`)."""
+    vec = Path(vec) if vec is not None else vectors_dir(root)
+    lanes = [np.concatenate(read_burst_bundle(vec / f"m_out_{j}")) for j in range(R)]
     return frames_from_lanes(lanes, _out_w(length, config), length)
 
 
 def check_bits(root: Path, length: int, n_frames: int, what: str = "run",
-               config: dict | None = None) -> None:
+               config: dict | None = None, vec: Path | None = None) -> None:
     """Every frame the RTL emitted equals the golden; raises otherwise."""
     cfg = dict(config or {})
-    got, want = captured_frames(root, length, cfg), golden(n_frames, length, **cfg)
+    got, want = captured_frames(root, length, cfg, vec), golden(n_frames, length, **cfg)
     if len(got) != n_frames:
         raise RuntimeError(f"L={length} {what}: captured {len(got)} frames, expected {n_frames}")
     mask = (1 << _out_w(length, cfg)) - 1
@@ -169,9 +186,11 @@ def check_bits(root: Path, length: int, n_frames: int, what: str = "run",
             raise RuntimeError(f"L={length} {what}: frame {k} is not bit-exact")
 
 
-def port_beats(vcd_path: Path) -> dict[str, list[int]]:
+def port_beats(vcd_path: Path, scope: str = TOP) -> dict[str, list[int]]:
     """Clock-edge index of every accepted beat (TVALID && TREADY) on each AXIS port, read with the
-    framework's VCD parser -- which samples just before each edge, as the flops do."""
+    framework's VCD parser -- which samples just before each edge, as the flops do.  *scope* is the
+    kernel's scope in the dump: the kernel itself when it is the elaborated top, or its path inside
+    a system top (``SystemTopSpec.scope_of``)."""
     from vcdvcd import VCDVCD
 
     from waveflow.utils.vcd import VcdParser
@@ -182,7 +201,7 @@ def port_beats(vcd_path: Path) -> dict[str, list[int]]:
     for port in [f"s_in_{j}" for j in range(R)] + [f"m_out_{j}" for j in range(R)]:
         # Anchored at the top scope: the task inside has nets of the same suffix
         # (`vitis_fft.vitis_fft_task_..._U0_s_in_0_TREADY`), and the port is the one measured.
-        sigs = parser.add_axiss_signals(name=f"{TOP}.{port}_T", short_name_prefix=port)
+        sigs = parser.add_axiss_signals(name=f"{scope}.{port}_T", short_name_prefix=port)
         sigs = sigs[0] if isinstance(sigs, tuple) else sigs
         bursts, _ = parser.extract_axis_bursts(clk, sigs)
         beats[port] = [int(b["start_idx"]) + i for b in bursts
@@ -190,12 +209,12 @@ def port_beats(vcd_path: Path) -> dict[str, list[int]]:
     return beats
 
 
-def capture_beats(root: Path) -> dict[str, list[int]]:
+def capture_beats(root: Path, vec: Path | None = None) -> dict[str, list[int]]:
     """The same beats :func:`port_beats` reads off a waveform, from the BFMs' own capture bundles:
     each ``AxisMaster``'s accepted words (``s_in_<j>_acc``) and each ``AxisSlave``'s received ones
     (``m_out_<j>``), both on the BFMs' shared 1-based cycle count.  No trace, no VCD parse -- which
     is what makes a calibration run cost the simulation and nothing more."""
-    vec = Path(root) / XSI_DIR / "vectors"
+    vec = Path(vec) if vec is not None else vectors_dir(root)
     beats = {}
     for j in range(R):
         for port, name in ((f"s_in_{j}", f"s_in_{j}_acc"), (f"m_out_{j}", f"m_out_{j}")):
@@ -242,11 +261,17 @@ def run_scenario(root: Path, length: int, n_frames: int, gaps=(),
     ``trace=True`` reads the same beats off a waveform instead (:func:`port_beats`) -- the
     cross-check, and the route when something inside the block needs looking at."""
     cfg = dict(config or {})
-    write_tb(root, make_tb(length, n_frames, gaps, untimed=True, **cfg))
-    run_xsi(root, trace=trace)
+    sysm = VitisFftSystem(length=length, n_frames=n_frames, burst_gaps=list(gaps), config=cfg)
+    run_xsi(root, sysm, trace=trace)
     check_bits(root, length, n_frames, "back to back" if not gaps else "phase sweep", cfg)
-    beats = (port_beats(Path(root) / XSI_DIR / f"{TOP}_trace.vcd") if trace
-             else capture_beats(root))
+    if trace:
+        from waveflow.build.system_top import SystemTopSpec
+
+        spec = SystemTopSpec.from_system(sysm, top=SYSTEM_TOP)
+        work = Path(root).resolve() / SYSTEM_DIR / SYSTEM_TOP
+        beats = port_beats(work / f"{SYSTEM_TOP}_trace.vcd", spec.scope_of(spec.kernels[0]))
+    else:
+        beats = capture_beats(root)
     return frame_times(beats, length, n_frames)
 
 

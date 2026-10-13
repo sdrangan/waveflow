@@ -20,18 +20,19 @@ waveflow_get_doc("docs/examples/memcpy/memcpy.md")           # what it does, and
 waveflow_get_doc("docs/examples/memcpy/python.md")           # the leaves, the composite, the schemas
 waveflow_get_doc("docs/examples/memcpy/testbench.md")        # the testbench graph: pysim and XSI
 waveflow_get_doc("docs/examples/memcpy/codegen_dut.md")      # the free-running top
-waveflow_get_doc("docs/examples/memcpy/codegen_tb.md")       # the XSI testbench from the graph
+waveflow_get_doc("docs/examples/memcpy/system.md")           # the cut, and the top + harness derived from it
 waveflow_get_doc("docs/examples/memcpy/rtlsim.md")           # the RTL run, the exact cycles
 waveflow_get_doc("docs/examples/memcpy/timing.md")
 waveflow_get_example("memcpy", file="mem_copy.py")           # schemas, leaves, composite, codegen
 waveflow_get_example("memcpy", file="mem_copy_sim.py")       # the testbench graph
-waveflow_get_example("memcpy", file="mem_copy_build.py")     # the build DAG
+waveflow_get_example("memcpy", file="mem_copy_build.py")     # the build DAG: pysim, codegen, csynth
+waveflow_get_example("memcpy", file="mem_copy_system_build.py")  # the system flow: the RTL run
 waveflow_get_example("memcpy", file="include/mem_seq_framed_task.h")  # a hand-written task body
 ```
 
 **For a compute stage, or on-chip random access**, read `interleaver` the
 same way (`docs/examples/interleaver/interleaver.md`, then `python.md`,
-`testbench.md`, `codegen_dut.md`, `codegen_tb.md`, `rtlsim.md`), and only
+`testbench.md`, `codegen_dut.md`, `system.md`, `rtlsim.md`), and only
 these of its files -- the directory also holds sandboxes, unit gates and
 retired variants that are not models:
 

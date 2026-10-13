@@ -22,15 +22,22 @@ python rf_shot_tx_build.py --through sync_docs_figures   # the committed figure
 | rung | what it does | needs |
 |---|---|---|
 | `pysim` | runs **both** scenarios in SimPy and checks the verdicts and the playout | — |
-| `codegen_dut` | the `ap_ctrl_none` top, its tcl, its port map, the memory beside it, the **wrapper** that joins them, and the `$dumpvars` second top | — |
-| `codegen_tb` | the XSI harness + main, and **both** scenario bundles | — |
-| `csynth` | Vitis HLS C-synthesis; re-emits `rtl_<wrapper>.f` from the RTL on disk | Vitis HLS |
+| `codegen_dut` | the `ap_ctrl_none` top and its tcl (and the absolute-index build's, `codegen_dut_abs`) | — |
+| `csynth` | Vitis HLS C-synthesis, stamping the sources it was built from | Vitis HLS |
 | `playout_figure` | renders `results/playout.svg` from a pysim run | — |
 | `sync_docs_figures` | promotes it into `docs/examples/rf_shot_tx/images/` with a provenance record | — |
 
-**What a simulator elaborates is the wrapper**, `rf_shot_tx_top` — the kernel plus its hand-written
-`bram_t2p` memory — not the kernel. The kernel has `buf_w` / `buf_r` ports; the wrapper joins them to
-the memory instance beside it, so a testbench sees only AXI-Stream.
+**The RTL run is the system flow**, traced, one system per build and frame stream:
+
+```bash
+python -m examples.rf_shot_tx.rf_shot_tx_system_build [--abs] [--loop]
+pytest -m xsi tests/examples/test_rf_shot_tx_xsi.py tests/examples/test_rf_shot_tx_abs_xsi.py
+```
+
+The DUT is the transmitter with its memory, instantiated in the system top as its **wrapper**,
+`rf_shot_tx_top`: the kernel plus its hand-written `bram_t2p` memory. The kernel has `buf_w` /
+`buf_r` ports, and the wrapper joins them to the memory instance beside it, so a testbench sees only
+AXI-Stream. The RFDC's DAC model spans the cut.
 
 ## The pysim rung is the golden, and it checks both streams
 

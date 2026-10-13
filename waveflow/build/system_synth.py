@@ -4,20 +4,22 @@
 the generated system top, with every instance's sources: the crossbar by ``read_ip`` on its ``.xci``,
 the hand-written leaves the inventory uses (:meth:`~waveflow.build.system_top.SystemTopSpec.instances`),
 each kernel's csynth Verilog, and the top.  ``report_utilization -hierarchical`` then gives a row per
-child instance of the top, which is joined to the inventory **by instance name**.
+instance down to the sub-tops' children (``-hierarchical_depth 2``: the top holds its devices and the
+memory as sub-tops, ``plans/ip_packaging_routes.md`` Stage 0), which is joined to the inventory **by
+hierarchical path** (:attr:`~waveflow.build.system_top.RtlInstance.path`).
 
 Three numbers come out, and they add up exactly:
 
 * **per instance** -- each inventory instance's row, measured in the design it belongs to (Vivado's
   default ``-flatten_hierarchy rebuilt`` optimises across boundaries and rebuilds the hierarchy for
   reporting, so this is the design one would ship);
-* **integration** -- ``total - Σ instances``: the logic the top itself holds (each multi-view
-  adaptor's inline address decoder, the stream tie-offs) plus whatever optimisation moved across an
-  instance boundary.  Negative is legal and not clamped;
+* **integration** -- ``total - Σ instances``: the logic the top and its sub-tops hold themselves
+  (each multi-view adaptor's inline address decoder, the stream tie-offs) plus whatever optimisation
+  moved across an instance boundary.  Negative is legal and not clamped;
 * **the total**.
 
 An instance whose hierarchy synthesis dissolved has no row; it is priced by the primitives under
-its name prefix instead (:func:`attribute`), so it is still its own and not glue.  An instance that can
+its path prefix instead (:func:`attribute`), so it is still its own and not glue.  An instance that can
 be priced neither way **raises** (:class:`UnmappedInstanceError`).  ``keep_hierarchy`` keeps every
 instance's row at a QoR cost (markov: +25% LUT, +30% FF), so it is off by default.  The run is cached under the system's identity -- the inventory's
 identities, the top's text, every kernel source's digest, the part, the clock and ``impl`` -- so a
@@ -44,7 +46,7 @@ INSTANCE_TARGET = "instance"
 
 #: Files in a kernel's ``syn/verilog`` that the synthesis must find beside it (ROM initializers a
 #: ``$readmemh`` names relative to the run directory).
-_INIT_SUFFIXES = (".dat", ".mem", ".mif", ".hex")
+INIT_SUFFIXES = (".dat", ".mem", ".mif", ".hex")
 
 
 class UnmappedInstanceError(RuntimeError):
@@ -66,7 +68,8 @@ class SystemSynth:
     keep_hierarchy: bool = False
     total: dict = field(default_factory=dict)
     instances: dict = field(default_factory=dict)      # inst -> counters
-    unclaimed: dict = field(default_factory=dict)      # depth-1 rows no inventory instance names
+    #: Rows no inventory instance claims: the top's children and the sub-tops' children, by path.
+    unclaimed: dict = field(default_factory=dict)
     #: Instances with no row of their own (synthesis dissolved their hierarchy), priced instead by the
     #: primitives under their name prefix (``u_mem_mem/*``).
     recovered: list = field(default_factory=list)
@@ -74,6 +77,10 @@ class SystemSynth:
     met: bool | None = None
     tool: str = ""
     seconds: float = 0.0
+    #: The total after ``opt_design`` (asked with ``opt``): the like-for-like number for the
+    #: per-device route, whose linked total is after ``opt_design`` too (``system_ooc``).
+    opt_total: dict = field(default_factory=dict)
+    opt_seconds: float = 0.0
 
     @property
     def integration(self) -> dict:
@@ -108,7 +115,7 @@ def kernel_files(kernel_dir: Path) -> list[Path]:
     if tcls:
         raise NotImplementedError(f"{kernel_dir}: csynth emitted IP scripts {tcls}; system_synth does "
                                   f"not generate a kernel's Vitis IP cores yet")
-    return [p for p in files if p.suffix == ".v" or p.suffix in _INIT_SUFFIXES]
+    return [p for p in files if p.suffix == ".v" or p.suffix in INIT_SUFFIXES]
 
 
 def system_identity(spec, top_text: str, kernel_dirs: dict[str, Path], *, part: str,
@@ -139,7 +146,7 @@ def system_identity(spec, top_text: str, kernel_dirs: dict[str, Path], *, part: 
 
 
 def synth_tcl(top: str, *, part: str, period_ns: float, xci: str, sources: list[str],
-              impl: bool, insts=()) -> str:
+              impl: bool, insts=(), opt: bool = False) -> str:
     """The batch script: read everything, synthesize out of context, report hierarchically."""
     lines = [
         # Per instance, the primitives whose names it prefixes -- what prices an instance whose
@@ -174,16 +181,22 @@ def synth_tcl(top: str, *, part: str, period_ns: float, xci: str, sources: list[
         "set t1 [clock milliseconds]",
         'puts "WF_CLOCK [get_property PERIOD [get_clocks -of_objects [get_ports ap_clk]]]"',
         "report_utilization -file util_synth.rpt",
-        "report_utilization -hierarchical -hierarchical_depth 1 -file util_hier_synth.rpt",
+        "report_utilization -hierarchical -hierarchical_depth 2 -file util_hier_synth.rpt",
         "wf_slack synth",
         "wf_prims synth {" + " ".join(insts) + "}",
     ]
+    if opt and not impl:
+        lines += [
+            "set t2 [clock milliseconds]", "opt_design",
+            'puts "WF_OPT_SECONDS [expr {([clock milliseconds] - $t2) / 1000.0}]"',
+            "report_utilization -file util_opt.rpt",
+        ]
     if impl:
         lines += [
             "opt_design", "place_design", "phys_opt_design", "route_design",
             "set t1 [clock milliseconds]",
             "report_utilization -file util_impl.rpt",
-            "report_utilization -hierarchical -hierarchical_depth 1 -file util_hier_impl.rpt",
+            "report_utilization -hierarchical -hierarchical_depth 2 -file util_hier_impl.rpt",
             "wf_slack impl",
             "wf_prims impl {" + " ".join(insts) + "}",
         ]
@@ -232,12 +245,23 @@ def parse_prims(text: str, tag: str) -> dict[str, dict[str, int]]:
     return out
 
 
+def row_paths(hier_rows: list[dict]) -> list[str]:
+    """Each row's hierarchical path below the top (``""`` for the top, ``u_gen_sub/u_gen`` two levels
+    down), from the report's depths."""
+    stack: list[str] = []
+    out = []
+    for r in hier_rows:
+        stack = stack[:r["depth"]] + [r["instance"]]
+        out.append("/".join(stack[1:]))
+    return out
+
+
 def attribute(spec, hier_rows: list[dict],
               prims: "dict[str, dict[str, int]] | None" = None) -> tuple[dict, dict, dict, list]:
     """``(total, {inst: counters}, unclaimed, recovered)`` from a hierarchical report: the top row,
-    one row per inventory instance (by name, among the top's children), the children nobody
-    claimed, and the instances that had no row and were priced from *prims* -- the primitives under
-    their name prefix -- instead.
+    one row per inventory instance (by path: the top's children and its sub-tops' children), the
+    rows at those levels nobody claimed, and the instances that had no row and were priced from
+    *prims* -- the primitives under their path prefix -- instead.
 
     Synthesis can dissolve an instance's hierarchy (markov's BRAM window and memory under
     ``-flatten_hierarchy rebuilt``); its cells keep their names, so they are still its own and
@@ -247,20 +271,25 @@ def attribute(spec, hier_rows: list[dict],
     top_rows = [r for r in hier_rows if r["depth"] == 0]
     if not top_rows:
         raise ValueError("hierarchical report has no top row")
-    children = {r["instance"]: r["counters"] for r in hier_rows if r["depth"] == 1}
+    subs = {s.inst for s in spec.subs}
+    children = {}
+    for path, r in zip(row_paths(hier_rows), hier_rows):
+        parent = path.rpartition("/")[0]
+        if r["depth"] == 1 or (r["depth"] == 2 and parent in subs):
+            children[path] = r["counters"]
     inv = spec.instances()
-    missing = [i.inst for i in inv if i.inst not in children]
+    missing = [i.inst for i in inv if i.path not in children]
     if missing and prims is None:
         raise UnmappedInstanceError(
             f"{spec.top}: inventory instance(s) {missing} have no row in the hierarchical report "
             f"(rows: {sorted(children)}) and no primitive census to price them by name.  A "
             f"dropped instance would land in the integration term and read as expensive glue, "
             f"so this is fatal.")
-    inst = {i.inst: (children[i.inst] if i.inst in children
-                     else prim_counters((prims or {}).get(i.inst, {})))
+    inst = {i.inst: (children[i.path] if i.path in children
+                     else prim_counters((prims or {}).get(i.path, {})))
             for i in inv}
-    names = {i.inst for i in inv}
-    return (top_rows[0]["counters"], inst, {n: c for n, c in children.items() if n not in names},
+    claimed = {i.path for i in inv} | subs
+    return (top_rows[0]["counters"], inst, {n: c for n, c in children.items() if n not in claimed},
             missing)
 
 
@@ -282,11 +311,13 @@ def keep_hierarchy_top(top_text: str, insts) -> str:
 def synth_system(spec, *, top_v: Path, kernel_dirs: dict[str, Path], ip, out_dir: Path, part: str,
                  period_ns: float, impl: bool = False, keep_hierarchy: bool = False,
                  vivado: str | None = None,
-                 force: bool = False) -> SystemSynth:
+                 force: bool = False, opt: bool = False) -> SystemSynth:
     """Synthesize the system top *spec* describes (its Verilog at *top_v*) out of context on *part*
     at *period_ns*, attribute the hierarchical report to the inventory, and cache the result under
     ``out_dir/<run digest>/result.json``.  *ip* is the crossbar IP (``generate_axi_xbar``) generated
-    for *part*; *kernel_dirs* maps each csynth'd module to its ``syn/verilog``."""
+    for *part*; *kernel_dirs* maps each csynth'd module to its ``syn/verilog``.  *opt* also runs
+    ``opt_design`` after the synthesis and reports :attr:`SystemSynth.opt_total`; a cached result
+    without it is re-run when it is asked for."""
     from waveflow import events
     from waveflow.utils.vivado_report import parse_markers, parse_utilization_hierarchical
 
@@ -296,7 +327,9 @@ def synth_system(spec, *, top_v: Path, kernel_dirs: dict[str, Path], ip, out_dir
     work = Path(out_dir) / run
     stamp = work / "result.json"
     if stamp.exists() and not force:
-        return SystemSynth.from_json(json.loads(stamp.read_text(encoding="utf-8")))
+        cached = SystemSynth.from_json(json.loads(stamp.read_text(encoding="utf-8")))
+        if cached.opt_total or not opt or impl:
+            return cached
 
     if vivado is None:
         from waveflow.toolchain.toolchain import find_vivado_path
@@ -325,7 +358,7 @@ def synth_system(spec, *, top_v: Path, kernel_dirs: dict[str, Path], ip, out_dir
     tcl = work / "synth_system.tcl"
     tcl.write_text(synth_tcl(spec.top, part=part, period_ns=period_ns,
                              xci=(ip_copy / f"{ip.module}.xci").as_posix(), sources=sources,
-                             impl=impl, insts=[i.inst for i in spec.instances()]),
+                             impl=impl, insts=[i.path for i in spec.instances()], opt=opt),
                    encoding="utf-8")
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
@@ -351,6 +384,11 @@ def synth_system(spec, *, top_v: Path, kernel_dirs: dict[str, Path], ip, out_dir
                       met=(wns >= 0) if (impl and wns is not None) else None,
                       tool=f"vivado {mk.get('VERSION', '')}".strip(),
                       seconds=float(mk.get("SECONDS") or 0.0))
+    if opt and not impl:
+        from waveflow.utils.vivado_report import parse_utilization
+
+        res.opt_total = parse_utilization((work / "util_opt.rpt").read_text(encoding="utf-8"))
+        res.opt_seconds = float(mk.get("OPT_SECONDS") or 0.0)
     stamp.write_text(json.dumps(res.to_json(), indent=2), encoding="utf-8")
     return res
 
@@ -396,4 +434,4 @@ def system_synth_records(spec, res: SystemSynth, top_text: str, kernel_dirs: dic
 
 
 __all__ = ["INSTANCE_TARGET", "SystemSynth", "UnmappedInstanceError", "attribute", "kernel_files",
-           "synth_system", "synth_tcl", "system_identity", "system_synth_records"]
+           "row_paths", "synth_system", "synth_tcl", "system_identity", "system_synth_records"]

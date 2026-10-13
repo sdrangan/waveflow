@@ -8,7 +8,10 @@ summary: "Reading the VCD the RTL run produced: what the design did, whether it 
 
 # Reading the trace
 
-[RTL simulation](rtlsim.md) produced `bram_access_top_trace.vcd`. This page reads it: what the design
+The traced system run (`bram_access_build.py --through rtl_trace`, scenario zero through
+`bram_access_system_build.py`) leaves `xsi_work/bram_access_system/bram_access_system_trace.vcd`
+and, beside it, the wrapper's hazard manifest (`hazards.json`, whose `scope` places the wrapper's
+nets inside the system top); `trace_of` returns the pair. This page reads it: what the design
 did, whether it did anything it was not allowed to, how long the memory really takes to answer, and
 how all of that compares with the Python model.
 
@@ -30,10 +33,11 @@ The event counts say the same thing more precisely, and one of them is a surpris
 
 ```python
 from pathlib import Path
-from examples.bram_access.bram_access_build import hazard_manifest
 from examples.bram_access.bram_access_figures import lanes
+from examples.bram_access.bram_access_system_build import trace_of
 
-ll = lanes(Path("examples/bram_access/xsi/bram_access_top_trace.vcd"), hazard_manifest())
+vcd, manifest = trace_of(Path("examples/bram_access/xsi_work/bram_access_system"))
+ll = lanes(vcd, manifest)
 for label, ev, _colour in ll:
     print(f"{label:26s} {len(ev):4d} beats   first {ev[0]:3d}  last {ev[-1]:3d}")
 ```
@@ -65,14 +69,12 @@ before comparing a figure against a gate:
 ```python
 import numpy as np
 from pathlib import Path
-from examples.bram_access.bram_access_build import hazard_manifest
 from examples.bram_access.bram_access_figures import lanes
+from examples.bram_access.bram_access_system_build import trace_of
 
-xsi = Path("examples/bram_access/xsi")
-vcd_beats = [ev for label, ev, _c in
-             lanes(xsi / "bram_access_top_trace.vcd", hazard_manifest())
-             if label.startswith("data_r")][0]
-sink = np.fromfile(xsi / "vectors" / "data_r" / "cycles.bin", dtype="<u8")
+work = Path("examples/bram_access/xsi_work/bram_access_system")
+vcd_beats = [ev for label, ev, _c in lanes(*trace_of(work)) if label.startswith("data_r")][0]
+sink = np.fromfile(work / "xsi_run" / "vectors" / "data_r" / "cycles.bin", dtype="<u8")
 print("words:", len(vcd_beats), len(sink),
       "| offset:", sorted({int(d) for d in vcd_beats - sink}))
 ```
@@ -126,9 +128,9 @@ from pathlib import Path
 from examples.bram_access.bram_access import WriteResp, resp_words, scenario_zero
 
 sc = scenario_zero()
-xsi = Path("examples/bram_access/xsi")
-data = np.fromfile(xsi / "vectors" / "data_r" / "cycles.bin", dtype="<u8")
-resp_w = np.fromfile(xsi / "vectors" / "resp_w" / "cycles.bin", dtype="<u8")
+run = Path("examples/bram_access/xsi_work/bram_access_system/xsi_run/vectors")
+data = np.fromfile(run / "data_r" / "cycles.bin", dtype="<u8")
+resp_w = np.fromfile(run / "resp_w" / "cycles.bin", dtype="<u8")
 lo, hi = sc.overlap_read
 when = int(resp_w[resp_words(WriteResp, sc.overlap_write_resp + 1) - 1])
 print(f"read window [{int(data[lo])}, {int(data[hi - 1])}], phase-2 write done at {when}")
@@ -154,11 +156,10 @@ the same port. Everything except the access shape is held constant.
 ```python
 import numpy as np
 from pathlib import Path
-from examples.bram_access.bram_access_build import hazard_manifest
+from examples.bram_access.bram_access_system_build import trace_of
 from waveflow.utils.bram_trace import port_samples
 
-w = port_samples(Path("examples/bram_access/xsi/bram_access_top_trace.vcd"),
-                 hazard_manifest(), "write")
+w = port_samples(*trace_of(Path("examples/bram_access/xsi_work/bram_access_system")), "write")
 we = np.nonzero(np.asarray(w.we) != 0)[0]
 addr = np.asarray(w.addr)
 
@@ -226,11 +227,10 @@ them rather than matched by substring:
 
 ```python
 from pathlib import Path
-from examples.bram_access.bram_access_build import hazard_manifest
+from examples.bram_access.bram_access_system_build import trace_of
 from waveflow.utils.bram_trace import describe, find_read_during_write
 
-vcd = Path("examples/bram_access/xsi/bram_access_top_trace.vcd")
-print(describe(find_read_during_write(vcd, hazard_manifest())))
+print(describe(find_read_during_write(*trace_of(Path("examples/bram_access/xsi_work/bram_access_system")))))
 ```
 
 ```
@@ -286,7 +286,7 @@ address does the answer appear?**
 ```python
 from pathlib import Path
 from examples.bram_access.bram_access import BASE, DEPTH, SENTINEL_BASE
-from examples.bram_access.bram_access_build import hazard_manifest
+from examples.bram_access.bram_access_system_build import trace_of
 from waveflow.utils.bram_trace import measured_read_latency, port_samples
 
 def expected(addr):
@@ -298,8 +298,7 @@ def expected(addr):
         return SENTINEL_BASE + (addr - (DEPTH - 4))
     return None                      # computed in place, or never written (X at RTL)
 
-port = port_samples(Path("examples/bram_access/xsi/bram_access_top_trace.vcd"),
-                    hazard_manifest(), "read")
+port = port_samples(*trace_of(Path("examples/bram_access/xsi_work/bram_access_system")), "read")
 print("offsets that explain every read:", sorted(measured_read_latency(port, expected)))
 ```
 
@@ -332,7 +331,8 @@ from examples.bram_access.bram_access import run_pysim, scenario_zero
 
 sc = scenario_zero()
 lo, hi = sc.cadence_read
-rtl = np.fromfile(Path("examples/bram_access/xsi/vectors/data_r/cycles.bin"), dtype="<u8")
+rtl = np.fromfile(Path("examples/bram_access/xsi_work/bram_access_system/xsi_run/vectors/data_r/"
+                       "cycles.bin"), dtype="<u8")
 tb = run_pysim(sc=sc)
 
 def gaps(c):
@@ -395,7 +395,7 @@ Both SVGs on this page are **committed assets**, not rendered at build time. The
 
 ```bash
 cd examples/bram_access
-python bram_access_build.py --through rtl_trace          # the waveform
+python bram_access_build.py --through rtl_trace          # the waveform (a traced system run)
 python bram_access_build.py --through activity_figures   # -> results/ (gitignored)
 python bram_access_build.py --through sync_docs_figures  # -> docs/.../images/ (committed)
 ```
@@ -413,13 +413,9 @@ The SVGs are **deterministic**: `matplotlib.rcParams["svg.hashsalt"]` is fixed a
 is suppressed, so re-rendering an unchanged figure produces a byte-identical file. Without that, every
 refresh would diff.
 
-One caveat worth knowing: `rtl_trace` is *not* re-run just because the waveform on disk changed under
-it. If you have run the `-m xsi` gate since — which leaves the **collision** vectors and the collision
-waveform behind — force the step, or the figures will be of the wrong run:
-
-```bash
-python bram_access_build.py --through sync_docs_figures --force-step rtl_trace
-```
+`rtl_trace` is never fresh: it re-runs the traced system run every time, so the figures are always of
+scenario zero. (The `-m xsi` gate runs its own systems in `tests/build/_xsi_work/`, the collision one
+among them, and cannot leave a waveform behind for the figures to pick up.)
 
 ## See also
 

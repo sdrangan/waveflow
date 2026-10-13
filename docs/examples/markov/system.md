@@ -125,6 +125,10 @@ class MarkovChain(FreeRunMod):
 the view modules (`gen_qcmd`, `chain_qresp`, ...), so two kernels' views never collide. The kernel's own
 code is untouched: it still reads and writes streams.
 
+What it returns is a **device**: a composite module (`MmSlaveDevice`) whose children are the kernel,
+its views and its adaptor. A device is the unit the DUT is made of. It is one sub-top in the system's
+Verilog, and one IP when the system is packaged.
+
 ### Step 5: the credit stream, routed
 
 ```python
@@ -210,6 +214,31 @@ Two things the host needs, both by **view name**:
 Last, `mem_bus_base` tells the host the memory is on the bus, at `MEM_BASE`: it now reads `x` with bus
 reads.
 
+## Declaring the DUT
+
+```python
+        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen_dev, self.chain_dev, self.mem],
+                                 ifs=[self.xbar, self.u_link])
+```
+
+and the class says it is a system and which part of it is synthesized:
+
+```python
+@dataclass
+class MarkovSystem(HwSystem):
+    ...
+    def dut(self) -> DutTop:
+        return self.dut_top
+```
+
+[`HwSystem`](../../guide/build/xsi_system.md#the-spec) is the contract every system flow takes: a
+`sim`, a `run()`, and `dut()`, the **default DUT**. Here that is a tree: the two devices and the memory
+are its children, and the crossbar and the routed credit stream are the links between them. Binding
+the credit stream in Step 5 already put each of its bus writers in the device of the kernel it acts
+for: the forward writer in `gen_dev`, the credit writer in `chain_dev`. Everything not in the tree,
+which here is only the host, is the testbench. A build can draw another cut (`inside=`); this is the one
+it takes otherwise.
+
 ## Step 9: run it
 
 ```python
@@ -232,7 +261,9 @@ golden; running both wirings and their results are [Python simulation](pysim.md)
    credit link (`MmCreditStreamIF`), then the crossbar — every master, every slave at its base,
    `assign_address_ranges` — then `place` the link, then the interrupt lines, then the host's endpoints
    from `BoundMemSlaveAdaptor` by view name.
-5. Run until the host's `done` event.
+5. Declare the DUT: a `DutTop` of the devices and memories, with the links between them; `dut()`
+   returns it, and the class derives from `HwSystem`.
+6. Run until the host's `done` event.
 
 The same object is the input to the RTL simulation: the system top is walked from this graph and the
 host's endpoints become the testbench's — [XSI testbench](xsi.md).

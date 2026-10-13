@@ -59,8 +59,12 @@ struct Dut {
 
     void put1(int p, uint32_t b)  { LV v; v.aVal = b & 1u; v.bVal = 0; x.put_value(p, &v); }
     void putW(int p, uint64_t val){ uint64_t c[1] = {val}; putChunks(p, c, 1); }
-    uint32_t get1(int p)          { LV v[LV_MAX]; std::memset(v,0,sizeof(v)); x.get_value(p, v); return v[0].aVal & 1u; }
-    uint64_t getW(int p)          { uint64_t c[1]; getChunks(p, c, 1); return c[0]; }
+    uint32_t get1(int p, bool* xz = nullptr) {
+        LV v[LV_MAX]; std::memset(v,0,sizeof(v)); x.get_value(p, v);
+        if (xz) *xz = (v[0].bVal & 1u) != 0;
+        return v[0].aVal & 1u;
+    }
+    uint64_t getW(int p, uint64_t* xz = nullptr) { uint64_t c[1]; getChunks(p, c, 1, xz); return c[0]; }
 
     /// A wide port as *k* uint64 chunks, chunk 0 the low 64 bits -- the bundles' and the pysim's
     /// wide-word convention.  Bits above the port's width are ignored by XSI; bits of the port
@@ -74,12 +78,29 @@ struct Dut {
         }
         x.put_value(p, v);
     }
-    void getChunks(int p, uint64_t* c, int k) {
+    /// With *xz*, also each chunk's X/Z bits (the logic values' bVal): bits the DUT did not drive,
+    /// which aVal alone reads as 1s.
+    void getChunks(int p, uint64_t* c, int k, uint64_t* xz = nullptr) {
         LV v[LV_MAX];
         std::memset(v, 0, sizeof(v));
         x.get_value(p, v);
-        for (int i = 0; i < k; i++)
-            c[i] = (2 * i + 1 < LV_MAX) ? (((uint64_t)v[2 * i + 1].aVal << 32) | v[2 * i].aVal) : 0;
+        for (int i = 0; i < k; i++) {
+            const bool in = 2 * i + 1 < LV_MAX;
+            c[i] = in ? (((uint64_t)v[2 * i + 1].aVal << 32) | v[2 * i].aVal) : 0;
+            if (xz) xz[i] = in ? (((uint64_t)v[2 * i + 1].bVal << 32) | v[2 * i].bVal) : 0;
+        }
+    }
+
+    /// Stop the run: a handshake accepted a word with X/Z bits.  Read as aVal they are 1s, so the
+    /// run would finish on time with wrong numbers -- how SsrFft at L >= 256 passed with its twiddle
+    /// ROMs never loaded (their .dat files had not reached the run directory).
+    [[noreturn]] static void fatal_xz(const std::string& port, long cycle, long beat, int chunk,
+                                      uint64_t bits, bool valid_xz = false) {
+        std::fprintf(stderr, "FATAL: X/Z on %s in accepted beat %ld at cycle %ld (chunk %d, bits "
+                     "0x%016llx%s): the DUT never drove them -- an uninitialized memory (a ROM whose "
+                     ".dat is not in the run directory) or an unassigned output\n", port.c_str(),
+                     beat, cycle, chunk, (unsigned long long)bits, valid_xz ? "; TVALID X too" : "");
+        std::exit(7);
     }
 };
 
@@ -208,7 +229,8 @@ private:
 
 class AxiMmWriteSlave : public XsiSimObj {
 public:
-    AxiMmWriteSlave(Dut& d, const std::string& prefix, FlatMemory& mem) : d_(d), mem_(mem) {
+    AxiMmWriteSlave(Dut& d, const std::string& prefix, FlatMemory& mem)
+        : d_(d), mem_(mem), name_(prefix) {
         P_awvalid = d.port((prefix + "_AWVALID").c_str());
         P_awready = d.port((prefix + "_AWREADY").c_str());
         P_awaddr  = d.port((prefix + "_AWADDR").c_str());
@@ -227,7 +249,7 @@ public:
         awaddr_  = d_.getW(P_awaddr);
         awlen_   = (uint32_t)(d_.getW(P_awlen) & 0xFF);
         wvalid_  = d_.get1(P_wvalid);
-        wdata_   = d_.getW(P_wdata);
+        wdata_   = d_.getW(P_wdata, &wdata_xz_);
         wstrb_   = (uint32_t)(d_.getW(P_wstrb) & 0xFF);
         wlast_   = d_.get1(P_wlast);
         bready_  = d_.get1(P_bready);
@@ -241,6 +263,9 @@ public:
             addrw_ = mem_.word_index(awaddr_); len_ = awlen_; beat_ = 0;
             state_ = W_RECV; h_awready_ = 0; h_wready_ = 1;
         } else if (w_beat_) {
+            uint64_t lanes = 0;                     // X/Z only matters in the bytes the strobe writes
+            for (int b = 0; b < 8; ++b) if ((wstrb_ >> b) & 1u) lanes |= 0xFFull << (8 * b);
+            if ((wdata_xz_ & lanes) && !allow_xz) Dut::fatal_xz(name_ + "_WDATA", -1, w_count_, 0, wdata_xz_ & lanes);
             mem_.write_strobed(addrw_ + beat_, wdata_, wstrb_);
             ++w_count_;
             if (wlast_) { state_ = B_RESP; h_wready_ = 0; h_bvalid_ = 1; }
@@ -257,6 +282,9 @@ public:
         d_.put1(P_bvalid,  h_bvalid_);
     }
 
+    //: Accept written bytes with X/Z bits instead of stopping the run (see AxisSlave::allow_xz).
+    bool allow_xz = false;
+
     int  w_count() const { return w_count_; }   ///< total W beats accepted (a progress metric)
     int  state() const   { return (int)state_; }
     /// True once a B response has been consummated.  A write is not observable until B: "all the
@@ -266,6 +294,8 @@ public:
 
 private:
     Dut& d_; FlatMemory& mem_;
+    std::string name_;
+    uint64_t wdata_xz_ = 0;
     int P_awvalid, P_awready, P_awaddr, P_awlen, P_wvalid, P_wready, P_wdata, P_wstrb, P_wlast,
         P_bvalid, P_bready;
     enum State { AW_IDLE, W_RECV, B_RESP };
@@ -452,7 +482,7 @@ private:
 class AxisSlave : public XsiSimObj {
 public:
     AxisSlave(Dut& d, const std::string& prefix, int chunks = 1)
-        : d_(d), k_(chunks < 1 ? 1 : chunks), data_(k_, 0) {
+        : d_(d), k_(chunks < 1 ? 1 : chunks), data_(k_, 0), xz_(k_, 0), name_(prefix) {
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
@@ -464,8 +494,8 @@ public:
     }
 
     void sample() override {
-        valid_ = d_.get1(P_valid);
-        d_.getChunks(P_data, data_.data(), k_);
+        valid_ = d_.get1(P_valid, &valid_xz_);
+        d_.getChunks(P_data, data_.data(), k_, xz_.data());
         last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
         beat_  = (valid_ && d_ready_);
     }
@@ -481,6 +511,8 @@ public:
     void update() override {
         ++cycle_;                                   // 1-based: this is the cycle now executing
         if (beat_) {
+            for (int i = 0; i < k_; ++i)
+                if (xz_[i] && !allow_xz) Dut::fatal_xz(name_ + "_TDATA", cycle_, (long)count(), i, xz_[i], valid_xz_);
             words_.insert(words_.end(), data_.begin(), data_.end()); beat_cycles_.push_back(cycle_);
             if (P_last >= 0 && last_) bounds_.push_back((uint64_t)count());
         }
@@ -495,6 +527,11 @@ public:
     //: from the start, exactly the always-ready sink every existing gate uses.  Exists so a gate can
     //: fill an upstream FIFO on purpose and measure the back-pressure (plans/mm_slave_adaptor.md).
     long ready_from = 0;
+
+    //: Accept beats whose data has X/Z bits instead of stopping the run (Dut::fatal_xz).  For a design
+    //: that reads memory before writing it ON PURPOSE -- a negative control, a startup transient its
+    //: gates account for: X in simulation, the memory's initial contents on the device.
+    bool allow_xz = false;
 
     //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
     //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
@@ -534,6 +571,9 @@ private:
     Dut& d_;
     int k_;                             // uint64 chunks per beat; declared before data_ (init order)
     std::vector<uint64_t> data_;        // this cycle's sampled beat, k_ chunks
+    std::vector<uint64_t> xz_;          // ...and its X/Z bits per chunk
+    bool valid_xz_ = false;
+    std::string name_;
     int P_data, P_valid, P_ready, P_last;
     std::vector<uint64_t> words_;
     std::vector<uint64_t> bounds_;

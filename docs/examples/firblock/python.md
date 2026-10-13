@@ -28,9 +28,8 @@ The rest of the flow, in order:
 | `--through` | what it does | needs |
 |---|---|---|
 | `pysim` *(default)* | run the `FirBlockTB` graph, check every block against the golden | — |
-| `codegen_dut` | the `ap_ctrl_none` composite top, its TCL, the port map, the headers | — |
-| `codegen_tb` | the XSI BFM harness, its main, and the scenario bundles | — |
-| `csynth` | Vitis HLS C-synthesis; also re-emits `rtl_fir_block.f` | Vitis |
+| `codegen_dut` | the `ap_ctrl_none` composite top, its TCL, the headers | — |
+| `csynth` | Vitis HLS C-synthesis | Vitis |
 
 The parameters are CLI flags, which is also the handle a parameter sweep drives:
 
@@ -39,10 +38,14 @@ python -m examples.fir_block.fir_block_build --through csynth --samp-w 8 --ntap 
 python -m examples.fir_block.fir_block_build --through csynth --unroll-lane
 ```
 
-The RTL rung is a test rather than a build step, because it needs Vivado `xsim` and a prior `csynth`:
+The RTL rung is the **system flow** (`fir_block_system_build.py`): the kernel cut out of the
+testbench graph as the design under test, its top and harness derived, run under XSI and compared
+with pysim. Its gate needs Vivado `xsim` and a prior `csynth`
+([RTL simulation](./rtlsim.md)):
 
 ```bash
 pytest tests/examples/test_fir_block.py          # the pysim gates, incl. the falsification pair
+python -m examples.fir_block.fir_block_system_build
 pytest -m xsi tests/examples/test_fir_block_xsi.py
 ```
 

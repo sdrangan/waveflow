@@ -664,6 +664,26 @@ class MemoryMod(HwModule):
             words = np.concatenate([np.asarray(b, dtype=np.uint64) for b in read_burst_bundle(p)])
             self._mem.write(seg.off * bpw, words)
 
+    def post_sim(self) -> None:
+        """Dump ``dump_segs`` -- the pysim mirror of the C++ ``FlatMemory::post_sim``: each
+        ``[off, off+length)`` (``length=0``: to the end of the arena) written as one burst, against
+        :attr:`root`.  So a system run compares the arena pysim left against the one the RTL left
+        (``plans/system_model.md`` S3b).  No ``root``, nothing written: a relative path needs one."""
+        super().post_sim()
+        if not self.dump_segs or self.root is None:
+            return
+        from pathlib import Path
+
+        from waveflow.utils.burst_io import write_burst_bundle
+
+        bpw = int(self.word_size) // 8
+        total = int(self.nwords_tot)
+        for seg in self.dump_segs:
+            n = int(seg.length) or max(total - int(seg.off), 0)
+            words = np.asarray(self._mem.read(int(seg.off) * bpw, n), dtype=np.uint64)
+            p = Path(seg.bundle)
+            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p)
+
     def _access_delay(self, nwords: int) -> float:
         """Modeled RAM access time (seconds) for an *nwords*-word transfer."""
         return (self.latency_init + nwords * self.latency_per_word) / self.clk.freq

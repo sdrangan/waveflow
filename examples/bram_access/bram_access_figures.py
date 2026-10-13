@@ -12,9 +12,11 @@ Two figures, in the order ``docs/examples/bram_access/timing.md`` tells the stor
 
 **The lanes are the memory's own pins, not only the design's streams**, and that is the difference
 from every other timing figure in this repo.  ``buf_w`` and ``buf_r`` are wires of the *wrapper* —
-the join between the kernel's ``mode=bram`` ports and the hand-written ``bram_t2p`` — so a level-1
-``$dumpvars`` of the elaborated top sees them, and the figure can show the memory being used rather
-than inferring it from the streams at the boundary.
+the join between the kernel's ``mode=bram`` ports and the hand-written ``bram_t2p`` — and a traced
+system run dumps the wrapper's scope at level 1 inside the system top, so the figure can show the
+memory being used rather than inferring it from the streams at the boundary.  The trace is the
+system flow's (``bram_access_system_build.py``, scenario zero): ``<work>/<top>_trace.vcd`` and the
+wrapper's hazard manifest in ``<work>/hazards.json``, whose ``scope`` resolves the nets.
 
 Generated SVGs land in ``results/`` (gitignored); :class:`SyncDocsFiguresStep` promotes them — on
 demand, via an explicit manifest — into ``docs/examples/bram_access/images/`` as committed assets, so
@@ -25,7 +27,7 @@ Run it with::
 
     python bram_access_build.py --through sync_docs_figures
 
-which needs a traced RTL run first (``--through rtl_trace``).
+which runs the traced system run first (``--through rtl_trace``).
 """
 from __future__ import annotations
 
@@ -142,9 +144,9 @@ def render_activity_overlap(lane_list, path: Path) -> None:
 
 @dataclass(kw_only=True)
 class ActivityFiguresStep(BuildStep):
-    """Render both activity figures into ``results/`` from the traced run."""
+    """Render both activity figures into ``results/`` from the traced system run."""
 
-    description: str = "Render the bram_access activity figures from the traced RTL run."
+    description: str = "Render the bram_access activity figures from the traced system run."
     params: ClassVar[dict] = {}
 
     vcd_artifact: str = "trace_vcd"
@@ -158,10 +160,13 @@ class ActivityFiguresStep(BuildStep):
         return {f"{e['name']}_svg": Path(e["source"]) for e in FIGURE_MANIFEST}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
-        from examples.bram_access.bram_access_build import hazard_manifest
+        from examples.bram_access.bram_access_system_build import trace_of
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
-        lane_list = lanes(Path(artifacts[self.vcd_artifact]), hazard_manifest())
+        # The traced system run's VCD and, beside it, the wrapper's hazard manifest -- whose `scope`
+        # places the wrapper's nets inside the system top.
+        vcd, manifest = trace_of(Path(artifacts[self.vcd_artifact]).parent)
+        lane_list = lanes(vcd, manifest)
         out = {}
         for name, render in (("activity_full", render_activity_full),
                              ("activity_overlap", render_activity_overlap)):

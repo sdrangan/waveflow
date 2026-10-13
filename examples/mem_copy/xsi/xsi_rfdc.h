@@ -155,6 +155,32 @@ public:
     /// "which port's consumer is the one that cannot keep up", which a sum cannot.
     std::vector<std::uint64_t> words_sent_ch;
     std::vector<std::uint64_t> dropped_ch;
+
+    //: If set, ``post_sim`` writes the counters above as JSON to this path -- what a system run
+    //: gathers as a recording (``BurstBundle::write_counters``).  Empty: nothing written.
+    std::string counters_out;
+    //: Beside the totals: the ports bound (``n_ch``), each port's counts (``words_sent_<i>``,
+    //: ``dropped_<i>``) and the format (``fmt_*``) -- what a hand-written main used to print.
+    void post_sim() override {
+        if (counters_out.empty()) return;
+        std::vector<std::pair<std::string, long long>> kv = {
+            {"words_sent", (long long)words_sent}, {"dropped", (long long)dropped},
+            {"last_drop_cycle", (long long)last_drop_cycle}, {"n_ch", (long long)ch_.size()}};
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            kv.emplace_back("words_sent_" + std::to_string(i), (long long)words_sent_ch[i]);
+            kv.emplace_back("dropped_" + std::to_string(i), (long long)dropped_ch[i]);
+        }
+        add_fmt(kv, fmt_);
+        BurstBundle::write_counters(counters_out, kv);
+    }
+    /// The format the model was built with, as counters: what a testbench asserts reached it.
+    static void add_fmt(std::vector<std::pair<std::string, long long>>& kv, const RfdcFormat& f) {
+        kv.emplace_back("fmt_iq_mode", f.iq_mode);
+        kv.emplace_back("fmt_iq_order", f.iq_order);
+        kv.emplace_back("fmt_slots_per_word", f.slots_per_word());
+        kv.emplace_back("fmt_word_bits", f.word_bits());
+    }
+
     /// AXIS ports this model masters -- the tile's receive channel count.
     std::size_t n_ch() const { return ch_.size(); }
     /// The sample format it was built with.  Exposed so a testbench can ASSERT what reached the
@@ -363,6 +389,28 @@ public:
     /// Grid index of the most recent zero-fill (0 = never).  A count cannot separate a startup
     /// transient from a steady-state fault; this can.
     std::uint64_t last_zero_fill_idx = 0;
+
+    //: If set, ``post_sim`` writes the counters above as JSON to this path -- what a system run
+    //: gathers as a recording (``BurstBundle::write_counters``).  Empty: nothing written.
+    std::string counters_out;
+    //: Beside the totals: the ports bound (``n_ch``), each port's counts (``words_recv_<i>``,
+    //: ``underrun_<i>``) and the format (``fmt_*``) -- what a hand-written main used to print.
+    void post_sim() override {
+        if (counters_out.empty()) return;
+        std::vector<std::pair<std::string, long long>> kv = {
+            {"words_recv", (long long)words_recv}, {"underrun", (long long)underrun},
+            {"last_underrun_cycle", (long long)last_underrun_cycle},
+            {"blocks_out", (long long)blocks_out},
+            {"blocks_zero_filled", (long long)blocks_zero_filled},
+            {"last_zero_fill_idx", (long long)last_zero_fill_idx},
+            {"n_ch", (long long)ch_.size()}};
+        for (std::size_t i = 0; i < ch_.size(); ++i) {
+            kv.emplace_back("words_recv_" + std::to_string(i), (long long)words_recv_ch[i]);
+            kv.emplace_back("underrun_" + std::to_string(i), (long long)underrun_ch[i]);
+        }
+        RfdcAdcMaster::add_fmt(kv, fmt_);
+        BurstBundle::write_counters(counters_out, kv);
+    }
 
 private:
     /// One block period has elapsed: play whatever is buffered, or zero-fill and count.

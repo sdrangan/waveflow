@@ -16,6 +16,15 @@ harness pumps the clock and models every port.
 
 The target is `sequential_xsi_tb`. It is generated, not hand-written.
 
+**You reach it through a system.** An example does not call these functions itself. It states a
+[system](../build/xsi_system.md#the-system), the graph below plus the cut, and the system flow
+(`add_system_steps`) derives the harness from it. `system_tb_spec` applies the walk this page
+describes to the ports of the [system top](../build/xsi_system.md#the-spec): each participant's
+`bfm_model()`, its `DynParam`s, the shared memory arena, the behavioral edges. It then hands the
+result to `render_tb_harness`. `tb_top_spec` and `render_tb_main` are the same walk with the kernel
+itself as the elaborated top. They remain for tools that elaborate a kernel alone, such as the
+calibration traces of `mem_copy` and the interleaver, and `waveflow/vitis_l1/profile_xsi.py`.
+
 ## The testbench is a graph, not a program
 
 This is the part that surprises people. A `sequential_vitis_tb` comes from a `SeqTB`'s `main()` — a

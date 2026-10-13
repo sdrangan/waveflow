@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from waveflow.hw.clock import Clock
+from waveflow.hw.hw_module import HwModule
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.mm_adaptor import VIEW_BYTES, MemSlaveAdaptor
 from waveflow.hw.mm_bram import MemSlaveBramWindow
@@ -142,18 +143,34 @@ def layout_of(kernel_type, *, mem_dwidth: int = 64) -> MemSlaveLayout:
 
 
 @dataclass
-class MmSlaveDevice:
-    """One kernel instance's memory-mapped side, built by :func:`build_mm_device`.
+class MmSlaveDevice(HwModule):
+    """One kernel instance with its memory-mapped side, built by :func:`build_mm_device`: a
+    **composite** whose children are the kernel, its views and its adaptor.
 
     ``views`` are the view modules by declared name, ``adaptor`` the one front in front of them all
-    (``None`` when each view has its own bus port), ``layout`` the type's layout.
+    (``None`` when each view has its own bus port), ``layout`` the type's layout, ``streams`` the
+    channels joining the views to the kernel (its internal interfaces).  A routed credit stream adds
+    the bus writer acting for this kernel as a further child when it is bound
+    (:class:`~waveflow.hw.mm_credit.MmCreditStreamIF`).
+
+    The device is the unit a system's DUT is made of (``plans/system_model.md`` D2): its sub-top in
+    the system's Verilog, and the IP it is packaged as.  It has no behaviour of its own -- its
+    children simulate -- so making it a module changes no cycle.
     """
 
-    kernel: Any
-    views: dict[str, Any]
-    layout: MemSlaveLayout
+    kernel: Any = None
+    views: dict[str, Any] = field(default_factory=dict)
+    layout: MemSlaveLayout | None = None
     adaptor: MemSlaveAdaptor | None = None
     streams: dict[str, StreamIF] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for child in [self.kernel, *self.views.values(), self.adaptor]:
+            if child is not None:
+                self.add_comp(child)
+        for si in self.streams.values():
+            self.add_if(si)
 
     def bus_ports(self) -> list[tuple[Any, int, int]]:
         """``(slave endpoint, offset within the device, size)`` for every bus port: the adaptor's one
@@ -230,7 +247,8 @@ def build_mm_device(kernel, *, sim, clk: Clock, mem_dwidth: int = 64, one_front:
     if one_front:
         adaptor = MemSlaveAdaptor(name=f"{prefix}mm", sim=sim, mem_dwidth=dw,
                                   views=list(views.values()))
-    dev = MmSlaveDevice(kernel=kernel, views=views, layout=layout, adaptor=adaptor, streams=streams)
+    dev = MmSlaveDevice(name=f"{kernel.name}_dev", sim=sim, kernel=kernel, views=views, layout=layout,
+                        adaptor=adaptor, streams=streams)
     # Each bus-facing module knows its device, so a walk from a crossbar can find it (D5).
     for mod in ([adaptor] if adaptor is not None else list(views.values())):
         mod.mm_device = dev

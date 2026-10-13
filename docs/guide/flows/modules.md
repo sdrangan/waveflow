@@ -170,8 +170,9 @@ So no module declares which side it is on, and the framework does not either:
 - The **boundary is derived**. A child endpoint not bound to one of the composite's internal
   interfaces *is* a boundary port. Only the external port *names* are declared, and only because
   local names collide (two children both call their memory port `m_mem`).
-- The **cut is an argument**. `tb_top_spec(tb, dut=...)` names which child is synthesized; discovery
-  is the default, not the mechanism.
+- The **cut is stated on a system**, not on a module. A
+  [`GraphSystem`](../build/xsi_system.md#graph-system) names the modules inside it
+  (`dut_modules`), and a build may draw another cut (`inside=`).
 - **The cut decides which hook is consulted** — inside the top, `kernel_task()`; beside it in the
   same design, [`rtl_module()`](../comp_codegen/rtl_module.md); outside the design, `bfm_model()`.
 

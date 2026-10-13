@@ -140,6 +140,39 @@ runs fifty job lengths at RTL in 36 s, each point checked bit-exact, at about 0.
 > `vectors/` should therefore write one every time, even at the default scenario, so a previous
 > point's sizes cannot outlive it — `MemCopySim.write_scenario` does.
 
+## A plain SystemVerilog testbench: `SvSimStep`
+
+The same three tools also run a **hand-written SystemVerilog testbench** with no HLS and no XSI
+involved: `xvlog` compiles the design and the testbench, `xelab` elaborates the testbench as the top,
+and `xsim` runs it to completion. `SvSimStep` (`waveflow/build/svsim_steps.py`) is that run as a
+build step. It is a thin wrapper over `run_sv_sim` (`waveflow/scripts/sv_sim.py`, also the `sv_sim`
+command line).
+
+```python
+from pathlib import Path
+from waveflow.build.svsim_steps import SvSimStep
+
+dag.add(SourceStep(artifact="adder_src", path="adder.sv"))
+dag.add(SourceStep(artifact="adder_tb", path="tb_adder.sv"))
+dag.add(SvSimStep(name="adder_sim", sources=["adder.sv"], tb="tb_adder.sv",
+                  consumes=["adder_src", "adder_tb", "vectors"],
+                  sim_artifact="adder_sim_dir", sim_dir=Path("sim/adder"),
+                  outputs={"adder_results": Path("sim/adder/results.txt")},
+                  plusargs={"vectors": Path("vectors/in.txt")}))
+```
+
+| Parameter | Meaning |
+|---|---|
+| `sources`, `tb` | design sources and the testbench file, relative to `config.root_dir` or absolute |
+| `consumes` | per instance: the `SourceStep`s of the `.sv` files plus whatever wrote the testbench's inputs |
+| `sim_artifact`, `sim_dir` | the simulation directory, the step's one guaranteed artifact |
+| `outputs` | files the **testbench itself** writes. They join `produces`, so freshness is judged on data the simulation produced, and a run that died before writing them fails the step rather than leaving a stale `sim_dir` that looks fresh |
+| `plusargs` | `-testplusarg name=value`. A `Path` value is resolved against `config.root_dir`, so the testbench gets an absolute path to its vectors |
+| `top`, `tcl`, `keep`, `capture_output` | the top module (default: the testbench's stem), an xsim `run.tcl` (default `--runall`), keep the old `sim_dir`, capture tool output into the error |
+
+A tool failure raises `SvSimError` and the DAG records a failed step with its traceback. No reference
+example uses this rung yet; `tests/build/test_svsim_steps.py` pins the commands it builds.
+
 ## See also
 
 - [Build System index](./index.md) — one flow, fork at the RTL rung.

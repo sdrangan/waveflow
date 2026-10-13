@@ -18,6 +18,9 @@ Waveflow ships four built-in build steps that generate the C++ headers and helpe
 
 Each step is typically added once per design (or once per schema, in the case of `DataSchemaStep`), and the dependency wiring among them is automatic.
 
+A second family copies the framework's hand-written `hls::task` bodies (`MemStreamStep`, the RF
+buffer steps, `MemLockStep`); see [Framework task-body headers](#framework-task-body-headers).
+
 ---
 
 ## StreamUtilsStep
@@ -58,6 +61,31 @@ dag.add(MemMgrStep(output_dir="include"))
 Outputs:
 - `<output_dir>/memmgr.hpp`
 - `<output_dir>/memmgr_tb.hpp`
+
+---
+
+## Framework task-body headers
+
+A second family of steps copies **hand-written `hls::task` bodies** that ship with the framework. They
+work like `MemMgrStep`: each copies fixed headers from `waveflow/build/` verbatim into the example's
+include directory, because each example builds in its own tree and Vitis compiles against the files
+beside its top. All of them live in `waveflow.build.streamutils`, take only `output_dir`, and have no
+auto-wiring. Add the one whose module your design instantiates.
+
+| Step | Writes | For | Documented with |
+|---|---|---|---|
+| `MemStreamStep` | `mem_r_stream_task.h`, `mem_w_stream_task.h`, their framed / done variants, `mem_seq_framed_task.h`, the `il_*` interleaver bodies | `MemRStream` / `MemWStream` and the generated load-compute-store | [Concurrent flow steps](../flows/concurrent_flowsteps.md) |
+| `RfSampBufStep` | `rf_samp_buf_{ingress,capture,loader,player}_task.h` | `RfSampBufRx` / `RfSampBufTx` (`waveflow/hw/rf_samp_buf.py`). Both directions ship together, because they share a geometry and a status vocabulary | [RF: choosing a buffer](../rf/choosing.md) |
+| `RfTxStreamStep` | `rf_tx_loader_task.h`, `rf_tx_player_task.h`, `rf_circ_play_task.h` | `RfTxStream` (`waveflow/hw/rf_tx_stream.py`). This is a separate step from `RfSampBufStep` because the two designs' "too late" status codes deliberately differ | [Continuous sample buffer](../rf/rfstreambuf/index.md) |
+| `RfShotBufStep`, `RfShotTxStep`, `RfPingPongStep` | the shot buffer's relayout, loader / player and ping-pong bodies | the RF shot buffer | [Shot buffer TX internals](../rf/rfshotbuf/tx_internal.md) |
+| `MemLockStep` | `mem_lock.h` | the C++ half of `waveflow.hw.locked_mem`: the request / await / poll-and-grant moves of a memory lock. It carries no task body, and it includes the generated `mem_lock_cmd.h` / `mem_lock_resp.h` by plain name, so add a `DataSchemaStep` for `LOCK_SCHEMA_CLASSES` writing to the **same** `output_dir` | [Shot buffer TX internals](../rf/rfshotbuf/tx_internal.md) |
+
+```python
+from waveflow.build.streamutils import MemLockStep, RfTxStreamStep
+
+dag.add(RfTxStreamStep(output_dir="include"))
+dag.add(MemLockStep(output_dir="include"))
+```
 
 ---
 

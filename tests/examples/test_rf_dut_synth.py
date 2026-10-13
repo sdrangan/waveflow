@@ -16,8 +16,8 @@ The layers, and what each can and cannot say:
 - pysim — the relay is bit-identical in Python. No toolchain.
 - csynth (``-m vitis``) — the RTL exists **and contains a datapath**. csynth reporting success is
   not evidence: a nested-struct-by-value argument silently DCEs a kernel and still reports OK.
-- XSI (``-m xsi``, in ``test_xsi_bfm.py``) — the real RTL relays the words, bit-identical, at a
-  measured cycle count.
+- XSI (``-m xsi``, in ``test_rf_dut_system_xsi.py``, through the system flow) — the real RTL relays
+  the words, bit-identical, at a measured cycle count.
 """
 from __future__ import annotations
 
@@ -194,49 +194,7 @@ def test_csynth_produces_a_real_datapath():
         f"hardware: {sorted(mods)}")
 
 
-@pytest.mark.vitis
-def test_the_rtl_file_list_matches_the_rtl_on_disk():
-    """A stale ``.f`` plus a cached ``xsimk.dll`` is how an XSI run goes green proving nothing."""
-    from waveflow.build.composite_gen import render_rtl_f
-
-    if not PROJ.is_dir():
-        pytest.skip(f"no csynth RTL at {PROJ}")
-    committed = (ROOT / "xsi" / f"rtl_{TOP}.f").read_text(encoding="utf-8").replace("\r\n", "\n")
-    assert render_rtl_f(TOP, ROOT, stamp_sources=False) == committed
-
-
-# ---------------------------------------------------------------------------
-# The XSI workspace
-# ---------------------------------------------------------------------------
-
-def test_the_workspace_carries_the_framework_library():
-    """The gates compile the COMMITTED copies, so a new workspace must have them."""
-    src = Path(__file__).resolve().parents[2] / "waveflow" / "build" / "xsi"
-    ws = ROOT / "xsi"
-    for name in ("xsi_bfm.h", "xsi_simobj.h", "xsi_channel.h", "xsi_bundle.h", "run.bat", "run.sh"):
-        assert (ws / name).is_file(), f"{name} missing from {ws}"
-        assert (ws / name).read_text(encoding="utf-8").replace("\r\n", "\n") == \
-            (src / name).read_text(encoding="utf-8").replace("\r\n", "\n"), \
-            f"{name} has drifted from waveflow/build/xsi/"
-
-
-def test_the_workspace_now_carries_the_converter_headers():
-    """**Inverted deliberately.** This assertion used to say the opposite.
-
-    It was a scope guard: while this cut used only generic BFMs, a converter header in the workspace
-    would have been a header nothing included, and the guard said so. The RF loopback testbench now
-    shares this workspace and names ``RfdcAdcMaster`` / ``RfFileSource``, so the headers belong here
-    and ``XsiHarnessStep`` copies them. Inverted rather than deleted, because "which headers does
-    this workspace carry, and why" is the question that went stale — not the answer.
-    """
-    ws = ROOT / "xsi"
-    for name in ("xsi_rfdc.h", "xsi_rfdc_samp.h", "xsi_rf_block.h"):
-        assert (ws / name).is_file(), f"{name} missing from {ws}"
-
-
-def test_generated_top_and_harness_are_present():
-    for f in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp"):
-        assert (ROOT / "xsi" / f).is_file(), f"{f} was not generated"
+def test_generated_top_is_present():
     assert (ROOT / "gen" / f"{TOP}.cpp").is_file()
     # One generated body and one copied one -- both must be in the include dir the top #includes.
     assert (ROOT / "include" / "rf_samp_relay_task.h").is_file()

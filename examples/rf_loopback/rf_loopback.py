@@ -39,6 +39,7 @@ from waveflow.hw.synth import sim_only
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
+from waveflow.hw.hw_system import GraphSystem
 
 from waveflow.hw.rfdc import Rfdc
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord
@@ -731,6 +732,47 @@ def run_and_check() -> bool:
     print(f"[rf_loopback] dac {tb.dac_if.counters()}")
     print("rf_loopback pysim golden: PASSED")
     return True
+
+
+@dataclass
+class RfLoopbackSystem(GraphSystem):
+    """rf_loopback as a **system** (``plans/system_model.md`` S3d): vendor IP in the testbench.
+
+    The DUT is the pass-through kernel alone.  The RFDC cannot be brought into the DUT as vendor IP
+    today, so it is a testbench participant: in pysim the :class:`~waveflow.hw.rfdc.Rfdc` model, under
+    XSI its per-port C++ models (``RfdcAdcMaster`` / ``RfdcDacSlave``), each **spanning the cut** -- an
+    AXI-Stream port of the top on the fabric side, an RF behavioral edge on the other, to the RF data
+    source and sink.  On the board it is the RFDC IP, a cell of the block design beside the DUT's IP.
+
+    The sink's recording is checked by the example, not compared exactly (``recording_check``):
+    pysim paces the RF side on the edge and cannot see the sub-block sample loss the RTL measures,
+    so the two legitimately differ (``tests/examples/test_rf_loopback_xsi.py`` records how).
+    """
+
+    dut_name: ClassVar[str] = "rf_loopback_dut"
+
+    #: Which loopback: ``"real"`` (one channel, real samples), ``"2ch"`` (a two-channel tile through
+    #: the two-lane pass-through) or ``"iq"`` (interleaved I/Q through the unchanged one-channel
+    #: pass-through) -- the three scenarios of ``rf_loopback_xsi``, each its own system.
+    variant: str = "real"
+    n_src_blk: int = 8
+    blksize: int = 256
+    #: The RTL run's cycle bound (the scenario's ``run.json``); see ``rf_loopback_xsi.XSI_N_CYCLES``.
+    n_cycles: int = 16000
+
+    def graph(self) -> "RfLoopbackTB":
+        from examples.rf_loopback.rf_loopback_xsi import make_sim, make_sim_2ch, make_sim_iq
+
+        make = {"real": make_sim, "2ch": make_sim_2ch, "iq": make_sim_iq}[self.variant]
+        self.runner = make(int(self.n_src_blk), int(self.blksize))
+        self.runner.tb.sink.recording_check = "example"
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        self.runner.write_scenario(root)
 
 
 if __name__ == "__main__":

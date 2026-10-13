@@ -5,8 +5,9 @@
 
 Everything is the framework's (:mod:`waveflow.dsp.ssr_fft.rtl`): the task bodies and the generated
 configuration (:mod:`waveflow.dsp.ssr_fft.hls`), the ``ap_ctrl_none`` top from ``composite_top_spec``,
-the XSI harness from the testbench graph.  No vendor headers, no include path.  This example has no
-``src/``: it has no hand-written C++ of its own; ``include/``, ``gen/`` and ``xsi/`` are build output.
+and the RTL run through the system flow (``rtl.run_xsi``).  No vendor headers, no include path.  This
+example has no ``src/``: it has no hand-written C++ of its own; ``include/``, ``gen/`` and the run's
+``system/`` are build output.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import argparse
 from pathlib import Path
 
 from waveflow.dsp.ssr_fft import rtl
-from waveflow.dsp.ssr_fft.rtl import TB, TOP, XSI_DIR  # noqa: F401  (re-exported)
+from waveflow.dsp.ssr_fft.rtl import TOP  # noqa: F401  (re-exported)
 
 from examples.ssr_fft.ssr_fft import L, N_FRAMES, REORDER
 
@@ -34,7 +35,7 @@ def main() -> None:
     ap.add_argument("--no-synth", action="store_true")
     a = ap.parse_args()
     top = generate()
-    print(f"generated gen/{top}.cpp, gen/{top}.tcl and {XSI_DIR}/")
+    print(f"generated gen/{top}.cpp and gen/{top}.tcl")
     if a.no_synth:
         return
     synth()

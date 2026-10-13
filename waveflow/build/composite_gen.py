@@ -163,12 +163,25 @@ class BfmModel:
       nature, as a ``.h`` beside its Python twin rather than C++ in a Python string.  A local model is
       the participant's own class on every port it spans -- each port's BFM dual is still checked to
       exist, but the class is not looked up from it.
+    * ``generated_files`` -- files the model needs **generated** beside the harness, as
+      ``(file name, render)`` with *render* a no-argument function returning the text.  Rendered when
+      the harness is, not when the model is declared, so declaring it never needs a fully wired
+      participant.  The use: a software host's generated ``<Host>_endpoints.h``, which its hand-written
+      header includes (``plans/system_model.md`` D5) -- declared by the host, so the harness generator
+      names no participant type.
+    * ``reports_counters`` -- the C++ model keeps its own counters (a converter's dropped words, a
+      channel's transfers) and writes them as JSON in ``post_sim`` when its ``counters_out`` is set.
+      The **system** flow sets it -- ``vectors/counters/<model>.json`` -- and gathers the directory as
+      a recording, checked by the example (``plans/system_model.md`` S3d).  The kernel flow leaves
+      it unset, so its harness is unchanged.
     """
     cls: str
     ports: tuple[str | tuple[str, ...], ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
     header: str | None = None
+    generated_files: tuple = ()
+    reports_counters: bool = False
 
 
 @dataclass(frozen=True)
@@ -193,10 +206,17 @@ class ChannelModel:
     Order matters and is stated rather than inferred: ``peers[0]`` is the side that *pushes*.  A
     channel is one-producer/one-consumer (multi-producer is deferred, ``plans/behavioral_edges.md``
     S5), so a wrong order is a direction error, not a cosmetic one.
+
+    * ``reports_counters`` -- the C++ model keeps its own counters (a converter's dropped words, a
+      channel's transfers) and writes them as JSON in ``post_sim`` when its ``counters_out`` is set.
+      The **system** flow sets it -- ``vectors/counters/<model>.json`` -- and gathers the directory as
+      a recording, checked by the example (``plans/system_model.md`` S3d).  The kernel flow leaves
+      it unset, so its harness is unchanged.
     """
     cls: str
     peers: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
+    reports_counters: bool = False
 
 
 @dataclass(frozen=True)

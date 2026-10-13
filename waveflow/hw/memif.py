@@ -1169,6 +1169,15 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     # Bind
     # ------------------------------------------------------------------
 
+    def rtl_config(self, name: str, *, id_width: int = 1):
+        """The RTL realization of this crossbar inside a DUT (``plans/system_model.md`` D3): AMD's
+        ``axi_crossbar`` IP, configured from this crossbar's ports and the address ranges bound to
+        its slaves (:meth:`~waveflow.build.axi_xbar.AxiXbarConfig.from_crossbar`; addresses must be
+        assigned first).  *name* is the IP's module name; *id_width* the AXI ID bits it routes."""
+        from waveflow.build.axi_xbar import AxiXbarConfig
+
+        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width)
+
     def bind(
         self,
         ep_name: str,

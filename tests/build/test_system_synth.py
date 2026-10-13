@@ -34,10 +34,24 @@ _ROWS = {
 }
 
 
+def _row(indent: int, n: str, lut: int, ff: int, b36: int) -> str:
+    name = " " * indent + n
+    return (f"|{name:<20}|                          module | {lut:>10} | {lut:>10} |       0 |    0 "
+            f"| {ff:>5} | {b36:>6} |      0 |          0 |")
+
+
 def _report(drop: str | None = None) -> str:
-    rows = [f"|   {n:<16} |                          module | {lut:>10} | {lut:>10} |       0 |    0 "
-            f"| {ff:>5} | {b36:>6} |      0 |          0 |"
-            for n, (lut, ff, b36) in _ROWS.items() if n != drop]
+    """The rows nested as the top now holds them: the crossbar a child of the top, every other
+    instance a child of its device's or the memory's sub-top (``-hierarchical_depth 2``)."""
+    spec = _spec()
+    rows = []
+    for sub in [""] + [s.inst for s in spec.subs]:
+        mine = [i.inst for i in spec.instances() if i.sub == sub and i.inst != drop]
+        if sub:
+            tot = [sum(_ROWS[n][k] for n in mine) for k in range(3)]
+            rows.append(_row(3, sub, *tot))
+            rows.append(_row(5, f"({sub})", 0, 0, 0))
+        rows += [_row(5 if sub else 3, n, *_ROWS[n]) for n in mine]
     return _HEAD + "\n".join(rows) + "\n+----+\n"
 
 
@@ -53,7 +67,9 @@ def test_the_hierarchical_report_parses():
                                     "bram": 2, "dsp": 0}}
     assert rows[1]["instance"] == "(markov_top)" and rows[1]["depth"] == 1
     fwd = next(r for r in rows if r["instance"] == "u_u_fwd_wr")
-    assert fwd["depth"] == 1 and fwd["counters"]["bram"] == 2        # one RAMB36 = two 18K halves
+    assert fwd["depth"] == 2 and fwd["counters"]["bram"] == 2        # one RAMB36 = two 18K halves
+    from waveflow.build.system_synth import row_paths
+    assert row_paths(rows)[rows.index(fwd)] == "u_gen_sub/u_u_fwd_wr"   # under its device
     with pytest.raises(ValueError):
         parse_utilization_hierarchical("no table here")
 
@@ -63,7 +79,8 @@ def test_every_instance_is_attributed_and_the_terms_add_up():
     total, inst, unclaimed, recovered = attribute(spec, parse_utilization_hierarchical(_report()))
     assert recovered == []
     assert set(inst) == {i.inst for i in spec.instances()} and len(inst) == 15
-    assert set(unclaimed) == {"(markov_top)"}                       # the top's own cells
+    assert set(unclaimed) == {"(markov_top)", "u_gen_sub/(u_gen_sub)",   # the top's own cells,
+                              "u_chain_sub/(u_chain_sub)", "u_mem_sub/(u_mem_sub)"}  # each sub-top's
     res = SystemSynth(top=spec.top, digest="d", part="p", period_ns=10.0, impl=False, total=total,
                       instances=inst)
     for c in ("lut", "ff", "bram"):
@@ -143,11 +160,11 @@ def test_a_dissolved_instance_is_priced_by_its_cell_names():
     """markov with block RAM: synthesis dissolved u_mem_mem's hierarchy; its RAMB36 keeps its name."""
     from waveflow.build.system_synth import parse_prims, prim_counters
 
-    out = "WF_PRIM_synth u_gen_qcmd LUT6 3\nWF_PRIM_synth u_gen_qcmd FDRE 9\n" \
-          "WF_PRIM_synth u_gen_qcmd RAM32M 2\nWF_PRIM_synth u_gen_qcmd SRLC32E 1\n" \
-          "WF_PRIM_synth u_gen_qcmd RAMB36E1 1\nWF_PRIM_synth u_gen_qcmd CARRY4 5\n"
+    out = "WF_PRIM_synth u_gen_sub/u_gen_qcmd LUT6 3\nWF_PRIM_synth u_gen_sub/u_gen_qcmd FDRE 9\n" \
+          "WF_PRIM_synth u_gen_sub/u_gen_qcmd RAM32M 2\nWF_PRIM_synth u_gen_sub/u_gen_qcmd SRLC32E 1\n" \
+          "WF_PRIM_synth u_gen_sub/u_gen_qcmd RAMB36E1 1\nWF_PRIM_synth u_gen_sub/u_gen_qcmd CARRY4 5\n"
     prims = parse_prims(out, "synth")
-    assert prim_counters(prims["u_gen_qcmd"]) == {"lut": 3 + 8 + 1, "ff": 9, "lutram": 8, "srl": 1,
+    assert prim_counters(prims["u_gen_sub/u_gen_qcmd"]) == {"lut": 3 + 8 + 1, "ff": 9, "lutram": 8, "srl": 1,
                                                   "bram": 2}
     total, inst, _u, recovered = attribute(
         _spec(), parse_utilization_hierarchical(_report(drop="u_gen_qcmd")), prims)

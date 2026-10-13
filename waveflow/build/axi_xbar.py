@@ -166,16 +166,21 @@ class AxiXbarConfig:
         return ModuleIdentity(key=f"axi_crossbar-{sig[:KEY_DIGEST_CHARS]}", cls_name="AxiCrossbar",
                               cls_module=__name__, params=params, signature=sig)
 
+    def config_props(self) -> dict[str, str]:
+        """``{CONFIG.<name>: value}``: what the IP is told, by ``create_ip`` here or by a block
+        design's ``create_bd_cell`` (:mod:`~waveflow.build.system_bd`)."""
+        props = {"CONFIG.NUM_SI": str(self.n_si), "CONFIG.NUM_MI": str(len(self.mi)),
+                 "CONFIG.DATA_WIDTH": str(self.data_width),
+                 "CONFIG.ADDR_WIDTH": str(self.addr_width), "CONFIG.PROTOCOL": "AXI4",
+                 "CONFIG.ID_WIDTH": str(self.id_width), "CONFIG.CONNECTIVITY_MODE": self.mode}
+        for k, r in enumerate(self.mi):
+            props[f"CONFIG.M{k:02d}_A00_BASE_ADDR"] = f"0x{r.base:016x}"
+            props[f"CONFIG.M{k:02d}_A00_ADDR_WIDTH"] = str(r.addr_width)
+        return props
+
     def tcl(self, ip_dir: str) -> str:
         """The batch script: an in-memory project, ``create_ip``, the config, ``generate_target``."""
-        props = [f"CONFIG.NUM_SI {{{self.n_si}}}", f"CONFIG.NUM_MI {{{len(self.mi)}}}",
-                 f"CONFIG.DATA_WIDTH {{{self.data_width}}}", f"CONFIG.ADDR_WIDTH {{{self.addr_width}}}",
-                 "CONFIG.PROTOCOL {AXI4}", f"CONFIG.ID_WIDTH {{{self.id_width}}}",
-                 f"CONFIG.CONNECTIVITY_MODE {{{self.mode}}}"]
-        for k, r in enumerate(self.mi):
-            props.append(f"CONFIG.M{k:02d}_A00_BASE_ADDR {{0x{r.base:016x}}}")
-            props.append(f"CONFIG.M{k:02d}_A00_ADDR_WIDTH {{{r.addr_width}}}")
-        body = " \\\n  ".join(props)
+        body = " \\\n  ".join(f"{k} {{{v}}}" for k, v in self.config_props().items())
         return (
             f"create_project -in_memory -part {self.part}\n"
             "set_property target_language Verilog [current_project]\n"

@@ -23,6 +23,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
@@ -178,6 +179,30 @@ class InterleaverInbandSim:
         assert ok, "interleaver_inband mismatch (Y != X[P])"
         assert ndone >= len(tb._sizes), f"expected >= {len(tb._sizes)} done bursts, got {ndone}"
         return tb.dut
+
+
+@dataclass
+class InterleaverInbandSystem(GraphSystem):
+    """The in-band interleaver as a **system** (``plans/system_model.md`` S3e): the
+    :class:`InterleaverInbandTB` graph, the cut the :class:`InterleaverInband` kernel alone.  The
+    contention crossbar is testbench, so both ``m_axi`` bundles are top ports facing the memory."""
+
+    sizes: tuple = (256,)
+    n_cycles: int = 4000
+
+    def graph(self) -> InterleaverInbandTB:
+        self.runner = InterleaverInbandSim(sizes=tuple(self.sizes), name="xsi_tb",
+                                           n_cycles=int(self.n_cycles))
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        self.runner.write_scenario(root)
+
+    def check(self) -> "InterleaverInband":
+        return self.runner.check()
 
 
 def run_and_check() -> bool:

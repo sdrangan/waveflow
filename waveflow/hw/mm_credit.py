@@ -262,6 +262,13 @@ class MmCreditStreamIF(Interface):
         self.qin = None
         self.crd_in = None
 
+    def writers(self) -> "tuple[MmStreamWriter, MmStreamWriter]":
+        """The channel's RTL realization inside a DUT (``plans/system_model.md`` D3): its two bus
+        writers -- forward, then credit -- each a csynth'd module, placed in the device of the kernel
+        it acts for when the channel is bound.  The FIFO on the forward link is that link's own
+        (:meth:`~waveflow.hw.interface.StreamIF.rtl_fifo_depth`)."""
+        return (self.fwd_writer, self.crd_writer)
+
     def bus_masters(self) -> list[MMIFMaster]:
         """The two bus masters this channel adds to the crossbar: forward, then credit."""
         return [self.fwd_writer.m_mem, self.crd_writer.m_mem]
@@ -279,20 +286,41 @@ class MmCreditStreamIF(Interface):
             if endpoint.crd_ep.interface is None:
                 raise RuntimeError(f"{self.name}: {endpoint.name}'s credit half is not joined to a "
                                    f"credit-in view -- build the producer's mm device first")
-            self._join(f"{self.name}_fwd", endpoint.fwd_ep, self.fwd_writer.s_in, int(self.bitwidth),
-                       int(self.fwd_depth))
+            si = self._join(f"{self.name}_fwd", endpoint.fwd_ep, self.fwd_writer.s_in,
+                            int(self.bitwidth), int(self.fwd_depth))
+            self._place(self.fwd_writer, si, endpoint)
         else:
             if endpoint.fwd_ep.interface is None:
                 raise RuntimeError(f"{self.name}: {endpoint.name}'s forward half is not joined to a "
                                    f"queue-in view -- build the consumer's mm device first")
-            self._join(f"{self.name}_crd", endpoint.crd_ep, self.crd_writer.s_in, int(self.ctr_bits),
-                       int(self.writer_depth))
+            si = self._join(f"{self.name}_crd", endpoint.crd_ep, self.crd_writer.s_in,
+                            int(self.ctr_bits), int(self.writer_depth))
+            self._place(self.crd_writer, si, endpoint)
         super().bind(ep_name, endpoint)
 
-    def _join(self, name: str, master, slave, bw: int, depth: int) -> None:
+    def _join(self, name: str, master, slave, bw: int, depth: int) -> StreamIF:
         si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=bw, depth=int(depth))
         si.bind(ep_name="master", endpoint=master)
         si.bind(ep_name="slave", endpoint=slave)
+        return si
+
+    @staticmethod
+    def _place(writer: "MmStreamWriter", link: StreamIF, endpoint) -> None:
+        """Put *writer* -- and the stream feeding it -- in the device of the kernel it acts for: the
+        kernel owning *endpoint* (``plans/system_model.md`` D2).  The forward writer carries the
+        sender's data, so it joins the sender's device; the credit writer returns the receiver's
+        credit, so it joins the receiver's.  The endpoint may belong to a child of a composite kernel
+        (``MarkovChain``'s core), so the nearest ``MmSlaveDevice`` ancestor is the one.  A kernel in
+        no device leaves the writer unplaced: any other ancestor is a composite whose codegen would
+        take the writer as a task."""
+        from waveflow.hw.mm_device import MmSlaveDevice
+
+        node = getattr(endpoint, "comp", None)
+        while node is not None and not isinstance(node, MmSlaveDevice):
+            node = getattr(node, "parent", None)
+        if node is not None:
+            node.add_comp(writer)
+            node.add_if(link)
 
     def place(self, qin, crd_in) -> None:
         """Point the writers at the two views: *qin* is the consumer's queue-in entry, *crd_in* the

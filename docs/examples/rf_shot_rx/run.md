@@ -18,13 +18,22 @@ python rf_shot_rx_build.py --through pysim      # no toolchain needed
 | rung | what it does | needs |
 |---|---|---|
 | `pysim` | runs the capture in SimPy and checks the windows concatenate into a contiguous ramp | — |
-| `codegen_dut` | the `ap_ctrl_none` top, its tcl, its port map, the memory, the **wrapper** joining them, and the `$dumpvars` second top | — |
-| `codegen_tb` | the XSI harness + main, and the ramp bundle both backends drive | — |
-| `csynth` | Vitis HLS C-synthesis; re-emits `rtl_<wrapper>.f` from the RTL on disk | Vitis HLS |
+| `codegen_dut` | the `ap_ctrl_none` top and its tcl (and the absolute-index build's, `codegen_dut_abs`) | — |
+| `csynth` | Vitis HLS C-synthesis, stamping the sources it was built from | Vitis HLS |
 
-**What a simulator elaborates is the wrapper**, `rf_shot_rx_top` — the kernel plus its hand-written
-`bram_t2p` memory. The kernel has `buf_w` / `buf_r` ports; the wrapper joins them to the memory
-instance beside it, so the testbench sees only AXI-Stream.
+**The RTL run is the system flow**, traced, one system per build:
+
+```bash
+python -m examples.rf_shot_rx.rf_shot_rx_system_build            # the default build
+python -m examples.rf_shot_rx.rf_shot_rx_system_build --abs      # absolute_index = 1
+pytest -m xsi tests/examples/test_rf_shot_rx_xsi.py tests/examples/test_rf_shot_rx_abs_xsi.py
+```
+
+The DUT is the receiver with its memory, instantiated in the system top as its **wrapper**,
+`rf_shot_rx_top`: the kernel plus its hand-written `bram_t2p` memory. The kernel has `buf_w` /
+`buf_r` ports, and the wrapper joins them to the memory instance beside it, so the testbench sees
+only AXI-Stream. The RFDC's ADC model spans the cut, and the waveform the port checks read is the
+wrapper's scope inside the system top.
 
 ## The reset trap is on the other side here
 

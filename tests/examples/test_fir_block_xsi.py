@@ -17,59 +17,36 @@ either is missing.
 """
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from examples.fir_block.fir_block_build import check_xsi_outputs, generate_tb
-from waveflow.build.trace_steps import rtl_staleness
-
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "fir_block"
-XSI = ROOT / "xsi"
+from examples.fir_block.fir_block_system_build import HERE, TOP, build_dag, check_xsi, system
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
 
-def _require_toolchain() -> None:
-    if os.name != "nt":
-        pytest.skip("the XSI flow is a Windows .bat (xvlog/xelab/mingw)")
-    if not (ROOT / "fir_block_proj").is_dir():
-        pytest.skip(f"no csynth RTL at {ROOT / 'fir_block_proj'} — run fir_block.tcl first")
-    if not (XSI / "run.bat").exists():
-        pytest.skip(f"no XSI workspace at {XSI}")
-    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
-    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
-    # rtl_staleness().
-    why = rtl_staleness(ROOT, "fir_block")
-    if why is not None:
-        pytest.skip(f"XSI gate prerequisite missing: {why}")
+def test_the_system_runs_the_same_golden():
+    """The system the RTL gate runs (:class:`~examples.fir_block.fir_block_sim.FirBlockSystem`)
+    passes the golden check in pysim."""
+    system().run()
 
 
-def _run_xsi() -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        [str(XSI / "run.bat"), "fir_block", "fir_block_bfm_tb"],
-        cwd=XSI, capture_output=True, text=True, shell=False,
-    )
-    assert proc.returncode == 0, (
-        f"XSI run failed\n{proc.stdout[-3000:]}\n{proc.stderr[-2000:]}")
-    return proc
+@pytest.fixture(scope="module")
+def rtl_run() -> Path:
+    """One RTL run of the system, through ``examples/fir_block/fir_block_system_build.py``: the
+    filter kernel is the DUT; the driver, the sink and the memory behind both ``m_axi`` bundles
+    answer through their own models."""
+    return system_run(build_dag(work_dir=WORK), HERE, TOP)
 
 
 @pytest.mark.xsi
-def test_rtl_matches_golden_across_reload_and_carry():
+def test_rtl_matches_golden_across_reload_and_carry(rtl_run):
     """THE gate: LOAD_TAPS -> FILTER x2 -> LOAD_TAPS -> FILTER through real RTL, every output block
     bit-exact against the stateless golden, one completion per command."""
-    _require_toolchain()
-    # Regenerate the scenario AND clear the previous run's dumps.  A stale bundle would let a broken
-    # build "pass" on old output -- the same way a stale rtl_*.f plus a cached xsimk.dll would.
-    generate_tb(ROOT)
-    for name in ("out", "s_done"):
-        d = XSI / "vectors" / name
-        if d.exists():
-            for f in d.iterdir():
-                f.unlink()
+    check_xsi(rtl_run)
 
-    proc = _run_xsi()
-    assert (XSI / "vectors" / "out").exists(), (
-        f"the XSI run produced no memory dump — it did not complete\n{proc.stdout[-2000:]}")
-    check_xsi_outputs(XSI)
+
+@pytest.mark.xsi
+def test_rtl_recordings_match_pysim(rtl_run):
+    """The sink's completions and the memory's arena at RTL are pysim's, word for word."""
+    assert compared_clean(rtl_run) and recorded_names(rtl_run) == ["out", "s_done"]

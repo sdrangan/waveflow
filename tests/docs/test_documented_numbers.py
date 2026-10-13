@@ -416,16 +416,13 @@ def test_the_hop_latency_the_edge_pages_quote_is_the_one_the_channel_has():
 def test_rf_pass_through_page_quotes_the_recorded_cycle_gate():
     """``examples/rf_loopback/rtl.md`` states the RTL completion cycle and the scenario size.
 
-    The source of truth is ``test_xsi_bfm.py``'s ``GATES`` table — the same tuple the XSI run
-    asserts against — so a re-recorded gate fails here until the page is updated, and a page edited
-    to a number nobody measured fails immediately.
+    The source of truth is the system gate's constant
+    (``rf_dut_system_build.EXPECTED_CYCLES``, asserted by ``test_rf_dut_system_xsi.py``) — so a
+    re-recorded gate fails here until the page is updated, and a page edited to a number nobody
+    measured fails immediately.
     """
     from examples.rf_loopback.rf_dut_build import XSI_NBURST, XSI_NWORDS_BLK
-    from tests.examples.test_xsi_bfm import GATES
-
-    want = {top: cycles for top, _tb, cycles, _m in GATES}
-    assert "rf_pass_through" in want, "the rf_pass_through gate has been removed from GATES"
-    cycles = want["rf_pass_through"]
+    from examples.rf_loopback.rf_dut_system_build import EXPECTED_CYCLES as cycles
 
     text = _page("examples/rf_loopback/rtl.md")
     assert f"**{cycles}**" in text, (

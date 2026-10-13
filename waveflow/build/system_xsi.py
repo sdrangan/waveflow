@@ -56,28 +56,103 @@ class XsiRun:
 
 
 def discover(sysm):
-    """``(xbar, host, inside)`` of a system object: its one crossbar, its one software host, and the
-    default cut -- each kernel whose device is a crossbar slave, and each memory on the crossbar."""
-    from waveflow.hw.memif import AXIMMCrossBarIF
-    from waveflow.hw.memory import MemoryMod
-    from waveflow.sw import SwHost
+    """``(xbar, host, inside)`` of a :class:`~waveflow.hw.hw_system.HwSystem`: its bus, the
+    testbench participant that drives it, and its default cut
+    (:meth:`~waveflow.hw.hw_system.HwSystem.cut`).
 
-    objs = list(getattr(sysm.sim, "_sim_objs", []))
-    xbars = [o for o in objs if isinstance(o, AXIMMCrossBarIF)]
-    hosts = [o for o in objs if isinstance(o, SwHost)]
-    if len(xbars) != 1 or len(hosts) != 1:
-        raise LoweringError(f"{type(sysm).__name__}: a bus system has one crossbar and one software host; "
-                            f"found {len(xbars)} crossbar(s) and {len(hosts)} host(s)")
-    xbar, host = xbars[0], hosts[0]
-    inside: list = []
-    for k in range(int(xbar.nports_slave)):
-        ep = xbar.endpoints.get(f"slave_{k}")
-        mod = getattr(ep, "comp", None)
-        dev = getattr(mod, "mm_device", None)
-        target = dev.kernel if dev is not None else (mod if isinstance(mod, MemoryMod) else None)
-        if target is not None and all(target is not m for m in inside):
-            inside.append(target)
-    return xbar, host, inside
+    Each is found by **role**, not by type (``plans/system_model.md`` D1):
+
+    * the **bus** is the DUT's link that realizes as bus IP -- the interface of the DUT tree that
+      declares an ``rtl_config`` (S2), today the crossbar -- or ``None``: a system needs no bus;
+    * the **host** is the participant with a bus master on that bus whose owner is **outside** the
+      DUT tree -- the testbench side of the cut -- or ``None``.  Its realization is its own
+      ``bfm_model()``.
+
+    At most one of each, today (``plans/system_model.md`` S3)."""
+    from waveflow.hw.hw_system import HwSystem
+
+    if not isinstance(sysm, HwSystem):
+        raise LoweringError(f"{type(sysm).__name__} is not a waveflow HwSystem: a system flow takes a "
+                            f"subclass of waveflow.hw.hw_system.HwSystem, which builds its graph on "
+                            f"self.sim and implements dut() (the default cut) and run()")
+    root = sysm.dut()
+    buses = [i for i in root.interfaces.values() if callable(getattr(i, "rtl_config", None))]
+    if len(buses) > 1:
+        raise LoweringError(f"{type(sysm).__name__}: a system top links its devices through at most one "
+                            f"crossbar (an interface realized as bus IP, rtl_config); its DUT "
+                            f"'{root.name}' has {len(buses)}")
+    if not buses:                       # no bus: the testbench reaches the DUT through its own ports
+        return None, None, sysm.cut()
+    bus = buses[0]
+
+    def in_dut(mod) -> bool:
+        while mod is not None:
+            if mod is root:
+                return True
+            mod = getattr(mod, "parent", None)
+        return False
+
+    hosts: list = []
+    for name, ep in bus.endpoints.items():
+        owner = getattr(ep, "comp", None)
+        if name.startswith("master_") and owner is not None and not in_dut(owner) \
+                and all(owner is not h for h in hosts):
+            hosts.append(owner)
+    if len(hosts) > 1:
+        raise LoweringError(f"{type(sysm).__name__}: a system top is driven by at most one testbench "
+                            f"bus master (a host outside the DUT on '{bus.name}'); found "
+                            f"{[getattr(h, 'name', h) for h in hosts]}")
+    return bus, (hosts[0] if hosts else None), sysm.cut()
+
+
+def elaborate_sub_top(spec, name: str, *, root: Path, work_dir: Path) -> Path:
+    """Compile device (or memory) *name* of *spec* **alone** and elaborate it: the standalone module
+    (:meth:`~waveflow.build.system_top.SystemTopSpec.render_sub_verilog`), its leaves, and its
+    kernels' csynth Verilog under *root* -- nothing else.  It passing is what makes a sub-top a unit:
+    a per-device synthesis or IP can be built from it with no system around it
+    (``plans/system_model.md`` S5).  Returns the work directory; raises
+    :class:`~waveflow.scripts.sv_sim.SvSimError` naming the failing tool."""
+
+    sub = next(s for s in spec.subs if s.name == name)
+    leaves, kernels = spec.sources_of(name)
+    return _elaborate(sub.module, spec.render_sub_verilog(name), leaves, kernels, root=root,
+                      work_dir=work_dir)
+
+
+def elaborate_top(spec, *, root: Path, work_dir: Path) -> Path:
+    """Compile and elaborate a **whole** system top that has no crossbar: its Verilog, every leaf it
+    uses and every kernel's csynth Verilog under *root*.  For a top with no bus there is no vendor IP
+    to generate, so this is all it needs -- what shows a system with no crossbar (mem_copy) is a real
+    design before a harness is wrapped around it (``plans/system_model.md`` S3a).  A top with a
+    crossbar needs its IP's simulation files, which the ``system_rtl`` step generates; refused here."""
+    from waveflow.build.hwcodegen import LoweringError
+
+    if spec.xbar is not None:
+        raise LoweringError(f"{spec.top} has a crossbar: elaborate it through its system_rtl step, "
+                            f"which generates the IP's simulation files")
+    return _elaborate(spec.top, spec.render_verilog(), spec.leaf_sources(), spec.modules, root=root,
+                      work_dir=work_dir)
+
+
+def _elaborate(module: str, text: str, leaves, kernels, *, root: Path, work_dir: Path) -> Path:
+    """xvlog + xelab of *module* (Verilog *text*) with its *leaves* and its *kernels*' csynth
+    Verilog under *root*, in ``<work_dir>/<module>``."""
+    from waveflow.scripts.sv_sim import _run, sim_tool
+
+    work = Path(work_dir) / module
+    work.mkdir(parents=True, exist_ok=True)
+    top_v = work / f"{module}.v"
+    top_v.write_text(text, encoding="utf-8")
+    files = [*leaves]
+    for m in kernels:
+        files += sorted(_rtl_dir(Path(root), m).glob("*.v"))
+    files.append(top_v)
+    (work / f"{module}.f").write_text("\n".join(Path(f).resolve().as_posix() for f in files)
+                                      + "\n", encoding="utf-8")
+    _run(f'"{sim_tool("xvlog")}" -f {module}.f', work, capture_output=True, echo=False)
+    _run(f'"{sim_tool("xelab")}" work.{module} -s {module}_elab', work,
+         capture_output=True, echo=False)
+    return work
 
 
 def _rtl_dir(root: Path, module: str) -> Path:
@@ -127,13 +202,18 @@ def load_run(work) -> XsiRun:
 
 
 
-def compare_traces(a: Path, b: Path) -> list[str]:
+def compare_traces(a: Path, b: Path,
+                   files: tuple[str, ...] = ("words.bin", "bounds.bin", "meta.json"),
+                   names=None) -> list[str]:
     """``"<endpoint>/<file>"`` for every trace file under *a* that is missing or different under *b*
-    (and every endpoint *b* has that *a* lacks)."""
+    (and every endpoint *b* has that *a* lacks).  *files* chooses what is compared: a host's traces
+    whole, a testbench recording on its ``words.bin``.  *names*, when given, limits the comparison
+    to those trace directories."""
     bad = []
-    names = sorted({p.name for p in Path(a).iterdir()} | {p.name for p in Path(b).iterdir()})
+    present = {p.name for p in Path(a).iterdir()} | {p.name for p in Path(b).iterdir()}
+    names = sorted(present if names is None else set(names))
     for ep in names:
-        for f in ("words.bin", "bounds.bin", "meta.json"):
+        for f in files:
             pa, pb = Path(a) / ep / f, Path(b) / ep / f
             if not (pa.is_file() and pb.is_file() and pa.read_bytes() == pb.read_bytes()):
                 bad.append(f"{ep}/{f}")

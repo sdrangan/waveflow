@@ -253,7 +253,7 @@ def identify_instance(comp: Any, *, require_bound: bool = True,
     )
 
 
-def identify_rtl(module: str, params: dict[str, Any], sources) -> ModuleIdentity:
+def identify_rtl(module: str, params: dict[str, Any], sources, ties=()) -> ModuleIdentity:
     """The :class:`ModuleIdentity` of a hand-written Verilog *module* instantiated with *params*.
 
     A Verilog leaf is not an ``HwModule``, so there is no structure to elaborate: its identity is the
@@ -262,11 +262,19 @@ def identify_rtl(module: str, params: dict[str, Any], sources) -> ModuleIdentity
     on the old text become unreachable rather than silently wrong -- the rule ``ModuleStore``'s
     provenance check applies to modules.  The digest is of content, not of paths, so a checkout
     anywhere keys the same.
+
+    *ties* -- ``((port, value), ...)``, an input tied to *value* or an output left open (``""``) --
+    are the instance's tie-offs (``RtlInstance.ties``): a leaf with a port tied idle is another
+    configuration, and synthesizes to less (``plans/ip_packaging_routes.md`` Stage 2).  They enter
+    the key only when there are any, so an untied leaf keys as it always has.
     """
     from waveflow.build.rtl_digest import _sha256
 
     files = {Path(s).name: _sha256(Path(s)) for s in sources}
-    blob = json.dumps({"module": module, "params": params, "sources": files}, sort_keys=True)
+    d: dict[str, Any] = {"module": module, "params": params, "sources": files}
+    if ties:
+        d["ties"] = [list(t) for t in ties]
+    blob = json.dumps(d, sort_keys=True)
     sig = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     return ModuleIdentity(key=f"{module}-{sig[:KEY_DIGEST_CHARS]}", cls_name=module,
                           cls_module="verilog", params=dict(params), signature=sig)

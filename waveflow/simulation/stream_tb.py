@@ -182,6 +182,22 @@ class StreamSink(HwModule):
         self.words.append(np.array(words, copy=True))
         yield self.timeout(0)
 
+    def post_sim(self) -> None:
+        """Write the capture to :attr:`out_bundle`, as the XSI ``AxisSlave`` does in its
+        ``post_sim`` -- so a system run can compare what the sink observed in pysim against RTL
+        (``plans/system_model.md`` S3b).  Only when a scenario writer has set ``root`` (a plain
+        attribute, like :attr:`StreamDriver.root`): a relative bundle path means nothing without one,
+        and a run nobody anchored writes nothing.  The pysim capture carries no per-word arrival
+        cycles -- a recording is compared on its words, not on its timing."""
+        super().post_sim()
+        root = getattr(self, "root", None)
+        if not self.out_bundle or root is None:
+            return
+        from waveflow.utils.burst_io import write_burst_bundle
+
+        p = Path(self.out_bundle)
+        write_burst_bundle(list(self.words), p if p.is_absolute() else Path(root) / p)
+
     def bfm_model(self):
         """XSI twin: an ``AxisSlave`` on the port ``stream_ep`` is wired to — always ready, keeps
         everything, and timestamps each word so the testbench can report completion time."""

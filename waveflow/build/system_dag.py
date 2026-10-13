@@ -283,8 +283,8 @@ class _SystemStep(BuildStep):
 
 @dataclass(kw_only=True)
 class ScenarioStep(_SystemStep):
-    """``scenario``: the host writes its scenario bundle (``SwHost.write_scenario``) -- the one file the
-    pysim run and the XSI run both read."""
+    """``scenario``: the system writes its scenario (``HwSystem.write_scenario``: the host's bundle by
+    default) -- what the pysim run and the XSI run both read."""
 
     description = "The host's scenario bundle: the one file pysim and the RTL run both read."
     step_name: ClassVar[str] = "scenario"
@@ -295,9 +295,7 @@ class ScenarioStep(_SystemStep):
 
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         path = self.work_dir(config) / "scenario"
-        host = _host(self.sysm)
-        host.scenario = path.as_posix()
-        host.write_scenario(path)
+        self.sysm.write_scenario(path)
         return {self.a("scenario"): path}
 
 
@@ -327,13 +325,64 @@ class PysimStep(_SystemStep):
         traces = work / "pysim_traces"
         shutil.rmtree(traces, ignore_errors=True)        # a stale trace would describe another run
         host = _host(self.sysm)
-        host.scenario = Path(inputs[self.a("scenario")]).as_posix()
-        host.trace_dir = traces.as_posix()
-        self.sysm.run()
+        if host is not None:
+            host.scenario = Path(inputs[self.a("scenario")]).as_posix()
+            host.trace_dir = traces.as_posix()
+            self.sysm.run()
+        else:
+            # No host: the testbench's participants record into the scenario root.  Run from a
+            # fresh copy of it, then gather each recording as a trace.
+            run_root = work / "pysim_run"
+            shutil.rmtree(run_root, ignore_errors=True)
+            self.sysm.write_scenario(run_root)
+            self.sysm.run()
+            gather_recordings(self.sysm, run_root, traces)
         report = work / "pysim.json"
-        report.write_text(json.dumps({"cycles": self.sysm.sim.env.now / host.clk.period}, indent=2)
-                          + "\n", encoding="utf-8")
+        clk = self.sysm.clock()
+        cycles = self.sysm.sim.env.now / clk.period if clk is not None else None
+        report.write_text(json.dumps({"cycles": cycles}, indent=2) + "\n", encoding="utf-8")
         return {self.a("pysim_traces"): traces, self.a("pysim"): report}
+
+
+def _explain_mismatch(sysm, bad: list, rtl: Path, py: Path) -> str:
+    """The message for recordings that differ RTL against pysim: for each, the participant that
+    records it, the word counts and the first differing word -- and what to do when the difference
+    is one pysim cannot avoid by construction."""
+    import numpy as np
+
+    from waveflow.hw.hw_system import _inside
+
+    top = sysm.dut()
+    who: dict[str, str] = {}
+    for o in sysm.elements():
+        if _inside(o, top):
+            continue
+        for b in [getattr(o, "out_bundle", "")] + [g.bundle for g in (getattr(o, "dump_segs", None)
+                                                                      or ())]:
+            if b:
+                who[Path(str(b)).name] = f"{getattr(o, 'name', '?')} ({type(o).__name__})"
+    lines = ["the testbench's recordings differ, RTL against pysim:"]
+    for entry in bad:
+        name = entry.split("/")[0]
+        a, b = rtl / name / "words.bin", py / name / "words.bin"
+        detail = "missing on one side"
+        if a.is_file() and b.is_file():
+            x, y = np.fromfile(a, dtype="<u8"), np.fromfile(b, dtype="<u8")
+            n = min(x.size, y.size)
+            diff = np.flatnonzero(x[:n] != y[:n])
+            detail = f"{x.size} words at RTL, {y.size} in pysim"
+            if diff.size:
+                k = int(diff[0])
+                detail += (f"; first difference at word {k}: RTL 0x{int(x[k]):x}, "
+                           f"pysim 0x{int(y[k]):x} ({diff.size} differ)")
+        lines.append(f"  {name!r}, recorded by {who.get(name, '?')}: {detail}")
+    lines.append(
+        "A difference is a finding until shown otherwise -- an unassigned field, a lost word, a "
+        "design that disagrees with its twin.  If it is one pysim cannot avoid by construction (loss "
+        "below its resolution, a time horizon against a cycle bound, a loosely-timed lead), mark "
+        "that participant `recording_check = \"example\"` and check the recording in the example "
+        "instead (plans/system_model.md S3b).")
+    return "\n".join(lines)
 
 
 @dataclass(kw_only=True)
@@ -362,12 +411,37 @@ class CompareStep(_SystemStep):
 
         out = self.work_dir(config) / "compare.json"
         out.unlink(missing_ok=True)                      # a previous verdict must not outlive this run
+        # A host's traces are compared whole.  A sink's or a memory's recording is compared on its
+        # words: framing at RTL is whatever TLAST the DUT drives, which is not the pysim sink's.
+        host = _host(self.sysm) is not None
+        # Only what is compared exactly: a recording its participant marks "example" is gathered
+        # from both runs for the example's own check, and not judged here.
+        names = None if host else {Path(r).name for r in self.sysm.compared_recordings()}
         bad = compare_traces(Path(inputs[self.a(self.traces_from)]),
-                             Path(inputs[self.a("pysim_traces")]))
+                             Path(inputs[self.a("pysim_traces")]),
+                             files=("words.bin", "bounds.bin", "meta.json") if host
+                             else ("words.bin",), names=names)
         out.write_text(json.dumps({"trace_mismatches": bad}, indent=2) + "\n", encoding="utf-8")
         if bad:
-            raise RuntimeError(f"the host's RTL traces differ from pysim's: {bad}")
+            if host:
+                raise RuntimeError(f"the testbench's RTL traces differ from pysim's: {bad}")
+            raise RuntimeError(_explain_mismatch(self.sysm, bad,
+                                                 Path(inputs[self.a(self.traces_from)]),
+                                                 Path(inputs[self.a("pysim_traces")])))
         return {self.a("compare"): out}
+
+
+def gather_recordings(sysm, run_root: Path, traces: Path) -> None:
+    """Copy each of *sysm*'s recordings (``HwSystem.recordings``) from *run_root* into *traces*, one
+    directory per recording named by its last path part (``vectors/s_done`` -> ``s_done``) -- the
+    layout ``compare`` reads."""
+    import shutil
+
+    traces.mkdir(parents=True, exist_ok=True)
+    for rec in sysm.recordings():
+        src = Path(run_root) / rec
+        if src.is_dir():
+            shutil.copytree(src, traces / Path(rec).name, dirs_exist_ok=True)
 
 
 
@@ -452,7 +526,8 @@ class SystemRtlStep(_SystemStep):
         super().__post_init__()
         self.xbar, self.host, cut = discover(self.sysm)
         self.inside = list(self.inside) if self.inside is not None else cut
-        self.spec = system_top_spec(self.xbar, self.inside, top=self.top, xbar_name=self.xbar_name)
+        self.spec = system_top_spec(self.xbar, self.inside, top=self.top, xbar_name=self.xbar_name,
+                                    data_width=getattr(self.sysm, "data_width", None))
 
     @property
     def tops(self) -> tuple[str, ...]:
@@ -473,7 +548,8 @@ class SystemRtlStep(_SystemStep):
     def inner_dag(self) -> BuildDag:
         """The inner DAG: the crossbar IP, then the system top."""
         dag = BuildDag()
-        dag.add(XbarIpStep(name="xbar_ip", owner=self))
+        if self.spec.xbar is not None:                  # no crossbar inside the DUT: no IP to make
+            dag.add(XbarIpStep(name="xbar_ip", owner=self))
         dag.add(SystemTopStep(name="system_top", owner=self))
         return dag
 
@@ -487,17 +563,26 @@ class SystemRtlStep(_SystemStep):
         bad = [f"{n}: {r.message}" for n, r in results.items() if not r.success]
         if bad:
             raise RuntimeError("; ".join(bad))
-        ip = results["xbar_ip"].artifacts["xbar_ip"]
+        ip = results["xbar_ip"].artifacts["xbar_ip"] if "xbar_ip" in results else None
         root = Path(config.root_dir)
+        from waveflow.build.system_synth import INIT_SUFFIXES
+
         rtl = [f for m in self.spec.modules for f in sorted((root / rtl_rel(m)).glob("*.v"))]
+        # ROM initializers: csynth maps a large constant table (SsrFft's twiddles from L=256) to a ROM
+        # loaded by `$readmemh("./<name>.dat")`, relative to the simulator's directory.  Without them
+        # the ROM reads X and the run completes on time with wrong numbers.
+        init = [f for m in self.spec.modules for f in sorted((root / rtl_rel(m)).iterdir())
+                if f.suffix in INIT_SUFFIXES]
         manifest = self.work_dir(config) / "rtl.json"
         manifest.write_text(json.dumps({
             "top": self.spec.top,
             # The top last, by its bare name: the workspace compiles it from beside the .f.
             "rtl_files": [Path(f).as_posix()
-                          for f in [*ip.sim_files, *self.spec.leaf_sources(), *rtl]]
+                          for f in [*(ip.sim_files if ip else ()), *self.spec.leaf_sources(),
+                                    *rtl]]
                          + [f"{self.spec.top}.v"],
-            "include_dirs": [Path(d).as_posix() for d in ip.include_dirs],
+            "include_dirs": [Path(d).as_posix() for d in (ip.include_dirs if ip else ())],
+            "init_files": [Path(f).as_posix() for f in init],
         }, indent=1) + "\n", encoding="utf-8")
         return {self.a("rtl"): manifest}
 
@@ -515,8 +600,10 @@ class HarnessStep(_Inner):
         from waveflow.build.system_top import render_system_tb, system_tb_spec
 
         o, r = self.owner, self.owner.rtl
-        r.host.scenario, r.host.trace_dir = Path(scenario).as_posix(), o.traces(config).as_posix()
-        tb = system_tb_spec(r.spec, r.xbar, [r.host], probes=list(r.probes or ()))
+        if r.host is not None:
+            r.host.scenario, r.host.trace_dir = Path(scenario).as_posix(), o.traces(config).as_posix()
+        tb = system_tb_spec(r.spec, r.xbar, [r.host] if r.host is not None else [],
+                            probes=list(r.probes or ()), graph=o.sysm)
         return {"harness": render_system_tb(r.spec, tb)}
 
 
@@ -546,10 +633,30 @@ class XsiRunStep(_Inner):
         main, tb_files = harness
         tb_inc = [d for d in (find_vitis_include_dir(), root / "include")
                   if d is not None and Path(d).is_dir()]
+        if o.trace:
+            # A traced run: a second top dumps the wrappers' scopes, and the manifests naming their
+            # nets go beside the waveform (``<work>/hazards.json``).
+            from waveflow.build.trace_steps import render_vcd_dumper
+
+            spec = o.rtl.spec
+            (ws.work_dir / f"vcd_dumper_{m['top']}.v").write_text(
+                render_vcd_dumper(m["top"], spec.trace_scopes()), encoding="utf-8")
+            (o.work_dir(config) / "hazards.json").write_text(
+                json.dumps(spec.hazard_manifests(), indent=1) + "\n", encoding="utf-8")
+            (ws.work_dir / f"{m['top']}_trace.vcd").unlink(missing_ok=True)
         ws.prepare(rtl_files=m["rtl_files"], include_dirs=m["include_dirs"],
                    tb_name=f"{m['top']}_tb", tb_cpp=main, extra_files=dict(tb_files),
-                   tb_include_dirs=tb_inc)
-        out = ws.run(timeout=o.timeout)
+                   tb_include_dirs=tb_inc, trace=o.trace, init_files=m.get("init_files", ()))
+        if o.rtl.host is not None:
+            out = ws.run(timeout=o.timeout)
+        else:
+            # The testbench's participants read and write vectors/: give the run a fresh scenario
+            # copy as its vectors directory, then gather what they recorded.
+            run_root = o.work_dir(config) / "xsi_run"
+            shutil.rmtree(run_root, ignore_errors=True)
+            o.sysm.write_scenario(run_root)
+            out = ws.run(timeout=o.timeout, vectors_dir=run_root / "vectors")
+            gather_recordings(o.sysm, run_root, traces)
         run = XsiRun(output=out, workspace=ws.work_dir, scenario=Path(scenario), traces=traces)
         parse_output(out, run)
         report = write_report(run, ws.work_dir / "report.json")
@@ -569,6 +676,9 @@ class SystemXsiStep(_SystemStep):
 
     rtl: SystemRtlStep
     timeout: int = 3600
+    #: Trace the run: ``<work>/xsi/<top>_trace.vcd`` (each wrapped kernel's wrapper scope) and
+    #: ``<work>/hazards.json`` (:meth:`~waveflow.build.system_top.SystemTopSpec.hazard_manifests`).
+    trace: bool = False
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -641,29 +751,133 @@ class KernelResourcesStep(_SystemStep):
         plat = getattr(config, "platform_info", None)
         filed_into = str(getattr(plat, "write_dir", plat.dir)) if plat is not None else None
         for k in self.rtl.spec.kernels:
-            if k.module not in done:              # one csynth per module: attribute it once
-                out = work / "kernel_resources" / f"{k.module}.json"
-                xml = Path(inputs[report_artifact(k.module)]) / "syn" / "report" / "csynth.xml"
+            if k.csynth_module not in done:              # one csynth per module: attribute it once
+                out = work / "kernel_resources" / f"{k.csynth_module}.json"
+                xml = Path(inputs[report_artifact(k.csynth_module)]) / "syn" / "report" / "csynth.xml"
                 prev = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else None
                 # Records are filed once per csynth, not once per build: an attribution newer than
                 # its report, already filed into this platform, is reused as is.
                 if (prev is not None and prev.get("filed_into") == filed_into and xml.is_file()
                         and out.stat().st_mtime >= xml.stat().st_mtime):
-                    done[k.module] = prev
+                    done[k.csynth_module] = prev
                 else:
-                    done[k.module] = inspect_synth(
-                        k.hw, inputs[report_artifact(k.module)], top_name=k.module, config=config,
+                    done[k.csynth_module] = inspect_synth(
+                        k.hw, inputs[report_artifact(k.csynth_module)], top_name=k.csynth_module, config=config,
                         out=out,
-                        synth_seconds=synth_seconds_of(inputs.get(seconds_artifact(k.module))),
+                        synth_seconds=synth_seconds_of(inputs.get(seconds_artifact(k.csynth_module))),
                         owner=owner_label(k.owner))
-            blob = done[k.module]
-            index[k.inst] = {"top": k.module, "owner": owner_label(k.owner),
+            blob = done[k.csynth_module]
+            index[k.inst] = {"top": k.csynth_module, "owner": owner_label(k.owner),
                              "modules": [m["key"] for m in blob["modules"]],
                              "top_total": blob["top"], "integration": blob["integration"],
                              "filed_into": blob["filed_into"]}
         out = work / "kernel_resources.json"
         out.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
         return {self.a("kernel_resources"): out}
+
+
+@dataclass(kw_only=True)
+class IpPackageStep(_SystemStep):
+    """``ip_package``: the system packaged as IP, one per device and one for the memory
+    (:func:`~waveflow.build.system_ip.package_system`; ``plans/ip_packaging_routes.md`` Stage 3).
+    Each sub-top is packaged with ``ipx::package_project`` from what it compiles -- its rendered
+    module, its leaves' Verilog, its kernels' csynth Verilog -- with its AXI interfaces inferred,
+    its interrupt lines declared, and the clock associated with every AXI interface and the
+    reset.  The
+    crossbar is AMD's IP already: its ``.xci``, generated for the same part, is recorded as is.
+
+    Seconds once Vivado is up, but it needs Vivado, so **opt-in** (``--through ip_package``).  Each
+    IP is cached by the content of what it reads, so an unchanged device is never re-packaged.
+    For the part and clock the kernels were csynth'd for
+    (:func:`~waveflow.build.composite_gen.tcl_target`).
+
+    Produces ``<work>/ip_repo/`` (an IP repository: one directory per IP) and its
+    ``manifest.json`` -- each IP's VLNV, ports and bus interfaces, read back from its own
+    ``component.xml`` (:class:`~waveflow.build.system_ip.SystemIp`)."""
+
+    description = "Package each device and the memory as Vivado IP (opt-in; needs Vivado)."
+    step_name: ClassVar[str] = "ip_package"
+
+    rtl: "SystemRtlStep"
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("rtl")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("ip_repo"): self.work / "ip_repo" / "manifest.json"}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        import dataclasses
+
+        from waveflow.build.axi_xbar import generate_axi_xbar
+        from waveflow.build.composite_gen import tcl_target
+        from waveflow.build.system_ip import package_system
+
+        spec, work = self.rtl.spec, self.work_dir(config)
+        part, _period = tcl_target(config)
+        xbar = (generate_axi_xbar(dataclasses.replace(spec.xbar, part=part),
+                                  self.rtl.ip_dir(config))
+                if spec.xbar is not None else None)
+        root = Path(config.root_dir)
+        kdirs = {m: root / rtl_rel(m) for m in spec.modules}
+        res = package_system(spec, kernel_dirs=kdirs, part=part, out_dir=work / "ip_repo",
+                             xbar_ip=xbar)
+        fresh = [n for n, ip in res.ips.items() if not ip.cached]
+        print(f"  {spec.top}: {len(res.ips)} IPs ({', '.join(ip.vlnv for ip in res.ips.values())})"
+              f"{'' if res.xbar is None else ' + ' + res.xbar['vlnv']}; packaged now: "
+              f"{fresh or 'none (cached)'}")
+        return {self.a("ip_repo"): work / "ip_repo" / "manifest.json"}
+
+
+@dataclass(kw_only=True)
+class BlockDesignStep(_SystemStep):
+    """``block_design``: the packaged IPs instantiated and wired in a Vivado block design beside
+    AMD's crossbar, from the same spec as the XSI system top, and validated
+    (:func:`~waveflow.build.system_bd.build_block_design`; ``plans/ip_packaging_routes.md``
+    Stage 4).  Each IP interface meets the crossbar slot, the other IP or the design port of its
+    name; every master's address map is the crossbar's own windows, assigned explicitly.
+
+    Needs Vivado, so **opt-in** (``--through block_design``); cached by its inputs.  Produces
+    ``<work>/bd/block_design.json`` -- the design read back from Vivado after
+    ``validate_bd_design`` (:class:`~waveflow.build.system_bd.BlockDesign`) -- beside the project,
+    the wrapper and ``<top>_bd.tcl``, which recreates the design in another project."""
+
+    description = "Wire the packaged IPs in a validated Vivado block design (opt-in; needs Vivado)."
+    step_name: ClassVar[str] = "block_design"
+    #: ``bd_synth``: how a bitstream build synthesizes the design -- ``global`` (the default) or
+    #: ``per_ip`` (:data:`~waveflow.build.system_bd.SYNTH_MODES`).
+    params: ClassVar[dict] = {"bd_synth": "global"}
+
+    rtl: "SystemRtlStep"
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("ip_repo")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("block_design"): self.work / "bd" / "block_design.json"}
+
+    def run(self, config: BuildConfig, bd_synth: str = "global", **_: Any) -> dict[str, Any]:
+        import json
+
+        from waveflow.build.composite_gen import tcl_target
+        from waveflow.build.system_bd import build_block_design
+        from waveflow.build.system_ip import SystemIp
+
+        spec, work = self.rtl.spec, self.work_dir(config)
+        _part, period = tcl_target(config)
+        sysip = SystemIp.from_json(
+            json.loads((work / "ip_repo" / "manifest.json").read_text(encoding="utf-8")))
+        bd = build_block_design(spec, sysip, period_ns=period, out_dir=work / "bd",
+                                synth=bd_synth)
+        n_intf = sum(1 for x in bd.links if x.kind == "intf")
+        print(f"  {bd.name}: {len(sysip.ips)} IPs{'' if spec.xbar is None else ' + crossbar'}, "
+              f"{n_intf} interface links, {len(bd.ports)} ports; validated"
+              f"{' (cached)' if bd.cached else f' in {bd.seconds:.0f} s'}")
+        return {self.a("block_design"): work / "bd" / "block_design.json"}
 
 
 @dataclass(kw_only=True)
@@ -677,10 +891,18 @@ class SystemSynthStep(_SystemStep):
     default); the crossbar IP is generated for that part beside the simulation one.  With a platform
     selected the records are filed into it.  *impl* also places and routes (closure in the records).
 
-    Produces ``<work>/system_synth.json`` (the :class:`~waveflow.build.system_synth.SystemSynth`)."""
+    Produces ``<work>/system_synth.json`` (the :class:`~waveflow.build.system_synth.SystemSynth`).
+
+    The param ``synth_route`` chooses how (``plans/ip_packaging_routes.md``): ``"global"`` (the
+    default) is the one synthesis above; ``"per_device"`` synthesizes each device and the memory out
+    of context, the top against black boxes, and links them
+    (:func:`~waveflow.build.system_ooc.synth_ooc_link`) -- each part cached by content, so a change
+    to one device re-synthesizes that device only.  That route writes the
+    :class:`~waveflow.build.system_ooc.OocLink` instead and files no records yet."""
 
     description = "The system top synthesized in Vivado; every instance attributed (opt-in, minutes)."
     step_name: ClassVar[str] = "system_synth"
+    params: ClassVar[dict] = {"synth_route": "global"}
 
     rtl: "SystemRtlStep"
     impl: bool = False
@@ -701,7 +923,7 @@ class SystemSynthStep(_SystemStep):
         root = Path(config.root_dir)
         return {m: root / rtl_rel(m) for m in self.rtl.spec.modules}
 
-    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+    def run(self, config: BuildConfig, synth_route: str = "global", **_: Any) -> dict[str, Any]:
         import dataclasses
         import json
 
@@ -714,6 +936,21 @@ class SystemSynthStep(_SystemStep):
         ip = generate_axi_xbar(dataclasses.replace(spec.xbar, part=part), self.rtl.ip_dir(config))
         top_v = work / f"{spec.top}.v"
         kdirs = self.kernel_dirs(config)
+        if synth_route not in ("global", "per_device"):
+            raise ValueError(f"synth_route must be 'global' or 'per_device', got {synth_route!r}")
+        if synth_route == "per_device":
+            from waveflow.build.system_ooc import synth_ooc_link
+
+            link = synth_ooc_link(spec, kernel_dirs=kdirs, ip=ip, part=part, period_ns=period,
+                                  out_dir=work.parent / "ooc_link")
+            out = work / "system_synth.json"
+            out.write_text(json.dumps({"route": "per_device", **link.to_json()}, indent=2) + "\n",
+                           encoding="utf-8")
+            reran = [n for n, c in link.part_cached.items() if not c]
+            print(f"  {spec.top} per device: parts {sorted(link.parts)} (re-synthesized: "
+                  f"{reran or 'none'}; top {'cached' if link.top_cached else 'synthesized'}) "
+                  f"-> linked {link.linked}, link term {link.link_term}")
+            return {self.a("system_synth"): out}
         res = synth_system(spec, top_v=top_v, kernel_dirs=kdirs, ip=ip,
                            out_dir=work.parent / "system_synth", part=part, period_ns=period,
                            impl=self.impl, keep_hierarchy=self.keep_hierarchy)
@@ -841,18 +1078,19 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                      xbar_name: str | None = None, inside=None, probes: dict | None = None,
                      prefix: str = "", workspace: str | None = None,
                      sources: tuple[str, ...] = ("include", "gen"),
-                     tcls: dict[str, Path] | None = None, timeout: int = 3600) -> SystemXsiStep:
+                     tcls: dict[str, Path] | None = None, timeout: int = 3600,
+                     trace: bool = False) -> SystemXsiStep:
     """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
-    the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``leaf_resources``,
-    ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.  Returns the
-    ``system_xsi`` step (its ``rtl`` is the ``system_rtl`` step).
+    the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``ip_package``,
+    ``block_design``, ``leaf_resources``, ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.
+    Returns the ``system_xsi`` step (its ``rtl`` is the ``system_rtl`` step).
 
     *sysm* is the pysim system object, not yet run.  csynth consumes the artifacts *sources* -- the
     example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
     the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
     -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
     the cut; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
-    script (``{top: path relative to the root}``).
+    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
 
     The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
     probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
@@ -877,18 +1115,20 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     dag.add(rtl)
     dag.add(KernelResourcesStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(SystemSynthStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
+    dag.add(IpPackageStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
+    dag.add(BlockDesignStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(LeafResourcesStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ResourceReportStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
     dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix))
-    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout)
+    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace)
     dag.add(xsi)
     dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))
     return xsi
 
 
-__all__ = ["CompareStep", "CsynthStep", "CsynthTopsStep", "KernelResourcesStep", "LeafResourcesStep",
-           "PysimStep", "ResourceReportStep", "SystemSynthStep",
+__all__ = ["BlockDesignStep", "CompareStep", "CsynthStep", "CsynthTopsStep", "IpPackageStep", "KernelResourcesStep",
+           "LeafResourcesStep", "PysimStep", "ResourceReportStep", "SystemSynthStep",
            "SYNTH_MODES", "ScenarioStep", "SystemRtlStep", "SystemXsiStep", "add_system_steps",
            "owner_label", "report_artifact", "report_rel", "rtl_artifact", "rtl_problem", "rtl_rel",
            "seconds_artifact", "snake"]

@@ -38,6 +38,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_shot_rx import (
     CAP_OK,
@@ -84,7 +85,7 @@ SAMP_RATE = 256e6
 #: windows — short enough that an xsim run is a minute.
 N_BLK = 40
 
-#: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
+#: Fixed run bound for the XSI run — a testbench constant, not a latency.
 #: ``N_BLK * BLK_WORDS`` words at 0.256 words/cycle, plus a tail for the last window to land.
 XSI_N_CYCLES = 2800
 
@@ -172,7 +173,7 @@ class RfShotRxTB(FreeRunMod):
     #: ``0`` is the design; anything else makes it lose samples on purpose — see
     #: :attr:`~waveflow.hw.rf_shot_rx.PingPongWindow.stall_blocks`.
     stall_blocks: int = 0
-    #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
+    #: Fixed run bound for the XSI run — a testbench constant, not a latency.
     n_cycles: int = XSI_N_CYCLES
     #: Which of the two builds this graph wraps — :class:`~waveflow.hw.rf_shot_rx.RfShotRx` or
     #: :class:`RfShotRxAbs`.  ONE testbench graph for both, because a second graph would be a second
@@ -238,6 +239,27 @@ class RfShotRxTB(FreeRunMod):
         rate changed here cannot leave the two backends running at different speeds.
         """
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
+
+
+@dataclass
+class RfShotRxSystem(GraphSystem):
+    """The ping-pong receiver as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfShotRxTB` graph, the cut the receiver alone -- its memory inside it, so the system top
+    instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+    (:class:`~waveflow.hw.rf_shot_rx.RfShotRx` or :class:`RfShotRxAbs`)."""
+
+    dut_cls: type = RfShotRx
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> RfShotRxTB:
+        return RfShotRxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
+                          n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, n_blk=int(self.tb.n_blk))
 
 
 # ---------------------------------------------------------------------------

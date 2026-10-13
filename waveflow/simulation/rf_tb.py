@@ -289,7 +289,8 @@ class RfDataSource(HwModule):
         comps = (int(self.rf_ep.n_ch) * int(self.rf_ep.blksize)
                  * (2 if self.rf_ep.complex_samp else 1))
         return BfmModel("RfFileSource", ports=("rf_ep",),
-                        extra_args=(str(comps), "1" if self.rf_ep.complex_samp else "0"))
+                        extra_args=(str(comps), "1" if self.rf_ep.complex_samp else "0"),
+                        reports_counters=True)
 
 
 @dataclass
@@ -358,7 +359,8 @@ class RfDataSink(HwModule):
         from waveflow.build.composite_gen import BfmModel
 
         return BfmModel("RfFileSink", ports=("rf_ep",),
-                        extra_args=("1" if self.rf_ep.complex_samp else "0",))
+                        extra_args=("1" if self.rf_ep.complex_samp else "0",),
+                        reports_counters=True)
 
 
 @dataclass

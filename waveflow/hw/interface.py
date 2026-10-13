@@ -895,6 +895,14 @@ class StreamIF(QueuedTransferIF):
         #: from a steady-state fault, which is the same reason ``RFSampIF`` keeps its index.
         self.last_drop_time = 0.0
 
+    def rtl_fifo_depth(self, *, between_kernels: bool) -> int:
+        """The RTL realization of this link inside a DUT (``plans/system_model.md`` D3): the depth of
+        the ``mm_sync_fifo`` it becomes, or 0 for plain nets.  Between two kernels, a depth above the
+        default is a real FIFO, as it is in pysim; a link with a view at one end is that view's FIFO
+        already, so it is nets."""
+        depth = int(self.depth or DEFAULT_STREAM_DEPTH)
+        return depth if between_kernels and depth > DEFAULT_STREAM_DEPTH else 0
+
     def write(self, words: Words, tstart: float | None = None) -> ProcessGen[None]:
         """
         Write a burst of words to the master (TX) side of this interface.

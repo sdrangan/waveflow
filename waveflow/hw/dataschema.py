@@ -117,6 +117,35 @@ def _dense_lanes(cls, elem_dtype, word_bw: int) -> int | None:
         return None
     return lanes
 
+
+def _pack_lanes(bits: np.ndarray, pf: int, elem_bw: int, nwords: int, word_bw: int) -> list[int]:
+    """Words holding *bits* ``pf`` to a word, element ``k`` in word ``k // pf`` at bit
+    ``(k % pf) * elem_bw`` -- ``DataArray._array_layout``'s lanes -- as Python ints."""
+    lanes = np.zeros(nwords * pf, dtype=np.uint64)
+    lanes[:bits.size] = bits
+    lanes = lanes.reshape(nwords, pf)
+    if word_bw <= 64:
+        acc = np.zeros(nwords, dtype=np.uint64)
+        for j in range(pf):
+            acc |= lanes[:, j] << np.uint64(j * elem_bw)
+        return acc.tolist()
+    acc = np.zeros(nwords, dtype=object)
+    for j in range(pf):
+        acc |= lanes[:, j].astype(object) << (j * elem_bw)
+    return acc.tolist()
+
+
+def _unpack_lanes(words: list[int], pf: int, elem_bw: int, n_elem: int, word_bw: int) -> np.ndarray:
+    """The inverse of :func:`_pack_lanes`: the first *n_elem* lanes of *words* as ``uint64``."""
+    mask = (1 << elem_bw) - 1
+    if word_bw <= 64:
+        w = np.array(words, dtype=np.uint64)
+        lanes = [(w >> np.uint64(j * elem_bw)) & np.uint64(mask) for j in range(pf)]
+    else:
+        w = np.array(words, dtype=object)
+        lanes = [((w >> (j * elem_bw)) & mask).astype(np.uint64) for j in range(pf)]
+    return np.stack(lanes, axis=1).reshape(-1)[:n_elem]
+
 class DataSchema(ABC):
     """Abstract base class for schema nodes.
 
@@ -385,24 +414,15 @@ class DataSchema(ABC):
 
         words = words[:n_words]
 
-        if word_bw <= 32:
-            return np.array(
-                [np.uint32(word & ((1 << min(word_bw, 32)) - 1)) for word in words],
-                dtype=np.uint32,
-            )
-
+        w = np.array(words, dtype=object)      # Python ints: shifted and masked a column at a time
         if word_bw <= 64:
-            return np.array(
-                [np.uint64(word & ((1 << word_bw) - 1)) for word in words],
-                dtype=np.uint64,
-            )
+            return (w & ((1 << word_bw) - 1)).astype(np.uint32 if word_bw <= 32 else np.uint64)
 
         chunks_per_word = math.ceil(word_bw / 64)
         out = np.zeros((n_words, chunks_per_word), dtype=np.uint64)
         mask64 = (1 << 64) - 1
-        for row_idx, word in enumerate(words):
-            for chunk_idx in range(chunks_per_word):
-                out[row_idx, chunk_idx] = np.uint64((word >> (64 * chunk_idx)) & mask64)
+        for chunk_idx in range(chunks_per_word):
+            out[:, chunk_idx] = ((w >> (64 * chunk_idx)) & mask64).astype(np.uint64)
         return out
 
     def _serialize_recursive(
@@ -446,6 +466,8 @@ class DataSchema(ABC):
             arr = arr.reshape(1)
         elif arr.ndim != 1:
             raise ValueError("For word_bw <= 64, packed must be a 1D array-like.")
+        if arr.dtype.kind in "iu":                 # signed words: their bit pattern
+            return (arr.astype(np.uint64) & np.uint64(mask)).tolist()
         return [int(value) & mask for value in arr]
 
     def deserialize(self, packed: Words, word_bw: int = 32) -> DataSchema:
@@ -469,11 +491,17 @@ class DataSchema(ABC):
 
             mask = (1 << word_bw) - 1
             mask64 = (1 << 64) - 1
-            for row in arr:
-                word = 0
-                for chunk_idx, chunk in enumerate(row):
-                    word |= (int(chunk) & mask64) << (64 * chunk_idx)
-                words.append(word & mask)
+            if arr.dtype.kind in "iu":           # a column at a time; signed chunks are their bits
+                acc = np.zeros(arr.shape[0], dtype=object)
+                for chunk_idx in range(chunks_per_word):
+                    acc |= arr[:, chunk_idx].astype(np.uint64).astype(object) << (64 * chunk_idx)
+                words = (acc & mask).tolist()
+            else:
+                for row in arr:
+                    word = 0
+                    for chunk_idx, chunk in enumerate(row):
+                        word |= (int(chunk) & mask64) << (64 * chunk_idx)
+                    words.append(word & mask)
 
         if not words:
             words = [0]
@@ -504,6 +532,20 @@ class DataSchema(ABC):
     def from_words_numpy(cls, words: Any, count: int, word_bw: int) -> np.ndarray | None:
         """Vectorized unpack of ``count`` ``cls`` elements from ``words``, or ``None`` for
         no fast path (the caller then falls back to the recursive deserializer)."""
+        return None
+
+    # -- vectorized flat bits (the DataArray lane fast path) --------------------
+    # ``DataArray`` serializes an ndarray value by asking its element type for every element's flat
+    # bits at once (``_to_flat_bits`` vectorized) and shifting them into lanes itself.  ``None``
+    # means no vectorized path: the array falls back to its per-element loop.
+    @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The flat bit pattern of each stored value in *values* (1-D) as ``uint64``, or ``None``."""
+        return None
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        """The stored values of ``uint64`` flat bit patterns (1-D), or ``None``."""
         return None
 
     def write_uint32_file(self, file_path: str | Path) -> Path:
@@ -1514,6 +1556,24 @@ class IntField(DataField):
         return np.dtype(np.int64 if signed else np.uint64)
 
     @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The low ``W`` bits of each value: the wrap ``_convert`` applies."""
+        bw = cls.get_bitwidth()
+        if bw > 64 or values.dtype.kind not in "iub":
+            return None
+        return values.astype(np.uint64) & np.uint64((1 << bw) - 1)
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        bw = cls.get_bitwidth()
+        if bw > 64:
+            return None
+        if not cls.signed:
+            return bits
+        sh = np.uint64(64 - bw)                        # sign-extend: up as unsigned, down signed
+        return (bits << sh).view(np.int64) >> sh.astype(np.int64)
+
+    @classmethod
     @defer_if_symbolic
     def specialize(
         cls,
@@ -1923,6 +1983,21 @@ class FloatField(DataField):
     @classmethod
     def _numpy_elem_dtype(cls) -> np.dtype | None:
         return np.dtype(np.float64 if cls.get_bitwidth() == 64 else np.float32)
+
+    @classmethod
+    def _flat_bits_numpy(cls, values: np.ndarray) -> np.ndarray | None:
+        """The IEEE bits of each value (``_value_to_field_bits``)."""
+        bw = cls.get_bitwidth()
+        if bw not in (32, 64):
+            return None
+        return np.asarray(values, dtype=f"f{bw // 8}").view(f"u{bw // 8}").astype(np.uint64)
+
+    @classmethod
+    def _from_flat_bits_numpy(cls, bits: np.ndarray) -> np.ndarray | None:
+        bw = cls.get_bitwidth()
+        if bw not in (32, 64):
+            return None
+        return bits.astype(f"u{bw // 8}").view(f"f{bw // 8}")
 
     @classmethod
     @defer_if_symbolic
@@ -4560,6 +4635,12 @@ class DataArray(DataSchema):
         while len(words) < start + nwords:
             words.append(0)
         elem_bw = self.__class__._element_type().get_bitwidth()
+        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+            bits = self.__class__._element_type()._flat_bits_numpy(data.reshape(-1))
+            if bits is not None:
+                for i, w in enumerate(_pack_lanes(bits, pf, elem_bw, nwords, word_bw)):
+                    words[start + i] |= w
+                return 0, start + nwords
         flat = pf >= 1 and not isinstance(child, DataField)
         for k, idxs in enumerate(np.ndindex(shape)):
             child.val = get_elem(data, idxs)
@@ -4601,6 +4682,14 @@ class DataArray(DataSchema):
         start = curr_iword + (1 if curr_ipos > 0 else 0)
         elem_bw = self.__class__._element_type().get_bitwidth()
         elem_mask = (1 << elem_bw) - 1
+        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+            ws = words[start:start + nwords]
+            bits = _unpack_lanes(ws + [0] * (nwords - len(ws)), pf, elem_bw, data.size, word_bw)
+            vals = self.__class__._element_type()._from_flat_bits_numpy(bits)
+            if vals is not None:
+                data[...] = vals.reshape(shape)
+                self._val = data
+                return 0, start + nwords
         flat = pf >= 1 and not isinstance(child, DataField)
         for k, idxs in enumerate(np.ndindex(shape)):
             if pf == 0:

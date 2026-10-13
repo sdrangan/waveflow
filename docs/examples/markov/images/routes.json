@@ -1,0 +1,78 @@
+{
+  "part": "xc7z020clg484-1",
+  "period_ns": 10.0,
+  "tool": "vivado 2025.1",
+  "global": {
+    "synth": {
+      "lut": 6281,
+      "ff": 7187,
+      "bram": 4
+    },
+    "opt": {
+      "lut": 6228,
+      "ff": 7091,
+      "bram": 4
+    }
+  },
+  "per_device": {
+    "parts": {
+      "gen": {
+        "lut": 2299,
+        "ff": 2560,
+        "bram": 2
+      },
+      "chain": {
+        "lut": 3028,
+        "ff": 3934,
+        "bram": 0
+      },
+      "mem": {
+        "lut": 103,
+        "ff": 39,
+        "bram": 2
+      }
+    },
+    "top": {
+      "lut": 1292,
+      "ff": 808,
+      "bram": 0
+    },
+    "link_term": {
+      "lut": -472,
+      "ff": -242,
+      "bram": 0
+    },
+    "linked": {
+      "lut": 6250,
+      "ff": 7099,
+      "bram": 4
+    }
+  },
+  "gap": {
+    "lut": 22,
+    "ff": 8,
+    "bram": 0
+  },
+  "gap_pct": {
+    "lut": 0.35,
+    "ff": 0.11,
+    "bram": 0.0
+  },
+  "seconds": {
+    "global": 131.9,
+    "parts": {
+      "gen": 54.3,
+      "chain": 60.2,
+      "mem": 32.6
+    },
+    "top": 54.5,
+    "link": 23.9,
+    "per_device_cold": 225.5,
+    "per_device_one_changed": {
+      "gen": 78.2,
+      "chain": 84.1,
+      "mem": 56.5
+    },
+    "per_device_unchanged": 23.9
+  }
+}

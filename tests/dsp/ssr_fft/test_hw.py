@@ -86,8 +86,9 @@ def test_generate_writes_the_build_tree(tmp_path):
     for name in ("ssr_fft_tasks.h", "ssr_fft_L64_16_2_18_2.h", "ssr_fft_L64_16_2_18_2_tasks.h",
                  "complex__fixed16_2_array_utils.h", "complex__fixed23_9_array_utils.h"):
         assert (inc / name).exists(), name
-    for name in (f"{TOP}_ports.h", f"{TOP}_tb_harness.h", f"{TOP}_bfm_tb.cpp"):
-        assert (tmp_path / "xsi" / name).exists(), name
+    # The RTL run is the system flow's (rtl.run_xsi): generate records the scenario it builds.
+    from waveflow.dsp.ssr_fft.rtl import SCENARIO_JSON
+    assert (tmp_path / SCENARIO_JSON).is_file()
 
 
 #: XSI, RFSoC 4x2 at 250 MHz, ping-pong reorder, 8 frames back to back (2026-10-06): the first

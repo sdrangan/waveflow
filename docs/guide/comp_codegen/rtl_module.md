@@ -4,7 +4,7 @@ parent: Module Code Generation
 nav_order: 5.5
 audience: hls
 applies_to: [HwModule]
-api: [rtl_module, RtlModule, resolve_rtl_module, GenRtlStep, T2pBram, BramIFSlave]
+api: [rtl_module, RtlModule, resolve_rtl_module, GenRtlStep, GenWrapperStep, T2pBram, BramIFSlave]
 summary: "The third realization hook. A module declares pre-written Verilog with rtl_module() and it is instantiated beside the generated kernel — never generated from Python. Covers why a memory shared between two tasks cannot live inside a Vitis kernel, the endpoint → C++ parameter → Vitis port-name chain, the rule that the read latency has exactly one source (the .v publishes it, the pragma is derived from it), the declared resource footprint, and the conformance gap nothing static can close."
 ---
 
@@ -186,6 +186,29 @@ This page is the *declaration*. Two more pieces turn it into a design, and both 
 
 [`examples/bram_access`](../../examples/bram_access/) is the worked design, gated at RTL
 against the witness's own values.
+
+### The two build steps
+
+Two steps in [`waveflow/build/rtl_steps.py`](../../../waveflow/build/rtl_steps.py) put this on a
+build DAG, and a design that declares an `rtl_module()` adds both:
+
+| Step | Does | Produces |
+|---|---|---|
+| `GenRtlStep(comp_class=...)` | resolves the declaration (a missing file or an unmapped port fails the **build**), then copies the declared `.v` verbatim | `rtl_<stem>` per source file, under `output_dir` (default `rtl`) |
+| `GenWrapperStep(comp_class=..., elab_params=..., width=...)` | elaborates the composite at the kernel's own parameters and renders the wrapper (`wrapper_gen.render_wrapper`): the kernel, each memory, and the joins `add_rtl_if` registered | `wrapper_<name>`: `<output_dir>/<name>.v` (default `xsi`, beside the `.f` that names it) |
+
+`GenRtlStep` copies and `GenWrapperStep` generates. The wrapper may be generated because it is
+**wiring only**: every name in it was decided elsewhere (the kernel's ports by Vitis's naming rules,
+the memory's by its declared port map, the joins by `add_rtl_if`). Build the wrapper at the same
+`elab_params` and `width` as the kernel it instantiates, or the two will not match.
+
+**The system flow does both itself.** When a kernel inside a system's cut declares `add_rtl_mod`,
+the system top instantiates it as its wrapper. It renders the wrapper into the top's own Verilog,
+puts each memory's declared `.v` on the run's compile list, and elaborates the kernel from the
+system instance's own `HwParam`s, so the wrapper and the csynth'd kernel match by construction. The
+examples that wrap a kernel beside hand-written memory run that way: `bram_access`, `rf_blk_delay`,
+`rf_samp_buf_rx`, `rf_samp_buf_tx`, `rf_shot_rx` and `rf_shot_tx`. The two steps above remain for a
+design that wants the wrapper as a file of its own.
 
 `trace_manifest` derives net names in *the top's own scope*, so with a wrapper as the elaborated top
 the **kernel's** internals sit one level deeper and are still out of reach. The first consumer to

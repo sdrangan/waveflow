@@ -10,9 +10,9 @@ summary: "The testbench is itself a component graph, not a script that pokes the
 The testbench is **itself a component graph**. It is not a script that pokes the design — it is the
 DUT plus the participants that surround it, wired with the same `Interface` objects the design uses
 internally. That is the whole trick: **one graph drives two backends** — run it in Python for a fast
-SimPy simulation, or walk it with the code generator for a cycle-accurate RTL harness
-([Testbench codegen](./codegen_tb.md)). Neither can describe a different test, because there is only
-one description.
+SimPy simulation, or cut it into design and testbench and let the system flow derive a
+cycle-accurate RTL harness from it ([The system](./system.md)). Neither can describe a different
+test, because there is only one description.
 
 The testbench is two classes in `examples/mem_copy/mem_copy_sim.py`:
 
@@ -195,4 +195,4 @@ the property the free-running design exists for. How close these numbers land to
 ## Next
 
 - [DUT codegen](./codegen_dut.md) — how the `MemCopy` graph becomes the `ap_ctrl_none` `hls::task` top.
-- [Testbench codegen](./codegen_tb.md) — how *this* graph becomes the XSI BFM harness.
+- [The system](./system.md) — how *this* graph, with the cut stated, becomes the RTL run.

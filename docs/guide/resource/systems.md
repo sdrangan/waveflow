@@ -4,7 +4,7 @@ parent: Resource Analysis Tools
 nav_order: 4
 has_children: false
 audience: python
-api: [estimate_system, SystemEstimate, synth_system, SystemSynth, KernelResourcesStep, SystemSynthStep, LeafResourcesStep, ResourceReportStep, measure_instances]
+api: [estimate_system, SystemEstimate, synth_system, SystemSynth, synth_ooc_link, OocLink, KernelResourcesStep, SystemSynthStep, LeafResourcesStep, ResourceReportStep, measure_instances]
 summary: "A system's resources: every RTL instance of its top -- the Vitis kernels, the hand-written leaves its interfaces bring, the vendor IP -- priced from its own measurement and grouped by the pysim object it realizes, plus the system integration term, with the measured total of a whole-top synthesis beside the prediction. The composite-kernel decomposition, one level up."
 ---
 # Systems
@@ -75,7 +75,7 @@ Records go to the build's [platform](../calib/) (`--platform`), at the part and 
 csynth'd for.  A build **writes** its work-tier platform and a lookup **reads** that first and then the
 published library of the same name, so the next estimate sees what the build just filed.
 
-## The system synthesis
+## The system synthesis {#the-system-synthesis}
 
 `python markov_build.py --through system_synth --platform <name>` synthesizes markov's top out of context
 (xc7z020, 10 ns; 116 s of Vivado 2025.1) and attributes every inventory instance:
@@ -95,6 +95,15 @@ published library of the same name, so the next estimate sees what the build jus
 
 Instances plus integration equal the total exactly -- integration is *defined* as the remainder, and
 negative is legal.
+
+{: .note }
+> These numbers were measured on the flat top. The top now holds each
+> [device and the memory as a sub-top](../build/xsi_system.md#devices), and the step reads the report
+> one level deeper (`-hierarchical_depth 2`), joining each row to the inventory by its path
+> (`u_gen_sub/u_u_fwd_wr`). The same synthesis of the hierarchical top (2026-10-11) gives
+> **6,281 LUT / 7,187 FF / 4 BRAM18** with integration +2 LUT. Vivado's default
+> `-flatten_hierarchy rebuilt` dissolves the sub-tops, so the global result is the flat one to
+> within 0.1%.
 
 **A dissolved instance is still its own.**  Under Vivado's default `-flatten_hierarchy rebuilt`,
 `u_mem_mem` and `u_mem` get no row of their own: synthesis dissolved their hierarchy into the top.
@@ -124,6 +133,51 @@ synthesis:
 
 So *how* a number was obtained (an exact lookup) and *what* it measures (an HLS estimate) are separate
 columns of the report.
+
+## Per device: synthesized apart and linked {#per-device}
+
+The system synthesis above is **global**: one run that optimizes across every boundary. A block
+design of packaged IPs is synthesized another way by default: each IP on its own, then linked. The
+param `synth_route="per_device"` on `system_synth` does that (`markov_build.py --through system_synth
+--route per_device`, [`system_ooc.synth_ooc_link`](../../../waveflow/build/system_ooc.py)):
+
+1. each [device and the memory](../build/xsi_system.md#devices), rendered as a module of its own,
+   synthesized out of context with its netlist kept;
+2. the top (the crossbar and the glue) synthesized against a black box per device;
+3. the netlists linked (`link_design`, each part scoped to its cell), then `opt_design`.
+
+Each part and the top are cached by the content of everything they read. A change to one device
+re-synthesizes that device and re-links, and nothing else.
+
+On markov (xc7z020, 10 ns):
+
+| | LUT | FF | BRAM18 |
+|---|---:|---:|---:|
+| gen device, alone | 2,299 | 2,560 | 2 |
+| chain device, alone | 3,028 | 3,934 | 0 |
+| memory, alone | 103 | 39 | 2 |
+| top (crossbar and glue), alone | 1,292 | 808 | 0 |
+| link term | −472 | −242 | 0 |
+| **linked** | **6,250** | **7,099** | **4** |
+| global synthesis + `opt_design` | 6,228 | 7,091 | 4 |
+
+The parts plus the link term equal the linked total exactly. The link term is measured, not assumed,
+and it is mostly the crossbar's: 1,292 LUT out of context, against 849 in context. Against the global
+synthesis with the same `opt_design`, synthesizing apart costs 22 LUT (0.35%) and 8 FF. The memory
+needs one RAMB36 even alone, because its idle port B is tied off inside its own module.
+
+The time is what changes:
+
+| rebuild | wall clock |
+|---|---:|
+| global synthesis + `opt_design` | 144 s |
+| per device, cold | about 330 s |
+| per device, one device changed | 103 s |
+| per device, nothing changed | 31 s (the link only) |
+
+So route A, global synthesis, is the cheapest cold build. The per-device route makes each part's
+number its own and an incremental change cheap. [plans/ip_packaging_routes.md](../../../plans/ip_packaging_routes.md)
+weighs the two.
 
 ## The estimate
 
@@ -167,16 +221,16 @@ system's own synthesis and reproduces the measured total:
 ```text
 markov_top   platform scratch_7020
                                   LUT       FF     BRAM      DSP   how            measured by
-u (MmCreditStreamIF)            1,377    1,658        2        0   EXACT          vivado_synth (in markov_top)
+u (MmCreditStreamIF)            1,355    1,658        2        0   EXACT          vivado_synth (in markov_top)
 xbar (AXIMMCrossBarIF)            849      680        0        0   EXACT          vivado_synth (in markov_top)
-gen_mm (MemSlaveAdaptor)          237      217        0        0   EXACT          vivado_synth (in markov_top)
-chain_mm (MemSlaveAdaptor)        495      178        0        0   EXACT          vivado_synth (in markov_top)
-mem (MemoryMod)                   140       39        2        0   EXACT          vivado_synth (in markov_top)
+gen_mm (MemSlaveAdaptor)          230      217        0        0   EXACT          vivado_synth (in markov_top)
+chain_mm (MemSlaveAdaptor)        489      178        0        0   EXACT          vivado_synth (in markov_top)
+mem (MemoryMod)                   132       39        2        0   EXACT          vivado_synth (in markov_top)
 gen (MarkovGen)                 1,193    1,298        0        0   EXACT          vivado_synth (in markov_top)
-chain (MarkovChain)             2,032    3,115        0        0   EXACT          vivado_synth (in markov_top)
-system integration                -36        2        0        0   EXACT          vivado_synth (in markov_top)
-total                           6,287    7,187        4        0   weakest: EXACT (u (MmCreditStreamIF))
-measured total                  6,287    7,187        4        0   vivado_synth, 2026-10-11   gap +0.0% LUT, +0.0% FF, +0.0% BRAM
+chain (MarkovChain)             2,031    3,115        0        0   EXACT          vivado_synth (in markov_top)
+system integration                  2        2        0        0   EXACT          vivado_synth (in markov_top)
+total                           6,281    7,187        4        0   weakest: EXACT (u (MmCreditStreamIF))
+measured total                  6,281    7,187        4        0   vivado_synth, 2026-10-13   gap +0.0% LUT, +0.0% FF, +0.0% BRAM
 ```
 
 The **composed** prediction (`--composed`: each part from its own measurement, none from this
@@ -187,23 +241,29 @@ u (MmCreditStreamIF)            2,689    1,833        2        0   EXACT        
 xbar (AXIMMCrossBarIF)          1,292      808        0        0   EXACT          vivado_synth (ooc)
 gen_mm (MemSlaveAdaptor)          262      219        0        0   EXACT          vivado_synth (ooc)
 chain_mm (MemSlaveAdaptor)        538      188        0        0   EXACT          vivado_synth (ooc)
-mem (MemoryMod)                   149      105        4        0   EXACT          vivado_synth (ooc)
+mem (MemoryMod)                   148      105        2        0   EXACT          vivado_synth (ooc)
 gen (MarkovGen)                 2,585    1,905        0        0   EXACT          hls_estimate
 chain (MarkovChain)             4,423    3,030        0        0   EXACT          hls_estimate
 system integration                  0        0        0        0   UNCALIBRATED   --
-total                          11,938    8,088        6        0   weakest: UNCALIBRATED (system integration)
-measured total                  6,287    7,187        4        0   vivado_synth, 2026-10-11   gap +89.9% LUT, +12.5% FF, +50.0% BRAM
+total                          11,937    8,088        4        0   weakest: UNCALIBRATED (system integration)
+measured total                  6,281    7,187        4        0   vivado_synth, 2026-10-13   gap +90.0% LUT, +12.5% FF, +0.0% BRAM
 ```
 
 Every row is `EXACT` -- an exact lookup -- and the total is still nearly 2× the truth, which is the
 report's point about keeping *how* apart from *what*:
 
 - **HLS estimates.**  The four kernels' `hls_estimate` rows are ~2× their synthesized LUT (above):
-  5,092 of the 5,651-LUT gap.
+  most of the 5,656-LUT gap.
 - **The crossbar out of context** is 1,292 LUT against 849 in the design: 443 more.
-- **A tied-off port.**  Out of context, `bram_t2p` is a two-port memory: two RAMB36.  In markov its
-  kernel-side port B is tied idle, and the one live port fits one RAMB36.  An out-of-context number is
-  an **upper bound** for an instance whose ports the design ties off.
+
+The BRAM is exact, because a **tie-off is part of a leaf's identity**.  `bram_t2p` alone is a
+two-port memory, two RAMB36.  In markov its kernel-side port B is tied idle, and the one live port
+fits one RAMB36.  The system states that tie-off (`RtlInstance.ties`: an input tied to a value, an
+output left open), and `identify_rtl` keys on it, so the tied memory is another configuration with
+a record of its own. `leaf_resources` measures it inside a generated wrapper that ties the ports as
+the system does (`rtl_ooc.tied_wrapper`). An untied leaf keys as it always did, so no record is
+orphaned. (Before, the composed BRAM was 6 against the measured 4:
+[plans/ip_packaging_routes.md](../../../plans/ip_packaging_routes.md) Stage 2.)
 
 (Before the memory was recoded the composed gap was +412% LUT, nearly all of it a tied-off port on a
 flip-flop memory: 83,194 LUT out of context against 8,769 in markov.)

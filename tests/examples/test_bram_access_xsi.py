@@ -1,15 +1,16 @@
 """The RTL gate for ``examples/bram_access`` — ``plans/bram_access.md`` Stages 2 and 3.
 
-What xsim elaborates is the **wrapper** (``bram_access_top``): the kernel plus its hand-written
-``bram_t2p`` memory, so the ``.f``, the snapshot and the shared library are named for it while
-csynth's project keeps the kernel's name.  **There is no BRAM XSI object anywhere in this repo**, and
-that is the stronger story: in XSI the memory is ``bram_t2p.v`` itself, compiled into the simulation
-beside the synthesized kernel.  There is no second implementation that could disagree with the first.
+Both runs go through the **system flow** (``examples/bram_access/bram_access_system_build.py``,
+``plans/system_model.md`` S3f): the DUT is :class:`~examples.bram_access.bram_access.BramAccess`
+alone, instantiated in the system top as its **wrapper** (``bram_access_top``) -- the kernel plus its
+hand-written ``bram_t2p`` memory -- with the drivers and sinks answered by their own models.  **There
+is no BRAM XSI object anywhere in this repo**, and that is the stronger story: in XSI the memory is
+``bram_t2p.v`` itself, compiled into the simulation beside the synthesized kernel.  There is no second
+implementation that could disagree with the first.
 
-Both runs here are **traced** (``run.bat <top> <tb> trace``), and that costs nothing that matters:
-the dumper is a second elaborated top, so the XSI top, every BFM port number and every cycle count
-are untouched.  Checked rather than assumed — the traced run still ends at :data:`WANT_CYCLES`, the
-number an untraced run recorded.
+Both runs are **traced**: a second elaborated top dumps the wrapper's scope inside the system top,
+so the XSI top, every model's port and every cycle count are untouched.  Checked rather than assumed
+— the traced run still ends at :data:`WANT_CYCLES`, the number an untraced run recorded.
 
 Four things are checked here that pysim cannot check:
 
@@ -39,8 +40,6 @@ scenario zero must come back clean, and
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -56,20 +55,13 @@ from examples.bram_access.bram_access import (
     SENTINEL_BASE,
     WriteResp,
     check_xsi_outputs,
-    collision_scenario,
     resp_words,
     scenario_zero,
-    write_scenario,
 )
-from examples.bram_access.bram_access_build import (
-    RTL_FILES,
-    TOP,
-    WRAPPER,
-    generate_tb,
-    hazard_manifest,
-)
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.bram_access.bram_access_build import TOP, wrapper_text
+from examples.bram_access.bram_access_system_build import HERE, build_dag, top, trace_of
+from waveflow.build.build import BuildConfig
+from waveflow.toolchain.toolchain import find_vivado_path
 from waveflow.utils.bram_trace import (
     describe,
     find_read_during_write,
@@ -78,11 +70,9 @@ from waveflow.utils.bram_trace import (
 )
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "bram_access"
-XSI = ROOT / "xsi"
-TB = f"{TOP}_bfm_tb"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
-TRACE_VCD = XSI / f"{WRAPPER}_trace.vcd"
+WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 
 #: Time to last completion — the cycle the last word of the last read landed at the sink.  Exact,
 #: not a bound: a cycle count that moves is either a regression or an improvement, and both deserve a
@@ -134,66 +124,33 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
-def _run_traced(sc, keep: Path) -> Path:
-    """Play one scenario through the wrapper with tracing on; return the preserved VCD.
-
-    Everything the previous run left is removed first — the snapshot, the built TB, the capture
-    bundles and the waveform.  A cached snapshot plus a stale bundle is how a broken build passes on
-    old output, and a stale VCD is how a scan reports the *previous* run's collisions.
-    """
-    shutil.rmtree(XSI / "xsim.dir" / WRAPPER, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (XSI / stale).unlink(missing_ok=True)
-    for name in ("resp_w", "data_r", "resp_r"):
-        shutil.rmtree(XSI / "vectors" / name, ignore_errors=True)
-    TRACE_VCD.unlink(missing_ok=True)
-
-    generate_tb(ROOT)
-    write_scenario(XSI, sc)
-    r = subprocess.run(xsi_runner_cmd(WRAPPER, TB, trace=True), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"bram_access XSI run did not complete cleanly:\n{out[-3000:]}"
-    assert TRACE_VCD.is_file(), (
-        f"the traced run produced no {TRACE_VCD.name}. Is vcd_dumper_{WRAPPER}.v present in {XSI} "
-        f"(AddVcdTopStep with top={WRAPPER!r}), and did {XSI_RUNNER} get the `trace` argument?")
-
-    keep.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(TRACE_VCD, keep)
-    return keep
+def _run(scenario: str, through: str) -> Path:
+    """One traced system run of *scenario*; its work directory.  The DAG runs with
+    ``synth="check"``: a stale or missing csynth top fails the run, naming it -- a gate never grades
+    RTL it did not produce."""
+    res = build_dag(scenario, work_dir=WORK).run(
+        BuildConfig(root_dir=HERE, params={"synth": "check"}), through=through)
+    bad = {n: r.message for n, r in res.items() if not r.success}
+    assert not bad, f"the bram_access {scenario} system run failed: {bad}"
+    return WORK / top(scenario)
 
 
 @pytest.fixture(scope="module")
-def runs(tmp_path_factory):
-    """Both RTL runs, once: scenario zero and the deliberate collision.
+def runs():
+    """Both RTL runs, once: scenario zero and the deliberate collision -- each a traced system run
+    in its own work directory.
 
-    One fixture rather than two because the second run overwrites the first's capture bundles and
-    its waveform — so scenario zero's outputs are copied out before the collision scenario plays.
+    Scenario zero runs through ``compare`` (its recordings equal pysim's); the collision stops at
+    ``system_xsi``, because a read-during-write is exactly where the RTL may legitimately disagree
+    with a model that has no ports to collide on.
     """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(), f"no csynth RTL at {VERILOG} — run bram_access_build.py")
-    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it
-    # did not produce reports "a real behaviour change" when the truth is a stale artifact. See
-    # rtl_staleness().
-    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
-    for f in RTL_FILES + (f"vcd_dumper_{WRAPPER}.v",):
-        _require((XSI / f).is_file(), f"{XSI / f} — run bram_access_build.py --through codegen_dut")
-
-    # Regenerate the file list from the RTL actually on disk.  Never trust the committed .f: a
-    # renamed module leaves it naming a file that no longer exists, and xvlog plus a cached dll will
-    # happily go green.
-    (XSI / f"rtl_{WRAPPER}.f").write_text(
-        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
-
-    tmp = tmp_path_factory.mktemp("bram_access_xsi")
-    zero = scenario_zero()
-    zero_vcd = _run_traced(zero, tmp / "zero.vcd")
-    shutil.copytree(XSI / "vectors", tmp / "zero" / "vectors")
-
-    coll_vcd = _run_traced(collision_scenario(), tmp / "collision.vcd")
-
-    return {"sc": zero, "zero_dir": tmp / "zero", "zero_vcd": zero_vcd,
-            "collision_vcd": coll_vcd, "manifest": hazard_manifest()}
+    _require(find_vivado_path() is not None, "Vivado (xsim)")
+    zero = _run("zero", "compare")
+    coll = _run("collision", "system_xsi")
+    zero_vcd, manifest = trace_of(zero)
+    coll_vcd, coll_manifest = trace_of(coll)
+    return {"sc": scenario_zero(), "zero_dir": zero / "xsi_run", "zero_vcd": zero_vcd,
+            "collision_vcd": coll_vcd, "manifest": manifest, "collision_manifest": coll_manifest}
 
 
 def _cycles(runs, name: str) -> np.ndarray:
@@ -274,7 +231,7 @@ def test_a_deliberate_hazard_is_detected(runs):
     the words the scenario aimed at — a scan reporting hazards everywhere would satisfy a bare
     ``> 0`` just as easily and would be exactly as wrong.
     """
-    hz = find_read_during_write(runs["collision_vcd"], runs["manifest"])
+    hz = find_read_during_write(runs["collision_vcd"], runs["collision_manifest"])
     assert hz, (
         "the deliberate collision produced NO detected hazard. Either the scenario stopped "
         "overlapping in time (address overlap alone is not enough — see collision_scenario), or the "
@@ -558,7 +515,7 @@ def test_the_wrapper_undoes_the_shift_vitis_actually_emits():
         f"{_bram_addr_shift(64)}. Every address is then wrong by a factor and high words alias onto "
         f"low ones with no tool saying a word.")
 
-    wrapper = (XSI / f"{WRAPPER}.v").read_text(encoding="utf-8")
+    wrapper = wrapper_text()
     assert wrapper.count(f">> {_bram_addr_shift(64)}") == 2, (
         "the wrapper must undo the scaling on BOTH memory ports; one of them alone is worse than "
         "neither, because the write and the read would then disagree about where a word lives")

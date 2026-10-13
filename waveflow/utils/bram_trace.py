@@ -94,21 +94,26 @@ class _Scan:
 
         self.manifest = manifest
         self.top = manifest["top"]
+        #: Where the wrapper's nets are: the wrapper itself when it is the elaborated top, or its
+        #: hierarchical path inside a system top (``SystemTopSpec.hazard_manifests``).
+        self.scope = manifest.get("scope", self.top)
         vcd = VCDVCD(str(vcd_path))
 
-        # A VCD names a vector `<scope>.<net>[hi:lo]`; index by the bare name within the top scope.
+        # A VCD names a vector `<scope>.<net>[hi:lo]`; index by the bare name within the scope.
         # The suffix is load-bearing -- SigInfo infers the signal's WIDTH from it, and a name without
         # one silently infers width 1.
         self._by_bare: dict[str, str] = {}
+        head = self.scope + "."
         for full in vcd.signals:
-            scope, _, rest = full.partition(".")
-            if scope == self.top:
-                self._by_bare.setdefault(rest.split("[")[0], full)
+            if full.startswith(head):
+                bare = full[len(head):].split("[")[0]
+                if "." not in bare:
+                    self._by_bare.setdefault(bare, full)
         if not self._by_bare:
-            scopes = sorted({s.partition(".")[0] for s in vcd.signals})
+            scopes = sorted({s.rsplit(".", 1)[0] for s in vcd.signals})
             raise LookupError(
-                f"no signals under scope {self.top!r} in {vcd_path}. Scopes present: {scopes}. A "
-                f"$dumpvars naming a different top, or a dump that never ran?")
+                f"no signals under scope {self.scope!r} in {vcd_path}. Scopes present: {scopes}. A "
+                f"$dumpvars naming a different scope, or a dump that never ran?")
 
         self.parser = VcdParser(vcd)
         clk = self._resolve(manifest["clock"])

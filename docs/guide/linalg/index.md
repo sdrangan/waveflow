@@ -128,6 +128,10 @@ task bodies to copy from `waveflow/build/`, and its command schemas. The functio
 | `linalg_headers_dag(traits, bodies, include_dir, word_bits, schemas)` | a `BuildDag` that writes `streamutils_hls.h`, the header and command schemas, the helper headers, the bodies, and `wf_linalg_traits.h` with the array utilities of every memory element |
 | `gen_linalg_headers(root_dir, ...)` | runs that DAG under `root_dir` and returns the include directory |
 
+The DAG's own step is `LinalgStep`: it copies the helper headers (`wf_lanes.h`, `wf_matrix_io.h`,
+`wf_linalg_msg.h`) and the bodies, and renders `wf_linalg_traits.h` with the array utilities. Add it
+to a design's own `BuildDag` when that DAG already has the stream-utility and schema steps.
+
 The top of a design is then generated like that of any free-running composite
 ([Hardware modules and Flows](../flows/)). The
 [systolic page](./systolic.md#building-and-testing-it) lists what a built unit's include directory

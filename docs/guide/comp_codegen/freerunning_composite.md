@@ -210,7 +210,8 @@ composite carries an on-chip memory shared by two of its tasks, because
 generated **wrapper**:
 
 ```
-bram_access_top.v     the WRAPPER — instantiates the kernel + the memory, and joins them
+bram_access_top       the WRAPPER — instantiates the kernel + the memory, and joins them
+                      (rendered by the system flow into the system top's Verilog)
   bram_access.v       the generated kernel (csynth's own name, kept)
   bram_t2p.v          the hand-written memory
 ```

@@ -164,3 +164,19 @@ def test_markov_host_traces_match_pysim(markov_run):
     (the DAG's ``pysim`` and ``compare`` steps)."""
     assert sorted(p.name for p in markov_run.traces.iterdir()) == ["mem_reader", "qcmd", "qresp"]
     assert markov_run.trace_mismatches == [], markov_run.trace_mismatches
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("device", ["gen", "chain", "mem"])
+def test_markov_each_sub_top_elaborates_alone(markov_run, device):
+    """``plans/system_model.md`` S5: each device and the memory, rendered as a module of its own,
+    compiles and elaborates with nothing around it -- its leaves and its kernels' csynth Verilog only.
+    That is what lets a per-device synthesis or IP be built from it.  (``markov_run`` first: it fails
+    the session if any kernel's RTL is stale, so this elaborates current RTL.)"""
+    from examples.markov.markov_build import system
+    from waveflow.build.system_top import SystemTopSpec
+    from waveflow.build.system_xsi import elaborate_sub_top
+
+    spec = SystemTopSpec.from_system(system(), top="markov_top")
+    work = elaborate_sub_top(spec, device, root=HERE, work_dir=WORK / "sub_tops")
+    assert (work / "xsim.dir" / f"markov_top_{device}_elab").is_dir()

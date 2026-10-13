@@ -6,15 +6,15 @@ PR #179.  The rungs, in the order a failure is cheapest to diagnose:
                    halves, the ramp comes back contiguous, and the stalled run loses samples and
                    says so on the wire
     codegen_dut -> the ap_ctrl_none top (three tasks, two ``mode=bram`` ports, a plain input and a
-                   **framed** window port), its tcl, its port map, the memory beside it, the WRAPPER
-                   that joins them, the ``$dumpvars`` second top, and the hazard manifest
-    codegen_tb  -> the XSI harness + main + the RF scenario bundle
-    csynth      -> Vitis HLS; re-emits ``rtl_<wrapper>.f`` from the RTL on disk
+                   **framed** window port), its headers and its tcl
+    csynth      -> Vitis HLS; stamps the sources the RTL was built from
 
-The RTL rung is the ``-m xsi`` gate in ``tests/examples/test_rf_shot_rx_xsi.py``.
+and the same two rungs again for the absolute-index build (``codegen_dut_abs``, ``csynth_abs``).
 
-What a simulator elaborates is the **wrapper** (``rf_shot_rx_top``), not the kernel: the memory is
-inside it, which is why the testbench sees only AXI-Stream and the BFM library needs no memory model.
+The RTL rung is the **system flow** (``rf_shot_rx_system_build.py``), one system per build; the
+``-m xsi`` gates are ``tests/examples/test_rf_shot_rx_xsi.py`` and ``..._abs_xsi.py``.  The system
+top instantiates the kernel as its **wrapper** (the kernel and its ``bram_t2p``), so the testbench
+sees only AXI-Stream and the BFM library needs no memory model.
 
 **The reset trap does not bite this design, and the setting is here anyway.**
 :class:`~waveflow.hw.rf_shot_rx.PingPongCapture` holds statics and is the owner — but an RX owner
@@ -38,32 +38,23 @@ from waveflow.build.composite_gen import (  # noqa: E402
     RFSOC4X2_PART,
     RFSOC4X2_PERIOD_NS,
     composite_top_spec,
-    render_ports_h,
-    render_rtl_f,
-    render_tb_harness,
-    render_tb_main,
     render_tcl,
     render_top,
-    tb_top_spec,
 )
 from waveflow.build.elaborate import elaborate  # noqa: E402
-from waveflow.build.rtl_steps import GenRtlStep, GenWrapperStep  # noqa: E402
+from waveflow.build.rtl_digest import write_stamp  # noqa: E402
 from waveflow.build.streamutils import (  # noqa: E402
     MemLockStep,
     MemMgrStep,
     RfPingPongStep,
     RfShotBufStep,
     StreamUtilsStep,
-    XsiHarnessStep,
 )
-from waveflow.build.trace_steps import AddVcdTopStep  # noqa: E402
-from waveflow.build.wrapper_gen import bram_hazard_manifest  # noqa: E402
 from waveflow.hw.arrayutils import ArrayUtilsStep  # noqa: E402
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.locked_mem import LOCK_SCHEMA_CLASSES  # noqa: E402
 from waveflow.hw.rf_shot_rx import CAPTURE_SCHEMA_CLASSES, RfShotRx  # noqa: E402
 from waveflow.hw.rf_relayout import dense_elem_type, slot_elem_type, slots_per_word  # noqa: E402
-from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
 from examples.rf_shot_rx.rf_shot_rx import (  # noqa: E402
@@ -72,30 +63,16 @@ from examples.rf_shot_rx.rf_shot_rx import (  # noqa: E402
     SPW,
     WORD,
     RfShotRxAbs,
-    RfShotRxTB,
-    write_scenario,
 )
 
-#: The generated kernel's name, and the wrapper's.  The wrapper is what a simulator elaborates.
+#: The generated kernel's name.
 TOP = "rf_shot_rx"
-WRAPPER = f"{TOP}_top"
 #: The **second build of the same design** — PR #201.  One C++ body with an
 #: ``ABS`` template argument Vitis folds, so this is a second *elaboration*, not a second source; it
-#: needs its own name only because a Vitis project, an xsim snapshot and a generated ports header are
-#: all keyed on the kernel's name and the two have to sit in one directory to be compared.
+#: needs its own name only because a Vitis project and a system top are keyed on the kernel's
+#: name and the two have to sit in one directory to be compared.
 TOP_ABS = RfShotRxAbs.cpp_kernel_name
-WRAPPER_ABS = f"{TOP_ABS}_top"
 INCLUDE_DIR = "include"
-
-#: Where the hazard manifest lands — the nets a read-during-write collision is visible on, resolved
-#: from the wrapper's own wire names rather than matched by substring.
-HAZARD_JSON = f"xsi/{TOP}_hazard.json"
-
-#: RTL that must land in ``xsi/`` beside the ``.f`` naming it, in elaboration reading order.
-RTL_FILES = ("bram_t2p.v", f"{WRAPPER}.v")
-#: The same, for the absolute-index build.  The memory is shared — one ``bram_t2p.v`` serves both,
-#: because it is the same memory and neither variant changes it.
-RTL_FILES_ABS = ("bram_t2p.v", f"{WRAPPER_ABS}.v")
 
 #: Solution-level tcl.  See the module docstring — kept for parity with the TX build rather than
 #: because this design depends on it.
@@ -125,19 +102,15 @@ ABS_STALL_BLOCKS = 60
 
 
 def generate_dut(out_dir: Path = HERE, *, comp_class=RfShotRx, top: str = TOP,
-                 elab: dict | None = None, with_vcd: bool = True) -> Path:
-    """Generate the schema headers, the lock header, the task bodies, the array utils, the top, its
-    tcl, the port map, the memory, the wrapper, the ``$dumpvars`` top and the hazard manifest."""
+                 elab: dict | None = None) -> Path:
+    """Generate the schema headers, the lock header, the task bodies, the array utils, the top and
+    its tcl -- what csynth compiles.  The wrapper joining the kernel to its memory is the system
+    flow's (rendered into the system top)."""
     elab = dict(_ELAB if elab is None else elab)
-    wrapper = f"{top}_top"
-    hazard_json = f"xsi/{top}_hazard.json"
     word_bw = int(elab["bitwidth"])
     config = BuildConfig(root_dir=out_dir, params={})
 
     inner = BuildDag()
-    # The dumper step consumes the design source (it is derived from the class), so the inner DAG
-    # needs the same source node the outer one has.
-    inner.add(SourceStep(artifact="rf_shot_rx_source", path=HERE / "rf_shot_rx.py"))
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     # `render_top` includes memmgr.hpp unconditionally, so a generated top needs it beside the
     # sources even when the design has no m_axi port at all.
@@ -146,7 +119,6 @@ def generate_dut(out_dir: Path = HERE, *, comp_class=RfShotRx, top: str = TOP,
     inner.add(RfShotBufStep(output_dir=INCLUDE_DIR))
     inner.add(RfPingPongStep(output_dir=INCLUDE_DIR))
     inner.add(MemLockStep(output_dir=INCLUDE_DIR))
-    inner.add(XsiHarnessStep(output_dir="xsi"))
     # The window port is an `axi4s_word` stream, so the body calls write_axi4_stream -- which
     # DataSchemaStep emits by default.  The LOCK schemas need only the plain read_stream /
     # write_stream pair: the lock channels are INTERNAL edges, where ap_axis is refused (HLS 214-208).
@@ -157,14 +129,6 @@ def generate_dut(out_dir: Path = HERE, *, comp_class=RfShotRx, top: str = TOP,
     # stage a conversion rather than a pair of wires.
     inner.add(ArrayUtilsStep(slot_elem_type(WORD, INCLUDE_DIR), [word_bw]))
     inner.add(ArrayUtilsStep(dense_elem_type(WORD, INCLUDE_DIR), [word_bw]))
-    inner.add(GenRtlStep(name="place_memory", comp_class=_memory_class(), output_dir="xsi"))
-    inner.add(GenWrapperStep(name="wrapper", comp_class=comp_class, elab_params=dict(elab),
-                             width=word_bw, output_dir="xsi"))
-    # The $dumpvars second top.  It names the WRAPPER, because that is what xsim elaborates here and
-    # a $dumpvars naming a scope outside this elaboration is a hard error.
-    if with_vcd:
-        inner.add(AddVcdTopStep(name="vcd_dumper", comp_class=comp_class,
-                                source_artifact="rf_shot_rx_source", output_dir="xsi", top=wrapper))
     results = inner.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -185,61 +149,9 @@ def generate_dut(out_dir: Path = HERE, *, comp_class=RfShotRx, top: str = TOP,
         render_tcl(spec.top_name, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS,
                    solution_config=SOLUTION_CONFIG),
         encoding="utf-8")
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    (out_dir / hazard_json).write_text(json.dumps(bram_hazard_manifest(comp, spec), indent=2),
-                                       encoding="utf-8")
-    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h "
-          f"+ xsi/{wrapper}.v + {hazard_json} ({len(spec.tasks)} tasks, "
+    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl ({len(spec.tasks)} tasks, "
           f"{len(spec.channels)} internal channels, {len(spec.ports)} ports)")
     return cpp
-
-
-def hazard_manifest() -> dict:
-    """The manifest for the gated configuration — for tests that want it without reading the file."""
-    comp = elaborate(RfShotRx, dict(_ELAB), name=TOP)
-    return bram_hazard_manifest(comp, composite_top_spec(comp, width=int(WORD.bitwidth)))
-
-
-def _memory_class():
-    """The memory class the design instantiates — read off the elaborated graph, not restated."""
-    comp = elaborate(RfShotRx, dict(_ELAB))
-    mems = {type(m) for m in comp.rtl_mods.values()}
-    if len(mems) != 1:
-        raise RuntimeError(f"expected exactly one RTL module class in {TOP}, got {mems}")
-    return mems.pop()
-
-
-def make_xsi_tb(dut_cls=RfShotRx) -> RfShotRxTB:
-    """The graph the XSI testbench is generated from — the same class the pysim golden runs.
-
-    ``dut_cls`` selects the **build**, not the graph: ONE testbench serves both variants, because a
-    second graph would be a second model of one design.
-    """
-    return RfShotRxTB(name="xsi_tb", sim=Simulation(), dut_cls=dut_cls)
-
-
-def generate_tb(out_dir: Path = HERE, dut_cls=RfShotRx) -> None:
-    """Generate the XSI harness + main from the TB graph, and write the RF scenario bundle."""
-    tb = make_xsi_tb(dut_cls)
-    spec = tb_top_spec(tb)
-    top = spec.top_name
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{top}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / f"{top}_bfm_tb.cpp").write_text(render_tb_main(spec, int(tb.n_cycles)), encoding="utf-8")
-    write_scenario(xsi, n_blk=int(tb.n_blk))
-    print(f"generated TB xsi/{top}_tb_harness.h + xsi/{top}_bfm_tb.cpp "
-          f"({tb.n_cycles} cycles) + vectors/rf_in")
-
-
-def wrapper_text() -> str:
-    """The wrapper Verilog for the gated configuration — for tests that want it without a build."""
-    from waveflow.build.wrapper_gen import render_wrapper, wrapper_spec
-
-    comp = elaborate(RfShotRx, dict(_ELAB), name=TOP)
-    return render_wrapper(wrapper_spec(comp, composite_top_spec(comp, width=int(WORD.bitwidth))))
 
 
 # ---------------------------------------------------------------------------
@@ -354,94 +266,47 @@ class PySimStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
-    description = "Lower RfShotRx to its ap_ctrl_none top + the memory + the wrapper."
+    description = "Lower RfShotRx to its ap_ctrl_none top, its headers and its tcl."
     consumes = ["rf_shot_rx_source"]
     produces: ClassVar[dict] = {"rf_shot_rx_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
-                                "run_tcl": Path(f"{TOP}.tcl"),
-                                "dut_ports": Path(f"xsi/{TOP}_ports.h"),
-                                "wrapper_v": Path(f"xsi/{WRAPPER}.v"),
-                                "memory_v": Path("xsi/bram_t2p.v"),
-                                "vcd_dumper": Path(f"xsi/vcd_dumper_{WRAPPER}.v"),
-                                "hazard_manifest": Path(HAZARD_JSON)}
+                                "run_tcl": Path(f"{TOP}.tcl")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir)
         root = config.root_dir
         return {"rf_shot_rx_cpp": root / GEN_DIR / f"{TOP}.cpp",
-                "run_tcl": root / f"{TOP}.tcl",
-                "dut_ports": root / "xsi" / f"{TOP}_ports.h",
-                "wrapper_v": root / "xsi" / f"{WRAPPER}.v",
-                "memory_v": root / "xsi" / "bram_t2p.v",
-                "vcd_dumper": root / "xsi" / f"vcd_dumper_{WRAPPER}.v",
-                "hazard_manifest": root / HAZARD_JSON}
-
-
-@dataclass(kw_only=True)
-class CodegenTbStep(BuildStep):
-    description = "Lower RfShotRxTB to the XSI harness + main + the RF scenario bundle."
-    consumes = ["rf_shot_rx_source", "dut_ports"]
-    produces: ClassVar[dict] = {"tb_harness": Path(f"xsi/{TOP}_tb_harness.h"),
-                                "tb_main": Path(f"xsi/{TOP}_bfm_tb.cpp")}
-    params: ClassVar[dict] = {}
-
-    def run(self, config: BuildConfig, **_) -> dict:
-        generate_tb(config.root_dir)
-        return {"tb_harness": config.root_dir / "xsi" / f"{TOP}_tb_harness.h",
-                "tb_main": config.root_dir / "xsi" / f"{TOP}_bfm_tb.cpp"}
+                "run_tcl": root / f"{TOP}.tcl"}
 
 
 @dataclass(kw_only=True)
 class CodegenDutAbsStep(BuildStep):
     """The SAME design at ``absolute_index = 1`` — a second elaboration, not a second source.
 
-    Everything shared between the two builds (the task bodies, the schema headers, the lock, the
-    memory) is re-emitted identically; what is new is the top, its tcl, its ports header and its
-    wrapper, all named for :data:`TOP_ABS`.  The two therefore sit in one directory and one ``xsi/``
-    without either one's artifacts standing in for the other's.
+    Everything shared between the two builds (the task bodies, the schema headers, the lock) is
+    re-emitted identically; what is new is the top and its tcl, named for :data:`TOP_ABS`.  The two
+    therefore sit in one directory without either one's artifacts standing in for the other's.
     """
 
-    description = "Lower RfShotRxAbs (absolute_index=1) to its own top + wrapper."
+    description = "Lower RfShotRxAbs (absolute_index=1) to its own top and tcl."
     consumes = ["rf_shot_rx_source"]
     produces: ClassVar[dict] = {"rf_shot_rx_abs_cpp": Path(f"{GEN_DIR}/{TOP_ABS}.cpp"),
-                                "run_tcl_abs": Path(f"{TOP_ABS}.tcl"),
-                                "dut_ports_abs": Path(f"xsi/{TOP_ABS}_ports.h"),
-                                "wrapper_v_abs": Path(f"xsi/{WRAPPER_ABS}.v"),
-                                "vcd_dumper_abs": Path(f"xsi/vcd_dumper_{WRAPPER_ABS}.v"),
-                                "hazard_manifest_abs": Path(f"xsi/{TOP_ABS}_hazard.json")}
+                                "run_tcl_abs": Path(f"{TOP_ABS}.tcl")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir, comp_class=RfShotRxAbs, top=TOP_ABS, elab=_ELAB_ABS)
         root = config.root_dir
         return {"rf_shot_rx_abs_cpp": root / GEN_DIR / f"{TOP_ABS}.cpp",
-                "run_tcl_abs": root / f"{TOP_ABS}.tcl",
-                "dut_ports_abs": root / "xsi" / f"{TOP_ABS}_ports.h",
-                "wrapper_v_abs": root / "xsi" / f"{WRAPPER_ABS}.v",
-                "vcd_dumper_abs": root / "xsi" / f"vcd_dumper_{WRAPPER_ABS}.v",
-                "hazard_manifest_abs": root / "xsi" / f"{TOP_ABS}_hazard.json"}
-
-
-@dataclass(kw_only=True)
-class CodegenTbAbsStep(BuildStep):
-    description = "Lower the SAME RfShotRxTB graph, cut at RfShotRxAbs, to its harness + main."
-    consumes = ["rf_shot_rx_source", "dut_ports_abs"]
-    produces: ClassVar[dict] = {"tb_harness_abs": Path(f"xsi/{TOP_ABS}_tb_harness.h"),
-                                "tb_main_abs": Path(f"xsi/{TOP_ABS}_bfm_tb.cpp")}
-    params: ClassVar[dict] = {}
-
-    def run(self, config: BuildConfig, **_) -> dict:
-        generate_tb(config.root_dir, RfShotRxAbs)
-        return {"tb_harness_abs": config.root_dir / "xsi" / f"{TOP_ABS}_tb_harness.h",
-                "tb_main_abs": config.root_dir / "xsi" / f"{TOP_ABS}_bfm_tb.cpp"}
+                "run_tcl_abs": root / f"{TOP_ABS}.tcl"}
 
 
 @dataclass(kw_only=True)
 class CSynthStep(BuildStep):
-    """Vitis HLS C-synthesis of the kernel — and the ``.f`` for the **wrapper**.
+    """Vitis HLS C-synthesis of the kernel — and the source stamp the system flow checks.
 
-    Re-emitted from the RTL that is actually on disk, because a stale file list plus a cached
-    ``xsimk.dll`` is how an XSI run goes green while proving nothing.
+    The stamp (:func:`~waveflow.build.rtl_digest.write_stamp`) records the sources this RTL was built
+    from, so the system run's ``synth="check"`` accepts it, and refuses it once a source changes.
     """
 
     description = "Run Vitis HLS C-synthesis of the generated top."
@@ -457,10 +322,7 @@ class CSynthStep(BuildStep):
             print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        xsi = config.root_dir / "xsi"
-        xsi.mkdir(parents=True, exist_ok=True)
-        (xsi / f"rtl_{WRAPPER}.f").write_text(
-            render_rtl_f(TOP, config.root_dir, extra=RTL_FILES), encoding="utf-8")
+        write_stamp(config.root_dir, TOP)
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
@@ -487,10 +349,7 @@ class CSynthAbsStep(BuildStep):
             print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        xsi = config.root_dir / "xsi"
-        xsi.mkdir(parents=True, exist_ok=True)
-        (xsi / f"rtl_{WRAPPER_ABS}.f").write_text(
-            render_rtl_f(TOP_ABS, config.root_dir, extra=RTL_FILES_ABS), encoding="utf-8")
+        write_stamp(config.root_dir, TOP_ABS)
         return {"report_dir_abs": config.root_dir / f"{TOP_ABS}_proj" / "solution1"}
 
 
@@ -499,12 +358,10 @@ def build_rf_shot_rx_dag() -> BuildDag:
     dag.add(SourceStep(artifact="rf_shot_rx_source", path=HERE / "rf_shot_rx.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
-    dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
     # THE SECOND BUILD.  Same source, same geometry, `absolute_index = 1` -- and its own top, so the
-    # two snapshots can be elaborated against each other in one `xsi/`.
+    # two csynth projects sit side by side (the system flow runs each as a system of its own).
     dag.add(CodegenDutAbsStep(name="codegen_dut_abs"))
-    dag.add(CodegenTbAbsStep(name="codegen_tb_abs"))
     dag.add(CSynthAbsStep(name="csynth_abs"))
     return dag
 

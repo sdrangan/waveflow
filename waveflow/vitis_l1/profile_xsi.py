@@ -47,6 +47,48 @@ def _csynth_seconds(root: Path) -> float | None:
     return float(m[-1]) if m else None
 
 
+#: The profiler's own XSI workspace under the build root.  It times the kernel flow's phases one by
+#: one, so it drives the KERNEL as the elaborated top with a harness of its own -- not the system
+#: flow the gates run (``rtl.run_xsi``), whose steps hide those phases behind one DAG step.
+XSI_DIR = "xsi_profile"
+
+
+def _kernel_workspace(root: Path, length: int, tb) -> tuple[Path, str]:
+    """Write the kernel-as-top XSI workspace for *tb* under ``<root>/xsi_profile``: the BFM library
+    and run scripts, the VCD dumper, the kernel's port map and RTL file list, the harness and its
+    main, and the scenario.  Returns ``(the workspace, the testbench name)``."""
+    from waveflow.build.build import BuildConfig, BuildDag, SourceStep
+    from waveflow.build.composite_gen import (composite_top_spec, render_ports_h, render_rtl_f,
+                                              render_tb_harness, render_tb_main, tb_top_spec)
+    from waveflow.build.streamutils import XsiHarnessStep
+    from waveflow.build.trace_steps import AddVcdTopStep
+    from waveflow.vitis_l1 import rtl
+    from waveflow.vitis_l1.hw import VitisFft
+    from waveflow.vitis_l1.testbench import write_scenario
+
+    dag = BuildDag()
+    dag.add(SourceStep(artifact="vitis_fft_hw", path=Path(rtl.__file__).with_name("hw.py")))
+    dag.add(XsiHarnessStep(output_dir=XSI_DIR))
+    dag.add(AddVcdTopStep(name="vcd_top", comp_class=VitisFft, source_artifact="vitis_fft_hw",
+                          output_dir=XSI_DIR))
+    dag.run(BuildConfig(root_dir=root, params={}), force=True)
+    xsi = root / XSI_DIR
+    dut = tb.dut
+    widths = {f"s_in_{j}": ep.bitwidth for j, ep in enumerate(dut.s_in)}
+    widths |= {f"m_out_{j}": ep.bitwidth for j, ep in enumerate(dut.m_out)}
+    kspec = composite_top_spec(dut, width=int(dut.s_in[0].bitwidth), port_widths=widths)
+    (xsi / f"{rtl.TOP}_ports.h").write_text(render_ports_h(kspec), encoding="utf-8")
+    # The list names the csynth'd RTL relative to a workspace one level below the build root --
+    # which this one is, as the kernel flow's xsi/ was.
+    (xsi / f"rtl_{rtl.TOP}.f").write_text(render_rtl_f(rtl.TOP, root), encoding="utf-8")
+    tb_name = f"{rtl.TOP}_bfm_tb"
+    spec = tb_top_spec(tb)
+    (xsi / f"{rtl.TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
+    (xsi / f"{tb_name}.cpp").write_text(render_tb_main(spec, int(tb.n_cycles)), encoding="utf-8")
+    write_scenario(xsi, tb.n_frames, tb.length, **tb.config)
+    return xsi, tb_name
+
+
 def profile(root: Path, length: int, n_frames: int = 6, sweep: bool = False) -> dict:
     from waveflow.simulation.simulation import Simulation
     from waveflow.vitis_l1 import rtl
@@ -54,11 +96,10 @@ def profile(root: Path, length: int, n_frames: int = 6, sweep: bool = False) -> 
 
     root = Path(root).resolve()
     rtl.ensure_built(root, length)
-    xsi = root / rtl.XSI_DIR
-    top, tb_name = rtl.TOP, rtl.TB
+    top = rtl.TOP
     gaps = rtl.sweep_gaps(length, n_frames) if sweep else ()
     tb = rtl.make_tb(length, n_frames, gaps, untimed=True)
-    rtl.write_tb(root, tb)
+    xsi, tb_name = _kernel_workspace(root, length, tb)
     env = _env(xsi, top)
     bat = lambda exe: str(VIV / "bin" / f"{exe}.bat")   # noqa: E731
     out: dict = {"L": length, "n_frames": n_frames, "sweep": sweep, "sim_cycles": int(tb.n_cycles),
@@ -84,10 +125,10 @@ def profile(root: Path, length: int, n_frames: int = 6, sweep: bool = False) -> 
         return t_elab, t_gpp, t_run
 
     out["xelab_s"], out["gpp_s"], out["sim_s"] = build_and_run("typical", False)
-    rtl.check_bits(root, length, n_frames, "profile")
-    ref = rtl.frame_times(rtl.capture_beats(root), length, n_frames)
+    rtl.check_bits(root, length, n_frames, "profile", vec=xsi / "vectors")
+    ref = rtl.frame_times(rtl.capture_beats(root, xsi / "vectors"), length, n_frames)
     out["xelab_debug_off_s"], _, out["sim_debug_off_s"] = build_and_run("off", False)
-    same = rtl.frame_times(rtl.capture_beats(root), length, n_frames) == ref
+    same = rtl.frame_times(rtl.capture_beats(root, xsi / "vectors"), length, n_frames) == ref
     out["debug_off_same_timing"] = same
     out["xelab_traced_s"], _, out["sim_traced_s"] = build_and_run("typical", True)
     t = time.perf_counter()

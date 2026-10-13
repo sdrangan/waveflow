@@ -1,4 +1,4 @@
-"""rf_dut_build.py — the RF pass-through DUT, synthesized and driven at RTL.
+"""rf_dut_build.py — the RF pass-through DUT: pysim -> codegen_dut -> csynth.
 
 ``plans/adc_model.md`` staging item 2, opened at the digital-logic end rather than the converter end.
 
@@ -17,6 +17,10 @@ generic BFMs means that when the converter is wired in, a failure has one place 
 The task body is **generated** from ``run_iter`` — not hand-written.  Getting there cost two
 extractor findings, both recorded in ``plans/adc_model.md``: an implicit capture of a pysim counter,
 and the raw-word ``get(nwords_max=...)`` form having no extraction rule.
+
+The RTL rung is the **system** flow, ``rf_dut_system_build.py`` (:class:`RfPassThroughSystem` below):
+it instantiates the csynth'd top in a generated system top and drives it under XSI.  Its gate is
+``tests/examples/test_rf_dut_system_xsi.py``.
 """
 from __future__ import annotations
 
@@ -35,19 +39,15 @@ from waveflow.build.composite_gen import (  # noqa: E402
     RFSOC4X2_PART,
     RFSOC4X2_PERIOD_NS,
     composite_top_spec,
-    render_ports_h,
-    render_rtl_f,
-    render_tb_harness,
-    render_tb_main,
     render_tcl,
     render_top,
-    tb_top_spec,
 )
-from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep, XsiHarnessStep  # noqa: E402
+from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
@@ -142,7 +142,8 @@ def check_xsi_outputs(xsi_dir: Path, want_cycles: int, nburst: int = XSI_NBURST,
                       nwords: int = XSI_NWORDS_BLK) -> None:
     """Check the XSI run from the bundles it dumped — the golden, in Python.
 
-    The generated main only runs and dumps. Asserts:
+    *xsi_dir* is the system run's ``xsi_run/`` (``rf_dut_system_build.check_xsi``); the run only
+    plays and dumps. Asserts:
 
     - **correctness** — the captured word stream is **bit-identical** to what was played;
     - **completion** — every word came back, none extra;
@@ -174,17 +175,41 @@ def check_xsi_outputs(xsi_dir: Path, want_cycles: int, nburst: int = XSI_NBURST,
         f"behaviour change: either a regression or an improvement worth re-recording.")
 
 
+@dataclass
+class RfPassThroughSystem(GraphSystem):
+    """The pass-through's DUT gate as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfPassThroughTB` graph, the cut :class:`RfSampPassThrough` alone, between a generic
+    driver and sink.  The RFDC-side system is
+    :class:`~examples.rf_loopback.rf_loopback.RfLoopbackSystem`."""
+
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> RfPassThroughTB:
+        return RfPassThroughTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root)
+
+    def check(self) -> np.ndarray:
+        """The relayed words, which must be the played ones."""
+        got = np.concatenate([np.asarray(b) for b in self.tb.sink.words]).astype(np.uint64)
+        np.testing.assert_array_equal(got, np.concatenate(input_bursts()))
+        return got
+
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
 
 def gen_headers(config: BuildConfig) -> None:
     """Emit ``streamutils_hls.h`` + ``memmgr.hpp`` + the payload element's array-utils, and copy the
-    XSI framework library beside the testbench."""
+    hand-written task body into ``include/``."""
     inner = BuildDag()
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
-    inner.add(XsiHarnessStep(output_dir="xsi"))
     # The generated body reads and writes a whole block through the ARRAY (de)serializers -- never
     # hand-rolled packing -- so the schema the design needs is the DataArray itself (its header is
     # what `#include "u_int64_array.h"` in the generated body names), not its element type.
@@ -220,11 +245,11 @@ def copy_fixed_task_bodies(root_dir: Path) -> None:
 
 def generate_dut(out_dir: Path = HERE, dut_cls: type = RfSampPassThrough,
                  top: str = TOP) -> Path:
-    """Generate the task body, the ``ap_ctrl_none`` top, its csynth TCL and the XSI port map.
+    """Generate the task body, the ``ap_ctrl_none`` top and its csynth TCL.
 
     *dut_cls* / *top* are arguments because the DUT has a **top per channel count**: a two-channel
     pass-through has four AXIS ports where the one-channel one has two, so it is a different RTL
-    module with a project and a ports header of its own (see
+    module with a project of its own (see
     :class:`~examples.rf_loopback.rf_loopback.RfSampPassThrough2Ch`).  Everything below is the same
     for both — same body, same TCL shape — which is the point of parameterizing rather than forking.
     """
@@ -256,29 +281,8 @@ def generate_dut(out_dir: Path = HERE, dut_cls: type = RfSampPassThrough,
     (out_dir / f"{spec.top_name}.tcl").write_text(
         render_tcl(spec.top_name, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS),
         encoding="utf-8")
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h")
+    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl")
     return cpp
-
-
-def make_xsi_tb(n_cycles: int = XSI_N_CYCLES) -> RfPassThroughTB:
-    """The graph the XSI testbench is generated from — one statement, two backends."""
-    return RfPassThroughTB(name="xsi_tb", sim=Simulation(), n_cycles=n_cycles)
-
-
-def generate_tb(out_dir: Path = HERE, n_cycles: int = XSI_N_CYCLES) -> None:
-    """Generate the XSI harness + main from the TB graph, and write the scenario bundle."""
-    tb = make_xsi_tb(n_cycles)
-    spec = tb_top_spec(tb)
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / f"{TOP}_bfm_tb.cpp").write_text(render_tb_main(spec, n_cycles), encoding="utf-8")
-    write_scenario(xsi)
-    print(f"generated TB xsi/{TOP}_tb_harness.h + xsi/{TOP}_bfm_tb.cpp "
-          f"({XSI_NBURST} bursts x {XSI_NWORDS_BLK} words)")
 
 
 # ---------------------------------------------------------------------------
@@ -320,41 +324,21 @@ class PySimStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
-    description = "Lower RfSampPassThrough to its ap_ctrl_none top (+ generated task body, tcl, ports)."
+    description = "Lower RfSampPassThrough to its ap_ctrl_none top (+ generated task body, tcl)."
     consumes = ["rf_dut_source"]
     produces: ClassVar[dict] = {"rf_dut_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
-                                "run_tcl": Path(f"{TOP}.tcl"),
-                                "dut_ports": Path(f"xsi/{TOP}_ports.h")}
+                                "run_tcl": Path(f"{TOP}.tcl")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir)
         return {"rf_dut_cpp": config.root_dir / GEN_DIR / f"{TOP}.cpp",
-                "run_tcl": config.root_dir / f"{TOP}.tcl",
-                "dut_ports": config.root_dir / "xsi" / f"{TOP}_ports.h"}
-
-
-@dataclass(kw_only=True)
-class CodegenTbStep(BuildStep):
-    description = "Lower RfPassThroughTB to the XSI harness + main + scenario bundle."
-    consumes = ["rf_dut_source", "dut_ports"]
-    produces: ClassVar[dict] = {"tb_harness": Path(f"xsi/{TOP}_tb_harness.h"),
-                                "tb_main": Path(f"xsi/{TOP}_bfm_tb.cpp")}
-    params: ClassVar[dict] = {}
-
-    def run(self, config: BuildConfig, **_) -> dict:
-        generate_tb(config.root_dir)
-        return {"tb_harness": config.root_dir / "xsi" / f"{TOP}_tb_harness.h",
-                "tb_main": config.root_dir / "xsi" / f"{TOP}_bfm_tb.cpp"}
+                "run_tcl": config.root_dir / f"{TOP}.tcl"}
 
 
 @dataclass(kw_only=True)
 class CSynthStep(BuildStep):
-    """Vitis HLS C-synthesis — produces the RTL the ``-m xsi`` gate drives.
-
-    Re-emits ``rtl_<top>.f`` from the RTL that was just built. A stale file list plus a cached
-    ``xsimk.dll`` is how an XSI run goes green while proving nothing.
-    """
+    """Vitis HLS C-synthesis — produces the RTL the system flow's ``-m xsi`` gate drives."""
 
     description = "Run Vitis HLS C-synthesis of the generated top."
     consumes = ["rf_dut_cpp", "run_tcl"]
@@ -369,9 +353,13 @@ class CSynthStep(BuildStep):
             print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        xsi = config.root_dir / "xsi"
-        xsi.mkdir(parents=True, exist_ok=True)
-        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, config.root_dir), encoding="utf-8")
+        # The source stamp: this RTL was just built from the sources on disk, which is what lets the
+        # system flow's ``synth="check"`` accept it (``rtl_digest`` / ``trace_steps.rtl_staleness``).
+        from waveflow.build.composite_gen import check_maxi_lowered
+        from waveflow.build.rtl_digest import write_stamp
+
+        check_maxi_lowered(config.root_dir, TOP)
+        write_stamp(config.root_dir, TOP)
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
@@ -380,7 +368,6 @@ def build_rf_dut_dag() -> BuildDag:
     dag.add(SourceStep(artifact="rf_dut_source", path=HERE / "rf_loopback.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
-    dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
     return dag
 
