@@ -1199,3 +1199,226 @@ def test_cpu_example_report_matches_a_fresh_run():
     assert f"CPU utilization [{rep.utilization[0]:.3f}]; energy {rep.total_pj / 1e6:.3f} uJ" in text
     levels = rep.functions["sched_ops.add"].levels
     assert f"exactly the {levels['EXTRAPOLATED']} arrivals" in " ".join(text.split())
+
+
+# ---------------------------------------------------------------------------
+# The RF environment (plans/sionna_rt/sionna_rt.md) — docs/guide/rf/rfenv/
+# ---------------------------------------------------------------------------
+#
+# AC11 asks that *every* number on these pages be tied to a committed file or test, so the check runs
+# both ways: each number in the prose must have an entry below (a new number fails until it is tied),
+# and each entry must still hold.  The fenced blocks are left out: the python fences are code, and
+# their output fences are checked by tests/docs/test_doc_snippets.py, which runs them.
+
+
+def _prose_numbers(text: str) -> list[str]:
+    """The numbers a page's prose and tables state: front matter, fences, inline code and link
+    targets removed; identifiers such as ``AC7``, ``4x2`` or ``P.2040`` are not numbers."""
+    text = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL)
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`\n]*`", "", text)
+    text = re.sub(r"\]\([^)]*\)", "]", text)
+    return re.findall(r"(?<![\w.])[−-]?\d+(?:[.,]\d+)*(?:e[−-]?\d+)?(?!\w)", text)
+
+
+def _src(rel: str) -> str:
+    return (REPO / rel).read_text(encoding="utf-8")
+
+
+def _rfenv_page(rel: str) -> str:
+    p = DOCS / rel
+    assert p.is_file(), f"{rel} is missing"  # the plan's deliverable: not a skip
+    return p.read_text(encoding="utf-8")
+
+
+def _bound(rel: str, pattern: str) -> str:
+    """The number a committed source states, captured by *pattern*'s one group."""
+    m = re.search(pattern, _src(rel), flags=re.MULTILINE)
+    assert m, f"/{pattern}/ no longer matches in {rel}"
+    return m.group(1)
+
+
+def _rfenv_guide_phrases() -> list[str]:
+    """Each figure on ``docs/guide/rf/rfenv/index.md``, rebuilt from what states it into the phrase
+    the page uses: a number swapped for another, even one the page states elsewhere, fails."""
+    from examples.rt_sounder import rt_sounder as rs
+    from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
+    from waveflow.rfenv.apply import DEFAULT_FILT_LEN
+
+    ref, app, live = (
+        "tests/rfenv/test_sionna_reference.py",
+        "tests/rfenv/test_apply.py",
+        "tests/rfenv/test_live.py",
+    )
+
+    def ps(s: str) -> str:  # a bound in seconds, quoted in picoseconds
+        return f"{float(s) * 1e12:g} ps"
+
+    d_div = _bound("waveflow/rfenv/nodes.py", r"int\(self\.filt_len\) // (\d+)")
+    floor_db = float(_bound(app, r"err_db <= (-\d+\.\d+)"))
+    band = 2 * float(_bound(app, r"rng\.uniform\(-(0\.\d+), "))  # |f| <= x fs, of fs/2
+    sounder_bound = _bound("tests/examples/test_rt_sounder.py", r"cmp\.worst_db <= (\d\.\d+)")
+    iq_bits = int(Rfsoc4x2SampWord.specialize(samp_per_word=2, iq_mode=True).bitwidth)
+    assert int(Rfsoc4x2SampWord.specialize(samp_per_word=4).bitwidth) == iq_bits
+    snippet_dbfs = float(
+        _bound("docs/guide/rf/rfenv/index.md", r"gain_db_for_dbfs\(p_strongest, (-\d+\.\d+),")
+    )
+    taps_bound = _bound(ref, r"rel_err\(mine, theirs\) <= (\S+)$")
+    los_s = _bound(ref, r"abs\(tau\[0\] - d / C\) <= (\S+)$")
+    friis_db = _bound(ref, r"friis_db\(d\)\) <= (\S+)$")
+    reflect_s = _bound(ref, r"abs\(tau\[0\] - d_los / C\) <= (\S+) and")
+    reflect_db = _bound(ref, r"abs\(measured - expected\) <= (\S+),")
+    blocks_rel = _bound(app, r"rel_err\(got, want\) <= (\S+)$")
+    doppler_hz = _bound(ref, r"abs\(doppler\[0\] - v / LAM\) <= (\S+)$")
+    live_rel = _bound(live, r"rel_err\(y_live, y_cached\) <= (\S+)$")
+
+    tb = rs.run_channel_mode()
+    cmp = rs.compare_taps(tb.paths, rs.estimate_taps(tb))
+    return [
+        f"**D = `filt_len` / {d_div}** samples",
+        (
+            f"The default, {DEFAULT_FILT_LEN}, keeps a sub-sample delay's error at or below "
+            f"{_neg(floor_db, '.0f')} dB of a signal that occupies up to {band:g} of the Nyquist band"
+        ),
+        f"to compare taps {rs.TAP_WINDOW_DB:.0f} dB down with Sionna's",
+        f"(the sounder uses {rs.FILT_LEN})",
+        f"two complex samples in a {iq_bits}-bit beat, the width of the real word with four samples",
+        f"A source on an ADC, with the strongest tap at {_neg(snippet_dbfs, '.0f')} dBFS:",
+        f"| free space | d/c and Friis | {ps(los_s)}; {friis_db} dB |",
+        (
+            f"| one reflector | the image method; the ITU-R P.2040 slab | "
+            f"{ps(reflect_s)}; {reflect_db} dB |"
+        ),
+        f"| block by block | the whole signal at once | relative error {blocks_rel} |",
+        f"| sub-sample delay | the analytically delayed signal | {_neg(floor_db, '.0f')} dB |",
+        f"| Doppler | v·cos θ / λ, Sionna's sign | {doppler_hz} Hz |",
+        f"| `taps()` | Sionna's `Paths.taps()` | relative error {taps_bound} |",
+        f"| live mode | a channel file traced by the same install | relative error {live_rel} |",
+        (
+            f"| the sounder | `taps()`, every tap within {rs.TAP_WINDOW_DB:.0f} dB of the strongest | "
+            f"{sounder_bound} dB |"
+        ),
+        f"The sounder's measured worst case is {cmp.worst_db:.3f} dB, over {len(cmp.rows)} taps.",
+        f"agree far more closely than the {taps_bound} above",
+    ]
+
+
+def test_rfenv_guide_quotes_its_sources():
+    text = " ".join(_rfenv_page("guide/rf/rfenv/index.md").split())
+    missing = [p for p in _rfenv_guide_phrases() if " ".join(p.split()) not in text]
+    assert not missing, "docs/guide/rf/rfenv/index.md no longer states:\n  " + "\n  ".join(missing)
+
+
+def test_rfenv_guide_states_no_untied_number():
+    text = _rfenv_page("guide/rf/rfenv/index.md")
+    tied = {n for p in _rfenv_guide_phrases() for n in _prose_numbers(p)}
+    untied = sorted(set(_prose_numbers(text)) - tied)
+    assert not untied, (
+        f"docs/guide/rf/rfenv/index.md states {untied}, which no phrase in "
+        f"_rfenv_guide_phrases() ties to a source")
+
+
+# ---------------------------------------------------------------------------
+# docs/examples/rt_sounder/ — the channel sounder's page
+# ---------------------------------------------------------------------------
+#
+# Each figure is rebuilt from what states it -- the committed channel file, the example's constants,
+# the gates' recorded expectations -- into the phrase the page uses, and the phrases' numbers are the
+# only ones the prose may state.  The tap table in the page's output fence is the example's own
+# output, run by tests/docs/test_doc_snippets.py.
+
+
+def _neg(x: float, fmt: str) -> str:
+    """A number as the page prints it: a minus sign, not a hyphen."""
+    return format(x, fmt).replace("-", "−")
+
+
+def _rt_sounder_phrases() -> list[str]:
+    import math
+
+    from examples.rf_loopback.rf_dut_build import XSI_NWORDS_BLK
+    from examples.rt_sounder import rt_sounder as rs
+    from tests.examples import test_rf_loopback_xsi as iq
+    from tests.examples import test_rt_sounder_xsi as gate
+    from waveflow.rfenv.apply import DEFAULT_FILT_LEN, ChannelApplier, taps
+
+    ps = rs.channel()
+    ok = ps.valid[0, 0]
+    tau = ps.tau[0, 0][ok] * 1e9
+    db = 20 * np.log10(np.abs(ps.a[0, 0][ok]))
+    order = np.argsort(tau)
+    rows = [f"| {tau[i]:.1f} ns | {_neg(db[i], '.1f')} dB |" for i in order]
+    tx, rx = rs.SPEC.transmitters[0].position, rs.SPEC.receivers[0].position
+    dist = math.dist(tx, rx)
+    cluster = np.sort(tau)[:4]
+
+    n = math.ceil(ps.max_delay() * rs.SAMP_RATE) + 64
+    exact = np.abs(taps(ps, rs.SAMP_RATE, 0, n - 1)[0, 0, 0]) ** 2
+    inside = 10 * np.log10(exact / exact.max()) > -rs.TAP_WINDOW_DB
+    lags = np.flatnonzero(inside).tolist()
+    assert lags == list(range(23, 38)) + [43, 44]  # the shape the prose describes
+
+    def worst_window_db(filt_len: int) -> float:
+        app = ChannelApplier(ps, rs.SAMP_RATE, filt_len=filt_len)
+        x = np.zeros((1, n + filt_len), dtype=complex)
+        x[0, 0] = 1.0
+        d = app.group_delay_samp
+        win = np.abs(app.process(x, 0)[0][d : d + n]) ** 2
+        return float(np.max(np.abs(10 * np.log10(win[inside] / exact[inside]))))
+
+    hop, d = rs.BLKSIZE, rs.FILT_LEN // 2
+    return rows + [
+        f"canyon` at {rs.SPEC.frequency_hz / 1e9:g} GHz",
+        f"transmitter {tx[2]:.0f} m up",
+        f"canyon, {dist:.1f} m away",
+        f"Four paths arrive within {cluster[-1] - cluster[0]:.1f} ns",
+        (
+            f"at {rs.SAMP_RATE / 1e6:g} MSa/s they blur into a cluster of taps over lags {lags[0]} to "
+            f"{lags[14]}; the fifth is a separate echo at lags {lags[15]} and {lags[16]}"
+        ),
+        f"one block of {hop} samples",
+        f"`filt_len` / 2 = {d} samples",
+        f"sequence of length {rs.ZC.length} at half full scale",
+        f"strongest tap at {_neg(rs.TARGET_DBFS, '.0f')} dBFS at the ADC",
+        f"read {hop + d} samples earlier",
+        f"Every tap within {rs.TAP_WINDOW_DB:.0f} dB of the strongest",
+        "within 0.5 dB,",
+        f"channel has taps {rs.TAP_WINDOW_DB:.0f} dB down",
+        (
+            f"with the default {DEFAULT_FILT_LEN} taps, the taps above the window differ from Sionna's "
+            f"exact sinc by up to {worst_window_db(DEFAULT_FILT_LEN):.2f} dB"
+        ),
+        f"with {rs.FILT_LEN}, by {worst_window_db(rs.FILT_LEN):.3f} dB",
+        f"sent at {rs.SOURCE_TX_POWER_DBM:.0f} dBm",
+        (
+            f"a {rs.SOURCE_NOISE_FIGURE_DB:.0f} dB noise figure, and the strongest tap at "
+            f"{_neg(rs.TARGET_DBFS, '.0f')} dBFS"
+        ),
+        (
+            f"{rs.SOURCE_SAMP_RATE / 1e6:.0f} MSa/s, {rs.SOURCE_NBLK} blocks of {rs.SOURCE_BLKSIZE} "
+            f"samples"
+        ),
+        f"reads a whole {XSI_NWORDS_BLK}-word block",
+        (
+            f"drops {gate.WANT_ADC_DROPPED} of the {iq.WANT_IQ_ADC_WORDS} words, in "
+            f"{len(gate.WANT_SRC_GAPS)} gaps, and {iq.WANT_IQ_DATA_BLOCKS_OUT} data blocks reach the "
+            f"sink, among {iq.WANT_IQ_SINK_BLOCKS} grid periods"
+        ),
+    ]
+
+
+def test_rt_sounder_page_quotes_its_sources():
+    text = " ".join(_rfenv_page("examples/rt_sounder/index.md").split())
+    missing = [p for p in _rt_sounder_phrases() if p not in text]
+    assert not missing, "docs/examples/rt_sounder/index.md no longer states:\n  " + "\n  ".join(
+        missing)
+    assert re.search(r"cmp\.worst_db <= 0\.5", _src("tests/examples/test_rt_sounder.py"))
+
+
+def test_rt_sounder_page_states_no_untied_number():
+    text = _rfenv_page("examples/rt_sounder/index.md")
+    tied = {n for p in _rt_sounder_phrases() for n in _prose_numbers(p)}
+    untied = sorted(set(_prose_numbers(text)) - tied)
+    assert not untied, (
+        f"docs/examples/rt_sounder/index.md states {untied}, which no phrase in "
+        f"_rt_sounder_phrases() ties to a source")
