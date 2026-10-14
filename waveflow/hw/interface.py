@@ -39,8 +39,9 @@ env.process(adder_proc(words))
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, ClassVar, Generator
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generator, NamedTuple
 import math
 import simpy
 
@@ -399,6 +400,52 @@ class Interface(SimObj):
 # Shared base classes
 # ---------------------------------------------------------------------------
 
+class BurstStamp(NamedTuple):
+    """When one burst's words moved (``plans/pipelined_ops.md``): what the writer knew when it
+    started the transfer, and when admission let the burst in.  Simulated times.  An endpoint keeps
+    its stamps as plain ``(first, nominal, delivered)`` tuples -- this names them where one is read."""
+
+    first: float
+    """The first word's arrival at the reader: ``start + (latency_init + 1)`` cycles."""
+    nominal: float
+    """The last word's arrival had nothing stalled it: ``start + (latency_init + n)`` cycles."""
+    delivered: float
+    """When the burst entered the reader's buffer -- later than ``nominal`` when admission had to
+    wait for room (back-pressure)."""
+
+
+@dataclass(eq=False)
+class Xfer:
+    """One transfer on one endpoint -- one message -- with its two events (``plans/pipelined_ops.md``).
+
+    Returned by a transfer's ``begin`` and completed by its ``end``.  ``first`` is the transfer's first
+    beat at this endpoint (a writer: its start; a reader: ``max(the first word's arrival, when the
+    reader asked)``); ``last`` its last beat, set by ``end`` -- reading it before then raises, so a body
+    that orders its waits wrongly fails loudly instead of computing with nothing."""
+
+    ep: "InterfaceEndpoint"
+    index: int
+    """The k-th transfer in this direction on this endpoint, from 0."""
+    data: Any
+    nwords: int
+    first: float
+    stamp: BurstStamp | None = None
+    """The burst's stamp; known at once for a delivered burst, at ``end`` for one taken begun."""
+    stalled: bool = False
+    """Held up by the other side between ``first`` and ``last``: a writer whose burst waited for room,
+    a reader whose burst was delivered later than its nominal last word.  Not a clean timing sample."""
+    _last: float | None = field(default=None, repr=False)
+    _pending: Any = field(default=None, repr=False)
+    _ticket: Any = field(default=None, repr=False)
+
+    @property
+    def last(self) -> float:
+        if self._last is None:
+            raise RuntimeError(f"transfer {self.index} on '{self.ep.name}' is still in flight: its last "
+                               f"beat is known only after its end()")
+        return self._last
+
+
 @dataclass
 class QueuedTransferIFSlave(InterfaceEndpoint):
     """
@@ -431,8 +478,53 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
     ntx: simpy.Container = field(init=False)
     """Number of words pending in the TX (overflow) queue."""
 
+    burst_stamps: deque = field(init=False, repr=False)
+    """One ``(first, nominal, delivered)`` stamp (:class:`BurstStamp`) per burst in ``data_buffer``, in
+    the same order.  Kept beside the buffer, not on its items, because a queue view sums the items'
+    lengths; appended just before each put, under the bus hold that already serializes this
+    endpoint's producers, so it cannot fall out of step."""
+
+    pending_burst: tuple | None = field(init=False, default=None, repr=False)
+    """The burst whose transfer has begun and not ended, as ``(words, first, nominal)`` -- at most one:
+    a writer holds this endpoint's bus from its transfer's start to its delivery.  Visible to a reader
+    taking begun bursts; it holds no room."""
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+
+    # -- declared timing (plans/pipelined_ops.md) --------------------------------------------------
+    #: This endpoint's transfer log -- ``(index, first, last, nwords, stalled)`` per transfer -- kept only
+    #: once a declared phase names one of its events (``HwModule.add_timing_phase``); ``None``: nothing
+    #: is logged and nothing is paid.
+    xfer_log = None
+    _timing_owner = None
+    #: Set when a declared span starts at this reader's ``last``: a sequential body (Pattern 1), whose
+    #: plain read of a burst that sat in the buffer costs its beats, as the RTL reads it.
+    _charge_beats = False
+
+    @property
+    def first(self):
+        """The first beat of each transfer on this endpoint: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_first")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_first"] = TimingEvent(self, "first")
+        return ev
+
+    @property
+    def last(self):
+        """The last beat of each transfer on this endpoint: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_last")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_last"] = TimingEvent(self, "last")
+        return ev
+
+    def _log_xfer(self, rec: tuple) -> None:
+        """Log one ended transfer and close any declared span that ends here."""
+        self.xfer_log.append(rec)
+        from waveflow.hw.timed_phase import note_transfer
+        note_transfer(self, rec)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -441,6 +533,27 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         capacity = self.queue_size if self.queue_size is not None else float('inf')
         self.nrx = simpy.Container(self.env, init=0, capacity=capacity)
         self.ntx = simpy.Container(self.env, init=0)
+        self.burst_stamps = deque()
+        self.pending_burst = None
+        #: Transfers into this endpoint (``nwritten``) and out of it (``nread``): the next index.
+        self.nwritten = 0
+        self.nread = 0
+        self._last_stamp: tuple | None = None
+        #: A reader waiting for a burst to be posted or delivered (``begin_read(pending_ok=True)``).
+        self._arrival: simpy.Event | None = None
+        self._reading: Xfer | None = None
+
+    @property
+    def last_stamp(self) -> BurstStamp | None:
+        """The stamp of the burst the last plain read (``get``) took."""
+        s = self._last_stamp
+        return None if s is None else BurstStamp(*s)
+
+    def _note_arrival(self) -> None:
+        """A burst was posted or delivered: wake a reader waiting for one.  No event unless one waits."""
+        a = self._arrival
+        if a is not None and not a.triggered:
+            a.succeed()
 
     def run_proc(self) -> ProcessGen[None]:
         """Continually processes incoming data bursts and invokes :attr:`rx_proc`.
@@ -457,10 +570,14 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
 
     def _take_burst(self) -> ProcessGen[Words]:
         """The next burst off the buffer, its words retired from ``ntx`` then ``nrx`` -- without an
-        event for any step that need not wait (see ``_bus_take`` in this module)."""
+        event for any step that need not wait (see ``_bus_take`` in this module).  The plain read:
+        :meth:`begin_read` then :meth:`end_read` at once, inline (it is every read's cost)."""
+        asked = self.env.now
         ok, words = _store_get(self.data_buffer)
         if not ok:
             words = yield self.data_buffer.get()
+        self._last_stamp = self.burst_stamps.popleft()
+        self.nread += 1
         nwords = words.shape[0]
 
         btx = min(nwords, self.ntx.level)
@@ -476,7 +593,89 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
                 )
             if not _level_get(self.nrx, brx):
                 yield self.nrx.get(brx)
+        if self.xfer_log is not None:
+            yield from self._log_read(int(nwords), asked)
         return words
+
+    def _log_read(self, nwords: int, asked: float) -> ProcessGen[None]:
+        """A declared endpoint's plain read: ``first = max(first word's arrival, when asked)``.  On a
+        Pattern 1 start (``_charge_beats``) a burst that sat in the buffer is read at a word a cycle:
+        the read ends no earlier than ``first + (n - 1)`` cycles.  Then the transfer is logged."""
+        s = self._last_stamp
+        first = max(s[0], asked)
+        if self._charge_beats:
+            target = first + (nwords - 1) / self.interface.clk.freq
+            if target > self.env.now:
+                yield self.env.timeout(target - self.env.now)
+        self._log_xfer((self.nread - 1, first, self.env.now, nwords, s[2] > s[1]))
+
+    def begin_read(self, pending_ok: bool = False) -> ProcessGen[Xfer]:
+        """The first half of a read (``plans/pipelined_ops.md``): the next burst, its words in hand, at
+        its **first** word.
+
+        Takes the oldest delivered burst; with *pending_ok*, a burst whose transfer has only begun is
+        taken too (a pipelined body reads while the words arrive) -- otherwise it waits for a
+        delivery, as ``get`` does.  Never waits for room: a begun burst holds none.  ``first`` is
+        ``max(the first word's arrival, when this was called)``, so a burst that sat in the buffer is
+        first read when asked.  Finish with :meth:`end_read`."""
+        if self._reading is not None:
+            raise RuntimeError(f"'{self.name}': begin_read while transfer {self._reading.index} is "
+                               f"still being read; end_read it first")
+        asked = self.env.now
+        if pending_ok:
+            while not self.data_buffer.items and self.pending_burst is None:
+                self._arrival = self.env.event()
+                yield self._arrival
+                self._arrival = None
+        if self.data_buffer.items or not pending_ok:
+            ok, words = _store_get(self.data_buffer)
+            if not ok:
+                words = yield self.data_buffer.get()
+            stamp = BurstStamp(*self.burst_stamps.popleft())
+            x = Xfer(self, self.nread, words, int(words.shape[0]), max(stamp.first, asked), stamp,
+                     stalled=stamp.delivered > stamp.nominal)
+        else:
+            p = self.pending_burst
+            first = max(p[1], asked)
+            if first > self.env.now:
+                yield self.env.timeout(first - self.env.now)
+            x = Xfer(self, self.nread, p[0], int(p[0].shape[0]), first, _pending=p)
+        self.nread += 1
+        self._reading = x
+        return x
+
+    def end_read(self, x: Xfer) -> ProcessGen[None]:
+        """The second half of a read: for a burst taken begun, wait for its delivery; then retire its
+        words, freeing their room.  Sets ``x.last``."""
+        if x is not self._reading:
+            raise RuntimeError(f"'{self.name}': end_read of a transfer that is not the one being read")
+        if x._pending is not None:
+            ok, words = _store_get(self.data_buffer)
+            if not ok:
+                words = yield self.data_buffer.get()
+            if words is not x._pending[0]:
+                raise RuntimeError(f"'{self.name}': the burst delivered is not the one taken begun -- "
+                                   f"the stream's transfers are out of order")
+            x.stamp = BurstStamp(*self.burst_stamps.popleft())
+            x.stalled = x.stamp.delivered > x.stamp.nominal
+        # Retire the words: the same accounting as the plain read's (_take_burst).
+        nwords = x.nwords
+        btx = min(nwords, self.ntx.level)
+        if btx > 0 and not _level_get(self.ntx, btx):
+            yield self.ntx.get(btx)
+        brx = nwords - btx
+        if brx > 0:
+            if self.nrx.level < brx:
+                raise RuntimeError(
+                    f"Not enough words in RX queue to read {nwords} words. "
+                    f"RX queue level: {self.nrx.level}, TX queue level: {self.ntx.level}"
+                )
+            if not _level_get(self.nrx, brx):
+                yield self.nrx.get(brx)
+        x._last = self.env.now
+        self._reading = None
+        if self.xfer_log is not None:
+            self._log_xfer((x.index, x.first, x._last, x.nwords, x.stalled))
 
     def get(self, nwords_max: int | None = None) -> ProcessGen[Words]:
         """Pull the next word burst from the buffer (pull model).
@@ -517,6 +716,40 @@ class QueuedTransferIFMaster(InterfaceEndpoint):
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+
+    # -- declared timing (plans/pipelined_ops.md) --------------------------------------------------
+    #: This endpoint's transfer log -- ``(index, first, last, nwords, stalled)`` per transfer -- kept only
+    #: once a declared phase names one of its events (``HwModule.add_timing_phase``); ``None``: nothing
+    #: is logged and nothing is paid.
+    xfer_log = None
+    _timing_owner = None
+    #: Set when a declared span starts at this reader's ``last``: a sequential body (Pattern 1), whose
+    #: plain read of a burst that sat in the buffer costs its beats, as the RTL reads it.
+    _charge_beats = False
+
+    @property
+    def first(self):
+        """The first beat of each transfer on this endpoint: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_first")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_first"] = TimingEvent(self, "first")
+        return ev
+
+    @property
+    def last(self):
+        """The last beat of each transfer on this endpoint: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_last")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_last"] = TimingEvent(self, "last")
+        return ev
+
+    def _log_xfer(self, rec: tuple) -> None:
+        """Log one ended transfer and close any declared span that ends here."""
+        self.xfer_log.append(rec)
+        from waveflow.hw.timed_phase import note_transfer
+        note_transfer(self, rec)
 
     def _make_write_call(self, words: Words) -> ProcessGen[None]:
         """Return the generator that writes *words* to the bound interface."""
@@ -611,20 +844,37 @@ class QueuedTransferIF(Interface):
         if hold is None:
             with bus.request() as req:
                 yield req
-                yield from self._transfer(ep, words, cycles, tstart)
-            return
+                t0 = self._post(ep, words, tstart)
+                stamp = yield from self._transfer(ep, words, cycles, tstart)
+            return t0, stamp
         try:
-            yield from self._transfer(ep, words, cycles, tstart)
+            t0 = self._post(ep, words, tstart)
+            stamp = yield from self._transfer(ep, words, cycles, tstart)
         except GeneratorExit:                   # as a request's __exit__: no release at cleanup
             raise
         except BaseException:
             _bus_drop(bus, hold)
             raise
         _bus_drop(bus, hold)
+        return t0, stamp
+
+    def _post(self, ep: QueuedTransferIFSlave, words: Words, tstart: float | None) -> float:
+        """With the bus just taken: the transfer starts now (or at *tstart*, backdated); post the burst
+        as begun -- ``(words, first word's arrival, nominal last)`` -- so a reader taking begun bursts
+        can.  Plain arithmetic, no event.  Returns the start."""
+        t0 = self.env.now if tstart is None else tstart
+        per = 1.0 / self.clk.freq
+        ep.pending_burst = (words, t0 + (self.latency_init + 1) * per,
+                            t0 + (self.latency_init + words.shape[0]) * per)
+        ep.nwritten += 1
+        if ep._arrival is not None:
+            ep._note_arrival()
+        return t0
 
     def _transfer(self, ep: QueuedTransferIFSlave, words: Words, cycles,
-                  tstart: float | None) -> ProcessGen[None]:
-        """The hop with the bus held: the transfer time, room in the queue, the burst handed over."""
+                  tstart: float | None) -> ProcessGen[tuple]:
+        """The hop with the bus held: the transfer time, room in the queue, the burst handed over with
+        its stamp.  Returns the stamp ``(first, nominal, delivered)``."""
         dly = cycles / self.clk.freq
         if tstart is not None:
             dly = max(0.0, dly + (tstart - self.env.now))
@@ -632,8 +882,55 @@ class QueuedTransferIF(Interface):
             yield self.timeout(dly)
 
         yield from _admit_blocking(ep, int(words.shape[0]))
+        _w, first, nominal = ep.pending_burst
+        ep.pending_burst = None
+        stamp = (first, nominal, self.env.now)
+        ep.burst_stamps.append(stamp)           # before the put: a reader it wakes finds the stamp
         if not _store_put(ep.data_buffer, words):
             yield ep.data_buffer.put(words)
+        if ep._arrival is not None:
+            ep._note_arrival()
+        return stamp
+
+    def _begin_write(self, ep: QueuedTransferIFSlave, words: Words) -> ProcessGen[tuple]:
+        """The first half of a write (``plans/pipelined_ops.md``): take *ep*'s bus -- no event when it
+        is free -- and post the burst as begun.  Holds no room: admission is the second half's.
+        Returns the ticket :meth:`_end_write` takes: ``(ep, words, start, hold, request, index)``."""
+        bus = ep.bus
+        hold = _bus_take(bus)
+        req = None
+        if hold is None:
+            req = bus.request()
+            try:
+                yield req
+            except GeneratorExit:               # as a request's __exit__: no release at cleanup
+                raise
+            except BaseException:
+                bus.release(req)
+                raise
+        index = ep.nwritten
+        t0 = self._post(ep, words, None)
+        return (ep, words, t0, hold, req, index)
+
+    def _end_write(self, ticket: tuple) -> ProcessGen[tuple]:
+        """The second half of a write, with the bus held: the rest of the transfer time from its start,
+        room in the queue (waiting for it: back-pressure), the burst delivered; then the bus released.
+        :meth:`_transfer` with the start as a backdated ``tstart`` -- the same terms the single write
+        computes, so the two halves at once wait exactly what it does.  Returns the stamp."""
+        ep, words, t0, hold, req, _index = ticket
+        bus = ep.bus
+        try:
+            stamp = yield from self._transfer(ep, words, self.latency_init + words.shape[0], t0)
+        except GeneratorExit:
+            raise
+        except BaseException:
+            _bus_drop(bus, hold) if hold is not None else bus.release(req)
+            raise
+        if hold is not None:
+            _bus_drop(bus, hold)
+        else:
+            bus.release(req)
+        return stamp
 
 
 # -- the stream hop without events where none is needed ---------------------------------------------
@@ -1010,7 +1307,10 @@ class StreamIF(QueuedTransferIF):
                 f"Cannot write to StreamIF '{self.name}' because the slave side is not bound"
             )
         slave = self.endpoints['slave']
-        yield from self._push_to_endpoint(slave, words, tstart=tstart)
+        t0, stamp = yield from self._push_to_endpoint(slave, words, tstart=tstart)
+        m = self.endpoints['master']
+        if m is not None and m.xfer_log is not None:
+            m._log_xfer((slave.nwritten - 1, t0, stamp[2], int(words.shape[0]), stamp[2] > stamp[1]))
 
     # -- the non-blocking write ------------------------------------------------------------------
     #
@@ -1095,6 +1395,7 @@ class StreamIF(QueuedTransferIF):
             # and it is why the answer is taken here rather than at the end of the window -- by then
             # a store-and-forward consumer has finished and looks, wrongly, like it kept up.
             blocked = ep.nrx.level >= ep.nrx.capacity
+            t0 = self.env.now
             dly = (self.latency_init + n) / rate
             if dly > 0:
                 yield self.timeout(dly)
@@ -1102,10 +1403,13 @@ class StreamIF(QueuedTransferIF):
                 self.dropped += n
                 self.last_drop_time = float(self.env.now)
                 return 0
-            yield from self._admit(ep, np.asarray(words))
+            ep.nwritten += 1
+            yield from self._admit(ep, np.asarray(words),
+                                   (t0 + (self.latency_init + 1) / rate, t0 + dly))
         return n
 
-    def _admit(self, ep: "StreamIFSlave", words: Words) -> ProcessGen[None]:
+    def _admit(self, ep: "StreamIFSlave", words: Words,
+               stamp: tuple[float, float] | None = None) -> ProcessGen[None]:
         """Queue accounting for an accepted burst — **the split that only ``offer()`` still uses.**
 
         It used to be shared with :meth:`_push_to_endpoint`, "factored out so the blocking and
@@ -1132,7 +1436,14 @@ class StreamIF(QueuedTransferIF):
             rem -= nrx
         if rem > 0:
             yield ep.ntx.put(rem)
+        # Stamped before the put (the bus hold keeps this endpoint's producers in order), so a reader
+        # woken by the put always finds the burst's stamp.  ``stamp`` is (first, nominal).
+        now = self.env.now
+        first, nominal = stamp if stamp is not None else (now, now)
+        ep.burst_stamps.append((first, nominal, now))
         yield ep.data_buffer.put(words)
+        if ep._arrival is not None:
+            ep._note_arrival()
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:
         if ep_name not in ('master', 'slave'):
@@ -1437,6 +1748,36 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
                 "is not bound to an interface"
             )
         yield from self._make_write_call(raw_words)
+
+    @port_write
+    def begin(self, data) -> ProcessGen[Xfer]:
+        """The first half of a write (``plans/pipelined_ops.md``): take the wire and start the transfer
+        now, without delivering.  The burst is visible to a reader taking begun bursts at its first
+        word; it holds no room yet.  ``x.first`` is the transfer's start.  Finish with :meth:`end`;
+        :meth:`write` is the two at once.  *data* as for :meth:`write`."""
+        from waveflow.hw.dataschema import DataSchema
+
+        raw = data.serialize(word_bw=self.bitwidth) if isinstance(data, DataSchema) else data
+        iface = self.interface
+        if not isinstance(iface, StreamIF):
+            raise RuntimeError(f"'{self.name}': begin() needs a StreamIF, not "
+                               f"{type(iface).__name__}")
+        ticket = yield from iface._begin_write(iface.endpoints["slave"], raw)
+        return Xfer(self, ticket[5], raw, int(raw.shape[0]), ticket[2], _ticket=ticket)
+
+    @port_write
+    def end(self, x: Xfer) -> ProcessGen[None]:
+        """The second half of a write: the rest of the transfer, room in the reader's queue (waiting
+        for it), the burst delivered.  Sets ``x.last`` (the delivery) and ``x.stalled`` (admission had
+        to wait)."""
+        if x._ticket is None or x.ep is not self:
+            raise RuntimeError(f"'{self.name}': end() of a transfer this endpoint did not begin")
+        ticket, x._ticket = x._ticket, None
+        x.stamp = BurstStamp(*(yield from self.interface._end_write(ticket)))
+        x.stalled = x.stamp.delivered > x.stamp.nominal
+        x._last = x.stamp.delivered
+        if self.xfer_log is not None:
+            self._log_xfer((x.index, x.first, x._last, x.nwords, x.stalled))
 
     @port_write
     def offer(self, data, word_rate: float | None = None) -> ProcessGen[int]:
