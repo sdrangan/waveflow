@@ -405,6 +405,34 @@ def main() -> int:
             "lands in LUTs); `e_n64_c240_m8_r4x4_w12` was implemented beside it.\n"
         ),
     ]
+    fin = PAPER / "finalists_impl.csv"
+    if fin.is_file():
+        fi = pd.read_csv(fin)
+        text += [
+            "\n## 6. Finalists after Vivado implementation (AC10; `finalists_impl.csv`)\n",
+            _md_table(
+                fi,
+                [
+                    "build",
+                    "cp_post_impl_ns",
+                    "timing_met",
+                    "DSP_impl",
+                    "DSP_csynth",
+                    "DSP_model",
+                    "LUT_impl",
+                    "LUT_csynth",
+                    "LUT_model",
+                    "BRAM_18K_impl",
+                    "BRAM_18K_model",
+                ],
+            ),
+            (
+                "\nPost-implementation LUT and FF fall well below csynth's estimates, which the "
+                "models are fitted to; at 8x8 the W10 design uses fewer LUTs than W12 after "
+                "implementation, reversing the csynth ordering behind AC9's LUT shortfall.  The "
+                "32x32 design misses 4 ns by 0.19 ns.\n"
+            ),
+        ]
     (PAPER / "FINDINGS.md").write_text("\n".join(text))
     print(f"wrote {PAPER / 'FINDINGS.md'}")
     return 0
