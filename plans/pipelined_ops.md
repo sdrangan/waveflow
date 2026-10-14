@@ -287,6 +287,14 @@ move to the new construct as Stage 6 migrates their code.  Flow steps are named 
 numbered.  Gate: no docs page teaches `get_pipelined` / `write_pipelined` / `read_pipelined`; the
 docs snippet harness runs the guide page's code; the markdown integrity checks pass.
 
+**Stage 8 -- the speed check.**  When everything above has landed, re-run the scripts behind
+`docs/evaluation/sim_speed/` -- `python -m examples.mem_copy.mem_copy_runtime` and
+`python -m examples.ssr_fft.ssr_fft_runtime --rtl` -- with the page's method (best of N, alternating
+old and new in fresh processes, outcomes compared, not just bits).  The cost model there is pysim time
+= the model's time + SimPy events x a per-event cost, so the question is how many events this arc
+added per transaction and what each costs.  Gate: the per-copy and per-frame numbers re-measured and
+the pages updated with them -- whatever they are; an increase is reported with its cause, not hidden.
+
 ## Stage 1 record (2026-10-14)
 
 **What pysim does today** (`waveflow/hw/interface.py`).  A writer takes the slave's `bus` (one
@@ -346,13 +354,27 @@ a cycle.  This is the arithmetic the design removes, measured.
    one, else waits for one to be posted -- it never waits for room -- with `L.first = max(first-word
    stamp, when the reader asked)`; the words are in hand.  `end` waits for that burst's delivery and
    retires its words.  `get` = `begin` then `end` at once: it returns at delivery, as today.
-6. **Reading a buffered burst costs its beats -- in `phase.pipeline` only, for now.**  A pipelined
-   load's `end` waits until `max(delivery, L.first + (n - 1) cycles)`, so a burst that sat in the buffer
-   is read at a word a cycle, as the RTL reads it.  A plain `get` keeps today's zero-time read, because
-   charging it would move existing cycle counts.  **Open, for the user:** Pattern 1 reads with a plain
-   `get`, so on the middle column above its `s_in.last` is early by up to `n - 1` cycles.  Either charge
-   the beats on endpoints that carry a declared event (opt-in by declaration: existing code unchanged),
-   or everywhere (a measured, separate change that moves gates, likely toward RTL).
+6. **Reading a buffered burst costs its beats only where a phase declares it -- decided with the user,
+   2026-10-14.**  A pipelined load's `end` waits until `max(delivery, L.first + (n - 1) cycles)`, so a
+   burst that sat in the buffer is read at a word a cycle, as the RTL reads it; a plain `get` does the
+   same **only on an endpoint that starts a declared Pattern 1 span** -- declaring that phase says the
+   body really is sequential.  Every other `get` keeps today's zero-time read.  Charging everywhere was
+   measured and rejected (`plans/witness/pipelined_ops/charge_cost.py`):
+
+   | run | events today | charged everywhere | cycles today | charged everywhere |
+   |---|---|---|---|---|
+   | poly `timing` | 51 | 52 (+2%) | 150 | 155 |
+   | poly `multi_data` | 67 | 71 (+6%) | 234 | 255 |
+   | markov `direct` | 343 | 368 (+7%) | 1811 | 2082 |
+   | markov `mm` | 806 | 842 (+4.5%) | 1926 | 2200 |
+
+   The events are the smaller reason (one wait per buffered read, 2-7% more).  The deciding one:
+   markov's pysim moves from 1926 to 2200 cycles against an RTL 1870 -- from +3% to +18%, outside its
+   5% gate, **away** from RTL.  Its kernels are pipelined loops in hardware, written read-then-compute
+   in pysim with the overlap folded into hand-fitted per-chunk overheads that assume a zero-time read;
+   charging the read counts it twice.  A charge is right only for a body that is sequential, which is
+   what the declaration states.  So the opt-in costs existing code **no** event and no cycle, and a
+   migrated module pays one wait per buffered read on the endpoints it declared.
 7. **No new wait on the write path, so no new deadlock.**  PR #185's deadlock was a producer waiting
    for room that only a consumer retiring a *delivered* burst could free, while the consumer waited for
    a burst the producer never delivered.  Here a pending burst holds no room, so nothing but its own
