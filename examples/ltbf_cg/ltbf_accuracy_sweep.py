@@ -86,6 +86,7 @@ REGIMES = (1, 2)
 #: (drops 11-20, held out from the formats' profile: M3-M4 review)
 R2_N32_DROPS = tuple(range(11, 21))
 R2_N32_FORMATS = ((12, 1), (16, 1), (24, 1))
+R2_N32_BAND = "100MHz"
 #: The N_UE sweep (16x16, 100 MHz, [-6, 3] dB, nominal SRS): UEs per sector, groups of pooled drops.
 NUE_VALUES = (4, 10, 20, 40)
 NUE_GROUPS = 25
@@ -162,7 +163,9 @@ def fixed_plan(job: Job) -> list[tuple[int, int, str, int]]:
             for regime in REGIMES:
                 big = regime == 2 and job.n >= 32
                 if big and (
-                    job.group not in R2_N32_DROPS or (w, g) not in R2_N32_FORMATS
+                    job.band != R2_N32_BAND
+                    or job.group not in R2_N32_DROPS
+                    or (w, g) not in R2_N32_FORMATS
                 ):
                     continue
                 plan.append((w, g, form, regime))
@@ -344,7 +347,12 @@ def run(todo: list[Job], workers: int, log: Path) -> int:
     # the costliest first (large arrays, regime 2 at 32x32), so the pool's tail is short
     todo.sort(
         key=lambda j: (
-            -j.n * (2 if j.n >= 32 and j.group in R2_N32_DROPS else 1),
+            -j.n
+            * (
+                2
+                if j.n >= 32 and j.group in R2_N32_DROPS and j.band == R2_N32_BAND
+                else 1
+            ),
             -j.nue,
         )
     )
