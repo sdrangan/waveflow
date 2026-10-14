@@ -100,6 +100,20 @@ class PhaseRecord:
     #: The shortest duration pysim can realize for this span, in cycles: a write's first beat is a
     #: cycle after it starts, so a span ending at one is at least 1.  Not exceeding it is not a stall.
     floor: float = 0.0
+    #: The load delivered fewer words than it requested (a burst that ended early, at TLAST): the
+    #: declared features describe the request, not what moved.  A legitimate run, but not a sample
+    #: of the law the features state -- left out of a fit.
+    short: bool = False
+
+
+@dataclass
+class PipelineResult:
+    """What :meth:`TimedPhase.pipeline` did: ``y``, the compute's result (what was written), and the
+    two transfers -- ``load`` (how many words arrived, when, whether it stalled) and ``store``."""
+
+    y: Any
+    load: Any
+    store: Any
 
 
 class TimedPhase:
@@ -244,8 +258,10 @@ class TimedPhase:
     # -- Pattern 2 -------------------------------------------------------------------------------
     def pipeline(self, fn, load, store, **feats):
         """Pattern 2: a pipelined load, compute, store -- the HLS loop that reads a word, computes,
-        writes a word.  ``y = yield from phase.pipeline(fn, load=self.s_in.req(...), store=self.m_out,
-        n=n)``; returns ``fn``'s result, which was written.
+        writes a word.  ``r = yield from phase.pipeline(fn, load=self.s_in.req(...), store=self.m_out,
+        n=n)``; returns a :class:`PipelineResult`: ``r.y`` is ``fn``'s result (what was written),
+        ``r.load`` and ``r.store`` the two transfers -- a body that decides from its input (a burst that
+        ended early) reads ``r.load.nwords``, so ``fn`` stays a pure function.
 
         The phase must declare two spans: one from the load endpoint's ``first`` to the store
         endpoint's ``first`` (the latency), one from the store's ``first`` to its ``last`` (the fill);
@@ -281,15 +297,17 @@ class TimedPhase:
         occ = self._occurrences
         self._occurrences += 1
         stalled = bool(lx.stalled or sx.stalled)
+        asked = load.nwords()
+        short = asked is not None and lx.nwords < asked
         self.records.append(PhaseRecord(
             self.name, lat, occ, (load.ep.name, lx.index, "first", lx.first), dict(feats), pred[lat],
             end=(store.name, sx.index, "first", sx.first), actual=(sx.first - lx.first) / per,
-            stalled=stalled or (sx.first - lx.first) / per > pred[lat] + 1e-6))
+            stalled=stalled or (sx.first - lx.first) / per > pred[lat] + 1e-6, short=short))
         self.records.append(PhaseRecord(
             self.name, fill, occ, (store.name, sx.index, "first", sx.first), dict(feats), pred[fill],
             end=(store.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
-            stalled=stalled or (sx.last - sx.first) / per > pred[fill] + 1e-6))
-        return y
+            stalled=stalled or (sx.last - sx.first) / per > pred[fill] + 1e-6, short=short))
+        return PipelineResult(y, lx, sx)
 
     def _pipeline_spans(self, load_ep, store_ep) -> tuple[str, str]:
         """The (latency, fill) span names, found by their events; refuses a call whose endpoints are
@@ -359,4 +377,5 @@ def note_transfer(ep, rec: tuple) -> None:
     owner._open_phase_records = still
 
 
-__all__ = ["EDGES", "LinearTiming", "PhaseRecord", "TimedPhase", "TimingEvent", "note_transfer"]
+__all__ = ["EDGES", "LinearTiming", "PhaseRecord", "PipelineResult", "TimedPhase", "TimingEvent",
+           "note_transfer"]

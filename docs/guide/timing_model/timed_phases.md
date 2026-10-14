@@ -72,9 +72,15 @@ self.samp_phase = TimedPhase(
 self.add_timing_phase(self.samp_phase)
 
 # the body, per message
-y = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=n),
+r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=n),
                                         store=self.m_out, nwords=n)
+if r.load.nwords < n:            # the burst ended early, at TLAST
+    ...
 ```
+
+`pipeline` returns what it did: `r.y` is `compute`'s result (what was written), `r.load` and
+`r.store` the two transfers.  A body that decides from its input -- poly halts when a sample burst
+ends early -- reads `r.load`, so `compute` stays a pure function of the words.
 
 `pipeline` takes the words at the load's first beat, starts the store a latency later, and ends it no
 earlier than its fill nor the last input word plus the latency.  Every wait is a real event plus a
@@ -91,7 +97,9 @@ From the declarations alone (`waveflow/calib/phases.py`):
 - the **pairing**: pysim's phase records say which transfers each span starts and ends on, and with
   which features; the RTL supplies the times.  Both sides must carry the same transfers on every port,
   so functional equivalence is a precondition of a timing fit;
-- the **fit**, per span, on the rows the RTL did not stall, with interior points held out.
+- the **fit**, per span, on the rows the RTL did not stall, with interior points held out.  A
+  pipelined occurrence whose load delivered fewer words than it asked for (a burst that ended early) is
+  marked `short` and left out: its features describe the request, not what moved.
 
 The one hand-written piece is the scenario that produces the features.  Poly's is a run of commands of
 nine lengths (`examples/stream_inband/poly_calibrate.py`); at 32 bits it

@@ -456,6 +456,13 @@ class LoadRequest:
     count: int | None = None
     nwords_max: int | None = None
 
+    def nwords(self) -> int | None:
+        """The words this request asks for -- the typed elements' words, or the cap -- or ``None``
+        (the next burst, whatever its length)."""
+        if self.element_type is not None:
+            return int(self.ep._typed_nwords(self.element_type, self.count))
+        return None if self.nwords_max is None else int(self.nwords_max)
+
     def decode(self, words):
         """The burst's words as the request asked: capped raw words, or typed elements."""
         if self.element_type is not None:

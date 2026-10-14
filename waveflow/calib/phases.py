@@ -98,12 +98,14 @@ def phase_corpus(phase, rtl: dict[str, list[tuple]]) -> list[dict]:
         # kept beside it, for the report.
         out.append({**r.features, "span": r.span, "occurrence": r.occurrence,
                     "rtl": t1 - t0, "pysim": r.actual, "predicted": r.predicted,
-                    "stalled": bool(a[4] or b[4]), "pysim_stalled": bool(r.stalled)})
+                    "stalled": bool(a[4] or b[4]), "pysim_stalled": bool(r.stalled),
+                    "short": bool(r.short)})
     return out
 
 
 def fit_phase(phase, rows: list[dict], holdout=None, save: bool = True) -> dict:
-    """Fit each span of *phase* on the clean *rows* (not stalled) whose features are not held out,
+    """Fit each span of *phase* on the clean *rows* (not stalled, not short) whose features are not
+    held out,
     then report every row's residual.  *holdout*: a predicate on a row's features -- those rows test
     the fit and are not used by it.  With *save*, the parameters go to the phase's ``calib_dir``
     (``<span>.json``), where the phase loads them from.  Returns ``{span: {"params", "train",
@@ -113,7 +115,8 @@ def fit_phase(phase, rows: list[dict], holdout=None, save: bool = True) -> dict:
     held = holdout or (lambda feats: False)
     report = {}
     for span, model in phase.tm.items():
-        mine = [r for r in rows if r["span"] == span and not r["stalled"]]
+        # Training rows: the RTL did not stall them, and their load delivered what the features say.
+        mine = [r for r in rows if r["span"] == span and not r["stalled"] and not r.get("short")]
         train = [r for r in mine if not held({f: r[f] for f in phase.features})]
         test = [r for r in mine if held({f: r[f] for f in phase.features})]
         if not train:

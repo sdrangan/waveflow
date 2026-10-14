@@ -162,9 +162,15 @@ self.compute_phase = TimedPhase(
 self.add_timing_phase(self.compute_phase)
 
 # the body, per message
-y = yield from self.compute_phase.pipeline(fn=lambda x: array(Float32, poly_eval(c, x)),
+r = yield from self.compute_phase.pipeline(fn=lambda x: array(Float32, poly_eval(c, x)),
                                            load=self.s_in.req(Float32, n), store=self.m_out, n=n)
+# r.y: what was written; r.load / r.store: the two Xfers (how many words arrived, when, stalled)
 ```
+
+`pipeline` returns a `PipelineResult` (added in review, 2026-10-14): a body that decides from its
+input reads `r.load` rather than having `fn` record it as a side effect.  An occurrence whose load
+delivered fewer words than it requested is marked `short` on its records and left out of a fit: its
+features describe the request, not what moved.
 
 `pipeline` is a `yield from`: it is a sequence of waits, not one event -- the rule SimPy already
 follows (a method returning one event is `yield`, one running several steps is `yield from`).

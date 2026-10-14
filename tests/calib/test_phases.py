@@ -65,6 +65,8 @@ def test_the_join_pairs_pysim_records_with_rtl_times():
     fill = [r for r in samples if r["span"] == "fill_time"]
     assert [r["rtl"] for r in lat] == [34.0, 34.0]                  # first result 34 after first sample
     assert fill[0]["nwords"] == 8 and fill[0]["rtl"] == 7.0         # 8 words: beats 0..7
+    # The second command's burst ends early (6 of 10 words): its rows are marked short.
+    assert [r["short"] for r in fill] == [False, True]
 
 
 def test_the_fit_and_its_holdout():
@@ -74,7 +76,8 @@ def test_the_fit_and_its_holdout():
     ph.calib_dir = None
     rows = ([{"nwords": n, "span": "fill_time", "rtl": n - 1.0, "stalled": False} for n in (8, 16, 32, 64)]
             + [{"nwords": n, "span": "latency", "rtl": 34.0, "stalled": False} for n in (8, 16, 32, 64)]
-            + [{"nwords": 24, "span": "latency", "rtl": 99.0, "stalled": True}])   # stalled: not used
+            + [{"nwords": 24, "span": "latency", "rtl": 99.0, "stalled": True}]    # stalled: not used
+            + [{"nwords": 40, "span": "fill_time", "rtl": 5.0, "stalled": False, "short": True}])
     rep = fit_phase(ph, rows, holdout=lambda f: f["nwords"] == 32, save=False)
     assert rep["fill_time"]["params"]["nwords"] == pytest.approx(1.0)
     assert rep["fill_time"]["params"]["intercept"] == pytest.approx(-1.0)

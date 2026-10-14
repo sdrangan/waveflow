@@ -203,10 +203,12 @@ class _PipeDoubler(FreeRunMod):
                            "fill_time": (self.m_out.first, self.m_out.last)},
             features=("nwords",), seed=PIPE_SEED)
         self.add_timing_phase(self.phase)
+        self.results = []
 
     def run_iter(self):
         load = self.s_b.req(nwords_max=8) if self.swap else self.s_in.req(nwords_max=8)
-        yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out, nwords=8)
+        r = yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out, nwords=8)
+        self.results.append(r)
 
 
 def _pipe_harness(bursts, **kw):
@@ -264,3 +266,24 @@ class TestPattern2:
         with pytest.raises(RuntimeError, match="needs two spans"):
             gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.req(), store=a.m_out, n=1)
             next(gen)
+
+
+class TestPipelineResult:
+    def test_the_result_carries_y_and_both_transfers(self):
+        dut, _ = _pipe_harness([list(range(8))])
+        (r,) = dut.results
+        assert list(r.y) == [2 * k for k in range(8)]
+        assert r.load.nwords == 8 and r.load.first == 1.0 and r.load.last == 8.0
+        assert r.store.first == 6.0 and r.store.last == 14.0
+
+    def test_a_burst_that_ends_early_is_marked_short(self):
+        """5 words where 8 were requested (TLAST came early): the body sees it on r.load, and both
+        records are marked short -- a legitimate run, not a sample of the law nwords=8 states."""
+        dut, out = _pipe_harness([list(range(5))])
+        (r,) = dut.results
+        assert r.load.nwords == 5 and list(r.y) == [0, 2, 4, 6, 8]
+        assert all(rec.short for rec in dut.phase.records)
+
+    def test_a_full_burst_is_not_short(self):
+        dut, _ = _pipe_harness([list(range(8))])
+        assert not any(rec.short for rec in dut.phase.records)
