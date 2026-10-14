@@ -211,6 +211,8 @@ RESOURCE_TERMS = {
 }
 #: The overheads' models (cycles): linear in the tile shape and the width.
 OVERHEAD_TERMS = ("R", "C", "W", "explicit")
+#: The overheads both forms have (the rest belong to one form).
+SHARED_OVERHEADS = ("a_rz", "a_v", "d_alpha", "d_beta")
 
 
 # --- fit and predict ------------------------------------------------------------------------------
@@ -244,14 +246,16 @@ def fit(builds: list[tuple[sp.Knobs, dict]]) -> dict:
         params["resources"][res] = {"terms": list(terms), "coef": _lstsq(x, y).tolist()}
     ovs = [overheads_from_loops(k, rec["loops"]) for k, rec in builds]
     for name in Overheads.__dataclass_fields__:
+        # a form's own overheads (a_T, a_U: factored; a_S, a_Q: explicit) do not see the form
+        terms = OVERHEAD_TERMS if name in SHARED_OVERHEADS else OVERHEAD_TERMS[:-1]
         rows = [(f, getattr(o, name)) for f, o in zip(feats, ovs, strict=True)]
         rows = [(f, v) for f, v in rows if np.isfinite(v)]
-        x = np.array([[f[t] for t in OVERHEAD_TERMS] for f, _ in rows])
-        y = np.array([v for _, v in rows])
-        params["overheads"][name] = {
-            "terms": list(OVERHEAD_TERMS),
-            "coef": _lstsq(x, y).tolist(),
-        }
+        if not rows:
+            coef = [float("nan")] * (1 + len(terms))
+        else:
+            x = np.array([[f[t] for t in terms] for f, _ in rows], dtype=float)
+            coef = _lstsq(x, np.array([v for _, v in rows])).tolist()
+        params["overheads"][name] = {"terms": list(terms), "coef": coef}
     return params
 
 
