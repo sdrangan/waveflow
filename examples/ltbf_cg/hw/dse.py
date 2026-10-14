@@ -144,26 +144,38 @@ def build_table(
     return pd.DataFrame(rows)
 
 
+#: The option sets decisions are taken over: ``built`` -- what was built and calibrated (the A53
+#: forms M_i, runs Jacobi and forms G_i; one complex value per I/O beat); ``all`` -- adds the
+#: modeled options (``a53x4``, ``pl``, ``L = 4``), which the cost model prices at no resources.
+OPTION_SETS = {"built": lambda g: g[(g.eig == "a53") & (g.L == 1)], "all": lambda g: g}
+
+
 def decisions(df: pd.DataFrame) -> pd.DataFrame:
+    """The least-cost design meeting each loss and time budget, per option set.  Ties go to the
+    first row in table order (regime 1, ``a53``, L = 1, the smallest t first)."""
     out = []
-    for (band, target, srs, side), g in df.groupby(["band", "target", "srs", "side"]):
-        for lb, tb, cm in itertools.product(LOSS_BUDGETS, TIME_BUDGETS_MS, COSTS):
-            col = "max_frac" if cm == "max" else f"{cm}_frac"
-            ok = g[
-                (g.loss_med <= lb)
-                & (g.loss_p90 <= lb)
-                & (g.time_p90_ms <= tb)
-                & g.feasible
-            ]
-            rec = {"band": band, "target": target, "srs": srs, "side": side, "loss_budget_db": lb,
-                   "time_budget_ms": tb, "cost": cm, "n_meeting": len(ok)}  # fmt: skip
-            if len(ok):
-                best = ok.loc[ok[col].idxmin()]
-                rec.update({c: best[c] for c in ("form", "R", "C", "W", "grouping", "units", "eig",
-                                                 "L", "regime", "t", "loss_med", "loss_p90",
-                                                 "time_p90_ms", "max_frac")})  # fmt: skip
-                rec["cost_value"] = best[col]
-            out.append(rec)
+    for (band, target, srs, side), g0 in df.groupby(["band", "target", "srs", "side"]):
+        for opts, sel in OPTION_SETS.items():
+            g = sel(g0)
+            for lb, tb, cm in itertools.product(LOSS_BUDGETS, TIME_BUDGETS_MS, COSTS):
+                col = "max_frac" if cm == "max" else f"{cm}_frac"
+                ok = g[
+                    (g.loss_med <= lb)
+                    & (g.loss_p90 <= lb)
+                    & (g.time_p90_ms <= tb)
+                    & g.feasible
+                ]
+                rec = {"band": band, "target": target, "srs": srs, "side": side, "options": opts,
+                       "loss_budget_db": lb, "time_budget_ms": tb, "cost": cm,
+                       "n_meeting": len(ok)}  # fmt: skip
+                if len(ok):
+                    best = ok.loc[ok[col].idxmin()]
+                    rec.update({c: best[c] for c in ("form", "R", "C", "W", "grouping", "units",
+                                                     "eig", "L", "regime", "t", "loss_med",
+                                                     "loss_p90", "sinr_med", "time_p90_ms",
+                                                     "max_frac")})  # fmt: skip
+                    rec["cost_value"] = best[col]
+                out.append(rec)
     return pd.DataFrame(out)
 
 
@@ -189,7 +201,21 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--bands", nargs="+", default=["100MHz", "1.44MHz"])
     ap.add_argument("--srs", nargs="+", default=["10dB", "none"])
+    ap.add_argument(
+        "--decisions-only", action="store_true",
+        help="Recompute the decisions and frontiers from paper_data/dse_designs.csv.gz.",
+    )  # fmt: skip
     a = ap.parse_args(argv)
+    if a.decisions_only:
+        df = pd.read_csv(PAPER / "dse_designs.csv.gz")
+        decisions(df).to_csv(
+            PAPER / "dse_decisions.csv", index=False, float_format="%.6g"
+        )
+        frontiers(df).to_csv(
+            PAPER / "dse_frontiers.csv", index=False, float_format="%.6g"
+        )
+        print("wrote the decisions and frontiers")
+        return 0
     acc = pd.read_csv(PAPER / "accuracy_losses.csv")
     delta = json.loads((sp.PREREG.parent / "reports" / "rtl_fit.json").read_text())[
         "delta"
