@@ -34,6 +34,8 @@ from examples.ltbf_cg.hw import models as md
 from examples.ltbf_cg.hw import space as sp
 
 CLOCK_NS = 4.0
+#: DDR4-2400 x 64 at 70 % efficiency (the RFSoC 4x2's PS DDR), bits per second.
+DDR_BPS = 2400e6 * 64 * 0.7
 A53_HZ = 1.2e9
 A53_CORES = 4
 #: Typical Jacobi work per UE (the calibration corpus: 122-156 rotations, 5-6 sweeps).
@@ -102,54 +104,147 @@ def a53_params() -> dict:
     return json.loads((le.DATA / "model.json").read_text())["params"]
 
 
-def a53_ue_cycles(n: int, r: int, eig: str) -> float:
+#: A modeled optimized A53 kernel (vectorized, contraction on): the ``"a53x4"`` placement prices
+#: the calibrated scalar kernel's n-proportional work 4 x faster -- a sensitivity, not calibrated.
+A53_SPEEDUP = {"a53": 1.0, "a53x4": 4.0, "pl": 1.0}
+
+
+def a53_counters(srs: str) -> tuple[float, float]:
+    """Typical Jacobi rotations and sweeps per UE for an SRS setting: the mean over the served UEs
+    of drops 1-3 at 16 x 16, 100 MHz, [-6, 3] dB, exact LTBF (cached).  A noiseless estimate's
+    M_i is nearly rank one and needs a few rotations; a noisy one needs about 140."""
+    from examples.ltbf_cg import ltbf as lt
+    from examples.ltbf_cg import ltbf_eig as le_
+
+    key = f"jacobi|{srs}"
+    cache_ = json.loads(COUNTS.read_text()) if COUNTS.is_file() else {}
+    if key not in cache_:
+        g = None if srs == "none" else lk.G_SRS_DB
+        rot, sw = [], []
+        for d in (1, 2, 3):
+            h0 = lk.channel(sc.load_drop(d), 0, 16, "100MHz")
+            pc = lk.power_control(h0, lk.TARGETS["-6_3"])
+            ltu = lk.long_term(lk.scaled(h0, pc), pc, np.random.default_rng(d), g)
+            for s_ in range(sc.N_SECT):
+                for u, a_i in lt.sector_a(ltu, s_, lt.Solve(), None).items():
+                    h_i = ltu.srs_own[u]
+                    m = h_i.conj().T @ a_i
+                    m = 0.5 * (m + m.conj().T)
+                    _, n_rot, n_sw = le_._jacobi(
+                        [[[float(v.real), float(v.imag)] for v in row] for row in m]
+                    )
+                    rot.append(n_rot)
+                    sw.append(n_sw)
+        cache_[key] = [float(np.mean(rot)), float(np.mean(sw))]
+        COUNTS.write_text(json.dumps(cache_))
+    return tuple(cache_[key])
+
+
+def a53_ue_cycles(
+    n: int, r: int, eig: str, counters: tuple[float, float] = (N_ROT, N_SWEEPS)
+) -> float:
+    """One UE's A53 cycles: Jacobi always; M_i and G_i too unless the engine forms them."""
     p = a53_params()
     c0, (cn, cnr, crot, csw) = p["intercept"], p["coeffs"]
-    jac = c0 + crot * N_ROT + csw * N_SWEEPS
-    return jac if eig == "pl" else jac + cn * n + cnr * n * r
+    jac = c0 + crot * counters[0] + csw * counters[1]
+    return jac if eig == "pl" else jac + (cn * n + cnr * n * r) / A53_SPEEDUP[eig]
 
 
 def pl_eig_cycles(k: sp.Knobs, o: md.Overheads, n: int, r: int) -> float:
     """M_i (8 x 8 over n) and G_i (r x n over 8) on the engine's tile, per UE (modeled)."""
-    m_cyc = (
-        math.ceil(8 / k.R)
-        * math.ceil(8 / k.C)
-        * (n + (o.a_T if np.isfinite(o.a_T) else o.a_S))
-    )
-    g_cyc = (
-        math.ceil(n / k.R)
-        * math.ceil(r / k.C)
-        * (8 + (o.a_U if np.isfinite(o.a_U) else o.a_S))
-    )
-    return m_cyc + g_cyc
+    a = o.a_T if np.isfinite(o.a_T) else o.a_S
+    b = o.a_U if np.isfinite(o.a_U) else o.a_S
+    return math.ceil(8 / k.R) * math.ceil(8 / k.C) * (n + a) + math.ceil(
+        n / k.R
+    ) * math.ceil(r / k.C) * (8 + b)
+
+
+def regime2_a_cycles(k: sp.Knobs, o: md.Overheads, n: int) -> float:
+    """Regime 2's A_i = X_sym H_i (n x n times n x 8) on the engine's tile, per UE (modeled; the
+    symmetrization reads X and its transpose)."""
+    a = o.a_T if np.isfinite(o.a_T) else o.a_S
+    return math.ceil(n / k.R) * math.ceil(8 / k.C) * (n + a)
+
+
+def io_cycles(n: int, cols: int, m: int, load_h: bool) -> float:
+    """The stream words of one job at one complex value per beat (job_cycles' I/O terms)."""
+    return (n * cols if load_h else 0) + 2 * n * m
+
+
+def sector_cycles(
+    k: sp.Knobs,
+    o: md.Overheads,
+    n_conn: int,
+    n_own: int,
+    regime: int,
+    eig: str,
+    delta: float,
+    L: int = 1,
+    r: int = 1,
+) -> tuple[float, float]:
+    """One sector's engine cycles as ``(fixed, per iteration)``: jobs of <= ``mmax`` columns padded
+    to the tile (the first loads H), I/O at ``L`` complex values per beat, regime 2's A_i, and M_i,
+    G_i when the engine forms them.  Explicit at N_rx > 256 streams Q from DDR each S pass.
+    """
+    if n_own == 0:
+        return 0.0, 0.0
+    n = k.nmax
+    cols = 8 * n_conn
+    cols_p = math.ceil(cols / k.R) * k.R
+    if cols_p > k.cmax:
+        raise ValueError(f"{cols} columns exceed the build's cmax {k.cmax}")
+    m_total = 8 * n_own if regime == 1 else n
+    c0 = c1 = 0.0
+    first = True
+    for j in range(math.ceil(m_total / k.mmax)):
+        m = min(k.mmax, m_total - j * k.mmax)
+        m_p = math.ceil(m / k.C) * k.C
+        a = md.job_cycles_rtl(k, o, n, cols_p, m_p, 0, first, delta)
+        b = md.job_cycles_rtl(k, o, n, cols_p, m_p, 1, first, delta) - a
+        io = io_cycles(n, cols_p, m_p, first)
+        a += math.ceil(io / L) - io
+        if k.explicit and n > sp.EXPLICIT_NMAX:  # each S pass streams Q from DDR
+            b = max(
+                b, math.ceil(m_p / k.C) * 2 * k.W * n * n / DDR_BPS / (CLOCK_NS * 1e-9)
+            )
+        c0, c1 = c0 + a, c1 + b
+        first = False
+    if regime == 2:
+        c0 += n_own * regime2_a_cycles(k, o, n)
+    if eig == "pl":
+        c0 += n_own * pl_eig_cycles(k, o, n, r)
+    return c0, c1
+
+
+def assign(cyc: np.ndarray, units: int) -> np.ndarray:
+    """Longest-first assignment of the three sectors (rows) to ``units`` engines: the makespan."""
+    srt = -np.sort(-cyc, axis=0)
+    if units >= 3:
+        return srt[0]
+    if units == 2:
+        return np.maximum(srt[0], srt[1] + srt[2])
+    return srt.sum(axis=0)
 
 
 def update_time_s(
-    k: sp.Knobs, o: md.Overheads, run: Run, sectors: list[tuple[int, int]], delta: float
+    k: sp.Knobs,
+    o: md.Overheads,
+    run: Run,
+    sectors: list[tuple[int, int]],
+    delta: float,
+    L: int = 1,
+    counters: tuple[float, float] = (N_ROT, N_SWEEPS),
 ) -> float:
     """One long-term update (all three sectors) for one drop's sector populations."""
-    n = k.nmax
-    per_sector = []
-    n_ue = 0
-    for n_conn, n_own in sectors:
-        if n_own == 0:
-            per_sector.append(0.0)
-            continue
-        cols = 8 * n_conn
-        m_total = 8 * n_own if run.regime == 1 else n
-        cyc, first = 0.0, True
-        for j in range(math.ceil(m_total / k.mmax)):
-            m = min(k.mmax, m_total - j * k.mmax)
-            cyc += md.job_cycles_rtl(k, o, n, cols, m, run.t, first, delta)
-            first = False
-        if run.eig == "pl":
-            cyc += n_own * pl_eig_cycles(k, o, n, run.r)
-        per_sector.append(cyc)
-        n_ue += n_own
-    # sectors over the units: the longest-first greedy assignment
-    loads = [0.0] * run.units
-    for c in sorted(per_sector, reverse=True):
-        loads[loads.index(min(loads))] += c
-    engine_s = max(loads) * CLOCK_NS * 1e-9
-    a53_s = math.ceil(n_ue / A53_CORES) * a53_ue_cycles(n, run.r, run.eig) / A53_HZ
+    cyc = np.array(
+        [[sum(sector_cycles(k, o, nc, no, run.regime, run.eig, delta, L, run.r) * np.array([1, run.t]))]
+         for nc, no in sectors]
+    )  # fmt: skip
+    engine_s = float(assign(cyc, run.units)[0]) * CLOCK_NS * 1e-9
+    n_ue = sum(no for _, no in sectors)
+    a53_s = (
+        math.ceil(n_ue / A53_CORES)
+        * a53_ue_cycles(k.nmax, run.r, run.eig, counters)
+        / A53_HZ
+    )
     return engine_s + a53_s

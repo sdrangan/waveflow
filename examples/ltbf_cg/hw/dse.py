@@ -39,15 +39,15 @@ PAPER = md.eg.HERE.parent / "paper_data"
 #: xczu48dr-ffvg1517-2-e (the csynth reports' AvailableResources).
 AVAILABLE = {"DSP": 4272, "LUT": 425280, "FF": 850560, "BRAM_18K": 2160}
 COSTS = ("DSP", "LUT", "FF", "BRAM_18K", "max")
-#: DDR4-2400 x 64 at 70 % efficiency (the RFSoC 4x2's PS DDR), bits per second.
-DDR_BPS = 2400e6 * 64 * 0.7
 ARRAYS = {8: 64, 16: 256, 32: 1024}
 WIDTHS = (10, 12, 14, 16, 18, 20, 24)
 GROUPING = {"per_ue": 8, "joint": 80}
 UNITS = (1, 2, 3)
-EIG = ("a53", "pl")
+EIG = ("a53", "a53x4", "pl")
+#: Complex values per I/O beat: 1 is built; 4 is modeled (a 4 x wider stream).
+LANES = (1, 4)
 T_ALL = np.arange(1, 11)
-LOSS_BUDGETS = (0.1, 0.5, 1.0)
+LOSS_BUDGETS = (0.1, 0.25, 0.5, 1.0)  # AC8's three and the rule's 1 dB
 TIME_BUDGETS_MS = (1.0, 5.0, 10.0)
 
 
@@ -81,43 +81,12 @@ def cost(k: sp.Knobs) -> dict[str, float]:
     return res
 
 
-def _sector_cycles(
-    k: sp.Knobs, o: md.Overheads, n_conn: int, n_own: int, regime: int, delta: float
-):
-    """(fixed, per-iteration) engine cycles of one sector, and the DDR-bound per-iteration cycles."""
-    if n_own == 0:
-        return 0.0, 0.0
-    n, cols = k.nmax, 8 * n_conn
-    m_total = 8 * n_own if regime == 1 else n
-    c0 = c1 = 0.0
-    first = True
-    for j in range(math.ceil(m_total / k.mmax)):
-        m = min(k.mmax, m_total - j * k.mmax)
-        a = md.job_cycles_rtl(k, o, n, cols, m, 0, first, delta)
-        b = md.job_cycles_rtl(k, o, n, cols, m, 1, first, delta) - a
-        if k.explicit and n > sp.EXPLICIT_NMAX:  # each S pass streams Q from DDR
-            ddr = math.ceil(m / k.C) * 2 * k.W * n * n / DDR_BPS / (tm.CLOCK_NS * 1e-9)
-            b = max(b, ddr)
-        c0, c1 = c0 + a, c1 + b
-        first = False
-    return c0, c1
-
-
-def _assign(cyc: np.ndarray, units: int) -> np.ndarray:
-    """Longest-first assignment of the three sectors to ``units`` engines, per t: the makespan."""
-    s = -np.sort(-cyc, axis=0)  # sectors sorted by load, per t
-    if units >= 3:
-        return s[0]
-    if units == 2:
-        return np.maximum(s[0], s[1] + s[2])
-    return s.sum(axis=0)
-
-
 def build_table(
     band: str, target: str, srs: str, side: int, acc: pd.DataFrame, delta: float
 ) -> pd.DataFrame:
     nmax = ARRAYS[side]
     drops = tm.sector_counts(band, target, nmax)
+    counters = tm.a53_counters(srs)
     a = acc[(acc.band == band) & (acc.target == target) & (acc.srs == srs) & (acc.n == side)
             & (acc.kind == "fixed") & (acc.r == 1) & (acc.nue == 10)]  # fmt: skip
     a = a.assign(regime=a.regime.astype(int), t=a.t.astype(int))
@@ -130,34 +99,27 @@ def build_table(
         o = md.predict_overheads(p, k)
         res = cost(k)
         form = "explicit" if k.explicit else "factored"
-        for regime in (1, 2):
-            # engine cycles per drop and sector, per t (memoized over the sector populations)
+        for regime, eig, lanes in itertools.product((1, 2), EIG, LANES):
             memo: dict = {}
-            per_drop = []
+            t_drop = []
             for sectors in drops:
                 for pop in sectors:
                     if pop not in memo:
-                        memo[pop] = _sector_cycles(k, o, pop[0], pop[1], regime, delta)
+                        memo[pop] = tm.sector_cycles(
+                            k, o, pop[0], pop[1], regime, eig, delta, lanes
+                        )
                 cyc = np.array([memo[pop] for pop in sectors])
-                pl = np.array(
-                    [no * tm.pl_eig_cycles(k, o, nmax, 1) for _, no in sectors]
-                )
+                eng = cyc[:, :1] + cyc[:, 1:] * T_ALL[None, :]
                 n_ue = sum(no for _, no in sectors)
-                per_drop.append((cyc, pl, n_ue))
-            for units, eig in itertools.product(UNITS, EIG):
-                t_drop = []
-                for cyc, pl, n_ue in per_drop:
-                    eng = cyc[:, :1] + cyc[:, 1:] * T_ALL[None, :]
-                    if eig == "pl":
-                        eng = eng + pl[:, None]
-                    eng_s = _assign(eng, units) * tm.CLOCK_NS * 1e-9
-                    a53_s = (
-                        math.ceil(n_ue / tm.A53_CORES)
-                        * tm.a53_ue_cycles(nmax, 1, eig)
-                        / tm.A53_HZ
-                    )
-                    t_drop.append(eng_s + a53_s)
-                t90 = np.percentile(np.array(t_drop), 90, axis=0) * 1e3
+                a53_s = (
+                    math.ceil(n_ue / tm.A53_CORES)
+                    * tm.a53_ue_cycles(nmax, 1, eig, counters) / tm.A53_HZ
+                )  # fmt: skip
+                t_drop.append(
+                    [tm.assign(eng, u) * tm.CLOCK_NS * 1e-9 + a53_s for u in UNITS]
+                )
+            t90 = np.percentile(np.array(t_drop), 90, axis=0) * 1e3  # (units, t)
+            for ui, units in enumerate(UNITS):
                 for t in T_ALL:
                     key = (f"W{k.W}g1", form, regime, int(t))
                     if key not in a.index:
@@ -166,8 +128,9 @@ def build_table(
                     r = {
                         "band": band, "target": target, "srs": srs, "side": side, "form": form,
                         "R": k.R, "C": k.C, "W": k.W, "grouping": "per_ue" if k.mmax == 8 else "joint",
-                        "units": units, "eig": eig, "regime": regime, "t": int(t),
-                        "loss_med": lm, "loss_p90": lp, "sinr_med": sinr, "time_p90_ms": float(t90[t - 1]),
+                        "units": units, "eig": eig, "L": lanes, "regime": regime, "t": int(t),
+                        "loss_med": lm, "loss_p90": lp, "sinr_med": sinr,
+                        "time_p90_ms": float(t90[ui, t - 1]),
                         "ddr_q": bool(k.explicit and nmax > sp.EXPLICIT_NMAX),
                     }  # fmt: skip
                     for rs in ("DSP", "LUT", "FF", "BRAM_18K"):
@@ -197,7 +160,7 @@ def decisions(df: pd.DataFrame) -> pd.DataFrame:
             if len(ok):
                 best = ok.loc[ok[col].idxmin()]
                 rec.update({c: best[c] for c in ("form", "R", "C", "W", "grouping", "units", "eig",
-                                                 "regime", "t", "loss_med", "loss_p90",
+                                                 "L", "regime", "t", "loss_med", "loss_p90",
                                                  "time_p90_ms", "max_frac")})  # fmt: skip
                 rec["cost_value"] = best[col]
             out.append(rec)

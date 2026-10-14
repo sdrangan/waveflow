@@ -97,13 +97,38 @@ def test_time_model_counts_jobs_regimes_and_units():
     assert got3 == pytest.approx(
         (want_s0 + 4 * tm.pl_eig_cycles(k, o, 64, 1)) * 4e-9 + a53, rel=1e-12
     )
-    # regime 2: N_rx = 64 columns per sector with own UEs = 4 jobs each
+    # regime 2: N_rx = 64 columns per sector with own UEs = 4 jobs each, plus A_i = X_sym H_i
     r2 = tm.update_time_s(k, o, tm.Run(3, 2, 1, "a53"), sectors, 0.0)
     jobs = md.job_cycles_rtl(k, o, 64, 160, 16, 3, True, 0) + 3 * md.job_cycles_rtl(
         k, o, 64, 160, 16, 3, False, 0
     )
+    a_i = 6 * tm.regime2_a_cycles(k, o, 64)
     a53_full = 2 * tm.a53_ue_cycles(64, 1, "a53") / tm.A53_HZ
-    assert r2 == pytest.approx(2 * jobs * 4e-9 + a53_full, rel=1e-12)
+    assert r2 == pytest.approx((2 * jobs + a_i) * 4e-9 + a53_full, rel=1e-12)
+    # I/O at 4 values per beat: only the stream terms shrink
+    l4 = tm.update_time_s(k, o, run, sectors, 0.0, L=4)
+    io = (
+        tm.io_cycles(64, 160, 16, True)
+        + tm.io_cycles(64, 160, 16, False)
+        + tm.io_cycles(64, 160, 16, True)
+    )
+    io4 = sum(-(-tm.io_cycles(64, 160, 16, lh) // 4) for lh in (True, False, True))
+    assert got - l4 == pytest.approx((io - io4) * 4e-9, rel=1e-9)
+
+
+def test_time_model_pads_ragged_sectors_to_the_tile():
+    """Columns and right-hand sides are padded to R and C: 7 connected UEs (56 columns) on R = 16
+    cost what 64 do; a build too narrow for the sector is refused."""
+    from examples.ltbf_cg.hw import space as sp
+    from examples.ltbf_cg.hw import timing as tm
+
+    o = _flat_overheads()
+    k = sp.Knobs(False, 64, 64, 16, 16, 16, 16)
+    assert tm.sector_cycles(k, o, 7, 1, 1, "a53", 0.0) == tm.sector_cycles(
+        k, o, 8, 2, 1, "a53", 0.0
+    )
+    with pytest.raises(ValueError):
+        tm.sector_cycles(k, o, 9, 1, 1, "a53", 0.0)
 
 
 def test_time_model_rtl_correction_is_per_tile():
@@ -118,3 +143,43 @@ def test_time_model_rtl_correction_is_per_tile():
         a = md.job_cycles(k, o, 64, 64, 8, 4, True)
         b = md.job_cycles_rtl(k, o, 64, 64, 8, 4, True, 3.0)
         assert a - b == pytest.approx(3.0 * md.product_tiles(k, 64, 64, 8, 4, True))
+
+
+@pytest.mark.skipif(not hc.HLS_INCLUDE.is_dir(), reason="needs the Vitis HLS headers")
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"nmax": 64, "cmax": 64, "mmax": 16, "R": 2, "C": 16},  # per-UE jobs of 8 < C
+        {
+            "nmax": 64,
+            "cmax": 64,
+            "mmax": 16,
+            "R": 16,
+            "C": 16,
+            "cols_run": 56,
+        },  # 56 % R != 0
+    ],
+    ids=["m-below-C", "cols-ragged"],
+)
+def test_ragged_sizes_are_padded_exactly(knobs, tmp_path):
+    """M3-M4 review B2: the host pads H's columns to R and B's to C with zeros (exact); the body
+    and pysim then agree with the model on every word, the padding columns' X included.
+    """
+    s = eg.LtbfSystem(**knobs)
+    s.run()
+    assert hc.host_check(eg.LtbfSystem(**knobs), tmp_path) == 0
+
+
+def test_pysim_refuses_unpadded_sizes():
+    import numpy as np
+
+    s = eg.LtbfSystem(nmax=64, cmax=64, mmax=16, R=2, C=16)
+    f = eg.hw_formats(16)
+    job = s.jobs()[1]  # 8 columns
+    assert job.b.shape[1] == 8
+    padded = eg.job_words(job, f, 2, 16)
+    assert eg.LtbfCmd().__class__ is eg.LtbfCmd and len(padded) == 2
+    assert padded[-1].size == 64 * 16  # B padded to 16 columns
+    assert np.all(
+        np.asarray(eg.unpack_words(padded[-1], f.cg.B.W)[0]).reshape(64, 16)[:, 8:] == 0
+    )

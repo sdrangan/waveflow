@@ -34,32 +34,23 @@ from examples.ltbf_cg.hw import timing as tm
 SIDE = {64: 8, 256: 16, 1024: 32}
 
 
-def _times(k, o, regime, units, eig, drops, delta) -> np.ndarray:
+def _times(k, o, regime, units, eig, drops, delta, counters) -> np.ndarray:
     """p90 over drops of the update time (ms), per t."""
     memo: dict = {}
     vals = []
     for sectors in drops:
-        cyc = []
         for pop in sectors:
             if pop not in memo:
-                memo[pop] = dse._sector_cycles(k, o, pop[0], pop[1], regime, delta)
-            c0, c1 = memo[pop]
-            cyc.append(c0 + c1 * dse.T_ALL)
-        eng = np.array(cyc)
+                memo[pop] = tm.sector_cycles(k, o, pop[0], pop[1], regime, eig, delta)
+        cyc = np.array([memo[pop] for pop in sectors])
+        eng = cyc[:, :1] + cyc[:, 1:] * dse.T_ALL[None, :]
         n_ue = sum(no for _, no in sectors)
-        if eig == "pl":
-            eng = (
-                eng
-                + np.array(
-                    [no * tm.pl_eig_cycles(k, o, k.nmax, 1) for _, no in sectors]
-                )[:, None]
-            )
         a53 = (
             math.ceil(n_ue / tm.A53_CORES)
-            * tm.a53_ue_cycles(k.nmax, 1, eig)
+            * tm.a53_ue_cycles(k.nmax, 1, eig, counters)
             / tm.A53_HZ
         )
-        vals.append(dse._assign(eng, units) * tm.CLOCK_NS * 1e-9 + a53)
+        vals.append(tm.assign(eng, units) * tm.CLOCK_NS * 1e-9 + a53)
     return np.percentile(np.array(vals), 90, axis=0) * 1e3
 
 
@@ -76,6 +67,7 @@ def table(
         for k, rec in brute:
             side = SIDE[k.nmax]
             drops = tm.sector_counts(scen["band"], scen["target"], k.nmax)
+            counters = tm.a53_counters(scen["srs"])
             a = acc[(acc.band == scen["band"]) & (acc.target == scen["target"]) & (acc.srs == scen["srs"])
                     & (acc.n == side) & (acc.kind == "fixed") & (acc.r == 1) & (acc.nue == 10)]  # fmt: skip
             a = a.assign(regime=a.regime.astype(int), t=a.t.astype(int)).set_index(
@@ -91,8 +83,8 @@ def table(
             for regime, units in itertools.product(
                 rule["runtime_axes"]["regime"], rule["runtime_axes"]["units"]
             ):
-                tp = _times(k, o_pred, regime, units, eig, drops, delta)
-                tmeas = _times(k, o_meas, regime, units, eig, drops, delta)
+                tp = _times(k, o_pred, regime, units, eig, drops, delta, counters)
+                tmeas = _times(k, o_meas, regime, units, eig, drops, delta, counters)
                 for t in rule["runtime_axes"]["t"]:
                     key = (f"W{k.W}g1", form, regime, t)
                     if key not in a.index:

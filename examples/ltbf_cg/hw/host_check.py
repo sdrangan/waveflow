@@ -49,7 +49,7 @@ def host_check(system: eg.LtbfSystem, work: Path) -> int:
     jobs = system.jobs()
     lines = [str(len(jobs))]
     for job in jobs:
-        words = np.concatenate(eg.job_words(job, f))
+        words = np.concatenate(eg.job_words(job, f, int(system.R), int(system.C)))
         lines.append(str(len(words)))
         lines += [str(int(w)) for w in words]
     (work / "in.txt").write_text("\n".join(lines) + "\n")

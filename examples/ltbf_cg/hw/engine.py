@@ -76,7 +76,9 @@ class LtbfCmd(DataList):
 SCHEMA_CLASSES = [LtbfCmd]
 
 #: The register ranges the hardware formats are built for: drop 1 at 32 x 32, 100 MHz, nominal
-#: SRS, both regimes (step 2.3's profile, rounded up) -- generous for every array.
+#: SRS, both regimes (step 2.3's profile, rounded up).  A build's cost depends on the word width
+#: alone (the integer bits move no resource), so the accuracy sweep scores per-scenario formats of
+#: the same widths; a scenario's ranges can exceed these (up to 3.7x, M3-M4 review).
 CANON_RANGES: dict[str, float] = {
     "H": 0.4, "Q": 4.1, "B": 1.2, "P": 6.0, "R": 1.2, "S": 33.0, "X": 0.9, "T": 51.0,
     "ps": 4300.0, "rz": 150.0, "alpha": 0.37, "beta": 4.4,
@@ -157,6 +159,14 @@ class LtbfEngine(FreeRunMod):
         f = self.formats
         cmd = yield from self.s_in.get_schema(LtbfCmd)
         n, cols, m, nit = int(cmd.n_rx), int(cmd.cols), int(cmd.m), int(cmd.nit)
+        r, c = int(self.R), int(self.C)
+        if n % r or n % c or m % c or (int(cmd.load_h) and cols % r):
+            # the body tiles n, cols and m exactly: the host pads (pad_job), never the engine
+            raise ValueError(
+                f"sizes n={n} cols={cols} m={m} are not multiples of R={r}, C={c}"
+            )
+        if n > int(self.nmax) or m > int(self.mmax) or cols > int(self.cmax):
+            raise ValueError(f"sizes n={n} cols={cols} m={m} exceed the build's maxima")
         if int(cmd.load_h):
             words = yield from self.s_in.get(nwords_max=n * cols)
             hr, hi = unpack_words(words, f.H.W)
@@ -221,8 +231,23 @@ def scenario_jobs(
     return jobs
 
 
-def job_words(job: Job, f: lf.LtbfFormats) -> list[np.ndarray]:
-    """The bursts one job puts on ``s_in``: the command, H (if any), B."""
+def pad_job(job: Job, R: int, C: int) -> Job:
+    """Zero columns so H has a multiple of R columns and B a multiple of C: exact (a zero column of
+    H adds nothing to any product; a zero column of B takes both zero guards and returns X = 0).
+    """
+
+    def pad(x: np.ndarray, q: int) -> np.ndarray:
+        extra = -x.shape[1] % q
+        return (
+            np.hstack([x, np.zeros((x.shape[0], extra), dtype=x.dtype)]) if extra else x
+        )
+
+    return Job(None if job.h is None else pad(job.h, R), pad(job.b, C), job.nit)
+
+
+def job_words(job: Job, f: lf.LtbfFormats, R: int = 1, C: int = 1) -> list[np.ndarray]:
+    """The bursts one job puts on ``s_in``: the command, H (if any), B -- padded to the tile."""
+    job = pad_job(job, R, C)
     n, m = job.b.shape
     cols = 0 if job.h is None else job.h.shape[1]
     cmd = LtbfCmd(n_rx=n, cols=cols, m=m, nit=job.nit, load_h=int(job.h is not None))
@@ -233,10 +258,12 @@ def job_words(job: Job, f: lf.LtbfFormats) -> list[np.ndarray]:
     return out
 
 
-def golden(jobs: list[Job], f: lf.LtbfFormats, explicit: bool) -> list[np.ndarray]:
-    """The X words each job must produce (the model, H kept across jobs)."""
+def golden(
+    jobs: list[Job], f: lf.LtbfFormats, explicit: bool, R: int = 1, C: int = 1
+) -> list[np.ndarray]:
+    """The X words each job must produce (the model on the padded job, H kept across jobs)."""
     out, h = [], None
-    for job in jobs:
+    for job in (pad_job(j, R, C) for j in jobs):
         if job.h is not None:
             h = lf.to_stored(job.h, f.H)
         br, bi = lf.to_stored(job.b, f.cg.B)
@@ -341,11 +368,21 @@ class LtbfSystem(GraphSystem):
 
     def write_inputs(self, root) -> None:
         f = hw_formats(int(self.W))
-        bursts = [w for job in self.jobs() for w in job_words(job, f)]
+        bursts = [
+            w
+            for job in self.jobs()
+            for w in job_words(job, f, int(self.R), int(self.C))
+        ]
         write_burst_bundle(bursts, Path(root) / "vectors" / "s_in")
 
     def expected(self) -> list[np.ndarray]:
-        return golden(self.jobs(), hw_formats(int(self.W)), bool(self.explicit))
+        return golden(
+            self.jobs(),
+            hw_formats(int(self.W)),
+            bool(self.explicit),
+            int(self.R),
+            int(self.C),
+        )
 
     def check(self) -> list[np.ndarray]:
         """The sink's words against the model, job by job."""

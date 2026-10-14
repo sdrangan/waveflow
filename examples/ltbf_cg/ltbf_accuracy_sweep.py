@@ -14,9 +14,10 @@ fixed-point configuration (format x ``Q`` form x regime) for every ``t <= 10`` a
 per-UE losses ``exact - approx`` (dB, signed) and their median and percentiles per configuration
 in ``paper_data/accuracy_losses.csv``.
 
-The formats are static per (band, array, UEs per sector): :func:`~examples.ltbf_cg.ltbf_fixed.formats_for`
-over a range profile of the profile drops (every target, SRS setting and regime), so the other
-drops are held out from it and may saturate, as hardware built for a profile would.
+The formats are static per (band, target, SRS, array, UEs per sector, regime):
+:func:`~examples.ltbf_cg.ltbf_fixed.formats_for` over a range profile of the profile drops
+(1-10; pooled groups 1-5 for N_UE > 10).  The merge scores the other drops only, which are held
+out from the profile and may saturate, as hardware built for a profile would.
 
 Determinism
 -----------
@@ -82,7 +83,8 @@ FORMATS = tuple((w, 1) for w in (10, 12, 14, 16, 18, 20, 24)) + (
 FORMS = ("factored", "explicit")
 REGIMES = (1, 2)
 #: Regime 2 at 32x32 (B = I has 1024 columns, ~20x regime 1's cost) runs on these drops and formats.
-R2_N32_DROPS = tuple(range(1, 11))
+#: (drops 11-20, held out from the formats' profile: M3-M4 review)
+R2_N32_DROPS = tuple(range(11, 21))
 R2_N32_FORMATS = ((12, 1), (16, 1), (24, 1))
 #: The N_UE sweep (16x16, 100 MHz, [-6, 3] dB, nominal SRS): UEs per sector, groups of pooled drops.
 NUE_VALUES = (4, 10, 20, 40)
@@ -399,10 +401,18 @@ def _stats(loss: np.ndarray, sinr: np.ndarray) -> list[str]:
     ]  # fmt: skip
 
 
-def merge(out: Path, todo: list[Job]) -> Path:
-    """Per scenario and configuration, the per-UE loss statistics over the jobs' UEs."""
+def profile_group(j: Job) -> bool:
+    """Is the job's drop (or pooled group) one the formats were profiled on?"""
+    return j.group in _profile_groups(j.nue)
+
+
+def merge(out: Path, todo: list[Job], exclude_profile: bool = True) -> Path:
+    """Per scenario and configuration, the per-UE loss statistics over the jobs' UEs -- the drops
+    held out from the formats' profile only, unless ``exclude_profile`` is off."""
     scen: dict[tuple, list[Job]] = {}
     for j in todo:
+        if exclude_profile and profile_group(j):
+            continue
         scen.setdefault((j.band, j.target, j.srs, j.n, j.nue), []).append(j)
     rows = []
     for key in sorted(scen, key=lambda k: (BANDS.index(k[0]), k[1], k[2], k[3], k[4])):
