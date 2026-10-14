@@ -1,131 +1,197 @@
-# Plan: a unit harness per device -- verification, timing and calibration, one component at a time
+# Plan: a unit harness per test subsystem -- verification, timing and calibration, one module at a time
 
-**Status:** drafted 2026-10-12; **revised 2026-10-13**, after `plans/ip_packaging_routes.md` was
-completed (PRs #252, #259, #260).  **Stage 0 done 2026-10-13** (no code): the findings below
-([Stage 0 findings](#stage-0-findings-2026-10-13)) map every port of markov's three devices and
-mm_fir's device (both topologies) to a model, name the unit hosts and how a harness is stated, and
-list the decisions Stage 1 needs -- D9 (the harness boundary) among them, still proposed, not taken.
-**PAUSED 2026-10-14** for `plans/pipelined_ops.md`: the discussion after Stage 0 found that a harness
-can only calibrate a module whose timing is stated between events at its ports, and that a module
-cannot state it yet (`get_pipelined` / `write_pipelined` compute times that never happened).  This
-plan resumes after that plan's Stage 5 (the fit generated from poly's declarations: done 2026-10-14) once the end-to-end gap it found -- undeclared time in poly's transaction -- is closed.  Also from that discussion, to
-fold in when it resumes: the unit generalizes from "device" to any **test subsystem** (a subgraph whose
-function and timing are observable at its boundary; hierarchical; calibrated at the leaves, composed
-and verified above), independent of how it is packaged; and every child's boundary is observed in
-place by probes on its ports, so only a module that needs *control* (sweeps, hostile policies,
-development before its parent) needs a harness of its own.  Part A is staged work; Part B is a sketch that connects
-it to `plans/multi_agent_flows.md`.
-
-**What the prerequisite plan now provides** (all merged):
-
-- **the device as a module of its own**: `SystemTopSpec.subs`, `render_sub_verilog(name)`,
-  `sources_of(name)` -- the device's Verilog, its leaves and its kernels' csynth files;
-- **the device as an IP** (`waveflow/build/system_ip.py`, step `ip_package`): its boundary is AXI4
-  slave groups (`mi<k>_axi`, its views), AXI4 master groups (`si<k>_axi`, its bus writers) and
-  interrupt lines -- read back from `component.xml` (`PackagedIp.interfaces`);
-- **the device's resources** (`waveflow/build/system_ooc.py`, `system_synth --route per_device`): an
-  out-of-context synthesis per device, cached by content -- D6's record (records not yet filed into
-  the store: `OocLink` only);
-- **tie-offs in identity** (`RtlInstance.ties`, `identify_rtl(..., ties)`): a leaf's configuration
-  includes what the system ties off;
-- **a block design and the routes measured** (`system_bd.py`; `docs/examples/markov/synth.md#routes`):
-  not needed here, but the device boundary they use is the one D9 proposes.
-
-Also landed since the draft: `HwSystem` / `GraphSystem` (`waveflow/hw/hw_system.py`; a system class
-states its graph, its cut and its inputs -- markov is still a plain `HwSystem`, mm_fir too), the
-system flow as the only kernel flow (`plans/system_model.md` S3f), and the routed credit stream's
-writers placed in the device of the kernel they act for.
+**Status:** drafted 2026-10-12; revised 2026-10-13 (Stage 0); paused 2026-10-14 for
+`plans/pipelined_ops.md`, which gave modules a way to state their timing ([timed
+phases](../docs/guide/timing_model/timed_phases.md), merged PRs #274, #275).  **Revised again
+2026-10-14, with the user, before any code:** the unit is a **test subsystem**, not only a device;
+**D9 is decided**; the first vehicle is a **free-running poly** -- first as a stream-only kernel, then
+as a memory-mapped device -- and markov follows as the first multi-kernel system.  That example also
+becomes the docs' first example, the start of retiring the host-activated examples.  The original Stage
+0 (markov and mm_fir, port by port) is kept as a record at the end: it is the inventory the markov stage
+needs.
 
 ## Motivation
 
-Calibrating a module's timing today means running the **whole system** and extracting the module's
-behaviour from a trace: `AddVcdTopStep` dumps a VCD, `TraceManifestStep` names the nets, and
-`waveflow/utils/trace.py` binds firings to them (the memcpy arc, `project-memcpy-timing-instrumentation`).
+Calibrating a module's timing used to mean running the **whole system** and extracting the module's
+behaviour from a trace (the memcpy arc: `AddVcdTopStep`, `TraceManifestStep`, `waveflow/utils/trace.py`).
 It works, but:
 
-- **the system must be arranged so the right signals arrive at the right time** -- the module's timing is
+- **the system must be arranged so the right signals arrive at the right time** -- a module's timing is
   only as measurable as the scenario around it makes it;
 - **every calibration point is a system run**, so a module's parameter sweep pays for its neighbours;
 - **a module cannot be developed alone**: no place to verify and calibrate it before the system exists.
 
-The better design was always one harness per module: functional verification, timing and resources,
-for that module alone.  It was not built because **Vitis cosim cannot unit-test a free-running task with
-an `m_axi` port** (`ap_ctrl_none` with a non-stream port is refused; `ap_ctrl_hs` cannot drive a detached
-task -- `reference-hls-task-no-maxi`).  Nothing was wrong with the idea; there was nowhere to run it.
+The better design was always one harness per module: function, timing and resources, for that module
+alone.  It was not built because Vitis cosim cannot unit-test a free-running task with an `m_axi` port
+(`reference-hls-task-no-maxi`).  That wall is gone -- XSI runs free-running modules with `m_axi` ports
+through the framework's bus models, the cut is a build choice (`add_system_steps(..., inside=...)`),
+re-runs are nearly free (`plans/incremental_xsi.md`), and resources are measured per device already
+(`system_ooc.synth_ooc_link`).
 
-That wall is gone:
+And since `plans/pipelined_ops.md` a module **states its own timing** in a form a harness can measure:
+timed phases, spans between the first and last beats of transfers at its own ports, calibrated from a
+trace of those ports with the pairing and the features supplied by pysim (`waveflow/calib/phases.py`).
+What was missing is the harness: a way to run one module alone, in pysim and at RTL, on a workload that
+produces the features, and to observe the ports its phases name.  Poly's first calibration had to be a
+hand-written wrapper around its own Vitis flow (`examples/stream_inband/poly_calibrate.py`); the harness
+is what makes such wrappers unnecessary.
 
-- **XSI runs free-running modules with `m_axi` ports**, through the framework's bus models.  The
-  `mem_r_stream` (158) and `mem_w_stream` (176) gates are already unit harnesses, for two framework blocks.
-- **The cut is a build choice.**  `add_system_steps(..., inside=...)` overrides which modules are RTL;
-  outside it, a module is its `bfm_model()` and an edge with both endpoints outside is its
-  `xsi_model()` (`waveflow/hw/interface.py`, `project-design-cut`, `project-behavioral-edges`).  A
-  unit harness is a system with the cut drawn around one device.
-- **Re-runs are nearly free** (`plans/incremental_xsi.md`, done): a no-change build 6 ms, a workload point
-  ~0.15 s plus its simulation, scenario sizes from `run.json`, parallel runs on one snapshot safe.
-- **The calibration doctrine asks for it.**  Two-level calibration (`project-two-level-calibration`):
-  characterize the bus once per platform, fit only each kernel's own compute, contention-free.  memcpy
-  showed the loaded system then comes out right with no end-to-end fitting (0.0%), because back-pressure
-  emerges from the FIFO depths.
-- **Resources are per device already** (`system_ooc.synth_ooc_link`, merged): a device's
-  out-of-context synthesis *is* its resource measurement, cached by content.
+## What a test subsystem is
 
-## What a device harness is
+A **test subsystem** is a subgraph of a system that admits a harness (the user's definition,
+2026-10-14).  It must satisfy:
 
-The unit is the **device** of `ip_packaging_routes.md`: a kernel, its memory-mapped views, its AXI front
-and the bus writers that act for it.  (A framework leaf -- a mem stream, a queue -- can have one too; the
-existing gates are examples.)  For one device, the harness gives:
+1. **Its function and its timing are observable at its boundary** -- the events of its timed phases are
+   on its own ports.
+2. **It is hierarchical** -- a test subsystem is made of test subsystems.
+3. **Its resources and timing are either calibrated from its boundary and its synthesis reports (a
+   leaf), or composed from its children's (a composite)** -- leaves are calibrated, composites are
+   composed and then *verified* by property 1, never fitted.
+
+It is independent of packaging: a kernel is a test subsystem but rarely an IP; a device is both.  The
+crossbar is a leaf of its own, calibrated once per configuration and composed into its parents.  A
+child's boundary is observed **in place** whenever its parent runs (its declared events are logged at
+any level); only a test subsystem that needs **control** -- a workload sweep, a hostile environment,
+development before its parent exists -- needs a harness of its own.
+
+For one test subsystem, the harness gives:
 
 | | how |
 | --- | --- |
-| **function** | its golden model and scenarios, bit-exact in pysim and at RTL (XSI of the device sub-top) |
-| **timing** | cycles per job, per firing, measured at the device's ports from the bus models' timestamps -- no VCD, no system arrangement |
-| **resources** | read, not measured: the device's route-B out-of-context record, under the same identity |
-| **calibration** | sweeps over workloads (`run.json`) and device parameters; the kernel's timing model fitted; records filed under the device's identity |
+| **function** | its golden model and scenarios, bit-exact in pysim and at RTL (XSI) |
+| **timing** | its timed phases, measured at its own ports (RTL transfers paired with pysim's records), fitted, filed under its identity |
+| **resources** | read, not measured: a leaf's csynth report or a device's out-of-context record, under the same identity |
 | **robustness** | hostile environments on demand: a neighbour that stalls, starves credit, or answers late |
 
 ## Decisions
 
-- **D1 -- the unit is the device**, as `ip_packaging_routes.md` decided, so one identity keys its
-  verification, its timing records, its resource record and its IP.
-- **D2 -- a harness is a cut, not a new kind of testbench.**  Build the device's harness by drawing the cut
-  around it in the system it belongs to (or in a minimal system that holds only it), and generate the
-  rest with the machinery that already lowers a system: the inventory, `system_top_spec`, the XSI
-  workspace, the host's C++ twin.  No second testbench framework.
-- **D3 -- generic stand-ins for cut-away neighbours.**  `bfm_model()` is hand-written per module, by
-  design ("declared, never derived").  A unit harness should not require a hand-written model of every
-  neighbour.  The framework provides **generic stand-ins at the bus level**: a remote queue that accepts
-  a writer's bursts and returns credit by a policy; a memory; an interrupt sink.  A neighbour with its
-  own `bfm_model()` may be used instead, when someone has written one.
+- **D1 -- the unit is a test subsystem** (was: the device).  A device of `ip_packaging_routes.md` is one
+  level of the hierarchy; the kernel inside it is the leaf below, the system the composite above.  One
+  identity keys a test subsystem's verification, timing records and resource record.
+- **D2 -- a harness is a cut, not a new kind of testbench.**  Build it by drawing the cut around the test
+  subsystem in a system that holds it (often a minimal one), and generate the rest with the machinery
+  that already lowers a system: `system_top_spec`, the XSI workspace, the host's C++ twin.  No second
+  testbench framework.
+- **D3 -- generic stand-ins for cut-away neighbours.**  A unit harness should not need a hand-written
+  model of every neighbour.  The framework provides generic stand-ins: stream drivers and sinks (exist),
+  a remote queue that accepts a writer's bursts and returns credit by a policy, a memory, an interrupt
+  sink.  A neighbour's own `bfm_model()` may be used instead.
 - **D4 -- the environment is a parameter.**  A stand-in's policy (always ready, a fixed latency, a stall
-  pattern, credit starved) is part of the scenario, written in `run.json`, so one compiled harness serves
-  calibration (contention-free) and robustness (hostile) alike.  The baseline blind-test agent's
-  95%-stall test found a Vitis bug; this makes that test routine.
-- **D5 -- timing is measured at the ports.**  Bus models already timestamp transactions (`cycles.bin`
-  per stream).  A firing's start and end come from the device's own port traffic, so no internal net,
-  manifest or VCD is required.  The trace path stays for what ports cannot show (an internal FIFO's
-  occupancy).
-- **D6 -- the harness does not re-measure resources.**  It reads the device's route-B record.  One
-  measurement, one source; a harness that synthesized would duplicate route B and drift from it.
-- **D7 -- records under identity, library first.**  Timing records file in the calibration store keyed by
-  the device's identity and the workload's features, beside the resource record.  The `mcp_fir.md`
-  commitments hold: failures are rows, a measurement is content-addressed (a repeat is a cache hit), cost
-  is known before the call (`waveflow.events`), batches go through `SweepRunner`.
-- **D9 (proposed 2026-10-13, not yet taken) -- the harness boundary is the device's IP boundary.**
-  The harness top is the device's sub-top itself (`render_sub_verilog`): its AXI4 slave group(s),
-  master group(s) and interrupt lines, exactly the ports its IP has.  No crossbar in the harness's
-  RTL: the testbench decodes addresses in a small C++ router to the host and the stand-ins.  Then one
-  boundary serves the IP, the per-device synthesis, the harness and a sub-agent's brief, and the
-  timing measured at the ports (D5) is the device's own, with no crossbar latency in it.  The
-  alternative -- keep the crossbar in the harness and turn each slot whose neighbour is outside the
-  cut into a top port -- reuses today's top-port kinds (`host_axi`, `maxi_ext`) and the crossbar RTL,
-  but puts the crossbar's latency inside every unit measurement.
-- **D8 -- the composition check is part of the plan, not an afterthought.**  Unit-calibrated devices must
-  reproduce the system: timing through the system's pysim against its XSI run, with no system-level
-  fitting; resources through route B's sum plus link term.  If they do not, the decomposition is wrong,
-  and that is the finding.
+  pattern, credit starved) is part of the scenario (`run.json`), so one compiled harness serves
+  calibration (contention-free) and robustness (hostile) alike.
+- **D5 -- timing is measured at the ports, as declared phases.**  A test subsystem's timing is its timed
+  phases; their events are its ports' first and last beats; the RTL side reads them from the harness's
+  port trace or its bus models' timestamps, pysim logs them itself.  No internal net, no manifest.  (Was:
+  "cycles per firing from port timestamps" -- the phases are what made that precise.)
+- **D6 -- the harness does not re-measure resources.**  It reads the record a leaf's csynth or a
+  device's out-of-context synthesis already filed.
+- **D7 -- records under identity, library first.**  Fitted phases file in the calibration store under the
+  test subsystem's identity; a measurement is content-addressed (a repeat is a cache hit); failures are
+  rows; batches go through `SweepRunner`.
+- **D8 -- the composition check is part of the plan.**  A composite's pysim, run on its children's
+  calibrated phases with no fitting of its own, must reproduce its RTL run within tolerance; when it
+  does not, the difference is undeclared time or a wrong decomposition, and that is the finding (poly
+  showed both kinds: `plans/pipelined_ops.md`, the Stages 2-5 record).
+- **D9 -- DECIDED 2026-10-14: a harness's boundary is the test subsystem's own boundary.**  For a
+  device, its sub-top's ports -- its AXI4 slave groups, master groups and interrupt lines, the ports its
+  IP has -- with **no crossbar inside**: the crossbar is a sibling leaf, calibrated on its own and
+  composed by the parent, so a device's measured timing is the device's own.  What this leaves is
+  implementation, from the Stage 0 record: the host bound straight to a device's slave group(s) (today
+  it binds only through a crossbar), a small testbench fan-out for a device with several slave groups,
+  and stand-ins placed at the addresses the device's writers are tied to.
+- **D10 -- calibration is a framework step.**  A harness's calibration is generated from the declared
+  phases (`phases.py`: ports, RTL transfers, pairing, fit) plus **one hand-written hook**: a workload
+  that produces given feature values.  No per-example wrapper like `poly_calibrate.py`; one scenario can
+  carry every feature value (poly's `calib` carries nine lengths), so a calibration is one pass, not an
+  outer loop -- a sweep over *build* parameters is an outer loop, and each point is its own identity.
 
-## Stage 0 findings (2026-10-13)
+## The vehicle: a free-running poly
+
+The first harness is built on a new example (directory to be named; proposed `examples/stream_kernel/`,
+taking `stream_inband`'s name once the host-activated example is retired): **poly's arithmetic as a
+free-running kernel**.
+
+- **The kernel** is a `FreeRunMod` whose firing is one command: the in-band header (with its
+  coefficients), the samples, the response header, the results.  Poly's two timed phases, unchanged:
+  the response after the header (sequential) and the samples-to-results loop (pipelined).  A new
+  hand-written HLS task body: the same arithmetic as `poly_body_impl.tpp`, one command per firing,
+  `ap_ctrl_none`.
+- **Errors without a status register**: the response carries the status -- `tx_id`, an error code (OK,
+  or TLAST came early) and the samples processed -- and the kernel answers what it read and goes on to
+  the next command.  Everything poly reports stays observable on its streams (the command-response
+  pattern, `docs/guide/patterns/command_response.md`).
+- **Two wirings of one kernel**, as markov and mm_fir have: `link="direct"` -- streams to a stream driver
+  and a sink -- and `link="mm"` -- the kernel behind queue views on an AXI-MM slave, driven by a host of
+  two `SwThread`s (a writer and a reader, on interrupts, no polling).
+- **A cross-check, not only a test**: poly's host-activated phases were fitted from Vitis cosim (response
+  4, latency 34, fill `nwords - 1` at 32 bits).  The free-running kernel's, fitted in the harness under
+  XSI, should agree within a cycle or two, and every difference needs a reason (a free-running top has
+  no `ap_start` / `ap_done`).  The first harness is checked against an independent measurement of the
+  same arithmetic.
+
+## Stages
+
+**Stage 1 -- the leaf: free-running poly on streams.**  The example with `link="direct"`: golden,
+kernel (`run_iter` + its HLS task body), its system (`GraphSystem`: a stream driver, the kernel, a sink),
+its build DAG and XSI gate.  The leaf harness: run the kernel alone at RTL with its ports traced (the
+system flow's traced run, `SystemXsiStep(trace=True)`), decode its declared ports' transfers, pair with
+pysim, fit -- through a framework calibration step (D10), the workload hook being "commands of these
+lengths".  Gate: bit-exact in pysim and at XSI on every scenario (errors included); the phases fitted in
+the harness with held-out lengths exact; the fit compared with the host-activated cosim fit, every
+difference explained; no example-specific calibration wrapper.
+
+**Stage 2 -- the device: the same kernel behind AXI-MM.**  `link="mm"`: queue views (command/sample
+queue in, response/result queue out) on one front, a `SwHost` of two threads.  The device harness under
+D9: the device's sub-top as the top, the host bound straight to its slave group, no crossbar.  Gate:
+bit-exact; the device's timing **composed** from the kernel's phases and the views' with no fitting,
+checked against its RTL (D8); then the system run with a crossbar composed from the device and the
+crossbar leaf (`AxiXbarConfig` records), checked against its RTL.
+
+**Stage 3 -- calibration as a step, records under identity.**  The framework calibration step of Stage 1
+generalized: one `XsiSnapshot` per configuration, the workload hook's scenario in `run.json`, the fit
+filed under the test subsystem's identity (D7), a repeated calibration with no change running no
+simulation.  Grid discipline: at least three values a feature, interior points held out.  Gate: a
+repeat is a cache hit; a held-out point within tolerance; the filed record found from the identity alone.
+
+**Stage 4 -- markov: the first multi-kernel system.**  Declare phases on markov's two stream kernels (the
+generator and the chain's core), replacing their hand-fitted per-chunk overheads (7 and 15); calibrate
+each as a leaf; the devices with the stand-ins of the Stage 0 record (the remote queue, the credit loop);
+the composition check against markov's RTL (1870 cycles), with no system-level fitting.  Gate: within the
+existing 5% from composition alone -- or a written account of what the decomposition missed.
+
+**Stage 5 -- robustness.**  Hostile stand-in policies (stall, starved credit, late answers) swept per
+harness; any hang or mismatch is a finding.  Gate: the policies run on every harness; what they find is
+fixed or recorded with a reproducer.
+
+**Stage 6 -- incremental, end to end.**  Change one test subsystem's parameter: only its harness rebuilds,
+only its synthesis re-runs, its parents' estimates update from records.  Gate: the events show no work
+for unchanged subsystems.
+
+**Stage 7 -- docs.**  The free-running poly becomes **the first example in the docs** (the user,
+2026-10-14: the host-activated examples are to be retired over time).  It teaches, in order: the
+command-response protocol, the golden, the kernel and its HLS body, the system flow, timed phases, the
+harness and calibration, then the memory-mapped device.  A guide page on module-level development: test
+subsystems, harnesses, stand-ins and policies, calibrating a leaf, composing and verifying a parent.
+Name steps and link them.
+
+## The host-activated examples
+
+The docs open today with three host-activated examples (`basic_vec`, `regmap`, `stream_inband`).  The
+direction (the user, 2026-10-14) is to retire that flow over time.  This plan's part: the free-running
+poly takes the first place in the docs (Stage 7), and `stream_inband`'s pages point to it.  What becomes
+of `basic_vec` and `regmap` -- moved to a legacy section, or rewritten free-running -- is its own decision,
+not taken here.
+
+## Relationship to the pipelined-ops migration
+
+`plans/pipelined_ops.md` Stage 6 retires `get_pipelined` / `write_pipelined` / `read_pipelined`.  Its users
+are framework blocks with calibrated timing and cycle-exact gates (the mem streams, BRAM, locked memory,
+the RF shot buffers, the SSR FFT), most of them needing memory-mapped, BRAM or stream-of-blocks events.
+That migration runs **after** this plan's Stage 3, one block at a time with the harness: declare the
+block's phases, add the event kind its first user needs, calibrate it in its harness, check its existing
+gate.  The harness is what makes each migration a re-fit rather than a hand-calibrated guess.
+
+## Record: Stage 0 findings (2026-10-13), the markov and mm_fir inventory
 
 **The cut today.**  `inside=` takes kernels and memories, not devices (`SystemTopSpec.from_system(s,
 inside=[s.gen_dev])` raises: "names no csynth'd module").  With markov's generator alone inside
@@ -218,66 +284,15 @@ existing pysim, so the pysim harness needs no new bus model; only its RTL side i
 missing pieces for Stage 1 are then: the host binding of fact 4, the two C++ stand-ins, and the
 cut taking a device whose neighbours are outside (Stage 0's first finding).
 
-**To decide before Stage 1:**
+**Decided since:** D9 (above).  **Still open, for the markov stage:**
 
-- **D9** (the harness boundary): the facts above favour it -- the harness runs the system's own module
-  (fact 1), and the router keeps the system's addresses (facts 2, 3) -- at the cost of fact 4's new
-  binding and, for mm_fir `per_view`, a fan-out.  The alternative keeps fact 4 free but needs a new top
-  port kind (a crossbar MI slot outside the cut, as an AXI4 master group) and measures crossbar latency.
 - **The credit returner**: a thread of the unit host on its bus master (proposed: no arbiter), or an
   autonomous stand-in with a master of its own (closer to the chain's real credit writer, but two
   testbench masters on one slave group need a testbench arbiter).
 - **The chain's feeder input**: the golden's stream, or the gen harness's recording.
 - **Fact 1**: the ID width in the device's identity, or a sub-top independent of it.
 
-## Part A -- the unit harness
-
-**Stage 0 -- inventory of what a device needs.**  For markov's two devices and mm_fir's: every port, and
-the bus model or stand-in that would answer it (existing, or named as missing).  How the cut override
-behaves today with one kernel inside and its neighbours outside -- what fails, and why.  Which host
-programs can drive a device alone (markov's host drives both devices; a unit host drives one).  Written
-down before code.  Gate: each port of the three devices mapped to an existing model or a named
-missing one.
-
-**Stage 1 -- one device, assembled by hand.**  markov's generator device inside the cut (its
-sub-top as the harness top, if D9 is taken), the chain replaced by a stand-in remote queue with
-immediate credit, a minimal host driving `qcmd`.  Function
-bit-exact against the golden model in pysim and at XSI; cycles per job recorded from port timestamps.
-Gate: bit-exact; and the device's per-job timing agrees with the same device's timing traced inside the
-full markov run (the existing VCD path, now `SystemXsiStep(trace=True)`: each kernel's scope dumped,
-`hazards.json`) -- the unit view and the system view of one device must not disagree, once the
-crossbar's latency is accounted for.
-
-**Stage 2 -- generated.**  The harness derived from a device's ports and the stand-ins of D3, for any
-device: markov's generator and chain, mm_fir's device (both topologies).  A stand-in's policy read from
-`run.json` (D4).  Gate: the generated harness for Stage 1's device is equivalent to the hand-assembled
-one; the other devices pass function and record timing.
-
-**Stage 3 -- timing calibration.**  Sweeps over workloads and device parameters on one `XsiSnapshot` per
-device configuration; the kernel's timing model fitted from contention-free runs; records under the
-device's identity.  Held-out interior points as the check, per the grid discipline of
-`project-cycle-model-training` (at least three sizes, no extrapolation).  Gate: held-out points within
-tolerance; a repeated sweep with no change runs no simulation.
-
-**Stage 4 -- the composition check (D8).**  markov and mm_fir's system pysim with unit-calibrated
-parameters against their system XSI runs (1870; 618 / 611 cycles), within the existing 5% and with no
-system-level fitting; resources from route B beside them.  Gate: both systems within tolerance -- or a
-written explanation of what the unit view missed.
-
-**Stage 5 -- robustness.**  Hostile stand-in policies (stall, starved credit, late answers) swept per
-device; any hang or mismatch is a finding.  Gate: the policies run on every device harness; whatever
-they find is either fixed or recorded with a reproducer.
-
-**Stage 6 -- incremental, end to end.**  Change one device's parameter: only that device's harness
-rebuilds, only its route-B synthesis re-runs, the system's estimate updates from records.  A small sweep
-over one device parameter (a queue depth or credit window) as the demonstration, its per-point cost from
-the events.  Gate: the events show no work for unchanged devices.
-
-**Stage 7 -- docs.**  A guide page on module-level development: a device's harness, its stand-ins and
-policies, calibrating one device, the composition check.  markov's docs gain a short section on its two
-devices' harnesses beside the system flow.  Name steps and link them.
-
-## Part B -- the device as an agent boundary (sketch)
+## Part B -- the test subsystem as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:
 
@@ -306,6 +321,8 @@ agents splitting by device.
   trace path still needed?
 - **How hostile is hostile?**  Which stall policies are worth running by default, and at what cost.
 - **Devices with more than one kernel**, if a later grouping produces them.
+- **The free-running example's name** (proposed `stream_kernel`), and what becomes of `basic_vec` and
+  `regmap` when the host-activated flow is retired.
 
 ## Relationship to other plans
 
@@ -314,5 +331,7 @@ agents splitting by device.
 - `plans/incremental_xsi.md` -- `XsiSnapshot`, `run.json`, parallel runs: what makes a sweep cheap.
 - `plans/system_resources.md` -- the inventory and the records the harness reads and writes beside.
 - `plans/paper_cg_dse_vision.md` -- per-block calibration over each block's own parameters is this plan's
-  Stage 3; its composition claim is this plan's Stage 4.
+  Stage 3; its composition claim is D8.
+- `plans/pipelined_ops.md` -- timed phases, the calibration they make generated, and the migration this
+  plan's harness enables (see above).
 - `plans/multi_agent_flows.md`, `plans/mcp_fir.md` -- Part B.
