@@ -46,7 +46,9 @@ def check(drops, arrays, bands, target_name, ranks=(1, 2)):
                         for u, v in ev.exact[r].items():
                             gap[r].append(ev.ins[u] - v)
                             for t in T_SHOW:
-                                loss[(t, r)].append(v - ev.approx[("factored", 1, t, r)][u])
+                                loss[(t, r)].append(
+                                    v - ev.approx[("factored", 1, t, r)][u]
+                                )
                 for r in ranks:
                     row = {
                         "band": band, "n": n, "srs": "noiseless" if srs is None else f"{srs:g}dB",
@@ -55,13 +57,17 @@ def check(drops, arrays, bands, target_name, ranks=(1, 2)):
                     }  # fmt: skip
                     for t in T_SHOW:
                         row[f"median_loss_t{t}_db"] = float(np.median(loss[(t, r)]))
-                        row[f"p90_loss_t{t}_db"] = float(np.percentile(loss[(t, r)], 90))
+                        row[f"p90_loss_t{t}_db"] = float(
+                            np.percentile(loss[(t, r)], 90)
+                        )
                     row["seconds"] = round(time.time() - t0, 1)
                     rows.append(row)
                     print(
                         f"{band:8s} {n:2d}x{n:<2d} {row['srs']:9s} r={r} UEs={row['ues']:3d} "
                         f"MMSE-exact {row['median_mmse_minus_exact_db']:+.3f} dB; median loss "
-                        + " ".join(f"t{t} {row[f'median_loss_t{t}_db']:+.3f}" for t in T_SHOW)
+                        + " ".join(
+                            f"t{t} {row[f'median_loss_t{t}_db']:+.3f}" for t in T_SHOW
+                        )
                         + f"  ({row['seconds']} s)",
                         flush=True,
                     )

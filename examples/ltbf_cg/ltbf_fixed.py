@@ -116,7 +116,8 @@ def merge_ranges(*profiles: dict[str, float]) -> dict[str, float]:
 def int_bits(maxabs: float, guard: int) -> int:
     """Signed integer bits that hold ``+-maxabs``, plus ``guard``.  Negative for a register whose
     values stay below 1/4 (``ap_fixed`` allows ``I < 0``): power control holds the total SNR, so
-    channel entries shrink as ``1/sqrt(N_rx)`` and a floor at 1 would waste bits on large arrays."""
+    channel entries shrink as ``1/sqrt(N_rx)`` and a floor at 1 would waste bits on large arrays.
+    """
     if maxabs <= 0:
         return 1 + int(guard)
     return math.floor(math.log2(maxabs)) + 2 + int(guard)
