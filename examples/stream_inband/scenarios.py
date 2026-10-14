@@ -41,6 +41,12 @@ except ModuleNotFoundError:  # run from inside the example directory
 from waveflow.hw.arrayutils import write_array
 from waveflow.utils.burst_io import StreamBurst, read_bursts, write_bursts
 
+#: The calibration scenario's command lengths (samples): well over three per fitted feature, the
+#: interior ones held out (:data:`CALIB_HOLDOUT`) -- the grid discipline of a timing fit.  Even, so
+#: every command fills whole words at 64 bits too.
+CALIB_NSAMP = (8, 16, 32, 48, 64, 96, 128, 160, 200)
+CALIB_HOLDOUT = (48, 128)
+
 #: Two coefficient sets, constant term first.
 A = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
 B = np.array([0.5, 0.25, -1.0, 2.0], dtype=np.float32)
@@ -167,6 +173,11 @@ def scenarios() -> dict[str, Scenario]:
         # cosim can record it.  The error-path waveform in the docs is drawn from this run.
         "early_tlast_vcd": Scenario([Tx(71, x(8)), Tx(72, x(10), sent=6)], end=False,
                                     cosim=True),
+        # The phase calibration (plans/pipelined_ops.md): commands of many lengths, back to back,
+        # traced in cosim -- each command one occurrence of each phase at its own nwords.  Last,
+        # so the samples drawn for every scenario above are unchanged.
+        "calib": Scenario([Tx(80 + k, x(n), A if k % 2 else B)
+                           for k, n in enumerate(CALIB_NSAMP)], cosim=True),
     }
 
 

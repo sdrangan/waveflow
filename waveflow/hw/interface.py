@@ -1338,7 +1338,10 @@ class StreamIF(QueuedTransferIF):
         t0, stamp = yield from self._push_to_endpoint(slave, words, tstart=tstart)
         m = self.endpoints['master']
         if m is not None and m.xfer_log is not None:
-            m._log_xfer((slave.nwritten - 1, t0, stamp[2], int(words.shape[0]), stamp[2] > stamp[1]))
+            # A writer's first beat is one cycle after its transfer starts (as the reader's first word
+            # is, with no wire latency): the handshake an RTL trace shows.
+            m._log_xfer((slave.nwritten - 1, t0 + 1.0 / self.clk.freq, stamp[2], int(words.shape[0]),
+                         stamp[2] > stamp[1]))
 
     # -- the non-blocking write ------------------------------------------------------------------
     #
@@ -1803,7 +1806,9 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
             raise RuntimeError(f"'{self.name}': begin() needs a StreamIF, not "
                                f"{type(iface).__name__}")
         ticket = yield from iface._begin_write(iface.endpoints["slave"], raw)
-        return Xfer(self, ticket[5], raw, int(raw.shape[0]), ticket[2], _ticket=ticket)
+        # x.first is the first beat: one cycle after the transfer starts.
+        return Xfer(self, ticket[5], raw, int(raw.shape[0]), ticket[2] + 1.0 / iface.clk.freq,
+                    _ticket=ticket)
 
     @port_write
     def end(self, x: Xfer) -> ProcessGen[None]:

@@ -92,9 +92,9 @@ def _harness(bursts, depth=16, **kw):
 class TestPattern1:
     def test_the_span_is_waited_and_recorded(self):
         """4 words land at 4 (s_in.last); compute_time = 3 + 2*4 = 11; the result's first beat at 15
-        (m_out.first), delivered at 19."""
+        (m_out.first: the write starts a cycle before, at 14), delivered at 18."""
         dut, out = _harness([[1, 2, 3, 4]])
-        assert out == [(19.0, [2, 4, 6, 8])]
+        assert out == [(18.0, [2, 4, 6, 8])]
         (r,) = dut.compute_phase.records
         assert r.start == ("dut_s_in", 0, "last", 4.0)
         assert r.end == ("dut_m_out", 0, "first", 15.0)
@@ -103,18 +103,18 @@ class TestPattern1:
 
     def test_a_buffered_burst_costs_its_beats(self):
         """The second burst is delivered at 8 and sits in the buffer while the module works; asked
-        at 19, it is read at a word a cycle -- its last beat at 22, not 19 -- so its span starts at 22.
+        at 18, it is read at a word a cycle -- its last beat at 21, not 18 -- so its span starts at 21.
         (Decision 6: the declaration says this body is sequential.)"""
         dut, out = _harness([[1, 2, 3, 4], [5, 6, 7, 8]])
         r0, r1 = dut.compute_phase.records
-        assert r1.start == ("dut_s_in", 1, "last", 22.0)
-        assert r1.end[3] == pytest.approx(22.0 + 11.0)
-        assert [t for t, _w in out] == [19.0, 37.0]
+        assert r1.start == ("dut_s_in", 1, "last", 21.0)
+        assert r1.end[3] == pytest.approx(21.0 + 11.0)
+        assert [t for t, _w in out] == [18.0, 35.0]
 
     def test_the_transfer_logs(self):
         dut, _ = _harness([[1, 2, 3, 4]])
         assert dut.s_in.xfer_log == [(0, 1.0, 4.0, 4, False)]
-        assert dut.m_out.xfer_log == [(0, 15.0, 19.0, 4, False)]
+        assert dut.m_out.xfer_log == [(0, 15.0, 18.0, 4, False)]
 
     def test_an_undeclared_endpoint_logs_nothing(self):
         dut, _ = _harness([[1, 2]])

@@ -97,6 +97,9 @@ class PhaseRecord:
     end: tuple | None = None
     actual: float | None = None
     stalled: bool = False
+    #: The shortest duration pysim can realize for this span, in cycles: a write's first beat is a
+    #: cycle after it starts, so a span ending at one is at least 1.  Not exceeding it is not a stall.
+    floor: float = 0.0
 
 
 class TimedPhase:
@@ -227,12 +230,15 @@ class TimedPhase:
         per = self._period(ep)
         dur = self.predict(**feats)[span]
         env = self.owner.env
+        # A write's first beat follows its start by a cycle: a span ending at one starts the write a
+        # cycle before the deadline, so the beat lands on it -- and cannot be shorter than that cycle.
+        lead = per if end.edge == "first" and _is_writer(end.ep) else 0.0
         rec = PhaseRecord(self.name, span, self._occurrences, (ep.name, index, start.edge, t_start),
-                          dict(feats), dur, stalled=bool(stalled))
+                          dict(feats), dur, stalled=bool(stalled), floor=1.0 if lead else 0.0)
         self._occurrences += 1
         self.records.append(rec)
         _open(self.owner).append((rec, end, per))
-        return env.timeout(max(0.0, t_start + dur * per - env.now))
+        return env.timeout(max(0.0, t_start + dur * per - lead - env.now))
 
 
     # -- Pattern 2 -------------------------------------------------------------------------------
@@ -264,7 +270,7 @@ class TimedPhase:
 
         lx = yield from load.ep.begin_read(pending_ok=True)
         y = fn(load.decode(lx.data))
-        yield _until(env, lx.first + t_lat)
+        yield _until(env, lx.first + t_lat - per)          # the store's first beat a cycle later
         sx = yield from store.begin(y)
         # The load ends when its last word is read -- delivered, and a word a cycle after the first --
         # which frees its words' room then, not when the store is done.
@@ -304,6 +310,12 @@ class TimedPhase:
         return lat[0], fill[0]
 
 
+def _is_writer(ep) -> bool:
+    from waveflow.hw.interface import QueuedTransferIFMaster
+
+    return isinstance(ep, QueuedTransferIFMaster)
+
+
 def _until(env, t: float):
     """An event at absolute time *t*, or now if *t* has passed: a wait that takes the max for free."""
     return env.timeout(max(0.0, t - env.now))
@@ -336,7 +348,7 @@ def note_transfer(ep, rec: tuple) -> None:
             t_end = first if end.edge == "first" else last
             r.end = (ep.name, index, end.edge, t_end)
             r.actual = (t_end - r.start[3]) / per
-            r.stalled = r.stalled or bool(stalled) or r.actual > r.predicted + 1e-6
+            r.stalled = r.stalled or bool(stalled) or r.actual > max(r.predicted, r.floor) + 1e-6
         elif r.start[0] != ep.name:
             raise RuntimeError(
                 f"phase {r.phase!r} on '{owner.name}': a transfer on '{ep.name}' ended while span "

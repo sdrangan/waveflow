@@ -292,17 +292,21 @@ class PolyAccel(HostActivated):
         # * the response header after the command header -- sequential (Pattern 1);
         # * the samples -> results loop -- pipelined (Pattern 2): a latency from the first sample
         #   word to the first result word, then the results at the loop's rate.
-        # The durations are the phases' models, in cycles; these numbers only seed them.
+        # The durations are the phases' models, in cycles; these numbers only seed them.  Fitted
+        # parameters, per width, are loaded from calib/w<W>/<phase>/ when they have been filed there
+        # (poly_calibrate.py).
+        cal = Path(__file__).resolve().parent / "calib" / f"w{int(self.in_bw)}"
         self.hdr_phase = TimedPhase(
             "hdr", spans={"resp_time": (self.s_in.last, self.m_out.first)},
-            seed={"resp_time": {"intercept": 0.0}})
+            seed={"resp_time": {"intercept": 0.0}}, calib_dir=cal / "hdr")
         self.samp_phase = TimedPhase(
             "samples", spans={"latency": (self.s_in.first, self.m_out.first),
                               "fill_time": (self.m_out.first, self.m_out.last)},
             features=("nwords",),
             seed={"latency": {"intercept": float(self.proc_latency), "nwords": 0.0},
                   "fill_time": {"intercept": 0.0,
-                                "nwords": float(self.proc_ii) / self.unroll_factor}})
+                                "nwords": float(self.proc_ii) / self.unroll_factor}},
+            calib_dir=cal / "samples")
         for ph in (self.hdr_phase, self.samp_phase):
             self.add_timing_phase(ph)
 

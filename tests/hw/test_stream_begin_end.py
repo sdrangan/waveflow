@@ -249,7 +249,8 @@ class TestBeginEnd:
         assert got == [0, 10, 20]
 
     def test_writer_markers(self):
-        """The writer's first is its transfer's start; its last the delivery."""
+        """The writer's first is its first beat, a cycle after the transfer starts; its last the
+        delivery."""
         env, m, s = _chan(depth=8, latency_init=1)
         seen = {}
 
@@ -262,7 +263,7 @@ class TestBeginEnd:
 
         env.process(writer())
         env.run()
-        assert seen == {"first": 5.0, "last": 10.0}
+        assert seen == {"first": 6.0, "last": 10.0}
 
     def test_last_raises_while_in_flight(self):
         env, m, s = _chan(depth=8)

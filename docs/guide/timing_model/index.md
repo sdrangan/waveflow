@@ -47,6 +47,8 @@ synthesized yet.
   the whole block has loaded (the prediction goes after the load, before the store).
 - [Streaming processing](./streaming.md) — inserting the model in a **streaming** process: the compute
   overlaps the load and/or store, element by element.
+- [Timed phases](./timed_phases.md) — the declared form: phases between events at a module's own ports,
+  a sequential and a pipelined pattern, and a calibration generated from the declarations alone.
 
 Double-buffering (ping-pong overlap) is no longer a separate timing model: it is built by composing
 **load / compute / store as concurrent sub-components over a [stream of blocks](../interface/primitive/sob.md)**,

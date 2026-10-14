@@ -9,6 +9,11 @@ summary: "The streaming timing model: compute overlaps the load, so the first ou
 
 # Streaming processing
 
+{: .note }
+> A module can now state this declaratively: [Timed phases](./timed_phases.md) time a pipelined body
+> between events at its ports (`phase.pipeline`), with no arithmetic on arrival times in the body.
+> This page's `get_pipelined` / `write_pipelined` form remains until its users are migrated.
+
 **Streaming** is the opposite end of the continuum from [block](./block.md): instead of loading the
 whole array and *then* computing, the compute pipeline starts as soon as the **first** input
 element arrives and runs concurrently with the rest of the load. There is no load-then-compute
