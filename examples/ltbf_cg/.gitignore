@@ -12,3 +12,5 @@ include/
 xsi/
 *_proj/
 hw/build/
+hw/prereg/
+hw/reports/
