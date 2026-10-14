@@ -1,10 +1,20 @@
 # Plan: a unit harness per device -- verification, timing and calibration, one component at a time
 
 **Status:** drafted 2026-10-12; **revised 2026-10-13**, after `plans/ip_packaging_routes.md` was
-completed (PRs #252, #259, #260).  Nothing of this plan is built.  Stage 0 is half done: the findings
-below ([Stage 0 findings](#stage-0-findings-2026-10-13)) are the inventory for markov and mm_fir, and
-one decision is proposed and not yet taken (the harness boundary, D9).  Part A is staged work; Part B
-is a sketch that connects it to `plans/multi_agent_flows.md`.
+completed (PRs #252, #259, #260).  **Stage 0 done 2026-10-13** (no code): the findings below
+([Stage 0 findings](#stage-0-findings-2026-10-13)) map every port of markov's three devices and
+mm_fir's device (both topologies) to a model, name the unit hosts and how a harness is stated, and
+list the decisions Stage 1 needs -- D9 (the harness boundary) among them, still proposed, not taken.
+**PAUSED 2026-10-14** for `plans/pipelined_ops.md`: the discussion after Stage 0 found that a harness
+can only calibrate a module whose timing is stated between events at its ports, and that a module
+cannot state it yet (`get_pipelined` / `write_pipelined` compute times that never happened).  This
+plan resumes after that plan's Stage 4 (the mechanical fit on poly).  Also from that discussion, to
+fold in when it resumes: the unit generalizes from "device" to any **test subsystem** (a subgraph whose
+function and timing are observable at its boundary; hierarchical; calibrated at the leaves, composed
+and verified above), independent of how it is packaged; and every child's boundary is observed in
+place by probes on its ports, so only a module that needs *control* (sweeps, hostile policies,
+development before its parent) needs a harness of its own.  Part A is staged work; Part B is a sketch that connects
+it to `plans/multi_agent_flows.md`.
 
 **What the prerequisite plan now provides** (all merged):
 
@@ -149,10 +159,76 @@ writer's bursts into a recorded stream) and the **credit loop** around it (a sin
 and a feeder or returner that honours them by a policy, D4).  Both are testbench C++ beside
 `xsi_mm_host.h`; neither needs RTL.  Each needs a pysim twin so the harness runs in pysim too.
 
-**Still to write for Stage 0:** the unit hosts (which of `MarkovHost`'s two threads a device alone
-needs -- gen: the writer only; chain: the reader, plus the `u` feeder), and how a harness is stated
-(likely a `GraphSystem` whose `dut_modules` is one device, with the stand-ins as its testbench
-participants -- which is D2).
+**mm_fir's device** (one device, host only; rendered from `mm_fir_build.system(...)`):
+
+| topology | device ports | what answers them in a harness | exists? |
+|---|---|---|---|
+| `per_view` | `mi0_axi` .. `mi3_axi` (views `regs`, `qin`, `qout`, `qresp`, one front each) | the host's one bus master, fanned out to four slave groups by address | host yes; **the fan-out is new** under D9 |
+| `one_front` | `mi0_axi` (all four views behind one front) | the host's bus master | yes |
+| both | `irq_qin`, `irq_qout`, `irq_qresp` | `IrqPin` | yes |
+
+The memory sub-top (`markov_top_mem`) is `mi2_axi` only: host + `MmBusReader` / `BusRw`, nothing new.
+**Gate met:** every port of the three devices (and the memory) maps to an existing model or to one of
+the two named stand-ins (the remote queue and the credit loop), plus, under D9, a fan-out.
+
+**Five facts the inventory turned up**, each one Stage 1 has to respect:
+
+1. **A device's module depends on its system's crossbar.**  Its AXI4 groups take the crossbar's ID
+   width: markov's sub-tops have `[1:0]` IDs (4 masters), mm_fir's 1 bit.  The same kernel in another
+   system renders another module.  For D9 this is the right thing (the harness runs the module the
+   system runs), but the device's identity (D1, D7) then has to include the ID width -- or the sub-top
+   must stop depending on it.
+2. **A device embeds its neighbours' addresses.**  The forward writer's `target` is a tied scalar,
+   `32'd2048` = the chain's `qu` at `0x4000` (the credit writer's: `512` = the generator's `u_crd` at
+   `0x1000`).  So the generator's RTL is configured by the system's address map, and a harness must
+   place the remote-queue stand-in exactly there.  It is part of the device's identity, as a tie is.
+3. **A front decodes only the low `LAW` bits** (`axi_slave_front.v`: `addr_q <= AWADDR[LAW-1:0]`).
+   A sub-top alone aliases each view modulo its window; nothing in it knows its base.  A harness can
+   keep the system's addresses (the host twin's generated map stays valid) only if whatever routes them
+   -- the crossbar today, D9's C++ router -- decodes by the system map.
+4. **The host is bound to a crossbar today.**  `discover()` finds a host only as a master on a bus
+   *inside* the DUT, and `system_tb_spec` binds its bus master only to an `s<k>_axi` slot.  Under D9
+   (no crossbar in the harness) the host faces the device's `mi<k>_axi` groups directly: a binding
+   that does not exist yet, in pysim (a testbench-side bus, latency 0, as pysim's twin of the router)
+   and in the harness generator.
+5. **Admission comes from the response.**  `MarkovHost`'s `slots` (MAX_IN_FLIGHT) are released by the
+   reader on a response -- which the generator alone never produces.  A unit host for the generator
+   frees a slot when the remote queue has taken a job's last word (the stand-in says so), or runs
+   without admission and lets the command queue's room interrupt pace it.
+
+**The unit hosts.**  Each is `MarkovHost` cut down, plus the stand-ins' threads -- on **one bus
+master**: a credit returner that is a thread of the host shares its `AxiMmMaster` (C++ host threads
+already share `bus_`), so no testbench-side arbiter is needed in front of a device's slave group.
+
+| device | threads | stand-ins beside it | scenario |
+|---|---|---|---|
+| gen | writer (`qcmd`, room IRQ); credit returner (cumulative words to `u_crd`, by policy) | remote queue on `si1_axi` at `qu`'s address: records each burst as a packet, counts words consumed by policy | the jobs' commands |
+| chain | feeder (`MkvCmd` + `u` bursts into `qu`, within the credit it holds); reader (`qresp`, data IRQ; `x` read straight from the memory model, as the direct wiring reads it) | credit sink on `si2_axi` at `u_crd`'s address (a latest-value register the feeder reads); `FlatMemory` + `AxiMmWriteSlave` on `si3_axi` | the forward stream -- the golden's, or **the gen harness's recording** (the two harnesses compose at the stream) |
+| mem | writer + reader (`BusRw`) | none | words and addresses |
+| mm_fir | `FirHost` unchanged | none | unchanged |
+
+The remote queue and the credit loop need one object both sides see (the sink's consumed count, the
+returner's next write): the harness's `shared` objects already do this for a memory's arena.
+
+**How a harness is stated.**  A `GraphSystem` whose graph is the device's kernel (built into its device
+with `build_mm_device`, at the system's base), the stand-ins and the unit host; `dut_modules` is the
+kernel.  The pysim stand-in for the remote queue can be the real thing cut short: the routed credit
+stream into a trivial consumer kernel that takes words by the policy -- its views and credit writer are
+existing pysim, so the pysim harness needs no new bus model; only its RTL side is the new C++.  The
+missing pieces for Stage 1 are then: the host binding of fact 4, the two C++ stand-ins, and the
+cut taking a device whose neighbours are outside (Stage 0's first finding).
+
+**To decide before Stage 1:**
+
+- **D9** (the harness boundary): the facts above favour it -- the harness runs the system's own module
+  (fact 1), and the router keeps the system's addresses (facts 2, 3) -- at the cost of fact 4's new
+  binding and, for mm_fir `per_view`, a fan-out.  The alternative keeps fact 4 free but needs a new top
+  port kind (a crossbar MI slot outside the cut, as an AXI4 master group) and measures crossbar latency.
+- **The credit returner**: a thread of the unit host on its bus master (proposed: no arbiter), or an
+  autonomous stand-in with a master of its own (closer to the chain's real credit writer, but two
+  testbench masters on one slave group need a testbench arbiter).
+- **The chain's feeder input**: the golden's stream, or the gen harness's recording.
+- **Fact 1**: the ID width in the device's identity, or a sub-top independent of it.
 
 ## Part A -- the unit harness
 
