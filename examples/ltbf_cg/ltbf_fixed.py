@@ -243,6 +243,42 @@ def s_factored(hr, hi, pr, pi, f: LtbfFormats) -> tuple[np.ndarray, np.ndarray]:
     return fx.quantize(sr, sfmt, c.S), fx.quantize(si, sfmt, c.S)
 
 
+def solve_stored(
+    hr: np.ndarray,
+    hi: np.ndarray,
+    br: np.ndarray,
+    bi: np.ndarray,
+    f: LtbfFormats,
+    t_max: int,
+    form: str = "factored",
+    on_iteration: Callable[[int, lcg.CgState, dict], None] | None = None,
+) -> lcg.CgState:
+    """The fixed-point multi-RHS CG of ``Q X = B`` from stored ``H`` and ``B``: the state after
+    ``t_max`` iterations (the engine's golden).  ``on_iteration(n, state, scalars)`` sees the
+    stored state after iteration ``n``."""
+    c = f.cg
+    if form == "explicit":
+        qr, qi = q_explicit(hr, hi, f)
+
+        def product(pr, pi):
+            return mm(qr, qi, f.Q, pr, pi, c.P, c.S)
+
+    elif form == "factored":
+
+        def product(pr, pi):
+            return s_factored(hr, hi, pr, pi, f)
+
+    else:
+        raise ValueError(f"form must be 'explicit' or 'factored', got {form!r}")
+    state = lcg.cg_init(br, bi, c)
+    for n in range(1, int(t_max) + 1):
+        sr, si = product(state.pr, state.pi)
+        state, scalars = lcg.vec_step(state, sr, si, c)
+        if on_iteration is not None:
+            on_iteration(n, state, scalars)
+    return state
+
+
 def solve_fixed(
     h_alpha: np.ndarray,
     b: np.ndarray,
@@ -258,27 +294,14 @@ def solve_fixed(
     c = f.cg
     hr, hi = to_stored(h_alpha, f.H)
     br, bi = to_stored(b, c.B)
-    if form == "explicit":
-        qr, qi = q_explicit(hr, hi, f)
+    out: list[np.ndarray] = []
 
-        def product(pr, pi):
-            return mm(qr, qi, f.Q, pr, pi, c.P, c.S)
-
-    elif form == "factored":
-
-        def product(pr, pi):
-            return s_factored(hr, hi, pr, pi, f)
-
-    else:
-        raise ValueError(f"form must be 'explicit' or 'factored', got {form!r}")
-    state = lcg.cg_init(br, bi, c)
-    out = []
-    for _ in range(int(t_max)):
-        sr, si = product(state.pr, state.pi)
-        state, scalars = lcg.vec_step(state, sr, si, c)
+    def keep(n, state, scalars):
         if on_iteration is not None:
-            on_iteration(len(out) + 1, state, scalars)
+            on_iteration(n, state, scalars)
         out.append(to_complex(state.xr, state.xi, c.X))
+
+    solve_stored(hr, hi, br, bi, f, t_max, form, keep)
     return out
 
 

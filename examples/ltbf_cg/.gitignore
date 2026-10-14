@@ -11,3 +11,4 @@ gen/
 include/
 xsi/
 *_proj/
+hw/build/

@@ -199,7 +199,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 212 + 1 -> 213 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 0.2): ``feat/sionna-prod`` merged
 #: into ``paper/cg_dse``, bringing the sounder's replay gate (test_rt_sounder_xsi.py);
 #: ``pytest -m xsi --collect-only -q`` counts 213.
-WANT_XSI_GATES = 213
+#: 213 + 2 -> 215 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 4.3): the LTBF engine's factored
+#: and explicit RTL gates (test_ltbf_cg_xsi.py); ``pytest -m xsi --collect-only -q`` counts 215.
+WANT_XSI_GATES = 215
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

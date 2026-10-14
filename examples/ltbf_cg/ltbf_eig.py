@@ -351,7 +351,7 @@ def fit() -> int:
     out = {}
     for role in ("fit", "validation", "test"):
         part = df[df["role"] == role]
-        pred = np.array([model.predict(dict(r)) for r in part.to_dict("records")])
+        pred = np.array([model.predict_feat(r) for r in part.to_dict("records")])
         err = np.abs(pred - part["cycles"].to_numpy()) / part["cycles"].to_numpy()
         out[role] = {
             "points": len(part),
