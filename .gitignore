@@ -346,6 +346,13 @@ examples/markov/include/
 examples/markov/gen/
 # the build DAG's RTL runs (plans/system_dag.md).
 examples/markov/xsi_work/
+# examples/stream_kernel (plans/unit_harness.md Stage 1): the body is src/; the rest is build output.
+examples/stream_kernel/include/
+examples/stream_kernel/gen/
+examples/stream_kernel/poly_kernel_proj/
+examples/stream_kernel/xsi_work/
+# its fitted timed-phase parameters (calib_phases files them) are source: keep them despite *.json.
+!examples/stream_kernel/calib/**/*.json
 # mem_copy through the system flow (examples/mem_copy/mem_copy_system_build.py): its system workspace.
 examples/mem_copy/xsi_work/
 # rf_loopback through the system flow (examples/rf_loopback/rf_loopback_system_build.py).

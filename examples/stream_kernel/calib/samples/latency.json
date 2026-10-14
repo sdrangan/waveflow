@@ -1,0 +1,19 @@
+{
+  "nwords": 0.0,
+  "intercept": 30.0,
+  "_fit_summary": {
+    "features": [
+      "nwords"
+    ],
+    "ranges": {
+      "nwords": [
+        8.0,
+        200.0
+      ]
+    },
+    "n_points": 7,
+    "max_abs_residual": 0.0,
+    "max_rel_residual": 0.0,
+    "n_free_params": 2
+  }
+}
