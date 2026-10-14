@@ -300,6 +300,17 @@ old and new in fresh processes, outcomes compared, not just bits).  The cost mod
 added per transaction and what each costs.  Gate: the per-copy and per-frame numbers re-measured and
 the pages updated with them -- whatever they are; an increase is reported with its cause, not hidden.
 
+**Split 2026-10-14, with the user: events here, wall time on a quiet machine.**  The event counts are
+deterministic, so they are measured anywhere: `plans/witness/pipelined_ops/event_counts.py`, run on the
+commit before the arc and after Stage 5, gives **identical** SimPy events per memcpy copy, by type, at
+every point of the grid (25.0 per copy at 1000 copies, the page's number) -- the arc adds no event to
+code that does not use it.  Wall time needs a machine not in daily use (this one swung tens of percent
+run to run): `plans/witness/pipelined_ops/ab_speed.py --old 7167cfe3 --new <ref>` runs both pages'
+scripts alternately, old and new in fresh processes, best of N, and reports new/old per point.  What it
+can see that events cannot is the per-transfer Python the arc added (a stamp, the pending slot, an
+index): a loaded-machine microbenchmark put it near +5% on a bare stream transfer, not a number to
+publish.
+
 ## Stage 1 record (2026-10-14)
 
 **What pysim does today** (`waveflow/hw/interface.py`).  A writer takes the slave's `bus` (one
