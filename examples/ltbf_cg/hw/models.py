@@ -65,8 +65,10 @@ def overheads_from_loops(k: sp.Knobs, loops: dict) -> Overheads:
         return v["latency"] / v["trip_max"] if v and v["trip_max"] else float("nan")
 
     n, c = k.nmax, k.cmax
-    div_a = per("PS_DIV") if "PS_DIV" in loops else float("nan")
-    div_b = per("BETA_DIV") if "BETA_DIV" in loops else float("nan")
+    # At C = 1 the one-iteration division loops are dissolved into the tiles: the divisions are
+    # then part of a_v (d = 0), which the overhead fit leaves out of a_v, d_alpha and d_beta.
+    div_a = per("PS_DIV") if "PS_DIV" in loops else 0.0
+    div_b = per("BETA_DIV") if "BETA_DIV" in loops else 0.0
     ps_tile = per("PS_T")
     xr_tile = per("XR_T")
     a_v = (ps_tile - n - k.C * div_a) + (xr_tile - n - k.C * div_b)
@@ -151,6 +153,43 @@ def _dsp_per_mult(wa: int, wb: int) -> int:
     return math.ceil(a / 26) * math.ceil(b / 17)
 
 
+#: BRAM18 shapes (depth, width); an array bank of at most ``LUTRAM_BITS`` bits goes to LUTRAM.
+BRAM18_SHAPES = ((16384, 1), (8192, 2), (4096, 4), (2048, 9), (1024, 18), (512, 36))
+LUTRAM_BITS = 1024
+
+
+def bram18(depth: int, width: int) -> int:
+    """BRAM18s one bank of ``depth`` x ``width`` bits takes, in its cheapest shape."""
+    if depth * width <= LUTRAM_BITS:
+        return 0
+    return min(
+        math.ceil(width / cw) * math.ceil(depth / cd) for cd, cw in BRAM18_SHAPES
+    )
+
+
+def bram_counts(k: sp.Knobs) -> dict[str, float]:
+    """The banked arrays' BRAM18 counts by the per-bank rule, per kind (re and im each)."""
+    f = eg.hw_formats(k.W)
+    c = f.cg
+    h = 2 * k.R * k.R * bram18((k.nmax // k.R) * (k.cmax // k.R), f.H.W)
+    st = sum(
+        2 * k.C * bram18(k.nmax * (k.mmax // k.C), w)
+        for w in (c.X.W, c.R.W, c.P.W, c.S.W)
+    )
+    t = 0 if k.explicit else 2 * k.C * bram18(k.cmax * (k.mmax // k.C), f.T.W)
+    q = (
+        2 * k.R * k.C * bram18((k.nmax // k.R) * (k.nmax // k.C), f.Q.W)
+        if k.explicit
+        else 0
+    )
+    return {
+        "bram_h": float(h),
+        "bram_st": float(st),
+        "bram_t": float(t),
+        "bram_q": float(q),
+    }
+
+
 def features(k: sp.Knobs) -> dict[str, float]:
     f = eg.hw_formats(k.W)
     c = f.cg
@@ -183,32 +222,19 @@ def features(k: sp.Knobs) -> dict[str, float]:
         "h_bits": float(h_bits), "st_bits": float(st_bits), "t_bits": float(t_bits),
         "q_bits": float(q_bits), "explicit": float(k.explicit), "W": float(k.W),
         "R": float(k.R), "C": float(k.C), "rc": float(rc),
+        "tile_mults": float(8 * rc), "lanes": float(k.C), **bram_counts(k),
     }  # fmt: skip
 
 
-#: Each resource's model: the features it is linear in.
+#: Each resource's model: the features it is linear in (DSP has its own per-width model).
 RESOURCE_TERMS = {
-    "DSP": ("tile_dsp", "lane_dsp"),
-    "BRAM_18K": ("h_bits", "st_bits", "t_bits", "q_bits", "h_banks", "st_banks"),
-    "LUT": (
-        "tile_bits",
-        "acc_bits",
-        "lane_bits",
-        "div_bits2",
-        "h_banks",
-        "st_banks",
-        "explicit",
-    ),
-    "FF": (
-        "tile_bits",
-        "acc_bits",
-        "lane_bits",
-        "div_bits2",
-        "h_banks",
-        "st_banks",
-        "explicit",
-    ),
-}
+    "BRAM_18K": ("bram_h", "bram_st", "bram_t", "bram_q"),
+    "LUT": ("tile_bits", "acc_bits", "lane_bits", "div_bits2", "h_banks", "st_banks", "explicit"),
+    "FF": ("tile_bits", "acc_bits", "lane_bits", "div_bits2", "h_banks", "st_banks", "explicit"),
+}  # fmt: skip
+#: Widths whose operands all fit one DSP48E2 (27 x 18) take W16's per-multiply DSP cost when the
+#: fit set has no build at that width (W18).
+DSP_LIKE_W16 = (12, 14, 16, 18)
 #: The overheads' models (cycles): linear in the tile shape and the width.
 OVERHEAD_TERMS = ("R", "C", "W", "explicit")
 #: The overheads both forms have (the rest belong to one form).
@@ -238,7 +264,7 @@ def _lstsq(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def fit(builds: list[tuple[sp.Knobs, dict]]) -> dict:
-    params: dict = {"resources": {}, "overheads": {}}
+    params: dict = {"resources": {"DSP": _fit_dsp(builds)}, "overheads": {}}
     feats = [features(k) for k, _ in builds]
     for res, terms in RESOURCE_TERMS.items():
         x = np.array([[f[t] for t in terms] for f in feats])
@@ -248,7 +274,11 @@ def fit(builds: list[tuple[sp.Knobs, dict]]) -> dict:
     for name in Overheads.__dataclass_fields__:
         # a form's own overheads (a_T, a_U: factored; a_S, a_Q: explicit) do not see the form
         terms = OVERHEAD_TERMS if name in SHARED_OVERHEADS else OVERHEAD_TERMS[:-1]
-        rows = [(f, getattr(o, name)) for f, o in zip(feats, ovs, strict=True)]
+        rows = [
+            (f, getattr(o, name))
+            for f, o, (k, _) in zip(feats, ovs, builds, strict=True)
+            if not (k.C == 1 and name in ("a_v", "d_alpha", "d_beta"))
+        ]
         rows = [(f, v) for f, v in rows if np.isfinite(v)]
         if not rows:
             coef = [float("nan")] * (1 + len(terms))
@@ -259,14 +289,64 @@ def fit(builds: list[tuple[sp.Knobs, dict]]) -> dict:
     return params
 
 
+def _fit_dsp(builds) -> dict:
+    """DSP = a_W x (tile multiplies) + b_W x (vector lanes), per width W.
+
+    Vitis maps a width's multiplies its own way (W10 packs two per DSP, W20 takes two, W24 moves
+    some to fabric), so a width with builds of two or more tile shapes gets its own least squares;
+    a width with one shape scales W16's coefficients to that build."""
+    by_w: dict[int, list] = {}
+    for k, rec in builds:
+        f = features(k)
+        by_w.setdefault(k.W, []).append(
+            (f["tile_mults"], f["lanes"], float(rec["resources"]["DSP"]))
+        )
+    per_w: dict[str, list[float]] = {}
+    for w, rows in by_w.items():
+        if len({(a, b) for a, b, _ in rows}) >= 2:
+            x = np.array([[a, b] for a, b, _ in rows])
+            y = np.array([d for _, _, d in rows])
+            wt = 1.0 / np.maximum(y, 1.0)
+            per_w[str(w)] = np.linalg.lstsq(x * wt[:, None], y * wt, rcond=None)[
+                0
+            ].tolist()
+    base = per_w.get("16")
+    for w, rows in by_w.items():
+        if str(w) not in per_w and base is not None:
+            a, b, d = rows[0]
+            sc = d / (base[0] * a + base[1] * b)
+            per_w[str(w)] = [base[0] * sc, base[1] * sc]
+    return {"per_w": per_w}
+
+
+def predict_dsp(p: dict, k: sp.Knobs) -> float:
+    per_w = p["per_w"]
+    key = str(k.W)
+    if key not in per_w:
+        key = (
+            "16" if k.W in DSP_LIKE_W16 else min(per_w, key=lambda w: abs(int(w) - k.W))
+        )
+    a, b = per_w[key]
+    f = features(k)
+    return a * f["tile_mults"] + b * f["lanes"]
+
+
 def _apply(p: dict, f: dict) -> float:
     c = p["coef"]
     return float(c[0] + sum(ci * f[t] for ci, t in zip(c[1:], p["terms"], strict=True)))
 
 
-def predict_resources(params: dict, k: sp.Knobs) -> dict[str, float]:
-    f = features(k)
-    return {res: max(0.0, _apply(p, f)) for res, p in params["resources"].items()}
+def predict_resources(
+    params: dict, k: sp.Knobs, f: dict | None = None
+) -> dict[str, float]:
+    f = features(k) if f is None else f
+    out = {
+        res: max(0.0, _apply(p, f))
+        for res, p in params["resources"].items()
+        if res != "DSP"
+    }
+    out["DSP"] = max(0.0, predict_dsp(params["resources"]["DSP"], k))
+    return out
 
 
 def predict_overheads(params: dict, k: sp.Knobs) -> Overheads:
