@@ -99,6 +99,26 @@ def test_a_header_edit_rebuilds_the_testbench_only(tmp_path):
     assert s.build() == ["tb"] and s.calls[-1] == "tb"
 
 
+def test_a_vendor_core_is_an_rtl_input(tmp_path):
+    """A kernel's vendor cores (waveflow.build.hls_ip): adding the VHDL list, editing a wrapper it
+    names, and changing the libraries xelab links each rebuild the design -- the testbench stays."""
+    ws = _workspace(tmp_path)
+    s = _Fake(ws, "k", "k_tb")
+    s.build()
+    core = tmp_path / "rtl" / "core.vhd"
+    core.write_text("entity core is end;\n", encoding="utf-8")
+    (ws / "vhdl_k.f").write_text("../rtl/core.vhd\n", encoding="utf-8")
+    assert s.stale() == ["rtl"]
+    s.build()
+    core.write_text("entity core is end; -- changed\n", encoding="utf-8")
+    assert s.stale() == ["rtl"]
+    s.build()
+    (ws / "xelab_k.f").write_text("-L floating_point_v7_1_20\n", encoding="utf-8")
+    assert s.stale() == ["rtl"]
+    s.build()
+    assert s.stale() == []
+
+
 def test_testbench_flags_are_an_input(tmp_path):
     ws = _workspace(tmp_path)
     _Fake(ws, "k", "k_tb").build()
