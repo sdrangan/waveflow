@@ -559,16 +559,39 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+*Written 2026-10-14 (EDT). Every measured number is Vitis/Vivado 2024.1, gem5 v25.1 HPI, Sionna RT 2.2.0, on the branch `paper/cg_dse`. Results, drops and tables are local (`examples/ltbf_cg/{data,results,paper_data,logs}`); `paper_data/FINDINGS.md` is the findings summary.*
 
 - **Changed:**
+  - `examples/ltbf_cg/` (new): the drop tracer and link model (`scenario.py`, `ltbf_link.py`), the float LTBF with the paper's CG (`ltbf.py`), the bit-exact fixed-point model (`ltbf_fixed.py`) and its C-sim conformance (`ltbf_conformance.py`, `src/ltbf_ref.h`), the paper comparison, the accuracy sweep and figures, the A53 eigendecomposition kernel and its gem5 calibration (`cpu/ltbf_eig.c`, `ltbf_eig.py`), and the hardware (`hw/`: the engine body `cpp/ltbf_engine_task.h` and its `FreeRunMod`, csynth, the system-flow XSI gate, the knob space and pre-registered sets, the build queue, the cost models and their validation, the RTL anchors, the time model, the DSE, the fidelity score, the findings, the finalists).
+  - Tests (new): `tests/examples/test_ltbf_cg.py`, `_conformance.py`, `_hw.py`, `_xsi.py`, `_cpu.py`.
+  - Shared files: `tests/conftest.py` (gate floors, each measured: `WANT_XSI_GATES` 213 → 215, `WANT_GEM5_GATES` 12 → 14, `WANT_SIONNA_GATES` 25 → 22 after the review moved three data-dependent tests out of the marker); `waveflow/cpu/calib/sweep.py` (`ltbf_eig_rows()`, a pre-approved addition). `waveflow/linalg` and `waveflow/rfenv` unchanged. Merges: `feat/sionna-prod` into the branch (step 0.2).
 - **Tested (commands and results):**
-- **Acceptance criteria:** AC0 … AC12 ✅/❌/⚠️ with evidence
-- **Decisions made:**
-- **Assumptions and not verified:**
-- **Remaining risks and issues:**
-- **Next steps:**
-- **Reusable artifacts saved / tools that would have helped:**
+  - `pytest -m vitis -rs tests/examples/test_ltbf_cg_conformance.py`: 9 passed (2,331,840 words bit-exact, re-run after the negative-integer-bit change).
+  - `pytest -m xsi -rs tests/examples/test_ltbf_cg_xsi.py`: 2 passed (factored and explicit at N_rx 64: 3,072 X words equal the model; RTL = pysim). Plus the 256-antenna RTL anchor (RTL words = model).
+  - `pytest -m gem5 -rs tests/examples/test_ltbf_cg_cpu.py`: 2 passed (gem5 output = twin).
+  - `pytest tests/examples/test_ltbf_cg*.py -m "not vitis and not xsi and not gem5"`: all pass (link, float, fixed, the ragged-size, time-model and A53 tests).
+  - The fast suite (`pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`): the 6 baseline failures of step 0.4 and no other (11:08 run; the final run is recorded in §15).
+  - `ruff check` and `black --check` on `examples/ltbf_cg`, the new tests and `waveflow/cpu/calib/sweep.py`: clean; `tests/conftest.py` keeps its one ruff finding, `sweep.py` its zero.
+- **Acceptance criteria:**
+  - **AC0 ✅** branch from `feat/cpu-model` (`e0f12e19`) with `feat/sionna-prod` (`8ca01221`) merged, both unchanged; no drop, result, table or figure is tracked. The AC0 grep prints one file, `examples/ltbf_cg/cpu/sweep_plan.csv`: the A53 pre-registration (40 points, no results), which `waveflow`'s `SweepPlan` requires to be committed.
+  - **AC1 ✅** 100 drops, two snapshots each, traced once at 32 × 32 from the repo-local Denver copy (16 × 16 and 8 × 8 as sub-arrays); a drop re-traces bit for bit (test).
+  - **AC2 ✅** (a), (b) tests; (c) the paper comparison: noiseless SRS MMSE − exact ≤ 0.002 dB, t = 3 loss ≤ 0.012 dB; nominal SRS 2.38 / 6.27 / 10.71 dB at 8 × 8 / 16 × 16 / 32 × 32 (100 MHz) against the paper's 2.25 / 6.30 / 10.58.
+  - **AC3 ⚠️** bit-exact (9 case sets, both regimes and forms, N_rx ≤ 64, zero-divisor and saturating cases); at 24 bits the SINR equals the float pipeline's within 0.01 dB on the synthetic link at every t and on the drops for t ≤ 7, but not at t = 8–10 with nominal SRS (up to 0.12 dB: the static formats' precision floor).
+  - **AC4 ✅** one command, deterministic; `accuracy_losses.csv` (17,082 rows: median, p10, p90, mean loss and median SINR per configuration, on the 90 drops held out from the formats' profile); the pre-chosen subset (drops 11–12, pooled groups 6–7) re-run byte-identical (merged rows and all 54 job files); figures byte-stable.
+  - **AC5 ✅** factored engine bit-exact at RTL at 64 (joint and per UE); csynth 2.867 ns at 64 and 256.
+  - **AC5b ✅** explicit engine bit-exact in pysim and at RTL at 64; csynth ≤ 4 ns at 64 and at 256 (the largest kept on chip; ≤ 1,280 BRAM18); factored csynth at 1024 (≤ 2.90 ns); all 332 builds ≤ 2.92 ns.
+  - **AC6 ✅** the A53 step (M_i, Jacobi, G_i) as a calibrated `Kernel`/`Family` on gem5 v25.1 HPI, pre-registered (`d2cc61d5`): test median 0.2 %, max 0.7 %.
+  - **AC7 ✅** on 14 held-out builds, scored once with the model frozen (hash in §15): cycles 0.68 % (worst 2.5 %), DSP 2.5 % (17 %), LUT 6.8 % (16 %), FF 5.9 % (14 %), BRAM 9.1 % (34 %), URAM unused. On the 300 brute-force builds: time 0.5 %, DSP 3.2 %, LUT 6.9 %, FF 6.4 %, BRAM 8.0 % median.
+  - **AC8 ✅** 2,838,240 designs (both bands, both targets, both SRS settings, 3 arrays), decisions over built and all options, 1,481 frontier points, the findings in `FINDINGS.md` (with the limitations of §14's final-review note).
+  - **AC9 ⚠️** registered score (`a53`): DSP, FF, BRAM 100 %, LUT 75.9 %, max 88.9 %; on the 105 decisions with a feasible design LUT 8/21, max 15/21; 32 × 32 untested. Cause: csynth's LUT estimate at W10 (DSP packing); after implementation the ordering reverses (below).
+  - **AC10:** see §15 (four finalists: 8 × 8 W10 and W12, 16 × 16, 32 × 32).
+  - **AC11:** see §15 (the final fast-suite run).
+  - **AC12:** compute ended before 18:30 on 2026-10-15; this report written 2026-10-14.
+- **Decisions made:** §14 (all rows dated 2026-10-13/14), notably: the 100 MHz band sampled at 66 points; formats per scenario and regime with negative integer bits; r = 2 only with SRS noise; the signed loss kept; the paper's CG stop rule; held-out drops for every statistic; built vs modeled options in the decisions; AC9's placement interpretation.
+- **Assumptions and not verified:** the sector nuller is the identity (the paper's default); `L > 1`, `units > 1`, `a53x4` and `pl` are modeled, not built; explicit Q in DDR at 1024 is modeled; engine and A53 run in sequence (no overlap); the A53 kernel is scalar C (an optimized one would change finding 4); csynth's LUT estimate is the AC9 "measurement".
+- **Remaining risks and issues:** §14's final-review note: 32 × 32 is infeasible with built options; the nominal-SRS loss axis is degenerate (t = 1 is a matched filter); regime 2's X_sym is not costed; AC9's LUT shortfall; the cost model's tails (BRAM up to 78 % off on the brute set).
+- **Next steps:** a W10-aware LUT term (or implementation-calibrated LUTs) and a re-registered fidelity run; build L = 4 and the PL-side M_i/G_i; an optimized A53 kernel calibrated on gem5; per-column scaling (block floating point) for late iterations; N_SRS scaling with N_rx (the paper's design rule) as a scenario.
+- **Reusable artifacts saved / tools that would have helped:** the engine body and system-flow XSI gate pattern (`hw/`), the RTL-anchored structural cycle model, the pre-registration and frozen-hash workflow, the lessons file; a csynth-to-implementation LUT calibration would have helped AC9.
 
 ## Checklist coverage
 
