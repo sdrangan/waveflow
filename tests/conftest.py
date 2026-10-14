@@ -207,7 +207,9 @@ WANT_XSI_GATES = 213
 #: 0 -> 9 on 2026-10-08 (plans/cpu_model.md step 9): the runner's end-to-end gates.
 #: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
-WANT_GEM5_GATES = 12
+#: 12 -> 14 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 4.8): the LTBF eigendecomposition
+#: kernel's gem5 run equals its twin at the two smoke points (tests/examples/test_ltbf_cg_cpu.py).
+WANT_GEM5_GATES = 14
 
 #: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
 #: environment's tests that trace a scene (``plans/sionna_rt/sionna_rt.md``).  The same two rules:
