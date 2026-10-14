@@ -1,0 +1,13 @@
+# examples/ltbf_cg (plans/mimo_cg/ltbf_cg_dse.md): nothing this study produces is committed.
+# data/ holds the copied Denver scene, the traced drops and channel files; the rest are sweep
+# outputs, tables, figures, logs and build trees (plans/source_layout.md: include/, gen/, xsi/,
+# *_proj/ are generated).
+data/
+paper_data/
+results/
+logs/
+runs/
+gen/
+include/
+xsi/
+*_proj/
