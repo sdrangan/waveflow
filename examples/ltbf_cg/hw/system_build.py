@@ -26,8 +26,24 @@ WORK_DIR = "xsi_work"
 #: The AC5 configurations: N_rx = 64, 64 columns (8 connected UEs), 16 right-hand sides (2 own
 #: UEs jointly, then each alone with H kept), a 2 x 2 tile, 16-bit words, 4 iterations.
 GATE = {
-    "factored": {"nmax": 64, "cmax": 64, "mmax": 16, "R": 2, "C": 2, "explicit": False, "W": 16},
-    "explicit": {"nmax": 64, "cmax": 64, "mmax": 16, "R": 2, "C": 2, "explicit": True, "W": 16},
+    "factored": {
+        "nmax": 64,
+        "cmax": 64,
+        "mmax": 16,
+        "R": 2,
+        "C": 2,
+        "explicit": False,
+        "W": 16,
+    },
+    "explicit": {
+        "nmax": 64,
+        "cmax": 64,
+        "mmax": 16,
+        "R": 2,
+        "C": 2,
+        "explicit": True,
+        "W": 16,
+    },
 }
 NIT = 4
 
@@ -46,11 +62,19 @@ def top(form: str) -> str:
 
 
 def build_dag(form: str, work_dir=WORK_DIR) -> BuildDag:
+    return dag_for(system(form), top(form), work_dir)
+
+
+def dag_for(sys_: eg.LtbfSystem, top_: str, work_dir=WORK_DIR) -> BuildDag:
+    """The system steps for any engine system (its build tree is the flow's root)."""
     dag = BuildDag()
     add_system_steps(
-        dag, system(form), work_dir=work_dir, top=top(form),
+        dag,
+        sys_,
+        work_dir=work_dir,
+        top=top_,
         tcls={"ltbf_engine": Path("ltbf_engine.tcl")},
-    )  # fmt: skip
+    )
     return dag
 
 

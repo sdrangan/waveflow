@@ -313,6 +313,10 @@ class LtbfSystem(GraphSystem):
     W: int = 16
     nit: int = 4
     n_cycles: int = 2_000_000
+    #: The scenario's sizes (0: the build's maxima): N_rx, columns of H, the joint solve's columns.
+    n_run: int = 0
+    cols_run: int = 0
+    m_run: int = 0
 
     def knobs(self) -> dict:
         return {
@@ -322,8 +326,9 @@ class LtbfSystem(GraphSystem):
 
     def jobs(self) -> list[Job]:
         return scenario_jobs(
-            int(self.nmax), int(self.cmax), int(self.mmax), int(self.nit)
-        )
+            int(self.n_run or self.nmax), int(self.cols_run or self.cmax),
+            int(self.m_run or self.mmax), int(self.nit),
+        )  # fmt: skip
 
     def graph(self) -> LtbfTB:
         self.tb = LtbfTB(
