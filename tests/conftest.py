@@ -228,7 +228,10 @@ WANT_GEM5_GATES = 12
 #: (tests/rfenv/test_live.py).
 #: 21 -> 22 on 2026-10-12 (M6 review): a user's Mitsuba XML scene, by path, traces as its built-in
 #: twin (tests/rfenv/test_sionna_backend.py).
-WANT_SIONNA_GATES = 22
+#: 22 -> 25 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 1.1): the LTBF DSE's Denver drops follow
+#: the paper's geometry, the one-element trace plus the synthetic array equals Sionna's own, and a
+#: drop retraces bit for bit (tests/examples/test_ltbf_cg.py).
+WANT_SIONNA_GATES = 25
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {
