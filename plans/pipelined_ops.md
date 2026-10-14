@@ -1,10 +1,11 @@
-# Plan: pipelines inside a module -- load, compute, store, timed by the markers at their ports
+# Plan: timed phases inside a module -- load, compute, store, timed by events at its ports
 
 **Status: PLANNED 2026-10-14, nothing built.**  The defect was recorded 2026-08-16 (below, from
 [The defect](#the-defect) on, kept as the evidence).  The design came out of the
 `plans/unit_harness.md` discussion: a unit harness can only calibrate a module whose timing is stated
 between events it can observe, and today's pipelined ops state it with arithmetic on times that never
-happened.  `unit_harness.md` is **paused** until this plan's Stage 4 (the mechanical fit) works on poly.
+happened.  `unit_harness.md` is **paused** until this plan's Stage 5 (the fit generated from poly's
+declarations) works.
 
 ## The rules
 
@@ -20,47 +21,133 @@ happened.  `unit_harness.md` is **paused** until this plan's Stage 4 (the mechan
   back-pressure) -- mechanical on both sides too.  A stalled record tests a prediction; it is not
   training data.
 
-## The pattern: load, compute, store
+## The design in one paragraph
 
-The minimum a module must express is a pipeline of three stages, as the HLS body is written (a
-straight-line loop per message, `docs/guide/vectorization/hls/loop_optimization.md`):
+A module **declares** its timed phases once, beside its endpoints: a `TimedPhase` names its spans --
+each a pair of endpoint events (`ep.first` / `ep.last`, the first and last beat of a message) -- the
+features its duration depends on, and the family of its timing model.  Its **body** reads and writes
+its endpoints as it always has, and between them calls `self.phase(...)` (sequential) or
+`self.pipeline(...)` (pipelined), which wait the predicted durations and record the phase.  From the
+declarations alone the framework generates the RTL probes, the pysim logs and the calibration corpus,
+and fits the model.  The endpoints appear in both the declaration and the body -- the body stays
+readable -- and the framework **checks** that the transfers the body performed are on the endpoints
+the declaration names, so the two cannot drift.
 
-1. an **endpoint transaction** -- the load;
-2. a **compute** -- the only stage with a timing model;
-3. an **endpoint transaction** -- the store.
+## The declared layer
 
-The four **markers** are the two transactions' first and last beats: `L.first`, `L.last`, `S.first`,
-`S.last`.  They are the endpoints' own handshakes, so the unit harness reads them at its boundary (the
-bus models' timestamps) and, in place, from probes on the module's ports (`system_top.beat` /
-`last`, which resolve a pysim endpoint to its net) -- never from a net someone had to find.
+```python
+@dataclass(frozen=True)
+class TimingEvent:
+    """A marker on one of the module's own endpoints: the first or last beat of each message."""
+    ep: InterfaceEndpoint
+    edge: Literal["first", "last"]
+    channel: str | None = None      # an m_axi endpoint: which AXI channel ("R", "W"); a stream: None
 
-The compute's model predicts two targets, each a difference of markers:
+@dataclass(frozen=True)
+class TimedPhase:
+    """Rule 1: spans between endpoint events, the features known before the first, one model."""
+    name: str
+    spans: dict[str, tuple[TimingEvent, TimingEvent]]   # target name -> (start event, end event)
+    features: tuple[str, ...]
+    tm: TimingModelFamily = LinearTiming()               # the law's SHAPE; never a number or a path
+```
 
-| target | measured as |
-|---|---|
-| `latency` | `S.first - L.first` |
-| `fill_time` | `S.last - S.first`, when neither the input nor the output limited it |
+- **Every endpoint provides its events**: `self.s_in.first`, `self.s_in.last` are `TimingEvent`s.  A
+  phase that names them declares them; a module's events are the union of its phases'.
+  `add_timing_event(ep, edge)` stays for an event to observe with no phase on it yet.
+- **A phase and its model are one object.**  There is no phase without a model (by Rule 1 a phase *is*
+  what a model learns; before a fit it predicts from its seed) and, once migrated, no model without a
+  phase.  One model may predict several spans that share features -- the pipeline's two -- so the
+  spans are the model's **targets**, named: `predict` returns named durations and a fit report says
+  "latency: +-2 cycles", not "target 0".  This is the slot `TimingModel` already reserves
+  (`num_targets > 1`, "a delay between internal stages", raising today for want of a measurement).
+- **`tm=` names the family, not an instance.**  The parameters live in the calibration store under
+  (module identity, phase name), loaded lazily, seeded before any fit.  The declaration says *what* is
+  timed and *what shape* its law has; the store says how well it is known.  So today's required
+  `component=` / `calib_dir=` become derived, and the same class in two configurations cannot share a
+  directory by accident.
+- **The target is the span's duration, not a residual.**  The residual form (`rtl - pysim +
+  current_dly`) exists because a firing's pysim span mixes the model's delay with whatever else pysim
+  charged.  Here an unstalled span's pysim duration *is* the prediction.
+- **A span uses only the module's own boundary endpoints.**  A span from module A's port to module B's
+  belongs to the composite holding both, declared there: leaves calibrate their phases, composites
+  declare their own.  A point inside an HLS body cannot be a span by design -- if a phase cannot be
+  stated between port events, the module is split.
 
-## The module code
+## The runtime layer
+
+- **`Xfer`** -- one message on one endpoint, logged by the endpoint's transfer primitive, **only for
+  endpoints that carry a declared event** (an untimed endpoint costs nothing):
+
+  ```python
+  @dataclass
+  class Xfer:
+      ep: InterfaceEndpoint     # whose transfer (the port name for alignment)
+      index: int                # the k-th message on that endpoint, counted by the primitive
+      data: Any                 # load: the words, typed if the request asked for a type; store: what was written
+      nwords: int
+      first: float              # first beat (set by begin)
+      last: float               # last beat (set by end; a property that RAISES while in flight)
+      stalled: bool             # held up by the other side in between: not a clean fitting sample
+  ```
+
+- **A phase record** -- one occurrence of a phase, written by `phase` / `pipeline`: `(phase, per span:
+  start (ep, index, edge) and end (ep, index, edge), features, predicted, stalled)`.  It holds
+  *references* to `Xfer`s, not times.
+
+## Pattern 1: sequential load, compute, store
+
+The input is complete before the compute starts, and the output starts after it: one span.
+
+```python
+# declared once, in __post_init__
+self.compute_phase = self.add_timing_phase(TimedPhase(
+    "compute", spans={"compute_time": (self.s_in.last, self.m_out.first)}, features=("n",)))
+
+# the body, per message
+x = yield from self.s_in.get_array(Float32, n)          # returns at s_in.last
+y = compute(x)
+yield from self.phase(self.compute_phase, {"n": n})       # waits compute_time; opens the record
+yield from self.m_out.write(y)                            # its first beat closes the record
+```
+
+`self.phase` takes each span's start from its declared endpoint's **most recent** transfer (`s_in`'s,
+just completed), waits the predicted duration, and binds the span's end to the **next** transfer on its
+declared end endpoint (`m_out`).  If `s_in` had not just completed a transfer, or the next transfer
+lands on another endpoint, it raises, naming the phase and both endpoints.  Today's `get` / `write` are
+unchanged here: the sequential pattern needs no `begin` / `end`.
+
+## Pattern 2: pipelined load, compute, store
+
+The HLS loop reads a word, computes, writes a word, at one per II: output starts a latency after the
+**first** input word, and the input and output overlap.  Two spans:
+
+```python
+# declared once
+self.compute_phase = self.add_timing_phase(TimedPhase(
+    "compute", spans={"latency":   (self.s_in.first, self.m_out.first),
+                      "fill_time": (self.m_out.first, self.m_out.last)},
+    features=("n",)))
+
+# the body, per message
+y = yield from self.pipeline(self.compute_phase, fn=lambda x: array(Float32, poly_eval(c, x)),
+                             load=self.s_in.req(Float32, n), store=self.m_out, feats={"n": n})
+```
+
+**Streaming vs block is which event a span starts at** -- `s_in.first` (pipelined) or `s_in.last`
+(Pattern 1, an FFT frame) -- so no separate anchor flag is needed.  `pipeline` checks that `load`'s
+endpoint starts `latency` and `store`'s ends it and carries `fill_time`, then runs:
 
 ```python
 lx = yield from load.begin()           # L.first; lx.data is already here
-y = compute.fn(lx.data)
-latency, fill_time = compute.tm.predict(feats)
+y = fn(lx.data)
+latency, fill_time = phase.predict(feats)
 yield self.timeout(latency)            # L.first + latency   (relative: nothing waited since L.first)
 sx = yield from store.begin(y)         # S.first, when the bus and the queue's room allow
 yield self.timeout(fill_time)          # S.first + fill_time (relative: nothing waited since S.first)
 yield from load.end(lx)                # L.last
 yield self.until(lx.last + latency)    # the tail -- the last output needs the last input; no-op if past
 yield from store.end(sx)               # S.last: the burst is delivered
-```
-
-wrapped for the common case as
-
-```python
-y = yield from self.pipeline(load=Load(self.s_in, Float32, n),
-                             compute=Compute(fn, tm=self.poly_tm, feats={"nsamp": n}),
-                             store=self.m_out)
 ```
 
 - **The rule of the waits:** a relative `timeout` only straight after the event it is measured from;
@@ -75,27 +162,34 @@ y = yield from self.pipeline(load=Load(self.s_in, Float32, n),
   held when it is really used.  This is why the design is two events per transfer and not markers
   recorded after the fact: a backdated write (`write_pipelined`'s `tstart`) cannot take a contended
   bus in the past.
-- **`load` is a description** (`Load(endpoint, type, count)`), symmetric with `store=self.m_out`:
-  `pipeline` drives the transfer's two halves itself, which a running `get_array(...)` -- which only
-  returns at the end -- cannot.
+- **`load` is a request** (`self.s_in.req(type, count)`), not a running `get_array(...)`, which only
+  returns at the end: `pipeline` drives the transfer's two halves itself.  A body of another shape
+  uses the same `begin` / `end` directly.
+- **Several pipelines may share endpoints** -- poly has two per message on the same ports, header ->
+  response and samples -> results: two declared phases.  Each endpoint's `Xfer` index counts every
+  transfer on it; which transfers make up an occurrence comes from the phase record, never from index
+  arithmetic.
 
-`Xfer` is the handle `begin` returns and `end` completes, one per message per endpoint:
+## What is generated from the declarations
 
-```python
-@dataclass
-class Xfer:
-    ep: InterfaceEndpoint     # whose transfer (the port name for alignment)
-    index: int                # the k-th message on that endpoint, counted by the primitive
-    data: Any                 # load: the words, typed if the Load asked for a type; store: what was written
-    nwords: int
-    first: float              # first beat (set by begin)
-    last: float               # last beat (set by end; a property that RAISES while in flight)
-    stalled: bool             # held up by the other side in between: not a clean fitting sample
-```
-
-The endpoint logs each `Xfer` when it ends -- pysim's half of Rule 2.  pysim and RTL records join on
-`(endpoint, index)`; the model is fitted on the feature point, as `waveflow.calib.timing_model`
-already joins its two sides.
+1. **RTL probes.**  Walk the modules in the cut -- or the children inside it, for observation in place
+   -- and collect their `TimingEvent`s.  Each such endpoint gets `beat`, `last`, `stall` (`VALID &&
+   !READY`) and one new probe kind, `starve` (`READY && !VALID`); the existing `Probe` -> net
+   resolution makes them `ProbePin`s, inside a sub-top if need be (`probe_home`).  Nobody names a net.
+2. **RTL `Xfer`s.**  Each endpoint's probe runs decoded into messages -- by TLAST on a framed stream,
+   by pysim's `Xfer.nwords` on an unframed one or a multi-burst `m_axi` transfer -- into the table
+   pysim logs: `(ep, index, first, last, stalled)`.
+3. **The corpus, joined mechanically: pysim supplies the pairing and the features, RTL supplies the
+   times.**  For each pysim phase record, each span's start and end `(ep, index)` are looked up in the
+   RTL `Xfer`s.  Legal because Rule 1 puts the features before the first event; it needs both sides to
+   carry the same message sequence per port, so **functional equivalence is a precondition of timing
+   calibration** (the bit-exact check runs first anyway).  This replaces the VCD-firing path
+   (`ExtractBurstsStep` -> `CollectTimingStep`); `FitTimingStep` and `TimingModel` stay, and
+   `discover_timing_models` becomes a walk over declared phases.
+4. **The sweep's requirements.**  The declared features say what a sweep must vary, so the grid
+   discipline (at least three values a feature, an interior point held out) is checked mechanically.
+   What cannot be generated is a scenario that *produces* given feature values: the module or example
+   supplies a "workload for these features" hook -- the one hand-written piece of a calibration.
 
 ## Compatibility
 
@@ -103,12 +197,15 @@ already joins its two sides.
   (`StreamIF._transfer`, `QueuedTransferIFSlave._take_burst`), and today's `get` / `write` become
   `begin` immediately followed by `end`.  Every existing pysim cycle count must be unchanged; if one
   moves, the refactor is wrong.
-- **The API is not, in the end.**  `get_pipelined` / `write_pipelined` / `read_pipelined` sit beside
-  the new form while poly proves it, then are retired (Stage 5): two ways to state a pipeline is the
-  undiscoverability this file records.  Today they are used by about 18 framework modules (mem
-  streams, queue and regbank views, the RF buffers, BRAM, SSR FFT, locked memory), 5 examples
-  (`stream_inband`, `mm_fir`, `bram_access`, `vmac`, the RF ones through the framework) and about 12
-  docs pages -- not a flag day.
+- **`TimingModel(component=..., calib_dir=...)` keeps working** for its current users
+  (`StreamTimingModel` on the mem streams, the Vitis FFT model) until each is migrated to declared
+  phases in Stage 6.
+- **The pipelined API is not kept, in the end.**  `get_pipelined` / `write_pipelined` /
+  `read_pipelined` sit beside the new form while poly proves it, then are retired (Stage 6): two ways
+  to state a pipeline is the undiscoverability this file records.  Today they are used by about 18
+  framework modules (mem streams, queue and regbank views, the RF buffers, BRAM, SSR FFT, locked
+  memory), 5 examples (`stream_inband`, `mm_fir`, `bram_access`, `vmac`, the RF ones through the
+  framework) and about 12 docs pages -- not a flag day.
 
 ## Stages
 
@@ -126,37 +223,41 @@ through it.
 on top of them rebuilt on it.  Gate: every pysim cycle count unchanged (the fast suite's gates;
 markov's and mm_fir's pysim numbers; the calibration keys), and the added events per message measured.
 
-**Stage 3 -- `self.pipeline`, `Load`, `Compute`, `until`; poly migrated.**  The four markers logged by
-the primitive.  Poly's `body` keeps its function and loses its formula (`tstart`, `t_out_start`,
-`write_pipelined`).  Gate: poly bit-exact as before; its pysim timing within the existing tolerance of
-cosim with the model seeded by hand.
+**Stage 3 -- the declared layer.**  `TimingEvent` (`ep.first` / `ep.last`), `TimedPhase`,
+`add_timing_phase`, the model family and its store lookup; `Xfer`s logged for declared endpoints;
+`self.phase` (Pattern 1) with its endpoint check.  Gate: unit tests of the check (a phase whose body
+uses the wrong endpoint raises, naming both), and an undeclared endpoint logs nothing.
 
-**Stage 4 -- the markers at RTL, and the fit.**  The four markers per message from poly's cosim (or XSI
-of the kernel alone), aligned by `(endpoint, index)`; `latency` and `fill_time` fitted over at least
-three `nsamp` values with an interior point held out (`project-cycle-model-training`'s grid
-discipline).  Gate: the fitted model predicts cosim at least as well as the hand-fitted
-`proc_latency = 40`, with no number typed in.  `unit_harness.md` resumes after this.
+**Stage 4 -- `self.pipeline` (Pattern 2), `req`, `until`; poly migrated.**  Poly declares two phases
+(header -> response, Pattern 1; samples -> results, Pattern 2); its `body` keeps its function and loses
+its formula (`tstart`, `t_out_start`, `write_pipelined`).  Gate: poly bit-exact as before; its pysim
+timing within the existing tolerance of cosim with the models seeded by hand.
 
-**Stage 5 -- retire the old API.**  Migrate the users of `get_pipelined` / `write_pipelined` /
-`read_pipelined`, then remove them and the extraction prohibition they caused
-(`hwcodegen._check_not_pipelined`, `tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user
-left; docs teach one construct.
+**Stage 5 -- generated probes, RTL `Xfer`s, and the fit.**  The probes generated from poly's
+declarations; its cosim (or XSI of the kernel alone) decoded into `Xfer`s; the corpus joined; the
+spans fitted over at least three `nsamp` values with an interior point held out
+(`project-cycle-model-training`'s grid discipline).  Gate: **the fit is generated from poly's
+declarations alone**, and predicts cosim at least as well as the hand-fitted `proc_latency = 40`, with
+no number typed in.  `unit_harness.md` resumes after this.
+
+**Stage 6 -- retire the old API.**  Migrate the users of `get_pipelined` / `write_pipelined` /
+`read_pipelined` and the undeclared `TimingModel`s, then remove the old forms and the extraction
+prohibition they caused (`hwcodegen._check_not_pipelined`,
+`tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user left; docs teach one construct.
 
 ## Deferred, written down
 
 - **Several loads or stores per stage** -- the HLS loop that reads `in_stream1` and `in_stream2` each
-  iteration.  The construct extends: `load=(...)` begins every load **concurrently** (chained
-  `yield from`s would serialize what the loop interleaves), `latency` is measured from the latest
-  first beat, the tail from the latest last beat.  Not now: load-compute-store first.
-- **Block compute** (an FFT frame, a frame buffer): output starts after the *last* input, so
-  `latency` is measured from `L.last`.  One anchor word on `Compute`; needed before an FFT migrates.
+  iteration.  The construct extends: several `load=` requests begun **concurrently** (chained
+  `yield from`s would serialize what the loop interleaves), `latency` measured from the latest first
+  beat, the tail from the latest last beat.  Not now: load-compute-store first.
 - **`m_axi` loads and stores** (`MMIFMaster.read_pipelined`): the same split in the memory-mapped
-  primitive, where a message may be several bursts -- its markers then split RTL beats by pysim's
-  word counts, as for an unframed stream.
+  primitive, where a message may be several bursts -- its markers then split RTL beats by pysim's word
+  counts, as for an unframed stream; a `TimingEvent` names its AXI channel.
 - **Lowering `self.pipeline` in the extractor** to the pipelined HLS loop, closing point 3 below.
-- **The silent case stays possible**: a plain `get` + `write` without `pipeline` still simulates as a
-  sequence.  A unit-harness check could flag it per port (pysim's `S.first - L.first` far above the
-  RTL's).
+- **The silent case stays possible**: a plain `get` + `write` with no phase still simulates as a
+  sequence with no compute time.  A unit-harness check could flag it per port (pysim's span far below
+  the RTL's).
 
 ## The defect
 
