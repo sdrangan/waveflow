@@ -35,7 +35,7 @@ from typing import ClassVar
 import numpy as np
 
 from examples.stream_inband.poly import CoeffArray, Float32, poly_eval
-from waveflow.hw.arrayutils import array, read_array, write_array
+from waveflow.hw.arrayutils import array, write_array
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.dataschema import DataList, EnumField, IntField
@@ -222,13 +222,17 @@ class PolyKernel(FreeRunMod):
         n = int(hdr.nsamp)
         coeffs = hdr.coeffs
 
-        def compute(words):
-            x = read_array(words, elem_type=Float32, word_bw=W, shape=len(words)).val
-            return array(Float32, poly_eval(coeffs, x))
+        # The three parts of the pipeline: get_array(Float32, n) and the results' write, deferred,
+        # and the pure function between them.  compute gets the samples that arrived -- fewer than n
+        # if the burst ended early -- and so many results go out, closed.
+        load = self.s_in.load_array(Float32, n)
+        store = self.m_out.store_array(Float32, n)
 
-        r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=n),
-                                                store=self.m_out, nwords=n)
-        k = int(r.load.nwords)
+        def compute(x):
+            return array(Float32, poly_eval(coeffs, x.val))
+
+        r = yield from self.samp_phase.pipeline(compute, load=load, store=store, nwords=load.nwords())
+        k = len(r.y.val)
         st = Status.OK if k == n else Status.TLAST_EARLY
         yield self.resp_phase.timeout()
         yield from self.m_resp.write(Resp(tx_id=hdr.tx_id, nsamp=k, status=st))

@@ -206,8 +206,9 @@ class _PipeDoubler(FreeRunMod):
         self.results = []
 
     def run_iter(self):
-        load = self.s_b.req(nwords_max=8) if self.swap else self.s_in.req(nwords_max=8)
-        r = yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out, nwords=8)
+        load = self.s_b.load_words(nwords_max=8) if self.swap else self.s_in.load_words(nwords_max=8)
+        r = yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out.store_words(),
+                                           nwords=8)
         self.results.append(r)
 
 
@@ -264,7 +265,8 @@ class TestPattern2:
         sim = Simulation()
         a = _Doubler(name="a", sim=sim)
         with pytest.raises(RuntimeError, match="needs two spans"):
-            gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.req(), store=a.m_out, n=1)
+            gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.load_words(),
+                                           store=a.m_out.store_words(), n=1)
             next(gen)
 
 
@@ -287,3 +289,67 @@ class TestPipelineResult:
     def test_a_full_burst_is_not_short(self):
         dut, _ = _pipe_harness([list(range(8))])
         assert not any(rec.short for rec in dut.phase.records)
+
+
+# ---------------------------------------------------------------------------
+# Deferred transfers: load_* decodes as the read it stands for, store_* checks what the compute returns
+# ---------------------------------------------------------------------------
+
+from waveflow.hw.dataschema import FloatField, IntField  # noqa: E402
+
+Float32 = FloatField.specialize(bitwidth=32)
+Int32 = IntField.specialize(bitwidth=32)
+
+
+def _f32_words(x, word_bw):
+    from waveflow.hw.arrayutils import write_array
+
+    return np.asarray(write_array(np.asarray(x, np.float32), elem_type=Float32, word_bw=word_bw),
+                      dtype=np.uint64)
+
+
+class TestDeferredTransfers:
+    def test_load_array_is_get_array_and_a_short_burst_gives_what_arrived(self):
+        """Full: the n elements get_array returns.  Short (TLAST early): every element whose words
+        arrived -- at two Float32 a 64-bit word, both lanes of the last word."""
+        s = StreamIFSlave(name="s", sim=Simulation(), bitwidth=64)
+        x = np.arange(7, dtype=np.float32)
+        req = s.load_array(Float32, 7)
+        assert req.nwords() == 4
+        np.testing.assert_array_equal(req.decode(_f32_words(x, 64)).val, x)
+        short = req.decode(_f32_words(x, 64)[:2])
+        np.testing.assert_array_equal(short.val, x[:4])
+
+    def test_a_schema_cannot_arrive_in_part(self):
+        from waveflow.hw.dataschema import DataList, IntField
+
+        class Hdr(DataList):
+            elements = {"a": {"schema": IntField.specialize(32)},
+                        "b": {"schema": IntField.specialize(32)}}
+
+        s = StreamIFSlave(name="s", sim=Simulation(), bitwidth=32)
+        h = Hdr(a=3, b=4)
+        words = np.asarray(h.serialize(word_bw=32), dtype=np.uint64)
+        got = s.load_schema(Hdr).decode(words)
+        assert (int(got.a), int(got.b)) == (3, 4)
+        with pytest.raises(ValueError, match="ended after 1"):
+            s.load_schema(Hdr).decode(words[:1])
+
+    def test_store_array_holds_the_compute_to_its_type_and_count(self):
+        from waveflow.hw.arrayutils import array
+
+        m = StreamIFMaster(name="m", sim=Simulation(), bitwidth=32)
+        st = m.store_array(Float32, 4)
+        st.check(array(Float32, np.zeros(4, np.float32)))
+        st.check(array(Float32, np.zeros(2, np.float32)))           # fewer: an early TLAST upstream
+        with pytest.raises(ValueError, match="returned 5 elements"):
+            st.check(array(Float32, np.zeros(5, np.float32)))
+        with pytest.raises(TypeError, match="Float32"):
+            st.check(array(Int32, np.zeros(4, np.int32)))
+        with pytest.raises(TypeError):
+            st.check(np.zeros(4, np.float32))
+
+    def test_pipeline_takes_deferred_transfers_not_endpoints(self):
+        a = _Doubler(name="a", sim=Simulation())
+        with pytest.raises(TypeError, match="deferred transfers"):
+            next(a.compute_phase.pipeline(lambda w: w, load=a.s_in.load_words(), store=a.m_out, n=1))

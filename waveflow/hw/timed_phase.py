@@ -256,12 +256,15 @@ class TimedPhase:
 
 
     # -- Pattern 2 -------------------------------------------------------------------------------
-    def pipeline(self, fn, load, store, **feats):
+    def pipeline(self, compute, load, store, **feats):
         """Pattern 2: a pipelined load, compute, store -- the HLS loop that reads a word, computes,
-        writes a word.  ``r = yield from phase.pipeline(fn, load=self.s_in.req(...), store=self.m_out,
-        n=n)``; returns a :class:`PipelineResult`: ``r.y`` is ``fn``'s result (what was written),
-        ``r.load`` and ``r.store`` the two transfers -- a body that decides from its input (a burst that
-        ended early) reads ``r.load.nwords``, so ``fn`` stays a pure function.
+        writes a word.  ``r = yield from phase.pipeline(compute, load=self.s_in.load_array(T, n),
+        store=self.m_out.store_array(T, n), nwords=...)`` -- the load and the store are reads and writes
+        **deferred** (``load_*`` / ``store_*`` on the endpoints), ``compute`` the pure function between
+        them, given what the load's read returns and checked against what the store writes.  Returns a
+        :class:`PipelineResult`: ``r.y`` is ``compute``'s result (what was written), ``r.load`` and
+        ``r.store`` the two transfers -- a body that decides from its input (a burst that ended early)
+        reads ``len(r.y.val)`` or ``r.load.nwords``, so ``compute`` stays a pure function.
 
         The phase must declare two spans: one from the load endpoint's ``first`` to the store
         endpoint's ``first`` (the latency), one from the store's ``first`` to its ``last`` (the fill);
@@ -269,7 +272,7 @@ class TimedPhase:
         against each other.  The waits (the plan's Pattern 2): every time is a real event plus a
         prediction, never backdated::
 
-            L.first                -> the words are in hand; y = fn(words)
+            L.first                -> the words are in hand; y = compute(decoded words)
             L.first + latency      -> the store begins (S.first), when its bus allows
             S.first + fill         -> then the load ends: L.last >= L.first + (n - 1) beats
             L.last  + latency      -> the tail: the last output needs the last input
@@ -279,20 +282,24 @@ class TimedPhase:
             raise RuntimeError(f"phase {self.name!r} is not registered: call the module's "
                                f"add_timing_phase(phase) in __post_init__")
         self._check_features(feats)
-        lat, fill = self._pipeline_spans(load.ep, store)
-        env, per = self.owner.env, self._period(store)
+        if not hasattr(load, "decode") or not hasattr(store, "check"):
+            raise TypeError(f"phase {self.name!r}: pipeline() takes deferred transfers -- "
+                            f"load=ep.load_array(T, n) / load_schema(T) / load_words(), "
+                            f"store=ep.store_array(T, n) / store_schema(T) / store_words()")
+        lat, fill = self._pipeline_spans(load.ep, store.ep)
+        env, per = self.owner.env, self._period(store.ep)
         pred = self.predict(**feats)
         t_lat, t_fill = pred[lat] * per, pred[fill] * per
 
         lx = yield from load.ep.begin_read(pending_ok=True)
-        y = fn(load.decode(lx.data))
+        y = store.check(compute(load.decode(lx.data)))
         yield _until(env, lx.first + t_lat - per)          # the store's first beat a cycle later
-        sx = yield from store.begin(y)
+        sx = yield from store.ep.begin(y)
         # The load ends when its last word is read -- delivered, and a word a cycle after the first --
         # which frees its words' room then, not when the store is done.
         yield from load.ep.end_read(lx, charge_beats=True)
         yield _until(env, max(sx.first + t_fill, lx.last + t_lat))
-        yield from store.end(sx)
+        yield from store.ep.end(sx)
 
         occ = self._occurrences
         self._occurrences += 1
@@ -301,11 +308,11 @@ class TimedPhase:
         short = asked is not None and lx.nwords < asked
         self.records.append(PhaseRecord(
             self.name, lat, occ, (load.ep.name, lx.index, "first", lx.first), dict(feats), pred[lat],
-            end=(store.name, sx.index, "first", sx.first), actual=(sx.first - lx.first) / per,
+            end=(store.ep.name, sx.index, "first", sx.first), actual=(sx.first - lx.first) / per,
             stalled=stalled or (sx.first - lx.first) / per > pred[lat] + 1e-6, short=short))
         self.records.append(PhaseRecord(
-            self.name, fill, occ, (store.name, sx.index, "first", sx.first), dict(feats), pred[fill],
-            end=(store.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
+            self.name, fill, occ, (store.ep.name, sx.index, "first", sx.first), dict(feats), pred[fill],
+            end=(store.ep.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
             stalled=stalled or (sx.last - sx.first) / per > pred[fill] + 1e-6, short=short))
         return PipelineResult(y, lx, sx)
 

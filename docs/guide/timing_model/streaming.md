@@ -4,8 +4,8 @@ parent: Timing Models
 nav_order: 4
 audience: python
 snippets: run
-api: [TimedPhase.pipeline, PipelineResult, StreamIFSlave.req, LoadRequest]
-summary: "A pipelined body -- the loop that reads a word, computes, writes a word -- overlaps its input and output: the first output comes a latency after the first input, and later outputs are paced by the slower of input arrival and the loop's rate. Declared as two spans, latency (input first -> output first) and fill_time (output first -> output last), and run with `phase.pipeline(fn, load=ep.req(...), store=ep, **features)`, which waits exactly that race from real events and returns what it did. Run on a small module: 8 words, latency 5, fill 7."
+api: [TimedPhase.pipeline, PipelineResult, StreamIFSlave.load_array, StreamIFMaster.store_array, LoadRequest, StoreRequest]
+summary: "A pipelined body -- the loop that reads a word, computes, writes a word -- overlaps its input and output: the first output comes a latency after the first input, and later outputs are paced by the slower of input arrival and the loop's rate. Declared as two spans, latency (input first -> output first) and fill_time (output first -> output last), and run with `phase.pipeline(compute, load=ep.load_array(T, n), store=ep.store_array(T, n), **features)`, which waits exactly that race from real events and returns what it did. Run on a small module: 8 words, latency 5, fill 7."
 ---
 
 # Pipelined bodies
@@ -75,15 +75,19 @@ class Double(FreeRunMod):
         self.results = []
 
     def run_iter(self):
-        r = yield from self.loop_phase.pipeline(lambda w: w * 2, load=self.s_in.req(nwords_max=N),
-                                                store=self.m_out, nwords=N)
+        r = yield from self.loop_phase.pipeline(lambda w: w * 2,
+                                                load=self.s_in.load_words(nwords_max=N),
+                                                store=self.m_out.store_words(), nwords=N)
         self.results.append(r)
 ```
 
-- **`load=self.s_in.req(...)`** is a *request*, not a read: `pipeline` drives the transfer's two
-  halves itself.  `req()` takes the next burst's raw words, `req(nwords_max=N)` at most `N` of them,
-  `req(T, count)` typed elements as `get_array` returns them.
-- **`store=self.m_out`** is the endpoint the result goes out on.
+- **`load=` and `store=` are transfers deferred, not made**: `pipeline` drives each one's two halves
+  itself.  Each names the endpoint method it stands for: `s_in.load_array(T, n)` is `get_array(T, n)`
+  -- the compute receives that `DataArray`, shorter if the burst ended early -- `s_in.load_schema(T)`
+  is `get_schema(T)`, and `s_in.load_words(nwords_max=N)` raw words, as here.  On the output,
+  `m_out.store_array(T, n)` writes the compute's `DataArray` of `T` (at most `n` elements, checked),
+  `store_schema(T)` one `T`, `store_words()` raw words.
+- **The compute is a pure function** from what the load returns to what the store writes.
 - **The call is checked against the declaration**: the load must be on the endpoint whose `first`
   starts `latency`, the store on the one that ends it and carries `fill_time`.
 - **`pipeline` is a `yield from`**: a sequence of waits, not one event.
@@ -160,14 +164,16 @@ a shared bus is held when it is really used.
 
 `pipeline` returns a `PipelineResult`: `r.y` is the compute's result (what was written), and `r.load`
 and `r.store` are the two transfers -- how many words arrived, when, and whether the other side held
-them up.  A body that decides from its input reads `r.load`, so the compute stays a pure function.
-Poly halts when a sample burst ends early, at TLAST:
+them up.  A body that decides from its input reads the result or `r.load`, so the compute stays a pure function.
+Poly halts when a sample burst ends early, at TLAST -- its compute received fewer samples, so it
+returned fewer results:
 
 <!-- snippet: skip -->
 ```python
-r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=nwords_max),
-                                        store=self.m_out, nwords=nwords_max)
-if r.load.nwords < nwords_max:      # TLAST came early: halt, read nothing more
+load = self.s_in.load_array(Float32, cmd_hdr.nsamp)
+store = self.m_out.store_array(Float32, cmd_hdr.nsamp)
+r = yield from self.samp_phase.pipeline(compute, load=load, store=store, nwords=load.nwords())
+if len(r.y.val) < cmd_hdr.nsamp:    # TLAST came early: halt, read nothing more
     ...
 ```
 

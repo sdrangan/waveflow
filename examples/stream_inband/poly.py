@@ -348,21 +348,21 @@ class PolyAccel(HostActivated):
                 self._job += 1
                 continue
 
-            # The burst ends at TLAST, so the words that arrived say whether it came early.
-            pf = samples_per_word(self.in_bw)
-            nwords_max = -(-int(cmd_hdr.nsamp) // pf)    # int: -n of an unsigned wraps
-            def compute(words):
-                # A short burst's results still go out as one burst, closed (rule 6).
-                x = read_array(words, elem_type=Float32, word_bw=self.in_bw,
-                               shape=min(cmd_hdr.nsamp, len(words) * pf)).val
-                return array(Float32, poly_eval(cmd_hdr.coeffs, x))
+            # The samples: get_array(Float32, nsamp) and the results' write, deferred, and the pure
+            # function between them.  compute gets the samples that arrived: a burst that ends early
+            # at TLAST is shorter, and its results still go out as one burst, closed (rule 6).
+            load = self.s_in.load_array(Float32, cmd_hdr.nsamp)
+            store = self.m_out.store_array(Float32, cmd_hdr.nsamp)
 
-            r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=nwords_max),
-                                                    store=self.m_out, nwords=nwords_max)
+            def compute(x):
+                return array(Float32, poly_eval(cmd_hdr.coeffs, x.val))
+
+            r = yield from self.samp_phase.pipeline(compute, load=load, store=store,
+                                                    nwords=load.nwords())
             yield resp
             self._job += 1
 
-            if r.load.nwords < nwords_max:      # TLAST came early: halt, read nothing more
+            if len(r.y.val) < cmd_hdr.nsamp:    # TLAST came early: halt, read nothing more
                 self._halt(PolyError.TLAST_EARLY_SAMP_IN, cmd_hdr.tx_id)
                 self.logger.log(event='proc_end', job=self._job)
                 return

@@ -162,8 +162,10 @@ self.compute_phase = TimedPhase(
 self.add_timing_phase(self.compute_phase)
 
 # the body, per message
-r = yield from self.compute_phase.pipeline(fn=lambda x: array(Float32, poly_eval(c, x)),
-                                           load=self.s_in.req(Float32, n), store=self.m_out, n=n)
+load = self.s_in.load_array(Float32, n)       # get_array(Float32, n), deferred
+store = self.m_out.store_array(Float32, n)    # the results' write, deferred (type and count checked)
+r = yield from self.compute_phase.pipeline(lambda x: array(Float32, poly_eval(c, x.val)),
+                                           load=load, store=store, nwords=load.nwords())
 # r.y: what was written; r.load / r.store: the two Xfers (how many words arrived, when, stalled)
 ```
 
@@ -202,8 +204,13 @@ yield from store.end(sx)                           # S.last: the burst is delive
   held when it is really used.  This is why the design is two events per transfer and not markers
   recorded after the fact: a backdated write (`write_pipelined`'s `tstart`) cannot take a contended
   bus in the past.
-- **`load` is a request** (`self.s_in.req(type, count)`), not a running `get_array(...)`, which only
-  returns at the end: `pipeline` drives the transfer's two halves itself.  A body of another shape
+- **`load` and `store` are transfers deferred** (`self.s_in.load_array(T, n)` is `get_array(T, n)`,
+  `self.m_out.store_array(T, n)` its write; `load_schema` / `store_schema`, `load_words` /
+  `store_words`), not a running `get_array(...)`, which only returns at the end: `pipeline` drives each
+  transfer's two halves itself.  (Named `req(...)` and a bare store endpoint until 2026-10-14, with the
+  user: the call should name the endpoint method it defers and its type on both sides; a typed load
+  on a burst that ends early returns the elements that arrived, and the store checks what the compute
+  returns.)  A body of another shape
   uses the same `begin` / `end` directly.
 - **Several pipelines may share endpoints** -- poly has two per message on the same ports, header ->
   response and samples -> results: two declared phases.  Each endpoint's `Xfer` index counts every
