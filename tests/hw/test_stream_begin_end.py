@@ -298,3 +298,27 @@ class TestBeginEnd:
         env.process(reader())
         env.run()
         assert idx == [0, 1, 2]
+
+
+class TestOneBeatACycle:
+    def test_the_next_transfer_starts_a_cycle_after_the_last_beat(self):
+        """A port takes one beat a cycle: two bursts waiting in the buffer, read back to back -- the
+        first is read 20 .. 23 (a word a cycle), the second's first beat is 24, not 23."""
+        env, m, s = _chan(depth=16)
+        seen = []
+
+        def writer():
+            for k in range(2):
+                yield from m.write(_words(4) + 10 * k)
+
+        def reader():
+            yield env.timeout(20)
+            for _ in range(2):
+                x = yield from s.begin_read()
+                yield from s.end_read(x, charge_beats=True)
+                seen.append((x.first, x.last))
+
+        env.process(writer())
+        env.process(reader())
+        env.run()
+        assert seen == [(20.0, 23.0), (24.0, 27.0)]

@@ -315,6 +315,11 @@ class PolyAccel(HostActivated):
         self.regmap.set("tx_id", tx_id)
         self.regmap.set("halted", 1)
 
+    def _respond(self, wait, resp_hdr: "PolyRespHdr") -> ProcessGen[None]:
+        """The response header: after the header phase's wait (*wait*, already taken), written."""
+        yield wait
+        yield from self.m_out.write(resp_hdr)
+
     def body(self) -> ProcessGen[None]:
         """The kernel for pysim: the port wrapper around :func:`poly_eval`, plus timing.
 
@@ -334,9 +339,12 @@ class PolyAccel(HostActivated):
 
             resp_hdr = PolyRespHdr()
             resp_hdr.tx_id = cmd_hdr.tx_id
-            yield self.hdr_phase.timeout()
-            yield from self.m_out.write(resp_hdr)
+            # The response goes out while the samples come in, as the RTL overlaps them: the header
+            # phase's wait is taken now (its span starts at this header's last beat), and the
+            # response is written by a process of its own while the sample pipeline begins.
+            resp = self.env.process(self._respond(self.hdr_phase.timeout(), resp_hdr))
             if cmd_hdr.nsamp == 0:          # no sample burst either way, as in the C++
+                yield resp
                 self._job += 1
                 continue
 
@@ -351,6 +359,7 @@ class PolyAccel(HostActivated):
 
             r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=nwords_max),
                                                     store=self.m_out, nwords=nwords_max)
+            yield resp
             self._job += 1
 
             if r.load.nwords < nwords_max:      # TLAST came early: halt, read nothing more
