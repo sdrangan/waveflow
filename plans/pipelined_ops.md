@@ -1,7 +1,162 @@
-# Plan: `get_pipelined` / `write_pipelined` is undiscoverable
+# Plan: pipelines inside a module -- load, compute, store, timed by the markers at their ports
 
-**Status: RECORDED, not scheduled.** 2026-08-16. No solution proposed here — the point of this file
-is that the problem is *structural*, so nobody wastes a docs pass on it.
+**Status: PLANNED 2026-10-14, nothing built.**  The defect was recorded 2026-08-16 (below, from
+[The defect](#the-defect) on, kept as the evidence).  The design came out of the
+`plans/unit_harness.md` discussion: a unit harness can only calibrate a module whose timing is stated
+between events it can observe, and today's pipelined ops state it with arithmetic on times that never
+happened.  `unit_harness.md` is **paused** until this plan's Stage 4 (the mechanical fit) works on poly.
+
+## The rules
+
+- **Rule 1 -- a timed phase.**  A *time-calibratable phase* is the time between two events whose
+  duration is a deterministic function of features known before the first event.  A *timing model*
+  is a learned version of that function: its **targets** are observable durations; its parameters (a
+  latency, an II) are internal to it and never appear in module code.  Nothing else is passed: the two
+  events, the features, the model.
+- **Rule 2 -- every event is measurable.**  Each event of a phase has a mechanical measurement at RTL
+  (the handshake of an endpoint: its first and last beat of a message) and is logged by pysim's own
+  transfer primitive.  A phase's duration is deterministic only while the environment does not stall
+  the module inside it, so every record also carries whether it did (an input gap, output
+  back-pressure) -- mechanical on both sides too.  A stalled record tests a prediction; it is not
+  training data.
+
+## The pattern: load, compute, store
+
+The minimum a module must express is a pipeline of three stages, as the HLS body is written (a
+straight-line loop per message, `docs/guide/vectorization/hls/loop_optimization.md`):
+
+1. an **endpoint transaction** -- the load;
+2. a **compute** -- the only stage with a timing model;
+3. an **endpoint transaction** -- the store.
+
+The four **markers** are the two transactions' first and last beats: `L.first`, `L.last`, `S.first`,
+`S.last`.  They are the endpoints' own handshakes, so the unit harness reads them at its boundary (the
+bus models' timestamps) and, in place, from probes on the module's ports (`system_top.beat` /
+`last`, which resolve a pysim endpoint to its net) -- never from a net someone had to find.
+
+The compute's model predicts two targets, each a difference of markers:
+
+| target | measured as |
+|---|---|
+| `latency` | `S.first - L.first` |
+| `fill_time` | `S.last - S.first`, when neither the input nor the output limited it |
+
+## The module code
+
+```python
+lx = yield from load.begin()           # L.first; lx.data is already here
+y = compute.fn(lx.data)
+latency, fill_time = compute.tm.predict(feats)
+yield self.timeout(latency)            # L.first + latency   (relative: nothing waited since L.first)
+sx = yield from store.begin(y)         # S.first, when the bus and the queue's room allow
+yield self.timeout(fill_time)          # S.first + fill_time (relative: nothing waited since S.first)
+yield from load.end(lx)                # L.last
+yield self.until(lx.last + latency)    # the tail -- the last output needs the last input; no-op if past
+yield from store.end(sx)               # S.last: the burst is delivered
+```
+
+wrapped for the common case as
+
+```python
+y = yield from self.pipeline(load=Load(self.s_in, Float32, n),
+                             compute=Compute(fn, tm=self.poly_tm, feats={"nsamp": n}),
+                             store=self.m_out)
+```
+
+- **The rule of the waits:** a relative `timeout` only straight after the event it is measured from;
+  anything else is an absolute `until`, which takes the max for free.  Sequential relative waits add
+  where the hardware takes a max.
+- **The data arrives at `begin`.**  The writer holds every word when it calls `write`, so a begun
+  burst carries them; compute is functional, and the waits enforce the timing.  No deferred-data write.
+- **`store.begin` takes the bus and marks `S.first` without delivering; `store.end` delivers** at the
+  later of now and the interface's own minimum (`S.first` + its beats), waiting for room, and marks
+  `S.last`.  So delivery is never earlier than anything the module waited for.
+- **Nothing is backdated.**  Every wait is "now + a prediction" from a real event, so a shared bus is
+  held when it is really used.  This is why the design is two events per transfer and not markers
+  recorded after the fact: a backdated write (`write_pipelined`'s `tstart`) cannot take a contended
+  bus in the past.
+- **`load` is a description** (`Load(endpoint, type, count)`), symmetric with `store=self.m_out`:
+  `pipeline` drives the transfer's two halves itself, which a running `get_array(...)` -- which only
+  returns at the end -- cannot.
+
+`Xfer` is the handle `begin` returns and `end` completes, one per message per endpoint:
+
+```python
+@dataclass
+class Xfer:
+    ep: InterfaceEndpoint     # whose transfer (the port name for alignment)
+    index: int                # the k-th message on that endpoint, counted by the primitive
+    data: Any                 # load: the words, typed if the Load asked for a type; store: what was written
+    nwords: int
+    first: float              # first beat (set by begin)
+    last: float               # last beat (set by end; a property that RAISES while in flight)
+    stalled: bool             # held up by the other side in between: not a clean fitting sample
+```
+
+The endpoint logs each `Xfer` when it ends -- pysim's half of Rule 2.  pysim and RTL records join on
+`(endpoint, index)`; the model is fitted on the feature point, as `waveflow.calib.timing_model`
+already joins its two sides.
+
+## Compatibility
+
+- **The primitive is fully compatible.**  `begin` / `end` go into the stream's transfer primitive
+  (`StreamIF._transfer`, `QueuedTransferIFSlave._take_burst`), and today's `get` / `write` become
+  `begin` immediately followed by `end`.  Every existing pysim cycle count must be unchanged; if one
+  moves, the refactor is wrong.
+- **The API is not, in the end.**  `get_pipelined` / `write_pipelined` / `read_pipelined` sit beside
+  the new form while poly proves it, then are retired (Stage 5): two ways to state a pipeline is the
+  undiscoverability this file records.  Today they are used by about 18 framework modules (mem
+  streams, queue and regbank views, the RF buffers, BRAM, SSR FFT, locked memory), 5 examples
+  (`stream_inband`, `mm_fir`, `bram_access`, `vmac`, the RF ones through the framework) and about 12
+  docs pages -- not a flag day.
+
+## Stages
+
+**Stage 1 -- the begun burst.**  Decide how a burst that has begun and not ended counts against the
+reader's queue.  Today (`_admit_blocking`): a writer waits for room for `min(n, capacity)` and the
+whole burst then lands at once; a burst larger than its queue is "one burst in flight at a time"; the
+reader takes the burst *first* and only then retires its words (`_take_burst`), which is why chunking
+deadlocks (PR #185).  The proposal to test: admission at the writer's `begin` (the first word enters
+the FIFO then), the reader may take a begun burst at its own `begin`, and retires its words at its
+`end`, after the writer's.  Also measure today's events per message on poly and markov -- the
+baseline for Stage 2's cost.  Gate: the rule written down, with the deadlock case of PR #185 argued
+through it.
+
+**Stage 2 -- `Xfer`, `begin` / `end` in the stream primitive.**  `get` / `write` and every typed read
+on top of them rebuilt on it.  Gate: every pysim cycle count unchanged (the fast suite's gates;
+markov's and mm_fir's pysim numbers; the calibration keys), and the added events per message measured.
+
+**Stage 3 -- `self.pipeline`, `Load`, `Compute`, `until`; poly migrated.**  The four markers logged by
+the primitive.  Poly's `body` keeps its function and loses its formula (`tstart`, `t_out_start`,
+`write_pipelined`).  Gate: poly bit-exact as before; its pysim timing within the existing tolerance of
+cosim with the model seeded by hand.
+
+**Stage 4 -- the markers at RTL, and the fit.**  The four markers per message from poly's cosim (or XSI
+of the kernel alone), aligned by `(endpoint, index)`; `latency` and `fill_time` fitted over at least
+three `nsamp` values with an interior point held out (`project-cycle-model-training`'s grid
+discipline).  Gate: the fitted model predicts cosim at least as well as the hand-fitted
+`proc_latency = 40`, with no number typed in.  `unit_harness.md` resumes after this.
+
+**Stage 5 -- retire the old API.**  Migrate the users of `get_pipelined` / `write_pipelined` /
+`read_pipelined`, then remove them and the extraction prohibition they caused
+(`hwcodegen._check_not_pipelined`, `tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user
+left; docs teach one construct.
+
+## Deferred, written down
+
+- **Several loads or stores per stage** -- the HLS loop that reads `in_stream1` and `in_stream2` each
+  iteration.  The construct extends: `load=(...)` begins every load **concurrently** (chained
+  `yield from`s would serialize what the loop interleaves), `latency` is measured from the latest
+  first beat, the tail from the latest last beat.  Not now: load-compute-store first.
+- **Block compute** (an FFT frame, a frame buffer): output starts after the *last* input, so
+  `latency` is measured from `L.last`.  One anchor word on `Compute`; needed before an FFT migrates.
+- **`m_axi` loads and stores** (`MMIFMaster.read_pipelined`): the same split in the memory-mapped
+  primitive, where a message may be several bursts -- its markers then split RTL beats by pysim's
+  word counts, as for an unframed stream.
+- **Lowering `self.pipeline` in the extractor** to the pipelined HLS loop, closing point 3 below.
+- **The silent case stays possible**: a plain `get` + `write` without `pipeline` still simulates as a
+  sequence.  A unit-harness check could flag it per port (pysim's `S.first - L.first` far above the
+  RTL's).
 
 ## The defect
 

@@ -5,7 +5,15 @@ completed (PRs #252, #259, #260).  **Stage 0 done 2026-10-13** (no code): the fi
 ([Stage 0 findings](#stage-0-findings-2026-10-13)) map every port of markov's three devices and
 mm_fir's device (both topologies) to a model, name the unit hosts and how a harness is stated, and
 list the decisions Stage 1 needs -- D9 (the harness boundary) among them, still proposed, not taken.
-Stopped there for discussion before Stage 1.  Part A is staged work; Part B is a sketch that connects
+**PAUSED 2026-10-14** for `plans/pipelined_ops.md`: the discussion after Stage 0 found that a harness
+can only calibrate a module whose timing is stated between events at its ports, and that a module
+cannot state it yet (`get_pipelined` / `write_pipelined` compute times that never happened).  This
+plan resumes after that plan's Stage 4 (the mechanical fit on poly).  Also from that discussion, to
+fold in when it resumes: the unit generalizes from "device" to any **test subsystem** (a subgraph whose
+function and timing are observable at its boundary; hierarchical; calibrated at the leaves, composed
+and verified above), independent of how it is packaged; and every child's boundary is observed in
+place by probes on its ports, so only a module that needs *control* (sweeps, hostile policies,
+development before its parent) needs a harness of its own.  Part A is staged work; Part B is a sketch that connects
 it to `plans/multi_agent_flows.md`.
 
 **What the prerequisite plan now provides** (all merged):
