@@ -79,6 +79,7 @@ def main() -> int:
 
 def _figure(rows: list[dict]) -> None:
     import matplotlib
+    import matplotlib.ticker
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -90,6 +91,8 @@ def _figure(rows: list[dict]) -> None:
         ax.loglog(m, p, "o", ms=4)
         lo, hi = min(m.min(), p.min()) * 0.8, max(m.max(), p.max()) * 1.25
         ax.plot([lo, hi], [lo, hi], "-", lw=1, color="0.5")
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        ax.yaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
         ax.set_title(t)
         ax.set_xlabel("measured (csynth)")
         ax.set_ylabel("predicted")
