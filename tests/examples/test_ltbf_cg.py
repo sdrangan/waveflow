@@ -216,3 +216,92 @@ def test_float_exact_projection_spans_the_top_eigenvectors():
     p_top = top @ np.linalg.pinv(top)
     gh = g.conj().T
     assert np.linalg.norm(p_top @ gh - gh) / np.linalg.norm(gh) < 1e-8
+
+
+# --- the fixed-point solve (AC3), no Sionna ------------------------------------------------------
+
+
+def _states(ha, b, f, form, t_max=10):
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    out = []
+    lf.solve_fixed(
+        ha, b, f, t_max, form, on_iteration=lambda n, st, sc: out.append((st.xr, st.xi))
+    )
+    return out
+
+
+@pytest.mark.parametrize("form", ["factored", "explicit"])
+def test_fixed_per_ue_and_joint_solves_are_bit_identical(form):
+    """Per-column omega and nu with static formats: solving the own UEs jointly or one at a time
+    gives the same stored X, so grouping is a hardware axis only (plan §9 b)."""
+    from examples.ltbf_cg import ltbf as lt
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    rng = np.random.default_rng(14)
+    ha, _ = _system(rng, n=16, cols=48)
+    b = ha[:, :24] * np.sqrt(lk.N_SRS)  # three own UEs
+    f = lf.formats_for(12, lf.profile_ranges(ha, b, 10))
+    joint = _states(ha, b, f, form)
+    xs_joint = lt.cg_iterates(lt.factored_s(ha), b, 10)
+    for k in range(3):
+        cols = slice(k * lk.N_SRS, (k + 1) * lk.N_SRS)
+        per = _states(ha, b[:, cols], f, form)
+        for (jr, ji), (pr, pi) in zip(joint, per, strict=True):
+            np.testing.assert_array_equal(jr[:, cols], pr)
+            np.testing.assert_array_equal(ji[:, cols], pi)
+        xs_per = lt.cg_iterates(lt.factored_s(ha), b[:, cols], 10)
+        for xj, xp in zip(xs_joint, xs_per, strict=True):
+            np.testing.assert_allclose(xj[:, cols], xp, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("form", ["factored", "explicit"])
+def test_fixed_zero_column_stays_zero(form):
+    """A zero right-hand side takes both zero guards (rz = ps = 0): its X stays exactly zero."""
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    rng = np.random.default_rng(15)
+    ha, b = _system(rng, n=16, cols=48, rhs=8)
+    b[:, 2] = 0
+    f = lf.formats_for(12, lf.profile_ranges(ha, b, 10))
+    for xr, xi in _states(ha, b, f, form):
+        assert not np.any(xr[:, 2]) and not np.any(xi[:, 2])
+        assert np.any(xr[:, 3])
+
+
+def test_fixed_24_bit_formats_fit_64_bits_at_1024_antennas():
+    """AC3's 24-bit check is buildable at the largest array: every exact intermediate <= 64 bits."""
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    rng = np.random.default_rng(16)
+    ha, b = _system(rng, n=32, cols=96, rhs=16, scale=2.0)
+    lf.check_widths(lf.formats_for(24, lf.profile_ranges(ha, b, 10)), 1024, 240)
+
+
+def test_fixed_24_bit_sinr_equals_the_float_pipeline():
+    """AC3: at W = 24 the fixed-point LTBF SINR equals the float pipeline's within 0.01 dB, for
+    every t <= 10, rank, regime and Q form."""
+    from examples.ltbf_cg import ltbf as lt
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    rng = np.random.default_rng(17)
+    h0 = _random_channel(rng, n_ant=16, n_f=12)
+    h1 = h0 + 0.1 * _random_channel(rng, n_ant=16, n_f=12)
+    target = lk.TARGETS["-6_14"]
+    pc0 = lk.power_control(h0, target)
+    ltu = lk.long_term(lk.scaled(h0, pc0), pc0, np.random.default_rng(18), lk.G_SRS_DB)
+    f = lf.formats_for(24, lf.profile_link(ltu, 10))
+    solves = tuple(
+        lt.Solve(form, reg) for form in ("factored", "explicit") for reg in (1, 2)
+    )
+    ev = lt.evaluate_channels(
+        h0, h1, target, lk.G_SRS_DB, np.random.default_rng(18),
+        solves=solves, fixed={"W24": f}, fixed_solves=solves,
+    )  # fmt: skip
+    assert ev.served.size >= 10
+    worst = 0.0
+    for (_, form, reg, t, r), per_ue in ev.fixed.items():
+        ref = ev.approx[(form, reg, t, r)]
+        assert per_ue.keys() == ref.keys()
+        worst = max(worst, max(abs(per_ue[u] - ref[u]) for u in ref))
+    assert worst <= 0.01, worst

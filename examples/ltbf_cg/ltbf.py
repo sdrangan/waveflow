@@ -166,14 +166,82 @@ def sinr_ins_db(
 
 @dataclass(frozen=True)
 class DropEval:
-    """What one drop gives for one configuration."""
+    """What one drop gives for one configuration (per-UE SINR in dB)."""
 
     served: np.ndarray
-    exact: dict[int, float]  # per UE, dB
+    exact: dict[int, dict[int, float]]  # r -> per UE
     approx: dict[
         tuple[str, int, int, int], dict[int, float]
-    ]  # (form, regime, t, r) -> per UE dB
+    ]  # (form, regime, t, r) -> per UE
     ins: dict[int, float]
+    #: The fixed-point solves: (format name, form, regime, t, r) -> per UE.
+    fixed: dict[tuple[str, str, int, int, int], dict[int, float]]
+
+
+def _g_per_t(
+    per_ue: dict[int, list[np.ndarray]],
+    lt: lk.LongTerm,
+    t_max: int,
+    ranks: tuple[int, ...],
+):
+    """``(t, r) -> {u: G_u}`` from every UE's ``A_i`` iterates."""
+    return {
+        (t, r): {
+            u: projection(a_t[t - 1], lt.srs_own[u], r) for u, a_t in per_ue.items()
+        }
+        for t in range(1, t_max + 1)
+        for r in ranks
+    }
+
+
+def evaluate_channels(
+    h0: np.ndarray,
+    h1: np.ndarray,
+    target: tuple[float, float],
+    g_srs_db: float | None,
+    rng: np.random.Generator,
+    t_max: int = 10,
+    ranks: tuple[int, ...] = (1, 2),
+    solves: tuple[Solve, ...] = (Solve("factored", 1),),
+    fixed: dict | None = None,
+    fixed_solves: tuple[Solve, ...] = (),
+) -> DropEval:
+    """Exact, float CG and fixed-point CG LTBF SINR for every ``t <= t_max`` and rank.
+
+    ``h0``, ``h1`` are the unscaled ``S x N x U x F`` channels of the two snapshots; ``fixed``
+    maps a name to an :class:`~examples.ltbf_cg.ltbf_fixed.LtbfFormats`, each solved with every
+    ``fixed_solves`` entry."""
+    from examples.ltbf_cg import ltbf_fixed as lf
+
+    pc0 = lk.power_control(h0, target)
+    pc1 = lk.power_control(h1, target)
+    lt = lk.long_term(lk.scaled(h0, pc0), pc0, rng, g_srs_db)
+    hf = lk.scaled(h1, pc1)
+    served = np.intersect1d(pc0.iconn, pc1.iconn)
+    exact_g: dict[int, dict[int, np.ndarray]] = {r: {} for r in ranks}
+    for s in range(len(lt.own)):
+        for u, a_i in sector_a(lt, s, Solve(), None).items():
+            for r in ranks:
+                exact_g[r][u] = projection(a_i, lt.srs_own[u], r)
+    exact = {r: sinr_lt_db(exact_g[r], hf, pc1, served) for r in ranks}
+    approx: dict[tuple[str, int, int, int], dict[int, float]] = {}
+    for sv in solves:
+        per_ue: dict[int, list[np.ndarray]] = {}
+        for s in range(len(lt.own)):
+            per_ue.update(sector_a(lt, s, sv, t_max))
+        for (t, r), g in _g_per_t(per_ue, lt, t_max, ranks).items():
+            approx[(sv.form, sv.regime, t, r)] = sinr_lt_db(g, hf, pc1, served)
+    fx_out: dict[tuple[str, str, int, int, int], dict[int, float]] = {}
+    for name, f in (fixed or {}).items():
+        for sv in fixed_solves:
+            per_ue = {}
+            for s in range(len(lt.own)):
+                per_ue.update(lf.sector_a_fixed(lt, s, f, t_max, sv.form, sv.regime))
+            for (t, r), g in _g_per_t(per_ue, lt, t_max, ranks).items():
+                fx_out[(name, sv.form, sv.regime, t, r)] = sinr_lt_db(
+                    g, hf, pc1, served
+                )
+    return DropEval(served, exact, approx, sinr_ins_db(hf, pc1, served), fx_out)
 
 
 def evaluate_drop(
@@ -186,32 +254,12 @@ def evaluate_drop(
     t_max: int = 10,
     ranks: tuple[int, ...] = (1, 2),
     solves: tuple[Solve, ...] = (Solve("factored", 1),),
+    fixed: dict | None = None,
+    fixed_solves: tuple[Solve, ...] = (),
 ) -> DropEval:
-    """Exact and CG LTBF SINR for every ``t <= t_max``, rank and solve, on one drop."""
+    """:func:`evaluate_channels` on one traced drop at array ``n x n`` over ``band``."""
     h0 = lk.channel(drop, 0, n, band)
     h1 = lk.channel(drop, 1, n, band)
-    pc0 = lk.power_control(h0, target)
-    pc1 = lk.power_control(h1, target)
-    lt = lk.long_term(lk.scaled(h0, pc0), pc0, rng, g_srs_db)
-    hf = lk.scaled(h1, pc1)
-    served = np.intersect1d(pc0.iconn, pc1.iconn)
-    exact_g = {r: {} for r in ranks}
-    for s in range(len(lt.own)):
-        a = sector_a(lt, s, Solve(), None)
-        for u, a_i in a.items():
-            for r in ranks:
-                exact_g[r][u] = projection(a_i, lt.srs_own[u], r)
-    exact = {r: sinr_lt_db(exact_g[r], hf, pc1, served) for r in ranks}
-    approx: dict[tuple[str, int, int, int], dict[int, float]] = {}
-    for sv in solves:
-        per_ue: dict[int, list[np.ndarray]] = {}
-        for s in range(len(lt.own)):
-            per_ue.update(sector_a(lt, s, sv, t_max))
-        for t in range(1, t_max + 1):
-            for r in ranks:
-                g = {
-                    u: projection(a_t[t - 1], lt.srs_own[u], r)
-                    for u, a_t in per_ue.items()
-                }
-                approx[(sv.form, sv.regime, t, r)] = sinr_lt_db(g, hf, pc1, served)
-    return DropEval(served, exact, approx, sinr_ins_db(hf, pc1, served))
+    return evaluate_channels(
+        h0, h1, target, g_srs_db, rng, t_max, ranks, solves, fixed, fixed_solves
+    )
