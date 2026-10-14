@@ -1,6 +1,7 @@
 # Plan: timed phases inside a module -- load, compute, store, timed by events at its ports
 
-**Status: PLANNED 2026-10-14, nothing built.**  The defect was recorded 2026-08-16 (below, from
+**Status: PLANNED 2026-10-14; Stage 1 DONE 2026-10-14** (a decision record, no code: the
+[Stage 1 record](#stage-1-record-2026-10-14)).  The defect was recorded 2026-08-16 (below, from
 [The defect](#the-defect) on, kept as the evidence).  The design came out of the
 `plans/unit_harness.md` discussion: a unit harness can only calibrate a module whose timing is stated
 between events it can observe, and today's pipelined ops state it with arithmetic on times that never
@@ -176,7 +177,7 @@ lx = yield from load.begin()           # L.first; lx.data is already here
 y = fn(lx.data)
 latency, fill_time = phase.tm.predict(**feats)
 yield self.timeout(latency)            # L.first + latency   (relative: nothing waited since L.first)
-sx = yield from store.begin(y)         # S.first, when the bus and the queue's room allow
+sx = yield from store.begin(y)         # S.first, when the bus allows (room is taken at end)
 yield self.timeout(fill_time)          # S.first + fill_time (relative: nothing waited since S.first)
 yield from load.end(lx)                # L.last
 yield self.until(lx.last + latency)    # the tail -- the last output needs the last input; no-op if past
@@ -241,19 +242,17 @@ yield from store.end(sx)               # S.last: the burst is delivered
 
 ## Stages
 
-**Stage 1 -- the begun burst.**  Decide how a burst that has begun and not ended counts against the
-reader's queue.  Today (`_admit_blocking`): a writer waits for room for `min(n, capacity)` and the
-whole burst then lands at once; a burst larger than its queue is "one burst in flight at a time"; the
-reader takes the burst *first* and only then retires its words (`_take_burst`), which is why chunking
-deadlocks (PR #185).  The proposal to test: admission at the writer's `begin` (the first word enters
-the FIFO then), the reader may take a begun burst at its own `begin`, and retires its words at its
-`end`, after the writer's.  Also measure today's events per message on poly and markov -- the
-baseline for Stage 2's cost.  Gate: the rule written down, with the deadlock case of PR #185 argued
-through it.
+**Stage 1 -- the begun burst.  DONE 2026-10-14.**  How a burst that has begun and not ended counts
+against the reader's queue, with today's events per message as the cost baseline.  The answer and the
+evidence are the [Stage 1 record](#stage-1-record-2026-10-14): a begun burst holds **no** room;
+admission stays where it is today.
 
-**Stage 2 -- `Xfer`, `begin` / `end` in the stream primitive.**  `get` / `write` and every typed read
-on top of them rebuilt on it.  Gate: every pysim cycle count unchanged (the fast suite's gates;
-markov's and mm_fir's pysim numbers; the calibration keys), and the added events per message measured.
+**Stage 2 -- `Xfer`, `begin` / `end` in the stream primitive.**  As the Stage 1 record decides: the
+stamp FIFO beside `data_buffer`, the pending list, the writer's and the reader's `begin` / `end`;
+`get` / `write` and every typed read on top of them rebuilt on it.  Gate: every pysim cycle count
+unchanged (the fast suite's gates; markov's and mm_fir's pysim numbers; the calibration keys); a plain
+`get` / `write` adds **no** SimPy event (measured as in the Stage 1 baseline); the stamps reproduce
+the Stage 1 table (a stamp equals the old back-calculation exactly on the "agree" reads).
 
 **Stage 3 -- the declared layer.**  `TimingEvent` (`ep.first` / `ep.last`, and the qualified names
 on two-operation endpoints), `TimedPhase`, `add_timing_phase` (returns `None`; sets the owner), the
@@ -276,7 +275,97 @@ no number typed in.  `unit_harness.md` resumes after this.
 **Stage 6 -- retire the old API.**  Migrate the users of `get_pipelined` / `write_pipelined` /
 `read_pipelined` and the undeclared `TimingModel`s, then remove the old forms and the extraction
 prohibition they caused (`hwcodegen._check_not_pipelined`,
-`tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user left; docs teach one construct.
+`tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user left.
+
+**Stage 7 -- docs.**  One guide page on timed phases -- the two rules, the declaration, Pattern 1 and
+Pattern 2 with poly as the running example, what is generated from a declaration, and how a phase is
+calibrated -- beside `docs/guide/timing_model/` (whose `streaming.md` teaches `get_pipelined` today
+and is rewritten to point at it).  Poly's pages (`docs/examples/stream_inband/`, its cosim-timing page
+above all: the hand-fitted `proc_latency = 40` becomes the fitted model) are rewritten when Stage 5
+lands; the other pages that teach the pipelined ops (about 12, see [Compatibility](#compatibility))
+move to the new construct as Stage 6 migrates their code.  Flow steps are named and linked, never
+numbered.  Gate: no docs page teaches `get_pipelined` / `write_pipelined` / `read_pipelined`; the
+docs snippet harness runs the guide page's code; the markdown integrity checks pass.
+
+## Stage 1 record (2026-10-14)
+
+**What pysim does today** (`waveflow/hw/interface.py`).  A writer takes the slave's `bus` (one
+resource per slave: writers to one slave are serialized), waits the transfer, `(latency_init + n)`
+cycles, **then** waits for room (`_admit_blocking`: `min(n, capacity)` words, the rest parked in
+`ntx`), puts the whole burst into `data_buffer` and releases the bus.  The reader's `_take_burst`
+takes the burst and only then retires its words, freeing the room.  A burst is one object, delivered
+at once.  `mm_queue` reads the buffer's contents (it sums the bursts' lengths for its occupancy and
+interrupt), so a buffer item must stay a plain word array.  Both producers (`write` and `offer`) hold
+the slave's bus while they put.
+
+**The cost baseline** -- SimPy events (`env._eid`) and stream transfers, counted on whole runs
+(`plans/witness/pipelined_ops/event_baseline.py`, run from the repo root):
+
+| run | events | stream writes | events / write | messages | events / message |
+|---|---|---|---|---|---|
+| poly `timing` (w32) | 51 | 5 | 10.2 | 3 | 17.0 |
+| poly `multi_data` (w32) | 67 | 13 | 5.2 | 7 | 9.6 |
+| markov `direct` (4 jobs x 300) | 343 | 80 | 4.3 | 4 | 85.8 |
+| markov `mm` (4 jobs x 300) | 806 | 112 | 7.2 | 4 | 201.5 |
+
+**What today's back-calculation gets wrong.**  The writer knows when its transfer starts, so the first
+word reaches the reader at `start + (latency_init + 1)` cycles and the last at `start + (latency_init +
+n)`.  `get_pipelined` instead back-calculates `first = now - (n - 1)` cycles when the read returns.
+Every read on the runs above, classified (`plans/witness/pipelined_ops/stamp_check.py`):
+
+| run | agree | burst sat in the buffer before the read | delivery held by back-pressure |
+|---|---|---|---|
+| poly `timing` | 4 | 1 | 0 |
+| poly `multi_data` | 8 | 3 | 2 |
+| markov `direct` | 51 | 29 | 0 |
+| markov `mm` | 64 | 41 | 5 |
+
+The back-calculation is right on about 60% of reads.  On the middle column it dates the first word
+**after** it arrived, and pysim reads a buffered burst in **zero** time where the RTL reads it at a word
+a cycle.  This is the arithmetic the design removes, measured.
+
+**The decisions.**
+
+1. **Every burst carries stamps: its first word's arrival (`start + (latency_init + 1)` cycles), its
+   nominal last (`start + (latency_init + n)`), and its delivery (when admission let it in).**  They
+   live in a FIFO beside `data_buffer` (not on the item: `mm_queue` sums the items), appended under the
+   bus hold that already serializes the slave's producers, so the FIFO cannot fall out of order with the
+   buffer.  Both producers stamp (`offer` too).  Stamps are plain floats: no SimPy event.
+2. **A begun burst holds no room.**  Admission stays exactly where it is -- at the writer's `end`, after
+   the transfer time -- because moving it to `begin` changes today's cycle counts (a full queue would
+   then delay the transfer's start rather than its delivery).  The plan's earlier proposal (admission at
+   `begin`) is withdrawn.
+3. **A pending list beside the buffer makes a burst visible at the writer's `begin`.**  The writer
+   posts it (words and stamps) when it takes the bus and removes it at delivery.  `get_nb` and
+   `mm_queue` see only delivered bursts, as today.
+4. **The writer's `begin` / `end`.**  `begin` takes the bus and posts the pending burst (`S.first` = the
+   transfer's start); `end` waits the rest of the transfer, admits (waiting for room), delivers, and
+   releases the bus (`S.last` = delivery).  `write` = `begin` then `end` at once: the same waits in the
+   same order as today.  The writer's record is `stalled` when admission had to wait.
+5. **The reader's `begin` / `end`.**  `begin` takes the oldest delivered burst, else the oldest pending
+   one, else waits for one to be posted -- it never waits for room -- with `L.first = max(first-word
+   stamp, when the reader asked)`; the words are in hand.  `end` waits for that burst's delivery and
+   retires its words.  `get` = `begin` then `end` at once: it returns at delivery, as today.
+6. **Reading a buffered burst costs its beats -- in `phase.pipeline` only, for now.**  A pipelined
+   load's `end` waits until `max(delivery, L.first + (n - 1) cycles)`, so a burst that sat in the buffer
+   is read at a word a cycle, as the RTL reads it.  A plain `get` keeps today's zero-time read, because
+   charging it would move existing cycle counts.  **Open, for the user:** Pattern 1 reads with a plain
+   `get`, so on the middle column above its `s_in.last` is early by up to `n - 1` cycles.  Either charge
+   the beats on endpoints that carry a declared event (opt-in by declaration: existing code unchanged),
+   or everywhere (a measured, separate change that moves gates, likely toward RTL).
+7. **No new wait on the write path, so no new deadlock.**  PR #185's deadlock was a producer waiting
+   for room that only a consumer retiring a *delivered* burst could free, while the consumer waited for
+   a burst the producer never delivered.  Here a pending burst holds no room, so nothing but its own
+   reader ever waits on it; the reader's `begin` waits only for a burst to exist, and its `end` only for
+   that burst's delivery -- which needs room freed by the reader's *previous* `end`, already done (one
+   reader per slave, transfers in order).  A burst larger than its queue still waits for an empty queue
+   at admission, and the queue is empty once the previous burst is retired: the "one burst in flight"
+   row is unchanged.
+
+**Events per message, expected.**  `get` / `write`: none added (stamps and the pending list are plain
+lists).  `phase.pipeline` against today's `get_pipelined` + timeout + `write_pipelined` (about 3
+events): the two predicted timeouts, the store's remaining transfer, and at most a wait for the load's
+delivery and one for the tail -- about 3 more a message.  Stage 2 measures it.
 
 ## Deferred, written down
 
