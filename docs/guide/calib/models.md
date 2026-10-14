@@ -197,5 +197,5 @@ compute, a prior for DSP, and *one* `InterpCalibModel` for a saturating term. Th
 
 - [What a `CalibModel` is](./model.md) — the shape these implement.
 - [A worked example](./example.md) — `LinCalibModel` and `InterpCalibModel` end-to-end.
-- [Fitting a timing model](../timing_model/fit.md) — the latency/`ii` line `LinCalibModel` recovers.
+- [The form of a span's model](../timing_model/loops.md) — the latency/`ii` line `LinCalibModel` recovers.
 - [`waveflow/calib/calib.py`](../../../waveflow/calib/calib.py) — the source (≈300 lines).

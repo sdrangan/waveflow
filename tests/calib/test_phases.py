@@ -110,3 +110,12 @@ def test_the_filed_parameters_are_what_the_committed_trace_fits(bw, tmp_path):
     for key, params in got.items():
         for name, value in params.items():
             assert filed[key][name] == pytest.approx(value), key
+
+
+def test_the_guide_figure_shows_the_traces_spans():
+    """docs/guide/timing_model/timed_phases.md's figure is drawn from the committed calibration trace;
+    the three spans it labels are the ones that trace gives (and the fit recovers)."""
+    from examples.stream_inband.poly_figures import timed_phase_data
+
+    spans = {k: b - a for k, (a, b) in timed_phase_data()["spans"].items()}
+    assert spans == {"resp_time": 4, "latency": 34, "fill_time": 7}

@@ -75,24 +75,28 @@ a stream of its own.
 The kernel is a free-running module whose `run_iter` is one job:
 
 ```python
+# __post_init__: the job loop is a pipelined timed phase -- a latency, then the results at its rate
+self.job_phase = TimedPhase(
+    "job", spans={"latency": (self.s_in.first, self.m_out.first),
+                  "fill_time": (self.m_out.first, self.m_out.last)}, features=("n",))
+self.add_timing_phase(self.job_phase)
+
 def run_iter(self):
     hdr = yield from self.s_in.get_schema(CmdHdr)                  # 1. the command
     n = hdr.n
-    x, tstart = yield from self.s_in.get_pipelined(S16, n)          # 2. n elements in ...
-    y = golden(x.val)                                               #    ... the work, vectorized ...
-    t_out = tstart + self.proc_latency * self.clk.period
-    yield self.timeout(max(0.0, n * self.proc_ii * self.clk.period + t_out - self.env.now))
-    yield from self.m_out.write_pipelined(array(S64, y), t_out)     #    ... n results out
+    yield from self.job_phase.pipeline(                            # 2. n elements in, the work,
+        lambda x: array(S64, golden(x.val)),                       #    vectorized, n results out --
+        load=self.s_in.req(S16, n), store=self.m_out, n=n)         #    overlapped, as in hardware
     yield from self.m_resp.write(Resp(tx_id=hdr.tx_id, n=n))        # 3. the response
 ```
 
 - **The work is the golden**, called on the whole job at once -- a NumPy expression, not a Python loop
   over elements ([Vectorization](../vectorization/index.md)).
-- **The timing is two numbers from the HLS body**: the loop's initiation interval (`proc_ii`, one element
-  per cycle) and its latency (`proc_latency`). `get_pipelined` returns when the first element arrived;
-  `write_pipelined` anchors the results to it, so reading, computing and writing overlap as they do in
-  hardware ([Components charge compute latency](../sim/timing.md#components-charge-compute-latency),
-  [streaming timing models](../timing_model/streaming.md)).
+- **The timing is a [timed phase](../timing_model/timed_phases.md)** with the HLS loop's two numbers as
+  its spans: the latency from the first element in to the first result out, and the fill at the loop's
+  rate.  `pipeline` starts the results a latency after the first element arrived, so reading, computing
+  and writing overlap as they do in hardware ([Pipelined bodies](../timing_model/streaming.md)); the
+  numbers come from [calibrating the phase](../timing_model/fit.md), not the code.
 - **`run_iter` is the specification of the HLS body**, which should read the same way, line for line.
 
 ## The HLS body

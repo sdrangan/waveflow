@@ -296,7 +296,16 @@ above all: the hand-fitted `proc_latency = 40` becomes the fitted model) are rew
 lands; the other pages that teach the pipelined ops (about 12, see [Compatibility](#compatibility))
 move to the new construct as Stage 6 migrates their code.  Flow steps are named and linked, never
 numbered.  Gate: no docs page teaches `get_pipelined` / `write_pipelined` / `read_pipelined`; the
-docs snippet harness runs the guide page's code; the markdown integrity checks pass.
+docs snippet harness runs the guide page's code; the markdown integrity checks pass.  **The timing-model section is DONE (2026-10-14, with the user):** rewritten around
+timed phases, the hand-charged `tm.predict` / `timeout` and `get_pipelined` patterns removed from it --
+*What a timed phase is* (with a figure drawn from poly's committed calibration trace,
+`docs/guide/timing_model/figures/timed_phase.svg`), *Declaring*, *Sequential bodies*, *Pipelined
+bodies*, *The form of a span's model*, *Calibrating* (four of them runnable under the snippet harness);
+the residual / bus / mem-stream pages kept, marked as the framework blocks' pre-phase method; inbound
+links' text updated, and `patterns/command_response.md`, `sim/timing.md` and the stream interface page
+point at phases.  Left: the example pages that describe their own pre-phase code (bram_access, mm_fir,
+the SSR FFT, the interleaver) change as Stage 6 migrates that code; poly's pages when its end-to-end
+gap is closed.
 
 **Stage 8 -- the speed check.**  When everything above has landed, re-run the scripts behind
 `docs/evaluation/sim_speed/` -- `python -m examples.mem_copy.mem_copy_runtime` and

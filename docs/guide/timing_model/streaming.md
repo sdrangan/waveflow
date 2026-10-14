@@ -1,132 +1,197 @@
 ---
-title: Streaming processing
+title: Pipelined bodies
 parent: Timing Models
-nav_order: 5
+nav_order: 4
 audience: python
-api: [StreamIFSlave.get_pipelined, StreamIFMaster.write_pipelined, SimObj.timeout, Clock.period]
-summary: "The streaming timing model: compute overlaps the load, so the first output appears `latency` cycles after the first input and later outputs are gated by whichever is slower — input arrival or compute rate. The per-element max() collapses to a first/last form; only first and last arrival times are known."
+snippets: run
+api: [TimedPhase.pipeline, PipelineResult, StreamIFSlave.req, LoadRequest]
+summary: "A pipelined body -- the loop that reads a word, computes, writes a word -- overlaps its input and output: the first output comes a latency after the first input, and later outputs are paced by the slower of input arrival and the loop's rate. Declared as two spans, latency (input first -> output first) and fill_time (output first -> output last), and run with `phase.pipeline(fn, load=ep.req(...), store=ep, **features)`, which waits exactly that race from real events and returns what it did. Run on a small module: 8 words, latency 5, fill 7."
 ---
 
-# Streaming processing
+# Pipelined bodies
 
-{: .note }
-> A module can now state this declaratively: [Timed phases](./timed_phases.md) time a pipelined body
-> between events at its ports (`phase.pipeline`), with no arithmetic on arrival times in the body.
-> This page's `get_pipelined` / `write_pipelined` form remains until its users are migrated.
+A **pipelined** body does not wait for its whole input: the loop reads a word, computes, writes a word,
+so the output starts while the input is still arriving.  That overlap is what makes it the harder shape
+to time -- and what `phase.pipeline` does for you.
 
-**Streaming** is the opposite end of the continuum from [block](./block.md): instead of loading the
-whole array and *then* computing, the compute pipeline starts as soon as the **first** input
-element arrives and runs concurrently with the rest of the load. There is no load-then-compute
-barrier — load and compute overlap element by element.
+## The race
 
-That overlap is exactly what makes streaming harder to model. In block processing the compute
-window is a single `timeout` after the load finishes. In streaming, each output's time depends on
-two competing pressures, and we have to take the later of them.
-
-The two parameters are the same ones as the [loop model](./loops.md) — `latency` (pipeline depth) and
-`ii` (initiation interval). The difference is only *how they are used*: a block process lumps them into
-a single `latency + ii·(m − 1)` delay, while streaming needs them **separately** — `latency` sets when
-the first output appears, `ii` the gap between the rest. In a fitted design both come from the model's
-coefficients (`self.tm.coeffs["latency"]`, `["ii"]`); below they are written `self.latency` /
-`self.proc_ii` for brevity.
-
-## The per-element model
-
-Let `L` be the pipeline `latency`, `II` the initiation interval, and `T` the clock period
-(`self.clk.period`). For output element `k`:
+Let `L` be the loop's pipeline depth (its **latency**), `II` its initiation interval, and `m` the words.
+Output word `k` cannot leave before input word `k` arrived and went through the pipeline, nor sooner
+than `II` after the output before it:
 
 ```
-t_out[k]    = max( t_in[k] + L*T ,  t_out[k-1] + II*T )
+t_out[k]    = max( t_in[k] + L ,  t_out[k-1] + II )
 
-t_out_first = t_in_first + L*T
-t_out_last  = max( t_in_last + L*T ,  t_out_first + (m-1)*II*T )
-                  └─ input-limited ─┘   └──── compute-limited ────┘
+t_out_first = t_in_first + L
+t_out_last  = max( t_in_last + L ,  t_out_first + II·(m − 1) )
+                  └ input-limited ┘  └──── compute-limited ────┘
 ```
 
-Read the per-element line as a race between two bounds:
+The output is paced by whichever is slower.  Collapsed to the first and last words -- the only two
+events a [loosely-timed](./models.md) transfer has -- that is two spans:
 
-- **`t_in[k] + L*T` — input-limited.** Output `k` cannot exist until input `k` has arrived
-  (`t_in[k]`) and traversed the pipeline (`L*T`). If the source is slow, this dominates.
-- **`t_out[k-1] + II*T` — compute-limited.** The pipeline can emit at most one result every `II`
-  cycles, so output `k` is at least `II*T` after output `k-1`. If the source is fast, this
-  dominates.
+- **`latency`**: from the input's **first** beat to the output's **first** beat (`L`);
+- **`fill_time`**: from the output's **first** beat to its **last** (`II·(m − 1)`, the
+  [loop model](./loops.md)'s second term),
 
-The output is paced by whichever is slower, hence the `max`. Collapsing the recurrence to just the
-**first** and **last** elements gives the form we actually compute: the first output is purely
-input-limited (`t_in_first + L*T`), and the last output is the later of the input-limited bound
-(`t_in_last + L*T`) and the compute-limited bound (`(m-1)` more iterations at `II` after the
-first). The `(m-1)` is the same effective-trip-count convention as in
-[block processing](./block.md) — `m = ceil(n / unroll_factor)`
-iterations means `m-1` outputs after the first.
-
-> A timeline figure for this page (deferred) would show the **load** bar and the **compute** bar
-> overlapping, with the first output offset `L*T` into the load and the gap between outputs set by
-> the slower of arrival and `II` — visually, the two bounds racing.
+and a tail no span has to state: the last output word cannot leave before the last input word plus `L`.
 
 ## The pattern
 
+Declare the two spans, and in the body hand the phase the compute, what to load and where to store:
+
 ```python
-import math
-from waveflow.hw.arrayutils import array
+from dataclasses import dataclass, field
 
-# Wait for the entire vector x to load, but also retrieve when the first
-# sample was loaded.  After this returns, env.now == t_in_last.
-x, t_in_first = yield from s_in.get_pipelined(Float32, count=n)
+import numpy as np
 
-y = compute(x)
-m = math.ceil(n / self.unroll_factor)
-T = self.clk.period
+from waveflow.hw.clock import Clock
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.timed_phase import TimedPhase
+from waveflow.simulation.simulation import Simulation
 
-# First output is ready `latency` cycles after the first input.
-t_out_first = t_in_first + self.latency * T
+N = 8
 
-# Last output: gated by the later of the input-limited and compute-limited bounds.
-# env.now == t_in_last, so the input-limited bound is (env.now + latency*T).
-t_out_last = max(self.env.now  + self.latency * T,
-                 t_out_first   + (m - 1) * self.proc_ii * T)
 
-# Stay busy until the last output is emitted.
-yield self.timeout(t_out_last - self.env.now)
+@dataclass
+class Double(FreeRunMod):
+    clk: Clock = field(default_factory=lambda: Clock(freq=1.0))   # 1 Hz: times read as cycles
 
-# Write the output, tagging the stream with when it could start.
-yield from m_out.write_pipelined(array(Float32, y), t_out_first)
+    def __post_init__(self):
+        super().__post_init__()
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)
+        for ep in (self.s_in, self.m_out):
+            self.add_endpoint(ep)
+        self.loop_phase = TimedPhase(
+            "loop", spans={"latency": (self.s_in.first, self.m_out.first),
+                           "fill_time": (self.m_out.first, self.m_out.last)},
+            features=("nwords",),
+            seed={"latency": {"intercept": 5.0, "nwords": 0.0},           # L = 5
+                  "fill_time": {"intercept": -1.0, "nwords": 1.0}})       # II·(m − 1), II = 1
+        self.add_timing_phase(self.loop_phase)
+        self.results = []
+
+    def run_iter(self):
+        r = yield from self.loop_phase.pipeline(lambda w: w * 2, load=self.s_in.req(nwords_max=N),
+                                                store=self.m_out, nwords=N)
+        self.results.append(r)
 ```
 
-[`get_pipelined`](../interface/primitive/stream.md) returns the data **and** the first-word arrival time:
-after it returns, `self.env.now` is `t_in_last` (the whole burst has arrived), and `t_in_first` is
-when the first word landed. [`write_pipelined`](../interface/primitive/stream.md) tags the outgoing stream
-with `t_out_first` so the *next* component downstream sees a correctly-timed first word and can
-overlap against it in turn — that is how streaming composes across a pipeline of components.
+- **`load=self.s_in.req(...)`** is a *request*, not a read: `pipeline` drives the transfer's two
+  halves itself.  `req()` takes the next burst's raw words, `req(nwords_max=N)` at most `N` of them,
+  `req(T, count)` typed elements as `get_array` returns them.
+- **`store=self.m_out`** is the endpoint the result goes out on.
+- **The call is checked against the declaration**: the load must be on the endpoint whose `first`
+  starts `latency`, the store on the one that ends it and carries `fill_time`.
+- **`pipeline` is a `yield from`**: a sequence of waits, not one event.
 
-Note the division of labor between the two delays here. The **compute rate** is set by
-`self.proc_ii` and is charged by the `yield self.timeout(...)` above — that is what holds the
-component busy until its last result exists. The **output transport rate** is a separate concern
-owned by `write_pipelined`, which models the burst as leaving at one word per clock from
-`t_out_first`. Do not read `proc_ii` as the rate at which words go out on the stream: it paces the
-datapath, not the wire. (In this pattern the `timeout` has already advanced past `t_out_first`, so
-`write_pipelined`'s remaining delay collapses and the compute `timeout` dominates the total —
-`write_pipelined` is only setting the downstream *start* tag, not adding fresh time.)
+## Running it
 
-## Two simplifications to be honest about
+```python
+def run(bursts):
+    sim = Simulation()
+    env = sim.env
+    dut = Double(name="dbl", sim=sim)
+    drv = StreamIFMaster(name="drv", sim=sim, bitwidth=64)
+    snk = StreamIFSlave(name="snk", sim=sim, bitwidth=64, queue_size=64)
+    for name, master, slave in (("a", drv, dut.s_in), ("b", dut.m_out, snk)):
+        link = StreamIF(name=name, sim=sim, bitwidth=64, clk=Clock(freq=1.0), depth=16)
+        link.bind("master", master)
+        link.bind("slave", slave)
+    out = []
 
-This model is loosely timed, and it makes two deliberate approximations:
+    def driver():
+        for b in bursts:
+            yield from drv.write(np.asarray(b, dtype=np.uint64))
 
-1. **Only first and last arrival times are known.** `get_pipelined` gives us `t_in_first` and
-   `t_in_last`, not the full per-element arrival profile. The `max()` therefore assumes the inputs
-   arrive **densely and uniformly** between those two times. A bursty source that pauses mid-stream
-   would, in real hardware, stall the pipeline at points this model smooths over.
-2. **Functional compute happens "all at once."** `y = compute(x)` runs as a single numpy-level
-   operation on the whole vector — only the *timestamps* are pipelined, not the data. The model
-   reproduces *when* each output would be available, but it does not actually push elements through
-   a cycle-by-cycle datapath. (This is the LT bet from [LT vs CT](./models.md): model the
-   transaction's timing, not every cycle.)
+    def sink():
+        for _ in bursts:
+            w = yield from snk.get()
+            out.append((env.now, [int(v) for v in w]))
+
+    env.process(driver())
+    env.process(sink())
+    env.process(dut._run_iter_forever())
+    env.run(until=200)
+    return dut, out
+
+
+dut, out = run([list(range(8))])
+print(out)
+r = dut.results[0]
+print(r.load.first, r.load.last, r.store.first, r.store.last)
+for rec in dut.loop_phase.records:
+    print(rec.span, rec.predicted, rec.actual)
+```
+
+```text
+[(13.0, [0, 2, 4, 6, 8, 10, 12, 14])]
+1.0 8.0 6.0 13.0
+latency 5.0 5.0
+fill_time 7.0 7.0
+```
+
+The input's beats run 1 .. 8 and the output's 6 .. 13: the results start `latency = 5` after the first
+input word, **while the input is still arriving** -- overlap, not a sequence -- and fill in
+`II·(m − 1) = 7`.
+
+## What `pipeline` does
+
+Every wait is a real event plus a prediction; nothing is computed backwards from a later time:
+
+```
+L.first            the words are in hand; y = fn(words)
+L.first + latency  the store begins -- its first beat lands there (S.first)
+L.last             the load ends when its last word was read: delivered, and a word a cycle after
+                   the first, so a burst that waited in the buffer is still read at the loop's rate
+max(S.first + fill_time, L.last + latency)
+                   the fill, and the tail
+S.last             the store is delivered, waiting for room if the reader is behind
+```
+
+That is the race above, from events: the first output is input-limited, the last the later of the
+input-limited and compute-limited bounds.  Because the store holds its wire from `S.first` to `S.last`,
+a shared bus is held when it is really used.
+
+## What it returns
+
+`pipeline` returns a `PipelineResult`: `r.y` is the compute's result (what was written), and `r.load`
+and `r.store` are the two transfers -- how many words arrived, when, and whether the other side held
+them up.  A body that decides from its input reads `r.load`, so the compute stays a pure function.
+Poly halts when a sample burst ends early, at TLAST:
+
+<!-- snippet: skip -->
+```python
+r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=nwords_max),
+                                        store=self.m_out, nwords=nwords_max)
+if r.load.nwords < nwords_max:      # TLAST came early: halt, read nothing more
+    ...
+```
+
+Such an occurrence is marked **short** on its records -- the features describe the request, not what
+moved -- and a [calibration](./fit.md) leaves it out:
+
+```python
+dut, out = run([list(range(5))])
+print(dut.results[0].load.nwords, [rec.short for rec in dut.loop_phase.records])
+```
+
+```text
+5 [True, True]
+```
+
+## Streaming versus block is one event
+
+A [sequential body](./block.md) is the same idea with the span starting at the input's **last** beat:
+the compute waits for the whole input.  A pipelined one starts at the **first**.  Which one a module is
+is a fact about its HLS body -- a straight-line loop per message is pipelined
+(`docs/guide/vectorization/hls/loop_optimization.md`).
 
 ## See also
 
-- [Block processing](./block.md) — the no-overlap baseline this is the streaming limit of.
-- [Timing models for loops](./loops.md) — the `latency` / `ii` parameters this uses (separately here).
-- [Adding a timing model to a component](./insertion.md) — the general pattern; streaming is the
-  overlapped variant.
-- [Stream Interfaces](../interface/primitive/stream.md) — `get_pipelined` / `write_pipelined` and the first-word-time mechanism.
-- Double-buffering (block-granularity overlap) is built by composing sub-components over a
-  [stream of blocks](../interface/primitive/sob.md), not a separate timing model.
+- [What a timed phase is](./timed_phases.md) -- poly's `latency` and `fill_time` on a real trace.
+- [The form of a span's model](./loops.md) -- why `fill_time` is `II·(m − 1)`.
+- [Calibrating a timed phase](./fit.md) -- fitting both spans from an RTL trace.

@@ -1,118 +1,91 @@
 ---
-title: Timed phases
+title: What a timed phase is
 parent: Timing Models
-nav_order: 5.5
+nav_order: 1
 audience: python
-api: [TimedPhase, TimingEvent, HwModule.add_timing_phase, TimedPhase.timeout, TimedPhase.pipeline, StreamIFSlave.req]
-summary: "Declare how long a module's work takes as phases between events at its own ports -- the first or last beat of a transfer -- with the features the duration depends on and a learned model. The body reads and writes as usual and lets the phase wait. Two patterns: sequential (one span) and pipelined (latency + fill). From the declarations alone the framework logs every transfer in pysim, reads the same transfers off an RTL trace, pairs them, and fits the model."
+api: [TimedPhase, TimingEvent]
+summary: "A module's timing is stated as timed phases: spans between events at its own ports -- the first or last beat of a transfer -- whose durations are a function of features known before the span starts, learned by a model. Shown on a real RTL trace of the polynomial kernel: a 4-cycle response, a 34-cycle latency and a 7-cycle fill. Everything a calibration needs -- what to probe, what to log, how to pair pysim with RTL -- follows from the declaration."
 ---
 
-# Timed phases
+# What a timed phase is
 
-A module's timing is stated as **phases** between **events at its own ports**, declared once beside
-its endpoints.  Its body reads and writes as it always has; between a read and a write it lets the
-phase wait.  Nothing in the body computes a time.
+A Waveflow simulation is [loosely timed](./models.md): it does not step every clock edge.  A transfer
+on a port -- a burst of words on a stream -- is one simulated transaction, and what the simulation
+knows about its timing is two moments: its **first beat** and its **last beat**.  Those two moments
+are the only things a module's timing can be stated against.
 
-Two rules make a phase calibratable:
+So a module states its timing as **timed phases**.  A phase names one or more **spans**, each the time
+between two of those events on the module's own ports, and the **features** the span depends on.  A
+**timing model** -- one per span -- predicts the span's duration from the features.
 
-1. **A phase is the time between two events whose duration is a deterministic function of features
-   known before the first event.**  Its *timing model* learns that function: the targets are the
-   observable durations, and the model's parameters (a latency, a rate) stay inside it.
-2. **Every event is measurable.**  An event is an endpoint's `first` or `last` beat of a transfer --
-   a handshake an RTL trace shows -- and pysim's transfer primitive logs the same event.
+## A phase, on a real trace
 
-## Declaring a phase
+![One poly command at RTL: the header and samples arriving on s_in, the response and results leaving on
+m_out, and three spans between their events: resp_time = 4, latency = 34, fill_time = 7](figures/timed_phase.svg)
 
-An endpoint provides its events: `self.s_in.first`, `self.s_in.last`.  A phase names its **spans**,
-each a pair of events, the **features** its durations depend on, and optionally **seed** numbers --
-what it predicts before it is fitted.  It is registered like an endpoint:
+This is the [polynomial kernel](../../examples/stream_inband/index.md) at RTL, one 8-sample command, beat
+by beat on its two ports (a cycle-accurate co-simulation; each box is one word accepted).  Poly declares
+two phases, and its three spans are drawn where the trace puts them:
 
-```python
-self.compute_phase = TimedPhase(
-    "compute", spans={"compute_time": (self.s_in.last, self.m_out.first)},
-    features=("n",), seed={"compute_time": {"intercept": 3.0, "n": 2.0}})
-self.add_timing_phase(self.compute_phase)
-```
+- **`resp_time`** -- from the **last** beat of the command header on `s_in` to the **first** beat of the
+  response on `m_out`: 4 cycles.  The kernel decodes the header and answers.
+- **`latency`** -- from the **first** beat of the samples on `s_in` to the **first** beat of the results
+  on `m_out`: 34 cycles, the depth of the evaluation pipeline.
+- **`fill_time`** -- from the **first** to the **last** beat of the results: 7 cycles for 8 words, one
+  word a cycle.
 
-- A span uses only the module's **own** endpoints.  A span between two modules belongs to the
-  composite holding both.
-- An event names an **operation on an endpoint**, never a role ("load") and never a message: which
-  transfer it refers to is bound at run time.
-- Durations are in **cycles** of the module's clock, so a fit is clock-independent.
-- A phase and its model are one object: `phase.tm` holds one model per span (linear in the features
-  by default), and `phase.predict(n=4)` works with no simulator.
+The picture also shows what a phase does *not* have to model.  The samples arrive with a gap -- the
+kernel was still handling the header -- and the results leave long after the last sample came in.
+Neither is a separate number: the gap falls inside `latency`, which is measured from the samples'
+first beat, and the transfers themselves are timed by the simulation already.
 
-## Pattern 1: sequential
+## The two rules
 
-The input is complete before the compute starts, and the output starts after it -- one span, from the
-input's `last` to the output's `first`:
+A span can be calibrated only if two things hold:
 
-```python
-x = yield from self.s_in.get()                 # returns at s_in.last
-y = compute(x)
-yield self.compute_phase.timeout(n=len(x))     # waits compute_time; opens the record
-yield from self.m_out.write(y)                 # its first beat closes the record
-```
+1. **Its duration is a deterministic function of features known before its first event.**  Poly's
+   `fill_time` depends on the number of words, which the header announced before the first result
+   word; its `latency` on nothing at all.  The model learns that function: its *targets* are the
+   observable durations, and its parameters -- a latency, a rate -- stay inside it.  They never
+   appear in the module's code.
+2. **Every event is measurable.**  An event is an endpoint's first or last beat -- a handshake any RTL
+   trace shows -- and the simulation's own transfer primitive logs the same event.
 
-`timeout` measures the span from the start endpoint's most recent transfer and binds its end to the
-next transfer on the end endpoint.  A body that waits before reading, or passes a feature the phase
-does not declare, is refused.  Declaring this span also says the body is sequential: a burst that sat
-in the input buffer is read at a word a cycle, as the RTL reads it.
+A duration is deterministic only while the environment does not hold the module up inside the span (a
+full output queue, an input that is late), so every measurement also says whether it was held -- a
+held measurement tests a prediction but is not used to fit one.
 
-## Pattern 2: pipelined
+## Two shapes
 
-The HLS loop that reads a word, computes, writes a word: the output starts a **latency** after the
-**first** input word, then comes at the loop's rate.  Two spans:
+Most module bodies are one of two shapes, and each is one kind of phase:
 
-```python
-self.samp_phase = TimedPhase(
-    "samples", spans={"latency":   (self.s_in.first, self.m_out.first),
-                      "fill_time": (self.m_out.first, self.m_out.last)},
-    features=("nwords",))
-self.add_timing_phase(self.samp_phase)
+- **Sequential** -- the whole input arrives, then the compute, then the output: one span, from the
+  input's **last** beat to the output's **first** (poly's `resp_time`).  See
+  [Sequential bodies](./block.md).
+- **Pipelined** -- a loop that reads a word, computes, writes a word: the output starts a **latency**
+  after the input's **first** beat and then fills at the loop's rate -- two spans (poly's `latency` and
+  `fill_time`).  See [Pipelined bodies](./streaming.md).
 
-# the body, per message
-r = yield from self.samp_phase.pipeline(compute, load=self.s_in.req(nwords_max=n),
-                                        store=self.m_out, nwords=n)
-if r.load.nwords < n:            # the burst ended early, at TLAST
-    ...
-```
+The difference between them is only *which event the span starts at*.
 
-`pipeline` returns what it did: `r.y` is `compute`'s result (what was written), `r.load` and
-`r.store` the two transfers.  A body that decides from its input -- poly halts when a sample burst
-ends early -- reads `r.load`, so `compute` stays a pure function of the words.
+## What follows from a declaration
 
-`pipeline` takes the words at the load's first beat, starts the store a latency later, and ends it no
-earlier than its fill nor the last input word plus the latency.  Every wait is a real event plus a
-prediction; nothing is backdated, so a shared bus is held when it is really used.  Streaming versus
-block is only which event a span starts at: a block process's span starts at the input's `last`.
+A phase is declared once, beside the module's endpoints ([Declaring a timed phase](./insertion.md)).
+Everything a calibration needs follows from it, with nothing written by hand:
 
-## Calibrating a phase
+- **what to observe** -- every endpoint a phase names, which is a port of the generated kernel;
+- **what pysim logs** -- each of those endpoints' transfers, and each occurrence of each span with its
+  features;
+- **what the RTL shows** -- the same transfers, read off a trace of those ports;
+- **how they pair** -- pysim says which transfers each span started and ended on, and with which
+  features; the RTL supplies the times.
 
-From the declarations alone (`waveflow/calib/phases.py`):
-
-- the **ports** to observe -- each endpoint a phase names, under its attribute name, which is its RTL
-  port;
-- the **RTL transfers** on them, decoded from a trace of the kernel's ports (TLAST frames a transfer);
-- the **pairing**: pysim's phase records say which transfers each span starts and ends on, and with
-  which features; the RTL supplies the times.  Both sides must carry the same transfers on every port,
-  so functional equivalence is a precondition of a timing fit;
-- the **fit**, per span, on the rows the RTL did not stall, with interior points held out.  A
-  pipelined occurrence whose load delivered fewer words than it asked for (a burst that ended early) is
-  marked `short` and left out: its features describe the request, not what moved.
-
-The one hand-written piece is the scenario that produces the features.  Poly's is a run of commands of
-nine lengths (`examples/stream_inband/poly_calibrate.py`); at 32 bits it
-recovers a 4-cycle response, a 34-cycle latency and a fill of `nwords - 1` cycles, and predicts its two
-held-out lengths exactly.
-
-What a phase does not cover is not timed.  Poly's transaction also spends cycles before its first
-header beat, after its last result, and in the overlap of its response with its first sample word --
-none of them in a declared span -- so its fitted spans are exact while its end-to-end count is a few
-cycles short.  An undeclared gap is where to look when the spans agree and the total does not.
+[Calibrating a timed phase](./fit.md) is those steps.  The figure above is drawn from the very trace
+poly's phases were fitted from.
 
 ## See also
 
-- [Streaming processing](./streaming.md) -- the arithmetic `get_pipelined` / `write_pipelined` form this
-  replaces.
-- [Fitting a timing model](./fit.md) -- the direct fit the calibration uses.
+- [LT vs CT models](./models.md) -- why a transfer is one event and not one per cycle.
+- [Declaring a timed phase](./insertion.md) -- the API: `TimedPhase`, `add_timing_phase`.
+- [The form of a span's model](./loops.md) -- what a span's model is, for a pipelined loop.
+- `plans/pipelined_ops.md` -- the design and its record.
