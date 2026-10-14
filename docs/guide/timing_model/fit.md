@@ -88,16 +88,19 @@ same decode applies: the ports come from the declaration, never from someone nam
 
 ## Exact spans, and a total that is not
 
-With the fitted phases, poly's whole transaction at 32 bits is 148 cycles in pysim against 152 in
-cosim; the hand seeds had given exactly 152.  The seeds were right for the wrong reason -- their errors
-cancelled (+6 on latency, −4 on the response, +1 on the fill).  The fitted spans are each exact; the 4
-cycles are time that **no declared span covers**: at RTL the kernel starts reading the samples a cycle
-after the header while the response goes out four cycles after it (poly's body does the two in
-sequence), and the transaction's start and end -- `ap_start` to the first header beat, END to `ap_done`
--- are in no span.
+The hand seeds poly used before had given its whole 32-bit transaction exactly cosim's 152 cycles --
+right for the wrong reason: their errors cancelled (+6 on latency, −4 on the response, +1 on the fill).
+With the spans fitted, pysim first came out at 148, and the gap was time **no declared span covered**:
+at RTL the kernel starts reading the samples a cycle after the header while the response goes out four
+cycles after it, and poly's body did the two in sequence.  Letting the body send the response while
+the samples load -- as the RTL does -- made every stretch inside a command match the trace.
 
-That is the method working: an end-to-end number can be right by accident, and spans make the
-accident visible.  When the spans agree and the total does not, look for undeclared time.
+The total is now 145 against 152, and the 7 cycles are counted: one cycle per command of loop restart
+that no span holds, and about six of start and done handshake (`ap_start` to the first header beat,
+END to `ap_done`), which is the host's control path, not the module's work on its streams.  That is
+the method working: an end-to-end number can be right by accident, spans make the accident visible,
+and when the spans agree and the total does not, the difference is undeclared time -- to declare, or to
+name and leave.
 
 ## Before timed phases
 

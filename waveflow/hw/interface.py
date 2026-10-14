@@ -567,6 +567,9 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         #: A reader waiting for a burst to be posted or delivered (``begin_read(pending_ok=True)``).
         self._arrival: simpy.Event | None = None
         self._reading: Xfer | None = None
+        #: The last beat of the previous read this endpoint logged or ended (a timed endpoint): a port
+        #: takes one beat a cycle, so the next transfer's first beat is at least a cycle later.
+        self._last_beat = float("-inf")
 
     @property
     def last_stamp(self) -> BurstStamp | None:
@@ -627,12 +630,15 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         Pattern 1 start (``_charge_beats``) a burst that sat in the buffer is read at a word a cycle:
         the read ends no earlier than ``first + (n - 1)`` cycles.  Then the transfer is logged."""
         s = self._last_stamp
-        first = max(s[0], asked)
+        per = 1.0 / self.interface.clk.freq
+        first = max(s[0], asked, self._last_beat + per)    # one beat a cycle on the port
         if self._charge_beats:
-            target = first + (nwords - 1) / self.interface.clk.freq
+            target = first + (nwords - 1) * per
             if target > self.env.now:
                 yield self.env.timeout(target - self.env.now)
-        self._log_xfer((self.nread - 1, first, self.env.now, nwords, s[2] > s[1]))
+        last = max(self.env.now, first)
+        self._last_beat = last
+        self._log_xfer((self.nread - 1, first, last, nwords, s[2] > s[1]))
 
     def begin_read(self, pending_ok: bool = False) -> ProcessGen[Xfer]:
         """The first half of a read (``plans/pipelined_ops.md``): the next burst, its words in hand, at
@@ -646,7 +652,9 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         if self._reading is not None:
             raise RuntimeError(f"'{self.name}': begin_read while transfer {self._reading.index} is "
                                f"still being read; end_read it first")
-        asked = self.env.now
+        # A port takes one beat a cycle: this transfer's first beat is at least a cycle after the
+        # previous one's last.
+        asked = max(self.env.now, self._last_beat + 1.0 / self.interface.clk.freq)
         if pending_ok:
             while not self.data_buffer.items and self.pending_burst is None:
                 self._arrival = self.env.event()
@@ -657,7 +665,10 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
             if not ok:
                 words = yield self.data_buffer.get()
             stamp = BurstStamp(*self.burst_stamps.popleft())
-            x = Xfer(self, self.nread, words, int(words.shape[0]), max(stamp.first, asked), stamp,
+            first = max(stamp.first, asked)
+            if first > self.env.now:
+                yield self.env.timeout(first - self.env.now)
+            x = Xfer(self, self.nread, words, int(words.shape[0]), first, stamp,
                      stalled=stamp.delivered > stamp.nominal)
         else:
             p = self.pending_burst
@@ -708,6 +719,7 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
             if not _level_get(self.nrx, brx):
                 yield self.nrx.get(brx)
         x._last = last
+        self._last_beat = last
         self._reading = None
         if self.xfer_log is not None:
             self._log_xfer((x.index, x.first, x._last, x.nwords, x.stalled))

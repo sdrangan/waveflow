@@ -480,6 +480,25 @@ sequence), and the transaction's start (`ap_start` to the first header beat) and
 gaps (or let the response and the sample load overlap in the body) and re-check -- before
 `unit_harness.md` resumes.
 
+**The gap, closed as far as it is worth (2026-10-14, with the user).**  Measured beat by beat on the
+calib trace, per command: the samples started 4 cycles after the header in pysim and 1 at RTL; the
+next header ended 5 cycles after the last result in pysim and 6 at RTL.  Two fixes:
+
+- **poly's body sends the response while the samples load** (as the RTL does): the header phase's
+  wait is taken when the header is read, and the response is written by a process of its own while
+  the sample pipeline begins;
+- **one beat a cycle on a timed port** (the primitive): a reader's next transfer starts no earlier
+  than a cycle after its previous last beat -- `begin_read` and the logged markers of a declared
+  endpoint; a plain `get` on an undeclared endpoint is unchanged.
+
+Every stretch inside a command now matches the RTL.  What is left is counted and deliberately not
+modeled: **one cycle per command** of loop restart (the span that would hold it ends at the next
+header's last beat, which a wait cannot target cheaply), and **about six cycles of start/done
+handshake** -- `ap_start` to the first header beat, END to `ap_done`: the host's control path, which
+the user decided is outside a module's timing (host-activated kernels are not the common case).  The
+totals moved away from cosim, as they should once the cancelling errors were gone: w32 145 vs 152,
+w64 88 vs 94, both inside the 20-cycle tolerance.
+
 ## Deferred, written down
 
 - **Several loads or stores per stage** -- the HLS loop that reads `in_stream1` and `in_stream2` each
