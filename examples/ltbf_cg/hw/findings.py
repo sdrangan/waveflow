@@ -132,6 +132,55 @@ def eig_place(df: pd.DataFrame, lb: float = 0.5) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def nue_crossover(acc: pd.DataFrame, lb: float = 0.5) -> pd.DataFrame:
+    """16 x 16, 100 MHz, [-6, 3] dB, nominal SRS, UEs per sector 4..40: per form and regime at a
+    fixed engine (4 x 4, W16, joint, one unit, M_i and G_i on the engine) the p90 update time and
+    the smallest t meeting the loss budget."""
+    import json
+
+    from examples.ltbf_cg.hw import models as md
+    from examples.ltbf_cg.hw import space as sp
+    from examples.ltbf_cg.hw import timing as tm
+
+    delta = json.loads((sp.PREREG.parent / "reports" / "rtl_fit.json").read_text())[
+        "delta"
+    ]
+    params = md.load()
+    a = acc[(acc.kind == "fixed") & (acc.r == 1) & (acc.band == "100MHz") & (acc.target == "-6_3")
+            & (acc.srs == "10dB") & (acc.n == 16) & (acc.format == "W16g1")].copy()  # fmt: skip
+    a["regime"], a["t"] = a.regime.astype(int), a.t.astype(int)
+    out = []
+    for nue in (4, 10, 20, 40):
+        drops = (
+            tm.sector_counts_nue(nue)
+            if nue != 10
+            else tm.sector_counts("100MHz", "-6_3", 256)
+        )
+        cmax = 8 * max(nc for d in drops for nc, _ in d)
+        cmax = next(c for c in (96, 240, 480, 960) if c >= cmax)
+        for form, regime in ((f, r) for f in ("factored", "explicit") for r in (1, 2)):
+            k = sp.Knobs(form == "explicit", 256, cmax, 80, 4, 4, 16)
+            o = md.predict_overheads(params, k)
+            g = a[(a.nue == nue) & (a.form == form) & (a.regime == regime)]
+            ok = g[(g.median_loss_db <= lb) & (g.p90_loss_db <= lb)]
+            t_min = int(ok.t.min()) if len(ok) else None
+            rec = {
+                "nue": nue,
+                "cmax": cmax,
+                "form": form,
+                "regime": regime,
+                "t_for_budget": t_min,
+            }
+            if t_min is not None:
+                vals = [
+                    tm.update_time_s(k, o, tm.Run(t_min, regime, 1, "pl"), d, delta)
+                    for d in drops
+                ]
+                rec["time_p90_ms"] = float(np.percentile(vals, 90) * 1e3)
+            out.append(rec)
+    return pd.DataFrame(out)
+
+
 def main() -> int:
     df = pd.read_csv(PAPER / "dse_designs.csv.gz")
     dec = pd.read_csv(PAPER / "dse_decisions.csv")
@@ -144,6 +193,8 @@ def main() -> int:
     wt.to_csv(PAPER / "findings_width.csv", index=False)
     ep = eig_place(df)
     ep.to_csv(PAPER / "findings_eig.csv", index=False)
+    nu = nue_crossover(acc)
+    nu.to_csv(PAPER / "findings_nue.csv", index=False)
     fid = {}
     for eig in ("a53", "pl"):
         p = PAPER / f"fidelity_{eig}.csv"
@@ -167,6 +218,8 @@ def main() -> int:
         _md_table(wt[(wt.band == MAIN["band"])], ["target", "srs", "side", "loss_budget_db"] + [f"t{t}" for t in range(1, 11)]),
         "\n## 4. Where the eigendecomposition step runs (loss budget 0.5 dB; `findings_eig.csv`)\n",
         _md_table(ep[(ep.band == MAIN["band"])], ["target", "srs", "side", "a53_fastest_ms", "pl_fastest_ms"]),
+        "\n## 2b. The regime and form crossovers against UEs per sector (16 x 16, 0.5 dB; `findings_nue.csv`)\n",
+        _md_table(nu, ["nue", "cmax", "form", "regime", "t_for_budget", "time_p90_ms"]) if "time_p90_ms" in nu else "",
         "\n## 5. Decision fidelity (AC9, pre-registered; fraction right per cost measure)\n",
         "\n".join(f"- `{k}`: {v}" for k, v in fid.items()) or "- not scored yet",
         "\n",

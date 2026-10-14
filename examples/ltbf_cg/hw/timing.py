@@ -75,6 +75,28 @@ def sector_counts(
     return [[tuple(x) for x in drop] for drop in cache_[key]]
 
 
+def sector_counts_nue(nue: int, groups=range(1, 26)) -> list[list[tuple]]:
+    """The N_UE sweep's per-group sector populations (16 x 16, 100 MHz, [-6, 3] dB; cached)."""
+    from examples.ltbf_cg import ltbf_accuracy_sweep as sw
+
+    key = f"nue|{nue}"
+    cache_ = json.loads(COUNTS.read_text()) if COUNTS.is_file() else {}
+    if key not in cache_:
+        out = []
+        for g in groups:
+            job = sw.Job("100MHz", "-6_3", "10dB", 16, nue, g)
+            pc = lk.power_control(sw.channels(job, 0), lk.TARGETS["-6_3"])
+            out.append(
+                [
+                    (int(pc.iconn.size), int(np.sum(pc.gnb_idx[pc.iconn] == s)))
+                    for s in range(sc.N_SECT)
+                ]
+            )
+        cache_[key] = out
+        COUNTS.write_text(json.dumps(cache_))
+    return [[tuple(x) for x in grp] for grp in cache_[key]]
+
+
 @cache
 def a53_params() -> dict:
     return json.loads((le.DATA / "model.json").read_text())["params"]
