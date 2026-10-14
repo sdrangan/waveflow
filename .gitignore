@@ -394,3 +394,6 @@ examples/ssr_fft/logs/
 examples/vitis_fft/system/
 examples/vitis_fft/xsi_profile/
 examples/ssr_fft/system/
+
+# Personal Claude Code instructions (venv path, toolchain version, OS): per machine, never shared.
+CLAUDE.local.md
