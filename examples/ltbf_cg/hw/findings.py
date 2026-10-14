@@ -217,7 +217,7 @@ def main() -> int:
         "\n## 3. Iterations vs word length (regime 1, factored; narrowest W meeting the budget at each t; `findings_width.csv`)\n",
         _md_table(wt[(wt.band == MAIN["band"])], ["target", "srs", "side", "loss_budget_db"] + [f"t{t}" for t in range(1, 11)]),
         "\n## 4. Where the eigendecomposition step runs (loss budget 0.5 dB; `findings_eig.csv`)\n",
-        _md_table(ep[(ep.band == MAIN["band"])], ["target", "srs", "side", "a53_fastest_ms", "pl_fastest_ms"]),
+        _md_table(ep[(ep.band == MAIN["band"])], ["target", "srs", "side", "a53_fastest_ms", "a53x4_fastest_ms", "pl_fastest_ms"]),
         "\n## 2b. The regime and form crossovers against UEs per sector (16 x 16, 0.5 dB; `findings_nue.csv`)\n",
         _md_table(nu, ["nue", "cmax", "form", "regime", "t_for_budget", "time_p90_ms"]) if "time_p90_ms" in nu else "",
         "\n## 5. Decision fidelity (AC9, pre-registered; fraction right per cost measure)\n",
