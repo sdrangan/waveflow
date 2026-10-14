@@ -235,6 +235,80 @@ class TimedPhase:
         return env.timeout(max(0.0, t_start + dur * per - env.now))
 
 
+    # -- Pattern 2 -------------------------------------------------------------------------------
+    def pipeline(self, fn, load, store, **feats):
+        """Pattern 2: a pipelined load, compute, store -- the HLS loop that reads a word, computes,
+        writes a word.  ``y = yield from phase.pipeline(fn, load=self.s_in.req(...), store=self.m_out,
+        n=n)``; returns ``fn``'s result, which was written.
+
+        The phase must declare two spans: one from the load endpoint's ``first`` to the store
+        endpoint's ``first`` (the latency), one from the store's ``first`` to its ``last`` (the fill);
+        ``load`` and ``store`` must be on those endpoints -- the declaration and the call are checked
+        against each other.  The waits (the plan's Pattern 2): every time is a real event plus a
+        prediction, never backdated::
+
+            L.first                -> the words are in hand; y = fn(words)
+            L.first + latency      -> the store begins (S.first), when its bus allows
+            S.first + fill         -> then the load ends: L.last >= L.first + (n - 1) beats
+            L.last  + latency      -> the tail: the last output needs the last input
+            S.last                 -> the store ends: delivered, waiting for room
+        """
+        if self.owner is None:
+            raise RuntimeError(f"phase {self.name!r} is not registered: call the module's "
+                               f"add_timing_phase(phase) in __post_init__")
+        self._check_features(feats)
+        lat, fill = self._pipeline_spans(load.ep, store)
+        env, per = self.owner.env, self._period(store)
+        pred = self.predict(**feats)
+        t_lat, t_fill = pred[lat] * per, pred[fill] * per
+
+        lx = yield from load.ep.begin_read(pending_ok=True)
+        y = fn(load.decode(lx.data))
+        yield _until(env, lx.first + t_lat)
+        sx = yield from store.begin(y)
+        # The load ends when its last word is read -- delivered, and a word a cycle after the first --
+        # which frees its words' room then, not when the store is done.
+        yield from load.ep.end_read(lx, charge_beats=True)
+        yield _until(env, max(sx.first + t_fill, lx.last + t_lat))
+        yield from store.end(sx)
+
+        occ = self._occurrences
+        self._occurrences += 1
+        stalled = bool(lx.stalled or sx.stalled)
+        self.records.append(PhaseRecord(
+            self.name, lat, occ, (load.ep.name, lx.index, "first", lx.first), dict(feats), pred[lat],
+            end=(store.name, sx.index, "first", sx.first), actual=(sx.first - lx.first) / per,
+            stalled=stalled or (sx.first - lx.first) / per > pred[lat] + 1e-6))
+        self.records.append(PhaseRecord(
+            self.name, fill, occ, (store.name, sx.index, "first", sx.first), dict(feats), pred[fill],
+            end=(store.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
+            stalled=stalled or (sx.last - sx.first) / per > pred[fill] + 1e-6))
+        return y
+
+    def _pipeline_spans(self, load_ep, store_ep) -> tuple[str, str]:
+        """The (latency, fill) span names, found by their events; refuses a call whose endpoints are
+        not the declaration's."""
+        lat = [s for s, (a, b) in self.spans.items()
+               if a.edge == "first" and b.edge == "first" and b.ep is not a.ep]
+        fill = [s for s, (a, b) in self.spans.items()
+                if a.edge == "first" and b.edge == "last" and a.ep is b.ep]
+        if len(self.spans) != 2 or len(lat) != 1 or len(fill) != 1:
+            raise RuntimeError(
+                f"phase {self.name!r}: pipeline() needs two spans -- (load.first, store.first) and "
+                f"(store.first, store.last); it declares {self.spans!r}")
+        (la, lb), (fa, _fb) = self.spans[lat[0]], self.spans[fill[0]]
+        if la.ep is not load_ep or lb.ep is not store_ep or fa.ep is not store_ep:
+            raise RuntimeError(
+                f"phase {self.name!r}: pipeline(load on '{load_ep.name}', store on '{store_ep.name}') "
+                f"does not match its declared spans {self.spans!r}")
+        return lat[0], fill[0]
+
+
+def _until(env, t: float):
+    """An event at absolute time *t*, or now if *t* has passed: a wait that takes the max for free."""
+    return env.timeout(max(0.0, t - env.now))
+
+
 def _open(owner) -> list:
     """The owner's open phase records: ``(record, end event, clock period)``, oldest first."""
     lst = getattr(owner, "_open_phase_records", None)

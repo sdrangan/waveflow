@@ -175,3 +175,92 @@ class TestTheModel:
         ph = TimedPhase("stored", spans={"compute_time": (a.s_aux.last, a.m_out.first)},
                         features=("n",), seed=SEED, calib_dir=tmp_path)
         assert ph.predict(n=4) == {"compute_time": pytest.approx(44.0)}
+
+
+# ---------------------------------------------------------------------------------------------------
+# Pattern 2: the pipelined phase (Stage 4)
+# ---------------------------------------------------------------------------------------------------
+
+PIPE_SEED = {"latency": {"intercept": 5.0, "nwords": 0.0}, "fill_time": {"intercept": 0.0, "nwords": 1.0}}
+
+
+@dataclass
+class _PipeDoubler(FreeRunMod):
+    """Pattern 2: read a burst while writing its results -- latency 5, then a word a cycle."""
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=1.0))
+    swap: bool = False             # misuse: call pipeline with the endpoints the wrong way round
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)
+        self.s_b = StreamIFSlave(name=f"{self.name}_s_b", sim=self.sim, bitwidth=64)
+        for ep in (self.s_in, self.m_out, self.s_b):
+            self.add_endpoint(ep)
+        self.phase = TimedPhase(
+            "loop", spans={"latency": (self.s_in.first, self.m_out.first),
+                           "fill_time": (self.m_out.first, self.m_out.last)},
+            features=("nwords",), seed=PIPE_SEED)
+        self.add_timing_phase(self.phase)
+
+    def run_iter(self):
+        load = self.s_b.req(nwords_max=8) if self.swap else self.s_in.req(nwords_max=8)
+        yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out, nwords=8)
+
+
+def _pipe_harness(bursts, **kw):
+    sim = Simulation()
+    env = sim.env
+    dut = _PipeDoubler(name="dut", sim=sim, **kw)
+    drv = StreamIFMaster(name="drv", sim=sim, bitwidth=64)
+    snk = StreamIFSlave(name="snk", sim=sim, bitwidth=64, queue_size=64)
+    for name, m, s in (("a", drv, dut.s_in), ("b", dut.m_out, snk)):
+        f = StreamIF(name=name, sim=sim, bitwidth=64, clk=Clock(freq=1.0), depth=16)
+        f.bind("master", m)
+        f.bind("slave", s)
+    out = []
+
+    def driver():
+        for b in bursts:
+            yield from drv.write(np.asarray(b, dtype=np.uint64))
+
+    def sink():
+        for _ in bursts:
+            w = yield from snk.get()
+            out.append((env.now, list(w)))
+
+    env.process(driver())
+    env.process(sink())
+    env.process(dut._run_iter_forever())
+    env.run(until=500)
+    return dut, out
+
+
+class TestPattern2:
+    def test_the_results_start_a_latency_after_the_first_word(self):
+        """8 words begun at 0: first word 1; results begin at 1 + 5 = 6 and are delivered at 14 --
+        while the input is still arriving (delivered at 8): overlap, not a sequence."""
+        dut, out = _pipe_harness([list(range(8))])
+        assert out == [(14.0, [2 * k for k in range(8)])]
+        lat, fill = dut.phase.records
+        assert (lat.span, lat.start[3], lat.end[3], lat.actual) == ("latency", 1.0, 6.0, 5.0)
+        assert (fill.span, fill.start[3], fill.end[3], fill.actual) == ("fill_time", 6.0, 14.0, 8.0)
+        assert dut.s_in.xfer_log == [(0, 1.0, 8.0, 8, False)]
+
+    def test_a_buffered_burst_is_read_a_word_a_cycle(self):
+        """The second burst (begun 8, delivered 16) is asked at 14: read 14 .. 21, results 19 .. 27."""
+        dut, out = _pipe_harness([list(range(8)), list(range(8, 16))])
+        assert [t for t, _w in out] == [14.0, 27.0]
+        assert dut.s_in.xfer_log[1][1:3] == (14.0, 21.0)
+
+    def test_a_call_that_does_not_match_the_declaration_raises(self):
+        with pytest.raises(RuntimeError, match="does not match its declared spans"):
+            _pipe_harness([list(range(8))], swap=True)
+
+    def test_pipeline_needs_the_two_pipeline_spans(self):
+        sim = Simulation()
+        a = _Doubler(name="a", sim=sim)
+        with pytest.raises(RuntimeError, match="needs two spans"):
+            gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.req(), store=a.m_out, n=1)
+            next(gen)

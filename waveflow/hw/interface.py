@@ -446,6 +446,24 @@ class Xfer:
         return self._last
 
 
+@dataclass(frozen=True, eq=False)
+class LoadRequest:
+    """What a pipelined phase reads and how it decodes it (``StreamIFSlave.req``): the endpoint,
+    and either an element type and count or a cap on the raw words."""
+
+    ep: "QueuedTransferIFSlave"
+    element_type: Any = None
+    count: int | None = None
+    nwords_max: int | None = None
+
+    def decode(self, words):
+        """The burst's words as the request asked: capped raw words, or typed elements."""
+        if self.element_type is not None:
+            n = self.ep._typed_nwords(self.element_type, self.count)
+            return self.ep._unpack(words[:n], self.element_type, self.count)
+        return words if self.nwords_max is None else words[:self.nwords_max]
+
+
 @dataclass
 class QueuedTransferIFSlave(InterfaceEndpoint):
     """
@@ -644,9 +662,11 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
         self._reading = x
         return x
 
-    def end_read(self, x: Xfer) -> ProcessGen[None]:
+    def end_read(self, x: Xfer, charge_beats: bool = False) -> ProcessGen[None]:
         """The second half of a read: for a burst taken begun, wait for its delivery; then retire its
-        words, freeing their room.  Sets ``x.last``."""
+        words, freeing their room.  Sets ``x.last``.  With *charge_beats* (a pipelined load) the read
+        ends no earlier than ``x.first + (n - 1)`` cycles: a burst that sat in the buffer is read at a
+        word a cycle, as the RTL reads it."""
         if x is not self._reading:
             raise RuntimeError(f"'{self.name}': end_read of a transfer that is not the one being read")
         if x._pending is not None:
@@ -658,6 +678,14 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
                                    f"the stream's transfers are out of order")
             x.stamp = BurstStamp(*self.burst_stamps.popleft())
             x.stalled = x.stamp.delivered > x.stamp.nominal
+        # The last word's read: when the burst was delivered -- or, with *charge_beats*, no earlier than
+        # a word a cycle after the first.  A time, possibly past: the body may end the read later than
+        # it happened, and the event is when it happened.
+        last = max(x.stamp.delivered, x.first)
+        if charge_beats:
+            last = max(last, x.first + (x.nwords - 1) / self.interface.clk.freq)
+        if last > self.env.now:
+            yield self.env.timeout(last - self.env.now)
         # Retire the words: the same accounting as the plain read's (_take_burst).
         nwords = x.nwords
         btx = min(nwords, self.ntx.level)
@@ -672,7 +700,7 @@ class QueuedTransferIFSlave(InterfaceEndpoint):
                 )
             if not _level_get(self.nrx, brx):
                 yield self.nrx.get(brx)
-        x._last = self.env.now
+        x._last = last
         self._reading = None
         if self.xfer_log is not None:
             self._log_xfer((x.index, x.first, x._last, x.nwords, x.stalled))
@@ -1572,6 +1600,18 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         raw_words = yield from super().get(
             nwords_max=self._typed_nwords(element_type, count))
         return self._unpack(raw_words, element_type, count)
+
+    def req(self, element_type=None, count=None, *, nwords_max: int | None = None) -> "LoadRequest":
+        """A **load request** for a pipelined phase (``phase.pipeline(fn, load=self.s_in.req(...),
+        ...)``; ``plans/pipelined_ops.md``): what to read and how to decode it, without reading.  The
+        phase drives the transfer's two halves itself.
+
+        ``req()`` -- the next burst's raw words; ``req(nwords_max=N)`` -- at most *N* of them (a burst
+        that ends early, at TLAST, is shorter: the body sees how many arrived); ``req(T, count)`` --
+        *count* elements of *T*, as :meth:`get_array` would return them."""
+        if element_type is not None and count is None:
+            raise TypeError(f"'{self.name}'.req({element_type.__name__}): give the element count")
+        return LoadRequest(self, element_type, count, nwords_max)
 
     @port_read
     def get_nb(self, *, nwords_max=None):
