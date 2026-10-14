@@ -406,6 +406,28 @@ class HwModule(SimObj):
         endpoint.comp = self
         self.endpoints[endpoint.name] = endpoint
 
+    def add_timing_phase(self, phase) -> None:
+        """Register a declared timed phase (:class:`~waveflow.hw.timed_phase.TimedPhase`) -- like
+        :meth:`add_endpoint`: construct, assign, register.  Binds the phase to this module (its owner:
+        the clock, and the check that every event is on one of this module's own endpoints) and turns
+        on what its events need: each named endpoint's transfer log, and on a reader whose ``last``
+        starts a span (a sequential body, Pattern 1) the charge for reading a buffered burst's beats.
+        Returns ``None``, so there is one way to write it (``plans/pipelined_ops.md``)."""
+        phases = self.__dict__.setdefault("timing_phases", {})
+        if phase.name in phases:
+            raise ValueError(f"'{self.name}' already has a timed phase named {phase.name!r}")
+        phase._bind(self)
+        phases[phase.name] = phase
+        from waveflow.hw.interface import QueuedTransferIFSlave
+
+        for ev in phase.events():
+            if ev.ep.xfer_log is None:
+                ev.ep.xfer_log = []
+            ev.ep._timing_owner = self
+        for start, _end in phase.spans.values():
+            if start.edge == "last" and isinstance(start.ep, QueuedTransferIFSlave):
+                start.ep._charge_beats = True
+
     def add_comp(self, comp: "HwModule") -> None:
         """Register *comp* as a sub-component (insertion order preserved).
 

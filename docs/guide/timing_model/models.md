@@ -1,7 +1,7 @@
 ---
 title: LT vs CT models
 parent: Timing Models
-nav_order: 1
+nav_order: 1.5
 audience: python
 api: [Clock, SimObj.timeout]
 summary: "Loosely-timed (LT) vs cycle-timed (CT) simulation. Waveflow models timing loosely — one timed event per transaction, not per clock edge — which is what makes a whole-system Python simulation fast, and is the same choice established computer-architecture simulators make."
@@ -40,12 +40,12 @@ correct. That is a design-space-exploration job: you run it constantly, over man
 and you need it to be fast and to compose across dozens of blocks. An LT model delivers that. The
 trade is precision: an LT model predicts timing within a calibrated error band rather than to the
 exact cycle. When you need the exact cycle count, you fall back to cosim — and you can *calibrate*
-the LT model against it (see [Fitting a timing model](../timing_model/fit.md)).
+the LT model against it (see [Calibrating a timed phase](./fit.md)).
 
-The flows in this section — [block](./block.md) and [streaming](./streaming.md) — are LT models. They
-differ only in how much load/compute/store overlap their timeline exposes, not in whether they step
-every cycle (neither does). Double-buffering is the same idea one level up, built by composing these
-over a [stream of blocks](../interface/primitive/sob.md).
+That is also why a module's timing is stated as [timed phases](./timed_phases.md): an LT transfer has
+two moments, its first and its last beat, and a phase is a span between such moments.  The two shapes
+in this section -- [sequential](./block.md) and [pipelined](./streaming.md) -- differ only in which
+moments their spans start at, not in whether they step every cycle (neither does).
 
 ## Not a new idea
 
@@ -60,5 +60,5 @@ source of truth drives simulation, timing, and codegen.
 ## See also
 
 - [Simulation](../sim/) — the SimPy discrete-event runtime an LT model runs on.
-- [Block processing](./block.md) — the first and simplest LT timing model.
+- [What a timed phase is](./timed_phases.md) — how a module's timing is stated in LT terms.
 - [Timing Analysis Tools](../timing/) — including the cosim path that produces the cycle-accurate ground truth an LT model is calibrated against.

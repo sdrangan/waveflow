@@ -247,6 +247,15 @@ _CONTEXT_ATTRS = frozenset({
     # does); the endpoint's own has_tlast still tells two such writers apart.  Adding the field moved
     # every FirBlock key -- caught by test_key_stability, again.
     "done_framed",
+    # A stream endpoint's transfer bookkeeping (plans/pipelined_ops.md): each burst's stamps, the burst
+    # in flight, transfer counts, a waiting reader -- what moved, never what the port is.  Without them
+    # every module with a stream port re-keys, caught by test_key_stability once more.
+    "burst_stamps", "pending_burst", "nwritten", "nread", "_last_stamp", "_arrival", "_reading",
+    # Declared timing (plans/pipelined_ops.md): a module's timed phases and their open records, and
+    # what declaring them turns on at an endpoint (its transfer log, its owner, the beat charge, its
+    # cached events).  A phase predicts something about a module, as a calibration model does.
+    "timing_phases", "_open_phase_records", "xfer_log", "_timing_owner", "_charge_beats",
+    "_ev_first", "_ev_last", "_nxfer",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value

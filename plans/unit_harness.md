@@ -8,7 +8,7 @@ list the decisions Stage 1 needs -- D9 (the harness boundary) among them, still 
 **PAUSED 2026-10-14** for `plans/pipelined_ops.md`: the discussion after Stage 0 found that a harness
 can only calibrate a module whose timing is stated between events at its ports, and that a module
 cannot state it yet (`get_pipelined` / `write_pipelined` compute times that never happened).  This
-plan resumes after that plan's Stage 5 (the fit generated from poly's declarations).  Also from that discussion, to
+plan resumes after that plan's Stage 5 (the fit generated from poly's declarations: done 2026-10-14) once the end-to-end gap it found -- undeclared time in poly's transaction -- is closed.  Also from that discussion, to
 fold in when it resumes: the unit generalizes from "device" to any **test subsystem** (a subgraph whose
 function and timing are observable at its boundary; hierarchical; calibrated at the leaves, composed
 and verified above), independent of how it is packaged; and every child's boundary is observed in

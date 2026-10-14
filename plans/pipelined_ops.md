@@ -1,7 +1,8 @@
 # Plan: timed phases inside a module -- load, compute, store, timed by events at its ports
 
-**Status: PLANNED 2026-10-14; Stage 1 DONE 2026-10-14** (a decision record, no code: the
-[Stage 1 record](#stage-1-record-2026-10-14)).  The defect was recorded 2026-08-16 (below, from
+**Status: Stages 1-5 DONE 2026-10-14; Stage 7 begun (the guide page); Stage 6 re-scoped (it needs
+the deferred memory-mapped events); Stage 8 not run.**  The records: [Stage 1](#stage-1-record-2026-10-14),
+[Stages 2-5](#stages-2-5-record-2026-10-14).  The defect was recorded 2026-08-16 (below, from
 [The defect](#the-defect) on, kept as the evidence).  The design came out of the
 `plans/unit_harness.md` discussion: a unit harness can only calibrate a module whose timing is stated
 between events it can observe, and today's pipelined ops state it with arithmetic on times that never
@@ -161,9 +162,15 @@ self.compute_phase = TimedPhase(
 self.add_timing_phase(self.compute_phase)
 
 # the body, per message
-y = yield from self.compute_phase.pipeline(fn=lambda x: array(Float32, poly_eval(c, x)),
+r = yield from self.compute_phase.pipeline(fn=lambda x: array(Float32, poly_eval(c, x)),
                                            load=self.s_in.req(Float32, n), store=self.m_out, n=n)
+# r.y: what was written; r.load / r.store: the two Xfers (how many words arrived, when, stalled)
 ```
+
+`pipeline` returns a `PipelineResult` (added in review, 2026-10-14): a body that decides from its
+input reads `r.load` rather than having `fn` record it as a side effect.  An occurrence whose load
+delivered fewer words than it requested is marked `short` on its records and left out of a fit: its
+features describe the request, not what moved.
 
 `pipeline` is a `yield from`: it is a sequence of waits, not one event -- the rule SimPy already
 follows (a method returning one event is `yield`, one running several steps is `yield from`).
@@ -173,15 +180,14 @@ follows (a method returning one event is `yield`, one running several steps is `
 endpoint starts `latency` and `store`'s ends it and carries `fill_time`, then runs:
 
 ```python
-lx = yield from load.begin()           # L.first; lx.data is already here
+lx = yield from load.begin()                       # L.first; lx.data is already here
 y = fn(lx.data)
-latency, fill_time = phase.tm.predict(**feats)
-yield self.timeout(latency)            # L.first + latency   (relative: nothing waited since L.first)
-sx = yield from store.begin(y)         # S.first, when the bus allows (room is taken at end)
-yield self.timeout(fill_time)          # S.first + fill_time (relative: nothing waited since S.first)
-yield from load.end(lx)                # L.last
-yield self.until(lx.last + latency)    # the tail -- the last output needs the last input; no-op if past
-yield from store.end(sx)               # S.last: the burst is delivered
+latency, fill_time = phase.predict(**feats)         # cycles
+yield until(lx.first + latency - 1)                # the store's first beat comes a cycle after it starts
+sx = yield from store.begin(y)                     # S.first = L.first + latency, when the bus allows
+yield from load.end(lx)                            # L.last: when the last word was READ (below)
+yield until(max(sx.first + fill_time, lx.last + latency))   # the fill, and the tail
+yield from store.end(sx)                           # S.last: the burst is delivered (room permitting)
 ```
 
 - **The rule of the waits:** a relative `timeout` only straight after the event it is measured from;
@@ -247,25 +253,26 @@ against the reader's queue, with today's events per message as the cost baseline
 evidence are the [Stage 1 record](#stage-1-record-2026-10-14): a begun burst holds **no** room;
 admission stays where it is today.
 
-**Stage 2 -- `Xfer`, `begin` / `end` in the stream primitive.**  As the Stage 1 record decides: the
+**Stage 2 -- `Xfer`, `begin` / `end` in the stream primitive.  DONE 2026-10-14.**  As the Stage 1 record decides: the
 stamp FIFO beside `data_buffer`, the pending list, the writer's and the reader's `begin` / `end`;
 `get` / `write` and every typed read on top of them rebuilt on it.  Gate: every pysim cycle count
 unchanged (the fast suite's gates; markov's and mm_fir's pysim numbers; the calibration keys); a plain
 `get` / `write` adds **no** SimPy event (measured as in the Stage 1 baseline); the stamps reproduce
 the Stage 1 table (a stamp equals the old back-calculation exactly on the "agree" reads).
 
-**Stage 3 -- the declared layer.**  `TimingEvent` (`ep.first` / `ep.last`, and the qualified names
+**Stage 3 -- the declared layer.  DONE 2026-10-14.**  `TimingEvent` (`ep.first` / `ep.last`, and the qualified names
 on two-operation endpoints), `TimedPhase`, `add_timing_phase` (returns `None`; sets the owner), the
 model family and its store lookup; `Xfer`s logged for declared endpoints; `phase.timeout` (Pattern 1)
 with its endpoint check and its feature-name check.  Gate: unit tests of the check (a phase whose body
 uses the wrong endpoint raises, naming both), and an undeclared endpoint logs nothing.
 
-**Stage 4 -- `phase.pipeline` (Pattern 2), `req`, `until`; poly migrated.**  Poly declares two phases
+**Stage 4 -- `phase.pipeline` (Pattern 2), `req`, `until`; poly migrated.  DONE 2026-10-14.**  Poly declares two phases
 (header -> response, Pattern 1; samples -> results, Pattern 2); its `body` keeps its function and loses
 its formula (`tstart`, `t_out_start`, `write_pipelined`).  Gate: poly bit-exact as before; its pysim
 timing within the existing tolerance of cosim with the models seeded by hand.
 
-**Stage 5 -- generated probes, RTL `Xfer`s, and the fit.**  The probes generated from poly's
+**Stage 5 -- generated probes, RTL `Xfer`s, and the fit.  DONE 2026-10-14, the end-to-end half of
+its gate NOT met (see the record).**  The probes generated from poly's
 declarations; its cosim (or XSI of the kernel alone) decoded into `Xfer`s; the corpus joined; the
 spans fitted over at least three `nsamp` values with an interior point held out
 (`project-cycle-model-training`'s grid discipline).  Gate: **the fit is generated from poly's
@@ -275,7 +282,11 @@ no number typed in.  `unit_harness.md` resumes after this.
 **Stage 6 -- retire the old API.**  Migrate the users of `get_pipelined` / `write_pipelined` /
 `read_pipelined` and the undeclared `TimingModel`s, then remove the old forms and the extraction
 prohibition they caused (`hwcodegen._check_not_pipelined`,
-`tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user left.
+`tests/hw/test_extract_pipelined_forbidden.py`).  Gate: no user left.  **Re-scoped 2026-10-14:** of
+31 call sites only mm_fir's is a pure stream-to-stream pipeline; the rest load from or store to memory
+(`MMIFMaster`, BRAM, locked memory, the queue and register-bank views, the mem streams, the RF shot
+buffers) or have several outputs (SSR FFT).  They need the deferred `m_axi` / memory events and
+multi-port stages first, so this stage follows those -- mm_fir alone can migrate before them.
 
 **Stage 7 -- docs.**  One guide page on timed phases -- the two rules, the declaration, Pattern 1 and
 Pattern 2 with poly as the running example, what is generated from a declaration, and how a phase is
@@ -285,7 +296,16 @@ above all: the hand-fitted `proc_latency = 40` becomes the fitted model) are rew
 lands; the other pages that teach the pipelined ops (about 12, see [Compatibility](#compatibility))
 move to the new construct as Stage 6 migrates their code.  Flow steps are named and linked, never
 numbered.  Gate: no docs page teaches `get_pipelined` / `write_pipelined` / `read_pipelined`; the
-docs snippet harness runs the guide page's code; the markdown integrity checks pass.
+docs snippet harness runs the guide page's code; the markdown integrity checks pass.  **The timing-model section is DONE (2026-10-14, with the user):** rewritten around
+timed phases, the hand-charged `tm.predict` / `timeout` and `get_pipelined` patterns removed from it --
+*What a timed phase is* (with a figure drawn from poly's committed calibration trace,
+`docs/guide/timing_model/figures/timed_phase.svg`), *Declaring*, *Sequential bodies*, *Pipelined
+bodies*, *The form of a span's model*, *Calibrating* (four of them runnable under the snippet harness);
+the residual / bus / mem-stream pages kept, marked as the framework blocks' pre-phase method; inbound
+links' text updated, and `patterns/command_response.md`, `sim/timing.md` and the stream interface page
+point at phases.  Left: the example pages that describe their own pre-phase code (bram_access, mm_fir,
+the SSR FFT, the interleaver) change as Stage 6 migrates that code; poly's pages when its end-to-end
+gap is closed.
 
 **Stage 8 -- the speed check.**  When everything above has landed, re-run the scripts behind
 `docs/evaluation/sim_speed/` -- `python -m examples.mem_copy.mem_copy_runtime` and
@@ -294,6 +314,17 @@ old and new in fresh processes, outcomes compared, not just bits).  The cost mod
 = the model's time + SimPy events x a per-event cost, so the question is how many events this arc
 added per transaction and what each costs.  Gate: the per-copy and per-frame numbers re-measured and
 the pages updated with them -- whatever they are; an increase is reported with its cause, not hidden.
+
+**Split 2026-10-14, with the user: events here, wall time on a quiet machine.**  The event counts are
+deterministic, so they are measured anywhere: `plans/witness/pipelined_ops/event_counts.py`, run on the
+commit before the arc and after Stage 5, gives **identical** SimPy events per memcpy copy, by type, at
+every point of the grid (25.0 per copy at 1000 copies, the page's number) -- the arc adds no event to
+code that does not use it.  Wall time needs a machine not in daily use (this one swung tens of percent
+run to run): `plans/witness/pipelined_ops/ab_speed.py --old 7167cfe3 --new <ref>` runs both pages'
+scripts alternately, old and new in fresh processes, best of N, and reports new/old per point.  What it
+can see that events cannot is the per-transfer Python the arc added (a stamp, the pending slot, an
+index): a loaded-machine microbenchmark put it near +5% on a bare stream transfer, not a number to
+publish.
 
 ## Stage 1 record (2026-10-14)
 
@@ -388,6 +419,66 @@ a cycle.  This is the arithmetic the design removes, measured.
 lists).  `phase.pipeline` against today's `get_pipelined` + timeout + `write_pipelined` (about 3
 events): the two predicted timeouts, the store's remaining transfer, and at most a wait for the load's
 delivery and one for the tail -- about 3 more a message.  Stage 2 measures it.
+
+## Stages 2-5 record (2026-10-14)
+
+**Stage 2 -- the primitive.**  Plain `write` / `get` keep their code paths and add, per transfer, one
+pending slot, one plain-tuple stamp and an index count: the reference scenario's 18 SimPy events and
+times are unchanged, and on poly (five scenarios) and markov (direct and bus) the event counts, end times
+(to the last floating-point bit) and job results are identical.  The stamps reproduce the Stage 1 table
+from the primitive's own FIFO, including the 6 and 8 markov reads Stage 1's patch could not stamp (it
+keyed by `id(words)`, which collides when one array is written twice).  A writer holds the slave's bus
+from start to delivery, so **at most one burst per slave is begun and not ended**: one slot, not a
+list.  Cost: the first draft (a ticket, a pending object and a named tuple per transfer, two more
+generator layers) added 37% to a pure stream microbenchmark; the slot-and-tuple version about 5% (both
+measured on a loaded machine: Stage 8 re-measures).  **Found:** the new endpoint attributes changed the
+structural signature, so every module with a stream port re-keyed -- caught by
+`tests/calib/test_key_stability.py`; they are context in `elaborate._CONTEXT_ATTRS` now, as are the
+declared-timing attributes.  The fast suite's failing set equals the baseline's (54, all in the CPU and
+MIMO examples and the index-timing test).
+
+**Stage 3 -- the declared layer**, as designed: `TimingEvent` (`ep.first` / `ep.last`, cached),
+`TimedPhase` (spans, features, `LinearTiming` -- one `LinCalibModel` per span, in cycles -- seed or
+`calib_dir`), `add_timing_phase` (returns `None`, binds the owner, turns on the named endpoints'
+transfer logs and the Pattern 1 beat charge), `phase.timeout`.  Qualified `read_first` / ... for
+two-operation endpoints wait for the memory-mapped events (deferred).
+
+**Stage 4 -- Pattern 2 and poly.**  `phase.pipeline` and `StreamIFSlave.req`; poly's body has no timing
+arithmetic left.  Bit-exact on every scenario; with the hand seeds (latency 40, fill `nwords`, response
+0) its transaction against cosim is w32 152 vs 152 (was 147), w64 96 vs 94 (was 94).  Two corrections
+the run forced, both now in the design:
+
+- **A read's `last` is when its last word was read** -- `max(delivery, first + (n - 1) cycles)` -- not when
+  the body called `end`.  Recording the call time let the tail double-count (poly: 195 cycles instead of
+  155).  The load now ends straight after the store begins, so its words free their room when read.
+- **A writer's `first` is its first beat, one cycle after the transfer starts** -- the handshake a trace
+  shows; with no wire latency the reader's first word is the same cycle.  A span ending at a writer's
+  first beat starts the write a cycle early; it cannot be shorter than that cycle (`PhaseRecord.floor`).
+
+**Stage 5 -- the fit, from the declarations.**  `waveflow/calib/phases.py`: the timed ports (each
+endpoint a phase names, under its attribute name = its RTL port), the RTL transfers decoded from a
+trace of the kernel's ports, the join (pysim's records give the pairing and the features, the RTL the
+times; a row is training data unless the **RTL** stalled -- pysim's own testbench back-pressure is not
+the measured environment), the fit with interior points held out.  Poly's scenario is `calib`
+(commands of 8 ... 200 samples, 48 and 128 held out), traced in cosim (`run.tcl`'s `vcd` stage now
+takes a scenario and a project), `examples/stream_inband/poly_calibrate.py`.  Fitted at w32:
+
+| span | seed | fitted | held-out error |
+|---|---|---|---|
+| `hdr.resp_time` | 0 | 4 | -- (no feature) |
+| `samples.latency` | 40 | 34 | 0 |
+| `samples.fill_time` | `nwords` | `nwords - 1` | 0 |
+
+At w64 the same shape: resp_time 4, latency 33, fill_time `nwords - 1`, both held-out lengths exact; its transaction is 96 against cosim's 94 (+2), as with the seeds.
+
+**The gate's end-to-end half is not met.**  With the fitted model poly's w32 transaction is 148 cycles
+against cosim's 152 (-4); the hand seeds gave exactly 152 -- because their errors cancelled (+6, -4,
++1 per message).  The 4 cycles are time no declared span covers: the RTL starts reading the samples one
+cycle after the header while the response goes out four cycles after it (poly's body does the two in
+sequence), and the transaction's start (`ap_start` to the first header beat) and end (END to
+`ap_done`) are undeclared.  Spans are exact; an undeclared gap is the finding.  Next: declare those
+gaps (or let the response and the sample load overlap in the body) and re-check -- before
+`unit_harness.md` resumes.
 
 ## Deferred, written down
 

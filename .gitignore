@@ -167,6 +167,8 @@ examples/stream_inband/waveflow_poly_proj
 examples/stream_inband/w32_proj
 examples/stream_inband/w64_proj
 examples/stream_inband/vcd_proj
+examples/stream_inband/cal_w32
+examples/stream_inband/cal_w64
 examples/stream_inband/data
 examples/stream_inband/results
 .hls.failed
