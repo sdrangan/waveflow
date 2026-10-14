@@ -124,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 rec = fut.result()
             except Exception as exc:  # noqa: BLE001
-                rec = {"ok": False, "error": repr(exc)}  # one failed build must not stop the queue
+                # one failed build must not stop the queue
+                rec = {"ok": False, "error": repr(exc)}
             bad += not rec.get("ok")
             el = (time.monotonic() - t0) / 60
             print(

@@ -34,8 +34,8 @@ INK = "#1f1f1f"
 PNG_META = {"Software": None}
 
 
-def _legend(fig, axes) -> None:
-    """One legend for the figure, from every panel (a panel may be empty)."""
+def _legend(fig, axes, y: float = 1.0) -> None:
+    """One legend for the figure, from every panel (a panel may be empty), its top at ``y``."""
     seen: dict = {}
     for ax in np.ravel(axes):
         for h, lab in zip(*ax.get_legend_handles_labels(), strict=True):
@@ -45,6 +45,7 @@ def _legend(fig, axes) -> None:
             list(seen.values()),
             list(seen),
             loc="upper center",
+            bbox_to_anchor=(0.5, y),
             ncol=8,
             fontsize=8,
             frameon=False,
@@ -96,10 +97,10 @@ def loss_vs_t(df: pd.DataFrame, band: str, srs: str, out: Path) -> Path:
                 ax.set_xlabel("CG iterations t")
             if j == 0:
                 ax.set_ylabel("loss vs exact LTBF (dB)")
-    _legend(fig, axes)
+    _legend(fig, axes, y=0.955)
     fig.suptitle(f"{band}, SRS {srs}: median (solid) and 90th percentile (dashed), regime 1, factored",
                  y=0.995, fontsize=10)  # fmt: skip
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
     p = out / f"loss_vs_t_{band}_{srs}.png"
     fig.savefig(p, dpi=130, metadata=PNG_META)
     plt.close(fig)
