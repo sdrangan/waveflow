@@ -231,7 +231,10 @@ WANT_GEM5_GATES = 12
 #: 22 -> 25 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 1.1): the LTBF DSE's Denver drops follow
 #: the paper's geometry, the one-element trace plus the synthetic array equals Sionna's own, and a
 #: drop retraces bit for bit (tests/examples/test_ltbf_cg.py).
-WANT_SIONNA_GATES = 25
+#: 25 -> 22 on 2026-10-13 (ltbf_cg_dse.md step 2.4 review): those three trace the local, uncommitted
+#: scene copy, so every other checkout would skip them and fail its ``-m sionna`` session; they are
+#: now skip-if-missing tests outside the marker.
+WANT_SIONNA_GATES = 22
 
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
 _GATES = {

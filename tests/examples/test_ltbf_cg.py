@@ -1,10 +1,14 @@
 """examples/ltbf_cg (plans/mimo_cg/ltbf_cg_dse.md): the LTBF CG design-space exploration.
 
-The ``sionna``-marked tests trace the repo-local Denver scene copy (``examples/ltbf_cg/data/``,
-local, not committed); the rest run on synthetic channels.
+The scene tests trace the repo-local Denver scene copy (``examples/ltbf_cg/data/``, local, never
+committed), so they skip where it is missing or Sionna is not installed.  They are deliberately not
+``sionna``-marked: a ``-m sionna`` session fails on any skip, and every other checkout lacks the
+copy.  The rest run on synthetic channels.
 """
 
 from __future__ import annotations
+
+import importlib.util
 
 import numpy as np
 import pytest
@@ -12,7 +16,11 @@ import pytest
 from examples.ltbf_cg import ltbf_link as lk
 from examples.ltbf_cg import scenario as sc
 
-SCENE_MISSING = not sc.SCENE_XML.is_file()
+SCENE_MISSING = not sc.SCENE_XML.is_file() or importlib.util.find_spec("sionna") is None
+needs_scene = pytest.mark.skipif(
+    SCENE_MISSING,
+    reason="needs the local Denver scene copy (plan step 0.3) and Sionna RT",
+)
 
 
 def _random_channel(rng, n_sect=3, n_ant=16, n_ue=30, n_f=12):
@@ -50,24 +58,42 @@ def test_link_power_control_lands_connected_ues_on_target():
 
 
 def test_link_long_term_inputs_have_the_papers_structure():
+    """Noiseless SRS: every UE's block of H_alpha is sqrt(1/N_SRS) times its channel at 8 distinct
+    frequency samples, the same samples in every sector; a sector's right-hand sides are its own
+    UEs' unscaled blocks; Q = I + sum_j H_j H_j^H / N_SRS over the connected UEs."""
     rng = np.random.default_rng(2)
     h = _random_channel(rng)
     pc = lk.power_control(h, lk.TARGETS["-6_14"])
     hs = lk.scaled(h, pc)
-    lt = lk.long_term(hs, pc, np.random.default_rng(3), g_srs_db=lk.G_SRS_DB)
+    lt = lk.long_term(hs, pc, np.random.default_rng(3), g_srs_db=None)
+    idx: dict[int, list[int]] = {}
     for s in range(3):
         ha = lt.h_alpha[s]
         assert ha.shape == (h.shape[1], lk.N_SRS * pc.iconn.size)
-        q = lk.q_hat(ha)
-        # Q = I + sum_j Qhat_j, Qhat_j = Hj Hj^H / N_SRS, over every connected UE
         want = np.eye(h.shape[1], dtype=complex)
         for k, u in enumerate(pc.iconn):
-            hj = ha[:, k * lk.N_SRS : (k + 1) * lk.N_SRS] * np.sqrt(lk.N_SRS)
-            want += hj @ hj.conj().T / lk.N_SRS
-        np.testing.assert_allclose(q, want, rtol=1e-12, atol=1e-12)
-        assert np.linalg.eigvalsh(q).min() >= 1.0 - 1e-9
-        assert set(lt.own[s].tolist()) == {u for u in pc.iconn if pc.gnb_idx[u] == s}
-        assert lt.rhs[s].shape == (h.shape[1], lk.N_SRS * lt.own[s].size)
+            blk = ha[:, k * lk.N_SRS : (k + 1) * lk.N_SRS] * np.sqrt(lk.N_SRS)
+            # which frequency sample each column is: it must equal one exactly
+            d = np.abs(hs[s, :, u, :, None] - blk[:, None, :]).max(axis=0)  # (F, 8)
+            cols = d.argmin(axis=0)
+            assert np.all(d[cols, np.arange(lk.N_SRS)] < 1e-15)
+            assert len(set(cols.tolist())) == lk.N_SRS
+            assert (
+                idx.setdefault(int(u), cols.tolist()) == cols.tolist()
+            )  # same in every sector
+            want += hs[s, :, u, cols].T @ hs[s, :, u, cols].conj() / lk.N_SRS
+        np.testing.assert_allclose(lk.q_hat(ha), want, rtol=1e-12, atol=1e-12)
+        own = lt.own[s]
+        assert set(own.tolist()) == {u for u in pc.iconn if pc.gnb_idx[u] == s}
+        assert lt.rhs[s].shape == (h.shape[1], lk.N_SRS * own.size)
+        for k, u in enumerate(own):
+            blk = lt.rhs[s][:, k * lk.N_SRS : (k + 1) * lk.N_SRS]
+            np.testing.assert_array_equal(blk, lt.srs_own[int(u)])
+            np.testing.assert_array_equal(blk, hs[s, :, u, idx[int(u)]].T)
+    # with SRS noise: the same shapes, and Q >= I
+    ltn = lk.long_term(hs, pc, np.random.default_rng(3), g_srs_db=lk.G_SRS_DB)
+    for s in range(3):
+        assert np.linalg.eigvalsh(lk.q_hat(ltn.h_alpha[s])).min() >= 1.0 - 1e-9
 
 
 def test_link_srs_noise_is_at_the_processing_gain():
@@ -89,10 +115,7 @@ def test_link_srs_noise_is_at_the_processing_gain():
 # --- the scenario and the trace, Sionna ---------------------------------------------------------
 
 
-@pytest.mark.sionna
-@pytest.mark.skipif(
-    SCENE_MISSING, reason="the Denver scene copy is local (plan step 0.3)"
-)
+@needs_scene
 def test_scenario_drop_follows_the_papers_geometry():
     grid = sc.coverage_grid()
     d = sc.make_drop(7, grid)
@@ -109,10 +132,7 @@ def test_scenario_drop_follows_the_papers_geometry():
     np.testing.assert_array_equal(d.ue_pos, d2.ue_pos)
 
 
-@pytest.mark.sionna
-@pytest.mark.skipif(
-    SCENE_MISSING, reason="the Denver scene copy is local (plan step 0.3)"
-)
+@needs_scene
 def test_synthetic_expansion_matches_sionna():
     """One element per sector plus lk.channel's array = Sionna's own synthetic 4x4 array."""
     from waveflow.rfenv.sionna_backend import ArraySpec, trace_with_paths
@@ -137,10 +157,7 @@ def test_synthetic_expansion_matches_sionna():
     assert np.linalg.norm(mine - h4) / np.linalg.norm(h4) < 1e-6
 
 
-@pytest.mark.sionna
-@pytest.mark.skipif(
-    SCENE_MISSING, reason="the Denver scene copy is local (plan step 0.3)"
-)
+@needs_scene
 def test_drops_retrace_bit_for_bit(tmp_path):
     """AC1: a drop traced again from its seed is identical, and so is the local committed-run file."""
     grid = sc.coverage_grid()
@@ -182,12 +199,32 @@ def test_float_cg_converges_to_the_direct_solve(form, regime):
         b = np.eye(ha.shape[0], dtype=complex)
     apply = lt.factored_s(ha) if form == "factored" else lt.explicit_s(ha)
     q = lk.q_hat(ha)
-    xs = lt.cg_iterates(apply, b, 4 * ha.shape[0])
+    # the recursion itself, without the paper's stop (which ends a column at r^H r < 1e-10 by
+    # design; test_float_cg_stops_where_the_paper_does covers it)
+    xs = lt.cg_iterates(apply, b, 4 * ha.shape[0], stop=0.0)
     x = xs[-1]
     res = np.linalg.norm(b - q @ x, axis=0) / np.linalg.norm(b, axis=0)
     assert res.max() < 1e-12
     want = np.linalg.solve(q, b)
     assert np.linalg.norm(x - want) / np.linalg.norm(want) <= 1e-8
+
+
+def test_float_cg_stops_where_the_paper_does():
+    """cg_solve_complex leaves a column once r^H r < 1e-10: from then on its iterate is frozen,
+    while the other columns keep moving."""
+    from examples.ltbf_cg import ltbf as lt
+
+    rng = np.random.default_rng(20)
+    ha, b = _system(rng, n=16, cols=24, rhs=4)
+    b[:, 0] *= 1e-6  # converges below the threshold within a few iterations
+    xs = lt.cg_iterates(lt.factored_s(ha), b, 30)
+    q = lk.q_hat(ha)
+    res = [np.linalg.norm(b - q @ x, axis=0) ** 2 for x in xs]
+    first = next(t for t, rr in enumerate(res) if rr[0] < lt.STOP_RS)
+    assert first < 10
+    for t in range(first + 1, len(xs)):
+        np.testing.assert_array_equal(xs[t][:, 0], xs[first][:, 0])
+    assert np.any(xs[first + 1][:, 1] != xs[first][:, 1])
 
 
 def test_float_explicit_and_factored_products_agree():
@@ -305,3 +342,46 @@ def test_fixed_24_bit_sinr_equals_the_float_pipeline():
         assert per_ue.keys() == ref.keys()
         worst = max(worst, max(abs(per_ue[u] - ref[u]) for u in ref))
     assert worst <= 0.01, worst
+
+
+@pytest.mark.parametrize("adjoint", [False, True])
+@pytest.mark.parametrize(
+    ("wa", "wb", "k"), [(10, 12, 48), (16, 16, 256), (24, 24, 1024), (24, 28, 240)]
+)
+def test_fixed_blas_product_equals_matmul_exact(adjoint, wa, wb, k):
+    """The sweep's float64-BLAS product is waveflow.linalg's matmul_exact bit for bit, including
+    the extreme stored values (the most negative one is where a negation would overflow).
+    """
+    from examples.ltbf_cg import ltbf_fixed as lf
+    from waveflow.linalg.matmul import matmul_exact
+
+    rng = np.random.default_rng(wa * 1000 + wb + k)
+    fa, fb = lf.reg(wa, 3), lf.reg(wb, 5)
+    lo_a, hi_a = -(1 << (wa - 1)), (1 << (wa - 1)) - 1
+    lo_b, hi_b = -(1 << (wb - 1)), (1 << (wb - 1)) - 1
+    shape_a = (k, 12) if adjoint else (12, k)
+    ar, ai = (rng.integers(lo_a, hi_a + 1, size=shape_a) for _ in range(2))
+    br, bi = (rng.integers(lo_b, hi_b + 1, size=(k, 7)) for _ in range(2))
+    ar[0, :], ai[0, :], br[:, 0], bi[:, 0] = lo_a, lo_a, lo_b, lo_b  # the extremes
+    ai[1, :], bi[:, 1] = hi_a, hi_b
+    want = matmul_exact(ar, ai, fa, br, bi, fb, adjoint=adjoint)
+    got = lf.mm_exact(ar, ai, fa, br, bi, fb, adjoint=adjoint)
+    np.testing.assert_array_equal(got[0], want[0])
+    np.testing.assert_array_equal(got[1], want[1])
+    assert got[2] == want[2]
+
+
+def test_fixed_degenerate_projection_is_floored_not_an_error():
+    """A fixed-point A_i of all zeros gives G_i = 0: the UE receives nothing (the SINR floor)."""
+    from examples.ltbf_cg import ltbf as lt
+
+    rng = np.random.default_rng(19)
+    h = _random_channel(rng, n_ant=16, n_f=12)
+    pc = lk.power_control(h, lk.TARGETS["-6_14"])
+    hs = lk.scaled(h, pc)
+    u0, u1 = (int(u) for u in pc.iconn[:2])
+    g = {u0: np.zeros((2, 16), complex), u1: rng.standard_normal((2, 16)) + 0j}
+    g[u1][1] = g[u1][0]  # rank 1 with r = 2
+    out = lt.sinr_lt_db(g, hs, pc, np.array([u0, u1]))
+    assert out[u0] == pytest.approx(10 * np.log10(lt.SINR_FLOOR))
+    assert np.isfinite(out[u1]) and out[u1] > 10 * np.log10(lt.SINR_FLOOR)

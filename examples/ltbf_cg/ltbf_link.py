@@ -7,12 +7,12 @@ semantics (``salsa-ltbf/salsa/salsa/ray_tracing.py`` ``control_ue_power``, ``com
 * **channels.** Each sector's array is applied to the one-element trace of :mod:`scenario` the way
   Sionna's synthetic array does, then the frequency response is taken on a band's grid;
 * **bands.** ``"1.44MHz"``: the code's grid, ``n_rb`` = 69 points over ``scs * n_sc_rb``
-  (the paper's deviation D21); ``"100MHz"``: 66 resource-block centres over the 792 active
-  subcarriers at 120 kHz, the band the paper's text states.  The noise floor stays the code's
+  (the paper's deviation D21); ``"100MHz"``: 66 equally spaced samples spanning the 792 active
+  subcarriers at 120 kHz edge to edge (1.46 MHz apart), the band the paper's text states.  The noise floor stays the code's
   (``used_bw`` = 192 subcarriers x 120 kHz) in both, so a band changes only the channel's
   frequency diversity;
 * **power control.** Each UE is served by its strongest sector; a UE whose SNR at full power is
-  below the target range is in outage; the rest are scaled so the per-antenna SNR lands at
+  below the target range is in outage; the rest are scaled so the SNR summed over the array lands at
   ``min(SNR at full power, upper target)``, with the noise normalised to unit variance;
 * **SRS.** ``N_SRS`` = 8 distinct random frequency samples per UE, the same for every sector, with
   independent estimation noise per sector at ``G_SRS`` (``None``: noiseless);

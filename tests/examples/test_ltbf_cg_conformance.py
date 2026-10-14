@@ -58,21 +58,33 @@ def test_zero_divisor_case_takes_both_zero_guards(spec):
         assert not np.any(r["xr"][:, ZERO_COL]) and not np.any(r["xi"][:, ZERO_COL])
 
 
-def test_stress_set_saturates():
-    """The saturation paths must be exercised: the stress set saturates beta and H."""
+def test_stress_set_saturates_at_both_rails():
+    """The saturation paths must be exercised: in the stress set H and X hit both rails (the most
+    negative H is the adjoint's sign corner), alpha and beta the top one, and some registers have
+    zero or negative integer bits."""
+    from examples.ltbf_cg import ltbf_fixed as lf
+
     spec = next(s for s in SPECS if s.name.endswith("_sat"))
     f = case_set_formats(spec)
-    beta_top = (1 << (f.cg.beta.W - 1)) - 1
-    h_top = (1 << (f.H.W - 1)) - 1
-    n_beta = n_h = 0
-    from examples.ltbf_cg import ltbf_fixed as lf
+    c = f.cg
+    assert min(fmt.int_bits for fmt in (f.H, c.X, c.alpha)) < 0
+    counts: dict[str, list[int]] = {}
+
+    def rails(name, arr, fmt):
+        top, bot = (1 << (fmt.W - 1)) - 1, -(1 << (fmt.W - 1))
+        n = counts.setdefault(name, [0, 0])
+        n[0] += int(np.sum(arr >= top))
+        n[1] += int(np.sum(arr <= bot))
 
     for ha, b in problems(spec):
         hr, hi = lf.to_stored(ha, f.H)
-        n_h += int(np.sum(np.abs(hr) >= h_top) + np.sum(np.abs(hi) >= h_top))
+        rails("H", np.concatenate([hr.ravel(), hi.ravel()]), f.H)
         for r in golden(spec, ha, b).values():
-            n_beta += int(np.sum(np.abs(r["beta"]) >= beta_top))
-    assert n_beta > 0 and n_h > 0
+            rails("X", np.concatenate([r["xr"].ravel(), r["xi"].ravel()]), c.X)
+            rails("alpha", r["alpha"], c.alpha)
+            rails("beta", r["beta"], c.beta)
+    assert min(counts["H"]) > 0 and min(counts["X"]) > 0, counts
+    assert counts["alpha"][0] > 0 and counts["beta"][0] > 0, counts
 
 
 def test_testbench_declares_the_golden_formats():

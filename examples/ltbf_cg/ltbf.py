@@ -30,6 +30,10 @@ from examples.ltbf_cg import ltbf_link as lk
 
 ApplyS = Callable[[np.ndarray], np.ndarray]
 
+#: The LTBF SINR floor (-60 dB): a fixed-point solve can return ``A_i = 0`` (every entry below
+#: one LSB), whose projection receives nothing.
+SINR_FLOOR = 1e-6
+
 
 def explicit_s(h_alpha: np.ndarray) -> ApplyS:
     """``S = Q D`` with ``Q = I + H_alpha H_alpha^H`` formed once."""
@@ -43,25 +47,34 @@ def factored_s(h_alpha: np.ndarray) -> ApplyS:
     return lambda d: d + h_alpha @ (hh @ d)
 
 
-def cg_iterates(apply_s: ApplyS, b: np.ndarray, t_max: int) -> list[np.ndarray]:
+#: The paper's per-column stop: ``cg_solve_complex`` leaves a column once ``r^H r < 1e-10``.
+STOP_RS = 1e-10
+
+
+def cg_iterates(
+    apply_s: ApplyS, b: np.ndarray, t_max: int, stop: float = STOP_RS
+) -> list[np.ndarray]:
     """Multi-RHS CG from ``X0 = 0``: the iterates ``X_1 .. X_t_max`` (the paper's recursion,
-    ``salsa/salsa/utils.py`` ``cg_solve_complex``, fixed ``t``).  A column whose ``d^H s`` is zero
-    stops moving, as the paper's code stops it."""
+    ``salsa/salsa/utils.py`` ``cg_solve_complex``, fixed ``t``).  As there, a column stops
+    moving once ``d^H s`` is zero (before its update) or ``r^H r < stop`` (after it)."""
     x = np.zeros_like(b, dtype=np.complex128)
     r = b.astype(np.complex128).copy()
     d = r.copy()
     rs = np.einsum("ij,ij->j", r.conj(), r).real
+    live = np.ones(b.shape[1], dtype=bool)
     out = []
     for _ in range(int(t_max)):
         s = apply_s(d)
         ds = np.einsum("ij,ij->j", d.conj(), s).real
-        omega = np.divide(rs, ds, out=np.zeros_like(rs), where=ds != 0)
+        live &= ds != 0
+        omega = np.divide(rs, ds, out=np.zeros_like(rs), where=live)
         x = x + d * omega
         r = r - s * omega
         rs_new = np.einsum("ij,ij->j", r.conj(), r).real
-        nu = np.divide(rs_new, rs, out=np.zeros_like(rs), where=rs != 0)
-        d = r + d * nu
-        rs = rs_new
+        live &= ~(rs_new < stop)
+        nu = np.divide(rs_new, rs, out=np.zeros_like(rs), where=live & (rs != 0))
+        d = np.where(live, r + d * nu, 0)
+        rs = np.where(live, rs_new, rs)
         out.append(x.copy())
     return out
 
@@ -118,26 +131,44 @@ def sinr_lt_db(
     pc_final: lk.PowerControl,
     served: np.ndarray,
 ) -> dict[int, float]:
-    """Per served UE: ``10 log10`` of the frequency-mean LTBF SINR one ``T_LT`` later."""
+    """Per served UE: ``10 log10`` of the frequency-mean LTBF SINR one ``T_LT`` later.
+
+    Per sector, the projections of its UEs are stacked so ``G H_c`` is one product over every
+    connected UE and frequency; per UE and frequency ``G Q G^H = G G^H + (G H_c)(G H_c)^H``.
+    """
     out = {}
     conn = pc_final.iconn
+    pos = {int(u): k for k, u in enumerate(conn)}
+    by_sector: dict[int, list[int]] = {}
     for u in served:
         u = int(u)
         s = int(pc_final.gnb_idx[u])
-        if s < 0 or u not in g:
-            continue
-        gi = g[u]  # (r, N)
-        hs = h_final[s]  # (N, U, F)
-        gh = np.einsum("rn,nuf->ruf", gi, hs[:, conn, :])  # (r, K, F)
-        ggh = gi @ gi.conj().T
-        hp = np.einsum("rn,nf->rf", gi, hs[:, u, :])
-        sinr = np.empty(hs.shape[2])
-        for f in range(hs.shape[2]):
-            qp = ggh + gh[:, :, f] @ gh[:, :, f].conj().T
-            v = hp[:, f]
-            sv = np.real(v.conj() @ np.linalg.solve(qp, v))
-            sinr[f] = sv / (1.0 - sv)
-        out[u] = float(10.0 * np.log10(np.mean(sinr)))
+        if s >= 0 and u in g:
+            by_sector.setdefault(s, []).append(u)
+    for s, ues in by_sector.items():
+        hs = h_final[s][:, conn, :]  # (N, K, F)
+        n, k, f = hs.shape
+        gs = np.vstack([g[u] for u in ues])  # (sum r, N)
+        gh_all = (gs @ hs.reshape(n, k * f)).reshape(-1, k, f)
+        row = 0
+        for u in ues:
+            gi = g[u]
+            r = gi.shape[0]
+            gh = gh_all[row : row + r].transpose(2, 1, 0)  # (F, K, r)
+            row += r
+            qp = gi @ gi.conj().T + np.einsum(
+                "fkr,fks->frs", gh, gh.conj()
+            )  # (F, r, r)
+            v = gh[:, pos[u], :][..., None]  # (F, r, 1)
+            try:
+                x = np.linalg.solve(qp, v)
+            except (
+                np.linalg.LinAlgError
+            ):  # a degenerate G: a fixed-point A_i of rank < r
+                x = np.linalg.pinv(qp, hermitian=True) @ v
+            sv = np.real(np.sum(v.conj() * x, axis=(1, 2)))
+            sinr = np.mean(sv / (1.0 - sv))
+            out[u] = float(10.0 * np.log10(max(sinr, SINR_FLOOR)))
     return out
 
 
@@ -210,7 +241,7 @@ def evaluate_channels(
 
     ``h0``, ``h1`` are the unscaled ``S x N x U x F`` channels of the two snapshots; ``fixed``
     maps a name to an :class:`~examples.ltbf_cg.ltbf_fixed.LtbfFormats`, each solved with every
-    ``fixed_solves`` entry."""
+    ``fixed_solves`` entry, or to ``(formats, solves)``."""
     from examples.ltbf_cg import ltbf_fixed as lf
 
     pc0 = lk.power_control(h0, target)
@@ -232,8 +263,10 @@ def evaluate_channels(
         for (t, r), g in _g_per_t(per_ue, lt, t_max, ranks).items():
             approx[(sv.form, sv.regime, t, r)] = sinr_lt_db(g, hf, pc1, served)
     fx_out: dict[tuple[str, str, int, int, int], dict[int, float]] = {}
-    for name, f in (fixed or {}).items():
-        for sv in fixed_solves:
+    for name, spec in (fixed or {}).items():
+        # a name maps to formats (solved with every fixed_solves entry) or to (formats, solves)
+        f, f_solves = spec if isinstance(spec, tuple) else (spec, fixed_solves)
+        for sv in f_solves:
             per_ue = {}
             for s in range(len(lt.own)):
                 per_ue.update(lf.sector_a_fixed(lt, s, f, t_max, sv.form, sv.regime))
