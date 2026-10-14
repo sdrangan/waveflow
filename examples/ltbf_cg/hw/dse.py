@@ -74,8 +74,8 @@ def cost(k: sp.Knobs) -> dict[str, float]:
     p = params()
     if k.explicit and k.nmax > sp.EXPLICIT_NMAX:  # Q in DDR: no Q storage on chip
         f = md.features(k)
-        f["q_bits"] = 0.0
-        res = {r: max(0.0, md._apply(q, f)) for r, q in p["resources"].items()}
+        f["q_bits"] = f["bram_q"] = 0.0
+        res = md.predict_resources(p, k, f)
     else:
         res = md.predict_resources(p, k)
     return res

@@ -140,18 +140,25 @@ def main() -> int:
     delta = json.loads((sp.PREREG.parent / "reports" / "rtl_fit.json").read_text())[
         "delta"
     ]
+    fit_names = {k.name for k in sp.load("fit")}
     ok = True
     for eig in ("a53", "pl"):
         df = table(rule, acc, params, delta, eig)
-        sc = score(df, rule)
-        sc.to_csv(dse.PAPER / f"fidelity_{eig}.csv", index=False)
-        frac = sc.groupby("cost")["right"].mean()
-        print(
-            f"eig={eig}: {len(df)} designs, {len(sc)} decisions;",
-            frac.round(3).to_dict(),
+        df.to_csv(
+            dse.PAPER / f"fidelity_designs_{eig}.csv", index=False, float_format="%.6g"
         )
-        if eig == "a53":
-            ok = bool((frac >= rule["pass_fraction"]).all())
+        # the registered score; then without the brute builds that are also fit builds
+        for tag, d in (("", df), ("_nofit", df[~df.build.isin(fit_names)])):
+            sc = score(d, rule)
+            sc.to_csv(dse.PAPER / f"fidelity_{eig}{tag}.csv", index=False)
+            frac = sc.groupby("cost")["right"].mean()
+            print(
+                f"eig={eig}{tag}: {d.build.nunique()} builds, {len(d)} designs, {len(sc)} decisions;",
+                frac.round(3).to_dict(),
+                flush=True,
+            )
+            if eig == "a53" and not tag:
+                ok = bool((frac >= rule["pass_fraction"]).all())
     return 0 if ok else 1
 
 
