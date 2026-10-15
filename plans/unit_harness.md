@@ -61,6 +61,14 @@ boundary -- Stage 1's `PolyKernelSystem` is exactly that for the leaf `poly_kern
                                └ HwSubsystem tree   (DUT -> composites -> leaves)
     harness(node) = HwSystem(testbench = stand-ins at node's boundary, DUT = node)
 
+**An `HwSubsystem` is always inside the DUT; nothing on the testbench side is one** (the user,
+2026-10-14).  Testbench-side timing has two other sources: **stand-ins** -- drivers, sinks, the remote
+queue -- are never calibrated, they set the environment by policy (D4); **real things outside the DUT** --
+the `m_axi` path to DDR, the host processor -- are **platform** models (the bus model, the CPU model on
+gem5), calibrated once per platform and shared by every design on it, not keyed by a design's identity.
+The cut can move: a memory outside the DUT in one system is a leaf of the tree in another that puts it
+inside.
+
 It is independent of packaging: a kernel is an `HwSubsystem` but rarely an IP; a **device** -- in
 `ip_packaging_routes.md`, the group packaged as one IP -- is a composite that happens to be packaged
 as one, a packaging fact about a node, not a separate kind of unit.  The
