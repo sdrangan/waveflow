@@ -29,6 +29,12 @@ def timed_ports(module) -> dict[str, tuple]:
     """``{pysim endpoint name: (endpoint, RTL port name)}`` for every endpoint a declared phase of
     *module* names.  The RTL port is the attribute the module holds the endpoint under."""
     by_id = {id(v): k for k, v in vars(module).items() if hasattr(v, "xfer_log")}
+    # A composite endpoint's halves are ports of their own: ``m_u`` -> ``m_u_fwd``, ``m_u_crd``.
+    for k, v in list(vars(module).items()):
+        if hasattr(v, "physical_endpoints") and not hasattr(v, "xfer_log"):
+            for p in v.physical_endpoints():
+                if p is not v and p.name.startswith(v.name):
+                    by_id.setdefault(id(p), k + p.name[len(v.name):])
     out: dict[str, tuple] = {}
     for phase in getattr(module, "timing_phases", {}).values():
         for ev in phase.events():
@@ -155,14 +161,17 @@ def module_identity(module):
     ``identify_instance`` alone is not that: it exempts the boundary from the bound check but still
     hashes each boundary port's ``queue_size`` -- the depth of whatever channel it is bound to, the
     harness's 2 or a queue view's 256 -- so one kernel got two keys (measured on stream_kernel,
-    2026-10-15).  Here the boundary ports' depths are blanked for the hash.  Fixing that in the
-    identity itself would move every existing key with a boundary (``plans/unit_harness.md``, Stage 3
-    record); timed-phase records are new, so they start context-free."""
+    2026-10-15).  Here the module's own ports' depths -- and their halves', for a composite port such
+    as a credit stream -- are blanked for the hash: a module's own ports are its boundary wherever it
+    sits (markov's generator: its harness's 2 against the system's 16).  Fixing that in the identity
+    itself would move every existing key with a boundary (``plans/unit_harness.md``, Stage 3 record);
+    timed-phase records are new, so they start context-free."""
     from waveflow.calib.module_key import boundary_endpoint_ids, identify_instance
 
     exempt = boundary_endpoint_ids(module)
-    eps = [ep for ep in (getattr(module, "endpoints", {}) or {}).values()
-           if id(ep) in exempt and hasattr(ep, "queue_size")]
+    own = list((getattr(module, "endpoints", {}) or {}).values())
+    own += [p for e in list(own) for p in e.physical_endpoints() if p is not e]
+    eps = [ep for ep in own if hasattr(ep, "queue_size")]
     saved = [ep.queue_size for ep in eps]
     try:
         for ep in eps:

@@ -134,7 +134,9 @@ class PhaseCalibStep(_SystemStep):
         if missing:
             raise RuntimeError(f"calib_phases: pysim occurrences with no RTL partner: {missing}")
         if self.store is not None:
-            self._file(config, fresh, rep, time.perf_counter() - t0)
+            # Filed under an UN-RUN copy's identity, which is what a lookup computes: a module's own
+            # run-time state (a job counter) must not decide where its calibration lives.
+            self._file(config, self.sysm.fresh(), rep, time.perf_counter() - t0)
         return {self.a("phase_calib"): out}
 
     def _file(self, config: BuildConfig, sysm, rep: dict, seconds: float) -> None:
