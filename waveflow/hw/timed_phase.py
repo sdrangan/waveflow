@@ -126,6 +126,8 @@ class TimedPhase:
 
     * :meth:`timeout` -- Pattern 1, a sequential body: wait one span, measured from its start event,
       and arrange for the next transfer on its end endpoint to close the record.
+    * :meth:`pipeline` -- Pattern 2, a pipelined load, compute, store.
+    * :meth:`produce` -- Pattern 3, a write paced by its producer (a loop that makes the words).
     * :attr:`tm` -- the learned functions, one per span (:class:`LinearTiming` by default), usable with
       no simulator: :meth:`predict` is plain arithmetic.
     * :attr:`records` -- every occurrence (:class:`PhaseRecord`), the pysim half of a calibration.
@@ -169,11 +171,28 @@ class TimedPhase:
         from the seed."""
         if self._models is None:
             models = self.family.build(self)
+            stored = self._stored_params()
             for span, m in models.items():
+                if stored is not None and span in stored:
+                    m.load_params(stored[span])
+                    continue
                 path = self.calib_dir / f"{span}.json" if self.calib_dir is not None else None
                 m.load_or_default(path)
             self._models = models
         return self._models
+
+    def _stored_params(self) -> dict | None:
+        """``{span: params}`` from a record store, when :attr:`calib_dir` is one (it holds a
+        ``modules/`` directory, ``plans/unit_harness.md`` D7): the newest timed-phase record filed
+        under the owner's identity -- found from the identity alone, verified against it -- else
+        ``None`` (the per-span files, or the seed)."""
+        if self.calib_dir is None or self.owner is None or not (self.calib_dir / "modules").is_dir():
+            return None
+        from waveflow.calib.phases import stored_phases
+        from waveflow.calib.record_store import ModuleStore
+
+        rec = stored_phases(ModuleStore(self.calib_dir), self.owner)
+        return None if rec is None else rec.payload["phases"].get(self.name)
 
     def predict(self, **feats) -> dict[str, float]:
         """The predicted duration of every span, in cycles (never negative), for *feats* -- which must
@@ -200,6 +219,10 @@ class TimedPhase:
             raise RuntimeError(f"phase {self.name!r} is already registered on "
                                f"'{getattr(self.owner, 'name', '?')}'")
         own = list(getattr(owner, "endpoints", {}).values())
+        # A composite endpoint's halves (a credit stream's forward and credit streams) are the
+        # module's own too: at RTL each is a port of its own.
+        own += [p for e in list(own) if hasattr(e, "physical_endpoints")
+                for p in e.physical_endpoints() if p is not e]
         for ev in self.events():
             if all(ev.ep is not e for e in own) and getattr(ev.ep, "comp", None) is not owner:
                 raise ValueError(
@@ -316,6 +339,71 @@ class TimedPhase:
             end=(store.ep.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
             stalled=stalled or (sx.last - sx.first) / per > pred[fill] + 1e-6, short=short))
         return PipelineResult(y, lx, sx)
+
+    # -- Pattern 3 -------------------------------------------------------------------------------
+    def produce(self, ep, data, **feats):
+        """Pattern 3: a write **paced by its producer** -- the HLS loop that makes the words and writes
+        each as it is made (a generator's draws, a chain's states).  ``sx = yield from
+        phase.produce(self.m_u, chunk, c=c)``: the write's first beat comes the declared *lead* after
+        the lead's start event, and its last the declared *fill* after its first.
+
+        The phase declares two spans: the lead, from any event of the module's (the latest transfer
+        there) to the write's ``first``; the fill, from its ``first`` to its ``last``.  On a credit
+        stream (*ep* a :class:`~waveflow.hw.reverse_stream.CreditStreamMasterIF`) the events are its
+        forward half's, and the write waits for room before it begins.  An occurrence the environment
+        delayed -- the start late for want of room or input, the end for want of a reader -- is marked
+        stalled: it is not a sample of the module's own timing.  Returns the write's transfer."""
+        if self.owner is None:
+            raise RuntimeError(f"phase {self.name!r} is not registered: call the module's "
+                               f"add_timing_phase(phase) in __post_init__")
+        self._check_features(feats)
+        phys = getattr(ep, "fwd_ep", ep)
+        lead, fill = self._produce_spans(phys)
+        start = self.spans[lead][0]
+        log = start.ep.xfer_log
+        used = self._used.get(start.ep.name, -1)
+        if not log or log[-1][0] <= used:
+            raise RuntimeError(
+                f"phase {self.name!r}: span {lead!r} starts at {start!r}, but '{start.ep.name}' has no "
+                f"transfer since this phase last ran")
+        index, first, last, _n, _st = log[-1]
+        self._used[start.ep.name] = index
+        t0 = first if start.edge == "first" else last
+        env, per = self.owner.env, self._period(phys)
+        pred = self.predict(**feats)
+
+        yield _until(env, t0 + pred[lead] * per - per)        # the first beat a cycle after begin
+        sx = yield from ep.begin(data)
+        late = sx.first > t0 + pred[lead] * per + 1e-6 * per
+        yield _until(env, sx.first + pred[fill] * per)
+        t_ready = env.now
+        yield from ep.end(sx)
+        # Held: delivered later than the fill and the transfer's own nominal end allow (a reader
+        # not ready).
+        held = sx.last > max(t_ready, sx.stamp.nominal) + 1e-6 * per
+
+        occ = self._occurrences
+        self._occurrences += 1
+        self.records.append(PhaseRecord(
+            self.name, lead, occ, (start.ep.name, index, start.edge, t0), dict(feats), pred[lead],
+            end=(phys.name, sx.index, "first", sx.first), actual=(sx.first - t0) / per, stalled=late))
+        self.records.append(PhaseRecord(
+            self.name, fill, occ, (phys.name, sx.index, "first", sx.first), dict(feats), pred[fill],
+            end=(phys.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
+            stalled=held))
+        return sx
+
+    def _produce_spans(self, ep) -> tuple[str, str]:
+        """The (lead, fill) span names: the one ending at *ep*'s ``first`` and the one from its
+        ``first`` to its ``last``."""
+        lead = [s for s, (a, b) in self.spans.items() if b.ep is ep and b.edge == "first"]
+        fill = [s for s, (a, b) in self.spans.items()
+                if a.ep is ep and a.edge == "first" and b.ep is ep and b.edge == "last"]
+        if len(self.spans) != 2 or len(lead) != 1 or len(fill) != 1:
+            raise RuntimeError(
+                f"phase {self.name!r}: produce() on '{ep.name}' needs two spans -- (any event, "
+                f"{ep.name}.first) and ({ep.name}.first, {ep.name}.last); it declares {self.spans!r}")
+        return lead[0], fill[0]
 
     def _pipeline_spans(self, load_ep, store_ep) -> tuple[str, str]:
         """The (latency, fill) span names, found by their events; refuses a call whose endpoints are

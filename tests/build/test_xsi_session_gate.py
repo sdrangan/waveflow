@@ -139,8 +139,12 @@ def test_the_recorded_floor_matches_what_the_suite_actually_has(gate):
     import subprocess
     import sys
 
+    import os
+
+    # Every gate that exists, quarantined ones included: the floor is the suite's, not this machine's.
+    env = {**os.environ, "WAVEFLOW_NO_QUARANTINE": "1"}
     r = subprocess.run([sys.executable, "-m", "pytest", "-m", "xsi", "--collect-only", "-q"],
-                       cwd=str(REPO), capture_output=True, text=True, timeout=900)
+                       cwd=str(REPO), capture_output=True, text=True, timeout=900, env=env)
     out = r.stdout + r.stderr
     counts = [int(m) for m in re.findall(r"^\S+\.py: (\d+)$", out, flags=re.M)]
     assert counts, f"could not read a collection summary from:\n{out[-3000:]}"

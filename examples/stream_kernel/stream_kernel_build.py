@@ -5,6 +5,8 @@
     python -m examples.stream_kernel.stream_kernel_build --through csynth # build the RTL, stop there
     python -m examples.stream_kernel.stream_kernel_build --trace          # the XSI run with its ports traced
     python -m examples.stream_kernel.stream_kernel_build --through calib_phases   # calibrate the phases
+    python -m examples.stream_kernel.stream_kernel_build --through mm_compare     # behind AXI-MM, host
+    python -m examples.stream_kernel.stream_kernel_build --through dev_compare    # the device alone (D9)
 
 The kernel's body is hand-written (``src/poly_kernel_task.h``, the HLS twin of ``PolyKernel.run_iter``);
 everything around it is generated: the command and response structs from :class:`CmdHdr` /
@@ -16,7 +18,7 @@ RTL under XSI, a stream driver and two sinks around it) and ``compare`` (the sin
 against pysim).
 
 ``calib_phases`` calibrates the kernel's timed phases (:mod:`waveflow.build.phase_calib`): the
-calibration workload (:meth:`PolyKernelSystem.calibration_workload`) as a second, traced system sharing
+calibration workload (the kernel's ``workload("calib")`` and ``calib_holdout``) as a second, traced system sharing
 ``codegen`` and ``csynth``, then the fit, filed in ``calib/``.  Nothing here is calibration code.
 
 ``src/`` is the only C++ source here; ``include/`` and ``gen/`` are build output, untracked.
@@ -38,27 +40,37 @@ from waveflow.build.composite_gen import (
 )
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
 from waveflow.build.phase_calib import add_calib_steps
+from waveflow.calib.record_store import ModuleStore
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
+
+from waveflow.hw.harness import harness
+
+from examples.stream_kernel.stream_kernel_mm import mm_system
+from waveflow.hw.hw_system import HwSystem
 
 from examples.stream_kernel.stream_kernel import (
     SCHEMA_CLASSES,
     W,
     Float32,
     PolyKernel,
-    PolyKernelSystem,
 )
 
 HERE = Path(__file__).resolve().parent
 #: The RTL run's top and where it runs (``<work_dir>/<top>``).
 TOP, WORK_DIR = "stream_kernel_top", "xsi_work"
+#: The memory-mapped system's top (``--through mm_compare``).
+MM_TOP = "stream_kernel_mm_top"
+#: The device harness's top (``--through dev_compare``): the device alone, its host on a direct link.
+DEV_TOP = "stream_kernel_dev_top"
 
 
-def system() -> PolyKernelSystem:
-    """The system the DAG runs, in pysim and at RTL, on the default commands."""
-    return PolyKernelSystem()
+def system() -> HwSystem:
+    """The system the DAG runs, in pysim and at RTL: the kernel's harness on its test workload --
+    generated from its boundary, no testbench code here."""
+    return harness(PolyKernel, workload="test")
 
 
 def gen_headers(root: Path = HERE) -> None:
@@ -111,7 +123,7 @@ class StreamKernelCodegenStep(BuildStep):
         return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
 
 
-def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: PolyKernelSystem | None = None) -> BuildDag:
+def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = None) -> BuildDag:
     """``codegen``, the framework's system steps for *sysm* (default :func:`system`), and its
     calibration (``calib_*``, run only when asked for).  *trace* dumps the kernel's ports in the XSI
     run (``<work>/<top>_trace.vcd``)."""
@@ -119,7 +131,12 @@ def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: PolyKernelSystem | N
     dag.add(StreamKernelCodegenStep(name="codegen"))
     sysm = sysm if sysm is not None else system()
     add_system_steps(dag, sysm, work_dir=work_dir, top=TOP, trace=trace)
-    add_calib_steps(dag, sysm, work_dir=work_dir, top=TOP)
+    add_calib_steps(dag, sysm, work_dir=work_dir, top=TOP, store=ModuleStore(HERE / "calib"))
+    # The same kernel behind AXI-MM with its two-thread host (``stream_kernel_mm.py``): its own steps
+    # (``mm_*``), sharing codegen and the kernel's csynth.
+    add_system_steps(dag, mm_system(), work_dir=work_dir, top=MM_TOP, prefix="mm_")
+    # The device's own harness (D9): the host bound straight to its one front, no crossbar.
+    add_system_steps(dag, mm_system(direct=True), work_dir=work_dir, top=DEV_TOP, prefix="dev_")
     return dag
 
 

@@ -50,6 +50,9 @@ from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsSte
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
+from waveflow.hw.harness import harness, memory_harness
+from waveflow.build.phase_calib import MemCalibStep, add_calib_steps
+from waveflow.calib.record_store import ModuleStore
 from waveflow.hw.mem_stream import MemWCmd
 from waveflow.simulation.simulation import Simulation
 
@@ -58,9 +61,12 @@ from examples.markov.markov import (
     QDEPTH,
     U8,
     U16,
+    ChainCore,
     MarkovChain,
     MarkovGen,
     MarkovSystem,
+    markov_memory,
+    mem_script,
     MkvCmd,
     MkvResp,
     default_jobs,
@@ -69,6 +75,10 @@ from examples.markov.markov import (
 
 HERE = Path(__file__).resolve().parent
 TOPS = (MarkovGen, MarkovChain)
+#: Tops built only for a kernel's own harness (plans/unit_harness.md Stage 4): the chain's core alone,
+#: which the system synthesizes inside MarkovChain with its memory writer.  Not in top_names(): the
+#: system's gates do not need it.
+UNIT_TOPS = (ChainCore,)
 #: The routed link's two bus writers: (mode, maxp).  Framework tops (mm_writer_gen), built here.
 WRITERS = (("queue", QDEPTH), ("credit", None))
 #: The RTL run: its top, its crossbar IP (names kept from before the DAG, so the generated IP's cache
@@ -127,6 +137,8 @@ def generate(root: Path = HERE) -> list[str]:
     or a generator show up as a changed source (``trace_steps.rtl_staleness``)."""
     gen_headers(root)
     names = [gen_top(cls, root).stem for cls in TOPS]
+    for cls in UNIT_TOPS:
+        gen_top(cls, root)
     names += [write_writer_project(root, mode, DW, maxp) for mode, maxp in WRITERS]
     return names
 
@@ -174,6 +186,23 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
     # Both synthesis routes, measured, for the docs (opt-in: minutes of Vivado cold).
     dag.add(MarkovRoutesStep(name="markov_routes", rtl=xsi.rtl))
     dag.add(SyncRoutesFigureStep(name="sync_routes_figure"))
+    # Each kernel alone, in its own harness (plans/unit_harness.md Stage 4): the generator against a
+    # credit sink, the chain's core against a credit source -- traced; and each one's timed phases
+    # fitted on its calibration workload, filed under its identity in calib/ (the store asked first).
+    store = ModuleStore(HERE / "calib")
+    for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
+                             ("ucore_", "markov_core_unit", ChainCore)):
+        unit = harness(cls, workload="test")
+        add_system_steps(dag, unit, work_dir=work_dir, top=top, prefix=prefix, trace=True)
+        add_calib_steps(dag, unit, work_dir=work_dir, top=top, prefix=f"{prefix}calib_", store=store)
+    # The memory alone (Stage 4c): its slot behind a direct link, a scripted master as the testbench.
+    # Calibrated on a memory that loads no timing, filed in calib/; then checked, loading it.
+    uncal = memory_harness(lambda sim: markov_memory(sim, calibrated=False), mem_script("calib"),
+                           n_cycles=20000)
+    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="markov_mem_unit", prefix="umemcal_")
+    dag.add(MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=store))
+    add_system_steps(dag, memory_harness(markov_memory, mem_script("test")), work_dir=work_dir,
+                     top="markov_mem_unit", prefix="umem_")
     return dag
 
 

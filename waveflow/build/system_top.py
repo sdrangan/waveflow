@@ -764,6 +764,23 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
                          subs=tuple(subs), maxi_ext=tuple(maxi_ext), dw=dw, aw=aw, idw=idw)
 
 
+def _render_direct_link(si: str, mi: str, dw: int, aw: int, idw: int) -> str:
+    """A direct link's Verilog: master group *si* wired to slave slot *mi*, signal by signal -- the
+    master's outputs drive the slot, the slot's drive back.  A signal the master group lacks (the
+    REGION fields) is tied to zero."""
+    from waveflow.build.axi_xbar import axi_signals
+
+    have = {n for n, _w, _m in axi_signals(dw, aw, idw)}
+    out = [f"  // direct link: {si} -> {mi} (no crossbar)"]
+    for name, _w, m2s in mi_wire_signals(dw, aw, idw):
+        if m2s:
+            out.append(f"  assign {mi}_{name} = {si}_{name};" if name in have
+                       else f"  assign {mi}_{name} = 0;")
+        elif name in have:
+            out.append(f"  assign {si}_{name} = {mi}_{name};")
+    return "\n".join(out)
+
+
 def _view_nets(view) -> list[tuple[str, str]]:
     """``(net side, "p" | "c")`` for each stream a view's leaf drives (p) or reads (c)."""
     if isinstance(view, QueueView):
@@ -1092,7 +1109,10 @@ def _render_modules(spec: SystemTopSpec, probes: dict | None = None) -> dict[str
         if net.consumer_keep and not net.producer_keep:
             bodies[drv] += [f"  assign {net.name}_TKEEP = {{{dw // 8}{{1'b1}}}};",
                             f"  assign {net.name}_TSTRB = {{{dw // 8}{{1'b1}}}};"]
-    if cfg is not None:
+    if cfg is not None and cfg.direct:
+        # A direct link (D9): the one master group wired straight to the one slave slot.
+        body.append(_render_direct_link(spec.si[0][0], mi[0], dw, aw, idw))
+    elif cfg is not None:
         body.append(render_xbar_instance(cfg, XBAR_INST, [p for p, _o in spec.si], mi))
     for slot, p in zip(spec.mi, mi):
         out = bodies[slot.group]

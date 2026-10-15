@@ -47,6 +47,18 @@ namespace streamutils {
         s.write(w);
     }
 
+    // write_msg — a schema message onto a framed stream of either word type: the schema's framed
+    // writer on an internal FIFO, its AXI-Stream writer (TLAST on the message's last word) at a top's
+    // port.  For a body whose framed port's word type is a template parameter (KernelTask.framed).
+    template<int W, typename Msg>
+    inline void write_msg(const Msg& m, hls::stream<framed_word<W> >& s) {
+        m.template write_framed_stream<W>(s);
+    }
+    template<int W, typename Msg>
+    inline void write_msg(const Msg& m, hls::stream<axi4s_word<W> >& s) {
+        m.template write_axi4_stream<W>(s, true);
+    }
+
     template<typename WordT, int W>
     inline ap_uint<W> read_boundary_word(hls::stream<WordT>& s, bool& last) {
         WordT w = s.read();

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #include "xsi_loader.h"
@@ -584,6 +585,172 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// CreditSink / CreditSource — the two ends of a credit stream a harness stands in for
+// (waveflow/simulation/credit_tb.py; plans/unit_harness.md D3).  A credit stream is two AXIS ports:
+// data forward, credit back.  Credit values are CUMULATIVE words consumed, 16 bits, compared modulo
+// 2^16 -- the rules of credit_stream_hls.h's Producer / Consumer.
+// ---------------------------------------------------------------------------
+
+/// The consumer end, facing a kernel that PRODUCES into a credit stream: always ready on data,
+/// recording every word (and the frame bounds when the port is framed), and reporting the cumulative
+/// count once crd_every words are unreported -- the newest count, one beat at a time.
+class CreditSink : public XsiSimObj {
+public:
+    /// *ports* is the port group {data, credit} -- the two AXIS ports one credit stream is.
+    CreditSink(Dut& d, std::initializer_list<const char*> ports, int crd_every, int chunks = 1)
+        : d_(d), every_(crd_every < 1 ? 1 : crd_every), k_(chunks < 1 ? 1 : chunks), data_(k_, 0) {
+        const std::string fwd = ports.begin()[0], crd = ports.begin()[1];
+        F_data  = d.port((fwd + "_TDATA").c_str());
+        F_valid = d.port((fwd + "_TVALID").c_str());
+        F_ready = d.port((fwd + "_TREADY").c_str());
+        F_last  = d.port_opt((fwd + "_TLAST").c_str());
+        C_data  = d.port((crd + "_TDATA").c_str());
+        C_valid = d.port((crd + "_TVALID").c_str());
+        C_ready = d.port((crd + "_TREADY").c_str());
+        C_last  = d.port_opt((crd + "_TLAST").c_str());
+    }
+
+    std::string out_bundle;
+
+    void sample() override {
+        fbeat_ = d_.get1(F_valid) != 0;
+        d_.getChunks(F_data, data_.data(), k_);
+        last_ = (F_last >= 0) ? d_.get1(F_last) : 0u;
+        cbeat_ = c_valid_ && d_.get1(C_ready);
+    }
+
+    void update() override {
+        ++cycle_;
+        if (cbeat_) c_valid_ = 0u;                        // the report was taken
+        if (fbeat_) {
+            words_.insert(words_.end(), data_.begin(), data_.end());
+            cycles_.push_back(cycle_);
+            ++consumed_;
+            if (F_last >= 0 && last_) bounds_.push_back((uint64_t)(words_.size() / (size_t)k_));
+        }
+        if (!c_valid_ && (uint16_t)(consumed_ - offered_) >= (uint16_t)every_) {
+            offered_ = consumed_;                         // the newest cumulative count
+            c_valid_ = 1u;
+        }
+    }
+
+    void drive() override {
+        d_.put1(F_ready, 1u);
+        d_.putW(C_data, (uint64_t)(uint16_t)offered_);
+        d_.put1(C_valid, c_valid_);
+        if (C_last >= 0) d_.put1(C_last, 1u);
+    }
+
+    void post_sim() override {
+        if (out_bundle.empty()) return;
+        if (F_last >= 0) {
+            std::vector<uint64_t> b = bounds_;
+            const uint64_t n = words_.size() / (size_t)k_;
+            if (b.empty() || b.back() != n) b.push_back(n);
+            BurstBundle::write_capture(out_bundle, words_, cycles_, b, k_);
+        } else {
+            BurstBundle::write_capture(out_bundle, words_, cycles_, k_);
+        }
+    }
+
+private:
+    Dut& d_;
+    int every_, k_;
+    std::vector<uint64_t> data_, words_, bounds_;
+    std::vector<long> cycles_;
+    int F_data, F_valid, F_ready, F_last, C_data, C_valid, C_ready, C_last;
+    uint32_t consumed_ = 0, offered_ = 0, c_valid_ = 0u, last_ = 0u;
+    bool fbeat_ = false, cbeat_ = false;
+    long cycle_ = 0;
+};
+
+/// The producer end, facing a kernel that CONSUMES a credit stream: plays in_bundle's bursts, each
+/// started only once the window -- depth - resp_words - outstanding -- has room for all of it, and
+/// always ready for the credit counts the kernel reports.
+class CreditSource : public XsiSimObj {
+public:
+    /// *ports* is the port group {data, credit}.
+    CreditSource(Dut& d, std::initializer_list<const char*> ports, int depth, int resp_words,
+                 int chunks = 1)
+        : d_(d), window_(depth - resp_words), k_(chunks < 1 ? 1 : chunks) {
+        const std::string fwd = ports.begin()[0], crd = ports.begin()[1];
+        F_data  = d.port((fwd + "_TDATA").c_str());
+        F_valid = d.port((fwd + "_TVALID").c_str());
+        F_ready = d.port((fwd + "_TREADY").c_str());
+        F_last  = d.port_opt((fwd + "_TLAST").c_str());
+        F_keep  = d.port_opt((fwd + "_TKEEP").c_str());
+        F_strb  = d.port_opt((fwd + "_TSTRB").c_str());
+        C_data  = d.port((crd + "_TDATA").c_str());
+        C_valid = d.port((crd + "_TVALID").c_str());
+        C_ready = d.port((crd + "_TREADY").c_str());
+    }
+
+    std::string in_bundle;
+
+    void pre_sim() override {
+        if (in_bundle.empty()) return;
+        words_ = BurstBundle::read_words(in_bundle);
+        bounds_ = BurstBundle::read_bounds(in_bundle);
+        if (bounds_.empty()) bounds_.assign(1, (uint64_t)nwords());
+    }
+
+    void sample() override {
+        fbeat_ = valid_ && d_.get1(F_ready);
+        if (d_.get1(C_valid)) acked_ = (uint32_t)(d_.getW(C_data) & 0xFFFFu);
+    }
+
+    void update() override {
+        if (fbeat_) {
+            ++widx_;
+            ++written_;
+            if (burst_ < (int)bounds_.size() && (uint64_t)widx_ == bounds_[burst_]) ++burst_;
+        }
+        // Start the next burst only when all of it fits: room = window - outstanding.
+        if (widx_ < nwords()) {
+            const bool starting = burst_ == 0 ? widx_ == 0 : (uint64_t)widx_ == bounds_[burst_ - 1];
+            if (starting) {
+                const int len = (int)(bounds_[burst_] - (uint64_t)widx_);
+                const int outstanding = (int)(uint16_t)(written_ - acked_);
+                valid_ = (window_ - outstanding >= len);
+            } else {
+                valid_ = true;                            // inside an admitted burst
+            }
+        } else {
+            valid_ = false;
+        }
+    }
+
+    void drive() override {
+        if (widx_ < nwords()) d_.putChunks(F_data, &words_[(size_t)widx_ * k_], k_);
+        d_.put1(F_valid, valid_ ? 1u : 0u);
+        if (F_last >= 0) d_.put1(F_last, is_last(widx_) ? 1u : 0u);
+        if (F_keep >= 0 || F_strb >= 0) {
+            std::vector<uint64_t> ones(k_, ~(uint64_t)0);
+            if (F_keep >= 0) d_.putChunks(F_keep, ones.data(), k_);
+            if (F_strb >= 0) d_.putChunks(F_strb, ones.data(), k_);
+        }
+        d_.put1(C_ready, 1u);
+    }
+
+    bool done() const { return widx_ >= nwords(); }
+
+private:
+    int nwords() const { return (int)(words_.size() / (size_t)k_); }
+    bool is_last(int i) const {
+        for (uint64_t b : bounds_) if ((uint64_t)i + 1 == b) return true;
+        return false;
+    }
+
+    Dut& d_;
+    int window_, k_;
+    std::vector<uint64_t> words_, bounds_;
+    int F_data, F_valid, F_ready, F_last, F_keep, F_strb, C_data, C_valid, C_ready;
+    int widx_ = 0, burst_ = 0;
+    uint32_t written_ = 0, acked_ = 0;
+    bool valid_ = false, fbeat_ = false;
+};
+
+// ---------------------------------------------------------------------------
 // AxiMmMaster — the TB acting as an AXI4 *master*: a host, or any bus master that is not the DUT.
 // We drive AW* / W* / BREADY / AR* / RREADY; the DUT (a crossbar, a slave) drives the rest.
 // ---------------------------------------------------------------------------
@@ -840,6 +1007,67 @@ private:
              rlast_ = 0, rresp_ = 0;
     uint64_t rdata_ = 0;
     bool aw_beat_ = false, w_beat_ = false, b_beat_ = false, ar_beat_ = false, r_beat_ = false;
+};
+
+// ---------------------------------------------------------------------------
+// MmScript — a scripted AXI-MM master: the testbench stand-in for a module's memory-mapped slave port
+// (waveflow/simulation/mm_tb.py; plans/unit_harness.md Stage 4c).  The system's host by role: plays
+// <scenario>/vectors/script -- one burst per op, [kind (1 write, 0 read), byte addr, nwords,
+// not_before, data...] -- with one read and one write outstanding (overlap_rw), each channel in script
+// order.  Records each read's data (<trace_dir>/rdata, one burst per read) and each op's [t_start,
+// t_end] cycles (<trace_dir>_timing, one burst per op).
+// ---------------------------------------------------------------------------
+
+class MmScript : public AxiMmMaster {
+public:
+    MmScript(Dut& d, const char* prefix, int bytes_per_word)
+        : AxiMmMaster(d, prefix, bytes_per_word, 0, true) {}
+
+    std::string scenario, trace_dir;
+
+    void pre_sim() override {
+        if (scenario.empty()) { std::fprintf(stderr, "FATAL: MmScript: no scenario\n"); std::exit(1); }
+        const std::string script = scenario + "/vectors/script";
+        const std::vector<uint64_t> w = BurstBundle::read_words(script);
+        const std::vector<uint64_t> b = BurstBundle::read_bounds(script);
+        uint64_t lo = 0;
+        for (uint64_t hi : b) {
+            const bool wr = w[lo] != 0;
+            const uint64_t addr = w[lo + 1];
+            const uint32_t n = (uint32_t)w[lo + 2];
+            const long nb = (long)w[lo + 3];
+            if (wr) write(addr, std::vector<uint64_t>(w.begin() + (long)lo + 4, w.begin() + (long)hi), nb);
+            else read(addr, n, nb);
+            lo = hi;
+        }
+    }
+
+    bool done() const {
+        for (size_t i = 0; i < nops(); ++i) if (!op(i).done()) return false;
+        return true;
+    }
+
+    void post_sim() override {
+        if (trace_dir.empty()) return;
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                if (op(i).write) continue;
+                words.insert(words.end(), op(i).rdata.begin(), op(i).rdata.end());
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "/rdata", words, bounds);
+        }
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                words.push_back((uint64_t)op(i).t_start);
+                words.push_back((uint64_t)op(i).t_end);
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "_timing", words, bounds);
+        }
+    }
 };
 
 // ---------------------------------------------------------------------------

@@ -384,3 +384,89 @@ class TestDeferredTransfers:
         env.run(until=100)
         np.testing.assert_array_equal(got["a"].val, x)
         np.testing.assert_array_equal(np.asarray(got["w"]), np.arange(3))
+
+
+# ---------------------------------------------------------------------------
+# Pattern 3: a write paced by its producer (plans/unit_harness.md Stage 4)
+# ---------------------------------------------------------------------------
+
+PRODUCE_SEED = {"lead": {"intercept": 5.0, "c": 0.0}, "fill": {"intercept": -1.0, "c": 1.0}}
+
+
+@dataclass
+class _Producer(FreeRunMod):
+    """Per command, a burst of ``c`` words made one a cycle: Pattern 3, timed from the command."""
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=1.0))
+    wrong_spans: bool = False
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)
+        for ep in (self.s_in, self.m_out):
+            self.add_endpoint(ep)
+        o = self.m_out
+        spans = ({"lead": (self.s_in.last, o.first), "fill": (self.s_in.first, o.last)}
+                 if self.wrong_spans else {"lead": (self.s_in.last, o.first), "fill": (o.first, o.last)})
+        self.phase = TimedPhase("make", spans=spans, features=("c",), seed=PRODUCE_SEED)
+        self.add_timing_phase(self.phase)
+
+    def run_iter(self):
+        w = yield from self.s_in.get()
+        c = int(w[0])
+        yield from self.phase.produce(self.m_out, np.arange(c, dtype=np.uint64), c=c)
+
+
+def _produce_harness(cmds, out_depth=16, sink_delay=0.0, **kw):
+    sim = Simulation()
+    env = sim.env
+    dut = _Producer(name="dut", sim=sim, **kw)
+    drv = StreamIFMaster(name="drv", sim=sim, bitwidth=64)
+    snk = StreamIFSlave(name="snk", sim=sim, bitwidth=64)
+    for name, m, s, d in (("a", drv, dut.s_in, 16), ("b", dut.m_out, snk, out_depth)):
+        f = StreamIF(name=name, sim=sim, bitwidth=64, clk=Clock(freq=1.0), depth=d)
+        f.bind("master", m)
+        f.bind("slave", s)
+    out = []
+
+    def driver():
+        for c in cmds:
+            yield from drv.write(np.asarray([c], dtype=np.uint64))
+
+    def sink():
+        yield env.timeout(sink_delay)
+        for _ in cmds:
+            w = yield from snk.get()
+            out.append((env.now, len(w)))
+
+    env.process(driver())
+    env.process(sink())
+    env.process(dut._run_iter_forever())
+    env.run(until=500)
+    return dut, out
+
+
+class TestPattern3:
+    def test_the_write_starts_its_lead_after_and_lasts_its_fill(self):
+        """The command lands at 1 (s_in.last); lead 5 -> the first beat at 6; fill 8 - 1 = 7 -> the
+        last at 13, which is when the burst is delivered."""
+        dut, out = _produce_harness([8])
+        assert out == [(13.0, 8)]
+        lead, fill = dut.phase.records
+        assert lead.span == "lead" and lead.start == ("dut_s_in", 0, "last", 1.0)
+        assert lead.end == ("dut_m_out", 0, "first", 6.0) and lead.actual == pytest.approx(5.0)
+        assert fill.end == ("dut_m_out", 0, "last", 13.0) and fill.actual == pytest.approx(7.0)
+        assert not lead.stalled and not fill.stalled
+
+    def test_a_reader_that_holds_the_write_marks_it_stalled(self):
+        """An 8-word link holds the first burst until the sink reads, at 100: the second write's end
+        waits for room, and that occurrence is no sample of the module's own timing."""
+        dut, out = _produce_harness([8, 8], out_depth=8, sink_delay=100.0)
+        fills = [r for r in dut.phase.records if r.span == "fill"]
+        assert [r.stalled for r in fills] == [False, True]
+        assert out[1][0] >= 100.0
+
+    def test_spans_that_are_not_lead_and_fill_are_refused(self):
+        with pytest.raises(RuntimeError, match="produce"):
+            _produce_harness([4], wrong_spans=True)

@@ -21,9 +21,11 @@ Its timing is two declared [timed phases](../../docs/guide/timing_model/timed_ph
   ``fill_time`` over the results -- the HLS loop that reads a word, computes, writes a word;
 * **resp** (sequential): ``resp_time`` from the last result word to the response's first word.
 
-What is in this file, in order: the schemas, the golden (pure functions), the kernel, the testbench
-graph and the system.  The HLS twin of :meth:`PolyKernel.run_iter` is ``src/poly_kernel_task.h``; the
-build DAG is ``stream_kernel_build.py``.
+What is in this file, in order: the schemas, the golden (pure functions), the kernel.  There is no
+testbench here: the kernel's harness -- a stream driver on ``s_in``, a sink on each output -- is generated
+from its boundary (:func:`~waveflow.hw.harness.harness`, ``plans/unit_harness.md``), playing the
+kernel's own :meth:`PolyKernel.workload`.  The HLS twin of :meth:`PolyKernel.run_iter` is
+``src/poly_kernel_task.h``; the build DAG is ``stream_kernel_build.py``.
 """
 from __future__ import annotations
 
@@ -37,15 +39,12 @@ import numpy as np
 from examples.stream_inband.poly import CoeffArray, Float32, poly_eval
 from waveflow.hw.arrayutils import array, write_array
 from waveflow.hw.clock import Clock
-from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_system import GraphSystem
-from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave, StreamIF
+from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
+from waveflow.hw.mm_device import QueueIn, QueueOut
 from waveflow.hw.timed_phase import TimedPhase
-from waveflow.simulation.simulation import Simulation
-from waveflow.simulation.stream_tb import StreamDriver, StreamSink
-from waveflow.utils.burst_io import StreamBurst, write_burst_bundle
+from waveflow.utils.burst_io import StreamBurst
 
 HERE = Path(__file__).resolve().parent
 
@@ -162,6 +161,11 @@ def default_cmds(seed: int = 1) -> list[Cmd]:
 CALIB_NSAMP = (8, 16, 32, 48, 64, 96, 128, 160, 200)
 CALIB_HOLDOUT = (48, 128)
 
+#: Queue depths when the kernel is memory-mapped: a command's samples fit queue in whole (the largest,
+#: 200 calibration samples, in 256 words); a response is one or two words.
+QDEPTH = 256
+RDEPTH = 16
+
 
 def calib_cmds(seed: int = 2) -> list[Cmd]:
     """One command per calibration length, coefficients alternating."""
@@ -185,6 +189,16 @@ class PolyKernel(FreeRunMod):
 
     cpp_kernel_name: ClassVar[str | None] = "poly_kernel"
     cpp_namespace: ClassVar[str | None] = "poly_kernel_impl"
+    #: The calibration's held-out feature values: interior lengths, which test the fit (D10).
+    calib_holdout: ClassVar[dict] = {"nwords": CALIB_HOLDOUT}
+    #: Its memory-mapped side, when a system puts it behind AXI-MM (``stream_kernel_mm.py``): a queue
+    #: in front of ``s_in`` deep enough for the largest command's samples, a queue behind each output.
+    #: The kernel itself stays stream-only; :func:`~waveflow.hw.mm_device.build_mm_device` builds these.
+    mm_views: ClassVar[tuple] = (
+        QueueIn("q_in", port="s_in", depth=QDEPTH),
+        QueueOut("q_out", port="m_out", depth=QDEPTH),
+        QueueOut("q_resp", port="m_resp", depth=RDEPTH),
+    )
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 
@@ -197,6 +211,9 @@ class PolyKernel(FreeRunMod):
             self.add_endpoint(ep)
         # The timed phases.  The numbers only seed the models until they are fitted in the harness
         # (calib/<phase>/<span>.json); they are poly's host-activated fit, as a starting point.
+        # The calibration store (plans/unit_harness.md D7): the fitted phases are one record filed under
+        # this kernel's identity in calib/modules/<key>/ -- found from the identity alone, wherever the
+        # kernel sits (its stream harness, behind AXI-MM).  Before a calibration: the seed.
         cal = HERE / "calib"
         self.samp_phase = TimedPhase(
             "samples", spans={"latency": (self.s_in.first, self.m_out.first),
@@ -204,12 +221,19 @@ class PolyKernel(FreeRunMod):
             features=("nwords",),
             seed={"latency": {"intercept": 34.0, "nwords": 0.0},
                   "fill_time": {"intercept": -1.0, "nwords": 1.0}},
-            calib_dir=cal / "samples")
+            calib_dir=cal)
         self.resp_phase = TimedPhase(
             "resp", spans={"resp_time": (self.m_out.last, self.m_resp.first)},
-            seed={"resp_time": {"intercept": 1.0}}, calib_dir=cal / "resp")
+            seed={"resp_time": {"intercept": 1.0}}, calib_dir=cal)
         for ph in (self.samp_phase, self.resp_phase):
             self.add_timing_phase(ph)
+
+    def workload(self, kind: str = "test") -> dict:
+        """What the kernel's harness plays on ``s_in``: ``"test"`` -- :func:`default_cmds` (one command
+        ending early, one of a single sample); ``"calib"`` -- :func:`calib_cmds`, a command per
+        calibration length."""
+        cmds = {"test": default_cmds, "calib": calib_cmds}[kind]()
+        return {"s_in": stimulus(cmds)}
 
     def kernel_task(self):
         """The hand-written HLS body, ``src/poly_kernel_task.h``: the twin of :meth:`run_iter`."""
@@ -236,78 +260,3 @@ class PolyKernel(FreeRunMod):
         st = Status.OK if k == n else Status.TLAST_EARLY
         yield self.resp_phase.timeout()
         yield from self.m_resp.write(Resp(tx_id=hdr.tx_id, nsamp=k, status=st))
-
-
-# ---------------------------------------------------------------------------
-# 4. The testbench graph and the system
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PolyKernelTB(FreeRunMod):
-    """The testbench as a graph: a stream driver plays the command stream into the kernel, two sinks
-    record its results and its responses."""
-
-    potential_targets: ClassVar[frozenset[str]] = frozenset({SEQUENTIAL_XSI_TB})
-
-    n_cycles: int = 4000
-    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.dut = PolyKernel(name="poly", sim=self.sim, clk=self.clk)
-        self.driver = StreamDriver(sim=self.sim, bitwidth=W, in_bundle="vectors/s_in",
-                                   has_tlast=True)
-        self.out_sink = StreamSink(sim=self.sim, bitwidth=W, out_bundle="vectors/m_out",
-                                   has_tlast=True, name="out_sink")
-        self.resp_sink = StreamSink(sim=self.sim, bitwidth=W, out_bundle="vectors/m_resp",
-                                    has_tlast=True, name="resp_sink")
-        for c in (self.dut, self.driver, self.out_sink, self.resp_sink):
-            self.add_comp(c)
-        for name, m, s in (("in", self.driver.stream_ep, self.dut.s_in),
-                           ("out", self.dut.m_out, self.out_sink.stream_ep),
-                           ("resp", self.dut.m_resp, self.resp_sink.stream_ep)):
-            link = StreamIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk, bitwidth=W)
-            link.bind(ep_name="master", endpoint=m)
-            link.bind(ep_name="slave", endpoint=s)
-            self.add_if(link)
-        self.boundary = []
-
-
-def write_scenario(root, cmds: list[Cmd]) -> None:
-    """The one input both backends read: the command stream as a burst bundle."""
-    write_burst_bundle([b.words for b in stimulus(cmds)], Path(root) / "vectors" / "s_in",
-                       tlast=[b.tlast for b in stimulus(cmds)])
-
-
-@dataclass
-class PolyKernelSystem(GraphSystem):
-    """The free-running poly as a system: the kernel alone inside the cut, its three streams top ports
-    facing the driver and the two sinks."""
-
-    cmds: list = field(default_factory=default_cmds)
-    n_cycles: int = 4000
-
-    def graph(self) -> PolyKernelTB:
-        return PolyKernelTB(name="tb", sim=Simulation(), n_cycles=int(self.n_cycles))
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        write_scenario(root, list(self.cmds))
-
-    def check(self) -> dict:
-        """The two recordings, per burst, against the golden; returns them."""
-        want_y, want_r = expected(list(self.cmds))
-        got_y = [np.asarray(b, dtype=np.uint64) for b in self.tb.out_sink.words]
-        got_r = [np.asarray(b, dtype=np.uint64) for b in self.tb.resp_sink.words]
-        return {"results": got_y, "resps": got_r, "want_results": want_y, "want_resps": want_r}
-
-    def calibration_workload(self):
-        """Commands of the :data:`CALIB_NSAMP` lengths (``nwords`` = ``nsamp`` at W=32); the
-        :data:`CALIB_HOLDOUT` lengths test the fit."""
-        from waveflow.build.phase_calib import CalibWorkload
-
-        return CalibWorkload(PolyKernelSystem(cmds=calib_cmds()),
-                             holdout={"nwords": CALIB_HOLDOUT})

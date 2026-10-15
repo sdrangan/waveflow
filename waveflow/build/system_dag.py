@@ -548,7 +548,7 @@ class SystemRtlStep(_SystemStep):
     def inner_dag(self) -> BuildDag:
         """The inner DAG: the crossbar IP, then the system top."""
         dag = BuildDag()
-        if self.spec.xbar is not None:                  # no crossbar inside the DUT: no IP to make
+        if self.spec.xbar is not None and not self.spec.xbar.direct:   # no crossbar IP to make
             dag.add(XbarIpStep(name="xbar_ip", owner=self))
         dag.add(SystemTopStep(name="system_top", owner=self))
         return dag
