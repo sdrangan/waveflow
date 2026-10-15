@@ -3,7 +3,8 @@ generic credit-stream stand-ins (``waveflow/simulation/credit_tb.py``), generate
 
 pysim: the generator's output, as its credit sink takes it, is exactly what the chain core's harness
 plays -- the two workloads describe one stream -- and the chain core answers each job.  At RTL: the
-generator alone, against the C++ ``CreditSink``, records what pysim does.
+generator alone against the C++ ``CreditSink`` and the chain core alone against the
+C++ ``CreditSource`` each record what pysim does.
 """
 from __future__ import annotations
 
@@ -66,3 +67,17 @@ def test_rtl_generator_alone_matches_pysim(gen_run):
     """The generator at RTL against the C++ CreditSink: what the sink took is what pysim's took."""
     assert recorded_names(gen_run) == ["m_u"]
     assert compared_clean(gen_run)
+
+
+@pytest.fixture(scope="module")
+def core_run() -> Path:
+    return system_run(build_dag(work_dir=WORK), HERE, "ucore_markov_core_unit",
+                      through="ucore_compare")
+
+
+@pytest.mark.xsi
+def test_rtl_core_alone_matches_pysim(core_run):
+    """The chain core at RTL against the C++ CreditSource: its framed output is an AXI-Stream port at
+    its own top (``KernelTask.framed``), and what the sink took is what pysim's took."""
+    assert recorded_names(core_run) == ["m_x"]
+    assert compared_clean(core_run)

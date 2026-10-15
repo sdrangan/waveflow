@@ -95,6 +95,10 @@ class TaskInst:
     template_args: tuple[int, ...]   # baked-concrete template args, e.g. (64,) or (32, 256)
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
+    #: The C++ word types of the body's framed ports (``KernelTask.framed``), template arguments after
+    #: ``template_args``.  Not part of :attr:`inst_name`: Vitis names an instance by its integer
+    #: arguments only.
+    word_types: tuple[str, ...] = ()
 
     @property
     def inst_name(self) -> str:
@@ -975,7 +979,8 @@ def bundle_map(boundary) -> dict[str, str]:
     return out
 
 
-def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None) -> ExtPort:
+def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None, *,
+                   framed: bool = False) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas).
 
     *bundle* comes from :func:`bundle_map` (the assembler's policy) for the m_axi kinds, and is
@@ -993,8 +998,9 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
         # TLAST does so because the design reads the frame boundary, which is a fact about the
         # design.  `getattr` with a default keeps every non-stream endpoint (and any third-party
         # one) working unchanged rather than needing the attribute added to it.
+        # A kernel's framed port at a top (`KernelTask.framed`) carries TLAST too.
         return _axis_port(name, width, kind=kind,
-                          axi4s=bool(getattr(ep, "boundary_tlast", False)))
+                          axi4s=framed or bool(getattr(ep, "boundary_tlast", False)))
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
@@ -1148,6 +1154,12 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
 
+    # The endpoints of the kernels' framed ports: such a port is TLAST-carrying wherever it lands.
+    framed_eps: set[int] = set()
+    for sub in kernel_tasks(comp):
+        for attr in _kernel_task_of(sub, comp).framed:
+            framed_eps.update(id(p) for p in getattr(sub, attr).physical_endpoints())
+
     ports: list[ExtPort] = []
     bundles = bundle_map(comp.boundary)
     for entry in comp.boundary:
@@ -1163,7 +1175,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
                     f"composite_top_spec: port_widths names {name!r}, a {kind} port; only AXIS "
                     f"boundary ports take a per-port width.")
             w = int(port_widths.pop(name))
-        ports.append(_boundary_port(name, kind, w, bundle, ep))
+        ports.append(_boundary_port(name, kind, w, bundle, ep, framed=id(ep) in framed_eps))
     if port_widths:
         raise LoweringError(
             f"composite_top_spec: port_widths names {sorted(port_widths)}, which are not boundary "
@@ -1191,7 +1203,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
                         f"boundary port of {type(comp).__name__} — cannot resolve its task arg")
                 args.append(arg)
                 ep_task[id(phys)] = len(tasks)
-        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
+        # A framed port's word type: axi4s_word at the top's port, framed_word on an internal FIFO.
+        boundary = {p.name: p for p in ports}
+        word_types = []
+        for attr in kt.framed:
+            (phys,) = getattr(sub, attr).physical_endpoints()
+            arg = ep_arg[id(phys)]
+            if arg in boundary:
+                word_types.append(f"streamutils::axi4s_word<{boundary[arg].width}>")
+            else:
+                w = int(getattr(phys, "bitwidth", width))
+                word_types.append(f"streamutils::framed_word<{w}>")
+        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header,
+                              tuple(word_types)))
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
@@ -1258,8 +1282,8 @@ def render_top(spec: TopSpec) -> str:
         # non-template, so the brackets appear only when there is something to put in them.
         # (Reachable since a GENERATED task body bakes its width when the endpoints were built
         # from an already-int()'d HwParam — nothing stays symbolic to template on.)
-        targs = ", ".join(str(a) for a in t.template_args)
-        fn = f"{t.task_fn}<{targs}>" if t.template_args else t.task_fn
+        targs = ", ".join([*(str(a) for a in t.template_args), *t.word_types])
+        fn = f"{t.task_fn}<{targs}>" if targs else t.task_fn
         lines.append(
             f"    hls_thread_local hls::task t{i}({fn}, {call_args});")
     lines.append("}")

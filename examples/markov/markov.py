@@ -294,7 +294,7 @@ class ChainCore(FreeRunMod):
         :meth:`run_iter`.  ``s_u`` is two ports (forward in, credit out) in that order."""
         from waveflow.hw.mem_stream import KernelTask
         return KernelTask("markov_chain_core_task", "markov_chain_core_task.h", ("s_u", "m_x"),
-                          template_args=(DW, CRD_EVERY))
+                          template_args=(DW, CRD_EVERY), framed=("m_x",))
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -197,11 +197,17 @@ class KernelTask:
       internal FIFO/block name (from the interface graph), yielding the concrete call args.  This is
       the seam that makes the top *graph-derived* rather than hand-written.
     * ``template_args`` — the baked-concrete C++ template arguments in order (``(mem_dwidth,)`` for a
-      width-templated body; ``(elem_bw, N)`` for the ``<EW, N>`` compute tiles)."""
+      width-templated body; ``(elem_bw, N)`` for the ``<EW, N>`` compute tiles).
+    * ``framed`` — the signature's ports that carry a packet boundary.  Their C++ word type is decided
+      by where the kernel sits, not by the kernel: ``framed_word`` on an internal FIFO, ``axi4s_word``
+      on a top's port (Vitis allows ``ap_axis`` only on interface ports).  The body takes each one's
+      word type as a template parameter after ``template_args``, in this order, and the generator
+      supplies it -- so one body serves a composite and the kernel's own harness."""
     task_fn: str
     header: str
     signature: tuple[str, ...]
     template_args: tuple[int, ...] = ()
+    framed: tuple[str, ...] = ()
 
 
 #: Schema classes the gen-include step emits C++ headers for (consumed by the kernel templates).

@@ -35,10 +35,10 @@
 #include "uint8_array_utils.h"
 #include "credit_stream_hls.h"
 
-template <int DW, int CRD_EVERY>
+template <int DW, int CRD_EVERY, typename XWord = streamutils::framed_word<DW> >
 static void markov_chain_core_task(hls::stream<ap_uint<DW> >& s_u_fwd,
                                    hls::stream<ap_uint<DW> >& s_u_crd,
-                                   hls::stream<streamutils::framed_word<DW> >& m_x) {
+                                   hls::stream<XWord>& m_x) {
     const int CW = MkvCmd::nwords<DW>();
     const int PFU = uint16_array_utils::lane_capacity<DW>();    // draws per input word
     const int PFX = uint8_array_utils::lane_capacity<DW>();     // states per output word
@@ -66,7 +66,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
         m.addr = (cmd.dstaddr + k0) >> 3;                       // a word index: the writer's base is 0
         m.len = (c + PFX - 1) / PFX;
         m.fwd_bursts = 0;
-        m.write_framed_stream<DW>(m_x);
+        streamutils::write_msg<DW>(m, m_x);
     STEP: for (int k = 0; k < c; ++k) {
 #pragma HLS PIPELINE II=1
             const int ju = k % PFU;
@@ -85,8 +85,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
             if (jx == PFX - 1 || k == c - 1) {                  // a word of states is full
                 ap_uint<DW> xw;
                 uint8_array_utils::write_array_lane<DW>(xlane, &xw, jx + 1);
-                streamutils::write_boundary_word<streamutils::framed_word<DW>, DW>(m_x, xw,
-                                                                                 k == c - 1);
+                streamutils::write_boundary_word<XWord, DW>(m_x, xw, k == c - 1);
             }
         }
         crd.offer(s_u_crd);                      // report: between chunks
@@ -96,10 +95,10 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
     // 3. the response, forwarded by the writer once x is stored
     MemWCmd fin;
     fin.addr = 0; fin.len = 0; fin.fwd_bursts = 1;
-    fin.write_framed_stream<DW>(m_x);
+    streamutils::write_msg<DW>(fin, m_x);
     MkvResp r;
     r.n = n; r.ones = ones; r.tx_id = cmd.tx_id;
-    r.write_framed_stream<DW>(m_x);
+    streamutils::write_msg<DW>(r, m_x);
 }
 
 #endif  // EXAMPLES_MARKOV_CHAIN_CORE_TASK_H
