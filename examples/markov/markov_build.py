@@ -51,6 +51,8 @@ from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.harness import harness
+from waveflow.build.phase_calib import add_calib_steps
+from waveflow.calib.record_store import ModuleStore
 from waveflow.hw.mem_stream import MemWCmd
 from waveflow.simulation.simulation import Simulation
 
@@ -183,11 +185,14 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
     dag.add(MarkovRoutesStep(name="markov_routes", rtl=xsi.rtl))
     dag.add(SyncRoutesFigureStep(name="sync_routes_figure"))
     # Each kernel alone, in its own harness (plans/unit_harness.md Stage 4): the generator against a
-    # credit sink, the chain's core against a credit source -- traced, so their phases can be fitted.
+    # credit sink, the chain's core against a credit source -- traced; and each one's timed phases
+    # fitted on its calibration workload, filed under its identity in calib/ (the store asked first).
+    store = ModuleStore(HERE / "calib")
     for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
                              ("ucore_", "markov_core_unit", ChainCore)):
-        add_system_steps(dag, harness(cls, workload="test"), work_dir=work_dir, top=top,
-                         prefix=prefix, trace=True)
+        unit = harness(cls, workload="test")
+        add_system_steps(dag, unit, work_dir=work_dir, top=top, prefix=prefix, trace=True)
+        add_calib_steps(dag, unit, work_dir=work_dir, top=top, prefix=f"{prefix}calib_", store=store)
     return dag
 
 

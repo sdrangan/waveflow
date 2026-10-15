@@ -47,6 +47,35 @@ def test_the_core_harness_answers_every_job():
     assert {type(p).__name__ for p in sysm.participants()} == {"CreditSource", "StreamSink"}
 
 
+@pytest.mark.parametrize("cls", [MarkovGen, ChainCore], ids=["gen", "core"])
+def test_a_kernel_is_filed_and_found_under_one_identity(cls):
+    """Calibrated in its harness, loaded in the system: one key in both, computed on the module as
+    built (a phase loads its model before the run; a record is filed under an un-run copy's key).
+    Starting a simulation does not move it: a credit link's counters and a queue view's notifying
+    store are context."""
+    from examples.markov.markov_build import system
+    from waveflow.build.phase_calib import timed_modules
+    from waveflow.calib.phases import module_identity
+
+    key = module_identity(harness(cls).dut()).key
+    sysm = system()
+    (inside,) = [m for m in timed_modules(sysm) if isinstance(m, cls)]
+    assert module_identity(inside).key == key
+    for obj in sysm.sim._sim_objs:
+        obj.pre_sim()
+    assert module_identity(inside).key == key
+
+
+def test_the_system_loads_both_kernels_calibrations():
+    """Each kernel's phases in the system come from its harness's record in calib/, not the seed."""
+    from examples.markov.markov_build import system
+    from waveflow.build.phase_calib import timed_modules
+
+    for m in timed_modules(system()):
+        for ph in m.timing_phases.values():
+            assert ph._stored_params() is not None, (m.name, ph.name)
+
+
 def test_a_credit_port_needs_its_window_declared():
     """The window is compiled into a producer's RTL, so the harness refuses to guess it."""
     class Bare(MarkovGen):

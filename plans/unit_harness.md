@@ -576,7 +576,7 @@ run, and the generator's output, as its credit sink takes it, is word for word w
 plays.  At RTL **the generator alone is bit-exact** against the C++ `CreditSink` (`ugen_compare`; gate
 `tests/examples/test_markov_units.py`).
 
-**Blocked: the chain core alone does not csynth.**  Its body writes `m_x` as
+**Was blocked (resolved in part 2, option A): the chain core alone did not csynth.**  Its body writes `m_x` as
 `hls::stream<framed_word<64>>` -- the internal framed type, because inside `MarkovChain` the channel to
 the memory writer is declared `framed=True`; at a top that port must be `axi4s_word` (Vitis allows
 `ap_axis` only on interface ports) and the generator renders it `ap_uint` (it reads the endpoint, and
@@ -588,7 +588,7 @@ framed_word -> axi4s adapter task at such a port (body untouched, but the harnes
 the system lacks); (C) harness `MarkovChain` (core + writer) as the leaf, which needs a memory stand-in
 on its `m_axi`.  Recommended: A.
 
-**Not started: the generator's timed phases.**  Its RTL pattern (from the harness trace): the command
+**Was not started (done in part 2): the generator's timed phases.**  Its RTL pattern (from the harness trace): the command
 forwarded in 3 back-to-back words, then each 64-draw chunk as 16 words over **61 cycles** (a word every
 4 draws), **~12 cycles** between chunks, the job's last chunk (11 words) over 41.  A chunk is a write
 **paced by its producer** -- which no timed-phase pattern expresses yet (Pattern 1 waits; Pattern 2 is
@@ -597,6 +597,50 @@ wait the declared fill span from its first beat, end it); begin/end on a credit 
 then the forward half's begin/end); and events and RTL port names for a credit stream's halves
 (`m_u_fwd`).  The hand-fitted overheads (7 and 15) stand until both kernels can be calibrated, since the
 Stage 4 gate is markov's composition from both.
+
+## Record: Stage 4, part 2 (2026-10-15), both kernels calibrated alone -- the gate not yet met
+
+**Option A, done.**  `KernelTask.framed` names a kernel's packet-carrying ports; the body takes each
+one's word type as a template parameter and the composite generator supplies it -- `framed_word` on an
+internal FIFO, `axi4s_word` (a TLAST port) at a top.  `streamutils::write_msg<W>(msg, s)` picks the
+schema's framed or AXI-Stream writer by the stream's type.  The chain core csynths as its own top and
+matches pysim at RTL (`test_rtl_core_alone_matches_pysim`); `MarkovChain` instantiates it with
+`framed_word` and its RTL gates are unchanged (1870 cycles, all ten markov XSI gates).
+
+**Pattern 3, `phase.produce(ep, data, **feats)`** (`timed_phase.py`): a write paced by its producer.  Two
+spans, a *lead* from any event of the module's (the latest transfer there) to the write's `first`, and a
+*fill* from its `first` to its `last`; an occurrence the environment delayed (begun late for want of room
+or input, ended late for want of a reader) is marked stalled.  A credit master has `begin` / `end` (the
+room wait, then the forward half's), its halves' events are the module's own, and their RTL ports are
+`<attr>_fwd` / `<attr>_crd` (`timed_ports`).  Tests: `TestPattern3`.
+
+**Both kernels' phases, fitted alone** (`ugen_calib_*`, `ucore_calib_*`; records in
+`examples/markov/calib/modules/`): the generator's chunk -- lead 12.8 (residual <= 0.9), fill `c - 4`
+(exact); its command forward -- lead 16.5, fill 2.  The core, all exact: a chunk's MemWCmd lead 8 (7 for
+a job's first, from the previous response, reading the command between), fill 1; its states lead 15,
+fill `c - 8`; the job's closing MemWCmd lead 8, the response lead 1.  The hand-fitted
+`chunk_overhead`s (7, 15) are gone.
+
+**Identity, three leaks fixed** (each moved a kernel's key between where it was calibrated and where it
+is used): a credit link's run-time counters (`written`, `consumed`, ...) are context (`_CONTEXT_ATTRS`);
+`module_identity` blanks every own port's depth, halves included -- a module's ports are its boundary
+wherever it sits (the generator's `s_cmd`: 2 in its harness, 16 in the system); a simpy subclass is
+run-time (a queue view swaps in a notifying `Store` at `pre_sim`).  And a phase loads its model before
+`pre_sim`, a record is filed under an **un-run** copy's identity: a module's own state (a job counter)
+cannot decide where its calibration lives.  Tests: `test_a_kernel_is_filed_and_found_under_one_identity`.
+
+**The gate: not met -- pysim 1705 cycles against RTL 1870 (-8.8%)**, `test_markov_pysim_tracks_rtl`
+fails.  The kernels compose right (the core is 80 cycles a chunk to RTL's 79; the generator matches its
+RTL probes to a constant offset), and what is missing is **the MM link between them**: at RTL the core
+starves twice a job, ~28 cycles each (probes: `u` reads idle 496 -> 525, 617 -> 645), while pysim's never
+does.  The forward queue writer issues its burst ~29 cycles after a chunk's last word and adds a second
+(pointer) write (`ufwd_last` 103 -> `wr1_aw` 132 -> `wr1_b` 154); pysim's bursts at once (88 -> 109).  The
+hand-fitted overheads had absorbed this, which is why they composed to +3%: they charged the kernels for
+the link.  Delaying the pysim writer alone barely moves the total (+29 for 29 cycles), so the starvation
+is the link's whole path -- writer, crossbar, queue-in reader, credit return -- and **the next step is to
+calibrate the link's parts as units of their own** (`MmStreamWriter`, the queue-in view), which needs a
+memory stand-in for an `m_axi` port (D3) and AXI-MM events for a timed phase.  Until then the gate is red,
+on purpose: re-fitting the kernels to hide the link is what the old overheads did.
 
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 
