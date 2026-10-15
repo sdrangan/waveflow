@@ -1,4 +1,14 @@
-# FIR experiment-and-evidence interface
+# Waveflow execution tools and FIR pilot
+
+**Revised direction:** [problem-agnostic execution surface](EXECUTION_SURFACE.md).
+**Start here:** [shared execution demo](execution/README.md) — four-tool MCP/CLI,
+real FIR and MemCopy Python runs, and an interactive evidence-review page.
+Live synthesis/RTL adapters are not yet integrated.
+
+## Legacy six-tool FIR pilot
+
+The implementation below remains available for historical replay/agent benchmarks;
+it is separate from the new shared execution surface.
 
 A bounded FIR DSE service with six typed tools, durable evidence, a JSON/CSV CLI,
 stdio MCP, and an optional Pi extension. Ordinary Python owns the semantics;

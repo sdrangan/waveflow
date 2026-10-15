@@ -143,3 +143,25 @@ Limits: no new model trial, statistical comparison, live synthesis or RTL run.
 Exposure entries establish adapter submission, not provider receipt. Historical
 DeepSeek trials above predate this extension. Earlier full-suite failures remain
 documented; this revision uses the focused integration gate.
+
+## Shared execution slice — working review
+
+Environment regenerated with `uv sync --extra dev`. The `.venv` directory is
+disposable; recreation is part of the documented workflow.
+
+- `uv run --no-sync pytest examples/dse_fir/tests tests/examples/test_mcp_tools.py tests/examples/test_mcp_setup.py tests/docs -m 'not vitis and not xsi' -o addopts='' -q`: **212 passed, 8 skipped**. Six skips are optional browser tests, executed separately below.
+- `uv run --no-project --with playwright python examples/dse_fir/tests/test_execution_visualizer.py`: **6 passed**, with actual Chrome. Covers import rejection, safe text, filters, review roundtrip, chat bridge/fallback and 1200/700/390 px layouts.
+- New execution service/adapter subset: **42 passed**, including real FIR and MemCopy through subprocess CLI and actual stdio MCP. The demo adds a separate end-to-end export test.
+- Scoped Ruff and `git diff --check` pass. The complete repository suite was not rerun; historical upstream failures above are not claimed resolved.
+- `uv build` produced a wheel containing all execution modules and both HTML files. Running the demo from the installed wheel outside the checkout returned `passed: true` with 14 attempts.
+- Independent read-only review found no material issues in the CPU-only slice; its focused run passed 43 tests with 6 optional browser skips. It also checked source identities and reproduced the recorded non-timing outcomes with a fresh demo.
+- [Recorded study](evidence/execution_study.json): **14 attempts** — 6 successful Python simulations, 2 discovery observations, 4 deliberately invalid requests, 2 unavailable synthesis requests. Every result comes from the actual service; no hardware replay is substituted.
+- FIR: 8/32 taps plus a repeated 32-tap point. MemCopy: 32/64-bit bus plus a repeated 64-bit point, each copying 2,048 bytes across four jobs. Successful repeats retain request identity and receive distinct attempt identities.
+- The [interactive review](execution/review.html) loads the recorded study, filters actual attempts and preserves review notes. Actual-data browser checks confirm all 14 rows, six successful Python rows, and three MemCopy rows under the corresponding filters, without horizontal overflow at the tested widths.
+
+Limits: serial local execution only; source/condition changes require new roots.
+Synthesis and RTL execution are not integrated. MemCopy cycles denote modeled
+simulation end, not RTL last completion. Cold imports are included in wall time;
+this demo does not establish performance differences or agent-search superiority.
+The legacy Pi adapter remains on the six-tool FIR interface. Presentation judgments
+remain open for team review.

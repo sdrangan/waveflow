@@ -1,5 +1,9 @@
 # Agent harness benchmark and connector direction
 
+**Priority reset:** establish the [shared execution surface](EXECUTION_SURFACE.md)
+across designs before further harness comparisons. Results below remain historical;
+the proposed comparison is deferred, not evidence of problem-agnostic support.
+
 **Purpose:** test whether a harness can use Waveflow to complete a hardware-design task correctly and efficiently, then improve the interface between domain evidence and agent decisions. FIR is the first bounded task, following [M3 of the prescribed plan](../../plans/mcp_fir.md#phases).
 
 ## Harness-neutral architecture
@@ -73,6 +77,6 @@ The direction is a shared connector and benchmark approach across Waveflow's age
 | FIR DSE profile: bounded evaluation, evidence and budgets | Reuse the task/evidence/scoring pattern for further designs, including [CG](../../plans/paper_cg_dse_vision.md) |
 | Python simulation, resource models and deterministic build/validation flows | Expose additional capabilities through scoped tools with declared cost and provenance; add live-backend benchmarks when available |
 
-Reuse the canonical registry and domain implementations. Extend task-specific tools rather than forcing every workflow into FIR's six operations. Keep authoring permissions separate from bounded DSE; do not expose all capabilities to every benchmark. Broader connector coverage and live hardware execution are intentions, not delivered features of this PR.
+Reuse the canonical registry and domain implementations. Expose common execution operations with design-specific adapters rather than extending FIR-shaped tools for every workload. Keep authoring permissions separate from bounded DSE; do not expose all capabilities to every benchmark. Broader connector coverage and live hardware execution are intentions, not delivered features of this PR.
 
 [Architecture](ARCHITECTURE.md) · [Usage](README.md) · [Verification](VERIFICATION.md)

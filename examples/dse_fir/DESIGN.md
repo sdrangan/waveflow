@@ -1,5 +1,8 @@
 # FIR agent surface: executable experiments, replaceable hosts
 
+**Historical implementation design.** The [execution-surface reset](EXECUTION_SURFACE.md)
+supersedes this page's extension direction; the current FIR implementation is unchanged.
+
 This implements the replay-first M0–M3 slice of [`plans/mcp_fir.md`](../../plans/mcp_fir.md).
 The target is the project's [AI substrate](../../docs/overview/aiharness.md), not a new
 agent framework. FIR is a pilot for the [CG DSE vision](../../plans/paper_cg_dse_vision.md):

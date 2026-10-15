@@ -1,5 +1,8 @@
 # FIR DSE architecture
 
+**Implemented pilot.** For the revised problem-agnostic architecture, see
+[execution surface](EXECUTION_SURFACE.md). The diagrams below describe existing code.
+
 The replay-first pilot from [plans/mcp_fir.md](../../plans/mcp_fir.md): expose the existing FIR design through six tools, with persistent evidence and explicit evaluation budgets.
 
 ## Domain and host boundary
