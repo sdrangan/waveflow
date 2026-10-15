@@ -225,8 +225,8 @@ class PolyKernel(FreeRunMod):
         # The three parts of the pipeline: get_array(Float32, n) and the results' write, deferred,
         # and the pure function between them.  compute gets the samples that arrived -- fewer than n
         # if the burst ended early -- and so many results go out, closed.
-        load = self.s_in.load_array(Float32, n)
-        store = self.m_out.store_array(Float32, n)
+        load = self.s_in.get_array(Float32, n)
+        store = self.m_out.write_array(Float32, n)
 
         def compute(x):
             return array(Float32, poly_eval(coeffs, x.val))

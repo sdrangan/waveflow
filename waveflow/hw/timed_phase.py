@@ -258,9 +258,10 @@ class TimedPhase:
     # -- Pattern 2 -------------------------------------------------------------------------------
     def pipeline(self, compute, load, store, **feats):
         """Pattern 2: a pipelined load, compute, store -- the HLS loop that reads a word, computes,
-        writes a word.  ``r = yield from phase.pipeline(compute, load=self.s_in.load_array(T, n),
-        store=self.m_out.store_array(T, n), nwords=...)`` -- the load and the store are reads and writes
-        **deferred** (``load_*`` / ``store_*`` on the endpoints), ``compute`` the pure function between
+        writes a word.  ``r = yield from phase.pipeline(compute, load=self.s_in.get_array(T, n),
+        store=self.m_out.write_array(T, n), nwords=...)`` -- the load and the store are the same reads and
+        writes a sequential body makes, **deferred** (a read not run, a write given no data), ``compute``
+        the pure function between
         them, given what the load's read returns and checked against what the store writes.  Returns a
         :class:`PipelineResult`: ``r.y`` is ``compute``'s result (what was written), ``r.load`` and
         ``r.store`` the two transfers -- a body that decides from its input (a burst that ended early)
@@ -284,8 +285,8 @@ class TimedPhase:
         self._check_features(feats)
         if not hasattr(load, "decode") or not hasattr(store, "check"):
             raise TypeError(f"phase {self.name!r}: pipeline() takes deferred transfers -- "
-                            f"load=ep.load_array(T, n) / load_schema(T) / load_words(), "
-                            f"store=ep.store_array(T, n) / store_schema(T) / store_words()")
+                            f"load=ep.get_array(T, n) / get_schema(T) / get(), "
+                            f"store=ep.write_array(T, n) / write_schema(T)")
         lat, fill = self._pipeline_spans(load.ep, store.ep)
         env, per = self.owner.env, self._period(store.ep)
         pred = self.predict(**feats)

@@ -206,8 +206,8 @@ class _PipeDoubler(FreeRunMod):
         self.results = []
 
     def run_iter(self):
-        load = self.s_b.load_words(nwords_max=8) if self.swap else self.s_in.load_words(nwords_max=8)
-        r = yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out.store_words(),
+        load = self.s_b.get(nwords_max=8) if self.swap else self.s_in.get(nwords_max=8)
+        r = yield from self.phase.pipeline(lambda w: w * 2, load=load, store=self.m_out.write(),
                                            nwords=8)
         self.results.append(r)
 
@@ -265,8 +265,8 @@ class TestPattern2:
         sim = Simulation()
         a = _Doubler(name="a", sim=sim)
         with pytest.raises(RuntimeError, match="needs two spans"):
-            gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.load_words(),
-                                           store=a.m_out.store_words(), n=1)
+            gen = a.compute_phase.pipeline(lambda w: w, load=a.s_in.get(),
+                                           store=a.m_out.write(), n=1)
             next(gen)
 
 
@@ -292,7 +292,7 @@ class TestPipelineResult:
 
 
 # ---------------------------------------------------------------------------
-# Deferred transfers: load_* decodes as the read it stands for, store_* checks what the compute returns
+# One vocabulary: get_* runs now under yield from, or is a pipeline's load; write_* given no data is its store
 # ---------------------------------------------------------------------------
 
 from waveflow.hw.dataschema import FloatField, IntField  # noqa: E402
@@ -309,12 +309,12 @@ def _f32_words(x, word_bw):
 
 
 class TestDeferredTransfers:
-    def test_load_array_is_get_array_and_a_short_burst_gives_what_arrived(self):
+    def test_a_deferred_get_array_decodes_as_get_array_and_a_short_burst_gives_what_arrived(self):
         """Full: the n elements get_array returns.  Short (TLAST early): every element whose words
         arrived -- at two Float32 a 64-bit word, both lanes of the last word."""
         s = StreamIFSlave(name="s", sim=Simulation(), bitwidth=64)
         x = np.arange(7, dtype=np.float32)
-        req = s.load_array(Float32, 7)
+        req = s.get_array(Float32, 7)
         assert req.nwords() == 4
         np.testing.assert_array_equal(req.decode(_f32_words(x, 64)).val, x)
         short = req.decode(_f32_words(x, 64)[:2])
@@ -330,16 +330,16 @@ class TestDeferredTransfers:
         s = StreamIFSlave(name="s", sim=Simulation(), bitwidth=32)
         h = Hdr(a=3, b=4)
         words = np.asarray(h.serialize(word_bw=32), dtype=np.uint64)
-        got = s.load_schema(Hdr).decode(words)
+        got = s.get_schema(Hdr).decode(words)
         assert (int(got.a), int(got.b)) == (3, 4)
         with pytest.raises(ValueError, match="ended after 1"):
-            s.load_schema(Hdr).decode(words[:1])
+            s.get_schema(Hdr).decode(words[:1])
 
-    def test_store_array_holds_the_compute_to_its_type_and_count(self):
+    def test_a_deferred_write_array_holds_the_compute_to_its_type_and_count(self):
         from waveflow.hw.arrayutils import array
 
         m = StreamIFMaster(name="m", sim=Simulation(), bitwidth=32)
-        st = m.store_array(Float32, 4)
+        st = m.write_array(Float32, 4)
         st.check(array(Float32, np.zeros(4, np.float32)))
         st.check(array(Float32, np.zeros(2, np.float32)))           # fewer: an early TLAST upstream
         with pytest.raises(ValueError, match="returned 5 elements"):
@@ -352,4 +352,35 @@ class TestDeferredTransfers:
     def test_pipeline_takes_deferred_transfers_not_endpoints(self):
         a = _Doubler(name="a", sim=Simulation())
         with pytest.raises(TypeError, match="deferred transfers"):
-            next(a.compute_phase.pipeline(lambda w: w, load=a.s_in.load_words(), store=a.m_out, n=1))
+            next(a.compute_phase.pipeline(lambda w: w, load=a.s_in.get(), store=a.m_out, n=1))
+
+    def test_the_same_names_run_now(self):
+        """Sequentially the same calls run: ``yield from get_array``, ``write_array(T, n, y)``, and a
+        read handed straight to ``env.process`` (a generator to SimPy)."""
+        from waveflow.hw.arrayutils import array
+
+        sim = Simulation()
+        env = sim.env
+        m = StreamIFMaster(name="m", sim=sim, bitwidth=32)
+        s = StreamIFSlave(name="s", sim=sim, bitwidth=32, queue_size=64)
+        f = StreamIF(name="f", sim=sim, bitwidth=32, clk=Clock(freq=1.0), depth=16)
+        f.bind("master", m)
+        f.bind("slave", s)
+        x = np.arange(4, dtype=np.float32)
+        got = {}
+
+        def producer():
+            yield from m.write_array(Float32, 4, array(Float32, x))
+            yield from m.write(np.arange(3, dtype=np.uint64))
+            with pytest.raises(ValueError, match="returned 5 elements"):
+                yield from m.write_array(Float32, 4, array(Float32, np.zeros(5, np.float32)))
+
+        def consumer():
+            got["a"] = yield from s.get_array(Float32, 4)
+            got["w"] = yield env.process(s.get())
+
+        env.process(producer())
+        env.process(consumer())
+        env.run(until=100)
+        np.testing.assert_array_equal(got["a"].val, x)
+        np.testing.assert_array_equal(np.asarray(got["w"]), np.arange(3))

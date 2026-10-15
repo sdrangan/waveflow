@@ -4,8 +4,8 @@ parent: Timing Models
 nav_order: 4
 audience: python
 snippets: run
-api: [TimedPhase.pipeline, PipelineResult, StreamIFSlave.load_array, StreamIFMaster.store_array, LoadRequest, StoreRequest]
-summary: "A pipelined body -- the loop that reads a word, computes, writes a word -- overlaps its input and output: the first output comes a latency after the first input, and later outputs are paced by the slower of input arrival and the loop's rate. Declared as two spans, latency (input first -> output first) and fill_time (output first -> output last), and run with `phase.pipeline(compute, load=ep.load_array(T, n), store=ep.store_array(T, n), **features)`, which waits exactly that race from real events and returns what it did. Run on a small module: 8 words, latency 5, fill 7."
+api: [TimedPhase.pipeline, PipelineResult, StreamIFSlave.get_array, StreamIFMaster.write_array, LoadRequest, StoreRequest]
+summary: "A pipelined body -- the loop that reads a word, computes, writes a word -- overlaps its input and output: the first output comes a latency after the first input, and later outputs are paced by the slower of input arrival and the loop's rate. Declared as two spans, latency (input first -> output first) and fill_time (output first -> output last), and run with `phase.pipeline(compute, load=ep.get_array(T, n), store=ep.write_array(T, n), **features)`, which waits exactly that race from real events and returns what it did. Run on a small module: 8 words, latency 5, fill 7."
 ---
 
 # Pipelined bodies
@@ -76,17 +76,18 @@ class Double(FreeRunMod):
 
     def run_iter(self):
         r = yield from self.loop_phase.pipeline(lambda w: w * 2,
-                                                load=self.s_in.load_words(nwords_max=N),
-                                                store=self.m_out.store_words(), nwords=N)
+                                                load=self.s_in.get(nwords_max=N),
+                                                store=self.m_out.write(), nwords=N)
         self.results.append(r)
 ```
 
-- **`load=` and `store=` are transfers deferred, not made**: `pipeline` drives each one's two halves
-  itself.  Each names the endpoint method it stands for: `s_in.load_array(T, n)` is `get_array(T, n)`
-  -- the compute receives that `DataArray`, shorter if the burst ended early -- `s_in.load_schema(T)`
-  is `get_schema(T)`, and `s_in.load_words(nwords_max=N)` raw words, as here.  On the output,
-  `m_out.store_array(T, n)` writes the compute's `DataArray` of `T` (at most `n` elements, checked),
-  `store_schema(T)` one `T`, `store_words()` raw words.
+- **`load=` and `store=` are the same reads and writes a sequential body makes, deferred**: one
+  vocabulary for both.  `x = yield from s_in.get_array(T, n)` reads now; `load=s_in.get_array(T, n)`
+  hands the same read to `pipeline`, which drives its two halves itself and gives the compute that
+  `DataArray` -- shorter if the burst ended early.  Likewise `get_schema(T)`, and `get(nwords_max=N)`
+  for raw words, as here.  A write given its data runs now (`yield from m_out.write_array(T, n, y)`);
+  given none it is deferred: `store=m_out.write_array(T, n)` (the compute's `DataArray` of `T`, at
+  most `n` elements, checked), `write_schema(T)` (one `T`), `write()` (raw words, as here).
 - **The compute is a pure function** from what the load returns to what the store writes.
 - **The call is checked against the declaration**: the load must be on the endpoint whose `first`
   starts `latency`, the store on the one that ends it and carries `fill_time`.
@@ -170,8 +171,8 @@ returned fewer results:
 
 <!-- snippet: skip -->
 ```python
-load = self.s_in.load_array(Float32, cmd_hdr.nsamp)
-store = self.m_out.store_array(Float32, cmd_hdr.nsamp)
+load = self.s_in.get_array(Float32, cmd_hdr.nsamp)
+store = self.m_out.write_array(Float32, cmd_hdr.nsamp)
 r = yield from self.samp_phase.pipeline(compute, load=load, store=store, nwords=load.nwords())
 if len(r.y.val) < cmd_hdr.nsamp:    # TLAST came early: halt, read nothing more
     ...

@@ -351,8 +351,8 @@ class PolyAccel(HostActivated):
             # The samples: get_array(Float32, nsamp) and the results' write, deferred, and the pure
             # function between them.  compute gets the samples that arrived: a burst that ends early
             # at TLAST is shorter, and its results still go out as one burst, closed (rule 6).
-            load = self.s_in.load_array(Float32, cmd_hdr.nsamp)
-            store = self.m_out.store_array(Float32, cmd_hdr.nsamp)
+            load = self.s_in.get_array(Float32, cmd_hdr.nsamp)
+            store = self.m_out.write_array(Float32, cmd_hdr.nsamp)
 
             def compute(x):
                 return array(Float32, poly_eval(cmd_hdr.coeffs, x.val))

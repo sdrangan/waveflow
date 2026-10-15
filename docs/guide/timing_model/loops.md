@@ -81,8 +81,8 @@ is a different feature.  Compute it in the body, where `U` is known, and pass it
 
 ```python
 m = math.ceil(n / self.unroll)
-yield from self.loop_phase.pipeline(compute, load=self.s_in.load_array(T, n),
-                                    store=self.m_out.store_array(T, n), trips=m)
+yield from self.loop_phase.pipeline(compute, load=self.s_in.get_array(T, n),
+                                    store=self.m_out.write_array(T, n), trips=m)
 ```
 
 with the phase declared over `features=("trips",)`.  At large `m` the throughput asymptote
