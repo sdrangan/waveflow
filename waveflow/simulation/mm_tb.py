@@ -23,6 +23,7 @@ t_end]`` in cycles (not compared: the two backends' timings are what a calibrati
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,13 @@ class MmScript(HwModule):
     #: the system flow, as a software host's are.
     scenario: DynParam[str] = ""
     trace_dir: DynParam[str] = ""
+    #: Stage 5 policy (late answers): the percent of cycles the master holds RREADY / BREADY low, and
+    #: the pattern's seed.  ``0``: it takes every answer the cycle it comes.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
+
+    #: A policy's stalls are this stand-in's answers (:meth:`StandInPolicy.apply`).
+    policy_role: ClassVar[str] = "answers"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -104,6 +112,12 @@ class MmScript(HwModule):
                 self.rdata[i] = np.asarray((yield from self.m.read(n, addr)), dtype=np.uint64)
             self.times[i] = (t0 / per, self.env.now / per)
             self.ndone += 1
+            if self.stall_pct:
+                # Late answers: the RTL master drops RREADY / BREADY cycle by cycle; pysim holds its
+                # next op on this channel off by the average.
+                from waveflow.simulation.policy import stall_cycles
+
+                yield self.timeout(stall_cycles(max(n, 1), self.stall_pct) * per)
 
     def run_proc(self) -> ProcessGen[None]:
         self.env.process(self._channel(WRITE))

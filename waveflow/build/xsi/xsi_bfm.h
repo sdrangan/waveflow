@@ -340,6 +340,16 @@ private:
 /// WIDE PORTS.  A port wider than 64 bits takes *chunks* = ceil(W/64) uint64 per beat (low chunk
 /// first), in the ctor vector and in the bundle alike; the generator passes *chunks* only when it is
 /// not 1, so every narrower harness is unchanged.  A bundle whose word width disagrees is refused.
+/// A stand-in's hostile policy (plans/unit_harness.md Stage 5): is *cycle* one it stalls on?  A seeded
+/// hash of the cycle number -- *pct* percent of cycles, deterministic, and the same function as
+/// waveflow.simulation.policy.stalled() in Python.  pct <= 0: never.
+inline bool policy_stalled(uint32_t seed, long cycle, int pct) {
+    if (pct <= 0) return false;
+    uint32_t x = seed * 2654435761u ^ (uint32_t)cycle * 2246822519u;
+    x ^= x >> 15; x *= 2654435761u; x ^= x >> 13; x *= 3266489917u; x ^= x >> 16;
+    return (int)(x % 100u) < pct;
+}
+
 class AxisMaster : public XsiSimObj {
 public:
     AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words, int chunks = 1)
@@ -390,7 +400,19 @@ public:
         if (!accept_bundle.empty()) BurstBundle::write_capture(accept_bundle, acc_words_, acc_cycles_, k_);
     }
 
+    //: Stage 5 policy: on a stalled cycle the next word is not yet presented (TVALID low).  A word
+    //: already presented stays up until it is taken -- AXI-Stream allows nothing else.  0 = never.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
     void update() override {
+        const bool hold = h_valid_ && !beat_;       // presented, not taken: TVALID stays
+        advance();
+        if (stall_pct > 0 && !hold && gap_left_ == 0 && widx_ < nwords())
+            h_valid_ = policy_stalled((uint32_t)stall_seed, cycle_, stall_pct) ? 0u : 1u;
+    }
+
+    void advance() {
         ++cycle_;                                   // 1-based, the same count AxisSlave keeps
         if (gap_left_ > 0) {
             if (--gap_left_ == 0) h_valid_ = (widx_ < nwords()) ? 1u : 0u;
@@ -520,9 +542,14 @@ public:
     }
 
     void drive() override {
-        d_ready_ = (h_ready_ && cycle_ >= ready_from) ? 1u : 0u;
+        d_ready_ = (h_ready_ && cycle_ >= ready_from
+                    && !policy_stalled((uint32_t)stall_seed, cycle_, stall_pct)) ? 1u : 0u;
         d_.put1(P_ready, d_ready_);
     }
+
+    //: Stage 5 policy: TREADY low on stalled cycles (back-pressure).  0 = always ready.
+    int stall_pct = 0;
+    int stall_seed = 0;
 
     //: Optional: hold TREADY low until this cycle (1-based, the sink's own count).  Default 0 = ready
     //: from the start, exactly the always-ready sink every existing gate uses.  Exists so a gate can
@@ -611,9 +638,14 @@ public:
     }
 
     std::string out_bundle;
+    //: Stage 5 policy: TREADY low on stalled cycles, and each credit report held *credit_delay*
+    //: cycles after it is due (starved credit).  0 = neither.
+    int stall_pct = 0;
+    int stall_seed = 0;
+    int credit_delay = 0;
 
     void sample() override {
-        fbeat_ = d_.get1(F_valid) != 0;
+        fbeat_ = d_.get1(F_valid) != 0 && f_ready_;
         d_.getChunks(F_data, data_.data(), k_);
         last_ = (F_last >= 0) ? d_.get1(F_last) : 0u;
         cbeat_ = c_valid_ && d_.get1(C_ready);
@@ -628,14 +660,18 @@ public:
             ++consumed_;
             if (F_last >= 0 && last_) bounds_.push_back((uint64_t)(words_.size() / (size_t)k_));
         }
-        if (!c_valid_ && (uint16_t)(consumed_ - offered_) >= (uint16_t)every_) {
+        if (!c_valid_ && due_ < 0 && (uint16_t)(consumed_ - offered_) >= (uint16_t)every_)
+            due_ = cycle_ + credit_delay;
+        if (!c_valid_ && due_ >= 0 && cycle_ >= due_) {
             offered_ = consumed_;                         // the newest cumulative count
             c_valid_ = 1u;
+            due_ = -1;
         }
     }
 
     void drive() override {
-        d_.put1(F_ready, 1u);
+        f_ready_ = !policy_stalled((uint32_t)stall_seed, cycle_, stall_pct);
+        d_.put1(F_ready, f_ready_ ? 1u : 0u);
         d_.putW(C_data, (uint64_t)(uint16_t)offered_);
         d_.put1(C_valid, c_valid_);
         if (C_last >= 0) d_.put1(C_last, 1u);
@@ -660,8 +696,8 @@ private:
     std::vector<long> cycles_;
     int F_data, F_valid, F_ready, F_last, C_data, C_valid, C_ready, C_last;
     uint32_t consumed_ = 0, offered_ = 0, c_valid_ = 0u, last_ = 0u;
-    bool fbeat_ = false, cbeat_ = false;
-    long cycle_ = 0;
+    bool fbeat_ = false, cbeat_ = false, f_ready_ = true;
+    long cycle_ = 0, due_ = -1;
 };
 
 /// The producer end, facing a kernel that CONSUMES a credit stream: plays in_bundle's bursts, each
@@ -699,7 +735,13 @@ public:
         if (d_.get1(C_valid)) acked_ = (uint32_t)(d_.getW(C_data) & 0xFFFFu);
     }
 
+    //: Stage 5 policy: on a stalled cycle the next word is not yet presented; a presented one stays.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
     void update() override {
+        const bool hold = valid_ && !fbeat_;
+        ++cycle_;
         if (fbeat_) {
             ++widx_;
             ++written_;
@@ -718,6 +760,8 @@ public:
         } else {
             valid_ = false;
         }
+        if (stall_pct > 0 && !hold && valid_ && policy_stalled((uint32_t)stall_seed, cycle_, stall_pct))
+            valid_ = false;
     }
 
     void drive() override {
@@ -748,6 +792,7 @@ private:
     int widx_ = 0, burst_ = 0;
     uint32_t written_ = 0, acked_ = 0;
     bool valid_ = false, fbeat_ = false;
+    long cycle_ = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -833,6 +878,10 @@ public:
         ops_.push_back(std::move(o)); return ops_.size() - 1;
     }
 
+    //: Stage 5 policy (late answers): BREADY / RREADY low on stalled cycles.  0 = always ready.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
     bool idle() const {
         if (!overlap_) return cur_ >= ops_.size();
         return !wact_ && !ract_ && next_of(true, wcur_) >= ops_.size() &&
@@ -853,9 +902,9 @@ public:
         rresp_ = (P_rresp >= 0) ? (uint32_t)(d_.getW(P_rresp) & 3) : 0;
         aw_beat_ = h_awvalid_ && awready_;
         w_beat_  = h_wvalid_ && wready_;
-        b_beat_  = bvalid_ && h_bready_;
+        b_beat_  = bvalid_ && d_bready_;
         ar_beat_ = h_arvalid_ && arready_;
-        r_beat_  = rvalid_ && h_rready_;
+        r_beat_  = rvalid_ && d_rready_;
     }
 
     void update() override {
@@ -904,11 +953,15 @@ public:
         const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
         const Op* so = overlap_ ? wo : o;      // the default model drives WSTRB from any active op
         if (P_wstrb >= 0) d_.putW(P_wstrb, (so ? so->wstrb : ~(uint64_t)0) & strb_all);
-        d_.put1(P_bready, h_bready_);
+        // Stage 5 policy: the master takes its answers late -- BREADY / RREADY low on stalled cycles.
+        const bool st = policy_stalled((uint32_t)stall_seed, cycle_, stall_pct);
+        d_bready_ = h_bready_ && !st;
+        d_rready_ = h_rready_ && !st;
+        d_.put1(P_bready, d_bready_);
         d_.putW(P_araddr, ro ? ro->addr : 0);
         d_.putW(P_arlen, ro ? ro->nwords - 1 : 0);
         d_.put1(P_arvalid, h_arvalid_);
-        d_.put1(P_rready, h_rready_);
+        d_.put1(P_rready, d_rready_);
         if (P_awid >= 0) d_.putW(P_awid, id_);
         if (P_arid >= 0) d_.putW(P_arid, id_);
         if (overlap_) {
@@ -1003,6 +1056,7 @@ private:
         P_awcache, P_arcache;
     std::vector<int> zero_;
     uint32_t h_awvalid_ = 0, h_wvalid_ = 0, h_bready_ = 1, h_arvalid_ = 0, h_rready_ = 1;
+    uint32_t d_bready_ = 1, d_rready_ = 1;   ///< as driven (the Stage 5 policy may hold them low)
     uint32_t awready_ = 0, wready_ = 0, bvalid_ = 0, bresp_ = 0, arready_ = 0, rvalid_ = 0,
              rlast_ = 0, rresp_ = 0;
     uint64_t rdata_ = 0;

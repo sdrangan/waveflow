@@ -98,6 +98,10 @@ class StreamDriver(HwModule):
     #: bundle (the twin of :attr:`StreamSink.out_bundle`), so a DUT can be timed at its ports from the
     #: BFMs alone, with no waveform.  pysim ignores it: its own timestamps are the simulation's.
     accept_bundle: DynParam[str] = ""
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -128,12 +132,16 @@ class StreamDriver(HwModule):
 
     def gap_before(self, k: int) -> int:
         """Idle cycles before burst *k* (none before the first).  The C++ ``AxisMaster`` applies the
-        same rule."""
+        same rule -- and, under a stall policy, holds words off cycle by cycle, which pysim
+        approximates here as the average stall over the burst before."""
         if k == 0:
             return 0
+        from waveflow.simulation.policy import stall_cycles
+
+        stall = stall_cycles(len(self.bursts[k - 1]), self.stall_pct) if self.bursts else 0
         if k - 1 < len(self.burst_gaps):
-            return int(self.burst_gaps[k - 1])
-        return int(self.burst_gap_cycles)
+            return int(self.burst_gaps[k - 1]) + stall
+        return int(self.burst_gap_cycles) + stall
 
     def bfm_model(self):
         """XSI twin: an ``AxisMaster`` on the port ``stream_ep`` is wired to, constructed with empty
@@ -169,6 +177,10 @@ class StreamSink(HwModule):
     #: something is wrong, and a bound that can be exceeded is what makes a runaway producer visible
     #: instead of silently absorbed.
     queue_size: int = 64
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -180,7 +192,12 @@ class StreamSink(HwModule):
 
     def rx_proc(self, words: Words) -> ProcessGen[None]:
         self.words.append(np.array(words, copy=True))
-        yield self.timeout(0)
+        from waveflow.simulation.policy import stall_cycles
+
+        stall = stall_cycles(len(words), self.stall_pct)
+        # A stall policy: the RTL sink drops TREADY cycle by cycle; pysim holds the next burst off by
+        # the average stall over this one.
+        yield self.timeout(stall / self.stream_ep.interface.clk.freq if stall else 0)
 
     def post_sim(self) -> None:
         """Write the capture to :attr:`out_bundle`, as the XSI ``AxisSlave`` does in its
