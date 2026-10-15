@@ -1,14 +1,16 @@
-# Plan: a unit harness per test subsystem -- verification, timing and calibration, one module at a time
+# Plan: a unit harness per `SynthUnit` -- verification, timing and calibration, one module at a time
 
 **Status:** drafted 2026-10-12; revised 2026-10-13 (Stage 0); paused 2026-10-14 for
 `plans/pipelined_ops.md`, which gave modules a way to state their timing ([timed
 phases](../docs/guide/timing_model/timed_phases.md), merged PRs #274, #275).  **Revised again
-2026-10-14, with the user, before any code:** the unit is a **test subsystem**, not only a device;
+2026-10-14, with the user, before any code:** the unit is a **test subsystem** (since named `SynthUnit`), not only a device;
 **D9 is decided**; the first vehicle is a **free-running poly** -- first as a stream-only kernel, then
 as a memory-mapped device -- and markov follows as the first multi-kernel system.  That example also
 becomes the docs' first example, the start of retiring the host-activated examples.  The original Stage
 0 (markov and mm_fir, port by port) is kept as a record at the end: it is the inventory the markov stage
-needs.
+needs.  **Stage 1 merged 2026-10-14 (PR #277).**  **Named the same day, with the user:** a test subsystem
+is a **`SynthUnit`**; the system is flat (a testbench and a DUT), the DUT is the tree of
+`SynthUnit`s, and a harness is itself an `HwSystem` whose DUT is one `SynthUnit` (D1, D2, D11).
 
 ## Motivation
 
@@ -36,25 +38,63 @@ produces the features, and to observe the ports its phases name.  Poly's first c
 hand-written wrapper around its own Vitis flow (`examples/stream_inband/poly_calibrate.py`); the harness
 is what makes such wrappers unnecessary.
 
-## What a test subsystem is
+## What a `SynthUnit` is
 
-A **test subsystem** is a subgraph of a system that admits a harness (the user's definition,
-2026-10-14).  It must satisfy:
+A **`SynthUnit`** (a *test subsystem*) is a subgraph of a system's DUT that admits a harness (the
+user's definition, 2026-10-14; named the same day).  It must satisfy:
 
 1. **Its function and its timing are observable at its boundary** -- the events of its timed phases are
    on its own ports.
-2. **It is hierarchical** -- a test subsystem is made of test subsystems.
+2. **It is hierarchical** -- a `SynthUnit` is made of `SynthUnit`s.
 3. **Its resources and timing are either calibrated from its boundary and its synthesis reports (a
    leaf), or composed from its children's (a composite)** -- leaves are calibrated, composites are
    composed and then *verified* by property 1, never fitted.
 
-It is independent of packaging: a kernel is a test subsystem but rarely an IP; a device is both.  The
+**The system is flat; the DUT is the tree.**  An `HwSystem` is one experiment -- a testbench (hosts,
+drivers, sinks, memories outside the cut) and a DUT -- so it cannot nest: a system inside a system would
+bring its own testbench.  The hierarchy is inside the DUT: its root is the DUT itself (`HwSystem.dut()`,
+the `DutTop`), its leaves are kernels and the crossbar, and between them are composites.  A **harness is
+an `HwSystem`** whose DUT is one `SynthUnit` and whose testbench is stand-ins at that unit's
+boundary -- Stage 1's `PolyKernelSystem` is exactly that for the leaf `poly_kernel`:
+
+    Simulation =  any SimObjs                                     (pysim only)
+    HwSystem   =  testbench participants  +  DUT                   (pysim and RTL)
+                  (each lowerable: bfm_model,    └ tree of SynthUnits
+                   xsi_model or a C++ twin)        (DUT -> composites -> leaves)
+    harness(node) = HwSystem(testbench = stand-ins at node's boundary, DUT = node)
+
+The name (the user, 2026-10-14): first `HwSubsystem`, renamed **`SynthUnit`** -- *synthesizable*, so on
+the DUT side, and the *unit* the harness, the calibration and the records are about; not "...System",
+since a system is a testbench plus a DUT.  The objects outside the DUT keep their existing name,
+**testbench participants**: what makes one is that it can be lowered to the RTL testbench (a
+`bfm_model()`, an `xsi_model()`, or a C++ twin like the `SwHost`).  An object that cannot be lowered
+belongs in a plain `Simulation`, not an `HwSystem` -- a rule nothing checks yet (the XSI build is where
+it fails today).
+
+**Roles, not classes** (the user, 2026-10-14, keeping an earlier convention): one `SimObj` class may be
+lowered several ways -- inside the DUT one day, on the testbench the next -- so neither side is a class
+an object inherits.  A *testbench participant* is any `SimObj` outside **this** system's DUT, required to
+have a testbench lowering (today an XSI one); a `SynthUnit` is a **node of this system's DUT tree**, a
+small object grouping modules (members, boundary, children, identity), not a base class.  Both are
+positions, decided by where the cut is drawn.
+
+**A `SynthUnit` is always inside the DUT; nothing on the testbench side is one** (the user,
+2026-10-14).  Testbench-side timing has two other sources: **stand-ins** -- drivers, sinks, the remote
+queue -- are never calibrated, they set the environment by policy (D4); **real things outside the DUT** --
+the `m_axi` path to DDR, the host processor -- are **platform** models (the bus model, the CPU model on
+gem5), calibrated once per platform and shared by every design on it, not keyed by a design's identity.
+The cut can move: a memory outside the DUT in one system is a leaf of the tree in another that puts it
+inside.
+
+It is independent of packaging: a kernel is a `SynthUnit` but rarely an IP; a **device** -- in
+`ip_packaging_routes.md`, the group packaged as one IP -- is a composite that happens to be packaged
+as one, a packaging fact about a node, not a separate kind of unit.  The
 crossbar is a leaf of its own, calibrated once per configuration and composed into its parents.  A
 child's boundary is observed **in place** whenever its parent runs (its declared events are logged at
-any level); only a test subsystem that needs **control** -- a workload sweep, a hostile environment,
+any level); only a `SynthUnit` that needs **control** -- a workload sweep, a hostile environment,
 development before its parent exists -- needs a harness of its own.
 
-For one test subsystem, the harness gives:
+For one `SynthUnit`, the harness gives:
 
 | | how |
 | --- | --- |
@@ -65,13 +105,18 @@ For one test subsystem, the harness gives:
 
 ## Decisions
 
-- **D1 -- the unit is a test subsystem** (was: the device).  A device of `ip_packaging_routes.md` is one
-  level of the hierarchy; the kernel inside it is the leaf below, the system the composite above.  One
-  identity keys a test subsystem's verification, timing records and resource record.
-- **D2 -- a harness is a cut, not a new kind of testbench.**  Build it by drawing the cut around the test
-  subsystem in a system that holds it (often a minimal one), and generate the rest with the machinery
+- **D1 -- the unit is a `SynthUnit`** (was: the device).  A device of `ip_packaging_routes.md` is a
+  composite that is packaged as one IP; the kernel inside it is the leaf below, the DUT the root above.
+  One identity keys a `SynthUnit`'s verification, timing records and resource record.
+- **D2 -- a harness is an `HwSystem`, not a new kind of testbench.**  Its DUT is one `SynthUnit` (the
+  cut), its testbench the stand-ins at that node's boundary (D3), and everything else is the machinery
   that already lowers a system: `system_top_spec`, the XSI workspace, the host's C++ twin.  No second
-  testbench framework.
+  testbench framework and no harness class: **every harness is just an `HwSystem`** (the user,
+  2026-10-14), so verification and calibration operate on `HwSystem`s, as they already do
+  (`add_system_steps`, `add_calib_steps`).  What D11 adds is a **factory**, node -> `HwSystem`.  A
+  harness's testbench generally differs from the full system's: it drives the node's boundary, which
+  for an inner node includes edges internal to its parent (in Stage 2 the kernel leaf's harness keeps
+  Stage 1's driver and sinks, while the system's testbench is the host behind the crossbar).
 - **D3 -- generic stand-ins for cut-away neighbours.**  A unit harness should not need a hand-written
   model of every neighbour.  The framework provides generic stand-ins: stream drivers and sinks (exist),
   a remote queue that accepts a writer's bursts and returns credit by a policy, a memory, an interrupt
@@ -79,21 +124,21 @@ For one test subsystem, the harness gives:
 - **D4 -- the environment is a parameter.**  A stand-in's policy (always ready, a fixed latency, a stall
   pattern, credit starved) is part of the scenario (`run.json`), so one compiled harness serves
   calibration (contention-free) and robustness (hostile) alike.
-- **D5 -- timing is measured at the ports, as declared phases.**  A test subsystem's timing is its timed
+- **D5 -- timing is measured at the ports, as declared phases.**  A `SynthUnit`'s timing is its timed
   phases; their events are its ports' first and last beats; the RTL side reads them from the harness's
   port trace or its bus models' timestamps, pysim logs them itself.  No internal net, no manifest.  (Was:
   "cycles per firing from port timestamps" -- the phases are what made that precise.)
 - **D6 -- the harness does not re-measure resources.**  It reads the record a leaf's csynth or a
   device's out-of-context synthesis already filed.
 - **D7 -- records under identity, library first.**  Fitted phases file in the calibration store under the
-  test subsystem's identity; a measurement is content-addressed (a repeat is a cache hit); failures are
+  `SynthUnit`'s identity; a measurement is content-addressed (a repeat is a cache hit); failures are
   rows; batches go through `SweepRunner`.
 - **D8 -- the composition check is part of the plan.**  A composite's pysim, run on its children's
   calibrated phases with no fitting of its own, must reproduce its RTL run within tolerance; when it
   does not, the difference is undeclared time or a wrong decomposition, and that is the finding (poly
   showed both kinds: `plans/pipelined_ops.md`, the Stages 2-5 record).
-- **D9 -- DECIDED 2026-10-14: a harness's boundary is the test subsystem's own boundary.**  For a
-  device, its sub-top's ports -- its AXI4 slave groups, master groups and interrupt lines, the ports its
+- **D9 -- DECIDED 2026-10-14: a harness's boundary is the `SynthUnit`'s own boundary.**  For a
+  composite packaged as one IP (a device), its sub-top's ports -- its AXI4 slave groups, master groups and interrupt lines, the ports its
   IP has -- with **no crossbar inside**: the crossbar is a sibling leaf, calibrated on its own and
   composed by the parent, so a device's measured timing is the device's own.  What this leaves is
   implementation, from the Stage 0 record: the host bound straight to a device's slave group(s) (today
@@ -104,6 +149,13 @@ For one test subsystem, the harness gives:
   that produces given feature values.  No per-example wrapper like `poly_calibrate.py`; one scenario can
   carry every feature value (poly's `calib` carries nine lengths), so a calibration is one pass, not an
   outer loop -- a sweep over *build* parameters is an outer loop, and each point is its own identity.
+- **D11 -- how a `SynthUnit` is declared: a default tree, overridable.**  Most systems declare
+  nothing: the tree is derived from what the build already knows -- each csynth'd kernel and the crossbar
+  a leaf, each group packaged as one IP a composite, the DUT the root.  A system that wants another
+  grouping overrides one hook returning its tree.  Each node carries its members, its boundary (the
+  ports that cross it: the cut), its children and its identity; a harness is generated **from a node**
+  (replacing Stage 1's hand-picked `dut_modules` list), and a composite's composition check (D8) is a run
+  of its own node.  The API is Stage 2's first piece of work.
 
 ## The vehicle: a free-running poly
 
@@ -131,31 +183,35 @@ free-running kernel**.
 
 ## Stages
 
-**Stage 1 -- the leaf: free-running poly on streams.**  The example with `link="direct"`: golden,
+**Stage 1 -- the leaf: free-running poly on streams.  DONE (PR #277, record below).**  The example with `link="direct"`: golden,
 kernel (`run_iter` + its HLS task body), its system (`GraphSystem`: a stream driver, the kernel, a sink),
 its build DAG and XSI gate.  The leaf harness: run the kernel alone at RTL with its ports traced (the
 system flow's traced run, `SystemXsiStep(trace=True)`), decode its declared ports' transfers, pair with
 pysim, fit -- through a framework calibration step (D10), the workload hook being "commands of these
 lengths".  Gate: bit-exact in pysim and at XSI on every scenario (errors included); the phases fitted in
 the harness with held-out lengths exact; the fit compared with the host-activated cosim fit, every
-difference explained; no example-specific calibration wrapper.
+difference explained; no example-specific calibration wrapper.  Two loose ends to close: `calib_phases`
+should consume the calibration run's `compare` (its scenario ran at RTL but was not compared bit-exact),
+and one cycle of the latency difference (the task's loop entry) is not yet accounted for.
 
-**Stage 2 -- the device: the same kernel behind AXI-MM.**  `link="mm"`: queue views (command/sample
-queue in, response/result queue out) on one front, a `SwHost` of two threads.  The device harness under
-D9: the device's sub-top as the top, the host bound straight to its slave group, no crossbar.  Gate:
-bit-exact; the device's timing **composed** from the kernel's phases and the views' with no fitting,
-checked against its RTL (D8); then the system run with a crossbar composed from the device and the
-crossbar leaf (`AxiXbarConfig` records), checked against its RTL.
+**Stage 2 -- the composite: the same kernel behind AXI-MM.**  First D11: the `SynthUnit` tree and
+harnesses generated from a node, Stage 1's harness re-expressed as the leaf node's.  Then `link="mm"`:
+queue views (command/sample queue in, response/result queue out) on one front, a `SwHost` of two threads.
+The composite (kernel + views + front, packaged as one IP) is the harness's DUT under D9: its sub-top as
+the top, the host bound straight to its slave group, no crossbar.  Gate: bit-exact; the composite's
+timing **composed** from the kernel leaf's phases and the views' with no fitting, checked against its RTL
+(D8); then the root (the composite and the crossbar leaf, `AxiXbarConfig` records) composed and checked
+against its RTL.
 
 **Stage 3 -- calibration as a step, records under identity.**  The framework calibration step of Stage 1
 generalized: one `XsiSnapshot` per configuration, the workload hook's scenario in `run.json`, the fit
-filed under the test subsystem's identity (D7), a repeated calibration with no change running no
+filed under the `SynthUnit`'s identity (D7), a repeated calibration with no change running no
 simulation.  Grid discipline: at least three values a feature, interior points held out.  Gate: a
 repeat is a cache hit; a held-out point within tolerance; the filed record found from the identity alone.
 
 **Stage 4 -- markov: the first multi-kernel system.**  Declare phases on markov's two stream kernels (the
 generator and the chain's core), replacing their hand-fitted per-chunk overheads (7 and 15); calibrate
-each as a leaf; the devices with the stand-ins of the Stage 0 record (the remote queue, the credit loop);
+each as a leaf; the composites with the stand-ins of the Stage 0 record (the remote queue, the credit loop);
 the composition check against markov's RTL (1870 cycles), with no system-level fitting.  Gate: within the
 existing 5% from composition alone -- or a written account of what the decomposition missed.
 
@@ -163,15 +219,15 @@ existing 5% from composition alone -- or a written account of what the decomposi
 harness; any hang or mismatch is a finding.  Gate: the policies run on every harness; what they find is
 fixed or recorded with a reproducer.
 
-**Stage 6 -- incremental, end to end.**  Change one test subsystem's parameter: only its harness rebuilds,
+**Stage 6 -- incremental, end to end.**  Change one `SynthUnit`'s parameter: only its harness rebuilds,
 only its synthesis re-runs, its parents' estimates update from records.  Gate: the events show no work
-for unchanged subsystems.
+for unchanged units.
 
 **Stage 7 -- docs.**  The free-running poly becomes **the first example in the docs** (the user,
 2026-10-14: the host-activated examples are to be retired over time).  It teaches, in order: the
 command-response protocol, the golden, the kernel and its HLS body, the system flow, timed phases, the
-harness and calibration, then the memory-mapped device.  A guide page on module-level development: test
-subsystems, harnesses, stand-ins and policies, calibrating a leaf, composing and verifying a parent.
+harness and calibration, then the memory-mapped composite.  A guide page on module-level development:
+`SynthUnit`s, harnesses, stand-ins and policies, calibrating a leaf, composing and verifying a parent.
 Name steps and link them.
 
 ## The host-activated examples
@@ -347,7 +403,7 @@ with vendor cores would synthesize them as missing modules -- the `.xci` `hls_ip
 need (`read_ip`), not done.  The fitted parameters are filed in the example tree (`calib/`); Stage 3
 files them under the subsystem's identity.
 
-## Part B -- the test subsystem as an agent boundary (sketch)
+## Part B -- the `SynthUnit` as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:
 
