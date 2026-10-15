@@ -52,6 +52,43 @@ def _is_input(ep) -> bool:
     return isinstance(ep, QueuedTransferIFSlave)
 
 
+def _credit_stand_ins(dut, sim, clk, stand_ins: dict, inputs_of: set) -> set:
+    """A :class:`~waveflow.simulation.credit_tb.CreditSink` for each credit stream *dut* produces into,
+    a :class:`~waveflow.simulation.credit_tb.CreditSource` for each it consumes, each on a
+    ``CreditStreamIF`` at the window the module declares (``credit_links``: ``{port: {"depth": ..,
+    "crd_every": ..}}``) -- a producer has its consumer's depth compiled in, so the harness cannot
+    guess it.  Returns the ids of the credit streams' halves (the boundary lists them as ports)."""
+    from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamMasterIF, CreditStreamSlaveIF
+    from waveflow.simulation.credit_tb import CreditSink, CreditSource
+
+    links = getattr(dut, "credit_links", {}) or {}
+    halves: set = set()
+    for attr, ep in list(vars(dut).items()):
+        if not isinstance(ep, (CreditStreamMasterIF, CreditStreamSlaveIF)):
+            continue
+        cfg = links.get(attr)
+        if cfg is None:
+            raise ValueError(f"harness: '{dut.name}' port '{attr}' is a credit stream; its class must "
+                             f"state the window its RTL was built with: credit_links = "
+                             f"{{{attr!r}: {{'depth': .., 'crd_every': ..}}}}")
+        if isinstance(ep, CreditStreamMasterIF):
+            si = CreditSink(name=f"{attr}_sink", sim=sim, bitwidth=ep.bitwidth,
+                            crd_every=int(cfg["crd_every"]), out_bundle=f"vectors/{attr}")
+            master, slave = ep, si.stream_ep
+        else:
+            si = CreditSource(name=f"{attr}_source", sim=sim, bitwidth=ep.bitwidth,
+                              in_bundle=f"vectors/{attr}")
+            master, slave = si.stream_ep, ep
+            inputs_of.add(attr)
+        link = CreditStreamIF(name=f"{attr}_if", sim=sim, clk=clk, bitwidth=ep.bitwidth,
+                              depth=int(cfg["depth"]))
+        link.bind("master", master)
+        link.bind("slave", slave)
+        stand_ins[attr] = si
+        halves |= {id(ep.fwd_ep), id(ep.crd_ep)}
+    return halves
+
+
 def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
     """The harness of *module* (a module instance, or its class): an ``HwSystem`` whose DUT is a fresh
     copy of it and whose testbench is a driver per stream input and a sink per stream output.
@@ -70,7 +107,11 @@ def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
         stim = dict(workload)
     clk = dut.clk
     stand_ins: dict[str, Any] = {}
+    inputs_of = {p for p, ep in _boundary_eps(dut) if _is_input(ep)}
+    halves = _credit_stand_ins(dut, sim, clk, stand_ins, inputs_of)
     for port, ep in _boundary_eps(dut):
+        if id(ep) in halves:            # one half of a credit stream: its stand-in is in place
+            continue
         if not isinstance(ep, (StreamIFSlave, StreamIFMaster)):
             raise NotImplementedError(f"harness: '{dut.name}' port '{port}' is a "
                                       f"{type(ep).__name__} -- only stream ports have a stand-in yet")
@@ -87,7 +128,7 @@ def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
         link.bind(ep_name="master", endpoint=pair[0])
         link.bind(ep_name="slave", endpoint=pair[1])
         stand_ins[port] = si
-    unknown = set(stim) - {p for p, ep in _boundary_eps(dut) if _is_input(ep)}
+    unknown = set(stim) - inputs_of
     if unknown:
         raise ValueError(f"harness: '{dut.name}'.workload({workload!r}) drives ports it has no input "
                          f"of: {sorted(unknown)}")

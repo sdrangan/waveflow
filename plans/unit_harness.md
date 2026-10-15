@@ -558,6 +558,46 @@ migration (`waveflow/calib/migrate_keys.py`), not done unattended.
 not the XSI run before it; the record's `tool` names Vitis without its version when the build config
 does not carry one.
 
+## Record: Stage 4, part 1 (2026-10-15), markov's kernels alone -- credit stand-ins
+
+**Generic credit-stream stand-ins (D3).**  `waveflow/simulation/credit_tb.py`: `CreditSink` (faces a
+kernel that produces into a credit stream: always ready, records, reports the cumulative count every
+`crd_every` words) and `CreditSource` (faces a kernel that consumes one: plays its bursts, each once the
+window has room for all of it), with C++ twins of the same names in `xsi_bfm.h` (a credit stream is two
+AXIS ports at RTL; the models take them as one port group `{data, credit}`; the rules are
+`credit_stream_hls.h`'s).  `harness()` gives each credit port its stand-in on a `CreditStreamIF` at the
+window the kernel class declares (`credit_links = {port: {"depth", "crd_every"}}`: a producer has its
+consumer's depth compiled in, so the harness refuses to guess it).
+
+**markov's kernels** declare `credit_links` and a `workload(kind)` (`gen_stimulus` / `chain_stimulus`,
+`workload_jobs("test" | "calib")`); markov's DAG builds the chain's core as a top of its own (codegen,
+not in `top_names()`) and adds both kernels' harnesses (`ugen_*`, `ucore_*`, traced).  In pysim both
+run, and the generator's output, as its credit sink takes it, is word for word what the core's harness
+plays.  At RTL **the generator alone is bit-exact** against the C++ `CreditSink` (`ugen_compare`; gate
+`tests/examples/test_markov_units.py`).
+
+**Blocked: the chain core alone does not csynth.**  Its body writes `m_x` as
+`hls::stream<framed_word<64>>` -- the internal framed type, because inside `MarkovChain` the channel to
+the memory writer is declared `framed=True`; at a top that port must be `axi4s_word` (Vitis allows
+`ap_axis` only on interface ports) and the generator renders it `ap_uint` (it reads the endpoint, and
+the framing was the channel's).  A port's C++ type is decided by its context, which a harness does not
+have.  Options, for the user: (A) the kernel declares its framed ports and the body takes their word
+type as a template parameter -- `framed_word` inside a composite, `axi4s_word` at a top
+(`streamutils`' `write_boundary_word<WordT>` already serves both); (B) the generated top inserts a
+framed_word -> axi4s adapter task at such a port (body untouched, but the harness RTL gains a cycle
+the system lacks); (C) harness `MarkovChain` (core + writer) as the leaf, which needs a memory stand-in
+on its `m_axi`.  Recommended: A.
+
+**Not started: the generator's timed phases.**  Its RTL pattern (from the harness trace): the command
+forwarded in 3 back-to-back words, then each 64-draw chunk as 16 words over **61 cycles** (a word every
+4 draws), **~12 cycles** between chunks, the job's last chunk (11 words) over 41.  A chunk is a write
+**paced by its producer** -- which no timed-phase pattern expresses yet (Pattern 1 waits; Pattern 2 is
+load -> store).  Needed: a third pattern, `phase.produce(data, store, **feats)` (begin the store's burst,
+wait the declared fill span from its first beat, end it); begin/end on a credit master (the room wait,
+then the forward half's begin/end); and events and RTL port names for a credit stream's halves
+(`m_u_fwd`).  The hand-fitted overheads (7 and 15) stand until both kernels can be calibrated, since the
+Stage 4 gate is markov's composition from both.
+
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:

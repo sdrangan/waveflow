@@ -50,6 +50,7 @@ from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsSte
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
+from waveflow.hw.harness import harness
 from waveflow.hw.mem_stream import MemWCmd
 from waveflow.simulation.simulation import Simulation
 
@@ -58,6 +59,7 @@ from examples.markov.markov import (
     QDEPTH,
     U8,
     U16,
+    ChainCore,
     MarkovChain,
     MarkovGen,
     MarkovSystem,
@@ -69,6 +71,10 @@ from examples.markov.markov import (
 
 HERE = Path(__file__).resolve().parent
 TOPS = (MarkovGen, MarkovChain)
+#: Tops built only for a kernel's own harness (plans/unit_harness.md Stage 4): the chain's core alone,
+#: which the system synthesizes inside MarkovChain with its memory writer.  Not in top_names(): the
+#: system's gates do not need it.
+UNIT_TOPS = (ChainCore,)
 #: The routed link's two bus writers: (mode, maxp).  Framework tops (mm_writer_gen), built here.
 WRITERS = (("queue", QDEPTH), ("credit", None))
 #: The RTL run: its top, its crossbar IP (names kept from before the DAG, so the generated IP's cache
@@ -127,6 +133,8 @@ def generate(root: Path = HERE) -> list[str]:
     or a generator show up as a changed source (``trace_steps.rtl_staleness``)."""
     gen_headers(root)
     names = [gen_top(cls, root).stem for cls in TOPS]
+    for cls in UNIT_TOPS:
+        gen_top(cls, root)
     names += [write_writer_project(root, mode, DW, maxp) for mode, maxp in WRITERS]
     return names
 
@@ -174,6 +182,12 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
     # Both synthesis routes, measured, for the docs (opt-in: minutes of Vivado cold).
     dag.add(MarkovRoutesStep(name="markov_routes", rtl=xsi.rtl))
     dag.add(SyncRoutesFigureStep(name="sync_routes_figure"))
+    # Each kernel alone, in its own harness (plans/unit_harness.md Stage 4): the generator against a
+    # credit sink, the chain's core against a credit source -- traced, so their phases can be fitted.
+    for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
+                             ("ucore_", "markov_core_unit", ChainCore)):
+        add_system_steps(dag, harness(cls, workload="test"), work_dir=work_dir, top=top,
+                         prefix=prefix, trace=True)
     return dag
 
 

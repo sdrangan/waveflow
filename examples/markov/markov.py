@@ -45,6 +45,7 @@ from typing import ClassVar
 import numpy as np
 
 from waveflow.hw.arrayutils import array, get_nwords, read_array
+from waveflow.utils.burst_io import StreamBurst
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -154,6 +155,50 @@ def markov_golden(cmd: dict) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# The kernels' workloads, for their own harnesses (plans/unit_harness.md Stage 4)
+# ---------------------------------------------------------------------------
+
+#: Job lengths for a calibration: whole chunks and every kind of remainder, so the per-chunk timing
+#: sees chunk sizes from 8 to 64 draws.
+CALIB_LENGTHS = (64, 72, 100, 128, 150, 192, 220, 256, 300)
+
+
+def workload_jobs(kind: str) -> list[dict]:
+    """``"test"``: :func:`default_jobs`; ``"calib"``: one job per :data:`CALIB_LENGTHS` length."""
+    if kind == "test":
+        return default_jobs()
+    rng = np.random.default_rng(23)
+    return [dict(tx_id=j, n=int(n), x0=j & 1, seed=int(rng.integers(1, 2**32 - 1)),
+                 p01=int(rng.integers(2000, 20000)), p10=int(rng.integers(2000, 20000)))
+            for j, n in enumerate(CALIB_LENGTHS)]
+
+
+def _cmd(job: dict, region: int) -> "MkvCmd":
+    return MkvCmd(n=job["n"], tx_id=job["tx_id"], x0=job["x0"], seed=job["seed"], p01=job["p01"],
+                  p10=job["p10"], dstaddr=MEM_BASE + region * REGION_BYTES)
+
+
+def gen_stimulus(jobs: list[dict]) -> list[StreamBurst]:
+    """What the generator reads: each job's command, one burst."""
+    return [StreamBurst(np.asarray(_cmd(j, k % 8).serialize(word_bw=DW), dtype=np.uint64), True)
+            for k, j in enumerate(jobs)]
+
+
+def chain_stimulus(jobs: list[dict]) -> list[StreamBurst]:
+    """What the chain reads -- what the generator sends it: each job's command, then its draws a
+    chunk at a time, each one burst."""
+    out = []
+    for k, j in enumerate(jobs):
+        out.append(StreamBurst(np.asarray(_cmd(j, k % 8).serialize(word_bw=DW), dtype=np.uint64),
+                               True))
+        u = uniforms(j["seed"], j["n"])
+        for k0 in range(0, j["n"], CHUNK):
+            out.append(StreamBurst(np.asarray(array(U16, u[k0:k0 + CHUNK]).serialize(word_bw=DW),
+                                              dtype=np.uint64), True))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The kernels
 # ---------------------------------------------------------------------------
 
@@ -176,6 +221,15 @@ class MarkovGen(FreeRunMod):
     #: Cycles a chunk costs beyond its draws: the credit check before the loop, the loop's fill and
     #: drain.  MEASURED at RTL (the system top's timing probes: a chunk leaves every 71 cycles for 64 draws).
     chunk_overhead: int = 7
+
+    #: The credit window its RTL is built with (``markov_gen_task.h``'s QDEPTH, CRD_EVERY): what its
+    #: harness's stand-in presents (``plans/unit_harness.md`` D3).
+    credit_links: ClassVar[dict] = {"m_u": {"depth": QDEPTH, "crd_every": CRD_EVERY}}
+    calib_holdout: ClassVar[dict] = {}
+
+    def workload(self, kind: str = "test") -> dict:
+        """Its harness's stimulus: the jobs' commands (:func:`workload_jobs`)."""
+        return {"s_cmd": gen_stimulus(workload_jobs(kind))}
 
     def kernel_task(self):
         """The hand-written HLS body, ``src/markov_gen_task.h``: the twin of :meth:`run_iter`,
@@ -225,6 +279,15 @@ class ChainCore(FreeRunMod):
     #: depth is 5), the credit offer.  MEASURED at RTL (the system top's timing probes: x leaves for memory every
     #: 79 cycles for 64 steps).
     chunk_overhead: int = 15
+
+    #: The credit window its RTL is built with (``markov_chain_core_task.h``'s CRD_EVERY; the queue in
+    #: front of it is QDEPTH): what its harness's stand-in presents.
+    credit_links: ClassVar[dict] = {"s_u": {"depth": QDEPTH, "crd_every": CRD_EVERY}}
+    calib_holdout: ClassVar[dict] = {}
+
+    def workload(self, kind: str = "test") -> dict:
+        """Its harness's stimulus: what the generator would send it (:func:`chain_stimulus`)."""
+        return {"s_u": chain_stimulus(workload_jobs(kind))}
 
     def kernel_task(self):
         """The hand-written HLS body, ``src/markov_chain_core_task.h``: the twin of
