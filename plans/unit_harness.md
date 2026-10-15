@@ -74,9 +74,9 @@ it fails today).
 **Roles, not classes** (the user, 2026-10-14, keeping an earlier convention): one `SimObj` class may be
 lowered several ways -- inside the DUT one day, on the testbench the next -- so neither side is a class
 an object inherits.  A *testbench participant* is any `SimObj` outside **this** system's DUT, required to
-have a testbench lowering (today an XSI one); a `SynthUnit` is a **node of this system's DUT tree**, a
-small object grouping modules (members, boundary, children, identity), not a base class.  Both are
-positions, decided by where the cut is drawn.
+have a testbench lowering (today an XSI one); a `SynthUnit` is **any `HwModule` in this system's DUT
+tree** -- its children, boundary and identity are the module's own (D11), not a base class and not a
+second tree.  Both are positions, decided by where the cut is drawn.
 
 **A `SynthUnit` is always inside the DUT; nothing on the testbench side is one** (the user,
 2026-10-14).  Testbench-side timing has two other sources: **stand-ins** -- drivers, sinks, the remote
@@ -149,13 +149,20 @@ For one `SynthUnit`, the harness gives:
   that produces given feature values.  No per-example wrapper like `poly_calibrate.py`; one scenario can
   carry every feature value (poly's `calib` carries nine lengths), so a calibration is one pass, not an
   outer loop -- a sweep over *build* parameters is an outer loop, and each point is its own identity.
-- **D11 -- how a `SynthUnit` is declared: a default tree, overridable.**  Most systems declare
-  nothing: the tree is derived from what the build already knows -- each csynth'd kernel and the crossbar
-  a leaf, each group packaged as one IP a composite, the DUT the root.  A system that wants another
-  grouping overrides one hook returning its tree.  Each node carries its members, its boundary (the
-  ports that cross it: the cut), its children and its identity; a harness is generated **from a node**
-  (replacing Stage 1's hand-picked `dut_modules` list), and a composite's composition check (D8) is a run
-  of its own node.  The API is Stage 2's first piece of work.
+- **D11 -- a `SynthUnit` is a role of an `HwModule`, and the unit tree is the module tree** (the user,
+  2026-10-14).  An `HwModule` is already hierarchical (SystemC-style): its sub-modules, its internal
+  interfaces, its boundary endpoints and its identity (`structure_signature` canonicalizes the whole
+  sub-graph, so `identify_instance` already keys a composite -- checked on markov: `gen_dev` is
+  `mm_slave_device-b10db324`).  A second tree restating children, boundary and identity would only drift
+  from it, so there is no `SynthUnit` class: **any `HwModule` in a system's DUT tree is a `SynthUnit`**,
+  and its children, boundary and identity are the module's own.  To group differently, change the
+  module tree (wrap modules in a composite `HwModule`).  **Leaf or composite is decided by data**: a
+  module that declares timed phases is calibrated; one that does not is composed from its children (so a
+  csynth'd kernel built of sub-modules, like markov's `MarkovChain`, is a leaf when it declares phases).
+  The one exception is the **crossbar**, an `Interface` with a config identity (`AxiXbarConfig`): a leaf
+  with its own records, special-cased until it is a module.  What is new is small: a factory
+  `harness(sysm, module) -> HwSystem` (the module as DUT, stand-ins generated at its boundary by port
+  type) and a workload hook for a module's harness -- Stage 2's first piece of work.
 
 ## The vehicle: a free-running poly
 
