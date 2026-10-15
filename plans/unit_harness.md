@@ -71,6 +71,13 @@ since a system is a testbench plus a DUT.  The objects outside the DUT keep thei
 belongs in a plain `Simulation`, not an `HwSystem` -- a rule nothing checks yet (the XSI build is where
 it fails today).
 
+**Roles, not classes** (the user, 2026-10-14, keeping an earlier convention): one `SimObj` class may be
+lowered several ways -- inside the DUT one day, on the testbench the next -- so neither side is a class
+an object inherits.  A *testbench participant* is any `SimObj` outside **this** system's DUT, required to
+have a testbench lowering (today an XSI one); a `SynthUnit` is a **node of this system's DUT tree**, a
+small object grouping modules (members, boundary, children, identity), not a base class.  Both are
+positions, decided by where the cut is drawn.
+
 **A `SynthUnit` is always inside the DUT; nothing on the testbench side is one** (the user,
 2026-10-14).  Testbench-side timing has two other sources: **stand-ins** -- drivers, sinks, the remote
 queue -- are never calibrated, they set the environment by policy (D4); **real things outside the DUT** --
