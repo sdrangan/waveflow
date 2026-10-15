@@ -5,6 +5,8 @@
     python -m examples.stream_kernel.stream_kernel_build --through csynth # build the RTL, stop there
     python -m examples.stream_kernel.stream_kernel_build --trace          # the XSI run with its ports traced
     python -m examples.stream_kernel.stream_kernel_build --through calib_phases   # calibrate the phases
+    python -m examples.stream_kernel.stream_kernel_build --through mm_compare     # behind AXI-MM, host
+    python -m examples.stream_kernel.stream_kernel_build --through dev_compare    # the device alone (D9)
 
 The kernel's body is hand-written (``src/poly_kernel_task.h``, the HLS twin of ``PolyKernel.run_iter``);
 everything around it is generated: the command and response structs from :class:`CmdHdr` /
@@ -44,6 +46,8 @@ from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
 
 from waveflow.hw.harness import harness
+
+from examples.stream_kernel.stream_kernel_mm import mm_system
 from waveflow.hw.hw_system import HwSystem
 
 from examples.stream_kernel.stream_kernel import (
@@ -56,6 +60,10 @@ from examples.stream_kernel.stream_kernel import (
 HERE = Path(__file__).resolve().parent
 #: The RTL run's top and where it runs (``<work_dir>/<top>``).
 TOP, WORK_DIR = "stream_kernel_top", "xsi_work"
+#: The memory-mapped system's top (``--through mm_compare``).
+MM_TOP = "stream_kernel_mm_top"
+#: The device harness's top (``--through dev_compare``): the device alone, its host on a direct link.
+DEV_TOP = "stream_kernel_dev_top"
 
 
 def system() -> HwSystem:
@@ -123,6 +131,11 @@ def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = No
     sysm = sysm if sysm is not None else system()
     add_system_steps(dag, sysm, work_dir=work_dir, top=TOP, trace=trace)
     add_calib_steps(dag, sysm, work_dir=work_dir, top=TOP)
+    # The same kernel behind AXI-MM with its two-thread host (``stream_kernel_mm.py``): its own steps
+    # (``mm_*``), sharing codegen and the kernel's csynth.
+    add_system_steps(dag, mm_system(), work_dir=work_dir, top=MM_TOP, prefix="mm_")
+    # The device's own harness (D9): the host bound straight to its one front, no crossbar.
+    add_system_steps(dag, mm_system(direct=True), work_dir=work_dir, top=DEV_TOP, prefix="dev_")
     return dag
 
 

@@ -1194,7 +1194,8 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         assigned first).  *name* is the IP's module name; *id_width* the AXI ID bits it routes."""
         from waveflow.build.axi_xbar import AxiXbarConfig
 
-        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width)
+        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width,
+                                           direct=bool(getattr(self, "direct", False)))
 
     def bind(
         self,
@@ -1282,6 +1283,10 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
               tstart: float | None = None) -> ProcessGen[None]:
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
+        # A cut-through slave (``rx_write_begin``) hears a FULL burst when its FIRST data word lands,
+        # then again (``rx_write_proc``) when the last does -- a queue view that streams words on as
+        # they arrive.  Not for an early-anchored (``tstart``) write: its words already landed.
+        begin = getattr(slave_ep, "rx_write_begin", None) if tstart is None else None
 
         if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
             # One transaction at a time from the address phase on: travel, then take the channel,
@@ -1290,13 +1295,20 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 yield self.timeout(self.latency_travel / self.clk.freq)
             with slave_ep.write_channel.request() as req:
                 yield req
-                cycles = (self.latency_init - self.latency_travel
-                          + words.shape[0] * self._poll_stretch(ep_name))
-                dly = cycles / self.clk.freq
-                if tstart is not None:
-                    dly = max(0.0, dly + (tstart - self.env.now))
-                if dly > 0:
-                    yield self.timeout(dly)
+                head = (self.latency_init - self.latency_travel) / self.clk.freq
+                body = words.shape[0] * self._poll_stretch(ep_name) / self.clk.freq
+                if begin is not None:
+                    if head > 0:
+                        yield self.timeout(head)
+                    yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                    if body > 0:
+                        yield self.timeout(body)
+                else:
+                    dly = head + body
+                    if tstart is not None:
+                        dly = max(0.0, dly + (tstart - self.env.now))
+                    if dly > 0:
+                        yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
                     yield from slave_ep.rx_write_proc(words, local_addr)
 
@@ -1310,6 +1322,13 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             # wait if the anchor is in the past (mirrors StreamIF.write_pipelined).
             if tstart is not None:
                 dly = max(0.0, dly + (tstart - self.env.now))
+            if begin is not None:
+                head = self.latency_init / self.clk.freq
+                body = dly - head
+                if head > 0:
+                    yield self.timeout(head)
+                yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                dly = body
             if dly > 0:
                 yield self.timeout(dly)
             with slave_ep.write_channel.request() as req:

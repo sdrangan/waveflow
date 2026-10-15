@@ -42,6 +42,7 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import FramedStreamIFMaster, FramedStreamIFSlave
+from waveflow.hw.mm_device import QueueIn, QueueOut
 from waveflow.hw.timed_phase import TimedPhase
 from waveflow.utils.burst_io import StreamBurst
 
@@ -160,6 +161,11 @@ def default_cmds(seed: int = 1) -> list[Cmd]:
 CALIB_NSAMP = (8, 16, 32, 48, 64, 96, 128, 160, 200)
 CALIB_HOLDOUT = (48, 128)
 
+#: Queue depths when the kernel is memory-mapped: a command's samples fit queue in whole (the largest,
+#: 200 calibration samples, in 256 words); a response is one or two words.
+QDEPTH = 256
+RDEPTH = 16
+
 
 def calib_cmds(seed: int = 2) -> list[Cmd]:
     """One command per calibration length, coefficients alternating."""
@@ -185,6 +191,14 @@ class PolyKernel(FreeRunMod):
     cpp_namespace: ClassVar[str | None] = "poly_kernel_impl"
     #: The calibration's held-out feature values: interior lengths, which test the fit (D10).
     calib_holdout: ClassVar[dict] = {"nwords": CALIB_HOLDOUT}
+    #: Its memory-mapped side, when a system puts it behind AXI-MM (``stream_kernel_mm.py``): a queue
+    #: in front of ``s_in`` deep enough for the largest command's samples, a queue behind each output.
+    #: The kernel itself stays stream-only; :func:`~waveflow.hw.mm_device.build_mm_device` builds these.
+    mm_views: ClassVar[tuple] = (
+        QueueIn("q_in", port="s_in", depth=QDEPTH),
+        QueueOut("q_out", port="m_out", depth=QDEPTH),
+        QueueOut("q_resp", port="m_resp", depth=RDEPTH),
+    )
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
 

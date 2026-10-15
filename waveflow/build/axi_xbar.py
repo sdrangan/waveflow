@@ -81,6 +81,10 @@ class AxiXbarConfig:
     id_width: int = 1
     part: str = "xczu48dr-ffvg1517-2-e"
     mode: str = "SAMD"
+    #: A **direct** link (``plans/unit_harness.md`` D9): one master straight to one slave, realized as
+    #: wires in the system top -- no ``axi_crossbar`` IP is generated or instantiated.  What a
+    #: device's own harness uses: the host bound to the device's slave group, no crossbar between.
+    direct: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mi", tuple(self.mi))
@@ -88,7 +92,10 @@ class AxiXbarConfig:
             raise ValueError(f"mode must be one of {XBAR_MODES}, got {self.mode!r}")
         if not 1 <= self.n_si <= 16 or not 1 <= len(self.mi) <= 16:
             raise ValueError("axi_crossbar supports 1..16 SI and 1..16 MI slots")
-        if self.n_si == 1 and len(self.mi) == 1:
+        if self.direct and (self.n_si != 1 or len(self.mi) != 1):
+            raise ValueError(f"a direct link joins one master to one slave, not {self.n_si} x "
+                             f"{len(self.mi)}")
+        if self.n_si == 1 and len(self.mi) == 1 and not self.direct:
             # Measured 2026-10-02 (Vivado 2025.1): create_ip accepts NUM_SI=1/NUM_MI=1 and silently
             # generates C_NUM_MASTER_SLOTS=2 with address parameters for ONE slot -- 2-bit MI ports, an
             # inconsistent IP, and an XSI run that crashes.  A 1x1 crossbar routes nothing; connect the
@@ -105,7 +112,8 @@ class AxiXbarConfig:
 
     @classmethod
     def from_crossbar(cls, xbar, name: str, *, addr_width: int = 32, id_width: int = 1,
-                      part: str | None = None, mode: str = "SAMD") -> "AxiXbarConfig":
+                      part: str | None = None, mode: str = "SAMD",
+                      direct: bool = False) -> "AxiXbarConfig":
         """The RTL crossbar for a pysim ``AXIMMCrossBarIF``: one master-side (MI) slot per bound
         slave, at the base and size ``assign_address_ranges`` gave it -- so a slave's address is
         written once, in Python, and both backends decode it (``plans/bus_address_map.md`` D4).
@@ -125,12 +133,12 @@ class AxiXbarConfig:
             if size != 1 << aw:
                 raise ValueError(f"{xbar.name}: slave_{k}'s range 0x{size:x} is not a power of two")
             mi.append(AxiXbarRange(base, aw))
-        if len(mi) == 1:
+        if len(mi) == 1 and not direct:
             end = mi[0].base + mi[0].size
             mi.append(AxiXbarRange(-(-end // 0x1_0000) * 0x1_0000, 12))
         kw = {} if part is None else {"part": part}
         return cls(name=name, n_si=int(xbar.nports_master), mi=mi, data_width=int(xbar.bitwidth),
-                   addr_width=addr_width, id_width=id_width, mode=mode, **kw)
+                   addr_width=addr_width, id_width=id_width, mode=mode, direct=direct, **kw)
 
     def digest(self) -> str:
         """A short hash of the configuration: the cache key for the generated IP.
@@ -141,6 +149,8 @@ class AxiXbarConfig:
         d = {**asdict(self), "mi": [asdict(r) for r in self.mi]}
         if self.mode == "SAMD":
             del d["mode"]
+        if not self.direct:             # every crossbar from before the field keeps its key
+            del d["direct"]
         blob = json.dumps(d, sort_keys=True)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
@@ -244,6 +254,8 @@ def generate_axi_xbar(cfg: AxiXbarConfig, out_dir: str | Path, vivado: str | Non
     Vivado, and a changed one lands in a new directory rather than half-overwriting the old one.
     Raises ``RuntimeError`` with Vivado's output tail if generation fails.
     """
+    if cfg.direct:
+        raise ValueError(f"{cfg.name} is a direct link (no crossbar): there is no IP to generate")
     out_dir = Path(out_dir)
     work = out_dir / f"{cfg.name}_{cfg.digest()}"
     root = work / "ip" / cfg.name

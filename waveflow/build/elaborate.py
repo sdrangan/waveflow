@@ -255,7 +255,7 @@ _CONTEXT_ATTRS = frozenset({
     # what declaring them turns on at an endpoint (its transfer log, its owner, the beat charge, its
     # cached events).  A phase predicts something about a module, as a calibration model does.
     "timing_phases", "_open_phase_records", "xfer_log", "_timing_owner", "_charge_beats",
-    "_ev_first", "_ev_last", "_nxfer", "_last_beat",
+    "_ev_first", "_ev_last", "_nxfer", "_last_beat", "rx_write_begin",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value

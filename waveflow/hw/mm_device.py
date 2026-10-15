@@ -226,7 +226,14 @@ def build_mm_device(kernel, *, sim, clk: Clock, mem_dwidth: int = 64, one_front:
             join(f"k_{sp.name}", v.m_out, port(sp.port, "fwd_ep"), sp.depth)
         elif sp.view_kind == "queue_out":
             v = MemSlaveRStream(name=vname, sim=sim, mem_dwidth=dw, depth=sp.depth, clk=clk)
-            join(f"k_{sp.name}", port(sp.port), v.s_in, sp.depth)
+            src = port(sp.port)
+            if getattr(src, "has_tlast", False):
+                # A framed producer (a kernel whose output closes its bursts with TLAST, as one
+                # serving a stream harness does): the queue's RTL accepts TLAST and drops it, and the
+                # view pops words whatever the framing, so its input declares the producer's framing
+                # -- the same RTL, an honest pysim channel.
+                v.s_in.has_tlast = True
+            join(f"k_{sp.name}", src, v.s_in, sp.depth)
         elif sp.view_kind == "regbank":
             v = MemSlaveRegBank(name=vname, sim=sim, cfg_type=sp.cfg_type,
                                 status_type=sp.status_type, mem_dwidth=dw, clk=clk)

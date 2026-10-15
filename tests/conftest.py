@@ -196,7 +196,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 212 -> 213 on 2026-10-14 (plans/unit_harness.md Stage 1): the free-running poly's RTL recordings
 #: against pysim (tests/examples/test_stream_kernel.py) -- the first system-flow kernel with vendor
 #: (floating_point) cores.
-WANT_XSI_GATES = 213
+#: 213 -> 217 on 2026-10-15 (plans/unit_harness.md Stage 2b): the free-running poly behind AXI-MM, and the device alone on a direct link (D9) --
+#: its host traces against pysim, and the composition check (pysim within 5% of the RTL, no fitting)
+#: (tests/examples/test_stream_kernel_mm.py).
+WANT_XSI_GATES = 217
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

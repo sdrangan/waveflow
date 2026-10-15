@@ -459,6 +459,68 @@ first sample arrives and the register slices look transparent at the ports, so a
 "inside the task"; separating loop entry from the slices needs the slices' task-side `TVALID`, not
 dumped.  Recorded as a measured one-cycle residual, consistent over every command.
 
+## Record: Stage 2b (2026-10-15), the kernel behind AXI-MM, and the composition check
+
+`examples/stream_kernel/stream_kernel_mm.py`: the **same** `PolyKernel` (same class, same csynth'd RTL)
+behind the queue views its type now declares (`mm_views`: a queue in for `s_in`, depth 256 so the
+largest command fits; a queue out for `m_out`, depth 256; one for `m_resp`, depth 16), per-view on a
+1x3 crossbar, driven by `PolyHost` -- two threads (a writer: each command's header and samples, a
+packet each; a reader: each command's results, then its response), interrupt-driven, never polling.
+The host knows how many results each command gives (one per sample sent), so it drains them before
+the response and the results queue never fills behind an unread response.  Its C++ twin is
+`poly_kernel_host.h`.  Built the D12 way (`mm_system()`: modules on one simulation, then
+`HwSystem(sim, dut)` -- the first system with a software host so built), in the same build DAG as the
+stream harness (`mm_*` steps sharing `codegen` and `csynth`; `--through mm_compare`).
+
+**One adaptation, in the framework.**  The kernel's outputs are framed (TLAST, which the stream harness
+and an early end need); a queue-out view's input was declared unframed.  The RTL queue accepts TLAST
+and drops it and the view pops whole waiting bursts by count, so `build_mm_device` now declares the
+view's input with the producer's framing: same RTL, honest pysim channel; unframed producers (mm_fir,
+markov) unchanged.
+
+**Result.**  Bit-exact first time: pysim against the golden, and the host's three endpoint traces RTL
+against pysim (`mm_compare`).
+
+**The composition check (D8) found a modelling gap, and closing it closed the check.**  pysim's timing
+here is composed from parts calibrated elsewhere -- the kernel's Stage 1 phases, the queue views' and
+crossbar's models -- with nothing fitted to this system.  First run: **466 cycles against the RTL's 392,
+19% slow**.  Tracing the kernel's ports at RTL against pysim's logs, command by command: command 0's 100
+samples enter the kernel at cycles 46-145 at RTL, its results begin at 71, overlapped; in pysim the
+results began at 132, *after the last sample* -- the overlap lost, every later command offset by it.
+Cause: the queue-in view delivered each packet with `write_pipelined` and a **backdated** start, because
+the crossbar hands a slave a write burst only when its last word lands -- the case `pipelined_ops.md`
+named ("a backdated write cannot take a contended bus in the past"; Stage 6 there).  Fix: an optional
+**cut-through hook** on a bus slave, `rx_write_begin(words, local_addr, word_period)`, which the
+crossbar calls when a FULL burst's first data word lands (then `rx_write_proc` at its last, as before);
+the queue-in view uses it to *begin* each packet the burst holds whole as its first word lands and *end*
+it as its last does, and the bus write still waits for that delivery, so a packet with too little room
+stalls the bus as in RTL (the first version did not wait, and the queue-view gates caught it).  A
+consumer that reads with a plain `get` sees the packet at its last word, as before.  After: **396
+against 392, within 1%**, nothing fitted.  Gates: `tests/examples/test_stream_kernel_mm.py` (pysim
+golden, never polls, the D12 shape; at RTL the traces and the composition within 5%).
+
+**The device's own harness (D9), with no crossbar.**  `mm_system(direct=True)`: the views behind one
+front, the host bound straight to its slave group.  Before this a system without a crossbar rendered no
+views and a 1x1 crossbar was refused, so the link needed a realization of its own: a **direct link** --
+the pysim crossbar model with one master and one slave, marked `direct` (`AxiXbarConfig.direct`), which
+skips the IP (no `axi_crossbar` generated, no 1x1 refusal, no stub padding) and is rendered in the system
+top as `assign`s from the host's port group to the one slave slot.  `discover` and the testbench
+generation are unchanged (they find the host on the link's master port).  Bit-exact at RTL
+(`dev_compare`); **408 cycles at RTL, 421 in pysim (+3.2%)**, nothing fitted.  The one number chosen is
+the link's latency, and it is physics: a wire has none (2 cycles, the first guess, gave +6.1%); the
+front's registers are in the adaptor's model.  Synthesis and packaging of a direct link are not wired
+(`generate_axi_xbar` refuses it with a message); they are opt-in steps.
+
+| system | RTL cycles | pysim (composed, nothing fitted) |
+|---|---|---|
+| poly behind AXI-MM, per-view on a 1x3 crossbar | 392 | 396 (+1.0%) |
+| the device alone, one front, direct link (D9) | 408 | 421 (+3.2%) |
+
+**Open from Stage 2:** the device harness is hand-wired in the example (`mm_system(direct=True)`), not
+yet produced by `harness(device)`: a generic host stand-in generated from a device's views (the "unit
+host" of Open questions) is the missing piece -- the stream harness's drivers and sinks have no
+memory-mapped counterpart yet.
+
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:

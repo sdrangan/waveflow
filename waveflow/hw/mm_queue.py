@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -131,6 +131,15 @@ class MemSlaveWStream(HwModule):
         #: Packets that arrived with too little room and so stalled the bus until the kernel drained
         #: the queue.  A writer that respects credit (``plans/mm_credit_stream.md``) keeps it zero.
         self.nstall = 0
+        #: Cut-through: the crossbar calls this when a burst's first data word lands, so a packet the
+        #: burst holds whole is **begun** on ``m_out`` as its first word arrives and ended as its last
+        #: does -- the RTL's words cut through to the stream -- and a pipelined consumer overlaps it,
+        #: as at RTL.  A consumer reading with a plain ``get`` still has it at its last word, as before.
+        self.s_mem.rx_write_begin = self._on_write_begin
+        #: Packets begun by :meth:`_on_write_begin`, by sequence number: the process delivering each,
+        #: which the bus write waits for (:meth:`_on_write`) -- so a packet with too little room still
+        #: stalls the bus until the kernel drains the queue, as in RTL.
+        self._begun: dict[int, Any] = {}
 
     # -- the FIFO is the stream channel ------------------------------------------------------------
     def _fifo(self):
@@ -165,6 +174,36 @@ class MemSlaveWStream(HwModule):
         ep.data_buffer = _NotifyingStore(self.env, self._update_irq, ep.data_buffer.items)
 
     # -- bus side ----------------------------------------------------------------------------------
+    def _on_write_begin(self, words: Words, local_addr: int, word_period: float):
+        """At the first data word of a bus burst: begin every packet the burst holds whole (its
+        length word and all its data in this burst), each at its own first word's arrival."""
+        bpw = int(self.mem_dwidth) // 8
+        left, start, seq = self._left, None, len(self.packets)
+        for i, w in enumerate(np.asarray(words).tolist()):
+            if int(local_addr) + i * bpw >= int(self.window) // 2:
+                continue
+            if left == 0:
+                left, start = int(w) & 0xFFFF_FFFF, i + 1
+                continue
+            left -= 1
+            if left == 0:
+                if start is not None:
+                    pkt = np.asarray([int(v) for v in np.asarray(words)[start:i + 1]], dtype=self._dt)
+                    self._begun[seq] = self.env.process(
+                        self._cut_through(pkt, start * word_period, i * word_period))
+                seq += 1
+                start = None
+        yield self.env.timeout(0)
+
+    def _cut_through(self, pkt, t_first: float, t_last: float):
+        """One packet onto ``m_out`` as its words land: begun at its first, ended at its last."""
+        if t_first > 0:
+            yield self.env.timeout(t_first)
+        x = yield from self.m_out.begin(pkt)
+        if t_last - t_first > 0:
+            yield self.env.timeout(t_last - t_first)
+        yield from self.m_out.end(x)
+
     def _on_write(self, words: Words, local_addr: int) -> ProcessGen[None]:
         bpw = int(self.mem_dwidth) // 8
         for i, w in enumerate(np.asarray(words).tolist()):
@@ -181,7 +220,13 @@ class MemSlaveWStream(HwModule):
             if self._left == 0:
                 pkt = np.asarray(self._pkt, dtype=self._dt)
                 self._pkt = []
+                seq = len(self.packets)
                 self.packets.append(len(pkt))
+                if seq in self._begun:          # cut through (``_on_write_begin``): wait for its delivery
+                    if self.vacancy() < len(pkt):
+                        self.nstall += 1
+                    yield self._begun.pop(seq)
+                    continue
                 if self.vacancy() < len(pkt):
                     self.nstall += 1
                 # Early-anchored: in RTL the words cut through to the stream as each beat arrives,
