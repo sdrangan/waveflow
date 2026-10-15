@@ -94,7 +94,12 @@ For one `HwSubsystem`, the harness gives:
 - **D2 -- a harness is an `HwSystem`, not a new kind of testbench.**  Its DUT is one `HwSubsystem` (the
   cut), its testbench the stand-ins at that node's boundary (D3), and everything else is the machinery
   that already lowers a system: `system_top_spec`, the XSI workspace, the host's C++ twin.  No second
-  testbench framework and no harness class.
+  testbench framework and no harness class: **every harness is just an `HwSystem`** (the user,
+  2026-10-14), so verification and calibration operate on `HwSystem`s, as they already do
+  (`add_system_steps`, `add_calib_steps`).  What D11 adds is a **factory**, node -> `HwSystem`.  A
+  harness's testbench generally differs from the full system's: it drives the node's boundary, which
+  for an inner node includes edges internal to its parent (in Stage 2 the kernel leaf's harness keeps
+  Stage 1's driver and sinks, while the system's testbench is the host behind the crossbar).
 - **D3 -- generic stand-ins for cut-away neighbours.**  A unit harness should not need a hand-written
   model of every neighbour.  The framework provides generic stand-ins: stream drivers and sinks (exist),
   a remote queue that accepts a writer's bursts and returns credit by a policy, a memory, an interrupt
