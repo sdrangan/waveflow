@@ -129,7 +129,7 @@ With a `store`, the fits are filed in the module record store, one timing record
 under its identity -- the same key wherever the module sits, since what its ports are bound to is
 context -- and a phase whose `calib_dir` is that store loads them from the record its module's identity
 finds.  The store is asked first: when it already holds a record measured on this workload, the
-calibration adds no simulation at all.
+calibration adds no simulation at all -- only a `PhaseCalibCachedStep`, which names the records it found.
 
 `calib_phases` runs the workload in pysim (the records), decodes the traced XSI run at each kernel's
 scope (the times), fits every span as above, files the parameters in each phase's `calib_dir`, and
