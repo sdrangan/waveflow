@@ -1,0 +1,3 @@
+# Committed tables the code regenerates byte for byte (examples/mimo_cg): LF on every platform,
+# or a Windows checkout (core.autocrlf) reads CRLF and every "is what the code regenerates" test fails.
+examples/mimo_cg/** text=auto eol=lf
