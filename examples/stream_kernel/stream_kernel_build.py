@@ -137,6 +137,11 @@ def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = No
     add_system_steps(dag, mm_system(), work_dir=work_dir, top=MM_TOP, prefix="mm_")
     # The device's own harness (D9): the host bound straight to its one front, no crossbar.
     add_system_steps(dag, mm_system(direct=True), work_dir=work_dir, top=DEV_TOP, prefix="dev_")
+    # The kernel's harness under each hostile policy (plans/unit_harness.md Stage 5): rob_<policy>_*.
+    from waveflow.build.robustness import add_robustness_steps
+
+    add_robustness_steps(dag, lambda p: harness(PolyKernel, workload="test", policy=p),
+                         work_dir=work_dir, top=TOP, prefix="rob_")
     return dag
 
 

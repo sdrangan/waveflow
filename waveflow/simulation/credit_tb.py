@@ -39,6 +39,12 @@ class CreditSink(HwModule):
     crd_every: int = 1
     #: Dumped like a :class:`~waveflow.simulation.stream_tb.StreamSink`'s, relative to ``root``.
     out_bundle: DynParam[str] = ""
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
+    #: Stage 5 policy (starved credit): each credit report is held this many cycles after it is due.
+    credit_delay: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -53,9 +59,26 @@ class CreditSink(HwModule):
         self.words: list[np.ndarray] = []
 
     def run_proc(self) -> ProcessGen[None]:
+        from waveflow.simulation.policy import stall_cycles
+
+        ep = self.stream_ep
         while True:
-            w = yield from self.stream_ep.get()
+            w = yield from ep.fwd_ep.get()
             self.words.append(np.array(w, copy=True))
+            per = 1.0 / ep.fwd_ep.interface.clk.freq
+            if self.credit_delay:
+                # Starved credit: the report goes out late, the data keeps flowing.  Each report in its
+                # own process, all held the same time, so they stay in order.
+                self.env.process(self._report_late(w, self.credit_delay * per))
+            else:
+                yield from ep._consume(w)
+            stall = stall_cycles(len(w), self.stall_pct)
+            if stall:
+                yield self.timeout(stall * per)
+
+    def _report_late(self, w, delay: float) -> ProcessGen[None]:
+        yield self.timeout(delay)
+        yield from self.stream_ep._consume(w)
 
     def post_sim(self) -> None:
         super().post_sim()
@@ -82,6 +105,10 @@ class CreditSource(HwModule):
     bitwidth: int = 64
     #: The bursts to play, relative to ``root`` (written by the harness's scenario).
     in_bundle: DynParam[str] = ""
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -102,8 +129,13 @@ class CreditSource(HwModule):
         self.bursts = read_burst_bundle(p)
 
     def run_proc(self) -> ProcessGen[None]:
+        from waveflow.simulation.policy import stall_cycles
+
         for b in self.bursts or []:
             yield from self.stream_ep.write(np.asarray(b))
+            stall = stall_cycles(len(b), self.stall_pct)
+            if stall:
+                yield self.timeout(stall / self.stream_ep.fwd_ep.interface.clk.freq)
 
     def bfm_model(self):
         """XSI twin: ``CreditSource`` on the data and credit ports, with the window the link has."""

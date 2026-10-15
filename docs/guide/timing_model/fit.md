@@ -139,6 +139,15 @@ equivalence), and a pysim occurrence with no RTL partner fails it rather than be
 (`examples/stream_kernel`) is calibrated this way: latency 30, fill `nwords - 1`, response 4, held-out
 lengths exact.
 
+An on-chip memory is calibrated the same way, from its own harness rather than from declared phases.
+`memory_harness` puts the memory behind a direct link and drives it with a scripted AXI-MM master that
+records when each read and write starts and ends, in pysim and at RTL.  `MemCalibStep` (named
+`<prefix>mem_timing`) fits what the memory adds per direction, `init + per_word * n` cycles, from the ops
+that met no other, and whether a read and a write that met were served one after the other.  It files
+the fit in the store under the memory's identity, and a `MemoryMod` given that store as its `calib_dir`
+loads it.  markov's memory measures a read at `1 + n` cycles and a write at 1, serialized, and then
+matches RTL to the cycle (`examples/markov/markov_build.py`, `umemcal_*`).
+
 ## Before timed phases
 
 The framework's memory-mapped stream blocks were calibrated before timed phases existed, by fitting the

@@ -203,6 +203,15 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
     dag.add(MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=store))
     add_system_steps(dag, memory_harness(markov_memory, mem_script("test")), work_dir=work_dir,
                      top="markov_mem_unit", prefix="umem_")
+    # Each unit under each hostile policy (Stage 5): <unit>rob_<policy>_*.
+    from waveflow.build.robustness import add_robustness_steps
+
+    for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
+                             ("ucore_", "markov_core_unit", ChainCore)):
+        add_robustness_steps(dag, lambda p, cls=cls: harness(cls, workload="test", policy=p),
+                             work_dir=work_dir, top=top, prefix=f"{prefix}rob_")
+    add_robustness_steps(dag, lambda p: memory_harness(markov_memory, mem_script("test"), policy=p),
+                         work_dir=work_dir, top="markov_mem_unit", prefix="umem_rob_")
     return dag
 
 

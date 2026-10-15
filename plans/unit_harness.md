@@ -238,13 +238,13 @@ filed under the `SynthUnit`'s identity (D7), a repeated calibration with no chan
 simulation.  Grid discipline: at least three values a feature, interior points held out.  Gate: a
 repeat is a cache hit; a held-out point within tolerance; the filed record found from the identity alone.
 
-**Stage 4 -- markov: the first multi-kernel system.**  Declare phases on markov's two stream kernels (the
+**Stage 4 -- markov: the first multi-kernel system.  DONE on the gate's second clause (records below).**  Declare phases on markov's two stream kernels (the
 generator and the chain's core), replacing their hand-fitted per-chunk overheads (7 and 15); calibrate
 each as a leaf; the composites with the stand-ins of the Stage 0 record (the remote queue, the credit loop);
 the composition check against markov's RTL (1870 cycles), with no system-level fitting.  Gate: within the
 existing 5% from composition alone -- or a written account of what the decomposition missed.
 
-**Stage 5 -- robustness.**  Hostile stand-in policies (stall, starved credit, late answers) swept per
+**Stage 5 -- robustness.  DONE (record below).**  Hostile stand-in policies (stall, starved credit, late answers) swept per
 harness; any hang or mismatch is a finding.  Gate: the policies run on every harness; what they find is
 fixed or recorded with a reproducer.
 
@@ -682,6 +682,37 @@ cycles to RTL's 80.  What remains, from the chain's memory writes job by job:
 
 Next: the core's `x` as Pattern 2 (a credit-stream `begin_read`), and the forward writer as a unit (its
 harness: a stream in, `MemoryMod` as the `m_axi` stand-in).
+
+## Record: Stage 5 (2026-10-15), robustness -- no findings
+
+**Stage 4 closes on its gate's second clause** ("or a written account of what the decomposition
+missed"): the Stage 4c record is that account, and `test_markov_pysim_tracks_rtl` is quarantined until
+the forward writer and the core's input lead are calibrated.
+
+**Policies** (`waveflow/simulation/policy.py`): a `StandInPolicy` -- `stall_pct` (a stream sink drops
+TREADY; a stream driver or credit source holds off its next word, never withdrawing one it presented),
+`answer_pct` (a scripted AXI-MM master drops RREADY / BREADY: late answers; a stand-in says it takes
+answers with `policy_role = "answers"`), `credit_delay` (a credit sink holds each report: starved
+credit), `seed`.  At RTL the stall is cycle by cycle, `policy_stalled` (C++) / `stalled` (Python): one
+seeded hash of the cycle number.  pysim, the functional reference, approximates each policy per burst.
+The knobs are `DynParam`s on the stand-ins, so the generated testbench carries them; at their defaults
+nothing is emitted and every existing gate is unchanged.  `harness(..., policy=)` and
+`memory_harness(..., policy=)` apply one and scale the RTL bound (`StandInPolicy.bound`).
+
+**The sweep** (`waveflow.build.robustness.add_robustness_steps`): each policy that touches a harness's
+stand-ins adds it again as a system of its own (`<prefix><policy>_*`, the same top).  stream_kernel's
+kernel (`rob_stall_`), markov's generator (`ugen_rob_stall_`, `ugen_rob_starved_credit_`), chain core
+(`ucore_rob_stall_`) and memory (`umem_rob_late_answers_`).  Gates: `tests/examples/test_robustness_xsi.py`.
+
+**First cut too gentle -- measured.**  At 50% a sink never back-pressured the generator (a word every four
+cycles: 1449 cycles against 1436 polite), and credit held 300 cycles never emptied its 128-word window
+(1430).  A policy that changes nothing finds nothing, so the sweep is 90% stall, 2000-cycle credit, 90%
+late answers.  Then each bites: generator 1436 -> 3098 (stall) and 4633 (starved credit); core 1561 ->
+3285; stream_kernel 326 -> 2029; the memory's 38-word read 77 -> 209.
+
+**Findings: none.**  Every run finishes with exactly pysim's words.  Not covered: the device harness
+(`dev_`), whose testbench is a software host with its own C++ model -- a host policy is that model's
+to implement.
 
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 

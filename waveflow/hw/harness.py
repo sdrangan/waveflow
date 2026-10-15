@@ -91,11 +91,23 @@ def _credit_stand_ins(dut, sim, clk, stand_ins: dict, inputs_of: set) -> set:
     return halves
 
 
-def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
+def _apply_policy(policy, stand_ins, n_cycles: int) -> int:
+    """Make *stand_ins* misbehave as *policy* says (``plans/unit_harness.md`` Stage 5); return the RTL
+    run's bound, scaled by how much longer the policy may make it take."""
+    if policy is None:
+        return n_cycles
+    for s in stand_ins:
+        policy.apply(s)
+    return policy.bound(n_cycles)
+
+
+def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> HwSystem:
     """The harness of *module* (a module instance, or its class): an ``HwSystem`` whose DUT is a fresh
     copy of it and whose testbench is a driver per stream input and a sink per stream output.
     *workload* is a kind the module names (``module.workload(kind)``) or the stimulus itself,
-    ``{input port: bursts}`` (a one-off scenario).  *n_cycles* bounds the RTL run."""
+    ``{input port: bursts}`` (a one-off scenario).  *n_cycles* bounds the RTL run.  *policy* (a
+    :class:`~waveflow.simulation.policy.StandInPolicy`) makes the stand-ins hostile (Stage 5); the
+    calibration workload is always polite."""
     from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
     from waveflow.simulation.simulation import Simulation
     from waveflow.simulation.stream_tb import StreamDriver, StreamSink
@@ -130,6 +142,7 @@ def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
         link.bind(ep_name="master", endpoint=pair[0])
         link.bind(ep_name="slave", endpoint=pair[1])
         stand_ins[port] = si
+    run_cycles = _apply_policy(policy, stand_ins.values(), n_cycles)
     unknown = set(stim) - inputs_of
     if unknown:
         raise ValueError(f"harness: '{dut.name}'.workload({workload!r}) drives ports it has no input "
@@ -149,15 +162,16 @@ def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
         return CalibWorkload(harness(module, workload="calib", n_cycles=n_cycles),
                              holdout=dict(holdout))
 
-    sysm = HwSystem(sim, dut, n_cycles=n_cycles, inputs=inputs,
-                    fresh=lambda: harness(module, workload=workload, n_cycles=n_cycles),
+    sysm = HwSystem(sim, dut, n_cycles=run_cycles, inputs=inputs,
+                    fresh=lambda: harness(module, workload=workload, n_cycles=n_cycles, policy=policy),
                     calibration=calibration)
+    sysm.policy = policy
     sysm.stand_ins = stand_ins
     return sysm
 
 
 def memory_harness(make, script, *, n_cycles: int = 4000, name: str = "mem_unit",
-                   fresh=None) -> HwSystem:
+                   fresh=None, policy=None) -> HwSystem:
     """The harness of an on-chip memory (``plans/unit_harness.md`` Stage 4c): the memory *make(sim)*
     builds, its ``s_mm`` slave behind a direct link (no crossbar: at RTL the master group is wired
     straight to the memory's slot), and an :class:`~waveflow.simulation.mm_tb.MmScript` master playing
@@ -166,7 +180,7 @@ def memory_harness(make, script, *, n_cycles: int = 4000, name: str = "mem_unit"
     host.  Its read data is its trace (``rdata``, compared RTL against pysim); each op's start and end
     cycles go beside the traces (:func:`~waveflow.simulation.mm_tb.timing_dir`), the measurement a
     calibration of the memory fits.  *fresh* rebuilds the system (default: the same
-    call)."""
+    call).  *policy*: the master's hostile policy (Stage 5)."""
     from waveflow.hw.hw_system import DutTop
     from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
     from waveflow.simulation.mm_tb import MmScript
@@ -192,8 +206,11 @@ def memory_harness(make, script, *, n_cycles: int = 4000, name: str = "mem_unit"
     def inputs(root: Path) -> None:
         write_burst_bundle(ops, Path(root) / "vectors" / "script")
 
-    sysm = HwSystem(sim, dut, n_cycles=n_cycles, inputs=inputs,
-                    fresh=fresh or (lambda: memory_harness(make, script, n_cycles=n_cycles, name=name)))
+    run_cycles = _apply_policy(policy, [master], n_cycles)
+    sysm = HwSystem(sim, dut, n_cycles=run_cycles, inputs=inputs,
+                    fresh=fresh or (lambda: memory_harness(make, script, n_cycles=n_cycles, name=name,
+                                                           policy=policy)))
+    sysm.policy = policy
     sysm.stand_ins = {"s_mm": master}
     sysm.script = ops
     master.script = ops
