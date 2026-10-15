@@ -283,6 +283,12 @@ QUARANTINE: dict[str, str] = {
         _Q_V,
     "tests/examples/test_mimo_cg_hw_detector.py::test_detector_rtl_is_bit_exact":
         _Q_R,
+    # plans/unit_harness.md, Stage 4c record: markov composed from its harness-calibrated parts is
+    # 1740 cycles against RTL 1870 (-7.0%).  Uncalibrated still: the forward queue writer's latency
+    # and the chain core's lead from its input.  Out of quarantine when those land.
+    "tests/examples/test_markov_xsi.py::test_markov_pysim_tracks_rtl":
+        "markov composition -7.0% (Stage 4c): forward writer latency and the core's input-to-output "
+        "lead not yet calibrated -- plans/unit_harness.md",
 }
 
 #: Filled in at collection: ``(nodeid, gate markers it carries, reason)`` per quarantined test.
