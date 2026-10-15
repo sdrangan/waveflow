@@ -67,17 +67,22 @@ echo WF_PHASE compile_rtl %time%
 echo --- xvlog RTL (%TOP%) ---
 call %VIV%\bin\xvlog -f rtl_%TOP%.f
 echo xvlog errorlevel=%ERRORLEVEL%
+rem A kernel's vendor cores (waveflow.build.hls_ip): their VHDL wrappers, and the precompiled
+rem libraries xelab links them against.  Neither file exists for a design without cores.
+if exist vhdl_%TOP%.f call %VIV%\bin\xvhdl -f vhdl_%TOP%.f
+set XLIBS=
+if exist xelab_%TOP%.f set XLIBS=-f xelab_%TOP%.f
 echo WF_PHASE elaborate %time%
 if exist xsim.dir\%SNAP% rd /s /q xsim.dir\%SNAP%
 if defined TRACE goto elab_trace
 echo --- xelab -dll ---
-call %VIV%\bin\xelab work.%TOP% -dll -s %SNAP% -debug typical
+call %VIV%\bin\xelab work.%TOP% %XLIBS% -dll -s %SNAP% -debug typical
 goto elab_done
 :elab_trace
 echo --- xvlog vcd_dumper_%TOP% ---
 call %VIV%\bin\xvlog vcd_dumper_%TOP%.v
 echo --- xelab -dll [+ vcd_dumper_%TOP%] ---
-call %VIV%\bin\xelab work.%TOP% work.vcd_dumper_%TOP% -dll -s %SNAP% -debug typical
+call %VIV%\bin\xelab work.%TOP% work.vcd_dumper_%TOP% %XLIBS% -dll -s %SNAP% -debug typical
 :elab_done
 echo xelab errorlevel=%ERRORLEVEL%
 :after_rtl

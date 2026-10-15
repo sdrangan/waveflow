@@ -895,8 +895,13 @@ public:
         }
     }
 
-    void clock_low()  { d_.put1(P_clk_, 0); xsi_.run(10); }
-    void clock_high() { d_.put1(P_clk_, 1); xsi_.run(10); }
+    /// A 10 ns clock (the time unit is the kernel's 1 ps precision).  Vitis's own RTL has no delays,
+    /// so any period simulates it alike; vendor cores do not -- a float multiplier's DSP48E1 model
+    /// settles ~100 ps after the edge, and a 20 ps clock (this was run(10)) sampled it unsettled:
+    /// garbage products with no error (waveflow.build.hls_ip).
+    void clock_low()  { d_.put1(P_clk_, 0); xsi_.run(HALF_PERIOD_PS); }
+    void clock_high() { d_.put1(P_clk_, 1); xsi_.run(HALF_PERIOD_PS); }
+    static constexpr int HALF_PERIOD_PS = 5000;
 
     /// Hold reset for *cycles* clocks with *drive* presenting held values throughout, then release.
     template <typename DriveFn>

@@ -193,7 +193,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 195 + 17 -> 212 on 2026-10-13: ``origin/main`` merged into ``feat/cpu-model``.  This branch's
 #: 17 gates beyond 168 (the ``paper/mimo-cg`` line above) on top of main's 195;
 #: ``pytest -m xsi --collect-only -q`` counts 212.
-WANT_XSI_GATES = 212
+#: 212 -> 213 on 2026-10-14 (plans/unit_harness.md Stage 1): the free-running poly's RTL recordings
+#: against pysim (tests/examples/test_stream_kernel.py) -- the first system-flow kernel with vendor
+#: (floating_point) cores.
+WANT_XSI_GATES = 213
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

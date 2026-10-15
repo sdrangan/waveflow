@@ -292,6 +292,61 @@ cut taking a device whose neighbours are outside (Stage 0's first finding).
 - **The chain's feeder input**: the golden's stream, or the gen harness's recording.
 - **Fact 1**: the ID width in the device's identity, or a sub-top independent of it.
 
+## Record: Stage 1 (2026-10-14), the leaf
+
+`examples/stream_kernel/`: `PolyKernel` (a `FreeRunMod`, one firing = one command; errors answered in
+the response -- `TLAST_EARLY` with the count that arrived -- never a halt), its hand-written HLS body
+`src/poly_kernel_task.h`, `PolyKernelSystem` (a stream driver, the kernel, two sinks), its build DAG
+`stream_kernel_build.py` (one `codegen` step, everything else the framework's).  pysim is bit-exact to
+the golden on the five-command scenario (one ending early, one of a single sample); the RTL under XSI is
+bit-exact to pysim on both sinks (`compare`).  Gate: `tests/examples/test_stream_kernel.py`.
+
+**Two framework gaps, found by the first float kernel in the system flow, fixed:**
+
+- **Vendor cores were never generated.**  csynth writes a `float` add/multiply as a Xilinx
+  `floating_point` core: a Verilog shell plus `<name>_ip.tcl`, which only Vitis's own cosim ran.
+  `xelab` stopped at `Module <..._ip> not found`.  `waveflow/build/hls_ip.py` runs the scripts in one
+  Vivado batch (cached by digest, beside the crossbar's IP) for csynth's part; `rtl.json` carries the
+  cores' VHDL wrappers and the precompiled libraries they bind (`floating_point_v7_1_20`); the run
+  scripts `xvhdl` the wrappers and `xelab -L` the libraries; the snapshot stamps both.
+- **The XSI clock was 20 ps.**  `clock_low/high` ran `xsi_.run(10)` at a 1 ps precision.  Vitis's RTL
+  has no delays, so the period never mattered -- until the multiplier's `DSP48E1` model, which settles
+  ~100 ps after the edge: every product read unsettled, no error, results wrong (all `c0` on the first
+  command).  Now a 10 ns clock (`HALF_PERIOD_PS = 5000`).  Nothing read the period as a constant (VCD
+  consumers infer it from edges); every XSI gate re-ran.  A standalone xsim test of the two cores
+  (correct at 10 ns) is what separated the cores from the clock.
+
+**The calibration step (D10).**  `waveflow/build/phase_calib.py`: `add_calib_steps(dag, sysm, ...)` adds
+the system's `calibration_workload()` (the one hand-written hook, `HwSystem`'s, default None) as a
+second system in the DAG (`calib_` prefix, sharing `codegen` and `csynth`), its XSI run traced, and
+`calib_phases`: pysim runs the workload, the traced VCD is decoded at each kernel's scope
+(`SystemTopSpec.scope_of`), the corpus joined and fitted (`waveflow/calib/phases.py`), the parameters
+filed in each phase's `calib_dir`, the report in `<work>/phase_calib.json`; a pysim occurrence with no
+RTL partner fails it.  `--through calib_phases`; no example code.  Workload: poly's nine lengths, 48 and
+128 held out.
+
+| span | fitted (free-running, XSI) | host-activated poly (cosim) |
+|---|---|---|
+| `samples.latency` | 30, exact on all 9 (holdouts too) | 34 |
+| `samples.fill_time` | nwords − 1, exact | nwords − 1 |
+| `resp.resp_time` (m_out last → m_resp first) | 4, all 9 | 4 (its response span) |
+
+**The latency difference, explained.**  The two loop bodies are the same code, same part (xc7z020),
+same 10 ns clock, same operator cores (`fmul_..._4_max_dsp`, `fadd_..._5_full_dsp`).  Inside the
+`hls::task` the scheduler overlaps each float operator's last stage with the next one's first (the
+SAMPLES pipeline is 24 deep; poly's function-level loop gives every stage its own state, 29 deep).  csynth
+then *estimates* 12.96 ns and flags a Timing issue -- but Vivado place-and-route of the kernel
+(`export_design -flow impl`) achieves **8.80 ns: met**.  The estimate is pessimistic about the chain, the
+shorter pipeline is real.  The depth is 5 cycles shorter and the latency 4: at the ports the latency is
+the depth plus 6 here (24 + 6) and plus 5 in poly (29 + 5) -- loop entry and the register slices; the
+one cycle more the task's loop entry takes was not chased.  (Without the `PIPELINE II=1` pragma csynth picks II=2 inside the task; the pipeline style
+`stp/flp/frp` changes nothing; `config_op` latencies restore depth 29 but still chain.)
+
+**Open from Stage 1:** `system_synth` / the resource steps read a kernel's `syn/verilog` only, so a kernel
+with vendor cores would synthesize them as missing modules -- the `.xci` `hls_ip` generates is what they
+need (`read_ip`), not done.  The fitted parameters are filed in the example tree (`calib/`); Stage 3
+files them under the subsystem's identity.
+
 ## Part B -- the test subsystem as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:

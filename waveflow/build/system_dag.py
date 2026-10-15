@@ -565,7 +565,20 @@ class SystemRtlStep(_SystemStep):
             raise RuntimeError("; ".join(bad))
         ip = results["xbar_ip"].artifacts["xbar_ip"] if "xbar_ip" in results else None
         root = Path(config.root_dir)
+        from waveflow.build.hls_ip import HlsIp, csynth_part, generate_hls_ips, ip_tcls
         from waveflow.build.system_synth import INIT_SUFFIXES
+
+        # Vendor cores the kernels instantiate (a float add is a floating_point IP): generated here,
+        # cached beside the crossbar's, and compiled as VHDL against Vivado's precompiled models.
+        tcls = [t for m in self.spec.modules for t in ip_tcls(root / rtl_rel(m))]
+        hls_ip = HlsIp()
+        if tcls:
+            part = (next((p for m in self.spec.modules
+                          if (p := csynth_part((root / rtl_rel(m)).parents[1])) is not None), None)
+                    or config.part)
+            if part is None:
+                raise RuntimeError("system_rtl: kernel IP needs a part (csynth report or --part)")
+            hls_ip = generate_hls_ips(tcls, self.ip_dir(config), part=part)
 
         rtl = [f for m in self.spec.modules for f in sorted((root / rtl_rel(m)).glob("*.v"))]
         # ROM initializers: csynth maps a large constant table (SsrFft's twiddles from L=256) to a ROM
@@ -583,6 +596,8 @@ class SystemRtlStep(_SystemStep):
                          + [f"{self.spec.top}.v"],
             "include_dirs": [Path(d).as_posix() for d in (ip.include_dirs if ip else ())],
             "init_files": [Path(f).as_posix() for f in init],
+            "vhdl_files": [Path(f).as_posix() for f in hls_ip.vhdl_files],
+            "xelab_libs": list(hls_ip.libs),
         }, indent=1) + "\n", encoding="utf-8")
         return {self.a("rtl"): manifest}
 
@@ -646,7 +661,8 @@ class XsiRunStep(_Inner):
             (ws.work_dir / f"{m['top']}_trace.vcd").unlink(missing_ok=True)
         ws.prepare(rtl_files=m["rtl_files"], include_dirs=m["include_dirs"],
                    tb_name=f"{m['top']}_tb", tb_cpp=main, extra_files=dict(tb_files),
-                   tb_include_dirs=tb_inc, trace=o.trace, init_files=m.get("init_files", ()))
+                   tb_include_dirs=tb_inc, trace=o.trace, init_files=m.get("init_files", ()),
+                   vhdl_files=m.get("vhdl_files", ()), xelab_libs=m.get("xelab_libs", ()))
         if o.rtl.host is not None:
             out = ws.run(timeout=o.timeout)
         else:

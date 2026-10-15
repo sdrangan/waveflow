@@ -115,9 +115,10 @@ before you rely on it: see [the fidelity boundary](../../rf/rfdc/fidelity.md#the
 Every transfer on a stream endpoint has two events, its **first** and its **last** beat, and the
 endpoint names them: `ep.first`, `ep.last`.  A module states its compute time as
 [timed phases](../../timing_model/timed_phases.md) between those events, and a pipelined body -- one
-that processes data as it streams through -- hands its phase a **load request**,
-`s_in.req(...)` (`req()` the next burst, `req(nwords_max=N)` at most `N` words, `req(T, count)` typed
-elements), and lets `phase.pipeline` run the transfer's two halves ([Pipelined
+that processes data as it streams through -- hands its phase the read and the write **deferred**,
+in the same vocabulary a sequential body uses: `load=s_in.get_array(T, n)` (or `get_schema(T)`,
+`get(nwords_max=N)`) is the read not yet run, `store=m_out.write_array(T, n)` (or `write_schema(T)`,
+`write()`) the write given no data -- and lets `phase.pipeline` run each transfer's two halves ([Pipelined
 bodies](../../timing_model/streaming.md)).  That is how a stream-to-stream pipeline is timed.
 
 ### Pipelined processing (before timed phases)

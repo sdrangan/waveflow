@@ -123,6 +123,14 @@ class HwSystem(ABC):
         host.scenario = Path(root).as_posix()
         host.write_scenario(root)
 
+    def calibration_workload(self):
+        """The workload that calibrates this design's declared timed phases, or None (the default:
+        nothing to calibrate) -- a :class:`~waveflow.build.phase_calib.CalibWorkload`: a system of
+        the same design whose scenario produces the feature values to fit on, and the values held
+        out to test the fit.  The one hand-written piece of a calibration
+        (:func:`~waveflow.build.phase_calib.add_calib_steps` generates the rest)."""
+        return None
+
     def recordings(self) -> tuple[str, ...]:
         """The bundles the testbench records, relative to the scenario root: each participant
         outside the DUT that declares an ``out_bundle`` (a sink) or ``dump_segs`` (a memory).  The

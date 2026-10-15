@@ -86,7 +86,8 @@ def run_iter(self):
     n = hdr.n
     yield from self.job_phase.pipeline(                            # 2. n elements in, the work,
         lambda x: array(S64, golden(x.val)),                       #    vectorized, n results out --
-        load=self.s_in.req(S16, n), store=self.m_out, n=n)         #    overlapped, as in hardware
+        load=self.s_in.get_array(S16, n),                         #    overlapped, as in hardware
+        store=self.m_out.write_array(S64, n), n=n)
     yield from self.m_resp.write(Resp(tx_id=hdr.tx_id, n=n))        # 3. the response
 ```
 

@@ -446,29 +446,149 @@ class Xfer:
         return self._last
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(eq=False)
 class LoadRequest:
-    """What a pipelined phase reads and how it decodes it (``StreamIFSlave.req``): the endpoint,
-    and either an element type and count or a cap on the raw words."""
+    """A read of a stream slave -- what :meth:`StreamIFSlave.get_array`, :meth:`~StreamIFSlave.
+    get_schema` and :meth:`~StreamIFSlave.get` return.  **One name, two uses**: ``yield from`` it and
+    the read runs now (``x = yield from s_in.get_array(T, n)``); hand it to a pipelined phase
+    (``phase.pipeline(compute, load=s_in.get_array(T, n), ...)``) and the phase drives the transfer's
+    two halves itself, ``decode`` turning its words into what the read returns.
+
+    It is a generator to everything that runs one -- ``yield from``, ``env.process``, ``next`` --
+    by delegating to the read's body, made on first use."""
 
     ep: "QueuedTransferIFSlave"
+    kind: str = "words"                       # "words" | "array" | "schema"
     element_type: Any = None
     count: int | None = None
     nwords_max: int | None = None
+    _gen: Any = field(default=None, repr=False)
 
+    # -- running it now: the generator protocol, delegated --------------------------------------
+    def _body(self):
+        ep = self.ep
+        # The primitive pull, resolved past StreamIFSlave in the endpoint's own MRO -- what the typed
+        # reads' ``super().get`` reached: the base class's buffer read, or an override placed between
+        # them (mm_host's ``_InterfacePull`` routes it to the bus).
+        pull = super(StreamIFSlave, ep).get
+        if self.kind == "words":
+            if not ep.has_tlast and self.nwords_max is None:
+                raise ValueError(f"StreamIFSlave '{ep.name}' has has_tlast=False: "
+                                 "nwords_max must be provided to specify the transfer length")
+            return (yield from pull(nwords_max=self.nwords_max))
+        raw = yield from pull(nwords_max=self.nwords())
+        if self.kind == "schema":
+            return ep._unpack(raw, self.element_type)
+        return ep._unpack(raw, self.element_type, self.count)
+
+    def _g(self):
+        if self._gen is None:
+            self._gen = self._body()
+        return self._gen
+
+    def __iter__(self):
+        return self._g()
+
+    def __next__(self):
+        return next(self._g())
+
+    def send(self, value):
+        return self._g().send(value)
+
+    def throw(self, *exc):
+        return self._g().throw(*exc)
+
+    def close(self):
+        return self._g().close()
+
+    @property
+    def __name__(self) -> str:                # simpy names a process after its generator
+        return f"{self.ep.name}.get_{self.kind}"
+
+    @property
+    def gi_frame(self):
+        return self._g().gi_frame
+
+    # -- deferred: what a pipelined phase needs --------------------------------------------------
     def nwords(self) -> int | None:
-        """The words this request asks for -- the typed elements' words, or the cap -- or ``None``
-        (the next burst, whatever its length)."""
-        if self.element_type is not None:
+        """The words this request asks for -- the typed read's words, or the cap -- or ``None`` (the
+        next burst, whatever its length)."""
+        if self.kind == "array":
             return int(self.ep._typed_nwords(self.element_type, self.count))
+        if self.kind == "schema":
+            return int(self.ep._typed_nwords(self.element_type))
         return None if self.nwords_max is None else int(self.nwords_max)
 
     def decode(self, words):
-        """The burst's words as the request asked: capped raw words, or typed elements."""
-        if self.element_type is not None:
-            n = self.ep._typed_nwords(self.element_type, self.count)
-            return self.ep._unpack(words[:n], self.element_type, self.count)
-        return words if self.nwords_max is None else words[:self.nwords_max]
+        """The burst's words as the deferred read returns them: raw words (capped), a ``DataArray``
+        of the element type, or one schema instance.
+
+        A burst that ended early (TLAST) is shorter than asked: an array request then returns the
+        elements whose words arrived -- fewer than ``count`` (at several elements a word, every lane
+        of the last word counts) -- and the body reads how many from the array.  A schema cannot
+        arrive in part: a short one raises."""
+        if self.kind == "words":
+            return words if self.nwords_max is None else words[:self.nwords_max]
+        full = self.nwords()
+        if self.kind == "schema":
+            if len(words) < full:
+                raise ValueError(f"'{self.ep.name}': a {self.element_type.__name__} is {full} words, "
+                                 f"the burst ended after {len(words)}")
+            return self.ep._unpack(words[:full], self.element_type)
+        count = int(self.count)
+        if len(words) < full:                 # the most elements whose words all arrived
+            lo, hi = 0, count
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if self.ep._typed_nwords(self.element_type, mid) <= len(words):
+                    lo = mid
+                else:
+                    hi = mid - 1
+            count = lo
+            if count == 0:
+                raise ValueError(f"'{self.ep.name}': the burst ended before one "
+                                 f"{self.element_type.__name__}")
+        n = self.ep._typed_nwords(self.element_type, count)
+        return self.ep._unpack(words[:n], self.element_type, count)
+
+
+@dataclass(frozen=True, eq=False)
+class StoreRequest:
+    """A typed write of a stream master -- what :meth:`StreamIFMaster.write_array` and
+    :meth:`~StreamIFMaster.write_schema` return when given no data: the write **deferred**, for a
+    pipelined phase's ``store``.  ``check`` holds the phase's compute to it: the declared type, and
+    for an array at most ``count`` elements (fewer is a burst that ended early upstream); ``put``
+    is the write now."""
+
+    ep: "StreamIFMaster"
+    kind: str = "words"                       # "words" | "array" | "schema"
+    element_type: Any = None
+    count: int | None = None
+
+    def check(self, y):
+        """*y* -- what the compute returned -- if it is what this store writes; raises otherwise."""
+        from waveflow.hw.dataschema import DataArray
+
+        where = f"'{self.ep.name}'.write_{self.kind}"
+        if self.kind == "schema":
+            if not isinstance(y, self.element_type):
+                raise TypeError(f"{where}({self.element_type.__name__}): the compute returned "
+                                f"{type(y).__name__}")
+        elif self.kind == "array":
+            et = getattr(type(y), "element_type", None)
+            if not isinstance(y, DataArray) or et is not self.element_type:
+                raise TypeError(f"{where}({self.element_type.__name__}, {self.count}): the compute "
+                                f"returned {type(y).__name__}"
+                                + (f" of {et.__name__}" if et is not None else ""))
+            n = len(y.val)
+            if n > self.count:
+                raise ValueError(f"{where}({self.element_type.__name__}, {self.count}): the compute "
+                                 f"returned {n} elements")
+        return y
+
+    def put(self, y):
+        """The write, now: ``check(y)``, then the endpoint's :meth:`~StreamIFMaster.write`."""
+        return (yield from self.ep.write(self.check(y)))
 
 
 @dataclass
@@ -1583,13 +1703,11 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
 
         For a typed read use :meth:`get_schema` (one instance) or :meth:`get_array` (*count* of
         them).  Those were once this method's extra arguments; see the note above.
+
+        Returns a :class:`LoadRequest`: ``yield from`` it to read now, or hand it to a pipelined
+        phase as its ``load``.
         """
-        if not self.has_tlast and nwords_max is None:
-            raise ValueError(
-                f"StreamIFSlave '{self.name}' has has_tlast=False: "
-                "nwords_max must be provided to specify the transfer length"
-            )
-        return (yield from super().get(nwords_max=nwords_max))
+        return LoadRequest(self, "words", nwords_max=nwords_max)
 
     @port_read
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetSchemaStmt)
@@ -1601,9 +1719,11 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         The word count comes from ``schema_type.nwords_per_inst(bitwidth)`` — never from the
         caller — and the schema's own deserializer unpacks them.  The ``m_axi`` twin is
         :meth:`~waveflow.hw.memif.MMIFMaster.read_schema`.
+
+        Returns a :class:`LoadRequest`: ``yield from`` it, or hand it to a pipelined phase.  A
+        schema cannot arrive in part: a burst that ended early fails the pipelined decode.
         """
-        raw_words = yield from super().get(nwords_max=self._typed_nwords(schema_type))
-        return self._unpack(raw_words, schema_type)
+        return LoadRequest(self, "schema", schema_type)
 
     @port_read
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamGetArrayStmt)
@@ -1618,22 +1738,13 @@ class StreamIFSlave(TypedCodecMixin, QueuedTransferIFSlave):
         *count* is required.  A zero-element read is not a shorter transfer, it is a different
         question — and one this method has no answer for, since the burst it would consume has no
         words in it.
+
+        Returns a :class:`LoadRequest`: ``yield from`` it to read now, or hand it to a pipelined
+        phase as its ``load`` (``phase.pipeline(compute, load=s_in.get_array(T, n), ...)``), where the
+        compute receives this ``DataArray`` -- shorter if the burst ended early
+        (:meth:`LoadRequest.decode`).
         """
-        raw_words = yield from super().get(
-            nwords_max=self._typed_nwords(element_type, count))
-        return self._unpack(raw_words, element_type, count)
-
-    def req(self, element_type=None, count=None, *, nwords_max: int | None = None) -> "LoadRequest":
-        """A **load request** for a pipelined phase (``phase.pipeline(fn, load=self.s_in.req(...),
-        ...)``; ``plans/pipelined_ops.md``): what to read and how to decode it, without reading.  The
-        phase drives the transfer's two halves itself.
-
-        ``req()`` -- the next burst's raw words; ``req(nwords_max=N)`` -- at most *N* of them (a burst
-        that ends early, at TLAST, is shorter: the body sees how many arrived); ``req(T, count)`` --
-        *count* elements of *T*, as :meth:`get_array` would return them."""
-        if element_type is not None and count is None:
-            raise TypeError(f"'{self.name}'.req({element_type.__name__}): give the element count")
-        return LoadRequest(self, element_type, count, nwords_max)
+        return LoadRequest(self, "array", element_type, int(count))
 
     @port_read
     def get_nb(self, *, nwords_max=None):
@@ -1783,7 +1894,7 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
 
     @port_write
     @synthesizable(synth_fn=_not_implemented_synth, stmt_class=StreamWriteStmt)
-    def write(self, data) -> ProcessGen[None]:
+    def write(self, data=None):
         """Write a burst to the bound interface, serializing typed data.
 
         Accepts two forms:
@@ -1796,7 +1907,16 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
           :class:`~waveflow.hw.dataschema.DataArray` instances are handled
           this way (they are a :class:`~waveflow.hw.dataschema.DataSchema`
           subclass).
+
+        With no *data*, the write **deferred** (a :class:`StoreRequest`) for a pipelined phase's
+        ``store``: the compute's result goes out as written.  The typed deferred writes are
+        :meth:`write_array` and :meth:`write_schema`.
         """
+        if data is None:
+            return StoreRequest(self, "words")
+        return self._write_now(data)
+
+    def _write_now(self, data) -> ProcessGen[None]:
         from waveflow.hw.dataschema import DataSchema
 
         if isinstance(data, DataSchema):
@@ -1812,6 +1932,23 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
         yield from self._make_write_call(raw_words)
 
     @port_write
+    def write_array(self, element_type, count, data=None):
+        """Write a ``DataArray`` of *element_type*, at most *count* elements.  With *data*, now
+        (``yield from m_out.write_array(T, n, y)``: type and count checked, then :meth:`write`);
+        without, the write **deferred** for a pipelined phase's ``store``
+        (``phase.pipeline(compute, load=..., store=m_out.write_array(T, n))``), the compute's result
+        checked the same way."""
+        req = StoreRequest(self, "array", element_type, int(count))
+        return req if data is None else req.put(data)
+
+    def write_schema(self, schema):
+        """Write one schema instance.  Given an instance, now (``yield from m_out.write_schema(hdr)``,
+        then :meth:`write`); given a schema **class**, the write deferred for a pipelined phase's
+        ``store`` -- the compute must return an instance of it."""
+        if isinstance(schema, type):
+            return StoreRequest(self, "schema", schema)
+        return StoreRequest(self, "schema", type(schema)).put(schema)
+
     def begin(self, data) -> ProcessGen[Xfer]:
         """The first half of a write (``plans/pipelined_ops.md``): take the wire and start the transfer
         now, without delivering.  The burst is visible to a reader taking begun bursts at its first
