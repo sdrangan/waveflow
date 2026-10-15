@@ -220,9 +220,8 @@ system flow's traced run, `SystemXsiStep(trace=True)`), decode its declared port
 pysim, fit -- through a framework calibration step (D10), the workload hook being "commands of these
 lengths".  Gate: bit-exact in pysim and at XSI on every scenario (errors included); the phases fitted in
 the harness with held-out lengths exact; the fit compared with the host-activated cosim fit, every
-difference explained; no example-specific calibration wrapper.  Two loose ends to close: `calib_phases`
-should consume the calibration run's `compare` (its scenario ran at RTL but was not compared bit-exact),
-and one cycle of the latency difference (the task's loop entry) is not yet accounted for.
+difference explained; no example-specific calibration wrapper.  Its two loose ends are closed in the
+Stage 2a record below.
 
 **Stage 2 -- the composite: the same kernel behind AXI-MM.**  First D11: the `SynthUnit` tree and
 harnesses generated from a node, Stage 1's harness re-expressed as the leaf node's.  Then `link="mm"`:
@@ -432,6 +431,33 @@ one cycle more the task's loop entry takes was not chased.  (Without the `PIPELI
 with vendor cores would synthesize them as missing modules -- the `.xci` `hls_ip` generates is what they
 need (`read_ip`), not done.  The fitted parameters are filed in the example tree (`calib/`); Stage 3
 files them under the subsystem's identity.
+
+## Record: Stage 2a (2026-10-14), the harness factory
+
+**D12 in code** (`waveflow/hw/hw_system.py`): `HwSystem(sim, dut, *, n_cycles, inputs, check, run_until,
+fresh, calibration)` beside the subclass form (the existing systems unchanged).  The constructor refuses
+a DUT not in the simulation, a DUT that is not a root, a testbench participant with no lowering
+(`bfm_model()` / `xsi_model()` / a `SwHost`), and an unbound DUT boundary port; `participants()` is the
+derived testbench; `fresh()` an unrun copy (the calibration's pysim pass, replacing
+`dataclasses.replace`).  `cut()` now **refuses an empty cut**, and `dut_members` treats a DUT that is
+itself a member (a csynth'd kernel, a memory, one device) as its own cut.
+
+**`harness(module, *, workload, n_cycles)`** (`waveflow/hw/harness.py`): a fresh copy of the module (its
+class and `HwParam`s, as `system_top` rebuilds one for csynth) on a new simulation; a `StreamDriver` per
+stream input, a `StreamSink` per stream output; the stimulus from `module.workload(kind)` or given
+directly; the calibration workload from `module.workload("calib")` and `module.calib_holdout` (D10, now
+on the module).  Other port kinds raise -- Stage 2b's.  The free-running poly lost its testbench graph
+and system class: `stream_kernel_build.system()` is `harness(PolyKernel, workload="test")`.
+
+**Stage 1's loose ends.**  (a) `calib_phases` now consumes the calibration run's `compare`.  Its first
+run failed, rightly: with the harness's DUT being the kernel itself, the old `dut_members` (which only
+looked at a DUT's *children*) gave an empty cut, and the RTL run had **no design in it** -- csynth,
+`system_rtl` and XSI all "passed", the sinks recorded nothing, and only the comparison saw it.  Hence the
+empty-cut refusal above.  (b) The one latency cycle (the free-running port latency is depth + 6, poly's
+depth + 5): the level-1 trace cannot split it -- the task's `s_in` `TREADY` is already high when the
+first sample arrives and the register slices look transparent at the ports, so all 30 cycles fall
+"inside the task"; separating loop entry from the slices needs the slices' task-side `TVALID`, not
+dumped.  Recorded as a measured one-cycle residual, consistent over every command.
 
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 

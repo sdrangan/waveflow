@@ -26,7 +26,6 @@ pass over one scenario that carries every feature value.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,8 +49,15 @@ class CalibWorkload:
 
 
 def timed_modules(sysm) -> list:
-    """The modules of *sysm*'s cut that declare timed phases."""
-    return [m for m in sysm.dut_modules(sysm.tb) if getattr(m, "timing_phases", None)]
+    """The modules of *sysm*'s DUT tree that declare timed phases -- its calibrated leaves
+    (``plans/unit_harness.md`` D11: the unit tree is the module tree)."""
+    out, todo = [], [sysm.dut()]
+    while todo:
+        m = todo.pop(0)
+        if getattr(m, "timing_phases", None):
+            out.append(m)
+        todo.extend(getattr(m, "sub_comps", {}).values())
+    return out
 
 
 def calibrate_system(sysm, vcd: Path, spec, holdout=None, save: bool = True) -> dict:
@@ -85,7 +91,8 @@ def calibrate_system(sysm, vcd: Path, spec, holdout=None, save: bool = True) -> 
 @dataclass(kw_only=True)
 class PhaseCalibStep(_SystemStep):
     """``calib_phases``: :func:`calibrate_system` on the workload, from its traced XSI run.  Consumes
-    that run's report (so it follows it); produces ``<work>/phase_calib.json``.  A span with no
+    that run's comparison -- the workload bit-exact, RTL against pysim, before any timing is fitted from
+    it (timing calibration presumes functional equivalence); produces ``<work>/phase_calib.json``.  A span with no
     clean training row, or a pysim occurrence the RTL does not have, fails the step: a calibration
     is never fitted around a gap."""
 
@@ -96,7 +103,7 @@ class PhaseCalibStep(_SystemStep):
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return [self.a("report")]
+        return [self.a("report"), self.a("compare")]
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
@@ -107,7 +114,7 @@ class PhaseCalibStep(_SystemStep):
         vcd = work / f"{self.rtl.spec.top}_trace.vcd"
         if not vcd.is_file():
             raise RuntimeError(f"calib_phases: no traced run at {vcd}")
-        fresh = dataclasses.replace(self.sysm)          # the pysim run the records come from
+        fresh = self.sysm.fresh()                       # the pysim run the records come from
         rep = calibrate_system(fresh, vcd, self.rtl.spec, holdout=self.workload.held)
         missing = {(m, p, s): r["missing"] for m, ph in rep.items() for p, spans in ph.items()
                    for s, r in spans.items() if r["missing"]}

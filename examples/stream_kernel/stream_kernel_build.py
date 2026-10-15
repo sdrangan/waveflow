@@ -16,7 +16,7 @@ RTL under XSI, a stream driver and two sinks around it) and ``compare`` (the sin
 against pysim).
 
 ``calib_phases`` calibrates the kernel's timed phases (:mod:`waveflow.build.phase_calib`): the
-calibration workload (:meth:`PolyKernelSystem.calibration_workload`) as a second, traced system sharing
+calibration workload (the kernel's ``workload("calib")`` and ``calib_holdout``) as a second, traced system sharing
 ``codegen`` and ``csynth``, then the fit, filed in ``calib/``.  Nothing here is calibration code.
 
 ``src/`` is the only C++ source here; ``include/`` and ``gen/`` are build output, untracked.
@@ -43,12 +43,14 @@ from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.simulation.simulation import Simulation
 
+from waveflow.hw.harness import harness
+from waveflow.hw.hw_system import HwSystem
+
 from examples.stream_kernel.stream_kernel import (
     SCHEMA_CLASSES,
     W,
     Float32,
     PolyKernel,
-    PolyKernelSystem,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -56,9 +58,10 @@ HERE = Path(__file__).resolve().parent
 TOP, WORK_DIR = "stream_kernel_top", "xsi_work"
 
 
-def system() -> PolyKernelSystem:
-    """The system the DAG runs, in pysim and at RTL, on the default commands."""
-    return PolyKernelSystem()
+def system() -> HwSystem:
+    """The system the DAG runs, in pysim and at RTL: the kernel's harness on its test workload --
+    generated from its boundary, no testbench code here."""
+    return harness(PolyKernel, workload="test")
 
 
 def gen_headers(root: Path = HERE) -> None:
@@ -111,7 +114,7 @@ class StreamKernelCodegenStep(BuildStep):
         return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
 
 
-def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: PolyKernelSystem | None = None) -> BuildDag:
+def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = None) -> BuildDag:
     """``codegen``, the framework's system steps for *sysm* (default :func:`system`), and its
     calibration (``calib_*``, run only when asked for).  *trace* dumps the kernel's ports in the XSI
     run (``<work>/<top>_trace.vcd``)."""

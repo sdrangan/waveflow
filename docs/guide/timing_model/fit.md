@@ -104,26 +104,31 @@ name and leave.
 
 ## As a build step
 
-In the system flow, calibration is a framework step, not a script per example.  The system supplies
-the one hand-written piece -- a workload whose scenario produces the feature values -- through its
-`calibration_workload()` hook, and `add_calib_steps` adds that workload to the build DAG as a second,
+In the system flow, calibration is a framework step, not a script per example.  The **module** supplies
+the one hand-written piece -- a workload whose scenario produces the feature values, and the values to
+hold out -- and its harness (an `HwSystem` whose DUT is the module, generated from its boundary) turns
+them into the calibrating system.  `add_calib_steps` adds that system to the build DAG as a second,
 traced system (sharing `codegen` and `csynth`) followed by `PhaseCalibStep`, named `calib_phases`:
 
 <!-- snippet: skip -->
 ```python
-class PolyKernelSystem(GraphSystem):
-    def calibration_workload(self):
-        return CalibWorkload(PolyKernelSystem(cmds=calib_cmds()),   # nine lengths
-                             holdout={"nwords": (48, 128)})
+class PolyKernel(FreeRunMod):
+    calib_holdout: ClassVar[dict] = {"nwords": (48, 128)}
 
+    def workload(self, kind="test"):
+        cmds = {"test": default_cmds, "calib": calib_cmds}[kind]()      # calib: nine lengths
+        return {"s_in": stimulus(cmds)}
+
+sysm = harness(PolyKernel, workload="test")
 add_system_steps(dag, sysm, work_dir=WORK_DIR, top=TOP)
 add_calib_steps(dag, sysm, work_dir=WORK_DIR, top=TOP)     # run with --through calib_phases
 ```
 
 `calib_phases` runs the workload in pysim (the records), decodes the traced XSI run at each kernel's
 scope (the times), fits every span as above, files the parameters in each phase's `calib_dir`, and
-writes the report -- every row's residual -- to `<work>/phase_calib.json`.  A pysim occurrence with no
-RTL partner fails it rather than being fitted around.  The free-running poly
+writes the report -- every row's residual -- to `<work>/phase_calib.json`.  It runs only once the
+workload's RTL recordings equal pysim's word for word (timing calibration presumes functional
+equivalence), and a pysim occurrence with no RTL partner fails it rather than being fitted around.  The free-running poly
 (`examples/stream_kernel`) is calibrated this way: latency 30, fill `nwords - 1`, response 4, held-out
 lengths exact.
 

@@ -292,8 +292,12 @@ def _quarantine_reason(nodeid: str) -> str | None:
 
 
 def pytest_collection_modifyitems(config, items):
-    """Deselect the quarantined tests (``QUARANTINE``), remembering them for the summary."""
+    """Deselect the quarantined tests (``QUARANTINE``), remembering them for the summary.
+    ``WAVEFLOW_NO_QUARANTINE=1`` turns it off -- the gate-floor measurement counts every gate that
+    exists (``tests/build/test_xsi_session_gate.py``)."""
     _QUARANTINED.clear()
+    if os.environ.get("WAVEFLOW_NO_QUARANTINE"):
+        return
     keep, drop = [], []
     for item in items:
         why = _quarantine_reason(item.nodeid)
