@@ -164,6 +164,29 @@ For one `SynthUnit`, the harness gives:
   `harness(sysm, module) -> HwSystem` (the module as DUT, stand-ins generated at its boundary by port
   type) and a workload hook for a module's harness -- Stage 2's first piece of work.
 
+- **D12 -- an `HwSystem` is a `Simulation` plus one named DUT** (the user, 2026-10-14).  It **has** a
+  `Simulation` (every `SimObj`, registered on construction) and names one root `HwModule` as its DUT;
+  its testbench is **derived** -- every `SimObj` in the simulation outside the DUT -- never listed:
+
+      sim = Simulation()
+      dut = MarkovDut(name="markov_dut", sim=sim)       # gen_dev, chain_dev, mem; xbar + link inside
+      host = MarkovHost(name="host", sim=sim, jobs=jobs) # the SwHost
+      host.bind(dut.s_axi)
+      sysm = HwSystem(sim=sim, dut=dut)
+
+  The constructor checks: the DUT is registered in the simulation; it is a root (no parent -- a
+  sub-module's harness gets a fresh copy instead); every testbench participant has a testbench lowering
+  (`bfm_model()` / `xsi_model()` / a C++ twin); every DUT boundary endpoint is bound.  Not *derived from*
+  `Simulation`: that is the pysim engine (single-use, its clock only advances), while an `HwSystem` is
+  lowered to pysim **and** RTL and rebuilt per run.  `HwSystem` becomes concrete -- the per-example
+  subclasses' hooks move to where the knowledge is (scenarios to the participants, as the `SwHost`
+  already writes its own; workloads to the modules, D10) -- and a named DUT class replaces the anonymous
+  `DutTop.of(...)` where the DUT deserves an identity (`DutTop.of` stays for quick systems).  The harness
+  factory is the same shape: a new `Simulation`, a fresh copy of the module from its class and
+  parameters (as `system_top` already builds one for csynth), stand-ins at its boundary,
+  `HwSystem(sim, dut=copy)`.  Migration: the new form beside the existing subclasses (about 15), which
+  move one at a time -- the free-running poly first, markov in Stage 4.
+
 ## The vehicle: a free-running poly
 
 The first harness is built on a new example (directory to be named; proposed `examples/stream_kernel/`,
