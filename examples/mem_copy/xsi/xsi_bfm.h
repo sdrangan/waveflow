@@ -1010,6 +1010,67 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// MmScript — a scripted AXI-MM master: the testbench stand-in for a module's memory-mapped slave port
+// (waveflow/simulation/mm_tb.py; plans/unit_harness.md Stage 4c).  The system's host by role: plays
+// <scenario>/vectors/script -- one burst per op, [kind (1 write, 0 read), byte addr, nwords,
+// not_before, data...] -- with one read and one write outstanding (overlap_rw), each channel in script
+// order.  Records each read's data (<trace_dir>/rdata, one burst per read) and each op's [t_start,
+// t_end] cycles (<trace_dir>_timing, one burst per op).
+// ---------------------------------------------------------------------------
+
+class MmScript : public AxiMmMaster {
+public:
+    MmScript(Dut& d, const char* prefix, int bytes_per_word)
+        : AxiMmMaster(d, prefix, bytes_per_word, 0, true) {}
+
+    std::string scenario, trace_dir;
+
+    void pre_sim() override {
+        if (scenario.empty()) { std::fprintf(stderr, "FATAL: MmScript: no scenario\n"); std::exit(1); }
+        const std::string script = scenario + "/vectors/script";
+        const std::vector<uint64_t> w = BurstBundle::read_words(script);
+        const std::vector<uint64_t> b = BurstBundle::read_bounds(script);
+        uint64_t lo = 0;
+        for (uint64_t hi : b) {
+            const bool wr = w[lo] != 0;
+            const uint64_t addr = w[lo + 1];
+            const uint32_t n = (uint32_t)w[lo + 2];
+            const long nb = (long)w[lo + 3];
+            if (wr) write(addr, std::vector<uint64_t>(w.begin() + (long)lo + 4, w.begin() + (long)hi), nb);
+            else read(addr, n, nb);
+            lo = hi;
+        }
+    }
+
+    bool done() const {
+        for (size_t i = 0; i < nops(); ++i) if (!op(i).done()) return false;
+        return true;
+    }
+
+    void post_sim() override {
+        if (trace_dir.empty()) return;
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                if (op(i).write) continue;
+                words.insert(words.end(), op(i).rdata.begin(), op(i).rdata.end());
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "/rdata", words, bounds);
+        }
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                words.push_back((uint64_t)op(i).t_start);
+                words.push_back((uint64_t)op(i).t_end);
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "_timing", words, bounds);
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 // XsiSim — open/close, the clock phases, reset, and pinning undriven inputs.
 // ---------------------------------------------------------------------------
 

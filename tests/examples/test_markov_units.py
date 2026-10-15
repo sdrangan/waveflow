@@ -110,3 +110,59 @@ def test_rtl_core_alone_matches_pysim(core_run):
     its own top (``KernelTask.framed``), and what the sink took is what pysim's took."""
     assert recorded_names(core_run) == ["m_x"]
     assert compared_clean(core_run)
+
+
+# ---------------------------------------------------------------------------
+# The memory alone (Stage 4c): a scripted master, the memory's slot behind a direct link
+# ---------------------------------------------------------------------------
+
+def test_the_memory_harness_reads_back_what_it_wrote():
+    from examples.markov.markov import markov_memory, mem_script
+    from waveflow.hw.harness import memory_harness
+
+    sysm = memory_harness(lambda sim: markov_memory(sim, calibrated=False), mem_script("test"))
+    sysm.run()
+    host = sysm.stand_ins["s_mm"]
+    assert host.done()
+    writes = [o for o in host.ops if int(o[0]) == 1]
+    reads = [r for r in host.rdata if r is not None]
+    for w, r in zip(writes, reads):
+        np.testing.assert_array_equal(r, w[4:])
+
+
+def test_the_system_memory_loads_its_harness_calibration():
+    """Measured alone, loaded in the system: one identity (contents, allocation, address placement and
+    the back door are context), and the record makes the slave serve one transaction at a time."""
+    from examples.markov.markov import markov_memory, mem_script
+    from examples.markov.markov_build import system
+    from waveflow.calib.phases import module_identity
+    from waveflow.hw.harness import memory_harness
+
+    sysm = system()
+    unit = memory_harness(markov_memory, mem_script("test"))
+    assert module_identity(sysm.mem).key == module_identity(unit.dut().sub_comps["mem"]).key
+    sysm.mem.pre_sim()
+    t = sysm.mem._mem_timing
+    assert t is not None and t["serialize"] and sysm.mem.s_mm.serialize_transactions
+    assert (round(t["read"]["init"]), round(t["read"]["per_word"])) == (1, 1)
+    assert (round(t["write"]["init"]), round(t["write"]["per_word"])) == (1, 0)
+
+
+@pytest.fixture(scope="module")
+def mem_run() -> Path:
+    return system_run(build_dag(work_dir=WORK), HERE, "umem_markov_mem_unit", through="umem_compare")
+
+
+@pytest.mark.xsi
+def test_rtl_memory_alone_is_timed_exactly_by_its_calibration(mem_run):
+    """The memory at RTL against the scripted master: the read data equal pysim's, and with its
+    calibrated timing loaded every op's duration equals the RTL's to the cycle."""
+    from examples.markov.markov import mem_script
+    from waveflow.simulation.mm_tb import timing_dir
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    rtl = read_burst_bundle(timing_dir(mem_run / "traces"))
+    pys = read_burst_bundle(timing_dir(mem_run / "pysim_traces"))
+    ops = mem_script("test")
+    assert len(rtl) == len(pys) == len(ops)
+    assert [int(b[1] - b[0]) for b in pys] == [int(b[1] - b[0]) for b in rtl]

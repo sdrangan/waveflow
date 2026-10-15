@@ -25,6 +25,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from waveflow.hw.hw_system import HwSystem, _boundary_eps
 
 
@@ -154,4 +156,48 @@ def harness(module, *, workload="test", n_cycles: int = 4000) -> HwSystem:
     return sysm
 
 
-__all__ = ["harness"]
+def memory_harness(make, script, *, n_cycles: int = 4000, name: str = "mem_unit",
+                   fresh=None) -> HwSystem:
+    """The harness of an on-chip memory (``plans/unit_harness.md`` Stage 4c): the memory *make(sim)*
+    builds, its ``s_mm`` slave behind a direct link (no crossbar: at RTL the master group is wired
+    straight to the memory's slot), and an :class:`~waveflow.simulation.mm_tb.MmScript` master playing
+    *script* -- a list of ops (:func:`~waveflow.simulation.mm_tb.script_op`) at byte addresses from 0.
+    The DUT is the memory and its link, as a device's own harness is (D9); the script master is its
+    host.  Its read data is its trace (``rdata``, compared RTL against pysim); each op's start and end
+    cycles go beside the traces (:func:`~waveflow.simulation.mm_tb.timing_dir`), the measurement a
+    calibration of the memory fits.  *fresh* rebuilds the system (default: the same
+    call)."""
+    from waveflow.hw.hw_system import DutTop
+    from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
+    from waveflow.simulation.mm_tb import MmScript
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.burst_io import write_burst_bundle
+
+    sim = Simulation()
+    mem = make(sim)
+    bpw = int(mem.word_size) // 8
+    # The script addresses the whole memory: one region from 0.
+    if mem.alloc(int(mem.nwords_tot)) != 0:
+        raise ValueError(f"memory_harness: '{mem.name}' is already allocated; build it fresh")
+    master = MmScript(name="script", sim=sim, bitwidth=int(mem.word_size), clk=mem.clk)
+    link = AXIMMCrossBarIF(name="link", sim=sim, clk=mem.clk, nports_master=1, nports_slave=1,
+                           bitwidth=int(mem.word_size), latency_init=0.0, latency_travel=0.0)
+    link.direct = True
+    link.bind("master_0", master.m)
+    link.bind("slave_0", mem.s_mm)
+    assign_address_ranges([mem.s_mm], [(0, int(mem.nwords_tot) * bpw)])
+    dut = DutTop.of(name, sim, comps=[mem], ifs=[link])
+    ops = [np.asarray(o, dtype=np.uint64) for o in script]
+
+    def inputs(root: Path) -> None:
+        write_burst_bundle(ops, Path(root) / "vectors" / "script")
+
+    sysm = HwSystem(sim, dut, n_cycles=n_cycles, inputs=inputs,
+                    fresh=fresh or (lambda: memory_harness(make, script, n_cycles=n_cycles, name=name)))
+    sysm.stand_ins = {"s_mm": master}
+    sysm.script = ops
+    master.script = ops
+    return sysm
+
+
+__all__ = ["harness", "memory_harness"]

@@ -1579,10 +1579,20 @@ def header_model_classes(path) -> frozenset[str]:
 
     text = Path(path).read_text(encoding="utf-8")
     # A software host's model derives from its generated <Host>_endpoints (or SwHostModel directly),
-    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.
-    return frozenset(re.findall(
+    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.  A model may also derive from
+    # another model in the same header (MmScript : AxiMmMaster), so the rule is followed through.
+    found = set(re.findall(
         r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(?:XsiSimObj|SwHostModel|\w+_endpoints)\b",
         text, re.M))
+    derived = re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(\w+)\b", text, re.M)
+    grew = True
+    while grew:
+        grew = False
+        for cls, base in derived:
+            if base in found and cls not in found:
+                found.add(cls)
+                grew = True
+    return frozenset(found)
 
 
 def bfm_model_header(mod, bm: "BfmModel"):

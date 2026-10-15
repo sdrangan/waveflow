@@ -50,8 +50,8 @@ from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsSte
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
-from waveflow.hw.harness import harness
-from waveflow.build.phase_calib import add_calib_steps
+from waveflow.hw.harness import harness, memory_harness
+from waveflow.build.phase_calib import MemCalibStep, add_calib_steps
 from waveflow.calib.record_store import ModuleStore
 from waveflow.hw.mem_stream import MemWCmd
 from waveflow.simulation.simulation import Simulation
@@ -65,6 +65,8 @@ from examples.markov.markov import (
     MarkovChain,
     MarkovGen,
     MarkovSystem,
+    markov_memory,
+    mem_script,
     MkvCmd,
     MkvResp,
     default_jobs,
@@ -193,6 +195,14 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
         unit = harness(cls, workload="test")
         add_system_steps(dag, unit, work_dir=work_dir, top=top, prefix=prefix, trace=True)
         add_calib_steps(dag, unit, work_dir=work_dir, top=top, prefix=f"{prefix}calib_", store=store)
+    # The memory alone (Stage 4c): its slot behind a direct link, a scripted master as the testbench.
+    # Calibrated on a memory that loads no timing, filed in calib/; then checked, loading it.
+    uncal = memory_harness(lambda sim: markov_memory(sim, calibrated=False), mem_script("calib"),
+                           n_cycles=20000)
+    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="markov_mem_unit", prefix="umemcal_")
+    dag.add(MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=store))
+    add_system_steps(dag, memory_harness(markov_memory, mem_script("test")), work_dir=work_dir,
+                     top="markov_mem_unit", prefix="umem_")
     return dag
 
 

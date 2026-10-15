@@ -642,6 +642,47 @@ calibrate the link's parts as units of their own** (`MmStreamWriter`, the queue-
 memory stand-in for an `m_axi` port (D3) and AXI-MM events for a timed phase.  Until then the gate is red,
 on purpose: re-fitting the kernels to hide the link is what the old overheads did.
 
+## Record: Stage 4c (2026-10-15), the memory as a calibrated unit -- the gate still red
+
+**The diagnosis of part 2 was wrong.**  Word by word (probes `ufwd` against `u`), every draw is in the
+chain's queue 90-200 cycles before the core reads it: the core does not starve for input.  It reads
+slowly at job boundaries because its output cannot drain: the chain's memory writes stall (30 cycles
+for one that takes 10) behind the **host's result reads of the same memory** -- 38 words in 80 cycles at
+RTL, 42 in pysim.  `mm_bram_port.v` says why: a read word costs `LAT + 1` cycles, and the front serves one
+AXI transaction at a time.  pysim's memory was full-duplex at a cycle a word.
+
+**The memory's harness** (`waveflow.hw.harness.memory_harness`): the memory's slot behind a direct link,
+the DUT; the testbench a scripted master, `MmScript` (`waveflow/simulation/mm_tb.py`, C++ twin of the
+same name over `AxiMmMaster(overlap_rw)`) -- the system's host by role, so it keeps a host's contract
+(script under `scenario`, read data in `trace_dir` compared RTL against pysim, each op's
+`[t_start, t_end]` beside it in `<trace_dir>_timing`).  A model deriving from another model is now a
+model (`header_model_classes` follows derivation).  markov: `umemcal_*` (calibration script: every length
+1-32, reads and writes started together) and `umem_*` (the check).
+
+**Measured, and fitted exactly** (`waveflow.calib.mem_timing`, step `MemCalibStep`, record in
+`examples/markov/calib/modules/memory_mod-*`): over a zero-latency link a read adds `1 + n` cycles, a write
+`1`; and a read and a write that meet are served one after the other, write first (`serialize`).  With
+the record loaded (`MemoryMod.calib_dir`; the slave then serves one transaction at a time,
+`serialize_transactions` on one channel), every op of the check script matches RTL to the cycle -- gate
+`test_rtl_memory_alone_is_timed_exactly_by_its_calibration`.  Collisions land within 2-3 cycles (a
+turnaround between transactions at the front, not modeled).  Identity: a memory's backing store,
+allocation, back door (`__wf_identity_exclude__`) and a slave's address placement are context.
+
+**The gate: pysim 1740 against RTL 1870 (-7.0%)**, from -8.8%.  The host's result read now takes 81
+cycles to RTL's 80.  What remains, from the chain's memory writes job by job:
+
+* **startup, ~44 cycles**: the core gets its first chunk 26 cycles later at RTL -- the forward queue
+  writer issues its burst ~29 cycles after a packet's last word (`ufwd_last` 103 -> `wr1_aw` 132), pysim's
+  at once -- and then, starved, it needs a pipeline latency from the draws' arrival to its first state,
+  which Pattern 3 does not charge (a late start begins the write as soon as the input is in hand).  The
+  core's `x` is a pipelined load -> compute -> store: **Pattern 2**, with the load on a credit stream.
+* **per job, ~23 cycles** (414 against 391): each job's first chunk write meets the host's result read
+  at RTL and its stall propagates to the core's next chunk (99 cycles, not 80).  pysim now serializes
+  the memory, but its offsets differ (the startup above), so the two rarely meet.
+
+Next: the core's `x` as Pattern 2 (a credit-stream `begin_read`), and the forward writer as a unit (its
+harness: a stream in, `MemoryMod` as the `m_axi` stand-in).
+
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 
 A device's harness is the contract a sub-agent would work against.  What crosses the boundary:

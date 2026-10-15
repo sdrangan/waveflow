@@ -261,6 +261,9 @@ _CONTEXT_ATTRS = frozenset({
     # the run under a key no lookup before one computes (plans/unit_harness.md Stage 4).
     "written", "acked", "n_no_room", "n_resp_no_room", "n_credit_waits",
     "consumed", "offered", "n_offers",
+    # A memory's calibrated timing, loaded from its record at pre_sim (Stage 4c): a statement about
+    # the memory, never part of it.
+    "_mem_timing",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value

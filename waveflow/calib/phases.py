@@ -163,9 +163,14 @@ def module_identity(module):
     harness's 2 or a queue view's 256 -- so one kernel got two keys (measured on stream_kernel,
     2026-10-15).  Here the module's own ports' depths -- and their halves', for a composite port such
     as a credit stream -- are blanked for the hash: a module's own ports are its boundary wherever it
-    sits (markov's generator: its harness's 2 against the system's 16).  Fixing that in the identity
+    sits (markov's generator: its harness's 2 against the system's 16); likewise a slave port's
+    place in the address map.  Fixing that in the identity
     itself would move every existing key with a boundary (``plans/unit_harness.md``, Stage 3 record);
-    timed-phase records are new, so they start context-free."""
+    timed-phase records are new, so they start context-free.
+
+    A class may name further attributes that are run-time state, not structure
+    (``__wf_identity_exclude__``): a memory's backing store holds its contents and allocations (the
+    harness allocates one region, the system several), so it is blanked too (Stage 4c)."""
     from waveflow.calib.module_key import boundary_endpoint_ids, identify_instance
 
     exempt = boundary_endpoint_ids(module)
@@ -173,13 +178,26 @@ def module_identity(module):
     own += [p for e in list(own) for p in e.physical_endpoints() if p is not e]
     eps = [ep for ep in own if hasattr(ep, "queue_size")]
     saved = [ep.queue_size for ep in eps]
+    # Where a slave port sits in the address map is the system's choice too.
+    placed = [ep for ep in own if getattr(ep, "addr_range", None) is not None]
+    ranges = [ep.addr_range for ep in placed]
+    state = [a for a in getattr(type(module), "__wf_identity_exclude__", ()) if hasattr(module, a)]
+    held = {a: getattr(module, a) for a in state}
     try:
         for ep in eps:
             ep.queue_size = None
+        for a in state:
+            setattr(module, a, None)
+        for ep in placed:
+            ep.addr_range = None
         return identify_instance(module, exempt=exempt)
     finally:
         for ep, q in zip(eps, saved):
             ep.queue_size = q
+        for ep, r in zip(placed, ranges):
+            ep.addr_range = r
+        for a, v in held.items():
+            setattr(module, a, v)
 
 
 def phase_record(module, fits: dict, *, workload: str, part: str = "", period_ns: float = 0.0,

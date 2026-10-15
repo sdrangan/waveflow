@@ -154,6 +154,36 @@ def chain_golden(u: np.ndarray, x0: int, p01: int, p10: int) -> np.ndarray:
     return x
 
 
+def markov_memory(sim, clk: Clock | None = None, calibrated: bool = True) -> MemoryMod:
+    """The system's memory, where the chain stores ``x`` and the host reads it: one factory for the
+    system and the memory's own harness (``plans/unit_harness.md`` Stage 4c).  *calibrated*: its
+    timing from its record in ``calib/`` (the harness that measures it builds one without)."""
+    return MemoryMod(name="mem", sim=sim, word_size=DW, inline=False,
+                     clk=clk if clk is not None else Clock(freq=100e6),
+                     nwords_tot=MEM_SPAN // 8, addr_unit=AddrUnit.byte,
+                     calib_dir=HERE / "calib" if calibrated else None)
+
+
+def mem_script(kind: str = "test") -> list:
+    """What the memory's harness plays (:func:`~waveflow.hw.harness.memory_harness`): each length a
+    write then a read back, spaced so no two meet; ``"calib"`` adds every length from 1 to 32 and a
+    read and a write started together at each of several lengths (the two channels meeting at the
+    memory)."""
+    from waveflow.simulation.mm_tb import READ, WRITE, script_op
+
+    lens = (1, 2, 4, 8, 16, 38) if kind == "test" else tuple(range(1, 33)) + (38, 64)
+    ops, t, gap = [], 10, 100
+    for n in lens:
+        addr = (n % 8) * 0x200 % (MEM_SPAN - 0x200)
+        ops.append(script_op(WRITE, addr, n, t, np.arange(n, dtype=np.uint64) * 3 + n)); t += gap
+        ops.append(script_op(READ, addr, n, t)); t += gap
+    if kind != "test":
+        for n in (4, 8, 16, 38):
+            ops.append(script_op(READ, 0, n, t))
+            ops.append(script_op(WRITE, 0x800, n, t, np.arange(n, dtype=np.uint64))); t += 2 * gap
+    return ops
+
+
 def markov_golden(cmd: dict) -> np.ndarray:
     return chain_golden(uniforms(cmd["seed"], cmd["n"]), cmd["x0"], cmd["p01"], cmd["p10"])
 
@@ -560,8 +590,7 @@ class MarkovSystem(HwSystem):
         sim = self.sim = Simulation()
         self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk)
         self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
-        self.mem = MemoryMod(name="mem", sim=sim, word_size=DW, inline=False, clk=self.clk,
-                             nwords_tot=MEM_SPAN // 8, addr_unit=AddrUnit.byte)
+        self.mem = markov_memory(sim, self.clk)
         self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
         self.host.mem = self.mem
         if len(self.jobs) > MEM_SPAN // REGION_BYTES or any(j["n"] > REGION_BYTES for j in self.jobs):

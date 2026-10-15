@@ -181,6 +181,56 @@ class PhaseCalibCachedStep(_SystemStep):
         return {self.a("phase_calib"): out}
 
 
+@dataclass(kw_only=True)
+class MemCalibStep(_SystemStep):
+    """``<prefix>mem_timing``: an on-chip memory's timing (:mod:`waveflow.calib.mem_timing`), from its
+    harness's two runs (:func:`~waveflow.hw.harness.memory_harness`) -- the script's op timings, RTL
+    and pysim -- filed under the memory's identity in *store*.  Consumes the run's comparison: the read
+    data equal, RTL against pysim, before any timing is fitted.  The harness's memory must load no
+    stored timing (the fit is what the memory adds over the rest of the harness)."""
+
+    description = "Fit an on-chip memory's per-direction costs and serialization from its harness."
+    step_name: ClassVar[str] = "mem_timing"
+    store: Any
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("compare")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("mem_timing"): self.work / "mem_timing.json"}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        import hashlib
+
+        from waveflow.calib.mem_timing import fit_mem_timing, mem_timing_record
+        from waveflow.hw.hw_system import dut_members
+        from waveflow.simulation.mm_tb import timing_dir
+        from waveflow.utils.burst_io import read_burst_bundle
+
+        work = self.work_dir(config)
+        (ran,) = dut_members(self.sysm.dut())
+        if getattr(ran, "_mem_timing", None) is not None:
+            raise RuntimeError("mem_timing: the harness's memory loaded a stored timing; fit from one "
+                               "that loads none")
+        ops = list(self.sysm.script)
+        rtl = read_burst_bundle(timing_dir(work / "traces"))
+        base = read_burst_bundle(timing_dir(work / "pysim_traces"))
+        if len(rtl) != len(ops) or len(base) != len(ops):
+            raise RuntimeError(f"mem_timing: {len(ops)} ops, {len(rtl)} RTL and {len(base)} pysim times")
+        payload = fit_mem_timing(ops, base, rtl)
+        digest = hashlib.sha256(b"".join(bytes(memoryview(o.astype("<u8"))) for o in ops)).hexdigest()[:16]
+        (mem,) = dut_members(self.sysm.fresh().dut())        # un-run: the identity a lookup computes
+        rec, ident = mem_timing_record(mem, payload, workload=digest,
+                                       period_ns=float(mem.clk.period) * 1e9,
+                                       tool=f"vitis {config.vitis_version or ''}".strip())
+        self.store.append(rec, identity=ident)
+        out = work / "mem_timing.json"
+        out.write_text(json.dumps({"key": ident.key, **payload}, indent=1) + "\n", encoding="utf-8")
+        return {self.a("mem_timing"): out}
+
+
 def add_calib_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                     prefix: str = "calib_", store=None, **kw):
     """Add *sysm*'s calibration to *dag*: its :meth:`calibration_workload` as a second system
@@ -218,5 +268,5 @@ def add_calib_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     return step
 
 
-__all__ = ["CalibWorkload", "PhaseCalibCachedStep", "PhaseCalibStep", "add_calib_steps",
+__all__ = ["CalibWorkload", "MemCalibStep", "PhaseCalibCachedStep", "PhaseCalibStep", "add_calib_steps",
            "calibrate_system", "timed_modules"]
