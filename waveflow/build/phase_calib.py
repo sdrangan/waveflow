@@ -100,6 +100,13 @@ class PhaseCalibStep(_SystemStep):
     step_name: ClassVar[str] = "phases"
     rtl: Any
     workload: CalibWorkload
+    #: Where the fits are filed (``plans/unit_harness.md`` D7): a
+    #: :class:`~waveflow.calib.record_store.ModuleStore` -- one timing record per calibrated module,
+    #: under its identity -- or ``None`` (each phase's per-span files in its ``calib_dir``).
+    store: Any = None
+    #: The workload's digest (:func:`~waveflow.calib.phases.scenario_digest`), filed with the record:
+    #: what a repeat compares against.
+    workload_digest: str = ""
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -114,32 +121,100 @@ class PhaseCalibStep(_SystemStep):
         vcd = work / f"{self.rtl.spec.top}_trace.vcd"
         if not vcd.is_file():
             raise RuntimeError(f"calib_phases: no traced run at {vcd}")
+        import time
+
+        t0 = time.perf_counter()
         fresh = self.sysm.fresh()                       # the pysim run the records come from
-        rep = calibrate_system(fresh, vcd, self.rtl.spec, holdout=self.workload.held)
+        rep = calibrate_system(fresh, vcd, self.rtl.spec, holdout=self.workload.held,
+                               save=self.store is None)
         missing = {(m, p, s): r["missing"] for m, ph in rep.items() for p, spans in ph.items()
                    for s, r in spans.items() if r["missing"]}
         out = work / "phase_calib.json"
         out.write_text(json.dumps(rep, indent=1, default=str) + "\n", encoding="utf-8")
         if missing:
             raise RuntimeError(f"calib_phases: pysim occurrences with no RTL partner: {missing}")
+        if self.store is not None:
+            self._file(config, fresh, rep, time.perf_counter() - t0)
+        return {self.a("phase_calib"): out}
+
+    def _file(self, config: BuildConfig, sysm, rep: dict, seconds: float) -> None:
+        """One timing record per calibrated module, under its identity, with its provenance."""
+        from waveflow.build.hls_ip import csynth_part
+        from waveflow.build.system_dag import rtl_rel
+        from waveflow.calib.phases import phase_record
+
+        root = Path(config.root_dir)
+        for mod in timed_modules(sysm):
+            part = csynth_part((root / rtl_rel(type(mod).cpp_kernel_name)).parents[1]) or ""
+            rec, ident = phase_record(mod, rep[mod.name], workload=self.workload_digest, part=part,
+                                      period_ns=float(mod.clk.period) * 1e9,
+                                      tool=f"vitis {config.vitis_version or ''}".strip(),
+                                      cost_seconds=seconds)
+            self.store.append(rec, identity=ident)
+
+
+@dataclass(kw_only=True)
+class PhaseCalibCachedStep(_SystemStep):
+    """``calib_phases`` when the store already holds this calibration: every calibrated module has a
+    record under its identity, measured on this very workload, verified against the module -- so
+    nothing is simulated.  Writes ``<work>/phase_calib.json`` naming the records it found."""
+
+    description = "The calibration is in the store for this identity and workload: nothing to run."
+    step_name: ClassVar[str] = "phases"
+    hits: Any = None
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return []
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("phase_calib"): self.work / "phase_calib.json"}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        out = self.work_dir(config) / "phase_calib.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"cache_hit": True, "records": self.hits}, indent=1) + "\n",
+                       encoding="utf-8")
         return {self.a("phase_calib"): out}
 
 
 def add_calib_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
-                    prefix: str = "calib_", **kw) -> PhaseCalibStep:
+                    prefix: str = "calib_", store=None, **kw):
     """Add *sysm*'s calibration to *dag*: its :meth:`calibration_workload` as a second system
     (*prefix*; traced; the rest of *kw* as :func:`~waveflow.build.system_dag.add_system_steps`), and
     ``<prefix>phases``.  Add it after the design's own system steps, so ``codegen`` and ``csynth``
-    are shared."""
+    are shared.
+
+    With a *store* (a :class:`~waveflow.calib.record_store.ModuleStore`, D7) the fits are filed there,
+    one record per calibrated module under its identity -- and the store is asked first: when every
+    calibrated module already has a record measured on this workload (same digest, provenance
+    verified against the module), only a :class:`PhaseCalibCachedStep` is added, and a repeated
+    calibration runs no simulation."""
+    from waveflow.calib.phases import module_identity, scenario_digest, stored_phases
+
     wl = sysm.calibration_workload()
     if wl is None:
         raise ValueError(f"{type(sysm).__name__} has no calibration_workload()")
     top = top or snake(type(sysm).__name__)
+    digest = scenario_digest(wl.system) if store is not None else ""
+    if store is not None:
+        mods = timed_modules(wl.system)
+        found = [stored_phases(store, m, workload=digest) for m in mods]
+        if mods and all(r is not None for r in found):
+            hits = [{"module": m.name, "key": module_identity(m).key, "workload": digest}
+                    for m in mods]
+            step = PhaseCalibCachedStep(sysm=wl.system, work=Path(work_dir) / f"{prefix}{top}",
+                                        prefix=prefix, hits=hits)
+            dag.add(step)
+            return step
     xsi = add_system_steps(dag, wl.system, work_dir=work_dir, top=top, prefix=prefix, trace=True,
                            **kw)
-    step = PhaseCalibStep(sysm=wl.system, work=xsi.work, prefix=prefix, rtl=xsi.rtl, workload=wl)
+    step = PhaseCalibStep(sysm=wl.system, work=xsi.work, prefix=prefix, rtl=xsi.rtl, workload=wl,
+                          store=store, workload_digest=digest)
     dag.add(step)
     return step
 
 
-__all__ = ["CalibWorkload", "PhaseCalibStep", "add_calib_steps", "calibrate_system", "timed_modules"]
+__all__ = ["CalibWorkload", "PhaseCalibCachedStep", "PhaseCalibStep", "add_calib_steps",
+           "calibrate_system", "timed_modules"]

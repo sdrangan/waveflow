@@ -40,6 +40,7 @@ from waveflow.build.composite_gen import (
 )
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
 from waveflow.build.phase_calib import add_calib_steps
+from waveflow.calib.record_store import ModuleStore
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
@@ -130,7 +131,7 @@ def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = No
     dag.add(StreamKernelCodegenStep(name="codegen"))
     sysm = sysm if sysm is not None else system()
     add_system_steps(dag, sysm, work_dir=work_dir, top=TOP, trace=trace)
-    add_calib_steps(dag, sysm, work_dir=work_dir, top=TOP)
+    add_calib_steps(dag, sysm, work_dir=work_dir, top=TOP, store=ModuleStore(HERE / "calib"))
     # The same kernel behind AXI-MM with its two-thread host (``stream_kernel_mm.py``): its own steps
     # (``mm_*``), sharing codegen and the kernel's csynth.
     add_system_steps(dag, mm_system(), work_dir=work_dir, top=MM_TOP, prefix="mm_")

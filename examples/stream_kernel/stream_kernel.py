@@ -211,6 +211,9 @@ class PolyKernel(FreeRunMod):
             self.add_endpoint(ep)
         # The timed phases.  The numbers only seed the models until they are fitted in the harness
         # (calib/<phase>/<span>.json); they are poly's host-activated fit, as a starting point.
+        # The calibration store (plans/unit_harness.md D7): the fitted phases are one record filed under
+        # this kernel's identity in calib/modules/<key>/ -- found from the identity alone, wherever the
+        # kernel sits (its stream harness, behind AXI-MM).  Before a calibration: the seed.
         cal = HERE / "calib"
         self.samp_phase = TimedPhase(
             "samples", spans={"latency": (self.s_in.first, self.m_out.first),
@@ -218,10 +221,10 @@ class PolyKernel(FreeRunMod):
             features=("nwords",),
             seed={"latency": {"intercept": 34.0, "nwords": 0.0},
                   "fill_time": {"intercept": -1.0, "nwords": 1.0}},
-            calib_dir=cal / "samples")
+            calib_dir=cal)
         self.resp_phase = TimedPhase(
             "resp", spans={"resp_time": (self.m_out.last, self.m_resp.first)},
-            seed={"resp_time": {"intercept": 1.0}}, calib_dir=cal / "resp")
+            seed={"resp_time": {"intercept": 1.0}}, calib_dir=cal)
         for ph in (self.samp_phase, self.resp_phase):
             self.add_timing_phase(ph)
 

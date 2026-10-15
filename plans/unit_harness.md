@@ -232,7 +232,7 @@ timing **composed** from the kernel leaf's phases and the views' with no fitting
 (D8); then the root (the composite and the crossbar leaf, `AxiXbarConfig` records) composed and checked
 against its RTL.
 
-**Stage 3 -- calibration as a step, records under identity.**  The framework calibration step of Stage 1
+**Stage 3 -- calibration as a step, records under identity.  DONE (record below).**  The framework calibration step of Stage 1
 generalized: one `XsiSnapshot` per configuration, the workload hook's scenario in `run.json`, the fit
 filed under the `SynthUnit`'s identity (D7), a repeated calibration with no change running no
 simulation.  Grid discipline: at least three values a feature, interior points held out.  Gate: a
@@ -520,6 +520,43 @@ front's registers are in the adaptor's model.  Synthesis and packaging of a dire
 yet produced by `harness(device)`: a generic host stand-in generated from a device's views (the "unit
 host" of Open questions) is the missing piece -- the stream harness's drivers and sinks have no
 memory-mapped counterpart yet.
+
+## Record: Stage 3 (2026-10-15), calibration records under identity
+
+**Filed in the module store.**  `add_calib_steps(..., store=ModuleStore(...))`: `calib_phases` files one
+`timing` record per calibrated module in the existing record store (`waveflow/calib/record_store.py`,
+`modules/<key>/timing/records.jsonl`), source `xsi`, payload `{kind: "timed_phases", workload: <digest>,
+phases: {phase: {span: params}}, max_abs_residual}`, provenance (structure signature, the part csynth
+used, the clock, the tool).  A `TimedPhase` whose `calib_dir` is a store root (it holds `modules/`)
+loads its spans from the newest such record under its owner's identity -- found from the identity
+alone, verified against it (a record of different hardware raises `StaleRecordError`) -- else, as
+before, its per-span files or the seed.  stream_kernel moved: its `calib/samples/*.json` and
+`calib/resp/*.json` are now one record, `calib/modules/poly_kernel-53a32b7b/`.
+
+**A repeat runs no simulation.**  The DAG decides freshness per step after its upstream has run, so a
+fresh last step does not spare the XSI run before it.  The decision is therefore taken when the DAG is
+built: `add_calib_steps` asks the store first, and when every calibrated module has a record measured on
+this workload (`scenario_digest`: the bytes the workload's testbench plays, hashed without simulating)
+it adds one `PhaseCalibCachedStep` and nothing else.  Measured: the repeat ran `calib_phases` alone,
+0.0 s; a changed workload or an empty store brings the chain back.
+
+**A finding: the identity was not context-free.**  The point of D7 is that a module is calibrated once
+and its record found wherever it sits.  The kernel's `identify_instance` key differed between its
+stream harness (`3e5b096b`) and behind AXI-MM (`6b469304`), so the memory-mapped system silently fell
+back to the seed (latency 34, response 1).  Cause: `identify_instance`'s `exempt` only skips the
+boundary in the bound check; the digest still hashes each boundary port's `queue_size` -- the depth of
+whatever channel it is bound to (2 in the harness, 256 behind a queue view).  `module_key`'s own
+docstring says a boundary port's depth "is set by whatever encloses the top, not by the top".  Fixed
+for timed-phase records (`waveflow.calib.phases.module_identity` blanks the boundary depths for the
+hash): one key in all three systems, and the memory-mapped system now loads the harness's calibration
+(396 cycles, as before the move).  **Open:** the same fix in `identify_instance` itself, which moves
+every existing key with a boundary port (resource records, the calibrated platforms) -- a key
+migration (`waveflow/calib/migrate_keys.py`), not done unattended.
+
+**Not done:** grid discipline as a check (at least three values per feature, interior points held out
+-- stream_kernel's workload satisfies it, nothing enforces it); `cost_seconds` counts the fit step only,
+not the XSI run before it; the record's `tool` names Vitis without its version when the build config
+does not carry one.
 
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 

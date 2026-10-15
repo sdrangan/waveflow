@@ -169,11 +169,28 @@ class TimedPhase:
         from the seed."""
         if self._models is None:
             models = self.family.build(self)
+            stored = self._stored_params()
             for span, m in models.items():
+                if stored is not None and span in stored:
+                    m.load_params(stored[span])
+                    continue
                 path = self.calib_dir / f"{span}.json" if self.calib_dir is not None else None
                 m.load_or_default(path)
             self._models = models
         return self._models
+
+    def _stored_params(self) -> dict | None:
+        """``{span: params}`` from a record store, when :attr:`calib_dir` is one (it holds a
+        ``modules/`` directory, ``plans/unit_harness.md`` D7): the newest timed-phase record filed
+        under the owner's identity -- found from the identity alone, verified against it -- else
+        ``None`` (the per-span files, or the seed)."""
+        if self.calib_dir is None or self.owner is None or not (self.calib_dir / "modules").is_dir():
+            return None
+        from waveflow.calib.phases import stored_phases
+        from waveflow.calib.record_store import ModuleStore
+
+        rec = stored_phases(ModuleStore(self.calib_dir), self.owner)
+        return None if rec is None else rec.payload["phases"].get(self.name)
 
     def predict(self, **feats) -> dict[str, float]:
         """The predicted duration of every span, in cycles (never negative), for *feats* -- which must

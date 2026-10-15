@@ -138,4 +138,90 @@ def fit_phase(phase, rows: list[dict], holdout=None, save: bool = True) -> dict:
     return report
 
 
-__all__ = ["fit_phase", "phase_corpus", "rtl_xfers", "timed_ports"]
+# ---------------------------------------------------------------------------
+# Records under identity (plans/unit_harness.md D7, Stage 3)
+# ---------------------------------------------------------------------------
+
+#: The payload kind of a timed-phase calibration record in a :class:`~waveflow.calib.record_store.
+#: ModuleStore` (``target="timing"``).
+PHASE_RECORD_KIND = "timed_phases"
+
+
+def module_identity(module):
+    """*module*'s content-addressed identity **free of its context**: the key its phases are filed under
+    -- the same wherever the module sits (its harness, behind AXI-MM), since what its ports are bound
+    to is context, not structure.
+
+    ``identify_instance`` alone is not that: it exempts the boundary from the bound check but still
+    hashes each boundary port's ``queue_size`` -- the depth of whatever channel it is bound to, the
+    harness's 2 or a queue view's 256 -- so one kernel got two keys (measured on stream_kernel,
+    2026-10-15).  Here the boundary ports' depths are blanked for the hash.  Fixing that in the
+    identity itself would move every existing key with a boundary (``plans/unit_harness.md``, Stage 3
+    record); timed-phase records are new, so they start context-free."""
+    from waveflow.calib.module_key import boundary_endpoint_ids, identify_instance
+
+    exempt = boundary_endpoint_ids(module)
+    eps = [ep for ep in (getattr(module, "endpoints", {}) or {}).values()
+           if id(ep) in exempt and hasattr(ep, "queue_size")]
+    saved = [ep.queue_size for ep in eps]
+    try:
+        for ep in eps:
+            ep.queue_size = None
+        return identify_instance(module, exempt=exempt)
+    finally:
+        for ep, q in zip(eps, saved):
+            ep.queue_size = q
+
+
+def phase_record(module, fits: dict, *, workload: str, part: str = "", period_ns: float = 0.0,
+                 tool: str = "", cost_seconds: float = 0.0, source: str = "xsi"):
+    """One timing :class:`~waveflow.calib.record_store.Record` for *module*'s fitted phases: *fits* is
+    ``{phase: fit_phase report}``; the payload keeps each span's parameters, its residuals and the
+    workload's digest (what a repeat compares against)."""
+    from waveflow.calib.record_store import Provenance, Record
+
+    ident = module_identity(module)
+    phases, resid = {}, {}
+    for pname, rep in fits.items():
+        phases[pname] = {span: r["params"] for span, r in rep.items()}
+        resid[pname] = {span: max([abs(rtl - pred) for _f, rtl, pred in r["train"] + r["holdout"]]
+                                  or [0.0]) for span, r in rep.items()}
+    rec = Record(key=ident.key, target="timing", source=source, cost_seconds=float(cost_seconds),
+                 payload={"kind": PHASE_RECORD_KIND, "workload": workload, "phases": phases,
+                          "max_abs_residual": resid},
+                 provenance=Provenance(signature=ident.signature, part=part,
+                                       period_ns=float(period_ns), tool=tool))
+    return rec, ident
+
+
+def stored_phases(store, module, *, workload: str | None = None):
+    """The newest timed-phase record for *module* in *store* -- verified against its identity, so a
+    record of different hardware raises rather than loads -- or ``None``.  With *workload*, only a
+    record measured on that workload counts."""
+    ident = module_identity(module)
+    recs = [r for r in store.read(ident.key, "timing", identity=ident)
+            if r.payload.get("kind") == PHASE_RECORD_KIND
+            and (workload is None or r.payload.get("workload") == workload)]
+    return recs[-1] if recs else None
+
+
+def scenario_digest(sysm) -> str:
+    """A digest of the scenario *sysm* writes -- every byte its testbench plays -- written to a
+    scratch directory and hashed, so it is known without simulating.  Written by a fresh copy: writing
+    a scenario anchors the participants to where it was written, and the scratch is deleted."""
+    import hashlib
+    import tempfile
+
+    sysm = sysm.fresh()
+    h = hashlib.sha256()
+    with tempfile.TemporaryDirectory() as tmp:
+        sysm.write_scenario(tmp)
+        for f in sorted(Path(tmp).rglob("*")):
+            if f.is_file():
+                h.update(f.relative_to(tmp).as_posix().encode())
+                h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+__all__ = ["PHASE_RECORD_KIND", "fit_phase", "module_identity", "phase_corpus", "phase_record",
+           "rtl_xfers", "scenario_digest", "stored_phases", "timed_ports"]
