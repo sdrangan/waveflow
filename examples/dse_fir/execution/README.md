@@ -2,6 +2,15 @@
 
 **Objective:** use the same tools to explore different Waveflow designs. Fixed tests stay separate from candidate parameters; search policy stays outside the service.
 
+**For discussion:** [research presentation](presentation.html) — four sections, diagrams,
+measured Python results, presentation mode and optional speaker notes; appendix collapsed.
+Download/open the HTML, or serve the checkout locally. It is self-contained and works offline.
+
+**For the next implementer:** [synthesis / RTL handoff](HANDOFF.md) — extension points,
+artifact-binding requirements, the first hardware experiment and relevant recent upstream work.
+Reconcile with current `main` before hardware integration; the tested CPU snapshot predates
+substantial upstream changes. No main-branch merge or compatibility validation is implied.
+
 ## Run and inspect
 
 ```sh
