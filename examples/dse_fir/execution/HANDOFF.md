@@ -1,63 +1,85 @@
-# Synthesis / RTL collaborator handoff
+# Add synthesis and RTL
 
-## Start here
+Start with **MemCopy at 32 and 64 bits, using four 512-byte jobs**. Both settings
+already pass Python data checks. The next goal is to synthesize each setting, run
+its exact RTL output, and compare results under the same workload. The byte workload
+stays fixed while word count changes with width.
 
-- [Research presentation](presentation.html): question, structure, actual Python results, next experiment. Download/open the HTML or serve the repository locally; GitHub does not render it inline.
-- [Run the CPU demo](README.md) and [inspect recorded evidence](../evidence/execution_study.json).
-- [Execution contract](../EXECUTION_SURFACE.md): four tool signatures and evidence semantics.
+[Run the CPU demo](README.md) first. Work in `examples/dse_fir/execution/`, not the
+legacy six-tool service. The branch includes upstream `c10da3002a5e51cd56bbfc9538f017d0c849a6c2`; the merge and
+MCP SDK 2.x migration are covered in the [test record](../VERIFICATION.md).
 
-The implementation demonstrates real FIR and MemCopy Python execution. It does **not** yet execute synthesis or RTL through the shared service. The existing six-tool FIR replay pilot is separate; do not extend it by mistake.
+## Code to change
 
-## Upstream reconciled; hardware integration remains next
+- **`designs.py`** owns parameters, fixed conditions and design-specific execution.
+  Add build/check logic here. Keep target device, clock and toolchain settings fixed
+  for the experiment, rather than allowing the caller to change them per candidate.
+- **`service.py::ExecutionService.invoke`** validates requests and saves each attempt.
+  Add hardware dispatch here; keep design calculations in the adapter.
+- **`../tests/test_execution_service.py`** and **`test_execution_designs.py`** cover
+  transport, persistence and parameter propagation. Extend these tests for hardware.
 
-This branch merges `main` through `c10da3002a5e51cd56bbfc9538f017d0c849a6c2`, preserving history. Both execution surfaces now use upstream's MCP SDK 2.x `MCPServer`; strict validation, rejected-attempt persistence and real stdio transport are tested. Upstream's fixed-point array change is retained alongside our FIR headroom constraint. MemCopy's current `PySimStep` still receives candidate width and fixed byte workload correctly. See [verification results](../VERIFICATION.md), including three broader MCP failures reproduced on untouched upstream.
+Reuse `examples/mem_copy/mem_copy_build.py`. Its Python and codegen stages forward
+bus width, but `_write_scenario_bundles`, `_calibrated_pysim` and `_mem_copy_design`
+still use the default width. Trace factories also need candidate binding. Fix those
+paths before trusting a two-width hardware comparison. The RTL runner must consume
+the returned synthesis artifact, not merely declare an input while resolving a
+relative file list against whichever build directory happens to be current.
 
-Sundeep's recent merged work is directly relevant:
+## What must hold
 
-| Upstream work | Reuse / implication |
-|---|---|
-| [PR #280: unit harnesses, stages 2–4c](https://github.com/sdrangan/waveflow/pull/280) | `HwSystem`, `harness(module)`, memory harnesses, identity-bound calibration records and `MemCalibStep`. Prefer the maintained primitives over parallel adapter infrastructure. |
-| [PR #281: hostile stand-in policies](https://github.com/sdrangan/waveflow/pull/281) | Shared seeded stall/late-response/credit-starvation scenarios and `add_robustness_steps`. Add stress tests after the normal functional path works. |
-| [Simulation-speed evaluation](https://github.com/sdrangan/waveflow/blob/c10da3002a5e51cd56bbfc9538f017d0c849a6c2/docs/evaluation/sim_speed/index.md) | Separates setup from per-frame/transaction wall cost. Reuse its measurement discipline rather than interpreting this demo's cold-import timings as speedups. |
+1. **Build each candidate in its own directory.** Save a manifest with parameters,
+   source and artifact hashes, target, clock and tool versions. Extend `get_design`
+   identity to include HDL/C++ bodies, includes and build scripts, not just Python.
+2. **Run the exact synthesized artifact.** Use the successful synthesis run ID as
+   `synthesis_id`. Verify the manifest before RTL execution; reject missing, failed,
+   mismatched or changed artifacts. The existing ID check alone does not do this.
+   Saved artifact references must be existing files relative to the attempt directory.
+3. **Check all copied data and completions.** Verify completion count and echoed
+   transaction IDs. Separate `check_mem_copy_xsi_outputs` data/completion checks from
+   its fixed cycle-count assertion: new candidates need measured timing, not a known-answer
+   timing requirement. Record failures. A simulator exit code or VCD is not a correctness check.
+4. **Compare the same timing events.** Python `end_cycles` is simulation end; the
+   RTL checker measures last completion. Choose matched boundaries before comparing.
+   Report RTL cycles, HLS estimates and host wall time separately; preserve disagreements.
+   State event boundaries, for example first accepted command to last valid completion.
+5. **Stress and cross-design checks.** Apply upstream hostile policies after the normal
+   path works. Then check FIR discovery/Python and both transports through the same four tools.
 
-Upstream reports successful unit RTL checks, but its Markov composed-timing gate remains quarantined: 1,740 model cycles versus 1,870 RTL cycles. Those are upstream results, not measurements from this branch or proof that MemCopy timing is calibrated.
+Keep the four [tool signatures](../EXECUTION_SURFACE.md). Enable hardware capabilities
+only after these checks pass. Provisioned vendor tools are required, but installation
+alone does not implement the adapters. Do not substitute replay or introduce an
+optimizer/new tool interface to make this path work.
 
-The original pre-integration study remains in Git history at `71727ec`. New studies must use fresh roots because source and MCP dependency identities changed. Hardware adapters are still deliberately unavailable; merging upstream's hardware primitives does not itself implement them in this service.
+## Upstream work to reuse
 
-## Where to extend
+- [#280](https://github.com/sdrangan/waveflow/pull/280): `HwSystem`, unit harnesses,
+  memory harnesses and calibration records.
+- [#281](https://github.com/sdrangan/waveflow/pull/281): seeded stalls, delayed responses
+  and credit-starvation tests. Add these after the normal path works.
 
-| File / path | Current behavior → required work |
-|---|---|
-| `execution/service.py::ExecutionService.invoke` | Dispatches Python; hardware falls through to `unavailable`. Add hardware dispatch without moving workload logic into the service. `rtlsim` already validates that its ID identifies successful synthesis in the bound experiment. That guard alone is **not** artifact integrity checking. |
-| `execution/designs.py::Design` | Owns legal parameters, fixed conditions, metrics and capabilities. Add trusted build/evaluation implementations and enable capabilities only after their gates pass. Extend host conditions for fixed target/clock/toolchain settings; never make them arbitrary candidate fields. |
-| `execution/designs.py::get_design` | Current source closure hashes Python and selected dependency versions. Hardware identity must additionally cover HDL/C++ task bodies, includes, scripts, target, clock and tool versions. |
-| `examples/mem_copy/mem_copy_build.py` | Current upstream build path is included unchanged. DUT/testbench codegen forwards width, but `_write_scenario_bundles`, `_calibrated_pysim` and `_mem_copy_design` still use default width; trace factories also need candidate binding. Audit these before enabling a 32/64-bit hardware sweep. Python correctness is not evidence that this hardware chain propagates width. |
-| `tests/test_execution_service.py`, `test_execution_designs.py` | Protect strict transport, durable outcomes and actual candidate propagation. Add the new hardware evidence-contract tests here, with hardware execution gated appropriately. |
+Reuse `harness(module)`, `MemCalibStep` and identity-bound calibration records from
+#280, and `add_robustness_steps` from #281 rather than creating parallel infrastructure.
+The [simulation-speed study](https://github.com/sdrangan/waveflow/blob/c10da3002a5e51cd56bbfc9538f017d0c849a6c2/docs/evaluation/sim_speed/index.md)
+separates setup from per-frame/transaction cost; use that distinction for runtime measurements.
 
-Current artifact references must be existing files relative to the attempt directory. A synthesis manifest can be such a file. Use the successful synthesis run ID as the `synthesis_id`; RTL must resolve and verify its manifest, never select a build by whatever happens to exist in a mutable directory.
+Upstream's Markov composed-timing gate remains quarantined: 1,740 model cycles versus
+1,870 RTL cycles. These are upstream observations, not new branch measurements or
+proof of MemCopy calibration. Preserve that disagreement.
 
-## First hardware experiment
+The merge retains upstream's fixed-point array change and the FIR headroom constraint.
+The original pre-integration study remains at `71727ec`; refreshed evidence has new
+source/dependency identities. Merging hardware primitives does not enable live adapters.
 
-**MemCopy:** 32-bit and 64-bit buses; four jobs of 512 bytes each. The byte workload stays fixed while word count changes with width.
+## Local checks
 
-1. **Synthesis:** propagate the candidate through DUT generation, testbench/scenario generation and trace elaboration. Create an isolated build and record source, parameters, target, clock, toolchain and artifact hashes.
-2. **Artifact-bound RTL:** consume the exact successful synthesis artifact. Reject unknown, failed, mismatched or tampered bindings; record failures rather than dropping points.
-3. **Functional checks:** compare all destination data, completion count and echoed completion IDs. A simulator exit code or a VCD alone is not correctness evidence. Keep expected cycle counts separate from correctness.
-4. **Matched timing:** measure the same event boundaries in Python and RTL (for example first accepted command to last valid completion). Current Python `end_cycles` means simulation end and is not an interchangeable latency measure.
-5. **Reports:** distinguish HLS resource/clock estimates, RTL-observed cycles and host wall time. Preserve disagreements and unsupported fields. No physical timing-closure claim without implementation evidence.
-6. **Stress and cross-design regression:** apply relevant upstream hostile policies, then verify FIR discovery/Python and both transports still work through the same four tools.
+The [usage guide](README.md#test-or-extend-it) has the CPU and browser commands;
+Chrome is needed for browser checks. Vendor-tool checks need the provisioned machine.
+Run the demo into a fresh root and keep the raw directory alongside the exported study.
 
-Installing vendor tools alone does not complete these steps. Do not replace unavailable operations with replay. Do not introduce an optimizer or a new tool interface to make the hardware path work.
+## Hand back
 
-## Local gate and handback
-
-```sh
-uv sync --extra dev
-uv run pytest examples/dse_fir/tests -m 'not vitis and not xsi'
-uv run --no-project --with playwright python examples/dse_fir/tests/test_execution_visualizer.py
-uv run python -m examples.dse_fir.execution.demo --output ./execution-demo-new
-```
-
-Use a new output root whenever source, dependencies or conditions change. Retain raw run directories as well as the exported study. Browser checks require Chrome; hardware checks require the provisioned vendor-tool machine.
-
-Return: exact commit and tool versions; commands run; per-candidate correctness and timing/resource results; synthesis/RTL artifact IDs; raw reports/traces; exported review; and any failed or unsupported checks. Completion means both widths pass declared functional checks through the shared interface—not merely that synthesis produced files.
+Provide the commit, tool versions, commands, results for both widths, synthesis/RTL
+IDs, raw reports/traces, exported review and any failed or unsupported checks. Rerun the CPU and transport tests so FIR still
+works. Use fresh study roots after source changes. Done means both widths pass the
+declared functional checks through the shared interface, not merely that synthesis produced files.

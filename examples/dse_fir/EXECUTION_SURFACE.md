@@ -1,10 +1,15 @@
-# Problem-agnostic Waveflow execution surface
+# Execution contract
 
-**Direction reset, 2026-10-04.** The professor's diagram, supplied by Ashesh, defines the intended loop: discover design parameters, simulate, synthesize, verify RTL and compare performance. FIR illustrates the loop; it must not define the interface.
+The professor’s loop defines the interface; FIR illustrates it. This direction was
+agreed on 2026-10-04; the earlier FIR-first plan is retained as historical context.
 
-This document supersedes the FIR-first *architectural direction*, not the historical results. The [initial implementation](execution/README.md) now exposes the four operations through MCP/CLI, with real FIR and MemCopy Python execution. Synthesis/RTL contracts are exposed but live execution is not integrated. The original [plan](../../plans/mcp_fir.md) and six-tool pilot remain historical references.
+The host selects a registered design and fixes its test conditions. The caller can
+choose candidate parameters and which operation to run, but cannot change the test
+to make a candidate pass. Search and ranking remain outside the service.
 
-## Boundary
+FIR and MemCopy use this contract through CLI and MCP. Supporting another design
+requires an adapter with legal parameters, a model and checks; arbitrary Python
+is not automatically supported.
 
 ```mermaid
 flowchart TB
@@ -22,34 +27,48 @@ flowchart TB
     E --> A
 ```
 
+## Four operations
+
+| Call | Current result | Hardware extension |
+|---|---|---|
+| `get_param_list()` | Names, descriptions, types, defaults, legal domains and coupling constraints; fixed conditions, metrics, stage availability/reasons and known cost estimates | Advertise hardware only when implemented |
+| `pysim(params)` | Python metrics, checks, wall time and saved-file references | Unchanged |
+| `synth(params)` | `unavailable`, saved as an attempt | Generated/synthesized artifact, HLS resource/timing estimates, duration and result reference |
+| `rtlsim(synthesis_id)` | Rejects IDs without successful synthesis | Consume that exact successful artifact; return verification, observed latency/throughput, duration and trace/report references |
+
+Code generation is part of synthesis, not another agent tool. Resource prediction
+is optional; there is no mandatory `optimize()` call. Source editing is a separate
+authoring task. Objectives, constraints and scoring belong to the experiment,
+not the service. The
+[hardware handoff](execution/HANDOFF.md) describes the implementation work.
+
+## Who owns what
+
 | Owner | Responsibility |
 |---|---|
-| Design package | Model construction, legal parameter domains, build recipe, testbench and metric definitions |
-| Experiment | Fixed workload, reference/checks, device/clock, objective and constraints, execution limits |
-| Waveflow execution | Validate, run canonical stages, retain artifacts and report observations |
-| Agent or search algorithm | Choose candidates and evaluations; compare results; recommend a design |
-| MCP / CLI / Pi connector | Transport requests and observations; no domain calculations or search policy |
+| Design adapter | Legal values, model/build recipe, checks and metric meanings |
+| Host | Fixed workload and conditions; target/clock for future hardware runs |
+| Service | Validate, execute and save results |
+| Caller | Choose candidates, compare results and recommend a design |
+| CLI / MCP | Carry requests and results |
 
-Problem-agnostic means **the same operations and result envelope across registered designs**, not an automatic testbench or evaluator for arbitrary Python. Design-specific knowledge remains necessary, but below the interface. Objectives and scoring live with the experiment, not the generic execution service.
+Unknown fields and illegal values are rejected. Missing capabilities stay unavailable;
+replay must not masquerade as a new hardware measurement. Resolve designs and build
+steps from trusted registration, not caller-supplied imports or shell commands.
 
-## Minimal tool surface
+## Results and repeat runs
 
-A host binds the server to a registered design and fixed experiment at startup. The signatures are implemented; the synthesis/RTL outputs below remain the target contract. Current `synth` returns unavailable; `rtlsim` rejects IDs without successful synthesis evidence.
+Each attempt has its own ID, status, parameters, metrics with units, checks, evidence
+kind, wall time and file references. Hardware observations must also identify the
+source, test protocol, target and toolchain. The experiment records source/dependency identity and
+fixed conditions. Invalid, failed and unavailable attempts remain in the results.
 
-| Operation | Input | Output |
-|---|---|---|
-| `get_param_list()` | Bound experiment | Names, descriptions, types, defaults, domains and coupling constraints; fixed test conditions, metric definitions, available stages and known cost estimates |
-| `pysim(params)` | Candidate parameters | Functional/quality metrics, checks, modeled timing if supported, execution duration, result reference |
-| `synth(params)` | Candidate parameters | Generated/synthesized artifact reference, HLS resource/timing estimates, execution duration, result reference |
-| `rtlsim(synthesis_id)` | Exact successful synthesis artifact | Verification outcome, observed latency/throughput, execution duration, trace/report references |
+Repeated requests share a request ID but execute again with new attempt IDs and
+wall times. There is no execution cache. Changed source, dependencies or conditions
+require a new root. Use one caller per root; concurrency and crash recovery are
+not implemented. Retain the raw directory alongside the exported study.
 
-Use `get_run(run_id)` as supporting retrieval if runs outlive a tool call; it is not another hardware operation. Start with bounded synchronous calls where practical. Do not build a separate orchestration framework merely to wrap existing stages.
-
-Code generation is a synthesis dependency, not necessarily a separate agent tool. Resource prediction is an optional capability, not a prerequisite for every design. DSE is repeated use of these operations, not a mandatory `optimize()` tool. Architecture/source editing belongs to a separate authoring scope.
-
-The agent cannot change the test conditions or relax constraints through candidate parameters. Unknown fields and invalid combinations fail explicitly. Missing stages return unavailable, never fabricated measurements. Capability discovery includes unavailable stages and their reasons.
-
-## What “time” means
+## Read timing correctly
 
 | Quantity | Meaning | Comparison rule |
 |---|---|---|
@@ -60,9 +79,13 @@ The agent cannot change the test conditions or relax constraints through candida
 
 A Python simulation taking less wall time does not mean its hardware design is faster. A requested clock is not achieved timing. HLS resources are estimates, not post-route utilization. Successful RTL execution is not functional verification unless declared checks actually ran and passed.
 
-Each observation carries status, parameters, source/test/target/toolchain identities, metric definitions and units, evidence kind, timing and artifact references. Retain the original evaluation duration separately from cache-retrieval duration. Repeated timing attempts share a request identity but have distinct attempt identities; caching must not erase their measurements. Preserve discrepancies rather than replacing Python results with RTL results.
+MemCopy currently reports simulation end, not last completion. No execution cache
+is used in the current service; host timing includes first-use imports.
 
-## Reuse the repository
+Keep Python and RTL observations separate so disagreements remain visible.
+
+## Reuse existing build machinery
+
 
 | Existing primitive | Role and limit |
 |---|---|
@@ -74,18 +97,23 @@ Each observation carries status, parameters, source/test/target/toolchain identi
 
 Resolve paths and stage choices from trusted registration, not model-supplied shell commands or import paths. Bind synthesized artifacts to source, build parameters, target and toolchain. Bind each evaluation to its test protocol. Isolate or serialize mutable build directories; the shared DAG machinery is not proof of concurrent-run safety.
 
-### Non-FIR acceptance workload
+## Remaining stages
 
-Use [MemCopy](../mem_copy/mem_copy.py), whose [build DAG](../mem_copy/mem_copy_build.py) already connects Python simulation, code generation, synthesis and RTL tracing. Its Python adapter now executes through the same service as FIR, with fixed bytes per job across bus widths. The live hardware paths below remain unintegrated.
+1. **Shared CPU execution — demonstrated.** FIR and MemCopy use the same interface;
+   candidate changes affect the instantiated model, not just request metadata.
+2. **Synthesis → RTL — pending.** On a provisioned toolchain, check the exact generated
+   artifact under the fixed test. See the [handoff](execution/HANDOFF.md) for known gaps.
+3. **Timing study — pending.** Match Python/RTL event boundaries and measure host costs
+   separately, including phase, machine/toolchain, cache state, warmup and workload.
+4. **Agent/search benchmark — pending.** Compare deterministic search and agent-driven
+   search under the same objective and budget. The Pi adapter still uses the legacy API.
 
-Static review found requirements the adapter must resolve:
+<details>
+<summary>Earlier FIR work and deferred interface decisions</summary>
 
-- Propagate candidate width into scenario generation and trace elaboration, not just the DUT. `_write_scenario_bundles` currently leaves width at its default.
-- Bind the RTL runner's relative file list to the returned synthesis artifact; declaring a consumed artifact is insufficient when the runner ignores its value.
-- Separate `check_mem_copy_xsi_outputs` correctness/completion checks from its fixed cycle-count assertion. Unknown candidates need measured timing, not a known-answer timing requirement.
-- Measure the same completion event: current Python `end_cycles` is simulation end, whereas the RTL checker uses last completion.
-
-## Restructure the existing work
+The [original six-tool plan](../../plans/mcp_fir.md) and [pilot](LEGACY.md) remain
+historical references. The original transition plan below explains what to keep
+design-specific and what to reuse; it does not claim these files became a generic framework.
 
 | Current work | Treatment |
 |---|---|
@@ -95,12 +123,13 @@ Static review found requirements the adapter must resolve:
 | MCP, CLI and Pi adapters | Adapt to the common execution contract after it works without an agent. |
 | FIR benchmark and recovery tests | Preserve historical evidence. Defer additional harness-policy optimization until shared execution is established. |
 
-## Acceptance sequence
+If calls later become asynchronous, a supporting `get_run(run_id)` lookup may be
+needed; it is a proposal, not a fifth implemented tool. Start with bounded synchronous
+calls. No execution cache exists today; any future cache must distinguish original
+execution time from retrieval time. General package placement is undecided; the current
+implementation stays under `examples/dse_fir/execution/`.
 
-1. **Contract:** review the four operations against the professor's loop; keep fixed tests distinct from editable design parameters.
-2. **Cross-design execution:** expose FIR and MemCopy through the same schemas/service, using their existing build recipes and resolving the gaps above. No FIR fields or ranking in the shared layer. Parameter changes must affect the actual instantiated design.
-3. **Synthesis-to-RTL continuity:** on a provisioned toolchain machine, produce RTL, consume that exact artifact, execute declared correctness checks and report measured timing. Local replay tests cannot close this gate.
-4. **Timing study:** compare matched Python/RTL events and separately measure execution costs; retain failed and unsupported points.
-5. **DSE:** run deterministic search, then Pi-driven search against the same fixed experiments and budgets. Score feasible design quality and cost; harness ablations are secondary.
+</details>
 
-Repository-wide placement remains a follow-up decision: the working constraint permits new code only under `examples/dse_fir/`, so the initial shared surface lives in `execution/`. CPU cross-design execution is demonstrated; live hardware validation, general arbitrary-design support and optimization performance are not.
+[Usage](execution/README.md) · [Hardware handoff](execution/HANDOFF.md) ·
+[Test results](VERIFICATION.md) · [Legacy FIR pilot](LEGACY.md)
