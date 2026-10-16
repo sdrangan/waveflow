@@ -66,11 +66,16 @@ def rtl_xfers(vcd_path, module, scope: str) -> dict[str, list[tuple]]:
     for ep_name, (ep, port) in timed_ports(module).items():
         sigs, _ = vp.add_axiss_signals(name=f"{scope}.{port}_", short_name_prefix=port,
                                        ignore_multiple=True)
-        if "tlast" not in sigs or sigs.get("tlast") is None:
-            raise KeyError(f"{vcd_path}: port '{port}' has no TLAST in the trace -- its transfers "
-                           f"cannot be framed from the wire")
-        bursts, _period = vp.extract_axis_bursts(clk, sigs)
         hold = 2 if _is_output(ep) else 1          # stall: not ready (output); idle: not valid (input)
+        if "tlast" not in sigs or sigs.get("tlast") is None:
+            # No TLAST pin (a plain ap_uint stream: a credit stream's data half, say): the wire has
+            # no packet boundary, so frame its beats by the word counts pysim logged on the same
+            # endpoint -- legal for the reason the whole join is (both sides carry the same words).
+            bursts, _period = vp.extract_axis_bursts(clk, {**sigs, "tlast": None})
+            out[ep_name] = _frame_by_counts(bursts, [r[3] for r in ep.xfer_log or []], hold,
+                                            f"{vcd_path}: port '{port}'")
+            continue
+        bursts, _period = vp.extract_axis_bursts(clk, sigs)
         rows = []
         for k, b in enumerate(bursts):
             if not b.get("complete", True):
@@ -81,6 +86,30 @@ def rtl_xfers(vcd_path, module, scope: str) -> dict[str, list[tuple]]:
                          hold in b["beat_type"]))
         out[ep_name] = rows
     return out
+
+
+def _frame_by_counts(bursts, counts: list[int], hold: int, what: str) -> list[tuple]:
+    """The rows of an unframed channel (one burst of every accepted beat, ``walk_handshake_bursts``)
+    split into transfers of *counts* words, in order: ``(index, first, last, nwords, stalled)``, the
+    beat cycles of each transfer's first and last word, and whether a *hold* cycle (the other side's)
+    fell between them.  Refuses a count total the wire does not have: then the two runs did not carry
+    the same words, and no timing can be read from them."""
+    if not bursts:
+        beats, kinds, start = [], [], 0
+    else:
+        (b,) = bursts
+        kinds, start = list(b["beat_type"]), int(b["start_idx"])
+        beats = [start + i for i, k in enumerate(kinds) if k == 0]
+    if sum(counts) != len(beats):
+        raise ValueError(f"{what}: pysim logged {sum(counts)} words in {len(counts)} transfers, the "
+                         f"trace has {len(beats)} beats -- the runs differ, nothing to frame")
+    rows, i = [], 0
+    for k, n in enumerate(counts):
+        first, last = beats[i], beats[i + n - 1]
+        stalled = hold in kinds[first - start:last - start + 1]
+        rows.append((k, float(first), float(last), int(n), stalled))
+        i += n
+    return rows
 
 
 def phase_corpus(phase, rtl: dict[str, list[tuple]]) -> list[dict]:
@@ -127,7 +156,13 @@ def fit_phase(phase, rows: list[dict], holdout=None, save: bool = True) -> dict:
         test = [r for r in mine if held({f: r[f] for f in phase.features})]
         if not train:
             raise RuntimeError(f"phase {phase.name!r}, span {span!r}: no clean training row")
-        if phase.features:
+        bound = span in getattr(phase, "lower_bounds", ())
+        if bound:
+            # A lower bound (one of several leads to one event): only the rows where it was the one
+            # that held the event back sit on it; the rest are above.  Fit the lower envelope -- refit
+            # on the rows at or below the fit until they stop changing.
+            train = _lower_envelope(phase, span, model, train)
+        elif phase.features:
             df = pd.DataFrame([{**{f: r[f] for f in phase.features}, span: r["rtl"]} for r in train])
             model.fit(df)
         else:
@@ -151,6 +186,30 @@ def fit_phase(phase, rows: list[dict], holdout=None, save: bool = True) -> dict:
 #: The payload kind of a timed-phase calibration record in a :class:`~waveflow.calib.record_store.
 #: ModuleStore` (``target="timing"``).
 PHASE_RECORD_KIND = "timed_phases"
+
+
+def _lower_envelope(phase, span, model, rows, tol: float = 0.5, rounds: int = 20) -> list[dict]:
+    """Fit *model* (span *span* of *phase*) to the lower envelope of *rows*: start from all of them,
+    then keep refitting on those at or below the fit (within *tol* cycles).  Returns the rows it ended
+    on -- the ones the bound held."""
+    import pandas as pd
+
+    def fit(rs):
+        if phase.features:
+            model.fit(pd.DataFrame([{**{f: r[f] for f in phase.features}, span: r["rtl"]} for r in rs]))
+        else:
+            model.load_params({"intercept": float(min(r["rtl"] for r in rs))})
+
+    keep = list(rows)
+    fit(keep)
+    for _ in range(rounds):
+        below = [r for r in rows
+                 if r["rtl"] <= float(model.predict_feat({f: r[f] for f in phase.features})) + tol]
+        if not below or len(below) == len(keep):
+            break
+        keep = below
+        fit(keep)
+    return keep
 
 
 def module_identity(module):
@@ -200,6 +259,21 @@ def module_identity(module):
             setattr(module, a, v)
 
 
+def phase_declaration(module) -> dict:
+    """What *module*'s timed phases are, as a record states it: per phase, its features and each
+    span's two events (``"<port>.<edge>"``, by RTL port name).  A record fitted to other spans or
+    features is not this module's calibration, whatever its identity says -- phases are context, so
+    the identity does not move when they do."""
+    ports = {ep_name: port for ep_name, (_ep, port) in timed_ports(module).items()}
+    out = {}
+    for ph in getattr(module, "timing_phases", {}).values():
+        out[ph.name] = {
+            "features": list(ph.features),
+            "spans": {s: [f"{ports[a.ep.name]}.{a.edge}", f"{ports[b.ep.name]}.{b.edge}"]
+                      for s, (a, b) in ph.spans.items()}}
+    return out
+
+
 def phase_record(module, fits: dict, *, workload: str, part: str = "", period_ns: float = 0.0,
                  tool: str = "", cost_seconds: float = 0.0, source: str = "xsi"):
     """One timing :class:`~waveflow.calib.record_store.Record` for *module*'s fitted phases: *fits* is
@@ -215,7 +289,7 @@ def phase_record(module, fits: dict, *, workload: str, part: str = "", period_ns
                                   or [0.0]) for span, r in rep.items()}
     rec = Record(key=ident.key, target="timing", source=source, cost_seconds=float(cost_seconds),
                  payload={"kind": PHASE_RECORD_KIND, "workload": workload, "phases": phases,
-                          "max_abs_residual": resid},
+                          "declared": phase_declaration(module), "max_abs_residual": resid},
                  provenance=Provenance(signature=ident.signature, part=part,
                                        period_ns=float(period_ns), tool=tool))
     return rec, ident
@@ -223,11 +297,15 @@ def phase_record(module, fits: dict, *, workload: str, part: str = "", period_ns
 
 def stored_phases(store, module, *, workload: str | None = None):
     """The newest timed-phase record for *module* in *store* -- verified against its identity, so a
-    record of different hardware raises rather than loads -- or ``None``.  With *workload*, only a
-    record measured on that workload counts."""
+    record of different hardware raises rather than loads -- or ``None``.  Only a record of the phases
+    as declared now counts (:func:`phase_declaration`): one fitted to other spans would load the wrong
+    numbers, and a repeat would mistake it for this calibration.  With *workload*, only a record
+    measured on that workload counts."""
     ident = module_identity(module)
+    declared = phase_declaration(module)
     recs = [r for r in store.read(ident.key, "timing", identity=ident)
             if r.payload.get("kind") == PHASE_RECORD_KIND
+            and r.payload.get("declared") == declared
             and (workload is None or r.payload.get("workload") == workload)]
     return recs[-1] if recs else None
 
@@ -251,4 +329,4 @@ def scenario_digest(sysm) -> str:
 
 
 __all__ = ["PHASE_RECORD_KIND", "fit_phase", "module_identity", "phase_corpus", "phase_record",
-           "rtl_xfers", "scenario_digest", "stored_phases", "timed_ports"]
+           "phase_declaration", "rtl_xfers", "scenario_digest", "stored_phases", "timed_ports"]

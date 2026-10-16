@@ -155,6 +155,12 @@ class TimedPhase:
         #: Where fitted parameters live (``<calib_dir>/<span>.json``); ``None``: the seed only.
         self.calib_dir = Path(calib_dir) if calib_dir is not None else None
         self.family = tm if tm is not None else LinearTiming()
+        #: Spans that share their end event with another: each a LOWER BOUND on that event (it comes
+        #: when every one of them allows), fitted to the lower envelope of its rows (``fit_phase``).
+        ends: dict = {}
+        for s, (_a, b) in self.spans.items():
+            ends.setdefault((id(b.ep), b.edge), []).append(s)
+        self.lower_bounds: frozenset[str] = frozenset(s for g in ends.values() if len(g) > 1 for s in g)
         self.owner = None
         self.records: list[PhaseRecord] = []
         self._models: dict | None = None
@@ -347,8 +353,11 @@ class TimedPhase:
         phase.produce(self.m_u, chunk, c=c)``: the write's first beat comes the declared *lead* after
         the lead's start event, and its last the declared *fill* after its first.
 
-        The phase declares two spans: the lead, from any event of the module's (the latest transfer
-        there) to the write's ``first``; the fill, from its ``first`` to its ``last``.  On a credit
+        The phase declares a fill, from the write's ``first`` to its ``last``, and one or more leads,
+        each from an event of the module's (the latest transfer there) to the write's ``first``.  With
+        several, the write starts when **every** lead allows -- the latest of them: a chain's states
+        need both their turn and their draws.  Each such lead is a lower bound
+        (:attr:`lower_bounds`).  On a credit
         stream (*ep* a :class:`~waveflow.hw.reverse_stream.CreditStreamMasterIF`) the events are its
         forward half's, and the write waits for room before it begins.  An occurrence the environment
         delayed -- the start late for want of room or input, the end for want of a reader -- is marked
@@ -358,23 +367,27 @@ class TimedPhase:
                                f"add_timing_phase(phase) in __post_init__")
         self._check_features(feats)
         phys = getattr(ep, "fwd_ep", ep)
-        lead, fill = self._produce_spans(phys)
-        start = self.spans[lead][0]
-        log = start.ep.xfer_log
-        used = self._used.get(start.ep.name, -1)
-        if not log or log[-1][0] <= used:
-            raise RuntimeError(
-                f"phase {self.name!r}: span {lead!r} starts at {start!r}, but '{start.ep.name}' has no "
-                f"transfer since this phase last ran")
-        index, first, last, _n, _st = log[-1]
-        self._used[start.ep.name] = index
-        t0 = first if start.edge == "first" else last
+        leads, fill = self._produce_spans(phys)
         env, per = self.owner.env, self._period(phys)
         pred = self.predict(**feats)
+        starts = {}
+        for lead in leads:
+            start = self.spans[lead][0]
+            log = start.ep.xfer_log
+            used = self._used.get(start.ep.name, -1)
+            if not log or log[-1][0] <= used:
+                raise RuntimeError(
+                    f"phase {self.name!r}: span {lead!r} starts at {start!r}, but '{start.ep.name}' "
+                    f"has no transfer since this phase last ran")
+            index, first, last, _n, _st = log[-1]
+            starts[lead] = (start, index, first if start.edge == "first" else last)
+        for start, index, _t in starts.values():
+            self._used[start.ep.name] = index
+        due = max(t + pred[lead] * per for lead, (_s, _i, t) in starts.items())
 
-        yield _until(env, t0 + pred[lead] * per - per)        # the first beat a cycle after begin
+        yield _until(env, due - per)                         # the first beat a cycle after begin
         sx = yield from ep.begin(data)
-        late = sx.first > t0 + pred[lead] * per + 1e-6 * per
+        late = sx.first > due + 1e-6 * per
         yield _until(env, sx.first + pred[fill] * per)
         t_ready = env.now
         yield from ep.end(sx)
@@ -384,26 +397,29 @@ class TimedPhase:
 
         occ = self._occurrences
         self._occurrences += 1
-        self.records.append(PhaseRecord(
-            self.name, lead, occ, (start.ep.name, index, start.edge, t0), dict(feats), pred[lead],
-            end=(phys.name, sx.index, "first", sx.first), actual=(sx.first - t0) / per, stalled=late))
+        for lead, (start, index, t0) in starts.items():
+            self.records.append(PhaseRecord(
+                self.name, lead, occ, (start.ep.name, index, start.edge, t0), dict(feats), pred[lead],
+                end=(phys.name, sx.index, "first", sx.first), actual=(sx.first - t0) / per,
+                stalled=late))
         self.records.append(PhaseRecord(
             self.name, fill, occ, (phys.name, sx.index, "first", sx.first), dict(feats), pred[fill],
             end=(phys.name, sx.index, "last", sx.last), actual=(sx.last - sx.first) / per,
             stalled=held))
         return sx
 
-    def _produce_spans(self, ep) -> tuple[str, str]:
-        """The (lead, fill) span names: the one ending at *ep*'s ``first`` and the one from its
-        ``first`` to its ``last``."""
+    def _produce_spans(self, ep) -> tuple[list[str], str]:
+        """The lead span names (each ending at *ep*'s ``first``) and the fill's (from its ``first`` to
+        its ``last``)."""
         lead = [s for s, (a, b) in self.spans.items() if b.ep is ep and b.edge == "first"]
         fill = [s for s, (a, b) in self.spans.items()
                 if a.ep is ep and a.edge == "first" and b.ep is ep and b.edge == "last"]
-        if len(self.spans) != 2 or len(lead) != 1 or len(fill) != 1:
+        if len(lead) < 1 or len(fill) != 1 or len(lead) + 1 != len(self.spans):
             raise RuntimeError(
-                f"phase {self.name!r}: produce() on '{ep.name}' needs two spans -- (any event, "
-                f"{ep.name}.first) and ({ep.name}.first, {ep.name}.last); it declares {self.spans!r}")
-        return lead[0], fill[0]
+                f"phase {self.name!r}: produce() on '{ep.name}' needs one or more leads (any event, "
+                f"{ep.name}.first) and one fill ({ep.name}.first, {ep.name}.last); it declares "
+                f"{self.spans!r}")
+        return lead, fill[0]
 
     def _pipeline_spans(self, load_ep, store_ep) -> tuple[str, str]:
         """The (latency, fill) span names, found by their events; refuses a call whose endpoints are
