@@ -22,7 +22,7 @@ from waveflow.mcp.knowledge import (
 from waveflow.mcp.knowledge.corpus import TOC_DIR, parse_front_matter
 from waveflow.mcp.knowledge.roots import repo_root
 
-#: The docs TOC as of 2026-10-06 (ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
+#: The docs TOC as of 2026-10-16 (stream_kernel added; 2026-10-06: ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
 #: deliberate two-line change rather than something that happens by accident,
 #: and so the count in the plan stays honest.
 TOC_EXAMPLES = {
@@ -43,6 +43,7 @@ TOC_EXAMPLES = {
     "shared_mem",
     "ssr_fft",
     "stream_inband",
+    "stream_kernel",
     "vecmult",
     "vitis_fft",
     "xbar_profile",

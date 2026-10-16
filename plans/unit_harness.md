@@ -248,11 +248,11 @@ existing 5% from composition alone -- or a written account of what the decomposi
 harness; any hang or mismatch is a finding.  Gate: the policies run on every harness; what they find is
 fixed or recorded with a reproducer.
 
-**Stage 6 -- incremental, end to end.**  Change one `SynthUnit`'s parameter: only its harness rebuilds,
+**Stage 6 -- incremental, end to end.  DONE (record below).**  Change one `SynthUnit`'s parameter: only its harness rebuilds,
 only its synthesis re-runs, its parents' estimates update from records.  Gate: the events show no work
 for unchanged units.
 
-**Stage 7 -- docs.**  The free-running poly becomes **the first example in the docs** (the user,
+**Stage 7 -- docs.  DONE (record below).**  The free-running poly becomes **the first example in the docs** (the user,
 2026-10-14: the host-activated examples are to be retired over time).  It teaches, in order: the
 command-response protocol, the golden, the kernel and its HLS body, the system flow, timed phases, the
 harness and calibration, then the memory-mapped composite.  A guide page on module-level development:
@@ -738,6 +738,60 @@ late answers.  Then each bites: generator 1436 -> 3098 (stall) and 4633 (starved
 **Findings: none.**  Every run finishes with exactly pysim's words.  Not covered: the device harness
 (`dev_`), whose testbench is a software host with its own C++ model -- a host policy is that model's
 to implement.
+
+## Record: Stage 6 (2026-10-16), incremental -- the gate met
+
+**The knob.**  `MarkovGen.gen_ii` (`HwParam`): the draw loop's pipeline interval (`#pragma HLS PIPELINE
+II=II`, a template argument of `markov_gen_task`).  The generator's alone -- its RTL and pace, no contract
+with the chain.  `build_dag(gen_ii=...)` threads it through codegen, the system and the generator's
+harness.  Adding the parameter moved the generator's identity (`markov_gen-26326038` at 1; the old
+`3619dd90` is gone); at 2 it is `961bfeb2`, calibrated alone too.
+
+**Fresh by a digest** (`waveflow/build/freshness.py`).  Every system step (`_SystemStep`: scenario,
+pysim, `system_rtl`, `system_xsi`, compare, a calibration) was never fresh.  Now each is fresh while
+one digest of what it reads equals the one it last succeeded with: the DUT's structure, the testbench's
+knobs, every non-framework class's source and the framework's, the scenario -- and, for the steps that
+read them, the tops' RTL stamps (`uses_rtl`: not scenario, not pysim) and the calibration records the
+modules load, each its own by identity (`uses_records`: pysim only).  The digest is taken **before** the
+step runs (a run moves what the modules' identities hash) and stamped after it succeeds (`BuildDag` calls
+a step's `after_run`).  A calibrating system leaves its own records out (it writes them); a cached
+calibration is fresh while its report names the same records.  A parent's pysim runs after its units'
+calibrations (`add_system_steps(after=...)`, `BuildDag.require`), so its estimate is composed from what
+they just filed.  Steady state: an unchanged markov build runs `codegen` only (Python, seconds; csynth
+decides by content).
+
+**Found on the way**: a digest of participants by name moved between builds (an unnamed endpoint takes
+a process-wide counter's name: `stream_if_slave0` against `stream_if_slave7`) -- only knob-carrying
+participants are listed now; and `TaskInst.inst_name` was wrong for a framed port's word type, which
+Vitis spells into the instance (`..._axis_U0`, `..._framed_word_64_U0`; checked against the RTL).
+
+**The gate** (`tests/examples/test_incremental_units.py`, `-m vitis`): warm at `gen_ii=1`, then at 2 --
+csynth re-ran `markov_gen` alone of the five tops; the generator's harness, its calibration (fitted
+afresh, a new identity) and the full system re-ran; **the chain core's and the memory's harnesses,
+calibrations and checks did nothing**.  The composition held at the new point: pysim 2804 against RTL
+2854 (-1.75%), from the generator calibrated alone at II=2 and the unchanged core and memory records.
+Back to 1: `markov_gen` re-synthesized, its calibration a cache hit, nothing else.
+
+## Record: Stage 7 (2026-10-16), docs
+
+**The free-running poly is the first example** (`docs/examples/stream_kernel/`, nav order 0.5; the
+landing page starts there; `stream_inband` points to it).  Its pages teach in the order the stage asks:
+the protocol, the golden, the kernel and its HLS body (and the generated top), the system flow (the
+harness from the ports; csynth, `system_rtl`, scenario / pysim, `system_xsi`, compare -- named and
+linked), timing (two phases calibrated in the harness: latency 30, fill `nwords - 1`, response 4, all
+exact; the record under the kernel's identity), and the memory-mapped composite (queue views, the
+two-thread host, the composition check: +1.0% behind the crossbar, +3.2% as the device alone).  The
+curated set is twenty-one (`tests/mcp/test_knowledge_corpus.py` pins it; CLAUDE.md says so).
+
+**The guide page** `docs/guide/flows/units.md` (*Developing module by module*, under *Hardware modules
+and Flows*): a unit is any module in the tree; the harness and the stand-ins by port type, with their C++
+twins; hostile policies; calibrating a leaf (the three patterns, the record under identity with its
+phases); composing and verifying a parent (+1.0%, -1.6%; how markov's miss located what was unmodeled);
+incremental builds.  `docs/guide/build/xsi_system.md` has the freshness rule.
+
+**Every number quoted has a gate or a record** (Vitis / Vivado 2025.1): the calibration in
+`examples/stream_kernel/calib/`, the cycle counts in `tests/examples/test_stream_kernel_mm.py`, markov's
+in `test_markov_xsi.py`.
 
 ## Part B -- the `SynthUnit` as an agent boundary (sketch)
 

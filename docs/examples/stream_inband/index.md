@@ -9,6 +9,11 @@ summary: "The command-response contract between a host and a streaming kernel, t
 
 # Streaming polynomial: the command-response contract
 
+{: .note }
+> Start with [Free-running polynomial](../stream_kernel/index.md): the same arithmetic as a free-running
+> kernel, the shape most accelerators take and the one the docs now teach first. This page is the
+> host-activated form, with `ap_start`, `ap_done` and a status register.
+
 What is the contract between a host and a command-driven streaming kernel?  This example
 answers it with a small accelerator that evaluates a polynomial
 
