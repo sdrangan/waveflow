@@ -92,9 +92,10 @@ def scenario_jobs() -> list[dict]:
     return default_jobs(NJOBS, NSTEPS)
 
 
-def system() -> MarkovSystem:
-    """The system the DAG runs -- in pysim, and at RTL -- on the scenario."""
-    return MarkovSystem(jobs=scenario_jobs(), link="mm")
+def system(gen_ii: int = 1) -> MarkovSystem:
+    """The system the DAG runs -- in pysim, and at RTL -- on the scenario.  *gen_ii*: the generator's
+    draw interval (``MarkovGen.gen_ii``)."""
+    return MarkovSystem(jobs=scenario_jobs(), link="mm", gen_ii=gen_ii)
 
 
 def gen_headers(root: Path = HERE) -> None:
@@ -117,8 +118,8 @@ def gen_headers(root: Path = HERE) -> None:
     copy_credit_header(root / INCLUDE_DIR)
 
 
-def gen_top(cls, root: Path = HERE) -> Path:
-    mod = cls(name=cls.cpp_kernel_name, sim=Simulation())
+def gen_top(cls, root: Path = HERE, **params) -> Path:
+    mod = cls(name=cls.cpp_kernel_name, sim=Simulation(), **params)
     spec = composite_top_spec(mod, width=DW)
     gen = root / GEN_DIR
     gen.mkdir(parents=True, exist_ok=True)
@@ -128,7 +129,7 @@ def gen_top(cls, root: Path = HERE) -> Path:
     return cpp
 
 
-def generate(root: Path = HERE) -> list[str]:
+def generate(root: Path = HERE, gen_ii: int = 1) -> list[str]:
     """Everything before csynth -- headers, the two kernel tops, the two bus-writer tops, each with
     its ``.tcl`` -- and the names of the four tops.  Python only, seconds, no toolchain.
 
@@ -136,7 +137,8 @@ def generate(root: Path = HERE) -> list[str]:
     untracked copies, so only regenerating them makes a pulled change to a framework header, a schema
     or a generator show up as a changed source (``trace_steps.rtl_staleness``)."""
     gen_headers(root)
-    names = [gen_top(cls, root).stem for cls in TOPS]
+    names = [gen_top(cls, root, **({"gen_ii": gen_ii} if cls is MarkovGen else {})).stem
+             for cls in TOPS]
     for cls in UNIT_TOPS:
         gen_top(cls, root)
     names += [write_writer_project(root, mode, DW, maxp) for mode, maxp in WRITERS]
@@ -159,26 +161,38 @@ class MarkovCodegenStep(BuildStep):
     description = "Generate the headers, the two kernel tops and the two bus-writer tops, with their .tcl."
     params: ClassVar[dict] = {}
     produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
+    gen_ii: int = 1
 
     def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
         return False
 
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         root = Path(config.root_dir)
-        generate(root)
+        generate(root, gen_ii=self.gen_ii)
         return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
 
 
-def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
-    """``codegen``, then the framework's system steps for :func:`system` (``csynth`` -> ``system_rtl``;
-    ``scenario`` / ``pysim``; ``system_xsi`` -> ``compare``), and the docs figure beside them.  *probes* builds the
-    system top with :func:`~examples.markov.markov.timing_probes` (workspace ``markov_probes``)."""
+def build_dag(probes: bool = False, work_dir=WORK_DIR, gen_ii: int = 1) -> BuildDag:
+    """``codegen``; each unit alone in its harness, calibrated and swept over the hostile policies; then
+    the framework's system steps for :func:`system` (``csynth`` -> ``system_rtl``; ``scenario`` /
+    ``pysim``; ``system_xsi`` -> ``compare``) -- its pysim after the units' calibrations, so its
+    estimate is composed from their records -- and the docs figures beside them.  *probes* builds the
+    system top with :func:`~examples.markov.markov.timing_probes` (workspace ``markov_probes``);
+    *gen_ii* is the generator's draw interval (``MarkovGen.gen_ii``, ``plans/unit_harness.md`` Stage 6).
+
+    Every system step is fresh while what it depends on is unchanged (``waveflow.build.freshness``):
+    change one unit and only that unit, and the systems holding it, do any work."""
     from examples.markov.markov_figures import MarkovFiguresStep, SyncDocsFiguresStep
     from examples.markov.markov_routes import MarkovRoutesStep, SyncRoutesFigureStep
+    from waveflow.build.robustness import add_robustness_steps
 
-    sysm = system()
     dag = BuildDag()
-    dag.add(MarkovCodegenStep(name="codegen"))
+    dag.add(MarkovCodegenStep(name="codegen", gen_ii=gen_ii))
+    store = ModuleStore(HERE / "calib")
+
+    # The system first (its csynth is the one named ``csynth``): its units composed, its pysim after
+    # their calibrations (Stage 6), required once the unit steps below exist.
+    sysm = system(gen_ii)
     xsi = add_system_steps(dag, sysm, work_dir=work_dir, top=TOP, xbar_name=XBAR_NAME,
                            workspace=WORKSPACE, probes=timing_probes(sysm) if probes else None)
     dag.add(MarkovFiguresStep(name="markov_figures"))
@@ -186,32 +200,39 @@ def build_dag(probes: bool = False, work_dir=WORK_DIR) -> BuildDag:
     # Both synthesis routes, measured, for the docs (opt-in: minutes of Vivado cold).
     dag.add(MarkovRoutesStep(name="markov_routes", rtl=xsi.rtl))
     dag.add(SyncRoutesFigureStep(name="sync_routes_figure"))
-    # Each kernel alone, in its own harness (plans/unit_harness.md Stage 4): the generator against a
-    # credit sink, the chain's core against a credit source -- traced; and each one's timed phases
-    # fitted on its calibration workload, filed under its identity in calib/ (the store asked first).
-    store = ModuleStore(HERE / "calib")
-    for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
-                             ("ucore_", "markov_core_unit", ChainCore)):
-        unit = harness(cls, workload="test")
-        add_system_steps(dag, unit, work_dir=work_dir, top=top, prefix=prefix, trace=True)
-        add_calib_steps(dag, unit, work_dir=work_dir, top=top, prefix=f"{prefix}calib_", store=store)
+
+    def gen():
+        return MarkovGen(name="gen", sim=Simulation(), gen_ii=gen_ii)
+
+    # Each kernel alone, in its own harness (Stage 4): the generator against a credit sink, the
+    # chain's core against a credit source -- traced; each one's timed phases fitted on its
+    # calibration workload, filed under its identity in calib/ (the store asked first).
+    calibrated = []
+    for prefix, top, unit in (("ugen_", "markov_gen_unit", gen),
+                              ("ucore_", "markov_core_unit", lambda: ChainCore)):
+        sysm = harness(unit(), workload="test")
+        add_system_steps(dag, sysm, work_dir=work_dir, top=top, prefix=prefix, trace=True)
+        step = add_calib_steps(dag, sysm, work_dir=work_dir, top=top, prefix=f"{prefix}calib_",
+                               store=store)
+        calibrated.append(step.a("phase_calib"))
     # The memory alone (Stage 4c): its slot behind a direct link, a scripted master as the testbench.
     # Calibrated on a memory that loads no timing, filed in calib/; then checked, loading it.
     uncal = memory_harness(lambda sim: markov_memory(sim, calibrated=False), mem_script("calib"),
                            n_cycles=20000)
     xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="markov_mem_unit", prefix="umemcal_")
-    dag.add(MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=store))
+    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=store)
+    dag.add(mem_cal)
+    calibrated.append(mem_cal.a("mem_timing"))
     add_system_steps(dag, memory_harness(markov_memory, mem_script("test")), work_dir=work_dir,
                      top="markov_mem_unit", prefix="umem_")
     # Each unit under each hostile policy (Stage 5): <unit>rob_<policy>_*.
-    from waveflow.build.robustness import add_robustness_steps
-
-    for prefix, top, cls in (("ugen_", "markov_gen_unit", MarkovGen),
-                             ("ucore_", "markov_core_unit", ChainCore)):
-        add_robustness_steps(dag, lambda p, cls=cls: harness(cls, workload="test", policy=p),
+    for prefix, top, unit in (("ugen_", "markov_gen_unit", gen),
+                              ("ucore_", "markov_core_unit", lambda: ChainCore)):
+        add_robustness_steps(dag, lambda p, unit=unit: harness(unit(), workload="test", policy=p),
                              work_dir=work_dir, top=top, prefix=f"{prefix}rob_")
     add_robustness_steps(dag, lambda p: memory_harness(markov_memory, mem_script("test"), policy=p),
                          work_dir=work_dir, top="markov_mem_unit", prefix="umem_rob_")
+    dag.require("pysim", calibrated)
     return dag
 
 

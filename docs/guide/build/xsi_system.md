@@ -331,6 +331,27 @@ stamp covers all of `include/` and `src/`, so an edit there re-runs every top; a
   the top and the source that changed. A gate never hides a 40-second csynth, and never runs against RTL
   built from other sources.
 
+### The other steps: fresh while nothing they read changed {#system-freshness}
+
+The system's own steps (scenario, pysim, `system_rtl`, `system_xsi`, compare, and a calibration) are
+fresh while one digest of what they read is the one they last succeeded with
+([`freshness`](../../../waveflow/build/freshness.py)). The digest covers:
+
+- the DUT's structure and the testbench participants' knobs (bundles, policies);
+- the source of every class in the system, and the framework itself;
+- the scenario;
+- for the steps that read RTL, the source stamps of the system's tops;
+- for pysim, the calibration records its modules load, each module's own, found by its identity.
+
+So in a build of several systems -- a design and each of its units in its own harness -- a unit nobody
+changed does no work. Change one unit's build parameter and only that unit's csynth, harness and
+calibration re-run, with every system that holds it: markov's generator at a new draw interval
+re-synthesizes one of five tops and re-runs the generator's harness and the full system, while the
+chain core's and the memory's harnesses skip (`tests/examples/test_incremental_units.py`). A parent's
+pysim runs after its units' calibrations (`add_system_steps(..., after=...)`, or `dag.require`), so its
+estimate is composed from the records they just filed. `codegen` still regenerates every time: it is
+Python only, and csynth decides by content.
+
 ### system_rtl {#system-rtl}
 
 The rest of the system's Verilog, after csynth, as an inner DAG:

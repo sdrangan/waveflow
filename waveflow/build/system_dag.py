@@ -254,10 +254,21 @@ def _host(sysm):
 class _SystemStep(BuildStep):
     """A framework step about one system: *sysm* (the pysim system object), its workspace *work*
     (relative to the root, or absolute), and the *prefix* naming its artifacts -- so two systems can
-    share one DAG.  Never fresh: what each reads includes Python and C++ the DAG cannot see, and every
-    one is seconds (the XSI run re-runs anyway).  Only csynth decides freshness by content."""
+    share one DAG.
+
+    Fresh while its outputs exist and the system's digest (:func:`~waveflow.build.freshness.
+    system_digest`: structure, sources, scenario, RTL stamps, the records its modules load) is the one
+    it last succeeded with (``plans/unit_harness.md`` Stage 6) -- so a unit nobody changed does no
+    work.  A step whose result is not a function of that digest sets :attr:`stamped` False."""
 
     params: ClassVar[dict] = {}
+    #: Freshness by the system digest (above); False: always runs.
+    stamped: ClassVar[bool] = True
+    #: The step's result depends on the calibration records the system's modules load (pysim's
+    #: timing does; the RTL run does not), so the digest it is fresh by includes them.
+    uses_records: ClassVar[bool] = False
+    #: The step reads the RTL of the system's tops (the scenario and pysim do not).
+    uses_rtl: ClassVar[bool] = True
 
     sysm: Any
     work: Path
@@ -278,7 +289,33 @@ class _SystemStep(BuildStep):
         return self.work if self.work.is_absolute() else Path(config.root_dir) / self.work
 
     def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
-        return False
+        if not self.stamped:
+            return False
+        from waveflow.build.freshness import stamp_file, system_digest
+
+        # Taken now, before the step runs, and kept for after_run: a run moves what a digest of the
+        # modules would read (their counters, so the identity their records are found by).
+        self._digest = system_digest(self.sysm, config.root_dir, records=self.uses_records,
+                                     rtl=self.uses_rtl)
+        stamp = stamp_file(self.work_dir(config), self.name)
+        if not stamp.is_file():
+            return False
+        if any(n in paths and not Path(paths[n]).exists() for n in self.produces):
+            return False
+        return stamp.read_text(encoding="utf-8") == self._digest
+
+    def after_run(self, config: BuildConfig) -> None:
+        """Record the digest this step succeeded with (see :meth:`is_fresh`)."""
+        if not self.stamped:
+            return
+        from waveflow.build.freshness import stamp_file, system_digest
+
+        digest = getattr(self, "_digest", None)
+        if digest is None:                     # forced: is_fresh was never asked
+            return
+        stamp = stamp_file(self.work_dir(config), self.name)
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(digest, encoding="utf-8")
 
 
 @dataclass(kw_only=True)
@@ -288,6 +325,7 @@ class ScenarioStep(_SystemStep):
 
     description = "The host's scenario bundle: the one file pysim and the RTL run both read."
     step_name: ClassVar[str] = "scenario"
+    uses_rtl: ClassVar[bool] = False
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
@@ -307,10 +345,15 @@ class PysimStep(_SystemStep):
 
     description = "The system in pysim, from the scenario: the host's traces and the cycle count."
     step_name: ClassVar[str] = "pysim"
+    uses_records: ClassVar[bool] = True
+    uses_rtl: ClassVar[bool] = False
+    #: Artifacts this run must come after -- its units' calibrations, so a parent's estimate is made
+    #: from the records they file (``plans/unit_harness.md`` Stage 6).
+    after: tuple[str, ...] = ()
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return [self.a("scenario")]
+        return [self.a("scenario"), *self.after]
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
@@ -1095,7 +1138,7 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                      prefix: str = "", workspace: str | None = None,
                      sources: tuple[str, ...] = ("include", "gen"),
                      tcls: dict[str, Path] | None = None, timeout: int = 3600,
-                     trace: bool = False) -> SystemXsiStep:
+                     trace: bool = False, after: tuple[str, ...] = ()) -> SystemXsiStep:
     """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
     the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``ip_package``,
     ``block_design``, ``leaf_resources``, ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.
@@ -1105,7 +1148,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
     the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
     -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
-    the cut; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
+    the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
+    parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
     script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
 
     The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
@@ -1120,6 +1164,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     work = work_dir / ((workspace or f"{prefix}{top}") + ("_probes" if probes else ""))
     rtl = SystemRtlStep(sysm=sysm, work=work, prefix=prefix, top=top, xbar_name=xbar_name,
                         inside=inside, probes=probes)
+    # The HLS tops whose RTL the system's digest follows (Stage 6 freshness).
+    sysm._wf_tops = tuple(rtl.tops)
     owners = dag.artifact_owners()
     for name in sources:
         if name not in owners:
@@ -1136,7 +1182,7 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     dag.add(LeafResourcesStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ResourceReportStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
-    dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix))
+    dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix, after=tuple(after)))
     xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace)
     dag.add(xsi)
     dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))

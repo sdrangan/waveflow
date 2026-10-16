@@ -27,7 +27,7 @@
 #include "uint16_array_utils.h"
 #include "credit_stream_hls.h"
 
-template <int DW, int QDEPTH, int CRD_EVERY>
+template <int DW, int QDEPTH, int CRD_EVERY, int II = 1>
 static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
                             hls::stream<streamutils::axi4s_word<DW> >& m_u_fwd,
                             hls::stream<ap_uint<DW> >& m_u_crd) {
@@ -50,7 +50,7 @@ static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
     cmd.write_axi4_stream<DW>(m_u_fwd);
     crd.sent(CW);
 
-    // 3. the draws, a chunk per write, one draw per cycle
+    // 3. the draws, a chunk per write, one draw every II cycles
     uint16_array_utils::value_type lane[PF];
 #pragma HLS ARRAY_PARTITION variable=lane complete dim=1
 CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
@@ -59,7 +59,7 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
         const int cw = (c + PF - 1) / PF;
         crd.wait_room(m_u_crd, cw);                  // admit the chunk: outside the loop
     GEN: for (int k = 0; k < c; ++k) {
-#pragma HLS PIPELINE II=1
+#pragma HLS PIPELINE II=II
             s ^= s << 13;
             s ^= s >> 17;
             s ^= s << 5;

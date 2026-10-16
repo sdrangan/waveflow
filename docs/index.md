@@ -32,7 +32,7 @@ notebooks, HDL fragments, and build glue.
 - **[Project status](./overview/status.md)** — what works today, what's next, and the first integrated milestone
 - **[Installation](./guide/installation/)** — install Waveflow from source
 - **[Guide](./guide/)** — schemas, interfaces, components, simulation, synthesis, and builds
-- **[Examples](./examples/)** — worked designs, starting with [basic vectorization](./examples/basic_vec/)
+- **[Examples](./examples/)** — worked designs, starting with [a free-running polynomial](./examples/stream_kernel/): the command-response kernel, its harness, its calibrated timing, and the same kernel behind AXI-MM
 
 ## People
 

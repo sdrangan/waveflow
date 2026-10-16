@@ -96,8 +96,7 @@ class TaskInst:
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
     #: The C++ word types of the body's framed ports (``KernelTask.framed``), template arguments after
-    #: ``template_args``.  Not part of :attr:`inst_name`: Vitis names an instance by its integer
-    #: arguments only.
+    #: ``template_args``.  Vitis names them in the instance too (:func:`_vitis_type_name`).
     word_types: tuple[str, ...] = ()
 
     @property
@@ -111,8 +110,24 @@ class TaskInst:
 
         The suffix is a **prediction**: a second instance of the same body at the same template
         args would be ``_U1``, and nothing here could tell them apart.  :meth:`TopSpec.trace_manifest`
-        rejects that case rather than emitting names that silently bind to the wrong instance."""
-        return "_".join([self.task_fn, *(str(a) for a in self.template_args)]) + "_U0"
+        rejects that case rather than emitting names that silently bind to the wrong instance.
+
+        A framed port's word type is a template argument too, and Vitis spells it into the name
+        (:func:`_vitis_type_name`; observed on markov's chain core, Vitis 2025.1)."""
+        return "_".join([self.task_fn, *(str(a) for a in self.template_args),
+                         *(_vitis_type_name(w) for w in self.word_types)]) + "_U0"
+
+
+def _vitis_type_name(word_type: str) -> str:
+    """How Vitis spells a framed port's word type in a task instance's name, as its csynth RTL shows
+    (Vitis 2025.1, markov's chain core): ``streamutils::axi4s_word<64>`` (an ``ap_axis``) ->
+    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``."""
+    import re
+
+    m = re.fullmatch(r"streamutils::(axi4s_word|framed_word)<(\d+)>", word_type.replace(" ", ""))
+    if m is None:
+        raise ValueError(f"no known Vitis spelling for word type {word_type!r}")
+    return "axis" if m.group(1) == "axi4s_word" else f"framed_word_{m.group(2)}"
 
 
 @dataclass(frozen=True)
