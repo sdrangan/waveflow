@@ -1,4 +1,4 @@
-"""P1 of ``plans/sweep_runner.md`` — the grid a sweep visits.
+"""P1 of the sweep_runner plan (commit 3d74877) — the grid a sweep visits.
 
 The gate that matters is not that `ParamGrid` produces *a* product, but that it produces the **same
 points in the same order** as the hand-written loops it replaces.  Order is not cosmetic here: with

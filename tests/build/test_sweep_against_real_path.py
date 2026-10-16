@@ -1,4 +1,4 @@
-"""P4 of ``plans/sweep_runner.md`` — the collapsed sweep files what the hand-written one did.
+"""P4 of the sweep_runner plan (commit 3d74877) — the collapsed sweep files what the hand-written one did.
 
 `test_sweep_runner.py` covers the control flow against a stub, which is where the runner's value
 lives and what can be checked on every run.  What a stub cannot check is that a **real** point, driven

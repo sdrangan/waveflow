@@ -141,17 +141,31 @@ class TimingDiagram(object):
         text_scale_factor : float, optional
             Scale factor to determine if there is enough space to draw text labels.
 
-        Returns 
+        Returns
         -------
-        None         
+        None
         ax : matplotlib.axes.Axes
-            Axes object with the plotted signals.   
+            Axes object with the plotted signals.
+
+        Raises
+        ------
+        ValueError
+            If no signals have been added to the diagram.
         """
 
         # Determine signals to plot
-        signals_to_plot = list(self.sig_info.keys())    
+        signals_to_plot = list(self.sig_info.keys())
 
-    
+        # With no signals the time bounds below are never assigned, and the failure surfaces much
+        # further down as an UnboundLocalError on `tmin`.  Say what actually went wrong instead.
+        if not signals_to_plot:
+            raise ValueError(
+                "No signals to plot.  Add signals with add_signal/add_signals before plotting -- "
+                "an empty diagram usually means the signal selection matched nothing, or the VCD "
+                "it came from declared no signals."
+            )
+
+
         # Create figure and axis if not provided
         nsig = len(signals_to_plot)
         ymax = row_step * nsig

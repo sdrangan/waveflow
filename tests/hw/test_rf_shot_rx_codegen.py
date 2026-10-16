@@ -1,6 +1,6 @@
 """The continuous-capture receiver's **lowering**: what the graph becomes, and whether Vitis takes it.
 
-``plans/t2p_lock_chan.md`` S2, checkpoint 3.  Checkpoints 1 and 2 proved the protocol and the verdict
+PR #179, checkpoint 3.  Checkpoints 1 and 2 proved the protocol and the verdict
 in pysim; this proves the other half — that the RX pairing reaches a generated top with the memory
 ports on the right side of the wrapper seam, and that both bodies synthesize at the II they claim.
 
@@ -111,7 +111,7 @@ def test_the_three_tasks_take_their_lock_arguments_adjacent():
     ``(buf, cmd, resp)`` together.  The two are instantiated from **one** set of template arguments,
     so a window task told a different geometry from its capture is not expressible.
 
-    The capture then takes a **fifth**, ``ABS`` (``plans/rf_shot_absolute.md`` S2), and the window
+    The capture then takes a **fifth**, ``ABS`` (PR #201), and the window
     reader does not: it follows the ``base_addr`` it is handed and has no opinion about where that
     address came from.  ``0`` here because ``0`` is what every gate in this family was recorded
     against, and it is spelled out rather than defaulted in the C++ — a template argument a build

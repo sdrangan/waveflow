@@ -2,6 +2,7 @@
 title: The timing model
 parent: Composite kernel interleaver
 nav_order: 8
+summary: "The framework mem-streams ship their timing; the gather stage is the design's own kernel, so the design gives it one. In pysim the gather is instantaneous, so without a model the compute looks free and the timeline runs ahead of the RTL. Declares where the model lives on the stage, the formula it evaluates and what its parameters mean."
 ---
 # The compute stage's timing model
 
@@ -10,8 +11,9 @@ the design gives it a timing model. This page **declares** that model: where it 
 formula it evaluates, and what its parameters mean. [Fitting the timing model](./timing_fit.md) then
 recovers those parameters from RTL.
 
-The general facility is [Adding a timing model to a component](../../guide/timing_model/insertion.md); this
-is the interleaver's worked instance of it.
+The interleaver's compute stage predates [timed phases](../../guide/timing_model/timed_phases.md), the
+declared form a new module uses ([Declaring a timed phase](../../guide/timing_model/insertion.md)); this
+page describes the model the stage holds directly, which it keeps until it is migrated.
 
 ## Why the stage needs one
 
@@ -78,7 +80,7 @@ instead. Both currently agree — `cycles = n` (`ii = 1`, `latency = 1`) — bec
 
 ## See also
 
-- [Adding a timing model to a component](../../guide/timing_model/insertion.md) — the general pattern this
+- [Declaring a timed phase](../../guide/timing_model/insertion.md) — the declared form that replaces this
   instantiates.
-- [Timing models for loops](../../guide/timing_model/loops.md) — the `latency + ii·(n − 1)` law.
+- [The form of a span's model](../../guide/timing_model/loops.md) — the `latency + ii·(n − 1)` law.
 - [Fitting the timing model](./timing_fit.md) — recovering `latency` and `ii` from RTL (the next page).

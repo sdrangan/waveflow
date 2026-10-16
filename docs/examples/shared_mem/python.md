@@ -3,6 +3,7 @@ title: Python model
 parent: Histogram with shared memory
 nav_order: 2
 has_children: false
+summary: "Writing the histogram accelerator as an HwModule: the command and response schemas that ride the streams, the kernel's three data ports, and the on_start body that validates, reads, computes and writes back. The concept page covers why the data lives in memory and the control on a stream; this is how."
 ---
 
 # Python model
@@ -222,21 +223,20 @@ generated kernel, codegen emits a call to the hook.
 # examples/shared_mem/hist.py
 @synthesizable
 def validate(self, cmd: HistCmd) -> ProcessGen[HistError]:
-    ndata, nbins = int(cmd.ndata), int(cmd.nbins)
+    ndata, nbins = cmd.ndata, cmd.nbins
     word_bytes = self.mem_bw // 8
     if ndata <= 0 or ndata > self.max_ndata:
         return HistError.INVALID_NDATA
     if nbins <= 0 or nbins > self.max_nbins:
         return HistError.INVALID_NBINS
-    if (int(cmd.data_addr) % word_bytes or int(cmd.bin_edges_addr) % word_bytes
-            or int(cmd.cnt_addr) % word_bytes):
+    if cmd.data_addr % word_bytes or cmd.bin_edges_addr % word_bytes or cmd.cnt_addr % word_bytes:
         return HistError.ADDRESS_ERROR
     return HistError.NO_ERROR
     yield  # unreachable — makes this a generator
 
 @synthesizable
 def compute(self, data, edges, ndata, nbins) -> ProcessGen[HistCountBuf]:
-    counts = golden_counts(np.asarray(data)[:int(ndata)], edges, int(nbins))
+    counts = golden_counts(data[:ndata], edges, nbins)
     return counts
     yield  # unreachable — makes this a generator
 ```

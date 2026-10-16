@@ -340,7 +340,7 @@ VEC_PLATFORM = REPO / "examples" / "vecmult" / "calib" / "platforms" / "zynq7020
 
 
 class TestIntegrationRecords:
-    """P1-P4 of ``plans/integration_record.md`` — the third additive term is stored like the others.
+    """P1-P4 of the integration_record plan (commit 108501b) — the third additive term is stored like the others.
 
     ``top = Σ(modules) + integration``.  Two of those were durable and the third was not, so both
     examples transcribed it into source.  On ``fir_block`` that term is 29% of the design and was the

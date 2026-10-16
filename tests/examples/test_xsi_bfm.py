@@ -3,7 +3,7 @@
 **Why this file exists.**  These four cycle counts are the only evidence that the generated
 ``ap_ctrl_none`` tops, the hand-written framed/interleaver task bodies, and the BFM library are
 correct, and until now they were checked *by hand*.  A refactor that broke them would have gone unnoticed until
-someone happened to re-run ``run.bat``.  ``plans/xsi_tb_codegen.md`` records them as Stage 1's gate;
+someone happened to re-run ``run.bat``.  the xsi_tb_codegen plan (commit 3052952) records them as Stage 1's gate;
 this makes the gate real.
 
 Run: ``pytest tests/examples/test_xsi_bfm.py -m xsi``  (needs Vivado xsim + mingw g++, and a prior
@@ -25,11 +25,6 @@ from examples.interleaver.mem_stream_gen import (
     write_mem_r_xsi_bundles,
     write_mem_w_xsi_bundles,
 )
-from examples.mem_copy.mem_copy import check_mem_copy_xsi_outputs, write_mem_copy_xsi_bundles
-from examples.rf_loopback.rf_dut_build import (
-    check_xsi_outputs as check_rf_dut_xsi_outputs,
-    write_scenario as write_rf_dut_scenario,
-)
 from waveflow.build.composite_gen import render_rtl_f
 from waveflow.build.trace_steps import XSI_RUNNER, xsi_runner_cmd
 
@@ -41,17 +36,12 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 _XSI_SETUP = {
     "mem_r_stream": lambda xsi: write_mem_r_xsi_bundles(xsi),
     "mem_w_stream": lambda xsi: write_mem_w_xsi_bundles(xsi),
-    "mem_copy": lambda xsi: write_mem_copy_xsi_bundles(xsi),
-    "rf_pass_through": lambda xsi: write_rf_dut_scenario(xsi),
 }
 
 #: Tops whose generated C++ main just runs + dumps: correctness is checked HERE, in Python, from the
 #: output bundles the run wrote (memory arena + the sink's capture-with-cycles).  The value is called
 #: ``check(xsi_dir, want_cycles)`` and asserts.  A top absent here still self-checks in its C++ main.
-_XSI_CHECK = {
-    "mem_copy": check_mem_copy_xsi_outputs,
-    "rf_pass_through": check_rf_dut_xsi_outputs,
-}
+_XSI_CHECK: dict = {}
 
 #: Which example directory owns each top.  They are no longer all in one place: mem_copy is its own
 #: example, with its own xsi/ workspace (its own xsim.dir, its own copy of the harness via
@@ -60,8 +50,6 @@ _XSI_CHECK = {
 ROOT_OF = {
     "mem_r_stream": EXAMPLES / "interleaver",
     "mem_w_stream": EXAMPLES / "interleaver",
-    "mem_copy": EXAMPLES / "mem_copy",
-    "rf_pass_through": EXAMPLES / "rf_loopback",
 }
 
 #: (top, tb basename, expected cycles, a substring proving the golden actually ran).
@@ -82,48 +70,13 @@ ROOT_OF = {
 GATES = [
     ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
     ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
-    ("mem_copy", "mem_copy_bfm_tb", 2908, "done=16 w_count=2048"),
     # interleaver retired from the gate with InterleaverCanon (2026-07); the in-band interleaver's RTL
     # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
     # an exact-cycle gate here.
     #
-    # rf_pass_through: the RF loopback's digital logic, cut ALONE between generic AXIS BFMs
-    # (plans/adc_model.md staging item 2).  8 bursts x 64 words, relayed bit-identically.
+    # mem_copy (2908) and rf_pass_through (1066) moved to the system flow (plans/system_model.md
+    # S3f): tests/examples/test_mem_copy_system_xsi.py and test_rf_dut_system_xsi.py.
     #
-    # 1066, re-recorded 2026-08-14 when the DUT became two tasks + a one-block internal FIFO
-    # (ingress word relay -> block stage).  It was 1072, and **the six cycles are the whole
-    # throughput story, deliberately**: the change was not made to go faster.  The block stage still
-    # costs 136 cycles per firing (csynth: two 66-cycle pipelined loops, read-then-write over one
-    # block RAM), so per-block cost is ~133 either way and this TB -- whose driver pushes at full
-    # rate -- is bound by that.  What changed is WHERE the stall lands: the boundary port is now
-    # drained a word at a time by a task with latency 0, so a producer that cannot wait (an ADC)
-    # loses nothing.  That is invisible here, because a StreamDriver BFM waits; it is measured in
-    # tests/examples/test_rf_loopback_xsi.py, where ADC_DROPPED went 72 -> 0.
-    #
-    # The read/write serialization inside the block stage is intrinsic to block processing, not a
-    # defect: a stage that transforms a block cannot emit before it has received one.  Splitting it
-    # further would buy throughput here and change nothing about the converter.
-    #
-    # BACK TO 1066, 2026-08-18, when the RF fabric moved 300 -> 250 MHz (4.0 ns).  PREDICTED FROM
-    # THE REPORTS BEFORE THE RUN: at the looser target Vitis no longer needs the extra pipeline
-    # stage, VITIS_LOOP_258_1 latency returns 67 -> 66, the relay's interval 137 -> 136, and
-    # 8 blocks x 1 cycle = 8.  1074 - 8 = 1066.  Measured 1066.  The two records below are the same
-    # schedule seen at two clock targets, which is why neither is "the" number.
-    #
-    # 1074, recorded 2026-08-17 when the RF examples moved to the RFSoC 4x2 part
-    # (xczu48dr-ffvg1517-2-e) at 300 MHz, from xc7z020clg484-1 at 100 MHz.  +8 cycles, and the
-    # arithmetic closes exactly:
-    #
-    #   * the relay's WRITE loop, VITIS_LOOP_258_1, deepened by one pipeline stage -- latency
-    #     66 -> 67 -- to meet the 3.333 ns target.  Its II is unchanged at 65, and the READ loop
-    #     (VITIS_LOOP_184_1) did not need the extra stage.  Depth-for-frequency, the ordinary trade.
-    #   * so rf_samp_relay_task's interval went 136 -> 137: one more cycle per block firing.
-    #   * the scenario is XSI_NBURST = 8 blocks, so 8 x 1 = 8.  1066 + 8 = 1074.
-    #
-    # Measured by A/B in one session: same generated C++ built for both targets, module latencies
-    # read from each project's own csynth.xml.  Fmax went 146.74 -> 547.05 MHz, which is the point of
-    # the move -- the RF model's arithmetic assumes a 300 MHz fabric and 146 MHz could not host it.
-    ("rf_pass_through", "rf_pass_through_bfm_tb", 1066, ""),
 ]
 
 
@@ -197,7 +150,7 @@ def test_xsi_bfm_gate(top: str, tb: str, want_cycles: int, want_marker: str):
         )
         assert f"cycles={want_cycles}" in out, (
             f"{top} cycle count moved (want {want_cycles}).  That is a real behaviour change: either a\n"
-            f"regression, or an improvement worth re-recording in plans/xsi_tb_codegen.md.\n{out[-2000:]}"
+            f"regression, or an improvement worth re-recording in this gate's expected count.\n{out[-2000:]}"
         )
 
 

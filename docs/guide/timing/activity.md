@@ -3,6 +3,7 @@ title: Activity Diagrams
 parent: Timing Analysis Tools
 nav_order: 2
 has_children: false
+summary: "The view for a thousand cycles rather than fifty: labelled lanes on a common cycle axis, filled with when each stage was busy instead of what each signal held. Bands collapse contiguous active cycles into one bar, beats draw a hairline per cycle, and an optional occupancy panel shades wherever a FIFO sat at capacity — which is where the producer was blocked."
 ---
 
 # Activity Diagrams

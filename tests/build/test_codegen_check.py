@@ -44,7 +44,7 @@ from waveflow.simulation.simulation import Simulation
 from examples.block_scale.block_scale import BlockScaleTBHls
 from examples.regmap.simp_fun import SimpFun, SimpFunTBHls
 from examples.shared_mem.hist import HistAccel, HistTBHls
-from examples.stream_inband.poly import PolyTBHls
+from tests.fixtures.poly_extracted.poly_extracted import PolyTBHls
 from examples.toy.toy import ScaledSquare, Square
 
 Int32 = IntField.specialize(bitwidth=32, signed=True)
@@ -663,7 +663,7 @@ def test_no_real_kernel_or_tb_trips_the_sequential_gate():
     it.  `extract_*` is what `generate` runs, so this covers all four for real.
     """
     from examples.block_scale.block_scale import BlockScale
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
     from waveflow.build.hwcodegen import extract_kernel, extract_testbench
 
     for cls in (SimpFun, PolyAccel, HistAccel, BlockScale):

@@ -58,7 +58,8 @@ def test_one_crossbar_becomes_two_slaves_sharing_one_arena():
     assert len(spec.shared) == 1
     cls, name, args, _dyn = spec.shared[0]
     assert cls == "FlatMemory" and name == "mem"
-    assert args == ("2624", "8"), "arena size/bpw come from the MemoryMod's own fields"
+    assert args == ('wfbfm::run_param("mem_words", 2624)', "8"), (
+        "arena size/bpw come from the MemoryMod's own fields (the size a run-time-overridable default)")
 
     slaves = [m for m in spec.models if m.cls.startswith("AxiMm")]
     assert len(slaves) == 2
@@ -223,11 +224,12 @@ def test_every_declared_boundary_kind_has_a_row():
     from waveflow.hw.bram import BramIFMaster
     from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
     from waveflow.hw.memif import MMIFReadMaster, MMIFSlave, MMIFWriteMaster
+    from waveflow.hw.irq import IrqIFSink, IrqIFSource
     from waveflow.hw.regmap import RegMapMMIFSlave
 
     declared = {cls.boundary_kind for cls in (
         StreamIFSlave, StreamIFMaster, MMIFSlave, MMIFReadMaster, MMIFWriteMaster,
-        RegMapMMIFSlave, BramIFMaster)}
+        RegMapMMIFSlave, BramIFMaster, IrqIFSource, IrqIFSink)}
     missing = sorted(declared - set(BFM_DUALS))
     assert not missing, (
         f"boundary kinds with no BFM_DUALS row: {missing}. A kind with no row is a KeyError "

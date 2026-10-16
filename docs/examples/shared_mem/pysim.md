@@ -3,6 +3,7 @@ title: Python Simulation
 parent: Histogram with shared memory
 nav_order: 3
 has_children: false
+summary: "Running the histogram in SimPy before ever invoking Vitis, and checking the counts against the numpy golden. Unlike the register-map example, where the host talks to the kernel over one AXI-Lite link, here there are two participants on the memory side — the host controller and a MemoryMod standing in for shared DRAM."
 ---
 
 # Python simulation
@@ -49,7 +50,8 @@ Three SimObjs share one `Simulation` and one `Clock`:
   so its accesses take simulated time on the clock.
 - **`HistAccel`** is the [accelerator](python.md) under test.
 - **`HistController`** is the host stand-in — the SimObj that plays the CPU
-  driver.
+  driver. Only its bus transfers take simulated time; to time the software itself, run it on a
+  [processor model](../../guide/cpu/index.md).
 
 ## The controller — one transaction, end to end
 
@@ -93,7 +95,7 @@ self.resp = HistResp().deserialize(resp_words, word_bw=bw)
 
 # Read the kernel-produced counts back.
 out = yield from self.mem.m_mm.read_array(Uint32Field, nbins, self.count_addr, word_bw=bw)
-self.counts = np.asarray(out, dtype=np.uint32)
+self.counts = out.val
 ```
 
 The details that matter:

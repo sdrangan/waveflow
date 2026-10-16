@@ -18,8 +18,6 @@ a ``+2`` in the difference histogram. Both are gone, and their cause is recorded
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -31,12 +29,8 @@ from examples.rf_repeat_play.rf_repeat_play import (
     SAMP_BW,
     waveform,
 )
-from examples.rf_repeat_play.rf_repeat_play_build import TOP, generate_tb
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
-
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_repeat_play"
-TB = f"{TOP}_bfm_tb"
+from examples.rf_repeat_play import rf_repeat_play_system_build as sysb
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
 #: Samples the DAC pulled over the run — 60000 fabric cycles at 0.256 samples/cycle.  A result of the
 #: run bound and the converter's rate, not of the design; it moves if either does.
@@ -80,12 +74,6 @@ WANT_TRAIN_START = 153
 WANT_TRAIN_LEN = 15143
 
 
-def _require(cond: bool, why: str) -> None:
-    """Skip loudly — a silent skip on a gate this expensive reads as 'passed' in a summary line."""
-    if not cond:
-        pytest.skip(f"XSI gate prerequisite missing: {why}")
-
-
 def _played(xsi: Path) -> np.ndarray:
     """The samples the RF sink captured, as unsigned 16-bit words.
 
@@ -120,33 +108,14 @@ def _zero_runs(a: np.ndarray) -> list[tuple[int, int]]:
 
 @pytest.fixture(scope="module")
 def played() -> np.ndarray:
-    """One RTL run, shared by the assertions below."""
-    xsi = ROOT / "xsi"
-    _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
-    proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
-    _require(proj.is_dir(),
-             f"no csynth RTL at {proj} — run rf_repeat_play_build.py --through csynth")
-    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
-    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
-    # when the truth is a stale artifact. See rtl_staleness().
-    _require(rtl_staleness(ROOT, 'rf_repeat_play') is None, rtl_staleness(ROOT, 'rf_repeat_play') or "")
-
-    # Regenerate the file list FROM THE RTL ON DISK; never trust a committed `.f`.  A stale one names
-    # files that may no longer be this design, and xsim would elaborate them and PASS.
-    (xsi / f"rtl_{TOP}.f").write_text(
-        render_rtl_f(TOP, ROOT, stamp_sources=False), encoding="utf-8")
-    # Force a clean elaboration: a cached snapshot proves nothing about this design.
-    shutil.rmtree(xsi / "xsim.dir" / TOP, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (xsi / stale).unlink(missing_ok=True)
-    shutil.rmtree(xsi / "vectors" / "rf_out", ignore_errors=True)
-    generate_tb(ROOT)
-
-    r = subprocess.run(xsi_runner_cmd(TOP, TB), cwd=str(xsi),
-                       capture_output=True, text=True, errors="replace", timeout=2400)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"the RTL run did not complete cleanly:\n{out[-3000:]}"
-    return _played(xsi)
+    """One RTL run, shared by the assertions below: the system run
+    (``examples/rf_repeat_play/rf_repeat_play_system_build.py``) -- the transmitter is the DUT, the
+    RFDC's DAC model spans the cut, the waveform driver and the RF sink are its testbench.  The RF
+    sink's capture is the example's to check (pysim runs to a time horizon), so nothing else in the
+    run is compared exactly and the compare must come back clean."""
+    work = system_run(sysb.build_dag(work_dir=WORK), sysb.HERE, sysb.TOP)
+    assert compared_clean(work) and recorded_names(work) == ["counters", "rf_out"]
+    return _played(work / "xsi_run")
 
 
 @pytest.mark.xsi

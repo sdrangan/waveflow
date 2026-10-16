@@ -37,10 +37,14 @@ one?**
 
 | | | |
 |---|---|---|
-| **[Primitive](./primitive/)** | builds on no other interface — it is the module's direct connection to the outside | [`StreamIF`](./primitive/stream.md) · [`MMIF` / `DirectMMIF`](./primitive/aximm.md) · [`BramIF`](./primitive/bram.md) · [`RegMapMMIFSlave`](./primitive/regmap.md) · [`StreamOfBlocksIF`](./primitive/sob.md) · [`CrossBarIF`](./primitive/crossbar.md) · [`RFSampIF`](../rf/rfdc/) |
-| **[Derived](./derived/)** | built from one or more primitives, whose endpoints it owns and drives | [`CreditStreamIF`](./derived/credit_stream.md) · [`AckedStreamIF`](./derived/acked_stream.md) · [`AXIMMQueue`](./derived/mmqueue.md) |
+| **[Primitive](./primitive/)** | builds on no other interface — it is the module's direct connection to the outside | [`StreamIF`](./primitive/stream.md) · [`MMIF` / `DirectMMIF`](axi_mm/modeling.md) · [`BramIF`](./primitive/bram.md) · [`RegMapMMIFSlave`](axi_mm/regmap.md) · [`StreamOfBlocksIF`](./primitive/sob.md) · [`CrossBarIF`](./primitive/crossbar.md) · [`RFSampIF`](../rf/rfdc/) |
+| **[Derived](./derived/)** | built from one or more primitives, whose endpoints it owns and drives | [`CreditStreamIF`](./derived/credit_stream.md) · [`AckedStreamIF`](./derived/acked_stream.md) |
 
 Primitives come first, because everything in the second row is written in terms of the first.
+
+**AXI-MM has a section of its own**, [AXI-MM](./axi_mm/), because reaching a bus from a kernel cuts
+across both rows: the memory-mapped model is primitive, but a free-running kernel only ever reaches it
+through an adaptor. That section holds the model, the register map, and both adaptors.
 
 Two of them are worth pointing at directly. [`RFSampIF`](../rf/rfdc/) is primitive — it composes
 nothing — but it is domain-specific, so it lives with its domain rather than here.

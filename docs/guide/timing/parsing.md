@@ -3,6 +3,7 @@ title: Parsing VCD Files
 parent: Timing Analysis Tools
 nav_order: 4
 has_children: false
+summary: "Reading a VCD into Python with VcdParser: loading the file, finding the signal names inside it, and adding the ones you want under short display names. The starting point for every other page in this section."
 ---
 
 # Parsing a VCD File
@@ -42,8 +43,8 @@ vp = VcdParser(vcd)
 You can add signals to the parser as:
 
 ```python
-sig_name = 'apatb_poly_top.AESL_inst_poly.in_stream_TDATA[31:0]'
-short_name = 'in_stream_TDATA'
+sig_name = 'apatb_poly_top.AESL_inst_poly.s_in_TDATA[31:0]'
+short_name = 's_in_TDATA'
 
 vp.add_signal(name=sig_name, short_name=short_name)
 ```

@@ -3,7 +3,7 @@ title: Polling Overhead
 parent: Timing Models
 nav_order: 8.5
 audience: python
-api: [MMIFMaster, AXIMMCrossBarIF, DirectMMIF, MMIFSlave, PollCond, Eq, Ne, AXIMMQueue]
+api: [MMIFMaster, AXIMMCrossBarIF, DirectMMIF, MMIFSlave, PollCond, Eq, Ne]
 summary: "The loosely-timed polling-overhead model — MMIFMaster.poll_until with a restricted PollCond, the per-bus bandwidth-steal (ov) derating and the deterministic discovery-latency delay, modeled in O(transactions) rather than by stepping every poll cycle."
 ---
 
@@ -14,7 +14,7 @@ A master that **polls** a memory word — a queue consumer watching a ring tail,
 1. **Bandwidth steal.** Every poll read consumes bus beats. A master polling every *N* cycles steals a `1/N` fraction of the bus's throughput from everyone else on it, whether or not the watched event has happened yet.
 2. **Discovery latency.** After the watched event becomes true, the poller does not see it until its *next* poll. On average that is half a poll interval of delay between the event and its discovery.
 
-Waveflow models **both** costs with [`MMIFMaster.poll_until`](../interface/primitive/aximm.md), in **O(transactions)** — it never actually loops the simulation every poll cycle. This page describes the model and the design rationale behind it.
+Waveflow models **both** costs with [`MMIFMaster.poll_until`](../interface/axi_mm/modeling.md), in **O(transactions)** — it never actually loops the simulation every poll cycle. This page describes the model and the design rationale behind it.
 
 > This is the loosely-timed (LT) twin of a real hardware poll loop (the C++ ring-poll `while (head == tail) tail = gmem[...]`). `poll_until` is also `@synthesizable`: the same call lowers to that C++ poll loop — see [The synthesizable twin](#the-synthesizable-twin) below. Most of this page documents the **simulation** model; the timing parameters (`poll_interval`, `poll_beat_cost`, `discovery`) are loosely-timed concerns and have no hardware meaning.
 
@@ -150,19 +150,13 @@ python examples/interface/poll_demo.py
 
 ---
 
-## VMAC integration
-
-`AXIMMQueue.get`'s empty-ring wait is built on `poll_until`: the consumer polls the ring tail with `poll_until(tail_addr, Ne(head), poll_interval)`. This retired the old coarse `poll_cycles=64` band-aid — a poll interval now *means* something. An aggressive consumer poll shows up as derated bus throughput (and, if too aggressive, the saturation warning), not merely shifted dequeue times, so the cycle-model calibration can reflect real polling cost.
-
----
-
 ## The synthesizable twin
 
-`poll_until` is a legitimate hardware primitive too — a master spinning on a memory word. The **same** `poll_until` call that runs the LT model in simulation is `@synthesizable`: inside a synthesizable `run_proc`, the extractor lowers it to a C++ poll loop over the `m_axi` pointer, the hardware twin of the sim form. (The [AXI-MM command-queue example](../../examples/mmqueue/) shows the same lowering for the ring-dequeue hook it shares this primitive with.)
+`poll_until` is a legitimate hardware primitive too — a master spinning on a memory word. The **same** `poll_until` call that runs the LT model in simulation is `@synthesizable`: inside a synthesizable `run_proc`, the extractor lowers it to a C++ poll loop over the `m_axi` pointer, the hardware twin of the sim form.
 
 ```python
-# inside a synthesizable run_proc — the consumer waits for the ring to fill
-head = yield from self.cmd_queue.get(self.Cmd)         # a prior runtime read
+# inside a synthesizable run_proc — wait until the word at tail_addr differs from head,
+# a value the body already holds from an earlier read
 tail = yield from self.m_mem.poll_until(tail_addr, Ne(head), poll_interval)
 ```
 
@@ -179,10 +173,7 @@ What lowers and what does not:
 - **The `PollCond` is the lowerable subset.** `Eq(x)` / `Ne(x)` map to the `==` / `!=` C++ poll; the `rhs` may be a **constant** (`Eq(1)`) or a **runtime value already in scope** (`Ne(head)`, where `head` is a prior read). Supporting a runtime-variable rhs is the condition-IR extension this step added — the same capability now also lets a synthesizable `if a != b:` compare two runtime locals.
 - **The timing parameters do not lower.** `poll_interval`, `poll_beat_cost`, and `discovery` are AT-model (loosely-timed) concerns — a hardware poll just spins on the word — so they never appear in the generated C++.
 
-This is one poll loop, not two: `AXIMMQueue.get`'s ring-dequeue hook (`aximm_queue_impl::queue_get`) expresses its own `while (head == tail)` non-empty wait as `poll_until_ne(tail_word, head)`, so the standalone `poll_until` and the queue dequeue share the same primitive.
-
 ## See also
 
-- [MM Interfaces](../interface/primitive/aximm.md) — the `MMIFMaster` / `AXIMMCrossBarIF` endpoints and the FULL/LITE latency model `poll_until` plugs into.
+- [Modeling memory-mapped traffic](../interface/axi_mm/modeling.md) — the `MMIFMaster` / `AXIMMCrossBarIF` endpoints and the FULL/LITE latency model `poll_until` plugs into.
 - [Overview](../interface/overview.md) — the `Words` type and the SimPy transaction lifecycle.
-- [AXI-MM Command Queue example](../../examples/mmqueue/) — the ring-dequeue hook (`queue_get`) this poll primitive is shared with, and its cosim calibration.

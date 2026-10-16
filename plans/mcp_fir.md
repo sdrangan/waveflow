@@ -19,7 +19,7 @@
 >
 > The pilot is [`examples/fir_block`](../examples/fir_block) — green through pysim → csynth → XSI,
 > already carrying a fitted resource model and a 24-point measured corpus
-> ([`resource_model.md`](resource_model.md), phases D/E complete).
+> (the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)), phases D/E complete).
 
 ## Motivation
 
@@ -706,7 +706,7 @@ M0–M3 need no toolchain — only M4 requires Vitis. M3 and the scored part of 
 3. **Does `samp_i` belong in the module key?** It is frozen at 2 in the measured grid. Unfreezing it
    for the data path must not perturb `FirCompute`'s module key, or every `predict_resource` lookup
    misses and silently returns zeros — which makes a design look *cheaper*, turning "does not fit"
-   into "fits". [`resource_model.md`](resource_model.md) records this happening once already, when
+   into "fits". the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)) records this happening once already, when
    merely attaching a model moved a key. Check before M2 wires `predict_resource`, not after.
 
 4. **Long-running calls.** M4's live `synth` blocks for ~50 s per point and a batch is minutes. Decide

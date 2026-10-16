@@ -8,8 +8,8 @@ serialization verbatim — and because storage is now the **stored integer** (no
 float), value↔bits needs no override at all.  ``.val`` holds the stored int;
 ``to_real``/``.real`` derives ``stored · 2^-F``.
 
-Arithmetic is **free functions** (:func:`mult`/:func:`add`/:func:`sub`/:func:`shift`/
-:func:`quantize`/:func:`fixed_sum`), not methods — each reads the operands' formats,
+Arithmetic is **free functions** (:func:`mult`/:func:`add`/:func:`sub`/:func:`div`/
+:func:`shift`/:func:`quantize`/:func:`fixed_sum`), not methods — each reads the operands' formats,
 runs the vectorized integer op on the stored ``.val`` arrays via
 :mod:`waveflow.utils.fixputils`, derives the result format, and returns a
 ``DataArray[FixedField<derived>]``.  Full-precision intermediates; :func:`quantize`
@@ -58,6 +58,11 @@ class FixedField(IntField):
         **kwargs: Any,
     ) -> type[FixedField]:
         """Return a cached ``FixedField`` for ``ap_fixed<W, I, q, o>`` (one per format)."""
+        if not kwargs and type(W) is int and type(I) is int:    # a format made before: validated
+            cached = cls._specializations.get(
+                (cls, int(W), int(I), bool(signed), q_mode, o_mode, ()))
+            if cached is not None:
+                return cached
         Format(W, I, signed, q_mode, o_mode)        # validates + fires the >64-bit guard
 
         overrides = cls.validate_specialize_kwargs(kwargs)
@@ -162,6 +167,18 @@ def add(a: DataArray, b: DataArray) -> DataArray:
 
 def sub(a: DataArray, b: DataArray) -> DataArray:
     stored, fmt = fixputils.sub(np.asarray(a), _fmt(a), np.asarray(b), _fmt(b))
+    return _wrap(stored, fmt)
+
+
+def div(a: DataArray, b: DataArray) -> DataArray:
+    """``ap_fixed`` division ``a / b`` with Waveflow's zero guard (``x / 0 = 0``).
+
+    Truncates toward zero and keeps the dividend's fraction bits
+    (:func:`~waveflow.utils.fixputils.div_format`).  For a more precise quotient,
+    :func:`quantize` the dividend to more fraction bits first.  The matching C++ is
+    ``(b == 0) ? 0 : a / b``.
+    """
+    stored, fmt = fixputils.div(np.asarray(a), _fmt(a), np.asarray(b), _fmt(b))
     return _wrap(stored, fmt)
 
 

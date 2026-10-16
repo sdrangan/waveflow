@@ -3,6 +3,7 @@ title: Timing Diagrams
 parent: Timing Analysis Tools
 nav_order: 1
 has_children: false
+summary: "Building waveform diagrams by hand, from any Python arrays rather than from a simulation trace. SigTimingInfo holds a signal's (time, value) transitions, ClkSig is the clock, and TimingDiagram renders them in matplotlib — used for teaching material and for figures in papers."
 ---
 
 # Basic Timing Diagrams

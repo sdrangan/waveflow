@@ -2,7 +2,7 @@
 #define WAVEFLOW_LOCK_TOY_WRITE_TASK_H
 // lock_toy_write_task.h — the REQUESTER, as small as a requester gets.
 //
-// The C++ half of the minimal consumer for plans/t2p_lock_chan.md S1, checkpoint 2.  It exists to
+// The C++ half of the minimal consumer for PR #178, checkpoint 2.  It exists to
 // answer one question a Python-side check() cannot: does a task holding a `mode=bram` port and two
 // lock channels actually SYNTHESIZE, at the II the design claims.  Everything a real requester has
 // beyond this -- a header, a verdict, a repeat count -- is application, and none of it is the lock's.

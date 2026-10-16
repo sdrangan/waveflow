@@ -207,8 +207,8 @@ class HistogramAccel(object):
         resp = HistResp()
         resp.tx_id = cmd.tx_id
 
-        ndata = int(cmd.ndata)
-        nbins = int(cmd.nbins)
+        ndata = cmd.ndata
+        nbins = cmd.nbins
 
         if ndata <= 0 or ndata > self.max_ndata:
             resp.status = HistError.INVALID_NDATA
@@ -220,17 +220,15 @@ class HistogramAccel(object):
 
         try:
             data_nwords = get_nwords(Float32, word_bw=self.mem.word_size, shape=ndata)
-            data_words = self.mem.read(int(cmd.data_addr), nwords=data_nwords)
-            data = np.asarray(read_array(data_words, elem_type=Float32, word_bw=self.mem.word_size, shape=ndata), dtype=np.float32)
+            data_words = self.mem.read(cmd.data_addr, nwords=data_nwords)
+            data = read_array(data_words, elem_type=Float32, word_bw=self.mem.word_size, shape=ndata).val
 
             if nbins > 1:
                 edge_shape = nbins - 1
                 edge_nwords = get_nwords(Float32, word_bw=self.mem.word_size, shape=edge_shape)
-                edge_words = self.mem.read(int(cmd.bin_edges_addr), nwords=edge_nwords)
-                bin_edges = np.asarray(
-                    read_array(edge_words, elem_type=Float32, word_bw=self.mem.word_size, shape=edge_shape),
-                    dtype=np.float32,
-                )
+                edge_words = self.mem.read(cmd.bin_edges_addr, nwords=edge_nwords)
+                bin_edges = read_array(edge_words, elem_type=Float32, word_bw=self.mem.word_size,
+                                       shape=edge_shape).val
             else:
                 bin_edges = np.array([], dtype=np.float32)
 
@@ -238,7 +236,7 @@ class HistogramAccel(object):
             counts = np.bincount(bin_index, minlength=nbins).astype(np.uint32, copy=False)
             packed_counts = write_array(counts, elem_type=Uint32Field, 
                                         word_bw=self.mem.word_size)
-            self.mem.write(int(cmd.cnt_addr), packed_counts)
+            self.mem.write(cmd.cnt_addr, packed_counts)
         except ValueError:
             resp.status = HistError.ADDRESS_ERROR
             return resp
@@ -399,16 +397,16 @@ class HistAccel(HostActivated):
         ``@synthesizable`` hook its body is *not* extracted (the C++ is
         hand-written and references the ``max_ndata``/``max_nbins`` constants),
         so it may freely read the HwParams here for the SimPy model."""
-        ndata = int(cmd.ndata)
-        nbins = int(cmd.nbins)
+        ndata = cmd.ndata
+        nbins = cmd.nbins
         word_bytes = self.mem_bw // 8
         if ndata <= 0 or ndata > self.max_ndata:
             return HistError.INVALID_NDATA
         if nbins <= 0 or nbins > self.max_nbins:
             return HistError.INVALID_NBINS
-        if (int(cmd.data_addr) % word_bytes
-                or int(cmd.bin_edges_addr) % word_bytes
-                or int(cmd.cnt_addr) % word_bytes):
+        if (cmd.data_addr % word_bytes
+                or cmd.bin_edges_addr % word_bytes
+                or cmd.cnt_addr % word_bytes):
             return HistError.ADDRESS_ERROR
         return HistError.NO_ERROR
         yield  # unreachable — makes this a generator
@@ -432,7 +430,7 @@ class HistAccel(HostActivated):
         ap_uint<32> count_buf[max_nbins]`` in place — HLS can't return an array
         by value — but the SimPy model returns it, per the build's chosen
         buffer convention)."""
-        counts = golden_counts(np.asarray(data)[:int(ndata)], edges, int(nbins))
+        counts = golden_counts(data[:ndata], edges, nbins)
         return counts
         yield  # unreachable — makes this a generator
 
@@ -518,7 +516,7 @@ class HistController(SimObj):
 
         # Read the kernel-produced counts back.
         out = yield from self.mem.m_mm.read_array(Uint32Field, nbins, self.count_addr, word_bw=bw)
-        self.counts = np.asarray(out, dtype=np.uint32)
+        self.counts = out.val
 
     def _regmap(self) -> VitisRegMap:
         if self._regmap_ref is None:

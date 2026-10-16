@@ -5,7 +5,7 @@ surfaced as "what kind is the RFDC emulator?". It is not an RFDC question — it
 question that the RFDC merely made unavoidable. Resolve this first; `adc_model.md` then reduces to
 "three plain `HwModule`s" and can proceed.
 
-Supersedes the open question **"What *kind* is a TB participant?"** in `plans/xsi_tb_codegen.md`
+Supersedes the open question **"What *kind* is a TB participant?"** in the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952))
 (§Open questions), which proposed "a new kind with `potential_targets = {xsi_bfm_model}`". That is half
 right: `xsi_bfm_model` is a real *target*; it is not a *kind*. See "Two rejected answers" below.
 
@@ -507,7 +507,7 @@ never mistaken for a regression:
 
 ## Not in scope
 
-- **Generating BFM C++ from Python.** Same anti-goal as `plans/xsi_tb_codegen.md` Stage 0: a
+- **Generating BFM C++ from Python.** Same anti-goal as the xsi_tb_codegen plan, Stage 0 ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)): a
   hand-written, cycle-exact protocol layer is verified code; re-deriving it is not progress.
 - **RFDC / `adc_model.md`.** Returns after this lands.
 - **`TbGraph`.** `MemCopyTB` inherits `FreeRunMod` purely for `ordered_subcomps` / `interfaces` /
@@ -530,7 +530,7 @@ never mistaken for a regression:
 
 - **csynth OK is not evidence of correctness** (`reference-hls-hook-csynth-gotchas`). Every claim here
   is gated on XSI.
-- **pysim and XSI are expected to disagree on timing** (`plans/xsi_tb_codegen.md`) — that is the model,
+- **pysim and XSI are expected to disagree on timing** (the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952))) — that is the model,
   not a bug. Nothing in this plan compares them.
 - **`XsiSimObj` is C++-only, and that is deliberate.** The class in `waveflow/build/xsi/xsi_bfm.h`
   (landed in `fed661f`, documented in `docs/guide/build/bfm.md`) is live and inherited by all five

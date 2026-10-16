@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Composite kernel interleaver
 nav_order: 4
+summary: "Lowering the six-leaf graph to a free-running Vitis HLS top — the same lowering mem_copy uses, with nothing added for the gather. Explains what an hls::task top is: bodies the runtime re-fires on their own whenever their input streams have data, so there is no host handshake and the stages overlap rather than running in sequence."
 ---
 
 # DUT codegen
@@ -37,9 +38,10 @@ endpoint, to either a boundary port or an internal channel; `render_top` emits i
 void interleaver_inband(hls::stream<ap_uint<64> >& s_cmd, const ap_uint<64>* m_in,
                         ap_uint<64>* m_out, hls::stream<ap_uint<64> >& s_done) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in  offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in  offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_in
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<64> > cmd_rd;   // cmd_rx  -> reader
@@ -138,10 +140,9 @@ It runs without the toolchain up to the csynth call; the RTL-timing build
 first step. It generates:
 
 - `gen/interleaver_inband.cpp` — the top above;
-- `interleaver_inband.tcl` — drives Vitis HLS C-synthesis (the `csynth` step, which produces the RTL the
-  [RTL-timing rung](./rtltiming.md) drives);
-- `xsi/interleaver_inband_ports.h` — the DUT's port map, which the generated
-  [testbench harness](./codegen_tb.md) includes;
+- `interleaver_inband.tcl` — drives Vitis HLS C-synthesis (the `csynth` step, which produces the RTL
+  the [system flow](./system.md) instantiates inside its top, and the [RTL-timing rung](./rtltiming.md)
+  traces);
 
 plus, via `gen_headers`, the command structs, `streamutils` / `memmgr`, the block element type's
 array-utils (`read_framed_stream_lane`), and the six copied task bodies. Everything generated carries a
@@ -158,5 +159,5 @@ is `ap_ctrl_none`, csynth is where the C++ is checked — the *behaviour* is ver
 
 ## Next
 
-[Testbench codegen](./codegen_tb.md) — how the `InterleaverInbandTB` graph becomes the XSI BFM harness
-that drives this top.
+[The system](./system.md) — the testbench graph cut at this kernel, and the top and harness the system
+flow derives to drive it.

@@ -8,8 +8,10 @@ Download/open the HTML, or serve the checkout locally. It is self-contained and 
 
 **For the next implementer:** [synthesis / RTL handoff](HANDOFF.md) — extension points,
 artifact-binding requirements, the first hardware experiment and relevant recent upstream work.
-Reconcile with current `main` before hardware integration; the tested CPU snapshot predates
-substantial upstream changes. No main-branch merge or compatibility validation is implied.
+This branch integrates `main` through `c10da30`, including the new harness/calibration
+primitives and MCP SDK 2.x. CPU/transport compatibility is tested; live hardware remains
+unintegrated. See the [verification ledger](../VERIFICATION.md) for scoped results and
+reproduced upstream failures.
 
 ## Run and inspect
 

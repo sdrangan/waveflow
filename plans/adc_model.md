@@ -360,7 +360,7 @@ change when answered:
   file and read the summary.
 - **XSI gates compile the COMMITTED `xsi/` copies**, and the staleness guard can skip silently
   (Vitis alternates `Pipeline_VITIS_LOOP_N` / `Pipeline_N` module names) — see
-  `plans/xsi_tb_codegen.md`.
+  the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)).
 - **`examples/` is an installed package** — re-install after packaging edits.
 - **Never hand-roll word↔element packing.** Everything needed exists; the bug hides at
   `samp_per_word == 1`, and every new test belongs at two or more.
@@ -1868,7 +1868,7 @@ exactly as today, which is every existing design.
 **Deliberately not built ahead of its consumer.** The constructor shapes above are a guess until
 `RfdcAdcMaster` / `RfdcDacSlave` exist, and this repo has already paid for designing emitter machinery
 against a presumed surface once (`CodegenSource`, "designed against a presumed surface and reverted" —
-`plans/xsi_tb_codegen.md`). The same ordering argument put stage 1 before `behavioral_edges` and was
+the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952))). The same ordering argument put stage 1 before `behavioral_edges` and was
 repaid: the working `RFSampIF` retired one of that plan's open questions and shrank `BlockChannel`.
 So: write the two C++ models first, let them state what they need, then generalize `BfmModel` to fit.
 

@@ -2,6 +2,7 @@
 title: BFM Testbenches
 parent: Build System
 nav_order: 7
+summary: "At the XSI rung a C++ testbench drives the generated RTL cycle by cycle. The bus models are framework code and the assembly is generated, so what you write is the scenario and the golden, in Python on either side of the run — never per-cycle bus code. Lists which model serves which port."
 ---
 
 # BFM testbenches
@@ -43,7 +44,9 @@ caveat in prose:
 | `axis_out` | AXI4-Stream | slave | `AxisSlave` * |
 | `maxi_read` | AXI4-MM | read slave | `AxiMmReadSlave` |
 | `maxi_write` | AXI4-MM | write slave | `AxiMmWriteSlave` |
-| `mm_slave` | AXI4-MM | master | **none** — in this flow the kernel is always the master |
+| `mm_slave` | AXI4-MM | master | `AxiMmMaster` — a host reaching a system top's crossbar |
+| `irq_out` | interrupt | sampler | `IrqPin` — a host waiting on a queue view's interrupt |
+| `irq_in` | interrupt | driver | **none** — no design takes an interrupt in |
 | `axilite_slave` | AXI4-Lite | master | **none** — so a `HostActivated` DUT cannot be driven at RTL |
 
 \* On AXI-Stream the role fixes the direction but not the class, so the **participant** names it: a
@@ -197,6 +200,26 @@ once, in Python, and the C++ only plays and records it.
 
 This is what makes the concurrent flow structurally identical to the sequential one: Python writes the
 inputs, the kernel and testbench are generated, the toolchain runs them, and Python checks the outputs.
+
+### Ports wider than 64 bits {#wide-words}
+
+A stream word wider than 64 bits travels as `k = ceil(W/64)` little-endian `uint64` **chunks**, chunk 0
+the low 64 bits, in every layer -- the same convention the pysim uses for a wide stream (an `(n, k)`
+`Words` array):
+
+- **Bundles.** `write_burst_bundle(bursts, dir, word_chunks=k)` takes `(n, k)` bursts; `words.bin`
+  holds the chunks beat after beat, `meta.json` declares `word_bytes = 8k`, and `bounds.bin` and
+  `cycles.bin` count beats. `read_burst_bundle` hands `(n, k)` bursts back. `k = 1` is every bundle
+  written before wide words existed, byte for byte.
+- **Models.** `AxisMaster(..., chunks)` and `AxisSlave(..., chunks)` move `k` chunks a beat. The
+  generator passes `chunks` from the endpoint's width (`StreamDriver` / `StreamSink.bfm_model()`), and
+  only when it is not 1, so every narrower harness is emitted exactly as before. An `AxisMaster` refuses
+  a bundle whose `word_bytes` disagrees with its port.
+- **Pins.** `Dut::putChunks` / `getChunks` move a port of any width up to 2048 bits; the buffers are
+  sized for that, because XSI reads or writes as many 32-bit words as the *port* has.
+
+The first user is the SSR FFT, whose `RadixWord` ports are 128 to 232 bits
+([its interfaces](../dsp/ssr_fft/interfaces.md#wide-words-end-to-end)).
 
 ## Completion and throughput framing
 

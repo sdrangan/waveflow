@@ -1,5 +1,5 @@
 set part {xc7z020clg484-1}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: fir_block"
 open_project -reset fir_block_proj
 set_top fir_block

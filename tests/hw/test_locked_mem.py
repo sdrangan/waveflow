@@ -1,6 +1,6 @@
 """The lock channel as a *module*: the wire format, the protocol, and the region assertion.
 
-``plans/t2p_lock_chan.md`` S1, checkpoint 1.  These are the claims :mod:`waveflow.hw.locked_mem`
+PR #178, checkpoint 1.  These are the claims :mod:`waveflow.hw.locked_mem`
 makes without a toolchain and without a consumer.
 
 **The region assertion gets most of the file, because it is the payoff.**  The plan's argument for

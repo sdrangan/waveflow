@@ -1,0 +1,36 @@
+<section id="dist-bf" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">Distributed processing · Example</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Distributed long-term beamforming</h2>
+<div style="display:flex;align-items:center;gap:16px">
+<div style="flex:1;background:#E4DAEC;border-radius:10px;padding:20px;display:flex;flex-direction:column;align-items:center"><p style="font-size:26px;font-weight:600;text-align:center">RF front-end tiles</p></div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1.3;background:#2A0D45;border-radius:10px;padding:20px;display:flex;flex-direction:column;align-items:center"><p style="font-size:26px;font-weight:600;color:#F7F5FA;text-align:center">Channel tiles (daisy chain)</p></div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1;background:#E4DAEC;border-radius:10px;padding:20px;display:flex;flex-direction:column;align-items:center"><p style="font-size:26px;font-weight:600;text-align:center">Bus or hub</p></div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1;background:#57068C;border-radius:10px;padding:20px;display:flex;flex-direction:column;align-items:center"><p style="font-size:26px;font-weight:600;color:#F7F5FA;text-align:center">Common tiles</p></div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1;background:#E4DAEC;border-radius:10px;padding:20px;display:flex;flex-direction:column;align-items:center"><p style="font-size:26px;font-weight:600;text-align:center">Upper PHY (GPU)</p></div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+<div style="background:#FCFBFE;border:1px solid #D9CCE5;border-radius:12px;padding:24px 28px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:26px;font-weight:600;color:#57068C">1 · Local</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Filtering and OFDM, processed locally at each tile</p>
+</div>
+<div style="background:#FCFBFE;border:1px solid #D9CCE5;border-radius:12px;padding:24px 28px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:26px;font-weight:600;color:#57068C">2 · Long-term beamforming</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Channel tiles compute user responses for their antennas; a common tile computes a low-rank projection; antenna-specific parts are broadcast back</p>
+</div>
+<div style="background:#FCFBFE;border:1px solid #D9CCE5;border-radius:12px;padding:24px 28px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:26px;font-weight:600;color:#57068C">3 · Beamforming</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Partial beamforming accumulated along the daisy chain</p>
+</div>
+<div style="background:#FCFBFE;border:1px solid #D9CCE5;border-radius:12px;padding:24px 28px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:26px;font-weight:600;color:#57068C">4 · Equalization</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Equalization and soft demodulation at the final tile in the chain</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">SALSA design study</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>This is one partition among many. It is the choice that sets the inter-tile bandwidth two slides from now, and it is a good thing to invite the audience to challenge.</aside>
+</section>

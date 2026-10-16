@@ -1,4 +1,4 @@
-"""P2 of ``plans/sweep_runner.md`` — the runner's behaviour, against a fake DAG.
+"""P2 of the sweep_runner plan (commit 3d74877) — the runner's behaviour, against a fake DAG.
 
 None of what makes a sweep runner worth having needs a toolchain: failure isolation, incremental
 save, per-stage resume and the stage list are all decisions about *control flow*.  Testing them

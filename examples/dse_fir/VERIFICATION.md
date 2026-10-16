@@ -1,5 +1,40 @@
 # Verification ledger
 
+## Current upstream reconciliation
+
+Integrated `main` at `c10da3002a5e51cd56bbfc9538f017d0c849a6c2` without rewriting
+branch history. Targeted analysis covered the overlapping FIR quantizer, manifest,
+package dependencies, shared MCP registry/server, and the reused MemCopy build/simulator.
+Upstream hardware examples and framework code are accepted unchanged; no vendor tools ran.
+
+- Reproduced the SDK migration failure before repairing it: removed `FastMCP` imports
+  prevented CLI/MCP startup under upstream's `mcp==2.3.0`. Both surfaces and the shared
+  DSE server factory now use `MCPServer`; wire tests retain strict rejection and durable
+  attempt assertions. Added a regression for the separate shared-server factory path.
+- Regenerated the development environment with `uv sync --extra dev`.
+- Targeted gate: **370 passed, 9 skipped, 18 deselected**:
+
+  ```sh
+  uv run --no-sync pytest examples/dse_fir/tests \
+    tests/examples/test_mcp_tools.py tests/examples/test_mcp_setup.py tests/docs \
+    tests/examples/test_mem_copy*.py tests/examples/test_fir_block*.py \
+    tests/hw/test_fixpoint*.py -m 'not vitis and not xsi' -o addopts='' -q
+  ```
+
+- Actual Chrome visualizer suite: **6 passed** separately. Scoped DSE Ruff passes.
+- Broader MCP run (DSE + `tests/mcp` + existing MCP/examples/docs): **407 passed,
+  3 failed, 8 skipped, 5 deselected, 8 xfailed, 1 xpassed**. All three failures
+  reproduce on an untouched detached worktree of `c10da30` using the same environment:
+  - `tests/mcp/test_knowledge_corpus.py::test_index_builds_in_under_three_seconds`
+    exceeded the machine-dependent budget (4.03 s integrated; 3.37 s upstream).
+  - `tests/mcp/test_retrieval_eval.py::test_generated_code_is_excluded_by_default`
+    found no generated files with the opt-in flag.
+  - `tests/mcp/test_usage_index.py::test_generated_files_are_excluded_from_usage_by_default`
+    found identical counts with/without generated files.
+
+These are scoped compatibility checks, not an all-repository green claim. No upstream
+test was suppressed or relaxed. Historical verification below describes earlier revisions.
+
 ## Upstream regression baseline
 
 Base: `2e77a43` (`origin/main` at branch creation).

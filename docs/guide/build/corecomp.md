@@ -2,6 +2,7 @@
 title: Core Components
 parent: Build System
 nav_order: 1
+summary: "The reference for everything the build framework exports: BuildConfig, the file and object artifacts, BuildResult, BuildStep and Buildable, and the BuildDag that wires them. Read top to bottom for the conceptual order, ending with the incremental-rebuild model that decides which steps are skipped."
 ---
 
 # Core Components

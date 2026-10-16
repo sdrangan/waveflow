@@ -240,6 +240,19 @@ class MMIFSlave(InterfaceEndpoint):
     (``False``, full-duplex) gives independent AR/R and AW/W channels, matching real
     AXI where a read and a write on one bundle never contend."""
 
+    serialize_transactions: bool = False
+    """When ``True`` the slave serves ONE transaction at a time, from its address phase to its
+    response, and :class:`AXIMMCrossBarIF` holds this slave's channel for the whole transfer -- its
+    wire latency and per-word time included -- not only while :attr:`rx_write_proc` /
+    :attr:`rx_read_proc` run.
+
+    Without it (the default, unchanged) a FULL burst's transfer time is charged *before* the channel
+    is taken, so a short write issued after a long one can reach the slave first.  That is harmless
+    for a memory, and wrong for a slave whose whole point is order: the memory-mapped adaptor's front
+    end (``axi_slave_front.v``) accepts one AW/AR and is busy until its B/RLAST, which is what makes
+    "data, then doorbell" safe (``plans/mm_slave_adaptor.md``, guarantee 1).  Measured: without this
+    flag the pysim adaptor let a doorbell overtake a 256-word burst that the RTL held it behind."""
+
     bus_timing: "BusTiming | None" = None
     """Calibrated per-direction bus-occupancy span model for this slave's memory port
     (the contended physical resource).  ``None`` ⇒ the pipelined :class:`Region` slices
@@ -346,6 +359,24 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     bitwidth: int = 32
     master_port: int = field(init=False)
 
+    max_outstanding: int | None = None
+    """Transactions this master may have in flight **per direction**: ``1`` means one read and one
+    write at a time, each direction in issue order.  ``None`` (default) is unlimited -- every caller's
+    transaction proceeds at once, the model every design used before this existed.
+
+    It is a property of the *master*, and it matters as soon as two processes share one: a host with a
+    writer and a reader polls on both, and an unlimited master lets two of those reads travel the
+    crossbar together where a real one-outstanding master serializes them.  The XSI testbench's
+    ``AxiMmMaster(..., overlap_rw=true)`` is ``max_outstanding = 1``; set the two from one setting."""
+
+    issue_cycles: float = 0.
+    """Cycles between a caller asking for a transaction and the master presenting it -- the host's
+    own pacing.  ``0`` (default) presents it at once.  The XSI testbench's host takes 2: one cycle for
+    an endpoint to see its previous transaction finish, one for ``AxiMmMaster`` to present the next.
+    Measured on mm_fir by lining up each backend's bus operations; without it a pysim host issues
+    back-to-back transactions 2 cycles sooner than the RTL host it is compared with.  Cycles of the
+    interconnect's clock."""
+
     type_name = 'mmif_master'
 
     def __init_subclass__(cls, **kwargs):
@@ -354,6 +385,23 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.master_port = -1
+        if self.max_outstanding is not None and int(self.max_outstanding) < 1:
+            raise ValueError(f"{self.name}: max_outstanding must be >= 1 or None, "
+                             f"got {self.max_outstanding}")
+        self._slots: dict[str, simpy.Resource] = {}
+
+    def _issue(self, direction: str, transfer: ProcessGen[Any]) -> ProcessGen[Any]:
+        """Run *transfer* (an interconnect generator), holding one of this master's
+        :attr:`max_outstanding` slots for *direction* (``"R"`` / ``"W"``) when there is a limit."""
+        if self.issue_cycles:
+            yield self.timeout(float(self.issue_cycles) / self.interface.clk.freq)
+        if self.max_outstanding is None:
+            return (yield from transfer)
+        if direction not in self._slots:
+            self._slots[direction] = simpy.Resource(self.env, capacity=int(self.max_outstanding))
+        with self._slots[direction].request() as req:
+            yield req
+            return (yield from transfer)
 
     def _check_bound(self) -> None:
         if self.interface is None:
@@ -375,16 +423,15 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         ``tstart + nwords*period`` (the wait shortens if *tstart* is in the past).
         ``None`` is the ordinary blocking write."""
         self._check_bound()
-        yield self.process(
-            self.interface.write(words, global_addr, self.master_port, tstart=tstart))
+        yield from self._issue(
+            "W", self.interface.write(words, global_addr, self.master_port, tstart=tstart))
 
     @port_read
     def read(self, nwords: int, global_addr: int) -> ProcessGen[Words]:
         """Read *nwords* from *global_addr* and return the word array."""
         self._check_bound()
-        proc = self.process(self.interface.read(nwords, global_addr, self.master_port))
-        yield proc
-        return proc.value
+        return (yield from self._issue(
+            "R", self.interface.read(nwords, global_addr, self.master_port)))
 
     # ------------------------------------------------------------------
     # Polling (the LT polling-overhead model)
@@ -483,11 +530,14 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         m_axi buffered read at codegen time — the generated kernel fails loudly
         without it (each buffer declares its own bound; there is no fallback).
 
-        Accepts a ``np.ndarray`` (the vectorized fast path for any element type
-        that enables it via :meth:`DataSchema.to_words_numpy`) or a
-        :class:`~waveflow.hw.dataschema.DataArray` / array-like.  Packing is the
-        canonical :meth:`DataSchema.serialize` layout — there is no element-type
-        switch here; the element type decides whether it has a numpy fast path.
+        **One rule, whatever *elements* is:** the words written are
+        ``DataArray.specialize(element_type, n)(elements).serialize()`` -- a
+        ``DataArray``, a ``np.ndarray`` or a list all mean the same values, converted
+        by the ``DataArray`` constructor (which is where any policing of a bad
+        conversion belongs, not here).  Raw words go to :meth:`write`.  A
+        ``np.ndarray`` may take the element type's vectorized
+        :meth:`DataSchema.to_words_numpy` path, an optimization that must produce the
+        same words (``tests/hw/test_maxi_array_roundtrip.py`` checks it).
 
         *count* — when given — selects the first *count* elements before
         packing.  It exists so a synthesizable m_axi write carries an explicit
@@ -626,10 +676,8 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         returning ``(data, t0, t1)`` — the bus-visible span (see
         :meth:`AXIMMCrossBarIF.read_spanned`)."""
         nwords = self._typed_nwords(element_type, count, word_bw=word_bw)
-        proc = self.process(self.interface.read_spanned(
+        words, t0, t1 = yield from self._issue("R", self.interface.read_spanned(
             nwords, addr, self.master_port, t_out_start=t_out_start, num_trans=num_trans))
-        yield proc
-        words, t0, t1 = proc.value
         return self._unpack_elems(words, element_type, count, word_bw=word_bw), t0, t1
 
     def write_spanned(
@@ -641,11 +689,9 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         returning the bus-visible span ``(t0, t1)`` (see
         :meth:`AXIMMCrossBarIF.write_spanned`)."""
         words = self._pack(elements, element_type, count, word_bw=word_bw)
-        proc = self.process(self.interface.write_spanned(
+        return (yield from self._issue("W", self.interface.write_spanned(
             words, addr, self.master_port,
-            t_out_start=t_out_start, num_trans=num_trans, min_span=min_span))
-        yield proc
-        return proc.value
+            t_out_start=t_out_start, num_trans=num_trans, min_span=min_span)))
 
     # ------------------------------------------------------------------
     # Element-coordinate region view (the sim twin of the C++ read_array_slice)
@@ -711,20 +757,42 @@ class _DirectionalMMIFMaster(MMIFMaster):
     #: ``'R'`` or ``'W'`` — set by the concrete subclass.
     port_dir: ClassVar[str] = 'RW'
 
-    def __getattribute__(self, name: str):
-        attr = super().__getattribute__(name)
-        if name.startswith('_'):
-            return attr
-        want = object.__getattribute__(self, '__class__').port_dir
-        got = _classify_port_dir(name, attr)
-        if got is not None and got != want:
-            raise AttributeError(
-                f"{type(self).__name__}.{name} is a "
-                f"{'read' if got == 'R' else 'write'} operation, but this endpoint declares "
-                f"port_dir={want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
-                f"the direction is the type, so codegen can lower it without being told separately."
-            )
-        return attr
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Refuse the wrong direction's methods once, when the class is made.
+
+        Each method the classifier says belongs to the other direction is replaced on the class by a
+        :class:`_WrongDirection` descriptor, so reading it from an instance raises.  Checking in
+        ``__getattribute__`` instead ran on every attribute access of every transfer -- a measurable
+        share of a memory transaction's pysim cost -- to answer a question fixed by the class."""
+        super().__init_subclass__(**kwargs)
+        want = cls.port_dir
+        for name in dir(cls):
+            if name.startswith('_'):
+                continue
+            attr = getattr(cls, name)
+            if isinstance(attr, _WrongDirection):
+                continue
+            got = _classify_port_dir(name, attr)
+            if got is not None and got != want:
+                setattr(cls, name, _WrongDirection(name, got, want, attr))
+
+
+class _WrongDirection:
+    """A method a directional master's type forbids (see :class:`_DirectionalMMIFMaster`): reading it
+    from an instance raises ``AttributeError``; from the class, it is the method (for introspection)."""
+
+    def __init__(self, name: str, got: str, want: str, func) -> None:
+        self.name, self.got, self.want, self.func = name, got, want, func
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self.func
+        raise AttributeError(
+            f"{type(obj).__name__}.{self.name} is a "
+            f"{'read' if self.got == 'R' else 'write'} operation, but this endpoint declares "
+            f"port_dir={self.want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
+            f"the direction is the type, so codegen can lower it without being told separately."
+        )
 
 
 class MMIFReadMaster(_DirectionalMMIFMaster):
@@ -1070,6 +1138,14 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         Fixed wire-latency cycles added to every FULL forward transfer.
     latency_read_return : float
         Fixed wire-latency cycles added to every FULL read return transfer.
+    latency_travel : float
+        How many of the ``latency_init`` cycles a request spends **reaching** the slave, before it
+        competes for it.  Only the ``serialize_transactions`` path uses it (a slave that serves one
+        transaction at a time -- the memory-mapped adaptor's front): the travel overlaps whatever the
+        slave is doing, and only the rest is charged while the slave is held.  Every request travels
+        the same cycles, so they still reach the slave in the order they were issued.  ``0``
+        (default) charges all of ``latency_init`` while holding the slave -- the model before this
+        existed.  Measured through AMD's ``axi_crossbar``: 2 of its 4 cycles.
     byte_addressable : bool
         When ``True`` (default, AXI convention) addresses are byte addresses
         and each 32-bit word spans 4 bytes.  When ``False`` (word-addressed)
@@ -1083,6 +1159,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     nports_master: int = 1
     nports_slave: int = 1
     latency_read_return: float = 0.
+    latency_travel: float = 0.
     byte_addressable: bool = True
 
     type_name = 'aximm_crossbar_if'
@@ -1095,6 +1172,9 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             raise ValueError("nports_master must be at least 1")
         if self.nports_slave < 1:
             raise ValueError("nports_slave must be at least 1")
+        if not 0 <= float(self.latency_travel) <= float(self.latency_init):
+            raise ValueError(f"latency_travel must be in [0, latency_init], got "
+                             f"{self.latency_travel} (latency_init {self.latency_init})")
         self.endpoint_names = tuple(
             [f'master_{i}' for i in range(self.nports_master)] +
             [f'slave_{j}'  for j in range(self.nports_slave)]
@@ -1106,6 +1186,16 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
     # ------------------------------------------------------------------
     # Bind
     # ------------------------------------------------------------------
+
+    def rtl_config(self, name: str, *, id_width: int = 1):
+        """The RTL realization of this crossbar inside a DUT (``plans/system_model.md`` D3): AMD's
+        ``axi_crossbar`` IP, configured from this crossbar's ports and the address ranges bound to
+        its slaves (:meth:`~waveflow.build.axi_xbar.AxiXbarConfig.from_crossbar`; addresses must be
+        assigned first).  *name* is the IP's module name; *id_width* the AXI ID bits it routes."""
+        from waveflow.build.axi_xbar import AxiXbarConfig
+
+        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width,
+                                           direct=bool(getattr(self, "direct", False)))
 
     def bind(
         self,
@@ -1193,8 +1283,36 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
               tstart: float | None = None) -> ProcessGen[None]:
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
+        # A cut-through slave (``rx_write_begin``) hears a FULL burst when its FIRST data word lands,
+        # then again (``rx_write_proc``) when the last does -- a queue view that streams words on as
+        # they arrive.  Not for an early-anchored (``tstart``) write: its words already landed.
+        begin = getattr(slave_ep, "rx_write_begin", None) if tstart is None else None
 
-        if protocol == AXIMMProtocol.FULL:
+        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
+            # One transaction at a time from the address phase on: travel, then take the channel,
+            # then charge the rest, so a later transaction cannot slip in ahead (see the field).
+            if self.latency_travel > 0:
+                yield self.timeout(self.latency_travel / self.clk.freq)
+            with slave_ep.write_channel.request() as req:
+                yield req
+                head = (self.latency_init - self.latency_travel) / self.clk.freq
+                body = words.shape[0] * self._poll_stretch(ep_name) / self.clk.freq
+                if begin is not None:
+                    if head > 0:
+                        yield self.timeout(head)
+                    yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                    if body > 0:
+                        yield self.timeout(body)
+                else:
+                    dly = head + body
+                    if tstart is not None:
+                        dly = max(0.0, dly + (tstart - self.env.now))
+                    if dly > 0:
+                        yield self.timeout(dly)
+                if slave_ep.rx_write_proc is not None:
+                    yield from slave_ep.rx_write_proc(words, local_addr)
+
+        elif protocol == AXIMMProtocol.FULL:
             # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
             # fixed init/address latency is untouched (see the model).
             cycles = self.latency_init + words.shape[0] * self._poll_stretch(ep_name)
@@ -1204,12 +1322,19 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             # wait if the anchor is in the past (mirrors StreamIF.write_pipelined).
             if tstart is not None:
                 dly = max(0.0, dly + (tstart - self.env.now))
+            if begin is not None:
+                head = self.latency_init / self.clk.freq
+                body = dly - head
+                if head > 0:
+                    yield self.timeout(head)
+                yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                dly = body
             if dly > 0:
                 yield self.timeout(dly)
             with slave_ep.write_channel.request() as req:
                 yield req
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
 
         else:  # LITE — one word per transaction
             word_step = self._word_step()
@@ -1222,12 +1347,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.write_channel.request() as req:
                     yield req
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(
-                            slave_ep.rx_write_proc(
-                                words[i : i + 1],
-                                local_addr + i * word_step,
-                            )
-                        )
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step, )
 
         # the watched word may have changed — wake any pollers on this slave
         self._notify_write(ep_name)
@@ -1241,6 +1361,27 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
         dtype = self._dtype()
 
+        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
+            # The whole read -- the rest of the address latency, the slave, the return -- inside the
+            # channel, after the travel (see latency_travel).
+            if self.latency_travel > 0:
+                yield self.timeout(self.latency_travel / self.clk.freq)
+            with slave_ep.read_channel.request() as req:
+                yield req
+                req_dly = (self.latency_init - self.latency_travel) / self.clk.freq
+                if req_dly > 0:
+                    yield self.timeout(req_dly)
+                if slave_ep.rx_read_proc is not None:
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
+                else:
+                    words = np.zeros(nwords, dtype=dtype)
+                ret_dly = (
+                    self.latency_read_return + nwords * self._poll_stretch(ep_name)
+                ) / self.clk.freq
+                if ret_dly > 0:
+                    yield self.timeout(ret_dly)
+            return words
+
         if protocol == AXIMMProtocol.FULL:
             req_dly = self.latency_init / self.clk.freq
             if req_dly > 0:
@@ -1249,9 +1390,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             with slave_ep.read_channel.request() as req:
                 yield req
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
 
@@ -1276,11 +1415,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.read_channel.request() as req:
                     yield req
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step)
-                        )
-                        yield proc
-                        result[i] = proc.value[0]
+                        result[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
 
             return result
 
@@ -1314,9 +1449,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if req_dly > 0:
                     yield self.timeout(req_dly)
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
                 ret_dly = (
@@ -1332,10 +1465,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step))
-                        yield proc
-                        words[i] = proc.value[0]
+                        words[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
             # Occupy the channel out to the full span (anchored).
             t0 = anchor
             t1 = max(anchor + span, self.env.now)
@@ -1378,7 +1508,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if dly > 0:
                     yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
             else:  # LITE — one word per transaction
                 word_step = self._word_step()
                 for i in range(nwords):
@@ -1388,8 +1518,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(slave_ep.rx_write_proc(
-                            words[i : i + 1], local_addr + i * word_step))
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step)
             # the watched word may have changed — wake any pollers on this slave
             self._notify_write(ep_name)
             # Occupy the channel out to the full span (anchored); remember the busy-until so the
@@ -1501,7 +1630,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.write_channel.request() as req:
             yield req
             if slave_ep.rx_write_proc is not None:
-                yield self.env.process(slave_ep.rx_write_proc(words, addr))
+                yield from slave_ep.rx_write_proc(words, addr)
         # wake any pollers waiting on this slave (point-to-point: single bus)
         self._notify_write('slave')
 
@@ -1518,9 +1647,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.read_channel.request() as req:
             yield req
             if slave_ep.rx_read_proc is not None:
-                proc = self.env.process(slave_ep.rx_read_proc(nwords, addr))
-                yield proc
-                words = proc.value
+                words = yield from slave_ep.rx_read_proc(nwords, addr)
             else:
                 words = np.zeros(nwords, dtype=dtype)
 

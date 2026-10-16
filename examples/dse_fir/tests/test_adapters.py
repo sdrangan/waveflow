@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
 def test_cli_schema_and_errors_are_json(tmp_path):
@@ -22,6 +22,17 @@ def test_cli_schema_and_errors_are_json(tmp_path):
 def test_workspace_does_not_import_dse():
     result = subprocess.run([sys.executable, "-c", "import sys; from waveflow.mcp.server import build_mcp; build_mcp(); assert 'examples.dse_fir.service' not in sys.modules; assert 'examples.dse_fir.dse_tools' not in sys.modules"], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_dse_server_factory_exposes_working_isolated_tools(tmp_path):
+    from waveflow.mcp.server import build_mcp
+
+    server = build_mcp(mode="dse", work_dir=tmp_path)
+    tools = asyncio.run(server.list_tools())
+    assert len(tools) == 6 and all(tool.name.startswith("dse_") for tool in tools)
+    result = asyncio.run(server.call_tool("dse_get_results", {}))
+    assert not result.is_error
+    assert json.loads(result.content[0].text)["total"] == 0
 
 
 def test_cli_reports_service_failures_and_exports_csv(tmp_path):
@@ -50,7 +61,7 @@ def test_mcp_stdio_six_tools_and_live_results(tmp_path):
             assert len(tools) == 6
             assert all(t.name.startswith("dse_") for t in tools)
             result = await client.call_tool("dse_get_results", {})
-            assert not result.isError
+            assert not result.is_error
             assert json.loads(result.content[0].text)["total"] == 0
             await client.call_tool("dse_pysim", {"params": {}})
             result = await client.call_tool("dse_get_results", {})
@@ -74,13 +85,13 @@ def test_registry_six_tools_match_mcp_and_dispatch():
     registry = make_dse_registry(service)
     schemas = registry.tool_schemas("dse")
     assert len(schemas) == 6
-    mcp = FastMCP("test")
+    mcp = MCPServer("test")
     registry.register_all(mcp, "dse")
-    actual = {tool.name: tool.inputSchema for tool in asyncio.run(mcp.list_tools())}
+    actual = {tool.name: tool.input_schema for tool in asyncio.run(mcp.list_tools())}
     for schema in schemas:
         fn = schema["function"]
         assert fn["parameters"] == actual[fn["name"]]
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
     with pytest.raises(ToolError, match="validation"):
         asyncio.run(mcp.call_tool("dse_get_results", {"offset": "1"}))
     with pytest.raises(ToolError, match="validation"):

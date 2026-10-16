@@ -58,6 +58,7 @@ arrivals.
 | `n_rx`, `n_tx` | `HwParam` | RF channels per direction on the AXIS side |
 | `word` | plain field, a **type** | the whole sample geometry — samples per beat, effective bits, container bits, `iq_mode`, and the two packing rules a serializer cannot know |
 | `full_scale`, `t0_rx`, `t0_tx` | plain init-time fields | one artifact serves every value |
+| `allow_xz` | `DynParam[bool]`, default `False` | XSI only: let the DAC model accept a word with undriven (X/Z) bits instead of stopping the run -- for a design whose startup plays memory it has not written |
 
 **`word` is a plain field for a mechanical reason.** `HwModule.__post_init__` wraps every `HwParam`
 value in `HwParamValue(int(value))`, so a type-valued parameter cannot be one. Nothing is lost: an

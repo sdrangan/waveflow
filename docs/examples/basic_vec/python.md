@@ -2,6 +2,7 @@
 title: The Python model
 parent: Basic vector arithmetic
 nav_order: 1
+summary: "The golden model: one vectorized multiply-accumulate per numeric kind, a*b + c over DataArrays with no per-element Python loop. The same expression in integer, float and fixed point, with the operators deriving the result width — 8-bit times 8-bit gives 16, plus a carry bit for the add."
 ---
 # The Python golden model
 
@@ -69,9 +70,9 @@ import numpy as np
 from waveflow.utils.fixputils import to_bits
 
 # integer / fixed: stored W-bit integers
-int_bits = [int(x) for x in to_bits(np.asarray(y), 8)]
+int_bits = [int(x) for x in to_bits(y.val, 8)]
 # float: raw IEEE bits
-float_bits = [int(u) for u in np.asarray(y).astype(np.float32).view(np.uint32)]
+float_bits = [int(u) for u in y.val.view(np.uint32)]
 ```
 
 These golden bit-vectors go into `expected.json`; the kernel's output is compared against

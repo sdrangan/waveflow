@@ -3,6 +3,7 @@ title: Stream-of-Blocks Timing Analysis
 parent: Timing Analysis Tools
 nav_order: 7
 has_children: false
+summary: "A stream of blocks lowers to a block-RAM port rather than an AXI stream, so its activity lives on a different set of nets than the two protocol pages cover. add_sob_signals finds a named buffer's port nets from the owning component, and extract_sob_span turns them into spans. Worked on the interleaver's gather stage, which holds two read blocks and one write block."
 ---
 
 # Stream-of-Blocks Analysis

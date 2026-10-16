@@ -57,7 +57,7 @@ def test_hostactivated_rejects_run_iter():
 
 def test_migrated_examples_are_hostactivated():
     from examples.regmap.simp_fun import SimpFun
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
     assert issubclass(SimpFun, HostActivated)
     assert issubclass(PolyAccel, HostActivated)
 
@@ -107,7 +107,7 @@ def test_run_once_wrong_arg_count_raises():
 
 def test_run_once_stream_bearing_is_follow_on():
     """Phase 5a is regmap-scalar only; a stream-bearing kernel (poly) raises a clear follow-on error."""
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
     dut = elaborate(PolyAccel)
     with pytest.raises(NotImplementedError, match="stream-bearing"):
         dut.run_once(1)

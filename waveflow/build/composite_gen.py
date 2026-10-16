@@ -23,12 +23,17 @@ edges), and a SOBIF toy (a block edge) all fall out of this *same* generator.  P
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePath
 
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.hw.hw_module import declares_hook
 from waveflow.hw.interface import DEFAULT_STREAM_DEPTH
 
-#: Output-directory convention shared by the generated tops and their csynth .tcl.
+#: Directory convention shared by the generated tops and their csynth .tcl
+#: (``plans/source_layout.md``): ``src/`` holds the hand-written sources and is tracked; ``include/``
+#: and ``gen/`` are build output -- untracked, and deleting them is a clean build.  ``gen/`` also
+#: holds each top's ``<top>.tcl`` (see :func:`tcl_path`).
+SRC_DIR = "src"
 INCLUDE_DIR = "include"
 GEN_DIR = "gen"
 DEFAULT_MEM_DW = 64
@@ -90,6 +95,10 @@ class TaskInst:
     template_args: tuple[int, ...]   # baked-concrete template args, e.g. (64,) or (32, 256)
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
+    #: The C++ word types of the body's framed ports (``KernelTask.framed``), template arguments after
+    #: ``template_args``.  Not part of :attr:`inst_name`: Vitis names an instance by its integer
+    #: arguments only.
+    word_types: tuple[str, ...] = ()
 
     @property
     def inst_name(self) -> str:
@@ -149,11 +158,34 @@ class BfmModel:
 
     A single ``BfmModel`` whose ports are all boundary ports resolves precisely as it always did,
     which is every design that existed before this generalization.
+
+    * ``header`` — the model lives **beside the example**, not in the framework library
+      (``plans/xsi_system_top.md`` S2).  A path relative to the directory of the file that defines
+      the module's class (or absolute).  ``check`` then looks ``cls`` up in *that* header instead of
+      the framework's, the harness includes it by file name, and :attr:`TbSpec.local_headers` carries
+      its path so a workspace can copy it in.  The use: a host program, whose C++ is per-example by
+      nature, as a ``.h`` beside its Python twin rather than C++ in a Python string.  A local model is
+      the participant's own class on every port it spans -- each port's BFM dual is still checked to
+      exist, but the class is not looked up from it.
+    * ``generated_files`` -- files the model needs **generated** beside the harness, as
+      ``(file name, render)`` with *render* a no-argument function returning the text.  Rendered when
+      the harness is, not when the model is declared, so declaring it never needs a fully wired
+      participant.  The use: a software host's generated ``<Host>_endpoints.h``, which its hand-written
+      header includes (``plans/system_model.md`` D5) -- declared by the host, so the harness generator
+      names no participant type.
+    * ``reports_counters`` -- the C++ model keeps its own counters (a converter's dropped words, a
+      channel's transfers) and writes them as JSON in ``post_sim`` when its ``counters_out`` is set.
+      The **system** flow sets it -- ``vectors/counters/<model>.json`` -- and gathers the directory as
+      a recording, checked by the example (``plans/system_model.md`` S3d).  The kernel flow leaves
+      it unset, so its harness is unchanged.
     """
     cls: str
     ports: tuple[str | tuple[str, ...], ...] = ()
     extra_args: tuple[str, ...] = ()
     shared: str | None = None
+    header: str | None = None
+    generated_files: tuple = ()
+    reports_counters: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,10 +210,17 @@ class ChannelModel:
     Order matters and is stated rather than inferred: ``peers[0]`` is the side that *pushes*.  A
     channel is one-producer/one-consumer (multi-producer is deferred, ``plans/behavioral_edges.md``
     S5), so a wrong order is a direction error, not a cosmetic one.
+
+    * ``reports_counters`` -- the C++ model keeps its own counters (a converter's dropped words, a
+      channel's transfers) and writes them as JSON in ``post_sim`` when its ``counters_out`` is set.
+      The **system** flow sets it -- ``vectors/counters/<model>.json`` -- and gathers the directory as
+      a recording, checked by the example (``plans/system_model.md`` S3d).  The kernel flow leaves
+      it unset, so its harness is unchanged.
     """
     cls: str
     peers: tuple[str, ...] = ()
     extra_args: tuple[str, ...] = ()
+    reports_counters: bool = False
 
 
 @dataclass(frozen=True)
@@ -520,12 +559,25 @@ def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = Fa
 def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
     """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
     with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
-    ``const`` (the ``@port_read`` capability -> a stray write is a compile error) and gets
-    ``#pragma HLS stable``; the write owner is plain."""
+    ``const`` (the ``@port_read`` capability -> a stray write is a compile error); the write owner is
+    plain.
+
+    **``offset=off`` + ``stable``, on every pointer -- not ``offset=slave``.**  UG1399 (HLS Task
+    Library) supports an ``m_axi`` pointer passed to an ``hls::task`` only as a ``stable`` argument
+    with ``offset=off``.  With ``offset=slave`` Vitis 2025.1 still synthesizes it, but hands each task
+    its pointer through a small FIFO of its own, refilled by one ``entry_proc`` that writes every such
+    FIFO together; a task pops its FIFO each firing.  A reader that fires more often per job than the
+    writer drains its FIFO while the writer's fills, the entry process blocks, and the pipeline stops
+    -- at RTL only, after a number of jobs set by the FIFO depth (``interleaver_inband``: 6 jobs, then
+    a hang; ``plans/maxi_pointer_fifo.md``).  ``stable`` alone does not remove the FIFOs (measured);
+    ``offset=off`` does: no entry process, no pointer FIFOs, no ``s_axi_control`` slave.
+
+    The cost is the relocatable base: the bus address is the command's word coordinate times the
+    word size, from 0.  Every flow already ran that way -- the XSI testbenches and the system top
+    pinned the base register to 0."""
     qual = "const " if const else ""
-    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=slave bundle={bundle} depth=8192"]
-    if const:
-        pragmas.append(f"#pragma HLS stable variable={name}")
+    pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=off bundle={bundle} depth=8192",
+               f"#pragma HLS stable variable={name}"]
     return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
                    width=width)
@@ -927,7 +979,8 @@ def bundle_map(boundary) -> dict[str, str]:
     return out
 
 
-def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None) -> ExtPort:
+def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None, *,
+                   framed: bool = False) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas).
 
     *bundle* comes from :func:`bundle_map` (the assembler's policy) for the m_axi kinds, and is
@@ -945,8 +998,9 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
         # TLAST does so because the design reads the frame boundary, which is a fact about the
         # design.  `getattr` with a default keeps every non-stream endpoint (and any third-party
         # one) working unchanged rather than needing the attribute added to it.
+        # A kernel's framed port at a top (`KernelTask.framed`) carries TLAST too.
         return _axis_port(name, width, kind=kind,
-                          axi4s=bool(getattr(ep, "boundary_tlast", False)))
+                          axi4s=framed or bool(getattr(ep, "boundary_tlast", False)))
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
@@ -1053,7 +1107,8 @@ def _kernel_task_of(sub, comp):
     return kt()
 
 
-def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
+def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
+                       port_widths: dict[str, int] | None = None) -> TopSpec:
     """Derive the composite :class:`TopSpec` from *comp*'s component/interface graph.
 
     Reads four things off the built parent, nothing hand-written per top:
@@ -1071,7 +1126,15 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
 
     Because the args and channel decls come from the graph, the standalone kernel (one node, no
     edges), the memcpy composite (stream edges), and the SOBIF toy (a block edge) all fall out of this
-    *same* generator."""
+    *same* generator.
+
+    *port_widths* overrides *width* for the named AXIS boundary ports, for a design whose ports do not
+    share one word width -- ``VitisFft``'s output word is wider than its input, because the FFT's
+    output format grows with ``log2 L``.  It is opt-in rather than read off every endpoint's
+    ``bitwidth`` because existing designs declare endpoints narrower than the design width (credit
+    ports at 16 bits on a 64-bit design) and are gated on exact RTL cycle counts for the top as it is
+    emitted today.  A name that is not an AXIS boundary port is refused."""
+    port_widths = dict(port_widths or {})
     ep_arg: dict[int, str] = {}
 
     seen: dict[str, object] = {}
@@ -1091,6 +1154,12 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
 
+    # The endpoints of the kernels' framed ports: such a port is TLAST-carrying wherever it lands.
+    framed_eps: set[int] = set()
+    for sub in kernel_tasks(comp):
+        for attr in _kernel_task_of(sub, comp).framed:
+            framed_eps.update(id(p) for p in getattr(sub, attr).physical_endpoints())
+
     ports: list[ExtPort] = []
     bundles = bundle_map(comp.boundary)
     for entry in comp.boundary:
@@ -1098,7 +1167,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
         bundle = bundles.get(name)
         ep_arg[id(ep)] = name
         _check_boundary_depth(comp, name, ep)
-        ports.append(_boundary_port(name, kind_of_endpoint(ep), width, bundle, ep))
+        kind = kind_of_endpoint(ep)
+        w = width
+        if name in port_widths:
+            if kind not in ("axis_in", "axis_out"):
+                raise LoweringError(
+                    f"composite_top_spec: port_widths names {name!r}, a {kind} port; only AXIS "
+                    f"boundary ports take a per-port width.")
+            w = int(port_widths.pop(name))
+        ports.append(_boundary_port(name, kind, w, bundle, ep, framed=id(ep) in framed_eps))
+    if port_widths:
+        raise LoweringError(
+            f"composite_top_spec: port_widths names {sorted(port_widths)}, which are not boundary "
+            f"ports of {type(comp).__name__}.")
 
     # Tasks are built before channels so a channel can record WHICH task drives it: the producer
     # and consumer task indices are what turn a channel name into RTL net names
@@ -1122,7 +1203,19 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW) -> TopSpec:
                         f"boundary port of {type(comp).__name__} — cannot resolve its task arg")
                 args.append(arg)
                 ep_task[id(phys)] = len(tasks)
-        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
+        # A framed port's word type: axi4s_word at the top's port, framed_word on an internal FIFO.
+        boundary = {p.name: p for p in ports}
+        word_types = []
+        for attr in kt.framed:
+            (phys,) = getattr(sub, attr).physical_endpoints()
+            arg = ep_arg[id(phys)]
+            if arg in boundary:
+                word_types.append(f"streamutils::axi4s_word<{boundary[arg].width}>")
+            else:
+                w = int(getattr(phys, "bitwidth", width))
+                word_types.append(f"streamutils::framed_word<{w}>")
+        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header,
+                              tuple(word_types)))
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
@@ -1189,8 +1282,8 @@ def render_top(spec: TopSpec) -> str:
         # non-template, so the brackets appear only when there is something to put in them.
         # (Reachable since a GENERATED task body bakes its width when the endpoints were built
         # from an already-int()'d HwParam — nothing stays symbolic to template on.)
-        targs = ", ".join(str(a) for a in t.template_args)
-        fn = f"{t.task_fn}<{targs}>" if t.template_args else t.task_fn
+        targs = ", ".join([*(str(a) for a in t.template_args), *t.word_types])
+        fn = f"{t.task_fn}<{targs}>" if targs else t.task_fn
         lines.append(
             f"    hls_thread_local hls::task t{i}({fn}, {call_args});")
     lines.append("}")
@@ -1249,11 +1342,19 @@ BFM_DUALS: dict[str, BfmDual] = {
     "axis_out":      BfmDual("AXI4-Stream", "slave", "AxisSlave", participant_declares=True),
     "maxi_read":     BfmDual("AXI4-MM", "read slave", "AxiMmReadSlave"),
     "maxi_write":    BfmDual("AXI4-MM", "write slave", "AxiMmWriteSlave"),
-    # A port that is an AXI-MM *slave* would need the testbench to MASTER the bus into it.  No model
-    # does that, and none is planned: in this flow the kernel is always the m_axi master and the
-    # testbench always supplies the memory.  The row exists so a module that would need it gets that
-    # sentence instead of a KeyError.
-    "mm_slave":      BfmDual("AXI4-MM", "master", None),
+    # A DUT port that is an AXI-MM *slave* -- a system top's crossbar SI, reached by a host
+    # (plans/xsi_system_top.md S1).  The testbench masters the bus into it with `AxiMmMaster`, which
+    # carries both directions on one port; a host program's queue / register endpoints
+    # (`xsi_mm_host.h`) issue their reads and writes through it.  Once "none is planned" -- stale since
+    # the mm_fir and markov gates drove their system tops this way.
+    "mm_slave":      BfmDual("AXI4-MM", "master", "AxiMmMaster"),
+    # A DUT's interrupt OUTPUT (an `IrqIFSource` crossing the cut -- a queue view's `irq`): a one-bit
+    # level the testbench samples every cycle.  `IrqPin` (`xsi_mm_host.h`) is the C++ end of an
+    # `IrqIF`, as `IrqIFSink` is the pysim end.
+    "irq_out":       BfmDual("interrupt", "sampler", "IrqPin"),
+    # The other direction -- a DUT that TAKES an interrupt (an `IrqIFSink` inside the cut) -- would
+    # need a model that drives the line.  None does: no design has one.  A hole, recorded as a row.
+    "irq_in":        BfmDual("interrupt", "driver", None),
     # THE KNOWN GAP.  A regmap / HostActivated DUT presents an AXI4-Lite control slave, and no model
     # in waveflow/build/xsi/ answers it — so such a DUT cannot be XSI-lowered at all today.  Recorded
     # here, as a row with no model, rather than in prose: "which duals exist" is one lookup, and the
@@ -1368,6 +1469,18 @@ class TbSpec:
     #: Behavioral edges — one per TB interface with **neither** endpoint on the DUT boundary.  Empty
     #: for every design that has only boundary edges, which is every design built before this existed.
     channels: tuple[ChannelInst, ...] = ()
+    #: Absolute paths of the example-local model headers (:attr:`BfmModel.header`) this harness
+    #: includes, in first-use order.  The harness names them by file name; whoever builds the
+    #: workspace copies these files beside it.
+    local_headers: tuple[str, ...] = ()
+    #: The model whose ``done()`` ends the run, or ``None``.  Set, the harness also has
+    #: ``run_until(n_max)``: a **host program** knows when it has everything it asked for, and a run
+    #: that stops there is not the drain-tail-as-latency mistake ``run``'s note warns about -- the
+    #: host's completion IS the measurement (``plans/xsi_system_top.md``).
+    stop_on: str | None = None
+    #: Generated files the harness needs beside it, ``(file name, text)`` -- a software host's
+    #: ``<Host>_endpoints.h``.
+    extra_files: tuple[tuple[str, str], ...] = ()
 
 
 def _find_dut(tb):
@@ -1431,7 +1544,10 @@ _XSI_BFM_HEADER = "xsi_bfm.h"
 #: holds the converters, which bind both.  Scanning the set rather than one file is what keeps that
 #: split from silently shrinking the registry — a model in the "wrong" header would otherwise be
 #: reported as not existing.
-_XSI_MODEL_HEADERS = ("xsi_bfm.h", "xsi_rf_block.h", "xsi_rfdc.h")
+#: ``xsi_mm_host.h`` holds the host side of a memory-mapped system -- ``IrqPin``, the one model there
+#: that is a participant on its own (the queue / register endpoints are not models of their own: they
+#: are stepped by a host program).
+_XSI_MODEL_HEADERS = ("xsi_bfm.h", "xsi_rf_block.h", "xsi_rfdc.h", "xsi_mm_host.h")
 
 
 def xsi_model_classes() -> frozenset[str]:
@@ -1446,16 +1562,53 @@ def xsi_model_classes() -> frozenset[str]:
     simulator and its handle, not participants, and naming one as a ``bfm_model()`` would compile
     into nonsense rather than a model.
     """
-    import re
     from pathlib import Path
 
     xsi = Path(__file__).resolve().parent / "xsi"
     found: set[str] = set()
     for name in _XSI_MODEL_HEADERS:
-        text = (xsi / name).read_text(encoding="utf-8")
-        found |= set(re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+XsiSimObj\b",
-                                text, re.M))
+        found |= header_model_classes(xsi / name)
     return frozenset(found)
+
+
+def header_model_classes(path) -> frozenset[str]:
+    """The ``XsiSimObj`` subclasses one C++ header defines -- the rule :func:`xsi_model_classes`
+    applies to the framework library, applied to any header (an example-local model's)."""
+    import re
+    from pathlib import Path
+
+    text = Path(path).read_text(encoding="utf-8")
+    # A software host's model derives from its generated <Host>_endpoints (or SwHostModel directly),
+    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.  A model may also derive from
+    # another model in the same header (MmScript : AxiMmMaster), so the rule is followed through.
+    found = set(re.findall(
+        r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(?:XsiSimObj|SwHostModel|\w+_endpoints)\b",
+        text, re.M))
+    derived = re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(\w+)\b", text, re.M)
+    grew = True
+    while grew:
+        grew = False
+        for cls, base in derived:
+            if base in found and cls not in found:
+                found.add(cls)
+                grew = True
+    return frozenset(found)
+
+
+def bfm_model_header(mod, bm: "BfmModel"):
+    """The absolute path of *bm*'s example-local header (:attr:`BfmModel.header`), or ``None``.
+
+    A relative path resolves against the directory of the file defining *mod*'s class -- "beside the
+    example" -- so the declaration means the same wherever the build runs from."""
+    import inspect
+    from pathlib import Path
+
+    if bm.header is None:
+        return None
+    p = Path(bm.header)
+    if not p.is_absolute():
+        p = Path(inspect.getfile(type(mod))).resolve().parent / p
+    return p
 
 
 def _xsi_type_headers() -> dict[str, str]:
@@ -1545,6 +1698,23 @@ def resolve_bfm_model(mod, crossing=None):
 
     known = xsi_model_classes()
     for bm in models:
+        hdr = bfm_model_header(mod, bm)
+        if hdr is not None:
+            # An example-local model is looked up in ITS header, never the framework's -- a library
+            # class of the same name would otherwise answer for a typo in the local one.
+            if not hdr.is_file():
+                raise LoweringError(
+                    f"{name}.bfm_model() names {bm.cls!r} in header {bm.header!r}, but there is no "
+                    f"such file ({hdr}). A relative header resolves beside the file that defines "
+                    f"{name}."
+                )
+            local = header_model_classes(hdr)
+            if bm.cls not in local:
+                raise LoweringError(
+                    f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj "
+                    f"in {hdr.name}. Classes it defines: {sorted(local)}."
+                )
+            continue
         if bm.cls not in known:
             raise LoweringError(
                 f"{name}.bfm_model() names the C++ class {bm.cls!r}, which is not an XsiSimObj in "
@@ -1725,6 +1895,7 @@ _FACING_KINDS: dict[str, tuple[str, ...]] = {
     "maxi_read": ("mm_slave",),      # an m_axi master outside the cut would need the TB to be a slave
     "maxi_write": ("mm_slave",),
     "axilite_slave": ("axilite_slave",),
+    "irq_in": ("irq_out",),          # a host's IrqIFSink faces the DUT's interrupt output
 }
 
 
@@ -1735,6 +1906,14 @@ def _facing_kinds(ep, mod, attr: str) -> tuple[str, ...]:
     kernel walk and wrong here: "this endpoint type has no BFM" is precisely the answer
     ``xsi_bfm_model`` exists to give, so the refusal is re-framed rather than propagated.
     """
+    from waveflow.hw.memif import MMIFMaster
+
+    # A bare (read+write) MMIFMaster OUTSIDE the cut is a host's bus master.  Its kind is declared
+    # `None` because a *kernel* pointer must say whether it is const; that question does not arise
+    # for a model beside the top -- `AxiMmMaster` carries both directions -- so it faces an AXI-MM
+    # slave port, as a directional master does.
+    if _declared_boundary_kind(ep) is None and isinstance(ep, MMIFMaster):
+        return _FACING_KINDS["maxi_read"]
     try:
         kind = kind_of_endpoint(ep)
     except LoweringError as e:
@@ -2141,6 +2320,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
 
     dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
     ports_ns = f"{dut.cpp_kernel_name}_ports"
+    local_headers: list[str] = []
 
     # endpoint identity -> (participant, the model spanning it, that model's identity).  Built over
     # EVERY declared model, so a module with one and a module with three walk the same path.
@@ -2233,7 +2413,15 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         if key in emitted:
             continue          # this boundary port is covered by a model already constructed
         binds, prefix, chan = _resolve_model_binding(part, bm, ports_ns, boundary_of, channel_of)
-        models.append(BfmInst(bfm_dual_class(kind, bm.cls), name, prefix or port.xsi_prefix,
+        # The dual is resolved either way (a port with no dual is refused), but an example-local
+        # model is the participant's own class on every port it spans.
+        cls = bfm_dual_class(kind, bm.cls)
+        if bm.header is not None:
+            cls = bm.cls
+            hdr = str(bfm_model_header(part, bm))
+            if hdr not in local_headers:
+                local_headers.append(hdr)
+        models.append(BfmInst(cls, name, prefix or port.xsi_prefix,
                               bm.extra_args, dyn, channel=chan, binds=binds))
         emitted.add(key)
         claimed_eps.update(id(_bfm_port_endpoint(part, a)) for a in _bfm_port_attrs(bm))
@@ -2257,7 +2445,8 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
         emitted[nm] = kind
 
     return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
-                  models=tuple(models), channels=tuple(channels))
+                  models=tuple(models), channels=tuple(channels),
+                  local_headers=tuple(local_headers))
 
 
 def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
@@ -2320,6 +2509,9 @@ def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
     # remembered to.
     for hdr in _harness_extra_includes(spec):
         lines.append(f'#include "{hdr}"')
+    # Example-local models (BfmModel.header), by file name: the workspace holds them beside this one.
+    for hdr in spec.local_headers:
+        lines.append(f'#include "{PurePath(hdr).name}"')
     lines += [
         f'#include "{ports_ns}.h"',
         "",
@@ -2411,6 +2603,28 @@ def render_tb_harness(spec: TbSpec, ns: str | None = None) -> str:
         "        post_sim();                      // participants dump results / collect metrics",
         "    }",
         "",
+    ]
+    if spec.stop_on is not None:
+        lines += [
+            f"    /// Run until {spec.stop_on}.done() -- the host has taken everything it asked for -- or",
+            "    /// *n_max* cycles.  Returns the cycles run: the loop of run(), with the stop test.",
+            "    long run_until(long n_max) {",
+            "        pre_sim();",
+            "        sim.reset([this]{ drive(); });",
+            "        long c = 0;",
+            f"        for (; c < n_max && !{spec.stop_on}.done(); ++c) {{",
+            "            sim.clock_low();",
+            "            sample();",
+            "            sim.clock_high();",
+            "            update();",
+            "            drive();",
+            "        }",
+            "        post_sim();",
+            "        return c;",
+            "    }",
+            "",
+        ]
+    lines += [
         "    void close() { sim.close(); }",
         "};",
         "",
@@ -2434,12 +2648,19 @@ _MAXI_UNDRIVEN = {
 }
 
 #: The AXI-Lite control slave Vitis creates for `offset=slave` m_axi ports.  Pinning it quiescent is
-#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.
+#: what makes every offset register read 0, i.e. element coordinates == byte addresses / BPW.  A
+#: free-running top's pointers are `offset=off` (see :func:`_maxi_port`) and have no such slave.
 _CONTROL_UNDRIVEN = (
     "s_axi_control_AWVALID", "s_axi_control_AWADDR", "s_axi_control_WVALID", "s_axi_control_WDATA",
     "s_axi_control_WSTRB", "s_axi_control_ARVALID", "s_axi_control_ARADDR", "s_axi_control_RREADY",
     "s_axi_control_BREADY",
 )
+
+
+def has_control_slave(ports) -> bool:
+    """Whether a kernel with these boundary *ports* has the ``s_axi_control`` slave: Vitis creates it
+    for an ``m_axi`` port with ``offset=slave``, so it is read off the pragmas, not assumed."""
+    return any("offset=slave" in pr for p in ports for pr in p.pragmas)
 
 
 def render_ports_h(spec: TopSpec) -> str:
@@ -2493,7 +2714,7 @@ def render_ports_h(spec: TopSpec) -> str:
         lines.append(f'static const char* const {p.name:<8} = "{p.xsi_prefix}";   // {comment}')
 
     zero: list[str] = []
-    if any(p.kind in ("maxi_read", "maxi_write") for p in spec.pin_ports):
+    if has_control_slave(spec.pin_ports):
         zero.extend(_CONTROL_UNDRIVEN)
     for p in spec.pin_ports:
         for ch in _MAXI_UNDRIVEN.get(p.kind, ()):
@@ -2542,7 +2763,9 @@ def render_tb_main(spec: TbSpec, n_cycles: int, ns: str | None = None,
         "",
         "int main() {",
         f'    {ns}::Harness h("{wdb}");',
-        f"    h.run({int(n_cycles)});",
+        # The bound is the GENERATED default; a run's vectors/run.json may override it (a workload
+        # sweep's points then share one compiled testbench -- wfbfm::run_param, xsi_bundle.h).
+        f'    h.run(wfbfm::run_param("n_cycles", {int(n_cycles)}));',
         "    h.close();",
         "    return 0;",
         "}",
@@ -2598,6 +2821,34 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def check_maxi_lowered(root, top_name: str) -> None:
+    """Refuse a csynth result whose ``m_axi`` ports were not lowered to AXI masters.
+
+    **Seen twice (Vitis 2025.1, 2026-10-10), never reproduced on demand.**  csynth of a top whose
+    pragmas declare ``m_axi`` (``offset=off`` + ``stable``) reported success with every pointer lowered
+    to a plain register port -- ``HLS 214-450 Ignore address on register port 'm_mem'``, no
+    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  Nothing downstream
+    says so until XSI fails to bind a port (``FATAL: port 'ap_rst_n' not found``), or worse, never
+    binds it at all.  So right after csynth, before the stamp vouches for it: every ``m_axi`` bundle the
+    top's source declares must have its adapter in the RTL.  ``plans/maxi_pointer_fifo.md``.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
+    if not src.is_file():
+        return
+    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
+                             src.read_text(encoding="utf-8")))
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    missing = sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+    if missing:
+        raise RuntimeError(
+            f"csynth of {top_name} declared m_axi bundle(s) {missing} but produced no AXI master for "
+            f"them -- Vitis lowered the pointer to a register port (look for HLS 214-450 in the log). "
+            f"Re-run csynth; see composite_gen.check_maxi_lowered.")
+
+
 def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
                  stamp_sources: bool = True) -> str:
     """Emit the ``xvlog`` file list (``rtl_<top>.f``) for *top*'s elaborated RTL.
@@ -2648,7 +2899,18 @@ def render_rtl_f(top_name: str, root, extra: tuple[str, ...] = (), *,
     if not names:
         raise FileNotFoundError(f"No .v files in {vdir} — csynth for '{top_name}' produced no RTL")
     if stamp_sources:
+        check_maxi_lowered(root, top_name)
         write_stamp(root, top_name)
+    # ROM initialization data.  csynth writes a constant table it maps to a ROM as a `.dat` beside the
+    # `.v`, loaded with `$readmemh("./<name>.dat")` -- a path relative to the SIMULATOR's working
+    # directory, which is `xsi/`, not the verilog dir.  Without the copy XSI loads nothing, the ROM
+    # reads as zero, and the run completes silently with wrong numbers: VitisFft at L=1024 (its
+    # twiddles move into a ROM there) produced 4 correct outputs of 1024 until this was added.
+    xsi = Path(root) / "xsi"
+    if xsi.is_dir():
+        import shutil
+        for dat in vdir.glob("*.dat"):
+            shutil.copyfile(dat, xsi / dat.name)
     return ("".join(f"../{top_name}_proj/solution1/syn/verilog/{n}\n" for n in names)
             + "".join(f"{e}\n" for e in extra))
 
@@ -2712,9 +2974,19 @@ def tcl_target(config) -> tuple[str, float]:
     return part, period
 
 
+def tcl_path(root, top_name: str):
+    """Where *top_name*'s generated csynth script goes: ``<root>/gen/<top>.tcl``, beside its top.
+
+    In ``gen/`` so the script is deleted with the rest of the build output; run it with
+    ``work_dir=<root>`` (its paths, and ``<top>_proj/``, are relative to the example root)."""
+    from pathlib import Path
+    return Path(root) / GEN_DIR / f"{top_name}.tcl"
+
+
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
-               solution_config: tuple[str, ...] = ()) -> str:
+               solution_config: tuple[str, ...] = (),
+               include_dirs: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
@@ -2735,13 +3007,30 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     csynth cannot resolve them.
 
     *part* / *period_ns* pin the synthesis target — pass :func:`tcl_target` of the build's config to
-    drive them from the selected platform; the defaults reproduce the historical TCL byte-for-byte."""
+    drive them from the selected platform; the defaults reproduce the historical part and clock.
+
+    The include path is ``-Isrc -Iinclude``, **``src/`` first**: a hand-written body in ``src/`` must
+    win over any same-named file in ``include/`` (build output -- a leftover copy there is exactly the
+    file that must never be compiled instead).  A ``src/`` that does not exist is harmless.  The
+    script runs with the example root as working directory, wherever it is written (:func:`tcl_path`).
+
+    *include_dirs* are additional ``-I`` paths appended to ``$cf``, for a body that includes
+    headers living outside the generated ``include/`` directory.  The case this exists for is
+    vendor IP: ``waveflow/vitis_l1`` wraps ``xf::dsp::fft::fft<>``, whose headers stay in the Vitis
+    install and are reached with an include path rather than copied
+    (:mod:`waveflow.build.vitis_l1_step` resolves it).  **Empty by default**, so every existing
+    generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
+    a changed TCL is a changed build."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
+    # Forward slashes: the flags sit inside a Tcl double-quoted string, where a Windows path's
+    # backslashes are escapes (a path under C:/Xilinx/2025.1/tps reached the compiler mangled).
+    from pathlib import PureWindowsPath
+    incs = "".join(f" -I{PureWindowsPath(d).as_posix()}" for d in include_dirs)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\
 set part {{{part}}}
-set cf "-I{INCLUDE_DIR}"
+set cf "-I{SRC_DIR} -I{INCLUDE_DIR}{incs}"
 puts "WAVEFLOW_INFO: {top_name}"
 open_project -reset {top_name}_proj
 set_top {top_name}

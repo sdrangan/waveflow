@@ -26,7 +26,7 @@ worked example is [`examples/block_scale`](../../../examples/block_scale/block_s
 ## The split: movement in `run_proc`, math in the hook
 
 `run_proc` is the extractable kernel body. It does the data movement with
-[`read_array` / `write_array`](../interface/primitive/aximm.md) on the `m_axi` master, and
+[`read_array` / `write_array`](../interface/axi_mm/modeling.md) on the `m_axi` master, and
 delegates the math to the `compute` hook:
 
 ```python
@@ -38,7 +38,7 @@ def run_proc(self) -> ProcessGen[None]:
 
 @synthesizable
 def compute(self, x: BlockBuf, n: int) -> ProcessGen[BlockBuf]:
-    return block_affine(np.asarray(x)[:int(n)])       # == the golden; C++ is hand-written
+    return block_affine(x[:n])                        # == the golden; C++ is hand-written
     yield                                              # unreachable — makes this a generator
 ```
 

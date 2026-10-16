@@ -24,7 +24,7 @@ from typing import Any, Callable, ClassVar, Literal
 
 import numpy as np
 
-from waveflow.hw.dataschema import DataSchema, IntField, Words
+from waveflow.hw.dataschema import DataArray, DataSchema, IntField, Words
 from waveflow.hw.hwstmt import SynthCallStmt
 from waveflow.hw.memif import MMIFMaster, MMIFSlave
 from waveflow.hw.synth import synthesizable
@@ -162,9 +162,9 @@ class RegMap:
     only the bus-level word composition differs.
     """
 
-    #: Byte offset spacing between successive auto-assigned fields.  The base
-    #: RegMap packs fields tightly (one word each); VitisRegMap overrides this
-    #: to reproduce Vitis's data-word + control-word stride.
+    #: First byte offset the auto-placer may use.  The base RegMap packs fields
+    #: tightly from here (see ``_auto_assign``); VitisRegMap starts after its
+    #: control block and overrides the placement rule.
     _auto_start: int = 0
 
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
@@ -236,20 +236,7 @@ class RegMap:
             self._offsets[name] = f.offset
 
         # Pass 2: auto-assign remaining fields in declaration order.
-        next_free = self._auto_start
-        align = self._auto_align_bytes(word_bytes)
-        for name, f in fields.items():
-            if f.offset is not None:
-                continue
-            nwords = f.schema.nwords_per_inst(bitwidth)
-            while not all(
-                (next_free + k * word_bytes) not in occupied for k in range(nwords)
-            ):
-                next_free += align
-            self._offsets[name] = next_free
-            for k in range(nwords):
-                occupied.add(next_free + k * word_bytes)
-            next_free += self._auto_stride_bytes(nwords, word_bytes)
+        self._auto_assign(fields, occupied, word_bytes)
 
         # ------------------------------------------------------------------
         # Backing store — zero-initialised, one numpy array per field.
@@ -264,16 +251,28 @@ class RegMap:
     # Auto-placement policy (overridden by VitisRegMap)
     # ------------------------------------------------------------------
 
-    def _auto_align_bytes(self, word_bytes: int) -> int:
-        """Granularity the auto-placer steps by when hunting for a free slot."""
-        return word_bytes
+    def _auto_assign(
+        self, fields: dict[str, RegField], occupied: set[int], word_bytes: int,
+    ) -> None:
+        """Place every field without a manual ``offset``, in declaration order.
 
-    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
-        """Bytes consumed by an auto-placed field of *nwords* words.
-
-        The base RegMap packs tightly: a field consumes exactly its own words.
+        The base RegMap packs tightly: a cursor walks forward from
+        ``_auto_start``, skipping manually-placed words, and each field
+        consumes exactly its own words.
         """
-        return nwords * word_bytes
+        next_free = self._auto_start
+        for name, f in fields.items():
+            if f.offset is not None:
+                continue
+            nwords = f.schema.nwords_per_inst(self.bitwidth)
+            while not all(
+                (next_free + k * word_bytes) not in occupied for k in range(nwords)
+            ):
+                next_free += word_bytes
+            self._offsets[name] = next_free
+            for k in range(nwords):
+                occupied.add(next_free + k * word_bytes)
+            next_free += nwords * word_bytes
 
     # ------------------------------------------------------------------
     # Layout queries
@@ -533,6 +532,40 @@ class BoundRegMap:
         """Write 1 to ``ap_start`` (only valid on a :class:`VitisRegMap`)."""
         yield from self.set("ap_start", 1)
 
+    # -- completion by interrupt (only valid on a VitisRegMap) -----------------------------------
+    def enable_irq(self) -> ProcessGen[None]:
+        """Enable the ap_done interrupt: ``ier = 1`` (ap_done only), then ``gier = 1``.  Two writes,
+        once per kernel -- the enables stay set across launches.  Must precede the launch it is to
+        report, or a kernel that finishes first sets no status bit."""
+        yield from self.set("ier", 1)
+        yield from self.set("gier", 1)
+        self._irq_enabled = True
+
+    def wait_done(self, irq) -> ProcessGen[None]:
+        """Wait for the launched kernel to finish, on its interrupt line, then clear it.
+
+        *irq* is the host's :class:`~waveflow.hw.irq.IrqIFSink`, bound by an
+        :class:`~waveflow.hw.irq.IrqIF` to the slave's
+        :meth:`VitisRegMapMMIFSlave.interrupt`.  The wait reads nothing on the bus; the one write
+        after it clears ``isr[0]`` (toggle-on-write), which drops the line and re-arms it for the
+        next launch.  Requires :meth:`enable_irq` first.
+        """
+        if not getattr(self, "_irq_enabled", False):
+            raise RuntimeError("wait_done: call enable_irq() before the launch it waits for")
+        yield from irq.wait_high()
+        yield from self.set("isr", 1)
+
+    def run(self, irq) -> ProcessGen[None]:
+        """Launch the kernel and wait for it on its interrupt: enable once, ``start``,
+        :meth:`wait_done`.  The usual host call::
+
+            yield from rm.run(irq)
+        """
+        if not getattr(self, "_irq_enabled", False):
+            yield from self.enable_irq()
+        yield from self.start()
+        yield from self.wait_done(irq)
+
     def poll_end(
         self,
         interval: float,
@@ -543,8 +576,7 @@ class BoundRegMap:
         """Poll ``field`` until it reads ``target``, with ``interval`` seconds between reads.
 
         Defaults to the standard ``ap_done == 1`` completion contract that
-        :class:`VitisRegMap` auto-emits via :class:`VitisRegMapMMIFSlave` — so a
-        typical kernel-launch flow is just::
+        :class:`VitisRegMap` auto-emits via :class:`VitisRegMapMMIFSlave`::
 
             yield from rm.start()
             yield from rm.poll_end(interval=clk.period * 4, max_polls=64)
@@ -555,8 +587,8 @@ class BoundRegMap:
         service stuffs the AXI-Lite link with redundant reads — choose
         ``interval`` to match the expected kernel runtime.
 
-        Polling is a pedagogical / debugging convenience. Production hosts
-        should wait on the AXI-Lite interrupt line instead.
+        Polling is a debugging fallback.  A host waits on the kernel's
+        interrupt line instead -- :meth:`run` / :meth:`wait_done`.
 
         Raises :class:`RuntimeError` if ``target`` has not been observed
         after ``max_polls`` reads.
@@ -740,13 +772,38 @@ class VitisRegMap(RegMap):
         0x04 : Global Interrupt Enable Register (GIER)
         0x08 : IP Interrupt Enable Register (IER)
         0x0c : IP Interrupt Status Register (ISR)
-        0x10 : first user field  (0x14 : its control word / reserved)
-        0x18 : second user field (0x1c : …)
-        …
+        0x10 : user arguments, placed by the rule below
 
     So the four control signals are *bits of one word at 0x00* — not registers
-    of their own — and 32-bit scalar arguments start at 0x10 on an 8-byte
-    stride (one data word plus one control/reserved word each).
+    of their own — and user arguments start at 0x10.
+
+    Argument placement
+    ------------------
+    Measured from the ``ADDR_*`` maps of 17 probe kernels (Vitis HLS 2025.1,
+    ``csynth_design``, one ``control`` bundle; see ``_auto_assign``).  Each
+    argument, in declaration order, is placed at the **lowest free address at
+    or after 0x10** that meets its alignment — first fit, so a small scalar
+    may land in a hole an earlier array left, *ahead* of fields declared
+    before it.  Footprints, in 4-byte slots:
+
+    - **input scalar** (``RW`` / ``W``): ``ceil(W/32)`` data slots + one
+      control slot (reads ``reserved``).  4-byte aligned — a 64-bit port is
+      *not* 8-byte aligned.
+    - **output scalar** (``R``): twice that.  Data slots, then a control slot
+      carrying ``ap_vld``, then an undocumented gap of the same size again.
+      The gap is invisible when the output is the last argument.
+    - **array** (``DataArray`` with ``cpp_storage = "raw"``): a memory region
+      of ``next_pow2(4 * n)`` bytes, aligned to its own size.
+
+    Not modelled (all unmeasured or known to differ):
+
+    - An ``RW`` field the kernel *writes* becomes an in/out port, which Vitis
+      splits into ``<name>_i`` and ``<name>_o`` registers (the ``_o`` half
+      without the output gap).  Here ``RW`` always means *input*.
+    - Struct-typed fields (non-raw ``DataArray``, ``DataList``) are placed as
+      a scalar of their word count — not measured.
+    - Arrays of elements other than 32 bits wide are rejected.
+    - Multiple bundles, ``ap_ctrl_none``, and other Vitis versions.
 
     What this models, and what it does not
     -------------------------------------
@@ -760,13 +817,18 @@ class VitisRegMap(RegMap):
       when ``on_start`` returns and cleared on the next ``ap_start``.  A host
       may therefore read ``ap_done`` repeatedly and keep seeing 1, where real
       hardware clears it on the first read of 0x00.
-    - ``gier`` / ``ier`` / ``isr`` are plain storage: writing them enables no
-      interrupt, and ``isr`` does not implement toggle-on-write.  There is no
-      interrupt line in the simulation.
-    - ``auto_restart`` (bit 7) and ``interrupt`` (bit 9) are not modelled.
+    - ``gier`` / ``ier`` / ``isr`` drive an interrupt line exactly as the Vitis-generated
+      ``*_control_s_axi.v`` does (``plans/no_polling_next.md`` Part A): ``isr`` bit 0 sets when
+      the kernel finishes with ``ier`` bit 0 enabled (bit 1 likewise for ``ap_ready``), a host
+      write *toggles* the bits it writes 1 to (toggle-on-write), and the line is
+      ``gier[0] && isr != 0`` -- :meth:`VitisRegMapMMIFSlave.interrupt`.  Because ``ap_done`` is
+      held here rather than pulsed, ``isr`` is set at the completion *event*, not while
+      ``ap_done`` reads 1.
+    - ``auto_restart`` (bit 7) and the ``interrupt`` status bit (bit 9) are not modelled.
 
-    Nothing yet *enforces* that this layout tracks Vitis; ``control.h`` is the
-    authoritative artifact a conformance test could check against.
+    The ``-m vitis`` test ``tests/hw/test_regmap_vitis_layout.py`` csynths
+    probe kernels and diffs this layout against the generated ``ADDR_*``
+    localparams.
     """
 
     #: User arguments begin after the 16-byte control/interrupt block.
@@ -777,23 +839,47 @@ class VitisRegMap(RegMap):
     #: Bytes reserved for control + interrupt registers before user fields.
     CTRL_BLOCK_BYTES: int = 0x10
 
-    def _auto_align_bytes(self, word_bytes: int) -> int:
-        # Vitis places every scalar argument on an 8-byte boundary.
-        return 8
+    def _auto_assign(
+        self, fields: dict[str, RegField], occupied: set[int], word_bytes: int,
+    ) -> None:
+        """First-fit placement in declaration order — see the class docstring.
 
-    def _auto_stride_bytes(self, nwords: int, word_bytes: int) -> int:
-        """Bytes Vitis consumes per scalar argument: the field's data words
-        plus one control word, rounded up to the 8-byte argument grid.
-
-        Verified for 32-bit scalars (1 data word + 1 control word = 8 bytes:
-        x@0x10/x_ctrl@0x14, a@0x18/a_ctrl@0x1c, …).  The generalization to
-        multi-word fields follows the same data+control rule but is *not*
-        verified against a local artifact — in particular Vitis maps array
-        arguments on s_axilite as a BRAM-backed region, which this does not
-        attempt to reproduce.
+        ``occupied`` gets the whole footprint (control slot, output gap,
+        region padding), not just the data words, so no later field can land
+        on bytes Vitis has claimed.
         """
-        raw = (nwords + 1) * word_bytes
-        return ((raw + 7) // 8) * 8
+        for name, f in fields.items():
+            if f.offset is not None:
+                continue
+            size, align = self._vitis_footprint(name, f, word_bytes)
+            pos = -(-self._auto_start // align) * align
+            while any(p in occupied for p in range(pos, pos + size, word_bytes)):
+                pos += align
+            self._offsets[name] = pos
+            occupied.update(range(pos, pos + size, word_bytes))
+
+    def _vitis_footprint(
+        self, name: str, f: RegField, word_bytes: int,
+    ) -> tuple[int, int]:
+        """Return ``(size_bytes, align_bytes)`` Vitis claims for field *f*."""
+        nwords = int(f.schema.nwords_per_inst(self.bitwidth))
+        if (isinstance(f.schema, type) and issubclass(f.schema, DataArray)
+                and getattr(f.schema, "cpp_storage", "struct") == "raw"):
+            elem_bw = getattr(f.schema.element_type, "bitwidth", None)
+            if elem_bw != 32:
+                raise ValueError(
+                    f"Field '{name}': VitisRegMap only models s_axilite arrays of "
+                    f"32-bit elements (got element bitwidth {elem_bw}); the Vitis "
+                    "memory layout for other widths has not been measured."
+                )
+            size = word_bytes
+            while size < nwords * word_bytes:
+                size *= 2
+            return size, size
+        slots = nwords + 1
+        if f.access is RegAccess.R:
+            slots *= 2
+        return slots * word_bytes, word_bytes
 
     def __init__(self, fields: dict[str, RegField], bitwidth: int = 32) -> None:
         if bitwidth != 32:
@@ -857,21 +943,24 @@ class VitisRegMap(RegMap):
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x04,
-                description="Global Interrupt Enable Register — storage only",
+                description="Global Interrupt Enable: bit 0 gates the interrupt line",
                 is_vitis_auto=True,
             ),
             "ier": RegField(
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x08,
-                description="IP Interrupt Enable Register — storage only",
+                description="IP Interrupt Enable: bit 0 ap_done, bit 1 ap_ready",
                 is_vitis_auto=True,
             ),
             "isr": RegField(
                 Uint32Word,
                 RegAccess.RW,
                 offset=0x0C,
-                description="IP Interrupt Status Register — storage only",
+                description=(
+                    "IP Interrupt Status: bit 0 ap_done, bit 1 ap_ready; set on the event when "
+                    "enabled, toggled by a host write of 1"
+                ),
                 is_vitis_auto=True,
             ),
         }
@@ -892,6 +981,10 @@ class VitisRegMap(RegMap):
 @dataclass
 class VitisRegMapMMIFSlave(RegMapMMIFSlave):
     """RegMapMMIFSlave that invokes an ``on_start`` generator on ap_start writes.
+
+    It also drives the kernel's **interrupt line**, as the Vitis-generated control slave does:
+    :meth:`interrupt` returns its :class:`~waveflow.hw.irq.IrqIFSource`, high while
+    ``gier[0] && isr != 0``.  A host waits on it with :meth:`BoundRegMap.wait_done`.
 
     When the host writes 1 to ``ap_start``:
 
@@ -918,7 +1011,46 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
             )
         self._busy: bool = False
         ap_field.on_write = self._on_ap_start
+        # The interrupt registers: gier / ier just re-evaluate the line; isr is toggle-on-write.
+        self._isr_bits: int = 0
+        self._irq_src = None
+        self.regmap._fields["gier"].on_write = self._on_irq_reg
+        self.regmap._fields["ier"].on_write = self._on_irq_reg
+        self.regmap._fields["isr"].on_write = self._on_isr_write
         super().__post_init__()
+
+    # -- the interrupt (Vitis *_control_s_axi.v: interrupt = gie && |isr) ------------------------
+    def interrupt(self):
+        """The kernel's interrupt line: an :class:`~waveflow.hw.irq.IrqIFSource`, high while
+        ``gier[0] && isr != 0``.  Bind it to an :class:`~waveflow.hw.irq.IrqIF` whose sink the host
+        waits on.  (Created on first use.)"""
+        if self._irq_src is None:
+            from waveflow.hw.irq import IrqIFSource
+            self._irq_src = IrqIFSource(name=f"{self.name}_irq", sim=self.sim)
+            self._update_irq()
+        return self._irq_src
+
+    def _update_irq(self) -> None:
+        if self._irq_src is not None:
+            gie = int(self.regmap.read_word("gier", 0)) & 1
+            self._irq_src.set(bool(gie and (self._isr_bits & 0x3)))
+
+    def _on_irq_reg(self, name: str, sub_word: int, value: int) -> None:
+        self._update_irq()
+
+    def _on_isr_write(self, name: str, sub_word: int, value: int) -> None:
+        """Toggle-on-write, as Vitis: each bit written 1 flips (so a host clears a set bit by
+        writing 1 to it).  The register store took the raw value; put the real bits back."""
+        self._isr_bits ^= int(value) & 0x3
+        self.regmap.write_word("isr", 0, self._isr_bits, source="owner")
+        self._update_irq()
+
+    def _raise_isr(self) -> None:
+        """At completion: set each status bit whose source is enabled in ier."""
+        ier = int(self.regmap.read_word("ier", 0))
+        self._isr_bits |= ier & 0x3          # bit 0 ap_done, bit 1 ap_ready -- both fire here
+        self.regmap.write_word("isr", 0, self._isr_bits, source="owner")
+        self._update_irq()
 
     def _on_ap_start(self, name: str, sub_word: int, value: int) -> None:
         """Hook installed on ap_start; spawns _launch() if not busy.
@@ -948,3 +1080,4 @@ class VitisRegMapMMIFSlave(RegMapMMIFSlave):
             self.regmap.set("ap_ready", 1)
             self.regmap.set("ap_idle", 1)
             self._busy = False
+            self._raise_isr()

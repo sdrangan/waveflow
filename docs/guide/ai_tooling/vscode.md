@@ -1,8 +1,9 @@
 ---
-title: Installing the VS Code Extension
+title: VS Code Extension
 parent: AI Tooling
-nav_order: 1
+nav_order: 4
 has_children: false
+summary: "Setting up the development environment for the Waveflow VS Code extension — Node.js, the build, and the debug run. Only for contributors working on the extension itself; using Waveflow needs neither Node.js nor this build environment."
 ---
 
 # VS Code Extension Setup

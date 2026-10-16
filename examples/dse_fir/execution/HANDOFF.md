@@ -8,9 +8,9 @@
 
 The implementation demonstrates real FIR and MemCopy Python execution. It does **not** yet execute synthesis or RTL through the shared service. The existing six-tool FIR replay pilot is separate; do not extend it by mistake.
 
-## Reconcile upstream before hardware integration
+## Upstream reconciled; hardware integration remains next
 
-At handoff, the tested implementation commit `392a3c76afa22a0d9e6dbb27f3d599b4ed905331` has 639 commits on `main` not in its history. Upstream was inspected at `c10da3002a5e51cd56bbfc9538f017d0c849a6c2`. No merge/rebase was performed, and compatibility with that newer main is **not tested**.
+This branch merges `main` through `c10da3002a5e51cd56bbfc9538f017d0c849a6c2`, preserving history. Both execution surfaces now use upstream's MCP SDK 2.x `MCPServer`; strict validation, rejected-attempt persistence and real stdio transport are tested. Upstream's fixed-point array change is retained alongside our FIR headroom constraint. MemCopy's current `PySimStep` still receives candidate width and fixed byte workload correctly. See [verification results](../VERIFICATION.md), including three broader MCP failures reproduced on untouched upstream.
 
 Sundeep's recent merged work is directly relevant:
 
@@ -22,7 +22,7 @@ Sundeep's recent merged work is directly relevant:
 
 Upstream reports successful unit RTL checks, but its Markov composed-timing gate remains quarantined: 1,740 model cycles versus 1,870 RTL cycles. Those are upstream results, not measurements from this branch or proof that MemCopy timing is calibrated.
 
-First make an integration branch with the agreed current-main strategy, reconcile the adapter imports/build APIs, and rerun the CPU/transport gates. Preserve the committed study as historical evidence; generate a new study after source changes.
+The original pre-integration study remains in Git history at `71727ec`. New studies must use fresh roots because source and MCP dependency identities changed. Hardware adapters are still deliberately unavailable; merging upstream's hardware primitives does not itself implement them in this service.
 
 ## Where to extend
 
@@ -31,7 +31,7 @@ First make an integration branch with the agreed current-main strategy, reconcil
 | `execution/service.py::ExecutionService.invoke` | Dispatches Python; hardware falls through to `unavailable`. Add hardware dispatch without moving workload logic into the service. `rtlsim` already validates that its ID identifies successful synthesis in the bound experiment. That guard alone is **not** artifact integrity checking. |
 | `execution/designs.py::Design` | Owns legal parameters, fixed conditions, metrics and capabilities. Add trusted build/evaluation implementations and enable capabilities only after their gates pass. Extend host conditions for fixed target/clock/toolchain settings; never make them arbitrary candidate fields. |
 | `execution/designs.py::get_design` | Current source closure hashes Python and selected dependency versions. Hardware identity must additionally cover HDL/C++ task bodies, includes, scripts, target, clock and tool versions. |
-| `examples/mem_copy/mem_copy_build.py` | Existing canonical build path. Reinspect its current-main version; do not assume this branch's older DAG still describes the maintained integration. |
+| `examples/mem_copy/mem_copy_build.py` | Current upstream build path is included unchanged. DUT/testbench codegen forwards width, but `_write_scenario_bundles`, `_calibrated_pysim` and `_mem_copy_design` still use default width; trace factories also need candidate binding. Audit these before enabling a 32/64-bit hardware sweep. Python correctness is not evidence that this hardware chain propagates width. |
 | `tests/test_execution_service.py`, `test_execution_designs.py` | Protect strict transport, durable outcomes and actual candidate propagation. Add the new hardware evidence-contract tests here, with hardware execution gated appropriately. |
 
 Current artifact references must be existing files relative to the attempt directory. A synthesis manifest can be such a file. Use the successful synthesis run ID as the `synthesis_id`; RTL must resolve and verify its manifest, never select a build by whatever happens to exist in a mutable directory.

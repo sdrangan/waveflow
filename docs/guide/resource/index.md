@@ -31,6 +31,9 @@ Tools for other flows, including ASIC, may follow.
   per-module breakdown, and the per-loop pipeline table.
 - [Composite kernels](./composite.md) — decomposing a multi-task kernel's total into its modules and
   the interface logic between them, and the two traps that otherwise corrupt the arithmetic.
+- [Systems](./systems.md) — the same decomposition one level up: a system top's kernels, hand-written
+  leaves and vendor IP, the system integration term, and an estimate that sits beside the measured
+  total.
 
 ## See also
 

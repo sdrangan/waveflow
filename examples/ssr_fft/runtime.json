@@ -1,0 +1,132 @@
+{
+ "L1024_pingpong": {
+  "L": 1024,
+  "reorder": "pingpong",
+  "date": "2026-10-13",
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "frames": [
+   10,
+   50,
+   100
+  ],
+  "reps": 3,
+  "untimed": {
+   "per_frame_ms": 1.868814590661863,
+   "setup_ms": -4.165811492817154,
+   "runs": {
+    "10": 0.016648399992845953,
+    "50": 0.0854479999979958,
+    "100": 0.1844165000366047
+   },
+   "bits_exact": true
+  },
+  "pysim_tasks": {
+   "per_frame_ms": 4.437495328077558,
+   "setup_ms": 13.525749157854811,
+   "runs": {
+    "10": 0.05898309999611229,
+    "50": 0.23345219995826483,
+    "100": 0.4581412000115961
+   },
+   "bits_exact": true
+  },
+  "pysim_flat": {
+   "per_frame_ms": 2.2898661471773543,
+   "setup_ms": 15.422972129108338,
+   "runs": {
+    "10": 0.04000339994672686,
+    "50": 0.12688910006545484,
+    "100": 0.2457549999235198
+   },
+   "bits_exact": true
+  },
+  "rtl": {
+   "per_frame_ms": 131.22131147544872,
+   "setup_ms": 1858.1967213093096,
+   "runs": {
+    "10": 3.569999999999709,
+    "50": 7.69999999999709,
+    "100": 15.30000000000291
+   },
+   "bits_exact": true,
+   "csynth_s": null,
+   "build_s": {
+    "compile_rtl": 2.4499999999970896,
+    "elaborate": 17.12999999999738,
+    "compile_tb": 4.9100000000034925
+   },
+   "phases": {
+    "10": {
+     "total_s": 4.331605700077489,
+     "compile_rtl_s": 0,
+     "elaborate_s": 0,
+     "compile_tb_s": 0,
+     "simulate_s": 3.569999999999709,
+     "bits_exact": true
+    },
+    "50": {
+     "total_s": 8.568969499901868,
+     "compile_rtl_s": 0,
+     "elaborate_s": 0,
+     "compile_tb_s": 0,
+     "simulate_s": 7.69999999999709,
+     "bits_exact": true
+    },
+    "100": {
+     "total_s": 16.02846339996904,
+     "compile_rtl_s": 0,
+     "elaborate_s": 0,
+     "compile_tb_s": 0,
+     "simulate_s": 15.30000000000291,
+     "bits_exact": true
+    }
+   }
+  }
+ },
+ "L64_pingpong": {
+  "L": 64,
+  "reorder": "pingpong",
+  "date": "2026-10-13",
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "frames": [
+   4,
+   8
+  ],
+  "reps": 1,
+  "untimed": {
+   "per_frame_ms": -0.03917500725947311,
+   "setup_ms": 5.686799995601178,
+   "runs": {
+    "4": 0.005530099966563284,
+    "8": 0.005373399937525392
+   },
+   "bits_exact": true
+  },
+  "pysim_tasks": {
+   "per_frame_ms": -3.5940750094596248,
+   "setup_ms": 50.53770006634293,
+   "runs": {
+    "4": 0.03616140002850443,
+    "8": 0.021785099990665913
+   },
+   "bits_exact": true
+  },
+  "pysim_flat": {
+   "per_frame_ms": 0.7564499974250788,
+   "setup_ms": 6.913400022313006,
+   "runs": {
+    "4": 0.009939200012013316,
+    "8": 0.012965000001713634
+   },
+   "bits_exact": true
+  }
+ }
+}

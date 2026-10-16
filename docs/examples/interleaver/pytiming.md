@@ -2,6 +2,7 @@
 title: Timing in the pysim
 parent: Composite kernel interleaver
 nav_order: 9
+summary: "What the loosely-timed pysim measures, and the pipeline-activity plot it produces. Each stage's cost is a loaded model — the bus law per m_axi transfer, the mem-streams' own control residuals, and the gather's own cycle count — with backpressure emerging from the bounded FIFOs between stages rather than being modelled."
 ---
 # Timing in the pysim
 

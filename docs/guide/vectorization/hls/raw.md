@@ -150,6 +150,11 @@ below.
 
 ## The lane loop
 
+> The lane loop has two shapes -- a word per iteration with the compute unrolled, or one element per
+> iteration reading a word every `PF` iterations -- and the choice is a design decision.  Both, and
+> when to use which, are in [Design patterns for loop optimization](./loop_optimization.md).  This
+> section is the first shape over a memory buffer.
+
 The **lane methods** move the next `LW = lane_capacity<WORD_BW>() = max(1, pf)` elements per call — `pf`
 lanes of a word in the vectorized regime (`WORD_BW ≥ element_bits`), or one wide element spanning
 `⌈element_bits / WORD_BW⌉` words when `pf = 0`. You step the loop by `LW`, read into a **partitioned** lane

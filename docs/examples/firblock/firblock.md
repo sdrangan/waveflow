@@ -2,6 +2,7 @@
 title: Module Overview
 parent: Block FIR with state
 nav_order: 1
+summary: "What the module computes, and why a block FIR is the next step after the interleaver: not the arithmetic, but that a firing is no longer self-contained. The first output of a block needs samples that arrived in the previous one, and nothing in the current firing's input contains them."
 ---
 # Block FIR — a filter that remembers
 

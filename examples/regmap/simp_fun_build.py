@@ -5,12 +5,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep, SourceStep
 from waveflow.build.cli import run_dag_cli
 from waveflow.build.cosim_steps import ExtractCosimTimingStep, ValidateTimingStep
 from waveflow.build.hwcodegen_steps import HlsCodegenStep
+from waveflow.build.resource_steps import InspectSynthStep
 from waveflow.build.verify_steps import FunctionalVerifyStep
 from waveflow.toolchain import toolchain
 
@@ -77,7 +76,7 @@ class SystemSimStep(BuildStep):
     This is the first checkpoint in the example's progression: once the DUT and the host exist,
     you can simulate the whole system and *confirm it works* — before writing any testbench.
     The host does the real register-map protocol (write ``x``/``a``/``b`` → set ``ap_start`` →
-    poll ``ap_done`` → read ``y``), so this is the one path that demonstrates the interface this
+    wait for the interrupt → read ``y``), so this is the one path that demonstrates the interface this
     example is about, and the only one that yields a **per-step** event trace.
 
     It is **Python-only by nature**, not by omission: the host and the DUT are two *concurrent*
@@ -101,6 +100,7 @@ class SystemSimStep(BuildStep):
     def run(self, config: BuildConfig, x_in, a_in, b_in, clk_freq, latency_cycles, **_) -> dict:
         # Read the vector back from the input files the rest of the DAG uses, so the system sim
         # and the SeqTB golden are driven by identical stimulus.
+        # int: plain Python for relu_affine (a*x + b overflows int32) and the JSON summary
         x = int(Int32().read_uint32_file(x_in).val)
         a = int(Int32().read_uint32_file(a_in).val)
         b = int(Int32().read_uint32_file(b_in).val)
@@ -225,35 +225,6 @@ class CSynthStep(BuildStep):
 
 
 @dataclass(kw_only=True)
-class InspectSynthStep(BuildStep):
-    description = "Parse the Vitis HLS synthesis report and write results/loop_df.csv."
-    consumes = ["report_dir"]
-    produces = {"loop_df": Path("results/loop_df.csv")}
-    params = {}
-
-    def run(self, config: BuildConfig, report_dir, **_) -> dict:
-        from waveflow.utils.csynthparse import CsynthParser
-
-        if not report_dir.exists():
-            raise RuntimeError(f"Solution directory not found: {report_dir}")
-        parser = CsynthParser(sol_path=str(report_dir))
-        parser.get_loop_pipeline_info()
-        parser.get_resources()
-        if not parser.loop_df.empty:
-            non_unit_ii = parser.loop_df[
-                parser.loop_df["PipelineII"].apply(
-                    lambda v: isinstance(v, (int, np.integer)) and v > 1
-                )
-            ]
-            if not non_unit_ii.empty:
-                raise RuntimeError("Vitis synthesis produced loops with PipelineII > 1.")
-        loop_df_path = config.root_dir / "results" / "loop_df.csv"
-        loop_df_path.parent.mkdir(parents=True, exist_ok=True)
-        parser.loop_df.to_csv(loop_df_path, index=False)
-        return {"loop_df": loop_df_path}
-
-
-@dataclass(kw_only=True)
 class GenerateTimingDiagramStep(BuildStep):
     description = "Generate the committed timing-diagram artifacts from timing JSON."
     consumes = ["py_timing", "cosim_timing", "timing_verdict", "timing_diagram_source"]
@@ -360,7 +331,11 @@ def build_simp_fun_dag() -> BuildDag:
     ))
 
     dag.add(CSynthStep(name="csynth"))
-    dag.add(InspectSynthStep(name="inspect_synth"))
+    # The framework's step: the report attributed and filed (with a platform), the loop table
+    # written, and the build failed on a pipelined loop at II > 1.
+    dag.add(InspectSynthStep(name="inspect_synth", comp_class=SimpFun, top_name="simp_fun",
+                             seconds_artifact=None, require_ii1=True,
+                             loop_csv=Path("results/loop_df.csv")))
     dag.add(ExtractCosimTimingStep(
         name="extract_cosim_timing",
         top="simp_fun",

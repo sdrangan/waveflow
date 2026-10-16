@@ -3,6 +3,7 @@ title: Viewing Timing and Bursts
 parent: Histogram with shared memory
 nav_order: 6
 has_children: false
+summary: "Turning the cosim waveform and burst report into two pictures: the multi-buffer burst layout at its byte addresses, and the transaction timeline. Both are rendered from the burst report, which is itself regenerable from the committed VCD with no Vitis run — so the figures can be refreshed without the toolchain."
 ---
 
 # Viewing Timing and Bursts

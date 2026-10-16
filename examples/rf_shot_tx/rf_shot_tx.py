@@ -1,4 +1,4 @@
-"""rf_shot_tx.py — ``plans/rf_shot_unify.md``: **one transmitter, both play modes**.
+"""rf_shot_tx.py — PR #181: **one transmitter, both play modes**.
 
 The user story two retired examples told *between* them — a finite play-set and an infinite one —
 told once by one design::
@@ -36,7 +36,7 @@ finite predecessor's example needed two for its own reason:
 ``tid`` 1 and 2 sit between the two loop loads deliberately: their payloads have to be drained, which
 buys waveform A airtime on the converter before B arrives.  Without them the switch would happen
 before A had played a block.  **Their word counts are what matters** — a header plus a full payload,
-then a bare header — so ``plans/rf_shot_geometry.md`` kept both shapes exactly when it changed what
+then a bare header — so PR #194 kept both shapes exactly when it changed what
 made them refusable.  The frames used to be malformed *lengths*; a length is not something a header
 can carry any more, so they are malformed *opcodes* instead, and the airtime is unchanged.
 
@@ -44,7 +44,7 @@ can carry any more, so they are malformed *opcodes* instead, and the airtime is 
 DAC cannot be told to wait — and the claim of *both* halves is that neither a handover nor the end of
 a finite shot makes it wait: it gets filler, on time, as real beats.
 
-**The shot IS the buffer** (``plans/rf_shot_geometry.md``): the loader writes ``mem[i]``, the player
+**The shot IS the buffer** (PR #194): the loader writes ``mem[i]``, the player
 reads ``mem[i]``, and the only address arithmetic left is the read pointer's wrap at ``depth`` — a
 mask, because ``depth`` is a power of two.  There used to be a ``base`` here, placed at the top of
 the memory so ``base + offset`` was exercised; the coverage that needed is not lost, the arithmetic
@@ -63,6 +63,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_relayout import to_dense
 from waveflow.hw.rf_sample_if import RFSampIF
@@ -94,7 +95,7 @@ WORD = Rfsoc4x2SampWord.specialize(samp_per_word=4)
 WORD_BW = int(WORD.bitwidth)
 SPW = int(WORD.samp_per_word)
 
-#: Words the memory holds, which **is** the length of a shot (``plans/rf_shot_geometry.md``).
+#: Words the memory holds, which **is** the length of a shot (PR #194).
 #:
 #: **64, not 256, and that is deliberate.**  It is what ``nword`` was before the shot became the
 #: buffer, so the played length is unchanged and every recorded number in this example stays
@@ -266,17 +267,17 @@ def expected_responses(frames) -> list[tuple[int, int, int]]:
     out: list[tuple[int, int, int]] = []
     busy = False
     for f in frames:
-        h = HDR().deserialize(np.asarray(f, dtype=np.uint64)[:hn], word_bw=WORD_BW)
+        h = HDR().deserialize(f[:hn], word_bw=WORD_BW)
         took = min(int(np.asarray(f).size) - hn, DEPTH)
-        op = int(h.opcode)
+        op = h.opcode
         if op == SHOT_END:
-            out.append((int(h.tid), SHOT_LOADED, 0))
+            out.append((h.tid, SHOT_LOADED, 0))
         elif op not in (SHOT_LOAD, SHOT_LOOP):
-            out.append((int(h.tid), SHOT_BAD_OPCODE, 0))
+            out.append((h.tid, SHOT_BAD_OPCODE, 0))
         elif busy:
-            out.append((int(h.tid), SHOT_BUSY, 0))
+            out.append((h.tid, SHOT_BUSY, 0))
         else:
-            out.append((int(h.tid), SHOT_LOADED if took == DEPTH else SHOT_SHORT, took * SPW))
+            out.append((h.tid, SHOT_LOADED if took == DEPTH else SHOT_SHORT, took * SPW))
             busy = op == SHOT_LOAD
     return out
 
@@ -300,7 +301,7 @@ def write_scenario(root, frames, name: str) -> None:
 class RfShotTxAbs(RfShotTx):
     r"""``RfShotTx`` with ``absolute_index = 1`` — a second **build**, not a second design.
 
-    ``plans/rf_shot_absolute.md``.  The body is the same body: one C++ template with ``if (ABS)``
+    PR #199.  The body is the same body: one C++ template with ``if (ABS)``
     branches Vitis folds, so the two settings are two pieces of RTL cut from one source rather than
     two sources that drift.  What this subclass exists for is the **name**: an XSI snapshot, a Vitis
     project and a generated ports header are all keyed on ``cpp_kernel_name``, so the two variants
@@ -329,8 +330,8 @@ class RfShotTxTB(FreeRunMod):
     samp_rate: float = SAMP_RATE
     axis_freq: float = RFSOC4X2_CLK_HZ
     word: type[Rfsoc4x2SampWord] = WORD
-    #: Which scenario the pysim run and the generated XSI main drive.  The second scenario reassigns
-    #: the bundle names in its own hand-written main.
+    #: Which scenario the pysim run drives.  At RTL each frame stream is a system of its own
+    #: (``RfShotTxSystem``, ``rf_shot_tx_system_build.py``).
     in_bundle: str = "vectors/cmd"
     n_cycles: int = XSI_N_CYCLES
     #: Which of the two builds this graph wraps — :class:`RfShotTx` or :class:`RfShotTxAbs`.  ONE
@@ -386,7 +387,7 @@ class RfShotTxTB(FreeRunMod):
         # and nothing here reaches the RTL.  What the number does is decide whether pysim's producer
         # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
         # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
-        # still a hardware claim and still refused.  See plans/pysim_burst_backpressure.md S2 Task 0.
+        # still a hardware claim and still refused.  See PR #185 Task 0.
         cmd_words = int(self.depth) + 1          # one ShotTxHdr, then the payload
         blk_words = int(self.blksize) // SPW     # what the player hands over at once
         for nm, master, slave, depth in (
@@ -417,6 +418,36 @@ class RfShotTxTB(FreeRunMod):
         """How hard the DAC leans on the fabric — the same quantity the XSI converter model is
         constructed with, so a rate changed here cannot leave the two backends at different speeds."""
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
+
+
+@dataclass
+class RfShotTxSystem(GraphSystem):
+    """The shot transmitter as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfShotTxTB` graph, the cut the transmitter alone -- its memory inside it, so the system
+    top instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+    (:class:`RfShotTx` or :class:`RfShotTxAbs`) and *scenario* the frame stream (``"cmd"`` or
+    ``"cmd_loop"``), each its own run.
+
+    The RF sink's recording is the example's to check (``recording_check``): pysim's player runs
+    ahead by its loosely-timed lead, so the playouts align only after each backend's own startup
+    transient (``plans/lt_transient.md``)."""
+
+    dut_cls: type = RfShotTx
+    scenario: str = "cmd"
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> RfShotTxTB:
+        self.frames = dict(SCENARIOS)[self.scenario]
+        g = RfShotTxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
+                       in_bundle=f"vectors/{self.scenario}", n_cycles=int(self.n_cycles))
+        g.sink.recording_check = "example"
+        return g
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, self.frames, self.scenario)
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +499,7 @@ def responses(tb: RfShotTxTB) -> list[tuple[int, int, int]]:
     out = []
     for i in range(0, words.size - n + 1, n):
         r = RESP().deserialize(words[i:i + n], word_bw=WORD_BW)
-        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
+        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))  # int: lands in json.dumps
     return out
 
 

@@ -3,6 +3,7 @@ title: Vector multiply resource modeling
 parent: Examples
 nav_order: 5.5
 has_children: true
+example_dir: examples/vecmult
 summary: "Measuring and modelling what a design costs. A free-running vector multiplier swept across its two parameters, with the measurements handed to a VitisResourceModel that predicts LUT, FF, DSP and BRAM anywhere in the space. The arithmetic is trivial on purpose — the subject is how little you have to say to get a trustworthy model: describe what the design contains, and the library picks the features, prices the device geometry and fits whatever is left."
 ---
 # Vector Multiply — measuring and modelling what a design costs

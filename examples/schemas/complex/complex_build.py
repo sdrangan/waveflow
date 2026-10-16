@@ -155,7 +155,7 @@ def _wbw(cf) -> int:
 @dataclass
 class Case:
     name: str
-    op: str                          # roundtrip | cmult | cadd | csub | conj | cquantize
+    op: str                          # roundtrip | cmult | cmult3 | cadd | csub | conj | cquantize
     a: DataArray
     golden: DataArray
     b: DataArray | None = None
@@ -171,10 +171,11 @@ class Case:
 
     @property
     def binary(self) -> bool:
-        return self.op in ("cmult", "cadd", "csub")
+        return self.op in ("cmult", "cmult3", "cadd", "csub")
 
 
-_OPS = {"cmult": cmult, "cadd": cadd, "csub": csub, "conj": conj}
+# cmult3 is the same exact product as cmult in three multiplies, so cmult is its golden.
+_OPS = {"cmult": cmult, "cmult3": cmult, "cadd": cadd, "csub": csub, "conj": conj}
 
 
 def _mk_case(name: str, op: str, a: DataArray, b: DataArray | None = None,
@@ -199,7 +200,7 @@ def build_cases() -> list[dict]:
     for cfg in FIXED_SIGNED:
         a, b = _fixed_int_operand(cfg, 2), _fixed_int_operand(cfg, 4)
         cases.append(_mk_case(f"roundtrip_{cfg.name}", "roundtrip", _roundtrip_operand(cfg)))
-        for op in ("cmult", "cadd", "csub"):
+        for op in ("cmult", "cmult3", "cadd", "csub"):
             cases.append(_mk_case(f"{op}_{cfg.name}", op, a, b))
         cases.append(_mk_case(f"conj_{cfg.name}", "conj", a))
 
@@ -225,7 +226,7 @@ def build_cases() -> list[dict]:
     for cfg in INTS:
         a, b = _fixed_int_operand(cfg, 2), _fixed_int_operand(cfg, 4)
         cases.append(_mk_case(f"roundtrip_{cfg.name}", "roundtrip", _roundtrip_operand(cfg)))
-        for op in ("cmult", "cadd", "csub"):
+        for op in ("cmult", "cmult3", "cadd", "csub"):
             cases.append(_mk_case(f"{op}_{cfg.name}", op, a, b))
         cases.append(_mk_case(f"conj_{cfg.name}", "conj", a))
 
@@ -265,7 +266,7 @@ def gen_case_sources(case_dict: dict, work_dir: Path) -> Path:
 
     in_cf, out_cf = c.in_cf, c.out_cf
     wbi, wbo = _wbw(in_cf), _wbw(out_cf)
-    n = int(np.asarray(c.a.val).shape[0])
+    n = c.a.val.shape[0]
 
     # generated support headers
     cfg = BuildConfig(root_dir=work_dir)

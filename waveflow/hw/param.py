@@ -151,8 +151,14 @@ def defer_if_symbolic(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if any(is_symbolic(a) for a in args) or any(is_symbolic(v) for v in kwargs.values()):
-            return LazyField(fn, args, kwargs)
+        # A plain loop, not any() over generators: this runs on every specialize() call, which a
+        # pysim makes per transfer.
+        for a in args:
+            if is_symbolic(a):
+                return LazyField(fn, args, kwargs)
+        for v in kwargs.values():
+            if is_symbolic(v):
+                return LazyField(fn, args, kwargs)
         return fn(*args, **kwargs)
 
     return wrapper

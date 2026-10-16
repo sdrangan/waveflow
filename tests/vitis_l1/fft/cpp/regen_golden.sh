@@ -50,6 +50,11 @@ build dump_fft;      "$TMP/dump_fft"     "$ROOT/golden/fft_L16_R4_noscale_natura
 echo "wrote golden/fft_L16_R4_noscale_natural.json"
 build dump_fft_l64;  "$TMP/dump_fft_l64" "$ROOT/golden/fft_L64_R4_noscale_natural.json" >/dev/null
 echo "wrote golden/fft_L64_R4_noscale_natural.json"
+for L in 16 64 256 1024; do
+    $CXX $STD -O0 -DWF_L=$L -I"$VITIS_INC" -I"$VLIB" -o "$TMP/dump_ifft_$L" "$HERE/dump_ifft.cpp"
+    "$TMP/dump_ifft_$L" "$ROOT/golden/ifft_L${L}_R4_noscale_natural.json" >/dev/null
+    echo "wrote golden/ifft_L${L}_R4_noscale_natural.json"
+done
 build dump_cxops;    "$TMP/dump_cxops"   "$ROOT/golden/cxops_d16_2_t18_2.json" >/dev/null
 echo "wrote golden/cxops_d16_2_t18_2.json"
 

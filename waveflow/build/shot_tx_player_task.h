@@ -2,7 +2,7 @@
 #define WAVEFLOW_SHOT_TX_PLAYER_TASK_H
 // shot_tx_player_task.h — play the region a counted number of times, or forever, and yield it.
 //
-// The shot transmitter's player (plans/rf_shot_unify.md), and the OWNER side of the
+// The shot transmitter's player (PR #181), and the OWNER side of the
 // lock.  Its Python twin is ShotTxPlayer.run_iter, which is the pysim golden and NOT the source of
 // this file.
 //
@@ -16,7 +16,7 @@
 // above it -- the chunk, the filler, the poll, the ordering -- is shared, which is what makes this a
 // merge rather than two designs sharing a file.
 //
-// `rd` IS EITHER A POSITION OR A TIMESTAMP, AND `ABS` IS WHICH (plans/rf_shot_absolute.md).
+// `rd` IS EITHER A POSITION OR A TIMESTAMP, AND `ABS` IS WHICH (PR #199).
 //
 // At ABS=0 -- the default, and every predecessor's behaviour -- `rd` is reset on accept and advances
 // only while playing, so it says HOW FAR INTO THIS WAVEFORM.  At ABS=1 it advances and wraps on every
@@ -84,7 +84,7 @@
 /// @tparam W     word width in bits -- the memory's and the output stream's.
 /// @tparam D     memory depth in elements, the bound mem_lock_grant refuses a region against, AND
 ///               the wrap point of the read pointer: THE SHOT IS THE BUFFER
-///               (plans/rf_shot_geometry.md).  A power of two, so the wrap is a mask.
+///               (PR #194).  A power of two, so the wrap is a mask.
 ///
 ///               There is no NW and no BASE.  `buf[rd + i]` reads from the memory's own origin, so
 ///               the loader and the player cannot disagree about where the waveform is -- there is
@@ -92,7 +92,7 @@
 /// @tparam BW    words per chunk: the pipelined loop's trip count AND the poll period.  Must divide
 ///               D, so a chunk never straddles the wrap and the play boundary keeps landing on a
 ///               block boundary.
-/// @tparam ABS   THE INDEX IS A TIMESTAMP (plans/rf_shot_absolute.md).  0 is every predecessor's
+/// @tparam ABS   THE INDEX IS A TIMESTAMP (PR #199).  0 is every predecessor's
 ///               behaviour: a shot starts at rd == 0 the instant it is accepted.  1 makes `rd`
 ///               advance UNCONDITIONALLY -- filler included -- so it holds this task's own word
 ///               count since reset modulo D, and a playout is deferred to the next rd == 0.  Then
@@ -148,7 +148,7 @@ play_chunk:
         samp_out.write(playing ? buf[rd + i] : (ap_uint<W>)SHOT_TX_FILLER);
     }
 
-    // THE ADVANCE, AND THE SPLIT plans/rf_shot_absolute.md NAMES AS THE SILENT TRAP.
+    // THE ADVANCE, AND THE SPLIT PR #199 NAMES AS THE SILENT TRAP.
     //
     // When ABS the pointer advances and wraps on EVERY firing, filler included -- that is what makes
     // it this task's own word count since reset and therefore a timestamp.  What must NOT come out

@@ -3,6 +3,7 @@ title: Code generation
 parent: A memory reached three ways
 nav_order: 3
 has_children: false
+summary: "Three artifacts from the one Python class: the Vitis HLS kernel, the hand-written memory placed beside it, and the wrapper that joins the two. The message headers are emitted first, from the same declarations the model reads through. Also the one thing that has to be reconciled between the kernel's ports and the memory's."
 ---
 
 # Code generation
@@ -136,9 +137,9 @@ ap_uint<64> buf_r[1024] | #pragma HLS INTERFACE mode=bram port=buf_r storage_typ
 
 ## The memory
 
-`bram_t2p.v` is copied verbatim from `waveflow/build/rtl/` into the example's `xsi/` directory. It is
-not generated and it is never rewritten — `DW` and `AW` ride on the *instantiation*, because a
-Verilog parameter is not a code generator.
+`bram_t2p.v` is used verbatim from `waveflow/build/rtl/`: the system flow puts it on the run's
+compile list. It is not generated and it is never rewritten. `DW` and `AW` ride on the
+*instantiation*, because a Verilog parameter is not a code generator.
 
 ```verilog
     always @(posedge clk) begin
@@ -270,21 +271,16 @@ memory. That is why `T2pBram` *declares* its footprint by geometry rather than w
 depth × width maps to a primitive count by construction, and the alternative here is not a less
 precise number, it is no number at all.
 
-## The file list
+## The compile list
 
-The last thing `csynth` does is re-emit `rtl_bram_access_top.f` from the RTL that is actually on
-disk: every file `csynth` generated, then the memory, then the wrapper, in elaboration reading order.
+The system flow writes the compile list for each run (`rtl.json`): every file `csynth` generated for
+the kernel, then the hand-written memory. The wrapper needs no file of its own, because it is
+rendered into the system top's Verilog beside the modules that instantiate it.
 
-```
-../bram_access_proj/solution1/syn/verilog/bram_access.v
-...
-bram_t2p.v
-bram_access_top.v
-```
-
-Re-emitted rather than committed-and-trusted, because a stale file list plus a cached `xsimk.dll` is
-exactly how an XSI run goes green while proving nothing — a renamed module leaves the `.f` naming a
-file that no longer exists, and `xvlog` does not mind.
+The list is derived from the RTL actually on disk rather than committed and trusted. A stale file
+list plus a cached simulation library is exactly how an XSI run goes green while proving nothing: a
+renamed module leaves a committed list naming a file that no longer exists, and `xvlog` does not
+mind. A cached elaboration is reused only if its content stamp matches the RTL just written.
 
 ## See also
 

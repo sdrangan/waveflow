@@ -1,0 +1,10 @@
+{
+  "key": "cg_ctrl-b4e2e1cf",
+  "cls_name": "CgCtrl",
+  "cls_module": "examples.mimo_cg.hw.detector",
+  "params": {
+    "K": 4,
+    "mem_dwidth": 32
+  },
+  "signature": "b4e2e1cf5a1a5b8446e5c558214da19b428b2d413216d96e5d4bba26560d446c"
+}

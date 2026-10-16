@@ -163,16 +163,16 @@ def test_real_stdio_mcp_four_tools_strict_args_and_persistence(tmp_path, design)
                 tools = await client.list_tools()
                 assert {t.name for t in tools.tools} == {"get_param_list", "pysim", "synth", "rtlsim"}
                 for tool in tools.tools:
-                    assert tool.inputSchema["additionalProperties"] is False
+                    assert tool.input_schema["additionalProperties"] is False
                 result = await client.call_tool("pysim", {"params": {}})
-                assert not result.isError
+                assert not result.is_error
                 run = json.loads(result.content[0].text)
                 assert run["status"] == "ok" and run["metrics"]
                 for op, args in [("pysim", {"params": {}, "extra": 1}),
                                  ("pysim", {"params": "{}"}),
                                  ("rtlsim", {"synthesis_id": 42})]:
                     invalid = await client.call_tool(op, args)
-                    assert invalid.isError
+                    assert invalid.is_error
                 nested = {"ntap": 8.0} if design == "fir" else {"mem_dwidth": 32.0}
                 invalid = await client.call_tool("pysim", {"params": nested})
                 assert json.loads(invalid.content[0].text)["status"] == "invalid"

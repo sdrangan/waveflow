@@ -1,4 +1,4 @@
-"""One transmitter, both opcodes, at RTL — ``plans/rf_shot_unify.md`` Stage A, gates 1-4.
+"""One transmitter, both opcodes, at RTL — PR #181, gates 1-4.
 
 What xsim elaborates is the **wrapper** (``rf_shot_tx_top``): the kernel plus its
 hand-written ``bram_t2p`` memory, so the testbench sees only AXI-Stream and the converter model
@@ -69,9 +69,6 @@ missing.
 """
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -82,9 +79,7 @@ from examples.rf_shot_tx.rf_shot_tx import (
     DEPTH,
     FINITE_FRAMES,
     LOOP_FRAMES,
-    RESP,
     XSI_N_CYCLES,
-    blocks_to_codes,
     c_lead,
     check_finite_playout,
     check_horizon_covers_the_lead,
@@ -98,14 +93,14 @@ from examples.rf_shot_tx.rf_shot_tx import (
     segments,
     transients,
 )
-from examples.rf_shot_tx.rf_shot_tx_build import RTL_FILES, TOP, WRAPPER, generate_tb
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_shot_tx import rf_shot_tx_system_build as sysb
+from examples.rf_shot_tx.rf_shot_tx_build import TOP
+from tests.examples._system_run import (WORK, compared_clean, recorded_names, system_run,
+                                        trace_of)
 from waveflow.hw.rf_shot_tx import SHOT_STATUS_NAMES
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_tx"
-XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "report"
 
@@ -126,7 +121,7 @@ SCENARIOS = (
 #: carry a full payload to drain.  The loop stream's 502 is longer because it *accepts* three of its
 #: six frames, and each acceptance pays the grant wait again.
 #:
-#: **269 -> 273 and 500 -> 502 at ``plans/rf_shot_geometry.md``, and the cause was measured rather
+#: **269 -> 273 and 500 -> 502 at PR #194, and the cause was measured rather
 #: than assumed.**  Three things were ruled out and one was found:
 #:
 #: * **not the scenario.**  The frames' word counts are unchanged (65,65,65,1,1 and 65,65,1,65,33,1)
@@ -189,7 +184,7 @@ WANT_PORT_OVERLAP_CYCLES = {"cmd": 18, "cmd_loop": 55}
 #: address ever *coincides* with the writer's is a matter of phase.  Read the docstring of
 #: :func:`test_the_handover_leaves_a_speculative_read_that_the_design_discards`.
 #:
-#: **``cmd_loop`` went 2 -> 0 at ``plans/rf_shot_geometry.md``, from the same cause as
+#: **``cmd_loop`` went 2 -> 0 at PR #194, from the same cause as
 #: :data:`WANT_RESP_LAST_CYCLE`, and that was measured too**: the old design rebuilt at the NEW
 #: geometry still collides twice (cycles 469 and 470, addresses 24 and 25), so moving the buffer did
 #: not move them.  The few-cycle re-timing of the response path did — it slid the writer's sweep past
@@ -202,7 +197,7 @@ WANT_RDW_COLLISIONS = {"cmd": 0, "cmd_loop": 0}
 
 #: The elements the writer actually touched — **the whole buffer, and nothing outside it**.
 #:
-#: It was ``(192, 255)`` before ``plans/rf_shot_geometry.md``: a 64-word shot placed at the top of a
+#: It was ``(192, 255)`` before PR #194: a 64-word shot placed at the top of a
 #: 256-word memory, so ``base + offset`` was exercised.  There is no ``base`` any more and no
 #: addition to exercise; what the range still says is that the counted load pass **fills the buffer**,
 #: which is the pad's claim and is what makes ``SHOT_SHORT``'s ``nsamp_loaded`` mean something.
@@ -240,12 +235,12 @@ GUARD = 0
 #: body — one blocking read of the response, right after the request — **deadlocks**: Vitis schedules
 #: two ops on two streams with no data dependency into one state, that state stalls on the empty
 #: response FIFO, and the request is therefore never sent.
-#: The names carry the TEMPLATE ARGUMENTS, so ``plans/rf_shot_geometry.md`` renamed four of these by
+#: The names carry the TEMPLATE ARGUMENTS, so PR #194 renamed four of these by
 #: removing two of them from each body: ``<64, 256, 64, 4, 192>`` became ``<64, 64, 4>`` and
 #: ``<64, 256, 64, 192, 16>`` became ``<64, 64, 16>``.  Verified against the report directory rather
 #: than predicted — a name that MISSES makes this gate skip, which reads as a pass.
 #:
-#: ``plans/rf_shot_absolute.md`` renamed the player's again — ``<64, 64, 16>`` became
+#: PR #199 renamed the player's again — ``<64, 64, 16>`` became
 #: ``<64, 64, 16, 0>`` — and **the zero is in the mangled name**, so the default build's module is
 #: ``shot_tx_player_task_64_64_16_0_...``.  That is the one thing about this edit that had to be
 #: measured rather than reasoned about: a first reading of the report directory said the name had
@@ -270,106 +265,22 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines a counters main prints."""
-    vals: dict[str, int] = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
-def _responses(bundle: str) -> list[tuple[int, int, int]]:
-    """``(tid, status, nsamp_loaded)`` off the response **stream**, in arrival order.
-
-    Off the wire rather than off a counter, because the wire is what a host sees: a design that
-    decided correctly and serialized wrongly passes every internal check there is.
-    """
-    from waveflow.utils.burst_io import read_burst_bundle
-
-    d = XSI / "vectors" / bundle
-    if not d.is_dir():
-        return []
-    words = np.concatenate(read_burst_bundle(d)).ravel()
-    n = RESP.nwords_per_inst(64)
-    out = []
-    for i in range(0, words.size - n + 1, n):
-        r = RESP().deserialize(words[i:i + n], word_bw=64)
-        out.append((int(r.tid), int(r.status), int(r.nsamp_loaded)))
-    return out
-
-
-def _played(bundle: str) -> np.ndarray:
-    """The samples the RF sink captured, as signed converter codes."""
-    from waveflow.simulation.rf_tb import read_rf_bundle
-
-    d = XSI / "vectors" / bundle
-    if not d.is_dir():
-        return np.zeros(0, dtype=np.int64)
-    return blocks_to_codes(read_rf_bundle(d, 1, BLKSIZE))
-
-
-def _run_traced(tb: str, keep_vcd: Path) -> tuple[dict[str, int], Path]:
-    """Run *tb* against a freshly elaborated wrapper, with tracing, and keep the VCD.
-
-    Everything the previous run left is removed first — the built TB and the waveform.  A stale VCD
-    is how a scan reports the *previous* run's collisions, and with two scenarios writing one trace
-    file that is not a hypothetical.
-    """
-    for stale in (f"{tb}.exe", f"{tb}.bin", f"{tb}.o"):
-        (XSI / stale).unlink(missing_ok=True)
-    trace = XSI / f"{WRAPPER}_trace.vcd"
-    trace.unlink(missing_ok=True)
-
-    r = subprocess.run(xsi_runner_cmd(WRAPPER, tb, trace=True), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    text = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in text, (
-        f"the {tb} RTL run did not complete cleanly:\n{text[-3000:]}")
-    assert trace.is_file(), (
-        f"the traced run produced no {trace.name}. Is vcd_dumper_{WRAPPER}.v present in {XSI}, and "
-        f"did {XSI_RUNNER} get the `trace` argument?")
-    keep_vcd.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(trace, keep_vcd)
-    return _counters(text), keep_vcd
-
-
 @pytest.fixture(scope="module")
-def runs(tmp_path_factory) -> dict:
-    """Both scenarios, once, against the SAME snapshot.
-
-    One fixture, because the second run overwrites the first's waveform — so each run's outputs are
-    read and copied out before the next one plays.
-    """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_shot_tx_build.py --through csynth")
-    # `*_proj/` is gitignored build output, and a gate that compares a cycle count against RTL it did
-    # not produce reports "a real behaviour change" when the truth is a stale artifact.
-    _require(rtl_staleness(ROOT, TOP) is None, rtl_staleness(ROOT, TOP) or "")
-    # The hazard manifest is `*.json` and therefore gitignored like every other build artifact, so it
-    # is a prerequisite rather than a checked-in file — and a missing one must SKIP loudly rather
-    # than raise, which is what the whole-session gate in tests/conftest.py is about.
-    for f in (*RTL_FILES, f"vcd_dumper_{WRAPPER}.v", f"{TOP}_hazard.json"):
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_tx_build.py")
-    generate_tb(ROOT)
-    (XSI / f"rtl_{WRAPPER}.f").write_text(
-        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
-    shutil.rmtree(XSI / "xsim.dir" / WRAPPER, ignore_errors=True)
-
-    keep = tmp_path_factory.mktemp("rf_shot_tx_xsi")
+def runs() -> dict:
+    """Both scenarios, once each: the system runs of the 'default' build
+    (``examples/rf_shot_tx/rf_shot_tx_system_build.py``), one system per frame stream -- the
+    transmitter is the DUT (its wrapper: the kernel and its ``bram_t2p``), the RFDC's DAC model
+    spans the cut.  Each run is traced: the waveform is the wrapper's scope inside that run's system top, and its manifest names the nets there.  The counters are the ones the DAC model writes as a
+    recording, under the names the old hand-written main printed."""
     out: dict[str, dict] = {}
-    for name, tb, resp_b, rf_b, frames, check in SCENARIOS:
-        for od in (resp_b, rf_b):
-            shutil.rmtree(XSI / "vectors" / od, ignore_errors=True)
-        counters, vcd = _run_traced(tb, keep / f"{name}.vcd")
-        out[name] = {"counters": counters, "vcd": vcd, "played": _played(rf_b),
-                     "responses": _responses(resp_b), "frames": frames, "check": check}
-    out["manifest"] = json.loads((XSI / f"{TOP}_hazard.json").read_text(encoding="utf-8"))
+    for name, _tb, _resp_b, _rf_b, frames, *check in SCENARIOS:
+        work = system_run(sysb.build_dag('default', name, work_dir=WORK), sysb.HERE,
+                          sysb.top('default', name))
+        assert compared_clean(work) and recorded_names(work) == ["counters", "resp", "rf_out"]
+        vcd, manifest = trace_of(work)
+        out[name] = {"counters": sysb.counters(work), "played": sysb.played(work),
+                     "responses": sysb.responses(work), "frames": frames, "vcd": vcd, "manifest": manifest,
+                     "check": check[0] if check else None}
     return out
 
 
@@ -619,7 +530,7 @@ def test_shot_busy_answers_a_finite_shot_and_only_a_finite_shot(runs):
 def test_all_four_verdicts_and_the_fence_appear_across_the_two_streams(runs):
     """**Gate 4's other half.**  Every legal answer is exercised by one RTL, and none is a guess.
 
-    **Four, where it was five.**  ``plans/rf_shot_geometry.md`` retired ``SHOT_ZERO_LEN``
+    **Four, where it was five.**  PR #194 retired ``SHOT_ZERO_LEN``
     (``nsamp == 0``) and the length half of ``SHOT_WRONG_LEN`` (``nsamp != nword * spw``) along with
     the header field both read; the verdict itself survives as ``SHOT_BAD_OPCODE``, same wire value,
     named for the fault it actually reports.  So this gate asserts one fewer status because the
@@ -673,9 +584,12 @@ def test_the_scenario_was_consumed_and_the_last_verdict_landed_on_the_recorded_c
     family's first RTL run deadlocked after two words and every other counter still looked plausible.
     """
     c = runs[name]["counters"]
-    assert c["CMD_SENT"] == c["CMD_TOTAL"], (
-        f"{name}: the driver placed {c['CMD_SENT']} of {c['CMD_TOTAL']} words — the design stopped "
-        f"taking the command stream, which is a stall rather than a wrong answer.")
+    # One verdict per header, the closing fence's included: headers are answered strictly in order,
+    # so the fence's answer says the whole stream was taken -- a stall leaves it unanswered.  (The
+    # old hand-written main counted the driver's words to say the same thing.)
+    assert len(runs[name]["responses"]) == sum(1 for _f in runs[name]["frames"]), (
+        f"{name}: {len(runs[name]['responses'])} verdicts for {len(runs[name]['frames'])} headers "
+        f"-- the design stopped taking the command stream, which is a stall, not a wrong answer.")
     assert c["RESP_LAST_CYCLE"] == WANT_RESP_LAST_CYCLE[name], (
         f"{name}: the last response landed at cycle {c['RESP_LAST_CYCLE']}, gate expects "
         f"{WANT_RESP_LAST_CYCLE[name]} (of {XSI_N_CYCLES} run). That is a real behaviour change — "
@@ -694,14 +608,14 @@ def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
     This gate used to be about ``base + offset``: the byte-versus-word bug had every BRAM design in
     this repo mis-addressed and ``bram_toy`` stayed green through it, because consistently mis-scaled
     addressing round-trips perfectly right up to the top of the address space.
-    ``plans/rf_shot_geometry.md`` removed ``base``, so that arithmetic no longer exists to be wrong.
+    PR #194 removed ``base``, so that arithmetic no longer exists to be wrong.
 
     What survives is the other half, and it is still worth measuring: the load pass is **counted**,
     so it writes ``depth`` elements whatever arrives, and a short frame is padded rather than leaving
     the tail holding the previous waveform.  The assertion is not "the data came back" — it is
     *which elements the writer actually touched*.
     """
-    wa, _ra, wl, _rl = _port_pins(runs[name]["vcd"], runs["manifest"])
+    wa, _ra, wl, _rl = _port_pins(runs[name]["vcd"], runs[name]["manifest"])
     touched = np.unique(wa[wl])
     assert touched.size, f"{name}: the writer never wrote a word; there is no addressing to check"
     assert (int(touched.min()), int(touched.max())) == WANT_WRITE_RANGE, (
@@ -714,7 +628,7 @@ def test_the_write_addresses_reach_the_last_element_and_no_further(runs, name):
 def test_the_player_sweeps_the_whole_buffer_and_wraps(runs):
     """**The wrap, measured on the read port — the only address arithmetic this design has left.**
 
-    ``plans/rf_shot_geometry.md`` removed ``base``, and with it ``buf[BASE + rd + i]``.  What is left
+    PR #194 removed ``base``, and with it ``buf[BASE + rd + i]``.  What is left
     is ``buf[rd + i]`` with ``rd`` wrapping at ``depth``, and ``depth`` is a power of two, so at RTL
     that wrap is a **mask** rather than an addition.  The plan's argument for removing ``base`` was
     that the bug class disappears rather than going untested — so the one piece of arithmetic that
@@ -732,7 +646,7 @@ def test_the_player_sweeps_the_whole_buffer_and_wraps(runs):
     Run on ``cmd``: it is the finite scenario, so the whole playout is one waveform and a read
     address outside the buffer cannot be explained away by a handover.
     """
-    _wa, ra, _wl, rl = _port_pins(runs["cmd"]["vcd"], runs["manifest"])
+    _wa, ra, _wl, rl = _port_pins(runs["cmd"]["vcd"], runs["cmd"]["manifest"])
     live = np.asarray(ra)[np.asarray(rl)]
     assert live.size, "the player never drove its read port; there is no addressing to check"
     assert int(live.min()) >= 0 and int(live.max()) == DEPTH - 1, (
@@ -765,13 +679,13 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
 
     At RTL it buys something weaker, and this test records exactly what.  ``play_chunk`` is pipelined
     at II=1 and reads ``buf[rd + i]`` **unconditionally**, muxing the filler in afterwards; a
-    register guard was measured not to quiet the port (``plans/t2p_lock_chan.md``, *enable-gating is
+    register guard was measured not to quiet the port (PR #178, *enable-gating is
     closed*).  So a yielded player keeps driving its read address, and:
 
     * ``cmd``      — one grant, taken before anything has played: ``18`` cycles of both-ports-live on
       the region and **no** address collision.
     * ``cmd_loop`` — three grants, two of them mid-play: ``55`` cycles of overlap and, since
-      ``plans/rf_shot_geometry.md``, **no** cycle where the two addresses coincide.  It used to be
+      PR #194, **no** cycle where the two addresses coincide.  It used to be
       two, and the change is phase rather than substance — the old design rebuilt at the new geometry
       still collides twice, so what moved them was the few-cycle re-timing of the response path, not
       the buffer moving.  ``bram_t2p.v`` ``$error``\\ s on a collision and XSI throws the ``$error``
@@ -792,14 +706,14 @@ def test_the_handover_leaves_a_speculative_read_that_the_design_discards(runs, n
     means the read port stopped being unconditional, which changes what the region does and does not
     enforce at RTL.
     """
-    wa, ra, wl, rl = _port_pins(runs[name]["vcd"], runs["manifest"])
+    wa, ra, wl, rl = _port_pins(runs[name]["vcd"], runs[name]["manifest"])
     inside = (wa < DEPTH) & (ra < DEPTH)
     overlap = int(np.flatnonzero(wl & rl & inside).size)
     assert overlap == WANT_PORT_OVERLAP_CYCLES[name], (
         f"{name}: both memory ports are live on [0, {DEPTH}) for {overlap} cycle(s), "
         f"expected {WANT_PORT_OVERLAP_CYCLES[name]}. Vitis reads speculatively and muxes, so this "
         f"is not zero by design; a CHANGE is what matters.")
-    hz = find_read_during_write(runs[name]["vcd"], runs["manifest"])
+    hz = find_read_during_write(runs[name]["vcd"], runs[name]["manifest"])
     assert len(hz) == WANT_RDW_COLLISIONS[name], (
         f"{name}: {describe(hz)}; expected exactly {WANT_RDW_COLLISIONS[name]} collision(s). The "
         f"words are discarded — the two backends are byte-identical — but the COUNT is pinned, "

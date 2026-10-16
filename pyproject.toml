@@ -14,10 +14,12 @@ dependencies = [
     "pandas>=2.0",
     "simpy>=4.1",
     "scikit-learn>=1.3",
-    # Upper-bounded on purpose: waveflow.mcp imports `mcp.server.fastmcp.FastMCP`, which the 2.x
-    # line removed.  Unbounded, a fresh install resolves to 2.x and every MCP entry point fails to
-    # import.  Lift the bound only together with a port to the 2.x server API.
-    "mcp[cli]>=1.0,<2.0",
+    # Upper-bounded on purpose: each mcp major has removed the server API the one before ran on
+    # (2.x dropped `mcp.server.fastmcp.FastMCP` for `mcp.server.mcpserver.MCPServer` and changed
+    # what a raised exception shows the model), so a 3.x resolved unbounded could leave every MCP
+    # entry point failing to import.  Lift the bound only together with a port to that API.
+    # No `[cli]` extra: nothing here uses the `mcp` command line.
+    "mcp>=2.3.0,<3",
     "openai>=1.0",
     "platformdirs>=4.0",
     # Imported at module scope by waveflow.utils.vcd / .timing (matplotlib) and
@@ -47,7 +49,7 @@ sv_impl  = "waveflow.scripts.sv_build:run_impl"
 build_lab_autograder = "waveflow.scripts.build_lab_autograder:main"
 waveflow_mcp_setup = "waveflow.scripts.waveflow_mcp_setup:main"
 waveflow_mcp_server = "waveflow.mcp.server:main"
-build_corpus = "waveflow.mcp.build_corpus:main"
+waveflow = "waveflow.cli:main"
 clean_examples = "waveflow.scripts.clean_examples:main"
 publish_calib = "waveflow.calib.publish:main"
 waveflow_calib = "waveflow.calib.cli:main"
@@ -92,6 +94,18 @@ include-package-data = true
 # MANIFEST.in (whose `recursive-include waveflow` covers only *.json/*.yaml/*.yml/*.txt/*.md), so a
 # pip-installed non-editable waveflow had every hook component fail on a missing source file.
 "waveflow.build" = ["xsi/**", "rtl/**", "*.h", "*.hpp", "*.tpp", "*.cpp"]
+# The processor model's calibration kernels are C programs (plus their shared header) that the gem5
+# runner compiles; without this a pip-installed waveflow could not calibrate a new platform.
+"waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h", "calib/gem5_cfg/*.py"]
+# The SSR FFT's hand-written task bodies (waveflow.dsp.ssr_fft.hls copies them into a build).
+"waveflow.dsp.ssr_fft" = ["src/*.h"]
+
+# The accelerator frames are markdown and TOML -- the specification, the process
+# text (which the scaffold also writes as a project's AGENTS.md) and the example
+# function specs.  No Python, so package discovery misses them entirely, and
+# without this `waveflow_get_process` returns a missing-file error on any
+# pip-installed waveflow.
+"waveflow.mcp.frames" = ["**/*.md", "**/*.toml"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["**/node_modules/**", "**/__pycache__/**", "**/*.pyc"]
@@ -105,6 +119,7 @@ norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", 
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
     "xsi: marks tests as requiring Vivado xsim + mingw g++ AND a prior csynth (RTL-level BFM gates)",
+    "gem5: marks tests as requiring gem5 (WAVEFLOW_GEM5_ROOT), Docker and an aarch64 cross gcc (processor-model ground truth)",
     "phase1: HwModule codegen phase 14 — phase 1 (HwTestbench + extractor mode)",
     "phase2: HwModule codegen phase 14 — phase 2 (HlsCodegenStep.is_testbench)",
     "phase3: HwModule codegen phase 14 — phase 3 (DUT binding + dut.run)",

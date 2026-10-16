@@ -5,7 +5,7 @@ The load-bearing test here is not the round-trip — it is
 the failure mode this tree has already been bitten by (a stale ``rtl_fir_block.f`` beside a cached
 ``xsimk.dll`` makes an XSI run go green while proving nothing).  A store shared across designs *and*
 parameter points turns that from occasional into constant, so verification-on-read is a safety
-property, not an optimization (``plans/resource_model.md``).
+property, not an optimization (the resource_model plan (commit b715f1d)).
 """
 from __future__ import annotations
 

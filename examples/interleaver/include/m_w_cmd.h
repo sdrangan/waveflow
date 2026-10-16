@@ -194,7 +194,7 @@ struct MWCmd {
             int out_idx = 0;
             for (int i0 = 0; i0 < n0_eff; ++i0) {
                 w = self->xfer_msg.data[i0];
-                streamutils::write_axi4_word<32>(s, w, tlast);
+                streamutils::write_axi4_word<32>(s, w, tlast && (out_idx == (n0_eff) - 1));
                 out_idx++;
             }
         }
@@ -221,7 +221,7 @@ struct MWCmd {
                 if (i + 1 < n0_eff) {
                     w.range(63, 32) = self->xfer_msg.data[i + 1];
                 }
-                streamutils::write_axi4_word<64>(s, w, tlast);
+                streamutils::write_axi4_word<64>(s, w, tlast && (i + 2 >= n0_eff));
                 out_idx++;
             }
         }

@@ -1,5 +1,5 @@
 set part {xc7z020clg484-1}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: bram_access"
 open_project -reset bram_access_proj
 set_top bram_access

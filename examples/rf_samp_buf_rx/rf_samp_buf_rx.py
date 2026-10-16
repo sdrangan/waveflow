@@ -27,6 +27,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.hw.rf_samp_buf import (  # noqa: E402
     BUF_DEPTH,
@@ -290,6 +291,25 @@ class RfSampBufRxTB(FreeRunMod):
         self.add_if(resp_axis)
 
 
+@dataclass
+class RfSampBufRxSystem(GraphSystem):
+    """The capture buffer as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfSampBufRxTB` graph, the cut :class:`RfSampBufRx` alone -- its ``bram_t2p`` inside it,
+    so the system top instantiates its **wrapper**.  The RFDC is testbench, its ADC model spanning
+    the cut."""
+
+    n_cycles: int = 40000
+
+    def graph(self) -> RfSampBufRxTB:
+        return RfSampBufRxTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, samp_per_word=int(self.tb.word.samp_per_word))
+
+
 def write_scenario(root, samp_per_word: int = 1, cmds=None) -> None:
     """Materialize ``<root>/vectors/rf_in`` and ``.../cmd`` — what BOTH backends play.
 
@@ -339,7 +359,7 @@ def captured_words(tb: "RfSampBufRxTB") -> np.ndarray:
     """The raw AXIS words the sink collected — ``samp_per_word`` samples in each."""
     if not tb.out_sink.words:
         return np.zeros(0, dtype=np.uint64)
-    return np.concatenate(tb.out_sink.words).astype(np.uint64)
+    return np.concatenate(tb.out_sink.words)
 
 
 def captured_samples(tb: "RfSampBufRxTB") -> np.ndarray:
@@ -360,10 +380,10 @@ def responses(tb: "RfSampBufRxTB") -> list[tuple[int, int, int]]:
     if not tb.resp_sink.words:
         return []
     w = int(tb.rfdc.axis_bitwidth)
-    flat = np.concatenate(tb.resp_sink.words).astype(np.uint64)
+    flat = np.concatenate(tb.resp_sink.words)
     n = RxResp.nwords_per_inst(w)
     out = []
     for i in range(0, flat.size, n):
         r = RxResp().deserialize(flat[i:i + n], word_bw=w)
-        out.append((int(r.tid), int(r.status), int(r.nsent)))
+        out.append((int(r.tid), int(r.status), int(r.nsent)))  # int: json.dumps (build)
     return out

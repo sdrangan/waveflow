@@ -2,11 +2,12 @@
 title: Fitting the timing model
 parent: Composite kernel interleaver
 nav_order: 11
+summary: "Recovering the compute stage's latency and initiation interval from the RTL by the direct method: run the kernel at a range of sizes, record the cycles, fit a line, and ship the result to the platform library so any build loads it. The half of the calibration story mem_copy has none of, because the gather is the design's own kernel — read it as a recipe for fitting your own stage."
 ---
 # Fitting the timing model
 
 [The timing model](./timing_model.md) has two parameters, `latency` and `ii`. This page **recovers them
-from the RTL** — the [direct method](../../guide/timing_model/fit.md): run the kernel at a range of sizes, record
+from the RTL** — a [direct fit](../../guide/calib/example.md): run the kernel at a range of sizes, record
 `(n, cycles)`, and fit a line. The result ships to the platform library so any build loads it.
 
 This is the half of the calibration story `mem_copy` has none of, because the gather is the design's own
@@ -192,7 +193,8 @@ il.gather.job_span_cyc        # [256.0, 256.0, 256.0] — the contiguous burst X
 
 ## See also
 
-- [Fitting a timing model](../../guide/timing_model/fit.md) — the direct method, in general.
+- [Calibrating a timed phase](../../guide/timing_model/fit.md) — the declared form of this fit, generated
+  from a module's phases.
 - [The timing model](./timing_model.md) — what `latency` and `ii` mean (the previous page).
 - [Platforms](../../guide/platform/identity.md) — the library the fit ships into.
 - [Component residuals](../../guide/timing_model/component_residual.md) — the *other*, DAG-driven method, for the

@@ -22,8 +22,11 @@ The flow forks only at the final RTL-exercising rung, based on top execution mod
 |---|---|
 | single-kernel top (`ap_ctrl_hs`, register-map launched) | [Vitis cosim](./vitis.md) |
 | composite free-running task-network top (`ap_ctrl_none`) | [XSI + BFM](./xsi.md) |
+| a memory-mapped system: kernels, adaptors, crossbar, host | [XSI system simulation](./xsi_system.md) |
 
-That fork is two realizations of one flow, not two separate flows.
+That fork is two realizations of one flow, not two separate flows. A system then goes toward a
+board as IP, one per device, wired in a block design ([IP packaging](./ipi.md)): a realization,
+not a verification rung.
 
 ## Why it's useful
 
@@ -42,11 +45,32 @@ That fork is two realizations of one flow, not two separate flows.
 - [Python Simulation Pattern](./python.md) — recipe for writing a step that runs a SimPy simulation and produces in-memory or file artifacts.
 - [Vitis Pattern](./vitis.md) — recipe for invoking Vitis HLS C-sim / C-synth and parsing the resulting reports.
 - [Authoring `run.tcl`](./tcl.md) — the Vitis script shared by both single-kernel and composite flows.
-- [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end.
+- [XSI Build Rung](./xsi.md) — what XSI/`xvlog`/`xelab`/BFM mean and how the composite RTL rung runs end-to-end;
+  also `SvSimStep`, for a hand-written SystemVerilog testbench with no HLS in it.
+- [XSI System Simulation](./xsi_system.md) — a whole memory-mapped system at RTL, from the pysim
+  system object: the generated top, the host as a hooked module, and the trace conformance gate.
+- [IP Packaging and Block Design](./ipi.md) — a system packaged as Vivado IP, one per device,
+  then wired in a validated block design from the same spec as the XSI system top: the two steps,
+  the interfaces each IP declares, the address map, and the gates.
+- [Software Threads](./sw_threads.md) — the host as threads, with one API in Python (SimPy) and C++
+  (fibers): the primitives side by side, writing a host's C++ twin, and the gate that checks they agree.
 - [BFM Testbenches](./bfm.md) — the framework's AXI-MM / AXI-Stream models and their five-phase
   lifecycle, assembled from the testbench graph or by hand.
 - [Sweeping a design](./sweep.md) — running the DAG at every point of a parameter grid to build a
   calibration corpus: `ParamGrid`, `Stage`, `SweepRunner` and `sweep_cli`.
+- [Timing Events](./timing_events.md) — where a build's wall clock goes: every step, nested step,
+  toolchain run, XSI phase and MCP call as a timing span; `--timing`, `analyze_events`, and what
+  each fidelity costs.
+
+Steps documented outside this section:
+
+- [System resources](../resource/systems.md) — the steps `add_system_steps` adds after the RTL:
+  `kernel_resources`, `system_synth` (`SystemSynthStep`, one Vivado synthesis of the system top),
+  `leaf_resources` (`LeafResourcesStep`) and `resource_report` (`ResourceReportStep`).
+- [A module realized as Verilog](../comp_codegen/rtl_module.md#the-two-build-steps) — `GenRtlStep`
+  and `GenWrapperStep`, for a kernel beside hand-written RTL.
+- [Code Generation Steps](./codegen.md#framework-task-body-headers) — the steps that copy the
+  framework's hand-written task bodies (`MemStreamStep`, the RF buffer steps, `MemLockStep`).
 
 ## Quick example
 
@@ -57,24 +81,31 @@ from waveflow.build.build import BuildConfig, BuildDag, SourceStep
 
 dag = BuildDag()
 dag.add(SourceStep(artifact="poly_source", path="poly.py"))
+dag.add(SourceStep(artifact="scenarios_source", path="scenarios.py"))
 
-dag.add(BuildInputsStep(name="build_inputs"))                    # writes data/*.bin
-dag.add(PySimStep(name="py_sim"))                                # writes results/sim/*
-dag.add(ExtractPyTimingStep(name="extract_py_timing"))           # writes results/py_timing.json
-dag.add(HlsGenIncludeStep(name="gen_include"))                   # writes include/*.h
-dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))
-dag.add(HlsCodegenStep(name="gen_tb",     comp_class=PolyTBHls, is_testbench=True, ...))
-dag.add(CSimStep(name="csim"))                                   # invokes Vitis C-sim
-dag.add(FunctionalVerifyStep(name="validate_csim", ...))         # py vs Vitis outputs
-dag.add(CSynthStep(name="csynth"))                               # invokes Vitis C-synth + cosim
-dag.add(InspectSynthStep(name="inspect_synth"))                  # parses csynth.xml
-dag.add(ExtractCosimTimingStep(name="extract_cosim_timing", top="poly"))
-dag.add(ValidateTimingStep(name="validate_timing", tolerance_cycles=20))
+dag.add(ScenariosStep(name="scenarios"))                         # data/w<W>/<scenario>/{in,expected}
+dag.add(ModelStep(name="py_model"))                              # the pure model, every scenario
+dag.add(CheckStep(name="check_model", stage="model", ...))       # vs the expected responses
+dag.add(PySimStep(name="py_sim"))                                # pysim: the timing model
+dag.add(CheckStep(name="check_pysim", stage="pysim", ...))
+dag.add(ExtractPyTimingStep(name="extract_py_timing_w32", word_bw=32))   # results/py_timing_w32.json
+dag.add(HlsGenIncludeStep(name="gen_include"))                   # include/*.h
+dag.add(SourcesStep(name="sources"))                             # hand-written C++ in place
+dag.add(HlsCodegenStep(name="gen_kernel", comp_class=PolyAccel, ...))  # the kernel boundary
+dag.add(CSimStep(name="csim"))                                   # Vitis C-sim, hand-written TB
+dag.add(CheckStep(name="check_csim", stage="csim", ...))
+dag.add(CSynthStep(name="csynth_w32", word_bw=32))               # Vitis C-synth + cosim
+dag.add(InspectSynthStep(name="inspect_synth_w32", word_bw=32))  # parses csynth.xml
+dag.add(CheckStep(name="check_cosim", stage="cosim", ...))
+dag.add(ExtractCosimTimingStep(name="extract_cosim_timing_w32", top="poly", ...))
+dag.add(ValidateTimingStep(name="validate_timing_w32", tolerance_cycles=20, ...))
+# ... and the same five steps again for the 64-bit top, poly_bw64
+dag.add(SummaryStep(name="summary"))                             # every check, one file
 
-config = BuildConfig(root_dir=".", params={"nsamp": 100, "clk_freq": 100e6})
-dag.run(config, through="extract_py_timing")          # stop before Vitis
+config = BuildConfig(root_dir=".", params={"clk_freq": 100e6})
+dag.run(config, through="check_pysim")               # stop before Vitis
 # or:
-dag.run(config)                                       # full build through validate_timing
+dag.run(config, through="summary")                    # the full build, every check
 ```
 
 See [examples/stream_inband/poly_build.py](https://github.com/sdrangan/waveflow/tree/main/examples/stream_inband/poly_build.py) for the full working pipeline this snippet is drawn from.

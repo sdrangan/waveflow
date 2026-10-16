@@ -1,6 +1,6 @@
 r"""rf_shot_tx.py — **one** shot transmitter, on the lock, with both play modes.
 
-``plans/rf_shot_unify.md``.  Stage A built this beside two predecessors — a finite player
+PR #181.  Stage A built this beside two predecessors — a finite player
 (``ShotPhase`` + ``rdy`` + ``done``, five tasks) and an infinite one (``LockedT2pMemIF``, three
 tasks) — and **Stage B deleted them both**, along with the ``ShotPhase`` buffer primitive underneath
 the first, and moved their shared vocabulary in here.  What is left is one design that does what all
@@ -124,7 +124,7 @@ SHOT_LOAD = 0
 SHOT_END = 1
 #: Load the samples that follow, then play them **until told otherwise** — the infinite-play flag.
 #:
-#: ``plans/t2p_lock_chan.md`` S1.  :data:`SHOT_LOAD` and this one differ in exactly one thing: when
+#: PR #178.  :data:`SHOT_LOAD` and this one differ in exactly one thing: when
 #: the design stops.  A ``SHOT_LOAD`` plays ``nrepeat`` times and goes quiet, which is why a second
 #: load arriving mid-play is :data:`SHOT_BUSY` — the memory is under a reader.  A ``SHOT_LOOP`` never
 #: goes quiet, so ``SHOT_BUSY`` would refuse every load forever; the design that accepts it hands the
@@ -135,7 +135,7 @@ SHOT_END = 1
 #: overloading it would make "play forever" and "never play" the same value on the wire.
 #:
 #: :class:`~waveflow.hw.rf_shot_tx.RfShotTx` does not implement it (a finite player has nothing to
-#: Until ``plans/rf_shot_unify.md`` Stage B there were two designs and each implemented exactly one
+#: Until PR #181 there were two designs and each implemented exactly one
 #: of the pair; :class:`RfShotTx` implements both, and this constant is why the two could share a
 #: header schema across that whole period rather than growing a second vocabulary for one opcode.
 SHOT_LOOP = 2
@@ -150,7 +150,7 @@ SHOT_LOADED = 0
 #: transfer completes cleanly at the DMA, so the host sees success while the buffer holds a block of
 #: the right shape carrying half a signal.  Nothing on the host side can see it.
 #:
-#: **Since ``plans/rf_shot_geometry.md`` it is the ONLY way a short transfer is detectable.**  The
+#: **Since PR #194 it is the ONLY way a short transfer is detectable.**  The
 #: header used to declare a length and the loader used to check it; with the length gone, ``TLAST``
 #: arriving early is the sole evidence, and :attr:`ShotTxResp.nsamp_loaded` is the sole diagnosis.
 SHOT_SHORT = 1
@@ -158,7 +158,7 @@ SHOT_SHORT = 1
 #: answered as something other than what it asked for is invisible, because the samples would look
 #: perfect.
 #:
-#: **Renamed from ``SHOT_WRONG_LEN`` by ``plans/rf_shot_geometry.md``, and the wire value is
+#: **Renamed from ``SHOT_WRONG_LEN`` by PR #194, and the wire value is
 #: deliberately unchanged so no host has to change.**  The old name was already an overload at this
 #: site — *"wrong length"* reported for a wrong *opcode* — and this is the one use of it that
 #: survives the header losing its length.  Folding it into :data:`SHOT_SHORT` was the alternative and
@@ -206,7 +206,7 @@ MSG_BW = 64
 
 #: The floor on ``nsamp_loaded``'s width — **16 bits, whatever the geometry derives**.
 #:
-#: The reason changed with ``plans/rf_shot_geometry.md``, and the old one is worth recording because
+#: The reason changed with PR #194, and the old one is worth recording because
 #: it **retired** rather than turned out wrong: the floor used to stop a host's mistyped *length* from
 #: aliasing onto a legal one on the way in.  There is no length on the way in any more.  What is left
 #: is a field the host **reads**, and holding it at one width across geometries is what lets a host be
@@ -227,7 +227,7 @@ def nsamp_bw_for(depth: int, samp_per_word: int) -> int:
     That made a constant bound the design.  Now the design sizes the field, so the largest value it
     can ever report fits **by construction** and the check is unnecessary rather than deleted on
     faith.  :func:`test_a_buffer_too_large_for_the_old_16_bit_field_builds_and_round_trips` is the
-    witness — retargeted by ``plans/rf_shot_geometry.md`` from the header's ``nsamp``, which no
+    witness — retargeted by PR #194 from the header's ``nsamp``, which no
     longer exists, onto the response's ``nsamp_loaded``, which does the same job on the way back.
 
     **Takes ``depth`` rather than ``nword`` because the shot IS the buffer**: a full load is ``depth``
@@ -272,7 +272,7 @@ class ShotTxHdr(ParamSchema):
     :class:`waveflow.hw.rf_samp_buf_tx.TxCmd` names a **buffer window**, and this one names a
     **stream transaction**.  The three designs are alternatives, never layers.
 
-    **There is no length field at all**, and ``plans/rf_shot_geometry.md`` is why.  It carried one
+    **There is no length field at all**, and PR #194 is why.  It carried one
     (``nsamp``) whose only legal value was ``nword x samp_per_word`` — a checksum wearing a
     parameter's clothes, and a reader met it as a parameter first.  **The shot IS the buffer** now:
     the length is :attr:`RfShotTx.depth`, the host does not restate it, and there is nothing for a
@@ -305,7 +305,7 @@ class ShotTxResp(ParamSchema):
     know whether it worked.
 
     ``nsamp_loaded`` is **what actually landed**, not what was asked for — and since
-    ``plans/rf_shot_geometry.md`` removed the header's ``nsamp`` it is the **only** length on the
+    PR #194 removed the header's ``nsamp`` it is the **only** length on the
     wire, in either direction.  On :data:`SHOT_LOADED` it is a full buffer; on :data:`SHOT_SHORT` it
     *is* the diagnosis, and it is the number a DMA cannot produce — ``sendchannel.transfer()`` knows
     it pushed bytes, not whether they were a whole waveform.
@@ -347,7 +347,7 @@ def shot_tx_schemas(depth: int = BUF_DEPTH, samp_per_word: int = 4):
     :class:`~waveflow.hw.dataschema.DataSchemaStep` cannot disagree about the wire.  Both messages
     are one :data:`MSG_BW`-bit word whatever the geometry.
 
-    Only the **response** varies now: since ``plans/rf_shot_geometry.md`` the header carries no
+    Only the **response** varies now: since PR #194 the header carries no
     length, so its layout is the same at every geometry and what the pair still shares is the word
     size.  The response's ``nsamp_loaded`` is sized from ``depth`` — the shot is the buffer, so a
     full load is ``depth x samp_per_word`` samples.
@@ -411,7 +411,7 @@ class ShotPlayCmd(DataList):
 
 #: Schema classes a build emits C++ headers for.  ``ShotTxHdr`` and ``ShotTxResp`` are **not** here:
 #: they are still :mod:`waveflow.hw.rf_shot_tx`'s at Stage A — see the ownership decision recorded in
-#: ``plans/rf_shot_unify.md``.  A build wanting this design needs both lists.
+#: PR #181.  A build wanting this design needs both lists.
 SHOT_PLAY_SCHEMA_CLASSES = [ShotPlayCmd]
 
 
@@ -437,7 +437,7 @@ class ShotTxLoader(FreeRunMod):
     otherwise                                       :data:`~waveflow.hw.rf_shot_tx.SHOT_LOADED`
     ==============================================  ==================================
 
-    It was five before ``plans/rf_shot_geometry.md``.  Both that went were about a length the header
+    It was five before PR #194.  Both that went were about a length the header
     no longer declares: ``SHOT_ZERO_LEN`` was ``nsamp == 0`` and ``SHOT_WRONG_LEN``'s length half was
     ``nsamp != nword * spw``.  The verdict itself survives as ``SHOT_BAD_OPCODE`` — same wire value,
     a name that describes the fault it actually reports.
@@ -457,7 +457,7 @@ class ShotTxLoader(FreeRunMod):
     #: Word width in bits — the host port's and the memory's.
     bitwidth: HwParam[int] = WORD_BW
     #: Memory depth in **elements**, and therefore the **length of a shot**: since
-    #: ``plans/rf_shot_geometry.md`` the shot IS the buffer.  There is no separate ``nword``, no
+    #: PR #194 the shot IS the buffer.  There is no separate ``nword``, no
     #: ``base``, and no length on the wire to disagree with this one.
     depth: HwParam[int] = BUF_DEPTH
     #: Samples one word carries — what turns a word count into the ``nsamp_loaded`` a host reads.
@@ -474,7 +474,7 @@ class ShotTxLoader(FreeRunMod):
                 f"a {w}-bit word cannot carry {spw} samples without one straddling a slot")
         # There is no region check here any more, and there is nothing left to check: the region is
         # the whole memory, so it fits by construction.  `base` used to make [base, base+nword) a
-        # thing that could be wrong, and plans/rf_shot_geometry.md removed the arithmetic rather
+        # thing that could be wrong, and PR #194 removed the arithmetic rather
         # than the gate that covered it.
         self.hdr_cls, self.resp_cls = shot_tx_schemas(d, spw)
         #: The host's port: header **and** payload, one frame, ``TLAST`` at the end.  Without the pin
@@ -602,7 +602,7 @@ class ShotTxLoader(FreeRunMod):
         lo, hi = self.region
         lock_status = yield from self.lock.acquire(lo, hi)
         if lock_status != LOCK_GRANTED:
-            # Unreachable: the region IS the memory since plans/rf_shot_geometry.md, so there is no
+            # Unreachable: the region IS the memory since PR #194, so there is no
             # geometry left for the two ends to disagree about.  Raised rather than answered, because
             # a region the design declared and the memory refuses is a wiring fault, not a host's
             # mistake.
@@ -684,7 +684,7 @@ class ShotTxPlayer(FreeRunMod):
     playing, so it says *how far into this waveform*.  At ``1`` it advances and wraps on **every**
     firing, filler included, so it says *how many words since reset*, modulo :attr:`depth`; a shot is
     armed in :attr:`pending` at accept and starts at the next ``rd == 0``.  Sample *j* then comes out
-    at an absolute index congruent to *j* — ``plans/rf_shot_absolute.md``.
+    at an absolute index congruent to *j* — PR #199.
 
     **The split at the wrap is load-bearing.**  The advance leaves the ``playing`` guard;
     ``nrep_left`` and the ``done`` do not.  Moving the whole block makes the repeat count tick on
@@ -701,7 +701,7 @@ class ShotTxPlayer(FreeRunMod):
 
     bitwidth: HwParam[int] = WORD_BW
     #: Memory depth in elements, **and** the wrap point of the read pointer — one number, because
-    #: since ``plans/rf_shot_geometry.md`` the shot IS the buffer.  A power of two, so the wrap is a
+    #: since PR #194 the shot IS the buffer.  A power of two, so the wrap is a
     #: mask rather than an addition.
     depth: HwParam[int] = BUF_DEPTH
     #: Elements between polls, **and** words per pysim output burst — one number, because they are
@@ -712,7 +712,7 @@ class ShotTxPlayer(FreeRunMod):
     #: width remains because the converter edge downstream takes a whole block per event and refuses
     #: a partial one; that is a modelling *shape*, and nothing here declares how fast anything runs.
     blk_words: HwParam[int] = 1
-    #: **The index is a timestamp** (``plans/rf_shot_absolute.md``).  ``0`` is the behaviour every
+    #: **The index is a timestamp** (PR #199).  ``0`` is the behaviour every
     #: predecessor had: a shot starts at :attr:`rd` ``= 0`` the instant it is accepted, so the read
     #: pointer says *how far into this waveform* and nothing more.  ``1`` makes :attr:`rd` advance
     #: **unconditionally** — filler included — so what it holds is the design's own word count since
@@ -812,7 +812,7 @@ class ShotTxPlayer(FreeRunMod):
         play = yield from self.rep_in.get_schema(ShotPlayCmd)
         self.loop = int(play.opcode) == SHOT_LOOP
         self.nrep_left = int(play.nrepeat)
-        # ARMED is not PLAYING, and separating them is edit 2 of `plans/rf_shot_absolute.md`.
+        # ARMED is not PLAYING, and separating them is edit 2 of PR #199.
         arm = self.nrep_left > 0
         if int(self.absolute_index):
             # DO NOT TOUCH `rd`.  It is the design's word count since reset and a shot has no
@@ -873,7 +873,7 @@ class ShotTxPlayer(FreeRunMod):
             yield from self.samp_out.write(np.full(bw, FILLER, dtype=np.uint64))
             self.n_filler += 1
 
-        # THE ADVANCE, AND THE SPLIT THAT `plans/rf_shot_absolute.md` NAMES AS THE SILENT TRAP.
+        # THE ADVANCE, AND THE SPLIT THAT PR #199 NAMES AS THE SILENT TRAP.
         #
         # Under `absolute_index` the pointer advances and wraps on EVERY firing, filler included --
         # that is what makes it the design's own word count since reset and therefore a timestamp.
@@ -921,7 +921,7 @@ class RfShotTx(FreeRunMod):
                resp_out +--------------- rep ---------------------->+                samp_out
 
     **It was built under the name ``RfShotTxUnified``**, beside the two designs it merges, because
-    Stage A of ``plans/rf_shot_unify.md`` was forbidden to touch either: if the merge had turned out
+    Stage A of PR #181 was forbidden to touch either: if the merge had turned out
     harder than it looked, the working designs had to still be there.  Stage B deleted them and this
     class took the freed name.
 
@@ -952,7 +952,7 @@ class RfShotTx(FreeRunMod):
     #: Samples one word carries.
     samp_per_word: HwParam[int] = 4
     #: Memory depth in **WORDS**, and therefore the length of a shot — **the shot IS the buffer**
-    #: (``plans/rf_shot_geometry.md``).  A power of two, because the read pointer's wrap is then a
+    #: (PR #194).  A power of two, because the read pointer's wrap is then a
     #: mask, and that mask is the only address arithmetic this design has.
     depth: HwParam[int] = BUF_DEPTH
     #: Bits the effective sample sits above the bottom of its converter slot.  **0 makes the last

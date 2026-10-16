@@ -1,0 +1,140 @@
+{
+ "date": "2026-10-13",
+ "machine": {
+  "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+  "python": "3.14.3",
+  "system": "Windows-11-10.0.26200-SP0"
+ },
+ "reps": 5,
+ "points": [
+  {
+   "n": 1,
+   "b": 16,
+   "pysim_s": 0.01490349997766316,
+   "pysim_us_per_copy": 14903.49997766316,
+   "events_per_copy": 39.0,
+   "events_by_type": {
+    "Timeout": 16.0,
+    "Initialize": 8.0,
+    "StoreGet": 7.0,
+    "Process": 4.0,
+    "Request": 2.0,
+    "Release": 2.0
+   },
+   "untimed_us_per_copy": 0.600004568696022,
+   "bits_exact": true
+  },
+  {
+   "n": 10,
+   "b": 16,
+   "pysim_s": 0.025669299997389317,
+   "pysim_us_per_copy": 2566.9299997389317,
+   "events_per_copy": 26.3,
+   "events_by_type": {
+    "Timeout": 13.3,
+    "StoreGet": 4.3,
+    "ContainerPut": 2.6,
+    "Request": 2.0,
+    "Release": 2.0,
+    "Event": 0.9,
+    "Initialize": 0.8,
+    "Process": 0.4
+   },
+   "untimed_us_per_copy": 0.4300032742321491,
+   "bits_exact": true
+  },
+  {
+   "n": 100,
+   "b": 16,
+   "pysim_s": 0.0681219999678433,
+   "pysim_us_per_copy": 681.2199996784329,
+   "events_per_copy": 25.13,
+   "events_by_type": {
+    "Timeout": 13.03,
+    "StoreGet": 4.03,
+    "ContainerPut": 2.96,
+    "Request": 2.0,
+    "Release": 2.0,
+    "Event": 0.99,
+    "Initialize": 0.08,
+    "Process": 0.04
+   },
+   "untimed_us_per_copy": 0.4339998122304678,
+   "bits_exact": true
+  },
+  {
+   "n": 1000,
+   "b": 16,
+   "pysim_s": 0.40659200004301965,
+   "pysim_us_per_copy": 406.59200004301965,
+   "events_per_copy": 25.013,
+   "events_by_type": {
+    "Timeout": 13.003,
+    "StoreGet": 4.003,
+    "ContainerPut": 2.996,
+    "Request": 2.0,
+    "Release": 2.0,
+    "Event": 0.999,
+    "Initialize": 0.008,
+    "Process": 0.004
+   },
+   "untimed_us_per_copy": 0.48559997230768204,
+   "bits_exact": true
+  },
+  {
+   "n": 1,
+   "b": 1024,
+   "pysim_s": 0.01954100001603365,
+   "pysim_us_per_copy": 19541.00001603365,
+   "events_per_copy": 39.0,
+   "events_by_type": {
+    "Timeout": 16.0,
+    "Initialize": 8.0,
+    "StoreGet": 7.0,
+    "Process": 4.0,
+    "Request": 2.0,
+    "Release": 2.0
+   },
+   "untimed_us_per_copy": 0.700005330145359,
+   "bits_exact": true
+  },
+  {
+   "n": 10,
+   "b": 1024,
+   "pysim_s": 0.021200499963015318,
+   "pysim_us_per_copy": 2120.049996301532,
+   "events_per_copy": 26.3,
+   "events_by_type": {
+    "Timeout": 13.3,
+    "StoreGet": 4.3,
+    "ContainerPut": 2.6,
+    "Request": 2.0,
+    "Release": 2.0,
+    "Event": 0.9,
+    "Initialize": 0.8,
+    "Process": 0.4
+   },
+   "untimed_us_per_copy": 0.6599933840334415,
+   "bits_exact": true
+  },
+  {
+   "n": 100,
+   "b": 1024,
+   "pysim_s": 0.08159740001428872,
+   "pysim_us_per_copy": 815.9740001428872,
+   "events_per_copy": 25.13,
+   "events_by_type": {
+    "Timeout": 13.03,
+    "StoreGet": 4.03,
+    "ContainerPut": 2.96,
+    "Request": 2.0,
+    "Release": 2.0,
+    "Event": 0.99,
+    "Initialize": 0.08,
+    "Process": 0.04
+   },
+   "untimed_us_per_copy": 0.8740008343011141,
+   "bits_exact": true
+  }
+ ]
+}

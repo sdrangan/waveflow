@@ -3,6 +3,7 @@ title: Python model
 parent: A memory reached three ways
 nav_order: 1
 has_children: false
+summary: "The model: three transactions over one memory, each a command with a response. WRITE puts a payload at an address, COMPUTE rewrites that range in place as x*3 + 1, and READ returns it. WRITE and COMPUTE share a stream and a task because they share a port; READ is a second task on the other one."
 ---
 
 # Python model
@@ -177,7 +178,8 @@ The body dispatches on the opcode:
 
 ```python
 cmd = yield from self.cmd_w.get_schema(WriteComputeCmd)
-wp, n, op = int(cmd.waddr), int(cmd.nsamp), BramOp(int(cmd.opcode))
+wp, op = cmd.waddr, cmd.opcode
+n = int(cmd.nsamp)                   # int: depth - n below
 ok = n <= int(self.depth) and wp <= int(self.depth) - n
 if op is BramOp.WRITE:
     if n:
@@ -196,7 +198,7 @@ yield from self.resp_w.write(resp)
 
 **There is no `for` in it, and that is the point.** A per-element loop in a pysim body opts the design
 out of the LT model that is the tool's reason to exist; the C++ keeps its
-`#pragma HLS PIPELINE II=1` loop, exactly as `poly_evaluate_impl.tpp` keeps its lane loop. Three
+`#pragma HLS PIPELINE II=1` loop, exactly as `stream_inband`'s `poly_body_impl.tpp` keeps its lane loop. Three
 things carry the work instead:
 
 - **The command is read in one call and the response written in one.** That is the
@@ -237,7 +239,8 @@ if not self.armed:
     yield from _word(self.go_in)
     self.armed = True
 cmd = yield from self.cmd_r.get_schema(ReadCmd)
-rp, n = int(cmd.raddr), int(cmd.nsamp)
+rp = cmd.raddr
+n = int(cmd.nsamp)                   # int: depth - n below
 ok = n <= int(self.depth) and rp <= int(self.depth) - n
 if ok and n:
     y, tstart = yield from self.buf_r.read_pipelined(self.buf_r.element_type, n, rp)
@@ -252,7 +255,7 @@ explains why it is a token on an ordinary stream rather than a testbench's order
 `BramIF` access is **untimed in pysim, on purpose**: a BRAM answer is deterministic, unarbitrated and
 one cycle, so a discrete-event model of it would add a SimPy timestep and no fidelity — `read`
 and `write` are plain methods rather than generators, and **the absence of the `yield` is the
-interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/primitive/aximm.md), where the
+interface stating that no time passes**. (Contrast [AXI-MM](../../guide/interface/axi_mm/modeling.md), where the
 bus, the arbitration and the burst *are* the point of having a model.)
 
 What that leaves out is not throughput. At II=1 a pipelined reader still answers one word per cycle

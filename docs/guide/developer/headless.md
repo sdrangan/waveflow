@@ -3,6 +3,7 @@ title: Headless Testing
 parent: Developers
 nav_order: 1
 has_children: false
+summary: "Running a prompt against the MCP tools with no human and no IDE, to evaluate the agent as a new user with a specified context. headless.run_session takes the task, the model, the mode and a work directory, which can be left empty to simulate someone starting from nothing. The headless mode adds file read and write tools, which a workspace host such as VS Code already supplies."
 ---
 
 # Headless Testing Mode
@@ -44,9 +45,9 @@ As an example, the following python code will:
 
 - Create an empty directory `test_workspace`
 - Give the LLM a prompt to create a schema for a command for a convolutional kernel and write that schema in a file, `conv1d.py`
-- The LLM is given a *headless* MCP meaning it has access to the RAG tools to search the examples, plus file read and write tools
+- The LLM is given a *headless* MCP meaning it has access to the search and read tools for the guide and the examples, plus file read and write tools
 
-When executed, LLM will use MCP tools, including the RAG search tools for examples, to build the desired schema.
+When executed, LLM will use MCP tools, including the search and read tools for the guide and the examples, to build the desired schema.
 
 ```python
 import waveflow.mcp.headless as headless

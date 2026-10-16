@@ -1,6 +1,6 @@
 """The A3 gate: a model reports how much its own prediction should be believed.
 
-The design (``plans/resource_model.md``, decision 6) is a closed sortable level plus a free-form
+The design (the resource_model plan (commit b715f1d), decision 6) is a closed sortable level plus a free-form
 JSON-able fact dict — deliberately *not* an interval.  Synthesis is deterministic, so there is no noise
 process for a prediction interval to estimate; the error that occurs is model misspecification, which
 is not measurable from inside the model.  What a model *can* say honestly is which region it was fit

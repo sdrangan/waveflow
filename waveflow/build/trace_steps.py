@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +51,8 @@ def xsi_runner_cmd(
     tb: str,
     trace: bool = False,
     os_name: str | None = None,
+    verb: str | None = None,
+    vectors_dir: str | None = None,
 ) -> list[str]:
     """
     Build the argv that drives one XSI run, for whichever platform this is.
@@ -69,6 +72,12 @@ def xsi_runner_cmd(
     os_name : str | None, optional
         Override the platform, in :data:`os.name` spelling. Exists so both forms stay testable
         from either host; leave it ``None`` in production callers.
+    verb : str | None, optional
+        The phases to run: ``rtl``, ``tb``, ``build``, ``run`` or ``all``.  ``None`` passes none,
+        which the runner reads as ``all`` -- every phase, unconditionally.  Which phases are
+        *needed* is :class:`~waveflow.build.xsi_snapshot.XsiSnapshot`'s decision, not the runner's.
+    vectors_dir : str | None, optional
+        A run's vectors directory, replacing the testbench's ``vectors/`` (``WF_VECTORS_DIR``).
 
     Returns
     -------
@@ -76,10 +85,66 @@ def xsi_runner_cmd(
         Argument vector to hand to :func:`subprocess.run`, with ``cwd`` set to the ``xsi/`` dir.
     """
     runner = xsi_runner_name(os_name)
-    args = [top, tb] + (["trace"] if trace else [])
+    args = ([top, tb] + (["trace"] if trace else []) + ([verb] if verb else [])
+            + ([str(vectors_dir)] if vectors_dir else []))
     if (os_name or os.name) == "nt":
         return ["cmd", "/c", f".\\{runner}"] + args
     return ["bash", runner] + args
+
+
+#: ``WF_PHASE <name> <time>``, printed by run.bat / run.sh at the start of each phase and at the
+#: end.  run.bat prints ``%time%`` (``H:MM:SS.cc``, the decimal separator per locale); run.sh
+#: prints epoch seconds.
+_PHASE_LINE = re.compile(r"^WF_PHASE (\w+) +(\S+)\s*$", re.MULTILINE)
+
+
+def _phase_seconds(stamp: str) -> float | None:
+    """A WF_PHASE stamp as seconds: epoch seconds, or seconds since midnight for ``H:MM:SS.cc``."""
+    stamp = stamp.replace(",", ".")
+    if ":" not in stamp:
+        try:
+            return float(stamp)
+        except ValueError:
+            return None
+    try:
+        h, m, sec = stamp.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+    except ValueError:
+        return None
+
+
+def xsi_phases(output: str) -> list[tuple[str, float]]:
+    """``[(phase, seconds), ...]`` from a runner's output: compile_rtl, elaborate, compile_tb, simulate."""
+    marks = [(name, _phase_seconds(t)) for name, t in _PHASE_LINE.findall(output)]
+    marks = [(name, t) for name, t in marks if t is not None]
+    out = []
+    for (name, t0), (_, t1) in zip(marks, marks[1:]):
+        dt = t1 - t0
+        if dt < 0:                       # %time% wrapped past midnight
+            dt += 24 * 3600
+        out.append((name, dt))
+    return out
+
+
+def run_xsi(cmd: list[str], *, cwd: str | os.PathLike[str], name: str = "xsi",
+            **kwargs: Any) -> subprocess.CompletedProcess:
+    """:func:`subprocess.run` of an XSI runner, timed: one ``tool`` span, one child per phase.
+
+    The phases come from the runner's ``WF_PHASE`` lines, so the split -- how much of an XSI run
+    was compiling and elaborating, and how much was simulating -- is measured by the runner
+    itself, not inferred.  Everything else is :func:`subprocess.run`'s, unchanged.
+    """
+    from waveflow import events
+
+    with events.span("tool", name, cwd=str(cwd)) as ev:
+        r = subprocess.run(cmd, cwd=str(cwd), **kwargs)
+        out = (r.stdout or "") if isinstance(r.stdout, str) else ""
+        ev["ok"] = "XSI_EXITCODE=0" in out
+        at = ev["start"]
+        for phase, seconds in xsi_phases(out):
+            events.record("phase", phase, elapsed=seconds, start=at)
+            at += seconds
+    return r
 
 
 #: The dumper module.  One line of Verilog does the work; the comment is most of it, because the
@@ -106,6 +171,19 @@ module vcd_dumper_{top};
     end
 endmodule
 '''
+
+
+def render_vcd_dumper(top: str, scopes: "list[str] | None" = None) -> str:
+    """``vcd_dumper_<top>.v``: the second top whose ``$dumpvars`` writes ``<top>_trace.vcd``.
+
+    *scopes* are the hierarchical scopes dumped, each at level 1 (its own nets); the default is
+    *top* itself.  A system top names the scopes the waveform claims read -- a wrapper's, inside a
+    sub-top -- because its own level-1 nets are only the wiring between sub-tops."""
+    text = _DUMPER_TEMPLATE.format(top=top)
+    if scopes is None:
+        return text
+    dumps = "".join(f"        $dumpvars(1, {s});\n" for s in scopes)
+    return text.replace(f"        $dumpvars(1, {top});\n", dumps)
 
 
 @dataclass(kw_only=True)
@@ -137,6 +215,11 @@ class AddVcdTopStep(BuildStep):
     #: ``$dumpvars`` naming a scope that is not part of this elaboration is a hard error.  Left
     #: ``None`` for the ordinary case, where the kernel is the top.
     top: str | None = None
+    #: The artifact the dumper is published under.  One ``xsi/`` directory serves several tops, so
+    #: a DAG really does hold more than one of these steps -- and BuildDag refuses two producers of
+    #: one artifact.  The consuming :class:`RtlSimStep` takes the matching name in its
+    #: ``dumper_artifact``.
+    dumper_artifact: str = "vcd_dumper"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -151,14 +234,14 @@ class AddVcdTopStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"vcd_dumper": Path(self.output_dir) / f"vcd_dumper_{self._top}.v"}
+        return {self.dumper_artifact: Path(self.output_dir) / f"vcd_dumper_{self._top}.v"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         root_dir = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
         out_path = root_dir / self.output_dir / f"vcd_dumper_{self._top}.v"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_DUMPER_TEMPLATE.format(top=self._top), encoding="utf-8")
-        return {"vcd_dumper": out_path}
+        return {self.dumper_artifact: out_path}
 
 
 @dataclass(kw_only=True)
@@ -199,6 +282,11 @@ class TraceManifestStep(BuildStep):
     source_artifact: str
     output_path: str = "results/trace_manifest.json"
     elab_params: dict[str, Any] | None = field(default=None)
+    #: The artifact the manifest is published under; one per traced top, since BuildDag refuses two
+    #: producers of one artifact.  The consuming :class:`ExtractBurstsStep` and
+    #: :class:`~waveflow.build.calib_steps.CalibBusStep` take the matching name in their
+    #: ``manifest_artifact``.
+    manifest_artifact: str = "trace_manifest"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -206,7 +294,7 @@ class TraceManifestStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"trace_manifest": Path(self.output_path)}
+        return {self.manifest_artifact: Path(self.output_path)}
 
     def run(self, config: BuildConfig, mem_dwidth=DEFAULT_MEM_DW, **artifacts) -> dict[str, Any]:
         comp = elaborate(self.comp_class, self.elab_params)
@@ -219,7 +307,7 @@ class TraceManifestStep(BuildStep):
         # DAG think the design changed on every build.
         out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                             encoding="utf-8")
-        return {"trace_manifest": out_path}
+        return {self.manifest_artifact: out_path}
 
 
 @dataclass(kw_only=True)
@@ -227,9 +315,12 @@ class RtlSimStep(BuildStep):
     """Run the RTL through XSI **with tracing on**, producing ``<top>_trace.vcd``.
 
     A thin wrapper over the example's ``xsi/run.bat``, which already does the whole flow
-    (``xvlog`` -> ``xelab -dll`` -> ``g++`` the BFM main -> execute).  Its third argument ``trace``
-    additionally elaborates the :class:`AddVcdTopStep` dumper as a second top, leaving the DUT and
-    every BFM port number untouched -- the cycle counts are identical either way.
+    (``xvlog`` -> ``xelab -dll`` -> ``g++`` the BFM main -> execute), driven through
+    :class:`~waveflow.build.xsi_snapshot.XsiSnapshot` so the phases whose inputs did not change are
+    skipped: every point of a workload sweep pays only the simulation.  Its ``trace`` argument
+    additionally elaborates the :class:`AddVcdTopStep` dumper as a second top (the snapshot
+    ``<top>_trace``), leaving the DUT and every BFM port number untouched -- the cycle counts are
+    identical either way.
 
     **This step asserts nothing.**  It runs and produces an artifact; correctness stays with the
     ``-m xsi`` gate in ``tests/examples/test_xsi_bfm.py``, which calls ``run.bat`` directly and
@@ -253,7 +344,7 @@ class RtlSimStep(BuildStep):
         That is not a hypothetical either.  The harness carries the scenario's arena size and its
         ``h.run(N)`` cycle bound, so a sweep silently ran every point under the committed gate's
         3400-cycle bound: the larger points were cut off mid-job and the missing firings read as a
-        *design stall* -- see ``plans/sweep_runner.md``.  Forcing the codegen step does not help,
+        *design stall* -- see the sweep_runner plan (commit 3d74877).  Forcing the codegen step does not help,
         because a step outside the closure is never consulted, forced or not.
     prepare : callable | None
         Called as ``prepare(xsi_dir, config)`` before the run, to materialize the scenario bundles the
@@ -278,6 +369,11 @@ class RtlSimStep(BuildStep):
     rtl_artifact: str = "report_dir"
     dumper_artifact: str = "vcd_dumper"
     tb_artifact: str = "tb_main"
+    #: The artifact the traced VCD is published under; one per traced top, since BuildDag refuses
+    #: two producers of one artifact.  The consuming :class:`ExtractBurstsStep` and
+    #: :class:`~waveflow.build.calib_steps.CalibBusStep` take the matching name in their
+    #: ``vcd_artifact``.
+    vcd_artifact: str = "trace_vcd"
     prepare: Callable[[Path, "BuildConfig"], None] | None = None
 
     @property
@@ -286,7 +382,7 @@ class RtlSimStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"trace_vcd": Path(self.xsi_dir) / f"{self.top}_trace.vcd"}
+        return {self.vcd_artifact: Path(self.xsi_dir) / f"{self.top}_trace.vcd"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
@@ -296,24 +392,24 @@ class RtlSimStep(BuildStep):
         if self.prepare is not None:
             self.prepare(xsi, config)
 
-        # Delete first, then require it to reappear.  Re-running the built .exe does NOT regenerate
-        # the VCD -- only the full run.bat path, which re-elaborates, does -- so without this guard
-        # a failed or skipped run leaves the PREVIOUS trace on disk and everything downstream is
-        # silently measured from the wrong run.  Not hypothetical: it yielded an identical period
-        # at five different job sizes before it was caught.
+        # Delete first, then require it to reappear: without this guard a failed or skipped run
+        # leaves the PREVIOUS trace on disk and everything downstream is silently measured from the
+        # wrong run.  Not hypothetical: it yielded an identical period at five different job sizes
+        # before it was caught.  (The dump comes from the elaborated snapshot, so it is the TRACED
+        # snapshot that writes it -- every run of that one does, a run of the untraced one never.)
         vcd.unlink(missing_ok=True)
 
-        r = subprocess.run(xsi_runner_cmd(self.top, self.tb, trace=True),
-                           cwd=str(xsi), capture_output=True, text=True, timeout=1800)
-        out = (r.stdout or "") + (r.stderr or "")
-        if "XSI_EXITCODE=0" not in out:
-            raise RuntimeError(f"{self.top}: XSI run did not complete cleanly:\n{out[-3000:]}")
+        from waveflow.build.xsi_snapshot import XsiRunError, XsiSnapshot
+        try:
+            XsiSnapshot(xsi, self.top, self.tb, trace=True).run(timeout=1800)
+        except XsiRunError as e:
+            raise RuntimeError(str(e)) from None
         if not vcd.exists():
             raise RuntimeError(
                 f"{self.top}: {XSI_RUNNER} completed but wrote no {vcd.name}. Is "
                 f"vcd_dumper_{self.top}.v present in {xsi} (AddVcdTopStep), and did "
                 f"{XSI_RUNNER} get the `trace` argument?")
-        return {"trace_vcd": vcd}
+        return {self.vcd_artifact: vcd}
 
 
 @dataclass(kw_only=True)
@@ -350,6 +446,11 @@ class ExtractBurstsStep(BuildStep):
     #: How many firings each task is expected to complete -- the job count the scenario issued, as an
     #: int or a ``callable(config) -> int`` when a sweep varies it.  ``None`` disables the check.
     expect_firings: "int | Callable[[BuildConfig], int] | None" = None
+    #: The artifact the timing table is published under; one per traced top, since BuildDag refuses
+    #: two producers of one artifact.  The consuming
+    #: :class:`~waveflow.build.calib_steps.CollectTimingStep` takes the matching name in its
+    #: ``events_artifact``.
+    events_artifact: str = "timing_events"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -357,7 +458,7 @@ class ExtractBurstsStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"timing_events": Path(self.output_path)}
+        return {self.events_artifact: Path(self.output_path)}
 
     def _firing_rows(self, bt) -> list[dict]:
         rows: list[dict] = []
@@ -475,11 +576,11 @@ class ExtractBurstsStep(BuildStep):
         out_path = root / self.output_path
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return {"timing_events": out_path}
+        return {self.events_artifact: out_path}
 
 
 def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
-                  include_dir: str = "include") -> str | None:
+                  include_dir: str = "include", src_dir: str = "src") -> str | None:
     """``None`` if *top*'s synthesized RTL was built from the sources now on disk, otherwise a
     sentence naming the offending source.
 
@@ -511,12 +612,25 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     Deliberately a **predicate**, not an assertion or a rebuild.  A gate decides for itself whether
     to skip; rebuilding here would hide a 40-second csynth inside a test fixture, and a helper that
     silently runs the toolchain is its own kind of surprise.
+
+    **Regenerate the headers before asking.**  The digests are of the example's *copies* in
+    ``include/`` and ``gen/``, not of the framework headers, schemas and generators they came from.
+    Once those directories are untracked build output (``plans/source_layout.md``), a ``git pull``
+    that changes ``waveflow/build/memmgr.hpp`` never touches them, and this guard would call RTL built
+    from the old header clean.  So a gate fixture runs the example's Python-only codegen first
+    (seconds, no toolchain -- e.g. ``examples.markov.markov_build.generate``): the copies then
+    reflect the checkout, and a pulled change reads as a changed source.
+
+    A tree where ``src/`` and ``include/`` hold **different** files of the same name is reported as
+    stale too (:func:`~waveflow.build.rtl_digest.shadowed_sources`): which one csynth read depends
+    on the ``-I`` order, so no stamp can vouch for it.
     """
     from pathlib import Path
 
     from waveflow.build.rtl_digest import (
         first_mismatch,
         read_stamp,
+        shadowed_sources,
         source_digests,
         source_files,
     )
@@ -532,10 +646,16 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     tail = ("the synthesized design on disk is not this checkout's. Re-run the example's build "
             "--through csynth. Do NOT re-record a cycle count against RTL you did not produce.")
 
+    shadow = shadowed_sources(root, include_dir=include_dir, src_dir=src_dir)
+    if shadow:
+        return (f"{', '.join(shadow)} differ between {src_dir}/ and {include_dir}/, so which one csynth "
+                f"compiled depends on the include order — delete the {include_dir}/ copy, then {tail}")
+
     recorded = read_stamp(root, top)
     if recorded is not None:
-        current = source_digests(root, top, gen_dir=gen_dir, include_dir=include_dir)
-        miss = first_mismatch(recorded, current)
+        kw = dict(gen_dir=gen_dir, include_dir=include_dir, src_dir=src_dir)
+        current = source_digests(root, top, **kw)
+        miss = first_mismatch(recorded, current, source_digests(root, top, raw=True, **kw))
         if miss is None:
             return None
         rel, verb = miss
@@ -544,7 +664,7 @@ def rtl_staleness(example_root, top: str, *, gen_dir: str = "gen",
     # No stamp: this project was built before the digest existed.  Fall back to the mtime proxy,
     # which is what the guard was for years -- weaker, but never silently absent.
     newest_rtl = max(p.stat().st_mtime for p in rtl)
-    for src in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir):
+    for src in source_files(root, top, gen_dir=gen_dir, include_dir=include_dir, src_dir=src_dir):
         if src.stat().st_mtime > newest_rtl + 1.0:     # 1 s slack: filesystem timestamp grain
             return (f"{src.relative_to(root).as_posix()} is newer than the newest RTL in "
                     f"{rtl_dir.relative_to(root).as_posix()} (no source stamp: this project "

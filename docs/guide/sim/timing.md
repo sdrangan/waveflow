@@ -42,7 +42,7 @@ transfer_time = (latency_init + nwords) / clk.freq   [seconds]
 `master.write(words)` blocks the caller for `transfer_time` of simulated time. The per-interface
 parameters (`latency_init`, the FULL/LITE read/write formulas, `latency_per_word`) are documented
 with each interface — see [Overview](../interface/overview.md), [streams](../interface/primitive/stream.md),
-and [memory-mapped](../interface/primitive/aximm.md). This page only notes *that* interfaces are where transfer
+and [memory-mapped](../interface/axi_mm/modeling.md). This page only notes *that* interfaces are where transfer
 time is charged.
 
 ## Components charge compute latency
@@ -70,12 +70,13 @@ Each call appends an `ActionRecord(name, start, end)` to `self.action_history`; 
 on the same object are collected in `self.action_overlaps` (count via
 `self.active_overlap_count()`). `self.now` is the current time at any point.
 
-### Pipelined transfers
+### Timed phases
 
-For a component that streams data through (rather than buffering a whole burst), the stream endpoints
-expose `get_pipelined` / `write_pipelined`, which carry the first-word arrival time and the
-component's initiation interval / latency (`proc_ii`, `proc_latency`, set to match HLS synthesis
-numbers). That mechanism is documented on the [stream interface](../interface/primitive/stream.md) page.
+A module's own compute time is best not charged with a hand-computed `timeout` at all: it declares
+[timed phases](../timing_model/timed_phases.md) -- spans between the first and last beats of its
+transfers -- and its body waits them (`yield phase.timeout(...)` for a sequential body,
+`phase.pipeline(...)` for one that streams data through).  The durations come from a model calibrated
+against RTL, not from numbers in the code.
 
 ## What this feeds
 
@@ -85,7 +86,7 @@ timestamped events for later analysis).
 
 ## See also
 
-- [Timing Models](../timing_model/) — the deeper forward model: how a component's load/compute/store shape (block, streaming, double-buffered) sets its timeline, building on this page.
+- [Timing Models](../timing_model/) — how a module declares its own time as timed phases between events at its ports (sequential or pipelined), and how those are calibrated, building on this page.
 - [Logging](./logging.md) — capture `self.now`-stamped events to a CSV during the run.
 - [Timing Analysis Tools](../timing/) — analyzing the timeline this model produces.
 - [Interface Overview](../interface/overview.md) — the per-interface latency parameters.

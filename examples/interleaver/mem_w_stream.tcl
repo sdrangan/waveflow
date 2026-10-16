@@ -1,5 +1,5 @@
 set part {xc7z020clg484-1}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: mem_w_stream"
 open_project -reset mem_w_stream_proj
 set_top mem_w_stream

@@ -2,7 +2,7 @@
 #define WAVEFLOW_PINGPONG_WINDOW_TASK_H
 // pingpong_window_task.h — wait to be told a region is ready, take it, drain it, give it back.
 //
-// The continuous-capture receiver's requester (plans/t2p_lock_chan.md S2).  Its Python twin is
+// The continuous-capture receiver's requester (PR #179).  Its Python twin is
 // PingPongWindow.run_iter, which is the pysim golden and NOT the source of this file.
 //
 // IT BLOCKS ON `rdy` BEFORE IT ASKS FOR ANYTHING, AND THAT ORDERING IS WHY THE CHANNEL EXISTS.

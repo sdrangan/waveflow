@@ -209,7 +209,7 @@ struct UInt64Array {
             int out_idx = 0;
             for (int i0 = 0; i0 < n0_eff; ++i0) {
                 w = self->data[i0];
-                streamutils::write_axi4_word<64>(s, w, tlast);
+                streamutils::write_axi4_word<64>(s, w, tlast && (out_idx == (n0_eff) - 1));
                 out_idx++;
             }
         }

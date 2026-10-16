@@ -22,11 +22,12 @@ from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
-from waveflow.utils.burst_io import write_burst_bundle
+from waveflow.utils.burst_io import write_burst_bundle, write_run_params
 
 
 @dataclass
@@ -98,7 +99,7 @@ class MemCopyTB(FreeRunMod):
         # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
         # MemoryMod.pre_sim loads the same bundle (root set in write_scenario).
         self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, int(self.mem.nwords_tot), "vectors/out")]
+        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
 
         self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
                            calib_dir=self.calib_dir, platform_dir=self.platform_dir)
@@ -135,7 +136,7 @@ class MemCopyTB(FreeRunMod):
 
         # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master
         # crossbar.  NOTE: the crossbar models contention; the XSI slave models do not — see
-        # plans/xsi_tb_codegen.md.  The two describe different systems on purpose.
+        # the xsi_tb_codegen plan (commit 3052952).  The two describe different systems on purpose.
         xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
                                nports_master=2, nports_slave=1, bitwidth=w)
         xbar.bind("master_0", self.dut.m_in)          # MemRStream.m_mem (read)
@@ -158,9 +159,10 @@ class MemCopySim:
 
     def __init__(self, jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
                  mem_dwidth: int = 64, name: str = "tb", calib_dir: "str | None" = None,
-                 platform_dir: "str | None" = None) -> None:
+                 platform_dir: "str | None" = None, n_cycles: "int | None" = None) -> None:
+        kw = {} if n_cycles is None else {"n_cycles": int(n_cycles)}
         self.tb = MemCopyTB(name=name, sim=Simulation(), jobs=tuple(jobs), mem_dwidth=mem_dwidth,
-                            calib_dir=calib_dir, platform_dir=platform_dir)
+                            calib_dir=calib_dir, platform_dir=platform_dir, **kw)
         #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
         self.expected: list[np.ndarray] = []
 
@@ -195,6 +197,11 @@ class MemCopySim:
         write_burst_bundle(tb.cmd_words, vdir / "s_cmd")
         write_burst_bundle([mem_in], vdir / "mem_in")
         write_burst_bundle([golden], vdir / "golden")
+        # The scenario's sizes, read by the XSI testbench at run time (wfbfm::run_param): so a
+        # testbench generated for one scenario runs any other -- a workload sweep compiles it once.
+        # Written at every scenario, the default too: a run reads whatever run.json its vectors/
+        # holds, and a previous point's must not outlive it.
+        write_run_params(vdir, n_cycles=int(tb.n_cycles), mem_words=int(tb._nwords_tot))
         tb.driver.root = root
         tb.mem.root = root
 
@@ -241,3 +248,37 @@ def run_and_check() -> bool:
 
 if __name__ == "__main__":
     run_and_check()
+
+
+@dataclass
+class MemCopySystem(GraphSystem):
+    """mem_copy as a **system** (``plans/system_model.md`` S3): the :class:`MemCopyTB` graph, with
+    the cut stated as a DUT tree rather than implied by a testbench class.
+
+    The DUT is the :class:`MemCopy` kernel alone -- no bus inside it.  Everything else the graph holds
+    is the testbench: the command driver, the completion sink, the memory, and the crossbar that
+    models the two ``m_axi`` bundles' contention in pysim.  That crossbar is *outside* the cut, so the
+    kernel's two ``m_axi`` bundles are top ports facing the memory model, and its two streams are top
+    ports facing the driver and the sink.
+
+    The scenario is :class:`MemCopySim`'s -- the command bursts, the source arena, the golden, and
+    its ``run.json`` (the arena size beside the bound); :meth:`check` is its golden check.
+    """
+
+    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
+    mem_dwidth: int = 64
+
+    def graph(self) -> MemCopyTB:
+        self.runner = MemCopySim(jobs=tuple(self.jobs), mem_dwidth=int(self.mem_dwidth))
+        return self.runner.tb
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        self.runner.write_scenario(root)
+
+    def check(self) -> "MemCopy":
+        return self.runner.check()
+
+

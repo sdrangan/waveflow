@@ -69,7 +69,8 @@ def array(elem_type: type[T], data, static: bool = False) -> DataArray:
 
 
 def _normalize_array_shape(shape: int | tuple[int, ...] | list[int]) -> tuple[int, ...]:
-    if isinstance(shape, int):
+    # A count read from a schema field is a numpy integer: it is a 1-D shape, like an int.
+    if isinstance(shape, (int, np.integer)):
         norm_shape = (int(shape),)
     else:
         norm_shape = tuple(int(dim) for dim in shape)
@@ -134,8 +135,8 @@ def write_array(arr: DataArray | Any, elem_type: type[T] | None = None, *, word_
 
 
 def write_uint32_file(
-    arr: Any,
-    elem_type: type[DataSchema],
+    arr: DataArray | Any,
+    elem_type: type[DataSchema] | None,
     file_path: str | Path,
     write_slice: Any = None,
     nwrite: int | None = None,
@@ -144,10 +145,12 @@ def write_uint32_file(
 
     Parameters
     ----------
-    arr : Any
-        Input array-like value.
-    elem_type : type[DataSchema]
-        Element schema class describing each array entry.
+    arr : DataArray or array-like
+        Input data.  A :class:`~waveflow.hw.dataschema.DataArray` supplies
+        ``elem_type`` itself, as in :func:`write_array`.
+    elem_type : type[DataSchema] or None
+        Element schema class describing each array entry.  Required for a plain
+        array-like; for a ``DataArray``, pass ``None`` or the same class.
     file_path : str | Path
         Destination binary file path.
     write_slice : Any, optional
@@ -166,6 +169,17 @@ def write_uint32_file(
         raise ValueError("Specify only one of write_slice or nwrite.")
     if nwrite is not None and nwrite < 0:
         raise ValueError("nwrite must be non-negative.")
+
+    if isinstance(arr, DataArray):
+        inferred_elem = type(arr).element_type
+        if elem_type is not None and elem_type is not inferred_elem:
+            raise TypeError(
+                f"elem_type mismatch: DataArray carries {inferred_elem.__name__!r} "
+                f"but elem_type={elem_type.__name__!r} was also supplied."
+            )
+        elem_type, arr = inferred_elem, arr.val
+    elif elem_type is None:
+        raise TypeError("elem_type must be provided when arr is not a DataArray.")
 
     np_arr = np.asarray(arr)
     if np_arr.ndim > 0:
@@ -227,7 +241,7 @@ def read_array(
         static=True,
     )
     array_obj = array_cls()
-    array_obj.deserialize(np.asarray(packed), word_bw=word_bw)
+    array_obj.deserialize(packed, word_bw=word_bw)   # no np.asarray: a list of words must not be dtype-inferred
     return array_obj
 
 

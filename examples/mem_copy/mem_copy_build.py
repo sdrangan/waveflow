@@ -161,22 +161,16 @@ class CodegenTbStep(BuildStep):
     consumes = ["mem_copy_source", "dut_ports"]
     produces = {"tb_harness": Path("xsi/mem_copy_tb_harness.h"),
                 "tb_main": Path("xsi/mem_copy_bfm_tb.cpp")}
-    #: The scenario sizes the harness arena and the ``h.run(N)`` bound, so a sweep point must reach
-    #: here -- but *not* the DUT: ``len`` is a runtime command field, so the RTL is unchanged and
-    #: needs no re-synthesis.  That asymmetry is the whole reason a timing sweep is cheap.
-    params = {"mem_dwidth": DEFAULT_MEM_DW, "n_words": XSI_N, "num_cmds": XSI_NUM_CMDS}
+    #: No scenario params, deliberately.  The scenario sizes the harness arena and the ``h.run(N)``
+    #: bound, but both are now read at run time from the point's ``vectors/run.json``
+    #: (``wfbfm::run_param``, written by :func:`write_mem_copy_xsi_bundles`), so the testbench is
+    #: generated -- and compiled -- for the DESIGN once, and every workload point of a sweep reuses
+    #: it (``plans/incremental_xsi.md`` Stage 4).  Generating per point would rewrite
+    #: ``xsi/mem_copy_bfm_tb.cpp``, a *tracked* file the ``-m xsi`` gate drives, and recompile it.
+    params = {"mem_dwidth": DEFAULT_MEM_DW}
 
-    def run(self, config: BuildConfig, mem_dwidth, n_words, num_cmds, **_) -> dict:
-        n, k = int(n_words), int(num_cmds)
-        # At the default point, pass nothing: `generate_tb`'s own defaults ARE the committed gate
-        # scenario, including its hand-picked 3400-cycle bound.  Deriving the bound here instead
-        # would emit ~3600 -- harmless to the run, but it would diff `xsi/mem_copy_bfm_tb.cpp`,
-        # which is a *tracked* file the `-m xsi` gate drives.  A build that rewrites a committed
-        # artifact merely because it ran is how a gate stops meaning what it meant.
-        default = (n, k) == (XSI_N, XSI_NUM_CMDS)
-        generate_tb(out_dir=config.root_dir, width=int(mem_dwidth),
-                    jobs=None if default else xsi_jobs(n, k),
-                    n_cycles=None if default else xsi_run_cycles(n, k))
+    def run(self, config: BuildConfig, mem_dwidth, **_) -> dict:
+        generate_tb(out_dir=config.root_dir, width=int(mem_dwidth))
         return {
             "tb_harness": config.root_dir / "xsi" / "mem_copy_tb_harness.h",
             "tb_main": config.root_dir / "xsi" / "mem_copy_bfm_tb.cpp",
@@ -229,7 +223,11 @@ def _write_scenario_bundles(xsi_dir: Path, config: BuildConfig) -> None:
     produces a clean run measured against another point's data.
     """
     n, k = _scenario(config)
-    write_mem_copy_xsi_bundles(xsi_dir, jobs=xsi_jobs(n, k))
+    # The default point keeps the gate's own 3400-cycle bound; another point gets a bound that
+    # clears its completion.  Either way it rides in vectors/run.json, not in the testbench.
+    default = (n, k) == (XSI_N, XSI_NUM_CMDS)
+    write_mem_copy_xsi_bundles(xsi_dir, jobs=xsi_jobs(n, k),
+                               n_cycles=None if default else xsi_run_cycles(n, k))
 
 
 def _calibrated_pysim(config: BuildConfig):

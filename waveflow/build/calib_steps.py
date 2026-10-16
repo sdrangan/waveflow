@@ -62,6 +62,8 @@ class CollectTimingStep(BuildStep):
         same corpus folder and the fit would see one point however many were run.
     events_artifact : str
         Upstream artifact naming the ``ExtractBurstsStep`` timing JSON.
+    collected_artifact : str
+        Name the done-sentinel is published under.
     """
 
     description: str = "Collect a run's RTL + pysim firings into each timing model's corpus."
@@ -70,6 +72,10 @@ class CollectTimingStep(BuildStep):
     run_pysim: Callable[["BuildConfig"], Any]
     run_id: "str | Callable[[BuildConfig], str]"
     events_artifact: str = "timing_events"
+    #: A DAG holding two of these steps needs a distinct name per step: BuildDag refuses two
+    #: producers of one artifact.  :class:`FitTimingStep` orders itself behind the matching name
+    #: through its ``after``.
+    collected_artifact: str = "timing_collected"
 
     def resolve_run_id(self, config: BuildConfig) -> str:
         """This point's scenario key — the string, or what the callable makes of the config."""
@@ -87,7 +93,7 @@ class CollectTimingStep(BuildStep):
         # the step instead, and carries the resolved run_id in its contents.  `run` must write
         # exactly this path: the DAG checks that a declared artifact appears.
         stem = self.run_id if isinstance(self.run_id, str) else self.name
-        return {"timing_collected": Path("results") / f"collected_{stem}.json"}
+        return {self.collected_artifact: Path("results") / f"collected_{stem}.json"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         run_id = self.resolve_run_id(config)
@@ -107,11 +113,11 @@ class CollectTimingStep(BuildStep):
                            "pysim_firings": len(getattr(comp, "firing_records", []))})
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
-        out = root / self.produces["timing_collected"]
+        out = root / self.produces[self.collected_artifact]
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"run_id": run_id, "models": report}, indent=2) + "\n",
                        encoding="utf-8")
-        return {"timing_collected": out}
+        return {self.collected_artifact: out}
 
 
 @dataclass(kw_only=True)
@@ -137,6 +143,8 @@ class FitTimingStep(BuildStep):
         In a DAG holding both, that put it **before** the step that fills the corpus: nothing
         ordered them, and the topological sort is free to emit an unconstrained step first.  It
         would then fit whatever the previous run left behind and report success.
+    fit_artifact : str
+        Name the fit report is published under.
     """
 
     description: str = "Fit each timing model from its corpus; write params.json."
@@ -145,6 +153,9 @@ class FitTimingStep(BuildStep):
     build_design: Callable[["BuildConfig"], Any]
     output_path: str = "results/timing_fit.json"
     after: "Sequence[str]" = ()
+    #: A DAG holding two of these steps needs a distinct name per step: BuildDag refuses two
+    #: producers of one artifact.
+    fit_artifact: str = "timing_fit"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -152,7 +163,7 @@ class FitTimingStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        return {"timing_fit": Path(self.output_path)}
+        return {self.fit_artifact: Path(self.output_path)}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         found = discover_timing_models(self.build_design(config))
@@ -171,7 +182,7 @@ class FitTimingStep(BuildStep):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"fitted": fitted, "skipped": skipped}, indent=2) + "\n",
                        encoding="utf-8")
-        return {"timing_fit": out}
+        return {self.fit_artifact: out}
 
 
 @dataclass(kw_only=True)
@@ -204,6 +215,8 @@ class CalibBusStep(BuildStep):
         Clock the platform model is expressed against.
     refit : bool
         Re-fit ``mm_bus.json`` from the whole corpus after adding this run (default ``True``).
+    bus_artifact : str
+        Name the per-run sentinel is published under.
     """
 
     description: str = "Calibrate the platform m_axi bus model from a traced run's ports."
@@ -215,6 +228,9 @@ class CalibBusStep(BuildStep):
     vcd_artifact: str = "trace_vcd"
     clk_freq: float = 100e6
     refit: bool = True
+    #: A DAG holding two of these steps needs a distinct name per step: BuildDag refuses two
+    #: producers of one artifact.
+    bus_artifact: str = "bus_calibrated"
 
     def resolve_run_id(self, config: BuildConfig) -> str:
         return self.run_id if isinstance(self.run_id, str) else self.run_id(config)
@@ -241,7 +257,7 @@ class CalibBusStep(BuildStep):
         # cannot be resolved here -- `produces` is read without a config -- so the sentinel is named
         # for the step, and `run` must write exactly this path.
         stem = self.run_id if isinstance(self.run_id, str) else self.name
-        return {"bus_calibrated": Path("results") / f"bus_{stem}.json"}
+        return {self.bus_artifact: Path("results") / f"bus_{stem}.json"}
 
     def run(self, config: BuildConfig, **artifacts) -> dict[str, Any]:
         from waveflow.calib.bus_model import BusCalib, measure_bus_span
@@ -263,12 +279,12 @@ class CalibBusStep(BuildStep):
         fitted = bc.fit() if self.refit else {}
 
         root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
-        out = root / self.produces["bus_calibrated"]
+        out = root / self.produces[self.bus_artifact]
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"run_id": run_id, "point": point,
                                    "fitted_directions": sorted(fitted)}, indent=2) + "\n",
                        encoding="utf-8")
-        return {"bus_calibrated": out}
+        return {self.bus_artifact: out}
 
 
 @dataclass(kw_only=True)

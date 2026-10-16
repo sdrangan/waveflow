@@ -3,6 +3,7 @@ title: Python model
 parent: Register mapped simple function
 nav_order: 2
 has_children: false
+summary: "Declaring the control plane in Python: each register is a RegField with its data schema and access mode, and Waveflow adds the Vitis control block automatically. The one declaration drives the Python simulation, the generated HLS pragmas and the host-side offset map, so those three cannot disagree about where a register lives."
 ---
 
 # Python model
@@ -13,14 +14,14 @@ We first describe how to build a python model for a hardware component with a Vi
 
 
 
-Waveflow's [`VitisRegMap`](../../guide/interface/primitive/regmap.md) class mirrors this layout: the user declares each register as a Python `RegField` with its data schema and access mode (`R`, `W`, `RW`, `W1C`, `W1S`), and Waveflow adds the same Vitis control block automatically. The one declaration drives the Python simulation, the generated HLS pragmas, and the host-side offset map.
+Waveflow's [`VitisRegMap`](../../guide/interface/axi_mm/regmap.md) class mirrors this layout: the user declares each register as a Python `RegField` with its data schema and access mode (`R`, `W`, `RW`, `W1C`, `W1S`), and Waveflow adds the same Vitis control block automatically. The one declaration drives the Python simulation, the generated HLS pragmas, and the host-side offset map.
 
 Vitis HLS automatically generates this AXI-Lite slave whenever a kernel function has `#pragma HLS interface s_axilite` on its scalar arguments and on `return`. The Vitis-generated slave includes:
 
 - A reserved control region at offsets `0x00–0x0f`: one control word at `0x00` packing `ap_start` (bit 0), `ap_done` (bit 1), `ap_idle` (bit 2) and `ap_ready` (bit 3), followed by the interrupt registers `gier` (`0x04`), `ier` (`0x08`) and `isr` (`0x0c`). The host writes `ap_start` to launch the kernel; the kernel raises `ap_done` when it returns.
 - A user-defined region starting at `0x10`, with one register per scalar argument in declaration order — each on an 8-byte stride (a data word plus a control/reserved word).
 
-Waveflow's [`VitisRegMap`](../../guide/interface/primitive/regmap.md) class mirrors this layout. The user declares only the application registers; the framework adds the control block, and the [`VitisRegMapMMIFSlave`](../../guide/interface/primitive/regmap.md) that wraps the regmap manages the control bits automatically.
+Waveflow's [`VitisRegMap`](../../guide/interface/axi_mm/regmap.md) class mirrors this layout. The user declares only the application registers; the framework adds the control block, and the [`VitisRegMapMMIFSlave`](../../guide/interface/axi_mm/regmap.md) that wraps the regmap manages the control bits automatically.
 
 ## Describing the Register Map in Python
 
@@ -42,7 +43,7 @@ After construction, the layout is `ap_start@0x00` bit 0, `ap_done@0x00` bit 1, t
 
 Note what does and does not follow from that. The generated C++ contains no offsets at all — Vitis derives them from the `s_axilite` pragmas — so these Python offsets are used only *inside* the simulation, where the host proxy and the slave read the same table. That makes the model self-consistent, and it makes the addresses you see here the ones a real driver would use. It does not make them *enforced*: nothing yet diffs `VitisRegMap` against `control.h`, so the mirror could drift silently if Vitis changed its layout.
 
-The full set of `RegAccess` modes and the access matrix they imply is documented in [Register Maps](../../guide/interface/primitive/regmap.md).
+The full set of `RegAccess` modes and the access matrix they imply is documented in [Register Maps](../../guide/interface/axi_mm/regmap.md).
 
 ## Creating the Kernel with the Register Map
 
@@ -78,6 +79,7 @@ def on_start(self) -> ProcessGen[None]:
 
 @synthesizable
 def compute(self, x: Int32, a: Int32, b: Int32) -> Int32:
+    # int: the golden is plain-Python a*x + b, which overflows int32
     return Int32(relu_affine(int(x.val), int(a.val), int(b.val)))
 ```
 
@@ -90,16 +92,19 @@ What Vitis supplies is not `on_start`'s body but the **launch** around it: the `
 
 ## Creating the Host
 
-The host is the SimPy stand-in for the CPU driver. It is a plain `SimObj` with an `MMIFMaster` connected to the kernel's slave via a `DirectMMIF` (the in-process AXI-Lite link). Inside `run_proc`, it obtains a bound regmap proxy with `regmap.bind_master(...)` and then talks to the kernel by name rather than by address.
+The host is the SimPy stand-in for the CPU driver. It is a plain `SimObj` with two ends: an `MMIFMaster` connected to the kernel's slave via a `DirectMMIF` (the in-process AXI-Lite link), and an `IrqIFSink` connected to the kernel's **interrupt line**. Inside `run_proc`, it obtains a bound regmap proxy with `regmap.bind_master(...)` and then talks to the kernel by name rather than by address.
 
 ```python
 @dataclass(kw_only=True)
 class SimpFunHost(SimObj):
     case: SimpFunCase
     clk:  Clock
-    latency_cycles:       int = 4
-    poll_interval_cycles: int = 4
-    max_polls:            int = 32
+    latency_cycles: int = 4
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.master = MMIFMaster(name=f"{self.name}_m_lite", sim=self.sim, bitwidth=32)
+        self.irq = IrqIFSink(name=f"{self.name}_irq", sim=self.sim)
 
     def run_proc(self) -> ProcessGen[None]:
         rm = self._regmap().bind_master(self.master, base_addr=self.base_addr)
@@ -107,26 +112,20 @@ class SimpFunHost(SimObj):
         yield from rm.set("x", self.case.x)
         yield from rm.set("a", self.case.a)
         yield from rm.set("b", self.case.b)
-        yield from rm.start()                                       # write 1 to ap_start
-
-        yield self.timeout(self.latency_cycles * self.clk.period)   # don't poll too early
-
-        self.ap_done = yield from rm.poll_end(                       # poll ap_done until == 1
-            interval=self.poll_interval_cycles * self.clk.period,
-            max_polls=self.max_polls,
-        )
+        yield from rm.run(self.irq)     # enable the interrupt, ap_start, sleep until it fires
+        self.ap_done = 1
         self.y = yield from rm.get("y")
 ```
 
 Three things are doing real work here:
 
-1. **`bind_master`** wraps the regmap with a host-side proxy so subsequent `get` / `set` / `start` / `poll_end` calls all dispatch through the AXI-Lite master at the configured `base_addr`. The proxy mirrors the kernel-side `regmap.get/set` API — same names, different yield discipline because bus traffic is asynchronous.
-2. **`rm.start()`** is the convenience wrapper for "write 1 to `ap_start`."
-3. **`rm.poll_end(interval=..., max_polls=...)`** polls the auto-emitted `ap_done` field every `interval` seconds until it reads 1 (the default target), then returns the read value. Raises `RuntimeError` after `max_polls` if the kernel never completes.
+1. **`bind_master`** wraps the regmap with a host-side proxy so subsequent `get` / `set` / `run` calls all dispatch through the AXI-Lite master at the configured `base_addr`. The proxy mirrors the kernel-side `regmap.get/set` API — same names, different yield discipline because bus traffic is asynchronous.
+2. **`rm.run(self.irq)`** launches the kernel and waits for it the way a driver does, on the interrupt. The first call enables the `ap_done` interrupt (`ier = 1`, then `gier = 1`); every call then writes `ap_start`, sleeps on the interrupt line, and writes `1` to `isr` to clear it (the register is toggle-on-write), which lowers the line for the next launch. It is `rm.enable_irq()` once, then `rm.start()` + `rm.wait_done(irq)` per launch, if you need the steps apart.
+3. **The wait reads nothing.** While the kernel runs, the host issues no bus transactions at all — it is parked on the line, and the slave raises it the moment `on_start` returns. There is no polling interval to tune and no early-read waste.
 
-The `latency_cycles` initial wait is an optimization: the host knows the kernel cannot possibly be done before that many cycles, so the early reads would just be wasted bus traffic. `poll_interval_cycles` then controls how aggressively the host hits the bus while waiting. Polling every clock cycle would saturate the AXI-Lite link in a real system — `poll_end` makes the cadence an explicit, tunable parameter.
+The line itself is wired in `connect()`: the slave's `interrupt()` is the source (`interrupt = gier[0] && isr != 0`, as in the Vitis-generated control slave), the host's `IrqIFSink` the sink.
 
-> **In production**, the host wouldn't poll at all — it would wait on an AXI-Lite interrupt line. The polling path here is a pedagogical and debugging convenience. Waveflow's interrupt-based wait API will land in a future release.
+> **Polling** is still available as `rm.poll_end(interval=..., max_polls=...)`, which reads `ap_done` until it is 1. It is a debugging fallback (a kernel whose interrupt is not wired), not how a host should wait.
 
 ## Using the interface
 

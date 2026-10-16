@@ -21,7 +21,7 @@ add a rule here; add it to the extractor, and ``check`` reports it for free.
 a build wants the traceback).  Nothing should call ``check`` and then ``generate`` — that extracts
 twice to learn the same thing.
 
-See ``plans/codegen_check_family.md``; the target vocabulary is
+See the codegen_check_family plan (commit ddf60c8); the target vocabulary is
 :mod:`waveflow.hw.codegen_targets` (shared with ``docs/guide/flows/index.md``).
 """
 from __future__ import annotations

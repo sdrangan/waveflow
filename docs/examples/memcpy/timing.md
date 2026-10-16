@@ -2,6 +2,7 @@
 title: Visualizing timing
 parent: Free-running memory copy
 nav_order: 7
+summary: "Seeing where the cycles go: tracing the RTL run and rendering it, to show how the stages overlap and which one is the bottleneck. The pysim and the RTL agree on the steady-state period, about 183 cycles per job, because this design composes two already-calibrated framework components and Waveflow ships their timing for this platform — mem_copy itself calibrates nothing."
 ---
 
 # Visualizing timing

@@ -77,7 +77,7 @@ def test_run_vitis_hls_result_passed(monkeypatch, tmp_path):
     }
 
     def fake_subprocess_result(cmd_list, work_dir=None, capture_output=True, output_path=None, env=None):
-        assert cmd_list == [str(tmp_path / "vitis-run.bat"), "--mode", "hls", "--tcl", str(tmp_path / "run.tcl"), "--tclargs", "alpha", "beta"]
+        assert cmd_list == [str(tmp_path / "vitis-run.bat"), "--mode", "hls", "--tcl", str(tmp_path / "run.tcl")]
         assert work_dir == tmp_path
         assert capture_output is True
         assert output_path is None
@@ -90,7 +90,6 @@ def test_run_vitis_hls_result_passed(monkeypatch, tmp_path):
     out = toolchain.run_vitis_hls_result(
         tmp_path / "run.tcl",
         work_dir=tmp_path,
-        args=["alpha", "beta"],
     )
 
     assert out == expected
@@ -206,7 +205,7 @@ def test_run_vitis_hls_uses_shared_command_builder(monkeypatch, tmp_path):
     )
 
     def fake_run(final_cmd, cwd=None, shell=None, check=None, text=None, capture_output=None, env=None):
-        assert final_cmd == [str(tmp_path / "vitis-run"), "--mode", "hls", "--tcl", str(tmp_path / "run.tcl"), "--tclargs", "alpha", "beta"]
+        assert final_cmd == [str(tmp_path / "vitis-run"), "--mode", "hls", "--tcl", str(tmp_path / "run.tcl")]
         assert cwd == tmp_path
         assert shell is False
         assert check is True
@@ -222,7 +221,6 @@ def test_run_vitis_hls_uses_shared_command_builder(monkeypatch, tmp_path):
     out = toolchain.run_vitis_hls(
         tmp_path / "run.tcl",
         work_dir=tmp_path,
-        args=["alpha", "beta"],
         capture_output=False,
     )
 
@@ -307,3 +305,9 @@ def test_vitis_smoke_with_resources(tmp_path):
     
     # 3. Assert
     assert result.returncode == 0
+
+def test_run_vitis_hls_rejects_tclargs_before_launching(monkeypatch, tmp_path):
+    """vitis-run 2025.1 has no --tclargs: fail here, naming the env route that works."""
+    monkeypatch.setattr(toolchain, "find_vitis_path", lambda top_dir=None: str(tmp_path / "vitis-run"))
+    with pytest.raises(ValueError, match=r"no --tclargs.*env="):
+        toolchain.run_vitis_hls(tmp_path / "run.tcl", args=["csim"])

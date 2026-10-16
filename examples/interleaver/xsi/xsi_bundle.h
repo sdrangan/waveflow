@@ -6,10 +6,18 @@
 // StreamDriver/StreamSink (and the memory arena) and the XSI testbench — a bundle written by Python
 // is read here, and a bundle written here is read back by Python, so neither side re-implements the
 // vectors.  x86 is little-endian, so a raw fread/fwrite of uint64 matches numpy's "<u8".
+//
+// WIDE WORDS.  A beat wider than 64 bits is stored as k = ceil(W/64) consecutive uint64 CHUNKS,
+// chunk 0 the low 64 bits -- the pysim's (n, k) uint64 convention for a wide stream, so the two
+// sides agree on the bytes.  meta.json's word_bytes is 8*k (data, not convention), bounds.bin
+// counts BEATS, and cycles.bin has one entry per beat.  k = 1 is every bundle written before this
+// existed, byte for byte.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
+#include <utility>
 #include <vector>
 #ifdef _WIN32
 #include <direct.h>     // _mkdir  (std::filesystem does not link with the run.bat mingw)
@@ -19,10 +27,77 @@
 
 namespace wfbfm {
 
+/// Where a testbench's bundle path *p* lives on disk.  Testbenches name their bundles
+/// "vectors/<port>", relative to the run directory; when WF_VECTORS_DIR is set (run.bat / run.sh's
+/// vectors-directory argument, plans/incremental_xsi.md D4) the leading "vectors" is replaced by
+/// it, so two runs of one built testbench can read and write separate directories.  Unset, or a
+/// path not under "vectors", is returned unchanged -- every run before this existed.
+///
+/// Resolved HERE, at the one place bundle files are opened, rather than in each generated main:
+/// the hand-written and the generated testbenches then honour it alike, with no regeneration.
+inline std::string vectors_path(const std::string& p) {
+    const char* root = std::getenv("WF_VECTORS_DIR");
+    if (!root || !*root) return p;
+    if (p == "vectors") return root;
+    if (p.size() >= 8 && p.compare(0, 7, "vectors") == 0 && (p[7] == '/' || p[7] == '\\'))
+        return std::string(root) + p.substr(7);
+    return p;
+}
+
+/// A scenario-sized constant of this run: *key*'s integer in "vectors/run.json" (resolved like every
+/// bundle, so per run), or *dflt* -- the value the testbench was generated with -- when the file or
+/// the key is absent.
+///
+/// A testbench is compiled for a DESIGN; a workload sweep varies the SCENARIO.  Values that size the
+/// scenario but sit in compiled code (the cycle bound of `h.run(N)`, a memory arena's words) would
+/// otherwise make every workload point a different testbench, paying g++ for nothing
+/// (plans/incremental_xsi.md Stage 4).  The file is flat JSON of integers, written by
+/// waveflow.utils.burst_io.write_run_params; an override is printed, so a log says what ran.
+inline long run_param(const char* key, long dflt) {
+    FILE* f = std::fopen(vectors_path("vectors/run.json").c_str(), "rb");
+    if (!f) return dflt;
+    std::string txt;
+    char buf[512];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) txt.append(buf, n);
+    std::fclose(f);
+    const std::string pat = std::string("\"") + key + "\"";
+    const size_t k = txt.find(pat);
+    if (k == std::string::npos) return dflt;
+    const size_t colon = txt.find(':', k + pat.size());
+    if (colon == std::string::npos) return dflt;
+    const long v = std::strtol(txt.c_str() + colon + 1, 0, 10);
+    std::printf("WF_RUN_PARAM %s=%ld (generated %ld)\n", key, v, dflt);
+    return v;
+}
+
 struct BurstBundle {
-    /// The flat words of *dir*'s stream (words.bin), one AXIS beat each.
+    /// The flat words of *dir*'s stream (words.bin): one AXIS beat each, or -- for a wide stream
+    /// -- read_chunks(dir) uint64 chunks per beat, low chunk first.
     static std::vector<uint64_t> read_words(const std::string& dir) {
         return read_u64(dir + "/words.bin");
+    }
+    /// uint64 chunks per beat: meta.json's word_bytes / 8, or 1 when the manifest does not say.
+    static int read_chunks(const std::string& dir) {
+        const long wb = read_meta_int(dir, "word_bytes", 8);
+        return wb > 8 ? (int)(wb / 8) : 1;
+    }
+    /// The integer value of *key* in meta.json, or *dflt* -- the unquoted-number twin of
+    /// read_meta_str below, under the same minimal-scan contract.
+    static long read_meta_int(const std::string& dir, const std::string& key, long dflt) {
+        FILE* f = std::fopen(vectors_path(dir + "/meta.json").c_str(), "rb");
+        if (!f) return dflt;
+        std::string txt;
+        char buf[512];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) txt.append(buf, n);
+        std::fclose(f);
+        const std::string pat = "\"" + key + "\"";
+        const size_t k = txt.find(pat);
+        if (k == std::string::npos) return dflt;
+        const size_t colon = txt.find(':', k + pat.size());
+        if (colon == std::string::npos) return dflt;
+        return std::strtol(txt.c_str() + colon + 1, 0, 10);
     }
     /// The cumulative burst end-indices (bounds.bin); burst k is words[bounds[k-1]:bounds[k]].
     static std::vector<uint64_t> read_bounds(const std::string& dir) {
@@ -44,7 +119,7 @@ struct BurstBundle {
     /// default — see rf_require_bundle_kind().
     static std::string read_meta_str(const std::string& dir, const std::string& key,
                                      const std::string& dflt = std::string()) {
-        FILE* f = std::fopen((dir + "/meta.json").c_str(), "rb");
+        FILE* f = std::fopen(vectors_path(dir + "/meta.json").c_str(), "rb");
         if (!f) return dflt;
         std::string txt;
         char buf[512];
@@ -79,17 +154,17 @@ struct BurstBundle {
     static void write(const std::string& dir,
                       const std::vector<uint64_t>& words,
                       const std::vector<uint64_t>& bounds,
-                      const char* extra_key = 0, const char* extra_val = 0) {
+                      const char* extra_key = 0, const char* extra_val = 0, int chunks = 1) {
         mkdirs(dir);
         write_u64(dir + "/words.bin", words);
         write_u64(dir + "/bounds.bin", bounds);
         const std::string meta = dir + "/meta.json";
-        FILE* f = std::fopen(meta.c_str(), "wb");
+        FILE* f = std::fopen(vectors_path(meta).c_str(), "wb");
         if (!f) die(meta);
         std::fprintf(f,
-            "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": 8,\n"
+            "{\n  \"format\": \"waveflow.burst_bundle/1\",\n  \"word_bytes\": %d,\n"
             "  \"n_bursts\": %zu,\n  \"n_words\": %zu",
-            bounds.size(), words.size());
+            8 * chunks, bounds.size(), words.size() / (size_t)chunks);
         if (extra_key && extra_val) std::fprintf(f, ",\n  \"%s\": \"%s\"", extra_key, extra_val);
         std::fprintf(f, "\n}\n");
         std::fclose(f);
@@ -97,17 +172,18 @@ struct BurstBundle {
 
     /// Convenience: write a single-burst bundle (one burst spanning all of *words*) — e.g. a memory
     /// arena, or a continuous (has_tlast=false) stream.
-    static void write_one(const std::string& dir, const std::vector<uint64_t>& words) {
-        std::vector<uint64_t> bounds(1, (uint64_t)words.size());
-        write(dir, words, bounds);
+    static void write_one(const std::string& dir, const std::vector<uint64_t>& words,
+                          int chunks = 1) {
+        std::vector<uint64_t> bounds(1, (uint64_t)(words.size() / (size_t)chunks));
+        write(dir, words, bounds, 0, 0, chunks);
     }
 
     /// Write a captured output stream: the words bundle (words/bounds/meta) **plus** ``cycles.bin`` —
     /// the arrival cycle of each word (uint64, parallel to ``words``).  So the C++ side only records
     /// timing; Python reads ``cycles.bin`` and computes completion time (cycle_of_word) off-line.
     static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
-                              const std::vector<long>& cycles) {
-        write_one(dir, words);
+                              const std::vector<long>& cycles, int chunks = 1) {
+        write_one(dir, words, chunks);
         std::vector<uint64_t> c(cycles.begin(), cycles.end());
         write_u64(dir + "/cycles.bin", c);
     }
@@ -121,16 +197,46 @@ struct BurstBundle {
     /// has bounds passes them; a caller that has none says so by calling the other function.
     static void write_capture(const std::string& dir, const std::vector<uint64_t>& words,
                               const std::vector<long>& cycles,
-                              const std::vector<uint64_t>& bounds) {
-        write(dir, words, bounds);
+                              const std::vector<uint64_t>& bounds, int chunks = 1) {
+        write(dir, words, bounds, 0, 0, chunks);
         std::vector<uint64_t> c(cycles.begin(), cycles.end());
         write_u64(dir + "/cycles.bin", c);
+    }
+
+    /// Write a model's **counters** -- its own bookkeeping, not a stream -- as a flat JSON object at
+    /// *path* (``{"dropped": 62, ...}``), creating the parent directory.  A testbench model that
+    /// counts what crossed it (a converter's dropped words, a channel's transfers) writes these in
+    /// ``post_sim`` when its ``counters_out`` is set, so a system run gathers them as a recording and
+    /// Python checks them -- no hand-written main reading the fields (``plans/system_model.md`` S3d).
+    static void write_counters(const std::string& path,
+                               std::initializer_list<std::pair<const char*, long long>> kv) {
+        std::vector<std::pair<std::string, long long>> v;
+        for (const auto& p : kv) v.emplace_back(p.first, p.second);
+        write_counters(path, v);
+    }
+
+    /// The same, for counters whose names are built at run time (one per channel).
+    static void write_counters(const std::string& path,
+                               const std::vector<std::pair<std::string, long long>>& kv) {
+        const size_t slash = path.find_last_of("/\\");
+        if (slash != std::string::npos) mkdirs(path.substr(0, slash));
+        FILE* f = std::fopen(vectors_path(path).c_str(), "wb");
+        if (!f) die(path);
+        std::fputs("{", f);
+        bool first = true;
+        for (const auto& p : kv) {
+            std::fprintf(f, "%s\"%s\": %lld", first ? "" : ", ", p.first.c_str(), p.second);
+            first = false;
+        }
+        std::fputs("}\n", f);
+        std::fclose(f);
     }
 
 private:
     /// Create *dir* and any missing parents (like Python's write_burst_bundle), ignoring
     /// already-exists.  No std::filesystem — it does not link with the run.bat mingw.
-    static void mkdirs(const std::string& dir) {
+    static void mkdirs(const std::string& d) {
+        const std::string dir = vectors_path(d);
         for (size_t i = 1; i <= dir.size(); ++i) {
             if (i == dir.size() || dir[i] == '/' || dir[i] == '\\') {
                 std::string sub = dir.substr(0, i);
@@ -144,7 +250,7 @@ private:
     }
 
     static std::vector<uint64_t> read_u64(const std::string& path) {
-        FILE* f = std::fopen(path.c_str(), "rb");
+        FILE* f = std::fopen(vectors_path(path).c_str(), "rb");
         if (!f) die(path);
         std::fseek(f, 0, SEEK_END);
         long n = std::ftell(f);
@@ -155,7 +261,7 @@ private:
         return v;
     }
     static void write_u64(const std::string& path, const std::vector<uint64_t>& v) {
-        FILE* f = std::fopen(path.c_str(), "wb");
+        FILE* f = std::fopen(vectors_path(path).c_str(), "wb");
         if (!f) die(path);
         if (!v.empty() && std::fwrite(v.data(), 8, v.size(), f) != v.size()) die(path);
         std::fclose(f);

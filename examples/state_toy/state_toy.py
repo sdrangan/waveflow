@@ -12,8 +12,10 @@ a design whose state is reset (or never persisted) emits 1,1,1,1.  A gate that c
 off-by-one would not be worth the toolchain.
 
 Structure mirrors ``examples/mem_copy``: the DUT is a leaf ``FreeRunMod`` (the 1-task degenerate
-composite), the testbench is a component **graph** so the XSI harness can be walked out of it, and
-the scenario is written once as burst bundles that both backends read.
+composite), the testbench is a component **graph** (:class:`StateAccumTB`), and the scenario is
+written once as burst bundles that both backends read.  ``python -m examples.state_toy.state_toy``
+generates the DUT (task body, top, csynth TCL); the RTL run is the **system** flow,
+``python -m examples.state_toy.state_toy_system_build``, which builds its own XSI workspace.
 """
 from __future__ import annotations
 
@@ -29,18 +31,10 @@ from waveflow.build.build import BuildConfig, BuildDag  # noqa: E402
 from waveflow.build.composite_gen import (  # noqa: E402
     GEN_DIR,
     composite_top_spec,
-    render_ports_h,
-    render_tb_harness,
-    render_tb_main,
     render_tcl,
     render_top,
-    tb_top_spec,
 )
-from waveflow.build.streamutils import (  # noqa: E402
-    MemMgrStep,
-    StreamUtilsStep,
-    XsiHarnessStep,
-)
+from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep  # noqa: E402
 from waveflow.utils.burst_io import write_burst_bundle  # noqa: E402
 from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
@@ -48,6 +42,7 @@ from waveflow.hw.dataschema import DataArray, DataSchemaStep, IntField  # noqa: 
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
 from waveflow.hw.hw_module import HwParam  # noqa: E402
 from waveflow.hw.hw_state import HwState  # noqa: E402
+from waveflow.hw.hw_system import GraphSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave  # noqa: E402
 from waveflow.hw.mem_stream import KernelTask  # noqa: E402
 from waveflow.hw.synth import synthesizable  # noqa: E402
@@ -123,9 +118,8 @@ class StateAccum(FreeRunMod):
     @synthesizable
     def accumulate(self, x: Vec4, total: HwState) -> Vec4:
         """Add ``x`` into the running total and emit it.  The pysim twin of the hand-written hook."""
-        total.val[:] = (np.asarray(total.val, dtype=np.uint64)
-                        + np.asarray(x.val, dtype=np.uint64)) & 0xFFFFFFFF
-        return Vec4(np.asarray(total.val).copy())
+        total.val[:] = total.val + x.val  # uint32 arrays wrap mod 2**32, like the ap_uint<32> add
+        return Vec4(total.val.copy())
 
 
 @dataclass
@@ -178,13 +172,35 @@ def write_scenario(root, nvec: int = 5) -> None:
     write_burst_bundle(input_words(nvec), Path(root) / "vectors" / "s_in")
 
 
+@dataclass
+class StateAccumSystem(GraphSystem):
+    """state_toy as a **system** (``plans/system_model.md`` S3e): the :class:`StateAccumTB` graph,
+    the cut the accumulator alone -- its two streams top ports facing the driver and the sink."""
+
+    nvec: int = 5
+    n_cycles: int = 400
+
+    def graph(self) -> StateAccumTB:
+        return StateAccumTB(name="tb", sim=Simulation(), nvec=int(self.nvec),
+                            n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, int(self.nvec))
+
+    def check(self) -> np.ndarray:
+        """The sink's words, flat, in arrival order."""
+        return np.concatenate([np.asarray(b).ravel() for b in self.tb.sink.words]).astype(np.uint64)
+
+
 def gen_headers(config: BuildConfig) -> None:
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir="include"))
     dag.add(MemMgrStep(output_dir="include"))
     for cls in SCHEMA_CLASSES:
         dag.add(DataSchemaStep(cls, word_bw_supported=[WORD_BW], include_dir="include"))
-    dag.add(XsiHarnessStep(output_dir="xsi"))
     results = dag.run(config)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -192,7 +208,7 @@ def gen_headers(config: BuildConfig) -> None:
 
 
 def generate_dut(out_dir: Path = HERE) -> Path:
-    """Generate the task body, the ``ap_ctrl_none`` top, its csynth TCL, and the XSI port map."""
+    """Generate the task body, the ``ap_ctrl_none`` top, and its csynth TCL."""
     from waveflow.build.elaborate import elaborate
     from waveflow.build.hwgen import task_files_to_str
 
@@ -218,30 +234,9 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     (out_dir / f"{spec.top_name}.tcl").write_text(
         render_tcl(spec.top_name, extra_sources=(HOOK_IMPL,),
                    part="xc7z020clg484-1", period_ns=10), encoding="utf-8")
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h")
+    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl")
     return cpp
 
 
-def generate_tb(out_dir: Path = HERE, nvec: int = 5, n_cycles: int = 400) -> None:
-    """Generate the XSI harness + main from the TB graph, and write the scenario bundles."""
-    tb = StateAccumTB(name="tb", sim=Simulation(), nvec=nvec, n_cycles=n_cycles)
-    spec = tb_top_spec(tb)
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / "state_accum_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / "state_accum_bfm_tb.cpp").write_text(
-        render_tb_main(spec, n_cycles), encoding="utf-8")
-    write_scenario(xsi, nvec)
-    print(f"generated TB xsi/state_accum_tb_harness.h + xsi/state_accum_bfm_tb.cpp ({nvec} vectors)")
-
-
-def generate(out_dir: Path = HERE) -> None:
-    generate_dut(out_dir)
-    generate_tb(out_dir)
-
-
 if __name__ == "__main__":
-    generate()
+    generate_dut()

@@ -22,13 +22,14 @@ The steps are a :class:`BuildDag` driven by :func:`run_dag_cli`, like the other 
 
     python -m examples.fir_block.fir_block_build --through pysim       # default; no toolchain
     python -m examples.fir_block.fir_block_build --list-steps
-    python -m examples.fir_block.fir_block_build --through codegen_tb  # DUT + XSI harness
+    python -m examples.fir_block.fir_block_build --through codegen_dut # the composite top + TCL
     python -m examples.fir_block.fir_block_build --through csynth      # needs Vitis
     python -m examples.fir_block.fir_block_build --through csynth --unroll-lane --samp-w 8
 
-The RTL rung (drive the synthesized top through XSI and check bit-exactness) is the ``-m xsi`` gate in
-``tests/examples/test_fir_block_xsi.py``: it needs Vivado xsim plus a prior ``csynth``, and is
-orchestrated there rather than duplicated here.
+The RTL rung (drive the synthesized top through XSI and check bit-exactness) is the **system** flow,
+``fir_block_system_build.py`` -- ``python -m examples.fir_block.fir_block_system_build`` -- which builds
+its own XSI workspace; the ``-m xsi`` gate ``tests/examples/test_fir_block_xsi.py`` runs it.  This file
+keeps the golden check that run is graded by (:func:`check_xsi_outputs`).
 """
 from __future__ import annotations
 
@@ -46,15 +47,13 @@ from waveflow.build.composite_gen import (
     GEN_DIR,
     INCLUDE_DIR,
     composite_top_spec,
-    render_ports_h,
-    render_rtl_f,
     render_tcl,
     render_top,
 )
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwgen import state_decls_to_cpp
 from waveflow.build.resource_steps import InspectSynthStep
-from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep, XsiHarnessStep
+from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
 from waveflow.hw.arrayutils import _array_utils_namespace, gen_array_utils
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.fixpoint import fixed_sum, mult
@@ -165,7 +164,6 @@ def gen_headers(config: BuildConfig, mem_dwidth: int = MEM_DW, samp_w: int = DEF
     for cls in SCHEMA_CLASSES:
         dag.add(DataSchemaStep(cls, word_bw_supported=WORD_BW_SUPPORTED, include_dir=INCLUDE_DIR,
                                framed=(cls in FRAMED_SCHEMAS)))
-    dag.add(XsiHarnessStep(output_dir="xsi"))
     results = dag.run(config, force=True)
     failed = [n for n, r in results.items() if not r.success]
     if failed:
@@ -178,7 +176,7 @@ def generate_dut(out_dir: Path = HERE, mem_dwidth: int = MEM_DW, ntap: int = DEF
                  samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I,
                  unroll_lane: bool = False) -> Path:
     """Generate the whole DUT side: headers, the state/type headers, the composite top, its csynth
-    TCL, and the XSI port map.  Runnable without the toolchain up to the csynth call."""
+    TCL.  Runnable without the toolchain up to the csynth call."""
     out_dir = Path(out_dir)
     config = BuildConfig(root_dir=out_dir, params={})
     gen_headers(config, mem_dwidth=mem_dwidth, samp_w=samp_w, samp_i=samp_i)
@@ -209,32 +207,23 @@ def generate_dut(out_dir: Path = HERE, mem_dwidth: int = MEM_DW, ntap: int = DEF
     cpp.write_text(render_top(spec), encoding="utf-8")
     (out_dir / f"{spec.top_name}.tcl").write_text(
         render_tcl(spec.top_name, part="xc7z020clg484-1", period_ns=10), encoding="utf-8")
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h")
+    print(f"generated {cpp.relative_to(out_dir)} + {spec.top_name}.tcl")
     return cpp
 
 
 # ---------------------------------------------------------------------------
-# XSI testbench codegen — the BFM harness derived from the FirBlockTB graph
+# The RTL golden check -- graded on the system flow's recordings (fir_block_system_build.py)
 # ---------------------------------------------------------------------------
-
-from waveflow.build.composite_gen import (  # noqa: E402
-    render_tb_harness,
-    render_tb_main,
-    render_vectors_h,
-    tb_top_spec,
-)
 
 
 def make_xsi_tb(program=None, blk: int | None = None, ntap: int = DEFAULT_NTAP,
                 samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I,
                 mem_dwidth: int = MEM_DW, n_cycles: "int | None" = None):
-    """The :class:`~examples.fir_block.fir_block_sim.FirBlockTB` the XSI testbench is generated from.
+    """The :class:`~examples.fir_block.fir_block_sim.FirBlockTB` whose command program
+    :func:`check_xsi_outputs` grades the RTL run against.
 
     Lazy import: the sim module imports the design, and this one imports both — keeping the import
-    here means the design can be generated without pulling in the harness."""
+    here means the design can be generated without pulling in the testbench."""
     from waveflow.simulation.simulation import Simulation
     from examples.fir_block.fir_block_sim import DEFAULT_BLK, DEFAULT_PROGRAM, FirBlockTB
 
@@ -244,39 +233,6 @@ def make_xsi_tb(program=None, blk: int | None = None, ntap: int = DEFAULT_NTAP,
                       blk=int(blk if blk is not None else DEFAULT_BLK),
                       ntap=int(ntap), samp_w=int(samp_w), samp_i=int(samp_i),
                       mem_dwidth=int(mem_dwidth), **kw)
-
-
-def render_xsi_vectors(tb) -> str:
-    """``fir_block_vectors.h`` — the arena size and command count the harness needs, read off the very
-    graph the pysim golden runs.  The per-job offsets ride the ``vectors/s_cmd`` bundle instead of
-    being baked, so the RTL stays scenario-independent."""
-    from examples.fir_block.fir_block import FirDesc
-
-    return render_vectors_h(
-        f"{TOP}_vectors",
-        scalars={
-            "MEM_DW": int(tb.mem_dwidth),
-            "MEM_NW": int(tb._nwords_tot),
-            "NUM_CMDS": len(tb._steps),
-            "DONE_WORDS": FirDesc.nwords_per_inst(int(tb.mem_dwidth)),
-        },
-        note=("Derived from the FirBlockTB graph (examples/fir_block/fir_block_sim.py) -- the same\n"
-              "class the pysim golden runs.  The command words, the taps/input arena, and the golden\n"
-              "ride the burst bundles under xsi/vectors/, written by write_xsi_bundles."),
-    )
-
-
-def write_xsi_bundles(xsi_dir: Path, program=None, blk: int | None = None, ntap: int = DEFAULT_NTAP,
-                      samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I,
-                      mem_dwidth: int = MEM_DW) -> None:
-    """Write the XSI input + golden bundles into ``<xsi_dir>/vectors/`` — the single scenario writer
-    both backends share, so pysim and RTL cannot be running different tests."""
-    from examples.fir_block.fir_block_sim import DEFAULT_BLK, DEFAULT_PROGRAM, FirBlockSim
-
-    FirBlockSim(program=tuple(program or DEFAULT_PROGRAM),
-                blk=int(blk if blk is not None else DEFAULT_BLK), ntap=int(ntap),
-                samp_w=int(samp_w), samp_i=int(samp_i),
-                mem_dwidth=int(mem_dwidth)).write_scenario(Path(xsi_dir))
 
 
 def check_xsi_outputs(xsi_dir: Path, program=None, blk: int | None = None, ntap: int = DEFAULT_NTAP,
@@ -306,40 +262,6 @@ def check_xsi_outputs(xsi_dir: Path, program=None, blk: int | None = None, ntap:
     assert len(s_done) == len(tb._steps) * dw, (
         f"fir_block RTL: s_done has {len(s_done)} words, expected {len(tb._steps)}*{dw} "
         f"(one FirDesc echo per command, LOAD_TAPS included)")
-
-
-def generate_tb(out_dir: Path = HERE, program=None, blk: int | None = None, ntap: int = DEFAULT_NTAP,
-                samp_w: int = DEFAULT_SAMP_W, samp_i: int = DEFAULT_SAMP_I,
-                mem_dwidth: int = MEM_DW, n_cycles: "int | None" = None) -> dict:
-    """Generate the XSI testbench — scenario constants, BFM harness, and the two-line main — all
-    derived from the FirBlockTB graph, plus the scenario bundles themselves."""
-    out_dir = Path(out_dir)
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    tb = make_xsi_tb(program, blk, ntap, samp_w, samp_i, mem_dwidth, n_cycles)
-    (xsi / f"{TOP}_vectors.h").write_text(render_xsi_vectors(tb), encoding="utf-8")
-    spec = tb_top_spec(tb)
-    (xsi / f"{TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / f"{TOP}_bfm_tb.cpp").write_text(render_tb_main(spec, tb.n_cycles), encoding="utf-8")
-    write_xsi_bundles(xsi, program, blk, ntap, samp_w, samp_i, mem_dwidth)
-    # The xvlog file list, regenerated from the RTL that is actually on disk.  Never hand-maintain it:
-    # a stale .f plus a cached xsimk.dll is how an XSI run goes green while proving nothing.
-    if (out_dir / f"{TOP}_proj").is_dir():
-        # stamp_sources=False: this runs at TB-GENERATION time, not after csynth.  Stamping
-        # here would record whatever sources are on disk now as the ones the existing RTL was
-        # built from -- the guard signing off on a build it did not witness.
-        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, out_dir, stamp_sources=False),
-                                         encoding="utf-8")
-    else:
-        print(f"  (no {TOP}_proj yet — run csynth, then regenerate to get rtl_{TOP}.f)")
-    print(f"generated TB xsi/{TOP}_vectors.h + xsi/{TOP}_tb_harness.h + xsi/{TOP}_bfm_tb.cpp")
-    return {"harness": xsi / f"{TOP}_tb_harness.h", "main": xsi / f"{TOP}_bfm_tb.cpp"}
-
-
-def generate(out_dir: Path = HERE, **kw) -> None:
-    """Both codegen halves in order — the DUT first, since the TB harness includes its port map."""
-    generate_dut(out_dir, **kw)
-    generate_tb(out_dir, **{k: v for k, v in kw.items() if k != "unroll_lane"})
 
 
 # ---------------------------------------------------------------------------
@@ -385,17 +307,16 @@ class PySimStep(BuildStep):
 
 @dataclass(kw_only=True)
 class CodegenDutStep(BuildStep):
-    """Lower the ``FirBlock`` graph to the ``ap_ctrl_none`` composite top, plus its headers.
+    """Lower the ``FirBlock`` graph to the ``ap_ctrl_none`` composite top, plus its headers + TCL.
 
     Emits the schema headers, the sample element's array-utils, ``fir_types.h`` (the derived
     accumulator and the array-utils namespace alias) and ``fir_compute_state.inc`` (the ``add_state``
     storage), then copies the sticky hand-written task bodies into ``include/``.
     """
 
-    description = "Lower the FirBlock graph to the composite top (+ tcl, ports, headers, state)."
+    description = "Lower the FirBlock graph to the composite top (+ tcl, headers, state)."
     consumes = ["fir_block_source"]
-    produces = {"fir_block_cpp": Path("gen/fir_block.cpp"), "run_tcl": Path("fir_block.tcl"),
-                "dut_ports": Path("xsi/fir_block_ports.h")}
+    produces = {"fir_block_cpp": Path("gen/fir_block.cpp"), "run_tcl": Path("fir_block.tcl")}
     params = {"mem_dwidth": MEM_DW, "ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W,
               "samp_i": DEFAULT_SAMP_I, "unroll_lane": False}
 
@@ -403,38 +324,14 @@ class CodegenDutStep(BuildStep):
         generate_dut(config.root_dir, mem_dwidth=int(mem_dwidth), ntap=int(ntap),
                      samp_w=int(samp_w), samp_i=int(samp_i), unroll_lane=bool(unroll_lane))
         return {"fir_block_cpp": config.root_dir / GEN_DIR / f"{TOP}.cpp",
-                "run_tcl": config.root_dir / f"{TOP}.tcl",
-                "dut_ports": config.root_dir / "xsi" / f"{TOP}_ports.h"}
-
-
-@dataclass(kw_only=True)
-class CodegenTbStep(BuildStep):
-    """Lower the ``FirBlockTB`` graph to the XSI BFM harness, main, scenario constants, and bundles.
-
-    Runs after the DUT step because the harness ``#include``s the DUT's port map.
-    """
-
-    description = "Lower the FirBlockTB graph to the XSI harness + main + scenario bundles."
-    consumes = ["fir_block_source", "dut_ports"]
-    produces = {"tb_harness": Path("xsi/fir_block_tb_harness.h"),
-                "tb_main": Path("xsi/fir_block_bfm_tb.cpp")}
-    params = {"mem_dwidth": MEM_DW, "ntap": DEFAULT_NTAP, "samp_w": DEFAULT_SAMP_W,
-              "samp_i": DEFAULT_SAMP_I}
-
-    def run(self, config: BuildConfig, mem_dwidth, ntap, samp_w, samp_i, **_) -> dict:
-        generate_tb(config.root_dir, ntap=int(ntap), samp_w=int(samp_w), samp_i=int(samp_i),
-                    mem_dwidth=int(mem_dwidth))
-        return {"tb_harness": config.root_dir / "xsi" / f"{TOP}_tb_harness.h",
-                "tb_main": config.root_dir / "xsi" / f"{TOP}_bfm_tb.cpp"}
+                "run_tcl": config.root_dir / f"{TOP}.tcl"}
 
 
 @dataclass(kw_only=True)
 class CSynthStep(BuildStep):
-    """Vitis HLS C-synthesis of the generated top — produces the RTL the ``-m xsi`` gate drives.
+    """Vitis HLS C-synthesis of the generated top — produces the RTL the system flow drives.
 
-    Toolchain-gated (needs Vitis).  Re-emits ``rtl_fir_block.f`` afterwards so the file list always
-    names the RTL that was just built: a stale ``.f`` plus a cached ``xsimk.dll`` is how an XSI run
-    goes green while proving nothing.
+    Toolchain-gated (needs Vitis).
     """
 
     description = "Run Vitis HLS C-synthesis of the generated composite top."
@@ -446,6 +343,9 @@ class CSynthStep(BuildStep):
     def run(self, config: BuildConfig, live_output, **_) -> dict:
         import time as _time
 
+        from waveflow.build.composite_gen import check_maxi_lowered
+        from waveflow.build.rtl_digest import write_stamp
+
         started = _time.perf_counter()
         result = toolchain.run_vitis_hls(config.root_dir / f"{TOP}.tcl",
                                          work_dir=config.root_dir,
@@ -455,9 +355,10 @@ class CSynthStep(BuildStep):
             print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        xsi = config.root_dir / "xsi"
-        xsi.mkdir(parents=True, exist_ok=True)
-        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, config.root_dir), encoding="utf-8")
+        # The source stamp: this RTL was just built from the sources on disk, which is what lets the
+        # system flow's ``synth="check"`` accept it (``rtl_digest`` / ``trace_steps.rtl_staleness``).
+        check_maxi_lowered(config.root_dir, TOP)
+        write_stamp(config.root_dir, TOP)
         # Published as an artifact, not just left in the BuildResult: the *next* step is what records
         # it, and a resource record's cost_seconds is what later makes "K syntheses sufficed for N
         # design points" auditable from the library.  It is unrecoverable if not captured when spent.
@@ -471,7 +372,6 @@ def build_fir_block_dag() -> BuildDag:
     dag.add(SourceStep(artifact="fir_block_source", path=HERE / "fir_block.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
-    dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
     dag.add(InspectSynthStep(
         name="resources", comp_class=FirBlock, top_name=TOP,

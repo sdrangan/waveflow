@@ -18,7 +18,7 @@ needs both in one list:
 
 | | test | pages |
 |---|---|---|
-| **Boundary** | becomes a port on the generated kernel, and has a `kind_of_endpoint` kind | [Stream](./stream.md) · [MM](./aximm.md) · [BRAM](./bram.md) · [Register map](./regmap.md) |
+| **Boundary** | becomes a port on the generated kernel, and has a `kind_of_endpoint` kind | [Stream](./stream.md) · [MM](../axi_mm/modeling.md) · [BRAM](./bram.md) · [Register map](../axi_mm/regmap.md) |
 | **Internal** | lowers to an HLS construct that exists only *inside* the kernel | [Stream-of-blocks](./sob.md) · [Crossbar](./crossbar.md) |
 
 The distinction matters when reading about lowering and nowhere else: a `StreamIFSlave` at a
@@ -29,10 +29,10 @@ See [Interfaces](../) for the tier table this table refines, and
 ## Pages
 
 - [Stream Interfaces](./stream.md) — unidirectional streams (`StreamIF`) and pipelined transfer.
-- [MM Interfaces](./aximm.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`).
+- [Modeling memory-mapped traffic](../axi_mm/modeling.md) — memory-mapped read/write (`AXIMMCrossBarIF`, `DirectMMIF`); in the [AXI-MM](../axi_mm/) section.
 - [BRAM — memory between modules](./bram.md) — `BramIF`: an on-chip memory shared by two tasks,
   which cannot live *inside* a Vitis kernel and so lives beside it as hand-written Verilog.
-- [Register Maps](./regmap.md) — AXI-Lite control/status fields (`RegMap`, `RegField`, `RegAccess`).
+- [Register Maps](../axi_mm/regmap.md) — AXI-Lite control/status fields (`RegMap`, `RegField`, `RegAccess`); in the [AXI-MM](../axi_mm/) section.
 - [Stream-of-Blocks Interface](./sob.md) — block handoff (`DataArray[T, N]`) over
   `write_lock` / `read_lock`. **Internal.**
 - [Crossbar Interfaces](./crossbar.md) — the port-indexed n × m stream fabric (`CrossBarIF`).
@@ -65,8 +65,7 @@ or in place.
 > one place the vocabulary was inconsistent for no reason, and it cost more than tidiness: the
 > codegen extractor matches methods structurally, by name, so `get(T)` and `get(T, count=N)` were
 > indistinguishable to it and the array form silently lowered to a single-element read. The three
-> names above are what fixed it. The same split has **not** reached `AXIMMQueue.get`, which still
-> dispatches on its arguments; that is unfinished work rather than a considered difference.
+> names above are what fixed it.
 
 > **The pipelined forms take no payload suffix, and that is the one exception to the rule above.**
 > `get_pipelined(T, count=N)` — and `read_pipelined` / `write_pipelined` on the other endpoints —
@@ -83,18 +82,20 @@ three are essential; collapsing any of them models a cost the hardware does not 
 | | Non-overlapping transfer | Overlapping (pipelined) transfer | In place |
 |---|---|---|---|
 | [`StreamIF`](stream.md) | `get` / `write` | `get_pipelined` / `write_pipelined` | — no addressing |
-| [`MMIF`](aximm.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
+| [`MMIF`](../axi_mm/modeling.md) | `read/write_schema`, `read/write_array` | `*_pipelined`, `*_anchored`, `*_spanned` | — every access is a bus transaction |
 | [`BramIF`](bram.md) | *not built* | `read_pipelined` / `write_pipelined` | **`array_ref`** |
 | `HwState` | — already local | — | *not built* |
 
 **Non-overlapping transfer.** Data physically moves into an internal structure, and the call elapses
-the whole of it — nothing downstream starts until it finishes. The model is
-[block timing](../../timing_model/block.md).
+the whole of it — nothing downstream starts until it finishes. Its timing is a
+[sequential body](../../timing_model/block.md).
 
 **Overlapping (pipelined) transfer.** Two transfers proceed at once — reading one endpoint while
-writing another — so the pair costs `max(a, b)` rather than `a + b`. The model is
-[streaming timing](../../timing_model/streaming.md). Pipelined ops are **array** operations: the
-saving is proportional to the words moved, so there is no schema-only form.
+writing another — so the pair costs `max(a, b)` rather than `a + b`. Between two **streams**, state it
+as a [pipelined timed phase](../../timing_model/streaming.md) (`phase.pipeline`): there is no anchor to
+get wrong.  The pipelined ops below remain for transfers that touch memory -- `MMIF`, `BramIF` -- until
+those endpoints have events too.  They are **array** operations: the saving is proportional to the
+words moved, so there is no schema-only form.
 
 ```python
 x, tstart = yield from self.s_in.get_pipelined(Float32, count=n)
@@ -109,8 +110,8 @@ yield from self.buf_w.write_pipelined(y, addr, tstart)
 > **no gate compares your anchor against anything**. In [`bram_access`](../../../examples/bram_access/),
 > anchoring the memory write at the payload read's `tstart` is the entire reason a firing costs
 > `max(stream, memory)` — and adding that anchor moved the model's own predictions by a real cycle
-> per command. If you are unsure what to anchor to, read
-> [streaming timing](../../timing_model/streaming.md) before guessing.
+> per command. Between two streams, a [pipelined timed phase](../../timing_model/streaming.md) does the
+> anchoring from real events instead.
 
 **In place.** Unique to directly-addressable storage, and the reason is **timing, not copies**. A
 kernel computing against a BRAM transfers nothing — in C++ it is `foo(&buf[addr], n)`, reading and

@@ -17,8 +17,6 @@ Three things are gated here, and they fail in different ways:
 """
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -28,16 +26,12 @@ from examples.rf_samp_buf_rx.rf_samp_buf_rx import (
     WORD_BW,
     RxResp,
     expected_capture,
-    write_scenario,
 )
-from examples.rf_samp_buf_rx.rf_samp_buf_rx_build import RTL_FILES, TOP, WRAPPER
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_samp_buf_rx import rf_samp_buf_rx_system_build as sysb
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_samp_buf_rx"
-#: The hand-written main: the generated one runs and dumps, this one also prints the model counters,
-#: and two of this design's most important numbers live only on the models.
-TB = "rf_samp_buf_rx_counters"
+#: Where the system run's testbench read and recorded (``tests/examples/_system_run.py``).
+VECTORS = WORK / sysb.TOP / "xsi_run" / "vectors"
 
 #: Cycle the last captured sample reached the sink.  Recorded 2026-08-15 on the first green run.
 #: Exact, not a bound — it moves only if the design's timing changes, and both directions are worth a
@@ -61,55 +55,16 @@ WANT_LAST_CYCLE = 15442
 WANT_ADC_WORDS = 4096
 
 
-def _require(cond: bool, why: str) -> None:
-    """Skip loudly — a silent skip on a gate this expensive reads as 'passed' in a summary line."""
-    if not cond:
-        pytest.skip(f"XSI gate prerequisite missing: {why}")
-
-
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines the counters main prints."""
-    vals = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
 @pytest.fixture(scope="module")
-def run(tmp_path_factory) -> tuple[dict[str, int], str]:
-    """One RTL run, shared by the assertions below."""
-    xsi = ROOT / "xsi"
-    _require((xsi / XSI_RUNNER).exists(), f"{xsi / XSI_RUNNER}")
-    proj = ROOT / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
-    _require(proj.is_dir(), f"no csynth RTL at {proj} — run rf_samp_buf_rx_build.py --through csynth")
-    # SECOND INSTANCE OF THIS CLASS: `*_proj/` is gitignored build output, and a gate that
-    # compares a cycle count against RTL it did not produce reports "a real behaviour change"
-    # when the truth is a stale artifact. See rtl_staleness().
-    _require(rtl_staleness(ROOT, 'rf_samp_buf_rx') is None, rtl_staleness(ROOT, 'rf_samp_buf_rx') or "")
-    for f in RTL_FILES:
-        _require((xsi / f).is_file(), f"{xsi / f} — run rf_samp_buf_rx_build.py --through codegen_dut")
-
-    # Regenerate the file list from the RTL actually on disk; never trust the committed .f.
-    (xsi / f"rtl_{WRAPPER}.f").write_text(
-        render_rtl_f(TOP, ROOT, extra=RTL_FILES, stamp_sources=False), encoding="utf-8")
-    # Force a clean elaboration of the WRAPPER: a cached snapshot proves nothing about this design.
-    shutil.rmtree(xsi / "xsim.dir" / WRAPPER, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (xsi / stale).unlink(missing_ok=True)
-    for od in ("out", "resp"):
-        shutil.rmtree(xsi / "vectors" / od, ignore_errors=True)
-    write_scenario(xsi)
-
-    r = subprocess.run(xsi_runner_cmd(WRAPPER, TB), cwd=str(xsi),
-                       capture_output=True, text=True, timeout=1800)
-    out = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in out, f"the RTL run did not complete cleanly:\n{out[-3000:]}"
-    return _counters(out), out
+def run() -> tuple[dict[str, int], str]:
+    """One RTL run, shared by the assertions below: the system run
+    (``examples/rf_samp_buf_rx/rf_samp_buf_rx_system_build.py``) -- the buffer is the DUT (its wrapper: the kernel and
+    its ``bram_t2p``), the RFDC's converter model spans the cut.  The counters are the ones the
+    converter model writes as a recording (``vectors/counters/``), read under the names the old
+    hand-written main printed; the text is the run's report."""
+    work = system_run(sysb.build_dag(work_dir=WORK), sysb.HERE, sysb.TOP)
+    assert compared_clean(work) and recorded_names(work) == ['counters', 'out', 'resp']
+    return sysb.counters(work), (work / "report.json").read_text(encoding="utf-8")
 
 
 def _captured(xsi: Path) -> np.ndarray:
@@ -123,7 +78,7 @@ def _captured(xsi: Path) -> np.ndarray:
 @pytest.mark.xsi
 def test_the_rtl_captures_the_predicted_windows(run):
     """All four cases, bit-exact — the same prediction the pysim golden is held to."""
-    got = _captured(ROOT / "xsi")
+    got = _captured(VECTORS.parent)
     want, _ = expected_capture()
     assert got.size == want.size, f"RTL captured {got.size} samples, predicted {want.size}"
     if not np.array_equal(got, want):
@@ -139,7 +94,7 @@ def test_every_command_is_answered_with_the_predicted_status(run):
     """Including the refusal: ``(4, TOO_OLD, 0)`` is as much a result as the three captures."""
     from waveflow.utils.burst_io import read_burst_bundle
 
-    d = ROOT / "xsi" / "vectors" / "resp"
+    d = VECTORS / "resp"
     assert d.is_dir(), "the run dumped no response bundle"
     flat = np.concatenate(read_burst_bundle(d)).astype(np.uint64)
     n = RxResp.nwords_per_inst(WORD_BW)
@@ -186,7 +141,8 @@ def test_the_completion_cycle_is_the_recorded_one(run):
 @pytest.mark.xsi
 def test_the_whole_command_stream_was_consumed(run):
     """Four commands in, four answered — so 'nothing came out' can never be read as 'nothing went
-    in', which is exactly how the first failing run was diagnosed."""
+    in', which is exactly how the first failing run was diagnosed.  (Each command is answered, in
+    order, only after it was read whole, so a response per command is the consumption evidence;
+    the old hand-written main's driver count said the same thing twice.)"""
     c, _out = run
-    assert c["CMD_SENT"] == c["CMD_TOTAL"]
     assert c["RESP_WORDS"] == c["CMD_TOTAL"], "one response per command, same three-word shape"

@@ -21,7 +21,7 @@ The seam already exists and is exercised three times in the histogram; see
 [Mechanism](#mechanism-this-is-already-built) below. The genuinely new work is Parts A
 and B plus a small amount of build plumbing.
 
-## Relation to `fft_bit_exact_notes.md`
+## Relation to the fft_bit_exact_notes plan ([commit 19005b5](https://github.com/sdrangan/waveflow/commit/19005b5))
 
 That note draws a sharp line and it applies here:
 
@@ -169,7 +169,7 @@ they will disagree. Bit-exact float would require the Python golden to replicate
 hardware reduction tree — at which point the "golden" is a hardware model, not a
 reference. **v1 is fixed-point only**, precisely so that "bit-exact" means what it
 says. If float is ever needed, it gets a tolerance/SNR gate (which is what
-`fft_bit_exact_notes.md` assumed for wrappers) and that must be stated plainly rather
+the fft_bit_exact_notes plan ([commit 19005b5](https://github.com/sdrangan/waveflow/commit/19005b5)) assumed for wrappers) and that must be stated plainly rather
 than blurred into the same word.
 
 **If Stage 0.3 finds mid-accumulation saturation**, order-independence is void and A.0
@@ -298,7 +298,7 @@ Stages 2–4 on GEMV constitute the real proof. GEMM inherits the seam.
 
 - [Vitis BLAS library docs](https://xilinx.github.io/Vitis_Libraries/blas/)
 - [Vitis_Libraries source](https://github.com/Xilinx/Vitis_Libraries)
-- Sibling note: `plans/fft_bit_exact_notes.md` (wrap-vs-replicate distinction)
+- Sibling note: the fft_bit_exact_notes plan ([commit 19005b5](https://github.com/sdrangan/waveflow/commit/19005b5)) (wrap-vs-replicate distinction)
 - Anatomy precedent: `examples/shared_mem/hist.py`, `examples/vmac/vmac.py`
 </content>
 </invoke>

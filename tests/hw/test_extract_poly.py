@@ -379,16 +379,12 @@ def test_extract_kernel_with_regmap_uses_on_start():
 # ---------------------------------------------------------------------------
 
 def _ensure_poly_on_path():
-    import sys
-    from pathlib import Path
-    POLY_DIR = Path(__file__).resolve().parents[2] / "examples" / "stream_inband"
-    if str(POLY_DIR) not in sys.path:
-        sys.path.insert(0, str(POLY_DIR))
+    """No-op: the extracted poly kernel is a test fixture now (the example is body-only)."""
 
 
 def test_extract_poly_accel_on_start():
     _ensure_poly_on_path()
-    from poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
     from waveflow.build.hwcodegen import extract_kernel
     from waveflow.hw.interface import StreamGetStmt
     from waveflow.hw.regmap import RegMapGetStmt, RegMapSetStmt
@@ -428,7 +424,7 @@ def test_extract_poly_accel_no_implicit_capture_violation():
     """Cloning PolyAccel and adding a self.proc_latency read in
     on_start must raise SynthesisError mentioning proc_latency."""
     _ensure_poly_on_path()
-    from poly import (
+    from tests.fixtures.poly_extracted.poly_extracted import (
         PolyAccel, PolyCmdHdr, PolyCmdType, PolyError,
     )
     from waveflow.build.hwcodegen import extract_kernel

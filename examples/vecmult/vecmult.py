@@ -160,7 +160,7 @@ class VecMult(FreeRunMod):
         # calib/platforms/zynq7020_vecmult.  `tests/calib/test_key_stability.py` catches exactly that.
         # It carries no information `vlen` does not already, so it is a fair candidate for a
         # *deliberate* re-key -- with the store regenerated in the same commit.  See
-        # plans/key_stability.md.
+        # the key_stability plan (commit 40e8e00).
         self.vec_cls = vec_type(int(self.vlen))
 
     @property
@@ -245,7 +245,7 @@ class VecMult(FreeRunMod):
         and both fail silently.
         """
         from waveflow.calib.device_rules import require_same_device
-        from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.record_store import ModuleStore, platform_store
         from waveflow.calib.vitis_model import VitisResourceModel
 
         from examples.vecmult.vecmult_corpus import COMMITTED_CALIB, PART
@@ -254,7 +254,8 @@ class VecMult(FreeRunMod):
         part = getattr(platform, "part", None) or PART
         require_same_device(part, PART, what="VecMult's resource model")
 
-        store = ModuleStore(getattr(platform, "dir", None) or COMMITTED_CALIB)
+        # A platform's layered store: what a build filed (its work tier) first, then the library.
+        store = platform_store(platform) if platform is not None else ModuleStore(COMMITTED_CALIB)
         return VitisResourceModel(name="vec_mult", part=part, platform=platform,
                                   cls_name="VecMult", comp_class=cls, store=store,
                                   shell=vec_mult_shell(store)).load_or_fit()
@@ -262,9 +263,9 @@ class VecMult(FreeRunMod):
     def run_iter(self) -> ProcessGen[None]:
         """One firing: ``[cmd | x | y]`` in, ``[z | resp]`` out.  The pysim golden."""
         cmd = yield from self.s_in.get_schema(VecCmd)
-        n = int(cmd.n)
+        n = cmd.n
         x = yield from self.s_in.get_array(Samp, count=n)
         y = yield from self.s_in.get_array(Samp, count=n)
-        z = golden(np.asarray(x.val), np.asarray(y.val))
+        z = golden(x.val, y.val)
         yield from self.z_out.write(DataArray.specialize(Samp, max_shape=(n,), static=True)(z))
-        yield from self.z_out.write(VecResp(tx_id=int(cmd.tx_id)))
+        yield from self.z_out.write(VecResp(tx_id=cmd.tx_id))

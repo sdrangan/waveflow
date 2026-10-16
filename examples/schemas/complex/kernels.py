@@ -26,6 +26,8 @@ _OPCALL = {
     "cquantize": "a[i]",
     "conj": "complex_utils::conj(a[i])",
     "cmult": "complex_utils::cmult(a[i], b[i])",
+    # the three-multiply (Gauss) form: the same exact product, so cmult's golden applies
+    "cmult3": "complex_utils::cmult3(a[i], b[i])",
     "cadd": "complex_utils::cadd(a[i], b[i])",
     "csub": "complex_utils::csub(a[i], b[i])",
 }

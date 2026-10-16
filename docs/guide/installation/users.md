@@ -3,6 +3,7 @@ title: User Setup
 parent: Installation
 nav_order: 1
 has_children: false
+summary: "Installing Waveflow as a library in your own project, with no clone: what a virtual environment is and why to use one, creating and activating it, and installing the package. Python 3.10 or newer. For modifying Waveflow itself, or running the bundled examples and tests, see Developer Setup instead."
 ---
 
 # User Setup — Installing the Waveflow Package

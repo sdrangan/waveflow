@@ -5,7 +5,7 @@ grand_parent: Interfaces
 nav_order: 3
 audience: python
 snippets: run
-summary: "CreditStreamIF — a forward stream plus a reverse credit channel, so a producer knows there is room before it commits. Built from two ordinary StreamIFs. Use it only when the producer cannot abandon a transaction partway; if it can simply block, a plain StreamIF is better and cheaper."
+summary: "CreditStreamIF — a forward stream plus a reverse credit channel, so a producer knows there is room before it commits. Built from two ordinary StreamIFs. Use it when the producer cannot abandon a transaction partway, or when the stream crosses a shared bus (where blocking stalls the bus) -- then MmCreditStreamIF routes the same endpoints over a crossbar.  If the producer can simply block on a point-to-point link, a plain StreamIF is better and cheaper."
 ---
 
 # Credit Stream
@@ -27,8 +27,16 @@ multi-word transaction it **cannot abandon partway**. A data converter is the mo
 presents samples whether or not the fabric is ready, so discovering halfway through a burst that
 there is no room is not a situation it can be in.
 
-**If your producer can simply block, it should.** Use a plain [`StreamIF`](../primitive/stream.md)
-and let `write` stall. Credit buys nothing there and costs you a second channel.
+**If your producer can simply block, it should** -- on a point-to-point link. Use a plain
+[`StreamIF`](../primitive/stream.md) and let `write` stall. Credit buys nothing there and costs you
+a second channel.
+
+**Unless the link crosses a shared bus.** A producer writing another kernel's queue over a crossbar
+cannot "simply block": a write into a full queue stalls the bus itself -- the crossbar path and the
+target's adaptor front, which serves every view behind it for every master, including the reads that
+would drain the queue. So a producer that is perfectly willing to wait still needs to know there is
+room *before* it writes. That is credit again, for a different reason; see
+[Over a shared bus](#over-a-shared-bus).
 
 The other reverse channel answers the opposite question: [Acked Stream](./acked_stream.md) reports
 *what became of what you sent* — after the fact, from the only party that can know.
@@ -80,6 +88,7 @@ site.
 | | `ctr_bits` | width of the cumulative counter (16), and therefore of the reverse channel |
 | `CreditStreamMasterIF` | `resp_words` | headroom reserved so a response can never be refused for room |
 | `CreditStreamSlaveIF` | `queue_size` | optional bound on the consumer's receive queue |
+| | `crd_every` | offer credit once this many words are unreported (default 1: after every read). Batching matters when every offer costs something -- a bus write |
 
 ## The methods
 
@@ -89,6 +98,8 @@ site.
 |---|---|
 | `poll_credit(n=1)` | take **up to** *n* credit values; returns how many were taken |
 | `write_nb(words)` | write if the accounting says it fits, else refuse. **Never blocks**; returns `bool` |
+| `write(words)` | for a producer that **may wait**: sleep on the credit channel until the burst fits, then write. The wait is on a credit *arriving* -- nothing is re-read -- and the write that follows cannot stall |
+| `max_write` | the longest burst `write` accepts: `depth - resp_words - (crd_every - 1)` |
 | `write_resp_nb(resp)` | write a response, drawing on the reserved headroom so room cannot refuse it |
 | `avail`, `depth` | what the accounting believes is free |
 
@@ -158,9 +169,18 @@ fills and offers start dropping, the producer's view stops advancing and never r
 because nothing retransmits. Size `credit_depth` so that cannot happen; it is a sizing violation,
 not a transient.
 
+## Over a shared bus
+
+A credit stream can also run between two kernels **across a shared memory-mapped bus** -- the producer
+writing the consumer's queue-in view, the consumer writing its counts into a credit register on the
+producer's side -- with the kernels' endpoints and code unchanged. That is where credit stops being an
+option: over a bus, blocking on a full queue stalls the bus itself. The transport, how to build and size
+it, and why it is safe on a shared bus are on [MM-streams with credit](../axi_mm/credit_streams.md).
+
 ## See also
 
 - [Acked Stream](./acked_stream.md) — the other reverse channel, for *what became of what I sent*
 - [`StreamIF`](../primitive/stream.md) — the primitive both directions are built from, and the right
   answer when the producer can block
+- [MM-streams with credit](../axi_mm/credit_streams.md) — the same channel routed over a shared bus
 - [Derived interfaces](./index.md) — how a derived interface composes its primitives

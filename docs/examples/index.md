@@ -3,6 +3,7 @@ title: Examples
 parent: Waveflow
 nav_order: 3
 has_children: true
+summary: "The reference designs, in reading order, each a complete end-to-end build — a Python golden model, a simulation, a generated Vitis kernel and testbench, and RTL verification — and each adding one or two concepts to the one before. Every entry's blurb is read from that example's own front matter, so the list is generated rather than maintained here and cannot fall out of step with what it lists."
 ---
 # Examples
 

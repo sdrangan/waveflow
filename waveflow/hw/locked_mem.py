@@ -1,6 +1,6 @@
 """locked_mem.py — a **lock channel** over a shared true-dual-port memory.
 
-``plans/t2p_lock_chan.md`` S1.  Two modules share one :class:`~waveflow.hw.bram.T2pBram`; one of
+PR #178.  Two modules share one :class:`~waveflow.hw.bram.T2pBram`; one of
 them cannot stop, the other arrives with a transaction; and the thing that keeps them off each
 other's addresses is a pair of messages rather than a phase the design hopes it is in::
 
@@ -91,7 +91,7 @@ LOCK_GRANTED = 0
 #: ``end > nelem``, or ``start > end``.  **Refused, never clamped** — the same discipline
 #: :data:`~waveflow.hw.rf_shot_tx.SHOT_SHORT` follows, and for its reason: a clamped region is a
 #: different region, silently, exactly as a truncated waveform is a different signal.  (It used to
-#: name ``SHOT_WRONG_LEN``, which ``plans/rf_shot_geometry.md`` retired along with the length check
+#: name ``SHOT_WRONG_LEN``, which PR #194 retired along with the length check
 #: it policed; the argument moved to the verdict that still makes it.)
 LOCK_BAD_RANGE = 1
 
@@ -346,7 +346,7 @@ class LockedMemMasterIF(_RegionGuard, InterfaceEndpoint):
                 f"LockedMemMasterIF '{self.name}'.acquire({lo}, {hi}): it already holds "
                 f"{region_str(self._lo, self._hi)}. One outstanding request is the S1 contract — a "
                 f"second ACQUIRE before the first is released is a protocol error, not a queued "
-                f"request (plans/t2p_lock_chan.md, 'Protocol').")
+                f"request (PR #178, 'Protocol').")
         cmd = MemLockCmd()
         cmd.opcode, cmd.start_addr, cmd.end_addr = LOCK_ACQUIRE, int(lo), int(hi)
         t0 = self.env.now

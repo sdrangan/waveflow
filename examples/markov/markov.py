@@ -1,0 +1,713 @@
+"""markov.py — a two-state Markov chain simulator: two kernels that talk over the bus.
+
+The gate of ``plans/mm_credit_stream.md``.  Deliberately not useful hardware: each kernel is tiny, so
+the example is about the **links** -- a host that sends commands and sleeps on an interrupt, and two
+kernels joined by a credit stream routed over a shared bus::
+
+    host  -> gen.qcmd     : MkvCmd(tx_id, n, x0, seed, p01, p10, dstaddr)     (queue in, room IRQ)
+    gen   -> chain.qu     : MkvCmd | u[0..n-1]          (a CreditStreamIF, routed over the bus)
+    chain -> gen.u_crd    : cumulative words consumed   (its credit half, routed back)
+    chain -> mem          : x[0..n-1] at dstaddr        (its MemWStream's m_axi bursts)
+    chain -> chain.qresp  : MkvResp(tx_id, n, ones)     (forwarded by the writer once x is stored;
+                                                         queue out, data IRQ -> host)
+    host  <- mem          : x
+
+* :class:`MarkovGen` (kernel 1) draws ``u[k]`` from an xorshift32 PRNG seeded per command, keeping
+  the top :data:`UBITS` bits, and forwards the command header in front of them.
+* :class:`MarkovChain` (kernel 2) is a composite: :class:`ChainCore` runs the chain and hands ``x``
+  and the response to the framework's in-band memory writer.  The core runs the chain: ``P(0 -> 1) = p01``, ``P(1 -> 0) = p10``, both in
+  Q\\ :data:`UBITS`, so a step is two integer compares and a select::
+
+      t0 = u < p01          # from state 0: go to 1
+      t1 = u >= p10         # from state 1: stay at 1
+      x' = x ? t1 : t0
+
+  Both compares depend only on ``u``; the dependency carried from step to step is the 2:1 select,
+  which is why the HLS body is expected to reach one sample per cycle.
+
+**Flow control, with no polling anywhere.**  The kernel-to-kernel link is a
+:class:`~waveflow.hw.reverse_stream.CreditStreamIF` -- the generator writes only what its credit
+says fits, so it never stalls the bus -- routed over the crossbar by
+:class:`~waveflow.hw.mm_credit.MmCreditStreamIF`.  The chain batches its credit (one bus write per
+half queue, and one when it drains).  The host keeps at most :data:`MAX_IN_FLIGHT` jobs outstanding,
+which bounds the response queue (end-to-end admission); it waits on the command queue's room
+interrupt and the response queue's data interrupt.
+
+The same two kernel classes also run joined **directly** (``link="direct"``): a plain
+``CreditStreamIF`` between them, the host's ends joined straight to the kernels.  The kernels' code is
+identical; only the wiring differs.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import ClassVar
+
+import numpy as np
+
+from waveflow.hw.arrayutils import array, get_nwords, read_array
+from waveflow.utils.burst_io import StreamBurst
+from waveflow.hw.clock import Clock
+from waveflow.hw.dataschema import DataList, IntField
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_module import DynParam
+from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
+from waveflow.hw.irq import IrqIF, IrqIFSink
+from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
+from waveflow.hw.mem_stream import MemWCmd, MemWStream
+from waveflow.hw.memory import AddrUnit, MemoryMod
+from waveflow.hw.mm_credit import MmCreditStreamIF
+from waveflow.hw.mm_device import CreditIn, QueueIn, QueueOut, build_mm_device
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
+from waveflow.hw.reverse_stream import CreditStreamIF, CreditStreamSlaveIF, FramedCreditStreamMasterIF
+from waveflow.hw.timed_phase import TimedPhase
+from waveflow.simulation.simulation import Simulation
+from waveflow.hw.hw_system import DutTop, HwSystem
+from waveflow.sw import SwHost, SwSemaphore
+
+HERE = Path(__file__).resolve().parent
+
+DW = 64
+#: Bits of each uniform draw, and the Q-format of p01 / p10.
+UBITS = 16
+#: Samples per transfer between the kernels (and per memory write): 16 words of u, 8 words of x.
+CHUNK = 64
+#: The chain's input queue, in words: eight chunks.  Credit is returned every 32 words consumed.
+#: The credit window (QDEPTH - 1 words) must cover the bandwidth-delay product of the link -- a word's
+#: round trip through the forward FIFO, the store-and-forward writer, the queue, up to CRD_EVERY - 1
+#: unreported words and the credit path back -- or credit, not compute, sets the rate.  Measured at RTL:
+#: 64 words throttled the generator at every job start and starved the chain (2015 cycles).
+QDEPTH = 128
+CRD_EVERY = 32
+#: The command and response queues, in words.
+CDEPTH = 16
+RDEPTH = 16
+#: The FIFO between the generator and its forward bus writer, in words: two chunks, so the generator
+#: fills one while the writer bursts the other (the writer is store-and-forward).
+FWD_DEPTH = 2 * (CHUNK // 4)
+#: Jobs the host keeps outstanding.
+MAX_IN_FLIGHT = 2
+
+U8 = IntField.specialize(bitwidth=8, signed=False, include_dir="include")
+U16 = IntField.specialize(bitwidth=16, signed=False, include_dir="include")
+U32 = IntField.specialize(bitwidth=32, signed=False)
+U64 = IntField.specialize(bitwidth=64, signed=False)
+
+
+class MkvCmd(DataList):
+    """One job: three 64-bit words, scalars only.  The generator forwards it to the chain."""
+
+    elements = {
+        "n": {"schema": U32, "description": "steps to run"},
+        "tx_id": {"schema": U16, "description": "the host's job id, echoed in the response"},
+        "x0": {"schema": U16, "description": "initial state, 0 or 1"},
+        "seed": {"schema": U32, "description": "xorshift32 seed (0 is replaced by 1)"},
+        "p01": {"schema": U16, "description": "P(0 -> 1) in Q16"},
+        "p10": {"schema": U16, "description": "P(1 -> 0) in Q16"},
+        "dstaddr": {"schema": U64, "description": "bus address x[0..n-1] is written to"},
+    }
+
+
+class MkvResp(DataList):
+    """The chain's response to one job: two 64-bit words."""
+
+    elements = {
+        "n": {"schema": U32, "description": "steps run"},
+        "ones": {"schema": U32, "description": "how many x[k] were 1"},
+        "tx_id": {"schema": U16, "description": "echo of the job's tx_id"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# The golden
+# ---------------------------------------------------------------------------
+
+def xorshift32(seed: int, n: int) -> np.ndarray:
+    """``n`` successive xorshift32 states after *seed* (0 is replaced by 1).  Sequential by nature:
+    each state is a function of the last."""
+    s = (int(seed) & 0xFFFF_FFFF) or 1
+    out = np.empty(int(n), dtype=np.uint32)
+    for k in range(int(n)):
+        s ^= (s << 13) & 0xFFFF_FFFF
+        s ^= s >> 17
+        s ^= (s << 5) & 0xFFFF_FFFF
+        out[k] = s
+    return out
+
+
+def uniforms(seed: int, n: int) -> np.ndarray:
+    """The draws: the top :data:`UBITS` bits of each state."""
+    return (xorshift32(seed, n) >> (32 - UBITS)).astype(np.uint16)
+
+
+def chain_golden(u: np.ndarray, x0: int, p01: int, p10: int) -> np.ndarray:
+    """The chain: ``x[k]`` is the state after step *k*.  The compares are vectorized; the select
+    carried from step to step is the one sequential part."""
+    u = np.asarray(u, dtype=np.int64)
+    t0 = u < int(p01)
+    t1 = u >= int(p10)
+    x = np.empty(len(u), dtype=np.uint8)
+    s = int(x0) & 1
+    for k in range(len(u)):
+        s = int(t1[k]) if s else int(t0[k])
+        x[k] = s
+    return x
+
+
+def markov_memory(sim, clk: Clock | None = None, calibrated: bool = True) -> MemoryMod:
+    """The system's memory, where the chain stores ``x`` and the host reads it: one factory for the
+    system and the memory's own harness (``plans/unit_harness.md`` Stage 4c).  *calibrated*: its
+    timing from its record in ``calib/`` (the harness that measures it builds one without)."""
+    return MemoryMod(name="mem", sim=sim, word_size=DW, inline=False,
+                     clk=clk if clk is not None else Clock(freq=100e6),
+                     nwords_tot=MEM_SPAN // 8, addr_unit=AddrUnit.byte,
+                     calib_dir=HERE / "calib" if calibrated else None)
+
+
+def mem_script(kind: str = "test") -> list:
+    """What the memory's harness plays (:func:`~waveflow.hw.harness.memory_harness`): each length a
+    write then a read back, spaced so no two meet; ``"calib"`` adds every length from 1 to 32 and a
+    read and a write started together at each of several lengths (the two channels meeting at the
+    memory)."""
+    from waveflow.simulation.mm_tb import READ, WRITE, script_op
+
+    lens = (1, 2, 4, 8, 16, 38) if kind == "test" else tuple(range(1, 33)) + (38, 64)
+    ops, t, gap = [], 10, 100
+    for n in lens:
+        addr = (n % 8) * 0x200 % (MEM_SPAN - 0x200)
+        ops.append(script_op(WRITE, addr, n, t, np.arange(n, dtype=np.uint64) * 3 + n)); t += gap
+        ops.append(script_op(READ, addr, n, t)); t += gap
+    if kind != "test":
+        for n in (4, 8, 16, 38):
+            ops.append(script_op(READ, 0, n, t))
+            ops.append(script_op(WRITE, 0x800, n, t, np.arange(n, dtype=np.uint64))); t += 2 * gap
+    return ops
+
+
+def markov_golden(cmd: dict) -> np.ndarray:
+    return chain_golden(uniforms(cmd["seed"], cmd["n"]), cmd["x0"], cmd["p01"], cmd["p10"])
+
+
+# ---------------------------------------------------------------------------
+# The kernels' workloads, for their own harnesses (plans/unit_harness.md Stage 4)
+# ---------------------------------------------------------------------------
+
+#: Job lengths for a calibration: whole chunks and every kind of remainder, so the per-chunk timing
+#: sees chunk sizes from 8 to 64 draws.
+CALIB_LENGTHS = (64, 72, 100, 128, 150, 192, 220, 256, 300)
+
+
+def workload_jobs(kind: str) -> list[dict]:
+    """``"test"``: :func:`default_jobs`; ``"calib"``: one job per :data:`CALIB_LENGTHS` length."""
+    if kind == "test":
+        return default_jobs()
+    rng = np.random.default_rng(23)
+    return [dict(tx_id=j, n=int(n), x0=j & 1, seed=int(rng.integers(1, 2**32 - 1)),
+                 p01=int(rng.integers(2000, 20000)), p10=int(rng.integers(2000, 20000)))
+            for j, n in enumerate(CALIB_LENGTHS)]
+
+
+def _cmd(job: dict, region: int) -> "MkvCmd":
+    return MkvCmd(n=job["n"], tx_id=job["tx_id"], x0=job["x0"], seed=job["seed"], p01=job["p01"],
+                  p10=job["p10"], dstaddr=MEM_BASE + region * REGION_BYTES)
+
+
+def gen_stimulus(jobs: list[dict]) -> list[StreamBurst]:
+    """What the generator reads: each job's command, one burst."""
+    return [StreamBurst(np.asarray(_cmd(j, k % 8).serialize(word_bw=DW), dtype=np.uint64), True)
+            for k, j in enumerate(jobs)]
+
+
+def chain_stimulus(jobs: list[dict]) -> list[StreamBurst]:
+    """What the chain reads -- what the generator sends it: each job's command, then its draws a
+    chunk at a time, each one burst."""
+    out = []
+    for k, j in enumerate(jobs):
+        out.append(StreamBurst(np.asarray(_cmd(j, k % 8).serialize(word_bw=DW), dtype=np.uint64),
+                               True))
+        u = uniforms(j["seed"], j["n"])
+        for k0 in range(0, j["n"], CHUNK):
+            out.append(StreamBurst(np.asarray(array(U16, u[k0:k0 + CHUNK]).serialize(word_bw=DW),
+                                              dtype=np.uint64), True))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# The kernels
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MarkovGen(FreeRunMod):
+    """Kernel 1: one firing = one job.  Takes a command, forwards it, then sends ``n`` draws in
+    chunks of :data:`CHUNK`, each written only when the credit says it fits."""
+
+    cpp_kernel_name: ClassVar[str | None] = "markov_gen"
+    cpp_namespace: ClassVar[str | None] = "markov_gen_impl"
+
+    mm_views: ClassVar[tuple] = (
+        QueueIn("qcmd", port="s_cmd", depth=CDEPTH),
+        CreditIn("u_crd", port="m_u"),
+    )
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    #: The credit window its RTL is built with (``markov_gen_task.h``'s QDEPTH, CRD_EVERY): what its
+    #: harness's stand-in presents (``plans/unit_harness.md`` D3).
+    credit_links: ClassVar[dict] = {"m_u": {"depth": QDEPTH, "crd_every": CRD_EVERY}}
+    calib_holdout: ClassVar[dict] = {}
+
+    def workload(self, kind: str = "test") -> dict:
+        """Its harness's stimulus: the jobs' commands (:func:`workload_jobs`)."""
+        return {"s_cmd": gen_stimulus(workload_jobs(kind))}
+
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/markov_gen_task.h``: the twin of :meth:`run_iter`,
+        credit accounting included.  ``m_u`` is two ports (forward, credit) in that order."""
+        from waveflow.hw.mem_stream import KernelTask
+        return KernelTask("markov_gen_task", "markov_gen_task.h", ("s_cmd", "m_u"),
+                          template_args=(DW, QDEPTH, CRD_EVERY))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.s_cmd = StreamIFSlave(name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=DW,
+                                   has_tlast=True)
+        # Framed: over the bus, the writer frames each write as one queue-in packet, and at RTL only a
+        # TLAST pin can say where a write ends.
+        self.m_u = FramedCreditStreamMasterIF(name=f"{self.name}_m_u", sim=self.sim, bitwidth=DW)
+        for ep in (self.s_cmd, self.m_u):
+            self.add_endpoint(ep)
+        # A chunk is made a draw a cycle and written as it is made (four draws to a word): a write
+        # paced by its producer (Pattern 3).  Its lead runs from the previous write on the link (the
+        # command forwarded, or the last chunk): the credit check, the loop's fill.  Fitted in the
+        # generator's own harness (plans/unit_harness.md Stage 4); seeded from its RTL trace.
+        u = self.m_u.fwd_ep
+        self.chunk_phase = TimedPhase(
+            "chunk", spans={"lead": (u.last, u.first), "fill": (u.first, u.last)},
+            features=("c", "first"),
+            seed={"lead": {"intercept": 12.0, "c": 0.0, "first": 0.0},
+                  "fill": {"intercept": -3.0, "c": 1.0, "first": 0.0}},
+            calib_dir=HERE / "calib")
+        # The command forwarded: a job's first write, after the previous job's last chunk (reading
+        # the command between) -- late when the command is, and then no sample.
+        self.fwd_phase = TimedPhase(
+            "fwd", spans={"lead": (u.last, u.first), "fill": (u.first, u.last)},
+            seed={"lead": {"intercept": 16.0}, "fill": {"intercept": 2.0}}, calib_dir=HERE / "calib")
+        for ph in (self.chunk_phase, self.fwd_phase):
+            self.add_timing_phase(ph)
+        self.njobs = 0
+
+    def run_iter(self):
+        cmd = yield from self.s_cmd.get_schema(MkvCmd)
+        if self.m_u.fwd_ep.xfer_log:
+            yield from self.fwd_phase.produce(self.m_u, cmd)
+        else:
+            yield from self.m_u.write(cmd)                # the very first: nothing to time it from
+        n = cmd.n
+        u = uniforms(cmd.seed, n)
+        for k0 in range(0, n, CHUNK):
+            c = min(CHUNK, n - k0)
+            yield from self.chunk_phase.produce(self.m_u, array(U16, u[k0:k0 + c]), c=c,
+                                                first=int(k0 == 0))
+        self.njobs += 1
+
+
+@dataclass
+class ChainCore(FreeRunMod):
+    """The chain itself (a leaf, streams only): one firing = one job.  Reads the forwarded command,
+    then the draws chunk by chunk, and runs the chain.  Its output is the in-band frame stream a
+    :class:`~waveflow.hw.mem_stream.MemWStream` takes: per chunk ``[MemWCmd(addr, len) | x words]``,
+    then ``[MemWCmd(len=0, fwd_bursts=1) | MkvResp]`` -- the writer stores ``x`` and only then forwards
+    the response, so a host holding a response knows its ``x`` is in memory."""
+
+    cpp_kernel_name: ClassVar[str | None] = "markov_chain_core"
+    cpp_namespace: ClassVar[str | None] = "markov_chain_core_impl"
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    #: The credit window its RTL is built with (``markov_chain_core_task.h``'s CRD_EVERY; the queue in
+    #: front of it is QDEPTH): what its harness's stand-in presents.
+    credit_links: ClassVar[dict] = {"s_u": {"depth": QDEPTH, "crd_every": CRD_EVERY}}
+    calib_holdout: ClassVar[dict] = {}
+
+    def workload(self, kind: str = "test") -> dict:
+        """Its harness's stimulus: what the generator would send it (:func:`chain_stimulus`)."""
+        return {"s_u": chain_stimulus(workload_jobs(kind))}
+
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/markov_chain_core_task.h``: the twin of
+        :meth:`run_iter`.  ``s_u`` is two ports (forward in, credit out) in that order."""
+        from waveflow.hw.mem_stream import KernelTask
+        return KernelTask("markov_chain_core_task", "markov_chain_core_task.h", ("s_u", "m_x"),
+                          template_args=(DW, CRD_EVERY), framed=("m_x",))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.s_u = CreditStreamSlaveIF(name=f"{self.name}_s_u", sim=self.sim, bitwidth=DW,
+                                       crd_every=CRD_EVERY)
+        self.m_x = StreamIFMaster(name=f"{self.name}_m_x", sim=self.sim, bitwidth=DW, has_tlast=True)
+        for ep in (self.s_u, self.m_x):
+            self.add_endpoint(ep)
+        # Every write on m_x is paced by the core (Pattern 3), each timed from the write before it:
+        # per chunk its MemWCmd (after the previous chunk's states -- or, a job's first, after the
+        # previous job's response: reading the command between) and its states, a step a cycle, eight
+        # to a word; per job the closing MemWCmd and the response.  Fitted in the core's own harness;
+        # a write the environment delayed (its input late) is no sample.
+        x = self.m_x
+
+        def phase(name, features=(), lead=4.0, fill=0.0, per_c=0.0):
+            feats = {f: 0.0 for f in features}
+            return TimedPhase(
+                name, spans={"lead": (x.last, x.first), "fill": (x.first, x.last)},
+                features=features,
+                seed={"lead": {"intercept": lead, **feats},
+                      "fill": {"intercept": fill, **feats, **({"c": per_c} if per_c else {})}},
+                calib_dir=HERE / "calib")
+
+        self.cmd_phase = phase("cmd", ("first",), lead=8.0, fill=1.0)
+        self.x_phase = phase("x", ("c",), lead=15.0, fill=-8.0, per_c=1.0)
+        self.fin_phase = phase("fin", lead=4.0, fill=1.0)
+        self.resp_phase = phase("resp", lead=1.0, fill=1.0)
+        for ph in (self.cmd_phase, self.x_phase, self.fin_phase, self.resp_phase):
+            self.add_timing_phase(ph)
+        self.njobs = 0
+
+    def run_iter(self):
+        cmd = yield from self.s_u.get_schema(MkvCmd)
+        n, x = cmd.n, cmd.x0 & 1
+        dst, ones = cmd.dstaddr, 0
+        for k0 in range(0, n, CHUNK):
+            c = min(CHUNK, n - k0)
+            # Chunk k0 lands at dstaddr + k0 bytes (one U8 per sample, eight to a word); MemWCmd's
+            # address is a word index (the writer's m_axi base is 0).
+            m = MemWCmd(addr=(dst + k0) // 8, len=get_nwords(U8, word_bw=DW, shape=c), fwd_bursts=0)
+            if self.m_x.xfer_log:
+                yield from self.cmd_phase.produce(self.m_x, m, first=int(k0 == 0))
+            else:
+                yield from self.m_x.write(m)                # the very first: nothing to time it from
+            u = yield from self.s_u.get_array(U16, c)
+            xs = chain_golden(u.val, x, cmd.p01, cmd.p10)
+            x = int(xs[-1])
+            ones += int(xs.sum())
+            xw = array(U8, xs).serialize(word_bw=DW)
+            yield from self.x_phase.produce(self.m_x, np.asarray(xw, dtype=np.uint64), c=c)
+        yield from self.fin_phase.produce(self.m_x, MemWCmd(addr=0, len=0, fwd_bursts=1))
+        yield from self.resp_phase.produce(self.m_x, MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
+        self.njobs += 1
+
+
+@dataclass
+class MarkovChain(FreeRunMod):
+    """Kernel 2: a composite of :class:`ChainCore` and the framework's in-band memory writer
+    (:class:`~waveflow.hw.mem_stream.MemWStream`), joined by a framed stream.  Its boundary: the
+    credit stream in (``s_u``), the writer's ``m_axi`` (``m_mem``) and the forwarded responses
+    (``m_resp``)."""
+
+    cpp_kernel_name: ClassVar[str | None] = "markov_chain"
+    cpp_namespace: ClassVar[str | None] = "markov_chain_impl"
+
+    mm_views: ClassVar[tuple] = (
+        QueueIn("qu", port="s_u", depth=QDEPTH),
+        QueueOut("qresp", port="m_resp", depth=RDEPTH),
+    )
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.core = ChainCore(name=f"{self.name}_core", sim=self.sim, clk=self.clk)
+        # The response is forwarded through the writer: MkvResp is its whole forward buffer.
+        self.writer = MemWStream(name=f"{self.name}_w", sim=self.sim, mem_dwidth=DW, inband=True,
+                                 emit_done=True, done_framed=False,
+                                 max_fwd_words=int(MkvResp.nwords_per_inst(DW)), clk=self.clk)
+        for c in (self.core, self.writer):
+            self.add_comp(c)
+        self._x_if = StreamIF(name=f"{self.name}_x_if", sim=self.sim, clk=self.clk, bitwidth=DW,
+                              framed=True)
+        self._x_if.bind("master", self.core.m_x)
+        self._x_if.bind("slave", self.writer.s_in)
+        self.add_if(self._x_if)
+        self.boundary = ["s_u_fwd", "s_u_crd", "m_mem", "m_resp"]
+        self.s_u = self.core.s_u
+        self.m_mem = self.writer.m_mem
+        self.m_resp = self.writer.s_done
+
+    @property
+    def njobs(self) -> int:
+        return self.core.njobs
+
+
+#: Each kernel type's address layout (offsets within its slave).
+GEN_LAYOUT = MemSlaveLayout.of(MarkovGen, mem_dwidth=DW)
+CHAIN_LAYOUT = MemSlaveLayout.of(MarkovChain, mem_dwidth=DW)
+#: Where the system places them.
+GEN_BASE, CHAIN_BASE = 0x0000, 0x4000
+#: The shared memory: one 4 KB window -- in RTL a BRAM behind the adaptor's front (which echoes AXI IDs,
+#: as a four-master crossbar's responses need).  Each job's x gets a REGION_BYTES region, so a job is at
+#: most REGION_BYTES steps and at most MEM_SPAN // REGION_BYTES jobs fit.
+MEM_BASE, MEM_SPAN = 0x10_0000, 0x1000
+REGION_BYTES = 0x200
+
+
+# ---------------------------------------------------------------------------
+# The host and the system
+# ---------------------------------------------------------------------------
+
+def default_jobs(njobs: int = 4, n: int = 300, seed: int = 11) -> list[dict]:
+    rng = np.random.default_rng(seed)
+    jobs = []
+    for j in range(njobs):
+        p01 = int(rng.integers(2000, 20000))
+        p10 = int(rng.integers(2000, 20000))
+        jobs.append(dict(tx_id=j, n=int(n), x0=j & 1, seed=int(rng.integers(1, 2**32 - 1)),
+                         p01=p01, p10=p10))
+    return jobs
+
+
+#: The host's endpoints that record a trace (memory-mapped wiring), in the order they are dumped:
+#: the command queue, the response queue, and the reads of each job's x from the shared memory.
+HOST_ENDPOINTS = ("qcmd", "qresp", "mem_reader")
+
+
+def _u64(words) -> np.ndarray:
+    """Words as uint64 -- every piece of a scenario burst (numpy turns int64 + uint64 into float64)."""
+    return np.asarray([int(w) for w in np.asarray(words).reshape(-1)], dtype=np.uint64)
+
+
+@dataclass
+class MarkovHost(SwHost):
+    """The host program: a **writer** that sends each job's command once a slot is free, and a
+    **reader** that takes each response, reads that job's ``x`` from memory and frees the slot.
+    At most :data:`MAX_IN_FLIGHT` jobs are outstanding.  Nothing polls: over the bus the command
+    endpoint sleeps on the command queue's room interrupt and the response endpoint on the response
+    queue's data interrupt.  ``x`` is read with ``mem_read`` -- a bus read (memory-mapped) or a
+    direct read of the memory (direct).
+
+    **Two realizations** (``plans/host_runtime.md``): the C++ one is ``MarkovHostModel`` in
+    ``markov_host.h`` beside this file -- the same two threads on the generated endpoints.  Both run **one scenario**, one burst per
+    job (:meth:`scenario_bursts`): ``[x address, x words, <MkvCmd words>]`` -- from :attr:`scenario` when
+    set (the bundle :meth:`write_scenario` wrote), else the same bursts built in memory.  With
+    :attr:`trace_dir` set, the three memory-mapped endpoints' traces (:data:`HOST_ENDPOINTS`) are dumped
+    there after the run; the C++ host dumps the same three."""
+
+    jobs: list = field(default_factory=list)
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Cycles between polls, should an endpoint poll (none does: they wait on interrupts).
+    poll_cycles: int = 8
+    #: Jobs outstanding at most.  A DynParam, so the C++ realization reads the same value.
+    max_in_flight: DynParam[int] = MAX_IN_FLIGHT
+
+    #: The C++ realization (``SwHost.bfm_model``): thread bodies only, on the generated endpoints.
+    cpp_model: ClassVar[str | None] = "MarkovHostModel"
+    cpp_header: ClassVar[str | None] = "markov_host.h"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.add_bus_master("m", bitwidth=DW)
+        self.qcmd: StreamIFMaster | None = None
+        self.qresp: StreamIFSlave | None = None
+        #: The host's ends of the two queues' interrupt lines (memory-mapped wiring binds them).
+        self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in ("qcmd", "qresp")}
+        #: The reads of x from the shared memory, recorded (memory-mapped wiring).
+        self.mem_reader = BusReader(self.m)
+        self.mem: MemoryMod | None = None
+        self.mem_bus_base: int | None = None       # None: read the memory directly
+        self.done = self.env.event()
+        self.results: dict[int, dict] = {}
+        #: Jobs that may still be sent: the writer takes one, the reader gives it back.
+        self.slots = SwSemaphore(self, int(self.max_in_flight), name="slots")
+
+    def _dst(self, j: int) -> int:
+        """Job *j*'s region, memory-local: ``REGION_BYTES`` per job."""
+        return j * REGION_BYTES
+
+    # -- the scenario --------------------------------------------------------------------------------
+
+    def scenario_bursts(self) -> list[np.ndarray]:
+        """One burst per job: where its x lands (the address the host reads it back from), how many
+        words x is, and the command words."""
+        out = []
+        for j, job in enumerate(self.jobs):
+            dst = self._dst(j) + (self.mem_bus_base or 0)
+            cmd = MkvCmd(**job, dstaddr=dst).serialize(word_bw=DW)
+            out.append(np.concatenate([_u64([dst, get_nwords(U8, word_bw=DW, shape=job["n"])]),
+                                       _u64(cmd)]))
+        return out
+
+    def pre_sim(self) -> None:
+        super().pre_sim()
+        if self.scenario:
+            from waveflow.utils.burst_io import read_burst_bundle
+            bursts = read_burst_bundle(self.scenario)
+        else:
+            bursts = self.scenario_bursts()
+        #: The decoded scenario, per job: (x address, x words, command words).
+        self.items = [(int(b[0]), int(b[1]), np.asarray(b[2:], dtype=np.uint64)) for b in bursts]
+
+    # -- the host program -----------------------------------------------------------------------------
+
+    def _writer(self):
+        for _xaddr, _xwords, cmd in self.items:
+            yield from self.slots.acquire()
+            yield from self.qcmd.write(cmd)
+
+    def _reader(self):
+        for _ in self.items:
+            resp = yield from self.qresp.get_schema(MkvResp)
+            j = resp.tx_id
+            n = resp.n
+            if self.mem_bus_base is None:
+                x = self.mem.read_array(self._dst(j), U8, n).val
+            else:
+                xaddr, xwords, _cmd = self.items[j]
+                words = yield from self.mem_reader.read(xwords, xaddr)
+                x = read_array(words, U8, word_bw=DW, shape=n).val
+            self.results[j] = dict(n=n, ones=resp.ones, x=x, t=self.env.now)
+            self.slots.release()
+        self.done.succeed()
+
+    def main(self):
+        """Two threads: the writer, started here, and the reader, which is this thread and ends the
+        run."""
+        self.start(self._writer)
+        yield from self._reader()
+
+
+@dataclass
+class MarkovSystem(HwSystem):
+    """Everything wired.  ``link="mm"``: host, generator writer, chain credit writer and chain memory
+    master on one crossbar, with the two kernels' views and the memory as slaves.  ``link="direct"``:
+    a ``CreditStreamIF`` between the kernels and plain streams to the host."""
+
+    jobs: list
+    link: str = "mm"
+    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    xbar_latency: float = 4
+    xbar_travel: float = 2
+
+    def __post_init__(self) -> None:
+        if self.link not in ("mm", "direct"):
+            raise ValueError(f"link must be 'mm' or 'direct', got {self.link!r}")
+        sim = self.sim = Simulation()
+        self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk)
+        self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
+        self.mem = markov_memory(sim, self.clk)
+        self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
+        self.host.mem = self.mem
+        if len(self.jobs) > MEM_SPAN // REGION_BYTES or any(j["n"] > REGION_BYTES for j in self.jobs):
+            raise ValueError(f"at most {MEM_SPAN // REGION_BYTES} jobs of at most {REGION_BYTES} steps")
+        for j in range(len(self.jobs)):          # each job's x region, at the host's offsets
+            a = self.mem.alloc(REGION_BYTES // 8)
+            assert a == self.host._dst(j), (a, self.host._dst(j))
+        if self.link == "direct":
+            self._wire_direct()
+        else:
+            self._wire_mm()
+
+    def _stream(self, name, master, slave, depth):
+        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=DW, depth=depth)
+        si.bind(ep_name="master", endpoint=master)
+        si.bind(ep_name="slave", endpoint=slave)
+
+    def _wire_direct(self) -> None:
+        sim, host = self.sim, self.host
+        host.qcmd = StreamIFMaster(name="host_qcmd", sim=sim, bitwidth=DW, has_tlast=True)
+        host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
+        self._stream("k_cmd", host.qcmd, self.gen.s_cmd, CDEPTH)
+        self._stream("k_resp", self.chain.m_resp, host.qresp, RDEPTH)
+        self.u_link = CreditStreamIF(name="u", sim=sim, clk=self.clk, bitwidth=DW, depth=QDEPTH)
+        self.u_link.bind("master", self.gen.m_u)
+        self.u_link.bind("slave", self.chain.s_u)
+        # The chain's memory master straight to the memory.
+        from waveflow.hw.memif import DirectMMIF
+        self.mem_link = DirectMMIF(name="k_mem", sim=sim, clk=self.clk)
+        self.mem_link.bind("master", self.chain.m_mem)
+        self.mem_link.bind("slave", self.mem.s_mm)
+        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen, self.chain, self.mem],
+                                 ifs=[self.u_link, self.mem_link])
+
+    def _wire_mm(self) -> None:
+        sim, clk, host = self.sim, self.clk, self.host
+        self.gen_dev = build_mm_device(self.gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
+        self.chain_dev = build_mm_device(self.chain, sim=sim, clk=clk, mem_dwidth=DW,
+                                         prefix="chain_")
+        self.u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
+        self.u_link.bind("master", self.gen.m_u)
+        self.u_link.bind("slave", self.chain.s_u)
+        masters = [host.m, *self.u_link.bus_masters(), self.chain.m_mem]
+        gs, gr = self.gen_dev.ranges(GEN_BASE)
+        cs, cr = self.chain_dev.ranges(CHAIN_BASE)
+        slaves = gs + cs + [self.mem.s_mm]
+        ranges = gr + cr + [(MEM_BASE, MEM_SPAN)]
+        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
+                                    nports_slave=len(slaves), bitwidth=DW,
+                                    latency_init=self.xbar_latency,
+                                    latency_travel=self.xbar_travel)
+        for k, m in enumerate(masters):
+            self.xbar.bind(f"master_{k}", m)
+        for k, s in enumerate(slaves):
+            self.xbar.bind(f"slave_{k}", s)
+        assign_address_ranges(slaves, ranges)
+        gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
+        self.u_link.place(qin=cmap["qu"], crd_in=gmap["u_crd"])
+        # The host: the command queue (room IRQ) and the response queue (data IRQ).
+        for dev, name in ((self.gen_dev, "qcmd"), (self.chain_dev, "qresp")):
+            v = dev.views[name]
+            line = IrqIF(name=f"{v.name}_irq", sim=sim)
+            line.bind("source", v.m_irq)
+            line.bind("sink", host.irq[name])
+        poll = host.poll_cycles
+        host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
+            "qcmd", irq=host.irq["qcmd"])
+        host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
+            "qresp", irq=host.irq["qresp"])
+        host.mem_bus_base = MEM_BASE
+        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen_dev, self.chain_dev, self.mem],
+                                 ifs=[self.xbar, self.u_link])
+
+    def dut(self) -> DutTop:
+        """The default DUT: the two kernels' devices and the shared memory, with the crossbar and
+        the routed credit stream between them."""
+        return self.dut_top
+
+    def run(self) -> dict[int, dict]:
+        self.sim.run_sim(until=self.host.done)
+        return self.host.results
+
+
+def timing_probes(sysm: MarkovSystem) -> dict:
+    """Timing probes (plans: markov-timing): one-bit handshakes the system top exposes as outputs when
+    built with probes (``markov_build.build_dag(probes=True)``, or ``--probes``), and the testbench
+    samples every cycle.  Off for the gate.  Each names the pysim object it watches -- a kernel's port,
+    or a bus master and an AXI channel -- and the system top resolves the net."""
+    from waveflow.build.system_top import beat, last
+
+    gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
+    return {
+        "cmd": beat(gen.s_cmd),                          # host's command reaches the generator
+        "ufwd": beat(gen.m_u.fwd_ep),                    # generator -> its queue writer, a word
+        "ufwd_last": last(gen.m_u.fwd_ep),               # ... the last word of a chunk
+        "wr1_aw": beat(link.fwd_writer.m_mem, "AW"),     # queue writer: a burst issued
+        "wr1_b": beat(link.fwd_writer.m_mem, "B"),       # ... and acknowledged
+        "u": beat(chain.s_u.fwd_ep),                     # chain takes a word from its queue in
+        "crd": beat(chain.s_u.crd_ep),                   # chain offers credit
+        "wr2_aw": beat(link.crd_writer.m_mem, "AW"),     # credit writer: a credit write
+        "ucrd": beat(gen.m_u.crd_ep),                    # generator takes a credit value
+        "wr3_aw": beat(chain.m_mem, "AW"),               # chain's memory writer: a burst
+        "wr3_b": beat(chain.m_mem, "B"),
+        "resp": beat(chain.m_resp),                      # a response word into qresp
+    }
+
+
+def demo(link: str = "mm", njobs: int = 4, n: int = 300) -> dict:
+    jobs = default_jobs(njobs, n)
+    sysm = MarkovSystem(jobs=jobs, link=link)
+    res = sysm.run()
+    ok = all(np.array_equal(res[j["tx_id"]]["x"], markov_golden(j)) for j in jobs)
+    return {"system": sysm, "jobs": jobs, "results": res, "bit_exact": ok,
+            "cycles": sysm.sim.env.now / sysm.clk.period}
+
+
+if __name__ == "__main__":
+    for link in ("direct", "mm"):
+        r = demo(link)
+        print(f"{link:6s} bit-exact={r['bit_exact']}  cycles={r['cycles']:.0f}")

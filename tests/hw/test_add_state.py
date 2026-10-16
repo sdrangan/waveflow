@@ -281,7 +281,7 @@ def test_gate_hook_signature_is_identical_to_the_regmap_version():
     Anchoring on an existing Vitis-verified design is the point: if ``add_state`` had perturbed
     the array lowering, the widths, or the argument order, this is where it would show.
     """
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
 
     from tests.hw.state_poly_fixture import PolyStateAccel
 
@@ -292,7 +292,7 @@ def test_gate_hook_signature_is_identical_to_the_regmap_version():
 
 def test_gate_body_differs_only_by_the_declaration():
     """The regmap 'already in scope' comment becomes a static; everything else is unchanged."""
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
 
     from tests.hw.state_poly_fixture import PolyStateAccel
 

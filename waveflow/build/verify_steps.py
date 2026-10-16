@@ -76,6 +76,11 @@ class FunctionalVerifyStep(BuildStep):
     output_artifact: str = "verify_output_dir"
 
     report_path: str = "verify_report.json"
+    # The artifact the report is published under.  A DAG that verifies
+    # more than once -- after C simulation and again after co-simulation,
+    # say -- needs a distinct name per step, since BuildDag refuses two
+    # producers of one artifact.
+    report_artifact: str = "verify_report"
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -87,7 +92,7 @@ class FunctionalVerifyStep(BuildStep):
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
-        d: dict[str, Path] = {"verify_report": Path(self.report_path)}
+        d: dict[str, Path] = {self.report_artifact: Path(self.report_path)}
         if self.output_dir is not None:
             d[self.output_artifact] = Path(self.output_dir)
         return d
@@ -246,7 +251,7 @@ class FunctionalVerifyStep(BuildStep):
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-        result_artifacts: dict[str, Any] = {"verify_report": report_path}
+        result_artifacts: dict[str, Any] = {self.report_artifact: report_path}
 
         if self.output_dir is not None:
             out_dir = root_dir / self.output_dir

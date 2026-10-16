@@ -128,7 +128,7 @@ class ExecutionService:
 
 def make_execution_registry(service):
     """Expose only transport operations, reusing the existing strict MCP registry."""
-    from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata, func_metadata
+    from mcp.server.mcpserver.utilities.func_metadata import FuncMetadata, func_metadata
     from pydantic import ConfigDict, ValidationError, validate_call
 
     from examples.dse_fir.dse_tools import DseRegistry
@@ -137,7 +137,7 @@ def make_execution_registry(service):
         operation: str
 
         def pre_parse_json(self, data):
-            # FastMCP otherwise JSON-decodes strings before even strict validation.
+            # MCPServer otherwise JSON-decodes strings before even strict validation.
             # Validate the actual wire values and retain rejected attempts too.
             try:
                 self.arg_model.model_validate(data)

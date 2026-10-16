@@ -161,3 +161,19 @@ def test_twiddle_width_reaches_the_radix_exp_table():
     assert (f18.W, f12.W) == (18, 12)
     assert re18[0] == 1 << 16 and re12[0] == 1 << 10, "W_4^0 must be 1.0 in each format"
     assert im12[1] == -(1 << 10), "W_4^1 must be -j in the caller's format"
+
+
+@pytest.mark.parametrize("length", [16, 64, 256, 1024])
+def test_inverse_is_bit_exact(length):
+    """``REVERSE_TRANSFORM``: conjugated twiddles and radix-4 kernel, then the library's ``1/L``
+    (truncation toward zero, binary point moved by ``log2 L``) -- against the vendor's own
+    templates (``cpp/dump_ifft.cpp``)."""
+    g = json.loads((GOLDEN_DIR / f"ifft_L{length}_R4_noscale_natural.json").read_text())
+    iw, ow = g["in_W"], g["out_W"]
+    for vec in g["vectors"]:
+        xr = _sgn([e["re"] for e in vec["input"]], iw)
+        xi = _sgn([e["im"] for e in vec["input"]], iw)
+        r, i, fo = fft_general(xr, xi, length, iw, g["in_I"], g["tw_W"], g["tw_I"], inverse=True)
+        assert (fo.W, fo.int_bits) == (ow, g["out_I"])
+        assert np.array_equal(r, _sgn([e["re"] for e in vec["output"]], ow))
+        assert np.array_equal(i, _sgn([e["im"] for e in vec["output"]], ow))

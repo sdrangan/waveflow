@@ -1,0 +1,5 @@
+component,index,L,L_log2L,blocked,span
+vitis_fft_task_16_2_18_2_0_0.ii,2,4096.0,49152.0,0,10240
+vitis_fft_task_16_2_18_2_0_0.ii,3,4096.0,49152.0,0,10240
+vitis_fft_task_16_2_18_2_0_0.ii,4,4096.0,49152.0,0,10240
+vitis_fft_task_16_2_18_2_0_0.ii,5,4096.0,49152.0,0,10240

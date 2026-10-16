@@ -3,6 +3,7 @@ title: Python simulation
 parent: A memory reached three ways
 nav_order: 2
 has_children: false
+summary: "Running the design in SimPy, long before Vitis is invoked, and recording the timing the trace page later compares against RTL. The testbench is the DUT plus six stream BFMs — and the memory is deliberately not among them, because it lives inside the DUT's wrapper. That absence is what keeps the RTL harness small: the elaborated design's only pins are AXI-Stream."
 ---
 
 # Python simulation
@@ -50,7 +51,7 @@ than of words — `WriteComputeCmd` and `ReadCmd` objects, whose fields the scen
 from examples.bram_access.bram_access import BramOp, scenario_zero
 
 sc = scenario_zero()
-print("writes:", [(int(c.tid), BramOp(int(c.opcode)).name, int(c.nsamp), int(c.waddr))
+print("writes:", [(int(c.tid), c.opcode.name, int(c.nsamp), int(c.waddr))
                   for c in sc.cmd_w])
 print("reads :", [(int(c.tid), int(c.nsamp), int(c.raddr)) for c in sc.cmd_r])
 print("payload words:", len(sc.data_w))
@@ -170,7 +171,7 @@ from examples.bram_access.bram_access import (
 def responses(words, schema):
     per = schema.nwords_per_inst(WORD_BW)
     raw = np.asarray(words, dtype=np.uint64).ravel()
-    return [(int(o.tid), BramStatus(int(o.status)).name)
+    return [(int(o.tid), o.status.name)
             for o in (schema().deserialize(raw[i:i + per], word_bw=WORD_BW)
                       for i in range(0, raw.size, per))]
 

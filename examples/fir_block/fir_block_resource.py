@@ -1,6 +1,6 @@
 """fir_block_resource.py — the resource models for the block FIR.
 
-Phases D1 and D2 of ``plans/resource_model.md``, and the split between them is the point: **encode the
+Phases D1 and D2 of the resource_model plan (commit b715f1d), and the split between them is the point: **encode the
 known physics, learn only what is left over.**
 
 * **D1 — DSP and BRAM: a prior, nothing fitted.** These are *binding decisions* HLS makes and reports,

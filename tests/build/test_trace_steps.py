@@ -153,7 +153,7 @@ class TestRtlSimStepWiring:
         dependency closure, so ``--through extract_bursts`` never runs it and the RTL is measured
         against the last-generated harness -- its arena size and its ``h.run(N)`` bound both.  A
         sweep then runs every point under one point's cycle bound, and the truncated runs read as
-        a design stall.  See plans/sweep_runner.md."""
+        a design stall.  See the sweep_runner plan (commit 3d74877)."""
         assert set(step.consumes) == {"report_dir", "vcd_dumper", "tb_main"}
 
     def test_asserts_nothing_about_cycle_counts(self, step):

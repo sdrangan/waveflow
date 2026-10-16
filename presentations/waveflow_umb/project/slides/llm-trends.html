@@ -1,0 +1,39 @@
+<section id="llm-trends" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#B4570F;font-weight:600">Waveflow · Context</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Agents and hardware design: where things stand</h2>
+<div style="display:flex;gap:40px;flex:1">
+<div style="flex:1;background:#EEE6F3;border-radius:16px;padding:40px;display:flex;flex-direction:column;gap:24px">
+<h3 style="font-size:34px;font-weight:600;color:#57068C">Recent advances</h3>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Individual modules</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Agents write single kernels and testbenches well from a specification.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Complex toolchains</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">With the right harness, they run synthesis and simulation and read the reports.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Bit-exact models</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">They can match hardware to a bit-exact Python model.</p>
+</div>
+</div>
+<div style="flex:1;background:#FCFBFE;border:2px solid #B4570F;border-radius:16px;padding:40px;display:flex;flex-direction:column;gap:24px">
+<h3 style="font-size:34px;font-weight:600;color:#8A430B">Open problems, changing fast</h3>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Exploring complex systems</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Efficient design-space exploration when every design point is a whole system.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Many agents at once</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Encapsulation, so agents can work on separate blocks without breaking each other.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:28px;font-weight:600">Verification that scales</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F">Confidence that the tests check the design you meant, at system level.</p>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">From our experience building Waveflow, 2026</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Keep this open-ended and ask the room what they have seen. The right column is changing quickly, so present it as where things stand today. One concrete example per open problem, if asked: free-running HLS pipelines that deadlock unless paced per job; tests that passed against stale RTL, green while testing the wrong design; and the cost of re-verifying a whole system after a small change.</aside>
+</section>

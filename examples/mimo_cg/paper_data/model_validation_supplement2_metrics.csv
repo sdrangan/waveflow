@@ -1,0 +1,11 @@
+# mimo_cg model_validation_supplement2: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, role=supplement2, model_sha256=d95510d337e992d3, part=xczu48dr-ffvg1517-2-e
+metric,n,value,worst,threshold,pass
+blocks: DSP and BRAM both exact (%),6,1.000000e+02,,,
+blocks: DSP exact (%),6,1.000000e+02,,,
+blocks: BRAM exact (%),6,1.000000e+02,,,
+CgMm: LUT MAPE (%),6,1.713000e+00,4.545000e+00,,
+CgMm: FF MAPE (%),6,3.752000e+00,6.399000e+00,,
+unit builds: mm.iter span MAPE (%),6,8.350000e-01,2.154000e+00,,
+"channel memories: BRAM, LUT and FF exact (%)",18,1.000000e+02,,,
+channel memories with BRAM > 0 (count),18,16,,,
+disjoint from fit: blocks DSP and BRAM both exact (%),6,1.000000e+02,,,

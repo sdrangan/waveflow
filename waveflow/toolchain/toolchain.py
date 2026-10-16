@@ -197,6 +197,19 @@ def _vivado_siblings(vitis_exe: Path, binary_name: str) -> List[Path]:
     return [p for p in candidates if _is_tool_binary(p, binary_name)]
 
 
+def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Optional[Path]:
+    """Vitis's C++ include directory -- ``ap_int.h``, ``hls_stream.h`` -- or ``None``.
+
+    The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
+    ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
+    is ``<install>/bin/vitis-run[.bat]``."""
+    exe = find_vitis_path(top_dir)
+    if not exe:
+        return None
+    inc = Path(exe).resolve().parent.parent / "include"
+    return inc if (inc / "ap_int.h").is_file() else None
+
+
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:
     """
     Locate the Vivado executable used for RTL simulation, synthesis, and implementation.
@@ -411,6 +424,15 @@ def _build_vitis_hls_cmd(
     tcl_script: Union[str, Path],
     args: Optional[Sequence[str]] = None,
 ) -> tuple[List[str], Path]:
+    if args:
+        # vitis-run (2025.1) has no --tclargs: it would fail inside Vitis with an
+        # unrelated-looking option error.  Say so here, with the way that works.
+        raise ValueError(
+            "vitis-run has no --tclargs, so a Tcl script cannot receive arguments. "
+            "Pass values through the environment instead -- run_vitis_hls(..., "
+            "env={'MY_STAGE': 'csim'}) and read $::env(MY_STAGE) in the script "
+            "(see examples/stream_inband/run.tcl)."
+        )
     vitis_path = find_vitis_path()
     if not vitis_path:
         raise RuntimeError(
@@ -420,9 +442,6 @@ def _build_vitis_hls_cmd(
 
     tcl_path = Path(tcl_script)
     cmd_list = [str(vitis_path), "--mode", "hls", "--tcl", str(tcl_path)]
-    if args:
-        cmd_list.append("--tclargs")
-        cmd_list.extend(str(arg) for arg in args)
 
     return cmd_list, tcl_path.parent
 
@@ -440,9 +459,9 @@ def run_vitis_hls(
     The function first resolves the Vitis executable via :func:`find_vitis_path`.
     It then builds and executes a command of the form:
 
-    - Windows: ``vitis-run.bat --mode hls <tcl_script> [--tclargs ...]``
+    - Windows: ``vitis-run.bat --mode hls --tcl <tcl_script>``
       executed via ``cmd.exe /c call ...``
-    - Linux: ``vitis-run --mode hls <tcl_script> [--tclargs ...]``
+    - Linux: ``vitis-run --mode hls --tcl <tcl_script>``
 
     Parameters
     ----------
@@ -454,9 +473,8 @@ def run_vitis_hls(
         Working directory for the subprocess. If ``None``, defaults to
         ``Path(tcl_script).parent``.
     args : Optional[List[str]], optional
-        Optional values passed to the TCL script through ``--tclargs``.
-        If provided, they are appended after ``--tclargs`` in the exact order
-        given.
+        Not supported: ``vitis-run`` has no ``--tclargs``, so any value raises
+        :class:`ValueError`.  Pass values to the script through ``env``.
     capture_output : bool, optional
         If ``True`` (default), captures stdout/stderr and stores them in the
         returned :class:`subprocess.CompletedProcess`. If ``False``, output is
@@ -475,9 +493,16 @@ def run_vitis_hls(
     ------
     RuntimeError
         If no Vitis executable could be discovered.
+    ValueError
+        If ``args`` is given (see above).
     subprocess.CalledProcessError
         If Vitis returns a non-zero exit status (``check=True`` behavior).
     """
+    # Before anything runs: a src/ body shadowed by a different include/ copy means the include
+    # order decides which one is compiled (waveflow.build.rtl_digest.shadowed_sources).
+    from waveflow.build.rtl_digest import check_not_shadowed
+    check_not_shadowed(work_dir if work_dir is not None else Path(tcl_script).parent)
+
     cmd_list, default_work_dir = _build_vitis_hls_cmd(tcl_script=tcl_script, args=args)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
 
@@ -486,15 +511,20 @@ def run_vitis_hls(
         final_env = os.environ.copy()
         final_env.update(env)
 
-    return subprocess.run(
-        final_cmd,
-        cwd=work_dir or default_work_dir,
-        shell=use_shell,
-        check=True,
-        text=True,
-        capture_output=capture_output,
-        env=final_env,
-    )
+    # One timing span per Vitis run (waveflow.events); a csim, csynth or cosim is told apart by
+    # the build step it runs inside.
+    from waveflow import events
+
+    with events.span("tool", "vitis-run", script=Path(tcl_script).name):
+        return subprocess.run(
+            final_cmd,
+            cwd=work_dir or default_work_dir,
+            shell=use_shell,
+            check=True,
+            text=True,
+            capture_output=capture_output,
+            env=final_env,
+        )
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:
@@ -640,9 +670,8 @@ def run_vitis_hls_result(
         Working directory for the subprocess. If ``None``, defaults to
         ``Path(tcl_script).parent``.
     args : Optional[List[str]], optional
-        Optional values passed to the TCL script through ``--tclargs``.
-        If provided, they are appended after ``--tclargs`` in the exact order
-        given.
+        Not supported: ``vitis-run`` has no ``--tclargs``, so any value raises
+        :class:`ValueError`.  Pass values to the script through ``env``.
     capture_output : bool, optional
         If ``True`` (default), captures stdout/stderr in the returned result
         dictionary. If ``False``, output is inherited by the current process

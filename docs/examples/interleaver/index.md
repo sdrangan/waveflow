@@ -3,6 +3,7 @@ title: Composite kernel interleaver
 parent: Examples
 nav_order: 6
 has_children: true
+example_dir: examples/interleaver
 summary: "A gather accelerator — Y[i] = X[P[i]], reordering one vector under an index vector. It builds on the data mover by adding the two things copying never needs: a real compute stage, and on-chip random access, holding X in block RAM so the index-driven reads are single-cycle. Same free-running composite flow, and this is where fitting a custom component's own timing model is taken up rather than inherited."
 ---
 # Interleaver — a gather accelerator with a custom compute stage
@@ -37,7 +38,7 @@ In going through this example, you will learn to:
   straight from the loosely-timed simulation
 - Reuse the platform's shipped **infra timing** — the mem-stream adaptors *and* the `m_axi` bus law —
   then **fit the custom compute stage's own loop model** from a size sweep (the
-  [direct method](../../guide/timing_model/fit.md)) and store it in the platform library so a build loads it
+  [direct fit](../../guide/calib/example.md)) and store it in the platform library so a build loads it
   with no re-fit
 
 ## In this example
@@ -52,7 +53,7 @@ The pages build the design up from Python, parallel to [`mem_copy`](../memcpy/):
   the `Y = X[P]` golden check.
 - [DUT codegen](./codegen_dut.md) — how the graph becomes the `ap_ctrl_none` `hls::task` top, and why every
   task body is hand-written.
-- [Testbench codegen](./codegen_tb.md) — the generated C++ BFM harness that drives the RTL through XSI.
+- [The system](./system.md) — the testbench graph cut at the kernel, and the top, harness and scenario the system flow derives from it.
 - [RTL simulation](./rtlsim.md) — running the harness in `xsim`: no deadlock, and bit-exact through real
   RTL.
 - [The timing model](./timing_model.md) — declaring `il_compute`'s own loop model: where it plugs into the

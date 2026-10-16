@@ -96,7 +96,7 @@ All three declare a pre-written artifact; none extracts one. The target is **`rt
 elaboratable boundary, which is the first boundary a resource estimate can be defined against. csynth
 of the kernel alone reports **no BRAM at all** — the memory is invisible to it. That is not a side
 effect of this plan; it is half the reason to want it, and it lands on
-`plans/resource_model.md`'s territory.
+the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d))'s territory.
 
 ## Stages
 
@@ -356,7 +356,7 @@ Two cross-cutting tables the section lacks, both earned by this arc:
   **un-arbitrated** `FlatMemory`), BRAM (both faithful — deterministic latency). Note this is not
   one-sided: **pysim is the better memory-system model, XSI the better fabric model.**
 - **what `csynth` counts** — categories 1, 2, 5, 6 yes; 3 and 4 **no**. That is the resource story,
-  and it is the table `plans/resource_model.md` needs.
+  and it is the table the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)) needs.
 
 `Region` gets a mention as a cross-cutting *access view* (element coordinates over word storage), not a
 seventh category.
@@ -374,7 +374,7 @@ three times in this arc.
 
 ## Not in scope
 
-- **Generating Verilog from Python.** The anti-goal, same as `xsi_tb_codegen.md` Stage 0 and
+- **Generating Verilog from Python.** The anti-goal, same as the xsi_tb_codegen plan, Stage 0 ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)) and
   `behavioral_edges.md`: the artifact is *declared*, never extracted. A generator would be re-deriving
   verified code.
 - **Endpoints other than `BramIFSlave`.** The hook is general; the mapping table starts with one row.
@@ -419,7 +419,7 @@ the declared number should eventually be **gated against a real synthesis** rath
 forever.
 
 That is the same two-tier shape the calibration work already uses — a cheap derived value, an
-authoritative measured one, and a regression guard between them. `plans/resource_model.md` should
+authoritative measured one, and a regression guard between them. the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)) should
 inherit the pattern rather than invent a second one.
 
 The general rule the taxonomy implies: **structural blocks (memories, FIFOs) can declare their

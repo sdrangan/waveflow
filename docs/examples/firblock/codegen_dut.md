@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Block FIR with state
 nav_order: 7
+summary: "Lowering the four-component graph to a free-running hls::task top. The mechanism is the one mem_copy and interleaver already cover; what is specific here is what feeds the hand-written bodies — the storage and the types — and how one parameter picks between two of them."
 ---
 # DUT codegen — the graph becomes an `hls::task` top
 
@@ -35,9 +36,10 @@ void fir_block(
     hls::stream<ap_uint<32> >& s_done
 ) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in offset=slave bundle=gmem0 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in offset=off bundle=gmem0 depth=8192
 #pragma HLS stable variable=m_in
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<32> > cmd_rd;
@@ -185,9 +187,9 @@ hooks live in their own `.cpp` would need each added here.)
 python -m examples.fir_block.fir_block_build --through csynth
 ```
 
-That step also re-emits `xsi/rtl_fir_block.f` from the RTL that was just built, so the file list can
-never name a stale design — the failure mode being a `.f` that no longer matches plus a cached
-`xsimk.dll`, which makes an XSI run go green while proving nothing.
+That step also stamps the sources the RTL was built from. The RTL run (the system flow's) checks
+the stamp against the sources on disk and refuses RTL built from anything else, so it can never grade
+a stale design.
 
 ## Where to next
 

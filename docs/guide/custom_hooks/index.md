@@ -17,6 +17,12 @@ hand-tuned HLS pragmas and exact `ap_fixed` intermediates. For those you write t
 yourself — a **custom hook** — and Waveflow drops it into the generated kernel in place of extracted
 code.
 
+**For a host-launched kernel, start with a [body-only kernel](./body_only.md).**  The
+module names one method as the whole kernel body (`cpp_body`); Waveflow generates only the
+boundary -- prototype, interface pragmas, register map -- and you write the body, a pure
+Python model, and an ordinary C++ testbench.  The patterns below are for when the
+kernel's control flow is extracted from Python and only a datapath is hand-written.
+
 ## Auto-generated vs. hand-written
 
 This is the **hand-written** side of hardware generation; the **auto-generated** side is
@@ -71,7 +77,6 @@ with no data movement), then jump to the pattern that matches your operand.
 - [Block — load, compute, store](./block.md) — auto-generated `read_array`/`write_array` I/O, a pure-compute hook. The array generalization of the regmap kernel.
 - [Stream — process as you read](./stream.md) — the lane loop over an AXI-Stream port (`read_axi4_stream_lane` / `write_axi4_stream_lane`, `pf` lanes, `TLAST`).
 - [Complex — data-dependent addressing](./complex.md) — driving the `m_axi` port from the datapath (`read_array_lane` with a running pointer), and the two VMAC csynth gotchas.
-- [Memory command queue](./queue.md) — the advanced case: a hook that is the synthesizable half of a transport interface (the `queue_get` ring dequeue).
 - [Kernel transfer reference](./reference.md) — the in-kernel transfer-call cheat sheet (`read_array_lane` / `read_array_slice` / stream variants) and the Python↔C++ mapping table.
 - [Writing a BFM model](./bfm_model.md) — the `bfm_model()` hook: the C++ testbench model that drives a
   boundary port from outside the DUT.

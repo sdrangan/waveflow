@@ -110,9 +110,23 @@ wire either way — "who is willing to wait" is a property of the producer, not 
 stays zero for every design whose producers call `write()`. It has a resolution limit worth knowing
 before you rely on it: see [the fidelity boundary](../../rf/rfdc/fidelity.md#the-resolution-limit).
 
-### Pipelined processing
+### Events and timed phases
 
-Use `get_pipelined` / `write_pipelined` when the component processes data as it streams through (rather than buffering the full burst first). These methods carry pipeline timing explicitly so the simulation reflects the latency and throughput of synthesized hardware.
+Every transfer on a stream endpoint has two events, its **first** and its **last** beat, and the
+endpoint names them: `ep.first`, `ep.last`.  A module states its compute time as
+[timed phases](../../timing_model/timed_phases.md) between those events, and a pipelined body -- one
+that processes data as it streams through -- hands its phase the read and the write **deferred**,
+in the same vocabulary a sequential body uses: `load=s_in.get_array(T, n)` (or `get_schema(T)`,
+`get(nwords_max=N)`) is the read not yet run, `store=m_out.write_array(T, n)` (or `write_schema(T)`,
+`write()`) the write given no data -- and lets `phase.pipeline` run each transfer's two halves ([Pipelined
+bodies](../../timing_model/streaming.md)).  That is how a stream-to-stream pipeline is timed.
+
+### Pipelined processing (before timed phases)
+
+`get_pipelined` / `write_pipelined` carry pipeline timing by hand: a read returns its first word's
+time, and a write is anchored to a time the body computes.  They predate timed phases, and remain for
+the code that still uses them (memory-mapped and BRAM pipelines use the same idea, `read_pipelined` /
+`write_pipelined`); a new stream-to-stream body declares a phase instead.
 
 **`StreamIFSlave.get_pipelined(element_type, count=N)`** returns `(data, tstart)`. Both
 arguments are required — a pipelined transfer is always an array transfer, so there is no
@@ -154,12 +168,15 @@ def evaluate(self, cmd_hdr, s_in, m_out):
     yield from m_out.write_pipelined(
         array(Float32, y), t_out_start, ii=self.proc_ii
     )
-    if len(samp_in) != cmd_hdr.nsamp:
-        return PolyError.WRONG_NSAMP
-    return PolyError.NO_ERROR
 ```
 
 Set `proc_ii` and `proc_latency` on the component to match values reported by HLS synthesis for the `evaluate` loop.
+
+`get_pipelined` always returns `count` elements: if the burst ended early, the missing ones come
+back as zeros.  A body that must **detect** a short burst -- to report an early TLAST -- reads the
+raw words with `get(nwords_max=...)`, counts them, and unpacks with `read_array`, as
+`PolyAccel.body` in [`examples/stream_inband/poly.py`](https://github.com/sdrangan/waveflow/blob/main/examples/stream_inband/poly.py)
+does.
 
 ### Example: point-to-point stream
 

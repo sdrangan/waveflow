@@ -71,7 +71,8 @@ class CopyCmd(DataList):
     """One :class:`MemCopy` app command (host -> ``s_cmd``): copy ``n_words`` packed words from the
     source word offset ``src_off`` to the destination word offset ``dst_off``.  All three are
     **element/word coordinates** relative to their buffer bases (the addressing convention —
-    ``plans/component.md``; the physical bases live in the two ``offset=slave`` registers)."""
+    ``plans/component.md``).  The top's pointers are ``offset=off``, so the bases are 0 and an
+    offset is the bus word address."""
     elements = {
         "src_off": {"schema": Word32, "description": "source element/word offset"},
         "dst_off": {"schema": Word32, "description": "destination element/word offset"},
@@ -181,9 +182,9 @@ class Sequencer(FreeRunMod):
         it holds no cross-firing state (the ``tx_id`` comes from the command)."""
         w = int(self.mem_dwidth)
         cmd: CopyCmd = yield from self.s_cmd.get_schema(CopyCmd)
-        memr = MemRCmd(addr=int(cmd.src_off), len=int(cmd.n_words), fwd_bursts=2)
-        memw = MemWCmd(addr=int(cmd.dst_off), len=int(cmd.n_words), fwd_bursts=1)
-        resp = CopyResp(tx_id=int(cmd.tx_id))
+        memr = MemRCmd(addr=cmd.src_off, len=cmd.n_words, fwd_bursts=2)
+        memw = MemWCmd(addr=cmd.dst_off, len=cmd.n_words, fwd_bursts=1)
+        resp = CopyResp(tx_id=cmd.tx_id)
         yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(memw.serialize(word_bw=w), dtype=np.uint64))
         yield from self.cmd_out.write(np.asarray(resp.serialize(word_bw=w), dtype=np.uint64))
@@ -408,7 +409,8 @@ def render_xsi_vectors(width: int = DEFAULT_MEM_DW, jobs=None) -> str:
     )
 
 
-def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW, jobs=None) -> None:
+def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW, jobs=None,
+                               n_cycles: int | None = None) -> None:
     """Write mem_copy's XSI input + golden **bundles** into ``<xsi_dir>/vectors/``.
 
     - ``vectors/s_cmd``  — the command stream (the StreamDriver's own bursts, schema-packed); the
@@ -423,15 +425,19 @@ def write_mem_copy_xsi_bundles(xsi_dir: Path, width: int = DEFAULT_MEM_DW, jobs=
     for both backends.  This is a thin wrapper: it builds a :class:`MemCopySim` on the XSI scenario and
     writes its bundles into ``<xsi_dir>/vectors``.  pysim's ``run`` calls the same ``write_scenario``
     with a temp root, so the pysim run and the XSI run cannot start from different bytes.
+
+    It also writes ``vectors/run.json`` -- the scenario's arena size and *n_cycles* (the
+    :class:`MemCopyTB` default when ``None``) -- which the generated testbench reads at run time, so
+    one compiled testbench serves every scenario.
     """
     from examples.mem_copy.mem_copy_sim import MemCopySim
 
-    MemCopySim(jobs=XSI_JOBS if jobs is None else tuple(jobs),
-               mem_dwidth=width).write_scenario(Path(xsi_dir))
+    MemCopySim(jobs=XSI_JOBS if jobs is None else tuple(jobs), mem_dwidth=width,
+               n_cycles=n_cycles).write_scenario(Path(xsi_dir))
 
 
-def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEFAULT_MEM_DW,
-                               jobs=None) -> None:
+def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int | None, width: int = DEFAULT_MEM_DW,
+                               jobs=None) -> int:
     """Check mem_copy's XSI run from the dumped output bundles — the golden, in Python.
 
     The generated C++ main only runs and dumps; every check lives here.  Reads what the run wrote:
@@ -442,7 +448,8 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
       ``vectors/golden``;
     - **completion** — one ``CopyResp`` per job, each echoing ``tx_id == j`` (CopyResp word 0);
     - **timing** — the cycle the *last* completion word landed (time-to-last-completion, NOT the loop
-      bound) equals *want_cycles*.
+      bound) equals *want_cycles* -- unless it is ``None``, for a sweep point with no recorded
+      number.  Either way the cycle is returned.
 
     Raises ``AssertionError`` on any mismatch; a missing output bundle (a run that did not regenerate
     it) fails loudly on read.
@@ -477,9 +484,10 @@ def check_mem_copy_xsi_outputs(xsi_dir: Path, want_cycles: int, width: int = DEF
     #    time-to-last-completion, not the run's loop bound; a change here is a real behaviour change.
     cycles = np.fromfile(vdir / "s_done" / "cycles.bin", dtype="<u8")
     done_cycle = int(cycles[len(jobs) * done_words - 1])
-    assert done_cycle == want_cycles, (
+    assert want_cycles is None or done_cycle == want_cycles, (
         f"mem_copy completion cycle moved: got {done_cycle}, expected {want_cycles} — a real behaviour "
         f"change (regression, or an improvement worth re-recording).")
+    return done_cycle
 
 
 def gen_xsi_vectors(out_dir: Path = HERE, width: int = DEFAULT_MEM_DW, jobs=None) -> Path:

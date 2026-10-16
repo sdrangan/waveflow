@@ -2,6 +2,7 @@
 title: Python
 parent: Block FIR with state
 nav_order: 4
+summary: "Building the design in code: the two commands, the two custom leaves, and the composite that wires them to the framework mem-streams. The build is a BuildDag behind the standard CLI, so every stage is a --through target, and the first checkpoint runs the golden with no toolchain in seconds."
 ---
 # Python Model
 
@@ -27,9 +28,8 @@ The rest of the flow, in order:
 | `--through` | what it does | needs |
 |---|---|---|
 | `pysim` *(default)* | run the `FirBlockTB` graph, check every block against the golden | — |
-| `codegen_dut` | the `ap_ctrl_none` composite top, its TCL, the port map, the headers | — |
-| `codegen_tb` | the XSI BFM harness, its main, and the scenario bundles | — |
-| `csynth` | Vitis HLS C-synthesis; also re-emits `rtl_fir_block.f` | Vitis |
+| `codegen_dut` | the `ap_ctrl_none` composite top, its TCL, the headers | — |
+| `csynth` | Vitis HLS C-synthesis | Vitis |
 
 The parameters are CLI flags, which is also the handle a parameter sweep drives:
 
@@ -38,10 +38,14 @@ python -m examples.fir_block.fir_block_build --through csynth --samp-w 8 --ntap 
 python -m examples.fir_block.fir_block_build --through csynth --unroll-lane
 ```
 
-The RTL rung is a test rather than a build step, because it needs Vivado `xsim` and a prior `csynth`:
+The RTL rung is the **system flow** (`fir_block_system_build.py`): the kernel cut out of the
+testbench graph as the design under test, its top and harness derived, run under XSI and compared
+with pysim. Its gate needs Vivado `xsim` and a prior `csynth`
+([RTL simulation](./rtlsim.md)):
 
 ```bash
 pytest tests/examples/test_fir_block.py          # the pysim gates, incl. the falsification pair
+python -m examples.fir_block.fir_block_system_build
 pytest -m xsi tests/examples/test_fir_block_xsi.py
 ```
 
@@ -83,9 +87,9 @@ def run_iter(self) -> ProcessGen[None]:
     w = int(self.mem_dwidth)
     cmd = yield from self.s_cmd.get_schema(FirCmd)
     self._mark_start()
-    desc = FirDesc(op=int(cmd.op), n=int(cmd.n), dst_off=int(cmd.dst_off),
-                   zero_state=int(cmd.zero_state), tx_id=int(cmd.tx_id))
-    memr = MemRCmd(addr=int(cmd.src_off), len=nwords(int(cmd.n), self.lw), fwd_bursts=1)
+    desc = FirDesc(op=cmd.op, n=cmd.n, dst_off=cmd.dst_off, zero_state=cmd.zero_state,
+                   tx_id=cmd.tx_id)
+    memr = MemRCmd(addr=cmd.src_off, len=nwords(cmd.n, self.lw), fwd_bursts=1)
     yield from self.cmd_out.write(np.asarray(memr.serialize(word_bw=w), dtype=np.uint64))
     yield from self.cmd_out.write(np.asarray(desc.serialize(word_bw=w), dtype=np.uint64))
     self._log_firing()
@@ -110,19 +114,19 @@ dispatches, and frames the writer's stream:
 def run_iter(self) -> ProcessGen[None]:
     w = int(self.mem_dwidth)
     desc = yield from self.s_in.get_schema(FirDesc)
-    n = int(desc.n)
+    n = desc.n
     nw = nwords(n, self.lw)          # the stream speaks WORDS; the descriptor carries SAMPLES
     data = yield from self.s_in.get(nwords_max=nw)
     self._mark_start()
 
-    if int(desc.op) == FirOp.LOAD_TAPS:
-        self.load_taps(np.asarray(data), n, self.taps)
-        memw = MemWCmd(addr=int(desc.dst_off), len=0, fwd_bursts=1)
+    if desc.op == FirOp.LOAD_TAPS:
+        self.load_taps(data, n, self.taps)
+        memw = MemWCmd(addr=desc.dst_off, len=0, fwd_bursts=1)
         ...
     else:
-        y = self.filter_block(np.asarray(data), n, self.taps, self.carry, int(desc.zero_state))
+        y = self.filter_block(data, n, self.taps, self.carry, desc.zero_state)
         yield self.timeout(self._compute_delay(n))
-        memw = MemWCmd(addr=int(desc.dst_off), len=nw, fwd_bursts=1)
+        memw = MemWCmd(addr=desc.dst_off, len=nw, fwd_bursts=1)
         ...
 ```
 
@@ -142,19 +146,18 @@ reviewable.
 def filter_block(self, x, n, taps: HwState, carry: HwState, zero_state: int):
     t = int(self.ntap)
     xs = unpack_samples(x, n, self.samp_cls, self.mem_dwidth)
-    prev = np.zeros(t - 1, dtype=np.int64) if zero_state else np.asarray(carry.val, dtype=np.int64)
+    prev = np.zeros(t - 1, dtype=np.int64) if zero_state else carry.val
 
     # The window: buf[i : i+T] reversed is [x[i], x[i-1], ..., x[i-T+1]], aligned with h[0..T-1].
     buf = np.concatenate([prev, xs])
     win = np.lib.stride_tricks.sliding_window_view(buf, t)[:, ::-1]
 
-    prod = mult(_as_fixed(win, self.samp_cls),
-                _as_fixed(np.asarray(taps.val, dtype=np.int64), self.samp_cls))
+    prod = mult(_as_fixed(win, self.samp_cls), _as_fixed(taps.val, self.samp_cls))
     acc = fixed_sum(prod, axis=1)                 # +ceil(log2 T) integer bits, NOT +T
     y = quantize(acc, self.samp_cls)
 
     carry.val[:] = buf[len(buf) - (t - 1):]       # the next block's initial condition
-    return pack_samples(np.asarray(y).reshape(-1), self.samp_cls, self.mem_dwidth)
+    return pack_samples(y.val, self.samp_cls, self.mem_dwidth)
 ```
 
 Note that this is **one twin for both realizations**. `unroll_lane` changes the RTL's iteration

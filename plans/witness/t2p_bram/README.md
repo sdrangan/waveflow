@@ -28,3 +28,9 @@ pragma and the memory, which shifts the data by one and would pass a constant-va
 
 The two structures that do NOT work, and why, are in the plan's motivation section — a shared local
 array silently becomes a synchronizing PIPO channel, and a single port used both ways is refused.
+
+**2026-10-11 -- the shipped memory no longer equals this file.**  `waveflow/build/rtl/bram_t2p.v`
+writes each port in its own `always` block (Vivado's true-dual-port template): this file's single
+block built a 512 x 64 instance from 32832 flip-flops and no block RAM
+(`plans/system_resources.md`).  Ports, statements, read-first and latency 1 are unchanged; this copy
+is kept as it ran.  `tests/build/test_rtl_module.py` gates what still must match.

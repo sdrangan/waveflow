@@ -189,6 +189,17 @@ class FunctionStmt(SynthCallStmt):
     impl_file: str | None = None
 
 
+@dataclass(frozen=True)
+class KernelArgRef:
+    """A top-level kernel argument passed on by name: a register field or an m_axi pointer.
+
+    Used by a body-only kernel (``cpp_body``), whose generated top forwards every one of its
+    own arguments to the hook.  Streams are passed as their endpoints; this covers the rest,
+    which have no Python object of their own in the call.
+    """
+    name: str
+
+
 @dataclass
 class ReturnStmt(HwStmt):
     """``return`` from the kernel function. Optional return value."""

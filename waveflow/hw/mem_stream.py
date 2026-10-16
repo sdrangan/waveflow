@@ -62,9 +62,10 @@ from waveflow.simulation.simobj import ProcessGen
 # --- command field types --------------------------------------------------------------------------
 # ``addr`` is an **element / word coordinate** relative to the bound buffer base, NOT a byte
 # address — the addressing convention (plans/component.md): ``m_mem`` is already a word pointer, so a
-# word-index command needs no byte<->word conversion in generated logic; the physical base lives in
-# the ``offset=slave`` register (set once, via :meth:`bind_base`) and ``Region._word_bytes`` + the AXI
-# hardware absorb byte-vs-word.  So the command is unit-agnostic.
+# word-index command needs no byte<->word conversion in generated logic; the physical base is
+# :meth:`bind_base`'s (0 in the generated top, whose pointers are ``offset=off`` -- no base register,
+# ``docs/guide/comp_codegen/freerunning_composite.md``) and ``Region._word_bytes`` + the AXI hardware
+# absorb byte-vs-word.  So the command is unit-agnostic.
 Word32 = IntField.specialize(bitwidth=32, signed=False)   # word / element coordinate or count
 
 # ``MRCmd``/``MWCmd``/``MemComplete`` are ``ParamSchema``s parametrized only by ``max_xfer_len`` (the
@@ -196,11 +197,17 @@ class KernelTask:
       internal FIFO/block name (from the interface graph), yielding the concrete call args.  This is
       the seam that makes the top *graph-derived* rather than hand-written.
     * ``template_args`` — the baked-concrete C++ template arguments in order (``(mem_dwidth,)`` for a
-      width-templated body; ``(elem_bw, N)`` for the ``<EW, N>`` compute tiles)."""
+      width-templated body; ``(elem_bw, N)`` for the ``<EW, N>`` compute tiles).
+    * ``framed`` — the signature's ports that carry a packet boundary.  Their C++ word type is decided
+      by where the kernel sits, not by the kernel: ``framed_word`` on an internal FIFO, ``axi4s_word``
+      on a top's port (Vitis allows ``ap_axis`` only on interface ports).  The body takes each one's
+      word type as a template parameter after ``template_args``, in this order, and the generator
+      supplies it -- so one body serves a composite and the kernel's own harness."""
     task_fn: str
     header: str
     signature: tuple[str, ...]
     template_args: tuple[int, ...] = ()
+    framed: tuple[str, ...] = ()
 
 
 #: Schema classes the gen-include step emits C++ headers for (consumed by the kernel templates).
@@ -332,7 +339,7 @@ class MemRStream(FreeRunMod):
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
-        #: Physical base of the bound buffer (the ``offset=slave`` register value, host domain) —
+        #: Physical base of the bound buffer (host domain; 0 behind an ``offset=off`` pointer) —
         #: set once via :meth:`bind_base`.  Default 0: the single-arena / flat-array mode (sim & BFM),
         #: where the command frame is base-relative so "base 0" holds in the command coordinate system.
         self._base = 0
@@ -353,7 +360,8 @@ class MemRStream(FreeRunMod):
                 clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
-        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain).
+        """Set the bound buffer's physical base (host domain; the generated top's ``offset=off`` pointer
+        has no base register, so there it is 0).
 
         The addressing convention (plans/component.md): the host writes the buffer's physical base
         **once**, then issues commands in **word offsets** within it.  The base is a native-unit
@@ -481,6 +489,11 @@ class MemWStream(FreeRunMod):
     #: forward buffer (this component holds the response bursts across the write, then echoes them).
     #: Default ``False`` keeps the legacy protocol.
     inband: HwParam[bool] = False
+    #: In-band only: whether ``s_done`` carries TLAST in pysim.  The HLS port never does (it is a plain
+    #: ``hls::stream<ap_uint<MEM_DW>>``), so ``False`` is the faithful choice when ``s_done`` feeds an
+    #: unframed consumer -- a queue-out view, say (``examples/markov``).  ``True`` (default) keeps the
+    #: whole-burst reads ``MemCopy``'s host makes.
+    done_framed: bool = True
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: When set, attach a :class:`~waveflow.calib.timing_model.StreamTimingModel` at this directory
     #: and inject its predicted (trailing) delay per firing — the posted-write drain the RTL law
@@ -515,14 +528,14 @@ class MemWStream(FreeRunMod):
         if self.emit_done:
             self.s_done = StreamIFMaster(
                 name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.mem_dwidth),
-                has_tlast=bool(self.inband))
+                has_tlast=bool(self.inband) and bool(self.done_framed))
             eps.append(self.s_done)
         for ep in eps:
             self.add_endpoint(ep)
         self._mem_bw = int(self.mem_dwidth)
         self._word_t = _word_type(self.mem_dwidth)
         self._fill = FILL_CYCLES * self.clk.period
-        #: Physical base of the bound buffer (the ``offset=slave`` register value) — see
+        #: Physical base of the bound buffer (0 behind an ``offset=off`` pointer) — see
         #: :meth:`MemRStream.bind_base`.  Default 0: the flat single-arena mode (sim & BFM).
         self._base = 0
         self.transfer_spans: list[float] = []
@@ -542,7 +555,7 @@ class MemWStream(FreeRunMod):
                 clk=self.clk, config_specific=config_specific))
 
     def bind_base(self, base: int = 0) -> None:
-        """Set the bound buffer's physical base (the ``offset=slave`` register, host domain) — the
+        """Set the bound buffer's physical base (host domain; 0 behind an ``offset=off`` pointer) — the
         mirror of :meth:`MemRStream.bind_base`.  Commands then carry word offsets within it."""
         self._base = int(base)
 

@@ -10,8 +10,6 @@ The discriminator is deliberately loud: five all-ones vectors through a per-lane
 """
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -23,11 +21,9 @@ from examples.state_toy.state_toy import (
     input_words,
     write_scenario,
 )
+from examples.state_toy.state_toy_system_build import HERE, TOP, build_dag, check_xsi, system
+from tests.examples._system_run import WORK, compared_clean, recorded_names, system_run
 from waveflow.simulation.simulation import Simulation
-from waveflow.utils.burst_io import read_burst_bundle
-
-ROOT = Path(__file__).resolve().parents[2] / "examples" / "state_toy"
-XSI = ROOT / "xsi"
 NVEC = 5
 
 
@@ -54,37 +50,29 @@ def test_scenario_is_all_ones():
         np.testing.assert_array_equal(np.asarray(burst), np.ones_like(np.asarray(burst)))
 
 
+def test_the_system_runs_the_same_golden():
+    """The system the RTL gate runs (:class:`StateAccumSystem`) reproduces the golden in pysim."""
+    np.testing.assert_array_equal(system().run(), expected_words(NVEC))
+
+
+@pytest.fixture(scope="module")
+def rtl_run() -> Path:
+    """One RTL run of the system, shared by the gates below."""
+    return system_run(build_dag(work_dir=WORK), HERE, TOP)
+
+
 @pytest.mark.xsi
-def test_rtl_state_persists_across_firings():
+def test_rtl_state_persists_across_firings(rtl_run):
     """THE gate: the RTL's per-lane totals climb 1..5 across five re-firings of the hls::task.
 
-    Needs a prior ``vitis-run --mode hls --tcl state_accum.tcl`` and the XSI toolchain; skips
-    loudly rather than passing when either is missing.
+    Run through the system flow (``examples/state_toy/state_toy_system_build.py``): the accumulator
+    is the DUT, the driver and the sink answer through their own models.  Needs a prior csynth
+    (``state_accum.tcl``) and Vivado; a stale or missing csynth fails the run rather than passing.
     """
-    if os.name != "nt":
-        pytest.skip("the XSI flow is a Windows .bat (xvlog/xelab/mingw)")
-    if not (ROOT / "state_accum_proj").is_dir():
-        pytest.skip(f"no csynth RTL at {ROOT / 'state_accum_proj'} — run state_accum.tcl first")
-    if not (XSI / "run.bat").exists():
-        pytest.skip(f"no XSI workspace at {XSI}")
+    check_xsi(rtl_run)
 
-    write_scenario(XSI, NVEC)
-    out = XSI / "vectors" / "m_out"
-    if out.exists():
-        # A stale bundle from a previous run would let a broken build "pass" on old output.
-        for f in out.iterdir():
-            f.unlink()
 
-    proc = subprocess.run(
-        [str(XSI / "run.bat"), "state_accum", "state_accum_bfm_tb"],
-        cwd=XSI, capture_output=True, text=True, shell=False,
-    )
-    assert proc.returncode == 0, f"XSI run failed\n{proc.stdout[-3000:]}\n{proc.stderr[-2000:]}"
-
-    got = _flat(read_burst_bundle(out))
-    want = expected_words(NVEC)
-    assert got.size == want.size, (
-        f"RTL produced {got.size} words, expected {want.size} — the run did not complete "
-        f"(check the cycle bound)\n{proc.stdout[-2000:]}"
-    )
-    np.testing.assert_array_equal(got, want)
+@pytest.mark.xsi
+def test_rtl_recording_matches_pysim(rtl_run):
+    """What the sink recorded at RTL is what it recorded in pysim, word for word."""
+    assert compared_clean(rtl_run) and recorded_names(rtl_run) == ["m_out"]

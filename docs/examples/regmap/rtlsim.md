@@ -3,6 +3,7 @@ title: C and RTL Simulation
 parent: Register mapped simple function
 nav_order: 6
 has_children: false
+summary: "Driving Vitis through the whole flow: C-simulation checked bit-exact against the Python golden, C-synthesis with a resource and pipeline-II report, RTL co-simulation for a measured cycle count, and a validation step comparing that count against the Python prediction within a tolerance. The payoff is one JSON verdict that makes the cycle-approximate-Python claim concrete for this kernel."
 ---
 # C and RTL Simulation
 
@@ -41,7 +42,7 @@ Each step is described below in the order it runs.
 
 ## C-sim functional verification
 
-`CSimStep` invokes Vitis HLS's C-simulator on the generated `.cpp` files. The kernel runs as a normal C++ program; its testbench (also auto-generated) reads the input `.bin` files written by `BuildInputsStep`, writes the registers via the slave model, drives `ap_start`, polls `ap_done`, and writes the kernel's output back to `y_data.bin` plus a `regmap_status.json` mirror of the final regmap state.
+`CSimStep` invokes Vitis HLS's C-simulator on the generated `.cpp` files. The kernel runs as a normal C++ program; its testbench (also auto-generated) reads the input `.bin` files written by `BuildInputsStep`, calls the kernel function with them (C-simulation is untimed: there is no `ap_start` / `ap_done` handshake to drive), and writes the kernel's output back to `y_data.bin` plus a `regmap_status.json` mirror of the final regmap state.
 
 `FunctionalVerifyStep` then compares those C-sim outputs to the Python golden produced by `py_sim`:
 
@@ -208,5 +209,5 @@ If all four show the expected results, this kernel passes the full cycle-approxi
 This is the last page in the Vitis Register Map walkthrough. For the broader framework references, see:
 
 - [Build System](../../guide/build/index.md) — the full BuildDag reference.
-- [Register Maps](../../guide/interface/primitive/regmap.md) — the underlying regmap abstractions.
+- [Register Maps](../../guide/interface/axi_mm/regmap.md) — the underlying regmap abstractions.
 - [Hardware modules](../../guide/flows/modules.md) — the component kinds (`HostActivated` → sequential, `FreeRunMod` → concurrent) and the flow each maps to.

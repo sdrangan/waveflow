@@ -50,7 +50,7 @@ not promise and `RfShotTx`'s use cases do not need**.
 
 Recorded so it is not retried:
 
-* **`plans/pysim_burst_backpressure.md` S1/S2** — a pysim burst write was back-pressured for exactly
+* **[PR #184](https://github.com/sdrangan/waveflow/pull/184)/S2** — a pysim burst write was back-pressured for exactly
   one word and then absorbed into an unbounded counter. Real defect, fixed, no gate number moved. It
   did **not** retire the metronome.
 * **S3** — removed the metronome and measured the result. **Refuted**: back-pressure paces *rate*,
@@ -213,7 +213,7 @@ global counter) rather than per-segment. Do not build it by tightening this plan
 * `ShotTxPlayer.dac_word_rate`, and the hand-computed `samp_rate / samp_per_word` in the example.
 * `blk_words`'s second meaning — it becomes only the lock poll period.
 * The other two metronomes stay for their own measured reasons, recorded in
-  `plans/pysim_burst_backpressure.md`: `RfSampBufPlayer.dac_word_rate` is `max(fabric, demand)` and
+  [PR #184](https://github.com/sdrangan/waveflow/pull/184): `RfSampBufPlayer.dac_word_rate` is `max(fabric, demand)` and
   models which side is the bottleneck; `RfTxStream.slot_period` raises when unset and is a guard.
 
 ## Traps
@@ -234,7 +234,7 @@ Measured 2026-09-07, branch `lt-transient-s1`, gated geometry
 (`blksize = 64`, `samp_per_word = 4`, `blk_words = 16`, `nword = 64`, `n_blk = 20`).
 Nothing under `waveflow/` or `examples/` was edited: the depths were read off the bound interface
 graph, and the occupancies off read-only wrappers around the endpoint methods in the measuring
-process — the same technique `plans/pysim_burst_backpressure.md` S1 used.
+process — the same technique [PR #184](https://github.com/sdrangan/waveflow/pull/184) used.
 
 ### 1. The derived bound
 
@@ -370,7 +370,7 @@ queue does. The sum is a **bound**, and at the gated depths it is reached exactl
 The plan predicted "~448 against the **576** S3 measured" and called the difference a 128-sample gap.
 Both numbers were wrong, in opposite directions, and that accident is why it read as one clean gap:
 
-* **The 576 was a misquote.** `plans/pysim_burst_backpressure.md` S3 measured the gated geometry at
+* **The 576 was a misquote.** [PR #186](https://github.com/sdrangan/waveflow/pull/186) measured the gated geometry at
   **640**, and says so in its own table (*lead filler … without it: **640***). The 576 is one row of
   S3's `dac_axis` **depth sweep** — the value at `D_dac <= 16`, which is not the gated configuration.
   The sweep in §3 above is that same sweep, reproduced, and it agrees line for line.
@@ -443,7 +443,7 @@ and `dac_word_rate` are all exactly as they were; the suites are unchanged (6 no
 
 Built 2026-09-07, branch `lt-transient-s2`. `ShotTxPlayer.dac_word_rate` and `RfShotTx.dac_word_rate`
 are gone; `RfSampBufPlayer.dac_word_rate` and `RfTxStream.slot_period` remain, for the measured
-reasons `plans/pysim_burst_backpressure.md` S3 records.
+reasons [PR #186](https://github.com/sdrangan/waveflow/pull/186) records.
 
 ### The three gates
 

@@ -2,6 +2,7 @@
 title: DUT codegen
 parent: Free-running memory copy
 nav_order: 4
+summary: "Lowering the three-leaf graph to a free-running Vitis HLS top. Explains what an hls::task is: a body the runtime re-fires on its own whenever its input streams have data, so there is no host handshake and the stages overlap — which is why sequence, read and write become three tasks wired by FIFOs rather than one sequential function."
 ---
 
 # DUT codegen — the graph becomes an `hls::task` top
@@ -35,8 +36,10 @@ graph made concrete:
 void mem_copy(hls::stream<ap_uint<64> >& s_cmd, const ap_uint<64>* m_in,
               ap_uint<64>* m_out, hls::stream<ap_uint<64> >& s_done) {
 #pragma HLS INTERFACE axis port=s_cmd
-#pragma HLS INTERFACE m_axi port=m_in  offset=slave bundle=gmem0 depth=8192
-#pragma HLS INTERFACE m_axi port=m_out offset=slave bundle=gmem1 depth=8192
+#pragma HLS INTERFACE m_axi port=m_in  offset=off bundle=gmem0 depth=8192
+#pragma HLS stable variable=m_in
+#pragma HLS INTERFACE m_axi port=m_out offset=off bundle=gmem1 depth=8192
+#pragma HLS stable variable=m_out
 #pragma HLS INTERFACE axis port=s_done
 #pragma HLS INTERFACE ap_ctrl_none port=return
     hls_thread_local hls::stream<streamutils::framed_word<64> > cmd;         // Sequencer -> reader
@@ -89,12 +92,13 @@ generated DUT gen\mem_copy.cpp + mem_copy.tcl + xsi/mem_copy_ports.h
     PASSED
 ```
 
-`gen/mem_copy.cpp` is the top above; `mem_copy.tcl` drives Vitis HLS C-synthesis (the `csynth` step,
-which needs Vitis and produces the RTL the [RTL rung](./rtlsim.md) drives); `xsi/mem_copy_ports.h` is
-the DUT's port map, which the generated [testbench harness](./codegen_tb.md) includes. Anything
-generated carries a banner and a regenerate overwrites a hand-edit — so don't hand-edit them.
+`gen/mem_copy.cpp` is the top above, and `mem_copy.tcl` drives Vitis HLS C-synthesis. The
+system flow's `csynth` step runs it (it needs Vitis), producing the RTL that the
+[RTL rung](./rtlsim.md) instantiates inside the system top. (`xsi/mem_copy_ports.h` is the kernel's
+own port map; the system flow writes one for the system top instead.) Anything generated carries a
+banner, and a regenerate overwrites a hand-edit, so don't hand-edit them.
 
 ## Next
 
-[Testbench codegen](./codegen_tb.md) — how the `MemCopyTB` graph becomes the XSI BFM harness that
-drives this top.
+[The system](./system.md) — the cut that puts this kernel inside a system top, and the harness the
+system flow derives to drive it.

@@ -25,8 +25,8 @@ def main(argv=None):
         with redirect_stdout(sys.stderr):
             service = ExecutionService(args.root, args.design, json.loads(args.conditions))
         if args.command == "serve":
-            from mcp.server.fastmcp import FastMCP
-            server = FastMCP("waveflow-execution")
+            from mcp.server.mcpserver import MCPServer
+            server = MCPServer("waveflow-execution")
             make_execution_registry(service).register_all(server)
             server.run(transport="stdio")
             return 0

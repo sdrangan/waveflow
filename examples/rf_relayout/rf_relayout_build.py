@@ -3,15 +3,16 @@
 ``plans/rf_shot_buf.md`` § *The caveat, and it is a Stage A gate*.  The rungs:
 
     pysim       -> the loopback is byte-identical in SimPy, and the DENSE words match the golden
-    codegen_dut -> the ap_ctrl_none top, its tcl, its port map, and the two generated array-utils
-                   headers the task bodies serialize through
-    codegen_tb  -> the XSI harness + main + scenario bundle
+    codegen_dut -> the ap_ctrl_none top, its tcl, and the two generated array-utils headers the
+                   task bodies serialize through
     csynth      -> Vitis HLS.  **This is the rung the plan asks for**: the achieved PipelineII of the
                    two re-layout bodies, at a geometry where the conversion is not the identity.
 
+The RTL rung is the **system** flow, ``python -m examples.rf_relayout.rf_relayout_system_build``, which
+builds its own XSI workspace from this csynth project.
+
 **No wrapper and no memory here** — the re-layout holds no state, so the thing xsim elaborates is the
-kernel itself.  That is the difference from the shot family, whose designs all wrap a memory, and it
-is why this example's ``.f`` is named for the top rather than for a wrapper.
+kernel itself.  That is the difference from the shot family, whose designs all wrap a memory.
 
 **The two array-utils headers are generated into the same directory as the task bodies**, because the
 bodies include them by plain name.  Their *class names* are fixed
@@ -32,20 +33,14 @@ from waveflow.build.composite_gen import (  # noqa: E402
     RFSOC4X2_PART,
     RFSOC4X2_PERIOD_NS,
     composite_top_spec,
-    render_ports_h,
-    render_rtl_f,
-    render_tb_harness,
-    render_tb_main,
     render_tcl,
     render_top,
-    tb_top_spec,
 )
 from waveflow.build.elaborate import elaborate  # noqa: E402
 from waveflow.build.streamutils import (  # noqa: E402
     MemMgrStep,
     RfShotBufStep,
     StreamUtilsStep,
-    XsiHarnessStep,
 )
 from waveflow.hw.arrayutils import ArrayUtilsStep  # noqa: E402
 from waveflow.hw.rf_relayout import (  # noqa: E402
@@ -54,15 +49,9 @@ from waveflow.hw.rf_relayout import (  # noqa: E402
     slot_elem_type,
     slots_per_word,
 )
-from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.toolchain import toolchain  # noqa: E402
 
-from examples.rf_relayout.rf_relayout import (  # noqa: E402
-    NWORD,
-    WORD,
-    RfRelayoutTB,
-    write_scenario,
-)
+from examples.rf_relayout.rf_relayout import NWORD, WORD  # noqa: E402
 
 TOP = "rf_relayout"
 INCLUDE_DIR = "include"
@@ -77,7 +66,7 @@ _ELAB = {"bitwidth": int(WORD.bitwidth), "n_slot": slots_per_word(WORD),
 
 
 def generate_dut(out_dir: Path = HERE) -> Path:
-    """Generate the top, its tcl, the XSI port map, and the two array-utils headers."""
+    """Generate the top, its tcl, and the two array-utils headers."""
     word_bw = int(_ELAB["bitwidth"])
     config = BuildConfig(root_dir=out_dir, params={})
 
@@ -85,7 +74,6 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     inner.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     inner.add(MemMgrStep(output_dir=INCLUDE_DIR))
     inner.add(RfShotBufStep(output_dir=INCLUDE_DIR))
-    inner.add(XsiHarnessStep(output_dir="xsi"))
     # The serializers the two bodies call.  The SLOT element is the converter's container width and
     # the DENSE element the effective one; at 14-in-16 they differ, which is the whole reason this
     # example exists.  Both at the design's word width, because the re-layout stays inside one width.
@@ -110,28 +98,9 @@ def generate_dut(out_dir: Path = HERE) -> Path:
     (out_dir / f"{spec.top_name}.tcl").write_text(
         render_tcl(spec.top_name, part=RFSOC4X2_PART, period_ns=RFSOC4X2_PERIOD_NS),
         encoding="utf-8")
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{spec.top_name}_ports.h").write_text(render_ports_h(spec), encoding="utf-8")
-    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl + xsi/{spec.top_name}_ports.h "
+    print(f"generated DUT {cpp.name} + {spec.top_name}.tcl "
           f"({WORD.describe()}, shift {_ELAB['shift']})")
     return cpp
-
-
-def make_xsi_tb() -> RfRelayoutTB:
-    return RfRelayoutTB(name="xsi_tb", sim=Simulation())
-
-
-def generate_tb(out_dir: Path = HERE) -> None:
-    """Generate the XSI harness + main from the TB graph, and write the scenario bundle."""
-    tb = make_xsi_tb()
-    spec = tb_top_spec(tb)
-    xsi = out_dir / "xsi"
-    xsi.mkdir(parents=True, exist_ok=True)
-    (xsi / f"{TOP}_tb_harness.h").write_text(render_tb_harness(spec), encoding="utf-8")
-    (xsi / f"{TOP}_bfm_tb.cpp").write_text(render_tb_main(spec, int(tb.n_cycles)), encoding="utf-8")
-    write_scenario(xsi)
-    print(f"generated TB xsi/{TOP}_tb_harness.h + xsi/{TOP}_bfm_tb.cpp ({NWORD} words)")
 
 
 # ---------------------------------------------------------------------------
@@ -177,30 +146,14 @@ class CodegenDutStep(BuildStep):
     description = "Lower RfRelayout to its ap_ctrl_none top + the two array-utils headers."
     consumes = ["rf_relayout_source"]
     produces: ClassVar[dict] = {"rf_relayout_cpp": Path(f"{GEN_DIR}/{TOP}.cpp"),
-                                "run_tcl": Path(f"{TOP}.tcl"),
-                                "dut_ports": Path(f"xsi/{TOP}_ports.h")}
+                                "run_tcl": Path(f"{TOP}.tcl")}
     params: ClassVar[dict] = {}
 
     def run(self, config: BuildConfig, **_) -> dict:
         generate_dut(config.root_dir)
         root = config.root_dir
         return {"rf_relayout_cpp": root / GEN_DIR / f"{TOP}.cpp",
-                "run_tcl": root / f"{TOP}.tcl",
-                "dut_ports": root / "xsi" / f"{TOP}_ports.h"}
-
-
-@dataclass(kw_only=True)
-class CodegenTbStep(BuildStep):
-    description = "Lower RfRelayoutTB to the XSI harness + main + scenario bundle."
-    consumes = ["rf_relayout_source", "dut_ports"]
-    produces: ClassVar[dict] = {"tb_harness": Path(f"xsi/{TOP}_tb_harness.h"),
-                                "tb_main": Path(f"xsi/{TOP}_bfm_tb.cpp")}
-    params: ClassVar[dict] = {}
-
-    def run(self, config: BuildConfig, **_) -> dict:
-        generate_tb(config.root_dir)
-        return {"tb_harness": config.root_dir / "xsi" / f"{TOP}_tb_harness.h",
-                "tb_main": config.root_dir / "xsi" / f"{TOP}_bfm_tb.cpp"}
+                "run_tcl": root / f"{TOP}.tcl"}
 
 
 @dataclass(kw_only=True)
@@ -218,6 +171,9 @@ class CSynthStep(BuildStep):
     params: ClassVar[dict] = {"live_output": False}
 
     def run(self, config: BuildConfig, live_output, **_) -> dict:
+        from waveflow.build.composite_gen import check_maxi_lowered
+        from waveflow.build.rtl_digest import write_stamp
+
         result = toolchain.run_vitis_hls(config.root_dir / f"{TOP}.tcl",
                                          work_dir=config.root_dir,
                                          capture_output=not live_output)
@@ -225,9 +181,10 @@ class CSynthStep(BuildStep):
             print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        xsi = config.root_dir / "xsi"
-        xsi.mkdir(parents=True, exist_ok=True)
-        (xsi / f"rtl_{TOP}.f").write_text(render_rtl_f(TOP, config.root_dir), encoding="utf-8")
+        # The source stamp: this RTL was just built from the sources on disk, which is what lets the
+        # system flow's ``synth="check"`` accept it (``rtl_digest`` / ``trace_steps.rtl_staleness``).
+        check_maxi_lowered(config.root_dir, TOP)
+        write_stamp(config.root_dir, TOP)
         return {"report_dir": config.root_dir / f"{TOP}_proj" / "solution1"}
 
 
@@ -236,7 +193,6 @@ def build_rf_relayout_dag() -> BuildDag:
     dag.add(SourceStep(artifact="rf_relayout_source", path=HERE / "rf_relayout.py"))
     dag.add(PySimStep(name="pysim"))
     dag.add(CodegenDutStep(name="codegen_dut"))
-    dag.add(CodegenTbStep(name="codegen_tb"))
     dag.add(CSynthStep(name="csynth"))
     return dag
 

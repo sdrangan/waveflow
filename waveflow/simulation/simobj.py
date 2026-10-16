@@ -215,6 +215,45 @@ class SimObj(NamedObject):
         """Create a level-based container tied to this environment."""
         return simpy.Container(self.env, capacity=capacity, init=init)
 
+    def call_after(self, delay: float, fn: Callable[..., ProcessGen[Any]], *args: Any,
+                   slot: simpy.Container | None = None) -> simpy.events.Process:
+        """Run ``fn(*args)`` as a new process after *delay*; return without waiting.
+
+        The way a pipelined block lets its intake run ahead of its output: ``run_iter`` reads a
+        frame, computes it, and defers the write by the processing time, so the next frame can
+        be accepted while this one is still in flight.  *fn* is a generator function, not a plain
+        callback, because the deferred work (a stream write) itself takes simulated time.
+
+        *slot*, if given, is put back (``put(1)``) when *fn* finishes.  The caller takes it
+        (``yield slot.get(1)``) before calling, so where intake blocks stays visible in the
+        caller.  A module that can be back-pressured needs one: without it, a stalled consumer
+        leaves deferred writes piling up while intake keeps accepting work -- infinite buffering,
+        which no hardware has.
+
+        **The contract on *fn*: it is a pure function of its arguments.**  It may touch its
+        arguments, output ports and *slot*, and no other state on ``self``.  This is a second
+        entry point into the object, so state it shared with the caller would make behaviour
+        depend on SimPy's ordering of same-time events.
+
+        Deferred calls with equal delays run in the order they were made.  With per-call delays
+        that vary, a later call can overtake an earlier one; use one long-lived process reading a
+        :meth:`transaction_queue` when order must hold.
+
+        Started with ``env.process``, not :meth:`process`: that one keeps every process in
+        :attr:`processes`, and one deferred call per frame would grow it for the whole run.
+        """
+        if delay < 0:
+            raise ValueError("delay must be non-negative.")
+
+        def deferred() -> ProcessGen[None]:
+            if delay > 0:
+                yield self.env.timeout(delay)
+            yield from fn(*args)
+            if slot is not None:
+                yield slot.put(1)
+
+        return self.env.process(deferred())
+
     def action(
         self,
         name: str,

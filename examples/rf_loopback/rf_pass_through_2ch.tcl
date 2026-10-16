@@ -1,5 +1,5 @@
 set part {xczu48dr-ffvg1517-2-e}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: rf_pass_through_2ch"
 open_project -reset rf_pass_through_2ch_proj
 set_top rf_pass_through_2ch

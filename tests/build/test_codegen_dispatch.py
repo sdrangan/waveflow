@@ -28,7 +28,7 @@ def _add_regmap(self) -> None:
 
 
 def test_hostactivated_dispatches_to_on_start():
-    from examples.stream_inband.poly import PolyAccel
+    from tests.fixtures.poly_extracted.poly_extracted import PolyAccel
     assert codegen_path(elaborate(PolyAccel)) == CodegenPath("leaf", "on_start")
 
 
@@ -43,7 +43,7 @@ def test_compositecomp_dispatches_to_composite():
 
 
 def test_testbench_dispatches_to_main():
-    from examples.stream_inband.poly import PolyTBHls
+    from tests.fixtures.poly_extracted.poly_extracted import PolyTBHls
     assert codegen_path(elaborate(PolyTBHls)) == CodegenPath("testbench", "main")
 
 

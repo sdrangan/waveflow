@@ -289,7 +289,8 @@ class RfDataSource(HwModule):
         comps = (int(self.rf_ep.n_ch) * int(self.rf_ep.blksize)
                  * (2 if self.rf_ep.complex_samp else 1))
         return BfmModel("RfFileSource", ports=("rf_ep",),
-                        extra_args=(str(comps), "1" if self.rf_ep.complex_samp else "0"))
+                        extra_args=(str(comps), "1" if self.rf_ep.complex_samp else "0"),
+                        reports_counters=True)
 
 
 @dataclass
@@ -358,14 +359,15 @@ class RfDataSink(HwModule):
         from waveflow.build.composite_gen import BfmModel
 
         return BfmModel("RfFileSink", ports=("rf_ep",),
-                        extra_args=("1" if self.rf_ep.complex_samp else "0",))
+                        extra_args=("1" if self.rf_ep.complex_samp else "0",),
+                        reports_counters=True)
 
 
 @dataclass
 class RfSampDelay(HwModule):
     """A **path** between two converter edges: takes blocks from one, hands them to the other, later.
 
-    ``plans/rf_shot_absolute.md`` S3.  This is the ``Channel`` block
+    PR #202.  This is the ``Channel`` block
     :mod:`~waveflow.hw.rf_sample_if`'s docstring reserves the job for — *"gain, fractional delay,
     per-channel skew and multipath belong in a ``Channel`` block"* — built at the one fidelity that
     rule allows an edge to keep for itself and this node to apply: **bulk delay, in whole samples.**

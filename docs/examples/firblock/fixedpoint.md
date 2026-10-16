@@ -2,6 +2,7 @@
 title: Fixed point
 parent: Block FIR with state
 nav_order: 3
+summary: "The three decisions a real filter makes on top of the fixed-point guide: what format to declare, what to derive, and how the derived answer reaches the C++. Samples, coefficients and output share one format — Q2.14 by default — and the accumulator width is derived from it rather than chosen."
 ---
 # Fixed point — one declared format, one derived accumulator
 
@@ -38,8 +39,7 @@ instance* rather than from a type annotation — an annotation could only name t
 The one place a fixed-point design usually goes wrong is the accumulator. Here nothing is hand-sized:
 
 ```python
-prod = mult(_as_fixed(win, self.samp_cls),
-            _as_fixed(np.asarray(taps.val, dtype=np.int64), self.samp_cls))
+prod = mult(_as_fixed(win, self.samp_cls), _as_fixed(taps.val, self.samp_cls))
 acc = fixed_sum(prod, axis=1)                 # +ceil(log2 T) integer bits, NOT +T
 y = quantize(acc, self.samp_cls)
 ```

@@ -1,4 +1,4 @@
-"""rf_shot_rx.py — ``plans/t2p_lock_chan.md`` S2: **capture continuously and lose nothing**.
+"""rf_shot_rx.py — PR #179: **capture continuously and lose nothing**.
 
 The RX half of the story ``examples/rf_shot_tx`` tells on TX.  There the two regions were an
 optimisation nobody needed — a handover is a *gap*, and you had already accepted discontinuity when
@@ -38,6 +38,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.hw_system import GraphSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_shot_rx import (
     CAP_OK,
@@ -84,7 +85,7 @@ SAMP_RATE = 256e6
 #: windows — short enough that an xsim run is a minute.
 N_BLK = 40
 
-#: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
+#: Fixed run bound for the XSI run — a testbench constant, not a latency.
 #: ``N_BLK * BLK_WORDS`` words at 0.256 words/cycle, plus a tail for the last window to land.
 XSI_N_CYCLES = 2800
 
@@ -132,7 +133,7 @@ def write_scenario(root, n_blk: int = N_BLK) -> None:
 class RfShotRxAbs(RfShotRx):
     r"""``RfShotRx`` with ``absolute_index = 1`` — a second **build**, not a second design.
 
-    ``plans/rf_shot_absolute.md`` S2, and the mirror of
+    PR #201, and the mirror of
     :class:`~examples.rf_shot_tx.rf_shot_tx.RfShotTxAbs`.  The body is the same body: one C++
     template with ``if (ABS)`` branches Vitis folds, so the two settings are two pieces of RTL cut
     from one source rather than two sources that drift.  What this subclass exists for is the
@@ -172,7 +173,7 @@ class RfShotRxTB(FreeRunMod):
     #: ``0`` is the design; anything else makes it lose samples on purpose — see
     #: :attr:`~waveflow.hw.rf_shot_rx.PingPongWindow.stall_blocks`.
     stall_blocks: int = 0
-    #: Fixed run bound for the generated XSI main — a testbench constant, not a latency.
+    #: Fixed run bound for the XSI run — a testbench constant, not a latency.
     n_cycles: int = XSI_N_CYCLES
     #: Which of the two builds this graph wraps — :class:`~waveflow.hw.rf_shot_rx.RfShotRx` or
     #: :class:`RfShotRxAbs`.  ONE testbench graph for both, because a second graph would be a second
@@ -240,6 +241,27 @@ class RfShotRxTB(FreeRunMod):
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
 
 
+@dataclass
+class RfShotRxSystem(GraphSystem):
+    """The ping-pong receiver as a **system** (``plans/system_model.md`` S3e): the
+    :class:`RfShotRxTB` graph, the cut the receiver alone -- its memory inside it, so the system top
+    instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+    (:class:`~waveflow.hw.rf_shot_rx.RfShotRx` or :class:`RfShotRxAbs`)."""
+
+    dut_cls: type = RfShotRx
+    n_cycles: int = XSI_N_CYCLES
+
+    def graph(self) -> RfShotRxTB:
+        return RfShotRxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
+                          n_cycles=int(self.n_cycles))
+
+    def dut_modules(self, g) -> list:
+        return [g.dut]
+
+    def write_inputs(self, root) -> None:
+        write_scenario(root, n_blk=int(self.tb.n_blk))
+
+
 # ---------------------------------------------------------------------------
 # Running it, and reading what came out
 # ---------------------------------------------------------------------------
@@ -274,7 +296,7 @@ def run_pysim(root=None, **kw) -> RfShotRxTB:
 
 def frames_from_sink(tb: RfShotRxTB) -> list[np.ndarray]:
     """The raw frames the sink collected — header **and** samples, as a host would see them."""
-    return [np.asarray(b, dtype=np.uint64).ravel() for b in tb.win_snk.words]
+    return [np.asarray(b).ravel() for b in tb.win_snk.words]
 
 
 def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
@@ -294,9 +316,8 @@ def windows_as_codes(frames) -> list[tuple[object, np.ndarray]]:
         from waveflow.hw.rf_relayout import dense_elem_type
 
         n = int(words.size) * SPW
-        vals = read_array(np.asarray(words, dtype=np.uint64), elem_type=dense_elem_type(WORD),
-                          word_bw=WORD_BW, shape=n)
-        out.append((hdr, np.asarray(getattr(vals, "val", vals), dtype=np.int64).ravel()))
+        vals = read_array(words, elem_type=dense_elem_type(WORD), word_bw=WORD_BW, shape=n)
+        out.append((hdr, vals.val))
     return out
 
 
@@ -331,8 +352,8 @@ def check_windows(frames, *, where: str = "", expect_loss: bool = False) -> np.n
             f"{where}the windows are not contiguous: sample {i} is {int(flat[i])} and sample "
             f"{i + 1} is {int(flat[i + 1])}, a jump of {int(step[i])}. That gap is capture the "
             f"design lost, and it is invisible in every other reading of this run.")
-    bad_hdr = [(i, int(h.status), int(h.n_dropped)) for i, (h, _c) in enumerate(wins)
-               if int(h.status) != CAP_OK or int(h.n_dropped)]
+    bad_hdr = [(i, h.status, h.n_dropped) for i, (h, _c) in enumerate(wins)
+               if h.status != CAP_OK or h.n_dropped]
     if bad_hdr:
         i, st, n = bad_hdr[0]
         raise AssertionError(
@@ -371,11 +392,11 @@ def check_addresses_are_the_phase(frames, *, where: str = "") -> list[int]:
     nsamp = int(DEPTH) * SPW
     out = []
     for w, (hdr, codes) in enumerate(wins):
-        base = int(hdr.base_addr)
-        k = window_abs_index(w, int(hdr.n_dropped), REGION_WORDS)
+        base = hdr.base_addr
+        k = window_abs_index(w, hdr.n_dropped, REGION_WORDS)
         out.append(k)
         want = (np.arange(int(codes.size), dtype=np.int64) + base * SPW) % nsamp
-        got = (np.asarray(codes, dtype=np.int64) - CODE_BASE) % nsamp
+        got = (codes - CODE_BASE) % nsamp
         if not np.array_equal(got, want):
             i = int(np.flatnonzero(got != want)[0])
             raise AssertionError(

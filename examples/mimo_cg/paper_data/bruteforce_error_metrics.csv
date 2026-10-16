@@ -1,0 +1,14 @@
+# mimo_cg bruteforce_error_metrics: numpy=2.5.3, base_seed=20260930, tool=vitis_hls 2024.1, model_sha256=d95510d337e992d3, measured_builds=1440, job_tolerance=0.02, cost_tolerance=0.1
+metric,n,value,worst
+DSP exact (%),1440,1.000000e+02,
+BRAM exact (%),1440,1.000000e+02,
+LUT MAPE (%),1440,9.210000e-01,5.118000e+00
+FF MAPE (%),1440,2.312000e+00,9.378000e+00
+"job time MAPE (%), loop-dominated",8807,1.044000e+00,9.896000e+00
+"job time MAPE (%), under the guard",193,5.373000e+00,3.820500e+01
+"LUT MAPE (%), 1 lanes",480,7.120000e-01,1.875000e+00
+"LUT MAPE (%), 4 lanes",480,8.620000e-01,3.227000e+00
+"LUT MAPE (%), 16 lanes",480,1.188000e+00,5.118000e+00
+"job time MAPE (%), loop-dominated, K = 4",1439,1.124000e+00,8.735000e+00
+"job time MAPE (%), loop-dominated, K = 8",3180,1.010000e+00,9.896000e+00
+"job time MAPE (%), loop-dominated, K = 16",4188,1.042000e+00,8.465000e+00

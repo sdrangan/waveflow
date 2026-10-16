@@ -11,34 +11,39 @@ extracts that once; an example supplies its DAG factory, root directory, default
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 from textwrap import indent
 from typing import Callable, Iterable
 
+from waveflow import events
 from waveflow.build.build import BuildConfig, BuildDag
 
 
 def run_dag_cli(
-    dag_factory: Callable[[], BuildDag],
+    dag_factory: Callable[[], BuildDag] | Callable[[argparse.Namespace], BuildDag],
     *,
     description: str,
-    default_through: str,
+    default_through: str | None,
     root_dir: Path,
     extra_args: Iterable[tuple[tuple, dict]] = (),
     params_from_args: Callable[[argparse.Namespace], dict] | None = None,
     config_from_args: Callable[[argparse.Namespace], dict] | None = None,
-) -> None:
+) -> list[dict] | None:
     """Run an example's ``BuildDag`` with the standard introspection CLI.
 
     Parameters
     ----------
     dag_factory:
-        Zero-arg callable returning the assembled :class:`BuildDag`.
+        Callable returning the assembled :class:`BuildDag`: zero-arg, or taking the parsed
+        ``argparse`` namespace when the DAG's *shape* depends on an ``extra_args`` knob (e.g. a
+        ``--probes`` flag that adds timing probes to a system top).
     description:
         ``argparse`` description (the example's one-liner).
     default_through:
-        Default ``--through`` target when none is given.
+        Default ``--through`` target when none is given; ``None`` runs the whole DAG (a DAG with
+        more than one sink, e.g. two systems' ``compare`` steps).
     root_dir:
         Build root for the :class:`BuildConfig`.
     extra_args:
@@ -53,6 +58,12 @@ def run_dag_cli(
         Params alone could not express this: a platform is not a knob the steps read, it is where a
         calibrated build *files what it measured*.  Without this hook no example CLI could target a
         platform at all, so a single point of a calibration sweep could only be run by the sweep.
+
+    Returns
+    -------
+    The build's timing spans (:mod:`waveflow.events`): the command, each step, and every nested
+    step and toolchain run inside them, as also appended to ``<root_dir>/.waveflow/events.jsonl``.
+    ``None`` for the listing flags, which build nothing.  ``--timing`` prints them as a tree.
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--through", metavar="STEP", default=default_through,
@@ -71,9 +82,13 @@ def run_dag_cli(
                         help="Force all steps to rebuild.")
     parser.add_argument("--force-step", metavar="STEP", action="append", default=[],
                         help="Force a specific step to rebuild (repeatable).")
+    parser.add_argument("--timing", action="store_true",
+                        help="After the build, print every step's time, nested steps and the "
+                             "toolchain runs inside them included.")
     args = parser.parse_args()
 
-    dag = dag_factory()
+    import inspect
+    dag = dag_factory(args) if inspect.signature(dag_factory).parameters else dag_factory()
 
     if args.list_steps:
         for name in dag.step_names():
@@ -116,8 +131,14 @@ def run_dag_cli(
         for entry in dag.results_status(config):
             age = f"{(now - entry['mtime']) / 3600:.1f}h ago" if entry["mtime"] else "—"
             exists_mark = "✓" if entry["exists"] else "✗"
-            stale_note = (f"  STALE ({', '.join(entry['stale_because'])} newer)"
-                          if entry["stale"] else "")
+            if not entry["stale"]:
+                stale_note = ""
+            elif not entry["exists"]:
+                stale_note = "  STALE (missing)"
+            elif entry["stale_because"]:
+                stale_note = f"  STALE ({', '.join(entry['stale_because'])} newer)"
+            else:                                   # the step's is_fresh hook said so
+                stale_note = "  STALE (the step's own check)"
             print(f"  {entry['artifact']:<16} {entry['produced_by']:<22} "
                   f"{exists_mark}  {age:<12}{stale_note}")
         return
@@ -136,8 +157,11 @@ def run_dag_cli(
             print("    RUNNING...")
 
     def on_step_end(step, result):
+        # The elapsed time is on the status line so a log -- or a blind test's transcript of
+        # one -- says where a build's wall clock went, step by step (`csynth` vs `system_xsi`).
+        took = f"({result.elapsed_seconds:.1f} s)"
         if not result.success:
-            print(f"    FAILED: {result.message}")
+            print(f"    FAILED {took}: {result.message}")
             # The message is str(exc); for a toolchain error that is often a bare string with no
             # file or line.  Print the traceback too so the failure is actionable.
             if result.traceback:
@@ -145,7 +169,37 @@ def run_dag_cli(
         elif result.skipped:
             print("    UP-TO-DATE")
         else:
-            print("    PASSED")
+            print(f"    PASSED {took}")
 
-    dag.run(config, through=args.through, force=force,
-            on_step_begin=on_step_begin, on_step_end=on_step_end)
+    # The whole command is one timing span, its steps (and their nested DAGs and toolchain runs)
+    # beneath it -- logged to <root>/.waveflow/events.jsonl and handed back to the caller.
+    command = Path(sys.argv[0]).name or "build"
+    with (events.logging_to(config.root_dir), events.collect() as spans,
+          events.span("build", command, through=args.through)):
+        dag.run(config, through=args.through, force=force,
+                on_step_begin=on_step_begin, on_step_end=on_step_end)
+    if args.timing:
+        print("timing:")
+        print(indent(events.format_tree(spans), "    "))
+    return spans
+
+
+
+#: ``--platform`` / ``--platforms-root``: the flags an example adds (``extra_args``) when its build
+#: should file what it measures -- csynth reports attributed, a system synthesized -- into a platform.
+PLATFORM_ARGS: tuple[tuple[tuple, dict], ...] = (
+    (("--platform",), {"default": None, "metavar": "NAME",
+                       "help": "file resource records into this calibration platform (created at "
+                               "the build's part and clock if absent; refused if it holds another)"}),
+    (("--platforms-root",), {"default": None, "metavar": "DIR",
+                             "help": "the platform library to write (default calib/platforms)"}),
+)
+
+
+def platform_config(args: argparse.Namespace, *, part: str, clk_freq: float) -> dict:
+    """The ``config_from_args`` for :data:`PLATFORM_ARGS`: the platform with the build's *part* and
+    *clk_freq* -- what its RTL is synthesized for, so the records describe that RTL -- or ``{}``."""
+    if not getattr(args, "platform", None):
+        return {}
+    return {"platform": args.platform, "platforms_root": args.platforms_root, "part": part,
+            "clk_freq": clk_freq}

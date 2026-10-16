@@ -2,6 +2,7 @@
 title: Python
 parent: Composite kernel interleaver
 nav_order: 2
+summary: "Building the design in Python: four hand-written FreeRunMod leaves, the two framework mem-streams they compose with, and the composite that wires all six. Shows how to write each kind of block for a gather, starting from the two descriptor types — one plain boundary command the host sends, one framed internal descriptor the pipeline forwards."
 ---
 # Python Model
 
@@ -72,8 +73,8 @@ that its input is *two* buffers — the indices `P` and the source `X` — so `c
 stream as **two reads**:
 
 ```python
-memr_p = MemRCmd(addr=int(cmd.p_off), len=nw, fwd_bursts=1)   # read P, relay 1 burst (the descriptor)
-memr_x = MemRCmd(addr=int(cmd.x_off), len=nw, fwd_bursts=0)   # read X, relay nothing
+memr_p = MemRCmd(addr=cmd.p_off, len=nw, fwd_bursts=1)   # read P, relay 1 burst (the descriptor)
+memr_x = MemRCmd(addr=cmd.x_off, len=nw, fwd_bursts=0)   # read X, relay nothing
 yield from self.cmd_out.write(...memr_p...)                   # [ MemRCmd(P,fwd=1)
 yield from self.cmd_out.write(...desc...)                     #   | IlDesc
 yield from self.cmd_out.write(...memr_x...)                   #   | MemRCmd(X,fwd=0) ]
@@ -117,13 +118,13 @@ class IlComputeInband(FreeRunMod):
 
     def run_iter(self) -> ProcessGen[None]:
         desc = yield from self.desc_in.get_schema(IlDesc)
-        n = int(desc.n)
+        n = desc.n
         yield from self.desc_out.write(...desc...)          # forward the descriptor
         pblock = yield from self.p_blk.acquire_read()
         xblock = yield from self.x_blk.acquire_read()
         yblock = yield from self.y_blk.acquire_write()
         yblock.val[:n] = xblock.val[pblock.val[:n]]         # the gather, vectorized: Y[i] = X[P[i]]
-        cycles = float(self.timing.predict({"n": n}))       # its own fitted loop-timing model
+        cycles = float(self.compute_timing.predict_feat({"n": n}))   # its own fitted loop-timing model
         yield self.timeout(max(0.0, cycles) * self.clk.period)
         ...
 ```
@@ -147,7 +148,7 @@ width-templated `hls::task` copied in by the build (a body that owns a memory po
 `MemRCmd` in-band and relays the opaque prefix; the writer takes its `MemWCmd` in-band on its single data
 stream. The writer is additionally `emit_done=True`, so it buffers the echoed `IlDesc` across the store and
 emits it on `s_done` after the write commits — the commit-timed completion. Their full story is
-[Streaming Memory Kernels](../../guide/memory/memstream.md).
+[Streaming Memory Kernels](../../guide/interface/axi_mm/master.md).
 
 ## Writing the composite: `InterleaverInband`
 

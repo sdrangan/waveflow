@@ -1,309 +1,200 @@
+"""The streaming polynomial example: model, scenarios, pysim timing, and the Vitis flow.
+
+The example is hook-first (plans/hook_first_flow.md): a pure bit-exact model, a body-only
+kernel, and shared stimulus files that the Python model, pysim and the hand-written C++
+testbench all read.  Every stage is checked against the expected responses scenarios.py
+computes from each scenario's intent.  The protocol is the command-response contract of
+plans/stream_inband_pattern.md: the coefficients travel in each DATA header, and the
+register map holds only status.
+"""
+from __future__ import annotations
+
 import csv
 import json
-import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from examples.stream_inband import scenarios as S
 from examples.stream_inband.poly import (
-    Float32,
+    POISONED_STATUS,
     PolyAccel,
     PolyCmdHdr,
-    PolyCmdType,
     PolyError,
-    PolyRespHdr,
-    PolySimResult,
     PolyTB,
     connect,
+    poly_eval,
+    poly_stream_model,
 )
-from examples.stream_inband.poly_build import build_poly_dag
+from examples.stream_inband.poly_build import WIDTHS, build_poly_dag, width_dir
 from waveflow.build.build import BuildConfig
 from waveflow.hw.clock import Clock
+from waveflow.simulation.logger import Logger
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain
-
+from waveflow.utils.burst_io import StreamBurst, read_bursts, write_bursts
 
 _CLK_FREQ = 100e6
 
 
-def _read_event_times(log_file: Path) -> dict[str, float]:
-    """Return first occurrence of each event name → simulation time (seconds)."""
-    events: dict[str, float] = {}
-    with open(log_file, newline='') as f:
-        for row in csv.DictReader(f):
-            ev = row['event']
-            if ev not in events:
-                events[ev] = float(row['time'])
-    return events
+def test_poly_eval_worked_examples() -> None:
+    # Every value here is exact in float32.
+    # A: y = 1 - 2x - 3x^2 + 4x^3
+    assert poly_eval(S.A, [0.0, 1.0, 2.0, -1.0]).tolist() == [1.0, 0.0, 17.0, -4.0]
+    # B: y = 0.5 + 0.25x - x^2 + 2x^3
+    assert poly_eval(S.B, [0.0, 1.0, 2.0, -1.0]).tolist() == [0.5, 1.75, 13.0, -2.75]
+    assert poly_eval(S.A, [0.5]).dtype == np.float32
 
 
-POLY_EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "stream_inband"
+def test_the_header_carries_the_coefficients() -> None:
+    """Rule 2: everything the kernel computes with is on the stream."""
+    assert "coeffs" in PolyCmdHdr.elements
+    assert PolyCmdHdr().serialize(word_bw=32).size == 6       # tx_id|cmd, nsamp, 4 floats
+    assert PolyCmdHdr().serialize(word_bw=64).size == 3
+    regmap = PolyAccel(name="a", sim=Simulation()).regmap
+    assert {"halted", "error", "tx_id"} <= set(regmap._fields)
+    assert "coeffs" not in regmap._fields                      # status only (rule 3)
 
 
-def _copy_poly_vitis_resources(dst_dir: Path) -> None:
-    """Copy the persistent (non-generated) poly Vitis sources into a temp dir.
-
-    Phase 14 of the codegen pipeline emits ``gen/poly.{hpp,cpp}`` and
-    ``gen/poly_tb.cpp`` from Python sources, so only the TCL driver and
-    the sticky ``poly_evaluate_impl.tpp`` implementation file need to be
-    seeded — the build DAG generates the rest.
-    """
-    for name in ("run.tcl", "poly_evaluate_impl.tpp"):
-        shutil.copy(POLY_EXAMPLE_DIR / name, dst_dir / name)
+def _run_model(d: Path, bw: int, names) -> None:
+    for name in names:
+        res = poly_stream_model(read_bursts(d / name / "in"), word_bw=bw)
+        write_bursts(res.out, d / name / "model")
+        (d / name / "model" / "status.json").write_text(json.dumps(res.status()))
 
 
-def test_poly_simulate_matches_expected_outputs(tmp_path: Path) -> None:
-    results = build_poly_dag().run(
-        BuildConfig(root_dir=tmp_path, params={'nsamp': 100}),
-        through='extract_py_timing',
-    )
-
-    assert results['build_inputs'].success
-    assert results['py_sim'].success
-
-    sim_result = PolySimResult.from_paths(
-        cmd_hdr_path=results['build_inputs'].path('data_cmd_hdr'),
-        samp_in_path=results['build_inputs'].path('samp_in'),
-        resp_dir=results['py_sim'].path('sim_dir'),
-    )
-
-    assert sim_result.cmd_hdr is not None
-    assert sim_result.samp_in is not None
-    assert sim_result.resp_hdr is not None
-    assert sim_result.samp_out is not None
-    assert sim_result.passed is True
-    assert sim_result.halted == 0
-    assert sim_result.error is PolyError.NO_ERROR
-    assert sim_result.samp_out.dtype == np.float32
+@pytest.mark.parametrize("bw", WIDTHS)
+def test_the_model_matches_every_scenario(tmp_path: Path, bw: int) -> None:
+    S.write_scenarios(tmp_path, bw)
+    _run_model(tmp_path, bw, S.scenarios())
+    assert S.check(tmp_path, "model") == {n: [] for n in S.scenarios()}
 
 
-def test_poly_timing_bandwidth_and_unroll(tmp_path: Path) -> None:
-    """Timing scales with unroll_factor and interface bitwidth.
-
-    Three configurations at nsamp=100, proc_latency=10, clk=1 GHz:
-
-    Case 1 — uf=1, bw=32: each sample is one 32-bit word; bandwidth-limited
-      at 1 sample/cycle.  Expected duration ≈ (nsamp + proc_latency) cycles.
-
-    Case 2 — uf=2, bw=32: unroll=2 but the 32-bit interface only carries one
-      Float32 per clock, so still bandwidth-limited at 1 sample/cycle.
-      Duration should match case 1.
-
-    Case 3 — uf=2, bw=64: two Float32 samples packed per 64-bit word; both
-      compute and bandwidth scale with unroll_factor.
-      Expected duration ≈ (nsamp/uf + proc_latency) cycles ≈ half of case 1.
-    """
-    nsamp = 100
-    proc_latency = 40  # matches PolyAccel default (cosim-calibrated)
-    period = 1.0 / _CLK_FREQ
-
-    configs = [
-        dict(in_bw=32, out_bw=32, unroll_factor=1),
-        dict(in_bw=32, out_bw=32, unroll_factor=2),
-        dict(in_bw=64, out_bw=64, unroll_factor=2),
-    ]
-
-    durations: list[float] = []
-    for i, cfg in enumerate(configs):
-        run_dir = tmp_path / f"run_{i}"
-        run_dir.mkdir()
-        results = build_poly_dag().run(
-            BuildConfig(root_dir=run_dir, params={
-                'clk_freq': _CLK_FREQ,
-                'nsamp': nsamp,
-                'in_bw': cfg['in_bw'],
-                'out_bw': cfg['out_bw'],
-                'unroll_factor': cfg['unroll_factor'],
-            }),
-            through='extract_py_timing',
-        )
-        sim_result = PolySimResult.from_paths(
-            cmd_hdr_path=results['build_inputs'].path('data_cmd_hdr'),
-            samp_in_path=results['build_inputs'].path('samp_in'),
-            resp_dir=results['py_sim'].path('sim_dir'),
-        )
-        assert sim_result.passed, f"Simulation failed for config {cfg}"
-        log_path = results['py_sim'].path('log')
-        events = _read_event_times(log_path)
-        durations.append(events['samp_out_write_end'] - events['samp_read_begin'])
-
-    dur_uf1_bw32, dur_uf2_bw32, dur_uf2_bw64 = durations
-    tol = 5 * period  # ±5 clock cycles to allow for timing discretisation
-
-    # Cases 1 and 2: bandwidth-limited — timing should be identical
-    expected_bw_limited = (nsamp + proc_latency) * period
-    assert abs(dur_uf1_bw32 - expected_bw_limited) < tol, (
-        f"Case 1 (uf=1, bw=32): expected ~{expected_bw_limited*1e9:.0f} ns, "
-        f"got {dur_uf1_bw32*1e9:.1f} ns"
-    )
-    assert abs(dur_uf2_bw32 - expected_bw_limited) < tol, (
-        f"Case 2 (uf=2, bw=32): expected ~{expected_bw_limited*1e9:.0f} ns (BW-limited), "
-        f"got {dur_uf2_bw32*1e9:.1f} ns"
-    )
-    assert abs(dur_uf2_bw32 - dur_uf1_bw32) < tol, (
-        f"Cases 1 and 2 should match (both BW-limited): "
-        f"{dur_uf1_bw32*1e9:.1f} ns vs {dur_uf2_bw32*1e9:.1f} ns"
-    )
-
-    # Case 3: compute + BW not limited — duration halved
-    expected_bw64 = (nsamp // 2 + proc_latency) * period
-    assert abs(dur_uf2_bw64 - expected_bw64) < tol, (
-        f"Case 3 (uf=2, bw=64): expected ~{expected_bw64*1e9:.0f} ns, "
-        f"got {dur_uf2_bw64*1e9:.1f} ns"
-    )
-    assert dur_uf2_bw64 < dur_uf1_bw32 * 0.75, (
-        f"Case 3 should be significantly faster than case 1: "
-        f"{dur_uf2_bw64*1e9:.1f} ns vs {dur_uf1_bw32*1e9:.1f} ns"
-    )
+@pytest.mark.parametrize("bw", WIDTHS)
+def test_the_error_scenarios_halt_and_close_the_output_burst(tmp_path: Path, bw: int) -> None:
+    """Rule 6: status set, the burst in progress closed with TLAST, nothing more read."""
+    S.write_scenarios(tmp_path, bw)
+    for name, code, tx, n_last in (("early_tlast", PolyError.TLAST_EARLY_SAMP_IN, 42, 6),
+                                   ("no_tlast", PolyError.NO_TLAST_SAMP_IN, 51, 10),
+                                   ("early_tlast_vcd", PolyError.TLAST_EARLY_SAMP_IN, 72, 6)):
+        res = poly_stream_model(read_bursts(tmp_path / name / "in"), word_bw=bw)
+        assert res.status() == {"halted": 1, "error": int(code), "tx_id": tx}, name
+        assert res.out[-1].tlast, name                          # closed
+        assert len(res.out[-1].words) == -(-n_last // (bw // 32)), name
 
 
-class _FailingPolyAccel(PolyAccel):
-    """Accelerator variant whose `evaluate()` always returns WRONG_NSAMP.
-
-    Drives the halt-on-error path through `on_start` end-to-end: the regmap
-    latches halted/error/tx_id, the slave clears _busy, and the host reads
-    the status back over AXI-Lite. The real evaluate() can't naturally
-    return WRONG_NSAMP under SimPy (get_pipelined zero-pads up to ``count``),
-    so we inject the failure here while preserving the real stream contract
-    (resp_hdr + samp_out written before returning).
-    """
-
-    def evaluate(self, cmd_hdr, s_in, m_out, coeffs):  # type: ignore[override]
-        from waveflow.hw.arrayutils import array
-        del coeffs  # injected for signature parity; this stub forces an error path.
-        resp_hdr = PolyRespHdr()
-        resp_hdr.tx_id = cmd_hdr.tx_id
-        yield from m_out.write(resp_hdr)
-        _samp_in, _tstart = yield from s_in.get_pipelined(Float32, count=cmd_hdr.nsamp)
-        zero_out = np.zeros(int(cmd_hdr.nsamp), dtype=np.float32)
-        yield from m_out.write(array(Float32, zero_out))
-        return PolyError.WRONG_NSAMP
+def test_the_coefficients_do_not_carry_over(tmp_path: Path) -> None:
+    """Rule 4: the same samples under A, B, A give A's results twice and B's between."""
+    S.write_scenarios(tmp_path, 32)
+    out = read_bursts(tmp_path / "coeff_change" / "expected")
+    a1, b, a2 = out[1].words, out[3].words, out[5].words
+    assert np.array_equal(a1, a2) and not np.array_equal(a1, b)
 
 
-def test_poly_halts_on_error(tmp_path: Path) -> None:
-    """Kernel latches halted/error/tx_id and returns when evaluate fails."""
-    nsamp = 100
-    tx_id = 17
+def test_the_checker_rejects_wrong_answers(tmp_path: Path) -> None:
+    """The checker is worth something only if it rejects a wrong answer."""
+    S.write_scenarios(tmp_path, 32)
+    _run_model(tmp_path, 32, ["multi_data", "early_tlast"])
 
-    cmd_hdr = PolyCmdHdr()
-    cmd_hdr.cmd_type = PolyCmdType.DATA
-    cmd_hdr.tx_id    = tx_id
-    cmd_hdr.nsamp    = nsamp
+    # A wrong result word.
+    d = tmp_path / "multi_data" / "model"
+    bursts = read_bursts(d)
+    bursts[1].words[3] ^= 1
+    write_bursts(bursts, d)
+    assert S.check(tmp_path, "model", ["multi_data"])["multi_data"]
 
-    samp_in = np.linspace(0.0, 1.0, nsamp, dtype=np.float32)
-    coeffs  = np.array([1.0, -2.0, -3.0, 4.0], dtype=np.float32)
+    # A kernel that did not clear its status (rule 5): the poisoned values survive.
+    _run_model(tmp_path, 32, ["multi_data"])
+    (d / "status.json").write_text(json.dumps(POISONED_STATUS))
+    assert any("status" in p for p in S.check(tmp_path, "model", ["multi_data"])["multi_data"])
 
-    sim = Simulation()
-    clk = Clock(freq=_CLK_FREQ)
-    accel = _FailingPolyAccel(name="poly_accel", sim=sim, clk=clk)
-    tb = PolyTB(name="poly_tb", sim=sim,
-                cmd_hdr=cmd_hdr, samp_in=samp_in, coeffs=coeffs)
+    # A kernel that left its output burst open on the error (rule 6).
+    d = tmp_path / "early_tlast" / "model"
+    bursts = read_bursts(d)
+    bursts[-1] = StreamBurst(bursts[-1].words, False)
+    write_bursts(bursts, d)
+    problems = S.check(tmp_path, "model", ["early_tlast"])["early_tlast"]
+    assert any(p.startswith("rule 6") for p in problems), problems
+
+
+def test_pipeline_python_half(tmp_path: Path) -> None:
+    for through in ("check_model", "check_pysim", "extract_py_timing_w32",
+                    "extract_py_timing_w64"):
+        results = build_poly_dag().run(BuildConfig(root_dir=tmp_path), through=through)
+        bad = {k: v.message for k, v in results.items() if not v.success}
+        assert not bad, bad
+    for bw in WIDTHS:
+        pysim = json.loads((tmp_path / "results" / "check_pysim.json").read_text())
+        ran = [k for k in pysim if k.startswith(f"w{bw}/")]
+        assert f"w{bw}/early_tlast" in ran and f"w{bw}/no_tlast" not in ran
+    py = {bw: json.loads((tmp_path / "results" / f"py_timing_w{bw}.json").read_text())
+          for bw in WIDTHS}
+    assert py[64]["transaction_cycles"] < py[32]["transaction_cycles"]
+
+
+def _kernel_cycles(stim: Path, bw: int, uf: int, log: Path) -> float:
+    sim, clk = Simulation(), Clock(freq=_CLK_FREQ)
+    accel = PolyAccel(name="a", sim=sim, clk=clk, in_bw=bw, out_bw=bw, unroll_factor=uf,
+                      logger=Logger(name="l", sim=sim, file_path=log, fields=["event", "job"]))
+    tb = PolyTB(name="tb", sim=sim, stimulus=stim, n_out=2, word_bw=bw)
     connect(sim, tb, accel, clk)
     sim.run_sim()
-
-    assert tb.halted == 1, f"expected halted=1, got {tb.halted}"
-    assert tb.error == PolyError.WRONG_NSAMP, (
-        f"expected WRONG_NSAMP, got {tb.error!r}"
-    )
-    assert tb.tx_id_status == tx_id, (
-        f"expected tx_id={tx_id}, got {tb.tx_id_status}"
-    )
-
-    sim_result = PolySimResult(
-        cmd_hdr=cmd_hdr,
-        samp_in=samp_in,
-        resp_hdr=tb.resp_hdr,
-        samp_out=tb.samp_out,
-        halted=tb.halted,
-        error=tb.error,
-        tx_id=tb.tx_id_status,
-    )
-    assert sim_result.passed is False
+    assert tb.status == {"halted": 0, "error": 0, "tx_id": 0}   # cleared over the poison
+    ev: dict[str, float] = {}
+    with open(log, newline="") as f:
+        for row in csv.DictReader(f):
+            ev.setdefault(row["event"], float(row["time"]))
+    return (ev["proc_end"] - ev["proc_begin"]) * _CLK_FREQ
 
 
-@pytest.mark.vitis
-def test_poly_vitis_cosim_matches_python_model(tmp_path: Path) -> None:
-    if not toolchain.find_vitis_path():
-        pytest.skip("Vitis installation not found; skipping poly Vitis co-sim regression.")
-
-    _copy_poly_vitis_resources(tmp_path)
-
-    results = build_poly_dag().run(
-        BuildConfig(root_dir=tmp_path, params={'nsamp': 100})
-    )
-
-    csim_result = results.get('csim')
-    if csim_result is None or not csim_result.success:
-        msg = csim_result.message if csim_result else "csim did not run"
-        pytest.skip(f"Vitis execution unavailable in current setup: {msg}")
-
-    assert results['validate_csim'].success, results['validate_csim'].message
-
-    cmd_hdr_path = results['build_inputs'].path('data_cmd_hdr')
-    samp_in_path = results['build_inputs'].path('samp_in')
-    sim_result = PolySimResult.from_paths(
-        cmd_hdr_path=cmd_hdr_path, samp_in_path=samp_in_path,
-        resp_dir=results['py_sim'].path('sim_dir'),
-    )
-    vitis_result = PolySimResult.from_paths(
-        cmd_hdr_path=cmd_hdr_path, samp_in_path=samp_in_path,
-        resp_dir=results['validate_csim'].path('vitis_dir'),
-    )
-    # Vitis 2025.1 writes poly_cosim.rpt; older versions wrote cosim.log
-    sim_report_dir = tmp_path / "waveflow_poly_proj" / "solution1" / "sim" / "report"
-    cosim_reports = list(sim_report_dir.glob("*cosim*")) if sim_report_dir.exists() else []
-
-    assert vitis_result.passed is True
-    assert vitis_result.halted == 0
-    assert vitis_result.error is PolyError.NO_ERROR
-    assert np.allclose(vitis_result.samp_out, sim_result.samp_out[:vitis_result.samp_out.size], rtol=1e-6, atol=1e-6)
-    assert cosim_reports, f"No cosim report found in {sim_report_dir}"
+def test_timing_model_scales_with_width_and_unroll(tmp_path: Path) -> None:
+    """The pysim timing model: bandwidth-limited, so 64 bits saves the words, unroll does not."""
+    cycles = {}
+    for bw, uf in ((32, 1), (32, 2), (64, 2)):
+        d = tmp_path / f"w{bw}_{uf}"
+        S.write_scenarios(d, bw)
+        cycles[(bw, uf)] = _kernel_cycles(d / "timing" / "in", bw, uf, tmp_path / f"{bw}_{uf}.csv")
+    assert abs(cycles[(32, 2)] - cycles[(32, 1)]) < 5            # unroll can't beat the bus
+    # 64 bits moves the 100 samples in 50 words instead of 100, and each 6-word header in 3.
+    saved = cycles[(32, 1)] - cycles[(64, 2)]
+    assert 50 <= saved <= 58, cycles
 
 
 @pytest.mark.vitis
-def test_poly_vitis_cosim_timing_within_tolerance(tmp_path: Path) -> None:
-    """End-to-end success gate for the build-DAG-reorg plan.
-
-    Runs the full pipeline through ``validate_timing`` and asserts the
-    new ValidateTimingStep's verdict reports ``pass=true``.  Both
-    structured timing artifacts (``py_timing.json`` /
-    ``cosim_timing.json``) must be present so a future model-training
-    workflow can consume them.
-    """
+def test_vitis_csim_cosim_and_timing(tmp_path: Path) -> None:
+    """csim on every scenario, cosim of the timing scenario, cosim cycles vs pysim, both widths."""
     if not toolchain.find_vitis_path():
-        pytest.skip("Vitis installation not found; skipping poly Vitis cosim timing regression.")
+        pytest.skip("Vitis installation not found")
+    results = build_poly_dag().run(BuildConfig(root_dir=tmp_path), through="summary")
+    bad = {k: str(v.message)[-2000:] for k, v in results.items() if not v.success}
+    assert not bad, bad
+    summary = json.loads((tmp_path / "results" / "summary.json").read_text())
+    for stage, scenarios in summary["checks"].items():
+        assert scenarios and all(scenarios.values()), (stage, scenarios)
+    assert set(summary["checks"]["csim"]) == {f"w{bw}/{n}" for bw in WIDTHS for n in S.scenarios()}
+    for bw in WIDTHS:
+        assert summary["timing"][f"w{bw}"]["pass"], summary["timing"]
+        status = json.loads((width_dir(tmp_path, bw) / "timing" / "cosim" / "status.json").read_text())
+        assert status == {"halted": 0, "error": 0, "tx_id": 0}
+    assert (tmp_path / "vcd" / "error_path.vcd").stat().st_size > 0
 
-    _copy_poly_vitis_resources(tmp_path)
 
-    results = build_poly_dag().run(
-        BuildConfig(root_dir=tmp_path, params={'nsamp': 100}),
-        through='validate_timing',
-    )
+def test_the_protocol_page_shows_the_serialized_layout() -> None:
+    """docs/examples/stream_inband/protocol.md quotes word layouts; they must be serialize()'s."""
+    from waveflow.hw.arrayutils import write_array
 
-    csim_result = results.get('csim')
-    if csim_result is None or not csim_result.success:
-        msg = csim_result.message if csim_result else "csim did not run"
-        pytest.skip(f"Vitis execution unavailable in current setup: {msg}")
+    from examples.stream_inband.poly import CoeffArray, Float32, PolyCmdType, PolyRespHdr
 
-    assert results['validate_timing'].success, results['validate_timing'].message
-    verdict_path = results['validate_timing'].path('timing_verdict')
-    verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
-    assert verdict['pass'] is True, (
-        f"Timing verdict failed: py={verdict['py_cycles']} cycles, "
-        f"cosim={verdict['cosim_cycles']} cycles, delta={verdict['delta']}, "
-        f"tolerance={verdict['tolerance']}."
-    )
-    assert verdict['delta'] <= 20, verdict
-    # Structured fields must round-trip — see [[project-cycle-model-training]].
-    assert 'py_cycles' in verdict and 'cosim_cycles' in verdict
-    py_timing = json.loads(
-        results['extract_py_timing'].path('py_timing').read_text(encoding="utf-8")
-    )
-    assert py_timing['source'] == 'py_sim'
-    assert isinstance(py_timing['transaction_cycles'], int)
-    cosim_timing = json.loads(
-        results['extract_cosim_timing'].path('cosim_timing').read_text(encoding="utf-8")
-    )
-    assert cosim_timing['source'] == 'cosim'
-    assert isinstance(cosim_timing['transaction_cycles'], int)
+    page = (Path(__file__).resolve().parents[2] / "docs" / "examples" / "stream_inband"
+            / "protocol.md").read_text(encoding="utf-8")
+    for bw, digits in ((32, 8), (64, 16)):
+        hdr = PolyCmdHdr()
+        hdr.cmd_type, hdr.tx_id, hdr.nsamp = PolyCmdType.DATA, 42, 100
+        hdr.coeffs = CoeffArray(S.A)
+        resp = PolyRespHdr()
+        resp.tx_id = 42
+        x = write_array(np.array([0.5, -1.0, 2.0], np.float32), elem_type=Float32, word_bw=bw)
+        for words in (hdr.serialize(word_bw=bw), resp.serialize(word_bw=bw), x):
+            for w in words:
+                assert f"0x{int(w):0{digits}x}" in page, (bw, hex(int(w)))

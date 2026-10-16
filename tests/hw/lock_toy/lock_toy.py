@@ -1,6 +1,6 @@
 """lock_toy.py — the smallest graph that holds a :class:`~waveflow.hw.locked_mem.LockedT2pMemIF`.
 
-``plans/t2p_lock_chan.md`` S1, checkpoint 2.  Two tasks, one memory, one lock::
+PR #178, checkpoint 2.  Two tasks, one memory, one lock::
 
     s_in --> [write] --ACQUIRE/GRANT/RELEASE--> [read] --> s_out
                 |                                  |

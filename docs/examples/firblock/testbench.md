@@ -2,6 +2,7 @@
 title: Testbench (Python)
 parent: Block FIR with state
 nav_order: 5
+summary: "The harder half: writing a check that can actually catch a state bug. Computing the expected output the same way the DUT does — block by block, carrying the tail — is nearly worthless, because a bug in how the carry is stored reproduces itself in the check. The gate on this page found a bug C-synthesis was perfectly happy with."
 ---
 # Testbench — how do you know stateful hardware is right?
 
@@ -36,7 +37,7 @@ for bi, blk in enumerate(blocks):
         g = base[bi] + i                       # index into the global signal
         win = np.array([sig[g - k] if g - k >= 0 else 0 for k in range(t)], dtype=np.int64)
         acc = fixed_sum(mult(_as_fixed(win, samp_cls), h))
-        ys[i] = int(np.asarray(quantize(acc, samp_cls)).reshape(-1)[0])
+        ys[i] = int(quantize(acc, samp_cls).val.reshape(-1)[0])
 ```
 
 There is no carry here, and no block boundary — just `x[i-k]`, zero before the start, with the
@@ -130,7 +131,7 @@ bursts = tb.done_sink.words
 assert len(bursts) == len(tb._steps), (
     f"fir_block: {len(bursts)} completions on s_done, expected {len(tb._steps)} "
     f"(one per command, LOAD_TAPS included)")
-got_ids = [int(FirDesc().deserialize(np.asarray(b), word_bw=w).tx_id) for b in bursts]
+got_ids = [FirDesc().deserialize(b, word_bw=w).tx_id for b in bursts]
 assert got_ids == list(range(len(tb._steps))), ...
 ```
 

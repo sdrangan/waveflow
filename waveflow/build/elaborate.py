@@ -237,6 +237,33 @@ _CONTEXT_ATTRS = frozenset({
     # caught only by ``tests/calib/test_key_stability.py``.
     "dropped", "last_drop_time",                        # StreamIF (offer)
     "blocks_sent", "blocks_delivered", "underrun", "overrun",    # RFSampIF
+    # How the pysim model ISSUES a master's transactions, not what the master is.  An MMIFMaster's
+    # outstanding limit and issue delay model the host driving it (one read + one write, 2 cycles
+    # between transactions, matching the XSI AxiMmMaster), and ``_slots`` holds its simpy resources.  Adding the field moved every FirBlock
+    # key in one commit, caught by tests/calib/test_key_stability.py -- the same lesson as above.
+    "max_outstanding", "issue_cycles", "_slots",        # MMIFMaster
+    "mm_device",          # a view/adaptor's back-reference to its MmSlaveDevice (an address-map walk)
+    # MemWStream.done_framed only chooses whether pysim's s_done carries TLAST (the HLS port never
+    # does); the endpoint's own has_tlast still tells two such writers apart.  Adding the field moved
+    # every FirBlock key -- caught by test_key_stability, again.
+    "done_framed",
+    # A stream endpoint's transfer bookkeeping (plans/pipelined_ops.md): each burst's stamps, the burst
+    # in flight, transfer counts, a waiting reader -- what moved, never what the port is.  Without them
+    # every module with a stream port re-keys, caught by test_key_stability once more.
+    "burst_stamps", "pending_burst", "nwritten", "nread", "_last_stamp", "_arrival", "_reading",
+    # Declared timing (plans/pipelined_ops.md): a module's timed phases and their open records, and
+    # what declaring them turns on at an endpoint (its transfer log, its owner, the beat charge, its
+    # cached events).  A phase predicts something about a module, as a calibration model does.
+    "timing_phases", "_open_phase_records", "xfer_log", "_timing_owner", "_charge_beats",
+    "_ev_first", "_ev_last", "_nxfer", "_last_beat", "rx_write_begin",
+    # A credit stream's run-time accounting (reverse_stream.py): what the link has carried, never
+    # what it is.  Without them a kernel's key moved when it ran -- its calibration was filed after
+    # the run under a key no lookup before one computes (plans/unit_harness.md Stage 4).
+    "written", "acked", "n_no_room", "n_resp_no_room", "n_credit_waits",
+    "consumed", "offered", "n_offers",
+    # A memory's calibrated timing, loaded from its record at pre_sim (Stage 4c): a statement about
+    # the memory, never part of it.
+    "_mem_timing",
 })
 
 # Attributes holding *name-keyed* structural collections: compare the value
@@ -265,10 +292,20 @@ def _numpy():
     return _numpy_mod or None
 
 
+def _simpy_type(value: Any) -> type | None:
+    """The simpy class *value* is, or derives from (the nearest in its MRO); ``None`` if none."""
+    for cls in type(value).__mro__:
+        mod = cls.__module__ or ""
+        if mod == "simpy" or mod.startswith("simpy."):
+            return cls
+    return None
+
+
 def _is_runtime(value: Any) -> bool:
-    """True for a simpy runtime object (per-build identity, not structure)."""
-    mod = type(value).__module__ or ""
-    return mod == "simpy" or mod.startswith("simpy.")
+    """True for a simpy runtime object (per-build identity, not structure) -- a subclass too: a queue
+    view swaps an endpoint's ``simpy.Store`` for its notifying subclass at ``pre_sim``, and the key
+    must not move when a simulation starts (``plans/unit_harness.md`` Stage 4)."""
+    return _simpy_type(value) is not None
 
 
 def _canon(value: Any, seen: frozenset) -> Any:
@@ -302,7 +339,7 @@ def _canon(value: Any, seen: frozenset) -> Any:
             return ("np", str(value.dtype), value.item())
     if _is_runtime(value):
         # simpy resources are per-build identity only — keep just the type tag.
-        return ("runtime", type(value).__name__)
+        return ("runtime", _simpy_type(value).__name__)
     d = getattr(value, "__dict__", None)
     if d is None:
         return ("opaque", f"{type(value).__module__}.{type(value).__qualname__}",

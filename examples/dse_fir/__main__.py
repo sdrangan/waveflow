@@ -45,8 +45,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("--config must contain a JSON object")
                 registry = make_dse_registry(make_service(args.root, config))
                 if args.command == "serve":
-                    from mcp.server.fastmcp import FastMCP
-                    server = FastMCP("waveflow-fir-dse")
+                    from mcp.server.mcpserver import MCPServer
+                    server = MCPServer("waveflow-fir-dse")
                     registry.register_all(server, "dse")
                 elif args.command == "context":
                     output = registry.dispatch("dse_get_dse_context", {})

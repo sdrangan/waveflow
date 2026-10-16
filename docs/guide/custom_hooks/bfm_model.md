@@ -54,9 +54,19 @@ opposite role on the same protocol. That pairing is one table,
 [`BFM_DUALS`](../build/bfm.md#bfm-duals), and a new model has to name the row it
 fills.
 
-Two entries in that table are **holes**, and they bound what this hook can do today: nothing
-implements AXI4-Lite (so a `HostActivated` DUT cannot be driven at RTL at all), and nothing masters
-an `m_axi` bus *into* a DUT (in this flow the kernel is always the master).
+A **host** is a participant too. When the RTL top is a system — kernels behind adaptors and AMD's
+crossbar — the top presents an AXI-MM *slave* port (the crossbar's SI) and one interrupt output per
+queue view. The host's bus master faces the first and is answered by `AxiMmMaster`; each of its
+`IrqIFSink`s faces an `irq_out` pin and is answered by `IrqPin`
+([`xsi_mm_host.h`](../../../waveflow/build/xsi/xsi_mm_host.h)). So a host module resolves:
+
+```python
+>>> check(host, "xsi_bfm_model")      # a FirHost declaring AxiMmMaster + three IrqPins
+(True, None)
+```
+
+One entry in that table is a **hole** that bounds what this hook can do today: nothing implements
+AXI4-Lite, so a `HostActivated` DUT cannot be driven at RTL at all.
 
 ## The five phases, and why `sample` and `update` are split
 
@@ -196,6 +206,82 @@ def bfm_model(self):
 `ports` are **attribute names**, in the C++ constructor's order — that order is a fact about the C++
 and nothing else records it. Each is validated against the module's `add_endpoint` registry at
 elaboration time, so a renamed port is an error where you can see it rather than deep inside the walk.
+
+## A model beside the example {#local-header}
+
+A model need not live in the framework library. Some C++ is per-example by nature — a **host
+program** is the case that matters: what it sends and what it checks belong to one design, not to
+`xsi_bfm.h`. Such a model goes in a header beside the Python module that declares it:
+
+```python
+def bfm_model(self):
+    from waveflow.build.composite_gen import BfmModel
+    return BfmModel("CountingSink", ports=("stream_ep",), header="xsi_local/counting_sink.h")
+```
+
+`header` is relative to the directory of the file defining the module's class. Three things change
+when it is set:
+
+- **`check` looks the class up in that header**, not in the library — so a library class of the same
+  name cannot answer for a typo in the local one, and a missing file is named.
+- **The class is the participant's on every port it spans.** Each port's dual is still checked to
+  exist (a port with no dual is refused), but the class is not taken from the dual table.
+- **The harness includes it by file name**, and `TbSpec.local_headers` carries its path so whoever
+  builds the workspace copies it beside the harness.
+
+The conformance obligation is unchanged — a local model is a model, and the same gate applies.
+`tests/build/test_xsi_system_top.py` resolves and compiles a trivial one.
+
+## A host is a hooked module {#host}
+
+A host program is the module this hook was missing. Like a kernel it has two realizations -- the Python
+one and a pre-written one -- and the hook joins them the way `kernel_task()` joins a kernel to its HLS
+body:
+
+| | kernel | host |
+|---|---|---|
+| Python realization | `run_iter` / `run_proc` | a `SwHost`'s threads (SimPy processes) |
+| pre-written realization | `kernel_task()` → an `hls::task` body | `cpp_model` / `cpp_header` → the same threads in C++, in a `.h` beside the example |
+| generated | the top, the wiring | the system top, the host's endpoints, the harness |
+| the gate | same vectors, bit-exact output | same scenario, identical per-endpoint traces |
+
+A host is a [`SwHost`](../build/sw_threads.md), and **it does not write `bfm_model()` -- or a model**. It
+declares its C++ class and header, and `SwHost.bfm_model()` derives the rest: one model spanning the
+host's bus master and every interrupt input it created (`add_bus_master`, `add_irq`):
+
+```python
+class FirHost(SwHost):
+    cpp_model: ClassVar[str | None] = "FirHostModel"
+    cpp_header: ClassVar[str | None] = "mm_fir_host.h"
+```
+
+The C++ class derives from `<Host>_endpoints`, a header **generated** from the wired host
+([`sw_host_gen.py`](../../../waveflow/build/sw_host_gen.py)), and holds only the host's threads, written
+with blocking calls on the software-thread runtime -- see [Software threads](../build/sw_threads.md).
+`check(host, "xsi_bfm_model")` looks the class up in that header (a class deriving from
+`<Host>_endpoints` counts). Its ports resolve against the **system top**
+([`system_top`](../../../waveflow/build/system_top.py)): the bus master to the crossbar slot it is bound
+to (`s0_axi`), each interrupt input to the output of the view its line comes from (`irq_qin`, ...). The
+run ends when the host's `done()` -- every thread finished -- says it has everything it asked for; that
+completion is the measured cycle count. Worked cases: [mm_fir](../../examples/mm_fir/xsi.md#the-host-program)
+and [markov](../../examples/markov/xsi.md#the-host-in-c); the whole flow is
+[XSI system simulation](../build/xsi_system.md).
+
+Two rules keep the two realizations comparable:
+
+- **No scenario in the C++.** What the host sends comes from a file both realizations read -- the host's
+  `scenario_bursts()`, written by `write_scenario` to the `scenario` DynParam. A scenario baked into the
+  C++ would be a second copy, and there would be nothing to compare. Settings the C++ needs are
+  `DynParam`s too.
+- **Every host endpoint records what crossed it** -- each packet sent, each config committed, the words
+  each read took, each status read, each region read back from memory -- on both sides, and dumps one
+  burst bundle per endpoint to the `trace_dir` DynParam.
+
+The **host conformance gate** then discharges the obligation above for a host: run the same scenario
+through pysim and through RTL, and require **each endpoint's trace to be byte-identical** --
+the system DAG's [compare](../build/xsi_system.md#compare) step does it (`run.trace_mismatches`). Per endpoint, not globally: the
+interleaving across endpoints is timing, and pysim is loosely timed. The RTL cycle count is an exact
+gate of its own.
 
 ## See also
 

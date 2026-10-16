@@ -72,12 +72,15 @@ would otherwise have to be careful about.
 Each module also carries its own loop-level breakdown in `m.subblocks`, as figures *within* its total
 rather than additions to it — see [Trap 1](#trap-1-the-rows-nest).
 
-## You get this on every build
+## You get this on every build that has the step
 
-Nothing above needs doing by hand in a build DAG.
+Nothing above needs doing by hand in a build DAG that includes the step.
 [`InspectSynthStep`](../build/vitis.md) is the rung after `csynth`: it consumes the `report_dir`
 artifact, attributes it, writes `results/resources.json`, and files each module's figures into the
-platform's [module store](../resource_model/resources.md).
+platform's [module store](../resource_model/resources.md) (when the build selects a platform).
+`fir_block`, `vecmult`, `regmap` and `stream_inband` add it; a system built by `add_system_steps`
+gets the same attribution for every kernel from its `kernel_resources` step
+([Systems](./systems.md)).  A DAG without it attributes nothing.
 
 ```python
 dag.add(InspectSynthStep(
@@ -88,8 +91,15 @@ dag.add(InspectSynthStep(
 ```
 
 The synthesis is the expensive part; attributing its report costs a tenth of a second. That is why it
-runs on **every** C-synthesis rather than only when someone remembers to calibrate — the numbers above
-are read back from the `results/resources.json` this step wrote.
+runs on every C-synthesis of a DAG that has it rather than only when someone remembers to calibrate —
+the numbers above are read back from the `results/resources.json` this step wrote.  With
+`require_ii1=True` and `loop_csv=` the same step writes the loop table and fails the build on a
+pipelined loop at II > 1 (`regmap` and `stream_inband` use it that way).
+
+A top with **no** kernel task and no children — a host-activated kernel, a routed channel's bus
+writer — is attributed too: its one function row (`mm_queue_writer_task_64_128_s`) is the module,
+and the `m_axi` / `s_axilite` adapters, which csynth gives no figures, stay integration.  A report
+with no function row besides the top's (`simp_fun`) makes the top row the module, adapters inside.
 
 ## Why this is not just summing the rows
 

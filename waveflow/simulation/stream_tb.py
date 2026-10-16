@@ -25,12 +25,12 @@ What did **not** change is the reason they are not kernels: a participant declar
 :meth:`~waveflow.hw.hw_module.HwModule.bfm_model`, not ``kernel_task``, so it is realized beside the
 top rather than inside it.  ``HwModule`` **is** a ``SimObj``, so ``pre_sim``/``run_proc`` are
 untouched — this buys structure, it does not change behaviour.  The question this settles was posed
-in ``plans/xsi_tb_codegen.md`` ("what kind is a TB participant"): the answer is *not a new kind* — it
+in the xsi_tb_codegen plan (commit 3052952) ("what kind is a TB participant"): the answer is *not a new kind* — it
 is a hook on the one module class.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +39,13 @@ from waveflow.hw.hw_module import DynParam, HwModule
 from waveflow.hw.interface import StreamIFMaster, StreamIFSlave, Words
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils.burst_io import read_burst_bundle
+
+
+def _chunk_args(bitwidth: int) -> tuple[str, ...]:
+    """The XSI model's ``chunks`` ctor argument -- ``ceil(W/64)`` uint64 per beat -- for a port wider
+    than 64 bits, and nothing otherwise, so every narrower harness is emitted exactly as before."""
+    k = -(-int(bitwidth) // 64)
+    return (str(k),) if k > 1 else ()
 
 
 @dataclass
@@ -76,6 +83,25 @@ class StreamDriver(HwModule):
     #: for a consumer that relays or reads whole bursts (``StreamIFSlave.get()`` with no count is only
     #: defined on a packet-delimited stream).  Default ``False`` keeps existing graphs unchanged.
     has_tlast: bool = False
+    #: Idle clock cycles between one burst's last word and the next burst's first.  A
+    #: :class:`DynParam` (the XSI ``AxisMaster`` holds TVALID low for the same count), so both
+    #: backends space the bursts identically.  The use: proving a pipelined block releases a frame
+    #: without the next one behind it -- a test that only ever plays bursts back to back cannot.
+    #: ``0`` (the default) emits nothing and plays back to back, as before.
+    burst_gap_cycles: DynParam[int] = 0
+    #: Per-burst gaps: entry ``k`` is the idle cycles before burst ``k + 1``.  Bursts past the end
+    #: of the list fall back to :attr:`burst_gap_cycles`.  A varied list is how a calibration run
+    #: spreads frame arrivals over every phase of a block's internal cadence; see
+    #: ``examples/vitis_fft/vitis_fft_build.py`` (``measure``).  Empty (the default) emits nothing.
+    burst_gaps: DynParam[list[int]] = field(default_factory=list)
+    #: If set, the XSI ``AxisMaster`` dumps every accepted word with its acceptance cycle to this
+    #: bundle (the twin of :attr:`StreamSink.out_bundle`), so a DUT can be timed at its ports from the
+    #: BFMs alone, with no waveform.  pysim ignores it: its own timestamps are the simulation's.
+    accept_bundle: DynParam[str] = ""
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -98,8 +124,24 @@ class StreamDriver(HwModule):
         self.bursts = read_burst_bundle(p)
 
     def run_proc(self) -> ProcessGen[None]:
-        for b in self.bursts:
+        for k, b in enumerate(self.bursts):
+            gap = self.gap_before(k)
+            if gap:
+                yield self.timeout(gap / self.stream_ep.interface.clk.freq)
             yield from self.stream_ep.write(np.asarray(b))
+
+    def gap_before(self, k: int) -> int:
+        """Idle cycles before burst *k* (none before the first).  The C++ ``AxisMaster`` applies the
+        same rule -- and, under a stall policy, holds words off cycle by cycle, which pysim
+        approximates here as the average stall over the burst before."""
+        if k == 0:
+            return 0
+        from waveflow.simulation.policy import stall_cycles
+
+        stall = stall_cycles(len(self.bursts[k - 1]), self.stall_pct) if self.bursts else 0
+        if k - 1 < len(self.burst_gaps):
+            return int(self.burst_gaps[k - 1]) + stall
+        return int(self.burst_gap_cycles) + stall
 
     def bfm_model(self):
         """XSI twin: an ``AxisMaster`` on the port ``stream_ep`` is wired to, constructed with empty
@@ -107,7 +149,8 @@ class StreamDriver(HwModule):
         generator emits as a member assignment and the model loads in ``pre_sim`` — the same on-disk
         bundle this driver plays in pysim, so both drive from one source."""
         from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisMaster", ports=("stream_ep",), extra_args=("{}",))
+        return BfmModel("AxisMaster", ports=("stream_ep",),
+                        extra_args=("{}",) + _chunk_args(self.bitwidth))
 
 
 @dataclass
@@ -128,12 +171,16 @@ class StreamSink(HwModule):
     #: `bind()` hands a slave the channel's depth only when the endpoint declared none — so a sink
     #: that says nothing would inherit `DEFAULT_STREAM_DEPTH` (2) and stall its producer on every
     #: multi-word frame.  64 is the historical default and covers every frame in the tree bar two;
-    #: a testbench receiving longer frames raises it (``plans/pysim_burst_backpressure.md`` S2).
+    #: a testbench receiving longer frames raises it (PR #185).
     #:
     #: It is a number rather than "unbounded" on purpose: a sink is *"always ready"* only until
     #: something is wrong, and a bound that can be exceeded is what makes a runaway producer visible
     #: instead of silently absorbed.
     queue_size: int = 64
+    #: Stage 5 policy (:class:`~waveflow.simulation.policy.StandInPolicy`): the percent of cycles this
+    #: stand-in stalls on, and the pattern's seed.  ``0`` (the default) emits nothing: polite.
+    stall_pct: DynParam[int] = 0
+    stall_seed: DynParam[int] = 0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -145,10 +192,31 @@ class StreamSink(HwModule):
 
     def rx_proc(self, words: Words) -> ProcessGen[None]:
         self.words.append(np.array(words, copy=True))
-        yield self.timeout(0)
+        from waveflow.simulation.policy import stall_cycles
+
+        stall = stall_cycles(len(words), self.stall_pct)
+        # A stall policy: the RTL sink drops TREADY cycle by cycle; pysim holds the next burst off by
+        # the average stall over this one.
+        yield self.timeout(stall / self.stream_ep.interface.clk.freq if stall else 0)
+
+    def post_sim(self) -> None:
+        """Write the capture to :attr:`out_bundle`, as the XSI ``AxisSlave`` does in its
+        ``post_sim`` -- so a system run can compare what the sink observed in pysim against RTL
+        (``plans/system_model.md`` S3b).  Only when a scenario writer has set ``root`` (a plain
+        attribute, like :attr:`StreamDriver.root`): a relative bundle path means nothing without one,
+        and a run nobody anchored writes nothing.  The pysim capture carries no per-word arrival
+        cycles -- a recording is compared on its words, not on its timing."""
+        super().post_sim()
+        root = getattr(self, "root", None)
+        if not self.out_bundle or root is None:
+            return
+        from waveflow.utils.burst_io import write_burst_bundle
+
+        p = Path(self.out_bundle)
+        write_burst_bundle(list(self.words), p if p.is_absolute() else Path(root) / p)
 
     def bfm_model(self):
         """XSI twin: an ``AxisSlave`` on the port ``stream_ep`` is wired to — always ready, keeps
         everything, and timestamps each word so the testbench can report completion time."""
         from waveflow.build.composite_gen import BfmModel
-        return BfmModel("AxisSlave", ports=("stream_ep",))
+        return BfmModel("AxisSlave", ports=("stream_ep",), extra_args=_chunk_args(self.bitwidth))

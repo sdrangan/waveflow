@@ -1,4 +1,4 @@
-"""P0-P3 of ``plans/key_stability.md`` — a module key addresses structure, and nothing else.
+"""P0-P3 of the key_stability plan (commit 40e8e00) — a module key addresses structure, and nothing else.
 
 A record store is addressed by ``structure_signature``.  If something that is *not* structure reaches
 that signature, every stored measurement for the affected modules becomes unreachable — and silently,
@@ -92,7 +92,7 @@ def test_module_keys_are_unchanged(golden):
     """
     assert _design_keys() == golden, (
         "module keys moved. If this is a deliberate signature change, regenerate the snapshot AND "
-        "migrate the committed stores in the same commit — see plans/key_stability.md.")
+        "migrate the committed stores in the same commit — see the key_stability plan (commit 40e8e00).")
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def test_every_leaf_key_resolves_in_the_committed_store(example, platform, compo
     """A store whose keys a current elaboration cannot reach is a library that silently answers zero.
 
     Asserted over **leaves** only: a composite legitimately has no records of its own until the
-    integration term is filed (``plans/integration_record.md``), and asserting over it would make this
+    integration term is filed (the integration_record plan (commit 108501b)), and asserting over it would make this
     fail for a reason it is not about.
     """
     if not platform.is_dir():
@@ -206,7 +206,7 @@ def test_every_leaf_key_resolves_in_the_committed_store(example, platform, compo
     assert not missing, (
         f"{example}: module keys with no record in the committed store: "
         f"{ {c: f'{len(ks)} key(s)' for c, ks in missing.items()} }. Either the store is stale or a "
-        f"signature moved; see plans/key_stability.md.")
+        f"signature moved; see the key_stability plan (commit 40e8e00).")
 
 
 if __name__ == "__main__":  # pragma: no cover - regeneration entry point

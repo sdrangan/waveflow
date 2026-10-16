@@ -1,117 +1,120 @@
 ---
 title: RTL Cosim Timing Verification
 parent: Streaming polynomial
-nav_order: 5
+nav_order: 9
+summary: "What co-simulation tells us that C simulation cannot: how many clock cycles the RTL takes. The cosim report's cycle count for one kernel call is compared, at 32 and 64 bits, with the count pysim predicts for the same span, and the build fails if they differ by more than 20 cycles. The pysim timing is poly's declared timed phases, fitted from a traced cosim: every stretch of a command matches the RTL except a one-cycle restart per command, and the start/done handshake is outside the module's timing; both are counted here. Includes the history: a hand-set proc_latency, and why the measured span had to match before any number meant anything."
 ---
 
-# RTL cosim timing verification
+# RTL co-simulation timing
 
-The fifth and final group closes the cycle-approximate-Python loop:
-it reads the cycle count the RTL co-simulator measured for one
-transaction and compares it against the cycle count the Python
-golden predicted in Group 1.  When the two agree within tolerance,
-the SimPy timing model has been *experimentally validated* against
-the RTL — the strongest claim Waveflow can make about its sim.
+What does co-simulation tell us that C simulation cannot?  **Time.**  C simulation runs the
+kernel as a C++ function: it checks *what* comes out, never *when*.  Co-simulation runs the
+synthesized RTL, clock cycle by clock cycle, on the same stimulus, so it measures how long the
+kernel takes.  This group compares that measurement with what the Python timing model predicted, at
+both widths.
 
 | Step | Produces | What it does |
 |------|----------|--------------|
-| `extract_cosim_timing` | `cosim_timing` | Runs `waveflow.utils.cosimparse.CosimReportParser` on the solution dir; serializes the kernel's measured transaction-cycle count to `results/cosim_timing.json` |
-| `validate_timing` | `timing_verdict` | Compares `py_timing.transaction_cycles` (Group 1) against `cosim_timing.transaction_cycles`; raises if the absolute delta exceeds `tolerance_cycles` (default 20) |
+| `check_cosim` | `check_cosim` | The co-simulated response of the timing scenario, at each width, checked bit-exactly against its expected response, like every other stage |
+| `extract_cosim_timing_w32`, `_w64` | `cosim_timing_w*` | Runs `waveflow.utils.cosimparse.CosimReportParser` on the solution and writes the measured cycle count to `results/cosim_timing_w*.json` |
+| `validate_timing_w32`, `_w64` | `timing_verdict_w*` | Compares pysim's count (`results/py_timing_w*.json`) with the RTL's, and fails if they differ by more than `tolerance_cycles` (20) |
+| `error_vcd` | `vcd/error_path.vcd` | Co-simulates `early_tlast_vcd` with port tracing, for the [error-path](./error_path.md) waveform |
 
-## The structured timing pair
+## Measure the same thing on both sides
 
-Both timing-side steps deliberately emit *structured* JSON with
-named cycle counts — not pass/fail bits.  This shape is what the
-future model-training workflow (per
-[`project-cycle-model-training`](#whats-next)) will consume to fit
-`HwModule` timing parameters from a corpus of cosim runs.
+The timing scenario is one `DATA` command of 100 samples, then `END`: one kernel call.  The cosim
+report gives the latency of that call, from `ap_start` to `ap_done`.  pysim must measure **the same
+span**, from the start of its `body()` to its return, or the comparison means nothing.
 
-`results/py_timing.json` (from Group 1):
+## The numbers
 
-```json
-{
-    "transaction_cycles": 140,
-    "transaction_seconds": 1.4e-06,
-    "clk_freq": 100000000.0,
-    "source": "py_sim",
-    "events": { "samp_read_begin": ..., "samp_out_write_end": ... }
-}
-```
+| Width | pysim | cosim | delta | tolerance |
+|---|---|---|---|---|
+| 32 bits | 145 | 152 | 7 | 20 |
+| 64 bits | 88 | 94 | 6 | 20 |
 
-`results/cosim_timing.json` (this group):
+Each verdict file (`results/timing_verdict_w*.json`) is written whether the check passes or fails,
+so downstream tools can read the numbers without re-running the build.
 
-```json
-{
-    "transaction_cycles": 144,
-    "report_path": ".../sim/report/poly_cosim.rpt",
-    "vitis_version": "2025.1+",
-    "source": "cosim",
-    "top": "poly"
-}
-```
+The 64-bit kernel is about 58 cycles faster: at 64 bits the 100 samples take 50 words instead of 100,
+and each 6-word command header takes 3.  The kernel is bandwidth-bound -- one word a cycle, whatever
+the width -- and the model counts words the same way.
 
-The parser handles both Vitis 2025.1+ (`<top>_cosim.rpt` table) and
-the legacy `cosim.log` shape — picked transparently per file presence.
+## Where the pysim cycles come from
 
-## The verdict
+Poly declares its timing as two [timed phases](../../guide/timing_model/timed_phases.md) -- the
+response after a command header, and the samples-to-results pipeline (a latency and a fill) -- and
+they are **fitted from a traced cosim**, not set by hand
+(`examples/stream_inband/poly_calibrate.py`; [Calibrating a timed
+phase](../../guide/timing_model/fit.md)):
 
-`ValidateTimingStep` produces `results/timing_verdict.json`
-regardless of pass/fail:
+| span | 32 bits | 64 bits |
+|---|---|---|
+| `resp_time` -- header's last beat to response's first | 4 | 4 |
+| `latency` -- first sample word to first result word | 34 | 33 |
+| `fill_time` -- first to last result word | `nwords - 1` | `nwords - 1` |
 
-```json
-{
-    "pass": true,
-    "py_cycles": 140,
-    "cosim_cycles": 144,
-    "delta": 4,
-    "tolerance": 20,
-    "py_timing_path": "...",
-    "cosim_timing_path": "..."
-}
-```
+Compared beat by beat with the trace, every stretch inside a command matches the RTL: the response
+four cycles after the header, the samples starting **one** cycle after it -- the RTL sends the
+response while it reads the samples, and so does poly's body -- and the results 34 cycles after the
+first sample, at one word a cycle.  The 7 cycles pysim is short are counted, and deliberately left:
 
-If `delta > tolerance` the build fails with `RuntimeError`.  Either
-way the verdict file is written first — downstream tools can read
-the actual numbers without re-running the build.
+- **one cycle per command**, the kernel's loop restarting between commands (the next header ends six
+  cycles after the last result at RTL, five in pysim) -- no declared span holds it, and stating one
+  would cost more than the cycle is worth;
+- **about six cycles at the call's start and end** -- `ap_start` to the first header beat, and the END
+  header to `ap_done`.  That is the AXI-Lite handshake of a host-activated kernel; a module's timed
+  phases cover its own work on its streams, not its control handshake.
 
-The tolerance is a constructor parameter on the step (defaulted to
-20).  Tightening it is a one-line change once the model is refined.
+So the gap is a known, counted quantity, not a parameter absorbing an unknown one -- which is the
+point of the history below.
 
-## How the model was calibrated
+## How the model used to be calibrated
 
-The first cosim run reported 144 cycles for `nsamp=100`,
-`unroll_factor=1`, `in_bw=32`.  The Python sim with the default
-`proc_latency=10` reported 110 — delta=34, over tolerance.
+pysim's timing model used to be two hand-set numbers: `proc_ii`, the cycles per sample word, and
+`proc_latency`, the fixed overhead of a call -- the pipeline fill of the sample loop plus the stream
+handshakes.  They now only seed the phases before a fit.
 
-The fix was to bump `PolyAccel.proc_latency` from 10 to 40
-to absorb the RTL pipeline fill/drain and stream handshake overhead
-that the simpler "compute-latency" model didn't capture.  With that
-calibration:
+**First calibration: 10 → 40.**  The first co-simulation reported 144 cycles for 100 samples at
+32 bits.  pysim, with a guessed `proc_latency = 10`, predicted 110: a delta of 34, outside the
+tolerance.  The guess counted only the arithmetic latency.  It missed the pipeline fill and drain
+and the stream handshakes.  Setting `proc_latency = 40` brought pysim to 140 against cosim's 144, a
+delta of 4.  That is the method: run the RTL, read the measured number, set the model's parameter
+from it, never from a guess.
 
-- `py_cycles = 140`
-- `cosim_cycles = 144`
-- `delta = 4`
+**Second: make the spans match.**  At that point pysim measured only from the first sample read to
+the last result written, while cosim measured the whole call, and `proc_latency` silently absorbed
+the difference.  A parameter that absorbs a mismatch only works until something changes it.  When
+the command header grew to carry the coefficients (6 words instead of 2 at 32 bits), cosim's span
+grew and pysim's did not.  So pysim now measures the whole call, as cosim does, and models every
+header word.  With the same `proc_latency = 40` it predicted 147 against 152 at 32 bits, and exactly
+94 at 64.
 
-This is the manual v1 of the model-training workflow described next.
-
-## What's next
-
-The structured timing artifacts emitted here are the input format
-for a future parameter-fitting step that will fit
-`HwModule.proc_latency` / `proc_ii` / similar from a corpus of
-cosim runs across `param_supports` variants.  Once that lands,
-calibration stops being a manual one-line edit and starts being a
-build-DAG step in its own right.
+That 147 looked close for the wrong reason.  Once the phases were fitted span by span, the hand-set
+numbers turned out wrong on every span -- latency 40 against 34, response 0 against 4, a fill one cycle
+long -- with errors that happened to cancel.  The lesson for your own design: before you fit a timing
+parameter, make sure the model and the RTL measure the same interval; and fit the intervals one by one,
+so an end-to-end number cannot be right by accident.
 
 ## Run the whole pipeline
 
 ```bash
-python -m examples.stream_inband.poly_build --through validate_timing --force --live-output
+python examples/stream_inband/poly_build.py --through summary
 ```
 
-Requires Vitis HLS on `PATH`.  Produces `results/timing_verdict.json`
-with a green `pass=true` when the model and the RTL agree.
+Requires Vitis HLS.  `results/summary.json` collects every check, both synthesis reports and both
+timing verdicts.  (`--through validate_timing_w32` alone would skip the cosim response check and the
+other width: a target runs only its ancestors.)
+
+## Check your understanding
+
+1. Why can C simulation not catch a kernel whose sample loop runs at II = 2?
+2. Before the spans were matched, which quantity was `proc_latency` absorbing besides the pipeline
+   fill?  Why is that fragile -- and why did fitting the spans one by one move the total *away* from
+   cosim?
+3. The 64-bit kernel is about 55 cycles faster on the timing scenario.  Where do most of them come
+   from?
 
 ---
 
-Back to: [Polynomial Accelerator overview](./index.md)
+Next: [Reading the protocol off a waveform →](./poly_axi_stream.md)

@@ -5,7 +5,7 @@
 turned out to need machinery that does not exist. It is not an RF feature — it is XSI testbench
 infrastructure, shared with monitors and scoreboards. `plans/adc_model.md` stage 2 depends on it.
 
-**Promotes a deferred decision.** `plans/xsi_tb_codegen.md` §"Deliberately deferred" rejected
+**Promotes a deferred decision.** the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)) §"Deliberately deferred" rejected
 *channel-as-a-class* for want of a motivating case, and named its own re-opening condition:
 
 > It **earns itself** the moment an edge needs *behaviour*: instrumentation (log/count/inject
@@ -18,7 +18,7 @@ which bounds the risk.
 
 ## The invariant this exists to protect
 
-From `plans/xsi_tb_codegen.md`, stated twice and load-bearing:
+From the xsi_tb_codegen plan ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)), stated twice and load-bearing:
 
 > *"If those were participants, the pysim graph and the XSI graph would have different nodes and 'one
 > statement, two backends' breaks on the first example."*
@@ -237,8 +237,7 @@ modelling anything, and a page that documents it is documenting a wish.
 
 ## Not in scope
 
-- **Generating the C++ model from the Python `run_proc`.** Same anti-goal as `xsi_tb_codegen.md`
-  Stage 0: the model is declared, not extracted. This is why the "ten lines" bar above exists.
+- **Generating the C++ model from the Python `run_proc`.** Same anti-goal as the xsi_tb_codegen plan, Stage 0 ([commit 3052952](https://github.com/sdrangan/waveflow/commit/3052952)): the model is declared, not extracted. This is why the "ten lines" bar above exists.
 - **Signal processing in edges.** See the boundary line.
 - Edges that cross the cut. Those are boundary ports with BFM duals and are already built.
 

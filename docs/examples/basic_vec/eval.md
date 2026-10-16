@@ -2,6 +2,7 @@
 title: Confirming the match
 parent: Basic vector arithmetic
 nav_order: 3
+summary: "Comparing the Python golden against the Vitis kernels bit for bit, through a small build DAG — the same gen, csim and compare machinery the fuller examples/schemas/fixedpoint conformance sweep uses. gen writes the kernels, the input vectors and the expected bits; run invokes Vitis csim and compares."
 ---
 # Confirming the match
 

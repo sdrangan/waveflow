@@ -2,6 +2,7 @@
 title: RF figure sources
 nav_exclude: true
 search_exclude: true
+summary: "The RF diagrams follow the same convention as the flow figures: the source is committed beside its output, and the output is generated rather than hand-drawn, so a diagram cannot drift from what it describes."
 ---
 
 # RF figures — source → committed artifact

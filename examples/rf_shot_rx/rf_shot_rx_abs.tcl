@@ -1,5 +1,5 @@
 set part {xczu48dr-ffvg1517-2-e}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: rf_shot_rx_abs"
 open_project -reset rf_shot_rx_abs_proj
 set_top rf_shot_rx_abs

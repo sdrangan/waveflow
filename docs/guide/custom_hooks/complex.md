@@ -137,5 +137,4 @@ Reach for the complex pattern when:
 ## See also
 
 - [Kernel transfer reference](./reference.md) — `read_array_lane` / `read_array_slice` / `write_array_lane`.
-- [Memory command queue](./queue.md) — a hook that is the synthesizable half of a transport interface.
 - [`examples/vmac`](../../../examples/vmac/vmac_compute_impl.tpp) — the worked complex datapath.

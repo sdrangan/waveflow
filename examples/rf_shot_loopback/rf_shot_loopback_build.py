@@ -1,13 +1,13 @@
 """rf_shot_loopback_build.py — build the loopback demonstration: pysim -> figure.
 
-``plans/rf_shot_absolute.md`` S3.  The rungs, in the order a failure is cheapest to diagnose:
+PR #202.  The rungs, in the order a failure is cheapest to diagnose:
 
     pysim               -> the loopback in SimPy: the address difference, the aliasing, the epoch
     address_delay_figure-> the two memories on one address axis
     sync_docs_figures   -> promote the SVG into the committed docs assets
 
 **There is no codegen rung, and that is a decision rather than an omission** — see
-``plans/rf_shot_absolute.md`` S3, *What S3 built*.  The two designs in this graph are each
+PR #202, *What S3 built*.  The two designs in this graph are each
 synthesized and RTL-gated by their **own** examples, at the very ``absolute_index = 1`` this one
 runs; what a loopback adds is a claim about the *pair*, and that claim is an address correspondence
 in the loosely-timed model rather than a property of either kernel's RTL.  Closing the loop at RTL

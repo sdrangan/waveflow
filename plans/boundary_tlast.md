@@ -187,7 +187,7 @@ message before someone follows it.
 **Cycle counts are measurements.** A TLAST pin is a flip-flop and a scheduling fact. Every gate in
 `tests/examples/*_xsi.py` (10 files, `WANT_XSI_GATES=63`) that touches a flipped design must be
 re-run and re-recorded with its new number and the reason. Inheriting a count across this change is
-the failure mode `plans/xsi_staleness_and_silent_skips.md` exists to prevent.
+the failure mode [PR #177](https://github.com/sdrangan/waveflow/pull/177) exists to prevent.
 
 **Calibration keys move for flipped designs, and only for those.** That is the subclass working as
 designed. Expect `tests/calib/test_key_stability.py` to want new keys for exactly the designs in the

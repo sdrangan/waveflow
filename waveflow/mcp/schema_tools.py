@@ -1,4 +1,10 @@
-"""Deterministic schema-planning and validation helpers for waveflow MCP tools."""
+"""Deterministic schema-validation helpers for waveflow MCP tools.
+
+The schema *planning* helper that used to live here was a static step list
+whose only argument rewrote its summary.  It was replaced by the frame process
+(``waveflow_get_process``), which is real text about a real architecture --
+decision D2.
+"""
 from __future__ import annotations
 
 import ast
@@ -8,91 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from waveflow.hw import DataArray, DataField, DataList, DataSchema, EnumField, FloatField, IntField, MemAddr
-
-
-def get_schema_draft_plan(
-	task: str | None = None,
-	workspace_root: str | None = None,
-) -> dict:
-	"""Return a deterministic workflow for drafting a new schema.
-
-	The returned plan is intentionally generic and tool-friendly. It does not
-	search, rank, or recommend specific example IDs. The optional
-	``workspace_root`` argument is used only to tailor the first step's
-	instructions.
-	"""
-	if workspace_root:
-		first_step_instructions = (
-			f"Check the workspace at {workspace_root} for related schemas when "
-			"available, then call waveflow_get_components to review the schema "
-			"vocabulary and use the returned keywords with "
-			"waveflow_rag_search_examples to find relevant examples."
-		)
-	else:
-		first_step_instructions = (
-			"Call waveflow_get_components to review the schema vocabulary, "
-			"then use the returned keywords with "
-			"waveflow_rag_search_examples to find relevant examples."
-		)
-
-	summary = (
-		"Use this plan to draft a new waveflow schema from a natural-language "
-		"request by reviewing similar patterns, identifying required elements, "
-		"drafting the main schema and supporting types, and validating the result."
-	)
-	if task:
-		summary = f"Schema drafting plan for request: {task}"
-
-	return {
-		"summary": summary,
-		"steps": [
-			{
-				"goal": "Retrieve similar schema patterns",
-				"instructions": first_step_instructions,
-				"recommended_tools": [
-					"waveflow_get_components",
-					"waveflow_rag_search_examples",
-				],
-			},
-			{
-				"goal": "Determine required schema elements",
-				"instructions": (
-					"List the fields and structures implied by the request, including "
-					"command fields, nested records, arrays, memory-address fields, "
-					"scalar parameters, enums, and repeated structures."
-				),
-				"recommended_tools": [],
-			},
-			{
-				"goal": "Draft the main schema",
-				"instructions": (
-					"Write the primary schema using the closest structural pattern and "
-					"reuse naming and layout conventions from similar examples when "
-					"practical."
-				),
-				"recommended_tools": [],
-			},
-			{
-				"goal": "Draft missing supporting schemas",
-				"instructions": (
-					"If the schema depends on nested or reusable element types that do "
-					"not already exist, draft those supporting schemas as part of the "
-					"same design pass."
-				),
-				"recommended_tools": [],
-			},
-			{
-				"goal": "Validate the schema and record assumptions",
-				"instructions": (
-					"Run waveflow_validate_schema on the completed draft to catch "
-					"structural or typing issues before use, and document any assumed "
-					"scalar types, array lengths, optional fields, or address "
-					"representations for later review."
-				),
-				"recommended_tools": ["waveflow_validate_schema"],
-			},
-		],
-	}
 
 
 def validate_schema(schema: str, workspace_root: str | None = None) -> dict:
@@ -150,7 +71,9 @@ def validate_schema(schema: str, workspace_root: str | None = None) -> dict:
 	}
 
 	namespace = _build_validation_namespace()
-	initial_names = set(namespace)
+	# A schema the text imports (`from waveflow.hw.rfdc import RfdcSampWord`) is not one
+	# it defines: validating it would report someone else's class as this file's.
+	initial_names = set(namespace) | _imported_names(tree)
 
 	try:
 		exec(compile(tree, "<schema>", "exec"), namespace)
@@ -250,6 +173,16 @@ def _build_validation_namespace() -> dict[str, Any]:
 		"DataArray": DataArray,
 		"IntEnum": IntEnum,
 	}
+
+
+def _imported_names(tree: ast.Module) -> set[str]:
+	"""Names bound by the text's own top-level ``import`` / ``from ... import`` statements."""
+	names: set[str] = set()
+	for node in tree.body:
+		if isinstance(node, (ast.Import, ast.ImportFrom)):
+			for alias in node.names:
+				names.add(alias.asname or alias.name.split(".")[0])
+	return names
 
 
 def _discover_schema_classes(

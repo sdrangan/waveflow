@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Protocol
 
-from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+from mcp.server.mcpserver.utilities.func_metadata import func_metadata
 from pydantic import ConfigDict, validate_call
 
 from waveflow.mcp.registry import ToolRegistry
@@ -16,7 +16,7 @@ from .contracts import canonical
 
 
 class DseRegistry(ToolRegistry):
-    """FastMCP 1.x defaults coerce and drop extras; enforce the direct contract."""
+    """MCPServer defaults coerce and drop extras; enforce the direct contract."""
 
     def register_all(self, mcp, profile=None):
         super().register_all(mcp, profile)
@@ -115,7 +115,7 @@ def make_dse_registry(service: Service | None = None) -> ToolRegistry:
         return result
 
     for fn in (dse_get_dse_context, dse_pysim, dse_predict_resource, dse_synth, dse_rtlsim, dse_get_results):
-        # Export the actual FastMCP schema, not a separately maintained approximation.
+        # Export the actual MCPServer schema, not a separately maintained approximation.
         model = func_metadata(fn).arg_model
         model.model_config.update(strict=True, extra="forbid")
         model.model_rebuild(force=True)

@@ -3,6 +3,7 @@ title: AXI4 Memory-Mapped Timing Analysis
 parent: Timing Analysis Tools
 nav_order: 6
 has_children: false
+summary: "Pulling AXI4 memory-mapped activity out of a VCD: add_aximm_signals loads the read and write address, data and handshake nets from one prefix — including the burst-length and last-beat signals on an AXI4-Full interface — and the accepted read and write bursts come out as data. Worked on the histogram example's m_axi_gmem master."
 ---
 
 # AXI4 Memory-Mapped Analysis
@@ -259,8 +260,7 @@ The hex form is often easier to compare against bus waveforms, while the decimal
 For example, if a read burst returns 32-bit float payload words, you can deserialize the decimal `data` list directly:
 
 ```python
-words = np.asarray(read_bursts[0]['data'], dtype=np.uint32)
-values = read_array(words, elem_type=Float32, word_bw=32, shape=(16,))
+values = read_array(read_bursts[0]['data'], elem_type=Float32, word_bw=32, shape=(16,))
 print(values)
 ```
 

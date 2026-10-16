@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from enum import Enum
@@ -482,8 +482,9 @@ class MemSeg:
     """One memory region tied to a burst bundle — mirrors the C++ ``wfbfm::MemSeg``.
 
     For a **load**, the bundle's words go to ``[off, off+len)`` (``length`` ignored — the bundle's own
-    length is used).  For a **dump**, ``[off, off+length)`` is written to ``bundle``.  ``off``/``length``
-    are word indices; ``bundle`` is a path rooted by the run dir (e.g. ``"vectors/mem_in"``).
+    length is used).  For a **dump**, ``[off, off+length)`` is written to ``bundle``; ``length=0`` is
+    "to the end of the arena".  ``off``/``length`` are word indices; ``bundle`` is a path rooted by
+    the run dir (e.g. ``"vectors/mem_in"``).
     """
     off: int = 0
     length: int = 0
@@ -532,6 +533,10 @@ class MemoryMod(HwModule):
     carve out regions, then access them via their own wired ``MMIFMaster``.
     """
 
+    #: A plain memory on a bus has a base and a span but no views, so a bus walk
+    #: (:func:`~waveflow.hw.mm_device.bus_address_headers`) lists it in the bases header only.
+    bus_memory: ClassVar[bool] = True
+
     word_size: int = 32        # bits per word
     addr_size: int = 32        # address bits
     nwords_tot: int = 2 ** 20  # capacity in words
@@ -556,6 +561,17 @@ class MemoryMod(HwModule):
     #: whoever materializes the scenario (an example/build dir or a temp dir).  ``None`` → resolve
     #: against the process cwd.  Runtime config; never emitted to codegen.
     root: Any = None
+    #: A record store (``<calib_dir>/modules/``, ``plans/unit_harness.md`` D7) holding this memory's
+    #: calibrated timing, measured in its own harness (Stage 4c): when it has a record under the
+    #: memory's identity, the record's per-direction access costs replace ``latency_init`` /
+    #: ``latency_per_word``, and its ``serialize`` makes the slave serve one transaction at a time, as
+    #: the RTL front (``axi_slave_front.v``) does.  ``None``: the fields above, as always.
+    calib_dir: Any = None
+
+    #: Run-time state a calibration identity does not hash (``waveflow.calib.phases.module_identity``):
+    #: the backing store -- its contents and allocations --, where the owner's region starts, and the
+    #: owner's back door onto it (``m_mm``, never bound).
+    __wf_identity_exclude__: ClassVar[tuple[str, ...]] = ("_mem", "_base_addr", "m_mm")
 
     def bfm_model(self):
         """XSI twin: the ``FlatMemory`` arena the AXI-MM slave models serve out of.
@@ -567,18 +583,23 @@ class MemoryMod(HwModule):
         will be driven.
 
         The C++ arguments come from this component's own fields, so nothing example-specific leaks
-        into the framework.
+        into the framework.  The arena's size is the generated DEFAULT: a run's ``vectors/run.json``
+        may override it as ``mem_words`` (``wfbfm::run_param``), because a scenario sizes its arena
+        and a workload sweep should not recompile the testbench per point
+        (``plans/incremental_xsi.md`` Stage 4).  A whole-arena dump says ``MemSeg(off, 0, ...)``,
+        "to the end", so it follows.
 
         NOTE: the XSI slave models are independent and un-arbitrated, whereas
         :class:`~waveflow.hw.memif.AXIMMCrossBarIF` models contention.  The two therefore describe
         different systems and should be expected to disagree on timing — see
-        ``plans/xsi_tb_codegen.md``.
+        the xsi_tb_codegen plan (commit 3052952).
         """
         from waveflow.build.composite_gen import BfmModel
         return BfmModel(
             "FlatMemory",
             ports=("s_mm",),
-            extra_args=(str(int(self.nwords_tot)), str(int(self.word_size) // 8)),
+            extra_args=(f'wfbfm::run_param("mem_words", {int(self.nwords_tot)})',
+                        str(int(self.word_size) // 8)),
             shared="mem",
         )
 
@@ -640,6 +661,7 @@ class MemoryMod(HwModule):
         ``"vectors/mem_in"`` works from any cwd.
         """
         super().pre_sim()
+        self._apply_stored_timing()
         if not self.load_segs:
             return
         from pathlib import Path
@@ -654,19 +676,66 @@ class MemoryMod(HwModule):
             words = np.concatenate([np.asarray(b, dtype=np.uint64) for b in read_burst_bundle(p)])
             self._mem.write(seg.off * bpw, words)
 
-    def _access_delay(self, nwords: int) -> float:
-        """Modeled RAM access time (seconds) for an *nwords*-word transfer."""
+    def post_sim(self) -> None:
+        """Dump ``dump_segs`` -- the pysim mirror of the C++ ``FlatMemory::post_sim``: each
+        ``[off, off+length)`` (``length=0``: to the end of the arena) written as one burst, against
+        :attr:`root`.  So a system run compares the arena pysim left against the one the RTL left
+        (``plans/system_model.md`` S3b).  No ``root``, nothing written: a relative path needs one."""
+        super().post_sim()
+        if not self.dump_segs or self.root is None:
+            return
+        from pathlib import Path
+
+        from waveflow.utils.burst_io import write_burst_bundle
+
+        bpw = int(self.word_size) // 8
+        total = int(self.nwords_tot)
+        for seg in self.dump_segs:
+            n = int(seg.length) or max(total - int(seg.off), 0)
+            words = np.asarray(self._mem.read(int(seg.off) * bpw, n), dtype=np.uint64)
+            p = Path(seg.bundle)
+            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p)
+
+    def _apply_stored_timing(self) -> None:
+        """Load this memory's calibrated timing (:attr:`calib_dir`), once, before the run: by the
+        memory's identity as built, so nothing a run changes can move where it is looked up."""
+        self._mem_timing = None
+        if self.calib_dir is None:
+            return
+        from pathlib import Path
+
+        if not (Path(self.calib_dir) / "modules").is_dir():
+            return
+        from waveflow.calib.mem_timing import stored_mem_timing
+        from waveflow.calib.record_store import ModuleStore
+
+        rec = stored_mem_timing(ModuleStore(self.calib_dir), self)
+        if rec is None:
+            return
+        self._mem_timing = rec.payload
+        if rec.payload.get("serialize"):
+            # One transaction at a time, reads and writes alike: one channel, held for the transfer.
+            self.s_mm.serialize_transactions = True
+            self.s_mm.write_channel = self.s_mm.read_channel
+
+    def _access_delay(self, nwords: int, kind: str | None = None) -> float:
+        """Modeled RAM access time (seconds) for an *nwords*-word transfer -- a ``"read"`` or a
+        ``"write"``, from the calibrated record when there is one."""
+        t = getattr(self, "_mem_timing", None)
+        if t is not None and kind is not None:
+            k = t[kind]
+            return (float(k["init"]) + nwords * float(k["per_word"])) / self.clk.freq
         return (self.latency_init + nwords * self.latency_per_word) / self.clk.freq
 
     def _on_write(self, words: Any, local_addr: int) -> ProcessGen[None]:
         # Decision 5: model the access latency *before* the data op; the
         # interconnect already wraps this callback and waits for it, so the
         # caller observes bus + access time.
-        yield self.timeout(self._access_delay(len(words)))
+        yield self.timeout(self._access_delay(len(words), "write"))
         self._mem.write(local_addr, words)
 
     def _on_read(self, nwords: int, local_addr: int) -> ProcessGen[np.ndarray]:
-        yield self.timeout(self._access_delay(nwords))
+        yield self.timeout(self._access_delay(nwords, "read"))
         return self._mem.read(local_addr, nwords)
 
     def alloc(self, nwords: int) -> int:

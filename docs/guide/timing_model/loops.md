@@ -1,31 +1,22 @@
 ---
-title: Timing models for loops
+title: The form of a span's model
 parent: Timing Models
-nav_order: 3
+nav_order: 5
 audience: python
-api: [LinCalibModel]
-summary: "The typical custom-hook compute is a loop, and a pipelined loop of m iterations costs latency + ii·(m − 1) cycles — latency is the pipeline depth (the first result), ii the initiation interval (each result after). That is linear in two parameters (latency, ii), so it is a LinCalibModel with a two-term basis map [1, m − 1] and coeff_names ['latency', 'ii'], fit_intercept=False. Unrolling by U reshapes the trip count to m = ceil(n / U). The parameters are set by hand now and fit from RTL later."
+api: [LinearTiming, LinCalibModel, TimedPhase]
+summary: "What a span's model is for the common case, a pipelined loop: m iterations cost latency + ii·(m − 1) cycles. A sequential span is that whole formula; a pipelined phase splits it into its two spans, latency (a constant) and fill_time (ii·(m − 1)). Both are linear in the features, which is what LinearTiming fits: an intercept plus a coefficient per feature, one LinCalibModel per span. Poly's fitted fill_time, -1 + 1·nwords, is ii·(m − 1) with ii = 1. Unrolling makes the trip count ceil(n / U): compute it in the body and pass it as the feature."
 ---
 
-# Timing models for loops
+# The form of a span's model
 
-The compute you describe for a [custom hook](../custom_hooks/) is very often a **loop** over the input
-— one iteration per sample (or per few samples). This page is the timing model for that case: what a
-pipelined loop costs, and how to express it as a fittable model.
+A [timed phase](./timed_phases.md)'s model predicts each span from its features.  Its *form* -- what
+shape that function has -- follows from what the hardware does, and the common case is a **loop**: one
+iteration per sample, or per few.
 
-## A loop, in Python and HLS
+## A pipelined loop costs `latency + ii·(m − 1)`
 
-Take a length-`n` inner product — the shape of most DSP kernels:
-
-```python
-def compute(x, coef):          # the functional golden
-    y = 0.0
-    for i in range(n):
-        y += coef[i] * x[i]
-    return y
-```
-
-The synthesized kernel is the same loop with a pipeline pragma:
+Take a length-`n` inner product -- the shape of most DSP kernels.  The synthesized kernel is a loop
+with a pipeline pragma:
 
 ```cpp
 float compute(const float x[N], const float coef[N]) {
@@ -38,73 +29,75 @@ float compute(const float x[N], const float coef[N]) {
 }
 ```
 
-In pysim the Python `compute` runs instantly; the **timing model** says how long the *hardware* loop
-would take.
-
-## The closed form `latency + ii·(m − 1)`
-
-A pipelined loop that issues `m` iterations takes:
+A pipelined loop that issues `m` iterations takes
 
 ```
 cycles = latency + ii · (m − 1)
 ```
 
-Two numbers describe the pipeline:
+- **`latency`** -- the **pipeline depth**: cycles from an input entering the pipeline to its result
+  coming out.  It is the cost of the **first** iteration's result.
+- **`ii`** -- the **initiation interval**: cycles between successive iterations entering the pipeline.
+  `II = 1` starts one every cycle; `II = 2` every other.  It sets the **throughput**.
 
-- **`latency`** — the **pipeline depth**: cycles from an input entering the pipeline to its result
-  coming out. It is the cost of the **first** iteration's result.
-- **`ii`** — the **initiation interval**: cycles between successive iterations entering the pipeline.
-  An `II = 1` loop starts a new iteration every cycle; `II = 2` every other cycle. It sets the
-  **throughput**.
+Reason it out from the two ends: the first result lands `latency` cycles in; after it the pipeline
+emits one more every `ii` cycles, and `m − 1` are left, so they add `ii · (m − 1)`.  (`latency + ii · m`
+is the common off-by-one -- it charges an `ii` for the first result, already paid inside `latency`.
+With `m = 1` the formula correctly collapses to `latency`.)
 
-Reason the form out from the two endpoints: the first result lands `latency` cycles in; after it, the
-pipeline emits one more result every `ii` cycles, and there are `m − 1` results left, so they add
-`ii · (m − 1)`. (Writing `latency + ii · m` is the common off-by-one — it charges an `ii` for the first
-result, already paid inside `latency`. With `m = 1` the formula correctly collapses to `latency`.)
+## How it maps onto the spans
 
-## It is linear in two parameters — a `LinCalibModel`
+The two shapes of body use the formula differently:
 
-`latency + ii · (m − 1)` is **linear in the parameters** `latency` and `ii`: it is
-`latency · 1 + ii · (m − 1)`, a two-term basis `[1, m − 1]` with those two as the coefficients. So it is
-exactly a [`LinCalibModel`](../calib/models.md) — no new machinery:
+| body | span | form |
+|---|---|---|
+| [sequential](./block.md) -- the loop runs after the whole input | `compute_time` (input last → output first) | `latency + ii·(m − 1)` -- the whole formula |
+| [pipelined](./streaming.md) -- the loop runs while the input arrives | `latency` (input first → output first) | `latency` -- a constant |
+| | `fill_time` (output first → output last) | `ii·(m − 1)` |
 
-```python
-import math
-from waveflow.calib.calib import LinCalibModel
+A pipelined phase is the same formula, split at the moment the first result comes out -- which is why
+it needs two spans and a sequential one needs one.
 
-self.tm = LinCalibModel(
-    basis=["const", "trip"], target="cycles",
-    coeff_names=["latency", "ii"], fit_intercept=False,   # the coeffs ARE the parameters
-    transform=lambda r: [1.0, r["n"] - 1],                # the basis map: [1, m − 1], m = n here
-    seed={"latency": 8, "ii": 1},                         # hand values now; fit later
-)
-self.tm.load_or_default()
+## Linear in the features: `LinearTiming`
 
-cycles = self.tm.predict({"n": n})                        # latency + ii · (n − 1)
-```
+Every one of those forms is **linear** in the trip count: an intercept plus a coefficient times `m`.
+That is the default model family, `LinearTiming`: for each span, one
+[`LinCalibModel`](../calib/models.md) -- `intercept + Σ coefficient · feature` over the phase's
+declared features.  The parameters of the hardware are read off the fitted coefficients:
 
-`fit_intercept=False` because the constant term is already a basis column whose coefficient *is*
-`latency` — nothing is hidden in a separate intercept. The `transform` is the model's own basis map,
-used identically at fit and predict, so `predict({"n": n})` evaluates the formula. You set `latency` and
-`ii` by hand from an HLS report now (the `seed`); [the fitting section](../calib/) recovers them from a
-real RTL simulation.
+- a pipelined phase's `latency` span fits a constant: the intercept **is** `latency`;
+- its `fill_time` fits `−ii + ii·m`: the coefficient of `m` **is** `ii`;
+- a sequential span fits `(latency − ii) + ii·m`.
+
+Poly at 32 bits, [calibrated against its RTL](./fit.md), comes out as `latency = 34` and
+`fill_time = −1 + 1·nwords`: a 34-cycle pipeline at `II = 1`.  None of those numbers is in the module's
+code; the declaration only says which spans exist and what they depend on.
 
 ## Unrolling
 
-Unrolling the loop by a factor `U` processes `U` elements per iteration, so the number of iterations
-actually issued — the **effective trip count** — is `m = ceil(n / U)`, not `n`. That is not a fitted
-coefficient; it reshapes the basis. Fold it into the `transform`:
+Unrolling the loop by `U` processes `U` elements per iteration, so the iterations actually issued --
+the **effective trip count** -- are `m = ceil(n / U)`, not `n`.  That is not a fitted coefficient; it
+is a different feature.  Compute it in the body, where `U` is known, and pass it:
 
 ```python
-transform=lambda r: [1.0, math.ceil(r["n"] / U) - 1],     # m = ceil(n / U)
+m = math.ceil(n / self.unroll)
+yield from self.loop_phase.pipeline(compute, load=self.s_in.get_array(T, n),
+                                    store=self.m_out.write_array(T, n), trips=m)
 ```
 
-Everything else is unchanged: two parameters `latency` and `ii`, fit the same way. At large `n` the
-throughput asymptote `cycles / n → ii / U` is what pins `U` down if it is unknown.
+with the phase declared over `features=("trips",)`.  At large `m` the throughput asymptote
+`cycles / n → ii / U` is what pins `U` down if it is unknown.  The rule is general: a feature is
+whatever the body knows before the span starts, in the form the hardware's cost is linear in.
+
+## Another form
+
+`TimedPhase(..., tm=...)` takes the family.  `LinearTiming` is the only one today; a span whose
+duration is not linear in anything the body can compute -- a saturating curve, a lookup -- needs a
+family of its own (the calibration layer already has an interpolating model,
+[`InterpCalibModel`](../calib/models.md), to build one on).
 
 ## See also
 
-- [Adding a timing model to a component](./insertion.md) — attaching this model and charging its delay.
-- [Block processing](./block.md) / [Streaming processing](./streaming.md) — where in the run loop the
-  predicted delay is inserted.
-- [Timing model fitting](../calib/) — recovering `latency` and `ii` from measurement.
+- [Sequential bodies](./block.md) / [Pipelined bodies](./streaming.md) -- the two shapes.
+- [Calibrating a timed phase](./fit.md) -- recovering `latency` and `ii` from an RTL trace.
+- [Models](../calib/models.md) -- `LinCalibModel` and the calibration layer underneath.

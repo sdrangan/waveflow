@@ -1,0 +1,3 @@
+# The repo ignores *.json at the top level; a deck's index (project/deck.json) and its figure map
+# (figures/figures.json) are source, so keep them.
+!*.json

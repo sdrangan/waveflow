@@ -2,13 +2,11 @@
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from importlib import resources
 from pathlib import Path
 
-from waveflow.mcp.cli_build_example_rag import build_example_rag as _build_example_rag
 
 
 TEMPLATE_PACKAGE = "waveflow.mcp.resources"
@@ -24,7 +22,7 @@ def load_template() -> dict:
     return json.loads(template_text)
 
 
-def render_mcp_config(*, python_path: str, vector_store_id: str | None = None) -> str:
+def render_mcp_config(*, python_path: str) -> str:
     config = load_template()
     servers = config.setdefault("servers", {})
 
@@ -39,9 +37,6 @@ def render_mcp_config(*, python_path: str, vector_store_id: str | None = None) -
         }
 
     servers["waveflow"]["command"] = python_path
-
-    if vector_store_id is not None:
-        servers["waveflow"].setdefault("env", {})["WAVEFLOW_EXAMPLES_VECTOR_STORE_ID"] = vector_store_id
 
     return json.dumps(config, indent=2) + "\n"
 
@@ -65,6 +60,13 @@ def validate_python_interpreter(python_path: str) -> None:
     stderr = (completed.stderr or "").strip()
     stdout = (completed.stdout or "").strip()
     details = stderr or stdout or "Unknown error while importing waveflow.mcp.server"
+    if "mcp.server.mcpserver" in details:
+        # mcp 1.x in that environment, typically installed after waveflow by a pinned
+        # requirements file.  The bare ModuleNotFoundError does not say so.
+        details += (
+            "\nThat interpreter has mcp 1.x; waveflow needs mcp 2: "
+            'pip install -U "mcp>=2.3,<3"'
+        )
     raise RuntimeError(
         "The selected Python interpreter cannot import waveflow.mcp.server: "
         f"{python_path}\n{details}"
@@ -72,7 +74,7 @@ def validate_python_interpreter(python_path: str) -> None:
 
 
 def write_mcp_config(
-    *, workspace: Path, python_path: str, force: bool = False, vector_store_id: str | None = None
+    *, workspace: Path, python_path: str, force: bool = False
 ) -> Path:
     vscode_dir = workspace / ".vscode"
     target_path = vscode_dir / "mcp.json"
@@ -84,7 +86,7 @@ def write_mcp_config(
 
     vscode_dir.mkdir(parents=True, exist_ok=True)
     target_path.write_text(
-        render_mcp_config(python_path=python_path, vector_store_id=vector_store_id),
+        render_mcp_config(python_path=python_path),
         encoding="utf-8",
     )
     return target_path
@@ -114,15 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the generated config instead of writing it.",
     )
-    parser.add_argument(
-        "--build-rag",
-        action="store_true",
-        help=(
-            "Build the OpenAI vector store for waveflow examples and write the "
-            "resulting ID into .vscode/mcp.json under servers.waveflow.env. "
-            "Requires OPENAI_API_KEY to be set in the environment."
-        ),
-    )
     return parser
 
 
@@ -135,32 +128,14 @@ def main() -> int:
 
     validate_python_interpreter(python_path)
 
-    vector_store_id: str | None = None
-    if args.build_rag:
-        if not os.environ.get("OPENAI_API_KEY"):
-            print(
-                "Error: OPENAI_API_KEY environment variable is not set.\n"
-                "Set it before running --build-rag using one of these commands:\n"
-                "  Unix/Linux/macOS (current shell):\n"
-                "    export OPENAI_API_KEY=sk-...\n"
-                "  PowerShell (current session):\n"
-                "    $env:OPENAI_API_KEY = \"sk-...\"\n"
-                "  PowerShell (persist for future sessions):\n"
-                "    setx OPENAI_API_KEY \"sk-...\"",
-                file=sys.stderr,
-            )
-            return 1
-        vector_store_id = _build_example_rag(verbose=True)
-
     if args.dry_run:
-        print(render_mcp_config(python_path=python_path, vector_store_id=vector_store_id), end="")
+        print(render_mcp_config(python_path=python_path), end="")
         return 0
 
     output_path = write_mcp_config(
         workspace=workspace,
         python_path=python_path,
         force=args.force,
-        vector_store_id=vector_store_id,
     )
     print(f"Wrote {output_path}")
     return 0

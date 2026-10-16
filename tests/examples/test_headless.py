@@ -7,13 +7,13 @@ import pytest
 from waveflow.mcp.headless import _build_tool_runtime
 
 
-def test_build_tool_runtime_workspace_includes_rag_but_not_file_tools():
+def test_build_tool_runtime_workspace_includes_knowledge_but_not_file_tools():
     tool_schemas, dispatch_tool = _build_tool_runtime(mode="workspace", work_dir=None)
 
     names = {schema["function"]["name"] for schema in tool_schemas}
 
     assert "waveflow_get_components" in names
-    assert "waveflow_rag_search_examples" in names
+    assert "waveflow_search" in names
     assert "list_files" not in names
     with pytest.raises(ValueError, match="Unknown tool name"):
         dispatch_tool("list_files", {})
@@ -28,7 +28,7 @@ def test_build_tool_runtime_headless_includes_file_tools(tmp_path):
     names = {schema["function"]["name"] for schema in tool_schemas}
 
     assert "waveflow_get_components" in names
-    assert "waveflow_rag_search_examples" in names
+    assert "waveflow_search" in names
     assert {"list_files", "read_file", "write_file", "edit_file"}.issubset(names)
 
     result = dispatch_tool("read_file", {"path": "sample.txt"})

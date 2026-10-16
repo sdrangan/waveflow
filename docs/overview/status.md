@@ -48,7 +48,8 @@ linear-solve kernel — built from **three interacting modules**:
 
 - a **systolic array** (matrix–matrix product),
 - the **VMAC** vector engine (the complex vector-MAC tile, already verified), and
-- a **general-purpose processor** (control and scalar work).
+- a **general-purpose processor** (control and scalar work) — now modelled and calibrated as the
+  [processor model](../guide/cpu/index.md), a Cortex-A53 measured on gem5.
 
 Composed and simulated as one system, the goal is to show that Waveflow's **fast, bit-exact, timing-aware simulation** — paired with **agentic design-space exploration** — finds good parameterizations *much faster*
 than an RTL-first flow. That is a concrete, publishable validation of the central claim, and the first

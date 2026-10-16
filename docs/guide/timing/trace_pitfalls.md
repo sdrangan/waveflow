@@ -3,6 +3,7 @@ title: Trace pitfalls
 parent: Timing Analysis Tools
 nav_order: 10
 has_children: false
+summary: "Three ways a trace measurement returns a plausible number that is wrong, each of which produced a confident incorrect conclusion before it was caught. Sampling on the rising edge rather than mid clock-low read 16 accepted AXI-MM addresses instead of 128. The fixes are built into the Waveflow accessors; the pitfalls return the moment you step outside them."
 ---
 
 # Trace pitfalls — three ways a measurement goes silently wrong

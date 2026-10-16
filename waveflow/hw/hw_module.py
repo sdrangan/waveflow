@@ -406,6 +406,28 @@ class HwModule(SimObj):
         endpoint.comp = self
         self.endpoints[endpoint.name] = endpoint
 
+    def add_timing_phase(self, phase) -> None:
+        """Register a declared timed phase (:class:`~waveflow.hw.timed_phase.TimedPhase`) -- like
+        :meth:`add_endpoint`: construct, assign, register.  Binds the phase to this module (its owner:
+        the clock, and the check that every event is on one of this module's own endpoints) and turns
+        on what its events need: each named endpoint's transfer log, and on a reader whose ``last``
+        starts a span (a sequential body, Pattern 1) the charge for reading a buffered burst's beats.
+        Returns ``None``, so there is one way to write it (``plans/pipelined_ops.md``)."""
+        phases = self.__dict__.setdefault("timing_phases", {})
+        if phase.name in phases:
+            raise ValueError(f"'{self.name}' already has a timed phase named {phase.name!r}")
+        phase._bind(self)
+        phases[phase.name] = phase
+        from waveflow.hw.interface import QueuedTransferIFSlave
+
+        for ev in phase.events():
+            if ev.ep.xfer_log is None:
+                ev.ep.xfer_log = []
+            ev.ep._timing_owner = self
+        for start, _end in phase.spans.values():
+            if start.edge == "last" and isinstance(start.ep, QueuedTransferIFSlave):
+                start.ep._charge_beats = True
+
     def add_comp(self, comp: "HwModule") -> None:
         """Register *comp* as a sub-component (insertion order preserved).
 
@@ -459,7 +481,7 @@ class HwModule(SimObj):
 
         **Declared, never derived.**  Nothing can extract a cycle-exact protocol FSM from Python
         behaviour, and re-deriving a hand-written, verified bus model would not be progress
-        (``plans/xsi_tb_codegen.md`` Stage 0).  So a module in that position simply *names* its model,
+        (the xsi_tb_codegen plan, Stage 0 (commit 3052952)).  So a module in that position simply *names* its model,
         exactly as an override of ``kernel_task()`` names a hand-written ``hls::task`` body.
 
         **The asymmetry to keep honest.**  ``composite_kernel`` is *derived* — gate 4 runs the real
@@ -589,7 +611,7 @@ class HwModule(SimObj):
             self._resource_model = rm
             return
 
-        from waveflow.calib.record_store import ModuleStore
+        from waveflow.calib.record_store import platform_store
         from waveflow.calib.resource_model import LookupResourceModel
 
         if platform is None:
@@ -600,7 +622,7 @@ class HwModule(SimObj):
             return
         self._resource_model = LookupResourceModel(
             name=f"{type(self).__name__}:measured",
-            store=ModuleStore(platform.dir), platform=platform)
+            store=platform_store(platform), platform=platform)
 
     def resource_structure(self):
         """What this module physically **contains** — multiplier groups, partitioned arrays, and the

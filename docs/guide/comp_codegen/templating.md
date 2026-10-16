@@ -31,8 +31,8 @@ value** or a **template-parameter name**, depending on where it lands:
   and so on), so its stub is written to a `.tpp` rather than a `.cpp` —
   [`HlsCodegenStep`](../../../waveflow/build/hwcodegen_steps.py) selects the extension per hook.
   Emitting it as `.tpp` keeps the template definition visible through the generated header's include
-  path while the impl file stays [sticky](./codegen.md) across rebuilds. `poly`'s `evaluate` hook takes
-  `s_in` / `m_out`, so it lands in `poly_evaluate_impl.tpp`; a hook with no stream argument (like
+  path while the impl file stays [sticky](./codegen.md) across rebuilds. `poly`'s kernel body (a body-only
+  kernel, `cpp_body = "body"`) takes `s_in` / `m_out`, so it lands in `poly_body_impl.tpp`; a hook with no stream argument (like
   `simp_fun`'s `compute`) is concrete and lands in a plain `.cpp`.
 
 The decision between the two is `HwParamValue.param_name`: `SynthContext.cpp_param(name)` returns the

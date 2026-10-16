@@ -1,4 +1,4 @@
-"""The index is a timestamp on the RECEIVE side, at RTL — ``plans/rf_shot_absolute.md`` S2.
+"""The index is a timestamp on the RECEIVE side, at RTL — PR #201.
 
 ``absolute_index`` is a template argument, so the two settings are two pieces of RTL rather than one
 design with a mode register in it.  A gate that only ever elaborated one of them would be asserting
@@ -15,8 +15,8 @@ What this run can prove, and what it cannot
 -------------------------------------------
 It **can** prove the mode synthesizes, keeps ``II=1``, keeps the converter fed, satisfies the
 absolute claim on the wire — and the part only an RTL run can say, that **two regions still keep the
-writer and the reader apart**.  That is the trap ``plans/rf_shot_absolute.md`` S2 names: absolute
-indexing moves *when* a region is claimed, and the property ``plans/t2p_lock_chan.md`` S2 established
+writer and the reader apart**.  That is the trap PR #201 names: absolute
+indexing moves *when* a region is claimed, and the property PR #179 established
 (both memory ports live together, never in the same region) is what makes the region enforced at RTL
 by construction rather than by an assertion nobody can hear.  So it is **re-measured here rather than
 inherited**.
@@ -24,7 +24,7 @@ inherited**.
 It **cannot** prove what a drop does to an address, because the only thing that loses samples on RX
 is a reader that dawdles, and ``stall_blocks`` is a pysim modelling field that reaches no template
 argument — a reader that dawdles is not a thing the RTL can be asked to do.  That is the same reason
-``plans/t2p_lock_chan.md`` S2 declined to ship a dirty RTL build, and it is recorded rather than
+PR #179 declined to ship a dirty RTL build, and it is recorded rather than
 glossed: the drop gates below therefore run in pysim, where the knob does, and the two controls live
 beside them in ``tests/hw/test_rf_shot_rx.py``.
 
@@ -34,8 +34,6 @@ missing.
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -55,25 +53,17 @@ from examples.rf_shot_rx.rf_shot_rx import (
 )
 from examples.rf_shot_rx.rf_shot_rx_build import (
     ABS_STALL_BLOCKS,
-    RTL_FILES_ABS,
     STALL_BLOCKS,
     TOP_ABS,
-    WRAPPER_ABS,
-    generate_tb,
 )
-from waveflow.build.composite_gen import render_rtl_f
-from waveflow.build.trace_steps import XSI_RUNNER, rtl_staleness, xsi_runner_cmd
+from examples.rf_shot_rx import rf_shot_rx_system_build as sysb
+from tests.examples._system_run import (WORK, compared_clean, recorded_names, system_run,
+                                        trace_of)
 from waveflow.utils.bram_trace import describe, find_read_during_write, sampled
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "rf_shot_rx"
-XSI = ROOT / "xsi"
 VERILOG = ROOT / f"{TOP_ABS}_proj" / "solution1" / "syn" / "verilog"
 REPORT = ROOT / f"{TOP_ABS}_proj" / "solution1" / "syn" / "report"
-
-#: The hand-written main for this build, and the bundle it writes.  ``_abs``-suffixed on the output
-#: side so the two builds' captures sit beside each other.
-TB = f"{TOP_ABS}_counters"
-WIN_BUNDLE = "win_abs"
 
 #: **Recorded 2026-09-08 on the first green run of this build, and every one of them is the default
 #: build's number unchanged.**  That is the finding rather than a coincidence: on a run that drops
@@ -117,69 +107,18 @@ def _require(cond: bool, why: str) -> None:
         pytest.skip(f"XSI gate prerequisite missing: {why}")
 
 
-def _counters(out: str) -> dict[str, int]:
-    """The ``KEY=VALUE`` lines a counters main prints."""
-    vals: dict[str, int] = {}
-    for line in out.splitlines():
-        if "=" in line and line.split("=", 1)[0].isupper():
-            k, v = line.split("=", 1)
-            try:
-                vals[k.strip()] = int(v.strip())
-            except ValueError:
-                pass
-    return vals
-
-
-def _frames() -> list[np.ndarray]:
-    """The window frames the sink captured — header **and** samples, as a host would see them."""
-    from waveflow.utils.burst_io import read_burst_bundle
-
-    d = XSI / "vectors" / WIN_BUNDLE
-    if not d.is_dir():
-        return []
-    return [np.asarray(b, dtype=np.uint64).ravel() for b in read_burst_bundle(d)]
-
-
 @pytest.fixture(scope="module")
-def run(tmp_path_factory) -> dict:
-    """One traced RTL run of the absolute-index build, shared by the assertions below.
-
-    Everything the previous run left is removed first — the snapshot, the built TB, the capture
-    bundle and the waveform.  A cached snapshot plus a stale bundle is how a broken build passes on
-    old output, and a stale VCD is how a scan reports the *previous* run's addresses.
-    """
-    _require((XSI / XSI_RUNNER).exists(), f"{XSI / XSI_RUNNER}")
-    _require(VERILOG.is_dir(),
-             f"no csynth RTL at {VERILOG} — run rf_shot_rx_build.py --through csynth_abs")
-    _require(rtl_staleness(ROOT, TOP_ABS) is None, rtl_staleness(ROOT, TOP_ABS) or "")
-    for f in (*RTL_FILES_ABS, f"vcd_dumper_{WRAPPER_ABS}.v", f"{TOP_ABS}_hazard.json"):
-        _require((XSI / f).is_file(), f"{XSI / f} — run rf_shot_rx_build.py")
-
-    (XSI / f"rtl_{WRAPPER_ABS}.f").write_text(
-        render_rtl_f(TOP_ABS, ROOT, extra=RTL_FILES_ABS, stamp_sources=False), encoding="utf-8")
-    shutil.rmtree(XSI / "xsim.dir" / WRAPPER_ABS, ignore_errors=True)
-    for stale in (f"{TB}.exe", f"{TB}.bin", f"{TB}.o"):
-        (XSI / stale).unlink(missing_ok=True)
-    shutil.rmtree(XSI / "vectors" / WIN_BUNDLE, ignore_errors=True)
-    trace = XSI / f"{WRAPPER_ABS}_trace.vcd"
-    trace.unlink(missing_ok=True)
-    generate_tb(ROOT, RfShotRxAbs)
-
-    r = subprocess.run(xsi_runner_cmd(WRAPPER_ABS, TB, trace=True), cwd=str(XSI),
-                       capture_output=True, text=True, timeout=1800)
-    text = (r.stdout or "") + (r.stderr or "")
-    assert "XSI_EXITCODE=0" in text, f"the RTL run did not complete cleanly:\n{text[-3000:]}"
-    assert trace.is_file(), (
-        f"the traced run produced no {trace.name}. Is vcd_dumper_{WRAPPER_ABS}.v present in {XSI}?")
-
-    keep = tmp_path_factory.mktemp("rf_shot_rx_abs_xsi") / "trace.vcd"
-    shutil.copyfile(trace, keep)
-    return {
-        "counters": _counters(text),
-        "frames": _frames(),
-        "vcd": keep,
-        "manifest": json.loads((XSI / f"{TOP_ABS}_hazard.json").read_text(encoding="utf-8")),
-    }
+def run() -> dict:
+    """One traced RTL run, shared by the assertions below: the system run of the 'abs' build
+    (``examples/rf_shot_rx/rf_shot_rx_system_build.py``) -- the receiver is the DUT (its wrapper:
+    the kernel and its ``bram_t2p``), the RFDC's ADC model spans the cut.  The waveform is the
+    wrapper's scope inside the system top, the manifest names its nets there, and the counters are
+    the ones the converter model writes as a recording, under the names the old main printed."""
+    work = system_run(sysb.build_dag('abs', work_dir=WORK), sysb.HERE, sysb.BUILDS['abs'][1])
+    assert compared_clean(work) and recorded_names(work) == ["counters", "win"]
+    vcd, manifest = trace_of(work)
+    return {"counters": sysb.counters(work), "frames": sysb.frames(work), "vcd": vcd,
+            "manifest": manifest}
 
 
 @pytest.fixture(scope="module")
@@ -269,7 +208,7 @@ def test_a_DROP_leaves_a_HOLE_and_not_a_SHIFT(pysim_runs):
     own absolute indices name — not shifted up by what was lost.
 
     It is in pysim because ``stall_blocks`` reaches no template argument: a reader that dawdles is
-    not a thing the RTL can be asked to do, which is the same reason ``plans/t2p_lock_chan.md`` S2
+    not a thing the RTL can be asked to do, which is the same reason PR #179
     shipped no dirty RTL build. The RTL half of this file proves the mode *is* the RTL; this proves
     what the mode is for.
 
@@ -331,7 +270,7 @@ def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK(
 
     That coarseness is not only a cost: it is what keeps an announced window from ever being part
     stale, and therefore what lets the header localize a hole with **no per-block valid mask**
-    (``plans/rf_shot_absolute.md`` S2, *what is in a hole*).
+    (PR #201, *what is in a hole*).
     """
     lost = {k: int(v["tb"].dut.n_dropped) for k, v in pysim_runs.items()}
     assert (lost["default"], lost["abs"]) == (160, 448), (
@@ -355,7 +294,7 @@ def test_absolute_indexing_costs_a_WHOLE_WINDOW_where_the_default_costs_a_BLOCK(
 def test_both_ports_are_live_together_and_never_in_the_same_region(run):
     """**The property absolute indexing must not break, re-measured rather than inherited.**
 
-    ``plans/t2p_lock_chan.md`` S2's whole RTL claim: both memory ports are simultaneously live for
+    PR #179's whole RTL claim: both memory ports are simultaneously live for
     many cycles of this run, and on **every one of them** the writer and the reader are in different
     regions. That is what makes the region enforced at RTL *by construction* — Vitis still owns the
     port enable and still reads speculatively, and with disjoint regions that stops mattering.

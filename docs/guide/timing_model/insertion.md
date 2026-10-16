@@ -1,71 +1,134 @@
 ---
-title: Adding a timing model to a component
+title: Declaring a timed phase
 parent: Timing Models
 nav_order: 2
 audience: python
-api: [LinCalibModel, TimingModel, FreeRunMod.add_timing_model]
-summary: "How a component sources its compute delay from a timing-model object: attach a model and, in the run loop, charge self.timeout(tm.predict(...) * clk.period). tm.predict returns the cycles the compute will take as a function of the firing size (e.g. n); internally it evaluates a formula in a few parameters (e.g. latency + proc_ii*(ceil(n/U)-1)), which the following pages make concrete and the fitting section recovers by comparison to RTL. The model adds only this component's compute plus unaccounted overhead — read/write times are charged by the transfer yields, and stalls grow the firing on their own."
+snippets: run
+api: [TimedPhase, TimingEvent, HwModule.add_timing_phase, TimedPhase.predict, LinearTiming]
+summary: "How a module declares its timing: build a TimedPhase from spans between its own endpoints' events (ep.first / ep.last), the features the durations depend on, and seed numbers; register it with add_timing_phase, like an endpoint. The phase's model predicts each span in cycles with no simulator. The rules: a span uses the module's own endpoints, an event names an operation not a role or a message, features are checked by name. The phase charges only the module's own time; the transfers time themselves, and a stall lengthens a firing on its own."
 ---
 
-# Adding a timing model to a component
+# Declaring a timed phase
 
-A component's **functional** model says *what* it computes; its **timing** model says *how long* that
-takes. In pysim the compute is instantaneous — the value is produced at once — so a component must
-**charge the time its computation would take in hardware**. It does that by holding a *timing model*
-and, in its run loop, waiting the delay the model predicts.
+A module declares its [timed phases](./timed_phases.md) once, in `__post_init__`, beside its endpoints.
+This page is the declaration; the body's side is [Sequential bodies](./block.md) and
+[Pipelined bodies](./streaming.md).
 
-## Where it plugs in
+## The declaration
 
-Attach the model in `__post_init__`; predict the delay and charge it with `self.timeout`:
+Every endpoint provides its two events, `ep.first` and `ep.last` -- the first and last beat of each of
+its transfers.  A phase names its **spans** as pairs of those events, the **features** the durations
+depend on, and **seed** numbers -- what it predicts before it is calibrated.  It is registered like an
+endpoint: construct, assign, register.
 
 ```python
-class MyCompute(FreeRunMod):
+from dataclasses import dataclass, field
+
+from waveflow.hw.clock import Clock
+from waveflow.hw.hw_freerun import FreeRunMod
+from waveflow.hw.interface import StreamIFMaster, StreamIFSlave
+from waveflow.hw.timed_phase import TimedPhase
+from waveflow.simulation.simulation import Simulation
+
+
+@dataclass
+class Scale(FreeRunMod):
+    """Reads a burst of n words, computes, writes the result: compute_time = 3 + 2 n cycles."""
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=1.0))   # 1 Hz: times read as cycles
+
     def __post_init__(self):
         super().__post_init__()
-        # ... declare ports: s_cmd, m_mem, m_out ...
-        self.tm = ...                   # a timing model — given a formula on the next pages
-        self.add_timing_model(self.tm)  # register it with the component (so the fitting tools find it)
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)
+        for ep in (self.s_in, self.m_out):
+            self.add_endpoint(ep)
+        self.compute_phase = TimedPhase(
+            "compute", spans={"compute_time": (self.s_in.last, self.m_out.first)},
+            features=("n",), seed={"compute_time": {"intercept": 3.0, "n": 2.0}})
+        self.add_timing_phase(self.compute_phase)
 
     def run_iter(self):
-        cmd = yield from self.s_cmd.get_schema(MyCmd)     # blocks until a command arrives
-        x   = yield from self.m_mem.read(cmd.addr, cmd.n) # blocks on the read
+        w = yield from self.s_in.get()
+        yield self.compute_phase.timeout(n=len(w))
+        yield from self.m_out.write(w * 2)
 
-        y = compute(x)                                    # the value — computed instantly in pysim
 
-        cycles = self.tm.predict({"n": cmd.n})            # cycles the compute takes, vs. the size n
-        yield self.timeout(cycles * self.clk.period)
-
-        yield from self.m_out.write(y)                    # blocks if the downstream FIFO is full
+m = Scale(name="scale", sim=Simulation())
+print(m.compute_phase.spans)
+print(m.compute_phase.predict(n=4))
 ```
 
-`tm.predict` returns the **number of cycles** the compute will take as a function of the firing size —
-here the sample count `n`. Internally it evaluates a formula in a few parameters; for a pipelined loop,
-for instance,
-
-```
-cycles = latency + proc_ii · (ceil(n / unroll_factor) − 1)
+```text
+{'compute_time': (scale_s_in.last, scale_m_out.first)}
+{'compute_time': 11.0}
 ```
 
-The next pages ([Block](./block.md), [Streaming](./streaming.md)) make that formula concrete, and
-[the fitting section](../calib/) shows how to recover its parameters — `latency`, `proc_ii` — by
-comparison to an actual RTL simulation. (`× clk.period` converts the predicted cycles to sim time.)
+- **A phase and its model are one object.**  `phase.predict(**features)` is plain arithmetic, in
+  **cycles** of the module's clock, and needs no simulator: the same model a calibration fits.  Each
+  span gets its own model -- `LinearTiming` by default, `intercept + sum(coefficient · feature)` -- so
+  a phase with two spans predicts two named durations.
+- **The numbers are not in the code.**  The seed is a starting point; a calibration files fitted
+  parameters in the phase's `calib_dir` (`<span>.json`), and the phase loads them when they are there.
+  The declaration says *what* is timed and the law's *shape*; the store says how well it is known.
+- **Registering binds the phase to its module** -- through it the phase reaches the clock -- and turns
+  on what its events need: a transfer log on each endpoint it names.  `add_timing_phase` returns
+  `None`, so there is one way to write it, and phases share a loop as endpoints do.
+
+## The rules a declaration is held to
+
+**Features are checked by name.**  A prediction or a wait with a missing or unexpected feature fails
+at the call, instead of fitting the wrong thing:
+
+```python
+try:
+    m.compute_phase.predict(words=4)
+except TypeError as e:
+    print(e)
+```
+
+```text
+phase 'compute' declares features ['n']; got ['words'] (missing ['n'], unexpected ['words'])
+```
+
+**A span uses only the module's own endpoints.**  A span between two modules belongs to the composite
+that holds both, declared there; leaves calibrate their own phases.  A point inside an HLS body cannot
+be an event -- if a phase cannot be stated between port events, the module is split.
+
+```python
+other = Scale(name="other", sim=Simulation())
+try:
+    m.add_timing_phase(TimedPhase("x", spans={"t": (m.s_in.last, other.m_out.first)}))
+except ValueError as e:
+    print(str(e).split(".  ")[0])
+```
+
+```text
+phase 'x' on 'scale': event other_m_out.first is on an endpoint that is not the module's own
+```
+
+**An event names an operation on an endpoint, never a role and never a message.**  "Load" and "store"
+are roles a body gives transfers, not properties of an endpoint, so there is no `s_in.load.first`.
+And `s_in.last` is "the last beat of *a* transfer on `s_in`": which transfer is decided when the body
+runs, so one declaration serves every message -- poly's `s_in` carries both its command headers and its
+samples, and two phases start on it.
 
 ## The delay is *additional*, not end-to-end
 
-The model adds **only this component's own compute cost, plus any overhead not already charged** — not
-the load or store. Those are already accounted for:
+A phase times **only the module's own work** -- the compute between the events.  The transfers time
+themselves:
 
-- `m_mem.read()` / `m_out.write()` block for however long the transfer actually takes, charged by the
-  `yield from`.
-- `s_cmd.get()` blocks until a command arrives.
+- `s_in.get()` and `m_out.write()` take as long as the transfer takes, charged by their `yield from`;
+- if a transfer **stalls** -- a downstream FIFO is full, a producer is behind -- that `yield from`
+  simply takes longer, and the firing's end-to-end time **grows on its own**.
 
-So if the reads or writes **stall** — the interconnect is busy with another master, or a downstream
-FIFO is full — those `yield from`s simply take longer, and the firing's end-to-end time **grows on its
-own**. Congestion is the *simulation's* to model; the timing model owns only the extra compute delay.
-That is why a model built in isolation still predicts the contended system.
+So a phase calibrated in isolation still predicts the contended system: congestion is the
+simulation's to model, and the phase owns only the module's own delay.  The same split is what makes a
+measurement honest: an occurrence the environment held up is marked, and kept out of a fit.
 
 ## See also
 
-- [Block processing](./block.md) — the next page: the formula above as a concrete `LinCalibModel`.
-- [Timing model fitting](../calib/) — recovering the model's parameters by comparison to RTL.
-- [Simulation timing model](../sim/timing.md) — `Clock`, `self.timeout`, and cycles → time.
+- [What a timed phase is](./timed_phases.md) -- spans, events, features, on a real trace.
+- [Sequential bodies](./block.md) / [Pipelined bodies](./streaming.md) -- waiting the phase in the body.
+- [The form of a span's model](./loops.md) -- what `LinearTiming` is, for a pipelined loop.
+- [Calibrating a timed phase](./fit.md) -- where the fitted numbers come from.
