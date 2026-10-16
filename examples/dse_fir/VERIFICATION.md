@@ -22,6 +22,17 @@ Upstream hardware examples and framework code are accepted unchanged; no vendor 
   ```
 
 - Actual Chrome visualizer suite: **6 passed** separately. Scoped DSE Ruff passes.
+- Post-merge fresh demo at `f4fe5b0`: **14 attempts**, with all statuses, parameters,
+  metrics and checks identical to the original study (wall times and IDs are fresh).
+  Both experiment identities changed as required. The current study/review exports
+  contain these new runs; the pre-integration study remains at `71727ec` in Git.
+- Rebuilt wheel includes execution modules and all presentation/handoff artifacts.
+  Its non-editable installation outside the checkout completed the real 14-attempt
+  demo with `passed: true`. No editable-install fallback was used.
+- Final transport/docs check after the shared-registry annotation repair:
+  **103 passed, 2 skipped, 1 deselected**. Undefined-name checks on both shared MCP
+  files and diff checks relative to `main` pass. Upstream's existing SVG whitespace
+  is retained rather than rewritten as part of this merge.
 - Broader MCP run (DSE + `tests/mcp` + existing MCP/examples/docs): **407 passed,
   3 failed, 8 skipped, 5 deselected, 8 xfailed, 1 xpassed**. All three failures
   reproduce on an untouched detached worktree of `c10da30` using the same environment:
