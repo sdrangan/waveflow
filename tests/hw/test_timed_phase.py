@@ -470,3 +470,85 @@ class TestPattern3:
     def test_spans_that_are_not_lead_and_fill_are_refused(self):
         with pytest.raises(RuntimeError, match="produce"):
             _produce_harness([4], wrong_spans=True)
+
+
+@dataclass
+class _TwoLead(FreeRunMod):
+    """A write that needs both its turn (after the command's last word) and its input (the data's first
+    word on a second port): two leads to one event."""
+
+    clk: Clock = field(default_factory=lambda: Clock(freq=1.0))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.s_cmd = StreamIFSlave(name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=64)
+        self.s_in = StreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=64)
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=64)
+        for ep in (self.s_cmd, self.s_in, self.m_out):
+            self.add_endpoint(ep)
+        o = self.m_out
+        self.phase = TimedPhase(
+            "make", spans={"turn": (self.s_cmd.last, o.first), "input": (self.s_in.first, o.first),
+                           "fill": (o.first, o.last)},
+            seed={"turn": {"intercept": 5.0}, "input": {"intercept": 3.0}, "fill": {"intercept": 1.0}})
+        self.add_timing_phase(self.phase)
+
+    def run_iter(self):
+        yield from self.s_cmd.get()
+        w = yield from self.s_in.get()
+        yield from self.phase.produce(self.m_out, np.asarray(w, dtype=np.uint64))
+
+
+def _two_lead_run(data_at: float):
+    sim = Simulation()
+    env = sim.env
+    dut = _TwoLead(name="dut", sim=sim)
+    cmd = StreamIFMaster(name="cmd", sim=sim, bitwidth=64)
+    dat = StreamIFMaster(name="dat", sim=sim, bitwidth=64)
+    snk = StreamIFSlave(name="snk", sim=sim, bitwidth=64)
+    for name, m, s in (("a", cmd, dut.s_cmd), ("b", dat, dut.s_in), ("c", dut.m_out, snk)):
+        f = StreamIF(name=name, sim=sim, bitwidth=64, clk=Clock(freq=1.0), depth=16)
+        f.bind("master", m)
+        f.bind("slave", s)
+
+    def drive_cmd():
+        yield from cmd.write(np.asarray([1], dtype=np.uint64))
+
+    def drive_dat():
+        yield env.timeout(data_at)
+        yield from dat.write(np.asarray([7, 8], dtype=np.uint64))
+
+    def sink():
+        yield from snk.get()
+
+    for p in (drive_cmd(), drive_dat(), sink(), dut._run_iter_forever()):
+        env.process(p)
+    env.run(until=200)
+    return dut
+
+
+class TestSeveralLeads:
+    def test_the_write_starts_when_every_lead_allows(self):
+        """Input early: the turn binds (command last at 1, + 5 -> 6).  Input late (its first word at
+        41): the input binds (41 + 3 -> 44)."""
+        early = {r.span: r for r in _two_lead_run(0.0).phase.records}
+        assert early["turn"].end[3] == pytest.approx(6.0)
+        late = {r.span: r for r in _two_lead_run(40.0).phase.records}
+        assert late["input"].start[3] == pytest.approx(41.0)
+        assert late["turn"].end[3] == pytest.approx(44.0)
+
+    def test_leads_to_one_event_are_lower_bounds(self):
+        dut = _two_lead_run(0.0)
+        assert dut.phase.lower_bounds == {"turn", "input"}
+
+
+def test_an_unframed_port_is_framed_by_pysims_counts():
+    """A port with no TLAST: its one burst of beats split by the word counts pysim logged."""
+    from waveflow.calib.phases import _frame_by_counts
+
+    burst = {"start_idx": 10, "beat_type": [0, 0, 1, 0, 0, 0, 1, 1, 0]}     # beats at 10,11,13,14,15,18
+    rows = _frame_by_counts([burst], [2, 3, 1], hold=1, what="p")
+    assert [(r[1], r[2], r[3]) for r in rows] == [(10.0, 11.0, 2), (13.0, 15.0, 3), (18.0, 18.0, 1)]
+    assert [r[4] for r in rows] == [False, False, False]
+    with pytest.raises(ValueError, match="differ"):
+        _frame_by_counts([burst], [2, 3], hold=1, what="p")

@@ -97,3 +97,24 @@ def test_the_digest_is_of_the_workload_and_leaves_the_system_untouched():
     assert a == scenario_digest(wl.system)
     assert a != scenario_digest(sysm)                  # the test workload is another scenario
     assert wl.system._root is None                     # digested on a fresh copy
+
+
+def test_a_record_of_other_spans_is_not_this_modules_calibration(tmp_path):
+    """Phases are context, so the identity does not move when they change -- the record's declaration
+    does: a record fitted to other spans is neither loaded nor taken for a cache hit."""
+    from examples.markov.markov import ChainCore
+    from waveflow.calib.phases import phase_declaration, phase_record, stored_phases
+    from waveflow.calib.record_store import ModuleStore
+    from waveflow.hw.harness import harness
+
+    core = harness(ChainCore).dut()
+    fits = {ph: {s: {"params": {"intercept": 1.0}, "train": [], "holdout": []} for s in p.spans}
+            for ph, p in core.timing_phases.items()}
+    store = ModuleStore(tmp_path)
+    rec, ident = phase_record(core, fits, workload="w")
+    rec.payload["declared"] = {**phase_declaration(core), "x": {"features": [], "spans": {}}}
+    store.append(rec, identity=ident)
+    assert stored_phases(store, core) is None
+    rec2, _ = phase_record(core, fits, workload="w")
+    store.append(rec2, identity=ident)
+    assert stored_phases(store, core) is not None

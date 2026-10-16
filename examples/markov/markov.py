@@ -347,24 +347,30 @@ class ChainCore(FreeRunMod):
         self.m_x = StreamIFMaster(name=f"{self.name}_m_x", sim=self.sim, bitwidth=DW, has_tlast=True)
         for ep in (self.s_u, self.m_x):
             self.add_endpoint(ep)
-        # Every write on m_x is paced by the core (Pattern 3), each timed from the write before it:
+        # Every write on m_x is paced by the core (Pattern 3), each timed from the event before it:
         # per chunk its MemWCmd (after the previous chunk's states -- or, a job's first, after the
         # previous job's response: reading the command between) and its states, a step a cycle, eight
         # to a word; per job the closing MemWCmd and the response.  Fitted in the core's own harness;
         # a write the environment delayed (its input late) is no sample.
         x = self.m_x
 
-        def phase(name, features=(), lead=4.0, fill=0.0, per_c=0.0):
+        def phase(name, features=(), lead=4.0, fill=0.0, per_c=0.0, inputs=None):
             feats = {f: 0.0 for f in features}
-            return TimedPhase(
-                name, spans={"lead": (x.last, x.first), "fill": (x.first, x.last)},
-                features=features,
-                seed={"lead": {"intercept": lead, **feats},
-                      "fill": {"intercept": fill, **feats, **({"c": per_c} if per_c else {})}},
-                calib_dir=HERE / "calib")
+            spans = {"lead": (x.last, x.first), "fill": (x.first, x.last)}
+            seed = {"lead": {"intercept": lead, **feats},
+                    "fill": {"intercept": fill, **feats, **({"c": per_c} if per_c else {})}}
+            if inputs is not None:                     # a second lead: from the input
+                ev, lat = inputs
+                spans["input"] = (ev, x.first)
+                seed["input"] = {"intercept": lat, **feats}
+            return TimedPhase(name, spans=spans, features=features, seed=seed,
+                              calib_dir=HERE / "calib")
 
         self.cmd_phase = phase("cmd", ("first",), lead=8.0, fill=1.0)
-        self.x_phase = phase("x", ("c",), lead=15.0, fill=-8.0, per_c=1.0)
+        # The states start when both their turn (after the MemWCmd) and their draws (the chunk's first
+        # word in) allow: a chunk that arrives late makes its states late (Stage 4c's startup gap).
+        self.x_phase = phase("x", ("c",), lead=15.0, fill=-8.0, per_c=1.0,
+                             inputs=(self.s_u.fwd_ep.first, 19.0))
         self.fin_phase = phase("fin", lead=4.0, fill=1.0)
         self.resp_phase = phase("resp", lead=1.0, fill=1.0)
         for ph in (self.cmd_phase, self.x_phase, self.fin_phase, self.resp_phase):

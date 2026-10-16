@@ -238,7 +238,7 @@ filed under the `SynthUnit`'s identity (D7), a repeated calibration with no chan
 simulation.  Grid discipline: at least three values a feature, interior points held out.  Gate: a
 repeat is a cache hit; a held-out point within tolerance; the filed record found from the identity alone.
 
-**Stage 4 -- markov: the first multi-kernel system.  DONE on the gate's second clause (records below).**  Declare phases on markov's two stream kernels (the
+**Stage 4 -- markov: the first multi-kernel system.  DONE: -1.6% from composition (Stage 4d record).**  Declare phases on markov's two stream kernels (the
 generator and the chain's core), replacing their hand-fitted per-chunk overheads (7 and 15); calibrate
 each as a leaf; the composites with the stand-ins of the Stage 0 record (the remote queue, the credit loop);
 the composition check against markov's RTL (1870 cycles), with no system-level fitting.  Gate: within the
@@ -683,9 +683,34 @@ cycles to RTL's 80.  What remains, from the chain's memory writes job by job:
 Next: the core's `x` as Pattern 2 (a credit-stream `begin_read`), and the forward writer as a unit (its
 harness: a stream in, `MemoryMod` as the `m_axi` stand-in).
 
+## Record: Stage 4d (2026-10-15), the core's input lead -- the gate met: -1.6%
+
+**The gate: markov composed from its calibrated parts is 1841 cycles against RTL 1870 (-1.6%)**, no
+system-level fitting; `test_markov_pysim_tracks_rtl` is out of quarantine.  The forward writer was not
+needed: once the core waited for its input, the rest followed.
+
+**The core's states need two things** -- their turn (after the chunk's MemWCmd) and their draws (the
+chunk's first word in).  Timed from the input alone, the RTL rows came in two clean values, 19 and 34
+cycles: the input port's handshake is when a word enters the kernel's input FIFO, which is early when
+the stand-in has it ready and is the core's own read when it arrives late.  So the RTL is
+`x.first = max(MemWCmd.last + 15, s_u_fwd.first + 19)`, Pattern 2's latency rule.  `produce` takes
+several leads to the write's first beat and starts it when every one allows; leads to one event are
+**lower bounds** (`TimedPhase.lower_bounds`), fitted to the lower envelope of their rows (`fit_phase`):
+the turn 15 on all 26 chunks, the input 19 for a full chunk on the 10 where it held, both exact.  (The
+shorter last chunks' input lead is the less certain: in the harness their input was always early.)
+
+**Ports with no TLAST** (a credit stream's data half, `s_u_fwd`) are framed at RTL by the word counts
+pysim logged on the same endpoint (`rtl_xfers`, `_frame_by_counts`) -- legal for the reason the whole
+join is: both runs carry the same words; a different total refuses.
+
+**A record now states its phases** (`phase_declaration`: each span's events by RTL port, the features),
+and `stored_phases` counts only a record of the phases as declared.  Found the hard way: changing the
+core's spans gave a calibration cache hit (phases are context, so the identity did not move) and would
+have loaded numbers fitted to other spans.  All records were refitted.
+
 ## Record: Stage 5 (2026-10-15), robustness -- no findings
 
-**Stage 4 closes on its gate's second clause** ("or a written account of what the decomposition
+**Stage 4 closed on its gate's second clause** (superseded: Stage 4d met the gate itself, -1.6%) ("or a written account of what the decomposition
 missed"): the Stage 4c record is that account, and `test_markov_pysim_tracks_rtl` is quarantined until
 the forward writer and the core's input lead are calibrated.
 
