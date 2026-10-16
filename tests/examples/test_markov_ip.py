@@ -79,7 +79,10 @@ def test_an_unchanged_system_is_not_repackaged(manifest):
     Vivado, and writes the same manifest (crossbar included)."""
     work = system_run(build_dag(work_dir=WORK), HERE, WORKSPACE, through="ip_package")
     again = json.loads((work / "ip_repo" / "manifest.json").read_text(encoding="utf-8"))
-    assert again["seconds"] == 0.0
+    # Either the step ran and every IP was a cache hit (0 s), or -- since the system's steps are
+    # fresh while nothing they read changed (plans/unit_harness.md Stage 6) -- it did not run at all
+    # and the manifest is the first run's, word for word.
+    assert again["seconds"] == 0.0 or again == manifest
     assert again["ips"] == manifest["ips"] and again["xbar"] == manifest["xbar"]
 
 

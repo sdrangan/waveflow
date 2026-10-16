@@ -1,0 +1,9 @@
+{
+  "key": "markov_gen-26326038",
+  "cls_name": "MarkovGen",
+  "cls_module": "examples.markov.markov",
+  "params": {
+    "gen_ii": 1
+  },
+  "signature": "26326038595730c7ba427c936a19be0eca3208581bdfd1c6d66f3f1a40c5b090"
+}

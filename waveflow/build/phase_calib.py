@@ -173,11 +173,19 @@ class PhaseCalibCachedStep(_SystemStep):
     def produces(self) -> dict:  # type: ignore[override]
         return {self.a("phase_calib"): self.work / "phase_calib.json"}
 
+    def _report(self) -> str:
+        return json.dumps({"cache_hit": True, "records": self.hits}, indent=1) + "\n"
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        """Fresh while its report already names these records: the store was asked when the DAG was
+        built, so there is nothing left to decide (Stage 6)."""
+        out = self.work_dir(config) / "phase_calib.json"
+        return out.is_file() and out.read_text(encoding="utf-8") == self._report()
+
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         out = self.work_dir(config) / "phase_calib.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"cache_hit": True, "records": self.hits}, indent=1) + "\n",
-                       encoding="utf-8")
+        out.write_text(self._report(), encoding="utf-8")
         return {self.a("phase_calib"): out}
 
 
@@ -248,6 +256,8 @@ def add_calib_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     wl = sysm.calibration_workload()
     if wl is None:
         raise ValueError(f"{type(sysm).__name__} has no calibration_workload()")
+    # It writes the records its modules would load: its freshness must not follow them (Stage 6).
+    wl.system._wf_calibrating = True
     top = top or snake(type(sysm).__name__)
     digest = scenario_digest(wl.system) if store is not None else ""
     if store is not None:

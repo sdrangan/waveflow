@@ -50,7 +50,7 @@ from waveflow.utils.burst_io import StreamBurst
 from waveflow.hw.clock import Clock
 from waveflow.hw.dataschema import DataList, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import DynParam
+from waveflow.hw.hw_module import DynParam, HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
@@ -250,6 +250,10 @@ class MarkovGen(FreeRunMod):
     )
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: Cycles per draw: the draw loop's pipeline interval (``markov_gen_task.h``'s ``II``).  A build
+    #: parameter of this unit alone -- it changes the generator's RTL and pace, no contract with the
+    #: chain -- and the knob ``plans/unit_harness.md`` Stage 6 turns.
+    gen_ii: HwParam[int] = 1
 
     #: The credit window its RTL is built with (``markov_gen_task.h``'s QDEPTH, CRD_EVERY): what its
     #: harness's stand-in presents (``plans/unit_harness.md`` D3).
@@ -265,7 +269,7 @@ class MarkovGen(FreeRunMod):
         credit accounting included.  ``m_u`` is two ports (forward, credit) in that order."""
         from waveflow.hw.mem_stream import KernelTask
         return KernelTask("markov_gen_task", "markov_gen_task.h", ("s_cmd", "m_u"),
-                          template_args=(DW, QDEPTH, CRD_EVERY))
+                          template_args=(DW, QDEPTH, CRD_EVERY, int(self.gen_ii)))
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -285,7 +289,7 @@ class MarkovGen(FreeRunMod):
             "chunk", spans={"lead": (u.last, u.first), "fill": (u.first, u.last)},
             features=("c", "first"),
             seed={"lead": {"intercept": 12.0, "c": 0.0, "first": 0.0},
-                  "fill": {"intercept": -3.0, "c": 1.0, "first": 0.0}},
+                  "fill": {"intercept": -3.0, "c": float(self.gen_ii), "first": 0.0}},
             calib_dir=HERE / "calib")
         # The command forwarded: a job's first write, after the previous job's last chunk (reading
         # the command between) -- late when the command is, and then no sample.
@@ -587,6 +591,8 @@ class MarkovSystem(HwSystem):
     jobs: list
     link: str = "mm"
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
+    #: The generator's draw interval (:attr:`MarkovGen.gen_ii`).
+    gen_ii: int = 1
     xbar_latency: float = 4
     xbar_travel: float = 2
 
@@ -594,7 +600,7 @@ class MarkovSystem(HwSystem):
         if self.link not in ("mm", "direct"):
             raise ValueError(f"link must be 'mm' or 'direct', got {self.link!r}")
         sim = self.sim = Simulation()
-        self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk)
+        self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk, gen_ii=self.gen_ii)
         self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
         self.mem = markov_memory(sim, self.clk)
         self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
