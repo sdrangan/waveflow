@@ -233,7 +233,11 @@ class MemCalibStep(_SystemStep):
         rec, ident = mem_timing_record(mem, payload, workload=digest,
                                        period_ns=float(mem.clk.period) * 1e9,
                                        tool=f"vitis {config.vitis_version or ''}".strip())
-        self.store.append(rec, identity=ident)
+        from waveflow.calib.mem_timing import stored_mem_timing
+
+        newest = stored_mem_timing(self.store, mem, workload=digest)
+        if newest is None or newest.payload != rec.payload:   # a repeat measuring the same: no copy
+            self.store.append(rec, identity=ident)
         out = work / "mem_timing.json"
         out.write_text(json.dumps({"key": ident.key, **payload}, indent=1) + "\n", encoding="utf-8")
         return {self.a("mem_timing"): out}
