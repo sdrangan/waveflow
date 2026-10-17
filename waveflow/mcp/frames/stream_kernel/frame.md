@@ -27,7 +27,8 @@ The pattern is command-response (`docs/guide/patterns/command_response.md`); the
    nothing after it is answered.
 4. **When the number of results is not known until the end** (detections, matches), `m_out` carries
    a tagged union ending in `END` -- one `DataList` per message type, each beginning with the same
-   `EnumField` tag -- and `m_status` is unchanged (*Variable-length output* on the pattern page).
+   `EnumField` tag (`docs/guide/schema/python/tagged_union.md`) -- and `m_status` is unchanged
+   (*Variable-length output* on the pattern page).
 5. **Every message is a schema** (`DataList`, `EnumField`, `FixedField`, `ComplexField`), and every
    word is packed by the generated code: `serialize` / `write_array` in Python, `read_axi4_stream` /
    `write_axi4_stream` and the lane routines in C++.  Never by hand.
