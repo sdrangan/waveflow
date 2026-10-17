@@ -1,0 +1,125 @@
+{
+  "schema_version": "fir-trial-score-v1",
+  "passed": true,
+  "checks": {
+    "completed": true,
+    "runtime_locked": true,
+    "tool_boundary": true,
+    "context_first": true,
+    "recommendation_parsed": true,
+    "candidate_exists": true,
+    "params_match": true,
+    "feasibility_supported": true,
+    "evidence_cited": true,
+    "citations_valid": true,
+    "objective_matches": true
+  },
+  "runtime": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "route_source": "raw_request",
+    "requested": {
+      "provider": "deepseek",
+      "model": "deepseek-flash"
+    },
+    "model_lock": "confirmed"
+  },
+  "turn_exit_reason": null,
+  "tool_call_count": 20,
+  "usage": {
+    "input_tokens": 90712,
+    "output_tokens": 3179,
+    "total_tokens": 93891,
+    "runtime": {
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "route_source": "raw_request",
+      "requested": {
+        "provider": "deepseek",
+        "model": "deepseek-flash"
+      },
+      "model_lock": "confirmed"
+    }
+  },
+  "budget": {
+    "limits": {
+      "pysim": 64,
+      "predict_resource": 64,
+      "synth": 8,
+      "rtlsim": 2
+    },
+    "spent": {
+      "pysim": 10,
+      "predict_resource": 7,
+      "synth": 8,
+      "rtlsim": 0
+    },
+    "remaining": {
+      "pysim": 54,
+      "predict_resource": 57,
+      "synth": 0,
+      "rtlsim": 2
+    }
+  },
+  "recommendation": {
+    "recommended_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+    "params": {
+      "ntap": 32,
+      "samp_w": 16,
+      "samp_i": 2,
+      "mem_dwidth": 32,
+      "unroll_lane": false
+    },
+    "evaluation_ids": {
+      "pysim": "3fc6b09421e86a7859e8c46c41b813e8260f4391c4a6aba95f15be2e0ae71734",
+      "synth": "946e0bb3f4ee2a1b3edd9a1d6947f062f30f25159a1c320846f6dcfb4a442391",
+      "predict_resource": "00b76aaf0a3b1f8bbc9514c27fc623935306dc7829c50ec85af308c1bcabef13"
+    },
+    "objective_value": 55.32082157015257,
+    "feasible": true,
+    "limitations": "Feasibility and objective rest on fixed-point Python pysim (gain-normalized periodic waveform metric, not a worst-bin guarantee) plus replayed Vitis HLS resource estimates (top_dsp 32, top_lut 8674, top_ff 11347, top_bram 2) \u2014 these are replay, not live synthesis or board validation. rtlsim was unavailable (no per-candidate RTL evidence). Constraints applied: max_top_dsp=48, max_top_lut=53200, min_throughput=1.0, min_passband_sndr_db=20.0, all satisfied (samp_w=16 gives throughput 1.0 and SNDR 55.95). ntap=32 with samp_w=24 or with unroll_lane=true was rejected: replay showed DSP=64 > 48. ntap=32/samp_w=16/unroll_lane=false is the best of the points I evaluated in the scored space (ntap in [8,16,32]), not proven globally optimal; ntap=64/128 are outside the stated scored space and were not evaluated."
+  },
+  "experiment_id": "39f140d19841bc82613d6c44b5da9a657ee66eecb1f35538292e2f235a2c3534",
+  "raw_sse_sha256": "7528a0975315989e207491da398f8c3a501c8c3946b2d22489670daf58c3e462",
+  "spillover_occurrences": 0,
+  "limitations": [
+    "Single-trial functional test, not a model ranking or statistical estimate.",
+    "Verdict checks structured recommendation; narrative claims require review."
+  ],
+  "search_score": {
+    "best_candidate_id": "380315375bb0c39005926fb93288f7ce5e334f2a862ffd4fe641acf2f13c63d1",
+    "best_params": {
+      "mem_dwidth": 32,
+      "ntap": 32,
+      "samp_i": 2,
+      "samp_w": 16,
+      "unroll_lane": false
+    },
+    "quality_db": 55.32082157015257,
+    "regret_db": 0.0,
+    "optimum_found": true,
+    "budget": {
+      "limits": {
+        "pysim": 64,
+        "predict_resource": 64,
+        "synth": 8,
+        "rtlsim": 2
+      },
+      "spent": {
+        "pysim": 10,
+        "predict_resource": 7,
+        "synth": 8,
+        "rtlsim": 0
+      },
+      "remaining": {
+        "pysim": 54,
+        "predict_resource": 57,
+        "synth": 0,
+        "rtlsim": 2
+      }
+    },
+    "experiment_id": "39f140d19841bc82613d6c44b5da9a657ee66eecb1f35538292e2f235a2c3534",
+    "scope": "best evidenced candidate found, not necessarily agent final selection"
+  },
+  "wall_time_seconds": 22.201062243431807
+}
