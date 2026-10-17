@@ -25,7 +25,7 @@ The specs form a ladder, each rung reusing the one below:
 | 3 | [03_peak_detect.md](03_peak_detect.md) | two stages at a rate that depends on the data, a wide link serialized, a tagged union |
 | 3b | (later) the peak detector, architecture open | the same boundary and test plan, no stages given: does the agent find the split? |
 | 4 | (to write) FFT matched-filter detector | a pipeline around the framework FFT, rung 3's detector at its end |
-| 5 | (to write) packet capture | rung 4's detector, a capture kernel, a shared memory, a host |
+| 5 | [05_packet_capture.md](05_packet_capture.md) | two kernels, a routed link with credit, a shared memory, a host on interrupts (markov's shape) |
 
 Every spec links [deliverable.md](deliverable.md), which `waveflow blind-test` copies into the trial
 folder with it.  Nothing else in this directory reaches the agent; the reference plans live in
