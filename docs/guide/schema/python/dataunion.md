@@ -26,6 +26,13 @@ nwords = hdr.nwords_per_inst(word_bw) + max(payload.nwords_per_inst(word_bw)
                                             for payload in registry)
 ```
 
+**Fixed length, by design.** Every `DataUnion` message is the same number of words: a short payload is
+zero-padded to the longest. That is what lets a union be read like any other schema -- a reader takes
+`nwords_per_inst` words and decodes them, never deciding a length from the data -- at the cost of the
+padding on short messages. A design that cannot afford the padding sends one `DataList` per message
+type instead, each beginning with the same tag; a reader then reads the tag first and the rest by that
+type's schema.
+
 ---
 
 ## Building a DataUnion step by step

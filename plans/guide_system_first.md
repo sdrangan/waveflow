@@ -238,8 +238,13 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
   `_gen_read_recursive`: the header's fields, then a `switch` on `schema_id`).  **To decide first:**
   fixed size (padded to the largest payload, as today -- `nwords_per_inst` constant, the base machinery
   as is) or variable length (a reader reads the tag, then the variant's own words -- what a
-  variable-length output wants, a larger change to the base).
-- A Python framed `write` is one burst: no way to write a burst in pieces (TLAST low).
+  variable-length output wants, a larger change to the base).  **DECIDED (the user, 2026-10-17): fixed
+  length**, and the documentation says so (`schema/python/dataunion.md`, *Fixed length, by design*).
+  The refactor to derive from `DataSchema` is still to do.
+- A Python framed `write` is one burst: no way to write a burst in pieces (TLAST low).  **Deliberate**
+  (the user, 2026-10-17): a write in pieces would invite serializing and deserializing by hand.  The
+  cost -- data-dependent structures (a variable number of records, a `DataUnion` per record) cannot be
+  written as they are made -- is acknowledged, to be addressed later.
 - A stage's hand-written body cannot be RTL-harnessed alone: its ports are `framed_word<W>` inside a
   composite, `axi4s_word<W>` as a top.
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
