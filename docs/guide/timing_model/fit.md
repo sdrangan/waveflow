@@ -136,7 +136,7 @@ scope (the times), fits every span as above, files the parameters in each phase'
 writes the report -- every row's residual -- to `<work>/phase_calib.json`.  It runs only once the
 workload's RTL recordings equal pysim's word for word (timing calibration presumes functional
 equivalence), and a pysim occurrence with no RTL partner fails it rather than being fitted around.  The free-running poly
-(`examples/stream_kernel`) is calibrated this way: latency 30, fill `nwords - 1`, response 4, held-out
+(`examples/stream_kernel`) is calibrated this way: latency 29, fill `nwords - 1`, status 1, held-out
 lengths exact.
 
 An on-chip memory is calibrated the same way, from its own harness rather than from declared phases.

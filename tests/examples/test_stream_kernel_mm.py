@@ -13,14 +13,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.stream_kernel.stream_kernel import default_cmds
+from examples.stream_kernel.stream_kernel import good_cmds
 from examples.stream_kernel.stream_kernel_build import HERE, MM_TOP, build_dag
 from examples.stream_kernel.stream_kernel_mm import HOST_ENDPOINTS, mm_system
 from tests.examples._system_run import WORK, system_run
 
-#: The RTL's cycle count for the default commands (Vitis/Vivado 2025.1, XSI): the composition check's
-#: reference.  pysim measured 396 when this was recorded.
-RTL_CYCLES = 392
+#: The RTL's cycle count for good_cmds() (Vitis/Vivado 2025.1, XSI): the composition check's reference.
+#: pysim measured 392 when this was recorded (2026-10-16, the status-plane protocol).
+RTL_CYCLES = 385
 
 
 def _run():
@@ -29,13 +29,12 @@ def _run():
 
 
 def test_pysim_matches_the_golden_through_the_bus():
-    """Every result burst and response, bit for bit -- including the command whose samples end early,
-    whose results are as many as the host sent."""
+    """Every header, result burst and status, bit for bit -- the results sized by the host from their
+    header, as a reader behind a queue that drops TLAST must."""
     _sysm, out = _run()
-    assert len(out["results"]) == len(out["want_results"]) == len(default_cmds())
-    for got, want in zip(out["results"], out["want_results"]):
-        np.testing.assert_array_equal(np.asarray(got, np.uint64), np.asarray(want, np.uint64))
-    for got, want in zip(out["resps"], out["want_resps"]):
+    assert len(out["out"]) == len(out["want_out"]) == 2 * len(good_cmds())
+    assert len(out["status"]) == len(out["want_status"]) == len(good_cmds())
+    for got, want in zip(out["out"] + out["status"], out["want_out"] + out["want_status"]):
         np.testing.assert_array_equal(np.asarray(got, np.uint64), np.asarray(want, np.uint64))
 
 
@@ -51,7 +50,7 @@ def test_the_host_never_polls():
 
     host.m.read = spy
     sysm.run()
-    status = {sysm.device.layout.at(0)[n].status_addr for n in ("q_out", "q_resp")}
+    status = {sysm.device.layout.at(0)[n].status_addr for n in ("q_out", "q_status")}
     assert not (set(reads) & status)
 
 
@@ -93,9 +92,9 @@ def test_composition_holds_without_fitting(rtl_run):
 # The device's own harness (D9): the host on a direct link to the device's one front, no crossbar
 # ---------------------------------------------------------------------------
 
-#: The device harness's RTL cycles for the default commands (Vitis/Vivado 2025.1, XSI).  pysim
-#: measured 421 when this was recorded (the direct link at zero latency: it is wires).
-DEV_RTL_CYCLES = 408
+#: The device harness's RTL cycles for good_cmds() (Vitis/Vivado 2025.1, XSI).  pysim measured 383
+#: when this was recorded (2026-10-16; the direct link at zero latency: it is wires).
+DEV_RTL_CYCLES = 370
 
 
 def test_the_device_harness_runs_without_a_crossbar():
@@ -104,7 +103,7 @@ def test_the_device_harness_runs_without_a_crossbar():
 
     sysm = mm_system(direct=True)
     out = sysm.run()
-    for got, want in zip(out["results"] + out["resps"], out["want_results"] + out["want_resps"]):
+    for got, want in zip(out["out"] + out["status"], out["want_out"] + out["want_status"]):
         np.testing.assert_array_equal(np.asarray(got, np.uint64), np.asarray(want, np.uint64))
     spec = SystemTopSpec.from_system(sysm, top="dev_top")
     assert spec.xbar.direct and len(spec.mi) == 1 and spec.mi[0].kind == "adaptor"

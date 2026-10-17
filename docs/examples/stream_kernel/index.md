@@ -4,13 +4,13 @@ parent: Examples
 nav_order: 0.5
 has_children: true
 example_dir: examples/stream_kernel
-summary: "The first example, and the shape most accelerators take: a free-running kernel that answers commands on streams. A polynomial evaluator reads a command (its id, a sample count, four coefficients) and its samples on one AXI4-Stream, writes the results on a second and a response on a third; a burst that ends early is answered, never halted on. The page set walks the whole flow in order -- the protocol, the golden, the kernel and its hand-written HLS body, the system flow (csynth, the RTL run under XSI, the comparison with pysim), declared timed phases calibrated in the kernel's own generated harness, and finally the same kernel behind AXI-MM with a two-thread software host, whose timing is composed from the calibrated parts with nothing fitted and lands within 1% of its RTL."
+summary: "The first example, and the shape most accelerators take: a free-running kernel that answers commands on streams. A polynomial evaluator reads a command (its id, a sample count, four coefficients) and its samples on one AXI4-Stream, writes the results on a second -- headed by which command and how many -- and a status on a third, the last command seen; a burst that ends early is fatal: the kernel reports it and stops. The page set walks the whole flow in order -- the protocol, the golden, the kernel and its hand-written HLS body, the system flow (csynth, the RTL run under XSI, the comparison with pysim), declared timed phases calibrated in the kernel's own generated harness, and finally the same kernel behind AXI-MM with a two-thread software host, whose timing is composed from the calibrated parts with nothing fitted and lands within 2% of its RTL."
 ---
-
 # Free-running polynomial
 
 A polynomial evaluator, $y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$ on float32 samples, as a **free-running
-kernel**: no `ap_start`, no register map -- it fires once per command and runs forever. It is the first
+kernel**: no `ap_start`, no register map -- it fires once per command, and runs until an error stops
+it. It is the first
 example because its shape is the one most accelerators take: a command comes in on a stream, the work
 happens on its data, and the answer goes out on streams, including the answer that something went
 wrong. The arithmetic is deliberately trivial, so every page is about the flow.
@@ -19,21 +19,32 @@ The kernel is one Python class, [`PolyKernel`](../../../examples/stream_kernel/s
 it, everything is generated or comes from the framework: its testbench (a harness built from its ports),
 its RTL top, its calibration, and later its memory-mapped device.
 
-## What you will be able to do
+## Learning Objectives
 
 In the order the pages teach it:
 
-1. State a kernel's command-response protocol: what crosses each stream, and how an error is answered.
-2. Write a bit-exact golden as pure functions, and compute the expected outputs from intent.
-3. Write the kernel's Python behavior and its HLS twin, one firing per command, and generate its top.
-4. Run the system flow: csynth, the RTL run under XSI, and the comparison of RTL against pysim.
-5. Declare the kernel's timing as timed phases and calibrate them in its generated harness.
-6. Put the same kernel behind AXI-MM with a software host, and check that its timing composes from the
-   calibrated parts with nothing fitted.
+1. Define a [**command-response protocol**](../../guide/patterns/command_response.md) for a simple
+   kernel: a command and its data in, the results out headed by which command they answer and how
+   many.
+2. Add a **status stream** for error reporting, and halt the kernel on an error.
+3. Write [**DataSchema** classes](../../guide/schema/python/) for every message to and from the kernel.
+4. Write a **bit-exact golden model** as pure Python functions, and compute the expected outputs from
+   intent.
+5. Write the kernel as a [`FreeRunMod`](../../guide/flows/concurrent_python.md) with **framed stream
+   ports**, one firing per command: read the command, head the results, run the samples through a
+   pipelined phase, write the status, and stop after an error.
+6. Write its **HLS twin** with the generated lane routines
+   ([loop optimization](../../guide/vectorization/hls/loop_optimization.md)), and generate its top.
+7. Make the kernel the DUT of its own [**harness**](../../guide/flows/units.md), and run the system
+   flow: csynth, the RTL run under XSI, and the comparison of RTL against pysim.
+8. Declare the kernel's timing as [**timed phases**](../../guide/timing_model/timed_phases.md) and
+   calibrate them in its harness.
+9. Put the same kernel **behind AXI-MM** with a software host, and check that its timing composes from
+   the calibrated parts with nothing fitted.
 
 ## The pages
 
-- [The protocol](protocol.md) -- three streams, one command at a time, errors answered.
+- [The protocol](protocol.md) -- three streams, one command at a time, a status plane, errors fatal.
 - [The golden](golden.md) -- the schemas, the reference arithmetic, stimulus and expected outputs.
 - [The kernel](kernel.md) -- `PolyKernel.run_iter`, its HLS body, and the generated top.
 - [The system flow](system_flow.md) -- the kernel's harness, csynth, the RTL run, the comparison.

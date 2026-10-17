@@ -55,7 +55,7 @@ def test_the_testbench_is_derived_and_a_kernel_is_its_own_cut():
     sysm = harness(PolyKernel)
     assert [m.name for m in sysm.cut()] == ["poly_kernel"]
     names = sorted(p.name for p in sysm.participants())
-    assert names == ["m_out_sink", "m_resp_sink", "s_in_driver"]
+    assert names == ["m_out_sink", "m_status_sink", "s_in_driver"]
 
 
 def test_a_harness_copies_a_module_out_of_its_system():
