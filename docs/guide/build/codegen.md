@@ -182,7 +182,7 @@ Outputs:
 - `<elem_type.include_dir>/<name>_array_utils.h` — synthesizable helpers.
 - `<elem_type.include_dir>/<name>_array_utils_tb.h` — testbench helpers.
 
-The output directory comes from `elem_type.include_dir`, so the element-type specialization should include `include_dir`:
+The output directory comes from `elem_type.include_dir`, so the element-type specialization should include `include_dir` (unset, the headers land in the build root, which is not on csynth's include path):
 
 ```python
 Float32 = FloatField.specialize(bitwidth=32, include_dir="include")

@@ -99,7 +99,7 @@ one:
 
 | what | read | write |
 |---|---|---|
-| a schema message | `streamutils::read_msg<W>(msg, s)` | `streamutils::write_msg<W>(msg, s)` |
+| a schema message | `streamutils::read_msg<W>(msg, s)` | `streamutils::write_msg<W>(msg, s, last = true)`: `last` is TLAST on its last word; `false` leaves the burst open for the next message |
 | a word of elements (lanes) | `<elem>_array_utils::read_boundary_lane<W>(s, dst, n, tl)` | `<elem>_array_utils::write_boundary_lane<W>(src, s, tlast, n)` |
 | one raw word | `streamutils::read_boundary_word<WordT, W>(s, last)` | `streamutils::write_boundary_word<WordT, W>(s, data, last)` |
 
