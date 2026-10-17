@@ -388,6 +388,34 @@ inline void write_framed_stream_lane(const value_type src[lane_capacity<word_bw>
     write_framed_stream_elem_impl<word_bw>::run(s, src, tlast, pf<word_bw>() >= 1 ? n : 1);
 }
 
+// --- boundary lane methods: ONE name for both TLAST-carrying word types, overloaded on the
+// stream -- axi4s_word at a top's port, framed_word on an internal FIFO.  For a body whose port
+// types are template parameters (KernelTask.framed): the generator picks the word type where the
+// body sits, and overload resolution picks the routine, so one body serves both placements.
+template<int word_bw>
+inline void read_boundary_lane(hls::stream<streamutils::axi4s_word<word_bw>>& s, value_type dst[lane_capacity<word_bw>()], int n, streamutils::tlast_status& tl) {
+    #pragma HLS INLINE
+    read_axi4_stream_lane<word_bw>(s, dst, n, tl);
+}
+
+template<int word_bw>
+inline void read_boundary_lane(hls::stream<streamutils::framed_word<word_bw>>& s, value_type dst[lane_capacity<word_bw>()], int n, streamutils::tlast_status& tl) {
+    #pragma HLS INLINE
+    read_framed_stream_lane<word_bw>(s, dst, n, tl);
+}
+
+template<int word_bw>
+inline void write_boundary_lane(const value_type src[lane_capacity<word_bw>()], hls::stream<streamutils::axi4s_word<word_bw>>& s, bool tlast = false, int n = lane_capacity<word_bw>()) {
+    #pragma HLS INLINE
+    write_axi4_stream_lane<word_bw>(src, s, tlast, n);
+}
+
+template<int word_bw>
+inline void write_boundary_lane(const value_type src[lane_capacity<word_bw>()], hls::stream<streamutils::framed_word<word_bw>>& s, bool tlast = false, int n = lane_capacity<word_bw>()) {
+    #pragma HLS INLINE
+    write_framed_stream_lane<word_bw>(src, s, tlast, n);
+}
+
 // --- element random access (Phase 3): read/write ONE packed element by index i ---
 // iw = i / LW, k = i % LW  (LW = lane_capacity<W>(), compile-time; a power-of-two LW is a
 // shift/mask).  Reuses the shared run_lane / write_lane (the single packing-contract source)

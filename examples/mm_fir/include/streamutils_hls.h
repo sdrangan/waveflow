@@ -59,6 +59,19 @@ namespace streamutils {
         m.template write_axi4_stream<W>(s, true);
     }
 
+    // read_msg — write_msg's reader: a schema message off a framed stream of either word type, by
+    // the schema's framed reader on an internal FIFO or its AXI-Stream reader at a top's port.  (The
+    // schema's header must be generated with framed readers: DataSchemaStep(..., framed=True).)  The
+    // element-array twins are each element type's read_boundary_lane / write_boundary_lane.
+    template<int W, typename Msg>
+    inline void read_msg(Msg& m, hls::stream<framed_word<W> >& s) {
+        m.template read_framed_stream<W>(s);
+    }
+    template<int W, typename Msg>
+    inline void read_msg(Msg& m, hls::stream<axi4s_word<W> >& s) {
+        m.template read_axi4_stream<W>(s);
+    }
+
     template<typename WordT, int W>
     inline ap_uint<W> read_boundary_word(hls::stream<WordT>& s, bool& last) {
         WordT w = s.read();

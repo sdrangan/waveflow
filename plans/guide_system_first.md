@@ -253,7 +253,8 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
   **Done 2026-10-17:** `docs/guide/comp_codegen/freerunning_override.md#framed`, and the helpers a body
   needs to never name a word type -- `streamutils::read_msg` (beside `write_msg`) and every element's
   `read_boundary_lane` / `write_boundary_lane`.  Both headers are copied into every example: a full
-  re-synthesis precedes the next full `-m xsi` run.
+  re-synthesis precedes the next full `-m xsi` run.  **Done 2026-10-17:** `WAVEFLOW_RESYNTH=1 pytest -m xsi` -- every example
+  re-synthesized, **221 passed**, 0 failed, 37 min (Vitis/Vivado 2025.1).
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
