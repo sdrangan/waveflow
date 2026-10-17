@@ -1826,12 +1826,20 @@ class ArrayUtilsStep(Buildable):
 
     @property
     def build_outputs(self) -> dict[str, Path]:
-        return {
+        out = {
             "include": Path(_array_utils_include_path(self._elem_type)),
             "tb_include": Path(_array_utils_tb_include_path(self._elem_type)),
         }
+        # An integer complex element's C++ type is the framework's wf_cint, which the header includes
+        # by name: write it beside the header, so the include resolves with nothing copied by hand.
+        if '"wf_cint.h"' in self._elem_type.get_codegen_includes():
+            out["wf_cint"] = out["include"].parent / "wf_cint.h"
+        return out
 
     def generate(self, key: str, config: BuildConfig) -> str:
+        if key == "wf_cint":
+            return (Path(__file__).resolve().parent.parent / "build" / "wf_cint.h").read_text(
+                encoding="utf-8")
         hls, tb = _gen_array_utils_content(
             elem_type=self._elem_type,
             widths=self._widths,

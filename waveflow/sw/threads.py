@@ -242,6 +242,8 @@ class SwHost(HwModule):
     def add_bus_master(self, attr: str, **kw):
         """Create this host's bus master (an ``MMIFMaster``) as attribute *attr*, and register it."""
         from waveflow.hw.memif import MMIFMaster
+        kw.setdefault("max_outstanding", 1)
+        kw.setdefault("issue_cycles", 2)
         ep = MMIFMaster(name=f"{self.name}_{attr}", sim=self.sim, **kw)
         setattr(self, attr, ep)
         self.add_endpoint(ep)

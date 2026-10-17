@@ -46,9 +46,10 @@ static void markov_gen_task(hls::stream<ap_uint<DW> >& s_cmd,
     ap_uint<32> s = (cmd.seed == 0) ? ap_uint<32>(1) : ap_uint<32>(cmd.seed);
 
     // 2. forward it
-    crd.wait_room(m_u_crd, CW);
-    cmd.write_axi4_stream<DW>(m_u_fwd);
-    crd.sent(CW);
+    if (crd.wait_room(m_u_crd, CW)) {                // guarded: the write cannot pass the wait
+        cmd.write_axi4_stream<DW>(m_u_fwd);
+        crd.sent(CW);
+    }
 
     // 3. the draws, a chunk per write, one draw every II cycles
     uint16_array_utils::value_type lane[PF];
@@ -57,7 +58,8 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
         const ap_uint<32> rem = n - k0;
         const int c = (rem < CHUNK) ? (int)rem : CHUNK;
         const int cw = (c + PF - 1) / PF;
-        crd.wait_room(m_u_crd, cw);                  // admit the chunk: outside the loop
+        if (!crd.wait_room(m_u_crd, cw)) continue;   // admit the chunk: outside the loop, and
+                                                     // guarding it, so no write passes the wait
     GEN: for (int k = 0; k < c; ++k) {
 #pragma HLS PIPELINE II=II
             s ^= s << 13;

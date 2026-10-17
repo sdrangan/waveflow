@@ -234,3 +234,23 @@ def test_write_array_dataarray_elem_type_mismatch_raises():
     S16 = IntField.specialize(bitwidth=16, signed=True)
     with pytest.raises(TypeError, match="elem_type mismatch"):
         write_array(inst, elem_type=S16, word_bw=32)
+
+
+def test_an_int_complex_element_gets_wf_cint_beside_its_header(tmp_path):
+    """Found by the rung-5 blind build: the lane routines of an integer ComplexField include
+    "wf_cint.h", which no step wrote -- csynth failed until it was copied by hand."""
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.streamutils import StreamUtilsStep
+    from waveflow.hw.arrayutils import ArrayUtilsStep
+    from waveflow.hw.complexfield import ComplexField
+    from waveflow.hw.dataschema import IntField
+
+    cs16 = ComplexField.specialize(IntField.specialize(16, signed=True), include_dir="include")
+    dag = BuildDag()
+    dag.add(StreamUtilsStep(output_dir="include"))
+    dag.add(ArrayUtilsStep(cs16, [32]))
+    res = dag.run(BuildConfig(root_dir=tmp_path), force=True)
+    assert all(r.success for r in res.values()), {n: r.message for n, r in res.items()}
+    hdr = next((tmp_path / "include").glob("*_array_utils.h"))
+    assert '#include "wf_cint.h"' in hdr.read_text(encoding="utf-8")
+    assert (hdr.parent / "wf_cint.h").is_file()

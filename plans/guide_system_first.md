@@ -312,6 +312,14 @@ for 4096 samples, PF samples per cycle); 128 bits was blocked by a framework def
 `--force-step csynth` did nothing; a failed step exited 0; `validate_schema` failed on a `@dataclass`).
 `evaluation/planning_tests/results/build_01_2026-10-17.md`.
 
+*Record (2026-10-17), rung 5:* built blind from the `bus_system` frame (markov as reference), 285 turns,
+52 min, 66.9M tokens in (99% cached), 215k out.  Every functional gate passes at RTL (each kernel alone,
+the system's host traces identical to pysim's and the golden, zero polls); composed timing -6.4% of RTL
+against the spec's 5% (the memory writer's model under contention).  Fixed from it: a credit write
+reordered ahead of `wait_room` deadlocks at RTL (the guard); `SwHost`'s master serializes as the RTL
+host does; `wf_cint.h` written by `ArrayUtilsStep`.
+`evaluation/planning_tests/results/build_05_2026-10-17.md`.  **Stage 6 gate met: both reach their RTL gate.**
+
 **Stage 7 -- the rest of the guide.**  The target's remaining sections, in an order the read logs of
 Stages 1, 5 and 6 justify: Modules; `flows/` dissolved; Legacy; `nav_order`; a "where this sits in a
 system" line in each reference section's page summaries; the guide index; CLAUDE.md's *Designing an
