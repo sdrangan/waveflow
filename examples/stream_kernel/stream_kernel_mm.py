@@ -3,15 +3,20 @@
 
 The **same kernel** as ``stream_kernel.py`` -- the same class, the same csynth'd RTL -- placed behind the
 queue views its type declares (``PolyKernel.mm_views``: a queue in front of ``s_in``, a queue behind
-``m_out`` and ``m_resp``), on an AXI-MM crossbar, and driven by a host of **two threads**:
+``m_out`` and one behind ``m_status``), on an AXI-MM crossbar, and driven by a host of **two threads**:
 
 * a **writer** that sends each command's header and samples into queue in, each one packet;
-* a **reader** that takes each command's results from queue out and its response from the response
-  queue, and checks the response.
+* a **reader** that takes each command's results from queue out -- first their header, ``Resp(tx_id,
+  nsamp)``, then as many results as it announces -- and then its status from the status queue.
 
-Nothing polls: the endpoints sleep on the queues' interrupts.  The host knows how many results each
-command produces -- one per sample it sent, so fewer when it ends a burst early -- so the reader takes
-exactly those words before the response, and the results queue never fills behind an unread response.
+Nothing polls: the endpoints sleep on the queues' interrupts.  Queue out carries no TLAST (the bus cannot
+see where the kernel's packets end), so the reader sizes the results **from the header**, never from
+what it sent: the protocol carries the count, so any reader can.  It reads in the order the kernel
+writes -- header, results, status -- so the results queue never fills behind an unread status.
+
+The host runs :func:`~examples.stream_kernel.stream_kernel.good_cmds`: an error is fatal to the kernel,
+and its recovery -- a status register raising an interrupt, a reset -- is the pattern's bus mapping, not
+built yet (``docs/guide/patterns/command_response.md``).
 
 The system is built the D12 way: modules on one simulation, then ``HwSystem(sim, dut)`` naming the DUT
 (the device and the crossbar); the host is the testbench, derived.  The host's C++ twin is
@@ -38,8 +43,9 @@ from examples.stream_kernel.stream_kernel import (
     Float32,
     PolyKernel,
     Resp,
-    default_cmds,
+    Status,
     expected,
+    good_cmds,
     stimulus,
 )
 
@@ -49,7 +55,7 @@ MM_BASE = 0x0000
 HOST_MAX_OUTSTANDING = 1
 HOST_ISSUE_CYCLES = 2
 #: The traced host endpoints -- what both hosts dump and the conformance gate compares.
-HOST_ENDPOINTS = ("q_in", "q_out", "q_resp")
+HOST_ENDPOINTS = ("q_in", "q_out", "q_status")
 
 
 def _u64(words) -> np.ndarray:
@@ -58,15 +64,16 @@ def _u64(words) -> np.ndarray:
 
 @dataclass
 class PolyHost(SwHost):
-    """The host program: send every command, collect every result and response.
+    """The host program: send every command, collect every result and status.
 
     Endpoints (set by :func:`mm_system`): ``q_in`` -- a ``StreamIFMaster``, one ``write`` one packet;
-    ``q_out`` and ``q_resp`` -- unframed ``StreamIFSlave``s, so reads name their size.  The scenario is
-    one burst per command, ``[k, nresp, nhdr, <header words>, <sample words>]``: ``k`` results to take,
-    a response of ``nresp`` words.  :meth:`write_scenario` writes it; given :attr:`scenario`, this host
-    runs from that file, as its C++ twin (``PolyHostModel``, ``poly_kernel_host.h``) does."""
+    ``q_out`` and ``q_status`` -- unframed ``StreamIFSlave``s, so reads name their size.  The scenario
+    is one burst per command, ``[nhdr, <header words>, <sample words>]`` -- what to send, nothing about
+    what comes back: the reader learns that from the results' header.  :meth:`write_scenario` writes
+    it; given :attr:`scenario`, this host runs from that file, as its C++ twin (``PolyHostModel``,
+    ``poly_kernel_host.h``) does."""
 
-    cmds: list = field(default_factory=default_cmds)
+    cmds: list = field(default_factory=good_cmds)
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
     #: Cycles between polls, should an endpoint poll (none does: they wait on interrupts).
     poll_cycles: int = 8
@@ -78,20 +85,18 @@ class PolyHost(SwHost):
         super().__post_init__()
         self.add_bus_master("m", bitwidth=W, max_outstanding=HOST_MAX_OUTSTANDING,
                             issue_cycles=HOST_ISSUE_CYCLES)
-        self.q_in = self.q_out = self.q_resp = None
+        self.q_in = self.q_out = self.q_status = None
         self.irq: dict[str, IrqIFSink] = {v: self.add_irq(f"irq_{v}") for v in HOST_ENDPOINTS}
         self.done = self.env.event()
-        #: Per command: the results words and the response, as read.
-        self.results: list[np.ndarray] = []
-        self.resps: list[np.ndarray] = []
+        #: Per command: its header and results bursts (as ``m_out`` carries them), and its status.
+        self.out: list[np.ndarray] = []
+        self.status: list[np.ndarray] = []
 
     def scenario_bursts(self) -> list[np.ndarray]:
         out = []
         for c in self.cmds:
             hdr, samples = stimulus([c])
-            nresp = Resp.nwords_per_inst(W)
-            out.append(np.concatenate([_u64([c.n_sent, nresp, len(hdr.words)]),
-                                       _u64(hdr.words), _u64(samples.words)]))
+            out.append(np.concatenate([_u64([len(hdr.words)]), _u64(hdr.words), _u64(samples.words)]))
         return out
 
     def pre_sim(self) -> None:
@@ -101,24 +106,27 @@ class PolyHost(SwHost):
             bursts = read_burst_bundle(self.scenario)
         else:
             bursts = self.scenario_bursts()
-        #: ``(k, nresp, header words, sample words)`` per command.
+        #: ``(header words, sample words)`` per command.
         self.items: list[tuple] = []
         for b in bursts:
             b = _u64(b)
-            k, nresp, nhdr = (int(v) for v in b[:3])
-            self.items.append((k, nresp, b[3:3 + nhdr], b[3 + nhdr:]))
+            nhdr = int(b[0])
+            self.items.append((b[1:1 + nhdr], b[1 + nhdr:]))
 
     def _writer(self):
-        for _k, _nresp, hdr, samples in self.items:
+        for hdr, samples in self.items:
             yield from self.q_in.write(hdr)
             yield from self.q_in.write(samples)
 
     def _reader(self):
-        for k, nresp, _hdr, _samples in self.items:
-            y = yield from self.q_out.get(nwords_max=k)
-            self.results.append(_u64(y))
-            r = yield from self.q_resp.get(nwords_max=nresp)
-            self.resps.append(_u64(r))
+        """In the order the kernel writes: the header, the results it announces (one float32 a word at
+        ``W = 32``), the status."""
+        for _ in self.items:
+            h = yield from self.q_out.get_schema(Resp)
+            y = yield from self.q_out.get(nwords_max=h.nsamp)
+            st = yield from self.q_status.get_schema(Status)
+            self.out += [_u64(h.serialize(word_bw=W)), _u64(y)]
+            self.status.append(_u64(st.serialize(word_bw=W)))
         self.done.succeed()
 
     def bfm_model(self):
@@ -146,7 +154,7 @@ def mm_system(cmds=None, direct: bool = False) -> HwSystem:
     ``direct=True`` is the **device's own harness** (``plans/unit_harness.md`` D9): its views behind
     one front, the host bound straight to that front's slave group by a direct link -- no crossbar --
     so what is measured is the device's own timing."""
-    cmds = list(default_cmds() if cmds is None else cmds)
+    cmds = list(good_cmds() if cmds is None else cmds)
     sim = Simulation()
     clk = Clock(freq=100e6)
     kernel = PolyKernel(name=PolyKernel.cpp_kernel_name, sim=sim, clk=clk)
@@ -169,13 +177,13 @@ def mm_system(cmds=None, direct: bool = False) -> HwSystem:
         line.bind("sink", host.irq[name])
     host.q_in = mm.stream_master("q_in", irq=host.irq["q_in"])
     host.q_out = mm.stream_slave("q_out", irq=host.irq["q_out"])
-    host.q_resp = mm.stream_slave("q_resp", irq=host.irq["q_resp"])
+    host.q_status = mm.stream_slave("q_status", irq=host.irq["q_status"])
     dut = DutTop.of("poly_dev_dut" if direct else "poly_mm_dut", sim, comps=[device], ifs=[xbar])
 
     def check(sysm):
-        want_y, want_r = expected(cmds)
-        return {"results": host.results, "resps": host.resps,
-                "want_results": want_y, "want_resps": want_r}
+        want_out, want_status = expected(cmds)
+        return {"out": host.out, "status": host.status,
+                "want_out": want_out, "want_status": want_status}
 
     sysm = HwSystem(sim, dut, run_until=host.done, check=check,
                     fresh=lambda: mm_system(cmds, direct=direct))

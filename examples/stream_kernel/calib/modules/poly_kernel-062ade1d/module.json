@@ -1,0 +1,7 @@
+{
+  "key": "poly_kernel-062ade1d",
+  "cls_name": "PolyKernel",
+  "cls_module": "examples.stream_kernel.stream_kernel",
+  "params": {},
+  "signature": "062ade1db61db9db7133dc11ce7e09ec9124d43d202b2621f0c870088e85558c"
+}

@@ -15,13 +15,16 @@ self.samp_phase = TimedPhase(
     "samples", spans={"latency": (self.s_in.first, self.m_out.first),
                       "fill_time": (self.m_out.first, self.m_out.last)},
     features=("nwords",), calib_dir=HERE / "calib")
-self.resp_phase = TimedPhase(
-    "resp", spans={"resp_time": (self.m_out.last, self.m_resp.first)}, calib_dir=HERE / "calib")
+self.status_phase = TimedPhase(
+    "status", spans={"status_time": (self.m_out.last, self.m_status.first)}, calib_dir=HERE / "calib")
 ```
 
 - **samples** is pipelined: `latency` from the first sample word in to the first result word out, then
   `fill_time` over the results -- the loop that reads a word, computes, writes a word.
-- **resp** is sequential: `resp_time` from the last result word to the response's first word.
+- **status** is sequential: `status_time` from the last result word to the status's first word.
+
+The `Resp` header is written before the samples phase begins, so it is in neither span: `latency` runs
+from the first *sample* in to the first *result* out.
 
 Every event is a handshake at a port, so every span can be measured at RTL.
 
@@ -43,9 +46,9 @@ and supplies the features, the RTL trace supplies the times. Measured (Vitis 202
 
 | span | fit | residual |
 |---|---|---|
-| `latency` | 30 cycles | 0 |
+| `latency` | 29 cycles | 0 |
 | `fill_time` | `nwords - 1` cycles | 0 |
-| `resp_time` | 4 cycles | 0 |
+| `status_time` | 1 cycle | 0 |
 
 The held-out lengths are predicted exactly too.
 

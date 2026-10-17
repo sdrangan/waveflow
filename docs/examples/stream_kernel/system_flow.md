@@ -18,7 +18,7 @@ def system() -> HwSystem:
 
 [`harness`](../../../waveflow/hw/harness.py) builds a fresh copy of the kernel and puts a stand-in at
 each port: a stream driver on `s_in` playing the kernel's own `workload("test")`, and a sink on `m_out`
-and on `m_resp` recording what comes out. Each stand-in has a twin in the C++ testbench library, so the
+and on `m_status` recording what comes out. Each stand-in has a twin in the C++ testbench library, so the
 same harness runs in pysim and at RTL. There is no testbench code in the example.
 
 `workload(kind)` is where the scenario lives:
@@ -43,8 +43,8 @@ the framework's (`add_system_steps`, [The system flow](../../guide/build/xsi_sys
 - `system_xsi` -- the RTL under XSI, with the stand-ins' C++ twins around it, from the same scenario.
 - `compare` -- each sink's recording, RTL against pysim, word for word.
 
-`compare` is the gate: the RTL's results and responses are the ones pysim's are, and pysim's are the
-golden's ([`test_stream_kernel.py`](../../../tests/examples/test_stream_kernel.py)).
+`compare` is the gate: the RTL's headers, results and statuses are the ones pysim's are -- including the
+fatal `TLAST_EARLY` and the silence after it -- and pysim's are the golden's ([`test_stream_kernel.py`](../../../tests/examples/test_stream_kernel.py)).
 
 A build that changed nothing does no work: every system step is fresh while what it reads is unchanged
 ([freshness](../../guide/build/xsi_system.md#system-freshness)).

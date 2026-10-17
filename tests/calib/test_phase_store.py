@@ -19,7 +19,7 @@ FITS = {
                             "train": [({"nwords": 8}, 30.0, 30.0)], "holdout": []},
                 "fill_time": {"params": {"intercept": -1.0, "nwords": 1.0},
                               "train": [({"nwords": 8}, 7.0, 7.0)], "holdout": []}},
-    "resp": {"resp_time": {"params": {"intercept": 4.0}, "train": [({}, 4.0, 4.0)], "holdout": []}},
+    "status": {"status_time": {"params": {"intercept": 4.0}, "train": [({}, 4.0, 4.0)], "holdout": []}},
 }
 
 
@@ -43,10 +43,10 @@ def test_a_record_is_found_from_the_identity_alone(tmp_path):
     store = ModuleStore(tmp_path)
     _file(store, harness(PolyKernel).dut())
     k = mm_system().device.kernel
-    for ph in (k.samp_phase, k.resp_phase):
+    for ph in (k.samp_phase, k.status_phase):
         ph.calib_dir, ph._models = tmp_path, None
     assert k.samp_phase.predict(nwords=100) == {"latency": 30.0, "fill_time": 99.0}
-    assert k.resp_phase.predict() == {"resp_time": 4.0}
+    assert k.status_phase.predict() == {"status_time": 4.0}
     assert stored_phases(store, k, workload="w0") is not None
     assert stored_phases(store, k, workload="another") is None
 

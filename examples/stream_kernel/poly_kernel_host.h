@@ -1,16 +1,20 @@
 #ifndef EXAMPLES_STREAM_KERNEL_POLY_KERNEL_HOST_H
 #define EXAMPLES_STREAM_KERNEL_POLY_KERNEL_HOST_H
 // poly_kernel_host.h -- the C++ realization of examples/stream_kernel/stream_kernel_mm.py::PolyHost:
-// the same two threads, line for line.  Everything else -- the endpoints (q_in, q_out, q_resp, named
+// the same two threads, line for line.  Everything else -- the endpoints (q_in, q_out, q_status, named
 // as in Python and bound to their views and interrupts), the bus master, the scenario, the cycle
 // count, the report and the traces -- is the generated PolyHost_endpoints and the runtime (xsi_sw.h).
 //
 // The scenario is PolyHost.write_scenario's bundle, one burst per command:
-//     [k, nresp, nhdr, <header words>, <sample words>]
+//     [nhdr, <header words>, <sample words>]
+// -- what to send.  What comes back the reader learns from the results' header (Resp).
 #include <cstdint>
 #include <vector>
 
 #include "PolyHost_endpoints.h"
+#include "resp.h"
+#include "status.h"
+#include "xsi_sw_schema.h"
 
 namespace wfbfm {
 
@@ -26,7 +30,7 @@ public:
     }
 
 private:
-    struct Item { uint32_t k, nresp; std::vector<uint64_t> hdr, samples; };
+    struct Item { std::vector<uint64_t> hdr, samples; };
 
     // ~ PolyHost._writer
     void writer() {
@@ -36,21 +40,25 @@ private:
         }
     }
 
-    // ~ PolyHost._reader -- the results and responses are checked in Python, from the traces.
+    // ~ PolyHost._reader -- in the order the kernel writes: the header, the results it announces (one
+    // float32 a word at W = 32), the status.  The values are checked in Python, from the traces.
+    // The typed reads name the word width: the schemas are generated for W = 32 only.
+    static constexpr int W = 32;
     void reader() {
-        for (const Item& it : items_) {
-            q_out.get(it.k);
-            q_resp.get(it.nresp);
+        for (size_t i = 0; i < items_.size(); ++i) {
+            const Resp h = q_out.get<Resp, W>();
+            q_out.get((uint32_t)h.nsamp);
+            q_status.get<Status, W>();
         }
     }
 
     // ~ PolyHost.pre_sim: the scenario bursts as items.
     void decode() {
         for (const std::vector<uint64_t>& b : scenario_bursts()) {
-            Item it{(uint32_t)b[0], (uint32_t)b[1], {}, {}};
-            const size_t nhdr = (size_t)b[2];
-            it.hdr.assign(b.begin() + 3, b.begin() + 3 + nhdr);
-            it.samples.assign(b.begin() + 3 + nhdr, b.end());
+            Item it;
+            const size_t nhdr = (size_t)b[0];
+            it.hdr.assign(b.begin() + 1, b.begin() + 1 + nhdr);
+            it.samples.assign(b.begin() + 1 + nhdr, b.end());
             items_.push_back(it);
         }
     }
