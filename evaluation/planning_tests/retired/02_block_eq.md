@@ -1,7 +1,7 @@
 # Planning test 2: a block equalizer on two streams
 
 Plan the Python and RTL models of the kernel below.  The deliverable -- what to write, and how -- is
-in [deliverable.md](deliverable.md); read it first.
+in [deliverable.md](../deliverable.md); read it first.
 
 ## 1. Purpose
 
