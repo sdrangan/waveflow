@@ -92,17 +92,29 @@ compared **by their bits**: `-0.0` and `+0.0` differ.
 **Normally**, after a command's results the kernel writes `Status(tx_id, OK)` and takes the next
 command.  Nothing carries over from one command to the next.
 
-**An error is fatal**: the kernel closes `m_out` -- the results burst ends with TLAST on the last result
-written, or, if no header was written, nothing is written on `m_out` -- writes the status, and **stops
-taking both inputs**.  Only a reset recovers it.
+**An error is fatal**: the kernel writes what the error allows on `m_out` (below), writes the status,
+and **answers nothing more**: it reads no further symbols, and writes nothing more on either output.
+`gain` may already have read ahead on `s_est`; it need not be stopped there.  Only a reset recovers
+the kernel.
 
-- **`MISMATCH`**: the two headers disagree on `tx_id`, `nrows` or `m`.  Nothing on `m_out`.
-- **`BAD_NOISE`**: some `N[i] <= 0`.  The results of the rows before `i` are written; row `i` and after
-  are not.
-- **`TLAST_EARLY`**: either input's data ends before it should.  The results of the symbols that arrived
-  with their row's `g[i]` are written, and no more.
+- **`MISMATCH`**: the two headers disagree on `tx_id`, `nrows` or `m`.  Nothing on `m_out` -- not even
+  its header.
+- **`BAD_NOISE`**: some `N[i] <= 0`, the first such row `i`.  The `m_out` header is written, then the
+  results of the rows before `i`, the burst closed with TLAST on the last of them; if `i = 0` there are
+  no results, and no results burst (a burst cannot be empty).  Row `i` and after are not written.
+- **`TLAST_EARLY`**: either input's data ends on a word before the last word it needs (an estimates
+  entry that is cut short makes its row invalid).  The results of
+  **every symbol lane of every word that arrived** whose row has its `g[i]` are written, and no more (a
+  stream word cannot say that only some of its lanes are symbols; a sender pads its last word with
+  zeros).
+
+**One status per command, and one error.**  When several things are wrong, the status reports the
+first in this order: `MISMATCH` (the headers are compared before any data); then whichever of
+`BAD_NOISE` and `TLAST_EARLY` cuts the results earlier in row-major order; at a tie, `BAD_NOISE`.
 
 ### Worked examples
+
+One command, `nrows = 3`, `m = 2`: each row's two symbols are the two lines of its group.
 
 | `h[i]` | `N[i]` | `g[i]` | `r[i, j]` | `z[i, j]` | bits of `z` |
 |---|---|---|---|---|---|
@@ -111,6 +123,7 @@ taking both inputs**.  Only a reset recovers it.
 | 0 + 2j | 0.5 | 0.0 - 0.44444445j | 1 + 1j | 0.44444445 - 0.44444445j | `3ee38e39`, `bee38e39` |
 | | | | 0 - 3j | -1.3333334 - 0.0j | `bfaaaaab`, `80000000` |
 | 3 + 4j | 0.25 | 0.118811876 - 0.15841584j | 3 + 4j | 0.99009895 + 0.0j | `3f7d7720`, `00000000` |
+| | | | 1 - 2j | -0.1980198 - 0.3960396j | `be4ac5b4`, `becac5b4` |
 
 Note the signed zeros: `gi = -(0 * q)` is `-0.0` in the first row, and `zi = p3 + p4` is `-0.0` in the
 fourth.
@@ -122,14 +135,14 @@ Every scenario is a sequence of commands sent back to back -- the estimates on `
 
 | # | scenario | what it exercises |
 |---|---|---|
-| 1 | the worked examples: one command, three rows of one or two symbols | the arithmetic, the operation order, signed zeros |
+| 1 | the worked examples: one command, `nrows = 3`, `m = 2` | the arithmetic, the operation order, signed zeros |
 | 2 | `nrows = 1, m = 1`; `nrows = 64, m = 256` | the smallest and the largest command |
 | 3 | `m = 1` for every row, `nrows = 64` | `gain` sets the pace: a division per symbol |
 | 4 | at `PF > 1`, `m` not a multiple of `PF`, and rows that start mid-word | rows across word boundaries |
 | 5 | `h = 0` (so `g = 0`), very large and very small `|h|`, `N` from 1e-6 to 1e6 | the range of the division |
 | 6 | 20 commands from a fixed seed, random `nrows`, `m`, `h`, `N`, `r` | everything mixed |
 | 7 | good commands, then a `MISMATCH`, then more | the check, and nothing answered after it |
-| 8 | good commands, then `N[i] = 0` in a middle row, then more | `BAD_NOISE`: the rows before it, then the stop |
+| 8 | good commands, then `N[i] = 0` in a middle row, then more; separately, `N[0] = 0` | `BAD_NOISE`: the rows before it (none for row 0: the header, no results burst), then the stop |
 | 9 | good commands, then symbols ending early mid-row, then more | `TLAST_EARLY` |
 | 10 | one command, `nrows = 16, m = 64` | throughput |
 

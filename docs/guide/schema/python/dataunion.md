@@ -46,7 +46,7 @@ The name (`"Sensor"`) is used as a prefix for generated C++ types.
 
 ### 2. Register payload schemas
 
-Use the `@register_schema` decorator to associate an ID with a `DataList` class.  IDs must be positive integers; omitting `schema_id` auto-assigns the next available value.
+Use the `@register_schema` decorator to associate an ID with a `DataList` class.  IDs are non-negative integers -- 0 is allowed; omitting `schema_id` auto-assigns the next available value (`max + 1`, or 0 in an empty registry).
 
 ```python
 from waveflow.hw.dataschema import DataList, IntField
@@ -138,6 +138,14 @@ Key class-level attributes derived automatically:
 | `SensorDU.nwords_per_inst(32)` | total words per transfer at 32-bit word width |
 
 ---
+
+> **On a stream.** A `DataUnion` serializes to words in Python, and its generated C++ has
+> `read_array` / `write_array`, but **no stream methods** (`read_axi4_stream` / `write_axi4_stream`), and a
+> stream endpoint's `write` takes it only as words (`du.serialize(...)`). It is also fixed-size: every
+> message is padded to the largest payload. For a tagged union on a kernel's stream -- the
+> [variable-length output](../../patterns/command_response.md#variable-length-output-a-tagged-union-ending-in-end)
+> of the command-response pattern -- the working form today is one `DataList` per message type, each
+> beginning with the same `EnumField` tag.
 
 ## Transmitting a DataUnion
 

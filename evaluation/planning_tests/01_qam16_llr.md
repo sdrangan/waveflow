@@ -109,15 +109,18 @@ intermediate wide enough that nothing is lost.  `Q` is the one rounding: to the 
 **Normally**, after a command's LLRs the kernel writes `Status(tx_id, OK)` and takes the next command.
 Nothing carries over from one command to the next.
 
-**An error is fatal.**  If the samples end early -- TLAST after `k < nsamp` samples -- the kernel:
+**An error is fatal.**  If the samples end early -- TLAST on a word before the last word `nsamp`
+needs -- the kernel:
 
-1. writes the `k` entries that arrived and closes the `m_llr` burst with TLAST on the last of them, so
-   the burst is shorter than its header announced;
+1. writes an entry for **every lane of every sample word that arrived** (`PF` per word: a stream word
+   cannot say that only some of its lanes are samples) and closes the `m_llr` burst with TLAST on the
+   last of them, so the burst is shorter than its header announced;
 2. writes `Status(tx_id, TLAST_EARLY)`;
 3. **stops taking `s_in`**: it reads nothing more and answers nothing more.  Only a reset recovers it.
 
 An early TLAST is the sender's bug, not an operating condition.  The sender never sends more samples
-than `nsamp`.
+than `nsamp`, and pads the unused lanes of its last word with zeros.  An early TLAST therefore always
+ends a whole word, and the entries for that word's lanes are computed like any others.
 
 ### Worked examples
 
@@ -141,7 +144,7 @@ header, entry and status field, and TLAST.
 | 4 | the extremes of `r` (-128, 127.996) and of `invnoise` (0, 255.996) | saturation; an `invnoise` of 0 gives all-zero LLRs |
 | 5 | rounding ties, positive and negative | `AP_RND`, not round-half-even or truncation |
 | 6 | `nsamp = 1`; `nsamp = 4096`; at `PF > 1`, every `nsamp` from 1 to `2 PF + 1` | the smallest and the largest command; last words partly filled |
-| 7 | two good commands, then one whose samples end early, then two more | the error: the short burst, its status, and **nothing** answered after it -- the kernel has stopped |
+| 7 | two good commands, then one whose samples end early (TLAST on a word before the last), then two more | the error: the short burst, its status, and **nothing** answered after it -- the kernel has stopped |
 | 8 | 20 commands from a fixed seed: constellation points plus Gaussian noise, random `invnoise` and `nsamp` | everything mixed |
 | 9 | one command, `nsamp = 4096` | throughput |
 

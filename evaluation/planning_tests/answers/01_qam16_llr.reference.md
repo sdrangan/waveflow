@@ -70,6 +70,9 @@ the scoring section says what must be there, what may differ, and what counts ag
 - Whether the generated array routines handle a `ComplexField` of `FixedField` and a four-LLR entry at
   every width (they should; a plan that checks is careful).
 - The exact width of the intermediate (a reasoned number, not "wide enough").
+- (Before 2026-10-17 the spec said an early TLAST leaves `k` entries, which cannot be implemented at
+  `PF > 1`: no lane count travels with a word.  The baseline's plan found it; the spec now defines an
+  early TLAST per whole word.  A plan that flags lane granularity anyway is careful.)
 
 ## Scoring
 
@@ -86,7 +89,10 @@ the scoring section says what must be there, what may differ, and what counts ag
 8. The fatal error: the short burst, its status, the kernel stopped -- in the model, the body and the gate.
 
 **Accept either:** a `DataArray` or a `DataList` for the entry; the golden via `FixedField` or written-out
-integer arithmetic; throughput by timed phase or by cycle count.
+integer arithmetic; throughput by timed phase or by cycle count; the scenarios as one workload or as a
+harness system each (the error scenario must be its own, or last: nothing runs after it); one class
+with `WORD_BW` as an `HwParam` or a thin subclass per width (`param_supports` exists but no example
+uses it).
 
 **Counts against a plan:** packing or unpacking words by hand (`feedback-datalist-not-manual-unpack`);
 `ap_fixed` types declared by hand rather than generated from schemas; a Python loop per sample in the

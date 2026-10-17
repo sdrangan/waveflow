@@ -59,7 +59,7 @@ def _slug(heading: str) -> str:
         return explicit.group(1)
     h = h.lower().replace("`", "")
     h = re.sub(r"[^\w\s-]", "", h)
-    return re.sub(r"\s+", "-", h.strip())
+    return re.sub(r"\s", "-", h.strip())          # each space a hyphen, as kramdown does
 
 
 def _anchors(page: Path) -> set[str]:
@@ -89,6 +89,8 @@ def check_citations(plan: str) -> list[tuple[str, bool, str]]:
             rows.append((key, False, f"no curated example '{name}'"))
             continue
         f = d / file
+        if not f.is_file() and (ROOT / file).is_file():     # the repo-relative form the tool also takes
+            f = ROOT / file
         if not f.is_file():
             rows.append((key, False, f"no file {file} in {d.relative_to(ROOT)}"))
             continue

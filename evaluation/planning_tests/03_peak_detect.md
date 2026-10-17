@@ -108,7 +108,9 @@ Over `k = 0 .. n-1`, starting **idle**, with nothing carried over from an earlie
 nothing more and answers nothing more; only a reset recovers it.  An error is the sender's bug, not an
 operating condition.
 
-- **TLAST early**: the metrics end after `k < n` samples.  The kernel processes the `k` -- a search in
+- **TLAST early**: the metrics end on a word before the last word `n` needs.  The kernel processes
+  **every lane of every word that arrived** (`PF` per word: a stream word cannot say that only some of
+  its lanes are metrics; the sender pads its last word with zeros) -- a search in
   progress is ended and written as a `DET`, as at the end of the metrics -- then closes the `m_det` burst
   with TLAST on the last message it wrote (`START`, if there was no detection), **without** an `END`;
   then `Status(tx_id, TLAST_EARLY)`; then it stops.

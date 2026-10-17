@@ -91,6 +91,10 @@ differ, and what counts against a plan.
   goes as `du.serialize(...)` words); no example uses it on a free-running kernel; the id-0 doc error.
 - The pipelined-phase helper (`TimedPhase.pipeline` with a `write_array` store) assumes a known output
   size; the detections are not.
+- A Python framed `write` is one burst: a multi-message `m_det` burst must be written at once in pysim.
+- `harness` around a composite is in no example.
+- The scenarios as one harness system each is right: an error scenario stops the kernel, and a new
+  system run is the reset.
 
 ## Scoring
 
@@ -108,7 +112,8 @@ differ, and what counts against a plan.
    for `W = 0` and `n = 0`; the status written; nothing read or answered after.
 8. Sparse and dense throughput, each with how it is measured.
 
-**Accept either:** `DataUnion` or tag-first `DataList`s; equal or unequal message lengths (with a
+**Accept either:** `DataUnion` or tag-first `DataList`s (rejecting `DataUnion` for its lack of
+AXI4-Stream methods is a correct reading of the tree as of 2026-10-17); equal or unequal message lengths (with a
 reason); a count or a valid mask on the wide link; throughput by timed phase or by cycle count.
 
 **Counts against a plan:** packing or unpacking words by hand (`feedback-datalist-not-manual-unpack`);

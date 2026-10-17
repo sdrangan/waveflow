@@ -61,6 +61,7 @@ What a good plan for [02_block_eq.md](../02_block_eq.md) looks like, written fro
 - The float divider's bit-exactness against numpy (expected to hold: IEEE division is correctly
   rounded; to be confirmed at RTL).
 - Signed zeros through the generated array routines and the BFM (bits, not values).
+- Subnormal flushing in the Vitis float cores against an IEEE golden.
 - How a free-running module stops after a fatal error -- answered by `stream_kernel` (a `static bool
   halted`; `yield self.event()`); a plan that cites it is right.
 
@@ -78,7 +79,10 @@ What a good plan for [02_block_eq.md](../02_block_eq.md) looks like, written fro
 7. Throughput for scenarios 10 and 3, with what limits 3.
 
 **Accept either:** `ComplexField` or a two-float `DataList`; one or two arrays for the estimates; `gain`
-sequential or pipelined over rows (with its consequence for scenario 3 stated).
+sequential or pipelined over rows (with its consequence for scenario 3 stated); a token back from
+`apply` to `gain`, or none (the spec now lets `gain` read ahead); per-stage harnesses in pysim only (a
+stage's body cannot be RTL-harnessed alone as of 2026-10-17); one root per width or a subclass per
+width.
 
 **Counts against a plan:** hand packing; `SeqTB` or cosim; a hand-written testbench; a single kernel
 doing both stages; an error answered and then carried on from; a citation that does not resolve.
