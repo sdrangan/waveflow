@@ -20,8 +20,10 @@ with credit, a shared memory, a host on interrupts -- markov's shape in another 
   (`MemWStream`, `inband=True`, `emit_done=True`) that stores it and forwards the report once stored; its
   reports through a `QueueOut` the host reads.  The response is sent only after the data is in memory --
   markov's "the answer means done".
-- **memory:** a `MemoryMod` on a crossbar slave, inside the cut; slot addresses computed from the
-  layout, never typed by hand.
+- **memory:** a `MemoryMod` on a crossbar slave, inside the cut; the host takes `base` from the address
+  map and sends it in the command (as markov's `dstaddr`); the kernels compute `base + 256 s`.  (Before
+  2026-10-17 the spec gave no address, and the first plan had to bake one in at build time: a spec error,
+  fixed.)
 - **host:** a `SwHost` with `add_bus_master`, `add_irq` per view it waits on, two threads (`start`), a
   `SwSemaphore` of two, reads the reports by the tag, then each window from the memory; a C++ twin.
 - **system:** `HwSystem(sim, dut)` with a `DutTop.of(...)` of the two devices, the memory and the crossbar

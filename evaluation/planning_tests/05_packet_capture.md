@@ -50,6 +50,7 @@ and your plan must give each layout.
 | `thr` | uint32 | the power threshold |
 | `len` | uint16 | the window length `L`, 1 to 64 |
 | `slot0` | uint16 | the slot of the job's first detection, 0 to 63 |
+| `base` | uint32 | the byte address of slot 0 in the memory -- the host takes it from the address map; the hardware writes slot `s` at `base + 256 s` |
 
 then `n` samples, each a complex int16 (`xr`, `xi`; one 32-bit word).
 
@@ -63,8 +64,9 @@ each message beginning with its type:
 
 A report is sent only after its window is in the memory.
 
-**The memory**: slot `s` is words `64 s` .. `64 s + 63`; a window's sample `j` is the word `64 s + j`, the
-same complex int16 as on the way in.
+**The memory**: slot `s` is the 64 words from `base + 256 s` (bytes); a window's sample `j` is the word at
+`base + 256 s + 4 j`, the same complex int16 as on the way in.  The kernels are never given an address any
+other way: `base` travels in the command, so nothing is typed into the hardware.
 
 ## 4. The operation
 
@@ -79,7 +81,7 @@ The host never has more windows in flight than slots, and reads each window befo
 
 ### Worked example
 
-`tx_id = 5, thr = 64, L = 3, slot0 = 10`, samples
+`tx_id = 5, thr = 64, L = 3, slot0 = 10` (and the memory's `base`), samples
 `1+1j, 3-2j, 10+0j, 2+2j, -1+0j, 0+9j, 1+1j, 0+0j, 7-7j, 1+0j` (`n = 10`):
 
 - powers `2, 13, 100, 8, 1, 81, 2, 0, 98, 1`;
