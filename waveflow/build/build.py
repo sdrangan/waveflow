@@ -288,6 +288,10 @@ class BuildStep(ABC):
     consumes: ClassVar[list] = []
     produces: ClassVar[dict] = {}
     params: ClassVar[dict] = {}
+    #: Set by the DAG before each run: True when this run was forced (``force=`` / ``--force-step``)
+    #: rather than due.  A step that runs an inner DAG passes it on, so forcing the outer step
+    #: rebuilds what is inside it instead of asking the inner steps whether they are fresh.
+    forced: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -672,6 +676,7 @@ class BuildDag:
                 # after the fact if it was never measured.
                 started = time.perf_counter()
                 ran.add(step.name)
+                step.forced = step.name in forced
                 with events.span("step", step.name) as ev:
                     try:
                         produced = self._call_run(step, config, artifact_store)

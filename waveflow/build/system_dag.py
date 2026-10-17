@@ -192,8 +192,9 @@ class CsynthTopsStep(BuildStep):
     """``csynth``: every HLS top of a system, one inner :class:`CsynthStep` each.
 
     Its consumed artifacts enter the inner DAG as :class:`~waveflow.build.build.SourceStep`\\ s, and
-    the inner DAG runs **without force**: each top decides for itself, so editing one top's generated
-    source re-runs that csynth and reuses the others' RTL.  Fresh when every top is
+    the inner DAG runs **without force** -- each top decides for itself, so editing one top's generated
+    source re-runs that csynth and reuses the others' RTL -- unless this step itself was forced
+    (``--force-step csynth``), which re-synthesizes every top.  Fresh when every top is
     (:meth:`is_fresh`), so a run with nothing to do does not enter at all and the cascade stops here.
     *tcls* overrides a top's csynth script (``{top: path relative to the root}``)."""
 
@@ -236,7 +237,7 @@ class CsynthTopsStep(BuildStep):
         root = Path(config.root_dir)
         inner = BuildConfig(root_dir=root, vitis_version=config.vitis_version,
                             params={**config.params, "synth": synth})
-        results = self.inner_dag(inputs).run(inner)
+        results = self.inner_dag(inputs).run(inner, force=self.forced)
         #: Per top: "ran" / "fresh" / the failure -- what the last entry did, for the caller to show.
         self.last_run = {n: ("fresh" if r.skipped else "ran") if r.success else r.message
                          for n, r in results.items() if n.startswith("csynth_")}
