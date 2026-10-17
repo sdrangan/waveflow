@@ -33,6 +33,11 @@ every name below is one call away.
 
 All of these are also `waveflow kb <cmd>` on the command line.
 
+**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` (what a
+Waveflow system is: a testbench and a DUT, the DUT a tree of modules, any module the DUT of its own
+harness) and `waveflow_get_doc("docs/guide/systems/recipe.md")` (decompose top-down, write bottom-up,
+verify each module alone before the system).  The steps below follow the recipe.
+
 Examples that `waveflow_list_examples()` does not return are **not** models to
 copy, whatever else is in the tree.
 

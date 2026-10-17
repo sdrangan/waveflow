@@ -20,7 +20,7 @@ flow = "the kernel's harness on the system DAG: codegen, csynth, system_rtl, pys
 choose_when = """one kernel that takes commands and data on a stream and answers on streams -- a \
 function to put on a stream, no start signal, no register map, no host program on a bus, no memory.  \
 If the spec says the host launches the kernel (ap_start, AXI-Lite status), choose stream_inband; \
-for several kernels, or a host on a bus, choose bus_system."""
+two or more stages streaming to each other are stream_pipeline; for several kernels, or a host \non a bus, choose bus_system."""
 
 reference_examples = ["stream_kernel"]
 
