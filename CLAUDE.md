@@ -92,9 +92,13 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 ### Designing an accelerator
 
-Start from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
-carrying `n` and a `tx_id`, the work on `n` elements, a response that echoes it; through a pipeline the
-command travels with the data and the last stage answers) -- the page links every layer it touches.
+Start from `docs/guide/systems/recipe.md` (*Building a system*): decompose top-down, write bottom-up --
+schemas and a golden, each module alone in its harness, then `HwSystem(sim, dut)` and the system flow.
+The protocol comes from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
+carrying `n` and a `tx_id`, the work on `n` elements, the results headed by a `Resp` that echoes it, and a
+`Status` per command on its own stream; an error is fatal -- close the output, report, stop taking input;
+through a pipeline the command travels with the data and the last stage answers) -- the page links every
+layer it touches.
 
 ### Writing HLS kernel bodies
 
