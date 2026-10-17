@@ -302,8 +302,8 @@ def test_add_system_steps_derives_the_tops_and_the_defaults():
                                      "system_synth", "ip_package", "block_design", "leaf_resources", "resource_report",
                                      "scenario", "pysim", "system_xsi", "compare"}
     assert dag.artifact_owners()["report_markov_gen"] == "csynth"
-    assert xsi.rtl.top == "markov_system" and xsi.rtl.spec.xbar.name == "xbar_markov_system"
-    assert xsi.work == xsi.rtl.work == Path("xsi_work") / "markov_system"
+    assert xsi.rtl.top == "markov_dut" and xsi.rtl.spec.xbar.name == "xbar_markov_dut"
+    assert xsi.work == xsi.rtl.work == Path("xsi_work") / "markov_dut"
     assert dag.artifact_owners()["rtl"] == "system_rtl"
     assert "rtl" in xsi.consumes and not any(c.startswith("rtl_") for c in xsi.consumes)
     from examples.markov.markov_build import top_names

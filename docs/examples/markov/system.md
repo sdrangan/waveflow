@@ -2,19 +2,19 @@
 title: The system
 parent: Two kernels on a bus
 nav_order: 3.4
-summary: "MarkovSystem, step by step, as the general pattern for assembling a system: one Simulation; the kernels, the memory and the host; the memory regions the host hands out; then a wiring. The direct wiring joins the host to the kernels with plain streams and the kernels with a CreditStreamIF. The bus wiring builds each kernel's memory-mapped device from its declared views, routes the credit stream over the crossbar, binds every master and slave, assigns the address map, places the credit link, runs each queue's interrupt to the host, and hands the host its endpoints by view name. The ordering constraints between those steps, and how to run it."
+summary: "markov_system, step by step, as the general pattern for assembling a system: one Simulation; the kernels, the memory and the host; the memory regions the host hands out; then a wiring. The direct wiring joins the host to the kernels with plain streams and the kernels with a CreditStreamIF. The bus wiring builds each kernel's memory-mapped device from its declared views, routes the credit stream over the crossbar, binds every master and slave, assigns the address map, places the credit link, runs each queue's interrupt to the host, and hands the host its endpoints by view name. The ordering constraints between those steps; then HwSystem(sim, dut) names the DUT, and how to run it."
 ---
 
 # The system
 
-[`MarkovSystem`](../../../examples/markov/markov.py) is the object that holds everything: the two
-kernels, the shared memory, the host, and the connections between them. It builds the same modules
+[`markov_system`](../../../examples/markov/markov.py) builds the object that holds everything: the
+two kernels, the shared memory, the host, and the connections between them. It builds the same modules
 two ways — joined **directly**, or **across one bus** — and the kernels and the host are the same code
 in both; only the wiring differs. This page goes through it step by step, because the steps are the
 general pattern for any system.
 
 ```python
-sysm = MarkovSystem(jobs=default_jobs(4, 300), link="mm")     # or link="direct"
+sysm = markov_system(default_jobs(4, 300), link="mm")         # or link="direct"
 results = sysm.run()                                          # {job: {"x", "ones", "n", "t"}}
 ```
 
@@ -32,27 +32,27 @@ That picture is the same in both wirings. What changes is what each arrow *is*.
 ## Step 1: one simulation, and its modules
 
 ```python
-    def __post_init__(self) -> None:
-        sim = self.sim = Simulation()
-        self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk)
-        self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
-        self.mem = MemoryMod(name="mem", sim=sim, word_size=DW, inline=False, clk=self.clk,
-                             nwords_tot=MEM_SPAN // 8, addr_unit=AddrUnit.byte)
-        self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
-        self.host.mem = self.mem
+def markov_system(jobs, link="mm", clk=None, gen_ii=1, xbar_latency=4, xbar_travel=2) -> HwSystem:
+    clk = clk if clk is not None else Clock(freq=100e6)
+    sim = Simulation()
+    gen = MarkovGen(name="gen", sim=sim, clk=clk, gen_ii=gen_ii)
+    chain = MarkovChain(name="chain", sim=sim, clk=clk)
+    mem = markov_memory(sim, clk)
+    host = MarkovHost(name="host", sim=sim, jobs=list(jobs), clk=clk)
+    host.mem = mem
 ```
 
 Every module is constructed with the **same `Simulation`** — constructing it registers it, so there is
 no separate "add" step — and the same clock. The kernels are built bare: their ports exist, bound to
-nothing yet. `MemoryMod` is the shared memory: 512 64-bit words (`MEM_SPAN = 4 KB`), byte-addressed,
+nothing yet. `markov_memory` makes the shared memory, a `MemoryMod`: 512 64-bit words (`MEM_SPAN = 4 KB`), byte-addressed,
 as a bus sees it.
 
 ## Step 2: the memory regions the host hands out
 
 ```python
-        for j in range(len(self.jobs)):
-            a = self.mem.alloc(REGION_BYTES // 8)
-            assert a == self.host._dst(j), (a, self.host._dst(j))
+    for j in range(len(jobs)):
+        a = mem.alloc(REGION_BYTES // 8)
+        assert a == host._dst(j), (a, host._dst(j))
 ```
 
 Each job's states go to their own region. The memory **allocates** them, and the assert checks the
@@ -65,23 +65,25 @@ kernels only stream does not.
 The simplest form, and worth having: it checks the kernels and the host with no bus in the way.
 
 ```python
-    def _stream(self, name, master, slave, depth):
-        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=DW, depth=depth)
-        si.bind(ep_name="master", endpoint=master)
-        si.bind(ep_name="slave", endpoint=slave)
+def _stream(sim, clk, name, master, slave, depth) -> StreamIF:
+    si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=depth)
+    si.bind(ep_name="master", endpoint=master)
+    si.bind(ep_name="slave", endpoint=slave)
+    return si
 
-    def _wire_direct(self) -> None:
-        sim, host = self.sim, self.host
-        host.qcmd = StreamIFMaster(name="host_qcmd", sim=sim, bitwidth=DW, has_tlast=True)
-        host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
-        self._stream("k_cmd", host.qcmd, self.gen.s_cmd, CDEPTH)
-        self._stream("k_resp", self.chain.m_resp, host.qresp, RDEPTH)
-        self.u_link = CreditStreamIF(name="u", sim=sim, clk=self.clk, bitwidth=DW, depth=QDEPTH)
-        self.u_link.bind("master", self.gen.m_u)
-        self.u_link.bind("slave", self.chain.s_u)
-        self.mem_link = DirectMMIF(name="k_mem", sim=sim, clk=self.clk)
-        self.mem_link.bind("master", self.chain.m_mem)
-        self.mem_link.bind("slave", self.mem.s_mm)
+def _wire_direct(sim, clk, gen, chain, mem, host) -> tuple[DutTop, dict]:
+    host.qcmd = StreamIFMaster(name="host_qcmd", sim=sim, bitwidth=DW, has_tlast=True)
+    host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
+    _stream(sim, clk, "k_cmd", host.qcmd, gen.s_cmd, CDEPTH)
+    _stream(sim, clk, "k_resp", chain.m_resp, host.qresp, RDEPTH)
+    u_link = CreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, depth=QDEPTH)
+    u_link.bind("master", gen.m_u)
+    u_link.bind("slave", chain.s_u)
+    mem_link = DirectMMIF(name="k_mem", sim=sim, clk=clk)
+    mem_link.bind("master", chain.m_mem)
+    mem_link.bind("slave", mem.s_mm)
+    dut = DutTop.of("markov_dut", sim, comps=[gen, chain, mem], ifs=[u_link, mem_link])
+    return dut, {"u_link": u_link, "mem_link": mem_link}
 ```
 
 The pattern for every connection is **make the interface, bind its two sides**:
@@ -93,20 +95,21 @@ The pattern for every connection is **make the interface, bind its two sides**:
 | chain → memory | `DirectMMIF` | the chain's `m_mem`, the memory's `s_mm` |
 
 The host gets **plain streams** for `qcmd` and `qresp`, which the system creates; `host.mem_bus_base`
-stays `None`, so the host reads `x` from the memory object directly.
+stays `None`, so the host reads `x` from the memory object directly. The last lines name the DUT —
+the kernels and the memory, with the links between them ([Declaring the DUT](#declaring-the-dut)).
 
 ## The bus wiring
 
 Now every arrow crosses one AXI crossbar. The host is a bus master, and so are three things inside the
-system; the kernels' queues are reached through memory-mapped **views**. Steps 4 to 8 are the order
-that works — several of them depend on the one before.
+system; the kernels' queues are reached through memory-mapped **views**. Steps 4 to 8 are the body of
+`_wire_mm(sim, clk, gen, chain, mem, host, xbar_latency, xbar_travel)`, in the order that works —
+several of them depend on the one before.
 
 ### Step 4: each kernel's memory-mapped device
 
 ```python
-        self.gen_dev = build_mm_device(self.gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
-        self.chain_dev = build_mm_device(self.chain, sim=sim, clk=clk, mem_dwidth=DW,
-                                         prefix="chain_")
+    gen_dev = build_mm_device(gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
+    chain_dev = build_mm_device(chain, sim=sim, clk=clk, mem_dwidth=DW, prefix="chain_")
 ```
 
 A kernel type **declares** how a bus reaches it, on its class, as its `mm_views`:
@@ -132,9 +135,9 @@ Verilog, and one IP when the system is packaged.
 ### Step 5: the credit stream, routed
 
 ```python
-        self.u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
-        self.u_link.bind("master", self.gen.m_u)
-        self.u_link.bind("slave", self.chain.s_u)
+    u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
+    u_link.bind("master", gen.m_u)
+    u_link.bind("slave", chain.s_u)
 ```
 
 The same two kernel endpoints as in the direct wiring, but the link now carries the stream across the
@@ -147,20 +150,19 @@ is already joined to its view. Why the link must be credit-based, and how it is 
 ### Step 6: the crossbar
 
 ```python
-        masters = [host.m, *self.u_link.bus_masters(), self.chain.m_mem]
-        gs, gr = self.gen_dev.ranges(GEN_BASE)
-        cs, cr = self.chain_dev.ranges(CHAIN_BASE)
-        slaves = gs + cs + [self.mem.s_mm]
-        ranges = gr + cr + [(MEM_BASE, MEM_SPAN)]
-        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
-                                    nports_slave=len(slaves), bitwidth=DW,
-                                    latency_init=self.xbar_latency,
-                                    latency_travel=self.xbar_travel)
-        for k, m in enumerate(masters):
-            self.xbar.bind(f"master_{k}", m)
-        for k, s in enumerate(slaves):
-            self.xbar.bind(f"slave_{k}", s)
-        assign_address_ranges(slaves, ranges)
+    masters = [host.m, *u_link.bus_masters(), chain.m_mem]
+    gs, gr = gen_dev.ranges(GEN_BASE)
+    cs, cr = chain_dev.ranges(CHAIN_BASE)
+    slaves = gs + cs + [mem.s_mm]
+    ranges = gr + cr + [(MEM_BASE, MEM_SPAN)]
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
+                           nports_slave=len(slaves), bitwidth=DW, latency_init=xbar_latency,
+                           latency_travel=xbar_travel)
+    for k, m in enumerate(masters):
+        xbar.bind(f"master_{k}", m)
+    for k, s in enumerate(slaves):
+        xbar.bind(f"slave_{k}", s)
+    assign_address_ranges(slaves, ranges)
 ```
 
 Collect **every bus master** — the host's, the credit link's two writers, the chain's memory writer —
@@ -176,8 +178,8 @@ in travel), part of pysim's timing model.
 ### Step 7: placing the credit link
 
 ```python
-        gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
-        self.u_link.place(qin=cmap["qu"], crd_in=gmap["u_crd"])
+    gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
+    u_link.place(qin=cmap["qu"], crd_in=gmap["u_crd"])
 ```
 
 The two writers must know their **targets** — the bus address of the chain's `qu` view and of the
@@ -188,17 +190,17 @@ after the address map exists** — that is why this is not part of Step 5.
 ### Step 8: interrupts, and the host endpoints
 
 ```python
-        for dev, name in ((self.gen_dev, "qcmd"), (self.chain_dev, "qresp")):
-            v = dev.views[name]
-            line = IrqIF(name=f"{v.name}_irq", sim=sim)
-            line.bind("source", v.m_irq)
-            line.bind("sink", host.irq[name])
-        poll = host.poll_cycles
-        host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
-            "qcmd", irq=host.irq["qcmd"])
-        host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
-            "qresp", irq=host.irq["qresp"])
-        host.mem_bus_base = MEM_BASE
+    for dev, name in ((gen_dev, "qcmd"), (chain_dev, "qresp")):
+        v = dev.views[name]
+        line = IrqIF(name=f"{v.name}_irq", sim=sim)
+        line.bind("source", v.m_irq)
+        line.bind("sink", host.irq[name])
+    poll = host.poll_cycles
+    host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
+        "qcmd", irq=host.irq["qcmd"])
+    host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
+        "qresp", irq=host.irq["qresp"])
+    host.mem_bus_base = MEM_BASE
 ```
 
 Two things the host needs, both by **view name**:
@@ -217,38 +219,39 @@ reads.
 ## Declaring the DUT
 
 ```python
-        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen_dev, self.chain_dev, self.mem],
-                                 ifs=[self.xbar, self.u_link])
+    dut = DutTop.of("markov_dut", sim, comps=[gen_dev, chain_dev, mem], ifs=[xbar, u_link])
 ```
 
-and the class says it is a system and which part of it is synthesized:
+and the system is the simulation with that DUT named:
 
 ```python
-@dataclass
-class MarkovSystem(HwSystem):
-    ...
-    def dut(self) -> DutTop:
-        return self.dut_top
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
+                    fresh=lambda: markov_system(jobs, link, clk, gen_ii, xbar_latency, xbar_travel))
+    sysm.gen, sysm.chain, sysm.mem, sysm.host = gen, chain, mem, host   # and u_link, xbar, the devices
+    return sysm
 ```
 
-[`HwSystem`](../../guide/build/xsi_system.md#the-spec) is the contract every system flow takes: a
-`sim`, a `run()`, and `dut()`, the **default DUT**. Here that is a tree: the two devices and the memory
+[`HwSystem(sim, dut)`](../../guide/systems/index.md) is what every system flow takes: the simulation,
+and the **DUT**, the one root that is synthesized. Here that is a tree: the two devices and the memory
 are its children, and the crossbar and the routed credit stream are the links between them. Binding
 the credit stream in Step 5 already put each of its bus writers in the device of the kernel it acts
 for: the forward writer in `gen_dev`, the credit writer in `chain_dev`. Everything not in the tree,
-which here is only the host, is the testbench. A build can draw another cut (`inside=`); this is the one
-it takes otherwise.
+which here is only the host, is the testbench — derived, never listed. The constructor checks the
+rules: the DUT is a root of this simulation, every testbench participant can be lowered to the RTL
+testbench (the host has a C++ twin), and no DUT boundary port is left unbound. The rest describes the
+run: `run_until` ends it (the kernels never stop on their own), `check` is what `run()` returns, and
+`fresh` rebuilds an unrun copy for a second pass (a calibration's). The parts are kept as attributes
+for the tests and the [timing probes](xsi.md) that name them. A build can draw another cut (`inside=`);
+the DUT is the one it takes otherwise.
 
 ## Step 9: run it
 
 ```python
-    def run(self) -> dict[int, dict]:
-        self.sim.run_sim(until=self.host.done)
-        return self.host.results
+results = sysm.run()                       # sim.run_sim(until=host.done), then check(sysm)
 ```
 
-`run_sim` calls every module's `pre_sim`, starts every `run_proc`, and runs until the host says it is
-done (the kernels never stop on their own). `demo(link)` wraps it and compares every job with the
+`run()` writes the scenario the host plays (the same file the RTL testbench reads), then `run_sim`
+calls every module's `pre_sim`, starts every `run_proc`, and runs until the host says it is done. `demo(link)` wraps it and compares every job with the
 golden; running both wirings and their results are [Python simulation](pysim.md).
 
 ## The pattern, in one list
@@ -261,9 +264,9 @@ golden; running both wirings and their results are [Python simulation](pysim.md)
    credit link (`MmCreditStreamIF`), then the crossbar — every master, every slave at its base,
    `assign_address_ranges` — then `place` the link, then the interrupt lines, then the host's endpoints
    from `BoundMemSlaveAdaptor` by view name.
-5. Declare the DUT: a `DutTop` of the devices and memories, with the links between them; `dut()`
-   returns it, and the class derives from `HwSystem`.
-6. Run until the host's `done` event.
+5. Declare the DUT: a `DutTop` of the devices and memories, with the links between them, and
+   `HwSystem(sim, dut, run_until=host.done, check=...)`.
+6. `run()`: until the host's `done` event.
 
 The same object is the input to the RTL simulation: the system top is walked from this graph and the
 host's endpoints become the testbench's — [XSI testbench](xsi.md).

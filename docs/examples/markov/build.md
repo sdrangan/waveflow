@@ -29,7 +29,7 @@ what it writes -- the jobs -- comes from the example's `system()`.*
 
 ## Before you start
 
-- **pysim works.** Everything here derives from `MarkovSystem(link="mm")`; if it does not run bit-exact
+- **pysim works.** Everything here derives from `markov_system(jobs, link="mm")`; if it does not run bit-exact
   in Python ([Python simulation](pysim.md)), nothing below will.
 - **Vitis HLS** for csynth, **Vivado** for the crossbar IP (`create_ip`) and the simulation (`xsim`), and
   a C++ compiler -- the mingw `g++` that ships with Vivado on Windows, the system `g++` on Linux. The
@@ -44,8 +44,8 @@ NJOBS, NSTEPS = 4, 300
 def scenario_jobs() -> list[dict]:
     return default_jobs(NJOBS, NSTEPS)
 
-def system() -> MarkovSystem:
-    return MarkovSystem(jobs=scenario_jobs(), link="mm")
+def system(gen_ii: int = 1) -> HwSystem:
+    return markov_system(scenario_jobs(), "mm", gen_ii=gen_ii)
 ```
 
 `system()` is the **same object pysim runs**, on the gate's scenario: four jobs of 300 steps.

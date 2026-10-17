@@ -52,7 +52,7 @@ In going through this example, you will learn how to:
   with the framework's memory writer).
 - [The host](host.md) — `MarkovHost`, step by step: what a host owns, what the system hands it, its two
   processes, and a checklist for writing your own.
-- [The system](system.md) — `MarkovSystem`, step by step: the modules, the memory regions, the direct
+- [The system](system.md) — `markov_system`, step by step: the modules, the memory regions, the direct
   wiring, and the bus wiring (devices, the routed credit link, the crossbar, interrupts, the host's
   endpoints).
 - [The credit link](credit_link.md) — how the generator's stream reaches the chain across the bus: the

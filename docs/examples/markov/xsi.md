@@ -25,7 +25,7 @@ flowchart LR
     top -- "irq_gen_qcmd, irq_chain_qresp" --> host
   end
   host --> traces[("traces/<br/>report.json")]
-  scen --> pysim["pysim<br/>MarkovSystem.run()"] --> ptraces[("pysim_traces/<br/>pysim.json")]
+  scen --> pysim["pysim<br/>sysm.run()"] --> ptraces[("pysim_traces/<br/>pysim.json")]
   traces --> compare{"compare"}
   ptraces --> compare
   classDef here fill:#f59f00,stroke:#9c5b00,color:#1a1a1a
@@ -187,11 +187,11 @@ pytest tests/examples/test_markov_xsi.py -m xsi
 Only once the gates pass is the cycle count worth explaining.
 `python -m examples.markov.markov_build --probes` (or `build_dag(probes=True)`) builds the top with
 one-bit **probes** on the handshakes `timing_probes` names, in its own workspace
-(`xsi_work/markov_probes/`). `timing_probes` lives in `markov.py`, beside `MarkovSystem`. You name each
+(`xsi_work/markov_probes/`). `timing_probes` lives in `markov.py`, beside `markov_system`. You name each
 probe by the **pysim object** you want to watch, never by a net:
 
 ```python
-def timing_probes(sysm: MarkovSystem) -> dict:
+def timing_probes(sysm: HwSystem) -> dict:
     gen, chain, link = sysm.gen, sysm.chain, sysm.u_link
     return {
         "cmd": beat(gen.s_cmd),                          # host's command reaches the generator

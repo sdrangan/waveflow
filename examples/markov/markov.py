@@ -582,111 +582,110 @@ class MarkovHost(SwHost):
         yield from self._reader()
 
 
-@dataclass
-class MarkovSystem(HwSystem):
-    """Everything wired.  ``link="mm"``: host, generator writer, chain credit writer and chain memory
-    master on one crossbar, with the two kernels' views and the memory as slaves.  ``link="direct"``:
-    a ``CreditStreamIF`` between the kernels and plain streams to the host."""
-
-    jobs: list
-    link: str = "mm"
-    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
-    #: The generator's draw interval (:attr:`MarkovGen.gen_ii`).
-    gen_ii: int = 1
-    xbar_latency: float = 4
-    xbar_travel: float = 2
-
-    def __post_init__(self) -> None:
-        if self.link not in ("mm", "direct"):
-            raise ValueError(f"link must be 'mm' or 'direct', got {self.link!r}")
-        sim = self.sim = Simulation()
-        self.gen = MarkovGen(name="gen", sim=sim, clk=self.clk, gen_ii=self.gen_ii)
-        self.chain = MarkovChain(name="chain", sim=sim, clk=self.clk)
-        self.mem = markov_memory(sim, self.clk)
-        self.host = MarkovHost(name="host", sim=sim, jobs=list(self.jobs), clk=self.clk)
-        self.host.mem = self.mem
-        if len(self.jobs) > MEM_SPAN // REGION_BYTES or any(j["n"] > REGION_BYTES for j in self.jobs):
-            raise ValueError(f"at most {MEM_SPAN // REGION_BYTES} jobs of at most {REGION_BYTES} steps")
-        for j in range(len(self.jobs)):          # each job's x region, at the host's offsets
-            a = self.mem.alloc(REGION_BYTES // 8)
-            assert a == self.host._dst(j), (a, self.host._dst(j))
-        if self.link == "direct":
-            self._wire_direct()
-        else:
-            self._wire_mm()
-
-    def _stream(self, name, master, slave, depth):
-        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=DW, depth=depth)
-        si.bind(ep_name="master", endpoint=master)
-        si.bind(ep_name="slave", endpoint=slave)
-
-    def _wire_direct(self) -> None:
-        sim, host = self.sim, self.host
-        host.qcmd = StreamIFMaster(name="host_qcmd", sim=sim, bitwidth=DW, has_tlast=True)
-        host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
-        self._stream("k_cmd", host.qcmd, self.gen.s_cmd, CDEPTH)
-        self._stream("k_resp", self.chain.m_resp, host.qresp, RDEPTH)
-        self.u_link = CreditStreamIF(name="u", sim=sim, clk=self.clk, bitwidth=DW, depth=QDEPTH)
-        self.u_link.bind("master", self.gen.m_u)
-        self.u_link.bind("slave", self.chain.s_u)
-        # The chain's memory master straight to the memory.
-        from waveflow.hw.memif import DirectMMIF
-        self.mem_link = DirectMMIF(name="k_mem", sim=sim, clk=self.clk)
-        self.mem_link.bind("master", self.chain.m_mem)
-        self.mem_link.bind("slave", self.mem.s_mm)
-        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen, self.chain, self.mem],
-                                 ifs=[self.u_link, self.mem_link])
-
-    def _wire_mm(self) -> None:
-        sim, clk, host = self.sim, self.clk, self.host
-        self.gen_dev = build_mm_device(self.gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
-        self.chain_dev = build_mm_device(self.chain, sim=sim, clk=clk, mem_dwidth=DW,
-                                         prefix="chain_")
-        self.u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
-        self.u_link.bind("master", self.gen.m_u)
-        self.u_link.bind("slave", self.chain.s_u)
-        masters = [host.m, *self.u_link.bus_masters(), self.chain.m_mem]
-        gs, gr = self.gen_dev.ranges(GEN_BASE)
-        cs, cr = self.chain_dev.ranges(CHAIN_BASE)
-        slaves = gs + cs + [self.mem.s_mm]
-        ranges = gr + cr + [(MEM_BASE, MEM_SPAN)]
-        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
-                                    nports_slave=len(slaves), bitwidth=DW,
-                                    latency_init=self.xbar_latency,
-                                    latency_travel=self.xbar_travel)
-        for k, m in enumerate(masters):
-            self.xbar.bind(f"master_{k}", m)
-        for k, s in enumerate(slaves):
-            self.xbar.bind(f"slave_{k}", s)
-        assign_address_ranges(slaves, ranges)
-        gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
-        self.u_link.place(qin=cmap["qu"], crd_in=gmap["u_crd"])
-        # The host: the command queue (room IRQ) and the response queue (data IRQ).
-        for dev, name in ((self.gen_dev, "qcmd"), (self.chain_dev, "qresp")):
-            v = dev.views[name]
-            line = IrqIF(name=f"{v.name}_irq", sim=sim)
-            line.bind("source", v.m_irq)
-            line.bind("sink", host.irq[name])
-        poll = host.poll_cycles
-        host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
-            "qcmd", irq=host.irq["qcmd"])
-        host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
-            "qresp", irq=host.irq["qresp"])
-        host.mem_bus_base = MEM_BASE
-        self.dut_top = DutTop.of("markov_dut", sim, comps=[self.gen_dev, self.chain_dev, self.mem],
-                                 ifs=[self.xbar, self.u_link])
-
-    def dut(self) -> DutTop:
-        """The default DUT: the two kernels' devices and the shared memory, with the crossbar and
-        the routed credit stream between them."""
-        return self.dut_top
-
-    def run(self) -> dict[int, dict]:
-        self.sim.run_sim(until=self.host.done)
-        return self.host.results
+def _stream(sim, clk, name, master, slave, depth) -> StreamIF:
+    si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=depth)
+    si.bind(ep_name="master", endpoint=master)
+    si.bind(ep_name="slave", endpoint=slave)
+    return si
 
 
-def timing_probes(sysm: MarkovSystem) -> dict:
+def _wire_direct(sim, clk, gen, chain, mem, host) -> tuple[DutTop, dict]:
+    """``link="direct"``: plain streams between the host and the kernels, a ``CreditStreamIF``
+    between the kernels, the chain's memory master straight to the memory."""
+    from waveflow.hw.memif import DirectMMIF
+
+    host.qcmd = StreamIFMaster(name="host_qcmd", sim=sim, bitwidth=DW, has_tlast=True)
+    host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
+    _stream(sim, clk, "k_cmd", host.qcmd, gen.s_cmd, CDEPTH)
+    _stream(sim, clk, "k_resp", chain.m_resp, host.qresp, RDEPTH)
+    u_link = CreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, depth=QDEPTH)
+    u_link.bind("master", gen.m_u)
+    u_link.bind("slave", chain.s_u)
+    mem_link = DirectMMIF(name="k_mem", sim=sim, clk=clk)
+    mem_link.bind("master", chain.m_mem)
+    mem_link.bind("slave", mem.s_mm)
+    dut = DutTop.of("markov_dut", sim, comps=[gen, chain, mem], ifs=[u_link, mem_link])
+    return dut, {"u_link": u_link, "mem_link": mem_link}
+
+
+def _wire_mm(sim, clk, gen, chain, mem, host, xbar_latency, xbar_travel) -> tuple[DutTop, dict]:
+    """``link="mm"``: each kernel's device from its declared views; the host, the routed credit
+    stream's writers and the chain's memory master on one crossbar, the views and the memory its
+    slaves; each queue's interrupt to the host; the host's endpoints by view name."""
+    gen_dev = build_mm_device(gen, sim=sim, clk=clk, mem_dwidth=DW, prefix="gen_")
+    chain_dev = build_mm_device(chain, sim=sim, clk=clk, mem_dwidth=DW, prefix="chain_")
+    u_link = MmCreditStreamIF(name="u", sim=sim, clk=clk, bitwidth=DW, fwd_depth=FWD_DEPTH)
+    u_link.bind("master", gen.m_u)
+    u_link.bind("slave", chain.s_u)
+    masters = [host.m, *u_link.bus_masters(), chain.m_mem]
+    gs, gr = gen_dev.ranges(GEN_BASE)
+    cs, cr = chain_dev.ranges(CHAIN_BASE)
+    slaves = gs + cs + [mem.s_mm]
+    ranges = gr + cr + [(MEM_BASE, MEM_SPAN)]
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
+                           nports_slave=len(slaves), bitwidth=DW, latency_init=xbar_latency,
+                           latency_travel=xbar_travel)
+    for k, m in enumerate(masters):
+        xbar.bind(f"master_{k}", m)
+    for k, s in enumerate(slaves):
+        xbar.bind(f"slave_{k}", s)
+    assign_address_ranges(slaves, ranges)
+    gmap, cmap = GEN_LAYOUT.at(GEN_BASE), CHAIN_LAYOUT.at(CHAIN_BASE)
+    u_link.place(qin=cmap["qu"], crd_in=gmap["u_crd"])
+    # The host: the command queue (room IRQ) and the response queue (data IRQ).
+    for dev, name in ((gen_dev, "qcmd"), (chain_dev, "qresp")):
+        v = dev.views[name]
+        line = IrqIF(name=f"{v.name}_irq", sim=sim)
+        line.bind("source", v.m_irq)
+        line.bind("sink", host.irq[name])
+    poll = host.poll_cycles
+    host.qcmd = BoundMemSlaveAdaptor(gmap, host.m, poll_cycles=poll).stream_master(
+        "qcmd", irq=host.irq["qcmd"])
+    host.qresp = BoundMemSlaveAdaptor(cmap, host.m, poll_cycles=poll).stream_slave(
+        "qresp", irq=host.irq["qresp"])
+    host.mem_bus_base = MEM_BASE
+    dut = DutTop.of("markov_dut", sim, comps=[gen_dev, chain_dev, mem], ifs=[xbar, u_link])
+    return dut, {"u_link": u_link, "xbar": xbar, "gen_dev": gen_dev, "chain_dev": chain_dev}
+
+
+def markov_system(jobs: list, link: str = "mm", clk: Clock | None = None, gen_ii: int = 1,
+                  xbar_latency: float = 4, xbar_travel: float = 2) -> HwSystem:
+    """Everything wired, as ``HwSystem(sim, dut)``: the modules on one simulation, then the DUT named
+    -- the two kernels (their devices, for ``link="mm"``) and the shared memory, with the links between
+    them; the host is the testbench.  ``link="mm"``: host, generator writer, chain credit writer and
+    chain memory master on one crossbar.  ``link="direct"``: a ``CreditStreamIF`` between the kernels
+    and plain streams to the host.  *gen_ii* is the generator's draw interval
+    (:attr:`MarkovGen.gen_ii`).  ``run()`` returns the host's results, ``{tx_id: {"x", "ones", "n",
+    "t"}}``; the parts are attributes of the system (``sysm.gen``, ``sysm.chain``, ``sysm.u_link``,
+    ...)."""
+    if link not in ("mm", "direct"):
+        raise ValueError(f"link must be 'mm' or 'direct', got {link!r}")
+    if len(jobs) > MEM_SPAN // REGION_BYTES or any(j["n"] > REGION_BYTES for j in jobs):
+        raise ValueError(f"at most {MEM_SPAN // REGION_BYTES} jobs of at most {REGION_BYTES} steps")
+    clk = clk if clk is not None else Clock(freq=100e6)
+    sim = Simulation()
+    gen = MarkovGen(name="gen", sim=sim, clk=clk, gen_ii=gen_ii)
+    chain = MarkovChain(name="chain", sim=sim, clk=clk)
+    mem = markov_memory(sim, clk)
+    host = MarkovHost(name="host", sim=sim, jobs=list(jobs), clk=clk)
+    host.mem = mem
+    for j in range(len(jobs)):                   # each job's x region, at the host's offsets
+        a = mem.alloc(REGION_BYTES // 8)
+        assert a == host._dst(j), (a, host._dst(j))
+    if link == "direct":
+        dut, parts = _wire_direct(sim, clk, gen, chain, mem, host)
+    else:
+        dut, parts = _wire_mm(sim, clk, gen, chain, mem, host, xbar_latency, xbar_travel)
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
+                    fresh=lambda: markov_system(jobs, link, clk, gen_ii, xbar_latency, xbar_travel))
+    sysm.clk, sysm.link, sysm.jobs = clk, link, jobs
+    sysm.gen, sysm.chain, sysm.mem, sysm.host = gen, chain, mem, host
+    for k, v in parts.items():
+        setattr(sysm, k, v)
+    return sysm
+
+
+def timing_probes(sysm: HwSystem) -> dict:
     """Timing probes (plans: markov-timing): one-bit handshakes the system top exposes as outputs when
     built with probes (``markov_build.build_dag(probes=True)``, or ``--probes``), and the testbench
     samples every cycle.  Off for the gate.  Each names the pysim object it watches -- a kernel's port,
@@ -712,7 +711,7 @@ def timing_probes(sysm: MarkovSystem) -> dict:
 
 def demo(link: str = "mm", njobs: int = 4, n: int = 300) -> dict:
     jobs = default_jobs(njobs, n)
-    sysm = MarkovSystem(jobs=jobs, link=link)
+    sysm = markov_system(jobs, link)
     res = sysm.run()
     ok = all(np.array_equal(res[j["tx_id"]]["x"], markov_golden(j)) for j in jobs)
     return {"system": sysm, "jobs": jobs, "results": res, "bit_exact": ok,

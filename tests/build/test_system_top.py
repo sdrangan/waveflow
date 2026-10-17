@@ -319,7 +319,7 @@ def test_from_system_is_the_walk_with_add_system_steps_defaults():
     obj = SystemTopSpec.from_system(sysm, top="markov_top")
     assert obj == spec
     assert obj.render_verilog() == render_system_top(spec)
-    assert SystemTopSpec.from_system(sysm).top == "markov_system"        # the class, snake case
+    assert SystemTopSpec.from_system(sysm).top == "markov_dut"           # the DUT's name
     only = SystemTopSpec.from_system(sysm, inside=[sysm.gen, sysm.chain, sysm.mem], top="t")
     assert [s.name for s in only.subs] == ["gen", "chain", "mem"]
 
@@ -434,10 +434,10 @@ def test_the_direct_wired_markov_renders_its_kernel_link_as_ports():
     """With no bus, the credit link between the two kernels runs between their sub-tops; the host's
     streams and the chain's memory master leave the top.  The memory has to be testbench: an on-chip
     memory reached directly is refused, not silently dropped."""
-    from examples.markov.markov import MarkovSystem, default_jobs
+    from examples.markov.markov import default_jobs, markov_system
     from waveflow.build.system_top import SystemTopSpec
 
-    s = MarkovSystem(jobs=default_jobs(1, 16), link="direct")
+    s = markov_system(default_jobs(1, 16), "direct")
     with pytest.raises(LoweringError, match="inside the cut but on no crossbar"):
         SystemTopSpec.from_system(s)
     spec = SystemTopSpec.from_system(s, inside=[s.gen, s.chain], top="markov_direct")

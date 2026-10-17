@@ -506,6 +506,17 @@ def snake(name: str) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name).lower()
 
 
+def default_top(sysm) -> str:
+    """The Verilog top a system is named by when none is given: a subclass's name in snake case
+    (``MarkovSystem`` -> ``markov_system``); a system built directly, ``HwSystem(sim, dut)``, its DUT's
+    name."""
+    from waveflow.hw.hw_system import HwSystem
+
+    if type(sysm) is HwSystem:
+        return sysm.dut().name
+    return snake(type(sysm).__name__)
+
+
 @dataclass(kw_only=True)
 class _Inner(BuildStep):
     """One step of ``system_rtl``'s or ``system_xsi``'s inner DAG; *owner* is the outer step holding
@@ -1153,8 +1164,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
 
     *sysm* is the pysim system object, not yet run.  csynth consumes the artifacts *sources* -- the
     example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
-    the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
-    -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
+    the root.  *top* names the Verilog top (default: :func:`default_top` -- the DUT's name, or a
+    subclass's name in snake case), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
     the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
     parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
     script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
@@ -1166,7 +1177,7 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     of one kernel share one ``codegen`` and one ``csynth``.  The first csynth is named ``csynth``; one
     a later system needs for tops of its own is ``<prefix>csynth``.
     """
-    top = top or snake(type(sysm).__name__)
+    top = top or default_top(sysm)
     work_dir = Path(work_dir)
     work = work_dir / ((workspace or f"{prefix}{top}") + ("_probes" if probes else ""))
     rtl = SystemRtlStep(sysm=sysm, work=work, prefix=prefix, top=top, xbar_name=xbar_name,

@@ -51,6 +51,7 @@ from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.harness import harness, memory_harness
+from waveflow.hw.hw_system import HwSystem
 from waveflow.build.phase_calib import MemCalibStep, add_calib_steps
 from waveflow.calib.record_store import ModuleStore
 from waveflow.hw.mem_stream import MemWCmd
@@ -64,7 +65,7 @@ from examples.markov.markov import (
     ChainCore,
     MarkovChain,
     MarkovGen,
-    MarkovSystem,
+    markov_system,
     markov_memory,
     mem_script,
     MkvCmd,
@@ -92,10 +93,10 @@ def scenario_jobs() -> list[dict]:
     return default_jobs(NJOBS, NSTEPS)
 
 
-def system(gen_ii: int = 1) -> MarkovSystem:
+def system(gen_ii: int = 1) -> HwSystem:
     """The system the DAG runs -- in pysim, and at RTL -- on the scenario.  *gen_ii*: the generator's
     draw interval (``MarkovGen.gen_ii``)."""
-    return MarkovSystem(jobs=scenario_jobs(), link="mm", gen_ii=gen_ii)
+    return markov_system(scenario_jobs(), "mm", gen_ii=gen_ii)
 
 
 def gen_headers(root: Path = HERE) -> None:
