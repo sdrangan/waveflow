@@ -80,8 +80,9 @@ What a good plan for [02_block_eq.md](../02_block_eq.md) looks like, written fro
 
 **Accept either:** `ComplexField` or a two-float `DataList`; one or two arrays for the estimates; `gain`
 sequential or pipelined over rows (with its consequence for scenario 3 stated); a token back from
-`apply` to `gain`, or none (the spec now lets `gain` read ahead); per-stage harnesses in pysim only (a
-stage's body cannot be RTL-harnessed alone as of 2026-10-17); one root per width or a subclass per
+`apply` to `gain`, or none (the spec now lets `gain` read ahead); per-stage harnesses at RTL through
+`KernelTask(framed=(...))` (the better answer: one body, its word types supplied where it sits) or in
+pysim only; one root per width or a subclass per
 width.
 
 **Counts against a plan:** hand packing; `SeqTB` or cosim; a hand-written testbench; a single kernel

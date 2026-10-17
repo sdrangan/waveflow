@@ -245,8 +245,11 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
   (the user, 2026-10-17): a write in pieces would invite serializing and deserializing by hand.  The
   cost -- data-dependent structures (a variable number of records, a `DataUnion` per record) cannot be
   written as they are made -- is acknowledged, to be addressed later.
-- A stage's hand-written body cannot be RTL-harnessed alone: its ports are `framed_word<W>` inside a
-  composite, `axi4s_word<W>` as a top.
+- ~~A stage's hand-written body cannot be RTL-harnessed alone~~ -- **WRONG, corrected 2026-10-17**:
+  `KernelTask(framed=(...))` makes each listed port's word type a template parameter the generator
+  supplies (`framed_word` inside a composite, `axi4s_word` at a top), "so one body serves a composite
+  and the kernel's own harness" (`waveflow/hw/mem_stream.py`; markov uses it).  The real finding is a
+  **doc** one: a careful agent concluded it did not exist.  The guide must show it.
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
