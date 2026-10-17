@@ -276,6 +276,13 @@ Results in `evaluation/planning_tests/results/baseline_2026-10-17.md`.
 (markov 1870 cycles at RTL, pysim -1.6%); their example pages updated.  `stream_kernel` checked for
 the stub anchors a scaffold needs.
 
+*Record (2026-10-17):* **done** -- `markov_system()` and `mm_fir_system()` return `HwSystem(sim, dut)`
+(the subclasses removed; pysim cycles unchanged, 1682 / 1823 and 608); pages and `xsi_system.md` lead
+with the direct form.  Then `write_msg(..., last)` and a `WAVEFLOW_RESYNTH=1 pytest -m xsi` run: 218 of
+221 at once, the 3 others two csynth failures that passed on a rerun (the mimo_cg unit bench's m_axi
+lowering, which its message says to re-run, and markov's core unit, both while a blind build ran Vitis
+beside them) -- **221 passed**, markov and mm_fir gates included (Vitis/Vivado 2025.1).
+
 **Stage 3 -- the guide slice the frames point to.**  The Systems section of the target: the lead page,
 *A system in code*, *The system flow*, *Building a system* -- written new, on D4's vocabulary, every
 step named and linked.  The pages they replace stay in place until Stage 7 moves them; each gets a line
