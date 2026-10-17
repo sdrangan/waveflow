@@ -37,4 +37,7 @@ the harness).
 - each internal link: what it carries per command, its layout, its width and its depth;
 - the boundary messages, the operation bit-exactly, the errors and which stage detects each;
 - the word width and the elements per word;
+- the part and the clock, if the spec sets a clock: csynth targets a Zynq-7020 at 100 MHz unless the
+  top's script names others (`render_tcl(top, part=..., period_ns=...)`; `RFSOC4X2_PART` at 4 ns is
+  the framework's fast part) -- a 7020 does not close 250 MHz;
 - the scenarios, their expected outputs, and any throughput target.

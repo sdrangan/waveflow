@@ -55,4 +55,7 @@ Stage 1 answers each in one line:
 - the operation, bit-exactly: the operation order, every rounding and saturation;
 - the errors the kernel detects, and their status codes;
 - the word width -- one, or several built from one class -- and the elements per word;
+- the part and the clock, if the spec sets a clock: csynth targets a Zynq-7020 at 100 MHz unless the
+  top's script names others (`render_tcl(top, part=..., period_ns=...)`; `RFSOC4X2_PART` at 4 ns is
+  the framework's fast part) -- a 7020 does not close 250 MHz;
 - the scenarios and their expected outputs, and any throughput target.

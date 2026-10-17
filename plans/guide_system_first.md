@@ -258,7 +258,8 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
-- No timed-phase pattern for a data-dependent rate.  `run_dag_cli` exits 0 when a step fails.
+- No timed-phase pattern for a data-dependent rate.  ~~`run_dag_cli` exits 0 when a step fails~~ -- **fixed**
+  2026-10-17 (the build test, below).
 - **Fixed 2026-10-17:** a framed internal link wider than the boundary was declared at the boundary's
   width (`FramedEdge`); it now carries its own, as `StreamEdge` did.  `write_msg` takes no TLAST argument:
   to do after the re-synthesis run (it is in `streamutils_hls.h`).
@@ -296,6 +297,13 @@ before the system and cites `HwSystem(sim, dut)`; citations resolve; whatever re
 rung 5, packet capture (the simplest and the hardest).  A plan can cite every right snippet and still produce
 parts that do not fit together; only a build shows that.  Gate: both reach their RTL gate; every failure
 on the way is a finding, fixed in the frame or the guide, or recorded.
+
+*Record (2026-10-17), rung 1:* built blind from the `stream_kernel` frame, 200 turns, 31 min, 31.5M tokens
+in (99% cached), 96k out.  32 and 64 bits pass every gate at RTL (9/9 scenarios each; 4107 / 2059 cycles
+for 4096 samples, PF samples per cycle); 128 bits was blocked by a framework defect (the harness wrote
+>64-bit words flat) -- fixed, with four more the build found (csynth freshness ignored the `.tcl`;
+`--force-step csynth` did nothing; a failed step exited 0; `validate_schema` failed on a `@dataclass`).
+`evaluation/planning_tests/results/build_01_2026-10-17.md`.
 
 **Stage 7 -- the rest of the guide.**  The target's remaining sections, in an order the read logs of
 Stages 1, 5 and 6 justify: Modules; `flows/` dissolved; Legacy; `nav_order`; a "where this sits in a
