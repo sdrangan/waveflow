@@ -23,9 +23,9 @@ from waveflow.build.system_top import (
 
 
 def _fir(topology: str):
-    from examples.mm_fir.mm_fir import MmFirSystem
+    from examples.mm_fir.mm_fir import mm_fir_system
     from examples.mm_fir.mm_fir_build import PLAN
-    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    sysm = mm_fir_system(x=[0], plan=PLAN, one_front=topology == "one_front")
     return sysm, system_top_spec(sysm.xbar, [sysm.fir], top="mm_fir_top")
 
 

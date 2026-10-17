@@ -20,8 +20,8 @@ from examples.mm_fir.mm_fir import (
     FirCfg,
     FirCmdHdr,
     FirRespHdr,
-    MmFirSystem,
     fir_golden,
+    mm_fir_system,
     host_schedule,
     make_cfg,
 )
@@ -39,7 +39,7 @@ def _x(n=200, seed=7):
 
 
 def _sys(link, one_front, **kw):
-    return MmFirSystem(link=link, one_front=one_front, **kw)
+    return mm_fir_system(link=link, one_front=one_front, **kw)
 
 
 @pytest.mark.parametrize("link,one_front", WIRINGS, ids=WIRING_IDS)
@@ -148,7 +148,7 @@ def test_schedule_cuts_at_switches_and_tags_each_packet():
 
 def test_one_front_needs_a_memory_mapped_link():
     with pytest.raises(ValueError, match="link='mm'"):
-        MmFirSystem(x=[0], plan=[(0, TAPS_A)], link="direct", one_front=True)
+        mm_fir_system(x=[0], plan=[(0, TAPS_A)], link="direct", one_front=True)
 
 
 def test_message_sizes():

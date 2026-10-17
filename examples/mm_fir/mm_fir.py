@@ -384,7 +384,7 @@ class FirHost(SwHost):
     kernel publishes it before each response.  A response must echo: the response must echo the
     packet's ``tx_id`` and the config the plan meant it to use.  The host holds five endpoints and
     never an address, so the same class runs memory-mapped (through the adaptor) and direct (joined
-    straight to the kernel); :class:`MmFirSystem` sets them:
+    straight to the kernel); :func:`mm_fir_system` sets them:
 
     * ``cfg`` -- a ``StreamIFMaster``: one ``write`` is one committed config;
     * ``qin`` -- a ``StreamIFMaster``: one ``write`` is one queue-in packet (a header, or samples);
@@ -527,106 +527,95 @@ class FirHost(SwHost):
         yield from self._reader()
 
 
-@dataclass
-class MmFirSystem(HwSystem):
-    """Everything wired: the host, the kernel, and between them either the bus or nothing.
-
-    ``link="mm"`` (default): host -> crossbar -> {register bank, queue in, queue out} <-> kernel,
-    each view on its own crossbar slot, or all three behind one adaptor port with ``one_front``.
-    ``link="direct"``: the host's four endpoints joined straight to the kernel's -- plain streams,
-    and a :class:`~waveflow.hw.mm_host.LatestValueIF` for the status.  The host class is the same.
-    """
-
-    x: list
-    plan: list
-    pkt: int = 16
-    lag: int = 0
-    stale_tag: bool = False
-    #: Stage 4: all three views behind one adaptor port instead of one crossbar slot each.
-    one_front: bool = False
-    link: str = "mm"
-    xbar_latency: float = XBAR_LATENCY
-    xbar_travel: float = XBAR_TRAVEL
-    clk: Clock = field(default_factory=lambda: Clock(freq=100e6))
-
-    def __post_init__(self) -> None:
-        if self.link not in ("mm", "direct"):
-            raise ValueError(f"link must be 'mm' or 'direct', got {self.link!r}")
-        if self.one_front and self.link != "mm":
-            raise ValueError("one_front chooses a memory-mapped topology; it needs link='mm'")
-        sim = self.sim = Simulation()
-        self.fir = MmFir(name="fir", sim=sim, clk=self.clk)
-        self.host = FirHost(name="host", sim=sim, x=list(self.x), plan=list(self.plan), pkt=self.pkt,
-                            lag=self.lag, stale_tag=self.stale_tag, clk=self.clk)
-        if self.link == "direct":
-            self._wire_direct()
-        else:
-            self._wire_mm()
-
-    def _stream(self, name: str, master, slave, depth: int) -> None:
-        si = StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=DW, depth=depth)
-        si.bind(ep_name="master", endpoint=master)
-        si.bind(ep_name="slave", endpoint=slave)
-
-    def _wire_direct(self) -> None:
-        sim, host, fir = self.sim, self.host, self.fir
-        host.cfg = StreamIFMaster(name="host_cfg", sim=sim, bitwidth=DW, has_tlast=True)
-        host.qin = StreamIFMaster(name="host_qin", sim=sim, bitwidth=DW, has_tlast=True)
-        host.qout = StreamIFSlave(name="host_qout", sim=sim, bitwidth=DW, has_tlast=False)
-        host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
-        host.status = LatestValueIFSlave(name="host_status", sim=sim)
-        self._stream("k_cfg", host.cfg, fir.s_cfg, FirCfg.nwords_per_inst(DW))
-        self._stream("k_in", host.qin, fir.s_in, QDEPTH)
-        self._stream("k_out", fir.m_out, host.qout, QDEPTH)
-        self._stream("k_resp", fir.m_resp, host.qresp, RDEPTH)
-        self.status_if = LatestValueIF(name="k_stat", sim=sim, schema_type=FirStatus, bitwidth=DW,
-                                       clk=self.clk)
-        self.status_if.bind("master", fir.m_status)
-        self.status_if.bind("slave", host.status)
-        self.dut_top = DutTop.of("mm_fir_dut", sim, comps=[fir])
-
-    def _wire_mm(self) -> None:
-        sim, clk = self.sim, self.clk
-        # The kernel's memory-mapped side, built from the views its type declares: behind one front,
-        # or one crossbar slot per view -- the same addresses either way (view k at k * 4 KB).
-        self.device = build_mm_device(self.fir, sim=sim, clk=clk, mem_dwidth=DW,
-                                      one_front=self.one_front)
-        self.regs, self.qin, self.qout, self.qresp = (
-            self.device.views[n] for n in ("regs", "qin", "qout", "qresp"))
-        self.adaptor = self.device.adaptor
-        slaves, ranges = self.device.ranges(MM_BASE)
-        self.xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1,
-                                    nports_slave=len(slaves), bitwidth=DW,
-                                    latency_init=self.xbar_latency,
-                                    latency_travel=self.xbar_travel)
-        self.xbar.bind("master_0", self.host.m)
-        for k, ep in enumerate(slaves):
-            self.xbar.bind(f"slave_{k}", ep)
-        assign_address_ranges(slaves, ranges)
-        self.slave_map = self.device.layout.at(MM_BASE)
-        mm = BoundMemSlaveAdaptor(self.slave_map, self.host.m, poll_cycles=self.host.poll_cycles)
-        self.host.cfg = mm.stream_master("regs")
-        # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.
-        for v in (self.qin, self.qout, self.qresp):
-            line = IrqIF(name=f"{v.name}_irq", sim=sim)
-            line.bind("source", v.m_irq)
-            line.bind("sink", self.host.irq[v.name])
-        self.host.qin = mm.stream_master("qin", irq=self.host.irq["qin"])
-        self.host.qout = mm.stream_slave("qout", irq=self.host.irq["qout"])
-        self.host.qresp = mm.stream_slave("qresp", irq=self.host.irq["qresp"])
-        self.host.status = mm.status("regs")
-        self.dut_top = DutTop.of("mm_fir_dut", sim, comps=[self.device], ifs=[self.xbar])
-
-    def dut(self) -> DutTop:
-        """The default DUT: the FIR kernel's device (or, wired directly, the kernel alone)."""
-        return self.dut_top
-
-    def run(self) -> np.ndarray:
-        self.sim.run_sim(until=self.host.done)
-        return np.asarray(self.host.y, dtype=np.int64)
+def _stream(sim, clk, name: str, master, slave, depth: int) -> StreamIF:
+    si = StreamIF(name=name, sim=sim, clk=clk, bitwidth=DW, depth=depth)
+    si.bind(ep_name="master", endpoint=master)
+    si.bind(ep_name="slave", endpoint=slave)
+    return si
 
 
-def timing_probes(sysm: MmFirSystem) -> dict:
+def _wire_direct(sim, clk, fir, host) -> tuple[DutTop, dict]:
+    """``link="direct"``: the host's four endpoints joined straight to the kernel's -- plain
+    streams, and a :class:`~waveflow.hw.mm_host.LatestValueIF` for the status."""
+    host.cfg = StreamIFMaster(name="host_cfg", sim=sim, bitwidth=DW, has_tlast=True)
+    host.qin = StreamIFMaster(name="host_qin", sim=sim, bitwidth=DW, has_tlast=True)
+    host.qout = StreamIFSlave(name="host_qout", sim=sim, bitwidth=DW, has_tlast=False)
+    host.qresp = StreamIFSlave(name="host_qresp", sim=sim, bitwidth=DW, has_tlast=False)
+    host.status = LatestValueIFSlave(name="host_status", sim=sim)
+    _stream(sim, clk, "k_cfg", host.cfg, fir.s_cfg, FirCfg.nwords_per_inst(DW))
+    _stream(sim, clk, "k_in", host.qin, fir.s_in, QDEPTH)
+    _stream(sim, clk, "k_out", fir.m_out, host.qout, QDEPTH)
+    _stream(sim, clk, "k_resp", fir.m_resp, host.qresp, RDEPTH)
+    status_if = LatestValueIF(name="k_stat", sim=sim, schema_type=FirStatus, bitwidth=DW, clk=clk)
+    status_if.bind("master", fir.m_status)
+    status_if.bind("slave", host.status)
+    return DutTop.of("mm_fir_dut", sim, comps=[fir]), {"status_if": status_if}
+
+
+def _wire_mm(sim, clk, fir, host, one_front, xbar_latency, xbar_travel) -> tuple[DutTop, dict]:
+    """``link="mm"``: host -> crossbar -> {register bank, queue in, queue out} <-> kernel, each view
+    on its own crossbar slot, or all three behind one adaptor port with *one_front*."""
+    # The kernel's memory-mapped side, built from the views its type declares: behind one front,
+    # or one crossbar slot per view -- the same addresses either way (view k at k * 4 KB).
+    device = build_mm_device(fir, sim=sim, clk=clk, mem_dwidth=DW, one_front=one_front)
+    regs, qin, qout, qresp = (device.views[n] for n in ("regs", "qin", "qout", "qresp"))
+    slaves, ranges = device.ranges(MM_BASE)
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=len(slaves),
+                           bitwidth=DW, latency_init=xbar_latency, latency_travel=xbar_travel)
+    xbar.bind("master_0", host.m)
+    for k, ep in enumerate(slaves):
+        xbar.bind(f"slave_{k}", ep)
+    assign_address_ranges(slaves, ranges)
+    slave_map = device.layout.at(MM_BASE)
+    mm = BoundMemSlaveAdaptor(slave_map, host.m, poll_cycles=host.poll_cycles)
+    host.cfg = mm.stream_master("regs")
+    # Each queue view's interrupt line, to the host: the endpoints sleep on these, never poll.
+    for v in (qin, qout, qresp):
+        line = IrqIF(name=f"{v.name}_irq", sim=sim)
+        line.bind("source", v.m_irq)
+        line.bind("sink", host.irq[v.name])
+    host.qin = mm.stream_master("qin", irq=host.irq["qin"])
+    host.qout = mm.stream_slave("qout", irq=host.irq["qout"])
+    host.qresp = mm.stream_slave("qresp", irq=host.irq["qresp"])
+    host.status = mm.status("regs")
+    dut = DutTop.of("mm_fir_dut", sim, comps=[device], ifs=[xbar])
+    return dut, {"device": device, "regs": regs, "qin": qin, "qout": qout, "qresp": qresp,
+                 "adaptor": device.adaptor, "xbar": xbar, "slave_map": slave_map}
+
+
+def mm_fir_system(x: list, plan: list, pkt: int = 16, lag: int = 0, stale_tag: bool = False,
+                  one_front: bool = False, link: str = "mm", xbar_latency: float = XBAR_LATENCY,
+                  xbar_travel: float = XBAR_TRAVEL, clk: Clock | None = None) -> HwSystem:
+    """Everything wired, as ``HwSystem(sim, dut)``: the host, the kernel, and between them either the
+    bus or nothing.  ``link="mm"`` (default): the kernel's device and the crossbar are the DUT;
+    *one_front* (Stage 4) puts all three views behind one adaptor port instead of one crossbar slot
+    each.  ``link="direct"``: the kernel alone is the DUT.  The host class is the same; it is the
+    testbench.  ``run()`` returns ``y`` (int64); the parts are attributes of the system
+    (``sysm.fir``, ``sysm.host``, ``sysm.xbar``, ...)."""
+    if link not in ("mm", "direct"):
+        raise ValueError(f"link must be 'mm' or 'direct', got {link!r}")
+    if one_front and link != "mm":
+        raise ValueError("one_front chooses a memory-mapped topology; it needs link='mm'")
+    clk = clk if clk is not None else Clock(freq=100e6)
+    sim = Simulation()
+    fir = MmFir(name="fir", sim=sim, clk=clk)
+    host = FirHost(name="host", sim=sim, x=list(x), plan=list(plan), pkt=pkt, lag=lag,
+                   stale_tag=stale_tag, clk=clk)
+    if link == "direct":
+        dut, parts = _wire_direct(sim, clk, fir, host)
+    else:
+        dut, parts = _wire_mm(sim, clk, fir, host, one_front, xbar_latency, xbar_travel)
+    sysm = HwSystem(sim, dut, run_until=host.done,
+                    check=lambda s: np.asarray(host.y, dtype=np.int64),
+                    fresh=lambda: mm_fir_system(x, plan, pkt, lag, stale_tag, one_front, link,
+                                                xbar_latency, xbar_travel, clk))
+    sysm.clk, sysm.link, sysm.fir, sysm.host = clk, link, fir, host
+    for k, v in parts.items():
+        setattr(sysm, k, v)
+    return sysm
+
+
+def timing_probes(sysm: HwSystem) -> dict:
     """Timing probes: one-bit handshakes the system top exposes as outputs when built with probes
     (``mm_fir_build.build_dag(probes=True)``, or ``--probes``); the testbench samples them every cycle
     and prints the cycles each fired.  Off for the gate.  Each names the kernel port it watches; the
@@ -649,7 +638,7 @@ def demo(seed: int = 7, nsamp: int = 200, switch_at: int = 96) -> dict:
     rng = np.random.default_rng(seed)
     x = rng.integers(-2000, 2000, size=nsamp)
     plan = [(0, [3, -1, 4, 1, -5]), (switch_at, [2, 7, 1, -8, 2, 8, 1, -8])]
-    sysm = MmFirSystem(x=list(x), plan=plan)
+    sysm = mm_fir_system(list(x), plan)
     y = sysm.run()
     return {"x": x, "y": y, "golden": fir_golden(x, plan), "status": sysm.host.final_status,
             "cycles": sysm.sim.env.now / sysm.clk.period}
