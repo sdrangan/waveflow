@@ -690,9 +690,15 @@ class FramedEdge:
     master_ep: object
     slave_ep: object
     depth: int | None = None
+    #: The channel's own payload width, as :attr:`StreamEdge.bitwidth`: a framed link wider than the
+    #: design's boundary (16 correlations a codeword between two stages on 64-bit ports) is declared at
+    #: its own width, which is what the tasks' ``framed_word<W>`` template arguments already say.
+    #: ``None`` keeps the old behaviour exactly.
+    bitwidth: int | None = None
 
     def decl(self, width: int) -> str:
-        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
+        w = width if self.bitwidth is None else int(self.bitwidth)
+        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{w}> > "
                 f"{self.name};")
         if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
             # See StreamEdge.decl: the default depth is HLS's own, so no pragma for it (keeps the
@@ -845,7 +851,8 @@ def derive_internal_edges(comp) -> list:
                     f"the StreamIF a depth (default {DEFAULT_STREAM_DEPTH}), or keep it unbounded only "
                     f"for pysim exploration, not for codegen.")
             if getattr(iface, "framed", False):
-                edges.append(FramedEdge(name, master, slave, depth=depth))
+                edges.append(FramedEdge(name, master, slave, depth=depth,
+                                        bitwidth=getattr(iface, "bitwidth", None)))
             else:
                 edges.append(StreamEdge(name, master, slave, depth=depth,
                                         bitwidth=getattr(iface, "bitwidth", None)))
@@ -1080,7 +1087,7 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     if isinstance(edge, SobEdge):
         kind, payload = "sob", edge.elem_bw
     elif isinstance(edge, FramedEdge):
-        kind, payload = "framed", width
+        kind, payload = "framed", (width if edge.bitwidth is None else int(edge.bitwidth))
     else:
         # The channel's own width when it has one -- see StreamEdge.bitwidth.  This number is read
         # back by the VCD tooling to split a trace, so it has to be the width the RTL net actually

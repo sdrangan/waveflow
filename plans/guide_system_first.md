@@ -258,6 +258,9 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
 - No timed-phase pattern for a data-dependent rate.  `run_dag_cli` exits 0 when a step fails.
+- **Fixed 2026-10-17:** a framed internal link wider than the boundary was declared at the boundary's
+  width (`FramedEdge`); it now carries its own, as `StreamEdge` did.  `write_msg` takes no TLAST argument:
+  to do after the re-synthesis run (it is in `streamutils_hls.h`).
 - A queue-in packet longer than the queue cannot be written on the interrupt (the waiting `write` needs
   room for all of it; splitting puts TLAST on each piece) -- the input queue must hold the largest
   command.  A harness run with no host reports no cycle count (`cycles: -1`).
