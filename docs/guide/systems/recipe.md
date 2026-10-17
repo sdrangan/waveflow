@@ -43,7 +43,8 @@ Each step names where to start. Do not move on until a step's gate passes.
    `harness(Module, workload=...)` puts a stand-in at each port. *Gate:* pysim bit-exact against the
    golden. Then its HLS body behind `kernel_task()` and the build steps, and *gate:* the harness through
    `compare`, RTL against pysim. *Start from:* [the polynomial's kernel](../../examples/stream_kernel/kernel.md)
-   and [its system flow](../../examples/stream_kernel/system_flow.md);
+   and [its system flow](../../examples/stream_kernel/system_flow.md); for a composite,
+   [the block equalizer](../../examples/block_eq/index.md) (each stage alone, then the composite);
    [Developing module by module](../flows/units.md).
 4. **The system.** The modules on one simulation, the devices built from the kernels' views, the
    interfaces bound, the host if there is one, then `HwSystem(sim, dut)`. *Gate:* pysim bit-exact.
@@ -51,7 +52,9 @@ Each step names where to start. Do not move on until a step's gate passes.
    [Two kernels on a bus](../../examples/markov/index.md) for several devices and a memory.
 5. **The system flow.** The build DAG -- the example's `codegen`, then `add_system_steps` -- on
    `run_dag_cli`. *Gate:* `compare`, the system's RTL against its pysim; with a host, its traces at RTL
-   identical to pysim's and no polls ([The system flow](../build/xsi_system.md#running-it)).
+   identical to pysim's and no polls ([The system flow](../build/xsi_system.md#running-it)). csynth
+   targets a Zynq-7020 at 100 MHz unless a top's script names a part and clock
+   (`render_tcl(top, part=..., period_ns=...)`): a faster clock needs a faster part.
 6. **Timing, when the spec asks for numbers.** Declare each kernel's
    [timed phases](../timing_model/timed_phases.md) and calibrate them in its harness
    (`add_calib_steps`); the system's pysim then composes them, and its cycle count is checked against

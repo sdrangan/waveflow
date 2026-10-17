@@ -61,6 +61,7 @@ larger size:
 | system | the DUT | the testbench | worked example |
 |---|---|---|---|
 | one kernel on streams | a free-running kernel | its harness: a stream driver and sinks | [Free-running polynomial](../../examples/stream_kernel/index.md) |
+| a pipeline of kernels on streams | a composite: a broadcast and two stages, joined by internal streams | its harness; each stage alone in its own | [Block equalizer](../../examples/block_eq/index.md) |
 | one kernel on a bus | the same kernel as a device, and the crossbar | a two-thread `SwHost` | [Behind AXI-MM](../../examples/stream_kernel/memory_mapped.md) |
 | a pipeline with memory | a composite of free-running tasks, memory through stream adaptors | stream drivers, sinks, a memory model | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) |
 | several kernels, a memory, a host | devices, a memory, the crossbar | a `SwHost` | [Two kernels on a bus](../../examples/markov/index.md) |
