@@ -20,7 +20,8 @@ The specs form a ladder, each rung reusing the one below:
 | # | spec | the system |
 |---|---|---|
 | 1 | [01_qam16_llr.md](01_qam16_llr.md) | one free-running kernel on streams in the shape of the `stream_kernel` example, `PF` lanes, fixed point |
-| 2 | [02_block_eq.md](02_block_eq.md) | two input streams, two stages at fixed rates, a division, float32 bit-exact |
+| 1b | [01b_qam16_llr_bus.md](01b_qam16_llr_bus.md) | rung 1's kernel behind AXI-MM, a two-thread host |
+| 2 | [02_hamming_decode.md](02_hamming_decode.md) | a two-stage pipeline (16 correlations, then a 16-way select), the algorithm given |
 | 3 | [03_peak_detect.md](03_peak_detect.md) | two stages at a rate that depends on the data, a wide link serialized, a tagged union |
 | 3b | (later) the peak detector, architecture open | the same boundary and test plan, no stages given: does the agent find the split? |
 | 4 | (to write) FFT matched-filter detector | a pipeline around the framework FFT, rung 3's detector at its end |
@@ -35,3 +36,5 @@ waveflow blind-test --prompt evaluation/planning_tests/01_qam16_llr.md
 ```
 
 This directory is outside `docs/` and `examples/`, so the knowledge index never serves it to an agent.
+
+`retired/` holds specs that became worked examples -- `02_block_eq` is the equalizer example's spec -- and so no longer test anything: an agent could copy the example.
