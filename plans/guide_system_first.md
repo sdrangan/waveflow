@@ -221,6 +221,45 @@ whether a module was verified alone, the pages read, tokens.  Expected, and to b
 refuted: rung 1 goes to the `stream_inband` frame (the only one-kernel frame); no plan verifies a
 module alone; the system steps cite subclasses or `GraphSystem`.
 
+*Record (2026-10-17):* one run each of rungs 1-3 (`evaluation/planning_tests/results/baseline_2026-10-17.md`).
+Every plan would build with small fixes: the agents found `stream_kernel` from the example cards with no
+frame (the menu offered three wrong ones), followed it closely, used `harness` -- per stage, at rungs 2
+and 3 -- and found four errors in the specs (fixed) and a dozen real framework gaps (below).  **The user
+then changed the method:** do not baseline the complex rungs further -- the docs and frames must be
+rewritten regardless, so the delta is not the point.  **Write and test in tandem:** each concept the
+guide or a frame explains gets a blind test when it is written; rungs that need it get new examples.
+
+**Framework items the baseline surfaced** (each recorded with its evidence in the results file):
+
+- **`DataUnion` is not a `DataSchema`** (the user, 2026-10-17: it should derive from the base class).
+  It has its own serializer and C++ struct, so none of the base's generated readers and writers --
+  array, stream, AXI4-Stream, framed -- reach it, and a stream's `write` takes it only as words.
+  Deriving it from `DataSchema` gives all of them through one hook (`_gen_write_recursive` /
+  `_gen_read_recursive`: the header's fields, then a `switch` on `schema_id`).  **To decide first:**
+  fixed size (padded to the largest payload, as today -- `nwords_per_inst` constant, the base machinery
+  as is) or variable length (a reader reads the tag, then the variant's own words -- what a
+  variable-length output wants, a larger change to the base).  **DECIDED (the user, 2026-10-17): fixed
+  length**, and the documentation says so (`schema/python/dataunion.md`, *Fixed length, by design*).
+  The refactor to derive from `DataSchema` is still to do.
+- A Python framed `write` is one burst: no way to write a burst in pieces (TLAST low).  **Deliberate**
+  (the user, 2026-10-17): a write in pieces would invite serializing and deserializing by hand.  The
+  cost -- data-dependent structures (a variable number of records, a `DataUnion` per record) cannot be
+  written as they are made -- is acknowledged, to be addressed later.
+- A stage's hand-written body cannot be RTL-harnessed alone: its ports are `framed_word<W>` inside a
+  composite, `axi4s_word<W>` as a top.
+- No TKEEP / lane count through the lane routines (a partial last word is invisible).
+- `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
+  example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
+- No timed-phase pattern for a data-dependent rate.  `run_dag_cli` exits 0 when a step fails.
+- A queue-in packet longer than the queue cannot be written on the interrupt (the waiting `write` needs
+  room for all of it; splitting puts TLAST on each piece) -- the input queue must hold the largest
+  command.  A harness run with no host reports no cycle count (`cycles: -1`).
+
+*Record (2026-10-17, overnight):* written and tested in tandem -- the `stream_kernel` frame (rung 1: chosen
+from the menu, -36% tokens, every probe), `docs/guide/systems/` (the lead page and the recipe), `bus_system`
+pointed at `stream_kernel_mm` for one device and new test `01b` (one kernel on a bus: every must-have).
+Results in `evaluation/planning_tests/results/baseline_2026-10-17.md`.
+
 **Stage 2 -- the references.**  markov and mm_fir to `HwSystem(sim, dut)` (D3), their gates unchanged
 (markov 1870 cycles at RTL, pysim -1.6%); their example pages updated.  `stream_kernel` checked for
 the stub anchors a scaffold needs.

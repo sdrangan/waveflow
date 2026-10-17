@@ -44,7 +44,29 @@ the framework's (`add_system_steps`, [The system flow](../../guide/build/xsi_sys
 - `compare` -- each sink's recording, RTL against pysim, word for word.
 
 `compare` is the gate: the RTL's headers, results and statuses are the ones pysim's are -- including the
-fatal `TLAST_EARLY` and the silence after it -- and pysim's are the golden's ([`test_stream_kernel.py`](../../../tests/examples/test_stream_kernel.py)).
+fatal `TLAST_EARLY` and the silence after it -- and pysim's are the golden's.
+
+## Checking pysim against the golden
+
+`compare` checks RTL against pysim; pysim against the golden is checked before it, from the harness's
+sinks. Each `StreamSink` keeps what it recorded as `words`, one array per burst, so the check is a
+comparison of bursts ([`test_stream_kernel.py`](../../../tests/examples/test_stream_kernel.py)):
+
+```python
+sysm = harness(PolyKernel, workload="test")
+sysm.run()                                                     # pysim
+got = {p: [np.asarray(b, dtype=np.uint64) for b in sysm.stand_ins[p].words]
+       for p in ("m_out", "m_status")}
+want_out, want_status = expected(default_cmds())               # from the intents
+assert len(got["m_out"]) == len(want_out) and len(got["m_status"]) == len(want_status)
+for g, w in zip(got["m_out"] + got["m_status"], want_out + want_status):
+    np.testing.assert_array_equal(g, w)                        # bit for bit, burst for burst
+```
+
+A burst is what TLAST closed, so comparing burst lists checks the framing too: a header and its results
+are two bursts, a short results burst is short, and after the fatal error there are no more. To read a
+burst as a message, deserialize it with its schema -- `Status().deserialize(words, word_bw=W)` -- never
+by hand.
 
 A build that changed nothing does no work: every system step is fresh while what it reads is unchanged
 ([freshness](../../guide/build/xsi_system.md#system-freshness)).

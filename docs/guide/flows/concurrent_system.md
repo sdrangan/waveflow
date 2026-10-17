@@ -74,7 +74,7 @@ HwSystem  --dut()-->  DutTop  --walk-->  SystemTopSpec  --render_verilog()-->  <
 
 Because every later step reads that one spec, the simulated top, the synthesized top and each
 device's IP cannot disagree. One device can also be rendered alone. That is what a per-device
-synthesis or an IP is built from, and what [Systems](../resource/systems.md#per-device) measures.
+synthesis or an IP is built from, and what [System resources](../resource/systems.md#per-device) measures.
 
 What the spec holds, how to construct it, and its parameters are in
 [The system top: `SystemTopSpec`](../build/xsi_system.md#the-spec).

@@ -117,7 +117,7 @@ this page.
 
 `spec.instances()` lists the fifteen instances `markov_top.v` holds -- four kernels, ten hand-written
 leaves, the crossbar -- each with the pysim object it realizes. Four more steps price them
-([Systems](../../guide/resource/systems.md)):
+([System resources](../../guide/resource/systems.md)):
 
 ```bash
 python markov_build.py --through resource_report --platform <name>            # seconds
