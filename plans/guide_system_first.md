@@ -320,6 +320,12 @@ reordered ahead of `wait_room` deadlocks at RTL (the guard); `SwHost`'s master s
 host does; `wf_cint.h` written by `ArrayUtilsStep`.
 `evaluation/planning_tests/results/build_05_2026-10-17.md`.  **Stage 6 gate met: both reach their RTL gate.**
 
+*Record (2026-10-17):* `WAVEFLOW_RESYNTH=1 pytest -m xsi` after those fixes: **219 passed**, markov's exact
+gates unchanged with the guard; the 2 others the mimo_cg unit bench's csynth dropping its `m_axi`
+bundles (HLS 214-450, a Vitis 2025.1 nondeterminism: 3 of 5 unchanged runs) -- passed on a rerun.
+`run_vitis_hls` now re-runs such a csynth once by itself (`unlowered_maxi_bundles`;
+`tests/build/test_maxi_rerun.py`).
+
 **Stage 7 -- the rest of the guide.**  The target's remaining sections, in an order the read logs of
 Stages 1, 5 and 6 justify: Modules; `flows/` dissolved; Legacy; `nav_order`; a "where this sits in a
 system" line in each reference section's page summaries; the guide index; CLAUDE.md's *Designing an
