@@ -250,6 +250,10 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
   supplies (`framed_word` inside a composite, `axi4s_word` at a top), "so one body serves a composite
   and the kernel's own harness" (`waveflow/hw/mem_stream.py`; markov uses it).  The real finding is a
   **doc** one: a careful agent concluded it did not exist.  The guide must show it.
+  **Done 2026-10-17:** `docs/guide/comp_codegen/freerunning_override.md#framed`, and the helpers a body
+  needs to never name a word type -- `streamutils::read_msg` (beside `write_msg`) and every element's
+  `read_boundary_lane` / `write_boundary_lane`.  Both headers are copied into every example: a full
+  re-synthesis precedes the next full `-m xsi` run.
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
