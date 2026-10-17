@@ -228,7 +228,7 @@ len(spec.instances())                        # 15
 |---|---|
 | `render_verilog` / `render_system_top` | the Verilog itself |
 | `system_tb_spec`, `render_system_tb` | the XSI harness: which host model binds to which top port |
-| `system_synth` ([Systems](../resource/systems.md)) | joining Vivado's per-instance report to the inventory, by path |
+| `system_synth` ([System resources](../resource/systems.md)) | joining Vivado's per-instance report to the inventory, by path |
 | `estimate_system` | pricing each instance from the record store |
 | `measure_instances` (`rtl_ooc`) | the leaves to synthesize out of context |
 
