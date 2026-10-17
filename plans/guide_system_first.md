@@ -1,6 +1,6 @@
 # Plan: system first -- the guide and the MCP frames, restructured around the system, led by evidence
 
-**Status:** drafted 2026-10-16, before any change.  The guide is built bottom-up (schema -> interfaces ->
+**Status:** drafted 2026-10-16, before any change; D9 (the protocol pattern) and Stage 0a added the same day, with the user.  The guide is built bottom-up (schema -> interfaces ->
 simulation -> flows -> codegen), and the system arrives halfway through, three levels deep.  This plan
 turns it around -- *Waveflow models concurrent systems* -- and restructures the MCP frames on the same
 model, because **most users of Waveflow are now agents**, and an agent meets the frames first and the
@@ -75,6 +75,31 @@ Proposed 2026-10-16; each is confirmed or changed with the user before the stage
   and is run before any change and after the frames are rewritten.
 - **D8 -- reorder, do not regroup.**  Sections move by `nav_order`; no new parent pages above existing
   sections (Just the Docs binds `parent:` by title string, `reference-docs-nav-title-collision`).
+- **D9 -- DECIDED 2026-10-16 (the user): the default command-response protocol has a data plane and a
+  status plane, and an error is fatal.**  Three streams:
+
+      s_in       : Cmd(tx_id, nsamp, ...) | data
+      m_out      : Resp(tx_id, nsamp)     | data          framed as s_in: the header a burst, the data a burst
+      m_status   : Status(tx_id, status)                  one per command, after its data
+
+  - **Normal:** the data, then `Status(tx_id, OK)`.  The status is *the last command seen*: on a bus it
+    maps to a status register, and on real hardware it is how one sees the kernel is alive.
+  - **Error** (an early TLAST, a bad parameter): the kernel closes `m_out` with TLAST, possibly before
+    the data is complete, writes `Status(tx_id, <error>)`, and **stops taking `s_in`**.  Only a reset
+    recovers.  An error is a sender's bug, not an operating condition.
+  - **`nsamp` in the `Resp` header** lets any consumer size the data from the stream itself -- needed
+    behind the bus, where the memory-mapped output queue drops TLAST (`slave_views.md`, *Queue out*).
+    In the error case the data is short, but the error is fatal anyway.
+  - **On the bus:** `m_status` -> a status register **with an interrupt** on an error; the host waits
+    on data and on that interrupt, never polls, and keeps a timeout as the backstop against a hang
+    with no status written, after which it reads the register and resets.
+  - **Variable-length output** (the count is unknown until the end, e.g. detections): `m_out` is a
+    tagged union with an in-band end -- `START(tx_id) | item ... | END(tx_id, count)` in one burst --
+    and `m_status` is unchanged.  There is no way to avoid the in-band `END`.
+
+  It replaces poly's "errors are answered, not halted on" (`stream_kernel` today: results, then a
+  response carrying the status; the kernel takes the next command).  Stage 0a moves the pattern page
+  and poly to it before any spec cites them.
 
 ## The target
 
@@ -111,27 +136,67 @@ hand-write it* framing moves to the Modules section, as the relation between 3 a
 
 ## Stages
 
-**Stage 0 -- the test cases.**  Planning-only prompts and their scoring, so Stages 1 and 5 measure the
-same thing.  Deliverables, in `examples/mcp_test/plan_only/`:
+**Stage 0a -- the pattern, then its reference (D9).**  Before any spec cites them:
 
-- **Four specs**, naming no frame and no example, one per rung of the ladder, each small enough that
-  its plan fits on a page:
+1. **The pattern page** (`docs/guide/patterns/command_response.md`): the three streams; the header with
+   `nsamp`; the status as the last command seen; an error closes the data, reports, and stops; how
+   each stream maps onto the bus (queues for data, a status register with an interrupt); the
+   variable-length variant (a tagged union ending in `END`); and why -- the counting a consumer can and
+   cannot do, read order across streams, zero-length outputs.
+2. **poly (`examples/stream_kernel`)** moved to it: `Resp(tx_id, nsamp)` heads the results, `Status` on
+   its own stream, an early TLAST fatal (the kernel stops taking `s_in`).  The golden, `run_iter`, the
+   HLS body, `PolyHost` (it sizes the results from the header, and waits on the status interrupt),
+   the tests, the protocol pages.  Re-checked: the RTL gate, the calibration (it should not move:
+   fill depends on `nwords`), the composition behind the bus (+1.0%) and the device alone (+3.2%), and
+   Stage 5's hostile policies, which assume the kernel goes on after an error.
+3. **Open, to check first:** how a halted kernel is gated (the error command last; the gate asserts
+   the kernel consumed nothing after it), and whether a reset in the middle of a run can be exercised at
+   RTL at all (`reference-hls-task-reset-trap`).
 
-  | spec | the system | expected frame (after Stage 4) | expected references |
+Gate: the pattern page and `stream_kernel` agree; every `stream_kernel` gate green with its numbers
+re-recorded.
+
+*Record (2026-10-16):* done.  `m_out` frames as `s_in` does -- the `Resp` header its own burst, then
+the data -- not one burst: in pysim one write is one burst, and nothing in D9 needs a single one (behind
+the bus TLAST is gone; the count is in the header).  The stop is a `static bool halted` under `#pragma
+HLS reset` in the task body (an early return per firing; precedent `mm_fir`'s per-firing statics) and
+`yield self.event()` in `run_iter`; the harness's `n_cycles` bound ends the run, and the gate is the
+recordings: at RTL, four commands answered, the fourth short (6 of 20), the fifth silent -- identical to
+pysim.  Re-measured (Vitis/Vivado 2025.1): calibration latency 29 (was 30), fill `nwords - 1`, status 1
+(the old response 4), held-out exact, record `poly_kernel-062ade1d` (the old key removed); behind the
+crossbar 392 pysim / 385 RTL, +1.8% (was +1.0%); the device alone 383 / 370, +3.5% (was +3.2%); host
+traces identical, zero polls.  The host runs `good_cmds()`: the bus-side error path (a status register
+with an interrupt, a reset) needs a status-only register view -- the register bank requires a config
+port and raises no interrupt -- so `m_status` maps to a queue for now.  Found on the way: `run_dag_cli`
+exits 0 when a step fails (a stale `report.json` then reads as a result).
+
+**Stage 0b -- the test cases.**  Planning-only prompts and their scoring, so Stages 1 and 5 measure the
+same thing.  Deliverables, in `evaluation/planning_tests/` (outside `docs/` and `examples/`, so the
+knowledge index never serves them):
+
+- **A ladder of specs** from communications, the target application, each rung adding one difficulty
+  and reusing the one below.  Each spec gives the boundary exactly (fields, widths, order, framing,
+  errors -- the packing is the agent's), the architecture in words, the operation with worked examples,
+  and the test plan.  Agreed with the user 2026-10-16:
+
+  | # | spec | what it adds | expected reference |
   |---|---|---|---|
-  | `gain_clip_stream` | a function on a stream: a command (`tx_id`, `n`, a gain), `n` int16 samples, scaled, rounded and saturated; a response echoing the command with a clip count; a short burst answered, not halted on | `stream_kernel` | stream_kernel |
-  | `gain_clip_device` | the same kernel reached by a host over AXI-MM: queues in and out, the host on interrupts, two jobs in flight, no polling | `bus_system` | stream_kernel_mm |
-  | `scale_copy` | read a vector from on-chip memory, scale it, write it back, started by a command stream; no host program on a bus | `freerun_pipeline` | memcpy |
-  | `abc_system` | kernels A (scale), B (a running sum per block) and C (a histogram into a shared on-chip memory), A -> B direct, B -> C over the bus with credit, a host that sends jobs and reads the histogram back on an interrupt | `bus_system` | markov |
+  | 1 | `01_qam16_llr`: a 16-QAM max-log soft demapper, fixed point, `WORD_BW` 32/64/128 at `PF` samples a cycle | the flow itself, in `stream_kernel`'s shape | stream_kernel |
+  | 2 | block equalizer: `g[i] = conj(h[i]) / (|h[i]|^2 + N[i])`, then `z[i,j] = g[i] r[i,j]` | two input streams, two stages at fixed rates, a division | stream_kernel, interleaver |
+  | 3 | `03_peak_detect`: peaks of a correlation metric, two stages (`detect`, `serialize`) | a rate that depends on the data, a wide link serialized, a tagged union ending in `END`, a search over `PF` lanes | stream_kernel, interleaver |
+  | 3b | the peak detector with the architecture left open | does the agent find the split?  (after the baseline) | -- |
+  | 4 | FFT matched-filter detector | a pipeline around the framework FFT, rung 3's detector at its end | ssr_fft, interleaver |
+  | 5 | packet capture | rung 4's detector, a capture kernel, a shared memory, a host | markov |
 
-- **One deliverable format, stated in every spec:** the agent writes no code; it writes `plan.md` --
-  (a) the frame or reference it chose and why; (b) the DUT tree and the testbench; (c) the build as
-  ordered steps, each naming the Waveflow API it uses and the **exact snippet it would start from**, as
-  `example:file::symbol` or `docs/...md#anchor`; (d) the gates, and what each checks; (e) what it could
-  not find.  Then it stops.
-- **A reference plan per spec** (`<spec>.reference.md`), written by hand from the tree as it will be after
-  Stage 4: the frame, the DUT tree, the steps, the snippets.  It is the answer key, not shown to agents.
-- **A scorer** (`plan_grader.py`, beside `examples/mcp_test/grader/rotate_grader.py`), reading the trial
+- **One deliverable format** (`deliverable.md`, linked by every spec, so `blind-test` copies it): the
+  agent writes no code; it writes `plan.md` -- the approach and its reference, the modules, the
+  interfaces and messages with each one's word layout, the verification mapped onto Waveflow, the
+  gaps -- each item citing the snippet it starts from (`example:<name>/<file>::<symbol>`,
+  `docs/...md#anchor`, `waveflow.<module>.<symbol>`).  Then it stops.
+- **A reference plan per spec** (`answers/<spec>.reference.md`, linked by no spec): what a good plan
+  holds, what may differ, what counts against it, and the probes recorded but not scored.  It is the
+  answer key, never shown to agents.
+- **A scorer** (`plan_grader.py`, in `evaluation/planning_tests/`), reading the trial
   folder's `plan.md` and the run's `summary.md`:
 
   | measure | how |
@@ -150,11 +215,11 @@ same thing.  Deliverables, in `examples/mcp_test/plan_only/`:
 Gate: one spec run end to end through `waveflow blind-test --prompt ...` and scored; the scorer's output
 checked by hand against the plan it scored.
 
-**Stage 1 -- the baseline.**  The four specs on the unchanged tree (`main` at the start of the plan),
-each run twice (agents vary), scored.  Recorded below: the frame chosen, the system form, whether a
-module was verified alone, the pages read, tokens.  Expected, and to be confirmed or refuted:
-`gain_clip_stream` goes to `stream_inband`; no plan verifies a module alone; the system steps cite
-subclasses or `GraphSystem`.
+**Stage 1 -- the baseline.**  The specs on the tree after Stage 0a and before any frame or guide
+change, each run twice (agents vary), scored.  Recorded below: the frame chosen, the system form,
+whether a module was verified alone, the pages read, tokens.  Expected, and to be confirmed or
+refuted: rung 1 goes to the `stream_inband` frame (the only one-kernel frame); no plan verifies a
+module alone; the system steps cite subclasses or `GraphSystem`.
 
 **Stage 2 -- the references.**  markov and mm_fir to `HwSystem(sim, dut)` (D3), their gates unchanged
 (markov 1870 cycles at RTL, pysim -1.6%); their example pages updated.  `stream_kernel` checked for
@@ -177,8 +242,8 @@ project through pysim.
 scorer.  Gate: every spec chooses its expected frame in both runs; every plan verifies modules alone
 before the system and cites `HwSystem(sim, dut)`; citations resolve; whatever regressed is explained.
 
-**Stage 6 -- a full build.**  Two specs built for real, through the RTL gates: `gain_clip_stream` and
-`abc_system` (the simplest and the hardest).  A plan can cite every right snippet and still produce
+**Stage 6 -- a full build.**  Two specs built for real, through the RTL gates: rung 1 (`01_qam16_llr`) and
+rung 5, packet capture (the simplest and the hardest).  A plan can cite every right snippet and still produce
 parts that do not fit together; only a build shows that.  Gate: both reach their RTL gate; every failure
 on the way is a finding, fixed in the frame or the guide, or recorded.
 
