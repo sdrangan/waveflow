@@ -246,6 +246,14 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
 - No timed-phase pattern for a data-dependent rate.  `run_dag_cli` exits 0 when a step fails.
+- A queue-in packet longer than the queue cannot be written on the interrupt (the waiting `write` needs
+  room for all of it; splitting puts TLAST on each piece) -- the input queue must hold the largest
+  command.  A harness run with no host reports no cycle count (`cycles: -1`).
+
+*Record (2026-10-17, overnight):* written and tested in tandem -- the `stream_kernel` frame (rung 1: chosen
+from the menu, -36% tokens, every probe), `docs/guide/systems/` (the lead page and the recipe), `bus_system`
+pointed at `stream_kernel_mm` for one device and new test `01b` (one kernel on a bus: every must-have).
+Results in `evaluation/planning_tests/results/baseline_2026-10-17.md`.
 
 **Stage 2 -- the references.**  markov and mm_fir to `HwSystem(sim, dut)` (D3), their gates unchanged
 (markov 1870 cycles at RTL, pysim -1.6%); their example pages updated.  `stream_kernel` checked for
