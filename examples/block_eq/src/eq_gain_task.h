@@ -18,7 +18,7 @@
 #include "float32_array_utils.h"
 #include "cmd_hdr.h"
 #include "gain_hdr.h"
-#include "block_eq_io.h"
+
 
 #ifndef EQ_MAX_ROWS
 #define EQ_MAX_ROWS 64
@@ -35,7 +35,7 @@ static void eq_gain_task(hls::stream<TI>& s_in, hls::stream<TO>& m_g) {
 
     // 1. the command and the estimates
     CmdHdr hdr;
-    beq_io::read_msg<W>(hdr, s_in);
+    streamutils::read_msg<W>(hdr, s_in);
     const int nrows = hdr.nrows;
     const int m = hdr.m;
     const int nf = 3 * nrows;
@@ -49,7 +49,7 @@ EST:
     for (int i = 0; i < nf; i += 2) {
 #pragma HLS PIPELINE II=1
         streamutils::tlast_status ts = streamutils::tlast_status::no_tlast;
-        beq_io::read_lane<W>(s_in, lane, nf - i, ts);
+        float32_array_utils::read_boundary_lane<W>(s_in, lane, nf - i, ts);
         est[i] = lane[0];
         if (i + 1 < 3 * EQ_MAX_ROWS) {
             est[i + 1] = lane[1];
@@ -102,7 +102,7 @@ G:
 #pragma HLS ARRAY_PARTITION variable=out complete dim=1
         out[0] = gr[r];
         out[1] = gi[r];
-        beq_io::write_lane<W>(out, m_g, r == nvalid - 1, 2);
+        float32_array_utils::write_boundary_lane<W>(out, m_g, r == nvalid - 1, 2);
     }
 
     // 4. keep consuming: this copy of the symbols, discarded
@@ -112,7 +112,7 @@ SYM:
     for (int i = 0; i < ns; i += 2) {
 #pragma HLS PIPELINE II=1
         streamutils::tlast_status ts = streamutils::tlast_status::no_tlast;
-        beq_io::read_lane<W>(s_in, lane, ns - i, ts);
+        float32_array_utils::read_boundary_lane<W>(s_in, lane, ns - i, ts);
         if (ts == streamutils::tlast_status::tlast_at_end && ns - i > 2) {
             sym_early = true;
             break;

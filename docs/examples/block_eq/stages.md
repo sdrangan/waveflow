@@ -81,9 +81,10 @@ hls_thread_local hls::task t1(eq_gain_task<64, framed_word<64>, framed_word<64>>
 hls_thread_local hls::task t2(eq_apply_task<64, framed_word<64>, framed_word<64>, axi4s_word<64>, axi4s_word<64>>, est_apply, g, m_out, m_status);
 ```
 
-A body reads and writes through overloads that pick the generated routine for the type
-([`block_eq_io.h`](../../../examples/block_eq/src/block_eq_io.h)): a schema's `read_framed_stream` or
-`read_axi4_stream`, the float32 lane routines' `read_framed_stream_lane` or `read_axi4_stream_lane`.
+A body reads and writes through the framework's helpers that take either word type -- a schema with
+`streamutils::read_msg` / `write_msg`, a word of float32s with `float32_array_utils::read_boundary_lane` /
+`write_boundary_lane` -- so it never names one ([One body, wherever it
+sits](../../guide/comp_codegen/freerunning_override.md#framed)).
 
 Inside, the bodies are the [lane loop](../../guide/vectorization/hls/loop_optimization.md): a word per
 iteration at II=1, every float operation its own statement (no fused multiply-add), and a `static bool

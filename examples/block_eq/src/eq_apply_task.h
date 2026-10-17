@@ -20,7 +20,7 @@
 #include "gain_hdr.h"
 #include "resp.h"
 #include "status.h"
-#include "block_eq_io.h"
+
 
 #ifndef EQ_MAX_ROWS
 #define EQ_MAX_ROWS 64
@@ -38,7 +38,7 @@ static void eq_apply_task(hls::stream<TI>& s_in, hls::stream<TG>& s_g, hls::stre
 
     // 1. the command, then this copy of the estimates, discarded
     CmdHdr hdr;
-    beq_io::read_msg<W>(hdr, s_in);
+    streamutils::read_msg<W>(hdr, s_in);
     const int nrows = hdr.nrows;
     const int m = hdr.m;
     const int nf = 3 * nrows;
@@ -48,7 +48,7 @@ EST:
     for (int i = 0; i < nf; i += 2) {
 #pragma HLS PIPELINE II=1
         streamutils::tlast_status ts = streamutils::tlast_status::no_tlast;
-        beq_io::read_lane<W>(s_in, lane, nf - i, ts);
+        float32_array_utils::read_boundary_lane<W>(s_in, lane, nf - i, ts);
         if (ts == streamutils::tlast_status::tlast_at_end && nf - i > 2) {
             break;
         }
@@ -56,7 +56,7 @@ EST:
 
     // 2. g, from gain
     GainHdr gh;
-    beq_io::read_msg<W>(gh, s_g);
+    streamutils::read_msg<W>(gh, s_g);
     const int nvalid = gh.nvalid;
     float gr[EQ_MAX_ROWS];
     float gi[EQ_MAX_ROWS];
@@ -64,7 +64,7 @@ G:
     for (int r = 0; r < nvalid; ++r) {
 #pragma HLS PIPELINE II=1
         streamutils::tlast_status ts = streamutils::tlast_status::no_tlast;
-        beq_io::read_lane<W>(s_g, lane, 2 * (nvalid - r), ts);
+        float32_array_utils::read_boundary_lane<W>(s_g, lane, 2 * (nvalid - r), ts);
         gr[r] = lane[0];
         gi[r] = lane[1];
     }
@@ -85,7 +85,7 @@ SYM:
     for (int i = 0; i < need; ++i) {
 #pragma HLS PIPELINE II=1
         streamutils::tlast_status ts = streamutils::tlast_status::no_tlast;
-        beq_io::read_lane<W>(s_in, lane, 2 * (total - i), ts);
+        float32_array_utils::read_boundary_lane<W>(s_in, lane, 2 * (total - i), ts);
         const bool cut = (ts == streamutils::tlast_status::tlast_at_end) && (i < total - 1);
         const float g_r = gr[row];
         const float g_i = gi[row];
@@ -97,7 +97,7 @@ SYM:
 #pragma HLS ARRAY_PARTITION variable=z complete dim=1
         z[0] = p1 - p2;
         z[1] = p3 + p4;
-        beq_io::write_lane<W>(z, m_out, (i == need - 1) || cut, 2);
+        float32_array_utils::write_boundary_lane<W>(z, m_out, (i == need - 1) || cut, 2);
         done = i + 1;
         if (++col == m) {
             col = 0;
