@@ -8,7 +8,21 @@ build from the references, so read them first.
 
 ## The reference design
 
-**Your primary reference is `markov`**: two kernels, a credit link routed
+**For one kernel behind the bus, start from `stream_kernel`'s memory-mapped system**: the kernel of
+`stream_kernel`, unchanged, behind the queue views it declares (`mm_views`), on a crossbar, driven by a
+two-thread host that sizes each result from its header and reads the status after it:
+
+```
+waveflow_get_doc("docs/examples/stream_kernel/protocol.md")         # the protocol: header, results, status
+waveflow_get_doc("docs/examples/stream_kernel/memory_mapped.md")    # the device, the host, HwSystem(sim, dut)
+waveflow_get_example("stream_kernel", file="stream_kernel_mm.py")   # PolyHost and mm_system
+waveflow_get_example("stream_kernel", file="poly_kernel_host.h")    # the host's C++ twin
+```
+
+Then `docs/guide/systems/recipe.md` for the order of the steps: the kernel verified alone in its
+harness first, then the system.
+
+**For several kernels, a credit link or a shared memory, your reference is `markov`**: two kernels, a credit link routed
 over the bus, results in shared memory, a two-thread host.  Read its pages in
 the order they run:
 

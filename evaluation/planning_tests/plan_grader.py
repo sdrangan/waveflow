@@ -120,7 +120,9 @@ def check_citations(plan: str) -> list[tuple[str, bool, str]]:
             src = mod.with_suffix(".py") if mod.with_suffix(".py").is_file() else mod / "__init__.py"
             if src.is_file():
                 rest = parts[cut:]
-                ok = not rest or re.search(rf"\b(def|class)\s+{re.escape(rest[0])}\b|^{re.escape(rest[0])}\s*[:=]",
+                name = re.escape(rest[0]) if rest else ""
+                ok = not rest or re.search(rf"\b(def|class)\s+{name}\b|^{name}\s*[:=]"
+                                           rf"|^from\s+\S+\s+import\s+.*\b{name}\b|^\s+{name},",   # re-exports
                                            src.read_text(encoding="utf-8"), re.M) is not None
                 why = "" if ok else f"'{rest[0]}' not defined in {src.relative_to(ROOT)}"
                 break
