@@ -201,7 +201,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: (tests/examples/test_stream_kernel_mm.py).
 #: 217 -> 218 on 2026-10-15 (plans/unit_harness.md Stage 4): markov's generator alone in its harness,
 #: against the C++ CreditSink (tests/examples/test_markov_units.py).
-WANT_XSI_GATES = 225
+#: 225 -> 227 on 2026-10-17 (plans/guide_system_first.md): StreamBroadcast in its own harness, 2x32
+#: and 3x64, every output's RTL recording against pysim (tests/streams/test_broadcast.py).
+WANT_XSI_GATES = 227
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

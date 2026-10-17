@@ -37,7 +37,9 @@ Each step names where to start. Do not move on until a step's gate passes.
    stimulus. *Start from:* [the polynomial's golden](../../examples/stream_kernel/golden.md).
 3. **Each module, with its own harness.** Write the module -- a
    [`FreeRunMod`](../flows/concurrent_python.md) with framed stream ports and a `run_iter` per command,
-   its scenarios in `workload(kind)`; for a composite, a child per stage -- and verify it **alone**:
+   its scenarios in `workload(kind)`; for a composite, a child per stage, and between stages the
+   framework's [stream blocks](../streams/index.md) (a `StreamBroadcast` to give two stages one input) --
+   and verify it **alone**:
    `harness(Module, workload=...)` puts a stand-in at each port. *Gate:* pysim bit-exact against the
    golden. Then its HLS body behind `kernel_task()` and the build steps, and *gate:* the harness through
    `compare`, RTL against pysim. *Start from:* [the polynomial's kernel](../../examples/stream_kernel/kernel.md)

@@ -97,6 +97,8 @@ include-package-data = true
 "waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h", "calib/gem5_cfg/*.py"]
 # The SSR FFT's hand-written task bodies (waveflow.dsp.ssr_fft.hls copies them into a build).
 "waveflow.dsp.ssr_fft" = ["src/*.h"]
+# The stream blocks' hand-written task bodies (each block's step copies its body into a build).
+"waveflow.streams" = ["src/*.h"]
 
 # The accelerator frames are markdown and TOML -- the specification, the process
 # text (which the scaffold also writes as a project's AGENTS.md) and the example
