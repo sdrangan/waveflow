@@ -331,6 +331,11 @@ stamp covers all of `include/` and `src/`, so an edit there re-runs every top; a
   the top and the source that changed. A gate never hides a 40-second csynth, and never runs against RTL
   built from other sources.
 
+One exception, opt-in: with **`WAVEFLOW_RESYNTH=1`** in the environment, `synth="check"` builds a stale
+top instead of failing. It exists for one run -- after a framework header that every example copies into
+`include/` changes (`streamutils_hls.h`, the array utils), which makes every stamp stale at once:
+`WAVEFLOW_RESYNTH=1 pytest -m xsi` re-synthesizes and gates in one pass.
+
 ### The other steps: fresh while nothing they read changed {#system-freshness}
 
 The system's own steps (scenario, pysim, `system_rtl`, `system_xsi`, compare, and a calibration) are

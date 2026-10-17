@@ -144,10 +144,17 @@ class CsynthStep(BuildStep):
         import json
         import time
 
+        import os
+
         _check_synth(synth)
         root = Path(config.root_dir)
         out = {k: root / v for k, v in _csynth_products(self.top).items()}
         problem = rtl_problem(root, self.top)
+        # WAVEFLOW_RESYNTH=1: a stale top under synth="check" is built instead of refused -- for the one
+        # run after a framework header that every example copies has changed (every stamp goes stale at
+        # once).  Opt-in, per process; the gates' default stays "never grade RTL you did not produce".
+        if synth == "check" and problem is not None and os.environ.get("WAVEFLOW_RESYNTH") == "1":
+            synth = "build"
         if synth == "check":
             if problem is not None:
                 raise RuntimeError(f"{self.top}: {problem} (synth='check' does not run csynth: build "
