@@ -1,7 +1,7 @@
 ---
 title: Sequential (host-activated)
-parent: Hardware modules and Flows
-nav_order: 2
+parent: Legacy flows
+nav_order: 1
 has_children: true
 audience: python
 summary: "Flow 1 — a control-driven (ap_ctrl_hs + s_axilite) kernel the host launches and waits on, driven by a sequential Vitis testbench Vitis runs in C-simulation and C/RTL co-simulation. The concept here; the full worked walkthrough is the regmap example."

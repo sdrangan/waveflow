@@ -1,7 +1,7 @@
 ---
 title: Flow steps
 parent: Sequential (host-activated)
-grand_parent: Hardware modules and Flows
+grand_parent: Legacy flows
 nav_order: 1
 audience: python
 summary: "The sequential flow end to end as a step diagram: describe the module as a HostActivated component, simulate it in Python (PySim), write a SeqTB testbench, lower both to C++ with HlsCodegenStep, then verify by Vitis C-simulation and, after csynth, C/RTL co-simulation. The full worked instance is the regmap example."

@@ -18,7 +18,7 @@ Because it never returns, there is nothing for a sequential program to *call* â€
 it can do and how it must be verified.
 
 It is also the only flow that can express concurrency at all, which is why
-[most of Waveflow's development is expected to land here](./index.md#where-the-work-is-going).
+[most of Waveflow's development is expected to land here](./index.md#why-one-flow).
 
 ## Why free-running
 

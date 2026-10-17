@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 5.5
 has_children: true
 audience: python
-summary: "What a hardware module (HwModule) is — a SimObj with typed ports and a behavior, the single source of truth for a hardware block — and the two end-to-end recipes for taking one from Python to a verified realization. The flows split on the DUT: a control-driven (ap_ctrl_hs) kernel the host launches and Vitis can co-simulate, driven by a sequential Vitis testbench; or a free-running (ap_ctrl_none) kernel or composite Vitis cannot co-simulate, driven at RTL by a concurrent XSI BFM. The lead page defines the module and its kinds; one sub-section per flow, each walked end to end on a single toy example."
+summary: "What a hardware module (HwModule) is -- a SimObj with typed ports and a behavior, the single source of truth for a hardware block -- its kinds and the cut, and the flow that takes a module from Python to verified RTL: the system flow, a module in a system (or in its own harness) through csynth, the RTL run under XSI and the comparison with pysim. Writing a free-running module, its flow steps, the XSI simulation components, developing module by module, parameterization, and the path toward the board. The older sequential (host-activated) flow is under Legacy flows."
 ---
 
 # Hardware modules and Flows
@@ -15,36 +15,30 @@ modules](./modules.md)** page is the foundation — what a module is, the three 
 the taxonomy of kinds. This index then covers the **flows**.
 
 A **flow** is the end-to-end recipe for taking a module from its Python specification to a
-*verified* hardware realization — which build steps run, in what order, producing which artifacts, and
-how the result is checked. There are two, and they split on **one axis: the DUT**.
+*verified* hardware realization -- which build steps run, in what order, producing which artifacts, and
+how the result is checked. Waveflow has **one**: the system flow.
 
-## The two flows
+## The flow
 
-**[Sequential (host-activated)](./sequential.md)** — the DUT is a **control-driven kernel**
-(`ap_ctrl_hs` + `s_axilite`) that the host launches and waits on. Because it has a start/done
-handshake, Vitis can drive it directly in C-simulation and C/RTL co-simulation, so the testbench is an
-ordinary sequential `int main()` (a [`SeqTB`](./sequential.md)). Toy example throughout: `simp_fun`
-(`examples/regmap/simp_fun.py`). Targets: `control_driven_kernel` + `sequential_vitis_tb`.
+**[Concurrent (free-running)](./concurrent.md)** -- the module runs in a **system**: a DUT and a testbench,
+simulated together ([Systems](../systems/index.md)). Free-running modules (`ap_ctrl_none`) are one
+`hls::task` for a leaf, one per child for a composite, wired by internal channels; host-activated modules
+are devices a host launches over the bus. Verification drives the elaborated RTL cycle by cycle under XSI,
+against the same system's pysim. A module is verified first **alone**, in its own
+[harness](./units.md), then in the system. The steps are [Building a system](../systems/recipe.md).
 
-**[Concurrent (free-running)](./concurrent.md)** — the DUT is a **free-running kernel**
-(`ap_ctrl_none`): one `hls::task` for a leaf, one per child for a composite, wired by internal
-channels. It has no start/done handshake, so Vitis co-sim refuses it; verification instead drives the
-elaborated RTL cycle-by-cycle through an **XSI BFM**. Toy example throughout: `mem_copy`
-(`examples/mem_copy/`). Targets: `composite_kernel` + `sequential_xsi_tb`.
+The older **sequential flow** -- one host-launched kernel verified by a sequential Vitis testbench and
+co-simulation -- is kept under [Legacy flows](../legacy/index.md).
 
-## Where the work is going
+## Why one flow
 
-The concurrent flow is the only one that can express **concurrency**: several tasks running at once,
-streams between them, memory shared between them, kernels reached over a bus by a host or by one
-another — and RTL verification that is cycle-accurate across all of it. Most designs worth
-accelerating need some of that, so we expect most of Waveflow's development — new interfaces, new
-kinds of module, timing models calibrated against RTL — to land in this flow.
+Only the system flow can express **concurrency**: several tasks running at once, streams between them,
+memory shared between them, kernels reached over a bus by a host or by one another -- and RTL
+verification that is cycle-accurate across all of it. Most designs worth accelerating need some of
+that, and the system flow covers the single kernel too: a kernel in its own harness is a system with no
+crossbar.
 
-The sequential flow stays. It is the shortest path from a Python function to a verified kernel, it is
-where the examples start, and a control-driven kernel is the right realization for work a host
-genuinely launches one call at a time.
-
-What follows either flow on the way to a board is not a third flow: [Toward the
+What follows the flow on the way to a board is not a second flow: [Toward the
 board](./bitstream_ipi.md) packages a verified system as IP, one per device, and wires it in a Vivado
 block design from the same spec the XSI system top is rendered from. The processor, the board and
 the bitstream come next.

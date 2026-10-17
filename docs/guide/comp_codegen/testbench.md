@@ -1,7 +1,7 @@
 ---
 title: Sequential testbench
-parent: Module Code Generation
-nav_order: 7
+parent: Legacy flows
+nav_order: 2
 audience: hls
 applies_to: [SeqTB]
 api: [SeqTB, HlsCodegenStep, tb_files_to_str]
