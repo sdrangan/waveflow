@@ -205,7 +205,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: and 3x64, every output's RTL recording against pysim (tests/streams/test_broadcast.py).
 #: 227 -> 231 on 2026-10-17: the block equalizer -- gain alone, apply alone, the composite, and the
 #: composite's fatal early TLAST, every recording at RTL against pysim (tests/examples/test_block_eq.py).
-WANT_XSI_GATES = 231
+#: 231 -> 234 on 2026-10-18 (plans/next_docs_examples.md task D): mem_copy's kernel in its own harness,
+#: its m_axi ports on the memory stand-in -- recordings against pysim, the golden at 2908 cycles, and
+#: the input side's acceptance cycles (tests/examples/test_mem_copy_unit_xsi.py).
+WANT_XSI_GATES = 234
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
