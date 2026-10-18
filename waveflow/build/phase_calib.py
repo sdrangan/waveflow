@@ -144,10 +144,11 @@ class PhaseCalibStep(_SystemStep):
         from waveflow.build.hls_ip import csynth_part
         from waveflow.build.system_dag import rtl_rel
         from waveflow.calib.phases import phase_record
+        from waveflow.hw.hw_module import kernel_name
 
         root = Path(config.root_dir)
         for mod in timed_modules(sysm):
-            part = csynth_part((root / rtl_rel(type(mod).cpp_kernel_name)).parents[1]) or ""
+            part = csynth_part((root / rtl_rel(kernel_name(mod))).parents[1]) or ""
             rec, ident = phase_record(mod, rep[mod.name], workload=self.workload_digest, part=part,
                                       period_ns=float(mod.clk.period) * 1e9,
                                       tool=f"vitis {config.vitis_version or ''}".strip(),

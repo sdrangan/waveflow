@@ -261,3 +261,49 @@ def test_div_by_the_most_negative_64_bit_divisor():
     A, B = Format(8, 4), Format(64, 10)  # F2 = 54
     q, _ = fixputils.div(np.array([5, -5, 0]), A, np.array([-(1 << 63)] * 3), B)
     assert q.tolist() == [0, 0, 0]
+
+
+# --- abs: full-precision magnitude ---------------------------------------------
+def test_abs_grows_one_bit_and_is_exact_at_the_extremes():
+    from waveflow.hw.fixpoint import abs as fabs
+    Q8_4 = FixedField.specialize(8, 4)
+    a = Q8_4.get_format()
+    stored = np.arange(-128, 128, dtype=np.int64)              # every value, min included
+    da = from_real(stored * 2.0 ** -a.frac_bits, Q8_4)
+    r = fabs(da)
+    assert r.element_type.get_format() == Format(9, 5, True)  # <W+1, I+1>, the type of -a
+    np.testing.assert_array_equal(np.asarray(r), np.abs(stored))
+    assert np.asarray(r)[0] == 128                             # |min| fits: no wrap
+    np.testing.assert_array_equal(to_real(r), np.abs(to_real(da)))
+    assert abs(da).element_type is r.element_type             # the builtin spells it too
+    np.testing.assert_array_equal(np.asarray(abs(da)), np.asarray(r))
+
+
+def test_abs_then_quantize_saturates_min_to_max():
+    from waveflow.hw.fixpoint import abs as fabs
+    Q8_4 = FixedField.specialize(8, 4)
+    sat = FixedField.specialize(8, 4, o_mode=SAT)
+    y = quantize(fabs(from_real([-8.0, -7.9375, 3.5], Q8_4)), sat)
+    np.testing.assert_array_equal(to_real(y), [7.9375, 7.9375, 3.5])
+
+
+def test_abs_unsigned_is_unchanged_and_64_bit_raises():
+    from waveflow.hw.fixpoint import abs as fabs
+    U = FixedField.specialize(8, 4, signed=False)
+    u = from_real([1.5, 15.0], U)
+    assert fabs(u).element_type is U
+    np.testing.assert_array_equal(np.asarray(fabs(u)), np.asarray(u))
+    with pytest.raises(NotImplementedError):
+        fabs(from_real([-1.0], FixedField.specialize(64, 32)))   # derived W=65
+
+
+def test_abs_operator_on_int_and_float_arrays():
+    from waveflow.hw.dataschema import DataArray, FloatField, IntField
+    I8 = IntField.specialize(8, signed=True)
+    x = DataArray.specialize(I8, max_shape=(3,))(np.array([-128, -1, 5]))
+    r = abs(x)
+    assert r.element_type.get_bitwidth() == 9
+    np.testing.assert_array_equal(np.asarray(r), [128, 1, 5])
+    F32 = FloatField.specialize(32)
+    f = DataArray.specialize(F32, max_shape=(2,))(np.array([-1.5, 2.0], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(abs(f)), [1.5, 2.0])

@@ -113,6 +113,52 @@ def test_the_calibration_workload_comes_from_the_kernel():
     assert len(wl.system.dut().workload("calib")["s_in"]) == 2 * 9      # a header and samples each
 
 
+def test_the_dag_checks_pysim_against_the_golden(tmp_path):
+    """The kernel states its golden (``PolyKernel.golden``), so its harness's DAG has a ``golden``
+    step after ``pysim``: it passes on the kernel as it is, and the check it runs
+    (:func:`~waveflow.build.system_dag.golden_mismatches`) finds one flipped bit and a lost burst."""
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.system_dag import add_system_steps, golden_mismatches
+
+    sysm = harness(PolyKernel, workload="test")
+    assert sysm.has_golden()
+    dag = BuildDag()
+    add_system_steps(dag, sysm, work_dir="w", top=TOP)
+    names = dag.step_names()
+    assert names.index("pysim") < names.index("golden") and names[-1] == "compare"
+    res = dag.run(BuildConfig(root_dir=tmp_path), through="golden")
+    assert set(res) == {"scenario", "pysim", "golden"} and all(r.success for r in res.values())
+
+    traces = tmp_path / "w" / TOP / "pysim_traces"
+    want = sysm.golden_outputs()
+    assert golden_mismatches(traces, want) == []
+    off = {p: [b.copy() for b in bursts] for p, bursts in want.items()}
+    off["m_out"][1][3] ^= np.uint64(1)                      # one result word, one bit
+    bad = golden_mismatches(traces, off)
+    assert len(bad) == 1 and "'m_out' burst 1: word 3" in bad[0]
+    n = len(want["m_status"])
+    assert golden_mismatches(traces, {"m_status": want["m_status"][:-1]}) == [
+        f"'m_status': {n} bursts recorded, the golden has {n - 1}"]
+
+
+def test_a_golden_mismatch_fails_the_dag(tmp_path):
+    """A system whose golden disagrees with pysim fails at ``golden``, its verdict in golden.json."""
+    import json
+
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.system_dag import add_system_steps
+
+    sysm = harness(PolyKernel, workload="test")
+    want = sysm.golden_outputs()
+    sysm._golden = {"m_status": want["m_status"][:-1]}      # one status short
+    dag = BuildDag()
+    add_system_steps(dag, sysm, work_dir="w", top=TOP)
+    res = dag.run(BuildConfig(root_dir=tmp_path), through="golden")
+    assert res["pysim"].success and not res["golden"].success
+    verdict = json.loads((tmp_path / "w" / TOP / "golden.json").read_text(encoding="utf-8"))
+    assert len(verdict["golden_mismatches"]) == 1
+
+
 @pytest.fixture(scope="module")
 def rtl_run() -> Path:
     """One RTL run of the system, shared by the gates below."""

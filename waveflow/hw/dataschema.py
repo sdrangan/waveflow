@@ -3433,6 +3433,9 @@ class DataArray(DataSchema):
     def __sub__(self, other: Any) -> "DataArray":
         return _datarray_binop(self, other, "sub")
 
+    def __abs__(self) -> "DataArray":
+        return _datarray_abs(self)
+
     @classmethod
     def _normalized_shape(cls) -> tuple[int, ...]:
         max_shape = cls.max_shape
@@ -5823,6 +5826,32 @@ def _float_binop(a: DataArray, b: DataArray, op: str) -> DataArray:
     out = av * bv if op == "mul" else (av + bv if op == "add" else av - bv)
     bw = 64 if out.dtype == np.float64 else 32       # numpy passthrough; no growth
     return _wrap_datarray(out, FloatField.specialize(bw))
+
+
+def _datarray_abs(a: DataArray) -> DataArray:
+    """``abs(a)``: full precision -- a signed W-bit int or fixed grows one bit so ``|min|``
+    fits; unsigned is unchanged; float is numpy passthrough."""
+    kind = _elem_kind(a.element_type)
+    if kind == "fixed":
+        from waveflow.hw.fixpoint import abs as _fabs     # lazy import avoids a module cycle
+        return _fabs(a)
+    if kind == "int":
+        elem = a.element_type
+        if not elem.signed:
+            return _wrap_datarray(np.asarray(a.val).copy(), elem)
+        Wr = elem.get_bitwidth() + 1
+        if Wr > MAX_WIDTH:
+            raise NotImplementedError(
+                f"integer abs result width {Wr} exceeds the {MAX_WIDTH}-bit limit "
+                "(numpy would silently wrap); wide (>64-bit) support is Future.")
+        out = np.abs(np.asarray(a.val).astype(np.int64))
+        return _wrap_datarray(out, IntField.specialize(Wr, True))
+    if kind == "float":
+        out = np.abs(np.asarray(a.val))
+        return _wrap_datarray(out, FloatField.specialize(64 if out.dtype == np.float64 else 32))
+    raise TypeError(
+        f"abs() is not defined for {a.element_type.__name__} arrays (int, fixed or float only; "
+        "a complex magnitude is not type-preserving).")
 
 
 def _datarray_binop(a: DataArray, b: Any, op: str) -> DataArray:

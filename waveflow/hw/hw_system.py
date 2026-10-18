@@ -119,13 +119,15 @@ class HwSystem(ABC):
     sim: "Simulation"
 
     def __init__(self, sim: "Simulation", dut: HwModule, *, n_cycles: int | None = None,
-                 inputs=None, check=None, run_until=None, fresh=None, calibration=None) -> None:
+                 inputs=None, check=None, run_until=None, fresh=None, calibration=None,
+                 golden=None) -> None:
         """*sim* holds every module; *dut* is the one root module synthesized.  The rest describes the
         run: *n_cycles* bounds the RTL run (``vectors/run.json``), *inputs* ``(root) -> None`` writes
         what the testbench plays, *check* ``(system) -> Any`` is what :meth:`run` returns, *run_until*
         ends a pysim run that never runs out of events, *fresh* ``() -> HwSystem`` rebuilds an
         unrun copy (:meth:`fresh`), *calibration* ``() -> CalibWorkload`` is
-        :meth:`calibration_workload`."""
+        :meth:`calibration_workload`, *golden* (``{recording: [burst words]}``, or a function
+        returning it) is what the golden says each recording holds (:meth:`golden_outputs`)."""
         self.sim = sim
         self._dut = dut
         self.n_cycles = n_cycles
@@ -134,6 +136,7 @@ class HwSystem(ABC):
         self.run_until = run_until
         self._fresh = fresh
         self._calibration = calibration
+        self._golden = golden
         self._root = None
         self.clk = getattr(dut, "clk", None)
         widths = [int(ep.bitwidth) for _n, ep in _boundary_eps(dut) if getattr(ep, "bitwidth", None)]
@@ -252,6 +255,18 @@ class HwSystem(ABC):
         (:func:`~waveflow.build.phase_calib.add_calib_steps` generates the rest)."""
         make = getattr(self, "_calibration", None)
         return make() if make is not None else None
+
+    def has_golden(self) -> bool:
+        """Whether the system states a golden for its recordings (the DAG then adds ``golden``)."""
+        return getattr(self, "_golden", None) is not None
+
+    def golden_outputs(self) -> "dict[str, list] | None":
+        """What the golden says each recording holds: ``{recording: [burst words, ...]}``, keyed by
+        the recording's last path part (``vectors/m_out`` -> ``m_out``), one array per burst.  The
+        ``golden`` step checks pysim's recordings against it, burst for burst and word for word.
+        ``None``: the system states no golden."""
+        g = getattr(self, "_golden", None)
+        return g() if callable(g) else g
 
     def recordings(self) -> tuple[str, ...]:
         """The bundles the testbench records, relative to the scenario root: each participant
@@ -379,7 +394,9 @@ class GraphSystem(HwSystem):
         self.sim = self.tb.sim
         mods = list(self.dut_modules(self.tb))
         first = mods[0]
-        name = getattr(type(first), "cpp_kernel_name", None) or first.name
+        from waveflow.hw.hw_module import kernel_name
+
+        name = kernel_name(first) or first.name
         self.dut_top = DutTop.of(getattr(self, "dut_name", None) or f"{name}_dut", self.sim,
                                  comps=mods)
         self.clk = first.clk

@@ -94,6 +94,24 @@ int main(int argc, char** argv) {{
 """
 
 
+def render_abs(type_a: str, wa: int, type_full: str, type_t: str, wt: int) -> str:
+    """``y = |a|`` -- the full-precision magnitude in ``type_full`` (``ap_fixed<W+1, I+1>``,
+    the type of ``-a``), then quantize-on-assignment to the target type."""
+    return _PREAMBLE + f"""
+int main(int argc, char** argv) {{
+    auto A = read_bits(argv[1]);
+    std::ofstream out(argv[3]);
+    for (size_t i = 0; i < A.size(); ++i) {{
+        {type_a} a; a.range({wa} - 1, 0) = (ap_uint<{wa}>)A[i];
+        {type_full} m = (a < 0) ? {type_full}(-a) : {type_full}(a);
+        {type_t} y = m;
+        out << (unsigned long long)y.range({wt} - 1, 0) << "\\n";
+    }}
+    return 0;
+}}
+"""
+
+
 def render_requant(type_src: str, wsrc: int, type_t: str, wt: int) -> str:
     """``y = x`` — quantize-on-assignment from a (wider) source to the target type."""
     return _PREAMBLE + f"""

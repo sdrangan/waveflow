@@ -155,6 +155,25 @@ example names and the links.  Fix what disagrees; keep measured numbers only wit
   supported path; agents write a thin subclass per width -- `cpp_kernel_name` is class-level); an
   `ArrayUtilsStep` element that is a `DataList`; no `abs` in `waveflow.hw.fixpoint`; a framework hook to
   check pysim against the golden on the DAG (today in pytest).
+  **Done (2026-10-18)**, one commit each:
+  - `kernel_name_params` (`HwModule` ClassVar) + `hw_module.kernel_name(mod)`: a top per parameter set,
+    `<cpp_kernel_name>_<param><value>`, used wherever the system flow names a top; a class listing none is
+    unchanged.  Docs: `flows/parametrization.md#kernel-name-params`.  Test:
+    `tests/build/test_kernel_name_params.py` (two widths, two harnesses, one DAG -> two csynth tops).
+    **Remains**: no example uses it, and no csynth / XSI run of two widths has been made (the naming is
+    checked, the RTL is not); the hook flow (`param_supports`, `derive_kernel_task`'s `<kernel>_task.h`)
+    stays class-level.
+  - `ArrayUtilsStep` on a `DataList`: it already worked; now checked (`tests/hw/test_arrayutils_datalist_elem.py`,
+    MinGW 10, pf 0/1/2/4), and a record wider than a word without `DataSchemaStep(framed=True)` is a
+    `ValueError` at `dag.add` instead of a C++ error.  Docs: `build/codegen.md` (*A `DataList` element*).
+    **Remains**: not run through Vitis csim / csynth.
+  - `fixpoint.abs` (`<W+1, I+1>`, lossless) and `DataArray.__abs__`; Vitis csim bit-exact test.  Docs:
+    `schema/python/fixpoint.md#magnitude`.
+  - `GoldenStep` (`golden`, after `pysim`): `HwSystem(golden=...)`, a harness's from `module.golden(kind)`;
+    wired in stream_kernel (`PolyKernel.golden`).  Docs: `build/xsi_system.md#golden`,
+    `systems/verification.md`.  **Remains**: `docs/examples/stream_kernel/system_flow.md` ("Checking pysim
+    against the golden") should name the step (left for the examples task, which owns that page); a
+    system with a `SwHost` has no golden step (its traces are the host's), nor do calibration systems.
 
 ## Not now
 

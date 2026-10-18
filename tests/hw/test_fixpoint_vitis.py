@@ -124,3 +124,28 @@ def test_ap_fixed_div_with_zero_guard_is_bit_exact(tmp_path, case):
         f"{case['name']}: {len(result['mismatches'])} disagreement(s) between Python and Vitis; "
         f"the Python model is wrong (do NOT loosen). First few: {result['mismatches'][:5]}"
     )
+
+
+@pytest.mark.vitis
+def test_ap_fixed_abs_kernel_csim_bit_exact(tmp_path):
+    """``fixpoint.abs`` (then a saturating quantize) == the C++ in its docstring, every value."""
+    if not toolchain.find_vitis_path():
+        pytest.skip("Vitis not found.")
+    from examples.schemas.fixedpoint.kernels import render_abs
+    from waveflow.hw.fixpoint import abs as fabs
+    A = FixedField.specialize(8, 4)
+    target = FixedField.specialize(8, 4, o_mode=OMode.AP_SAT)
+    fa, ft = A.get_format(), target.get_format()
+    a = from_real(np.arange(-128, 128) * 2.0 ** -fa.frac_bits, A)
+    full = fabs(a)
+    py = quantize(full, target)
+    (tmp_path / "kernel.cpp").write_text(
+        render_abs(A.cpp_type, fa.W, full.element_type.cpp_type, target.cpp_type, ft.W),
+        encoding="utf-8")
+    shutil.copy(FIXEDPOINT_DIR / "run.tcl", tmp_path / "run.tcl")
+    np.savetxt(tmp_path / "in_a.txt", np.asarray(fixputils.to_bits(np.asarray(a), fa.W)).astype(np.uint64), fmt="%u")
+    (tmp_path / "in_b.txt").write_text("0\n", encoding="utf-8")
+    _run_tcl(tmp_path / "run.tcl", tmp_path, "ap_fixed abs kernel")
+    vitis_bits = np.atleast_1d(np.loadtxt(tmp_path / "out_bits.txt", dtype=np.uint64))
+    expected = np.asarray(fixputils.to_bits(np.asarray(py), ft.W)).astype(np.uint64)
+    assert np.array_equal(vitis_bits, expected), f"abs bits differ: vitis={vitis_bits} python={expected}"
