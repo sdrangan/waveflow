@@ -272,6 +272,39 @@ class MemCopy(FreeRunMod):
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
 
+    def workload(self, kind: str = "test") -> dict:
+        """The scenario of this module's harness (:func:`~waveflow.hw.harness.harness`): ``"test"`` is
+        the XSI gate's -- :data:`XSI_JOBS`, 16 back-to-back copies of 128 words -- as the commands on
+        ``s_cmd`` and, under ``m_in``, the memory's image with each source region filled
+        (:func:`copy_arena`).  ``m_in`` and ``m_out`` share the harness's one memory."""
+        from waveflow.utils.burst_io import StreamBurst
+
+        if kind != "test":
+            raise ValueError(f"MemCopy.workload: no scenario {kind!r} (it has 'test')")
+        w = int(self.mem_dwidth)
+        cmds = [StreamBurst(np.asarray(CopyCmd(src_off=j.src_off, dst_off=j.dst_off,
+                                               n_words=j.n_words, tx_id=k).serialize(word_bw=w),
+                                       dtype=np.uint64))
+                for k, j in enumerate(XSI_JOBS)]
+        image, _golden = copy_arena(XSI_JOBS, w)
+        return {"s_cmd": cmds, "m_in": image}
+
+
+def copy_arena(jobs, width: int = 64) -> tuple[np.ndarray, np.ndarray]:
+    """``(image, golden)`` for *jobs* in one flat arena, word 0 at byte address 0: the image has each
+    source region filled with its job's pattern (the seeded draw :class:`MemCopySim` uses), the golden
+    has the same pattern at each destination.  The arena ends 16 words past the last region."""
+    jobs = [CopyJob.coerce(j) for j in jobs]
+    n = max(max(j.src_off, j.dst_off) + j.n_words for j in jobs) + 16
+    image = np.zeros(n, dtype=np.uint64)
+    golden = np.zeros(n, dtype=np.uint64)
+    for k, j in enumerate(jobs):
+        known = np.random.default_rng(0xC0FFEE + k).integers(0, 1 << width, size=j.n_words,
+                                                             dtype=np.uint64)
+        image[j.src_off:j.src_off + j.n_words] = known
+        golden[j.dst_off:j.dst_off + j.n_words] = known
+    return image, golden
+
 
 # The graph -> composite TopSpec derivation lives in composite_gen.composite_top_spec (imported
 # above and re-exported here for callers/tests); MemCopy just supplies the graph descriptors above.

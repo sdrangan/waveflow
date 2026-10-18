@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from examples.mem_copy.mem_copy import XSI_JOBS, check_mem_copy_xsi_outputs
+from examples.mem_copy.mem_copy import MemCopy, XSI_JOBS, check_mem_copy_xsi_outputs
 from examples.mem_copy.mem_copy_sim import MemCopySystem
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.harness import harness
 
 HERE = Path(__file__).resolve().parent
 TOP = "mem_copy_system"
@@ -32,12 +33,24 @@ def system() -> MemCopySystem:
     return MemCopySystem(jobs=tuple(XSI_JOBS))
 
 
+#: The kernel's own harness (``--through unit_compare``): ``harness(MemCopy)``, its two ``m_axi``
+#: ports on the harness's one memory stand-in.
+UNIT_TOP = "mem_copy_unit"
+
+
+def unit_system():
+    """The kernel's harness on its test workload (``MemCopy.workload("test")``: the same 16 jobs)."""
+    return harness(MemCopy, workload="test")
+
+
 def build_dag(work_dir=WORK_DIR) -> BuildDag:
-    """The framework's system steps for :func:`system`.  The kernel's csynth project is the
-    single-kernel flow's (``mem_copy.tcl`` at the root); ``include/`` and ``gen/`` are its sources."""
+    """The framework's system steps for :func:`system` and for the kernel's harness
+    (:func:`unit_system`, prefix ``unit_``).  The kernel's csynth project is the single-kernel flow's
+    (``mem_copy.tcl`` at the root); ``include/`` and ``gen/`` are its sources."""
     dag = BuildDag()
-    add_system_steps(dag, system(), work_dir=work_dir, top=TOP,
-                     tcls={"mem_copy": Path("mem_copy.tcl")})
+    tcls = {"mem_copy": Path("mem_copy.tcl")}
+    add_system_steps(dag, system(), work_dir=work_dir, top=TOP, tcls=tcls)
+    add_system_steps(dag, unit_system(), work_dir=work_dir, top=UNIT_TOP, tcls=tcls, prefix="unit_")
     return dag
 
 

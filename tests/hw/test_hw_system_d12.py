@@ -75,3 +75,13 @@ def test_fresh_is_an_unrun_copy():
     again = sysm.fresh()
     assert again is not sysm and again.sim is not sysm.sim
     assert type(again.dut()) is type(sysm.dut())
+
+
+def test_a_harness_records_input_acceptance_at_rtl():
+    """Each stream input's driver names an acceptance bundle (the RTL ``AxisMaster`` writes each word
+    it had accepted, with its cycle); it is listed apart from the recordings, which compare RTL
+    against pysim -- pysim's times are its own."""
+    sysm = harness(PolyKernel)
+    assert sysm.stand_ins["s_in"].accept_bundle == "vectors/s_in_acc"
+    assert sysm.acceptances() == ("vectors/s_in_acc",)
+    assert "vectors/s_in_acc" not in sysm.recordings()

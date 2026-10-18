@@ -86,7 +86,7 @@ The example then checks the host's results against the golden ([markov's XSI tes
 ## Robustness: hostile stand-ins
 
 A polite testbench never shows that a module survives anything else. A
-[`StandInPolicy`](../flows/units.md#hostile-stand-ins) makes each stand-in misbehave as its protocol
+[`StandInPolicy`](../flows/units_hostile.md) makes each stand-in misbehave as its protocol
 allows -- a sink that drops TREADY, a driver that holds off its next word, credit held back -- and
 `add_robustness_steps` runs the harness again under each. The check is the same `compare`: the RTL must
 still produce exactly pysim's words.
