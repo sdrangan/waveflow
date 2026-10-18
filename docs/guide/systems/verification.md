@@ -11,9 +11,11 @@ summary: "How to verify a kernel or a system, in pysim and at RTL -- the fourth 
 
 Verifying a kernel or a system -- in pysim, then at RTL -- is a chain of comparisons, each against something already trusted. No link is "it ran".
 
-```text
-spec's worked examples  ->  golden  ->  pysim  ->  RTL
-                          (pure functions) (the model) (the hardware)
+```mermaid
+flowchart LR
+  S["the spec's<br/>worked examples"] -->|reproduced by| G["golden<br/><i>pure functions</i>"]
+  G -->|expected outputs| P["pysim<br/><i>the model</i>"]
+  P -->|compare, word for word| R["RTL<br/><i>the hardware</i>"]
 ```
 
 ## The golden against the spec
