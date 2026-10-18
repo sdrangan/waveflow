@@ -66,6 +66,6 @@ this system ([the record](../../../plans/unit_harness.md), Stage 2b).
 A unit verified and calibrated alone, then composed: the kernel in its stream harness, the device in
 its own, the system on the crossbar -- each step checked against its RTL, and nothing fitted above the
 unit it belongs to. For the practice in general -- several units, hostile stand-ins, incremental
-rebuilds -- see [Developing module by module](../../guide/flows/units.md#composing-and-verifying-a-parent);
+rebuilds -- see [Composing a parent](../../guide/flows/units_composing.md);
 for a system of several calibrated units, [Two kernels on a bus](../markov/index.md), whose composition
 lands at -0.9% ([Composed, and checked once](../../guide/systems/calibration.md#composed-and-checked-once)).
