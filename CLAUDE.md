@@ -82,7 +82,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). `mcp/knowledge/` is local search and read over `docs/guide/` and the reference examples — an in-memory BM25 index built from the checkout at server start, also reachable as `waveflow kb <cmd>`.
-- **`examples/`** — Reference designs. The curated set is the twenty-one with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
+- **`examples/`** — Reference designs. The curated set is the twenty-two with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
 
 ### Simulation flow
 
@@ -92,9 +92,13 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 ### Designing an accelerator
 
-Start from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
-carrying `n` and a `tx_id`, the work on `n` elements, a response that echoes it; through a pipeline the
-command travels with the data and the last stage answers) -- the page links every layer it touches.
+Start from `docs/guide/systems/recipe.md` (*Building a system*): decompose top-down, write bottom-up --
+schemas and a golden, each module alone in its harness, then `HwSystem(sim, dut)` and the system flow.
+The protocol comes from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
+carrying `n` and a `tx_id`, the work on `n` elements, the results headed by a `Resp` that echoes it, and a
+`Status` per command on its own stream; an error is fatal -- close the output, report, stop taking input;
+through a pipeline the command travels with the data and the last stage answers) -- the page links every
+layer it touches.
 
 ### Writing HLS kernel bodies
 

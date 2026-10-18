@@ -144,10 +144,17 @@ class CsynthStep(BuildStep):
         import json
         import time
 
+        import os
+
         _check_synth(synth)
         root = Path(config.root_dir)
         out = {k: root / v for k, v in _csynth_products(self.top).items()}
         problem = rtl_problem(root, self.top)
+        # WAVEFLOW_RESYNTH=1: a stale top under synth="check" is built instead of refused -- for the one
+        # run after a framework header that every example copies has changed (every stamp goes stale at
+        # once).  Opt-in, per process; the gates' default stays "never grade RTL you did not produce".
+        if synth == "check" and problem is not None and os.environ.get("WAVEFLOW_RESYNTH") == "1":
+            synth = "build"
         if synth == "check":
             if problem is not None:
                 raise RuntimeError(f"{self.top}: {problem} (synth='check' does not run csynth: build "
@@ -185,8 +192,9 @@ class CsynthTopsStep(BuildStep):
     """``csynth``: every HLS top of a system, one inner :class:`CsynthStep` each.
 
     Its consumed artifacts enter the inner DAG as :class:`~waveflow.build.build.SourceStep`\\ s, and
-    the inner DAG runs **without force**: each top decides for itself, so editing one top's generated
-    source re-runs that csynth and reuses the others' RTL.  Fresh when every top is
+    the inner DAG runs **without force** -- each top decides for itself, so editing one top's generated
+    source re-runs that csynth and reuses the others' RTL -- unless this step itself was forced
+    (``--force-step csynth``), which re-synthesizes every top.  Fresh when every top is
     (:meth:`is_fresh`), so a run with nothing to do does not enter at all and the cascade stops here.
     *tcls* overrides a top's csynth script (``{top: path relative to the root}``)."""
 
@@ -229,7 +237,7 @@ class CsynthTopsStep(BuildStep):
         root = Path(config.root_dir)
         inner = BuildConfig(root_dir=root, vitis_version=config.vitis_version,
                             params={**config.params, "synth": synth})
-        results = self.inner_dag(inputs).run(inner)
+        results = self.inner_dag(inputs).run(inner, force=self.forced)
         #: Per top: "ran" / "fresh" / the failure -- what the last entry did, for the caller to show.
         self.last_run = {n: ("fresh" if r.skipped else "ran") if r.success else r.message
                          for n, r in results.items() if n.startswith("csynth_")}
@@ -497,6 +505,17 @@ def snake(name: str) -> str:
     import re
 
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name).lower()
+
+
+def default_top(sysm) -> str:
+    """The Verilog top a system is named by when none is given: a subclass's name in snake case
+    (``MarkovSystem`` -> ``markov_system``); a system built directly, ``HwSystem(sim, dut)``, its DUT's
+    name."""
+    from waveflow.hw.hw_system import HwSystem
+
+    if type(sysm) is HwSystem:
+        return sysm.dut().name
+    return snake(type(sysm).__name__)
 
 
 @dataclass(kw_only=True)
@@ -1146,8 +1165,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
 
     *sysm* is the pysim system object, not yet run.  csynth consumes the artifacts *sources* -- the
     example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
-    the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
-    -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
+    the root.  *top* names the Verilog top (default: :func:`default_top` -- the DUT's name, or a
+    subclass's name in snake case), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
     the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
     parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
     script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
@@ -1159,7 +1178,7 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     of one kernel share one ``codegen`` and one ``csynth``.  The first csynth is named ``csynth``; one
     a later system needs for tops of its own is ``<prefix>csynth``.
     """
-    top = top or snake(type(sysm).__name__)
+    top = top or default_top(sysm)
     work_dir = Path(work_dir)
     work = work_dir / ((workspace or f"{prefix}{top}") + ("_probes" if probes else ""))
     rtl = SystemRtlStep(sysm=sysm, work=work, prefix=prefix, top=top, xbar_name=xbar_name,

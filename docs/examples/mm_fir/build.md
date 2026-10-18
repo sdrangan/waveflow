@@ -35,7 +35,7 @@ does not depend on the bus, so the two topologies share one `codegen` and one `c
 
 ## Before you start
 
-- **pysim works.** Everything here derives from `MmFirSystem`; if it does not run bit-exact in Python
+- **pysim works.** Everything here derives from `mm_fir_system`; if it does not run bit-exact in Python
   ([Python simulation](pysim.md)), nothing below will.
 - **Vitis HLS** for csynth, **Vivado** for the crossbar IP (`create_ip`) and the simulation (`xsim`), and
   a C++ compiler -- the mingw `g++` that ships with Vivado on Windows, the system `g++` on Linux. The
@@ -55,8 +55,8 @@ PLAN = [(0, TAPS_A), (SWITCH_AT, TAPS_B)]
 def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
 
-def system(topology: str) -> MmFirSystem:
-    return MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT, one_front=topology == "one_front")
+def system(topology: str) -> HwSystem:
+    return mm_fir_system(list(scenario_x()), PLAN, pkt=PKT, one_front=topology == "one_front")
 ```
 
 `system(topology)` is the **same object pysim runs**, on the gate's scenario: 200 samples in packets of

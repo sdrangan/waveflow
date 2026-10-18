@@ -10,10 +10,18 @@
 //
 //     static credit::Producer<QDEPTH> crd;            // static: survives the task's firings
 //     CHUNKS: for (...) {
-//         crd.wait_room(m_crd, cw);                    // admit the chunk -- OUTSIDE the loop
-//         LOOP: for (...) { #pragma HLS PIPELINE II=1 ... m_fwd.write(...) ... }
-//         crd.sent(cw);
+//         if (crd.wait_room(m_crd, cw)) {              // admit the chunk -- OUTSIDE the loop
+//             LOOP: for (...) { #pragma HLS PIPELINE II=1 ... m_fwd.write(...) ... }
+//             crd.sent(cw);
+//         }
 //     }
+//
+// The `if` is not decoration: the writes go to a different stream than the credit reads, so nothing
+// else orders them, and Vitis HLS may schedule a write ahead of the wait that admits it.  The
+// consumer then credits words the producer has not yet counted, `acked` passes `written`, the 16-bit
+// difference wraps, and wait_room waits forever (found by the rung-5 blind build: its detect kernel
+// hung at RTL after 97 words).  Guarding the writes on wait_room's result makes them depend on the
+// credit reads.
 //
 //     static credit::Consumer<CRD_EVERY> crd;
 //     CHUNKS: for (...) {
@@ -47,9 +55,11 @@ struct Producer {
     /// Return once *nwords* fit: first take any counts already waiting (a bounded drain, so the
     /// credit FIFO never fills with stale values), then, while they do not fit, sleep on the credit
     /// stream for the next one and catch up to the newest.  It never polls: a blocking read waits for
-    /// an arrival.  Call it BEFORE a pipelined loop, never inside one.
+    /// an arrival.  Call it BEFORE a pipelined loop, never inside one.  Returns that the words fit
+    /// (always true on return): guard the chunk's writes on it, so they cannot be scheduled ahead of
+    /// the credit reads (see the top of this file).
     template <int DW>
-    void wait_room(hls::stream<ap_uint<DW> >& crd, int nwords) {
+    bool wait_room(hls::stream<ap_uint<DW> >& crd, int nwords) {
         ap_uint<DW> v;
     DRAIN0: for (int i = 0; i < 4; ++i) {
             if (!crd.read_nb(v)) break;
@@ -62,6 +72,7 @@ struct Producer {
                 acked = v(CTR_BITS - 1, 0);
             }
         }
+        return room() >= nwords;
     }
 
     /// Record *nwords* written (after the write -- the chunk -- that wait_room admitted).

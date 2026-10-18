@@ -34,6 +34,7 @@ from typing import Any, ClassVar
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
 from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl, render_top
 from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
+from waveflow.hw.hw_system import HwSystem
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.arrayutils import ArrayUtilsStep
 from waveflow.hw.dataschema import DataSchemaStep
@@ -50,7 +51,7 @@ from examples.mm_fir.mm_fir import (
     FirRespHdr,
     FirStatus,
     MmFir,
-    MmFirSystem,
+    mm_fir_system,
     Taps,
     timing_probes,
 )
@@ -74,11 +75,11 @@ def scenario_x() -> np.ndarray:
     return np.random.default_rng(7).integers(-2000, 2000, size=NSAMP)
 
 
-def system(topology: str) -> MmFirSystem:
+def system(topology: str) -> HwSystem:
     """The pysim system for *topology* on the scenario -- what the DAG runs in pysim and at RTL."""
     if topology not in XBAR_NAMES:
         raise ValueError(f"topology must be one of {sorted(XBAR_NAMES)}, got {topology!r}")
-    return MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT, one_front=topology == "one_front")
+    return mm_fir_system(list(scenario_x()), PLAN, pkt=PKT, one_front=topology == "one_front")
 
 
 def gen_headers(root: Path = HERE) -> None:

@@ -38,3 +38,4 @@ recursive-include waveflow/build *.h *.hpp *.tpp *.cpp
 global-exclude __pycache__/
 global-exclude *.pyc
 global-exclude *.pyo
+recursive-include waveflow/streams/src *.h

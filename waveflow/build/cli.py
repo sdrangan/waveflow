@@ -64,6 +64,7 @@ def run_dag_cli(
     The build's timing spans (:mod:`waveflow.events`): the command, each step, and every nested
     step and toolchain run inside them, as also appended to ``<root_dir>/.waveflow/events.jsonl``.
     ``None`` for the listing flags, which build nothing.  ``--timing`` prints them as a tree.
+    A build with a failed step does not return: it prints the failed steps and exits with status 1.
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--through", metavar="STEP", default=default_through,
@@ -129,8 +130,8 @@ def run_dag_cli(
     if args.status:
         now = time.time()
         for entry in dag.results_status(config):
-            age = f"{(now - entry['mtime']) / 3600:.1f}h ago" if entry["mtime"] else "—"
-            exists_mark = "✓" if entry["exists"] else "✗"
+            age = f"{(now - entry['mtime']) / 3600:.1f}h ago" if entry["mtime"] else "-"
+            exists_mark = _mark(entry["exists"])
             if not entry["stale"]:
                 stale_note = ""
             elif not entry["exists"]:
@@ -156,11 +157,14 @@ def run_dag_cli(
         if will_run:
             print("    RUNNING...")
 
+    failed: list[str] = []
+
     def on_step_end(step, result):
         # The elapsed time is on the status line so a log -- or a blind test's transcript of
         # one -- says where a build's wall clock went, step by step (`csynth` vs `system_xsi`).
         took = f"({result.elapsed_seconds:.1f} s)"
         if not result.success:
+            failed.append(step.name)
             print(f"    FAILED {took}: {result.message}")
             # The message is str(exc); for a toolchain error that is often a bare string with no
             # file or line.  Print the traceback too so the failure is actionable.
@@ -181,8 +185,23 @@ def run_dag_cli(
     if args.timing:
         print("timing:")
         print(indent(events.format_tree(spans), "    "))
+    if failed:
+        # A failed step fails the command: a script or an agent reading only the exit status must
+        # not take a red build for a green one.
+        print(f"FAILED: {', '.join(failed)}")
+        sys.exit(1)
     return spans
 
+
+
+def _mark(ok: bool) -> str:
+    """A check or a cross -- as ASCII when the console cannot encode them (a Windows code page)."""
+    mark = "✓" if ok else "✗"
+    try:
+        mark.encode(sys.stdout.encoding or "ascii")
+    except (UnicodeEncodeError, LookupError):
+        return "+" if ok else "x"
+    return mark
 
 
 #: ``--platform`` / ``--platforms-root``: the flags an example adds (``extra_args``) when its build

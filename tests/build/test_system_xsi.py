@@ -29,8 +29,8 @@ def test_discover_finds_the_crossbar_the_host_and_the_cut():
 def test_a_system_needs_no_bus():
     """system_model S3: the direct-wired markov has no crossbar in its DUT -- so no bus and no host
     on one; its cut is still its own declaration."""
-    from examples.markov.markov import MarkovSystem, default_jobs
-    s = MarkovSystem(jobs=default_jobs(1, 16), link="direct")
+    from examples.markov.markov import default_jobs, markov_system
+    s = markov_system(default_jobs(1, 16), "direct")
     assert discover(s) == (None, None, [s.gen, s.chain, s.mem])
 
 

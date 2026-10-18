@@ -477,9 +477,10 @@ class LoadRequest:
                                  "nwords_max must be provided to specify the transfer length")
             return (yield from pull(nwords_max=self.nwords_max))
         raw = yield from pull(nwords_max=self.nwords())
-        if self.kind == "schema":
-            return ep._unpack(raw, self.element_type)
-        return ep._unpack(raw, self.element_type, self.count)
+        # The same decoding as a pipelined phase's: a burst that ended early (TLAST) gives the elements
+        # whose words arrived -- not `count` of them padded out -- and a short schema raises.  Run now
+        # or deferred, one read returns one thing.
+        return self.decode(raw)
 
     def _g(self):
         if self._gen is None:

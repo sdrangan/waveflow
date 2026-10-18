@@ -173,12 +173,11 @@ issues is a response or a read of `x`; none is a count.
 
 ## Step 5: how the run ends
 
-The reader fires `self.done` after the last job. The system runs the simulation until then:
+The reader fires `self.done` after the last job. The system runs the simulation until then -- it
+is built with that event as its end and the host's results as what `run()` returns:
 
 ```python
-    def run(self) -> dict[int, dict]:                 # MarkovSystem.run
-        self.sim.run_sim(until=self.host.done)
-        return self.host.results
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results, ...)
 ```
 
 A free-running kernel never finishes — it waits for the next command forever — so the host's "I have
@@ -205,5 +204,5 @@ That is a complete host for pysim. For RTL it adds two class attributes, `cpp_mo
 be checked against that twin. They do nothing in a pure Python run and are explained in
 [XSI testbench](xsi.md#the-host-in-c) and [Software threads](../../guide/build/sw_threads.md).
 
-Next: [The system](system.md) — how `MarkovSystem` builds the kernels, the memory and the host, and
+Next: [The system](system.md) — how `markov_system` builds the kernels, the memory and the host, and
 wires the host's endpoints either straight to the kernels or across the bus.

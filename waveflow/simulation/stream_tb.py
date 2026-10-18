@@ -213,7 +213,8 @@ class StreamSink(HwModule):
         from waveflow.utils.burst_io import write_burst_bundle
 
         p = Path(self.out_bundle)
-        write_burst_bundle(list(self.words), p if p.is_absolute() else Path(root) / p)
+        write_burst_bundle(list(self.words), p if p.is_absolute() else Path(root) / p,
+                           word_chunks=-(-int(self.bitwidth) // 64))
 
     def bfm_model(self):
         """XSI twin: an ``AxisSlave`` on the port ``stream_ep`` is wired to — always ready, keeps

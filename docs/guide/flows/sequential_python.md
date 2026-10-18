@@ -1,6 +1,7 @@
 ---
 title: Writing it in Python
 parent: Sequential (host-activated)
+grand_parent: Legacy flows
 nav_order: 0
 audience: python
 api: [HostActivated, VitisRegMap, RegField, VitisRegMapMMIFSlave, synthesizable, sim_only]

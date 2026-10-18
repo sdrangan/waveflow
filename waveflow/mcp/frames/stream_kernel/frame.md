@@ -27,7 +27,8 @@ The pattern is command-response (`docs/guide/patterns/command_response.md`); the
    nothing after it is answered.
 4. **When the number of results is not known until the end** (detections, matches), `m_out` carries
    a tagged union ending in `END` -- one `DataList` per message type, each beginning with the same
-   `EnumField` tag -- and `m_status` is unchanged (*Variable-length output* on the pattern page).
+   `EnumField` tag (`docs/guide/schema/python/tagged_union.md`) -- and `m_status` is unchanged
+   (*Variable-length output* on the pattern page).
 5. **Every message is a schema** (`DataList`, `EnumField`, `FixedField`, `ComplexField`), and every
    word is packed by the generated code: `serialize` / `write_array` in Python, `read_axi4_stream` /
    `write_axi4_stream` and the lane routines in C++.  Never by hand.
@@ -54,4 +55,7 @@ Stage 1 answers each in one line:
 - the operation, bit-exactly: the operation order, every rounding and saturation;
 - the errors the kernel detects, and their status codes;
 - the word width -- one, or several built from one class -- and the elements per word;
+- the part and the clock, if the spec sets a clock: csynth targets a Zynq-7020 at 100 MHz unless the
+  top's script names others (`render_tcl(top, part=..., period_ns=...)`; `RFSOC4X2_PART` at 4 ns is
+  the framework's fast part) -- a 7020 does not close 250 MHz;
 - the scenarios and their expected outputs, and any throughput target.

@@ -515,16 +515,36 @@ def run_vitis_hls(
     # the build step it runs inside.
     from waveflow import events
 
-    with events.span("tool", "vitis-run", script=Path(tcl_script).name):
-        return subprocess.run(
-            final_cmd,
-            cwd=work_dir or default_work_dir,
-            shell=use_shell,
-            check=True,
-            text=True,
-            capture_output=capture_output,
-            env=final_env,
-        )
+    cwd = work_dir or default_work_dir
+
+    def run() -> subprocess.CompletedProcess:
+        with events.span("tool", "vitis-run", script=Path(tcl_script).name):
+            return subprocess.run(final_cmd, cwd=cwd, shell=use_shell, check=True, text=True,
+                                  capture_output=capture_output, env=final_env)
+
+    result = run()
+    # Vitis 2025.1, now and then: a csynth that declares m_axi reports success with every pointer
+    # lowered to a register port (HLS 214-450), and an unchanged re-run is correct.  Re-run it once;
+    # composite_gen.check_maxi_lowered still refuses what a second run gets wrong.
+    top = _csynth_top(tcl_script)
+    if top is not None:
+        from waveflow.build.composite_gen import unlowered_maxi_bundles
+
+        if unlowered_maxi_bundles(cwd, top):
+            result = run()
+    return result
+
+
+def _csynth_top(tcl_script: Union[str, Path]) -> Optional[str]:
+    """The top a csynth script synthesizes (``set_top``), or None for a script that runs no csynth."""
+    import re
+
+    try:
+        text = Path(tcl_script).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^\s*set_top\s+(\w+)", text, re.M)
+    return m.group(1) if m and "csynth_design" in text else None
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:

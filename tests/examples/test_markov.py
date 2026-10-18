@@ -14,7 +14,7 @@ from examples.markov.markov import (
     CRD_EVERY,
     MAX_IN_FLIGHT,
     MEM_BASE,
-    MarkovSystem,
+    markov_system,
     chain_golden,
     default_jobs,
     markov_golden,
@@ -25,7 +25,7 @@ from examples.markov.markov import (
 
 def _run(link, njobs=4, n=300):
     jobs = default_jobs(njobs, n)
-    sysm = MarkovSystem(jobs=jobs, link=link)
+    sysm = markov_system(jobs, link)
     return sysm, jobs, sysm.run()
 
 
@@ -75,7 +75,7 @@ def test_the_routed_link_never_stalls_and_batches_credit():
 def test_the_host_never_polls():
     """Every host bus read is either the response pop or the x read-back -- no vacancy or occupancy
     read, ever, because both queue endpoints sleep on interrupts."""
-    sysm = MarkovSystem(jobs=default_jobs(3, 200), link="mm")
+    sysm = markov_system(default_jobs(3, 200))
     reads = []
     orig = sysm.host.m.read
 
@@ -104,7 +104,7 @@ def test_the_fraction_of_ones_approaches_the_stationary_probability():
 
 def test_the_bus_headers_list_the_memory():
     from waveflow.hw.mm_device import bus_address_headers
-    sysm = MarkovSystem(jobs=default_jobs(1, 64), link="mm")
+    sysm = markov_system(default_jobs(1, 64))
     h = bus_address_headers(sysm.xbar, system="markov")
     assert list(h) == ["markov_gen_layout.h", "markov_chain_layout.h", "markov_bases.h"]
     bases = h["markov_bases.h"]

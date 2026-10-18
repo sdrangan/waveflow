@@ -151,7 +151,8 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
     def inputs(root: Path) -> None:
         for port, bursts in stim.items():
             write_burst_bundle([b.words for b in bursts], Path(root) / "vectors" / port,
-                               tlast=[b.tlast for b in bursts])
+                               tlast=[b.tlast for b in bursts],
+                               word_chunks=-(-int(stand_ins[port].bitwidth) // 64))
 
     def calibration():
         holdout = getattr(dut, "calib_holdout", None)

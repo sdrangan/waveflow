@@ -23,7 +23,7 @@ flow = "free-running: pysim from the testbench graph, DUT and testbench codegen,
 choose_when = """one accelerator built from several stages that stream to each other, \
 reading its input from memory and writing its results to memory, started by a \
 command stream -- with no host program on a bus.  For several kernels or a host \
-on a bus, choose bus_system."""
+on a bus, choose bus_system; stages that stream to each other \nwith no memory are stream_pipeline."""
 
 # Primary first: memcpy is the whole flow with no compute; interleaver adds
 # compute stages and on-chip random access (stream-of-blocks).

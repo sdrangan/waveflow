@@ -4,7 +4,7 @@ parent: Build System
 nav_order: 6.5
 audience: python
 api: [HwSystem, DutTop, MmSlaveDevice, SystemTopSpec, SystemTopSpec.from_system, SystemTopSpec.render_verilog, system_top_spec, SubTop, RtlInstance, render_system_top, add_system_steps, run_system_xsi]
-summary: "Simulating a whole memory-mapped system at RTL -- several csynth'd kernels behind their adaptors, AMD's crossbar, an on-chip memory, and a host -- from the pysim system object, with nothing restated. A system is a subclass of HwSystem: its sim, run(), and dut(), a DutTop tree of devices (each kernel with its views and the bus writers acting for it) and memories, which is the default cut. SystemTopSpec is the RTL top as data, walked from it; each device is a sub-top that renders and elaborates alone. add_system_steps(dag, sysm) puts csynth (one step per HLS top, fresh while its source stamp matches; build or check), the crossbar IP and the Verilog top (system_rtl), the scenario, pysim, the RTL run and the trace comparison on a BuildDag, and run_system_xsi(sysm) is the same as one call. It walks the graph to the Verilog top (crossbar slots, adaptors, stream nets, credit-link writers, interrupt outputs, tie-offs), generates the harness around the host's C++ twin (its threads on generated endpoints), runs it, and checks the host against pysim: both run one scenario file, every host endpoint records what crossed it, and the traces must be byte-identical; the cycle count is an exact gate of its own. Worked on mm_fir (618 / 611) and markov (1870)."
+summary: "Simulating a whole memory-mapped system at RTL -- several csynth'd kernels behind their adaptors, AMD's crossbar, an on-chip memory, and a host -- from the pysim system object, with nothing restated. A system is HwSystem(sim, dut): the simulation holding every module, and the DUT, a DutTop tree of devices (each kernel with its views and the bus writers acting for it) and memories, which is the default cut. SystemTopSpec is the RTL top as data, walked from it; each device is a sub-top that renders and elaborates alone. add_system_steps(dag, sysm) puts csynth (one step per HLS top, fresh while its source stamp matches; build or check), the crossbar IP and the Verilog top (system_rtl), the scenario, pysim, the RTL run and the trace comparison on a BuildDag, and run_system_xsi(sysm) is the same as one call. It walks the graph to the Verilog top (crossbar slots, adaptors, stream nets, credit-link writers, interrupt outputs, tie-offs), generates the harness around the host's C++ twin (its threads on generated endpoints), runs it, and checks the host against pysim: both run one scenario file, every host endpoint records what crossed it, and the traces must be byte-identical; the cycle count is an exact gate of its own. Worked on mm_fir (618 / 611) and markov (1870)."
 ---
 
 # XSI system simulation
@@ -31,47 +31,57 @@ routed credit stream, four bus masters, a shared BRAM).
 
 ## The system: `HwSystem` {#the-system}
 
-Every system flow takes a **system object**: an instance of a subclass of
-[`HwSystem`](../../../waveflow/hw/hw_system.py) (`waveflow.hw.hw_system`). The class states
-what every downstream step relies on, so a system that compiles against it is one the flows accept:
-
-| member | what it is | markov's |
-|---|---|---|
-| `sim` | the `Simulation` holding every module and interface of the graph. The subclass builds the graph, typically in `__post_init__` | one `Simulation`, with the kernels, memory, host, crossbar and links on it |
-| `dut()` | the **default DUT**: a `DutTop`, the root of the tree of what is synthesized | `markov_dut`: `gen_dev`, `chain_dev`, `mem`, with `xbar` and `u_link` as its links |
-| `run()` | simulate the whole graph in pysim and return what the system reports | runs until the host is done; the host's results |
-| `cut()` | the DUT as a list, each device's kernel then each memory: what `inside=` takes | `[gen, chain, mem]` |
-| `elements()` | every module and interface of the graph | |
-
-`dut()` and `run()` are abstract, so a subclass missing either cannot be instantiated, and a flow
-given an object that is not a `HwSystem` refuses it by naming this contract.
-
-**The DUT is a tree.** `build_mm_device` returns each kernel's **device**, a composite module
-(`MmSlaveDevice`) holding the kernel, its views and its adaptor. Binding a routed credit stream adds
-each of its bus writers to the device of the kernel it acts for. `DutTop` holds the devices and the
-on-chip memories, and the interfaces between them:
+Every system flow takes a **system object**, an
+[`HwSystem`](../../../waveflow/hw/hw_system.py) (`waveflow.hw.hw_system`): a `Simulation` holding every
+module and interface, and the one root module that is synthesized, the **DUT**. Build the modules on
+one simulation, wire them, and name the DUT:
 
 ```python
 from waveflow.hw.hw_system import DutTop, HwSystem
 
-@dataclass
-class MarkovSystem(HwSystem):
-    jobs: list
-
-    def __post_init__(self):
-        self.sim = Simulation()
-        ...                                      # kernels, memory, host; devices; crossbar; links
-        self.dut_top = DutTop.of("markov_dut", self.sim,
-                                 comps=[self.gen_dev, self.chain_dev, self.mem],
-                                 ifs=[self.xbar, self.u_link])
-
-    def dut(self) -> DutTop:
-        return self.dut_top
-
-    def run(self):
-        self.sim.run_sim(until=self.host.done)
-        return self.host.results
+def markov_system(jobs, link="mm", ...) -> HwSystem:
+    sim = Simulation()
+    ...                                          # kernels, memory, host; devices; crossbar; links
+    dut = DutTop.of("markov_dut", sim, comps=[gen_dev, chain_dev, mem], ifs=[xbar, u_link])
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
+                    fresh=lambda: markov_system(jobs, link, ...))
+    sysm.gen, sysm.chain, sysm.xbar, sysm.u_link = gen, chain, xbar, u_link   # for tests and probes
+    return sysm
 ```
+
+The constructor checks the rules, each a refusal naming what to fix: the DUT is a SimObj of this
+simulation and a root (a sub-module's own harness takes a fresh copy of it), every testbench
+participant can be lowered to the RTL testbench (a `bfm_model()`, an `xsi_model()` or a C++ twin), and no
+DUT boundary port is bound to nothing. The rest of the arguments describe the run:
+
+| argument | what it is | markov's |
+|---|---|---|
+| `run_until` | the event that ends a pysim run that never runs out of events | the host's `done` |
+| `check` | `(system) -> Any`, what `run()` returns | the host's results |
+| `fresh` | `() -> HwSystem`, an unrun copy, for a second pysim pass (a calibration's) | the same call again |
+| `inputs`, `n_cycles` | a system with no software host: what the testbench plays, and the RTL run's bound | (the host writes its scenario) |
+| `calibration` | `() -> CalibWorkload`, the workload that calibrates the design's timed phases | |
+
+What the flows then use:
+
+| member | what it is | markov's |
+|---|---|---|
+| `sim` | the `Simulation` holding every module and interface of the graph | the kernels, memory, host, crossbar and links |
+| `dut()` | the **default DUT**: the root of the tree of what is synthesized | `markov_dut`: `gen_dev`, `chain_dev`, `mem`, with `xbar` and `u_link` as its links |
+| `participants()` | the testbench, derived: every root outside the DUT | `[host]` |
+| `run()` | write the scenario, simulate the whole graph in pysim to `run_until`, return `check`'s value | the host's results |
+| `cut()` | the DUT as a list, each device's kernel then each memory: what `inside=` takes | `[gen, chain, mem]` |
+| `elements()` | every module and interface of the graph | |
+
+A flow given an object that is not a `HwSystem` refuses it by naming this contract. A system written
+before this form subclasses `HwSystem` and implements `dut()` and `run()` itself; the flows take both.
+[`harness(module)`](../systems/index.md) builds the same object around one module, with generated
+stand-ins as its testbench.
+
+**The DUT is a tree.** `build_mm_device` returns each kernel's **device**, a composite module
+(`MmSlaveDevice`) holding the kernel, its views and its adaptor. Binding a routed credit stream adds
+each of its bus writers to the device of the kernel it acts for. `DutTop` holds the devices and the
+on-chip memories, and the interfaces between them.
 
 **DUT and testbench are roles, not kinds.** Everything outside the DUT tree is the testbench: here
 only the host. `dut()` is the cut a build takes when it is given none. A build may draw another one
@@ -110,7 +120,7 @@ by walking its graph. It is the middle of three layers, each derived from the on
 
 | layer | what it is | markov's |
 |---|---|---|
-| the pysim system | the Python object you write and simulate: kernels, interfaces, crossbar, host | `MarkovSystem` |
+| the pysim system | the Python object you write and simulate: kernels, interfaces, crossbar, host | `markov_system(jobs)` |
 | **the spec** | the RTL top as data: every instance, slot, net and port, cut at a set of modules | `SystemTopSpec`, top `markov_top` |
 | the Verilog | text rendered from the spec | `markov_top.v` |
 
@@ -124,7 +134,7 @@ From the system object, not yet run:
 ```python
 from waveflow.build.system_top import SystemTopSpec
 
-sysm = MarkovSystem(jobs=jobs, link="mm")
+sysm = markov_system(jobs, link="mm")
 spec = SystemTopSpec.from_system(sysm, top="markov_top")
 ```
 
@@ -141,7 +151,7 @@ can call it too.
 |---|---|---|
 | `sysm` | (required) | the [system object](#the-system), not yet run. It must hold one crossbar and one software host |
 | `inside` | `sysm.cut()` | the modules synthesized into the top: kernels (`FreeRunMod`s with a csynth'd module) and on-chip memories (`MemoryMod`). See [the cut](#the-cut) |
-| `top` | the system class in snake case (`MarkovSystem` → `markov_system`) | the Verilog module name of the system top; the sub-tops are named `<top>_<device>` |
+| `top` | the DUT's name (`markov_dut`); for a subclass, its name in snake case | the Verilog module name of the system top; the sub-tops are named `<top>_<device>` |
 | `xbar_name` | `xbar_<top>` | the crossbar IP's module name |
 | `id_width` | enough bits to route every crossbar master | the crossbar's AXI ID width |
 
@@ -302,14 +312,14 @@ from waveflow.build.system_dag import add_system_steps
 
 dag = BuildDag()
 dag.add(MarkovCodegenStep(name="codegen"))     # the example's: headers, kernel tops, writer tops, .tcl
-add_system_steps(dag, MarkovSystem(jobs=jobs, link="mm"), work_dir="xsi_work", top="markov_top")
+add_system_steps(dag, markov_system(jobs, link="mm"), work_dir="xsi_work", top="markov_top")
 ```
 
 [`add_system_steps`](../../../waveflow/build/system_dag.py) takes the system object -- not yet run --
 finds the crossbar and the `SwHost` among the simulation's objects, takes the default cut (each kernel
 whose device is a crossbar slave, then each memory on it; `inside=` overrides), and adds the six
-framework steps below. `top` defaults to the system class in snake case (`MarkovSystem` ->
-`markov_system`) and `xbar_name` to `xbar_<top>`. An example's script hands the DAG to
+framework steps below. `top` defaults to the DUT's name (a subclass: its name in snake case,
+`MarkovSystem` -> `markov_system`) and `xbar_name` to `xbar_<top>`. An example's script hands the DAG to
 `run_dag_cli`, so it gets `--through <step>`, `--status`, `--force` and `--force-step` for free.
 
 ### csynth {#csynth}
@@ -330,6 +340,11 @@ stamp covers all of `include/` and `src/`, so an edit there re-runs every top; a
 - `synth="check"` (the gate tests, `run_system_xsi`): a stale or missing top **fails the step**, naming
   the top and the source that changed. A gate never hides a 40-second csynth, and never runs against RTL
   built from other sources.
+
+One exception, opt-in: with **`WAVEFLOW_RESYNTH=1`** in the environment, `synth="check"` builds a stale
+top instead of failing. It exists for one run -- after a framework header that every example copies into
+`include/` changes (`streamutils_hls.h`, the array utils), which makes every stamp stale at once:
+`WAVEFLOW_RESYNTH=1 pytest -m xsi` re-synthesizes and gates in one pass.
 
 ### The other steps: fresh while nothing they read changed {#system-freshness}
 
@@ -432,7 +447,7 @@ paths, `pysim_cycles` and `trace_mismatches`.
 ```python
 from waveflow.build.system_xsi import run_system_xsi
 
-run = run_system_xsi(MarkovSystem(jobs=jobs, link="mm"), work_dir, top="markov_top")
+run = run_system_xsi(markov_system(jobs, link="mm"), work_dir, top="markov_top")
 run.cycles, run.trace_mismatches          # 1870, []
 ```
 

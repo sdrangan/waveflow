@@ -126,6 +126,12 @@ kernel that tries to resynchronize on bad input can only guess. A stopped kernel
 diagnose -- its status says which command broke it and how. Testing it is simple: put the bad command
 in the middle of a scenario, and check that nothing after it is answered on either stream.
 
+"Reads nothing more" is the kernel's body. At the pins of a Vitis HLS top, the AXI-Stream register
+slice in front of `s_in` still completes **two more handshakes** before TREADY falls: those words sit in
+the slice, and the body never reads them (measured with Vitis HLS 2025.1, at 32 and 64 bits, in the rung-1
+blind build). So a gate on the input side asserts what was accepted is at most the error's word plus two,
+not exactly the error's word.
+
 What an error does to the reader: the results are short, and the reader that sized them from the header
 is left waiting for words that never come. That is what the status, the interrupt and the timeout below
 are for.
@@ -161,9 +167,9 @@ m_status : Status(tx_id, code)                               unchanged
 
 There is no way around the in-band `END`: a reader behind a bus sees no TLAST, and nothing else can
 tell it the job is over. A job with no results is `START` then `END`. Each message begins with its type,
-so a reader tells them apart: today, one `DataList` per message type, each beginning with the same
+so a reader tells them apart: one `DataList` per message type, each beginning with the same
 `EnumField` tag (the reader reads the first word, decodes the tag, then the rest by that type's
-schema). A [`DataUnion`](../schema/python/dataunion.md) is the same idea as one schema, but its C++ has
+schema) -- worked, and runnable, in [Tagged unions on a stream](../schema/python/tagged_union.md). A [`DataUnion`](../schema/python/dataunion.md) is the same idea as one schema, but its C++ has
 no stream methods yet and pads every message to the longest.
 
 In Python, one `write` is one burst, so a kernel that builds a job's messages one at a time collects

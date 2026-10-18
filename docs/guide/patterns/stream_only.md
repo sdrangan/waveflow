@@ -110,6 +110,13 @@ arrays -- neither carries an event. What tells a module that the storage is *rea
 [bram_access](../../examples/bram_access/index.md) the two tasks share one memory, but which task touches
 it, and when, arrives as command messages on streams.
 
+## Between the kernels: stream blocks
+
+A stream-only design keeps needing the same pieces between its own kernels -- one stream to several
+stages, several streams into one. Waveflow has them written once, as framework modules, in
+[Stream Blocks](../streams/index.md): [`StreamBroadcast`](../streams/broadcast.md) gives each of several
+stages its own copy of one stream, each stage keeping its part.
+
 ## Where the rule does not apply
 
 - **The [sequential flow](../flows/sequential.md).** A host-activated kernel synchronizes through

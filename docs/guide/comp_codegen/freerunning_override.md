@@ -72,6 +72,42 @@ The same applies to `task_fn` and `header`: nobody can guess that `MemRStream`'s
 `mem_r_stream_framed_task` rather than `mem_r_stream_task`. And `template_args` are the concrete values
 to bake into the C++ template, in the order the template declares them.
 
+### One body, wherever it sits: `framed` {#framed}
+
+A port that carries TLAST has a **word type that depends on where the body sits**: a top's port is
+`streamutils::axi4s_word<W>` (Vitis allows `ap_axis` only on interface ports), an internal FIFO is
+`streamutils::framed_word<W>`. List such ports in `framed`, and the body takes each one's word type as a
+template parameter, after `template_args`, in signature order -- the generator supplies it:
+
+```python
+KernelTask("eq_apply_task", "eq_apply_task.h", ("s_in", "s_g", "m_out", "m_status"),
+           template_args=(64,), framed=("s_in", "s_g", "m_out", "m_status"))
+```
+
+```cpp
+template <int W, typename TI, typename TG, typename TO, typename TS>
+static void eq_apply_task(hls::stream<TI>& s_in, hls::stream<TG>& s_g,
+                          hls::stream<TO>& m_out, hls::stream<TS>& m_status);
+```
+
+So **one body serves a module in every placement**: as the top of its own harness (every port
+`axi4s_word`), and as a stage of a composite (`framed_word` on its internal edges, `axi4s_word` on the
+composite's boundary). That is what lets a stage be verified alone at RTL and then composed.
+
+Inside, read and write through the helpers that take **either** word type, so the body never names
+one:
+
+| what | read | write |
+|---|---|---|
+| a schema message | `streamutils::read_msg<W>(msg, s)` | `streamutils::write_msg<W>(msg, s, last = true)`: `last` is TLAST on its last word; `false` leaves the burst open for the next message |
+| a word of elements (lanes) | `<elem>_array_utils::read_boundary_lane<W>(s, dst, n, tl)` | `<elem>_array_utils::write_boundary_lane<W>(src, s, tlast, n)` |
+| one raw word | `streamutils::read_boundary_word<WordT, W>(s, last)` | `streamutils::write_boundary_word<WordT, W>(s, data, last)` |
+
+Each is an overload set resolved at compile time -- no runtime branch. The schema's header must be
+generated with framed readers and writers (`DataSchemaStep(..., framed=True)`). Worked examples:
+[the block equalizer's stages](../../examples/block_eq/stages.md#the-hls-bodies-one-body-two-placements),
+and the framework's own [`StreamBroadcast`](../streams/broadcast.md#in-hls).
+
 ### `run_iter` stays
 
 Overriding `kernel_task` does **not** remove `run_iter`. It stays as the **pysim golden**: the model

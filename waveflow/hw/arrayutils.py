@@ -1049,6 +1049,34 @@ def _gen_lane_helpers(
         f"{i1}write_framed_stream_elem_impl<word_bw>::run(s, src, tlast, {sel});",
         f"{indent}}}",
         "",
+        "// --- boundary lane methods: ONE name for both TLAST-carrying word types, overloaded on the",
+        "// stream -- axi4s_word at a top's port, framed_word on an internal FIFO.  For a body whose port",
+        "// types are template parameters (KernelTask.framed): the generator picks the word type where the",
+        "// body sits, and overload resolution picks the routine, so one body serves both placements.",
+        "template<int word_bw>",
+        f"{indent}inline void read_boundary_lane({axis} s, value_type dst[{lc}], int n, streamutils::tlast_status& tl) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}read_axi4_stream_lane<word_bw>(s, dst, n, tl);",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void read_boundary_lane(hls::stream<streamutils::framed_word<word_bw>>& s, value_type dst[{lc}], int n, streamutils::tlast_status& tl) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}read_framed_stream_lane<word_bw>(s, dst, n, tl);",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void write_boundary_lane(const value_type src[{lc}], {axis} s, bool tlast = false, int n = {lc}) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}write_axi4_stream_lane<word_bw>(src, s, tlast, n);",
+        f"{indent}}}",
+        "",
+        "template<int word_bw>",
+        f"{indent}inline void write_boundary_lane(const value_type src[{lc}], hls::stream<streamutils::framed_word<word_bw>>& s, bool tlast = false, int n = {lc}) {{",
+        f"{i1}#pragma HLS INLINE",
+        f"{i1}write_framed_stream_lane<word_bw>(src, s, tlast, n);",
+        f"{indent}}}",
+        "",
         "// --- element random access (Phase 3): read/write ONE packed element by index i ---",
         "// iw = i / LW, k = i % LW  (LW = lane_capacity<W>(), compile-time; a power-of-two LW is a",
         "// shift/mask).  Reuses the shared run_lane / write_lane (the single packing-contract source)",
@@ -1798,12 +1826,20 @@ class ArrayUtilsStep(Buildable):
 
     @property
     def build_outputs(self) -> dict[str, Path]:
-        return {
+        out = {
             "include": Path(_array_utils_include_path(self._elem_type)),
             "tb_include": Path(_array_utils_tb_include_path(self._elem_type)),
         }
+        # An integer complex element's C++ type is the framework's wf_cint, which the header includes
+        # by name: write it beside the header, so the include resolves with nothing copied by hand.
+        if '"wf_cint.h"' in self._elem_type.get_codegen_includes():
+            out["wf_cint"] = out["include"].parent / "wf_cint.h"
+        return out
 
     def generate(self, key: str, config: BuildConfig) -> str:
+        if key == "wf_cint":
+            return (Path(__file__).resolve().parent.parent / "build" / "wf_cint.h").read_text(
+                encoding="utf-8")
         hls, tb = _gen_array_utils_content(
             elem_type=self._elem_type,
             widths=self._widths,

@@ -100,7 +100,7 @@ class HwSystem(ABC):
       :meth:`dut` and :meth:`run`::
 
           @dataclass
-          class MarkovSystem(HwSystem):
+          class MySystem(HwSystem):
               jobs: list
 
               def __post_init__(self):
@@ -108,7 +108,7 @@ class HwSystem(ABC):
                   ...                              # the kernels, memory, host, crossbar, wiring
 
               def dut(self):
-                  return self.dut_top                  # DutTop.of("markov_dut", ...), built above
+                  return self.dut_top                  # DutTop.of("my_dut", ...), built above
 
               def run(self):
                   self.sim.run_sim(until=self.host.done)
@@ -228,6 +228,9 @@ class HwSystem(ABC):
             self._root = root
             return
         host = discover(self)[1]
+        if host is None:                # no bus to find it by: the one participant that writes one
+            hosts = [o for o in self.participants() if callable(getattr(o, "write_scenario", None))]
+            host = hosts[0] if len(hosts) == 1 else None
         if host is None:
             raise NotImplementedError(f"{type(self).__name__} has no software host to write its "
                                       f"scenario: override write_scenario(root)")

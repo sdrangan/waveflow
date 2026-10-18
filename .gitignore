@@ -351,6 +351,12 @@ examples/stream_kernel/include/
 examples/stream_kernel/gen/
 examples/stream_kernel/poly_kernel_proj/
 examples/stream_kernel/xsi_work/
+# examples/block_eq: the bodies are src/; the rest is build output.
+examples/block_eq/include/
+examples/block_eq/gen/
+examples/block_eq/*_proj/
+examples/block_eq/xsi_work/
+examples/block_eq/logs/
 # its fitted timed-phase parameters (calib_phases files them) are source: keep them despite *.json.
 !examples/stream_kernel/calib/**/*.json
 # mem_copy through the system flow (examples/mem_copy/mem_copy_system_build.py): its system workspace.

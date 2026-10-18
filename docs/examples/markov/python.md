@@ -153,5 +153,5 @@ The rest of the Python side has a page each:
 
 - [The host](host.md) -- `MarkovHost`, the program that sends the jobs and collects the results, read
   as a recipe for writing a host;
-- [The system](system.md) -- `MarkovSystem`, which builds the kernels, the memory and the host and
+- [The system](system.md) -- `markov_system`, which builds the kernels, the memory and the host and
   wires them, directly or across one bus, step by step.

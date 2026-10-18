@@ -15,14 +15,14 @@ demo("direct")["bit_exact"], demo("mm")["bit_exact"]      # (True, True)
 ```
 
 `demo` runs four jobs of 300 steps (`default_jobs`) and compares every job's `x` with the golden.
-`MarkovSystem(jobs=..., link=...)` is the system itself:
+`markov_system(jobs, link=...)` is the system itself:
 
 | `link` | between the kernels | between the host and the kernels | cycles |
 |---|---|---|---|
-| `"direct"` | a plain `CreditStreamIF` | plain streams; the memory joined directly | 1811 |
-| `"mm"` | a `MmCreditStreamIF` over the crossbar ([The credit link](credit_link.md)) | the queues' views on the crossbar, interrupts to the host; the memory on the crossbar | 1926 |
+| `"direct"` | a plain `CreditStreamIF` | plain streams; the memory joined directly | 1682 |
+| `"mm"` | a `MmCreditStreamIF` over the crossbar ([The credit link](credit_link.md)) | the queues' views on the crossbar, interrupts to the host; the memory on the crossbar | 1823 |
 
-The kernels are the same objects with the same code in both. The routed system is 6% slower: every
+The kernels are the same objects with the same code in both. The routed system is 8% slower: every
 word between the kernels now crosses the crossbar, and the generator sometimes waits for credit.
 
 ## Results

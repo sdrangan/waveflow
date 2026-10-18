@@ -690,9 +690,15 @@ class FramedEdge:
     master_ep: object
     slave_ep: object
     depth: int | None = None
+    #: The channel's own payload width, as :attr:`StreamEdge.bitwidth`: a framed link wider than the
+    #: design's boundary (16 correlations a codeword between two stages on 64-bit ports) is declared at
+    #: its own width, which is what the tasks' ``framed_word<W>`` template arguments already say.
+    #: ``None`` keeps the old behaviour exactly.
+    bitwidth: int | None = None
 
     def decl(self, width: int) -> str:
-        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
+        w = width if self.bitwidth is None else int(self.bitwidth)
+        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{w}> > "
                 f"{self.name};")
         if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
             # See StreamEdge.decl: the default depth is HLS's own, so no pragma for it (keeps the
@@ -845,7 +851,8 @@ def derive_internal_edges(comp) -> list:
                     f"the StreamIF a depth (default {DEFAULT_STREAM_DEPTH}), or keep it unbounded only "
                     f"for pysim exploration, not for codegen.")
             if getattr(iface, "framed", False):
-                edges.append(FramedEdge(name, master, slave, depth=depth))
+                edges.append(FramedEdge(name, master, slave, depth=depth,
+                                        bitwidth=getattr(iface, "bitwidth", None)))
             else:
                 edges.append(StreamEdge(name, master, slave, depth=depth,
                                         bitwidth=getattr(iface, "bitwidth", None)))
@@ -1080,7 +1087,7 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     if isinstance(edge, SobEdge):
         kind, payload = "sob", edge.elem_bw
     elif isinstance(edge, FramedEdge):
-        kind, payload = "framed", width
+        kind, payload = "framed", (width if edge.bitwidth is None else int(edge.bitwidth))
     else:
         # The channel's own width when it has one -- see StreamEdge.bitwidth.  This number is read
         # back by the VCD tooling to split a trace, so it has to be the width the RTL net actually
@@ -2836,27 +2843,36 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def unlowered_maxi_bundles(root, top_name: str) -> list[str]:
+    """The ``m_axi`` bundles *top_name*'s generated source declares with no AXI master adapter in its
+    csynth RTL, sorted -- empty when every one was lowered, or when there is no generated source.
+    ``run_vitis_hls`` re-runs csynth once on a non-empty answer; :func:`check_maxi_lowered` refuses it."""
+    import re
+    from pathlib import Path
+
+    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
+    if not src.is_file():
+        return []
+    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
+                             src.read_text(encoding="utf-8")))
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    return sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+
+
 def check_maxi_lowered(root, top_name: str) -> None:
     """Refuse a csynth result whose ``m_axi`` ports were not lowered to AXI masters.
 
     **Seen twice (Vitis 2025.1, 2026-10-10), never reproduced on demand.**  csynth of a top whose
     pragmas declare ``m_axi`` (``offset=off`` + ``stable``) reported success with every pointer lowered
     to a plain register port -- ``HLS 214-450 Ignore address on register port 'm_mem'``, no
-    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  Nothing downstream
+    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  (Since 2026-10-17
+``run_vitis_hls`` re-runs such a csynth once by itself: the mimo_cg unit bench hit it in 3 of 5
+unchanged runs.  This check is what remains if the re-run drops them too.)  Nothing downstream
     says so until XSI fails to bind a port (``FATAL: port 'ap_rst_n' not found``), or worse, never
     binds it at all.  So right after csynth, before the stamp vouches for it: every ``m_axi`` bundle the
     top's source declares must have its adapter in the RTL.  ``plans/maxi_pointer_fifo.md``.
     """
-    import re
-    from pathlib import Path
-
-    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
-    if not src.is_file():
-        return
-    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
-                             src.read_text(encoding="utf-8")))
-    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
-    missing = sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+    missing = unlowered_maxi_bundles(root, top_name)
     if missing:
         raise RuntimeError(
             f"csynth of {top_name} declared m_axi bundle(s) {missing} but produced no AXI master for "

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from waveflow.build.build import BuildConfig, BuildDag
-from waveflow.build.system_dag import _SystemStep, add_system_steps, snake
+from waveflow.build.system_dag import _SystemStep, add_system_steps, default_top
 
 
 @dataclass
@@ -262,7 +262,7 @@ def add_calib_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
         raise ValueError(f"{type(sysm).__name__} has no calibration_workload()")
     # It writes the records its modules would load: its freshness must not follow them (Stage 6).
     wl.system._wf_calibrating = True
-    top = top or snake(type(sysm).__name__)
+    top = top or default_top(sysm)
     digest = scenario_digest(wl.system) if store is not None else ""
     if store is not None:
         mods = timed_modules(wl.system)

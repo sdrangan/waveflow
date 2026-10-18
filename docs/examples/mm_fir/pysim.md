@@ -10,7 +10,7 @@ summary: "The whole system in pysim, in three wirings with one host class: each 
 
 ## The system
 
-`MmFirSystem` in [`mm_fir.py`](../../../examples/mm_fir/mm_fir.py) wires the whole design, in one of
+`mm_fir_system` in [`mm_fir.py`](../../../examples/mm_fir/mm_fir.py) wires the whole design, in one of
 three ways. The kernel and the host are the same in all three.
 
 ### Over the bus (`link="mm"`, the default)
@@ -92,11 +92,11 @@ kernel is free-running, and its idle loop would otherwise keep the simulation go
 ## Running it
 
 ```python
-from examples.mm_fir.mm_fir import MmFirSystem, fir_golden
+from examples.mm_fir.mm_fir import fir_golden, mm_fir_system
 from examples.mm_fir.mm_fir_build import PKT, PLAN, scenario_x
 
 x = scenario_x()                      # 200 int16 samples
-sysm = MmFirSystem(x=list(x), plan=PLAN, pkt=PKT)
+sysm = mm_fir_system(list(x), PLAN, pkt=PKT)
 y = sysm.run()
 ```
 

@@ -26,7 +26,7 @@ flowchart LR
     top -- "irq_qin, irq_qout, irq_qresp" --> host
   end
   host --> traces[("traces/<br/>report.json")]
-  scen --> pysim["pysim<br/>MmFirSystem.run()"] --> ptraces[("pysim_traces/<br/>pysim.json")]
+  scen --> pysim["pysim<br/>sysm.run()"] --> ptraces[("pysim_traces/<br/>pysim.json")]
   traces --> compare{"compare"}
   ptraces --> compare
   classDef here fill:#f59f00,stroke:#9c5b00,color:#1a1a1a

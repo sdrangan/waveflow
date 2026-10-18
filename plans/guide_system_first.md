@@ -245,12 +245,24 @@ guide or a frame explains gets a blind test when it is written; rungs that need 
   (the user, 2026-10-17): a write in pieces would invite serializing and deserializing by hand.  The
   cost -- data-dependent structures (a variable number of records, a `DataUnion` per record) cannot be
   written as they are made -- is acknowledged, to be addressed later.
-- A stage's hand-written body cannot be RTL-harnessed alone: its ports are `framed_word<W>` inside a
-  composite, `axi4s_word<W>` as a top.
+- ~~A stage's hand-written body cannot be RTL-harnessed alone~~ -- **WRONG, corrected 2026-10-17**:
+  `KernelTask(framed=(...))` makes each listed port's word type a template parameter the generator
+  supplies (`framed_word` inside a composite, `axi4s_word` at a top), "so one body serves a composite
+  and the kernel's own harness" (`waveflow/hw/mem_stream.py`; markov uses it).  The real finding is a
+  **doc** one: a careful agent concluded it did not exist.  The guide must show it.
+  **Done 2026-10-17:** `docs/guide/comp_codegen/freerunning_override.md#framed`, and the helpers a body
+  needs to never name a word type -- `streamutils::read_msg` (beside `write_msg`) and every element's
+  `read_boundary_lane` / `write_boundary_lane`.  Both headers are copied into every example: a full
+  re-synthesis precedes the next full `-m xsi` run.  **Done 2026-10-17:** `WAVEFLOW_RESYNTH=1 pytest -m xsi` -- every example
+  re-synthesized, **221 passed**, 0 failed, 37 min (Vitis/Vivado 2025.1).
 - No TKEEP / lane count through the lane routines (a partial last word is invisible).
 - `harness` around a composite: in no example.  One class at several widths (`param_supports`): in no
   example.  `ComplexField` in a `DataList`, and lane routines for a `DataList` element: in no example.
-- No timed-phase pattern for a data-dependent rate.  `run_dag_cli` exits 0 when a step fails.
+- No timed-phase pattern for a data-dependent rate.  ~~`run_dag_cli` exits 0 when a step fails~~ -- **fixed**
+  2026-10-17 (the build test, below).
+- **Fixed 2026-10-17:** a framed internal link wider than the boundary was declared at the boundary's
+  width (`FramedEdge`); it now carries its own, as `StreamEdge` did.  `write_msg` takes no TLAST argument:
+  to do after the re-synthesis run (it is in `streamutils_hls.h`).
 - A queue-in packet longer than the queue cannot be written on the interrupt (the waiting `write` needs
   room for all of it; splitting puts TLAST on each piece) -- the input queue must hold the largest
   command.  A harness run with no host reports no cycle count (`cycles: -1`).
@@ -263,6 +275,13 @@ Results in `evaluation/planning_tests/results/baseline_2026-10-17.md`.
 **Stage 2 -- the references.**  markov and mm_fir to `HwSystem(sim, dut)` (D3), their gates unchanged
 (markov 1870 cycles at RTL, pysim -1.6%); their example pages updated.  `stream_kernel` checked for
 the stub anchors a scaffold needs.
+
+*Record (2026-10-17):* **done** -- `markov_system()` and `mm_fir_system()` return `HwSystem(sim, dut)`
+(the subclasses removed; pysim cycles unchanged, 1682 / 1823 and 608); pages and `xsi_system.md` lead
+with the direct form.  Then `write_msg(..., last)` and a `WAVEFLOW_RESYNTH=1 pytest -m xsi` run: 218 of
+221 at once, the 3 others two csynth failures that passed on a rerun (the mimo_cg unit bench's m_axi
+lowering, which its message says to re-run, and markov's core unit, both while a blind build ran Vitis
+beside them) -- **221 passed**, markov and mm_fir gates included (Vitis/Vivado 2025.1).
 
 **Stage 3 -- the guide slice the frames point to.**  The Systems section of the target: the lead page,
 *A system in code*, *The system flow*, *Building a system* -- written new, on D4's vocabulary, every
@@ -285,6 +304,27 @@ before the system and cites `HwSystem(sim, dut)`; citations resolve; whatever re
 rung 5, packet capture (the simplest and the hardest).  A plan can cite every right snippet and still produce
 parts that do not fit together; only a build shows that.  Gate: both reach their RTL gate; every failure
 on the way is a finding, fixed in the frame or the guide, or recorded.
+
+*Record (2026-10-17), rung 1:* built blind from the `stream_kernel` frame, 200 turns, 31 min, 31.5M tokens
+in (99% cached), 96k out.  32 and 64 bits pass every gate at RTL (9/9 scenarios each; 4107 / 2059 cycles
+for 4096 samples, PF samples per cycle); 128 bits was blocked by a framework defect (the harness wrote
+>64-bit words flat) -- fixed, with four more the build found (csynth freshness ignored the `.tcl`;
+`--force-step csynth` did nothing; a failed step exited 0; `validate_schema` failed on a `@dataclass`).
+`evaluation/planning_tests/results/build_01_2026-10-17.md`.
+
+*Record (2026-10-17), rung 5:* built blind from the `bus_system` frame (markov as reference), 285 turns,
+52 min, 66.9M tokens in (99% cached), 215k out.  Every functional gate passes at RTL (each kernel alone,
+the system's host traces identical to pysim's and the golden, zero polls); composed timing -6.4% of RTL
+against the spec's 5% (the memory writer's model under contention).  Fixed from it: a credit write
+reordered ahead of `wait_room` deadlocks at RTL (the guard); `SwHost`'s master serializes as the RTL
+host does; `wf_cint.h` written by `ArrayUtilsStep`.
+`evaluation/planning_tests/results/build_05_2026-10-17.md`.  **Stage 6 gate met: both reach their RTL gate.**
+
+*Record (2026-10-17):* `WAVEFLOW_RESYNTH=1 pytest -m xsi` after those fixes: **219 passed**, markov's exact
+gates unchanged with the guard; the 2 others the mimo_cg unit bench's csynth dropping its `m_axi`
+bundles (HLS 214-450, a Vitis 2025.1 nondeterminism: 3 of 5 unchanged runs) -- passed on a rerun.
+`run_vitis_hls` now re-runs such a csynth once by itself (`unlowered_maxi_bundles`;
+`tests/build/test_maxi_rerun.py`).
 
 **Stage 7 -- the rest of the guide.**  The target's remaining sections, in an order the read logs of
 Stages 1, 5 and 6 justify: Modules; `flows/` dissolved; Legacy; `nav_order`; a "where this sits in a
