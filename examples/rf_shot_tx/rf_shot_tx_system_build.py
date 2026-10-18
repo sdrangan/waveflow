@@ -20,10 +20,11 @@ from pathlib import Path
 
 import numpy as np
 
-from examples.rf_shot_tx.rf_shot_tx import (BLKSIZE, RESP, RfShotTx, RfShotTxAbs, RfShotTxSystem,
+from examples.rf_shot_tx.rf_shot_tx import (BLKSIZE, RESP, RfShotTx, RfShotTxAbs, rf_shot_tx_system,
                                             blocks_to_codes)
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.hw_system import HwSystem
 
 HERE = Path(__file__).resolve().parent
 WORK_DIR = "xsi_work"
@@ -37,9 +38,9 @@ def top(build: str, scenario: str) -> str:
             f"_system")
 
 
-def system(build: str = "default", scenario: str = "cmd") -> RfShotTxSystem:
+def system(build: str = "default", scenario: str = "cmd") -> HwSystem:
     """One of the gates' four runs: a build and a frame stream, 1400 cycles."""
-    return RfShotTxSystem(dut_cls=BUILDS[build], scenario=scenario)
+    return rf_shot_tx_system(dut_cls=BUILDS[build], scenario=scenario)
 
 
 def build_dag(build: str = "default", scenario: str = "cmd", work_dir=WORK_DIR) -> BuildDag:
