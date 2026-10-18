@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from examples.rf_loopback.rf_dut_build import RfPassThroughSystem, check_xsi_outputs
+from examples.rf_loopback.rf_dut_build import check_xsi_outputs, rf_pass_through_system
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.hw_system import HwSystem
 
 HERE = Path(__file__).resolve().parent
 TOP = "rf_pass_through_system"
@@ -23,9 +24,9 @@ WORK_DIR = "xsi_work"
 EXPECTED_CYCLES = 1066
 
 
-def system() -> RfPassThroughSystem:
+def system() -> HwSystem:
     """The kernel gate's scenario: eight one-block bursts, back to back."""
-    return RfPassThroughSystem()
+    return rf_pass_through_system()
 
 
 def build_dag(work_dir=WORK_DIR) -> BuildDag:

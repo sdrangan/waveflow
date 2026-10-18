@@ -26,8 +26,10 @@ such a top is unreliable — the generated top says so in its own header comment
 elaborated design as a shared library and lets a C++ testbench drive every pin cycle by cycle, which
 is what a free-running design needs.
 
-`BramAccessSystem` (in `bram_access.py`) is a [`GraphSystem`](../../guide/build/xsi_system.md#graph-system)
-around the `BramAccessTB` graph. The cut is `BramAccess` alone, the kernel together with its memory.
+`bram_access_system()` (in `bram_access.py`) is an
+[`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system): `wire_bram_access(sim, ...)` builds
+the testbench graph on one simulation (the six participants `BramAccessTB` holds), and the DUT is
+`BramAccess` alone, the kernel together with its memory.
 The memory is hand-written RTL beside the kernel (`add_rtl_mod`), so the system top instantiates
 the DUT as its **wrapper**, `bram_access_top`: the kernel and `bram_t2p` joined, rendered into the
 top's own file. The steps are every system's:

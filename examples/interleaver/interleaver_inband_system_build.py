@@ -17,7 +17,8 @@ import numpy as np
 
 from examples.interleaver.interleaver_inband import (XSI_GATE_N_CYCLES, XSI_GATE_SIZES,
                                                      check_xsi_outputs)
-from examples.interleaver.interleaver_inband_sim import InterleaverInbandSystem
+from examples.interleaver.interleaver_inband_sim import interleaver_inband_system
+from waveflow.hw.hw_system import HwSystem
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
 
@@ -28,9 +29,9 @@ WORK_DIR = "xsi_work"
 WANT_LAST_DONE_CYCLE = 1300
 
 
-def system() -> InterleaverInbandSystem:
+def system() -> HwSystem:
     """The twelve-job scenario the kernel gate runs -- past the old pointer-FIFO wall at six."""
-    return InterleaverInbandSystem(sizes=XSI_GATE_SIZES, n_cycles=XSI_GATE_N_CYCLES)
+    return interleaver_inband_system(sizes=XSI_GATE_SIZES, n_cycles=XSI_GATE_N_CYCLES)
 
 
 def build_dag(work_dir=WORK_DIR) -> BuildDag:

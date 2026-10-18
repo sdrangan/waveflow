@@ -78,6 +78,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
@@ -87,8 +88,8 @@ from waveflow.hw.dataschema import DataList, EnumField, IntField
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import COMPOSITE_KERNEL, SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import HwParam
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_module import HwParam, kernel_name
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.simulation.simobj import ProcessGen
@@ -97,6 +98,7 @@ from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 __all__ = ["ADDRS", "BASE", "COMPUTE_ADDR", "COMPUTE_BASE", "COMPUTE_N", "DEPTH", "EXPECTED",
            "FILL", "SCHEMA_CLASSES", "SENTINEL_BASE", "WORD_BW", "XSI_N_CYCLES", "BramOp",
            "BramOpField", "BramReadCmd", "BramAccess", "BramAccessTB", "BramStatus",
+           "bram_access_system", "wire_bram_access",
            "BramStatusField", "BramWriteCompute", "ReadCmd", "ReadResp", "Scenario", "Word64",
            "WriteComputeCmd", "WriteResp", "check_outputs", "check_xsi_outputs",
            "collision_scenario", "compute_cmd", "computed", "resp_words", "run_pysim",
@@ -603,56 +605,79 @@ class BramAccessTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.bitwidth)
-        self.dut = BramAccess(sim=self.sim, name=f"{self.name}_dut", bitwidth=w,
-                              depth=int(self.depth),
-                              clk=self.clk)
-        # has_tlast=True on the participants because the DUT's stream endpoints declare it (it is
-        # StreamIFSlave/Master's default) and StreamIF refuses a mismatch.  It is pysim framing
-        # only: the generated top carries plain `hls::stream<ap_uint<W> >` ports and the generic
-        # BFMs drive no TLAST pin, so the RTL sees one word after another either way.
-        self.cmd_w_drv = StreamDriver(sim=self.sim, name=f"{self.name}_cmd_w_drv", bitwidth=w,
-                                      in_bundle="vectors/cmd_w", has_tlast=True)
-        self.data_w_drv = StreamDriver(sim=self.sim, name=f"{self.name}_data_w_drv", bitwidth=w,
-                                       in_bundle="vectors/data_w", has_tlast=True)
-        self.cmd_r_drv = StreamDriver(sim=self.sim, name=f"{self.name}_cmd_r_drv", bitwidth=w,
-                                      in_bundle="vectors/cmd_r", has_tlast=True)
-        self.resp_w_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_resp_w_snk", bitwidth=w,
-                                          out_bundle="vectors/resp_w", has_tlast=True)
-        # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
-        # endpoint declared none, and a StreamSink declares 64.  A read-out frame is up to FILL
-        # words, so 64 would stall the DUT mid-frame.
-        self.data_r_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_data_r_snk", bitwidth=w,
-                                          out_bundle="vectors/data_r", has_tlast=True,
-                                          queue_size=FILL)
-        self.resp_r_snk = TimedStreamSink(sim=self.sim, name=f"{self.name}_resp_r_snk", bitwidth=w,
-                                          out_bundle="vectors/resp_r", has_tlast=True)
-        for c in (self.dut, self.cmd_w_drv, self.data_w_drv, self.cmd_r_drv,
-                  self.resp_w_snk, self.data_r_snk, self.resp_r_snk):
+        parts = wire_bram_access(self.sim, name=self.name, bitwidth=int(self.bitwidth),
+                                 depth=int(self.depth), clk=self.clk)
+        for k in _PARTS:
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        # Depths sized to the largest burst each producer presents, so a whole frame lands in one
-        # SimPy event instead of stalling the driver word by word.  These are TESTBENCH channels —
-        # one end is a DUT boundary port, and a top-level AXIS argument cannot carry a FIFO depth at
-        # all, so the number is a pysim modelling choice and claims nothing about the RTL.  See
-        # PR #185 Task 0.
-        self._join(f"{self.name}_cmd_w_if", self.cmd_w_drv.stream_ep, self.dut.wr.cmd_w, w,
-                   depth=8)               # a write command is 4 words
-        self._join(f"{self.name}_data_w_if", self.data_w_drv.stream_ep, self.dut.wr.data_w, w,
-                   depth=FILL)            # the whole fill arrives as one frame
-        self._join(f"{self.name}_resp_w_if", self.dut.wr.resp_w, self.resp_w_snk.stream_ep, w)
-        self._join(f"{self.name}_cmd_r_if", self.cmd_r_drv.stream_ep, self.dut.rd.cmd_r, w,
-                   depth=8)               # a read command is 3 words
-        self._join(f"{self.name}_data_r_if", self.dut.rd.data_r, self.data_r_snk.stream_ep, w)
-        self._join(f"{self.name}_resp_r_if", self.dut.rd.resp_r, self.resp_r_snk.stream_ep, w)
 
-    def _join(self, name: str, master, slave, w: int, depth: int | None = None) -> None:
-        iface = (StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=w, depth=int(depth))
+#: The participants :func:`wire_bram_access` returns by name (and :class:`BramAccessTB` carries).
+_PARTS = ("dut", "cmd_w_drv", "data_w_drv", "cmd_r_drv", "resp_w_snk", "data_r_snk", "resp_r_snk")
+
+
+def wire_bram_access(sim, *, name: str = "tb", bitwidth: int = WORD_BW, depth: int = DEPTH,
+                     clk: Clock | None = None) -> SimpleNamespace:
+    """The :class:`BramAccess` DUT and the six generic AXI-Stream participants around it, built on
+    *sim* and wired: three drivers (``cmd_w``, ``data_w``, ``cmd_r``) and three timed sinks
+    (``resp_w``, ``data_r``, ``resp_r``).  The one wiring both forms use -- :func:`bram_access_system`
+    (``HwSystem(sim, dut)``) and :class:`BramAccessTB` (the composite ``tb_top_spec`` and
+    :func:`run_pysim` walk).  Returns the parts by name (``dut``, ``cmd_w_drv``, ...,
+    ``resp_r_snk``), plus ``comps`` / ``ifs`` in the order a composite registers them."""
+    w = int(bitwidth)
+    clk = clk if clk is not None else Clock(freq=100e6)
+    dut = BramAccess(sim=sim, name=f"{name}_dut", bitwidth=w, depth=int(depth), clk=clk)
+    # has_tlast=True on the participants because the DUT's stream endpoints declare it (it is
+    # StreamIFSlave/Master's default) and StreamIF refuses a mismatch.  It is pysim framing
+    # only: the generated top carries plain `hls::stream<ap_uint<W> >` ports and the generic
+    # BFMs drive no TLAST pin, so the RTL sees one word after another either way.
+    cmd_w_drv = StreamDriver(sim=sim, name=f"{name}_cmd_w_drv", bitwidth=w,
+                             in_bundle="vectors/cmd_w", has_tlast=True)
+    data_w_drv = StreamDriver(sim=sim, name=f"{name}_data_w_drv", bitwidth=w,
+                              in_bundle="vectors/data_w", has_tlast=True)
+    cmd_r_drv = StreamDriver(sim=sim, name=f"{name}_cmd_r_drv", bitwidth=w,
+                             in_bundle="vectors/cmd_r", has_tlast=True)
+    resp_w_snk = TimedStreamSink(sim=sim, name=f"{name}_resp_w_snk", bitwidth=w,
+                                 out_bundle="vectors/resp_w", has_tlast=True)
+    # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
+    # endpoint declared none, and a StreamSink declares 64.  A read-out frame is up to FILL
+    # words, so 64 would stall the DUT mid-frame.
+    data_r_snk = TimedStreamSink(sim=sim, name=f"{name}_data_r_snk", bitwidth=w,
+                                 out_bundle="vectors/data_r", has_tlast=True, queue_size=FILL)
+    resp_r_snk = TimedStreamSink(sim=sim, name=f"{name}_resp_r_snk", bitwidth=w,
+                                 out_bundle="vectors/resp_r", has_tlast=True)
+
+    def join(if_name: str, master, slave, depth: int | None = None) -> StreamIF:
+        iface = (StreamIF(name=if_name, sim=sim, clk=clk, bitwidth=w, depth=int(depth))
                  if depth is not None else
-                 StreamIF(name=name, sim=self.sim, clk=self.clk, bitwidth=w))
+                 StreamIF(name=if_name, sim=sim, clk=clk, bitwidth=w))
         iface.bind(ep_name="master", endpoint=master)
         iface.bind(ep_name="slave", endpoint=slave)
-        self.add_if(iface)
+        return iface
+
+    # Depths sized to the largest burst each producer presents, so a whole frame lands in one
+    # SimPy event instead of stalling the driver word by word.  These are TESTBENCH channels —
+    # one end is a DUT boundary port, and a top-level AXIS argument cannot carry a FIFO depth at
+    # all, so the number is a pysim modelling choice and claims nothing about the RTL.  See
+    # PR #185 Task 0.
+    ifs = (join(f"{name}_cmd_w_if", cmd_w_drv.stream_ep, dut.wr.cmd_w,
+                depth=8),               # a write command is 4 words
+           join(f"{name}_data_w_if", data_w_drv.stream_ep, dut.wr.data_w,
+                depth=FILL),            # the whole fill arrives as one frame
+           join(f"{name}_resp_w_if", dut.wr.resp_w, resp_w_snk.stream_ep),
+           join(f"{name}_cmd_r_if", cmd_r_drv.stream_ep, dut.rd.cmd_r,
+                depth=8),               # a read command is 3 words
+           join(f"{name}_data_r_if", dut.rd.data_r, data_r_snk.stream_ep),
+           join(f"{name}_resp_r_if", dut.rd.resp_r, resp_r_snk.stream_ep))
+    return SimpleNamespace(dut=dut, cmd_w_drv=cmd_w_drv, data_w_drv=data_w_drv,
+                           cmd_r_drv=cmd_r_drv, resp_w_snk=resp_w_snk, data_r_snk=data_r_snk,
+                           resp_r_snk=resp_r_snk,
+                           comps=(dut, cmd_w_drv, data_w_drv, cmd_r_drv, resp_w_snk, data_r_snk,
+                                  resp_r_snk),
+                           ifs=ifs)
 
 
 @dataclass
@@ -1087,40 +1112,42 @@ def run_pysim(root=None, sc: Scenario | None = None, *, bitwidth: int = WORD_BW,
     return tb
 
 
-@dataclass
-class BramAccessSystem(GraphSystem):
-    """bram_access as a **system** (``plans/system_model.md`` S3e): the :class:`BramAccessTB` graph,
-    the cut :class:`BramAccess` alone.  Its memory is hand-written RTL beside the kernel
-    (``add_rtl_mod``), so the system top instantiates the DUT as its **wrapper** -- the kernel and
-    ``bram_t2p`` joined -- whose ports are the six AXI-Stream ones.
+def bram_access_system(scenario_name: str = "zero", n_cycles: int = XSI_N_CYCLES) -> HwSystem:
+    """bram_access as a **system**, ``HwSystem(sim, dut)``: the DUT and its six participants built on
+    one simulation (:func:`wire_bram_access`), the cut :class:`BramAccess` alone.  Its memory is
+    hand-written RTL beside the kernel (``add_rtl_mod``), so the system top instantiates the DUT as
+    its **wrapper** -- the kernel and ``bram_t2p`` joined -- whose ports are the six AXI-Stream ones.
 
-    *scenario* is ``"zero"`` (:func:`scenario_zero`, the gate) or ``"collision"``
-    (:func:`collision_scenario`, the deliberate read-during-write the waveform scan must find)."""
+    *scenario_name* is ``"zero"`` (:func:`scenario_zero`, the gate) or ``"collision"``
+    (:func:`collision_scenario`, the deliberate read-during-write the waveform scan must find).
+    ``run()`` checks what the sinks captured against the scenario and returns the system; the
+    participants are its attributes (``sysm.kernel``, ``sysm.resp_w_snk``, ...)."""
+    from waveflow.simulation.simulation import Simulation
 
-    scenario_name: str = "zero"
-    n_cycles: int = XSI_N_CYCLES
+    sc: Scenario = {"zero": scenario_zero, "collision": collision_scenario}[scenario_name]()
+    sim = Simulation()
+    parts = wire_bram_access(sim, name="xsi_tb")
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
 
-    def graph(self) -> BramAccessTB:
-        from waveflow.simulation.simulation import Simulation
-
-        self.scenario: Scenario = {"zero": scenario_zero,
-                                   "collision": collision_scenario}[self.scenario_name]()
-        return BramAccessTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        write_scenario(root, self.scenario)
-
-    def check(self) -> BramAccessTB:
+    def check(sysm: HwSystem) -> HwSystem:
         """The acceptance check on what the sinks captured."""
-        check_outputs(*captured(self.tb), sc=self.scenario, where="pysim: ")
-        return self.tb
+        check_outputs(*captured(sysm), sc=sc, where="pysim: ")
+        return sysm
+
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles),
+                    inputs=lambda root: write_scenario(root, sc), check=check,
+                    fresh=lambda: bram_access_system(scenario_name, n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, WORD_BW
+    sysm.scenario_name, sysm.scenario = scenario_name, sc
+    sysm.kernel = parts.dut
+    for k in _PARTS[1:]:
+        setattr(sysm, k, getattr(parts, k))
+    return sysm
 
 
-def captured(tb: BramAccessTB) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(resp_w, data_r, resp_r)`` as the three sinks collected them."""
+def captured(tb) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(resp_w, data_r, resp_r)`` as the three sinks collected them -- of a :class:`BramAccessTB`
+    or of :func:`bram_access_system`'s system (both carry the sinks by name)."""
     def words(sink) -> np.ndarray:
         return np.concatenate(sink.words) if sink.words else np.zeros(0, dtype=np.uint64)
     return words(tb.resp_w_snk), words(tb.data_r_snk), words(tb.resp_r_snk)

@@ -23,6 +23,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
@@ -39,7 +40,7 @@ from waveflow.hw.synth import sim_only
 from waveflow.simulation.rf_tb import RfDataSink, RfDataSource, read_rf_bundle, write_rf_bundle
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_system import DutTop, HwSystem
 
 from waveflow.hw.rfdc import Rfdc
 from waveflow.hw.rfdc_samp_word import RfdcSampWord, Rfsoc4x2SampWord
@@ -417,100 +418,132 @@ class RfLoopbackTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
-        self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
-
-        #: Seconds per block on both RF grids — ``blksize / samp_rate``.
-        self.blk_period = int(self.blksize) / float(self.samp_rate)
-        n_ch = int(self.n_ch)
-        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, word=self.word,
-                         n_rx=n_ch, n_tx=n_ch,
-                         full_scale=float(self.full_scale),
-                         t0_rx=float(self.t0), t0_tx=float(self.t0))
-        w = self.rfdc.axis_bitwidth
-        self.nwords_blk = int(self.blksize) // int(self.word.samp_per_word)
-
-        # The DUT CLASS follows the channel count, because the generated top does.  A two-channel
-        # pass-through has four AXIS ports where a one-channel one has two, so it is a different
-        # RTL top with a different name -- and giving it one is what keeps the one-channel
-        # `rf_pass_through` project, its ports header and every gate that names them untouched.
-        dut_cls = RfSampPassThrough if n_ch == 1 else RfSampPassThrough2Ch
-        if n_ch not in (1, 2):
-            raise NotImplementedError(
-                f"RfLoopbackTB: this example carries a synthesizable DUT top per channel count and "
-                f"has {1, 2}, not {n_ch}. The CONVERTER is general -- n_ch is only bounded here "
-                f"because each count is a separate RTL top that has to be synthesized and gated.")
-        self.dut = dut_cls(name=f"{self.name}_dut", sim=self.sim, bitwidth=w, n_ch=n_ch,
-                           nwords_blk=self.nwords_blk, clk=self.axis_clk)
-        #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
-        #: modules on that path declare**, not inferred.  A general graph would need loop detection;
-        #: a design that states its latency does not.  This is the DAC edge's entitled startup
-        #: transient.
-        #:
-        #: Two terms, not one.  The DUT's own hop, plus **one block for the ADC**: a converter cannot
-        #: emit samples it has not yet collected, so a block exists only at its grid tick and is
-        #: transmitted across the *following* period.  That hop was invisible while the model charged
-        #: the ADC's burst at the fabric clock (213 ns instead of 1000 ns) and appeared the moment the
-        #: transfer was paced by the converter's own rate.  It is the same quantity the fidelity
-        #: contract states as "no dependency shorter than 2*blksize — one block per converter hop".
-        self.loop_blk_latency = 1 + int(self.dut.blk_latency)
-        self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim,
-                                   in_bundle=str(self.in_bundle),
-                                   start_delay=float(self.src_start_delay))
-        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim,
-                               out_bundle=str(self.out_bundle),
-                               depth=int(self.sink_depth), stall_after=self.sink_stall_after)
-
-        for c in (self.dut, self.rfdc, self.source, self.sink):
+        parts = wire_rf_loopback(self.sim, name=self.name,
+                                 **{k: getattr(self, k) for k in _RF_LOOPBACK_CONFIG})
+        for k in _RF_LOOPBACK_PARTS:
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        # --- the RF domain: one interface per direction, each owning its own metronome ---------
-        # `complex_samp` is DERIVED from the word, never declared beside it.  The two are the same
-        # fact seen from either side of the converter, and `Rfdc.on_rf_bind` refuses a disagreement
-        # -- so a testbench that stated both could only ever state them identically or fail.
-        cplx = bool(self.word.iq_mode)
-        self.adc_if = RFSampIF(name=f"{self.name}_adc_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk),
-                               complex_samp=cplx)
-        self.adc_if.bind("tx", self.source.rf_ep)
-        self.adc_if.bind("rx", self.rfdc.rx_rf)
-        self.add_if(self.adc_if)
 
-        self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=n_ch, blksize=int(self.blksize), n_blk=int(self.n_blk),
-                               complex_samp=cplx)
-        self.dac_if.bind("tx", self.rfdc.tx_rf)
-        self.dac_if.bind("rx", self.sink.rf_ep)
-        self.add_if(self.dac_if)
+#: :class:`RfLoopbackTB`'s configuration -- the keyword arguments of :func:`wire_rf_loopback`, and
+#: their defaults (the fabric clock is not one: it is made from ``axis_freq``).
+_RF_LOOPBACK_CONFIG = ("n_blk", "n_ch", "blksize", "samp_rate", "axis_freq", "word", "full_scale",
+                       "t0", "src_start_delay", "sink_stall_after", "sink_depth", "in_bundle",
+                       "out_bundle")
+#: What :func:`wire_rf_loopback` builds and :class:`RfLoopbackTB` carries.
+_RF_LOOPBACK_PARTS = ("axis_clk", "samp_clk", "blk_period", "rfdc", "nwords_blk", "dut",
+                      "loop_blk_latency", "source", "sink", "adc_if", "dac_if", "adc_axis",
+                      "dac_axis")
 
-        # --- the PL domain -------------------------------------------------------------------
-        # NO depth override, and that is a correction rather than an omission.  These interfaces
-        # become the DUT's top-level AXIS ports, and a top-level argument CANNOT carry a FIFO depth:
-        # Vitis ignores the pragma (HLS 214-387) and the RTL gets the default of 2.  Declaring 128
-        # here made pysim model a 128-word queue the hardware does not have, which is one of the
-        # three reasons pysim could not see the ADC dropping words.  `composite_top_spec` now refuses
-        # the declaration outright, so this cannot come back by accident.
-        # One AXIS pair per channel.  Row ch of the RF block is what port ch carries, so the wiring
-        # is index-for-index and nothing here has to know the packing convention.
-        self.adc_axis = []
-        self.dac_axis = []
-        for i in range(n_ch):
-            sfx = self.dut._sfx(i)
-            adc_axis = StreamIF(name=f"{self.name}_adc_axis{sfx}", sim=self.sim, clk=self.axis_clk,
-                                bitwidth=w)
-            adc_axis.bind("master", self.rfdc.rx_streams[i])
-            adc_axis.bind("slave", self.dut.s_ins[i])
-            self.add_if(adc_axis)
-            self.adc_axis.append(adc_axis)
 
-            # Deep enough for a whole block plus slack -- the relay hands one over at once.  A
-            # testbench channel, so the depth is a pysim modelling choice.
-            dac_axis = StreamIF(name=f"{self.name}_dac_axis{sfx}", sim=self.sim, clk=self.axis_clk,
-                                bitwidth=w, depth=2 * (int(self.blksize) // int(self.word.samp_per_word)))
-            dac_axis.bind("master", self.dut.s_outs[i])
-            dac_axis.bind("slave", self.rfdc.tx_streams[i])
-            self.add_if(dac_axis)
-            self.dac_axis.append(dac_axis)
+def wire_rf_loopback(sim, *, name: str = "rf_tb", **cfg) -> SimpleNamespace:
+    """The loopback's graph built on *sim*: the pass-through DUT, the RFDC model, the RF data
+    source and sink, the two RF interfaces and the AXIS pairs (:class:`RfLoopbackTB` draws it).  The
+    one wiring both forms use -- :func:`rf_loopback_system` (``HwSystem(sim, dut)``) and
+    :class:`RfLoopbackTB` (the composite the kernel-flow testbench and the pysim procedure walk).
+
+    *cfg* is :class:`RfLoopbackTB`'s configuration (``n_blk``, ``n_ch``, ``blksize``, ...), its
+    defaults where not given.  Returns the configuration, the parts (``dut``, ``rfdc``, ``source``,
+    ``sink``, ``adc_if``, ``dac_if``, ``adc_axis`` / ``dac_axis`` per channel, the clocks,
+    ``blk_period``, ``nwords_blk``, ``loop_blk_latency``), ``sim``, and ``comps`` / ``ifs`` in the
+    order a composite registers them."""
+    import dataclasses
+
+    bad = set(cfg) - set(_RF_LOOPBACK_CONFIG)
+    if bad:
+        raise TypeError(f"wire_rf_loopback: unknown configuration {sorted(bad)}")
+    defaults = {f.name: (f.default if f.default is not dataclasses.MISSING else f.default_factory())
+                for f in dataclasses.fields(RfLoopbackTB) if f.name in _RF_LOOPBACK_CONFIG}
+    p = SimpleNamespace(sim=sim, name=name, **{**defaults, **cfg})
+    p.axis_clk = Clock(name=f"{name}_axis_clk", freq=float(p.axis_freq))
+    p.samp_clk = Clock(name=f"{name}_samp_clk", freq=float(p.samp_rate))
+
+    #: Seconds per block on both RF grids — ``blksize / samp_rate``.
+    p.blk_period = int(p.blksize) / float(p.samp_rate)
+    n_ch = int(p.n_ch)
+    p.rfdc = Rfdc(name=f"{name}_rfdc", sim=sim, word=p.word, n_rx=n_ch, n_tx=n_ch,
+                  full_scale=float(p.full_scale), t0_rx=float(p.t0), t0_tx=float(p.t0))
+    w = p.rfdc.axis_bitwidth
+    p.nwords_blk = int(p.blksize) // int(p.word.samp_per_word)
+
+    # The DUT CLASS follows the channel count, because the generated top does.  A two-channel
+    # pass-through has four AXIS ports where a one-channel one has two, so it is a different
+    # RTL top with a different name -- and giving it one is what keeps the one-channel
+    # `rf_pass_through` project, its ports header and every gate that names them untouched.
+    dut_cls = RfSampPassThrough if n_ch == 1 else RfSampPassThrough2Ch
+    if n_ch not in (1, 2):
+        raise NotImplementedError(
+            f"RfLoopbackTB: this example carries a synthesizable DUT top per channel count and "
+            f"has {1, 2}, not {n_ch}. The CONVERTER is general -- n_ch is only bounded here "
+            f"because each count is a separate RTL top that has to be synthesized and gated.")
+    p.dut = dut_cls(name=f"{name}_dut", sim=sim, bitwidth=w, n_ch=n_ch,
+                    nwords_blk=p.nwords_blk, clk=p.axis_clk)
+    #: Block latency of the wired path from the ADC edge to the DAC edge — **summed from what the
+    #: modules on that path declare**, not inferred.  A general graph would need loop detection;
+    #: a design that states its latency does not.  This is the DAC edge's entitled startup
+    #: transient.
+    #:
+    #: Two terms, not one.  The DUT's own hop, plus **one block for the ADC**: a converter cannot
+    #: emit samples it has not yet collected, so a block exists only at its grid tick and is
+    #: transmitted across the *following* period.  That hop was invisible while the model charged
+    #: the ADC's burst at the fabric clock (213 ns instead of 1000 ns) and appeared the moment the
+    #: transfer was paced by the converter's own rate.  It is the same quantity the fidelity
+    #: contract states as "no dependency shorter than 2*blksize — one block per converter hop".
+    p.loop_blk_latency = 1 + int(p.dut.blk_latency)
+    p.source = RfDataSource(name=f"{name}_src", sim=sim, in_bundle=str(p.in_bundle),
+                            start_delay=float(p.src_start_delay))
+    p.sink = RfDataSink(name=f"{name}_sink", sim=sim, out_bundle=str(p.out_bundle),
+                        depth=int(p.sink_depth), stall_after=p.sink_stall_after)
+    p.comps = (p.dut, p.rfdc, p.source, p.sink)
+
+    # --- the RF domain: one interface per direction, each owning its own metronome -------------
+    # `complex_samp` is DERIVED from the word, never declared beside it.  The two are the same
+    # fact seen from either side of the converter, and `Rfdc.on_rf_bind` refuses a disagreement
+    # -- so a testbench that stated both could only ever state them identically or fail.
+    cplx = bool(p.word.iq_mode)
+    p.adc_if = RFSampIF(name=f"{name}_adc_if", sim=sim, samp_clk=p.samp_clk, n_ch=n_ch,
+                        blksize=int(p.blksize), n_blk=int(p.n_blk), complex_samp=cplx)
+    p.adc_if.bind("tx", p.source.rf_ep)
+    p.adc_if.bind("rx", p.rfdc.rx_rf)
+
+    p.dac_if = RFSampIF(name=f"{name}_dac_if", sim=sim, samp_clk=p.samp_clk, n_ch=n_ch,
+                        blksize=int(p.blksize), n_blk=int(p.n_blk), complex_samp=cplx)
+    p.dac_if.bind("tx", p.rfdc.tx_rf)
+    p.dac_if.bind("rx", p.sink.rf_ep)
+    ifs = [p.adc_if, p.dac_if]
+
+    # --- the PL domain ---------------------------------------------------------------------------
+    # NO depth override, and that is a correction rather than an omission.  These interfaces
+    # become the DUT's top-level AXIS ports, and a top-level argument CANNOT carry a FIFO depth:
+    # Vitis ignores the pragma (HLS 214-387) and the RTL gets the default of 2.  Declaring 128
+    # here made pysim model a 128-word queue the hardware does not have, which is one of the
+    # three reasons pysim could not see the ADC dropping words.  `composite_top_spec` now refuses
+    # the declaration outright, so this cannot come back by accident.
+    # One AXIS pair per channel.  Row ch of the RF block is what port ch carries, so the wiring
+    # is index-for-index and nothing here has to know the packing convention.
+    p.adc_axis = []
+    p.dac_axis = []
+    for i in range(n_ch):
+        sfx = p.dut._sfx(i)
+        adc_axis = StreamIF(name=f"{name}_adc_axis{sfx}", sim=sim, clk=p.axis_clk, bitwidth=w)
+        adc_axis.bind("master", p.rfdc.rx_streams[i])
+        adc_axis.bind("slave", p.dut.s_ins[i])
+        ifs.append(adc_axis)
+        p.adc_axis.append(adc_axis)
+
+        # Deep enough for a whole block plus slack -- the relay hands one over at once.  A
+        # testbench channel, so the depth is a pysim modelling choice.
+        dac_axis = StreamIF(name=f"{name}_dac_axis{sfx}", sim=sim, clk=p.axis_clk, bitwidth=w,
+                            depth=2 * (int(p.blksize) // int(p.word.samp_per_word)))
+        dac_axis.bind("master", p.dut.s_outs[i])
+        dac_axis.bind("slave", p.rfdc.tx_streams[i])
+        ifs.append(dac_axis)
+        p.dac_axis.append(dac_axis)
+    p.ifs = tuple(ifs)
+    return p
 
 
 class RfLoopbackSim:
@@ -521,10 +554,13 @@ class RfLoopbackSim:
     """
 
     def __init__(self, n_src_blk: int = 8, name: str = "rf_tb", seed: int = 0xADC0,
-                 waveform: str = "grid", sine_freq: float = 1.0e6,
+                 waveform: str = "grid", sine_freq: float = 1.0e6, direct: bool = False,
                  **tb_kwargs) -> None:
         tb_kwargs.setdefault("n_blk", n_src_blk)
-        self.tb = RfLoopbackTB(name=name, sim=Simulation(), **tb_kwargs)
+        #: The graph: an :class:`RfLoopbackTB`, or (*direct*) the parts :func:`wire_rf_loopback`
+        #: builds on a simulation of their own -- what :func:`rf_loopback_system` cuts.
+        self.tb = (wire_rf_loopback(Simulation(), name=name, **tb_kwargs) if direct else
+                   RfLoopbackTB(name=name, sim=Simulation(), **tb_kwargs))
         #: Blocks the source will play.  Fewer than ``tb.n_blk`` starves the RF grid on purpose.
         self.n_src_blk = int(n_src_blk)
         #: ``"grid"`` (on the quantization grid -- strict packing check, quantizer untested) or
@@ -734,9 +770,9 @@ def run_and_check() -> bool:
     return True
 
 
-@dataclass
-class RfLoopbackSystem(GraphSystem):
-    """rf_loopback as a **system** (``plans/system_model.md`` S3d): vendor IP in the testbench.
+def rf_loopback_system(variant: str = "real", n_src_blk: int = 8, blksize: int = 256,
+                       n_cycles: int = 16000) -> HwSystem:
+    """rf_loopback as a **system**, ``HwSystem(sim, dut)``: vendor IP in the testbench.
 
     The DUT is the pass-through kernel alone.  The RFDC cannot be brought into the DUT as vendor IP
     today, so it is a testbench participant: in pysim the :class:`~waveflow.hw.rfdc.Rfdc` model, under
@@ -744,35 +780,33 @@ class RfLoopbackSystem(GraphSystem):
     AXI-Stream port of the top on the fabric side, an RF behavioral edge on the other, to the RF data
     source and sink.  On the board it is the RFDC IP, a cell of the block design beside the DUT's IP.
 
+    *variant* is which loopback: ``"real"`` (one channel, real samples), ``"2ch"`` (a two-channel
+    tile through the two-lane pass-through) or ``"iq"`` (interleaved I/Q through the unchanged
+    one-channel pass-through) -- the three scenarios of ``rf_loopback_xsi``, each its own system.
+    *n_cycles* is the RTL run's bound (the scenario's ``run.json``; see
+    ``rf_loopback_xsi.XSI_N_CYCLES``).
+
     The sink's recording is checked by the example, not compared exactly (``recording_check``):
     pysim paces the RF side on the edge and cannot see the sub-block sample loss the RTL measures,
-    so the two legitimately differ (``tests/examples/test_rf_loopback_xsi.py`` records how).
+    so the two legitimately differ (``tests/examples/test_rf_loopback_xsi.py`` records how).  The
+    graph's parts are attributes of the system (``sysm.kernel``, ``sysm.rfdc``, ``sysm.sink``,
+    ...), the scenario's procedure ``sysm.runner``.
     """
+    from examples.rf_loopback.rf_loopback_xsi import make_sim, make_sim_2ch, make_sim_iq
 
-    dut_name: ClassVar[str] = "rf_loopback_dut"
-
-    #: Which loopback: ``"real"`` (one channel, real samples), ``"2ch"`` (a two-channel tile through
-    #: the two-lane pass-through) or ``"iq"`` (interleaved I/Q through the unchanged one-channel
-    #: pass-through) -- the three scenarios of ``rf_loopback_xsi``, each its own system.
-    variant: str = "real"
-    n_src_blk: int = 8
-    blksize: int = 256
-    #: The RTL run's cycle bound (the scenario's ``run.json``); see ``rf_loopback_xsi.XSI_N_CYCLES``.
-    n_cycles: int = 16000
-
-    def graph(self) -> "RfLoopbackTB":
-        from examples.rf_loopback.rf_loopback_xsi import make_sim, make_sim_2ch, make_sim_iq
-
-        make = {"real": make_sim, "2ch": make_sim_2ch, "iq": make_sim_iq}[self.variant]
-        self.runner = make(int(self.n_src_blk), int(self.blksize))
-        self.runner.tb.sink.recording_check = "example"
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        self.runner.write_scenario(root)
+    make = {"real": make_sim, "2ch": make_sim_2ch, "iq": make_sim_iq}[variant]
+    runner = make(int(n_src_blk), int(blksize), direct=True)
+    parts = runner.tb
+    parts.sink.recording_check = "example"
+    dut = DutTop.of("rf_loopback_dut", parts.sim, comps=[parts.dut])
+    sysm = HwSystem(parts.sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    fresh=lambda: rf_loopback_system(variant, n_src_blk, blksize, n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(parts.rfdc.axis_bitwidth)
+    sysm.variant, sysm.runner = variant, runner
+    sysm.kernel = parts.dut
+    for k in ("rfdc", "source", "sink", "adc_if", "dac_if", "adc_axis", "dac_axis"):
+        setattr(sysm, k, getattr(parts, k))
+    return sysm
 
 
 if __name__ == "__main__":

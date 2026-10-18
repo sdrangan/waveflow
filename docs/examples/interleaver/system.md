@@ -2,7 +2,7 @@
 title: The system
 parent: Composite kernel interleaver
 nav_order: 5
-summary: "The testbench graph that ran in pysim, with one more fact stated: which part of it is the design. InterleaverInbandSystem cuts the graph at the interleaver kernel; from that the system flow derives the Verilog top around the synthesized kernel, the harness of the participants' BFM models answering its ports, and the scenario, so the RTL run cannot drift from the model it is checked against."
+summary: "The testbench graph that ran in pysim, with one more fact stated: which part of it is the design. interleaver_inband_system() cuts the graph at the interleaver kernel; from that the system flow derives the Verilog top around the synthesized kernel, the harness of the participants' BFM models answering its ports, and the scenario, so the RTL run cannot drift from the model it is checked against."
 ---
 
 # The system
@@ -17,31 +17,29 @@ A system is the [testbench graph](./testbench.md) plus the **cut**: which module
 under test. For the interleaver the cut is the kernel alone. The command driver, the completion
 sink, the memory, and the crossbar that models the two bundles' contention in pysim are testbench.
 
-## `InterleaverInbandSystem`
+## `interleaver_inband_system()`
 
-The system is a [`GraphSystem`](../../guide/build/xsi_system.md#graph-system) in
-`examples/interleaver/interleaver_inband_sim.py`. It states only its own four parts:
+The system is a function in `examples/interleaver/interleaver_inband_sim.py`. It builds the kernel and
+its testbench on one simulation, names the kernel as the DUT, and returns
+[`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system):
 
 ```python
-@dataclass
-class InterleaverInbandSystem(GraphSystem):
-    sizes: tuple = (256,)
-    n_cycles: int = 4000
-
-    def graph(self) -> InterleaverInbandTB:        # the testbench graph pysim runs
-        self.runner = InterleaverInbandSim(sizes=tuple(self.sizes), name="xsi_tb",
-                                           n_cycles=int(self.n_cycles))
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:              # the cut: the kernel alone
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:          # the scenario: InterleaverInbandSim's one writer
-        self.runner.write_scenario(root)
-
-    def check(self) -> "InterleaverInband":        # the golden, on a pysim run
-        return self.runner.check()
+def interleaver_inband_system(sizes=(256,), n_cycles=4000, ...) -> HwSystem:
+    sim = Simulation()
+    parts = wire_interleaver_inband(sim, name="xsi_tb", sizes=sizes, ...)  # the testbench graph
+    runner = InterleaverInbandSim.on(parts)                     # its scenario and its golden
+    dut = DutTop.of("interleaver_inband_dut", sim, comps=[parts.dut])  # the cut: the kernel alone
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: interleaver_inband_system(sizes, n_cycles, ...))
+    sysm.kernel, sysm.driver, sysm.done_sink, sysm.mem = parts.dut, parts.driver, ...  # for tests
+    return sysm
 ```
+
+`wire_interleaver_inband` is the [testbench graph](./testbench.md)'s wiring, as a function of the
+simulation: `InterleaverInbandTB` registers the same parts as its children, the form the calibration
+tools walk. The testbench of the system is every root on the simulation outside the DUT: the driver,
+the sink and the memory.
 
 The scenario is parameterized by the job-size tuple `sizes`, one `InterleaverCmd` per job, of
 possibly different lengths (variable-length gather). The RTL gate runs twelve jobs of 64.

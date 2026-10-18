@@ -16,9 +16,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from examples.bram_access.bram_access import BramAccessSystem
+from examples.bram_access.bram_access import bram_access_system
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.hw_system import HwSystem
 
 HERE = Path(__file__).resolve().parent
 WORK_DIR = "xsi_work"
@@ -34,8 +35,8 @@ def top(scenario: str = "zero") -> str:
 TOP = top()
 
 
-def system(scenario: str = "zero") -> BramAccessSystem:
-    return BramAccessSystem(scenario_name=scenario)
+def system(scenario: str = "zero") -> HwSystem:
+    return bram_access_system(scenario)
 
 
 def build_dag(scenario: str = "zero", work_dir=WORK_DIR) -> BuildDag:

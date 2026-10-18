@@ -184,9 +184,10 @@ outright — see [the fidelity boundary](../../guide/rf/rfdc/fidelity.md#the-res
 
 ### Graph and procedure are separate objects
 
-The same split as [`mem_copy`](../memcpy/python.md): `RfLoopbackTB.__post_init__` builds **only
+The same split as [`mem_copy`](../memcpy/python.md): `wire_rf_loopback(sim, ...)` builds **only
 structure**, because a component graph is data and can be walked, while a run-and-check function is
-code and cannot. `RfLoopbackSim` owns the scenario, the run and the golden.
+code and cannot. `RfLoopbackTB` holds those parts as one composite's children; the system names the
+kernel in them as its DUT. `RfLoopbackSim` owns the scenario, the run and the golden.
 
 ## 4. The DUT, and why it is two tasks
 

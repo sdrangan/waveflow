@@ -17,10 +17,11 @@ from pathlib import Path
 
 import numpy as np
 
-from examples.rf_loopback.rf_loopback import RfLoopbackSystem
+from examples.rf_loopback.rf_loopback import rf_loopback_system
 from examples.rf_loopback.rf_loopback_xsi import XSI_BLKSIZE, XSI_N_CYCLES, XSI_NBLK
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.hw_system import HwSystem
 
 HERE = Path(__file__).resolve().parent
 TOP = "rf_loopback_system"
@@ -31,11 +32,11 @@ WANT_DATA_BLOCKS_OUT = 7
 WANT_SINK_BLOCKS = 63
 
 
-def system(variant: str = "real") -> RfLoopbackSystem:
+def system(variant: str = "real") -> HwSystem:
     """The gate scenario of *variant* (``"real"``, ``"2ch"``, ``"iq"``): eight 256-sample blocks,
     the kernel flow's cycle budget."""
-    return RfLoopbackSystem(variant=variant, n_src_blk=XSI_NBLK, blksize=XSI_BLKSIZE,
-                            n_cycles=XSI_N_CYCLES)
+    return rf_loopback_system(variant, n_src_blk=XSI_NBLK, blksize=XSI_BLKSIZE,
+                              n_cycles=XSI_N_CYCLES)
 
 
 def build_dag(work_dir=WORK_DIR, variant: str = "real") -> BuildDag:
