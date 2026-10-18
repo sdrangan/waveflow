@@ -71,7 +71,10 @@ sysm.run()                                                # pysim
 | a stream input | a `StreamDriver`, playing the module's scenario |
 | a stream output | a `StreamSink`, recording every burst |
 | a credit stream it produces into, or consumes | a `CreditSink`, or a `CreditSource` |
+| its memory-master ports (`m_axi`) | one `MemoryMod` behind all of them, its image from the scenario |
 | a memory's slave port (`memory_harness`) | `MmScript`, a scripted AXI-MM master |
+
+Each stand-in, its RTL twin, and what it records are in [The harness](../flows/units_harness.md).
 
 The scenario is the module's own: `workload(kind)` returns `{input port: bursts}`, built from the
 golden's intents, so a harness needs no testbench code:
@@ -86,7 +89,8 @@ After the run, each sink holds what it recorded -- `sysm.stand_ins["m_out"].word
 burst -- to check against the golden ([Functional verification](verification.md)). Every stand-in has an
 RTL twin, so the same harness runs at RTL in the next step. A stand-in can also be made hostile -- a
 sink that stalls, credit held back -- to show the module survives more than a polite testbench
-([Developing module by module](../flows/units.md)).
+([Hostile stand-ins](../flows/units_hostile.md)). The practice, module by module, is
+[Developing module by module](../flows/units.md).
 
 **Develop module by module**: each module in its harness, against the golden, before the whole is
 assembled. A whole that fails is then a fault in how the parts are joined, not in the parts.

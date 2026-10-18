@@ -43,9 +43,14 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
     ("design the DUT modules interfaces and messages", ("docs/guide/systems/dut.md",)),
     ("a message is a burst closed by TLAST", ("docs/guide/systems/streams.md",)),
     ("status stream fatal error command response", ("docs/guide/systems/command_response.md",)),
-    ("run a module alone in its harness", ("docs/guide/systems/pysim.md", "docs/guide/flows/units.md")),
+    ("run a module alone in its harness", ("docs/guide/systems/pysim.md", "docs/guide/flows/units")),
     ("verify a kernel at RTL", ("docs/guide/systems/verification.md", "docs/guide/systems/rtl.md")),
-    ("calibrate timed phases and compose a system", ("docs/guide/systems/calibration.md", "docs/guide/flows/units.md")),
+    ("calibrate timed phases and compose a system", ("docs/guide/systems/calibration.md", "docs/guide/flows/units")),
+    # --- the harness (docs/guide/flows/units_*.md) ------------------------
+    ("harness a kernel with an m_axi memory port", ("docs/guide/flows/units_harness.md",)),
+    ("when was each input word accepted at RTL", ("docs/guide/flows/units_recordings.md",)),
+    ("hostile stand-ins stall policy sweep", ("docs/guide/flows/units_hostile.md",
+                                              "docs/guide/systems/verification.md")),
     ("design space exploration sweep", ("docs/guide/systems/dse.md", "docs/guide/build/sweep.md")),
     # --- the protocol and the stream -----------------------------------
     ("error when TLAST arrives early", ("docs/guide/custom_hooks/stream.md",)),
