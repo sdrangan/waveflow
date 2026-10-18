@@ -60,9 +60,12 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 
 ## What needs work
 
-- **`GraphSystem` -> `HwSystem(sim, dut)`**: rf_shot_rx (rf_shot_loopback has no system).
-  memcpy, interleaver, fir_block, bram_access, rf_loopback and rf_shot_tx are done
-  ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
+- **`GraphSystem` -> `HwSystem(sim, dut)`**: done for every curated example with a system
+  (memcpy, interleaver, fir_block, bram_access, rf_loopback, rf_shot_tx, rf_shot_rx;
+  rf_shot_loopback has none) -- [below](#graphsystem---hwsystemsim-dut-2026-10-18).  `GraphSystem`
+  is left to `examples/state_toy`, the RF components' worked material (`rf_blk_delay`,
+  `rf_relayout`, `rf_repeat_play`, `rf_samp_buf_rx` / `_tx`) and the FFT wrappers
+  (`waveflow/dsp/ssr_fft/rtl.py`, `waveflow/vitis_l1/rtl.py`); retiring it would move those too.
 - **vecmult**: its verification is csim, the legacy rung. Either move it to the system flow or present
   it only as the resource-model example (its own summary already says the arithmetic is beside the point).
 - **stream_kernel / mm_fir overlap**: stream_kernel's *Behind AXI-MM* page already introduces a device
@@ -158,3 +161,4 @@ re-run on fresh RTL (Vitis/Vivado 2025.1).
 | bram_access | zero: 25 sink bursts, last at 531 cycles; collision: same log and hash as before; both hashes identical | zero and collision: every sink's arrival cycles identical (resp_w 266..476, data_r 274..568, resp_r 274..569; collision resp_w ..1083); `test_bram_access_xsi` 12 passed |
 | rf_loopback (`rf_pass_through_system()`, `rf_loopback_system(variant)`) | pass-through: last word at 640; loopback real / 2ch / iq: end at 2378 / 2378 / 4756; all four hashes identical | every RTL recording (words, cycles, counters) byte-identical for the four runs: pass-through 1066, loopback 63 sink blocks / 7 data (`test_rf_dut_system_xsi`, `test_rf_loopback_xsi`) |
 | rf_shot_tx (`rf_shot_tx_system(dut_cls, scenario)`) | 4 runs (default / abs x cmd / cmd_loop): end at 1812.5 cycles each, hashes identical; `rf_shot_tx_build --through pysim` result identical | every RTL recording of the 4 runs byte-identical (`test_rf_shot_tx_xsi`, `test_rf_shot_tx_abs_xsi`: 48 passed) |
+| rf_shot_rx (`rf_shot_rx_system(dut_cls)`) | 2 runs (default / abs): end at 2625 cycles, hashes identical; `rf_shot_rx_build --through pysim` result identical | every RTL recording of the 2 runs byte-identical (`test_rf_shot_rx_xsi`, `test_rf_shot_rx_abs_xsi`) |

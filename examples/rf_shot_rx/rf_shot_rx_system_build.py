@@ -21,9 +21,10 @@ from pathlib import Path
 
 import numpy as np
 
-from examples.rf_shot_rx.rf_shot_rx import RfShotRxAbs, RfShotRxSystem
+from examples.rf_shot_rx.rf_shot_rx import RfShotRxAbs, rf_shot_rx_system
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.hw_system import HwSystem
 from waveflow.hw.rf_shot_rx import RfShotRx
 
 HERE = Path(__file__).resolve().parent
@@ -32,9 +33,9 @@ WORK_DIR = "xsi_work"
 BUILDS = {"default": (RfShotRx, "rf_shot_rx_system"), "abs": (RfShotRxAbs, "rf_shot_rx_abs_system")}
 
 
-def system(build: str = "default") -> RfShotRxSystem:
+def system(build: str = "default") -> HwSystem:
     """The gates' run: forty ramp blocks into the receiver, 2800 cycles."""
-    return RfShotRxSystem(dut_cls=BUILDS[build][0])
+    return rf_shot_rx_system(dut_cls=BUILDS[build][0])
 
 
 def build_dag(build: str = "default", work_dir=WORK_DIR) -> BuildDag:

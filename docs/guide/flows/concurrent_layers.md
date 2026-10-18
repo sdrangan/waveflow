@@ -56,9 +56,10 @@ answered by a testbench model. It runs through the system flow (`mem_copy_system
 reproduces the single-kernel gate exactly: 2908 cycles.
 
 mem_copy builds its modules directly on one simulation and names the kernel as the DUT,
-`HwSystem(sim, dut)` ([The system](../../examples/memcpy/system.md)). Some examples still describe
-their graph the older way, a [`GraphSystem`](../build/xsi_system.md#graph-system): one composite
-`FreeRunMod` testbench class whose children the cut splits. The roles below are the same in both.
+`HwSystem(sim, dut)` ([The system](../../examples/memcpy/system.md)), as every curated example now
+does. A few demos still describe their graph the older way, a
+[`GraphSystem`](../build/xsi_system.md#graph-system): one composite `FreeRunMod` testbench class
+whose children the cut splits. The roles below are the same in both.
 
 Which modules are inside the DUT is decided per build: that is the [cut](./modules.md#the-cut). How
 the graph becomes a running simulation is the [flow steps](../systems/rtl.md) page.

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
@@ -38,7 +39,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_shot_rx import (
     CAP_OK,
@@ -53,7 +54,7 @@ from waveflow.simulation.rf_tb import RfDataSource
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamSink
 
-from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_module import HwParam, kernel_name
 from waveflow.hw.rfdc import Rfdc
 
 HERE = Path(__file__).resolve().parent
@@ -183,44 +184,14 @@ class RfShotRxTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
-        self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
-        self.blk_period = int(self.blksize) / float(self.samp_rate)
-
-        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=1, n_tx=0, word=self.word)
-        w = self.rfdc.axis_bitwidth
-        self.dut = self.dut_cls.for_word(
-            self.word, depth=int(self.depth), sim=self.sim, name=f"{self.name}_dut",
-            clk=self.axis_clk, blk_words=int(self.blksize) // SPW,
-            stall_blocks=int(self.stall_blocks), blk_period=self.blk_period)
-        self.source = RfDataSource(name=f"{self.name}_src", sim=self.sim, in_bundle="vectors/rf_in")
-        # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
-        # endpoint declared none, and a StreamSink declares its own.  A window frame is one header
-        # plus REGION_WORDS samples, so the historical 64 would stall the reader mid-window.
-        self.win_snk = StreamSink(sim=self.sim, name=f"{self.name}_win_snk", bitwidth=w,
-                                  out_bundle="vectors/win", has_tlast=True,
-                                  queue_size=2 * (REGION_WORDS + 1))
-        for c in (self.dut, self.rfdc, self.source, self.win_snk):
+        parts = wire_rf_shot_rx(self.sim, name=self.name,
+                                **{k: getattr(self, k) for k in _SHOT_RX_CONFIG})
+        for k in _SHOT_RX_PARTS:
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
-
-        # --- the RF domain: one interface, one metronome (there is no DAC) ----------------------
-        self.adc_if = RFSampIF(name=f"{self.name}_adc_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk))
-        self.adc_if.bind("tx", self.source.rf_ep)
-        self.adc_if.bind("rx", self.rfdc.rx_rf)
-        self.add_if(self.adc_if)
-
-        # --- the PL domain -----------------------------------------------------------------------
-        # No depth overrides on the two that become the DUT's own boundary ports: a top-level AXIS
-        # argument cannot carry a FIFO depth (Vitis ignores the pragma, sometimes silently).
-        for nm, master, slave in (("adc", self.rfdc.rx_streams[0], self.dut.samp_in),
-                                  ("win", self.dut.w_out, self.win_snk.stream_ep)):
-            ifc = StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
-                           bitwidth=w)
-            ifc.bind("master", master)
-            ifc.bind("slave", slave)
-            self.add_if(ifc)
-            setattr(self, f"{nm}_axis", ifc)
+        for i in parts.ifs:
+            self.add_if(i)
 
     @property
     def run_until(self) -> float:
@@ -241,25 +212,94 @@ class RfShotRxTB(FreeRunMod):
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
 
 
-@dataclass
-class RfShotRxSystem(GraphSystem):
-    """The ping-pong receiver as a **system** (``plans/system_model.md`` S3e): the
-    :class:`RfShotRxTB` graph, the cut the receiver alone -- its memory inside it, so the system top
-    instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
-    (:class:`~waveflow.hw.rf_shot_rx.RfShotRx` or :class:`RfShotRxAbs`)."""
+#: :class:`RfShotRxTB`'s configuration -- the keyword arguments of :func:`wire_rf_shot_rx` (the
+#: fabric clock is not one: it is made from ``axis_freq``).
+_SHOT_RX_CONFIG = ("depth", "blksize", "n_blk", "samp_rate", "axis_freq", "word", "stall_blocks",
+                   "n_cycles", "dut_cls")
+#: What :func:`wire_rf_shot_rx` builds and :class:`RfShotRxTB` carries.
+_SHOT_RX_PARTS = ("axis_clk", "samp_clk", "blk_period", "rfdc", "dut", "source", "win_snk",
+                  "adc_if", "adc_axis", "win_axis")
 
-    dut_cls: type = RfShotRx
-    n_cycles: int = XSI_N_CYCLES
 
-    def graph(self) -> RfShotRxTB:
-        return RfShotRxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
-                          n_cycles=int(self.n_cycles))
+def wire_rf_shot_rx(sim, *, name: str = "tb", **cfg) -> SimpleNamespace:
+    """The ping-pong receiver's graph built on *sim* -- a real ADC filling the memory, the receiver,
+    and one sink taking windows (:class:`RfShotRxTB` draws it).  The one wiring both forms use --
+    :func:`rf_shot_rx_system` (``HwSystem(sim, dut)``) and :class:`RfShotRxTB` (the composite
+    :func:`run_pysim` and the kernel-flow testbench walk).
 
-    def dut_modules(self, g) -> list:
-        return [g.dut]
+    *cfg* is :class:`RfShotRxTB`'s configuration, its defaults where not given.  Returns the
+    configuration, the parts (``dut``, ``rfdc``, ``source``, ``win_snk``, ``adc_if``, the two AXIS
+    links, the clocks), ``blk_period``, ``run_until`` and ``words_per_cycle``, ``sim``, and
+    ``comps`` / ``ifs`` in the order a composite registers them."""
+    import dataclasses
 
-    def write_inputs(self, root) -> None:
-        write_scenario(root, n_blk=int(self.tb.n_blk))
+    bad = set(cfg) - set(_SHOT_RX_CONFIG)
+    if bad:
+        raise TypeError(f"wire_rf_shot_rx: unknown configuration {sorted(bad)}")
+    defaults = {f.name: (f.default if f.default is not dataclasses.MISSING else f.default_factory())
+                for f in dataclasses.fields(RfShotRxTB) if f.name in _SHOT_RX_CONFIG}
+    p = SimpleNamespace(sim=sim, name=name, **{**defaults, **cfg})
+    p.axis_clk = Clock(name=f"{name}_axis_clk", freq=float(p.axis_freq))
+    p.samp_clk = Clock(name=f"{name}_samp_clk", freq=float(p.samp_rate))
+    p.blk_period = int(p.blksize) / float(p.samp_rate)
+
+    p.rfdc = Rfdc(name=f"{name}_rfdc", sim=sim, n_rx=1, n_tx=0, word=p.word)
+    w = p.rfdc.axis_bitwidth
+    p.dut = p.dut_cls.for_word(
+        p.word, depth=int(p.depth), sim=sim, name=f"{name}_dut",
+        clk=p.axis_clk, blk_words=int(p.blksize) // SPW,
+        stall_blocks=int(p.stall_blocks), blk_period=p.blk_period)
+    p.source = RfDataSource(name=f"{name}_src", sim=sim, in_bundle="vectors/rf_in")
+    # queue_size, not the channel depth: bind() gives a slave the channel's depth only when the
+    # endpoint declared none, and a StreamSink declares its own.  A window frame is one header
+    # plus REGION_WORDS samples, so the historical 64 would stall the reader mid-window.
+    p.win_snk = StreamSink(sim=sim, name=f"{name}_win_snk", bitwidth=w, out_bundle="vectors/win",
+                           has_tlast=True, queue_size=2 * (REGION_WORDS + 1))
+    p.comps = (p.dut, p.rfdc, p.source, p.win_snk)
+
+    # --- the RF domain: one interface, one metronome (there is no DAC) --------------------------
+    p.adc_if = RFSampIF(name=f"{name}_adc_if", sim=sim, samp_clk=p.samp_clk, n_ch=1,
+                        blksize=int(p.blksize), n_blk=int(p.n_blk))
+    p.adc_if.bind("tx", p.source.rf_ep)
+    p.adc_if.bind("rx", p.rfdc.rx_rf)
+    ifs = [p.adc_if]
+
+    # --- the PL domain ---------------------------------------------------------------------------
+    # No depth overrides on the two that become the DUT's own boundary ports: a top-level AXIS
+    # argument cannot carry a FIFO depth (Vitis ignores the pragma, sometimes silently).
+    for nm, master, slave in (("adc", p.rfdc.rx_streams[0], p.dut.samp_in),
+                              ("win", p.dut.w_out, p.win_snk.stream_ep)):
+        ifc = StreamIF(name=f"{name}_{nm}_axis", sim=sim, clk=p.axis_clk, bitwidth=w)
+        ifc.bind("master", master)
+        ifc.bind("slave", slave)
+        ifs.append(ifc)
+        setattr(p, f"{nm}_axis", ifc)
+    p.ifs = tuple(ifs)
+    # The derived quantities RfShotRxTB states as properties.
+    p.run_until = (int(p.n_blk) + 2) * p.blk_period
+    p.words_per_cycle = float(p.samp_rate) / (SPW * float(p.axis_freq))
+    return p
+
+
+def rf_shot_rx_system(dut_cls: type = RfShotRx, n_cycles: int = XSI_N_CYCLES) -> HwSystem:
+    """The ping-pong receiver as a **system**, ``HwSystem(sim, dut)``: the graph built on one
+    simulation (:func:`wire_rf_shot_rx`), the cut the receiver alone -- its memory inside it, so the
+    system top instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+    (:class:`~waveflow.hw.rf_shot_rx.RfShotRx` or :class:`RfShotRxAbs`).  pysim runs to the
+    metronome's horizon (``run_until``).  The parts are attributes of the system (``sysm.kernel``,
+    ``sysm.rfdc``, ``sysm.win_snk``, ...)."""
+    sim = Simulation()
+    parts = wire_rf_shot_rx(sim, name="xsi_tb", dut_cls=dut_cls, n_cycles=int(n_cycles))
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), run_until=parts.run_until,
+                    inputs=lambda root: write_scenario(root, n_blk=int(parts.n_blk)),
+                    fresh=lambda: rf_shot_rx_system(dut_cls, n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(parts.rfdc.axis_bitwidth)
+    sysm.dut_cls = dut_cls
+    sysm.kernel = parts.dut
+    for k in ("rfdc", "source", "win_snk", "adc_if"):
+        setattr(sysm, k, getattr(parts, k))
+    return sysm
 
 
 # ---------------------------------------------------------------------------
