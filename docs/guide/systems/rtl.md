@@ -20,6 +20,15 @@ An RTL simulation starts from an **`HwSystem`**: a `Simulation` with one module 
 and name the DUT:
 
 ```python
+from waveflow.simulation.simulation import Simulation
+from waveflow.hw.clock import Clock
+from waveflow.hw.hw_system import DutTop, HwSystem              # the system and its DUT
+from waveflow.hw.mm_device import build_mm_device               # a kernel's memory-mapped device
+from waveflow.hw.memif import AXIMMCrossBarIF                   # the crossbar
+from examples.stream_kernel.stream_kernel import PolyKernel, W  # the example's kernel
+from examples.stream_kernel.stream_kernel_mm import PolyHost    # the example's host
+
+clk = Clock(freq=100e6)
 sim = Simulation()
 kernel = PolyKernel(name="poly_kernel", sim=sim, clk=clk)
 host = PolyHost(name="host", sim=sim, cmds=cmds, clk=clk)            # the testbench: a SwHost
@@ -30,7 +39,7 @@ dut = DutTop.of("poly_mm_dut", sim, comps=[device], ifs=[xbar])
 sysm = HwSystem(sim, dut, run_until=host.done, check=check)
 ```
 
-([The polynomial behind AXI-MM](../../examples/stream_kernel/memory_mapped.md).) For one module the
+This is shortened: the whole of it, with the bindings, the address map and the interrupts, is `mm_system` in [`stream_kernel_mm.py`](../../../examples/stream_kernel/stream_kernel_mm.py), walked on [The polynomial behind AXI-MM](../../examples/stream_kernel/memory_mapped.md). For one module the
 whole of it is one line, because the testbench is generated: `harness(PolyKernel, workload="test")`.
 
 The constructor checks the rules, each a refusal that names what to fix:
