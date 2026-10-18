@@ -1,7 +1,7 @@
 ---
 title: The equalizer's protocol
 parent: Block equalizer
-nav_order: 1
+nav_order: 2
 ---
 
 # The protocol
@@ -20,6 +20,24 @@ m_status : Status(tx_id, status)                                                
 - **The results** are headed by `Resp`, so a reader sizes them from the stream; **the status** is the last
   command seen.
 
+## The words
+
+Each message is a [DataSchema](../../guide/schema/index.md) class in
+[`block_eq.py`](../../../examples/block_eq/block_eq.py), and its words are the schema's serialization:
+
+| burst | schema | words |
+|---|---|---|
+| the command | `CmdHdr(tx_id, nrows, m)`, three `U16` | 1 |
+| the estimates | `3 * nrows` float32s -- `hr, hi, N` per row, two a word | `ceil(3 * nrows / 2)`; a row's three floats may straddle two words |
+| the symbols | `2 * nrows * m` float32s -- `rr, ri` per symbol | `nrows * m`: one symbol a word |
+| the results header | `Resp(tx_id, nrows, m)` | 1 |
+| the results | `zr, zi` per symbol | one symbol a word |
+| the status | `Status(tx_id, status)` | 1 |
+
+The schema descriptions bound a command at 1 to 64 rows (`MAX_ROWS`, the rows of `g` the hardware
+buffers) and 1 to 256 symbols a row (`MAX_M`). When the estimates' last word has a lane to spare, it is
+zero.
+
 ## Errors are fatal
 
 | status | when | what is written first |
@@ -33,31 +51,6 @@ that arrived counts -- a word cannot say that only some of its lanes are data.
 
 ## The arithmetic
 
-Float32, one rounding per operation, in exactly this order -- a fused multiply-add rounds once and would
-not match:
+Float32, in a fixed operation order, compared by its bits: on [The golden](golden.md#the-arithmetic).
 
-```text
-gain, per row:              apply, per symbol:
-  t1 = hr * hr                p1 = gr * rr
-  t2 = hi * hi                p2 = gi * ri
-  d  = t1 + t2                zr = p1 - p2
-  d  = d + N                  p3 = gr * ri
-  q  = 1 / d                  p4 = gi * rr
-  gr = hr * q                 zi = p3 + p4
-  gi = -(hi * q)
-```
-
-Results are compared **by their bits**, so `-0.0` and `+0.0` differ. The worked examples
-(`worked_cmd()` in [`block_eq.py`](../../../examples/block_eq/block_eq.py)) include both: `gi = -(0 * q)`
-is `-0.0`, and so is one result's imaginary part.
-
-| `h` | `N` | `g` | `r` | `z` | bits of `z` |
-|---|---|---|---|---|---|
-| 1 | 1.0 | 0.5 - 0.0j | 2 + 4j | 1.0 + 2.0j | `3f800000 40000000` |
-| | | | -1 + 0.5j | -0.5 + 0.25j | `bf000000 3e800000` |
-| 2j | 0.5 | 0.0 - 0.44444445j | 1 + 1j | 0.44444445 - 0.44444445j | `3ee38e39 bee38e39` |
-| | | | -3j | -1.3333334 - 0.0j | `bfaaaaab 80000000` |
-| 3 + 4j | 0.25 | 0.118811876 - 0.15841584j | 3 + 4j | 0.99009895 + 0.0j | `3f7d7720 00000000` |
-| | | | 1 - 2j | -0.1980198 - 0.3960396j | `be4ac5b4 becac5b4` |
-
-Next, [The stages](stages.md).
+Next, [The golden](golden.md).

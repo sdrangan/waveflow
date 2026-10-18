@@ -12,8 +12,11 @@ between them, each stage verified alone and then the composite.  Read its pages 
 ```
 waveflow_get_example("block_eq")                                  # the card
 waveflow_get_doc("docs/examples/block_eq/index.md")
+waveflow_get_doc("docs/examples/block_eq/theory.md")              # what the example computes, plainly
 waveflow_get_doc("docs/examples/block_eq/protocol.md")            # one input, three bursts; errors
-waveflow_get_doc("docs/examples/block_eq/stages.md")              # the stages, the bodies, the composite
+waveflow_get_doc("docs/examples/block_eq/golden.md")              # schemas, float32 order, scenarios
+waveflow_get_doc("docs/examples/block_eq/stages.md")              # the split, the broadcast's rule, depths
+waveflow_get_doc("docs/examples/block_eq/hls.md")                 # each body loop by loop; two placements
 waveflow_get_doc("docs/examples/block_eq/system_flow.md")         # each stage alone, then the composite
 waveflow_get_example("block_eq", file="block_eq.py")              # schemas, golden, stages, composite
 waveflow_get_example("block_eq", file="block_eq_build.py")        # codegen, the tops, the systems
