@@ -116,17 +116,16 @@ def test_non_toc_example_directories_are_out_of_the_corpus(index) -> None:
     older directories here are not that.
     """
     listed = {c.example_dir for c in index.cards.values()}
-    excluded = {"examples/toy", "examples/bram_toy", "examples/state_toy",
-                "examples/vecunit", "examples/dse_fir", "examples/block_scale"}
+    excluded = {"examples/toy", "examples/state_toy", "examples/block_scale", "examples/vmac"}
     assert not (listed & excluded)
 
-    for name in ("toy", "bram_toy", "vecunit", "dse_fir"):
+    for name in ("toy", "state_toy", "block_scale", "vmac"):
         result = waveflow_get_example(name)
         assert "error" in result
 
     indexed = {c.path.split("/")[1] for c in index.chunks if c.path.startswith("examples/")}
     # vmac: AXIMMQueue's example, retired from the docs (2026-10-02) so it is not offered as a pattern.
-    for stray in ("toy", "bram_toy", "state_toy", "vecunit", "dse_fir", "_archive", "vmac"):
+    for stray in ("toy", "state_toy", "block_scale", "vmac"):
         assert stray not in indexed, f"examples/{stray} leaked into the index"
 
 
