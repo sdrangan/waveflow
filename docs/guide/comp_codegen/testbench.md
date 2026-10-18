@@ -90,7 +90,7 @@ Spawning a SimPy process is **rejected** — not deferred:
 
 A `sequential_vitis_tb` *is* an `int main()`; there is nowhere for a fork to go. A concurrently-driven
 testbench is a different [target](./index.md) — `sequential_xsi_tb`, the
-[concurrent (free-running)](../flows/concurrent.md) flow — and it **is** built.
+[concurrent (free-running)](../systems/index.md) flow — and it **is** built.
 Honest limit: this is a **gate, not a proof** — it rejects the syntax that certainly forks, but cannot
 certify that a body is sequential.
 
@@ -144,7 +144,7 @@ Note `cpp_kernel_name` on the TB names the **DUT**, not the testbench — that i
 
 - A `SeqTB` is the source for `sequential_vitis_tb`; `main()` → `<kernel>_tb.cpp`.
 - Keep `main()` straight-line — `env.process(...)` is rejected, with a message pointing at the
-  [concurrently driven](../flows/concurrent.md) flow.
+  [concurrently driven](../systems/index.md) flow.
 - Invoke once with `dut.run()` / `dut.run_once(...)` / `yield from dut.run_once_sim(...)` — all one kernel call.
 - Streams use `push`/`pop` (+ `_array`) here, never the `get`/`write` process forms.
 - `@sim_only` calls (e.g. the timers) are stripped and emit nothing.

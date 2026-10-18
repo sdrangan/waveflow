@@ -9,7 +9,7 @@ summary: "The sequential (host-activated) flow, kept for the designs and courses
 
 # Legacy flows
 
-Waveflow's flow is the **system flow** ([Systems](../systems/index.md)): a system of concurrent modules,
+Waveflow's flow is the **system flow** ([Flow Overview](../systems/index.md)): a system of concurrent modules,
 each verified in its own harness and then together, in pysim and at RTL under XSI. Before it, Waveflow had
 a second flow, kept here for the designs and courses that use it.
 

@@ -1,7 +1,7 @@
 ---
 title: Parameterization
-parent: Hardware modules and Flows
-nav_order: 4
+parent: Modules
+nav_order: 5
 audience: python
 api: [HwParam, HwParamValue, HwConst, DynParam, discover_hw_const, discover_dyn_params, param_supports]
 summary: "Parameterizing a HwModule (both flows). The family is one axis — when does the value bind — with four points: HwConst at class definition, HwParam at build (so distinct values mean distinct artifacts), DynParam at init/pre-sim, and a regmap register at runtime. The last two share one artifact across every value. param_supports declares a set of HwParam values to emit as kernel variants; its C++ realization is comp_codegen/templating."

@@ -7,7 +7,7 @@ summary: "What the module does — copy a run of words between memory regions �
 # Memory Copy
 
 `mem_copy` copies a run of words from one memory region to another. It is deliberately the simplest
-design that still exercises the whole [concurrent (free-running) flow](../../guide/flows/concurrent.md):
+design that still exercises the whole [concurrent (free-running) flow](../../guide/systems/index.md):
 a **composite of free-running `hls::task`s** with two `m_axi` memory ports, internal streams between the
 stages, and a completion signal back to the host. Nothing is computed — the payload is copied unchanged
 — so the design's *structure* is the subject, not its math.

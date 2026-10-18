@@ -149,7 +149,7 @@ The rule is not relaxed — an undeclared `self.X` is still rejected. What chang
 way to answer it. A declared object may be read at a hook call site, where it lowers to its bare
 attribute name, and codegen emits persistent storage for it: a `static` at the top of the kernel
 function for a [control-driven kernel](../flows/sequential.md), and at the top of the generated
-`hls::task` body for a [free-running](../flows/concurrent.md) leaf — where it is the only place
+`hls::task` body for a [free-running](../systems/index.md) leaf — where it is the only place
 persistent storage *can* live, since a task has no "before the loop".
 
 One detail worth knowing: the C++ type comes from the **registered instance**, not from the hook's
@@ -166,7 +166,7 @@ it a hook, or `@sim_only` to have its calls stripped from the kernel entirely (t
 
 **No concurrency.** Spawning a SimPy process (`env.process(...)`) is rejected, because every target this
 extractor feeds is sequential — there is no straight-line lowering for a fork. The message points at the
-[concurrent (free-running)](../flows/concurrent.md) flow, whose XSI BFM drives every port each cycle.
+[concurrent (free-running)](../systems/index.md) flow, whose XSI BFM drives every port each cycle.
 Honest limit: this is a **gate, not a proof**. It rejects the
 syntax that certainly implies concurrency; it cannot certify that a body is sequential.
 

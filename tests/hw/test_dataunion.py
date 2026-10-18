@@ -1100,9 +1100,19 @@ class TestDataUnionCodegen:
         decl = self.DU._gen_include_decl(word_bw_supported=[32])
         assert f"struct {self.DU.cpp_class_name()}" in decl
 
-    def test_gen_include_decl_contains_payload_bits(self):
+    def test_gen_include_decl_holds_a_member_per_type(self):
         decl = self.DU._gen_include_decl(word_bw_supported=[32])
-        assert "payload_bits" in decl
+        assert "payload_bits" not in decl
+        for _, schema_cls in self.reg.items():
+            assert f"{schema_cls.cpp_class_name()} {self.DU._member(schema_cls)};" in decl
+
+    def test_gen_include_decl_has_every_stream_form(self):
+        """A DataSchema now: the base generates the stream and AXI4-Stream readers and writers too
+        (framed with framed=True)."""
+        decl = self.DU._gen_include_decl(word_bw_supported=[32], framed=True)
+        for m in ("write_stream", "read_stream", "write_axi4_stream", "read_axi4_stream",
+                  "write_framed_stream", "read_framed_stream"):
+            assert m in decl, m
 
     def test_gen_include_decl_contains_getters_for_all_schemas(self):
         decl = self.DU._gen_include_decl(word_bw_supported=[32])
@@ -1132,7 +1142,6 @@ class TestDataUnionCodegen:
         out_path = DU.gen_include(cfg=cfg, word_bw_supported=[32])
         content = out_path.read_text(encoding="utf-8")
         assert f"struct {DU.cpp_class_name()}" in content
-        assert "payload_bits" in content
         assert "#ifndef" in content
 
 

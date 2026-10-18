@@ -136,7 +136,7 @@ kernel and reads its status through one register map — which is exactly what m
 
 > **What `ap` and `hs` stand for.** `ap_` is Xilinx/AMD's HLS signal prefix; it originates in the
 > *arbitrary-precision* types (`ap_int`, `ap_fixed`) and labels the block-control signals too. The `hs`
-> in `ap_ctrl_hs` is **handshake**. The [concurrent flow](../../guide/flows/concurrent.md) uses the
+> in `ap_ctrl_hs` is **handshake**. The [concurrent flow](../../guide/systems/index.md) uses the
 > *other* mode, `ap_ctrl_none` — a free-running kernel with no start/done handshake — which is why Vitis
 > cannot co-simulate it and it must be driven at RTL.
 

@@ -74,7 +74,7 @@ auto-wiring. Add the one whose module your design instantiates.
 
 | Step | Writes | For | Documented with |
 |---|---|---|---|
-| `MemStreamStep` | `mem_r_stream_task.h`, `mem_w_stream_task.h`, their framed / done variants, `mem_seq_framed_task.h`, the `il_*` interleaver bodies | `MemRStream` / `MemWStream` and the generated load-compute-store | [Concurrent flow steps](../flows/concurrent_flowsteps.md) |
+| `MemStreamStep` | `mem_r_stream_task.h`, `mem_w_stream_task.h`, their framed / done variants, `mem_seq_framed_task.h`, the `il_*` interleaver bodies | `MemRStream` / `MemWStream` and the generated load-compute-store | [Concurrent flow steps](../systems/rtl.md) |
 | `RfSampBufStep` | `rf_samp_buf_{ingress,capture,loader,player}_task.h` | `RfSampBufRx` / `RfSampBufTx` (`waveflow/hw/rf_samp_buf.py`). Both directions ship together, because they share a geometry and a status vocabulary | [RF: choosing a buffer](../rf/choosing.md) |
 | `RfTxStreamStep` | `rf_tx_loader_task.h`, `rf_tx_player_task.h`, `rf_circ_play_task.h` | `RfTxStream` (`waveflow/hw/rf_tx_stream.py`). This is a separate step from `RfSampBufStep` because the two designs' "too late" status codes deliberately differ | [Continuous sample buffer](../rf/rfstreambuf/index.md) |
 | `RfShotBufStep`, `RfShotTxStep`, `RfPingPongStep` | the shot buffer's relayout, loader / player and ping-pong bodies | the RF shot buffer | [Shot buffer TX internals](../rf/rfshotbuf/tx_internal.md) |

@@ -8,7 +8,7 @@ summary: "The worked example for the free-running flow, the counterpart to the r
 ---
 # Memory Copy — a free-running composite kernel
 
-This is the worked example for the [concurrent (free-running) flow](../../guide/flows/concurrent.md),
+This is the worked example for the [concurrent (free-running) flow](../../guide/systems/index.md),
 the counterpart to the sequential [register-map example](../regmap/). Where `simp_fun` is a single
 host-launched function, `mem_copy` is a **composite of free-running `hls::task`s** that copies a run of
 words from one memory region to another — and it is verified not by Vitis co-simulation (which cannot
@@ -25,7 +25,7 @@ component's timing is taken up in the interleaver example.) The final page visua
 
 In going through this example, you will learn to:
 
-- Model hardware as [**free-running component** classes](../../guide/flows/concurrent.md) (the `FreeRunMod` class in Waveflow), and interconnect them into **composite free-running components** to describe a target hardware object
+- Model hardware as [**free-running component** classes](../../guide/systems/index.md) (the `FreeRunMod` class in Waveflow), and interconnect them into **composite free-running components** to describe a target hardware object
 - Develop a **concurrent testbench** as a composite graph that wires the DUT to stimulus and capture, using Waveflow's built-in stream source/sink models (`StreamDriver`, `StreamSink`)
 - Run a Python **concurrent simulation** of the composite target hardware in conjunction with the testbench components
 - Generate a **concurrent Vitis C++ kernel** from the Python descriptions, where each sub-component becomes an **HLS task**

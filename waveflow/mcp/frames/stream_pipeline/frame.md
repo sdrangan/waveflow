@@ -5,7 +5,7 @@ other: one input stream, the results and a status out, no memory and no host on 
 what the frame **fixes** and what a spec **must decide** -- the checklist Stage 1 answers.  Where the spec
 and this frame disagree, the spec wins; say so in Stage 1.
 
-The pattern is command-response (`docs/guide/patterns/command_response.md`, its pipeline form); the
+The pattern is command-response (`docs/guide/systems/command_response.md`, its pipeline form); the
 references are `block_eq` (a broadcast, two stages, a link) and `stream_kernel` (one stage, the protocol,
 the harness).
 

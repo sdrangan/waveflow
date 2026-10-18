@@ -52,7 +52,7 @@ kernel -> regs   FirStatus(nsamp, cfg_id, ncfg)            (latest value)
 kernel -> qresp  FirRespHdr(nsamp, tx_id, cfg_id)
 ```
 
-It is the [command-response pattern](../../guide/patterns/command_response.md), with one addition:
+It is the [command-response pattern](../../guide/systems/command_response.md), with one addition:
 the configuration travels separately from the commands, so the commands say which one they need.
 
 ## Why a config id

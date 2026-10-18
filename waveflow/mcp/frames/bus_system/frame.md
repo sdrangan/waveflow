@@ -6,9 +6,9 @@ software host on one AXI-MM crossbar.  This file says what the frame
 decide**, which is the checklist Stage 1 answers.  Where the spec and this
 frame disagree, the spec wins; say so in Stage 1.
 
-The pattern is command-response (`docs/guide/patterns/command_response.md`);
+The pattern is command-response (`docs/guide/systems/command_response.md`);
 the rule under every free-running module is stream-only logic behind adaptors
-(`docs/guide/patterns/stream_only.md`).  The references are `markov` (two
+(`docs/guide/systems/streams.md`).  The references are `markov` (two
 kernels, a routed credit link, shared memory) and `mm_fir` (one kernel
 reached over the bus, a register bank changed mid-stream).
 
@@ -23,7 +23,7 @@ reached over the bus, a register bank changed mid-stream).
    declares its views as `mm_views`.  No kernel holds a bus master of its own
    except to reach memory.
 2. **Every job is a command carrying `n` and a `tx_id`, answered on a data
-   plane and a status plane** (`docs/guide/patterns/command_response.md`):
+   plane and a status plane** (`docs/guide/systems/command_response.md`):
    the results headed by `Resp(tx_id, n)`, so the host sizes them from the
    stream (queue out drops TLAST), then a `Status(tx_id, status)` per job on a
    stream of its own -- behind the bus, a queue the host reads after the

@@ -3,7 +3,7 @@ title: Guide
 parent: Waveflow
 nav_order: 2
 has_children: true
-summary: "How the guide is organized: system first. Systems is the top -- a testbench and a DUT simulated together, the DUT a tree of modules, any module the DUT of its own harness -- with the recipe for building one; the sections after it are what that picture is made of, from the outside in (patterns, modules and the flow, interfaces, schemas, simulation, code generation, hooks, build), then the libraries, timing and resources, and the legacy flows last."
+summary: "How the guide is organized: the flow first. The Flow Overview walks one design through the whole flow, a page per step -- designing the DUT (with the stream patterns and the command-response protocol), simulating it in Python, simulating it at RTL, verifying it, calibrating its timing and resources, exploring the design space -- and the sections after it are the reference those pages link into, from the outside in (modules, interfaces, schemas, simulation, code generation, hooks, build), then the libraries, timing and resources, and the legacy flows last."
 ---
 # Guide
 
@@ -11,15 +11,17 @@ Welcome to Waveflow.  This folder will have guides to use the Waveflow functiona
 
 ## How this guide is organized
 
-**Waveflow models concurrent systems**, and the guide starts there. [Systems](./systems/) is the top: a
-system is a testbench and a DUT simulated together, in pysim and at RTL; the DUT is a tree of modules
-joined by interfaces carrying schemas; and any module can be made the DUT of its own system -- its
-harness -- so a design is built module by module. [Building a system](./systems/recipe.md) is the recipe:
-decompose top-down, write bottom-up, verify each module alone and then together.
+**Waveflow models concurrent systems**, and the guide starts with the flow that takes one from an idea
+to verified, measured hardware. The [Flow Overview](./systems/) walks it a page per step, on one running
+example: [designing the DUT](./systems/dut.md) -- its modules, interfaces and messages, the
+[stream patterns](./systems/streams.md) they talk by and the [command-response](./systems/command_response.md)
+protocol most designs speak -- then [simulating it in Python](./systems/pysim.md) beside anything else the
+question needs, [simulating it at RTL](./systems/rtl.md), [verifying](./systems/verification.md) it,
+[calibrating](./systems/calibration.md) its timing and resources, and [exploring](./systems/dse.md) the
+design space. Each step is done module by module: any module can be the DUT of its own harness.
 
-The sections after it are what that picture is made of, from the outside in, each a reference a page of
-Systems links into: [Design patterns](./patterns/) (the shapes accelerators take), the modules and the
-flow ([Hardware modules and Flows](./flows/)), [Interfaces](./interface/), [Data schemas](./schema/) and
+The sections after it are the reference those pages link into, from the outside in:
+[Modules](./flows/), [Interfaces](./interface/), [Data schemas](./schema/) and
 [Vectorization](./vectorization/), the [Simulation](./sim/) engine, and how a module becomes hardware --
 [Module Code Generation](./comp_codegen/) (what a tool writes for you), [Custom Hooks](./custom_hooks/)
 (what no generator can guess) and the [Build System](./build/). Then the libraries

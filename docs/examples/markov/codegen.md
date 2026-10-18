@@ -57,7 +57,7 @@ the system top drives.
 
 ## The bodies: one job per firing
 
-Both bodies follow the [command-response pattern](../../guide/patterns/command_response.md) and read
+Both bodies follow the [command-response pattern](../../guide/systems/command_response.md) and read
 like their Python `run_iter`: read the command, then per chunk a loop of one step per cycle, then the
 answer. The generator:
 

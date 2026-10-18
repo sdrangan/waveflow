@@ -9,7 +9,7 @@ summary: "Decomposing a multi-task kernel's utilization into the parts that caus
 ---
 # Composite kernels
 
-A [free-running composite](../flows/concurrent.md) synthesizes as **one** Vitis project, and therefore
+A [free-running composite](../systems/index.md) synthesizes as **one** Vitis project, and therefore
 produces **one** `csynth.xml`. Inside it is a design total and a table of per-entity rows, which raises
 the obvious question: *which part of my design cost what?*
 
@@ -191,7 +191,7 @@ correspondence with the design's interface graph**:
 | `entry_proc`, `regslice_both`, `sparsemux_*` | the DATAFLOW shell                                   | fixed      |
 
 Three internal FIFOs for a four-module chain, and their widths are legible too: `w65` is a 64-bit word
-plus the one framing bit an [in-band framed](../flows/concurrent.md) edge carries.
+plus the one framing bit an [in-band framed](../systems/index.md) edge carries.
 
 Note the FIFOs are *internal*: the term depends on the whole interface graph, not just the outward-
 facing port list. And none of it depends on what the modules compute. Across the committed 24-point

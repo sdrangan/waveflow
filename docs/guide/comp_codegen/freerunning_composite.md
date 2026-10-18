@@ -10,7 +10,7 @@ summary: "The same composite_kernel target with more than one task. Walks mem_co
 
 # Free-running composite in HLS
 
-A composite is a [`FreeRunMod`](../flows/concurrent.md) with **sub-components instead of a body**. It
+A composite is a [`FreeRunMod`](../systems/index.md) with **sub-components instead of a body**. It
 lowers to the same `composite_kernel` target as [a leaf](./freerunning.md) — the difference is only
 that the graph has more than one node, so the generated top has more than one `hls::task` in it and
 some channels between them.

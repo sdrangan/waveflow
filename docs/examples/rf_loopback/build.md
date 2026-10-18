@@ -190,7 +190,7 @@ code and cannot. `RfLoopbackSim` owns the scenario, the run and the golden.
 
 ## 4. The DUT, and why it is two tasks
 
-`RfSampPassThrough` is a [`FreeRunMod`](../../guide/flows/concurrent.md): one burst in, the same
+`RfSampPassThrough` is a [`FreeRunMod`](../../guide/systems/index.md): one burst in, the same
 burst out — as **two tasks over an internal channel**.
 
 ```

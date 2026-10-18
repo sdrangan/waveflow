@@ -36,6 +36,9 @@ exclude:
   - waveflow/
   - tests/
   - plans/
+  # Blind-test specs, answer keys and results -- inputs for agents, not site pages (the site's
+  # Evaluation section is docs/evaluation/).
+  - evaluation/
   - CLAUDE.md
   - pyproject.toml
   - Gemfile
@@ -54,3 +57,9 @@ defaults:
       nav_exclude: true
       search_exclude: true
 
+  # The slide decks' notes: served, never in the nav or search.
+  - scope:
+      path: "presentations"
+    values:
+      nav_exclude: true
+      search_exclude: true

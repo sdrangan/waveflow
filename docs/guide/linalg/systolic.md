@@ -315,7 +315,7 @@ three memory element types.
 
 **The top and the RTL test.** The unit is a free-running composite, so its top and its XSI
 testbench come from the framework's composite flow, like any other
-([the concurrent flow](../flows/concurrent.md)). `tests/linalg/_unit_bench.py` is a complete
+([the concurrent flow](../systems/index.md)). `tests/linalg/_unit_bench.py` is a complete
 example. It feeds the unit from memory through an in-band `MemRStream` and lands its replies
 through an in-band `MemWStream`, with two small test-only framers that turn a job list into memory
 commands. It then runs csynth and an XSI simulation that checks every reply bit for bit.

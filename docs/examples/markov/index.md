@@ -26,7 +26,7 @@ In going through this example, you will learn how to:
   and simulate it with a pseudo-random generator, in integer arithmetic that Python and the RTL agree on
   bit for bit.
 - Split a computation into **two kernels joined by a stream**, and pass the job's command down the
-  pipeline ahead of its data -- the [command-response pattern](../../guide/patterns/command_response.md)
+  pipeline ahead of its data -- the [command-response pattern](../../guide/systems/command_response.md)
   through a pipeline.
 - Implement an [MM-stream](../../guide/interface/axi_mm/credit_streams.md) with a reverse
   **credit stream** to avoid back-pressure across a shared bus (`MmCreditStreamIF`).

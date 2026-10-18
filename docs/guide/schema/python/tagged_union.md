@@ -13,7 +13,7 @@ summary: "Several kinds of message on one stream -- START, one DET per result, E
 
 When the number of results is not known until a job is done -- detections, matches, peaks -- the results
 cannot be headed by a count, so the stream carries **several kinds of message** and the end is **in band**
-([Variable-length output](../../patterns/command_response.md#variable-length-output-a-tagged-union-ending-in-end)):
+([Variable-length output](../../systems/command_response.md#variable-length-output-a-tagged-union-ending-in-end)):
 
 ```text
 m_out : START(tx_id) | DET(index, peak) ... | END(tx_id, count)        one job's messages, one burst

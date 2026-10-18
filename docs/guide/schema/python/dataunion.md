@@ -26,8 +26,8 @@ nwords = hdr.nwords_per_inst(word_bw) + max(payload.nwords_per_inst(word_bw)
                                             for payload in registry)
 ```
 
-**Fixed length, by design.** Every `DataUnion` message is the same number of words: a short payload is
-zero-padded to the longest. That is what lets a union be read like any other schema -- a reader takes
+**Fixed length, by design.** Every `DataUnion` message is the same number of words: the header, then
+the payload **from the next word boundary**, in its own type's word layout, zero-padded to the longest. That is what lets a union be read like any other schema -- a reader takes
 `nwords_per_inst` words and decodes them, never deciding a length from the data -- at the cost of the
 padding on short messages. A design that cannot afford the padding sends one `DataList` per message
 type instead, each beginning with the same tag; a reader then reads the tag first and the rest by that
@@ -146,27 +146,14 @@ Key class-level attributes derived automatically:
 
 ---
 
-> **On a stream.** A `DataUnion` serializes to words in Python, and its generated C++ has
-> `read_array` / `write_array`, but **no stream methods** (`read_axi4_stream` / `write_axi4_stream`), and a
-> stream endpoint's `write` takes it only as words (`du.serialize(...)`). It is also fixed-size: every
-> message is padded to the largest payload. For a tagged union on a kernel's stream -- the
-> [variable-length output](../../patterns/command_response.md#variable-length-output-a-tagged-union-ending-in-end)
-> of the command-response pattern -- the working form today is one `DataList` per message type, each
-> beginning with the same `EnumField` tag.
-
-## Transmitting a DataUnion
-
-Set the `payload` attribute — this automatically updates the `schema_id` in the header:
-
-```python
-du = SensorDU()
-du.payload = AccelPacket(ax=100, ay=-200, az=980)
-
-print(du.schema_id)    # → 3  (auto-set from registry)
-
-words = du.serialize(word_bw=32)
-# words is a 1D numpy array of uint32 with nwords_per_inst(32) elements
-```
+> **On a stream.** A `DataUnion` is a `DataSchema` like a `DataList`: a stream endpoint's `write` takes
+> it (one message, one burst), `get_schema(SensorDU)` reads one, it can be a field of a `DataList`, and
+> its generated C++ has every reader and writer -- array, stream, AXI4-Stream, and framed with
+> `DataSchemaStep(..., framed=True)`. What it cannot be is variable-length: for a variable number of
+> results on a kernel's stream -- the
+> [variable-length output](../../systems/command_response.md#variable-length-output-a-tagged-union-ending-in-end)
+> of the command-response pattern -- send one `DataList` per message type, each beginning with the same
+> `EnumField` tag ([Tagged unions on a stream](tagged_union.md)).
 
 ---
 
@@ -229,36 +216,35 @@ A typed stream transfer is agnostic to which case applies — `write(obj)` calls
 
 ## C++ code generation
 
-`DataUnion` can generate a Vitis HLS-compatible C++ struct with templated `write_array` / `read_array` methods and typed payload accessors:
-
-```python
-path = SensorDU.gen_include(word_bw_supported=[32, 64])
-```
-
-The generated struct looks like:
+A `DataSchemaStep` (or `SensorDU.gen_include(cfg, word_bw_supported=[32, 64])` on its own) generates
+a C++ struct with the header, **one member per registered type**, typed accessors, and the readers and
+writers every schema has:
 
 ```cpp
 struct SensorDataUnion {
     SensorHdr header;
-    ap_uint<48> payload_bits;   // max_payload_bw across all schemas
+    TempPacket temp_packet;      // one member per registered type, snake case
+    PressPacket press_packet;
+    AccelPacket accel_packet;
 
-    static constexpr int max_payload_bw = 48;
+    TempPacket get_TempPacket() const;              // the member
+    void set_TempPacket(const TempPacket& p);       // the member, and header.schema_id
+    ...
 
-    template<int WORD_BW>
-    void write_array(ap_uint<WORD_BW> x[]) const;   // serialize
-
-    template<int WORD_BW>
-    void read_array(const ap_uint<WORD_BW> x[]);    // deserialize
-
-    // Typed accessors
-    TempPacket  get_TempPacket()  const;
-    void        set_TempPacket(const TempPacket&);
-    AccelPacket get_AccelPacket() const;
-    void        set_AccelPacket(const AccelPacket&);
-    PressPacket get_PressPacket() const;
-    void        set_PressPacket(const PressPacket&);
+    template<int word_bw> static constexpr int nwords();
+    template<int word_bw> void write_array(ap_uint<word_bw> x[]) const;
+    template<int word_bw> void read_array(const ap_uint<word_bw> x[]);
+    template<int word_bw> void write_stream(hls::stream<ap_uint<word_bw>>& s) const;
+    template<int word_bw> void read_stream(hls::stream<ap_uint<word_bw>>& s);
+    template<int word_bw> void write_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s,
+                                                 bool tlast = true) const;
+    template<int word_bw> void read_axi4_stream(hls::stream<streamutils::axi4s_word<word_bw>>& s);
 };
 ```
+
+A writer sends the header, then a `switch` on `schema_id` writes that type's payload, padded to the
+longest; a reader reads the header and the padded payload words, and the `switch` decodes them into the
+member `schema_id` names.
 
 ---
 

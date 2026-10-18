@@ -27,7 +27,7 @@ samples, a queue behind each output. The kernel itself stays stream-only. See
 [MM queues](../../guide/interface/axi_mm/index.md).
 
 The status is meant for a **status register**, with an interrupt on an error, readable whenever the
-host needs it ([On a bus](../../guide/patterns/command_response.md#on-a-bus)). The register bank
+host needs it ([On a bus](../../guide/systems/command_response.md#on-a-bus)). The register bank
 Waveflow has needs a configuration port and raises no interrupt, so here the status goes to a queue,
 one status per command.
 

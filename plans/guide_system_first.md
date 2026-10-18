@@ -326,11 +326,81 @@ bundles (HLS 214-450, a Vitis 2025.1 nondeterminism: 3 of 5 unchanged runs) -- p
 `run_vitis_hls` now re-runs such a csynth once by itself (`unlowered_maxi_bundles`;
 `tests/build/test_maxi_rerun.py`).
 
-**Stage 7 -- the rest of the guide.**  The target's remaining sections, in an order the read logs of
-Stages 1, 5 and 6 justify: Modules; `flows/` dissolved; Legacy; `nav_order`; a "where this sits in a
-system" line in each reference section's page summaries; the guide index; CLAUDE.md's *Designing an
-accelerator* pointer to the recipe.  Gate: the docs tests (snippets, links, the knowledge corpus) and a
-`waveflow kb search` for "build a system" whose top hit is the recipe.
+**Stage 7 -- the flow, page by page (D10).**  The Systems section becomes the guide's narrative: one
+page per step of the flow, in the order a design takes them, each walking the same running example and
+linking down to the reference sections for the details.  It replaces `flows/` and absorbs `patterns/`.
+
+**D10 (the user, 2026-10-18).**  *Two levels of simulation, and the narrative follows the flow.*
+
+- **pysim** runs the DUT in a **`Simulation`** with any `SimObj` beside it -- a wireless channel, a
+  sensor, a processor model, a host.  It is the general timed model, and the top object is the
+  `Simulation`.
+- **RTL simulation** runs the DUT in an **`HwSystem(sim, dut)`**, whose testbench is the part of that
+  simulation with an RTL twin (a `bfm_model()`, an `xsi_model()`, a C++ host).  The rule, which the
+  constructor already enforces: *anything can join a `Simulation`; only what lowers can join an
+  `HwSystem`.*  XSI is today's simulator; the page and the step are named for RTL, not for XSI.
+- **One running example**: `stream_kernel` excerpts on every page -- schemas, `run_iter`, the harness,
+  the system flow, the timing -- so a reader sees one design go the whole way.  Where a page's idea
+  needs more, a short "a step up" excerpt from `block_eq` (a pipeline of stages on streams) or `markov`
+  (kernels, a memory and a host on a bus), linking to its example pages.
+- **Module by module is not a page**: the cut is introduced on the pysim page (any module can be the
+  DUT of its own harness) and used again on the RTL and calibration pages.
+- **The reference sections stay** (Schemas, Interfaces, Modules, Build, Timing models, Calibration,
+  Resource models); the flow pages narrate and link, never restate.  An agent's process stages map one
+  to one onto these pages, so each step it takes lands on one page.
+
+**The pages** (`docs/guide/systems/`, title *Building a system*; nav order as listed):
+
+| page | what it covers | moves in / replaces |
+|---|---|---|
+| `index.md` *Building a system* | the figure walked top-down; the two levels; the flow in one table, each step a link; the ladder of examples | today's `systems/index.md`; `flows/index.md`, `flows/concurrent.md` (overview) |
+| `dut.md` *Designing the DUT* | what it does, its golden; its boundary; how the work is partitioned into modules and devices; the interfaces between them; the messages (schemas) | `recipe.md` "Decompose"; `flows/modules.md` (what a module is, linked); `flows/concurrent_system.md` (the cut's half that is design) |
+| `streams.md` *Stream patterns* | a module on streams: framing (TLAST), one Python `write` = one burst, the lane loop, read in the order written, stream-only modules and adaptors, broadcast, internal links and their depth | `patterns/stream_only.md`; the stream half of `patterns/index.md`; links to `streams/`, `vectorization/hls/loop_optimization.md` |
+| `command_response.md` *Command-response* | the default protocol (D9): command and data in, `Resp` + results out, a status per command, fatal errors, the bus mapping, variable-length output, the pipeline form | `patterns/command_response.md` (moved, not rewritten) |
+| `pysim.md` *Simulating in Python* | the DUT in a `Simulation`; `run_iter` and timing; the harness (the cut); any `SimObj` beside it -- a host, a channel; running and reading results | `flows/concurrent_python.md`; `flows/units.md` (harness half); `sim/running.md` linked |
+| `rtl.md` *Simulating at RTL* | `HwSystem(sim, dut)` and the lowering rule; each module's body (`kernel_task`, framed); the system flow steps (`codegen` ... `compare`) on `run_dag_cli`; the system top, the host's twin | `flows/concurrent_flowsteps.md`, `flows/concurrent_layers.md`; the narrative half of `build/xsi_system.md` (the reference half stays) |
+| `verification.md` *Functional verification* | what is compared with what: golden vs pysim, pysim vs RTL (`compare`), the error scenarios; gates assert counts (a deadlock looks like success); conformance of a host's traces | new; the rules from `recipe.md`; links the deadlock material |
+| `calibration.md` *Timing and resources* | timed phases declared and fitted per module in its harness; composition with nothing fitted to the whole; the cycle gate; csynth resources and the system's | `flows/units.md` (calibration half); links `timing_model/`, `calib/`, `resource/` |
+| `dse.md` *Design-space exploration* | the outer loop: sweeps, the resource model, what is measured vs predicted; what exists and what is planned, plainly | links `build/sweep.md`, `resource_model/`; `flows/bitstream_ipi.md` linked as "toward the board" |
+
+`flows/` is dissolved: each page above says where its content went; `parametrization.md` moves under
+Modules; the sequential pages are already under Legacy.  `patterns/` keeps no pages of its own (its
+index becomes a redirect line in the new section).  Moves keep the old path as a stub page that links to
+the new one, so a frame's or a plan's link does not break (the frame lint checks the frames).
+
+**Order of work**: the plan section (this) reviewed; then `index.md` and the three design pages (the
+biggest ideas); then pysim, RTL, verification, calibration, DSE; then the stubs, nav orders, the frames'
+process links (`_common/process.md` names each step's page), the guide index, `CLAUDE.md`.
+
+**Gate**: the docs tests (snippets, links, the knowledge corpus); the frame lint; a `waveflow kb search`
+for "build a system" whose top hit is the section's index; then Stage 5 -- the planning blind tests on
+the new tree.
+
+*Record (2026-10-18):* **Stage 7 first pass done** (branch `guide-stage7`, commit 941d860b).  The section
+is titled **Flow Overview** (the user); the directory stays `systems/` (frames and plans link into it).
+Nine pages written on the running example; `patterns/command_response.md` moved whole; `stream_only.md`
+folded into *Stream patterns*; the pattern catalogue into *Designing the DUT*.  `flows/` is the **Modules**
+reference (modules, writing a free-running module, module by module, XSI components, parameterization,
+toward the board); its narrative pages, `patterns/` and the recipe are nav-excluded stubs; 57 files'
+links rewritten to the new pages; the frames' `_common/process.md` maps each step to its page.  Gate: docs
+tests green, frame lint green, retrieval eval 38 pass with nine new cases ("build a system" finds a flow
+page in the top 5 -- *Simulating at RTL*, 2nd -- not the index, since the search does no stemming and the
+build reference uses those words most).  Also on the branch: `DataUnion` as a `DataSchema` (word-boundary
+payload, every stream form; C-sim loopback through all of them); `evaluation/` out of the site.
+
+*Record (2026-10-18), Stage 5:* rungs 1 and 3 re-run plan-only on the new tree -- both chose their frame,
+both read the flow pages on their own, both **would build**; citations 48/48 and 53/53.  Tokens did not
+fall (2.41M and 3.11M in; one run each): both read more broadly and spent it on their gaps.  The one doc
+gap fixed: an internal link's own width (*Stream patterns*).  `evaluation/planning_tests/results/stage5_2026-10-18.md`.
+
+**Future direction (the user, 2026-10-18): architecture from the algorithm.**  Today a spec gives the
+boundary and the architecture in hardware terms (the ladder's rule: "architecture given in words"); the
+agent's job is the hardware.  The target user -- a domain researcher, e.g. a wireless grad student -- will
+not always know those choices.  Next: the agent proposes them -- the interfaces, the partition into
+stages, the word widths and PF from a throughput target -- and explains the trade-offs.  The frames'
+`choose_when` is the seed of this; the test is a rung whose spec gives only the algorithm, the rates and
+the I/O, graded on the architecture proposed.  Tokens are not the constraint (the user): a plan run is
+2-3M in, mostly cached; a full build 30-70M in, 30-50 min.
 
 **Follow-on, not this plan:** the `GraphSystem` examples to `HwSystem(sim, dut)`, one at a time, with an
 "older form" banner on each example page until it moves; what becomes of `basic_vec` and `regmap`.

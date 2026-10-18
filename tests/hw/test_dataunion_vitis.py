@@ -56,6 +56,13 @@ class AccelPacket(DataList):
     elements = {"ax": S16, "ay": S16, "az": S16}
 
 
+#: Its word layout has a gap at 32 bits: c does not fit after a and b, so it starts the next word --
+#: where a flat-bits layout would put it at bit 24.  The C++ must read and write the word layout.
+@register_schema(schema_id=4, registry=_vitis_reg)
+class GapPacket(DataList):
+    elements = {"a": U16, "b": U8, "c": U16}
+
+
 _SensorSchemaID = SchemaIDField.specialize(registry=_vitis_reg, bitwidth=16)
 _SensorHdr = DataUnionHdr.specialize(schema_id_type=_SensorSchemaID)
 SensorDataUnion = DataUnion.specialize(hdr_type=_SensorHdr)
@@ -72,6 +79,7 @@ TEST_PAYLOADS = [
     TempPacket(temp_raw=32767, sensor_id=0),
     PressPacket(pressure_pa=0, sensor_id=255),
     AccelPacket(ax=-32768, ay=0, az=32767),
+    GapPacket(a=0xBEEF, b=0x5A, c=0x1234),
 ]
 
 

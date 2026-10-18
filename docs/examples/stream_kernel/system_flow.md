@@ -6,7 +6,7 @@ nav_order: 4
 
 # The system flow
 
-The kernel is verified at RTL as an [`HwSystem`](../../guide/flows/concurrent_system.md): a simulation
+The kernel is verified at RTL as an [`HwSystem`](../../guide/systems/index.md): a simulation
 and one named DUT. Here the DUT is the kernel, and the testbench is **generated from its ports**.
 
 ## The harness

@@ -25,7 +25,7 @@ Say which you chose, and why, before writing anything.
    (`waveflow_get_example(name)` lists them), and its source files with
    `waveflow_get_example(name, file=...)`. Every departure from it is a
    likely failure point.
-2. **Read the pattern** it realizes: `waveflow_get_doc("docs/guide/patterns/index.md")`.
+2. **Read the pattern** it realizes: `waveflow_get_doc("docs/guide/systems/dut.md")`.
 3. **Stage 1:** the schemas (validate each with `waveflow_validate_schema`),
    a golden model of the function, the scenarios and their expected outputs
    computed from the golden model, and one line for each decision the

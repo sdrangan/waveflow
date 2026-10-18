@@ -6,7 +6,7 @@ nav_order: 1
 
 # The protocol
 
-The kernel speaks the [command-response pattern](../../guide/patterns/command_response.md) on three
+The kernel speaks the [command-response pattern](../../guide/systems/command_response.md) on three
 AXI4-Streams of 32-bit words -- a data plane and a status plane:
 
 ```text
@@ -43,7 +43,7 @@ its own for three reasons:
 
 The cost is one more port, and one rule for a reader: read in the order the kernel writes -- the
 header, the results, then the status -- or a full results stream blocks the kernel before it ever
-writes the status ([the rules](../../guide/patterns/command_response.md#the-rules-that-make-it-robust)).
+writes the status ([the rules](../../guide/systems/command_response.md#the-rules-that-make-it-robust)).
 
 ## An error is fatal
 

@@ -1,10 +1,10 @@
 ---
 title: Developing module by module
-parent: Hardware modules and Flows
-nav_order: 3.5
+parent: Modules
+nav_order: 3
 audience: python
 api: [HwSystem, harness, memory_harness, StreamDriver, StreamSink, CreditSink, CreditSource, MmScript, StandInPolicy, add_robustness_steps, TimedPhase, add_calib_steps, MemCalibStep, ModuleStore]
-summary: "How a design of several modules is developed one module at a time. Any module in a design's tree can be run alone: harness(module) makes it the DUT of its own HwSystem, with a stand-in at each port generated from the port's type (a stream driver or sink, a credit source or sink, a scripted AXI-MM master), each with a C++ twin so the harness runs in pysim and at RTL. Stand-ins can be made hostile (StandInPolicy: stalls, late answers, starved credit) and a harness swept over them. A module's timing is declared as timed phases and calibrated in its harness; the fit is filed under the module's identity and loaded wherever the module sits. A parent's timing is then composed from its units' records with nothing fitted, and checked against the parent's RTL -- markov within 1.6%. Builds are incremental: change one unit and only it, and the systems holding it, do any work."
+summary: "How a design of several modules is developed one module at a time. Any module in a design's tree can be run alone: harness(module) makes it the DUT of its own HwSystem, with a stand-in at each port generated from the port's type (a stream driver or sink, a credit source or sink, a scripted AXI-MM master), each with a C++ twin so the harness runs in pysim and at RTL. Stand-ins can be made hostile (StandInPolicy: stalls, late answers, starved credit) and a harness swept over them. A module's timing is declared as timed phases and calibrated in its harness; the fit is filed under the module's identity and loaded wherever the module sits. A parent's timing is then composed from its units' records with nothing fitted, and checked against the parent's RTL -- markov within 1%. Builds are incremental: change one unit and only it, and the systems holding it, do any work."
 ---
 
 # Developing module by module
@@ -21,7 +21,7 @@ There is no unit class. Any `HwModule` in a design's DUT tree can be built and r
 kernel, a memory, a composite of several. The unit tree **is** the module tree: a module's children,
 boundary and wiring are already declared by the module itself.
 
-What runs is always an [`HwSystem`](concurrent_system.md): a simulation plus **one named DUT**. The
+What runs is always an [`HwSystem`](../systems/index.md): a simulation plus **one named DUT**. The
 testbench is everything else in the simulation, derived, never listed. Each testbench participant must
 have a lowering to the RTL testbench (its `bfm_model()`), so the same system runs in pysim and under XSI.
 
@@ -97,7 +97,7 @@ parent. The check is the parent's RTL:
 | system | composed from | against its RTL (Vitis 2025.1) |
 |---|---|---|
 | the polynomial behind AXI-MM | the kernel's record, the queues, the crossbar | +1.8% |
-| markov: a generator, a chain, a memory, on a bus | three records, each from its own harness | -1.6% |
+| markov: a generator, a chain, a memory, on a bus | three records, each from its own harness | -0.9% |
 
 When the composition misses, the miss locates what is not yet modeled: markov's first composition was
 -8.8%, and comparing its RTL probes against pysim event by event found an uncalibrated memory (reads at

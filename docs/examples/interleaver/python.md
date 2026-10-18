@@ -6,7 +6,7 @@ summary: "Building the design in Python: four hand-written FreeRunMod leaves, th
 ---
 # Python Model
 
-This page builds the design in Python — the four hand-written [`FreeRunMod`](../../guide/flows/concurrent.md)
+This page builds the design in Python — the four hand-written [`FreeRunMod`](../../guide/systems/index.md)
 leaves, the two framework mem-streams they compose with, and the composite that wires all six — and shows
 *how to write each kind of block* for a gather `Y[i] = X[P[i]]`. The whole design is
 `examples/interleaver/interleaver_inband.py`.

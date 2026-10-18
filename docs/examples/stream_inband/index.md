@@ -91,7 +91,7 @@ cleanly, and the host resets and starts over -- simple hardware, and a simple ho
 
 A kernel that must run **continuously** and keep going after a bad packet -- a radio receiver, a
 network function -- is a different design: a free-running kernel that resynchronizes on its own.
-That is the free-running flow (`FreeRunMod`; see [Design patterns](../../guide/patterns/index.md)),
+That is the free-running flow (`FreeRunMod`; see [the shapes a design takes](../../guide/systems/command_response.md#the-shape)),
 not this one.
 
 ## Reading this example
