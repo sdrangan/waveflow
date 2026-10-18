@@ -18,7 +18,7 @@ spec's worked examples  ->  golden  ->  pysim  ->  RTL
 
 ## The golden against the spec
 
-The golden is pure functions ([Designing the DUT](dut.md#what-it-does-the-golden-first)), so its test is
+The golden is pure functions ([The DUT](dut.md#what-it-does-the-golden-first)), so its test is
 the spec's own worked examples, reproduced exactly. Everything after it is checked against the golden's
 expected outputs, computed **from the intents** -- so a bug in the stimulus cannot hide by being repeated
 in the expectation.

@@ -1,17 +1,53 @@
 ---
-title: Designing the DUT
+title: The DUT and two levels of simulation
 parent: Flow Overview
 nav_order: 1
 audience: python
-api: [FreeRunMod, run_iter, add_comp, add_if, DataList, StreamBroadcast]
-summary: "The first step of the flow: deciding what is built. What the design does, pinned first as a bit-exact golden model computed from intents; its boundary -- the ports where it meets everything else; how the work is partitioned into modules (a leaf with one run_iter, or a composite of stages that run concurrently; devices for what a bus reaches); the interfaces between them; and the messages on each, as schemas. The shape a design takes -- command-response by default, a continuous or configured stream, a host-launched one-shot. Walked on the free-running polynomial, with steps up to a three-stage pipeline (block_eq) and a bus system (markov)."
+api: [FreeRunMod, run_iter, add_comp, add_if, DataList, StreamBroadcast, Simulation, HwSystem]
+summary: "The first step of the flow: what is built, and how it is tested. The DUT -- the design under test -- is the hardware that will be synthesized, and Waveflow tests it at two levels: in a Simulation beside any SimObj (a host, a wireless channel, a traffic source), and in an HwSystem whose testbench is the part of that simulation with an RTL twin, the DUT running as RTL. Then the recipe for designing a DUT -- five questions: what it does (a bit-exact golden from intents), its boundary, its modules (a leaf with one run_iter, or a composite of stages that run concurrently; devices for what a bus reaches), the interfaces between them, and the messages on each -- answered first in brief for the free-running polynomial, then each in turn, with steps up to a three-stage pipeline (block_eq) and a bus system (markov)."
 ---
 
-# Designing the DUT
+# The DUT and two levels of simulation
 
-The DUT -- the design under test -- is what will be synthesized: the hardware. Designing it means
-answering five questions before any module is written. They are the system's design, and every later
-step follows from them.
+The DUT -- the design under test -- is what will be synthesized: the hardware. Synthesized hardware must
+be **tested**, and Waveflow offers two modes. Both put the DUT in a simulation; they differ in what may
+sit around it.
+
+```mermaid
+flowchart LR
+  subgraph S["Simulation: pysim"]
+    direction TB
+    H1["host program"] --> D1[["DUT"]]
+    C1["wireless channel"] --> D1
+    T1["traffic source"] --> C1
+    D1 --> P1["processor model"]
+  end
+  subgraph H["HwSystem: RTL simulation"]
+    direction TB
+    H2["host<br/>(C++ twin)"] --> D2[["DUT<br/>(its RTL)"]]
+    DR["stream driver<br/>(AxisMaster)"] --> D2
+    D2 --> SK["stream sink<br/>(AxisSlave)"]
+  end
+```
+
+- **pysim** runs the DUT in a **[`Simulation`](../sim/index.md)**: a discrete-event simulation of any
+  collection of `SimObj`s. Beside the DUT there can be anything the question needs -- a host program, a
+  wireless channel, a traffic source, a processor model. It is fast, its timing is a model, and it is
+  where a design is explored and evaluated as part of a larger system ([Simulating in Python](pysim.md)).
+- **RTL simulation** runs the DUT in an **[`HwSystem(sim, dut)`](rtl.md#the-system)**: the same kind of
+  simulation, with the DUT named, and everything else its **testbench**. The DUT's Verilog runs cycle by
+  cycle under Vivado's simulator, and every testbench part runs as its C++ twin beside it
+  ([Simulating at RTL](rtl.md)).
+
+The rule between them is one line: **anything can join a `Simulation`; only what has an RTL twin can
+join an `HwSystem`.** A host has a C++ twin, so it can drive the RTL; a wireless channel model has none,
+so a study with one is a pysim study, and its RTL simulation draws the testbench where everything has
+a twin. Here the DUT is a black box; the rest of this page is what goes inside it.
+
+## Designing the DUT: the recipe
+
+Designing the DUT means answering five questions before any module is written. They are the system's
+design, and every later step follows from them.
 
 1. **What it does** -- pinned as a golden model.
 2. **Its boundary** -- where it meets everything else.
@@ -19,8 +55,32 @@ step follows from them.
 4. **The interfaces** between them.
 5. **The messages** on each interface.
 
-Then one choice cuts across all five: the **shape** of the design -- how a job goes in and how its
-answer comes out.
+## Example: the polynomial
+
+The running example is the [free-running polynomial](../../examples/stream_kernel/index.md). Its five
+answers, in brief:
+
+1. **What it does:** for each command, evaluate $y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$ on its float32
+   samples, in Horner order, and report how the command ended.
+2. **Its boundary:** three streams -- `s_in` takes a command and its samples, `m_out` gives the results,
+   `m_status` gives one status per command.
+3. **Its modules:** one -- `PolyKernel`, a leaf with one `run_iter`, which becomes one task. The work is
+   one stage, so there is nothing to split.
+4. **The interfaces:** the three streams, each framed (TLAST ends each message).
+5. **The messages:** `CmdHdr(tx_id, nsamp, c0..c3)` and the samples in; `Resp(tx_id, nsamp)` and the
+   results out; `Status(tx_id, status)`, with `status` `OK` or `TLAST_EARLY`.
+
+```mermaid
+flowchart LR
+  IN(["s_in<br/>CmdHdr | x[0..n-1]"]) --> T
+  subgraph DUT["DUT: PolyKernel"]
+    T["poly_kernel_task<br/>(one hls::task)"]
+  end
+  T --> OUT(["m_out<br/>Resp | y[0..n-1]"])
+  T --> ST(["m_status<br/>Status"])
+```
+
+Each answer in turn, below.
 
 ## What it does: the golden first
 
@@ -110,20 +170,6 @@ The same classes generate the C++ structs the HLS body reads and writes, so the 
 every bit by construction. Several kinds of message on one stream are a
 [tagged union](../schema/python/tagged_union.md); validate each schema as it is written
 (`waveflow_validate_schema` for an assistant).
-
-## The shape
-
-The five answers take one of a few shapes:
-
-| shape | how it goes | use it when | examples |
-|---|---|---|---|
-| [**Command-response**](command_response.md) | a command carrying `n` -> the work on `n` elements -> a response, and a status per command | the work comes in jobs. **The default**: every job is named, bounded and answered, so it can be checked | [polynomial](../../examples/stream_kernel/index.md), [block_eq](../../examples/block_eq/index.md), [mm_fir](../../examples/mm_fir/index.md), [markov](../../examples/markov/index.md) |
-| **Continuous stream** | samples in -> samples out, no commands | an always-on signal chain with no "job" | [rf_loopback](../../examples/rf_loopback/index.md) |
-| **Configured stream** | parameters written once (registers), then a continuous stream | parameters change rarely, and the exact sample they take effect on does not matter | the RF data converter's settings |
-| **Host-launched one-shot** | write the arguments, `ap_start`, wait, read the result | a classic Vitis kernel under a host program | [regmap](../../examples/regmap/index.md) |
-
-Most accelerators in practice are command-response -- DMA descriptors, NVMe queues, GPU command
-buffers -- because a job that is named, bounded and answered is a job you can check.
 
 ## Steps up
 

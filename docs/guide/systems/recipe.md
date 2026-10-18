@@ -7,7 +7,7 @@ summary: "Moved: the recipe is now the Flow Overview, a page per step."
 
 # Building a system -- moved
 
-The recipe is now the [Flow Overview](index.md), a page per step: [Designing the DUT](dut.md),
+The recipe is now the [Flow Overview](index.md), a page per step: [The DUT and two levels of simulation](dut.md),
 [Stream patterns](streams.md), [Command-response](command_response.md),
 [Simulating in Python](pysim.md), [Simulating at RTL](rtl.md),
 [Functional verification](verification.md), [Timing and resources](calibration.md),

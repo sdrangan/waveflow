@@ -51,6 +51,24 @@ The details -- every argument, `participants()`, `cut()` -- are in
 
 ![A generic system. A host (a SwHost, tan) is a bus master on an AXI crossbar (purple, vendor IP). The crossbar's slaves are three sub-tops, each in a dashed box. Device A holds a front with views (green, hand-written RTL), kernel A (blue, Vitis HLS) and a bus writer (blue) that acts for kernel A. Device B holds a front with views and kernel B, which also masters the bus through m_axi. The memory holds a front with a window and the RAM (both green). A solid box around the crossbar and the three sub-tops is the DUT; a dotted box around everything, host included, is the HwSystem. An interrupt line runs from device A's front across the DUT boundary to the host. A legend names the build step that realizes each colour: csynth for blue, system_rtl for green, xbar_ip for purple, system_xsi for tan.](../flows/figures/system_cut.svg)
 
+Read it from the outside in:
+
+1. **The system** (dotted) is everything simulated together: an `HwSystem`, a simulation plus one
+   named DUT. It is flat -- a testbench and a DUT, nothing nested.
+2. **The testbench** is everything outside the DUT, derived, never listed: here the host, a
+   [`SwHost`](../build/sw_threads.md) whose threads are Python in pysim and a C++ twin at RTL. In a
+   smaller system it is stream drivers and sinks.
+3. **The DUT** (solid) is what is synthesized: a **tree of modules** -- here three devices and the
+   crossbar between them.
+4. **A device** (dashed) is a kernel with everything that belongs to it -- its memory-mapped views
+   and front, the bus writers that act for it -- one IP when the system is packaged.
+5. **A module** is a [`HwModule`](../flows/modules.md): typed ports and a behavior. A **kernel** is a
+   free-running module whose behavior is a Python `run_iter` and, at RTL, an HLS body.
+6. **The interfaces** between modules are typed connections -- streams, credit streams, AXI-MM,
+   BRAM, interrupts ([Interfaces](../interface/index.md)).
+7. **The messages** on them are [schemas](../schema/index.md): the fields once, in Python, and every
+   word packed by generated code.
+
 | colour | what it is | how it becomes RTL |
 |---|---|---|
 | **blue** | kernels, and the bus writers a routed stream brings | an HLS body, synthesized by Vitis (`csynth`) |
@@ -114,6 +132,19 @@ reads is unchanged ([freshness](../build/xsi_system.md#system-freshness)). csynt
 100 MHz unless a top's script names a part and clock (`render_tcl(top, part=..., period_ns=...)`).
 
 What `compare` proves, and what it does not, is the next page.
+
+## A ladder of systems {#a-ladder-of-systems}
+
+The worked examples climb from the smallest system to the full picture, each the same idea at a larger
+size:
+
+| system | the DUT | the testbench | worked example |
+|---|---|---|---|
+| one kernel on streams | a free-running kernel | its harness: a stream driver and sinks | [Free-running polynomial](../../examples/stream_kernel/index.md) |
+| a pipeline of kernels on streams | a composite: a broadcast and two stages, joined by internal streams | its harness; each stage alone in its own | [Block equalizer](../../examples/block_eq/index.md) |
+| one kernel on a bus | the same kernel as a device, and the crossbar | a two-thread `SwHost` | [Behind AXI-MM](../../examples/stream_kernel/memory_mapped.md) |
+| a pipeline with memory | a composite of free-running tasks, memory through stream adaptors | stream drivers, sinks, a memory model | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) |
+| several kernels, a memory, a host | devices, a memory, the crossbar | a `SwHost` | [Two kernels on a bus](../../examples/markov/index.md) |
 
 ## Steps up
 

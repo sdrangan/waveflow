@@ -19,6 +19,20 @@ answered. This page is the pattern end to end -- the protocol, the reasons for i
 HLS body, the host -- with links to the layer page for each piece. Its worked example is the
 [free-running polynomial](../../examples/stream_kernel/index.md).
 
+## Command-response among the shapes {#the-shape}
+
+A design takes one of a few shapes -- how a job goes in and how its answer comes out:
+
+| shape | how it goes | use it when | examples |
+|---|---|---|---|
+| **Command-response** (this page) | a command carrying `n` -> the work on `n` elements -> a response, and a status per command | the work comes in jobs. **The default**: every job is named, bounded and answered, so it can be checked | [polynomial](../../examples/stream_kernel/index.md), [block_eq](../../examples/block_eq/index.md), [mm_fir](../../examples/mm_fir/index.md), [markov](../../examples/markov/index.md) |
+| **Continuous stream** | samples in -> samples out, no commands | an always-on signal chain with no "job" | [rf_loopback](../../examples/rf_loopback/index.md) |
+| **Configured stream** | parameters written once (registers), then a continuous stream | parameters change rarely, and the exact sample they take effect on does not matter | the RF data converter's settings |
+| **Host-launched one-shot** | write the arguments, `ap_start`, wait, read the result | a classic Vitis kernel under a host program | [regmap](../../examples/regmap/index.md) |
+
+Most accelerators in practice are command-response -- DMA descriptors, NVMe queues, GPU command
+buffers -- because a job that is named, bounded and answered is a job you can check.
+
 ## The protocol: a data plane and a status plane
 
 Three streams:
@@ -297,5 +311,5 @@ registers, and an error ends the run ([the stream_inband contract](../../example
 ## When it is not the right shape
 
 When there is no job -- samples arrive forever and leave forever -- there is nothing for a command to
-bound, and a [continuous or configured stream](./dut.md#the-shape) is the honest shape. Forcing
+bound, and a [continuous or configured stream](#the-shape) is the honest shape. Forcing
 commands onto it only adds a header nobody needs.
