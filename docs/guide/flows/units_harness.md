@@ -73,7 +73,7 @@ puts behind the same two bundles.
   ([Hostile stand-ins](units_hostile.md)).
 
 Other port kinds -- a device's AXI-MM slave group, an interrupt -- have no stand-in: a device is
-harnessed with its host on a direct link ([the polynomial on a bus](../../examples/stream_kernel/memory_mapped.md)).
+harnessed with its host on a direct link ([the polynomial on a bus](../../examples/stream_kernel_mm/composition.md)).
 
 ### A memory's own harness
 
