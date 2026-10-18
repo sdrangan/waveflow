@@ -39,7 +39,7 @@ def _fresh_module(module, sim):
     """A copy of *module* (an instance or a class) on *sim*: its class, its name and its build
     parameters -- the same rebuild ``system_top`` makes for csynth."""
     from waveflow.hw.clock import Clock
-    from waveflow.hw.hw_module import _hw_param_names
+    from waveflow.hw.hw_module import _hw_param_names, kernel_name
 
     cls = module if isinstance(module, type) else type(module)
     kw: dict[str, Any] = {}
@@ -48,7 +48,7 @@ def _fresh_module(module, sim):
         clk = getattr(module, "clk", None)
         if clk is not None and "clk" in getattr(cls, "__dataclass_fields__", {}):
             kw["clk"] = Clock(freq=clk.freq)
-    name = (getattr(cls, "cpp_kernel_name", None)
+    name = (kernel_name(module, kw)
             or (module.name if not isinstance(module, type) else cls.__name__.lower()))
     return cls(name=name, sim=sim, **kw)
 

@@ -379,7 +379,9 @@ class GraphSystem(HwSystem):
         self.sim = self.tb.sim
         mods = list(self.dut_modules(self.tb))
         first = mods[0]
-        name = getattr(type(first), "cpp_kernel_name", None) or first.name
+        from waveflow.hw.hw_module import kernel_name
+
+        name = kernel_name(first) or first.name
         self.dut_top = DutTop.of(getattr(self, "dut_name", None) or f"{name}_dut", self.sim,
                                  comps=mods)
         self.clk = first.clk

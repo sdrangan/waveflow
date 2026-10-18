@@ -214,6 +214,34 @@ def validate_param_supports(comp_class) -> None:
             seen_resolved[dup_key] = key
 
 
+def kernel_name(module, values: dict[str, Any] | None = None) -> str | None:
+    """The csynth'd top a module instance is built as: its class's ``cpp_kernel_name``, plus
+    ``_<param><value>`` for each ``HwParam`` its class lists in ``kernel_name_params``.
+
+    One class at several build parameters (two widths of one kernel) so names one top per
+    parameter set, and the tops coexist in one system or DAG: ``cpp_kernel_name = "poly"`` with
+    ``kernel_name_params = ("w",)`` names ``poly_w32`` and ``poly_w64``.  A class that lists no
+    parameter keeps its ``cpp_kernel_name`` unchanged (``None`` when it names none).  *module* is an
+    instance or a class; for a class the values are *values*, else its ``HwParam`` defaults.
+    """
+    cls = module if isinstance(module, type) else type(module)
+    base = getattr(cls, "cpp_kernel_name", None)
+    params = tuple(getattr(cls, "kernel_name_params", ()) or ())
+    if not base or not params:
+        return base
+    known = _hw_param_names(cls)
+    unknown = [p for p in params if p not in known]
+    if unknown:
+        raise ValueError(f"{cls.__name__}.kernel_name_params names {unknown}, which are not HwParam "
+                         f"fields (declared: {sorted(known)})")
+    src = (values or {}) if isinstance(module, type) else {}
+    parts = []
+    for p in params:
+        v = src[p] if p in src else getattr(module, p)
+        parts.append(f"_{p}{re.sub(r'[^A-Za-z0-9]', '_', str(v))}")
+    return base + "".join(parts)
+
+
 class ControlMode(Enum):
     AUTO = auto()           # inferred from HwStmt root at build time
     FREE_RUNNING = auto()   # ap_ctrl_none  (WhileStmt at root)
@@ -376,6 +404,10 @@ class HwModule(SimObj):
 
     control_mode: ClassVar[ControlMode] = ControlMode.AUTO
     cpp_kernel_name: ClassVar[str | None] = None
+    kernel_name_params: ClassVar[tuple[str, ...]] = ()
+    """``HwParam`` fields whose values name each instance's top (:func:`kernel_name`):
+    ``cpp_kernel_name`` + ``_<param><value>`` per entry, so one class builds one top per
+    parameter set in a single system or DAG.  Empty (default): the top is ``cpp_kernel_name``."""
     cpp_namespace: ClassVar[str | None] = None
     """Override for the C++ namespace wrapping hooks for this component.
 

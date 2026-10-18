@@ -1244,14 +1244,16 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
     # A graph with RTL modules beside the kernel is elaborated as its WRAPPER, not as the kernel.
     # Derived here rather than declared, so a design cannot end up with a wrapper the ports header
     # does not know about: one registry decides both.
+    from waveflow.hw.hw_module import kernel_name
+
     return TopSpec(
-        top_name=comp.cpp_kernel_name,
+        top_name=kernel_name(comp),
         ports=tuple(ports),
         tasks=tuple(tasks),
         cmd_headers=tuple(getattr(comp, "cmd_headers", ())),
         channels=channels,
         extra_includes=tuple(getattr(comp, "extra_includes", ())),
-        rtl_top=(wrapper_name(comp.cpp_kernel_name)
+        rtl_top=(wrapper_name(kernel_name(comp))
                  if getattr(comp, "rtl_mods", None) else None),
     )
 
@@ -2338,10 +2340,10 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
     claimed twice, and an interface reaching neither a participant nor the DUT is an error rather
     than a silent no-op — which is what it used to be.
     """
-    from waveflow.hw.hw_module import discover_dyn_params
+    from waveflow.hw.hw_module import discover_dyn_params, kernel_name
 
     dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
-    ports_ns = f"{dut.cpp_kernel_name}_ports"
+    ports_ns = f"{kernel_name(dut)}_ports"
     local_headers: list[str] = []
 
     # endpoint identity -> (participant, the model spanning it, that model's identity).  Built over
@@ -2466,7 +2468,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             )
         emitted[nm] = kind
 
-    return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
+    return TbSpec(top_name=kernel_name(dut), shared=tuple(shared.values()),
                   models=tuple(models), channels=tuple(channels),
                   local_headers=tuple(local_headers))
 
