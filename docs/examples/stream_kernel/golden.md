@@ -56,6 +56,7 @@ Two functions turn intents into streams:
 Computing the expectation from intent is what makes it a check: a bug in `stimulus` cannot hide by
 being repeated in `expected`. `default_cmds()` is the test scenario -- five commands of different
 lengths and coefficients: one of a single sample, then one that ends early (fatal), then one that is
-never answered.  `good_cmds()` is the same without the bad one, for the host behind AXI-MM.
+never answered.  `good_cmds()` is the same without the bad one, for the host behind AXI-MM
+([The polynomial on a bus](../stream_kernel_mm/device.md#the-status-a-queue-for-now)).
 
 Next, [The kernel](kernel.md) that has to produce these outputs.

@@ -56,8 +56,9 @@ The held-out lengths are predicted exactly too.
 
 The fit is one record in [`calib/`](../../../examples/stream_kernel/calib), filed under the kernel's
 **identity** -- a digest of its structure, free of what its ports are bound to -- with the phases it was
-fitted to. Wherever the kernel sits (its harness here, a memory-mapped device on the next page), its
-phases load the record its identity finds. A repeat of the calibration finds the record and runs no
-simulation; a kernel whose phases changed finds none, and is calibrated again.
+fitted to. Wherever the kernel sits (its harness here, or a memory-mapped device), its phases load the
+record its identity finds. A repeat of the calibration finds the record and runs no simulation; a kernel
+whose phases changed finds none, and is calibrated again.
 
-Next, [Behind AXI-MM](memory_mapped.md): the same kernel, its timing composed from this record.
+The same kernel on a bus, its timing composed from this record, is
+[The polynomial on a bus](../stream_kernel_mm/index.md).

@@ -22,7 +22,7 @@ from waveflow.mcp.knowledge import (
 from waveflow.mcp.knowledge.corpus import TOC_DIR, parse_front_matter
 from waveflow.mcp.knowledge.roots import repo_root
 
-#: The docs TOC as of 2026-10-17 (block_eq added; 2026-10-16: stream_kernel added; 2026-10-06: ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
+#: The docs TOC as of 2026-10-18 (stream_kernel_mm added, sharing stream_kernel's directory; 2026-10-17: block_eq added; 2026-10-16: stream_kernel added; 2026-10-06: ssr_fft added; 2026-10-05: vitis_fft added; 2026-10-04: markov added; 2026-10-02: mm_fir added, mmqueue removed).  Pinned so that *adding* an example is a
 #: deliberate two-line change rather than something that happens by accident,
 #: and so the count in the plan stays honest.
 TOC_EXAMPLES = {
@@ -45,6 +45,7 @@ TOC_EXAMPLES = {
     "ssr_fft",
     "stream_inband",
     "stream_kernel",
+    "stream_kernel_mm",
     "vecmult",
     "vitis_fft",
     "xbar_profile",
@@ -95,6 +96,17 @@ def test_the_corpus_examples_are_exactly_the_toc(index) -> None:
 def test_renamed_examples_resolve_to_their_real_directory(index) -> None:
     for name, expected in RENAMED.items():
         assert index.cards[name].example_dir == expected
+
+
+def test_two_pages_may_share_one_example_dir(index) -> None:
+    """The polynomial on streams and on a bus are two examples over one code base: both cards
+    carry the directory's files, and each file is owned once (by the first, by name)."""
+    stream, bus = index.cards["stream_kernel"], index.cards["stream_kernel_mm"]
+    assert stream.example_dir == bus.example_dir == "examples/stream_kernel"
+    assert bus.doc_path == "docs/examples/stream_kernel_mm/index.md"
+    whole = waveflow_get_example("stream_kernel_mm", file="stream_kernel_mm.py")
+    assert whole["path"] == "examples/stream_kernel/stream_kernel_mm.py"
+    assert index.corpus.file_owner[whole["path"]] == "stream_kernel"
 
 
 def test_non_toc_example_directories_are_out_of_the_corpus(index) -> None:

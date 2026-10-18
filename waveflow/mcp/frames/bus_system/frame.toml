@@ -26,10 +26,10 @@ bank written mid-stream), or kernels share a memory, or more than one kernel.  O
 fed and drained by stream sources and sinks, with no host on a bus, is stream_kernel.  Not \
 for off-chip (DDR) memory yet."""
 
-# Primary first: stream_kernel's memory-mapped system is the smallest -- one kernel behind queue views,
-# a two-thread host; markov is two kernels, a routed credit link and shared memory; mm_fir is one
+# Primary first: stream_kernel_mm (the polynomial on a bus) is the smallest -- one kernel behind queue
+# views, a two-thread host; markov is two kernels, a routed credit link and shared memory; mm_fir is one
 # kernel reached over the bus, with a register bank.
-reference_examples = ["stream_kernel", "markov", "mm_fir"]
+reference_examples = ["stream_kernel_mm", "markov", "mm_fir"]
 
 [docs]
 specification = "frame.md"
