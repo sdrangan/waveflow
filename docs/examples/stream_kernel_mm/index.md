@@ -1,7 +1,7 @@
 ---
 title: The polynomial on a bus
 parent: Examples
-nav_order: 0.8
+nav_order: 4
 has_children: true
 example_dir: examples/stream_kernel
 summary: "One kernel put on a bus: the free-running polynomial of the stream example -- the same class, the same csynth'd RTL -- placed behind memory-mapped queues on an AXI-MM crossbar and driven by a software host. The kernel's class declares its views (mm_views: a queue in front of its input, a queue behind each output) and build_mm_device builds them; the system is HwSystem(sim, dut) with the device and the crossbar as the DUT; the host is a two-thread SwHost -- a writer and a reader that sizes each result from its header -- that never polls, waiting on the queues' interrupts, with a C++ twin that runs the same scenario at RTL and must leave identical traces. The device also runs in its own harness, the host on a direct link with no crossbar. The composition check: pysim's cycles, composed from the kernel's calibrated record and the queue and crossbar models with nothing fitted, land within 2% of the RTL (Vitis/Vivado 2025.1)."

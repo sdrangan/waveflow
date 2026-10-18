@@ -1,7 +1,7 @@
 ---
 title: Block FIR with state
 parent: Examples
-nav_order: 8
+nav_order: 7
 has_children: true
 example_dir: examples/fir_block
 summary: "The first design in the tree whose firings are not independent. A block FIR has to carry two things from one firing to the next, with different lifetimes — the coefficients, loaded once, and the tail of the previous block — so both are storage the module itself owns and declares with add_state. In fixed point, as a four-module composite, RTL-gated and resource-modelled: the advanced counterpart to the vector multiply."
@@ -48,24 +48,24 @@ firing rather than a loop*.
 
 ## Learning Objectives
 
-In going through this example, you will learn to:
+What this adds to [Composite kernel interleaver](../interleaver/index.md#learning-objectives), in the
+order the pages teach it:
 
-- Give a hardware module **memory between firings** with
-  [`add_state`](../../guide/memory/hwstate.md) — both *load-once, held* state and *per-firing carry*
-  state, and add a **declared reset path**
-- Perform a common **DSP calculation in fixed point** with one declared format, leveraging the
-  [format algebra](../../guide/schema/python/fixpoint.md) to *derive* the full-precision accumulators, adding lossy steps where necessary.
-- **Hand-write kernel task bodies with different unrolling structures** — one output per iteration
-  versus a whole lane per iteration — and create a compile-time parameter to select between the options
-- **Verify stateful hardware**, using a golden that is deliberately *stateless* so that agreeing with it
-  *is* the proof the state is right, plus falsification tests that break each flavour of state in turn
-- **Identify** the firing patterns that can wedge a free-running pipeline — a stage that consumes
-  without emitting, or a zero-length transfer handled as if it were non-zero — and **avoid** them by
-  keeping every stage's token count uniform across opcodes, so that even a no-output command issues a
-  (zero-length) transfer and lands its completion
-- **Sweep the bitwidth parameters** and build a **resource model** from what comes back — encoding the
-  DSP48's geometry as a prior that needs no fitting at all, fitting only the counters no closed form
-  reaches, and composing the parts into a whole-design estimate that reports its own confidence
+1. Give a module **memory between firings** with [`add_state`](../../guide/memory/hwstate.md): state
+   loaded once and held (the taps), state carried from one firing to the next (the tail), and a
+   **declared reset path**.
+2. Compute a filter in **fixed point** with one declared format, and **derive** the full-precision
+   accumulator from the [format algebra](../../guide/schema/python/fixpoint.md) instead of sizing it by
+   hand.
+3. Write **two kernel bodies** for one specification -- one output per iteration, or a whole lane per
+   iteration -- and select between them with a compile-time parameter.
+4. Verify stateful hardware against a deliberately **stateless golden**, and write falsification tests
+   that break each kind of state in turn.
+5. Keep every stage's **token count uniform across opcodes**, so a command with no output still issues
+   a (zero-length) transfer and lands its completion, and the pipeline cannot wedge.
+6. **Sweep the bitwidth parameters** and build a **resource model** from the results: a DSP prior from
+   the DSP48's geometry with nothing fitted, a fit only for the counters no closed form reaches, and a
+   whole-design estimate that reports its confidence.
 
 ## In this example
 

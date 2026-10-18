@@ -1,7 +1,7 @@
 ---
 title: What a crossbar costs
 parent: Examples
-nav_order: 9.552
+nav_order: 12
 example_dir: examples/xbar_profile
 summary: "A measurement census rather than a design: AMD's axi_crossbar in every small shape (1x2 to 4x4), both connectivity modes (SAMD crossbar, SASD shared bus) and two data widths, each synthesized, placed and routed out of context at 250 MHz and run under XSI between host and memory BFMs. The area, the timing-closure margin and the latency of every configuration are filed into a platform's module record store -- the same records a resource model fits from -- and the tables on this page are rendered back out of that store."
 ---
@@ -13,6 +13,22 @@ summary: "A measurement census rather than a design: AMD's axi_crossbar in every
 in cycles. Two questions were left open: **how much fabric** a crossbar takes, and **how both answers
 change** with its shape and its connectivity mode. This example measures them for every small
 configuration and keeps the numbers where a model can use them.
+
+## Learning objectives
+
+What this adds to the examples before it, which built designs: a **measurement** of vendor IP. In the
+order the page teaches it:
+
+1. Configure AMD's `axi_crossbar` (`AxiXbarConfig`) in a shape and a connectivity mode, and say what
+   SAMD and SASD each allow to overlap.
+2. Run a grid of configurations through out-of-context synthesis, place and route, and read the
+   utilization, the routed slack and the critical path of each.
+3. Measure the IP's latency under XSI with **probes** that start every operation in the same cycle,
+   between host and memory BFMs, each read checked against what its write stored.
+4. File every measurement as a **record** in a platform's module store (`ModuleStore`), under the IP's
+   content key, with the part it was measured on.
+5. Render the tables back out of the store, and read the store as the frame a resource model fits
+   from (`corpus_from_records`).
 
 The crossbar has two architectures (`AxiXbarConfig(mode=...)`):
 
