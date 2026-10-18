@@ -43,6 +43,10 @@ The module names a calibration scenario and the feature values to hold out of th
 calib_holdout: ClassVar[dict] = {"nwords": (48, 128)}           # interior lengths test the fit
 def workload(self, kind="test"): ...                             # "calib": nine lengths, 8 to 200
 
+from waveflow.build.phase_calib import add_calib_steps
+from waveflow.calib.record_store import ModuleStore
+from waveflow.hw.harness import harness
+
 add_calib_steps(dag, harness(PolyKernel), work_dir=..., top=..., store=ModuleStore(HERE / "calib"))
 ```
 

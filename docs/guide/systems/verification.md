@@ -29,6 +29,10 @@ In the module's harness, each `StreamSink` keeps what it recorded as `words`, on
 check compares bursts, so it checks the framing as well as the values:
 
 ```python
+import numpy as np
+from waveflow.hw.harness import harness
+from examples.stream_kernel.stream_kernel import PolyKernel, default_cmds, expected
+
 sysm = harness(PolyKernel, workload="test")
 sysm.run()                                                     # pysim
 got = {p: [np.asarray(b, dtype=np.uint64) for b in sysm.stand_ins[p].words]

@@ -20,6 +20,8 @@ constructed on it, wired by interfaces, and `run_sim()` drives them all -- each 
 processes, then its `post_sim` ([Running a simulation](../sim/running.md)).
 
 ```python
+from waveflow.simulation.simulation import Simulation
+
 sim = Simulation()
 kernel = PolyKernel(name="poly_kernel", sim=sim, clk=clk)     # constructing it registers it
 ...                                                            # the objects around it, the interfaces
@@ -52,12 +54,16 @@ polynomial, read a command, head its results, run the samples, report
 
 ## The cut: a module in its own harness {#the-cut}
 
-Any module can be simulated **alone**. `harness` makes it the DUT of its own system, with a stand-in at
-each port generated from the port's type:
+Any module can be simulated **alone**. [`harness`](../../../waveflow/hw/harness.py) is a Waveflow
+function, not the example's: it makes any module the DUT of its own system, with a stand-in at each port
+generated from the port's type:
 
 ```python
-sysm = harness(PolyKernel, workload="test")
-sysm.run()
+from waveflow.hw.harness import harness                  # the framework's
+from examples.stream_kernel.stream_kernel import PolyKernel   # the example's kernel
+
+sysm = harness(PolyKernel, workload="test")               # an HwSystem: the kernel, a stand-in per port
+sysm.run()                                                # pysim
 ```
 
 | the module's port | stand-in |
@@ -96,6 +102,8 @@ joined by their internal streams. Three harnesses, one golden.
 `SwHost` on one simulation, wired directly or over a crossbar, run until the host is done:
 
 ```python
+from examples.markov.markov import default_jobs, markov_system
+
 sysm = markov_system(default_jobs(4, 300), link="mm")      # the kernels' devices, the memory, the host
 results = sysm.run()                                        # {job: {"x", "ones", "n", "t"}}
 ```

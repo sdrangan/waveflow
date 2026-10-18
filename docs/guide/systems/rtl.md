@@ -99,6 +99,13 @@ One call puts the RTL simulation on a build DAG, after the example's own `codege
 routines, tops and bodies):
 
 ```python
+from waveflow.build.build import BuildDag
+from waveflow.build.cli import run_dag_cli
+from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.harness import harness
+from examples.stream_kernel.stream_kernel import PolyKernel
+from examples.stream_kernel.stream_kernel_build import StreamKernelCodegenStep   # the example's codegen
+
 dag = BuildDag()
 dag.add(StreamKernelCodegenStep(name="codegen"))
 add_system_steps(dag, harness(PolyKernel, workload="test"), work_dir="xsi_work", top="stream_kernel_top")
