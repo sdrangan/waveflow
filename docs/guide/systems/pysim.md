@@ -39,40 +39,16 @@ an [RTL simulation](rtl.md) can hold only what has an RTL twin.
 
 ## A module's behavior: one firing
 
-A free-running module's behavior is its `run_iter`: **one firing**, the work on one message. The
-polynomial reads a command, heads its results, runs the samples, reports:
+A free-running module's behavior is its `run_iter`: **one firing**, the work on one message -- for the
+polynomial, read a command, head its results, run the samples, report
+([Defining the kernel in Python and HLS](hwmodule.md)). In pysim it is what runs:
 
-```python
-def run_iter(self):
-    hdr = yield from self.s_in.get_schema(CmdHdr)
-    n = int(hdr.nsamp)
-    coeffs = hdr.coeffs
-    yield from self.m_out.write(Resp(tx_id=hdr.tx_id, nsamp=n))
-
-    load = self.s_in.get_array(Float32, n)
-    store = self.m_out.write_array(Float32, n)
-
-    def compute(x):
-        return array(Float32, poly_eval(coeffs, x.val))
-
-    r = yield from self.samp_phase.pipeline(compute, load=load, store=store, nwords=load.nwords())
-    code = StatusCode.OK if len(r.y.val) == n else StatusCode.TLAST_EARLY
-    yield self.status_phase.timeout()
-    yield from self.m_status.write(Status(tx_id=hdr.tx_id, status=code))
-    if code != StatusCode.OK:
-        yield self.event()          # fatal: never triggered, so the kernel stops taking s_in
-```
-
-- The reads and writes are the stream ports' -- messages by their schemas, arrays by their element
-  type, never words by hand.
-- `compute` is the golden's function, so pysim's results are the golden's by construction.
-- The **timing** is declared, not hand-tuned: `samp_phase` and `status_phase` are
-  [timed phases](../timing_model/timed_phases.md) -- spans between events at the module's own ports,
-  calibrated later against the RTL ([Timing and resources](calibration.md)).
-- A fatal error waits on an event nothing triggers: the module stops, as the hardware does.
-
-Writing a module -- leaves and composites, state across firings -- is in
-[Hardware modules](../flows/modules.md).
+- the reads and writes are the stream ports' -- messages by their schemas, arrays by their element type;
+- the work is the golden's function, so pysim's results are the golden's by construction;
+- the **timing** is declared, not hand-tuned: [timed phases](../timing_model/timed_phases.md), spans
+  between events at the module's own ports, calibrated later against the RTL
+  ([Timing and resources](calibration.md));
+- a fatal error waits on an event nothing triggers: the module stops, as the hardware does.
 
 ## The cut: a module in its own harness {#the-cut}
 

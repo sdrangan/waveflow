@@ -189,86 +189,10 @@ In Python, one `write` is one burst, so a kernel that builds a job's messages on
 them and writes the job's burst at `END`; at RTL they go out as they are made, with TLAST on the
 last.
 
-## The Python model
+## The kernel, the body and the host
 
-The kernel is a free-running module whose `run_iter` is one job:
-
-```python
-# __post_init__: the job loop is a pipelined timed phase -- a latency, then the results at its rate
-self.job_phase = TimedPhase(
-    "job", spans={"latency": (self.s_in.first, self.m_out.first),
-                  "fill_time": (self.m_out.first, self.m_out.last)}, features=("n",))
-self.add_timing_phase(self.job_phase)
-
-def run_iter(self):
-    hdr = yield from self.s_in.get_schema(CmdHdr)                  # 1. the command
-    n = hdr.n
-    yield from self.m_out.write(Resp(tx_id=hdr.tx_id, n=n))        #    the results' header
-    r = yield from self.job_phase.pipeline(                        # 2. n elements in, the work,
-        lambda x: array(S64, golden(x.val)),                       #    vectorized, n results out --
-        load=self.s_in.get_array(S16, n),                         #    overlapped, as in hardware
-        store=self.m_out.write_array(S64, n), n=n)
-    code = StatusCode.OK if len(r.y.val) == n else StatusCode.TLAST_EARLY
-    yield from self.m_status.write(Status(tx_id=hdr.tx_id, status=code))   # 3. the status
-    if code != StatusCode.OK:
-        yield self.event()                                         # fatal: never triggered
-```
-
-- **The work is the golden**, called on the whole job at once -- a NumPy expression, not a Python loop
-  over elements ([Vectorization](../vectorization/index.md)).
-- **The timing is a [timed phase](../timing_model/timed_phases.md)** with the HLS loop's two numbers as
-  its spans: the latency from the first element in to the first result out, and the fill at the loop's
-  rate.  `pipeline` starts the results a latency after the first element arrived, so reading, computing
-  and writing overlap as they do in hardware ([Pipelined bodies](../timing_model/streaming.md)); the
-  numbers come from [calibrating the phase](../timing_model/fit.md), not the code.
-- **A fatal error waits on an event nothing triggers**: the module stops taking input, as the RTL does.
-- **`run_iter` is the specification of the HLS body**, which should read the same way, line for line.
-
-## The HLS body
-
-One firing of the `hls::task` is one job, written straight down -- the same three steps, and a flag for
-the fatal error:
-
-```cpp
-static bool halted = false;                               // set by an error, cleared by a reset
-#pragma HLS reset variable=halted
-if (halted) return;                                       // stopped: read nothing, write nothing
-
-CmdHdr h;
-h.read_axi4_stream<W>(s_in);                              // 1. the command
-Resp r; r.tx_id = h.tx_id; r.n = h.n;
-r.write_axi4_stream<W>(m_out, true);                      //    the results' header
-
-bool early = false;
-for (int i = 0; i < h.n; i += PF) {                       // 2. the work, one word per iteration
-#pragma HLS PIPELINE II=1
-    ... read a word with the lane routines; TLAST before n sets early and breaks ...
-    ... compute its lanes, write the result word; TLAST on the last one ...
-}
-
-Status s; s.tx_id = h.tx_id; s.status = early ? StatusCode::TLAST_EARLY : StatusCode::OK;
-s.write_axi4_stream<W>(m_status, true);                   // 3. the status
-if (early) halted = true;
-```
-
-The command, header and status structs come from the schemas; the loop over `n` is the **lane loop**,
-because several elements are packed into each bus word. Both of the loop's shapes -- a word per
-iteration with the work unrolled, or an element per iteration -- and why the body is a straight loop
-rather than a state machine are in [Design patterns for loop optimization](../vectorization/hls/loop_optimization.md).
-
-## The host
-
-The host sends commands and collects results and statuses, usually as two processes -- a **writer** and
-a **reader** -- so it never has to finish one job before starting the next:
-
-- **Keep a bounded number of jobs in flight.** The writer sends a command only while fewer than `k` are
-  outstanding; the reader frees a slot per status. That bounds everything a job leaves behind without
-  the host polling anything.
-- **Wait, do not poll.** Over a bus the host waits on each queue's interrupt
-  ([Interrupts](../interface/axi_mm/slave.md#interrupts)).
-- **Read as the kernel writes**: the header, the `n` results it announces, the status.
-- **Check the echo.** Every header's and status's `tx_id` (and `cfg_id`, if there is one) against what
-  was sent.
+How a command-response kernel is written -- its Python model, its HLS body written to read the same way,
+and the host that drives it -- is the next page, [Defining the kernel in Python and HLS](hwmodule.md).
 
 ## Through a pipeline: the command travels with the data
 

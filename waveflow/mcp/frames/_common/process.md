@@ -42,6 +42,7 @@ pages, in order:
 | step | page |
 |---|---|
 | the schemas, the golden, the design notes | `docs/guide/systems/dut.md`, `streams.md`, `command_response.md` |
+| each module in Python, and its HLS body (two copies that must agree) | `docs/guide/systems/hwmodule.md` |
 | each module, then the whole, in pysim | `docs/guide/systems/pysim.md` |
 | the bodies, the build DAG, RTL against pysim | `docs/guide/systems/rtl.md` |
 | what each gate compares, and asserting counts | `docs/guide/systems/verification.md` |

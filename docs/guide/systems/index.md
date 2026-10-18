@@ -25,6 +25,7 @@ running example and links down to the reference sections for the details.
 | **Design the DUT** | what is built and how it is tested; what it does, its modules, interfaces and messages | [The DUT and two levels of simulation](dut.md) |
 | | how modules talk on streams | [Stream patterns](streams.md) |
 | | how a job goes in and its answer comes out | [Command-response](command_response.md) |
+| | the kernel, twice: a Python model and an HLS body that must agree | [Defining the kernel in Python and HLS](hwmodule.md) |
 | **Simulate in Python** | does the design work, as part of everything around it | [Simulating in Python](pysim.md) |
 | **Simulate at RTL** | does the hardware do what the Python does, cycle by cycle | [Simulating at RTL](rtl.md) |
 | **Verify** | what is compared with what, and what a passing gate proves | [Functional verification](verification.md) |

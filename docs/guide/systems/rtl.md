@@ -82,26 +82,14 @@ crossbar slot, stream net and port -- and renders the top from it, a sub-top per
 
 ## A module's HLS body
 
-Each kernel needs its HLS body: generated from `run_iter`, or **hand-written** and named by
-`kernel_task()`. The polynomial's is hand-written, a C++ twin of `run_iter` read as the Python reads:
+Each kernel's hardware is its HLS body -- the second copy of the kernel, written to read as `run_iter`
+does, and named by `kernel_task()` ([Defining the kernel in Python and HLS](hwmodule.md#the-hls-body)).
+The generator writes the top around it -- for the polynomial three `axis` ports, `ap_ctrl_none`, one
+`hls::task` -- and its csynth script; nothing about the top is hand-written.
 
-```python
-def kernel_task(self):
-    return KernelTask("poly_kernel_task", "poly_kernel_task.h", ("s_in", "m_out", "m_status"),
-                      template_args=(W,))
-```
-
-1. read the command (`hdr.read_axi4_stream<W>(s_in)`, a generated reader), write the `Resp` header;
-2. the samples: one word per iteration at II=1, its lanes by the generated float32 lane routines,
-   TLAST on the last result; an early TLAST ends the loop;
-3. write the `Status`; after an error, set a `static` flag under `#pragma HLS reset`, and return at
-   once on every later firing.
-
-The generator writes the top around it -- three `axis` ports, `ap_ctrl_none`, one `hls::task` -- and
-its csynth script; nothing about the top is hand-written. A body that names no word type
-(`KernelTask(..., framed=ports)`, `streamutils::read_msg` / `write_msg`, the lane routines'
-`read_boundary_lane`) serves the module **alone and inside a composite**, so each stage of a pipeline is
-synthesized once and run at RTL in its own harness and in the whole
+A body that names no word type (`KernelTask(..., framed=ports)`, `streamutils::read_msg` / `write_msg`,
+the lane routines' `read_boundary_lane`) serves the module **alone and inside a composite**, so each stage
+of a pipeline is synthesized once and run at RTL in its own harness and in the whole
 ([One body, wherever it sits](../comp_codegen/freerunning_override.md#framed)). Before shaping any loop:
 [Design patterns for loop optimization](../vectorization/hls/loop_optimization.md).
 
