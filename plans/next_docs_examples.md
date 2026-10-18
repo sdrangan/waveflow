@@ -172,8 +172,35 @@ example names and the links.  Fix what disagrees; keep measured numbers only wit
   - `GoldenStep` (`golden`, after `pysim`): `HwSystem(golden=...)`, a harness's from `module.golden(kind)`;
     wired in stream_kernel (`PolyKernel.golden`).  Docs: `build/xsi_system.md#golden`,
     `systems/verification.md`.  **Remains**: `docs/examples/stream_kernel/system_flow.md` ("Checking pysim
-    against the golden") should name the step (left for the examples task, which owns that page); a
+    against the golden") names the step now; a
     system with a `SwHost` has no golden step (its traces are the host's), nor do calibration systems.
+
+## Status (2026-10-18, branch `next-docs-examples`)
+
+A-F done on one branch, one merge per task:
+
+- **A** `docs/examples/stream_kernel_mm/` (5 pages); `memory_mapped.md` a stub; two cards may share one
+  `example_dir` (`test_two_pages_may_share_one_example_dir`); `bus_system` lists it first.
+- **B** block_eq: `theory.md` (first), `golden.md`, `hls.md` new; `stages.md`, `system_flow.md` rewritten.
+  No timing page: block_eq declares no timed phases.
+- **C** order 1-20 + `docs/examples/legacy.md` (a file, not a folder: every `examples/<dir>/index.md` is a
+  card); objectives on every curated index; `vscode`, `dse_fir`, `_archive` deleted.  **vmac kept**
+  (reason in `examples_order.md`: `custom_hooks/complex.md` teaches a hook walking an `m_axi` pointer,
+  which no current example has).  memcpy, interleaver, fir_block, bram_access, rf_loopback, rf_shot_tx,
+  rf_shot_rx moved to `HwSystem(sim, dut)`, pysim and RTL byte-identical (table in `examples_order.md`).
+  **Left**: the untracked `examples/bram_toy`, `examples/test`, `examples/vecunit` in the main checkout
+  (the agent's sandbox refused the delete; `test/dataschema2.ipynb` and `vecunit/vecunit.py` are
+  hand-written -- check before deleting); `pip install -e .` after merging (pyproject changed).
+  `GraphSystem` still used by state_toy, the RF component dirs and the two FFT wrappers.
+- **D** memory stand-in for `MMIF*Master` ports (pysim + RTL twin = `MemoryMod.bfm_model()`; mem_copy's
+  harness gates at 2908); `accept_bundle` set by `harness()` (`xsi_run/vectors/<port>_acc/`);
+  `units.md` -> a page set (`units_harness`, `_recordings`, `_hostile`, `_calibration`, `_composing`).
+  **Left**: no hostile memory (the C++ AXI-MM slaves have no stall knob).
+- **E** Overview pages and the home page against the Flow Overview, incl. `status.md`, `targets.md`.
+- **F** frames (`choose_when` decided by memory; firblock a freerun reference); the four framework items
+  above; Stage 5's second runs recorded in `stage5_2026-10-18.md` (both "would build, with small fixes").
+  **Left** from the second runs: `get_array` after an early TLAST at PF > 1 is stated only in a docstring;
+  no example at a 256-bit internal link; no fixpoint conditional select; no throughput report step.
 
 ## Not now
 
