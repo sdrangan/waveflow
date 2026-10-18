@@ -96,7 +96,7 @@ parent. The check is the parent's RTL:
 
 | system | composed from | against its RTL (Vitis 2025.1) |
 |---|---|---|
-| the polynomial behind AXI-MM | the kernel's record, the queues, the crossbar | +1.8% |
+| [the polynomial on a bus](../../examples/stream_kernel_mm/composition.md) | the kernel's record, the queues, the crossbar | +1.8% |
 | markov: a generator, a chain, a memory, on a bus | three records, each from its own harness | -0.9% |
 
 When the composition misses, the miss locates what is not yet modeled: markov's first composition was

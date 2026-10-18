@@ -32,7 +32,7 @@ notebooks, HDL fragments, and build glue.
 - **[Project status](./overview/status.md)** — what works today, what's next, and the first integrated milestone
 - **[Installation](./guide/installation/)** — install Waveflow from source
 - **[Guide](./guide/)** — systems first: what a Waveflow system is, how to build one module by module, and the references beneath it
-- **[Examples](./examples/)** — worked designs, starting with [a free-running polynomial](./examples/stream_kernel/): the command-response kernel, its harness, its calibrated timing, and the same kernel behind AXI-MM
+- **[Examples](./examples/)** — worked designs, starting with [a free-running polynomial](./examples/stream_kernel/): the command-response kernel, its harness, its calibrated timing, and then [the same kernel on a bus](./examples/stream_kernel_mm/)
 
 ## People
 

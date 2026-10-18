@@ -130,7 +130,7 @@ none of it, so:
 
 - **The module is reusable across transports.** The same body takes its commands from another module's
   stream, from a host's queue over AXI, or from a testbench -- the polynomial runs unchanged in its
-  harness and [behind AXI-MM](../../examples/stream_kernel/memory_mapped.md).
+  harness and [on a bus](../../examples/stream_kernel_mm/index.md).
 - **Contention is solved once.** Several modules sharing one memory port is an arbiter over command
   streams ([why a streaming interface](../interface/axi_mm/master.md#why-a-streaming-interface-to-memory)),
   written and timed once.
