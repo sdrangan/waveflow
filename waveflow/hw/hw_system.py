@@ -214,12 +214,19 @@ class HwSystem(ABC):
         from waveflow.build.system_xsi import discover
 
         if getattr(self, "_inputs", None) is not None:
+            import json
+
             from waveflow.utils.burst_io import write_run_params
 
             root = Path(root)
+            run_json = root / "vectors" / "run.json"
+            run_json.unlink(missing_ok=True)      # a previous scenario's params are not this one's
             self._inputs(root)
             if self.n_cycles is not None:
-                write_run_params(root / "vectors", n_cycles=int(self.n_cycles))
+                # The inputs may write run params of their own (a memory's arena); the bound joins them.
+                params = (json.loads(run_json.read_text(encoding="utf-8")) if run_json.is_file()
+                          else {})
+                write_run_params(root / "vectors", **{**params, "n_cycles": int(self.n_cycles)})
             top = self.dut()
             for o in self.elements():
                 if not _inside(o, top) and any(getattr(o, a, None) for a in (
