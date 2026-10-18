@@ -78,8 +78,17 @@ Gate: docs and MCP tests; `waveflow kb search "put a kernel on a bus"` finds the
 
 ### B. Fill in block_eq
 
-`docs/examples/block_eq/` (index, protocol, stages, system_flow) is thin next to stream_kernel.  Add: the
-golden and its float32 operation order; why the split is where it is (two computations at different
+`docs/examples/block_eq/` (index, protocol, stages, system_flow) is thin next to stream_kernel.  Add:
+
+- **A theory page for a reader who is not a wireless engineer** (the user), first in the page set: what a
+  channel does to a transmitted symbol (`r = h s + noise`, `h` a complex gain per subcarrier or row), what
+  an equalizer is for (undo `h` to recover `s`), why the gain is `g = conj(h) / (|h|^2 + N)` rather
+  than `1/h` (dividing by a small `h` amplifies the noise; the noise term `N` limits the gain -- the
+  MMSE equalizer), why one gain serves a whole row (the channel is flat across it), and what the example
+  computes in those terms.  Plain words and one small worked number; no derivation beyond what the
+  arithmetic needs; link out for the full theory.
+
+Then: the golden and its float32 operation order; why the split is where it is (two computations at different
 rates); the broadcast's lockstep and the rule it imposes; link depth sizing; each stage's HLS body walked
 like `stream_kernel/kernel.md`; the four systems on one DAG; learning objectives (the increment over
 stream_kernel).  Read `examples/block_eq/*.py` and `src/*.h` for the facts; do not invent numbers --
@@ -94,6 +103,11 @@ anything measured comes from a run.
   Examples, like `docs/guide/legacy/index.md` does for the guide.  Check `docs/examples/index.md` (the
   examples landing page) and keep it in step.
 - Learning objectives on every curated page, in stream_kernel's form, stating only the increment.
+- **Keep every advanced example** (the user): the RF examples (`rf_loopback`, `rf_shot_tx`, `rf_shot_rx`,
+  `rf_shot_loopback`, and the RF component directories `rf_blk_delay`, `rf_relayout`, `rf_repeat_play`,
+  `rf_samp_buf_rx`, `rf_samp_buf_tx`), the FFTs (`ssr_fft`, `vitis_fft`), `mimo_cg`, `cpu_sched`,
+  `xbar_profile`.  They move later in the order, never out of the tree.  Deletion is only for the
+  directories listed next, which nothing uses.
 - Delete the dead directories: `examples/vscode`, `examples/dse_fir` (fix the corpus test that lists
   it), the untracked local `bram_toy`, `test`, `vecunit`.  `vmac` and `_archive` need their references
   moved first (two guide pages and two tests for vmac; two tests for `_archive`) -- do those or record

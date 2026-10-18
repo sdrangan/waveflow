@@ -71,6 +71,10 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 - **Learning objectives** in the form stream_kernel uses (testable skills, in flow order) on every curated
   example, stating only the increment over the examples before it.
 
+**Keep every advanced example** (the user, 2026-10-18): the RF examples and components, the FFTs, mimo_cg,
+cpu_sched, xbar_profile move later in the order, never out of the tree.  Only the unused directories
+below are deleted.
+
 ## Outside the curated set
 
 | dir | what it is | proposal |
