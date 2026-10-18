@@ -35,6 +35,10 @@ m_out : Resp(tx_id, nsamp)           | y[0] .. y[nsamp-1]     TLAST on the heade
   message goes out as it is made, `streamutils::write_msg(msg, s, last)`, with TLAST on the last.
 - **A message is read with its schema**, `get_schema(CmdHdr)` in Python and the generated
   `read_axi4_stream` in C++ -- never unpacked by hand.
+- **A burst that ends early is short, not padded.** `get_array(T, n)` on a burst whose TLAST came early
+  returns the elements whose words arrived -- every lane of every arrived word, so at several elements a
+  word a multiple of that count, capped at `n` -- and the body reads how many from the array
+  (`len(x.val)`). A schema cannot arrive in part: a short `get_schema` raises.
 
 ## Words and lanes
 
