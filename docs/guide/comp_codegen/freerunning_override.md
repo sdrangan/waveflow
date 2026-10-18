@@ -105,7 +105,7 @@ one:
 
 Each is an overload set resolved at compile time -- no runtime branch. The schema's header must be
 generated with framed readers and writers (`DataSchemaStep(..., framed=True)`). Worked examples:
-[the block equalizer's stages](../../examples/block_eq/stages.md#the-hls-bodies-one-body-two-placements),
+[the block equalizer's HLS bodies](../../examples/block_eq/hls.md#one-body-two-placements),
 and the framework's own [`StreamBroadcast`](../streams/broadcast.md#in-hls).
 
 ### `run_iter` stays

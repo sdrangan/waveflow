@@ -159,7 +159,7 @@ A pipeline of kernels needs a few more rules, and a few framework pieces:
   another must first consume its own copy of anything queued ahead**.
 - **An internal link's depth is explicit**, sized against what can pile up in it: a burst of results
   while the next stage is busy. block_eq's links are framed streams of depth 128
-  ([block_eq's stages](../../examples/block_eq/stages.md)).
+  ([block_eq's link depths](../../examples/block_eq/stages.md#link-depths)).
 - **An internal link has its own width.** A link between two stages need not be the boundary's word:
   `StreamIF(bitwidth=LW, framed=True, depth=...)` is declared at `LW` in the generated top, beside
   `W`-bit boundary ports, and each stage's body sees `framed_word<LW>` on that port through
