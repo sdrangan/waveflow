@@ -24,7 +24,7 @@ Each row's objectives are only what it adds over the rows above it.
 | 4 | **memcpy** | memory: a kernel that masters `m_axi` through `MemRStream` / `MemWStream`; a memory model in the testbench; adaptors whose timing ships pre-fit | `HwSystem` (`mem_copy_system()`) |
 | 5 | **interleaver** | on-chip storage (blocks of BRAM, stream-of-blocks) between stages; a real compute stage; fitting a custom stage's own timing model | `HwSystem` (`interleaver_inband_system()`) |
 | 6 | **fir_block** | state across firings (`add_state`): coefficients loaded once, a tail carried between blocks; fixed point; a four-module composite | `HwSystem` (`fir_block_system()`) |
-| 7 | **bram_access** | memory outside the Vitis kernel: hand-written Verilog (`rtl_module`) joined by a generated wrapper; a true-dual-port memory shared by two tasks | `GraphSystem` -- migrate |
+| 7 | **bram_access** | memory outside the Vitis kernel: hand-written Verilog (`rtl_module`) joined by a generated wrapper; a true-dual-port memory shared by two tasks | `HwSystem` (`bram_access_system()`) |
 | 8 | **mm_fir** | a kernel reached over the bus by a host program: a register bank and queues behind one adaptor, the crossbar; ordering a config against the data it applies to (a config id in-band); one front vs a slot per view | `HwSystem` |
 | 9 | **markov** | several kernels on a bus: a credit stream routed over the crossbar, a shared memory, several bus masters, interrupts and no polling; timing composed from three calibrated modules | `HwSystem` |
 
@@ -60,9 +60,9 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 
 ## What needs work
 
-- **`GraphSystem` -> `HwSystem(sim, dut)`**: bram_access, and the RF
-  examples (rf_loopback, rf_shot_tx, rf_shot_rx; rf_shot_loopback has no system). One example at a
-  time; memcpy, interleaver and fir_block are done ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
+- **`GraphSystem` -> `HwSystem(sim, dut)`**: the RF examples (rf_loopback, rf_shot_tx, rf_shot_rx;
+  rf_shot_loopback has no system). memcpy, interleaver, fir_block and bram_access are done
+  ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
 - **vecmult**: its verification is csim, the legacy rung. Either move it to the system flow or present
   it only as the resource-model example (its own summary already says the arithmetic is beside the point).
 - **stream_kernel / mm_fir overlap**: stream_kernel's *Behind AXI-MM* page already introduces a device
@@ -155,3 +155,4 @@ re-run on fresh RTL (Vitis/Vivado 2025.1).
 | memcpy | 16 completions, last at 2361 cycles; scenario + recordings hash identical | 2908 (`test_mem_copy_system_xsi`, `test_mem_copy_unit_xsi`) |
 | interleaver | 12 completions, last at 1110 cycles; hash identical | 1300 (`test_interleaver_inband_xsi`) |
 | fir_block | 5 completions, last at 486 cycles; hash identical | completions at 67 / 164 / 275 / 323 / 420, arena identical (`test_fir_block_xsi`, no cycle assert) |
+| bram_access | zero: 25 sink bursts, last at 531 cycles; collision: same log and hash as before; both hashes identical | zero and collision: every sink's arrival cycles identical (resp_w 266..476, data_r 274..568, resp_r 274..569; collision resp_w ..1083); `test_bram_access_xsi` 12 passed |

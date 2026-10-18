@@ -108,10 +108,12 @@ only what is its own, and the base derives the rest:
 
 A recording that pysim cannot match by construction is marked on its participant in `graph()`
 (`recording_check = "example"`), and the example checks it instead of `compare`.
-[The bram_access system](../../examples/bram_access/rtlsim.md) is a worked example; [the mem_copy
-system](../../examples/memcpy/system.md), [the interleaver's](../../examples/interleaver/system.md)
-and [fir_block's](../../examples/firblock/rtlsim.md) are the same shape built directly,
-`HwSystem(sim, dut)`.
+The RF examples' systems ([RF loopback](../../examples/rf_loopback/index.md)) and
+`examples/state_toy` still take this form. The single-kernel examples that used it --
+[mem_copy](../../examples/memcpy/system.md), [the interleaver](../../examples/interleaver/system.md),
+[fir_block](../../examples/firblock/rtlsim.md) and [bram_access](../../examples/bram_access/rtlsim.md)
+-- now build their modules directly and name the kernel as the DUT, `HwSystem(sim, dut)`: the
+composite's wiring became a function of the simulation, which the composite and the system share.
 
 ## The system top: `SystemTopSpec` {#the-spec}
 
