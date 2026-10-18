@@ -94,6 +94,7 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
     # --- the examples themselves ------------------------------------------
     ("store then multiply a vector", ("docs/examples/vecmult/",)),
     ("polynomial accelerator example", ("docs/examples/stream_inband/",)),
+    ("put a kernel on a bus", ("docs/examples/stream_kernel_mm/",)),
 ]
 
 

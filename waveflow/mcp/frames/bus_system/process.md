@@ -8,15 +8,19 @@ build from the references, so read them first.
 
 ## The reference design
 
-**For one kernel behind the bus, start from `stream_kernel`'s memory-mapped system**: the kernel of
-`stream_kernel`, unchanged, behind the queue views it declares (`mm_views`), on a crossbar, driven by a
-two-thread host that sizes each result from its header and reads the status after it:
+**For one kernel behind the bus, start from `stream_kernel_mm`** (the polynomial on a bus): the kernel
+of `stream_kernel`, unchanged, behind the queue views it declares (`mm_views`), on a crossbar, driven by
+a two-thread host that sizes each result from its header and reads the status after it:
 
 ```
-waveflow_get_doc("docs/examples/stream_kernel/protocol.md")         # the protocol: header, results, status
-waveflow_get_doc("docs/examples/stream_kernel/memory_mapped.md")    # the device, the host, HwSystem(sim, dut)
-waveflow_get_example("stream_kernel", file="stream_kernel_mm.py")   # PolyHost and mm_system
-waveflow_get_example("stream_kernel", file="poly_kernel_host.h")    # the host's C++ twin
+waveflow_get_doc("docs/examples/stream_kernel/protocol.md")          # the protocol: header, results, status
+waveflow_get_doc("docs/examples/stream_kernel_mm/index.md")          # what it adds, the pages
+waveflow_get_doc("docs/examples/stream_kernel_mm/device.md")         # mm_views, build_mm_device
+waveflow_get_doc("docs/examples/stream_kernel_mm/system.md")         # the crossbar, IRQs, HwSystem(sim, dut)
+waveflow_get_doc("docs/examples/stream_kernel_mm/host.md")           # the two threads, no polling, the C++ twin
+waveflow_get_doc("docs/examples/stream_kernel_mm/composition.md")    # the device's own harness, the timing check
+waveflow_get_example("stream_kernel_mm", file="stream_kernel_mm.py") # PolyHost and mm_system
+waveflow_get_example("stream_kernel_mm", file="poly_kernel_host.h")  # the host's C++ twin
 ```
 
 Then `docs/guide/systems/index.md` for the order of the steps: the kernel verified alone in its
