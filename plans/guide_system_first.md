@@ -376,6 +376,18 @@ process links (`_common/process.md` names each step's page), the guide index, `C
 for "build a system" whose top hit is the section's index; then Stage 5 -- the planning blind tests on
 the new tree.
 
+*Record (2026-10-18):* **Stage 7 first pass done** (branch `guide-stage7`, commit 941d860b).  The section
+is titled **Flow Overview** (the user); the directory stays `systems/` (frames and plans link into it).
+Nine pages written on the running example; `patterns/command_response.md` moved whole; `stream_only.md`
+folded into *Stream patterns*; the pattern catalogue into *Designing the DUT*.  `flows/` is the **Modules**
+reference (modules, writing a free-running module, module by module, XSI components, parameterization,
+toward the board); its narrative pages, `patterns/` and the recipe are nav-excluded stubs; 57 files'
+links rewritten to the new pages; the frames' `_common/process.md` maps each step to its page.  Gate: docs
+tests green, frame lint green, retrieval eval 38 pass with nine new cases ("build a system" finds a flow
+page in the top 5 -- *Simulating at RTL*, 2nd -- not the index, since the search does no stemming and the
+build reference uses those words most).  Also on the branch: `DataUnion` as a `DataSchema` (word-boundary
+payload, every stream form; C-sim loopback through all of them); `evaluation/` out of the site.
+
 **Follow-on, not this plan:** the `GraphSystem` examples to `HwSystem(sim, dut)`, one at a time, with an
 "older form" banner on each example page until it moves; what becomes of `basic_vec` and `regmap`.
 
