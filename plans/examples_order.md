@@ -60,8 +60,8 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 
 ## What needs work
 
-- **`GraphSystem` -> `HwSystem(sim, dut)`**: the RF examples (rf_loopback, rf_shot_tx, rf_shot_rx;
-  rf_shot_loopback has no system). memcpy, interleaver, fir_block and bram_access are done
+- **`GraphSystem` -> `HwSystem(sim, dut)`**: rf_shot_tx, rf_shot_rx (rf_shot_loopback has no
+  system). memcpy, interleaver, fir_block, bram_access and rf_loopback are done
   ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
 - **vecmult**: its verification is csim, the legacy rung. Either move it to the system flow or present
   it only as the resource-model example (its own summary already says the arithmetic is beside the point).
@@ -156,3 +156,4 @@ re-run on fresh RTL (Vitis/Vivado 2025.1).
 | interleaver | 12 completions, last at 1110 cycles; hash identical | 1300 (`test_interleaver_inband_xsi`) |
 | fir_block | 5 completions, last at 486 cycles; hash identical | completions at 67 / 164 / 275 / 323 / 420, arena identical (`test_fir_block_xsi`, no cycle assert) |
 | bram_access | zero: 25 sink bursts, last at 531 cycles; collision: same log and hash as before; both hashes identical | zero and collision: every sink's arrival cycles identical (resp_w 266..476, data_r 274..568, resp_r 274..569; collision resp_w ..1083); `test_bram_access_xsi` 12 passed |
+| rf_loopback (`rf_pass_through_system()`, `rf_loopback_system(variant)`) | pass-through: last word at 640; loopback real / 2ch / iq: end at 2378 / 2378 / 4756; all four hashes identical | every RTL recording (words, cycles, counters) byte-identical for the four runs: pass-through 1066, loopback 63 sink blocks / 7 data (`test_rf_dut_system_xsi`, `test_rf_loopback_xsi`) |

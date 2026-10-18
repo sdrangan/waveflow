@@ -8,7 +8,7 @@ environment is file-backed peers across two behavioral edges.
 module adds is the three gate scenarios (one channel real, the two-channel tile, interleaved I/Q):
 their graphs (``make_xsi_tb*``), their pysim procedures (``make_sim*``, the single writers of the
 vectors), the two-channel DUT's generation, and the pysim goldens.  The RTL runs are the **system**
-flow: :class:`~examples.rf_loopback.rf_loopback.RfLoopbackSystem`, built by
+flow: :func:`~examples.rf_loopback.rf_loopback.rf_loopback_system`, built by
 ``rf_loopback_system_build.py`` (one system per variant) and gated by
 ``tests/examples/test_rf_loopback_xsi.py``.
 
@@ -72,9 +72,10 @@ def make_xsi_tb(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopback
     return RfLoopbackTB(name="xsi_tb", sim=Simulation(), n_blk=n_blk, blksize=blksize)
 
 
-def make_sim(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackSim:
-    """The pysim procedure over the same scenario — the single source of the vectors."""
-    return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb", blksize=blksize)
+def make_sim(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE, direct: bool = False) -> RfLoopbackSim:
+    """The pysim procedure over the same scenario — the single source of the vectors.  *direct*: on
+    the graph's parts rather than an :class:`RfLoopbackTB` (``RfLoopbackSim``'s *direct*)."""
+    return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb", blksize=blksize, direct=direct)
 
 
 # ---------------------------------------------------------------------------
@@ -107,10 +108,11 @@ def make_xsi_tb_2ch(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoop
                         blksize=blksize, in_bundle=IN_BUNDLE_2CH, out_bundle=OUT_BUNDLE_2CH)
 
 
-def make_sim_2ch(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackSim:
+def make_sim_2ch(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE,
+                 direct: bool = False) -> RfLoopbackSim:
     """The pysim procedure over the two-channel scenario — the single source of its vectors."""
     return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb_2ch", n_ch=XSI_NCH, blksize=blksize,
-                         in_bundle=IN_BUNDLE_2CH, out_bundle=OUT_BUNDLE_2CH)
+                         in_bundle=IN_BUNDLE_2CH, out_bundle=OUT_BUNDLE_2CH, direct=direct)
 
 
 def generate_dut_2ch(out_dir: Path = HERE) -> None:
@@ -166,11 +168,12 @@ def make_xsi_tb_iq(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopb
     return RfLoopbackTB(name="xsi_tb_iq", sim=Simulation(), **_iq_kwargs(n_blk, blksize))
 
 
-def make_sim_iq(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE) -> RfLoopbackSim:
+def make_sim_iq(n_blk: int = XSI_NBLK, blksize: int = XSI_BLKSIZE,
+                direct: bool = False) -> RfLoopbackSim:
     """The pysim procedure over the I/Q scenario — the single source of its vectors."""
     kw = _iq_kwargs(n_blk, blksize)
     kw.pop("n_blk")
-    return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb_iq", **kw)
+    return RfLoopbackSim(n_src_blk=n_blk, name="xsi_tb_iq", direct=direct, **kw)
 
 
 # The golden lives in tests/examples/test_rf_loopback_xsi.py, not here.
