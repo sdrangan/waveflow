@@ -1,7 +1,8 @@
 ---
 title: Streaming polynomial
-parent: Examples
-nav_order: 3
+parent: Legacy examples
+grand_parent: Examples
+nav_order: 2
 has_children: true
 example_dir: examples/stream_inband
 summary: "The command-response contract between a host and a streaming kernel, taught on a polynomial accelerator. Commands and their configuration travel on the input stream -- each DATA header carries its own coefficients -- responses on the output stream, and AXI-Lite carries only ap_start/ap_done and a halted/error/tx_id status. On an error the kernel closes its output burst with TLAST and returns; the host resets and starts again. Seven numbered rules, the reason for each, the alternatives and why they are worse, then the build: a pure bit-exact model, pysim, a hand-written C++ body behind a generated boundary, csim and cosim at 32 and 64 bits, all checked against expected responses computed from intent."
@@ -13,6 +14,20 @@ summary: "The command-response contract between a host and a streaming kernel, t
 > Start with [Free-running polynomial](../stream_kernel/index.md): the same arithmetic as a free-running
 > kernel, the shape most accelerators take and the one the docs now teach first. This page is the
 > host-activated form, with `ap_start`, `ap_done` and a status register.
+
+## Learning objectives
+
+What this adds to [Register mapped simple function](../regmap/index.md#learning-objectives), in the
+order the pages teach it:
+
+1. State a host-activated streaming kernel's **contract** as numbered rules -- commands and their
+   configuration in-band, AXI-Lite for control and status only, nothing carried over between commands,
+   the status cleared at every activation -- and check a design against them.
+2. On an error, set the status, close the output burst with TLAST and return; on the host, reset the
+   accelerator and its stream path before the next `ap_start`.
+3. Read a failing command off a co-simulation waveform.
+4. Write the kernel body by hand behind a generated boundary, and check it in csim and cosim at 32 and
+   64 bits against expected responses computed from intent.
 
 What is the contract between a host and a command-driven streaming kernel?  This example
 answers it with a small accelerator that evaluates a polynomial

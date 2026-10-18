@@ -1,10 +1,10 @@
 ---
 title: Block equalizer
 parent: Examples
-nav_order: 0.7
+nav_order: 3
 has_children: true
 example_dir: examples/block_eq
-summary: "The second example: a stream-only pipeline of three free-running modules. One input stream carries, per command, the channel estimates and the received symbols; the framework's StreamBroadcast gives a copy to each of two stages -- gain computes the MMSE equalizer g = conj(h)/(|h|^2+N) once a row (a division), apply multiplies every symbol by its row's g -- and gain passes g to apply on an internal stream. Each stage keeps consuming its own copy (the broadcast's rule), errors are fatal (a zero noise, a burst that ends early), and the arithmetic is float32 in a fixed operation order, bit-exact with signed zeros. Each stage is verified alone in its own harness, then the composite, in pysim and at RTL -- one hand-written body serving a stage in both places."
+summary: "The second kernel example: a stream-only pipeline of three free-running modules. One input stream carries, per command, the channel estimates and the received symbols; the framework's StreamBroadcast gives a copy to each of two stages -- gain computes the MMSE equalizer g = conj(h)/(|h|^2+N) once a row (a division), apply multiplies every symbol by its row's g -- and gain passes g to apply on an internal stream. Each stage keeps consuming its own copy (the broadcast's rule), errors are fatal (a zero noise, a burst that ends early), and the arithmetic is float32 in a fixed operation order, bit-exact with signed zeros. Each stage is verified alone in its own harness, then the composite, in pysim and at RTL -- one hand-written body serving a stage in both places."
 ---
 
 # Block equalizer
@@ -20,7 +20,7 @@ $$
 and applies it to every symbol of the row: $z_{i,j} = g_i \, r_{i,j}$. If those terms are new, start
 with [What an equalizer does](theory.md).
 
-It is the second example because it adds exactly one thing to the [free-running polynomial](../stream_kernel/index.md):
+It is the second kernel example because it adds exactly one thing to the [free-running polynomial](../stream_kernel/index.md):
 **several modules**. A division once a row and a multiply once a symbol run at different rates, so they
 are two stages; one input carries what both need, so the framework's
 [`StreamBroadcast`](../../guide/streams/broadcast.md) gives each its own copy; and `gain` hands its result to

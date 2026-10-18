@@ -1,6 +1,7 @@
 ---
 title: Understanding Vitis Register Maps
 parent: Register mapped simple function
+grand_parent: Legacy examples
 nav_order: 1
 has_children: false
 summary: "The simplest accelerator in Waveflow: a kernel with no data streams at all, controlled entirely through a register map over AXI-Lite. It exists to introduce one idea in isolation — how a host CPU passes a few scalars, starts the kernel, waits for it to finish and reads a result back — before later examples layer streaming and shared memory on top."

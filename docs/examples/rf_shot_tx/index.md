@@ -1,7 +1,7 @@
 ---
 title: Playing a stored waveform
 parent: Examples
-nav_order: 9.6
+nav_order: 17
 has_children: true
 audience: python
 example_dir: examples/rf_shot_tx
@@ -23,6 +23,20 @@ StreamDriver --[ShotTxHdr | dense words … TLAST]--> RfShotTx.s_in
 RfShotTx.resp_out --> StreamSink            (one ShotTxResp per header)
 RfShotTx.samp_out --> Rfdc.tx_streams[0] | Rfdc.tx_rf --RFSampIF--> RfDataSink
 ```
+
+## Learning objectives
+
+What this adds to [RF loopback](../rf_loopback/index.md#learning-objectives), in the order the page
+teaches it:
+
+1. Load a waveform from **in-band frames** -- a header, then samples, TLAST at the end -- into a BRAM
+   behind a lock, and play it at the converter's grid, writing filler when there is nothing to play.
+2. Drive **one design with two command bundles** (a finite `SHOT_LOAD`, an infinite `SHOT_LOOP`)
+   through two XSI mains, and exercise every verdict the protocol has across the two.
+3. Compare pysim's playout with the RTL's after aligning each on its own playout log, and name the
+   leading transient where the loosely-timed model differs.
+4. Gate the address arithmetic: the writer touches exactly `0..depth-1`, and the player sweeps the
+   whole buffer and wraps.
 
 ## What it plays
 

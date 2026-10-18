@@ -1,7 +1,7 @@
 ---
 title: Capturing without losing anything
 parent: Examples
-nav_order: 9.7
+nav_order: 18
 has_children: true
 audience: python
 example_dir: examples/rf_shot_rx
@@ -22,6 +22,19 @@ what `n_dropped` and `CAP_LOST` each answer — is [the guide's](../../guide/rf/
 RfDataSource --RFSampIF--> Rfdc.rx_rf | Rfdc.rx_streams[0] --> RfShotRx.samp_in
 RfShotRx.w_out --> StreamSink        (one FRAME per window: a header, then the samples)
 ```
+
+## Learning objectives
+
+What this adds to [Playing a stored waveform](../rf_shot_tx/index.md#learning-objectives), in the order
+the page teaches it:
+
+1. Capture a converter that **cannot be told to wait** into a memory split into **two regions**, one
+   filling while a reader drains the other, with no command stream.
+2. Send each completed region as a frame whose header reports what was lost (`n_dropped`, the status).
+3. Make the scenario the gate: play a **ramp**, so a dropped block is a step in the captured numbers,
+   and assert that the counters agree with it.
+4. Measure from the RTL trace that both memory ports are live together and never inside the same
+   region.
 
 ## The converter is really here, and the tile is ADC-only
 

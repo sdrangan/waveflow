@@ -1,6 +1,7 @@
 ---
 title: C-Synth Resource Estimation
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 8
 summary: "What synthesis built at each width, and whether every loop reaches II = 1: C synthesis of the poly and poly_bw64 tops, the report parsed into a per-loop pipeline table and a resource summary, and a build that fails if any loop's initiation interval is above 1. Doubling the word width doubles the DSPs, because two samples are evaluated per cycle."
 ---

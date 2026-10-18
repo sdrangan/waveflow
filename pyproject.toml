@@ -61,10 +61,8 @@ build-backend = "setuptools.build_meta"
 # `examples*` is installed so `from examples.mem_copy... import ...` resolves from ANY working
 # directory after `pip install -e` -- not only when the repo root is on sys.path.  The example
 # packages have no __init__.py (PEP 420 namespace packages), so discovery needs `namespaces = true`.
-# `_archive` is excluded to match the pytest ignore.
 [tool.setuptools.packages.find]
 include = ["waveflow*", "scripts*", "examples*"]
-exclude = ["examples._archive*"]
 namespaces = true
 
 # Include non-Python files (schemas, templates, docs assets)
@@ -110,9 +108,9 @@ include-package-data = true
 # Pytest configuration
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-q --ignore-glob=examples/_archive/*"
+addopts = "-q"
 testpaths = ["tests"]
-norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}", "examples/_archive"]
+norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}"]
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
     "xsi: marks tests as requiring Vivado xsim + mingw g++ AND a prior csynth (RTL-level BFM gates)",

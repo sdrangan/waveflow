@@ -1,6 +1,7 @@
 ---
 title: C-Sim Functional Verification
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 7
 summary: "How C simulation checks the error paths: every scenario at both widths in one Vitis run per width, each scenario one kernel call on fresh streams (the model of the host's reset), the status registers poisoned before each call, and every response compared bit-exactly -- words, burst boundaries, TLAST flags, status -- with the expected responses. The error scenarios keep commands queued behind the bad burst, and the kernel must leave them unread."
 ---

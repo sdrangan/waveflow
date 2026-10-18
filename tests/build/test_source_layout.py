@@ -36,7 +36,7 @@ def _tracked(*patterns: str) -> list[str]:
                              capture_output=True, text=True).stdout
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("not a git checkout")
-    return [ln for ln in out.splitlines() if ln and not ln.startswith("examples/_archive/")]
+    return [ln for ln in out.splitlines() if ln]
 
 
 def _tracked_text(path: str) -> str:

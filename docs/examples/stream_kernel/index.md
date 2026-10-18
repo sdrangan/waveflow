@@ -1,17 +1,17 @@
 ---
 title: Free-running polynomial
 parent: Examples
-nav_order: 0.5
+nav_order: 2
 has_children: true
 example_dir: examples/stream_kernel
-summary: "The first example, and the shape most accelerators take: a free-running kernel that answers commands on streams. A polynomial evaluator reads a command (its id, a sample count, four coefficients) and its samples on one AXI4-Stream, writes the results on a second -- headed by which command and how many -- and a status on a third, the last command seen; a burst that ends early is fatal: the kernel reports it and stops. The page set walks the whole flow in order -- the protocol, the golden, the kernel and its hand-written HLS body, the system flow (csynth, the RTL run under XSI, the comparison with pysim), and declared timed phases calibrated in the kernel's own generated harness. The same kernel on a bus, behind AXI-MM with a software host, is its own example, The polynomial on a bus."
+summary: "The first kernel example, and the shape most accelerators take: a free-running kernel that answers commands on streams. A polynomial evaluator reads a command (its id, a sample count, four coefficients) and its samples on one AXI4-Stream, writes the results on a second -- headed by which command and how many -- and a status on a third, the last command seen; a burst that ends early is fatal: the kernel reports it and stops. The page set walks the whole flow in order -- the protocol, the golden, the kernel and its hand-written HLS body, the system flow (csynth, the RTL run under XSI, the comparison with pysim), and declared timed phases calibrated in the kernel's own generated harness. The same kernel on a bus, behind AXI-MM with a software host, is its own example, The polynomial on a bus."
 ---
 # Free-running polynomial
 
 A polynomial evaluator, $y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$ on float32 samples, as a **free-running
 kernel**: no `ap_start`, no register map -- it fires once per command, and runs until an error stops
 it. It is the first
-example because its shape is the one most accelerators take: a command comes in on a stream, the work
+kernel example (after the data-only [Basic vector arithmetic](../basic_vec/index.md)) because its shape is the one most accelerators take: a command comes in on a stream, the work
 happens on its data, and the answer goes out on streams, including the answer that something went
 wrong. The arithmetic is deliberately trivial, so every page is about the flow.
 
@@ -22,15 +22,17 @@ memory-mapped device.
 
 ## Learning Objectives
 
-In the order the pages teach it:
+What this adds to [Basic vector arithmetic](../basic_vec/index.md#learning-objectives) (schemas,
+vectorized goldens, bit-exactness against Vitis), in the order the pages teach it:
 
 1. Define a [**command-response protocol**](../../guide/systems/command_response.md) for a simple
    kernel: a command and its data in, the results out headed by which command they answer and how
    many.
 2. Add a **status stream** for error reporting, and halt the kernel on an error.
-3. Write [**DataSchema** classes](../../guide/schema/python/) for every message to and from the kernel.
-4. Write a **bit-exact golden model** as pure Python functions, and compute the expected outputs from
-   intent.
+3. Write [**DataSchema** classes](../../guide/schema/python/) for every **message** to and from the
+   kernel: the command, the results header, the status.
+4. Write the golden as pure Python functions, and compute the **expected outputs from intent**: from
+   what each scenario means, not from an implementation.
 5. Write the kernel as a [`FreeRunMod`](../../guide/flows/concurrent_python.md) with **framed stream
    ports**, one firing per command: read the command, head the results, run the samples through a
    pipelined phase, write the status, and stop after an error.

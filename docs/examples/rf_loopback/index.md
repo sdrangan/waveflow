@@ -1,7 +1,7 @@
 ---
 title: RF loopback
 parent: Examples
-nav_order: 10
+nav_order: 16
 has_children: true
 example_dir: examples/rf_loopback
 summary: "The worked example for designs that talk to an RF data converter. A source plays sample blocks into an ADC, the samples cross into the fabric as AXI-Stream words, a trivial pass-through relays them, and a DAC turns them back into sample blocks at a sink — a loopback that is byte-identical end to end, two blocks later. Deliberately without DSP: the point is the converter boundary itself, and the loss counters that are the only evidence a sample grid was actually met."
@@ -54,16 +54,17 @@ pytest tests/examples/test_rf_loopback.py tests/hw/test_rf_sample_if.py
 
 ## Learning objectives
 
+The first RF example: what it adds to the examples before it, in the order the pages teach it:
+
 - Model an RF sample channel as an [**interface** that owns a metronome](../../guide/rf/rfdc/sampling.md)
   — a clock, a block cadence, a buffer, and loss counters living on the edge rather than in a node.
 - Model a **data converter** as a module carrying both directions, with `HwParam` structure
   (resolution, samples per word) separated from plain init-time knobs (the amplitude reference, the
   tile epochs).
-- Quantize bit-exactly with the integer-backed `FixedField` and pack samples into stream words
+- Quantize converter samples with the integer-backed `FixedField`, and pack them into stream words
   through the generated array serializers.
 - Assert a **byte-identical** loopback (shifted by the loop's declared block latency) *and* that loss
-  is exactly what the graph declared, and understand why the first check is not sufficient without
-  the second.
+  is exactly what the graph declared, and name the failure the first check alone cannot see.
 - Read `check(mod, "xsi_bfm_model")` as a **finding** about a module rather than a declaration on it.
 
 ## Where the pieces live
