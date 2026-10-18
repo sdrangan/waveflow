@@ -156,6 +156,11 @@ A pipeline of kernels needs a few more rules, and a few framework pieces:
 - **An internal link's depth is explicit**, sized against what can pile up in it: a burst of results
   while the next stage is busy. block_eq's links are framed streams of depth 128
   ([block_eq's stages](../../examples/block_eq/stages.md)).
+- **An internal link has its own width.** A link between two stages need not be the boundary's word:
+  `StreamIF(bitwidth=LW, framed=True, depth=...)` is declared at `LW` in the generated top, beside
+  `W`-bit boundary ports, and each stage's body sees `framed_word<LW>` on that port through
+  `KernelTask(framed=...)`. A wide link carries a whole record a cycle -- a detection's index and peak
+  with its lane flags -- where a boundary-width link would take several words.
 - **Every stage gets a token per job.** In a free-running pipeline, a stage that consumes a job and
   emits nothing leaves the next stage waiting forever; if a job produces no output, forward something
   anyway. The command travels with the data, and the last stage answers.

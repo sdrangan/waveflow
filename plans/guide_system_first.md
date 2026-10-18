@@ -388,6 +388,11 @@ page in the top 5 -- *Simulating at RTL*, 2nd -- not the index, since the search
 build reference uses those words most).  Also on the branch: `DataUnion` as a `DataSchema` (word-boundary
 payload, every stream form; C-sim loopback through all of them); `evaluation/` out of the site.
 
+*Record (2026-10-18), Stage 5:* rungs 1 and 3 re-run plan-only on the new tree -- both chose their frame,
+both read the flow pages on their own, both **would build**; citations 48/48 and 53/53.  Tokens did not
+fall (2.41M and 3.11M in; one run each): both read more broadly and spent it on their gaps.  The one doc
+gap fixed: an internal link's own width (*Stream patterns*).  `evaluation/planning_tests/results/stage5_2026-10-18.md`.
+
 **Follow-on, not this plan:** the `GraphSystem` examples to `HwSystem(sim, dut)`, one at a time, with an
 "older form" banner on each example page until it moves; what becomes of `basic_vec` and `regmap`.
 
