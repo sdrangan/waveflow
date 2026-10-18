@@ -12,7 +12,7 @@ This example builds on [`mem_copy`](../memcpy/). Where the data mover copies a b
 `interleaver` computes a **gather** — `Y[i] = X[P[i]]`, reordering `X` under an index vector `P` — so it
 adds the two things a pure data mover never needs: a real **compute** stage, and **on-chip random
 access** (holding `X` in block RAM so the index-driven reads are single-cycle). It is the same
-[concurrent free-running flow](../../guide/flows/concurrent.md): a composite of `ap_ctrl_none`
+[concurrent free-running flow](../../guide/systems/index.md): a composite of `ap_ctrl_none`
 `hls::task`s, wired by internal streams and stream-of-blocks, driven by a command stream and reporting on
 a done stream.
 

@@ -15,7 +15,7 @@ can choose, with the steps, rules and reference design that go with it.
 
 ## What a frame is
 
-A frame is a [design pattern](../patterns/index.md) realized in one **system shape** and one
+A frame is a [design pattern](../systems/dut.md) realized in one **system shape** and one
 **verification flow**, with a reference example that proves it works:
 
 | axis | sets | values |

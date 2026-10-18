@@ -92,5 +92,5 @@ python -m waveflow.streams.rtl C:/wfb/b2 --n-out 2 --bitwidth 32
 
 ## See also
 
-- [Stream-only modules and adaptors](../patterns/stream_only.md) -- the rule this block serves.
-- [Command-response](../patterns/command_response.md) -- the protocol its consumers usually parse.
+- [Stream-only modules and adaptors](../systems/streams.md) -- the rule this block serves.
+- [Command-response](../systems/command_response.md) -- the protocol its consumers usually parse.

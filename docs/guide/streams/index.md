@@ -10,7 +10,7 @@ summary: "Waveflow's own stream blocks: small, general free-running modules that
 # Stream Blocks
 
 A stream-only design -- kernels that read and write only streams, joined by streams
-([Stream-only modules and adaptors](../patterns/stream_only.md)) -- keeps needing the same few pieces
+([Stream-only modules and adaptors](../systems/streams.md)) -- keeps needing the same few pieces
 between its kernels: one stream to several stages, several streams into one. These are those pieces,
 written once, verified once, in `waveflow.streams`.
 

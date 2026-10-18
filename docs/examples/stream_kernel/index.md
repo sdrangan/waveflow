@@ -23,7 +23,7 @@ its RTL top, its calibration, and later its memory-mapped device.
 
 In the order the pages teach it:
 
-1. Define a [**command-response protocol**](../../guide/patterns/command_response.md) for a simple
+1. Define a [**command-response protocol**](../../guide/systems/command_response.md) for a simple
    kernel: a command and its data in, the results out headed by which command they answer and how
    many.
 2. Add a **status stream** for error reporting, and halt the kernel on an error.

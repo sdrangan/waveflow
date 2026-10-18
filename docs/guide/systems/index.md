@@ -1,21 +1,56 @@
 ---
-title: Systems
+title: Flow Overview
 parent: Guide
 nav_order: 1.2
 has_children: true
 audience: python
-summary: "Waveflow models concurrent systems, and this section is where the guide starts. A system is flat: a testbench and a DUT, simulated together in pysim and at RTL. The DUT is a tree of modules -- kernels, memories, the devices that put kernels on a bus -- wired by interfaces that carry schemas. The cut is a build choice: any module in the tree can be made the DUT of its own system, its harness, so a design is developed module by module and composed. The figure walked top-down, with a link from each part to the section that defines it; a ladder of worked examples from one kernel on streams to several kernels, a memory and a host on a bus; and the recipe for building one."
+summary: "How to build a system with Waveflow, start to finish -- where the guide starts. Waveflow models concurrent systems, and this section walks one design through the whole flow of building a system, a page per step -- designing the DUT (its modules, interfaces and messages; the stream patterns; the command-response protocol), simulating it in Python, simulating it at RTL, verifying it, calibrating its timing and resources, and exploring the design space. Two levels of simulation: pysim runs the DUT in a Simulation beside any SimObj -- a host, a wireless channel, a sensor; RTL simulation runs it in an HwSystem(sim, dut), whose testbench is the part of the simulation that has an RTL twin. One running example (the free-running polynomial) on every page, with steps up to a pipeline (block_eq) and a bus system (markov)."
 ---
 
-# Systems
+# Flow Overview
 
-**Waveflow models concurrent systems.** A design is several things running at once -- kernels, memories,
-a host program -- joined by streams and buses, and the questions worth asking are about the whole: does
-it compute the right answer, how fast, at what cost. Waveflow describes such a system once, in Python,
-and runs that one description in a fast Python simulation (pysim) and, cycle by cycle, as RTL.
+**Waveflow models concurrent systems.** A design is several things running at once -- kernels,
+memories, a host program, the world around them -- joined by streams and buses, and the questions worth
+asking are about the whole: does it compute the right answer, how fast, at what cost. Waveflow describes
+the hardware once, in Python, and runs that one description in a fast Python simulation and, cycle by
+cycle, as RTL.
 
-This section is the top of the guide: what a system is, its parts from the outside in, and how to build
-one. Each part links to the section that defines it.
+This section is how to build a system: the flow, a page per step, in the order a design takes them. Each page walks the same
+running example and links down to the reference sections for the details.
+
+## Build a system, step by step {#the-flow}
+
+| step | the question | page |
+|---|---|---|
+| **Design the DUT** | what is built, what it does, its modules, interfaces and messages | [Designing the DUT](dut.md) |
+| | how modules talk on streams | [Stream patterns](streams.md) |
+| | how a job goes in and its answer comes out | [Command-response](command_response.md) |
+| **Simulate in Python** | does the design work, as part of everything around it | [Simulating in Python](pysim.md) |
+| **Simulate at RTL** | does the hardware do what the Python does, cycle by cycle | [Simulating at RTL](rtl.md) |
+| **Verify** | what is compared with what, and what a passing gate proves | [Functional verification](verification.md) |
+| **Calibrate** | how long it takes and what it costs, measured per module and composed | [Timing and resources](calibration.md) |
+| **Explore** | which design, of the ones that work | [Design-space exploration](dse.md) |
+
+The steps are done module by module: any module in the design can be the design under test of its own
+system, its **harness**, so each is verified and measured alone before the whole is put together
+([Simulating in Python](pysim.md#the-cut)).
+
+## Two levels of simulation
+
+The flow has two simulations of the same design, and they ask different questions:
+
+- **pysim** runs the design in a **[`Simulation`](../sim/index.md)**: a discrete-event simulation of
+  any collection of `SimObj`s. Beside the hardware there can be anything the question needs -- a host
+  program, a wireless channel, a traffic source, a processor model. It is fast, its timing is a model,
+  and it is where a design is explored and evaluated as part of a larger system.
+- **RTL simulation** runs the design in an **[`HwSystem(sim, dut)`](rtl.md#the-system)**: the
+  simulation with one module named the **DUT** -- what is synthesized -- and a **testbench** of
+  everything else. The RTL of the DUT runs cycle by cycle under Vivado's simulator, and every testbench
+  part runs as its C++ twin beside it.
+
+The rule between them is one line: **anything can join a `Simulation`; only what has an RTL twin can
+join an `HwSystem`.** A host has a C++ twin, so it can drive the RTL; a wireless channel model has
+none, so a system with one is a pysim study, and its RTL simulation cuts at the channel's edge.
 
 ## A system, in one picture
 
@@ -23,40 +58,31 @@ one. Each part links to the section that defines it.
 
 Read it from the outside in:
 
-1. **The system** (dotted) is everything simulated together: an [`HwSystem`](../build/xsi_system.md#the-system),
-   a simulation plus **one named DUT**. It is flat -- a testbench and a DUT, nothing nested.
+1. **The system** (dotted) is everything simulated together: an `HwSystem`, a simulation plus one
+   named DUT. It is flat -- a testbench and a DUT, nothing nested.
 2. **The testbench** is everything outside the DUT, derived, never listed: here the host, a
    [`SwHost`](../build/sw_threads.md) whose threads are Python in pysim and a C++ twin at RTL. In a
-   smaller system the testbench is stream drivers and sinks.
-3. **The DUT** (solid) is what is synthesized. It is a **tree of modules**: here three devices and the
+   smaller system it is stream drivers and sinks.
+3. **The DUT** (solid) is what is synthesized: a **tree of modules** -- here three devices and the
    crossbar between them.
-4. **A device** (dashed) is a kernel with everything that belongs to it -- its memory-mapped views and
-   front, the bus writers that act for it -- packaged as one IP. A device is a composite module like any
-   other; being packaged as one is a fact about it, not a kind.
+4. **A device** (dashed) is a kernel with everything that belongs to it -- its memory-mapped views
+   and front, the bus writers that act for it -- one IP when the system is packaged.
 5. **A module** is a [`HwModule`](../flows/modules.md): typed ports and a behavior. A **kernel** is a
-   free-running module whose behavior is a Python `run_iter` and, at RTL, a hand-written or generated HLS
-   body ([Modules](../flows/modules.md)); a host-activated kernel is the other kind.
-6. **The interfaces** between modules are typed connections -- streams, credit streams, AXI-MM, BRAM,
-   interrupts ([Interfaces](../interface/index.md)).
+   free-running module whose behavior is a Python `run_iter` and, at RTL, an HLS body.
+6. **The interfaces** between modules are typed connections -- streams, credit streams, AXI-MM,
+   BRAM, interrupts ([Interfaces](../interface/index.md)).
 7. **The messages** on them are [schemas](../schema/index.md): the fields once, in Python, and every
    word packed by generated code.
 
-The colours are the ways a part becomes hardware: **blue** is Vitis HLS (the kernels, by csynth),
-**green** is hand-written framework RTL (the views and the memory), **purple** is vendor IP (the
-crossbar), **tan** is the testbench (never synthesized).
+The colours are the ways a part becomes hardware: **blue** is Vitis HLS (csynth), **green** is
+hand-written framework RTL, **purple** is vendor IP, **tan** is the testbench (never synthesized).
 
-## The cut is a build choice
+## The running example, and the steps up
 
-DUT and testbench are **roles**, not kinds of module. Draw the cut around any module in the tree and
-the rest becomes the testbench: [`harness(module)`](../flows/units.md) makes a module the DUT of its own
-system, with a stand-in generated at each of its ports. That is how a system is **developed module by
-module**: each kernel verified, and its timing calibrated, alone; then composed, with nothing fitted to
-the whole, and checked once against the whole's RTL.
-
-## A ladder of systems
-
-The worked examples climb from the smallest system to the full picture. Each one is the same idea at a
-larger size:
+Every page walks the **[free-running polynomial](../../examples/stream_kernel/index.md)**: a kernel that
+reads a command and its samples on a stream, evaluates a polynomial, and answers on two more streams.
+Its arithmetic is trivial on purpose, so each page is about the flow. Where a page's idea needs more,
+it takes a step up:
 
 | system | the DUT | the testbench | worked example |
 |---|---|---|---|
@@ -66,36 +92,6 @@ larger size:
 | a pipeline with memory | a composite of free-running tasks, memory through stream adaptors | stream drivers, sinks, a memory model | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) |
 | several kernels, a memory, a host | devices, a memory, the crossbar | a `SwHost` | [Two kernels on a bus](../../examples/markov/index.md) |
 
-The protocol between them is nearly always [command-response](../patterns/command_response.md): a
-command and its data in, the results headed by which command they answer, a status per command.
-
-## A system in code
-
-The one-kernel-on-a-bus system, whole ([`stream_kernel_mm.py`](../../../examples/stream_kernel/stream_kernel_mm.py),
-shortened): the modules are built on one simulation, then `HwSystem(sim, dut)` names the DUT, and the
-testbench -- the host -- is whatever is left.
-
-```python
-sim = Simulation()
-kernel = PolyKernel(name="poly_kernel", sim=sim, clk=clk)            # the kernel: a FreeRunMod
-host = PolyHost(name="host", sim=sim, cmds=cmds, clk=clk)            # the testbench: a SwHost
-device = build_mm_device(kernel, sim=sim, clk=clk, mem_dwidth=W)     # the kernel's views and front
-xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=1, nports_slave=len(slaves), ...)
-xbar.bind("master_0", host.m)                                        # the host masters the bus
-...                                                                   # the device's slaves, interrupts
-dut = DutTop.of("poly_mm_dut", sim, comps=[device], ifs=[xbar])
-sysm = HwSystem(sim, dut, run_until=host.done, check=check)
-```
-
-The one-kernel-on-streams system is one line, because its testbench is generated:
-
-```python
-sysm = harness(PolyKernel, workload="test")
-```
-
-## Next
-
-- [Building a system](recipe.md): the steps, in the order you take them.
-- [The system flow](../build/xsi_system.md#running-it): the build steps from Python to the RTL
-  comparison -- `csynth`, `system_rtl`, `scenario`, `pysim`, `system_xsi`, `compare`.
-- [Developing module by module](../flows/units.md): harnesses, calibration, composition.
+The older host-launched flow -- one kernel called by a sequential Vitis testbench -- is under
+[Legacy flows](../legacy/index.md). Host-activated *modules* are not legacy: they are devices a host
+launches over the bus.

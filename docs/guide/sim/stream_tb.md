@@ -136,7 +136,7 @@ becomes an [`AxisMaster`](../build/bfm.md), a `StreamSink` an `AxisSlave` — th
 Verilog cycle by cycle through XSI. Same words, same wiring; only the timing model differs (fast
 transaction events vs. exact per-cycle handshakes).
 
-This is why one design description serves both: the [concurrent flow](../flows/concurrent.md) runs the
+This is why one design description serves both: the [concurrent flow](../systems/index.md) runs the
 identical graph as a fast Python check and as a cycle-accurate RTL test — and, because the driver plays
 a bundle, from the identical vectors too. The `AxisMaster` reads that same bundle directly: the
 participant carries an `in_bundle` [`DynParam`](../flows/parametrization.md#dynparam) which the

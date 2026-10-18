@@ -22,7 +22,7 @@ waveflow_get_example("stream_kernel", file="stream_kernel_build.py")  # codegen 
 waveflow_get_example("stream_kernel", file="src/poly_kernel_task.h")  # the hand-written HLS body
 ```
 
-Then the pattern page, `docs/guide/patterns/command_response.md`, and before you shape any loop,
+Then the pattern page, `docs/guide/systems/command_response.md`, and before you shape any loop,
 `docs/guide/vectorization/hls/loop_optimization.md`.  For the data's types:
 `docs/guide/schema/python/fixpoint.md` (`FixedField`, its rounding and overflow modes) and
 `docs/guide/schema/python/complex.md` (`ComplexField`).

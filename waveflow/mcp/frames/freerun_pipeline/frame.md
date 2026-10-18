@@ -8,9 +8,9 @@ decide**, which is the checklist Stage 1 answers.  Where the spec and this
 frame disagree, the spec wins; say so in Stage 1.
 
 The pattern is command-response through a pipeline
-(`docs/guide/patterns/command_response.md`); the rule under every
+(`docs/guide/systems/command_response.md`); the rule under every
 free-running module is stream-only logic behind adaptors
-(`docs/guide/patterns/stream_only.md`).  The references are `memcpy` (the
+(`docs/guide/systems/streams.md`).  The references are `memcpy` (the
 whole flow, with no compute) and `interleaver` (compute stages, and on-chip
 random access through a stream of blocks).
 

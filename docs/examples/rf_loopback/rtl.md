@@ -171,7 +171,7 @@ went from dropping 72 words to dropping none. Both numbers live in
 
 ## The loopback, through the system flow {#system-flow}
 
-The loopback runs through the [system flow](../../guide/flows/concurrent_system.md), as an
+The loopback runs through the [system flow](../../guide/systems/index.md), as an
 `HwSystem`:
 
 ```bash

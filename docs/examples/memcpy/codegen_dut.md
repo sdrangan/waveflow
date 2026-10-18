@@ -16,7 +16,7 @@ Vitis HLS `hls::task` is the free-running execution model. A task is a body that
 on its own** whenever its input streams have data — there is no host `start`/`done` handshake, so the
 top is declared `ap_ctrl_none`. Tasks connected by `hls::stream` FIFOs run **concurrently** and
 **overlap**: one task processes job *j+1* while another is still on job *j*. That is exactly the
-[concurrent flow](../../guide/flows/concurrent.md)'s model, and it is why `mem_copy`'s three stages —
+[concurrent flow](../../guide/systems/index.md)'s model, and it is why `mem_copy`'s three stages —
 sequence, read, write — become three tasks wired by FIFOs rather than one sequential function.
 
 The contrast is `ap_ctrl_hs` (the [sequential flow](../../guide/flows/sequential.md)): a kernel the

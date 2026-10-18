@@ -204,7 +204,7 @@ the C-simulation testing different things — they are the same program.
 
 The [system simulation](./pysim.md) cannot make that trip: it is *concurrent*, and concurrency has no
 straight-line `int main()` to lower onto. Driving a free-running design at RTL is the
-[concurrent flow](../../guide/flows/concurrent.md) instead — an XSI BFM in place of a sequential
+[concurrent flow](../../guide/systems/index.md) instead — an XSI BFM in place of a sequential
 `int main()`. Sequential is what reaches Vitis's C-simulation and co-simulation; concurrent reaches the
 RTL through XSI.
 

@@ -6,7 +6,7 @@ nav_order: 1
 
 # The protocol
 
-The [command-response pattern](../../guide/patterns/command_response.md) on 64-bit AXI4-Streams -- two
+The [command-response pattern](../../guide/systems/command_response.md) on 64-bit AXI4-Streams -- two
 float32s, or one complex value, a word:
 
 ```text

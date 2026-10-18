@@ -151,7 +151,7 @@ Key class-level attributes derived automatically:
 > its generated C++ has every reader and writer -- array, stream, AXI4-Stream, and framed with
 > `DataSchemaStep(..., framed=True)`. What it cannot be is variable-length: for a variable number of
 > results on a kernel's stream -- the
-> [variable-length output](../../patterns/command_response.md#variable-length-output-a-tagged-union-ending-in-end)
+> [variable-length output](../../systems/command_response.md#variable-length-output-a-tagged-union-ending-in-end)
 > of the command-response pattern -- send one `DataList` per message type, each beginning with the same
 > `EnumField` tag ([Tagged unions on a stream](tagged_union.md)).
 

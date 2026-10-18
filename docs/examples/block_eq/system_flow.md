@@ -6,7 +6,7 @@ nav_order: 3
 
 # The system flow
 
-Each stage is verified **alone** before the composite -- [Building a system](../../guide/systems/recipe.md),
+Each stage is verified **alone** before the composite -- [Simulating in Python](../../guide/systems/pysim.md#the-cut),
 step by step. Every one of them is a harness: the module as the DUT, a stand-in generated at each port.
 
 | system | the DUT | its stand-ins | the scenario | prefix |

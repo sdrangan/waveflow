@@ -5,14 +5,14 @@ answers on streams.  This file says what the frame **fixes** -- the rules every 
 and what a spec **must decide**, which is the checklist Stage 1 answers.  Where the spec and this frame
 disagree, the spec wins; say so in Stage 1.
 
-The pattern is command-response (`docs/guide/patterns/command_response.md`); the reference is
+The pattern is command-response (`docs/guide/systems/command_response.md`); the reference is
 `stream_kernel`, a polynomial on float32 samples that follows every rule below.
 
 ## Fixed by the frame
 
 1. **One `FreeRunMod`**, no start signal and no register map, with **framed** stream ports
    (`FramedStreamIFSlave` in, `FramedStreamIFMaster` out).  One firing is one command.
-2. **The protocol** (`docs/guide/patterns/command_response.md`, *The protocol*):
+2. **The protocol** (`docs/guide/systems/command_response.md`, *The protocol*):
 
    ```text
    s_in     : Cmd(tx_id, n, ...) | data        the command one burst, its data another

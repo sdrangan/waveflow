@@ -44,7 +44,7 @@ In going through this example, you will learn how to:
   data without polling.
 - Carry the **order between two streams** in the messages: a **config id** (`cfg_id`) that the host
   puts in each config and each packet's header names, and a **response FIFO** that echoes it -- the
-  [command-response pattern](../../guide/patterns/command_response.md).
+  [command-response pattern](../../guide/systems/command_response.md).
 - Run the same host program in **pysim** and at **RTL** (XSI, AMD's crossbar), in two adaptor
   topologies, and **calibrate pysim's timing** against the RTL with handshake probes.
 

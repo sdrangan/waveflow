@@ -77,6 +77,6 @@ credit between the kernels does not.
 queue's data interrupt. At RTL the testbench checks it: the host reads nothing but responses and
 memory.
 
-This is the [command-response pattern](../../guide/patterns/command_response.md) through a pipeline:
+This is the [command-response pattern](../../guide/systems/command_response.md) through a pipeline:
 the command travels with the data from stage to stage, and the last stage answers once its work is
 stored.

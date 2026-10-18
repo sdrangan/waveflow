@@ -43,8 +43,8 @@ waveflow_get_example("interleaver", file="interleaver.py")             # the sha
 waveflow_get_example("interleaver", file="include/il_compute_inband_task.h")  # a compute body
 ```
 
-Then the pattern pages: `docs/guide/patterns/command_response.md` (the
-pipeline form) and `docs/guide/patterns/stream_only.md`, and
+Then the pattern pages: `docs/guide/systems/command_response.md` (the
+pipeline form) and `docs/guide/systems/streams.md`, and
 `docs/guide/comp_codegen/freerunning_composite.md`.
 
 ---
@@ -104,7 +104,7 @@ Each of these has cost a debugging session here:
 - **Boundary TLAST comes from `ap_axis`**; an internal edge is a framed word,
   and `ap_axis` on an internal FIFO is rejected by Vitis.
 - **A write, then a blocking read on another stream, deadlocks** when the
-  two depend on each other: use `read_nb` (`docs/guide/patterns/stream_only.md`).
+  two depend on each other: use `read_nb` (`docs/guide/systems/streams.md`).
 - **An `hls::task` that writes before it reads counts as in reset**
   (`docs/guide/rf/rfshotbuf/tx_internal.md`, "The reset trap").
 - **The memory reader and writer may fire different numbers of times per

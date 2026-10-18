@@ -10,7 +10,7 @@ summary: "A FreeRunMod lowers to a composite_kernel: an ap_ctrl_none top whose b
 
 # Free-running kernel in HLS
 
-A [`FreeRunMod`](../flows/concurrent.md) lowers to a **`composite_kernel`**: an `ap_ctrl_none` top
+A [`FreeRunMod`](../systems/index.md) lowers to a **`composite_kernel`**: an `ap_ctrl_none` top
 whose entire body is `hls::task` instantiations. There is no `ap_start`, no `ap_done`, and no control
 loop — the runtime **re-fires** each task on every new job.
 
@@ -170,6 +170,6 @@ law of HLS.
 - [Overriding the generated task](./freerunning_override.md) — handing over a body you wrote.
 - [Free-running composite in HLS](./freerunning_composite.md) — the same generator with several tasks
   and internal channels.
-- [Concurrent (free-running)](../flows/concurrent.md) — the flow and when to choose it.
+- [Concurrent (free-running)](../systems/index.md) — the flow and when to choose it.
 - [Writing it in Python](../flows/concurrent_python.md) — the authoring side.
 - [XSI testbench](./xsi_tb.md) — how this top is verified at RTL.
