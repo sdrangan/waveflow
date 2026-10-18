@@ -282,6 +282,17 @@ class HwSystem(ABC):
             out.append(COUNTERS_DIR)
         return tuple(dict.fromkeys(out))
 
+    def acceptances(self) -> tuple[str, ...]:
+        """The bundles the testbench's drivers record **acceptance** into, relative to the scenario
+        root: each participant outside the DUT that declares an ``accept_bundle`` (a
+        :class:`~waveflow.simulation.stream_tb.StreamDriver`; a harness sets one per stream input).
+        Only the RTL run writes them -- each word the DUT accepted with its cycle, the input-side
+        twin of a sink's arrival cycles -- in its run directory (``<work>/xsi_run/<bundle>``); pysim's
+        times are the simulation's own, so they are not compared."""
+        root = self.dut()
+        return tuple(dict.fromkeys(str(o.accept_bundle) for o in self.elements()
+                                   if not _inside(o, root) and getattr(o, "accept_bundle", "")))
+
     def compared_recordings(self) -> tuple[str, ...]:
         """The recordings compared **exactly**, RTL against pysim: every :meth:`recordings` entry
         whose participant has not set ``recording_check = "example"``.  The rest are still gathered

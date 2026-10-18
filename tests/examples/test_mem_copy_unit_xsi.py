@@ -39,3 +39,17 @@ def test_the_rtl_copies_and_finishes_at_the_kernel_gate(unit_run):
     assert len(np.concatenate(done)) == len(XSI_JOBS)
     cycles = np.fromfile(vdir / "s_done" / "cycles.bin", dtype="<u8")
     assert int(cycles[len(XSI_JOBS) - 1]) == EXPECTED_CYCLES
+
+
+@pytest.mark.xsi
+def test_the_rtl_records_when_each_input_word_was_accepted(unit_run):
+    """The input side's timing: the command driver's acceptance bundle holds every command word, in
+    order, each with the cycle the kernel took it -- non-decreasing, and all before the last
+    completion."""
+    vdir = unit_run / "xsi_run" / "vectors"
+    sent = np.concatenate(read_burst_bundle(vdir / "s_cmd"))
+    acc = vdir / "s_cmd_acc"
+    assert np.array_equal(np.concatenate(read_burst_bundle(acc)), sent)
+    cycles = np.fromfile(acc / "cycles.bin", dtype="<u8")
+    assert cycles.size == sent.size and np.all(np.diff(cycles.astype(np.int64)) >= 0)
+    assert 0 < int(cycles[-1]) < EXPECTED_CYCLES

@@ -101,6 +101,9 @@ DEFAULT_MEM_WORDS = 4096
 #: The bundles a harness's memory stand-in loads its image from and dumps its arena to.
 MEM_INIT_BUNDLE = "vectors/mem_init"
 MEM_BUNDLE = "vectors/mem"
+#: A stream input's driver records, at RTL, each word it had accepted and the cycle it was, in
+#: ``vectors/<port><ACCEPT_SUFFIX>`` (:attr:`~waveflow.simulation.stream_tb.StreamDriver.accept_bundle`).
+ACCEPT_SUFFIX = "_acc"
 
 
 def _is_mem_master(ep) -> bool:
@@ -206,8 +209,11 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
                                       f"credit-stream and memory-master ports only")
         tlast = bool(getattr(type(ep), "boundary_tlast", False) or getattr(ep, "has_tlast", False))
         if _is_input(ep):
+            # accept_bundle: the RTL driver records the cycle each word was accepted (pysim's own
+            # times are the simulation's), so a harness run is timed at its inputs as at its outputs.
             si = StreamDriver(name=f"{port}_driver", sim=sim, bitwidth=ep.bitwidth,
-                              in_bundle=f"vectors/{port}", has_tlast=tlast)
+                              in_bundle=f"vectors/{port}", has_tlast=tlast,
+                              accept_bundle=f"vectors/{port}{ACCEPT_SUFFIX}")
             pair = (si.stream_ep, ep)
         else:
             si = StreamSink(name=f"{port}_sink", sim=sim, bitwidth=ep.bitwidth,
