@@ -393,6 +393,15 @@ both read the flow pages on their own, both **would build**; citations 48/48 and
 fall (2.41M and 3.11M in; one run each): both read more broadly and spent it on their gaps.  The one doc
 gap fixed: an internal link's own width (*Stream patterns*).  `evaluation/planning_tests/results/stage5_2026-10-18.md`.
 
+**Future direction (the user, 2026-10-18): architecture from the algorithm.**  Today a spec gives the
+boundary and the architecture in hardware terms (the ladder's rule: "architecture given in words"); the
+agent's job is the hardware.  The target user -- a domain researcher, e.g. a wireless grad student -- will
+not always know those choices.  Next: the agent proposes them -- the interfaces, the partition into
+stages, the word widths and PF from a throughput target -- and explains the trade-offs.  The frames'
+`choose_when` is the seed of this; the test is a rung whose spec gives only the algorithm, the rates and
+the I/O, graded on the architecture proposed.  Tokens are not the constraint (the user): a plan run is
+2-3M in, mostly cached; a full build 30-70M in, 30-50 min.
+
 **Follow-on, not this plan:** the `GraphSystem` examples to `HwSystem(sim, dut)`, one at a time, with an
 "older form" banner on each example page until it moves; what becomes of `basic_vec` and `regmap`.
 
