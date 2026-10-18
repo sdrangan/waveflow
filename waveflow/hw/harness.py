@@ -250,9 +250,16 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
         return CalibWorkload(harness(module, workload="calib", n_cycles=n_cycles),
                              holdout=dict(holdout))
 
+    # The golden, when the module states one for this workload kind (``module.golden(kind)``:
+    # ``{output port: [burst words]}``): the DAG's ``golden`` step checks pysim's sinks against it.
+    # A hostile policy changes when words move, never which, so it holds under every policy.
+    golden = None
+    if isinstance(workload, str) and callable(getattr(dut, "golden", None)):
+        golden = lambda: dut.golden(workload)  # noqa: E731
+
     sysm = HwSystem(sim, dut, n_cycles=run_cycles, inputs=inputs,
                     fresh=lambda: harness(module, workload=workload, n_cycles=n_cycles, policy=policy),
-                    calibration=calibration)
+                    calibration=calibration, golden=golden)
     sysm.policy = policy
     sysm.stand_ins = stand_ins
     return sysm

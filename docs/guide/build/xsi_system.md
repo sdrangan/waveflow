@@ -393,6 +393,21 @@ The same system object, run in pysim from that scenario. Every host endpoint's t
 `<work>/pysim_traces/` and the run's length in host clock cycles to `<work>/pysim.json`. Needs no
 toolchain: `--through pysim` is the whole software side, with no Vivado.
 
+### golden {#golden}
+
+`GoldenStep`: pysim's recordings against the system's golden -> `<work>/golden.json` (the mismatches; empty: pass),
+burst for burst and word for word, so the framing is checked with the values. Added after `pysim` only
+when the system states a golden ([`HwSystem.golden_outputs`](../../../waveflow/hw/hw_system.py),
+`{recording: [burst words]}`, given as `HwSystem(..., golden=...)`). A
+[harness](../../../waveflow/hw/harness.py) states one when its module has `golden(kind)`: what each
+output port records for `workload(kind)`, as `PolyKernel.golden` does in
+[`examples/stream_kernel/stream_kernel.py`](../../../examples/stream_kernel/stream_kernel.py). A
+hostile stand-in policy changes when words move, not which, so the harness under each policy has the
+step too. A mismatch fails the step and names the recording, the burst and the first differing word
+([`golden_mismatches`](../../../waveflow/build/system_dag.py)); `--through golden` checks pysim
+against the golden with no Vivado. The step always runs: the golden is Python the system digest does
+not cover.
+
 ### system_xsi {#system-xsi}
 
 The system at RTL under a testbench, itself an inner DAG:
