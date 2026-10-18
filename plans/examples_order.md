@@ -1,7 +1,7 @@
 # Examples: order, legacy, and what needs work
 
 A survey of `examples/` (2026-10-18), for the Flow Overview restructure (`plans/guide_system_first.md`
-Stage 7).  Proposal for the user's review; nothing has moved.
+Stage 7).  Implemented by task C of `plans/next_docs_examples.md` -- see [Done](#done-task-c-2026-10-18).
 
 ## How they were classified
 
@@ -88,3 +88,50 @@ below are deleted.
 | `toy`, `state_toy`, `interface`, `memory`, `schemas`, `timing` | small demos the guide pages run or cite (`add_state`, the XSI testbench, polling, memory, schema registry, timing diagrams) | keep as guide demos, not examples |
 | `rf_blk_delay`, `rf_relayout`, `rf_repeat_play`, `rf_samp_buf_rx`, `rf_samp_buf_tx` | the RF components' worked material, tested, used by `guide/rf/` | keep; promote one to a curated page if the RF track needs it |
 | `mcp_test` | blind-test fixtures | keep |
+
+## Done (task C, 2026-10-18)
+
+- **Order**: `nav_order` 1-20 on the curated indexes, in this file's order with `stream_kernel_mm` (task
+  A) 4th, after block_eq: basic_vec, stream_kernel, block_eq, stream_kernel_mm, memcpy, interleaver,
+  fir_block, bram_access, mm_fir, markov; vecmult, xbar_profile, mimo_cg; ssr_fft, vitis_fft,
+  rf_loopback, rf_shot_tx, rf_shot_rx, rf_shot_loopback, cpu_sched.  The landing page
+  (`docs/examples/index.md`) lists the four groups with a line each.
+- **Legacy**: `docs/examples/legacy.md` (*Legacy examples*, nav_order 21) is the parent of regmap,
+  stream_inband and shared_mem (`parent: Legacy examples`, `grand_parent: Examples`; their pages
+  `grand_parent: Legacy examples`).  A file, not `docs/examples/legacy/index.md`: the corpus
+  (`waveflow/mcp/knowledge/corpus.py::_toc_examples`) and `blind_test._toc_example_dirs` take every
+  `docs/examples/<dir>/index.md` as an example card, and a parent page has no `example_dir:`.  The three
+  directories did not move, so the cards and every link are unchanged.
+- **Learning objectives** on every curated index, as the increment.
+- **Deleted**: `examples/vscode`, `examples/dse_fir`, `examples/_archive` and their config references.
+- **Not deleted -- `bram_toy`, `test`, `vecunit`** in the main checkout: zero tracked files (checked on
+  `main`), but the deletion was refused by the agent's permission sandbox (outside its worktree).
+  `vecunit/vecunit.py` and `test/dataschema2.ipynb` are hand-written untracked files; delete them by
+  hand (`rm -rf examples/bram_toy examples/test examples/vecunit`).  Their `.gitignore` lines are gone,
+  so until then they show as untracked.
+- **Kept -- `vmac`**, for these reasons:
+  1. `docs/guide/custom_hooks/complex.md` teaches *data-dependent addressing from the datapath*: a hook
+     that walks an `m_axi` pointer itself (`read_array_lane` over a running word pointer, row strides
+     from command fields, `read_array_slice` for a per-row scalar), and the two csynth gotchas that only
+     arise there (scalar `*_core` arguments; `#pragma HLS INLINE` so `m_axi` binds to the top).  No
+     current example has that shape: every memory-mastering kernel (memcpy, interleaver, fir_block,
+     mimo_cg, the linalg tasks) reaches memory through `MemRStream` / `MemWStream` and computes on
+     streams or stream-of-blocks; `read_array_lane` in the current examples (markov, mm_fir, the RF
+     relayout tasks) reads stream words, not a memory pointer.  The complex datapath in
+     `waveflow/linalg` (`systolic_*_task.h`, `cg_vector*_task.h`) matches only the page's second section
+     (complex fixed point, a wide accumulator, one requantize), not its subject or its gotchas.
+     Rewriting the page onto one of them would change what it teaches, not move it.
+  2. The vmac tests are framework tests too: `tests/hw/test_extract_vmac.py` checks the extractor's
+     `FunctionStmt` / `impl_file` path on `VmacAccel`, and `tests/examples/test_vmac_*.py` the
+     instance-specialized command schema (`VmacAccel.Cmd`) that `waveflow/hw/hw_module.py` and
+     `tests/hw/test_aximm_queue_stmt.py` cite.  Deleting vmac drops that coverage.
+  What it would take: either retire the pattern (the guide now routes memory through the adaptors,
+  and `m_axi` on an `hls::task` must be `offset=off` + `stable`), deleting complex.md and moving the
+  extractor test onto a small fixture in `tests/hw/`; or build a current example with a strided /
+  gathered `m_axi` datapath and move the page onto it.  vmac stays out of the corpus
+  (`test_non_toc_example_directories_are_out_of_the_corpus`).
+- **Not done**: the `GraphSystem` -> `HwSystem(sim, dut)` migrations (memcpy, interleaver, fir_block,
+  bram_access, the RF examples), left for its own pass; memcpy's objectives name `GraphSystem` as the
+  older form until then.  vecmult is placed as the resource-model example, without an RTL rung.
+- `examples/` is an installed package: after these deletions re-install (`pip install -e .`) so the
+  dropped `examples._archive*` exclude leaves the metadata.
