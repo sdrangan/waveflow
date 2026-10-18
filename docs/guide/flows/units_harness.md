@@ -124,6 +124,10 @@ add_system_steps(dag, harness(MemCopy, workload="test"), work_dir=work_dir, top=
 python -m examples.mem_copy.mem_copy_system_build --through unit_compare
 ```
 
+`harness(module, workload=..., n_cycles=4000)`: `n_cycles` bounds the RTL run, in clock cycles. A
+scenario that needs longer is cut short at RTL and its `compare` fails on the missing words, so a long
+workload (thousands of samples at one per cycle) raises it.
+
 At RTL (Vitis/Vivado 2025.1) the harness's memory and completions match pysim word for word, and the
 last completion lands at cycle **2908** -- the number [mem_copy's system](../../examples/memcpy/rtlsim.md)
 gates on, since the testbench is the same: a driver, a sink and one memory behind both bundles
