@@ -1,6 +1,7 @@
 ---
 title: Protocol and interfaces
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 1
 summary: "What crosses each of the kernel's three interfaces, word by word: the command header with its four coefficients, the sample burst, the response header and results, at 32 and 64 bits, with every layout taken from serializing the schemas; the status-only AXI-Lite register map; which bursts TLAST frames; and when -- and how -- to add a response footer."
 ---

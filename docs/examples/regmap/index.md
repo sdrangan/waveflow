@@ -1,7 +1,8 @@
 ---
 title: Register mapped simple function
-parent: Examples
-nav_order: 2
+parent: Legacy examples
+grand_parent: Examples
+nav_order: 1
 has_children: true
 example_dir: examples/regmap
 summary: "The first end-to-end example: design, simulation, synthesis and RTL co-simulation of a standalone control-driven Vitis kernel, over the simplest AXI interface there is — an AXI-Lite register map. A host modelled as a SimObj drives the launch protocol (write the inputs, assert ap_start, wait for the interrupt, read the result), so a system simulation confirms the design works before any testbench exists, and the measured RTL cycles are compared back against the Python estimate."
@@ -14,7 +15,8 @@ simplest of the AXI-* interfaces — an **AXI-Lite register map**.
 
 ## Learning Objectives
 
-In going through this example, you will learn to:
+The first of the [legacy examples](../legacy.md), the sequential (host-activated) flow; it assumes only
+[Basic vector arithmetic](../basic_vec/index.md). In the order the pages teach it:
 
 - Declare a `VitisRegMap` of typed registers and wire it into a `HostActivated` kernel.
 - Write the kernel's behavior as a Python method that reads the input registers, computes a result, and writes it back to the output register.

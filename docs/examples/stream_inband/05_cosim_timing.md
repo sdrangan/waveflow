@@ -1,6 +1,7 @@
 ---
 title: RTL Cosim Timing Verification
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 9
 summary: "What co-simulation tells us that C simulation cannot: how many clock cycles the RTL takes. The cosim report's cycle count for one kernel call is compared, at 32 and 64 bits, with the count pysim predicts for the same span, and the build fails if they differ by more than 20 cycles. The pysim timing is poly's declared timed phases, fitted from a traced cosim: every stretch of a command matches the RTL except a one-cycle restart per command, and the start/done handshake is outside the module's timing; both are counted here. Includes the history: a hand-set proc_latency, and why the measured span had to match before any number meant anything."
 ---
