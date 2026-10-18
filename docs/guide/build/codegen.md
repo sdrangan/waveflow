@@ -2,7 +2,7 @@
 title: Code Generation Steps
 parent: Build System
 nav_order: 2
-summary: "The four built-in steps that turn Python schema definitions into the C++ a Vitis kernel compiles against: the stream helpers, the memory-manager headers, a header pair per DataSchema, and packed-array helpers per scalar element type. The dependency wiring among them is automatic, but the stream helpers must be added first."
+summary: "The four built-in steps that turn Python schema definitions into the C++ a Vitis kernel compiles against: the stream helpers, the memory-manager headers, a header pair per DataSchema, and packed-array helpers per element type (a scalar or a `DataList` record). The dependency wiring among them is automatic, but the stream helpers must be added first."
 ---
 
 # Code Generation Steps
@@ -14,7 +14,7 @@ Waveflow ships four built-in build steps that generate the C++ headers and helpe
 | `StreamUtilsStep` | Copy synthesizable + testbench stream helpers into the include directory | `waveflow.build.streamutils` |
 | `MemMgrStep` | Copy memory-manager headers into the include directory | `waveflow.build.streamutils` |
 | `DataSchemaStep` | Generate the C++ header pair for one `DataSchema` class | `waveflow.hw.dataschema` |
-| `ArrayUtilsStep` | Generate packed-array helpers for one scalar element type | `waveflow.hw.arrayutils` |
+| `ArrayUtilsStep` | Generate packed-array helpers for one element type (scalar or record) | `waveflow.hw.arrayutils` |
 
 Each step is typically added once per design (or once per schema, in the case of `DataSchemaStep`), and the dependency wiring among them is automatic.
 
@@ -165,7 +165,7 @@ dag.add(DataSchemaStep(PolyCmdHdr, word_bw_supported=[32, 64], include_dir="incl
 
 ## ArrayUtilsStep
 
-Generates packed-array helper headers for a scalar element type. The output provides C++ functions for reading and writing arrays of that type across AXI streams and arrays at every supported word width.
+Generates packed-array helper headers for one element type: a scalar, a `ComplexField`, or a `DataList` record. The output provides C++ functions for reading and writing arrays of that type across AXI streams and arrays at every supported word width.
 
 ```python
 from waveflow.hw.arrayutils import ArrayUtilsStep
@@ -175,7 +175,7 @@ dag.add(ArrayUtilsStep(Float32, [32, 64]))
 
 | Parameter | Description |
 |---|---|
-| `elem_type` | A `DataSchema` subclass for the scalar element type (e.g. `Float32`, `PixelField`). |
+| `elem_type` | A `DataSchema` subclass for the element type (e.g. `Float32`, `PixelField`, a `DataList`). |
 | `word_bw_supported` | List of word widths to generate helpers for. |
 
 Outputs:
@@ -191,6 +191,24 @@ dag.add(ArrayUtilsStep(Float32, [32, 64]))
 ```
 
 `ArrayUtilsStep` automatically wires itself to the `StreamUtilsStep` in the DAG.
+
+### A `DataList` element
+
+A record is an element like any other: `pf = word_bw // record_bw` records share a word, record 0 in
+the low bits, each packed flat in its lane in `pack_to_uint`'s layout (the rule on
+[Serialization](../schema/hls/serialization.md)), and the lane routines move `value_type` records.
+The record's own header comes from its [`DataSchemaStep`](#dataschemastep) in the same DAG:
+
+```python
+dag.add(DataSchemaStep(Pair, word_bw_supported=[32, 64], include_dir="include"))
+dag.add(ArrayUtilsStep(Pair, [32, 64]))      # include/pair_array_utils.h, value_type = Pair
+```
+
+A record wider than one of the word widths (`pf = 0`, one record over several words) moves through
+the record's own stream methods, and its framed lane routines call the framed ones, so its
+`DataSchemaStep` takes `framed=True`; without it, `ArrayUtilsStep` raises when it is added to the DAG.
+The lane routines on records are checked against `write_array` by
+[`tests/hw/test_arrayutils_datalist_elem.py`](../../../tests/hw/test_arrayutils_datalist_elem.py).
 
 ---
 
