@@ -24,7 +24,7 @@ The steps run in dependency order:
 
 | step | what it does |
 |---|---|
-| `scenario` | writes the scenario once (`write_inputs` and `run.json`) |
+| `scenario` | writes the scenario once (`inputs` and `run.json`) |
 | `csynth` | C-synthesizes the kernel from [DUT codegen](./codegen_dut.md)'s `mem_copy.tcl`, unless its RTL is current |
 | `pysim` | runs the system in pysim from a copy of the scenario, and gathers what it recorded |
 | `system_rtl` | renders the system top and its file list |

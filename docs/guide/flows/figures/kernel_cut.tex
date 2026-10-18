@@ -67,7 +67,7 @@
   \node[sys, fit=(drv)(sink)(mem)(dut), inner xsep=5mm, inner ysep=9mm] (sys) {};
 \end{scope}
 \node[tag, text=sysline, anchor=south west] at ($(sys.north west)+(3mm,0.3mm)$)
-     {HwSystem \;\textmd{= \texttt{MemCopySystem}: the kernel and its testbench}};
+     {HwSystem \;\textmd{= \texttt{mem\_copy\_system()}: the kernel and its testbench}};
 \node[lbl, align=center, anchor=north, text width=120mm] at ($(sys.south)+(0,-0.15)$)
      {each port that leaves the DUT is answered by a testbench model:
       the driver and sink by \texttt{AxisMaster} / \texttt{AxisSlave},

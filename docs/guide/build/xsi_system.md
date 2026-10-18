@@ -108,7 +108,8 @@ only what is its own, and the base derives the rest:
 
 A recording that pysim cannot match by construction is marked on its participant in `graph()`
 (`recording_check = "example"`), and the example checks it instead of `compare`.
-[The mem_copy system](../../examples/memcpy/system.md) is the worked example.
+[The interleaver system](../../examples/interleaver/system.md) is a worked example; [the mem_copy
+system](../../examples/memcpy/system.md) is the same shape built directly, `HwSystem(sim, dut)`.
 
 ## The system top: `SystemTopSpec` {#the-spec}
 

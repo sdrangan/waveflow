@@ -37,8 +37,8 @@ teach it:
 3. Put a **memory model** (`MemoryMod`, one shared arena) in the testbench, and check the golden on the
    words the RTL wrote into it.
 4. Read the generated `hls::task` top's `m_axi` ports (`offset=off` and `stable`), and state the
-   system as a [`GraphSystem`](../../guide/build/xsi_system.md#graph-system), the older form of
-   `HwSystem(sim, dut)`: the kernel the DUT, the drivers and the memory the testbench.
+   system as [`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system): the kernel the DUT,
+   the drivers and the memory the testbench.
 5. Draw the concurrent timing of a traced RTL run on an [**activity diagram**](./timing.md): the
    pipeline overlap and where every cycle of the period goes.
 6. Reuse the platform's **pre-fit timing** of the `m_axi` bus and the memory-stream adaptors, so pysim
@@ -52,11 +52,11 @@ model it, test it in Python, generate the kernel, state the system, then run the
 1. [Module overview](./memcpy.md) — the three-stage design, the in-band forwarding protocol, and how
    it is wired.
 2. [Python model](./python.md) — the schemas and the three `FreeRunMod` leaves + the composite.
-3. [Testbench (Python)](./testbench.md) — the `MemCopyTB` graph, the `MemCopySim` procedure, and
+3. [Testbench (Python)](./testbench.md) — the graph (`wire_mem_copy`), the `MemCopySim` procedure, and
    running the pysim step.
 4. [DUT codegen](./codegen_dut.md) — what an `hls::task` is, and how the design graph becomes the
    `ap_ctrl_none` top.
-5. [The system](./system.md) — `MemCopySystem`, the cut, and what the system flow derives from it:
+5. [The system](./system.md) — `mem_copy_system()`, the cut, and what the system flow derives from it:
    the system top, the harness of BFM models, the scenario.
 6. [RTL simulation](./rtlsim.md) — running the system flow end to end, the RTL-vs-pysim comparison,
    and the golden at 2908 cycles.

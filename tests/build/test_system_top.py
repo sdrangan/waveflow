@@ -414,17 +414,17 @@ def test_mem_copy_is_a_system_with_no_crossbar():
     """The DUT is the kernel alone; its streams and m_axi bundles leave the top as ports of their own
     kind, each facing a testbench model -- and the crossbar that models contention in pysim stays
     in the testbench."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
     from waveflow.build.system_top import SystemTopSpec
 
-    sysm = MemCopySystem()
+    sysm = mem_copy_system()
     spec = SystemTopSpec.from_system(sysm)
     assert spec.xbar is None and spec.si == () and spec.mi == ()
     assert spec.ext_streams == (("tb_cmd_if", "in"), ("tb_done_if", "out"))
     assert spec.maxi_ext == (("u_tb_copier", "m_in", "m0_axi"), ("u_tb_copier", "m_out", "m1_axi"))
     assert [i.path for i in spec.instances()] == ["u_tb_copier_sub/u_tb_copier"]
     v = spec.render_verilog()
-    top = re.search(r"^module mem_copy_system \((.*?)\);", v, re.M | re.S).group(1)
+    top = re.search(r"^module mem_copy_dut \((.*?)\);", v, re.M | re.S).group(1)   # the DUT's name
     assert "input  wire tb_cmd_if_TVALID" in top and "output wire tb_done_if_TVALID" in top
     assert "output wire m0_axi_ARVALID" in top and "output wire m1_axi_AWVALID" in top
     assert "u_xbar" not in v and "_RID[0]" not in v                    # 1 ID bit: a scalar, no index

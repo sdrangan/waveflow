@@ -16,10 +16,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from examples.mem_copy.mem_copy import MemCopy, XSI_JOBS, check_mem_copy_xsi_outputs
-from examples.mem_copy.mem_copy_sim import MemCopySystem
+from examples.mem_copy.mem_copy_sim import mem_copy_system
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
 from waveflow.hw.harness import harness
+from waveflow.hw.hw_system import HwSystem
 
 HERE = Path(__file__).resolve().parent
 TOP = "mem_copy_system"
@@ -28,9 +29,9 @@ WORK_DIR = "xsi_work"
 EXPECTED_CYCLES = 2908
 
 
-def system() -> MemCopySystem:
+def system() -> HwSystem:
     """The 16-job scenario the XSI gate runs."""
-    return MemCopySystem(jobs=tuple(XSI_JOBS))
+    return mem_copy_system(jobs=XSI_JOBS)
 
 
 #: The kernel's own harness (``--through unit_compare``): ``harness(MemCopy)``, its two ``m_axi``

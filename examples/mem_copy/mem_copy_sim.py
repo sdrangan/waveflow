@@ -11,18 +11,19 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
-from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_module import HwParam, kernel_name
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.simulation.simulation import Simulation
 
 from examples.mem_copy.mem_copy import CopyCmd, CopyJob, MemCopy
@@ -75,75 +76,95 @@ class MemCopyTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.mem_dwidth)
-        bpw = w // 8
-        # Accept CopyJobs or bare (src, dst, n) tuples; work in CopyJobs from here on.
-        self._jobs = [CopyJob.coerce(j) for j in self.jobs]
-
-        # One flat arena covering every source and destination region (byte-addressed, base 0).
-        self.arena_words = max(max(job.src_off, job.dst_off) + job.n_words
-                               for job in self._jobs) + 16
-        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
-                                word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
-        # Platform bus model: the memory's slave charges the calibrated m_axi transfer cost, so the
-        # component's residual is just its own control cost.  Shared across accelerators (fit once).
-        if self.platform_dir is not None:
-            from waveflow.calib.bus_model import BusCalib
-            self.mem.s_mm.bus_timing = BusCalib(self.platform_dir,
-                                                clk_freq=self.clk.freq).bus_timing()
-        # Allocate the full capacity so the memory is the same size as the RTL FlatMemory and the whole
-        # vectors/mem_in image loads directly in pre_sim (no clip).  The DUT still addresses only
-        # [0, arena_words) -- the extra is headroom for the image.
-        self.mem.alloc(int(self.mem.nwords_tot))
-        # Both backends seed the memory from vectors/mem_in in pre_sim (load_segs) and the RTL memory
-        # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
-        # MemoryMod.pre_sim loads the same bundle (root set in write_scenario).
-        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
-
-        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w,
-                           calib_dir=self.calib_dir, platform_dir=self.platform_dir)
-        # The testbench owns the schema: it serializes each command into raw stream words.  Those words
-        # are the ONE source -- write_scenario materializes them to <root>/vectors/s_cmd, the driver
-        # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
-        # XSI vectors are the same bytes.  `self.cmds` is kept for introspection.
-        self.cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
-                     for j, job in enumerate(self._jobs)]
-        self.cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
-        # in_bundle is the DynParam the XSI harness emits AND the path pysim's driver reads in pre_sim
-        # (resolved against the root write_scenario sets).  No temp dir, no eager read.
-        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
-        # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
-        # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done",
-                                    has_tlast=True)
-
+        parts = wire_mem_copy(self.sim, name=self.name, jobs=self.jobs,
+                              mem_dwidth=int(self.mem_dwidth), clk=self.clk,
+                              calib_dir=self.calib_dir, platform_dir=self.platform_dir)
+        for k in ("_jobs", "arena_words", "mem", "dut", "cmds", "cmd_words", "driver", "done_sink",
+                  "_nwords_tot"):
+            setattr(self, k, getattr(parts, k))
         # Insertion order is the order the emitter walks; the DUT is found by its `boundary`.
-        for c in (self.dut, self.driver, self.done_sink, self.mem):
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        self._nwords_tot = int(self.mem.nwords_tot)
 
-        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
-        cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
-        self.add_if(cmd_if)
+def wire_mem_copy(sim, *, name: str = "tb", jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),),
+                  mem_dwidth: int = 64, clk: "Clock | None" = None, calib_dir: "str | None" = None,
+                  platform_dir: "str | None" = None) -> SimpleNamespace:
+    """The :class:`MemCopy` kernel and its testbench participants, built on *sim* and wired: a
+    driver on ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi`` bundles (a
+    2-master crossbar models their contention in pysim).  The one wiring both forms use --
+    :func:`mem_copy_system` (``HwSystem(sim, dut)``, the system flow) and :class:`MemCopyTB` (the
+    composite graph the calibration tools and the kernel-flow testbench walk).
 
-        done_if = StreamIF(name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        done_if.bind(ep_name="master", endpoint=self.dut.s_done)
-        done_if.bind(ep_name="slave", endpoint=self.done_sink.stream_ep)
-        self.add_if(done_if)
+    Returns the parts: ``dut`` (the kernel), ``driver``, ``done_sink``, ``mem``, ``xbar``, ``comps``
+    and ``ifs`` (in the order a composite registers them), the scenario's ``_jobs`` (as
+    :class:`CopyJob`), ``cmds`` / ``cmd_words`` (the command bursts the driver plays),
+    ``arena_words`` / ``_nwords_tot`` (the arena the DUT addresses, and the memory's size), and
+    ``mem_dwidth``.  Names are ``<name>_mem``, ``<name>_copier``, ``<name>_cmd_if``, ..."""
+    w = int(mem_dwidth)
+    bpw = w // 8
+    clk = clk if clk is not None else Clock(freq=100e6)
+    # Accept CopyJobs or bare (src, dst, n) tuples; work in CopyJobs from here on.
+    jobs = [CopyJob.coerce(j) for j in jobs]
 
-        # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master
-        # crossbar.  NOTE: the crossbar models contention; the XSI slave models do not — see
-        # the xsi_tb_codegen plan (commit 3052952).  The two describe different systems on purpose.
-        xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
-                               nports_master=2, nports_slave=1, bitwidth=w)
-        xbar.bind("master_0", self.dut.m_in)          # MemRStream.m_mem (read)
-        xbar.bind("master_1", self.dut.m_out)         # MemWStream.m_mem (write)
-        xbar.bind("slave_0", self.mem.s_mm)
-        self.add_if(xbar)
-        assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * bpw)])
+    # One flat arena covering every source and destination region (byte-addressed, base 0).
+    arena_words = max(max(job.src_off, job.dst_off) + job.n_words for job in jobs) + 16
+    mem = MemoryMod(name=f"{name}_mem", sim=sim, inline=False, clk=clk,
+                    word_size=w, addr_size=32, nwords_tot=arena_words * 4)
+    # Platform bus model: the memory's slave charges the calibrated m_axi transfer cost, so the
+    # component's residual is just its own control cost.  Shared across accelerators (fit once).
+    if platform_dir is not None:
+        from waveflow.calib.bus_model import BusCalib
+        mem.s_mm.bus_timing = BusCalib(platform_dir, clk_freq=clk.freq).bus_timing()
+    # Allocate the full capacity so the memory is the same size as the RTL FlatMemory and the whole
+    # vectors/mem_in image loads directly in pre_sim (no clip).  The DUT still addresses only
+    # [0, arena_words) -- the extra is headroom for the image.
+    mem.alloc(int(mem.nwords_tot))
+    # Both backends seed the memory from vectors/mem_in in pre_sim (load_segs) and the RTL memory
+    # dumps vectors/out in post_sim (dump_segs).  These are DynParams the harness emits; pysim's
+    # MemoryMod.pre_sim loads the same bundle (root set by the scenario writer).
+    mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
+    mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
+
+    dut = MemCopy(name=f"{name}_copier", sim=sim, mem_dwidth=w, calib_dir=calib_dir,
+                  platform_dir=platform_dir)
+    # The testbench owns the schema: it serializes each command into raw stream words.  Those words
+    # are the ONE source -- the scenario writer materializes them to <root>/vectors/s_cmd, the driver
+    # loads that bundle in pre_sim (pysim) exactly as the XSI AxisMaster loads in_bundle, and the
+    # XSI vectors are the same bytes.  `cmds` is kept for introspection.
+    cmds = [CopyCmd(src_off=job.src_off, dst_off=job.dst_off, n_words=job.n_words, tx_id=j)
+            for j, job in enumerate(jobs)]
+    cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in cmds]
+    # in_bundle is the DynParam the XSI harness emits AND the path pysim's driver reads in pre_sim
+    # (resolved against the root the scenario writer sets).  No temp dir, no eager read.
+    driver = StreamDriver(sim=sim, bitwidth=w, in_bundle="vectors/s_cmd")
+    # The sink dumps its capture (completion words + per-word arrival cycles) so Python checks the
+    # output stream AND the completion cycle off-line -- no golden in the generated C++ main.
+    done_sink = StreamSink(sim=sim, bitwidth=w, out_bundle="vectors/s_done", has_tlast=True)
+
+    cmd_if = StreamIF(name=f"{name}_cmd_if", sim=sim, clk=clk, bitwidth=w)
+    cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
+    cmd_if.bind(ep_name="slave", endpoint=dut.s_cmd)
+
+    done_if = StreamIF(name=f"{name}_done_if", sim=sim, clk=clk, bitwidth=w)
+    done_if.bind(ep_name="master", endpoint=dut.s_done)
+    done_if.bind(ep_name="slave", endpoint=done_sink.stream_ep)
+
+    # Two m_axi bundles (read gmem0, write gmem1) over the one shared memory: a 2-master
+    # crossbar.  NOTE: the crossbar models contention; the XSI slave models do not — see
+    # the xsi_tb_codegen plan (commit 3052952).  The two describe different systems on purpose.
+    xbar = AXIMMCrossBarIF(name=f"{name}_xbar", sim=sim, clk=clk,
+                           nports_master=2, nports_slave=1, bitwidth=w)
+    xbar.bind("master_0", dut.m_in)          # MemRStream.m_mem (read)
+    xbar.bind("master_1", dut.m_out)         # MemWStream.m_mem (write)
+    xbar.bind("slave_0", mem.s_mm)
+    assign_address_ranges([mem.s_mm], [(0, arena_words * bpw)])
+    return SimpleNamespace(dut=dut, driver=driver, done_sink=done_sink, mem=mem, xbar=xbar,
+                           comps=(dut, driver, done_sink, mem), ifs=(cmd_if, done_if, xbar),
+                           _jobs=jobs, cmds=cmds, cmd_words=cmd_words, arena_words=arena_words,
+                           _nwords_tot=int(mem.nwords_tot), mem_dwidth=w)
 
 
 class MemCopySim:
@@ -165,6 +186,15 @@ class MemCopySim:
                             calib_dir=calib_dir, platform_dir=platform_dir, **kw)
         #: The per-job source patterns, filled by :meth:`write_scenario` and read back by :meth:`check`.
         self.expected: list[np.ndarray] = []
+
+    @classmethod
+    def on(cls, parts) -> "MemCopySim":
+        """The procedure around parts already built -- :func:`wire_mem_copy`'s, with ``n_cycles``
+        set -- rather than a :class:`MemCopyTB` of its own: what :func:`mem_copy_system` drives."""
+        self = cls.__new__(cls)
+        self.tb = parts
+        self.expected = []
+        return self
 
     def write_scenario(self, root) -> None:
         """Materialize **the whole scenario** under ``<root>/vectors`` and point the graph's
@@ -246,39 +276,37 @@ def run_and_check() -> bool:
     return True
 
 
+
+def mem_copy_system(jobs=(CopyJob(src_off=16, dst_off=512, n_words=128),), mem_dwidth: int = 64,
+                    n_cycles: int = 3400, calib_dir: "str | None" = None,
+                    platform_dir: "str | None" = None) -> HwSystem:
+    """mem_copy as a **system**, ``HwSystem(sim, dut)``: the kernel and its testbench built on one
+    simulation (:func:`wire_mem_copy`), then the DUT named -- the :class:`MemCopy` kernel alone, no
+    bus inside it.  Everything else on the simulation is the testbench: the command driver, the
+    completion sink, the memory, and the crossbar that models the two ``m_axi`` bundles' contention in
+    pysim.  That crossbar is *outside* the cut, so the kernel's two ``m_axi`` bundles are top ports
+    facing the memory model, and its two streams are top ports facing the driver and the sink.
+
+    The scenario is :class:`MemCopySim`'s -- the command bursts, the source arena, the golden, and its
+    ``run.json`` (the arena size beside the bound *n_cycles*); ``run()`` returns its golden check (the
+    kernel).  The parts are attributes of the system (``sysm.kernel``, ``sysm.driver``,
+    ``sysm.done_sink``, ``sysm.mem``, ``sysm.xbar``)."""
+    sim = Simulation()
+    parts = wire_mem_copy(sim, jobs=jobs, mem_dwidth=mem_dwidth, calib_dir=calib_dir,
+                          platform_dir=platform_dir)
+    parts.n_cycles = int(n_cycles)
+    runner = MemCopySim.on(parts)
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: mem_copy_system(jobs, mem_dwidth, n_cycles, calib_dir,
+                                                  platform_dir))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(mem_dwidth)
+    sysm.jobs, sysm.runner = tuple(jobs), runner
+    sysm.kernel, sysm.driver, sysm.done_sink = parts.dut, parts.driver, parts.done_sink
+    sysm.mem, sysm.xbar = parts.mem, parts.xbar
+    return sysm
+
+
 if __name__ == "__main__":
     run_and_check()
-
-
-@dataclass
-class MemCopySystem(GraphSystem):
-    """mem_copy as a **system** (``plans/system_model.md`` S3): the :class:`MemCopyTB` graph, with
-    the cut stated as a DUT tree rather than implied by a testbench class.
-
-    The DUT is the :class:`MemCopy` kernel alone -- no bus inside it.  Everything else the graph holds
-    is the testbench: the command driver, the completion sink, the memory, and the crossbar that
-    models the two ``m_axi`` bundles' contention in pysim.  That crossbar is *outside* the cut, so the
-    kernel's two ``m_axi`` bundles are top ports facing the memory model, and its two streams are top
-    ports facing the driver and the sink.
-
-    The scenario is :class:`MemCopySim`'s -- the command bursts, the source arena, the golden, and
-    its ``run.json`` (the arena size beside the bound); :meth:`check` is its golden check.
-    """
-
-    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
-    mem_dwidth: int = 64
-
-    def graph(self) -> MemCopyTB:
-        self.runner = MemCopySim(jobs=tuple(self.jobs), mem_dwidth=int(self.mem_dwidth))
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        self.runner.write_scenario(root)
-
-    def check(self) -> "MemCopy":
-        return self.runner.check()
-
-

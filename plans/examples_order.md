@@ -21,7 +21,7 @@ Each row's objectives are only what it adds over the rows above it.
 | 1 | **basic_vec** | schemas and fields (int, float, fixed); arrays and vectorized NumPy goldens; bit-exact against Vitis (csim of a plain function) -- data before any interface | csim; fine for what it is |
 | 2 | **stream_kernel** | one free-running kernel on streams; the command-response protocol (status stream, fatal errors); golden from intents; framed ports; `run_iter`; the HLS body with lane routines; the harness; the system flow to `compare`; timed phases calibrated in the harness; then behind AXI-MM with a host, its timing composed | `HwSystem` / `harness` |
 | 3 | **block_eq** | a composite: partitioning into stages that run concurrently; `StreamBroadcast`; internal framed links and their depth; one body alone and in the composite (`KernelTask(framed=)`); each stage verified in its own harness, then the whole | `harness` |
-| 4 | **memcpy** | memory: a kernel that masters `m_axi` through `MemRStream` / `MemWStream`; a memory model in the testbench; adaptors whose timing ships pre-fit | `GraphSystem` -- migrate |
+| 4 | **memcpy** | memory: a kernel that masters `m_axi` through `MemRStream` / `MemWStream`; a memory model in the testbench; adaptors whose timing ships pre-fit | `HwSystem` (`mem_copy_system()`) |
 | 5 | **interleaver** | on-chip storage (blocks of BRAM, stream-of-blocks) between stages; a real compute stage; fitting a custom stage's own timing model | `GraphSystem` -- migrate |
 | 6 | **fir_block** | state across firings (`add_state`): coefficients loaded once, a tail carried between blocks; fixed point; a four-module composite | `GraphSystem` -- migrate |
 | 7 | **bram_access** | memory outside the Vitis kernel: hand-written Verilog (`rtl_module`) joined by a generated wrapper; a true-dual-port memory shared by two tasks | `GraphSystem` -- migrate |
@@ -60,9 +60,9 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 
 ## What needs work
 
-- **`GraphSystem` -> `HwSystem(sim, dut)`**: memcpy, interleaver, fir_block, bram_access, and the RF
-  examples (rf_loopback, rf_shot_tx, rf_shot_rx; rf_shot_loopback has no system). The plan's follow-on
-  item, one example at a time; memcpy first, since it is 4th in the order.
+- **`GraphSystem` -> `HwSystem(sim, dut)`**: interleaver, fir_block, bram_access, and the RF
+  examples (rf_loopback, rf_shot_tx, rf_shot_rx; rf_shot_loopback has no system). One example at a
+  time; memcpy is done ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
 - **vecmult**: its verification is csim, the legacy rung. Either move it to the system flow or present
   it only as the resource-model example (its own summary already says the arithmetic is beside the point).
 - **stream_kernel / mm_fir overlap**: stream_kernel's *Behind AXI-MM* page already introduces a device
@@ -131,7 +131,25 @@ below are deleted.
   gathered `m_axi` datapath and move the page onto it.  vmac stays out of the corpus
   (`test_non_toc_example_directories_are_out_of_the_corpus`).
 - **Not done**: the `GraphSystem` -> `HwSystem(sim, dut)` migrations (memcpy, interleaver, fir_block,
-  bram_access, the RF examples), left for its own pass; memcpy's objectives name `GraphSystem` as the
-  older form until then.  vecmult is placed as the resource-model example, without an RTL rung.
+  bram_access, the RF examples), left for its own pass -- since taken up, see
+  [below](#graphsystem---hwsystemsim-dut-2026-10-18).  vecmult is placed as the resource-model example, without an RTL rung.
 - `examples/` is an installed package: after these deletions re-install (`pip install -e .`) so the
   dropped `examples._archive*` exclude leaves the metadata.
+
+## `GraphSystem` -> `HwSystem(sim, dut)` (2026-10-18)
+
+The pattern, one example per commit: the testbench composite's wiring moves into a function that
+builds the kernel and its participants on a given simulation (`wire_<example>(sim, ...)`, same
+creation order and names, so pysim's event order is unchanged); the composite (`<Example>TB`, kept
+for the calibration tools, the kernel-flow testbench and `tb_top_spec`) registers those parts as its
+children; the system is a function, `<example>_system(...)`, that builds the parts on a fresh
+`Simulation`, wraps the kernel in `DutTop.of("<kernel>_dut", ...)` and returns
+`HwSystem(sim, dut, n_cycles=, inputs=, check=, fresh=)` with the parts as attributes.  The build
+modules pass their `TOP` explicitly, so the RTL top keeps its name (only `SystemTopSpec.from_system`
+without `top=` now defaults to the DUT's name).  Gate: a pysim probe (scenario + run hashed, each
+sink burst's arrival cycle, the end time) identical before and after, and the `-m xsi` gates
+re-run on fresh RTL (Vitis/Vivado 2025.1).
+
+| example | pysim (before = after) | RTL (before = after) |
+|---|---|---|
+| memcpy | 16 completions, last at 2361 cycles; scenario + recordings hash identical | 2908 (`test_mem_copy_system_xsi`, `test_mem_copy_unit_xsi`) |

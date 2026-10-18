@@ -128,11 +128,11 @@ def test_the_harness_binds_every_participant_behind_a_top_port():
     """mem_copy: no host.  The driver and the sink answer the two stream ports with their declared
     models; the memory behind both m_axi bundles is ONE shared arena with a read and a write slave;
     with no host there is no done() -- the run is the scenario's bound."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
     from waveflow.build.system_top import (SystemTopSpec, render_system_ports_h, render_system_tb,
                                            system_tb_spec)
 
-    s = MemCopySystem()
+    s = mem_copy_system()
     spec = SystemTopSpec.from_system(s)
     tb = system_tb_spec(spec, None, [], graph=s)
     assert {m.name: m.cls for m in tb.models} == {
@@ -149,9 +149,9 @@ def test_the_harness_binds_every_participant_behind_a_top_port():
 def test_recordings_come_from_the_participants_and_pysim_writes_them(tmp_path):
     """A system states nothing: the sink's out_bundle and the memory's dump segments are its
     recordings, and pysim now writes them as the C++ models do."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
 
-    s = MemCopySystem()
+    s = mem_copy_system()
     assert s.recordings() == ("vectors/out", "vectors/s_done")
     s.write_scenario(tmp_path)
     s.run()
@@ -199,12 +199,12 @@ def test_the_system_harness_for_rf_loopback_is_the_kernel_flows_model_for_model(
 
 
 def test_a_recording_its_participant_marks_example_is_gathered_not_compared():
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
     from examples.rf_loopback.rf_loopback import RfLoopbackSystem
 
     rf = RfLoopbackSystem()
     assert rf.recordings() == ("vectors/rf_out", "vectors/counters") and rf.compared_recordings() == ()
-    mc = MemCopySystem()
+    mc = mem_copy_system()
     assert mc.compared_recordings() == mc.recordings()          # exact by default
 
 
