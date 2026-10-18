@@ -26,6 +26,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
@@ -34,8 +35,8 @@ from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.fixpoint import fixed_sum, from_real, mult, quantize
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_module import HwParam
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_module import HwParam, kernel_name
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
@@ -111,93 +112,120 @@ class FirBlockTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.mem_dwidth)
-        t = int(self.ntap)
-        self.samp_cls = samp_type(self.samp_w, self.samp_i)
-        self._program = tuple(self.program)
-
-        # --- lay the arena out ------------------------------------------------------------------
-        # Offsets and region sizes are WORD coordinates; `n` on a command is a SAMPLE count.  At
-        # LW = MEM_DW//W samples per word those differ, and conflating them is how the arena and the
-        # DUT's ceil(n/LW) read length drift apart.  `nwords` is the one conversion.
-        self.lw = lane_width(self.mem_dwidth, self.samp_w)
-        cur = 0
-        self._steps: list[dict] = []
-        n_load = 0
-        n_filter = 0
-        for step in self._program:
-            if step == "load":
-                nw = nwords(t, self.lw)
-                self._steps.append({"op": FirOp.LOAD_TAPS, "n": t, "nw": nw, "src": cur, "dst": 0,
-                                    "zero_state": 0, "tap_set": n_load, "blk_idx": None})
-                cur += nw
-                n_load += 1
-            elif step == "filter":
-                n = int(self.blk)
-                nw = nwords(n, self.lw)
-                src = cur
-                cur += nw
-                dst = cur
-                cur += nw
-                # Only the FIRST block starts from zeros; every later block must inherit the carry.
-                self._steps.append({"op": FirOp.FILTER, "n": n, "nw": nw, "src": src, "dst": dst,
-                                    "zero_state": 1 if n_filter == 0 else 0,
-                                    "tap_set": None, "blk_idx": n_filter})
-                n_filter += 1
-            else:
-                raise ValueError(f"unknown program step {step!r}; expected 'load' or 'filter'")
-        if n_load == 0 or n_filter == 0:
-            raise ValueError("the program needs at least one 'load' and one 'filter' step")
-        self.arena_words = cur + 16
-
-        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
-                             word_size=w, addr_size=32, nwords_tot=self.arena_words)
-        if self.platform_dir is not None:
-            from waveflow.calib.bus_model import BusCalib
-            self.mem.s_mm.bus_timing = BusCalib(self.platform_dir, clk_freq=self.clk.freq).bus_timing()
-        self.mem.alloc(int(self.mem.nwords_tot))
-        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
-        self._nwords_tot = int(self.mem.nwords_tot)
-
-        self.dut = FirBlock(name=f"{self.name}_fir", sim=self.sim, mem_dwidth=w, ntap=t,
-                            samp_w=int(self.samp_w), samp_i=int(self.samp_i),
-                            unroll_lane=bool(self.unroll_lane),
-                            compute_calib_dir=self.compute_calib_dir,
-                            platform_dir=self.platform_dir)
-        self.cmds = [FirCmd(op=int(s["op"]), src_off=s["src"], n=s["n"], dst_off=s["dst"],
-                            zero_state=s["zero_state"], tx_id=i)
-                     for i, s in enumerate(self._steps)]
-        self.cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
-
-        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
-        # s_done is framed (the in-band writer echoes the FirDesc) -- has_tlast.
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done",
-                                    has_tlast=True)
-
-        for c in (self.dut, self.driver, self.done_sink, self.mem):
+        parts = wire_fir_block(self.sim, name=self.name, program=self.program, blk=self.blk,
+                               ntap=int(self.ntap), samp_w=int(self.samp_w),
+                               samp_i=int(self.samp_i), unroll_lane=bool(self.unroll_lane),
+                               mem_dwidth=int(self.mem_dwidth), clk=self.clk,
+                               compute_calib_dir=self.compute_calib_dir,
+                               platform_dir=self.platform_dir)
+        for k in ("samp_cls", "_program", "lw", "_steps", "arena_words", "mem", "_nwords_tot",
+                  "dut", "cmds", "cmd_words", "driver", "done_sink"):
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        # depth 16: a FirCmd frame is 6 words and the driver presents it in one burst.  A testbench
-        # channel, so the depth is a pysim modelling choice (PR #185).
-        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w,
-                          depth=16)
-        cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
-        cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
-        self.add_if(cmd_if)
 
-        done_if = StreamIF(name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        done_if.bind(ep_name="master", endpoint=self.dut.s_done)
-        done_if.bind(ep_name="slave", endpoint=self.done_sink.stream_ep)
-        self.add_if(done_if)
+def wire_fir_block(sim, *, name: str = "tb", program=DEFAULT_PROGRAM, blk: int = DEFAULT_BLK,
+                   ntap: int = DEFAULT_NTAP, samp_w: int = DEFAULT_SAMP_W,
+                   samp_i: int = DEFAULT_SAMP_I, unroll_lane: bool = False,
+                   mem_dwidth: int = MEM_DW, clk: "Clock | None" = None,
+                   compute_calib_dir: "str | None" = None,
+                   platform_dir: "str | None" = None) -> SimpleNamespace:
+    """The :class:`FirBlock` kernel and its testbench participants, built on *sim* and wired: a
+    driver on ``s_cmd`` playing *program* (``"load"`` / ``"filter"`` steps), a sink on ``s_done``,
+    one shared arena behind both ``m_axi`` bundles (a 2-master crossbar models their contention in
+    pysim).  The one wiring both forms use -- :func:`fir_block_system` (``HwSystem(sim, dut)``) and
+    :class:`FirBlockTB` (the composite the calibration tools and the kernel-flow testbench walk).
 
-        xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
-                               nports_master=2, nports_slave=1, bitwidth=w)
-        xbar.bind("master_0", self.dut.m_in)           # gmem0 read (taps, blocks)
-        xbar.bind("master_1", self.dut.m_out)          # gmem1 write (y)
-        xbar.bind("slave_0", self.mem.s_mm)
-        self.add_if(xbar)
-        assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * (w // 8))])
+    Returns the parts: ``dut``, ``driver``, ``done_sink``, ``mem``, ``xbar``, ``comps`` / ``ifs``
+    (in the order a composite registers them), the arena layout (``_steps``, ``lw``,
+    ``arena_words``, ``_nwords_tot``), ``cmds`` / ``cmd_words``, and the configuration the golden
+    reads (``samp_cls``, ``_program``, ``blk``, ``ntap``, ``samp_w``, ``mem_dwidth``)."""
+    w = int(mem_dwidth)
+    t = int(ntap)
+    clk = clk if clk is not None else Clock(freq=100e6)
+    samp_cls = samp_type(samp_w, samp_i)
+    program = tuple(program)
+
+    # --- lay the arena out ------------------------------------------------------------------
+    # Offsets and region sizes are WORD coordinates; `n` on a command is a SAMPLE count.  At
+    # LW = MEM_DW//W samples per word those differ, and conflating them is how the arena and the
+    # DUT's ceil(n/LW) read length drift apart.  `nwords` is the one conversion.
+    lw = lane_width(w, samp_w)
+    cur = 0
+    steps: list[dict] = []
+    n_load = 0
+    n_filter = 0
+    for step in program:
+        if step == "load":
+            nw = nwords(t, lw)
+            steps.append({"op": FirOp.LOAD_TAPS, "n": t, "nw": nw, "src": cur, "dst": 0,
+                          "zero_state": 0, "tap_set": n_load, "blk_idx": None})
+            cur += nw
+            n_load += 1
+        elif step == "filter":
+            n = int(blk)
+            nw = nwords(n, lw)
+            src = cur
+            cur += nw
+            dst = cur
+            cur += nw
+            # Only the FIRST block starts from zeros; every later block must inherit the carry.
+            steps.append({"op": FirOp.FILTER, "n": n, "nw": nw, "src": src, "dst": dst,
+                          "zero_state": 1 if n_filter == 0 else 0,
+                          "tap_set": None, "blk_idx": n_filter})
+            n_filter += 1
+        else:
+            raise ValueError(f"unknown program step {step!r}; expected 'load' or 'filter'")
+    if n_load == 0 or n_filter == 0:
+        raise ValueError("the program needs at least one 'load' and one 'filter' step")
+    arena_words = cur + 16
+
+    mem = MemoryMod(name=f"{name}_mem", sim=sim, inline=False, clk=clk,
+                    word_size=w, addr_size=32, nwords_tot=arena_words)
+    if platform_dir is not None:
+        from waveflow.calib.bus_model import BusCalib
+        mem.s_mm.bus_timing = BusCalib(platform_dir, clk_freq=clk.freq).bus_timing()
+    mem.alloc(int(mem.nwords_tot))
+    mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
+    mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
+
+    dut = FirBlock(name=f"{name}_fir", sim=sim, mem_dwidth=w, ntap=t, samp_w=int(samp_w),
+                   samp_i=int(samp_i), unroll_lane=bool(unroll_lane),
+                   compute_calib_dir=compute_calib_dir, platform_dir=platform_dir)
+    cmds = [FirCmd(op=int(st["op"]), src_off=st["src"], n=st["n"], dst_off=st["dst"],
+                   zero_state=st["zero_state"], tx_id=i)
+            for i, st in enumerate(steps)]
+    cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in cmds]
+
+    driver = StreamDriver(sim=sim, bitwidth=w, in_bundle="vectors/s_cmd")
+    # s_done is framed (the in-band writer echoes the FirDesc) -- has_tlast.
+    done_sink = StreamSink(sim=sim, bitwidth=w, out_bundle="vectors/s_done", has_tlast=True)
+
+    # depth 16: a FirCmd frame is 6 words and the driver presents it in one burst.  A testbench
+    # channel, so the depth is a pysim modelling choice (PR #185).
+    cmd_if = StreamIF(name=f"{name}_cmd_if", sim=sim, clk=clk, bitwidth=w, depth=16)
+    cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
+    cmd_if.bind(ep_name="slave", endpoint=dut.s_cmd)
+
+    done_if = StreamIF(name=f"{name}_done_if", sim=sim, clk=clk, bitwidth=w)
+    done_if.bind(ep_name="master", endpoint=dut.s_done)
+    done_if.bind(ep_name="slave", endpoint=done_sink.stream_ep)
+
+    xbar = AXIMMCrossBarIF(name=f"{name}_xbar", sim=sim, clk=clk,
+                           nports_master=2, nports_slave=1, bitwidth=w)
+    xbar.bind("master_0", dut.m_in)           # gmem0 read (taps, blocks)
+    xbar.bind("master_1", dut.m_out)          # gmem1 write (y)
+    xbar.bind("slave_0", mem.s_mm)
+    assign_address_ranges([mem.s_mm], [(0, arena_words * (w // 8))])
+    return SimpleNamespace(dut=dut, driver=driver, done_sink=done_sink, mem=mem, xbar=xbar,
+                           comps=(dut, driver, done_sink, mem), ifs=(cmd_if, done_if, xbar),
+                           samp_cls=samp_cls, _program=program, lw=lw, _steps=steps,
+                           arena_words=arena_words, _nwords_tot=int(mem.nwords_tot), cmds=cmds,
+                           cmd_words=cmd_words, blk=int(blk), ntap=t, samp_w=int(samp_w),
+                           mem_dwidth=w)
 
 
 class FirBlockSim:
@@ -215,6 +243,15 @@ class FirBlockSim:
                              n_cycles=int(n_cycles),
                              compute_calib_dir=compute_calib_dir, platform_dir=platform_dir)
         self.expected: list[tuple[int, np.ndarray]] = []
+
+    @classmethod
+    def on(cls, parts) -> "FirBlockSim":
+        """The procedure around parts already built (:func:`wire_fir_block`'s) rather than a
+        :class:`FirBlockTB` of its own: what :func:`fir_block_system` drives."""
+        self = cls.__new__(cls)
+        self.tb = parts
+        self.expected = []
+        return self
 
     # --- the golden --------------------------------------------------------------------------
 
@@ -330,27 +367,26 @@ class FirBlockSim:
         return tb.dut
 
 
-@dataclass
-class FirBlockSystem(GraphSystem):
-    """fir_block as a **system** (``plans/system_model.md`` S3e): the :class:`FirBlockTB` graph, the
-    cut the :class:`FirBlock` kernel alone.  The crossbar that models the two ``m_axi`` bundles'
-    contention in pysim is testbench, so both bundles are top ports facing the memory model."""
-
-    program: tuple = DEFAULT_PROGRAM
-    blk: int = DEFAULT_BLK
-
-    def graph(self) -> FirBlockTB:
-        self.runner = FirBlockSim(program=tuple(self.program), blk=int(self.blk), name="xsi_tb")
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        self.runner.write_scenario(root)
-
-    def check(self) -> FirBlock:
-        return self.runner.check()
+def fir_block_system(program=DEFAULT_PROGRAM, blk: int = DEFAULT_BLK,
+                     n_cycles: int = 8000) -> HwSystem:
+    """fir_block as a **system**, ``HwSystem(sim, dut)``: the kernel and its testbench built on one
+    simulation (:func:`wire_fir_block`), the DUT the :class:`FirBlock` kernel alone.  The crossbar
+    that models the two ``m_axi`` bundles' contention in pysim is testbench, so both bundles are top
+    ports facing the memory model.  The scenario and the golden are :class:`FirBlockSim`'s;
+    ``run()`` returns the kernel after the check.  The parts are attributes of the system
+    (``sysm.kernel``, ``sysm.driver``, ``sysm.done_sink``, ``sysm.mem``, ``sysm.xbar``)."""
+    sim = Simulation()
+    parts = wire_fir_block(sim, name="xsi_tb", program=program, blk=blk)
+    runner = FirBlockSim.on(parts)
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: fir_block_system(program, blk, n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(parts.mem_dwidth)
+    sysm.program, sysm.blk, sysm.runner = tuple(program), int(blk), runner
+    sysm.kernel, sysm.driver, sysm.done_sink = parts.dut, parts.driver, parts.done_sink
+    sysm.mem, sysm.xbar = parts.mem, parts.xbar
+    return sysm
 
 
 def run_and_check() -> bool:

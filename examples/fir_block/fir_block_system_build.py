@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from examples.fir_block.fir_block_build import check_xsi_outputs
-from examples.fir_block.fir_block_sim import FirBlockSystem
+from examples.fir_block.fir_block_sim import fir_block_system
+from waveflow.hw.hw_system import HwSystem
 from waveflow.build.build import BuildDag
 from waveflow.build.system_dag import add_system_steps
 
@@ -23,9 +24,9 @@ TOP = "fir_block_system"
 WORK_DIR = "xsi_work"
 
 
-def system() -> FirBlockSystem:
+def system() -> HwSystem:
     """The kernel gate's program: LOAD_TAPS -> FILTER x2 -> LOAD_TAPS -> FILTER."""
-    return FirBlockSystem()
+    return fir_block_system()
 
 
 def build_dag(work_dir=WORK_DIR) -> BuildDag:

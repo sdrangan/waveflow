@@ -141,15 +141,20 @@ it, dropping the load's completion would look like a pass.
 
 ## The testbench is a graph
 
-`FirBlockTB` is a `FreeRunMod` composite, not a script: a `StreamDriver` on `s_cmd`, a `StreamSink` on
-`s_done`, one `MemoryMod` arena behind both `m_axi` bundles via a crossbar, and the DUT.
+The testbench is a graph, not a script: `wire_fir_block(sim, ...)` builds a `StreamDriver` on `s_cmd`,
+a `StreamSink` on `s_done`, one `MemoryMod` arena behind both `m_axi` bundles via a crossbar, and the
+DUT, on one simulation.
 
 ```python
 xbar = AXIMMCrossBarIF(..., nports_master=2, nports_slave=1, bitwidth=w)
-xbar.bind("master_0", self.dut.m_in)           # gmem0 read (taps, blocks)
-xbar.bind("master_1", self.dut.m_out)          # gmem1 write (y)
-xbar.bind("slave_0", self.mem.s_mm)
+xbar.bind("master_0", dut.m_in)           # gmem0 read (taps, blocks)
+xbar.bind("master_1", dut.m_out)          # gmem1 write (y)
+xbar.bind("slave_0", mem.s_mm)
 ```
+
+The [system](./rtlsim.md#the-system-the-testbench-graph-cut-at-the-kernel) names the kernel in it as
+the DUT. `FirBlockTB` registers the same parts as the children of one `FreeRunMod` composite, the form
+`FirBlockSim` and the calibration tools run.
 
 Being a walkable graph is what lets the *same structure* generate the XSI harness — see
 [RTL simulation](./rtlsim.md). One statement, two backends: pysim builds the graph and runs it, and the
