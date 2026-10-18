@@ -22,7 +22,7 @@ Each row's objectives are only what it adds over the rows above it.
 | 2 | **stream_kernel** | one free-running kernel on streams; the command-response protocol (status stream, fatal errors); golden from intents; framed ports; `run_iter`; the HLS body with lane routines; the harness; the system flow to `compare`; timed phases calibrated in the harness; then behind AXI-MM with a host, its timing composed | `HwSystem` / `harness` |
 | 3 | **block_eq** | a composite: partitioning into stages that run concurrently; `StreamBroadcast`; internal framed links and their depth; one body alone and in the composite (`KernelTask(framed=)`); each stage verified in its own harness, then the whole | `harness` |
 | 4 | **memcpy** | memory: a kernel that masters `m_axi` through `MemRStream` / `MemWStream`; a memory model in the testbench; adaptors whose timing ships pre-fit | `HwSystem` (`mem_copy_system()`) |
-| 5 | **interleaver** | on-chip storage (blocks of BRAM, stream-of-blocks) between stages; a real compute stage; fitting a custom stage's own timing model | `GraphSystem` -- migrate |
+| 5 | **interleaver** | on-chip storage (blocks of BRAM, stream-of-blocks) between stages; a real compute stage; fitting a custom stage's own timing model | `HwSystem` (`interleaver_inband_system()`) |
 | 6 | **fir_block** | state across firings (`add_state`): coefficients loaded once, a tail carried between blocks; fixed point; a four-module composite | `GraphSystem` -- migrate |
 | 7 | **bram_access** | memory outside the Vitis kernel: hand-written Verilog (`rtl_module`) joined by a generated wrapper; a true-dual-port memory shared by two tasks | `GraphSystem` -- migrate |
 | 8 | **mm_fir** | a kernel reached over the bus by a host program: a register bank and queues behind one adaptor, the crossbar; ordering a config against the data it applies to (a config id in-band); one front vs a slot per view | `HwSystem` |
@@ -60,9 +60,9 @@ between them -- the hardest rung; its blind build passes every RTL gate).
 
 ## What needs work
 
-- **`GraphSystem` -> `HwSystem(sim, dut)`**: interleaver, fir_block, bram_access, and the RF
+- **`GraphSystem` -> `HwSystem(sim, dut)`**: fir_block, bram_access, and the RF
   examples (rf_loopback, rf_shot_tx, rf_shot_rx; rf_shot_loopback has no system). One example at a
-  time; memcpy is done ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
+  time; memcpy and interleaver are done ([below](#graphsystem---hwsystemsim-dut-2026-10-18)).
 - **vecmult**: its verification is csim, the legacy rung. Either move it to the system flow or present
   it only as the resource-model example (its own summary already says the arithmetic is beside the point).
 - **stream_kernel / mm_fir overlap**: stream_kernel's *Behind AXI-MM* page already introduces a device
@@ -153,3 +153,4 @@ re-run on fresh RTL (Vitis/Vivado 2025.1).
 | example | pysim (before = after) | RTL (before = after) |
 |---|---|---|
 | memcpy | 16 completions, last at 2361 cycles; scenario + recordings hash identical | 2908 (`test_mem_copy_system_xsi`, `test_mem_copy_unit_xsi`) |
+| interleaver | 12 completions, last at 1110 cycles; hash identical | 1300 (`test_interleaver_inband_xsi`) |
