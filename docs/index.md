@@ -31,7 +31,7 @@ notebooks, HDL fragments, and build glue.
 - **[Overview](./overview/)** — the motivation, what makes Waveflow different, and the flow
 - **[Project status](./overview/status.md)** — what works today, what's next, and the first integrated milestone
 - **[Installation](./guide/installation/)** — install Waveflow from source
-- **[Guide](./guide/)** — systems first: what a Waveflow system is, how to build one module by module, and the references beneath it
+- **[Guide](./guide/)** — systems first: the [Flow Overview](./guide/systems/index.md) builds one system a page per step (the DUT, pysim, RTL simulation, verification, calibration, exploration), module by module, with the references beneath it
 - **[Examples](./examples/)** — worked designs, starting with [a free-running polynomial](./examples/stream_kernel/): the command-response kernel, its harness, its calibrated timing, and the same kernel behind AXI-MM
 
 ## People
