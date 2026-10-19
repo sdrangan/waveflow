@@ -59,8 +59,8 @@ static void panel(
     acc_t acc_r[R][C], acc_i[R][C], sh_r[R][C], sh_i[R][C];
     a_t ax_r[R][C], ax_i[R][C];
     ba_t bx_r[R][C], bx_i[R][C];
-    bool fl[R][C];
-    int qpe[R][C];  // the tile an element is on (its latch count)
+    bool fl[R][C], pv[R][C];  // the first flag, and "start from the store" (a later panel's tile)
+    ap_uint<8> qt[R][C];      // the tile the flag starts, riding along the row with it
 #pragma HLS ARRAY_PARTITION variable = acc_r complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = acc_i complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = sh_r complete dim = 0
@@ -70,9 +70,13 @@ static void panel(
 #pragma HLS ARRAY_PARTITION variable = bx_r complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = bx_i complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = fl complete dim = 0
-#pragma HLS ARRAY_PARTITION variable = qpe complete dim = 0
-    // the edges: row i at (tile qr, step kr, row tile rtr); column j at (tile qc, step kc, col tile ctc)
-    int kr[R], qr[R], rtr[R], ctr[R], kc[C], qc[C], ctc[C];
+#pragma HLS ARRAY_PARTITION variable = pv complete dim = 0
+#pragma HLS ARRAY_PARTITION variable = qt complete dim = 0
+    // the edges: row i at (tile qr, step kr, row tile rtr); column j at (tile qc, step kc, col tile ctc).
+    // Narrow counters: each is at most a few hundred, and a 32-bit int costs a select, an adder and a
+    // comparator of 32 bits per counter per cycle.
+    typedef ap_uint<10> cnt_t;
+    cnt_t kr[R], qr[R], rtr[R], ctr[R], kc[C], qc[C], ctc[C];
 #pragma HLS ARRAY_PARTITION variable = kr complete
 #pragma HLS ARRAY_PARTITION variable = qr complete
 #pragma HLS ARRAY_PARTITION variable = rtr complete
@@ -93,7 +97,8 @@ static void panel(
             bx_r[i][j] = 0;
             bx_i[i][j] = 0;
             fl[i][j] = false;
-            qpe[i][j] = -1;
+            pv[i][j] = false;
+            qt[i][j] = 0;
         }
         kr[i] = 0;
         qr[i] = 0;
@@ -106,7 +111,7 @@ static void panel(
         qc[j] = 0;
         ctc[j] = 0;
     }
-    int dq = 0, dn = 0, drt = 0, dct = 0, dwait = P + L;
+    cnt_t dq = 0, dn = 0, drt = 0, dct = 0, dwait = P + L;
     const int steps = T * P + imax(L + G, R + C - 1) + P;
 STEP:
     for (int t = 0; t < steps; ++t) {
@@ -154,10 +159,13 @@ STEP:
 #pragma HLS UNROLL
                 a_t ar = 0, ai = 0;
                 ba_t vr = 0, vi = 0;
-                bool f = false;
+                bool f = false, v = false;
+                ap_uint<8> q = 0;
                 if (j == 0) {
                     if (t >= i && qr[i] <= T) {
                         f = kr[i] == 0;
+                        q = qr[i];
+                        v = !first && qr[i] < T;
                         if (qr[i] < T && kr[i] < kp) {
                             wf_lanes::get<a_t, 1>(a[rtr[i] * R + i][kr[i]], 0, ar, ai);
                         }
@@ -166,6 +174,8 @@ STEP:
                     ar = ax_r[i][j - 1];
                     ai = ax_i[i][j - 1];
                     f = fl[i][j - 1];
+                    v = pv[i][j - 1];
+                    q = qt[i][j - 1];
                 }
                 if (i == 0) {
                     if (t >= j && qc[j] < T && kc[j] < kp) {
@@ -188,25 +198,21 @@ STEP:
                     pr = ar * vr - ai * vi;
                     pi = ar * vi + ai * vr;
                 }
+                // a new tile starts from zero, or from its partial sum on a later panel; one adder
+                acc_t base_r = acc_r[i][j], base_i = acc_i[i][j];
                 if (f) {
                     sh_r[i][j] = acc_r[i][j];
                     sh_i[i][j] = acc_i[i][j];
-                    const int q = qpe[i][j] + 1;  // the tile it starts
-                    acc_t base_r = 0, base_i = 0;
-                    if (!first && q < T) {
-                        base_r = accs_r[q][i][j];
-                        base_i = accs_i[q][i][j];
-                    }
-                    acc_r[i][j] = base_r + pr;
-                    acc_i[i][j] = base_i + pi;
-                    qpe[i][j] = q;
-                } else {
-                    acc_r[i][j] += pr;
-                    acc_i[i][j] += pi;
+                    base_r = v ? accs_r[q][i][j] : acc_t(0);
+                    base_i = v ? accs_i[q][i][j] : acc_t(0);
                 }
+                acc_r[i][j] = base_r + pr;
+                acc_i[i][j] = base_i + pi;
                 ax_r[i][j] = ar;
                 ax_i[i][j] = ai;
                 fl[i][j] = f;
+                pv[i][j] = v;
+                qt[i][j] = q;
                 bx_r[i][j] = vr;
                 bx_i[i][j] = vi;
             }
@@ -281,6 +287,8 @@ static void systolic_engine_core_task(
 #pragma HLS ARRAY_PARTITION variable = accs_r dim = 3 complete
 #pragma HLS ARRAY_PARTITION variable = accs_i dim = 2 complete
 #pragma HLS ARRAY_PARTITION variable = accs_i dim = 3 complete
+#pragma HLS BIND_STORAGE variable = accs_r type = ram_s2p impl = lutram
+#pragma HLS BIND_STORAGE variable = accs_i type = ram_s2p impl = lutram
     // ONE call site of the array (each would be a copy of it in hardware): per output the C block is
     // held across its panels -- written on the last, the accumulator store on the others -- and
     // every panel takes an X block and a B block (with keep_a the A loader repeats its one A).
