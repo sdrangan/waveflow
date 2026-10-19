@@ -426,6 +426,120 @@ def rtl(
             **stamp()}  # fmt: skip
 
 
+#: Where a profiled run's time goes: the first area whose path fragment a function's file contains.
+AREAS = (
+    ("SimPy core", ("/simpy/",)),
+    ("model arithmetic (matmul, CG, fixed point)",
+     ("waveflow/linalg/matmul.py", "waveflow/linalg/cg.py", "waveflow/utils/fixputils.py",
+      "waveflow/utils/complexutils.py")),
+    ("timing models (timed phases, cost models)",
+     ("waveflow/hw/timed_phase.py", "waveflow/linalg/cost.py", "waveflow/linalg/cg_cost.py",
+      "waveflow/calib/")),
+    ("unit task bodies (systolic.py, cg_vector.py)",
+     ("waveflow/linalg/systolic.py", "waveflow/linalg/cg_vector.py")),
+    ("words and schemas (lanes, headers, dataschema)",
+     ("waveflow/linalg/lanes.py", "waveflow/linalg/formats.py", "waveflow/linalg/message.py",
+      "waveflow/hw/dataschema.py", "waveflow/hw/dataunion.py", "waveflow/hw/complexfield.py",
+      "waveflow/hw/arrayutils.py", "waveflow/hw/fixpoint.py")),
+    ("stream and block interfaces", ("waveflow/hw/interface.py",)),
+    ("memory, memory streams, bench framers",
+     ("waveflow/hw/mem_stream.py", "waveflow/hw/memif.py", "waveflow/hw/memory.py",
+      "tests/linalg/_unit_bench.py", "tests/linalg/_cg_unit_bench.py",
+      "waveflow/simulation/stream_tb.py")),
+    ("Waveflow simulation framework",
+     ("waveflow/simulation/", "waveflow/hw/hw_freerun.py", "waveflow/hw/hw_module.py")),
+)  # fmt: skip
+OTHER = "other"
+
+
+def _area(filename: str) -> str | None:
+    """The area of a function by its file; ``None`` for a C built-in or a library's own Python
+    (numpy's, the standard library's): their time is charged to the code that called them.
+    """
+    if filename == "~" or filename.startswith("<"):
+        return None
+    path = filename.replace("\\", "/")
+    for name, parts in AREAS:
+        if any(part in path for part in parts):
+            return name
+    if "/site-packages/" in path or "/lib/python3" in path:
+        return None
+    return OTHER
+
+
+def _charged_to(stats: dict, func: tuple, memo: dict, stack: set) -> dict[str, float]:
+    """The areas *func*'s own time is charged to, as fractions: its own area, or -- for a built-in
+    or a library frame -- its callers' areas, in proportion to the time each call took, up the
+    chain (a cycle, or a frame with no caller, counts as ``other``)."""
+    if func in memo:
+        return memo[func]
+    area = _area(func[0])
+    if area is not None:
+        out = {area: 1.0}
+    elif func in stack or func not in stats or not stats[func][4]:
+        out = {OTHER: 1.0}
+    else:
+        weights = {c: (v[2] or v[3] or v[1]) for c, v in stats[func][4].items()}
+        total = sum(weights.values())
+        out = {}
+        stack.add(func)
+        for caller, w in weights.items():
+            for a, f in _charged_to(stats, caller, memo, stack).items():
+                out[a] = out.get(a, 0.0) + f * w / total
+        stack.discard(func)
+    memo[func] = out
+    return out
+
+
+def profile_run(fn, top: int = 10) -> dict[str, Any]:
+    """cProfile *fn*: each area's share of the run's own time, and the top functions by own time.
+
+    A C built-in's or a library's own time (numpy's, the standard library's) goes to the areas of
+    the code that called it, in proportion, so "model arithmetic" includes the numpy it runs.  cProfile's
+    overhead is larger on call-heavy code (SimPy's), so the shares are indicative; timings never
+    use it.
+    """
+    import collections
+    import cProfile
+    import pstats
+
+    prof = cProfile.Profile()
+    prof.enable()
+    fn()
+    prof.disable()
+    stats = pstats.Stats(prof).stats  # type: ignore[attr-defined]
+    total = sum(v[2] for v in stats.values())
+    shares: collections.Counter = collections.Counter()
+    memo: dict = {}
+    for func, (_cc, _nc, tt, _ct, _callers) in stats.items():
+        for area, frac in _charged_to(stats, func, memo, set()).items():
+            shares[area] += tt * frac
+    ranked = sorted(stats.items(), key=lambda kv: kv[1][2], reverse=True)[:top]
+    return {
+        "total_s": total,
+        "shares": {k: v / total for k, v in shares.most_common()},
+        "top": [{"function": f"{Path(f).name}:{line}({name})", "own_share": v[2] / total,
+                 "calls": v[1]} for (f, line, name), v in ranked],
+    }  # fmt: skip
+
+
+def profiles(block: str, n: int, seed: int = 1) -> dict[str, Any]:
+    """Where the time goes at *n* jobs: the pysim's ``run_sim`` (the timed scope) and the untimed
+    model."""
+    jobs = make_jobs(block, n, seed)
+    stim = cg_stimulus(jobs) if block == "cg" else jobs
+    sim = make_sim(block, jobs)
+    with tempfile.TemporaryDirectory() as root:
+        sim.write_scenario(Path(root))
+        pysim = profile_run(sim.tb.sim.run_sim)
+    out = {"pysim": pysim, "untimed": profile_run(lambda: untimed(block, stim)),
+           "jobs": n, **stamp()}  # fmt: skip
+    for name in ("pysim", "untimed"):
+        print(f"  profile {block} {name}: " + ", ".join(
+            f"{k} {100 * v:.0f}%" for k, v in list(out[name]["shares"].items())[:4]), flush=True)  # fmt: skip
+    return out
+
+
 def _config(block: str) -> dict[str, Any]:
     return {k: (str(v) if not isinstance(v, (int, float, str)) else v)
             for k, v in unit_config(block).items()}  # fmt: skip
@@ -444,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-load", type=float, default=1.0,
                     help="wait for a load average below this before each series")  # fmt: skip
     ap.add_argument("--rtl", action="store_true", help="also run the jobs at RTL (XSI)")
+    ap.add_argument(
+        "--profile", action="store_true", help="also profile where the time goes"
+    )
     ap.add_argument(
         "--synth", action="store_true", help="with --rtl: csynth from scratch, timed"
     )
@@ -477,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
                   f"{sum(r['build_s'].values()):.1f} s  {r['tool']}  exact={r['bits_exact']}",
                   flush=True)  # fmt: skip
             ok &= r["bits_exact"]
+        if a.profile:
+            entry["profile"] = profiles(block, sizes[-1])
         entry.setdefault("history", [])
         u, py = entry["untimed"], entry["pysim"]
         print(f"{block}: untimed {u['per_job_ms']:.3f} ms/job  pysim {py['per_job_ms']:.3f} ms/job "

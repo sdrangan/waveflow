@@ -322,21 +322,49 @@ OTHER = "other"
 
 
 def _area(filename: str) -> str | None:
-    """The area of a function by its file; ``None`` for a C built-in (charged to its callers)."""
+    """The area of a function by its file; ``None`` for a C built-in or a library's own Python
+    (numpy's, the standard library's): their time is charged to the code that called them.
+    """
     if filename == "~" or filename.startswith("<"):
         return None
     path = filename.replace("\\", "/")
     for name, parts in AREAS:
-        if any(p in path for p in parts):
+        if any(part in path for part in parts):
             return name
+    if "/site-packages/" in path or "/lib/python3" in path:
+        return None
     return OTHER
+
+
+def _charged_to(stats: dict, func: tuple, memo: dict, stack: set) -> dict[str, float]:
+    """The areas *func*'s own time is charged to, as fractions: its own area, or -- for a built-in
+    or a library frame -- its callers' areas, in proportion to the time each call took, up the
+    chain (a cycle, or a frame with no caller, counts as ``other``)."""
+    if func in memo:
+        return memo[func]
+    area = _area(func[0])
+    if area is not None:
+        out = {area: 1.0}
+    elif func in stack or func not in stats or not stats[func][4]:
+        out = {OTHER: 1.0}
+    else:
+        weights = {c: (v[2] or v[3] or v[1]) for c, v in stats[func][4].items()}
+        total = sum(weights.values())
+        out = {}
+        stack.add(func)
+        for caller, w in weights.items():
+            for a, f in _charged_to(stats, caller, memo, stack).items():
+                out[a] = out.get(a, 0.0) + f * w / total
+        stack.discard(func)
+    memo[func] = out
+    return out
 
 
 def profile_run(fn: Callable[[], Any], top: int = 10) -> dict[str, Any]:
     """cProfile *fn*: each area's share of the run's own time, and the top functions by own time.
 
-    A C built-in's own time (a numpy call, a list method) goes to the areas of the functions that
-    called it, in proportion, so "pricing" includes the numpy it runs.  cProfile's overhead is
+    A C built-in's or a library's own time (numpy's, the standard library's) goes to the areas of
+    the code that called it, in proportion, so "pricing" includes the numpy it runs.  cProfile's overhead is
     larger on call-heavy code (SimPy's), so the shares are indicative; timings never use it.
     """
     import cProfile
@@ -349,18 +377,10 @@ def profile_run(fn: Callable[[], Any], top: int = 10) -> dict[str, Any]:
     stats = pstats.Stats(prof).stats  # type: ignore[attr-defined]
     total = sum(v[2] for v in stats.values())
     shares: collections.Counter = collections.Counter()
-    for (filename, _line, _name), (_cc, _nc, tt, _ct, callers) in stats.items():
-        area = _area(filename)
-        if area is not None:
-            shares[area] += tt
-            continue
-        given = 0.0
-        for (cfile, _cl, _cn), (_c, _n, ctt, _cct) in callers.items():
-            carea = _area(cfile)
-            if carea is not None:
-                shares[carea] += ctt
-                given += ctt
-        shares[OTHER] += max(0.0, tt - given)
+    memo: dict = {}
+    for func, (_cc, _nc, tt, _ct, _callers) in stats.items():
+        for area, frac in _charged_to(stats, func, memo, set()).items():
+            shares[area] += tt * frac
     ranked = sorted(stats.items(), key=lambda kv: kv[1][2], reverse=True)[:top]
     return {
         "total_s": total,
