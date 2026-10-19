@@ -61,6 +61,39 @@ sample, because the queue in delivered a packet only when the bus burst's last w
 **cut-through** in the queue's model -- each packet begun as its first word lands -- not a number fitted to
 this system ([the record](../../../plans/unit_harness.md), Stage 2b).
 
+## One command on the bus
+
+![The same 8-sample command behind the crossbar: the bus at each view, the interrupt lines and the kernel's three streams, with latency = 24, fill_time = 7, status_time = 1 and command = 70 marked](images/mm_command.svg)
+
+This is the command from the [stream example's figure](../stream_kernel/timing.md#one-command-at-rtl)
+(8 samples), alone, behind the crossbar, from a traced RTL run (`fig_mm_`, `mm_system` on that one
+command). The bus lanes are the W and R data beats at each view's slave group. The kernel's lanes are
+the streams between the views and the kernel. Reading down the figure:
+
+1. The host sets the interrupt thresholds (the grey beats).
+2. It writes the header and then the samples into `q_in`, two bursts, each headed by its `len` word.
+3. The kernel answers on its streams.
+4. The host reads the `Resp`, then the results, then the status, each after its view's interrupt rises.
+
+The kernel's spans come from its own ports, as in the harness:
+
+- `fill_time` (7) and `status_time` (1) are the stream example's.
+- **`latency` is 24, not the record's 29.** In the harness the samples come straight after the header,
+  and two of them wait five cycles in `s_in` while the kernel writes the `Resp`. Here the samples are a
+  second bus burst and reach `s_in` six cycles after the header, when the kernel's loop is already
+  waiting. Nothing waits, and the span is the pipeline's own 24.
+
+So the record overstates `latency` by 5 cycles whenever the samples arrive after the kernel is ready.
+On this one command pysim gives 96 cycles against the RTL's 90 (+6.7%), and those 5 cycles are most
+of the miss. They are probably also part of the +1.8% and +3.5% above. The fix belongs in the
+kernel's model, not in the bus: `latency` should start when the kernel can take the first sample, not
+at the sample's handshake.
+
+The command takes 70 cycles, from the header's first bus write to the status read. The kernel's spans
+cover 32 of them (24 + 7 + 1). The 13 before are the two write bursts reaching `s_in`. The 25 after
+are the host's reads: the results after `irq_q_out`, then the status. The host arms the status
+queue's interrupt only once it has read the results.
+
 ## What this practice is
 
 A unit verified and calibrated alone, then composed: the kernel in its stream harness, the device in

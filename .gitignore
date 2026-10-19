@@ -344,6 +344,8 @@ examples/stream_kernel/include/
 examples/stream_kernel/gen/
 examples/stream_kernel/poly_kernel_proj/
 examples/stream_kernel/xsi_work/
+# the figure step renders here; docs/examples/stream_kernel{,_mm}/images/ hold the committed copies.
+examples/stream_kernel/results/
 # examples/block_eq: the bodies are src/; the rest is build output.
 examples/block_eq/include/
 examples/block_eq/gen/

@@ -52,6 +52,28 @@ and supplies the features, the RTL trace supplies the times. Measured (Vitis 202
 
 The held-out lengths are predicted exactly too.
 
+## One command at RTL
+
+![One 8-sample command at RTL: s_in, m_out and m_status beat by beat, with latency = 29, fill_time = 7 and status_time = 1 marked](images/stream_command.svg)
+
+One command of the calibration workload (its first: 8 samples) alone in the kernel's harness, from
+the traced RTL run: a box is a handshake (TVALID && TREADY), a hollow box a cycle the sender waited
+(TVALID without TREADY). The spans are drawn between the beats that bound them, and they are the fit's:
+`latency` 29, `fill_time` 7 (`nwords - 1`), `status_time` 1. The `CmdHdr` and the `Resp` are in no span.
+
+`latency` starts at the first *sample's* handshake, not when the kernel starts computing. The driver
+sends the samples straight after the header, so `s_in` takes two of them and then stalls for five
+cycles while the kernel writes the `Resp` and enters its loop. Those five cycles are inside the 29;
+the pipeline's own latency is 24. On a bus, where the samples arrive later, `latency` is 24
+([One command on the bus](../stream_kernel_mm/composition.md#one-command-on-the-bus)).
+
+The figure comes from its own traced system (`fig_`, the kernel's harness on that one command). The
+waveform is build output, so re-rendering it needs Vivado:
+
+```bash
+python -m examples.stream_kernel.stream_kernel_build --through sync_docs_figures
+```
+
 ## Filed under the kernel's identity
 
 The fit is one record in [`calib/`](../../../examples/stream_kernel/calib), filed under the kernel's
