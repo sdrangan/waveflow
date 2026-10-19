@@ -83,6 +83,9 @@ class SwFunction:
     code_bytes: int | None = None
     #: :meth:`price`'s memo: ``key -> (features, cycles, energy)``.
     _prices: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+    #: What the memo's prices were computed with -- the models and the working set themselves, held
+    #: so that a replaced one is noticed by identity (an ``id`` alone could be reused).
+    _priced_with: tuple = field(default=(), init=False, repr=False, compare=False)
 
     def features(
         self, counters: Mapping[str, float], config: CpuConfig
@@ -102,11 +105,19 @@ class SwFunction:
         configuration's cache sizes -- and of the models attached, so a point the function has
         already been priced at costs a lookup, not two model evaluations.  Control code repeats its
         points (a scheduler's counters are small integers), which is where the processor model spent
-        most of its time.  The models must not be refitted in place while the function is in use.
+        most of its time.  Replacing ``cycles``, ``energy_pj`` or ``working_set`` starts the memo
+        afresh.  Two things it cannot see: a model refitted in place, and a ``working_set`` that
+        depends on anything but the counters -- neither is allowed while the function is in use.
         The features are returned as a fresh dict, as :meth:`features` returns them.
         """
+        used = (self.cycles, self.energy_pj, self.working_set)
+        if len(used) != len(self._priced_with) or any(
+            a is not b for a, b in zip(used, self._priced_with)
+        ):
+            self._prices.clear()
+            self._priced_with = used
         try:
-            key: tuple = (tuple(counters.items()), id(self.cycles), id(self.energy_pj))
+            key: tuple = (tuple(counters.items()),)
             if self.working_set is not None:
                 key += (config.l1d_bytes, config.l2_bytes)
             hit = self._prices.get(key)

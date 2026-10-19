@@ -67,3 +67,26 @@ def test_the_memo_is_bounded(monkeypatch):
     for i in range(10):
         assert f.price({"i": float(i)}, CpuConfig())[1] == 5.0
         assert len(f._prices) <= 3
+
+
+def test_replacing_a_model_or_the_working_set_starts_afresh():
+    """A memo keyed on the models' ids could hand out a replaced model's price when the new model
+    reuses the old one's address; the memo holds what it priced with, and starts afresh on a change
+    (the independent review of plans/sim_speed_cpu_linalg.md, finding 1)."""
+    import gc
+
+    plat = CpuPlatform.load()
+    f = _sched_add()
+    cfg = CpuConfig()
+    cnt = {"n_tasks": 4.0, "n_scanned": 3.0, "n_moved": 1.0}
+    stale = 0
+    for i in range(60):
+        fam = ("sched_ops.add", "sched_ops.delete", "sched_ops.reprio")[i % 3]
+        f.cycles = plat.model(fam, "cycles")  # a fresh model object each time
+        gc.collect()
+        stale += f.price(cnt, cfg)[1] != eval_cycles(f.cycles, f.features(cnt, cfg))
+    assert stale == 0
+    f.working_set = lambda c: 1e9
+    assert f.price(cnt, cfg)[0]["ws"] == 1e9
+    f.energy_pj = None
+    assert f.price(cnt, cfg)[2] is None
