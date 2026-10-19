@@ -28,6 +28,13 @@ Nothing downstream can see an answer before the processor could have produced it
 Timing is never charged twice: bus and memory-mapped traffic a task issues goes through the
 ``MMIFMaster`` it holds and is timed by the bus model, outside the task.  A task that talks to
 hardware is split at each interaction — one ``execute`` per stretch of pure computation.
+
+NO PROCESS PER TASK.  A core's segment -- the switch and the compute of one task -- is one timeout
+with a callback, not a spawned SimPy process: a process costs an object, a generator and two more
+events (its start, and its end that nothing waits on) for every call.  The segment still begins where
+a process's first step would run -- an event at this instant ahead of every normal one, as SimPy's
+``Initialize`` -- so bodies run in the same order; a preemption is delivered the same way, as SimPy's
+``Interruption``, and a segment that has already ended ignores it.
 """
 
 from __future__ import annotations
@@ -36,10 +43,12 @@ import bisect
 import heapq
 import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import simpy
+from simpy.events import URGENT
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig
 from waveflow.cpu.report import CpuReport, build_report
@@ -70,6 +79,23 @@ class _Task:
     queued: bool = True
 
 
+class _Now(simpy.Event):
+    """An event that fires at this instant, ahead of every normal event of it, and calls *callback*.
+
+    What SimPy schedules to start a process (``Initialize``) or to interrupt one (``Interruption``),
+    without the process: the initialization is inlined from ``Event.__init__``, as ``Initialize``'s is.
+    """
+
+    def __init__(
+        self, env: simpy.Environment, callback: Callable[[simpy.Event], None]
+    ) -> None:
+        self.env = env
+        self.callbacks = [callback]
+        self._value = None
+        self._ok = True
+        env.schedule(self, URGENT)
+
+
 @dataclass(eq=False)
 class _Core:
     """A core token: what it runs, whose context it holds (for the switch charge), what waits on it."""
@@ -78,7 +104,11 @@ class _Core:
     #: The owner whose context the core holds; ``None`` after a switch cut short (no one's).
     last_owner: object = None
     running: _Task | None = None
-    proc: simpy.Process | None = None
+    #: The running segment's pending event -- its start, then its timeout -- or ``None`` when idle.
+    #: A timeout that is no longer this is stale (its segment was preempted) and is ignored.
+    seg: simpy.Event | None = None
+    #: Counts the segments started on this core: a preemption names the segment it was sent to.
+    seg_id: int = 0
     #: When the running segment's compute (after its switch) begins.
     work_start: float = 0.0
     seg_start: float = 0.0
@@ -197,9 +227,7 @@ class Processor(SimObj):
         victim = None
         for core in self._cores:
             run = core.running
-            if run is None or core.preempt_pending or core.proc is None:
-                continue
-            if not core.proc.is_alive:
+            if run is None or core.preempt_pending or core.seg is None:
                 continue
             if victim is None or (run.prio, run.seq) > (
                 victim.running.prio,  # type: ignore[union-attr]
@@ -217,7 +245,17 @@ class Processor(SimObj):
             # preemption is delivered.
             task.queued = False
             victim.irq_pending = task
-        victim.proc.interrupt("preempt")  # type: ignore[union-attr]
+        seg_id, running = victim.seg_id, victim.running
+        _Now(self.env, lambda _ev: self._deliver(victim, running, seg_id))
+
+    def _deliver(self, core: _Core, task: _Task, seg_id: int) -> None:
+        """A preemption reaches *core*'s segment *seg_id* (of *task*), as an ``Interruption`` reaches
+        a process; a segment that has ended since is left alone, as a dead process is.
+        """
+        if core.seg_id != seg_id or core.running is not task or core.seg is None:
+            return
+        core.seg = None  # its timeout is now stale
+        self._preempted(core, task)
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -247,10 +285,12 @@ class Processor(SimObj):
     def _start(self, core: _Core, task: _Task) -> None:
         task.queued = False
         core.running = task
-        core.proc = self.env.process(self._segment(core, task))
+        core.seg_id += 1
+        core.seg = _Now(self.env, lambda _ev: self._begin(core, task))
 
-    def _segment(self, core: _Core, task: _Task) -> ProcessGen[None]:
-        """Hold *core* for *task*'s switch and remaining compute, then finish the task."""
+    def _begin(self, core: _Core, task: _Task) -> None:
+        """Hold *core* for *task*'s switch and remaining compute: run the body if this is the task's
+        first segment, then one timeout, whose end (:meth:`_end`) finishes the task."""
         cfg = self.config
         rec = task.rec
         env = self.env
@@ -272,12 +312,15 @@ class Processor(SimObj):
         core.seg_start = now
         core.seg_switch = switch
         core.work_start = now + switch * cfg.period
-        try:
-            yield env.timeout((switch + task.left) * cfg.period)
-        except simpy.Interrupt:
-            self._preempted(core, task)
+        ev = env.timeout((switch + task.left) * cfg.period)
+        ev.callbacks.append(lambda _ev: self._end(core, task, ev))
+        core.seg = ev
+
+    def _end(self, core: _Core, task: _Task, ev: simpy.Event) -> None:
+        """*task*'s segment ran to its end: finish the task -- unless it was preempted meanwhile."""
+        if core.seg is not ev:
             return
-        rec.switch_cycles += switch
+        task.rec.switch_cycles += core.seg_switch
         task.left = 0.0
         self._complete(core, task)
         self._release(core)
@@ -353,7 +396,7 @@ class Processor(SimObj):
 
     def _release(self, core: _Core) -> None:
         core.running = None
-        core.proc = None
+        core.seg = None
         core.preempt_pending = False
         if (
             core.resume
