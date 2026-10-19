@@ -262,12 +262,18 @@ class TimedPhase:
         ep = start.ep
         log = ep.xfer_log
         used = self._used.get(ep.name, -1)
-        if not log or log[-1][0] <= used:
+        held = getattr(ep, "open_block", None)
+        if start.edge == "first" and held is not None and held[0] > used:
+            # A block the body holds now (acquired, not yet released): the span runs from its
+            # acquire -- the work on a block cannot start before the block is there.
+            index, first, last, _n, stalled = (*held, None, 1, False)
+        elif not log or log[-1][0] <= used:
             raise RuntimeError(
                 f"phase {self.name!r}: span {span!r} starts at {start!r}, but '{ep.name}' has no "
                 f"transfer since this phase last ran -- the body must complete a transfer on "
                 f"'{ep.name}' before timeout()")
-        index, first, last, _n, stalled = log[-1]
+        else:
+            index, first, last, _n, stalled = log[-1]
         self._used[ep.name] = index
         t_start = first if start.edge == "first" else last
         per = self._period(ep)

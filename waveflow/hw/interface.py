@@ -2146,13 +2146,62 @@ class FramedStreamIFMaster(StreamIFMaster):
 # second buffer while the consumer still holds (random-reads) the first.
 
 
+class _BlockEvents:
+    """Declared timing on one end of a :class:`StreamOfBlocksIF` (``plans/systolic_characterization.md``,
+    Stage 3): a **transfer is one block**, held from its acquire (``first``) to its release
+    (``last``).  At RTL those are the end's first access to the block (``ce0``) and its lock release
+    pulse; :meth:`~waveflow.utils.trace.BoundTrace.block_events` reads them.  The log, like a stream
+    endpoint's, is kept only once a declared phase names one of the events."""
+
+    xfer_log = None
+    _timing_owner = None
+
+    @property
+    def first(self):
+        """The acquire of each block: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_first")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_first"] = TimingEvent(self, "first")
+        return ev
+
+    @property
+    def last(self):
+        """The release of each block: a :class:`~waveflow.hw.timed_phase.TimingEvent`."""
+        ev = self.__dict__.get("_ev_last")
+        if ev is None:
+            from waveflow.hw.timed_phase import TimingEvent
+            ev = self.__dict__["_ev_last"] = TimingEvent(self, "last")
+        return ev
+
+    @property
+    def open_block(self) -> tuple[int, float] | None:
+        """``(index, acquire time)`` of the block this end holds now, acquired and not yet released,
+        or ``None``: what a span that starts at :attr:`first` is measured from while the body works
+        on the block (``TimedPhase.timeout``)."""
+        t = self.__dict__.get("_t_acq")
+        return None if t is None or self.xfer_log is None else (len(self.xfer_log), t)
+
+    def _acquired(self) -> None:
+        if self.xfer_log is not None:
+            self.__dict__["_t_acq"] = self.env.now
+
+    def _released(self) -> None:
+        if self.xfer_log is None:
+            return
+        rec = (len(self.xfer_log), self.__dict__.pop("_t_acq", self.env.now), self.env.now, 1, False)
+        self.xfer_log.append(rec)
+        from waveflow.hw.timed_phase import note_transfer
+        note_transfer(self, rec)
+
+
 def _block_dtype(bitwidth: int) -> np.dtype:
     """The numpy word dtype for a SOBIF block element (uint32 for <=32-bit, else uint64)."""
     return np.dtype(np.uint32) if int(bitwidth) <= 32 else np.dtype(np.uint64)
 
 
 @dataclass
-class SobIFMaster(InterfaceEndpoint):
+class SobIFMaster(_BlockEvents, InterfaceEndpoint):
     """Producer (``write_lock``) side of a :class:`StreamOfBlocksIF`.
 
     Acquires a free block buffer, fills it (whole-block), then commits it to the
@@ -2176,15 +2225,18 @@ class SobIFMaster(InterfaceEndpoint):
         """Block until a buffer is free, then return a fresh typed block instance to fill."""
         if self.interface is None:
             raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
-        return (yield from self.interface.acquire_write())
+        blk = yield from self.interface.acquire_write()
+        self._acquired()
+        return blk
 
     def commit_write(self, block: "DataSchema") -> ProcessGen[None]:
         """Release the filled *block* to the consumer (the ``write_lock`` scope exit)."""
         yield from self.interface.commit_write(block)
+        self._released()
 
 
 @dataclass
-class SobIFSlave(InterfaceEndpoint):
+class SobIFSlave(_BlockEvents, InterfaceEndpoint):
     """Consumer (``read_lock``) side of a :class:`StreamOfBlocksIF`.
 
     Acquires the filled block, random-accesses it (``b[idx]``), then releases the
@@ -2216,11 +2268,14 @@ class SobIFSlave(InterfaceEndpoint):
         """Block until the producer commits a block, then return it for random access."""
         if self.interface is None:
             raise RuntimeError(f"{type(self).__name__} '{self.name}' is not bound to a SOBIF")
-        return (yield from self.interface.acquire_read())
+        blk = yield from self.interface.acquire_read()
+        self._acquired()
+        return blk
 
     def release_read(self) -> ProcessGen[None]:
         """Release the consumed buffer back to the producer (the ``read_lock`` scope exit)."""
         yield from self.interface.release_read()
+        self._released()
 
 
 @dataclass

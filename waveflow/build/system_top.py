@@ -518,7 +518,7 @@ def _rtl_of(mod, dw: int, owner=None) -> KernelRtl:
         module, ports, scalars = writer_rtl(mod)
         eps = (("s_in", mod.s_in), ("m_mem", mod.m_mem))
         return KernelRtl(module, f"u_{mod.name}", ports, scalars, eps, hw=mod, owner=owner)
-    from waveflow.hw.hw_module import _hw_param_names, kernel_name
+    from waveflow.hw.hw_module import build_params, kernel_name
 
     name = kernel_name(mod)
     if not name:
@@ -526,8 +526,7 @@ def _rtl_of(mod, dw: int, owner=None) -> KernelRtl:
                             f"csynth'd module (cpp_kernel_name)")
     # The instance's own build parameters, so the spec (and a wrapper's memory sizes) is the one its
     # csynth top was elaborated with, not the class defaults.
-    fresh = type(mod)(name=name, sim=Simulation(),
-                      **{n: getattr(mod, n) for n in sorted(_hw_param_names(type(mod)))})
+    fresh = type(mod)(name=name, sim=Simulation(), **build_params(mod))
     spec = composite_top_spec(fresh, width=dw)
     eps = tuple(_unpack_boundary(e) for e in mod.boundary)
     if not getattr(fresh, "rtl_mods", None):

@@ -120,6 +120,15 @@ def _hw_param_names(comp_class) -> set[str]:
     return names
 
 
+def build_params(module) -> dict[str, Any]:
+    """What a fresh copy of *module* (an instance) is built with -- the harness's DUT, a system's
+    csynth spec: its ``HwParam`` fields, and the fields its class names in ``build_fields`` (build
+    inputs that are not template parameters, such as an operand's fixed-point ``Format``)."""
+    cls = type(module)
+    names = sorted(_hw_param_names(cls)) + list(getattr(cls, "build_fields", ()) or ())
+    return {n: getattr(module, n) for n in names}
+
+
 def _dyn_param_names(cls) -> set[str]:
     """Return the set of ``DynParam``-annotated field names on *cls* (mirrors ``_hw_param_names``)."""
     names: set[str] = set()

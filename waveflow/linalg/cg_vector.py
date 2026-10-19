@@ -684,7 +684,11 @@ class CgVectorUnit(FreeRunMod):
             self.add_comp(comp)
         w = int(self.word_bits)
         self._stream("pay", self.rx.s_pay, self.load.s_in, w, framed=True)
-        self._stream("reply", self.rx.store_cmd, self.store.cmd_in, w, framed=True)
+        # Two reply headers deep, as SystolicUnit's (plans/systolic_characterization.md, Stage 0): the
+        # store holds a header for its whole firing, and with the 2-word default the receiver blocks
+        # on the next header's last word, so load(n+1) waits for store(n).
+        self._stream("reply", self.rx.store_cmd, self.store.cmd_in, w, framed=True,
+                     depth=2 * self.header_words)
         self._stream("lcmd", self.rx.load_cmd, self.load.cmd_in, CMD_BITS)
         self._stream("ccmd", self.rx.core_cmd, self.core.cmd_in, CMD_BITS)
         self._blocks("b", self.load.b_blk, self.core.b_blk)
@@ -696,8 +700,11 @@ class CgVectorUnit(FreeRunMod):
         self.s_out = self.store.s_out
         self.extra_includes = ["hls_streamofblocks.h"]
 
-    def _stream(self, name, master, slave, bits: int, framed: bool = False) -> None:
+    def _stream(self, name, master, slave, bits: int, framed: bool = False,
+                depth: int | None = None) -> None:
         kw = {"framed": True} if framed else {}
+        if depth is not None:
+            kw["depth"] = depth
         iface = StreamIF(
             name=f"{self.name}_{name}_if",
             sim=self.sim,

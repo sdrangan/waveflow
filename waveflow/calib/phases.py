@@ -88,6 +88,47 @@ def rtl_xfers(vcd_path, module, scope: str) -> dict[str, list[tuple]]:
     return out
 
 
+def internal_xfers(bound, module, kernel) -> dict[str, list[tuple]]:
+    """Each timed endpoint's transfers for *module*, a task **inside** the csynth'd *kernel* (its
+    endpoints are the kernel's internal channels, not ports), from *bound* -- the kernel top's trace
+    manifest bound to the run's VCD at the kernel's scope (:func:`~waveflow.utils.trace.load_trace`).
+    Rows as :func:`rtl_xfers`'s: ``(index, first, last, nwords, stalled)`` in cycles.
+
+    A FIFO end is framed by the word counts pysim logged on the same endpoint (an internal FIFO has no
+    TLAST net of its own); a stream-of-blocks end is a transfer per block: its first access and its
+    release.  ``stalled``: a block commit the reader held (:meth:`~waveflow.utils.trace.BoundTrace.block_events`);
+    a FIFO end is never marked here -- pysim's flag (a span longer than its prediction) covers it."""
+    from waveflow.build.composite_gen import _edge_name
+
+    where: dict[int, tuple[str, str]] = {}
+    for iface in [p for i in kernel.interfaces.values() for p in i.physical_interfaces()]:
+        for role, side in (("master", "write"), ("slave", "read")):
+            ep = iface.endpoints.get(role)
+            if ep is not None:
+                where[id(ep)] = (_edge_name(kernel, iface), side)
+    out: dict[str, list[tuple]] = {}
+    for ep_name, (ep, _attr) in timed_ports(module).items():
+        if id(ep) not in where:
+            raise ValueError(f"'{module.name}': endpoint '{ep_name}' is on no internal channel of "
+                             f"'{kernel.name}', so it has no RTL nets to read")
+        ch, side = where[id(ep)]
+        if bound.channel(ch)["kind"] == "sob":
+            out[ep_name] = [(k, float(a), float(r), 1, held)
+                            for k, (a, r, held) in enumerate(bound.block_events(ch, side))]
+            continue
+        beats = [int(b) for b in bound.fifo_beats(ch, side)]
+        counts = [r[3] for r in ep.xfer_log or []]
+        if sum(counts) != len(beats):
+            raise ValueError(f"'{module.name}': pysim logged {sum(counts)} words on '{ep_name}', the "
+                             f"trace has {len(beats)} on channel '{ch}' -- the runs differ")
+        rows, i = [], 0
+        for k, n in enumerate(counts):
+            rows.append((k, float(beats[i]), float(beats[i + n - 1]), int(n), False))
+            i += n
+        out[ep_name] = rows
+    return out
+
+
 def _frame_by_counts(bursts, counts: list[int], hold: int, what: str) -> list[tuple]:
     """The rows of an unframed channel (one burst of every accepted beat, ``walk_handshake_bursts``)
     split into transfers of *counts* words, in order: ``(index, first, last, nwords, stalled)``, the

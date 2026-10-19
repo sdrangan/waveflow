@@ -32,7 +32,9 @@ from waveflow.utils.vcd import (
 #: a broken binding.  ``tlast``: a plain ``hls::stream<ap_uint<W> >`` boundary port has no TLAST
 #: wire (mem_copy's ``s_cmd``).  The AXI burst signals: absent on an AXI4-Lite bundle.
 _OPTIONAL = frozenset({"tlast", "AWLEN", "WLAST", "ARLEN", "RLAST", "BVALID", "BREADY",
-                       "level", "cap"})
+                       "level", "cap",
+                       # a stream_of_blocks channel's lock nets: block_events() refuses when absent
+                       "blk_release", "blk_ce0", "blk_full_n", "blk_empty_n"})
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,54 @@ class BoundTrace:
         return ComponentView(inst=task["inst"], id=task["id"],
                              inputs=inputs, outputs=outputs, boundary=boundary)
 
+    def _sampled(self, bare: str) -> np.ndarray:
+        """A resolved net sampled once a cycle on the clock grid."""
+        n = self.resolved[bare]
+        self.parser.sig_info[n].get_values()
+        return np.asarray(resample_signal(self.parser.sig_info[n], self._grid()))
+
+    def fifo_beats(self, name: str, side: str) -> np.ndarray:
+        """Cycles at which one end of an internal FIFO channel moved a word: ``read`` with
+        ``empty_n`` (the consumer took one), or ``write`` with ``full_n`` (the producer offered one
+        and it was taken)."""
+        ch = self.channel(name)
+        if ch["kind"] == "sob":
+            raise ValueError(f"channel {name!r} is a stream_of_blocks; use block_events()")
+        sig = ch[side]
+        return (self._handshakes(sig["empty_n"], sig["read"]) if side == "read"
+                else self._handshakes(sig["full_n"], sig["write"]))
+
+    def block_events(self, name: str, side: str) -> list[tuple[int, int, bool]]:
+        """One end of a stream_of_blocks channel, a block at a time: ``(first access, release,
+        held)`` in cycles -- the task's first ``ce0`` on its block after its previous release, the
+        cycle of its release pulse (``write``: the writer commits the block; ``read``: the reader
+        frees it), and whether the other side held the release.
+
+        *held* is the writer's case: the buffer (Vitis 2025.1) drops ``i_full_n`` once one block is
+        committed and not yet freed, and a commit waits for ``i_full_n`` -- so a writer may fill the
+        next block while the reader holds the last, but releases it only after the reader's release.
+        A commit with ``i_full_n`` low the cycle before it waited for the reader.  A block released
+        with no access in between (an empty one) has ``first == release``."""
+        ch = self.channel(name)
+        if ch["kind"] != "sob":
+            raise ValueError(f"channel {name!r} is a FIFO; use fifo_beats()")
+        sig = ch.get(side, {})
+        if sig.get("blk_release") not in self.resolved or sig.get("blk_ce0") not in self.resolved:
+            raise TraceBindError(f"channel {name!r}: no {side}-side lock nets in this trace "
+                                 f"(manifest {sig or '{}'}); block events need a level-1 dump of "
+                                 f"the kernel's top")
+        rel = np.nonzero(self._sampled(sig["blk_release"]) != 0)[0]
+        ce = np.nonzero(self._sampled(sig["blk_ce0"]) != 0)[0]
+        full = (self._sampled(sig["blk_full_n"]) if side == "write" and
+                sig.get("blk_full_n") in self.resolved else None)
+        out, prev = [], -1
+        for r in rel:
+            acc = ce[(ce > prev) & (ce <= r)]
+            held = bool(full is not None and r > 0 and full[r - 1] == 0)
+            out.append((int(acc[0]) if len(acc) else int(r), int(r), held))
+            prev = int(r)
+        return out
+
     def _handshakes(self, valid: str, ready: str) -> np.ndarray:
         """Cycle indices where a valid/ready pair fires."""
         def _s(bare):
@@ -331,7 +381,8 @@ class BoundTrace:
         return np.nonzero((v[1:] != 0) & (v[:-1] == 0))[0] + 1
 
 
-def load_trace(manifest: dict | str | Path, vcd_path: str | Path) -> BoundTrace:
+def load_trace(manifest: dict | str | Path, vcd_path: str | Path,
+               scope: str | None = None) -> BoundTrace:
     """Resolve *manifest* against the VCD at *vcd_path*.
 
     Parameters
@@ -340,6 +391,10 @@ def load_trace(manifest: dict | str | Path, vcd_path: str | Path) -> BoundTrace:
         A manifest dict, or a path to the JSON emitted at build time.
     vcd_path : str | Path
         The waveform, as written by a ``vcd_dumper`` top.
+    scope : str, optional
+        The dotted VCD scope of the top's own nets -- for a kernel inside a system top, the
+        instance path (``systolic_unit_sys.u_systolic_unit_sub.u_systolic_unit``).  Default: the
+        manifest's top.
 
     Raises
     ------
@@ -350,15 +405,18 @@ def load_trace(manifest: dict | str | Path, vcd_path: str | Path) -> BoundTrace:
         manifest = json.loads(Path(manifest).read_text(encoding="utf-8"))
 
     vcd = VCDVCD(str(vcd_path))
-    top = manifest["top"]
+    top = scope or manifest["top"]
 
     # A VCD names a vector `<scope>.<net>[hi:lo]`; index by the bare name within the top scope.
     # The suffix is not cosmetic -- SigInfo infers the signal's WIDTH from it, and a name without
     # one silently infers width 1, so the full name is what has to be added to the parser.
     by_bare: dict[str, str] = {}
+    head = top + "."
     for full in vcd.signals:
-        scope, _, rest = full.partition(".")
-        if scope != top:
+        if not full.startswith(head):
+            continue
+        rest = full[len(head):]
+        if "." in rest.split("[")[0]:      # a net of a scope below this one
             continue
         by_bare.setdefault(rest.split("[")[0], full)
 

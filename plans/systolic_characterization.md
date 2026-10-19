@@ -205,8 +205,27 @@ script (not in the repo): `<scratchpad>/fact_a/unit_harness_run.py`; builds in `
    `UnitBench`, so the memory-fed "sum of compute and transfer" (720 at 2024.1, about 759 here) is most
    likely this serialization too, not the `m_axi` pointer FIFOs. Not yet verified: a memory-fed run
    with the deeper channel settles it (Stage 4).
-8. **Two more things the trace shows**, for Stage 2: the store writes `C` at one word per 2 cycles,
-   and the core's `B` copy and sweep run inside one firing (`ccmd_read` -> `b` release 90 cycles).
+8. **Correction (after the fix below):** the "one word per 2 cycles" store output above was the
+   scratch `framed_to_axis` adapter, not the store: with the real framed port the store writes `C` at a
+   word a cycle (128 words in 128 cycles) and the reply header leaves without waiting (16, 17, 18).
+
+#### Record: the fix (2026-10-19, user: do every recommendation; 2024.1 numbers may go)
+
+D1-D6 decided as recommended. Changes:
+
+- `SystolicUnit` and `CgVectorUnit`: the `reply` channel is `2 * header_words` deep (6 at 64 bits).
+- Framework: `waveflow.hw.hw_module.build_params(module)` -- the `HwParam`s plus a class's
+  `build_fields` -- used by `harness()` and `system_top._rtl_of`; `SystolicUnit.build_fields = ("a",
+  "b", "c")`.
+- `SystolicRx.s_in` / `SystolicStore.s_out` are `FramedStreamIF*`, their `KernelTask`s mark them
+  `framed`, and the bodies take the boundary word type as a template parameter (`IN_T`, `OUT_T`);
+  `wf_linalg::drain`, `wf_store_matrix` are generic in the stream's word type, `read_header` added;
+  the traits' `*_mem` structs forward `write_boundary_lane`.
+- The RTL tests take the tool label from the csynth banner.
+
+**Stream-fed, the real unit in its own harness (no scratch fixes):** all steps ok, compare clean,
+bit-exact; **steady interval 390** (`[707, 1097, 1487, 1877]`). Per-job schedule from the trace:
+architecture page, *The schedule, measured*.
 
 **For the user:** D1-D5 as listed, and **D6 -- fix the `reply` depth in Part A?** The fix is one
 channel depth (at least `header_words`, e.g. from `request_words`' header size), declared where the unit
@@ -330,6 +349,67 @@ figure; every number names 2025.1. **Pause.**
 **Gate:** `pytest -m "not vitis and not xsi"` passes (baseline failures excepted); `pytest -m xsi
 tests/linalg` passes; every number on the new pages traces to a committed record. Part A's PR is
 ready for the user. **Pause.**
+
+#### Record: Stages 1-5 (2026-10-19), done in one pass at the user's request
+
+The user approved every recommendation (D1-D6) and allowed the 2024.1 numbers to go; the fix went in
+first. All numbers Vitis HLS / Vivado xsim 2025.1.
+
+- **Stage 1** (commit `3ff39dd8`): pages moved (`dsp/linalg_common.md`, `dsp/systolic/index.md`,
+  `dsp/cg_vector.md`), links rewritten by resolving each relative link from its old and new place,
+  DSP index lists them, `CLAUDE.md` and the docs-number test paths updated. `tests/docs` pass.
+- **The fix** (record above): `reply` depth `2 * header_words` in both linalg units.
+  - Memory-fed gates `pytest -m xsi tests/linalg --basetemp=C:/wfsc/x1`: **5 passed** (CG centre,
+    systolic centre / one_word_groups / smallest / word32), bit-exact. Centre run ends at 1,690
+    (was 2,237); job 1 at 854 (was 1,088).
+  - **Memory-fed steady interval: 390, 390, 390** (4 identical `8x8x32`, `UnitBench`) -- equal to
+    stream-fed. The 2024.1 "sum of compute and transfer" (720) was this serialization; the `m_axi`
+    pointer-FIFO explanation was wrong (Stage 0 item 7 settled).
+- **Stage 2:** `docs/guide/dsp/systolic/architecture.md` -- the four tasks and channel depths, the
+  storage table (18 BRAM18K, all in the three ping-pong buffers; the core's banks in LUTRAM and
+  registers), the `X` pre-skew and the `B` column banks, load, the level-2 tiling and the skewed sweep,
+  store, the level-1 outer loop as not built, and the measured schedule (cmd 201, `X` freed 223, `B`
+  freed 291, tile outputs every 36 cycles from 321, `C` committed 589, next cmd 591).
+  Deviation: the prediction was not written before the measurement -- the trace came first (Stage 0).
+- **Stage 3** (D2(a)):
+  - framework: `TaskInst.params`; the trace manifest gives a block channel its lock nets
+    (`blk_release`, `blk_ce0`, `blk_full_n` / `blk_empty_n`, optional roles); `load_trace(scope=)`
+    binds at a nested kernel's scope; `BoundTrace.fifo_beats` / `block_events` (a writer's commit
+    marked held when `i_full_n` was low the cycle before); `SobIFMaster` / `SobIFSlave` log blocks as
+    transfers (`first` = acquire, `last` = release); `calib.phases.internal_xfers`;
+    `calibrate_system` reads a timed task inside a kernel at the kernel's scope and skips a phase the
+    workload never exercised; the harness offers a calibration workload when any task in the tree is
+    timed.
+  - the core: phases `start` (`cmd_in.last` -> `a_blk.first`), `copy_x` (`a_blk.first` ->
+    `a_blk.last`, `ag`), `to_b` (`a_blk.last` -> `b_blk.first`), `copy_b` (`b_blk.first` ->
+    `b_blk.last`, `bg`, every B of a job), `sweep` (`b_blk.last` -> `c_blk.last`, `tiles`, `steps`);
+    pysim waits them (`timeout`), replacing `cost.core_interval`. A copy is measured from its block's
+    acquire (`timeout` from an open block, `SobIF*.open_block`): the first declaration measured from
+    the previous event, and the MIMO-CG detector -- whose core waits for the vector core's `P` -- showed
+    pysim hiding each 36-cycle copy inside the wait (`test_python_simulation_takes_the_cores_cycle_models`,
+    now START + nit (copy B + sweep + STEP), exact on its three configurations). The unit:
+    `jobs` / `workload` / `golden` / `calib_holdout = {"tiles": (3, 6)}`.
+  - harness DAG `tests/linalg/_systolic_harness.py`; tests `tests/linalg/test_systolic_harness.py`
+    (manifest, reply depth, scenarios; `-m xsi`: 4 jobs stream-fed, intervals `[390, 390, 390]`);
+    `WANT_XSI_GATES` 234 -> 235.
+- **Stage 4** (centre only; the second configuration of the plan not run -- see below):
+  `python -m tests.linalg._systolic_harness --root C:/wfsc/sh --through calib_phases`, 32 jobs, filed in
+  `waveflow/linalg/calib/` under `systolic_core-65ffc80e`, provenance `vitis 2025.1`:
+  `start = 5`, `copy_x = 1 + ag`, `to_b = 3`, `copy_b = 1 + bg` (exact, 32 rows each), `sweep = 8.3 + 18.2 tiles + 1.0 steps`
+  (23 fitted, mean 0.76, worst 1.30; 8 held out, mean 0.68, worst 0.92; 1 held -- a short job after a
+  long one waited for the store's release).
+  - **Finding:** the RTL ping-pong lets a writer commit only after the reader frees the previous
+    block (`full_n` drops at count 1); pysim's `StreamOfBlocksIF` lets it commit two. pysim is
+    optimistic when the reader is slower. Not fixed: it changes every block user's pysim timing.
+  - **Finding:** nothing in the framework sets `BuildConfig.vitis_version`, so phase records filed by
+    other builds say `"tool": "vitis"` with no release; this build sets it (`build_config`).
+  - Not done: the second configuration, the hostile-sink run (`add_robustness_steps`).
+- **Stage 5:** `docs/guide/dsp/systolic/timing.md` (where measured, phases, calibration, the fix,
+  limits); the main page's 2024.1 cycle claims replaced (example prints the phases' prediction
+  `[22, 68, 298] 388`; *Cycles* rewritten; the accuracy table's two cycle rows, the isolated-rejection
+  and cycle-model limits removed; resources stay, labelled 2024.1); `cost.py`'s docstring;
+  `timed_phases.md` and `units_calibration.md` on block events and inner tasks; docs-number tests
+  updated and one added (the timing page's fit against the filed record).
 
 # Part B -- the scratchpad unit and the outer loop
 

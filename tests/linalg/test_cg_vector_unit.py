@@ -231,7 +231,9 @@ def test_xsi_unit(name, tmp_path_factory):
     cycles = UB.check_xsi(build, sc, UNITS[name]["word_bits"])
     record = {
         "config": name,
-        "tool": "Vitis HLS / Vivado xsim 2024.1",
+        # the release that ran, from the csynth banner -- never a constant
+        "tool": "Vitis HLS / Vivado xsim "
+        + str(toolchain.parse_tool_version((build / "csynth.log").read_text("utf-8"))),
         "requests": [
             {
                 "op": int(m.op), "k": m.k, "n": m.n, "nfollow": m.nfollow,

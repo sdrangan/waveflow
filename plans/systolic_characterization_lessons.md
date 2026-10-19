@@ -17,3 +17,15 @@
 - **A unit that was only ever a child is not ready to be a top.** Making `SystolicUnit` its own
   harness's DUT exposed four gaps (formats not `HwParam`s, unframed boundary endpoints, bodies not
   templated on the boundary word type, a system top named like the DUT). Harness every module early.
+- **A wrong explanation can sit in a docstring for months.** The memory-fed "transfers add" was
+  explained by the `m_axi` pointer FIFOs; one memory-fed run of four identical jobs after the fix gave
+  390 = the stream-fed interval. Test a stated mechanism the cheap way (change one thing, rerun) before
+  quoting it.
+- **The RTL ping-pong is one block ahead, not two.** Vitis 2025.1's `stream_of_blocks<.., 2>` drops
+  `i_full_n` after one committed block, and a commit waits for it: a writer may fill block n+1 while
+  the reader holds n, but releases it only after the reader frees n. pysim's model allows two. A fit
+  must exclude commits the reader held (`i_full_n` low the cycle before).
+- **Collinear features fit fine and mean nothing.** Within one configuration a tile's output groups
+  are a constant times the tile count; with both as features the split was arbitrary (0.28 / 2.24).
+- **A DAG step that is "fresh" files nothing.** Deleting a bad record and rerunning skipped the fit
+  (its report existed); force the step (`force=["calib_phases"]`).

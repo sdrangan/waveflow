@@ -208,7 +208,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 231 -> 234 on 2026-10-18 (plans/next_docs_examples.md task D): mem_copy's kernel in its own harness,
 #: its m_axi ports on the memory stand-in -- recordings against pysim, the golden at 2908 cycles, and
 #: the input side's acceptance cycles (tests/examples/test_mem_copy_unit_xsi.py).
-WANT_XSI_GATES = 234
+#: 234 -> 235 on 2026-10-19 (plans/systolic_characterization.md): the systolic unit in its own
+#: harness, stream-fed -- 390 cycles a job (tests/linalg/test_systolic_harness.py).
+WANT_XSI_GATES = 235
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
