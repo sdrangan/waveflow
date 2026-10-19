@@ -16,3 +16,10 @@ newest last.
 - **2026-10-19 (step 1): plans are linted too.** `tests/docs/test_markdown_integrity.py` scans every
   Markdown file, `plans/` included. A table cell with `Σ` immediately before a backtick (no space)
   failed it. Run `pytest tests/docs/test_markdown_integrity.py` after editing a plan.
+- **2026-10-19 (step 2): a `tail` at the end of a check hides its failure.** `pytest ... | tail -1 && git commit`
+  committed even though the lint failed, because the pipeline's status is `tail`'s. Gate commits on
+  `pytest`'s own exit status (`set -o pipefail`, or no pipe). The same no-space-before-backtick slip
+  (`Σ` before a backtick) went in twice; write "the sum of" in plans.
+- **2026-10-19 (step 1): the XSI suite writes into tracked files.** A `pytest -m xsi` run modified
+  `examples/interleaver/xsi/rtl_mem_r_stream.f` in the working tree. Stage files by name, never
+  `git add -A`, while it runs, and inspect such files after it.
