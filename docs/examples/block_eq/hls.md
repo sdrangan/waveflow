@@ -3,14 +3,13 @@ title: The equalizer's HLS bodies
 parent: Block equalizer
 nav_order: 5
 ---
-
 # The HLS bodies
 
 Each stage's body is hand-written, the twin of its `run_iter`:
 [`src/eq_gain_task.h`](../../../examples/block_eq/src/eq_gain_task.h) and
 [`src/eq_apply_task.h`](../../../examples/block_eq/src/eq_apply_task.h). Everything around them is
 generated: the schemas' structs, the float32 lane routines, the broadcast's body, and three tops. As in
-[the polynomial's kernel](../stream_kernel/kernel.md#the-hls-body), a body is
+[the polynomial&#39;s kernel](../stream_kernel/kernel.md#the-hls-body), a body is
 [straight-line loops, one per part of the message](../../guide/vectorization/hls/loop_optimization.md),
 and never packs or unpacks a word by hand.
 
@@ -143,5 +142,11 @@ From the composite's csynth report (`block_eq_proj/solution1/syn/report/csynth.r
 target): every loop of both bodies achieves II=1. The longest iterations are `gain`'s `ROWS` loop, 37
 cycles -- the division is in it -- and `apply`'s `SYM` loop, 13 cycles; at II=1 those are latency, not
 rate.
+
+The division does not stand in the way of II=1: Vitis pipelines the float divider (16 cycles of latency,
+a new division every cycle), so it lengthens the iteration, not the interval. Since `gain` needs only one
+`g` per row, an II above 1 would also have been an option, and would let HLS share the multipliers and
+adders. But `ROWS` runs between the estimates and the symbols in each firing, so its interval adds to every
+command's time, and at II=1 the loop is cheap: about one cycle a row.
 
 Next, [The system flow](system_flow.md): each stage alone, then the composite, at RTL.
