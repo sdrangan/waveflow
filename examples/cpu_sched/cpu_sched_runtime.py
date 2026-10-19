@@ -74,13 +74,24 @@ def _git(*args: str) -> str:
     return r.stdout.strip()
 
 
+#: The load average ``wait_idle`` last saw before a series started (``None`` before the first).
+_IDLE: dict[str, float | None] = {"load": None}
+
+
+def _code_dirty() -> bool:
+    """Uncommitted changes to tracked files other than the results this script writes."""
+    lines = _git("status", "--porcelain", "--untracked-files=no").splitlines()
+    return any(not line.rstrip().endswith("runtime.json") for line in lines)
+
+
 def stamp() -> dict[str, Any]:
     """When, at which commit and under what load a measurement was taken."""
     return {
         "date": datetime.now(timezone.utc).astimezone().date().isoformat(),
         "commit": _git("rev-parse", "--short", "HEAD"),
-        "dirty": bool(_git("status", "--porcelain", "--untracked-files=no")),
+        "dirty": _code_dirty(),
         "load": round(os.getloadavg()[0], 2),
+        "load_before": _IDLE["load"],
     }
 
 
@@ -109,6 +120,7 @@ def wait_idle(max_load: float, timeout_s: float = 900.0) -> float:
     while True:
         load = os.getloadavg()[0]
         if load < max_load:
+            _IDLE["load"] = round(load, 2)
             return load
         if time.monotonic() > end:
             raise SystemExit(
