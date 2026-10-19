@@ -31,3 +31,8 @@ newest last.
   operation end to end (parsing, a warm-up pass, printing counters, plus 5 s of container start). In
   per-op marker mode, the stats dumps dominate (657 s for 410 ops). The same pysim is ~15×, ~340× or
   ~72,000× faster depending on which of these it is compared with, so always name the comparison.
+- **2026-10-19 (step 8): an XSI testbench's idle cycles are cheap, so pro-rating by cycles misleads.** The
+  linalg benches run exactly `n_cycles`. Sizing it at 1.25× the pysim's end time left 21-35 % idle
+  cycles after the last reply. Pro-rating the simulate time by cycles then under-stated the RTL by
+  ~15 %: cutting 16 % of the cycles saved only 3.5 % of the time. Size `n_cycles` tightly (the
+  pysim is within 1 % of the RTL here) and let `check_xsi` catch a run cut short.

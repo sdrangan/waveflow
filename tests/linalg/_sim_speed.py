@@ -186,6 +186,10 @@ def cg_stimulus(jobs: list[Any]) -> list[tuple[Any, list]]:
 RUNTIME = Path(__file__).resolve().parent / "sim_speed_runtime.json"
 REPO = Path(__file__).resolve().parents[2]
 JOBS = (10, 50, 100)
+#: The RTL testbench runs past the pysim's end time by this factor (+ 1000 cycles): the RTL replies
+#: within 1 % of the pysim (390 vs 388 cycles a systolic job, 9,231 vs 9,324 a CG job), and a run
+#: cut short fails ``check_xsi``.
+RTL_MARGIN = 1.05
 
 
 def _git(*args: str) -> str:
@@ -338,6 +342,90 @@ def events(block: str, n: int, seed: int = 1) -> dict[str, Any]:
             "by_type": {k: v / n for k, v in kinds.items()}, **stamp()}  # fmt: skip
 
 
+def rtl(
+    block: str, sizes: list[int], root: Path, synth: bool, max_load: float
+) -> dict[str, Any]:
+    """The same jobs at RTL: csynth of the bench once, then per job count the generated XSI
+    testbench, every reply checked, its *simulate* phase fitted per job.
+
+    The testbench runs exactly ``n_cycles`` (``waveflow/build/composite_gen.py``), so each run's is
+    sized from that job count's own pysim end time (x ``RTL_MARGIN``, + 1000); the cycles it runs
+    past the last reply are idle, so the fit is also given pro-rated to the last reply
+    (``to_last_reply``).  Every run rebuilds (the runner's verb is ``all``): the build phases are the
+    median over the runs.
+    """
+    import itertools
+    import math
+    import shutil
+    import statistics
+    import time
+
+    from tests.linalg._hls import PART, PERIOD_NS
+    from waveflow.build.trace_steps import xsi_phases
+    from waveflow.toolchain import toolchain
+
+    bench: Any = UB if block == "systolic" else CB
+    p = unit_config(block)
+    root.mkdir(parents=True, exist_ok=True)
+    csynth_s = None
+    if synth or not (root / f"{bench.TOP}_proj").is_dir():
+        shutil.rmtree(root / f"{bench.TOP}_proj", ignore_errors=True)
+        bench.generate(p, root, part=PART, period_ns=PERIOD_NS)
+        t = time.perf_counter()
+        bench.csynth(root)
+        csynth_s = time.perf_counter() - t
+        print(f"  {block} csynth {csynth_s:.0f} s", flush=True)
+    tool = toolchain.parse_tool_version((root / "csynth.log").read_text("utf-8"))
+    per = replies_per_job(block)
+    runs: dict[str, Any] = {}
+    sim_s, exact = [], True
+    for n in sizes:
+        jobs = make_jobs(block, n)
+        probe = make_sim(block, jobs)
+        with tempfile.TemporaryDirectory() as tmp:
+            probe.write_scenario(Path(tmp))
+            probe.tb.sim.run_sim()
+        n_cycles = (
+            math.ceil(probe.tb.sim.env.now * probe.tb.clk.freq * RTL_MARGIN) + 1000
+        )
+        sim = make_sim(block, jobs, n_cycles=n_cycles)
+        sc = bench.generate_tb(root, sim)
+        wait_idle(max_load)
+        t = time.perf_counter()
+        run = bench.run_xsi(root)
+        total = time.perf_counter() - t
+        phases = dict(xsi_phases(run.stdout))
+        ok = run.returncode == 0
+        cycles: list[int] = []
+        if ok:
+            try:
+                cycles = bench.check_xsi(root, sc, int(p["word_bits"]))
+            except AssertionError as err:
+                ok = False
+                print(f"  {block} N={n}: RTL replies differ: {err}", flush=True)
+        exact &= ok
+        last = [cycles[(j + 1) * per - 1] for j in range(n)] if cycles else []
+        runs[str(n)] = {"total_s": total, **{f"{k}_s": v for k, v in phases.items()},
+                        "n_cycles": n_cycles, "bits_exact": ok,
+                        "job_done_cycles": last,
+                        "job_interval_cycles": (statistics.median(
+                            b - a for a, b in itertools.pairwise(last)) if len(last) > 1 else None)}  # fmt: skip
+        sim_s.append(phases.get("simulate", float("nan")))
+        print(f"  {block} N={n}: RTL simulate {sim_s[-1]:7.2f} s  total {total:6.1f} s  "
+              f"n_cycles {n_cycles}  exact={ok}", flush=True)  # fmt: skip
+    used = [
+        r["simulate_s"] * r["job_done_cycles"][-1] / r["n_cycles"] if r["job_done_cycles"]
+        else float("nan") for r in runs.values()
+    ]  # fmt: skip
+    build = {ph: statistics.median(r[f"{ph}_s"] for r in runs.values() if f"{ph}_s" in r)
+             for ph in ("compile_rtl", "elaborate", "compile_tb")}  # fmt: skip
+    return {**_fit(sizes, sim_s), "to_last_reply": _fit(sizes, used), "margin": RTL_MARGIN,
+            "bits_exact": exact, "csynth_s": csynth_s,
+            "tool": f"Vitis HLS / Vivado {tool}", "build_s": build, "phases": runs,
+            "root": str(root.relative_to(REPO)) if root.is_relative_to(REPO) else str(root),
+            **stamp()}  # fmt: skip
+
+
 def _config(block: str) -> dict[str, Any]:
     return {k: (str(v) if not isinstance(v, (int, float, str)) else v)
             for k, v in unit_config(block).items()}  # fmt: skip
@@ -355,6 +443,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--max-load", type=float, default=1.0,
                     help="wait for a load average below this before each series")  # fmt: skip
+    ap.add_argument("--rtl", action="store_true", help="also run the jobs at RTL (XSI)")
+    ap.add_argument(
+        "--synth", action="store_true", help="with --rtl: csynth from scratch, timed"
+    )
+    ap.add_argument("--root", type=Path, default=REPO / "work" / "sim_speed",
+                    help="the RTL build directories (<root>/<block>_centre)")  # fmt: skip
     a = ap.parse_args(argv)
     sizes = sorted(a.jobs)
     data = json.loads(RUNTIME.read_text(encoding="utf-8")) if RUNTIME.exists() else {}
@@ -368,6 +462,21 @@ def main(argv: list[str] | None = None) -> int:
         wait_idle(a.max_load)
         entry.update(measure(block, sizes, a.reps))
         entry["events"] = events(block, sizes[1] if len(sizes) > 1 else sizes[0])
+        if a.rtl:
+            prev = entry.get("rtl", {})
+            entry["rtl"] = rtl(
+                block, sizes, a.root / f"{block}_centre", a.synth, a.max_load
+            )
+            r = entry["rtl"]
+            if r["csynth_s"] is None and prev.get("csynth_s") is not None:
+                # Not re-synthesized: keep the time of the run that did, and say which it was.
+                r["csynth_s"] = prev["csynth_s"]
+                r["csynth_from"] = prev.get("csynth_from", prev.get("commit"))
+            print(f"{block} RTL: {r['per_job_ms']:.2f} ms/job simulate "
+                  f"({r['to_last_reply']['per_job_ms']:.2f} to the last reply)  build "
+                  f"{sum(r['build_s'].values()):.1f} s  {r['tool']}  exact={r['bits_exact']}",
+                  flush=True)  # fmt: skip
+            ok &= r["bits_exact"]
         entry.setdefault("history", [])
         u, py = entry["untimed"], entry["pysim"]
         print(f"{block}: untimed {u['per_job_ms']:.3f} ms/job  pysim {py['per_job_ms']:.3f} ms/job "
