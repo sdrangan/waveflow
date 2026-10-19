@@ -26,10 +26,23 @@ are two stages; one input carries what both need, so the framework's
 [`StreamBroadcast`](../../guide/streams/broadcast.md) gives each its own copy; and `gain` hands its result to
 `apply` on a stream between them.
 
-```text
-                     +----------------------- block_eq -----------------------+
-source --s_in--> [ StreamBroadcast(2) ] --> [ gain ] --g--> [ apply ] --m_out-----> sink
-                                       ----------------->  [ apply ] --m_status--> sink
+```mermaid
+flowchart LR
+  src(["source"])
+  sink_out(["sink"])
+  sink_st(["sink"])
+  subgraph beq["block_eq"]
+    direction LR
+    bc["StreamBroadcast(2)"]
+    gain["gain"]
+    apply["apply"]
+    bc --> gain
+    bc --> apply
+    gain -- "g" --> apply
+  end
+  src -- "s_in" --> bc
+  apply -- "m_out" --> sink_out
+  apply -- "m_status" --> sink_st
 ```
 
 ## Learning Objectives
