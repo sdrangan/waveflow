@@ -485,6 +485,40 @@ Sequencer -> inner cmds (in-band, ahead of the data each consumes)
 inner s_out -> MemWStream (C tiles + their cmds)            -> Status(tx_id), one per Job
 ```
 
+#### Record: Part B built (2026-10-19, branch `systolic-engine`) -- before the calibration
+
+All numbers Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns, centre (`Mmax 8, Kmax 8, Nmax 32, Pmax 4,
+R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
+
+- **Facts measured first** (`plans/witness/systolic_stream`, `C:\wfsc\sobbank`, `C:\wfsc\sobnest`):
+  a partitioned `stream_of_blocks` is one ping-pong per bank, read a bank a cycle at II 1 (2-D
+  partitions too); one task may hold two read locks and a write lock at once (csynth; the pipelines
+  fall back to `style=stp`); the streaming sweep prototype is bit-exact, II 1, 84 steps for `8x8x32`.
+- **Built:** `waveflow/linalg/systolic_engine.py` (`SystolicEngine`: rx, two loaders, core, store) and
+  `systolic_engine_mem.py` (`SystolicEngineMem`: sequencer, in-band `MemRStream` / `MemWStream`,
+  writer); bodies `waveflow/build/systolic_engine_{rx,load,core,store,mem}_task.h`; framework
+  `StreamOfBlocksIF.bank(shape, partition)`; pysim's block buffer now commits one block ahead.
+- **Design changes found while building** (each from a measurement):
+  - two loaders, not one: a single loader filling `A` then `B` waits to commit the next `A` until the
+    core frees the current one, which it does together with `B` -- the next `B` would load after the
+    sweep;
+  - the `A` channel holds a whole `A` (32 words): the `A` loader takes a value a cycle and the receiver
+    forwards in order (206 -> 175 cycles a job);
+  - one call site of the array: three call sites (keep, last panel, other panels) built three arrays
+    (410 DSP); the `C` lock is held across an output's panels and `keep_a` moved into the `A` loader
+    (repeats a local copy) -- 137 DSP for the core;
+  - `B` laid out `[Kmax][Nmax/C][C/LW][LW]` so a word's values land in constant lanes (a provably
+    conflict-free write a word a cycle); `A` written a value a cycle (no `kp` alignment rule; `A^H`
+    at a value a cycle, against II 2 in `SystolicUnit`);
+  - LUTs 47.4k -> 37.0k: the accumulator store in LUTRAM (`ram_s2p`), one adder per element, the tile
+    index riding with the flag, 10-bit counters.
+- **Measured:** engine bit-exact at RTL (six commands); **175 cycles a job** stream-fed `8x8x32`
+  (`SystolicUnit` 390; 162 words in + 13 of command handling); wrapper exact at RTL on four jobs incl.
+  `32x32x64` (done at 6,655 against an input floor of ~5,136); engine 154 DSP / 37.0k LUT / 26 BRAM,
+  est. 3.05 ns; wrapper 156 DSP / 43.2k LUT / 30 BRAM, est. 3.35 ns.
+- **Open before the calibration:** the wrapper's read-command overhead (77% of the input floor); the
+  receiver's 13 cycles a command; the per-element selects (LUTs); then calibrate once (6d).
+
 #### 6a -- the design (a page of decisions, reviewed before any code)
 
 The inner unit's command is a `DataUnion` (user's sketch, 2026-10-19):
