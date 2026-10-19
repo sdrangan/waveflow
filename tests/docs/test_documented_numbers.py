@@ -706,7 +706,7 @@ def test_the_rf_guide_names_the_part_its_examples_target():
 
 
 # ---------------------------------------------------------------------------
-# guide/linalg/systolic.md — the cost model's measured accuracy and the limits it quotes
+# guide/dsp/systolic/index.md — the cost model's measured accuracy and the limits it quotes
 # ---------------------------------------------------------------------------
 #
 # The page's accuracy table is the evidence for a cost model a reader will price designs with, so it
@@ -729,7 +729,7 @@ def _linalg_metrics() -> dict:
 
 def _systolic_page() -> str:
     """The page with its line breaks folded, so a quoted figure may wrap."""
-    return " ".join(_page("guide/linalg/systolic.md").split())
+    return " ".join(_page("guide/dsp/systolic/index.md").split())
 
 
 def test_systolic_page_quotes_the_held_out_scores():
@@ -892,12 +892,12 @@ def test_systolic_page_quotes_the_synthesis_timing_of_every_build():
 
 
 # ---------------------------------------------------------------------------
-# guide/linalg/cg_vector.md — the CG unit's cost model, measured runs and limits
+# guide/dsp/cg_vector.md — the CG unit's cost model, measured runs and limits
 # ---------------------------------------------------------------------------
 
 
 def _cg_page() -> str:
-    return " ".join(_page("guide/linalg/cg_vector.md").split())
+    return " ".join(_page("guide/dsp/cg_vector.md").split())
 
 
 def _cg_metrics() -> dict:

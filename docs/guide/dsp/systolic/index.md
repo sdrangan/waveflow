@@ -1,8 +1,8 @@
 ---
 title: Systolic Matrix Multiply
-parent: Linear Algebra
-nav_order: 1
-has_children: false
+parent: DSP Blocks
+nav_order: 3
+has_children: true
 snippets: run
 summary: "SystolicCore and SystolicUnit compute C = q(A·B) or C = q(Aᴴ·B) on complex fixed-point matrices with an output-stationary array of R × C processing elements, exactly before one rounding and bit for bit like the model in waveflow.linalg.matmul. Covers what it computes, its parameters and run-time dimensions, the core's command and blocks, the unit's request and reply messages, a runnable example, how to build and test it, its calibrated cost model with measured accuracy, and its limits."
 ---
@@ -19,7 +19,7 @@ Every product and every sum is exact, and `C` is rounded and saturated **once**,
 format. The bit-exact model is `waveflow.linalg.matmul.matmul`. The pysim modules call it, and the
 HLS body equals it in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at
 RTL. For what the linear-algebra components share (formats, lane groups, messages, the build
-step), see [Linear Algebra](./index.md).
+step), see [Linear-Algebra Conventions](../linalg_common.md).
 
 ## What it computes
 
@@ -61,7 +61,7 @@ the two forms differ in DSPs and LUTs ([the cost model](#the-cost-model)).
 | `clk` | 250 MHz | the clock of the pysim timing | |
 
 The integer parameters are `HwParam`s. They reach the C++ bodies as template arguments, and the
-formats reach them through the format id ([Linear Algebra](./index.md#formats)).
+formats reach them through the format id ([Linear-Algebra Conventions](../linalg_common.md#formats)).
 
 **Run-time dimensions.** Each job states its own `m`, `k` and `n`, up to the maxima:
 
@@ -104,7 +104,7 @@ configuration.
 ## The standalone unit
 
 `SystolicUnit` puts the core behind three tasks and speaks the framed messages of
-[Linear Algebra](./index.md#messages) on `s_in` and `s_out`:
+[Linear-Algebra Conventions](../linalg_common.md#messages) on `s_in` and `s_out`:
 
 ```mermaid
 flowchart LR
@@ -315,7 +315,7 @@ three memory element types.
 
 **The top and the RTL test.** The unit is a free-running composite, so its top and its XSI
 testbench come from the framework's composite flow, like any other
-([the concurrent flow](../systems/index.md)). `tests/linalg/_unit_bench.py` is a complete
+([the concurrent flow](../../systems/index.md)). `tests/linalg/_unit_bench.py` is a complete
 example. It feeds the unit from memory through an in-band `MemRStream` and lands its replies
 through an in-band `MemWStream`, with two small test-only framers that turn a job list into memory
 commands. It then runs csynth and an XSI simulation that checks every reply bit for bit.
@@ -332,7 +332,7 @@ commands. It then runs csynth and an XSI simulation that checks every reply bit 
 ## The cost model
 
 `waveflow/linalg/cost.py` holds the model forms. The fitted numbers live in the packaged platform
-`xczu48dr_250mhz_vitis2024_1` ([Linear Algebra](./index.md#cost-data)).
+`xczu48dr_250mhz_vitis2024_1` ([Linear-Algebra Conventions](../linalg_common.md#cost-data)).
 
 ### Resources
 

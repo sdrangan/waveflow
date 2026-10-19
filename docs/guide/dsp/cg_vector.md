@@ -1,7 +1,7 @@
 ---
 title: CG Vector Unit
-parent: Linear Algebra
-nav_order: 2
+parent: DSP Blocks
+nav_order: 4
 has_children: false
 snippets: run
 summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conjugate gradient, multi-RHS: the start and, per iteration, the column dots, the two guarded divisions and the updates of X, R and P, bit for bit like the model in waveflow.linalg.cg. The matrix multiply S = A·P of each iteration comes from outside: a systolic core job, or a STEP message. Covers the model, the parameters, the core's command and blocks, the unit's START/STEP messages, a runnable example, building and testing, the calibrated cost model with its held-out scores, and the limits."
@@ -13,13 +13,13 @@ summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conj
 fixed-point **conjugate gradient** on `A X = B`: `A` Hermitian positive definite (`k × k`) and `n`
 right-hand sides (`B`, `k × n`), each column with its own step sizes. A job runs `nit` iterations
 from `X = 0`. The matrix multiply of each iteration, `S = A·P`, is not in this unit: in a design, a
-[systolic core](./systolic.md) job with `nb = nit` computes the `nit` matrices `S` from the `nit`
+[systolic core](systolic/index.md) job with `nb = nit` computes the `nit` matrices `S` from the `nit`
 matrices `P` this unit writes; the standalone unit takes `S` in its messages.
 
 The bit-exact model is `waveflow.linalg.cg`. The pysim modules call it, and the HLS body equals it
 in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at RTL. For what the
 linear-algebra components share (formats, lane groups, messages, the build step), see
-[Linear Algebra](./index.md).
+[Linear-Algebra Conventions](./linalg_common.md).
 
 ## The model
 
@@ -97,7 +97,7 @@ below prints these three for one configuration.
 ## The standalone unit
 
 `CgVectorUnit` puts the core behind three tasks and speaks the framed messages of
-[Linear Algebra](./index.md#messages) on `s_in` and `s_out`:
+[Linear-Algebra Conventions](./linalg_common.md#messages) on `s_in` and `s_out`:
 
 | Task | Body | Does |
 |---|---|---|
@@ -328,7 +328,7 @@ inside them.
 
 `waveflow/linalg/cg_cost.py` holds the model forms, the CG twin of the systolic unit's
 `waveflow/linalg/cost.py`. The fitted numbers live in the same packaged platform
-([Linear Algebra](./index.md#cost-data)).
+([Linear-Algebra Conventions](./linalg_common.md#cost-data)).
 
 ### Resources
 

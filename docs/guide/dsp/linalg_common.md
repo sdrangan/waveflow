@@ -1,12 +1,12 @@
 ---
-title: Linear Algebra
-parent: Guide
-nav_order: 13.5
-has_children: true
+title: Linear-Algebra Conventions
+parent: DSP Blocks
+nav_order: 2
+has_children: false
 summary: "Reusable hardware for complex fixed-point linear algebra in waveflow.linalg. Each component is a bit-exact Python model, a pysim module, a Vitis HLS task body, a standalone unit that speaks framed messages, and a cost model calibrated on a packaged platform. This page covers what the components share: operand formats and the integer format id that carries them to C++, lane groups and message words, the message header and its statuses, the build step, and where the cost data live. The components are the systolic matrix multiply and the CG vector unit."
 ---
 
-# Linear Algebra
+# Linear-Algebra Conventions
 
 `waveflow.linalg` holds hardware components for linear algebra on **complex fixed-point** data.
 Each component comes in five forms, and the first four agree bit for bit:
@@ -21,7 +21,7 @@ Each component comes in five forms, and the first four agree bit for bit:
 
 | Component | Computes | Page |
 |---|---|---|
-| Systolic matrix multiply | `C = q(A·B)` and `C = q(Aᴴ·B)` | [Systolic Matrix Multiply](./systolic.md) |
+| Systolic matrix multiply | `C = q(A·B)` and `C = q(Aᴴ·B)` | [Systolic Matrix Multiply](systolic/index.md) |
 | CG vector unit | the vector steps of conjugate gradient on `A X = B`, multi-RHS | [CG Vector Unit](./cg_vector.md) |
 
 ## Two layers: core and unit
@@ -134,7 +134,7 @@ to a design's own `BuildDag` when that DAG already has the stream-utility and sc
 
 The top of a design is then generated like that of any free-running composite
 ([Hardware modules and Flows](../flows/)). The
-[systolic page](./systolic.md#building-and-testing-it) lists what a built unit's include directory
+[systolic page](systolic/index.md#building-and-testing-it) lists what a built unit's include directory
 holds.
 
 ## Cost data
@@ -154,5 +154,5 @@ and the tool version that the numbers belong to:
 A model measured with one tool version describes that version only. The components' `get_rm`
 refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost` and
 `cg_cost` read only this one. Pricing another part, clock or tool version takes a new calibration and a
-platform of its own; the component pages ([systolic](./systolic.md#calibration-and-accuracy),
+platform of its own; the component pages ([systolic](systolic/index.md#calibration-and-accuracy),
 [CG](./cg_vector.md#calibration-and-accuracy)) describe how this one was calibrated.

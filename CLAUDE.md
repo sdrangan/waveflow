@@ -71,7 +71,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
   module, a Vitis HLS task body in `waveflow/build/` (`systolic_*_task.h`,
   `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
   platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (Vitis 2024.1).
-  Tests in `tests/linalg/`; guide in `docs/guide/linalg/`.
+  Tests in `tests/linalg/`; guide in `docs/guide/dsp/` (`linalg_common.md`, `systolic/`, `cg_vector.md`).
 - **`waveflow/cpu/`** — A loosely-timed, calibrated general-purpose processor for software beside
   the hardware: `Processor` (N cores, priority ready queue, context switches, optional preemption),
   `SwFunction` (Python that reports work counters, priced by calibrated cycle / pJ models), `CpuReport`,

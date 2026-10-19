@@ -47,7 +47,7 @@ Several new core modules and capabilities are on the horizon.
 
 The first *system-level* result is **conjugate gradient (CG)** — a real linear-solve kernel, as an
 MMSE detector for the massive-MIMO uplink ([mimo_cg](../examples/mimo_cg/index.md)) — built from
-Waveflow's two [linear-algebra modules](../guide/linalg/index.md):
+Waveflow's two [linear-algebra modules](../guide/dsp/linalg_common.md):
 
 - a **systolic array** (matrix–matrix product), and
 - a **CG vector unit** (the per-iteration vector work).
