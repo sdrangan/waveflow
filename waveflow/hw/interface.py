@@ -2309,6 +2309,27 @@ class StreamOfBlocksIF(QueuedTransferIF):
         self._free = simpy.Container(self.env, init=self.depth, capacity=self.depth)
         self._ready = simpy.Store(self.env, capacity=self.depth)
 
+    def bank(self, shape: tuple[int, ...], partition: tuple = ()) -> "StreamOfBlocksIF":
+        """Declare the block's C++ shape and banking for codegen: the block is
+        ``ap_uint<W>[shape[0]][shape[1]]...`` (its ``element_type`` lists ``prod(shape)`` elements,
+        row-major), split by ``#pragma HLS ARRAY_PARTITION`` per *partition* entry ``(dim, kind,
+        factor)`` (``kind`` ``"complete"`` or ``"cyclic"``; *dim* from 1).  Vitis then builds one
+        ping-pong per bank, and a reader may take a value from every bank in one cycle
+        (``plans/witness/systolic_stream``).  Kept out of the dataclass fields -- an attribute only
+        on a channel that declares it -- so no other module's structure signature moves.  Returns
+        the interface."""
+        shape = tuple(int(d) for d in shape)
+        n = int(self.element_type.max_shape[0])
+        if int(np.prod(shape)) != n:
+            raise ValueError(f"StreamOfBlocksIF {self.name!r}: shape {shape} holds "
+                             f"{int(np.prod(shape))} elements, the block has {n}")
+        for dim, kind, _factor in partition:
+            if not 1 <= int(dim) <= len(shape) or kind not in ("complete", "cyclic"):
+                raise ValueError(f"StreamOfBlocksIF {self.name!r}: bad partition {(dim, kind)}")
+        self.__dict__["block_shape"] = shape
+        self.__dict__["block_partition"] = tuple((int(d), str(k), int(f)) for d, k, f in partition)
+        return self
+
     def acquire_write(self) -> ProcessGen["DataSchema"]:
         """Acquire a free buffer and return a fresh typed block instance to fill."""
         yield self._free.get(1)
