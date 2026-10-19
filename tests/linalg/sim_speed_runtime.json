@@ -1,0 +1,207 @@
+{
+ "cg_centre": {
+  "meta": {
+   "machine": {
+    "cpu": "Intel(R) Core(TM) i7-7700K CPU @ 4.20GHz",
+    "threads": 8,
+    "system": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "simpy": "4.1.2",
+    "numpy": "2.5.3"
+   },
+   "config": {
+    "word_bits": 64,
+    "Kmax": 8,
+    "Nmax": 32,
+    "nitmax": 8,
+    "L": 4,
+    "sob_depth": 2,
+    "lane_bits": 16,
+    "formats": "CgFormats(A=Format(W=12, int_bits=3, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), B=Format(W=12, int_bits=4, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), P=Format(W=12, int_bits=4, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), R=Format(W=12, int_bits=4, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), S=Format(W=12, int_bits=5, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), X=Format(W=12, int_bits=3, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), ps=Format(W=20, int_bits=10, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), rz=Format(W=20, int_bits=9, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), alpha=Format(W=12, int_bits=5, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), beta=Format(W=12, int_bits=3, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>), g_div=6)"
+   },
+   "reps": 3,
+   "jobs": [
+    10,
+    50,
+    100
+   ],
+   "replies_per_job": 9,
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "untimed": {
+   "per_job_ms": 1.9477303765836305,
+   "setup_ms": 0.3398331645571414,
+   "runs": {
+    "10": 0.01961230207234621,
+    "50": 0.09809505473822355,
+    "100": 0.19494900293648243
+   },
+   "bits_exact": true,
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.26
+  },
+  "pysim": {
+   "per_job_ms": 11.686597937015723,
+   "setup_ms": -1.1516075703448212,
+   "runs": {
+    "10": 0.11703289952129126,
+    "50": 0.5808049393817782,
+    "100": 1.1685630083084106
+   },
+   "bits_exact": true,
+   "end_s": {
+    "10": 0.00037515419088409086,
+    "50": 0.001867050954420441,
+    "100": 0.0037319219088409452
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.26
+  },
+  "construction": {
+   "per_job_ms": 6.755861065151994,
+   "setup_ms": 3.9942841213504443,
+   "runs": {
+    "10": 0.0709552951157093,
+    "50": 0.3428630167618394,
+    "100": 0.679102310910821
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.26
+  },
+  "events": {
+   "jobs": 50,
+   "total": 408.74,
+   "by_type": {
+    "Timeout": 182.18,
+    "StoreGet": 82.2,
+    "ContainerPut": 62.8,
+    "Request": 18.0,
+    "Release": 18.0,
+    "ContainerGet": 18.0,
+    "StorePut": 18.0,
+    "Event": 8.98,
+    "Initialize": 0.38,
+    "Process": 0.2
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.26
+  },
+  "history": []
+ },
+ "systolic_centre": {
+  "meta": {
+   "machine": {
+    "cpu": "Intel(R) Core(TM) i7-7700K CPU @ 4.20GHz",
+    "threads": 8,
+    "system": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "simpy": "4.1.2",
+    "numpy": "2.5.3"
+   },
+   "config": {
+    "word_bits": 64,
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "L": 4,
+    "R": 4,
+    "C": 8,
+    "form": 4,
+    "sob_depth": 2,
+    "lane_bits": 16,
+    "a": "Format(W=12, int_bits=3, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>)",
+    "b": "Format(W=12, int_bits=4, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>)",
+    "c": "Format(W=12, int_bits=5, signed=True, q_mode=<QMode.AP_RND: 'AP_RND'>, o_mode=<OMode.AP_SAT: 'AP_SAT'>)"
+   },
+   "reps": 3,
+   "jobs": [
+    10,
+    50,
+    100
+   ],
+   "replies_per_job": 1,
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "untimed": {
+   "per_job_ms": 0.043627695317883936,
+   "setup_ms": 0.044664994004321765,
+   "runs": {
+    "10": 0.000471518374979496,
+    "50": 0.0022430121898651123,
+    "100": 0.004399895668029785
+   },
+   "bits_exact": true,
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "pysim": {
+   "per_job_ms": 1.727625529938301,
+   "setup_ms": 4.418499447161083,
+   "runs": {
+    "10": 0.02175932750105858,
+    "50": 0.09068354498595,
+    "100": 0.17723271064460278
+   },
+   "bits_exact": true,
+   "end_s": {
+    "10": 1.776669235259778e-05,
+    "50": 7.984146176298893e-05,
+    "100": 0.00015743492352597731
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "construction": {
+   "per_job_ms": 0.3394897607323087,
+   "setup_ms": 3.368694090940923,
+   "runs": {
+    "10": 0.006794977001845837,
+    "50": 0.020286688581109047,
+    "100": 0.03734277840703726
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "events": {
+   "jobs": 50,
+   "total": 70.5,
+   "by_type": {
+    "Timeout": 32.18,
+    "StoreGet": 13.26,
+    "ContainerPut": 11.5,
+    "Request": 3.0,
+    "Release": 3.0,
+    "ContainerGet": 3.0,
+    "StorePut": 3.0,
+    "Event": 0.98,
+    "Initialize": 0.38,
+    "Process": 0.2
+   },
+   "date": "2026-10-19",
+   "commit": "3784365d",
+   "dirty": true,
+   "load": 0.12
+  },
+  "history": []
+ }
+}
