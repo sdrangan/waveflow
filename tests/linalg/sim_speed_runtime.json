@@ -27,31 +27,33 @@
    ],
    "replies_per_job": 9,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.17,
+   "load_before": 0.68
   },
   "untimed": {
-   "per_job_ms": 2.0185874546038316,
-   "setup_ms": -0.3086865772721557,
+   "per_job_ms": 1.9707240935292885,
+   "setup_ms": 0.34385911937136276,
    "runs": {
-    "10": 0.020104252733290195,
-    "50": 0.10021196957677603,
-    "100": 0.20173171069473028
+    "10": 0.019952130503952503,
+    "50": 0.09905820898711681,
+    "100": 0.19733709283173084
    },
    "bits_exact": true,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.91
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.85,
+   "load_before": 0.71
   },
   "pysim": {
-   "per_job_ms": 11.774202758354729,
-   "setup_ms": 2.0591243032797224,
+   "per_job_ms": 11.647751385376587,
+   "setup_ms": 2.067899987956937,
    "runs": {
-    "10": 0.11849788762629032,
-    "50": 0.5931151378899813,
-    "100": 1.1784367887303233
+    "10": 0.11845926474779844,
+    "50": 0.5846105376258492,
+    "100": 1.1667741192504764
    },
    "bits_exact": true,
    "end_s": {
@@ -60,22 +62,24 @@
     "100": 0.0037319219088409452
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.91
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.85,
+   "load_before": 0.71
   },
   "construction": {
-   "per_job_ms": 6.947665399734358,
-   "setup_ms": 2.748423561331896,
+   "per_job_ms": 6.811088422069051,
+   "setup_ms": 4.390023984625841,
    "runs": {
-    "10": 0.07285930216312408,
-    "50": 0.3489900892600417,
-    "100": 0.6980223432183266
+    "10": 0.07250099442899227,
+    "50": 0.34494428988546133,
+    "100": 0.6854989351704717
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.91
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.85,
+   "load_before": 0.71
   },
   "events": {
    "jobs": 50,
@@ -93,26 +97,27 @@
     "Process": 0.2
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.91
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.85,
+   "load_before": 0.71
   },
   "history": [],
   "rtl": {
-   "per_job_ms": 339.89086033868,
-   "setup_ms": -13.499674249853156,
+   "per_job_ms": 336.0153016496876,
+   "setup_ms": 52.82713546128615,
    "runs": {
-    "10": 3.457119941711426,
-    "50": 16.85196352005005,
-    "100": 34.032955169677734
+    "10": 3.456068515777588,
+    "50": 16.77603316307068,
+    "100": 33.688827991485596
    },
    "to_last_reply": {
-    "per_job_ms": 320.4643268366427,
-    "setup_ms": -51.633729995187686,
+    "per_job_ms": 316.8145372384716,
+    "setup_ms": 10.868443808394693,
     "runs": {
-     "10": 3.220454681020069,
-     "50": 15.850181355069035,
-     "100": 32.04875506778815
+     "10": 3.2194752329166,
+     "50": 15.778764755629673,
+     "100": 31.724691301034348
     }
    },
    "margin": 1.05,
@@ -120,17 +125,17 @@
    "csynth_s": 32.570665603503585,
    "tool": "Vitis HLS / Vivado 2024.1",
    "build_s": {
-    "compile_rtl": 1.3385186195373535,
-    "elaborate": 6.878080368041992,
-    "compile_tb": 1.6144986152648926
+    "compile_rtl": 1.3426401615142822,
+    "elaborate": 6.890568733215332,
+    "compile_tb": 1.6188530921936035
    },
    "phases": {
     "10": {
-     "total_s": 13.28899492137134,
-     "compile_rtl_s": 1.3385186195373535,
-     "elaborate_s": 6.878080368041992,
-     "compile_tb_s": 1.6122453212738037,
-     "simulate_s": 3.457119941711426,
+     "total_s": 13.303115841932595,
+     "compile_rtl_s": 1.3380651473999023,
+     "elaborate_s": 6.890568733215332,
+     "compile_tb_s": 1.6153268814086914,
+     "simulate_s": 3.456068515777588,
      "n_cycles": 99478,
      "bits_exact": true,
      "job_done_cycles": [
@@ -148,11 +153,11 @@
      "job_interval_cycles": 9232
     },
     "50": {
-     "total_s": 26.777032429352403,
-     "compile_rtl_s": 1.342912197113037,
-     "elaborate_s": 6.95709228515625,
-     "compile_tb_s": 1.621877670288086,
-     "simulate_s": 16.85196352005005,
+     "total_s": 26.6730503924191,
+     "compile_rtl_s": 1.3436870574951172,
+     "elaborate_s": 6.92429518699646,
+     "compile_tb_s": 1.6259186267852783,
+     "simulate_s": 16.77603316307068,
      "n_cycles": 491101,
      "bits_exact": true,
      "job_done_cycles": [
@@ -210,11 +215,11 @@
      "job_interval_cycles": 9231
     },
     "100": {
-     "total_s": 43.576457533054054,
-     "compile_rtl_s": 1.337867021560669,
-     "elaborate_s": 6.58793044090271,
-     "compile_tb_s": 1.6144986152648926,
-     "simulate_s": 34.032955169677734,
+     "total_s": 43.463776289485395,
+     "compile_rtl_s": 1.3426401615142822,
+     "elaborate_s": 6.810131072998047,
+     "compile_tb_s": 1.6188530921936035,
+     "simulate_s": 33.688827991485596,
      "n_cycles": 980630,
      "bits_exact": true,
      "job_done_cycles": [
@@ -324,143 +329,146 @@
    },
    "root": "work/sim_speed/cg_centre",
    "date": "2026-10-19",
-   "commit": "ef073aeb",
-   "dirty": true,
-   "load": 1.13,
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.12,
+   "load_before": 0.72,
    "csynth_from": "ef073aeb"
   },
   "profile": {
    "pysim": {
-    "total_s": 2.429319032,
+    "total_s": 2.414051317,
     "shares": {
-     "words and schemas (lanes, headers, dataschema)": 0.3759057001013306,
-     "stream and block interfaces": 0.16853277497950447,
-     "model arithmetic (matmul, CG, fixed point)": 0.16676250952592506,
-     "SimPy core": 0.14414836437176523,
-     "memory, memory streams, bench framers": 0.0671009924236189,
-     "other": 0.027644458547989036,
-     "unit task bodies (systolic.py, cg_vector.py)": 0.024467581428381617,
-     "Waveflow simulation framework": 0.021768042545813764,
-     "timing models (timed phases, cost models)": 0.0036695760756712335
+     "words and schemas (lanes, headers, dataschema)": 0.3771201585241641,
+     "stream and block interfaces": 0.16965298330758594,
+     "model arithmetic (matmul, CG, fixed point)": 0.16546704291790978,
+     "SimPy core": 0.14451812956219764,
+     "memory, memory streams, bench framers": 0.06715335168023766,
+     "other": 0.026352567828187918,
+     "unit task bodies (systolic.py, cg_vector.py)": 0.02470087293506362,
+     "Waveflow simulation framework": 0.021318362888890285,
+     "timing models (timed phases, cost models)": 0.003716530355762938
     },
     "top": [
      {
       "function": "dataschema.py:1713(_convert)",
-      "own_share": 0.03688542460651171,
+      "own_share": 0.036226169006497555,
       "calls": 49500
      },
      {
       "function": "fixputils.py:135(quantize)",
-      "own_share": 0.018291439047187278,
+      "own_share": 0.01815656348783409,
       "calls": 10100
      },
      {
       "function": "~:0(<built-in method builtins.isinstance>)",
-      "own_share": 0.018222001893080302,
+      "own_share": 0.018107081523984023,
       "calls": 208192
      },
      {
       "function": "core.py:182(step)",
-      "own_share": 0.018151920113883176,
+      "own_share": 0.018094155121061162,
       "calls": 40838
      },
      {
       "function": "interface.py:720(_take_burst)",
-      "own_share": 0.017147802923893615,
+      "own_share": 0.0172209769143031,
       "calls": 19219
      },
      {
       "function": "_methods.py:96(_clip)",
-      "own_share": 0.016451411475213767,
+      "own_share": 0.01657279351033779,
       "calls": 10100
      },
      {
-      "function": "dataschema.py:3038(_serialize_recursive)",
-      "own_share": 0.015985691252757617,
-      "calls": 5500
-     },
-     {
       "function": "dataschema.py:2466(__init__)",
-      "own_share": 0.015872192368350902,
+      "own_share": 0.016340998934945176,
       "calls": 9300
      },
      {
+      "function": "dataschema.py:3038(_serialize_recursive)",
+      "own_share": 0.01620581622457697,
+      "calls": 5500
+     },
+     {
       "function": "interface.py:1042(_transfer)",
-      "own_share": 0.01572687180923547,
+      "own_share": 0.015833800934895368,
       "calls": 30090
      },
      {
       "function": "fixputils.py:262(div)",
-      "own_share": 0.015370492927501176,
+      "own_share": 0.015350374177650507,
       "calls": 1600
      }
     ]
    },
    "untimed": {
-    "total_s": 0.35501566100000004,
+    "total_s": 0.35041474100000003,
     "shares": {
-     "model arithmetic (matmul, CG, fixed point)": 0.9931527386900263,
-     "other": 0.0068472613099735905
+     "model arithmetic (matmul, CG, fixed point)": 0.9932793609273417,
+     "other": 0.006720639072658192
     },
     "top": [
      {
       "function": "fixputils.py:135(quantize)",
-      "own_share": 0.11843248796846739,
+      "own_share": 0.11765744181407026,
       "calls": 10100
      },
      {
       "function": "_methods.py:96(_clip)",
-      "own_share": 0.10550861585793535,
+      "own_share": 0.10660218201265682,
       "calls": 10100
      },
      {
       "function": "fixputils.py:262(div)",
-      "own_share": 0.0966548994017478,
+      "own_share": 0.09603341144829293,
       "calls": 1600
      },
      {
       "function": "~:0(<method 'astype' of 'numpy.ndarray' objects>)",
-      "own_share": 0.06114184635927934,
+      "own_share": 0.06319647665735614,
       "calls": 32900
      },
      {
       "function": "<string>:2(__init__)",
-      "own_share": 0.051985692541039755,
+      "own_share": 0.05053173262479845,
       "calls": 14700
      },
      {
       "function": "fixputils.py:248(add)",
-      "own_share": 0.046435137406515704,
+      "own_share": 0.04747432414665455,
       "calls": 3200
      },
      {
       "function": "fixputils.py:101(saturate)",
-      "own_share": 0.03832501349848901,
+      "own_share": 0.03868561282928448,
       "calls": 10100
      },
      {
       "function": "getlimits.py:399(__init__)",
-      "own_share": 0.037335071254786134,
+      "own_share": 0.03619457892611886,
       "calls": 20200
      },
      {
       "function": "fixputils.py:117(_apply_overflow)",
-      "own_share": 0.03116575186805632,
+      "own_share": 0.03136237924419966,
       "calls": 10100
      },
      {
       "function": "cg.py:151(_scale)",
-      "own_share": 0.03008558825240107,
+      "own_share": 0.029293385234612602,
       "calls": 2400
      }
     ]
    },
    "jobs": 100,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.92
-  }
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.11,
+   "load_before": 0.72
+  },
+  "optimization": "none: 93-95 % of the pysim is framework code (dataschema, interface, simulation, fixputils); at the step 11 gate the user chose no framework changes (plans/sim_speed_cpu_linalg.md \u00a714)"
  },
  "systolic_centre": {
   "meta": {
@@ -495,31 +503,33 @@
    ],
    "replies_per_job": 1,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.88
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.0,
+   "load_before": null
   },
   "untimed": {
-   "per_job_ms": 0.0443680166098915,
-   "setup_ms": 0.03320096274379974,
+   "per_job_ms": 0.04374503967214803,
+   "setup_ms": 0.04491471059498365,
    "runs": {
-    "10": 0.00047967303544282913,
-    "50": 0.0022465763613581657,
-    "100": 0.0044722361490130424
+    "10": 0.000474817119538784,
+    "50": 0.0022457530722022057,
+    "100": 0.004413380287587643
    },
    "bits_exact": true,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.64,
+   "load_before": 0.61
   },
   "pysim": {
-   "per_job_ms": 1.7314055820041503,
-   "setup_ms": 4.537271015101832,
+   "per_job_ms": 1.7276671921193107,
+   "setup_ms": 4.473270680450082,
    "runs": {
-    "10": 0.02199580706655979,
-    "50": 0.09084748569875956,
-    "100": 0.17779341340065002
+    "10": 0.02178827114403248,
+    "50": 0.09078763891011477,
+    "100": 0.1772706527262926
    },
    "bits_exact": true,
    "end_s": {
@@ -528,22 +538,24 @@
     "100": 0.00015743492352597731
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.64,
+   "load_before": 0.61
   },
   "construction": {
-   "per_job_ms": 0.34068698506252676,
-   "setup_ms": 3.34795770525445,
+   "per_job_ms": 0.3403091910066174,
+   "setup_ms": 3.381361925333259,
    "runs": {
-    "10": 0.006867223419249058,
-    "50": 0.02017999440431595,
-    "100": 0.037506572902202606
+    "10": 0.006863127462565899,
+    "50": 0.02025520894676447,
+    "100": 0.037475219927728176
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.64,
+   "load_before": 0.61
   },
   "events": {
    "jobs": 50,
@@ -561,26 +573,27 @@
     "Process": 0.2
    },
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 0.64,
+   "load_before": 0.61
   },
   "history": [],
   "rtl": {
-   "per_job_ms": 30.550662220501508,
-   "setup_ms": 42.32316329831063,
+   "per_job_ms": 30.095210817993664,
+   "setup_ms": 48.707715800552236,
    "runs": {
-    "10": 0.3425140380859375,
-    "50": 1.5794246196746826,
-    "100": 3.093136787414551
+    "10": 0.34296464920043945,
+    "50": 1.5655195713043213,
+    "100": 3.052872657775879
    },
    "to_last_reply": {
-    "per_job_ms": 29.096290530988725,
-    "setup_ms": -28.33769784227479,
+    "per_job_ms": 28.67288952479086,
+    "setup_ms": -22.335448707591116,
     "runs": {
-     "10": 0.25996960623789644,
-     "50": 1.431256910920648,
-     "100": 2.8791668742728254
+     "10": 0.26031162198317254,
+     "50": 1.4186563117348099,
+     "100": 2.841688044125779
     }
    },
    "margin": 1.05,
@@ -588,17 +601,17 @@
    "csynth_s": 31.704194298945367,
    "tool": "Vitis HLS / Vivado 2024.1",
    "build_s": {
-    "compile_rtl": 1.3547074794769287,
-    "elaborate": 7.903944492340088,
-    "compile_tb": 1.615739107131958
+    "compile_rtl": 1.352816104888916,
+    "elaborate": 7.971580505371094,
+    "compile_tb": 1.6240100860595703
    },
    "phases": {
     "10": {
-     "total_s": 11.075135139748454,
-     "compile_rtl_s": 1.347205638885498,
-     "elaborate_s": 7.766618013381958,
-     "compile_tb_s": 1.615739107131958,
-     "simulate_s": 0.3425140380859375,
+     "total_s": 11.295398190617561,
+     "compile_rtl_s": 1.352816104888916,
+     "elaborate_s": 7.971580505371094,
+     "compile_tb_s": 1.6249969005584717,
+     "simulate_s": 0.34296464920043945,
      "n_cycles": 5664,
      "bits_exact": true,
      "job_done_cycles": [
@@ -616,11 +629,11 @@
      "job_interval_cycles": 390
     },
     "50": {
-     "total_s": 12.46535475552082,
-     "compile_rtl_s": 1.3568849563598633,
-     "elaborate_s": 7.903944492340088,
-     "compile_tb_s": 1.6220152378082275,
-     "simulate_s": 1.5794246196746826,
+     "total_s": 12.511945602484047,
+     "compile_rtl_s": 1.3512825965881348,
+     "elaborate_s": 7.969696044921875,
+     "compile_tb_s": 1.622262954711914,
+     "simulate_s": 1.5655195713043213,
      "n_cycles": 21959,
      "bits_exact": true,
      "job_done_cycles": [
@@ -678,11 +691,11 @@
      "job_interval_cycles": 390
     },
     "100": {
-     "total_s": 14.082675064913929,
-     "compile_rtl_s": 1.3547074794769287,
-     "elaborate_s": 8.017574071884155,
-     "compile_tb_s": 1.6140763759613037,
-     "simulate_s": 3.093136787414551,
+     "total_s": 14.007298302836716,
+     "compile_rtl_s": 1.3546957969665527,
+     "elaborate_s": 7.972269058227539,
+     "compile_tb_s": 1.6240100860595703,
+     "simulate_s": 3.052872657775879,
      "n_cycles": 42327,
      "bits_exact": true,
      "job_done_cycles": [
@@ -792,142 +805,145 @@
    },
    "root": "work/sim_speed/systolic_centre",
    "date": "2026-10-19",
-   "commit": "ef073aeb",
-   "dirty": true,
-   "load": 1.28,
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.17,
+   "load_before": 0.68,
    "csynth_from": "ef073aeb"
   },
   "profile": {
    "pysim": {
-    "total_s": 0.371122471,
+    "total_s": 0.37289042600000005,
     "shares": {
-     "words and schemas (lanes, headers, dataschema)": 0.4017767918263629,
-     "stream and block interfaces": 0.18524084892359707,
-     "SimPy core": 0.1607622514455612,
-     "memory, memory streams, bench framers": 0.07114022242643109,
-     "timing models (timed phases, cost models)": 0.04573397785975195,
-     "other": 0.03994725774866735,
-     "Waveflow simulation framework": 0.03574987537352299,
-     "model arithmetic (matmul, CG, fixed point)": 0.03425858453611181,
-     "unit task bodies (systolic.py, cg_vector.py)": 0.025390189859993688
+     "words and schemas (lanes, headers, dataschema)": 0.4001373705065595,
+     "stream and block interfaces": 0.1830640029307733,
+     "SimPy core": 0.16090180068071794,
+     "memory, memory streams, bench framers": 0.0695455225705837,
+     "other": 0.04810639300137104,
+     "timing models (timed phases, cost models)": 0.0456869232615576,
+     "Waveflow simulation framework": 0.03397401862374315,
+     "model arithmetic (matmul, CG, fixed point)": 0.03338149245659248,
+     "unit task bodies (systolic.py, cg_vector.py)": 0.025202475968101143
     },
     "top": [
      {
       "function": "dataschema.py:1713(_convert)",
-      "own_share": 0.0405422796400814,
+      "own_share": 0.040148585096684675,
       "calls": 8300
      },
      {
       "function": "~:0(<built-in method builtins.isinstance>)",
-      "own_share": 0.020832403328118605,
+      "own_share": 0.020544399817870356,
       "calls": 38922
      },
      {
       "function": "core.py:182(step)",
-      "own_share": 0.019762036990748535,
+      "own_share": 0.01982751898274803,
       "calls": 7026
      },
      {
       "function": "dataschema.py:2466(__init__)",
-      "own_share": 0.01877308852041999,
+      "own_share": 0.018914242652076026,
       "calls": 1700
      },
      {
       "function": "interface.py:720(_take_burst)",
-      "own_share": 0.018723096936913854,
+      "own_share": 0.01812272595059869,
       "calls": 3022
      },
      {
       "function": "interface.py:1042(_transfer)",
-      "own_share": 0.016474828332343153,
+      "own_share": 0.01659877692864123,
       "calls": 4875
      },
      {
       "function": "dataschema.py:3038(_serialize_recursive)",
-      "own_share": 0.01571117206750868,
+      "own_share": 0.01587661840371305,
       "calls": 900
      },
      {
-      "function": "events.py:388(_resume)",
-      "own_share": 0.015480566252211659,
-      "calls": 6616
-     },
-     {
       "function": "dataschema.py:3071(_deserialize_recursive)",
-      "own_share": 0.015394346735743738,
+      "own_share": 0.015532292051928413,
       "calls": 1100
      },
      {
-      "function": "interface.py:995(_push_to_endpoint)",
-      "own_share": 0.013154994325309931,
-      "calls": 4875
+      "function": "events.py:388(_resume)",
+      "own_share": 0.015293219139930399,
+      "calls": 6616
+     },
+     {
+      "function": "~:0(<method 'get' of 'mappingproxy' objects>)",
+      "own_share": 0.01294130839390336,
+      "calls": 27408
      }
     ]
    },
    "untimed": {
-    "total_s": 0.007486615,
+    "total_s": 0.007481144,
     "shares": {
-     "model arithmetic (matmul, CG, fixed point)": 0.9739143791954036,
-     "other": 0.026085620804595935
+     "model arithmetic (matmul, CG, fixed point)": 0.9732171977975562,
+     "other": 0.026782802202443907
     },
     "top": [
      {
       "function": "matmul.py:58(matmul_exact)",
-      "own_share": 0.18108050166864464,
+      "own_share": 0.18078825912186694,
       "calls": 100
      },
      {
       "function": "fixputils.py:135(quantize)",
-      "own_share": 0.12182728776623347,
+      "own_share": 0.1212214335133771,
       "calls": 200
      },
      {
       "function": "_methods.py:96(_clip)",
-      "own_share": 0.0987016161509574,
+      "own_share": 0.09936114048867392,
       "calls": 200
      },
      {
       "function": "~:0(<method 'reduce' of 'numpy.ufunc' objects>)",
-      "own_share": 0.07659349385536722,
+      "own_share": 0.07628806503390391,
       "calls": 800
      },
      {
       "function": "matmul.py:43(_check_operand)",
-      "own_share": 0.06527489392736237,
+      "own_share": 0.06599418484659565,
       "calls": 200
      },
      {
       "function": "<string>:2(__init__)",
-      "own_share": 0.04654854029491299,
+      "own_share": 0.04642204454292018,
       "calls": 300
      },
      {
       "function": "fixputils.py:101(saturate)",
-      "own_share": 0.03533853417064989,
+      "own_share": 0.03476420183864928,
       "calls": 200
      },
      {
       "function": "getlimits.py:399(__init__)",
-      "own_share": 0.03217649097756463,
+      "own_share": 0.03233970633368373,
       "calls": 400
      },
      {
       "function": "fixputils.py:117(_apply_overflow)",
-      "own_share": 0.03039384287825673,
+      "own_share": 0.030455502527420943,
       "calls": 200
      },
      {
       "function": "~:0(<method 'astype' of 'numpy.ndarray' objects>)",
-      "own_share": 0.028102687262534537,
+      "own_share": 0.0294397487870839,
       "calls": 200
      }
     ]
    },
    "jobs": 100,
    "date": "2026-10-19",
-   "commit": "e56c8fcc",
-   "dirty": true,
-   "load": 0.89
-  }
+   "commit": "f3768657",
+   "dirty": false,
+   "load": 1.17,
+   "load_before": 0.68
+  },
+  "optimization": "none: 93-95 % of the pysim is framework code (dataschema, interface, simulation, fixputils); at the step 11 gate the user chose no framework changes (plans/sim_speed_cpu_linalg.md \u00a714)"
  }
 }
