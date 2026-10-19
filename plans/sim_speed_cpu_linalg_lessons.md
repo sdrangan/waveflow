@@ -36,3 +36,10 @@ newest last.
   cycles after the last reply. Pro-rating the simulate time by cycles then under-stated the RTL by
   ~15 %: cutting 16 % of the cycles saved only 3.5 % of the time. Size `n_cycles` tightly (the
   pysim is within 1 % of the RTL here) and let `check_xsi` catch a run cut short.
+- **2026-10-19 (step 10): a ratio stopping rule penalizes making the model itself faster.** The rule
+  "stop at pysim ≤ 2× untimed" treats the untimed model as fixed. Memoizing the CPU model's prices
+  sped up the untimed sum 3.9× and the pysim 1.8×, so the ratio went from 2.7× to 5.7× while both got
+  faster. Report the overhead (pysim − untimed, per unit) and the absolute times, not only the ratio.
+- **2026-10-19 (step 10): validate an A/B harness with a null run first.** With A and B the same code,
+  B/A came out 0.99-1.00. That set the noise floor (~1 %) under the 3 % "helps" bar, and showed each
+  side imported its own tree (`python -m`/`-c` put the cwd first on `sys.path`).

@@ -56,7 +56,7 @@ from waveflow.cpu.task import SwFunction, TaskRecord, eval_cycles
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, slots=True)
 class _Task:
     """One submitted call, while it is queued or running."""
 
@@ -142,6 +142,9 @@ class Processor(SimObj):
         self._free: list[int] = list(range(self.config.n_cores))
         #: One record per finished task, in completion order.
         self.records: list[TaskRecord] = []
+        # The context-switch cost, evaluated once per cost object (it is a constant of the config).
+        self._switch_src: object = object()
+        self._switch_val = 0.0
 
     def report(self, elapsed_s: float | None = None) -> CpuReport:
         """Utilization, latency, queueing and confidence over the run so far.
@@ -209,8 +212,12 @@ class Processor(SimObj):
             done=env.event(),
             owner=owner,
         )
-        heapq.heappush(self._ready, (prio, seq, task))
-        self._dispatch()
+        if not self._ready and self._free:
+            # Nothing queued and a core free: the task would be pushed and popped at once.
+            self._start(self._cores[self._pick_core(owner)], task)
+        else:
+            heapq.heappush(self._ready, (prio, seq, task))
+            self._dispatch()
         if task.queued and (is_irq or self.config.preemptive):
             self._preempt_for(task)
         return task
@@ -271,16 +278,20 @@ class Processor(SimObj):
             if not self._free:
                 return
             heapq.heappop(self._ready)
-            # Prefer a free core that still holds this owner's context; else the lowest-numbered.
-            free, owner = self._free, task.owner
-            index = free[0]
-            if len(free) > 1 and self._cores[index].last_owner is not owner:
-                for i in free:
-                    if self._cores[i].last_owner is owner:
-                        index = i
-                        break
-            free.remove(index)
-            self._start(self._cores[index], task)
+            self._start(self._cores[self._pick_core(task.owner)], task)
+
+    def _pick_core(self, owner: object) -> int:
+        """Take a free core for *owner*'s task: one that still holds its context, else the
+        lowest-numbered."""
+        free = self._free
+        index = free[0]
+        if len(free) > 1 and self._cores[index].last_owner is not owner:
+            for i in free:
+                if self._cores[i].last_owner is owner:
+                    index = i
+                    break
+        free.remove(index)
+        return index
 
     def _start(self, core: _Core, task: _Task) -> None:
         task.queued = False
@@ -307,7 +318,13 @@ class Processor(SimObj):
             if energy is not None:
                 rec.energy_pj = energy
         same = core.last_owner is not None and core.last_owner is task.owner
-        switch = 0.0 if same else eval_cycles(cfg.switch_cycles, {})
+        if same:
+            switch = 0.0
+        else:
+            if cfg.switch_cycles is not self._switch_src:
+                self._switch_src = cfg.switch_cycles
+                self._switch_val = eval_cycles(cfg.switch_cycles, {})
+            switch = self._switch_val
         core.seg_start = now
         core.seg_switch = switch
         core.work_start = now + switch * cfg.period
