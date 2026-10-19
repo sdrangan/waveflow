@@ -297,6 +297,105 @@ def events(base: list[dict[str, Any]], platform_: CpuPlatform) -> dict[str, Any]
     }
 
 
+def time_gem5(
+    base: list[dict[str, Any]], copies: list[int], reps: int
+) -> dict[str, Any]:
+    """The same traces on gem5's HPI core (``sched_replay.c``, ``mode=total``), per operation.
+
+    Two costs, fitted apart.  The **region** is the measured pass alone: the host time gem5 spent
+    simulating it (block 0's ``simTicks / hostTickRate``, and the printed ``hostSeconds`` at 0.01 s
+    resolution beside it).  The **wall** time is end to end: the container's start, parsing the trace,
+    a warm-up pass over it, the measured pass, and printing three counters per operation.  The build
+    is timed once, in a fresh work directory (the runner caches binaries per directory).
+    """
+    from examples.cpu_sched.replay import (
+        CYCLES,
+        REPLAY,
+        _expected,
+        load_trace,
+        replay_total,
+        trace_text,
+    )
+    from waveflow.cpu.calib.gem5 import GEM5_TAG, Gem5Runner, stat_series
+
+    workdir = REPO / "work" / "sim_speed" / f"gem5_{int(time.time())}"
+    runner = Gem5Runner(workdir=workdir)
+    why = runner.unavailable()
+    if why:
+        raise SystemExit(f"gem5 is not available: {why}")
+    t = time.perf_counter()
+    runner.build(REPLAY)
+    build_s = time.perf_counter() - t
+
+    sizes: list[int] = []
+    wall: list[float] = []
+    host: list[float] = []
+    host_printed: list[float] = []
+    cycles: dict[str, float] = {}
+    model: dict[str, float] = {}
+    match = True
+    for k in copies:
+        trace = repeat_trace(base, k)
+        files = {"trace.txt": trace_text(trace)}
+        best: dict[str, float] = {}
+        for _ in range(reps):
+            t = time.perf_counter()
+            out, _, rundir = runner.run(
+                REPLAY,
+                {"trace": "/run/trace.txt", "mode": "total"},
+                extra_files=files,
+                compact_stats=True,
+                parse=False,
+            )
+            dt = time.perf_counter() - t
+            stats = rundir / "m5out" / "stats.txt"
+            region_cycles = stat_series(stats, CYCLES)[0]
+            region_s = (
+                stat_series(stats, "simTicks")[0]
+                / stat_series(stats, "hostTickRate")[0]
+            )
+            match &= out == _expected(trace)
+            if str(k) in cycles and cycles[str(k)] != region_cycles:
+                raise RuntimeError(f"gem5 is not deterministic at k={k}")
+            cycles[str(k)] = region_cycles
+            for name, v in (
+                ("wall", dt),
+                ("host", region_s),
+                ("printed", stat_series(stats, "hostSeconds")[0]),
+            ):
+                best[name] = min(best.get(name, v), v)
+        sizes.append(len(trace))
+        wall.append(best["wall"])
+        host.append(best["host"])
+        host_printed.append(best["printed"])
+        model[str(k)] = SchedTrace(trace).untimed()["cycles"]
+        print(
+            f"  k={k}: {len(trace)} ops  region {best['host']:6.2f} s host, "
+            f"{region_cycles:,.0f} cycles  wall {best['wall']:6.1f} s  counters={match}",
+            flush=True,
+        )
+    anchor = replay_total(load_trace(), runner=runner)
+    return {
+        **_fit(sizes, host, "op"),
+        "counters_match": match,
+        "region_host_printed": _fit(sizes, host_printed, "op"),
+        "wall": _fit(sizes, wall, "op"),
+        "region_cycles": cycles,
+        "model_cycles": model,
+        "anchor": {
+            "trace": "tests/fixtures/cpu/cpu_sched_trace.jsonl",
+            **anchor,
+            "pinned": 63266.0,
+            "ok": anchor["counters_match"] and anchor["total_cycles"] == 63266.0,
+        },
+        "build_s": build_s,
+        "gem5_tag": GEM5_TAG,
+        "image": runner.image,
+        "reps": reps,
+        **stamp(),
+    }
+
+
 # --- the driver ----------------------------------------------------------------------------------
 
 
@@ -321,6 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         help="wait for a load average below this before each series",
     )
     ap.add_argument("--no-bench", action="store_true", help="skip the bench rows")
+    ap.add_argument(
+        "--gem5", action="store_true", help="also replay the traces on gem5 (Docker)"
+    )
     a = ap.parse_args(argv)
     copies, jobs = sorted(a.copies), sorted(a.jobs)
 
@@ -373,14 +475,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     entry.setdefault("history", [])
 
+    if a.gem5:
+        wait_idle(a.max_load)
+        entry["gem5"] = time_gem5(base, copies, a.reps)
+        g = entry["gem5"]
+        print(
+            f"gem5 region  {g['per_op_ms'] * 1e3:8.1f} us/op  wall {g['wall']['per_op_ms'] * 1e3:.1f} "
+            f"us/op (setup {g['wall']['setup_ms'] / 1e3:.1f} s)  build {g['build_s']:.1f} s  "
+            f"anchor ok={g['anchor']['ok']}",
+            flush=True,
+        )
+
     data[key] = entry
     RUNTIME.write_text(
         json.dumps(dict(sorted(data.items())), indent=1) + "\n", encoding="utf-8"
     )
+
     ok = (
         entry["untimed"]["exact"]
         and entry["pysim_trace"]["exact"]
         and entry["pysim_system"]["all_correct"]
+        and (
+            not a.gem5
+            or (entry["gem5"]["counters_match"] and entry["gem5"]["anchor"]["ok"])
+        )
     )
     print(f"-> {RUNTIME.relative_to(REPO)} [{key}]  exact={ok}")
     return 0 if ok else 1

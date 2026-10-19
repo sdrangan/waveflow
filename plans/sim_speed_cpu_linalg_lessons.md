@@ -23,3 +23,11 @@ newest last.
 - **2026-10-19 (step 1): the XSI suite writes into tracked files.** A `pytest -m xsi` run modified
   `examples/interleaver/xsi/rtl_mem_r_stream.f` in the working tree. Stage files by name, never
   `git add -A`, while it runs, and inspect such files after it.
+- **2026-10-19 (step 4): add a measurement before the results are written, not after.** A `--gem5`
+  block inserted after `RUNTIME.write_text` ran for 2.5 min and saved nothing. Keep the write as the
+  last statement before the exit status, and check the key in the JSON after every new fidelity.
+- **2026-10-19 (step 4): what "N× faster than gem5" means depends on gem5's mode.** In `mode=total`,
+  gem5 spends ~0.47 ms of host time per scheduler operation inside the measured region, but ~11 ms per
+  operation end to end (parsing, a warm-up pass, printing counters, plus 5 s of container start). In
+  per-op marker mode, the stats dumps dominate (657 s for 410 ops). The same pysim is ~15×, ~340× or
+  ~72,000× faster depending on which of these it is compared with, so always name the comparison.
