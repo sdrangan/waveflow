@@ -83,4 +83,6 @@ cycles and the model predicted 75,656: **19.6 % high**. The model was calibrated
 a time, and a scheduler running back to back pays less per call — roughly 20–40 cycles less. That is
 a documented limit of the shipped platform; see [Calibration](../../guide/cpu/calibration.md).
 
-Pricing the same trace through the model took about 9 ms; gem5 took 657 s.
+Pricing the same trace through the model takes about 5 ms; gem5, with a marker around every
+operation, took 657 s. What each fidelity costs per operation, and which comparison with gem5 is
+fair, is measured in [Evaluation: the processor model](../../evaluation/sim_speed/cpu.md).

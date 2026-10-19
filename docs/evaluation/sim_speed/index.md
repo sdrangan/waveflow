@@ -3,7 +3,7 @@ title: Simulation speed
 parent: Evaluation
 nav_order: 1
 has_children: true
-summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy and the SSR FFT: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation, before RTL's minutes of synthesis and build per design point. What is still slow and what to do about it."
+summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy, the SSR FFT, the processor model and the linear-algebra units: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation; the processor model's pysim is 31x faster than gem5 simulating the same software; the systolic and CG units' pysims are 17x and 29x faster than their RTL, before RTL's minutes of synthesis and build per design point. What is still slow and what to do about it."
 ---
 
 # Simulation speed
@@ -35,20 +35,29 @@ pysim time  =  untimed model time  +  (SimPy events) x (cost per event)
   How many a transaction needs is a property of the model's structure.
 - **The cost per event** is SimPy's own (about 0.6 us for a bare event on the test machine) plus
   Waveflow's work around it: building and parsing a message, interface bookkeeping. On memcpy it is
-  about 16 us today.
+  about 16 us today (machine A, below); on the processor model about 2.8 us, and on the
+  linear-algebra units about 24 us (machine B). It is a property of what an event carries: a
+  processor call moves no data, a linear-algebra job moves matrices through typed messages.
 
 So the honest questions are how many events a design needs, and what each one costs -- which is why
 the first block measured is memcpy, which has no arithmetic at all.
 
 ## Results
 
-| block | untimed model | Waveflow pysim | RTL (XSI) | notes |
-|---|---|---|---|---|
-| [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length |
-| [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point |
+| block | untimed model | Waveflow pysim | RTL (XSI) or gem5 | notes | machine |
+|---|---|---|---|---|---|
+| [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length | A |
+| [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point | A |
+| [processor model](cpu.md), per scheduler operation | 2.82 us (Python + calibrated prices) | 15.3 us (4.46 events) | gem5 HPI: 469 us simulating it, 10.8 ms a run | three optimization rounds took the pysim from 31.8 us | B |
+| [systolic unit](linalg.md) 8 x 8 by 8 x 32, per job | 0.044 ms | 1.73 ms (70.5 events) | 30.1 ms | plus 32 s csynth and a 10.9 s XSI build per design point | B |
+| [CG vector unit](linalg.md) 8 iterations, per job | 1.97 ms | 11.6 ms (408.7 events) | 336 ms | plus 33 s csynth and a 9.9 s XSI build per design point | B |
 
-Measured 2026-10-13 on one Windows 11 machine (Intel 13th-generation-class CPU, Python 3.14),
-nothing else running, best of several runs.
+- **Machine A**: Windows 11, an Intel 13th-generation-class CPU, Python 3.14; measured 2026-10-13.
+- **Machine B**: Linux, an Intel Core i7-7700K (8 threads, 4.2 GHz), Python 3.12.3, SimPy 4.1.2;
+  measured 2026-10-19, with Vitis HLS / Vivado 2024.1 and gem5 v25.1.
+
+Both with nothing else running, best of several runs. The two machines differ in age and Python
+version, so compare times within a machine; across machines, compare the ratios.
 
 **Against a compiled model** the picture changes, and it should be read that way. The FFT's untimed
 model is vectorized numpy -- a fair baseline, and what most system engineers write -- but not
@@ -78,9 +87,18 @@ The estimate and its basis are on [the FFT page](fft.md#with-a-compiled-model-an
   compiled model would lower the untimed baseline *and* the pysim. See [the FFT](fft.md#future-work).
 - **Fine-grained designs.** A design that moves many small messages pays the per-transaction cost
   many times; memcpy's 0.4 ms per copy is about 800 times a numpy copy.
+- **Typed messages and their interfaces.** In the linear-algebra units, building, packing and
+  parsing messages and matrix blocks is 40% of the pysim, and the interfaces they cross another 18%;
+  the units' own code is a few percent. The same framework path is what is left in memcpy and in the
+  register traffic of the [processor model's](cpu.md#future-work) whole example. See
+  [the linear-algebra units](linalg.md#why-it-was-not-optimized-here).
 
 ## The pages
 
 - [memcpy](memcpy.md) -- the cost of a transaction, with no arithmetic to hide it.
 - [The SSR FFT](fft.md) -- three ways to run the same bit-exact FFT, and the lessons from making
   its pysim fast.
+- [The processor model](cpu.md) -- a scheduler's operations untimed, in the pysim and on gem5, and
+  three rounds that halved the pysim's cost with every simulated outcome unchanged.
+- [The linear-algebra units](linalg.md) -- the systolic and CG units against their bit-exact
+  models and their RTL, and why their remaining cost is the framework's.

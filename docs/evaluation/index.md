@@ -28,7 +28,8 @@ measured and on what machine.
 ## The evaluations
 
 - [Simulation speed](sim_speed/index.md) -- what a loosely-timed Python simulation costs against an
-  untimed model and against RTL, per transaction and per frame.
+  untimed model and against RTL or gem5: per transaction, per frame, per job and per scheduler
+  operation.
 
 Planned: agentic design (an agent building a block from the docs), and design-space exploration (how
 many design points per hour each fidelity allows).

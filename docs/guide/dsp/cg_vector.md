@@ -324,6 +324,9 @@ inside them.
 | `test_cg_vector_unit.py` | the unit in pysim and at RTL (XSI): jobs of several shapes, formats and iteration counts back to back, with every kind of rejection between and inside jobs | `xsi` for RTL |
 | `test_cg_cost.py` | the counted rules against measured builds, the fitting procedures, and the packaged models | none |
 
+What a job of the unit costs to simulate -- the bit-exact model, the pysim and the RTL -- is measured
+in [Evaluation: the linear-algebra units](../../evaluation/sim_speed/linalg.md).
+
 ## The cost model
 
 `waveflow/linalg/cg_cost.py` holds the model forms, the CG twin of the systolic unit's
