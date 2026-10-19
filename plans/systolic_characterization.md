@@ -413,6 +413,32 @@ first. All numbers Vitis HLS / Vivado xsim 2025.1.
 
 # Part B -- the scratchpad unit and the outer loop
 
+> **Revised 2026-10-19 (user).** (1) Fold the command changes for the outer loop (matrices that do
+> not fit on chip) into the same redesign. (2) Do **every** optimization before an extensive
+> calibration: RTL runs are slow, so iterate on pysim bit-exactness + csynth (II, resources) + one
+> short stream-fed RTL run per change (about 6 minutes), and calibrate and run the full gates once at
+> the end (6d). (3) Optimize buffers and pipelines freely -- the code base is early -- and flag pages
+> and examples whose numbers change with "needs re-measurement" rather than holding back.
+>
+> Optimizations found in Part A, to design in (centre `8x8x32`, 390 cycles a job, all core):
+> - **Tile overlap.** A tile costs 36 cycles for an 18-step sweep: the fill/drain and its 8 output
+>   groups do not overlap the next tile's sweep. Shadow accumulators drained into `C` during the next
+>   sweep: about 18 + a few a tile (298 -> ~160 for 8 tiles).
+> - **No core-side copy.** The core copies `X` and `B` out of the block buffers into its banks
+>   (22 + 68 cycles) before the first tile. Operands loaded straight into the banked layout the array
+>   reads, double-buffered, remove it.
+> - Together about 390 -> 170-200; then the input stream (163 words at a word a cycle) is the bound.
+> - **pysim's block buffer** (framework): the RTL ping-pong releases a writer's commit only after the
+>   reader frees the previous block; pysim allows two. Fix pysim, flag what it changes.
+>
+> Proposed choices (to confirm with the user before code): role stores `A` (bank per row), `B` (bank
+> per array column), `C` (accumulator width), two regions each; commands `Load(region, role, rows,
+> cols, transpose)`, `MatMult(a, b, c, m, k, n, accumulate)`, `Store(c, m, n)` with a `tx_id` each and a
+> `Status` per command on its own stream, errors fatal; shadow accumulators for tile overlap, and an
+> accumulate mode that starts a tile from `C`'s partial sums; a sequencer between `MemRStream` and
+> `MemWStream` running the output-stationary loop over block-major matrices (strided reads later);
+> the current `SystolicUnit` kept beside the new unit.
+
 ### Stage 6 -- addressed operands, accumulate, and a tiling wrapper with memory adaptors
 
 **Why.** Two needs the current command cannot meet: reusing an operand across jobs (in the CG
