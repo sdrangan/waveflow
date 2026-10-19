@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 #: What a software function returns: its result and the counters its cost is a function of.
 SwResult = tuple[Any, Mapping[str, float]]
 
+#: How many distinct points one function's price memo holds before it starts afresh.
+PRICE_MEMO_MAX = 65536
+
 
 def eval_cost(cost: CycleCost, feats: Mapping[str, float]) -> float:
     """*cost* at *feats*: a number is itself, a model is its prediction, never below zero."""
@@ -78,6 +81,8 @@ class SwFunction:
     working_set: Callable[[Mapping[str, float]], float] | None = None
     #: Bytes of code, normally filled from the calibration corpus (the kernel's symbol size).
     code_bytes: int | None = None
+    #: :meth:`price`'s memo: ``key -> (features, cycles, energy)``.
+    _prices: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def features(
         self, counters: Mapping[str, float], config: CpuConfig
@@ -87,6 +92,38 @@ class SwFunction:
         if self.working_set is not None:
             feats.update(regime_features(self.working_set(counters), config))
         return feats
+
+    def price(
+        self, counters: Mapping[str, float], config: CpuConfig
+    ) -> tuple[dict[str, float], float, float | None]:
+        """One call's features, compute cycles and dynamic energy (``None`` without a model).
+
+        Memoized: a price is a pure function of the counters -- and, with a working set, of the
+        configuration's cache sizes -- and of the models attached, so a point the function has
+        already been priced at costs a lookup, not two model evaluations.  Control code repeats its
+        points (a scheduler's counters are small integers), which is where the processor model spent
+        most of its time.  The models must not be refitted in place while the function is in use.
+        The features are returned as a fresh dict, as :meth:`features` returns them.
+        """
+        try:
+            key: tuple = (tuple(counters.items()), id(self.cycles), id(self.energy_pj))
+            if self.working_set is not None:
+                key += (config.l1d_bytes, config.l2_bytes)
+            hit = self._prices.get(key)
+        except TypeError:  # an unhashable counter: price it every time
+            key, hit = (), None
+        if hit is None:
+            feats = self.features(counters, config)
+            cycles = eval_cycles(self.cycles, feats)
+            energy = (
+                None if self.energy_pj is None else eval_cost(self.energy_pj, feats)
+            )
+            hit = (feats, cycles, energy)
+            if key:
+                if len(self._prices) >= PRICE_MEMO_MAX:
+                    self._prices.clear()
+                self._prices[key] = hit
+        return dict(hit[0]), hit[1], hit[2]
 
     @classmethod
     def fixed(cls, name: str, cycles: CycleCost) -> SwFunction:

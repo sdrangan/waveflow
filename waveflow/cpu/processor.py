@@ -52,7 +52,7 @@ from simpy.events import URGENT
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig
 from waveflow.cpu.report import CpuReport, build_report
-from waveflow.cpu.task import SwFunction, TaskRecord, eval_cost, eval_cycles
+from waveflow.cpu.task import SwFunction, TaskRecord, eval_cycles
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
@@ -299,14 +299,13 @@ class Processor(SimObj):
             task.started = True
             rec.t_start = now
             task.result, counters = task.func.fn(*task.args, **task.kw)
-            rec.feats = task.func.features(counters, cfg)
-            cycles = eval_cycles(task.func.cycles, rec.feats)
+            rec.feats, cycles, energy = task.func.price(counters, cfg)
             if task.rec.is_irq:
                 cycles += eval_cycles(cfg.irq_entry_cycles, {})
             task.left = cycles
             rec.cycles = cycles
-            if task.func.energy_pj is not None:
-                rec.energy_pj = eval_cost(task.func.energy_pj, rec.feats)
+            if energy is not None:
+                rec.energy_pj = energy
         same = core.last_owner is not None and core.last_owner is task.owner
         switch = 0.0 if same else eval_cycles(cfg.switch_cycles, {})
         core.seg_start = now

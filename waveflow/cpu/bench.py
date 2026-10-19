@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from waveflow.cpu.calib.kernels.sched_ops import _Counters, tg_insert, tg_remove
 from waveflow.cpu.config import CpuConfig
 from waveflow.cpu.processor import Processor
-from waveflow.cpu.task import SwFunction, eval_cost, eval_cycles
+from waveflow.cpu.task import SwFunction
 from waveflow.simulation.simulation import Simulation
 
 if TYPE_CHECKING:
@@ -195,10 +195,10 @@ class SchedTrace:
         for t in self.trace:
             for f, args in self._calls(t):
                 _, cnt = f.fn(*args)
-                feats = f.features(cnt, cfg)
-                cycles += eval_cycles(f.cycles, feats)
-                if f.energy_pj is not None:
-                    energy += eval_cost(f.energy_pj, feats)
+                _, c, e = f.price(cnt, cfg)
+                cycles += c
+                if e is not None:
+                    energy += e
                 calls += 1
         return {"cycles": cycles, "energy_pj": energy, "calls": calls}
 
