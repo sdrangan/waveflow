@@ -144,14 +144,20 @@ def _fit(sizes: list[int], secs: list[float], unit: str) -> dict[str, Any]:
     }
 
 
+#: A run shorter than this is at the mercy of anything else on the machine: it is repeated until
+#: ``SHORT_REPS`` runs, still keeping the best.  (With best of 3, one 5 ms point read 5.47 ms against
+#: 4.64 ms an hour earlier, and moved the untimed fit by 26 %: plans/sim_speed_cpu_linalg.md step 12.)
+SHORT_S = 0.05
+SHORT_REPS = 15
+
+
 def _best(fn: Callable[[], Any], reps: int) -> tuple[float, Any]:
-    best, out = None, None
-    for _ in range(reps):
+    best, out, n = float("inf"), None, 0
+    while n < reps or (best < SHORT_S and n < SHORT_REPS):
         t = time.perf_counter()
         out = fn()
-        dt = time.perf_counter() - t
-        best = dt if best is None else min(best, dt)
-    assert best is not None
+        best = min(best, time.perf_counter() - t)
+        n += 1
     return best, out
 
 
