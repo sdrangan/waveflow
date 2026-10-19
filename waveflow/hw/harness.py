@@ -37,14 +37,15 @@ from waveflow.hw.hw_system import HwSystem, _boundary_eps
 
 def _fresh_module(module, sim):
     """A copy of *module* (an instance or a class) on *sim*: its class, its name and its build
-    parameters -- the same rebuild ``system_top`` makes for csynth."""
+    parameters (:func:`~waveflow.hw.hw_module.build_params`) -- the same rebuild ``system_top``
+    makes for csynth."""
     from waveflow.hw.clock import Clock
-    from waveflow.hw.hw_module import _hw_param_names, kernel_name
+    from waveflow.hw.hw_module import build_params, kernel_name
 
     cls = module if isinstance(module, type) else type(module)
     kw: dict[str, Any] = {}
     if not isinstance(module, type):
-        kw = {n: getattr(module, n) for n in sorted(_hw_param_names(cls))}
+        kw = build_params(module)
         clk = getattr(module, "clk", None)
         if clk is not None and "clk" in getattr(cls, "__dataclass_fields__", {}):
             kw["clk"] = Clock(freq=clk.freq)
@@ -243,7 +244,13 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
 
     def calibration():
         holdout = getattr(dut, "calib_holdout", None)
-        if holdout is None or not getattr(dut, "timing_phases", None):
+        # Timed phases on the DUT itself, or on a task inside it (a composite kernel's leaves).
+        todo, timed = [dut], False
+        while todo and not timed:
+            m = todo.pop()
+            timed = bool(getattr(m, "timing_phases", None))
+            todo.extend(getattr(m, "sub_comps", {}).values())
+        if holdout is None or not timed:
             return None
         from waveflow.build.phase_calib import CalibWorkload
 

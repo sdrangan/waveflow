@@ -7,7 +7,9 @@
 // waveflow.linalg.systolic.cmd_status), and length against the dimensions (BAD_LENGTH).  A valid
 // request sends the job to the load task and the core, the reply header to the store, and its
 // payload words to the load task.  A rejected one sends the store a reply with its status and no
-// payload, and is drained by length.  Python twin: waveflow.linalg.systolic.SystolicRx.
+// payload, and is drained by length.  IN_T is s_in's word type (KernelTask.framed): framed_word
+// inside a composite, axi4s_word at the unit's own top.  Python twin:
+// waveflow.linalg.systolic.SystolicRx.
 #ifndef WF_SYSTOLIC_RX_TASK_H
 #define WF_SYSTOLIC_RX_TASK_H
 #include "hls_stream.h"
@@ -17,8 +19,8 @@
 #include "wf_linalg_traits.h"
 #include "wf_systolic_cmd.h"
 
-template <int WBW, int MMAX, int KMAX, int NMAX, int L, int R, int C, int IOID>
-static void systolic_rx_task(hls::stream<streamutils::framed_word<WBW> >& s_in,
+template <int WBW, int MMAX, int KMAX, int NMAX, int L, int R, int C, int IOID, typename IN_T>
+static void systolic_rx_task(hls::stream<IN_T>& s_in,
                              hls::stream<ap_uint<64> >& load_cmd,
                              hls::stream<ap_uint<64> >& core_cmd,
                              hls::stream<streamutils::framed_word<WBW> >& store_cmd,
@@ -27,7 +29,7 @@ static void systolic_rx_task(hls::stream<streamutils::framed_word<WBW> >& s_in,
     const int LW = IO::a_mem::template lane_capacity<WBW>();  // memory elements per word
     LinalgHeader h;
     streamutils::tlast_status tl;
-    h.template read_framed_stream<WBW>(s_in, tl);
+    wf_linalg::read_header<WBW>(h, s_in, tl);
     const int op = h.op, m = h.m, k = h.k, n = h.n;
     // k is a multiple of L, or a power of two below it (L is one)
     const bool k_ok = (k & (L - 1)) == 0 || (k < L && (k & (k - 1)) == 0);
@@ -57,7 +59,9 @@ static void systolic_rx_task(hls::stream<streamutils::framed_word<WBW> >& s_in,
         for (ap_uint<32> i = 0; i < h.length; ++i) {
 #pragma HLS LOOP_TRIPCOUNT max = (MMAX * KMAX + KMAX * NMAX) / 2
 #pragma HLS PIPELINE II = 1
-            s_pay.write(s_in.read());
+            bool last;
+            const ap_uint<WBW> d = streamutils::read_boundary_word<IN_T, WBW>(s_in, last);
+            streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(s_pay, d, last);
         }
     } else {
         wf_linalg::reply<WBW>(store_cmd, h, st, 0);

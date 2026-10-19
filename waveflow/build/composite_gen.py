@@ -98,6 +98,9 @@ class TaskInst:
     #: The C++ word types of the body's framed ports (``KernelTask.framed``), template arguments after
     #: ``template_args``.  Vitis names them in the instance too (:func:`_vitis_type_name`).
     word_types: tuple[str, ...] = ()
+    #: The body's parameter names, in signature order (``KernelTask.signature``): Vitis names a
+    #: task's stream-of-blocks pins after the PARAMETER (``<inst>_a_blk_write``), not the channel.
+    params: tuple[str, ...] = ()
 
     @property
     def inst_name(self) -> str:
@@ -522,8 +525,24 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
              "producer": prod, "consumer": cons}
 
     if ch.kind == "sob":
-        # A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO: there is no
-        # din/write/full_n vocabulary to bind, so the channel is declared but has no burst view.
+        # A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO, so it has no
+        # burst view.  Its events are the locks: each side's release pulse (`<inst>_<param>_write` /
+        # `_read`, named after the task's PARAMETER) and its first access to the block (`_ce0`),
+        # beside the buffer's own `<ch>_i_full_n` / `<ch>_t_empty_n` (Vitis 2025.1 RTL,
+        # plans/systolic_characterization.md, Stage 0).  Optional roles: a trace that lacks them is
+        # a design without block events, not a broken binding.
+        def _param(t: int | None) -> str | None:
+            if t is None or not tasks[t].params or ch.name not in tasks[t].args:
+                return None
+            return tasks[t].params[tasks[t].args.index(ch.name)]
+
+        mp, sp = _param(ch.master_task), _param(ch.slave_task)
+        if prod is not None and mp is not None:
+            entry["write"] = {"blk_release": f"{prod}_{mp}_write", "blk_ce0": f"{prod}_{mp}_ce0",
+                              "blk_full_n": f"{ch.name}_i_full_n"}
+        if cons is not None and sp is not None:
+            entry["read"] = {"blk_release": f"{cons}_{sp}_read", "blk_ce0": f"{cons}_{sp}_ce0",
+                             "blk_empty_n": f"{ch.name}_t_empty_n"}
         return entry
 
     entry["write"] = {"din": f"{prod}_{ch.name}_din",
@@ -1237,7 +1256,7 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
                 w = int(getattr(phys, "bitwidth", width))
                 word_types.append(f"streamutils::framed_word<{w}>")
         tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header,
-                              tuple(word_types)))
+                              tuple(word_types), params=tuple(kt.signature)))
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 

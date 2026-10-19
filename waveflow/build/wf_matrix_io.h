@@ -143,11 +143,12 @@ ELEMS:
 }
 
 // Serialize n elements of lane groups of register type T as one burst (last on its final word),
-// with zeros in the lanes of the final word past n.  The mirror of wf_load_matrix: values leave a
+// with zeros in the lanes of the final word past n.  WT, the stream's word type, is framed_word on
+// an internal FIFO or axi4s_word at a top's port.  The mirror of wf_load_matrix: values leave a
 // group register from the bottom, or a word takes several groups from fixed lanes.
-template <int WBW, int L, int MAXG, class T, class MEM>
+template <int WBW, int L, int MAXG, class T, class MEM, typename WT>
 static void wf_store_matrix(const typename wf_lanes::group<T, L>::type blk[MAXG],
-                            hls::stream<streamutils::framed_word<WBW> >& s_out, int n) {
+                            hls::stream<WT>& s_out, int n) {
 #pragma HLS INLINE
     static_assert((L & (L - 1)) == 0, "the lane count must be a power of two");
     typedef typename wf_lanes::group<T, L>::type grp_t;
@@ -174,7 +175,7 @@ static void wf_store_matrix(const typename wf_lanes::group<T, L>::type blk[MAXG]
                 }
                 buf[i] = typename MEM::value_type(re, im);
             }
-            MEM::template write_framed_stream_lane<WBW>(buf, s_out, w == NW - 1, LW);
+            MEM::template write_boundary_lane<WBW>(buf, s_out, w == NW - 1, LW);
             cur = wf_matrix_io::shift<grp_t::width, LW * VB>::out(cur);
             if (q == WPG - 1) {
                 q = 0;
@@ -206,7 +207,7 @@ static void wf_store_matrix(const typename wf_lanes::group<T, L>::type blk[MAXG]
                     buf[j * L + l] = typename MEM::value_type(re, im);
                 }
             }
-            MEM::template write_framed_stream_lane<WBW>(buf, s_out, w == NW - 1, LW);
+            MEM::template write_boundary_lane<WBW>(buf, s_out, w == NW - 1, LW);
             e0 += LW;
         }
     }

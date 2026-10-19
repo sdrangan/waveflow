@@ -706,7 +706,7 @@ def test_the_rf_guide_names_the_part_its_examples_target():
 
 
 # ---------------------------------------------------------------------------
-# guide/linalg/systolic.md — the cost model's measured accuracy and the limits it quotes
+# guide/dsp/systolic/index.md — the cost model's measured accuracy and the limits it quotes
 # ---------------------------------------------------------------------------
 #
 # The page's accuracy table is the evidence for a cost model a reader will price designs with, so it
@@ -729,7 +729,7 @@ def _linalg_metrics() -> dict:
 
 def _systolic_page() -> str:
     """The page with its line breaks folded, so a quoted figure may wrap."""
-    return " ".join(_page("guide/linalg/systolic.md").split())
+    return " ".join(_page("guide/dsp/systolic/index.md").split())
 
 
 def test_systolic_page_quotes_the_held_out_scores():
@@ -753,10 +753,6 @@ def test_systolic_page_quotes_the_held_out_scores():
          f"| {pct('core_lut_mape_pct')} ({pct('core_lut_max_pct')}) |"),
         (f"| FF, mean error (worst) | {pct('unit_ff_mape_pct')} ({pct('unit_ff_max_pct')}) "
          f"| {pct('core_ff_mape_pct')} ({pct('core_ff_max_pct')}) |"),
-        (f"| steady interval, mean error (worst), {len(_linalg_rows('linalg_validation_cycles_v2.csv'))} "
-         f"job shapes | {pct('interval_mape_pct')} ({pct('interval_max_pct')}) | |"),
-        (f"| rejected requests back to back, mean error (worst) | {pct('reject_mape_pct')} "
-         f"({pct('reject_max_pct')}) | |"),
     ]
     text = _systolic_page()
     for row in rows:
@@ -769,36 +765,39 @@ def test_systolic_page_quotes_the_held_out_scores():
 
 
 def test_systolic_page_quotes_the_measured_centre_build():
-    """The example's configuration as measured: the unit's resources and its full-size interval."""
+    """The example's configuration as measured by the resource calibration (Vitis 2024.1).  Its
+    2024.1 interval is not quoted: it was the unit before the 2026-10 reply-FIFO fix."""
     build = "su_m8_k8_n32_r4_c8_l4_w12_f4_b64"
     unit = next(r for r in _linalg_rows("linalg_modules.csv")
                 if r["build"] == build and r["what"] == "unit")
-    full = next(r for r in _linalg_rows("linalg_cycles.csv")
-                if r["build"] == build and r["op"] == "1" and (r["m"], r["k"], r["n"]) == ("8", "8", "32"))
-    want = (f"{int(unit['lut']):,} LUT, {int(unit['ff']):,} FF, {unit['dsp']} DSP and {unit['bram']} "
-            f"block RAM, and {full['interval']} cycles per `8 × 8 × 32` message")
+    want = (f"{int(unit['lut']):,} LUT, {int(unit['ff']):,} FF, {unit['dsp']} DSP and "
+            f"{unit['bram']} block RAM")
     assert want in _systolic_page(), f"systolic.md no longer quotes the measured centre build: {want!r}"
 
 
-def test_systolic_page_quotes_the_isolated_rejections_and_the_run_they_spoil():
-    """A rejected request alone between served jobs: one reply gap whatever its length, and the
-    recorded run whose prediction it spoils."""
-    import itertools
+def test_systolic_timing_page_quotes_the_filed_calibration():
+    """guide/dsp/systolic/timing.md's fit table is the record the calibration filed for the centre
+    configuration's core (waveflow/linalg/calib/, under its identity), as rounded on the page."""
+    from tests.linalg._systolic_harness import unit
+    from waveflow.calib.phases import stored_phases
+    from waveflow.calib.record_store import ModuleStore
+    from waveflow.linalg.systolic import CALIB_DIR
 
-    rows = _linalg_rows("linalg_unit_7_4_cycles.csv")
-    gaps = {int(cur["reply_cycle"]) - int(prev["reply_cycle"])
-            for prev, cur in itertools.pairwise(rows)
-            if prev["run"] == cur["run"] and cur["status"] != "OK"}
-    assert len(gaps) == 1, f"the isolated rejections no longer take one time: {sorted(gaps)}"
-    m = _linalg_metrics()
-    centre = [r for r in rows if r["run"] == "centre"]
-    words = {4: "four", 10: "ten"}
-    text = _systolic_page()
-    assert f"every such reply came {gaps.pop()} cycles after the previous one" in text
-    assert (f"one recorded run of {words[len(centre)]} jobs, "
-            f"{words[sum(r['status'] != 'OK' for r in centre)]} of them rejected, was predicted at "
-            f"{float(m['run_7_4.centre.predicted']):,.0f} cycles against "
-            f"{int(m['run_7_4.centre.measured']):,} measured") in text
+    core = unit().core
+    rec = stored_phases(ModuleStore(CALIB_DIR), core)
+    assert rec is not None, "no calibration record for the centre configuration's core"
+    assert rec.provenance.tool == "vitis 2025.1"
+    ph = rec.payload["phases"]
+    cx, cb, sw = ph["copy_x"]["copy_x"], ph["copy_b"]["copy_b"], ph["sweep"]["sweep"]
+    text = " ".join(_page("guide/dsp/systolic/timing.md").split())
+    assert f"| `start` | `{ph['start']['start']['intercept']:.0f}` |" in text
+    assert f"| `to_b` | `{ph['to_b']['to_b']['intercept']:.0f}` |" in text
+    assert f"`{cx['intercept']:.0f} + ag`" in text and round(cx["ag"], 6) == 1
+    assert f"`{cb['intercept']:.0f} + bg`" in text and round(cb["bg"], 6) == 1
+    want = f"`{sw['intercept']:.1f} + {sw['tiles']:.1f}·tiles + {sw['steps']:.1f}·steps`"
+    assert want in text, f"timing.md no longer quotes the sweep fit {want}"
+    worst = rec.payload["max_abs_residual"]["sweep"]["sweep"]
+    assert f"({worst:.2f})" in text, f"timing.md no longer quotes the sweep's worst residual {worst:.2f}"
 
 
 def test_systolic_page_names_the_block_ram_misses_and_their_buffers():
@@ -847,27 +846,15 @@ def test_systolic_page_quotes_the_first_round_and_how_the_builds_were_chosen():
 
 
 def test_systolic_page_quotes_the_model_figures_it_states_in_prose():
-    """Figures the prose states outside the example's output: pysim's share against the memory-fed
-    sum for the example's job, the adapters' block RAM, and the calibrated range."""
+    """Figures the prose states outside the example's output: the adapters' block RAM and the
+    calibrated range.  (The 2024.1 cycle model's share and sum are no longer quoted: they described
+    the unit before the 2026-10 reply-FIFO fix.)"""
     import json
 
     from examples.mimo_cg.hw.linalg_cal import MAX_PES, VALUES
     from waveflow.linalg import cost
-    from waveflow.linalg.systolic import MatmulOp, SystolicUnit
-    from waveflow.simulation.simulation import Simulation
-    from waveflow.utils.fixputils import Format, OMode, QMode
 
-    def reg(W: int, I: int) -> Format:
-        return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
-
-    u = SystolicUnit(name="mm", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32, R=4, C=8, L=4, form=4,
-                     word_bits=64, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
-    coef = cost.message_model()
-    share = cost.core_interval(coef, 8, 8, 32, L=4, R=4, C=8)
-    total = cost.message_interval(coef, cost.message_features(u, MatmulOp.MUL, 8, 8, 32))
     text = _systolic_page()
-    assert (f"{round(share)} cycles for the job of the example, where the memory-fed sum is "
-            f"{round(total)}") in text
 
     chan = json.loads((cost.platform_dir() / "models" / cost.CHANNELS / "params.json")
                       .read_text(encoding="utf-8"))["adapters_bram"]
@@ -892,12 +879,12 @@ def test_systolic_page_quotes_the_synthesis_timing_of_every_build():
 
 
 # ---------------------------------------------------------------------------
-# guide/linalg/cg_vector.md — the CG unit's cost model, measured runs and limits
+# guide/dsp/cg_vector.md — the CG unit's cost model, measured runs and limits
 # ---------------------------------------------------------------------------
 
 
 def _cg_page() -> str:
-    return " ".join(_page("guide/linalg/cg_vector.md").split())
+    return " ".join(_page("guide/dsp/cg_vector.md").split())
 
 
 def _cg_metrics() -> dict:

@@ -23,15 +23,18 @@ A message's time in a stream of messages fed from memory is a sum of compute and
 
 the tiles' skewed sweeps ``tiles·(k + R + C − 2)``, their outputs ``tiles·R·C/L``, the load of ``B``
 in lane groups, the tile count, the words in and out, and for ``Aᴴ`` the ``m·k`` values of the
-transposing load (:func:`fit_message_model`: least squares).  The terms add rather than overlap: in
-a design whose ``m_axi`` reader and writer share one generated top, their pointer FIFOs keep the
-memory transfers in step with the jobs.  A rejected request costs ``r0 + r1·w_in`` (its payload
-is drained), fitted on rejected requests sent back to back (:func:`fit_reject_model`).
+transposing load (:func:`fit_message_model`: least squares).  A rejected request costs
+``r0 + r1·w_in`` (its payload is drained), fitted on rejected requests sent back to back
+(:func:`fit_reject_model`).
 
-pysim takes its time from the same model: the core spends the intercept and the compute terms
-(:func:`core_interval`) per matrix ``B``, and the loader ``c_ah·m·k`` on a transposing load.  Its
-transfers take a word per cycle and overlap the compute, so a stream of messages sent straight to
-the unit runs at the core's share, not at the memory-fed sum above.
+**This cycle model describes the unit before its 2026-10 fix** (Vitis 2024.1).  Its terms added
+because a 2-deep reply FIFO serialized each job's load behind the previous job's store -- not, as
+this docstring used to say, because of the ``m_axi`` pointer FIFOs.  With the FIFO two headers deep
+the unit runs at its core's pace, fed from streams or from memory (390 cycles for ``8x8x32`` at the
+centre, Vitis 2025.1), and pysim times the core by its calibrated timed phases
+(:class:`~waveflow.linalg.systolic.SystolicCore`, ``docs/guide/dsp/systolic/timing.md``).  The model
+is kept for the study that used it (``examples/mimo_cg``); the loader's transposing load still takes
+its per-value cost ``c_ah`` from it.
 
 The fitted numbers live in the packaged platform :data:`PLATFORM`: the task fits under
 ``models/<task>/params.json`` (the framework's resource-model layout), the channel model under

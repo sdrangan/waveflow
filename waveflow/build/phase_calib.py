@@ -60,6 +60,21 @@ def timed_modules(sysm) -> list:
     return out
 
 
+def _kernel_holding(root, mod, kernel_names) -> Any:
+    """The module of *root*'s tree named in *kernel_names* (a csynth'd kernel) that holds *mod* as a
+    task below it, or ``None``."""
+    def below(m) -> bool:
+        return any(c is mod or below(c) for c in getattr(m, "sub_comps", {}).values())
+
+    todo = [root]
+    while todo:
+        m = todo.pop(0)
+        if m.name in kernel_names and below(m):
+            return m
+        todo.extend(getattr(m, "sub_comps", {}).values())
+    return None
+
+
 def calibrate_system(sysm, vcd: Path, spec, holdout=None, save: bool = True) -> dict:
     """Steps 1-3 on an un-run *sysm* whose RTL run traced *vcd* (a run of *spec*, the system top's
     :class:`~waveflow.build.system_top.SystemTopSpec`).  Returns ``{module: {phase: {span: report}}}``,
@@ -69,14 +84,36 @@ def calibrate_system(sysm, vcd: Path, spec, holdout=None, save: bool = True) -> 
 
     sysm.run()
     scopes = {k.hw.name: spec.scope_of(k) for k in spec.kernels if k.hw is not None}
+    widths = {k.hw.name: max((int(p.width) for p in k.ports if getattr(p, "width", None)),
+                             default=64) for k in spec.kernels if k.hw is not None}
     out: dict = {}
+    bound: dict = {}
     for mod in timed_modules(sysm):
-        if mod.name not in scopes:
-            raise RuntimeError(f"calib: '{mod.name}' declares timed phases but is not a kernel of "
-                               f"the traced top")
-        rtl = rtl_xfers(vcd, mod, scopes[mod.name])
+        if mod.name in scopes:
+            rtl = rtl_xfers(vcd, mod, scopes[mod.name])
+        else:
+            # A task inside a csynth'd kernel (its endpoints are the kernel's internal channels):
+            # read at the kernel's scope through its top's trace manifest.
+            kernel = _kernel_holding(sysm.dut(), mod, scopes)
+            if kernel is None:
+                raise RuntimeError(f"calib: '{mod.name}' declares timed phases but is neither a "
+                                   f"kernel of the traced top nor a task inside one")
+            if kernel.name not in bound:
+                from waveflow.build.composite_gen import composite_top_spec
+                from waveflow.utils.trace import load_trace
+
+                manifest = composite_top_spec(kernel, width=widths[kernel.name]).trace_manifest()
+                bound[kernel.name] = load_trace(manifest, vcd, scope=scopes[kernel.name])
+            from waveflow.calib.phases import internal_xfers
+
+            rtl = internal_xfers(bound[kernel.name], mod, kernel)
         mine = out.setdefault(mod.name, {})
         for phase in mod.timing_phases.values():
+            if not phase.records:
+                # Not exercised by this workload (the systolic core's second B of a job, in a unit
+                # that always sends one): nothing measured, nothing filed -- it keeps its seed.  A
+                # phase that ran but has rows with no RTL partner is a gap, and fails below.
+                continue
             rows = phase_corpus(phase, rtl)
             done = {(r["span"], r["occurrence"]) for r in rows}
             missing = [(r.span, r.occurrence) for r in phase.records
@@ -147,8 +184,11 @@ class PhaseCalibStep(_SystemStep):
         from waveflow.hw.hw_module import kernel_name
 
         root = Path(config.root_dir)
+        kernels = {k.hw.name for k in self.rtl.spec.kernels if k.hw is not None}
         for mod in timed_modules(sysm):
-            part = csynth_part((root / rtl_rel(kernel_name(mod))).parents[1]) or ""
+            # A task inside a kernel was synthesized as part of that kernel's top.
+            host = mod if mod.name in kernels else (_kernel_holding(sysm.dut(), mod, kernels) or mod)
+            part = csynth_part((root / rtl_rel(kernel_name(host))).parents[1]) or ""
             rec, ident = phase_record(mod, rep[mod.name], workload=self.workload_digest, part=part,
                                       period_ns=float(mod.clk.period) * 1e9,
                                       tool=f"vitis {config.vitis_version or ''}".strip(),

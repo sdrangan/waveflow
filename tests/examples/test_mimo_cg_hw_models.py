@@ -264,11 +264,13 @@ def test_block_spans_come_from_the_models_inside_the_space():
     ids=["default", "k8_l2", "k16_l16_32bit"],
 )
 def test_python_simulation_takes_the_cores_cycle_models(c, monkeypatch):
-    """Bit-exact as before, and cycle-approximate by the components' own calibrated models: between
-    two job completions the vector core starts the job and runs ``nit`` iterations, each after one
-    matrix of the systolic core, so the interval is START + nit·(matrix + STEP)."""
+    """Bit-exact as before, and cycle-approximate by the components' own timing: between two job
+    completions the vector core starts the job and runs ``nit`` iterations, each after one matrix of
+    the systolic core -- its timed phases: copy ``B`` (from the block's acquire: it waits for the
+    vector core's ``P``) and sweep the tiles -- so the interval is START + nit·(copy B + sweep + STEP).
+    (Until 2026-10 the systolic core took the 2024.1 cycle model's share; plans/systolic_characterization.md.)"""
     from examples.mimo_cg.hw.detector import CgDetectorSim, detector_problems
-    from waveflow.linalg import cg_cost, cost
+    from waveflow.linalg import cg_cost
     from waveflow.linalg.cg_vector import CgOp
     from waveflow.simulation.stream_tb import StreamSink
 
@@ -287,12 +289,15 @@ def test_python_simulation_takes_the_cores_cycle_models(c, monkeypatch):
     tb = CgDetectorSim(probs, jobs, **kw).run()  # raises unless every X word is exact
     det = tb.dut
     ends = np.array(done_at) / det.clk.period
-    cg, mm = cg_cost.message_model(), cost.message_model()
+    cg = cg_cost.message_model()
     start, step = (
         cg_cost.core_interval(cg, op, c.K, N, L=c.L, formats=det.formats)
         for op in (CgOp.START, CgOp.STEP)
     )
-    matrix = cost.core_interval(mm, c.K, c.K, N, L=c.L, R=int(det.mm.R), C=c.C)
+    core = det.mm
+    f = core.features(c.K, c.K, N)
+    matrix = (core.copy_b.predict(bg=f["bg"])["copy_b"]
+              + core.sweep.predict(tiles=f["tiles"], steps=f["steps"])["sweep"])
     want = np.array([start + nit * (matrix + step) for nit in jobs[1:]])
     assert np.diff(ends) == pytest.approx(want, abs=0.5)
 

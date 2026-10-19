@@ -78,7 +78,7 @@ onto a Waveflow abstraction, and the whole thing simulates, verifies, and genera
   it (FIR, FFT, systolic, vector) — is a `HwModule` with typed interfaces (the **Serial I/F** and
   **Bus/memory I/F** of the figure above) and a behavior: modeled in Python, simulated at NumPy
   speed, verified bit-exact against its golden, and realized in HLS. The first PEs through that flow
-  are Waveflow's [linear-algebra components](../guide/linalg/index.md) — a systolic matrix multiply and
+  are Waveflow's [linear-algebra components](../guide/dsp/linalg_common.md) — a systolic matrix multiply and
   a conjugate-gradient vector unit, composed into the [CG massive-MIMO detector](../examples/mimo_cg/index.md)
   and bit-exact at RTL — and an [SSR FFT](../examples/ssr_fft/index.md): concrete SALSA building blocks,
   not sketches.

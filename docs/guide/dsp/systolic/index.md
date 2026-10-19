@@ -1,10 +1,10 @@
 ---
 title: Systolic Matrix Multiply
-parent: Linear Algebra
-nav_order: 1
-has_children: false
+parent: DSP Blocks
+nav_order: 3
+has_children: true
 snippets: run
-summary: "SystolicCore and SystolicUnit compute C = q(A·B) or C = q(Aᴴ·B) on complex fixed-point matrices with an output-stationary array of R × C processing elements, exactly before one rounding and bit for bit like the model in waveflow.linalg.matmul. Covers what it computes, its parameters and run-time dimensions, the core's command and blocks, the unit's request and reply messages, a runnable example, how to build and test it, its calibrated cost model with measured accuracy, and its limits."
+summary: "SystolicCore and SystolicUnit compute C = q(A·B) or C = q(Aᴴ·B) on complex fixed-point matrices with an output-stationary array of R × C processing elements, exactly before one rounding and bit for bit like the model in waveflow.linalg.matmul. Covers what it computes, its parameters and run-time dimensions, the core's command and blocks, the unit's request and reply messages, a runnable example, how to build and test it, its calibrated resource model with measured accuracy (Vitis 2024.1), its timing -- the core's calibrated phases, 390 cycles a job for 8x8x32 at the centre configuration (Vitis 2025.1), detailed on the Timing page -- and its limits."
 ---
 
 # Systolic Matrix Multiply
@@ -19,7 +19,9 @@ Every product and every sum is exact, and `C` is rounded and saturated **once**,
 format. The bit-exact model is `waveflow.linalg.matmul.matmul`. The pysim modules call it, and the
 HLS body equals it in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at
 RTL. For what the linear-algebra components share (formats, lane groups, messages, the build
-step), see [Linear Algebra](./index.md).
+step), see [Linear-Algebra Conventions](../linalg_common.md). [Architecture](architecture.md)
+follows one job through the hardware cycle by cycle -- storage, tiling, load, store, the schedule --
+and [Timing](timing.md) says where its timing is measured and what was measured.
 
 ## What it computes
 
@@ -61,7 +63,7 @@ the two forms differ in DSPs and LUTs ([the cost model](#the-cost-model)).
 | `clk` | 250 MHz | the clock of the pysim timing | |
 
 The integer parameters are `HwParam`s. They reach the C++ bodies as template arguments, and the
-formats reach them through the format id ([Linear Algebra](./index.md#formats)).
+formats reach them through the format id ([Linear-Algebra Conventions](../linalg_common.md#formats)).
 
 **Run-time dimensions.** Each job states its own `m`, `k` and `n`, up to the maxima:
 
@@ -104,7 +106,7 @@ configuration.
 ## The standalone unit
 
 `SystolicUnit` puts the core behind three tasks and speaks the framed messages of
-[Linear Algebra](./index.md#messages) on `s_in` and `s_out`:
+[Linear-Algebra Conventions](../linalg_common.md#messages) on `s_in` and `s_out`:
 
 ```mermaid
 flowchart LR
@@ -261,20 +263,19 @@ print(np.array_equal(cr, want_r.ravel()) and np.array_equal(ci, want_i.ravel()))
 True
 ```
 
-The cost model prices this configuration per task, plus the unit's channels. It then gives the
-cycles per message for this job, the core's share of them, and the cycles of a rejected request of
-the same length:
+The resource model prices this configuration per task, plus the unit's channels, and the core's
+timed phases predict its time for this job ([Timing](timing.md)):
 
 ```python
 from waveflow.linalg import cost
 
 for task, row in cost.predict_unit(unit).items():
     print(f"{task:22} " + " ".join(f"{key}={row[key]:5.0f}" for key in ("lut", "ff", "dsp", "bram")))
-coef = cost.message_model()
-feats = cost.message_features(unit, MatmulOp.MUL, m, k, n)
-share = cost.core_interval(coef, m, k, n, L=unit.L, R=unit.R, C=unit.C)
-print(round(cost.message_interval(coef, feats)), round(share),
-      round(cost.reject_interval(coef, feats["w_in"])))
+core, f = unit.core, unit.core.features(m, k, n)
+spans = (core.start.predict()["start"], core.copy_x.predict(ag=f["ag"])["copy_x"],
+         core.to_b.predict()["to_b"], core.copy_b.predict(bg=f["bg"])["copy_b"],
+         core.sweep.predict(tiles=f["tiles"], steps=f["steps"])["sweep"])
+print([round(c) for c in spans], round(sum(spans)))
 ```
 
 ```text
@@ -284,14 +285,14 @@ systolic_core_task     lut=12956 ff= 8856 dsp=  130 bram=    0
 systolic_store_task    lut= 1063 ff=  550 dsp=    1 bram=    0
 systolic_unit_channels lut= 2629 ff= 2613 dsp=    0 bram=   17
 total                  lut=23365 ff=14347 dsp=  136 bram=   17
-724 400 203
+[5, 17, 3, 65, 298] 388
 ```
 
-This configuration was one of the calibration builds. Measured with Vitis HLS / Vivado xsim
-2024.1 (`examples/mimo_cg/paper_data/linalg_modules.csv` and `linalg_cycles.csv`), it took
-24,339 LUT, 14,543 FF, 136 DSP and 17 block RAM, and 720 cycles per `8 × 8 × 32` message. A
-rejected request alone between served jobs takes far fewer cycles than 203 (see
-[Limits](#limits)).
+This configuration was one of the resource calibration builds. Measured with Vitis HLS 2024.1
+(`examples/mimo_cg/paper_data/linalg_modules.csv`), it took 24,339 LUT, 14,543 FF, 136 DSP and 17
+block RAM. At RTL (Vitis HLS / Vivado xsim 2025.1) back-to-back jobs of this shape take **390 cycles**
+each -- the core's own work, the phases above plus the next command's read -- whether the unit is fed
+from streams or from memory.
 
 ## Building and testing it
 
@@ -315,7 +316,7 @@ three memory element types.
 
 **The top and the RTL test.** The unit is a free-running composite, so its top and its XSI
 testbench come from the framework's composite flow, like any other
-([the concurrent flow](../systems/index.md)). `tests/linalg/_unit_bench.py` is a complete
+([the concurrent flow](../../systems/index.md)). `tests/linalg/_unit_bench.py` is a complete
 example. It feeds the unit from memory through an in-band `MemRStream` and lands its replies
 through an in-band `MemWStream`, with two small test-only framers that turn a job list into memory
 commands. It then runs csynth and an XSI simulation that checks every reply bit for bit.
@@ -332,7 +333,7 @@ commands. It then runs csynth and an XSI simulation that checks every reply bit 
 ## The cost model
 
 `waveflow/linalg/cost.py` holds the model forms. The fitted numbers live in the packaged platform
-`xczu48dr_250mhz_vitis2024_1` ([Linear Algebra](./index.md#cost-data)).
+`xczu48dr_250mhz_vitis2024_1` ([Linear-Algebra Conventions](../linalg_common.md#cost-data)).
 
 ### Resources
 
@@ -368,38 +369,21 @@ tool version. Other modules in the same design are priced from that platform too
 
 ### Cycles
 
-The cycle model gives a message's **steady interval**: the time it adds to a stream of messages
-fed from memory. It is a sum of compute and transfer terms:
+The unit's time is its core's: back-to-back jobs overlap their loads and stores with the core's
+work, so the steady interval is the core's timed phases -- copy `X`, copy `B`, sweep the tiles, and two
+short gaps -- calibrated in the unit's own harness at RTL (Vitis 2025.1). [Timing](timing.md) has the phases,
+where each is measured, the fit and its held-out score; pysim takes its time from them.
 
-<!-- snippet: skip -->
-```python
-interval = c0 + c · (sweep, out, b_load, tiles, w_in, w_out, ah)
-```
-
-| Term | Value |
-|---|---|
-| `sweep` | the tiles' skewed sweeps, `tiles·(k + R + C − 2)` |
-| `out` | the tiles' outputs, `tiles·R·C/L` |
-| `b_load` | loading `B` in lane groups, `k·n/L` |
-| `tiles` | `(m/R)·(n/C)` |
-| `w_in`, `w_out` | words in (header and payload) and words out |
-| `ah` | for `MUL_AH`, the `m·k` values of the transposing load; 0 otherwise |
-
-The terms add rather than overlap. In a design whose in-band memory reader and writer share one
-generated top, their pointer FIFOs keep the memory transfers in step with the jobs. A rejected
-request costs `r0 + r1·w_in`. `cost.message_features`, `cost.message_interval` and
-`cost.reject_interval` evaluate it; `cost.message_model()` loads the coefficients. The latency of
-the first message after reset is not modelled.
-
-**Simulated time.** pysim takes its time from the same model. The core spends its share of each
-message, the intercept and the compute terms (`cost.core_interval`), and the loader spends
-`c_ah·m·k` cycles on a transposing load. Transfers take one word per cycle and overlap the
-compute, so requests sent straight to the unit run at the core's share in pysim: 400 cycles for the
-job of the example, where the memory-fed sum is 724.
+The packaged cycle model (`cost.message_model()`, `message_interval`, `reject_interval`) was fitted
+with Vitis 2024.1 on the unit before its 2026-10 fix, when a 2-deep FIFO serialized load and store
+([Timing](timing.md#the-fix)). It describes that unit, not this one, and is kept for the study that
+used it (`examples/mimo_cg`).
 
 ### Calibration and accuracy
 
-The calibration ran in two rounds. A first model was fitted on 29 builds chosen by rule (the
+These are the resource models' calibration and scores (Vitis HLS 2024.1); the 2026-10 fix changed
+one FIFO's depth, not the datapath. The cycle side of the same study is retired with the cycle model
+([Cycles](#cycles)). The calibration ran in two rounds. A first model was fitted on 29 builds chosen by rule (the
 centre, each parameter varied alone, the corners of the multiply forms, 16 lanes, 32-bit words)
 and scored on 12 held-out builds drawn at random. It missed: block RAM exact on 8 of 12 units, core
 LUT error 13.5% (`examples/mimo_cg/paper_data/linalg_validation_metrics.csv`). Those 12 builds
@@ -423,8 +407,6 @@ committed before any build of that round ran. All 12 were bit-exact at RTL. The 
 | block RAM exact | 83.3% of builds (10 of 12) | 100% of builds |
 | LUT, mean error (worst) | 6.1% (12.0%) | 8.8% (20.7%) |
 | FF, mean error (worst) | 2.3% (5.0%) | 2.1% (4.0%) |
-| steady interval, mean error (worst), 48 job shapes | 1.8% (5.4%) | |
-| rejected requests back to back, mean error (worst) | 0.4% (1.3%) | |
 
 Every one of the 73 builds met 4 ns in synthesis (estimated 3.352 or 3.392 ns,
 `linalg_builds.csv`). The study tooling is `examples/mimo_cg/hw/linalg_cal.py`: `run` builds and
@@ -432,8 +414,9 @@ measures, `merge` writes the tables, `fit` writes the packaged models, and `vali
 
 ## Limits
 
-* **One tool version, one part, one clock.** The cost models describe Vitis HLS / Vivado xsim
-  2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+* **One tool version, one part, one clock.** The resource models describe Vitis HLS 2024.1 on
+  `xczu48dr-ffvg1517-2-e` at 250 MHz; the core's timing, Vitis HLS / Vivado xsim 2025.1 on the same
+  part and clock.
 * **The calibrated range.** The calibration builds spanned `Mmax` and `Kmax` in {4, 8, 16}, `Nmax`
   in {16, 32}, `R` in {1, 2, 4, 8, 16} and `C` in {4, 8, 16, 32} with `R·C` ≤ 256, `L` in
   {1, 2, 4, 8, 16}, `W` in {8, 10, 12, 14, 16}, both forms and both word widths. Every build used
@@ -451,28 +434,18 @@ measures, `merge` writes the tables, `fit` writes the packaged models, and `vali
   held-out builds both have `Mmax = Kmax = 4` and 32-bit words. Their `A` buffer (768 and 640 bits
   in all) went to distributed RAM, where the rule counts 12 and 18 block RAMs. No calibration build
   had a buffer that small with 32-bit words, so the threshold there is not measured.
-* **Isolated rejections.** The rejection model was fitted on rejected requests sent back to back,
-  which are limited by draining their payloads. A rejected request alone between served jobs
-  overlaps the job before it: in the RTL runs of `tests/linalg/test_systolic_unit.py`, every such
-  reply came 39 cycles after the previous one, whatever its length
-  (`examples/mimo_cg/paper_data/linalg_unit_7_4_cycles.csv`). A stream with isolated rejections
-  is over-priced: one recorded run of ten jobs, four of them rejected, was predicted at 1,554
-  cycles against 1,416 measured.
 * **Memory-fed designs: balance the reader and the writer.** With an in-band `MemRStream` and
   `MemWStream` in one generated top, the `m_axi` pointer FIFOs couple how often the reader and the
   writer fire. A request is read in two bursts (`A`, `B`) and its reply written in one, so a
   writer that fires once per job stalls the design after eight jobs. The test bench adds an empty
   write per reply. The unit itself never touches memory.
-* **The cycle model's setting.** The sum form was measured in that memory-fed setting. A unit fed
-  by another unit, where transfers may overlap compute, is untested.
+* **Timing.** One configuration's core is calibrated; the others run on the seed. Only the core is
+  timed by phases, and pysim's block buffer is looser than the RTL's
+  ([Timing, Limits](timing.md#limits)).
 * **Back-pressure.** Every RTL test drains `s_out` with an always-ready sink. Behaviour under a
   stalled consumer is untested.
 * **Dimensions.** `m` must be a multiple of `R`, `n` of `C`, and `k` a multiple of `L` or a divisor
   of it; anything else is refused with `BAD_DIMS`. Pad with zeros instead.
-* **Simulated time.** pysim overlaps transfers with compute ([Cycles](#cycles)), so it gives the
-  core's share of a message, while the memory-fed RTL adds the transfers. How a unit fed straight
-  from a stream behaves at RTL is untested. For a design fed from memory, use
-  `cost.message_interval`.
 * **Reported confidence.** `compose` reports the fitted LUT and FF of these models as
   `UNCALIBRATED`. The framework's saved Vitis models keep their coefficients but no fit summary,
   so their support region is unknown to it. The held-out scores above are the evidence for these

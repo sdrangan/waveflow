@@ -47,6 +47,8 @@ from waveflow.hw.dataschema import DataList
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import (
+    FramedStreamIFMaster,
+    FramedStreamIFSlave,
     SobIFMaster,
     SobIFSlave,
     StreamIF,
@@ -57,7 +59,8 @@ from waveflow.hw.interface import (
 from waveflow.hw.mem_stream import KernelTask
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
-from waveflow.linalg.cost import core_interval, message_model
+from waveflow.hw.timed_phase import TimedPhase
+from waveflow.linalg.cost import message_model
 from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits, mem_format
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
@@ -75,6 +78,9 @@ from waveflow.utils.fixputils import Format
 
 #: The task body of the core, in ``waveflow/build/``.
 CORE_BODY = "systolic_core_task.h"
+#: Where the core's calibrated phases are filed (a ModuleStore, one record per configuration, under
+#: its identity): plans/systolic_characterization.md, Stage 3.
+CALIB_DIR = __import__("pathlib").Path(__file__).resolve().parent / "calib"
 #: The headers a design with the core copies from ``waveflow/build/``.
 CORE_HEADERS = (CORE_BODY, "complex_utils.hpp", "wf_cint.h")
 #: The traits family of the core.
@@ -245,6 +251,43 @@ class SystolicCore(FreeRunMod):
         )
         for ep in (self.cmd_in, self.a_blk, self.b_blk, self.c_blk):
             self.add_endpoint(ep)
+        # The core's timing, a sequential body of three phases (docs/guide/dsp/systolic/timing.md):
+        # copy X into the row banks, copy each B into the column banks, sweep every tile -- and the
+        # two short gaps before the copies (start, to_b).  A copy runs from its block's acquire (its
+        # first access, at RTL) to its release -- never from an earlier event, or a wait for the block
+        # would hide the copy; the sweep from B's release to C's commit.  Each release is the lock's
+        # release pulse at RTL.  The seeds are
+        # the 2025.1 trace of the centre configuration (22 = 16 + 6, 68 = 64 + 4, a tile 36 = an
+        # 18-step sweep + 18: its 8 output groups and the pipeline's fill); a calibration replaces
+        # them per configuration.  A tile's output groups are R*C/L, fixed by the configuration, so
+        # they are in the per-tile cost rather than a feature of their own.
+        self.start = TimedPhase(                        # the command read to X's first access
+            "start", spans={"start": (self.cmd_in.last, self.a_blk.first)},
+            seed={"start": {"intercept": 5.0}}, calib_dir=CALIB_DIR)
+        self.to_b = TimedPhase(                         # X freed to the first B's first access
+            "to_b", spans={"to_b": (self.a_blk.last, self.b_blk.first)},
+            seed={"to_b": {"intercept": 3.0}}, calib_dir=CALIB_DIR)
+        self.copy_x = TimedPhase(
+            "copy_x", spans={"copy_x": (self.a_blk.first, self.a_blk.last)}, features=("ag",),
+            seed={"copy_x": {"intercept": 6.0, "ag": 1.0}}, calib_dir=CALIB_DIR)
+        self.copy_b = TimedPhase(                       # every B of a job, the first and the next
+            "copy_b", spans={"copy_b": (self.b_blk.first, self.b_blk.last)}, features=("bg",),
+            seed={"copy_b": {"intercept": 4.0, "bg": 1.0}}, calib_dir=CALIB_DIR)
+        self.sweep = TimedPhase(
+            "sweep", spans={"sweep": (self.b_blk.last, self.c_blk.last)},
+            features=("tiles", "steps"),
+            seed={"sweep": {"intercept": 10.0, "tiles": 18.0, "steps": 1.0}},
+            calib_dir=CALIB_DIR)
+        for ph in (self.start, self.copy_x, self.to_b, self.copy_b, self.sweep):
+            self.add_timing_phase(ph)
+
+    def features(self, m: int, k: int, n: int) -> dict:
+        """The phases' features for one job: lane groups of ``X`` (``ag``) and of ``B`` (``bg``), the
+        tiles, and their sweep steps in all (``tiles·(k+R+C-2)``)."""
+        L, R, C = int(self.L), int(self.R), int(self.C)
+        tiles = (m // R) * (n // C)
+        return {"ag": n_groups(m * k, L), "bg": k * n // L, "tiles": tiles,
+                "steps": tiles * (k + R + C - 2)}
 
     def status(self, op: int, nb: int, m: int, k: int, n: int) -> Status:
         """:func:`cmd_status` for this core."""
@@ -304,20 +347,21 @@ class SystolicCore(FreeRunMod):
         if st != Status.OK:
             raise RuntimeError(f"{self.name}: a command it cannot run ({st.name})")
         adjoint = op == MatmulOp.MUL_AH
+        f = self.features(m, k, n)
+        yield self.start.timeout()
         blk = yield from self.a_blk.acquire_read()
         xr, xi = blk.payload
+        yield self.copy_x.timeout(ag=f["ag"])
         yield from self.a_blk.release_read()
         if xr.shape != (m, k):
             raise RuntimeError(f"{self.name}: X is {xr.shape}, the command says {m, k}")
         ar, ai = (xr.T, xi.T) if adjoint else (xr, xi)  # A as the model takes it
-        L, R, C = int(self.L), int(self.R), int(self.C)
-        period = self.clk.period
-        coef = message_model()
-        if coef is None:
-            yield self.timeout(load_a_cycles(m, k, L=L) * period)
-        for _ in range(nb):
+        for b in range(nb):
+            if b == 0:
+                yield self.to_b.timeout()
             blk = yield from self.b_blk.acquire_read()
             br, bi = blk.payload
+            yield self.copy_b.timeout(bg=f["bg"])
             yield from self.b_blk.release_read()
             if br.shape != (k, n):
                 raise RuntimeError(
@@ -334,11 +378,7 @@ class SystolicCore(FreeRunMod):
                 adjoint=adjoint,
                 form=int(self.form),
             )
-            if coef is None:
-                cycles = per_b_cycles(m, k, n, L=L, R=R, C=C)
-            else:  # the calibrated share of a message (X's load is in the intercept)
-                cycles = core_interval(coef, m, k, n, L=L, R=R, C=C)
-            yield self.timeout(cycles * period)
+            yield self.sweep.timeout(tiles=f["tiles"], steps=f["steps"])
             out = yield from self.c_blk.acquire_write()
             out.payload = (cr, ci)
             yield from self.c_blk.commit_write(out)
@@ -493,7 +533,7 @@ class SystolicRx(_UnitPart):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.s_in = self._framed(StreamIFSlave, "s_in")
+        self.s_in = self._framed(FramedStreamIFSlave, "s_in")
         self.load_cmd = self._cmd(StreamIFMaster, "load_cmd")
         self.core_cmd = self._cmd(StreamIFMaster, "core_cmd")
         self.store_cmd = self._framed(StreamIFMaster, "store_cmd")
@@ -504,6 +544,7 @@ class SystolicRx(_UnitPart):
             "systolic_rx_task",
             UNIT_HEADERS[0],
             ("s_in", "load_cmd", "core_cmd", "store_cmd", "s_pay"),
+            framed=("s_in",),
             template_args=(
                 int(self.word_bits),
                 int(self.Mmax),
@@ -647,13 +688,14 @@ class SystolicStore(_UnitPart):
         self.c_blk = self._block(
             SobIFSlave, "c_blk", self.c, int(self.Mmax) * int(self.Nmax)
         )
-        self.s_out = self._framed(StreamIFMaster, "s_out")
+        self.s_out = self._framed(FramedStreamIFMaster, "s_out")
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(
             "systolic_store_task",
             UNIT_HEADERS[2],
             ("cmd_in", "c_blk", "s_out"),
+            framed=("s_out",),
             template_args=(
                 int(self.word_bits),
                 int(self.Mmax),
@@ -692,6 +734,9 @@ class SystolicUnit(FreeRunMod):
     """
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_unit"
+    #: Build inputs that are not template parameters: a fresh copy (the harness's DUT, a system's
+    #: csynth spec) is built with them too (:func:`~waveflow.hw.hw_module.build_params`).
+    build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c")
     word_bits: HwParam[int] = DEFAULT_WORD_BITS
     Mmax: HwParam[int] = 8
     Kmax: HwParam[int] = 8
@@ -738,7 +783,13 @@ class SystolicUnit(FreeRunMod):
             self.add_comp(comp)
         w = int(self.word_bits)
         self._stream("pay", self.rx.s_pay, self.load.s_in, w, framed=True)
-        self._stream("reply", self.rx.store_cmd, self.store.cmd_in, w, framed=True)
+        # The store holds a reply header for its whole firing (the header, then C), so this channel
+        # must take the next request's header -- and a rejected request's -- while it waits: two
+        # headers.  With the HLS default of 2 words the receiver blocks on the next header's last
+        # word, never forwards its payload, and load(n+1) waits for store(n) (821 cycles a job
+        # against 390, plans/systolic_characterization.md, Stage 0).
+        self._stream("reply", self.rx.store_cmd, self.store.cmd_in, w, framed=True,
+                     depth=2 * self.header_words)
         self._stream("lcmd", self.rx.load_cmd, self.load.cmd_in, CMD_BITS)
         self._stream("ccmd", self.rx.core_cmd, self.core.cmd_in, CMD_BITS)
         self._blocks("a", self.load.a_blk, self.core.a_blk)
@@ -749,8 +800,11 @@ class SystolicUnit(FreeRunMod):
         self.s_out = self.store.s_out
         self.extra_includes = ["hls_streamofblocks.h"]
 
-    def _stream(self, name, master, slave, bits: int, framed: bool = False) -> None:
+    def _stream(self, name, master, slave, bits: int, framed: bool = False,
+                depth: int | None = None) -> None:
         kw = {"framed": True} if framed else {}
+        if depth is not None:
+            kw["depth"] = depth
         iface = StreamIF(
             name=f"{self.name}_{name}_if",
             sim=self.sim,
@@ -777,6 +831,72 @@ class SystolicUnit(FreeRunMod):
     @property
     def header_words(self) -> int:
         return header_words(int(self.word_bits))
+
+    # -- the harness's scenarios (docs/guide/flows/units_harness.md) ---------------------------------
+    #: Job shapes whose tile counts test the calibration of the core's sweep instead of fitting it.
+    calib_holdout: ClassVar[dict] = {"tiles": (3, 6)}
+
+    def jobs(self, kind: str = "test") -> list[tuple[int, int, int, int]]:
+        """``(op, m, k, n)`` of the requests :meth:`workload` sends.  ``"test"``: a few served shapes,
+        plain and ``Aᴴ``, with a refused request (an operation the unit lacks) between them.
+        ``"calib"``: every row count and column count the configuration allows, at its smallest and
+        largest ``k``, plain and ``Aᴴ`` -- the spread the core's features need to be told apart."""
+        M, K, N = int(self.Mmax), int(self.Kmax), int(self.Nmax)
+        L, R, C = int(self.L), int(self.R), int(self.C)
+        ks = [k for k in range(1, K + 1) if (k % L == 0) or (k < L and L % k == 0)]
+        ms, ns = list(range(R, M + 1, R)), list(range(C, N + 1, C))
+        if kind == "test":
+            return [(MatmulOp.MUL, M, K, N), (MatmulOp.MUL_AH, ms[0], ks[-1], ns[0]),
+                    (5, ms[0], ks[0], ns[0]), (MatmulOp.MUL, ms[-1], ks[0], ns[-1])]
+        if kind != "calib":
+            raise ValueError(f"no workload {kind!r}: 'test' or 'calib'")
+        out = [(int(op), m, k, n) for op in (MatmulOp.MUL, MatmulOp.MUL_AH)
+               for m in ms for n in ns for k in sorted({ks[0], ks[-1]})]
+        return out
+
+    def _operands(self, kind: str):
+        rng = np.random.default_rng(7)
+        for j, (op, m, k, n) in enumerate(self.jobs(kind)):
+            fa, fb = self.a, self.b
+            sa = stored_shape(op, m, k) if op in (MatmulOp.MUL, MatmulOp.MUL_AH) else (m, k)
+            a = tuple(rng.integers(-(1 << (fa.W - 1)), 1 << (fa.W - 1), sa) for _ in range(2))
+            b = tuple(rng.integers(-(1 << (fb.W - 1)), 1 << (fb.W - 1), (k, n)) for _ in range(2))
+            yield j, op, m, k, n, a, b
+
+    def workload(self, kind: str = "test") -> dict:
+        """What the unit's harness plays on ``s_in``: per request of :meth:`jobs`, its header and its
+        two payload bursts, ``A`` and ``B`` (random operands, a fixed seed)."""
+        from waveflow.linalg.message import header
+        from waveflow.utils.burst_io import StreamBurst
+
+        lb, w = int(self.lane_bits), int(self.word_bits)
+        bursts = []
+        for j, op, m, k, n, a, b in self._operands(kind):
+            aw, bw = to_words(*a, self.a, lb, w), to_words(*b, self.b, lb, w)
+            h = header(100 + j, op, m=m, k=k, n=n, length=len(aw) + len(bw))
+            for words in (h.serialize(word_bw=w), aw, bw):
+                bursts.append(StreamBurst(np.asarray(words, np.uint64), True))
+        return {"s_in": bursts}
+
+    def golden(self, kind: str = "test") -> dict:
+        """What ``s_out`` records for :meth:`workload`'s *kind*, from the bit-exact model: per
+        request its reply header, and ``C`` when served."""
+        from waveflow.linalg.message import header
+
+        lb, w = int(self.lane_bits), int(self.word_bits)
+        out = []
+        for j, op, m, k, n, a, b in self._operands(kind):
+            length = request_words(m, k, n, lb, w)
+            st = self.rx.status(header(100 + j, op, m=m, k=k, n=n, length=length))
+            served = st == Status.OK
+            nout = reply_words(m, n, lb, w) if served else 0
+            out.append(np.asarray(header(100 + j, op, m=m, k=k, n=n, length=nout, status=st)
+                                  .serialize(word_bw=w), np.uint64))
+            if served:
+                cr, ci = mm.matmul(*a, self.a, *b, self.b, self.c,
+                                   adjoint=op == MatmulOp.MUL_AH, form=int(self.form))
+                out.append(np.asarray(to_words(cr, ci, self.c, lb, w), np.uint64))
+        return {"s_out": out}
 
     @classmethod
     def get_rm(cls, platform):

@@ -97,6 +97,9 @@ include-package-data = true
 "waveflow.dsp.ssr_fft" = ["src/*.h"]
 # The stream blocks' hand-written task bodies (each block's step copies its body into a build).
 "waveflow.streams" = ["src/*.h"]
+# The systolic core's calibrated timed phases (a ModuleStore: module.json + timing/records.jsonl),
+# which SystolicCore loads by identity; without them a pip-installed core runs on its seeds.
+"waveflow.linalg" = ["calib/**"]
 
 # The accelerator frames are markdown and TOML -- the specification, the process
 # text (which the scaffold also writes as a project's AGENTS.md) and the example
