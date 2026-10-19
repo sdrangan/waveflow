@@ -19,8 +19,9 @@ python bram_access_build.py --through pysim
 
 ## The testbench is the DUT and six BFMs
 
-`BramAccessTB` wires three `StreamDriver`s to the command and payload inputs and three sinks to the
-answers. **The memory is not in the testbench** — it is inside the DUT's wrapper — and that absence
+`wire_bram_access(sim, ...)` wires three `StreamDriver`s to the command and payload inputs and three
+sinks to the answers; `BramAccessTB` holds those parts as the children of one composite, the form
+`run_pysim` and `tb_top_spec` take. **The memory is not in the testbench** — it is inside the DUT's wrapper — and that absence
 is the property that keeps the RTL harness small later: the elaborated design's only pins are
 AXI-Stream, so the BFM library needs no memory model at all.
 

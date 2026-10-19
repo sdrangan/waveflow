@@ -677,3 +677,136 @@ class ActivityDiagram(object):
         ax2.grid(axis="x", alpha=0.25, linewidth=0.4)
         for s in ("top", "right"):
             ax2.spines[s].set_visible(False)
+
+
+class BeatDiagram(object):
+    """Handshake beats on a cycle axis, with measured spans between them: the zoomed view of one
+    transaction at a few ports, where each accepted transfer is a box and the spans a model declares
+    are drawn between the beats that bound them.
+
+    A sibling of :class:`ActivityDiagram`'s ``"beat"`` mode: that draws a hairline per event across
+    hundreds of cycles; this draws, over tens, a box per beat in the colour of the message it belongs
+    to (a header, the data), the stall cycles inside a message as hollow boxes, a level lane per
+    one-bit line (an interrupt), and a bracket per span labelled ``name = length``.
+
+    It draws on its own :class:`~matplotlib.figure.Figure` with an SVG canvas, never through pyplot,
+    so a figure saved with a fixed ``svg.hashsalt`` is byte-stable whatever else the process plots.
+
+    Lanes are added top to bottom (:meth:`add_lane`); a lane holds message groups (:meth:`add_beats`)
+    or a level (:meth:`add_level`).  Spans (:meth:`add_span`) are drawn one per row beneath the
+    lanes, in the order added, each with dotted guides at its two beats.  A cycle ``c`` is the box
+    ``[c, c + 0.9]``; a span from beat ``a`` to beat ``b`` is ``b - a`` cycles, centre to centre.
+    """
+
+    def __init__(self, time_unit="cycle"):
+        self.time_unit = time_unit
+        self.lanes = []             # (label, [("beats", ...) | ("level", ...)])
+        self.spans = []             # (name, start, end, colour)
+        self.ax = None
+
+    def add_lane(self, label):
+        """Add a lane (drawn below the ones before it); returns its index."""
+        self.lanes.append((label, []))
+        return len(self.lanes) - 1
+
+    def add_beats(self, lane, cycles, colour, text=None, stalls=()):
+        """A message on *lane*: a box at each of its transfer *cycles*, hollow boxes at its *stalls*
+        (cycles inside it the transfer waited), and *text* centred above it."""
+        self.lanes[lane][1].append(("beats", sorted(int(c) for c in cycles), colour, text,
+                                    sorted(int(c) for c in stalls)))
+        return self
+
+    def add_level(self, lane, high, colour):
+        """A one-bit line on *lane*: high over each ``(rise, fall)`` cycle interval of *high* (a
+        ``fall`` of ``None`` stays high to the window's end)."""
+        self.lanes[lane][1].append(("level", [(int(a), None if b is None else int(b))
+                                              for a, b in high], colour))
+        return self
+
+    def add_span(self, name, start, end, colour="#D1495B"):
+        """A span from the beat at cycle *start* to the beat at cycle *end*, labelled
+        ``name = end - start``."""
+        self.spans.append((name, int(start), int(end), colour))
+        return self
+
+    @staticmethod
+    def span_length(start, end):
+        """A span's length in cycles: beat centre to beat centre."""
+        return int(end) - int(start)
+
+    def plot(self, trange, title=None, xlabel=None, fig_width=10.0, lane_step=1.0,
+             span_step=0.55, label_fontsize=9, text_fontsize=7.5, ink="#333333"):
+        """Render to a fresh figure over the cycle window *trange* = ``(lo, hi)``; returns
+        ``(fig, ax)``."""
+        from matplotlib.backends.backend_svg import FigureCanvasSVG
+        from matplotlib.figure import Figure
+        from matplotlib.patches import FancyArrowPatch, Rectangle
+
+        lo, hi = trange
+        n, ns = len(self.lanes), len(self.spans)
+        box_h = 0.5 * lane_step
+        # Lane i's boxes sit on y_i (top lane highest); the span rows below lane n-1.
+        y_lane = [(n - 1 - i) * lane_step + ns * span_step + 0.4 for i in range(n)]
+        y_top = (y_lane[0] if n else 0) + box_h + 0.45
+        height = 0.32 * (y_top + 0.3) + 0.9
+        fig = Figure(figsize=(fig_width, height))
+        FigureCanvasSVG(fig)
+        ax = fig.add_subplot(1, 1, 1)
+
+        for (label, items), y in zip(self.lanes, y_lane):
+            ax.text(lo - 0.6, y + box_h / 2, label, ha="right", va="center",
+                    fontsize=label_fontsize, color=ink, family="monospace")
+            ax.plot([lo, hi], [y, y], color="0.85", lw=0.5, zorder=0)
+            for item in items:
+                if item[0] == "beats":
+                    _, cycles, colour, text, stalls = item
+                    for c in cycles:
+                        ax.add_patch(Rectangle((c, y), 0.9, box_h, facecolor=colour,
+                                               edgecolor=ink, lw=0.4))
+                    for c in stalls:
+                        ax.add_patch(Rectangle((c, y), 0.9, box_h, facecolor="none",
+                                               edgecolor=colour, lw=0.6, ls=(0, (2, 1))))
+                    if text and cycles:
+                        a, b = min(cycles + stalls), max(cycles + stalls) + 0.9
+                        ax.text((a + b) / 2, y + box_h + 0.08, text, ha="center", va="bottom",
+                                fontsize=text_fontsize, color=ink)
+                else:
+                    _, high, colour = item
+                    xs, ys = [lo], [y]
+                    for a, b in high:
+                        b = hi if b is None else b
+                        xs += [a, a, b, b]
+                        ys += [y, y + box_h, y + box_h, y]
+                        ax.add_patch(Rectangle((a, y), b - a, box_h, facecolor=colour,
+                                               edgecolor="none", alpha=0.3))
+                    xs.append(hi)
+                    ys.append(y)
+                    ax.plot(xs, ys, color=colour, lw=1.0)
+
+        for k, (name, a, b, colour) in enumerate(self.spans):
+            ys = (ns - 1 - k) * span_step + 0.2
+            xa, xb = a + 0.45, b + 0.45
+            ax.add_patch(FancyArrowPatch((xa, ys), (xb, ys), arrowstyle="<|-|>",
+                                         mutation_scale=8, lw=1.0, color=colour,
+                                         shrinkA=0, shrinkB=0))
+            for x in (xa, xb):
+                ax.plot([x, x], [ys, y_top - 0.3], color=colour, lw=0.5, ls=":")
+            label = f"{name} = {self.span_length(a, b)}"
+            if b - a >= 12:
+                ax.text((xa + xb) / 2, ys + 0.06, label, ha="center", va="bottom",
+                        fontsize=text_fontsize + 0.5, color=colour)
+            else:                               # too short to hold its label: beside it
+                ax.text(xb + 0.6, ys, label, ha="left", va="center",
+                        fontsize=text_fontsize + 0.5, color=colour)
+
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(-0.15, y_top)
+        ax.set_yticks([])
+        for s in ("left", "right", "top"):
+            ax.spines[s].set_visible(False)
+        ax.set_xlabel(xlabel or f"clock {self.time_unit}", fontsize=8)
+        ax.tick_params(axis="x", labelsize=8)
+        if title is not None:
+            ax.set_title(title, fontsize=10)
+        self.ax = ax
+        return fig, ax

@@ -155,6 +155,52 @@ example names and the links.  Fix what disagrees; keep measured numbers only wit
   supported path; agents write a thin subclass per width -- `cpp_kernel_name` is class-level); an
   `ArrayUtilsStep` element that is a `DataList`; no `abs` in `waveflow.hw.fixpoint`; a framework hook to
   check pysim against the golden on the DAG (today in pytest).
+  **Done (2026-10-18)**, one commit each:
+  - `kernel_name_params` (`HwModule` ClassVar) + `hw_module.kernel_name(mod)`: a top per parameter set,
+    `<cpp_kernel_name>_<param><value>`, used wherever the system flow names a top; a class listing none is
+    unchanged.  Docs: `flows/parametrization.md#kernel-name-params`.  Test:
+    `tests/build/test_kernel_name_params.py` (two widths, two harnesses, one DAG -> two csynth tops).
+    **Remains**: no example uses it, and no csynth / XSI run of two widths has been made (the naming is
+    checked, the RTL is not); the hook flow (`param_supports`, `derive_kernel_task`'s `<kernel>_task.h`)
+    stays class-level.
+  - `ArrayUtilsStep` on a `DataList`: it already worked; now checked (`tests/hw/test_arrayutils_datalist_elem.py`,
+    MinGW 10, pf 0/1/2/4), and a record wider than a word without `DataSchemaStep(framed=True)` is a
+    `ValueError` at `dag.add` instead of a C++ error.  Docs: `build/codegen.md` (*A `DataList` element*).
+    **Remains**: not run through Vitis csim / csynth.
+  - `fixpoint.abs` (`<W+1, I+1>`, lossless) and `DataArray.__abs__`; Vitis csim bit-exact test.  Docs:
+    `schema/python/fixpoint.md#magnitude`.
+  - `GoldenStep` (`golden`, after `pysim`): `HwSystem(golden=...)`, a harness's from `module.golden(kind)`;
+    wired in stream_kernel (`PolyKernel.golden`).  Docs: `build/xsi_system.md#golden`,
+    `systems/verification.md`.  **Remains**: `docs/examples/stream_kernel/system_flow.md` ("Checking pysim
+    against the golden") names the step now; a
+    system with a `SwHost` has no golden step (its traces are the host's), nor do calibration systems.
+
+## Status (2026-10-18, branch `next-docs-examples`)
+
+A-F done on one branch, one merge per task:
+
+- **A** `docs/examples/stream_kernel_mm/` (5 pages); `memory_mapped.md` a stub; two cards may share one
+  `example_dir` (`test_two_pages_may_share_one_example_dir`); `bus_system` lists it first.
+- **B** block_eq: `theory.md` (first), `golden.md`, `hls.md` new; `stages.md`, `system_flow.md` rewritten.
+  No timing page: block_eq declares no timed phases.
+- **C** order 1-20 + `docs/examples/legacy.md` (a file, not a folder: every `examples/<dir>/index.md` is a
+  card); objectives on every curated index; `vscode`, `dse_fir`, `_archive` deleted.  **vmac kept**
+  (reason in `examples_order.md`: `custom_hooks/complex.md` teaches a hook walking an `m_axi` pointer,
+  which no current example has).  memcpy, interleaver, fir_block, bram_access, rf_loopback, rf_shot_tx,
+  rf_shot_rx moved to `HwSystem(sim, dut)`, pysim and RTL byte-identical (table in `examples_order.md`).
+  **Left**: the untracked `examples/bram_toy`, `examples/test`, `examples/vecunit` in the main checkout
+  (the agent's sandbox refused the delete; `test/dataschema2.ipynb` and `vecunit/vecunit.py` are
+  hand-written -- check before deleting); `pip install -e .` after merging (pyproject changed).
+  `GraphSystem` still used by state_toy, the RF component dirs and the two FFT wrappers.
+- **D** memory stand-in for `MMIF*Master` ports (pysim + RTL twin = `MemoryMod.bfm_model()`; mem_copy's
+  harness gates at 2908); `accept_bundle` set by `harness()` (`xsi_run/vectors/<port>_acc/`);
+  `units.md` -> a page set (`units_harness`, `_recordings`, `_hostile`, `_calibration`, `_composing`).
+  **Left**: no hostile memory (the C++ AXI-MM slaves have no stall knob).
+- **E** Overview pages and the home page against the Flow Overview, incl. `status.md`, `targets.md`.
+- **F** frames (`choose_when` decided by memory; firblock a freerun reference); the four framework items
+  above; Stage 5's second runs recorded in `stage5_2026-10-18.md` (both "would build, with small fixes").
+  **Left** from the second runs: `get_array` after an early TLAST at PF > 1 is stated only in a docstring;
+  no example at a 256-bit internal link; no fixpoint conditional select; no throughput report step.
 
 ## Not now
 

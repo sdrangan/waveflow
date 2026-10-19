@@ -140,6 +140,33 @@ Rules of thumb:
 - it **configures an already-built thing** → `DynParam`, or a
   [regmap register](../interface/axi_mm/regmap.md) if that thing is synthesized.
 
+## One class at several widths in one system {#kernel-name-params}
+
+`cpp_kernel_name` belongs to the class, so two instances of one class at two `HwParam` values would
+build the same top. A class that lists `HwParam` fields in `kernel_name_params` names a top per
+parameter set instead: [`kernel_name(mod)`](../../../waveflow/hw/hw_module.py) is `cpp_kernel_name`
+plus `_<param><value>` for each listed field, and the system flow names each instance's top with it
+(the [top spec](../comp_codegen/templating.md), the [harness](../../../waveflow/hw/harness.py)'s DUT,
+`csynth`, the RTL):
+
+```python
+@dataclass
+class Scale(FreeRunMod):
+    cpp_kernel_name: ClassVar[str | None] = "scale"
+    kernel_name_params: ClassVar[tuple[str, ...]] = ("w",)
+    w: HwParam[int] = 32
+
+    def kernel_task(self):        # one templated body serves every width
+        return KernelTask("scale_task", "scale_task.h", ("s_in", "m_out"), template_args=(int(self.w),))
+```
+
+`Scale(w=32)` builds `scale_w32` and `Scale(w=64)` builds `scale_w64`; both can sit in one system,
+or be two harnesses on one DAG (`add_system_steps(..., prefix=...)`), each csynth'd once
+([`tests/build/test_kernel_name_params.py`](../../../tests/build/test_kernel_name_params.py)). The
+build script writes each instance's top, `composite_top_spec(mod)` per width. A class that lists no
+field keeps `cpp_kernel_name` unchanged, so no existing top or calibration record moves. This is the
+supported path in place of a thin subclass per width.
+
 ## `param_supports` — declaring kernel variants
 
 To emit more than one concrete kernel from a class, declare
@@ -180,4 +207,6 @@ generated — concrete top functions per key — is the realization page:
   `discover_dyn_params`. Bound once at `pre_sim`, constant for the run.
 - Sizes the hardware → `HwParam`; fixed fact of the class → `HwConst`; configures an already-built
   thing → `DynParam`, or a regmap register if it is synthesized.
+- `kernel_name_params` names a top per parameter set (`<cpp_kernel_name>_<param><value>`), so one
+  class at several widths coexists in one system or DAG ([above](#kernel-name-params)).
 - `param_supports` declares variant kernels (key → `HwParam` overrides); realization is [Templating](../comp_codegen/templating.md).

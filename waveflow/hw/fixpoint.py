@@ -9,7 +9,7 @@ float), value↔bits needs no override at all.  ``.val`` holds the stored int;
 ``to_real``/``.real`` derives ``stored · 2^-F``.
 
 Arithmetic is **free functions** (:func:`mult`/:func:`add`/:func:`sub`/:func:`div`/
-:func:`shift`/:func:`quantize`/:func:`fixed_sum`), not methods — each reads the operands' formats,
+:func:`abs`/:func:`shift`/:func:`quantize`/:func:`fixed_sum`), not methods — each reads the operands' formats,
 runs the vectorized integer op on the stored ``.val`` arrays via
 :mod:`waveflow.utils.fixputils`, derives the result format, and returns a
 ``DataArray[FixedField<derived>]``.  Full-precision intermediates; :func:`quantize`
@@ -185,6 +185,21 @@ def div(a: DataArray, b: DataArray) -> DataArray:
 def shift(a: DataArray, n: int) -> DataArray:
     """Lossless rescale by ``2^n`` (point-move): stored bits unchanged."""
     stored, fmt = fixputils.shift(np.asarray(a), _fmt(a), n)
+    return _wrap(stored, fmt)
+
+
+def abs(a: DataArray) -> DataArray:  # noqa: A001 -- the fixed-point op, beside mult/add/sub
+    """Full-precision magnitude ``|a|``: a signed ``<W, I>`` gives ``<W+1, I+1>``.
+
+    Lossless, like the other ops: the extra bit holds ``|min|`` (``ap_fixed`` unary minus
+    has the same type).  An unsigned format is returned unchanged.  The matching C++ is
+    ``ap_fixed<W+1, I+1> y = (a < 0) ? ap_fixed<W+1, I+1>(-a) : ap_fixed<W+1, I+1>(a);``;
+    :func:`quantize` the result to keep the input width (with ``AP_SAT``, ``|min|``
+    saturates to the maximum).  Vitis ``hls::abs`` on ``ap_fixed<W, I>`` keeps the width
+    and returns 0 for ``min``, so it is not this op.  Also spelled ``abs(a)`` on a
+    ``DataArray`` (Python's builtin calls ``__abs__``).
+    """
+    stored, fmt = fixputils.abs_(np.asarray(a), _fmt(a))
     return _wrap(stored, fmt)
 
 

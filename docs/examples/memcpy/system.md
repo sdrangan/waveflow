@@ -7,9 +7,9 @@ summary: "The graph becomes a system: an HwSystem that states which modules are 
 
 # The system
 
-The [testbench](./testbench.md) page built `MemCopyTB`: one graph holding the copy kernel *and* the
-participants around it. To take that graph to RTL, one more fact is needed — **which part of it is
-the design** — and that fact is stated once, on a **system**.
+The [testbench](./testbench.md) page built the graph, `wire_mem_copy`: the copy kernel *and* the
+participants around it, on one simulation. To take that graph to RTL, one more fact is needed —
+**which part of it is the design** — and that fact is stated once, on a **system**.
 
 ## What a system is
 
@@ -36,42 +36,42 @@ The crossbar that models the two `m_axi` bundles' contention in pysim is *outsid
 part of the testbench. On the RTL side the kernel's two bundles therefore become ports of the top,
 each facing the memory model.
 
-## `MemCopySystem`
+## `mem_copy_system()`
 
-The system is a short class in `examples/mem_copy/mem_copy_sim.py`. It derives from
-[`GraphSystem`](../../guide/build/xsi_system.md#graph-system), so it states only the four things that are its own:
+The system is a short function in `examples/mem_copy/mem_copy_sim.py`. It builds the graph on one
+simulation, names the DUT, and hands both to
+[`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system) with the run's description:
 
 ```python
-@dataclass
-class MemCopySystem(GraphSystem):
-    jobs: tuple = (CopyJob(src_off=16, dst_off=512, n_words=128),)
-    mem_dwidth: int = 64
-
-    def graph(self) -> MemCopyTB:                 # the graph: the testbench page's MemCopyTB
-        self.runner = MemCopySim(jobs=tuple(self.jobs), mem_dwidth=int(self.mem_dwidth))
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:             # the cut: the kernel alone
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:         # the scenario: MemCopySim's one writer
-        self.runner.write_scenario(root)
-
-    def check(self) -> "MemCopy":                 # the golden, on a pysim run
-        return self.runner.check()
+def mem_copy_system(jobs=..., mem_dwidth=64, n_cycles=3400, ...) -> HwSystem:
+    sim = Simulation()
+    parts = wire_mem_copy(sim, jobs=jobs, mem_dwidth=mem_dwidth, ...)   # the testbench page's graph
+    parts.n_cycles = int(n_cycles)
+    runner = MemCopySim.on(parts)                                       # its scenario and its golden
+    dut = DutTop.of("mem_copy_dut", sim, comps=[parts.dut])             # the cut: the kernel alone
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: mem_copy_system(jobs, mem_dwidth, n_cycles, ...))
+    sysm.kernel, sysm.driver, sysm.done_sink, sysm.mem = parts.dut, parts.driver, ...  # for tests
+    return sysm
 ```
 
-Everything else is derived from the graph:
+What each argument gives the flow:
 
-| derived | from |
-|---|---|
-| the DUT tree (`dut()`) | `dut_modules`, wrapped in a `DutTop` |
-| the clock, the data width | the DUT's clock, its widest boundary port |
-| the run's cycle bound | the graph's `n_cycles`, written to `vectors/run.json` |
-| where each participant reads and records | every participant with a bundle, anchored at the run's root |
-| `run()` | pysim, then `check()` |
+| argument | what it is | mem_copy's |
+|---|---|---|
+| `dut` | the root of what is synthesized; everything else on `sim` is the testbench | a `DutTop` holding the `MemCopy` kernel |
+| `inputs` | `(root) -> None`, writes what the testbench plays | `MemCopySim.write_scenario`: `s_cmd`, `mem_in`, `golden` |
+| `n_cycles` | the RTL run's bound, written to `vectors/run.json` beside the inputs' own params | 3400 |
+| `check` | what `run()` returns, after pysim | the golden check, `MemCopySim.check` |
+| `fresh` | an unrun copy, for a second pysim pass | the same call again |
 
-So `MemCopySystem().run()` is the same pysim golden as `MemCopySim().run()`. The system adds no
+The rest is derived: the testbench is every root on the simulation outside the DUT
+(`participants()`: the driver, the sink, the memory); every participant with a bundle is anchored at
+the run's root, so pysim records what the RTL records; `run()` writes the scenario, runs pysim and
+returns `check`'s value.
+
+So `mem_copy_system().run()` is the same pysim golden as `MemCopySim().run()`. The system adds no
 behaviour; it adds the cut.
 
 ## What the system flow generates
@@ -79,8 +79,8 @@ behaviour; it adds the cut.
 `examples/mem_copy/mem_copy_system_build.py` hands the system to the framework's system steps:
 
 ```python
-def system() -> MemCopySystem:
-    return MemCopySystem(jobs=tuple(XSI_JOBS))          # the 16-job scenario
+def system() -> HwSystem:
+    return mem_copy_system(jobs=XSI_JOBS)                # the 16-job scenario
 
 def build_dag(work_dir=WORK_DIR) -> BuildDag:
     dag = BuildDag()
@@ -123,7 +123,7 @@ int main() {
 }
 ```
 
-**The scenario** (`scenario/vectors/`). This is `write_inputs`'s output — `s_cmd`, `mem_in`,
+**The scenario** (`scenario/vectors/`). This is `inputs`'s output — `s_cmd`, `mem_in`,
 `golden` — plus `run.json`, which holds the cycle bound (3400) and the arena size the memory model
 allocates. The pysim run and the RTL run each start from a fresh copy of it, so the two runs read
 the same bytes.

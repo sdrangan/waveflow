@@ -39,7 +39,7 @@ dut = DutTop.of("poly_mm_dut", sim, comps=[device], ifs=[xbar])
 sysm = HwSystem(sim, dut, run_until=host.done, check=check)
 ```
 
-This is shortened: the whole of it, with the bindings, the address map and the interrupts, is `mm_system` in [`stream_kernel_mm.py`](../../../examples/stream_kernel/stream_kernel_mm.py), walked on [The polynomial behind AXI-MM](../../examples/stream_kernel/memory_mapped.md). For one module the
+This is shortened: the whole of it, with the bindings, the address map and the interrupts, is `mm_system` in [`stream_kernel_mm.py`](../../../examples/stream_kernel/stream_kernel_mm.py), walked on [The polynomial on a bus](../../examples/stream_kernel_mm/system.md). For one module the
 whole of it is one line, because the testbench is generated: `harness(PolyKernel, workload="test")`.
 
 The constructor checks the rules, each a refusal that names what to fix:
@@ -146,7 +146,7 @@ size:
 |---|---|---|---|
 | one kernel on streams | a free-running kernel | its harness: a stream driver and sinks | [Free-running polynomial](../../examples/stream_kernel/index.md) |
 | a pipeline of kernels on streams | a composite: a broadcast and two stages, joined by internal streams | its harness; each stage alone in its own | [Block equalizer](../../examples/block_eq/index.md) |
-| one kernel on a bus | the same kernel as a device, and the crossbar | a two-thread `SwHost` | [Behind AXI-MM](../../examples/stream_kernel/memory_mapped.md) |
+| one kernel on a bus | the same kernel as a device, and the crossbar | a two-thread `SwHost` | [The polynomial on a bus](../../examples/stream_kernel_mm/index.md) |
 | a pipeline with memory | a composite of free-running tasks, memory through stream adaptors | stream drivers, sinks, a memory model | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) |
 | several kernels, a memory, a host | devices, a memory, the crossbar | a `SwHost` | [Two kernels on a bus](../../examples/markov/index.md) |
 

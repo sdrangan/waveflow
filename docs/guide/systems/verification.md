@@ -49,6 +49,18 @@ A header and its results are two bursts; a short results burst is short; after a
 none. To read a burst as a message, deserialize it with its schema -- `Status().deserialize(words,
 word_bw=W)` -- never by hand.
 
+The same check runs on the DAG when the module states its golden: a method `golden(kind)` returning
+`{output port: [burst words]}` for `workload(kind)` (`PolyKernel.golden` returns `expected` on the same
+commands). Its harness's DAG then has a [`golden`](../build/xsi_system.md#golden) step after `pysim`,
+which fails the DAG on a mismatch:
+
+```python
+def golden(self, kind: str = "test") -> dict:
+    cmds = {"test": default_cmds, "calib": calib_cmds}[kind]()
+    out, status = expected(cmds)
+    return {"m_out": out, "m_status": status}
+```
+
 ## RTL against pysim
 
 The [system flow](rtl.md#the-system-flow)'s **`compare`** step checks what the testbench recorded at RTL
@@ -86,7 +98,7 @@ The example then checks the host's results against the golden ([markov's XSI tes
 ## Robustness: hostile stand-ins
 
 A polite testbench never shows that a module survives anything else. A
-[`StandInPolicy`](../flows/units.md#hostile-stand-ins) makes each stand-in misbehave as its protocol
+[`StandInPolicy`](../flows/units_hostile.md) makes each stand-in misbehave as its protocol
 allows -- a sink that drops TREADY, a driver that holds off its next word, credit held back -- and
 `add_robustness_steps` runs the harness again under each. The check is the same `compare`: the RTL must
 still produce exactly pysim's words.

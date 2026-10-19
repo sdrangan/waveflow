@@ -17,10 +17,7 @@ composite), then the composite, in pysim and at RTL under XSI."""
 pattern = "command_response"
 shape = "a composite of free-running stages joined by internal framed streams; one input stream, results and status out; no memory"
 flow = "each stage's harness, then the composite's, on the system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare"
-choose_when = """one accelerator of two or more stages that stream to each other -- different rates, \
-a wide internal link, two stages needing parts of one input -- with its input and outputs on streams \
-and no memory and no host on a bus.  One stage is stream_kernel; stages that read and write memory \
-are freerun_pipeline; kernels a host reaches over a bus are bus_system."""
+choose_when = """one accelerator of two or more stages that stream to each other -- different rates, a wide internal link, two stages needing parts of one input -- with its input and outputs on streams and no host on a bus.  The deciding question against freerun_pipeline is memory: no stage reads or writes memory here (no MemRStream / MemWStream adaptor); stages that do are freerun_pipeline.  One stage is stream_kernel; kernels a host reaches over a bus are bus_system."""
 
 # Primary first: block_eq is the composite (a broadcast, two stages at different rates, a link between
 # them); stream_kernel is the single stage, the protocol and the harness.

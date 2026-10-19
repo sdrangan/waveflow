@@ -1,7 +1,7 @@
 ---
 title: CG massive-MIMO detector
 parent: Examples
-nav_order: 11
+nav_order: 13
 example_dir: examples/mimo_cg
 summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink. A bit-exact fixed-point Python model reproduces Vitis ap_fixed arithmetic, and a free-running hardware detector is composed from Waveflow's two linear-algebra components, a systolic matrix multiply and a CG vector unit. The RTL matches the Python model bit for bit at K = 4, 8 and 16 users and every iteration count, and meets 4 ns on the RFSoC xczu48dr."
 ---
@@ -23,6 +23,23 @@ This example shows:
 - **verification** from the Python model through pysim and C-simulation to RTL, bit for bit.
 
 Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+
+## Learning objectives
+
+What this adds to the examples before it, in the order the page teaches it:
+
+1. Write a **bit-exact fixed-point model** of an iterative algorithm (multi-RHS CG) on integers,
+   reproducing `ap_fixed` rounding and saturation -- a division and its zero guard included -- so it
+   runs without Vitis.
+2. Use that model to find the narrowest register width, and the guard bits, that meet an accuracy
+   budget on simulated links.
+3. Compose a detector from the framework's [linear-algebra components](../../guide/linalg/index.md)
+   (`SystolicCore`, `CgVectorCore`) on the interleaver's load-compute-store skeleton, the two cores
+   passing `P` and `S` through streams of blocks once an iteration.
+4. Make each job **write as often as it reads**, so the `m_axi` pointer FIFOs do not stall the design
+   at RTL.
+5. Check **one golden at every level** -- the C++ reference in csim, pysim, csynth at 4 ns, the RTL --
+   at several sizes and every iteration count.
 
 ## The algorithm
 

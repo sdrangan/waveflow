@@ -1,7 +1,7 @@
 ---
 title: Measuring a delay with an address
 parent: Examples
-nav_order: 9.8
+nav_order: 19
 has_children: true
 audience: python
 example_dir: examples/rf_shot_loopback
@@ -26,6 +26,21 @@ delays the samples, and both buffers built with
 There is no time axis on that figure, and that is the point. Both panels are the *same* address axis,
 one buffer wide: the waveform sits at address `a` on top and at `a + 160` on the bottom, and the
 `160` is what the gate reads.
+
+## Learning objectives
+
+What this adds to [Playing a stored waveform](../rf_shot_tx/index.md#learning-objectives) and
+[Capturing without losing anything](../rf_shot_rx/index.md#learning-objectives), in the order the page
+teaches it:
+
+1. Close a transmit and a receive buffer through **one converter carrying both directions**, with a
+   bulk delay on a node between them, both buffers indexing absolutely.
+2. Read the channel delay as a **difference of memory addresses**, from a window header and one sample
+   value, and subtract the loop's declared latency from it.
+3. Show that the reading **aliases at one buffer**, and pick the geometry against the delay measured.
+4. Show that an **epoch offset** moves the reading exactly as a path delay does.
+5. Space two loads more than a pass apart, and show that loads too close lose the first waveform while
+   both are answered `SHOT_LOADED`.
 
 ## Read this first: it aliases at `depth`
 

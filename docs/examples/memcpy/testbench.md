@@ -14,17 +14,20 @@ SimPy simulation, or cut it into design and testbench and let the system flow de
 cycle-accurate RTL harness from it ([The system](./system.md)). Neither can describe a different
 test, because there is only one description.
 
-The testbench is two classes in `examples/mem_copy/mem_copy_sim.py`:
+The testbench is two pieces in `examples/mem_copy/mem_copy_sim.py`:
 
-- **`MemCopyTB`** — the **graph**. Pure structure: the participants and their wiring, nothing else. A
-  generator walks it; a graph is *data*.
+- **`wire_mem_copy(sim, ...)`** — the **graph**. Pure structure: the kernel, the participants and
+  their wiring, built on one simulation, nothing else. A generator walks it; a graph is *data*.
+  [The system](./system.md) (`mem_copy_system()`) names the kernel in it as the DUT;
+  **`MemCopyTB`** registers the same parts as the children of one composite, the form the
+  calibration tools and `mem_copy_build.py` walk.
 - **`MemCopySim`** — the **procedure**. The code that drives the graph: materialize a scenario, run
   the SimPy model, check the golden. A driver is *code*.
 
-Keeping them apart is the point — `MemCopyTB.__post_init__` builds only structure, so nothing a
-generator introspects is entangled with file I/O or the golden.
+Keeping them apart is the point — `wire_mem_copy` builds only structure, so nothing a generator
+introspects is entangled with file I/O or the golden.
 
-## The graph: `MemCopyTB`
+## The graph: `wire_mem_copy`
 
 `mem_copy` exposes four boundary ports, so the testbench puts something on each: a source for commands,
 a sink for completions, and memory behind the two `m_axi` bundles.
@@ -48,19 +51,19 @@ All three participants are **framework** classes — you do not write them (see
 The memory being *one* component behind *two* bundles matters: `m_in` reads and `m_out` writes the same
 words, which is what makes this a copy rather than two unrelated transfers.
 
-`__post_init__` instantiates those participants and the DUT and wires them — nothing more. It puts **no
+`wire_mem_copy` instantiates those participants and the DUT and wires them — nothing more. It puts **no
 data** in memory; it declares that the memory will load `vectors/mem_in` in `pre_sim` (a `load_segs`
 entry), exactly like the RTL memory:
 
 ```python
-        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
-                                word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
-        self.mem.alloc(int(self.mem.nwords_tot))         # full capacity: mem_in loads directly, no clip
-        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
+    mem = MemoryMod(name=f"{name}_mem", sim=sim, inline=False, clk=clk,
+                    word_size=w, addr_size=32, nwords_tot=arena_words * 4)
+    mem.alloc(int(mem.nwords_tot))         # full capacity: mem_in loads directly, no clip
+    mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
 
-        self.dut = MemCopy(name=f"{self.name}_copier", sim=self.sim, mem_dwidth=w)
-        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")   # names a PATH
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done")
+    dut = MemCopy(name=f"{name}_copier", sim=sim, mem_dwidth=w)
+    driver = StreamDriver(sim=sim, bitwidth=w, in_bundle="vectors/s_cmd")   # names a PATH
+    done_sink = StreamSink(sim=sim, bitwidth=w, out_bundle="vectors/s_done")
 ```
 
 The driver and sink name a *path*, not bytes — `in_bundle` is the one path both backends read (pysim's
@@ -68,12 +71,12 @@ The driver and sink name a *path*, not bytes — `in_bundle` is the one path bot
 is wired: two streams with `StreamIF`, and the two `m_axi` bundles onto one arena with a crossbar:
 
 ```python
-        cmd_if = StreamIF(...);  cmd_if.bind("master", self.driver.stream_ep); cmd_if.bind("slave", self.dut.s_cmd)
-        done_if = StreamIF(...); done_if.bind("master", self.dut.s_done); done_if.bind("slave", self.done_sink.stream_ep)
-        xbar = AXIMMCrossBarIF(sim=self.sim, clk=self.clk, nports_master=2, nports_slave=1, bitwidth=w)
-        xbar.bind("master_0", self.dut.m_in)     # read  (gmem0)
-        xbar.bind("master_1", self.dut.m_out)    # write (gmem1)
-        xbar.bind("slave_0",  self.mem.s_mm)     # ... both onto the one arena
+    cmd_if = StreamIF(...);  cmd_if.bind("master", driver.stream_ep); cmd_if.bind("slave", dut.s_cmd)
+    done_if = StreamIF(...); done_if.bind("master", dut.s_done); done_if.bind("slave", done_sink.stream_ep)
+    xbar = AXIMMCrossBarIF(sim=sim, clk=clk, nports_master=2, nports_slave=1, bitwidth=w)
+    xbar.bind("master_0", dut.m_in)     # read  (gmem0)
+    xbar.bind("master_1", dut.m_out)    # write (gmem1)
+    xbar.bind("slave_0",  mem.s_mm)     # ... both onto the one arena
 ```
 
 Notice what is *not* here: no clock or reset driving, no handshake logic, no per-cycle stepping, no
@@ -84,7 +87,8 @@ bundles, whereas the RTL slave models do not — which is part of why pysim timi
 
 ## The procedure: `MemCopySim`
 
-`MemCopySim` owns a `MemCopyTB` and the three things you *do* with it.
+`MemCopySim` owns the graph (a `MemCopyTB`, or the system's parts: `MemCopySim.on(parts)`) and the
+three things you *do* with it.
 
 **`write_scenario`** — the **single** scenario writer both backends share. It computes the source
 patterns once (a seeded PRNG per job), stores `expected` for the check, writes the vectors, and points

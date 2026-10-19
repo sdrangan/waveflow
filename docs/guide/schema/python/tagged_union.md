@@ -87,7 +87,8 @@ print([type(m).__name__ for m in msgs], len(burst), "words")
 ```
 
 `Start` is one word; each `Det` and the `End` are two at 32 bits -- seven in all. In a kernel's `run_iter` the burst is one
-`write` (a Python `write` is one burst); in its HLS body each message goes out as it is made, with
+`write` of the words (a Python `write` is one burst, and it takes a word array as well as a message):
+`yield from self.m_out.write(burst)`. In its HLS body each message goes out as it is made, with
 `streamutils::write_msg(msg, s, last)`, `last` true only on the `END`.
 
 ## Reading

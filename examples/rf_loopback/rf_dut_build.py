@@ -18,7 +18,7 @@ The task body is **generated** from ``run_iter`` — not hand-written.  Getting 
 extractor findings, both recorded in ``plans/adc_model.md``: an implicit capture of a pysim counter,
 and the raw-word ``get(nwords_max=...)`` form having no extraction rule.
 
-The RTL rung is the **system** flow, ``rf_dut_system_build.py`` (:class:`RfPassThroughSystem` below):
+The RTL rung is the **system** flow, ``rf_dut_system_build.py`` (:func:`rf_pass_through_system` below):
 it instantiates the csynth'd top in a generated system top and drives it under XSI.  Its gate is
 ``tests/examples/test_rf_dut_system_xsi.py``.
 """
@@ -47,7 +47,8 @@ from waveflow.hw.clock import Clock  # noqa: E402
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB  # noqa: E402
 from waveflow.hw.dataschema import DataSchemaStep  # noqa: E402
 from waveflow.hw.hw_freerun import FreeRunMod  # noqa: E402
-from waveflow.hw.hw_system import GraphSystem  # noqa: E402
+from waveflow.hw.hw_module import kernel_name  # noqa: E402
+from waveflow.hw.hw_system import DutTop, HwSystem  # noqa: E402
 from waveflow.hw.interface import StreamIF  # noqa: E402
 from waveflow.simulation.simulation import Simulation  # noqa: E402
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink  # noqa: E402
@@ -92,30 +93,45 @@ class RfPassThroughTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.bitwidth)
-        self.dut = RfSampPassThrough(name=f"{self.name}_dut", sim=self.sim, bitwidth=w,
+        parts = wire_rf_pass_through(self.sim, name=self.name, bitwidth=int(self.bitwidth),
                                      nwords_blk=int(self.nwords_blk), clk=self.clk)
-        # has_tlast=True on both participants because the DUT's endpoints declare it and StreamIF
-        # refuses a mismatch.  It is pysim framing only: the generated top carries plain
-        # `hls::stream<ap_uint<W>>` ports and the generic BFMs drive no TLAST pin — the same
-        # asymmetry mem_copy's s_done already has.
-        self.driver = StreamDriver(sim=self.sim, name=f"{self.name}_drv", bitwidth=w,
-                                   in_bundle="vectors/s_in", has_tlast=True)
-        self.sink = StreamSink(sim=self.sim, name=f"{self.name}_snk", bitwidth=w,
-                               out_bundle="vectors/s_out", has_tlast=True)
-        for c in (self.dut, self.driver, self.sink):
+        self.dut, self.driver, self.sink = parts.dut, parts.driver, parts.sink
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        in_if = StreamIF(name=f"{self.name}_in_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        in_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
-        in_if.bind(ep_name="slave", endpoint=self.dut.s_in)
-        self.add_if(in_if)
 
-        out_if = StreamIF(name=f"{self.name}_out_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        out_if.bind(ep_name="master", endpoint=self.dut.s_out)
-        out_if.bind(ep_name="slave", endpoint=self.sink.stream_ep)
-        self.add_if(out_if)
+def wire_rf_pass_through(sim, *, name: str = "xsi_tb", bitwidth: int = XSI_WORD_BW,
+                         nwords_blk: int = XSI_NWORDS_BLK, clk: Clock | None = None):
+    """The pass-through DUT between a generic AXI-Stream driver and sink, built on *sim* and wired
+    -- the one wiring :func:`rf_pass_through_system` (``HwSystem(sim, dut)``) and
+    :class:`RfPassThroughTB` share.  Returns ``dut``, ``driver``, ``sink`` and ``comps`` / ``ifs``
+    in the order a composite registers them."""
+    from types import SimpleNamespace
 
+    w = int(bitwidth)
+    clk = clk if clk is not None else Clock(freq=100e6)
+    dut = RfSampPassThrough(name=f"{name}_dut", sim=sim, bitwidth=w, nwords_blk=int(nwords_blk),
+                            clk=clk)
+    # has_tlast=True on both participants because the DUT's endpoints declare it and StreamIF
+    # refuses a mismatch.  It is pysim framing only: the generated top carries plain
+    # `hls::stream<ap_uint<W>>` ports and the generic BFMs drive no TLAST pin — the same
+    # asymmetry mem_copy's s_done already has.
+    driver = StreamDriver(sim=sim, name=f"{name}_drv", bitwidth=w, in_bundle="vectors/s_in",
+                          has_tlast=True)
+    sink = StreamSink(sim=sim, name=f"{name}_snk", bitwidth=w, out_bundle="vectors/s_out",
+                      has_tlast=True)
+
+    in_if = StreamIF(name=f"{name}_in_if", sim=sim, clk=clk, bitwidth=w)
+    in_if.bind(ep_name="master", endpoint=driver.stream_ep)
+    in_if.bind(ep_name="slave", endpoint=dut.s_in)
+
+    out_if = StreamIF(name=f"{name}_out_if", sim=sim, clk=clk, bitwidth=w)
+    out_if.bind(ep_name="master", endpoint=dut.s_out)
+    out_if.bind(ep_name="slave", endpoint=sink.stream_ep)
+    return SimpleNamespace(dut=dut, driver=driver, sink=sink, comps=(dut, driver, sink),
+                           ifs=(in_if, out_if))
 
 
 # ---------------------------------------------------------------------------
@@ -175,29 +191,26 @@ def check_xsi_outputs(xsi_dir: Path, want_cycles: int, nburst: int = XSI_NBURST,
         f"behaviour change: either a regression or an improvement worth re-recording.")
 
 
-@dataclass
-class RfPassThroughSystem(GraphSystem):
-    """The pass-through's DUT gate as a **system** (``plans/system_model.md`` S3e): the
-    :class:`RfPassThroughTB` graph, the cut :class:`RfSampPassThrough` alone, between a generic
-    driver and sink.  The RFDC-side system is
-    :class:`~examples.rf_loopback.rf_loopback.RfLoopbackSystem`."""
+def rf_pass_through_system(n_cycles: int = XSI_N_CYCLES) -> HwSystem:
+    """The pass-through's DUT gate as a **system**, ``HwSystem(sim, dut)``: the cut
+    :class:`RfSampPassThrough` alone, between a generic driver and sink
+    (:func:`wire_rf_pass_through`).  ``run()`` returns the relayed words, which must be the played
+    ones.  The RFDC-side system is :func:`~examples.rf_loopback.rf_loopback.rf_loopback_system`."""
+    sim = Simulation()
+    parts = wire_rf_pass_through(sim, name="xsi_tb")
 
-    n_cycles: int = XSI_N_CYCLES
-
-    def graph(self) -> RfPassThroughTB:
-        return RfPassThroughTB(name="xsi_tb", sim=Simulation(), n_cycles=int(self.n_cycles))
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        write_scenario(root)
-
-    def check(self) -> np.ndarray:
+    def check(sysm) -> np.ndarray:
         """The relayed words, which must be the played ones."""
-        got = np.concatenate([np.asarray(b) for b in self.tb.sink.words]).astype(np.uint64)
+        got = np.concatenate([np.asarray(b) for b in parts.sink.words]).astype(np.uint64)
         np.testing.assert_array_equal(got, np.concatenate(input_bursts()))
         return got
+
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=write_scenario, check=check,
+                    fresh=lambda: rf_pass_through_system(n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, XSI_WORD_BW
+    sysm.kernel, sysm.driver, sysm.sink = parts.dut, parts.driver, parts.sink
+    return sysm
 
 
 # ---------------------------------------------------------------------------

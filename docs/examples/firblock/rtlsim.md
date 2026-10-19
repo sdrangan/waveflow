@@ -39,30 +39,24 @@ pytest -m xsi tests/examples/test_fir_block_xsi.py
 
 ## The system: the testbench graph, cut at the kernel
 
-The [`FirBlockTB`](./testbench.md#the-testbench-is-a-graph) graph is what pysim runs. For the RTL it
-is wrapped in a system that states the **cut**: the `FirBlock` kernel is the design under test, and
-everything else is testbench. That includes the driver, the sink, the memory, and the crossbar that
-models the two `m_axi` bundles' contention in pysim.
+The [testbench graph](./testbench.md#the-testbench-is-a-graph) is what pysim runs. For the RTL the
+same graph, built on one simulation, becomes a system that states the **cut**: the `FirBlock` kernel
+is the design under test, and everything else is testbench. That includes the driver, the sink, the
+memory, and the crossbar that models the two `m_axi` bundles' contention in pysim.
 
 ```python
-@dataclass
-class FirBlockSystem(GraphSystem):                 # examples/fir_block/fir_block_sim.py
-    program: tuple = DEFAULT_PROGRAM
-    blk: int = DEFAULT_BLK
-
-    def graph(self) -> FirBlockTB:                 # the testbench graph pysim runs
-        self.runner = FirBlockSim(program=tuple(self.program), blk=int(self.blk), name="xsi_tb")
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:              # the cut: the kernel alone
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:          # the scenario: the one writer pysim uses
-        self.runner.write_scenario(root)
-
-    def check(self) -> FirBlock:                   # the golden, on a pysim run
-        return self.runner.check()
+def fir_block_system(program=DEFAULT_PROGRAM, blk=DEFAULT_BLK, n_cycles=8000) -> HwSystem:
+    sim = Simulation()                               # examples/fir_block/fir_block_sim.py
+    parts = wire_fir_block(sim, name="xsi_tb", program=program, blk=blk)   # the testbench graph
+    runner = FirBlockSim.on(parts)                   # the scenario writer and the golden pysim uses
+    dut = DutTop.of("fir_block_dut", sim, comps=[parts.dut])                # the cut: the kernel alone
+    return HwSystem(sim, dut, n_cycles=n_cycles, inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: fir_block_system(program, blk, n_cycles))
 ```
+
+It is [`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system): the testbench is every root
+on the simulation outside the DUT, derived rather than listed.
 
 From that, the system flow derives the rest:
 

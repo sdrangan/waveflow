@@ -1,6 +1,7 @@
 ---
 title: Python Golden Model
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 5
 summary: "How we know the Python model is right: schemas that generate the C++ wire format (the command header carries the coefficients), a pure bit-exact model of the kernel -- the arithmetic in the C++ operation order, and the whole protocol over a stream at either width -- scenarios whose expected responses are computed from intent rather than from any implementation, a checker that is shown to reject wrong answers, and pysim's cycle estimate."
 ---

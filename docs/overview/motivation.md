@@ -45,7 +45,7 @@ structured. Five gaps in today's flow stand in the way:
 
 - **Verification is rigorous but manual and fragmented.** Checking generated or hand-written hardware against
   the algorithm model bit-for-bit is standard practice — but today it is painstaking: the algorithm and
-  hardware teams maintain separate models and exchange vectors by hand, and the harness is rebuilt per module.
+  hardware teams maintain separate models and exchange vectors by hand, and the testbench is rebuilt per module.
   Because the golden and the hardware are not derived from one source, keeping them aligned is ongoing manual
   work. (For AI-generated code specifically, an *automatic* check is what separates *plausible* from *verified*.)
 
@@ -56,12 +56,12 @@ fragments.
 ## Waveflow's approach: a single, executable source of truth
 
 Waveflow attacks these together. It describes the key elements of a hardware system — **data
-schemas, interfaces, components, behavior, and build relationships** — as structured Python, so
+schemas, interfaces, modules, behavior, and build relationships** — as structured Python, so
 that simulation, downstream implementation, software integration, and tooling all stay aligned
 around one executable model. That one move addresses each problem directly:
 
 - **structure for AI** — typed schemas and explicit interfaces let generation stay *local* and
-  contract-guided, so an agent fills in one well-bounded component at a time instead of a whole
+  contract-guided, so an agent fills in one well-bounded module at a time instead of a whole
   system at once;
 - **fast, bit-exact simulation with timing** — event-level, vectorized models run orders of magnitude
   faster than RTL while staying value-exact, *and* carry calibrated timing/resource estimates — at
@@ -70,8 +70,9 @@ around one executable model. That one move addresses each problem directly:
   together, so there is no second copy to keep in sync;
 - **deterministic, traceable builds** — a `BuildDag` makes every `gen → simulate → synthesize → verify`
   run explicit and repeatable, so a timing or resource number traces back to the design that produced it;
-- **automatic bit-exact verification** — generated hardware is checked against the Python golden,
-  bit-for-bit, on the real toolchain — co-located with the model, not a separate hand-built harness.
+- **automatic bit-exact verification** — the hardware is checked against the Python golden,
+  bit-for-bit, on the real toolchain — each module in a [harness](../guide/systems/pysim.md#the-cut)
+  generated from its ports, not a separate hand-built testbench.
 
 The core thesis is that for many systems — especially domain-specific accelerators — the hardest
 problem is **not generating RTL**. It is keeping a coherent, executable specification across

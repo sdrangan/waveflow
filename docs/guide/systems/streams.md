@@ -130,7 +130,7 @@ none of it, so:
 
 - **The module is reusable across transports.** The same body takes its commands from another module's
   stream, from a host's queue over AXI, or from a testbench -- the polynomial runs unchanged in its
-  harness and [behind AXI-MM](../../examples/stream_kernel/memory_mapped.md).
+  harness and [on a bus](../../examples/stream_kernel_mm/index.md).
 - **Contention is solved once.** Several modules sharing one memory port is an arbiter over command
   streams ([why a streaming interface](../interface/axi_mm/master.md#why-a-streaming-interface-to-memory)),
   written and timed once.
@@ -159,7 +159,7 @@ A pipeline of kernels needs a few more rules, and a few framework pieces:
   another must first consume its own copy of anything queued ahead**.
 - **An internal link's depth is explicit**, sized against what can pile up in it: a burst of results
   while the next stage is busy. block_eq's links are framed streams of depth 128
-  ([block_eq's stages](../../examples/block_eq/stages.md)).
+  ([block_eq's link depths](../../examples/block_eq/stages.md#link-depths)).
 - **An internal link has its own width.** A link between two stages need not be the boundary's word:
   `StreamIF(bitwidth=LW, framed=True, depth=...)` is declared at `LW` in the generated top, beside
   `W`-bit boundary ports, and each stage's body sees `framed_word<LW>` on that port through

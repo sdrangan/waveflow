@@ -27,5 +27,5 @@ register map -- is still a kind of module and a kind of device in a system
 What is legacy is verifying a design through a sequential testbench instead of a system.
 
 The worked examples of this flow are [Streaming polynomial](../../examples/stream_inband/index.md) (its
-free-running successor is [Free-running polynomial](../../examples/stream_kernel/index.md)), and the older
-host-activated examples.
+free-running successor is [Free-running polynomial](../../examples/stream_kernel/index.md)), and the other
+[legacy examples](../../examples/legacy.md).

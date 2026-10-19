@@ -95,9 +95,9 @@ its DUT tree.
 
 ### A system around one graph: `GraphSystem` {#graph-system}
 
-Most systems with a single kernel already have their graph: a composite holding the kernel and the
-testbench participants around it. `GraphSystem` is the `HwSystem` for that case. A subclass states
-only what is its own, and the base derives the rest:
+The older form for a system with a single kernel: a composite holding the kernel and the testbench
+participants around it, cut by a subclass. `GraphSystem` is the `HwSystem` for that case. A subclass
+states only what is its own, and the base derives the rest:
 
 | a subclass states | the base derives |
 |---|---|
@@ -108,7 +108,14 @@ only what is its own, and the base derives the rest:
 
 A recording that pysim cannot match by construction is marked on its participant in `graph()`
 (`recording_check = "example"`), and the example checks it instead of `compare`.
-[The mem_copy system](../../examples/memcpy/system.md) is the worked example.
+`examples/state_toy`, the RF components' worked material (the `examples/rf_*` directories outside
+the curated set) and the FFT wrappers still take this form. The curated examples that used it --
+[mem_copy](../../examples/memcpy/system.md), [the interleaver](../../examples/interleaver/system.md),
+[fir_block](../../examples/firblock/rtlsim.md), [bram_access](../../examples/bram_access/rtlsim.md),
+[the RF loopback](../../examples/rf_loopback/rtl.md), [the shot transmitter](../../examples/rf_shot_tx/run.md)
+and [receiver](../../examples/rf_shot_rx/run.md) -- now build their modules directly and name the
+kernel as the DUT, `HwSystem(sim, dut)`. The composite's wiring became a function of the simulation
+(`wire_<example>(sim, ...)`), which the composite and the system share.
 
 ## The system top: `SystemTopSpec` {#the-spec}
 
@@ -392,6 +399,21 @@ because pysim and the RTL run must read **the same file** (the conformance gate 
 The same system object, run in pysim from that scenario. Every host endpoint's trace goes to
 `<work>/pysim_traces/` and the run's length in host clock cycles to `<work>/pysim.json`. Needs no
 toolchain: `--through pysim` is the whole software side, with no Vivado.
+
+### golden {#golden}
+
+`GoldenStep`: pysim's recordings against the system's golden -> `<work>/golden.json` (the mismatches; empty: pass),
+burst for burst and word for word, so the framing is checked with the values. Added after `pysim` only
+when the system states a golden ([`HwSystem.golden_outputs`](../../../waveflow/hw/hw_system.py),
+`{recording: [burst words]}`, given as `HwSystem(..., golden=...)`). A
+[harness](../../../waveflow/hw/harness.py) states one when its module has `golden(kind)`: what each
+output port records for `workload(kind)`, as `PolyKernel.golden` does in
+[`examples/stream_kernel/stream_kernel.py`](../../../examples/stream_kernel/stream_kernel.py). A
+hostile stand-in policy changes when words move, not which, so the harness under each policy has the
+step too. A mismatch fails the step and names the recording, the burst and the first differing word
+([`golden_mismatches`](../../../waveflow/build/system_dag.py)); `--through golden` checks pysim
+against the golden with no Vivado. The step always runs: the golden is Python the system digest does
+not cover.
 
 ### system_xsi {#system-xsi}
 

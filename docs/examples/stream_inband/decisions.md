@@ -1,6 +1,7 @@
 ---
 title: Decisions your spec must make
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 4
 summary: "A checklist for adapting the command-response contract to your own accelerator: where configuration lives, what zero-length data means, which error wins, how fields pack into words at each width, rounding and saturation for fixed point, what tx_id means in the status, TLAST on fixed-length bursts, and unused opcode values -- each with the answer this example chose and why."
 ---

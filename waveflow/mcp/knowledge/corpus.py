@@ -14,6 +14,9 @@ already exists, so each TOC page names its source directory in an
 ``example_dir:`` front-matter key and that is the whole list.  Two doc names
 differ from their directories (``memcpy``, ``firblock``), which is
 exactly why the key is needed rather than inferring the path from the name.
+Two pages may also name one directory (``stream_kernel`` and
+``stream_kernel_mm`` are one code base, on streams and on a bus): each is its
+own example with the same files, and each file belongs to the first by name.
 
 What is *hand-written* in an example and what is *build output* is decided by
 git, not by a path pattern: an untracked file under an example directory --

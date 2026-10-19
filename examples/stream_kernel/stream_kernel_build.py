@@ -7,6 +7,7 @@
     python -m examples.stream_kernel.stream_kernel_build --through calib_phases   # calibrate the phases
     python -m examples.stream_kernel.stream_kernel_build --through mm_compare     # behind AXI-MM, host
     python -m examples.stream_kernel.stream_kernel_build --through dev_compare    # the device alone (D9)
+    python -m examples.stream_kernel.stream_kernel_build --through sync_docs_figures  # the timing figures
 
 The kernel's body is hand-written (``src/poly_kernel_task.h``, the HLS twin of ``PolyKernel.run_iter``);
 everything around it is generated: the command and response structs from :class:`CmdHdr` /
@@ -142,6 +143,22 @@ def build_dag(work_dir=WORK_DIR, trace: bool = False, sysm: HwSystem | None = No
 
     add_robustness_steps(dag, lambda p: harness(PolyKernel, workload="test", policy=p),
                          work_dir=work_dir, top=TOP, prefix="rob_")
+    # The docs' timing figures (stream_kernel_figures.py): one command, traced, in the kernel's
+    # harness (fig_*) and in the bus system with its bus and interrupt lines (fig_mm_*).
+    from examples.stream_kernel.stream_kernel_figures import (
+        FIG_MM_PREFIX,
+        FIG_PREFIX,
+        StreamKernelFiguresStep,
+        SyncDocsFiguresStep,
+        fig_mm_system,
+        fig_system,
+    )
+
+    add_system_steps(dag, fig_system(), work_dir=work_dir, top=TOP, prefix=FIG_PREFIX, trace=True)
+    add_system_steps(dag, fig_mm_system(), work_dir=work_dir, top=MM_TOP, prefix=FIG_MM_PREFIX,
+                     trace=True, trace_bus=True)
+    dag.add(StreamKernelFiguresStep(name="stream_kernel_figures", work_dir=Path(work_dir)))
+    dag.add(SyncDocsFiguresStep(name="sync_docs_figures"))
     return dag
 
 

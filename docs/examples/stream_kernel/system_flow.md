@@ -40,6 +40,8 @@ the framework's (`add_system_steps`, [The system flow](../../guide/build/xsi_sys
 - [`system_rtl`](../../guide/build/xsi_system.md#system-rtl) -- the Verilog top. With no crossbar, the
   kernel's three streams are the top's ports.
 - `scenario` and `pysim` -- the stand-ins' input written once, and the system run in pysim from it.
+- [`golden`](../../guide/build/xsi_system.md#golden) -- pysim's recordings against `PolyKernel.golden`
+  (the `expected()` bursts of the same commands), burst for burst; a mismatch fails the DAG.
 - `system_xsi` -- the RTL under XSI, with the stand-ins' C++ twins around it, from the same scenario.
 - `compare` -- each sink's recording, RTL against pysim, word for word.
 
@@ -48,8 +50,8 @@ fatal `TLAST_EARLY` and the silence after it -- and pysim's are the golden's.
 
 ## Checking pysim against the golden
 
-`compare` checks RTL against pysim; pysim against the golden is checked before it, from the harness's
-sinks. Each `StreamSink` keeps what it recorded as `words`, one array per burst, so the check is a
+`compare` checks RTL against pysim; pysim against the golden is checked before it, by the `golden` step
+on the DAG. The same check written out, from the harness's sinks: each `StreamSink` keeps what it recorded as `words`, one array per burst, so the check is a
 comparison of bursts ([`test_stream_kernel.py`](../../../tests/examples/test_stream_kernel.py)):
 
 ```python

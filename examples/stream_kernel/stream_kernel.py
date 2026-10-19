@@ -260,6 +260,14 @@ class PolyKernel(FreeRunMod):
         cmds = {"test": default_cmds, "calib": calib_cmds}[kind]()
         return {"s_in": stimulus(cmds)}
 
+    def golden(self, kind: str = "test") -> dict:
+        """What the golden says each output records for :meth:`workload`'s *kind*: :func:`expected`
+        on the same commands, ``{output port: [burst words]}`` -- the harness's DAG checks pysim
+        against it (the ``golden`` step)."""
+        cmds = {"test": default_cmds, "calib": calib_cmds}[kind]()
+        out, status = expected(cmds)
+        return {"m_out": out, "m_status": status}
+
     def kernel_task(self):
         """The hand-written HLS body, ``src/poly_kernel_task.h``: the twin of :meth:`run_iter`."""
         from waveflow.hw.mem_stream import KernelTask

@@ -1882,3 +1882,15 @@ class ArrayUtilsStep(Buildable):
             )
             if dep_step is not None:
                 self.deps.append(dep_step)
+            # A record wider than a word moves through its own stream methods (one record over
+            # several words); the framed lane routines call its framed ones, which its header has
+            # only with DataSchemaStep(framed=True).  Say so here, not as a C++ error at compile.
+            wide = [bw for bw in self._widths if self._elem_type.get_bitwidth() > bw]
+            if (wide and issubclass(self._elem_type, DataList) and dep_step is not None
+                    and not dep_step._framed):
+                raise ValueError(
+                    f"{self.name}: the DataList element {self._elem_type.__name__} "
+                    f"({self._elem_type.get_bitwidth()} bits) is wider than a {wide[0]}-bit word, "
+                    "so its lane routines use the record's framed stream methods: add its "
+                    f"DataSchemaStep with framed=True (DataSchemaStep({self._elem_type.__name__}, "
+                    "..., framed=True)).")

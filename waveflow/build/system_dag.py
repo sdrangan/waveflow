@@ -395,6 +395,73 @@ class PysimStep(_SystemStep):
         return {self.a("pysim_traces"): traces, self.a("pysim"): report}
 
 
+@dataclass(kw_only=True)
+class GoldenStep(_SystemStep):
+    """``golden``: pysim's recordings against the system's golden
+    (:meth:`~waveflow.hw.hw_system.HwSystem.golden_outputs`), burst for burst and word for word --
+    the bursts are what TLAST closed, so the framing is checked too.  The mismatches go to
+    ``<work>/golden.json`` (empty: pass); any mismatch **fails** the step.  Added by
+    :func:`add_system_steps` when the system states a golden (a harness, when its module has
+    ``golden(kind)``).  Always runs: the golden is Python the system digest does not cover, and the
+    check reads a few files."""
+
+    description = "pysim's recordings against the golden, burst for burst (the mismatches; empty: pass)."
+    step_name: ClassVar[str] = "golden"
+    stamped: ClassVar[bool] = False
+    uses_rtl: ClassVar[bool] = False
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("pysim_traces")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("golden"): self.work / "golden.json"}
+
+    def run(self, config: BuildConfig, **inputs: Any) -> dict[str, Any]:
+        import json
+
+        out = self.work_dir(config) / "golden.json"
+        out.unlink(missing_ok=True)                      # a previous verdict must not outlive this run
+        bad = golden_mismatches(Path(inputs[self.a("pysim_traces")]), self.sysm.golden_outputs() or {})
+        out.write_text(json.dumps({"golden_mismatches": bad}, indent=2) + "\n", encoding="utf-8")
+        if bad:
+            raise RuntimeError("pysim's recordings differ from the golden:\n  " + "\n  ".join(bad))
+        return {self.a("golden"): out}
+
+
+def golden_mismatches(traces: Path, golden: dict) -> list[str]:
+    """Each way the recordings under *traces* (one bundle directory per recording) differ from
+    *golden* (``{recording: [burst words]}``): a missing recording, a burst count, a burst's length,
+    its first differing word.  Empty: they agree."""
+    import numpy as np
+
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    bad: list[str] = []
+    for name, want in golden.items():
+        d = Path(traces) / name
+        if not (d / "words.bin").is_file():
+            bad.append(f"{name!r}: no recording")
+            continue
+        got = read_burst_bundle(d)
+        if len(got) != len(want):
+            bad.append(f"{name!r}: {len(got)} bursts recorded, the golden has {len(want)}")
+        for i, (g, w) in enumerate(zip(got, want)):
+            # one row per word: a wide stream's words are (n, k) uint64 chunks
+            g, w = (np.asarray(a, dtype=np.uint64) for a in (g, w))
+            g, w = (a if a.ndim == 2 else a.reshape(-1, 1) for a in (g, w))
+            if g.shape != w.shape:
+                bad.append(f"{name!r} burst {i}: {len(g)} words recorded, the golden has {len(w)}")
+                continue
+            diff = np.flatnonzero((g != w).any(axis=1))
+            if diff.size:
+                k = int(diff[0])
+                bad.append(f"{name!r} burst {i}: word {k} is 0x{int(g[k, 0]):x}, the golden's "
+                           f"0x{int(w[k, 0]):x} ({diff.size} differ)")
+    return bad
+
+
 def _explain_mismatch(sysm, bad: list, rtl: Path, py: Path) -> str:
     """The message for recordings that differ RTL against pysim: for each, the participant that
     records it, the word counts and the first differing word -- and what to do when the difference
@@ -717,7 +784,7 @@ class XsiRunStep(_Inner):
 
             spec = o.rtl.spec
             (ws.work_dir / f"vcd_dumper_{m['top']}.v").write_text(
-                render_vcd_dumper(m["top"], spec.trace_scopes()), encoding="utf-8")
+                render_vcd_dumper(m["top"], spec.trace_scopes(bus=o.trace_bus)), encoding="utf-8")
             (o.work_dir(config) / "hazards.json").write_text(
                 json.dumps(spec.hazard_manifests(), indent=1) + "\n", encoding="utf-8")
             (ws.work_dir / f"{m['top']}_trace.vcd").unlink(missing_ok=True)
@@ -757,6 +824,9 @@ class SystemXsiStep(_SystemStep):
     #: Trace the run: ``<work>/xsi/<top>_trace.vcd`` (each wrapped kernel's wrapper scope) and
     #: ``<work>/hazards.json`` (:meth:`~waveflow.build.system_top.SystemTopSpec.hazard_manifests`).
     trace: bool = False
+    #: A traced run dumps each sub-top's wiring instead -- a device's bus groups, its interrupt lines,
+    #: the streams between its views and kernels (:meth:`~waveflow.build.system_top.SystemTopSpec.trace_scopes`).
+    trace_bus: bool = False
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -1157,7 +1227,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                      prefix: str = "", workspace: str | None = None,
                      sources: tuple[str, ...] = ("include", "gen"),
                      tcls: dict[str, Path] | None = None, timeout: int = 3600,
-                     trace: bool = False, after: tuple[str, ...] = ()) -> SystemXsiStep:
+                     trace: bool = False, trace_bus: bool = False,
+                     after: tuple[str, ...] = ()) -> SystemXsiStep:
     """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
     the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``ip_package``,
     ``block_design``, ``leaf_resources``, ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.
@@ -1169,7 +1240,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     subclass's name in snake case), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
     the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
     parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
-    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
+    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``),
+    *trace_bus* its bus and interrupt lines too (``SystemXsiStep.trace_bus``).
 
     The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
     probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
@@ -1202,13 +1274,17 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     dag.add(ResourceReportStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
     dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix, after=tuple(after)))
-    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace)
+    if getattr(sysm, "has_golden", lambda: False)():
+        dag.add(GoldenStep(sysm=sysm, work=work, prefix=prefix))
+    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace,
+                        trace_bus=trace_bus)
     dag.add(xsi)
     dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))
     return xsi
 
 
-__all__ = ["BlockDesignStep", "CompareStep", "CsynthStep", "CsynthTopsStep", "IpPackageStep", "KernelResourcesStep",
+__all__ = ["BlockDesignStep", "CompareStep", "CsynthStep", "CsynthTopsStep", "GoldenStep",
+           "IpPackageStep", "KernelResourcesStep", "golden_mismatches",
            "LeafResourcesStep", "PysimStep", "ResourceReportStep", "SystemSynthStep",
            "SYNTH_MODES", "ScenarioStep", "SystemRtlStep", "SystemXsiStep", "add_system_steps",
            "owner_label", "report_artifact", "report_rel", "rtl_artifact", "rtl_problem", "rtl_rel",

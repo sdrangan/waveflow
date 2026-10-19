@@ -1,52 +1,46 @@
 ---
 title: A memory-mapped FIR
 parent: Examples
-nav_order: 9.55
+nav_order: 9
 has_children: true
 example_dir: examples/mm_fir
-summary: "The first kernel that is REACHED over the bus rather than driving it. A free-running FIR whose taps are a register bank and whose samples and results are queues, all behind an AXI slave port that a host program writes and reads through AMD's crossbar. The kernel stays stream-only; a memory-mapped adaptor in the RTL top turns bus transactions into its messages. Because a config and the samples travel on different streams, the order between them is carried in the messages: each packet's in-band header names the config it needs by its id, the kernel waits for that config, and a response FIFO echoes which config each packet was filtered with. Bit-exact against an exact-integer golden in pysim and at RTL, in two adaptor topologies."
+summary: "A kernel the host configures over the bus. A free-running FIR whose taps are a register bank and whose samples and results are queues, all behind an AXI slave port that a host program writes and reads through AMD's crossbar. The kernel stays stream-only; a memory-mapped adaptor in the RTL top turns bus transactions into its messages. Because a config and the samples travel on different streams, the order between them is carried in the messages: each packet's in-band header names the config it needs by its id, the kernel waits for that config, and a response FIFO echoes which config each packet was filtered with. Bit-exact against an exact-integer golden in pysim and at RTL, in two adaptor topologies."
 ---
 
 # A memory-mapped FIR
 
-Every example before this one has a kernel that *drives* the bus: it sends commands to a
-`MemRStream` / `MemWStream`, and those turn them into AXI bursts. This example is the first kernel
-that is **reached** over the bus. A host writes its taps into registers, pushes samples into a queue,
-and reads results out of another queue — all through one AXI slave address range, the way a
-processor talks to a peripheral.
+[The polynomial on a bus](../stream_kernel_mm/index.md) put a stream-only kernel behind memory-mapped
+queues, reached by a host over a crossbar. This example keeps that shape and adds what a kernel the
+host **configures** needs: a **register bank** beside the queues, an **order** between a config and the
+samples it applies to, and a choice of how the views sit on the bus. A host writes the FIR's taps into
+registers, pushes samples into a queue, and reads results out of another queue — all through one AXI
+slave address range, the way a processor talks to a peripheral.
 
-Vitis HLS cannot generate that slave side. So the kernel stays exactly what the earlier examples'
-kernels are — a stream-only `FreeRunMod` — and a [memory-mapped slave
+Vitis HLS cannot generate that slave side. So the kernel stays a stream-only `FreeRunMod` — and a [memory-mapped slave
 adaptor](../../guide/interface/axi_mm/slave.md) in the RTL top does the translation: bus
 transactions in, stream messages out. This example is the worked design for that adaptor, and for the
 [components of the XSI simulation](../../guide/flows/concurrent_layers.md) a design with one has.
 
 ## Learning objectives
 
-In going through this example, you will learn how to:
+What this adds to [The polynomial on a bus](../stream_kernel_mm/index.md#learning-objectives) (views
+declared in `mm_views`, `build_mm_device`, a crossbar, a host on interrupts and its C++ twin), in the
+order the pages teach it:
 
-- Give a stream-only kernel **memory-mapped access** with a slave adaptor (`MemSlaveAdaptor`): the
-  kernel **declares its views** (`mm_views`) and `build_mm_device` builds the adaptor from them --
-  the kernel's own code stays streams only.
-- Choose a **view** for each kind of traffic: a **register bank** for configuration (shadow and
-  commit) and status (latest value), a **queue in** for a stream of samples, a **queue out** for
-  results and for responses.
-- Lay out the views' **local address regions** -- a 4 KB window each, in declaration order -- as the
-  kernel type's **layout** (`MemSlaveLayout`), with no base.
-- Assign the slave a **global base address** on a crossbar (`assign_address_ranges`), so a view's bus
-  address is base + offset.
-- Give a bus master **transactional endpoints** for the views (`BoundMemSlaveAdaptor`:
-  `stream_master`, `stream_slave`, `status`), so the host program holds endpoints and never names an
-  address.
-- Pass the **global and local addresses** to a C++ master: a per-type layout header and a per-system
-  bases header, found by walking the crossbar (`bus_address_headers`) and combined as `at(view, base)`.
-- Create **interrupt interfaces** (`IrqIF`) from the queue views to the host, so it waits for room or
-  data without polling.
-- Carry the **order between two streams** in the messages: a **config id** (`cfg_id`) that the host
-  puts in each config and each packet's header names, and a **response FIFO** that echoes it -- the
-  [command-response pattern](../../guide/systems/command_response.md).
-- Run the same host program in **pysim** and at **RTL** (XSI, AMD's crossbar), in two adaptor
-  topologies, and **calibrate pysim's timing** against the RTL with handshake probes.
+1. Choose a **view** for each kind of traffic: a **register bank** for configuration (shadow and
+   commit) and for status (the latest value), queues for the samples, the results and the responses.
+2. Lay out the views' **local address regions** as the kernel type's layout (`MemSlaveLayout`, a 4 KB
+   window each in declaration order), give the slave a global base with `assign_address_ranges`, and
+   hand both to the C++ host as a per-type layout header and a per-system bases header, combined as
+   `at(view, base)`.
+3. Carry the **order between two streams** in the messages: a **config id** (`cfg_id`) the host puts in
+   each config and names in each packet's header, a kernel that waits for that config, and a
+   **response FIFO** that echoes which config each packet was filtered with -- the
+   [command-response pattern](../../guide/systems/command_response.md) for a config.
+4. Build the device in **two adaptor topologies** -- a front per view (`per_view`) or every view behind
+   one front and a generated decoder (`one_front`) -- with one address map and the same host program.
+5. Find where pysim's cycles and the RTL's differ with **handshake probes**, and calibrate pysim's
+   timing against the RTL.
 
 ## Pages
 

@@ -1,6 +1,7 @@
 ---
 title: AXI4-Stream Timing Analysis
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 10
 has_children: false
 summary: "How to read the protocol off a waveform: decoding a co-simulation VCD of the poly kernel, without rerunning co-simulation, into its commands (headers with their coefficients, sample bursts) and responses (headers, results), in order, at either word width -- including a run that ends in an error -- and plotting the bursts on a timing diagram."

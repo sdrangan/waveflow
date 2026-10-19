@@ -15,15 +15,16 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import numpy as np
 
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
-from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_module import HwParam, kernel_name
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
@@ -66,59 +67,80 @@ class InterleaverInbandTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        w = int(self.mem_dwidth)
-        lw = w // 32
-        self._sizes = [int(n) for n in self.sizes]
-        n_max = max(self._sizes)
-
-        # Lay out each job's P/X/Y regions (nw words each) in one flat arena.
-        cur, self._layout = 0, []
-        for n in self._sizes:
-            nw = (n + lw - 1) // lw
-            self._layout.append((n, nw, cur, cur + nw, cur + 2 * nw))   # (n, nw, p_off, x_off, y_off)
-            cur += 3 * nw
-        self.arena_words = cur + 16
-
-        self.mem = MemoryMod(name=f"{self.name}_mem", sim=self.sim, inline=False, clk=self.clk,
-                                word_size=w, addr_size=32, nwords_tot=self.arena_words * 4)
-        if self.platform_dir is not None:
-            from waveflow.calib.bus_model import BusCalib
-            self.mem.s_mm.bus_timing = BusCalib(self.platform_dir, clk_freq=self.clk.freq).bus_timing()
-        self.mem.alloc(int(self.mem.nwords_tot))
-        self.mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
-        self.mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
-        self._nwords_tot = int(self.mem.nwords_tot)
-
-        self.dut = InterleaverInband(name=f"{self.name}_il", sim=self.sim, mem_dwidth=w, n=n_max,
-                                     compute_calib_dir=self.compute_calib_dir)
-        self.cmds = [InterleaverCmd(p_off=p, x_off=x, y_off=y, n=n)
-                     for (n, nw, p, x, y) in self._layout]
-        self.cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in self.cmds]
-        self.driver = StreamDriver(sim=self.sim, bitwidth=w, in_bundle="vectors/s_cmd")
-        # s_done is framed (the in-band MemWStream echoes the IlDesc) — has_tlast.
-        self.done_sink = StreamSink(sim=self.sim, bitwidth=w, out_bundle="vectors/s_done",
-                                    has_tlast=True)
-
-        for c in (self.dut, self.driver, self.done_sink, self.mem):
+        parts = wire_interleaver_inband(self.sim, name=self.name, sizes=self.sizes,
+                                        mem_dwidth=int(self.mem_dwidth), clk=self.clk,
+                                        compute_calib_dir=self.compute_calib_dir,
+                                        platform_dir=self.platform_dir)
+        for k in ("_sizes", "_layout", "arena_words", "mem", "_nwords_tot", "dut", "cmds",
+                  "cmd_words", "driver", "done_sink"):
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
+        for i in parts.ifs:
+            self.add_if(i)
 
-        cmd_if = StreamIF(name=f"{self.name}_cmd_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        cmd_if.bind(ep_name="master", endpoint=self.driver.stream_ep)
-        cmd_if.bind(ep_name="slave", endpoint=self.dut.s_cmd)
-        self.add_if(cmd_if)
 
-        done_if = StreamIF(name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w)
-        done_if.bind(ep_name="master", endpoint=self.dut.s_done)
-        done_if.bind(ep_name="slave", endpoint=self.done_sink.stream_ep)
-        self.add_if(done_if)
+def wire_interleaver_inband(sim, *, name: str = "tb", sizes=(256,), mem_dwidth: int = 64,
+                            clk: "Clock | None" = None, compute_calib_dir: "str | None" = None,
+                            platform_dir: "str | None" = None) -> SimpleNamespace:
+    """The :class:`InterleaverInband` kernel and its testbench participants, built on *sim* and
+    wired: a driver on ``s_cmd``, a sink on ``s_done``, one shared arena behind both ``m_axi``
+    bundles (a 2-master crossbar models their contention in pysim).  The one wiring both forms use
+    -- :func:`interleaver_inband_system` (``HwSystem(sim, dut)``) and :class:`InterleaverInbandTB`
+    (the composite the calibration tools and the kernel-flow testbench walk).
 
-        xbar = AXIMMCrossBarIF(name=f"{self.name}_xbar", sim=self.sim, clk=self.clk,
-                               nports_master=2, nports_slave=1, bitwidth=w)
-        xbar.bind("master_0", self.dut.m_in)          # gmem0 read (P, X)
-        xbar.bind("master_1", self.dut.m_out)         # gmem1 write (Y)
-        xbar.bind("slave_0", self.mem.s_mm)
-        self.add_if(xbar)
-        assign_address_ranges([self.mem.s_mm], [(0, self.arena_words * (w // 8))])
+    Returns the parts: ``dut``, ``driver``, ``done_sink``, ``mem``, ``xbar``, ``comps`` / ``ifs``
+    (in the order a composite registers them), ``_sizes``, ``_layout`` (per job ``(n, nw, p_off,
+    x_off, y_off)``), ``cmds`` / ``cmd_words``, ``arena_words`` / ``_nwords_tot``, ``mem_dwidth``."""
+    w = int(mem_dwidth)
+    lw = w // 32
+    clk = clk if clk is not None else Clock(freq=100e6)
+    sizes = [int(n) for n in sizes]
+    n_max = max(sizes)
+
+    # Lay out each job's P/X/Y regions (nw words each) in one flat arena.
+    cur, layout = 0, []
+    for n in sizes:
+        nw = (n + lw - 1) // lw
+        layout.append((n, nw, cur, cur + nw, cur + 2 * nw))   # (n, nw, p_off, x_off, y_off)
+        cur += 3 * nw
+    arena_words = cur + 16
+
+    mem = MemoryMod(name=f"{name}_mem", sim=sim, inline=False, clk=clk,
+                    word_size=w, addr_size=32, nwords_tot=arena_words * 4)
+    if platform_dir is not None:
+        from waveflow.calib.bus_model import BusCalib
+        mem.s_mm.bus_timing = BusCalib(platform_dir, clk_freq=clk.freq).bus_timing()
+    mem.alloc(int(mem.nwords_tot))
+    mem.load_segs = [MemSeg(0, 0, "vectors/mem_in")]
+    mem.dump_segs = [MemSeg(0, 0, "vectors/out")]       # 0 = the whole arena
+
+    dut = InterleaverInband(name=f"{name}_il", sim=sim, mem_dwidth=w, n=n_max,
+                            compute_calib_dir=compute_calib_dir)
+    cmds = [InterleaverCmd(p_off=p, x_off=x, y_off=y, n=n) for (n, nw, p, x, y) in layout]
+    cmd_words = [np.asarray(c.serialize(word_bw=w), dtype=np.uint64) for c in cmds]
+    driver = StreamDriver(sim=sim, bitwidth=w, in_bundle="vectors/s_cmd")
+    # s_done is framed (the in-band MemWStream echoes the IlDesc) — has_tlast.
+    done_sink = StreamSink(sim=sim, bitwidth=w, out_bundle="vectors/s_done", has_tlast=True)
+
+    cmd_if = StreamIF(name=f"{name}_cmd_if", sim=sim, clk=clk, bitwidth=w)
+    cmd_if.bind(ep_name="master", endpoint=driver.stream_ep)
+    cmd_if.bind(ep_name="slave", endpoint=dut.s_cmd)
+
+    done_if = StreamIF(name=f"{name}_done_if", sim=sim, clk=clk, bitwidth=w)
+    done_if.bind(ep_name="master", endpoint=dut.s_done)
+    done_if.bind(ep_name="slave", endpoint=done_sink.stream_ep)
+
+    xbar = AXIMMCrossBarIF(name=f"{name}_xbar", sim=sim, clk=clk,
+                           nports_master=2, nports_slave=1, bitwidth=w)
+    xbar.bind("master_0", dut.m_in)          # gmem0 read (P, X)
+    xbar.bind("master_1", dut.m_out)         # gmem1 write (Y)
+    xbar.bind("slave_0", mem.s_mm)
+    assign_address_ranges([mem.s_mm], [(0, arena_words * (w // 8))])
+    return SimpleNamespace(dut=dut, driver=driver, done_sink=done_sink, mem=mem, xbar=xbar,
+                           comps=(dut, driver, done_sink, mem), ifs=(cmd_if, done_if, xbar),
+                           _sizes=sizes, _layout=layout, cmds=cmds, cmd_words=cmd_words,
+                           arena_words=arena_words, _nwords_tot=int(mem.nwords_tot), mem_dwidth=w)
 
 
 class InterleaverInbandSim:
@@ -133,6 +155,15 @@ class InterleaverInbandSim:
                                       mem_dwidth=mem_dwidth, n_cycles=n_cycles,
                                       compute_calib_dir=compute_calib_dir, platform_dir=platform_dir)
         self.expected: list[tuple[int, int, np.ndarray]] = []
+
+    @classmethod
+    def on(cls, parts) -> "InterleaverInbandSim":
+        """The procedure around parts already built (:func:`wire_interleaver_inband`'s) rather than
+        an :class:`InterleaverInbandTB` of its own: what :func:`interleaver_inband_system` drives."""
+        self = cls.__new__(cls)
+        self.tb = parts
+        self.expected = []
+        return self
 
     def write_scenario(self, root) -> None:
         """Materialize the whole scenario under ``<root>/vectors`` and point the graph at it:
@@ -181,28 +212,31 @@ class InterleaverInbandSim:
         return tb.dut
 
 
-@dataclass
-class InterleaverInbandSystem(GraphSystem):
-    """The in-band interleaver as a **system** (``plans/system_model.md`` S3e): the
-    :class:`InterleaverInbandTB` graph, the cut the :class:`InterleaverInband` kernel alone.  The
-    contention crossbar is testbench, so both ``m_axi`` bundles are top ports facing the memory."""
-
-    sizes: tuple = (256,)
-    n_cycles: int = 4000
-
-    def graph(self) -> InterleaverInbandTB:
-        self.runner = InterleaverInbandSim(sizes=tuple(self.sizes), name="xsi_tb",
-                                           n_cycles=int(self.n_cycles))
-        return self.runner.tb
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        self.runner.write_scenario(root)
-
-    def check(self) -> "InterleaverInband":
-        return self.runner.check()
+def interleaver_inband_system(sizes=(256,), n_cycles: int = 4000, mem_dwidth: int = 64,
+                              compute_calib_dir: "str | None" = None,
+                              platform_dir: "str | None" = None) -> HwSystem:
+    """The in-band interleaver as a **system**, ``HwSystem(sim, dut)``: the kernel and its testbench
+    built on one simulation (:func:`wire_interleaver_inband`), the DUT the
+    :class:`InterleaverInband` kernel alone.  The contention crossbar is testbench, so both ``m_axi``
+    bundles are top ports facing the memory.  The scenario and the golden are
+    :class:`InterleaverInbandSim`'s; ``run()`` returns the kernel after the check.  The parts are
+    attributes of the system (``sysm.kernel``, ``sysm.driver``, ``sysm.done_sink``, ``sysm.mem``,
+    ``sysm.xbar``)."""
+    sim = Simulation()
+    parts = wire_interleaver_inband(sim, name="xsi_tb", sizes=sizes, mem_dwidth=mem_dwidth,
+                                    compute_calib_dir=compute_calib_dir,
+                                    platform_dir=platform_dir)
+    runner = InterleaverInbandSim.on(parts)
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), inputs=runner.write_scenario,
+                    check=lambda s: runner.check(),
+                    fresh=lambda: interleaver_inband_system(sizes, n_cycles, mem_dwidth,
+                                                            compute_calib_dir, platform_dir))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(mem_dwidth)
+    sysm.sizes, sysm.runner = tuple(sizes), runner
+    sysm.kernel, sysm.driver, sysm.done_sink = parts.dut, parts.driver, parts.done_sink
+    sysm.mem, sysm.xbar = parts.mem, parts.xbar
+    return sysm
 
 
 def run_and_check() -> bool:

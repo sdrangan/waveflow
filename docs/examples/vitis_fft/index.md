@@ -1,7 +1,7 @@
 ---
 title: "Wrapping vendor IP: the Vitis FFT"
 parent: Examples
-nav_order: 9.57
+nav_order: 15
 has_children: true
 example_dir: examples/vitis_fft
 summary: "Wrapping vendor IP, worked end to end: AMD's Vitis L1 SSR FFT as a Waveflow module -- four AXI-Stream lanes in, four out, the vendor's xf::dsp::fft::fft<> as the hardware body and a bit-exact Python model as the simulation, bit-exact at RTL on the RFSoC 4x2. Also a worked calibration of a black box (a phase-dependent latency, its mean and its spread on the platform) and a cautionary tale: the module passed every functional test while running at a tenth of the rate AMD states, and how that was found. For an FFT in a design, use the SSR FFT example."
@@ -20,6 +20,9 @@ ordinary Waveflow module, with the same guarantees as a block you wrote yourself
 example is the end-to-end run, and what measuring it at RTL taught us.
 
 ## Learning objectives
+
+What this adds to [Waveflow's FFT, at full rate](../ssr_fft/index.md#learning-objectives), in the
+order the pages teach it:
 
 - Use a **vendor HLS library block** as a `FreeRunMod`: its C++ body is the vendor call
   ([`kernel_task()`](../../guide/vitis_l1/fft/synthesis.md)), its simulation is a **bit-exact Python

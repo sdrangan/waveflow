@@ -159,8 +159,6 @@ waveflow-extension/*.vsix
 
 # Temporary working directory
 examples/dataschema
-examples/vecunit
-examples/test
 examples/stream_inband/include
 examples/stream_inband/logs
 examples/stream_inband/waveflow_poly_proj
@@ -203,11 +201,6 @@ examples/mem_copy/include/il_cmd_rx_framed_task.h
 examples/mem_copy/include/il_compute_inband_task.h
 examples/mem_copy/include/il_load_inband_task.h
 examples/mem_copy/include/il_store_inband_task.h
-
-examples/_archive/conv2d/include/
-examples/_archive/conv2d/waveflow_conv2d_proj/
-examples/_archive/conv2d/logs/
-examples/_archive/conv2d/data/
 
 # Interleaver DATAFLOW de-risk sandbox (exploratory scratch; C1-C6 variants + generated Vitis
 # projects/VCDs. Findings are captured in plans/dataflow_mod.md; regenerate via run_interleaver.py.)
@@ -351,6 +344,8 @@ examples/stream_kernel/include/
 examples/stream_kernel/gen/
 examples/stream_kernel/poly_kernel_proj/
 examples/stream_kernel/xsi_work/
+# the figure step renders here; docs/examples/stream_kernel{,_mm}/images/ hold the committed copies.
+examples/stream_kernel/results/
 # examples/block_eq: the bodies are src/; the rest is build output.
 examples/block_eq/include/
 examples/block_eq/gen/

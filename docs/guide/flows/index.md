@@ -15,8 +15,10 @@ through the flow; these pages are the reference for the modules themselves:
 - [Hardware modules](modules.md) -- what a `HwModule` is, its kinds, its hooks, and the cut.
 - [Writing a free-running module](concurrent_python.md) -- a leaf's `run_iter`, a composite's graph,
   state across firings.
-- [Developing module by module](units.md) -- harnesses and their stand-ins, hostile stand-ins,
-  calibrating a module, composing a parent, incremental builds.
+- [Developing module by module](units.md) -- [the harness](units_harness.md) and its stand-ins (streams,
+  credit streams, memory-master ports), [reading its recordings](units_recordings.md),
+  [hostile stand-ins](units_hostile.md), [calibrating in a harness](units_calibration.md),
+  [composing a parent](units_composing.md) and incremental builds.
 - [XSI simulation components](concurrent_layers.md) -- kernel, RTL and BFM modules: what each pysim
   object becomes in an RTL simulation.
 - [Parameterization](parametrization.md) -- build parameters, and what a value changes.

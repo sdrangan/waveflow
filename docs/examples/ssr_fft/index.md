@@ -1,7 +1,7 @@
 ---
 title: Waveflow's FFT, at full rate
 parent: Examples
-nav_order: 9.565
+nav_order: 14
 has_children: true
 example_dir: examples/ssr_fft
 summary: "Waveflow's own SSR FFT (SsrFft): one RadixWord stream in and out -- four complex samples a beat -- a new frame every L/R cycles -- the rate the architecture is built for and 7.5 to 10 times AMD's Vitis L1 core as shipped -- bit-exact with that core. Built as free-running Waveflow modules: one hls::task per commutator, stage and buffer, the top generated from the module graph, the XSI testbench from the testbench graph. Measured at RTL on the RFSoC 4x2 from L = 16 to 4096: the interval, a latency that does not depend on arrival, the pysim against the RTL, and what the throughput costs in resources."
@@ -18,14 +18,17 @@ module.
 
 ## Learning objectives
 
-- Build a **streaming DSP block as a composite** of free-running tasks -- here 7 to 20 of them --
-  whose top is generated from the module graph, and whose pysim is one process per task.
-- See what makes a pipeline run at **one word per cycle without stopping**: no per-frame function
-  to return from, frames visible only as a counter, and no blocking read at a loop head.
-- Keep the **bits single-sourced** across three backends: one Python model, a pysim that calls it per
-  block, and C++ whose formats and tables are generated from the same geometry.
-- **Measure** a block at RTL -- interval, latency, isolated-frame latency, resources -- and compare it
-  to the vendor core on the same platform.
+What this adds to the examples before it, in the order the pages teach it:
+
+1. Build a **streaming DSP block as a composite** of many free-running tasks -- here 7 to 20 of them,
+   one per commutator, stage and buffer -- whose top is generated from the module graph, and whose pysim is
+   one process per task.
+2. Write a pipeline that runs at **one word per cycle without stopping**: no per-frame function to
+   return from, frames visible only as a counter, and no blocking read at a loop head.
+3. Keep the **bits single-sourced** across three backends: one Python model, a pysim that calls it per
+   block, and C++ whose formats and tables are generated from the same geometry.
+4. **Measure** a block at RTL -- interval, latency, isolated-frame latency, resources -- and compare it
+   to the vendor core on the same platform.
 
 ## The design
 

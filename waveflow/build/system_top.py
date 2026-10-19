@@ -418,10 +418,20 @@ class SystemTopSpec:
         sub = self.sub_inst(k.group)
         return ".".join(p for p in (self.top, sub, k.inst) if p)
 
-    def trace_scopes(self) -> list[str]:
+    def trace_scopes(self, bus: bool = False) -> list[str]:
         """The scopes a traced run dumps (each at level 1): every kernel's own -- its ports, and for
-        a wrapped kernel the wrapper's wires to its memories -- or, with none, the top itself."""
-        return [self.scope_of(k) for k in self.kernels] or [self.top]
+        a wrapped kernel the wrapper's wires to its memories -- or, with none, the top itself.
+
+        *bus* dumps each sub-top's instead (with none, the top's): the wiring inside it -- a device's
+        slave groups behind the crossbar, its interrupt lines, the streams between its views and its
+        kernels.  A kernel inside a sub-top is then not dumped on its own: of two nested scopes, xsim
+        (2025.1, measured) dumps only the outer one, so the kernel's ports are read as the sub-top's
+        stream nets."""
+        kernels = [self.scope_of(k) for k in self.kernels]
+        if not bus:
+            return kernels or [self.top]
+        outer = [f"{self.top}.{s.inst}" for s in self.subs] or [self.top]
+        return outer + [k for k in kernels if not any(k.startswith(o + ".") for o in outer)]
 
     def hazard_manifests(self) -> list[dict]:
         """Each wrapped kernel's hazard manifest, with the ``scope`` its nets are found under in a
@@ -508,14 +518,14 @@ def _rtl_of(mod, dw: int, owner=None) -> KernelRtl:
         module, ports, scalars = writer_rtl(mod)
         eps = (("s_in", mod.s_in), ("m_mem", mod.m_mem))
         return KernelRtl(module, f"u_{mod.name}", ports, scalars, eps, hw=mod, owner=owner)
-    name = getattr(type(mod), "cpp_kernel_name", None)
+    from waveflow.hw.hw_module import _hw_param_names, kernel_name
+
+    name = kernel_name(mod)
     if not name:
         raise LoweringError(f"{type(mod).__name__} '{mod.name}' is inside the cut but names no "
                             f"csynth'd module (cpp_kernel_name)")
     # The instance's own build parameters, so the spec (and a wrapper's memory sizes) is the one its
     # csynth top was elaborated with, not the class defaults.
-    from waveflow.hw.hw_module import _hw_param_names
-
     fresh = type(mod)(name=name, sim=Simulation(),
                       **{n: getattr(mod, n) for n in sorted(_hw_param_names(type(mod)))})
     spec = composite_top_spec(fresh, width=dw)

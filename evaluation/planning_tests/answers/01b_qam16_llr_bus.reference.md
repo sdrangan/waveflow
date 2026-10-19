@@ -6,8 +6,8 @@ key, never shown to an agent.
 
 ## Expected
 
-- **Frame / references:** `bus_system`, its one-device reference `stream_kernel`'s memory-mapped system
-  (`docs/examples/stream_kernel/memory_mapped.md`, `stream_kernel_mm.py`, `poly_kernel_host.h`); the
+- **Frame / references:** `bus_system`, its one-device reference `stream_kernel_mm`, the polynomial on a bus
+  (`docs/examples/stream_kernel_mm/`, `stream_kernel_mm.py`, `poly_kernel_host.h`); the
   recipe `docs/guide/systems/recipe.md` for the order.
 - **The kernel alone first:** rung 1's kernel in its harness (`harness(Qam16Llr, workload=...)`), its
   gates, and its timed phases calibrated there (`add_calib_steps`) -- the record the system's pysim then

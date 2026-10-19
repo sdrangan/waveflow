@@ -1,94 +1,128 @@
 ---
 title: The equalizer's stages
 parent: Block equalizer
-nav_order: 2
+nav_order: 4
 ---
 
 # The stages
 
-Everything is in [`block_eq.py`](../../../examples/block_eq/block_eq.py): the schemas, the golden, the
-scenarios, the two stages and the composite. The HLS bodies are in [`src/`](../../../examples/block_eq/src).
+The two stages and the composite are the last two sections of
+[`block_eq.py`](../../../examples/block_eq/block_eq.py). Each stage is a
+[`FreeRunMod`](../../guide/flows/concurrent_python.md) with framed stream ports, one firing per command,
+like [the polynomial's kernel](../stream_kernel/kernel.md); the composite wires them behind the
+framework's [`StreamBroadcast`](../../guide/streams/broadcast.md). Their HLS bodies are on
+[The HLS bodies](hls.md).
 
-## Why two stages, and a broadcast
+## Why two stages {#why-two-stages}
 
-`g` costs a division, once a row; `z` costs four multiplies and two adds, once a symbol. In one loop the
-division would sit on every symbol's path; as two stages each runs at its own rate. Both need the
-command, `gain` needs the estimates and `apply` the symbols -- all on one input. So the framework's
-[`StreamBroadcast`](../../guide/streams/broadcast.md) gives each a copy of the whole stream, and each
-**skips** what is not its own.
+The equalizer is two computations at different rates ([What an equalizer
+does](theory.md#what-the-example-computes)):
 
-## `gain`
+| | once a | per command | the costly operation |
+|---|---|---|---|
+| `g = conj(h) / (\|h\|^2 + N)` | row | `nrows` | a division |
+| `z = g r` | symbol | `nrows * m` | four multiplies, two adds |
+
+The split is where the rate changes. In one loop over symbols, each row's division would sit on the path
+of its first symbol; as two stages, each is a loop of its own -- `gain` a row an iteration, `apply` a
+symbol an iteration, both at II=1 -- and they run concurrently: `gain` can work on the next command's
+estimates while `apply` is still on this command's symbols, as far ahead as the FIFOs between them allow
+([link depths](#link-depths)). What crosses the cut is small: one `GainHdr` and at most 64 `g` values a
+command.
+
+## One input, two consumers: the broadcast
+
+Both stages need the command; `gain` needs the estimates and `apply` the symbols -- all on the one input.
+`StreamBroadcast(2)` writes every word it reads to both outputs, TLAST included, so each stage gets a copy
+of the whole stream and **skips** what is not its own: `gain` discards the symbols, `apply` the estimates.
+
+The broadcast moves its outputs **in lockstep**: a word goes to both in the same firing, so a full output
+stalls both. That imposes [the rule](../../guide/streams/broadcast.md#two-rules) both stages are written
+around: **a consumer keeps consuming its own copy, and never waits on a sibling for something queued
+behind its own unread data.**
+
+- `gain` reads -- and drops -- its copy of the symbols. They are `apply`'s, but an unread copy would fill,
+  stall the broadcast, and starve `apply` of the symbols it needs.
+- `apply` discards its copy of the estimates **before** it waits for `g`. Waiting first, its copy would
+  fill with estimates, the broadcast would stall, `gain` would never get the rest of the estimates, and
+  `g` would never come.
+
+In pysim neither violation hangs: a framed transfer there moves a whole burst at once, so a copy never
+fills mid-burst. The rule is followed by construction, and a violation would show only at RTL -- as a
+hang, or as a run that ends early and looks like success. The gates therefore compare every recorded
+burst ([The system flow](system_flow.md#the-gates)).
+
+## `gain` {#gain}
 
 ```python
 def run_iter(self):
     hdr = yield from self.s_in.get_schema(CmdHdr)
     nrows, m = int(hdr.nrows), int(hdr.m)
     est = (yield from self.s_in.get_array(Float32, 3 * nrows)).val     # fewer if it ended early
-    ...                                                                 # g per row; the first N <= 0
+    complete = len(est) // 3
+    gr, gi = gain_golden(est[0::3][:complete], est[1::3][:complete], est[2::3][:complete])
+    bad = np.flatnonzero(~(est[2::3][:complete] > 0))
+    if len(bad):
+        nvalid, code = int(bad[0]), StatusCode.BAD_NOISE
+    elif complete < nrows:
+        nvalid, code = complete, StatusCode.TLAST_EARLY
+    else:
+        nvalid, code = nrows, StatusCode.OK
     yield from self.m_g.write(GainHdr(tx_id=hdr.tx_id, nvalid=nvalid, code=code))
     if nvalid:
-        yield from self.m_g.write_array(Float32, 2 * nvalid, array(Float32, g))
-    sym = (yield from self.s_in.get_array(Float32, 2 * nrows * m)).val # KEEP CONSUMING: discard
+        yield from self.m_g.write_array(Float32, 2 * nvalid,
+                                        array(Float32, _interleave(gr[:nvalid], gi[:nvalid])))
+    # Keep consuming: the symbols are apply's, but this copy must be read, or the broadcast stalls.
+    sym = (yield from self.s_in.get_array(Float32, 2 * nrows * m)).val
     if code != StatusCode.OK or len(sym) < 2 * nrows * m:
         yield from _halt(self)
 ```
 
-`gain` tells `apply` three things in `GainHdr`: which command, how many rows have a `g` (`nvalid`), and how
-its part ended (`code`). That is **the command travelling with the data**: `apply`, the last stage, answers
-for both, including an error only `gain` could see.
+Read the command and the estimates; compute `g` with the golden's own `gain_golden`; tell `apply`, in
+`GainHdr`, which command, how many rows have a `g` (`nvalid`) and how `gain`'s part ended (`code`); send
+the `g` values, real and imaginary interleaved, one row a word. `nvalid = 0` sends no `g` burst: a burst
+cannot be empty. Then discard the symbols, and halt on any error.
 
-Then `gain` reads -- and drops -- its copy of the symbols. They are `apply`'s, but the broadcast writes both
-copies in lockstep: an unread copy would fill, stall the broadcast, and starve `apply`.
+`gain` does not answer anything itself. Its error -- a bad noise, estimates that end early -- travels in
+`GainHdr`, and `apply`, the last stage, reports it: [the command travels with the
+data](../../guide/systems/command_response.md).
 
-## `apply`
+## `apply` {#apply}
 
 ```python
 def run_iter(self):
     hdr = yield from self.s_in.get_schema(CmdHdr)
-    yield from self.s_in.get_array(Float32, 3 * nrows)                  # KEEP CONSUMING, FIRST
-    gh = yield from self.s_g.get_schema(GainHdr)                        # then wait on gain
-    ...
+    nrows, m = int(hdr.nrows), int(hdr.m)
+    # Keep consuming, first: the estimates are gain's, but this copy must be read before waiting on
+    # gain -- waiting first would stall the broadcast, and gain would never get the rest of them.
+    yield from self.s_in.get_array(Float32, 3 * nrows)
+    gh = yield from self.s_g.get_schema(GainHdr)
+    nvalid = int(gh.nvalid)
+    g = (yield from self.s_g.get_array(Float32, 2 * nvalid)).val if nvalid else np.zeros(0, f32)
+    yield from self.m_out.write(Resp(tx_id=hdr.tx_id, nrows=nrows, m=m))
+    sym = (yield from self.s_in.get_array(Float32, 2 * nrows * m)).val
+    need, arrived = nvalid * m, len(sym) // 2
+    k = min(need, arrived)
+    if k:
+        rows = np.arange(k) // m
+        zr, zi = apply_golden(g[0::2][rows], g[1::2][rows], sym[0:2 * k:2], sym[1:2 * k:2])
+        yield from self.m_out.write_array(Float32, 2 * k, array(Float32, _interleave(zr, zi)))
+    if arrived < need:
+        code = StatusCode.TLAST_EARLY
+    else:
+        code = StatusCode(int(gh.code))
+    yield from self.m_status.write(Status(tx_id=hdr.tx_id, status=code))
+    if code != StatusCode.OK:
+        yield from _halt(self)
 ```
 
-The order is the point. `apply` discards its copy of the estimates **before** it waits for `gain`. Had it
-waited first, its copy would fill with estimates, the broadcast would stall, `gain` would never get the
-rest of the estimates, and `g` would never come: a deadlock that looks, at RTL, like a hang. This is the
-broadcast's [keep-consuming rule](../../guide/streams/broadcast.md#two-rules).
+The order is the point: the estimates are discarded **before** `s_g` is read. Then the `Resp` header,
+the results for the `k` symbols that both arrived and have a `g` (each symbol's row is `index // m`), and
+the status: `TLAST_EARLY` if the symbols ran out before the rows that have a `g`, else `gain`'s code. This
+is the protocol's [first cut in row-major order](protocol.md#errors-are-fatal): rows that `gain` cut stop
+the results at `nvalid * m`; symbols that end earlier than that win.
 
-Then `Resp`, the results for the rows that have a `g`, and the status.
-
-## The HLS bodies: one body, two placements
-
-Each stage's body takes its ports' **word types** as template parameters
-([`KernelTask(framed=...)`](../../guide/streams/broadcast.md#in-hls)):
-
-```cpp
-template <int W, typename TI, typename TO>
-static void eq_gain_task(hls::stream<TI>& s_in, hls::stream<TO>& m_g);
-
-template <int W, typename TI, typename TG, typename TO, typename TS>
-static void eq_apply_task(hls::stream<TI>& s_in, hls::stream<TG>& s_g,
-                          hls::stream<TO>& m_out, hls::stream<TS>& m_status);
-```
-
-The generator supplies the types where the body sits. Inside the composite, `gain` reads and writes
-`framed_word<64>` FIFOs, and `apply` reads `framed_word<64>` and writes the top's `axi4s_word<64>` ports;
-as a stage alone, every port is the top's `axi4s_word<64>`. The generated composite:
-
-```cpp
-hls_thread_local hls::task t0(stream_broadcast_task<64, axi4s_word<64>, framed_word<64>, framed_word<64>>, s_in, est_gain, est_apply);
-hls_thread_local hls::task t1(eq_gain_task<64, framed_word<64>, framed_word<64>>, est_gain, g);
-hls_thread_local hls::task t2(eq_apply_task<64, framed_word<64>, framed_word<64>, axi4s_word<64>, axi4s_word<64>>, est_apply, g, m_out, m_status);
-```
-
-A body reads and writes through the framework's helpers that take either word type -- a schema with
-`streamutils::read_msg` / `write_msg`, a word of float32s with `float32_array_utils::read_boundary_lane` /
-`write_boundary_lane` -- so it never names one ([One body, wherever it
-sits](../../guide/comp_codegen/freerunning_override.md#framed)).
-
-Inside, the bodies are the [lane loop](../../guide/vectorization/hls/loop_optimization.md): a word per
-iteration at II=1, every float operation its own statement (no fused multiply-add), and a `static bool
-halted` under `#pragma HLS reset` for the fatal error.
+`_halt` waits on an event nothing triggers: after an error the stage stops, as its RTL does.
 
 ## The composite
 
@@ -96,11 +130,46 @@ halted` under `#pragma HLS reset` for the fatal error.
 self.bcast = StreamBroadcast(name=f"{self.name}_bcast", sim=self.sim, n_out=2, bitwidth=W, clk=self.clk)
 self.gain = Gain(name=f"{self.name}_gain", sim=self.sim, clk=self.clk)
 self.apply = Apply(name=f"{self.name}_apply", sim=self.sim, clk=self.clk)
-...
-link("est_gain", self.bcast.m_out_0, self.gain.s_in, 128)     # StreamIF(framed=True, depth=128)
+for c in (self.bcast, self.gain, self.apply):
+    self.add_comp(c)
+
+def link(name, master, slave, depth):
+    iface = StreamIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk, bitwidth=W,
+                     framed=True, depth=depth)
+    iface.bind("master", master)
+    iface.bind("slave", slave)
+    self.add_if(iface)
+
+link("est_gain", self.bcast.m_out_0, self.gain.s_in, 128)
 link("est_apply", self.bcast.m_out_1, self.apply.s_in, 128)
 link("g", self.gain.m_g, self.apply.s_g, 128)
+
 self.boundary = ["s_in", "m_out", "m_status"]
+self.s_in = self.bcast.s_in
+self.m_out = self.apply.m_out
+self.m_status = self.apply.m_status
 ```
 
-Next, [The system flow](system_flow.md).
+Three children, three internal framed streams, and a boundary: the broadcast's input and `apply`'s two
+outputs are the composite's ports ([Free-running composites](../../guide/comp_codegen/freerunning_composite.md)).
+The composite has no behavior of its own; its children run.
+
+### Link depths {#link-depths}
+
+An internal link's `depth` is physical: the generated top declares each as an `hls::stream` with
+`#pragma HLS STREAM depth=128`. Each is sized against what can pile up in it:
+
+- **The two copies** (`est_gain`, `est_apply`): a command's estimates are at most `3 * 64` floats = 96
+  words, plus the `CmdHdr`. A copy of 128 words holds them whole, so the broadcast can deliver the next
+  command's estimates to `gain` while `apply` still has this command's symbols queued, rather than
+  waiting on `apply` word for word.
+- **The `g` link**: a `GainHdr` and at most 64 `g` words, 65 words. At 128 it holds one command's whole
+  message, so `gain` finishes writing and goes on to discard its symbols without waiting for `apply` to
+  read.
+
+The depths set how far one stage can run ahead of the other; they are not what keeps the design out of
+deadlock -- the keep-consuming order is. In fact a copy of 128 words would hide a wrong order in `apply`
+for any command of up to 64 rows (its copy could hold all the estimates while it waited on `g`); the
+rule is what makes the design correct at any depth.
+
+Next, [The HLS bodies](hls.md): the same two stages in C++.

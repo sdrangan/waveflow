@@ -128,11 +128,11 @@ def test_the_harness_binds_every_participant_behind_a_top_port():
     """mem_copy: no host.  The driver and the sink answer the two stream ports with their declared
     models; the memory behind both m_axi bundles is ONE shared arena with a read and a write slave;
     with no host there is no done() -- the run is the scenario's bound."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
     from waveflow.build.system_top import (SystemTopSpec, render_system_ports_h, render_system_tb,
                                            system_tb_spec)
 
-    s = MemCopySystem()
+    s = mem_copy_system()
     spec = SystemTopSpec.from_system(s)
     tb = system_tb_spec(spec, None, [], graph=s)
     assert {m.name: m.cls for m in tb.models} == {
@@ -149,9 +149,9 @@ def test_the_harness_binds_every_participant_behind_a_top_port():
 def test_recordings_come_from_the_participants_and_pysim_writes_them(tmp_path):
     """A system states nothing: the sink's out_bundle and the memory's dump segments are its
     recordings, and pysim now writes them as the C++ models do."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
 
-    s = MemCopySystem()
+    s = mem_copy_system()
     assert s.recordings() == ("vectors/out", "vectors/s_done")
     s.write_scenario(tmp_path)
     s.run()
@@ -178,12 +178,12 @@ def test_the_system_harness_for_rf_loopback_is_the_kernel_flows_model_for_model(
     """The RFDC's two models each span the cut (a top stream port and an RF channel); the source and
     sink are peers on the channels.  Same classes, arguments, DynParams and channels as tb_top_spec
     gives the same design -- only the names it binds to differ."""
-    from examples.rf_loopback.rf_loopback import RfLoopbackSystem
+    from examples.rf_loopback.rf_loopback import rf_loopback_system
     from examples.rf_loopback.rf_loopback_xsi import make_xsi_tb
     from waveflow.build.composite_gen import tb_top_spec
     from waveflow.build.system_top import SystemTopSpec, system_tb_spec
 
-    s = RfLoopbackSystem()
+    s = rf_loopback_system()
     spec = SystemTopSpec.from_system(s, top="rf_loopback_system")
     sys_tb, ker_tb = system_tb_spec(spec, None, [], graph=s), tb_top_spec(make_xsi_tb())
     # The one deliberate difference: the system harness points each counting model at the run's
@@ -199,12 +199,12 @@ def test_the_system_harness_for_rf_loopback_is_the_kernel_flows_model_for_model(
 
 
 def test_a_recording_its_participant_marks_example_is_gathered_not_compared():
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
-    from examples.rf_loopback.rf_loopback import RfLoopbackSystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
+    from examples.rf_loopback.rf_loopback import rf_loopback_system
 
-    rf = RfLoopbackSystem()
+    rf = rf_loopback_system()
     assert rf.recordings() == ("vectors/rf_out", "vectors/counters") and rf.compared_recordings() == ()
-    mc = MemCopySystem()
+    mc = mem_copy_system()
     assert mc.compared_recordings() == mc.recordings()          # exact by default
 
 
@@ -212,12 +212,12 @@ def test_counting_models_write_where_the_system_run_gathers_and_the_kernel_flow_
     """A model declaring reports_counters is pointed at vectors/counters/<model>.json by the SYSTEM
     harness only; the kernel flow's harness sets nothing new.  The directory is a recording the
     example checks, never compared against pysim."""
-    from examples.rf_loopback.rf_loopback import RfLoopbackSystem
+    from examples.rf_loopback.rf_loopback import rf_loopback_system
     from examples.rf_loopback.rf_loopback_xsi import make_xsi_tb
     from waveflow.build.composite_gen import render_tb_harness, tb_top_spec
     from waveflow.build.system_top import SystemTopSpec, render_system_tb, system_tb_spec
 
-    s = RfLoopbackSystem()
+    s = rf_loopback_system()
     spec = SystemTopSpec.from_system(s, top="rf_loopback_system")
     _main, files = render_system_tb(spec, system_tb_spec(spec, None, [], graph=s))
     wired = [ln.strip() for ln in files["rf_loopback_system_tb_harness.h"].splitlines()

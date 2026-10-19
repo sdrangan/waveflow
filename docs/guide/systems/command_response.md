@@ -182,8 +182,8 @@ There is no way around the in-band `END`: a reader behind a bus sees no TLAST, a
 tell it the job is over. A job with no results is `START` then `END`. Each message begins with its type,
 so a reader tells them apart: one `DataList` per message type, each beginning with the same
 `EnumField` tag (the reader reads the first word, decodes the tag, then the rest by that type's
-schema) -- worked, and runnable, in [Tagged unions on a stream](../schema/python/tagged_union.md). A [`DataUnion`](../schema/python/dataunion.md) is the same idea as one schema, but its C++ has
-no stream methods yet and pads every message to the longest.
+schema) -- worked, and runnable, in [Tagged unions on a stream](../schema/python/tagged_union.md). A [`DataUnion`](../schema/python/dataunion.md) is the same idea as one schema, with every stream reader
+and writer in its C++, but it pads every message to the longest.
 
 In Python, one `write` is one burst, so a kernel that builds a job's messages one at a time collects
 them and writes the job's burst at `END`; at RTL they go out as they are made, with TLAST on the

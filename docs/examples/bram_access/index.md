@@ -1,7 +1,7 @@
 ---
 title: A memory reached three ways
 parent: Examples
-nav_order: 9.5
+nav_order: 8
 has_children: true
 example_dir: examples/bram_access
 summary: "One true-dual-port memory that lives OUTSIDE the Vitis kernel, as hand-written Verilog joined by a generated wrapper, reached by three transactions over two free-running tasks: WRITE a payload in, COMPUTE over the words in place, READ them back. Command-driven, over DataList messages that generate the C++ headers the kernel compiles against; every transaction answers, because a write has no return path and a refused read is indistinguishable from a quiet stream. WRITE and COMPUTE share one port on one task, so what it costs to read a word you are about to write is a measurement in one waveform rather than an argument."
@@ -62,20 +62,24 @@ answers with a `(tid, status)` response: a write has no return path of its own, 
 returns zero words, which on a stream is indistinguishable from "not yet". The messages are declared
 once as schemas, and the C++ headers the kernel compiles against are generated from them.
 
-## What you will learn
+## Learning objectives
 
-- How to create a memory and connect two `HwModule`s to it through a `BramIF` — and why it is
-  registered with `add_rtl_if` rather than `add_if`.
-- How to move a vector into it, and how to compute over it **in place** without inventing a transfer
-  — and what declaring a port read-write costs you in cycles.
-- How to read and write it concurrently, and **what actually guards the hazard** — which is not the
-  thing the memory's own Verilog appears to promise.
-- How to run the design in Python simulation and record its timing.
-- How the read path's **fill** is modelled, and why that number must never be typed into Python.
-- How to run an RTL simulation in which the memory is the real hand-written Verilog, with no BFM
-  standing in for it.
-- How to verify throughput, overlap and the in-place cost from a timing diagram built out of the RTL
-  trace.
+What this adds to the memory examples before it -- memory over `m_axi`
+([Free-running memory copy](../memcpy/index.md#learning-objectives)), blocks between stages
+([Composite kernel interleaver](../interleaver/index.md#learning-objectives)), state inside a module
+([Block FIR with state](../firblock/index.md#learning-objectives)) -- in the order the pages teach it:
+
+1. Put a memory **outside the kernel**, as hand-written Verilog ([`rtl_module()`](../../guide/comp_codegen/rtl_module.md))
+   joined to the kernel by a generated wrapper, and connect two modules to it through a `BramIF`
+   registered with `add_rtl_if` rather than `add_if`.
+2. Move a vector into it, compute over it **in place** without inventing a transfer, and measure what
+   declaring a port read-write costs (II=2 against II=1).
+3. Answer every transaction, a write included, with a `(tid, status)` response.
+4. Read and write it from two tasks at once, and name what actually guards the hazard.
+5. Model the read path's **fill** from the `READ_LATENCY` the memory's Verilog declares, never from a
+   number typed into Python, and record the timing in pysim.
+6. Run the RTL with the real hand-written Verilog as the memory, no BFM standing in for it.
+7. Check throughput, overlap and the in-place cost on an activity diagram of the RTL trace.
 
 Once you have this example, the same structure is what the
 [RF shot buffer](../../guide/rf/rfshotbuf/) is built on.
