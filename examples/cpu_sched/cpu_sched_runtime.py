@@ -297,6 +297,115 @@ def events(base: list[dict[str, Any]], platform_: CpuPlatform) -> dict[str, Any]
     }
 
 
+#: Where a profiled run's time goes: the first area whose path fragment a function's file contains.
+AREAS = (
+    ("SimPy core", ("/simpy/",)),
+    ("Waveflow simulation framework", ("waveflow/simulation/",)),
+    (
+        "processor model (scheduling, accounting)",
+        ("waveflow/cpu/processor.py", "waveflow/cpu/report.py"),
+    ),
+    (
+        "pricing (cost models, features)",
+        ("waveflow/cpu/task.py", "waveflow/calib/", "waveflow/cpu/config.py"),
+    ),
+    (
+        "software bodies (list operations, driver)",
+        ("waveflow/cpu/calib/kernels/", "waveflow/cpu/bench.py", "examples/cpu_sched/"),
+    ),
+    (
+        "bus, registers, accelerators",
+        ("waveflow/hw/", "examples/regmap/", "waveflow/utils/"),
+    ),
+)
+OTHER = "other"
+
+
+def _area(filename: str) -> str | None:
+    """The area of a function by its file; ``None`` for a C built-in (charged to its callers)."""
+    if filename == "~" or filename.startswith("<"):
+        return None
+    path = filename.replace("\\", "/")
+    for name, parts in AREAS:
+        if any(p in path for p in parts):
+            return name
+    return OTHER
+
+
+def profile_run(fn: Callable[[], Any], top: int = 10) -> dict[str, Any]:
+    """cProfile *fn*: each area's share of the run's own time, and the top functions by own time.
+
+    A C built-in's own time (a numpy call, a list method) goes to the areas of the functions that
+    called it, in proportion, so "pricing" includes the numpy it runs.  cProfile's overhead is
+    larger on call-heavy code (SimPy's), so the shares are indicative; timings never use it.
+    """
+    import cProfile
+    import pstats
+
+    prof = cProfile.Profile()
+    prof.enable()
+    fn()
+    prof.disable()
+    stats = pstats.Stats(prof).stats  # type: ignore[attr-defined]
+    total = sum(v[2] for v in stats.values())
+    shares: collections.Counter = collections.Counter()
+    for (filename, _line, _name), (_cc, _nc, tt, _ct, callers) in stats.items():
+        area = _area(filename)
+        if area is not None:
+            shares[area] += tt
+            continue
+        given = 0.0
+        for (cfile, _cl, _cn), (_c, _n, ctt, _cct) in callers.items():
+            carea = _area(cfile)
+            if carea is not None:
+                shares[carea] += ctt
+                given += ctt
+        shares[OTHER] += max(0.0, tt - given)
+    ranked = sorted(stats.items(), key=lambda kv: kv[1][2], reverse=True)[:top]
+    return {
+        "total_s": total,
+        "shares": {k: v / total for k, v in shares.most_common()},
+        "top": [
+            {
+                "function": f"{Path(f).name}:{line}({name})",
+                "own_share": v[2] / total,
+                "calls": v[1],
+            }
+            for (f, line, name), v in ranked
+        ],
+    }
+
+
+def profiles(
+    base: list[dict[str, Any]],
+    copies: list[int],
+    jobs: list[int],
+    interarrival_s: float,
+    platform_: CpuPlatform,
+) -> dict[str, Any]:
+    """Where the time goes: the untimed sum and the pysim at the largest trace, the system at the
+    most jobs."""
+    st = SchedTrace(repeat_trace(base, copies[-1]), platform_)
+    out = {
+        "untimed": profile_run(st.untimed),
+        "pysim_trace": profile_run(st.pysim),
+        "pysim_system": profile_run(
+            partial(
+                run, jobs[-1], 2, mean_interarrival_s=interarrival_s, platform=platform_
+            )
+        ),
+    }
+    for name, p in out.items():
+        print(
+            f"  profile {name}: "
+            + ", ".join(
+                f"{k} {100 * v:.0f}%" for k, v in list(p["shares"].items())[:4]
+            ),
+            flush=True,
+        )
+    return {**out, "trace_copies": copies[-1], "system_jobs": jobs[-1], **stamp()}
+
+
 def time_gem5(
     base: list[dict[str, Any]], copies: list[int], reps: int
 ) -> dict[str, Any]:
@@ -423,6 +532,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--gem5", action="store_true", help="also replay the traces on gem5 (Docker)"
     )
+    ap.add_argument(
+        "--profile", action="store_true", help="also profile where the time goes"
+    )
     a = ap.parse_args(argv)
     copies, jobs = sorted(a.copies), sorted(a.jobs)
 
@@ -473,6 +585,8 @@ def main(argv: list[str] | None = None) -> int:
         f"{entry['events']['per_job']['total']:.2f}/job",
         flush=True,
     )
+    if a.profile:
+        entry["profile"] = profiles(base, copies, jobs, a.system_interarrival, plat)
     entry.setdefault("history", [])
 
     if a.gem5:
