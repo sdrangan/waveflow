@@ -784,7 +784,7 @@ class XsiRunStep(_Inner):
 
             spec = o.rtl.spec
             (ws.work_dir / f"vcd_dumper_{m['top']}.v").write_text(
-                render_vcd_dumper(m["top"], spec.trace_scopes()), encoding="utf-8")
+                render_vcd_dumper(m["top"], spec.trace_scopes(bus=o.trace_bus)), encoding="utf-8")
             (o.work_dir(config) / "hazards.json").write_text(
                 json.dumps(spec.hazard_manifests(), indent=1) + "\n", encoding="utf-8")
             (ws.work_dir / f"{m['top']}_trace.vcd").unlink(missing_ok=True)
@@ -824,6 +824,9 @@ class SystemXsiStep(_SystemStep):
     #: Trace the run: ``<work>/xsi/<top>_trace.vcd`` (each wrapped kernel's wrapper scope) and
     #: ``<work>/hazards.json`` (:meth:`~waveflow.build.system_top.SystemTopSpec.hazard_manifests`).
     trace: bool = False
+    #: A traced run dumps each sub-top's wiring instead -- a device's bus groups, its interrupt lines,
+    #: the streams between its views and kernels (:meth:`~waveflow.build.system_top.SystemTopSpec.trace_scopes`).
+    trace_bus: bool = False
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -1224,7 +1227,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                      prefix: str = "", workspace: str | None = None,
                      sources: tuple[str, ...] = ("include", "gen"),
                      tcls: dict[str, Path] | None = None, timeout: int = 3600,
-                     trace: bool = False, after: tuple[str, ...] = ()) -> SystemXsiStep:
+                     trace: bool = False, trace_bus: bool = False,
+                     after: tuple[str, ...] = ()) -> SystemXsiStep:
     """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
     the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``ip_package``,
     ``block_design``, ``leaf_resources``, ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.
@@ -1236,7 +1240,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     subclass's name in snake case), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
     the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
     parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
-    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
+    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``),
+    *trace_bus* its bus and interrupt lines too (``SystemXsiStep.trace_bus``).
 
     The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
     probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
@@ -1271,7 +1276,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix, after=tuple(after)))
     if getattr(sysm, "has_golden", lambda: False)():
         dag.add(GoldenStep(sysm=sysm, work=work, prefix=prefix))
-    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace)
+    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace,
+                        trace_bus=trace_bus)
     dag.add(xsi)
     dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))
     return xsi
