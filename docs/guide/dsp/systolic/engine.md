@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 3
 audience: python
 api: [SystolicEngine, SystolicEngineMem]
-summary: "SystolicEngine, the redesign of SystolicUnit: operands loaded straight into banked stream-of-blocks buffers the array reads in place (no copy), a streaming systolic array whose tiles follow every max(kp, R·C/L, L) cycles, exact accumulation over k-panels with one rounding, keep_a reuse, and the default command-response shape. SystolicEngineMem puts it behind in-band memory streams: the output-stationary outer loop for matrices larger than the engine, over block-major memory. Measured at RTL (Vitis 2025.1, centre): 175 cycles per 8×8×32 job against SystolicUnit's 390, input-bound; a 32×32×64 product through memory exact at 6,655 cycles."
+summary: "SystolicEngine, the redesign of SystolicUnit: operands loaded straight into banked stream-of-blocks buffers the array reads in place (no copy), a streaming systolic array whose tiles follow every max(kp, R·C/L, L) cycles, exact accumulation over k-panels with one rounding, keep_a reuse, and the default command-response shape. SystolicEngineMem puts it behind memory: the output-stationary outer loop for matrices larger than the engine, over block-major memory, fed by its own burst reader. Measured at RTL (Vitis 2025.1, centre): 175 cycles per 8×8×32 job against SystolicUnit's 390 -- bound by its input, the core takes 87 -- and a 32×32×64 product through memory exact at 6,470 cycles."
 ---
 
 # Systolic engine
@@ -28,7 +28,7 @@ configuration (`Mmax 8, Kmax 8, Nmax 32, Pmax 4, R 4, C 8, L 4`, 12-bit operands
 | `K` larger than the buffers | not possible | `npanels` k-panels accumulated exactly on chip, rounded once |
 | reuse of `A` | `nb` (core only) | `keep_a`: one `A` on the wire for `nb` outputs |
 | protocol | status in the reply header, errors drained | a `Resp` per output, a `Status` per command on its own stream, errors fatal |
-| `8×8×32` back to back, stream-fed | 390 cycles a job | **175** (input-bound: 162 words a job) |
+| `8×8×32` back to back, stream-fed | 390 cycles a job | **175** (input-bound: 162 words a job; the core takes 87) |
 | unit resources (csynth) | 136 DSP, 20.5k LUT, 18 BRAM18K | 154 DSP, 37.0k LUT, 26 BRAM18K |
 
 ## The engine
@@ -81,8 +81,8 @@ Every loop of the engine is at II 1; the core is one copy of the array (137 DSP)
 ```mermaid
 flowchart LR
     job["s_job"] --> SEQ["EngineSeq"]
-    SEQ -->|"MemRCmd | EngineCmd | ..."| MR["MemRStream"]
-    MR --> ENG["SystolicEngine"]
+    SEQ -->|"feed: a tile's panels"| FD["EngineFeeder (m_axi read)"]
+    FD -->|"EngineCmd, A, B, A, B ..."| ENG["SystolicEngine"]
     SEQ -->|"tile"| WR["EngineWriter"]
     ENG --> WR
     WR -->|"MemWCmd | C"| MW["MemWStream"]
@@ -92,11 +92,21 @@ flowchart LR
 `SystolicEngineMem` takes one `EngineJobDesc` per product (`tx_id`, `op`, `M`, `K`, `N`, and the base
 word addresses of `A`, `B` and `C`) and answers each with an `EngineDone`. The loop is output-stationary:
 `C` is covered in `Mmax × Nmax` tiles, each one engine command of `npanels = K / Kmax` panels. The
-sequencer sends the memory reader `MemRCmd(A(i,0), fwd 1) | EngineCmd | MemRCmd(B(0,j)) |
-MemRCmd(A(i,1)) | ...` -- the reader relays the command ahead of the first operand -- and the writer
-turns each tile's `Resp | C` into `MemWCmd(C(i,j)) | C`, echoing the job's `EngineDone` on its last
-tile. The in-band reader and writer of one generated top must fire equally often (their `m_axi` pointer
-FIFOs couple them), so the writer adds `2·npanels − 1` empty writes per tile.
+sequencer sends the **feeder** -- the read port's owner -- one descriptor per tile, and the feeder streams
+the tile in one firing: the `EngineCmd`, then `A(i,0) B(0,j) A(i,1) B(1,j) ...`, a burst loop per operand
+panel, a word a cycle. The writer turns each tile's `Resp | C` into `MemWCmd(C(i,j)) | C`, echoing the
+job's `EngineDone` on its last tile. The `m_axi` reader and writer of one generated top must fire equally
+often (their pointer FIFOs couple them); the feeder fires once per tile and the writer writes once per
+tile, so they balance.
+
+**Why a feeder of its own** (each measured on the `32×32×64` product, its read port traced):
+
+| Reader | Done at | Read port busy |
+|---|---|---|
+| the framework's in-band `MemRStream`, a firing per read command | 6,655 | 80%: ~16 idle cycles at each of 8 commands a tile |
+| one flattened loop with a computed address | 10,639 | 49%: no burst inferred, a single-beat read every two cycles |
+| a tile's `A` panels and `B` panels as two runs | 7,984 | 67%: `B` waits behind the core's last panel (one block of buffering) |
+| **a burst loop per panel, in the engine's order** | **6,470** | 82%: ~12 idle cycles at each switch between burst loops |
 
 **Memory is block-major** (`block_major`): `A`'s panel `(i, p)` at `a_base + (i·P + p)·wa`, `B`'s
 `(p, j)` at `b_base + (p·NT + j)·wb`, `C`'s tile `(i, j)` at `c_base + (i·NT + j)·wc`, each one burst.
@@ -109,9 +119,10 @@ FIFOs couple them), so the writer adds `2·npanels − 1` empty writes per tile.
 | engine, six commands (panels, `keep_a`, `Aᴴ` with panels, `kp = 1`) | bit-exact at RTL, pysim equal |
 | engine, 4 × `8×8×32` back to back, stream-fed | **175 cycles a job**: 162 words in, the receiver's 13 cycles of command handling |
 | wrapper: a 2×2-tile 2-panel job, an `Aᴴ` job of 4 panels, a single tile | `C` in memory exact at RTL |
-| wrapper: `32×32×64` (8 tiles × 4 panels) | exact at RTL, done at **cycle 6,655** against an input floor of about 5,136 |
+| wrapper: `32×32×64` (8 tiles × 4 panels) | exact at RTL, done at **cycle 6,470** against an input floor of about 5,136 (~79%) |
+| the core's own time, `8×8×32` and `8×1×32`, `8×2×32` (from the trace: its first touch of `X` to its commit of `C`) | **87 cycles** whatever `kp` -- never the bound at 64-bit words: the input binds at `kp = 8` (175), the output at short `kp` (141: `C` is 128 words whatever `kp`) |
 | engine resources | 154 DSP, 37.0k LUT, 25.6k FF, 26 BRAM18K, est. 3.05 ns |
-| wrapper resources | 156 DSP, 43.2k LUT, 31.0k FF, 30 BRAM18K, est. 3.35 ns |
+| wrapper resources | 157 DSP, 42.9k LUT, 31.1k FF, 30 BRAM18K, est. 3.35 ns |
 
 Gates: `tests/linalg/test_systolic_engine.py` (`-m xsi` for the RTL ones).
 
@@ -122,8 +133,12 @@ Gates: `tests/linalg/test_systolic_engine.py` (`-m xsi` for the RTL ones).
   design settles.
 - **`R ≤ L`.** The drain schedule needs distinct diagonals; `R > L` is refused at construction.
 - **Wrapper tiles are the maxima.** Every tile is `Mmax × Nmax × Kmax` per panel; other shapes pad.
-- **The wrapper is not yet input-bound** (77% of the floor at `32×32×64`): eight read commands a tile,
-  each a separate burst through the memory reader.
+- **The wrapper is not yet input-bound** (79% of the floor at `32×32×64`): each switch between the
+  feeder's burst loops leaves the read port idle ~12 cycles, 8 switches a tile. Removing it needs bursts
+  that overlap across loops (`hls::burst_maxi`, which the generated top does not yet declare) or deeper
+  buffering of `B`, so `A` and `B` can each be read in one run.
+- **I/O-bound at 64-bit words.** The core (87 cycles) has room: 128-bit words would bring the input to
+  ~95 and the output to ~65 (the linalg word-width guard, `lanes.WORD_BITS_SUPPORTED`, allows 32 and 64).
 - **LUTs.** The array costs about 1.8× `SystolicUnit`'s LUTs for 2.2× its throughput; the per-element
   selects are the next place to look.
 - **Ordered, not addressed.** Operands are reused in order (`keep_a`), not by address. Addressed

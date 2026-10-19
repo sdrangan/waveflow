@@ -4,23 +4,26 @@
 writing ``C = q(A·B)`` (or ``q(Aᴴ·B)``) back to memory, one job descriptor per product on ``s_job``
 and one :class:`EngineDone` per job on ``s_done`` (``plans/systolic_characterization.md``, Part B):
 
-    s_job -> EngineSeq -> MemRStream (in-band) -> SystolicEngine -> EngineWriter -> MemWStream -> s_done
+    s_job -> EngineSeq -> EngineFeeder (m_axi read) -> SystolicEngine -> EngineWriter -> MemWStream -> s_done
 
 The loop is output-stationary: ``C`` is covered in tiles of ``Mmax × Nmax``, and each tile is one engine
 command of ``npanels = K / Kmax`` panels, accumulated exactly on chip and rounded once.  The sequencer
-sends the memory reader ``MemRCmd(A_0, fwd 1) | EngineCmd | MemRCmd(B_0) | MemRCmd(A_1) | ...`` -- the
-reader relays the command header ahead of the first operand -- and the writer turns each tile's
+sends the feeder one :class:`EngineFeed` per tile, and the feeder -- the read port's owner -- streams the
+tile in one firing: the ``EngineCmd``, then ``A(i,0) B(0,j) A(i,1) B(1,j) ...``, a burst loop per
+operand panel, a word a cycle.
+(The framework's in-band ``MemRStream`` is a firing per read command, and each firing paid ~16 cycles of
+loop fill and drain: 8 commands a tile, 80% of the read port busy.)  The writer turns each tile's
 ``Resp | C`` into ``MemWCmd(C tile) | C``, with the job's ``EngineDone`` echoed on its last tile.
 
-**Memory layout: block-major** (:func:`block_major`), so every panel and tile is one burst:
+**Memory layout: block-major** (:func:`block_major`), so a tile's panels are one run each:
 ``A``'s panel ``(i, p)`` (``Mmax × Kmax``; ``Kmax × Mmax`` for ``MUL_AH``) at ``a_base + (i·P + p)·wa``,
 ``B``'s panel ``(p, j)`` (``Kmax × Nmax``) at ``b_base + (p·NT + j)·wb``, ``C``'s tile ``(i, j)``
 (``Mmax × Nmax``) at ``c_base + (i·NT + j)·wc``, row-major memory elements, word addresses.  A job needs
 ``M``, ``N``, ``K`` multiples of ``Mmax``, ``Nmax``, ``Kmax`` and ``K / Kmax <= Pmax`` (pad with zeros).
 
-**The pointer-FIFO rule** (``tests/linalg/cpp/unit_bench_tasks.h``): an in-band reader and writer in one
-generated top must fire equally often, so per tile the writer adds ``2·npanels - 1`` empty writes to
-its one data write, and a refused job costs one empty read for its one done.
+**The pointer-FIFO rule** (``tests/linalg/cpp/unit_bench_tasks.h``): the ``m_axi`` reader and writer of
+one generated top must fire equally often.  The feeder fires once per tile and the writer writes once per
+tile, so they balance; a refused job is one empty feeder firing for its one done.
 """
 
 from __future__ import annotations
@@ -35,7 +38,8 @@ from waveflow.hw.dataschema import DataList
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFSlave, StreamIF, StreamIFMaster, StreamIFSlave
-from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemRStream, MemWCmd, MemWStream
+from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemWCmd, MemWStream, _word_type
+from waveflow.hw.memif import MMIFReadMaster
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.lanes import DEFAULT_WORD_BITS, from_words, nwords, to_words
 from waveflow.linalg.message import U8, U16, U32, Status
@@ -88,7 +92,22 @@ class EngineTile(DataList):
     }
 
 
-MEM_SCHEMAS = (EngineJobDesc, EngineDone, EngineTile, MemRCmd, MemWCmd)
+class EngineFeed(DataList):
+    """The sequencer's word to the feeder, per tile (or per refused job): where the tile's panels are."""
+
+    include_filename: ClassVar[str | None] = "wf_engine_feed.h"
+    elements: ClassVar[dict] = {
+        "a_addr": {"schema": U32, "description": "A(i,0)'s first word; A(i,p) follow contiguously"},
+        "b_addr": {"schema": U32, "description": "B(0,j)'s first word"},
+        "b_step": {"schema": U32, "description": "words from B(p,j) to B(p+1,j)"},
+        "tx_id": {"schema": U16, "description": "the job's"},
+        "op": {"schema": U8, "description": "a MatmulOp"},
+        "npanels": {"schema": U16, "description": "panels of the tile"},
+        "refused": {"schema": U8, "description": "1: a refused job -- read nothing"},
+    }
+
+
+MEM_SCHEMAS = (EngineJobDesc, EngineDone, EngineTile, EngineFeed, MemRCmd, MemWCmd)
 
 
 def job_status(d, *, Mmax: int, Kmax: int, Nmax: int, Pmax: int) -> Status:
@@ -150,11 +169,11 @@ class EngineSeq(_MemPart):
         super().__post_init__()
         w = int(self.word_bits)
         self.s_job = self._ep(FramedStreamIFSlave, "s_job", w, True)
-        self.cmd_out = self._ep(StreamIFMaster, "cmd_out", w, True)
+        self.feed_out = self._ep(StreamIFMaster, "feed_out", CTRL_BITS, False)
         self.tile_out = self._ep(StreamIFMaster, "tile_out", CTRL_BITS, False)
 
     def kernel_task(self) -> KernelTask:
-        return KernelTask("systolic_engine_seq_task", MEM_HEADERS[0], ("s_job", "cmd_out", "tile_out"),
+        return KernelTask("systolic_engine_seq_task", MEM_HEADERS[0], ("s_job", "feed_out", "tile_out"),
                           framed=("s_job",), template_args=self._targs())
 
     def run_iter(self) -> ProcessGen[None]:
@@ -163,16 +182,17 @@ class EngineSeq(_MemPart):
         Mm, Km, Nm = int(self.Mmax), int(self.Kmax), int(self.Nmax)
         st = job_status(d, Mmax=Mm, Kmax=Km, Nmax=Nm, Pmax=int(self.Pmax))
 
-        def send(msg) -> ProcessGen[None]:
-            yield from self.cmd_out.write(np.asarray(msg.serialize(word_bw=w), np.uint64))
+        def send(msg, ep) -> ProcessGen[None]:
+            yield from ep.write(np.asarray(msg.serialize(word_bw=CTRL_BITS), np.uint64))
 
         if st != Status.OK:
             t = EngineTile()
             t.c_addr, t.tx_id, t.status, t.last, t.empties = 0, int(d.tx_id), int(st), 1, 0
-            yield from self.tile_out.write(np.asarray(t.serialize(word_bw=CTRL_BITS), np.uint64))
-            r = MemRCmd()
-            r.addr, r.len, r.fwd_bursts = 0, 0, 0      # one empty read for the done's one write
-            yield from send(r)
+            yield from send(t, self.tile_out)
+            f = EngineFeed()                           # one empty feeder firing for the done's write
+            f.a_addr = f.b_addr = f.b_step = 0
+            f.tx_id, f.op, f.npanels, f.refused = int(d.tx_id), int(d.op), 0, 1
+            yield from send(f, self.feed_out)
             return
         MT, NT, P = int(d.M) // Mm, int(d.N) // Nm, int(d.K) // Km
         wa, wb, wc = self.words(Mm * Km), self.words(Km * Nm), self.words(Mm * Nm)
@@ -181,17 +201,47 @@ class EngineSeq(_MemPart):
                 t = EngineTile()
                 t.c_addr = int(d.c_base) + (i * NT + j) * wc
                 t.tx_id, t.status, t.last = int(d.tx_id), int(Status.OK), int(i == MT - 1 and j == NT - 1)
-                t.empties = 2 * P - 1
-                yield from self.tile_out.write(np.asarray(t.serialize(word_bw=CTRL_BITS), np.uint64))
-                for p in range(P):
-                    ra = MemRCmd()
-                    ra.addr, ra.len, ra.fwd_bursts = int(d.a_base) + (i * P + p) * wa, wa, int(p == 0)
-                    yield from send(ra)
-                    if p == 0:
-                        yield from send(command(int(d.tx_id), int(d.op), Mm, Km, Nm, npanels=P))
-                    rb = MemRCmd()
-                    rb.addr, rb.len, rb.fwd_bursts = int(d.b_base) + (p * NT + j) * wb, wb, 0
-                    yield from send(rb)
+                t.empties = 0
+                yield from send(t, self.tile_out)
+                f = EngineFeed()
+                f.a_addr, f.b_addr = int(d.a_base) + i * P * wa, int(d.b_base) + j * wb
+                f.b_step, f.tx_id, f.op, f.npanels, f.refused = NT * wb, int(d.tx_id), int(d.op), P, 0
+                yield from send(f, self.feed_out)
+
+
+@dataclass
+class EngineFeeder(_MemPart):
+    """The read port's owner: per tile, the engine's command and its panels, in one stream."""
+
+    cpp_kernel_name: ClassVar[str | None] = "systolic_engine_feeder"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        w = int(self.word_bits)
+        self.feed_in = self._ep(StreamIFSlave, "feed_in", CTRL_BITS, False)
+        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        self.add_endpoint(self.m_mem)
+        self.m_out = self._ep(StreamIFMaster, "m_out", w, True)
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("systolic_engine_feed_task", MEM_HEADERS[0], ("feed_in", "m_mem", "m_out"),
+                          template_args=self._targs())
+
+    def run_iter(self) -> ProcessGen[None]:
+        w = int(self.word_bits)
+        f = yield from self.feed_in.get_schema(EngineFeed)
+        if int(f.refused):
+            return
+        Mm, Km, Nm = int(self.Mmax), int(self.Kmax), int(self.Nmax)
+        wa, wb = self.words(Mm * Km), self.words(Km * Nm)
+        P = int(f.npanels)
+        cmd = command(int(f.tx_id), int(f.op), Mm, Km, Nm, npanels=P)
+        yield from self.m_out.write(np.asarray(cmd.serialize(word_bw=w), np.uint64))
+        region = self.m_mem.region(0, _word_type(w), word_bw=w)
+        for p in range(P):
+            for base, n in ((int(f.a_addr) + p * wa, wa), (int(f.b_addr) + p * int(f.b_step), wb)):
+                words, _t0 = yield from region.read_slice_pipelined(base, base + n, num_trans=1)
+                yield from self.m_out.write(np.asarray(words, np.uint64))
 
 
 @dataclass
@@ -236,10 +286,6 @@ class EngineWriter(_MemPart):
         if int(t.last):
             yield from send(done)
         yield from self.w_out.write(np.asarray(cw))
-        for _ in range(int(t.empties)):
-            e = MemWCmd()
-            e.addr, e.len, e.fwd_bursts = 0, 0, 0
-            yield from send(e)
 
 
 @dataclass
@@ -264,18 +310,17 @@ class SystolicEngineMem(_MemPart):
                                               "lane_bits")}
         base = {**base, "sim": self.sim, "clk": self.clk}
         self.seq = EngineSeq(name=f"{self.name}_seq", **base)
-        self.rstream = MemRStream(name=f"{self.name}_memr", sim=self.sim, mem_dwidth=w, inband=True,
-                                  clk=self.clk)
+        self.feeder = EngineFeeder(name=f"{self.name}_feeder", **base)
         self.engine = SystolicEngine(name=f"{self.name}_engine", L=self.L, R=self.R, C=self.C,
                                      form=self.form, sob_depth=self.sob_depth, a=self.a, b=self.b,
                                      c=self.c, **base)
         self.writer = EngineWriter(name=f"{self.name}_writer", **base)
         self.wstream = MemWStream(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, inband=True,
                                   emit_done=True, clk=self.clk)
-        for comp in (self.seq, self.rstream, self.engine, self.writer, self.wstream):
+        for comp in (self.seq, self.feeder, self.engine, self.writer, self.wstream):
             self.add_comp(comp)
-        links = (("rd_cmd", self.seq.cmd_out, self.rstream.s_cmd, w, True, None),
-                 ("rd_data", self.rstream.m_out, self.engine.s_in, w, True, None),
+        links = (("feed", self.seq.feed_out, self.feeder.feed_in, CTRL_BITS, False, 6),
+                 ("rd_data", self.feeder.m_out, self.engine.s_in, w, True, None),
                  ("tile", self.seq.tile_out, self.writer.tile_in, CTRL_BITS, False, 4),
                  ("cout", self.engine.s_out, self.writer.c_in, w, True, None),
                  ("cst", self.engine.m_status, self.writer.st_in, CTRL_BITS, True, None),
@@ -291,7 +336,7 @@ class SystolicEngineMem(_MemPart):
             self.add_if(iface)
         self.boundary = ["s_job", "m_in", "m_out", "s_done"]
         self.s_job = self.seq.s_job
-        self.m_in = self.rstream.m_mem
+        self.m_in = self.feeder.m_mem
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
         self.extra_includes = ["hls_streamofblocks.h"]

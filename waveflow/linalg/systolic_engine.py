@@ -507,7 +507,7 @@ class SystolicEngine(_EnginePart):
             self._stream(name, src, dst, CTRL_BITS, depth=4)
         # A's words wait here: its loader takes a value a cycle (half the word rate), and the receiver
         # forwards A and then B in order, so a channel holding one whole A lets it move on to B at once
-        # (206 -> ~165 cycles a job, input-bound: plans/systolic_characterization.md).
+        # (206 -> 175 cycles a job, input-bound: plans/systolic_characterization.md).
         self._stream("paya", self.rx.pay_a, self.load_a.s_in, w, framed=True,
                      depth=max(2, self._words(int(self.Mmax) * int(self.Kmax))))
         self._stream("payb", self.rx.pay_b, self.load_b.s_in, w, framed=True)
@@ -559,6 +559,9 @@ class SystolicEngine(_EnginePart):
                     dict(op=MatmulOp.MUL, m=M, kp=1, n=N)]
         if kind == "steady":
             return [dict(op=MatmulOp.MUL, m=M, kp=K, n=N) for _ in range(4)]
+        if kind == "short":                      # short panels: the output, not the input, binds
+            return ([dict(op=MatmulOp.MUL, m=M, kp=1, n=N) for _ in range(4)]
+                    + [dict(op=MatmulOp.MUL, m=M, kp=2, n=N) for _ in range(4)])
         raise ValueError(f"no workload {kind!r}")
 
     def _operands(self, kind: str):

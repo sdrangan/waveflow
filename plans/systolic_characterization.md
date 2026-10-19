@@ -516,8 +516,19 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linal
   (`SystolicUnit` 390; 162 words in + 13 of command handling); wrapper exact at RTL on four jobs incl.
   `32x32x64` (done at 6,655 against an input floor of ~5,136); engine 154 DSP / 37.0k LUT / 26 BRAM,
   est. 3.05 ns; wrapper 156 DSP / 43.2k LUT / 30 BRAM, est. 3.35 ns.
-- **Open before the calibration:** the wrapper's read-command overhead (77% of the input floor); the
-  receiver's 13 cycles a command; the per-element selects (LUTs); then calibrate once (6d).
+- **The core's own time** (trace: its first touch of `X` to its `C` commit): **87 cycles** a job
+  (panel 83 + commit 4), the same at `kp` 1, 2 and 8. Never the bound at 64-bit words: the input binds
+  at `kp = 8` (175), the output at short `kp` (141 cycles: `C` is 128 words whatever `kp`).
+- **The wrapper's reader** (the `32x32x64` product, read port traced): the in-band `MemRStream` paid
+  ~16 idle cycles per read command, 8 a tile (6,655, 80% busy). Replaced by `EngineFeeder`, a task
+  owning the read port that streams a tile per firing, a burst loop per operand panel: **6,470** (82%;
+  ~12 idle cycles at each switch between burst loops). Tried and dropped: one flattened loop with a
+  computed address (no burst, 10,639); `A` panels then `B` panels as two runs (`B` waits behind the
+  core's last panel, one block of buffering: 7,984). Wrapper now 157 DSP / 42.9k LUT / 30 BRAM.
+- **Open before the calibration:** the remaining loop-switch loss (`hls::burst_maxi` or a deeper `B`
+  buffer); the receiver's 13 cycles a command; 128-bit words (the I/O binds, the core has room;
+  `lanes.WORD_BITS_SUPPORTED`); continuous panels; the per-element selects (LUTs); then calibrate
+  once (6d).
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 

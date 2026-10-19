@@ -99,10 +99,11 @@ if __name__ == "__main__":
     ap.add_argument("--root", required=True)
     ap.add_argument("--through", default="compare")
     ap.add_argument("--workload", default="test")
+    ap.add_argument("--trace", action="store_true")
     a = ap.parse_args()
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag(workload=a.workload).run(build_config(root), through=a.through)
+    res = build_dag(workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():
         print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")
