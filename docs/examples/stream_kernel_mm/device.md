@@ -39,10 +39,13 @@ At `MM_BASE = 0`, `q_in` is at `0x0000`, `q_out` at `0x1000` and `q_status` at `
 
 ## `build_mm_device` builds them
 
-[`build_mm_device(kernel, ...)`](../../../waveflow/hw/mm_device.py) turns one kernel instance into its
-memory-mapped side, an `MmSlaveDevice`:
+[`build_mm_device(kernel, ...)`](../../../waveflow/hw/mm_device.py) is the framework's: it turns one
+kernel instance into its memory-mapped side, an `MmSlaveDevice`:
 
 ```python
+from waveflow.hw.mm_device import build_mm_device         # the framework's
+from examples.stream_kernel.stream_kernel import PolyKernel  # the example's kernel
+
 kernel = PolyKernel(name=PolyKernel.cpp_kernel_name, sim=sim, clk=clk)
 device = build_mm_device(kernel, sim=sim, clk=clk, mem_dwidth=W, one_front=direct)
 ```
@@ -53,7 +56,37 @@ device = build_mm_device(kernel, sim=sim, clk=clk, mem_dwidth=W, one_front=direc
   view (`one_front=False`) ([One adaptor, or one per view](../../guide/interface/axi_mm/slave.md#one-adaptor-or-one-per-view)).
 
 The crossbar system gives each view its own crossbar slot; the device's own harness puts all three behind
-one front ([Composition](composition.md#the-devices-own-harness)).
+one front ([Composition](composition.md#the-devices-own-harness)). With one front, the device is:
+
+```mermaid
+flowchart LR
+  bus(["AXI-MM bus<br/>(the host's master)"])
+  host_irq(["the host's<br/>interrupt inputs"])
+  subgraph dev["DUT boundary: poly_kernel_dev (MmSlaveDevice)"]
+    direction LR
+    mm["mm<br/>MemSlaveAdaptor<br/>(one_front=True)"]
+    qin["q_in<br/>MemSlaveWStream<br/>queue in, 256 words"]
+    qout["q_out<br/>MemSlaveRStream<br/>queue out, 256 words"]
+    qst["q_status<br/>MemSlaveRStream<br/>queue out, 16 words"]
+    k["poly_kernel<br/>PolyKernel<br/>(the kernel task, unchanged)"]
+    mm -- "writes 0x0000" --> qin
+    qin -- "k_q_in -> s_in" --> k
+    k -- "m_out -> k_q_out" --> qout
+    k -- "m_status -> k_q_status" --> qst
+    qout -- "reads 0x1000" --> mm
+    qst -- "reads 0x2000" --> mm
+  end
+  bus <--> mm
+  qin -. "m_irq" .-> host_irq
+  qout -. "m_irq" .-> host_irq
+  qst -. "m_irq" .-> host_irq
+```
+
+The solid arrows are data: the bus reaches only the adaptor, which decodes the address to a view; each
+view reaches the kernel's port by a stream channel (`k_<view>`) whose depth is the queue's. The dotted
+arrows are the views' interrupt lines, which leave the device and go to the host. Without one front
+(`one_front=False`, the crossbar system), `mm` is absent and each view's bus port is the device's own
+([The system](system.md#the-whole-system)).
 
 The device is a composite module: the kernel, its views and its adaptor are its children, and it has
 no behavior of its own, so building it changes no cycle. At RTL it is one sub-top of the system's Verilog

@@ -11,9 +11,50 @@ nav_order: 2
 [`HwSystem(sim, dut)`](../../guide/systems/rtl.md#the-system) way: every module on one simulation, wired,
 and then the DUT named. The DUT is the device and the crossbar; the host is the testbench, derived.
 
+## The whole system
+
+```mermaid
+flowchart LR
+  subgraph tb["testbench (derived): pysim's SwHost, its C++ twin at RTL"]
+    host["host<br/>PolyHost (SwHost)<br/>writer and reader threads"]
+  end
+  subgraph dut["DUT boundary: poly_mm_dut"]
+    direction LR
+    xbar["xbar<br/>AXIMMCrossBarIF<br/>1 master, 3 slaves"]
+    subgraph dev["poly_kernel_dev (MmSlaveDevice, one_front=False)"]
+      direction LR
+      qin["q_in<br/>queue in<br/>0x0000"]
+      qout["q_out<br/>queue out<br/>0x1000"]
+      qst["q_status<br/>queue out<br/>0x2000"]
+      k["poly_kernel<br/>PolyKernel"]
+      qin -- "s_in" --> k
+      k -- "m_out" --> qout
+      k -- "m_status" --> qst
+    end
+    xbar -- "slave_0" --> qin
+    xbar -- "slave_1" --> qout
+    xbar -- "slave_2" --> qst
+  end
+  host -- "m -> master_0" --> xbar
+  qin -. "q_in_irq" .-> host
+  qout -. "q_out_irq" .-> host
+  qst -. "q_status_irq" .-> host
+```
+
+The host's one bus master, `m`, is the crossbar's one master; each view of the [device](device.md) is a
+crossbar slave at its address. The dotted arrows are the `IrqIF` lines, one per view, from the view's
+interrupt source to the host. Everything inside the boundary is RTL in the XSI run; the host is the only
+part outside it.
+
 ## The modules
 
 ```python
+from waveflow.hw.clock import Clock
+from waveflow.hw.mm_device import build_mm_device         # the framework's
+from waveflow.simulation.simulation import Simulation
+from examples.stream_kernel.stream_kernel import PolyKernel  # the example's kernel
+from examples.stream_kernel.stream_kernel_mm import PolyHost # the example's host
+
 sim = Simulation()
 clk = Clock(freq=100e6)
 kernel = PolyKernel(name=PolyKernel.cpp_kernel_name, sim=sim, clk=clk)
