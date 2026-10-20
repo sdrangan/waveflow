@@ -1918,12 +1918,13 @@ class StreamIFMaster(TypedCodecMixin, QueuedTransferIFMaster):
         return self._write_now(data)
 
     def _write_now(self, data) -> ProcessGen[None]:
-        from waveflow.hw.dataschema import DataSchema
-
-        if isinstance(data, DataSchema):
-            raw_words = data.serialize(word_bw=self.bitwidth)
+        if type(data) is np.ndarray:      # raw words, the common case: no schema check, no import
+            raw_words = data
         else:
-            raw_words = data  # already raw Words
+            from waveflow.hw.dataschema import DataSchema
+
+            raw_words = data.serialize(word_bw=self.bitwidth) if isinstance(data, DataSchema) \
+                else data
 
         if self.interface is None:
             raise RuntimeError(

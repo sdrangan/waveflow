@@ -1249,6 +1249,11 @@ class DataField(DataSchema):
         """Convert a raw integer bit pattern to a runtime value."""
         return int(field_bits)
 
+    def _set_bits(self, field_bits: int) -> None:
+        """Set the value from its raw bit pattern -- what deserialization does, per field.  A
+        subclass whose bits map straight to its value overrides it to skip the general setter."""
+        self.val = self._field_bits_to_value(field_bits)
+
     # -- vectorized numpy transfer (scalar fast path) --------------------------
     # A scalar field whose stored value maps to a single numpy dtype enables the
     # vectorized array transfer by overriding ``_numpy_elem_dtype`` alone; the pack /
@@ -1718,19 +1723,9 @@ class IntField(DataField):
 
         cls = self.__class__
         bitwidth = cls.get_bitwidth()
-        signed = cls.signed
 
         if bitwidth <= 64:
-            # The width's constants once per class (every message field is converted on each
-            # assignment, and a pysim assigns per transfer); rebuilt if the class's width changes.
-            conv = cls.__dict__.get("_int_conv")
-            if conv is None or conv[0] != bitwidth or conv[1] != signed:
-                ctor = (np.int32 if bitwidth <= 32 else np.int64) if signed else \
-                    (np.uint32 if bitwidth <= 32 else np.uint64)
-                conv = (bitwidth, signed, (1 << bitwidth) - 1,
-                        (1 << (bitwidth - 1)) if signed else 0, 1 << bitwidth, ctor)
-                cls._int_conv = conv
-            _, _, mask, sign_bit, full, ctor = conv
+            _, _, mask, sign_bit, full, ctor = cls._int_constants(bitwidth)
             wrapped = int(value) & mask
             if sign_bit and wrapped & sign_bit:
                 wrapped -= full
@@ -1762,6 +1757,43 @@ class IntField(DataField):
         for idx in range(num_words):
             arr[idx] = np.uint64((wrapped >> (64 * idx)) & 0xFFFFFFFFFFFFFFFF)
         return arr
+
+    @classmethod
+    def _int_constants(cls, bitwidth: int) -> tuple:
+        """The width's constants -- ``(bitwidth, signed, mask, sign bit, 2**bitwidth, numpy type)``
+        -- once per class (every message field is converted on each assignment, and a pysim assigns
+        per transfer); rebuilt if the class's width or signedness changes."""
+        signed = cls.signed
+        conv = cls.__dict__.get("_int_conv")
+        if conv is None or conv[0] != bitwidth or conv[1] != signed:
+            ctor = (np.int32 if bitwidth <= 32 else np.int64) if signed else \
+                (np.uint32 if bitwidth <= 32 else np.uint64)
+            conv = (bitwidth, signed, (1 << bitwidth) - 1,
+                    (1 << (bitwidth - 1)) if signed else 0, 1 << bitwidth, ctor)
+            cls._int_conv = conv
+        return conv
+
+    def _set_bits(self, field_bits: int) -> None:
+        """From raw bits straight to the value: the same wrap, sign extension and numpy type as
+        :meth:`_convert`, without its float check and second masking (bits are an int already).
+        Only for a class that keeps IntField's own conversions -- a subclass that overrides
+        ``_convert`` or ``_field_bits_to_value`` (BooleanField, FixedField, ...) takes the general
+        setter."""
+        cls = self.__class__
+        direct = cls.__dict__.get("_direct_bits")
+        if direct is None:
+            direct = (cls._convert is IntField._convert
+                      and cls._field_bits_to_value is DataField._field_bits_to_value)
+            cls._direct_bits = direct
+        bitwidth = cls.get_bitwidth()
+        if not direct or bitwidth > 64:
+            self.val = self._field_bits_to_value(field_bits)
+            return
+        _, _, mask, sign_bit, full, ctor = cls._int_constants(bitwidth)
+        v = field_bits & mask
+        if sign_bit and v & sign_bit:
+            v -= full
+        self._val = ctor(v)
 
     @classmethod
     def init_value(cls) -> Any:
@@ -2464,11 +2496,10 @@ class DataList(DataSchema):
     elements: ClassVar[dict[str, type[DataSchema] | Mapping[str, Any]]] = {}
 
     def __init__(self, **values: Any):
-        object.__setattr__(self, "_children", {})
-
-        for name, schema_cls in self._iter_element_schemas():
-            child = schema_cls()
-            self._children[name] = child
+        # The class's cached element list, read in place (not copied): a pysim builds a message
+        # each time it makes or parses one.
+        children = {name: schema_cls() for name, schema_cls in self.__class__._element_cache()[1]}
+        object.__setattr__(self, "_children", children)
 
         for name, value in values.items():
             setattr(self, name, value)
@@ -3082,8 +3113,7 @@ class DataList(DataSchema):
             nwords = len(words)
             for name, iw, pos, mask in fields:
                 i = iword0 + iw
-                child = children[name]
-                child.val = child._field_bits_to_value(((words[i] if i < nwords else 0) >> pos) & mask)
+                children[name]._set_bits(((words[i] if i < nwords else 0) >> pos) & mask)
             return end_ipos, iword0 + end_iword
 
         curr_ipos = ipos0
@@ -3204,19 +3234,27 @@ class DataList(DataSchema):
         for name, value in values.items():
             setattr(self, name, value)
 
+    @classmethod
+    def _list_element_names(cls) -> frozenset:
+        """The elements that are themselves DataLists -- an attribute returns those whole, every
+        other element its ``val``.  Once per class: a field is read and written by name on every
+        message a pysim makes or parses, and ``isinstance`` against the abstract DataSchema family
+        is the slow kind."""
+        names = cls.__dict__.get("_list_names")
+        if names is None:
+            names = frozenset(n for n, schema in cls._element_cache()[1]
+                              if isinstance(schema, type) and issubclass(schema, DataList))
+            cls._list_names = names
+        return names
+
     def __getattr__(self, name: str) -> Any:
         children = self.__dict__.get("_children")
-        if children is not None and name in children:
-            child = children[name]
-            if isinstance(child, DataField):
-                return child.val
-            if isinstance(child, DataList):
-                return child
-            if isinstance(child, DataArray):
-                return child.val
-            # Generic fallback for DataSchema subclasses added after DataArray
-            # (e.g. VarDataArray).  All concrete DataSchema subclasses expose .val.
-            if hasattr(child, "val"):
+        if children is not None:
+            child = children.get(name)
+            if child is not None:
+                # A nested DataList whole; any other element (a field, an array, ...) its value.
+                if name in self.__class__._list_element_names():
+                    return child
                 return child.val
         raise AttributeError(name)
 
@@ -3224,24 +3262,10 @@ class DataList(DataSchema):
         children = self.__dict__.get("_children")
         if children is not None and name in children:
             child = children[name]
-            if isinstance(child, DataField):
-                child.val = value
-            elif isinstance(child, DataList):
-                if isinstance(value, child.__class__):
-                    child.val = value.val
-                else:
-                    child.val = value
-            elif isinstance(child, DataArray):
-                child.val = value
+            if name in self.__class__._list_element_names() and isinstance(value, child.__class__):
+                child.val = value.val
             else:
-                # Generic fallback for DataSchema subclasses added after DataArray
-                # (e.g. VarDataArray).  All concrete DataSchema subclasses expose .val.
-                if hasattr(child, "val"):
-                    child.val = value
-                else:
-                    raise TypeError(
-                        f"Unsupported child schema type for attribute '{name}'."
-                    )
+                child.val = value
             return
         object.__setattr__(self, name, value)
 
