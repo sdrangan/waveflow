@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 430" width="1060" height="430" font-family="Helvetica, Arial, sans-serif" font-size="15">
+  <title>SystolicEngine: six free-running tasks. The receiver takes commands and operands on s_in, sends A words to one loader and B words to the other, and the job to the core and the reply to the store. The loaders write banked blocks the core reads in place; the core sends C in drain order to the collector, which fills a C block for the store; the store writes Resp and C on s_out and a Status on m_status.</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5b6b"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1060" height="430" fill="#ffffff"/>
+  <!-- data paths -->
+  <g stroke="#4a5b6b" stroke-width="2" fill="none">
+    <line x1="20" y1="190" x2="118" y2="190" marker-end="url(#a)"/>
+    <polyline points="250,170 285,170 285,90 318,90" marker-end="url(#a)"/>
+    <polyline points="250,210 285,210 285,290 318,290" marker-end="url(#a)"/>
+    <polyline points="470,90 515,90 515,165 558,165" marker-end="url(#a)"/>
+    <polyline points="470,290 515,290 515,215 558,215" marker-end="url(#a)"/>
+    <line x1="722" y1="175" x2="798" y2="175" marker-end="url(#a)"/>
+    <line x1="870" y1="222" x2="870" y2="298" marker-end="url(#a)"/>
+    <line x1="942" y1="315" x2="1040" y2="315" marker-end="url(#a)"/>
+    <line x1="942" y1="345" x2="1040" y2="345" marker-end="url(#a)"/>
+  </g>
+  <!-- control paths -->
+  <g stroke="#8a97a3" stroke-width="1.8" fill="none" stroke-dasharray="6 4">
+    <line x1="250" y1="190" x2="558" y2="190" marker-end="url(#a)"/>
+    <line x1="722" y1="205" x2="798" y2="205" marker-end="url(#a)"/>
+    <polyline points="185,222 185,395 870,395 870,362" marker-end="url(#a)"/>
+  </g>
+  <!-- tasks -->
+  <g stroke="#2f5d8a" stroke-width="2" fill="#e8f0f8">
+    <rect x="120" y="160" width="130" height="60" rx="8"/>
+    <rect x="320" y="60" width="150" height="60" rx="8"/>
+    <rect x="320" y="260" width="150" height="60" rx="8"/>
+    <rect x="560" y="140" width="160" height="100" rx="8"/>
+    <rect x="800" y="160" width="140" height="60" rx="8"/>
+    <rect x="800" y="300" width="140" height="60" rx="8"/>
+  </g>
+  <g fill="#1f3550" text-anchor="middle" font-weight="bold">
+    <text x="185" y="195">EngineRx</text>
+    <text x="395" y="95">EngineLoadA</text>
+    <text x="395" y="295">EngineLoadB</text>
+    <text x="640" y="180">EngineCore</text>
+    <text x="870" y="195">EngineCollect</text>
+    <text x="870" y="335">EngineStore</text>
+  </g>
+  <g fill="#3a4a5a" text-anchor="middle" font-size="13">
+    <text x="640" y="202">the array, continuous</text>
+    <text x="640" y="220">across panels and outputs</text>
+    <text x="395" y="112">A (or Aᵀ), a value a cycle</text>
+    <text x="395" y="312">B, a word a cycle</text>
+  </g>
+  <!-- labels on the paths -->
+  <g fill="#3a4a5a" font-size="13">
+    <text x="22" y="180">s_in: command,</text>
+    <text x="22" y="212">then A and B</text>
+    <text x="255" y="80">A words</text>
+    <text x="255" y="312">B words</text>
+    <text x="524" y="80">X block</text>
+    <text x="524" y="96" font-size="12">a bank per row</text>
+    <text x="524" y="300">B block</text>
+    <text x="524" y="316" font-size="12">a bank per column</text>
+    <text x="728" y="166">C groups</text>
+    <text x="728" y="230" fill="#6a7783">job</text>
+    <text x="400" y="184" fill="#6a7783">job</text>
+    <text x="880" y="265">C block</text>
+    <text x="950" y="305">s_out: Resp, C</text>
+    <text x="950" y="370">m_status: Status</text>
+    <text x="440" y="415" fill="#6a7783">reply (per command: outputs to write, or the refusal)</text>
+  </g>
+  <g fill="#6a7783" font-size="12">
+    <text x="20" y="30">solid: data   dashed: per-command control</text>
+  </g>
+</svg>

@@ -117,23 +117,45 @@ for c in (command(1, MatmulOp.MUL, 8, 8, 32, npanels=4),    # K = 32: four panel
 To run another shape, pad with zeros: zero rows of `A` give zero rows of `C`, zero columns of `B` zero
 columns of `C`, and zero columns of `A` with matching zero rows of `B` add nothing.
 
+## Panels: a long inner dimension
+
+![Panels: A cut into column strips, B into row strips, C the rounded sum of their products](images/engine_panels.svg)
+
+The buffers hold `kp ≤ Kmax` of the inner dimension at a time. A longer `K` is split into `npanels`
+**panels**: `A` into column strips `A₀ … A_(P−1)`, each `m × kp`, and `B` into row strips
+`B₀ … B_(P−1)`, each `kp × n`, so that
+
+```
+C = q( A₀·B₀ + A₁·B₁ + … + A_(P−1)·B_(P−1) )
+```
+
+Each panel is a product of the kind [the theory](systolic_theory.md) describes; the panels' sums add
+exactly, in a partial-sum store (`Mmax × Nmax` values at accumulator width, in LUTRAM), and `C` is
+rounded once, after the last. The accumulator is wide enough for `Pmax · Kmax` products, so
+`npanels ≤ Pmax`.
+
+**How the panels are iterated.** A command has `nb` outputs of `npanels` panels each:
+
+```
+for each output:                          the receiver forwards, per panel, A_p and then B_p
+    for each panel p:
+        the A loader fills an X block, the B loader a B block   (double-buffered: the next
+                                                                 panel's load overlaps this sweep)
+        the core sweeps every tile of the panel -- row tiles, then column tiles -- P steps a tile:
+            p = 0:          each tile starts from zero
+            p > 0:          each tile starts from its partial sum in the store
+            p < last:       each tile's sums drain into the store
+            p = last:       each tile's sums are rounded once and drain out as C
+    the collector places C in a block; the store writes the Resp, then C
+```
+
+The array runs on from one panel to the next: the next panel's first tile starts the step after this
+panel's last ([the array, continuous](#architecture)). With `keep_a` there is one panel and one `A` for
+all `nb` outputs, the `A` loader repeating it.
+
 ## Architecture
 
-```mermaid
-flowchart LR
-    sin["s_in: commands + operands"] --> RX["EngineRx"]
-    RX -->|"A words"| LA["EngineLoadA"]
-    RX -->|"B words"| LB["EngineLoadB"]
-    RX -->|"job"| CORE["EngineCore"]
-    RX -->|"reply"| ST["EngineStore"]
-    LA -->|"X: a bank per row"| CORE
-    LB -->|"B: a bank per array column"| CORE
-    CORE -->|"C groups, drain order"| CO["EngineCollect"]
-    CORE -->|"job"| CO
-    CO -->|"C block"| ST
-    ST --> sout["s_out: Resp + C"]
-    ST --> mst["m_status: Status"]
-```
+![SystolicEngine's six tasks and the channels between them](images/engine_arch.svg)
 
 Six free-running tasks, one command per firing each, every loop at II 1 (`waveflow/build/systolic_engine_*_task.h`).
 
@@ -176,7 +198,7 @@ diagonals (`drain_order`) -- and places each in a `C` block. **The store** write
 Measured at RTL at the centre ([the example](../../../examples/systolic/timing.md)): bit-exact on every
 path of the array, and `8×8×32` products back to back at **171 cycles each with 64-bit words, 94 with
 128-bit**. At 64 bits the input, `kp·(m + n)` values a product, sets the pace
-([the bounds](systolic_theory.md#three-bounds-on-a-panel)), and with short panels the output; at 128 bits
+([the bounds](systolic_theory.md#three-bounds-on-a-product)), and with short panels the output; at 128 bits
 the core's own floor -- its 64 tile steps and ~30 cycles a command -- ties with the input. A command
 with several outputs (`nb`) spreads those fixed costs: four outputs a command run at **81 cycles an
 output**, the input's bound.

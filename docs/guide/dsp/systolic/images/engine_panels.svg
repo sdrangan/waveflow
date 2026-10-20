@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 420" width="820" height="420" font-family="Helvetica, Arial, sans-serif" font-size="15">
+  <title>Panels: A (m × K) is cut into npanels column strips A_0..A_3 of kp columns, B (K × n) into row strips B_0..B_3 of kp rows; C = q(A_0 B_0 + A_1 B_1 + A_2 B_2 + A_3 B_3), the sums exact on chip and rounded once. On s_in each output's operands follow in order A_0 B_0 A_1 B_1 A_2 B_2 A_3 B_3.</title>
+  <rect x="0" y="0" width="820" height="420" fill="#ffffff"/>
+  <!-- A: m x K, four column panels -->
+  <g stroke="#2f5d8a" stroke-width="1.8">
+    <rect x="40" y="150" width="48" height="48" fill="#cfe0f1"/>
+    <rect x="88" y="150" width="48" height="48" fill="#e8f0f8"/>
+    <rect x="136" y="150" width="48" height="48" fill="#cfe0f1"/>
+    <rect x="184" y="150" width="48" height="48" fill="#e8f0f8"/>
+  </g>
+  <!-- B: K x n, four row panels -->
+  <g stroke="#2f5d8a" stroke-width="1.8">
+    <rect x="300" y="50" width="192" height="48" fill="#cfe0f1"/>
+    <rect x="300" y="98" width="192" height="48" fill="#e8f0f8"/>
+    <rect x="300" y="146" width="192" height="48" fill="#cfe0f1"/>
+    <rect x="300" y="194" width="192" height="48" fill="#e8f0f8"/>
+  </g>
+  <!-- C: m x n -->
+  <rect x="580" y="150" width="192" height="48" fill="#fbe9d0" stroke="#a8641c" stroke-width="1.8"/>
+  <g fill="#1f3550" text-anchor="middle">
+    <text x="64" y="179">A₀</text><text x="112" y="179">A₁</text><text x="160" y="179">A₂</text><text x="208" y="179">A₃</text>
+    <text x="396" y="79">B₀</text><text x="396" y="127">B₁</text><text x="396" y="175">B₂</text><text x="396" y="223">B₃</text>
+    <text x="676" y="179">C</text>
+  </g>
+  <g fill="#1f3550" font-size="28" text-anchor="middle">
+    <text x="266" y="184">·</text>
+    <text x="536" y="186">=</text>
+  </g>
+  <!-- dimension labels -->
+  <g fill="#3a4a5a" font-size="13" text-anchor="middle">
+    <text x="136" y="140">K = npanels · kp</text>
+    <text x="64" y="214">kp</text>
+    <text x="22" y="178">m</text>
+    <text x="396" y="40">n</text>
+    <text x="514" y="79">kp</text>
+    <text x="676" y="140">n</text>
+    <text x="562" y="178">m</text>
+  </g>
+  <!-- the sum -->
+  <text x="410" y="285" text-anchor="middle" fill="#1f3550" font-size="17">C = q( A₀·B₀ + A₁·B₁ + A₂·B₂ + A₃·B₃ )</text>
+  <text x="410" y="307" text-anchor="middle" fill="#3a4a5a" font-size="13">each panel's sums added on chip, exactly, into a partial-sum store; rounded once, after the last panel</text>
+  <!-- the order on s_in -->
+  <text x="40" y="350" fill="#3a4a5a" font-size="13">on s_in, an output's operands:</text>
+  <g stroke="#2f5d8a" stroke-width="1.5">
+    <rect x="240" y="333" width="52" height="26" fill="#cfe0f1"/>
+    <rect x="292" y="333" width="52" height="26" fill="#cfe0f1"/>
+    <rect x="344" y="333" width="52" height="26" fill="#e8f0f8"/>
+    <rect x="396" y="333" width="52" height="26" fill="#e8f0f8"/>
+    <rect x="448" y="333" width="52" height="26" fill="#cfe0f1"/>
+    <rect x="500" y="333" width="52" height="26" fill="#cfe0f1"/>
+    <rect x="552" y="333" width="52" height="26" fill="#e8f0f8"/>
+    <rect x="604" y="333" width="52" height="26" fill="#e8f0f8"/>
+  </g>
+  <g fill="#1f3550" text-anchor="middle" font-size="14">
+    <text x="266" y="351">A₀</text><text x="318" y="351">B₀</text><text x="370" y="351">A₁</text><text x="422" y="351">B₁</text>
+    <text x="474" y="351">A₂</text><text x="526" y="351">B₂</text><text x="578" y="351">A₃</text><text x="630" y="351">B₃</text>
+  </g>
+  <text x="40" y="392" fill="#3a4a5a" font-size="13">the core sweeps every tile of a panel, then the next panel -- its tiles starting from the store's partial sums</text>
+</svg>

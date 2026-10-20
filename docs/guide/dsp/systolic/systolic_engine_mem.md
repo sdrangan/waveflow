@@ -53,23 +53,51 @@ for tx, (M, K, N) in enumerate([(64, 32, 128), (64, 40, 128), (12, 8, 32)], star
 3 BAD_DIMS
 ```
 
-**Memory is block-major** (`block_major`), so each panel and tile is one burst: `A`'s panel `(i, p)` at
-`a_base + (i·P + p)·wa`, `B`'s `(p, j)` at `b_base + (p·NT + j)·wb`, `C`'s tile `(i, j)` at
-`c_base + (i·NT + j)·wc` -- `P = K/Kmax` panels, `NT = N/Nmax` column tiles, and `wa`, `wb`, `wc` the
-words of one panel or tile. `read_c` reads `C` back into a matrix.
+## Dividing a large product
+
+![A large product divided: C into tiles, A into row tiles of panels, B into column tiles of panels](images/engine_mem_tiles.svg)
+
+The engine holds at most an `Mmax × Nmax` output and `Pmax` panels of `Kmax`. A larger product is
+divided two ways:
+
+- **`C` into tiles** of `Mmax × Nmax`: `MT = M / Mmax` row tiles by `NT = N / Nmax` column tiles.
+- **The inner dimension into panels** of `Kmax`: `P = K / Kmax`, at most `Pmax`. `A` is then a grid of
+  `Mmax × Kmax` blocks `A(i, p)` -- row tile `i`, panel `p` -- and `B` a grid of `Kmax × Nmax` blocks
+  `B(p, j)`.
+
+Tile `C(i, j)` is the product of row tile `i` of `A` and column tile `j` of `B`:
+
+```
+C(i, j) = q( A(i,0)·B(0,j) + A(i,1)·B(1,j) + … + A(i,P−1)·B(P−1,j) )
+```
+
+-- one [engine command](systolic_engine.md#the-command) of `P` panels, which the engine sums on chip and
+rounds once ([panels](systolic_engine.md#panels-a-long-inner-dimension)).
+
+**How the tiles and panels are iterated.** The loop is **output-stationary**: a tile's sums stay in the
+engine while its panels stream past, and `C(i, j)` is written once, finished.
+
+```
+for i in 0 … MT−1:                 row tiles
+    for j in 0 … NT−1:             column tiles: one engine command of P panels
+        for p in 0 … P−1:          the feeder reads A(i,p), then B(p,j) -- a burst each
+            the engine adds A(i,p)·B(p,j) into the tile's partial sums
+        the engine rounds once; the writer writes C(i,j) -- one burst
+the job's EngineDone, after its last tile
+```
+
+Consecutive tiles overlap: while the engine sweeps a tile, the feeder is already reading the next tile's
+first panels, and the writer is writing the last tile's `C`. `A`'s row tile `i` is read once for each of
+the `NT` column tiles, and `B`'s column tile `j` once for each of the `MT` row tiles -- `A` read `N / Nmax`
+times and `B` `M / Mmax` times, `C` written once ([memory](systolic_theory.md#memory)).
+
+**Memory is block-major** (`block_major`), so each block and each tile is one burst: `A(i, p)` at
+`a_base + (i·P + p)·wa`, `B(p, j)` at `b_base + (p·NT + j)·wb`, `C(i, j)` at `c_base + (i·NT + j)·wc`,
+with `wa`, `wb`, `wc` the words of one block or tile. `read_c` reads `C` back into a matrix.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    job["s_job"] --> SEQ["EngineSeq"]
-    SEQ -->|"feed: a tile's panels"| FD["EngineFeeder (m_axi read)"]
-    FD -->|"EngineCmd, A, B, A, B ..."| ENG["SystolicEngine"]
-    SEQ -->|"tile"| WR["EngineWriter"]
-    ENG --> WR
-    WR -->|"MemWCmd | C"| MW["MemWStream (m_axi write)"]
-    MW --> done["s_done"]
-```
+![SystolicEngineMem: the sequencer, the feeder, the engine, the writer and the memory writer, and the memory](images/engine_mem_arch.svg)
 
 **The sequencer** checks the job and runs the output-stationary loop: per tile `(i, j)` of `C`, it sends
 the feeder where `A(i, 0)` and `B(0, j)` are and the step between `B`'s panels, and the writer the tile's
@@ -86,8 +114,6 @@ framework's in-band memory writer, with the job's `EngineDone` behind its last t
 and writer of one generated top must fire equally often (their pointer FIFOs couple them): the feeder
 fires once a tile and the writer writes once a tile, so they balance.
 
-**Traffic.** Each tile reads its `A` row panels and `B` column panels, so `A` is read `N / Nmax` times and
-`B` `M / Mmax` times ([memory](systolic_theory.md#memory)).
 
 ## Performance
 

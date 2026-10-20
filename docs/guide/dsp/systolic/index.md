@@ -8,15 +8,19 @@ summary: "Waveflow's systolic matrix multiply: C = q(A·B) or q(Aᴴ·B) on comp
 
 # Systolic Matrix Multiply
 
-Two modules multiply complex fixed-point matrices, `C = q(A·B)` or `C = q(Aᴴ·B)`, every product and
-sum exact and `C` rounded **once**, bit for bit like the model `waveflow.linalg.matmul.matmul`. They
-share one array -- output-stationary, `R × C` processing elements -- and differ in where the operands
-live:
+Waveflow currently offers two modules to multiply complex fixed-point matrices: `SystolicEngine` and
+`SystolicEngineMem`. Both compute a complex fixed-point matrix product `C = q(A·B)` or `C = q(Aᴴ·B)`,
+where every product and every sum in `A·B` or `Aᴴ·B` is computed exactly (wide enough that nothing
+overflows or rounds), and `q(·)` rounds and saturates the result **once**, to `C`'s format. The
+computation is bit for bit like the model `waveflow.linalg.matmul.matmul`. Both share one array --
+output-stationary, `R × C` processing elements.
+
+The key difference is where the operands live:
 
 | | `SystolicEngine` | `SystolicEngineMem` |
 |---|---|---|
-| operands and results | on streams: a command and its operands in; a `Resp` and `C` out | in memory: a job descriptor in, `C` written back, an `EngineDone` out |
-| largest product | `Mmax × Pmax·Kmax × Nmax` | any multiple of `Mmax`, `Nmax`; `K ≤ Pmax·Kmax` |
+| interface | streams: a command, then `A` and `B`, on an input stream; a `Resp` and `C` on an output stream | memory: a job descriptor on an input stream, with the addresses of `A`, `B` and `C`; `A` and `B` read and `C` written over `m_axi`; an `EngineDone` out on a stream |
+| largest product | `Mmax × Pmax·Kmax × Nmax`, held on chip: a long inner dimension is split into *panels*, summed on chip | any `M`, `N` that are multiples of `Mmax`, `Nmax`, split into *tiles* of `C`, one engine command each; `K ≤ Pmax·Kmax`, in the engine's panels |
 | reuse | `keep_a`: one `A` for several `B` | none across tiles |
 | at the centre | `8×8×32` back to back: 171 cycles a product (64-bit words), 94 (128-bit) | `32×32×64`: done at 5,813 cycles (64-bit), 3,033 (128-bit) |
 
@@ -25,13 +29,15 @@ live:
 
 ## The pages
 
-- [How a systolic array works](systolic_theory.md) -- one panel on the array: the dimensions, a tile,
-  the skew, the tile period, and the three bounds on its time (compute, input, output) and its memory.
+- [How a systolic array works](systolic_theory.md) -- a product that fits on the array: the dimensions,
+  a tile, the skew, the tile period, and the three bounds on its time (compute, input, output) and its
+  memory.
 - [Systolic engine](systolic_engine.md) -- `SystolicEngine`: what it computes, its parameters, the
-  command, its architecture (banked buffers read in place, a continuous array, the collector), what
-  the RTL measured, testing, limits.
-- [Systolic engine behind memory](systolic_engine_mem.md) -- `SystolicEngineMem`: the job, the
-  block-major layout, the outer loop and its feeder, what the RTL measured, testing, limits.
+  command, panels for a long inner dimension and how they are iterated, its architecture (banked buffers
+  read in place, a continuous array, the collector), performance, limits.
+- [Systolic engine behind memory](systolic_engine_mem.md) -- `SystolicEngineMem`: the job, how a large
+  product is divided into tiles and panels and the loop over them, the block-major layout, the feeder,
+  performance, limits.
 
 The older `SystolicUnit` (`waveflow/linalg/systolic.py`), which the engine supersedes, remains only for
 `examples/mimo_cg` until that example moves to the engine; it is no longer documented here.
