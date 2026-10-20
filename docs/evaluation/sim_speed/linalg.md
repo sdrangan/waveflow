@@ -37,7 +37,8 @@ RTL:      the bench's synthesized top (Vitis HLS 2024.1) --> XSI, driven by the 
   reported apart, as *construction*, because the CG bench computes its golden replies while it is
   built.
 - **The RTL** is the same scenario through the bench's synthesized top under XSI, every reply
-  checked. The testbench runs for a fixed number of cycles, set 5 % past the pysim's end time.
+  checked. The testbench runs for a fixed number of cycles, set 5 % plus 1,000 cycles past the
+  pysim's end time.
 
 ```bash
 python -m tests.linalg._sim_speed --rtl --synth --profile   # -> tests/linalg/sim_speed_runtime.json
@@ -61,9 +62,9 @@ Per job, fitted over 10, 50 and 100 jobs; every run bit-exact:
 | RTL time pro-rated to the last reply (a lower bound, see below) | 28.7 ms | 317 ms |
 
 Measured 2026-10-19 with Vitis HLS / Vivado 2024.1 for the RTL, on the machine of the
-[processor model page](cpu.md#results) (Linux, Intel Core i7-7700K, Python 3.12.3, SimPy 4.1.2): the
-machine idle before each series, the best of three runs per point, the RTL best of one, as on the
-FFT page. The XSI build is most of a run at these sizes (its elaborate step alone is 8.0 and 6.9 s),
+[processor model page](cpu.md#results) (Linux, Intel Core i7-7700K, Python 3.12.3, SimPy 4.1.2): a
+shared machine, its load average below 1 before each series; the best of three runs per point, the
+RTL best of one, as on the FFT page. The XSI build is most of a run at these sizes (its elaborate step alone is 8.0 and 6.9 s),
 and every run pays it: the runner rebuilds each time.
 
 **The pysim keeps the RTL's timing.** Its interval between systolic jobs is 388 cycles against the
@@ -126,10 +127,11 @@ meant packing words by hand, outside the schema that owns their layout, which Wa
    pysim's end, a fifth of its cycles were idle -- and cutting them saved far less time than their
    number suggested, because idle cycles are cheap for XSI. Pro-rating by cycles therefore
    under-states the RTL; sizing the run 5 % past the end, which the pysim's 1 % accuracy allows, keeps
-   the error small, and a run cut short fails its bit check.
-3. **The RTL flow needs its environment.** On this machine the XSI runner finds Vivado and its
-   simulation kernel only from the activated virtual environment (`XILINX_VIVADO`, and a link from the
-   kernel's 2025.1 name to 2024.1's); called without it, every gate errored.
+   the error small (5 % plus 1,000 cycles here), and a run cut short fails its bit check.
+3. **The RTL flow needs its environment.** The XSI runner finds Vivado through `XILINX_VIVADO` (or a
+   `vivado` on the path) and loads the simulator's kernel by name; on a machine where neither is set
+   up, every gate errors. That setup is per machine, and belongs in a developer's `CLAUDE.local.md`,
+   not in a script.
 4. **Charge library time to its callers.** A profile that leaves numpy's own Python as "other" hides
    a third of a model's arithmetic.
 

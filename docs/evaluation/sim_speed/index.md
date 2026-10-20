@@ -3,7 +3,7 @@ title: Simulation speed
 parent: Evaluation
 nav_order: 1
 has_children: true
-summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy, the SSR FFT, the processor model and the linear-algebra units: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation; the processor model's pysim is 31x faster than gem5 simulating the same software; the systolic and CG units' pysims are 17x and 29x faster than their RTL, before RTL's minutes of synthesis and build per design point. What is still slow and what to do about it."
+summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy, the SSR FFT, the processor model and the linear-algebra units: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation; the processor model's pysim is 33x faster than gem5 simulating the same software; the systolic and CG units' pysims are 17x and 29x faster than their RTL, before RTL's synthesis and build per design point (minutes for the FFT, about 40 s for each unit). What is still slow and what to do about it."
 ---
 
 # Simulation speed
@@ -35,7 +35,7 @@ pysim time  =  untimed model time  +  (SimPy events) x (cost per event)
   How many a transaction needs is a property of the model's structure.
 - **The cost per event** is SimPy's own (about 0.6 us for a bare event on the test machine) plus
   Waveflow's work around it: building and parsing a message, interface bookkeeping. On memcpy it is
-  about 16 us today (machine A, below); on the processor model about 2.8 us, and on the
+  about 16 us today (machine A, below); on the processor model about 2.7 us, and on the
   linear-algebra units about 24 us (machine B). It is a property of what an event carries: a
   processor call moves no data, a linear-algebra job moves matrices through typed messages.
 
@@ -48,7 +48,7 @@ the first block measured is memcpy, which has no arithmetic at all.
 |---|---|---|---|---|---|
 | [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length | A |
 | [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point | A |
-| [processor model](cpu.md), per scheduler operation | 2.82 us (Python + calibrated prices) | 15.3 us (4.46 events) | gem5 HPI: 469 us simulating it, 10.8 ms a run | three optimization rounds took the pysim from 31.8 us | B |
+| [processor model](cpu.md), per scheduler operation | 2.77 us (Python + calibrated prices) | 14.7 us (4.46 events) | gem5 HPI: 481 us simulating it; 10.8 ms of a whole run, plus 5.5 s a run | three optimization rounds took the pysim from 31.8 us; warm prices (cold first pass 20.1 us) | B |
 | [systolic unit](linalg.md) 8 x 8 by 8 x 32, per job | 0.044 ms | 1.73 ms (70.5 events) | 30.1 ms | plus 32 s csynth and a 10.9 s XSI build per design point | B |
 | [CG vector unit](linalg.md) 8 iterations, per job | 1.97 ms | 11.6 ms (408.7 events) | 336 ms | plus 33 s csynth and a 9.9 s XSI build per design point | B |
 
@@ -56,8 +56,9 @@ the first block measured is memcpy, which has no arithmetic at all.
 - **Machine B**: Linux, an Intel Core i7-7700K (8 threads, 4.2 GHz), Python 3.12.3, SimPy 4.1.2;
   measured 2026-10-19, with Vitis HLS / Vivado 2024.1 and gem5 v25.1.
 
-Both with nothing else running, best of several runs. The two machines differ in age and Python
-version, so compare times within a machine; across machines, compare the ratios.
+Machine A had nothing else running; machine B is shared, and its load average was below 1 before
+each series. Best of several runs. The two machines differ in age and Python version, so compare
+times within a machine; across machines, compare the ratios.
 
 **Against a compiled model** the picture changes, and it should be read that way. The FFT's untimed
 model is vectorized numpy -- a fair baseline, and what most system engineers write -- but not

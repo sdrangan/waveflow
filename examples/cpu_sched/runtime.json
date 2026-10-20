@@ -30,40 +30,40 @@
     400
    ],
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.48,
+   "load": 0.97,
    "load_before": null
   },
   "untimed": {
-   "per_op_ms": 0.0028246927904117267,
-   "setup_ms": -0.01720571890473484,
+   "per_op_ms": 0.0027734604992715696,
+   "setup_ms": 0.005602836608885596,
    "runs": {
-    "411": 0.0011445879936218262,
-    "822": 0.0023034242913126945,
-    "1644": 0.004627011716365814
+    "411": 0.0011364072561264038,
+    "822": 0.0022990191355347633,
+    "1644": 0.0045606279745697975
    },
    "exact": true,
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.48
+   "load": 0.97,
+   "load_before": 0.97
   },
   "pysim_trace": {
-   "per_op_ms": 0.015279121320146959,
-   "setup_ms": -0.4323474131524574,
+   "per_op_ms": 0.014714092251883224,
+   "setup_ms": -0.048516318202023206,
    "runs": {
-    "411": 0.0059272777289152145,
-    "822": 0.012007230892777443,
-    "1644": 0.024726481176912785
+    "411": 0.005906560458242893,
+    "822": 0.012185090221464634,
+    "1644": 0.024095243774354458
    },
    "exact": true,
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.48
+   "load": 0.97,
+   "load_before": 0.97
   },
   "work_per_op": {
    "1": 19.394160583941606,
@@ -76,12 +76,12 @@
    "4": 1644
   },
   "pysim_system": {
-   "per_job_ms": 0.3537821570145232,
-   "setup_ms": 6.512433290481542,
+   "per_job_ms": 0.34311101439275915,
+   "setup_ms": 6.490382831543677,
    "runs": {
-    "100": 0.04171534348279238,
-    "200": 0.07753182295709848,
-    "400": 0.1479376433417201
+    "100": 0.04061472229659557,
+    "200": 0.07539272867143154,
+    "400": 0.14364140760153532
    },
    "all_correct": true,
    "interarrival_s": 8e-07,
@@ -96,10 +96,10 @@
     "400": 2.0375
    },
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.52
+   "load": 0.97,
+   "load_before": 0.97
   },
   "events": {
    "per_op": {
@@ -147,10 +147,10 @@
     }
    },
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.52
+   "load": 0.97,
+   "load_before": 0.97
   },
   "history": [
    {
@@ -250,47 +250,47 @@
     "tasks": 100000,
     "cores": 4,
     "sim_s": 0.032675370796563914,
-    "wall_s": 1.3150680009275675,
-    "tasks_per_s": 76041.69512866726
+    "wall_s": 1.328152141533792,
+    "tasks_per_s": 75292.57896954248
    },
    "burst": {
     "tasks": 20000,
     "cores": 4,
     "sim_s": 0.005208333333333065,
-    "wall_s": 0.2608965430408716,
-    "tasks_per_s": 76658.73900393856
+    "wall_s": 0.2538411784917116,
+    "tasks_per_s": 78789.42305120538
    },
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.52
+   "load": 0.97,
+   "load_before": 0.97
   },
   "gem5": {
-   "per_op_ms": 0.46894108557494335,
-   "setup_ms": 253.53749983578743,
+   "per_op_ms": 0.48066006337156725,
+   "setup_ms": 251.1369992532748,
    "runs": {
-    "411": 0.4441490005683691,
-    "822": 0.6421920003364712,
-    "1644": 1.0234150018016344
+    "411": 0.44920199902912705,
+    "822": 0.6454690007494961,
+    "1644": 1.0415990003012006
    },
    "counters_match": true,
    "region_host_printed": {
-    "per_op_ms": 0.4692387904066736,
-    "setup_ms": 249.99999999999997,
+    "per_op_ms": 0.4779283976364269,
+    "setup_ms": 254.99999999999994,
     "runs": {
-     "411": 0.44,
-     "822": 0.64,
-     "1644": 1.02
+     "411": 0.45,
+     "822": 0.65,
+     "1644": 1.04
     }
    },
    "wall": {
-    "per_op_ms": 10.776141120252314,
-    "setup_ms": 5355.4418613202815,
+    "per_op_ms": 10.839340305341059,
+    "setup_ms": 5469.207007903604,
     "runs": {
-     "411": 9.753898665308952,
-     "822": 14.259235656820238,
-     "1644": 23.05614926479757
+     "411": 9.915961892344058,
+     "822": 14.39146571047604,
+     "1644": 23.284975479356945
     }
    },
    "region_cycles": {
@@ -310,200 +310,200 @@
     "pinned": 63266.0,
     "ok": true
    },
-   "build_s": 0.16395961120724678,
+   "build_s": 0.1634522881358862,
    "gem5_tag": "v25.1.0.1",
    "image": "ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1",
    "reps": 3,
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.97,
-   "load_before": 0.52
+   "load": 1.12,
+   "load_before": 0.97
   },
   "profile": {
    "untimed": {
-    "total_s": 0.016719387000000002,
+    "total_s": 0.015993885,
     "shares": {
-     "software bodies (list operations, driver)": 0.5777820083954034,
-     "pricing (cost models, features)": 0.4213367990106335,
-     "other": 0.0008811925939629246
+     "software bodies (list operations, driver)": 0.6116213165219083,
+     "pricing (cost models, features)": 0.38739268164051444,
+     "other": 0.0009860018375772992
     },
     "top": [
      {
-      "function": "task.py:96(price)",
-      "own_share": 0.18184925081284378,
+      "function": "task.py:99(price)",
+      "own_share": 0.17239232369121074,
       "calls": 2444
      },
      {
       "function": "sched_ops.py:26(tg_insert)",
-      "own_share": 0.12929475225377582,
+      "own_share": 0.1352648215239762,
       "calls": 844
      },
      {
-      "function": "bench.py:185(untimed)",
-      "own_share": 0.1263011018286735,
-      "calls": 1
-     },
-     {
       "function": "bench.py:155(body)",
-      "own_share": 0.1250989644536609,
+      "own_share": 0.13205284394629574,
       "calls": 1644
      },
      {
+      "function": "bench.py:185(untimed)",
+      "own_share": 0.1314102233447346,
+      "calls": 1
+     },
+     {
       "function": "bench.py:223(_calls)",
-      "own_share": 0.06374378438635339,
+      "own_share": 0.06739732091358668,
       "calls": 1644
      },
      {
       "function": "~:0(<method 'get' of 'dict' objects>)",
-      "own_share": 0.05805655434616113,
+      "own_share": 0.05741425551077803,
       "calls": 4088
      },
      {
       "function": "calib.py:741(_predict_one)",
-      "own_share": 0.04184423747114652,
+      "own_share": 0.04227678265787206,
       "calls": 322
      },
      {
       "function": "sched_ops.py:22(_less)",
-      "own_share": 0.03784450949068886,
+      "own_share": 0.04000428913925541,
       "calls": 9008
      },
      {
       "function": "~:0(<method 'append' of 'list' objects>)",
-      "own_share": 0.026727176062136725,
+      "own_share": 0.02854540969876925,
       "calls": 3288
      },
      {
-      "function": "~:0(<built-in method builtins.id>)",
-      "own_share": 0.024952649280742166,
-      "calls": 4888
+      "function": "sched_ops.py:41(tg_remove)",
+      "own_share": 0.02228395414872622,
+      "calls": 844
      }
     ]
    },
    "pysim_trace": {
-    "total_s": 0.07317685700000001,
+    "total_s": 0.095108289,
     "shares": {
-     "processor model (scheduling, accounting)": 0.460831735366825,
-     "SimPy core": 0.2577947970626833,
-     "software bodies (list operations, driver)": 0.1752077982797211,
-     "pricing (cost models, features)": 0.09207222441925866,
-     "Waveflow simulation framework": 0.013878909830740612,
-     "other": 0.00021453504077115524
+     "processor model (scheduling, accounting)": 0.5926350751615351,
+     "SimPy core": 0.19575986694493058,
+     "software bodies (list operations, driver)": 0.1358644145096544,
+     "pricing (cost models, features)": 0.06476729909419357,
+     "Waveflow simulation framework": 0.010749767562320465,
+     "other": 0.00022357672736600278
     },
     "top": [
      {
-      "function": "processor.py:195(_submit)",
-      "own_share": 0.117828673620131,
+      "function": "processor.py:302(_begin)",
+      "own_share": 0.3304039777226988,
       "calls": 2444
      },
      {
-      "function": "processor.py:302(_begin)",
-      "own_share": 0.10836696634839071,
+      "function": "processor.py:195(_submit)",
+      "own_share": 0.09139283327870613,
       "calls": 2444
      },
      {
       "function": "core.py:182(step)",
-      "own_share": 0.06539795771769755,
+      "own_share": 0.04758087909666844,
       "calls": 7335
      },
      {
-      "function": "task.py:96(price)",
-      "own_share": 0.05222167440178525,
+      "function": "task.py:99(price)",
+      "own_share": 0.041055885255174764,
       "calls": 2444
      },
      {
       "function": "bench.py:214(thread)",
-      "own_share": 0.046032135542525415,
+      "own_share": 0.03519112829377048,
       "calls": 2445
      },
      {
       "function": "core.py:214(run)",
-      "own_share": 0.039554404475174436,
+      "own_share": 0.030799260829936708,
       "calls": 1
      },
      {
-      "function": "core.py:165(schedule)",
-      "own_share": 0.03716019123368471,
-      "calls": 7334
-     },
-     {
       "function": "bench.py:155(body)",
-      "own_share": 0.035984600978421356,
+      "own_share": 0.02886674788145963,
       "calls": 1644
      },
      {
+      "function": "core.py:165(schedule)",
+      "own_share": 0.028322873098894672,
+      "calls": 7334
+     },
+     {
       "function": "sched_ops.py:26(tg_insert)",
-      "own_share": 0.03371181957158941,
+      "own_share": 0.02578991826884826,
       "calls": 844
      },
      {
       "function": "processor.py:397(_complete)",
-      "own_share": 0.03143738463651151,
+      "own_share": 0.024001504222202968,
       "calls": 2444
      }
     ]
    },
    "pysim_system": {
-    "total_s": 0.383048145,
+    "total_s": 0.372915023,
     "shares": {
-     "bus, registers, accelerators": 0.5135548556414942,
-     "SimPy core": 0.2763212754887509,
-     "processor model (scheduling, accounting)": 0.09197454951676468,
-     "software bodies (list operations, driver)": 0.046156325299722245,
-     "pricing (cost models, features)": 0.03546404804533435,
-     "Waveflow simulation framework": 0.021036089340675437,
-     "other": 0.015492856667258198
+     "bus, registers, accelerators": 0.5107387038754133,
+     "SimPy core": 0.27761112214564765,
+     "processor model (scheduling, accounting)": 0.09181933614673297,
+     "software bodies (list operations, driver)": 0.0471884665759808,
+     "pricing (cost models, features)": 0.03476226934158541,
+     "Waveflow simulation framework": 0.020931251139217313,
+     "other": 0.016948850775422377
     },
     "top": [
      {
       "function": "dataschema.py:1713(_convert)",
-      "own_share": 0.04281532547298983,
+      "own_share": 0.04255708947397381,
       "calls": 6808
      },
      {
       "function": "core.py:182(step)",
-      "own_share": 0.03886485078788203,
+      "own_share": 0.03816885918269911,
       "calls": 19306
      },
      {
       "function": "dataschema.py:322(_layout_memo)",
-      "own_share": 0.03057981915040993,
+      "own_share": 0.03087645787871625,
       "calls": 13248
      },
      {
       "function": "events.py:388(_resume)",
-      "own_share": 0.02619896514575211,
+      "own_share": 0.026642396758577356,
       "calls": 11665
      },
      {
       "function": "core.py:165(schedule)",
-      "own_share": 0.022023103649281475,
+      "own_share": 0.021963553342821483,
       "calls": 19305
      },
      {
-      "function": "memif.py:1619(write)",
-      "own_share": 0.021801447439459602,
-      "calls": 8016
-     },
-     {
-      "function": "dataschema.py:1503(_serialize_recursive)",
-      "own_share": 0.021700248672396,
-      "calls": 5208
-     },
-     {
       "function": "core.py:214(run)",
-      "own_share": 0.020949985281876252,
+      "own_share": 0.02174655484447995,
       "calls": 1
      },
      {
+      "function": "dataschema.py:1503(_serialize_recursive)",
+      "own_share": 0.021691898961120695,
+      "calls": 5208
+     },
+     {
+      "function": "memif.py:1619(write)",
+      "own_share": 0.021659701277306816,
+      "calls": 8016
+     },
+     {
       "function": "dataschema.py:453(serialize)",
-      "own_share": 0.02079419024467538,
+      "own_share": 0.021170978676286794,
       "calls": 5208
      },
      {
       "function": "regmap.py:660(_rx_write)",
-      "own_share": 0.019383780072867864,
+      "own_share": 0.018247988362753625,
       "calls": 4008
      }
     ]
@@ -511,11 +511,31 @@
    "trace_copies": 4,
    "system_jobs": 400,
    "date": "2026-10-19",
-   "commit": "492d3e20",
+   "commit": "c2c4be24",
    "dirty": false,
-   "load": 0.52,
-   "load_before": 0.52
+   "load": 0.97,
+   "load_before": 0.97
   },
-  "optimization": "three rounds (the plan's cap); each A/B'd against the commit before it in fresh alternating processes, best of each, every pinned TaskRecord unchanged"
+  "optimization": "three rounds (the plan's cap); each A/B'd against the commit before it in fresh alternating processes, best of each, every pinned TaskRecord unchanged",
+  "cold": {
+   "untimed_us_op": 5.883951002953986,
+   "pysim_us_op": 20.07848535576006,
+   "ops": 411,
+   "points": 161,
+   "calls": 611,
+   "date": "2026-10-19",
+   "commit": "c2c4be24",
+   "dirty": false,
+   "load": 0.97,
+   "load_before": 0.97
+  },
+  "replay_pricing": {
+   "ms": 4.5990366488695145,
+   "date": "2026-10-19",
+   "commit": "c2c4be24",
+   "dirty": false,
+   "load": 0.97,
+   "load_before": 0.97
+  }
  }
 }

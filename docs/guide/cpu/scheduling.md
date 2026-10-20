@@ -101,10 +101,10 @@ weakest level alone can hide that it was one call in two hundred, which is what 
 
 Each call is three SimPy events: its start, its timed completion, and the event its caller waits
 on; no process is spawned for it, and its price is computed once per distinct set of counters. On
-an otherwise idle 8-thread i7-7700K (Python 3.12.3, SimPy 4.1.2), 4 cores ran about 76,000 tasks
-per wall-clock second with streaming arrivals and about 77,000 with 20,000 queued at once
+a lightly loaded 8-thread i7-7700K (Python 3.12.3, SimPy 4.1.2), 4 cores ran about 75,000 tasks
+per wall-clock second with streaming arrivals and about 79,000 with 20,000 queued at once
 (`python -m waveflow.cpu.bench`), and a scheduler's list operation costs about 15 us to simulate,
-against 2.8 us untimed and 469 us on gem5 -- measured, with what the time is spent on, in
+against 2.8 us untimed and 481 us on gem5 -- measured, with what the time is spent on, in
 [Evaluation: the processor model](../../evaluation/sim_speed/cpu.md). The ready queue is a heap:
 SimPy's own priority resource re-sorts its queue on every request and managed a few hundred per
 second at that depth.
