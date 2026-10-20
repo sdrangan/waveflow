@@ -1,4 +1,95 @@
 {
+ "conversion_w128": {
+  "format": "W=12 in 16-bit lanes",
+  "sizes": {
+   "8": {
+    "direct": {
+     "to_words_us": 22.37946647355021,
+     "from_words_us": 31.083112579480503
+    },
+    "general": {
+     "to_words_us": 116.38856090852696,
+     "from_words_us": 199.29284385971994
+    },
+    "same_words": true
+   },
+   "16": {
+    "direct": {
+     "to_words_us": 17.4953580458818,
+     "from_words_us": 49.11044683738783
+    },
+    "general": {
+     "to_words_us": 186.64492881240398,
+     "from_words_us": 265.77545118951895
+    },
+    "same_words": true
+   },
+   "32": {
+    "direct": {
+     "to_words_us": 19.449684600447736,
+     "from_words_us": 90.5159674380756
+    },
+    "general": {
+     "to_words_us": 242.5158133071268,
+     "from_words_us": 383.3653678960324
+    },
+    "same_words": true
+   },
+   "64": {
+    "direct": {
+     "to_words_us": 42.04553681227369,
+     "from_words_us": 108.53615387312168
+    },
+    "general": {
+     "to_words_us": 335.4423758879317,
+     "from_words_us": 564.0894474096634
+    },
+    "same_words": true
+   },
+   "128": {
+    "direct": {
+     "to_words_us": 133.0301402219371,
+     "from_words_us": 200.0454225426566
+    },
+    "general": {
+     "to_words_us": 521.6062151811133,
+     "from_words_us": 843.1362244775709
+    },
+    "same_words": true
+   },
+   "256": {
+    "direct": {
+     "to_words_us": 240.59530826355393,
+     "from_words_us": 1206.1157305672598
+    },
+    "general": {
+     "to_words_us": 4170.937929302454,
+     "from_words_us": 6541.755174864726
+    },
+    "same_words": true
+   },
+   "512": {
+    "direct": {
+     "to_words_us": 1632.0183828664833,
+     "from_words_us": 6045.7090889527035
+    },
+    "general": {
+     "to_words_us": 12683.833338087425,
+     "from_words_us": 20773.155562993554
+    },
+    "same_words": true
+   }
+  },
+  "word_bits": 128,
+  "date": "2026-10-20",
+  "preliminary": true,
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "reps": 9
+ },
  "steady_w128": {
   "workload": "8x8x32 back to back",
   "word_bits": 128,

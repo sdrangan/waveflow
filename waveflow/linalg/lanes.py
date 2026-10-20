@@ -211,8 +211,8 @@ def to_words(
         pairs = np.zeros((nw * epw, 2), dt)    # the last word zero-padded
         pairs[: re.size, 0] = re               # wraps to the lane, as the format does
         pairs[: re.size, 1] = im
-        if shift:                              # the same bits as shifting before the wrap
-            pairs <<= shift
+        if shift:                              # the bits of shifting before the wrap (numpy's
+            pairs *= dt(1 << shift)            # multiply is vectorized for narrow ints, its shift not)
         flat = pairs.reshape(-1)
         if int(word_bits) == 32:               # one 32-bit word to a uint64
             return flat.view(np.uint32).astype(np.uint64)
@@ -248,11 +248,14 @@ def from_words(
         pairs = buf.reshape(-1).view(dt).reshape(-1, 2)[: int(n)]
         if pairs.shape[0] < int(n):
             raise ValueError(f"{w.shape[0]} words hold fewer than {n} elements")
-        if shift:
-            if np.any(pairs & dt((1 << shift) - 1)):
+        re, im = pairs[:, 0].astype(np.int64), pairs[:, 1].astype(np.int64)
+        if shift:                              # on the int64 copies: numpy vectorizes those
+            frac = (1 << shift) - 1
+            if np.any(re & frac) or np.any(im & frac):
                 raise finer
-            pairs = pairs >> shift
-        return pairs[:, 0].astype(np.int64), pairs[:, 1].astype(np.int64)
+            re >>= shift
+            im >>= shift
+        return re, im
     arr = mem_array_type(fmt, n, lane_bits)().deserialize(
         np.asarray(words, dtype=np.uint64), word_bw=int(word_bits)
     )

@@ -2,7 +2,7 @@
 title: "Simulation speed: the systolic engine"
 parent: Simulation speed
 nav_order: 3
-summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.036 ms a product), Waveflow's pysim of the engine's six tasks (0.73 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- Python packing and serialization, not SimPy -- how vectorizing the lane groups halved it, and how the flat pysim (one process, 20 events a product) runs about 1.8 times faster again."
+summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.036 ms a product), Waveflow's pysim of the engine's six tasks (0.73 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- Python packing and serialization, not SimPy -- how vectorizing the lane groups halved it, how the flat pysim (one process, 20 events a product) runs about 1.8 times faster again, and how a direct path for converting matrices to words is 3 to 17 times faster than the general one at sizes from 8×8 to 512×512."
 ---
 
 # Simulation speed: the systolic engine
@@ -59,7 +59,8 @@ Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1), the best of three runs a p
 - **The time is Python, not SimPy.** A profile of 50 products put most of the simulation in two places:
   packing and unpacking lane groups one at a time (the core's `C` out in drain order, the collector's
   3,200 `unpack_group` calls), and serializing complex operands and results through `ComplexField`
-  arrays (`lanes.to_words`, `from_words`). SimPy's own scheduling was a small part.
+  arrays (`lanes.to_words`, `from_words`; now a direct path, see
+  [Converting matrices to words](#converting-matrices-to-words)). SimPy's own scheduling was a small part.
 - **Vectorizing the lane groups halved it**: `lanes.pack_groups` / `unpack_groups` place each lane's field
   in whole arrays (a loop over the `L` lanes, not over the groups), and pysim went from 1.35 to 0.73 ms
   a product.
@@ -70,9 +71,45 @@ Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1), the best of three runs a p
   is for the lab run. Trimming the message handling itself bought 2.3% fewer calls -- earlier work had
   taken the obvious wins there.
 
+## Converting matrices to words
+
+Every operand goes into message words, and every `C` comes back out, through `lanes.to_words` and
+`from_words`. In general that is a `DataArray` of `ComplexField` elements: vectorized, but several passes
+through intermediate forms and a fixed cost to set the array up. When a lane is 8, 16 or 32 bits wide,
+the words are simply the bytes of the `(re, im)` integer pairs, so the **direct path** reinterprets the
+buffer: one pass, plus a multiply or shift when the register format is narrower than the lane. Both give
+the same words (tested bit for bit, and checked again on every size below).
+
+An `n × n` matrix in the engine's operand format (12 bits in 16-bit lanes, 128-bit words), per call,
+general path → direct path:
+
+| matrix | elements | `to_words` (µs) | speed-up | `from_words` (µs) | speed-up |
+|---|---|---|---|---|---|
+| 8×8 | 64 | 116 → 22.4 | **5×** | 199 → 31.1 | **6.4×** |
+| 16×16 | 256 | 187 → 17.5 | **11×** | 266 → 49.1 | **5.4×** |
+| 32×32 | 1,024 | 243 → 19.4 | **12×** | 383 → 90.5 | **4.2×** |
+| 64×64 | 4,096 | 335 → 42.0 | **8×** | 564 → 109 | **5.2×** |
+| 128×128 | 16,384 | 522 → 133 | **4×** | 843 → 200 | **4.2×** |
+| 256×256 | 65,536 | 4,171 → 241 | **17×** | 6,542 → 1,206 | **5.4×** |
+| 512×512 | 262,144 | 12,684 → 1,632 | **8×** | 20,773 → 6,046 | **3.4×** |
+
+Measured 2026-10-20, best of nine batches a point, on the busy laptop: single points moved by up to 5×
+between runs (the 8×8 direct `to_words` was 3.4 µs on one run, 22 µs on the next).
+
+```bash
+python -m examples.systolic.systolic_runtime --conversion   # -> runtime.json, "conversion_w128"
+```
+
+- **The speed-up holds at every size, with no clear trend**: about 4 to 17 times into words and 3 to 6
+  times back. At small sizes the direct path saves the general one's fixed set-up cost; at large sizes,
+  its passes over the data.
+- **Reading back gains less.** `from_words` still copies the lanes out into the two `int64` arrays its
+  callers expect, shifts them, and checks no fraction bits are lost. Those passes are most of its time
+  at large sizes.
+- **Simulation calls:** on four back-to-back products, the flat pysim makes 13% fewer Python calls
+  (12,756 → 11,084) and the six-task pysim 7% fewer. Its matrices are small, so the per-call set-up was
+  what it paid.
+
 ## Future work
 
-- **A direct path for complex-array serialization** -- the operands into words and `C` back out
-  (`lanes.to_words`, `from_words`, about 40 and 75 microseconds a matrix, vectorized but general) --
-  about a quarter of the six-task pysim's time.
-- **Re-run on the lab machine** for the numbers this page will keep.
+- **Re-run on the lab machine** for the numbers this page will keep, including the conversion table.

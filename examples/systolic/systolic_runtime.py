@@ -2,6 +2,7 @@
 
     python -m examples.systolic.systolic_runtime                          # untimed + pysim
     python -m examples.systolic.systolic_runtime --rtl --root C:/wfsc/rt  # ... + the RTL under XSI
+    python -m examples.systolic.systolic_runtime --conversion             # word conversion alone
 
 The three ways to run the same bit-exact systolic engine on the same products -- ``8×8×32`` back to
 back at the centre configuration (``docs/evaluation/sim_speed/systolic.md`` is written from what this
@@ -15,7 +16,9 @@ records):
   the testbench's build reported apart from the simulation.
 
 Each is run at several product counts and fitted to ``setup + products * per_product``.  Every run is
-checked against the model.  Times are the best of ``--reps`` runs: other load only ever adds time.
+checked against the model.  ``--conversion`` instead times the conversion between a matrix and its
+message words (``lanes.to_words`` / ``from_words``) across square sizes, the direct path (machine-width
+lanes) against the general ``ComplexField`` path, checking that both give the same words.  Times are the best of ``--reps`` runs: other load only ever adds time.
 **Times taken on a machine in use are preliminary**; results go to ``runtime.json`` with the machine.
 """
 from __future__ import annotations
@@ -100,6 +103,57 @@ def time_rtl(root: Path, cfg: dict, n: int) -> dict:
             "exact": not bad, "failed": bad or None}
 
 
+CONV_SIZES = (8, 16, 32, 64, 128, 256, 512)
+
+
+def _best_per_call(fn, reps: int, budget_s: float = 0.2) -> float:
+    """Seconds a call, the best of *reps* batches of enough calls to fill about *budget_s*."""
+    t = time.perf_counter()
+    fn()
+    k = max(1, int(budget_s / max(time.perf_counter() - t, 1e-7)))
+    best = None
+    for _ in range(reps):
+        t = time.perf_counter()
+        for _ in range(k):
+            fn()
+        dt = (time.perf_counter() - t) / k
+        best = dt if best is None else min(best, dt)
+    return best
+
+
+def time_conversion(cfg: dict, sizes, reps: int) -> dict:
+    """An ``n x n`` matrix of the engine's operand format to words and back, both paths, per call."""
+    from waveflow.linalg import lanes as LN
+
+    e = EH.engine(**cfg)
+    fmt, lb, wb = e.a, int(e.lane_bits), int(e.word_bits)
+    direct = LN._direct_dtype
+    general = lambda *a: None  # noqa: E731 -- the general path, as for a lane width with no dtype
+    rows = {}
+    try:
+        for n in sizes:
+            rng = np.random.default_rng(n)
+            lo, hi = -(1 << (fmt.W - 1)), 1 << (fmt.W - 1)
+            re, im = rng.integers(lo, hi, (n, n)), rng.integers(lo, hi, (n, n))
+            row, words = {}, {}
+            for name, d in (("direct", direct), ("general", general)):
+                LN._direct_dtype = d
+                w = words[name] = LN.to_words(re, im, fmt, lb, wb)
+                row[name] = {
+                    "to_words_us": 1e6 * _best_per_call(lambda: LN.to_words(re, im, fmt, lb, wb), reps),
+                    "from_words_us": 1e6 * _best_per_call(
+                        lambda: LN.from_words(w, n * n, fmt, lb, wb), reps),
+                }
+            row["same_words"] = bool(np.array_equal(words["direct"], words["general"]))
+            rows[str(n)] = row
+            d, g = row["direct"], row["general"]
+            print(f"{n:4d}x{n:<4d} to_words {g['to_words_us']:9.1f} -> {d['to_words_us']:8.1f} us"
+                  f"   from_words {g['from_words_us']:9.1f} -> {d['from_words_us']:8.1f} us", flush=True)
+    finally:
+        LN._direct_dtype = direct
+    return {"format": f"W={fmt.W} in {lb}-bit lanes", "sizes": rows}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--counts", type=int, nargs="+", default=list(COUNTS))
@@ -107,13 +161,23 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=3, help="best of this many runs per point")
     ap.add_argument("--rtl", action="store_true", help="also run the RTL under XSI (needs Vivado)")
     ap.add_argument("--root", type=Path, default=None, help="the RTL build root (keep it short)")
+    ap.add_argument("--conversion", action="store_true",
+                    help="only time the matrix <-> word conversion across sizes")
     a = ap.parse_args()
     counts = sorted(a.counts)
     cfg = {"word_bits": a.word_bits}
+    machine = {"cpu": platform.processor(), "python": platform.python_version(),
+               "system": platform.platform()}
+    if a.conversion:
+        data = json.loads(RUNTIME.read_text(encoding="utf-8")) if RUNTIME.exists() else {}
+        data[f"conversion_w{a.word_bits}"] = {
+            **time_conversion(cfg, CONV_SIZES, a.reps), "word_bits": a.word_bits,
+            "date": date.today().isoformat(), "preliminary": True, "machine": machine,
+            "reps": a.reps}
+        RUNTIME.write_text(json.dumps(dict(sorted(data.items())), indent=1) + "\n", encoding="utf-8")
+        return
     out = {"workload": "8x8x32 back to back", "word_bits": a.word_bits,
-           "date": date.today().isoformat(), "preliminary": True,
-           "machine": {"cpu": platform.processor(), "python": platform.python_version(),
-                       "system": platform.platform()},
+           "date": date.today().isoformat(), "preliminary": True, "machine": machine,
            "counts": counts, "reps": a.reps}
 
     secs = [time_untimed(cfg, n, a.reps) for n in counts]
