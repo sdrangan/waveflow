@@ -13,7 +13,7 @@ centre configuration, every output checked against the model -- from
 
 ## The engine against its bounds
 
-[The theory](../../guide/dsp/systolic/systolic_theory.md#three-bounds-on-a-panel) bounds a product by its
+[The theory](../../guide/dsp/systolic/systolic_theory.md#three-bounds-on-a-product) bounds a product by its
 compute (`T·P` steps), its input (`kp·(m + n)` values) and its output (`m·n` values), at one word a
 cycle. Products back to back, the interval between consecutive outputs:
 

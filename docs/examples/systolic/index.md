@@ -13,7 +13,7 @@ summary: "The systolic engine (SystolicEngine) and the engine behind memory (Sys
 `SystolicEngine`, which multiplies complex fixed-point matrices fed on streams, and
 `SystolicEngineMem`, which runs it in an outer loop over matrices in memory. This example puts each in
 its own harness and measures it at RTL: how long a product takes, against the bounds
-[the theory](../../guide/dsp/systolic/systolic_theory.md#three-bounds-on-a-panel) predicts, which stage
+[the theory](../../guide/dsp/systolic/systolic_theory.md#three-bounds-on-a-product) predicts, which stage
 sets the pace, and what it costs.
 
 ## Learning objectives
