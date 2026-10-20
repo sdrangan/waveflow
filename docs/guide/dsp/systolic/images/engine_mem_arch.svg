@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 440" width="1060" height="440" font-family="Helvetica, Arial, sans-serif" font-size="15">
+  <title>SystolicEngineMem: a job descriptor on s_job goes to the sequencer, which sends the feeder one descriptor per tile of C and the writer the tile's C address. The feeder owns the m_axi read port (an hls::burst_maxi): per tile it sends the engine a command and the tile's panels, A then B, read from memory. The writer turns each tile's Resp and C into a memory write command and C for the memory writer, which owns the m_axi write port and sends EngineDone on s_done.</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5b6b"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1060" height="440" fill="#ffffff"/>
+  <!-- data paths -->
+  <g stroke="#4a5b6b" stroke-width="2" fill="none">
+    <line x1="20" y1="150" x2="108" y2="150" marker-end="url(#a)"/>
+    <line x1="240" y1="150" x2="318" y2="150" marker-end="url(#a)"/>
+    <line x1="480" y1="150" x2="568" y2="150" marker-end="url(#a)"/>
+    <line x1="760" y1="150" x2="838" y2="150" marker-end="url(#a)"/>
+    <line x1="910" y1="182" x2="910" y2="258" marker-end="url(#a)"/>
+    <line x1="980" y1="290" x2="1048" y2="290" marker-end="url(#a)"/>
+    <!-- memory ports -->
+    <line x1="400" y1="338" x2="400" y2="184" marker-end="url(#a)"/>
+    <line x1="910" y1="322" x2="910" y2="358" marker-end="url(#a)"/>
+  </g>
+  <g stroke="#8a97a3" stroke-width="1.8" fill="none" stroke-dasharray="6 4">
+    <polyline points="175,118 175,60 910,60 910,116" marker-end="url(#a)"/>
+  </g>
+  <!-- tasks -->
+  <g stroke="#2f5d8a" stroke-width="2" fill="#e8f0f8">
+    <rect x="110" y="120" width="130" height="60" rx="8"/>
+    <rect x="320" y="120" width="160" height="60" rx="8"/>
+    <rect x="840" y="120" width="140" height="60" rx="8"/>
+    <rect x="840" y="260" width="140" height="60" rx="8"/>
+  </g>
+  <rect x="570" y="105" width="190" height="90" rx="10" fill="#dbe8f5" stroke="#2f5d8a" stroke-width="2.5"/>
+  <!-- memory -->
+  <rect x="300" y="340" width="700" height="60" rx="6" fill="#f3efe6" stroke="#8a7a55" stroke-width="2"/>
+  <g fill="#1f3550" text-anchor="middle" font-weight="bold">
+    <text x="175" y="155">EngineSeq</text>
+    <text x="400" y="155">EngineFeeder</text>
+    <text x="665" y="145">SystolicEngine</text>
+    <text x="910" y="155">EngineWriter</text>
+    <text x="910" y="295">MemWStream</text>
+    <text x="650" y="370" fill="#5a4a25">memory: A, B, C, block-major</text>
+  </g>
+  <g fill="#3a4a5a" text-anchor="middle" font-size="13">
+    <text x="665" y="166">(six tasks)</text>
+    <text x="650" y="390" fill="#6a5a35">each panel and each tile of C one burst</text>
+  </g>
+  <g fill="#3a4a5a" font-size="13">
+    <text x="22" y="140">s_job: job</text>
+    <text x="246" y="140">feed: a tile</text>
+    <text x="486" y="120">EngineCmd,</text>
+    <text x="486" y="136">A, B, A, B …</text>
+    <text x="766" y="140">Resp, C,</text>
+    <text x="766" y="170">Status</text>
+    <text x="920" y="225">MemWCmd, C</text>
+    <text x="986" y="280">s_done</text>
+    <text x="410" y="260">m_axi read</text>
+    <text x="410" y="276">(burst_maxi: every</text>
+    <text x="410" y="292">panel requested ahead)</text>
+    <text x="900" y="334" font-size="12" text-anchor="end">m_axi write</text>
+    <text x="420" y="52" fill="#6a7783">tile: C(i, j)'s address, and whether it is the job's last</text>
+  </g>
+</svg>
