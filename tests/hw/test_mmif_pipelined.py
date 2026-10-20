@@ -171,3 +171,28 @@ def test_region_pipelined_slices():
     assert res["wend"] == 6.0
     assert res["tstart"] == res["rend"] - 5.0
     npt.assert_array_equal(res["data"], data)
+
+
+def test_read_gather_is_one_read_of_the_runs():
+    """MMIFMaster.read_gather: several runs as one transaction -- each run's words, in order, in the
+    time one read of their total words takes (one latency, not one per run)."""
+    sim, mem, master = _harness(latency_init=3.0)
+    res = {}
+
+    def body(self):
+        data = np.arange(40, dtype=np.int32)
+        yield from master.write_pipelined(data, I32, addr=0, t_out_start=0.0)
+        t = self.now
+        got = yield from master.read_gather([(0, 4), (80, 6), (20, 2)])
+        res["gather"] = (self.now - t, [np.asarray(g).astype(np.int64).tolist() for g in got])
+        t = self.now
+        for addr, n in ((0, 4), (80, 6), (20, 2)):
+            yield from master.read(n, addr)
+        res["one_by_one"] = self.now - t
+
+    sim.add_obj(_Driver(name="d", sim=sim, body=body))
+    sim.run_sim()
+    span, words = res["gather"]
+    assert words == [[0, 1, 2, 3], list(range(20, 26)), [5, 6]]
+    assert span == 3.0 + 12                 # one latency + the 12 words
+    assert res["one_by_one"] == 3 * 3.0 + 12

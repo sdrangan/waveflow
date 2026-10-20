@@ -117,8 +117,38 @@ fires once a tile and the writer writes once a tile, so they balance.
 
 **Simulating it.** `SystolicEngineMem(pysim="flat")` runs the engine inside it as one process
 ([the flat pysim](systolic_engine.md#the-flat-pysim)); the sequencer, feeder, writer and memory writer
-run as tasks either way. The `big` product's run length is the same within a cycle, and its Python calls
+still run as tasks. The `big` product's run length is the same within a cycle, and its Python calls
 18% fewer.
+
+## The tile-level pysim
+
+`SystolicEngineMem(pysim="tiles")` runs the whole wrapper as one process, every task built but passive.
+The only events left are the ones the outside sees -- the job in, the memory, the done out:
+
+```text
+per job:
+    for each output tile (i, j):
+        one read of the tile's 2P panels       # MMIFMaster.read_gather: one transaction
+        decode A's row of panels (first tile of the row) and B's column (first row)
+        the core's time: each panel when its words are in and the core is free, at its calibrated phase
+    one bit-exact product C = q(A·B)            # waveflow.linalg.matmul.matmul, the whole job
+    each tile's C written at its time, then the job's EngineDone   # deferred: the next job's reads go on
+```
+
+- **One read per tile, not per panel.** `read_gather` takes the tile's runs (`A`'s row of panels is one,
+  each `B` panel another) as one transaction: one latency, the words a cycle each, and with a calibrated
+  memory its span over `{num_trans: 2P, nwords}`. A per-panel constant
+  (`TILE_BURST_CYCLES`) charges the feeder restarting its burst loop, which one transaction does not see.
+- **One product per job.** The engine sums a tile's panels exactly and rounds once, so the whole job's
+  product in one call gives the same words.
+- **What it gives up.** The read port is held per tile, so another master on the same memory
+  interleaves with it a tile at a time, not a burst at a time; and a tile's writes land when the job's
+  reads are done, each charged at its own time -- nothing may read `C` before the job's done, as the
+  [command-response](../../systems/command_response.md) protocol says.
+
+On every workload of the example, at 64- and 128-bit words, it writes the same `C` as the tasks and
+finishes within 1.1% of their time, with 5 to 15 times fewer SimPy events, more the larger the job
+([the speed measurements](../../../evaluation/sim_speed/systolic.md)).
 
 ## Performance
 

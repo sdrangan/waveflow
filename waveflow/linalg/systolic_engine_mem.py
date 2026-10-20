@@ -310,22 +310,32 @@ class SystolicEngineMem(_MemPart):
     a: Format | None = None
     b: Format | None = None
     c: Format | None = None
-    #: The engine's pysim granularity (``SystolicEngine.pysim``): ``"tasks"`` or ``"flat"``.  The
-    #: wrapper's own tasks -- sequencer, feeder, writer, memory writer -- run as tasks either way.
+    #: The pysim's granularity.  ``"tasks"`` (default): every task a process -- the wrapper's
+    #: sequencer, feeder, writer and memory writer, and the engine's six.  ``"flat"``: the engine's
+    #: flat pysim (``SystolicEngine.pysim``) inside the wrapper's tasks.  ``"tiles"``: one process for
+    #: the whole wrapper, every task passive -- per ``C`` tile, **one** coalesced memory read of its
+    #: ``2·P`` panels (``MMIFMaster.read_gather``); the core's time from its calibrated phase as the
+    #: panels arrive; one bit-exact product per job; each tile's write charged at its time.  Its
+    #: timing is the tasks' while the wrapper owns the read port: the read of a tile is one
+    #: transaction, so another master's reads interleave per tile, not per panel.
     pysim: str = "tasks"
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.pysim not in ("tasks", "flat", "tiles"):
+            raise ValueError(f"SystolicEngineMem.pysim must be 'tasks', 'flat' or 'tiles', "
+                             f"got {self.pysim!r}")
         w = int(self.word_bits)
         base = {f: getattr(self, f) for f in ("word_bits", "Mmax", "Kmax", "Nmax", "Pmax",
                                               "lane_bits")}
         base = {**base, "sim": self.sim, "clk": self.clk}
         self.seq = EngineSeq(name=f"{self.name}_seq", **base)
         self.feeder = EngineFeeder(name=f"{self.name}_feeder", **base)
+        tiles = self.pysim == "tiles"
         self.engine = SystolicEngine(name=f"{self.name}_engine", L=self.L, R=self.R, C=self.C,
                                      form=self.form, sob_depth=self.sob_depth, a=self.a, b=self.b,
-                                     c=self.c, pysim=self.pysim, **base)
+                                     c=self.c, pysim="flat" if tiles else self.pysim, **base)
         self.writer = EngineWriter(name=f"{self.name}_writer", **base)
         self.wstream = MemWStream(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, inband=True,
                                   emit_done=True, clk=self.clk)
@@ -352,6 +362,120 @@ class SystolicEngineMem(_MemPart):
         self.m_out = self.wstream.m_mem
         self.s_done = self.wstream.s_done
         self.extra_includes = ["hls_streamofblocks.h"]
+        if tiles:
+            import simpy
+
+            for comp in (self.seq, self.feeder, self.engine, self.writer, self.wstream):
+                comp.make_passive()
+            self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one job's writes at a time
+
+    # -- the tile-level pysim (pysim="tiles") -----------------------------------------------------
+    #: Cycles from a panel's last word read to the core starting on it (the feeder's forward, the
+    #: receiver, the loaders), and from the core's last panel of a tile to the tile's write anchored
+    #: in memory (the store, the writer, the memory writer's fill), and per panel read the feeder's
+    #: burst loop restarting -- fitted to the tasks' pysim.
+    TILE_READY_CYCLES: ClassVar[float] = 2
+    TILE_WRITE_CYCLES: ClassVar[float] = 4
+    TILE_BURST_CYCLES: ClassVar[float] = 2.2
+
+    def run_proc(self):
+        if self.pysim != "tiles":
+            return super().run_proc()
+        return self._tiles_forever()
+
+    def _tiles_forever(self) -> ProcessGen[None]:
+        while True:
+            yield from self._tiles_job()
+
+    def _tiles_job(self) -> ProcessGen[None]:
+        """One job: per tile, a coalesced read of its panels and the core's time; then the job's one
+        bit-exact product, and its tiles' writes and done deferred, so the next job's reads overlap
+        them as the tasks' do."""
+        period = self.clk.period
+        w, lb = int(self.word_bits), int(self.lane_bits)
+        Mm, Km, Nm = int(self.Mmax), int(self.Kmax), int(self.Nmax)
+        d = yield from self.seq.s_job.get_schema(EngineJobDesc)
+        st = job_status(d, Mmax=Mm, Kmax=Km, Nmax=Nm, Pmax=int(self.Pmax))
+        done = EngineDone()
+        done.tx_id, done.status = int(d.tx_id), int(st)
+        done_words = np.asarray(done.serialize(word_bw=w), np.uint64)
+        mem_r, mem_w = self.feeder.m_mem, self.wstream.m_mem
+        wb_bytes = mem_r._word_bytes(w)
+        if st != Status.OK:
+            self.call_after(0, self._tiles_store, mem_w, self.s_done, [], done_words, self._out_lock)
+            return
+        MT, NT, P = int(d.M) // Mm, int(d.N) // Nm, int(d.K) // Km
+        K = P * Km
+        ah = int(d.op) == MatmulOp.MUL_AH
+        wa, wb, wc = self.words(Mm * Km), self.words(Km * Nm), self.words(Mm * Nm)
+        ash = (K, int(d.M)) if ah else (int(d.M), K)
+        ar, ai = np.zeros(ash, np.int64), np.zeros(ash, np.int64)
+        br, bi = np.zeros((K, int(d.N)), np.int64), np.zeros((K, int(d.N)), np.int64)
+        # where each panel's last word falls in the tile's read: A(0) B(0) A(1) B(1) ...
+        ends = np.cumsum([(wa, wb)[q % 2] for q in range(2 * P)])[1::2]
+        core = self.engine.core
+        t, anchors, started = self._core_free, [], 0.0
+        for i in range(MT):
+            for j in range(NT):
+                a_addr = int(d.a_base) + i * P * wa
+                runs = [(a_addr * wb_bytes, P * wa)] + [
+                    ((int(d.b_base) + (p * NT + j) * wb) * wb_bytes, wb) for p in range(P)]
+                # the engine buffers about a tile ahead: a tile's read starts once the core has
+                # started the tile before it
+                if started > self.now:
+                    yield self.timeout(started - self.now)
+                t_rd = self.now
+                got = yield from mem_r.read_gather(runs)
+                # the feeder restarts its burst loop for each panel: the read port idles between them
+                yield self.timeout(2 * P * self.TILE_BURST_CYCLES * period)
+                if j == 0:                         # A's row of panels, the first time it is read
+                    re, im = from_words(got[0], P * Mm * Km, self.a, lb, w)
+                    if ah:                         # stored k x m panels, one under another
+                        ar[:, i * Mm:(i + 1) * Mm] = re.reshape(K, Mm)
+                        ai[:, i * Mm:(i + 1) * Mm] = im.reshape(K, Mm)
+                    else:
+                        ar[i * Mm:(i + 1) * Mm] = re.reshape(P, Mm, Km).transpose(1, 0, 2).reshape(Mm, K)
+                        ai[i * Mm:(i + 1) * Mm] = im.reshape(P, Mm, Km).transpose(1, 0, 2).reshape(Mm, K)
+                if i == 0:                         # B's column of panels, the first time
+                    re, im = from_words(np.concatenate(got[1:]), K * Nm, self.b, lb, w)
+                    br[:, j * Nm:(j + 1) * Nm] = re.reshape(K, Nm)
+                    bi[:, j * Nm:(j + 1) * Nm] = im.reshape(K, Nm)
+                # the core: each panel when its words are in and the core is free, at its phase
+                rate = (self.now - t_rd) / int(ends[-1])
+                for p in range(P):
+                    ready = t_rd + (int(ends[p]) * rate) + self.TILE_READY_CYCLES * period
+                    last = p == P - 1
+                    steps = core.steps(Mm, Km, Nm, last, last)
+                    t0 = max(t, ready)
+                    started = t0 if p == 0 else started
+                    t = t0 + core.panel.predict(steps=steps)["panel"] * period
+                anchors.append(t + self.TILE_WRITE_CYCLES * period)
+        self._core_free = t
+        cr, ci = mm.matmul(ar, ai, self.a, br, bi, self.b, self.c, adjoint=ah, form=int(self.form))
+        blocks = lambda x: x.reshape(MT, Mm, NT, Nm).transpose(0, 2, 1, 3).reshape(-1)  # noqa: E731
+        cw = np.asarray(to_words(blocks(cr), blocks(ci), self.c, lb, w), np.uint64)
+        # the tiles already written by now go as one write; each later one at its own time
+        now, c0 = self.now, int(d.c_base)
+        k = 0
+        while k < len(anchors) and anchors[k] + wc * period <= now:
+            k += 1
+        writes = []
+        if k:
+            writes.append((c0 * wb_bytes, cw[:k * wc], now - (k * wc + 1) * period))
+        writes += [((c0 + q * wc) * wb_bytes, cw[q * wc:(q + 1) * wc], anchors[q])
+                   for q in range(k, len(anchors))]
+        self.call_after(0, self._tiles_store, mem_w, self.s_done, writes, done_words, self._out_lock)
+
+    @staticmethod
+    def _tiles_store(mem_w, s_done, writes, done_words, lock) -> ProcessGen[None]:
+        """A job's deferred writes -- each anchored at its time -- then its done: a pure function
+        of its arguments, as ``call_after`` requires; one job's after another."""
+        with lock.request() as req:
+            yield req
+            for addr, words, anchor in writes:
+                yield from mem_w.write(words, addr, tstart=anchor)
+            yield from s_done.write(done_words)
 
     def linalg_parts(self):
         from waveflow.linalg.build import LinalgParts

@@ -2,7 +2,7 @@
 title: "Simulation speed: the systolic engine"
 parent: Simulation speed
 nav_order: 3
-summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). Bit-exact complex matrix products from 32×32×32 to 256×32×256 run three ways on the same operands: the untimed model (0.08 to 6.5 ms), Waveflow's flat pysim of the memory-backed engine (57 ms to 1.5 s, cycle counts 5-6% under the RTL's) and the synthesized RTL under XSI (1.5 to 75 s, after 224 s of csynth and 140 s of XSI build). The RTL takes 27 to 50 times as long as the pysim. Then how the pysim got there: vectorized lane groups, the flat pysim (one process), and a direct path for converting matrices to words."
+summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). Bit-exact complex matrix products from 32×32×32 to 256×32×256 run three ways on the same operands: the untimed model (0.08 to 7.9 ms), Waveflow's tile-level pysim of the memory-backed engine (60 to 236 ms, cycle counts 5-6% under the RTL's) and the synthesized RTL under XSI (1.5 to 75 s, after 224 s of csynth and 140 s of XSI build). The RTL takes 20 to over 300 times as long as the pysim, the gap growing with size. Then how the pysim got there: vectorized lane groups, the engine's flat pysim, one coalesced memory read per tile, and a direct path for converting matrices to words."
 ---
 
 # Simulation speed: the systolic engine
@@ -22,15 +22,17 @@ chip (`Pmax·Kmax`). The same random operands, and the same bit-exact model, for
 
 ```text
 untimed:  operands --> waveflow.linalg.matmul.matmul (exact sums, one rounding)
-pysim:    job stream + memory model --> SystolicEngineMem (engine pysim="flat") --> memory  (SimPy)
+pysim:    job stream + memory model --> SystolicEngineMem (pysim="tiles") --> memory        (SimPy)
 RTL:      AxisMaster + AXI-MM memory BFMs --> synthesized systolic_engine_mem --> memory     (XSI)
 ```
 
 - **Untimed** is the model alone: integer numpy over whole matrices.
-- **The pysim** is the wrapper's tasks (sequencer, feeder, writer, memory writer) around the engine's
-  [flat pysim](../../guide/dsp/systolic/systolic_engine_mem.md), timed against the core's
-  [calibrated phase](../../examples/systolic/timing.md#the-cores-timed-phase-calibrated). Its time includes
-  building the harness. Every `C` word it writes is checked against the model.
+- **The pysim** is the wrapper's **tile-level** pysim, `SystolicEngineMem(pysim="tiles")`, with every
+  optimization below: one process, one coalesced memory read per `C` tile, the core timed by its
+  [calibrated phase](../../examples/systolic/timing.md#the-cores-timed-phase-calibrated), one bit-exact
+  product per job. Its time includes building the harness. Every `C` word it writes is checked against
+  the model. The table also shows the step before it, the wrapper's tasks around the engine's flat pysim
+  (`pysim="flat"`).
 - **The RTL** is the csynth'd wrapper simulated by XSI through the system flow, untraced; every `C` word
   checked. csynth and the XSI build are reported apart from the simulation.
 
@@ -42,18 +44,20 @@ python -m examples.systolic.systolic_runtime --sizes --rtl --root C:/wfsc/rs   #
 
 One product per size; every run exact, in pysim and in RTL:
 
-| product | RTL cycles | untimed | pysim (flat) | RTL under XSI | RTL ÷ pysim |
-|---|---|---|---|---|---|
-| 32×32×32 | 1,609 | 0.08 ms | **57 ms** (346 events) | **1.5 s** | **27×** |
-| 64×32×64 | 5,881 | 1.1 ms | **94 ms** (1,210 events) | **2.6 s** | **27×** |
-| 128×32×128 | 22,969 | 3.9 ms | **634 ms** (4,666 events) | **19 s** | **30×** |
-| 256×32×256 | 91,321 | 6.5 ms | **1.5 s** (18,490 events) | **75 s** | **50×** |
+| product | RTL cycles | untimed | pysim (`tiles`) | RTL under XSI | RTL ÷ pysim | before: engine-flat pysim |
+|---|---|---|---|---|---|---|
+| 32×32×32 | 1,609 | 0.08 ms | **77 ms** (102 events) | **1.5 s** | **20×** | 110 ms (346 events) |
+| 64×32×64 | 5,881 | 0.27 ms | **60 ms** (210 events) | **2.6 s** | **43×** | 149 ms (1,210 events) |
+| 128×32×128 | 22,969 | 0.89 ms | **98 ms** (642 events) | **19 s** | **196×** | 305 ms (4,666 events) |
+| 256×32×256 | 91,321 | 7.9 ms | **236 ms** (2,370 events) | **75 s** | **318×** | 1.8 s (18,490 events) |
 
 One-time costs, per design point: csynth 224 s; the XSI build 140 s the first time (compile 5.6,
 elaborate 41, testbench 93), then 6 to 9 s for each new workload. The pysim needs neither.
 
-Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1); pysim and untimed are the best of seven runs, the
-RTL one run a size.
+Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1); pysim and untimed are the best of eleven runs, the
+RTL one run a size. The laptop's load moved the pysim by up to 4× between runs: at 256×32×256 the
+`tiles` pysim took 56, 92 and 236 ms on three sweeps (the last is recorded), so the RTL's ratio there is
+somewhere between 300 and 1,300.
 
 **How the RTL column is counted.** The harness has no host to end the RTL run, so XSI simulates a fixed
 number of cycles, set 20% (plus 2,000 cycles) past the pysim's length. The table charges the RTL only for
@@ -64,19 +68,19 @@ charged at the busy rate. The raw times are in `runtime.json`.
 
 ## Insights
 
-- **The RTL takes 27 to 50 times as long as the pysim, before its 6 minutes of build.** At the largest
-  size that is 75 s against 1.5 s. A change to the design costs a new csynth and XSI build on the RTL
-  side, and nothing on the pysim side.
-- **The pysim's timing is close.** Its cycle counts are 5 to 6% under the RTL's at every size (1,514
-  against 1,609 up to 86,438 against 91,321), so a design question about throughput can be answered at
+- **The RTL takes 20 to over 300 times as long as the pysim, and the gap grows with size,** before the
+  RTL's 6 minutes of build. At the largest size that is 75 s against a quarter of a second. A change to
+  the design costs a new csynth and XSI build on the RTL side, and nothing on the pysim side.
+- **The pysim's timing is close.** Its cycle counts are 5 to 6% under the RTL's at every size (1,504
+  against 1,609 up to 86,580 against 91,321), so a design question about throughput can be answered at
   pysim speed and confirmed once in RTL.
-- **Both grow with the work, about linearly in the RTL's cycles.** The pysim runs 200 to 215 SimPy
-  events per thousand RTL cycles at every size; XSI simulates about 1,200 cycles a second on this machine
-  at the large sizes.
-- **The untimed model is about 80 to 700 times faster than the pysim** (the spread is mostly the
-  laptop's noise on sub-millisecond runs). It does only the arithmetic, which
-  integer numpy does over whole matrices at once; the pysim also models every transfer, in time. Use the
-  model for numerics and the pysim for timing.
+- **The pysim is now mostly fixed cost.** Its run takes 30 to 60 ms at every size up to 128×32×128 --
+  loading the memory image and the calibrated phase models, dumping the memory afterwards -- and about
+  9 SimPy events per tile. XSI's time grows with the cycles (about 1,200 a second here), so the ratio
+  grows with the product.
+- **The untimed model is still 30 to 1,000 times faster** (the spread is the pysim's fixed cost and the
+  laptop's noise on sub-millisecond runs). It does only the arithmetic; the pysim also models the
+  transfers, in time. Use the model for numerics and the pysim for timing.
 
 ## The engine alone, product by product
 
@@ -116,6 +120,13 @@ python -m examples.systolic.systolic_runtime --rtl --root C:/wfsc/rt   # -> runt
   2.2 times fewer Python calls, the same words and the tasks' timing within 2%. Back to back with the
   six-task pysim on the same machine it ran 1.8 to 1.9 times faster. Trimming the message handling itself
   bought 2.3% fewer calls -- earlier work had taken the obvious wins there.
+- **The tile-level pysim coalesces memory.** [`SystolicEngineMem(pysim="tiles")`](../../guide/dsp/systolic/systolic_engine_mem.md#the-tile-level-pysim)
+  runs the whole wrapper as one process. Per `C` tile it makes **one** memory read of the tile's eight
+  panels (`MMIFMaster.read_gather`: one transaction, its time that of the panels' words plus the
+  feeder's restart per panel) instead of eight, and per job it computes **one** bit-exact product
+  instead of a product per panel. At 256×32×256 that is 2,370 SimPy events instead of 18,490, and 1.8 s
+  became 56 to 236 ms; at 128×32×128, 642 events against the all-tasks model's 9,640. Its cycle counts are within 1.1% of the
+  tasks' pysim on every workload, at 64- and 128-bit words.
 - **A direct path converts matrices to words**, below.
 
 ### Converting matrices to words

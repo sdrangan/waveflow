@@ -77,6 +77,31 @@ def test_flat_engine_inside_the_wrapper_writes_c_exactly(word_bits):
         assert abs(t_flat - t_tasks) <= 0.03 * t_tasks, (kind, t_flat, t_tasks)
 
 
+@pytest.mark.parametrize("word_bits", [64, 128])
+@pytest.mark.parametrize("kind", ["test", "big", "square_64"])
+def test_tiles_pysim_is_exact_and_times_like_the_tasks(word_bits, kind):
+    """SystolicEngineMem(pysim='tiles') -- one process, one coalesced memory read a tile, one
+    product a job -- writes C exactly, answers every job, and finishes within 2% of the tasks' pysim,
+    with far fewer events."""
+    cfg = {"word_bits": word_bits}
+    t_tasks, _, s_tasks = _pysim_run(lambda: EMH.engine_mem(**cfg), kind)
+    t_tiles, bad, s = _pysim_run(lambda: EMH.engine_mem(pysim="tiles", **cfg), kind)
+    assert not bad
+    assert abs(t_tiles - t_tasks) <= 0.02 * t_tasks, (t_tiles, t_tasks)
+    assert next(s.sim.env._eid) * 4 < next(s_tasks.sim.env._eid)
+
+
+def test_tiles_pysim_writes_c_exactly(tmp_path):
+    root = tmp_path
+    from waveflow.hw.harness import harness
+
+    s = harness(EMH.engine_mem(word_bits=128, pysim="tiles"), workload="test", n_cycles=10**6)
+    s.write_scenario(root)
+    s.run()
+    words = np.asarray(read_burst_bundle(root / "vectors" / "mem")[0], np.uint64)
+    assert EMH.check_c(words, "test", word_bits=128) == [0, 0, 0]
+
+
 def test_square_workload_is_exact():
     """The n x 32 x n workload docs/evaluation/sim_speed/systolic.md sweeps: the flat pysim writes C
     exactly, and a size the tiles do not divide is refused."""
@@ -98,6 +123,8 @@ def test_square_workload_is_exact():
 def test_flat_pysim_refuses_an_unknown_granularity():
     with pytest.raises(ValueError, match="pysim"):
         EH.engine(pysim="coarse")
+    with pytest.raises(ValueError, match="pysim"):
+        EMH.engine_mem(pysim="coarse")
 
 
 REPO = __import__("pathlib").Path(__file__).resolve().parents[2]

@@ -139,18 +139,24 @@ def time_sizes(sizes, reps: int, root: Path | None) -> dict:
             best = min(best or 1e9, time.perf_counter() - t)
         row = {"M": n, "K": int(_d.K), "N": n, "untimed_s": best}
 
-        best, cyc, events, exact = None, 0.0, 0, True
-        for _ in range(reps):
-            with tempfile.TemporaryDirectory() as tmp:
-                t = time.perf_counter()
-                s = harness(EMH.engine_mem(pysim="flat", **cfg), workload=kind, n_cycles=10**8)
-                s.write_scenario(Path(tmp))
-                s.run()
-                best = min(best or 1e9, time.perf_counter() - t)
-                cyc, events = s.sim.env.now / s.clock().period, next(s.sim.env._eid)
-                words = np.asarray(read_burst_bundle(Path(tmp) / "vectors" / "mem")[0], np.uint64)
-                exact = exact and EMH.check_c(words, kind, **cfg) == [0]
-        row["pysim_flat"] = {"s": best, "cycles": cyc, "events": events, "exact": exact}
+        for mode in ("flat", "tiles"):
+            best, run_best, cyc, events, exact = None, None, 0.0, 0, True
+            for _ in range(reps):
+                with tempfile.TemporaryDirectory() as tmp:
+                    t = time.perf_counter()
+                    s = harness(EMH.engine_mem(pysim=mode, **cfg), workload=kind, n_cycles=10**8)
+                    s.write_scenario(Path(tmp))
+                    t_run = time.perf_counter()
+                    s.run()
+                    end = time.perf_counter()
+                    best = min(best or 1e9, end - t)
+                    run_best = min(run_best or 1e9, end - t_run)
+                    cyc, events = s.sim.env.now / s.clock().period, next(s.sim.env._eid)
+                    words = np.asarray(read_burst_bundle(Path(tmp) / "vectors" / "mem")[0], np.uint64)
+                    exact = exact and EMH.check_c(words, kind, **cfg) == [0]
+            row[f"pysim_{mode}"] = {"s": best, "run_s": run_best, "cycles": cyc, "events": events,
+                                    "exact": exact}
+        cyc = row["pysim_flat"]["cycles"]
 
         if root is not None:
             bound = rtl_bound(cyc)
@@ -165,10 +171,13 @@ def time_sizes(sizes, reps: int, root: Path | None) -> dict:
                           "exact": r["exact"] and EMH.check_c(words, kind, **cfg) == [0]}
         rows[str(n)] = row
         rt = row.get("rtl", {})
+        pf, pt = row["pysim_flat"], row["pysim_tiles"]
         print(f"{n:4d}x{row['K']}x{n:<4d} untimed {1e3 * row['untimed_s']:8.2f} ms  "
-              f"pysim {1e3 * row['pysim_flat']['s']:8.1f} ms ({cyc:.0f} cyc, {events} ev)  "
+              f"flat {1e3 * pf['s']:8.1f} ms ({pf['cycles']:.0f} cyc, {pf['events']} ev)  "
+              f"tiles {1e3 * pt['s']:8.1f} ms (run {1e3 * pt['run_s']:.1f}; {pt['cycles']:.0f} cyc, "
+              f"{pt['events']} ev)  "
               f"rtl {rt.get('simulate_s', float('nan')):7.2f} s ({rt.get('done_cycle')} cyc)  "
-              f"exact {row['pysim_flat']['exact']} {rt.get('exact')}", flush=True)
+              f"exact {pf['exact']} {pt['exact']} {rt.get('exact')}", flush=True)
     return {"workload": "n x 32 x n, SystolicEngineMem centre, 128-bit words", "sizes": rows}
 
 
