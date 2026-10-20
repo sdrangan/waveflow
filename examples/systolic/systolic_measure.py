@@ -98,14 +98,38 @@ def measure(name: str, root: Path) -> dict:
     return out
 
 
+def pysim_only(name: str, root: Path) -> float:
+    """pysim alone (no csynth, no RTL): the run's length in cycles."""
+    mod, w, kind, extra = RUNS[name]
+    H = EH if mod == "eng" else EMH
+    run_root = root / f"py_{name}"
+    run_root.mkdir(parents=True, exist_ok=True)
+    res = H.build_dag({"word_bits": w, **extra}, workload=kind).run(EH.build_config(run_root),
+                                                                   through="golden")
+    bad = {k: r.message[-300:] for k, r in res.items() if not r.success}
+    if bad:
+        raise RuntimeError(f"{name}: {bad}")
+    work = run_root / H.WORK_DIR / H.TOP
+    return json.loads((work / "pysim.json").read_text(encoding="utf-8"))["cycles"]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, help="a short build root (Windows path length)")
     ap.add_argument("--runs", nargs="+", default=list(RUNS), choices=list(RUNS))
+    ap.add_argument("--pysim-only", action="store_true",
+                    help="re-run pysim alone and update each recorded run's pysim_cycles")
     a = ap.parse_args()
     root = Path(a.root).resolve()
     data = json.loads(MEASURED.read_text(encoding="utf-8")) if MEASURED.exists() else {
         "target": {"part": "xczu48dr-ffvg1517-2-e", "period_ns": 4.0}, "runs": {}}
+    if a.pysim_only:
+        for name in a.runs:
+            if name in data["runs"]:
+                data["runs"][name]["pysim_cycles"] = pysim_only(name, root)
+                print(name, data["runs"][name]["pysim_cycles"], flush=True)
+        MEASURED.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+        return
     for name in a.runs:
         r = measure(name, root)
         r["date"] = date.today().isoformat()

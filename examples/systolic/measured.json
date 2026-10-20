@@ -28,7 +28,7 @@
     83,
     111
    ],
-   "pysim_cycles": 1277.0000000000002,
+   "pysim_cycles": 791.0000000000002,
    "resources": {
     "bram": 36,
     "dsp": 154,
@@ -60,7 +60,7 @@
    "interval": [
     94
    ],
-   "pysim_cycles": 1235.0000000000002,
+   "pysim_cycles": 741.0000000000001,
    "resources": {
     "bram": 36,
     "dsp": 154,
@@ -88,7 +88,7 @@
    "interval": [
     94
    ],
-   "pysim_cycles": 785.0000000000001,
+   "pysim_cycles": 478.99999999999994,
    "resources": {
     "bram": 36,
     "dsp": 154,
@@ -126,7 +126,7 @@
     142,
     204
    ],
-   "pysim_cycles": 951.0000000000002,
+   "pysim_cycles": 661.0000000000001,
    "resources": {
     "bram": 36,
     "dsp": 154,
@@ -160,7 +160,7 @@
     163,
     229
    ],
-   "pysim_cycles": 1778.0000000000005,
+   "pysim_cycles": 1497.0000000000005,
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -192,7 +192,7 @@
    "interval": [
     141
    ],
-   "pysim_cycles": 1318.0000000000002,
+   "pysim_cycles": 1145.0,
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -220,7 +220,7 @@
    "interval": [
     171
    ],
-   "pysim_cycles": 1330.0,
+   "pysim_cycles": 860.9999999999999,
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -258,7 +258,7 @@
     190,
     233
    ],
-   "pysim_cycles": 1317.9999999999998,
+   "pysim_cycles": 1016.0000000000005,
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -290,7 +290,7 @@
    "interval": [
     171
    ],
-   "pysim_cycles": 1498.0000000000002,
+   "pysim_cycles": 919.9999999999998,
    "resources": {
     "bram": 23,
     "dsp": 91,
@@ -314,7 +314,7 @@
    "done": [
     3033
    ],
-   "pysim_cycles": 5699.999999999997,
+   "pysim_cycles": 2863.000000000003,
    "resources": {
     "bram": 44,
     "dsp": 157,
@@ -342,7 +342,7 @@
     1285,
     1387
    ],
-   "pysim_cycles": 2596.000000000001,
+   "pysim_cycles": 1265.0,
    "resources": {
     "bram": 44,
     "dsp": 157,
@@ -366,7 +366,7 @@
    "done": [
     5813
    ],
-   "pysim_cycles": 11239.0,
+   "pysim_cycles": 5495.999999999995,
    "resources": {
     "bram": 36,
     "dsp": 157,
@@ -394,7 +394,7 @@
     2365,
     2551
    ],
-   "pysim_cycles": 5030.999999999998,
+   "pysim_cycles": 2376.0000000000027,
    "resources": {
     "bram": 36,
     "dsp": 157,

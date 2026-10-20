@@ -2,7 +2,7 @@
 title: Systolic timing results
 parent: A systolic matrix multiply, measured
 nav_order: 2
-summary: "What the RTL measured (Vitis 2025.1, centre): the engine at 171 cycles per 8×8×32 product with 64-bit words (the input bound) and 141 with short panels (the output bound); with 128-bit words 94 whatever the panel -- the core's own floor, 64 tile steps and about 30 cycles a command -- and 81 an output when a command carries four, at the input's bound. How the binding stage was found from block hold times and input gaps; the design's steps from 390 cycles to 94; the wrapper at 5,813 and 3,033 cycles on 32×32×64 once its feeder requests a tile's panels ahead; pysim on seeded phases against the RTL."
+summary: "What the RTL measured (Vitis 2025.1, centre): the engine at 171 cycles per 8×8×32 product with 64-bit words (the input bound) and 141 with short panels (the output bound); with 128-bit words 94 whatever the panel -- the core's own floor, 64 tile steps and about 30 cycles a command -- and 81 an output when a command carries four, at the input's bound. How the binding stage was found from block hold times and input gaps; the design's steps from 390 cycles to 94; the wrapper at 5,813 and 3,033 cycles on 32×32×64 once its feeder requests a tile's panels ahead; the core's panel phase calibrated at RTL, 5 + 1.00·steps cycles, exact on held-out panels; pysim within 5 to 12% of the RTL."
 ---
 
 # Timing
@@ -98,10 +98,27 @@ port traced:
 | a burst loop per panel, in the engine's order | 6,470 | 82%: ~12 idle cycles at each switch between loops |
 | **every panel requested ahead (`hls::burst_maxi`), one read loop** | **5,813** | 88% of the input floor |
 
+## The core's timed phase, calibrated
+
+The core's `panel` phase -- from its `B` block's first access to its release -- is fitted at RTL by the
+harness's calibration (`engine_harness --calibrate`): the `calib` workload, 18 commands with panels of
+8 to 76 steps (every tile count, one and two panels, `Aᴴ`, `kp = 1`), traced, each panel's span read off
+the waveform by name. At 64- and 128-bit words alike:
+
+```
+panel = 5 + 1.00 · steps       (cycles; steps = T·P, the gap, the run-out)
+```
+
+exact on all 24 fitted panels and on the 4 held out (36 and 60 steps): the step count the schedule
+predicts is the RTL's to the cycle, plus 5. The records are filed by the core's identity in
+`waveflow/linalg/calib/modules/engine_core-*`, one per word width, and pysim loads them.
+
 ## pysim against the RTL
 
-pysim runs the same scenarios on the core's **seeded** `panel` phase (its tile steps plus a guessed
-intercept), not a calibrated one. Its run ends 1.5× the RTL's last output on the engine's `steady` runs
-and 1.9× on the wrapper's: the receiver's, loaders' and feeder's own times are not yet phases at all,
-and the feeder is modelled reading a burst at a time. The calibration fits the core's phase at RTL
-(`plans/systolic_characterization.md`); this page reports measurements until then.
+With the calibrated phase -- and with the receiver, the feeder and the writer forwarding a word a cycle
+as the RTL does -- pysim's runs end 5% to 12% before the RTL's last output (8% on the 128-bit `steady`
+run, 5% on the 128-bit wrapper's `big` product; 23% on the mixed `test` workload). What pysim lacks are
+the fixed costs per command outside the panels -- the receiver's command handling and the core's restart
+between commands -- which are not yet phases of their own. Before, it ran 1.5× (the engine) to 1.9×
+(the wrapper) long: its tasks stored and forwarded each burst, and the core sent `C` after its last panel
+instead of draining it as the tiles ran.

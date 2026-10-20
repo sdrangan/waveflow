@@ -49,6 +49,15 @@ def test_wrapper_top_reads_through_burst_maxi():
     assert "    ap_uint<128>* m_out," in top
 
 
+def test_core_phase_is_calibrated_at_both_word_widths():
+    """The core's panel phase was fitted at RTL (examples/systolic, engine_harness --calibrate) and
+    filed by identity: 5 + 1.00 steps cycles, so a 76-step panel (8 tiles at P = 8 and the run-out)
+    takes 81 -- at 64- and 128-bit words (one record each)."""
+    for w in (64, 128):
+        core = engine(word_bits=w).core
+        assert round(core.panel.predict(steps=76)["panel"]) == 81, w
+
+
 def test_command_rules():
     lim = dict(Mmax=8, Kmax=8, Nmax=32, Pmax=4, R=4, C=8)
     assert command_status(command(1, MatmulOp.MUL, 8, 5, 16, npanels=3), **lim) == Status.OK

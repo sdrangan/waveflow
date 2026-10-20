@@ -351,9 +351,13 @@ class EngineRx(_EnginePart):
         for ep in (self.a_job, self.b_job, self.core_job):
             yield from ep.write(words)
         yield from self.reply.write(self._job_words(r))
+        # Forwarded a word a cycle, as the RTL's loop does: each burst goes out one cycle behind its
+        # first word in, not after its last (store-and-forward would cost every burst twice).
+        period = self.clk.period
         for name, _ob, _p in operand_order(c):
-            burst = yield from self.s_in.get()
-            yield from (self.pay_a if name == "A" else self.pay_b).write(np.asarray(burst))
+            burst = np.asarray((yield from self.s_in.get()))
+            t0 = self.env.now - (len(burst) - 1) * period
+            yield from (self.pay_a if name == "A" else self.pay_b).write_pipelined(burst, t0 + period)
 
 
 @dataclass
@@ -483,7 +487,11 @@ class EngineCore(_EnginePart):
                 yield from self.b_blk.release_read()
                 yield from self.a_blk.release_read()
             cr, ci = fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c)
-            yield from self.c_out.write(self.groups_of(cr, ci))
+            # The groups drain while the tiles run (each tile while the next computes; the last in
+            # the run-out), so they are out when the panel ends -- not one burst after it.
+            groups = self.groups_of(cr, ci)
+            yield from self.c_out.write_pipelined(
+                groups, self.env.now - len(groups) * self.clk.period)
 
     def groups_of(self, cr, ci) -> np.ndarray:
         """``C``'s stored integers as ``c_out`` words: its lane groups in drain order."""

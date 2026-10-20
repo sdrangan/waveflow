@@ -24,10 +24,12 @@ What this adds to the examples before it, in the order the pages teach it:
    RTL from the same scenario files, every output checked against the model.
 2. Read a **steady interval** and a **completion cycle** from the sinks' arrival cycles, with no
    waveform.
-3. **Predict** a design's bound -- compute, input or output -- and compare it with the RTL.
-4. **Find the stage that binds** from a trace: how long a block is held, and the gaps in an input's
+3. **Calibrate** a task's timed phase inside a composite kernel at RTL, and score it on held-out
+   shapes.
+4. **Predict** a design's bound -- compute, input or output -- and compare it with the RTL.
+5. **Find the stage that binds** from a trace: how long a block is held, and the gaps in an input's
    acceptances.
-5. Read a design's **resources** from csynth's XML and compare configurations.
+6. Read a design's **resources** from csynth's XML and compare configurations.
 
 ## The design
 
@@ -58,6 +60,8 @@ python -m examples.systolic.engine_mem_harness --root C:/wfsc/em --workload big 
 pytest tests/examples/test_systolic.py                  # pysim against the model, both word widths
 pytest tests/examples/test_systolic.py -m xsi           # the RTL gates (needs Vitis and Vivado)
 python -m examples.systolic.systolic_measure --root C:/wfsc/sm    # every run -> measured.json
+python -m examples.systolic.engine_harness --root C:/wfsc/cal --word-bits 128 --calibrate --through calib_phases
+python -m examples.systolic.systolic_sweep --root C:/wfsc/sw      # csynth 15 configurations -> resources.json
 ```
 
 `--through golden` stops after pysim; the default, `compare`, adds csynth and XSI. Build from a short
@@ -70,6 +74,6 @@ root on Windows: past 260 characters a csynth path fails silently.
   and its read port, pysim against the RTL.
 - [Resources](resource.md) -- what each costs at 64- and 128-bit words.
 
-The timing and resource **models** -- the engine's timed phases fitted at RTL, and a resource model
-over its parameters -- come with the calibration (`plans/systolic_characterization.md`); until then
-pysim runs on seeded phases, and these pages report the measurements.
+The core's timed phase is **calibrated** at RTL ([Timing](timing.md#the-cores-timed-phase-calibrated)),
+and pysim runs within 5 to 12% of the RTL; a resource model over the engine's parameters is the next
+step, fitted on the sweep's builds ([Resources](resource.md#across-configurations)).

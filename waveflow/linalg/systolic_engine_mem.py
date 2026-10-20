@@ -241,10 +241,13 @@ class EngineFeeder(_MemPart):
         cmd = command(int(f.tx_id), int(f.op), Mm, Km, Nm, npanels=P)
         yield from self.m_out.write(np.asarray(cmd.serialize(word_bw=w), np.uint64))
         region = self.m_mem.region(0, _word_type(w), word_bw=w)
+        # Each panel's words go out as they arrive from memory (one cycle behind), as the RTL's one
+        # read loop streams them.
+        period = self.clk.period
         for p in range(P):
             for base, n in ((int(f.a_addr) + p * wa, wa), (int(f.b_addr) + p * int(f.b_step), wb)):
-                words, _t0 = yield from region.read_slice_pipelined(base, base + n, num_trans=1)
-                yield from self.m_out.write(np.asarray(words, np.uint64))
+                words, t0 = yield from region.read_slice_pipelined(base, base + n, num_trans=1)
+                yield from self.m_out.write_pipelined(np.asarray(words, np.uint64), t0 + period)
 
 
 @dataclass
@@ -280,15 +283,18 @@ class EngineWriter(_MemPart):
             yield from send(c)
             yield from send(done)
             return
+        # As the RTL: the Resp, then the write command (a tile's length is fixed) and the job's done,
+        # then C forwarded a word a cycle as it arrives (its FWD loop), then the Status.
         yield from self.c_in.get_schema(EngineResp)
-        cw = yield from self.c_in.get()
-        yield from self.st_in.get_schema(EngineStatus)
         c = MemWCmd()
-        c.addr, c.len, c.fwd_bursts = int(t.c_addr), len(cw), int(t.last)
+        c.addr, c.len, c.fwd_bursts = int(t.c_addr), self.words(int(self.Mmax) * int(self.Nmax)), int(t.last)
         yield from send(c)
         if int(t.last):
             yield from send(done)
-        yield from self.w_out.write(np.asarray(cw))
+        cw = np.asarray((yield from self.c_in.get()))
+        t0 = self.env.now - (len(cw) - 1) * self.clk.period    # C's first word in
+        yield from self.w_out.write_pipelined(cw, t0 + self.clk.period)
+        yield from self.st_in.get_schema(EngineStatus)
 
 
 @dataclass

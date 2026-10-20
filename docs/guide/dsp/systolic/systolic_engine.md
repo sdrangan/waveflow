@@ -185,9 +185,11 @@ The [harness, workloads and gates](../../../examples/systolic/test.md) and
 
 ## Limits
 
-- **Not calibrated.** The core's pysim time is one phase per panel (`b_blk.first → b_blk.last`, its tile
-  steps plus a seeded intercept); the calibration comes once the design settles
-  (`plans/systolic_characterization.md`).
+- **One timed phase.** The core's pysim time is one phase per panel (`b_blk.first → b_blk.last`),
+  calibrated at RTL as `5 + 1.00·steps` cycles, exact on held-out panels
+  ([the example](../../../examples/systolic/timing.md#the-cores-timed-phase-calibrated)); the receiver's
+  command handling and the core's restart between commands are not phases yet, so pysim runs 5 to 12%
+  fast.
 - **Fixed costs per command.** The core's ~30 cycles a command beyond its tile steps (the empty tile
   that runs the last one out, the restart) and the receiver's ~9 are paid once a command: batch outputs
   into a command (`nb`) to spread them. Carrying the array's state from one command to the next would
