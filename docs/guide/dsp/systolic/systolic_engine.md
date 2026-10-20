@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 2
 audience: python
 api: [SystolicEngine]
-summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- its performance (Vitis 2025.1, centre: 171 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, 81 an output when a command carries four; measured in examples/systolic), and its limits."
+summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- a flat pysim (one process, the tasks passive, the same words and timing within 2%) -- its performance (Vitis 2025.1, centre: 171 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, 81 an output when a command carries four; measured in examples/systolic), and its limits."
 snippets: run
 ---
 
@@ -192,6 +192,25 @@ command, which runs its last tile out. The core is one copy of the array (137 DS
 **The collector** takes `C`'s lane groups in the array's drain order -- row tiles, column tiles,
 diagonals (`drain_order`) -- and places each in a `C` block. **The store** writes, per output, the
 `Resp` and then `C` from that block, a word a cycle, and after the outputs the command's `Status`.
+
+## The flat pysim
+
+`SystolicEngine(pysim="flat")` keeps the six tasks -- their ports, their bodies, their place in the
+generated top, so the RTL is the same -- but makes them passive, and runs one process for the engine:
+read a command and each output's operands at `s_in`, compute the output with the bit-exact model
+(`matmul_exact` per panel, the sums added exactly, one rounding), write it at `s_out`. The internal
+channels, and the packing and unpacking at each, are gone.
+
+The timing is the tasks' when nothing inside stalls. Each panel starts when its operands have arrived
+(a cycle behind their last word) and the previous panel is done, and takes the core's calibrated phase;
+an output leaves when its last panel is done, one after another; the command's `Status` after its last
+output. On every workload, at 64- and 128-bit words, it gives the model's words and the tasks' run
+length within 2% (`tests/examples/test_systolic.py`), with fewer than half the SimPy events and Python
+calls. `SystolicEngineMem(pysim="flat")` passes the choice to its engine; its own tasks run as tasks.
+
+Use `"tasks"` (the default) to see inside -- a channel that fills, an output that is back-pressured,
+each task's timing -- and for the calibration, which fits the core's phase on its own events; use
+`"flat"` for long system runs.
 
 ## Performance
 

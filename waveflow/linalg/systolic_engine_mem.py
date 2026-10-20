@@ -310,7 +310,10 @@ class SystolicEngineMem(_MemPart):
     a: Format | None = None
     b: Format | None = None
     c: Format | None = None
-    build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c")
+    #: The engine's pysim granularity (``SystolicEngine.pysim``): ``"tasks"`` or ``"flat"``.  The
+    #: wrapper's own tasks -- sequencer, feeder, writer, memory writer -- run as tasks either way.
+    pysim: str = "tasks"
+    build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -322,7 +325,7 @@ class SystolicEngineMem(_MemPart):
         self.feeder = EngineFeeder(name=f"{self.name}_feeder", **base)
         self.engine = SystolicEngine(name=f"{self.name}_engine", L=self.L, R=self.R, C=self.C,
                                      form=self.form, sob_depth=self.sob_depth, a=self.a, b=self.b,
-                                     c=self.c, **base)
+                                     c=self.c, pysim=self.pysim, **base)
         self.writer = EngineWriter(name=f"{self.name}_writer", **base)
         self.wstream = MemWStream(name=f"{self.name}_memw", sim=self.sim, mem_dwidth=w, inband=True,
                                   emit_done=True, clk=self.clk)

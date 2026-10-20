@@ -239,8 +239,14 @@ class _EnginePart(FreeRunMod):
     b: Format | None = None
     c: Format | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+    #: Run no process: the engine's flat pysim (``SystolicEngine(pysim="flat")``) does this task's
+    #: work.  The task still exists -- its ports, its body, its place in the generated top.
+    passive: bool = False
     #: The formats are build inputs that are not template parameters.
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c")
+
+    def run_proc(self):
+        return None if self.passive else super().run_proc()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -572,12 +578,26 @@ class SystolicEngine(_EnginePart):
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine"
     endpoint_port_widths: ClassVar[bool] = True     # m_status stays 64 bits beside wider data words
+    #: The pysim's granularity.  ``"tasks"`` (default): one process per task, every internal channel
+    #: timed -- the hardware's structure, the core's calibrated phase on its own blocks.  ``"flat"``:
+    #: one process for the engine -- read a command and its operands at ``s_in``, compute every output
+    #: with the bit-exact model, write them at ``s_out`` -- the tasks built but passive.  Its timing is
+    #: the tasks' when nothing inside stalls: each panel starts when its operands have arrived and the
+    #: previous panel is done, at the core's calibrated phase; the outputs leave after the last panel,
+    #: one command's after another.  An output that is back-pressured, or buffers that fill, are the
+    #: tasks' model's to show.  Calibration runs with ``"tasks"`` (the phase is fitted on the core's
+    #: own events).
+    pysim: str = "tasks"
+    build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.pysim not in ("tasks", "flat"):
+            raise ValueError(f"SystolicEngine.pysim must be 'tasks' or 'flat', got {self.pysim!r}")
+        flat = self.pysim == "flat"
         p = {f: getattr(self, f) for f in ("word_bits", "Mmax", "Kmax", "Nmax", "Pmax", "L", "R",
                                            "C", "form", "sob_depth", "lane_bits", "a", "b", "c")}
-        p = {**p, "sim": self.sim, "clk": self.clk}
+        p = {**p, "sim": self.sim, "clk": self.clk, "passive": flat}
         self.rx = EngineRx(name=f"{self.name}_rx", **p)
         self.load_a = EngineLoadA(name=f"{self.name}_load_a", **p)
         self.load_b = EngineLoadB(name=f"{self.name}_load_b", **p)
@@ -620,6 +640,93 @@ class SystolicEngine(_EnginePart):
         self.s_out = self.store.s_out
         self.m_status = self.store.m_status
         self.extra_includes = ["hls_streamofblocks.h"]
+        if flat:
+            import simpy
+
+            self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one command's outputs at a time
+
+    # -- the flat pysim (pysim="flat") ----------------------------------------------------------
+    def run_proc(self):
+        if self.pysim != "flat":
+            return super().run_proc()
+        return self._flat_forever()
+
+    def _flat_forever(self) -> ProcessGen[None]:
+        while True:
+            yield from self._flat_command()
+
+    def _flat_command(self) -> ProcessGen[None]:
+        """One command: the receiver's read, the loaders' unpacking, the core's arithmetic and time,
+        the store's write -- what the tasks do, without the channels between them."""
+        period = self.clk.period
+        lb, w = int(self.lane_bits), int(self.word_bits)
+        c = yield from self.rx.s_in.get_schema(EngineCmd)
+        st = self.status(c)
+        sw = EngineStatus()
+        sw.tx_id, sw.status = int(c.tx_id), int(st)
+        status_words = np.asarray(sw.serialize(word_bw=CTRL_BITS), np.uint64)
+        if st != Status.OK:                       # answered, and fatal: no input is taken again
+            self.call_after(0, self._flat_store, self.store.s_out, self.store.m_status, [],
+                            status_words, self.now, self._out_lock)
+            yield self.env.event()
+        op, m, kp, n = int(c.op), int(c.m), int(c.kp), int(c.n)
+        npan, nb, keep = int(c.npanels), int(c.nb), bool(int(c.keep_a))
+        adj = op == MatmulOp.MUL_AH
+        from waveflow.utils import fixputils as fx
+
+        order = operand_order(c)                  # the bursts in arrival order: (name, output, panel)
+        ops, arrived = {}, {}
+        t = self._core_free
+        for ob in range(nb):
+            # this output's operands, read as they arrive (the ones before it are read already), so
+            # its write is scheduled as soon as it can be -- not after the command's last operand
+            while order and order[0][1] <= ob:
+                name, o, pp = order.pop(0)
+                words = yield from self.rx.s_in.get()
+                arrived[name, o, pp] = self.now
+                fmt, shape = (self.a, stored_shape(op, m, kp)) if name == "A" else (self.b, (kp, n))
+                re, im = from_words(words, shape[0] * shape[1], fmt, lb, w)
+                ops[name, o, pp] = (re.reshape(shape), im.reshape(shape))
+            accr = acci = fmt = None
+            for pp in range(npan):
+                akey = ("A", 0, 0) if keep else ("A", ob, pp)
+                (ar, ai), (br, bi) = ops[akey], ops["B", ob, pp]
+                pr, pi, fmt = mm.matmul_exact(ar, ai, self.a, br, bi, self.b, adjoint=adj,
+                                              form=int(self.form))
+                accr, acci = (pr, pi) if accr is None else (accr + pr, acci + pi)
+                # the panel starts when its blocks are loaded (a cycle behind their last word in)
+                # and the core is free, and takes the core's calibrated phase
+                last = pp == npan - 1
+                ready = max(arrived[akey], arrived["B", ob, pp]) + period
+                steps = self.core.steps(m, kp, n, last, last and ob == nb - 1)
+                t = max(t, ready) + self.core.panel.predict(steps=steps)["panel"] * period
+            cr, ci = fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c)
+            resp = EngineResp()
+            resp.tx_id, resp.index, resp.m, resp.n = int(c.tx_id), ob, m, n
+            # each output leaves when its last panel is done, as the store takes each C block; the
+            # command's Status after its last output
+            burst = [(np.asarray(resp.serialize(word_bw=w), np.uint64),
+                      np.asarray(to_words(cr, ci, self.c, lb, w), np.uint64))]
+            self.call_after(0, self._flat_store, self.store.s_out, self.store.m_status, burst,
+                            status_words if ob == nb - 1 else None, t, self._out_lock)
+        self._core_free = t
+
+    @staticmethod
+    def _flat_store(s_out, m_status, bursts, status_words, start: float, lock) -> ProcessGen[None]:
+        """The deferred write -- an output's Resp and C, and after a command's last output its
+        Status -- from *start*, one after another in the order they were deferred: a pure function of
+        its arguments, as ``call_after`` requires."""
+        with lock.request() as req:
+            yield req
+            env = s_out.env
+            if start > env.now:
+                yield env.timeout(start - env.now)
+            for resp, cw in bursts:
+                yield from s_out.write(resp)
+                yield from s_out.write(cw)
+            if status_words is not None:
+                yield from m_status.write(status_words)
 
     def _stream(self, name, master, slave, bits: int, framed: bool = False, depth=None) -> None:
         kw = {"framed": True} if framed else {}

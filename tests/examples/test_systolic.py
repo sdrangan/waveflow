@@ -39,6 +39,49 @@ def test_wrapper_pysim_writes_c_exactly(tmp_path, word_bits):
     assert EMH.check_c(words, **cfg) == [0, 0, 0]
 
 
+def _pysim_run(make, kind):
+    """One pysim run in its own harness: its length in cycles, and its mismatches with the golden."""
+    import tempfile
+    from pathlib import Path
+
+    from waveflow.build.system_dag import gather_recordings, golden_mismatches
+    from waveflow.hw.harness import harness
+
+    root = Path(tempfile.mkdtemp())
+    s = harness(make(), workload=kind, n_cycles=90000)
+    s.write_scenario(root)
+    s.run()
+    gather_recordings(s, root, root / "traces")
+    return s.sim.env.now / s.clock().period, golden_mismatches(root / "traces", s.golden_outputs()), s
+
+
+@pytest.mark.parametrize("word_bits", [64, 128])
+@pytest.mark.parametrize("kind", ["test", "steady", "short", "batch"])
+def test_flat_pysim_is_exact_and_times_like_the_tasks(word_bits, kind):
+    """SystolicEngine(pysim='flat') -- one process, the tasks passive -- gives the model's words and
+    the tasks' timing (within 3%: it reads, computes and writes an output as the tasks do, at the
+    core's calibrated phase)."""
+    t_tasks, bad, _ = _pysim_run(lambda: EH.engine(word_bits=word_bits), kind)
+    t_flat, bad_flat, _ = _pysim_run(lambda: EH.engine(word_bits=word_bits, pysim="flat"), kind)
+    assert not bad and not bad_flat, (bad, bad_flat)
+    assert abs(t_flat - t_tasks) <= 0.03 * t_tasks, (t_flat, t_tasks)
+
+
+@pytest.mark.parametrize("word_bits", [64, 128])
+def test_flat_engine_inside_the_wrapper_writes_c_exactly(word_bits):
+    cfg = {"word_bits": word_bits}
+    for kind in ("test", "big"):
+        t_tasks, _, _ = _pysim_run(lambda: EMH.engine_mem(**cfg), kind)
+        t_flat, bad, s = _pysim_run(lambda: EMH.engine_mem(pysim="flat", **cfg), kind)
+        assert not bad
+        assert abs(t_flat - t_tasks) <= 0.03 * t_tasks, (kind, t_flat, t_tasks)
+
+
+def test_flat_pysim_refuses_an_unknown_granularity():
+    with pytest.raises(ValueError, match="pysim"):
+        EH.engine(pysim="coarse")
+
+
 REPO = __import__("pathlib").Path(__file__).resolve().parents[2]
 
 

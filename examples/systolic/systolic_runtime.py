@@ -8,8 +8,9 @@ back at the centre configuration (``docs/evaluation/sim_speed/systolic.md`` is w
 records):
 
 - **untimed** -- the model alone, ``waveflow.linalg.matmul.matmul`` a product at a time.
-- **pysim** -- the engine in its harness (``engine_harness``): six tasks, every internal channel timed;
-  its SimPy event count, which does not depend on the machine, is recorded beside the time.
+- **pysim** -- the engine in its harness (``engine_harness``), both granularities: ``"tasks"`` (six
+  tasks, every internal channel timed) and ``"flat"`` (one process, the tasks passive); each one's SimPy
+  event count, which does not depend on the machine, is recorded beside its time.
 - **rtl** -- the synthesized RTL under XSI through the system flow (``system_xsi``), with csynth and
   the testbench's build reported apart from the simulation.
 
@@ -119,12 +120,13 @@ def main() -> None:
     out["untimed"] = _fit(counts, secs)
     print(f"untimed  {out['untimed']['per_product_ms']:8.3f} ms/product", flush=True)
 
-    runs = [time_pysim(cfg, n, a.reps) for n in counts]
-    out["pysim"] = {**_fit(counts, [r[0] for r in runs]), "exact": all(r[2] for r in runs),
+    for mode, key in (("tasks", "pysim"), ("flat", "pysim_flat")):
+        runs = [time_pysim({**cfg, "pysim": mode}, n, a.reps) for n in counts]
+        out[key] = {**_fit(counts, [r[0] for r in runs]), "exact": all(r[2] for r in runs),
                     "events": {str(n): r[1] for n, r in zip(counts, runs)},
                     "events_per_product": float(np.polyfit(counts, [r[1] for r in runs], 1)[0])}
-    print(f"pysim    {out['pysim']['per_product_ms']:8.3f} ms/product  "
-          f"{out['pysim']['events_per_product']:.0f} events/product", flush=True)
+        print(f"{key:10} {out[key]['per_product_ms']:8.3f} ms/product  "
+              f"{out[key]['events_per_product']:.0f} events/product", flush=True)
 
     if a.rtl:
         if a.root is None:

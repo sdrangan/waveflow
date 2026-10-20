@@ -115,6 +115,11 @@ and writer of one generated top must fire equally often (their pointer FIFOs cou
 fires once a tile and the writer writes once a tile, so they balance.
 
 
+**Simulating it.** `SystolicEngineMem(pysim="flat")` runs the engine inside it as one process
+([the flat pysim](systolic_engine.md#the-flat-pysim)); the sequencer, feeder, writer and memory writer
+run as tasks either way. The `big` product's run length is the same within a cycle, and its Python calls
+18% fewer.
+
 ## Performance
 
 Measured at RTL at the centre ([the example](../../../examples/systolic/timing.md#the-wrapper)): `C`

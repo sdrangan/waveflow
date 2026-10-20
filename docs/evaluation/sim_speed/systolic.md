@@ -2,7 +2,7 @@
 title: "Simulation speed: the systolic engine"
 parent: Simulation speed
 nav_order: 3
-summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.036 ms a product), Waveflow's pysim of the engine's six tasks (0.73 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- Python packing and serialization, not SimPy -- how vectorizing the lane groups halved it, and what is left."
+summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.036 ms a product), Waveflow's pysim of the engine's six tasks (0.73 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- Python packing and serialization, not SimPy -- how vectorizing the lane groups halved it, and how the flat pysim (one process, 20 events a product) runs about 1.8 times faster again."
 ---
 
 # Simulation speed: the systolic engine
@@ -44,6 +44,7 @@ Per product, fitted over 10, 50 and 100 products; every run exact:
 |---|---|---|---|
 | untimed model (`matmul`) | **0.036 ms** | 1x | none |
 | pysim, the engine's six tasks | **0.73 ms** (44 SimPy events) | 20x | ~56 ms to build the harness |
+| pysim, flat (`pysim="flat"`) | about 1.8x faster than the six tasks (20 SimPy events) | -- | the same harness |
 | RTL under XSI | **43 ms** | 1,200x | XSI build 20.2 s (compile 1.5, elaborate 14.7, testbench 3.9); csynth 80 s |
 
 Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1), the best of three runs a point.
@@ -62,10 +63,16 @@ Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1), the best of three runs a p
 - **Vectorizing the lane groups halved it**: `lanes.pack_groups` / `unpack_groups` place each lane's field
   in whole arrays (a loop over the `L` lanes, not over the groups), and pysim went from 1.35 to 0.73 ms
   a product.
+- **The flat pysim does less of it.** [`SystolicEngine(pysim="flat")`](../../guide/dsp/systolic/systolic_engine.md#the-flat-pysim)
+  runs one process instead of six, with no internal channels: 20 SimPy events a product instead of 44,
+  2.2 times fewer Python calls, the same words and the tasks' timing within 2%. Back to back with the
+  six-task pysim on the same (busy) machine it ran 1.8 to 1.9 times faster; its time on a quiet machine
+  is for the lab run. Trimming the message handling itself bought 2.3% fewer calls -- earlier work had
+  taken the obvious wins there.
 
 ## Future work
 
-- **A fast path for complex-array serialization** -- the operands into words and `C` back out
-  (`lanes.to_words`, `from_words`), now the larger share -- as the FFT's pysim got
-  ([how it got here](fft.md#how-it-got-here)).
+- **A direct path for complex-array serialization** -- the operands into words and `C` back out
+  (`lanes.to_words`, `from_words`, about 40 and 75 microseconds a matrix, vectorized but general) --
+  about a quarter of the six-task pysim's time.
 - **Re-run on the lab machine** for the numbers this page will keep.
