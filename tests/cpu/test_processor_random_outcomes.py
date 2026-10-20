@@ -37,25 +37,27 @@ N_WORKLOADS = 200
 def workload(seed: int) -> tuple[dict, list]:
     """A random configuration and its software threads: ``(start, [call, ...])`` each."""
     rng = random.Random(seed)
-    cfg = dict(
-        n_cores=rng.choice([1, 1, 2, 3]),
-        f_clk_hz=rng.choice([1.0, 1.0, 3.0, 1e9 / 7]),
-        preemptive=rng.random() < 0.6,
-        switch_cycles=rng.choice([0, 0, 1, 2, 3.5, 4]),
-        irq_entry_cycles=rng.choice([0, 1, 2]),
-    )
+    # The draws happen in this order; a literal evaluates its entries left to right, so reordering
+    # them would change every workload and the recorded digests with it.
+    cfg = {
+        "n_cores": rng.choice([1, 1, 2, 3]),
+        "f_clk_hz": rng.choice([1.0, 1.0, 3.0, 1e9 / 7]),
+        "preemptive": rng.random() < 0.6,
+        "switch_cycles": rng.choice([0, 0, 1, 2, 3.5, 4]),
+        "irq_entry_cycles": rng.choice([0, 1, 2]),
+    }
     threads = []
     for t in range(rng.randint(1, 6)):
         calls = [
-            dict(
-                delay=rng.choice([0, 0, 0, 1, 2, 0.5, 3, 7]),
-                irq=rng.random() < 0.2,
-                prio=rng.choice([0, 1, 2, 5, 5, 9]),
-                cyc=rng.choice([0, 0, 1, 2, 3, 4.5, 10, 13, 0.25]),
-                spawn=rng.random()
-                < 0.25,  # submitted from a fresh process, not waited for
-                name=f"t{t}k{k}",
-            )
+            {
+                "delay": rng.choice([0, 0, 0, 1, 2, 0.5, 3, 7]),
+                "irq": rng.random() < 0.2,
+                "prio": rng.choice([0, 1, 2, 5, 5, 9]),
+                "cyc": rng.choice([0, 0, 1, 2, 3, 4.5, 10, 13, 0.25]),
+                # submitted from a fresh process, not waited for
+                "spawn": rng.random() < 0.25,
+                "name": f"t{t}k{k}",
+            }
             for k in range(rng.randint(1, 8))
         ]
         threads.append((rng.choice([0, 0, 1, 2]), calls))

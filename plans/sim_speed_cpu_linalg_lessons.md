@@ -43,3 +43,7 @@ newest last.
 - **2026-10-19 (step 10): validate an A/B harness with a null run first.** With A and B the same code,
   B/A came out 0.99-1.00. That set the noise floor (~1 %) under the 3 % "helps" bar, and showed each
   side imported its own tree (`python -m`/`-c` put the cwd first on `sys.path`).
+- **2026-10-19 (step 17): a commit on its own line is not gated by the chain above it.** `ruff ... &&
+  pytest ... && python3 <<EOF (plan update)` failed at ruff, which skipped the tests and the plan
+  update. But `git add ... && git commit` on the next line still ran, and committed a lint error
+  without its log row. Run the checks, read their status, then commit in a separate step.
