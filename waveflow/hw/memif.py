@@ -433,6 +433,25 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         return (yield from self._issue(
             "R", self.interface.read(nwords, global_addr, self.master_port)))
 
+    @port_read
+    def read_gather(self, runs: list[tuple[int, int]]) -> ProcessGen[list[Words]]:
+        """Read several runs ``[(global_addr, nwords), ...]`` as **one** transaction and return their
+        word arrays, in order.
+
+        The coalesced read a loosely-timed model makes when it reads many bursts for one piece of
+        work -- a tile's panels, say -- and needs one event, not one per burst.  The interconnect
+        charges it as one read of the runs' total words in ``len(runs)`` bursts: one latency, the
+        words a cycle each, the slave's calibrated span over ``{num_trans: len(runs), nwords}`` when
+        it declares one.  An interconnect without ``read_gather`` reads the runs one after another."""
+        self._check_bound()
+        gather = getattr(self.interface, "read_gather", None)
+        if gather is None:
+            out = []
+            for addr, n in runs:
+                out.append((yield from self.read(int(n), int(addr))))
+            return out
+        return (yield from self._issue("R", gather(runs, self.master_port)))
+
     # ------------------------------------------------------------------
     # Polling (the LT polling-overhead model)
     # ------------------------------------------------------------------
@@ -1418,6 +1437,61 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                         result[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
 
             return result
+
+    def read_gather(self, runs: list[tuple[int, int]], master_port: int) -> ProcessGen[list[Words]]:
+        """Several runs ``[(global_addr, nwords)]`` on one slave as **one** read (see
+        :meth:`MMIFMaster.read_gather`): the same channel and timing as :meth:`read` of the runs'
+        total words -- or, when the slave declares a calibrated read model, its span over
+        ``{num_trans: len(runs), nwords}`` -- with every run's words moved inside it."""
+        decoded = [(self._decode_address(int(a)), int(n)) for a, n in runs]
+        ep_name, slave_ep, _ = decoded[0][0]
+        if any(d[0][0] != ep_name for d in decoded):
+            raise ValueError(f"{self.name}: read_gather runs span more than one slave")
+        if self._slave_protocols.get(ep_name, AXIMMProtocol.FULL) != AXIMMProtocol.FULL:
+            raise NotImplementedError(f"{self.name}: read_gather needs an AXI4 (FULL) slave")
+        dtype = self._dtype()
+        total = sum(n for _d, n in decoded)
+
+        def move():
+            out = []
+            for (_e, _s, local), n in decoded:
+                if slave_ep.rx_read_proc is not None:
+                    out.append((yield from slave_ep.rx_read_proc(n, local)))
+                else:
+                    out.append(np.zeros(n, dtype=dtype))
+            return out
+
+        bt = getattr(slave_ep, "bus_timing", None)
+        if bt is not None and bt.read is not None:
+            span = bt.read_span_secs(len(decoded), total)
+            with slave_ep.read_channel.request() as req:
+                yield req
+                t1 = self.env.now + span
+                out = yield from move()
+                if t1 > self.env.now:
+                    yield self.timeout(t1 - self.env.now)
+            return out
+        ret_dly = (self.latency_read_return + total * self._poll_stretch(ep_name)) / self.clk.freq
+        if slave_ep.serialize_transactions:
+            if self.latency_travel > 0:
+                yield self.timeout(self.latency_travel / self.clk.freq)
+            with slave_ep.read_channel.request() as req:
+                yield req
+                req_dly = (self.latency_init - self.latency_travel) / self.clk.freq
+                if req_dly > 0:
+                    yield self.timeout(req_dly)
+                out = yield from move()
+                if ret_dly > 0:
+                    yield self.timeout(ret_dly)
+            return out
+        if self.latency_init > 0:
+            yield self.timeout(self.latency_init / self.clk.freq)
+        with slave_ep.read_channel.request() as req:
+            yield req
+            out = yield from move()
+        if ret_dly > 0:
+            yield self.timeout(ret_dly)
+        return out
 
     # ------------------------------------------------------------------
     # Spanned (calibrated-occupancy) transfers — the interconnect owns the

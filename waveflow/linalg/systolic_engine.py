@@ -648,7 +648,7 @@ class SystolicEngine(_EnginePart):
 
     # -- the flat pysim (pysim="flat") ----------------------------------------------------------
     def run_proc(self):
-        if self.pysim != "flat":
+        if self.pysim != "flat" or self._sim_passive:
             return super().run_proc()
         return self._flat_forever()
 

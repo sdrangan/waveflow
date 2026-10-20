@@ -267,8 +267,20 @@ class FreeRunMod(HwModule):
 
         This is a plain method, not a generator function, so it can return ``None`` for the composite
         case (a generator function would return a generator, never ``None``, and always be scheduled).
+        A module made passive (:meth:`make_passive`) runs no process either.
         """
+        if self._sim_passive:
+            return None
         return self._run_iter_forever() if self._kind() == 'standalone' else None
+
+    #: Set by :meth:`make_passive`: a parent's coarser pysim does this module's work.
+    _sim_passive: ClassVar[bool] = False
+
+    def make_passive(self) -> None:
+        """Run no process in pysim: a parent module's coarser model (a flat pysim) does this module's
+        work through its ports.  The module still exists -- its ports, its body, its place in the
+        generated top -- and its structure (and so its identity) is unchanged."""
+        self._sim_passive = True
 
     def _run_iter_forever(self) -> ProcessGen[None]:
         if self.timing_model is None:
