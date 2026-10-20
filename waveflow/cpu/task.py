@@ -110,12 +110,15 @@ class SwFunction:
         depends on anything but the counters -- neither is allowed while the function is in use.
         The features are returned as a fresh dict, as :meth:`features` returns them.
         """
-        used = (self.cycles, self.energy_pj, self.working_set)
-        if len(used) != len(self._priced_with) or any(
-            a is not b for a, b in zip(used, self._priced_with)
-        ):
+        pw = self._priced_with
+        if not (
+            pw
+            and pw[0] is self.cycles
+            and pw[1] is self.energy_pj
+            and pw[2] is self.working_set
+        ):  # identity, not equality: a refitted model may compare equal; nothing is allocated here
             self._prices.clear()
-            self._priced_with = used
+            self._priced_with = (self.cycles, self.energy_pj, self.working_set)
         try:
             key: tuple = (tuple(counters.items()),)
             if self.working_set is not None:

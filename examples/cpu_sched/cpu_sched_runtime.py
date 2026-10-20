@@ -79,9 +79,10 @@ _IDLE: dict[str, float | None] = {"load": None}
 
 
 def _code_dirty() -> bool:
-    """Uncommitted changes to tracked files other than the results this script writes."""
+    """Uncommitted changes to tracked files that can change a measurement: not the results this
+    script writes, and not Markdown."""
     lines = _git("status", "--porcelain", "--untracked-files=no").splitlines()
-    return any(not line.rstrip().endswith("runtime.json") for line in lines)
+    return any(not line.rstrip().endswith(("runtime.json", ".md")) for line in lines)
 
 
 def stamp() -> dict[str, Any]:
