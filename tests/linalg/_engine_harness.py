@@ -23,8 +23,7 @@ from waveflow.linalg.build import collect_parts, linalg_headers_dag
 from waveflow.linalg.systolic_engine import SystolicEngine
 from waveflow.simulation.simulation import Simulation
 
-from tests.linalg._hls import PART, PERIOD_NS
-from tests.linalg._systolic_harness import build_config, reg
+from tests.linalg._hls import PART, PERIOD_NS, build_config, reg
 
 TOP, WORK_DIR = "systolic_engine_sys", "xsi_work"
 

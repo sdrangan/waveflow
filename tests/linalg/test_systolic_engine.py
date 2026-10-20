@@ -4,7 +4,7 @@
   A^H with panels, kp = 1), and the wrapper's pysim writes C exactly; the top declares the banked
   blocks; refused commands and jobs are answered;
 * ``-m xsi``: the engine at RTL is bit-exact and runs 8x8x32 back to back at 175 cycles a job with
-  64-bit words, 103 with 128-bit words, stream-fed (Vitis 2025.1); the wrapper at RTL writes a
+  64-bit words, 94 with 128-bit words, stream-fed (Vitis 2025.1); the wrapper at RTL writes a
   32x32x64 product exactly at either width.
 """
 
@@ -15,8 +15,7 @@ import pytest
 
 from tests.linalg import _engine_harness as EH
 from tests.linalg import _engine_mem_harness as EMH
-from tests.linalg._hls import require_vitis
-from tests.linalg._systolic_harness import build_config
+from tests.linalg._hls import build_config, require_vitis
 from waveflow.build.composite_gen import composite_top_spec, render_top
 from waveflow.linalg.message import Status
 from waveflow.linalg.systolic import MatmulOp
@@ -85,7 +84,7 @@ def _xsi(tmp_path_factory, name):
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("word_bits, interval", [(64, 175), (128, 103)])
+@pytest.mark.parametrize("word_bits, interval", [(64, 175), (128, 94)])
 def test_xsi_engine_exact_and_interval(tmp_path_factory, word_bits, interval):
     root = _xsi(tmp_path_factory, f"eng{word_bits}")
     cfg = {"word_bits": word_bits}

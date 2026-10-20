@@ -54,7 +54,8 @@ A span can be calibrated only if two things hold:
    access to it), `last` its release (the lock's release pulse).  A task inside a composite kernel --
    whose endpoints are the kernel's internal channels, not its ports -- is measured the same way, its
    events read by name from the kernel top's trace manifest at the kernel's scope
-   ([the systolic core](../dsp/systolic/timing.md#where-the-timing-is-measured) is the example).
+   ([the systolic engine's core](../dsp/systolic/systolic_engine.md#architecture) is the example: its
+   `panel` phase spans a `B` block's acquire and release).
 
 A duration is deterministic only while the environment does not hold the module up inside the span (a
 full output queue, an input that is late), so every measurement also says whether it was held -- a

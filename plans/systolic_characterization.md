@@ -488,7 +488,7 @@ inner s_out -> MemWStream (C tiles + their cmds)            -> Status(tx_id), on
 #### Record: Part B built (2026-10-19, branch `systolic-engine`) -- before the calibration
 
 All numbers Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns, centre (`Mmax 8, Kmax 8, Nmax 32, Pmax 4,
-R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
+R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/systolic_engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
 
 - **Facts measured first** (`plans/witness/systolic_stream`, `C:\wfsc\sobbank`, `C:\wfsc\sobnest`):
   a partitioned `stream_of_blocks` is one ping-pong per bank, read a bank a cycle at II 1 (2-D
@@ -535,10 +535,27 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linal
 - **Found:** the trace manifest predicts `<task>_<template args>_U0`, but Vitis 2025.1 names the
   engine's loaders and store `<task>_U0` (at 64 bits too), so `--trace` binds only the core's nets
   and the banked `a` / `b` lock nets do not bind. Fix before the calibration (6d).
-- **Open before the calibration:** continuous panels (the core's ~39 cycles of fill, drain and
-  restart a job now bind); the receiver's ~13 cycles a command; the remaining loop-switch loss in the
-  feeder (`hls::burst_maxi` or a deeper `B` buffer); the trace-manifest names above; the per-element
-  selects (LUTs); then calibrate once (6d).
+- **Continuous panels** (branch `systolic-panels`): the core keeps the array, skew delay lines on its
+  edges (every row and column read at one step, so a panel's reads fall in its own `T·P` steps) and a
+  two-slot drain queue across a command's panels and outputs; tile `g` drains `L + n` steps after tile
+  `g+1` starts; a gap before a panel whose tiles would read unstored partial sums (`T` = 2, 3); one tile
+  keeps accumulating (`S_KEEP`); one empty tile runs the last out at each command's end. `C` leaves in
+  drain order on a FIFO to a new `EngineCollect`, which fills the `C` block. **Found:** carrying the
+  state across firings as `static` registers made csynth run out of memory (6.7 GB against 0.4; core
+  alone with locals: 0.36 GB, II 1) -- so the state is per command. **Measured (2025.1):** bit-exact
+  (six commands); `8×8×32` at **94** cycles a job with 128-bit words (was 103; input-bound again) and
+  175 with 64-bit; core LUT 36.9k -> 31.2k, FF 25.7k -> 36.3k, BRAM 30 -> 36, est. 2.92 ns. The wrapper
+  barely moved (3,693 -> 3,680; 6,470 -> 6,468): its **read port** binds (~460 cycles a tile against
+  ~270 of the engine).
+- **Docs restructured** (2026-10-19, user): `SystolicUnit` retired from the guide -- pages: index (which
+  module), `systolic_theory` (one panel, the bounds, memory), `systolic_engine`, `systolic_engine_mem`;
+  the unit's timing and resource tests deleted, its functional tests and all of `examples/mimo_cg`'s
+  quarantined (`_Q_CG`) until mimo_cg moves to the engine (the student's). `docs/examples/systolic`
+  (timing and resource model, from the harnesses) comes with the calibration.
+- **Open before the calibration:** the feeder's loop switches (`hls::burst_maxi` or a deeper `B`
+  buffer) -- now the wrapper's bound; the receiver's ~13 cycles a command (the engine's bound); the
+  trace-manifest names above; a small-engine csynth against `SystolicUnit`'s area; then calibrate once
+  (6d).
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 

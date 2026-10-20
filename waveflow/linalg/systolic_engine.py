@@ -23,8 +23,12 @@ the core takes them: with ``keep_a``, ``A`` then the ``nb`` matrices ``B``; othe
 panel, ``A`` then ``B``.  ``A`` is ``m × kp`` (``kp × m`` for ``MUL_AH``) and ``B`` is ``kp × n``,
 row-major, as memory elements (``waveflow.linalg.lanes.to_words``).
 
+The array is **continuous**: its state persists across panels, outputs and commands, so each tile
+starts the step after the one before it ends and drains while the next runs; ``C`` leaves the core
+in that drain order, and :class:`EngineCollect` places it in a block for the store.
+
 Tasks: :class:`EngineRx`, :class:`EngineLoadA`, :class:`EngineLoadB`, :class:`EngineCore`,
-:class:`EngineStore`; the composite :class:`SystolicEngine`.  The bit-exact model is
+:class:`EngineCollect`, :class:`EngineStore`; the composite :class:`SystolicEngine`.  The bit-exact model is
 :func:`waveflow.linalg.matmul.matmul` on the whole ``K``.
 """
 
@@ -62,6 +66,8 @@ from waveflow.linalg.lanes import (
     nwords,
     to_words,
 )
+from waveflow.linalg.lanes import pack_group as lanes_pack
+from waveflow.linalg.lanes import unpack_group as lanes_unpack
 from waveflow.linalg.message import U8, U16, Status
 from waveflow.linalg.systolic import (
     MatmulOp,
@@ -189,6 +195,38 @@ def period(kp: int, *, L: int, R: int, C: int) -> int:
     return max(int(kp), R * C // L, L)
 
 
+def panel_gap(m: int, kp: int, n: int, *, L: int, R: int, C: int) -> int:
+    """Steps a panel that is not an output's last runs past its tiles, so the next panel reads no
+    partial sum the drain has not yet stored (``systolic_engine_core_task.h``): none for one tile,
+    which keeps accumulating."""
+    T = (m // R) * (n // C)
+    return 0 if T == 1 else max(0, L + 9 - (T - 1) * period(kp, L=L, R=R, C=C))
+
+
+def drain_order(m: int, n: int, *, L: int, R: int, C: int) -> list[tuple[int, int]]:
+    """``(row, first column)`` of each ``L``-wide group of an ``m × n`` ``C``, in the order the core
+    drains them: row tiles, column tiles, then the diagonals ``n = i + cg·L`` of an ``R × C`` tile."""
+    G = R * C // L
+    return [(rt * R + dn % R, ct * C + (dn // R) * L)
+            for rt in range(m // R) for ct in range(n // C) for dn in range(G)]
+
+
+def _group_words(groups: list[int], bits: int) -> np.ndarray:
+    """Lane groups as stream words: one ``uint64`` each up to 64 bits, else ``k`` chunks, low first."""
+    if bits <= 64:
+        return np.asarray(groups, np.uint64)
+    k = -(-bits // 64)
+    return np.asarray([[(g >> (64 * c)) & ((1 << 64) - 1) for c in range(k)] for g in groups],
+                      np.uint64)
+
+
+def _word_groups(words) -> list[int]:
+    w = np.asarray(words, np.uint64)
+    if w.ndim == 1:
+        return [int(x) for x in w]
+    return [sum(int(x) << (64 * c) for c, x in enumerate(row)) for row in w]
+
+
 # --- the tasks -------------------------------------------------------------------------------------
 
 
@@ -263,6 +301,11 @@ class _EnginePart(FreeRunMod):
 
     def _job_words(self, job: EngineJob) -> np.ndarray:
         return np.asarray(job.serialize(word_bw=CTRL_BITS), np.uint64)
+
+    @property
+    def group_bits(self) -> int:
+        """A lane group of ``C``: ``L`` complex values of the register format."""
+        return 2 * int(self.c.W) * int(self.L)
 
 
 @dataclass
@@ -377,8 +420,10 @@ class EngineLoadB(_EngineLoad):
 @dataclass
 class EngineCore(_EnginePart):
     """The streaming systolic array (``systolic_engine_core_task.h``): per output, per panel, it
-    sweeps the ``X`` and ``B`` blocks in place, accumulating exactly; the last panel rounds once into
-    the ``C`` block."""
+    sweeps the ``X`` and ``B`` blocks in place, accumulating exactly; the last panel rounds once, and
+    ``C`` leaves on ``c_out`` in drain order (:func:`drain_order`), a lane group a word.  At RTL the
+    array runs continuously across a command's panels and outputs, and runs its last tile out at the
+    command's end; pysim times each panel."""
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine_core"
 
@@ -388,39 +433,42 @@ class EngineCore(_EnginePart):
         self.job_in = self._ep(StreamIFSlave, "job_in", CTRL_BITS, False)
         self.a_blk = self._block(SobIFSlave, "a_blk", self.a, M * K, 1)
         self.b_blk = self._block(SobIFSlave, "b_blk", self.b, K * N, 1)
-        self.c_blk = self._block(SobIFMaster, "c_blk", self.c, M * N, L)
-        # pysim's time: a panel from its B's acquire to its release (the core holds X and B for the
-        # sweep and frees both at its end); seeded from the prototype (plans/witness/systolic_stream)
-        # -- the tiles at the period, then the fill and the last drain.  Calibrated once, at the end.
+        self.col_job = self._ep(StreamIFMaster, "col_job", CTRL_BITS, False)
+        self.c_out = self._ep(StreamIFMaster, "c_out", self.group_bits, False)
+        # pysim's time: a panel from its B's acquire to its release (the core holds X and B for its
+        # tiles and frees both at their end) -- the tiles at the period; continuous at RTL, so no fill
+        # or drain per panel.  Seeded, not measured: calibrated once, at the end.
         self.panel = TimedPhase(
             "panel", spans={"panel": (self.b_blk.first, self.b_blk.last)}, features=("steps",),
-            seed={"panel": {"intercept": 20.0, "steps": 1.0}}, calib_dir=CALIB_DIR)
+            seed={"panel": {"intercept": 2.0, "steps": 1.0}}, calib_dir=CALIB_DIR)
         self.add_timing_phase(self.panel)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_core_task", ENGINE_HEADERS[2],
-                          ("job_in", "a_blk", "b_blk", "c_blk"),
+                          ("job_in", "a_blk", "b_blk", "col_job", "c_out"),
                           template_args=(int(self.Mmax), int(self.Kmax), int(self.Nmax),
                                          int(self.Pmax), int(self.L), int(self.R), int(self.C),
                                          int(self.form), int(self.sob_depth), int(self.lw),
                                          self.core_traits.id))
 
-    def steps(self, m: int, kp: int, n: int) -> int:
-        """A panel's tile steps: ``tiles · P``."""
+    def steps(self, m: int, kp: int, n: int, last: bool = True, run_out: bool = False) -> int:
+        """A panel's steps: ``tiles · P``; the gap a panel that is not an output's last may need; and
+        on a command's last panel the empty tile that runs its last tile out (``L + R·C/L``)."""
         L, R, C = int(self.L), int(self.R), int(self.C)
-        return (m // R) * (n // C) * period(kp, L=L, R=R, C=C)
+        gap = 0 if last else panel_gap(m, kp, n, L=L, R=R, C=C)
+        tail = L + R * C // L if run_out else 0
+        return (m // R) * (n // C) * period(kp, L=L, R=R, C=C) + gap + tail
 
     def run_iter(self) -> ProcessGen[None]:
         from waveflow.utils import fixputils as fx
 
         job = yield from self.job_in.get_schema(EngineJob)
+        yield from self.col_job.write(self._job_words(job))
         op = int(job.op)
         m, kp, n, npan, nb = int(job.m), int(job.kp), int(job.n), int(job.npanels), int(job.nb)
         adj = op == MatmulOp.MUL_AH
-        # per output, its C block held across its panels (one call site of the array at RTL); every
-        # panel takes an X block (with keep_a the A loader repeats its one A) and a B block
+        # every panel takes an X block (with keep_a the A loader repeats its one A) and a B block
         for _ob in range(nb):
-            out = yield from self.c_blk.acquire_write()
             accr = acci = None
             for _p in range(npan):
                 ablk = yield from self.a_blk.acquire_read()
@@ -430,10 +478,53 @@ class EngineCore(_EnginePart):
                 pr, pi, fmt = mm.matmul_exact(ar, ai, self.a, br, bi, self.b, adjoint=adj,
                                               form=int(self.form))
                 accr, acci = (pr, pi) if accr is None else (accr + pr, acci + pi)
-                yield self.panel.timeout(steps=self.steps(m, kp, n))
+                yield self.panel.timeout(steps=self.steps(m, kp, n, _p == npan - 1,
+                                                          _p == npan - 1 and _ob == nb - 1))
                 yield from self.b_blk.release_read()
                 yield from self.a_blk.release_read()
-            out.payload = (fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c))
+            cr, ci = fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c)
+            yield from self.c_out.write(self.groups_of(cr, ci))
+
+    def groups_of(self, cr, ci) -> np.ndarray:
+        """``C``'s stored integers as ``c_out`` words: its lane groups in drain order."""
+        L, W = int(self.L), int(self.c.W)
+        m, n = cr.shape
+        groups = [lanes_pack(cr[r, c0:c0 + L], ci[r, c0:c0 + L], W)
+                  for r, c0 in drain_order(m, n, L=L, R=int(self.R), C=int(self.C))]
+        return _group_words(groups, self.group_bits)
+
+
+@dataclass
+class EngineCollect(_EnginePart):
+    """Per output, ``C``'s lane groups off ``c_in`` in the core's drain order, each into its place in
+    a ``C`` block for the store."""
+
+    cpp_kernel_name: ClassVar[str | None] = "systolic_engine_collect"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.job_in = self._ep(StreamIFSlave, "job_in", CTRL_BITS, False)
+        self.c_in = self._ep(StreamIFSlave, "c_in", self.group_bits, False)
+        self.c_blk = self._block(SobIFMaster, "c_blk", self.c, int(self.Mmax) * int(self.Nmax),
+                                 int(self.L))
+
+    def kernel_task(self) -> KernelTask:
+        return KernelTask("systolic_engine_collect_task", ENGINE_HEADERS[2],
+                          ("job_in", "c_in", "c_blk"),
+                          template_args=self._targs(int(self.sob_depth), self.core_traits.id))
+
+    def run_iter(self) -> ProcessGen[None]:
+        job = yield from self.job_in.get_schema(EngineJob)
+        m, n, L, W = int(job.m), int(job.n), int(self.L), int(self.c.W)
+        order = drain_order(m, n, L=L, R=int(self.R), C=int(self.C))
+        for _ob in range(int(job.nb)):
+            words = yield from self.c_in.get(nwords_max=len(order))
+            cr, ci = np.zeros((m, n), np.int64), np.zeros((m, n), np.int64)
+            for (r, c0), g in zip(order, _word_groups(words), strict=True):
+                re, im = lanes_unpack(g, W, L)
+                cr[r, c0:c0 + L], ci[r, c0:c0 + L] = re, im
+            out = yield from self.c_blk.acquire_write()
+            out.payload = (cr, ci)
             yield from self.c_blk.commit_write(out)
 
 
@@ -495,8 +586,9 @@ class SystolicEngine(_EnginePart):
         self.load_a = EngineLoadA(name=f"{self.name}_load_a", **p)
         self.load_b = EngineLoadB(name=f"{self.name}_load_b", **p)
         self.core = EngineCore(name=f"{self.name}_core", **p)
+        self.collect = EngineCollect(name=f"{self.name}_collect", **p)
         self.store = EngineStore(name=f"{self.name}_store", **p)
-        for comp in (self.rx, self.load_a, self.load_b, self.core, self.store):
+        for comp in (self.rx, self.load_a, self.load_b, self.core, self.collect, self.store):
             self.add_comp(comp)
         w = int(self.word_bits)
         # Each control message is 2 words; every channel holds two, so a task that keeps one for
@@ -504,7 +596,8 @@ class SystolicEngine(_EnginePart):
         for name, src, dst in (("ajob", self.rx.a_job, self.load_a.job_in),
                                ("bjob", self.rx.b_job, self.load_b.job_in),
                                ("cjob", self.rx.core_job, self.core.job_in),
-                               ("reply", self.rx.reply, self.store.reply)):
+                               ("reply", self.rx.reply, self.store.reply),
+                               ("kjob", self.core.col_job, self.collect.job_in)):
             self._stream(name, src, dst, CTRL_BITS, depth=4)
         # A's words wait here: its loader takes a value a cycle (half the word rate), and the receiver
         # forwards A and then B in order, so a channel holding one whole A lets it move on to B at once
@@ -521,7 +614,11 @@ class SystolicEngine(_EnginePart):
         # row -- so the loader writes a word a cycle into banks the compiler can tell apart.
         self._blocks("b", self.load_b.blk, self.core.b_blk).bank(
             (K, N // C, C // lw, lw), ((3, "complete", 0), (4, "complete", 0)))
-        self._blocks("c", self.core.c_blk, self.store.c_blk)
+        # C in drain order: a tile's G groups come a step apart, so two tiles' worth lets the
+        # collector place them a cycle each without holding the array back.
+        G = int(self.R) * int(self.C) // int(self.L)
+        self._stream("cg", self.core.c_out, self.collect.c_in, self.core.group_bits, depth=2 * G)
+        self._blocks("c", self.collect.c_blk, self.store.c_blk)
         self.boundary = ["s_in", "s_out", "m_status"]
         self.s_in = self.rx.s_in
         self.s_out = self.store.s_out

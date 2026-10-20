@@ -215,7 +215,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: (tests/linalg/test_systolic_engine.py).
 #: 237 -> 239 on 2026-10-19: the same two at 128-bit words -- 103 cycles a job, and the wrapper exact
 #: with its memory stand-in at 128 bits (tests/linalg/test_systolic_engine.py).
-WANT_XSI_GATES = 239
+#: 239 -> 238 on 2026-10-19: the systolic unit's 390-cycle gate retired with the unit's docs (its
+#: other gates are quarantined with the MIMO-CG example, and still counted).
+WANT_XSI_GATES = 238
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
@@ -244,59 +246,84 @@ _XSI_SKIPPED = _SKIPPED["xsi"]
 #: Added 2026-10-14 (PR #268, ``feat/cpu-model``: the processor model and the MIMO-CG study), pending
 #: review with its author: tests that fail on a Windows / Vitis 2025.1 machine for reasons of the
 #: environment they were recorded in, not of the code under test.
-_Q_NP = ("committed table's provenance header pins numpy=2.5.3; the data match exactly when the stamp matches (checked 2026-10-14) -- compare without the header, or pin numpy")
 _Q_K = ("the processor model's calibration kernels need a POSIX host toolchain (ucontext, nm -S): a "
         "Windows gcc cannot build them")
 _Q_J = ("examples/cpu_sched/replay_result.json was never committed (the repo ignores *.json)")
-_Q_V = ("recorded with Vitis 2024.1 on the xczu48dr platform; this machine's 2025.1 csynth differs (resource rows; cg_vector RTL replies differ -- also with the old 20 ps XSI clock)")
-_Q_R = ("needs the detectors' step-4.9 csynth RTL (xczu48dr), absent on this machine")
+#: Before the CG example was set aside whole (below), some of its tests were quarantined one by one for
+#: the environment they were recorded in -- they will need the same care when it comes back:
+#: - the committed tables of test_mimo_cg_hw_{dse,fidelity,finalists,finding,models,space} and
+#:   test_mimo_cg_migration: the provenance header pins numpy=2.5.3 (the data match when it does);
+#: - test_mimo_cg_hw_measure (four tests) and test_cg_vector_unit::test_xsi_unit[smallest, stress]:
+#:   recorded with Vitis 2024.1 on xczu48dr; 2025.1 csynth differs;
+#: - test_mimo_cg_hw_detector::test_detector_rtl_is_bit_exact: needs the step-4.9 csynth RTL.
+#: Added 2026-10-19 (plans/systolic_characterization.md): the MIMO-CG example and what only it uses --
+#: SystolicUnit (superseded by SystolicEngine) and the CG vector unit -- set aside until mimo_cg moves
+#: to the engine.  The code stays; its docs are retired.
+_Q_CG = ("the MIMO-CG example and the systolic unit and CG vector unit only it uses, set aside until "
+         "it moves to SystolicEngine (plans/systolic_characterization.md)")
 QUARANTINE: dict[str, str] = {
-    "tests/examples/test_mimo_cg_hw_dse.py::test_committed_tables_are_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_fidelity.py::test_committed_decisions_are_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_fidelity.py::test_committed_scores_are_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_finalists.py::test_committed_finalists_are_what_the_rule_gives":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_finding.py::test_committed_tables_are_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_models.py::test_second_held_out_set_judges_the_refit":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_models.py::test_supplement_is_scored_with_the_frozen_models_and_has_no_gates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_models.py::test_validation_tables_are_what_the_command_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_space.py::test_committed_bruteforce_grid_is_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_space.py::test_committed_second_round_is_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_space.py::test_committed_split_is_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_hw_space.py::test_committed_supplement_is_what_the_code_regenerates":
-        _Q_NP,
-    "tests/examples/test_mimo_cg_migration.py::test_the_committed_list_is_what_the_code_regenerates":
-        _Q_NP,
     "tests/cpu/test_kernel_twins.py":
         _Q_K,
     "tests/cpu/test_gem5_runner.py::test_symbol_sizes_count_gcc_clones":
         _Q_K,
     "tests/docs/test_documented_numbers.py::test_cpu_replay_figures_match_the_recorded_replay":
         _Q_J,
-    "tests/examples/test_mimo_cg_hw_measure.py::test_harness_reproduces_the_committed_rows_of_the_default_builds":
-        _Q_V,
-    "tests/examples/test_mimo_cg_hw_measure.py::test_a_memory_bound_unit_still_gives_the_blocks_own_span":
-        _Q_V,
-    "tests/examples/test_mimo_cg_hw_measure.py::test_steady_run_measures_the_job_time_of_a_stream":
-        _Q_V,
-    "tests/examples/test_mimo_cg_hw_measure.py::test_filing_follows_the_per_block_protocol":
-        _Q_V,
-    "tests/linalg/test_cg_vector_unit.py::test_xsi_unit[smallest]":
-        _Q_V,
-    "tests/linalg/test_cg_vector_unit.py::test_xsi_unit[stress]":
-        _Q_V,
-    "tests/examples/test_mimo_cg_hw_detector.py::test_detector_rtl_is_bit_exact":
-        _Q_R,
+    "tests/examples/test_mimo_cg_accuracy_analysis.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_accuracy_points.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_build.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_cg_cal.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_cg_golden.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_conformance.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_detectors.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_fixed.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_common.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_detector.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_dse.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_fidelity.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_finalists.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_finding.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_measure.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_models.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_hw_space.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_linalg_cal.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_link.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_migration.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_migration_models.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_study_tables.py":
+        _Q_CG,
+    "tests/examples/test_mimo_cg_sweep_no_vitis.py":
+        _Q_CG,
+    "tests/linalg/test_systolic_core.py":
+        _Q_CG,
+    "tests/linalg/test_systolic_unit.py":
+        _Q_CG,
+    "tests/linalg/test_cg_vector_unit.py":
+        _Q_CG,
+    "tests/linalg/test_cg_cost.py":
+        _Q_CG,
+    "tests/linalg/test_unit_pair.py":
+        _Q_CG,
 }
 
 #: Filled in at collection: ``(nodeid, gate markers it carries, reason)`` per quarantined test.
