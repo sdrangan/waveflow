@@ -46,6 +46,7 @@ the first block measured is memcpy, which has no arithmetic at all.
 |---|---|---|---|---|
 | [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length |
 | [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point |
+| [systolic engine](systolic.md) `8×8×32`, per product (preliminary) | 0.031 ms | 1.35 ms (44 events) | 43 ms | plus ~80 s csynth and a 20 s XSI build per design point |
 
 Measured 2026-10-13 on one Windows 11 machine (Intel 13th-generation-class CPU, Python 3.14),
 nothing else running, best of several runs.
@@ -84,3 +85,5 @@ The estimate and its basis are on [the FFT page](fft.md#with-a-compiled-model-an
 - [memcpy](memcpy.md) -- the cost of a transaction, with no arithmetic to hide it.
 - [The SSR FFT](fft.md) -- three ways to run the same bit-exact FFT, and the lessons from making
   its pysim fast.
+- [The systolic engine](systolic.md) -- preliminary: a tiny model beside a timed simulation, and
+  where its pysim time goes.
