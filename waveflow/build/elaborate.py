@@ -224,6 +224,10 @@ _CONTEXT_ATTRS = frozenset({
     # is a digest of this signature, so without the exclusion, attaching a model moves the key and
     # every store lookup misses — and ``add_rm`` needs the key to choose the model it is attaching.
     "_resource_model", "_timing_model", "firing_records",
+    # How the pysim runs a task -- its own process, or none while its parent's flat model does its
+    # work (``SsrFft(pysim="flat")``, ``SystolicEngine(pysim="flat")``) -- is not what it is: a task's
+    # calibration record must be found either way.
+    "passive",
     # Where a model's DATA lives is not part of the design's identity.  A design pointed at two
     # platform directories is one design; without this exclusion it keys as two, so records filed
     # under the first are invisible from the second and every lookup misses **silently** -- the same
