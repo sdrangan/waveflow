@@ -24,7 +24,7 @@ from waveflow.utils import complexutils as cx
 from waveflow.utils.fixputils import Format
 
 #: The message word widths the generated array utilities support.
-WORD_BITS_SUPPORTED = (32, 64)
+WORD_BITS_SUPPORTED = (32, 64, 128)
 DEFAULT_WORD_BITS = 64
 
 

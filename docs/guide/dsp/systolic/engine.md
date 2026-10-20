@@ -5,7 +5,8 @@ grand_parent: DSP Blocks
 nav_order: 3
 audience: python
 api: [SystolicEngine, SystolicEngineMem]
-summary: "SystolicEngine, the redesign of SystolicUnit: operands loaded straight into banked stream-of-blocks buffers the array reads in place (no copy), a streaming systolic array whose tiles follow every max(kp, R·C/L, L) cycles, exact accumulation over k-panels with one rounding, keep_a reuse, and the default command-response shape. SystolicEngineMem puts it behind memory: the output-stationary outer loop for matrices larger than the engine, over block-major memory, fed by its own burst reader. Measured at RTL (Vitis 2025.1, centre): 175 cycles per 8×8×32 job against SystolicUnit's 390 -- bound by its input, the core takes 87 -- and a 32×32×64 product through memory exact at 6,470 cycles."
+summary: "SystolicEngine, the redesign of SystolicUnit: operands loaded straight into banked stream-of-blocks buffers the array reads in place (no copy), a streaming systolic array whose tiles follow every max(kp, R·C/L, L) cycles, exact accumulation over k-panels with one rounding, keep_a reuse, and the default command-response shape. SystolicEngineMem puts it behind memory: the output-stationary outer loop for matrices larger than the engine, over block-major memory, fed by its own burst reader. Measured at RTL (Vitis 2025.1, centre): 175 cycles per 8×8×32 job with 64-bit words against SystolicUnit's 390, bound by the input; 103 with 128-bit words, bound by the core -- and a 32×32×64 product through memory exact at 6,470 cycles (64-bit) and 3,693 (128-bit)."
+snippets: run
 ---
 
 # Systolic engine
@@ -17,7 +18,8 @@ fixed point, exact sums, one rounding, bit-exact with `waveflow.linalg.matmul.ma
 traits and formats. What changes is how the operands reach the array and how the array runs.
 
 All numbers here: Vitis HLS / Vivado xsim **2025.1**, `xczu48dr-ffvg1517-2-e`, 4 ns, the centre
-configuration (`Mmax 8, Kmax 8, Nmax 32, Pmax 4, R 4, C 8, L 4`, 12-bit operands, 64-bit words).
+configuration (`Mmax 8, Kmax 8, Nmax 32, Pmax 4, R 4, C 8, L 4`, 12-bit operands), with 64-bit words
+unless a row says 128.
 
 ## What changed, and what it bought
 
@@ -28,8 +30,63 @@ configuration (`Mmax 8, Kmax 8, Nmax 32, Pmax 4, R 4, C 8, L 4`, 12-bit operands
 | `K` larger than the buffers | not possible | `npanels` k-panels accumulated exactly on chip, rounded once |
 | reuse of `A` | `nb` (core only) | `keep_a`: one `A` on the wire for `nb` outputs |
 | protocol | status in the reply header, errors drained | a `Resp` per output, a `Status` per command on its own stream, errors fatal |
-| `8×8×32` back to back, stream-fed | 390 cycles a job | **175** (input-bound: 162 words a job; the core takes 87) |
+| `8×8×32` back to back, stream-fed | 390 cycles a job | **175** (input-bound: 162 words a job); **103** with 128-bit words (core-bound) |
 | unit resources (csynth) | 136 DSP, 20.5k LUT, 18 BRAM18K | 154 DSP, 37.0k LUT, 26 BRAM18K |
+
+## Which one, and how large
+
+Two modules, one array. Pick by where the operands live:
+
+| | `SystolicEngine` | `SystolicEngineMem` |
+|---|---|---|
+| operands and results | on streams: a command, then `A` and `B` bursts in; a `Resp` and `C` out | in memory: one job descriptor in, `C` written back, an `EngineDone` out |
+| `M` (rows of `C`) | up to `Mmax`, a multiple of `R` | any multiple of `Mmax` (tiled) |
+| `N` (columns of `C`) | up to `Nmax`, a multiple of `C` | any multiple of `Nmax` (tiled) |
+| `K` (the inner dimension) | up to `Pmax · Kmax`: `npanels` panels of `kp ≤ Kmax`, summed on chip | the same bound, `K` a multiple of `Kmax` |
+| reuse | `keep_a`: one `A` for `nb` products | none (each tile reads its panels) |
+| memory layout | -- | block-major panels and tiles (`block_major`) |
+
+`SystolicEngineMem` *contains* a `SystolicEngine`: it adds the tile loop, a reader, a writer and the
+memory ports. Neither lifts the bound on `K`: the partial sums stay on chip, so a longer `K` needs a
+larger `Pmax`. Both check a request before running it and refuse what they cannot do, fatally (the
+default command-response rule):
+
+```python
+from waveflow.linalg.systolic import MatmulOp
+from waveflow.linalg.systolic_engine import SystolicEngine, command
+from waveflow.linalg.systolic_engine_mem import EngineJobDesc, job_status
+from waveflow.simulation.simulation import Simulation
+from waveflow.utils.fixputils import Format, OMode, QMode
+
+
+def reg(W, I):                     # W bits, I of them integer; rounded and saturated
+    return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+
+eng = SystolicEngine(name="systolic_engine", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32, Pmax=4,
+                     R=4, C=8, L=4, word_bits=128, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+for c in (command(1, MatmulOp.MUL, 8, 8, 32, npanels=4),    # K = 32: four panels, summed on chip
+          command(2, MatmulOp.MUL, 8, 8, 32, npanels=5),    # K = 40: more panels than Pmax
+          command(3, MatmulOp.MUL, 16, 8, 32)):             # M = 16: more rows than Mmax
+    print("engine", int(c.tx_id), eng.status(c).name)
+
+for tx, (M, K, N) in enumerate([(64, 32, 128), (64, 40, 128)], start=4):
+    d = EngineJobDesc()
+    d.tx_id, d.op, d.M, d.K, d.N = tx, MatmulOp.MUL, M, K, N
+    print("memory", tx, job_status(d, Mmax=8, Kmax=8, Nmax=32, Pmax=4).name)
+```
+
+```text
+engine 1 OK
+engine 2 BAD_DIMS
+engine 3 BAD_DIMS
+memory 4 OK
+memory 5 BAD_DIMS
+```
+
+**The word width** (`word_bits`, 32, 64 or 128) sets how many elements a stream or memory word carries:
+two 32-bit memory elements at 64 bits, four at 128. The engine's command and status ports stay 64
+bits (`endpoint_port_widths`); the data ports and the wrapper's memory take the word width.
 
 ## The engine
 
@@ -120,9 +177,13 @@ tile, so they balance.
 | engine, 4 × `8×8×32` back to back, stream-fed | **175 cycles a job**: 162 words in, the receiver's 13 cycles of command handling |
 | wrapper: a 2×2-tile 2-panel job, an `Aᴴ` job of 4 panels, a single tile | `C` in memory exact at RTL |
 | wrapper: `32×32×64` (8 tiles × 4 panels) | exact at RTL, done at **cycle 6,470** against an input floor of about 5,136 (~79%) |
+| engine, 128-bit words: the six commands, then 4 × `8×8×32` | bit-exact at RTL; **103 cycles a job**, now **core-bound**: the core holds each `C` block 83 cycles (64 tile steps, its fill and drain) and waits ~20 between jobs; the 81 input words take ~94 cycles, the 65 output words 65 |
+| wrapper, 128-bit words: the three test jobs and `32×32×64` | exact at RTL; done at **cycle 3,693** (~460 a tile) against an input floor of about 2,570; which stage binds is not yet traced |
 | the core's own time, `8×8×32` and `8×1×32`, `8×2×32` (from the trace: its first touch of `X` to its commit of `C`) | **87 cycles** whatever `kp` -- never the bound at 64-bit words: the input binds at `kp = 8` (175), the output at short `kp` (141: `C` is 128 words whatever `kp`) |
 | engine resources | 154 DSP, 37.0k LUT, 25.6k FF, 26 BRAM18K, est. 3.05 ns |
 | wrapper resources | 157 DSP, 42.9k LUT, 31.1k FF, 30 BRAM18K, est. 3.35 ns |
+| engine resources, 128-bit words | 154 DSP, 36.9k LUT, 25.7k FF, 30 BRAM18K, est. 3.05 ns |
+| wrapper resources, 128-bit words | 157 DSP, 43.1k LUT, 33.2k FF, 38 BRAM18K, est. 3.35 ns |
 
 Gates: `tests/linalg/test_systolic_engine.py` (`-m xsi` for the RTL ones).
 
@@ -137,8 +198,10 @@ Gates: `tests/linalg/test_systolic_engine.py` (`-m xsi` for the RTL ones).
   feeder's burst loops leaves the read port idle ~12 cycles, 8 switches a tile. Removing it needs bursts
   that overlap across loops (`hls::burst_maxi`, which the generated top does not yet declare) or deeper
   buffering of `B`, so `A` and `B` can each be read in one run.
-- **I/O-bound at 64-bit words.** The core (87 cycles) has room: 128-bit words would bring the input to
-  ~95 and the output to ~65 (the linalg word-width guard, `lanes.WORD_BITS_SUPPORTED`, allows 32 and 64).
+- **Core-bound at 128-bit words.** A job takes 103 cycles: the core's 64 tile steps plus ~39 of fill,
+  drain and restart between jobs, while the input needs ~94. Wider words no longer pay; overlapping one
+  panel's drain with the next panel's fill is the next gain, and then the receiver's ~13 cycles a
+  command once the input binds again.
 - **LUTs.** The array costs about 1.8× `SystolicUnit`'s LUTs for 2.2× its throughput; the per-element
   selects are the next place to look.
 - **Ordered, not addressed.** Operands are reused in order (`keep_a`), not by address. Addressed

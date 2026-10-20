@@ -100,10 +100,12 @@ if __name__ == "__main__":
     ap.add_argument("--through", default="compare")
     ap.add_argument("--workload", default="test")
     ap.add_argument("--trace", action="store_true")
+    ap.add_argument("--word-bits", type=int, default=64)
     a = ap.parse_args()
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag(workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
+    cfg = {"word_bits": a.word_bits}
+    res = build_dag(cfg, workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():
         print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")
@@ -113,5 +115,5 @@ if __name__ == "__main__":
                      ("rtl", work / "xsi_run" / "vectors" / "mem")):
         if d.is_dir():
             words = np.asarray(read_burst_bundle(d)[0], np.uint64)
-            print(f"{label}: C words wrong per job {check_c(words, a.workload)}")
+            print(f"{label}: C words wrong per job {check_c(words, a.workload, **cfg)}")
     sys.exit(0 if ok else 1)

@@ -134,19 +134,22 @@ def _memory_stand_in(dut, sim, clk, ports: list, stim: dict, stand_ins: dict):
         raise ValueError(f"harness: '{dut.name}' memory ports {[p for p, _ in ports]} have different "
                          f"widths {sorted(widths)} -- one memory serves them all; give them one width")
     (w,) = widths
-    if w > 64 or w % 8:
+    if w % 8 or (w > 64 and w % 64):
         raise NotImplementedError(f"harness: '{dut.name}' memory ports are {w} bits wide -- the "
-                                  f"memory stand-in takes words of 8 to 64 bits")
+                                  f"memory stand-in takes words of 8 to 64 bits or whole 64-bit "
+                                  f"chunks")
+    k = -(-w // 64)                     # a wider word is k uint64 chunks, chunk 0 low: (n, k)
     given = [p for p, _ep in ports if p in stim]
     if len(given) > 1:
         raise ValueError(f"harness: '{dut.name}'.workload gives images under {given} -- its memory "
                          f"ports share one memory; give its image under one of them")
     image = None
     if given:
-        image = np.asarray(stim.pop(given[0]), dtype=np.uint64).reshape(-1)
-    nwords = int(image.size) if image is not None and image.size else DEFAULT_MEM_WORDS
+        image = np.asarray(stim.pop(given[0]), dtype=np.uint64)
+        image = image.reshape(-1) if k == 1 else image.reshape(-1, k)
+    nwords = int(image.shape[0]) if image is not None and image.size else DEFAULT_MEM_WORDS
     if image is None:
-        image = np.zeros(nwords, dtype=np.uint64)
+        image = np.zeros(nwords if k == 1 else (nwords, k), dtype=np.uint64)
     mem = MemoryMod(name="memory", sim=sim, inline=False, clk=clk, word_size=w, addr_size=64,
                     nwords_tot=nwords)
     mem.alloc(nwords)
@@ -238,9 +241,10 @@ def harness(module, *, workload="test", n_cycles: int = 4000, policy=None) -> Hw
         if mem_image is not None:
             from waveflow.utils.burst_io import write_run_params
 
-            write_burst_bundle([mem_image], Path(root) / MEM_INIT_BUNDLE)
+            k = 1 if mem_image.ndim == 1 else int(mem_image.shape[1])
+            write_burst_bundle([mem_image], Path(root) / MEM_INIT_BUNDLE, word_chunks=k)
             # The arena's size, read by the RTL memory at run time (HwSystem adds the run's bound).
-            write_run_params(Path(root) / "vectors", mem_words=int(mem_image.size))
+            write_run_params(Path(root) / "vectors", mem_words=int(mem_image.shape[0]))
 
     def calibration():
         holdout = getattr(dut, "calib_holdout", None)

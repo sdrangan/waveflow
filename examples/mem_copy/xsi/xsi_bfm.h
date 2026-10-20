@@ -106,7 +106,8 @@ struct Dut {
 };
 
 // ---------------------------------------------------------------------------
-// FlatMemory — the word-addressed arena both m_axi bundles serve out of.
+// FlatMemory — the word-addressed arena both m_axi bundles serve out of.  A word wider than 64 bits
+// is k = bytes_per_word / 8 uint64 chunks, chunk 0 low -- the bundles' and pysim's (n, k) words.
 // ---------------------------------------------------------------------------
 
 /// One memory region tied to a burst bundle: for a load, `bundle`'s words go to `[off, off+len)`
@@ -120,10 +121,14 @@ struct MemSeg {
 };
 
 struct FlatMemory : public XsiSimObj {
-    std::vector<uint64_t> w;
+    std::vector<uint64_t> w;                  ///< nwords * k chunks
     int bpw;                                  ///< bytes per word (MEM_DW/8)
+    int k;                                    ///< uint64 chunks per word
 
-    FlatMemory(size_t nwords, int bytes_per_word) : w(nwords, 0), bpw(bytes_per_word) {}
+    FlatMemory(size_t nwords, int bytes_per_word)
+        : w(nwords * (size_t)chunks_of(bytes_per_word), 0), bpw(bytes_per_word),
+          k(chunks_of(bytes_per_word)) {}
+    static int chunks_of(int bytes_per_word) { return bytes_per_word > 8 ? bytes_per_word / 8 : 1; }
 
     //: Optional file-backed lifecycle.  Empty lists => the memory does nothing at pre/post_sim (the
     //: "do none" case); populated => it seeds / dumps the listed regions.
@@ -132,35 +137,40 @@ struct FlatMemory : public XsiSimObj {
     void pre_sim() override {
         for (const MemSeg& s : load_segs) {
             std::vector<uint64_t> v = BurstBundle::read_words(s.bundle);
-            for (size_t i = 0; i < v.size() && s.off + i < w.size(); ++i) w[s.off + i] = v[i];
+            const size_t o = s.off * (size_t)k;
+            for (size_t i = 0; i < v.size() && o + i < w.size(); ++i) w[o + i] = v[i];
         }
     }
     void post_sim() override {
         // len 0 = to the end of the arena: a whole-arena dump then follows an arena sized at run
         // time (run_param), instead of naming the size it was generated with.
         for (const MemSeg& s : dump_segs) {
-            const size_t len = s.len ? s.len : (s.off < w.size() ? w.size() - s.off : 0);
+            const size_t len = s.len ? s.len : (s.off < size() ? size() - s.off : 0);
             BurstBundle::write_one(s.bundle,
-                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + len));
+                std::vector<uint64_t>(w.begin() + s.off * k, w.begin() + (s.off + len) * k), k);
         }
     }
 
-    uint64_t  operator[](size_t i) const { return w[i]; }
-    uint64_t& operator[](size_t i)       { return w[i]; }
-    size_t    size() const               { return w.size(); }
+    /// Word *i*'s low chunk (the whole word up to 64 bits); word() is all k chunks.
+    uint64_t  operator[](size_t i) const { return w[i * k]; }
+    uint64_t& operator[](size_t i)       { return w[i * k]; }
+    const uint64_t* word(size_t i) const { return &w[i * k]; }
+    size_t    size() const               { return w.size() / (size_t)k; }
     uint64_t  word_index(uint64_t byte_addr) const { return byte_addr / (uint64_t)bpw; }
 
     /// One W-channel beat: byte-strobed read-modify-write.  WSTRB is honoured rather than assumed
     /// all-ones — a partial final beat would otherwise corrupt neighbouring bytes.
-    void write_strobed(uint64_t widx, uint64_t data, uint32_t strb) {
-        uint64_t cur = w[widx];
+    void write_strobed(uint64_t widx, const uint64_t* data, uint64_t strb) {
         for (int b = 0; b < bpw; ++b) {
-            if (strb & (1u << b)) {
-                uint64_t m = 0xFFull << (8 * b);
-                cur = (cur & ~m) | (data & m);
+            if ((strb >> b) & 1u) {
+                uint64_t& cur = w[widx * k + b / 8];
+                const uint64_t m = 0xFFull << (8 * (b % 8));
+                cur = (cur & ~m) | (data[b / 8] & m);
             }
         }
-        w[widx] = cur;
+    }
+    void write_strobed(uint64_t widx, uint64_t data, uint32_t strb) {
+        write_strobed(widx, &data, (uint64_t)strb);
     }
 };
 
@@ -196,29 +206,34 @@ public:
         if (ar_beat_) {
             addrw_ = mem_.word_index(araddr_); len_ = arlen_; beat_ = 0;
             state_ = R_SEND; h_arready_ = 0; h_rvalid_ = 1;
-            h_rdata_ = mem_[addrw_]; h_rlast_ = (len_ == 0) ? 1u : 0u;
+            load(addrw_); h_rlast_ = (len_ == 0) ? 1u : 0u;
         } else if (r_beat_) {
             if (beat_ >= len_) { state_ = AR_IDLE; h_rvalid_ = 0; h_rlast_ = 0; h_arready_ = 1; }
-            else { ++beat_; h_rdata_ = mem_[addrw_ + beat_]; h_rlast_ = (beat_ >= len_) ? 1u : 0u; }
+            else { ++beat_; load(addrw_ + beat_); h_rlast_ = (beat_ >= len_) ? 1u : 0u; }
         }
     }
 
     void drive() override {
         d_.put1(P_arready, h_arready_);
         d_.put1(P_rvalid,  h_rvalid_);
-        d_.putW(P_rdata,   h_rdata_);
+        d_.putChunks(P_rdata, h_rdata_, mem_.k);
         d_.put1(P_rlast,   h_rlast_);
     }
 
     int state() const { return (int)state_; }   ///< for timeout diagnostics
 
 private:
+    void load(uint64_t widx) {
+        const uint64_t* src = mem_.word(widx);
+        for (int i = 0; i < mem_.k && i < KMAX; ++i) h_rdata_[i] = src[i];
+    }
+    static const int KMAX = 32;                  ///< chunks: Dut::LV_MAX logic words, 2048 bits
     Dut& d_; FlatMemory& mem_;
     int P_arvalid, P_arready, P_araddr, P_arlen, P_rvalid, P_rready, P_rdata, P_rlast;
     enum State { AR_IDLE, R_SEND };
     State    state_ = AR_IDLE;
     uint64_t addrw_ = 0; uint32_t len_ = 0, beat_ = 0;
-    uint32_t h_arready_ = 1, h_rvalid_ = 0, h_rlast_ = 0; uint64_t h_rdata_ = 0;
+    uint32_t h_arready_ = 1, h_rvalid_ = 0, h_rlast_ = 0; uint64_t h_rdata_[KMAX] = {0};
     uint32_t arvalid_ = 0, rready_ = 0, arlen_ = 0; uint64_t araddr_ = 0;
     bool     ar_beat_ = false, r_beat_ = false;
 };
@@ -250,8 +265,8 @@ public:
         awaddr_  = d_.getW(P_awaddr);
         awlen_   = (uint32_t)(d_.getW(P_awlen) & 0xFF);
         wvalid_  = d_.get1(P_wvalid);
-        wdata_   = d_.getW(P_wdata, &wdata_xz_);
-        wstrb_   = (uint32_t)(d_.getW(P_wstrb) & 0xFF);
+        d_.getChunks(P_wdata, wdata_, mem_.k, wdata_xz_);
+        wstrb_   = d_.getW(P_wstrb);
         wlast_   = d_.get1(P_wlast);
         bready_  = d_.get1(P_bready);
         aw_beat_ = (state_ == AW_IDLE) && awvalid_ && h_awready_;
@@ -264,9 +279,13 @@ public:
             addrw_ = mem_.word_index(awaddr_); len_ = awlen_; beat_ = 0;
             state_ = W_RECV; h_awready_ = 0; h_wready_ = 1;
         } else if (w_beat_) {
-            uint64_t lanes = 0;                     // X/Z only matters in the bytes the strobe writes
-            for (int b = 0; b < 8; ++b) if ((wstrb_ >> b) & 1u) lanes |= 0xFFull << (8 * b);
-            if ((wdata_xz_ & lanes) && !allow_xz) Dut::fatal_xz(name_ + "_WDATA", -1, w_count_, 0, wdata_xz_ & lanes);
+            for (int c = 0; c < mem_.k; ++c) {      // X/Z only matters in the bytes the strobe writes
+                uint64_t lanes = 0;
+                for (int b = 0; b < 8 && 8 * c + b < mem_.bpw; ++b)
+                    if ((wstrb_ >> (8 * c + b)) & 1u) lanes |= 0xFFull << (8 * b);
+                if ((wdata_xz_[c] & lanes) && !allow_xz)
+                    Dut::fatal_xz(name_ + "_WDATA", -1, w_count_, c, wdata_xz_[c] & lanes);
+            }
             mem_.write_strobed(addrw_ + beat_, wdata_, wstrb_);
             ++w_count_;
             if (wlast_) { state_ = B_RESP; h_wready_ = 0; h_bvalid_ = 1; }
@@ -294,9 +313,10 @@ public:
     bool saw_b() const   { return saw_b_; }
 
 private:
+    static const int KMAX = 32;                  ///< chunks: Dut::LV_MAX logic words, 2048 bits
     Dut& d_; FlatMemory& mem_;
     std::string name_;
-    uint64_t wdata_xz_ = 0;
+    uint64_t wdata_xz_[KMAX] = {0};
     int P_awvalid, P_awready, P_awaddr, P_awlen, P_wvalid, P_wready, P_wdata, P_wstrb, P_wlast,
         P_bvalid, P_bready;
     enum State { AW_IDLE, W_RECV, B_RESP };
@@ -305,8 +325,8 @@ private:
     int      w_count_ = 0;
     bool     saw_b_ = false;
     uint32_t h_awready_ = 1, h_wready_ = 0, h_bvalid_ = 0;
-    uint32_t awvalid_ = 0, wvalid_ = 0, wstrb_ = 0, wlast_ = 0, bready_ = 0, awlen_ = 0;
-    uint64_t awaddr_ = 0, wdata_ = 0;
+    uint32_t awvalid_ = 0, wvalid_ = 0, wlast_ = 0, bready_ = 0, awlen_ = 0;
+    uint64_t awaddr_ = 0, wstrb_ = 0, wdata_[KMAX] = {0};
     bool     aw_beat_ = false, w_beat_ = false, b_beat_ = false;
 };
 
