@@ -3,7 +3,7 @@
 
 * fast: the engine's pysim matches the bit-exact model on six commands (panels, keep_a, A^H with
   panels, one tile, kp = 1), and the wrapper's pysim writes C exactly, at 64- and 128-bit words;
-* ``-m xsi``: the engine at RTL is bit-exact and runs 8x8x32 back to back at 175 cycles a job with
+* ``-m xsi``: the engine at RTL is bit-exact and runs 8x8x32 back to back at 171 cycles a job with
   64-bit words, 94 with 128-bit words (Vitis 2025.1); the wrapper at RTL writes a 32x32x64 product
   exactly at either width.
 """
@@ -39,6 +39,34 @@ def test_wrapper_pysim_writes_c_exactly(tmp_path, word_bits):
     assert EMH.check_c(words, **cfg) == [0, 0, 0]
 
 
+REPO = __import__("pathlib").Path(__file__).resolve().parents[2]
+
+
+def test_measured_runs_are_exact_and_meet_the_clock():
+    """examples/systolic/measured.json is the RTL evidence the pages quote: every run exact, and every
+    design within its 4 ns in csynth's estimate (a design that misses it measures another target)."""
+    import json
+
+    runs = json.loads((REPO / "examples/systolic/measured.json").read_text(encoding="utf-8"))["runs"]
+    for name, r in runs.items():
+        assert r["exact"], name
+        assert r["resources"]["est_clock_ns"] <= 4.0, (name, r["resources"]["est_clock_ns"])
+
+
+def test_timing_page_quotes_the_measurements():
+    """The intervals and completion times docs/examples/systolic/timing.md states are measured.json's."""
+    import json
+
+    runs = json.loads((REPO / "examples/systolic/measured.json").read_text(encoding="utf-8"))["runs"]
+    page = (REPO / "docs/examples/systolic/timing.md").read_text(encoding="utf-8")
+    for name in ("eng64_steady", "eng128_steady", "eng64_short", "eng128_short"):
+        (iv,) = runs[name]["interval"]
+        assert f"**{iv}**" in page, (name, iv)
+    for name in ("mem64_big", "mem128_big"):
+        (done,) = runs[name]["done"]
+        assert f"**{done:,}**" in page, (name, done)
+
+
 def _xsi(tmp_path_factory, name):
     if not toolchain.find_vitis_path():
         pytest.skip("Vitis HLS not found; the XSI gate needs it")
@@ -48,7 +76,7 @@ def _xsi(tmp_path_factory, name):
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("word_bits, interval", [(64, 175), (128, 94)])
+@pytest.mark.parametrize("word_bits, interval", [(64, 171), (128, 94)])
 def test_xsi_engine_exact_and_interval(tmp_path_factory, word_bits, interval):
     root = _xsi(tmp_path_factory, f"eng{word_bits}")
     cfg = {"word_bits": word_bits}

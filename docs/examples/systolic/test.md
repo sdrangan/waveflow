@@ -30,6 +30,8 @@ system steps (`add_system_steps`) -- pysim, csynth, the system top, XSI, compare
 | engine | `test` | six commands: one tile; `Aᴴ`; three panels; `keep_a` with two outputs; `Aᴴ` with two panels and two outputs; `kp = 1` | bit-exactness, every path of the array |
 | engine | `steady` | four `8×8×32` commands back to back | the steady interval |
 | engine | `short` | four `8×1×32`, then four `8×2×32` | the output bound: `C` stays 256 values whatever `kp` |
+| engine | `batch` | two commands of four `8×8×32` outputs each | a command's fixed costs spread over its outputs |
+| engine | `calib` | every tile count, one and two panels, `Aᴴ`, `kp = 1` | the spread the core's `panel` phase is fitted on |
 | wrapper | `test` | a 2×2-tile job of two panels, an `Aᴴ` job of four panels, one tile | `C` in memory, every path of the loop |
 | wrapper | `big` | one `32×32×64` product: 8 tiles of 4 panels | the completion time |
 
@@ -55,5 +57,5 @@ model. A run that finished on time with a wrong word fails.
 | Test | Checks | Marker |
 |---|---|---|
 | `tests/examples/test_systolic.py` | the engine's pysim against the model on the `test` workload, and the wrapper's pysim `C`, at 64 and 128-bit words | none |
-| `tests/examples/test_systolic.py` | the engine at RTL: bit-exact, and the `steady` interval -- 175 cycles a product with 64-bit words, 94 with 128-bit; the wrapper at RTL: `C` of the `big` product exact, at both widths | `xsi` |
+| `tests/examples/test_systolic.py` | the engine at RTL: bit-exact, and the `steady` interval -- 171 cycles a product with 64-bit words, 94 with 128-bit; the wrapper at RTL: `C` of the `big` product exact, at both widths | `xsi` |
 | `tests/linalg/test_systolic_engine.py` | without a harness: the generated top's banked blocks and port widths, the command and job rules | none |

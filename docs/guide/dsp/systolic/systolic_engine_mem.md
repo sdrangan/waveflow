@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 3
 audience: python
 api: [SystolicEngineMem]
-summary: "SystolicEngineMem multiplies matrices larger than the systolic engine, in memory: one job descriptor in, C written back, an EngineDone out. Covers the job and its rules, the block-major memory layout, a runnable check of what it accepts, its architecture -- a sequencer running the output-stationary loop over C's tiles, a feeder that owns the read port and streams each tile's panels in bursts, the engine, a writer -- its performance on a 32×32×64 product (Vitis 2025.1, centre; measured in examples/systolic), and its limits."
+summary: "SystolicEngineMem multiplies matrices larger than the systolic engine, in memory: one job descriptor in, C written back, an EngineDone out. Covers the job and its rules, the block-major memory layout, a runnable check of what it accepts, its architecture -- a sequencer running the output-stationary loop over C's tiles, a feeder that owns the read port and streams each tile's panels in bursts, the engine, a writer -- its performance on a 32×32×64 product (Vitis 2025.1, centre: 5,813 cycles with 64-bit words, 3,033 with 128-bit; measured in examples/systolic), and its limits."
 snippets: run
 ---
 
@@ -75,9 +75,11 @@ flowchart LR
 the feeder where `A(i, 0)` and `B(0, j)` are and the step between `B`'s panels, and the writer the tile's
 `C` address and whether it is the job's last.
 
-**The feeder** owns the read port. Per tile it writes the engine command (`npanels = K / Kmax`), then
-`A(i,0) B(0,j) A(i,1) B(1,j) ...` -- the order the engine takes them -- a burst loop per operand panel, a
-word a cycle.
+**The feeder** owns the read port, an `hls::burst_maxi` (the endpoint's `burst_maxi = True`). Per tile
+it writes the engine command (`npanels = K / Kmax`), requests every panel's read ahead --
+`A(i,0) B(0,j) A(i,1) B(1,j) ...`, the order the engine takes them -- and reads all their words in one
+loop, a word a cycle: the requests queue in the `m_axi` adapter, so the port does not wait between
+panels.
 
 **The writer** turns each tile's `Resp | C` from the engine into `MemWCmd(C(i, j)) | C` for the
 framework's in-band memory writer, with the job's `EngineDone` behind its last tile. The `m_axi` reader
@@ -90,19 +92,16 @@ fires once a tile and the writer writes once a tile, so they balance.
 ## Performance
 
 Measured at RTL at the centre ([the example](../../../examples/systolic/timing.md#the-wrapper)): `C`
-exact on every path of the loop, and a `32×32×64` product (8 tiles of 4 panels) in **6,468 cycles with
-64-bit words and 3,680 with 128-bit**. The read port sets the pace, not the engine: each tile reads its
-panels in bursts, a burst loop per panel, and the port idles ~12 cycles at each switch between loops.
-Why the feeder reads that way -- three readers were measured -- and the
+exact on every path of the loop, and a `32×32×64` product (8 tiles of 4 panels) in **5,813 cycles with
+64-bit words and 3,033 with 128-bit** -- 88% and 85% of the input's floor. The read port sets the pace,
+not the engine. Why the feeder reads that way -- five readers were measured -- and the
 [harness and gates](../../../examples/systolic/test.md) are in the example.
 
 ## Limits
 
 - **`K ≤ Pmax · Kmax`.** No accumulation through memory yet: a longer `K` needs a larger `Pmax`.
 - **Tiles are the maxima.** Every tile is `Mmax × Nmax`, `Kmax` per panel; other shapes pad.
-- **The read port idles between bursts, and binds.** Each switch between the feeder's burst loops
-  costs ~12 idle cycles, 8 switches a tile. Removing it needs bursts that overlap across loops (`hls::burst_maxi`,
-  which the generated top does not yet declare) or deeper buffering of `B`, so `A` and `B` can each be
-  read in one run.
+- **The read port binds.** With every panel requested ahead it is busy 85 to 88% of the time; the
+  rest is the adapter's gaps between bursts and the feeder's command a tile.
 - **No reuse across tiles.** A tile reads its panels whether or not the last tile read the same `A`.
 - **Not calibrated.** Its time in pysim is the sum of its tasks' seeded times.

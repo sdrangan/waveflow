@@ -105,7 +105,7 @@ array is input-bound at both. Square products of `m = n = 32` (16) would be comp
 (the period cannot drop below `R·C/L = 8`) and the input drops to `40 / LW`, but `C` is still
 `m·n = 256` values: the output, 128 cycles at 64-bit words, binds.
 
-**Against the RTL.** The engine at the centre takes 175 cycles a product with 64-bit words (the input
+**Against the RTL.** The engine at the centre takes 171 cycles a product with 64-bit words (the input
 bound, 160, plus the command), 141 at `kp = 1` (the output bound, 128, plus the reply header) and 94
 with 128-bit words, where the compute bound's 64 steps plus ~30 cycles of fixed cost a command meet the
 input's 80 words plus its command -- measured in

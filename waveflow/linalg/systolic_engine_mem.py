@@ -220,6 +220,9 @@ class EngineFeeder(_MemPart):
         w = int(self.word_bits)
         self.feed_in = self._ep(StreamIFSlave, "feed_in", CTRL_BITS, False)
         self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        # The body requests a tile's panels ahead of their data (hls::burst_maxi), so the read port
+        # does not idle between them.
+        self.m_mem.burst_maxi = True
         self.add_endpoint(self.m_mem)
         self.m_out = self._ep(StreamIFMaster, "m_out", w, True)
 

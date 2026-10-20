@@ -644,8 +644,15 @@ class SystolicEngine(_EnginePart):
         return iface
 
     # -- scenarios ----------------------------------------------------------------------------------
+    #: Panel lengths (the core's ``steps``) held out of the calibration's fit, to score it: an output's
+    #: last panel at three tiles and at six (``8·T + L + R·C/L`` at the centre).
+    calib_holdout: ClassVar[dict] = {"steps": (36, 60)}
+
     def jobs(self, kind: str = "test") -> list[dict]:
-        """The commands :meth:`workload` sends, as :func:`command` keywords."""
+        """The commands :meth:`workload` sends, as :func:`command` keywords.  ``"calib"``: every tile
+        count the configuration allows -- each row count and column count -- with one panel and with
+        two, then an ``Aᴴ`` command and a ``kp = 1`` command of three panels: the spread of panel
+        lengths the core's ``panel`` phase is fitted on."""
         M, K, N, P = int(self.Mmax), int(self.Kmax), int(self.Nmax), int(self.Pmax)
         R, C = int(self.R), int(self.C)
         if kind == "test":
@@ -655,11 +662,19 @@ class SystolicEngine(_EnginePart):
                     dict(op=MatmulOp.MUL, m=R, kp=3, n=N, nb=2, keep_a=True),
                     dict(op=MatmulOp.MUL_AH, m=M, kp=5, n=C, npanels=2, nb=2),
                     dict(op=MatmulOp.MUL, m=M, kp=1, n=N)]
-        if kind == "steady":
-            return [dict(op=MatmulOp.MUL, m=M, kp=K, n=N) for _ in range(4)]
+        if kind == "steady" or kind.startswith("steady_"):     # steady_<count>: that many
+            count = 4 if kind == "steady" else int(kind.split("_", 1)[1])
+            return [dict(op=MatmulOp.MUL, m=M, kp=K, n=N) for _ in range(count)]
         if kind == "short":                      # short panels: the output, not the input, binds
             return ([dict(op=MatmulOp.MUL, m=M, kp=1, n=N) for _ in range(4)]
                     + [dict(op=MatmulOp.MUL, m=M, kp=2, n=N) for _ in range(4)])
+        if kind == "batch":                      # one command's fixed costs over four outputs
+            return [dict(op=MatmulOp.MUL, m=M, kp=K, n=N, nb=4) for _ in range(2)]
+        if kind == "calib":
+            out = [dict(op=MatmulOp.MUL, m=m, kp=K, n=n, npanels=np_)
+                   for m in range(R, M + 1, R) for n in range(C, N + 1, C) for np_ in (1, 2)]
+            return out + [dict(op=MatmulOp.MUL_AH, m=M, kp=min(K, 3), n=N),
+                          dict(op=MatmulOp.MUL, m=M, kp=1, n=C, npanels=min(P, 3))]
         raise ValueError(f"no workload {kind!r}")
 
     def _operands(self, kind: str):

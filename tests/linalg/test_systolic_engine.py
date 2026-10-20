@@ -38,6 +38,17 @@ def test_engine_top_keeps_the_status_port_at_64_bits():
     assert "hls::stream<streamutils::axi4s_word<64> >& m_status" in top
 
 
+def test_wrapper_top_reads_through_burst_maxi():
+    """The feeder requests a tile's panels ahead of their data: its read port is an
+    hls::burst_maxi, not a pointer (and the top includes its header); the writer's stays a pointer."""
+    from waveflow.linalg.systolic_engine_mem import SystolicEngineMem
+    mem = SystolicEngineMem(name="systolic_engine_mem", sim=Simulation(), word_bits=128, **CENTRE)
+    top = render_top(composite_top_spec(mem, width=128))
+    assert '#include "hls_burst_maxi.h"' in top
+    assert "    hls::burst_maxi<ap_uint<128> > m_in," in top
+    assert "    ap_uint<128>* m_out," in top
+
+
 def test_command_rules():
     lim = dict(Mmax=8, Kmax=8, Nmax=32, Pmax=4, R=4, C=8)
     assert command_status(command(1, MatmulOp.MUL, 8, 5, 16, npanels=3), **lim) == Status.OK

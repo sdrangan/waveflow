@@ -84,12 +84,22 @@ class EngineCodegenStep(BuildStep):
 
 
 def build_dag(cfg: dict | None = None, *, workload="test", trace: bool = False,
-              n_cycles: int = 200_000) -> BuildDag:
+              n_cycles: int = 200_000, calibrate: bool = False, store_dir=None) -> BuildDag:
+    """The engine's harness on *workload* and, with *calibrate*, its calibration on
+    ``workload("calib")`` -- the core's ``panel`` phase fitted at RTL and filed in a ``ModuleStore``
+    at *store_dir* (default: the package's, ``waveflow/linalg/calib``)."""
     cfg = dict(cfg or {})
     sysm = harness(engine(**cfg), workload=workload, n_cycles=n_cycles)
     dag = BuildDag()
     dag.add(EngineCodegenStep(name="codegen", cfg=cfg))
     add_system_steps(dag, sysm, work_dir=WORK_DIR, top=TOP, trace=trace)
+    if calibrate:
+        from waveflow.build.phase_calib import add_calib_steps
+        from waveflow.calib.record_store import ModuleStore
+        from waveflow.linalg.systolic_engine import CALIB_DIR
+
+        add_calib_steps(dag, harness(engine(**cfg), workload="test", n_cycles=n_cycles),
+                        work_dir=WORK_DIR, top=TOP, store=ModuleStore(store_dir or CALIB_DIR))
     return dag
 
 
@@ -103,10 +113,13 @@ if __name__ == "__main__":
     ap.add_argument("--workload", default="test")
     ap.add_argument("--trace", action="store_true")
     ap.add_argument("--word-bits", type=int, default=64)
+    ap.add_argument("--calibrate", action="store_true",
+                    help="also fit the core's timed phase on workload('calib') and file it")
     a = ap.parse_args()
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag({"word_bits": a.word_bits}, workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
+    res = build_dag({"word_bits": a.word_bits}, workload=a.workload, trace=a.trace,
+                    calibrate=a.calibrate).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():
         print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")

@@ -26,15 +26,18 @@ from examples.systolic import engine_mem_harness as EMH
 from waveflow.utils.burst_io import read_burst_bundle
 
 HERE = Path(__file__).resolve().parent
+PERIOD_NS = EH.PERIOD_NS
 MEASURED = HERE / "measured.json"
 
-#: name -> (module, word bits, workload)
+#: name -> (module, word bits, workload, parameters that differ from the centre)
 RUNS = {
-    f"{mod}{w}_{kind}": (mod, w, kind)
+    f"{mod}{w}_{kind}": (mod, w, kind, {})
     for w in (64, 128)
-    for mod, kinds in (("eng", ("test", "steady", "short")), ("mem", ("test", "big")))
+    for mod, kinds in (("eng", ("test", "steady", "short", "batch")), ("mem", ("test", "big")))
     for kind in kinds
 }
+#: The half-size engine (16 elements): as fast as the centre's while the input binds.
+RUNS["half64_steady"] = ("eng", 64, "steady", {"R": 2, "L": 2})
 
 
 def _resources(proj: Path) -> dict:
@@ -59,8 +62,8 @@ def _job_ends(golden: list, cycles: np.ndarray, per_job: int) -> list[int]:
 
 
 def measure(name: str, root: Path) -> dict:
-    mod, w, kind = RUNS[name]
-    cfg = {"word_bits": w}
+    mod, w, kind, extra = RUNS[name]
+    cfg = {"word_bits": w, **extra}
     run_root = root / name
     run_root.mkdir(parents=True, exist_ok=True)
     H = EH if mod == "eng" else EMH
@@ -70,6 +73,7 @@ def measure(name: str, root: Path) -> dict:
     work = run_root / H.WORK_DIR / H.TOP
     vec = work / "xsi_run" / "vectors"
     out = {"module": "SystolicEngine" if mod == "eng" else "SystolicEngineMem", "word_bits": w,
+           "params": extra or None,
            "workload": kind, "tool": config.vitis_version, "exact": not bad,
            "failed": bad or None}
     if bad:
@@ -77,7 +81,7 @@ def measure(name: str, root: Path) -> dict:
     if mod == "eng":
         m = EH.engine(**cfg)
         g = m.golden(kind)["s_out"]
-        per = 2  # a Resp, then C, per output; every output of these workloads is one command's
+        per = 2  # a Resp, then C, per output
         ends = _job_ends(g, _cycles(vec, "s_out"), per)
         out["outputs"] = len(ends)
         out["ends"] = ends
@@ -89,6 +93,8 @@ def measure(name: str, root: Path) -> dict:
         out["done"] = [int(c) for c in _cycles(vec, "s_done")]
     out["pysim_cycles"] = json.loads((work / "pysim.json").read_text(encoding="utf-8"))["cycles"]
     out["resources"] = _resources(run_root / f"{H.KERNEL}_proj")
+    # A design that misses its clock in csynth's estimate is not a measurement of this target.
+    out["meets_clock"] = out["resources"]["est_clock_ns"] <= PERIOD_NS
     return out
 
 

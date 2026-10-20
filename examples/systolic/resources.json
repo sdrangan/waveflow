@@ -1,0 +1,368 @@
+{
+ "target": {
+  "part": "xczu48dr-ffvg1517-2-e",
+  "period_ns": 4
+ },
+ "points": {
+  "centre": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36354,
+    "lut": 31718,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "w128": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 128
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 36,
+    "dsp": 154,
+    "ff": 36481,
+    "lut": 31629,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "small": {
+   "params": {
+    "Mmax": 4,
+    "Kmax": 8,
+    "Nmax": 16,
+    "Pmax": 4,
+    "R": 2,
+    "C": 4,
+    "L": 2,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 15,
+    "dsp": 59,
+    "ff": 12534,
+    "lut": 14317,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "r2": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 2,
+    "C": 8,
+    "L": 2,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 23,
+    "dsp": 91,
+    "ff": 23390,
+    "lut": 20709,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "r8": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 8,
+    "C": 8,
+    "L": 8,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 42,
+    "dsp": 281,
+    "ff": 56090,
+    "lut": 48732,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "c4": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 4,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 18,
+    "dsp": 91,
+    "ff": 19391,
+    "lut": 19506,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "c16": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 64,
+    "Pmax": 4,
+    "R": 4,
+    "C": 16,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 48,
+    "dsp": 281,
+    "ff": 63187,
+    "lut": 51111,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "l8": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 8,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 42,
+    "dsp": 154,
+    "ff": 30018,
+    "lut": 27560,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "k4": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 4,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 16,
+    "dsp": 154,
+    "ff": 36410,
+    "lut": 31567,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "k16": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 16,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36609,
+    "lut": 31821,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "p1": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 1,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 35638,
+    "lut": 30981,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "p8": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 8,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36844,
+    "lut": 32314,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "m16": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 32,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36786,
+    "lut": 32424,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "n64": {
+   "params": {
+    "Mmax": 8,
+    "Kmax": 8,
+    "Nmax": 64,
+    "Pmax": 4,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36447,
+    "lut": 31848,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  },
+  "big": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 64,
+    "Pmax": 4,
+    "R": 8,
+    "C": 16,
+    "L": 8,
+    "word_bits": 128
+   },
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-10-20",
+   "resources": {
+    "bram": 62,
+    "dsp": 537,
+    "ff": 110203,
+    "lut": 94032,
+    "est_clock_ns": 2.92
+   },
+   "meets_clock": true
+  }
+ }
+}

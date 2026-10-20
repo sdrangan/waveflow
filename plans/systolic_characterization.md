@@ -554,11 +554,25 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/systolic_engine.md`. Gates: `te
   the unit's timing and resource tests deleted, its functional tests and all of `examples/mimo_cg`'s
   quarantined (`_Q_CG`) until mimo_cg moves to the engine (the student's). `docs/examples/systolic`
   (timing and resource model, from the harnesses) comes with the calibration.
-- **Open before the calibration:** the feeder's loop switches (`hls::burst_maxi` or a deeper `B`
-  buffer) -- now the wrapper's bound; the receiver's ~13 cycles a command AND the core's ~30 a command
-  (tied at 128 bits; the core's needs the state carried across commands, without `static`); the
-  trace-manifest names above; a small-engine csynth against `SystolicUnit`'s area; then calibrate once
-  (6d).
+- **Overnight 2026-10-20 (branch `systolic-panels`), all Vitis 2025.1, all exact, all meeting 4 ns:**
+  - the receiver forwards each output's payload in one pipelined loop: 64-bit steady **171** (was 175).
+    Tried and dropped: one loop with bound nb·np·(wa+wb) (6 DSP, or 2.4k LUT from fabric) and an exit
+    tested on a burst count (est. 5.6 ns, missed 4 ns);
+  - the feeder's read port is an `hls::burst_maxi` (framework: an endpoint's `burst_maxi = True` ->
+    `composite_gen` emits the port type and the include): a tile's panels requested ahead, read in one
+    loop. Wrapper `32x32x64` **5,813** (64-bit, was 6,468) and **3,033** (128-bit, was 3,680), 88% and
+    85% of the input floor;
+  - carrying the array's state across commands is NOT feasible: a loop over commands in one firing ran
+    csynth out of memory (7.0 GB) as `static` did -- batching outputs into a command (`nb`) is the
+    answer: four a command run at **81** cycles an output (128-bit), the input's bound;
+  - trace binding: banked blocks' first-bank nets in the manifest; `load_trace` binds `<body>_U0`
+    when Vitis drops a task's template args;
+  - `examples/systolic/systolic_sweep.py` -> `resources.json`: 15 configurations; DSP = 4·R·C + ~26;
+    the half-size engine (R 2: 91 DSP, 20.7k LUT, ~ SystolicUnit's area) runs at **171** too;
+  - `systolic_runtime.py` (the sim-speed page's script) written; calibration hooks on the engine
+    (`calib` workload, `calib_holdout`, `engine_harness --calibrate`).
+- **Open before the calibration:** none of the design items; then calibrate once (6d) -- the core's
+  `panel` phase -- and fit a resource model on the sweep.
 - **After the calibration** (user, 2026-10-19): `docs/evaluation/sim_speed/systolic.md`, the twin of
   `fft.md` -- one bit-exact workload run as the untimed model (`waveflow.linalg.matmul`), pysim (the
   engine's harness, and the wrapper's) and the RTL under XSI (plus csynth per point), the cost per

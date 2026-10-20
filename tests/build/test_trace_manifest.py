@@ -92,6 +92,26 @@ class TestChannelNets:
                                  "blk_empty_n": f"{c['id']}_t_empty_n"}
             assert "din" not in c["write"] and "dout" not in c["read"]
 
+    def test_banked_sob_channel_names_its_first_banks_nets(self):
+        """A banked block is a ping-pong per bank, each with nets suffixed by its indices (Vitis
+        2025.1, the systolic engine: `a_0_i_full_n`, `<inst>_a_blk_0_read`); the first bank's stand
+        for the block, since all its banks are acquired and released together."""
+        from waveflow.linalg.systolic_engine import SystolicEngine
+        from waveflow.utils.fixputils import Format, OMode, QMode
+
+        def reg(W, I):
+            return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+        eng = SystolicEngine(name="systolic_engine", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32,
+                             Pmax=4, R=4, C=8, L=4, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+        man = composite_top_spec(eng, width=64).trace_manifest()
+        ch = {c["id"]: c for c in man["channels"]}
+        assert ch["a"]["write"]["blk_full_n"] == "a_0_i_full_n"          # banked on one dimension
+        assert ch["a"]["read"]["blk_release"].endswith("_U0_a_blk_0_read")
+        assert ch["b"]["write"]["blk_full_n"] == "b_0_0_i_full_n"        # banked on two
+        assert ch["b"]["read"]["blk_release"].endswith("_U0_b_blk_0_0_read")
+        assert ch["c"]["write"]["blk_full_n"] == "c_i_full_n"            # one bank: no suffix
+
 class TestBoundaryNets:
     def test_axis_port_keeps_its_own_name(self, memcopy):
         man = memcopy.trace_manifest()

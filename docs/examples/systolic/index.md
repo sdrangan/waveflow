@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 21
 has_children: true
 example_dir: examples/systolic
-summary: "The systolic engine (SystolicEngine) and the engine behind memory (SystolicEngineMem), each in its own harness: a driver and sinks, or a driver, a sink and one memory, generated from the module. Each workload runs in pysim and at RTL from the same scenario files, every output checked against the bit-exact model; the RTL's timing is read at the ports, with no waveform, and the resources from csynth's XML. What it shows: the engine at its input bound -- 175 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit -- how the binding stage was found, and the wrapper bound by its read port."
+summary: "The systolic engine (SystolicEngine) and the engine behind memory (SystolicEngineMem), each in its own harness: a driver and sinks, or a driver, a sink and one memory, generated from the module. Each workload runs in pysim and at RTL from the same scenario files, every output checked against the bit-exact model; the RTL's timing is read at the ports, with no waveform, and the resources from csynth's XML. What it shows: the engine at its input bound -- 171 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, 81 an output batched -- how the binding stage was found, and the wrapper bound by its read port, 3,033 cycles for 32×32×64."
 ---
 
 # A systolic matrix multiply, measured

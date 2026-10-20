@@ -9,8 +9,8 @@
 // C(i,j) at c_base + (i NT + j) WC.
 //
 // systolic_engine_feed_task: one tile per firing, the read port's owner.  Writes the tile's EngineCmd,
-// then A(i,0) B(0,j) A(i,1) B(1,j) ..., a burst loop per operand panel, a word a cycle (last on each
-// panel's final word).  A firing per read command (the in-band MemRStream) paid ~16 cycles each.
+// then A(i,0) B(0,j) A(i,1) B(1,j) ...: every panel's read requested ahead (hls::burst_maxi), then the
+// words in one loop, a word a cycle (last on each panel's final word).
 //
 // systolic_engine_writer_task: one tile (or refused job) per firing.  Takes the engine's Resp and C
 // and its Status, and writes MemWCmd(C tile, fwd = last) | [EngineDone] | C.
@@ -29,6 +29,7 @@
 #include "wf_engine_done.h"
 #include "wf_engine_tile.h"
 #include "wf_engine_feed.h"
+#include "hls_burst_maxi.h"
 
 template <int WBW, int MMAX, int KMAX, int NMAX, int PMAX, int WA, int WB, int WC, typename IN_T>
 static void systolic_engine_seq_task(hls::stream<IN_T>& s_job, hls::stream<ap_uint<64> >& feed_out,
@@ -85,7 +86,8 @@ TILES_I:
 }
 
 template <int WBW, int MMAX, int KMAX, int NMAX, int PMAX, int WA, int WB, int WC>
-static void systolic_engine_feed_task(hls::stream<ap_uint<64> >& feed_in, const ap_uint<WBW>* m_mem,
+static void systolic_engine_feed_task(hls::stream<ap_uint<64> >& feed_in,
+                                      hls::burst_maxi<ap_uint<WBW> > m_mem,
                                       hls::stream<streamutils::framed_word<WBW> >& m_out) {
     EngineFeed f;
     f.template read_stream<64>(feed_in);
@@ -101,29 +103,36 @@ static void systolic_engine_feed_task(hls::stream<ap_uint<64> >& feed_in, const 
     c.nb = 1;
     streamutils::write_msg<WBW>(c, m_out);
     const int P = f.npanels;
-    // A burst loop per operand panel, in the order the engine takes them: each loop's addresses are
-    // sequential, so it is one burst train.  (A flattened loop with a computed address was single-beat
-    // reads, two cycles a word.  A's panels and B's panels as two runs -- 2 loop switches a tile instead
-    // of 8 -- stalled behind the core's last panel: B's buffering is one block ahead.)  Each switch
-    // between loops still costs ~12 idle cycles of the read port (plans/systolic_characterization.md).
+    // Every panel's read requested up front (hls::burst_maxi), in the order the engine takes them,
+    // then all their words in ONE loop: the requests queue in the m_axi adapter, so the port does not
+    // wait between panels.  (A burst loop per panel idled the port ~12 cycles at each switch between
+    // loops, 8 a tile; one flattened loop with a computed address read a single beat every two cycles;
+    // A's panels then B's as two runs waited behind the core's last panel --
+    // plans/systolic_characterization.md.)
     ap_uint<32> a = f.a_addr, b = f.b_addr;
-PANELS:
+REQ:
     for (int p = 0; p < P; ++p) {
 #pragma HLS LOOP_TRIPCOUNT max = PMAX
-    A_WORDS:
-        for (int w = 0; w < WA; ++w) {
-#pragma HLS PIPELINE II = 1
-            streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(m_out, m_mem[a + w],
-                                                                                 w == WA - 1);
-        }
-    B_WORDS:
-        for (int w = 0; w < WB; ++w) {
-#pragma HLS PIPELINE II = 1
-            streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(m_out, m_mem[b + w],
-                                                                                 w == WB - 1);
-        }
+        m_mem.read_request(a, WA);
+        m_mem.read_request(b, WB);
         a += WA;
         b += f.b_step;
+    }
+    const int total = P * (WA + WB);
+    ap_uint<16> w = 0;
+    bool is_a = true;
+WORDS:
+    for (int i = 0; i < total; ++i) {
+#pragma HLS LOOP_TRIPCOUNT max = PMAX * (WA + WB)
+#pragma HLS PIPELINE II = 1
+        const bool last = w == (is_a ? WA : WB) - 1;
+        streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(m_out, m_mem.read(), last);
+        if (last) {
+            w = 0;
+            is_a = !is_a;
+        } else {
+            ++w;
+        }
     }
 }
 

@@ -18,7 +18,7 @@ live:
 | operands and results | on streams: a command and its operands in; a `Resp` and `C` out | in memory: a job descriptor in, `C` written back, an `EngineDone` out |
 | largest product | `Mmax × Pmax·Kmax × Nmax` | any multiple of `Mmax`, `Nmax`; `K ≤ Pmax·Kmax` |
 | reuse | `keep_a`: one `A` for several `B` | none across tiles |
-| at the centre | `8×8×32` back to back: 175 cycles a job (64-bit words), 94 (128-bit) | `32×32×64`: done at 6,468 cycles (64-bit), 3,680 (128-bit) |
+| at the centre | `8×8×32` back to back: 171 cycles a product (64-bit words), 94 (128-bit) | `32×32×64`: done at 5,813 cycles (64-bit), 3,033 (128-bit) |
 
 (Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns, the centre configuration of
 [the engine page](systolic_engine.md#parameters).)

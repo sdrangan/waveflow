@@ -271,6 +271,10 @@ class IntChannel:
     width: int = 0                      # payload width W
     master_task: int | None = None      # index into TopSpec.tasks (producer)
     slave_task: int | None = None       # index into TopSpec.tasks (consumer)
+    #: A banked ``sob`` channel's first bank, as Vitis suffixes its nets (``_0``, ``_0_0``: one
+    #: index per partitioned dimension).  Every bank of a block is acquired and released together,
+    #: so the first bank's lock nets are the block's events.  Empty: one bank.
+    bank: str = ""
 
 
 @dataclass(frozen=True)
@@ -536,13 +540,18 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
                 return None
             return tasks[t].params[tasks[t].args.index(ch.name)]
 
-        mp, sp = _param(ch.master_task), _param(ch.slave_task)
+        # A banked block (StreamOfBlocksIF.bank) is a ping-pong per bank, each with its own nets,
+        # suffixed by its indices (`a_0_i_full_n`, `<inst>_a_blk_0_read`; Vitis 2025.1, the systolic
+        # engine): the first bank's stand for the block.
+        mp, sp, k = _param(ch.master_task), _param(ch.slave_task), ch.bank
         if prod is not None and mp is not None:
-            entry["write"] = {"blk_release": f"{prod}_{mp}_write", "blk_ce0": f"{prod}_{mp}_ce0",
-                              "blk_full_n": f"{ch.name}_i_full_n"}
+            entry["write"] = {"blk_release": f"{prod}_{mp}{k}_write",
+                              "blk_ce0": f"{prod}_{mp}{k}_ce0",
+                              "blk_full_n": f"{ch.name}{k}_i_full_n"}
         if cons is not None and sp is not None:
-            entry["read"] = {"blk_release": f"{cons}_{sp}_read", "blk_ce0": f"{cons}_{sp}_ce0",
-                             "blk_empty_n": f"{ch.name}_t_empty_n"}
+            entry["read"] = {"blk_release": f"{cons}_{sp}{k}_read",
+                             "blk_ce0": f"{cons}_{sp}{k}_ce0",
+                             "blk_empty_n": f"{ch.name}{k}_t_empty_n"}
         return entry
 
     entry["write"] = {"din": f"{prod}_{ch.name}_din",
@@ -590,7 +599,8 @@ def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = Fa
                    name=name, kind=kind, bundle=None, width=width, axi4s=axi4s)
 
 
-def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
+def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0",
+               burst: bool = False) -> ExtPort:
     """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
     with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
     ``const`` (the ``@port_read`` capability -> a stray write is a compile error); the write owner is
@@ -608,11 +618,18 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
 
     The cost is the relocatable base: the bus address is the command's word coordinate times the
     word size, from 0.  Every flow already ran that way -- the XSI testbenches and the system top
-    pinned the base register to 0."""
+    pinned the base register to 0.
+
+    *burst* (the endpoint's ``burst_maxi = True``): the port is an ``hls::burst_maxi<ap_uint<W> >``,
+    passed by value, instead of a pointer -- the body issues ``read_request`` / ``write_request``
+    ahead of the data, so bursts queue in the adapter and the port does not idle between them (the
+    systolic engine's feeder, Vitis 2025.1).  Same interface pragmas, same RTL ports."""
     qual = "const " if const else ""
     pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=off bundle={bundle} depth=8192",
                f"#pragma HLS stable variable={name}"]
-    return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
+    decl = (f"hls::burst_maxi<ap_uint<{width}> > {name}" if burst
+            else f"{qual}ap_uint<{width}>* {name}")
+    return ExtPort(decl, tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
                    width=width)
 
@@ -1056,7 +1073,8 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
-        return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle)
+        return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle,
+                          burst=bool(getattr(ep, "burst_maxi", False)))
     if kind == "bram":
         if ep is None:
             raise LoweringError(
@@ -1114,8 +1132,10 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     ``framed`` channel's RTL net is one bit wider (``last`` on top, see
     :func:`waveflow.utils.vcd.split_framed_word`), and a ``sob`` channel carries its own element
     width."""
+    bank = ""
     if isinstance(edge, SobEdge):
         kind, payload = "sob", edge.elem_bw
+        bank = "".join("_0" for _ in edge.partition)
     elif isinstance(edge, FramedEdge):
         kind, payload = "framed", (width if edge.bitwidth is None else int(edge.bitwidth))
     else:
@@ -1130,6 +1150,7 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
         width=payload,
         master_task=ep_task.get(id(edge.master_ep)),
         slave_task=ep_task.get(id(edge.slave_ep)),
+        bank=bank,
     )
 
 
@@ -1319,6 +1340,8 @@ def render_top(spec: TopSpec) -> str:
     # (`extra_includes` may name it too; dict.fromkeys below is not applied here, so the guard is.)
     if any(p.axi4s for p in spec.ports) and "streamutils_hls.h" not in spec.extra_includes:
         lines.append('#include "streamutils_hls.h"')
+    if any(p.decl.startswith("hls::burst_maxi<") for p in spec.ports):
+        lines.append('#include "hls_burst_maxi.h"')
     lines += [f'#include "{h}"' for h in spec.extra_includes]   # e.g. hls_streamofblocks.h (SOBIF)
     lines += [f'#include "{h}"' for h in spec.cmd_headers]
     lines += [f'#include "{h}"' for h in task_headers]

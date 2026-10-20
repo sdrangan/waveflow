@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 2
 audience: python
 api: [SystolicEngine]
-summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- its performance (Vitis 2025.1, centre: 175 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, bound by the input; measured in examples/systolic), and its limits."
+summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- its performance (Vitis 2025.1, centre: 171 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, 81 an output when a command carries four; measured in examples/systolic), and its limits."
 snippets: run
 ---
 
@@ -138,8 +138,9 @@ flowchart LR
 Six free-running tasks, one command per firing each, every loop at II 1 (`waveflow/build/systolic_engine_*_task.h`).
 
 **The receiver** checks the command, sends the job to the loaders and the core and the reply to the
-store, and forwards each operand burst -- `A` to one loader, `B` to the other. A refused command is
-answered with its status alone and stops the receiver.
+store, and forwards the operand bursts -- `A` to one loader, `B` to the other -- each output's in one
+pipelined loop, a word a cycle. A refused command is answered with its status alone and stops the
+receiver.
 
 **Two loaders, banked buffers, no copy.** Each loader writes its operand straight into a banked
 stream-of-blocks buffer in the layout the array reads: `X` (`A`, or `Aᵀ`) as `[Mmax][Kmax]`, a bank per
@@ -173,10 +174,12 @@ diagonals (`drain_order`) -- and places each in a `C` block. **The store** write
 ## Performance
 
 Measured at RTL at the centre ([the example](../../../examples/systolic/timing.md)): bit-exact on every
-path of the array, and `8×8×32` products back to back at **175 cycles each with 64-bit words, 94 with
+path of the array, and `8×8×32` products back to back at **171 cycles each with 64-bit words, 94 with
 128-bit**. At 64 bits the input, `kp·(m + n)` values a product, sets the pace
 ([the bounds](systolic_theory.md#three-bounds-on-a-panel)), and with short panels the output; at 128 bits
-the core's own floor -- its 64 tile steps and ~30 cycles a command -- ties with the input.
+the core's own floor -- its 64 tile steps and ~30 cycles a command -- ties with the input. A command
+with several outputs (`nb`) spreads those fixed costs: four outputs a command run at **81 cycles an
+output**, the input's bound.
 The [harness, workloads and gates](../../../examples/systolic/test.md) and
 [resources](../../../examples/systolic/resource.md) are in the example.
 
@@ -185,10 +188,11 @@ The [harness, workloads and gates](../../../examples/systolic/test.md) and
 - **Not calibrated.** The core's pysim time is one phase per panel (`b_blk.first → b_blk.last`, its tile
   steps plus a seeded intercept); the calibration comes once the design settles
   (`plans/systolic_characterization.md`).
-- **Fixed costs per command.** At 128-bit words the core's ~30 cycles a command beyond its tile steps
-  (the empty tile that runs the last one out, the restart) and the receiver's ~13 bind together: both
-  must shrink to go faster. Carrying the array's state from command to command would remove the core's
-  (as `static` registers it made csynth run out of memory, 6.7 GB against 0.4).
+- **Fixed costs per command.** The core's ~30 cycles a command beyond its tile steps (the empty tile
+  that runs the last one out, the restart) and the receiver's ~9 are paid once a command: batch outputs
+  into a command (`nb`) to spread them. Carrying the array's state from one command to the next would
+  remove the core's, but both ways tried -- `static` registers, and a loop over commands in one firing
+  -- made csynth run out of memory (6.7 and 7.0 GB, against 0.4).
 - **`R ≤ L`.** The drain needs distinct diagonals; `R > L` is refused at construction.
 - **Ordered, not addressed.** Operands are reused in order (`keep_a`), not by address. Addressed regions
   would need T2P BRAMs shared between tasks (`T2pBram`, `LockedT2pMemIF`).
