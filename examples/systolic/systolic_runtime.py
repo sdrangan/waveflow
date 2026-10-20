@@ -2,6 +2,7 @@
 
     python -m examples.systolic.systolic_runtime                          # untimed + pysim
     python -m examples.systolic.systolic_runtime --rtl --root C:/wfsc/rt  # ... + the RTL under XSI
+    python -m examples.systolic.systolic_runtime --sizes --rtl --root C:/wfsc/rs  # across sizes
     python -m examples.systolic.systolic_runtime --conversion             # word conversion alone
 
 The three ways to run the same bit-exact systolic engine on the same products -- ``8×8×32`` back to
@@ -65,12 +66,13 @@ def time_untimed(cfg: dict, n: int, reps: int) -> float:
     return best
 
 
-def time_pysim(cfg: dict, n: int, reps: int) -> tuple[float, int, bool]:
-    """One whole pysim run -- build the harness, write the scenario, run -- its SimPy events, and
-    whether every output word equals the model's (checked after the clock stops)."""
+def time_pysim(cfg: dict, n: int, reps: int) -> tuple[float, int, bool, float]:
+    """One whole pysim run -- build the harness, write the scenario, run -- its SimPy events,
+    whether every output word equals the model's (checked after the clock stops), and its length
+    in cycles."""
     from waveflow.build.system_dag import gather_recordings, golden_mismatches
 
-    best, events, ok = None, 0, True
+    best, events, ok, cyc = None, 0, True, 0.0
     for _ in range(reps):
         with tempfile.TemporaryDirectory() as root:
             t = time.perf_counter()
@@ -79,21 +81,106 @@ def time_pysim(cfg: dict, n: int, reps: int) -> tuple[float, int, bool]:
             sysm.run()
             dt = time.perf_counter() - t
             events = next(sysm.sim.env._eid)
+            cyc = sysm.sim.env.now / sysm.clock().period
             traces = Path(root) / "traces"
             gather_recordings(sysm, Path(root), traces)
             ok = ok and not golden_mismatches(traces, sysm.golden_outputs() or {})
         best = dt if best is None else min(best, dt)
-    return best, events, ok
+    return best, events, ok, cyc
 
 
-def time_rtl(root: Path, cfg: dict, n: int) -> dict:
+def rtl_bound(pysim_cycles: float) -> int:
+    """The RTL's fixed run: the harness has no host to end it, so it simulates every cycle of its
+    bound -- set a little past the pysim's length (within 12% of the RTL's), not far past it."""
+    return int(1.2 * pysim_cycles) + 2000
+
+
+def time_rtl(root: Path, cfg: dict, n: int, n_cycles: int) -> dict:
     """The harness through XSI in one build root: each step's time (csynth is fresh only on the
     first count), the XSI runner's phases, and whether compare passed."""
     from waveflow import events
 
-    dag = EH.build_dag(cfg, workload=f"steady_{n}", n_cycles=400 * n + 4000)
+    dag = EH.build_dag(cfg, workload=f"steady_{n}", n_cycles=n_cycles)
     with events.collect() as spans:
         results = dag.run(EH.build_config(root), through="compare")
+    phases: dict[str, float] = {}
+    for sp in spans:
+        if sp.get("kind") == "phase":
+            phases[sp["name"]] = phases.get(sp["name"], 0.0) + float(sp.get("elapsed", 0.0))
+    bad = [k for k, r in results.items() if not r.success]
+    return {"steps_s": {k: r.elapsed_seconds for k, r in results.items()}, "phases_s": phases,
+            "exact": not bad, "failed": bad or None, "bound_cycles": n_cycles}
+
+
+SQUARE_SIZES = (32, 64, 128, 256)
+
+
+def time_sizes(sizes, reps: int, root: Path | None) -> dict:
+    """One ``n x 32 x n`` product through the memory-backed engine (128-bit words, the flat pysim),
+    per ``n``: the untimed model, the pysim (build the harness, run, every C word checked), and with
+    *root* the RTL under XSI.  The RTL runs a fixed bound of cycles (the harness has no host to end
+    it), set a little past the pysim's length; its rate is reported per simulated cycle, so its time
+    for the product alone is ``done cycle / rate``."""
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    from examples.systolic import engine_mem_harness as EMH
+
+    cfg = {"word_bits": 128}
+    rows = {}
+    for n in sizes:
+        kind = f"square_{n}"
+        m = EMH.engine_mem(**cfg)
+        jobs, _ = m._layout(kind)
+        (_d, (ar, ai), (br, bi), _aw, _bw), = jobs
+        best = None
+        for _ in range(reps):
+            t = time.perf_counter()
+            mm.matmul(ar, ai, m.a, br, bi, m.b, m.c, form=int(m.form))
+            best = min(best or 1e9, time.perf_counter() - t)
+        row = {"M": n, "K": int(_d.K), "N": n, "untimed_s": best}
+
+        best, cyc, events, exact = None, 0.0, 0, True
+        for _ in range(reps):
+            with tempfile.TemporaryDirectory() as tmp:
+                t = time.perf_counter()
+                s = harness(EMH.engine_mem(pysim="flat", **cfg), workload=kind, n_cycles=10**8)
+                s.write_scenario(Path(tmp))
+                s.run()
+                best = min(best or 1e9, time.perf_counter() - t)
+                cyc, events = s.sim.env.now / s.clock().period, next(s.sim.env._eid)
+                words = np.asarray(read_burst_bundle(Path(tmp) / "vectors" / "mem")[0], np.uint64)
+                exact = exact and EMH.check_c(words, kind, **cfg) == [0]
+        row["pysim_flat"] = {"s": best, "cycles": cyc, "events": events, "exact": exact}
+
+        if root is not None:
+            bound = rtl_bound(cyc)
+            r = time_rtl_mem(root, cfg, kind, bound)
+            work = root / EMH.WORK_DIR / EMH.TOP / "xsi_run" / "vectors"
+            words = np.asarray(read_burst_bundle(work / "mem")[0], np.uint64)
+            done = np.fromfile(work / "s_done" / "cycles.bin", dtype="<u8")
+            sim_s = r["phases_s"].get("simulate", r["steps_s"].get("system_xsi", 0.0))
+            row["rtl"] = {**r, "bound_cycles": bound, "simulate_s": sim_s,
+                          "done_cycle": int(done[-1]) if done.size else None,
+                          "cycles_per_s": bound / sim_s if sim_s else None,
+                          "exact": r["exact"] and EMH.check_c(words, kind, **cfg) == [0]}
+        rows[str(n)] = row
+        rt = row.get("rtl", {})
+        print(f"{n:4d}x{row['K']}x{n:<4d} untimed {1e3 * row['untimed_s']:8.2f} ms  "
+              f"pysim {1e3 * row['pysim_flat']['s']:8.1f} ms ({cyc:.0f} cyc, {events} ev)  "
+              f"rtl {rt.get('simulate_s', float('nan')):7.2f} s ({rt.get('done_cycle')} cyc)  "
+              f"exact {row['pysim_flat']['exact']} {rt.get('exact')}", flush=True)
+    return {"workload": "n x 32 x n, SystolicEngineMem centre, 128-bit words", "sizes": rows}
+
+
+def time_rtl_mem(root: Path, cfg: dict, kind: str, n_cycles: int) -> dict:
+    """The memory-backed engine's harness through XSI (csynth fresh only on the first size)."""
+    from waveflow import events
+
+    from examples.systolic import engine_mem_harness as EMH
+
+    dag = EMH.build_dag(cfg, workload=kind, n_cycles=n_cycles)
+    with events.collect() as spans:
+        results = dag.run(EMH.build_config(root), through="compare")
     phases: dict[str, float] = {}
     for sp in spans:
         if sp.get("kind") == "phase":
@@ -161,6 +248,8 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=3, help="best of this many runs per point")
     ap.add_argument("--rtl", action="store_true", help="also run the RTL under XSI (needs Vivado)")
     ap.add_argument("--root", type=Path, default=None, help="the RTL build root (keep it short)")
+    ap.add_argument("--sizes", action="store_true",
+                    help="n x 32 x n products through the memory-backed engine, n = 32 .. 256")
     ap.add_argument("--conversion", action="store_true",
                     help="only time the matrix <-> word conversion across sizes")
     a = ap.parse_args()
@@ -168,6 +257,23 @@ def main() -> None:
     cfg = {"word_bits": a.word_bits}
     machine = {"cpu": platform.processor(), "python": platform.python_version(),
                "system": platform.platform()}
+    if a.sizes:
+        root = None
+        if a.rtl:
+            if a.root is None:
+                raise SystemExit("--rtl needs --root (a short path: csynth fails past 260 characters)")
+            root = a.root.resolve()
+            root.mkdir(parents=True, exist_ok=True)
+        data = json.loads(RUNTIME.read_text(encoding="utf-8")) if RUNTIME.exists() else {}
+        out = {**time_sizes(SQUARE_SIZES, a.reps, root), "date": date.today().isoformat(),
+               "preliminary": True, "machine": machine, "reps": a.reps}
+        if root is None and "sizes_w128" in data:        # keep RTL rows this run did not repeat
+            for n, row in data["sizes_w128"].get("sizes", {}).items():
+                if "rtl" in row and n in out["sizes"]:
+                    out["sizes"][n]["rtl"] = row["rtl"]
+        data["sizes_w128"] = out
+        RUNTIME.write_text(json.dumps(dict(sorted(data.items())), indent=1) + "\n", encoding="utf-8")
+        return
     if a.conversion:
         data = json.loads(RUNTIME.read_text(encoding="utf-8")) if RUNTIME.exists() else {}
         data[f"conversion_w{a.word_bits}"] = {
@@ -184,10 +290,13 @@ def main() -> None:
     out["untimed"] = _fit(counts, secs)
     print(f"untimed  {out['untimed']['per_product_ms']:8.3f} ms/product", flush=True)
 
+    pysim_cycles = {}
     for mode, key in (("tasks", "pysim"), ("flat", "pysim_flat")):
         runs = [time_pysim({**cfg, "pysim": mode}, n, a.reps) for n in counts]
+        pysim_cycles = pysim_cycles or {n: r[3] for n, r in zip(counts, runs)}
         out[key] = {**_fit(counts, [r[0] for r in runs]), "exact": all(r[2] for r in runs),
                     "events": {str(n): r[1] for n, r in zip(counts, runs)},
+                    "cycles": {str(n): r[3] for n, r in zip(counts, runs)},
                     "events_per_product": float(np.polyfit(counts, [r[1] for r in runs], 1)[0])}
         print(f"{key:10} {out[key]['per_product_ms']:8.3f} ms/product  "
               f"{out[key]['events_per_product']:.0f} events/product", flush=True)
@@ -197,7 +306,7 @@ def main() -> None:
             raise SystemExit("--rtl needs --root (a short path: csynth fails past 260 characters)")
         root = a.root.resolve()
         root.mkdir(parents=True, exist_ok=True)
-        rr = [time_rtl(root, cfg, n) for n in counts]
+        rr = [time_rtl(root, cfg, n, rtl_bound(pysim_cycles[n])) for n in counts]
         sim = [r["phases_s"].get("simulate", r["steps_s"].get("system_xsi", 0.0)) for r in rr]
         out["rtl"] = {**_fit(counts, sim), "exact": all(r["exact"] for r in rr),
                       "csynth_s": rr[0]["steps_s"].get("csynth"), "runs_detail": rr}

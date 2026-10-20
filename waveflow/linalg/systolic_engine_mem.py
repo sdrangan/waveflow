@@ -367,6 +367,11 @@ class SystolicEngineMem(_MemPart):
                     dict(op=MatmulOp.MUL, M=Mm, K=Km, N=Nm)]
         if kind == "big":
             return [dict(op=MatmulOp.MUL, M=4 * Mm, K=P * Km, N=2 * Nm)]
+        if kind.startswith("square_"):              # one n x Pmax*Kmax x n product
+            n = int(kind.removeprefix("square_"))
+            if n % Mm or n % Nm:
+                raise ValueError(f"{kind}: n must be a multiple of Mmax {Mm} and Nmax {Nm}")
+            return [dict(op=MatmulOp.MUL, M=n, K=P * Km, N=n)]
         raise ValueError(f"no workload {kind!r}")
 
     def _layout(self, kind: str):

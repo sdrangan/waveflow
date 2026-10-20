@@ -77,6 +77,24 @@ def test_flat_engine_inside_the_wrapper_writes_c_exactly(word_bits):
         assert abs(t_flat - t_tasks) <= 0.03 * t_tasks, (kind, t_flat, t_tasks)
 
 
+def test_square_workload_is_exact():
+    """The n x 32 x n workload docs/evaluation/sim_speed/systolic.md sweeps: the flat pysim writes C
+    exactly, and a size the tiles do not divide is refused."""
+    from pathlib import Path
+    import tempfile
+
+    from waveflow.hw.harness import harness
+
+    root = Path(tempfile.mkdtemp())
+    s = harness(EMH.engine_mem(word_bits=128, pysim="flat"), workload="square_64", n_cycles=10**6)
+    s.write_scenario(root)
+    s.run()
+    words = np.asarray(read_burst_bundle(root / "vectors" / "mem")[0], np.uint64)
+    assert EMH.check_c(words, "square_64", word_bits=128) == [0]
+    with pytest.raises(ValueError, match="multiple"):
+        EMH.engine_mem().jobs("square_40")
+
+
 def test_flat_pysim_refuses_an_unknown_granularity():
     with pytest.raises(ValueError, match="pysim"):
         EH.engine(pysim="coarse")
