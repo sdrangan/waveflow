@@ -22,6 +22,9 @@ RTL. For what the linear-algebra components share (formats, lane groups, message
 step), see [Linear-Algebra Conventions](../linalg_common.md). [Architecture](architecture.md)
 follows one job through the hardware cycle by cycle -- storage, tiling, load, store, the schedule --
 and [Timing](timing.md) says where its timing is measured and what was measured.
+[Systolic engine](engine.md) is its redesign -- operands read in place, a streaming array,
+panels for a `K` larger than the buffers, a memory wrapper for matrices larger than the engine --
+at 175 cycles a job against this unit's 390.
 
 ## What it computes
 

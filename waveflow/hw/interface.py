@@ -2308,6 +2308,33 @@ class StreamOfBlocksIF(QueuedTransferIF):
         # depth-2 ping-pong: `depth` free buffers; a ready queue of committed blocks.
         self._free = simpy.Container(self.env, init=self.depth, capacity=self.depth)
         self._ready = simpy.Store(self.env, capacity=self.depth)
+        # Committed blocks the reader has not yet released.  The RTL buffer (Vitis 2025.1,
+        # `<ch>_RAM_AUTO_1R1W`) drops its writer's `i_full_n` once depth - 1 blocks are committed and
+        # unreleased, and a commit waits for it: a writer may FILL the next block while the reader holds
+        # the last, but COMMITS it only after the reader frees the earlier one (one block ahead at depth
+        # 2, plans/systolic_characterization.md).  Capacity depth - 1 makes pysim's commit wait the same.
+        self._held = simpy.Container(self.env, init=0, capacity=max(1, self.depth - 1))
+
+    def bank(self, shape: tuple[int, ...], partition: tuple = ()) -> "StreamOfBlocksIF":
+        """Declare the block's C++ shape and banking for codegen: the block is
+        ``ap_uint<W>[shape[0]][shape[1]]...`` (its ``element_type`` lists ``prod(shape)`` elements,
+        row-major), split by ``#pragma HLS ARRAY_PARTITION`` per *partition* entry ``(dim, kind,
+        factor)`` (``kind`` ``"complete"`` or ``"cyclic"``; *dim* from 1).  Vitis then builds one
+        ping-pong per bank, and a reader may take a value from every bank in one cycle
+        (``plans/witness/systolic_stream``).  Kept out of the dataclass fields -- an attribute only
+        on a channel that declares it -- so no other module's structure signature moves.  Returns
+        the interface."""
+        shape = tuple(int(d) for d in shape)
+        n = int(self.element_type.max_shape[0])
+        if int(np.prod(shape)) != n:
+            raise ValueError(f"StreamOfBlocksIF {self.name!r}: shape {shape} holds "
+                             f"{int(np.prod(shape))} elements, the block has {n}")
+        for dim, kind, _factor in partition:
+            if not 1 <= int(dim) <= len(shape) or kind not in ("complete", "cyclic"):
+                raise ValueError(f"StreamOfBlocksIF {self.name!r}: bad partition {(dim, kind)}")
+        self.__dict__["block_shape"] = shape
+        self.__dict__["block_partition"] = tuple((int(d), str(k), int(f)) for d, k, f in partition)
+        return self
 
     def acquire_write(self) -> ProcessGen["DataSchema"]:
         """Acquire a free buffer and return a fresh typed block instance to fill."""
@@ -2315,7 +2342,9 @@ class StreamOfBlocksIF(QueuedTransferIF):
         return self.element_type()
 
     def commit_write(self, block: "DataSchema") -> ProcessGen[None]:
-        """Commit the filled block to the consumer's ready queue."""
+        """Commit the filled block to the consumer's ready queue -- once the reader has released the
+        blocks committed before it, as the RTL buffer allows (see ``__post_init__``)."""
+        yield self._held.put(1)
         yield self._ready.put(block)
 
     def acquire_read(self) -> ProcessGen["DataSchema"]:
@@ -2325,6 +2354,7 @@ class StreamOfBlocksIF(QueuedTransferIF):
 
     def release_read(self) -> ProcessGen[None]:
         """Release the block back to the free pool."""
+        yield self._held.get(1)
         yield self._free.put(1)
 
     def bind(self, ep_name: str, endpoint: InterfaceEndpoint) -> None:

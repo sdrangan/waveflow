@@ -736,10 +736,19 @@ class SobEdge:
     elem_bw: int
     block_n: int
     depth: int = 2
+    #: The block's C++ dimensions (``StreamOfBlocksIF.bank``); empty: one dimension of ``block_n``.
+    shape: tuple[int, ...] = ()
+    #: ``(dim, kind, factor)`` per ``#pragma HLS ARRAY_PARTITION`` on the channel (a bank each).
+    partition: tuple = ()
 
     def decl(self, width: int) -> str:
-        return (f"hls_thread_local hls::stream_of_blocks<ap_uint<{self.elem_bw}>[{self.block_n}], "
+        dims = "".join(f"[{d}]" for d in (self.shape or (self.block_n,)))
+        line = (f"hls_thread_local hls::stream_of_blocks<ap_uint<{self.elem_bw}>{dims}, "
                 f"{self.depth}> {self.name};")
+        for dim, kind, factor in self.partition:
+            extra = f" factor={factor}" if kind == "cyclic" else ""
+            line += f"\n    #pragma HLS ARRAY_PARTITION variable={self.name} dim={dim} {kind}{extra}"
+        return line
 
 
 #: Returned by :func:`_declared_boundary_kind` when the endpoint's class declares nothing at all.
@@ -855,7 +864,9 @@ def derive_internal_edges(comp) -> list:
                     f"derive_internal_edges: SOBIF {iface.name!r} has no element_type, so its block "
                     f"width/length cannot be derived. Construct it with element_type=<DataArray>.")
             edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
-                                 block_n=int(et.max_shape[0]), depth=int(iface.depth)))
+                                 block_n=int(et.max_shape[0]), depth=int(iface.depth),
+                                 shape=tuple(getattr(iface, "block_shape", ())),
+                                 partition=tuple(getattr(iface, "block_partition", ()))))
         elif isinstance(iface, StreamIF):
             # A framed StreamIF lowers to a FramedEdge (framed_word FIFO, carries the packet
             # boundary); a plain one to a StreamEdge (ap_uint FIFO).  See plans/memstream_inband.md.

@@ -431,13 +431,36 @@ first. All numbers Vitis HLS / Vivado xsim 2025.1.
 > - **pysim's block buffer** (framework): the RTL ping-pong releases a writer's commit only after the
 >   reader frees the previous block; pysim allows two. Fix pysim, flag what it changes.
 >
-> Proposed choices (to confirm with the user before code): role stores `A` (bank per row), `B` (bank
-> per array column), `C` (accumulator width), two regions each; commands `Load(region, role, rows,
-> cols, transpose)`, `MatMult(a, b, c, m, k, n, accumulate)`, `Store(c, m, n)` with a `tx_id` each and a
-> `Status` per command on its own stream, errors fatal; shadow accumulators for tile overlap, and an
-> accumulate mode that starts a tile from `C`'s partial sums; a sequencer between `MemRStream` and
-> `MemWStream` running the output-stationary loop over block-major matrices (strided reads later);
-> the current `SystolicUnit` kept beside the new unit.
+> **Decided (user, 2026-10-19): ordered, banked stream-of-blocks** -- not addressed regions.
+>
+> - **Fact (measured, Vitis 2025.1, `C:\wfsc\sobbank`):** `ARRAY_PARTITION dim=1 complete` on a
+>   `hls_thread_local hls::stream_of_blocks<v_t[R][K], 2>` splits it into `R` independent ping-pong
+>   buffers (`b_0`..`b_3`, "aggregating stream-of-blocks variable 'b_i'"); a reader takes all `R`
+>   rows a cycle at II 1, the writer fills at II 1. So operands are loaded straight into the layout
+>   the array reads -- no core-side copy -- and the ping-pong double-buffers.
+> - **Why not addressed regions:** tasks share no addressable memory, only FIFO-ordered blocks.
+>   Addressed regions need hand-written T2P BRAMs (`T2pBram`/`BramIF`, `LockedT2pMemIF` with disjoint
+>   regions, plus ready/free channels -- the lock arbitrates, it does not synchronise): `R + C`
+>   memories and the wrapper. A later upgrade if a use needs arbitrary reuse; it replaces the buffers
+>   and the command's reuse fields, not the sweep. Accepted price now: every block is sized to the
+>   maximum (`Mmax x Kmax`, `Kmax x Nmax`, `C` at `acc_t`), x2; small jobs leave it idle (mostly LUTRAM,
+>   since the banks are shallow).
+> - **Command (order, not address):** `MatMult(tx_id, m, n, kp, npanels, nb, keep_a)` -- for each of
+>   `nb` outputs, for each of `npanels` k-panels: take the next `A` (unless `keep_a`: one `A` for the job)
+>   and the next `B`, sweep accumulating into the `C` tile at `acc_t`; then round once and emit `C`. The
+>   outer loop (`npanels` > 1) is exact for `K > Kmax`; CG reuse is `keep_a` with `nb`. `Load` and
+>   `Store` are not separate commands: operands arrive in order, `C` leaves per output.
+>   `tx_id` and a `Status` per command on its own stream; errors fatal.
+> - **The core as a streaming systolic array:** each PE carries a `first` flag with its `X` input and
+>   latches its accumulator into a shadow register when it arrives, starting the next tile at once;
+>   tiles follow every `P = max(k_p, R*C/L, L)` cycles (a tile shorter than `P` is padded with zero
+>   steps -- exact); shadows drain in diagonal order (group `(i, cg)` from its row's latch to the next
+>   overwrite). Centre: `P = 8` against 36 a tile now; core ~ 80-90 cycles a job against 390; the
+>   unit then bound by its input (163 words a job): ~165.
+> - **Build order** (each: pysim bit-exact -> csynth II/resources -> one short stream-fed RTL run):
+>   (1) banked loader + core reading in place; (2) the streaming sweep + shadow drain; (3) panels;
+>   (4) receiver, store, command, pysim module; (5) the wrapper. Calibration and full gates once, last.
+> - The current `SystolicUnit` stays beside the new unit (`mimo_cg` uses it).
 
 ### Stage 6 -- addressed operands, accumulate, and a tiling wrapper with memory adaptors
 
@@ -461,6 +484,51 @@ Sequencer -> MemRStream cmds (A / B panels)     MemRStream -> inner unit s_in
 Sequencer -> inner cmds (in-band, ahead of the data each consumes)
 inner s_out -> MemWStream (C tiles + their cmds)            -> Status(tx_id), one per Job
 ```
+
+#### Record: Part B built (2026-10-19, branch `systolic-engine`) -- before the calibration
+
+All numbers Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns, centre (`Mmax 8, Kmax 8, Nmax 32, Pmax 4,
+R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
+
+- **Facts measured first** (`plans/witness/systolic_stream`, `C:\wfsc\sobbank`, `C:\wfsc\sobnest`):
+  a partitioned `stream_of_blocks` is one ping-pong per bank, read a bank a cycle at II 1 (2-D
+  partitions too); one task may hold two read locks and a write lock at once (csynth; the pipelines
+  fall back to `style=stp`); the streaming sweep prototype is bit-exact, II 1, 84 steps for `8x8x32`.
+- **Built:** `waveflow/linalg/systolic_engine.py` (`SystolicEngine`: rx, two loaders, core, store) and
+  `systolic_engine_mem.py` (`SystolicEngineMem`: sequencer, in-band `MemRStream` / `MemWStream`,
+  writer); bodies `waveflow/build/systolic_engine_{rx,load,core,store,mem}_task.h`; framework
+  `StreamOfBlocksIF.bank(shape, partition)`; pysim's block buffer now commits one block ahead.
+- **Design changes found while building** (each from a measurement):
+  - two loaders, not one: a single loader filling `A` then `B` waits to commit the next `A` until the
+    core frees the current one, which it does together with `B` -- the next `B` would load after the
+    sweep;
+  - the `A` channel holds a whole `A` (32 words): the `A` loader takes a value a cycle and the receiver
+    forwards in order (206 -> 175 cycles a job);
+  - one call site of the array: three call sites (keep, last panel, other panels) built three arrays
+    (410 DSP); the `C` lock is held across an output's panels and `keep_a` moved into the `A` loader
+    (repeats a local copy) -- 137 DSP for the core;
+  - `B` laid out `[Kmax][Nmax/C][C/LW][LW]` so a word's values land in constant lanes (a provably
+    conflict-free write a word a cycle); `A` written a value a cycle (no `kp` alignment rule; `A^H`
+    at a value a cycle, against II 2 in `SystolicUnit`);
+  - LUTs 47.4k -> 37.0k: the accumulator store in LUTRAM (`ram_s2p`), one adder per element, the tile
+    index riding with the flag, 10-bit counters.
+- **Measured:** engine bit-exact at RTL (six commands); **175 cycles a job** stream-fed `8x8x32`
+  (`SystolicUnit` 390; 162 words in + 13 of command handling); wrapper exact at RTL on four jobs incl.
+  `32x32x64` (done at 6,655 against an input floor of ~5,136); engine 154 DSP / 37.0k LUT / 26 BRAM,
+  est. 3.05 ns; wrapper 156 DSP / 43.2k LUT / 30 BRAM, est. 3.35 ns.
+- **The core's own time** (trace: its first touch of `X` to its `C` commit): **87 cycles** a job
+  (panel 83 + commit 4), the same at `kp` 1, 2 and 8. Never the bound at 64-bit words: the input binds
+  at `kp = 8` (175), the output at short `kp` (141 cycles: `C` is 128 words whatever `kp`).
+- **The wrapper's reader** (the `32x32x64` product, read port traced): the in-band `MemRStream` paid
+  ~16 idle cycles per read command, 8 a tile (6,655, 80% busy). Replaced by `EngineFeeder`, a task
+  owning the read port that streams a tile per firing, a burst loop per operand panel: **6,470** (82%;
+  ~12 idle cycles at each switch between burst loops). Tried and dropped: one flattened loop with a
+  computed address (no burst, 10,639); `A` panels then `B` panels as two runs (`B` waits behind the
+  core's last panel, one block of buffering: 7,984). Wrapper now 157 DSP / 42.9k LUT / 30 BRAM.
+- **Open before the calibration:** the remaining loop-switch loss (`hls::burst_maxi` or a deeper `B`
+  buffer); the receiver's 13 cycles a command; 128-bit words (the I/O binds, the core has room;
+  `lanes.WORD_BITS_SUPPORTED`); continuous panels; the per-element selects (LUTs); then calibrate
+  once (6d).
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 
@@ -548,6 +616,21 @@ number of jobs). **Pause.**
 
 **Gate:** the held-out scores reported; `pytest -m xsi` and the fast suites pass; every number traces
 to a committed record. Part B's PR ready for the user. **Pause.**
+
+### Stage 7 (late, low priority) -- compare with AMD's Vitis BLAS GEMM
+
+The student's core is said to be based on AMD's Vitis core (nothing in the repo records which parts);
+AMD benchmarked theirs extensively ([Vitis BLAS benchmark](https://docs.amd.com/r/en-US/Vitis_Libraries/blas/benchmark.html);
+their systolic array is the L1 `gemm` primitive under an L2 GEMM kernel, sized to the memory width,
+operands streamed from DDR/HBM). After Part B, not before it:
+
+1. **Read their source against ours** (cheap): does their array overlap a tile's drain with the next
+   sweep, stream operands into the array rather than copy them into banks, double-buffer across jobs?
+   A record of what the student's derivation lost, and whether Part B recovered it.
+2. **Wrap their GEMM and run it in the same harness** (bigger; `plans/integrate_blas.md`, where GEMM
+   may be L2-only): the same jobs, cycles per job and resources side by side. Caveat: their published
+   numbers are large float/int GEMM; at 8x8x32 complex fixed point their fill and tile setup may
+   dominate, so architecture, not their throughput, is the comparison.
 
 ## Out of scope
 
