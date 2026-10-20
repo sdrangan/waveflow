@@ -15,6 +15,8 @@ The values handled here are the **stored integers** of the register format.
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 from waveflow.hw.complexfield import ComplexField
@@ -176,6 +178,22 @@ def mem_array_type(
     return DataArray.specialize(elem, max_shape=(int(n),))
 
 
+#: Lane widths whose memory elements are a pair of machine integers: the words are then the
+#: ``(re, im)`` pairs' own bytes, and the conversion is a reinterpretation of the buffer (one pass,
+#: no ``DataArray``).  Any other width takes the general ``ComplexField`` path.
+_DIRECT_LANE_DTYPE = {8: (np.int8, np.uint8), 16: (np.int16, np.uint16), 32: (np.int32, np.uint32)}
+
+
+def _direct_dtype(fmt: Format, lane_bits: int):
+    """The integer dtype of one lane when the direct path gives the general path's bits, else None:
+    a machine-width lane on a little-endian host.  The memory format wraps (``mem_format``), and so
+    does the cast to the lane's dtype."""
+    pair = _DIRECT_LANE_DTYPE.get(int(lane_bits))
+    if pair is None or sys.byteorder != "little":
+        return None
+    return pair[0] if mem_format(fmt, lane_bits).signed else pair[1]
+
+
 def to_words(
     re,
     im,
@@ -184,8 +202,22 @@ def to_words(
     word_bits: int = DEFAULT_WORD_BITS,
 ) -> np.ndarray:
     """Stored integers ``(re, im)`` of format ``fmt`` (any shape, row-major) → message words."""
-    elems_per_word(lane_bits, word_bits)
+    epw = elems_per_word(lane_bits, word_bits)
     shift = int(lane_bits) - fmt.W
+    dt = _direct_dtype(fmt, lane_bits)
+    if dt is not None:
+        re, im = np.asarray(re).reshape(-1), np.asarray(im).reshape(-1)
+        nw = -(-re.size // epw)
+        pairs = np.zeros((nw * epw, 2), dt)    # the last word zero-padded
+        pairs[: re.size, 0] = re               # wraps to the lane, as the format does
+        pairs[: re.size, 1] = im
+        if shift:                              # the same bits as shifting before the wrap
+            pairs <<= shift
+        flat = pairs.reshape(-1)
+        if int(word_bits) == 32:               # one 32-bit word to a uint64
+            return flat.view(np.uint32).astype(np.uint64)
+        w = flat.view(np.uint64)
+        return w.reshape(nw, int(word_bits) // 64) if int(word_bits) > 64 else w.reshape(-1)
     re = np.asarray(re, np.int64).reshape(-1) << shift
     im = np.asarray(im, np.int64).reshape(-1) << shift
     arr = mem_array_type(fmt, re.size, lane_bits)(
@@ -207,14 +239,25 @@ def from_words(
     written from that format.
     """
     elems_per_word(lane_bits, word_bits)
+    shift = int(lane_bits) - fmt.W
+    finer = ValueError(f"words hold values finer than the {fmt.W}-bit register format")
+    dt = _direct_dtype(fmt, lane_bits)
+    if dt is not None:
+        w = np.asarray(words, dtype=np.uint64)
+        buf = w.astype(np.uint32) if int(word_bits) == 32 else np.ascontiguousarray(w)
+        pairs = buf.reshape(-1).view(dt).reshape(-1, 2)[: int(n)]
+        if pairs.shape[0] < int(n):
+            raise ValueError(f"{w.shape[0]} words hold fewer than {n} elements")
+        if shift:
+            if np.any(pairs & dt((1 << shift) - 1)):
+                raise finer
+            pairs = pairs >> shift
+        return pairs[:, 0].astype(np.int64), pairs[:, 1].astype(np.int64)
     arr = mem_array_type(fmt, n, lane_bits)().deserialize(
         np.asarray(words, dtype=np.uint64), word_bw=int(word_bits)
     )
     pairs = np.ascontiguousarray(np.asarray(arr)).view(np.int64).reshape(-1, 2)
     re, im = pairs[:, 0].copy(), pairs[:, 1].copy()
-    shift = int(lane_bits) - fmt.W
     if np.any(re & ((1 << shift) - 1)) or np.any(im & ((1 << shift) - 1)):
-        raise ValueError(
-            f"words hold values finer than the {fmt.W}-bit register format"
-        )
+        raise finer
     return re >> shift, im >> shift
