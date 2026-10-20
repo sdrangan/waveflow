@@ -184,19 +184,28 @@ def base_trace() -> list[dict[str, Any]]:
 def time_trace(
     base: list[dict[str, Any]], copies: list[int], platform_: CpuPlatform, reps: int
 ) -> dict[str, Any]:
-    """Untimed and pysim per trace operation, fitted over *copies* repetitions of *base*."""
+    """Untimed and pysim per trace operation, fitted over *copies* repetitions of *base*.
+
+    Each fidelity runs on its own :class:`SchedTrace`, so each prices with its own memo: neither
+    warms the other, and the untimed sum and the cycles the processor charges are two independent
+    pricings.  The best of several runs is the warm cost (the memo filled by the first run); the
+    cold first pass is :func:`time_cold`'s.
+    """
     sizes, untimed_s, pysim_s, work = [], [], [], []
     exact = True
     for k in copies:
-        st = SchedTrace(repeat_trace(base, k), platform_)
-        sizes.append(len(st.trace))
-        work.append(work_per_op(st.trace)["scanned_moved"])
-        dt_u, u = _best(st.untimed, reps)
-        exact &= st.counters_match() and st.ready == []
-        dt_p, cpu = _best(st.pysim, reps)
+        trace = repeat_trace(base, k)
+        st_u, st_p = SchedTrace(trace, platform_), SchedTrace(trace, platform_)
+        sizes.append(len(trace))
+        work.append(work_per_op(trace)["scanned_moved"])
+        dt_u, u = _best(st_u.untimed, reps)
+        exact &= st_u.counters_match() and st_u.ready == []
+        dt_p, cpu = _best(st_p.pysim, reps)
         charged = sum(r.cycles for r in cpu.records)
         exact &= (
-            st.counters_match() and st.ready == [] and len(cpu.records) == u["calls"]
+            st_p.counters_match()
+            and st_p.ready == []
+            and len(cpu.records) == u["calls"]
         )
         exact &= abs(charged - u["cycles"]) <= 1e-9 * u["cycles"]
         untimed_s.append(dt_u)
@@ -213,6 +222,48 @@ def time_trace(
         "pysim_trace": {**_fit(sizes, pysim_s, "op"), "exact": exact, **stamp()},
         "work_per_op": {str(k): w for k, w in zip(copies, work)},
         "ops": {str(k): n for k, n in zip(copies, sizes)},
+    }
+
+
+def time_cold(
+    base: list[dict[str, Any]], platform_: CpuPlatform, reps: int
+) -> dict[str, Any]:
+    """The first pass over one trace, before any price is memoized: untimed and pysim per operation.
+
+    Each run gets a fresh :class:`SchedTrace` (fresh functions, empty memos); the best of
+    ``max(reps, SHORT_REPS)`` fresh runs.  ``points`` is how many distinct prices the trace needs,
+    out of ``calls``.
+    """
+    best_u = best_p = float("inf")
+    points = calls = 0
+    for _ in range(max(reps, SHORT_REPS)):
+        st = SchedTrace(base, platform_)
+        t = time.perf_counter()
+        u = st.untimed()
+        best_u = min(best_u, time.perf_counter() - t)
+        points = sum(len(f._prices) for f in (*st.funcs.values(), st.dispatch))
+        calls = u["calls"]
+        st = SchedTrace(base, platform_)
+        t = time.perf_counter()
+        st.pysim()
+        best_p = min(best_p, time.perf_counter() - t)
+    n = len(base)
+    print(f"  cold first pass: untimed {1e6 * best_u / n:.2f} us/op  pysim "
+          f"{1e6 * best_p / n:.2f} us/op  ({points} distinct prices of {calls} calls)", flush=True)  # fmt: skip
+    return {"untimed_us_op": 1e6 * best_u / n, "pysim_us_op": 1e6 * best_p / n, "ops": n,
+            "points": points, "calls": calls, **stamp()}  # fmt: skip
+
+
+def time_replay_pricing() -> dict[str, Any]:
+    """What ``examples/cpu_sched/replay.py`` reports for pricing the committed 410-operation trace
+    through a ``Processor`` (``_model_wall_s``, best of 15): the figure the example's page quotes.
+    """
+    from examples.cpu_sched.replay import _model_wall_s, load_trace
+
+    plat = CpuPlatform.load()
+    return {
+        "ms": 1e3 * _model_wall_s(plat, replayable(load_trace()), repeats=15),
+        **stamp(),
     }
 
 
@@ -598,6 +649,8 @@ def main(argv: list[str] | None = None) -> int:
 
     wait_idle(a.max_load)
     entry.update(time_trace(base, copies, plat, a.reps))
+    entry["cold"] = time_cold(base, plat, a.reps)
+    entry["replay_pricing"] = time_replay_pricing()
     print(f"untimed      {entry['untimed']['per_op_ms'] * 1e3:8.2f} us/op", flush=True)
     print(
         f"pysim trace  {entry['pysim_trace']['per_op_ms'] * 1e3:8.2f} us/op  "
