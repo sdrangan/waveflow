@@ -363,9 +363,15 @@ class Memory(object):
         segment[offset:offset + nwords] = data_arr
 
 
+def _chunks(word_size: int) -> int:
+    """uint64 chunks per memory word in a burst bundle: 1 up to 64 bits, else ceil(bits / 64)."""
+    return 1 if int(word_size) <= 64 else -(-int(word_size) // 64)
+
+
 # ---------------------------------------------------------------------------
 # _DirectBackedMMIFMaster — MMIFMaster backed directly by a Memory object
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _DirectBackedMMIFMaster:
@@ -673,6 +679,7 @@ class MemoryMod(HwModule):
             p = Path(seg.bundle)
             if self.root is not None and not p.is_absolute():
                 p = Path(self.root) / p
+            # a word wider than 64 bits reads back as (n, k) chunks, which the store takes as is
             words = np.concatenate([np.asarray(b, dtype=np.uint64) for b in read_burst_bundle(p)])
             self._mem.write(seg.off * bpw, words)
 
@@ -694,7 +701,8 @@ class MemoryMod(HwModule):
             n = int(seg.length) or max(total - int(seg.off), 0)
             words = np.asarray(self._mem.read(int(seg.off) * bpw, n), dtype=np.uint64)
             p = Path(seg.bundle)
-            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p)
+            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p,
+                               word_chunks=_chunks(self.word_size))
 
     def _apply_stored_timing(self) -> None:
         """Load this memory's calibrated timing (:attr:`calib_dir`), once, before the run: by the

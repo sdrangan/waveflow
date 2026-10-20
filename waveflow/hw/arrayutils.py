@@ -123,6 +123,12 @@ def write_array(arr: DataArray | Any, elem_type: type[T] | None = None, *, word_
 
     np_arr = np.asarray(np_arr)
     shape = tuple(int(dim) for dim in np_arr.shape)
+    # An element held as several numbers (a word wider than 64 bits is its k uint64 chunks) has a
+    # tail shape of its own: the array's shape is what precedes it.
+    _dtype, tail = DataArray.specialize(element_type=elem_type, max_shape=(1,),
+                                        static=True)._element_numpy_info()
+    if tail and shape[-len(tail):] == tuple(tail):
+        shape = shape[:-len(tail)]
 
     array_cls = DataArray.specialize(
         element_type=elem_type,

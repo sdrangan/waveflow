@@ -213,7 +213,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 235 -> 237 on 2026-10-19 (plans/systolic_characterization.md, Part B): the systolic engine at RTL,
 #: bit-exact and 175 cycles a job, and its memory wrapper on a 32x32x64 product
 #: (tests/linalg/test_systolic_engine.py).
-WANT_XSI_GATES = 237
+#: 237 -> 239 on 2026-10-19: the same two at 128-bit words -- 103 cycles a job, and the wrapper exact
+#: with its memory stand-in at 128 bits (tests/linalg/test_systolic_engine.py).
+WANT_XSI_GATES = 239
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

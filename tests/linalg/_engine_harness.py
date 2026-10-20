@@ -52,7 +52,8 @@ class EngineCodegenStep(BuildStep):
         root = Path(config.root_dir)
         mod = engine(**self.cfg)
         parts = collect_parts(mod)
-        dag = linalg_headers_dag(parts.traits, parts.bodies, INCLUDE_DIR, [32, 64], parts.schemas)
+        dag = linalg_headers_dag(parts.traits, parts.bodies, INCLUDE_DIR,
+                                 sorted({32, 64, int(mod.word_bits)}), parts.schemas)
         dag.add(MemMgrStep(output_dir=INCLUDE_DIR))
         res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
         bad = {k: r.message for k, r in res.items() if not r.success}
@@ -86,10 +87,11 @@ if __name__ == "__main__":
     ap.add_argument("--through", default="compare")
     ap.add_argument("--workload", default="test")
     ap.add_argument("--trace", action="store_true")
+    ap.add_argument("--word-bits", type=int, default=64)
     a = ap.parse_args()
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag(workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
+    res = build_dag({"word_bits": a.word_bits}, workload=a.workload, trace=a.trace).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():
         print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")

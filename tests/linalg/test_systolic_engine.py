@@ -3,8 +3,9 @@
 * fast: the engine's harness in pysim matches the bit-exact model on six commands (panels, keep_a,
   A^H with panels, kp = 1), and the wrapper's pysim writes C exactly; the top declares the banked
   blocks; refused commands and jobs are answered;
-* ``-m xsi``: the engine at RTL is bit-exact and runs 8x8x32 back to back at 175 cycles a job,
-  stream-fed (Vitis 2025.1); the wrapper at RTL writes a 32x32x64 product exactly.
+* ``-m xsi``: the engine at RTL is bit-exact and runs 8x8x32 back to back at 175 cycles a job with
+  64-bit words, 103 with 128-bit words, stream-fed (Vitis 2025.1); the wrapper at RTL writes a
+  32x32x64 product exactly at either width.
 """
 
 from __future__ import annotations
@@ -31,8 +32,9 @@ def _run(dag, root, through):
     assert not bad, bad
 
 
-def test_engine_pysim_matches_the_model(tmp_path):
-    _run(EH.build_dag(), tmp_path, "golden")
+@pytest.mark.parametrize("word_bits", [64, 128])
+def test_engine_pysim_matches_the_model(tmp_path, word_bits):
+    _run(EH.build_dag({"word_bits": word_bits}), tmp_path, "golden")
 
 
 def test_engine_top_declares_banked_blocks():
@@ -43,6 +45,12 @@ def test_engine_top_declares_banked_blocks():
     assert "#pragma HLS ARRAY_PARTITION variable=b dim=3 complete" in top
     assert "#pragma HLS ARRAY_PARTITION variable=b dim=4 complete" in top
     assert "#pragma HLS STREAM variable=paya depth=32" in top   # a whole A: the receiver moves on
+
+
+def test_engine_top_keeps_the_status_port_at_64_bits():
+    top = render_top(composite_top_spec(EH.engine(word_bits=128), width=128))
+    assert "hls::stream<streamutils::axi4s_word<128> >& s_in," in top
+    assert "hls::stream<streamutils::axi4s_word<64> >& m_status" in top
 
 
 def test_command_rules():
@@ -60,11 +68,13 @@ def test_command_rules():
     assert job_status(d, Mmax=8, Kmax=8, Nmax=32, Pmax=4) == Status.OK
 
 
-def test_wrapper_pysim_writes_c_exactly(tmp_path):
-    _run(EMH.build_dag(), tmp_path, "golden")
+@pytest.mark.parametrize("word_bits", [64, 128])
+def test_wrapper_pysim_writes_c_exactly(tmp_path, word_bits):
+    cfg = {"word_bits": word_bits}
+    _run(EMH.build_dag(cfg), tmp_path, "golden")
     mem = tmp_path / EMH.WORK_DIR / EMH.TOP / "pysim_run" / "vectors" / "mem"
     words = np.asarray(read_burst_bundle(mem)[0], np.uint64)
-    assert EMH.check_c(words) == [0, 0, 0]
+    assert EMH.check_c(words, **cfg) == [0, 0, 0]
 
 
 def _xsi(tmp_path_factory, name):
@@ -75,21 +85,25 @@ def _xsi(tmp_path_factory, name):
 
 
 @pytest.mark.xsi
-def test_xsi_engine_exact_and_175_cycles(tmp_path_factory):
-    root = _xsi(tmp_path_factory, "eng")
-    _run(EH.build_dag(), root, "compare")                          # bit-exact, six commands
-    _run(EH.build_dag(workload="steady"), root, "compare")         # 4 x 8x8x32 back to back
+@pytest.mark.parametrize("word_bits, interval", [(64, 175), (128, 103)])
+def test_xsi_engine_exact_and_interval(tmp_path_factory, word_bits, interval):
+    root = _xsi(tmp_path_factory, f"eng{word_bits}")
+    cfg = {"word_bits": word_bits}
+    _run(EH.build_dag(cfg), root, "compare")                       # bit-exact, six commands
+    _run(EH.build_dag(cfg, workload="steady"), root, "compare")    # 4 x 8x8x32 back to back
     cyc = np.fromfile(root / EH.WORK_DIR / EH.TOP / "xsi_run" / "vectors" / "s_out" / "cycles.bin",
                       dtype="<u8")
-    per = 1 + 128                                                  # a Resp, then C
+    per = 1 + 8 * 32 * 32 // word_bits                             # a Resp, then C (32-bit elements)
     ends = [int(cyc[(j + 1) * per - 1]) for j in range(4)]
-    assert np.diff(ends).tolist() == [175, 175, 175]
+    assert np.diff(ends).tolist() == [interval] * 3
 
 
 @pytest.mark.xsi
-def test_xsi_wrapper_writes_a_large_product_exactly(tmp_path_factory):
-    root = _xsi(tmp_path_factory, "engmem")
-    _run(EMH.build_dag(workload="big"), root, "compare")
+@pytest.mark.parametrize("word_bits", [64, 128])
+def test_xsi_wrapper_writes_a_large_product_exactly(tmp_path_factory, word_bits):
+    root = _xsi(tmp_path_factory, f"engmem{word_bits}")
+    cfg = {"word_bits": word_bits}
+    _run(EMH.build_dag(cfg, workload="big"), root, "compare")
     mem = root / EMH.WORK_DIR / EMH.TOP / "xsi_run" / "vectors" / "mem"
     words = np.asarray(read_burst_bundle(mem)[0], np.uint64)
-    assert EMH.check_c(words, "big") == [0]
+    assert EMH.check_c(words, "big", **cfg) == [0]

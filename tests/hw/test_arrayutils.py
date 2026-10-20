@@ -227,6 +227,15 @@ def test_write_array_accepts_dataarray_instance():
     assert len(packed) > 0
 
 
+def test_write_array_round_trips_words_wider_than_64_bits():
+    # a 128-bit word is two uint64 chunks: (n, 2) is n words, not an n x 2 array of them
+    U128 = IntField.specialize(bitwidth=128, signed=False)
+    words = np.arange(8, dtype=np.uint64).reshape(4, 2)
+    arr = read_array(words, elem_type=U128, word_bw=128, shape=4)
+    np.testing.assert_array_equal(np.asarray(write_array(arr, word_bw=128)), words)
+    np.testing.assert_array_equal(np.asarray(write_array(words, elem_type=U128, word_bw=128)), words)
+
+
 def test_write_array_dataarray_elem_type_mismatch_raises():
     from waveflow.hw.arrayutils import array, write_array
     inst = array(F32, [1.0, 2.0])

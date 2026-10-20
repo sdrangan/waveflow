@@ -417,6 +417,10 @@ class HwModule(SimObj):
     """``HwParam`` fields whose values name each instance's top (:func:`kernel_name`):
     ``cpp_kernel_name`` + ``_<param><value>`` per entry, so one class builds one top per
     parameter set in a single system or DAG.  Empty (default): the top is ``cpp_kernel_name``."""
+    endpoint_port_widths: ClassVar[bool] = False
+    """True: each AXI-Stream port of the generated top takes its own endpoint's ``bitwidth`` (a 64-bit
+    command port beside 128-bit data).  False (default): every one takes the design width, as tops
+    gated on exact RTL counts are emitted today (``composite_gen.composite_top_spec``)."""
     cpp_namespace: ClassVar[str | None] = None
     """Override for the C++ namespace wrapping hooks for this component.
 

@@ -484,6 +484,7 @@ class SystolicEngine(_EnginePart):
     on ``m_status`` (see the module doc)."""
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine"
+    endpoint_port_widths: ClassVar[bool] = True     # m_status stays 64 bits beside wider data words
 
     def __post_init__(self) -> None:
         super().__post_init__()

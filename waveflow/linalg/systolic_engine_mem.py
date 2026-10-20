@@ -393,7 +393,8 @@ class SystolicEngineMem(_MemPart):
 
         w = int(self.word_bits)
         jobs, size = self._layout(kind)
-        image = np.zeros(size + 16, np.uint64)
+        # a word wider than 64 bits is k uint64 chunks, chunk 0 low (the framework's (n, k) words)
+        image = np.zeros((size + 16,) if w <= 64 else (size + 16, -(-w // 64)), np.uint64)
         bursts = []
         for d, _a, _b, aw, bw in jobs:
             image[int(d.a_base):int(d.a_base) + len(aw)] = aw

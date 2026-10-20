@@ -525,10 +525,20 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linal
   ~12 idle cycles at each switch between burst loops). Tried and dropped: one flattened loop with a
   computed address (no burst, 10,639); `A` panels then `B` panels as two runs (`B` waits behind the
   core's last panel, one block of buffering: 7,984). Wrapper now 157 DSP / 42.9k LUT / 30 BRAM.
-- **Open before the calibration:** the remaining loop-switch loss (`hls::burst_maxi` or a deeper `B`
-  buffer); the receiver's 13 cycles a command; 128-bit words (the I/O binds, the core has room;
-  `lanes.WORD_BITS_SUPPORTED`); continuous panels; the per-element selects (LUTs); then calibrate
-  once (6d).
+- **128-bit words** (branch `systolic-wide`): `lanes.WORD_BITS_SUPPORTED` takes 128; the engine's
+  status port stays 64 bits (`HwModule.endpoint_port_widths`); the harness memory (pysim `MemoryMod`,
+  RTL `FlatMemory` and the AXI-MM slave BFMs) takes words of k uint64 chunks; `write_array` no longer
+  reads a wide word's chunk axis as an array axis (it broke `MemWStream` at 128). Engine **103 cycles
+  a job**, bit-exact, now **core-bound** (trace: `C` held 83, ~20 idle between jobs; 81 input words
+  take ~94); 154 DSP / 36.9k LUT / 30 BRAM. Wrapper exact, `32x32x64` done at **3,693** (input floor
+  ~2,570; the binding stage not traced); 157 DSP / 43.1k LUT / 38 BRAM.
+- **Found:** the trace manifest predicts `<task>_<template args>_U0`, but Vitis 2025.1 names the
+  engine's loaders and store `<task>_U0` (at 64 bits too), so `--trace` binds only the core's nets
+  and the banked `a` / `b` lock nets do not bind. Fix before the calibration (6d).
+- **Open before the calibration:** continuous panels (the core's ~39 cycles of fill, drain and
+  restart a job now bind); the receiver's ~13 cycles a command; the remaining loop-switch loss in the
+  feeder (`hls::burst_maxi` or a deeper `B` buffer); the trace-manifest names above; the per-element
+  selects (LUTs); then calibrate once (6d).
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 

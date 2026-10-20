@@ -1221,6 +1221,9 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
         _check_boundary_depth(comp, name, ep)
         kind = kind_of_endpoint(ep)
         w = width
+        if (getattr(comp, "endpoint_port_widths", False) and kind in ("axis_in", "axis_out")
+                and getattr(ep, "bitwidth", None)):
+            w = int(ep.bitwidth)
         if name in port_widths:
             if kind not in ("axis_in", "axis_out"):
                 raise LoweringError(
