@@ -66,8 +66,7 @@ from waveflow.linalg.lanes import (
     nwords,
     to_words,
 )
-from waveflow.linalg.lanes import pack_group as lanes_pack
-from waveflow.linalg.lanes import unpack_group as lanes_unpack
+from waveflow.linalg.lanes import pack_groups, unpack_groups
 from waveflow.linalg.message import U8, U16, Status
 from waveflow.linalg.systolic import (
     MatmulOp,
@@ -211,20 +210,11 @@ def drain_order(m: int, n: int, *, L: int, R: int, C: int) -> list[tuple[int, in
             for rt in range(m // R) for ct in range(n // C) for dn in range(G)]
 
 
-def _group_words(groups: list[int], bits: int) -> np.ndarray:
-    """Lane groups as stream words: one ``uint64`` each up to 64 bits, else ``k`` chunks, low first."""
-    if bits <= 64:
-        return np.asarray(groups, np.uint64)
-    k = -(-bits // 64)
-    return np.asarray([[(g >> (64 * c)) & ((1 << 64) - 1) for c in range(k)] for g in groups],
-                      np.uint64)
-
-
-def _word_groups(words) -> list[int]:
-    w = np.asarray(words, np.uint64)
-    if w.ndim == 1:
-        return [int(x) for x in w]
-    return [sum(int(x) << (64 * c) for c, x in enumerate(row)) for row in w]
+def _drain_index(m: int, n: int, *, L: int, R: int, C: int) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`drain_order` as fancy indices: ``(rows, cols)``, each ``(groups, L)``, so ``C[rows,
+    cols]`` is ``C``'s lane groups in drain order."""
+    order = np.asarray(drain_order(m, n, L=L, R=R, C=C), np.int64)
+    return order[:, :1], order[:, 1:2] + np.arange(L)
 
 
 # --- the tasks -------------------------------------------------------------------------------------
@@ -497,9 +487,8 @@ class EngineCore(_EnginePart):
         """``C``'s stored integers as ``c_out`` words: its lane groups in drain order."""
         L, W = int(self.L), int(self.c.W)
         m, n = cr.shape
-        groups = [lanes_pack(cr[r, c0:c0 + L], ci[r, c0:c0 + L], W)
-                  for r, c0 in drain_order(m, n, L=L, R=int(self.R), C=int(self.C))]
-        return _group_words(groups, self.group_bits)
+        rows, cols = _drain_index(m, n, L=L, R=int(self.R), C=int(self.C))
+        return pack_groups(np.asarray(cr)[rows, cols], np.asarray(ci)[rows, cols], W)
 
 
 @dataclass
@@ -528,9 +517,8 @@ class EngineCollect(_EnginePart):
         for _ob in range(int(job.nb)):
             words = yield from self.c_in.get(nwords_max=len(order))
             cr, ci = np.zeros((m, n), np.int64), np.zeros((m, n), np.int64)
-            for (r, c0), g in zip(order, _word_groups(words), strict=True):
-                re, im = lanes_unpack(g, W, L)
-                cr[r, c0:c0 + L], ci[r, c0:c0 + L] = re, im
+            rows, cols = _drain_index(m, n, L=L, R=int(self.R), C=int(self.C))
+            cr[rows, cols], ci[rows, cols] = unpack_groups(words, W, L)
             out = yield from self.c_blk.acquire_write()
             out.payload = (cr, ci)
             yield from self.c_blk.commit_write(out)

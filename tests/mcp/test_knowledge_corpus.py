@@ -46,6 +46,7 @@ TOC_EXAMPLES = {
     "stream_inband",
     "stream_kernel",
     "stream_kernel_mm",
+    "systolic",
     "vecmult",
     "vitis_fft",
     "xbar_profile",

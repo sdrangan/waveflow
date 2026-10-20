@@ -139,7 +139,10 @@ def main() -> None:
               f"csynth {out['rtl']['csynth_s']} s  exact={out['rtl']['exact']}", flush=True)
 
     data = json.loads(RUNTIME.read_text(encoding="utf-8")) if RUNTIME.exists() else {}
-    data[f"steady_w{a.word_bits}"] = out
+    key = f"steady_w{a.word_bits}"
+    if not a.rtl and "rtl" in data.get(key, {}):    # keep an RTL run this one did not repeat
+        out["rtl"] = data[key]["rtl"]
+    data[key] = out
     RUNTIME.write_text(json.dumps(dict(sorted(data.items())), indent=1) + "\n", encoding="utf-8")
 
 

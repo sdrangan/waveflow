@@ -2,7 +2,7 @@
 title: "Simulation speed: the systolic engine"
 parent: Simulation speed
 nav_order: 3
-summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.031 ms a product), Waveflow's pysim of the engine's six tasks (1.35 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- packing lane groups and serializing complex arrays in Python, not SimPy -- and what would bring it down."
+summary: "PRELIMINARY (measured on a development laptop in use; to be re-run on the lab machine). One bit-exact 8×8×32 complex matrix product run three ways on the same operands: the untimed model (0.036 ms a product), Waveflow's pysim of the engine's six tasks (0.73 ms, 44 SimPy events) and the synthesized RTL under XSI (43 ms, plus a 20 s XSI build and 80 s of csynth per design point). Where pysim's time goes -- Python packing and serialization, not SimPy -- how vectorizing the lane groups halved it, and what is left."
 ---
 
 # Simulation speed: the systolic engine
@@ -42,27 +42,30 @@ Per product, fitted over 10, 50 and 100 products; every run exact:
 
 | | per product | vs untimed | one-time cost |
 |---|---|---|---|
-| untimed model (`matmul`) | **0.031 ms** | 1x | none |
-| pysim, the engine's six tasks | **1.35 ms** (44 SimPy events) | 44x | ~39 ms to build the harness |
-| RTL under XSI | **43 ms** | 1,400x | XSI build 20.2 s (compile 1.5, elaborate 14.7, testbench 3.9); csynth 80 s |
+| untimed model (`matmul`) | **0.036 ms** | 1x | none |
+| pysim, the engine's six tasks | **0.73 ms** (44 SimPy events) | 20x | ~56 ms to build the harness |
+| RTL under XSI | **43 ms** | 1,200x | XSI build 20.2 s (compile 1.5, elaborate 14.7, testbench 3.9); csynth 80 s |
 
 Measured 2026-10-20 (Vitis HLS / Vivado xsim 2025.1), the best of three runs a point.
 
 ## Insights
 
-- **The RTL is 32 times the pysim, before its build.** A design point costs 80 s of csynth and 20 s of
-  XSI build before the first product; the pysim is ready in 39 ms.
-- **The pysim is 44 times the model here, against 1.2 to 2.4 times for the [FFT](fft.md).** Not because
-  the simulation is slow -- 44 events a product is few -- but because the model is: one `8×8×32` product
-  is 32 microseconds of integer numpy, and anything a timed simulation adds is large beside it.
-- **The time is Python, not SimPy.** A profile of 50 products puts most of the simulation in two places:
+- **The RTL is about 60 times the pysim, before its build.** A design point costs 80 s of csynth and 20 s
+  of XSI build before the first product; the pysim is ready in 56 ms.
+- **The pysim is 20 times the model here, against 1.2 to 2.4 times for the [FFT](fft.md).** Not because
+  the simulation is slow -- 44 events a product is few -- but because the model is fast: one `8×8×32`
+  product is 36 microseconds of integer numpy, and anything a timed simulation adds is large beside it.
+- **The time is Python, not SimPy.** A profile of 50 products put most of the simulation in two places:
   packing and unpacking lane groups one at a time (the core's `C` out in drain order, the collector's
   3,200 `unpack_group` calls), and serializing complex operands and results through `ComplexField`
-  arrays (`lanes.to_words`, `from_words`). SimPy's own scheduling is a small part.
+  arrays (`lanes.to_words`, `from_words`). SimPy's own scheduling was a small part.
+- **Vectorizing the lane groups halved it**: `lanes.pack_groups` / `unpack_groups` place each lane's field
+  in whole arrays (a loop over the `L` lanes, not over the groups), and pysim went from 1.35 to 0.73 ms
+  a product.
 
 ## Future work
 
-- **Vectorize the lane-group packing** -- the core's `groups_of` and the collector's unpacking as whole
-  numpy arrays, not a Python loop a group -- the same fix that brought the FFT's pysim down
+- **A fast path for complex-array serialization** -- the operands into words and `C` back out
+  (`lanes.to_words`, `from_words`), now the larger share -- as the FFT's pysim got
   ([how it got here](fft.md#how-it-got-here)).
 - **Re-run on the lab machine** for the numbers this page will keep.

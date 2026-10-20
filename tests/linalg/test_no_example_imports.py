@@ -49,6 +49,9 @@ MANIFEST = (
     f"{PLATFORM}/models/cg_vector_unit_channels/params.json",
     f"{PLATFORM}/components/systolic_unit/params.json",
     f"{PLATFORM}/components/cg_vector_unit/params.json",
+    # the systolic engine core's calibrated timed phase, one record per configuration (by identity)
+    *(p.relative_to(ROOT).as_posix()
+      for p in (ROOT / "waveflow/linalg/calib/modules").glob("engine_core-*/**/*") if p.is_file()),
 )  # fmt: skip
 
 #: What the scan allows in code, and why.
@@ -148,8 +151,8 @@ def _code(path: Path) -> str:
 def test_the_new_files_carry_none_of_the_examples_constants():
     bad = []
     for name in MANIFEST:
-        if name.startswith(PLATFORM):
-            continue  # the packaged platform's data: it names the part it was measured on
+        if name.startswith(PLATFORM) or "/calib/modules/" in name:
+            continue  # measured data (a platform, a calibration record): it names its part
         code = _code(ROOT / name)
         for allowed in ALLOWED:
             code = code.replace(_tokens(allowed), "")
