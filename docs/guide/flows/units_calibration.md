@@ -31,8 +31,9 @@ def workload(self, kind="test"): ...                               # "calib": th
 [`CalibWorkload`](../../../waveflow/build/phase_calib.py): the harness of the same module on
 `workload("calib")`, always polite, and the held-out values. A module with no `calib_holdout`, or with
 no timed phases on itself or on any task inside it, has none (`None`). The phases may be a task's
-inside a composite kernel: the systolic unit's harness calibrates its core, whose events are block
-releases on the unit's internal channels ([Systolic array timing](../dsp/systolic/timing.md)).
+inside a composite kernel: the systolic engine's core carries a `panel` phase, whose events are the
+acquire and release of a block on the engine's internal `b` channel, and the engine's harness times it
+([Systolic engine](../dsp/systolic/systolic_engine.md#architecture); seeded until it is calibrated).
 
 `calib_phases` fits every phase the workload exercised. A phase with no occurrence at all is skipped
 and keeps its seed; one that occurred but has an occurrence the RTL lacks fails the step.

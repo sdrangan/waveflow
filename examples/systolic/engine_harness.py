@@ -1,0 +1,127 @@
+"""The systolic engine in its own harness, stream-fed: pysim + golden, csynth, XSI
+(docs/examples/systolic/test.md).
+
+    python -m examples.systolic.engine_harness --root C:/wfsc/eh --through golden      # pysim only
+    python -m examples.systolic.engine_harness --root C:/wfsc/eh --through compare     # + csynth, XSI
+
+Build from a short root on Windows: past 260 characters a csynth path fails silently.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
+
+from waveflow.build.build import BuildConfig, BuildDag, BuildStep
+from waveflow.build.composite_gen import (GEN_DIR, INCLUDE_DIR, composite_top_spec, render_tcl,
+                                          render_top, tcl_path)
+from waveflow.build.streamutils import MemMgrStep
+from waveflow.build.system_dag import add_system_steps
+from waveflow.hw.harness import harness
+from waveflow.linalg.build import collect_parts, linalg_headers_dag
+from waveflow.linalg.systolic_engine import SystolicEngine
+from waveflow.simulation.simulation import Simulation
+from waveflow.toolchain import toolchain
+from waveflow.utils.fixputils import Format, OMode, QMode
+
+#: The system top (the harness around the engine), its work directory, and the engine's own top.
+TOP, WORK_DIR, KERNEL = "systolic_engine_sys", "xsi_work", "systolic_engine"
+#: The target: the RFSoC 4x2's part, at 250 MHz.
+PART, PERIOD_NS = "xczu48dr-ffvg1517-2-e", 4
+
+
+def reg(W: int, I: int) -> Format:  # noqa: E741 -- (width, integer bits), as Format names them
+    """A register format: ``W`` bits, ``I`` of them integer, rounded and saturated."""
+    return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+
+def build_config(root) -> BuildConfig:
+    """The DAG's config, naming the installed Vitis release (a measurement names its tool)."""
+    exe = toolchain.find_vitis_path()
+    return BuildConfig(root_dir=Path(root), params={},
+                       vitis_version=toolchain.tool_version(exe, "--version") if exe else None)
+
+
+CENTRE = dict(Mmax=8, Kmax=8, Nmax=32, Pmax=4, R=4, C=8, L=4, form=4, word_bits=64,
+              a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+
+
+def engine(sim=None, **cfg) -> SystolicEngine:
+    return SystolicEngine(name="systolic_engine", sim=sim or Simulation(), **{**CENTRE, **cfg})
+
+
+@dataclass(kw_only=True)
+class EngineCodegenStep(BuildStep):
+    """``codegen``: the linalg headers, the engine's free-running top and its csynth script."""
+
+    description = "Headers, the systolic engine's top and its csynth script."
+    params: ClassVar[dict] = {}
+    produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
+    cfg: dict
+
+    def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
+        return False
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        root = Path(config.root_dir)
+        mod = engine(**self.cfg)
+        parts = collect_parts(mod)
+        dag = linalg_headers_dag(parts.traits, parts.bodies, INCLUDE_DIR,
+                                 sorted({32, 64, int(mod.word_bits)}), parts.schemas)
+        dag.add(MemMgrStep(output_dir=INCLUDE_DIR))
+        res = dag.run(BuildConfig(root_dir=root, params={}), force=True)
+        bad = {k: r.message for k, r in res.items() if not r.success}
+        if bad:
+            raise RuntimeError(f"header generation failed: {bad}")
+        spec = composite_top_spec(mod, width=int(mod.word_bits))
+        gen = root / GEN_DIR
+        gen.mkdir(parents=True, exist_ok=True)
+        (gen / f"{spec.top_name}.cpp").write_text(render_top(spec), encoding="utf-8")
+        tcl_path(root, spec.top_name).write_text(
+            render_tcl(spec.top_name, part=PART, period_ns=PERIOD_NS), encoding="utf-8")
+        return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
+
+
+def build_dag(cfg: dict | None = None, *, workload="test", trace: bool = False,
+              n_cycles: int = 200_000, calibrate: bool = False, store_dir=None) -> BuildDag:
+    """The engine's harness on *workload* and, with *calibrate*, its calibration on
+    ``workload("calib")`` -- the core's ``panel`` phase fitted at RTL and filed in a ``ModuleStore``
+    at *store_dir* (default: the package's, ``waveflow/linalg/calib``)."""
+    cfg = dict(cfg or {})
+    sysm = harness(engine(**cfg), workload=workload, n_cycles=n_cycles)
+    dag = BuildDag()
+    dag.add(EngineCodegenStep(name="codegen", cfg=cfg))
+    add_system_steps(dag, sysm, work_dir=WORK_DIR, top=TOP, trace=trace)
+    if calibrate:
+        from waveflow.build.phase_calib import add_calib_steps
+        from waveflow.calib.record_store import ModuleStore
+        from waveflow.linalg.systolic_engine import CALIB_DIR
+
+        add_calib_steps(dag, harness(engine(**cfg), workload="test", n_cycles=n_cycles),
+                        work_dir=WORK_DIR, top=TOP, store=ModuleStore(store_dir or CALIB_DIR))
+    return dag
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--root", required=True)
+    ap.add_argument("--through", default="compare")
+    ap.add_argument("--workload", default="test")
+    ap.add_argument("--trace", action="store_true")
+    ap.add_argument("--word-bits", type=int, default=64)
+    ap.add_argument("--calibrate", action="store_true",
+                    help="also fit the core's timed phase on workload('calib') and file it")
+    a = ap.parse_args()
+    root = Path(a.root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    res = build_dag({"word_bits": a.word_bits}, workload=a.workload, trace=a.trace,
+                    calibrate=a.calibrate).run(build_config(root), through=a.through)
+    ok = True
+    for name, r in res.items():
+        print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")
+        ok &= r.success
+    sys.exit(0 if ok else 1)

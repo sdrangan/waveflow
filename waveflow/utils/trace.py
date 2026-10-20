@@ -426,6 +426,21 @@ def load_trace(manifest: dict | str | Path, vcd_path: str | Path,
             f"no signals under scope {top!r} in {vcd_path}. Scopes present: {scopes}. "
             f"A $dumpvars naming a different top, or a dump that never ran?")
 
+    # Vitis names a task instance `<body>_<template args>_U0` -- or `<body>_U0` (Vitis 2025.1 did so
+    # for the systolic engine's loaders and store, whose full names run past ~64 characters).  The
+    # manifest predicts the first; bind whichever the trace has, by the instance's own pins.
+    renames: dict[str, str] = {}
+    for t in manifest.get("tasks", ()):
+        inst, short = t.get("inst"), f"{t.get('body')}_U0"
+        if inst and inst != short and f"{inst}_ap_start" not in by_bare \
+                and f"{short}_ap_start" in by_bare:
+            renames[inst] = short
+    if renames:
+        text = json.dumps(manifest)
+        for inst, short in renames.items():
+            text = text.replace(inst, short)
+        manifest = json.loads(text)
+
     parser = VcdParser(vcd)
     bound = BoundTrace(manifest=manifest, parser=parser, clock="")
 

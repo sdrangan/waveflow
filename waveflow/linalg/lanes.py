@@ -64,6 +64,53 @@ def unpack_group(g: int, W: int, L: int) -> tuple[list[int], list[int]]:
     return re, im
 
 
+def pack_groups(re, im, W: int) -> np.ndarray:
+    """:func:`pack_group` over many groups at once: *re*, *im* of shape ``(n, L)`` -> the groups as
+    stream words, ``(n,)`` ``uint64`` up to 64 bits, else ``(n, k)`` chunks, chunk 0 low.  Each lane's
+    ``2W``-bit field is placed with shifts, whole arrays at a time (no Python loop a group)."""
+    re = np.asarray(re, np.int64)
+    im = np.asarray(im, np.int64)
+    n, L = re.shape
+    W = int(W)
+    mask = np.uint64((1 << W) - 1)
+    field = (re.astype(np.uint64) & mask) | ((im.astype(np.uint64) & mask) << np.uint64(W))
+    bits = 2 * W * L
+    k = -(-bits // 64)
+    out = np.zeros((n, k), np.uint64)
+    for lane in range(L):                       # a loop over lanes, not over groups
+        off = 2 * W * lane
+        c, sh = off // 64, off % 64
+        out[:, c] |= field[:, lane] << np.uint64(sh)
+        if sh + 2 * W > 64:                     # the field straddles two chunks
+            out[:, c + 1] |= field[:, lane] >> np.uint64(64 - sh)
+    return out[:, 0] if k == 1 else out
+
+
+def unpack_groups(words, W: int, L: int) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`unpack_group` over many groups: stream words (``(n,)`` or ``(n, k)``) -> the signed stored
+    integers ``(re, im)``, each ``(n, L)``."""
+    w = np.asarray(words, np.uint64)
+    if w.ndim == 1:
+        w = w[:, None]
+    W, L = int(W), int(L)
+    fmask = np.uint64((1 << (2 * W)) - 1) if 2 * W < 64 else np.uint64(0xFFFFFFFFFFFFFFFF)
+    fields = np.zeros((w.shape[0], L), np.uint64)
+    for lane in range(L):
+        off = 2 * W * lane
+        c, sh = off // 64, off % 64
+        f = w[:, c] >> np.uint64(sh)
+        if sh + 2 * W > 64:
+            f = f | (w[:, c + 1] << np.uint64(64 - sh))
+        fields[:, lane] = f & fmask
+    mask = np.uint64((1 << W) - 1)
+    re = (fields & mask).astype(np.int64)
+    im = ((fields >> np.uint64(W)) & mask).astype(np.int64)
+    sign = 1 << (W - 1)
+    re = np.where(re & sign, re - (1 << W), re)
+    im = np.where(im & sign, im - (1 << W), im)
+    return re, im
+
+
 def n_groups(n_elems: int, L: int) -> int:
     """Lane groups holding ``n_elems`` complex values."""
     return -(-int(n_elems) // int(L))

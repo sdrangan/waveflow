@@ -67,15 +67,25 @@ static void systolic_engine_rx_task(hls::stream<IN_T>& s_in, hls::stream<ap_uint
     j.template write_stream<64>(core_job);
     r.template write_stream<64>(reply);
     const int wa = (m * kp + LW - 1) / LW, wb = (kp * n + LW - 1) / LW;
-    const int parts = keep ? 1 + nb : 2 * nb * np;
-PARTS:
-    for (int x = 0; x < parts; ++x) {
-#pragma HLS LOOP_TRIPCOUNT max = 2 * PMAX
-        const bool is_a = keep ? (x == 0) : ((x & 1) == 0);
-        const int words = is_a ? wa : wb;
+    // Each output's payload in ONE pipelined loop, a word a cycle: a loop per burst paid its exit and
+    // re-entry at every switch between A and B (plans/systolic_characterization.md).  Its words are
+    // np (A, B) pairs -- np <= PMAX, so a few adds, no multiplier -- or with keep_a the one A on the
+    // first output, then a B each.  (A bound of nb·np·(wa+wb) cost 6 DSP, or 2.4k LUT built from
+    // fabric; an exit tested on a burst count missed 4 ns.)
+    int pair_words = 0;
+    for (int p = 0; p < PMAX; ++p) {
+#pragma HLS UNROLL
+        if (p < np) pair_words += wa + wb;
+    }
+OUTS:
+    for (int ob = 0; ob < nb; ++ob) {
+#pragma HLS LOOP_TRIPCOUNT max = 4
+        const int words = keep ? (ob == 0 ? wa + wb : wb) : pair_words;
+        ap_uint<16> w = 0;              // the word within the current burst
+        bool is_a = !keep || ob == 0;   // keep_a: A on the first output only
     FWD:
         for (int i = 0; i < words; ++i) {
-#pragma HLS LOOP_TRIPCOUNT max = (KMAX * NMAX) / 2
+#pragma HLS LOOP_TRIPCOUNT max = PMAX * (MMAX * KMAX + KMAX * NMAX) / 2
 #pragma HLS PIPELINE II = 1
             bool last;
             const ap_uint<WBW> d = streamutils::read_boundary_word<IN_T, WBW>(s_in, last);
@@ -83,6 +93,12 @@ PARTS:
                 streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(pay_a, d, last);
             } else {
                 streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(pay_b, d, last);
+            }
+            if (w == (is_a ? wa : wb) - 1) {  // the burst's last word: the next burst
+                w = 0;
+                is_a = keep ? false : !is_a;
+            } else {
+                ++w;
             }
         }
     }

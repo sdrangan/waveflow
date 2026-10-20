@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 10.8
 has_children: true
 audience: python
-api: [SsrFft, SystolicUnit, SystolicCore, SystolicEngine, SystolicEngineMem, CgVectorUnit, CgVectorCore]
+api: [SsrFft, SystolicEngine, SystolicEngineMem, CgVectorUnit, CgVectorCore]
 summary: "Waveflow's own DSP blocks, written as free-running Waveflow modules rather than wrapped vendor IP: the full-rate SSR FFT, bit-exact with AMD's Vitis L1 FFT and ten times its throughput as shipped, and the complex fixed-point linear-algebra components -- the systolic matrix multiply and the CG vector unit -- with the conventions they share."
 ---
 
@@ -19,8 +19,9 @@ vendor library and rebuild what is not.
   frame every `L/R` cycles.
 - [Linear-Algebra Conventions](linalg_common.md) -- what the linear-algebra components share: formats,
   lane groups, the message header and its statuses, the build step, the cost data.
-- [Systolic Matrix Multiply](systolic/index.md) -- `SystolicCore` and `SystolicUnit`: `C = q(A·B)` and
-  `C = q(Aᴴ·B)` on complex fixed-point matrices. Its redesign, [the systolic engine](systolic/engine.md) --
-  `SystolicEngine` and `SystolicEngineMem` -- streams, accumulates over panels and runs behind memory.
+- [Systolic Matrix Multiply](systolic/index.md) -- `C = q(A·B)` and `C = q(Aᴴ·B)` on complex
+  fixed-point matrices: [the systolic engine](systolic/systolic_engine.md), streamed, with panels and
+  operand reuse, and [the engine behind memory](systolic/systolic_engine_mem.md) for larger matrices.
+  Starts from [how a systolic array works](systolic/systolic_theory.md).
 - [CG Vector Unit](cg_vector.md) -- `CgVectorCore` and `CgVectorUnit`: the vector steps of conjugate
   gradient on `A X = B`, multi-RHS.

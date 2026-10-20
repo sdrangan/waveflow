@@ -134,7 +134,7 @@ to a design's own `BuildDag` when that DAG already has the stream-utility and sc
 
 The top of a design is then generated like that of any free-running composite
 ([Hardware modules and Flows](../flows/)). The
-[systolic page](systolic/index.md#building-and-testing-it) lists what a built unit's include directory
+[CG vector page](cg_vector.md#building-and-testing-it) lists what a built unit's include directory
 holds.
 
 ## Cost data
@@ -154,5 +154,7 @@ and the tool version that the numbers belong to:
 A model measured with one tool version describes that version only. The components' `get_rm`
 refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost` and
 `cg_cost` read only this one. Pricing another part, clock or tool version takes a new calibration and a
-platform of its own; the component pages ([systolic](systolic/index.md#calibration-and-accuracy),
-[CG](./cg_vector.md#calibration-and-accuracy)) describe how this one was calibrated.
+platform of its own; [the CG page](./cg_vector.md#calibration-and-accuracy) describes how this one was
+calibrated, and the systolic unit's half of the same study is in `examples/mimo_cg/paper_data/`. The
+[systolic engine](systolic/systolic_engine.md) is not in this platform: it is to be calibrated with
+Vitis 2025.1.

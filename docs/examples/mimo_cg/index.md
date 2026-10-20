@@ -24,6 +24,12 @@ This example shows:
 
 Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
 
+**Status: set aside, to be moved to the systolic engine.** The detector is built on the older
+`SystolicUnit` and `SystolicCore`, which the [systolic engine](../../guide/dsp/systolic/systolic_engine.md)
+supersedes and which are no longer documented in the guide. Until this example moves to the engine, its
+tests are quarantined (`tests/conftest.py`) and its numbers are not re-measured: this page describes it
+as it was.
+
 ## Learning objectives
 
 What this adds to the examples before it, in the order the page teaches it:

@@ -488,7 +488,7 @@ inner s_out -> MemWStream (C tiles + their cmds)            -> Status(tx_id), on
 #### Record: Part B built (2026-10-19, branch `systolic-engine`) -- before the calibration
 
 All numbers Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns, centre (`Mmax 8, Kmax 8, Nmax 32, Pmax 4,
-R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
+R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/systolic_engine.md`. Gates: `tests/linalg/test_systolic_engine.py`.
 
 - **Facts measured first** (`plans/witness/systolic_stream`, `C:\wfsc\sobbank`, `C:\wfsc\sobnest`):
   a partitioned `stream_of_blocks` is one ping-pong per bank, read a bank a cycle at II 1 (2-D
@@ -535,10 +535,50 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/engine.md`. Gates: `tests/linal
 - **Found:** the trace manifest predicts `<task>_<template args>_U0`, but Vitis 2025.1 names the
   engine's loaders and store `<task>_U0` (at 64 bits too), so `--trace` binds only the core's nets
   and the banked `a` / `b` lock nets do not bind. Fix before the calibration (6d).
-- **Open before the calibration:** continuous panels (the core's ~39 cycles of fill, drain and
-  restart a job now bind); the receiver's ~13 cycles a command; the remaining loop-switch loss in the
-  feeder (`hls::burst_maxi` or a deeper `B` buffer); the trace-manifest names above; the per-element
-  selects (LUTs); then calibrate once (6d).
+- **Continuous panels** (branch `systolic-panels`): the core keeps the array, skew delay lines on its
+  edges (every row and column read at one step, so a panel's reads fall in its own `T·P` steps) and a
+  two-slot drain queue across a command's panels and outputs; tile `g` drains `L + n` steps after tile
+  `g+1` starts; a gap before a panel whose tiles would read unstored partial sums (`T` = 2, 3); one tile
+  keeps accumulating (`S_KEEP`); one empty tile runs the last out at each command's end. `C` leaves in
+  drain order on a FIFO to a new `EngineCollect`, which fills the `C` block. **Found:** carrying the
+  state across firings as `static` registers made csynth run out of memory (6.7 GB against 0.4; core
+  alone with locals: 0.36 GB, II 1) -- so the state is per command. **Measured (2025.1):** bit-exact
+  (six commands); `8×8×32` at **94** cycles a job with 128-bit words (was 103) and 175 with 64-bit;
+  the 128-bit `short` workload is also 94, so at 128 bits the core's floor (64 tile steps + ~30 a
+  command: the 12-step run-out and ~18 of restart) TIES the input (~94) -- the receiver fix alone gains
+  nothing; carrying the array's state across commands is no longer optional; core LUT 36.9k -> 31.2k, FF 25.7k -> 36.3k, BRAM 30 -> 36, est. 2.92 ns. The wrapper
+  barely moved (3,693 -> 3,680; 6,470 -> 6,468): its **read port** binds (~460 cycles a tile against
+  ~270 of the engine).
+- **Docs restructured** (2026-10-19, user): `SystolicUnit` retired from the guide -- pages: index (which
+  module), `systolic_theory` (one panel, the bounds, memory), `systolic_engine`, `systolic_engine_mem`;
+  the unit's timing and resource tests deleted, its functional tests and all of `examples/mimo_cg`'s
+  quarantined (`_Q_CG`) until mimo_cg moves to the engine (the student's). `docs/examples/systolic`
+  (timing and resource model, from the harnesses) comes with the calibration.
+- **Overnight 2026-10-20 (branch `systolic-panels`), all Vitis 2025.1, all exact, all meeting 4 ns:**
+  - the receiver forwards each output's payload in one pipelined loop: 64-bit steady **171** (was 175).
+    Tried and dropped: one loop with bound nb·np·(wa+wb) (6 DSP, or 2.4k LUT from fabric) and an exit
+    tested on a burst count (est. 5.6 ns, missed 4 ns);
+  - the feeder's read port is an `hls::burst_maxi` (framework: an endpoint's `burst_maxi = True` ->
+    `composite_gen` emits the port type and the include): a tile's panels requested ahead, read in one
+    loop. Wrapper `32x32x64` **5,813** (64-bit, was 6,468) and **3,033** (128-bit, was 3,680), 88% and
+    85% of the input floor;
+  - carrying the array's state across commands is NOT feasible: a loop over commands in one firing ran
+    csynth out of memory (7.0 GB) as `static` did -- batching outputs into a command (`nb`) is the
+    answer: four a command run at **81** cycles an output (128-bit), the input's bound;
+  - trace binding: banked blocks' first-bank nets in the manifest; `load_trace` binds `<body>_U0`
+    when Vitis drops a task's template args;
+  - `examples/systolic/systolic_sweep.py` -> `resources.json`: 15 configurations; DSP = 4·R·C + ~26;
+    the half-size engine (R 2: 91 DSP, 20.7k LUT, ~ SystolicUnit's area) runs at **171** too;
+  - `systolic_runtime.py` (the sim-speed page's script) written; calibration hooks on the engine
+    (`calib` workload, `calib_holdout`, `engine_harness --calibrate`).
+- **Open before the calibration:** none of the design items; then calibrate once (6d) -- the core's
+  `panel` phase -- and fit a resource model on the sweep.
+- **After the calibration** (user, 2026-10-19): `docs/evaluation/sim_speed/systolic.md`, the twin of
+  `fft.md` -- one bit-exact workload run as the untimed model (`waveflow.linalg.matmul`), pysim (the
+  engine's harness, and the wrapper's) and the RTL under XSI (plus csynth per point), the cost per
+  product, from an `examples/systolic/systolic_runtime.py`. Set up the script and the page and take
+  **preliminary** timings on the development laptop, labelled so; the final numbers come from a run
+  on the lab machine (the student's). Event counts (pysim events, RTL cycles) can be taken anywhere.
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 

@@ -4,7 +4,7 @@ parent: DSP Blocks
 nav_order: 4
 has_children: false
 snippets: run
-summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conjugate gradient, multi-RHS: the start and, per iteration, the column dots, the two guarded divisions and the updates of X, R and P, bit for bit like the model in waveflow.linalg.cg. The matrix multiply S = A·P of each iteration comes from outside: a systolic core job, or a STEP message. Covers the model, the parameters, the core's command and blocks, the unit's START/STEP messages, a runnable example, building and testing, the calibrated cost model with its held-out scores, and the limits."
+summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conjugate gradient, multi-RHS: the start and, per iteration, the column dots, the two guarded divisions and the updates of X, R and P, bit for bit like the model in waveflow.linalg.cg. The matrix multiply S = A·P of each iteration comes from outside: a systolic multiply, or a STEP message. Covers the model, the parameters, the core's command and blocks, the unit's START/STEP messages, a runnable example, building and testing, the calibrated cost model with its held-out scores, and the limits."
 ---
 
 # CG Vector Unit
@@ -13,8 +13,13 @@ summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conj
 fixed-point **conjugate gradient** on `A X = B`: `A` Hermitian positive definite (`k × k`) and `n`
 right-hand sides (`B`, `k × n`), each column with its own step sizes. A job runs `nit` iterations
 from `X = 0`. The matrix multiply of each iteration, `S = A·P`, is not in this unit: in a design, a
-[systolic core](systolic/index.md) job with `nb = nit` computes the `nit` matrices `S` from the `nit`
-matrices `P` this unit writes; the standalone unit takes `S` in its messages.
+systolic multiply computes the `nit` matrices `S` from the `nit` matrices `P` this unit writes -- a
+[systolic engine](systolic/systolic_engine.md) command with `keep_a` and `nb = nit`, one `A` for all of
+them; the standalone unit takes `S` in its messages.
+
+**Status.** This unit is part of the MIMO-CG example (`examples/mimo_cg`), which pairs it with the
+older `SystolicUnit`. Until that example moves to the systolic engine, its tests are quarantined
+(`tests/conftest.py`), and this page describes the unit as it was measured with Vitis HLS 2024.1.
 
 The bit-exact model is `waveflow.linalg.cg`. The pysim modules call it, and the HLS body equals it
 in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at RTL. For what the
@@ -79,7 +84,8 @@ on its data.
 | `p_blk` | stream of blocks, out | `P₀ … P_nit−1`, one per iteration |
 | `x_blk` | stream of blocks, out | `X`, after the last iteration |
 
-Every block holds a `k × n` matrix as row-major lane groups of `L`, the systolic core's layout. A
+Every block holds a `k × n` matrix as row-major lane groups of `L`
+([lane groups](linalg_common.md#lane-groups-and-message-words)). A
 job reads `B`, starts, and writes `P₀`; then, per iteration, it reads `S` and writes the next `P`,
 or `X` after the last. Per iteration and per group of `L` columns it makes three pipelined passes
 over the `k` rows: the dot `ps`, then `X`, `R` and `rz'`, then `P`, with the two divisions between
@@ -87,7 +93,7 @@ them. The core does not check its command, and the pysim core raises on an inval
 
 Paired with a `SystolicCore`, a CG job is a `SystolicCore` job with `nb = nit` (`A` once, the `nit`
 matrices `P` in, the `nit` matrices `S` out) beside one `CgVectorCore` job; the two cores must then
-share `L`, and the dimensions must also meet the systolic core's rules.
+share `L`, and the dimensions must also meet the systolic multiply's rules.
 
 The body is `waveflow/build/cg_vector_task.h`, a template on the maxima, `L`, `sob_depth` and the
 format id. Its traits carry the registers and the exact types the body needs: `rzw_t` (the widened
@@ -293,7 +299,7 @@ This configuration was a calibration build. Measured with Vitis HLS / Vivado xsi
 
 ## Building and testing it
 
-**Headers.** As for the systolic unit, `collect_parts` gathers what the unit needs and
+**Headers.** `collect_parts` gathers what the unit needs and
 `gen_linalg_headers` writes it:
 
 ```python
@@ -310,8 +316,8 @@ with tempfile.TemporaryDirectory() as tmp:
 ```
 
 **The top and the RTL test.** `tests/linalg/_cg_unit_bench.py` feeds the unit from memory through
-an in-band `MemRStream` and lands its replies through an in-band `MemWStream`, as the systolic
-unit's bench does, with one memory read per request and one write per reply. A scenario is a list of
+an in-band `MemRStream` and lands its replies through an in-band `MemWStream`, with one memory read
+per request and one write per reply. A scenario is a list of
 CG jobs, whose `S` matrices the model computes, and requests meant to be rejected, between jobs or
 inside them.
 
@@ -326,7 +332,7 @@ inside them.
 
 ## The cost model
 
-`waveflow/linalg/cg_cost.py` holds the model forms, the CG twin of the systolic unit's
+`waveflow/linalg/cg_cost.py` holds the model forms, beside the systolic unit's in
 `waveflow/linalg/cost.py`. The fitted numbers live in the same packaged platform
 ([Linear-Algebra Conventions](./linalg_common.md#cost-data)).
 
@@ -340,10 +346,10 @@ inside them.
 | receiver | 1 (index product) | none | the word width |
 | loader | 1 | none | `L·W`, `L·log₂L·W`, `W` over `B` and `S` |
 | store | 1 | none | `L·W`, `L·log₂L·W`, `W` over `P` and `X`, the word width |
-| channels | none | the four stream-of-blocks buffers, by the systolic unit's buffer rule; plus the `m_axi` adapters: 8 with 64-bit words, 4 with 32-bit | the word width |
+| channels | none | the four stream-of-blocks buffers, by the buffer rule measured in the linear-algebra calibration; plus the `m_axi` adapters: 8 with 64-bit words, 4 with 32-bit | the word width |
 
 The binding of narrow multiplies to LUTs is Vitis HLS 2024.1's on this part, kept with the model.
-`cg_cost.predict_unit(unit)` gives each part and the sum; or, as for the systolic unit,
+`cg_cost.predict_unit(unit)` gives each part and the sum; or
 `top.add_rm(cost.platform())` and `compose(top)`, where the `CgVectorUnit` carries its channels.
 
 ### Cycles
@@ -418,11 +424,11 @@ requests' intervals: centre 14,007.5 cycles against 14,070 measured (0.4%), smal
   were off by 26% on average and 84% at worst, a few dozen cycles each. Right after a served
   request, a rejection was off by 9.3% on average.
 * **`S` comes from outside.** The standalone unit takes `S` in its messages. The loop closed
-  around a systolic core is not tested here.
+  around a systolic multiply is not tested here.
 * **A job must finish.** A job in progress waits for its next valid `STEP`; a client that abandons a
   job blocks the unit.
 * **The explicit residual form is the model's only.** The hardware computes the recurrence.
-* **Memory-fed designs.** As for the systolic unit, the in-band reader and writer in one generated
+* **Memory-fed designs.** The in-band reader and writer in one generated
   top must fire equally often; the unit's bench reads once per request and writes once per reply.
 * **The cycle model's setting.** The sum form was measured with the unit fed from memory. pysim
   overlaps transfers with compute, and a unit fed straight from a stream at RTL is untested.

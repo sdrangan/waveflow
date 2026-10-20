@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from waveflow.toolchain import toolchain
+from waveflow.utils.fixputils import Format, OMode, QMode
 
 #: The part these tests use; any installed part serves C-simulation.
 PART = "xczu48dr-ffvg1517-2-e"
@@ -32,6 +33,11 @@ if {{[catch {{csim_design -argv "{out}"}} res]}} {{
 puts "WAVEFLOW_SUCCESS"
 exit 0
 """
+
+
+def reg(W: int, I: int) -> Format:  # noqa: E741 -- (width, integer bits), as Format names them
+    """A register format: ``W`` bits, ``I`` of them integer, rounded and saturated."""
+    return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
 
 
 def require_vitis() -> None:

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 430" width="660" height="430" font-family="Menlo, Consolas, monospace" font-size="13">
+  <title>An output-stationary systolic array: R = 3 rows by C = 4 columns of processing elements, A entering from the left a row per array row, B from the top a column per array column, each skewed one step per row or column</title>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5a6b7b"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="660" height="430" fill="#ffffff"/>
+  <g fill="#3a4a5a">
+    <!-- B columns, from the top: column j starts j steps late (the dots), b[k][j] nearest first -->
+    <text x="262" y="34" text-anchor="middle">b20</text>
+    <text x="262" y="54" text-anchor="middle">b10</text>
+    <text x="262" y="74" text-anchor="middle">b00</text>
+    <text x="362" y="14" text-anchor="middle">b21</text>
+    <text x="362" y="34" text-anchor="middle">b11</text>
+    <text x="362" y="54" text-anchor="middle">b01</text>
+    <text x="362" y="74" text-anchor="middle">·</text>
+    <text x="462" y="14" text-anchor="middle">b12</text>
+    <text x="462" y="34" text-anchor="middle">b02</text>
+    <text x="462" y="54" text-anchor="middle">·</text>
+    <text x="462" y="74" text-anchor="middle">·</text>
+    <text x="562" y="14" text-anchor="middle">b03</text>
+    <text x="562" y="34" text-anchor="middle">·</text>
+    <text x="562" y="54" text-anchor="middle">·</text>
+    <text x="562" y="74" text-anchor="middle">·</text>
+    <!-- A rows, from the left: row i starts i steps late, a[i][k] nearest first -->
+    <text x="196" y="149" text-anchor="end">a02  a01  a00</text>
+    <text x="196" y="229" text-anchor="end">a12  a11  a10   ·</text>
+    <text x="196" y="309" text-anchor="end">a22  a21  a20   ·   ·</text>
+  </g>
+  <g stroke="#5a6b7b" stroke-width="1.6" fill="none">
+    <!-- column feeds and the arrows between rows -->
+    <line x1="262" y1="84" x2="262" y2="118" marker-end="url(#ar)"/>
+    <line x1="362" y1="84" x2="362" y2="118" marker-end="url(#ar)"/>
+    <line x1="462" y1="84" x2="462" y2="118" marker-end="url(#ar)"/>
+    <line x1="562" y1="84" x2="562" y2="118" marker-end="url(#ar)"/>
+    <line x1="262" y1="170" x2="262" y2="198" marker-end="url(#ar)"/>
+    <line x1="362" y1="170" x2="362" y2="198" marker-end="url(#ar)"/>
+    <line x1="462" y1="170" x2="462" y2="198" marker-end="url(#ar)"/>
+    <line x1="562" y1="170" x2="562" y2="198" marker-end="url(#ar)"/>
+    <line x1="262" y1="250" x2="262" y2="278" marker-end="url(#ar)"/>
+    <line x1="362" y1="250" x2="362" y2="278" marker-end="url(#ar)"/>
+    <line x1="462" y1="250" x2="462" y2="278" marker-end="url(#ar)"/>
+    <line x1="562" y1="250" x2="562" y2="278" marker-end="url(#ar)"/>
+    <!-- row feeds and the arrows between columns -->
+    <line x1="202" y1="145" x2="218" y2="145" marker-end="url(#ar)"/>
+    <line x1="202" y1="225" x2="218" y2="225" marker-end="url(#ar)"/>
+    <line x1="202" y1="305" x2="218" y2="305" marker-end="url(#ar)"/>
+    <line x1="306" y1="145" x2="318" y2="145" marker-end="url(#ar)"/>
+    <line x1="406" y1="145" x2="418" y2="145" marker-end="url(#ar)"/>
+    <line x1="506" y1="145" x2="518" y2="145" marker-end="url(#ar)"/>
+    <line x1="306" y1="225" x2="318" y2="225" marker-end="url(#ar)"/>
+    <line x1="406" y1="225" x2="418" y2="225" marker-end="url(#ar)"/>
+    <line x1="506" y1="225" x2="518" y2="225" marker-end="url(#ar)"/>
+    <line x1="306" y1="305" x2="318" y2="305" marker-end="url(#ar)"/>
+    <line x1="406" y1="305" x2="418" y2="305" marker-end="url(#ar)"/>
+    <line x1="506" y1="305" x2="518" y2="305" marker-end="url(#ar)"/>
+  </g>
+  <!-- the processing elements: element (i, j) holds C[i][j] of the tile -->
+  <g stroke="#2f5d8a" stroke-width="1.6" fill="#e8f0f8">
+    <rect x="220" y="120" width="84" height="50" rx="6"/>
+    <rect x="320" y="120" width="84" height="50" rx="6"/>
+    <rect x="420" y="120" width="84" height="50" rx="6"/>
+    <rect x="520" y="120" width="84" height="50" rx="6"/>
+    <rect x="220" y="200" width="84" height="50" rx="6"/>
+    <rect x="320" y="200" width="84" height="50" rx="6"/>
+    <rect x="420" y="200" width="84" height="50" rx="6"/>
+    <rect x="520" y="200" width="84" height="50" rx="6"/>
+    <rect x="220" y="280" width="84" height="50" rx="6"/>
+    <rect x="320" y="280" width="84" height="50" rx="6"/>
+    <rect x="420" y="280" width="84" height="50" rx="6"/>
+    <rect x="520" y="280" width="84" height="50" rx="6"/>
+  </g>
+  <g fill="#1f3550" text-anchor="middle">
+    <text x="262" y="150">c00</text><text x="362" y="150">c01</text><text x="462" y="150">c02</text><text x="562" y="150">c03</text>
+    <text x="262" y="230">c10</text><text x="362" y="230">c11</text><text x="462" y="230">c12</text><text x="562" y="230">c13</text>
+    <text x="262" y="310">c20</text><text x="362" y="310">c21</text><text x="462" y="310">c22</text><text x="562" y="310">c23</text>
+  </g>
+  <g fill="#3a4a5a" font-size="12">
+    <text x="330" y="365" text-anchor="middle">each step, every element: c += a · b, then passes a right and b down</text>
+    <text x="330" y="385" text-anchor="middle">element (i, j) meets a[i][k] and b[k][j] at step k + i + j</text>
+    <text x="330" y="405" text-anchor="middle">a tile of C (R × C values) after k steps, plus R + C − 2 of skew</text>
+  </g>
+</svg>
