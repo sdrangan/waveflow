@@ -1,6 +1,6 @@
 # Plan: simulation speed of the processor model and the linear-algebra units
 
-**Status:** In progress (approved by the user 2026-10-19, with the independent plan review's corrections applied; started 2026-10-19)
+**Status:** Done (2026-10-19; approved with the plan review's corrections, executed steps 0-18; see §16)
 **Complexity:** L3 Complex. It needs three new measurement set-ups (CPU, systolic, CG), there were open choices about what each fidelity means, and the user chose to optimize after measuring, which can touch framework code. Nothing about it is irreversible. Scores: scope 3 · clarity 3 · novelty 2 · dependencies 2 · verification 3 · risk 2
 **Created:** 2026-10-19 · **Updated:** 2026-10-19
 **Plan file:** `plans/sim_speed_cpu_linalg.md` · **Lessons learned:** `plans/sim_speed_cpu_linalg_lessons.md` (the doer creates it at the first lesson)
@@ -396,8 +396,8 @@ Alternatives considered (L3):
 | 15 | **Index, evaluation summary, guide links** | steps 13–14 | `docs/evaluation/sim_speed/index.md`: summary, *Results* table (new rows; every row names its machine), *What is still slow*, *The pages*. `docs/evaluation/index.md` summary consistent. One-line links from `docs/guide/cpu/scheduling.md` § Speed (and its tasks/s figures if changed), the systolic guide (`docs/guide/dsp/systolic/timing.md` or `index.md`), and `docs/guide/dsp/cg_vector.md`. `tests/docs/test_sim_speed_numbers.py` checks the pages' load-bearing numbers against the two JSONs. | `git diff docs/`; `.venv/bin/python -m pytest tests/docs -q` (including the new test) | commit | ☑ |
 | — | **M4 pause** 👁 | steps 13–15 | The user has reviewed the pages | — | — | ☐ |
 | 16 | **Regression and lint** | everything | AC7: fast suite with no failures beyond step 1's baseline; `pytest -m gem5` passes; `pytest -m xsi` passes (if anything under `waveflow/` changed); ruff/black/mypy clean on touched files | the commands; summaries in §15/§16 | commit (if fixes) | ☑ |
-| 17 | **Independent result review** | the branch | A reviewer subagent (general-purpose) reviews `git diff main...sim-speed-cpu-linalg` against §4 and §2: correctness of each optimization, honesty of each number, page against JSON. Optionally `/code-review high` on the same diff. Findings shown to the user, who decides what to fix. | the review report in §15 | commit (fixes) | ☐ |
-| 18 | **Close-out** | everything | §16 written; AC1–AC8 marked with evidence; final lessons entry; `git diff --stat main...` shown; `../wf_ab_base` worktree removed (`git worktree remove ../wf_ab_base`); status *Done* / *Partially done* | `git worktree list`; `git log --oneline main..` | commit | ☐ |
+| 17 | **Independent result review** | the branch | A reviewer subagent (general-purpose) reviews `git diff main...sim-speed-cpu-linalg` against §4 and §2: correctness of each optimization, honesty of each number, page against JSON. Optionally `/code-review high` on the same diff. Findings shown to the user, who decides what to fix. | the review report in §15 | commit (fixes) | ☑ |
+| 18 | **Close-out** | everything | §16 written; AC1–AC8 marked with evidence; final lessons entry; `git diff --stat main...` shown; `../wf_ab_base` worktree removed (`git worktree remove ../wf_ab_base`); status *Done* / *Partially done* | `git worktree list`; `git log --oneline main..` | commit | ☑ |
 
 Milestones (L3): **M0** = steps 0–1 · **M1** (CPU measured) = steps 2–5 · **M2** (linalg measured) = steps 6–9 · **M3** (optimized and re-measured) = steps 10–12 · **M4** (pages) = steps 13–15 · **M5** (close-out) = steps 16–18. The doer pauses after each.
 
@@ -528,19 +528,71 @@ Flags: ⚠️ irreversible (see §12): none. 👁 the user reviews before contin
 | 2026-10-19 | 17.1 | **Fix 1, the memo.** `SwFunction.price` holds what it priced with (`cycles`, `energy_pj`, `working_set`) and clears the memo when any is no longer the same object; the key is the counters (plus the cache sizes with a working set). New test `test_replacing_a_model_or_the_working_set_starts_afresh`: on the old memo it fails with **32 stale prices of 60** (the reviewer's figure); fixed, it passes. The precondition (a `working_set` depends on the counters alone; no refit in place) is now in `docs/guide/cpu/index.md`. `tests/cpu` + `test_cpu_sched*`: 120 passed (pins unchanged). | the commands | none |
 | 2026-10-19 | 17.2 | **Fix 2, preemption and interrupts pinned.** `tests/cpu/test_processor_random_outcomes.py`: 200 seeded random workloads (the reviewer's generator: 1-3 cores, preemptive and run-to-completion, interrupts, several clocks and switch costs, zero and fractional cycles, same-instant spawned submitters). Each is a digest of every `TaskRecord` plus the order and time of every body call and result. **Recorded from `main`'s `processor.py` (`c0513139`)**: 517 preemptions and 617 interrupts in all (the test asserts more than 100 of each). The branch matches all 200. Sensitivity: `_Now` at NORMAL priority moves 38 of 200, so the test fails; reverted. **Own slip:** commit `cf1ee1ff` went in with a ruff error (C408) and without this row. In my shell line, ruff's failure skipped the test run and the plan update, but the commit was on its own line and still ran. Fixed in the next commit: literals in the same evaluation order (the recorded workloads are unchanged, and the pins pass). `tests/cpu` + `test_cpu_sched*`: 122 passed. | the commands | lesson added |
 | 2026-10-19 | 17.3 | **Fixes 3-7.** (a) The runtime script (`16dcd710`) gives untimed and pysim each their own `SchedTrace`: independent memos, so neither warms the other and the cycles check compares two independent pricings again. It also records a **cold row** (each run's first pass on a fresh instance, best of 15: the trace needs 161 distinct prices for 611 calls) and the example's replay-pricing time. (b) The re-measurement showed the memo fix had cost speed: untimed 3.48, pysim 16.2 µs/op, and pricing at 35 % of the pysim. The source check built a tuple and ran a generator per call. Three `is` comparisons instead (`c2c4be24`): A/B pysim 16.11 → 14.75, untimed 3.44 → 2.80 (5/5 each), back to the round 3 level. Stamps ignore Markdown, since a doc edit during the gem5 series had marked it dirty. (c) **Final CPU at `c2c4be24`, clean, `load_before` 0.97:** untimed **2.77** / pysim **14.7** µs/op warm, **5.88 / 20.1** cold; gem5 region **481 µs** (+0.25 s), whole run **10.8 ms**/op (+5.5 s; 23× the region); 33× / 737×; system **0.343 ms**/job; bench **75,293 / 78,789**; replay pricing 4.6 ms. (d) Pages: `cpu.md` rewritten from these numbers, with warm/cold explained and the cold rows, the gem5 wording (per op plus per run; what the 737× includes), "one event of four", "a shared machine, load below 1", a paragraph on the review (the pinned random workloads, the memo bug and its fix), and lessons 2 and 7. `linalg.md`: "5 % plus 1,000 cycles", the shared machine, and lesson 3 made general (`CLAUDE.local.md`). `index.md`: the machine B sentence, "about 40 s" of synthesis for the units, the processor row with "plus 5.5 s a run" and the cold pysim. The guide's note: "a lightly loaded" machine, 75,000 / 79,000, 481 µs. (e) `tests/docs/test_sim_speed_numbers.py` now also asserts every exactness flag and `dirty == false` on every stamp, the cold row, the 161/611 count, the gem5 23×, the RTL margin (from the JSON) and the example's replay figure: 10 tests, pass. `pytest tests/docs`: pass. | the commands | the memo fix's speed cost found and removed |
+| 2026-10-19 | 18 | **Close-out.** After the review's fixes, the fast suite at `8f86bce9` gave 5 failed, 5,009 passed (the same failure set as step 16), and gem5 12 passed. `git diff --stat main...`: 28 files, 3 of them under `waveflow/` (all `waveflow/cpu`). **Found: VS Code's git extension pushed the branch** (its log: `git push -u origin sim-speed-cpu-linalg` at 16:38:00, pushes at 18:48:20 and 19:08:40). `origin` is at `fbbd59dd`; the 10 later commits are local; I pushed nothing (AC8 ⚠️). The A/B worktree `../wf_ab_base` was removed (it was clean). §16 written; status Done. | `git status -sb`, the reflog, the extension's `Git.log` | AC8 ⚠️ |
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+*Written 2026-10-19 at the close-out (step 18).*
 
 - **Changed:**
+  - **The processor model** (`waveflow/cpu`):
+    - `processor.py`: a task's segment is an URGENT start event plus a timeout callback, not a spawned SimPy process; a preemption is delivered by an URGENT event and `seg_id`; a submit fast path; `_Task` slots; the switch cost evaluated once.
+    - `task.py`: `SwFunction.price`, memoized; it holds its models and working set and starts afresh when one is replaced.
+    - `bench.py`: `SchedTrace` and `repeat_trace`; `run_bench` returns its records.
+  - **Examples:** `examples/cpu_sched/cpu_sched.py` (`RunResult.records`); the runtime scripts `examples/cpu_sched/cpu_sched_runtime.py` and `tests/linalg/_sim_speed.py`, with their JSONs.
+  - **Tests:**
+    - outcome pins: CPU trace and bench, the example at two rates, 200 random workloads with preemption and interrupts (recorded from `main`'s processor), and the linalg units;
+    - `test_price_memo.py` and `test_sim_speed_numbers.py`.
+  - **Docs:**
+    - pages `docs/evaluation/sim_speed/cpu.md` and `linalg.md`;
+    - the index (a machine column on every row) and `docs/evaluation/index.md`;
+    - links and figures in `docs/guide/cpu/index.md` and `scheduling.md`, the systolic and CG guides, and the `cpu_sched` example.
+  - **No framework files** (`waveflow/hw`, `waveflow/simulation`, `waveflow/utils`, `waveflow/build`) were changed.
 - **Tested (commands and results):**
-- **Acceptance criteria:** AC1 ✅/❌/⚠️ <evidence> · …
-- **Decisions made:**
+  - **The fast suite** at `8f86bce9`: 5 failed, 5,009 passed. The 5 failures are among the baseline's 6. The sixth, `test_retrieval_eval.py::test_generated_code_is_excluded_by_default`, passes only because the new pages changed the search corpus; it still fails without them.
+  - **`-m gem5`:** 12 passed.
+  - **`-m xsi`** at `ed9372f0`: the identical failure, error and skip sets as the baseline; the 6 linalg gates pass. It was not re-run after the review's fixes, which touch only `waveflow/cpu` and docs, and no XSI gate exercises them.
+  - **Targeted:** `tests/cpu` with the pins, 122 passed; `tests/docs`, 88 passed.
+  - **Lint:** ruff, black and mypy (per package) clean on the 13 touched Python files.
+- **Acceptance criteria:**
+  - **AC1 ✅** CPU untimed / pysim / gem5 per operation on k = 1, 2, 4 copies. gem5 has both the region host time and the wall time, and the 63,266 anchor holds. The work is flat across copies, and bench, events and metadata are recorded. A cold row was added at the review.
+  - **AC2 ✅** Linalg untimed / pysim / RTL per job, construction apart. The RTL `n_cycles` is sized per run; build phases, csynth and the 2024.1 tool are recorded; everything is bit-exact.
+  - **AC3 ✅** *Where the time goes* on both pages, from the JSONs' profiles.
+  - **AC4 ✅ CPU, n/a linalg.**
+    - CPU: three rounds, each A/B'd (5 alternating pairs), each pinned unchanged; it ended on the round cap, with the ratio 5.3× against the 2× target.
+    - Linalg: no round, by the user's decision at the ⛔ gate (§14).
+  - **AC5 ✅** Both pages carry the FFT page's sections, and `test_sim_speed_numbers.py` pins every load-bearing number, every exactness flag and every clean-tree stamp.
+  - **AC6 ✅** The index names the machine of every row, with links from the guides and the example.
+  - **AC7 ✅** The regression is as above; XSI was not re-run after `ed9372f0`.
+  - **AC8 ⚠️** Everything is on `sim-speed-cpu-linalg`, one commit per step or round, and I ran no push. But **VS Code's git extension pushed the branch to `origin` three times**: `git push -u` at 16:38:00, then pushes at 18:48:20 and 19:08:40 (its `Git.log`). `origin/sim-speed-cpu-linalg` is at `fbbd59dd` (step 12); the later commits are local.
+- **Decisions made:** see §14:
+  - L3, measure + profile + optimize, models free and framework gated;
+  - the k-copy CPU workload; the linalg benches; two pages and machine labels;
+  - no linalg framework changes;
+  - the method deviations (warm and cold, short runs repeated, the RTL margin);
+  - all of the review's fixes.
 - **Assumptions and not verified:**
+  - Machine B is shared: its load was below 1 before each series, but not during the A/B sessions (up to 1.75 in round 2).
+  - The gem5 region's fixed ~0.25 s per run is reported, not explained.
+  - The 72,252× is quoted from `plans/cpu_model.md`, not re-measured.
+  - The A/B rows are per session, so they don't chain exactly.
+  - The 60,000-workload equivalence is the reviewer's scratch run; only the 200 pinned workloads are in the repo.
 - **Remaining risks and issues:**
+  - The systolic unit's redesign (`plans/systolic_characterization.md`, Part B) will make its numbers stale; re-run `python -m tests.linalg._sim_speed --rtl --profile`.
+  - Any re-measurement fails `test_sim_speed_numbers.py` until the pages are updated, by design.
+  - The price memo assumes a working set depends on the counters alone and that no model is refitted in place; this is documented in `docs/guide/cpu/index.md`.
+  - The linalg pysim's framework cost (P1-P3) remains.
+  - The branch is partly on `origin` (AC8).
 - **Next steps:**
+  - (user) Decide what to do with the pushed branch: push the rest, open a PR, or leave it.
+  - A follow-up plan for the framework message path (P1-P3), with its own pins.
+  - Re-measure the systolic unit after its redesign.
+  - Optionally a `CLAUDE.local.md` note to run everything with the venv activated (lesson, step 1).
 - **Reusable artifacts saved / tools that would have helped:**
+  - Committed: `tests/cpu/_outcomes.py` (TaskRecord fingerprints), the two runtime scripts, and the random-workload pin.
+  - In the session scratchpad: the A/B driver (`ab/ab.py` plus a snippet), which alternates fresh processes between two trees and asserts which tree each imported. It is worth keeping as a repo tool if A/B comes up again; the user decides.
+  - The two runtime scripts duplicate their stamp, idle-wait and profile helpers (`tests/linalg` may not import `examples`). A shared helper under `waveflow/` would be a framework change.
+  - A pre-push guard, such as a branch protection or a hook, would have stopped the editor's pushes.
 
 ## Checklist coverage
 

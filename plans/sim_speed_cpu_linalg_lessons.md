@@ -47,3 +47,7 @@ newest last.
   pytest ... && python3 <<EOF (plan update)` failed at ruff, which skipped the tests and the plan
   update. But `git add ... && git commit` on the next line still ran, and committed a lint error
   without its log row. Run the checks, read their status, then commit in a separate step.
+- **2026-10-19 (step 18): the editor can push.** VS Code's git extension published the branch
+  (`git push -u`) a minute after the plan's first commit, and pushed it twice more later. None of
+  those commands came from the agent. A "never push" rule binds the agent, not the editor. Check
+  `git status -sb` for an upstream at each milestone, and say so as soon as one appears.
