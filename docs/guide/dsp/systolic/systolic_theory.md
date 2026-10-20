@@ -4,7 +4,7 @@ parent: Systolic Matrix Multiply
 grand_parent: DSP Blocks
 nav_order: 1
 audience: python
-summary: "How the systolic engine's output-stationary array multiplies C = A·B in one panel, and what bounds it: the dimensions (m, k, n of the product; R × C processing elements; L lanes; LW elements a word), a tile of R × C outputs and its skew, why tiles can follow each other every max(kp, R·C/L, L) steps, and the three bounds on a panel's time -- compute T·P, input kp(m+n)/LW words, output m·n/LW words -- with the condition for being compute-bound, mn/(m+n) ≥ R·C/LW. Worked at the centre configuration against what the RTL measured, and the on-chip memory a panel needs."
+summary: "How the systolic engine's output-stationary array multiplies C = A·B in one panel, and what bounds it: the dimensions (m, k, n of the product; R × C processing elements; L lanes; LW elements a word), a tile of R × C outputs and its skew, why tiles can follow each other every max(kp, R·C/L, L) steps, and the three bounds on a panel's time -- compute T·P, input kp(m+n)/LW words, output m·n/LW words -- with the condition for being compute-bound, mn/(m+n) ≥ R·C/LW. Worked at the centre configuration, and the on-chip memory a panel needs, and how it is banked."
 ---
 
 # How a systolic array works
@@ -105,16 +105,11 @@ array is input-bound at both. Square products of `m = n = 32` (16) would be comp
 (the period cannot drop below `R·C/L = 8`) and the input drops to `40 / LW`, but `C` is still
 `m·n = 256` values: the output, 128 cycles at 64-bit words, binds.
 
-**What the RTL measured** (Vitis HLS / Vivado xsim 2025.1, `SystolicEngine`, `8×8×32` back to back):
-
-| Words | Bound (from the table) | Measured | Where the rest goes |
-|---|---|---|---|
-| 64-bit, `kp = 8` | input, 160 | 175 a job | the command (2 words) and the receiver's handling of it |
-| 64-bit, `kp = 1` | output, 128 | 141 | the reply header and the store's handling of it |
-| 128-bit, `kp = 8` | input, 80 | 94 | the command and the receiver's handling of it ([engine, Limits](systolic_engine.md#limits)) |
-
-An earlier design, whose tiles did not overlap and which copied its operands into the array's banks
-first, took 390 cycles a job on the same product.
+**Against the RTL.** The engine at the centre takes 175 cycles a product with 64-bit words (the input
+bound, 160, plus the command), 141 at `kp = 1` (the output bound, 128, plus the reply header) and 94
+with 128-bit words, where the compute bound's 64 steps plus ~30 cycles of fixed cost a command meet the
+input's 80 words plus its command -- measured in
+[the example](../../../examples/systolic/timing.md#the-engine-against-its-bounds).
 
 ## Memory
 

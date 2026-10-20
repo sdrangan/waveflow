@@ -1,0 +1,298 @@
+{
+ "target": {
+  "part": "xczu48dr-ffvg1517-2-e",
+  "period_ns": 4.0
+ },
+ "runs": {
+  "eng128_short": {
+   "module": "SystolicEngine",
+   "word_bits": 128,
+   "workload": "short",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 8,
+   "ends": [
+    182,
+    276,
+    370,
+    464,
+    558,
+    652,
+    746,
+    840
+   ],
+   "interval": [
+    94
+   ],
+   "pysim_cycles": 1235.0000000000002,
+   "resources": {
+    "bram": 36,
+    "dsp": 154,
+    "ff": 36347,
+    "lut": 31230,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "eng128_steady": {
+   "module": "SystolicEngine",
+   "word_bits": 128,
+   "workload": "steady",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 4,
+   "ends": [
+    252,
+    346,
+    440,
+    534
+   ],
+   "interval": [
+    94
+   ],
+   "pysim_cycles": 785.0000000000001,
+   "resources": {
+    "bram": 36,
+    "dsp": 154,
+    "ff": 36347,
+    "lut": 31230,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "eng128_test": {
+   "module": "SystolicEngine",
+   "word_bits": 128,
+   "workload": "test",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 8,
+   "ends": [
+    252,
+    273,
+    477,
+    550,
+    588,
+    668,
+    724,
+    866
+   ],
+   "interval": [
+    21,
+    38,
+    56,
+    73,
+    80,
+    142,
+    204
+   ],
+   "pysim_cycles": 951.0000000000002,
+   "resources": {
+    "bram": 36,
+    "dsp": 154,
+    "ff": 36347,
+    "lut": 31230,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "eng64_short": {
+   "module": "SystolicEngine",
+   "word_bits": 64,
+   "workload": "short",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 8,
+   "ends": [
+    257,
+    398,
+    539,
+    680,
+    821,
+    962,
+    1103,
+    1244
+   ],
+   "interval": [
+    141
+   ],
+   "pysim_cycles": 1318.0000000000002,
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36233,
+    "lut": 31316,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "eng64_steady": {
+   "module": "SystolicEngine",
+   "word_bits": 64,
+   "workload": "steady",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 4,
+   "ends": [
+    397,
+    572,
+    747,
+    922
+   ],
+   "interval": [
+    175
+   ],
+   "pysim_cycles": 1330.0,
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36233,
+    "lut": 31316,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "eng64_test": {
+   "module": "SystolicEngine",
+   "word_bits": 64,
+   "workload": "test",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "outputs": 8,
+   "ends": [
+    397,
+    426,
+    687,
+    777,
+    847,
+    930,
+    977,
+    1167
+   ],
+   "interval": [
+    29,
+    47,
+    70,
+    83,
+    90,
+    190,
+    261
+   ],
+   "pysim_cycles": 1317.9999999999998,
+   "resources": {
+    "bram": 32,
+    "dsp": 154,
+    "ff": 36233,
+    "lut": 31316,
+    "est_clock_ns": 2.92
+   },
+   "date": "2026-10-19"
+  },
+  "mem128_big": {
+   "module": "SystolicEngineMem",
+   "word_bits": 128,
+   "workload": "big",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "c_words_wrong": [
+    0
+   ],
+   "done": [
+    3680
+   ],
+   "pysim_cycles": 5699.999999999997,
+   "resources": {
+    "bram": 44,
+    "dsp": 157,
+    "ff": 43812,
+    "lut": 37443,
+    "est_clock_ns": 3.352
+   },
+   "date": "2026-10-19"
+  },
+  "mem128_test": {
+   "module": "SystolicEngineMem",
+   "word_bits": 128,
+   "workload": "test",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "c_words_wrong": [
+    0,
+    0,
+    0
+   ],
+   "done": [
+    1068,
+    1505,
+    1611
+   ],
+   "pysim_cycles": 2596.000000000001,
+   "resources": {
+    "bram": 44,
+    "dsp": 157,
+    "ff": 43812,
+    "lut": 37443,
+    "est_clock_ns": 3.352
+   },
+   "date": "2026-10-19"
+  },
+  "mem64_big": {
+   "module": "SystolicEngineMem",
+   "word_bits": 64,
+   "workload": "big",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "c_words_wrong": [
+    0
+   ],
+   "done": [
+    6468
+   ],
+   "pysim_cycles": 11239.0,
+   "resources": {
+    "bram": 36,
+    "dsp": 157,
+    "ff": 41727,
+    "lut": 37221,
+    "est_clock_ns": 3.352
+   },
+   "date": "2026-10-19"
+  },
+  "mem64_test": {
+   "module": "SystolicEngineMem",
+   "word_bits": 64,
+   "workload": "test",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "c_words_wrong": [
+    0,
+    0,
+    0
+   ],
+   "done": [
+    1812,
+    2590,
+    2789
+   ],
+   "pysim_cycles": 5030.999999999998,
+   "resources": {
+    "bram": 36,
+    "dsp": 157,
+    "ff": 41727,
+    "lut": 37221,
+    "est_clock_ns": 3.352
+   },
+   "date": "2026-10-19"
+  }
+ }
+}

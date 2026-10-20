@@ -543,8 +543,10 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/systolic_engine.md`. Gates: `te
   drain order on a FIFO to a new `EngineCollect`, which fills the `C` block. **Found:** carrying the
   state across firings as `static` registers made csynth run out of memory (6.7 GB against 0.4; core
   alone with locals: 0.36 GB, II 1) -- so the state is per command. **Measured (2025.1):** bit-exact
-  (six commands); `8×8×32` at **94** cycles a job with 128-bit words (was 103; input-bound again) and
-  175 with 64-bit; core LUT 36.9k -> 31.2k, FF 25.7k -> 36.3k, BRAM 30 -> 36, est. 2.92 ns. The wrapper
+  (six commands); `8×8×32` at **94** cycles a job with 128-bit words (was 103) and 175 with 64-bit;
+  the 128-bit `short` workload is also 94, so at 128 bits the core's floor (64 tile steps + ~30 a
+  command: the 12-step run-out and ~18 of restart) TIES the input (~94) -- the receiver fix alone gains
+  nothing; carrying the array's state across commands is no longer optional; core LUT 36.9k -> 31.2k, FF 25.7k -> 36.3k, BRAM 30 -> 36, est. 2.92 ns. The wrapper
   barely moved (3,693 -> 3,680; 6,470 -> 6,468): its **read port** binds (~460 cycles a tile against
   ~270 of the engine).
 - **Docs restructured** (2026-10-19, user): `SystolicUnit` retired from the guide -- pages: index (which
@@ -553,9 +555,16 @@ R 4, C 8, L 4`). Guide: `docs/guide/dsp/systolic/systolic_engine.md`. Gates: `te
   quarantined (`_Q_CG`) until mimo_cg moves to the engine (the student's). `docs/examples/systolic`
   (timing and resource model, from the harnesses) comes with the calibration.
 - **Open before the calibration:** the feeder's loop switches (`hls::burst_maxi` or a deeper `B`
-  buffer) -- now the wrapper's bound; the receiver's ~13 cycles a command (the engine's bound); the
+  buffer) -- now the wrapper's bound; the receiver's ~13 cycles a command AND the core's ~30 a command
+  (tied at 128 bits; the core's needs the state carried across commands, without `static`); the
   trace-manifest names above; a small-engine csynth against `SystolicUnit`'s area; then calibrate once
   (6d).
+- **After the calibration** (user, 2026-10-19): `docs/evaluation/sim_speed/systolic.md`, the twin of
+  `fft.md` -- one bit-exact workload run as the untimed model (`waveflow.linalg.matmul`), pysim (the
+  engine's harness, and the wrapper's) and the RTL under XSI (plus csynth per point), the cost per
+  product, from an `examples/systolic/systolic_runtime.py`. Set up the script and the page and take
+  **preliminary** timings on the development laptop, labelled so; the final numbers come from a run
+  on the lab machine (the student's). Event counts (pysim events, RTL cycles) can be taken anywhere.
 
 #### 6a -- the design (a page of decisions, reviewed before any code)
 

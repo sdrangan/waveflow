@@ -64,6 +64,8 @@ The core path, in order: each one is the next rung of the [Flow Overview](../gui
     one converter, a delay read as an address difference.
 20. [Micro-scheduler on a CPU](cpu_sched/index.md) -- software on a calibrated processor beside
     hardware.
+21. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
+    harness, measured at RTL against its bounds, and the stage that binds found from a trace.
 
 ## Legacy
 

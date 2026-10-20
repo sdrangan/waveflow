@@ -5,7 +5,7 @@ grand_parent: DSP Blocks
 nav_order: 2
 audience: python
 api: [SystolicEngine]
-summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- what the RTL measured (Vitis 2025.1, centre: 175 cycles per 8×8×32 job with 64-bit words, 94 with 128-bit, bound by the input), how to test it, and its limits."
+summary: "SystolicEngine computes C = q(A·B) or q(Aᴴ·B) on complex fixed-point matrices, streamed in and out: a command, then its operands; per output a Resp and C; a Status per command. Covers what it computes, its parameters, the command and its rules, a runnable check of what it accepts, its architecture -- two loaders writing banked stream-of-blocks buffers the array reads in place, an array continuous across a command's panels and outputs, a collector that turns the array's drain order into C -- its performance (Vitis 2025.1, centre: 175 cycles per 8×8×32 product with 64-bit words, 94 with 128-bit, bound by the input; measured in examples/systolic), and its limits."
 snippets: run
 ---
 
@@ -170,45 +170,25 @@ command, which runs its last tile out. The core is one copy of the array (137 DS
 diagonals (`drain_order`) -- and places each in a `C` block. **The store** writes, per output, the
 `Resp` and then `C` from that block, a word a cycle, and after the outputs the command's `Status`.
 
-## Measured
+## Performance
 
-| What | Result |
-|---|---|
-| six commands: panels, `keep_a`, `Aᴴ` with panels, one tile, `kp = 1` | bit-exact at RTL at 64 and 128-bit words; pysim equal |
-| 4 × `8×8×32` back to back, 128-bit words | **94 cycles a job**, bound by the input: 81 words a job, accepted in ~94 cycles (the receiver's ~13 cycles a command) |
-| 4 × `8×8×32` back to back, 64-bit words | **175 cycles a job**, bound by the input: 162 words, and the receiver's command handling |
-| 4 × `8×1×32`, 64-bit words | 141 cycles a job, bound by the output: `C` is 128 words whatever `kp` |
-| resources, 64-bit words | 154 DSP, 31.3k LUT, 36.2k FF, 32 BRAM18K, est. 2.92 ns |
-| resources, 128-bit words | 154 DSP, 31.2k LUT, 36.3k FF, 36 BRAM18K, est. 2.92 ns |
-
-Before the array ran continuously (each panel a loop of its own, with the last tile's fill and drain,
-`T·P + 20` steps), the same 128-bit job took 103 cycles, bound by the core; the change also took the
-core from 36.9k to 31.2k LUTs, one set of edge counters in place of one per row and column.
-
-## Testing it
-
-`tests/linalg/_engine_harness.py` puts the engine in its own harness
-([`harness`](../../flows/units_calibration.md)): a driver on `s_in`, sinks on `s_out` and `m_status`,
-workloads `test` (the six commands), `steady` (four `8×8×32` back to back) and `short`, each checked
-against the model in pysim and, with `--through compare`, at RTL:
-
-```
-python -m tests.linalg._engine_harness --root C:/wfsc/eh --through compare --word-bits 128 --workload steady
-```
-
-Build from a short root: Windows' 260-character path limit makes csynth fail silently. The gates are in
-`tests/linalg/test_systolic_engine.py`: pysim against the model at both word widths, the top's banked
-blocks and port widths, the command rules, and with `-m xsi` the RTL -- bit-exact, and the steady
-interval.
+Measured at RTL at the centre ([the example](../../../examples/systolic/timing.md)): bit-exact on every
+path of the array, and `8×8×32` products back to back at **175 cycles each with 64-bit words, 94 with
+128-bit**. At 64 bits the input, `kp·(m + n)` values a product, sets the pace
+([the bounds](systolic_theory.md#three-bounds-on-a-panel)), and with short panels the output; at 128 bits
+the core's own floor -- its 64 tile steps and ~30 cycles a command -- ties with the input.
+The [harness, workloads and gates](../../../examples/systolic/test.md) and
+[resources](../../../examples/systolic/resource.md) are in the example.
 
 ## Limits
 
 - **Not calibrated.** The core's pysim time is one phase per panel (`b_blk.first → b_blk.last`, its tile
   steps plus a seeded intercept); the calibration comes once the design settles
   (`plans/systolic_characterization.md`).
-- **Input-bound.** At 128-bit words the input, not the array, sets the pace; the receiver's ~13 cycles a
-  command are the next gain, then the empty tile at each command's end (carrying the array's state from
-  command to command as `static` registers made csynth run out of memory, 6.7 GB against 0.4).
+- **Fixed costs per command.** At 128-bit words the core's ~30 cycles a command beyond its tile steps
+  (the empty tile that runs the last one out, the restart) and the receiver's ~13 bind together: both
+  must shrink to go faster. Carrying the array's state from command to command would remove the core's
+  (as `static` registers it made csynth run out of memory, 6.7 GB against 0.4).
 - **`R ≤ L`.** The drain needs distinct diagonals; `R > L` is refused at construction.
 - **Ordered, not addressed.** Operands are reused in order (`keep_a`), not by address. Addressed regions
   would need T2P BRAMs shared between tasks (`T2pBram`, `LockedT2pMemIF`).
