@@ -364,5 +364,55 @@
    },
    "meets_clock": true
   }
+ },
+ "fit": {
+  "features": {
+   "dsp": [
+    "rc"
+   ],
+   "lut": [
+    "rc",
+    "groups"
+   ],
+   "ff": [
+    "rc",
+    "groups"
+   ]
+  },
+  "holdout": [
+   "c4",
+   "r8"
+  ],
+  "params": {
+   "dsp": {
+    "intercept": 26.62,
+    "rc": 3.98,
+    "train_max_err_pct": 0.9,
+    "holdout_err_pct": {
+     "r8": 0.2,
+     "c4": -0.7
+    }
+   },
+   "lut": {
+    "intercept": 9014.93,
+    "rc": 630.01,
+    "groups": 243.87,
+    "train_max_err_pct": 9.4,
+    "holdout_err_pct": {
+     "r8": 5.2,
+     "c4": 2.9
+    }
+   },
+   "ff": {
+    "intercept": 5750.53,
+    "rc": 702.77,
+    "groups": 910.25,
+    "train_max_err_pct": 19.8,
+    "holdout_err_pct": {
+     "r8": 3.4,
+     "c4": 6.4
+    }
+   }
+  }
  }
 }

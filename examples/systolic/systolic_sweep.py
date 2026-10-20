@@ -59,13 +59,59 @@ def synth(name: str, root: Path) -> dict:
     return out
 
 
+#: The points held out of the fit, to score it: a smaller array and a larger one.
+HOLDOUT = ("c4", "r8")
+#: Each resource's features: the elements (R·C) and, for the logic, the drain groups (R·C/L).
+FEATURES = {"dsp": ("rc",), "lut": ("rc", "groups"), "ff": ("rc", "groups")}
+
+
+def _features(params: dict) -> dict:
+    rc = params["R"] * params["C"]
+    return {"rc": rc, "groups": rc / params["L"]}
+
+
+def fit(points: dict) -> dict:
+    """Least squares of each resource on its features over every point but :data:`HOLDOUT`; the
+    held-out points' errors score it."""
+    import numpy as np
+
+    out = {}
+    train = {n: r for n, r in points.items() if r.get("ok") and n not in HOLDOUT}
+    held = {n: r for n, r in points.items() if r.get("ok") and n in HOLDOUT}
+    for res, feats in FEATURES.items():
+        X = np.asarray([[1.0] + [_features(r["params"])[f] for f in feats] for r in train.values()])
+        y = np.asarray([r["resources"][res] for r in train.values()], float)
+        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+
+        def pred(r):
+            f = _features(r["params"])
+            return float(coef[0] + sum(c * f[k] for c, k in zip(coef[1:], feats)))
+
+        err = {n: round(100 * (pred(r) - r["resources"][res]) / r["resources"][res], 1)
+               for n, r in held.items()}
+        train_err = max(abs(pred(r) - r["resources"][res]) / r["resources"][res]
+                        for r in train.values())
+        out[res] = {"intercept": round(float(coef[0]), 2),
+                    **{f: round(float(c), 2) for f, c in zip(feats, coef[1:])},
+                    "train_max_err_pct": round(100 * train_err, 1), "holdout_err_pct": err}
+    return {"features": {k: list(v) for k, v in FEATURES.items()}, "holdout": list(HOLDOUT),
+            "params": out}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, help="a short build root (Windows path length)")
     ap.add_argument("--points", nargs="+", default=list(POINTS), choices=list(POINTS))
     ap.add_argument("--force", action="store_true", help="re-synthesize points already recorded")
+    ap.add_argument("--fit", action="store_true", help="fit the resource model on what is recorded")
     a = ap.parse_args()
     root = Path(a.root).resolve()
+    if a.fit:
+        data = json.loads(RESOURCES.read_text(encoding="utf-8"))
+        data["fit"] = fit(data["points"])
+        print(json.dumps(data["fit"], indent=1))
+        RESOURCES.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+        return
     data = json.loads(RESOURCES.read_text(encoding="utf-8")) if RESOURCES.exists() else {
         "target": {"part": EH.PART, "period_ns": EH.PERIOD_NS}, "points": {}}
     for name in a.points:

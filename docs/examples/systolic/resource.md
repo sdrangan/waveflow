@@ -2,7 +2,7 @@
 title: Systolic resource results
 parent: A systolic matrix multiply, measured
 nav_order: 3
-summary: "What the engine and the wrapper cost on the xczu48dr, from csynth's XML (Vitis 2025.1): at the centre 154 DSP, 32k LUT and 36k FF for the engine, 32 to 36 BRAM18K by word width, and the wrapper 3 DSP and 6k LUT more. A sweep of fifteen configurations: DSPs are four per processing element plus about 26; LUTs and flip-flops grow with the array, about 0.66k LUT and 0.8k FF an element; the maxima and the panels barely move them. A half-size engine costs about what the earlier SystolicUnit did."
+summary: "What the engine and the wrapper cost on the xczu48dr, from csynth's XML (Vitis 2025.1): at the centre 154 DSP, 32k LUT and 36k FF for the engine, 32 to 36 BRAM18K by word width, and the wrapper 3 DSP and 6k LUT more. A sweep of fifteen configurations: DSPs are four per processing element plus about 26; LUTs and flip-flops grow with the array, about 0.66k LUT and 0.8k FF an element; the maxima and the panels barely move them. A half-size engine costs about what the earlier SystolicUnit did, and runs 2.3 times as fast. A first model fitted on thirteen builds predicts the two held out within 1% (DSP) and 6.4% (LUT, FF)."
 ---
 
 # Resources
@@ -64,7 +64,18 @@ What it says:
   (`half64_steady` in `measured.json`), the centre engine's rate -- the input binds both -- against the
   unit's 390.
 
-## What is not here yet
+## A first model
 
-A resource model fitted over these points and scored on held-out configurations, as the earlier unit's
-was; the points above are its first builds.
+`systolic_sweep --fit` fits each resource by least squares on the points above, all but two -- `c4`
+(a smaller array) and `r8` (a larger one), held out to score it -- and records it in `resources.json`:
+
+| Resource | Fit (`R·C` elements, `R·C/L` drain groups) | Held out: `c4`, `r8` | Worst training point |
+|---|---|---|---|
+| DSP | 26.6 + 3.98·`R·C` | −0.7%, +0.2% | 0.9% |
+| LUT | 9,015 + 630·`R·C` + 244·`R·C/L` | +2.9%, +5.2% | 9.4% |
+| FF | 5,751 + 703·`R·C` + 910·`R·C/L` | +6.4%, +3.4% | 19.8% |
+
+The DSPs are as good as counted. The logic is a first fit on thirteen builds, most of them at one
+array size: good enough to size a design, not yet a calibrated model -- the earlier unit's was fitted on
+61 builds and scored on 12 drawn at random. BRAM is not modelled: it follows the buffers' sizes and the
+word width, not the array, and needs points that vary them together.
