@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stage 0 approved 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-1 done 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -468,6 +468,39 @@ csynth fail silently on Windows):
 
 **Gate:** each witness's numbers recorded (tool version on each). **Pause**; the decisions may change.
 
+#### Record: Stage 1 witnesses (2026-10-22) -- Vitis HLS / Vivado xsim 2024.1
+
+Sources, scripts and the full table: `plans/witness/vecunit/` (`README.md`). The prototype is most of
+the execute task: an instruction loop, a three-slot chained pass with run-time operand selection, a
+banked register file, per-format conversions and quantizers, the guarded divide. One complex
+multiplier per slot and lane serves every form (the scalar forms and the reduction reuse it): **48
+DSP** at the centre, about the CG core's 49.
+
+Gate command: `./plans/witness/vecunit/run.sh <out>`, `COSIM=1 ./run.sh <out> w2_cosim`, and
+`./run_rtl5.sh <out> w5 w5b_cosim w5c_cosim w5d_cosim` -- every variant synthesized, II and resources
+in the README's table; `w2_cosim` PASS; `w5*` `VERDICT_PASS` at RTL.
+
+| witness | result (all 2024.1, xczu48dr, 4 ns) | decision |
+|---|---|---|
+| 1, register file | banked (4 banks): **50.9k LUT at 8, 16 and 32 groups**; a memory a group: 57k, 70k, 106k LUT, 32-128 BRAM, up to 1.69 GB | **D2: banked**, confirmed |
+| 2, `DEPENDENCE` | needed: without it II 2; with it II 1 and **C/RTL co-simulation PASS** (RTL equals C on a CG-like program) | the pragma goes in the body |
+| 3, chaining | `S = 3`, forwarding after quantization: **II 1 at 2.913 ns**, pass depth **22-24 cycles** | as planned |
+| 4, quantizers | five formats cost 12.9k LUT over one; **one shared quantizer** (shift, round bit, bounds and wrap muxed on the format id) gives the same bits for **44.5k** (against 50.9k) | **D4 amended**: the shared quantizer |
+| 5, run-time queue locks | `hls::read_buf` / `write_buf` (`EXPLICIT_ACQUIRE_RELEASE`, undocumented) under run-time control: csynth II 1, **correct at RTL** (xsim, direct testbench: 256/256, 2/2) | **D5 stands** |
+| D6 | csynth peak memory 0.71-1.69 GB in every variant | one firing = one job, confirmed |
+
+**Found:**
+- **Vitis co-simulation cannot judge a free-running `hls::task` design with stream-of-blocks
+  channels** (2024.1): its C test-bench phase runs the synthesized model and fails even with the
+  documented scoped locks, while the RTL itself is correct. Free-running bodies are judged at RTL
+  (xsim, XSI), as the repo already does.
+- **A risk for success criterion 3 (cycles within about 10 %).** A pass costs about `VL + 22` cycles
+  plus its decode, so at CG's `VL = 8` the fill and drain are nearly three times the elements. A
+  first estimate per CG step: 8 groups × (3 passes × ~32 + 2 divides × ~48) ≈ 1,540 cycles against
+  the core's calibrated 1,141, about +35 %, unless the passes overlap. Stage 5 measures it; Stage 6
+  (overlap) is the plan's answer, and this makes it likely needed rather than optional.
+- The undocumented lock API is a risk to re-check with every tool version.
+
 ### Stage 2: ISA, assembler, interpreter
 
 `waveflow/vecunit/`:
@@ -586,3 +619,4 @@ gates pass. **Pause.**
 | 2026-10-20 | -- | Drafted with the user: RVV-style framing, DAE organization, CG as an example program | this file |
 | 2026-10-20 | -- | Added the multi-antenna matched filter as the second application (a second student): conjugate and member-broadcast operand forms, `wf.vle1`, single-column blocks in D5, Stage 3a | this file |
 | 2026-10-22 | 0 | Decisions D1-D6 written and approved: a 64-bit `DataList` instruction word (a `DataUnion` is two), relax `L \| n` (no `wf.vle1`), uniform slots; witness 5 added (run-time queue locks) | Stage 0 record |
+| 2026-10-22 | 1 | Witnesses (2024.1): banked RF flat at 50.9k LUT; `DEPENDENCE` needed, cosim PASS; II 1 at 2.913 ns, pass depth 22-24; shared quantizer 44.5k; run-time SoB locks correct at RTL (cosim cannot judge them). D4 amended; pass depth a risk to the 10 % target | Stage 1 record, `plans/witness/vecunit/` |
