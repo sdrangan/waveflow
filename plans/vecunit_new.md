@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-3 done 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-4 done 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -599,6 +599,37 @@ against the interpreter.
 **Gate:** pysim bit-exact against the interpreter on `workload("test")`, both applications included.
 **Pause.**
 
+#### Record: Stage 4 (2026-10-22)
+
+- `waveflow/vecunit/unit.py`: `VecLoad`, `VecExec`, `VecStore` (free-running tasks, each with its own
+  framed program stream) and the composite `VecUnit`, a stream-of-blocks channel per queue (depth 2).
+  Boundary: `s_lprog`, `s_in<p>`, `s_xprog`, `m_status`, `s_sprog`, `s_out<p>`. The execute task runs
+  the interpreter's `Machine` per instruction, takes each block at its first `wf.vlse` / `wf.vsse`
+  and gives it back at `wf.qpop` / `wf.qpush`, and writes one `VecStatus` per job; an error halts it.
+  The configuration is a build field, so the harness rebuilds the unit as it is.
+- `waveflow/vecunit/workload.py`: jobs `(tx_id, Programs, inputs)` as harness stimulus and as golden
+  bursts (the interpreter's); `random_jobs` -- every instruction form, valid by the assembler.
+- Applications supply scenarios by subclassing: `examples/vecunit_cg/cg_unit.py` (`CgVecUnit`: the
+  configuration from a `CgFormats`; each job's `S` inputs captured from a closed-loop interpreter run)
+  and `examples/vecunit_mf/mf_unit.py` (`MfVecUnit`).
+- **Deviation:** time is charged per instruction from rough constants (`VecTiming`: a pass `S + 4 +
+  VL + 22`, a divide 45), not yet through `TimedPhase`; Stage 7 calibrates them.
+
+Tests: `tests/vecunit/test_unit.py` -- two configurations (4 lanes, 3 slots, 64-bit words; and 2
+lanes, 2 slots with a capability mask, 3 input queues, 2 input and 2 output ports, 32-bit words),
+random jobs, every output burst and status equal to the interpreter's; a fatal error (status
+`BAD_DIMS`, what was pushed before it stored, the next job never answered). `tests/examples`: the CG
+unit and the matched-filter unit on `"test"` and `"steady"`, bit-exact.
+
+Rough pysim times (uncalibrated constants; for orientation only): CG `"steady"` (four `8 x 32`
+solves of three iterations) 20,306 cycles, about 5,080 a job, against the CG core's calibrated
+4,735 a job with its message I/O (`START` 475 + 3 × `STEP` 1,420, Vitis 2024.1); the matched filter
+`"steady"` at `VLMAX = 16` (four frames of 64 samples, 8 antennas) 2,305 cycles against an input floor
+of 1,152 words.
+
+Gate: `pytest tests/vecunit tests/examples/test_vecunit_mf.py tests/examples/test_vecunit_cg.py` ->
+all passed (225).
+
 ### Stage 5: HLS bodies, RTL
 
 `waveflow/build/vecunit_{load,exec,store}_task.h` and the composite's generation, following
@@ -675,3 +706,4 @@ gates pass. **Pause.**
 | 2026-10-22 | 1 | Witnesses (2024.1): banked RF flat at 50.9k LUT; `DEPENDENCE` needed, cosim PASS; II 1 at 2.913 ns, pass depth 22-24; shared quantizer 44.5k; run-time SoB locks correct at RTL (cosim cannot judge them). D4 amended; pass depth a risk to the 10 % target | Stage 1 record, `plans/witness/vecunit/` |
 | 2026-10-22 | 2 | `waveflow/vecunit/` (isa, config, asm, model) and 87 tests: every instruction against an exact-rational reference, 150 random programs chained = serial | Stage 2 record |
 | 2026-10-22 | 3 | The matched filter (26 cases) and CG (104 cases: four format sets, `nit` 1-8, the zero guards) as programs, bit-exact on the interpreter with a closed-loop systolic harness | Stage 3 record |
+| 2026-10-22 | 4 | pysim: `VecLoad` / `VecExec` / `VecStore` / `VecUnit`, the harness, random and application workloads; bit-exact against the interpreter on two generic configurations, CG and the matched filter; a fatal error | Stage 4 record |

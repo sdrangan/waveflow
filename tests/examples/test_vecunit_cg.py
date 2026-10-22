@@ -127,3 +127,25 @@ def test_the_program_counts():
     # start: setvl, 8 X = 0, 8 x 3, qpop, 8 vsse, qpush; per iteration 8 x 9 + 2 (the last 8 x 5 + 2)
     assert len(p.execute) == 1 + 8 + 24 + 1 + 8 + 1 + 2 * (8 * 9 + 2) + (8 * 5 + 2)
     assert len(p.load) == 4 and len(p.store) == 4
+
+
+@pytest.mark.parametrize("kind", ["test", "steady"])
+def test_pysim_unit_equals_the_interpreter(kind, tmp_path):
+    """The CG-configured unit in its harness (Stage 4): four solves, every ``VecResp``, ``P``, ``X``
+    and status burst equal to the interpreter's; on ``"test"`` with a short job, one iteration and a
+    zero column among them."""
+    from examples.vecunit_cg.cg_unit import CgVecUnit
+    from waveflow.hw.harness import harness
+    from waveflow.simulation.simulation import Simulation
+
+    unit = CgVecUnit(name="vecunit", sim=Simulation())
+    sysm = harness(unit, workload=kind, n_cycles=10**6)
+    sysm.write_scenario(tmp_path)
+    sysm.run()
+    gold = unit.golden(kind)
+    assert len(gold["m_status"]) == 4
+    for port, bursts in gold.items():
+        got = sysm.stand_ins[port].words
+        assert len(got) == len(bursts)
+        assert all(np.array_equal(np.asarray(a, np.uint64).reshape(-1), np.asarray(b, np.uint64))
+                   for a, b in zip(got, bursts))

@@ -14,3 +14,9 @@
 4. **A chained pass is deep.** Three slots in series put 22-24 pipeline stages between an element's
    read and its write; at short vectors the fill and drain cost more than the elements. Count the
    depth before promising a cycle target.
+5. **Run `ruff --fix` on named files only.** A `ruff check --fix ... tests/` rewrote 205 unrelated test
+   files in one go; they were restored from `HEAD` before anything was committed, but only because
+   `git status` was checked straight after.
+6. **A composite's boundary names pair with its children's unwired ports in walk order** (children in
+   `add_comp` order, ports in `add_endpoint` order), not in the order you think of them; a wrong
+   order shows up as a harness that "has no input" called `s_in0`.
