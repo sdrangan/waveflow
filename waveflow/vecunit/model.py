@@ -26,6 +26,7 @@ instruction, and the unit takes no more input.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -309,6 +310,10 @@ class Machine:
         self.outq: list[deque] = [deque() for _ in range(cfg.NQO)]
         self.head: list[Block | None] = [None] * cfg.NQI
         self.tail: list[Block | None] = [None] * cfg.NQO
+        #: run_job's hooks: the load program, run until a queue has a block; the store program, run
+        #: after every push
+        self.pull = lambda q: None
+        self.pushed = lambda: None
 
     # -- reads ---------------------------------------------------------------------------------
     def _vread(self, g: int, sl: slice) -> tuple[np.ndarray, np.ndarray, Format]:
@@ -332,6 +337,8 @@ class Machine:
     def _head(self, q: int) -> Block:
         blk = self.head[q]
         if blk is None:
+            if not self.inq[q]:
+                self.pull(q)
             if not self.inq[q]:
                 raise ProgramError(f"input queue q{q} is read while empty")
             blk = self.head[q] = self.inq[q].popleft()
@@ -439,6 +446,7 @@ class Machine:
         else:  # QPUSH: commit the tail block
             self.outq[x.rd].append(self._tail(x.rd))
             self.tail[x.rd] = None
+            self.pushed()
 
     def run_pass(self, chain: list[Instr], mode: str) -> None:
         acc: dict = {}
@@ -470,27 +478,61 @@ def _cmul(a, b, *, conj: bool):
 
 
 def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: list[Instr],
-            inputs: dict[int, list], *, tx_id: int = 0, mode: str = "pass") -> JobResult:
-    """Run one job: the load program (filling the input queues from ``inputs``, per port a list of
-    ``(re, im)`` stored-integer matrices in the order they arrive), the execute program, then the
-    store program.  Returns the status and, per output port, ``(VecResp fields, re, im)`` per
-    ``wf.st``.  An execute error stops the job at the instruction (the store program then takes only
-    what was pushed); a load or store instruction the task cannot run stops that task."""
+            inputs: dict[int, list], *, tx_id: int = 0, mode: str = "pass",
+            on_starve: Callable[[int, JobResult], tuple | None] | None = None) -> JobResult:
+    """Run one job's three programs and return its status and outputs.
+
+    ``inputs`` holds, per input port, the ``(re, im)`` stored-integer matrices that arrive on it, in
+    order.  The programs run as the tasks do, each in its own order: the load program runs when the
+    execute program reads an input queue that is empty (in a functional model a queue never fills),
+    and the store program runs after every ``wf.qpush``, so ``result.outputs`` -- per output port,
+    ``(VecResp fields, re, im)`` per ``wf.st`` -- grows while the job runs.  When the load program
+    needs a burst on a port that has none left, ``on_starve(port, result)`` may supply it (a harness
+    playing the unit's neighbour: the matrix it computes from what the unit emitted); ``None`` means
+    there is none.
+
+    An execute error stops the job at the instruction (``result.status``; the store program then
+    takes only what was pushed).  A load or store instruction its task cannot run, or a read of
+    something never written, is a :class:`ProgramError`."""
     if mode not in ("pass", "serial"):
         raise ValueError(f"mode must be 'pass' or 'serial', not {mode!r}")
     m = Machine(cfg)
     feed = {p: deque(v) for p, v in inputs.items()}
-    for x in load:
-        if not load_status(x, cfg):
-            raise ProgramError(f"the load task cannot run {x}: it stops")
-        if not feed.get(x.rs1):
-            raise ProgramError(f"{x}: no more input on port {x.rs1}")
-        re, im = feed[x.rs1].popleft()
-        re, im = np.asarray(re, np.int64), np.asarray(im, np.int64)
-        if re.shape != (x.imm1, x.imm2):
-            raise ProgramError(f"{x}: the burst on port {x.rs1} is {re.shape}")
-        m.inq[x.rd].append(block_from_matrix(re, im, cfg))
     result = JobResult(Status.OK, {p: [] for p in range(cfg.n_out_ports)})
+    at = {"load": 0, "store": 0}
+
+    def pull(q: int) -> None:
+        while not m.inq[q] and at["load"] < len(load):
+            x = load[at["load"]]
+            at["load"] += 1
+            if not load_status(x, cfg):
+                raise ProgramError(f"the load task cannot run {x}: it stops")
+            if not feed.get(x.rs1) and on_starve is not None:
+                more = on_starve(x.rs1, result)
+                if more is not None:
+                    feed.setdefault(x.rs1, deque()).append(more)
+            if not feed.get(x.rs1):
+                raise ProgramError(f"{x}: no more input on port {x.rs1}")
+            re, im = feed[x.rs1].popleft()
+            re, im = np.asarray(re, np.int64), np.asarray(im, np.int64)
+            if re.shape != (x.imm1, x.imm2):
+                raise ProgramError(f"{x}: the burst on port {x.rs1} is {re.shape}")
+            m.inq[x.rd].append(block_from_matrix(re, im, cfg))
+
+    def pushed() -> None:
+        while at["store"] < len(store):
+            x = store[at["store"]]
+            if not store_status(x, cfg):
+                raise ProgramError(f"the store task cannot run {x}: it stops")
+            if not m.outq[x.rs1]:
+                return
+            at["store"] += 1
+            blk = m.outq[x.rs1].popleft()
+            re, im = matrix_from_block(blk, x.imm1, x.imm2, cfg)
+            resp = {"tx_id": int(tx_id), "tag": int(x.rs2), "k": int(x.imm1), "n": int(x.imm2)}
+            result.outputs[x.rd].append((resp, re, im))
+
+    m.pull, m.pushed = pull, pushed
     for chain in split_passes(execute, cfg.S):
         st = Status.OK
         for x in chain:
@@ -513,24 +555,16 @@ def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: 
         else:
             m.control(chain[0])
         result.executed += len(chain)
-    if result.status == Status.OK:
-        held = [f"q{q} (input)" for q, b in enumerate(m.head) if b is not None]
-        held += [f"q{q} (output)" for q, b in enumerate(m.tail) if b is not None]
-        left = [f"q{q}" for q, d in enumerate(m.inq) if d]
-        if held or left:
-            raise ProgramError(f"the job ends holding {held} with blocks left in {left}: every "
-                               "block a job takes is released, every block it fills is pushed")
-    for x in store:
-        if not store_status(x, cfg):
-            raise ProgramError(f"the store task cannot run {x}: it stops")
-        if not m.outq[x.rs1]:
-            if result.status != Status.OK:
-                break  # nothing more comes after a fatal error
-            raise ProgramError(f"{x}: output queue q{x.rs1} is empty")
-        blk = m.outq[x.rs1].popleft()
-        re, im = matrix_from_block(blk, x.imm1, x.imm2, cfg)
-        resp = {"tx_id": int(tx_id), "tag": int(x.rs2), "k": int(x.imm1), "n": int(x.imm2)}
-        result.outputs[x.rd].append((resp, re, im))
-    if result.status == Status.OK and any(m.outq):
-        raise ProgramError("blocks pushed that the store program never takes")
+    if result.status != Status.OK:
+        return result  # fatal: nothing more is taken or answered
+    held = [f"q{q} (input)" for q, b in enumerate(m.head) if b is not None]
+    held += [f"q{q} (output)" for q, b in enumerate(m.tail) if b is not None]
+    left = [f"q{q}" for q, d in enumerate(m.inq) if d]
+    if held or left or at["load"] < len(load):
+        raise ProgramError(f"the job ends holding {held}, with blocks left in {left} and "
+                           f"{len(load) - at['load']} load instructions not run: every block a job "
+                           "loads is taken and released, every block it fills is pushed")
+    pushed()
+    if at["store"] < len(store) or any(m.outq):
+        raise ProgramError("the store program and the pushed blocks do not match")
     return result

@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-2 done 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-3 done 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -562,6 +562,31 @@ zero guards (a column that freezes; `ps = 0`).
 
 **Gate:** both applications bit-exact on all of it. **Pause.**
 
+#### Record: Stage 3 (2026-10-22)
+
+The interpreter now runs the three programs as the tasks would, each in its own order: the load
+program when the execute program reads an empty queue, the store program after every push, and a
+harness callback (`on_starve`) supplies a burst a port has run out of -- so the CG harness computes
+each `S` from the `P` the unit has just emitted, a closed loop.
+
+- **3a, the matched filter** (`examples/vecunit_mf/`: `mf_golden.py`, `mf_program.py`): a unit of four
+  groups (`X`, `R`, `Y`, a spare), `X` read once a chunk into member 0 from a `k x 1` block, one
+  chained pass a column group (`wf.vlse.c`, `wf.vmulc.vb.c`, `wf.vsse`). `5 + 3·ceil(nrx/L)`
+  instructions a chunk. `tests/examples/test_vecunit_mf.py` (26): `nrx` 3, 4, 7, 8 at `L = 4`; frames
+  of 32 (two chunks of 16), 37 (a short last chunk) and 5 (one short chunk); both pass modes;
+  saturation; **all bit-exact against `mf_golden`.**
+- **3b, CG** (`examples/vecunit_cg/cg_program.py`): the builder above, with `rz` / `rz2` renamed every
+  iteration and, by default, the last iteration's dead work dropped (its second pass writes `X`
+  straight out; no third pass). `tests/examples/test_vecunit_cg.py` (104): random Hermitian positive
+  definite `A`; the `mimo_cg` study's formats `W12g8`, `W10g0`, `W16g4` and its saturation stress
+  set; `nit` 1, 2, 3, 5, 8; `(k, n)` = (8, 32), (8, 13), (5, 4), (3, 32), (1, 1); element-major
+  passes; the program that keeps the dead work; a zero column (both guards fire every iteration) and
+  a converged `1 x 1` column that freezes. **Every emitted `P` and the final `X` equal `cg.cg_solve`'s
+  bit for bit.**
+
+Gate: `pytest tests/vecunit tests/examples/test_vecunit_mf.py tests/examples/test_vecunit_cg.py -q`
+-> all passed.
+
 ### Stage 4: the pysim module and its harness
 
 `waveflow/vecunit/unit.py`: `VecLoad`, `VecExec`, `VecStore` and the composite `VecUnit`. The execute
@@ -649,3 +674,4 @@ gates pass. **Pause.**
 | 2026-10-22 | 0 | Decisions D1-D6 written and approved: a 64-bit `DataList` instruction word (a `DataUnion` is two), relax `L \| n` (no `wf.vle1`), uniform slots; witness 5 added (run-time queue locks) | Stage 0 record |
 | 2026-10-22 | 1 | Witnesses (2024.1): banked RF flat at 50.9k LUT; `DEPENDENCE` needed, cosim PASS; II 1 at 2.913 ns, pass depth 22-24; shared quantizer 44.5k; run-time SoB locks correct at RTL (cosim cannot judge them). D4 amended; pass depth a risk to the 10 % target | Stage 1 record, `plans/witness/vecunit/` |
 | 2026-10-22 | 2 | `waveflow/vecunit/` (isa, config, asm, model) and 87 tests: every instruction against an exact-rational reference, 150 random programs chained = serial | Stage 2 record |
+| 2026-10-22 | 3 | The matched filter (26 cases) and CG (104 cases: four format sets, `nit` 1-8, the zero guards) as programs, bit-exact on the interpreter with a closed-loop systolic harness | Stage 3 record |
