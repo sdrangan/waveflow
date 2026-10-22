@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** Not started (drafted 2026-10-20 with the user).
+**Status:** In progress: Stage 0 approved 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -333,6 +333,123 @@ Write each as a record in this file: the choice, the alternatives, and the evide
 
 **Gate:** the records written and approved. **Pause.**
 
+#### Record: Stage 0 decisions (2026-10-22, branch `vecunit`)
+
+Machine: Linux, Vitis HLS / Vivado **2024.1** (the version every `CgVectorCore` number on
+`docs/guide/dsp/cg_vector.md` was measured with, so Stage 5's comparison needs no re-measurement of
+the core's published figures; the systolic engine's numbers are 2025.1 and are not reused).
+
+**Facts found while writing these (each read in the code):**
+
+- **A `DataUnion` is at least two words.** Its payload starts on a fresh word after the header
+  (`waveflow/hw/dataunion.py:588-589`, docstring `:413-416`), so "one 64-bit word per instruction, as a
+  `DataUnion`" cannot hold as the class is written. A `DataList` packs fields LSB-first and moves a
+  field that does not fit to the next word, never splitting one (`waveflow/hw/dataschema.py:1508-1540`),
+  so a `DataList` of fields totalling 64 bits is exactly one word.
+- **The CG core's register file is already banked.** `xr`, `rr`, `pr` (`waveflow/build/cg_vector_task.h:86-96`)
+  are one memory per (array, lane), with the column group `g` in the *address*. In the plan's terms that
+  is four banks per lane (`X`, `R`, `P`, and `S` read from the block), a group's bank fixed by its
+  class: not one memory per (group, lane).
+- **The divides dominate an iteration today**, in the calibrated model: at the centre configuration a
+  `STEP` costs the core 48 + 280 + 48 + **765** = 1,141 cycles, the last term the divides (`groups_div`,
+  `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/components/cg_vector_unit/params.json`):
+  about 48 cycles a divide, not the uncalibrated `_DIV_LATENCY = 40`. Stage 6's hypothesis stands.
+- **Vitis 2024.1's `stream_of_blocks` has explicit acquire and release** (`hls::read_buf` /
+  `hls::write_buf`, `acquire()` / `release()`, `/tools/Xilinx/Vitis_HLS/2024.1/include/hls_streamofblocks.h:179-225`)
+  beside the scoped `read_lock` / `write_lock`. Whether they synthesize under run-time control (a
+  `wf.qpop` decoded from an instruction) is not known: Stage 1 adds it as witness 5.
+- **Bit-exactness with union formats.** Every exact sum and product has the same value whatever
+  exact format holds it, and `fixputils.quantize` depends only on the value and the target
+  (`waveflow/utils/fixputils.py:135-158`), so a slot may compute in one union format and still equal
+  the interpreter, which computes in each register's own format. **Division is the exception:**
+  `fixputils.div` truncates toward zero at the *dividend's* fraction bits (`:262-293`), so the
+  hardware divides at the dividend's own fraction bits (a constant shift per scalar format, then a
+  mux), not at the union's.
+
+**D1, the ISA.** *Proposed:* the table above, with these changes.
+- **Encoding: one 64-bit `DataList`**, not a `DataUnion` (two words): RISC-V-style fields, LSB first:
+  `opcode` 7 (a custom opcode per class: vector, scalar, queue, control), `funct` 6, `chain` 1,
+  `conj` 1, `bcast` 1, `rd` 8, `rs1` 8, `rs2` 8, `imm1` 12, `imm2` 12. The opcode and `funct` say
+  what the other fields mean, as in RISC-V. Each program is one framed burst: a `VecJob(tx_id,
+  ninstr)` word, then `ninstr` instruction words.
+- **Elements: complex only** (both applications are complex). Scalars are real (a reduction yields
+  `Re(...)`; `alpha`, `beta` are real). Real elements: a later build parameter.
+- **Slots: `S = 3`, uniform**: every slot can do every vector operation (a complex multiplier per
+  lane, the reduction adder, a queue read or write). A capability mask per slot is a build parameter
+  from the start (a DSE knob), default all. 3 slots × 4 lanes × 4 multipliers = 48 DSP at the centre,
+  about the CG core's 49.
+- **`wf.vle1` dropped** if D5 takes option (a): a `k × 1` vector is then an ordinary block, read with
+  `wf.vlse vd, q, 0`, and `.vb` reads member 0.
+- **Rules:** a slot that reads a register an earlier slot of its pass wrote gets the forwarded value
+  after its quantization; a reduction's result is not readable inside its own pass; scalar operands are
+  read once at the pass's start; two slots of a pass may not write one register.
+
+**D2, the register file.** *Proposed:* `NBANK` banks per lane, a group's bank `= group mod NBANK`,
+address `(group div NBANK)·VLMAX + i`; the assembler refuses a pass that reads two different groups
+of one bank, or writes two groups of one bank (each bank memory serves one read and one write a cycle,
+T2P). The alternative, one memory per (group, lane), needs an `NG:1` mux per operand. Every slot
+reads its operands at the same element `i`, so a group read once serves every slot that names it.
+CG's pass 2 reads `X, P, R, S` and writes `X, R`: four banks, conflict-free when `X_g, R_g, P_g, S_g`
+are groups `4g + 0..3`, which is the CG core's layout. Stage 1 witness 1 measures both forms (mux cost
+at `NG` 8, 16, 32) before this is final.
+
+**D3, program delivery.** *Proposed:* three program streams, one per task. **Rejected:** one stream
+and a dispatcher. The deadlock: the dispatcher forwards in program order; the load task stops
+because its output queue is full (execute has not popped); its instruction FIFO fills; the
+dispatcher blocks writing the next load instruction, while the execute instruction that would pop
+the queue sits behind it in the single stream. Every task waits on another, unless each instruction
+FIFO holds a whole program.
+
+**D4, formats.** *Proposed:* a format per register group, per scalar and per queue, fixed at build
+time. Operands convert on read to a union format (one per class: vector, scalar), a constant shift
+and sign extension per source format then a mux on the source's format id. A slot computes exactly in
+the union format, and quantizes to its destination with one constant quantizer per destination format
+and a mux on the destination's format id. Divides take the dividend's own fraction bits (above). One
+shared format per register class is the rejected alternative (it cannot reproduce `cg.py`, whose
+registers have five formats).
+
+*The `vnclip` correspondence* (from the RISC-V V 1.0 specification, §§ 3.8 and 12.5): `vnclip`
+narrows a `2·SEW` source to `SEW` bits by a right shift, rounds under `vxrm`, and saturates (setting
+`vxsat`). `fixputils.quantize` matches it as follows:
+- `AP_RND` (round half up) is `vxrm = rnu`, formula for formula: both add the bit just below the cut
+  (`floor + ((s >> (dF-1)) & 1)`, `waveflow/utils/fixputils.py:154`).
+- `AP_TRN` (floor) is `vxrm = rdn`.
+- `AP_SAT` is `vnclip`'s signed clip.
+- `AP_WRAP` has no clipping instruction; with `AP_TRN` it is the narrowing shift `vnsra`, which
+  floors and wraps. `AP_RND` with `AP_WRAP` is no single RVV instruction.
+
+Differences to name in the paper: `vnclip` narrows only from `2·SEW` to `SEW`, where `quantize` goes
+from any width to any `W ≤ 64`; its shift is a run-time operand, here the two formats fix it; it
+shifts only right, while `quantize` also shifts left (exactly) when the target keeps more fraction
+bits; it saturates at `SEW` bits, `AP_SAT` at `W`; and RVV's `rne` and `rod` have no `fixputils` mode.
+
+**D5, queue blocks.** *Proposed:* whole-matrix blocks in the row-major lane-group layout of
+`waveflow/linalg/lanes.py`, read by `vlse` and written by `vsse` per column group. For the
+single-column block (the matched filter's `X`), three options:
+- **(a) relax `L | n`** (proposed): a row holds `ceil(n/L)` lane groups, the last one zero-padded.
+  A `k × 1` vector is an ordinary block whose group 0 holds the value in lane 0; `wf.vlse vd, q, 0`
+  reads it, and `.vb` uses member 0. The wire carries `k` values (`k/2` words at 64 bits); the
+  loader writes a lane group a cycle, so `k` cycles. It also lets `nrx` not divide by `L`.
+- (b) a vector queue with its own layout (values packed along `i`, `L` a group): `k/2` words on
+  the wire, `k/L` cycles to load, but a second block layout and a `wf.vle1` that reads it.
+- (c) a `k × L` block with only column 0 meaningful, as sent: `L×` the input words (`kL/2`).
+
+**D6, one firing = one job.** *Proposed as in the plan:* the register and scalar files are locals of
+the execute firing, and the job's instruction loop runs inside it. Stage 1 witness 1 checks that an
+instruction loop over a small register file escapes the 6.7 GB / 7.0 GB csynth failures.
+
+**Protocol (rule 7):** each program's `VecJob(tx_id, ninstr)` word; the execute task writes one
+`Status(tx_id, code)` per job on `m_status` (codes from `waveflow/linalg/message.py`: `BAD_OP` for an
+unknown instruction, `BAD_DIMS` for a register, `VL`, `k` or `n` out of range); an error is fatal.
+`wf.st` heads each output with `VecResp(tx_id, tag, k, n)`. The data bursts on the input ports carry
+no header: the load program gives each one's size.
+
+**Approved (user, 2026-10-22):** D1 as proposed (one 64-bit `DataList` word; complex elements; `S = 3`
+uniform slots with a capability-mask parameter); D5 option (a), relax `L | n` and drop `wf.vle1`;
+D3, D4, D6 as proposed; D2 provisional until witness 1. The user also asked to go on through the
+stages without the per-stage pause, stopping only for a decision that is theirs, a surprise that
+changes the design, or a failure not root-caused in two hypotheses.
+
 ### Stage 1: HLS witnesses (facts before design)
 
 Small standalone csynth experiments, built under a short path such as `C:\wfsc\vec*` (long paths make
@@ -345,6 +462,9 @@ csynth fail silently on Windows):
    Element-wise passes make it safe; check that cosim or XSI agrees.
 3. `S = 3` chained slots with forwarding after quantization, at II=1, at 4 ns.
 4. The quantizer cost of D4 for `F` = 5 formats.
+5. (Added at Stage 0.) Queue blocks acquired and released by decoded instructions:
+   `hls::read_buf` / `hls::write_buf` `acquire()` / `release()` inside the instruction loop, under
+   run-time control. If csynth refuses it, the lock scopes must follow the program's structure.
 
 **Gate:** each witness's numbers recorded (tool version on each). **Pause**; the decisions may change.
 
@@ -465,3 +585,4 @@ gates pass. **Pause.**
 |---|---|---|---|
 | 2026-10-20 | -- | Drafted with the user: RVV-style framing, DAE organization, CG as an example program | this file |
 | 2026-10-20 | -- | Added the multi-antenna matched filter as the second application (a second student): conjugate and member-broadcast operand forms, `wf.vle1`, single-column blocks in D5, Stage 3a | this file |
+| 2026-10-22 | 0 | Decisions D1-D6 written and approved: a 64-bit `DataList` instruction word (a `DataUnion` is two), relax `L \| n` (no `wf.vle1`), uniform slots; witness 5 added (run-time queue locks) | Stage 0 record |
