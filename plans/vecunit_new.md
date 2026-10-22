@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-1 done 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-2 done 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -518,6 +518,34 @@ against an unchained execution of the same instructions. Chaining must not chang
 
 **Gate:** `pytest tests/vecunit` passes. **Pause.**
 
+#### Record: Stage 2 (2026-10-22)
+
+The stub `examples/vecunit/vecunit.py` was not in this checkout: nothing to delete.
+
+- `waveflow/vecunit/isa.py`: `VecInstr` (a 64-bit `DataList`, fields as D1), `VecJob`, `VecResp`,
+  `VecStatus`; `Instr` (encode, decode, the `.c` chain, RVV-syntax disassembly); a constructor per
+  instruction. `wf.vle1` is gone (D5 (a)); `wf.ld` / `wf.st` are queue-class functs of the load and
+  store programs; `wf.qpop` / `wf.qpush` take or commit a block that was not yet taken, so the lock
+  rule is "acquire at first use, release at pop / push".
+- `config.py`: `VecUnitConfig` -- a format per group, scalar and queue; `L`, `VLMAX`, `Kmax`, `Nmax`,
+  `S`, `NB`, slot capabilities (`Cap`), `g_div`, ports, word and lane widths; the union formats.
+- `model.py`: the interpreter on stored integers with `fixputils`, each value in its own format; a
+  pass element-major (`mode="pass"`, as the hardware) or instruction-major (`"serial"`); blocks in the
+  hardware's lane-group layout (`ceil(n/L)` groups a row, spare lanes zero); the checks the execute
+  task makes (`instr_status`, `pass_status`: an error is fatal, the job stops at the instruction).
+- `asm.py`: `check` / `assemble` -- the hardware's checks, plus what the hardware would get wrong
+  silently (unwritten registers and lane groups, a stride that is not the block's, queue imbalance).
+
+Tests (`tests/vecunit/`, 87): every vector instruction and operand form, `wf.vdotr`, `wf.sdivz` (the
+zero guard) and `wf.smv` against an **independent exact-rational reference** (`_ref.py`, no
+`fixputils`), with random formats (both rounding and both overflow modes), random `VL`, in both modes;
+**150 random programs** (over 300 chained instructions) run element-major and instruction-major, every
+register, scalar and output block equal; forwarding after quantization; every status case and pass
+rule; slot capabilities; the fatal stop; blocks with `L` not dividing `n`; the assembler's rules.
+
+Gate: `pytest tests/vecunit -q` -> 87 passed; `ruff check waveflow/vecunit tests/vecunit` clean;
+`mypy waveflow/vecunit` clean for the package.
+
 ### Stage 3: the two applications as programs, on the interpreter
 
 **3a, the matched filter first** (the simpler program, so it shakes out the program builder and the
@@ -620,3 +648,4 @@ gates pass. **Pause.**
 | 2026-10-20 | -- | Added the multi-antenna matched filter as the second application (a second student): conjugate and member-broadcast operand forms, `wf.vle1`, single-column blocks in D5, Stage 3a | this file |
 | 2026-10-22 | 0 | Decisions D1-D6 written and approved: a 64-bit `DataList` instruction word (a `DataUnion` is two), relax `L \| n` (no `wf.vle1`), uniform slots; witness 5 added (run-time queue locks) | Stage 0 record |
 | 2026-10-22 | 1 | Witnesses (2024.1): banked RF flat at 50.9k LUT; `DEPENDENCE` needed, cosim PASS; II 1 at 2.913 ns, pass depth 22-24; shared quantizer 44.5k; run-time SoB locks correct at RTL (cosim cannot judge them). D4 amended; pass depth a risk to the 10 % target | Stage 1 record, `plans/witness/vecunit/` |
+| 2026-10-22 | 2 | `waveflow/vecunit/` (isa, config, asm, model) and 87 tests: every instruction against an exact-rational reference, 150 random programs chained = serial | Stage 2 record |
