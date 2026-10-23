@@ -81,18 +81,30 @@ class CgVecUnit(VecUnit):
     def jobs(self, kind: str = "test") -> list:
         """``"test"``: four solves -- the full ``Kmax x Nmax`` at three iterations, a short one
         (``k`` 5, ``n`` 13, ``L`` not dividing it), one iteration, and a zero column (the guards).
-        ``"steady"``: four full solves of three iterations (the comparison with the CG core)."""
+        ``"steady"``: four full solves of three iterations (the comparison with the CG core).
+        ``"calib"``, ``"holdout"``: the calibration's pre-registered jobs
+        (:data:`waveflow.vecunit.calib.CG_JOBS`): random jobs over every instruction form on this
+        configuration, then CG solves."""
+        from waveflow.vecunit.calib import CG_JOBS
+
         f, K, N = self.cg_formats, int(self.Kmax), int(self.Nmax)
+        out = []
         if kind == "test":
             shapes = [(K, N, 3, 1), (min(K, 5), min(N, 13), 2, 2), (K, N, 1, 3), (K, min(N, 9), 4, 4)]
         elif kind == "steady":
             shapes = [(K, N, 3, s) for s in range(4)]
+        elif kind in CG_JOBS:  # the calibration's pre-registered sets (waveflow/vecunit/calib.py)
+            from waveflow.vecunit.workload import random_jobs
+
+            spec = CG_JOBS[kind]
+            out = random_jobs(self.cfg, spec["random"], seed=spec["seed"], npass=spec["npass"],
+                              n_max=spec["n_max"])
+            shapes = spec["solves"]
         else:
             raise ValueError(f"no workload {kind!r}")
-        out = []
         for j, (k, n, nit, seed) in enumerate(shapes):
             ar, ai, br, bi = problem(f, k, n, seed)
             if kind == "test" and j == 3:
                 br[:, 2] = bi[:, 2] = 0  # a zero column: both guards fire
-            out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + j))
+            out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + len(out)))
         return out

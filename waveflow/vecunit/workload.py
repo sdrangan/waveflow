@@ -51,12 +51,13 @@ def _random_vector(rng, cfg: VecUnitConfig, G: int) -> I.Instr:
     return I.vsse(int(rng.integers(cfg.NQO)), g(), int(rng.integers(G)), G)
 
 
-def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12):
+def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int | None = None):
     """A job using every instruction form: a block per input queue, every group and scalar written,
     ``npass`` random passes (and divides, moves and ``VL`` changes between them), every output
-    queue's block written in full, the queues balanced."""
+    queue's block written in full, the queues balanced.  ``n_max`` bounds the blocks' columns (small
+    blocks keep a job execute-bound: a calibration measures the execute task)."""
     k = int(rng.integers(1, min(cfg.Kmax, cfg.VLMAX) + 1))
-    n = int(rng.integers(1, cfg.Nmax + 1))
+    n = int(rng.integers(1, min(cfg.Nmax, n_max or cfg.Nmax) + 1))
     G = cfg.groups_per_row(n)
     p = Programs()
     inputs: dict[int, list] = {}
@@ -99,9 +100,12 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12):
     return tx_id, p, inputs
 
 
-def random_jobs(cfg: VecUnitConfig, count: int, *, seed: int = 0, npass: int = 12) -> list:
+def random_jobs(cfg: VecUnitConfig, count: int, *, seed: int = 0, npass=12,
+                n_max: int | None = None) -> list:
+    """``count`` random jobs; ``npass`` an int, or a sequence cycled over the jobs."""
     rng = np.random.default_rng(seed)
-    return [random_job(cfg, rng, 100 + j, npass) for j in range(count)]
+    seq = [npass] if isinstance(npass, int) else list(npass)
+    return [random_job(cfg, rng, 100 + j, seq[j % len(seq)], n_max) for j in range(count)]
 
 
 def job_bursts(cfg: VecUnitConfig, jobs: list) -> dict[str, list[StreamBurst]]:
