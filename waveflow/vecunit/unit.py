@@ -98,12 +98,27 @@ class _VecPart(FreeRunMod):
         self.add_endpoint(ep)
         return ep
 
-    def _block(self, cls, name: str, W: int):
+    def _block(self, cls, name: str):
+        """A queue end: blocks of ``Kmax x ceil(Nmax / L)`` lane groups of ``WV``-bit values (every
+        queue the widest vector format's width, each value in its queue's own format)."""
         cfg = self.cfg
         ep = cls(name=f"{self.name}_{name}", sim=self.sim,
-                 element_type=block_type(W, cfg.Kmax * cfg.NGQ, cfg.L))
+                 element_type=block_type(cfg.WV, cfg.Kmax * cfg.NGQ, cfg.L))
         self.add_endpoint(ep)
+        setattr(self, name, ep)
         return ep
+
+    def _named(self, cls, name: str, bits: int):
+        ep = self._ep(cls, name, bits)
+        setattr(self, name, ep)
+        return ep
+
+    def _kernel(self, role: str, signature: tuple[str, ...], framed: tuple[str, ...]):
+        from waveflow.hw.mem_stream import KernelTask
+        from waveflow.vecunit.hls import header_name, task_names
+
+        return KernelTask(task_names(self.cfg)[role], header_name(self.cfg), signature,
+                          framed=framed)
 
     def _halt(self) -> ProcessGen[None]:
         """Fatal: never take input again (a reset clears it)."""
@@ -127,10 +142,15 @@ class VecLoad(_VecPart):
         super().__post_init__()
         cfg = self.cfg
         self.s_prog = self._ep(FramedStreamIFSlave, "s_prog", CTRL_BITS)
-        self.s_in = [self._ep(FramedStreamIFSlave, f"s_in{p}", cfg.word_bits)
+        self.s_in = [self._named(FramedStreamIFSlave, f"s_in{p}", cfg.word_bits)
                      for p in range(cfg.n_in_ports)]
-        self.q = [self._block(SobIFMaster, f"q{j}", f.W) for j, f in enumerate(cfg.in_queue_formats)]
+        self.q = [self._block(SobIFMaster, f"q{j}") for j in range(cfg.NQI)]
         self.halted = False
+
+    def kernel_task(self):
+        sig = ("s_prog", *(f"s_in{p}" for p in range(self.cfg.n_in_ports)),
+               *(f"q{j}" for j in range(self.cfg.NQI)))
+        return self._kernel("load", sig, sig[:1 + self.cfg.n_in_ports])
 
     def run_iter(self) -> ProcessGen[None]:
         if self.halted:
@@ -161,11 +181,15 @@ class VecExec(_VecPart):
         super().__post_init__()
         cfg = self.cfg
         self.s_prog = self._ep(FramedStreamIFSlave, "s_prog", CTRL_BITS)
-        self.qi = [self._block(SobIFSlave, f"qi{j}", f.W) for j, f in enumerate(cfg.in_queue_formats)]
-        self.qo = [self._block(SobIFMaster, f"qo{j}", f.W)
-                   for j, f in enumerate(cfg.out_queue_formats)]
+        self.qi = [self._block(SobIFSlave, f"qi{j}") for j in range(cfg.NQI)]
+        self.qo = [self._block(SobIFMaster, f"qo{j}") for j in range(cfg.NQO)]
         self.m_status = self._ep(FramedStreamIFMaster, "m_status", CTRL_BITS)
         self.halted = False
+
+    def kernel_task(self):
+        sig = ("s_prog", *(f"qi{j}" for j in range(self.cfg.NQI)),
+               *(f"qo{j}" for j in range(self.cfg.NQO)), "m_status")
+        return self._kernel("exec", sig, ("s_prog", "m_status"))
 
     def run_iter(self) -> ProcessGen[None]:
         if self.halted:
@@ -236,10 +260,15 @@ class VecStore(_VecPart):
         super().__post_init__()
         cfg = self.cfg
         self.s_prog = self._ep(FramedStreamIFSlave, "s_prog", CTRL_BITS)
-        self.q = [self._block(SobIFSlave, f"q{j}", f.W) for j, f in enumerate(cfg.out_queue_formats)]
-        self.s_out = [self._ep(FramedStreamIFMaster, f"s_out{p}", cfg.word_bits)
+        self.q = [self._block(SobIFSlave, f"q{j}") for j in range(cfg.NQO)]
+        self.s_out = [self._named(FramedStreamIFMaster, f"s_out{p}", cfg.word_bits)
                       for p in range(cfg.n_out_ports)]
         self.halted = False
+
+    def kernel_task(self):
+        sig = ("s_prog", *(f"q{j}" for j in range(self.cfg.NQO)),
+               *(f"s_out{p}" for p in range(self.cfg.n_out_ports)))
+        return self._kernel("store", sig, ("s_prog", *sig[1 + self.cfg.NQO:]))
 
     def run_iter(self) -> ProcessGen[None]:
         if self.halted:

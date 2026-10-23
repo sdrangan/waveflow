@@ -13,6 +13,9 @@ them -- the unit knows nothing about any application.
   groups a row (D5: ``L`` need not divide ``n``; the last group's spare lanes are zero).
 * **Slots.** A pass runs at most ``S`` chained instructions; ``slot_caps[s]`` says which operation
   classes slot ``s`` has hardware for (:class:`Cap`), every class by default.
+* **Runs.** The execute task issues in order but fuses up to ``max_run`` consecutive independent
+  passes into one pipelined loop, and up to ``max_srun`` consecutive independent scalar instructions
+  into another (:func:`waveflow.vecunit.model.exec_items`; Stage 6).
 * **Divides.** ``wf.sdivz`` widens its dividend by ``g_div`` fraction bits first.
 * **Ports.** ``n_in_ports`` input and ``n_out_ports`` output streams of ``word_bits``-bit words, each
   value a memory element ``lane_bits`` wide (:func:`waveflow.linalg.formats.mem_format`).
@@ -60,6 +63,8 @@ class VecUnitConfig:
     NB: int = 4
     slot_caps: tuple[int, ...] = field(default=())
     g_div: int = 0
+    max_run: int = 8
+    max_srun: int = 8
     word_bits: int = 64
     lane_bits: int = DEFAULT_LANE_BITS
     n_in_ports: int = 1
@@ -91,12 +96,17 @@ class VecUnitConfig:
             problems.append(f"slot_caps {self.slot_caps}: each a nonzero Cap mask")
         if self.g_div < 0:
             problems.append(f"g_div = {self.g_div} is negative")
+        if not (1 <= self.max_run <= 64 and 1 <= self.max_srun <= 64):
+            problems.append(f"max_run, max_srun = {self.max_run}, {self.max_srun} are not in 1..64")
         if self.word_bits not in WORD_BITS_SUPPORTED:
             problems.append(f"word_bits = {self.word_bits} is not one of {WORD_BITS_SUPPORTED}")
         for name in ("group_formats", "scalar_formats", "in_queue_formats", "out_queue_formats"):
             for j, f in enumerate(getattr(self, name)):
                 if not isinstance(f, Format) or not f.signed:
                     problems.append(f"{name}[{j}] = {f}: every format must be a signed Format")
+                elif not 1 <= f.int_bits <= f.W:
+                    problems.append(f"{name}[{j}] = {f}: integer bits must be 1..W (no negative "
+                                    "fraction bits)")
         for name in ("in_queue_formats", "out_queue_formats"):
             for j, f in enumerate(getattr(self, name)):
                 if isinstance(f, Format) and f.W > self.lane_bits:
@@ -143,6 +153,11 @@ class VecUnitConfig:
         format ids the hardware muxes on."""
         fmts = (*self.group_formats, *self.in_queue_formats, *self.out_queue_formats)
         return tuple(dict.fromkeys(fmts))
+
+    @property
+    def WV(self) -> int:
+        """The width a stored vector value takes: the widest vector or queue format."""
+        return max(f.W for f in self.vector_formats)
 
     @property
     def scalar_format_set(self) -> tuple[Format, ...]:

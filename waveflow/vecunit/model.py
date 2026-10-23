@@ -260,6 +260,114 @@ def split_passes(prog: list[Instr], S: int) -> list[list[Instr]]:
     return out
 
 
+def chain_status(chain: list[Instr], cfg: VecUnitConfig) -> Status:
+    """A gathered pass's (or a lone instruction's) status, in the order the execute task checks:
+    each instruction, then an open chain or a non-vector inside one, then the pass rules."""
+    for x in chain:
+        st = instr_status(x, cfg)
+        if st != Status.OK:
+            return st
+    if chain[0].vector:
+        if chain[-1].chain or not all(y.vector for y in chain):
+            return Status.BAD_OP
+        return pass_status(chain, cfg)
+    return Status.OK
+
+
+@dataclass(frozen=True)
+class Item:
+    """A piece of the execute task's work, as its decode gathers it (Stage 6): ``"passes"`` -- a run
+    of independent passes, one pipelined loop over all their elements; ``"scalars"`` -- a run of
+    independent scalar instructions, one pipelined loop; ``"control"`` -- one ``wf.setvl``,
+    ``wf.qpop`` or ``wf.qpush``; ``"error"`` -- the status that stops the job, after the items before
+    it have run."""
+
+    kind: str
+    chains: tuple = ()
+    status: int = int(Status.OK)
+
+
+def exec_items(prog: list[Instr], cfg: VecUnitConfig, *, cut: bool = False) -> list[Item]:
+    """The execute program as the task issues it: in order, consecutive passes fused into a run
+    while each reads no group and no scalar an earlier pass of the run writes (and the run holds
+    fewer than ``max_run``); consecutive scalar instructions fused while each reads no scalar an
+    earlier one writes (fewer than ``max_srun``).  Any other instruction ends a run.  Fusion changes
+    no result: a fused run is serial execution with the pipeline filled once (a later pass writes a
+    group only after an earlier one has read it, ``VL`` plus the depth later).  ``cut``: the program
+    burst's framing failed after ``prog`` (:func:`program_prefix`): the job then stops with
+    ``BAD_LENGTH``, after the items gathered before it."""
+    items: list[Item] = []
+    run: list[tuple] = []
+    wg: set[int] = set()
+    ws: set[int] = set()
+    srun: list[tuple] = []
+    sw: set[int] = set()
+
+    def flush() -> None:
+        nonlocal run, srun, wg, ws, sw
+        if run:
+            items.append(Item("passes", tuple(run)))
+        if srun:
+            items.append(Item("scalars", tuple(srun)))
+        run, srun, wg, ws, sw = [], [], set(), set(), set()
+
+    for chain in split_passes(prog, cfg.S):
+        if cut and chain[-1].vector and chain[-1].chain:
+            break  # the chain runs into the bad word: BAD_LENGTH below
+        st = chain_status(chain, cfg)
+        if st != Status.OK:
+            flush()
+            items.append(Item("error", (tuple(chain),), int(st)))
+            return items
+        x = chain[0]
+        if x.vector:
+            if srun:
+                flush()
+            written: set[int] = set()
+            reads_g, reads_s, writes_g, writes_s = set(), set(), set(), set()
+            for y in chain:
+                o = operands(y)
+                reads_g |= {g for g in o.vreads if g not in written}
+                reads_s |= set(o.sreads)
+                if o.vwrite is not None:
+                    written.add(o.vwrite)
+                    writes_g.add(o.vwrite)
+                if o.swrite is not None:
+                    writes_s.add(o.swrite)
+            if run and (len(run) == cfg.max_run or reads_g & wg or reads_s & ws):
+                flush()
+            run.append(tuple(chain))
+            wg |= writes_g
+            ws |= writes_s
+        elif int(x.opcode) == Opcode.SCALAR:
+            if run:
+                flush()
+            o = operands(x)
+            if srun and (len(srun) == cfg.max_srun or set(o.sreads) & sw):
+                flush()
+            srun.append(tuple(chain))
+            sw.add(int(x.rd))
+        else:
+            flush()
+            items.append(Item("control", (tuple(chain),)))
+    flush()
+    if cut:
+        items.append(Item("error", (), int(Status.BAD_LENGTH)))
+    return items
+
+
+def program_prefix(words) -> tuple[int, list[Instr], bool]:
+    """A program burst as a task streams it: ``(tx_id, the instructions it runs, framing_ok)``.  A
+    task checks each word's TLAST against ``ninstr`` before it uses the word, so with ``m`` words for
+    ``n`` instructions (``m != n``) it runs the first ``min(m, n) - 1`` and stops at the next."""
+    w = [int(x) for x in np.asarray(words, np.uint64).reshape(-1)]
+    tx_id, n, m = w[0] & 0xFFFF, (w[0] >> 16) & 0xFFFF, len(w) - 1
+    instrs = [Instr.decode(x) for x in w[1:]]
+    if m == n:
+        return tx_id, instrs, True
+    return tx_id, instrs[: max(0, min(m, n) - 1)], False
+
+
 # --- block layout ------------------------------------------------------------------------------------
 
 

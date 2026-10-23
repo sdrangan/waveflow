@@ -35,6 +35,23 @@ def centre() -> VecUnitConfig:
                          L=4, VLMAX=8, Kmax=8, Nmax=9, g_div=3)
 
 
+def rtl_config() -> VecUnitConfig:
+    """The RTL gate's generic configuration: random jobs, every instruction form, formats drawn from
+    a small set (both rounding and both overflow modes) of a moderate spread.  A spread like
+    :func:`centre`'s -- integer bits from 1 to 14 -- builds a 52-bit result path whose csynth ran past
+    50 minutes (Stage 5 record)."""
+    rng = np.random.default_rng(2)
+    vec = [Format(12, 3, True, QMode.AP_RND, OMode.AP_SAT), Format(12, 4, True, QMode.AP_TRN, OMode.AP_SAT),
+           Format(12, 5, True, QMode.AP_RND, OMode.AP_WRAP), Format(10, 3, True, QMode.AP_TRN, OMode.AP_WRAP),
+           Format(14, 5, True, QMode.AP_RND, OMode.AP_SAT)]
+    sca = [Format(20, 10, True, QMode.AP_RND, OMode.AP_SAT), Format(20, 9, True, QMode.AP_TRN, OMode.AP_SAT),
+           Format(12, 5, True, QMode.AP_RND, OMode.AP_WRAP), Format(12, 3, True, QMode.AP_RND, OMode.AP_SAT)]
+    pick = lambda fs, n: tuple(fs[int(i)] for i in rng.integers(len(fs), size=n))
+    return VecUnitConfig(group_formats=pick(vec, 8), scalar_formats=pick(sca, 6),
+                         in_queue_formats=pick(vec, 2), out_queue_formats=pick(vec, 2),
+                         L=4, VLMAX=8, Kmax=8, Nmax=9, g_div=3)
+
+
 def two_ports() -> VecUnitConfig:
     """Two input and two output ports, two lanes, two slots (the second without a multiplier),
     32-bit words."""
@@ -65,7 +82,7 @@ def assert_outputs(sysm, gold: dict):
                                   np.asarray(b, np.uint64).reshape(-1)), port
 
 
-@pytest.mark.parametrize("make", [centre, two_ports])
+@pytest.mark.parametrize("make", [centre, two_ports, rtl_config])
 def test_pysim_equals_the_interpreter(make, tmp_path):
     cfg = make()
     unit, sysm = run(cfg, "test", tmp_path)

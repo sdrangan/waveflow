@@ -3075,7 +3075,8 @@ def tcl_path(root, top_name: str):
 def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
                part: str = DEFAULT_PART, period_ns: float = DEFAULT_PERIOD_NS,
                solution_config: tuple[str, ...] = (),
-               include_dirs: tuple[str, ...] = ()) -> str:
+               include_dirs: tuple[str, ...] = (),
+               defines: tuple[str, ...] = ()) -> str:
     """Emit a csynth ``.tcl`` for ``vitis-run --mode hls --tcl`` (concrete width baked in, so the
     cflags carry only the include path — no ``-DMEM_DW``).
 
@@ -3109,12 +3110,20 @@ def render_tcl(top_name: str, extra_sources: tuple[str, ...] = (), *,
     install and are reached with an include path rather than copied
     (:mod:`waveflow.build.vitis_l1_step` resolves it).  **Empty by default**, so every existing
     generated top renders byte-for-byte as before — several are gated on exact RTL cycle counts, and
-    a changed TCL is a changed build."""
+    a changed TCL is a changed build.
+
+    *defines* are preprocessor names appended to ``$cf`` as ``-D<name>``, for a body that needs a
+    vendor header configured before its first include -- which a generated top's ``hls_task.h``
+    makes impossible from the body itself.  The case this exists for is the vector unit's execute
+    task: ``hls::read_buf`` / ``hls::write_buf`` exist only under ``EXPLICIT_ACQUIRE_RELEASE``
+    (:data:`waveflow.vecunit.hls.DEFINES`).  **Empty by default**, for the same reason as
+    *include_dirs*."""
     extra = "".join(f"add_files {s} -cflags $cf\n" for s in extra_sources)
     # Forward slashes: the flags sit inside a Tcl double-quoted string, where a Windows path's
     # backslashes are escapes (a path under C:/Xilinx/2025.1/tps reached the compiler mangled).
     from pathlib import PureWindowsPath
     incs = "".join(f" -I{PureWindowsPath(d).as_posix()}" for d in include_dirs)
+    incs += "".join(f" -D{d}" for d in defines)
     period = int(period_ns) if float(period_ns).is_integer() else period_ns
     cfg = "".join(f"{line}\n" for line in solution_config)
     return f"""\

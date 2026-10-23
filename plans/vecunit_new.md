@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-4 done 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-5 done 2026-10-22 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -645,6 +645,57 @@ of the load task's input port against the execute task's passes).
 
 **Gate:** RTL bit-exact; the comparison table recorded. **Pause.**
 
+#### Record: Stage 5 (2026-10-22) -- Vitis HLS / Vivado xsim 2024.1, xczu48dr, 4 ns, this machine
+
+**Built.** The three task bodies are generated per configuration (`waveflow/vecunit/hls.py` ->
+`wf_vecunit_<id>.h`: a `wf_vec_cfg_<id>` struct with the union and exact types, the format tables,
+the shared quantizers and the dividend-format divide; `vecunit_load/exec/store_<id>`) on the
+configuration-independent `waveflow/build/vecunit_core.h` (instruction and pass checks, slot decode,
+operand resolution, matrix load and store between a framed burst and a block's padded rows).
+`waveflow/vecunit/build.py` (the headers, a codegen step, `build_dag`: a unit's harness through the
+system flow), `report.py` (cycles and resources of a run). Framework: `render_tcl(defines=...)`, empty
+by default, for `-DEXPLICIT_ACQUIRE_RELEASE` (`hls_task.h` includes the stream-of-blocks header before
+a body could define it). Every queue block holds `WV`-bit values (the widest vector format).
+
+**Gate:** every RTL run bit-exact against pysim (`compare.json`: no mismatch), pysim equal to the
+interpreter -- the generic unit on random jobs over every instruction form (`rtl_config`), the CG unit
+on `"test"` (four solves, a zero column among them) and `"steady"`, the matched filter on `"test"` and
+`"steady"`. csynth meets 4 ns: est. 2.914 ns (Fmax 343 MHz), the pass loop at II 1, depth 22.
+Commands: `python -m examples.vecunit_cg.harness --root <r> --through compare [--workload steady]`,
+the same for `examples.vecunit_mf`, `pytest -m xsi tests/vecunit/test_unit_xsi.py`.
+
+**Measured against `CgVectorUnit`** (its rx, load, core and store; the same steady workload: four
+`8 x 32` solves of three iterations, the same formats `W12g8`; the same tool and machine):
+
+| | cycles a job | LUT | FF | DSP | BRAM |
+|---|---|---|---|---|---|
+| `CgVectorUnit` (four tasks) | **3,581** | 21,596 | 11,876 | 52 | 20 (channels) |
+| ... its core, `cg_vector_task` | | 15,109 | 9,458 | 49 | 0 |
+| vector unit, CG program | **7,295** (2.04x) | 59,585 | 26,847 | 50 | 28 |
+| ... its execute task | | 48,933 | 24,207 | 48 | 16 |
+
+CgVectorUnit: replies 1,129-1,131 cycles apart per `STEP`; the unit's numbers are csynth estimates.
+**The 10 % cycle target is missed by Stage 5** (as Stage 1 warned); resources are 2.8x LUT, 2.3x FF,
+0.96x DSP.
+
+**The matched filter** (`VLMAX 64`, 8 antennas, four frames of four chunks): a frame every **1,448
+cycles against an input floor of 1,152 words (1.26x)**; the input accepted 4,608 words in 5,628
+cycles. The execute task binds (about 362 cycles a chunk against the loader's about 320).
+
+**Where the cycles go** (csynth's schedule, the RTL run):
+- the guarded divide serialized the four lane dividers -- a branch per lane, as `cg_vector_task.h`
+  warns: 177 cycles a divide instead of 45. Fixed (divide by a safe divisor, then select): the first
+  CG job fell from 12,413 to 7,297 cycles;
+- a pass costs about `VL + 22 + 31`: its elements, the pipeline's fill and drain, and about 31 cycles
+  of decode (gather, checks, operand resolution, reduction delivery); a CG job is 88 passes and 40
+  divides (about 45 cycles each, the lanes side by side).
+
+**Found:** a configuration whose formats spread widely (`centre()` in the tests: integer bits 1 to
+14) builds a wide union datapath -- 28 x 21-bit multiplier inputs, 52-bit results -- and its csynth ran
+past 50 minutes without finishing; the CG and matched-filter configurations take about a minute. The
+union's width, not only the number of formats, is a cost of D4; the generic RTL gate uses a moderate
+spread (`rtl_config`).
+
 ### Stage 6: overlap (optional; measure first)
 
 Two optimizations the decoupling makes possible. Each is in-order issue with a scoreboard, no ISA
@@ -707,3 +758,4 @@ gates pass. **Pause.**
 | 2026-10-22 | 2 | `waveflow/vecunit/` (isa, config, asm, model) and 87 tests: every instruction against an exact-rational reference, 150 random programs chained = serial | Stage 2 record |
 | 2026-10-22 | 3 | The matched filter (26 cases) and CG (104 cases: four format sets, `nit` 1-8, the zero guards) as programs, bit-exact on the interpreter with a closed-loop systolic harness | Stage 3 record |
 | 2026-10-22 | 4 | pysim: `VecLoad` / `VecExec` / `VecStore` / `VecUnit`, the harness, random and application workloads; bit-exact against the interpreter on two generic configurations, CG and the matched filter; a fatal error | Stage 4 record |
+| 2026-10-22 | 5 | Generated HLS bodies; RTL bit-exact (generic, CG, matched filter); CG 7,295 cycles a job against CgVectorUnit's 3,581 (2.04x, Vitis 2024.1), 59.6k LUT against 21.6k; the matched filter 1.26x its input floor | Stage 5 record |

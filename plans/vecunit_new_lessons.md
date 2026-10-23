@@ -20,3 +20,9 @@
 6. **A composite's boundary names pair with its children's unwired ports in walk order** (children in
    `add_comp` order, ports in `add_endpoint` order), not in the order you think of them; a wrong
    order shows up as a harness that "has no input" called `s_in0`.
+7. **A guarded divide is a branch HLS serializes** -- relearned: `b == 0 ? 0 : a / b` per lane put four
+   42-cycle dividers one after another (177 cycles a divide). Divide by a safe divisor, then select.
+   `cg_vector_task.h` says so; read the neighbour's comments before writing the same loop.
+8. **The width of a union datapath follows the spread of its formats.** Integer bits from 1 to 14
+   made 52-bit results and a csynth past 50 minutes; keep a configuration's formats close, or split
+   the register file by format family.
