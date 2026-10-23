@@ -201,7 +201,7 @@ struct wf_vec_cfg_{i} {{
     static const int NGQ = {cfg.NGQ}, QD = {cfg.Kmax * cfg.NGQ}, DEPTH = {cfg.NG // cfg.NB * cfg.VLMAX};
     static const int NPI = {cfg.n_in_ports}, NPO = {cfg.n_out_ports}, WBW = {cfg.word_bits};
     static const int WV = {w.WV}, WSR = {w.WSR}, FU = {w.FU}, FS = {w.FS}, FA = {w.FA}, FP = {w.FP};
-    static const int GDIV = {cfg.g_div};
+    static const int GDIV = {cfg.g_div}, MAXRUN = {cfg.max_run}, MAXSRUN = {cfg.max_srun};
     typedef ap_int<{w.FU + w.IU}> vu_t;   // the union vector format (frac FU)
     typedef ap_int<{w.FS + w.IS}> su_t;   // the union scalar format (frac FS)
     typedef ap_int<{w.AW}> au_t;          // a multiplier's A input (frac FA)
@@ -334,7 +334,10 @@ $CASES
 
 _EXEC = Template("""\
 // The execute task: one firing is one job (waveflow.vecunit.unit.VecExec; the interpreter is
-// waveflow.vecunit.model). A vector instruction and the ones chained to it run as one pass.
+// waveflow.vecunit.model). It issues in order but fuses (Stage 6, model.exec_items): consecutive
+// passes, while none reads a group or a scalar an earlier one of the run writes, run as ONE pipelined
+// loop over all their elements -- the pipeline fills once a run, not once a pass; consecutive
+// independent scalar instructions run as one pipelined loop on pipelined dividers.
 template <typename PROG_T, typename ST_T>
 static void vecunit_exec_$ID(hls::stream<PROG_T>& s_prog, $PARAMS,
                              hls::stream<ST_T>& m_status) {
@@ -347,7 +350,6 @@ static void vecunit_exec_$ID(hls::stream<PROG_T>& s_prog, $PARAMS,
     typedef typename C::dot_t dot_t;
     typedef lg_t blk_t[C::QD];
     typedef ap_uint<2 * C::WV> cell_t;
-    const int L = C::L, S = C::S, NB = C::NB, WV = C::WV;
     static bool halted = false;
 #pragma HLS reset variable = halted
     if (halted) return;
@@ -369,285 +371,434 @@ $BUFS
 #pragma HLS BIND_STORAGE variable = rf type = ram_s2p
     ap_int<C::WSR> sf[C::L][C::NS];
 #pragma HLS ARRAY_PARTITION variable = sf dim = 1 complete
+#pragma HLS BIND_STORAGE variable = sf type = ram_t2p
+    // A run's pass descriptors: what its decode resolved, read by the fused loop a pass at a time.
+    wf_vec::Slot dsl[C::MAXRUN][C::S];
+    ap_uint<16> drb[C::MAXRUN][C::NB], dwb[C::MAXRUN][C::NB];
+    ap_uint<8> drf[C::MAXRUN][C::NB];
+    ap_uint<2> dws[C::MAXRUN][C::NB];
+    bool dwe[C::MAXRUN][C::NB];
+    ap_uint<12> dqip[C::MAXRUN][C::NQI], dqis[C::MAXRUN][C::NQI];
+    ap_uint<12> dqop[C::MAXRUN][C::NQO], dqos[C::MAXRUN][C::NQO];
+    bool dqie[C::MAXRUN][C::NQI], dqoe[C::MAXRUN][C::NQO];
+    ap_uint<2> dqsl[C::MAXRUN][C::NQO];
+    su_t dsv[C::MAXRUN][C::S][C::L];
+    dot_t dacc[C::MAXRUN][C::S][C::L];
+#pragma HLS ARRAY_PARTITION variable = dsl dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = drb dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dwb dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = drf dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dws dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dwe dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqip dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqis dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqop dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqos dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqie dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqoe dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dqsl dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dsv dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dsv dim = 3 complete
+#pragma HLS ARRAY_PARTITION variable = dacc dim = 2 complete
+#pragma HLS ARRAY_PARTITION variable = dacc dim = 3 complete
     bool last = false;
     const VecJob job = VecJob::unpack_from_uint(streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
     const int n = job.ninstr;
     int st = (last == (n == 0)) ? int(wf_linalg::OK) : int(wf_linalg::BAD_LENGTH);
     int vl = C::VLMAX, pc = 0;
+    // Held over: an instruction read ahead that a run ended before (pend), or a whole pass gathered
+    // that would have read what its run writes (pendc) -- it starts the next run.
+    bool pend = false, pendc = false;
+    VecInstr pd, pg[C::S];
+    int pns = 0;
 INSTR:
-    while (st == wf_linalg::OK && pc < n) {
+    while (st == wf_linalg::OK && (pend || pendc || pc < n)) {
 #pragma HLS LOOP_TRIPCOUNT max = 512
-        VecInstr d = VecInstr::unpack_from_uint(streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
-        ++pc;
-        if (last != (pc == n)) {
-            st = wf_linalg::BAD_LENGTH;
-            break;
+        VecInstr d;
+        if (!pendc) {
+            if (pend) {
+                d = pd;
+                pend = false;
+            } else {
+                d = VecInstr::unpack_from_uint(streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
+                ++pc;
+                if (last != (pc == n)) {
+                    st = wf_linalg::BAD_LENGTH;
+                    break;
+                }
+                st = wf_vec::instr_status<C>(d);
+                if (st != wf_linalg::OK) break;
+            }
         }
-        st = wf_vec::instr_status<C>(d);
-        if (st != wf_linalg::OK) break;
-        if (wf_vec::is_vector(d)) {
-            // ---- gather the chain ----------------------------------------------------------------
-            VecInstr g[C::S];
-            g[0] = d;
-            int ns = 1;
-            bool more = d.chain;
-        GATHER:
-            for (int s = 1; s < C::S; ++s) {
-                if (more && st == wf_linalg::OK) {
-                    if (pc == n) {
-                        st = wf_linalg::BAD_OP;  // a chain left open at the program's end
-                    } else {
-                        d = VecInstr::unpack_from_uint(
-                            streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
-                        ++pc;
-                        if (last != (pc == n)) {
-                            st = wf_linalg::BAD_LENGTH;
-                        } else {
-                            st = wf_vec::instr_status<C>(d);
-                            if (st == wf_linalg::OK && !wf_vec::is_vector(d)) st = wf_linalg::BAD_OP;
+        if (pendc || wf_vec::is_vector(d)) {
+            // ==== a run of passes: decode up to MAXRUN, then one fused loop ==========================
+            ap_uint<C::NG> wg = 0;
+            ap_uint<C::NS> wsc = 0;
+            int np = 0;
+        RUNG:
+            for (int r = 0; r < C::MAXRUN; ++r) {
+                VecInstr g[C::S];
+                int ns = 0;
+                if (pendc) {
+                    for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                        g[s] = pg[s];
+                    }
+                    ns = pns;
+                    pendc = false;
+                } else {
+                    g[0] = d;
+                    ns = 1;
+                    bool more = d.chain;
+                GATHER:
+                    for (int s = 1; s < C::S; ++s) {
+                        if (more && st == wf_linalg::OK) {
+                            if (pc == n) {
+                                st = wf_linalg::BAD_OP;  // a chain left open at the program's end
+                            } else {
+                                d = VecInstr::unpack_from_uint(
+                                    streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
+                                ++pc;
+                                if (last != (pc == n)) {
+                                    st = wf_linalg::BAD_LENGTH;
+                                } else {
+                                    st = wf_vec::instr_status<C>(d);
+                                    if (st == wf_linalg::OK && !wf_vec::is_vector(d)) st = wf_linalg::BAD_OP;
+                                }
+                                g[s] = d;
+                                ns = s + 1;
+                                more = d.chain;
+                            }
                         }
-                        g[s] = d;
-                        ns = s + 1;
-                        more = d.chain;
+                    }
+                    if (st == wf_linalg::OK && more) st = wf_linalg::BAD_OP;  // chained past S
+                    if (st == wf_linalg::OK) st = wf_vec::pass_status<C>(g, ns);
+                    if (st != wf_linalg::OK) break;  // the run gathered so far still runs
+                }
+                // ---- a hazard with the run: this pass reads what an earlier pass writes ------------
+                ap_uint<C::NG> rg = 0, pw = 0;
+                ap_uint<C::NS> rs = 0, psw = 0;
+                for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                    if (s < ns) {
+                        const wf_vec::Ops o = wf_vec::operands(g[s]);
+                        for (int v = 0; v < 3; ++v) {
+#pragma HLS UNROLL
+                            if (v < o.nv && !pw[o.v[v]]) rg[o.v[v]] = 1;  // not forwarded in the pass
+                        }
+                        if (o.sr) rs[o.s] = 1;
+                        if (o.vw) pw[o.wg] = 1;
+                        if (o.sw) psw[o.ws] = 1;
                     }
                 }
-            }
-            if (st == wf_linalg::OK && more) st = wf_linalg::BAD_OP;  // chained past S
-            if (st == wf_linalg::OK) st = wf_vec::pass_status<C>(g, ns);
-            if (st != wf_linalg::OK) break;
-            // ---- resolve the operands, once ---------------------------------------------------------
-            wf_vec::Slot sl[C::S];
-            ap_uint<16> rbase[C::NB], wbase[C::NB];
-            ap_uint<8> rfmt[C::NB];
-            ap_uint<2> wslot[C::NB];
-            bool wen[C::NB];
-#pragma HLS ARRAY_PARTITION variable = sl complete
+                if (np > 0 && ((rg & wg) != 0 || (rs & wsc) != 0)) {
+                    for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                        pg[s] = g[s];
+                    }
+                    pns = ns;
+                    pendc = true;
+                    break;
+                }
+                wg |= pw;
+                wsc |= psw;
+                // ---- resolve the pass into descriptor np -----------------------------------------
+                ap_uint<16> rbase[C::NB], wbase[C::NB];
+                ap_uint<8> rfmt[C::NB];
+                ap_uint<2> wslot[C::NB];
+                bool wen[C::NB];
 #pragma HLS ARRAY_PARTITION variable = rbase complete
 #pragma HLS ARRAY_PARTITION variable = wbase complete
 #pragma HLS ARRAY_PARTITION variable = rfmt complete
 #pragma HLS ARRAY_PARTITION variable = wslot complete
 #pragma HLS ARRAY_PARTITION variable = wen complete
-            for (int b = 0; b < C::NB; ++b) {
-#pragma HLS UNROLL
-                rbase[b] = 0;
-                wbase[b] = 0;
-                rfmt[b] = 0;
-                wslot[b] = 0;
-                wen[b] = false;
-            }
-            ap_uint<12> qip[C::NQI], qis[C::NQI], qop[C::NQO], qos[C::NQO];
-            bool qien[C::NQI], qoen[C::NQO];
-            ap_uint<2> qoslot[C::NQO];
-#pragma HLS ARRAY_PARTITION variable = qip complete
-#pragma HLS ARRAY_PARTITION variable = qis complete
-#pragma HLS ARRAY_PARTITION variable = qop complete
-#pragma HLS ARRAY_PARTITION variable = qos complete
-#pragma HLS ARRAY_PARTITION variable = qien complete
-#pragma HLS ARRAY_PARTITION variable = qoen complete
-#pragma HLS ARRAY_PARTITION variable = qoslot complete
-            for (int q = 0; q < C::NQI; ++q) {
-#pragma HLS UNROLL
-                qip[q] = 0;
-                qis[q] = 0;
-                qien[q] = false;
-            }
-            for (int q = 0; q < C::NQO; ++q) {
-#pragma HLS UNROLL
-                qop[q] = 0;
-                qos[q] = 0;
-                qoen[q] = false;
-                qoslot[q] = 0;
-            }
-            bool written[C::S];
-            ap_uint<8> wgrp[C::S];
-            su_t sv[C::S][C::L];
-#pragma HLS ARRAY_PARTITION variable = written complete
-#pragma HLS ARRAY_PARTITION variable = wgrp complete
-#pragma HLS ARRAY_PARTITION variable = sv complete dim = 0
-        RESOLVE:
-            for (int s = 0; s < C::S; ++s) {
-#pragma HLS UNROLL
-                wf_vec::Slot x;
-                if (s < ns) {
-                    x = wf_vec::slot_of(g[s]);
-                } else {
-                    x.kind = wf_vec::K_NONE;
-                    x.a_src = x.b_src = x.c_src = wf_vec::SRC_ZERO;
-                    x.a_idx = x.b_idx = x.c_idx = x.dst = x.dfmt = 0;
-                    x.xsel = x.ysel = 0;
-                    x.neg = x.conj = x.bcast = false;
-                    x.imm = 0;
-                }
-                wf_vec::resolve<C>(x.a_src, x.a_idx, s, written, wgrp, rbase, rfmt);
-                wf_vec::resolve<C>(x.b_src, x.b_idx, s, written, wgrp, rbase, rfmt);
-                wf_vec::resolve<C>(x.c_src, x.c_idx, s, written, wgrp, rbase, rfmt);
-                for (int l = 0; l < C::L; ++l) {
-#pragma HLS UNROLL
-                    sv[s][l] = x.a_src == wf_vec::SRC_SCALAR ? C::conv_s(sf[l][x.a_idx], C::sfmt(x.a_idx))
-                                                             : su_t(0);
-                }
-                written[s] = x.kind == wf_vec::K_ARITH || x.kind == wf_vec::K_LOAD;
-                wgrp[s] = x.dst;
-                if (written[s]) {
-                    const int b = x.dst % C::NB;
-                    wen[b] = true;
-                    wslot[b] = s;
-                    wbase[b] = (x.dst / C::NB) * C::VLMAX;
-                    x.dfmt = C::gfmt(x.dst);
-                } else if (x.kind == wf_vec::K_STORE) {
-                    x.dfmt = C::qfmt_out(x.dst);
-                    qoen[x.dst] = true;
-                    qoslot[x.dst] = s;
-                    qop[x.dst] = g[s].imm1;
-                    qos[x.dst] = g[s].imm2;
-                } else if (x.kind == wf_vec::K_DOT) {
-                    x.dfmt = C::sfmt(x.dst);
-                }
-                if (x.kind == wf_vec::K_LOAD) {
-                    qien[x.b_idx] = true;
-                    qip[x.b_idx] = g[s].imm1;
-                    qis[x.b_idx] = g[s].imm2;
-                }
-                sl[s] = x;
-            }
-            // ---- take each queue block at its first use ----------------------------------------------
-$ACQUIRE
-            dot_t acc[C::S][C::L];
-#pragma HLS ARRAY_PARTITION variable = acc complete dim = 0
-            for (int s = 0; s < C::S; ++s) {
-#pragma HLS UNROLL
-                for (int l = 0; l < C::L; ++l) {
-#pragma HLS UNROLL
-                    acc[s][l] = 0;
-                }
-            }
-            // ---- the pass: every slot at element i, then i + 1 ---------------------------------------
-        PASS:
-            for (int i = 0; i < vl; ++i) {
-#pragma HLS PIPELINE II = 1
-#pragma HLS LOOP_TRIPCOUNT max = C::VLMAX
-#pragma HLS DEPENDENCE variable = rf type = inter dependent = false
-                vu_t rre[C::NB][C::L], rim[C::NB][C::L];
-#pragma HLS ARRAY_PARTITION variable = rre complete dim = 0
-#pragma HLS ARRAY_PARTITION variable = rim complete dim = 0
                 for (int b = 0; b < C::NB; ++b) {
 #pragma HLS UNROLL
+                    rbase[b] = 0;
+                    wbase[b] = 0;
+                    rfmt[b] = 0;
+                    wslot[b] = 0;
+                    wen[b] = false;
+                }
+                for (int q = 0; q < C::NQI; ++q) {
+#pragma HLS UNROLL
+                    dqip[np][q] = 0;
+                    dqis[np][q] = 0;
+                    dqie[np][q] = false;
+                }
+                for (int q = 0; q < C::NQO; ++q) {
+#pragma HLS UNROLL
+                    dqop[np][q] = 0;
+                    dqos[np][q] = 0;
+                    dqoe[np][q] = false;
+                    dqsl[np][q] = 0;
+                }
+                bool written[C::S];
+                ap_uint<8> wgrp[C::S];
+#pragma HLS ARRAY_PARTITION variable = written complete
+#pragma HLS ARRAY_PARTITION variable = wgrp complete
+            RESOLVE:
+                for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                    wf_vec::Slot x;
+                    if (s < ns) {
+                        x = wf_vec::slot_of(g[s]);
+                    } else {
+                        x.kind = wf_vec::K_NONE;
+                        x.a_src = x.b_src = x.c_src = wf_vec::SRC_ZERO;
+                        x.a_idx = x.b_idx = x.c_idx = x.dst = x.dfmt = 0;
+                        x.xsel = x.ysel = 0;
+                        x.neg = x.conj = x.bcast = false;
+                        x.imm = 0;
+                    }
+                    wf_vec::resolve<C>(x.a_src, x.a_idx, s, written, wgrp, rbase, rfmt);
+                    wf_vec::resolve<C>(x.b_src, x.b_idx, s, written, wgrp, rbase, rfmt);
+                    wf_vec::resolve<C>(x.c_src, x.c_idx, s, written, wgrp, rbase, rfmt);
                     for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
-                        const cell_t c = rf[b][l][rbase[b] + i];
-                        rre[b][l] = C::conv_v(ap_int<C::WV>(c(C::WV - 1, 0)), rfmt[b]);
-                        rim[b][l] = C::conv_v(ap_int<C::WV>(c(2 * C::WV - 1, C::WV)), rfmt[b]);
+                        dsv[np][s][l] = x.a_src == wf_vec::SRC_SCALAR
+                                            ? C::conv_s(sf[l][x.a_idx], C::sfmt(x.a_idx)) : su_t(0);
                     }
+                    written[s] = x.kind == wf_vec::K_ARITH || x.kind == wf_vec::K_LOAD;
+                    wgrp[s] = x.dst;
+                    if (written[s]) {
+                        const int b = x.dst % C::NB;
+                        wen[b] = true;
+                        wslot[b] = s;
+                        wbase[b] = (x.dst / C::NB) * C::VLMAX;
+                        x.dfmt = C::gfmt(x.dst);
+                    } else if (x.kind == wf_vec::K_STORE) {
+                        x.dfmt = C::qfmt_out(x.dst);
+                        dqoe[np][x.dst] = true;
+                        dqsl[np][x.dst] = s;
+                        dqop[np][x.dst] = g[s].imm1;
+                        dqos[np][x.dst] = g[s].imm2;
+                    } else if (x.kind == wf_vec::K_DOT) {
+                        x.dfmt = C::sfmt(x.dst);
+                    }
+                    if (x.kind == wf_vec::K_LOAD) {
+                        dqie[np][x.b_idx] = true;
+                        dqip[np][x.b_idx] = g[s].imm1;
+                        dqis[np][x.b_idx] = g[s].imm2;
+                    }
+                    dsl[np][s] = x;
                 }
-                vu_t qre[C::NQI][C::L], qim[C::NQI][C::L];
+                for (int b = 0; b < C::NB; ++b) {
+#pragma HLS UNROLL
+                    drb[np][b] = rbase[b];
+                    dwb[np][b] = wbase[b];
+                    drf[np][b] = rfmt[b];
+                    dws[np][b] = wslot[b];
+                    dwe[np][b] = wen[b];
+                }
+                ++np;
+                if (np == C::MAXRUN || pc == n) break;
+                // ---- look ahead: does the next instruction continue the run? ------------------------
+                d = VecInstr::unpack_from_uint(streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
+                ++pc;
+                if (last != (pc == n)) {
+                    st = wf_linalg::BAD_LENGTH;
+                    break;
+                }
+                st = wf_vec::instr_status<C>(d);
+                if (st != wf_linalg::OK) break;
+                if (!wf_vec::is_vector(d)) {
+                    pd = d;
+                    pend = true;
+                    break;
+                }
+            }
+            if (np > 0) {
+                // ---- take every queue block the run uses ----------------------------------------
+$ACQUIRE
+                // ---- the fused loop: pass p's element i, every slot, then the next element ------
+                int p = 0, i = 0;
+                ap_uint<12> qpi[C::NQI], qpo[C::NQO];
+                dot_t acc[C::S][C::L];
+#pragma HLS ARRAY_PARTITION variable = qpi complete
+#pragma HLS ARRAY_PARTITION variable = qpo complete
+#pragma HLS ARRAY_PARTITION variable = acc complete dim = 0
+            RUN:
+                for (int t = 0; t < np * vl; ++t) {
+#pragma HLS PIPELINE II = 1
+#pragma HLS LOOP_TRIPCOUNT max = C::MAXRUN * C::VLMAX
+#pragma HLS DEPENDENCE variable = rf type = inter dependent = false
+#pragma HLS DEPENDENCE variable = dacc type = inter dependent = false
+                    const bool first = i == 0, lastel = i == vl - 1;
+                    wf_vec::Slot sl[C::S];
+#pragma HLS ARRAY_PARTITION variable = sl complete
+                    for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                        sl[s] = dsl[p][s];
+                    }
+                    vu_t rre[C::NB][C::L], rim[C::NB][C::L];
+#pragma HLS ARRAY_PARTITION variable = rre complete dim = 0
+#pragma HLS ARRAY_PARTITION variable = rim complete dim = 0
+                    for (int b = 0; b < C::NB; ++b) {
+#pragma HLS UNROLL
+                        for (int l = 0; l < C::L; ++l) {
+#pragma HLS UNROLL
+                            const cell_t c = rf[b][l][drb[p][b] + i];
+                            rre[b][l] = C::conv_v(ap_int<C::WV>(c(C::WV - 1, 0)), drf[p][b]);
+                            rim[b][l] = C::conv_v(ap_int<C::WV>(c(2 * C::WV - 1, C::WV)), drf[p][b]);
+                        }
+                    }
+                    vu_t qre[C::NQI][C::L], qim[C::NQI][C::L];
 #pragma HLS ARRAY_PARTITION variable = qre complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = qim complete dim = 0
 $QREADS
-                vu_t fre[C::S][C::L], fim[C::S][C::L];
-                ap_int<C::WV> wr[C::S][C::L], wi[C::S][C::L];
+                    vu_t fre[C::S][C::L], fim[C::S][C::L];
+                    ap_int<C::WV> wr[C::S][C::L], wi[C::S][C::L];
 #pragma HLS ARRAY_PARTITION variable = fre complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = fim complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = wr complete dim = 0
 #pragma HLS ARRAY_PARTITION variable = wi complete dim = 0
-                for (int s = 0; s < C::S; ++s) {
+                    for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
-                    const wf_vec::Slot& x = sl[s];
-                    for (int l = 0; l < C::L; ++l) {
-#pragma HLS UNROLL
-                        vu_t ar = 0, ai = 0, br = 0, bi = 0, cr = 0, ci = 0;
-                        const int la = x.bcast ? 0 : l;
-                        for (int b = 0; b < C::NB; ++b) {
-#pragma HLS UNROLL
-                            if (x.a_src == wf_vec::SRC_BANK && x.a_idx == b) { ar = rre[b][la]; ai = rim[b][la]; }
-                            if (x.b_src == wf_vec::SRC_BANK && x.b_idx == b) { br = rre[b][l]; bi = rim[b][l]; }
-                            if (x.c_src == wf_vec::SRC_BANK && x.c_idx == b) { cr = rre[b][l]; ci = rim[b][l]; }
-                        }
-                        for (int t = 0; t < C::S; ++t) {
-#pragma HLS UNROLL
-                            if (t < s) {
-                                if (x.a_src == wf_vec::SRC_FWD && x.a_idx == t) { ar = fre[t][la]; ai = fim[t][la]; }
-                                if (x.b_src == wf_vec::SRC_FWD && x.b_idx == t) { br = fre[t][l]; bi = fim[t][l]; }
-                                if (x.c_src == wf_vec::SRC_FWD && x.c_idx == t) { cr = fre[t][l]; ci = fim[t][l]; }
-                            }
-                        }
-                        for (int q = 0; q < C::NQI; ++q) {
-#pragma HLS UNROLL
-                            if (x.b_src == wf_vec::SRC_QUEUE && x.b_idx == q) { br = qre[q][l]; bi = qim[q][l]; }
-                        }
-                        // the multiplier's A input: a real scalar, or the vector a (conjugated)
-                        au_t pa_r, pa_i;
-                        if (x.a_src == wf_vec::SRC_SCALAR) {
-                            pa_r = au_t(sv[s][l]) << (C::FA - C::FS);
-                            pa_i = 0;
-                        } else {
-                            pa_r = au_t(ar) << (C::FA - C::FU);
-                            pa_i = x.conj ? au_t(-(au_t(ai) << (C::FA - C::FU))) : au_t(au_t(ai) << (C::FA - C::FU));
-                        }
-                        const res_t pr = res_t(pa_r) * br - res_t(pa_i) * bi;
-                        const res_t pi = res_t(pa_r) * bi + res_t(pa_i) * br;
-                        if (x.kind == wf_vec::K_DOT) acc[s][l] += pr;
-                        res_t xr = 0, xi = 0, yr = 0, yi = 0;
-                        if (x.xsel == wf_vec::X_C) { xr = res_t(cr) << (C::FP - C::FU); xi = res_t(ci) << (C::FP - C::FU); }
-                        else if (x.xsel == wf_vec::X_A) { xr = res_t(ar) << (C::FP - C::FU); xi = res_t(ai) << (C::FP - C::FU); }
-                        else if (x.xsel == wf_vec::X_IMM) { xr = res_t(x.imm) << C::FP; }
-                        if (x.ysel == wf_vec::Y_P) { yr = pr; yi = pi; }
-                        else if (x.ysel == wf_vec::Y_B) { yr = res_t(br) << (C::FP - C::FU); yi = res_t(bi) << (C::FP - C::FU); }
-                        const res_t rr = x.neg ? res_t(xr - yr) : res_t(xr + yr);
-                        const res_t ri = x.neg ? res_t(xi - yi) : res_t(xi + yi);
-                        wr[s][l] = C::quant_v(rr, x.dfmt);
-                        wi[s][l] = C::quant_v(ri, x.dfmt);
-                        fre[s][l] = C::conv_v(wr[s][l], x.dfmt);
-                        fim[s][l] = C::conv_v(wi[s][l], x.dfmt);
-                    }
-                }
-                for (int b = 0; b < C::NB; ++b) {  // one write a bank
-#pragma HLS UNROLL
-                    if (wen[b]) {
+                        const wf_vec::Slot& x = sl[s];
                         for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
-                            ap_int<C::WV> r = 0, m = 0;
-                            for (int t = 0; t < C::S; ++t) {
+                            vu_t ar = 0, ai = 0, br = 0, bi = 0, cr = 0, ci = 0;
+                            const int la = x.bcast ? 0 : l;
+                            for (int b = 0; b < C::NB; ++b) {
 #pragma HLS UNROLL
-                                if (t == wslot[b]) { r = wr[t][l]; m = wi[t][l]; }
+                                if (x.a_src == wf_vec::SRC_BANK && x.a_idx == b) { ar = rre[b][la]; ai = rim[b][la]; }
+                                if (x.b_src == wf_vec::SRC_BANK && x.b_idx == b) { br = rre[b][l]; bi = rim[b][l]; }
+                                if (x.c_src == wf_vec::SRC_BANK && x.c_idx == b) { cr = rre[b][l]; ci = rim[b][l]; }
                             }
-                            cell_t c;
-                            c(C::WV - 1, 0) = ap_uint<C::WV>(r);
-                            c(2 * C::WV - 1, C::WV) = ap_uint<C::WV>(m);
-                            rf[b][l][wbase[b] + i] = c;
+                            for (int u = 0; u < C::S; ++u) {
+#pragma HLS UNROLL
+                                if (u < s) {
+                                    if (x.a_src == wf_vec::SRC_FWD && x.a_idx == u) { ar = fre[u][la]; ai = fim[u][la]; }
+                                    if (x.b_src == wf_vec::SRC_FWD && x.b_idx == u) { br = fre[u][l]; bi = fim[u][l]; }
+                                    if (x.c_src == wf_vec::SRC_FWD && x.c_idx == u) { cr = fre[u][l]; ci = fim[u][l]; }
+                                }
+                            }
+                            for (int q = 0; q < C::NQI; ++q) {
+#pragma HLS UNROLL
+                                if (x.b_src == wf_vec::SRC_QUEUE && x.b_idx == q) { br = qre[q][l]; bi = qim[q][l]; }
+                            }
+                            au_t pa_r, pa_i;
+                            if (x.a_src == wf_vec::SRC_SCALAR) {
+                                pa_r = au_t(dsv[p][s][l]) << (C::FA - C::FS);
+                                pa_i = 0;
+                            } else {
+                                pa_r = au_t(ar) << (C::FA - C::FU);
+                                pa_i = x.conj ? au_t(-(au_t(ai) << (C::FA - C::FU))) : au_t(au_t(ai) << (C::FA - C::FU));
+                            }
+                            const res_t pr = res_t(pa_r) * br - res_t(pa_i) * bi;
+                            const res_t pi = res_t(pa_r) * bi + res_t(pa_i) * br;
+                            const dot_t sum = (first ? dot_t(0) : acc[s][l]) + pr;
+                            acc[s][l] = sum;
+                            if (lastel && x.kind == wf_vec::K_DOT) dacc[p][s][l] = sum;
+                            res_t xr = 0, xi = 0, yr = 0, yi = 0;
+                            if (x.xsel == wf_vec::X_C) { xr = res_t(cr) << (C::FP - C::FU); xi = res_t(ci) << (C::FP - C::FU); }
+                            else if (x.xsel == wf_vec::X_A) { xr = res_t(ar) << (C::FP - C::FU); xi = res_t(ai) << (C::FP - C::FU); }
+                            else if (x.xsel == wf_vec::X_IMM) { xr = res_t(x.imm) << C::FP; }
+                            if (x.ysel == wf_vec::Y_P) { yr = pr; yi = pi; }
+                            else if (x.ysel == wf_vec::Y_B) { yr = res_t(br) << (C::FP - C::FU); yi = res_t(bi) << (C::FP - C::FU); }
+                            const res_t rr = x.neg ? res_t(xr - yr) : res_t(xr + yr);
+                            const res_t ri = x.neg ? res_t(xi - yi) : res_t(xi + yi);
+                            wr[s][l] = C::quant_v(rr, x.dfmt);
+                            wi[s][l] = C::quant_v(ri, x.dfmt);
+                            fre[s][l] = C::conv_v(wr[s][l], x.dfmt);
+                            fim[s][l] = C::conv_v(wi[s][l], x.dfmt);
+                        }
+                    }
+                    for (int b = 0; b < C::NB; ++b) {  // one write a bank
+#pragma HLS UNROLL
+                        if (dwe[p][b]) {
+                            for (int l = 0; l < C::L; ++l) {
+#pragma HLS UNROLL
+                                ap_int<C::WV> rv = 0, mv = 0;
+                                for (int u = 0; u < C::S; ++u) {
+#pragma HLS UNROLL
+                                    if (u == dws[p][b]) { rv = wr[u][l]; mv = wi[u][l]; }
+                                }
+                                cell_t c;
+                                c(C::WV - 1, 0) = ap_uint<C::WV>(rv);
+                                c(2 * C::WV - 1, C::WV) = ap_uint<C::WV>(mv);
+                                rf[b][l][dwb[p][b] + i] = c;
+                            }
+                        }
+                    }
+$QWRITES
+                    if (lastel) {
+                        i = 0;
+                        ++p;
+                    } else {
+                        ++i;
+                    }
+                }
+                // ---- the run's reductions, each delivered once -----------------------------------
+            DELIVER:
+                for (int q = 0; q < np; ++q) {
+#pragma HLS LOOP_TRIPCOUNT max = C::MAXRUN
+                    for (int s = 0; s < C::S; ++s) {
+#pragma HLS UNROLL
+                        const wf_vec::Slot x = dsl[q][s];
+                        if (x.kind == wf_vec::K_DOT) {
+                            for (int l = 0; l < C::L; ++l) {
+#pragma HLS UNROLL
+                                sf[l][x.dst] = C::quant_dot(dacc[q][s][l], x.dfmt);
+                            }
                         }
                     }
                 }
-$QWRITES
             }
-            for (int s = 0; s < C::S; ++s) {  // a reduction delivers at the end of its pass
-#pragma HLS UNROLL
-                if (sl[s].kind == wf_vec::K_DOT) {
-                    for (int l = 0; l < C::L; ++l) {
-#pragma HLS UNROLL
-                        sf[l][sl[s].dst] = C::quant_dot(acc[s][l], sl[s].dfmt);
-                    }
+            if (st != wf_linalg::OK) break;
+        } else if (d.opcode == wf_vec::OPC_S) {
+            // ==== a run of scalar instructions: gather, then one pipelined loop ======================
+            ap_uint<6> sfn[C::MAXSRUN];
+            ap_uint<8> srd[C::MAXSRUN], sra[C::MAXSRUN], srb[C::MAXSRUN];
+            ap_uint<C::NS> sw = 0;
+            int nr = 0;
+        SGATHER:
+            for (int r = 0; r < C::MAXSRUN; ++r) {
+                const bool raw = sw[d.rs1] || (d.funct == wf_vec::S_DIVZ && sw[d.rs2]);
+                if (nr > 0 && raw) {
+                    pd = d;
+                    pend = true;
+                    break;
+                }
+                sfn[nr] = d.funct;
+                srd[nr] = d.rd;
+                sra[nr] = d.rs1;
+                srb[nr] = d.rs2;
+                sw[d.rd] = 1;
+                ++nr;
+                if (nr == C::MAXSRUN || pc == n) break;
+                d = VecInstr::unpack_from_uint(streamutils::read_boundary_word<PROG_T, 64>(s_prog, last));
+                ++pc;
+                if (last != (pc == n)) {
+                    st = wf_linalg::BAD_LENGTH;
+                    break;
+                }
+                st = wf_vec::instr_status<C>(d);
+                if (st != wf_linalg::OK) break;
+                if (d.opcode != wf_vec::OPC_S) {
+                    pd = d;
+                    pend = true;
+                    break;
                 }
             }
-        } else if (d.opcode == wf_vec::OPC_S) {
-            const int fa = C::sfmt(d.rs1), fb = C::sfmt(d.rs2), fd = C::sfmt(d.rd);
-            ap_int<C::WSR> outv[C::L];
-#pragma HLS ARRAY_PARTITION variable = outv complete
-        LANES:
-            for (int l = 0; l < C::L; ++l) {
+        SRUN:
+            for (int r = 0; r < nr; ++r) {
+#pragma HLS PIPELINE II = 2
+#pragma HLS LOOP_TRIPCOUNT max = C::MAXSRUN
+#pragma HLS DEPENDENCE variable = sf type = inter dependent = false
+                const int fa = C::sfmt(sra[r]), fb = C::sfmt(srb[r]), fd = C::sfmt(srd[r]);
+                for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
-                const ap_int<C::WSR> a = sf[l][d.rs1], b = sf[l][d.rs2];
-                // Divide unconditionally by a safe divisor, then select: the L dividers run side by
-                // side (a guarded divide is a branch HLS serializes -- measured: four 42-cycle
-                // divides one after another, as cg_vector_task.h warns).
-                const ap_int<C::WSR> den = (b == 0) ? ap_int<C::WSR>(1) : b;
-                const ap_int<C::WSR> q = C::div_s(a, fa, den, fb, fd);
-                const ap_int<C::WSR> m = C::quant_s(C::conv_s(a, fa), fd);
-                outv[l] = d.funct == wf_vec::S_DIVZ ? ((b == 0) ? ap_int<C::WSR>(0) : q) : m;
+                    const ap_int<C::WSR> a = sf[l][sra[r]], b = sf[l][srb[r]];
+                    // a safe divisor, then select: the lanes' dividers side by side (Stage 5)
+                    const ap_int<C::WSR> den = (b == 0) ? ap_int<C::WSR>(1) : b;
+                    const ap_int<C::WSR> qv = C::div_s(a, fa, den, fb, fd);
+                    const ap_int<C::WSR> mv = C::quant_s(C::conv_s(a, fa), fd);
+                    sf[l][srd[r]] = sfn[r] == wf_vec::S_DIVZ ? ((b == 0) ? ap_int<C::WSR>(0) : qv) : mv;
+                }
             }
-            for (int l = 0; l < C::L; ++l) {
-#pragma HLS UNROLL
-                sf[l][d.rd] = outv[l];
-            }
+            if (st != wf_linalg::OK) break;
         } else if (d.funct == wf_vec::C_SETVL) {
             vl = d.imm1;
         } else if (d.funct == wf_vec::C_QPOP) {
@@ -710,36 +861,54 @@ def render_tasks(cfg: VecUnitConfig, qmem: dict[Format, int]) -> str:
     bufs = "\n".join([f"    hls::read_buf<blk_t> ri{j}(qi{j});" for j in range(NQI)]
                      + [f"    hls::write_buf<blk_t> wo{j}(qo{j});" for j in range(NQO)])
     acquire = "\n".join(
-        [f"            if (qien[{j}] && !hin[{j}]) {{ ri{j}.acquire(); hin[{j}] = true; }}"
-         for j in range(NQI)]
-        + [f"            if (qoen[{j}] && !hout[{j}]) {{ wo{j}.acquire(); hout[{j}] = true; }}"
-           for j in range(NQO)])
-    qreads = "\n".join(f"""\
+        [f"""\
                 {{
-                    const lg_t gq = qien[{j}] ? static_cast<blk_t&>(ri{j})[qip[{j}]] : lg_t(0);
-                    for (int l = 0; l < C::L; ++l) {{
+                    bool use = false;
+                    for (int q = 0; q < C::MAXRUN; ++q) {{
 #pragma HLS UNROLL
-                        qre[{j}][l] = C::conv_v(ap_int<C::WV>(gq(2 * C::WV * l + C::WV - 1, 2 * C::WV * l)), C::qfmt_in({j}));
-                        qim[{j}][l] = C::conv_v(ap_int<C::WV>(gq(2 * C::WV * l + 2 * C::WV - 1, 2 * C::WV * l + C::WV)), C::qfmt_in({j}));
+                        if (q < np && dqie[q][{j}]) use = true;
                     }}
-                    qip[{j}] += qis[{j}];
-                }}""" for j in range(NQI))
-    qwrites = "\n".join(f"""\
-                if (qoen[{j}]) {{  // one write an output queue
-                    lg_t gq = 0;
-                    for (int l = 0; l < C::L; ++l) {{
+                    if (use && !hin[{j}]) {{ ri{j}.acquire(); hin[{j}] = true; }}
+                }}""" for j in range(NQI)]
+        + [f"""\
+                {{
+                    bool use = false;
+                    for (int q = 0; q < C::MAXRUN; ++q) {{
 #pragma HLS UNROLL
-                        ap_int<C::WV> r = 0, m = 0;
-                        for (int t = 0; t < C::S; ++t) {{
+                        if (q < np && dqoe[q][{j}]) use = true;
+                    }}
+                    if (use && !hout[{j}]) {{ wo{j}.acquire(); hout[{j}] = true; }}
+                }}""" for j in range(NQO)])
+    qreads = "\n".join(f"""\
+                    {{
+                        const ap_uint<12> ptr = first ? dqip[p][{j}] : ap_uint<12>(qpi[{j}] + dqis[p][{j}]);
+                        qpi[{j}] = ptr;
+                        const lg_t gq = dqie[p][{j}] ? static_cast<blk_t&>(ri{j})[ptr] : lg_t(0);
+                        for (int l = 0; l < C::L; ++l) {{
 #pragma HLS UNROLL
-                            if (t == qoslot[{j}]) {{ r = wr[t][l]; m = wi[t][l]; }}
+                            qre[{j}][l] = C::conv_v(ap_int<C::WV>(gq(2 * C::WV * l + C::WV - 1, 2 * C::WV * l)), C::qfmt_in({j}));
+                            qim[{j}][l] = C::conv_v(ap_int<C::WV>(gq(2 * C::WV * l + 2 * C::WV - 1, 2 * C::WV * l + C::WV)), C::qfmt_in({j}));
                         }}
-                        gq(2 * C::WV * l + C::WV - 1, 2 * C::WV * l) = ap_uint<C::WV>(r);
-                        gq(2 * C::WV * l + 2 * C::WV - 1, 2 * C::WV * l + C::WV) = ap_uint<C::WV>(m);
-                    }}
-                    static_cast<blk_t&>(wo{j})[qop[{j}]] = gq;
-                    qop[{j}] += qos[{j}];
-                }}""" for j in range(NQO))
+                    }}""" for j in range(NQI))
+    qwrites = "\n".join(f"""\
+                    {{  // one write an output queue
+                        const ap_uint<12> ptr = first ? dqop[p][{j}] : ap_uint<12>(qpo[{j}] + dqos[p][{j}]);
+                        qpo[{j}] = ptr;
+                        if (dqoe[p][{j}]) {{
+                            lg_t gq = 0;
+                            for (int l = 0; l < C::L; ++l) {{
+#pragma HLS UNROLL
+                                ap_int<C::WV> rv = 0, mv = 0;
+                                for (int u = 0; u < C::S; ++u) {{
+#pragma HLS UNROLL
+                                    if (u == dqsl[p][{j}]) {{ rv = wr[u][l]; mv = wi[u][l]; }}
+                                }}
+                                gq(2 * C::WV * l + C::WV - 1, 2 * C::WV * l) = ap_uint<C::WV>(rv);
+                                gq(2 * C::WV * l + 2 * C::WV - 1, 2 * C::WV * l + C::WV) = ap_uint<C::WV>(mv);
+                            }}
+                            static_cast<blk_t&>(wo{j})[ptr] = gq;
+                        }}
+                    }}""" for j in range(NQO))
     pop = "\n".join(f"""\
             case {j}:
                 if (!hin[{j}]) ri{j}.acquire();

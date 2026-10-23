@@ -25,10 +25,15 @@ def _run(unit, root, workload="test"):
 
 @pytest.mark.xsi
 def test_xsi_generic_unit(tmp_path):
+    """Fusion off (``max_run = max_srun = 1``): with fused runs this configuration's format mix
+    drives csynth past 12 GB (Stage 6 record, open); CG and the matched filter run fused."""
+    import dataclasses
+
     from tests.vecunit.test_unit import rtl_config
     from waveflow.vecunit.unit import VecUnit
 
-    _run(VecUnit(name="vecunit", sim=Simulation(), cfg=rtl_config()), tmp_path)
+    cfg = dataclasses.replace(rtl_config(), max_run=1, max_srun=1)
+    _run(VecUnit(name="vecunit", sim=Simulation(), cfg=cfg), tmp_path)
 
 
 @pytest.mark.xsi

@@ -72,11 +72,11 @@ def golden(f, ar, ai, br, bi, nit):
     return ps_list, (state.xr, state.xi), ps_seen, rz_seen
 
 
-def assert_matches(f, ar, ai, br, bi, nit, *, mode="serial", skip_dead=True):
+def assert_matches(f, ar, ai, br, bi, nit, *, mode="serial", skip_dead=True, order="kind"):
     k, n = br.shape
     cfg = cg_config(f, Kmax=8, Nmax=32, L=4)
-    assert check(cfg, cg_programs(cfg, nit, k, n, skip_dead=skip_dead)) == []
-    r = run_cg(cfg, f, ar, ai, br, bi, nit, tx_id=7, mode=mode, skip_dead=skip_dead)
+    assert check(cfg, cg_programs(cfg, nit, k, n, skip_dead=skip_dead, order=order)) == []
+    r = run_cg(cfg, f, ar, ai, br, bi, nit, tx_id=7, mode=mode, skip_dead=skip_dead, order=order)
     assert r.status == 0
     p_gold, (xr, xi), ps_seen, rz_seen = golden(f, ar, ai, br, bi, nit)
     outs = r.outputs[0]
@@ -103,6 +103,8 @@ def test_element_major_passes_and_the_full_last_iteration(fname):
     prob = problem(f, 8, 12, seed=5)
     assert_matches(f, *prob, 3, mode="pass")
     assert_matches(f, *prob, 3, skip_dead=False)
+    assert_matches(f, *prob, 3, order="group")
+    assert_matches(f, *prob, 3, order="group", skip_dead=False, mode="pass")
 
 
 def test_zero_guards():
@@ -121,9 +123,13 @@ def test_zero_guards():
 
 
 def test_the_program_counts():
+    from waveflow.vecunit.model import exec_items
+
     f = FORMATS["W12g8"]
     cfg = cg_config(f)
     p = cg_programs(cfg, 3, 8, 32)
+    kinds = [it.kind for it in exec_items(p.execute, cfg)]
+    assert kinds.count("passes") == 11 and kinds.count("scalars") == 5  # by kind: 8 groups a run
     # start: setvl, 8 X = 0, 8 x 3, qpop, 8 vsse, qpush; per iteration 8 x 9 + 2 (the last 8 x 5 + 2)
     assert len(p.execute) == 1 + 8 + 24 + 1 + 8 + 1 + 2 * (8 * 9 + 2) + (8 * 5 + 2)
     assert len(p.load) == 4 and len(p.store) == 4

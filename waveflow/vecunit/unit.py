@@ -18,9 +18,10 @@ is a stream-of-blocks channel (a ping-pong of two blocks): the execute task take
 ``wf.vlse`` (or ``wf.vsse``) and gives it back at ``wf.qpop`` (``wf.qpush``), so the load task fills
 the next block while the current one is in use, and stalls when both are taken.
 
-The execute task's arithmetic is the interpreter's (:class:`~waveflow.vecunit.model.Machine`); its
-time is charged per instruction from :class:`VecTiming` -- rough constants until Stage 7 calibrates
-them.
+The execute task's arithmetic is the interpreter's (:class:`~waveflow.vecunit.model.Machine`). It
+issues in order, but fuses consecutive independent passes into one pipelined run, and consecutive
+independent scalar instructions into another (:func:`~waveflow.vecunit.model.exec_items`, Stage 6);
+its time is charged per item from :class:`VecTiming`, rough constants until Stage 7 calibrates them.
 """
 
 from __future__ import annotations
@@ -48,12 +49,11 @@ from waveflow.vecunit.model import (
     Block,
     Machine,
     block_from_matrix,
-    instr_status,
+    exec_items,
     load_status,
     matrix_from_block,
     operands,
-    pass_status,
-    split_passes,
+    program_prefix,
     store_status,
 )
 
@@ -61,21 +61,96 @@ from waveflow.vecunit.model import (
 CTRL_BITS = 64
 
 
+#: The features of a job's execute time (:func:`job_features`), and so of :class:`VecTiming`.
+FEATURES = ("job", "instr", "decode", "run", "elem", "srun", "sop", "divide", "control")
+
+
 @dataclass(frozen=True)
 class VecTiming:
-    """The execute task's cycles, per instruction: rough constants (Stage 1's witness for the pass
-    depth, the CG core's calibrated divide), until Stage 7 calibrates them."""
+    """The execute task's cycles: linear in counts its program gives before it runs
+    (:func:`job_features`), charged per item it issues (:func:`~waveflow.vecunit.model.exec_items`)
+    so the times inside a job are right too.  The defaults are rough (Stage 1's pass depth, Stage 5's
+    divider); :mod:`waveflow.vecunit.calib` fits them at RTL."""
 
-    instr: float = 1.0  # an instruction word read and decoded
-    pass_overhead: float = 4.0  # a pass's operand resolution and setup
-    pass_depth: float = 22.0  # its pipeline's fill and drain (Stage 1, witness 3)
-    divide: float = 45.0  # wf.sdivz
-    scalar: float = 2.0  # wf.smv
+    job: float = 4.0  # a job's start and its status
+    instr: float = 1.0  # an instruction word read
+    decode: float = 12.0  # a pass decoded into a run: its checks and operand resolution
+    run: float = 28.0  # a run: its queue blocks taken, its loop's fill and drain, its reductions
+    elem: float = 1.0  # an element of a run (the loop's II)
+    srun: float = 4.0  # a scalar run's start and its drain
+    sop: float = 2.0  # a scalar instruction (II 2: two reads and a write a lane)
+    divide: float = 42.0  # a scalar run with a divide: the pipelined divider's latency
     control: float = 1.0  # wf.setvl, wf.qpop, wf.qpush
     load: float = 3.0  # the loader's last lane group after its last word
 
-    def pass_cycles(self, n_instr: int, vl: int) -> float:
-        return self.instr * n_instr + self.pass_overhead + vl + self.pass_depth
+    def run_cycles(self, chains, vl: int) -> float:
+        """A run of passes: each decoded in turn, then one pipelined loop over all their elements."""
+        return (self.instr * sum(len(c) for c in chains) + self.decode * len(chains) + self.run
+                + self.elem * len(chains) * vl)
+
+    def srun_cycles(self, chains) -> float:
+        """A run of scalar instructions, into pipelined dividers."""
+        divides = any(int(c[0].funct) == I.SOp.DIVZ for c in chains)
+        return ((self.instr + self.sop) * len(chains) + self.srun
+                + (self.divide if divides else 0.0))
+
+    def predict(self, feats: dict) -> float:
+        """A job's execute cycles from its :func:`job_features`."""
+        return sum(getattr(self, f) * feats[f] for f in FEATURES)
+
+    @classmethod
+    def from_coefs(cls, coefs: dict) -> VecTiming:
+        return cls(**{k: float(v) for k, v in coefs.items() if k in cls.__dataclass_fields__})
+
+
+def job_features(prog, cfg: VecUnitConfig) -> dict:
+    """The counts a job's execute time is linear in: its instruction words, passes (each decoded),
+    runs, run elements (passes times ``VL``), scalar runs and instructions, scalar runs with a
+    divide, and control instructions -- the items :func:`~waveflow.vecunit.model.exec_items` issues.
+    """
+    from waveflow.vecunit.model import exec_items
+
+    f = dict.fromkeys(FEATURES, 0)
+    f["job"] = 1
+    vl = int(cfg.VLMAX)
+    for item in exec_items(list(prog), cfg):
+        if item.kind == "passes":
+            f["instr"] += sum(len(c) for c in item.chains)
+            f["decode"] += len(item.chains)
+            f["run"] += 1
+            f["elem"] += len(item.chains) * vl
+        elif item.kind == "scalars":
+            f["instr"] += len(item.chains)
+            f["srun"] += 1
+            f["sop"] += len(item.chains)
+            f["divide"] += any(int(c[0].funct) == I.SOp.DIVZ for c in item.chains)
+        elif item.kind == "control":
+            x = item.chains[0][0]
+            f["instr"] += 1
+            f["control"] += 1
+            if int(x.funct) == I.COp.SETVL:
+                vl = int(x.imm1)
+    return f
+
+
+def _calibrated() -> VecTiming:
+    """The fitted timing when :mod:`waveflow.vecunit.calib` has filed one, else the defaults."""
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "calib" / "timing.json"
+    if path.is_file():
+        return VecTiming.from_coefs(json.loads(path.read_text(encoding="utf-8"))["coefs"])
+    return VecTiming()
+
+
+def _slow_path(cfg: VecUnitConfig, n: int) -> bool:
+    """Whether the loader and the store move an ``n``-column matrix a value a cycle (``L`` does not
+    divide ``n``, or a lane group is not whole words: ``vecunit_core.h``) rather than a word."""
+    from waveflow.linalg.lanes import elems_per_word
+
+    lw = elems_per_word(cfg.lane_bits, cfg.word_bits)
+    return bool(n % cfg.L or cfg.L % lw)
 
 
 @dataclass
@@ -86,7 +161,7 @@ class _VecPart(FreeRunMod):
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
     #: the configuration is a build input that is not a template parameter
     build_fields: ClassVar[tuple[str, ...]] = ("cfg",)
-    timing: ClassVar[VecTiming] = VecTiming()
+    timing: ClassVar[VecTiming] = _calibrated()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -124,12 +199,6 @@ class _VecPart(FreeRunMod):
         """Fatal: never take input again (a reset clears it)."""
         yield self.env.event()
 
-    @staticmethod
-    def _program(words) -> tuple[int, list[I.Instr], bool]:
-        """A program burst: ``(tx_id, instructions, whether ninstr matched the burst)``."""
-        w = [int(x) for x in np.asarray(words, np.uint64).reshape(-1)]
-        tx_id, n = w[0] & 0xFFFF, (w[0] >> 16) & 0xFFFF
-        return tx_id, [I.Instr.decode(x) for x in w[1:]], n == len(w) - 1
 
 
 @dataclass
@@ -156,19 +225,26 @@ class VecLoad(_VecPart):
         if self.halted:
             yield from self._halt()
         cfg = self.cfg
-        _tx, prog, framed = self._program((yield from self.s_prog.get()))
+        _tx, prog, framed = program_prefix((yield from self.s_prog.get()))
         for x in prog:
-            if not framed or not load_status(x, cfg):
+            if not load_status(x, cfg):
                 self.halted = True
                 return
             k, n = int(x.imm1), int(x.imm2)
             words = yield from self.s_in[x.rs1].get()
+            # The RTL loader takes a word a cycle when L divides n and a group is whole words;
+            # otherwise a value a cycle (the row padding), slower than the words arrive.
+            slow = k * n - len(np.asarray(words).reshape(-1)) if _slow_path(cfg, n) else 0
+            if slow > 0:
+                yield self.timeout(slow * self.clk.period)
             re, im = from_words(words, k * n, cfg.in_queue_formats[x.rd], cfg.lane_bits,
                                 cfg.word_bits)
             blk = yield from self.q[x.rd].acquire_write()
             blk.payload = block_from_matrix(re.reshape(k, n), im.reshape(k, n), cfg)
             yield self.timeout(self.timing.load * self.clk.period)
             yield from self.q[x.rd].commit_write(blk)
+        if not framed:  # the burst's framing failed at the next word: stop
+            self.halted = True
 
 
 @dataclass
@@ -195,45 +271,42 @@ class VecExec(_VecPart):
         if self.halted:
             yield from self._halt()
         cfg, t, period = self.cfg, self.timing, self.clk.period
-        tx_id, prog, framed = self._program((yield from self.s_prog.get()))
+        tx_id, prog, framed = program_prefix((yield from self.s_prog.get()))
         m = Machine(cfg)
         held_out: list = [None] * cfg.NQO  # the block handle of each output queue's tail
-        st = Status.OK if framed else Status.BAD_LENGTH
-        for chain in split_passes(prog, cfg.S) if framed else []:
-            for x in chain:
-                st = instr_status(x, cfg)
-                if st != Status.OK:
-                    break
-            if st == Status.OK and chain[0].vector:
-                if chain[-1].chain or not all(y.vector for y in chain):
-                    st = Status.BAD_OP
-                else:
-                    st = pass_status(chain, cfg)
-            if st != Status.OK:
+        st = Status.OK
+        for item in exec_items(prog, cfg, cut=not framed):
+            if item.kind == "error":
+                st = Status(item.status)
                 break
-            x = chain[0]
-            if x.vector:
-                for y in chain:  # take each queue block at its first use
-                    o = operands(y)
-                    if o.qread is not None and m.head[o.qread] is None:
-                        blk = yield from self.qi[o.qread].acquire_read()
-                        m.head[o.qread] = blk.payload
-                    if o.qwrite is not None and m.tail[o.qwrite] is None:
-                        held_out[o.qwrite] = yield from self.qo[o.qwrite].acquire_write()
-                        m.tail[o.qwrite] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
-                m.run_pass(chain, "serial")
-                yield self.timeout(t.pass_cycles(len(chain), m.vl) * period)
-            elif int(x.opcode) == I.Opcode.SCALAR:
-                m.scalar(x)
-                yield self.timeout((t.divide if int(x.funct) == I.SOp.DIVZ else t.scalar) * period)
-            elif int(x.funct) == I.COp.SETVL:
+            if item.kind == "passes":
+                for chain in item.chains:  # a run takes every queue block it uses at its start
+                    for y in chain:
+                        o = operands(y)
+                        if o.qread is not None and m.head[o.qread] is None:
+                            blk = yield from self.qi[o.qread].acquire_read()
+                            m.head[o.qread] = blk.payload
+                        if o.qwrite is not None and m.tail[o.qwrite] is None:
+                            held_out[o.qwrite] = yield from self.qo[o.qwrite].acquire_write()
+                            m.tail[o.qwrite] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
+                for chain in item.chains:
+                    m.run_pass(list(chain), "serial")
+                yield self.timeout(t.run_cycles(item.chains, m.vl) * period)
+                continue
+            if item.kind == "scalars":
+                for chain in item.chains:
+                    m.scalar(chain[0])
+                yield self.timeout(t.srun_cycles(item.chains) * period)
+                continue
+            x = item.chains[0][0]
+            if int(x.funct) == I.COp.SETVL:
                 m.control(x)
-                yield self.timeout(t.control * period)
+                yield self.timeout((t.instr + t.control) * period)
             elif int(x.funct) == I.COp.QPOP:
                 if m.head[x.rs1] is None:  # released without a read: take it first
                     yield from self.qi[x.rs1].acquire_read()
                 m.head[x.rs1] = None
-                yield self.timeout(t.control * period)
+                yield self.timeout((t.instr + t.control) * period)
                 yield from self.qi[x.rs1].release_read()
             else:  # QPUSH
                 if m.tail[x.rd] is None:
@@ -241,8 +314,9 @@ class VecExec(_VecPart):
                     m.tail[x.rd] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
                 held_out[x.rd].payload = m.tail[x.rd]
                 m.tail[x.rd] = None
-                yield self.timeout(t.control * period)
+                yield self.timeout((t.instr + t.control) * period)
                 yield from self.qo[x.rd].commit_write(held_out[x.rd])
+        yield self.timeout(t.job * period)
         s = I.VecStatus()
         s.tx_id, s.status = int(tx_id), int(st)
         yield from self.m_status.write(np.asarray(s.serialize(word_bw=CTRL_BITS), np.uint64))
@@ -274,9 +348,9 @@ class VecStore(_VecPart):
         if self.halted:
             yield from self._halt()
         cfg = self.cfg
-        tx_id, prog, framed = self._program((yield from self.s_prog.get()))
+        tx_id, prog, framed = program_prefix((yield from self.s_prog.get()))
         for x in prog:
-            if not framed or not store_status(x, cfg):
+            if not store_status(x, cfg):
                 self.halted = True
                 return
             k, n = int(x.imm1), int(x.imm2)
@@ -286,10 +360,18 @@ class VecStore(_VecPart):
             resp.tx_id, resp.tag, resp.k, resp.n = int(tx_id), int(x.rs2), k, n
             out = self.s_out[x.rd]
             yield from out.write(np.asarray(resp.serialize(word_bw=cfg.word_bits), np.uint64))
+            if _slow_path(cfg, n):  # a value a cycle: the words leave at that pace
+                from waveflow.linalg.lanes import nwords
+
+                slow = k * n - nwords(k * n, cfg.lane_bits, cfg.word_bits)
+                if slow > 0:
+                    yield self.timeout(slow * self.clk.period)
             yield from out.write(np.asarray(
                 to_words(re, im, cfg.out_queue_formats[x.rs1], cfg.lane_bits, cfg.word_bits),
                 np.uint64))
             yield from self.q[x.rs1].release_read()
+        if not framed:
+            self.halted = True
 
 
 @dataclass

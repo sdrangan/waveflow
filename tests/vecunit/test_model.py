@@ -354,3 +354,59 @@ def test_program_errors_are_refused():
     with pytest.raises(ProgramError, match="empty"):
         m.run_pass([I.vlse(0, 0, 0, 1)], "serial")
     assert isinstance(Block.empty(4, 4), Block)
+
+
+# --- how the execute task issues a program (Stage 6) -------------------------------------------------
+
+
+def test_runs_fuse_independent_passes_and_scalars():
+    from waveflow.vecunit.model import exec_items
+
+    cfg = centre()
+    prog = [I.setvl(8),
+            I.vmv_v_i(0, 0), I.vmv_v_i(1, 0),       # a run
+            I.vadd_vv(2, 0, 1),                      # reads v0, v1, which the run writes: a new run
+            I.vdotr(0, 3, 3),                        # independent: joins it
+            I.vmacc_vs(3, 0, 2),                     # reads s0 and v2, which it writes: a new run
+            I.sdivz(1, 0, 0), I.sdivz(2, 0, 0),      # a scalar run
+            I.smv(3, 1),                             # reads s1, which it writes: a new one
+            I.qpop(0)]
+    items = exec_items(prog, cfg)
+    assert [(it.kind, len(it.chains)) for it in items] == [
+        ("control", 1), ("passes", 2), ("passes", 2), ("passes", 1), ("scalars", 2),
+        ("scalars", 1), ("control", 1)]
+
+
+def test_a_run_holds_at_most_max_run_passes_and_forwarding_is_no_hazard():
+    from waveflow.vecunit.model import exec_items
+
+    f = Format(12, 4)
+    cfg = VecUnitConfig(group_formats=(f,) * 8, scalar_formats=(f,), in_queue_formats=(f,),
+                        out_queue_formats=(f,), max_run=3)
+    # each pass writes v1 and reads it forwarded: no pass reads v1 from the register file
+    prog = []
+    for i in range(5):
+        prog += [I.vmv_v_v(1, 0).c, I.vmv_v_v(2 + 4 * (i % 2), 1)]
+    items = exec_items(prog, cfg)
+    assert [len(it.chains) for it in items] == [3, 2]
+
+
+def test_an_error_while_gathering_runs_what_was_gathered_first():
+    from waveflow.vecunit.model import exec_items
+
+    cfg = centre()
+    items = exec_items([I.vmv_v_i(0, 0), I.vmv_v_i(1, 0), I.vmv_v_v(8, 0)], cfg)
+    assert [(it.kind, it.status) for it in items] == [("passes", 0), ("error", Status.BAD_DIMS)]
+    items = exec_items([I.vmv_v_i(0, 0), I.vmv_v_i(1, 0).c], cfg, cut=True)
+    assert [(it.kind, it.status) for it in items] == [("passes", 0), ("error", Status.BAD_LENGTH)]
+
+
+@pytest.mark.parametrize("m, n, runs", [(3, 3, 3), (2, 3, 1), (5, 3, 2), (0, 2, 0)])
+def test_a_program_burst_runs_up_to_its_framing_error(m, n, runs):
+    from waveflow.vecunit.asm import job_words
+    from waveflow.vecunit.model import program_prefix
+
+    words = job_words(7, [I.setvl(1)] * m)
+    words[0] = int(words[0]) & 0xFFFF | n << 16  # claim n instructions
+    tx, prog, ok = program_prefix(words)
+    assert tx == 7 and len(prog) == runs and ok == (m == n)

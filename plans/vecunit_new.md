@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-5 done 2026-10-22 (drafted 2026-10-20 with the user).
+**Status:** In progress: Stages 0-6 done 2026-10-22 (one open item in Stage 6) (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -708,6 +708,52 @@ change:
 
 **Gate:** each measured against Stage 5's numbers, kept only if it pays. **Pause.**
 
+#### Record: Stage 6 (2026-10-22) -- fused runs; Vitis HLS / Vivado xsim 2024.1
+
+**What was built** (in-order issue, no ISA change, no new task). The execute task's decode gathers a
+**run**: consecutive passes while none reads a group or a scalar an earlier pass of the run writes
+(bit masks; a pass that would is held over to start the next run), up to `max_run` (8). The run's
+passes go into small descriptor memories, and **one pipelined loop over all their elements** (II 1,
+depth 24) executes them: the pipeline fills once a run instead of once a pass. Consecutive
+independent scalar instructions (`max_srun`, 8) run as one pipelined loop (II 2) on pipelined
+dividers. Fusion changes no result: a later pass of a run writes a group only after an earlier pass
+read it (`VL` plus the depth later). The rule is one definition, `model.exec_items`, which pysim's
+timing uses and the HLS decode mirrors (an error while gathering runs the run gathered so far, then
+stops: the job still stops exactly at the bad instruction; a program burst's framing error stops
+it with `BAD_LENGTH` after the prefix that streamed, in pysim as at RTL: `model.program_prefix`).
+CG's program gains `order="kind"` (the default): every group's first pass, every `alpha`, every
+second pass, every `beta`, every third pass -- 11 runs of 8 passes and 5 runs of 8 divides a job,
+where `order="group"` gives 46 pass runs and 40 scalar runs.
+
+**Measured** (RTL bit-exact against pysim on CG `"test"` and `"steady"` and the matched filter's
+`"steady"`; csynth est. 3.10 ns, Fmax 322 MHz):
+
+| | Stage 5 | Stage 6 | `CgVectorUnit` |
+|---|---|---|---|
+| CG, a steady `8 x 32` job of three iterations | 7,295 | **3,359** | 3,581 |
+| matched filter, a frame (input floor 1,152) | 1,448 | **1,408** (1.22x) | -- |
+| unit LUT / FF / DSP / BRAM (CG configuration) | 59.6k / 26.8k / 50 / 28 | 82.1k / 71.7k / 53 / 36 | 21.6k / 11.9k / 52 / 20 |
+
+**The cycle target is met: CG on the unit runs 6 % faster than `CgVectorUnit`**, because the program
+groups the eight column groups' divides into pipelined runs, which the fixed core's loop order
+serializes. The price is resources: the execute task is 71.4k LUT, 69.0k FF -- the fused loop 32.3k
+/ 27.5k (48 DSP), the scalar run's four pipelined dividers 13.2k / **32.6k FF** (one a lane at II 2),
+the run decode 14.8k LUT. Fewer, shared dividers would trade those flip-flops for divide time: a DSE
+knob, not taken here.
+
+**Where the CG job's 3,359 cycles go now** (233 instruction words; 88 passes in 11 runs, 704
+elements; 5 divide runs of 8; 9 control): about 20 cycles of decode a pass -- some 1,760 cycles, the
+largest share. A decode stage that runs ahead of execution (its own task, feeding run descriptors)
+would hide most of it; recorded as the next optimization, not built.
+
+**Open (rule 3: two hypotheses tested, stopped):** the generic RTL gate's configuration
+(`rtl_config`: five vector formats mixing round/truncate and saturate/wrap) drives csynth of the fused
+body past 12 GB (killed; 24.7 GB on the first try). H1 -- its small arrays (8 groups, 24-group
+blocks): rejected, the same formats at CG's sizes also exceed 12 GB. H2 -- fusion: with `max_run =
+max_srun = 1` the same configuration synthesizes in 65 s at 1.27 GB. So fusion and this format mix
+together; CG's formats (three vector, all round and saturate) and the matched filter's synthesize in
+under 2 minutes at about 1.3 GB. The generic RTL gate runs with fusion off until this is resolved.
+
 ### Stage 7: calibration, resource model, docs
 
 Pre-register the configurations (rule 5). Calibrate the pass and divide costs in the harness
@@ -759,3 +805,4 @@ gates pass. **Pause.**
 | 2026-10-22 | 3 | The matched filter (26 cases) and CG (104 cases: four format sets, `nit` 1-8, the zero guards) as programs, bit-exact on the interpreter with a closed-loop systolic harness | Stage 3 record |
 | 2026-10-22 | 4 | pysim: `VecLoad` / `VecExec` / `VecStore` / `VecUnit`, the harness, random and application workloads; bit-exact against the interpreter on two generic configurations, CG and the matched filter; a fatal error | Stage 4 record |
 | 2026-10-22 | 5 | Generated HLS bodies; RTL bit-exact (generic, CG, matched filter); CG 7,295 cycles a job against CgVectorUnit's 3,581 (2.04x, Vitis 2024.1), 59.6k LUT against 21.6k; the matched filter 1.26x its input floor | Stage 5 record |
+| 2026-10-22 | 6 | Fused runs (in-order issue): CG 3,359 cycles a job against CgVectorUnit's 3,581 (0.94x, Vitis 2024.1), the matched filter 1.22x its floor; 82k LUT / 72k FF. Open: a mixed-mode format set with fusion exceeds 12 GB in csynth | Stage 6 record |

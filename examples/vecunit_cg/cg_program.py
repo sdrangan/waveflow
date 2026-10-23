@@ -21,6 +21,10 @@ pass meets a bank conflict -- and five scalars ``ps_g, al_g, be_g, rz_g, rz2_g``
         wf.vmadd.vs.c P_g, be_g, R_g ; wf.vsse qP, P_g, g          # pass 3: P = q(P beta + R), out
     ... wf.qpop qS ; wf.qpush qP
 
+By default (``order="kind"``) each kind of step runs for every group before the next kind -- every
+group's first pass, every ``alpha``, every second pass, every ``beta``, every third pass -- so the
+execute task fuses each kind into one run (Stage 6); ``order="group"`` keeps the order above.
+
 The names ``rz_g`` and ``rz2_g`` swap every iteration (renaming in the program, not in hardware), so
 no ``wf.smv`` is needed.  In the last iteration ``R``, ``rz'``, ``beta`` and ``P`` feed nothing, so
 by default (``skip_dead``) its second pass is ``vmacc.vs.c X_g, al_g, P_g ; wf.vsse qX, X_g, g`` and
@@ -68,8 +72,16 @@ def cg_config(f: cg.CgFormats, *, Kmax: int = 8, Nmax: int = 32, L: int = 4,
 
 
 def cg_programs(cfg: VecUnitConfig, nit: int, k: int, n: int, *, skip_dead: bool = True,
-                tag0: int = 0) -> Programs:
-    """The three programs of one CG job: ``nit`` iterations on a ``k x n`` right-hand side."""
+                order: str = "kind", tag0: int = 0) -> Programs:
+    """The three programs of one CG job: ``nit`` iterations on a ``k x n`` right-hand side.
+
+    ``order="group"`` is the plan's: per column group, its three passes and two divides.
+    ``order="kind"`` (the default) does the same work kind by kind -- every group's first pass, then
+    every group's ``alpha``, then every group's second pass, every ``beta``, every third pass -- so
+    the execute task fuses each kind into one run (Stage 6): the column groups are independent CG
+    problems, so no instruction of a kind reads what another of that kind writes."""
+    if order not in ("group", "kind"):
+        raise ValueError(f"order must be 'group' or 'kind', not {order!r}")
     G = cfg.groups_per_row(n)
     ex = [I.setvl(k)]
     ex += [I.vmv_v_i(regs(g)[0], 0) for g in range(G)]
@@ -81,20 +93,27 @@ def cg_programs(cfg: VecUnitConfig, nit: int, k: int, n: int, *, skip_dead: bool
     swapped = False
     for it in range(1, nit + 1):
         last = it == nit
+        steps: list[list] = [[] for _ in range(5)]  # pass 1, alpha, pass 2, beta, pass 3: per group
         for g in range(G):
             X, R, P, S = regs(g)
             ps, al, be, rz, rz2 = scalars(g)
             if swapped:
                 rz, rz2 = rz2, rz
-            ex += [I.vlse(S, Q_S, g, G).c, I.vdotr(ps, P, S), I.sdivz(al, rz, ps)]
+            steps[0].append([I.vlse(S, Q_S, g, G).c, I.vdotr(ps, P, S)])
+            steps[1].append([I.sdivz(al, rz, ps)])
             if last and skip_dead:
-                ex += [I.vmacc_vs(X, al, P).c, I.vsse(Q_X, X, g, G)]
+                steps[2].append([I.vmacc_vs(X, al, P).c, I.vsse(Q_X, X, g, G)])
                 continue
-            ex += [I.vmacc_vs(X, al, P).c, I.vnmsac_vs(R, al, S).c, I.vdotr(rz2, R, R),
-                   I.sdivz(be, rz2, rz)]
-            ex += [I.vmadd_vs(P, be, R).c, I.vsse(Q_P, P, g, G)] if not last else [I.vmadd_vs(P, be, R)]
+            steps[2].append([I.vmacc_vs(X, al, P).c, I.vnmsac_vs(R, al, S).c, I.vdotr(rz2, R, R)])
+            steps[3].append([I.sdivz(be, rz2, rz)])
             if last:
-                ex += [I.vsse(Q_X, X, g, G)]
+                steps[4].append([I.vmadd_vs(P, be, R), I.vsse(Q_X, X, g, G)])
+            else:
+                steps[4].append([I.vmadd_vs(P, be, R).c, I.vsse(Q_P, P, g, G)])
+        if order == "kind":
+            ex += [x for step in steps for group in step for x in group]
+        else:
+            ex += [x for g in range(G) for step in steps if g < len(step) for x in step[g]]
         ex += [I.qpop(Q_S), I.qpush(Q_X if last else Q_P)]
         swapped = not swapped
     load = [I.ld(Q_B, PORT, k, n)] + [I.ld(Q_S, PORT, k, n) for _ in range(nit)]
@@ -104,12 +123,12 @@ def cg_programs(cfg: VecUnitConfig, nit: int, k: int, n: int, *, skip_dead: bool
 
 
 def run_cg(cfg: VecUnitConfig, f: cg.CgFormats, ar, ai, br, bi, nit: int, *, tx_id: int = 0,
-           mode: str = "pass", skip_dead: bool = True) -> JobResult:
+           mode: str = "pass", skip_dead: bool = True, order: str = "kind") -> JobResult:
     """One CG solve through the interpreter: ``B`` in, and each ``S = cg.mm_step(A, P)`` computed
     from the ``P`` the unit has just emitted (the systolic array's part).  ``result.outputs[0]``
     holds ``P0 .. P(nit-1)`` then ``X``."""
     k, n = np.shape(br)
-    progs = cg_programs(cfg, nit, k, n, skip_dead=skip_dead)
+    progs = cg_programs(cfg, nit, k, n, skip_dead=skip_dead, order=order)
 
     def systolic(port: int, result: JobResult):
         _resp, pr, pi = result.outputs[PORT][-1]
