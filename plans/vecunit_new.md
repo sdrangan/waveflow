@@ -754,6 +754,17 @@ max_srun = 1` the same configuration synthesizes in 65 s at 1.27 GB. So fusion a
 together; CG's formats (three vector, all round and saturate) and the matched filter's synthesize in
 under 2 minutes at about 1.3 GB. The generic RTL gate runs with fusion off until this is resolved.
 
+**Revisited after Stage 7 (2026-10-22; still open, rule 3: two more hypotheses, stopped).** H3 -- the
+wrap-around formats: rejected; the same configuration with every format saturating, fused, was killed
+at 12.0 GB after 501 s. H4 -- the quantizer's per-format wrap `switch`, a real multi-width mux here
+(vector formats 12 and 14 bits wide; CG's and the matched filter's are one width each): rejected;
+emitting wrap cases only for wrapping formats (bit-identical) left the all-saturating configuration
+with no wrap case at all, and it was killed at 12.1 GB after 491 s. The change was reverted (it would
+have altered the RTL Stage 7 calibrated). What still separates this set from CG's: the union width
+(`WV` 14 against 12, from the 14-bit format) and four distinct vector formats against three; a
+rounding/truncation mix alone is not it (the matched filter has one and builds). Each is one csynth
+of under 10 minutes to the watchdog.
+
 ### Stage 7: calibration, resource model, docs
 
 Pre-register the configurations (rule 5). Calibrate the pass and divide costs in the harness
