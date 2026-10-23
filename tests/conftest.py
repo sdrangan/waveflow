@@ -217,7 +217,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: with its memory stand-in at 128 bits (tests/linalg/test_systolic_engine.py).
 #: 239 -> 238 on 2026-10-19: the systolic unit's 390-cycle gate retired with the unit's docs (its
 #: other gates are quarantined with the MIMO-CG example, and still counted).
-WANT_XSI_GATES = 238
+#: 238 -> 241 on 2026-10-22 (plans/vecunit_new.md, Stage 5): the vector unit at RTL, bit-exact against
+#: pysim -- a generic configuration on random jobs, CG and the matched filter
+#: (tests/vecunit/test_unit_xsi.py).
+WANT_XSI_GATES = 241
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

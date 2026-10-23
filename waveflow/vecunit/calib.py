@@ -15,14 +15,22 @@ non-negative least squares; the held-out score is each held-out job's interval, 
 against RTL, end to end -- the matched filter's included, whose loader binds.
 
 **Resources.**  csynth's estimate of the unit (LUT, FF, DSP, BRAM) over the configurations below,
-linear in features of the configuration (:func:`resource_features`); the held-out configurations are
-scored once.
+linear in terms of the configuration (:func:`config_features`, :data:`RESOURCE_BASIS`); the held-out
+configurations are scored once.
 
 Every set uses formats that keep every product and the union datapath moderate: the Stage 6 record
 has a format mix whose fused body csynth cannot build.
 """
 
 from __future__ import annotations
+
+import contextlib
+import importlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
 
 #: Execute-timing jobs on the CG configuration (``examples.vecunit_cg.cg_unit.CgVecUnit``):
 #: ``random`` random jobs (seeded) over every instruction form with blocks of at most ``n_max``
@@ -52,3 +60,358 @@ RESOURCE_HOLDOUT = ((8, 16, 2, "all", "cg"), (4, 8, 3, "mul1", "mf"), (2, 16, 3,
 
 #: Held-out scores the plan asks to report (systolic plan's targets): mean and worst relative error.
 TARGET_MEAN, TARGET_WORST = 0.03, 0.06
+
+
+#: The units the sets above name, as ``module:class`` (the library imports no example).
+UNITS = {"cg": "examples.vecunit_cg.cg_unit:CgVecUnit", "mf": "examples.vecunit_mf.mf_unit:MfVecUnit"}
+#: The fitted models' names on the packaged platform (``models/<name>/params.json``).
+TIMING_MODEL, RESOURCE_MODEL = "vecunit_timing", "vecunit_resources"
+
+
+def model_path(name: str) -> Path:
+    """Where a fitted model is filed: the packaged platform the linear-algebra models share
+    (:func:`waveflow.linalg.cost.platform_dir`)."""
+    from waveflow.linalg.cost import platform_dir
+
+    return platform_dir() / "models" / name / "params.json"
+
+
+def make_unit(which: str, **kw):
+    """A fresh unit of :data:`UNITS` (``"cg"``, ``"mf"``) on its own simulation."""
+    from waveflow.simulation.simulation import Simulation
+
+    mod, cls = UNITS[which].split(":")
+    return getattr(importlib.import_module(mod), cls)(name="vecunit", sim=Simulation(), **kw)
+
+
+# -- timing ---------------------------------------------------------------------------------------
+def rtl_intervals(root) -> list[int]:
+    """Each job's interval at RTL: the cycles between its status and the previous job's.  The first
+    job's start is the run's, so it has none: the list starts at the second job."""
+    from waveflow.vecunit.report import job_cycles
+
+    return np.diff(job_cycles(Path(root))).astype(int).tolist()
+
+
+def features(unit, kind: str) -> list[dict]:
+    """The execute features of each job of *unit*'s workload *kind* but the first (as
+    :func:`rtl_intervals`)."""
+    from waveflow.vecunit.unit import job_features
+
+    return [job_features(p.execute, unit.cfg) for _tx, p, _inputs in unit.jobs(kind)][1:]
+
+
+@contextlib.contextmanager
+def _timing(timing):
+    """pysim's tasks charged from *timing* for the duration (it is a class attribute, read when the
+    module is imported)."""
+    from waveflow.vecunit.unit import _VecPart
+
+    saved = _VecPart.timing
+    _VecPart.timing = timing
+    try:
+        yield
+    finally:
+        _VecPart.timing = saved
+
+
+def pysim_intervals(unit, kind: str, timing=None) -> list[float]:
+    """:func:`rtl_intervals` in pysim: *unit* in its harness on workload *kind*, each status timed as
+    it leaves, charged from *timing* (default: the unit's)."""
+    from waveflow.hw.harness import harness
+
+    with _timing(timing if timing is not None else type(unit).timing):
+        sysm = harness(unit, workload=kind, n_cycles=10**7)
+        sink = sysm.stand_ins["m_status"]  # type: ignore[attr-defined]  # harness() attaches them
+        times: list[float] = []
+        rx = sink.stream_ep.rx_proc
+
+        def timed(words):
+            times.append(sink.env.now)
+            yield from rx(words)
+
+        sink.stream_ep.rx_proc = timed
+        sysm.run()
+    return np.diff(np.asarray(times) * unit.clk.freq).tolist()
+
+
+def fit_timing(feats: list[dict], cycles) -> dict:
+    """The coefficients of :data:`waveflow.vecunit.unit.FEATURES`: non-negative least squares on the
+    relative error (each job weighted by ``1 / cycles**2``), the score's own measure."""
+    from sklearn.linear_model import LinearRegression  # type: ignore[import-untyped]
+
+    from waveflow.vecunit.unit import FEATURES
+
+    X = np.array([[f[k] for k in FEATURES] for f in feats], dtype=float)
+    y = np.asarray(cycles, dtype=float)
+    reg = LinearRegression(fit_intercept=False, positive=True).fit(X, y, sample_weight=1.0 / y**2)
+    return {k: float(c) for k, c in zip(FEATURES, reg.coef_)}
+
+
+def errors(pred, meas) -> dict:
+    """Relative errors of *pred* against *meas*: each, their mean and the worst."""
+    p, m = np.asarray(pred, dtype=float), np.asarray(meas, dtype=float)
+    if p.shape != m.shape:
+        raise ValueError(f"{len(p)} predicted against {len(m)} measured")
+    rel = np.abs(p - m) / m
+    return {"rel": [round(float(r), 4) for r in rel], "mean": float(rel.mean()),
+            "worst": float(rel.max())}
+
+
+def _file(name: str, record: dict) -> Path:
+    from waveflow.linalg.cost import PART, TOOL
+
+    path = model_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"model": name, "part": PART, "tool": TOOL, **record}, indent=1)
+                    + "\n", encoding="utf-8")
+    return path
+
+
+def calibrate_timing(calib_root) -> dict:
+    """Fit the execute timing on the RTL run of the CG unit's ``"calib"`` workload at *calib_root*
+    and file it; returns the record (with the fit's in-sample errors: the model's, and pysim's
+    charged from it)."""
+    from waveflow.vecunit.unit import FEATURES, VecTiming
+
+    unit = make_unit("cg")
+    feats, meas = features(unit, "calib"), rtl_intervals(calib_root)
+    coefs = fit_timing(feats, meas)
+    t = VecTiming.from_coefs(coefs)
+    record = {"features": list(FEATURES), "coefs": coefs,
+              "fit": {"set": "cg calib", "jobs": len(meas), "rtl": meas,
+                      "model": errors([t.predict(f) for f in feats], meas),
+                      "pysim": errors(pysim_intervals(unit, "calib", t), meas)},
+              "plan": "plans/vecunit_new.md Stage 7"}
+    _file(TIMING_MODEL, record)
+    return record
+
+
+def score_timing(roots: dict) -> dict:
+    """The held-out score, once (rule 5): each :data:`TIMING_HOLDOUT` scenario's job intervals, pysim
+    charged from the filed fit against the RTL run at ``roots[(unit, workload)]``; filed beside the
+    fit."""
+    from waveflow.vecunit.unit import VecTiming
+
+    path = model_path(TIMING_MODEL)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if "holdout" in record:
+        raise RuntimeError(f"{path}: the held-out set is scored once, and it has been")
+    t = VecTiming.from_coefs(record["coefs"])
+    out, pred, meas = {}, [], []
+    for which, kind in TIMING_HOLDOUT:
+        m = rtl_intervals(roots[(which, kind)])
+        p = pysim_intervals(make_unit(which), kind, t)
+        out[f"{which} {kind}"] = {"rtl": m, "pysim": [round(x, 1) for x in p], **errors(p, m)}
+        pred += p
+        meas += m
+    out["all"] = {k: v for k, v in errors(pred, meas).items() if k != "rel"}
+    out["targets"] = {"mean": TARGET_MEAN, "worst": TARGET_WORST}
+    record["holdout"] = out
+    _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
+    return out
+
+
+
+# -- resources ------------------------------------------------------------------------------------
+def resource_config(spec):
+    """The configuration a :data:`RESOURCE_FIT` / :data:`RESOURCE_HOLDOUT` row names.  ``"cg"``: the
+    CG unit's formats and layout (four groups a column group, so ``Nmax = L * NG / 4``; blocks of 8
+    rows); ``"mf"``: the matched filter's (its four group formats repeated to ``NG``; blocks of 64
+    rows and 8 columns).  ``"mul1"``: only slot 0 has a multiplier."""
+    import dataclasses
+
+    from waveflow.vecunit.config import Cap
+
+    L, NG, S, caps, fmts = spec
+    if fmts == "cg":
+        cfg = make_unit("cg", L=L, Nmax=L * NG // 4).cfg
+    else:
+        cfg = make_unit("mf", L=L).cfg
+        g = cfg.group_formats
+        cfg = dataclasses.replace(cfg, group_formats=tuple(g[i % len(g)] for i in range(NG)))
+    rest = Cap.MOVE | Cap.LOAD | Cap.STORE
+    slot_caps = () if caps == "all" else (Cap.ALL,) + (rest,) * (S - 1)
+    cfg = dataclasses.replace(cfg, S=S, slot_caps=slot_caps)
+    if cfg.NG != NG:
+        raise ValueError(f"{spec}: the configuration has {cfg.NG} groups")
+    return cfg
+
+
+def config_features(cfg) -> dict:
+    """What a configuration's resources can depend on: its sizes and the datapath's widths
+    (:func:`waveflow.vecunit.hls.widths`)."""
+    from waveflow.vecunit.config import Cap
+    from waveflow.vecunit.hls import widths
+
+    w = widths(cfg)
+    caps = [int(c) for c in cfg.slot_caps]
+    return {"L": cfg.L, "NG": cfg.NG, "S": cfg.S, "NB": cfg.NB, "VLMAX": cfg.VLMAX,
+            "Kmax": cfg.Kmax, "NGQ": cfg.NGQ, "NQI": cfg.NQI, "NQO": cfg.NQO, "NS": cfg.NS,
+            "n_mul": sum(bool(c & int(Cap.MUL | Cap.DOT)) for c in caps),
+            "n_dot": sum(bool(c & int(Cap.DOT)) for c in caps),
+            "n_vfmt": len(cfg.vector_formats), "n_sfmt": len(cfg.scalar_format_set),
+            "max_run": cfg.max_run, "max_srun": cfg.max_srun,
+            **{k: getattr(w, k) for k in ("WV", "WSR", "AW", "RW", "DW", "NW", "QW")},
+            "bram18": _bram18(cfg, w)}
+
+
+def _bram18(cfg, w) -> int:
+    """The unit's BRAM18 as its memories bind (Vitis HLS 2024.1): the register file, a simple
+    dual-port memory a bank and lane (up to 36 bits wide, 512 deep); the scalar file, a true
+    dual-port memory a lane (18-bit ports); each queue's two blocks, one memory of lane groups."""
+    def sdp(width: int, depth: int) -> int:
+        return -(-width // 36) * -(-depth // 512)
+
+    rf = cfg.NB * cfg.L * sdp(2 * w.WV, cfg.NG // cfg.NB * cfg.VLMAX)
+    sf = cfg.L * -(-w.WSR // 18) * -(-cfg.NS // 1024)
+    q = (cfg.NQI + cfg.NQO) * sdp(2 * w.WV * cfg.L, 2 * cfg.Kmax * cfg.NGQ)
+    return rf + sf + q
+
+
+def measure_resources(spec, root) -> dict:
+    """csynth (alone) of the generic unit with the configuration *spec* names, at *root*: its
+    features and csynth's estimate for the unit and each task."""
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.vecunit.build import build_config, build_dag
+    from waveflow.vecunit.report import resources
+    from waveflow.vecunit.unit import VecUnit
+
+    cfg = resource_config(spec)
+    unit = VecUnit(name="vecunit", sim=Simulation(), cfg=cfg)
+    res = build_dag(unit).run(build_config(root), through="csynth")
+    bad = [f"{n}: {r.message[:500]}" for n, r in res.items() if not r.success]
+    if bad:
+        raise RuntimeError(f"{spec}: " + "; ".join(bad))
+    return {"spec": list(spec), "features": config_features(cfg), "csynth": resources(Path(root))}
+
+
+
+#: The resource model: per counter, the terms it is linear in (with an intercept), each a product of
+#: :func:`config_features`, chosen from csynth's breakdown of the fit set alone.  LUT and FF: the
+#: scalar dividers, one a lane (``L`` and ``L*NW*QW``: a lane's cost affine in its divider's width);
+#: the fused loop, whose operand and forwarding muxes and pipeline grow with the slots chained
+#: before each slot (``S*S*L``), for FF with a curvature in ``L`` (``S*S*L*L``: csynth gives the
+#: CG build's run loop 8.5k, 27.5k and 47.0k FF at ``L`` 2, 4 and 8); the multipliers (``n_mul*L``).  Each basis is the one of the few tried with the
+#: lowest leave-one-out error on the fit set.  DSP: four a complex multiplier.  BRAM: the memories
+#: as they bind (``bram18``).
+RESOURCE_BASIS: dict[str, tuple[str, ...]] = {
+    "lut": ("L", "L*NW*QW", "S*S*L", "n_mul*L"),
+    "ff": ("L", "L*NW*QW", "S*S*L", "S*S*L*L", "n_mul*L"),
+    "dsp": ("n_mul*L",),
+    "bram": ("bram18",),
+}
+
+
+def resource_terms(feats: dict, counter: str) -> dict[str, float]:
+    """The values of *counter*'s terms (:data:`RESOURCE_BASIS`) for a configuration's features."""
+    out = {}
+    for term in RESOURCE_BASIS[counter]:
+        v = 1.0
+        for name in term.split("*"):
+            v *= float(feats[name])
+        out[term] = v
+    return out
+
+
+def fit_resources(rows: list[dict]) -> dict:
+    """Each counter of the unit's csynth estimate, linear in its terms with an intercept, fitted on
+    the relative error (each row weighted by ``1 / value**2``).  The signs are free: the fit set has
+    two format sets, so a width term and its lane term together fix a lane's cost at two widths."""
+    from sklearn.linear_model import LinearRegression  # type: ignore[import-untyped]
+
+    model = {}
+    for counter, basis in RESOURCE_BASIS.items():
+        X = np.array([[resource_terms(r["features"], counter)[t] for t in basis] for r in rows])
+        y = np.array([float(r["csynth"]["unit"][counter]) for r in rows])
+        reg = LinearRegression().fit(X, y, sample_weight=1.0 / np.maximum(y, 1) ** 2)
+        model[counter] = {"basis": list(basis), "coefs": [float(c) for c in reg.coef_],
+                          "intercept": float(reg.intercept_)}
+    return model
+
+
+def predict_resources(model: dict, feats: dict) -> dict[str, float]:
+    """The unit's LUT, FF, DSP and BRAM for a configuration's :func:`config_features`."""
+    out = {}
+    for counter, m in model.items():
+        t = resource_terms(feats, counter)
+        out[counter] = m["intercept"] + sum(c * t[b] for b, c in zip(m["basis"], m["coefs"]))
+    return out
+
+
+def _rows(directory, which: str) -> list[dict]:
+    """The sweep's rows of one set (``<directory>/<which>_<i>.json``, as ``csynth`` prints them), in
+    the set's order; a missing row is an error."""
+    specs = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[which]
+    rows = []
+    for i, spec in enumerate(specs):
+        r = json.loads((Path(directory) / f"{which}_{i}.json").read_text(encoding="utf-8"))
+        if tuple(r["spec"]) != tuple(spec):
+            raise ValueError(f"{which}_{i}: measured {r['spec']}, pre-registered {spec}")
+        r["features"] = config_features(resource_config(spec))  # a function of the configuration
+        rows.append(r)
+    return rows
+
+
+def _resource_errors(model: dict, rows: list[dict]) -> dict:
+    out = {}
+    for counter in model:
+        pred = [predict_resources(model, r["features"])[counter] for r in rows]
+        meas = [r["csynth"]["unit"][counter] for r in rows]
+        out[counter] = {"measured": meas, "predicted": [round(p, 1) for p in pred],
+                        **errors(pred, meas)}
+    return out
+
+
+def calibrate_resources(directory) -> dict:
+    """Fit the resource model on the sweep's fit rows at *directory* and file it."""
+    rows = _rows(directory, "fit")
+    model = fit_resources(rows)
+    record = {"counters": model, "fit": {"configurations": [r["spec"] for r in rows],
+                                         **_resource_errors(model, rows)},
+              "plan": "plans/vecunit_new.md Stage 7"}
+    _file(RESOURCE_MODEL, record)
+    return record
+
+
+def score_resources(directory) -> dict:
+    """The held-out score, once (rule 5): the filed model against the sweep's held-out rows."""
+    path = model_path(RESOURCE_MODEL)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if "holdout" in record:
+        raise RuntimeError(f"{path}: the held-out set is scored once, and it has been")
+    rows = _rows(directory, "holdout")
+    out = {"configurations": [r["spec"] for r in rows],
+           **_resource_errors(record["counters"], rows)}
+    record["holdout"] = out
+    _file(RESOURCE_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
+    return out
+
+
+def main(argv=None) -> int:
+    """``fit-timing <calib root>``; ``score-timing <cg holdout> <cg steady> <mf steady>`` (roots of
+    the RTL runs); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
+    ``fit-resources <dir>``, ``score-resources <dir>`` (the rows ``csynth`` printed, saved as
+    ``<dir>/<fit|holdout>_<index>.json``)."""
+    a = list(sys.argv[1:] if argv is None else argv)
+    if a[:1] == ["fit-timing"] and len(a) == 2:
+        r = calibrate_timing(a[1])
+        print(json.dumps({k: r[k] for k in ("coefs", "fit")}, indent=1))
+        return 0
+    if a[:1] == ["score-timing"] and len(a) == 4:
+        print(json.dumps(score_timing(dict(zip(TIMING_HOLDOUT, a[1:]))), indent=1))
+        return 0
+    if a[:1] == ["csynth"] and len(a) == 4:
+        spec = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[a[1]][int(a[2])]
+        print(json.dumps(measure_resources(spec, a[3])))
+        return 0
+    if a[:1] in (["fit-resources"], ["score-resources"]) and len(a) == 2:
+        fn = calibrate_resources if a[0] == "fit-resources" else score_resources
+        print(json.dumps(fn(a[1]), indent=1))
+        return 0
+    print(main.__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

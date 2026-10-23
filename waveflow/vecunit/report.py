@@ -30,7 +30,9 @@ def output_cycles(root: Path, port: str = "s_out0") -> list[int]:
 def _resources(xml: Path) -> dict:
     r = ET.parse(xml).getroot()
     res = r.find("AreaEstimates/Resources")
-    out = {k: int(res.findtext(t) or 0) for k, t in (("lut", "LUT"), ("ff", "FF"), ("dsp", "DSP"),
+    if res is None:
+        raise ValueError(f"{xml}: no AreaEstimates/Resources")
+    out: dict[str, float] = {k: int(res.findtext(t) or 0) for k, t in (("lut", "LUT"), ("ff", "FF"), ("dsp", "DSP"),
                                                        ("bram", "BRAM_18K"))}
     out["clock_ns"] = float(r.findtext("PerformanceEstimates/SummaryOfTimingAnalysis/"
                                        "EstimatedClockPeriod") or 0)

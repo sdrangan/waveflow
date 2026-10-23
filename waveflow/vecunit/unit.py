@@ -134,11 +134,13 @@ def job_features(prog, cfg: VecUnitConfig) -> dict:
 
 
 def _calibrated() -> VecTiming:
-    """The fitted timing when :mod:`waveflow.vecunit.calib` has filed one, else the defaults."""
+    """The fitted timing when :mod:`waveflow.vecunit.calib` has filed one on the packaged platform,
+    else the defaults."""
     import json
-    from pathlib import Path
 
-    path = Path(__file__).resolve().parent / "calib" / "timing.json"
+    from waveflow.vecunit.calib import TIMING_MODEL, model_path
+
+    path = model_path(TIMING_MODEL)
     if path.is_file():
         return VecTiming.from_coefs(json.loads(path.read_text(encoding="utf-8"))["coefs"])
     return VecTiming()

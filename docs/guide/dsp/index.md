@@ -4,8 +4,8 @@ parent: Guide
 nav_order: 10.8
 has_children: true
 audience: python
-api: [SsrFft, SystolicEngine, SystolicEngineMem, CgVectorUnit, CgVectorCore]
-summary: "Waveflow's own DSP blocks, written as free-running Waveflow modules rather than wrapped vendor IP: the full-rate SSR FFT, bit-exact with AMD's Vitis L1 FFT and ten times its throughput as shipped, and the complex fixed-point linear-algebra components -- the systolic matrix multiply and the CG vector unit -- with the conventions they share."
+api: [SsrFft, SystolicEngine, SystolicEngineMem, CgVectorUnit, CgVectorCore, VecUnit]
+summary: "Waveflow's own DSP blocks, written as free-running Waveflow modules rather than wrapped vendor IP: the full-rate SSR FFT, bit-exact with AMD's Vitis L1 FFT and ten times its throughput as shipped, and the complex fixed-point linear-algebra components -- the systolic matrix multiply, the CG vector unit and the programmable vector unit -- with the conventions they share."
 ---
 
 # DSP Blocks
@@ -25,3 +25,6 @@ vendor library and rebuild what is not.
   Starts from [how a systolic array works](systolic/systolic_theory.md).
 - [CG Vector Unit](cg_vector.md) -- `CgVectorCore` and `CgVectorUnit`: the vector steps of conjugate
   gradient on `A X = B`, multi-RHS.
+- [Vector Unit](vecunit.md) -- `VecUnit`: a programmable complex fixed-point vector unit, RVV-style,
+  with a format per register and decoupled load, execute and store tasks; CG and a matched filter
+  run on it as programs.

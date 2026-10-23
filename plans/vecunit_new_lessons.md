@@ -26,3 +26,16 @@
 8. **The width of a union datapath follows the spread of its formats.** Integer bits from 1 to 14
    made 52-bit results and a csynth past 50 minutes; keep a configuration's formats close, or split
    the register file by format family.
+9. **A timing fit on one configuration carries that configuration's schedule.** The execute task's
+   decode loop has a configuration-dependent II and depth (13 / 23 in the CG build, 12 / 14 in the
+   matched filter's); coefficients fitted on CG jobs alone over-charged the matched filter 7.5 %.
+   Spread a timing fit over configurations, or take the per-pass and per-run costs from each build's
+   loop schedule and fit only the rest.
+10. **A knob a decision promises must reach the datapath -- check it in csynth.** The slot capability
+    mask was "a DSE knob" from Stage 0, but until Stage 7 it gated only the decoder's checks: every
+    slot still had its multiplier. The pre-registered `mul1` rows would have measured nothing. Gate
+    the hardware on the mask at compile time (`MULS`, `DOTS`), then read the DSP count.
+11. **Never leave a placeholder in a module a running job imports.** A `BASIS_TBD` in `calib.py`
+    failed six sweep rows that started after it; write placeholders as valid values.
+12. **`a && X=1 && (job1) & (job2) &` backgrounds the whole first list:** the variable is set only in
+    that subshell, and `job2` ran with it empty. Set variables on their own line first.

@@ -34,7 +34,7 @@ from string import Template
 from waveflow.hw.arrayutils import _array_utils_filename, _array_utils_namespace
 from waveflow.linalg.formats import Traits, format_id, mem_elem_type
 from waveflow.utils.fixputils import Format, OMode, QMode
-from waveflow.vecunit.config import VecUnitConfig
+from waveflow.vecunit.config import Cap, VecUnitConfig
 
 #: The define the explicit stream-of-blocks locks need, for the csynth flags.
 DEFINES = ("EXPLICIT_ACQUIRE_RELEASE",)
@@ -158,13 +158,16 @@ def _table(name: str, ret: str, values) -> str:
 """
 
 
-def render_cfg(cfg: VecUnitConfig) -> str:
-    """``struct wf_vec_cfg_<id>``: sizes, types, format tables and the conversions."""
+def render_cfg(cfg: VecUnitConfig) -> tuple[str, dict]:
+    """``struct wf_vec_cfg_<id>``: sizes, types, format tables and the conversions; and each queue
+    format's memory-element index."""
     w = widths(cfg)
     vf, sf = list(cfg.vector_formats), list(cfg.scalar_format_set)
     vid = {f: i for i, f in enumerate(vf)}
     sid = {f: i for i, f in enumerate(sf)}
     i = cfg_id(cfg)
+    muls = sum(1 << s for s, c in enumerate(cfg.slot_caps) if int(c) & int(Cap.MUL | Cap.DOT))
+    dots = sum(1 << s for s, c in enumerate(cfg.slot_caps) if int(c) & int(Cap.DOT))
     conv_v = "\n".join(f"        case {k}: return vu_t(raw) << {w.FU - f.frac_bits};"
                        for k, f in enumerate(vf))
     conv_s = "\n".join(f"        case {k}: return su_t(raw) << {w.FS - f.frac_bits};"
@@ -202,6 +205,7 @@ struct wf_vec_cfg_{i} {{
     static const int NPI = {cfg.n_in_ports}, NPO = {cfg.n_out_ports}, WBW = {cfg.word_bits};
     static const int WV = {w.WV}, WSR = {w.WSR}, FU = {w.FU}, FS = {w.FS}, FA = {w.FA}, FP = {w.FP};
     static const int GDIV = {cfg.g_div}, MAXRUN = {cfg.max_run}, MAXSRUN = {cfg.max_srun};
+    static const int MULS = {muls}, DOTS = {dots};  // bit s: slot s has a multiplier, an accumulator
     typedef ap_int<{w.FU + w.IU}> vu_t;   // the union vector format (frac FU)
     typedef ap_int<{w.FS + w.IS}> su_t;   // the union scalar format (frac FS)
     typedef ap_int<{w.AW}> au_t;          // a multiplier's A input (frac FA)
@@ -686,11 +690,16 @@ $QREADS
                                 pa_r = au_t(ar) << (C::FA - C::FU);
                                 pa_i = x.conj ? au_t(-(au_t(ai) << (C::FA - C::FU))) : au_t(au_t(ai) << (C::FA - C::FU));
                             }
-                            const res_t pr = res_t(pa_r) * br - res_t(pa_i) * bi;
-                            const res_t pi = res_t(pa_r) * bi + res_t(pa_i) * br;
-                            const dot_t sum = (first ? dot_t(0) : acc[s][l]) + pr;
-                            acc[s][l] = sum;
-                            if (lastel && x.kind == wf_vec::K_DOT) dacc[p][s][l] = sum;
+                            // The slot's mask is a build knob: without MUL or DOT it has no multiplier,
+                            // without DOT no accumulator (the decode refuses what a slot lacks).
+                            const bool mul = (C::MULS >> s) & 1, dot = (C::DOTS >> s) & 1;
+                            const res_t pr = mul ? res_t(res_t(pa_r) * br - res_t(pa_i) * bi) : res_t(0);
+                            const res_t pi = mul ? res_t(res_t(pa_r) * bi + res_t(pa_i) * br) : res_t(0);
+                            if (dot) {
+                                const dot_t sum = (first ? dot_t(0) : acc[s][l]) + pr;
+                                acc[s][l] = sum;
+                                if (lastel && x.kind == wf_vec::K_DOT) dacc[p][s][l] = sum;
+                            }
                             res_t xr = 0, xi = 0, yr = 0, yi = 0;
                             if (x.xsel == wf_vec::X_C) { xr = res_t(cr) << (C::FP - C::FU); xi = res_t(ci) << (C::FP - C::FU); }
                             else if (x.xsel == wf_vec::X_A) { xr = res_t(ar) << (C::FP - C::FU); xi = res_t(ai) << (C::FP - C::FU); }
@@ -737,7 +746,7 @@ $QWRITES
                     for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
                         const wf_vec::Slot x = dsl[q][s];
-                        if (x.kind == wf_vec::K_DOT) {
+                        if (((C::DOTS >> s) & 1) && x.kind == wf_vec::K_DOT) {
                             for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
                                 sf[l][x.dst] = C::quant_dot(dacc[q][s][l], x.dfmt);

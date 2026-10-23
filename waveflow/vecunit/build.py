@@ -92,7 +92,7 @@ class VecUnitCodegenStep(BuildStep):
         )
         from waveflow.build.streamutils import MemMgrStep
 
-        root = Path(config.root_dir)
+        root = Path(config.root_dir) if config.root_dir is not None else Path.cwd()
         unit = self.make()
         dag = vecunit_headers_dag([unit.cfg], INCLUDE_DIR)
         dag.add(MemMgrStep(output_dir=INCLUDE_DIR))

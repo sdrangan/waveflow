@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** In progress: Stages 0-6 done 2026-10-22 (one open item in Stage 6) (drafted 2026-10-20 with the user).
+**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7) (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -771,6 +771,92 @@ Add `waveflow/vecunit/` to the subsystem list in `CLAUDE.md`.
 **Gate:** held-out scores reported; `pytest -m "not vitis and not xsi and not gem5"` and the unit's XSI
 gates pass. **Pause.**
 
+#### Record: Stage 7 (2026-10-22) -- Vitis HLS / Vivado xsim 2024.1, xczu48dr, 4 ns, this machine
+
+**Pre-registered** (rule 5) in commit `83687710`, before any calibration run:
+`waveflow/vecunit/calib.py` names the timing fit set (on the CG configuration: 12 random jobs over
+every instruction form, 8 to 32 passes, blocks of at most 8 columns, and 8 CG solves of varied `k`,
+`n`, `nit`), the held-out timing scenarios (6 fresh random jobs and 2 solves; CG `"steady"`; the
+matched filter's `"steady"`), the resource fit configurations (10: `L` 2-8, `NG` 8-64, `S` 2-3,
+`"all"` or `"mul1"` capabilities, CG or matched-filter formats), 3 held-out configurations, and the
+targets (3 % mean, 6 % worst). The calibration departs from the plan's `add_calib_steps` as agreed
+with the user at the end of Stage 6: a linear job model fitted by its own code.
+
+**Built.** `calib.py`: the RTL job intervals (status to status), pysim's intervals, the fit, the
+score-once guard, the csynth-only resource measurement, the resource fit and score; the fits are
+filed on the packaged platform (`waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/models/
+vecunit_timing/` and `vecunit_resources/`), and pysim reads the timing at import. `unit.py`:
+`VecTiming` linear in `job_features` (decode, run, elem, srun, sop, divide, control, instr, job),
+charged per item so pysim's per-item times sum to the job model (a test). **A fix found by the
+pre-registered `mul1` rows' design:** the slot capability mask -- a DSE knob since Stage 0 -- gated
+only the decoder's checks; every slot still had its multiplier. The fused loop now tests
+compile-time masks `MULS` / `DOTS` (`hls.py`): an all-capable unit is unchanged (CG `"steady"` at RTL:
+the same status cycles, 3361 / 6720 / 10079 / 13438, and the same csynth estimate, 82,063 LUT / 71,661
+FF / 53 DSP / 36 BRAM), and `mul1` drops from 53 DSP to 21. Docs: `docs/guide/dsp/vecunit.md` (ISA,
+chaining and pass rules, formats rule, architecture, where timing is measured, the scores, limits;
+its example runs under the docs tests), `docs/examples/vecunit_cg/index.md`,
+`docs/examples/vecunit_mf/index.md` (the input floor); `CLAUDE.md` lists `waveflow/vecunit/`; the
+docs TOC pin gains the two examples. A Stage 5 omission the full suite caught: the two build steps
+were named in no page (`tests/docs/test_step_docs.py`).
+
+**Timing** (RTL every run bit-exact against pysim). Fit on 19 job intervals:
+
+| `decode` | `run` | `elem` | `srun` | `sop` | `divide` | `control` | `instr` | `job` |
+|---|---|---|---|---|---|---|---|---|
+| 15.9 | 66.1 | 0.99 | 68.7 | 4.26 | 1.23 | 1.96 | 0 | 0 |
+
+In-sample: the model 0.14 % mean / 0.38 % worst, pysim charged from it 0.16 % / 0.45 %.
+**Held out, scored once:**
+
+| Scenario | Intervals | Mean | Worst |
+|---|---|---|---|
+| CG configuration, fresh random jobs and solves | 7 | 0.30 % | 0.64 % |
+| CG `"steady"` | 3 | 0.02 % | 0.02 % |
+| matched filter `"steady"` | 3 | 7.5 % | 7.5 % |
+| all | 13 | **1.9 %** | **7.5 %** |
+
+The mean target holds; the worst does not, on the matched filter (pysim 1,513 cycles a frame, RTL
+1,408). Root cause (one hypothesis, confirmed from csynth's log): the execute task's decode loop
+`RUNG` is configuration-dependent -- II 13, depth 23 in the CG build; II 12, depth 14 in the matched
+filter's (`DELIVER` depth 7 against 6) -- and every fit job ran on the CG build. A chunk's 3 decoded
+passes and 2 runs give 3 + 18 + 2 = 23 of the 26 cycles a chunk pysim overcharges. Not refitted (the
+held-out set is scored once). **Next:** take the per-pass and per-run costs from each build's loop
+schedule and fit only the rest, on jobs from several configurations, with a fresh held-out set.
+
+**Resources** (csynth only, the whole unit; the sweep ran three builds at a time under a 9 GB / 40
+min watchdog; the largest, `L 8, NG 32, S 3`, took 37 min). DSP and BRAM are structural and exact on
+all 13 configurations: `4 · n_mul · L + 5`, and the memories as they bind (the register file one
+simple dual-port BRAM18 a bank and lane, the scalar file a true dual-port one a lane with 18-bit
+ports, each queue's two blocks). LUT and FF are linear in terms chosen from csynth's breakdown by loop
+(the dividers, one a lane, `L` and `L·NW·QW`; the fused loop, `S²·L`, and for FF `S²·L²`; the
+multipliers, `n_mul·L`), each basis the lowest leave-one-out error of the few tried on the fit set;
+the signs are free because two format sets fix a lane's width terms at two levels. Fit in-sample: LUT
+1.3 % mean / 3.5 % worst, FF 0.3 % / 0.7 %. **Held out, scored once:**
+
+| Held out (`L`, `NG`, `S`, slots, formats) | LUT | FF | DSP | BRAM |
+|---|---|---|---|---|
+| 8, 16, 2, all, CG | 104,024 (3.9 %) | 108,575 (1.1 %) | 69 | 72 |
+| 4, 8, 3, `mul1`, matched filter | 68,810 (2.3 %) | 39,654 (2.8 %) | 21 | 32 |
+| 2, 16, 3, all, CG | 51,621 (1.0 %) | 34,482 (0.5 %) | 29 | 20 |
+| mean / worst | **2.4 % / 3.9 %** | **1.4 % / 2.8 %** | exact | exact |
+
+Both within the targets. Read from the breakdown: `NG` hardly matters (81.5k to 83.3k LUT from 16 to
+64 groups); the scalar dividers are exactly proportional to `L` (32.6k FF at `L` 4 in the CG build,
+10.3k in the matched filter's); the run loop's FF has a knee (8.5k, 27.5k, 47.0k at `L` 2, 4, 8).
+
+**Not done:** revisit the open Stage 6 item (fusion with a wide mixed-mode format set past 12 GB in
+csynth); the timing model's schedule-derived form (above).
+
+**Gate:** held-out scores reported (above). `pytest -m "not vitis and not xsi and not gem5"`: 4,965 passed,
+40 skipped, 5 failed, none from this branch -- `test_markov_figures` (2) and
+`test_vitis_fft::test_generate_writes_the_build_tree` fail on `main` too (checked in a worktree of
+`main`: a figure-status file the repo does not track, the Vitis 2025.1 DSP headers absent here);
+`test_xsi_workspace_copies[rt_sounder, vitis_fft]` compares untracked, gitignored workspace copies of
+`run.bat` dated 2026-10-12/13 against the framework's, which `main` changed on 10-14. Fixed on the way:
+the XSI gate floor (238 -> 241, Stage 5's three gates), the build steps no page named, the platform
+manifest (`tests/linalg/test_no_example_imports.py`). `pytest -m xsi tests/vecunit/test_unit_xsi.py`:
+3 passed in 557 s (the generic configuration fusion-off, CG, the matched filter, on the gated HLS).
+
 ## Out of scope
 
 - Moving `examples/mimo_cg` onto this unit, or onto the systolic engine (a separate plan).
@@ -806,3 +892,4 @@ gates pass. **Pause.**
 | 2026-10-22 | 4 | pysim: `VecLoad` / `VecExec` / `VecStore` / `VecUnit`, the harness, random and application workloads; bit-exact against the interpreter on two generic configurations, CG and the matched filter; a fatal error | Stage 4 record |
 | 2026-10-22 | 5 | Generated HLS bodies; RTL bit-exact (generic, CG, matched filter); CG 7,295 cycles a job against CgVectorUnit's 3,581 (2.04x, Vitis 2024.1), 59.6k LUT against 21.6k; the matched filter 1.26x its input floor | Stage 5 record |
 | 2026-10-22 | 6 | Fused runs (in-order issue): CG 3,359 cycles a job against CgVectorUnit's 3,581 (0.94x, Vitis 2024.1), the matched filter 1.22x its floor; 82k LUT / 72k FF. Open: a mixed-mode format set with fusion exceeds 12 GB in csynth | Stage 6 record |
+| 2026-10-22 | 7 | Pre-registered (`83687710`), then calibrated (Vitis 2024.1): timing held out 1.9 % mean, 7.5 % worst (the matched filter: the decode loop's schedule differs by configuration); resources held out LUT 2.4 % / 3.9 %, FF 1.4 % / 2.8 %, DSP and BRAM exact. The slot capability mask now reaches the datapath. Guide and two example pages | Stage 7 record |
