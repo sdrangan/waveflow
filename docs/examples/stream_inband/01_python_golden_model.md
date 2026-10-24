@@ -1,6 +1,7 @@
 ---
 title: Python Golden Model
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 5
 summary: "How we know the Python model is right: schemas that generate the C++ wire format (the command header carries the coefficients), a pure bit-exact model of the kernel -- the arithmetic in the C++ operation order, and the whole protocol over a stream at either width -- scenarios whose expected responses are computed from intent rather than from any implementation, a checker that is shown to reject wrong answers, and pysim's cycle estimate."
 ---
@@ -125,12 +126,20 @@ rejects each:
 
 `PolyAccel` is a body-only module: it declares its ports and its status-only register map, and names
 its kernel body (`cpp_body = "body"`).  Its Python `body()` is the same kernel for pysim -- a thin
-port wrapper that calls `poly_eval` -- plus a timing model:
+port wrapper that calls `poly_eval` -- plus its timing, declared as two
+[timed phases](../../guide/timing_model/timed_phases.md):
 
 ```python
-proc_ii:      int = 1
-proc_latency: int = 40    # calibrated against RTL cosim (page 05)
+self.hdr_phase = TimedPhase(                     # the response after a command header
+    "hdr", spans={"resp_time": (self.s_in.last, self.m_out.first)}, ...)
+self.samp_phase = TimedPhase(                    # samples in, results out: a pipelined loop
+    "samples", spans={"latency":   (self.s_in.first, self.m_out.first),
+                      "fill_time": (self.m_out.first, self.m_out.last)},
+    features=("nwords",), ...)
 ```
+
+Their durations are fitted against RTL cosim ([page 05](./05_cosim_timing.md)); `proc_ii` and
+`proc_latency` only seed them before a fit.
 
 pysim runs every scenario except `no_tlast`: a pysim stream can end a burst early, but it cannot
 omit TLAST.  The pysim testbench also waits for the kernel's `ap_done` **interrupt** rather than

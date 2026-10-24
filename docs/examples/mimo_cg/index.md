@@ -1,7 +1,7 @@
 ---
 title: CG massive-MIMO detector
 parent: Examples
-nav_order: 11
+nav_order: 13
 example_dir: examples/mimo_cg
 summary: "A conjugate-gradient MMSE detector for the massive-MIMO uplink. A bit-exact fixed-point Python model reproduces Vitis ap_fixed arithmetic, and a free-running hardware detector is composed from Waveflow's two linear-algebra components, a systolic matrix multiply and a CG vector unit. The RTL matches the Python model bit for bit at K = 4, 8 and 16 users and every iteration count, and meets 4 ns on the RFSoC xczu48dr."
 ---
@@ -17,12 +17,35 @@ This example shows:
 - a **bit-exact fixed-point model** of multi-RHS CG in Python, which reproduces Vitis `ap_fixed`
   arithmetic exactly and runs without Vitis;
 - a **free-running detector** composed from Waveflow's
-  [linear-algebra components](../../guide/linalg/index.md): the
-  [systolic matrix multiply](../../guide/linalg/systolic.md) and the
-  [CG vector unit](../../guide/linalg/cg_vector.md);
+  [linear-algebra components](../../guide/dsp/linalg_common.md): the
+  [systolic matrix multiply](../../guide/dsp/systolic/index.md) and the
+  [CG vector unit](../../guide/dsp/cg_vector.md);
 - **verification** from the Python model through pysim and C-simulation to RTL, bit for bit.
 
 Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+
+**Status: set aside, to be moved to the systolic engine.** The detector is built on the older
+`SystolicUnit` and `SystolicCore`, which the [systolic engine](../../guide/dsp/systolic/systolic_engine.md)
+supersedes and which are no longer documented in the guide. Until this example moves to the engine, its
+tests are quarantined (`tests/conftest.py`) and its numbers are not re-measured: this page describes it
+as it was.
+
+## Learning objectives
+
+What this adds to the examples before it, in the order the page teaches it:
+
+1. Write a **bit-exact fixed-point model** of an iterative algorithm (multi-RHS CG) on integers,
+   reproducing `ap_fixed` rounding and saturation -- a division and its zero guard included -- so it
+   runs without Vitis.
+2. Use that model to find the narrowest register width, and the guard bits, that meet an accuracy
+   budget on simulated links.
+3. Compose a detector from the framework's [linear-algebra components](../../guide/dsp/linalg_common.md)
+   (`SystolicCore`, `CgVectorCore`) on the interleaver's load-compute-store skeleton, the two cores
+   passing `P` and `S` through streams of blocks once an iteration.
+4. Make each job **write as often as it reads**, so the `m_axi` pointer FIFOs do not stall the design
+   at RTL.
+5. Check **one golden at every level** -- the C++ reference in csim, pysim, csynth at 4 ns, the RTL --
+   at several sizes and every iteration count.
 
 ## The algorithm
 
@@ -150,7 +173,7 @@ Builds go to `examples/mimo_cg/hw/build/` (not committed).
 | Bit-exact golden | `examples/mimo_cg/mimo_cg_fixed.py`; the CG model in `waveflow/linalg/cg.py`; C++ reference `examples/mimo_cg/cpp/cg_ref.h` |
 | Link simulator and reference detectors | `examples/mimo_cg/mimo_link.py`, `detectors.py`, `mimo_cg.py` |
 | The detector | `examples/mimo_cg/hw/detector.py`, `common.py`, `cpp/`, `build.py` |
-| The components | `waveflow/linalg/`; guide in [linear algebra](../../guide/linalg/index.md) |
+| The components | `waveflow/linalg/`; guide in [linear algebra](../../guide/dsp/linalg_common.md) |
 | Tests | `tests/examples/test_mimo_cg_*.py` |
 | The design-space study | `examples/mimo_cg/hw/` and `examples/mimo_cg/tools/`; tables in `examples/mimo_cg/paper_data/` |
 

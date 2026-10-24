@@ -1,15 +1,15 @@
 ---
 title: Vector multiply resource modeling
 parent: Examples
-nav_order: 5.5
+nav_order: 11
 has_children: true
 example_dir: examples/vecmult
 summary: "Measuring and modelling what a design costs. A free-running vector multiplier swept across its two parameters, with the measurements handed to a VitisResourceModel that predicts LUT, FF, DSP and BRAM anywhere in the space. The arithmetic is trivial on purpose — the subject is how little you have to say to get a trustworthy model: describe what the design contains, and the library picks the features, prices the device geometry and fits whatever is left."
 ---
 # Vector Multiply — measuring and modelling what a design costs
 
-This example builds on [`memcpy`](../memcpy/). That one introduced the **free-running** kernel — a
-block that is never started and never returns, paced only by back-pressure. `vecmult` is the smallest
+This example builds on the free-running kernels of [the flow](../index.md#the-flow) — blocks that are
+never started and never return, paced only by back-pressure. `vecmult` is the smallest
 design in the tree that takes such a kernel all the way to a *number*: how many LUTs, flip-flops,
 DSPs and block RAMs it occupies, and how that changes as you turn its knobs.
 
@@ -52,24 +52,22 @@ cyclic `ARRAY_PARTITION` — and *that* is what turns a throughput requirement i
 
 ## Learning Objectives
 
-In going through this example, you will learn to:
+What this adds to the examples before it -- the flow, and the resource model
+[Block FIR with state](../firblock/index.md#learning-objectives) built beside its other material -- in
+the order the pages teach it:
 
-1. **Build a standalone free-running module** — one `FreeRunMod`, one stream in, one out, with an
-   in-band command and a response that echoes a transaction id.
-2. **Hand off a kernel body the extractor cannot write** — declare a hand-written `hls::task` through
-   `kernel_task()`, and keep the Python `run_iter` as the golden.
-3. **Prove the twin** — replay the pysim job through the C++ in Vitis C-simulation, so "Python golden,
-   C++ twin" is a checked claim rather than an intention.
-4. **Write a parameter sweep with `sweep_cli`** — declare the points as a `ParamGrid`, the run as a
-   `SweepRunner` and one `Stage`, and get a program with `--dry-run`, `--resume` and a flag per axis;
-   then collect an attributed utilization report at each of the 16 points.
-5. **Describe a design's structure and install a model on the module** — `resource_structure` and
-   `get_rm` — reading each declared number straight off the kernel body, and getting DSP and BRAM
-   exactly right before any synthesis has run.
-6. **Sweep for the measurements the declaration cannot give you**, and let `VitisResourceModel`
-   choose the features and fit the coefficients for LUT and FF.
-7. **Compose an estimate over a hierarchy** — `add_rm`, `compose` — and read the confidence it
-   reports, which is the *weakest* link rather than the best one.
+1. **Check the C++ twin in Vitis C-simulation**: replay the pysim job through the hand-written kernel,
+   so a design whose C++ disagrees with its Python golden cannot reach synthesis.
+2. **Write a parameter sweep with `sweep_cli`**: the points as a `ParamGrid`, the run as a `SweepRunner`
+   and one `Stage`, a program with `--dry-run`, `--resume` and a flag per axis; collect an attributed
+   utilization report at each of the 16 points.
+3. **Describe a design's structure and install a model on the module** (`resource_structure`,
+   `get_rm`), each declared number read off the kernel body, with DSP and BRAM exact before any
+   synthesis has run.
+4. Let `VitisResourceModel` **choose the features and fit** LUT and FF from the sweep, and check the fit
+   on points held out of it.
+5. **Compose an estimate over a hierarchy** (`add_rm`, `compose`), and read the confidence it reports:
+   the weakest link, not the best one.
 
 ## The build
 

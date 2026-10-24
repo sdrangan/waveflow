@@ -57,7 +57,7 @@ the system top drives.
 
 ## The bodies: one job per firing
 
-Both bodies follow the [command-response pattern](../../guide/patterns/command_response.md) and read
+Both bodies follow the [command-response pattern](../../guide/systems/command_response.md) and read
 like their Python `run_iter`: read the command, then per chunk a loop of one step per cycle, then the
 answer. The generator:
 
@@ -65,14 +65,15 @@ answer. The generator:
     MkvCmd cmd;
     cmd.read_stream<DW>(s_cmd);                                   // 1. the command
     ...
-    crd.wait_room(m_u_crd, CW);                                 // 2. forward it, when it fits
-    cmd.write_axi4_stream<DW>(m_u_fwd);
-    crd.sent(CW);
+    if (crd.wait_room(m_u_crd, CW)) {                          // 2. forward it, when it fits
+        cmd.write_axi4_stream<DW>(m_u_fwd);
+        crd.sent(CW);
+    }
 
 CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {          // 3. the draws, a chunk per write
         const int c = (rem < CHUNK) ? (int)rem : CHUNK;
         const int cw = (c + PF - 1) / PF;
-        crd.wait_room(m_u_crd, cw);                               //    admit the chunk
+        if (!crd.wait_room(m_u_crd, cw)) continue;                //    admit the chunk
     GEN: for (int k = 0; k < c; ++k) {
 #pragma HLS PIPELINE II=1
             s ^= s << 13;  s ^= s >> 17;  s ^= s << 5;             //    xorshift32
@@ -91,7 +92,10 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {          // 3. the draws
 `credit::Producer<QDEPTH>` (a `static`, so it survives the firings): `wait_room` waits until the chunk
 fits -- room = `QDEPTH − 1 − (written − acked)`, masked at 16 bits -- reading the credit stream
 (blocking, then a bounded drain to the newest value), and `sent` records the chunk. Once a chunk is
-admitted, the loop runs to its end without looking again. The chain mirrors it with a
+admitted, the loop runs to its end without looking again. The writes are **guarded on `wait_room`'s
+result** (always true when it returns): they go to another stream than the credit reads, so without
+the guard Vitis HLS may schedule one ahead of the wait, and the window's count wraps
+([why](../../guide/interface/axi_mm/credit_streams_hls.md#the-guard)). The chain mirrors it with a
 `credit::Consumer<32>`: `took` per word read, `offer` after each chunk. The pattern and the two types
 are [Credit streams in HLS](../../guide/interface/axi_mm/credit_streams_hls.md).
 

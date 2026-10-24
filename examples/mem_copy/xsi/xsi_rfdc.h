@@ -156,6 +156,10 @@ public:
     std::vector<std::uint64_t> words_sent_ch;
     std::vector<std::uint64_t> dropped_ch;
 
+    //: ``Rfdc.allow_xz``, which the harness assigns on every model of the converter.  The ADC drives
+    //: words and captures none, so it has nothing to check; the DAC's is the one that acts.
+    bool allow_xz = false;
+
     //: If set, ``post_sim`` writes the counters above as JSON to this path -- what a system run
     //: gathers as a recording (``BurstBundle::write_counters``).  Empty: nothing written.
     std::string counters_out;
@@ -313,9 +317,15 @@ public:
         // so TREADY toggles on almost every beat and the disagreement has somewhere to land.
         for (std::size_t i = 0; i < ch_.size(); ++i) {
             Ch& c = ch_[i];
-            c.beat = c.driven && d_.get1(c.tvalid);
+            bool vxz = false;
+            c.beat = c.driven && d_.get1(c.tvalid, &vxz);
             c.ready = (c.pending < cap_);
-            if (c.beat) c.word = d_.getW(c.tdata);
+            if (c.beat) {
+                std::uint64_t xz = 0;
+                c.word = d_.getW(c.tdata, &xz);
+                if (xz && !allow_xz) Dut::fatal_xz("DAC channel " + std::to_string(i) + " TDATA", (long)cycle_ + 1,
+                                      (long)words_recv_ch[i], 0, xz, vxz);
+            }
         }
     }
 
@@ -389,6 +399,10 @@ public:
     /// Grid index of the most recent zero-fill (0 = never).  A count cannot separate a startup
     /// transient from a steady-state fault; this can.
     std::uint64_t last_zero_fill_idx = 0;
+
+    //: Accept words with X/Z bits instead of stopping the run (``Dut::fatal_xz``): ``Rfdc.allow_xz``,
+    //: for a design whose startup transient plays memory it has not written yet.
+    bool allow_xz = false;
 
     //: If set, ``post_sim`` writes the counters above as JSON to this path -- what a system run
     //: gathers as a recording (``BurstBundle::write_counters``).  Empty: nothing written.

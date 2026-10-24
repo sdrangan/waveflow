@@ -37,6 +37,21 @@ from waveflow.mcp.knowledge import waveflow_search
 #: that returns either has done its job.  A single prefix means there is one
 #: right page and the eval holds the ranking to it.
 QUERIES: list[tuple[str, tuple[str, ...]]] = [
+    # --- the flow (Flow Overview, plans/guide_system_first.md Stage 7) ----
+    ("build a system", ("docs/guide/systems/",)),
+    ("two levels of simulation Simulation and HwSystem", ("docs/guide/systems/",)),
+    ("design the DUT modules interfaces and messages", ("docs/guide/systems/dut.md",)),
+    ("a message is a burst closed by TLAST", ("docs/guide/systems/streams.md",)),
+    ("status stream fatal error command response", ("docs/guide/systems/command_response.md",)),
+    ("run a module alone in its harness", ("docs/guide/systems/pysim.md", "docs/guide/flows/units")),
+    ("verify a kernel at RTL", ("docs/guide/systems/verification.md", "docs/guide/systems/rtl.md")),
+    ("calibrate timed phases and compose a system", ("docs/guide/systems/calibration.md", "docs/guide/flows/units")),
+    # --- the harness (docs/guide/flows/units_*.md) ------------------------
+    ("harness a kernel with an m_axi memory port", ("docs/guide/flows/units_harness.md",)),
+    ("when was each input word accepted at RTL", ("docs/guide/flows/units_recordings.md",)),
+    ("hostile stand-ins stall policy sweep", ("docs/guide/flows/units_hostile.md",
+                                              "docs/guide/systems/verification.md")),
+    ("design space exploration sweep", ("docs/guide/systems/dse.md", "docs/guide/build/sweep.md")),
     # --- the protocol and the stream -----------------------------------
     ("error when TLAST arrives early", ("docs/guide/custom_hooks/stream.md",)),
     ("kernel loops over commands until an END command", ("docs/examples/stream_inband/index.md",)),
@@ -84,6 +99,7 @@ QUERIES: list[tuple[str, tuple[str, ...]]] = [
     # --- the examples themselves ------------------------------------------
     ("store then multiply a vector", ("docs/examples/vecmult/",)),
     ("polynomial accelerator example", ("docs/examples/stream_inband/",)),
+    ("put a kernel on a bus", ("docs/examples/stream_kernel_mm/",)),
 ]
 
 

@@ -5,7 +5,7 @@ Cross-platform (Windows + Unix). Dry-run by default — pass --force to delete.
 This targets *known artifact directory names* rather than "everything git-ignored"
 (`git clean -fdx`). The git approach is hazardous here because some .gitignore rules
 ignore whole example directories, which would sweep up hand-written source files that
-happen to be uncommitted (e.g. examples/vecunit/vecunit.py). Matching artifact dir
+happen to be uncommitted (e.g. under the ignored examples/dataschema/). Matching artifact dir
 names keeps the cleanup intent-revealing and leaves source alone.
 """
 

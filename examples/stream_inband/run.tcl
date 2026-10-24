@@ -3,7 +3,9 @@
 #   WAVEFLOW_POLY_STAGE=csim   every scenario, C simulation
 #   WAVEFLOW_POLY_STAGE=synth  C synthesis + RTL co-simulation of the timing scenario
 #   WAVEFLOW_POLY_STAGE=vcd    C synthesis + RTL co-simulation of early_tlast_vcd, with port
-#                              tracing, in its own project (the error-path waveform)
+#                              tracing, in its own project (the error-path waveform); with
+#                              WAVEFLOW_POLY_SCENARIO and WAVEFLOW_POLY_PROJ, another scenario in
+#                              another project (the phase calibration's traced run)
 #
 #   vitis-run --mode hls --tcl run.tcl
 #
@@ -46,6 +48,9 @@ if {$width eq 32} {
 }
 if {$stage eq "vcd"} {
     set proj vcd_proj
+    if {[info exists ::env(WAVEFLOW_POLY_PROJ)]} {
+        set proj $::env(WAVEFLOW_POLY_PROJ)
+    }
 } else {
     set proj w${width}_proj
 }
@@ -88,6 +93,9 @@ if {$stage eq "synth"} {
     set trace_level none
 } else {
     set scenario early_tlast_vcd
+    if {[info exists ::env(WAVEFLOW_POLY_SCENARIO)]} {
+        set scenario $::env(WAVEFLOW_POLY_SCENARIO)
+    }
     set trace_level port
 }
 if {[catch {cosim_design -argv "$data_dir cosim $scenario" -trace_level $trace_level} res]} {

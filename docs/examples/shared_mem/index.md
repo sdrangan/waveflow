@@ -1,7 +1,8 @@
 ---
 title: Histogram with shared memory
-parent: Examples
-nav_order: 4
+parent: Legacy examples
+grand_parent: Examples
+nav_order: 3
 has_children: true
 example_dir: examples/shared_mem
 summary: "The payload moves off the control plane and into memory. A histogram accelerator takes three buffer addresses in its command, reads samples and bin edges and writes counts back over a single AXI4 memory-mapped master, while a stream still carries the command and the status response. The first example to exercise multiple distinct buffers at independent addresses, two element types over one bundle, and bounds checks that select a typed error status."
@@ -37,7 +38,8 @@ the reference design for AXI-MM (`m_axi`) codegen.
 
 ## Learning Objectives
 
-In going through this example, you will learn to:
+What this adds to the legacy examples before it ([Register mapped simple function](../regmap/index.md#learning-objectives),
+[Streaming polynomial](../stream_inband/index.md#learning-objectives)), in the order the pages teach it:
 
 - Move **bulk data off the control plane and into shared DRAM** over an AXI4
   memory-mapped (`m_axi`) master, addressed by pointers carried in the command — while
@@ -50,8 +52,7 @@ In going through this example, you will learn to:
 - Use the `MMIFMaster` (`read_array` / `write_array`) interface and the SimPy
   `MemoryMod` harness to reach parity with the numpy golden.
 - Generate the **multi-buffer `m_axi`** kernel + testbench, run the four-case C-sim,
-  C-synth, and RTL cosim, and extract **multi-buffer burst** timing — the reference
-  pattern other `m_axi` designs copy.
+  C-synth, and RTL cosim, and extract **multi-buffer burst** timing.
 
 ## Walkthrough
 

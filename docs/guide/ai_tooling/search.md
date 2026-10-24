@@ -53,7 +53,7 @@ looking something up but building something:
 | `waveflow_list_frames()` | the architecture menu: each frame's pattern, shape, flow, references, and when to choose it |
 | `waveflow_get_process(frame)` | the ordered steps for one frame, which tool to use at each, and the rules; with no frame, the generic process |
 
-A **frame** is a [design pattern](../patterns/index.md) realized in one system shape and one
+A **frame** is a [design pattern](../systems/dut.md) realized in one system shape and one
 verification flow, with a reference example that proves it. The server's instructions tell the
 assistant to choose a frame from the spec, then follow its process; [Frames](./frames.md) covers
 the menu, what a frame contains, and how to add one.

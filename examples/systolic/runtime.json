@@ -1,0 +1,378 @@
+{
+ "conversion_w128": {
+  "format": "W=12 in 16-bit lanes",
+  "sizes": {
+   "8": {
+    "direct": {
+     "to_words_us": 22.37946647355021,
+     "from_words_us": 31.083112579480503
+    },
+    "general": {
+     "to_words_us": 116.38856090852696,
+     "from_words_us": 199.29284385971994
+    },
+    "same_words": true
+   },
+   "16": {
+    "direct": {
+     "to_words_us": 17.4953580458818,
+     "from_words_us": 49.11044683738783
+    },
+    "general": {
+     "to_words_us": 186.64492881240398,
+     "from_words_us": 265.77545118951895
+    },
+    "same_words": true
+   },
+   "32": {
+    "direct": {
+     "to_words_us": 19.449684600447736,
+     "from_words_us": 90.5159674380756
+    },
+    "general": {
+     "to_words_us": 242.5158133071268,
+     "from_words_us": 383.3653678960324
+    },
+    "same_words": true
+   },
+   "64": {
+    "direct": {
+     "to_words_us": 42.04553681227369,
+     "from_words_us": 108.53615387312168
+    },
+    "general": {
+     "to_words_us": 335.4423758879317,
+     "from_words_us": 564.0894474096634
+    },
+    "same_words": true
+   },
+   "128": {
+    "direct": {
+     "to_words_us": 133.0301402219371,
+     "from_words_us": 200.0454225426566
+    },
+    "general": {
+     "to_words_us": 521.6062151811133,
+     "from_words_us": 843.1362244775709
+    },
+    "same_words": true
+   },
+   "256": {
+    "direct": {
+     "to_words_us": 240.59530826355393,
+     "from_words_us": 1206.1157305672598
+    },
+    "general": {
+     "to_words_us": 4170.937929302454,
+     "from_words_us": 6541.755174864726
+    },
+    "same_words": true
+   },
+   "512": {
+    "direct": {
+     "to_words_us": 1632.0183828664833,
+     "from_words_us": 6045.7090889527035
+    },
+    "general": {
+     "to_words_us": 12683.833338087425,
+     "from_words_us": 20773.155562993554
+    },
+    "same_words": true
+   }
+  },
+  "word_bits": 128,
+  "date": "2026-10-20",
+  "preliminary": true,
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "reps": 9
+ },
+ "sizes_w128": {
+  "workload": "n x 32 x n, SystolicEngineMem centre, 128-bit words",
+  "sizes": {
+   "32": {
+    "M": 32,
+    "K": 32,
+    "N": 32,
+    "untimed_s": 8.189992513507605e-05,
+    "pysim_flat": {
+     "s": 0.10953589994460344,
+     "run_s": 0.059187799924984574,
+     "cycles": 1513.9999999999998,
+     "events": 346,
+     "exact": true
+    },
+    "pysim_tiles": {
+     "s": 0.07723080005962402,
+     "run_s": 0.04397719993721694,
+     "cycles": 1504.3999999999999,
+     "events": 102,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.41301329992711544,
+      "scenario": 0.014190100017003715,
+      "csynth": 223.71237690001726,
+      "pysim": 0.30315649998374283,
+      "system_rtl": 0.16584630007855594,
+      "system_xsi": 144.84051420004107,
+      "compare": 0.03346219996456057
+     },
+     "phases_s": {
+      "compile_rtl": 5.630000000004657,
+      "elaborate": 41.43000000000029,
+      "compile_tb": 93.02999999999884,
+      "simulate": 3.569999999999709
+     },
+     "exact": true,
+     "failed": null,
+     "bound_cycles": 3816,
+     "simulate_s": 3.569999999999709,
+     "done_cycle": 1609,
+     "cycles_per_s": 1068.9075630252971
+    }
+   },
+   "64": {
+    "M": 64,
+    "K": 32,
+    "N": 64,
+    "untimed_s": 0.00027130008675158024,
+    "pysim_flat": {
+     "s": 0.14886389998719096,
+     "run_s": 0.11178999999538064,
+     "cycles": 5557.999999999994,
+     "events": 1210,
+     "exact": true
+    },
+    "pysim_tiles": {
+     "s": 0.05963699996937066,
+     "run_s": 0.027573200059123337,
+     "cycles": 5555.5999999999985,
+     "events": 210,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.08642019995022565,
+      "scenario": 0.008026800001971424,
+      "csynth": 0.0,
+      "pysim": 0.23637920001056045,
+      "system_rtl": 0.05553350003901869,
+      "system_xsi": 11.02453230007086,
+      "compare": 0.2782126000383869
+     },
+     "phases_s": {
+      "compile_tb": 6.489999999997963,
+      "simulate": 3.7600000000020373
+     },
+     "exact": true,
+     "failed": null,
+     "bound_cycles": 8669,
+     "simulate_s": 3.7600000000020373,
+     "done_cycle": 5881,
+     "cycles_per_s": 2305.5851063817295
+    }
+   },
+   "128": {
+    "M": 128,
+    "K": 32,
+    "N": 128,
+    "untimed_s": 0.000888700014911592,
+    "pysim_flat": {
+     "s": 0.30524279992096126,
+     "run_s": 0.28536320000421256,
+     "cycles": 21734.00000000028,
+     "events": 4666,
+     "exact": true
+    },
+    "pysim_tiles": {
+     "s": 0.09783039998728782,
+     "run_s": 0.053056900040246546,
+     "cycles": 21760.400000000027,
+     "events": 642,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.06543229997623712,
+      "scenario": 0.01738039997871965,
+      "csynth": 0.0,
+      "pysim": 0.5654457000782713,
+      "system_rtl": 0.035645199939608574,
+      "system_xsi": 31.86900780000724,
+      "compare": 0.09359039994888008
+     },
+     "phases_s": {
+      "compile_tb": 8.0,
+      "simulate": 23.43000000000029
+     },
+     "exact": true,
+     "failed": null,
+     "bound_cycles": 28080,
+     "simulate_s": 23.43000000000029,
+     "done_cycle": 22969,
+     "cycles_per_s": 1198.4635083226483
+    }
+   },
+   "256": {
+    "M": 256,
+    "K": 32,
+    "N": 256,
+    "untimed_s": 0.007857799995690584,
+    "pysim_flat": {
+     "s": 1.8274102999130264,
+     "run_s": 1.78283509996254,
+     "cycles": 86437.9999999999,
+     "events": 18490,
+     "exact": true
+    },
+    "pysim_tiles": {
+     "s": 0.23568359995260835,
+     "run_s": 0.18157809996046126,
+     "cycles": 86579.59999999922,
+     "events": 2370,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.154469900066033,
+      "scenario": 0.013294100062921643,
+      "csynth": 0.0,
+      "pysim": 2.7211844000266865,
+      "system_rtl": 0.040164200006984174,
+      "system_xsi": 96.15407220006455,
+      "compare": 0.04051700001582503
+     },
+     "phases_s": {
+      "compile_tb": 8.799999999995634,
+      "simulate": 86.88999999999942
+     },
+     "exact": true,
+     "failed": null,
+     "bound_cycles": 105725,
+     "simulate_s": 86.88999999999942,
+     "done_cycle": 91321,
+     "cycles_per_s": 1216.7683277707529
+    }
+   }
+  },
+  "date": "2026-10-20",
+  "preliminary": true,
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "reps": 11
+ },
+ "steady_w128": {
+  "workload": "8x8x32 back to back",
+  "word_bits": 128,
+  "date": "2026-10-20",
+  "preliminary": true,
+  "machine": {
+   "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+   "python": "3.14.3",
+   "system": "Windows-11-10.0.26200-SP0"
+  },
+  "counts": [
+   10,
+   50,
+   100
+  ],
+  "reps": 3,
+  "untimed": {
+   "per_product_ms": 0.03647549138938794,
+   "setup_ms": -0.006426208782328807,
+   "runs": {
+    "10": 0.00036130001535639167,
+    "50": 0.00181200000224635,
+    "100": 0.003643499978352338
+   }
+  },
+  "pysim": {
+   "per_product_ms": 0.7338986886172842,
+   "setup_ms": 55.7663032792692,
+   "runs": {
+    "10": 0.0641501999925822,
+    "50": 0.0905804000212811,
+    "100": 0.12999210000270978
+   },
+   "exact": true,
+   "events": {
+    "10": 491,
+    "50": 2226,
+    "100": 4475
+   },
+   "events_per_product": 44.295901639344265
+  },
+  "rtl": {
+   "per_product_ms": 43.04918032785728,
+   "setup_ms": 297.37704918055846,
+   "runs": {
+    "10": 0.75,
+    "50": 2.4099999999998545,
+    "100": 4.619999999998981
+   },
+   "exact": true,
+   "csynth_s": 79.51930210000137,
+   "runs_detail": [
+    {
+     "steps_s": {
+      "codegen": 0.03437329997541383,
+      "scenario": 0.0035001999931409955,
+      "csynth": 79.51930210000137,
+      "pysim": 0.038996600022073835,
+      "system_rtl": 0.025117999990470707,
+      "system_xsi": 21.17845359997591,
+      "compare": 0.06327959999907762
+     },
+     "phases_s": {
+      "compile_rtl": 1.5299999999997453,
+      "elaborate": 14.720000000000255,
+      "compile_tb": 3.9400000000005093,
+      "simulate": 0.75
+     },
+     "exact": true,
+     "failed": null
+    },
+    {
+     "steps_s": {
+      "codegen": 0.046373299963306636,
+      "scenario": 0.004463299992494285,
+      "csynth": 0.0,
+      "pysim": 0.1235179000068456,
+      "system_rtl": 0.014711300027556717,
+      "system_xsi": 2.5855709000024945,
+      "compare": 0.045766099996399134
+     },
+     "phases_s": {
+      "simulate": 2.4099999999998545
+     },
+     "exact": true,
+     "failed": null
+    },
+    {
+     "steps_s": {
+      "codegen": 0.03090199996950105,
+      "scenario": 0.003002899989951402,
+      "csynth": 0.0,
+      "pysim": 0.1730476000229828,
+      "system_rtl": 0.010223700024653226,
+      "system_xsi": 4.746215199993458,
+      "compare": 0.0438404000014998
+     },
+     "phases_s": {
+      "simulate": 4.619999999998981
+     },
+     "exact": true,
+     "failed": null
+    }
+   ]
+  }
+ }
+}

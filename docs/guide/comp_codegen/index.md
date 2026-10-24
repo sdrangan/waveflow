@@ -137,7 +137,7 @@ means when you write a [hook](../custom_hooks/).
 
 ## See also
 
-- [Hardware modules and Flows](../flows/) — the end-to-end *recipe* per target: which build steps run, in what order, and how the result is verified. This section is the per-target mechanics; that section is the story.
+- [Flow Overview](../systems/) — the end-to-end flow, a page per step: which build steps run, in what order, and how the result is verified. This section is the per-target mechanics; that section is the story.
 - [Hardware Modules](../flows/modules.md) — the Python `HwModule` this section generates C++ for.
 - [Custom Hooks](../custom_hooks/) — the hand-written synthesizable kernel bodies that plug into a generated module.
 - [Build System](../build/) — the `BuildDag` that drives these codegen steps end to end.

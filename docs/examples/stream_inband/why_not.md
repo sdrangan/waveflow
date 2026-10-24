@@ -1,6 +1,7 @@
 ---
 title: Why this contract
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 2
 summary: "Why the stream_inband contract is the way it is, argued against the four designs students usually propose first: configuration over AXI-Lite (a race with the commands already in flight), a response footer with recovery after an error (hardware that cannot remove the reset), draining to TLAST on an error (it removes one burst and guarantees nothing), and configuration that persists across commands or activations (hidden state). For each, the failure it causes, and when a variant of it is the right choice."
 ---

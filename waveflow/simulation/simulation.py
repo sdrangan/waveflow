@@ -87,6 +87,12 @@ class Simulation:
             ``read_nb`` on two streams, modelled as a check every cycle) never runs out of events, so
             its testbench passes the event that means "done" (or an end time) instead.
         """
+        # Each declared timed phase loads its model before anything runs: a store lookup is by the
+        # module's identity, which must be computed on the module as built, not on whatever state its
+        # run has reached by its first prediction (plans/unit_harness.md Stage 4).
+        for obj in self._sim_objs:
+            for phase in (getattr(obj, "timing_phases", None) or {}).values():
+                phase.tm
         for obj in self._sim_objs:
             obj.pre_sim()
 

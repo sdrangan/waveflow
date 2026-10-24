@@ -119,6 +119,7 @@ bits exactly.
 | `lanes` | `bool` | `False` | the boundary: one `RadixWord` port each way (`s_in`, `m_out`), or with `True` `VitisFft`'s four-lane group (`s_in_0..3`, `m_out_0..3`) |
 | `inverse` | `bool` | `False` | the inverse transform: conjugated twiddle ROMs, `1/L` as `log2 L` fewer integer bits on the output |
 | `timed` | `bool` | `True` | `False` gives exact bits in zero simulated time |
+| `pysim` | `str` | `"tasks"` | the pysim's granularity: `"tasks"`, one process per task; or `"flat"`, one process for the whole FFT with the same frames at the same cycles (ping-pong reorder only) -- see [Timing](timing.md#the-flat-pysim-one-process-for-the-fft) |
 
 `L` and the widths are `HwParam`s: they reach the C++ as the generated configuration (formats,
 ROMs), so two values are two artifacts. There is no `R` parameter: 4 is the only radix the model and
@@ -155,4 +156,5 @@ ValueError: reorder='fifo': one of ('sob', 'pingpong')
 ```
 
 Also refused, in `Geometry`: a radix other than 4, and a scaling mode other than `NO_SCALING` -- the
-modes the per-stage model has measured. The inverse transform is not built yet.
+modes the per-stage model has measured.  And `pysim="flat"` with `reorder="sob"`: that reorder's
+frames queue inside the chain, which one process would not reproduce. The inverse transform is not built yet.

@@ -1,5 +1,5 @@
 ---
-title: Systems
+title: System resources
 parent: Resource Analysis Tools
 nav_order: 4
 has_children: false

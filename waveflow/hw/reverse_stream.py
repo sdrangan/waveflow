@@ -372,6 +372,12 @@ class CreditStreamMasterIF(InterfaceEndpoint):
         A burst longer than :attr:`max_write` is refused at once rather than risk waiting forever.
         """
         n = nwords_of(words, self.bitwidth)
+        yield from self._wait_room(n)
+        yield from self.fwd_ep.write(words)
+        self.written = (self.written + n) & ((1 << int(self.ctr_bits)) - 1)
+
+    def _wait_room(self, n: int) -> ProcessGen[None]:
+        """Sleep on the credit channel until *n* words fit (:meth:`write`'s wait)."""
         if n > self.max_write:
             raise ValueError(
                 f"{self.name}: a {n}-word burst exceeds max_write={self.max_write} (depth "
@@ -383,8 +389,22 @@ class CreditStreamMasterIF(InterfaceEndpoint):
             got = yield from self.crd_ep.get()
             self.acked = int(np.asarray(got).reshape(-1)[-1]) & mask
             yield from self.poll_credit(CREDIT_DRAIN)
-        yield from self.fwd_ep.write(words)
-        self.written = (self.written + n) & mask
+
+    def begin(self, data) -> ProcessGen[Any]:
+        """The first half of :meth:`write` (``plans/pipelined_ops.md``): wait for room for all of
+        *data*, then begin the forward write; returns its :class:`~waveflow.hw.interface.Xfer`.
+        Finish with :meth:`end`.  For a write paced by its producer
+        (:meth:`~waveflow.hw.timed_phase.TimedPhase.produce`)."""
+        from waveflow.hw.dataschema import DataSchema
+
+        raw = data.serialize(word_bw=self.bitwidth) if isinstance(data, DataSchema) else data
+        yield from self._wait_room(nwords_of(raw, self.bitwidth))
+        return (yield from self.fwd_ep.begin(raw))
+
+    def end(self, x) -> ProcessGen[None]:
+        """The second half of :meth:`write`: the forward write delivered, and counted."""
+        yield from self.fwd_ep.end(x)
+        self.written = (self.written + x.nwords) & ((1 << int(self.ctr_bits)) - 1)
 
     def write_resp_nb(self, resp: Any) -> ProcessGen[bool]:
         """Write a **response**, drawing on the reserved headroom so it cannot be refused for room.

@@ -8,7 +8,25 @@ build from the references, so read them first.
 
 ## The reference design
 
-**Your primary reference is `markov`**: two kernels, a credit link routed
+**For one kernel behind the bus, start from `stream_kernel_mm`** (the polynomial on a bus): the kernel
+of `stream_kernel`, unchanged, behind the queue views it declares (`mm_views`), on a crossbar, driven by
+a two-thread host that sizes each result from its header and reads the status after it:
+
+```
+waveflow_get_doc("docs/examples/stream_kernel/protocol.md")          # the protocol: header, results, status
+waveflow_get_doc("docs/examples/stream_kernel_mm/index.md")          # what it adds, the pages
+waveflow_get_doc("docs/examples/stream_kernel_mm/device.md")         # mm_views, build_mm_device
+waveflow_get_doc("docs/examples/stream_kernel_mm/system.md")         # the crossbar, IRQs, HwSystem(sim, dut)
+waveflow_get_doc("docs/examples/stream_kernel_mm/host.md")           # the two threads, no polling, the C++ twin
+waveflow_get_doc("docs/examples/stream_kernel_mm/composition.md")    # the device's own harness, the timing check
+waveflow_get_example("stream_kernel_mm", file="stream_kernel_mm.py") # PolyHost and mm_system
+waveflow_get_example("stream_kernel_mm", file="poly_kernel_host.h")  # the host's C++ twin
+```
+
+Then `docs/guide/systems/index.md` for the order of the steps: the kernel verified alone in its
+harness first, then the system.
+
+**For several kernels, a credit link or a shared memory, your reference is `markov`**: two kernels, a credit link routed
 over the bus, results in shared memory, a two-thread host.  Read its pages in
 the order they run:
 
@@ -38,8 +56,8 @@ configuration changed mid-stream -- read `mm_fir` the same way, starting at
 with `waveflow_get_example("mm_fir", file="mm_fir.py")` and
 `waveflow_get_example("mm_fir", file="mm_fir_host.h")`.
 
-Then the pattern pages: `docs/guide/patterns/command_response.md` and
-`docs/guide/patterns/stream_only.md`.
+Then the pattern pages: `docs/guide/systems/command_response.md` and
+`docs/guide/systems/streams.md`.
 
 ---
 
@@ -102,9 +120,9 @@ The Stage 1 artifacts are now frozen.
 Each of these has cost a debugging session here:
 
 - **A write, then a blocking read on another stream, deadlocks** when the
-  two depend on each other: use `read_nb` (`docs/guide/patterns/stream_only.md`).
+  two depend on each other: use `read_nb` (`docs/guide/systems/streams.md`).
 - **An un-paced free-running pipeline deadlocks** at RTL: every stage waits
-  for a command or a credit (`docs/guide/patterns/command_response.md`).
+  for a command or a credit (`docs/guide/systems/command_response.md`).
 - **An `hls::task` that writes before it reads counts as in reset**
   (`docs/guide/rf/rfshotbuf/tx_internal.md`, "The reset trap").
 - **A deadlock at RTL looks like a hang, or like success**: every gate

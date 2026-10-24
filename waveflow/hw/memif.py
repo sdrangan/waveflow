@@ -396,16 +396,12 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         if self.issue_cycles:
             yield self.timeout(float(self.issue_cycles) / self.interface.clk.freq)
         if self.max_outstanding is None:
-            proc = self.process(transfer)
-            yield proc
-            return proc.value
+            return (yield from transfer)
         if direction not in self._slots:
             self._slots[direction] = simpy.Resource(self.env, capacity=int(self.max_outstanding))
         with self._slots[direction].request() as req:
             yield req
-            proc = self.process(transfer)
-            yield proc
-            return proc.value
+            return (yield from transfer)
 
     def _check_bound(self) -> None:
         if self.interface is None:
@@ -436,6 +432,25 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
         self._check_bound()
         return (yield from self._issue(
             "R", self.interface.read(nwords, global_addr, self.master_port)))
+
+    @port_read
+    def read_gather(self, runs: list[tuple[int, int]]) -> ProcessGen[list[Words]]:
+        """Read several runs ``[(global_addr, nwords), ...]`` as **one** transaction and return their
+        word arrays, in order.
+
+        The coalesced read a loosely-timed model makes when it reads many bursts for one piece of
+        work -- a tile's panels, say -- and needs one event, not one per burst.  The interconnect
+        charges it as one read of the runs' total words in ``len(runs)`` bursts: one latency, the
+        words a cycle each, the slave's calibrated span over ``{num_trans: len(runs), nwords}`` when
+        it declares one.  An interconnect without ``read_gather`` reads the runs one after another."""
+        self._check_bound()
+        gather = getattr(self.interface, "read_gather", None)
+        if gather is None:
+            out = []
+            for addr, n in runs:
+                out.append((yield from self.read(int(n), int(addr))))
+            return out
+        return (yield from self._issue("R", gather(runs, self.master_port)))
 
     # ------------------------------------------------------------------
     # Polling (the LT polling-overhead model)
@@ -761,20 +776,42 @@ class _DirectionalMMIFMaster(MMIFMaster):
     #: ``'R'`` or ``'W'`` — set by the concrete subclass.
     port_dir: ClassVar[str] = 'RW'
 
-    def __getattribute__(self, name: str):
-        attr = super().__getattribute__(name)
-        if name.startswith('_'):
-            return attr
-        want = object.__getattribute__(self, '__class__').port_dir
-        got = _classify_port_dir(name, attr)
-        if got is not None and got != want:
-            raise AttributeError(
-                f"{type(self).__name__}.{name} is a "
-                f"{'read' if got == 'R' else 'write'} operation, but this endpoint declares "
-                f"port_dir={want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
-                f"the direction is the type, so codegen can lower it without being told separately."
-            )
-        return attr
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Refuse the wrong direction's methods once, when the class is made.
+
+        Each method the classifier says belongs to the other direction is replaced on the class by a
+        :class:`_WrongDirection` descriptor, so reading it from an instance raises.  Checking in
+        ``__getattribute__`` instead ran on every attribute access of every transfer -- a measurable
+        share of a memory transaction's pysim cost -- to answer a question fixed by the class."""
+        super().__init_subclass__(**kwargs)
+        want = cls.port_dir
+        for name in dir(cls):
+            if name.startswith('_'):
+                continue
+            attr = getattr(cls, name)
+            if isinstance(attr, _WrongDirection):
+                continue
+            got = _classify_port_dir(name, attr)
+            if got is not None and got != want:
+                setattr(cls, name, _WrongDirection(name, got, want, attr))
+
+
+class _WrongDirection:
+    """A method a directional master's type forbids (see :class:`_DirectionalMMIFMaster`): reading it
+    from an instance raises ``AttributeError``; from the class, it is the method (for introspection)."""
+
+    def __init__(self, name: str, got: str, want: str, func) -> None:
+        self.name, self.got, self.want, self.func = name, got, want, func
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self.func
+        raise AttributeError(
+            f"{type(obj).__name__}.{self.name} is a "
+            f"{'read' if self.got == 'R' else 'write'} operation, but this endpoint declares "
+            f"port_dir={self.want!r}. Use a plain MMIFMaster if the port really is bidirectional — "
+            f"the direction is the type, so codegen can lower it without being told separately."
+        )
 
 
 class MMIFReadMaster(_DirectionalMMIFMaster):
@@ -1176,7 +1213,8 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         assigned first).  *name* is the IP's module name; *id_width* the AXI ID bits it routes."""
         from waveflow.build.axi_xbar import AxiXbarConfig
 
-        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width)
+        return AxiXbarConfig.from_crossbar(self, name, id_width=id_width,
+                                           direct=bool(getattr(self, "direct", False)))
 
     def bind(
         self,
@@ -1264,6 +1302,10 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
               tstart: float | None = None) -> ProcessGen[None]:
         ep_name, slave_ep, local_addr = self._decode_address(global_addr)
         protocol = self._slave_protocols.get(ep_name, AXIMMProtocol.FULL)
+        # A cut-through slave (``rx_write_begin``) hears a FULL burst when its FIRST data word lands,
+        # then again (``rx_write_proc``) when the last does -- a queue view that streams words on as
+        # they arrive.  Not for an early-anchored (``tstart``) write: its words already landed.
+        begin = getattr(slave_ep, "rx_write_begin", None) if tstart is None else None
 
         if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
             # One transaction at a time from the address phase on: travel, then take the channel,
@@ -1272,15 +1314,22 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 yield self.timeout(self.latency_travel / self.clk.freq)
             with slave_ep.write_channel.request() as req:
                 yield req
-                cycles = (self.latency_init - self.latency_travel
-                          + words.shape[0] * self._poll_stretch(ep_name))
-                dly = cycles / self.clk.freq
-                if tstart is not None:
-                    dly = max(0.0, dly + (tstart - self.env.now))
-                if dly > 0:
-                    yield self.timeout(dly)
+                head = (self.latency_init - self.latency_travel) / self.clk.freq
+                body = words.shape[0] * self._poll_stretch(ep_name) / self.clk.freq
+                if begin is not None:
+                    if head > 0:
+                        yield self.timeout(head)
+                    yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                    if body > 0:
+                        yield self.timeout(body)
+                else:
+                    dly = head + body
+                    if tstart is not None:
+                        dly = max(0.0, dly + (tstart - self.env.now))
+                    if dly > 0:
+                        yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
 
         elif protocol == AXIMMProtocol.FULL:
             # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
@@ -1292,12 +1341,19 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             # wait if the anchor is in the past (mirrors StreamIF.write_pipelined).
             if tstart is not None:
                 dly = max(0.0, dly + (tstart - self.env.now))
+            if begin is not None:
+                head = self.latency_init / self.clk.freq
+                body = dly - head
+                if head > 0:
+                    yield self.timeout(head)
+                yield from begin(words, local_addr, body / max(1, words.shape[0]))
+                dly = body
             if dly > 0:
                 yield self.timeout(dly)
             with slave_ep.write_channel.request() as req:
                 yield req
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
 
         else:  # LITE — one word per transaction
             word_step = self._word_step()
@@ -1310,12 +1366,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.write_channel.request() as req:
                     yield req
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(
-                            slave_ep.rx_write_proc(
-                                words[i : i + 1],
-                                local_addr + i * word_step,
-                            )
-                        )
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step, )
 
         # the watched word may have changed — wake any pollers on this slave
         self._notify_write(ep_name)
@@ -1340,9 +1391,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if req_dly > 0:
                     yield self.timeout(req_dly)
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
                 ret_dly = (
@@ -1360,9 +1409,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             with slave_ep.read_channel.request() as req:
                 yield req
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
 
@@ -1387,13 +1434,64 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 with slave_ep.read_channel.request() as req:
                     yield req
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step)
-                        )
-                        yield proc
-                        result[i] = proc.value[0]
+                        result[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
 
             return result
+
+    def read_gather(self, runs: list[tuple[int, int]], master_port: int) -> ProcessGen[list[Words]]:
+        """Several runs ``[(global_addr, nwords)]`` on one slave as **one** read (see
+        :meth:`MMIFMaster.read_gather`): the same channel and timing as :meth:`read` of the runs'
+        total words -- or, when the slave declares a calibrated read model, its span over
+        ``{num_trans: len(runs), nwords}`` -- with every run's words moved inside it."""
+        decoded = [(self._decode_address(int(a)), int(n)) for a, n in runs]
+        ep_name, slave_ep, _ = decoded[0][0]
+        if any(d[0][0] != ep_name for d in decoded):
+            raise ValueError(f"{self.name}: read_gather runs span more than one slave")
+        if self._slave_protocols.get(ep_name, AXIMMProtocol.FULL) != AXIMMProtocol.FULL:
+            raise NotImplementedError(f"{self.name}: read_gather needs an AXI4 (FULL) slave")
+        dtype = self._dtype()
+        total = sum(n for _d, n in decoded)
+
+        def move():
+            out = []
+            for (_e, _s, local), n in decoded:
+                if slave_ep.rx_read_proc is not None:
+                    out.append((yield from slave_ep.rx_read_proc(n, local)))
+                else:
+                    out.append(np.zeros(n, dtype=dtype))
+            return out
+
+        bt = getattr(slave_ep, "bus_timing", None)
+        if bt is not None and bt.read is not None:
+            span = bt.read_span_secs(len(decoded), total)
+            with slave_ep.read_channel.request() as req:
+                yield req
+                t1 = self.env.now + span
+                out = yield from move()
+                if t1 > self.env.now:
+                    yield self.timeout(t1 - self.env.now)
+            return out
+        ret_dly = (self.latency_read_return + total * self._poll_stretch(ep_name)) / self.clk.freq
+        if slave_ep.serialize_transactions:
+            if self.latency_travel > 0:
+                yield self.timeout(self.latency_travel / self.clk.freq)
+            with slave_ep.read_channel.request() as req:
+                yield req
+                req_dly = (self.latency_init - self.latency_travel) / self.clk.freq
+                if req_dly > 0:
+                    yield self.timeout(req_dly)
+                out = yield from move()
+                if ret_dly > 0:
+                    yield self.timeout(ret_dly)
+            return out
+        if self.latency_init > 0:
+            yield self.timeout(self.latency_init / self.clk.freq)
+        with slave_ep.read_channel.request() as req:
+            yield req
+            out = yield from move()
+        if ret_dly > 0:
+            yield self.timeout(ret_dly)
+        return out
 
     # ------------------------------------------------------------------
     # Spanned (calibrated-occupancy) transfers — the interconnect owns the
@@ -1425,9 +1523,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if req_dly > 0:
                     yield self.timeout(req_dly)
                 if slave_ep.rx_read_proc is not None:
-                    proc = self.env.process(slave_ep.rx_read_proc(nwords, local_addr))
-                    yield proc
-                    words = proc.value
+                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
                 else:
                     words = np.zeros(nwords, dtype=dtype)
                 ret_dly = (
@@ -1443,10 +1539,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_read_proc is not None:
-                        proc = self.env.process(
-                            slave_ep.rx_read_proc(1, local_addr + i * word_step))
-                        yield proc
-                        words[i] = proc.value[0]
+                        words[i] = (yield from slave_ep.rx_read_proc(1, local_addr + i * word_step))[0]
             # Occupy the channel out to the full span (anchored).
             t0 = anchor
             t1 = max(anchor + span, self.env.now)
@@ -1489,7 +1582,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                 if dly > 0:
                     yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
-                    yield self.env.process(slave_ep.rx_write_proc(words, local_addr))
+                    yield from slave_ep.rx_write_proc(words, local_addr)
             else:  # LITE — one word per transaction
                 word_step = self._word_step()
                 for i in range(nwords):
@@ -1499,8 +1592,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if dly > 0:
                         yield self.timeout(dly)
                     if slave_ep.rx_write_proc is not None:
-                        yield self.env.process(slave_ep.rx_write_proc(
-                            words[i : i + 1], local_addr + i * word_step))
+                        yield from slave_ep.rx_write_proc( words[i : i + 1], local_addr + i * word_step)
             # the watched word may have changed — wake any pollers on this slave
             self._notify_write(ep_name)
             # Occupy the channel out to the full span (anchored); remember the busy-until so the
@@ -1612,7 +1704,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.write_channel.request() as req:
             yield req
             if slave_ep.rx_write_proc is not None:
-                yield self.env.process(slave_ep.rx_write_proc(words, addr))
+                yield from slave_ep.rx_write_proc(words, addr)
         # wake any pollers waiting on this slave (point-to-point: single bus)
         self._notify_write('slave')
 
@@ -1629,9 +1721,7 @@ class DirectMMIF(_MMPollSupport, QueuedTransferIF):
         with slave_ep.read_channel.request() as req:
             yield req
             if slave_ep.rx_read_proc is not None:
-                proc = self.env.process(slave_ep.rx_read_proc(nwords, addr))
-                yield proc
-                words = proc.value
+                words = yield from slave_ep.rx_read_proc(nwords, addr)
             else:
                 words = np.zeros(nwords, dtype=dtype)
 

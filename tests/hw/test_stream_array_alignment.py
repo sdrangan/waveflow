@@ -283,7 +283,9 @@ def _gen_headers(root: Path) -> None:
     dag = BuildDag()
     dag.add(StreamUtilsStep(output_dir=INCLUDE_DIR))
     for cls in [AlPair, AlWide] + ARRAYS + [type(s) for s in SAMPLES]:
-        dag.add(DataSchemaStep(cls, word_bw_supported=[32, 64], include_dir=INCLUDE_DIR))
+        # AlWide is wider than 32 bits: its array-utils lane routines need its framed methods
+        dag.add(DataSchemaStep(cls, word_bw_supported=[32, 64], include_dir=INCLUDE_DIR,
+                               framed=cls is AlWide))
     for elem in (F32, I16, I8, AlPair, AlWide):
         dag.add(ArrayUtilsStep(elem, [32, 64]))
     res = dag.run(BuildConfig(root_dir=root, params={}), force=True)

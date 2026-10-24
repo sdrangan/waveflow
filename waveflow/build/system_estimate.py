@@ -311,14 +311,14 @@ def estimate_system(sysm, platform=None, *, top: str | None = None, inside=None,
     ``False`` ignores this system's own synthesis records, giving the purely composed prediction
     (each part from its own measurement) that the measured total is then a check on.
     """
-    from waveflow.build.system_dag import rtl_rel, snake
+    from waveflow.build.system_dag import default_top, rtl_rel
     from waveflow.build.system_synth import INSTANCE_TARGET, system_identity
     from waveflow.build.system_top import render_system_top, system_top_spec
     from waveflow.build.system_xsi import discover
     from waveflow.calib.record_store import INTEGRATION_TARGET, platform_store
 
     if spec is None:
-        top = top or snake(type(sysm).__name__)
+        top = top or default_top(sysm)
         xbar, _host, cut = discover(sysm)
         spec = system_top_spec(xbar, list(inside) if inside is not None else cut, top=top,
                                xbar_name=xbar_name)
@@ -419,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                                    "examples.markov.markov_build:system)")
     ap.add_argument("--platform", required=True)
     ap.add_argument("--platforms-root", default="calib/platforms")
-    ap.add_argument("--top", default=None, help="the system top's name (default: the class, snake)")
+    ap.add_argument("--top", default=None, help="the system top's name (default: the DUT's name)")
     ap.add_argument("--xbar-name", default=None)
     ap.add_argument("--root", default=None, help="the example root (its csynth output); default: "
                                                  "the system module's directory")

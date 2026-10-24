@@ -70,6 +70,30 @@ silently hold `2`. It packs into exactly **one bit** (`ap_uint<1>`), so several 
 only a few bits in a record — handy for `m_axi` control words. Use it directly (no
 `specialize` needed); the equivalent raw form is the one-bit `IntField` shown above.
 
+### `EnumField` — a named code
+
+A status, an opcode, a message type: a small set of named values. Declare them as a Python `IntEnum`
+and specialize `EnumField` on it:
+
+```python
+from enum import IntEnum
+from waveflow.hw.dataschema import EnumField
+
+class StatusCode(IntEnum):
+    OK = 0
+    TLAST_EARLY = 1
+
+StatusCodeField = EnumField.specialize(enum_type=StatusCode)               # the minimum width: 1 bit
+StatusCode16 = EnumField.specialize(enum_type=StatusCode, bitwidth=16)      # a protocol's uint16
+```
+
+- **`bitwidth`** is the field's width on the wire. Omitted, it is the **minimum** that holds the largest
+  value -- right for a field packed among others, wrong when a protocol fixes the width (a spec's
+  `status (uint16)`): give it explicitly.
+- **`default`** is the member `init_value()` takes; omitted, the first.
+- The values must be non-negative. The `.val` is the `IntEnum` member, and the generated C++ is an `enum
+  class` of the same name and values (`StatusCode::TLAST_EARLY`), so the two sides name the codes alike.
+
 ## Why arbitrary-precision integers matter in hardware
 
 Software integers come in a few fixed sizes (8/16/32/64). Hardware has no such restriction —

@@ -1,8 +1,7 @@
 ---
 title: XSI simulation components
-parent: Concurrent (free-running)
-grand_parent: Hardware modules and Flows
-nav_order: 1
+parent: Modules
+nav_order: 4
 audience: python
 summary: "The concurrent flow uses two simulations: a Python discrete-event simulation for system-level modeling, and an XSI simulation that runs the real RTL cycle by cycle. This page is the big picture of the second: an XSI simulation top made of the RTL top (what will be synthesized) and a testbench of C++ bus-functional models, the three ways an object can be realized in it, and where each kind of pysim object usually lands."
 ---
@@ -47,21 +46,23 @@ An XSI simulation runs a **DUT** and a **testbench** around it, cut from one Pyt
 - **The testbench** is every model around the DUT, each driving or answering some of its pins. These
   modules are not synthesized.
 
-![mem_copy as a system with no crossbar. A dotted box, the HwSystem MemCopySystem, holds everything. Inside it, a solid box is the DUT: the MemCopy kernel alone, one sub-top in a dashed box, made of three blue Vitis HLS tasks -- a Sequencer feeding a MemRStream and a MemWStream, with a data stream from the reader to the writer. Outside the DUT, in tan, the testbench: a command driver (StreamDriver) whose stream enters the Sequencer, a completion sink (StreamSink) fed by the MemWStream, and a memory (MemoryMod) answering the reader's m0_axi and the writer's m1_axi. A caption says each port leaving the DUT is answered by a testbench model: AxisMaster and AxisSlave for the driver and sink, one FlatMemory behind both m_axi groups.](./figures/kernel_cut.svg)
+![mem_copy as a system with no crossbar. A dotted box, the HwSystem mem_copy_system(), holds everything. Inside it, a solid box is the DUT: the MemCopy kernel alone, one sub-top in a dashed box, made of three blue Vitis HLS tasks -- a Sequencer feeding a MemRStream and a MemWStream, with a data stream from the reader to the writer. Outside the DUT, in tan, the testbench: a command driver (StreamDriver) whose stream enters the Sequencer, a completion sink (StreamSink) fed by the MemWStream, and a memory (MemoryMod) answering the reader's m0_axi and the writer's m1_axi. A caption says each port leaving the DUT is answered by a testbench model: AxisMaster and AxisSlave for the driver and sink, one FlatMemory behind both m_axi groups.](./figures/kernel_cut.svg)
 
 The picture is mem_copy, the kernel-scale twin of the system picture in
-[Systems and the cut](./concurrent_system.md), in the same colours. At either scale the graph is an
+[Systems and the cut](../systems/index.md), in the same colours. At either scale the graph is an
 `HwSystem` whose `dut()` names the DUT, and everything else is testbench. mem_copy is one kernel and
 no crossbar: its kernel's four ports (two streams, two `m_axi` bundles) leave the top, and each is
 answered by a testbench model. It runs through the system flow (`mem_copy_system_build.py`) and
 reproduces the single-kernel gate exactly: 2908 cycles.
 
-Most single-kernel examples still describe their graph the older way: one composite `FreeRunMod`
-testbench class, such as `MemCopyTB`, whose children the cut splits. The roles below are the same in
-both. Folding those examples into `HwSystem` is open work (`plans/system_model.md`).
+mem_copy builds its modules directly on one simulation and names the kernel as the DUT,
+`HwSystem(sim, dut)` ([The system](../../examples/memcpy/system.md)), as every curated example now
+does. A few demos still describe their graph the older way, a
+[`GraphSystem`](../build/xsi_system.md#graph-system): one composite `FreeRunMod` testbench class
+whose children the cut splits. The roles below are the same in both.
 
 Which modules are inside the DUT is decided per build: that is the [cut](./modules.md#the-cut). How
-the graph becomes a running simulation is the [flow steps](./concurrent_flowsteps.md) page.
+the graph becomes a running simulation is the [flow steps](../systems/rtl.md) page.
 
 ### Three kinds of module
 
@@ -145,8 +146,12 @@ not work either: `mem_copy`'s own `s_done` endpoint is `has_tlast=True` in Pytho
 `mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and that design is the 2908
 gate. The Python framing flag and the C++ word type already disagree on a *working* design.
 
-Making the cut free in the artifact means teaching `kernel_task()` about the cut. That is designed
-but not built — see `plans/design_cut.md` §S5.
+Making the cut free in the artifact means teaching `kernel_task()` about the cut, and for framed
+ports that is built: `KernelTask(..., framed=ports)` makes each listed port's word type a template
+parameter the generator supplies -- `axi4s_word` at a top, `framed_word` inside a composite -- so one
+body serves a module alone and inside a composite
+([One body, wherever it sits](../comp_codegen/freerunning_override.md#framed)). The in-band reader above
+predates it.
 
 ## See also
 
@@ -154,7 +159,7 @@ but not built — see `plans/design_cut.md` §S5.
   semantics, and the ordering guarantee.
 - [MM Interfaces](../interface/axi_mm/modeling.md#how-it-lowers) — `AXIMMCrossBarIF` in pysim, and
   `axi_crossbar` at RTL.
-- [Flow steps](./concurrent_flowsteps.md) — how the XSI simulation top becomes a running simulation.
+- [Flow steps](../systems/rtl.md) — how the XSI simulation top becomes a running simulation.
 - [mm_fir](../../examples/mm_fir/) — every piece in one design: a Vitis kernel, an adaptor and a
   crossbar in the RTL top, a host program in the testbench.
 - [Memory-mapped slave adaptor](../interface/axi_mm/slave.md#the-structure) — why a kernel can

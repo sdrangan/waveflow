@@ -125,6 +125,8 @@ class SsrFftTB(FreeRunMod):
     burst_gap_cycles: int = 0
     burst_gaps: list = field(default_factory=list)
     capture_accepts: bool = False
+    #: ``SsrFft.pysim``: ``"tasks"`` (one process per task) or ``"flat"`` (one for the FFT).
+    pysim: str = "tasks"
     root: Path | None = None
     clk: Clock = field(default_factory=lambda: Clock(freq=CLK_HZ))
 
@@ -133,7 +135,7 @@ class SsrFftTB(FreeRunMod):
         self.dut = SsrFft(name="ssr_fft", sim=self.sim, clk=self.clk, L=self.length,
                           in_w=self.in_w, in_i=self.in_i, tw_w=self.tw_w, tw_i=self.tw_i,
                           timed=self.timed, reorder=self.reorder, lanes=self.lanes,
-                          inverse=self.inverse)
+                          inverse=self.inverse, pysim=self.pysim)
         ins, outs = port_names(self.lanes)
         d_in = self.dut.s_in if self.lanes else [self.dut.s_in]
         d_out = self.dut.m_out if self.lanes else [self.dut.m_out]

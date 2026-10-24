@@ -3,7 +3,7 @@ title: Frames
 parent: AI Tooling
 nav_order: 2.5
 has_children: false
-summary: "How Waveflow guides an AI agent that is asked to build an accelerator. A frame is a design pattern realized in one system shape and one verification flow, with a reference example that proves it -- stream_inband (one host-launched kernel), freerun_pipeline (a composite of free-running tasks) and bus_system (kernels and a host on a crossbar). The agent chooses a frame from the spec, then follows its process: a specification stage that stops for review, then the build against that frozen specification. Covers the menu, what is in a frame, the shared process, the frame lint, and how to add a frame."
+summary: "How Waveflow guides an AI agent that is asked to build an accelerator. A frame is a design pattern realized in one system shape and one verification flow, with a reference example that proves it -- stream_kernel (one free-running kernel on streams), stream_pipeline (free-running stages on streams), stream_inband (one host-launched kernel), freerun_pipeline (a composite of free-running tasks) and bus_system (kernels and a host on a crossbar). The agent chooses a frame from the spec, then follows its process: a specification stage that stops for review, then the build against that frozen specification. Covers the menu, what is in a frame, the shared process, the frame lint, and how to add a frame."
 ---
 
 # Frames
@@ -15,7 +15,7 @@ can choose, with the steps, rules and reference design that go with it.
 
 ## What a frame is
 
-A frame is a [design pattern](../patterns/index.md) realized in one **system shape** and one
+A frame is a [design pattern](../systems/dut.md) realized in one **system shape** and one
 **verification flow**, with a reference example that proves it works:
 
 | axis | sets | values |
@@ -24,15 +24,17 @@ A frame is a [design pattern](../patterns/index.md) realized in one **system sha
 | **shape** | the structure, and the reference to copy | one kernel; a pipeline of free-running tasks; several kernels on a bus |
 | **flow** | the steps and the gates | host-launched (csim / cosim); free-running (XSI from the testbench graph); system (the system DAG) |
 
-Waveflow has three frames:
+Waveflow has five frames:
 
 | frame | shape | verified by | references | scaffold |
 | --- | --- | --- | --- | --- |
-| `stream_inband` | one host-launched kernel, configuration in each command header | C++ testbench, Vitis csim and cosim | [stream_inband](../../examples/stream_inband/index.md) | yes |
+| `stream_kernel` | one free-running kernel on framed streams: a header on the results, a status stream, errors fatal | its harness on the system DAG, RTL against pysim under XSI | [stream_kernel](../../examples/stream_kernel/index.md) | no |
+| `stream_pipeline` | a composite of free-running stages joined by internal streams; no memory, no host on a bus | each stage's harness, then the composite's, on the system DAG | [block_eq](../../examples/block_eq/index.md), [stream_kernel](../../examples/stream_kernel/index.md) | no |
+| `stream_inband` | one host-launched kernel, configuration in each command header (the host-activated flow) | C++ testbench, Vitis csim and cosim | [stream_inband](../../examples/stream_inband/index.md) | yes |
 | `freerun_pipeline` | a composite of free-running tasks, memory through `MemRStream` / `MemWStream` | the XSI testbench generated from the testbench graph, an exact cycle gate | [memcpy](../../examples/memcpy/index.md), [interleaver](../../examples/interleaver/index.md) | no |
 | `bus_system` | several free-running kernels and an on-chip memory on one crossbar, a software host | the [system DAG](../build/xsi_system.md): the host's bus traces identical at RTL and in pysim | [markov](../../examples/markov/index.md), [mm_fir](../../examples/mm_fir/index.md) | no |
 
-All three realize **command-response**: a command carrying `n` and a `tx_id`, the work on `n`
+All five realize **command-response**: a command carrying `n` and a `tx_id`, the work on `n`
 elements, a response that echoes them. A spec in another pattern, such as a continuous stream,
 is reached through the example cards instead.
 

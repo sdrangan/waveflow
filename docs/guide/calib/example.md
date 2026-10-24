@@ -47,7 +47,7 @@ print(model.score(db))          # 1.0  (R² — exact line here)
 ```
 
 `coeffs` recovers the physical numbers: the slope is the initiation interval `ii`, the intercept is
-the `latency` (see [Fitting a timing model](../timing_model/fit.md)).
+the `latency` (see [The form of a span's model](../timing_model/loops.md)).
 
 ## 3. Hold a point out (does it generalize?)
 
@@ -104,4 +104,4 @@ latency — that a straight line would distort: **measure** it rather than force
 - [The corpus — `CalibDataFrame`](./dataframe.md) — building and persisting the measurement table.
 - [Models](./models.md) — the full method reference for `CalibModel` / `LinCalibModel` / `InterpCalibModel`.
 - [Timing model fitting](./index.md) — the overall workflow.
-- [Fitting a timing model](../timing_model/fit.md) — the direct sweep-based fit this example's mechanics support.
+- [Calibrating a timed phase](../timing_model/fit.md) — a module's timing fit, built on these mechanics.

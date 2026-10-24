@@ -1,6 +1,7 @@
 ---
 title: HLS Code Generation
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 6
 summary: "Which parts of the kernel Waveflow writes and which you write. The schema headers and the kernel's boundary -- two tops (poly for 32-bit words, poly_bw64 for 64) with every interface pragma and a status-only register map, each one call into the body -- are generated; the whole kernel body and the C++ testbench are ordinary hand-written C++, and the body's error path is the contract's rule 6 in code."
 ---

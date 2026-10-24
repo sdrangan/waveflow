@@ -67,10 +67,8 @@ build-backend = "setuptools.build_meta"
 # `examples*` is installed so `from examples.mem_copy... import ...` resolves from ANY working
 # directory after `pip install -e` -- not only when the repo root is on sys.path.  The example
 # packages have no __init__.py (PEP 420 namespace packages), so discovery needs `namespaces = true`.
-# `_archive` is excluded to match the pytest ignore.
 [tool.setuptools.packages.find]
 include = ["waveflow*", "scripts*", "examples*"]
-exclude = ["examples._archive*"]
 namespaces = true
 
 # Include non-Python files (schemas, templates, docs assets)
@@ -103,6 +101,11 @@ include-package-data = true
 "waveflow.cpu" = ["calib/kernels/*.c", "calib/kernels/*.h", "calib/gem5_cfg/*.py"]
 # The SSR FFT's hand-written task bodies (waveflow.dsp.ssr_fft.hls copies them into a build).
 "waveflow.dsp.ssr_fft" = ["src/*.h"]
+# The stream blocks' hand-written task bodies (each block's step copies its body into a build).
+"waveflow.streams" = ["src/*.h"]
+# The systolic core's calibrated timed phases (a ModuleStore: module.json + timing/records.jsonl),
+# which SystolicCore loads by identity; without them a pip-installed core runs on its seeds.
+"waveflow.linalg" = ["calib/**"]
 
 # The accelerator frames are markdown and TOML -- the specification, the process
 # text (which the scaffold also writes as a project's AGENTS.md) and the example
@@ -114,9 +117,9 @@ include-package-data = true
 # Pytest configuration
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-q --ignore-glob=examples/_archive/*"
+addopts = "-q"
 testpaths = ["tests"]
-norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}", "examples/_archive"]
+norecursedirs = [".git", ".hg", ".mypy_cache", ".nox", ".tox", ".venv", "venv", "dist", "node_modules", "{arch}"]
 markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
     "xsi: marks tests as requiring Vivado xsim + mingw g++ AND a prior csynth (RTL-level BFM gates)",

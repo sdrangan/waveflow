@@ -1,7 +1,7 @@
 ---
 title: Micro-scheduler on a CPU
 parent: Examples
-nav_order: 12
+nav_order: 20
 example_dir: examples/cpu_sched
 summary: "Software on a calibrated processor, beside hardware: a micro-scheduler runs on the A53 platform model, keeps a ready list with the very algorithm the platform was calibrated on, and dispatches seeded Poisson jobs to SimpFun accelerators over AXI-Lite with interrupt completion. The report prices every scheduler operation -- latency, queueing, energy, footprint, confidence -- and the scheduler's trace is replayed on gem5 to check the model."
 ---
@@ -14,6 +14,20 @@ running on the calibrated Cortex-A53, handing jobs to accelerators that are *har
 ```bash
 python -m examples.cpu_sched.cpu_sched --jobs 200 --accels 2
 ```
+
+## Learning objectives
+
+What this adds to the examples before it -- software on a processor -- in the order the page teaches it:
+
+1. Write software as `SwFunction` calls on a calibrated `Processor`, each call run on the real data and
+   priced from the work counters it reports by the platform's cycle and energy models.
+2. Drive host-activated accelerators over AXI-Lite from software, sleeping on each one's interrupt while
+   the core is free.
+3. Make each decision inside the call that commits it, so two processes waiting for a core cannot act on
+   the same state, and check that every job is dispatched exactly once.
+4. Read the report: latency, queueing, energy, footprint, and how far each price is from the
+   calibration (`INTERPOLATED`, `EXTRAPOLATED`).
+5. Record the run as a trace, replay it on gem5, and state the model's error against it.
 
 ## The system
 

@@ -8,6 +8,12 @@ summary: "A component's control residual is the delay pysim is MISSING once the 
 ---
 # Component residuals
 
+{: .note }
+> This is how the framework's memory-mapped stream blocks were calibrated before
+> [timed phases](./timed_phases.md) existed, and how they still are: a module of your own declares its
+> timing as phases and is [calibrated from the declaration](./fit.md).  The mem streams keep this
+> method until memory-mapped events let them be declared as phases (`plans/pipelined_ops.md`).
+
 The second level of the [split](./index.md#the-two-level-split-bus-vs-component):
 once the [bus term](./bus_model.md) is charged, what remains is the component's own **control cost** —
 the per-firing overhead the loosely-timed pysim does not already account for. A `TimingModel` fits that
@@ -98,8 +104,7 @@ predicts `0.0` and records nothing extra, so the firing is captured with `curren
 
 `MemRStream` / `MemWStream` both carry this `timed_delay` hook (the writer's models the posted-write
 drain, the reader's its own control cost), inert until a model is fit. It is the recording counterpart
-of the plain `predict` shown in [Adding a timing model](../timing_model/insertion.md): same prediction,
-plus the firing record the residual fit needs.
+of a plain prediction: the same predicted delay, plus the firing record the residual fit needs.
 
 ## Two kinds of component: where the residual lives
 
@@ -135,8 +140,7 @@ does not yet join (a sweep in progress has partial coverage — forcing a fit th
 
 ## See also
 
-- [Adding a timing model to a component](../timing_model/insertion.md) — the usage side: attaching the
-  model and charging its delay, which this page fits.
+- [Calibrating a timed phase](./fit.md) — how a module's own declared timing is calibrated.
 - [The bus-transfer model](./bus_model.md) — the level this one assumes is already charged.
 - [Platforms](../platform/identity.md) — where a shared component's residual is keyed and stored.
 - [The calibration workflow](../platform/workflow.md) — collecting a sweep and publishing the result.

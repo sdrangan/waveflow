@@ -75,6 +75,16 @@ def validate_schema(schema: str, workspace_root: str | None = None) -> dict:
 	# it defines: validating it would report someone else's class as this file's.
 	initial_names = set(namespace) | _imported_names(tree)
 
+	# The text runs as a module of its own, registered while it runs: a ``@dataclass`` (or anything
+	# else that looks its class's module up in ``sys.modules``) fails in a bare namespace.
+	import sys
+	import types
+
+	mod_name = f"_waveflow_schema_{id(tree):x}"
+	module = types.ModuleType(mod_name)
+	module.__dict__.update({k: v for k, v in namespace.items() if k != "__name__"})
+	namespace = module.__dict__
+	sys.modules[mod_name] = module
 	try:
 		exec(compile(tree, "<schema>", "exec"), namespace)
 	except Exception as exc:  # noqa: BLE001
@@ -86,6 +96,8 @@ def validate_schema(schema: str, workspace_root: str | None = None) -> dict:
 			warnings=warnings,
 			schema_info=None,
 		)
+	finally:
+		sys.modules.pop(mod_name, None)
 
 	schema_classes = _discover_schema_classes(namespace, initial_names, class_lines)
 	if not schema_classes:

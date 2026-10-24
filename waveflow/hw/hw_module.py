@@ -120,6 +120,15 @@ def _hw_param_names(comp_class) -> set[str]:
     return names
 
 
+def build_params(module) -> dict[str, Any]:
+    """What a fresh copy of *module* (an instance) is built with -- the harness's DUT, a system's
+    csynth spec: its ``HwParam`` fields, and the fields its class names in ``build_fields`` (build
+    inputs that are not template parameters, such as an operand's fixed-point ``Format``)."""
+    cls = type(module)
+    names = sorted(_hw_param_names(cls)) + list(getattr(cls, "build_fields", ()) or ())
+    return {n: getattr(module, n) for n in names}
+
+
 def _dyn_param_names(cls) -> set[str]:
     """Return the set of ``DynParam``-annotated field names on *cls* (mirrors ``_hw_param_names``)."""
     names: set[str] = set()
@@ -212,6 +221,34 @@ def validate_param_supports(comp_class) -> None:
             )
         else:
             seen_resolved[dup_key] = key
+
+
+def kernel_name(module, values: dict[str, Any] | None = None) -> str | None:
+    """The csynth'd top a module instance is built as: its class's ``cpp_kernel_name``, plus
+    ``_<param><value>`` for each ``HwParam`` its class lists in ``kernel_name_params``.
+
+    One class at several build parameters (two widths of one kernel) so names one top per
+    parameter set, and the tops coexist in one system or DAG: ``cpp_kernel_name = "poly"`` with
+    ``kernel_name_params = ("w",)`` names ``poly_w32`` and ``poly_w64``.  A class that lists no
+    parameter keeps its ``cpp_kernel_name`` unchanged (``None`` when it names none).  *module* is an
+    instance or a class; for a class the values are *values*, else its ``HwParam`` defaults.
+    """
+    cls = module if isinstance(module, type) else type(module)
+    base = getattr(cls, "cpp_kernel_name", None)
+    params = tuple(getattr(cls, "kernel_name_params", ()) or ())
+    if not base or not params:
+        return base
+    known = _hw_param_names(cls)
+    unknown = [p for p in params if p not in known]
+    if unknown:
+        raise ValueError(f"{cls.__name__}.kernel_name_params names {unknown}, which are not HwParam "
+                         f"fields (declared: {sorted(known)})")
+    src = (values or {}) if isinstance(module, type) else {}
+    parts = []
+    for p in params:
+        v = src[p] if p in src else getattr(module, p)
+        parts.append(f"_{p}{re.sub(r'[^A-Za-z0-9]', '_', str(v))}")
+    return base + "".join(parts)
 
 
 class ControlMode(Enum):
@@ -376,6 +413,14 @@ class HwModule(SimObj):
 
     control_mode: ClassVar[ControlMode] = ControlMode.AUTO
     cpp_kernel_name: ClassVar[str | None] = None
+    kernel_name_params: ClassVar[tuple[str, ...]] = ()
+    """``HwParam`` fields whose values name each instance's top (:func:`kernel_name`):
+    ``cpp_kernel_name`` + ``_<param><value>`` per entry, so one class builds one top per
+    parameter set in a single system or DAG.  Empty (default): the top is ``cpp_kernel_name``."""
+    endpoint_port_widths: ClassVar[bool] = False
+    """True: each AXI-Stream port of the generated top takes its own endpoint's ``bitwidth`` (a 64-bit
+    command port beside 128-bit data).  False (default): every one takes the design width, as tops
+    gated on exact RTL counts are emitted today (``composite_gen.composite_top_spec``)."""
     cpp_namespace: ClassVar[str | None] = None
     """Override for the C++ namespace wrapping hooks for this component.
 
@@ -405,6 +450,28 @@ class HwModule(SimObj):
     def add_endpoint(self, endpoint: InterfaceEndpoint) -> None:
         endpoint.comp = self
         self.endpoints[endpoint.name] = endpoint
+
+    def add_timing_phase(self, phase) -> None:
+        """Register a declared timed phase (:class:`~waveflow.hw.timed_phase.TimedPhase`) -- like
+        :meth:`add_endpoint`: construct, assign, register.  Binds the phase to this module (its owner:
+        the clock, and the check that every event is on one of this module's own endpoints) and turns
+        on what its events need: each named endpoint's transfer log, and on a reader whose ``last``
+        starts a span (a sequential body, Pattern 1) the charge for reading a buffered burst's beats.
+        Returns ``None``, so there is one way to write it (``plans/pipelined_ops.md``)."""
+        phases = self.__dict__.setdefault("timing_phases", {})
+        if phase.name in phases:
+            raise ValueError(f"'{self.name}' already has a timed phase named {phase.name!r}")
+        phase._bind(self)
+        phases[phase.name] = phase
+        from waveflow.hw.interface import QueuedTransferIFSlave
+
+        for ev in phase.events():
+            if ev.ep.xfer_log is None:
+                ev.ep.xfer_log = []
+            ev.ep._timing_owner = self
+        for start, _end in phase.spans.values():
+            if start.edge == "last" and isinstance(start.ep, QueuedTransferIFSlave):
+                start.ep._charge_beats = True
 
     def add_comp(self, comp: "HwModule") -> None:
         """Register *comp* as a sub-component (insertion order preserved).

@@ -94,16 +94,20 @@ if [ -n "$DO_RTL" ]; then
     echo "--- xvlog RTL ($TOP) ---"
     "$VIV/bin/xvlog" -f "rtl_$TOP.f"
     echo "xvlog errorlevel=$?"
+    # A kernel's vendor cores (waveflow.build.hls_ip): VHDL wrappers + precompiled libraries.
+    XLIBS=()
+    if [ -f "vhdl_$TOP.f" ]; then "$VIV/bin/xvhdl" -f "vhdl_$TOP.f"; fi
+    if [ -f "xelab_$TOP.f" ]; then XLIBS=(-f "xelab_$TOP.f"); fi
     echo "WF_PHASE elaborate $(date +%s.%N)"
     rm -rf "xsim.dir/$SNAP"
     if [ -n "$TRACE" ]; then
         echo "--- xvlog vcd_dumper_$TOP ---"
         "$VIV/bin/xvlog" "vcd_dumper_$TOP.v"
         echo "--- xelab -dll [+ vcd_dumper_$TOP] ---"
-        "$VIV/bin/xelab" "work.$TOP" "work.vcd_dumper_$TOP" -dll -s "$SNAP" -debug typical
+        "$VIV/bin/xelab" "work.$TOP" "work.vcd_dumper_$TOP" "${XLIBS[@]}" -dll -s "$SNAP" -debug typical
     else
         echo "--- xelab -dll ---"
-        "$VIV/bin/xelab" "work.$TOP" -dll -s "$SNAP" -debug typical
+        "$VIV/bin/xelab" "work.$TOP" "${XLIBS[@]}" -dll -s "$SNAP" -debug typical
     fi
     echo "xelab errorlevel=$?"
 fi

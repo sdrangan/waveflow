@@ -143,7 +143,28 @@ class XsiSnapshot:
         if not runner.is_file() or not flist.is_file():
             return None
         files[runner.name] = _sha(runner)
-        files[flist.name] = _sha(flist)
+        # A kernel's vendor cores (waveflow.build.hls_ip): the VHDL list is read like the Verilog
+        # one; the xelab options are stamped by content.
+        xopts = wd / f"xelab_{self.top}.f"
+        if xopts.is_file():
+            files[xopts.name] = _sha(xopts)
+        vlist = wd / f"vhdl_{self.top}.f"
+        lists = [flist, vlist] if vlist.is_file() else [flist]
+        for lst in lists:
+            files[lst.name] = _sha(lst)
+            if not self._stamp_list(lst, files):
+                return None
+        if self.trace:
+            dumper = wd / f"vcd_dumper_{self.top}.v"
+            if not dumper.is_file():
+                return None
+            files[dumper.name] = _sha(dumper)
+        return files
+
+    def _stamp_list(self, flist: Path, files: dict[str, str]) -> bool:
+        """Stamp every file and include directory an ``-f`` list names into *files*; False if one
+        is missing."""
+        wd = self.work_dir
         for line in flist.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith(("//", "#")):
@@ -155,7 +176,7 @@ class XsiSnapshot:
                 if tok in _INCDIR_OPTS and i + 1 < len(toks):
                     d = (wd / toks[i + 1]).resolve()
                     if not d.is_dir():
-                        return None
+                        return False
                     for f in sorted(p for p in d.iterdir() if p.is_file()):
                         files[f.as_posix()] = _sha(f)
                     i += 2
@@ -163,15 +184,10 @@ class XsiSnapshot:
                 if not tok.startswith("-"):
                     f = (wd / tok).resolve()
                     if not f.is_file():
-                        return None
+                        return False
                     files[f.as_posix()] = _sha(f)
                 i += 1
-        if self.trace:
-            dumper = wd / f"vcd_dumper_{self.top}.v"
-            if not dumper.is_file():
-                return None
-            files[dumper.name] = _sha(dumper)
-        return files
+        return True
 
     def tb_inputs(self) -> dict[str, str] | None:
         """``{file: sha256}`` of every input to the testbench build, or None if its source is

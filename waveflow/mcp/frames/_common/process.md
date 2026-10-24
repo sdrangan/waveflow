@@ -33,6 +33,21 @@ every name below is one call away.
 
 All of these are also `waveflow kb <cmd>` on the command line.
 
+**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` -- the
+*Flow Overview*: what a Waveflow system is (a testbench and a DUT, the DUT a tree of modules, any module
+the DUT of its own harness), the two levels of simulation (anything can join a `Simulation`; only what has
+an RTL twin can join an `HwSystem`), and a page per step of the flow.  The steps below follow those
+pages, in order:
+
+| step | page |
+|---|---|
+| the schemas, the golden, the design notes | `docs/guide/systems/dut.md`, `streams.md`, `command_response.md` |
+| each module in Python, and its HLS body (two copies that must agree) | `docs/guide/systems/hwmodule.md` |
+| each module, then the whole, in pysim | `docs/guide/systems/pysim.md` |
+| the bodies, the build DAG, RTL against pysim | `docs/guide/systems/rtl.md` |
+| what each gate compares, and asserting counts | `docs/guide/systems/verification.md` |
+| timed phases, calibration, composition | `docs/guide/systems/calibration.md` |
+
 Examples that `waveflow_list_examples()` does not return are **not** models to
 copy, whatever else is in the tree.
 

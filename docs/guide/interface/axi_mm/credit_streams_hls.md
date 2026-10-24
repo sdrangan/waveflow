@@ -17,7 +17,7 @@ types in `credit_stream_hls.h`:
 
 | | Python | HLS (`credit_stream_hls.h`) |
 |---|---|---|
-| producer | `CreditStreamMasterIF.write(words)` | `credit::Producer<DEPTH>`: `wait_room(crd, n)`, then the words, then `sent(n)` |
+| producer | `CreditStreamMasterIF.write(words)` | `credit::Producer<DEPTH>`: `if (wait_room(crd, n))` the words, then `sent(n)` |
 | consumer | `CreditStreamSlaveIF(crd_every=...)`, a `get` | `credit::Consumer<CRD_EVERY>`: `took(n)` per read, `offer(crd)` between chunks |
 
 The credit stream itself is two ordinary `hls::stream` ports -- forward and credit -- whether the link
@@ -54,7 +54,7 @@ static void producer_task(hls::stream<ap_uint<DW> >& s_cmd,
 CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
         const int c = (n - k0 < CHUNK) ? (int)(n - k0) : CHUNK;
         const int cw = (c + PF - 1) / PF;                         // the chunk's words
-        crd.wait_room(m_crd, cw);                                 // 1. admit the chunk
+        if (!crd.wait_room(m_crd, cw)) continue;                  // 1. admit the chunk (guarding it)
     LOOP: for (int k = 0; k < c; ++k) {                           // 2. the work, one per cycle
 #pragma HLS PIPELINE II=1
             lane[k % PF] = next_element();
@@ -71,11 +71,22 @@ CHUNKS: for (ap_uint<32> k0 = 0; k0 < n; k0 += CHUNK) {
 1. **`wait_room(crd, n)`** returns once `n` words fit in the window. It first takes any credit values
    already waiting (a bounded drain, so the credit FIFO never fills with stale values), then, while the
    words do not fit, sleeps on the credit stream for the next value -- a blocking read, which waits for
-   an arrival and never polls.
+   an arrival and never polls. It returns `true` -- the words fit -- and the chunk's writes are
+   **guarded on it** ([the guard](#the-guard)).
 2. **The loop** is the [lane loop](../../vectorization/hls/loop_optimization.md): one element per
    cycle, a word written every `PF` elements, `TLAST` on the chunk's last word -- a routed link's queue
    writer needs it to know where a write ends.
 3. **`sent(n)`** adds the chunk's words to the producer's count.
+
+### The guard {#the-guard}
+
+`wait_room` reads the credit stream; the loop writes the forward stream. Nothing in the C++ orders an
+access to one stream against an access to another, so Vitis HLS may schedule a write **ahead of the
+wait that admits it**. The consumer then credits words the producer has not counted yet, `acked`
+passes `written`, the 16-bit difference wraps to nearly 2^16, and the next `wait_room` waits forever.
+It is not hypothetical: the rung-5 blind build's detect kernel hung at RTL after 97 words this way
+(Vitis HLS 2025.1), and pysim cannot show it. Making the writes depend on `wait_room`'s result -- the
+`if` / `continue` -- orders them after the credit reads.
 
 The consumer is the mirror: it reads in the same chunks, counts what it takes, and reports between
 chunks.

@@ -39,11 +39,36 @@ int main(int argc, char** argv) {
         ap_uint<WORD_BW> words_in[NWORDS];
         for (int i = 0; i < NWORDS; i++) words_in[i] = words_all[p * NWORDS + i];
 
+        // Every generated form, chained: array in, plain stream, AXI4-Stream (TLAST on the last
+        // word), array out -- each reader and writer must agree with the Python layout.
         __DATAUNION_CLASS__ du;
         du.read_array<WORD_BW>(words_in);
 
+        hls::stream<ap_uint<WORD_BW> > s;
+        du.write_stream<WORD_BW>(s);
+        if ((int)s.size() != NWORDS) {
+            std::cerr << "write_stream wrote " << s.size() << " words, expected " << NWORDS << std::endl;
+            return 2;
+        }
+        __DATAUNION_CLASS__ du2;
+        du2.read_stream<WORD_BW>(s);
+
+        hls::stream<streamutils::axi4s_word<WORD_BW> > a;
+        du2.write_axi4_stream<WORD_BW>(a);
+        if ((int)a.size() != NWORDS) {
+            std::cerr << "write_axi4_stream wrote " << a.size() << " words, expected " << NWORDS << std::endl;
+            return 3;
+        }
+        __DATAUNION_CLASS__ du3;
+        streamutils::tlast_status tl;
+        du3.read_axi4_stream<WORD_BW>(a, tl);
+        if (tl != streamutils::tlast_status::tlast_at_end) {
+            std::cerr << "read_axi4_stream: TLAST not at the end of packet " << p << std::endl;
+            return 4;
+        }
+
         ap_uint<WORD_BW> words_out[NWORDS];
-        du.write_array<WORD_BW>(words_out);
+        du3.write_array<WORD_BW>(words_out);
 
         for (int i = 0; i < NWORDS; i++) {
             fout << (unsigned long long)((ap_uint<64>)words_out[i]) << "\n";

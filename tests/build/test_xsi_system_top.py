@@ -25,7 +25,7 @@ from waveflow.build.composite_gen import (
 from waveflow.hw.codegen_targets import XSI_BFM_MODEL
 from waveflow.simulation.stream_tb import StreamSink
 
-from examples.mm_fir.mm_fir import FirHost, MmFirSystem
+from examples.mm_fir.mm_fir import FirHost, mm_fir_system
 
 HOST_PORTS = ("m", "irq_qin", "irq_qout", "irq_qresp")
 
@@ -51,7 +51,7 @@ def test_the_host_duals_are_filled():
 
 def test_check_resolves_mm_fir_host_ports():
     """The Stage 1 gate: the host of a wired mm_fir system resolves under the strictest cut."""
-    sysm = MmFirSystem(x=[0], plan=[(0, [1])])
+    sysm = mm_fir_system(x=[0], plan=[(0, [1])])
     host = sysm.host
     assert sorted(a for a in vars(host) if any(host.endpoints[k] is getattr(host, a)
                                                for k in host.endpoints)) == sorted(HOST_PORTS)
@@ -65,7 +65,7 @@ def test_an_uncovered_irq_is_named():
         def bfm_model(self):
             return BfmModel("AxiMmMaster", ports=("m",))
 
-    sysm = MmFirSystem(x=[0], plan=[(0, [1])])
+    sysm = mm_fir_system(x=[0], plan=[(0, [1])])
     ok, msg = check(_NoIrq(name="h", sim=sysm.sim, x=[0], plan=[(0, [1])]), XSI_BFM_MODEL)
     assert ok is False and "irq_qin" in msg
 
@@ -177,7 +177,7 @@ def test_the_harness_with_a_local_model_compiles(tmp_path):
 
 def test_fir_host_resolves_its_own_model():
     """FirHost names FirHostModel, in mm_fir_host.h beside it -- and the class really is there."""
-    sysm = MmFirSystem(x=[0], plan=[(0, [1])])
+    sysm = mm_fir_system(x=[0], plan=[(0, [1])])
     assert check(sysm.host, XSI_BFM_MODEL) == (True, None)
     bm = sysm.host.bfm_model()
     assert (bm.cls, bm.header, bm.ports) == ("FirHostModel", "mm_fir_host.h", HOST_PORTS)
@@ -192,7 +192,7 @@ def test_the_scenario_file_drives_the_host_exactly_as_in_memory(tmp_path):
     from examples.mm_fir.mm_fir_build import PKT, PLAN, scenario_x
 
     def run(scenario: str, traces):
-        sysm = MmFirSystem(x=list(scenario_x()), plan=PLAN, pkt=PKT)
+        sysm = mm_fir_system(x=list(scenario_x()), plan=PLAN, pkt=PKT)
         sysm.host.scenario = scenario
         sysm.host.trace_dir = str(traces)
         return sysm.run(), sysm

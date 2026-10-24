@@ -165,14 +165,14 @@ waveflow-extension/*.vsix
 
 # Temporary working directory
 examples/dataschema
-examples/vecunit
-examples/test
 examples/stream_inband/include
 examples/stream_inband/logs
 examples/stream_inband/waveflow_poly_proj
 examples/stream_inband/w32_proj
 examples/stream_inband/w64_proj
 examples/stream_inband/vcd_proj
+examples/stream_inband/cal_w32
+examples/stream_inband/cal_w64
 examples/stream_inband/data
 examples/stream_inband/results
 .hls.failed
@@ -207,11 +207,6 @@ examples/mem_copy/include/il_cmd_rx_framed_task.h
 examples/mem_copy/include/il_compute_inband_task.h
 examples/mem_copy/include/il_load_inband_task.h
 examples/mem_copy/include/il_store_inband_task.h
-
-examples/_archive/conv2d/include/
-examples/_archive/conv2d/waveflow_conv2d_proj/
-examples/_archive/conv2d/logs/
-examples/_archive/conv2d/data/
 
 # Interleaver DATAFLOW de-risk sandbox (exploratory scratch; C1-C6 variants + generated Vitis
 # projects/VCDs. Findings are captured in plans/dataflow_mod.md; regenerate via run_interleaver.py.)
@@ -350,6 +345,21 @@ examples/markov/include/
 examples/markov/gen/
 # the build DAG's RTL runs (plans/system_dag.md).
 examples/markov/xsi_work/
+# examples/stream_kernel (plans/unit_harness.md Stage 1): the body is src/; the rest is build output.
+examples/stream_kernel/include/
+examples/stream_kernel/gen/
+examples/stream_kernel/poly_kernel_proj/
+examples/stream_kernel/xsi_work/
+# the figure step renders here; docs/examples/stream_kernel{,_mm}/images/ hold the committed copies.
+examples/stream_kernel/results/
+# examples/block_eq: the bodies are src/; the rest is build output.
+examples/block_eq/include/
+examples/block_eq/gen/
+examples/block_eq/*_proj/
+examples/block_eq/xsi_work/
+examples/block_eq/logs/
+# its fitted timed-phase parameters (calib_phases files them) are source: keep them despite *.json.
+!examples/stream_kernel/calib/**/*.json
 # mem_copy through the system flow (examples/mem_copy/mem_copy_system_build.py): its system workspace.
 examples/mem_copy/xsi_work/
 # rf_loopback through the system flow (examples/rf_loopback/rf_loopback_system_build.py).
@@ -386,6 +396,10 @@ examples/ssr_fft/logs/
 # examples/rt_sounder (born under plans/source_layout.md): the one authored XSI file, the counters main,
 # is in src/; xsi/ is build output -- rt_sounder_xsi.generate_tb() restores it (and the gate calls it).
 examples/rt_sounder/xsi/
+# examples/systolic/measured.json: the RTL evidence docs/examples/systolic/ quotes (systolic_measure).
+!examples/systolic/measured.json
+!examples/systolic/resources.json
+!examples/systolic/runtime.json
 
 # Per-step build timings written by run_dag_cli (waveflow/build/cli.py STEP_LOG)
 .waveflow/
@@ -394,3 +408,6 @@ examples/rt_sounder/xsi/
 examples/vitis_fft/system/
 examples/vitis_fft/xsi_profile/
 examples/ssr_fft/system/
+
+# Personal Claude Code instructions (venv path, toolchain version, OS): per machine, never shared.
+CLAUDE.local.md

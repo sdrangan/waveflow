@@ -227,6 +227,15 @@ def test_write_array_accepts_dataarray_instance():
     assert len(packed) > 0
 
 
+def test_write_array_round_trips_words_wider_than_64_bits():
+    # a 128-bit word is two uint64 chunks: (n, 2) is n words, not an n x 2 array of them
+    U128 = IntField.specialize(bitwidth=128, signed=False)
+    words = np.arange(8, dtype=np.uint64).reshape(4, 2)
+    arr = read_array(words, elem_type=U128, word_bw=128, shape=4)
+    np.testing.assert_array_equal(np.asarray(write_array(arr, word_bw=128)), words)
+    np.testing.assert_array_equal(np.asarray(write_array(words, elem_type=U128, word_bw=128)), words)
+
+
 def test_write_array_dataarray_elem_type_mismatch_raises():
     from waveflow.hw.arrayutils import array, write_array
     inst = array(F32, [1.0, 2.0])
@@ -234,3 +243,23 @@ def test_write_array_dataarray_elem_type_mismatch_raises():
     S16 = IntField.specialize(bitwidth=16, signed=True)
     with pytest.raises(TypeError, match="elem_type mismatch"):
         write_array(inst, elem_type=S16, word_bw=32)
+
+
+def test_an_int_complex_element_gets_wf_cint_beside_its_header(tmp_path):
+    """Found by the rung-5 blind build: the lane routines of an integer ComplexField include
+    "wf_cint.h", which no step wrote -- csynth failed until it was copied by hand."""
+    from waveflow.build.build import BuildConfig, BuildDag
+    from waveflow.build.streamutils import StreamUtilsStep
+    from waveflow.hw.arrayutils import ArrayUtilsStep
+    from waveflow.hw.complexfield import ComplexField
+    from waveflow.hw.dataschema import IntField
+
+    cs16 = ComplexField.specialize(IntField.specialize(16, signed=True), include_dir="include")
+    dag = BuildDag()
+    dag.add(StreamUtilsStep(output_dir="include"))
+    dag.add(ArrayUtilsStep(cs16, [32]))
+    res = dag.run(BuildConfig(root_dir=tmp_path), force=True)
+    assert all(r.success for r in res.values()), {n: r.message for n, r in res.items()}
+    hdr = next((tmp_path / "include").glob("*_array_utils.h"))
+    assert '#include "wf_cint.h"' in hdr.read_text(encoding="utf-8")
+    assert (hdr.parent / "wf_cint.h").is_file()

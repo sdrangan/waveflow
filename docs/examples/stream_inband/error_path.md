@@ -1,6 +1,7 @@
 ---
 title: The error path
 parent: Streaming polynomial
+grand_parent: Legacy examples
 nav_order: 3
 summary: "What happens on the wire when a command fails, from the RTL co-simulation of a run whose second command's sample burst ends early: the kernel answers what it read, closes its output burst with TLAST, sets halted/error/tx_id and returns; the host sees ap_done and reads the status; then -- drawn, not measured -- the commands still queued, the reset, and the fresh run."
 ---

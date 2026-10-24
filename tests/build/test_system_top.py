@@ -23,9 +23,9 @@ from waveflow.build.system_top import (
 
 
 def _fir(topology: str):
-    from examples.mm_fir.mm_fir import MmFirSystem
+    from examples.mm_fir.mm_fir import mm_fir_system
     from examples.mm_fir.mm_fir_build import PLAN
-    sysm = MmFirSystem(x=[0], plan=PLAN, one_front=topology == "one_front")
+    sysm = mm_fir_system(x=[0], plan=PLAN, one_front=topology == "one_front")
     return sysm, system_top_spec(sysm.xbar, [sysm.fir], top="mm_fir_top")
 
 
@@ -319,7 +319,7 @@ def test_from_system_is_the_walk_with_add_system_steps_defaults():
     obj = SystemTopSpec.from_system(sysm, top="markov_top")
     assert obj == spec
     assert obj.render_verilog() == render_system_top(spec)
-    assert SystemTopSpec.from_system(sysm).top == "markov_system"        # the class, snake case
+    assert SystemTopSpec.from_system(sysm).top == "markov_dut"           # the DUT's name
     only = SystemTopSpec.from_system(sysm, inside=[sysm.gen, sysm.chain, sysm.mem], top="t")
     assert [s.name for s in only.subs] == ["gen", "chain", "mem"]
 
@@ -414,17 +414,17 @@ def test_mem_copy_is_a_system_with_no_crossbar():
     """The DUT is the kernel alone; its streams and m_axi bundles leave the top as ports of their own
     kind, each facing a testbench model -- and the crossbar that models contention in pysim stays
     in the testbench."""
-    from examples.mem_copy.mem_copy_sim import MemCopySystem
+    from examples.mem_copy.mem_copy_sim import mem_copy_system
     from waveflow.build.system_top import SystemTopSpec
 
-    sysm = MemCopySystem()
+    sysm = mem_copy_system()
     spec = SystemTopSpec.from_system(sysm)
     assert spec.xbar is None and spec.si == () and spec.mi == ()
     assert spec.ext_streams == (("tb_cmd_if", "in"), ("tb_done_if", "out"))
     assert spec.maxi_ext == (("u_tb_copier", "m_in", "m0_axi"), ("u_tb_copier", "m_out", "m1_axi"))
     assert [i.path for i in spec.instances()] == ["u_tb_copier_sub/u_tb_copier"]
     v = spec.render_verilog()
-    top = re.search(r"^module mem_copy_system \((.*?)\);", v, re.M | re.S).group(1)
+    top = re.search(r"^module mem_copy_dut \((.*?)\);", v, re.M | re.S).group(1)   # the DUT's name
     assert "input  wire tb_cmd_if_TVALID" in top and "output wire tb_done_if_TVALID" in top
     assert "output wire m0_axi_ARVALID" in top and "output wire m1_axi_AWVALID" in top
     assert "u_xbar" not in v and "_RID[0]" not in v                    # 1 ID bit: a scalar, no index
@@ -434,10 +434,10 @@ def test_the_direct_wired_markov_renders_its_kernel_link_as_ports():
     """With no bus, the credit link between the two kernels runs between their sub-tops; the host's
     streams and the chain's memory master leave the top.  The memory has to be testbench: an on-chip
     memory reached directly is refused, not silently dropped."""
-    from examples.markov.markov import MarkovSystem, default_jobs
+    from examples.markov.markov import default_jobs, markov_system
     from waveflow.build.system_top import SystemTopSpec
 
-    s = MarkovSystem(jobs=default_jobs(1, 16), link="direct")
+    s = markov_system(default_jobs(1, 16), "direct")
     with pytest.raises(LoweringError, match="inside the cut but on no crossbar"):
         SystemTopSpec.from_system(s)
     spec = SystemTopSpec.from_system(s, inside=[s.gen, s.chain], top="markov_direct")

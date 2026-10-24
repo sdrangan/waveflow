@@ -1,0 +1,33 @@
+# The stream_pipeline frame: one accelerator built as a composite of free-running stages that stream to
+# each other -- no memory, no host on a bus.  The shape between stream_kernel (one stage) and
+# freerun_pipeline (stages reaching memory through the stream adaptors).
+#
+# A frame is a bundle with no code of its own -- this file, frame.md, process.md, prompts/.  No
+# [template]: a pipeline does not reduce to "stub one function".
+
+name = "stream_pipeline"
+synopsis = """One accelerator built as a composite FreeRunMod of free-running stages joined by internal \
+streams: one stream in, the results and a status out, as in stream_kernel.  A stage is split off \
+where the work runs at a different rate, or where one loop would decide, compute and commit at once; \
+when two stages need parts of one input, the framework's StreamBroadcast gives each its own copy.  \
+The command travels with the data and the last stage answers; an error is fatal.  Each stage is \
+verified alone in its own harness (one hand-written body serving a stage alone and inside the \
+composite), then the composite, in pysim and at RTL under XSI."""
+
+pattern = "command_response"
+shape = "a composite of free-running stages joined by internal framed streams; one input stream, results and status out; no memory"
+flow = "each stage's harness, then the composite's, on the system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare"
+choose_when = """one accelerator of two or more stages that stream to each other -- different rates, a wide internal link, two stages needing parts of one input -- with its input and outputs on streams and no host on a bus.  The deciding question against freerun_pipeline is memory: no stage reads or writes memory here (no MemRStream / MemWStream adaptor); stages that do are freerun_pipeline.  One stage is stream_kernel; kernels a host reaches over a bus are bus_system."""
+
+# Primary first: block_eq is the composite (a broadcast, two stages at different rates, a link between
+# them); stream_kernel is the single stage, the protocol and the harness.
+reference_examples = ["block_eq", "stream_kernel"]
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_scale_then_sum.md"
+synopsis = "Scale each sample, then sum blocks of K: two stages at different rates, a link between them."

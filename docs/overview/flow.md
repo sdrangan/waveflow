@@ -7,10 +7,19 @@ nav_order: 3
 
 # The Waveflow flow
 
-In Waveflow, everything *flows* from the underlying [Python model specification](./pymodel.md). A
-**SimPy discrete-event simulation (DES)** runs it **fast** and **bit-exact** using a **calibrated,
-cycle-approximate** timing/resource model; the *same* model generates **HLS codegen** (kernel +
-testbench), which **RTL synthesis / simulation** turns into cycle- and resource-**exact** ground truth.
+In Waveflow, everything *flows* from the underlying [Python model specification](./pymodel.md). The
+design under test (the **DUT**) is simulated at **two levels**
+([The DUT and two levels of simulation](../guide/systems/dut.md)):
+
+- **pysim** — a **SimPy discrete-event simulation (DES)** runs it **fast** and **bit-exact**, using a
+  **calibrated, cycle-approximate** timing model, beside anything else the question needs (a host, a
+  wireless channel, a processor model);
+- **RTL simulation** — the *same* model generates the **HLS** top, message structs and lane routines
+  around the kernel's HLS body, and an `HwSystem(sim, dut)` runs the synthesized RTL cycle by cycle under
+  Vivado's simulator, with every testbench part as its C++ twin: cycle- and resource-**exact** ground
+  truth.
+
+The flow, a page per step, is the guide's [Flow Overview](../guide/systems/index.md).
 
 <p align="center">
   <img src="../assets/waveflow_methodology.svg" width="820"
@@ -31,17 +40,21 @@ it.
 The SimPy DES produces performance — accuracy, throughput, resources — that drives **design-space
 exploration**. This loop is cheap enough to sweep bit widths, queue sizes, memory organization,
 and iteration counts, so an **agent** can explore many designs per toolchain run. It closes by
-refining the Python model's architecture and parameters.
+refining the Python model's architecture and parameters. Sweeps and the models that price a point are
+built; the exploration loop itself is not yet a framework tool
+([Design-space exploration](../guide/systems/dse.md)).
 
 ## Outer loop — slow, sparse (calibration)
 
-The same Python model generates HLS; C-sim, co-sim, and synthesis give cycle/resource-**exact**
-numbers, and **Calibration** fits the **timing/resource model** the inner loop relies on. A few
-sparse toolchain runs keep the fast models trustworthy — the model is the **bridge** the two
-loops share.
+The same Python model generates the HLS top and the RTL testbench; csynth and the RTL simulation give
+cycle/resource-**exact** numbers, and **calibration** fits the **timing model** the inner loop relies
+on — each module in its own harness against its own RTL, a system's timing composed from its modules'
+records with nothing fitted to it ([Timing and resources](../guide/systems/calibration.md)). A few sparse
+toolchain runs keep the fast models trustworthy — the model is the **bridge** the two loops share.
 
 ## Functional verification
 
-In parallel, **functional verification** compares the **SimPy golden** against the generated
-**RTL**, **bit-for-bit**. A mismatch is a model or codegen bug to fix — this is the correctness
-guarantee that makes the fast loop's numbers worth trusting.
+In parallel, **functional verification** is a chain of comparisons: the **golden** (pure Python
+functions) against the spec's worked examples, **pysim** against the golden, and the **RTL** against
+pysim, word for word ([Functional verification](../guide/systems/verification.md)). A mismatch is a model
+or HLS bug to fix — this is the correctness guarantee that makes the fast loop's numbers worth trusting.

@@ -1,6 +1,6 @@
 ---
 title: Hardware modules
-parent: Hardware modules and Flows
+parent: Modules
 nav_order: 1
 audience: python
 api: [SimObj, HwModule, HostActivated, FreeRunMod, add_endpoint, kernel_task, bfm_model, declares_hook]
@@ -93,12 +93,12 @@ There are exactly **two synthesizable kinds**, and each is the entry point to on
 - **[`HostActivated`](./sequential.md)** — the host launches it over a register map;
   writing `ap_start` runs its `on_start` once (read inputs, compute, write outputs, return). Use it for
   invocation-style accelerators. This is the **[sequential flow](./sequential.md)**.
-- **[`FreeRunMod`](./concurrent.md)** — a free-running module, in one of two shapes. A
+- **[`FreeRunMod`](../systems/index.md)** — a free-running module, in one of two shapes. A
   **standalone** one implements `run_iter` (one firing; the base loops it forever) and lowers to a
   single `hls::task`; a **composite** has no body of its own — it wires sub-components, and each becomes
   its own `hls::task`. A standalone module is just the 1-task case of a composite, so they are
   literally **one class** — there is no separate composite type; the top level of a design or a
-  testbench is a `FreeRunMod` too. This is the **[concurrent flow](./concurrent.md)**.
+  testbench is a `FreeRunMod` too. This is the **[concurrent flow](../systems/index.md)**.
 
 > *Which* lifecycle method you implement is what distinguishes the kinds: `on_start` for a
 > host-launched module, `run_iter` for a standalone free-running one, and neither for a composite
@@ -170,9 +170,9 @@ So no module declares which side it is on, and the framework does not either:
 - The **boundary is derived**. A child endpoint not bound to one of the composite's internal
   interfaces *is* a boundary port. Only the external port *names* are declared, and only because
   local names collide (two children both call their memory port `m_mem`).
-- The **cut is stated on a system**, not on a module. A
-  [`GraphSystem`](../build/xsi_system.md#graph-system) names the modules inside it
-  (`dut_modules`), and a build may draw another cut (`inside=`).
+- The **cut is stated on a system**, not on a module.
+  [`HwSystem(sim, dut)`](../build/xsi_system.md#the-system) names the root of the modules inside
+  it, the DUT, and a build may draw another cut (`inside=`).
 - **The cut decides which hook is consulted** — inside the top, `kernel_task()`; beside it in the
   same design, [`rtl_module()`](../comp_codegen/rtl_module.md); outside the design, `bfm_model()`.
 
@@ -187,7 +187,7 @@ Pick the kind your design is, and follow its flow:
 
 - **[Sequential (host-activated)](./sequential.md)** — a `HostActivated` module and a sequential Vitis
   testbench, verified in C-sim and co-sim.
-- **[Concurrent (free-running)](./concurrent.md)** — a `FreeRunMod` (standalone or composite), verified
+- **[Concurrent (free-running)](../systems/index.md)** — a `FreeRunMod` (standalone or composite), verified
   at RTL through an XSI BFM.
 
 **Source of truth:** `waveflow/hw/hw_module.py` (`HwModule`), `waveflow/hw/hw_hostactivated.py`

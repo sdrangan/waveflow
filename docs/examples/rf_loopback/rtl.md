@@ -3,7 +3,7 @@ title: Taking it to RTL
 parent: RF loopback
 nav_order: 3
 audience: hls
-api: [RfSampPassThrough, kernel_task, bfm_model, check, potential_targets, sim_only, RfLoopbackSystem, recording_check, reports_counters]
+api: [RfSampPassThrough, kernel_task, bfm_model, check, potential_targets, sim_only, rf_loopback_system, recording_check, reports_counters]
 summary: "Step 7: the digital logic becomes hardware. What check says about each module in the graph, the DUT synthesized cut alone between generic AXI-Stream BFMs, one task body generated and one handed over, what each verification layer actually proves, the recorded XSI cycle gate, and the same gate through the system flow -- the RFDC in the testbench, its models' loss counters gathered as a recording."
 ---
 
@@ -128,7 +128,7 @@ and with two tasks there are now two things that could vanish.
 
 ## The gate
 
-The DUT alone first, between a generic stream driver and sink (`RfPassThroughSystem`, run by
+The DUT alone first, between a generic stream driver and sink (`rf_pass_through_system()`, run by
 `python -m examples.rf_loopback.rf_dut_system_build`): 8 bursts × 64 words = 512 words, relayed
 bit-identically, with the last word landing at cycle **1066**.
 
@@ -171,7 +171,7 @@ went from dropping 72 words to dropping none. Both numbers live in
 
 ## The loopback, through the system flow {#system-flow}
 
-The loopback runs through the [system flow](../../guide/flows/concurrent_system.md), as an
+The loopback runs through the [system flow](../../guide/systems/index.md), as an
 `HwSystem`:
 
 ```bash
@@ -179,7 +179,9 @@ python -m examples.rf_loopback.rf_loopback_system_build --synth check
 pytest -m xsi tests/examples/test_rf_loopback_xsi.py
 ```
 
-`RfLoopbackSystem` (in `rf_loopback.py`) cuts the same graph differently in words, not in effect. The
+`rf_loopback_system()` (in `rf_loopback.py`) builds the same graph on one simulation
+(`wire_rf_loopback`, the parts `RfLoopbackTB` holds) and names its DUT,
+[`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system). The
 **DUT is the pass-through kernel alone.** The RFDC cannot be brought into the DUT as vendor IP, so it
 is **testbench**:
 
@@ -193,7 +195,7 @@ harness has one model per participant, each the participant's own declared twin,
 per RF edge.
 
 The same system runs the other two tiles of `rf_loopback_xsi.py` as variants:
-`RfLoopbackSystem(variant="2ch")` drives a two-channel tile through the two-lane pass-through, and
+`rf_loopback_system(variant="2ch")` drives a two-channel tile through the two-lane pass-through, and
 `variant="iq"` drives interleaved I/Q through the unchanged one-channel pass-through. Each is its own
 system top and its own run.
 

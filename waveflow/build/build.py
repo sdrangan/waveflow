@@ -288,6 +288,10 @@ class BuildStep(ABC):
     consumes: ClassVar[list] = []
     produces: ClassVar[dict] = {}
     params: ClassVar[dict] = {}
+    #: Set by the DAG before each run: True when this run was forced (``force=`` / ``--force-step``)
+    #: rather than due.  A step that runs an inner DAG passes it on, so forcing the outer step
+    #: rebuilds what is inside it instead of asking the inner steps whether they are fresh.
+    forced: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -484,6 +488,22 @@ class BuildDag:
         self._artifact_paths: dict[str, Path | None] = {}
         self._step_by_name: dict[str, BuildStep] = {}
 
+    def require(self, step_name: str, artifacts) -> None:
+        """Make the registered step *step_name* run after the producers of *artifacts* -- registered,
+        possibly after it.  For an order the artifacts alone cannot state at ``add`` time: a system
+        added first (its csynth is the one named ``csynth``) whose pysim must follow calibrations
+        added after it (``plans/unit_harness.md`` Stage 6).  The step consumes them from then on."""
+        step = self._step_by_name[step_name]
+        for name in artifacts:
+            if name not in self._artifact_owners:
+                raise ValueError(f"require: no registered step produces '{name}'")
+            dep = self._step_by_name[self._artifact_owners[name]]
+            if dep.name not in {d.name for d in step._deps}:
+                step._deps.append(dep)
+            extra = getattr(step, "after", None)
+            if extra is not None and name not in extra:
+                step.after = (*extra, name)
+
     def add(self, step: BuildStep) -> BuildStep:
         """Register *step*, auto-derive its deps, and return it."""
         # Defensive: legacy Buildable subclasses may bypass dataclass __post_init__
@@ -656,9 +676,15 @@ class BuildDag:
                 # after the fact if it was never measured.
                 started = time.perf_counter()
                 ran.add(step.name)
+                step.forced = step.name in forced
                 with events.span("step", step.name) as ev:
                     try:
                         produced = self._call_run(step, config, artifact_store)
+                        # A step that records what it ran with (a system step's digest, Stage 6)
+                        # does so only once it has succeeded.
+                        after = getattr(step, "after_run", None)
+                        if callable(after):
+                            after(config)
                         results[step.name] = BuildResult(
                             success=True, artifacts=produced,
                             elapsed_seconds=time.perf_counter() - started)

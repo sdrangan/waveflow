@@ -1,7 +1,7 @@
 ---
 title: Sequential (host-activated)
-parent: Hardware modules and Flows
-nav_order: 2
+parent: Legacy flows
+nav_order: 1
 has_children: true
 audience: python
 summary: "Flow 1 — a control-driven (ap_ctrl_hs + s_axilite) kernel the host launches and waits on, driven by a sequential Vitis testbench Vitis runs in C-simulation and C/RTL co-simulation. The concept here; the full worked walkthrough is the regmap example."
@@ -27,7 +27,7 @@ generates the RTL test harness for you: it wraps each call as an `ap_start` → 
 transaction against the synthesized RTL. You write a sequential program; you get a cycle-accurate
 measurement, without writing a testbench for the hardware.
 
-That is exactly what the [concurrent flow](./concurrent.md) gives up. A free-running kernel never
+That is exactly what the [concurrent flow](../systems/index.md) gives up. A free-running kernel never
 returns — there is nothing to call and nothing for Vitis to wrap — so it must be driven at RTL by a
 hand-built harness. If your design fits the function shape, stay here.
 
@@ -42,7 +42,7 @@ covers most accelerators with a clear request/response boundary.
   back-to-back jobs across the kernel boundary.
 - **−** The control plane costs an `s_axilite` adapter and a host round-trip per job.
 
-If you need jobs to overlap, that is the [concurrent, free-running flow](./concurrent.md).
+If you need jobs to overlap, that is the [concurrent, free-running flow](../systems/index.md).
 
 ## The three gates
 

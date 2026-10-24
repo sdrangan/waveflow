@@ -26,7 +26,7 @@ from tests.examples._system_run import WORK, compared_clean, recorded_names, sys
 
 
 def test_the_system_runs_the_same_golden():
-    """The system the RTL gate runs (:class:`~examples.fir_block.fir_block_sim.FirBlockSystem`)
+    """The system the RTL gate runs (:func:`~examples.fir_block.fir_block_sim.fir_block_system`)
     passes the golden check in pysim."""
     system().run()
 

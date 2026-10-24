@@ -76,15 +76,18 @@ onto a Waveflow abstraction, and the whole thing simulates, verifies, and genera
 
 - **Tiles and their PEs are `HwModule`s.** A distributed tile — and each processing element inside
   it (FIR, FFT, systolic, vector) — is a `HwModule` with typed interfaces (the **Serial I/F** and
-  **Bus/memory I/F** of the figure above) and a compute hook: modeled in Python, simulated at NumPy
-  speed, verified bit-exact against its golden, and lowered to HLS. The reconfigurable **vector-MAC
-  engine (VMAC)** is the first PE through that flow — already bit-exact on real Vitis and
-  throughput-characterized — a concrete SALSA building block, not a sketch.
-- **The tasklet vocabulary maps straight onto Waveflow.** A *tasklet* is a compute hook on a PE
-  `HwModule`; a *flow* is a sequence of tasklets wired through the typed interfaces; and a PE's
-  *job queue + micro-scheduler* is an **AXI-MM command-queue interface** feeding the hook. So the one
-  model that simulates a tasklet bit-exact also describes the queue that schedules it — one source for
-  the compute *and* its dispatch.
+  **Bus/memory I/F** of the figure above) and a behavior: modeled in Python, simulated at NumPy
+  speed, verified bit-exact against its golden, and realized in HLS. The first PEs through that flow
+  are Waveflow's [linear-algebra components](../guide/dsp/linalg_common.md) — a systolic matrix multiply and
+  a conjugate-gradient vector unit, composed into the [CG massive-MIMO detector](../examples/mimo_cg/index.md)
+  and bit-exact at RTL — and an [SSR FFT](../examples/ssr_fft/index.md): concrete SALSA building blocks,
+  not sketches.
+- **The tasklet vocabulary maps straight onto Waveflow.** A *tasklet* is the behavior of a PE
+  `HwModule` — one firing per command; a *flow* is a sequence of tasklets wired through the typed
+  interfaces; and a PE's *job queue* is the **memory-mapped queue** a host or another PE reaches it by
+  (the module's `mm_views`, built into a device on the AXI crossbar). So the one model that simulates a
+  tasklet bit-exact also describes the queue that feeds it — one source for the compute *and* its
+  dispatch.
 - **The dataflow fabric is interfaces + concurrency.** Tiles connect through typed, transactional
   interfaces, and the simulator runs them as **truly concurrent processes**, so the *simultaneous,
   runtime-reconfigured* dataflows that define SALSA are modeled directly — something a sequential HLS
@@ -94,15 +97,18 @@ onto a Waveflow abstraction, and the whole thing simulates, verifies, and genera
   the design-space exploration a runtime-programmable dataflow machine needs but static analysis
   can't deliver.
 - **Firmware comes from the same source.** The control that programs the dataflow — the per-tile
-  commands and the routing — is generated alongside the hardware from the one model, so the firmware
-  and the silicon cannot drift.
+  commands — uses the message schemas and the device endpoints (queue addresses, interrupts) generated
+  from the one model; the host program itself is written once in Python and once as its C++ twin, and
+  the RTL simulation checks that both put identical traffic on the bus
+  ([Functional verification](../guide/systems/verification.md#with-a-host)), so the firmware and the
+  silicon cannot silently drift.
 - **Verification is end-to-end and bit-exact.** Every tile is checked against its Python golden on
   the real toolchain; the system is simulated against the very wireless algorithm it implements.
 
 SALSA is a reconfigurable, concurrent, heterogeneous system whose **correctness**, **performance**,
 and **firmware** must all be reasoned about *together* — and Waveflow keeps them in one fast,
-bit-exact, executable model. VMAC is the first tile through that flow; the rest of SALSA follows the
-same path.
+bit-exact, executable model. The linear-algebra and FFT components are the first tiles through that
+flow; the rest of SALSA follows the same path.
 
 ## References
 - French, Matthew, et al. "TRACER, the Next Generation Ultra-wideband Spectrum Processor." MILCOM 2025-2025 IEEE Military Communications Conference (MILCOM), 2025.

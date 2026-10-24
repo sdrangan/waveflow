@@ -1,0 +1,34 @@
+# The stream_kernel frame: one free-running kernel that takes commands and their data on a stream and
+# answers on streams -- the shape most accelerators take, and the first one to reach for.
+#
+# A frame is a bundle with no code of its own -- this file, frame.md (what the frame fixes and what a
+# spec must decide), process.md (the frame's own steps; joined with ../_common/process.md, they are
+# what `waveflow_get_process` returns) and prompts/ (example specs).  No [template] yet: the reference
+# imports its arithmetic from another example, so a copy would not stand alone.
+
+name = "stream_kernel"
+synopsis = """One free-running kernel (no start signal, no register map) on framed AXI4-Streams, \
+following the command-response protocol: a command and its data in; the results out, headed by \
+which command they answer and how many; a status per command on a stream of its own, the last \
+command seen.  An error is fatal: the kernel closes its results, reports, and stops taking input \
+until a reset.  The testbench is generated from the kernel's ports (its harness), and the kernel is \
+verified bit-exact in pysim and at RTL under XSI, its timing calibrated in the same harness."""
+
+pattern = "command_response"
+shape = "one free-running kernel: framed AXI4-Streams in and out, a header on the data, a status stream"
+flow = "the kernel's harness on the system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare"
+choose_when = """one kernel that takes commands and data on a stream and answers on streams -- a \
+function to put on a stream, no start signal, no register map, no host program on a bus, no memory.  \
+If the spec says the host launches the kernel (ap_start, AXI-Lite status), choose stream_inband; \
+two or more stages streaming to each other are stream_pipeline; for several kernels, or a host \non a bus, choose bus_system."""
+
+reference_examples = ["stream_kernel"]
+
+[docs]
+specification = "frame.md"
+process = "process.md"
+prompts = "prompts"
+
+[[prompts]]
+file = "01_cplx_gain.md"
+synopsis = "A complex gain per command on complex int16 samples, rounded and saturated; WORD_BW 32 or 64."

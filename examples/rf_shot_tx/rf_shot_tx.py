@@ -55,6 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar, NamedTuple
 
 import numpy as np
@@ -63,7 +64,7 @@ from waveflow.build.composite_gen import RFSOC4X2_CLK_HZ
 from waveflow.hw.clock import Clock
 from waveflow.hw.codegen_targets import SEQUENTIAL_XSI_TB
 from waveflow.hw.hw_freerun import FreeRunMod
-from waveflow.hw.hw_system import GraphSystem
+from waveflow.hw.hw_system import DutTop, HwSystem
 from waveflow.hw.interface import StreamIF
 from waveflow.hw.rf_relayout import to_dense
 from waveflow.hw.rf_sample_if import RFSampIF
@@ -78,7 +79,7 @@ from waveflow.hw.rf_shot_tx import (
     SHOT_STATUS_NAMES,
     shot_tx_schemas,
 )
-from waveflow.hw.hw_module import HwParam
+from waveflow.hw.hw_module import HwParam, kernel_name
 from waveflow.hw.rf_shot_tx import FILLER, RfShotTx
 from waveflow.hw.rfdc_samp_word import Rfsoc4x2SampWord
 from waveflow.simulation.rf_tb import RfDataSink
@@ -331,7 +332,7 @@ class RfShotTxTB(FreeRunMod):
     axis_freq: float = RFSOC4X2_CLK_HZ
     word: type[Rfsoc4x2SampWord] = WORD
     #: Which scenario the pysim run drives.  At RTL each frame stream is a system of its own
-    #: (``RfShotTxSystem``, ``rf_shot_tx_system_build.py``).
+    #: (``rf_shot_tx_system``, ``rf_shot_tx_system_build.py``).
     in_bundle: str = "vectors/cmd"
     n_cycles: int = XSI_N_CYCLES
     #: Which of the two builds this graph wraps — :class:`RfShotTx` or :class:`RfShotTxAbs`.  ONE
@@ -342,66 +343,14 @@ class RfShotTxTB(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.axis_clk = Clock(name=f"{self.name}_axis_clk", freq=float(self.axis_freq))
-        self.samp_clk = Clock(name=f"{self.name}_samp_clk", freq=float(self.samp_rate))
-
-        self.rfdc = Rfdc(name=f"{self.name}_rfdc", sim=self.sim, n_rx=0, n_tx=1, word=self.word)
-        w = self.rfdc.axis_bitwidth
-        self.dut = self.dut_cls.for_word(
-            self.word, depth=int(self.depth), sim=self.sim,
-            name=f"{self.name}_dut", clk=self.axis_clk,
-            # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
-            # blksize burst per event and refuses a partial one.  A modelling shape only.
-            #
-            # AND NOTHING ELSE.  There was a `dac_word_rate` here -- the converter's rate, computed
-            # by hand as samp_rate / SPW and handed to the player as a metronome -- and
-            # `plans/lt_transient.md` S2 retired it.  What paced the player was never hardware: at
-            # RTL `TREADY` does it.  The metronome existed to force pysim onto the converter's own
-            # time grid so a byte-identical-from-t=0 comparison could pass, and that comparison was
-            # a fidelity level loosely-timed modelling does not promise.  The player is now paced by
-            # back-pressure alone and runs `c_lead()` samples ahead; the gates align on each
-            # backend's own playout log instead.
-            blk_words=int(self.blksize) // SPW)
-        self.drv = StreamDriver(sim=self.sim, name=f"{self.name}_drv", bitwidth=w,
-                                in_bundle=str(self.in_bundle), has_tlast=True)
-        self.resp_snk = StreamSink(sim=self.sim, name=f"{self.name}_resp_snk", bitwidth=w,
-                                   out_bundle="vectors/resp", has_tlast=True)
-        self.sink = RfDataSink(name=f"{self.name}_sink", sim=self.sim, out_bundle="vectors/rf_out")
-        for c in (self.dut, self.rfdc, self.drv, self.resp_snk, self.sink):
+        parts = wire_rf_shot_tx(self.sim, name=self.name,
+                                **{k: getattr(self, k) for k in _SHOT_TX_CONFIG})
+        for k in _SHOT_TX_PARTS:
+            setattr(self, k, getattr(parts, k))
+        for c in parts.comps:
             self.add_comp(c)
-
-        # --- the RF domain: one interface, one metronome (there is no ADC) ----------------------
-        self.dac_if = RFSampIF(name=f"{self.name}_dac_if", sim=self.sim, samp_clk=self.samp_clk,
-                               n_ch=1, blksize=int(self.blksize), n_blk=int(self.n_blk))
-        self.dac_if.bind("tx", self.rfdc.tx_rf)
-        self.dac_if.bind("rx", self.sink.rf_ep)
-        self.add_if(self.dac_if)
-
-        # --- the PL domain -----------------------------------------------------------------------
-        # DEPTHS SIZED TO THE BURST, and that is a reversal of what this comment used to say.
-        #
-        # It used to read "no depth overrides on the three that become the DUT's own boundary ports:
-        # a top-level AXIS argument cannot carry a FIFO depth".  The first half is right and the
-        # conclusion was backwards.  These three interfaces are owned by the TESTBENCH, not by
-        # RfShotTx: codegen elaborates the DUT unbound, so `_check_boundary_depth` never sees them
-        # and nothing here reaches the RTL.  What the number does is decide whether pysim's producer
-        # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
-        # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
-        # still a hardware claim and still refused.  See PR #185 Task 0.
-        cmd_words = int(self.depth) + 1          # one ShotTxHdr, then the payload
-        blk_words = int(self.blksize) // SPW     # what the player hands over at once
-        for nm, master, slave, depth in (
-                ("cmd", self.drv.stream_ep, self.dut.s_in, 2 * cmd_words),
-                ("resp", self.dut.resp_out, self.resp_snk.stream_ep, None),
-                ("dac", self.dut.samp_out, self.rfdc.tx_streams[0], 2 * blk_words)):
-            ifc = (StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w, depth=depth) if depth is not None else
-                   StreamIF(name=f"{self.name}_{nm}_axis", sim=self.sim, clk=self.axis_clk,
-                            bitwidth=w))
-            ifc.bind("master", master)
-            ifc.bind("slave", slave)
-            self.add_if(ifc)
-            setattr(self, f"{nm}_axis", ifc)
+        for i in parts.ifs:
+            self.add_if(i)
 
     @property
     def blk_period(self) -> float:
@@ -420,34 +369,126 @@ class RfShotTxTB(FreeRunMod):
         return float(self.samp_rate) / (SPW * float(self.axis_freq))
 
 
-@dataclass
-class RfShotTxSystem(GraphSystem):
-    """The shot transmitter as a **system** (``plans/system_model.md`` S3e): the
-    :class:`RfShotTxTB` graph, the cut the transmitter alone -- its memory inside it, so the system
-    top instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
+#: :class:`RfShotTxTB`'s configuration -- the keyword arguments of :func:`wire_rf_shot_tx` (the
+#: fabric clock is not one: it is made from ``axis_freq``).
+_SHOT_TX_CONFIG = ("depth", "blksize", "n_blk", "samp_rate", "axis_freq", "word", "in_bundle",
+                   "n_cycles", "dut_cls")
+#: What :func:`wire_rf_shot_tx` builds and :class:`RfShotTxTB` carries.
+_SHOT_TX_PARTS = ("axis_clk", "samp_clk", "rfdc", "dut", "drv", "resp_snk", "sink", "dac_if",
+                  "cmd_axis", "resp_axis", "dac_axis")
+
+
+def wire_rf_shot_tx(sim, *, name: str = "tb", **cfg) -> SimpleNamespace:
+    """The shot transmitter's graph built on *sim* -- a driver pushing frames, the transmitter, a
+    real DAC, and two sinks (:class:`RfShotTxTB` draws it).  The one wiring both forms use --
+    :func:`rf_shot_tx_system` (``HwSystem(sim, dut)``) and :class:`RfShotTxTB` (the composite
+    :func:`run_pysim` and the kernel-flow testbench walk).
+
+    *cfg* is :class:`RfShotTxTB`'s configuration, its defaults where not given.  Returns the
+    configuration, the parts (``dut``, ``rfdc``, ``drv``, ``resp_snk``, ``sink``, ``dac_if``, the
+    three AXIS links, the clocks), the derived ``blk_period`` / ``run_until`` / ``words_per_cycle``,
+    ``sim``, and ``comps`` / ``ifs`` in the order a composite registers them."""
+    import dataclasses
+
+    bad = set(cfg) - set(_SHOT_TX_CONFIG)
+    if bad:
+        raise TypeError(f"wire_rf_shot_tx: unknown configuration {sorted(bad)}")
+    defaults = {f.name: (f.default if f.default is not dataclasses.MISSING else f.default_factory())
+                for f in dataclasses.fields(RfShotTxTB) if f.name in _SHOT_TX_CONFIG}
+    p = SimpleNamespace(sim=sim, name=name, **{**defaults, **cfg})
+    p.axis_clk = Clock(name=f"{name}_axis_clk", freq=float(p.axis_freq))
+    p.samp_clk = Clock(name=f"{name}_samp_clk", freq=float(p.samp_rate))
+
+    p.rfdc = Rfdc(name=f"{name}_rfdc", sim=sim, n_rx=0, n_tx=1, word=p.word)
+    w = p.rfdc.axis_bitwidth
+    p.dut = p.dut_cls.for_word(
+        p.word, depth=int(p.depth), sim=sim,
+        name=f"{name}_dut", clk=p.axis_clk,
+        # pysim's quantum on the converter edge is a BLOCK: the Rfdc's DAC process takes one
+        # blksize burst per event and refuses a partial one.  A modelling shape only.
+        #
+        # AND NOTHING ELSE.  There was a `dac_word_rate` here -- the converter's rate, computed
+        # by hand as samp_rate / SPW and handed to the player as a metronome -- and
+        # `plans/lt_transient.md` S2 retired it.  What paced the player was never hardware: at
+        # RTL `TREADY` does it.  The metronome existed to force pysim onto the converter's own
+        # time grid so a byte-identical-from-t=0 comparison could pass, and that comparison was
+        # a fidelity level loosely-timed modelling does not promise.  The player is now paced by
+        # back-pressure alone and runs `c_lead()` samples ahead; the gates align on each
+        # backend's own playout log instead.
+        blk_words=int(p.blksize) // SPW)
+    p.drv = StreamDriver(sim=sim, name=f"{name}_drv", bitwidth=w, in_bundle=str(p.in_bundle),
+                         has_tlast=True)
+    p.resp_snk = StreamSink(sim=sim, name=f"{name}_resp_snk", bitwidth=w,
+                            out_bundle="vectors/resp", has_tlast=True)
+    p.sink = RfDataSink(name=f"{name}_sink", sim=sim, out_bundle="vectors/rf_out")
+    p.comps = (p.dut, p.rfdc, p.drv, p.resp_snk, p.sink)
+
+    # --- the RF domain: one interface, one metronome (there is no ADC) --------------------------
+    p.dac_if = RFSampIF(name=f"{name}_dac_if", sim=sim, samp_clk=p.samp_clk, n_ch=1,
+                        blksize=int(p.blksize), n_blk=int(p.n_blk))
+    p.dac_if.bind("tx", p.rfdc.tx_rf)
+    p.dac_if.bind("rx", p.sink.rf_ep)
+    ifs = [p.dac_if]
+
+    # --- the PL domain ---------------------------------------------------------------------------
+    # DEPTHS SIZED TO THE BURST, and that is a reversal of what this comment used to say.
+    #
+    # It used to read "no depth overrides on the three that become the DUT's own boundary ports:
+    # a top-level AXIS argument cannot carry a FIFO depth".  The first half is right and the
+    # conclusion was backwards.  These three interfaces are owned by the TESTBENCH, not by
+    # RfShotTx: codegen elaborates the DUT unbound, so `_check_boundary_depth` never sees them
+    # and nothing here reaches the RTL.  What the number does is decide whether pysim's producer
+    # stalls against a MODEL -- a StreamDriver is a model of a DMA -- and a whole frame arriving
+    # in one event is the honest reading of that.  A depth on an interface the DUT itself owns is
+    # still a hardware claim and still refused.  See PR #185 Task 0.
+    cmd_words = int(p.depth) + 1          # one ShotTxHdr, then the payload
+    blk_words = int(p.blksize) // SPW     # what the player hands over at once
+    for nm, master, slave, depth in (
+            ("cmd", p.drv.stream_ep, p.dut.s_in, 2 * cmd_words),
+            ("resp", p.dut.resp_out, p.resp_snk.stream_ep, None),
+            ("dac", p.dut.samp_out, p.rfdc.tx_streams[0], 2 * blk_words)):
+        ifc = (StreamIF(name=f"{name}_{nm}_axis", sim=sim, clk=p.axis_clk, bitwidth=w,
+                        depth=depth) if depth is not None else
+               StreamIF(name=f"{name}_{nm}_axis", sim=sim, clk=p.axis_clk, bitwidth=w))
+        ifc.bind("master", master)
+        ifc.bind("slave", slave)
+        ifs.append(ifc)
+        setattr(p, f"{nm}_axis", ifc)
+    p.ifs = tuple(ifs)
+    # The derived quantities RfShotTxTB states as properties.
+    p.blk_period = int(p.blksize) / float(p.samp_rate)
+    p.run_until = (int(p.n_blk) + 2) * p.blk_period
+    p.words_per_cycle = float(p.samp_rate) / (SPW * float(p.axis_freq))
+    return p
+
+
+def rf_shot_tx_system(dut_cls: type = RfShotTx, scenario: str = "cmd",
+                      n_cycles: int = XSI_N_CYCLES) -> HwSystem:
+    """The shot transmitter as a **system**, ``HwSystem(sim, dut)``: the graph built on one
+    simulation (:func:`wire_rf_shot_tx`), the cut the transmitter alone -- its memory inside it, so
+    the system top instantiates its **wrapper**.  The RFDC is testbench.  *dut_cls* picks the build
     (:class:`RfShotTx` or :class:`RfShotTxAbs`) and *scenario* the frame stream (``"cmd"`` or
-    ``"cmd_loop"``), each its own run.
+    ``"cmd_loop"``), each its own run.  pysim runs to the metronome's horizon (``run_until``).
 
     The RF sink's recording is the example's to check (``recording_check``): pysim's player runs
     ahead by its loosely-timed lead, so the playouts align only after each backend's own startup
-    transient (``plans/lt_transient.md``)."""
-
-    dut_cls: type = RfShotTx
-    scenario: str = "cmd"
-    n_cycles: int = XSI_N_CYCLES
-
-    def graph(self) -> RfShotTxTB:
-        self.frames = dict(SCENARIOS)[self.scenario]
-        g = RfShotTxTB(name="xsi_tb", sim=Simulation(), dut_cls=self.dut_cls,
-                       in_bundle=f"vectors/{self.scenario}", n_cycles=int(self.n_cycles))
-        g.sink.recording_check = "example"
-        return g
-
-    def dut_modules(self, g) -> list:
-        return [g.dut]
-
-    def write_inputs(self, root) -> None:
-        write_scenario(root, self.frames, self.scenario)
+    transient (``plans/lt_transient.md``).  The parts are attributes of the system
+    (``sysm.kernel``, ``sysm.rfdc``, ``sysm.sink``, ...)."""
+    frames = dict(SCENARIOS)[scenario]
+    sim = Simulation()
+    parts = wire_rf_shot_tx(sim, name="xsi_tb", dut_cls=dut_cls, in_bundle=f"vectors/{scenario}",
+                            n_cycles=int(n_cycles))
+    parts.sink.recording_check = "example"
+    dut = DutTop.of(f"{kernel_name(parts.dut)}_dut", sim, comps=[parts.dut])
+    sysm = HwSystem(sim, dut, n_cycles=int(n_cycles), run_until=parts.run_until,
+                    inputs=lambda root: write_scenario(root, frames, scenario),
+                    fresh=lambda: rf_shot_tx_system(dut_cls, scenario, n_cycles))
+    sysm.clk, sysm.data_width = parts.dut.clk, int(parts.rfdc.axis_bitwidth)
+    sysm.dut_cls, sysm.scenario, sysm.frames = dut_cls, scenario, frames
+    sysm.kernel = parts.dut
+    for k in ("rfdc", "drv", "resp_snk", "sink", "dac_if"):
+        setattr(sysm, k, getattr(parts, k))
+    return sysm
 
 
 # ---------------------------------------------------------------------------

@@ -34,8 +34,10 @@ python -m examples.rf_shot_tx.rf_shot_tx_system_build [--abs] [--loop]
 pytest -m xsi tests/examples/test_rf_shot_tx_xsi.py tests/examples/test_rf_shot_tx_abs_xsi.py
 ```
 
-The DUT is the transmitter with its memory, instantiated in the system top as its **wrapper**,
-`rf_shot_tx_top`: the kernel plus its hand-written `bram_t2p` memory. The kernel has `buf_w` /
+The system is `rf_shot_tx_system(dut_cls, scenario)` in `rf_shot_tx.py`, an
+[`HwSystem(sim, dut)`](../../guide/build/xsi_system.md#the-system) built from `wire_rf_shot_tx(sim, ...)`
+(the parts `RfShotTxTB` holds). The DUT is the transmitter with its memory, instantiated in the
+system top as its **wrapper**, `rf_shot_tx_top`: the kernel plus its hand-written `bram_t2p` memory. The kernel has `buf_w` /
 `buf_r` ports, and the wrapper joins them to the memory instance beside it, so a testbench sees only
 AXI-Stream. The RFDC's DAC model spans the cut.
 

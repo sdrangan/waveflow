@@ -90,14 +90,12 @@ def truncate(
     arr = np.asarray(x)
     if wid >= MAX_WIDTH:
         return arr                              # already within the 64-bit dtype
-    mask = (1 << wid) - 1
-    y = (arr.astype(np.int64) & mask)
+    y = arr.astype(np.int64, copy=False)
     if signed:
-        # Sign-extend as (y ^ s) - s: every intermediate stays inside int64, even at
-        # wid == 63, where the textbook ``y - (1 << wid)`` overflows.
-        signbit = 1 << (wid - 1)
-        y = (y ^ signbit) - signbit
-    return y
+        # Up as unsigned (no signed overflow), back down arithmetically: the low wid bits,
+        # sign-extended -- two whole-array ops instead of a mask, a compare and a select.
+        return (y.view(np.uint64) << np.uint64(64 - wid)).view(np.int64) >> np.int64(64 - wid)
+    return y & ((1 << wid) - 1)
 
 
 def saturate(
@@ -223,6 +221,14 @@ def div_format(a: Format, b: Format) -> Format:
     return Format(sb + a.W + max(fb, 0), sb + a.int_bits + fb, a.signed or b.signed)
 
 
+def abs_format(a: Format) -> Format:
+    """``|x|`` at full precision: ``<W+1, I+1>`` signed (the type of ``ap_fixed`` unary
+    minus), so ``|min|`` fits; an unsigned format is its own magnitude (unchanged)."""
+    if not a.signed:
+        return Format(a.W, a.int_bits, False)
+    return Format(a.W + 1, a.int_bits + 1, True)
+
+
 def sum_format(a: Format, n_terms: int) -> Format:
     """Reduction of ``n_terms`` values: grow integer bits by ``ceil(log2(n_terms))``."""
     if n_terms < 1:
@@ -291,6 +297,13 @@ def shift(sa: NDArray, a: Format, n: int) -> tuple[NDArray, Format]:
     """Lossless point-move rescale: stored bits unchanged, value scaled by 2**n."""
     r = shift_format(a, n)
     return np.asarray(sa).astype(r.dtype).copy(), r
+
+
+def abs_(sa: NDArray, a: Format) -> tuple[NDArray, Format]:
+    """Full-precision magnitude: stored ints ``|s|`` in :func:`abs_format` (lossless)."""
+    r = abs_format(a)
+    arr = np.asarray(sa).astype(r.dtype)
+    return (np.abs(arr) if r.signed else arr.copy()).astype(r.dtype), r
 
 
 def fixed_sum(sa: NDArray, a: Format, axis: int | None = None) -> tuple[NDArray, Format]:

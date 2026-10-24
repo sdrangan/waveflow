@@ -67,61 +67,206 @@ class DutTop(HwModule):
 
 def dut_members(root: HwModule) -> list:
     """The cut a DUT tree stands for, as the list the system top is walked from: each device's
-    kernel, and each other child (an on-chip memory) itself, in the tree's order."""
+    kernel, and each other child (an on-chip memory) itself, in the tree's order.  A DUT that is
+    itself a member -- a csynth'd kernel, a memory, or one device (a harness's DUT, D12) -- is its own
+    cut."""
+    from waveflow.hw.memory import MemoryMod
     from waveflow.hw.mm_device import MmSlaveDevice
 
+    if isinstance(root, MmSlaveDevice):
+        return [root.kernel]
+    if getattr(type(root), "cpp_kernel_name", None) or isinstance(root, MemoryMod):
+        return [root]
     return [c.kernel if isinstance(c, MmSlaveDevice) else c for c in root.sub_comps.values()]
 
 
 class HwSystem(ABC):
-    """A design and its environment: the element graph, simulated by :meth:`run`, cut per build.
+    """A design and its environment: a :class:`~waveflow.simulation.simulation.Simulation` plus one
+    named DUT (``plans/unit_harness.md`` D12).  Two ways to make one:
 
-    A subclass builds the graph on ``self.sim`` and implements :meth:`dut` and :meth:`run`::
+    * **Directly** -- build the modules on a simulation, then name the DUT; the testbench is everything
+      else, derived (:meth:`participants`), never listed::
 
-        @dataclass
-        class MarkovSystem(HwSystem):
-            jobs: list
+          sim = Simulation()
+          dut = MarkovDut(name="markov_dut", sim=sim)
+          host = MarkovHost(name="host", sim=sim, jobs=jobs)
+          host.bind(dut.s_axi)
+          sysm = HwSystem(sim, dut)
 
-            def __post_init__(self):
-                self.sim = Simulation()
-                ...                              # the kernels, memory, host, crossbar, wiring
+      The constructor checks the D12 rules: the DUT is registered in the simulation, it is a root, every
+      testbench participant can be lowered to the RTL testbench, and no DUT boundary port is unbound.
+      :func:`~waveflow.hw.harness.harness` makes one this way around a single module.
+    * **By subclassing** (the systems written before D12): build the graph on ``self.sim`` and implement
+      :meth:`dut` and :meth:`run`::
 
-            def dut(self):
-                return self.dut_top                  # DutTop.of("markov_dut", ...), built above
+          @dataclass
+          class MySystem(HwSystem):
+              jobs: list
 
-            def run(self):
-                self.sim.run_sim(until=self.host.done)
-                return self.host.results
+              def __post_init__(self):
+                  self.sim = Simulation()
+                  ...                              # the kernels, memory, host, crossbar, wiring
+
+              def dut(self):
+                  return self.dut_top                  # DutTop.of("my_dut", ...), built above
+
+              def run(self):
+                  self.sim.run_sim(until=self.host.done)
+                  return self.host.results
     """
 
-    #: The simulation holding every module and interface of the graph; set by the subclass.
+    #: The simulation holding every module and interface of the graph.
     sim: "Simulation"
 
-    @abstractmethod
-    def dut(self) -> HwModule:
-        """The default DUT: the root of the synthesized tree (:class:`DutTop`), its children the
-        devices and on-chip memories in the order their sub-tops are rendered."""
+    def __init__(self, sim: "Simulation", dut: HwModule, *, n_cycles: int | None = None,
+                 inputs=None, check=None, run_until=None, fresh=None, calibration=None,
+                 golden=None) -> None:
+        """*sim* holds every module; *dut* is the one root module synthesized.  The rest describes the
+        run: *n_cycles* bounds the RTL run (``vectors/run.json``), *inputs* ``(root) -> None`` writes
+        what the testbench plays, *check* ``(system) -> Any`` is what :meth:`run` returns, *run_until*
+        ends a pysim run that never runs out of events, *fresh* ``() -> HwSystem`` rebuilds an
+        unrun copy (:meth:`fresh`), *calibration* ``() -> CalibWorkload`` is
+        :meth:`calibration_workload`, *golden* (``{recording: [burst words]}``, or a function
+        returning it) is what the golden says each recording holds (:meth:`golden_outputs`)."""
+        self.sim = sim
+        self._dut = dut
+        self.n_cycles = n_cycles
+        self._inputs = inputs
+        self._check = check
+        self.run_until = run_until
+        self._fresh = fresh
+        self._calibration = calibration
+        self._golden = golden
+        self._root = None
+        self.clk = getattr(dut, "clk", None)
+        widths = [int(ep.bitwidth) for _n, ep in _boundary_eps(dut) if getattr(ep, "bitwidth", None)]
+        if widths:
+            self.data_width = max(widths)
+        self._validate()
 
-    @abstractmethod
+    def _validate(self) -> None:
+        """The D12 rules, each a refusal naming what to fix."""
+        dut = self._dut
+        if not any(o is dut for o in self.sim._sim_objs):
+            raise ValueError(f"HwSystem: the DUT '{dut.name}' is not a SimObj of this simulation -- "
+                             f"build it with sim=<the system's simulation>")
+        if getattr(dut, "parent", None) is not None:
+            raise ValueError(f"HwSystem: the DUT '{dut.name}' is a sub-module of "
+                             f"'{dut.parent.name}' -- a system's DUT is a root; a sub-module's own "
+                             f"harness gets a fresh copy of it (waveflow.hw.harness.harness)")
+        bad = [o.name for o in self.participants() if not _lowerable(o)]
+        if bad:
+            raise ValueError(f"HwSystem: testbench participants with no testbench lowering (a "
+                             f"bfm_model(), an xsi_model() or a C++ twin): {bad} -- an object that "
+                             f"cannot be lowered belongs in a plain Simulation, not an HwSystem")
+        loose = [n for n, ep in _boundary_eps(dut) if getattr(ep, "interface", None) is None]
+        if loose:
+            raise ValueError(f"HwSystem: DUT '{dut.name}' boundary ports bound to nothing: {loose}")
+
+    def dut(self) -> HwModule:
+        """The DUT: the root of the synthesized tree (for a subclass, a :class:`DutTop` whose children
+        are the devices and on-chip memories, in the order their sub-tops are rendered)."""
+        dut = getattr(self, "_dut", None)
+        if dut is None:
+            raise NotImplementedError(f"{type(self).__name__}: implement dut() or construct with "
+                                      f"HwSystem(sim, dut)")
+        return dut
+
+    def participants(self) -> "list[SimObj]":
+        """The testbench, derived: every root ``SimObj`` of the simulation outside the DUT -- each a
+        testbench participant (an interface is an edge, not a participant)."""
+        from waveflow.hw.interface import Interface, InterfaceEndpoint
+
+        root = self.dut()
+        return [o for o in self.sim._sim_objs
+                if getattr(o, "parent", None) is None and o is not root
+                and not isinstance(o, (Interface, InterfaceEndpoint))]
+
+    def fresh(self) -> "HwSystem":
+        """An unrun copy of this system -- what a second pysim pass (a calibration's) runs."""
+        import dataclasses
+
+        if getattr(self, "_fresh", None) is not None:
+            return self._fresh()
+        if dataclasses.is_dataclass(self):
+            return dataclasses.replace(self)
+        raise NotImplementedError(f"{type(self).__name__}: no way to rebuild it -- pass fresh=")
+
     def run(self) -> Any:
-        """Simulate the whole graph in pysim and return what the system reports."""
+        """Simulate the whole graph in pysim; return *check*'s value (or the system)."""
+        import tempfile
+
+        if self._root is None:
+            with tempfile.TemporaryDirectory() as tmp:
+                self.write_scenario(tmp)
+                self.sim.run_sim(until=self.run_until)
+        else:
+            self.sim.run_sim(until=self.run_until)
+        return self._check(self) if self._check is not None else self
 
     def write_scenario(self, root) -> None:
         """Write the scenario -- every testbench participant's inputs -- under *root*, and anchor the
         participants there, so a pysim run and an RTL run started from *root* read the same bytes.
 
-        The default is the software host's (``SwHost.write_scenario``).  A system with no host
-        overrides this: the scenario is the example's (what commands, what memory contents)."""
+        The default: a system built directly writes its *inputs* and the run's bound
+        (``vectors/run.json``) and anchors every participant that reads or records a bundle at *root*;
+        otherwise the software host's (``SwHost.write_scenario``).  A subclass with no host overrides
+        this: the scenario is the example's (what commands, what memory contents)."""
         from pathlib import Path
 
         from waveflow.build.system_xsi import discover
 
+        if getattr(self, "_inputs", None) is not None:
+            import json
+
+            from waveflow.utils.burst_io import write_run_params
+
+            root = Path(root)
+            run_json = root / "vectors" / "run.json"
+            run_json.unlink(missing_ok=True)      # a previous scenario's params are not this one's
+            self._inputs(root)
+            if self.n_cycles is not None:
+                # The inputs may write run params of their own (a memory's arena); the bound joins them.
+                params = (json.loads(run_json.read_text(encoding="utf-8")) if run_json.is_file()
+                          else {})
+                write_run_params(root / "vectors", **{**params, "n_cycles": int(self.n_cycles)})
+            top = self.dut()
+            for o in self.elements():
+                if not _inside(o, top) and any(getattr(o, a, None) for a in (
+                        "in_bundle", "out_bundle", "load_segs", "dump_segs")):
+                    o.root = root
+            self._root = root
+            return
         host = discover(self)[1]
+        if host is None:                # no bus to find it by: the one participant that writes one
+            hosts = [o for o in self.participants() if callable(getattr(o, "write_scenario", None))]
+            host = hosts[0] if len(hosts) == 1 else None
         if host is None:
             raise NotImplementedError(f"{type(self).__name__} has no software host to write its "
                                       f"scenario: override write_scenario(root)")
         host.scenario = Path(root).as_posix()
         host.write_scenario(root)
+
+    def calibration_workload(self):
+        """The workload that calibrates this design's declared timed phases, or None (the default:
+        nothing to calibrate) -- a :class:`~waveflow.build.phase_calib.CalibWorkload`: a system of
+        the same design whose scenario produces the feature values to fit on, and the values held
+        out to test the fit.  The one hand-written piece of a calibration
+        (:func:`~waveflow.build.phase_calib.add_calib_steps` generates the rest)."""
+        make = getattr(self, "_calibration", None)
+        return make() if make is not None else None
+
+    def has_golden(self) -> bool:
+        """Whether the system states a golden for its recordings (the DAG then adds ``golden``)."""
+        return getattr(self, "_golden", None) is not None
+
+    def golden_outputs(self) -> "dict[str, list] | None":
+        """What the golden says each recording holds: ``{recording: [burst words, ...]}``, keyed by
+        the recording's last path part (``vectors/m_out`` -> ``m_out``), one array per burst.  The
+        ``golden`` step checks pysim's recordings against it, burst for burst and word for word.
+        ``None``: the system states no golden."""
+        g = getattr(self, "_golden", None)
+        return g() if callable(g) else g
 
     def recordings(self) -> tuple[str, ...]:
         """The bundles the testbench records, relative to the scenario root: each participant
@@ -151,6 +296,17 @@ class HwSystem(ABC):
 
             out.append(COUNTERS_DIR)
         return tuple(dict.fromkeys(out))
+
+    def acceptances(self) -> tuple[str, ...]:
+        """The bundles the testbench's drivers record **acceptance** into, relative to the scenario
+        root: each participant outside the DUT that declares an ``accept_bundle`` (a
+        :class:`~waveflow.simulation.stream_tb.StreamDriver`; a harness sets one per stream input).
+        Only the RTL run writes them -- each word the DUT accepted with its cycle, the input-side
+        twin of a sink's arrival cycles -- in its run directory (``<work>/xsi_run/<bundle>``); pysim's
+        times are the simulation's own, so they are not compared."""
+        root = self.dut()
+        return tuple(dict.fromkeys(str(o.accept_bundle) for o in self.elements()
+                                   if not _inside(o, root) and getattr(o, "accept_bundle", "")))
 
     def compared_recordings(self) -> tuple[str, ...]:
         """The recordings compared **exactly**, RTL against pysim: every :meth:`recordings` entry
@@ -188,7 +344,11 @@ class HwSystem(ABC):
     def cut(self) -> list:
         """The default cut as a list -- each device's kernel and each memory (:func:`dut_members`):
         what ``inside=`` takes, and what a build uses when it is not given one."""
-        return dut_members(self.dut())
+        cut = dut_members(self.dut())
+        if not cut:
+            raise ValueError(f"{type(self).__name__}: the DUT '{self.dut().name}' puts nothing in the "
+                             f"cut -- no kernel, memory or device; an RTL run of it would be vacuous")
+        return cut
 
     def elements(self) -> "list[SimObj]":
         """Every module and interface of the graph, in the order they were created."""
@@ -234,7 +394,9 @@ class GraphSystem(HwSystem):
         self.sim = self.tb.sim
         mods = list(self.dut_modules(self.tb))
         first = mods[0]
-        name = getattr(type(first), "cpp_kernel_name", None) or first.name
+        from waveflow.hw.hw_module import kernel_name
+
+        name = kernel_name(first) or first.name
         self.dut_top = DutTop.of(getattr(self, "dut_name", None) or f"{name}_dut", self.sim,
                                  comps=mods)
         self.clk = first.clk
@@ -310,6 +472,25 @@ def _inside(mod, root) -> bool:
             return True
         mod = getattr(mod, "parent", None)
     return False
+
+
+def _boundary_eps(mod) -> list:
+    """``[(name, endpoint), ...]`` of *mod*'s boundary."""
+    from waveflow.build.composite_gen import _unpack_boundary
+
+    return [_unpack_boundary(e) for e in getattr(mod, "boundary", ())]
+
+
+def _lowerable(obj) -> bool:
+    """Can testbench participant *obj* be lowered to the RTL testbench: a ``bfm_model()``, an
+    ``xsi_model()``, or a C++ twin (a software host)?"""
+    from waveflow.hw.hw_module import declares_hook
+
+    if declares_hook(obj, "bfm_model") or declares_hook(obj, "xsi_model"):
+        return True
+    from waveflow.sw.threads import SwHost
+
+    return isinstance(obj, SwHost)
 
 
 def _boundary_widths(mods) -> list[int]:

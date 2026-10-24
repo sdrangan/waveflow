@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from examples.mm_fir.mm_fir import MmFirSystem, fir_golden
+from examples.mm_fir.mm_fir import fir_golden, mm_fir_system
 from waveflow.hw.mm_adaptor import MemSlaveAdaptor
 from waveflow.hw.mm_queue import MemSlaveRStream, MemSlaveWStream
 from waveflow.simulation.simulation import Simulation
@@ -13,8 +13,8 @@ from waveflow.simulation.simulation import Simulation
 def test_mm_fir_one_front_is_bit_exact_and_no_faster_than_per_view():
     x = np.random.default_rng(3).integers(-2000, 2000, size=150)
     plan = [(0, [1, 2, 3]), (77, [4, -5, 6, -7])]
-    a = MmFirSystem(x=list(x), plan=plan)
-    b = MmFirSystem(x=list(x), plan=plan, one_front=True)
+    a = mm_fir_system(x=list(x), plan=plan)
+    b = mm_fir_system(x=list(x), plan=plan, one_front=True)
     ya, yb = a.run(), b.run()
     assert np.array_equal(yb, fir_golden(x, plan))
     assert np.array_equal(ya, yb)
@@ -27,7 +27,7 @@ def test_mm_fir_one_front_is_bit_exact_and_no_faster_than_per_view():
     # ... and with those costs zeroed the bus is the bottleneck, and the serialization shows.
     fast = []
     for one_front in (False, True):
-        s = MmFirSystem(x=list(x), plan=plan, one_front=one_front)
+        s = mm_fir_system(x=list(x), plan=plan, one_front=one_front)
         s.fir.hdr_cycles = s.fir.tail_cycles = s.fir.restart_cycles = 0
         assert np.array_equal(s.run(), fir_golden(x, plan))
         fast.append(s.sim.env.now)

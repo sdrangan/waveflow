@@ -15,9 +15,9 @@ measured nothing reads as success.  So the stamp records **content**: a SHA-256 
 written beside the Vitis project at csynth time by
 :func:`~waveflow.build.composite_gen.render_rtl_f`, and compared by ``rtl_staleness`` afterwards.
 
-The source set is ``gen/<top>.cpp``, ``include/*`` (flat: build output) and ``src/**`` (recursive:
-the hand-written sources, ``plans/source_layout.md``), counting the suffixes in
-:data:`SOURCE_SUFFIXES`.  ``src/`` is first on the csynth include path, so a hand-written body there is
+The source set is ``gen/<top>.cpp`` and its csynth script ``gen/<top>.tcl`` (the part, the clock),
+``include/*`` (flat: build output) and ``src/**`` (recursive: the hand-written sources,
+``plans/source_layout.md``), counting the suffixes in :data:`SOURCE_SUFFIXES`.  ``src/`` is first on the csynth include path, so a hand-written body there is
 what the compiler reads; :func:`shadowed_sources` refuses a tree where an ``include/`` file of the same
 name says something different, because that is the one arrangement in which "the guard hashed it" and
 "the compiler read it" can name different files.
@@ -74,9 +74,10 @@ def source_files(root, top: str, *, gen_dir: str = "gen",
     """
     root = Path(root)
     out: list[Path] = []
-    gen = root / gen_dir / f"{top}.cpp"
-    if gen.is_file():
-        out.append(gen)
+    for suffix in (".cpp", ".tcl"):         # the top, and the script that sets its part and clock
+        gen = root / gen_dir / f"{top}{suffix}"
+        if gen.is_file():
+            out.append(gen)
     inc = root / include_dir
     if inc.is_dir():
         out += [p for p in inc.iterdir() if p.is_file() and p.suffix in SOURCE_SUFFIXES]
@@ -207,13 +208,18 @@ def first_mismatch(recorded: dict[str, str], current: dict[str, str],
     """``(path, verb)`` for the first source that disagrees, or ``None`` if they match.
 
     *legacy* -- the current raw-byte digests -- is accepted as a match too, for stamps written
-    before digests normalized line endings (see :func:`_sha256`).
+    before digests normalized line endings (see :func:`_sha256`).  A stamp written before the csynth
+    script was recorded (no ``.tcl`` in it) does not vouch for the script, as it never did; the next
+    csynth records it.
 
     The verb ("has changed" / "is new" / "is gone") is what turns a digest comparison back into the
     sentence a human can act on; a bare hash pair tells nobody what to do.
     """
+    pre_tcl = not any(k.endswith(".tcl") for k in recorded)
     for rel in sorted(set(recorded) | set(current)):
         was, now = recorded.get(rel), current.get(rel)
+        if was is None and pre_tcl and rel.endswith(".tcl"):
+            continue
         if was == now or (legacy is not None and was is not None and was == legacy.get(rel)):
             continue
         if was is None:

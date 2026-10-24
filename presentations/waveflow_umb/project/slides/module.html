@@ -1,0 +1,39 @@
+<section id="module" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:row;gap:48px">
+<div style="width:900px;background:#2A0D45;border-radius:16px;padding:28px 32px;display:flex;flex-direction:column;font-family:'JetBrains Mono', 'Courier New', monospace;color:#EFE9F5">
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">class FirCmdHdr(DataList):&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span style="color:#C9A8E6"># one 64-bit word</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;elements = {"nsamp":&#160;&#160;{"schema": U32},</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;"tx_id":&#160;&#160;{"schema": U16},</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;"cfg_id": {"schema": U16}}</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">class MmFir(FreeRunMod):&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span style="color:#C9A8E6"># free-running kernel</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;mm_views = (&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span style="color:#C9A8E6"># what a host sees</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;RegBank("regs", cfg_port="s_cfg", ...),</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;QueueIn("qin", port="s_in", depth=64),</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;QueueOut("qout", port="m_out", depth=64))</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;proc_latency: int = 9&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span style="color:#C9A8E6"># measured at RTL</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;def run_iter(self):&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<span style="color:#C9A8E6"># behavior + timing</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;hdr = yield from self.s_in.get_schema(FirCmdHdr)</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;x, t0 = yield from self.s_in.get_pipelined(</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;S16, hdr.nsamp)</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;y = self._filter(x.val)&#160;&#160;&#160;<span style="color:#C9A8E6"># numpy golden</span></p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;yield from self.m_out.write_pipelined(</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;array(S64, y), t_out)</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">xbar = AXIMMCrossBarIF(nports_master=1, nports_slave=4,</p>
+<p style="font-size:24px;line-height:1.3;white-space:nowrap">&#160;&#160;&#160;&#160;bitwidth=64, latency_init=4)&#160;&#160;<span style="color:#C9A8E6"># measured at RTL</span></p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:28px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#B4570F;font-weight:600">Waveflow · One block</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:56px;font-weight:600;line-height:1.1">One block of the bit-true model, as code</h2>
+<div style="display:flex;flex-direction:column;gap:18px">
+<p style="font-size:26px;line-height:1.4;color:#423A4F"><b>Interfaces as code.</b> The schema fixes the word layout; ports, registers and queues are declared, not documented.</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F"><b>Generated.</b> The AMD crossbar, interrupts, RTL system top and a C++ testbench host.</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F"><b>Checked per block.</b> One scenario drives the Python and C++ hosts; their bus traffic must match byte for byte, and outputs match the golden.</p>
+<p style="font-size:26px;line-height:1.4;color:#423A4F"><b>Hand-written.</b> The HLS kernel body, as the twin of run_iter.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">Abridged from examples/mm_fir/mm_fir.py · a FIR with taps as registers and samples as a queue</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Show this to make the point that it is not slideware: the designer writes real hardware interfaces (stream ports, a register bank, queues, an AMD AXI crossbar with its latency measured at RTL). Be explicit that the kernel body itself is hand-written HLS; Waveflow generates everything around it and checks it. If time allows, show a waveform from the RTL run live.</aside>
+</section>

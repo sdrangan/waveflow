@@ -87,13 +87,15 @@ three are essential; collapsing any of them models a cost the hardware does not 
 | `HwState` | — already local | — | *not built* |
 
 **Non-overlapping transfer.** Data physically moves into an internal structure, and the call elapses
-the whole of it — nothing downstream starts until it finishes. The model is
-[block timing](../../timing_model/block.md).
+the whole of it — nothing downstream starts until it finishes. Its timing is a
+[sequential body](../../timing_model/block.md).
 
 **Overlapping (pipelined) transfer.** Two transfers proceed at once — reading one endpoint while
-writing another — so the pair costs `max(a, b)` rather than `a + b`. The model is
-[streaming timing](../../timing_model/streaming.md). Pipelined ops are **array** operations: the
-saving is proportional to the words moved, so there is no schema-only form.
+writing another — so the pair costs `max(a, b)` rather than `a + b`. Between two **streams**, state it
+as a [pipelined timed phase](../../timing_model/streaming.md) (`phase.pipeline`): there is no anchor to
+get wrong.  The pipelined ops below remain for transfers that touch memory -- `MMIF`, `BramIF` -- until
+those endpoints have events too.  They are **array** operations: the saving is proportional to the
+words moved, so there is no schema-only form.
 
 ```python
 x, tstart = yield from self.s_in.get_pipelined(Float32, count=n)
@@ -108,8 +110,8 @@ yield from self.buf_w.write_pipelined(y, addr, tstart)
 > **no gate compares your anchor against anything**. In [`bram_access`](../../../examples/bram_access/),
 > anchoring the memory write at the payload read's `tstart` is the entire reason a firing costs
 > `max(stream, memory)` — and adding that anchor moved the model's own predictions by a real cycle
-> per command. If you are unsure what to anchor to, read
-> [streaming timing](../../timing_model/streaming.md) before guessing.
+> per command. Between two streams, a [pipelined timed phase](../../timing_model/streaming.md) does the
+> anchoring from real events instead.
 
 **In place.** Unique to directly-addressable storage, and the reason is **timing, not copies**. A
 kernel computing against a BRAM transfers nothing — in C++ it is `foo(&buf[addr], n)`, reading and

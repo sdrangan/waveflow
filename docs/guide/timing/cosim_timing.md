@@ -38,9 +38,10 @@ for w in WIDTHS:
         verdict_artifact=f"timing_verdict_w{w}"))
 ```
 
-On that example pysim predicts 147 cycles against cosim's 152 at 32 bits (delta 5), and 94 against
-94 at 64 bits -- both measured over one whole kernel call.  The example's
-[calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-was-calibrated)
+On that example pysim predicts 145 cycles against cosim's 152 at 32 bits (delta 7), and 88 against
+94 at 64 bits -- both measured over one whole kernel call, the difference counted cycle by cycle (a
+one-cycle restart per command and the start/done handshake, outside the module's timed phases).  The example's
+[calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-used-to-be-calibrated)
 shows why the two sides must measure the same span.
 
 ## Quick reference

@@ -1,0 +1,16 @@
+{
+  "key": "systolic_core-65ffc80e",
+  "cls_name": "SystolicCore",
+  "cls_module": "waveflow.linalg.systolic",
+  "params": {
+    "C": 8,
+    "Kmax": 8,
+    "L": 4,
+    "Mmax": 8,
+    "Nmax": 32,
+    "R": 4,
+    "form": 4,
+    "sob_depth": 2
+  },
+  "signature": "65ffc80ef970109126976bc119ed98d020378a768acd7bb3030c3ba7f3443339"
+}

@@ -6,7 +6,7 @@ summary: "Building the design in Python: the three FreeRunMod leaves and the com
 ---
 # Python Model
 
-This page builds the design in Python — the three [`FreeRunMod`](../../guide/flows/concurrent.md)
+This page builds the design in Python — the three [`FreeRunMod`](../../guide/systems/index.md)
 leaves and the composite that wires them — and shows *how to write each kind of block*. The whole design
 is `examples/mem_copy/mem_copy.py`.
 

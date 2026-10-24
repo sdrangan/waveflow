@@ -95,6 +95,12 @@ class TaskInst:
     template_args: tuple[int, ...]   # baked-concrete template args, e.g. (64,) or (32, 256)
     args: tuple[str, ...]   # arg names (external ports and/or internal streams), in signature order
     header: str             # the task-body header to include
+    #: The C++ word types of the body's framed ports (``KernelTask.framed``), template arguments after
+    #: ``template_args``.  Vitis names them in the instance too (:func:`_vitis_type_name`).
+    word_types: tuple[str, ...] = ()
+    #: The body's parameter names, in signature order (``KernelTask.signature``): Vitis names a
+    #: task's stream-of-blocks pins after the PARAMETER (``<inst>_a_blk_write``), not the channel.
+    params: tuple[str, ...] = ()
 
     @property
     def inst_name(self) -> str:
@@ -107,8 +113,24 @@ class TaskInst:
 
         The suffix is a **prediction**: a second instance of the same body at the same template
         args would be ``_U1``, and nothing here could tell them apart.  :meth:`TopSpec.trace_manifest`
-        rejects that case rather than emitting names that silently bind to the wrong instance."""
-        return "_".join([self.task_fn, *(str(a) for a in self.template_args)]) + "_U0"
+        rejects that case rather than emitting names that silently bind to the wrong instance.
+
+        A framed port's word type is a template argument too, and Vitis spells it into the name
+        (:func:`_vitis_type_name`; observed on markov's chain core, Vitis 2025.1)."""
+        return "_".join([self.task_fn, *(str(a) for a in self.template_args),
+                         *(_vitis_type_name(w) for w in self.word_types)]) + "_U0"
+
+
+def _vitis_type_name(word_type: str) -> str:
+    """How Vitis spells a framed port's word type in a task instance's name, as its csynth RTL shows
+    (Vitis 2025.1, markov's chain core): ``streamutils::axi4s_word<64>`` (an ``ap_axis``) ->
+    ``axis``, ``streamutils::framed_word<64>`` -> ``framed_word_64``."""
+    import re
+
+    m = re.fullmatch(r"streamutils::(axi4s_word|framed_word)<(\d+)>", word_type.replace(" ", ""))
+    if m is None:
+        raise ValueError(f"no known Vitis spelling for word type {word_type!r}")
+    return "axis" if m.group(1) == "axi4s_word" else f"framed_word_{m.group(2)}"
 
 
 @dataclass(frozen=True)
@@ -249,6 +271,10 @@ class IntChannel:
     width: int = 0                      # payload width W
     master_task: int | None = None      # index into TopSpec.tasks (producer)
     slave_task: int | None = None       # index into TopSpec.tasks (consumer)
+    #: A banked ``sob`` channel's first bank, as Vitis suffixes its nets (``_0``, ``_0_0``: one
+    #: index per partitioned dimension).  Every bank of a block is acquired and released together,
+    #: so the first bank's lock nets are the block's events.  Empty: one bank.
+    bank: str = ""
 
 
 @dataclass(frozen=True)
@@ -503,8 +529,29 @@ def _channel_trace(ch: IntChannel, tasks: tuple[TaskInst, ...]) -> dict:
              "producer": prod, "consumer": cons}
 
     if ch.kind == "sob":
-        # A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO: there is no
-        # din/write/full_n vocabulary to bind, so the channel is declared but has no burst view.
+        # A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO, so it has no
+        # burst view.  Its events are the locks: each side's release pulse (`<inst>_<param>_write` /
+        # `_read`, named after the task's PARAMETER) and its first access to the block (`_ce0`),
+        # beside the buffer's own `<ch>_i_full_n` / `<ch>_t_empty_n` (Vitis 2025.1 RTL,
+        # plans/systolic_characterization.md, Stage 0).  Optional roles: a trace that lacks them is
+        # a design without block events, not a broken binding.
+        def _param(t: int | None) -> str | None:
+            if t is None or not tasks[t].params or ch.name not in tasks[t].args:
+                return None
+            return tasks[t].params[tasks[t].args.index(ch.name)]
+
+        # A banked block (StreamOfBlocksIF.bank) is a ping-pong per bank, each with its own nets,
+        # suffixed by its indices (`a_0_i_full_n`, `<inst>_a_blk_0_read`; Vitis 2025.1, the systolic
+        # engine): the first bank's stand for the block.
+        mp, sp, k = _param(ch.master_task), _param(ch.slave_task), ch.bank
+        if prod is not None and mp is not None:
+            entry["write"] = {"blk_release": f"{prod}_{mp}{k}_write",
+                              "blk_ce0": f"{prod}_{mp}{k}_ce0",
+                              "blk_full_n": f"{ch.name}{k}_i_full_n"}
+        if cons is not None and sp is not None:
+            entry["read"] = {"blk_release": f"{cons}_{sp}{k}_read",
+                             "blk_ce0": f"{cons}_{sp}{k}_ce0",
+                             "blk_empty_n": f"{ch.name}{k}_t_empty_n"}
         return entry
 
     entry["write"] = {"din": f"{prod}_{ch.name}_din",
@@ -552,7 +599,8 @@ def _axis_port(name: str, width: int, kind: str = "axis_in", *, axi4s: bool = Fa
                    name=name, kind=kind, bundle=None, width=width, axi4s=axi4s)
 
 
-def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> ExtPort:
+def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0",
+               burst: bool = False) -> ExtPort:
     """An ``m_axi`` master port on *bundle* (one AXI bundle per distinct memory port — a composite
     with independent read/write memories places them on ``gmem0``/``gmem1``).  The read owner is
     ``const`` (the ``@port_read`` capability -> a stray write is a compile error); the write owner is
@@ -570,11 +618,18 @@ def _maxi_port(name: str, width: int, *, const: bool, bundle: str = "gmem0") -> 
 
     The cost is the relocatable base: the bus address is the command's word coordinate times the
     word size, from 0.  Every flow already ran that way -- the XSI testbenches and the system top
-    pinned the base register to 0."""
+    pinned the base register to 0.
+
+    *burst* (the endpoint's ``burst_maxi = True``): the port is an ``hls::burst_maxi<ap_uint<W> >``,
+    passed by value, instead of a pointer -- the body issues ``read_request`` / ``write_request``
+    ahead of the data, so bursts queue in the adapter and the port does not idle between them (the
+    systolic engine's feeder, Vitis 2025.1).  Same interface pragmas, same RTL ports."""
     qual = "const " if const else ""
     pragmas = [f"#pragma HLS INTERFACE m_axi port={name} offset=off bundle={bundle} depth=8192",
                f"#pragma HLS stable variable={name}"]
-    return ExtPort(f"{qual}ap_uint<{width}>* {name}", tuple(pragmas),
+    decl = (f"hls::burst_maxi<ap_uint<{width}> > {name}" if burst
+            else f"{qual}ap_uint<{width}>* {name}")
+    return ExtPort(decl, tuple(pragmas),
                    name=name, kind=("maxi_read" if const else "maxi_write"), bundle=bundle,
                    width=width)
 
@@ -671,9 +726,15 @@ class FramedEdge:
     master_ep: object
     slave_ep: object
     depth: int | None = None
+    #: The channel's own payload width, as :attr:`StreamEdge.bitwidth`: a framed link wider than the
+    #: design's boundary (16 correlations a codeword between two stages on 64-bit ports) is declared at
+    #: its own width, which is what the tasks' ``framed_word<W>`` template arguments already say.
+    #: ``None`` keeps the old behaviour exactly.
+    bitwidth: int | None = None
 
     def decl(self, width: int) -> str:
-        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{width}> > "
+        w = width if self.bitwidth is None else int(self.bitwidth)
+        line = (f"hls_thread_local hls::stream<streamutils::framed_word<{w}> > "
                 f"{self.name};")
         if self.depth is not None and self.depth != DEFAULT_STREAM_DEPTH:
             # See StreamEdge.decl: the default depth is HLS's own, so no pragma for it (keeps the
@@ -692,10 +753,19 @@ class SobEdge:
     elem_bw: int
     block_n: int
     depth: int = 2
+    #: The block's C++ dimensions (``StreamOfBlocksIF.bank``); empty: one dimension of ``block_n``.
+    shape: tuple[int, ...] = ()
+    #: ``(dim, kind, factor)`` per ``#pragma HLS ARRAY_PARTITION`` on the channel (a bank each).
+    partition: tuple = ()
 
     def decl(self, width: int) -> str:
-        return (f"hls_thread_local hls::stream_of_blocks<ap_uint<{self.elem_bw}>[{self.block_n}], "
+        dims = "".join(f"[{d}]" for d in (self.shape or (self.block_n,)))
+        line = (f"hls_thread_local hls::stream_of_blocks<ap_uint<{self.elem_bw}>{dims}, "
                 f"{self.depth}> {self.name};")
+        for dim, kind, factor in self.partition:
+            extra = f" factor={factor}" if kind == "cyclic" else ""
+            line += f"\n    #pragma HLS ARRAY_PARTITION variable={self.name} dim={dim} {kind}{extra}"
+        return line
 
 
 #: Returned by :func:`_declared_boundary_kind` when the endpoint's class declares nothing at all.
@@ -811,7 +881,9 @@ def derive_internal_edges(comp) -> list:
                     f"derive_internal_edges: SOBIF {iface.name!r} has no element_type, so its block "
                     f"width/length cannot be derived. Construct it with element_type=<DataArray>.")
             edges.append(SobEdge(name, master, slave, elem_bw=int(et.element_type.bitwidth),
-                                 block_n=int(et.max_shape[0]), depth=int(iface.depth)))
+                                 block_n=int(et.max_shape[0]), depth=int(iface.depth),
+                                 shape=tuple(getattr(iface, "block_shape", ())),
+                                 partition=tuple(getattr(iface, "block_partition", ()))))
         elif isinstance(iface, StreamIF):
             # A framed StreamIF lowers to a FramedEdge (framed_word FIFO, carries the packet
             # boundary); a plain one to a StreamEdge (ap_uint FIFO).  See plans/memstream_inband.md.
@@ -826,7 +898,8 @@ def derive_internal_edges(comp) -> list:
                     f"the StreamIF a depth (default {DEFAULT_STREAM_DEPTH}), or keep it unbounded only "
                     f"for pysim exploration, not for codegen.")
             if getattr(iface, "framed", False):
-                edges.append(FramedEdge(name, master, slave, depth=depth))
+                edges.append(FramedEdge(name, master, slave, depth=depth,
+                                        bitwidth=getattr(iface, "bitwidth", None)))
             else:
                 edges.append(StreamEdge(name, master, slave, depth=depth,
                                         bitwidth=getattr(iface, "bitwidth", None)))
@@ -975,7 +1048,8 @@ def bundle_map(boundary) -> dict[str, str]:
     return out
 
 
-def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None) -> ExtPort:
+def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None, *,
+                   framed: bool = False) -> ExtPort:
     """Map one boundary (name, kind, bundle) to its :class:`ExtPort` (decl + interface pragmas).
 
     *bundle* comes from :func:`bundle_map` (the assembler's policy) for the m_axi kinds, and is
@@ -993,12 +1067,14 @@ def _boundary_port(name: str, kind: str, width: int, bundle: str | None, ep=None
         # TLAST does so because the design reads the frame boundary, which is a fact about the
         # design.  `getattr` with a default keeps every non-stream endpoint (and any third-party
         # one) working unchanged rather than needing the attribute added to it.
+        # A kernel's framed port at a top (`KernelTask.framed`) carries TLAST too.
         return _axis_port(name, width, kind=kind,
-                          axi4s=bool(getattr(ep, "boundary_tlast", False)))
+                          axi4s=framed or bool(getattr(ep, "boundary_tlast", False)))
     if kind in ("maxi_read", "maxi_write"):
         if bundle is None:
             raise LoweringError(f"_boundary_port: m_axi port {name!r} has no bundle (see bundle_map)")
-        return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle)
+        return _maxi_port(name, width, const=(kind == "maxi_read"), bundle=bundle,
+                          burst=bool(getattr(ep, "burst_maxi", False)))
     if kind == "bram":
         if ep is None:
             raise LoweringError(
@@ -1056,10 +1132,12 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
     ``framed`` channel's RTL net is one bit wider (``last`` on top, see
     :func:`waveflow.utils.vcd.split_framed_word`), and a ``sob`` channel carries its own element
     width."""
+    bank = ""
     if isinstance(edge, SobEdge):
         kind, payload = "sob", edge.elem_bw
+        bank = "".join("_0" for _ in edge.partition)
     elif isinstance(edge, FramedEdge):
-        kind, payload = "framed", width
+        kind, payload = "framed", (width if edge.bitwidth is None else int(edge.bitwidth))
     else:
         # The channel's own width when it has one -- see StreamEdge.bitwidth.  This number is read
         # back by the VCD tooling to split a trace, so it has to be the width the RTL net actually
@@ -1072,6 +1150,7 @@ def _int_channel(edge, width: int, ep_task: dict[int, int]) -> IntChannel:
         width=payload,
         master_task=ep_task.get(id(edge.master_ep)),
         slave_task=ep_task.get(id(edge.slave_ep)),
+        bank=bank,
     )
 
 
@@ -1148,6 +1227,12 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
         ep_arg[id(edge.master_ep)] = edge.name
         ep_arg[id(edge.slave_ep)] = edge.name
 
+    # The endpoints of the kernels' framed ports: such a port is TLAST-carrying wherever it lands.
+    framed_eps: set[int] = set()
+    for sub in kernel_tasks(comp):
+        for attr in _kernel_task_of(sub, comp).framed:
+            framed_eps.update(id(p) for p in getattr(sub, attr).physical_endpoints())
+
     ports: list[ExtPort] = []
     bundles = bundle_map(comp.boundary)
     for entry in comp.boundary:
@@ -1157,13 +1242,16 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
         _check_boundary_depth(comp, name, ep)
         kind = kind_of_endpoint(ep)
         w = width
+        if (getattr(comp, "endpoint_port_widths", False) and kind in ("axis_in", "axis_out")
+                and getattr(ep, "bitwidth", None)):
+            w = int(ep.bitwidth)
         if name in port_widths:
             if kind not in ("axis_in", "axis_out"):
                 raise LoweringError(
                     f"composite_top_spec: port_widths names {name!r}, a {kind} port; only AXIS "
                     f"boundary ports take a per-port width.")
             w = int(port_widths.pop(name))
-        ports.append(_boundary_port(name, kind, w, bundle, ep))
+        ports.append(_boundary_port(name, kind, w, bundle, ep, framed=id(ep) in framed_eps))
     if port_widths:
         raise LoweringError(
             f"composite_top_spec: port_widths names {sorted(port_widths)}, which are not boundary "
@@ -1191,21 +1279,35 @@ def composite_top_spec(comp, width: int = DEFAULT_MEM_DW, *,
                         f"boundary port of {type(comp).__name__} — cannot resolve its task arg")
                 args.append(arg)
                 ep_task[id(phys)] = len(tasks)
-        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header))
+        # A framed port's word type: axi4s_word at the top's port, framed_word on an internal FIFO.
+        boundary = {p.name: p for p in ports}
+        word_types = []
+        for attr in kt.framed:
+            (phys,) = getattr(sub, attr).physical_endpoints()
+            arg = ep_arg[id(phys)]
+            if arg in boundary:
+                word_types.append(f"streamutils::axi4s_word<{boundary[arg].width}>")
+            else:
+                w = int(getattr(phys, "bitwidth", width))
+                word_types.append(f"streamutils::framed_word<{w}>")
+        tasks.append(TaskInst(kt.task_fn, tuple(kt.template_args), tuple(args), kt.header,
+                              tuple(word_types), params=tuple(kt.signature)))
 
     channels = tuple(_int_channel(edge, width, ep_task) for edge in comp.internal_edges)
 
     # A graph with RTL modules beside the kernel is elaborated as its WRAPPER, not as the kernel.
     # Derived here rather than declared, so a design cannot end up with a wrapper the ports header
     # does not know about: one registry decides both.
+    from waveflow.hw.hw_module import kernel_name
+
     return TopSpec(
-        top_name=comp.cpp_kernel_name,
+        top_name=kernel_name(comp),
         ports=tuple(ports),
         tasks=tuple(tasks),
         cmd_headers=tuple(getattr(comp, "cmd_headers", ())),
         channels=channels,
         extra_includes=tuple(getattr(comp, "extra_includes", ())),
-        rtl_top=(wrapper_name(comp.cpp_kernel_name)
+        rtl_top=(wrapper_name(kernel_name(comp))
                  if getattr(comp, "rtl_mods", None) else None),
     )
 
@@ -1238,6 +1340,8 @@ def render_top(spec: TopSpec) -> str:
     # (`extra_includes` may name it too; dict.fromkeys below is not applied here, so the guard is.)
     if any(p.axi4s for p in spec.ports) and "streamutils_hls.h" not in spec.extra_includes:
         lines.append('#include "streamutils_hls.h"')
+    if any(p.decl.startswith("hls::burst_maxi<") for p in spec.ports):
+        lines.append('#include "hls_burst_maxi.h"')
     lines += [f'#include "{h}"' for h in spec.extra_includes]   # e.g. hls_streamofblocks.h (SOBIF)
     lines += [f'#include "{h}"' for h in spec.cmd_headers]
     lines += [f'#include "{h}"' for h in task_headers]
@@ -1258,8 +1362,8 @@ def render_top(spec: TopSpec) -> str:
         # non-template, so the brackets appear only when there is something to put in them.
         # (Reachable since a GENERATED task body bakes its width when the endpoints were built
         # from an already-int()'d HwParam — nothing stays symbolic to template on.)
-        targs = ", ".join(str(a) for a in t.template_args)
-        fn = f"{t.task_fn}<{targs}>" if t.template_args else t.task_fn
+        targs = ", ".join([*(str(a) for a in t.template_args), *t.word_types])
+        fn = f"{t.task_fn}<{targs}>" if targs else t.task_fn
         lines.append(
             f"    hls_thread_local hls::task t{i}({fn}, {call_args});")
     lines.append("}")
@@ -1555,10 +1659,20 @@ def header_model_classes(path) -> frozenset[str]:
 
     text = Path(path).read_text(encoding="utf-8")
     # A software host's model derives from its generated <Host>_endpoints (or SwHostModel directly),
-    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.
-    return frozenset(re.findall(
+    # which is an XsiSimObj -- see waveflow/build/sw_host_gen.py.  A model may also derive from
+    # another model in the same header (MmScript : AxiMmMaster), so the rule is followed through.
+    found = set(re.findall(
         r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(?:XsiSimObj|SwHostModel|\w+_endpoints)\b",
         text, re.M))
+    derived = re.findall(r"^(?:class|struct)\s+(\w+)\s*:\s*public\s+(\w+)\b", text, re.M)
+    grew = True
+    while grew:
+        grew = False
+        for cls, base in derived:
+            if base in found and cls not in found:
+                found.add(cls)
+                grew = True
+    return frozenset(found)
 
 
 def bfm_model_header(mod, bm: "BfmModel"):
@@ -2282,10 +2396,10 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
     claimed twice, and an interface reaching neither a participant nor the DUT is an error rather
     than a silent no-op — which is what it used to be.
     """
-    from waveflow.hw.hw_module import discover_dyn_params
+    from waveflow.hw.hw_module import discover_dyn_params, kernel_name
 
     dut = _find_dut(tb) if dut is None else _resolve_dut(tb, dut)
-    ports_ns = f"{dut.cpp_kernel_name}_ports"
+    ports_ns = f"{kernel_name(dut)}_ports"
     local_headers: list[str] = []
 
     # endpoint identity -> (participant, the model spanning it, that model's identity).  Built over
@@ -2410,7 +2524,7 @@ def tb_top_spec(tb, dut=None) -> TbSpec:
             )
         emitted[nm] = kind
 
-    return TbSpec(top_name=dut.cpp_kernel_name, shared=tuple(shared.values()),
+    return TbSpec(top_name=kernel_name(dut), shared=tuple(shared.values()),
                   models=tuple(models), channels=tuple(channels),
                   local_headers=tuple(local_headers))
 
@@ -2787,27 +2901,36 @@ def render_vectors_h(ns: str, scalars=None, arrays=None, note: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def unlowered_maxi_bundles(root, top_name: str) -> list[str]:
+    """The ``m_axi`` bundles *top_name*'s generated source declares with no AXI master adapter in its
+    csynth RTL, sorted -- empty when every one was lowered, or when there is no generated source.
+    ``run_vitis_hls`` re-runs csynth once on a non-empty answer; :func:`check_maxi_lowered` refuses it."""
+    import re
+    from pathlib import Path
+
+    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
+    if not src.is_file():
+        return []
+    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
+                             src.read_text(encoding="utf-8")))
+    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
+    return sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+
+
 def check_maxi_lowered(root, top_name: str) -> None:
     """Refuse a csynth result whose ``m_axi`` ports were not lowered to AXI masters.
 
     **Seen twice (Vitis 2025.1, 2026-10-10), never reproduced on demand.**  csynth of a top whose
     pragmas declare ``m_axi`` (``offset=off`` + ``stable``) reported success with every pointer lowered
     to a plain register port -- ``HLS 214-450 Ignore address on register port 'm_mem'``, no
-    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  Nothing downstream
+    ``<top>_<bundle>_m_axi.v``, no AXI pins -- and an unchanged re-run was correct.  (Since 2026-10-17
+``run_vitis_hls`` re-runs such a csynth once by itself: the mimo_cg unit bench hit it in 3 of 5
+unchanged runs.  This check is what remains if the re-run drops them too.)  Nothing downstream
     says so until XSI fails to bind a port (``FATAL: port 'ap_rst_n' not found``), or worse, never
     binds it at all.  So right after csynth, before the stamp vouches for it: every ``m_axi`` bundle the
     top's source declares must have its adapter in the RTL.  ``plans/maxi_pointer_fifo.md``.
     """
-    import re
-    from pathlib import Path
-
-    src = Path(root) / GEN_DIR / f"{top_name}.cpp"
-    if not src.is_file():
-        return
-    bundles = set(re.findall(r"#pragma HLS INTERFACE m_axi port=\w+\s.*?bundle=(\w+)",
-                             src.read_text(encoding="utf-8")))
-    vdir = Path(root) / f"{top_name}_proj" / "solution1" / "syn" / "verilog"
-    missing = sorted(b for b in bundles if not (vdir / f"{top_name}_{b}_m_axi.v").is_file())
+    missing = unlowered_maxi_bundles(root, top_name)
     if missing:
         raise RuntimeError(
             f"csynth of {top_name} declared m_axi bundle(s) {missing} but produced no AXI master for "

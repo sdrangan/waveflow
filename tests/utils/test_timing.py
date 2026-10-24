@@ -296,6 +296,60 @@ class TestActivityDiagram:
             ActivityDiagram.from_trace(FakeTrace(), [("x", ("chan", "cmd", "sideways"), "#000")])
 
 
+class TestBeatDiagram:
+    """The beats-and-spans renderer: one box per transfer, a bracket per span labelled with its
+    length.  No waveform needed -- cycles are plain lists."""
+
+    def _diagram(self):
+        from waveflow.utils.timing import BeatDiagram
+
+        d = BeatDiagram()
+        a = d.add_lane("s_in")
+        d.add_beats(a, [10, 11, 12], "#F2A65A", "hdr", stalls=[13])
+        d.add_beats(a, [14, 15], "#7FB77E", "data")
+        b = d.add_lane("irq")
+        d.add_level(b, [(12, 20), (30, None)], "#4C78A8")
+        c = d.add_lane("m_out")
+        d.add_beats(c, [40, 41, 42], "#7FB77E", "results")
+        d.add_span("latency", 14, 40)
+        d.add_span("fill", 40, 42)
+        return d
+
+    def test_lanes_and_spans_recorded_in_order(self):
+        d = self._diagram()
+        assert [label for label, _ in d.lanes] == ["s_in", "irq", "m_out"]
+        assert [(n, a, b) for n, a, b, _ in d.spans] == [("latency", 14, 40), ("fill", 40, 42)]
+        assert d.span_length(14, 40) == 26
+
+    def test_plot_labels_spans_with_their_lengths(self):
+        d = self._diagram()
+        fig, ax = d.plot((5, 50))
+        texts = [t.get_text() for t in ax.texts]
+        assert "latency = 26" in texts and "fill = 2" in texts
+        assert {"s_in", "irq", "m_out", "hdr", "data", "results"} <= set(texts)
+        assert ax.get_xlim() == (5.0, 50.0)
+
+    def test_plot_draws_a_box_per_beat_and_stall(self):
+        from matplotlib.patches import Rectangle
+
+        d = self._diagram()
+        _, ax = d.plot((5, 50))
+        boxes = [p for p in ax.patches if isinstance(p, Rectangle) and p.get_width() == 0.9]
+        assert len(boxes) == 3 + 1 + 2 + 3          # transfers and the one stall
+
+    def test_svg_is_byte_stable_under_a_fixed_salt(self, tmp_path):
+        import matplotlib
+
+        out = []
+        for k in range(2):
+            with matplotlib.rc_context({"svg.hashsalt": "beat-test"}):
+                fig, _ = self._diagram().plot((5, 50))
+                path = tmp_path / f"b{k}.svg"
+                fig.savefig(path, format="svg", metadata={"Date": None})
+            out.append(path.read_bytes())
+        assert out[0] == out[1]
+
+
 # ---------------------------------------------------------------------------
 # Smoke test: example figure generation
 # ---------------------------------------------------------------------------

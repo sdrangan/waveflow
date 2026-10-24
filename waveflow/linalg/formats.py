@@ -157,6 +157,12 @@ _MEM_STRUCT = """\
 #pragma HLS INLINE
             {ns}::write_framed_stream_lane<WBW>(src, s, tlast, n);
         }}
+        // Either TLAST-carrying word type: framed_word inside a composite, axi4s_word at a top.
+        template <int WBW, typename WT> static void write_boundary_lane(
+            const value_type* src, hls::stream<WT>& s, bool tlast, int n) {{
+#pragma HLS INLINE
+            {ns}::write_boundary_lane<WBW>(src, s, tlast, n);
+        }}
     }};"""
 
 

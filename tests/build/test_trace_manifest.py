@@ -73,14 +73,44 @@ class TestChannelNets:
         assert ch["read"]["dout"] == "copy_data_dout"
         assert ch["write"]["full_n"] == "copy_data_full_n"
 
-    def test_sob_channel_is_declared_but_has_no_burst_view(self, interleaver):
-        """A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO."""
+    def test_sob_channel_names_its_lock_nets_not_a_fifo(self, interleaver):
+        """A stream_of_blocks is a ping-pong block RAM plus a lock handshake, not a FIFO: no
+        din/write/full_n, but each side's release pulse and first access, named after the task's
+        PARAMETER for the channel (Vitis's pin naming), and the buffer's own full/empty flags."""
         man = interleaver.trace_manifest()
         sob = [c for c in man["channels"] if c["kind"] == "sob"]
         assert {c["id"] for c in sob} == {"p_blk", "x_blk", "y_blk"}
+        params = {t.inst_name: dict(zip(t.args, t.params)) for t in interleaver.tasks}
         for c in sob:
-            assert "write" not in c and "read" not in c
             assert c["producer"] and c["consumer"], "endpoints are still known"
+            mp, sp = params[c["producer"]][c["id"]], params[c["consumer"]][c["id"]]
+            assert c["write"] == {"blk_release": f"{c['producer']}_{mp}_write",
+                                  "blk_ce0": f"{c['producer']}_{mp}_ce0",
+                                  "blk_full_n": f"{c['id']}_i_full_n"}
+            assert c["read"] == {"blk_release": f"{c['consumer']}_{sp}_read",
+                                 "blk_ce0": f"{c['consumer']}_{sp}_ce0",
+                                 "blk_empty_n": f"{c['id']}_t_empty_n"}
+            assert "din" not in c["write"] and "dout" not in c["read"]
+
+    def test_banked_sob_channel_names_its_first_banks_nets(self):
+        """A banked block is a ping-pong per bank, each with nets suffixed by its indices (Vitis
+        2025.1, the systolic engine: `a_0_i_full_n`, `<inst>_a_blk_0_read`); the first bank's stand
+        for the block, since all its banks are acquired and released together."""
+        from waveflow.linalg.systolic_engine import SystolicEngine
+        from waveflow.utils.fixputils import Format, OMode, QMode
+
+        def reg(W, I):
+            return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+        eng = SystolicEngine(name="systolic_engine", sim=Simulation(), Mmax=8, Kmax=8, Nmax=32,
+                             Pmax=4, R=4, C=8, L=4, a=reg(12, 3), b=reg(12, 4), c=reg(12, 5))
+        man = composite_top_spec(eng, width=64).trace_manifest()
+        ch = {c["id"]: c for c in man["channels"]}
+        assert ch["a"]["write"]["blk_full_n"] == "a_0_i_full_n"          # banked on one dimension
+        assert ch["a"]["read"]["blk_release"].endswith("_U0_a_blk_0_read")
+        assert ch["b"]["write"]["blk_full_n"] == "b_0_0_i_full_n"        # banked on two
+        assert ch["b"]["read"]["blk_release"].endswith("_U0_b_blk_0_0_read")
+        assert ch["c"]["write"]["blk_full_n"] == "c_i_full_n"            # one bank: no suffix
 
 class TestBoundaryNets:
     def test_axis_port_keeps_its_own_name(self, memcopy):

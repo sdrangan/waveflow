@@ -1,13 +1,13 @@
 ---
-title: Writing it in Python
-parent: Concurrent (free-running)
-nav_order: 0
+title: Writing a free-running module
+parent: Modules
+nav_order: 2
 audience: python
 api: [FreeRunMod, run_iter, add_comp, add_if, add_state, KernelTask, synthesizable]
 summary: "How to describe a free-running module in Python: a LEAF implements run_iter (one firing) and a COMPOSITE has sub-components wired by internal interfaces — body XOR children, never both. Covers what one firing means, why there is no before-the-loop, how to carry state across firings with add_state, and how a composite declares only its boundary port names."
 ---
 
-# Writing it in Python
+# Writing a free-running module
 
 A free-running module **runs on its own**. There is no start/done handshake and nothing calls it: the
 runtime re-fires it on every new job. In Python that is a [`FreeRunMod`](./modules.md), and it comes
@@ -112,7 +112,7 @@ that is waiting. If an opcode produces no output, forward something anyway.
 
 ## Next
 
-- [Flow steps](./concurrent_flowsteps.md) — from the graph to a generated top and an RTL check.
+- [Flow steps](../systems/rtl.md) — from the graph to a generated top and an RTL check.
 - [How it is realized in HLS](../comp_codegen/freerunning.md) — the `ap_ctrl_none` top and the task
   body — and [the XSI testbench](../comp_codegen/xsi_tb.md) that drives it.
 - [mem_copy example](../../examples/memcpy/) — a full composite, worked end to end.

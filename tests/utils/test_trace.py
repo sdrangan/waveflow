@@ -95,6 +95,19 @@ class TestBinding:
         assert bt.manifest["top"] == "mem_copy"
 
 
+class TestShortInstanceNames:
+    def test_binds_an_instance_vitis_named_without_its_template_args(self, tmp_path,
+                                                                    memcopy_manifest):
+        """Vitis 2025.1 names some instances `<body>_U0` instead of `<body>_<args>_U0` (the
+        systolic engine's loaders and store): the trace binds whichever the RTL has."""
+        t = next(t for t in memcopy_manifest["tasks"] if t["inst"] != f"{t['body']}_U0")
+        short = f"{t['body']}_U0"
+        as_built = json.loads(json.dumps(memcopy_manifest).replace(t["inst"], short))
+        bt = load_trace(memcopy_manifest, _write_vcd(tmp_path / "t.vcd", as_built))
+        assert short in {x["inst"] for x in bt.manifest["tasks"]}
+        assert not bt.missing
+
+
 class TestBindingFailsLoud:
     def test_missing_required_net_raises(self, tmp_path, memcopy_manifest):
         vcd = _write_vcd(tmp_path / "t.vcd", memcopy_manifest, omit={"cmd_dout"})

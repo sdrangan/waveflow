@@ -1,0 +1,39 @@
+<section id="status" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:32px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#B4570F;font-weight:600">Waveflow · Status</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">Real infrastructure. No system-level result yet.</h2>
+<div style="display:flex;gap:24px;flex:1">
+<div style="flex:1;background:#EEE6F3;border-top:8px solid #57068C;border-radius:12px;padding:32px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:32px;font-weight:600;color:#57068C">Built and gated</h3>
+<ul style="font-size:24px;line-height:1.45;color:#2B2236">
+<li>Fixed-point and complex types, bit-exact to HLS</li>
+<li>Models of AXI-Stream, AXI-MM, AXI-Lite, crossbar, interrupts</li>
+<li>Codegen to Vitis HLS; generated RTL testbenches</li>
+<li>177 RTL gates asserting exact cycle counts</li>
+<li>Converter models, SSR FFT, vector MAC tile</li>
+</ul>
+</div>
+<div style="flex:1;background:#FCFBFE;border:2px solid #B4570F;border-top:8px solid #B4570F;border-radius:12px;padding:32px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:32px;font-weight:600;color:#8A430B">Partial</h3>
+<ul style="font-size:24px;line-height:1.45;color:#2B2236">
+<li>Timing calibration: a handful of kernels</li>
+<li>Resource model</li>
+<li>Multi-module systems: small ones only</li>
+<li>Agent tooling (MCP): built, never evaluated</li>
+</ul>
+</div>
+<div style="flex:1;background:#F7F5FA;border:2px dashed #9A8DA8;border-radius:12px;padding:32px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:32px;font-weight:600;color:#423A4F">Not done</h3>
+<ul style="font-size:24px;line-height:1.45;color:#2B2236">
+<li>Agentic design-space exploration</li>
+<li>Anything at SALSA-tile scale</li>
+<li>QoR against hand-written RTL</li>
+<li>ASIC flow: FPGA (AMD) only</li>
+<li>Evidence that systems teams would adopt it</li>
+</ul>
+</div>
+</div>
+<p style="font-size:26px;color:#423A4F;background:#EEE6F3;padding:16px 24px;border-radius:8px">Since February 2026 · ~77k lines of Python · 295 test files · 18 documented reference designs</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">Waveflow · research software, early stage</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Read the right column out loud. For this audience, naming what is missing is what makes the left column believable. Verification is directed: golden-model comparison and exact-cycle RTL gates. There is no coverage-driven or formal verification.</aside>
+</section>

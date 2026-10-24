@@ -25,7 +25,6 @@ import pytest
 from tests.linalg import _unit_bench as UB
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis
 from waveflow.hw.interface import StreamIF
-from waveflow.linalg import cost
 from waveflow.linalg.lanes import to_words
 from waveflow.linalg.message import Status, header
 from waveflow.linalg.systolic import MatmulOp, SystolicUnit, request_words, stored_shape
@@ -157,9 +156,10 @@ class _TimedSink(StreamSink):
 
 
 @pytest.mark.parametrize("op", [MUL, MUL_AH])
-def test_pysim_time_is_the_calibrated_core_share(op, tmp_path):
+def test_pysim_time_is_the_core_phases(op, tmp_path):
     """Requests sent straight to ``s_in``, back to back: in pysim the steady interval is the core's
-    calibrated share of a message (``cost.core_interval``), which the transfers overlap.
+    own work -- its three timed phases (copy ``X``, copy ``B``, sweep the tiles), as the RTL's is
+    (``plans/systolic_characterization.md``) -- and the transfers overlap it.
     """
     sim = Simulation()
     u = SystolicUnit(name="u", sim=sim, **UNITS["centre"])
@@ -186,8 +186,14 @@ def test_pysim_time_is_the_calibrated_core_share(op, tmp_path):
         link.bind("slave", dst)
     sim.run_sim()
     replies = [t / u.clk.period for t in sink.times[0::2]]  # each reply's header
-    want = cost.core_interval(cost.message_model(), m, k, n, L=u.L, R=u.R, C=u.C)
-    assert replies[2] - replies[1] == pytest.approx(want, abs=1e-6)
+    core = u.core
+    f = core.features(m, k, n)
+    want = (core.start.predict()["start"] + core.copy_x.predict(ag=f["ag"])["copy_x"]
+            + core.to_b.predict()["to_b"] + core.copy_b.predict(bg=f["bg"])["copy_b"]
+            + core.sweep.predict(tiles=f["tiles"], steps=f["steps"])["sweep"])
+    # each phase starts at the previous one's end event, so the core's firing is their sum plus the
+    # command read and block handover between jobs: within a few cycles of it, never below it
+    assert want <= replies[2] - replies[1] <= want + 4
 
 
 # --- XSI ------------------------------------------------------------------------------------------
@@ -212,7 +218,9 @@ def test_xsi_unit(name, tmp_path_factory):
     cycles = UB.check_xsi(build, sc, UNITS[name]["word_bits"])
     record = {
         "config": name,
-        "tool": "Vitis HLS / Vivado xsim 2024.1",
+        # the release that ran, from the csynth banner -- never a constant
+        "tool": "Vitis HLS / Vivado xsim "
+        + str(toolchain.parse_tool_version((build / "csynth.log").read_text("utf-8"))),
         "jobs": [
             {"op": int(op), "m": m, "k": k, "n": n, "status": st.name, "reply_cycle": c}
             for (op, m, k, n, _e, _o, st), c in zip(JOBS[name], cycles, strict=True)

@@ -16,7 +16,7 @@ four:
 - **Fast simulation** — vectorized, orders of magnitude faster than RTL, so an agent can try many
   designs *inside its loop* instead of waiting on one toolchain run.
 - **Structured architecture** — typed schemas and well-defined interfaces make code generation
-  **local**: an agent fills in one component against an explicit interface *contract*, not a
+  **local**: an agent fills in one module against an explicit interface *contract*, not a
   monolithic kernel it has to get entirely right at once. This is what lets AI scale past local
   fragments to whole systems.
 - **Deterministic, reproducible builds** — the build graph runs the same way every time, so a
@@ -29,25 +29,28 @@ Waveflow is that substrate.
 ## AI is downstream, not the center
 
 AI is a **first-class downstream consumer** of the representation — a real strength, and an active
-area of development — but it is grounded *by* the substrate, not the center of it. The codegen
-pipeline itself is deterministic (structured `hwgen`, not an LLM), and Waveflow is the substrate
-**beneath** an agent, not just an orchestration layer **over** one. That is the difference between
-AI output that is merely plausible and AI output you can trust.
+area of development — but it is grounded *by* the substrate, not the center of it. The code generators
+themselves are deterministic (the structs, the tops, the testbenches and the `hwgen` body extractor, not
+an LLM), and Waveflow is the substrate **beneath** an agent, not just an orchestration layer **over**
+one. That is the difference between AI output that is merely plausible and AI output you can trust.
 
-## AI in Waveflow (future work)
+## AI in Waveflow
 
-Waveflow is designed to integrate AI in three places — an active and largely forward-looking area
-of development:
+Waveflow integrates AI in three places — an active area of development, partly built:
 
-- **AI-assisted codegen.** Generate a component's HLS kernel from its Python model against the
-  typed interface contract, so an agent fills in one well-scoped block at a time instead of a whole
-  design. (Today the codegen pipeline is deterministic `hwgen`; AI assistance layers on top of it.)
-- **Agentic design-space exploration.** An agent drives the fast inner loop, using tools that
-  extract performance, timing, and resource estimates from the SimPy simulation to choose the next
-  design point and iterate.
-- **MCP tooling.** Model Context Protocol servers help users write Waveflow code and let AI agents
-  query simulation and synthesis results directly — grounding suggestions in real artifacts rather
-  than guesswork.
+- **AI-assisted design.** An agent writes one module at a time — its Python model and its HLS body —
+  against the generated message structs and ports, with the golden and the RTL comparison to check it
+  ([Defining the kernel in Python and HLS](../guide/systems/hwmodule.md)). **Built, experimental**: the
+  [MCP server](../guide/ai_tooling/index.md) gives an assistant the guide, the reference examples and
+  [frames](../guide/ai_tooling/frames.md) — a process per system shape — and
+  [blind tests](../guide/ai_tooling/blind.md) run a fresh agent from a spec to a verified build.
+- **Agentic design-space exploration.** An agent drives the fast inner loop, using the calibrated timing
+  and resource models to choose the next design point and iterate. **Not yet a framework tool**: sweeps
+  and the models are built, the exploration loop is not
+  ([Design-space exploration](../guide/systems/dse.md)).
+- **MCP tooling.** The [MCP server](../guide/ai_tooling/index.md) also searches the guide and examples
+  locally ([search](../guide/ai_tooling/search.md)) and validates schemas; letting an agent query
+  simulation and synthesis results directly is still being built.
 
 These map onto [the Waveflow flow](./flow.md): AI assists at **codegen** and drives the
 **agentic DSE** loop, both grounded by the bit-exact substrate.

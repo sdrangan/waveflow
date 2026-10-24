@@ -189,7 +189,7 @@ def test_single_thread_markov_driver_is_bit_exact():
         MAX_IN_FLIGHT,
         U8,
         MarkovHost,
-        MarkovSystem,
+        markov_system,
         MkvResp,
         default_jobs,
         markov_golden,
@@ -220,7 +220,7 @@ def test_single_thread_markov_driver_is_bit_exact():
             self.done.succeed()
 
     jobs = default_jobs(4, 300)
-    sysm = MarkovSystem(jobs=jobs, link="mm")
+    sysm = markov_system(jobs, "mm")
     sysm.host.__class__ = OneThread                   # same instance and wiring; only the program differs
     res = sysm.run()
     assert sorted(res) == [j["tx_id"] for j in jobs]

@@ -222,6 +222,6 @@ feeds five all-ones vectors through a running total and requires `1,2,3,4,5`: a 
 ## See also
 
 - [Free-running kernel in HLS](./freerunning.md) — the DUT this harness drives.
-- [Concurrent (free-running)](../flows/concurrent.md) — the flow end to end.
+- [Concurrent (free-running)](../systems/index.md) — the flow end to end.
 - [Testbench](./testbench.md) — the other testbench target, `sequential_vitis_tb`, from a `SeqTB` body.
 - [Writing a BFM model](../custom_hooks/bfm_model.md) — the authoring page for the `bfm_model()` hook.

@@ -16,15 +16,30 @@ namespace wf_linalg {
 // The status of a reply (waveflow.linalg.message.Status).
 enum Status { OK = 0, BAD_OP = 1, BAD_DIMS = 2, BAD_LENGTH = 3, BAD_SEQUENCE = 4 };
 
-// Read and discard the n payload words of a rejected request.
-template <int WBW>
-static void drain(hls::stream<streamutils::framed_word<WBW> >& s_in, ap_uint<32> n) {
+// Read and discard the n payload words of a rejected request.  WT is the stream's word type:
+// framed_word on an internal FIFO, axi4s_word at a top's port (KernelTask.framed).
+template <int WBW, typename WT>
+static void drain(hls::stream<WT>& s_in, ap_uint<32> n) {
 #pragma HLS INLINE off
 DRAIN:
     for (ap_uint<32> i = 0; i < n; ++i) {
 #pragma HLS PIPELINE II = 1
         s_in.read();
     }
+}
+
+// Read a request or reply header off a framed stream of either word type.
+template <int WBW>
+static void read_header(LinalgHeader& h, hls::stream<streamutils::framed_word<WBW> >& s,
+                        streamutils::tlast_status& tl) {
+#pragma HLS INLINE
+    h.template read_framed_stream<WBW>(s, tl);
+}
+template <int WBW>
+static void read_header(LinalgHeader& h, hls::stream<streamutils::axi4s_word<WBW> >& s,
+                        streamutils::tlast_status& tl) {
+#pragma HLS INLINE
+    h.template read_axi4_stream<WBW>(s, tl);
 }
 
 // Write the reply header to a request: its tag, operation and dimensions, with this status and a

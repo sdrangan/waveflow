@@ -76,7 +76,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
   module, a Vitis HLS task body in `waveflow/build/` (`systolic_*_task.h`,
   `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
   platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (Vitis 2024.1).
-  Tests in `tests/linalg/`; guide in `docs/guide/linalg/`.
+  Tests in `tests/linalg/`; guide in `docs/guide/dsp/` (`linalg_common.md`, `systolic/`, `cg_vector.md`).
 - **`waveflow/cpu/`** — A loosely-timed, calibrated general-purpose processor for software beside
   the hardware: `Processor` (N cores, priority ready queue, context switches, optional preemption),
   `SwFunction` (Python that reports work counters, priced by calibrated cycle / pJ models), `CpuReport`,
@@ -95,7 +95,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). `mcp/knowledge/` is local search and read over `docs/guide/` and the reference examples — an in-memory BM25 index built from the checkout at server start, also reachable as `waveflow kb <cmd>`.
-- **`examples/`** — Reference designs. The curated set is the twenty-one with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
+- **`examples/`** — Reference designs. The curated set is the twenty-five with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
 
 ### Simulation flow
 
@@ -105,9 +105,13 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 ### Designing an accelerator
 
-Start from `docs/guide/patterns/` (*Design patterns*): command-response is the default shape (a command
-carrying `n` and a `tx_id`, the work on `n` elements, a response that echoes it; through a pipeline the
-command travels with the data and the last stage answers) -- the page links every layer it touches.
+Start from `docs/guide/systems/index.md` (*Flow Overview*, a page per step): decompose top-down, write bottom-up --
+schemas and a golden, each module alone in its harness, then `HwSystem(sim, dut)` and the system flow.
+The protocol is `docs/guide/systems/command_response.md`: command-response is the default shape (a command
+carrying `n` and a `tx_id`, the work on `n` elements, the results headed by a `Resp` that echoes it, and a
+`Status` per command on its own stream; an error is fatal -- close the output, report, stop taking input;
+through a pipeline the command travels with the data and the last stage answers) -- the page links every
+layer it touches.
 
 ### Writing HLS kernel bodies
 
@@ -126,7 +130,7 @@ A Component's Python behavior is translated to Vitis HLS C++ via `BuildConfig` (
 
 - Python 3.10+ required.
 - Vitis HLS is optional and only needed for synthesis tests (`-m vitis`). The toolchain is auto-detected by `waveflow/toolchain/toolchain.py`.
-- Run everything inside the repo's virtual environment (`source .venv/bin/activate`). With Vivado 2024.1 the XSI flow depends on it: activation exports `XILINX_VIVADO` and puts `.venv/xsi_compat/` on `LD_LIBRARY_PATH`. Without it every XSI run fails with "Failed to Load up XSI".
+- Run everything inside the project's virtual environment. Its location, the installed Vitis/Vivado version, and any machine-specific setup the toolchain needs are per-machine: they belong in each developer's personal `CLAUDE.local.md` (gitignored), not here.
 - A measured number belongs to a tool version. Vitis/Vivado 2024.1 does not reproduce every number recorded with 2025.1 (co-simulation of `examples/regmap` gives 49 cycles against 5), so name the version next to any measured number. The `examples/mimo_cg` study was measured entirely with 2024.1.
 - The project is early-stage research software; many planned features are not yet built.
 - Non-commercial use only under the Waveflow Research License.

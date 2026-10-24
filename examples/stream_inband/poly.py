@@ -39,6 +39,7 @@ from waveflow.hw.hw_hostactivated import HostActivated
 from waveflow.hw.hw_module import HwConst, HwParam
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.hw.irq import IrqIF, IrqIFSink
+from waveflow.hw.timed_phase import TimedPhase
 from waveflow.hw.memif import DirectMMIF, MMIFMaster
 from waveflow.hw.regmap import (
     Bit,
@@ -262,9 +263,10 @@ class PolyAccel(HostActivated):
     out_bw:       HwParam[int] = 32
     aximm_bw:     HwParam[int] = 32
     clk:          Clock = field(default_factory=lambda: Clock(freq=1e9))
-    # The timing model (pysim only), calibrated against RTL cosim: one kernel call takes
-    # the stream transfers (one word per cycle) plus proc_latency cycles of pipeline fill
-    # and handshake overhead.  See docs/examples/stream_inband/05_cosim_timing.md.
+    # The timing model's SEEDS (pysim only): the samples' first result proc_latency cycles after
+    # their first word, then one word per proc_ii cycles.  They are the declared phases' starting
+    # point (see __post_init__) until those are fitted against RTL; set by hand against cosim.
+    # See docs/examples/stream_inband/05_cosim_timing.md.
     proc_ii:      int = 1
     proc_latency: int = 40
     logger:       Logger | NullLogger = field(default_factory=NullLogger)
@@ -286,18 +288,45 @@ class PolyAccel(HostActivated):
         for ep in (self.s_in, self.m_out, self.s_lite):
             self.add_endpoint(ep)
         self._job: int = 0
+        # The timed phases (plans/pipelined_ops.md), one per shape the body has:
+        # * the response header after the command header -- sequential (Pattern 1);
+        # * the samples -> results loop -- pipelined (Pattern 2): a latency from the first sample
+        #   word to the first result word, then the results at the loop's rate.
+        # The durations are the phases' models, in cycles; these numbers only seed them.  Fitted
+        # parameters, per width, are loaded from calib/w<W>/<phase>/ when they have been filed there
+        # (poly_calibrate.py).
+        cal = Path(__file__).resolve().parent / "calib" / f"w{int(self.in_bw)}"
+        self.hdr_phase = TimedPhase(
+            "hdr", spans={"resp_time": (self.s_in.last, self.m_out.first)},
+            seed={"resp_time": {"intercept": 0.0}}, calib_dir=cal / "hdr")
+        self.samp_phase = TimedPhase(
+            "samples", spans={"latency": (self.s_in.first, self.m_out.first),
+                              "fill_time": (self.m_out.first, self.m_out.last)},
+            features=("nwords",),
+            seed={"latency": {"intercept": float(self.proc_latency), "nwords": 0.0},
+                  "fill_time": {"intercept": 0.0,
+                                "nwords": float(self.proc_ii) / self.unroll_factor}},
+            calib_dir=cal / "samples")
+        for ph in (self.hdr_phase, self.samp_phase):
+            self.add_timing_phase(ph)
 
     def _halt(self, err: PolyError, tx_id: int) -> None:
         self.regmap.set("error", err)
         self.regmap.set("tx_id", tx_id)
         self.regmap.set("halted", 1)
 
+    def _respond(self, wait, resp_hdr: "PolyRespHdr") -> ProcessGen[None]:
+        """The response header: after the header phase's wait (*wait*, already taken), written."""
+        yield wait
+        yield from self.m_out.write(resp_hdr)
+
     def body(self) -> ProcessGen[None]:
         """The kernel for pysim: the port wrapper around :func:`poly_eval`, plus timing.
 
         Ordinary Python -- this is never translated to C++.  It reads and writes the ports,
-        calls the pure model for the arithmetic, and models time: the samples come out
-        ``proc_latency`` cycles after they start arriving, one word per ``proc_ii`` cycles.
+        calls the pure model for the arithmetic, and lets the declared phases model time: the
+        response header follows the command header by ``resp_time``; the samples go through the
+        pipelined phase, their results starting ``latency`` after the first sample word.
         """
         self.logger.log(event='proc_begin', job=self._job)
         for f in ("halted", "error", "tx_id"):          # rule 5: this run's status only
@@ -310,30 +339,30 @@ class PolyAccel(HostActivated):
 
             resp_hdr = PolyRespHdr()
             resp_hdr.tx_id = cmd_hdr.tx_id
-            yield from self.m_out.write(resp_hdr)
+            # The response goes out while the samples come in, as the RTL overlaps them: the header
+            # phase's wait is taken now (its span starts at this header's last beat), and the
+            # response is written by a process of its own while the sample pipeline begins.
+            resp = self.env.process(self._respond(self.hdr_phase.timeout(), resp_hdr))
             if cmd_hdr.nsamp == 0:          # no sample burst either way, as in the C++
+                yield resp
                 self._job += 1
                 continue
 
-            # The burst ends at TLAST, so the words that arrived say whether it came early.
-            pf = samples_per_word(self.in_bw)
-            nwords_max = -(-int(cmd_hdr.nsamp) // pf)    # int: -n of an unsigned wraps
-            words = yield from self.s_in.get(nwords_max=nwords_max)
-            nwords = len(words)
-            tstart = self.env.now - (nwords - 1) * self.clk.period    # first word's arrival
-            samp_in = read_array(words, elem_type=Float32, word_bw=self.in_bw,
-                                 shape=min(cmd_hdr.nsamp, nwords * pf)).val
-            y = poly_eval(cmd_hdr.coeffs, samp_in)
+            # The samples: get_array(Float32, nsamp) and the results' write, deferred, and the pure
+            # function between them.  compute gets the samples that arrived: a burst that ends early
+            # at TLAST is shorter, and its results still go out as one burst, closed (rule 6).
+            load = self.s_in.get_array(Float32, cmd_hdr.nsamp)
+            store = self.m_out.write_array(Float32, cmd_hdr.nsamp)
 
-            t_out_start = tstart + self.proc_latency * self.clk.period
-            proc_time = nwords / self.unroll_factor * self.proc_ii * self.clk.period
-            proc_time = max(0.0, proc_time + (t_out_start - self.env.now))
-            yield self.timeout(proc_time)
-            # A short burst's results still go out as one burst, closed (rule 6).
-            yield from self.m_out.write_pipelined(array(Float32, y), t_out_start)
+            def compute(x):
+                return array(Float32, poly_eval(cmd_hdr.coeffs, x.val))
+
+            r = yield from self.samp_phase.pipeline(compute, load=load, store=store,
+                                                    nwords=load.nwords())
+            yield resp
             self._job += 1
 
-            if len(samp_in) != cmd_hdr.nsamp:   # TLAST came early: halt, read nothing more
+            if len(r.y.val) < cmd_hdr.nsamp:    # TLAST came early: halt, read nothing more
                 self._halt(PolyError.TLAST_EARLY_SAMP_IN, cmd_hdr.tx_id)
                 self.logger.log(event='proc_end', job=self._job)
                 return

@@ -2,6 +2,10 @@
 
 * **protocol.svg** -- the contract at a glance: commands on ``in_stream``, responses on
   ``out_stream``, and only control and status on AXI-Lite.  Drawn, not measured.
+* **timed_phase.svg** -- the guide's picture of a timed phase: one command of the ``calib`` scenario
+  at RTL (``vcd/calib_w32.vcd``), beat by beat on ``s_in`` and ``m_out``, with the three spans poly
+  declares -- ``resp_time``, ``latency``, ``fill_time`` -- measured between the events that bound them.
+  It goes to ``docs/guide/timing_model/figures/``.
 * **error_path.svg** -- a failing command on the wire, from the RTL co-simulation of the
   ``early_tlast_vcd`` scenario (``vcd/error_path.vcd``, written by the ``error_vcd`` step):
   the host's ``ap_start``, two commands in and their responses out, the second command's
@@ -41,6 +45,10 @@ FIGURE_MANIFEST = [
      "dest": "docs/examples/stream_inband/images/protocol.svg"},
     {"name": "error_path", "source": "results/error_path.svg",
      "dest": "docs/examples/stream_inband/images/error_path.svg"},
+    # The guide's picture of a timed phase (docs/guide/timing_model/timed_phases.md), from the
+    # committed calibration trace: one command's beats and its three spans.
+    {"name": "timed_phase", "source": "results/timed_phase.svg",
+     "dest": "docs/guide/timing_model/figures/timed_phase.svg"},
 ]
 
 HDR = "#F2A65A"      # headers (orange, as in timing_analysis.plot_poly_timing)
@@ -229,6 +237,86 @@ def render_error_path(path: Path, vcd_path: Path = ERROR_VCD) -> None:
     _save_svg(fig, path)
 
 
+CALIB_VCD = _HERE / "vcd" / "calib_w32.vcd"
+#: The command the timed-phase figure shows: the calib scenario's first (8 samples, so its bursts
+#: are short enough to read beat by beat), i.e. s_in transfers 0 (header) and 1 (samples) and m_out
+#: transfers 0 (response) and 1 (results).
+FIG_CMD = 0
+
+
+def timed_phase_data(vcd_path: Path = CALIB_VCD, cmd: int = FIG_CMD) -> dict[str, Any]:
+    """The beats of one command on poly's two ports, from a traced cosim, and its three spans --
+    everything the timed-phase figure draws, in cycles from the trace's first clock edge."""
+    from vcdvcd import VCDVCD
+
+    from waveflow.utils.vcd import VcdParser
+
+    vp = VcdParser(VCDVCD(str(vcd_path), signals=None, store_tvs=True))
+    clk = vp.add_clock_signal()
+    lanes = {}
+    for port in ("s_in", "m_out"):
+        sigs, _ = vp.add_axiss_signals(name=f"apatb_poly_top.AESL_inst_poly.{port}_",
+                                       short_name_prefix=port, ignore_multiple=True)
+        bursts, _ = vp.extract_axis_bursts(clk, sigs)
+        lanes[port] = [(int(b["start_idx"]), list(b["beat_type"])) for b in bursts]
+    hdr, samp = lanes["s_in"][2 * cmd], lanes["s_in"][2 * cmd + 1]
+    resp, res = lanes["m_out"][2 * cmd], lanes["m_out"][2 * cmd + 1]
+
+    def first_last(b):
+        return b[0], b[0] + len(b[1]) - 1
+
+    return {"lanes": {"s_in": [("header", hdr), ("samples", samp)],
+                      "m_out": [("response", resp), ("results", res)]},
+            "spans": {"resp_time": (first_last(hdr)[1], first_last(resp)[0]),
+                      "latency": (first_last(samp)[0], first_last(res)[0]),
+                      "fill_time": first_last(res)}}
+
+
+def render_timed_phase(path: Path, vcd_path: Path = CALIB_VCD) -> None:
+    """One poly command at RTL, beat by beat on its two ports, with its timed phases' three spans
+    drawn between the events that bound them (``docs/guide/timing_model/timed_phases.md``)."""
+    d = timed_phase_data(vcd_path)
+    t0 = d["lanes"]["s_in"][0][1][0] - 2
+    y = {"s_in": 2.0, "m_out": 0.0}
+    color = {"header": HDR, "response": HDR, "samples": DATA, "results": DATA}
+    with matplotlib.rc_context(_SALT):
+        fig = Figure(figsize=(9.0, 3.4))
+        FigureCanvasSVG(fig)
+        ax = fig.add_subplot(1, 1, 1)
+        for port, bursts in d["lanes"].items():
+            for name, (start, beats) in bursts:
+                for i, kind in enumerate(beats):
+                    if kind == 0:                         # a transfer (valid and ready)
+                        ax.add_patch(Rectangle((start + i - t0, y[port]), 0.9, 0.7,
+                                               facecolor=color[name], edgecolor=INK, lw=0.4))
+                ax.text(start - t0 + len(beats) / 2, y[port] + 0.95, name, ha="center",
+                        fontsize=8, color=INK)
+            ax.text(-1.0, y[port] + 0.35, port, ha="right", va="center", fontsize=10, color=INK,
+                    family="monospace")
+
+        def span(name, a, b, yy, label_above=True):
+            a, b = a - t0 + 0.45, b - t0 + 0.45
+            ax.add_patch(FancyArrowPatch((a, yy), (b, yy), arrowstyle="<|-|>", mutation_scale=9,
+                                         lw=1.0, color=ERR))
+            ax.text((a + b) / 2, yy + (0.12 if label_above else -0.42),
+                    f"{name} = {int(round(b - a))}", ha="center", fontsize=8, color=ERR)
+            for x in (a, b):
+                ax.plot([x, x], [-0.1, 2.8], color=ERR, lw=0.5, ls=":")
+
+        (h_last, r_first), (s_first, o_first) = d["spans"]["resp_time"], d["spans"]["latency"]
+        f_first, f_last = d["spans"]["fill_time"]
+        span("resp_time", h_last, r_first, 3.35)
+        span("latency", s_first, o_first, 1.35)
+        span("fill_time", f_first, f_last, -0.55, label_above=False)
+        ax.set_xlim(-6, f_last - t0 + 3)
+        ax.set_ylim(-1.2, 3.9)
+        ax.set_yticks([])
+        ax.set_xlabel("cycle (RTL co-simulation, 32-bit poly, an 8-sample command)", fontsize=8)
+        for s in ("left", "right", "top"):
+            ax.spines[s].set_visible(False)
+        _save_svg(fig, path)
+
+
 def _save_svg(fig, path: Path) -> None:
     """Write a deterministic SVG (no embedded timestamp)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +353,7 @@ class PolyFiguresStep(BuildStep):
             vcd = ERROR_VCD
         render_protocol(root / "results" / "protocol.svg")
         render_error_path(root / "results" / "error_path.svg", vcd)
+        render_timed_phase(root / "results" / "timed_phase.svg", root / "vcd" / "calib_w32.vcd")
         return {f"{e['name']}_svg": root / e["source"] for e in FIGURE_MANIFEST}
 
 

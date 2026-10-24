@@ -56,11 +56,16 @@ class XsiWorkspace:
 
     def prepare(self, rtl_files, tb_name: str, tb_cpp: str, include_dirs=(),
                 extra_files: dict[str, str] | None = None, tb_include_dirs=(),
-                trace: bool = False, init_files=()) -> None:
+                trace: bool = False, init_files=(), vhdl_files=(), xelab_libs=()) -> None:
         """Copy the harness, write ``rtl_<top>.f`` and ``<tb_name>.cpp``.
 
         *init_files* are memory initializers the RTL loads with ``$readmemh("./<name>")`` (csynth's
         ROM ``.dat`` files): copied into the workspace, the simulator's working directory.
+
+        *vhdl_files* and *xelab_libs* are a kernel's vendor cores (:mod:`waveflow.build.hls_ip`):
+        their VHDL simulation wrappers, compiled by ``xvhdl -f vhdl_<top>.f``, and the precompiled
+        libraries they bind, linked by ``xelab -f xelab_<top>.f``.  Neither file exists for a design
+        without cores (a stale one is removed).
 
         *tb_include_dirs* are extra ``-I`` directories for compiling the **testbench** (not the RTL):
         a software host that reads typed messages includes generated schema headers, which need
@@ -78,6 +83,12 @@ class XsiWorkspace:
         lines = [f"--include {Path(d).as_posix()}" for d in include_dirs]
         lines += [Path(p).as_posix() for p in rtl_files]
         (self.work_dir / f"rtl_{self.top}.f").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for name, body in ((f"vhdl_{self.top}.f", [Path(p).as_posix() for p in vhdl_files]),
+                           (f"xelab_{self.top}.f", [f"-L {lib}" for lib in xelab_libs])):
+            if body:
+                (self.work_dir / name).write_text("\n".join(body) + "\n", encoding="utf-8")
+            else:
+                (self.work_dir / name).unlink(missing_ok=True)
         (self.work_dir / f"{tb_name}.cpp").write_text(tb_cpp, encoding="utf-8")
         for name, text in (extra_files or {}).items():
             (self.work_dir / name).write_text(text, encoding="utf-8")

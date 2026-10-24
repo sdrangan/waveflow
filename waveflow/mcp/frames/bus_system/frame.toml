@@ -21,13 +21,15 @@ within 5% of the RTL."""
 pattern = "command_response"
 shape = "several free-running kernels and an on-chip memory on one AXI-MM crossbar, a software host (SwHost) with one bus master"
 flow = "system DAG: codegen, csynth, system_rtl, pysim, system_xsi, compare; the host's traces identical at RTL and pysim, cycles within 5%"
-choose_when = """the design has more than one kernel, or a host program that reaches a \
-kernel over a bus (queues, a register bank written mid-stream), or kernels that share \
-a memory.  Not for off-chip (DDR) memory yet."""
+choose_when = """a host program reaches one kernel or several over a bus (queues, a register \
+bank written mid-stream), or kernels share a memory, or more than one kernel.  One kernel \
+fed and drained by stream sources and sinks, with no host on a bus, is stream_kernel.  Not \
+for off-chip (DDR) memory yet."""
 
-# Primary first: markov is two kernels, a routed credit link and shared memory;
-# mm_fir is one kernel reached over the bus, with a register bank.
-reference_examples = ["markov", "mm_fir"]
+# Primary first: stream_kernel_mm (the polynomial on a bus) is the smallest -- one kernel behind queue
+# views, a two-thread host; markov is two kernels, a routed credit link and shared memory; mm_fir is one
+# kernel reached over the bus, with a register bank.
+reference_examples = ["stream_kernel_mm", "markov", "mm_fir"]
 
 [docs]
 specification = "frame.md"

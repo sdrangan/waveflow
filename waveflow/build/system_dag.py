@@ -144,10 +144,17 @@ class CsynthStep(BuildStep):
         import json
         import time
 
+        import os
+
         _check_synth(synth)
         root = Path(config.root_dir)
         out = {k: root / v for k, v in _csynth_products(self.top).items()}
         problem = rtl_problem(root, self.top)
+        # WAVEFLOW_RESYNTH=1: a stale top under synth="check" is built instead of refused -- for the one
+        # run after a framework header that every example copies has changed (every stamp goes stale at
+        # once).  Opt-in, per process; the gates' default stays "never grade RTL you did not produce".
+        if synth == "check" and problem is not None and os.environ.get("WAVEFLOW_RESYNTH") == "1":
+            synth = "build"
         if synth == "check":
             if problem is not None:
                 raise RuntimeError(f"{self.top}: {problem} (synth='check' does not run csynth: build "
@@ -185,8 +192,9 @@ class CsynthTopsStep(BuildStep):
     """``csynth``: every HLS top of a system, one inner :class:`CsynthStep` each.
 
     Its consumed artifacts enter the inner DAG as :class:`~waveflow.build.build.SourceStep`\\ s, and
-    the inner DAG runs **without force**: each top decides for itself, so editing one top's generated
-    source re-runs that csynth and reuses the others' RTL.  Fresh when every top is
+    the inner DAG runs **without force** -- each top decides for itself, so editing one top's generated
+    source re-runs that csynth and reuses the others' RTL -- unless this step itself was forced
+    (``--force-step csynth``), which re-synthesizes every top.  Fresh when every top is
     (:meth:`is_fresh`), so a run with nothing to do does not enter at all and the cascade stops here.
     *tcls* overrides a top's csynth script (``{top: path relative to the root}``)."""
 
@@ -229,7 +237,7 @@ class CsynthTopsStep(BuildStep):
         root = Path(config.root_dir)
         inner = BuildConfig(root_dir=root, vitis_version=config.vitis_version,
                             params={**config.params, "synth": synth})
-        results = self.inner_dag(inputs).run(inner)
+        results = self.inner_dag(inputs).run(inner, force=self.forced)
         #: Per top: "ran" / "fresh" / the failure -- what the last entry did, for the caller to show.
         self.last_run = {n: ("fresh" if r.skipped else "ran") if r.success else r.message
                          for n, r in results.items() if n.startswith("csynth_")}
@@ -254,10 +262,21 @@ def _host(sysm):
 class _SystemStep(BuildStep):
     """A framework step about one system: *sysm* (the pysim system object), its workspace *work*
     (relative to the root, or absolute), and the *prefix* naming its artifacts -- so two systems can
-    share one DAG.  Never fresh: what each reads includes Python and C++ the DAG cannot see, and every
-    one is seconds (the XSI run re-runs anyway).  Only csynth decides freshness by content."""
+    share one DAG.
+
+    Fresh while its outputs exist and the system's digest (:func:`~waveflow.build.freshness.
+    system_digest`: structure, sources, scenario, RTL stamps, the records its modules load) is the one
+    it last succeeded with (``plans/unit_harness.md`` Stage 6) -- so a unit nobody changed does no
+    work.  A step whose result is not a function of that digest sets :attr:`stamped` False."""
 
     params: ClassVar[dict] = {}
+    #: Freshness by the system digest (above); False: always runs.
+    stamped: ClassVar[bool] = True
+    #: The step's result depends on the calibration records the system's modules load (pysim's
+    #: timing does; the RTL run does not), so the digest it is fresh by includes them.
+    uses_records: ClassVar[bool] = False
+    #: The step reads the RTL of the system's tops (the scenario and pysim do not).
+    uses_rtl: ClassVar[bool] = True
 
     sysm: Any
     work: Path
@@ -278,7 +297,33 @@ class _SystemStep(BuildStep):
         return self.work if self.work.is_absolute() else Path(config.root_dir) / self.work
 
     def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
-        return False
+        if not self.stamped:
+            return False
+        from waveflow.build.freshness import stamp_file, system_digest
+
+        # Taken now, before the step runs, and kept for after_run: a run moves what a digest of the
+        # modules would read (their counters, so the identity their records are found by).
+        self._digest = system_digest(self.sysm, config.root_dir, records=self.uses_records,
+                                     rtl=self.uses_rtl)
+        stamp = stamp_file(self.work_dir(config), self.name)
+        if not stamp.is_file():
+            return False
+        if any(n in paths and not Path(paths[n]).exists() for n in self.produces):
+            return False
+        return stamp.read_text(encoding="utf-8") == self._digest
+
+    def after_run(self, config: BuildConfig) -> None:
+        """Record the digest this step succeeded with (see :meth:`is_fresh`)."""
+        if not self.stamped:
+            return
+        from waveflow.build.freshness import stamp_file, system_digest
+
+        digest = getattr(self, "_digest", None)
+        if digest is None:                     # forced: is_fresh was never asked
+            return
+        stamp = stamp_file(self.work_dir(config), self.name)
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(digest, encoding="utf-8")
 
 
 @dataclass(kw_only=True)
@@ -288,6 +333,7 @@ class ScenarioStep(_SystemStep):
 
     description = "The host's scenario bundle: the one file pysim and the RTL run both read."
     step_name: ClassVar[str] = "scenario"
+    uses_rtl: ClassVar[bool] = False
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
@@ -307,10 +353,15 @@ class PysimStep(_SystemStep):
 
     description = "The system in pysim, from the scenario: the host's traces and the cycle count."
     step_name: ClassVar[str] = "pysim"
+    uses_records: ClassVar[bool] = True
+    uses_rtl: ClassVar[bool] = False
+    #: Artifacts this run must come after -- its units' calibrations, so a parent's estimate is made
+    #: from the records they file (``plans/unit_harness.md`` Stage 6).
+    after: tuple[str, ...] = ()
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
-        return [self.a("scenario")]
+        return [self.a("scenario"), *self.after]
 
     @property
     def produces(self) -> dict:  # type: ignore[override]
@@ -342,6 +393,73 @@ class PysimStep(_SystemStep):
         cycles = self.sysm.sim.env.now / clk.period if clk is not None else None
         report.write_text(json.dumps({"cycles": cycles}, indent=2) + "\n", encoding="utf-8")
         return {self.a("pysim_traces"): traces, self.a("pysim"): report}
+
+
+@dataclass(kw_only=True)
+class GoldenStep(_SystemStep):
+    """``golden``: pysim's recordings against the system's golden
+    (:meth:`~waveflow.hw.hw_system.HwSystem.golden_outputs`), burst for burst and word for word --
+    the bursts are what TLAST closed, so the framing is checked too.  The mismatches go to
+    ``<work>/golden.json`` (empty: pass); any mismatch **fails** the step.  Added by
+    :func:`add_system_steps` when the system states a golden (a harness, when its module has
+    ``golden(kind)``).  Always runs: the golden is Python the system digest does not cover, and the
+    check reads a few files."""
+
+    description = "pysim's recordings against the golden, burst for burst (the mismatches; empty: pass)."
+    step_name: ClassVar[str] = "golden"
+    stamped: ClassVar[bool] = False
+    uses_rtl: ClassVar[bool] = False
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("pysim_traces")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("golden"): self.work / "golden.json"}
+
+    def run(self, config: BuildConfig, **inputs: Any) -> dict[str, Any]:
+        import json
+
+        out = self.work_dir(config) / "golden.json"
+        out.unlink(missing_ok=True)                      # a previous verdict must not outlive this run
+        bad = golden_mismatches(Path(inputs[self.a("pysim_traces")]), self.sysm.golden_outputs() or {})
+        out.write_text(json.dumps({"golden_mismatches": bad}, indent=2) + "\n", encoding="utf-8")
+        if bad:
+            raise RuntimeError("pysim's recordings differ from the golden:\n  " + "\n  ".join(bad))
+        return {self.a("golden"): out}
+
+
+def golden_mismatches(traces: Path, golden: dict) -> list[str]:
+    """Each way the recordings under *traces* (one bundle directory per recording) differ from
+    *golden* (``{recording: [burst words]}``): a missing recording, a burst count, a burst's length,
+    its first differing word.  Empty: they agree."""
+    import numpy as np
+
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    bad: list[str] = []
+    for name, want in golden.items():
+        d = Path(traces) / name
+        if not (d / "words.bin").is_file():
+            bad.append(f"{name!r}: no recording")
+            continue
+        got = read_burst_bundle(d)
+        if len(got) != len(want):
+            bad.append(f"{name!r}: {len(got)} bursts recorded, the golden has {len(want)}")
+        for i, (g, w) in enumerate(zip(got, want)):
+            # one row per word: a wide stream's words are (n, k) uint64 chunks
+            g, w = (np.asarray(a, dtype=np.uint64) for a in (g, w))
+            g, w = (a if a.ndim == 2 else a.reshape(-1, 1) for a in (g, w))
+            if g.shape != w.shape:
+                bad.append(f"{name!r} burst {i}: {len(g)} words recorded, the golden has {len(w)}")
+                continue
+            diff = np.flatnonzero((g != w).any(axis=1))
+            if diff.size:
+                k = int(diff[0])
+                bad.append(f"{name!r} burst {i}: word {k} is 0x{int(g[k, 0]):x}, the golden's "
+                           f"0x{int(w[k, 0]):x} ({diff.size} differ)")
+    return bad
 
 
 def _explain_mismatch(sysm, bad: list, rtl: Path, py: Path) -> str:
@@ -456,6 +574,17 @@ def snake(name: str) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name).lower()
 
 
+def default_top(sysm) -> str:
+    """The Verilog top a system is named by when none is given: a subclass's name in snake case
+    (``MarkovSystem`` -> ``markov_system``); a system built directly, ``HwSystem(sim, dut)``, its DUT's
+    name."""
+    from waveflow.hw.hw_system import HwSystem
+
+    if type(sysm) is HwSystem:
+        return sysm.dut().name
+    return snake(type(sysm).__name__)
+
+
 @dataclass(kw_only=True)
 class _Inner(BuildStep):
     """One step of ``system_rtl``'s or ``system_xsi``'s inner DAG; *owner* is the outer step holding
@@ -548,7 +677,7 @@ class SystemRtlStep(_SystemStep):
     def inner_dag(self) -> BuildDag:
         """The inner DAG: the crossbar IP, then the system top."""
         dag = BuildDag()
-        if self.spec.xbar is not None:                  # no crossbar inside the DUT: no IP to make
+        if self.spec.xbar is not None and not self.spec.xbar.direct:   # no crossbar IP to make
             dag.add(XbarIpStep(name="xbar_ip", owner=self))
         dag.add(SystemTopStep(name="system_top", owner=self))
         return dag
@@ -565,7 +694,20 @@ class SystemRtlStep(_SystemStep):
             raise RuntimeError("; ".join(bad))
         ip = results["xbar_ip"].artifacts["xbar_ip"] if "xbar_ip" in results else None
         root = Path(config.root_dir)
+        from waveflow.build.hls_ip import HlsIp, csynth_part, generate_hls_ips, ip_tcls
         from waveflow.build.system_synth import INIT_SUFFIXES
+
+        # Vendor cores the kernels instantiate (a float add is a floating_point IP): generated here,
+        # cached beside the crossbar's, and compiled as VHDL against Vivado's precompiled models.
+        tcls = [t for m in self.spec.modules for t in ip_tcls(root / rtl_rel(m))]
+        hls_ip = HlsIp()
+        if tcls:
+            part = (next((p for m in self.spec.modules
+                          if (p := csynth_part((root / rtl_rel(m)).parents[1])) is not None), None)
+                    or config.part)
+            if part is None:
+                raise RuntimeError("system_rtl: kernel IP needs a part (csynth report or --part)")
+            hls_ip = generate_hls_ips(tcls, self.ip_dir(config), part=part)
 
         rtl = [f for m in self.spec.modules for f in sorted((root / rtl_rel(m)).glob("*.v"))]
         # ROM initializers: csynth maps a large constant table (SsrFft's twiddles from L=256) to a ROM
@@ -583,6 +725,8 @@ class SystemRtlStep(_SystemStep):
                          + [f"{self.spec.top}.v"],
             "include_dirs": [Path(d).as_posix() for d in (ip.include_dirs if ip else ())],
             "init_files": [Path(f).as_posix() for f in init],
+            "vhdl_files": [Path(f).as_posix() for f in hls_ip.vhdl_files],
+            "xelab_libs": list(hls_ip.libs),
         }, indent=1) + "\n", encoding="utf-8")
         return {self.a("rtl"): manifest}
 
@@ -640,13 +784,14 @@ class XsiRunStep(_Inner):
 
             spec = o.rtl.spec
             (ws.work_dir / f"vcd_dumper_{m['top']}.v").write_text(
-                render_vcd_dumper(m["top"], spec.trace_scopes()), encoding="utf-8")
+                render_vcd_dumper(m["top"], spec.trace_scopes(bus=o.trace_bus)), encoding="utf-8")
             (o.work_dir(config) / "hazards.json").write_text(
                 json.dumps(spec.hazard_manifests(), indent=1) + "\n", encoding="utf-8")
             (ws.work_dir / f"{m['top']}_trace.vcd").unlink(missing_ok=True)
         ws.prepare(rtl_files=m["rtl_files"], include_dirs=m["include_dirs"],
                    tb_name=f"{m['top']}_tb", tb_cpp=main, extra_files=dict(tb_files),
-                   tb_include_dirs=tb_inc, trace=o.trace, init_files=m.get("init_files", ()))
+                   tb_include_dirs=tb_inc, trace=o.trace, init_files=m.get("init_files", ()),
+                   vhdl_files=m.get("vhdl_files", ()), xelab_libs=m.get("xelab_libs", ()))
         if o.rtl.host is not None:
             out = ws.run(timeout=o.timeout)
         else:
@@ -679,6 +824,9 @@ class SystemXsiStep(_SystemStep):
     #: Trace the run: ``<work>/xsi/<top>_trace.vcd`` (each wrapped kernel's wrapper scope) and
     #: ``<work>/hazards.json`` (:meth:`~waveflow.build.system_top.SystemTopSpec.hazard_manifests`).
     trace: bool = False
+    #: A traced run dumps each sub-top's wiring instead -- a device's bus groups, its interrupt lines,
+    #: the streams between its views and kernels (:meth:`~waveflow.build.system_top.SystemTopSpec.trace_scopes`).
+    trace_bus: bool = False
 
     @property
     def consumes(self) -> list:  # type: ignore[override]
@@ -1079,7 +1227,8 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
                      prefix: str = "", workspace: str | None = None,
                      sources: tuple[str, ...] = ("include", "gen"),
                      tcls: dict[str, Path] | None = None, timeout: int = 3600,
-                     trace: bool = False) -> SystemXsiStep:
+                     trace: bool = False, trace_bus: bool = False,
+                     after: tuple[str, ...] = ()) -> SystemXsiStep:
     """Add the framework steps of a system's flow to *dag*: ``csynth`` (one inner step per HLS top in
     the cut), ``system_rtl``, ``kernel_resources``, ``system_synth``, ``ip_package``,
     ``block_design``, ``leaf_resources``, ``resource_report``, ``scenario``, ``pysim``, ``system_xsi`` and ``compare``.
@@ -1087,10 +1236,12 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
 
     *sysm* is the pysim system object, not yet run.  csynth consumes the artifacts *sources* -- the
     example's ``codegen`` products; one the DAG has no producer for becomes a source directory under
-    the root.  *top* names the Verilog top (default: the system class in snake case, ``MarkovSystem``
-    -> ``markov_system``), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
-    the cut; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
-    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``).
+    the root.  *top* names the Verilog top (default: :func:`default_top` -- the DUT's name, or a
+    subclass's name in snake case), *xbar_name* the crossbar IP (default ``xbar_<top>``).  *inside* overrides
+    the cut; *after* (artifact names) runs its pysim after them -- its units' calibrations, so a
+    parent's estimate comes from their records; *probes* (``{name: beat(...)}``) adds timing probes; *tcls* overrides a top's csynth
+    script (``{top: path relative to the root}``); *trace* traces the XSI run (``SystemXsiStep.trace``),
+    *trace_bus* its bus and interrupt lines too (``SystemXsiStep.trace_bus``).
 
     The run lives in ``<work_dir>/<workspace>`` (default ``<prefix><top>``, ``_probes`` added with
     probes) and the crossbar IP cache in ``<work_dir>/ip``; a relative *work_dir* is under the root.
@@ -1099,11 +1250,13 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     of one kernel share one ``codegen`` and one ``csynth``.  The first csynth is named ``csynth``; one
     a later system needs for tops of its own is ``<prefix>csynth``.
     """
-    top = top or snake(type(sysm).__name__)
+    top = top or default_top(sysm)
     work_dir = Path(work_dir)
     work = work_dir / ((workspace or f"{prefix}{top}") + ("_probes" if probes else ""))
     rtl = SystemRtlStep(sysm=sysm, work=work, prefix=prefix, top=top, xbar_name=xbar_name,
                         inside=inside, probes=probes)
+    # The HLS tops whose RTL the system's digest follows (Stage 6 freshness).
+    sysm._wf_tops = tuple(rtl.tops)
     owners = dag.artifact_owners()
     for name in sources:
         if name not in owners:
@@ -1120,14 +1273,18 @@ def add_system_steps(dag: BuildDag, sysm, *, work_dir, top: str | None = None,
     dag.add(LeafResourcesStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ResourceReportStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl))
     dag.add(ScenarioStep(sysm=sysm, work=work, prefix=prefix))
-    dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix))
-    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace)
+    dag.add(PysimStep(sysm=sysm, work=work, prefix=prefix, after=tuple(after)))
+    if getattr(sysm, "has_golden", lambda: False)():
+        dag.add(GoldenStep(sysm=sysm, work=work, prefix=prefix))
+    xsi = SystemXsiStep(sysm=sysm, work=work, prefix=prefix, rtl=rtl, timeout=timeout, trace=trace,
+                        trace_bus=trace_bus)
     dag.add(xsi)
     dag.add(CompareStep(sysm=sysm, work=work, prefix=prefix))
     return xsi
 
 
-__all__ = ["BlockDesignStep", "CompareStep", "CsynthStep", "CsynthTopsStep", "IpPackageStep", "KernelResourcesStep",
+__all__ = ["BlockDesignStep", "CompareStep", "CsynthStep", "CsynthTopsStep", "GoldenStep",
+           "IpPackageStep", "KernelResourcesStep", "golden_mismatches",
            "LeafResourcesStep", "PysimStep", "ResourceReportStep", "SystemSynthStep",
            "SYNTH_MODES", "ScenarioStep", "SystemRtlStep", "SystemXsiStep", "add_system_steps",
            "owner_label", "report_artifact", "report_rel", "rtl_artifact", "rtl_problem", "rtl_rel",

@@ -402,13 +402,22 @@ class DataUnionHdr(DataList):
         return specialized
 
 
-class DataUnion:
-    """Variable-schema burst: a fixed header combined with one of N registered payload types.
+class DataUnion(DataSchema):
+    """One message of several types: a header carrying the payload's ``schema_id``, then the payload.
 
-    The base class is not for direct use. Call ``DataUnion.specialize(hdr_type)`` to obtain
-    a concrete subclass bound to a specific ``DataUnionHdr``. Every serialized instance has
-    the same total word count: ``hdr_nwords + max_payload_nwords``. Payloads shorter than
-    the maximum are zero-padded on serialization so all instances have identical wire footprint.
+    A :class:`~waveflow.hw.dataschema.DataSchema` like any other, so it is a field of a ``DataList``,
+    a ``DataSchemaStep`` generates its header, and the generated struct has every reader and writer
+    -- array, stream, AXI4-Stream and framed.  The base class is not for direct use: call
+    ``DataUnion.specialize(hdr_type)``.
+
+    **Fixed length.**  The header comes first, in its own layout; the payload starts at the next word
+    boundary, in the registered type's own word layout, zero-padded to the longest registered payload.
+    So every instance is ``hdr_nwords + max_payload_nwords`` words at a given width, whatever its type
+    (``docs/guide/schema/python/dataunion.md``).  A variable number of messages of different lengths is
+    a tagged union on a stream instead (``tagged_union.md``).
+
+    In C++ the struct holds the header and one member per registered type, named after the type in
+    snake case; ``get_<Type>()`` / ``set_<Type>(p)`` read one and set it with its ``schema_id``.
 
     Example::
 
@@ -416,8 +425,7 @@ class DataUnion:
         PacketHdr = DataUnionHdr.specialize(schema_id_type=SensorSchemaID)
         SensorDataUnion = DataUnion.specialize(hdr_type=PacketHdr)
 
-        du = SensorDataUnion()
-        du.payload = TempPacket(temp_raw=-42, sensor_id=7)
+        du = SensorDataUnion(TempPacket(temp_raw=-42, sensor_id=7))
         words = du.serialize(word_bw=32)          # hdr_words + padded_payload_words
 
         rx = SensorDataUnion().deserialize(words, word_bw=32)
@@ -426,11 +434,11 @@ class DataUnion:
 
     hdr_type: ClassVar[type[DataUnionHdr] | None] = None
     registry: ClassVar[SchemaRegistry | None] = None
-    include_filename: ClassVar[str] = ""
-    include_dir: ClassVar[str | None] = None
+    include_filename: ClassVar[str | None] = None
+    can_gen_include: ClassVar[bool] = False
     _specializations: ClassVar[dict[Any, type[DataUnion]]] = {}
 
-    def __init__(self) -> None:
+    def __init__(self, payload: DataList | None = None) -> None:
         hdr_type = self.__class__.hdr_type
         if hdr_type is None:
             raise TypeError(
@@ -439,6 +447,8 @@ class DataUnion:
             )
         self._hdr: DataUnionHdr = hdr_type()
         self._payload: DataList | None = None
+        if payload is not None:
+            self.payload = payload
 
     # ------------------------------------------------------------------
     # specialize()
@@ -477,6 +487,7 @@ class DataUnion:
             "hdr_type": hdr_type,
             "registry": registry,
             "include_filename": f"{reg_name.lower()}_dataunion.h",
+            "can_gen_include": True,
             "__module__": cls.__module__,
             "__doc__": f"DataUnion for registry '{reg_name}' with {hdr_type.__name__} header.",
         }
@@ -510,59 +521,103 @@ class DataUnion:
         """Return the header instance."""
         return self._hdr
 
+    @property
+    def val(self) -> dict[str, Any]:
+        """The header and the payload as nested dicts (:meth:`to_dict`)."""
+        return self.to_dict()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"header": self._hdr.to_dict(),
+                "payload": None if self._payload is None else self._payload.to_dict()}
+
+    def from_dict(self, data: dict[str, Any]) -> DataUnion:
+        self._hdr.from_dict(data["header"])
+        schema_cls = self.__class__.registry.get_class(int(self._hdr.schema_id))
+        payload = data.get("payload")
+        self._payload = None if payload is None else schema_cls().from_dict(payload)
+        return self
+
+    @classmethod
+    def init_value(cls) -> dict[str, Any]:
+        return {"header": cls.hdr_type.init_value(), "payload": None}
+
     # ------------------------------------------------------------------
     # Size helpers
     # ------------------------------------------------------------------
 
     @classmethod
+    def _payload_types(cls) -> list[tuple[int, type[DataSchema]]]:
+        return list(cls.registry.items()) if cls.registry is not None else []
+
+    @classmethod
     def max_payload_bw(cls) -> int:
         """Return the maximum payload bitwidth across all registered schemas."""
-        if not cls.registry._id_to_cls:
-            return 0
-        return max(s.get_bitwidth() for _, s in cls.registry.items())
+        return max((s.get_bitwidth() for _, s in cls._payload_types()), default=0)
 
     @classmethod
     def max_payload_nwords(cls, word_bw: int) -> int:
         """Return the maximum payload word count across all registered schemas."""
-        if not cls.registry._id_to_cls:
-            return 0
-        return max(s.nwords_per_inst(word_bw) for _, s in cls.registry.items())
+        return max((s.nwords_per_inst(word_bw) for _, s in cls._payload_types()), default=0)
 
     @classmethod
-    def nwords_per_inst(cls, word_bw: int) -> int:
-        """Return the total serialized word count (header + max payload)."""
+    def get_bitwidth(cls) -> int:
+        """The header's bits plus the longest payload's."""
+        return cls.hdr_type.get_bitwidth() + cls.max_payload_bw()
+
+    @classmethod
+    def _nwords_per_inst_uncached(cls, word_bw: int) -> int:
         return cls.hdr_type.nwords_per_inst(word_bw) + cls.max_payload_nwords(word_bw)
 
+    @classmethod
+    def _max_cursor_step(cls, word_bw: int, ipos0: int = 0, iword0: int = 0) -> tuple[int, int]:
+        ipos, iword = cls.hdr_type._max_cursor_step(word_bw, ipos0, iword0)
+        if ipos > 0:
+            iword, ipos = iword + 1, 0
+        return 0, iword + cls.max_payload_nwords(word_bw)
+
     # ------------------------------------------------------------------
-    # Serialize / deserialize
+    # Serialize / deserialize: the header, then the payload from the next word, padded
     # ------------------------------------------------------------------
 
-    def serialize(self, word_bw: int = 32) -> Words:
-        """Serialize into a fixed-length word array (header + zero-padded payload).
-
-        The total word count is always ``nwords_per_inst(word_bw)`` regardless
-        of which payload type is stored.
-        """
+    def _serialize_recursive(self, word_bw: int, words: list[int], ipos0: int = 0,
+                             iword0: int = 0) -> tuple[int, int]:
         if self._payload is None:
             raise ValueError("Cannot serialize DataUnion: payload is not set.")
-        hdr_words = self._hdr.serialize(word_bw=word_bw)
-        payload_words = self._payload.serialize(word_bw=word_bw)
-        max_n = self.__class__.max_payload_nwords(word_bw)
-        if len(payload_words) < max_n:
-            pad = np.zeros(max_n - len(payload_words), dtype=payload_words.dtype)
-            payload_words = np.concatenate([payload_words, pad])
-        return np.concatenate([hdr_words, payload_words])
+        ipos, iword = self._hdr._serialize_recursive(word_bw=word_bw, words=words, ipos0=ipos0,
+                                                     iword0=iword0)
+        if ipos > 0:
+            iword, ipos = iword + 1, 0
+        end = iword + self.__class__.max_payload_nwords(word_bw)
+        while len(words) < end:
+            words.append(0)
+        self._payload._serialize_recursive(word_bw=word_bw, words=words, ipos0=0, iword0=iword)
+        return 0, end
 
-    def deserialize(self, words: Words, word_bw: int = 32) -> DataUnion:
-        """Populate this DataUnion from a flat word array and return self."""
-        hdr_type = self.__class__.hdr_type
-        hdr_n = hdr_type.nwords_per_inst(word_bw)
-        self._hdr = hdr_type().deserialize(words[:hdr_n], word_bw=word_bw)
-        schema_id = int(self._hdr.schema_id)
-        schema_cls = self.__class__.registry.get_class(schema_id)
-        payload_n = schema_cls.nwords_per_inst(word_bw)
-        self._payload = schema_cls().deserialize(words[hdr_n:hdr_n + payload_n], word_bw=word_bw)
-        return self
+    def _active_size_recursive(self, word_bw: int, ipos0: int = 0,
+                               iword0: int = 0) -> tuple[int, int]:
+        return self.__class__._max_cursor_step(word_bw, ipos0, iword0)
+
+    def _deserialize_recursive(self, word_bw: int, words: list[int], ipos0: int = 0,
+                               iword0: int = 0) -> tuple[int, int]:
+        self._hdr = self.__class__.hdr_type()
+        ipos, iword = self._hdr._deserialize_recursive(word_bw=word_bw, words=words, ipos0=ipos0,
+                                                       iword0=iword0)
+        if ipos > 0:
+            iword, ipos = iword + 1, 0
+        end = iword + self.__class__.max_payload_nwords(word_bw)
+        padded = list(words) + [0] * max(0, end - len(words))
+        schema_cls = self.__class__.registry.get_class(int(self._hdr.schema_id))
+        self._payload = schema_cls()
+        self._payload._deserialize_recursive(word_bw=word_bw, words=padded, ipos0=0, iword0=iword)
+        return 0, end
+
+    def is_close(self, other: DataSchema, rel_tol: float | None = None,
+                 abs_tol: float | None = 1e-8) -> bool:
+        if not isinstance(other, self.__class__) or self.schema_id != other.schema_id:
+            return False
+        if self._payload is None or other.payload is None:
+            return self._payload is other.payload
+        return self._payload.is_close(other.payload, rel_tol=rel_tol, abs_tol=abs_tol)
 
     # ------------------------------------------------------------------
     # C++ code generation
@@ -574,14 +629,14 @@ class DataUnion:
         return cls.__name__
 
     @classmethod
-    def include_path(cls) -> str:
-        """Return the header path relative to the code-generation root."""
-        inc_dir = (cls.include_dir or ".").replace("\\", "/")
-        inc_root = PurePosixPath(inc_dir)
-        filename = cls.include_filename or f"{cls.__name__.lower()}_dataunion.h"
-        if inc_root.as_posix() == ".":
-            return filename
-        return f"{inc_root.as_posix()}/{filename}"
+    def get_dependencies(cls) -> list[type[DataSchema]]:
+        """The header's type, then each registered payload type, by id."""
+        return [cls.hdr_type, *(s for _, s in cls._payload_types())]
+
+    @classmethod
+    def _member(cls, schema_cls: type[DataSchema]) -> str:
+        """The struct member holding a payload of *schema_cls*."""
+        return cls._camel_to_snake(schema_cls.__name__)
 
     @classmethod
     def gen_include(
@@ -590,100 +645,45 @@ class DataUnion:
         word_bw_supported: list[int] | None = None,
         streamutils_dir: Path | str | None = None,
     ) -> Path:
-        """Generate the DataUnion C++ header file and return its path.
+        """Generate the DataUnion's C++ header and return its path: a ``DataSchemaStep`` run alone
+        (in a build DAG, add a ``DataSchemaStep`` instead).  *streamutils_dir* is where
+        ``streamutils_hls.h`` is, relative to ``cfg.root_dir`` (default: the root)."""
+        from waveflow.hw.dataschema import DataSchemaStep
 
-        Parameters
-        ----------
-        cfg : BuildConfig | None
-            Code-generation config. Uses current directory when omitted.
-        word_bw_supported : list[int] | None
-            Word widths to support in the generated read/write helpers. When
-            omitted or empty, size helpers and read/write methods are not emitted.
-        streamutils_dir : Path | str | None
-            Directory containing ``streamutils_hls.h``, **relative to**
-            ``cfg.root_dir``.  Defaults to ``"."`` (the build root itself).
-        """
-        if cfg is None:
-            cfg = BuildConfig()
-        if word_bw_supported is None:
-            word_bw_supported = []
-
-        sutils_dir = Path(streamutils_dir) if streamutils_dir is not None else Path(".")
-
-        out_path = cfg.root_dir / cls.include_path()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        streamutils_hls_path = cfg.root_dir / sutils_dir / "streamutils_hls.h"
-        streamutils_hls_include = os.path.relpath(
-            streamutils_hls_path, start=out_path.parent
-        ).replace("\\", "/")
-
-        hdr_type = cls.hdr_type
-        hdr_abs = cfg.root_dir / hdr_type.include_path()
-        hdr_rel = os.path.relpath(hdr_abs, start=out_path.parent).replace("\\", "/")
-
-        schema_rels: list[str] = []
-        for _, schema_cls in cls.registry.items():
-            schema_abs = cfg.root_dir / schema_cls.include_path()
-            schema_rels.append(
-                os.path.relpath(schema_abs, start=out_path.parent).replace("\\", "/")
-            )
-
-        guard_raw = re.sub(r"[^A-Za-z0-9]+", "_", cls.include_path()).strip("_").upper()
-        guard = re.sub(r"_+", "_", guard_raw)
-
-        lines: list[str] = [
-            f"#ifndef {guard}",
-            f"#define {guard}",
-            "",
-            "#include <ap_int.h>",
-            "#include <hls_stream.h>",
-            "#if __has_include(<hls_axi_stream.h>)",
-            "#include <hls_axi_stream.h>",
-            "#else",
-            "#include <ap_axi_sdata.h>",
-            "#endif",
-            f'#include "{streamutils_hls_include}"',
-            "",
-            f'#include "{hdr_rel}"',
-        ]
-        for rel in schema_rels:
-            lines.append(f'#include "{rel}"')
-        lines.extend([
-            "",
-            cls._gen_include_decl(word_bw_supported=word_bw_supported),
-            "",
-            f"#endif // {guard}",
-        ])
-
-        out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return out_path
+        cfg = cfg if cfg is not None else BuildConfig()
+        step = DataSchemaStep(cls, list(word_bw_supported or []))
+        if streamutils_dir is not None:
+            step._streamutils_output_dir = Path(streamutils_dir)
+        res = step.run(cfg)
+        if not res.success:
+            raise RuntimeError(res.message)
+        return cfg.root_dir / cls.include_path()
 
     @classmethod
-    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None, framed: bool = False) -> str:
-        """Return the C++ struct body for this DataUnion."""
-        if word_bw_supported is None:
-            word_bw_supported = []
-
-        hdr_type = cls.hdr_type
-        registry = cls.registry
-        struct_name = cls.cpp_class_name()
-        hdr_cpp = hdr_type.cpp_class_name()
-
-        mpbw = cls.max_payload_bw()
-        if mpbw == 0:
-            mpbw = 1
-
-        lines: list[str] = [f"struct {struct_name} {{"]
-        lines.append(f"    {hdr_cpp} header;")
-        lines.append(f"    ap_uint<{mpbw}> payload_bits;")
+    def _gen_include_decl(cls, word_bw_supported: list[int] | None = None,
+                          framed: bool = False) -> str:
+        """The struct: the header, one member per registered type, accessors, the word counts, and
+        every reader and writer the base generates through :meth:`_gen_write_recursive` /
+        :meth:`_gen_read_recursive`."""
+        word_bw_supported = list(word_bw_supported or [])
+        hdr_cpp = cls.hdr_type.cpp_class_name()
+        sid_cpp = cls.hdr_type.schema_id_type.cpp_class_name()
+        lines = [f"struct {cls.cpp_class_name()} {{", f"    {hdr_cpp} header;"]
+        for _, s in cls._payload_types():
+            lines.append(f"    {s.cpp_class_name()} {cls._member(s)};")
         lines.append("")
-        lines.append(f"    static constexpr int max_payload_bw = {mpbw};")
-        lines.append(f"    static constexpr int hdr_bw = {hdr_type.get_bitwidth()};")
-        lines.append(f"    static constexpr int bitwidth = hdr_bw + max_payload_bw;")
-
+        lines.append(f"    static constexpr int bitwidth = {cls.get_bitwidth()};")
+        lines.append("")
+        for _, s in cls._payload_types():
+            n, m = s.cpp_class_name(), cls._member(s)
+            lines.extend([
+                f"    {n} get_{s.__name__}() const {{ return {m}; }}",
+                f"    void set_{s.__name__}(const {n}& p) {{",
+                f"        header.schema_id = {sid_cpp}::{s.__name__};",
+                f"        {m} = p;",
+                "    }",
+            ])
         if word_bw_supported:
-            # nwords() template
             lines.extend([
                 "",
                 "    template<int word_bw>",
@@ -696,11 +696,10 @@ class DataUnion:
                 "    }",
             ])
             for bw in word_bw_supported:
-                n = cls.nwords_per_inst(bw)
                 lines.extend([
                     "",
                     f"    static constexpr int nwords_value(word_bw_tag<{bw}>) {{",
-                    f"        return {n};",
+                    f"        return {cls.nwords_per_inst(bw)};",
                     "    }",
                 ])
             lines.extend([
@@ -710,82 +709,101 @@ class DataUnion:
                 "        return nwords_value(word_bw_tag<word_bw>{});",
                 "    }",
             ])
-
-            # write_array — fallback template + per-bw overloads + wrapper
-            lines.extend([
-                "",
-                "    template<int word_bw>",
-                f"    static void write_array_impl(word_bw_tag<word_bw>, const {struct_name}* self, ap_uint<word_bw> x[]) {{",
-                '        static_assert(word_bw < 0, "Unsupported word_bw for write_array");',
-                "        (void)self; (void)x;",
-                "    }",
-            ])
-            for bw in word_bw_supported:
-                hdr_n = hdr_type.nwords_per_inst(bw)
-                pay_n = cls.max_payload_nwords(bw)
-                lines.extend([
-                    "",
-                    f"    static void write_array_impl(word_bw_tag<{bw}>, const {struct_name}* self, ap_uint<{bw}> x[]) {{",
-                    f"        self->header.write_array<{bw}>(x);",
-                ])
-                for i in range(pay_n):
-                    high = min((i + 1) * bw - 1, mpbw - 1)
-                    low = i * bw
-                    lines.append(f"        x[{hdr_n + i}] = self->payload_bits.range({high}, {low});")
-                lines.append("    }")
-            lines.extend([
-                "",
-                "    template<int word_bw>",
-                "    void write_array(ap_uint<word_bw> x[]) const {",
-                "        write_array_impl(word_bw_tag<word_bw>{}, this, x);",
-                "    }",
-            ])
-
-            # read_array — fallback template + per-bw overloads + wrapper
-            lines.extend([
-                "",
-                "    template<int word_bw>",
-                f"    static void read_array_impl(word_bw_tag<word_bw>, {struct_name}* self, ap_uint<word_bw> x[]) {{",
-                '        static_assert(word_bw < 0, "Unsupported word_bw for read_array");',
-                "        (void)self; (void)x;",
-                "    }",
-            ])
-            for bw in word_bw_supported:
-                hdr_n = hdr_type.nwords_per_inst(bw)
-                pay_n = cls.max_payload_nwords(bw)
-                lines.extend([
-                    "",
-                    f"    static void read_array_impl(word_bw_tag<{bw}>, {struct_name}* self, ap_uint<{bw}> x[]) {{",
-                    f"        self->header.read_array<{bw}>(x);",
-                    "        self->payload_bits = 0;",
-                ])
-                for i in range(pay_n):
-                    high = min((i + 1) * bw - 1, mpbw - 1)
-                    low = i * bw
-                    lines.append(f"        self->payload_bits.range({high}, {low}) = x[{hdr_n + i}];")
-                lines.append("    }")
-            lines.extend([
-                "",
-                "    template<int word_bw>",
-                "    void read_array(ap_uint<word_bw> x[]) {",
-                "        read_array_impl(word_bw_tag<word_bw>{}, this, x);",
-                "    }",
-            ])
-
-        # Type-specific getters and setters for each registered schema
-        lines.append("")
-        for _, schema_cls in registry.items():
-            cls_cpp = schema_cls.cpp_class_name()
-            bw = schema_cls.get_bitwidth()
-            lines.extend([
-                f"    {cls_cpp} get_{schema_cls.__name__}() const {{",
-                f"        return {cls_cpp}::unpack_from_uint(payload_bits.range({bw - 1}, 0));",
-                "    }",
-                f"    void set_{schema_cls.__name__}(const {cls_cpp}& p) {{",
-                "        payload_bits = 0;",
-                f"        payload_bits.range({bw - 1}, 0) = {cls_cpp}::pack_to_uint(p);",
-                "    }",
-            ])
-
+            kinds = ("array", "stream", "axi4_stream") + (("framed_stream",) if framed else ())
+            for kind in kinds:
+                lines.append("")
+                lines.extend(cls.gen_write(dst_type=kind, word_bw_supported=word_bw_supported,
+                                           indent_level=1).splitlines())
+            for kind in kinds:
+                lines.append("")
+                lines.extend(cls.gen_read(src_type=kind, word_bw_supported=word_bw_supported,
+                                          indent_level=1).splitlines())
         lines.append("};")
         return "\n".join(lines)
+
+    @classmethod
+    def _gen_write_recursive(cls, word_bw: int, dst_type: str = "array", target: str = "x",
+                             ipos0: int = 0, iword0: int = 0, prefix: str = "",
+                             member_name: str | None = None) -> tuple[list[str], int, int]:
+        """The header by its own generator; the rest of its word flushed; then the payload, written by
+        its type's ``write_array`` into a local word array (one case per type) and sent word by word,
+        padded to the longest payload."""
+        from waveflow.hw.dataschema import _TLAST_MARKS, _array_beat_last
+
+        p = f"{prefix}{member_name}." if member_name else prefix
+        lines, ipos, iword = cls.hdr_type._gen_write_recursive(
+            word_bw=word_bw, dst_type=dst_type, target=target, ipos0=ipos0, iword0=iword0,
+            prefix=f"{p}header.", member_name=None)
+        if ipos > 0:
+            if dst_type == "stream":
+                lines += [f"    {target}.write(w);", "    w = 0;"]
+            elif dst_type == "axi4_stream":
+                lines += [f"    streamutils::write_axi4_word<{word_bw}>({target}, w, false);",
+                          "    w = 0;"]
+            iword, ipos = iword + 1, 0
+        n = cls.max_payload_nwords(word_bw)
+        if n == 0:
+            return lines, 0, iword
+        sid_cpp = cls.hdr_type.schema_id_type.cpp_class_name()
+        lines += [
+            "    {",
+            f"        ap_uint<{word_bw}> pw[{n}];",
+            f"        for (int k = 0; k < {n}; ++k) pw[k] = 0;",
+            f"        switch ({p}header.schema_id) {{",
+        ]
+        for _, s in cls._payload_types():
+            lines.append(f"        case {sid_cpp}::{s.__name__}: "
+                         f"{p}{cls._member(s)}.write_array<{word_bw}>(pw); break;")
+        lines += ["        default: break;", "        }"]
+        if dst_type == "array":
+            lines.append(f"        for (int k = 0; k < {n}; ++k) {target}[{iword} + k] = pw[k];")
+        elif dst_type == "stream":
+            lines.append(f"        for (int k = 0; k < {n}; ++k) {target}.write(pw[k]);")
+        else:
+            marks = _TLAST_MARKS.get()
+            aid = next(marks) if marks is not None else None
+            last = _array_beat_last(aid, f"k == {n - 1}")
+            lines.append(f"        for (int k = 0; k < {n}; ++k) "
+                         f"streamutils::write_axi4_word<{word_bw}>({target}, pw[k], {last});")
+        lines.append("    }")
+        return lines, 0, iword + n
+
+    @classmethod
+    def _gen_read_recursive(cls, word_bw: int, src_type: str = "array", source: str = "x",
+                            ipos0: int = 0, iword0: int = 0, prefix: str = "",
+                            member_name: str | None = None) -> tuple[list[str], int, int]:
+        """The mirror of :meth:`_gen_write_recursive`: the header, then the padded payload words into
+        a local array, read by the type ``schema_id`` names."""
+        p = f"{prefix}{member_name}." if member_name else prefix
+        lines, ipos, iword = cls.hdr_type._gen_read_recursive(
+            word_bw=word_bw, src_type=src_type, source=source, ipos0=ipos0, iword0=iword0,
+            prefix=f"{p}header.", member_name=None)
+        if ipos > 0:
+            iword, ipos = iword + 1, 0
+        n = cls.max_payload_nwords(word_bw)
+        if n == 0:
+            return lines, 0, iword
+        sid_cpp = cls.hdr_type.schema_id_type.cpp_class_name()
+        lines += ["    {", f"        ap_uint<{word_bw}> pw[{n}];"]
+        if src_type == "array":
+            lines.append(f"        for (int k = 0; k < {n}; ++k) pw[k] = {source}[{iword} + k];")
+        elif src_type == "stream":
+            lines.append(f"        for (int k = 0; k < {n}; ++k) pw[k] = {source}.read();")
+        else:
+            lines += [
+                f"        for (int k = 0; k < {n}; ++k) {{",
+                "            if (last) {",
+                "                tl = streamutils::tlast_status::tlast_early;",
+                "                return;",
+                "            }",
+                f"            auto axis_word = {source}.read();",
+                "            pw[k] = axis_word.data;",
+                "            last = axis_word.last;",
+                "        }",
+            ]
+        lines.append(f"        switch ({p}header.schema_id) {{")
+        for _, s in cls._payload_types():
+            lines.append(f"        case {sid_cpp}::{s.__name__}: "
+                         f"{p}{cls._member(s)}.read_array<{word_bw}>(pw); break;")
+        lines += ["        default: break;", "        }", "    }"]
+        return lines, 0, iword + n

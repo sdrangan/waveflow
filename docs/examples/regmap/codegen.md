@@ -1,6 +1,7 @@
 ---
 title: Vitis HLS Code Generation
 parent: Register mapped simple function
+grand_parent: Legacy examples
 nav_order: 5
 has_children: false
 summary: "What the framework generates and what it leaves you: the AXI-Lite slave, the interface pragmas, the top-level signature and the testbench harness are mechanical and automatic; the compute body is a small hand-written .cpp beside the Python source. The same codegen step every example uses, wired twice — once for the kernel, once for the testbench."
@@ -136,7 +137,7 @@ kernel and reads its status through one register map — which is exactly what m
 
 > **What `ap` and `hs` stand for.** `ap_` is Xilinx/AMD's HLS signal prefix; it originates in the
 > *arbitrary-precision* types (`ap_int`, `ap_fixed`) and labels the block-control signals too. The `hs`
-> in `ap_ctrl_hs` is **handshake**. The [concurrent flow](../../guide/flows/concurrent.md) uses the
+> in `ap_ctrl_hs` is **handshake**. The [concurrent flow](../../guide/systems/index.md) uses the
 > *other* mode, `ap_ctrl_none` — a free-running kernel with no start/done handshake — which is why Vitis
 > cannot co-simulate it and it must be driven at RTL.
 

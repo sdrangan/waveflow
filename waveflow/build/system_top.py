@@ -333,16 +333,16 @@ class SystemTopSpec:
 
         Finds the system's one crossbar, and cuts at *inside* -- the modules synthesized into the top:
         kernels and on-chip memories.  The default cut is what ``add_system_steps`` takes: each kernel
-        whose device is a crossbar slave, then each memory on the crossbar.  *top* defaults to the
-        system class in snake case (``MarkovSystem`` -> ``markov_system``), *xbar_name* to
+        whose device is a crossbar slave, then each memory on the crossbar.  *top* defaults to
+        :func:`~waveflow.build.system_dag.default_top` (the DUT's name), *xbar_name* to
         ``xbar_<top>``, *id_width* to enough bits to route every crossbar master.  The walk itself is
         :func:`system_top_spec`, which takes the crossbar directly."""
-        from waveflow.build.system_dag import snake
+        from waveflow.build.system_dag import default_top
         from waveflow.build.system_xsi import discover
 
         xbar, _host, cut = discover(sysm)
         return system_top_spec(xbar, cut if inside is None else list(inside),
-                               top=top or snake(type(sysm).__name__), xbar_name=xbar_name,
+                               top=top or default_top(sysm), xbar_name=xbar_name,
                                id_width=id_width, data_width=getattr(sysm, "data_width", None))
 
     def render_sub_verilog(self, name: str, probes: dict | None = None) -> str:
@@ -418,10 +418,20 @@ class SystemTopSpec:
         sub = self.sub_inst(k.group)
         return ".".join(p for p in (self.top, sub, k.inst) if p)
 
-    def trace_scopes(self) -> list[str]:
+    def trace_scopes(self, bus: bool = False) -> list[str]:
         """The scopes a traced run dumps (each at level 1): every kernel's own -- its ports, and for
-        a wrapped kernel the wrapper's wires to its memories -- or, with none, the top itself."""
-        return [self.scope_of(k) for k in self.kernels] or [self.top]
+        a wrapped kernel the wrapper's wires to its memories -- or, with none, the top itself.
+
+        *bus* dumps each sub-top's instead (with none, the top's): the wiring inside it -- a device's
+        slave groups behind the crossbar, its interrupt lines, the streams between its views and its
+        kernels.  A kernel inside a sub-top is then not dumped on its own: of two nested scopes, xsim
+        (2025.1, measured) dumps only the outer one, so the kernel's ports are read as the sub-top's
+        stream nets."""
+        kernels = [self.scope_of(k) for k in self.kernels]
+        if not bus:
+            return kernels or [self.top]
+        outer = [f"{self.top}.{s.inst}" for s in self.subs] or [self.top]
+        return outer + [k for k in kernels if not any(k.startswith(o + ".") for o in outer)]
 
     def hazard_manifests(self) -> list[dict]:
         """Each wrapped kernel's hazard manifest, with the ``scope`` its nets are found under in a
@@ -508,16 +518,15 @@ def _rtl_of(mod, dw: int, owner=None) -> KernelRtl:
         module, ports, scalars = writer_rtl(mod)
         eps = (("s_in", mod.s_in), ("m_mem", mod.m_mem))
         return KernelRtl(module, f"u_{mod.name}", ports, scalars, eps, hw=mod, owner=owner)
-    name = getattr(type(mod), "cpp_kernel_name", None)
+    from waveflow.hw.hw_module import build_params, kernel_name
+
+    name = kernel_name(mod)
     if not name:
         raise LoweringError(f"{type(mod).__name__} '{mod.name}' is inside the cut but names no "
                             f"csynth'd module (cpp_kernel_name)")
     # The instance's own build parameters, so the spec (and a wrapper's memory sizes) is the one its
     # csynth top was elaborated with, not the class defaults.
-    from waveflow.hw.hw_module import _hw_param_names
-
-    fresh = type(mod)(name=name, sim=Simulation(),
-                      **{n: getattr(mod, n) for n in sorted(_hw_param_names(type(mod)))})
+    fresh = type(mod)(name=name, sim=Simulation(), **build_params(mod))
     spec = composite_top_spec(fresh, width=dw)
     eps = tuple(_unpack_boundary(e) for e in mod.boundary)
     if not getattr(fresh, "rtl_mods", None):
@@ -762,6 +771,23 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
                          axis_nets=tuple(axis_nets), idle_memory_ports=tuple(idle_mem),
                          ep_nets=tuple(net_of.items()), ep_si=tuple(ep_si), xbar_owner=xbar,
                          subs=tuple(subs), maxi_ext=tuple(maxi_ext), dw=dw, aw=aw, idw=idw)
+
+
+def _render_direct_link(si: str, mi: str, dw: int, aw: int, idw: int) -> str:
+    """A direct link's Verilog: master group *si* wired to slave slot *mi*, signal by signal -- the
+    master's outputs drive the slot, the slot's drive back.  A signal the master group lacks (the
+    REGION fields) is tied to zero."""
+    from waveflow.build.axi_xbar import axi_signals
+
+    have = {n for n, _w, _m in axi_signals(dw, aw, idw)}
+    out = [f"  // direct link: {si} -> {mi} (no crossbar)"]
+    for name, _w, m2s in mi_wire_signals(dw, aw, idw):
+        if m2s:
+            out.append(f"  assign {mi}_{name} = {si}_{name};" if name in have
+                       else f"  assign {mi}_{name} = 0;")
+        elif name in have:
+            out.append(f"  assign {si}_{name} = {mi}_{name};")
+    return "\n".join(out)
 
 
 def _view_nets(view) -> list[tuple[str, str]]:
@@ -1092,7 +1118,10 @@ def _render_modules(spec: SystemTopSpec, probes: dict | None = None) -> dict[str
         if net.consumer_keep and not net.producer_keep:
             bodies[drv] += [f"  assign {net.name}_TKEEP = {{{dw // 8}{{1'b1}}}};",
                             f"  assign {net.name}_TSTRB = {{{dw // 8}{{1'b1}}}};"]
-    if cfg is not None:
+    if cfg is not None and cfg.direct:
+        # A direct link (D9): the one master group wired straight to the one slave slot.
+        body.append(_render_direct_link(spec.si[0][0], mi[0], dw, aw, idw))
+    elif cfg is not None:
         body.append(render_xbar_instance(cfg, XBAR_INST, [p for p, _o in spec.si], mi))
     for slot, p in zip(spec.mi, mi):
         out = bodies[slot.group]

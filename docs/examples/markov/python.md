@@ -77,18 +77,21 @@ class MarkovGen(FreeRunMod):
 
     def run_iter(self):
         cmd = yield from self.s_cmd.get_schema(MkvCmd)
-        yield from self.m_u.write(cmd)                   # forward the command
+        yield from self.fwd_phase.produce(self.m_u, cmd)          # forward the command
         n = cmd.n
         u = uniforms(cmd.seed, n)
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
-            yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
-            yield from self.m_u.write(array(U16, u[k0:k0 + c]))   # waits for credit
+            yield from self.chunk_phase.produce(self.m_u, array(U16, u[k0:k0 + c]), c=c,
+                                                first=int(k0 == 0))  # waits for credit
 ```
 
-`m_u` is a credit stream's producer end (a `FramedCreditStreamMasterIF`), so each `write` waits until
-the credit says the chunk fits -- see [The credit link](credit_link.md). The timeout is the HLS body's
-timing: one draw per cycle, plus a fixed cost per chunk measured at RTL (`chunk_overhead = 7`).
+`m_u` is a credit stream's producer end (a `FramedCreditStreamMasterIF`), so each write waits until
+the credit says the chunk fits -- see [The credit link](credit_link.md). Each write is **paced by the
+generator** -- it makes a draw a cycle and writes a word every four -- so it goes through a declared
+timed phase: `produce` begins the write its fitted *lead* after the write before it and holds it for
+its fitted *fill*.  The numbers are measured on the generator alone, in its own harness.
+(The very first command, with no write before it, is a plain `write`.)
 
 ## The chain
 
@@ -106,16 +109,19 @@ class ChainCore(FreeRunMod):
         dst, ones = cmd.dstaddr, 0
         for k0 in range(0, n, CHUNK):
             c = min(CHUNK, n - k0)
+            m = MemWCmd(addr=(dst + k0) // 8, len=get_nwords(U8, word_bw=DW, shape=c), fwd_bursts=0)
+            yield from self.cmd_phase.produce(self.m_x, m, first=int(k0 == 0))
             u = yield from self.s_u.get_array(U16, c)            # credit goes back from here
             xs = chain_golden(u.val, x, cmd.p01, cmd.p10)
             x, ones = int(xs[-1]), ones + int(xs.sum())
-            yield self.timeout((self.chunk_overhead + c * self.proc_ii) * self.clk.period)
             xw = array(U8, xs).serialize(word_bw=DW)
-            yield from self.m_x.write(MemWCmd(addr=(dst + k0) // 8, len=len(xw), fwd_bursts=0))
-            yield from self.m_x.write(np.asarray(xw, dtype=np.uint64))
-        yield from self.m_x.write(MemWCmd(addr=0, len=0, fwd_bursts=1))
-        yield from self.m_x.write(MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
+            yield from self.x_phase.produce(self.m_x, np.asarray(xw, dtype=np.uint64), c=c)
+        yield from self.fin_phase.produce(self.m_x, MemWCmd(addr=0, len=0, fwd_bursts=1))
+        yield from self.resp_phase.produce(self.m_x, MkvResp(n=n, ones=ones, tx_id=cmd.tx_id))
 ```
+
+Every write on `m_x` is likewise paced by the core, each timed from the write before it, with
+numbers fitted on the core alone.
 
 The core talks to the writer in **frames**: per chunk `[MemWCmd(addr, len) | x words]` -- "write these
 words here" -- and at the end `[MemWCmd(len=0, fwd_bursts=1) | MkvResp]` -- "write nothing, then
@@ -147,5 +153,5 @@ The rest of the Python side has a page each:
 
 - [The host](host.md) -- `MarkovHost`, the program that sends the jobs and collects the results, read
   as a recipe for writing a host;
-- [The system](system.md) -- `MarkovSystem`, which builds the kernels, the memory and the host and
+- [The system](system.md) -- `markov_system`, which builds the kernels, the memory and the host and
   wires them, directly or across one bus, step by step.

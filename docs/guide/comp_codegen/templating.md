@@ -72,6 +72,12 @@ literal widths of 32, 64 and 128, with no `template <...>` block on any of them.
 > Reach for `param_supports` when one component should ship several fixed-width tops; reach for a build
 > sweep when the configurations differ by more than `HwParam` values.
 
+`param_supports` belongs to the hook-based codegen (one class emitting several tops in one file). In
+the system flow, where each module instance is its own csynth top built by
+`composite_top_spec(mod)`, one class at several widths is
+[`kernel_name_params`](../flows/parametrization.md#kernel-name-params) instead: each instance's top is
+`<cpp_kernel_name>_<param><value>`.
+
 The mechanism: `_iter_variants(comp_class)` first validates with
 [`validate_param_supports`](../../../waveflow/hw/hw_module.py), then yields the default variant
 (suffix `""`) followed by one instance per `param_supports` entry — each built through the **normal

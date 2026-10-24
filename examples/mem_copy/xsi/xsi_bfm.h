@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #include "xsi_loader.h"
@@ -59,8 +60,12 @@ struct Dut {
 
     void put1(int p, uint32_t b)  { LV v; v.aVal = b & 1u; v.bVal = 0; x.put_value(p, &v); }
     void putW(int p, uint64_t val){ uint64_t c[1] = {val}; putChunks(p, c, 1); }
-    uint32_t get1(int p)          { LV v[LV_MAX]; std::memset(v,0,sizeof(v)); x.get_value(p, v); return v[0].aVal & 1u; }
-    uint64_t getW(int p)          { uint64_t c[1]; getChunks(p, c, 1); return c[0]; }
+    uint32_t get1(int p, bool* xz = nullptr) {
+        LV v[LV_MAX]; std::memset(v,0,sizeof(v)); x.get_value(p, v);
+        if (xz) *xz = (v[0].bVal & 1u) != 0;
+        return v[0].aVal & 1u;
+    }
+    uint64_t getW(int p, uint64_t* xz = nullptr) { uint64_t c[1]; getChunks(p, c, 1, xz); return c[0]; }
 
     /// A wide port as *k* uint64 chunks, chunk 0 the low 64 bits -- the bundles' and the pysim's
     /// wide-word convention.  Bits above the port's width are ignored by XSI; bits of the port
@@ -74,17 +79,35 @@ struct Dut {
         }
         x.put_value(p, v);
     }
-    void getChunks(int p, uint64_t* c, int k) {
+    /// With *xz*, also each chunk's X/Z bits (the logic values' bVal): bits the DUT did not drive,
+    /// which aVal alone reads as 1s.
+    void getChunks(int p, uint64_t* c, int k, uint64_t* xz = nullptr) {
         LV v[LV_MAX];
         std::memset(v, 0, sizeof(v));
         x.get_value(p, v);
-        for (int i = 0; i < k; i++)
-            c[i] = (2 * i + 1 < LV_MAX) ? (((uint64_t)v[2 * i + 1].aVal << 32) | v[2 * i].aVal) : 0;
+        for (int i = 0; i < k; i++) {
+            const bool in = 2 * i + 1 < LV_MAX;
+            c[i] = in ? (((uint64_t)v[2 * i + 1].aVal << 32) | v[2 * i].aVal) : 0;
+            if (xz) xz[i] = in ? (((uint64_t)v[2 * i + 1].bVal << 32) | v[2 * i].bVal) : 0;
+        }
+    }
+
+    /// Stop the run: a handshake accepted a word with X/Z bits.  Read as aVal they are 1s, so the
+    /// run would finish on time with wrong numbers -- how SsrFft at L >= 256 passed with its twiddle
+    /// ROMs never loaded (their .dat files had not reached the run directory).
+    [[noreturn]] static void fatal_xz(const std::string& port, long cycle, long beat, int chunk,
+                                      uint64_t bits, bool valid_xz = false) {
+        std::fprintf(stderr, "FATAL: X/Z on %s in accepted beat %ld at cycle %ld (chunk %d, bits "
+                     "0x%016llx%s): the DUT never drove them -- an uninitialized memory (a ROM whose "
+                     ".dat is not in the run directory) or an unassigned output\n", port.c_str(),
+                     beat, cycle, chunk, (unsigned long long)bits, valid_xz ? "; TVALID X too" : "");
+        std::exit(7);
     }
 };
 
 // ---------------------------------------------------------------------------
-// FlatMemory — the word-addressed arena both m_axi bundles serve out of.
+// FlatMemory — the word-addressed arena both m_axi bundles serve out of.  A word wider than 64 bits
+// is k = bytes_per_word / 8 uint64 chunks, chunk 0 low -- the bundles' and pysim's (n, k) words.
 // ---------------------------------------------------------------------------
 
 /// One memory region tied to a burst bundle: for a load, `bundle`'s words go to `[off, off+len)`
@@ -98,10 +121,14 @@ struct MemSeg {
 };
 
 struct FlatMemory : public XsiSimObj {
-    std::vector<uint64_t> w;
+    std::vector<uint64_t> w;                  ///< nwords * k chunks
     int bpw;                                  ///< bytes per word (MEM_DW/8)
+    int k;                                    ///< uint64 chunks per word
 
-    FlatMemory(size_t nwords, int bytes_per_word) : w(nwords, 0), bpw(bytes_per_word) {}
+    FlatMemory(size_t nwords, int bytes_per_word)
+        : w(nwords * (size_t)chunks_of(bytes_per_word), 0), bpw(bytes_per_word),
+          k(chunks_of(bytes_per_word)) {}
+    static int chunks_of(int bytes_per_word) { return bytes_per_word > 8 ? bytes_per_word / 8 : 1; }
 
     //: Optional file-backed lifecycle.  Empty lists => the memory does nothing at pre/post_sim (the
     //: "do none" case); populated => it seeds / dumps the listed regions.
@@ -110,35 +137,40 @@ struct FlatMemory : public XsiSimObj {
     void pre_sim() override {
         for (const MemSeg& s : load_segs) {
             std::vector<uint64_t> v = BurstBundle::read_words(s.bundle);
-            for (size_t i = 0; i < v.size() && s.off + i < w.size(); ++i) w[s.off + i] = v[i];
+            const size_t o = s.off * (size_t)k;
+            for (size_t i = 0; i < v.size() && o + i < w.size(); ++i) w[o + i] = v[i];
         }
     }
     void post_sim() override {
         // len 0 = to the end of the arena: a whole-arena dump then follows an arena sized at run
         // time (run_param), instead of naming the size it was generated with.
         for (const MemSeg& s : dump_segs) {
-            const size_t len = s.len ? s.len : (s.off < w.size() ? w.size() - s.off : 0);
+            const size_t len = s.len ? s.len : (s.off < size() ? size() - s.off : 0);
             BurstBundle::write_one(s.bundle,
-                std::vector<uint64_t>(w.begin() + s.off, w.begin() + s.off + len));
+                std::vector<uint64_t>(w.begin() + s.off * k, w.begin() + (s.off + len) * k), k);
         }
     }
 
-    uint64_t  operator[](size_t i) const { return w[i]; }
-    uint64_t& operator[](size_t i)       { return w[i]; }
-    size_t    size() const               { return w.size(); }
+    /// Word *i*'s low chunk (the whole word up to 64 bits); word() is all k chunks.
+    uint64_t  operator[](size_t i) const { return w[i * k]; }
+    uint64_t& operator[](size_t i)       { return w[i * k]; }
+    const uint64_t* word(size_t i) const { return &w[i * k]; }
+    size_t    size() const               { return w.size() / (size_t)k; }
     uint64_t  word_index(uint64_t byte_addr) const { return byte_addr / (uint64_t)bpw; }
 
     /// One W-channel beat: byte-strobed read-modify-write.  WSTRB is honoured rather than assumed
     /// all-ones — a partial final beat would otherwise corrupt neighbouring bytes.
-    void write_strobed(uint64_t widx, uint64_t data, uint32_t strb) {
-        uint64_t cur = w[widx];
+    void write_strobed(uint64_t widx, const uint64_t* data, uint64_t strb) {
         for (int b = 0; b < bpw; ++b) {
-            if (strb & (1u << b)) {
-                uint64_t m = 0xFFull << (8 * b);
-                cur = (cur & ~m) | (data & m);
+            if ((strb >> b) & 1u) {
+                uint64_t& cur = w[widx * k + b / 8];
+                const uint64_t m = 0xFFull << (8 * (b % 8));
+                cur = (cur & ~m) | (data[b / 8] & m);
             }
         }
-        w[widx] = cur;
+    }
+    void write_strobed(uint64_t widx, uint64_t data, uint32_t strb) {
+        write_strobed(widx, &data, (uint64_t)strb);
     }
 };
 
@@ -174,29 +206,34 @@ public:
         if (ar_beat_) {
             addrw_ = mem_.word_index(araddr_); len_ = arlen_; beat_ = 0;
             state_ = R_SEND; h_arready_ = 0; h_rvalid_ = 1;
-            h_rdata_ = mem_[addrw_]; h_rlast_ = (len_ == 0) ? 1u : 0u;
+            load(addrw_); h_rlast_ = (len_ == 0) ? 1u : 0u;
         } else if (r_beat_) {
             if (beat_ >= len_) { state_ = AR_IDLE; h_rvalid_ = 0; h_rlast_ = 0; h_arready_ = 1; }
-            else { ++beat_; h_rdata_ = mem_[addrw_ + beat_]; h_rlast_ = (beat_ >= len_) ? 1u : 0u; }
+            else { ++beat_; load(addrw_ + beat_); h_rlast_ = (beat_ >= len_) ? 1u : 0u; }
         }
     }
 
     void drive() override {
         d_.put1(P_arready, h_arready_);
         d_.put1(P_rvalid,  h_rvalid_);
-        d_.putW(P_rdata,   h_rdata_);
+        d_.putChunks(P_rdata, h_rdata_, mem_.k);
         d_.put1(P_rlast,   h_rlast_);
     }
 
     int state() const { return (int)state_; }   ///< for timeout diagnostics
 
 private:
+    void load(uint64_t widx) {
+        const uint64_t* src = mem_.word(widx);
+        for (int i = 0; i < mem_.k && i < KMAX; ++i) h_rdata_[i] = src[i];
+    }
+    static const int KMAX = 32;                  ///< chunks: Dut::LV_MAX logic words, 2048 bits
     Dut& d_; FlatMemory& mem_;
     int P_arvalid, P_arready, P_araddr, P_arlen, P_rvalid, P_rready, P_rdata, P_rlast;
     enum State { AR_IDLE, R_SEND };
     State    state_ = AR_IDLE;
     uint64_t addrw_ = 0; uint32_t len_ = 0, beat_ = 0;
-    uint32_t h_arready_ = 1, h_rvalid_ = 0, h_rlast_ = 0; uint64_t h_rdata_ = 0;
+    uint32_t h_arready_ = 1, h_rvalid_ = 0, h_rlast_ = 0; uint64_t h_rdata_[KMAX] = {0};
     uint32_t arvalid_ = 0, rready_ = 0, arlen_ = 0; uint64_t araddr_ = 0;
     bool     ar_beat_ = false, r_beat_ = false;
 };
@@ -208,7 +245,8 @@ private:
 
 class AxiMmWriteSlave : public XsiSimObj {
 public:
-    AxiMmWriteSlave(Dut& d, const std::string& prefix, FlatMemory& mem) : d_(d), mem_(mem) {
+    AxiMmWriteSlave(Dut& d, const std::string& prefix, FlatMemory& mem)
+        : d_(d), mem_(mem), name_(prefix) {
         P_awvalid = d.port((prefix + "_AWVALID").c_str());
         P_awready = d.port((prefix + "_AWREADY").c_str());
         P_awaddr  = d.port((prefix + "_AWADDR").c_str());
@@ -227,8 +265,8 @@ public:
         awaddr_  = d_.getW(P_awaddr);
         awlen_   = (uint32_t)(d_.getW(P_awlen) & 0xFF);
         wvalid_  = d_.get1(P_wvalid);
-        wdata_   = d_.getW(P_wdata);
-        wstrb_   = (uint32_t)(d_.getW(P_wstrb) & 0xFF);
+        d_.getChunks(P_wdata, wdata_, mem_.k, wdata_xz_);
+        wstrb_   = d_.getW(P_wstrb);
         wlast_   = d_.get1(P_wlast);
         bready_  = d_.get1(P_bready);
         aw_beat_ = (state_ == AW_IDLE) && awvalid_ && h_awready_;
@@ -241,6 +279,13 @@ public:
             addrw_ = mem_.word_index(awaddr_); len_ = awlen_; beat_ = 0;
             state_ = W_RECV; h_awready_ = 0; h_wready_ = 1;
         } else if (w_beat_) {
+            for (int c = 0; c < mem_.k; ++c) {      // X/Z only matters in the bytes the strobe writes
+                uint64_t lanes = 0;
+                for (int b = 0; b < 8 && 8 * c + b < mem_.bpw; ++b)
+                    if ((wstrb_ >> (8 * c + b)) & 1u) lanes |= 0xFFull << (8 * b);
+                if ((wdata_xz_[c] & lanes) && !allow_xz)
+                    Dut::fatal_xz(name_ + "_WDATA", -1, w_count_, c, wdata_xz_[c] & lanes);
+            }
             mem_.write_strobed(addrw_ + beat_, wdata_, wstrb_);
             ++w_count_;
             if (wlast_) { state_ = B_RESP; h_wready_ = 0; h_bvalid_ = 1; }
@@ -257,6 +302,9 @@ public:
         d_.put1(P_bvalid,  h_bvalid_);
     }
 
+    //: Accept written bytes with X/Z bits instead of stopping the run (see AxisSlave::allow_xz).
+    bool allow_xz = false;
+
     int  w_count() const { return w_count_; }   ///< total W beats accepted (a progress metric)
     int  state() const   { return (int)state_; }
     /// True once a B response has been consummated.  A write is not observable until B: "all the
@@ -265,7 +313,10 @@ public:
     bool saw_b() const   { return saw_b_; }
 
 private:
+    static const int KMAX = 32;                  ///< chunks: Dut::LV_MAX logic words, 2048 bits
     Dut& d_; FlatMemory& mem_;
+    std::string name_;
+    uint64_t wdata_xz_[KMAX] = {0};
     int P_awvalid, P_awready, P_awaddr, P_awlen, P_wvalid, P_wready, P_wdata, P_wstrb, P_wlast,
         P_bvalid, P_bready;
     enum State { AW_IDLE, W_RECV, B_RESP };
@@ -274,8 +325,8 @@ private:
     int      w_count_ = 0;
     bool     saw_b_ = false;
     uint32_t h_awready_ = 1, h_wready_ = 0, h_bvalid_ = 0;
-    uint32_t awvalid_ = 0, wvalid_ = 0, wstrb_ = 0, wlast_ = 0, bready_ = 0, awlen_ = 0;
-    uint64_t awaddr_ = 0, wdata_ = 0;
+    uint32_t awvalid_ = 0, wvalid_ = 0, wlast_ = 0, bready_ = 0, awlen_ = 0;
+    uint64_t awaddr_ = 0, wstrb_ = 0, wdata_[KMAX] = {0};
     bool     aw_beat_ = false, w_beat_ = false, b_beat_ = false;
 };
 
@@ -309,6 +360,16 @@ private:
 /// WIDE PORTS.  A port wider than 64 bits takes *chunks* = ceil(W/64) uint64 per beat (low chunk
 /// first), in the ctor vector and in the bundle alike; the generator passes *chunks* only when it is
 /// not 1, so every narrower harness is unchanged.  A bundle whose word width disagrees is refused.
+/// A stand-in's hostile policy (plans/unit_harness.md Stage 5): is *cycle* one it stalls on?  A seeded
+/// hash of the cycle number -- *pct* percent of cycles, deterministic, and the same function as
+/// waveflow.simulation.policy.stalled() in Python.  pct <= 0: never.
+inline bool policy_stalled(uint32_t seed, long cycle, int pct) {
+    if (pct <= 0) return false;
+    uint32_t x = seed * 2654435761u ^ (uint32_t)cycle * 2246822519u;
+    x ^= x >> 15; x *= 2654435761u; x ^= x >> 13; x *= 3266489917u; x ^= x >> 16;
+    return (int)(x % 100u) < pct;
+}
+
 class AxisMaster : public XsiSimObj {
 public:
     AxisMaster(Dut& d, const std::string& prefix, std::vector<uint64_t> words, int chunks = 1)
@@ -359,7 +420,19 @@ public:
         if (!accept_bundle.empty()) BurstBundle::write_capture(accept_bundle, acc_words_, acc_cycles_, k_);
     }
 
+    //: Stage 5 policy: on a stalled cycle the next word is not yet presented (TVALID low).  A word
+    //: already presented stays up until it is taken -- AXI-Stream allows nothing else.  0 = never.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
     void update() override {
+        const bool hold = h_valid_ && !beat_;       // presented, not taken: TVALID stays
+        advance();
+        if (stall_pct > 0 && !hold && gap_left_ == 0 && widx_ < nwords())
+            h_valid_ = policy_stalled((uint32_t)stall_seed, cycle_, stall_pct) ? 0u : 1u;
+    }
+
+    void advance() {
         ++cycle_;                                   // 1-based, the same count AxisSlave keeps
         if (gap_left_ > 0) {
             if (--gap_left_ == 0) h_valid_ = (widx_ < nwords()) ? 1u : 0u;
@@ -452,7 +525,7 @@ private:
 class AxisSlave : public XsiSimObj {
 public:
     AxisSlave(Dut& d, const std::string& prefix, int chunks = 1)
-        : d_(d), k_(chunks < 1 ? 1 : chunks), data_(k_, 0) {
+        : d_(d), k_(chunks < 1 ? 1 : chunks), data_(k_, 0), xz_(k_, 0), name_(prefix) {
         P_data  = d.port((prefix + "_TDATA").c_str());
         P_valid = d.port((prefix + "_TVALID").c_str());
         P_ready = d.port((prefix + "_TREADY").c_str());
@@ -464,8 +537,8 @@ public:
     }
 
     void sample() override {
-        valid_ = d_.get1(P_valid);
-        d_.getChunks(P_data, data_.data(), k_);
+        valid_ = d_.get1(P_valid, &valid_xz_);
+        d_.getChunks(P_data, data_.data(), k_, xz_.data());
         last_  = (P_last >= 0) ? d_.get1(P_last) : 0u;
         beat_  = (valid_ && d_ready_);
     }
@@ -481,20 +554,32 @@ public:
     void update() override {
         ++cycle_;                                   // 1-based: this is the cycle now executing
         if (beat_) {
+            for (int i = 0; i < k_; ++i)
+                if (xz_[i] && !allow_xz) Dut::fatal_xz(name_ + "_TDATA", cycle_, (long)count(), i, xz_[i], valid_xz_);
             words_.insert(words_.end(), data_.begin(), data_.end()); beat_cycles_.push_back(cycle_);
             if (P_last >= 0 && last_) bounds_.push_back((uint64_t)count());
         }
     }
 
     void drive() override {
-        d_ready_ = (h_ready_ && cycle_ >= ready_from) ? 1u : 0u;
+        d_ready_ = (h_ready_ && cycle_ >= ready_from
+                    && !policy_stalled((uint32_t)stall_seed, cycle_, stall_pct)) ? 1u : 0u;
         d_.put1(P_ready, d_ready_);
     }
+
+    //: Stage 5 policy: TREADY low on stalled cycles (back-pressure).  0 = always ready.
+    int stall_pct = 0;
+    int stall_seed = 0;
 
     //: Optional: hold TREADY low until this cycle (1-based, the sink's own count).  Default 0 = ready
     //: from the start, exactly the always-ready sink every existing gate uses.  Exists so a gate can
     //: fill an upstream FIFO on purpose and measure the back-pressure (plans/mm_slave_adaptor.md).
     long ready_from = 0;
+
+    //: Accept beats whose data has X/Z bits instead of stopping the run (Dut::fatal_xz).  For a design
+    //: that reads memory before writing it ON PURPOSE -- a negative control, a startup transient its
+    //: gates account for: X in simulation, the memory's initial contents on the device.
+    bool allow_xz = false;
 
     //: Optional: if set, post_sim dumps the collected words + their arrival cycles (a capture bundle),
     //: so Python checks correctness AND completion timing off-line rather than in hand-written C++.
@@ -534,6 +619,9 @@ private:
     Dut& d_;
     int k_;                             // uint64 chunks per beat; declared before data_ (init order)
     std::vector<uint64_t> data_;        // this cycle's sampled beat, k_ chunks
+    std::vector<uint64_t> xz_;          // ...and its X/Z bits per chunk
+    bool valid_xz_ = false;
+    std::string name_;
     int P_data, P_valid, P_ready, P_last;
     std::vector<uint64_t> words_;
     std::vector<uint64_t> bounds_;
@@ -541,6 +629,190 @@ private:
     long cycle_ = 0;
     uint32_t h_ready_ = 1, d_ready_ = 1, valid_ = 0, last_ = 0;
     bool beat_ = false;
+};
+
+// ---------------------------------------------------------------------------
+// CreditSink / CreditSource — the two ends of a credit stream a harness stands in for
+// (waveflow/simulation/credit_tb.py; plans/unit_harness.md D3).  A credit stream is two AXIS ports:
+// data forward, credit back.  Credit values are CUMULATIVE words consumed, 16 bits, compared modulo
+// 2^16 -- the rules of credit_stream_hls.h's Producer / Consumer.
+// ---------------------------------------------------------------------------
+
+/// The consumer end, facing a kernel that PRODUCES into a credit stream: always ready on data,
+/// recording every word (and the frame bounds when the port is framed), and reporting the cumulative
+/// count once crd_every words are unreported -- the newest count, one beat at a time.
+class CreditSink : public XsiSimObj {
+public:
+    /// *ports* is the port group {data, credit} -- the two AXIS ports one credit stream is.
+    CreditSink(Dut& d, std::initializer_list<const char*> ports, int crd_every, int chunks = 1)
+        : d_(d), every_(crd_every < 1 ? 1 : crd_every), k_(chunks < 1 ? 1 : chunks), data_(k_, 0) {
+        const std::string fwd = ports.begin()[0], crd = ports.begin()[1];
+        F_data  = d.port((fwd + "_TDATA").c_str());
+        F_valid = d.port((fwd + "_TVALID").c_str());
+        F_ready = d.port((fwd + "_TREADY").c_str());
+        F_last  = d.port_opt((fwd + "_TLAST").c_str());
+        C_data  = d.port((crd + "_TDATA").c_str());
+        C_valid = d.port((crd + "_TVALID").c_str());
+        C_ready = d.port((crd + "_TREADY").c_str());
+        C_last  = d.port_opt((crd + "_TLAST").c_str());
+    }
+
+    std::string out_bundle;
+    //: Stage 5 policy: TREADY low on stalled cycles, and each credit report held *credit_delay*
+    //: cycles after it is due (starved credit).  0 = neither.
+    int stall_pct = 0;
+    int stall_seed = 0;
+    int credit_delay = 0;
+
+    void sample() override {
+        fbeat_ = d_.get1(F_valid) != 0 && f_ready_;
+        d_.getChunks(F_data, data_.data(), k_);
+        last_ = (F_last >= 0) ? d_.get1(F_last) : 0u;
+        cbeat_ = c_valid_ && d_.get1(C_ready);
+    }
+
+    void update() override {
+        ++cycle_;
+        if (cbeat_) c_valid_ = 0u;                        // the report was taken
+        if (fbeat_) {
+            words_.insert(words_.end(), data_.begin(), data_.end());
+            cycles_.push_back(cycle_);
+            ++consumed_;
+            if (F_last >= 0 && last_) bounds_.push_back((uint64_t)(words_.size() / (size_t)k_));
+        }
+        if (!c_valid_ && due_ < 0 && (uint16_t)(consumed_ - offered_) >= (uint16_t)every_)
+            due_ = cycle_ + credit_delay;
+        if (!c_valid_ && due_ >= 0 && cycle_ >= due_) {
+            offered_ = consumed_;                         // the newest cumulative count
+            c_valid_ = 1u;
+            due_ = -1;
+        }
+    }
+
+    void drive() override {
+        f_ready_ = !policy_stalled((uint32_t)stall_seed, cycle_, stall_pct);
+        d_.put1(F_ready, f_ready_ ? 1u : 0u);
+        d_.putW(C_data, (uint64_t)(uint16_t)offered_);
+        d_.put1(C_valid, c_valid_);
+        if (C_last >= 0) d_.put1(C_last, 1u);
+    }
+
+    void post_sim() override {
+        if (out_bundle.empty()) return;
+        if (F_last >= 0) {
+            std::vector<uint64_t> b = bounds_;
+            const uint64_t n = words_.size() / (size_t)k_;
+            if (b.empty() || b.back() != n) b.push_back(n);
+            BurstBundle::write_capture(out_bundle, words_, cycles_, b, k_);
+        } else {
+            BurstBundle::write_capture(out_bundle, words_, cycles_, k_);
+        }
+    }
+
+private:
+    Dut& d_;
+    int every_, k_;
+    std::vector<uint64_t> data_, words_, bounds_;
+    std::vector<long> cycles_;
+    int F_data, F_valid, F_ready, F_last, C_data, C_valid, C_ready, C_last;
+    uint32_t consumed_ = 0, offered_ = 0, c_valid_ = 0u, last_ = 0u;
+    bool fbeat_ = false, cbeat_ = false, f_ready_ = true;
+    long cycle_ = 0, due_ = -1;
+};
+
+/// The producer end, facing a kernel that CONSUMES a credit stream: plays in_bundle's bursts, each
+/// started only once the window -- depth - resp_words - outstanding -- has room for all of it, and
+/// always ready for the credit counts the kernel reports.
+class CreditSource : public XsiSimObj {
+public:
+    /// *ports* is the port group {data, credit}.
+    CreditSource(Dut& d, std::initializer_list<const char*> ports, int depth, int resp_words,
+                 int chunks = 1)
+        : d_(d), window_(depth - resp_words), k_(chunks < 1 ? 1 : chunks) {
+        const std::string fwd = ports.begin()[0], crd = ports.begin()[1];
+        F_data  = d.port((fwd + "_TDATA").c_str());
+        F_valid = d.port((fwd + "_TVALID").c_str());
+        F_ready = d.port((fwd + "_TREADY").c_str());
+        F_last  = d.port_opt((fwd + "_TLAST").c_str());
+        F_keep  = d.port_opt((fwd + "_TKEEP").c_str());
+        F_strb  = d.port_opt((fwd + "_TSTRB").c_str());
+        C_data  = d.port((crd + "_TDATA").c_str());
+        C_valid = d.port((crd + "_TVALID").c_str());
+        C_ready = d.port((crd + "_TREADY").c_str());
+    }
+
+    std::string in_bundle;
+
+    void pre_sim() override {
+        if (in_bundle.empty()) return;
+        words_ = BurstBundle::read_words(in_bundle);
+        bounds_ = BurstBundle::read_bounds(in_bundle);
+        if (bounds_.empty()) bounds_.assign(1, (uint64_t)nwords());
+    }
+
+    void sample() override {
+        fbeat_ = valid_ && d_.get1(F_ready);
+        if (d_.get1(C_valid)) acked_ = (uint32_t)(d_.getW(C_data) & 0xFFFFu);
+    }
+
+    //: Stage 5 policy: on a stalled cycle the next word is not yet presented; a presented one stays.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
+    void update() override {
+        const bool hold = valid_ && !fbeat_;
+        ++cycle_;
+        if (fbeat_) {
+            ++widx_;
+            ++written_;
+            if (burst_ < (int)bounds_.size() && (uint64_t)widx_ == bounds_[burst_]) ++burst_;
+        }
+        // Start the next burst only when all of it fits: room = window - outstanding.
+        if (widx_ < nwords()) {
+            const bool starting = burst_ == 0 ? widx_ == 0 : (uint64_t)widx_ == bounds_[burst_ - 1];
+            if (starting) {
+                const int len = (int)(bounds_[burst_] - (uint64_t)widx_);
+                const int outstanding = (int)(uint16_t)(written_ - acked_);
+                valid_ = (window_ - outstanding >= len);
+            } else {
+                valid_ = true;                            // inside an admitted burst
+            }
+        } else {
+            valid_ = false;
+        }
+        if (stall_pct > 0 && !hold && valid_ && policy_stalled((uint32_t)stall_seed, cycle_, stall_pct))
+            valid_ = false;
+    }
+
+    void drive() override {
+        if (widx_ < nwords()) d_.putChunks(F_data, &words_[(size_t)widx_ * k_], k_);
+        d_.put1(F_valid, valid_ ? 1u : 0u);
+        if (F_last >= 0) d_.put1(F_last, is_last(widx_) ? 1u : 0u);
+        if (F_keep >= 0 || F_strb >= 0) {
+            std::vector<uint64_t> ones(k_, ~(uint64_t)0);
+            if (F_keep >= 0) d_.putChunks(F_keep, ones.data(), k_);
+            if (F_strb >= 0) d_.putChunks(F_strb, ones.data(), k_);
+        }
+        d_.put1(C_ready, 1u);
+    }
+
+    bool done() const { return widx_ >= nwords(); }
+
+private:
+    int nwords() const { return (int)(words_.size() / (size_t)k_); }
+    bool is_last(int i) const {
+        for (uint64_t b : bounds_) if ((uint64_t)i + 1 == b) return true;
+        return false;
+    }
+
+    Dut& d_;
+    int window_, k_;
+    std::vector<uint64_t> words_, bounds_;
+    int F_data, F_valid, F_ready, F_last, F_keep, F_strb, C_data, C_valid, C_ready;
+    int widx_ = 0, burst_ = 0;
+    uint32_t written_ = 0, acked_ = 0;
+    bool valid_ = false, fbeat_ = false;
+    long cycle_ = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -626,6 +898,10 @@ public:
         ops_.push_back(std::move(o)); return ops_.size() - 1;
     }
 
+    //: Stage 5 policy (late answers): BREADY / RREADY low on stalled cycles.  0 = always ready.
+    int stall_pct = 0;
+    int stall_seed = 0;
+
     bool idle() const {
         if (!overlap_) return cur_ >= ops_.size();
         return !wact_ && !ract_ && next_of(true, wcur_) >= ops_.size() &&
@@ -646,9 +922,9 @@ public:
         rresp_ = (P_rresp >= 0) ? (uint32_t)(d_.getW(P_rresp) & 3) : 0;
         aw_beat_ = h_awvalid_ && awready_;
         w_beat_  = h_wvalid_ && wready_;
-        b_beat_  = bvalid_ && h_bready_;
+        b_beat_  = bvalid_ && d_bready_;
         ar_beat_ = h_arvalid_ && arready_;
-        r_beat_  = rvalid_ && h_rready_;
+        r_beat_  = rvalid_ && d_rready_;
     }
 
     void update() override {
@@ -697,11 +973,15 @@ public:
         const uint64_t strb_all = (bpw_ >= 64) ? ~(uint64_t)0 : ((1ull << bpw_) - 1);
         const Op* so = overlap_ ? wo : o;      // the default model drives WSTRB from any active op
         if (P_wstrb >= 0) d_.putW(P_wstrb, (so ? so->wstrb : ~(uint64_t)0) & strb_all);
-        d_.put1(P_bready, h_bready_);
+        // Stage 5 policy: the master takes its answers late -- BREADY / RREADY low on stalled cycles.
+        const bool st = policy_stalled((uint32_t)stall_seed, cycle_, stall_pct);
+        d_bready_ = h_bready_ && !st;
+        d_rready_ = h_rready_ && !st;
+        d_.put1(P_bready, d_bready_);
         d_.putW(P_araddr, ro ? ro->addr : 0);
         d_.putW(P_arlen, ro ? ro->nwords - 1 : 0);
         d_.put1(P_arvalid, h_arvalid_);
-        d_.put1(P_rready, h_rready_);
+        d_.put1(P_rready, d_rready_);
         if (P_awid >= 0) d_.putW(P_awid, id_);
         if (P_arid >= 0) d_.putW(P_arid, id_);
         if (overlap_) {
@@ -796,10 +1076,72 @@ private:
         P_awcache, P_arcache;
     std::vector<int> zero_;
     uint32_t h_awvalid_ = 0, h_wvalid_ = 0, h_bready_ = 1, h_arvalid_ = 0, h_rready_ = 1;
+    uint32_t d_bready_ = 1, d_rready_ = 1;   ///< as driven (the Stage 5 policy may hold them low)
     uint32_t awready_ = 0, wready_ = 0, bvalid_ = 0, bresp_ = 0, arready_ = 0, rvalid_ = 0,
              rlast_ = 0, rresp_ = 0;
     uint64_t rdata_ = 0;
     bool aw_beat_ = false, w_beat_ = false, b_beat_ = false, ar_beat_ = false, r_beat_ = false;
+};
+
+// ---------------------------------------------------------------------------
+// MmScript — a scripted AXI-MM master: the testbench stand-in for a module's memory-mapped slave port
+// (waveflow/simulation/mm_tb.py; plans/unit_harness.md Stage 4c).  The system's host by role: plays
+// <scenario>/vectors/script -- one burst per op, [kind (1 write, 0 read), byte addr, nwords,
+// not_before, data...] -- with one read and one write outstanding (overlap_rw), each channel in script
+// order.  Records each read's data (<trace_dir>/rdata, one burst per read) and each op's [t_start,
+// t_end] cycles (<trace_dir>_timing, one burst per op).
+// ---------------------------------------------------------------------------
+
+class MmScript : public AxiMmMaster {
+public:
+    MmScript(Dut& d, const char* prefix, int bytes_per_word)
+        : AxiMmMaster(d, prefix, bytes_per_word, 0, true) {}
+
+    std::string scenario, trace_dir;
+
+    void pre_sim() override {
+        if (scenario.empty()) { std::fprintf(stderr, "FATAL: MmScript: no scenario\n"); std::exit(1); }
+        const std::string script = scenario + "/vectors/script";
+        const std::vector<uint64_t> w = BurstBundle::read_words(script);
+        const std::vector<uint64_t> b = BurstBundle::read_bounds(script);
+        uint64_t lo = 0;
+        for (uint64_t hi : b) {
+            const bool wr = w[lo] != 0;
+            const uint64_t addr = w[lo + 1];
+            const uint32_t n = (uint32_t)w[lo + 2];
+            const long nb = (long)w[lo + 3];
+            if (wr) write(addr, std::vector<uint64_t>(w.begin() + (long)lo + 4, w.begin() + (long)hi), nb);
+            else read(addr, n, nb);
+            lo = hi;
+        }
+    }
+
+    bool done() const {
+        for (size_t i = 0; i < nops(); ++i) if (!op(i).done()) return false;
+        return true;
+    }
+
+    void post_sim() override {
+        if (trace_dir.empty()) return;
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                if (op(i).write) continue;
+                words.insert(words.end(), op(i).rdata.begin(), op(i).rdata.end());
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "/rdata", words, bounds);
+        }
+        {
+            std::vector<uint64_t> words, bounds;
+            for (size_t i = 0; i < nops(); ++i) {
+                words.push_back((uint64_t)op(i).t_start);
+                words.push_back((uint64_t)op(i).t_end);
+                bounds.push_back(words.size());
+            }
+            BurstBundle::write(trace_dir + "_timing", words, bounds);
+        }
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -855,8 +1197,13 @@ public:
         }
     }
 
-    void clock_low()  { d_.put1(P_clk_, 0); xsi_.run(10); }
-    void clock_high() { d_.put1(P_clk_, 1); xsi_.run(10); }
+    /// A 10 ns clock (the time unit is the kernel's 1 ps precision).  Vitis's own RTL has no delays,
+    /// so any period simulates it alike; vendor cores do not -- a float multiplier's DSP48E1 model
+    /// settles ~100 ps after the edge, and a 20 ps clock (this was run(10)) sampled it unsettled:
+    /// garbage products with no error (waveflow.build.hls_ip).
+    void clock_low()  { d_.put1(P_clk_, 0); xsi_.run(HALF_PERIOD_PS); }
+    void clock_high() { d_.put1(P_clk_, 1); xsi_.run(HALF_PERIOD_PS); }
+    static constexpr int HALF_PERIOD_PS = 5000;
 
     /// Hold reset for *cycles* clocks with *drive* presenting held values throughout, then release.
     template <typename DriveFn>

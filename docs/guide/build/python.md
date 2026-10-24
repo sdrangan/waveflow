@@ -207,7 +207,7 @@ for w in WIDTHS:
 The event names are the ones the module's Python body logs.  **Measure the span the RTL
 measures.**  The cosim report counts one kernel call, so the events bracket the whole body, not
 just its sample loop.  Otherwise a timing parameter silently absorbs the difference -- see the
-example's [calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-was-calibrated).  The result's format is the one
+example's [calibration story](../../examples/stream_inband/05_cosim_timing.md#how-the-model-used-to-be-calibrated).  The result's format is the one
 the framework's `ValidateTimingStep` compares with the co-simulated count -- see
 [Vitis Pattern](./vitis.md#timing-pysim-against-cosim).
 

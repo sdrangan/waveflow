@@ -1,7 +1,7 @@
 ---
 title: Toward the board
-parent: Hardware modules and Flows
-nav_order: 4
+parent: Modules
+nav_order: 6
 audience: python
 summary: "What follows either simulation flow when a system goes to a board: its parts packaged as Vivado IP, one per device, and wired in a block design from the same spec as the XSI system top. Packaging and synthesis mode are independent choices: a block design of device IPs can be synthesized globally (one run, best area, fastest cold build: the default for a bitstream) or per device (each part's number its own, an incremental change cheap: for design-space exploration). Built through a validated block design; the processor, the board and the bitstream come next."
 ---

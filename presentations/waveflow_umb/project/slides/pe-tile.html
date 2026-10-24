@@ -1,0 +1,39 @@
+<section id="pe-tile" style="background:#F7F5FA;color:#2A0D45;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 160px;display:flex;flex-direction:column;gap:18px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#57068C;font-weight:600">SALSA · Processing element</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.1">A PE: one engine, many tasklets</h2>
+<p style="font-size:24px;color:#423A4F;align-self:center">From the NoC: packets tagged with a task_id</p>
+<x-shape kind="arrow-down" style="width:30px;height:44px;background:#A99BB8;align-self:center"></x-shape>
+<div style="background:#EEE6F3;border:3px solid #57068C;border-radius:20px;padding:28px;display:flex;flex-direction:row;gap:16px;align-items:center">
+<div style="flex:1;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:28px;font-weight:600">Input queue</h3>
+<p style="font-size:24px;color:#423A4F">First in, first out</p>
+<p style="font-size:24px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:8px;padding:8px 12px">task 3 · IQ data</p>
+<p style="font-size:24px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:8px;padding:8px 12px">task 1 · IQ data</p>
+<p style="font-size:24px;background:#FCFBFE;border:2px solid #9A8DA8;border-radius:8px;padding:8px 12px">task 3 · IQ data</p>
+</div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1.25;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:28px;font-weight:600">Tasklet memory</h3>
+<p style="font-size:24px;color:#423A4F">Written by the host</p>
+<p style="font-size:24px;font-family:'JetBrains Mono', 'Courier New', monospace;color:#57068C">task 1 → B · task 3 → A</p>
+<p style="font-size:24px;background:#57068C;color:#F7F5FA;border-radius:8px;padding:8px 12px">A · code · next hop PE 7</p>
+<p style="font-size:24px;background:#FCFBFE;border:2px solid #57068C;border-radius:8px;padding:8px 12px">B · code · next hop PE 2</p>
+<p style="font-size:24px;background:#FCFBFE;border:2px dashed #9A8DA8;border-radius:8px;padding:8px 12px;color:#6E6478">C · free slot</p>
+</div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:1;background:#2A0D45;color:#F7F5FA;border-radius:14px;padding:28px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:28px;font-weight:600">Specialized engine</h3>
+<p style="font-size:24px;color:#D9CCE5">FFT, systolic array or vector unit</p>
+<p style="font-size:24px;color:#F0A35E">Now: tasklet A on a task 3 packet</p>
+</div>
+<x-shape kind="arrow-right" style="width:48px;height:30px;background:#A99BB8"></x-shape>
+<div style="flex:0.8;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:28px;font-weight:600">Output</h3>
+<p style="font-size:24px;color:#423A4F">Same task_id, sent to the tasklet's next hop</p>
+</div>
+</div>
+<p style="font-size:24px;color:#423A4F;align-self:center">To the NoC: the next PE's input queue</p>
+<p style="position:absolute;left:128px;bottom:64px;width:1664px;font-size:24px;color:#6E6478">Design options: tag in the header vs. task→tasklet map · FIFO vs. priority queues · tasklet granularity</p>
+<img src="/_blob/f9b1959454cffb1de7e0b2b971324f9e" alt="NYU Wireless" style="position:absolute;left:1592px;top:44px;width:200px;height:55px;object-fit:contain">
+<aside>Each PE holds several tasklets. A packet carries its task_id; the PE's task-to-tasklet map picks the tasklet, whose code also names the next hop. One tasklet does a PE's whole share of a task: for OFDM, the FFTs of all antennas in one packet. Queues are first-in, first-out today; priority queues are an option to explore.</aside>
+</section>

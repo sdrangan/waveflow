@@ -36,9 +36,12 @@ MANIFEST = (
         for m in (
             "__init__", "formats", "lanes", "message", "build", "matmul", "systolic", "cost",
             "cg", "cg_vector", "cg_cost",
+            # the systolic engine and its memory wrapper (plans/systolic_characterization.md, Part B)
+            "systolic_engine", "systolic_engine_mem",
         )
     ),
     *(f"waveflow/build/{h}.h" for h in ("wf_lanes", "wf_matrix_io", "wf_linalg_msg", *_TASKS)),
+    *(f"waveflow/build/systolic_engine_{t}_task.h" for t in ("rx", "load", "core", "store", "mem")),
     f"{PLATFORM}/platform.json",
     f"{PLATFORM}/provenance.json",
     *(f"{PLATFORM}/models/{t}/params.json" for t in _TASKS),
@@ -46,6 +49,9 @@ MANIFEST = (
     f"{PLATFORM}/models/cg_vector_unit_channels/params.json",
     f"{PLATFORM}/components/systolic_unit/params.json",
     f"{PLATFORM}/components/cg_vector_unit/params.json",
+    # the systolic engine core's calibrated timed phase, one record per configuration (by identity)
+    *(p.relative_to(ROOT).as_posix()
+      for p in (ROOT / "waveflow/linalg/calib/modules").glob("engine_core-*/**/*") if p.is_file()),
 )  # fmt: skip
 
 #: What the scan allows in code, and why.
@@ -145,8 +151,8 @@ def _code(path: Path) -> str:
 def test_the_new_files_carry_none_of_the_examples_constants():
     bad = []
     for name in MANIFEST:
-        if name.startswith(PLATFORM):
-            continue  # the packaged platform's data: it names the part it was measured on
+        if name.startswith(PLATFORM) or "/calib/modules/" in name:
+            continue  # measured data (a platform, a calibration record): it names its part
         code = _code(ROOT / name)
         for allowed in ALLOWED:
             code = code.replace(_tokens(allowed), "")

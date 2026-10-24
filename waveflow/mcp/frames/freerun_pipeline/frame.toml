@@ -20,14 +20,12 @@ the only RTL check."""
 pattern = "command_response"
 shape = "a composite of free-running tasks streaming to each other, reading and writing memory through MemRStream / MemWStream"
 flow = "free-running: pysim from the testbench graph, DUT and testbench codegen, csynth, the generated XSI testbench at RTL with an exact cycle gate"
-choose_when = """one accelerator built from several stages that stream to each other, \
-reading its input from memory and writing its results to memory, started by a \
-command stream -- with no host program on a bus.  For several kernels or a host \
-on a bus, choose bus_system."""
+choose_when = """one accelerator built from several stages that stream to each other AND read or write memory -- its input fetched and its results stored through the MemRStream / MemWStream adaptors, started by a command stream, with no host program on a bus.  The deciding question against stream_pipeline is memory: stages whose input and outputs are all streams, with no memory adaptor, are stream_pipeline.  For several kernels or a host on a bus, choose bus_system."""
 
 # Primary first: memcpy is the whole flow with no compute; interleaver adds
-# compute stages and on-chip random access (stream-of-blocks).
-reference_examples = ["memcpy", "interleaver"]
+# compute stages and on-chip random access (stream-of-blocks); firblock adds
+# state carried across firings.
+reference_examples = ["memcpy", "interleaver", "firblock"]
 
 [docs]
 specification = "frame.md"

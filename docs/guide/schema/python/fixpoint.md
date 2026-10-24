@@ -115,6 +115,28 @@ q.element_type.cpp_type   # 'ap_fixed<13, 9, AP_TRN, AP_WRAP>'
 to_real(q)                # array([ 0.3125, -0.3125,  0.    ])
 ```
 
+## Magnitude
+
+`abs(a)` in [`waveflow/hw/fixpoint.py`](../../../../waveflow/hw/fixpoint.py) (also the
+builtin `abs()` on a `DataArray`) is the full-precision magnitude:
+
+- **Result format.** A signed `<W, I>` gives `<W+1, I+1>`, the type of `ap_fixed`
+  unary minus, so `|min|` fits. An unsigned format is returned unchanged.
+- **Matching C++.** `ap_fixed<W+1, I+1> m = (a < 0) ? ap_fixed<W+1, I+1>(-a) : ap_fixed<W+1, I+1>(a);`
+  -- checked bit for bit in Vitis C-simulation by `test_ap_fixed_abs_kernel_csim_bit_exact`
+  in [`tests/hw/test_fixpoint_vitis.py`](../../../../tests/hw/test_fixpoint_vitis.py).
+- **Back to the input width.** `quantize(abs(a), T)`; with `AP_SAT`, `|min|` saturates to
+  the maximum. Vitis `hls::abs` on `ap_fixed<W, I>` keeps the width and returns 0 for
+  `min`, so it is a different op.
+
+```python
+from waveflow.hw.fixpoint import abs as fabs
+
+m = fabs(from_real([-8.0, 3.5], Q8_4))
+m.element_type.cpp_type   # 'ap_fixed<9, 5, AP_TRN, AP_WRAP>'
+to_real(m)                # array([8. , 3.5])
+```
+
 ## Integer-backed storage and the real view
 
 Storage is the **stored integer** (decision: integer-backed). A scalar `FixedField`'s

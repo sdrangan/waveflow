@@ -88,10 +88,34 @@ once by 2. Against the RTL:
 tasks, plus the vectorized arithmetic: 0.1 s for four frames at `L = 64`, 1.6 s at `L = 1024`. The
 XSI run of the same four frames costs a 1.5-2 minute csynth and 10-20 s of simulation.
 
+## The flat pysim: one process for the FFT
+
+`SsrFft(pysim="flat")` keeps the children -- their ports, their wrappers, their place in the
+generated top -- but makes them passive, and runs one process for the whole FFT: read a frame at the
+boundary, apply every task's model function in task order, write the frame at the boundary. The
+internal edges, and the unpack and repack at each of them, are gone.
+
+The timing is the per-task chain's, not an approximation of it. Each hop of the chain starts its
+write `lat` after its frame's first word, and the next task sees that first word one cycle after the
+write starts, so the chain's first-word-in to output-start latency is `sum(lat + 1)` over every task
+but the last, plus the last task's `lat`. The flat process starts its write at exactly that offset.
+`tests/dsp/ssr_fft/test_hw.py` pins it: the same bits at the same cycles as `pysim="tasks"`, with
+and without lanes, forward and inverse, back to back and with idle gaps.
+
+Two limits, both stated by the class:
+
+- **The ping-pong reorder only.** The stream-of-blocks reader takes `L/R + 5` cycles a frame against
+  `L/R` in, so frames queue inside the chain, and that queue *is* the timing. `pysim="flat"` with
+  `reorder="sob"` is refused.
+- **An output that is not back-pressured.** The chain buffers more frames than one process does, so
+  under a stalled consumer the two would fill differently.
+
+**Cost.** A frame costs the model's arithmetic plus about a dozen SimPy events. At `L = 1024` that is
+about half the per-task model's time (measured 2026-10-13: 4.1 against 7.8 ms a frame on one
+machine), and most of what is left is the bit-exact arithmetic itself.
+
 ## What is open
 
-- **A fused pysim.** A single process for the whole FFT, `VitisFft`-style -- same bits, the latency as
-  one number -- for system simulations that do not need to see inside.
 - **The SOB reorder in the pysim** is timed with a fixed reader start-up matched to XSI (5 cycles),
   which reproduces the RTL's `L/R + 5`; it is a constant fitted at one length (`L = 64`).
 - **Latencies at `L = 4096`** and for widths other than 16 bits are unmeasured against the pysim.

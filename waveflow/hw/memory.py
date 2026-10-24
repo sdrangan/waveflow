@@ -363,9 +363,15 @@ class Memory(object):
         segment[offset:offset + nwords] = data_arr
 
 
+def _chunks(word_size: int) -> int:
+    """uint64 chunks per memory word in a burst bundle: 1 up to 64 bits, else ceil(bits / 64)."""
+    return 1 if int(word_size) <= 64 else -(-int(word_size) // 64)
+
+
 # ---------------------------------------------------------------------------
 # _DirectBackedMMIFMaster — MMIFMaster backed directly by a Memory object
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _DirectBackedMMIFMaster:
@@ -561,6 +567,17 @@ class MemoryMod(HwModule):
     #: whoever materializes the scenario (an example/build dir or a temp dir).  ``None`` → resolve
     #: against the process cwd.  Runtime config; never emitted to codegen.
     root: Any = None
+    #: A record store (``<calib_dir>/modules/``, ``plans/unit_harness.md`` D7) holding this memory's
+    #: calibrated timing, measured in its own harness (Stage 4c): when it has a record under the
+    #: memory's identity, the record's per-direction access costs replace ``latency_init`` /
+    #: ``latency_per_word``, and its ``serialize`` makes the slave serve one transaction at a time, as
+    #: the RTL front (``axi_slave_front.v``) does.  ``None``: the fields above, as always.
+    calib_dir: Any = None
+
+    #: Run-time state a calibration identity does not hash (``waveflow.calib.phases.module_identity``):
+    #: the backing store -- its contents and allocations --, where the owner's region starts, and the
+    #: owner's back door onto it (``m_mm``, never bound).
+    __wf_identity_exclude__: ClassVar[tuple[str, ...]] = ("_mem", "_base_addr", "m_mm")
 
     def bfm_model(self):
         """XSI twin: the ``FlatMemory`` arena the AXI-MM slave models serve out of.
@@ -650,6 +667,7 @@ class MemoryMod(HwModule):
         ``"vectors/mem_in"`` works from any cwd.
         """
         super().pre_sim()
+        self._apply_stored_timing()
         if not self.load_segs:
             return
         from pathlib import Path
@@ -661,6 +679,7 @@ class MemoryMod(HwModule):
             p = Path(seg.bundle)
             if self.root is not None and not p.is_absolute():
                 p = Path(self.root) / p
+            # a word wider than 64 bits reads back as (n, k) chunks, which the store takes as is
             words = np.concatenate([np.asarray(b, dtype=np.uint64) for b in read_burst_bundle(p)])
             self._mem.write(seg.off * bpw, words)
 
@@ -682,21 +701,49 @@ class MemoryMod(HwModule):
             n = int(seg.length) or max(total - int(seg.off), 0)
             words = np.asarray(self._mem.read(int(seg.off) * bpw, n), dtype=np.uint64)
             p = Path(seg.bundle)
-            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p)
+            write_burst_bundle([words], p if p.is_absolute() else Path(self.root) / p,
+                               word_chunks=_chunks(self.word_size))
 
-    def _access_delay(self, nwords: int) -> float:
-        """Modeled RAM access time (seconds) for an *nwords*-word transfer."""
+    def _apply_stored_timing(self) -> None:
+        """Load this memory's calibrated timing (:attr:`calib_dir`), once, before the run: by the
+        memory's identity as built, so nothing a run changes can move where it is looked up."""
+        self._mem_timing = None
+        if self.calib_dir is None:
+            return
+        from pathlib import Path
+
+        if not (Path(self.calib_dir) / "modules").is_dir():
+            return
+        from waveflow.calib.mem_timing import stored_mem_timing
+        from waveflow.calib.record_store import ModuleStore
+
+        rec = stored_mem_timing(ModuleStore(self.calib_dir), self)
+        if rec is None:
+            return
+        self._mem_timing = rec.payload
+        if rec.payload.get("serialize"):
+            # One transaction at a time, reads and writes alike: one channel, held for the transfer.
+            self.s_mm.serialize_transactions = True
+            self.s_mm.write_channel = self.s_mm.read_channel
+
+    def _access_delay(self, nwords: int, kind: str | None = None) -> float:
+        """Modeled RAM access time (seconds) for an *nwords*-word transfer -- a ``"read"`` or a
+        ``"write"``, from the calibrated record when there is one."""
+        t = getattr(self, "_mem_timing", None)
+        if t is not None and kind is not None:
+            k = t[kind]
+            return (float(k["init"]) + nwords * float(k["per_word"])) / self.clk.freq
         return (self.latency_init + nwords * self.latency_per_word) / self.clk.freq
 
     def _on_write(self, words: Any, local_addr: int) -> ProcessGen[None]:
         # Decision 5: model the access latency *before* the data op; the
         # interconnect already wraps this callback and waits for it, so the
         # caller observes bus + access time.
-        yield self.timeout(self._access_delay(len(words)))
+        yield self.timeout(self._access_delay(len(words), "write"))
         self._mem.write(local_addr, words)
 
     def _on_read(self, nwords: int, local_addr: int) -> ProcessGen[np.ndarray]:
-        yield self.timeout(self._access_delay(nwords))
+        yield self.timeout(self._access_delay(nwords, "read"))
         return self._mem.read(local_addr, nwords)
 
     def alloc(self, nwords: int) -> int:

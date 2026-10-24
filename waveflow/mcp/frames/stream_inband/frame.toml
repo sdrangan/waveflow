@@ -23,10 +23,11 @@ and on cycle count against the pysim timing model."""
 pattern = "command_response"
 shape = "one host-launched kernel, AXI-Stream in and out, AXI-Lite for control and status"
 flow = "host-launched: C++ testbench, Vitis csim and cosim, pysim timing against cosim"
-choose_when = """one kernel that a host starts and feeds over a stream, each command \
-carrying its own parameters, and nothing more -- no second kernel, no memory, no \
-host program on a bus.  A lab prompt that gives a function to put on a stream is \
-this frame."""
+choose_when = """one kernel that the HOST LAUNCHES -- ap_start / ap_done, status in \
+AXI-Lite registers, verified by Vitis csim and cosim -- and feeds over a stream, each \
+command carrying its own parameters.  The host-activated flow, kept for specs (and \
+lab prompts) that name it.  A free-running kernel with no start signal and no \
+register map is stream_kernel."""
 
 # The examples this frame is modeled on, primary first.  An agent should read
 # it first; every departure from it is a likely failure point.
