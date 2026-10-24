@@ -48,15 +48,30 @@ namespace streamutils {
     }
 
     // write_msg — a schema message onto a framed stream of either word type: the schema's framed
-    // writer on an internal FIFO, its AXI-Stream writer (TLAST on the message's last word) at a top's
-    // port.  For a body whose framed port's word type is a template parameter (KernelTask.framed).
+    // writer on an internal FIFO, its AXI-Stream writer at a top's port.  For a body whose framed
+    // port's word type is a template parameter (KernelTask.framed).  `last` is TLAST on the message's
+    // last word: true (the default) ends the burst there; false leaves it open, for a burst of several
+    // messages -- a header and then its data, or a tagged union's messages up to its END.
     template<int W, typename Msg>
-    inline void write_msg(const Msg& m, hls::stream<framed_word<W> >& s) {
-        m.template write_framed_stream<W>(s);
+    inline void write_msg(const Msg& m, hls::stream<framed_word<W> >& s, bool last = true) {
+        m.template write_framed_stream<W>(s, last);
     }
     template<int W, typename Msg>
-    inline void write_msg(const Msg& m, hls::stream<axi4s_word<W> >& s) {
-        m.template write_axi4_stream<W>(s, true);
+    inline void write_msg(const Msg& m, hls::stream<axi4s_word<W> >& s, bool last = true) {
+        m.template write_axi4_stream<W>(s, last);
+    }
+
+    // read_msg — write_msg's reader: a schema message off a framed stream of either word type, by
+    // the schema's framed reader on an internal FIFO or its AXI-Stream reader at a top's port.  (The
+    // schema's header must be generated with framed readers: DataSchemaStep(..., framed=True).)  The
+    // element-array twins are each element type's read_boundary_lane / write_boundary_lane.
+    template<int W, typename Msg>
+    inline void read_msg(Msg& m, hls::stream<framed_word<W> >& s) {
+        m.template read_framed_stream<W>(s);
+    }
+    template<int W, typename Msg>
+    inline void read_msg(Msg& m, hls::stream<axi4s_word<W> >& s) {
+        m.template read_axi4_stream<W>(s);
     }
 
     template<typename WordT, int W>
