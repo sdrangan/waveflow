@@ -4845,8 +4845,10 @@ class DataArray(DataSchema):
                 if arr.shape[0] < nwords:                    # missing words read as zero
                     arr = np.vstack([arr, np.zeros((nwords - arr.shape[0], arr.shape[1]), np.uint64)])
                 elem = self.__class__._element_type()
-                bits = _chunks_to_lanes(arr[:nwords], pf, elem.get_bitwidth(), data.size)
-                vals = elem._from_flat_bits_numpy(bits)
+                vals = None
+                if elem.get_bitwidth() <= 64:                        # the lanes are uint64
+                    bits = _chunks_to_lanes(arr[:nwords], pf, elem.get_bitwidth(), data.size)
+                    vals = elem._from_flat_bits_numpy(bits)
                 if vals is not None:
                     data[...] = vals.reshape(data.shape)
                     self._val = data
@@ -4929,7 +4931,7 @@ class DataArray(DataSchema):
         start = curr_iword + (1 if curr_ipos > 0 else 0)
         elem_bw = self.__class__._element_type().get_bitwidth()
         elem_mask = (1 << elem_bw) - 1
-        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+        if pf >= 1 and elem_bw <= 64 and isinstance(data, np.ndarray) and data.shape == shape:
             ws = words[start:start + nwords]
             bits = _unpack_lanes(ws + [0] * (nwords - len(ws)), pf, elem_bw, data.size, word_bw)
             vals = self.__class__._element_type()._from_flat_bits_numpy(bits)

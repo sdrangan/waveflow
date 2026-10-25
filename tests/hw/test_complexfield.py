@@ -224,3 +224,20 @@ def test_complex_inherits_the_inner_include_dir() -> None:
     assert ComplexField.specialize(inner, include_dir="hdr").include_dir == "hdr"
     plain = ComplexField.specialize(IntField.specialize(bitwidth=19, signed=True))
     assert plain.include_dir == "."
+
+
+@pytest.mark.parametrize("inner", [IntField.specialize(64), FloatField.specialize(64)],
+                         ids=lambda t: t.__name__)
+@pytest.mark.parametrize("word_bw", [128, 256])
+def test_a_128_bit_element_reads_back_from_an_ndarray(inner, word_bw) -> None:
+    """A 128-bit element is wider than the uint64 lanes: deserialize falls back instead of
+    overflowing building the lane mask."""
+    elem = ComplexField.specialize(inner)
+    arr_t = DataArray.specialize(elem, max_shape=(3,))
+    if elem.kind == "float":
+        v = np.array([1.5 - 2j, -0.0 + 1e300j, 3j], dtype=np.complex128)
+    else:
+        v = cx.make_complex(np.array([-(1 << 63), 5, (1 << 63) - 1]),
+                            np.array([(1 << 63) - 1, -7, -(1 << 63)]), elem.inner_format())
+    words = np.asarray(arr_t(v).serialize(word_bw))
+    assert arr_t().deserialize(words, word_bw).val.tobytes() == v.tobytes()
