@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7). Stage 8 (simulation speed, measurement only) added and done 2026-10-24; Stage 9 (measurement parity with the systolic example) added 2026-10-24; 9a-9d done, 9e and 9f wait for D7 and D8, 9g for the user (drafted 2026-10-20 with the user).
+**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7). Stage 8 (simulation speed, measurement only) added and done 2026-10-24; Stage 9 (measurement parity with the systolic example) added 2026-10-24; 9a-9d done, 9e and 9f wait for D7 and D8, 9g for the user; Stage 10 (faster untimed and pysim runs, no result changed) added and done 2026-10-24 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -1247,6 +1247,100 @@ Gate: `pytest -m "not vitis and not xsi and not gem5" tests/vecunit tests/exampl
 tests/examples/test_vecunit_mf.py tests/docs tests/mcp/test_knowledge_corpus.py
 tests/linalg/test_no_example_imports.py` (below, before the commit); the catalogues as above.
 
+### Stage 10: faster untimed and pysim runs, no result changed
+
+(Added 2026-10-24 with the user.) Stage 8 measured how long the unit's two applications take to
+simulate; this stage makes the unit's own Python faster -- the interpreter (the untimed model, and
+pysim's arithmetic), the harness's stimulus and golden, and pysim's run -- **without changing any
+result**. Scope (the user's): `waveflow/vecunit/` and `examples/vecunit_{cg,mf}/` only. Nothing in
+`waveflow/utils/fixputils.py`, `waveflow/linalg/` (`lanes`, `cg.cg_solve`, the CG golden), the
+interfaces or SimPy changes.
+
+**"No result changed"** is the simulation-speed section's rule (outcomes, not just bits): every output
+burst of every pysim run carries the same words *and* arrives at the same time; the interpreter gives
+the same bits; the HLS is untouched, so the RTL needs no re-run.
+
+**Found by profiling** (cProfile on Stage 8's largest runs, Stage 9's code):
+- **The interpreter's time is `fixputils`' per-call generality, not arithmetic.** `Machine.vector`
+  calls `fixputils.quantize`, `add`, `mult` on arrays of `L × VL` (32 values for CG): each call derives
+  a result `Format` (a frozen dataclass of enums, built and hashed), checks widths, chooses dtypes and
+  goes through numpy's `clip` wrapper. 49 % of CG's pysim run, 91 % with the rest of the interpreter.
+- **`run_job` checks every instruction and pass on every job** (`instr_status`, `pass_status`): 23 %
+  of the interpreter, though a solve's jobs share one program.
+- **CG's harness build runs the closed-loop interpreter element-major** (`run_job`'s default, 4.5×
+  the instruction-major mode, the same bits): 82 % of CG's pysim total. Its golden then runs the
+  interpreter again on the static stimulus.
+- **The assembler formats a disassembly for every pass** it checks (`asm._check_execute`), for a message
+  only an error prints, and every job's identical program is checked and encoded again.
+- **The execute task decodes and gathers each job's program again** (`program_prefix`, `exec_items`:
+  20 % of CG's run), and **waits after every item**, a SimPy timeout each.
+
+**Changes** (each holds the outcome; the tests below):
+1. `model.py`: the interpreter's fixed-point kernels (`_quantize`, `_add`, `_sub`, `_mul`, `_div`) run
+   `fixputils`' integer steps for signed int64 operands with each format pair's plan derived once and
+   looked up by the formats' identities; a write quantizes real and imaginary parts in one call.
+2. `model.py`: `checked_passes` -- a program's checks, cached in a dict a caller passes across its jobs
+   (`run_job(checks=...)`); never a module-level cache, so a timing of independent runs stays cold.
+3. `unit.py`: `VecExec` decodes and gathers each distinct program once per unit instance (its items and
+   each run's queue blocks, in order), and **defers its waits** to the moments another task can see its
+   clock -- a block taken, freed or committed, the status written (`VecExec.defer`).
+4. `cg_unit.py`, `workload.py`: the closed-loop stimulus and the golden run the interpreter
+   instruction-major; the CG unit keeps its closed-loop results as the golden
+   (`VecUnit.remember_results`), and a unit builds each workload's jobs once (`scenario_jobs`).
+5. `asm.py`: the checker formats its messages only for an error; `assemble(cache=...)` checks and
+   encodes a program its caller's jobs share once.
+
+**Not taken:** `mf_golden` (0.009 ms a chunk; rewriting it on the interpreter's kernels would tie the
+golden to what it checks); the word conversion (`lanes`, out of scope, 1-6 % of a run); `cg.cg_solve`
+(out of scope); coarser pysim granularities (Stage 9g: they change the timing's granularity, which is
+a result).
+
+**Gate:** (a) `tests/vecunit/test_model_fast.py`: the kernels against `fixputils` bit for bit on random
+signed formats (both rounding and both overflow modes, the width guard's refusals, the divide's zero
+guard and overflow case); deferral on and off giving every burst's words and time; the caches equal to
+none; the kept golden equal to a recomputed one. (b) Every output burst of 17 pysim workloads (both
+applications, the generic unit, four builds) the same words at the same times as Stage 9's code. (c)
+`pytest -m "not vitis and not xsi and not gem5"` on the unit's and examples' tests. (d) Stage 8's
+scripts re-run, before and after, on the same idle machine, best of 11; the pages report both.
+
+#### Record: Stage 10 (2026-10-24) -- done
+
+Built as listed above, in `waveflow/vecunit/` (`model.py`, `unit.py`, `asm.py`, `workload.py`) and
+`examples/vecunit_{cg,mf}/` (`cg_unit.py`, `cg_program.py`, `mf_program.py`, `cg_runtime.py`); nothing
+outside them.
+
+**Gate.**
+- (a) `tests/vecunit/test_model_fast.py`, 16 tests: the kernels against `fixputils` on 3,200 random
+  format sets plus 2,000 divides (with zero divisors and the overflow case), refusals included; the
+  identity table bounded; deferral on and off giving every burst's words and time on CG, the matched
+  filter and the generic unit; the caches equal to none; the kept golden equal to a recomputed one.
+- (b) A one-off cross-version check: every output burst of 17 pysim workloads (CG `test`, `steady`,
+  `calib`, `holdout2`, `steady_k2`, `steady_n4`, `rhs_256`, at 128 bits and at `L 2`; the matched
+  filter's `test`, `steady`, `calib`, `steady_nrx1`, `frame_1024`, at `VLMAX` 16 and 256; the generic
+  unit's `test`) recorded -- its words' hash and its arrival time -- on Stage 9's final code (`f95a3f91`)
+  and on this one: **724 bursts, 0 differences.**
+- (c) `pytest -m "not vitis and not xsi and not gem5" tests/vecunit tests/examples/test_vecunit_cg.py
+  tests/examples/test_vecunit_mf.py tests/docs tests/mcp/test_knowledge_corpus.py
+  tests/linalg/test_no_example_imports.py`: below, before the commit.
+- (d) Stage 8's scripts re-run on the idle machine, best of 11, the record before kept under
+  `<key>_before_stage10` in each `runtime.json`; every simulated cycle count identical:
+
+| | before | after | speed-up |
+|---|---|---|---|
+| CG pysim, 64 jobs (8 × 2048) | 4.98 s | 1.00 s | **5.0×** (3.1× at one job) |
+| ... building the harness | 4.07 s | 0.53 s | 7.8× |
+| ... the run | 0.91 s | 0.48 s | 1.9× |
+| CG interpreter, 64 jobs | 853 ms | 474 ms | 1.8× (1.55× at one job) |
+| the matched filter's pysim, 16,384 samples | 280 ms | 239 ms | 1.17× (1.08× at 256 samples) |
+| the matched filter's interpreter | 127 ms | 89 ms | 1.43× |
+| SimPy events: CG 64 jobs / the matched filter's 256 chunks | 7,509 / 9,242 | 6,678 / 8,733 | −11 % / −5.5 % |
+
+The RTL now takes 101 to 250 times as long as CG's whole pysim (it was 33 to 50) and 56 to 169 times
+the matched filter's (52 to 144). pysim's CG run takes 1.00 to 1.36 times the interpreter on the same
+jobs. What is left: CG's interpreter (77 % of its run, 89 % of its harness build); the matched filter's
+SimPy and framework (47 % of its run, outside the scope). Pages: `docs/evaluation/sim_speed/vecunit_cg.md`,
+`vecunit_mf.md` (the tables are the current code's, with a before-and-after section), the section index.
+
 ## Out of scope
 
 - Moving `examples/mimo_cg` onto this unit, or onto the systolic engine (a separate plan).
@@ -1287,3 +1381,4 @@ tests/linalg/test_no_example_imports.py` (below, before the commit); the catalog
 | 2026-10-24 | 8 | Simulation speed, measurement only (Vitis 2024.1, a lab workstation): CG `8 × 32`..`8 × 2048` -- the RTL 34-50× the whole pysim, 180-280× its run; the matched filter 256..16,384 samples -- 53-148×; every run exact. CG's harness build is 82 % of its pysim (the closed-loop stimulus, element-major) | Stage 8 record, `docs/evaluation/sim_speed/vecunit_{cg,mf}.md` |
 | 2026-10-24 | 9 | Added with the user: measurement parity with the systolic example -- 128-bit words, trace-based binding analysis, an RTL catalogue against the bounds over workloads and configurations, calibration by phase and configuration (pre-registered), a memory wrapper (D7), CG with the systolic engine in the loop (D8); coarser pysim granularities optional, to confirm | Stage 9 |
 | 2026-10-24 | 9 | 9a-9d: 128-bit words (XSI gates 241 -> 243); trace reports (CG and the matched filter execute-bound, `VLMAX 256` load-bound); a 24-run RTL catalogue on nine builds, all exact; pysim's first-job start-up fixed at the root (CG within 0.07 %); the fit by phase and configuration lost on held-out (6.2 % / 22.1 % against the incumbent's 4.4 % / 18.8 %), the Stage 7 timing kept. D7, D8 proposed | Stage 9 record |
+| 2026-10-24 | 10 | Faster untimed and pysim runs, no result changed (724 output bursts of 17 workloads identical, words and times): CG's pysim 3.1-5.0× faster, its interpreter 1.6-1.8×; the matched filter's interpreter 1.4×, its pysim 1.1-1.2× (half its run is SimPy and the framework). Fixed-point kernels without fixputils' per-call generality, programs checked once per caller, the stimulus instruction-major and kept as the golden, the execute task decoding once and waiting only where seen | Stage 10 record |

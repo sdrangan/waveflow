@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cache
 
 import numpy as np
 
@@ -48,6 +49,137 @@ from waveflow.vecunit.isa import (
 
 #: ``vmv.v.i``'s immediate: a signed 12-bit integer.
 IMM_FORMAT = Format(12, 12, True)
+
+
+# --- fixed point, without the per-call generality ---------------------------------------------------
+# The interpreter's arithmetic is fixputils', on small arrays (a group's L members by VL elements), where
+# each call's generality -- dtype choices, format derivation, the width guard, numpy's clip wrapper --
+# costs more than the arithmetic.  These run fixputils' integer steps for signed int64 operands (every
+# format of a unit is signed), each format pair's plan derived once (plans/vecunit_new.md Stage 10;
+# tests/vecunit/test_model_fast.py holds them to fixputils bit for bit).
+
+
+@cache
+def _qplan(src: Format, dst: Format) -> tuple:
+    """:func:`fixputils.quantize`'s steps from *src* to *dst*: the shift, the round bit, the overflow."""
+    dF = src.frac_bits - dst.frac_bits
+    if dF <= 0 and src.int_bits + dst.frac_bits > fx.MAX_WIDTH:
+        raise NotImplementedError(
+            f"requantize up-scale intermediate width {src.int_bits + dst.frac_bits} exceeds "
+            f"{fx.MAX_WIDTH} bits; wide support is Future.")
+    if dst.W >= fx.MAX_WIDTH:
+        ov: tuple = ()
+    elif dst.o_mode == fx.OMode.AP_WRAP:
+        ov = (np.uint64(64 - dst.W), np.int64(64 - dst.W))
+    else:
+        ov = (-(1 << (dst.W - 1)), (1 << (dst.W - 1)) - 1, None)
+    return dF, dst.q_mode == fx.QMode.AP_RND, ov
+
+
+#: Plans by the formats' identities: a configuration's formats, and the ones the plans derive, are
+#: the same objects call after call, so this skips hashing a Format (a dataclass of enums) every
+#: time.  Each entry keeps its formats, so an identity cannot be reused while it is here; the table
+#: is cleared when it grows (fixputils.div returns a fresh Format on every call).
+_BY_ID: dict[tuple, tuple] = {}
+
+
+def _by_id(fn, *formats):
+    key = (fn, *map(id, formats))
+    hit = _BY_ID.get(key)
+    if hit is None:
+        if len(_BY_ID) > 4096:
+            _BY_ID.clear()
+        hit = _BY_ID[key] = (fn(*formats), formats)
+    return hit[0]
+
+
+def _by_id_n(fn, f: Format, n: int):
+    """:func:`_by_id` for a function of one format and an int."""
+    key = (fn, id(f), n)
+    hit = _BY_ID.get(key)
+    if hit is None:
+        if len(_BY_ID) > 4096:
+            _BY_ID.clear()
+        hit = _BY_ID[key] = (fn(f, n), (f,))
+    return hit[0]
+
+
+def _quantize(s: np.ndarray, src: Format, dst: Format) -> np.ndarray:
+    """``fixputils.quantize(s, src, dst)`` for signed int64 *s*."""
+    dF, rnd, ov = _by_id(_qplan, src, dst)
+    if dF < 0:
+        q = s << -dF
+    elif dF == 0:
+        q = s
+    else:
+        q = s >> dF
+        if rnd:
+            q = q + ((s >> (dF - 1)) & 1)
+    if not ov:
+        return q
+    if len(ov) == 2:  # wrap: the low W bits, sign-extended
+        return (q.view(np.uint64) << ov[0]).view(np.int64) >> ov[1]
+    return np.minimum(np.maximum(q, ov[0]), ov[1])
+
+
+@cache
+def _addplan(a: Format, b: Format, sub: bool) -> tuple[Format, int, int]:
+    r = fx.sub_format(a, b) if sub else fx.add_format(a, b)
+    return r, r.frac_bits - a.frac_bits, r.frac_bits - b.frac_bits
+
+
+def _addplan_add(a: Format, b: Format) -> tuple[Format, int, int]:
+    return _addplan(a, b, False)
+
+
+def _addplan_sub(a: Format, b: Format) -> tuple[Format, int, int]:
+    return _addplan(a, b, True)
+
+
+def _add(sa, a: Format, sb, b: Format) -> tuple[np.ndarray, Format]:
+    """``fixputils.add`` for signed int64 operands."""
+    r, da, db = _by_id(_addplan_add, a, b)
+    return (sa << da if da else sa) + (sb << db if db else sb), r
+
+
+def _sub(sa, a: Format, sb, b: Format) -> tuple[np.ndarray, Format]:
+    """``fixputils.sub`` for signed int64 operands."""
+    r, da, db = _by_id(_addplan_sub, a, b)
+    return (sa << da if da else sa) - (sb << db if db else sb), r
+
+
+_mult_format = cache(fx.mult_format)
+_sum_format = cache(fx.sum_format)
+
+
+def _mul(sa, a: Format, sb, b: Format) -> tuple[np.ndarray, Format]:
+    """``fixputils.mult`` for signed int64 operands."""
+    return sa * sb, _by_id(_mult_format, a, b)
+
+
+@cache
+def _div_plan(a: Format, b: Format) -> tuple[Format, int, int]:
+    return fx.div_format(a, b), max(b.frac_bits, 0), max(a.W + max(b.frac_bits, 0), b.W)
+
+
+def _div(sa, a: Format, sb, b: Format) -> tuple[np.ndarray, Format]:
+    """``fixputils.div`` (truncating toward zero, ``x / 0 = 0``, the C-simulation wrap of the
+    one overflowing case) for signed int64 operands."""
+    r, fb, wid = _by_id(_div_plan, a, b)
+    num, den = np.broadcast_arrays(sa << fb if fb else sa, sb)
+    zero = den == 0
+    safe = np.where(zero, 1, den)
+    floor = np.floor_divide(num, safe)
+    quot = floor + ((np.remainder(num, safe) != 0) & ((num < 0) != (safe < 0)))
+    if wid < fx.MAX_WIDTH:
+        quot = (quot.view(np.uint64) << np.uint64(64 - wid)).view(np.int64) >> np.int64(64 - wid)
+    return np.where(zero, 0, quot), r
+
+
+@cache
+def _widened(f: Format, bits: int) -> Format:
+    """A dividend widened by ``g_div`` fraction bits (``wf.sdivz``)."""
+    return Format(f.W + bits, f.int_bits, True)
 
 
 class ProgramError(Exception):
@@ -437,8 +569,12 @@ class Machine:
 
     def _vwrite(self, g: int, sl: slice, re, rf: Format, im, imf: Format) -> None:
         fd = self.cfg.group_formats[g]
-        self.vre[g][:, sl] = fx.quantize(np.asarray(re), rf, fd)
-        self.vim[g][:, sl] = fx.quantize(np.asarray(im), imf, fd)
+        if rf == imf:  # one quantize for both parts
+            q = _quantize(np.stack((re, im)), rf, fd)
+            self.vre[g][:, sl], self.vim[g][:, sl] = q[0], q[1]
+        else:
+            self.vre[g][:, sl] = _quantize(np.asarray(re), rf, fd)
+            self.vim[g][:, sl] = _quantize(np.asarray(im), imf, fd)
         if sl.start <= self.vlen[g]:
             self.vlen[g] = max(int(self.vlen[g]), sl.stop)
 
@@ -477,8 +613,8 @@ class Machine:
                 if (idx >= len(blk.written)).any():
                     raise ProgramError(f"{x}: lane groups {idx.tolist()} are outside the block")
                 fq = cfg.out_queue_formats[x.rd]
-                blk.re[idx] = fx.quantize(re, fv, fq).T
-                blk.im[idx] = fx.quantize(im, fv, fq).T
+                q = _quantize(np.stack((re, im)), fv, fq)
+                blk.re[idx], blk.im[idx] = q[0].T, q[1].T
                 blk.written[idx] = True
             return
         v = VOp(f)
@@ -492,17 +628,18 @@ class Machine:
         elif v in (VOp.ADD, VOp.SUB):
             a_r, a_i, fa = self._vread(x.rs1, sl)
             b_r, b_i, fb = self._vread(x.rs2, sl)
-            fn = fx.add if v == VOp.ADD else fx.sub
+            fn = _add if v == VOp.ADD else _sub
             (rr, fr), (ri, fi) = fn(a_r, fa, b_r, fb), fn(a_i, fa, b_i, fb)
             self._vwrite(x.rd, sl, rr, fr, ri, fi)
         elif v == VOp.DOTR:
             a_r, a_i, fa = self._vread(x.rs1, sl)
             b_r, b_i, fb = self._vread(x.rs2, sl)
-            (pr, fp), (pi, _) = fx.mult(a_r, fa, b_r, fb), fx.mult(a_i, fa, b_i, fb)
-            term, ft = fx.add(pr, fp, pi, fp)  # Re(conj(a) b), exact
-            part = np.asarray(term, np.int64).sum(axis=1)  # over the elements: an integer sum
+            (pr, fp), (pi, _) = _mul(a_r, fa, b_r, fb), _mul(a_i, fa, b_i, fb)
+            term, ft = _add(pr, fp, pi, fp)  # Re(conj(a) b), exact
+            part = term.sum(axis=1)  # over the elements: an integer sum
             prev = acc.get(x.rd)
-            acc[x.rd] = (part if prev is None else prev[0] + part, fx.sum_format(ft, cfg.VLMAX))
+            acc[x.rd] = (part if prev is None else prev[0] + part,
+                         _by_id_n(_sum_format, ft, int(cfg.VLMAX)))
         else:
             if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S):
                 sv, fs = self._sread(x.rs1)
@@ -521,14 +658,15 @@ class Machine:
             if c is None:
                 self._vwrite(x.rd, sl, pr, fpr, pi, fpi)
             else:
-                fn = fx.sub if v in (VOp.NMSAC, VOp.NMSAC_S) else fx.add
+                fn = _sub if v in (VOp.NMSAC, VOp.NMSAC_S) else _add
                 (rr, fr), (ri, fi) = fn(c[0], c[2], pr, fpr), fn(c[1], c[2], pi, fpi)
                 self._vwrite(x.rd, sl, rr, fr, ri, fi)
 
     def deliver(self, acc: dict) -> None:
         """A pass's reductions, delivered at its end: each quantized once to its scalar."""
         for j, (s, fs) in acc.items():
-            self.s[j] = fx.quantize(np.asarray(s).reshape(-1), fs, self.cfg.scalar_formats[j])
+            self.s[j] = _quantize(np.asarray(s, np.int64).reshape(-1), fs,
+                                  self.cfg.scalar_formats[j])
             self.sset[j] = True
 
     def scalar(self, x: Instr) -> None:
@@ -537,11 +675,11 @@ class Machine:
         fd = cfg.scalar_formats[x.rd]
         if int(x.funct) == SOp.DIVZ:
             b, fb = self._sread(x.rs2)
-            faw = Format(fa.W + int(cfg.g_div), fa.int_bits, True)
-            q, fq = fx.div(fx.quantize(a, fa, faw), faw, b, fb)  # 0 where b == 0
-            self.s[x.rd] = fx.quantize(q, fq, fd).reshape(-1)
+            faw = _by_id_n(_widened, fa, int(cfg.g_div))
+            q, fq = _div(_quantize(a, fa, faw), faw, b, fb)  # 0 where b == 0
+            self.s[x.rd] = _quantize(np.asarray(q, np.int64), fq, fd).reshape(-1)
         else:
-            self.s[x.rd] = fx.quantize(a, fa, fd).reshape(-1)
+            self.s[x.rd] = _quantize(a, fa, fd).reshape(-1)
         self.sset[x.rd] = True
 
     def control(self, x: Instr) -> None:
@@ -573,21 +711,52 @@ def _cmul(a, b, *, conj: bool):
     """``a * b`` (or ``conj(a) * b``) exactly: ``(re, fmt), (im, fmt)``."""
     ar, ai, fa = a
     br, bi, fb = b
-    p_rr, fp = fx.mult(ar, fa, br, fb)
-    p_ii, _ = fx.mult(ai, fa, bi, fb)
-    p_ri, _ = fx.mult(ar, fa, bi, fb)
-    p_ir, _ = fx.mult(ai, fa, br, fb)
+    p_rr, fp = _mul(ar, fa, br, fb)
+    p_ii, _ = _mul(ai, fa, bi, fb)
+    p_ri, _ = _mul(ar, fa, bi, fb)
+    p_ir, _ = _mul(ai, fa, br, fb)
     if conj:
-        return fx.add(p_rr, fp, p_ii, fp), fx.sub(p_ri, fp, p_ir, fp)
-    return fx.sub(p_rr, fp, p_ii, fp), fx.add(p_ri, fp, p_ir, fp)
+        return _add(p_rr, fp, p_ii, fp), _sub(p_ri, fp, p_ir, fp)
+    return _sub(p_rr, fp, p_ii, fp), _add(p_ri, fp, p_ir, fp)
 
 
 # --- a job ------------------------------------------------------------------------------------------
 
 
+def checked_passes(execute: list[Instr], cfg: VecUnitConfig, cache: dict | None = None) -> list:
+    """An execute program as :func:`run_job` runs it: each pass (or scalar or control instruction)
+    with the status the execute task's checks give it, up to and including the first that is not
+    ``OK``.  The checks depend on the program and the configuration alone, so *cache* -- a dict a
+    caller passes across the jobs of one solve, one harness or one golden -- holds each program's
+    once (Stage 10; never a module-level cache, so a timing of independent runs stays cold)."""
+    key = (id(cfg), tuple(execute))
+    if cache is not None and key in cache:
+        return cache[key][1]
+    out = []
+    for chain in split_passes(execute, cfg.S):
+        st = Status.OK
+        for x in chain:
+            st = instr_status(x, cfg)
+            if st != Status.OK:
+                break
+        if st == Status.OK and chain[0].vector:
+            if chain[-1].chain or not all(y.vector for y in chain):
+                # the pass ran past S instructions or the program's end, or chained a non-vector
+                st = Status.BAD_OP
+            else:
+                st = pass_status(chain, cfg)
+        out.append((chain, st))
+        if st != Status.OK:
+            break
+    if cache is not None:
+        cache[key] = (cfg, out)  # the configuration kept, so its identity is not reused
+    return out
+
+
 def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: list[Instr],
             inputs: dict[int, list], *, tx_id: int = 0, mode: str = "pass",
-            on_starve: Callable[[int, JobResult], tuple | None] | None = None) -> JobResult:
+            on_starve: Callable[[int, JobResult], tuple | None] | None = None,
+            checks: dict | None = None) -> JobResult:
     """Run one job's three programs and return its status and outputs.
 
     ``inputs`` holds, per input port, the ``(re, im)`` stored-integer matrices that arrive on it, in
@@ -601,7 +770,8 @@ def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: 
 
     An execute error stops the job at the instruction (``result.status``; the store program then
     takes only what was pushed).  A load or store instruction its task cannot run, or a read of
-    something never written, is a :class:`ProgramError`."""
+    something never written, is a :class:`ProgramError`.  *checks*: a cache for
+    :func:`checked_passes`, shared by a caller's jobs."""
     if mode not in ("pass", "serial"):
         raise ValueError(f"mode must be 'pass' or 'serial', not {mode!r}")
     m = Machine(cfg)
@@ -641,18 +811,7 @@ def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: 
             result.outputs[x.rd].append((resp, re, im))
 
     m.pull, m.pushed = pull, pushed
-    for chain in split_passes(execute, cfg.S):
-        st = Status.OK
-        for x in chain:
-            st = instr_status(x, cfg)
-            if st != Status.OK:
-                break
-        if st == Status.OK and chain[0].vector:
-            if chain[-1].chain or not all(y.vector for y in chain):
-                # the pass ran past S instructions or the program's end, or chained a non-vector
-                st = Status.BAD_OP
-            else:
-                st = pass_status(chain, cfg)
+    for chain, st in checked_passes(execute, cfg, checks):
         if st != Status.OK:
             result.status = int(st)
             break

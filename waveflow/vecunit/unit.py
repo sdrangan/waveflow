@@ -324,6 +324,10 @@ class VecExec(_VecPart):
     """The execute task: one firing is one job (see the module doc)."""
 
     cpp_kernel_name: ClassVar[str | None] = "vecunit_exec"
+    #: Wait only where another task can see the job's clock -- a queue block taken, freed or
+    #: committed, the status written -- rather than after every item: the same times, fewer SimPy
+    #: events (Stage 10).  ``False`` waits after every item, as before; the tests compare the two.
+    defer: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -334,6 +338,33 @@ class VecExec(_VecPart):
         self.m_status = self._ep(FramedStreamIFMaster, "m_status", CTRL_BITS)
         self.halted = False
         self._vt: float = 0.0  # the job's clock (run_iter)
+        #: Each program's decoded work, by its instruction words (Stage 10): a job's program is
+        #: decoded, checked and gathered into items once, however many jobs run it.
+        self._plans: dict[tuple, tuple] = {}
+
+    def _plan(self, words: np.ndarray) -> tuple[list, list, list]:
+        """A program burst's instructions, its items (:func:`~waveflow.vecunit.model.exec_items`) and,
+        per run of passes, the queue blocks it uses in the order its instructions name them --
+        ``(kind, queue)``, ``kind`` ``"r"`` an input block, ``"w"`` an output one."""
+        key = (int(words[0]) >> 16, words[1:].tobytes())  # ninstr and the instructions: not tx_id
+        plan = self._plans.get(key)
+        if plan is None:
+            _tx, prog, framed = program_prefix(words)
+            items = exec_items(prog, self.cfg, cut=not framed)
+            needs: list = []
+            for item in items:
+                use: list = []
+                if item.kind == "passes":
+                    for chain in item.chains:
+                        for y in chain:
+                            o = operands(y)
+                            if o.qread is not None:
+                                use.append(("r", o.qread))
+                            if o.qwrite is not None:
+                                use.append(("w", o.qwrite))
+                needs.append(use)
+            plan = self._plans[key] = (prog, items, needs)
+        return plan
 
     def kernel_task(self):
         sig = ("s_prog", *(f"qi{j}" for j in range(self.cfg.NQI)),
@@ -341,10 +372,16 @@ class VecExec(_VecPart):
         return self._kernel("exec", sig, ("s_prog", "m_status"))
 
     def _until(self, dt: float) -> ProcessGen[None]:
-        """Advance the job's clock by *dt* and wait until the simulation reaches it.  The clock may
-        lag the simulation's (a job starts when its program's first word arrived, :meth:`run_iter`):
-        then only what overtakes the simulation is waited."""
+        """Advance the job's clock by *dt*; with :attr:`defer` off, also wait until the simulation
+        reaches it."""
         self._vt += dt
+        if not self.defer:
+            yield from self._sync()
+
+    def _sync(self) -> ProcessGen[None]:
+        """Wait until the simulation reaches the job's clock.  The clock may lag the simulation's (a
+        job starts when its program's first word arrived, :meth:`run_iter`): then only what
+        overtakes the simulation is waited."""
         if self._vt > self.env.now:
             yield self.timeout(self._vt - self.env.now)
 
@@ -361,34 +398,35 @@ class VecExec(_VecPart):
             yield from self._halt()
         cfg, t, period = self.cfg, self.timing.for_config(self.cfg), self.clk.period
         t0 = self.env.now
-        words = yield from self.s_prog.get()
-        tx_id, prog, framed = program_prefix(words)
+        words = np.asarray((yield from self.s_prog.get()), np.uint64).reshape(-1)
+        tx_id = int(words[0]) & 0xFFFF
+        _prog, items, needs = self._plan(words)
         # The RTL decodes each instruction as it arrives, a word a cycle; pysim has the whole burst
         # only at its last word.  So the job's clock starts when the first word arrived -- or when
         # the task asked, if the burst was already waiting (Stage 9d: the first job of a run had
         # started a program's length late).  Instructions decode slower than they arrive.
-        self._vt = max(t0, self.env.now - (int(np.asarray(words).shape[0]) - 1) * period)
+        self._vt = max(t0, self.env.now - (words.shape[0] - 1) * period)
         m = Machine(cfg)
         held_out: list = [None] * cfg.NQO  # the block handle of each output queue's tail
         st = Status.OK
-        for item in exec_items(prog, cfg, cut=not framed):
+        for item, use in zip(items, needs):
             if item.kind == "error":
                 st = Status(item.status)
                 break
             if item.kind == "passes":
-                for chain in item.chains:  # a run takes every queue block it uses at its start
-                    for y in chain:
-                        o = operands(y)
-                        if o.qread is not None and m.head[o.qread] is None:
-                            before = self.env.now
-                            blk = yield from self.qi[o.qread].acquire_read()
-                            m.head[o.qread] = blk.payload
-                            self._caught_up(before)
-                        if o.qwrite is not None and m.tail[o.qwrite] is None:
-                            before = self.env.now
-                            held_out[o.qwrite] = yield from self.qo[o.qwrite].acquire_write()
-                            m.tail[o.qwrite] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
-                            self._caught_up(before)
+                for side, q in use:  # a run takes every queue block it uses at its start
+                    if side == "r" and m.head[q] is None:
+                        yield from self._sync()
+                        before = self.env.now
+                        blk = yield from self.qi[q].acquire_read()
+                        m.head[q] = blk.payload
+                        self._caught_up(before)
+                    elif side == "w" and m.tail[q] is None:
+                        yield from self._sync()
+                        before = self.env.now
+                        held_out[q] = yield from self.qo[q].acquire_write()
+                        m.tail[q] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
+                        self._caught_up(before)
                 for chain in item.chains:
                     m.run_pass(list(chain), "serial")
                 yield from self._until(t.run_cycles(item.chains, m.vl) * period)
@@ -404,14 +442,17 @@ class VecExec(_VecPart):
                 yield from self._until((t.instr + t.control) * period)
             elif int(x.funct) == I.COp.QPOP:
                 if m.head[x.rs1] is None:  # released without a read: take it first
+                    yield from self._sync()
                     before = self.env.now
                     yield from self.qi[x.rs1].acquire_read()
                     self._caught_up(before)
                 m.head[x.rs1] = None
                 yield from self._until((t.instr + t.control) * period)
+                yield from self._sync()
                 yield from self.qi[x.rs1].release_read()
             else:  # QPUSH
                 if m.tail[x.rd] is None:
+                    yield from self._sync()
                     before = self.env.now
                     held_out[x.rd] = yield from self.qo[x.rd].acquire_write()
                     m.tail[x.rd] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
@@ -419,10 +460,12 @@ class VecExec(_VecPart):
                 held_out[x.rd].payload = m.tail[x.rd]
                 m.tail[x.rd] = None
                 yield from self._until((t.instr + t.control) * period)
+                yield from self._sync()
                 before = self.env.now
                 yield from self.qo[x.rd].commit_write(held_out[x.rd])
                 self._caught_up(before)
         yield from self._until(t.job * period)
+        yield from self._sync()
         s = I.VecStatus()
         s.tx_id, s.status = int(tx_id), int(st)
         yield from self.m_status.write(np.asarray(s.serialize(word_bw=CTRL_BITS), np.uint64))
@@ -534,13 +577,29 @@ class VecUnit(_VecPart):
             return random_jobs(self.cfg, 4, seed=1)
         raise ValueError(f"no workload {kind!r}")
 
+    def remember_results(self, kind: str, jobs: list, results: list) -> None:
+        """Keep what an application's :meth:`jobs` already ran in the interpreter while it built
+        them -- one :class:`~waveflow.vecunit.model.JobResult` (or ``None``) a job -- so the golden
+        of these jobs need not run them again (Stage 10)."""
+        self.__dict__.setdefault("_results", {})[kind] = (jobs, results)
+
+    def scenario_jobs(self, kind: str) -> list:
+        """:meth:`jobs`, built once per unit instance: its workload and its golden share them."""
+        memo = self.__dict__.setdefault("_jobs", {})
+        if kind not in memo:
+            memo[kind] = self.jobs(kind)
+        return memo[kind]
+
     def workload(self, kind: str = "test") -> dict:
         from waveflow.vecunit.workload import job_bursts
 
-        return job_bursts(self.cfg, self.jobs(kind))
+        return job_bursts(self.cfg, self.scenario_jobs(kind))
 
     def golden(self, kind: str = "test") -> dict:
-        """Every output port's bursts and ``m_status``, from the interpreter."""
+        """Every output port's bursts and ``m_status``, from the interpreter (the results
+        :meth:`jobs` already had, where it kept them)."""
         from waveflow.vecunit.workload import golden_bursts
 
-        return golden_bursts(self.cfg, self.jobs(kind))
+        jobs = self.scenario_jobs(kind)
+        known = self.__dict__.get("_results", {}).get(kind)
+        return golden_bursts(self.cfg, jobs, known[1] if known and known[0] is jobs else None)

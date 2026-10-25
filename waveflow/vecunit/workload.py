@@ -116,8 +116,9 @@ def job_bursts(cfg: VecUnitConfig, jobs: list) -> dict[str, list[StreamBurst]]:
     out: dict[str, list] = {"s_lprog": [], "s_xprog": [], "s_sprog": []}
     for p in range(cfg.n_in_ports):
         out[f"s_in{p}"] = []
+    programs: dict = {}  # each program the jobs share, checked and encoded once
     for tx_id, progs, inputs in jobs:
-        words = assemble(cfg, progs, tx_id)
+        words = assemble(cfg, progs, tx_id, programs)
         for port, name in (("s_lprog", "load"), ("s_xprog", "execute"), ("s_sprog", "store")):
             out[port].append(StreamBurst(np.asarray(words[name], np.uint64), True))
         nxt = {port: iter(mats) for port, mats in inputs.items()}
@@ -130,14 +131,18 @@ def job_bursts(cfg: VecUnitConfig, jobs: list) -> dict[str, list[StreamBurst]]:
 
 def golden_bursts(cfg: VecUnitConfig, jobs: list, results: list | None = None) -> dict:
     """What every output port and ``m_status`` carries for ``jobs``, from the interpreter (or from
-    ``results``, the jobs' :class:`~waveflow.vecunit.model.JobResult` when the caller ran them):
-    per ``wf.st`` a ``VecResp`` burst and a payload burst, per job a ``VecStatus`` burst; nothing
-    after a job that failed (an error is fatal)."""
+    ``results``, the jobs' :class:`~waveflow.vecunit.model.JobResult` when the caller ran them, a
+    ``None`` for one it did not): per ``wf.st`` a ``VecResp`` burst and a payload burst, per job a
+    ``VecStatus`` burst; nothing after a job that failed (an error is fatal).  The interpreter runs
+    its passes instruction-major, the same bits as element-major, faster (Stage 10)."""
     out: dict[str, list] = {f"s_out{p}": [] for p in range(cfg.n_out_ports)}
     out["m_status"] = []
+    checks: dict = {}
     for j, (tx_id, progs, inputs) in enumerate(jobs):
-        r = (results[j] if results is not None
-             else run_job(cfg, progs.load, progs.execute, progs.store, inputs, tx_id=tx_id))
+        r = results[j] if results is not None else None
+        if r is None:
+            r = run_job(cfg, progs.load, progs.execute, progs.store, inputs, tx_id=tx_id,
+                        mode="serial", checks=checks)
         fmts: dict[int, list] = {}
         for x in progs.store:
             fmts.setdefault(int(x.rd), []).append(cfg.out_queue_formats[x.rs1])

@@ -47,13 +47,14 @@ the first block measured is memcpy, which has no arithmetic at all.
 | [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length |
 | [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point |
 | [systolic engine](systolic.md) `8×8×32`, per product (preliminary) | 0.036 ms | 0.73 ms (44 events) | 43 ms | plus ~80 s csynth and a 20 s XSI build per design point |
-| [CG on the vector unit](vecunit_cg.md), per `8×32` job of three iterations | 0.05 ms (`cg_solve`); 13 ms the unit's interpreter | 78 ms, of which 64 ms builds the harness (117 events) | 3.9 s | plus ~98 s csynth and a 93 s XSI build per design point |
-| [matched filter on the vector unit](vecunit_mf.md), per 64-sample chunk at 8 antennas | 0.009 ms (numpy); 0.50 ms the unit's interpreter | 1.08 ms (36 events) | 159 ms | plus ~89 s csynth and an 85 s XSI build per design point |
+| [CG on the vector unit](vecunit_cg.md), per `8×32` job of three iterations | 0.05 ms (`cg_solve`); 7.4 ms the unit's interpreter | 15 ms, of which 8.1 ms builds the harness (104 events) | 3.9 s | plus ~98 s csynth and a 93 s XSI build per design point |
+| [matched filter on the vector unit](vecunit_mf.md), per 64-sample chunk at 8 antennas | 0.009 ms (numpy); 0.35 ms the unit's interpreter | 0.92 ms (34 events) | 159 ms | plus ~89 s csynth and an 85 s XSI build per design point |
 
 Measured 2026-10-13 on one Windows 11 machine (Intel 13th-generation-class CPU, Python 3.14),
 nothing else running, best of several runs. The two vector-unit rows were measured 2026-10-24 on a
 Linux workstation (Intel Core i7-7700K, Python 3.12) with Vitis HLS / Vivado xsim 2024.1, otherwise
-idle, each fitted over four problem sizes.
+idle, each fitted over four problem sizes, after Stage 10 of `plans/vecunit_new.md` made the unit's
+own Python faster.
 
 **Against a compiled model** the picture changes, and it should be read that way. The FFT's untimed
 model is vectorized numpy -- a fair baseline, and what most system engineers write -- but not
@@ -92,6 +93,7 @@ The estimate and its basis are on [the FFT page](fft.md#with-a-compiled-model-an
 - [The systolic engine](systolic.md) -- preliminary: a tiny model beside a timed simulation, and
   where its pysim time goes.
 - [CG on the vector unit](vecunit_cg.md) -- an iterative program on the programmable vector unit:
-  the unit's interpreter is the untimed term, and most of the pysim's time is its testbench.
+  the unit's interpreter is the untimed term; its pysim made 3 to 5 times faster with no result
+  changed.
 - [The matched filter on the vector unit](vecunit_mf.md) -- a streaming program on the same unit:
   small blocks, so the timing costs more against the arithmetic.

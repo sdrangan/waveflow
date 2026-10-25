@@ -93,11 +93,12 @@ def mf_inputs(cfg: VecUnitConfig, xr, xi, rr, ri) -> dict[int, list]:
 
 
 def run_mf(cfg: VecUnitConfig, xr, xi, rr, ri, *, tx_id: int = 0,
-           mode: str = "pass") -> tuple[np.ndarray, np.ndarray, JobResult]:
+           mode: str = "pass", checks: dict | None = None) -> tuple[np.ndarray, np.ndarray, JobResult]:
     """One frame through the interpreter: ``(Y re, Y im, the job's result)``."""
     nsamp, nrx = np.shape(rr)
     p = mf_programs(cfg, nsamp, nrx)
-    r = run_job(cfg, *p, mf_inputs(cfg, xr, xi, rr, ri), tx_id=tx_id, mode=mode)
+    r = run_job(cfg, *p, mf_inputs(cfg, xr, xi, rr, ri), tx_id=tx_id, mode=mode,
+                checks=checks)
     outs = r.outputs[PORT]
     yr = np.concatenate([o[1] for o in outs]) if outs else np.zeros((0, nrx), np.int64)
     yi = np.concatenate([o[2] for o in outs]) if outs else np.zeros((0, nrx), np.int64)

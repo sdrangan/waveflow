@@ -123,10 +123,12 @@ def cg_programs(cfg: VecUnitConfig, nit: int, k: int, n: int, *, skip_dead: bool
 
 
 def run_cg(cfg: VecUnitConfig, f: cg.CgFormats, ar, ai, br, bi, nit: int, *, tx_id: int = 0,
-           mode: str = "pass", skip_dead: bool = True, order: str = "kind") -> JobResult:
+           mode: str = "pass", skip_dead: bool = True, order: str = "kind",
+           checks: dict | None = None) -> JobResult:
     """One CG solve through the interpreter: ``B`` in, and each ``S = cg.mm_step(A, P)`` computed
     from the ``P`` the unit has just emitted (the systolic array's part).  ``result.outputs[0]``
-    holds ``P0 .. P(nit-1)`` then ``X``."""
+    holds ``P0 .. P(nit-1)`` then ``X``.  *checks*: a program-check cache shared across a caller's
+    solves (:func:`~waveflow.vecunit.model.checked_passes`)."""
     k, n = np.shape(br)
     progs = cg_programs(cfg, nit, k, n, skip_dead=skip_dead, order=order)
 
@@ -134,4 +136,5 @@ def run_cg(cfg: VecUnitConfig, f: cg.CgFormats, ar, ai, br, bi, nit: int, *, tx_
         _resp, pr, pi = result.outputs[PORT][-1]
         return cg.mm_step(ar, ai, pr, pi, f)
 
-    return run_job(cfg, *progs, {PORT: [(br, bi)]}, tx_id=tx_id, mode=mode, on_starve=systolic)
+    return run_job(cfg, *progs, {PORT: [(br, bi)]}, tx_id=tx_id, mode=mode, on_starve=systolic,
+                   checks=checks)

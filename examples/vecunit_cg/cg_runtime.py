@@ -61,8 +61,11 @@ def time_untimed(n: int, reps: int, word_bits: int = 64) -> dict:
     solve = lambda: cg.cg_solve(ar, ai, br, bi, RHS_NIT, f)
 
     def interp(mode):
-        return lambda: [run_cg(cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, mode=mode)
-                        for c in blocks]
+        def solve():  # one solve: its column blocks share a program, checked once
+            checks: dict = {}
+            return [run_cg(cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, mode=mode,
+                           checks=checks) for c in blocks]
+        return solve
 
     gold, exact = solve(), True
     for mode in ("serial", "pass"):

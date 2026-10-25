@@ -50,9 +50,13 @@ def problem(f: cg.CgFormats, k: int, n: int, seed: int):
     return q(A.real, f.A), q(A.imag, f.A), q(B.real, f.B), q(B.imag, f.B)
 
 
-def cg_job(cfg, f: cg.CgFormats, ar, ai, br, bi, nit: int, tx_id: int, *, skip_dead: bool = True):
+def cg_job(cfg, f: cg.CgFormats, ar, ai, br, bi, nit: int, tx_id: int, *, skip_dead: bool = True,
+           checks: dict | None = None, results: list | None = None):
     """One CG solve as a job ``(tx_id, Programs, inputs)``: its inputs are ``B`` then the ``S``
-    matrices a closed-loop run hands the unit."""
+    matrices a closed-loop run hands the unit.  The closed-loop run is the interpreter's, so its
+    result is the job's golden: appended to *results* when given (Stage 10).  It runs its passes
+    instruction-major, the same bits as element-major, faster; *checks* is
+    :func:`~waveflow.vecunit.model.run_job`'s program-check cache."""
     k, n = np.shape(br)
     progs = cg_programs(cfg, nit, k, n, skip_dead=skip_dead)
     fed = [(np.asarray(br), np.asarray(bi))]
@@ -63,7 +67,10 @@ def cg_job(cfg, f: cg.CgFormats, ar, ai, br, bi, nit: int, tx_id: int, *, skip_d
         fed.append(s)
         return s
 
-    run_job(cfg, *progs, {PORT: [fed[0]]}, tx_id=tx_id, on_starve=systolic)
+    r = run_job(cfg, *progs, {PORT: [fed[0]]}, tx_id=tx_id, on_starve=systolic, mode="serial",
+                checks=checks)
+    if results is not None:
+        results.append(r)
     return tx_id, progs, {PORT: fed}
 
 
@@ -100,11 +107,16 @@ class CgVecUnit(VecUnit):
         from waveflow.vecunit.calib import CG_JOBS
 
         f, K, N = self.cg_formats, int(self.Kmax), int(self.Nmax)
-        out = []
+        out: list = []
+        checks: dict = {}  # one program-check cache for the solves of this workload
+        solved: list = []  # their closed-loop results: the golden (Stage 10)
         if kind.startswith("rhs_"):
             ar, ai, br, bi = self.rhs(int(kind[4:]))
-            return [cg_job(self.cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, 200 + j)
-                    for j, c in enumerate(range(0, br.shape[1], N))]
+            out = [cg_job(self.cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, 200 + j,
+                          checks=checks, results=solved)
+                   for j, c in enumerate(range(0, br.shape[1], N))]
+            self.remember_results(kind, out, solved)
+            return out
         if kind == "test":
             shapes = [(K, N, 3, 1), (min(K, 5), min(N, 13), 2, 2), (K, N, 1, 3), (K, min(N, 9), 4, 4)]
         elif kind == "steady":
@@ -130,7 +142,9 @@ class CgVecUnit(VecUnit):
             ar, ai, br, bi = problem(f, k, n, seed)
             if kind == "test" and j == 3:
                 br[:, 2] = bi[:, 2] = 0  # a zero column: both guards fire
-            out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + len(out)))
+            out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + len(out), checks=checks,
+                              results=solved))
+        self.remember_results(kind, out, [None] * (len(out) - len(solved)) + solved)
         return out
 
     def rhs(self, n: int):

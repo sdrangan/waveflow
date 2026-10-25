@@ -96,20 +96,20 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
     tail_dims: list[tuple[int, int] | None] = [None] * cfg.NQO
     pc = 0
 
-    def take_head(q: int, where: str) -> tuple[int, int] | None:
+    def take_head(q: int, x: Instr) -> tuple[int, int] | None:
         if head[q] is None:
             if in_next[q] >= len(in_blocks[q]):
-                out.append(f"{where}: input queue q{q} has no more blocks (the load program "
+                out.append(f"execute: {x}: input queue q{q} has no more blocks (the load program "
                            f"loads {len(in_blocks[q])})")
                 return None
             head[q] = in_blocks[q][in_next[q]]
             in_next[q] += 1
         return head[q]
 
-    def take_tail(q: int, where: str) -> tuple[int, int] | None:
+    def take_tail(q: int, x: Instr) -> tuple[int, int] | None:
         if tail[q] is None:
             if out_next[q] >= len(out_blocks[q]):
-                out.append(f"{where}: output queue q{q} fills more blocks than the store program "
+                out.append(f"execute: {x}: output queue q{q} fills more blocks than the store program "
                            f"takes ({len(out_blocks[q])})")
                 return None
             tail[q] = set()
@@ -118,7 +118,7 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
         return tail_dims[q]
 
     for chain in split_passes(prog, cfg.S):
-        where = f"execute[{pc}] {chain[0]}"
+        at = pc  # formatted only for a message (a disassembly is not free: Stage 10)
         pc += len(chain)
         bad = [(x, instr_status(x, cfg)) for x in chain if instr_status(x, cfg) != Status.OK]
         if bad:
@@ -126,14 +126,14 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
             continue
         if chain[0].vector:
             if chain[-1].chain:
-                out.append(f"{where}: the chain is left open (it ends the program or runs past "
+                out.append(f"execute[{at}] {chain[0]}: the chain is left open (it ends the program or runs past "
                            f"S = {cfg.S} instructions)")
                 continue
             if not all(y.vector for y in chain):
-                out.append(f"{where}: a chain may hold only vector and queue instructions")
+                out.append(f"execute[{at}] {chain[0]}: a chain may hold only vector and queue instructions")
                 continue
             if pass_status(chain, cfg) != Status.OK:
-                out.append(f"{where}: the pass breaks a pass rule (slots and capabilities, one "
+                out.append(f"execute[{at}] {chain[0]}: the pass breaks a pass rule (slots and capabilities, one "
                            "group read and written per bank, one access per queue, no reduction "
                            "read in its own pass)")
                 continue
@@ -148,7 +148,7 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
                     if not sset[j]:
                         out.append(f"execute: {x} reads s{j} before it is written")
                 if o.qread is not None:
-                    dims = take_head(o.qread, f"execute: {x}")
+                    dims = take_head(o.qread, x)
                     if dims is not None:
                         k, n = dims
                         gpr = cfg.groups_per_row(n)
@@ -156,7 +156,7 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
                             out.append(f"execute: {x} reads a {k} x {n} block: the stride is "
                                        f"{gpr}, the column groups 0..{gpr - 1}, VL <= {k}")
                 if o.qwrite is not None:
-                    dims = take_tail(o.qwrite, f"execute: {x}")
+                    dims = take_tail(o.qwrite, x)
                     if dims is not None:
                         k, n = dims
                         gpr = cfg.groups_per_row(n)
@@ -185,10 +185,10 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
         elif op == Opcode.CTRL and f == COp.SETVL:
             vl = int(x.imm1)
         elif op == Opcode.CTRL and f == COp.QPOP:
-            take_head(x.rs1, f"execute: {x}")
+            take_head(x.rs1, x)
             head[x.rs1] = None
         elif op == Opcode.CTRL and f == COp.QPUSH:
-            dims = take_tail(x.rd, f"execute: {x}")
+            dims = take_tail(x.rd, x)
             if dims is not None:
                 k, n = dims
                 need = {(i, g) for i in range(k) for g in range(cfg.groups_per_row(n))}
@@ -212,22 +212,34 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
     return out
 
 
+def _job_head(tx_id: int, ninstr: int) -> np.ndarray:
+    job = VecJob()
+    job.tx_id, job.ninstr = int(tx_id), int(ninstr)
+    return np.asarray(job.serialize(word_bw=64), np.uint64)
+
+
 def job_words(tx_id: int, prog: list[Instr]) -> np.ndarray:
     """One program as its burst: the ``VecJob(tx_id, ninstr)`` word, then the instruction words."""
-    job = VecJob()
-    job.tx_id, job.ninstr = int(tx_id), len(prog)
-    head = np.asarray(job.serialize(word_bw=64), np.uint64)
     body = np.asarray([x.encode() for x in prog], np.uint64)
-    return np.concatenate([head, body])
+    return np.concatenate([_job_head(tx_id, len(prog)), body])
 
 
-def assemble(cfg: VecUnitConfig, progs: Programs, tx_id: int) -> dict[str, np.ndarray]:
+def assemble(cfg: VecUnitConfig, progs: Programs, tx_id: int,
+             cache: dict | None = None) -> dict[str, np.ndarray]:
     """``{"load": words, "execute": words, "store": words}`` for one job; raises :class:`AsmError`
-    on any problem :func:`check` finds."""
-    problems = check(cfg, progs)
-    if problems:
-        raise AsmError(problems)
-    return {name: job_words(tx_id, prog) for name, prog in zip(PROGRAMS, progs)}
+    on any problem :func:`check` finds.  *cache*: a dict a caller passes across its jobs, so a
+    program its jobs share is checked and encoded once (Stage 10)."""
+    key = (id(cfg), *(tuple(prog) for prog in progs))
+    hit = cache.get(key) if cache is not None else None
+    if hit is None:
+        problems = check(cfg, progs)
+        if problems:
+            raise AsmError(problems)
+        hit = (cfg, [np.asarray([x.encode() for x in prog], np.uint64) for prog in progs])
+        if cache is not None:
+            cache[key] = hit  # the configuration kept, so its identity is not reused
+    return {name: np.concatenate([_job_head(tx_id, len(body)), body])
+            for name, body in zip(PROGRAMS, hit[1])}
 
 
 def disassemble_words(words) -> list[str]:
