@@ -26,6 +26,7 @@ its time is charged per item from :class:`VecTiming`, rough constants until Stag
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -66,10 +67,60 @@ FEATURES = ("job", "instr", "decode", "run", "elem", "srun", "sop", "divide", "c
 
 
 @dataclass(frozen=True)
+class Schedule:
+    """The execute task's loop schedule in one build, ``(II, depth)`` per loop, from csynth's log
+    (:func:`waveflow.vecunit.report.loop_schedule`; Stage 9d): the decode ``RUNG``, a pass at a
+    time; the fused ``RUN``, an element at a time; ``DELIVER``, a pass's reductions; the scalar
+    gather ``SGATHER`` and loop ``SRUN``, a scalar instruction at a time.  A run of ``np`` passes then
+    costs ``np`` times each per-pass loop's II plus each loop's depth beyond it, and so does a scalar
+    run.  All zero: no schedule -- Stage 7's timing, whose coefficients carry it."""
+
+    rung: tuple[int, int] = (0, 0)
+    run: tuple[int, int] = (0, 0)
+    deliver: tuple[int, int] = (0, 0)
+    sgather: tuple[int, int] = (0, 0)
+    srun: tuple[int, int] = (0, 0)
+
+    @property
+    def per_pass(self) -> int:
+        return self.rung[0] + self.deliver[0]
+
+    @property
+    def per_run(self) -> int:
+        return sum(d - ii for ii, d in (self.rung, self.run, self.deliver))
+
+    @property
+    def per_scalar(self) -> int:
+        return self.sgather[0] + self.srun[0]
+
+    @property
+    def per_srun(self) -> int:
+        return sum(d - ii for ii, d in (self.sgather, self.srun))
+
+    def offset(self, feats: dict) -> float:
+        """The cycles of a job's :func:`job_features` the schedule accounts for."""
+        return (self.per_pass * feats["decode"] + self.per_run * feats["run"]
+                + self.per_scalar * feats["sop"] + self.per_srun * feats["srun"])
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Schedule:
+        return cls(**{k: tuple(int(x) for x in v) for k, v in d.items()
+                      if k in cls.__dataclass_fields__})
+
+
+#: Each build's :class:`Schedule` by configuration identity (its header,
+#: :func:`~waveflow.vecunit.hls.header_name`), as the calibration filed them, and the identity whose
+#: schedule stands in for a build never measured (filled by :func:`_calibrated`).
+SCHEDULES: dict[str, Schedule] = {}
+DEFAULT_SCHEDULE: list[str] = []
+
+
+@dataclass(frozen=True)
 class VecTiming:
     """The execute task's cycles: linear in counts its program gives before it runs
     (:func:`job_features`), charged per item it issues (:func:`~waveflow.vecunit.model.exec_items`)
-    so the times inside a job are right too.  The defaults are rough (Stage 1's pass depth, Stage 5's
+    so the times inside a job are right too, plus what its build's :class:`Schedule` accounts for
+    (Stage 9d; none in Stage 7's fit).  The defaults are rough (Stage 1's pass depth, Stage 5's
     divider); :mod:`waveflow.vecunit.calib` fits them at RTL."""
 
     job: float = 4.0  # a job's start and its status
@@ -82,25 +133,39 @@ class VecTiming:
     divide: float = 42.0  # a scalar run with a divide: the pipelined divider's latency
     control: float = 1.0  # wf.setvl, wf.qpop, wf.qpush
     load: float = 3.0  # the loader's last lane group after its last word
+    schedule: Schedule = Schedule()  # the build's loops (Stage 9d)
 
     def run_cycles(self, chains, vl: int) -> float:
         """A run of passes: each decoded in turn, then one pipelined loop over all their elements."""
-        return (self.instr * sum(len(c) for c in chains) + self.decode * len(chains) + self.run
-                + self.elem * len(chains) * vl)
+        s = self.schedule
+        return (self.instr * sum(len(c) for c in chains) + (self.decode + s.per_pass) * len(chains)
+                + self.run + s.per_run + self.elem * len(chains) * vl)
 
     def srun_cycles(self, chains) -> float:
         """A run of scalar instructions, into pipelined dividers."""
+        s = self.schedule
         divides = any(int(c[0].funct) == I.SOp.DIVZ for c in chains)
-        return ((self.instr + self.sop) * len(chains) + self.srun
+        return ((self.instr + self.sop + s.per_scalar) * len(chains) + self.srun + s.per_srun
                 + (self.divide if divides else 0.0))
 
     def predict(self, feats: dict) -> float:
         """A job's execute cycles from its :func:`job_features`."""
-        return sum(getattr(self, f) * feats[f] for f in FEATURES)
+        return sum(getattr(self, f) * feats[f] for f in FEATURES) + self.schedule.offset(feats)
+
+    def for_config(self, cfg: VecUnitConfig) -> VecTiming:
+        """This timing on *cfg*'s build: its filed :class:`Schedule`, else the default one's -- or,
+        with no schedule filed (Stage 7's fit), this timing as it is."""
+        if not DEFAULT_SCHEDULE:
+            return self
+        from waveflow.vecunit.hls import header_name
+
+        s = SCHEDULES.get(header_name(cfg), SCHEDULES[DEFAULT_SCHEDULE[0]])
+        return dataclasses.replace(self, schedule=s)
 
     @classmethod
     def from_coefs(cls, coefs: dict) -> VecTiming:
-        return cls(**{k: float(v) for k, v in coefs.items() if k in cls.__dataclass_fields__})
+        return cls(**{k: float(v) for k, v in coefs.items()
+                      if k in cls.__dataclass_fields__ and k != "schedule"})
 
 
 def job_features(prog, cfg: VecUnitConfig) -> dict:
@@ -142,7 +207,11 @@ def _calibrated() -> VecTiming:
 
     path = model_path(TIMING_MODEL)
     if path.is_file():
-        return VecTiming.from_coefs(json.loads(path.read_text(encoding="utf-8"))["coefs"])
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        SCHEDULES.clear()
+        SCHEDULES.update({k: Schedule.from_dict(v) for k, v in rec.get("schedules", {}).items()})
+        DEFAULT_SCHEDULE[:] = [rec["default_schedule"]] if rec.get("default_schedule") else []
+        return VecTiming.from_coefs(rec["coefs"])
     return VecTiming()
 
 
@@ -269,11 +338,30 @@ class VecExec(_VecPart):
                *(f"qo{j}" for j in range(self.cfg.NQO)), "m_status")
         return self._kernel("exec", sig, ("s_prog", "m_status"))
 
+    def _until(self, dt: float) -> ProcessGen[None]:
+        """Advance the job's clock by *dt* and wait until the simulation reaches it.  The clock may
+        lag the simulation's (a job starts when its program's first word arrived, :meth:`run_iter`):
+        then only what overtakes the simulation is waited."""
+        self._vt += dt
+        if self._vt > self.env.now:
+            yield self.timeout(self._vt - self.env.now)
+
+    def _caught_up(self) -> None:
+        """After a wait on a queue block: the job's clock cannot be behind the moment it ended."""
+        self._vt = max(self._vt, self.env.now)
+
     def run_iter(self) -> ProcessGen[None]:
         if self.halted:
             yield from self._halt()
-        cfg, t, period = self.cfg, self.timing, self.clk.period
-        tx_id, prog, framed = program_prefix((yield from self.s_prog.get()))
+        cfg, t, period = self.cfg, self.timing.for_config(self.cfg), self.clk.period
+        t0 = self.env.now
+        words = yield from self.s_prog.get()
+        tx_id, prog, framed = program_prefix(words)
+        # The RTL decodes each instruction as it arrives, a word a cycle; pysim has the whole burst
+        # only at its last word.  So the job's clock starts when the first word arrived -- or when
+        # the task asked, if the burst was already waiting (Stage 9d: the first job of a run had
+        # started a program's length late).  Instructions decode slower than they arrive.
+        self._vt = max(t0, self.env.now - (int(np.asarray(words).shape[0]) - 1) * period)
         m = Machine(cfg)
         held_out: list = [None] * cfg.NQO  # the block handle of each output queue's tail
         st = Status.OK
@@ -288,37 +376,42 @@ class VecExec(_VecPart):
                         if o.qread is not None and m.head[o.qread] is None:
                             blk = yield from self.qi[o.qread].acquire_read()
                             m.head[o.qread] = blk.payload
+                            self._caught_up()
                         if o.qwrite is not None and m.tail[o.qwrite] is None:
                             held_out[o.qwrite] = yield from self.qo[o.qwrite].acquire_write()
                             m.tail[o.qwrite] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
+                            self._caught_up()
                 for chain in item.chains:
                     m.run_pass(list(chain), "serial")
-                yield self.timeout(t.run_cycles(item.chains, m.vl) * period)
+                yield from self._until(t.run_cycles(item.chains, m.vl) * period)
                 continue
             if item.kind == "scalars":
                 for chain in item.chains:
                     m.scalar(chain[0])
-                yield self.timeout(t.srun_cycles(item.chains) * period)
+                yield from self._until(t.srun_cycles(item.chains) * period)
                 continue
             x = item.chains[0][0]
             if int(x.funct) == I.COp.SETVL:
                 m.control(x)
-                yield self.timeout((t.instr + t.control) * period)
+                yield from self._until((t.instr + t.control) * period)
             elif int(x.funct) == I.COp.QPOP:
                 if m.head[x.rs1] is None:  # released without a read: take it first
                     yield from self.qi[x.rs1].acquire_read()
+                    self._caught_up()
                 m.head[x.rs1] = None
-                yield self.timeout((t.instr + t.control) * period)
+                yield from self._until((t.instr + t.control) * period)
                 yield from self.qi[x.rs1].release_read()
             else:  # QPUSH
                 if m.tail[x.rd] is None:
                     held_out[x.rd] = yield from self.qo[x.rd].acquire_write()
                     m.tail[x.rd] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
+                    self._caught_up()
                 held_out[x.rd].payload = m.tail[x.rd]
                 m.tail[x.rd] = None
-                yield self.timeout((t.instr + t.control) * period)
+                yield from self._until((t.instr + t.control) * period)
                 yield from self.qo[x.rd].commit_write(held_out[x.rd])
-        yield self.timeout(t.job * period)
+                self._caught_up()
+        yield from self._until(t.job * period)
         s = I.VecStatus()
         s.tx_id, s.status = int(tx_id), int(st)
         yield from self.m_status.write(np.asarray(s.serialize(word_bw=CTRL_BITS), np.uint64))

@@ -26,11 +26,12 @@ def main(argv=None) -> int:
     ap.add_argument("--through", default="compare")
     ap.add_argument("--workload", default="test")
     ap.add_argument("--trace", action="store_true")
+    ap.add_argument("--word-bits", type=int, default=64, help="the data ports' width: 64 or 128")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag(unit(), workload=a.workload, trace=a.trace).run(build_config(root),
-                                                                     through=a.through)
+    res = build_dag(unit(word_bits=a.word_bits), workload=a.workload,
+                    trace=a.trace).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():
         print(f"{name:24} {'ok' if r.success else 'FAIL'}  {'' if r.success else r.message[:3000]}")

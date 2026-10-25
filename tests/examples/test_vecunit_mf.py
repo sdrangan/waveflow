@@ -62,15 +62,18 @@ def test_instruction_count_and_assembly():
     assert len(words["execute"]) == 1 + 4 * 17
 
 
+@pytest.mark.parametrize("word_bits", [64, 128])
 @pytest.mark.parametrize("kind", ["test", "steady"])
-def test_pysim_unit_equals_the_interpreter(kind, tmp_path):
+def test_pysim_unit_equals_the_interpreter(kind, word_bits, tmp_path):
     """The matched-filter-configured unit in its harness (Stage 4): every frame's outputs and
-    statuses equal to the interpreter's (and so to ``mf_golden``)."""
+    statuses equal to the interpreter's (and so to ``mf_golden``).  At 64- and 128-bit data words
+    (Stage 9a)."""
     from examples.vecunit_mf.mf_unit import MfVecUnit
     from waveflow.hw.harness import harness
     from waveflow.simulation.simulation import Simulation
 
-    unit = MfVecUnit(name="vecunit", sim=Simulation(), VLMAX=16)
+    unit = MfVecUnit(name="vecunit", sim=Simulation(), VLMAX=16, word_bits=word_bits)
+    assert unit.cfg.word_bits == word_bits
     sysm = harness(unit, workload=kind, n_cycles=10**6)
     sysm.write_scenario(tmp_path)
     sysm.run()
@@ -79,7 +82,8 @@ def test_pysim_unit_equals_the_interpreter(kind, tmp_path):
     for port, bursts in gold.items():
         got = sysm.stand_ins[port].words
         assert len(got) == len(bursts)
-        assert all(np.array_equal(np.asarray(a, np.uint64).reshape(-1), np.asarray(b, np.uint64))
+        assert all(np.array_equal(np.asarray(a, np.uint64).reshape(-1),
+                                  np.asarray(b, np.uint64).reshape(-1))
                    for a, b in zip(got, bursts))
 
 

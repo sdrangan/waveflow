@@ -9,6 +9,7 @@ interpreter (:func:`cg_job`), so a static stream carries exactly what the loop w
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -68,23 +69,29 @@ def cg_job(cfg, f: cg.CgFormats, ar, ai, br, bi, nit: int, tx_id: int, *, skip_d
 
 @dataclass
 class CgVecUnit(VecUnit):
-    """A vector unit for CG on ``k x n`` jobs up to ``Kmax x Nmax`` with ``cg_formats``."""
+    """A vector unit for CG on ``k x n`` jobs up to ``Kmax x Nmax`` with ``cg_formats``, its data
+    ports ``word_bits`` wide."""
 
     cg_formats: cg.CgFormats = CENTRE
     Kmax: int = 8
     Nmax: int = 32
     L: int = 4
-    build_fields: ClassVar[tuple[str, ...]] = ("cfg", "cg_formats", "Kmax", "Nmax", "L")
+    word_bits: int = 64
+    build_fields: ClassVar[tuple[str, ...]] = ("cfg", "cg_formats", "Kmax", "Nmax", "L", "word_bits")
 
     def __post_init__(self) -> None:
         if self.cfg is None:
-            self.cfg = cg_config(self.cg_formats, Kmax=self.Kmax, Nmax=self.Nmax, L=self.L)
+            self.cfg = cg_config(self.cg_formats, Kmax=self.Kmax, Nmax=self.Nmax, L=self.L,
+                                 word_bits=self.word_bits)
         super().__post_init__()
 
     def jobs(self, kind: str = "test") -> list:
         """``"test"``: four solves -- the full ``Kmax x Nmax`` at three iterations, a short one
         (``k`` 5, ``n`` 13, ``L`` not dividing it), one iteration, and a zero column (the guards).
         ``"steady"``: four full solves of three iterations (the comparison with the CG core).
+        ``"steady_<p><v>..."``: the same four solves with ``k``, ``n`` or ``nit`` changed, as
+        ``steady_k2`` or ``steady_nit1`` (the RTL catalogue's workloads, Stage 9c: each makes a
+        different bound bind).
         ``"calib"``, ``"holdout"``: the calibration's pre-registered jobs
         (:data:`waveflow.vecunit.calib.CG_JOBS`): random jobs over every instruction form on this
         configuration, then CG solves.  ``"rhs_<n>"``: one ``Kmax x n`` right-hand side of three
@@ -102,6 +109,14 @@ class CgVecUnit(VecUnit):
             shapes = [(K, N, 3, 1), (min(K, 5), min(N, 13), 2, 2), (K, N, 1, 3), (K, min(N, 9), 4, 4)]
         elif kind == "steady":
             shapes = [(K, N, 3, s) for s in range(4)]
+        elif kind.startswith("steady_"):
+            shape = {"k": K, "n": N, "nit": 3}
+            for part in kind[len("steady_"):].split("_"):
+                m = re.fullmatch(r"(nit|k|n)(\d+)", part)
+                if m is None:
+                    raise ValueError(f"no workload {kind!r}: {part!r} is not k<v>, n<v> or nit<v>")
+                shape[m[1]] = int(m[2])
+            shapes = [(shape["k"], shape["n"], shape["nit"], s) for s in range(4)]
         elif kind in CG_JOBS:  # the calibration's pre-registered sets (waveflow/vecunit/calib.py)
             from waveflow.vecunit.workload import random_jobs
 

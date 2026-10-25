@@ -1,7 +1,8 @@
 """The vector unit at RTL (Stage 5 of ``plans/vecunit_new.md``): each unit in its own harness through
 the system flow -- codegen, csynth at 4 ns, XSI -- and every output burst and status equal to pysim's,
 which equals the interpreter's: the generic unit on random jobs over every instruction form, the CG
-unit (four solves) and the matched-filter unit (four frames, long vectors)."""
+unit (four solves) and the matched-filter unit (four frames, long vectors); the last two also at
+128-bit data words (Stage 9a: a lane group of four 32-bit complex values is then one whole word)."""
 
 from __future__ import annotations
 
@@ -48,3 +49,17 @@ def test_xsi_matched_filter_unit(tmp_path):
     from examples.vecunit_mf.mf_unit import MfVecUnit
 
     _run(MfVecUnit(name="vecunit", sim=Simulation()), tmp_path)
+
+
+@pytest.mark.xsi
+def test_xsi_cg_unit_128(tmp_path):
+    from examples.vecunit_cg.cg_unit import CgVecUnit
+
+    _run(CgVecUnit(name="vecunit", sim=Simulation(), word_bits=128), tmp_path)
+
+
+@pytest.mark.xsi
+def test_xsi_matched_filter_unit_128(tmp_path):
+    from examples.vecunit_mf.mf_unit import MfVecUnit
+
+    _run(MfVecUnit(name="vecunit", sim=Simulation(), word_bits=128), tmp_path)

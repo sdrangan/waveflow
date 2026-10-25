@@ -44,12 +44,17 @@ KEY = "rhs_centre"
 SIZES = (32, 128, 512, 2048)
 
 
-def time_untimed(n: int, reps: int) -> dict:
+def record_key(word_bits: int) -> str:
+    """The record's key in ``runtime.json``: :data:`KEY`, with the word width when it is not 64."""
+    return KEY if word_bits == 64 else f"{KEY}_w{word_bits}"
+
+
+def time_untimed(n: int, reps: int, word_bits: int = 64) -> dict:
     """The golden on the whole ``B`` and the interpreter a column block at a time, on the operands
     the harness plays.  The interpreter runs its passes instruction-major (``"serial"``, what pysim's
     execute task calls) and, beside it, element-major (``"pass"``, as the hardware; its default).
     ``exact``: every block's ``X`` from the interpreter, both ways, equals the golden's."""
-    u = unit()
+    u = unit(word_bits=word_bits)
     f, cfg, N = u.cg_formats, u.cfg, int(u.Nmax)
     ar, ai, br, bi = u.rhs(n)
     blocks = range(0, n, N)
@@ -70,16 +75,17 @@ def time_untimed(n: int, reps: int) -> dict:
             "interpreter_pass_s": RT.best_of(interp("pass"), reps), "exact": exact}
 
 
-def time_sizes(sizes, reps: int, root: Path | None) -> dict:
+def time_sizes(sizes, reps: int, root: Path | None, word_bits: int = 64) -> dict:
     """Per size: the untimed ways, the pysim, and with *root* the RTL (one build root for every size,
     so csynth runs once)."""
     rows = {}
     for n in sizes:
         kind = f"rhs_{n}"
-        row = {"k": 8, "n": n, "jobs": n // 32, **time_untimed(n, reps)}
-        row["pysim"] = RT.time_pysim(unit(), kind, reps)
+        row = {"k": 8, "n": n, "jobs": n // 32, **time_untimed(n, reps, word_bits)}
+        row["pysim"] = RT.time_pysim(unit(word_bits=word_bits), kind, reps)
         if root is not None:
-            row["rtl"] = RT.time_rtl(unit(), kind, root, RT.rtl_bound(row["pysim"]["cycles"]))
+            row["rtl"] = RT.time_rtl(unit(word_bits=word_bits), kind, root,
+                                    RT.rtl_bound(row["pysim"]["cycles"]))
         rows[str(n)] = row
         p, r = row["pysim"], row.get("rtl", {})
         print(f"8x{n:<5d} ({row['jobs']:2d} jobs)  golden {1e3 * row['golden_s']:8.2f} ms  "
@@ -112,17 +118,19 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=11, help="best of this many runs per point")
     ap.add_argument("--rtl", action="store_true", help="also run the RTL under XSI (needs Vivado)")
     ap.add_argument("--root", type=Path, default=None, help="the RTL build root")
+    ap.add_argument("--word-bits", type=int, default=64, help="the data ports' width: 64 or 128")
     ap.add_argument("--profile", action="store_true",
                     help="only profile one pysim run at the largest size")
     a = ap.parse_args()
     if a.profile:
         n = max(a.sizes)
-        prof = {"size": n, **RT.profile_run(unit(), f"rhs_{n}")}
+        prof = {"size": n, **RT.profile_run(unit(word_bits=a.word_bits), f"rhs_{n}")}
         print({k: round(v, 3) if isinstance(v, float) else v for k, v in prof.items()})
-        rec = RT.load(RUNTIME, KEY)
+        key = record_key(a.word_bits)
+        rec = RT.load(RUNTIME, key)
         if not rec:
-            raise SystemExit(f"run the sizes first: {RUNTIME} has no {KEY!r}")
-        RT.save(RUNTIME, KEY, {**rec, "profile": prof})
+            raise SystemExit(f"run the sizes first: {RUNTIME} has no {key!r}")
+        RT.save(RUNTIME, key, {**rec, "profile": prof})
         return
     root = None
     if a.rtl:
@@ -130,14 +138,15 @@ def main() -> None:
             raise SystemExit("--rtl needs --root")
         root = a.root.resolve()
         root.mkdir(parents=True, exist_ok=True)
-    rows = time_sizes(sorted(a.sizes), a.reps, root)
+    rows = time_sizes(sorted(a.sizes), a.reps, root, a.word_bits)
     out = {"workload": f"8 x n right-hand side, {RHS_NIT} iterations, as n/32 jobs of 8 x 32; "
-                       "CgVecUnit centre (Kmax 8, Nmax 32, L 4), 64-bit words",
+                       f"CgVecUnit centre (Kmax 8, Nmax 32, L 4), {a.word_bits}-bit words",
            "date": datetime.now().astimezone().date().isoformat(), "machine": RT.machine(),
            "reps": a.reps, "sizes": rows}
-    RT.keep_previous(RUNTIME, KEY, out)
+    key = record_key(a.word_bits)
+    RT.keep_previous(RUNTIME, key, out)
     out["fit"] = fits(rows) if len(rows) > 1 else None
-    RT.save(RUNTIME, KEY, out)
+    RT.save(RUNTIME, key, out)
 
 
 if __name__ == "__main__":

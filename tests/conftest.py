@@ -220,7 +220,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 238 -> 241 on 2026-10-22 (plans/vecunit_new.md, Stage 5): the vector unit at RTL, bit-exact against
 #: pysim -- a generic configuration on random jobs, CG and the matched filter
 #: (tests/vecunit/test_unit_xsi.py).
-WANT_XSI_GATES = 241
+#: 241 -> 243 on 2026-10-24 (plans/vecunit_new.md, Stage 9a): the CG and matched-filter units at
+#: 128-bit data words (tests/vecunit/test_unit_xsi.py).
+WANT_XSI_GATES = 243
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

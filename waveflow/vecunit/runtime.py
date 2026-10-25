@@ -62,7 +62,8 @@ def outputs_match(sysm, golden: dict) -> bool:
         got = sysm.stand_ins[port].words
         if len(got) != len(bursts):
             return False
-        if not all(np.array_equal(np.asarray(a, np.uint64).reshape(-1), np.asarray(b, np.uint64))
+        if not all(np.array_equal(np.asarray(a, np.uint64).reshape(-1),
+                                  np.asarray(b, np.uint64).reshape(-1))
                    for a, b in zip(got, bursts)):
             return False
     return True
@@ -114,7 +115,7 @@ def _last_cycles(vectors: Path) -> dict[str, int]:
     return out
 
 
-def time_rtl(unit, kind: str, root: Path, n_cycles: int) -> dict:
+def time_rtl(unit, kind: str, root: Path, n_cycles: int, *, trace: bool = False) -> dict:
     """*unit*'s harness on workload *kind* through the system flow at *root*, the RTL bounded at
     *n_cycles*: each step's time (csynth is fresh only on a root's first run), the XSI runner's phases,
     whether every step passed (``compare``: the RTL's outputs equal pysim's), the cycle each output's
@@ -123,7 +124,7 @@ def time_rtl(unit, kind: str, root: Path, n_cycles: int) -> dict:
     from waveflow.hw.harness import ACCEPT_SUFFIX
     from waveflow.vecunit.build import TOP, WORK_DIR, build_config, build_dag
 
-    dag = build_dag(unit, workload=kind, n_cycles=n_cycles)
+    dag = build_dag(unit, workload=kind, n_cycles=n_cycles, trace=trace)
     config = build_config(root)
     with events.collect() as spans:
         results = dag.run(config, through="compare")

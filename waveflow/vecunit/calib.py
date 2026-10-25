@@ -61,6 +61,41 @@ RESOURCE_HOLDOUT = ((8, 16, 2, "all", "cg"), (4, 8, 3, "mul1", "mf"), (2, 16, 3,
 #: Held-out scores the plan asks to report (systolic plan's targets): mean and worst relative error.
 TARGET_MEAN, TARGET_WORST = 0.03, 0.06
 
+# -- Stage 9d: by phase and by configuration (pre-registered 2026-10-24, before any of its runs) ----
+#: A fresh held-out set on the CG configuration (Stage 7's ``holdout`` has been scored).
+CG_JOBS["holdout2"] = {"random": 6, "seed": 199, "npass": (10, 18, 26), "n_max": 8,
+                       "solves": [(8, 32, 5, 41), (4, 20, 3, 42)]}
+#: The matched filter's own: random jobs over every instruction form, their blocks at most
+#: ``k_max x n_max`` (execute-bound), then frames ``(nsamp, nrx, seed)``.
+MF_JOBS = {
+    "calib": {"random": 10, "seed": 41, "npass": (8, 16, 24), "n_max": 4, "k_max": 64,
+              "frames": [(128, 8, 51), (200, 5, 52), (64, 2, 53)]},
+    "holdout2": {"random": 6, "seed": 299, "npass": (12, 20), "n_max": 4, "k_max": 64,
+                 "frames": [(256, 6, 61), (100, 3, 62)]},
+}
+#: The builds Stage 9 measures at RTL: ``name -> (unit, its parameters)``; each is a configuration
+#: identity whose execute-loop schedule csynth reports (``report.loop_schedule``) and pysim loads.
+BUILDS = {
+    "cg": ("cg", {}), "cg_w128": ("cg", {"word_bits": 128}), "cg_l2": ("cg", {"L": 2}),
+    "cg_l8": ("cg", {"L": 8}),
+    "mf": ("mf", {}), "mf_w128": ("mf", {"word_bits": 128}), "mf_v16": ("mf", {"VLMAX": 16}),
+    "mf_v256": ("mf", {"VLMAX": 256}), "mf_l8": ("mf", {"L": 8}),
+}
+#: The fit: ``(build, workload)`` -- two configurations of each application, so no schedule is the
+#: only one seen (lesson 9).  A job enters the fit only if its bounds (``report.job_bounds``) say the
+#: execute task binds by :data:`EXECUTE_MARGIN`: the model is the execute task's time.
+TIMING2_FIT = (("cg", "calib"), ("cg", "steady"), ("cg_l2", "calib"),
+               ("mf", "calib"), ("mf", "steady"), ("mf_v256", "calib"))
+EXECUTE_MARGIN = 1.2
+#: Held out, scored once (pysim's job intervals against the RTL's, every job but each run's first):
+#: fresh jobs on fitted builds, the catalogue's other workloads, and builds never fitted.
+TIMING2_HOLDOUT = (
+    ("cg", "holdout2"), ("cg", "steady_k2"), ("cg", "steady_nit1"), ("cg", "steady_nit8"),
+    ("cg", "steady_n4"), ("cg_l8", "steady"), ("cg_l8", "holdout2"), ("cg_w128", "steady"),
+    ("mf", "holdout2"), ("mf", "steady_nrx4"), ("mf", "steady_nrx1"), ("mf_v16", "steady"),
+    ("mf_l8", "steady"), ("mf_w128", "steady"),
+)
+
 
 #: The units the sets above name, as ``module:class`` (the library imports no example).
 UNITS = {"cg": "examples.vecunit_cg.cg_unit:CgVecUnit", "mf": "examples.vecunit_mf.mf_unit:MfVecUnit"}
@@ -82,6 +117,12 @@ def make_unit(which: str, **kw):
 
     mod, cls = UNITS[which].split(":")
     return getattr(importlib.import_module(mod), cls)(name="vecunit", sim=Simulation(), **kw)
+
+
+def build_unit(build: str):
+    """A fresh unit of the :data:`BUILDS` entry *build*."""
+    which, kw = BUILDS[build]
+    return make_unit(which, **kw)
 
 
 # -- timing ---------------------------------------------------------------------------------------
@@ -115,9 +156,9 @@ def _timing(timing):
         _VecPart.timing = saved
 
 
-def pysim_intervals(unit, kind: str, timing=None) -> list[float]:
-    """:func:`rtl_intervals` in pysim: *unit* in its harness on workload *kind*, each status timed as
-    it leaves, charged from *timing* (default: the unit's)."""
+def pysim_status(unit, kind: str, timing=None) -> list[float]:
+    """The cycle each job's status leaves *unit* in pysim, in its harness on workload *kind*, charged
+    from *timing* (default: the unit's)."""
     from waveflow.hw.harness import harness
 
     with _timing(timing if timing is not None else type(unit).timing):
@@ -132,19 +173,27 @@ def pysim_intervals(unit, kind: str, timing=None) -> list[float]:
 
         sink.stream_ep.rx_proc = timed
         sysm.run()
-    return np.diff(np.asarray(times) * unit.clk.freq).tolist()
+    return (np.asarray(times) * unit.clk.freq).tolist()
 
 
-def fit_timing(feats: list[dict], cycles) -> dict:
+def pysim_intervals(unit, kind: str, timing=None) -> list[float]:
+    """:func:`rtl_intervals` in pysim: *unit* in its harness on workload *kind*, each status timed as
+    it leaves, charged from *timing* (default: the unit's)."""
+    return np.diff(pysim_status(unit, kind, timing)).tolist()
+
+
+def fit_timing(feats: list[dict], cycles, weights=None) -> dict:
     """The coefficients of :data:`waveflow.vecunit.unit.FEATURES`: non-negative least squares on the
-    relative error (each job weighted by ``1 / cycles**2``), the score's own measure."""
+    relative error (each job weighted by ``1 / w**2``, ``w`` its *weights* -- its whole interval when
+    *cycles* is what is left of it -- or *cycles*), the score's own measure."""
     from sklearn.linear_model import LinearRegression  # type: ignore[import-untyped]
 
     from waveflow.vecunit.unit import FEATURES
 
     X = np.array([[f[k] for k in FEATURES] for f in feats], dtype=float)
     y = np.asarray(cycles, dtype=float)
-    reg = LinearRegression(fit_intercept=False, positive=True).fit(X, y, sample_weight=1.0 / y**2)
+    w = np.asarray(cycles if weights is None else weights, dtype=float)
+    reg = LinearRegression(fit_intercept=False, positive=True).fit(X, y, sample_weight=1.0 / w**2)
     return {k: float(c) for k, c in zip(FEATURES, reg.coef_)}
 
 
@@ -211,6 +260,120 @@ def score_timing(roots: dict) -> dict:
     _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
     return out
 
+
+
+# -- timing by phase and configuration (Stage 9d) --------------------------------------------------
+def measured_runs(paths) -> dict:
+    """The RTL runs of the Stage 9c catalogues (``measured.json``, :mod:`waveflow.vecunit.measure`)
+    at *paths*, merged: ``{"<build>_<workload>": run}``."""
+    runs: dict = {}
+    for p in paths:
+        runs.update(json.loads(Path(p).read_text(encoding="utf-8"))["runs"])
+    return runs
+
+
+def _run(runs: dict, build: str, kind: str) -> dict:
+    run = runs.get(f"{build}_{kind}")
+    if run is None or not run.get("exact"):
+        raise RuntimeError(f"no exact RTL run of {build} {kind} in the catalogues")
+    return run
+
+
+def timing2_rows(runs: dict, pairs, *, execute_only: bool) -> list[dict]:
+    """Per job but each run's first (its interval is the run's start-up): its features, its build's
+    schedule offset and its RTL interval.  *execute_only*: only jobs whose bounds say the execute
+    task binds by :data:`EXECUTE_MARGIN` (the fit's rule)."""
+    from waveflow.vecunit.report import job_bounds
+    from waveflow.vecunit.unit import Schedule, job_features
+
+    rows = []
+    for build, kind in pairs:
+        run = _run(runs, build, kind)
+        unit = build_unit(build)
+        sched = Schedule.from_dict(run["schedule"])
+        meas = np.diff(run["status_cycles"]).astype(int).tolist()
+        for (_tx, progs, _inp), m in zip(unit.jobs(kind)[1:], meas):
+            b = job_bounds(unit.cfg, progs)
+            if execute_only and b["execute"] < EXECUTE_MARGIN * max(b["load"], b["store"]):
+                continue
+            f = job_features(progs.execute, unit.cfg)
+            rows.append({"build": build, "kind": kind, "feats": f, "offset": sched.offset(f),
+                         "rtl": m})
+    return rows
+
+
+def _reload_timing() -> None:
+    """Make pysim charge from the filed timing and schedules (read when the module was imported)."""
+    from waveflow.vecunit import unit as U
+
+    U._VecPart.timing = U._calibrated()
+
+
+def calibrate_timing2(paths) -> dict:
+    """Fit the execute timing by phase and configuration (Stage 9d, pre-registered): each build's
+    schedule from csynth accounts for its loops, and a non-negative least squares on the relative
+    error fits the rest over :data:`TIMING2_FIT`'s execute-bound jobs; file it with every measured
+    build's schedule (Stage 7's record kept under ``"v1"``).  Returns the record."""
+    from waveflow.vecunit.hls import header_name
+    from waveflow.vecunit.unit import FEATURES, VecTiming
+
+    runs = measured_runs(paths)
+    rows = timing2_rows(runs, TIMING2_FIT, execute_only=True)
+    coefs = fit_timing([r["feats"] for r in rows], [r["rtl"] - r["offset"] for r in rows],
+                       weights=[r["rtl"] for r in rows])
+    path = model_path(TIMING_MODEL)
+    old = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    schedules = {r["header"]: r["schedule"] for r in runs.values() if r.get("schedule")}
+    default = header_name(build_unit("cg").cfg)
+    record = {"version": 2, "features": list(FEATURES), "coefs": coefs, "schedules": schedules,
+              "default_schedule": default,
+              "v1": old.get("v1") or {k: v for k, v in old.items()
+                                      if k not in ("model", "part", "tool")},
+              "plan": "plans/vecunit_new.md Stage 9d"}
+    t = VecTiming.from_coefs(coefs)
+    pred = [t.predict(r["feats"]) + r["offset"] for r in rows]  # t has no schedule: add it
+    record["fit"] = {"set": [list(x) for x in TIMING2_FIT], "jobs": len(rows),
+                     "model": errors(pred, [r["rtl"] for r in rows])}
+    _file(TIMING_MODEL, record)
+    _reload_timing()
+    t = type(make_unit("cg")).timing
+    p_all, m_all = [], []
+    for build, kind in TIMING2_FIT:
+        run = _run(runs, build, kind)
+        p_all += pysim_intervals(build_unit(build), kind, t)
+        m_all += np.diff(run["status_cycles"]).astype(int).tolist()
+    record["fit"]["pysim"] = errors(p_all, m_all)
+    _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
+    return record
+
+
+def score_timing2(paths) -> dict:
+    """The held-out score, once (rule 5): each :data:`TIMING2_HOLDOUT` pair's job intervals but the
+    first, pysim charged from the filed fit against the RTL's; and, reported beside it, each run's
+    first status (its start-up), pysim against RTL.  Filed beside the fit."""
+    path = model_path(TIMING_MODEL)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record.get("version") != 2:
+        raise RuntimeError(f"{path}: fit Stage 9d's timing first (calibrate_timing2)")
+    if "holdout" in record:
+        raise RuntimeError(f"{path}: the held-out set is scored once, and it has been")
+    _reload_timing()
+    runs = measured_runs(paths)
+    out, pred, meas, start = {}, [], [], {}
+    for build, kind in TIMING2_HOLDOUT:
+        run = _run(runs, build, kind)
+        ps = pysim_status(build_unit(build), kind)
+        p, m = np.diff(ps).tolist(), np.diff(run["status_cycles"]).astype(int).tolist()
+        out[f"{build} {kind}"] = {"rtl": m, "pysim": [round(x, 1) for x in p], **errors(p, m)}
+        start[f"{build} {kind}"] = {"rtl": int(run["status_cycles"][0]), "pysim": round(ps[0], 1)}
+        pred += p
+        meas += m
+    out["all"] = {k: v for k, v in errors(pred, meas).items() if k != "rel"}
+    out["targets"] = {"mean": TARGET_MEAN, "worst": TARGET_WORST}
+    out["start"] = start
+    record["holdout"] = out
+    _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
+    return out
 
 
 # -- resources ------------------------------------------------------------------------------------
@@ -390,7 +553,8 @@ def score_resources(directory) -> dict:
 
 def main(argv=None) -> int:
     """``fit-timing <calib root>``; ``score-timing <cg holdout> <cg steady> <mf steady>`` (roots of
-    the RTL runs); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
+    the RTL runs); ``fit-timing2 <measured.json>...``, ``score-timing2 <measured.json>...`` (Stage 9d,
+    on the Stage 9c catalogues); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
     ``fit-resources <dir>``, ``score-resources <dir>`` (the rows ``csynth`` printed, saved as
     ``<dir>/<fit|holdout>_<index>.json``)."""
     a = list(sys.argv[1:] if argv is None else argv)
@@ -400,6 +564,13 @@ def main(argv=None) -> int:
         return 0
     if a[:1] == ["score-timing"] and len(a) == 4:
         print(json.dumps(score_timing(dict(zip(TIMING_HOLDOUT, a[1:]))), indent=1))
+        return 0
+    if a[:1] == ["fit-timing2"] and len(a) >= 2:
+        r = calibrate_timing2(a[1:])
+        print(json.dumps({k: r[k] for k in ("coefs", "fit")}, indent=1))
+        return 0
+    if a[:1] == ["score-timing2"] and len(a) >= 2:
+        print(json.dumps(score_timing2(a[1:]), indent=1))
         return 0
     if a[:1] == ["csynth"] and len(a) == 4:
         spec = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[a[1]][int(a[2])]

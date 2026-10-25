@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7). Stage 8 (simulation speed, measurement only) added and done 2026-10-24 (drafted 2026-10-20 with the user).
+**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7). Stage 8 (simulation speed, measurement only) added and done 2026-10-24; Stage 9 (measurement parity with the systolic example) added 2026-10-24, not started (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -978,10 +978,176 @@ the fits are on the pages.
 - XSI ran the CG build at 860-1,290 cycles a second and the matched filter's at 2,240-3,940 (csynth:
   82.1k / 74.5k LUT, 71.7k / 48.3k FF).
 
+### Stage 9: measurement parity with the systolic example
+
+(Added 2026-10-24 with the user.) The systolic example (`examples/systolic/`, `docs/examples/systolic/`)
+measures more than simulation speed. This stage gives the two vector programs every measurement of
+it that applies to them. Each sub-stage has its own gate; they run in the order below, because the
+later ones read the traces of 9b and the catalogue of 9c. Everything is measured with Vitis HLS /
+Vivado xsim **2024.1** on the Stage 8 machine. The systolic engine's published numbers are 2025.1 and
+are not reused: 9f re-measures what it needs.
+
+**Not taken, with the reason:**
+- The word-conversion benchmark (`systolic_runtime.py --conversion`). `lanes.to_words` / `from_words`
+  are shared code, already measured on `docs/evaluation/sim_speed/systolic.md`, and conversion is 1-6 %
+  of the unit's pysim run (Stage 8).
+- The resource sweep (`systolic_sweep.py`). Stage 7 already has one, over 13 configurations.
+
+#### 9a. Word width (small)
+
+`CgVecUnit` and `MfVecUnit` take `word_bits` (64 or 128) through to `cg_config` / `mf_config`, which
+already accept it. The harnesses and the Stage 8 runtime scripts gain `--word-bits`. A complex element
+is 32 bits (16-bit lanes), so a 128-bit word holds 4. At `L 4` a lane group is then exactly one word,
+and the loader and the store stay on their word-a-cycle path. At `L 2` a lane group is half a word, and
+they fall to a value a cycle (`unit._slow_path`, `vecunit_core.h`). Name this wherever a 128-bit run
+with `L 2` is reported.
+
+**Gate:** pysim exact at 128 bits on `"test"` and `"steady"` for both units;
+`python -m examples.vecunit_{cg,mf}.harness --through compare --word-bits 128` exact at RTL; one XSI
+gate per example at 128 bits in `tests/vecunit/test_unit_xsi.py`.
+
+#### 9b. Traces: which stage binds (medium)
+
+As `docs/examples/systolic/timing.md#finding-the-stage-that-binds`. First check that `--trace` binds
+the unit's channels by name through `waveflow.utils.trace.load_trace`:
+- each queue's `block_events` (the queues use the undocumented explicit acquire and release,
+  `EXPLICIT_ACQUIRE_RELEASE`, under `hls::task`);
+- the inputs' accepted beats (`vectors/s_in0_acc`) and the program streams' beats.
+
+If the manifest cannot bind explicit acquire and release, that is a framework change: search the KB
+and propose it first (rule 8). Then `waveflow/vecunit/report.py` gains a trace report: per queue, each
+block's held and idle cycles; per job, the execute task's time waiting on an input block, waiting on
+an output block, and busy; and the task that binds, with that evidence.
+
+**Gate:** the report on CG `"steady"` and the matched filter's `"steady"` at RTL, traced. It names the
+binding task, and agrees with or corrects Stage 5's reading (the matched filter's execute task at
+about 352 cycles a chunk against the loader's about 320). A test runs the report on a small traced
+run.
+
+#### 9c. The RTL catalogue against the bounds (medium; about 20 RTL runs)
+
+`examples/vecunit_cg/cg_measure.py` and `examples/vecunit_mf/mf_measure.py`, each writing a
+`measured.json` like `examples/systolic/systolic_measure.py`. Per run: the configuration, word width,
+workload and tool; whether it is exact; each job's status cycle and the output intervals; pysim's
+cycles; csynth's resources; and whether csynth's estimated clock meets 4 ns.
+- **The bounds, per job:** the input words at a word a cycle; the output words, headers included; and
+  the execute task's own floor from its timing features (decode, elements, scalar runs, divides).
+  **Before each run, write in the script which bound should bind.** The record says where the
+  prediction held.
+- **CG workloads** chosen so that a different bound binds: `steady` (`8 × 32`, `nit` 3); short
+  vectors (`k` 2, so passes are short and the divides' share rises); I/O-heavy (`nit` 1); long
+  (`nit` 8).
+- **Matched-filter workloads:** `steady` at `nrx` 8, 4 (one column group) and 1, where `X`'s
+  single-column block costs the most.
+- **Both word widths (9a), and configurations other than the two builds** (the systolic example's
+  half-size engine): CG at `L 2`, `L 8` and `S 2`; the matched filter at `VLMAX` 16 and 256. Each is a
+  csynth and an XSI build of about three minutes. The script lists the runs; a run already in
+  `measured.json` is skipped unless forced.
+
+**Gate:** both `measured.json` committed (force-added past the `*.json` ignore), every run exact,
+`meets_clock` checked on each, and a test like `test_measured_runs_are_exact_and_meet_the_clock`.
+Pages `docs/examples/vecunit_cg/timing.md` and `docs/examples/vecunit_mf/timing.md` hold the bounds
+table and what binds, as `docs/examples/systolic/timing.md` does.
+
+#### 9d. Calibration by phase and by configuration (large; rule 5)
+
+Stage 7's recorded next step, and the cause of both timing gaps Stage 8 found: the first job's 233
+cycles of start-up, and the matched filter's 11 % a chunk. In place of the one global linear job
+model:
+- time each phase from the traces (9b): a decoded pass, a run's fill and drain, an element, a scalar
+  run, a divide, a job's start-up, the loader's and the store's per word;
+- take the per-pass and per-run costs from each build's own csynth loop schedule (II and depth), and
+  fit only the rest (lesson 9);
+- file the fit per configuration identity, as the systolic core's `engine_core-*` records are filed
+  per word width, so pysim loads the one that matches its build.
+
+**A decision record first:** whether `add_calib_steps` / `timing_phases` can express a phase per
+decoded item. Stage 7 departed from them; say why the new form does or does not return to them.
+
+**Pre-register before any run:** a fit set on the CG and matched-filter builds and at least two of
+9c's other configurations, and a fresh held-out set. Score once against Stage 7's targets (3 % mean,
+6 % worst), now including the matched filter.
+
+**Gate:** held-out scores reported; Stage 8's scripts re-run (pysim only), and their pages' pysim
+cycle columns updated.
+
+#### 9e. Behind memory: `VecUnitMem` (large; D7 first)
+
+A wrapper that stands to the unit as `SystolicEngineMem` stands to the engine:
+- a job descriptor carrying base addresses;
+- a feeder that reads the input matrices from memory through one `m_axi` port (`hls::burst_maxi`,
+  each request issued ahead of its data) and streams them to the unit's inputs;
+- a writer that writes the unit's outputs back;
+- a done per job.
+
+It sits outside the ISA, and the unit still sees streams, so *Out of scope*'s "DRAM addressing"
+(meaning in the ISA) stands.
+
+**D7 decides:**
+- whether the programs come from memory or stay on streams;
+- one memory port or two;
+- whether the wrapper splits a wide CG `B` into column-block jobs from one descriptor (the split
+  Stage 8's testbench does today);
+- the matched filter's `X` and `R` layout in memory.
+
+**Pause for approval.** Then the pysim, the HLS (the framework's memory feeder and writer), the RTL,
+and a harness with its one memory (`harness()` puts one behind the `m_axi` ports).
+
+**Measure,** as `docs/examples/systolic/timing.md#the-wrapper`:
+- the done cycles against the input floor;
+- the read port's busy share (traced, 9b);
+- Stage 8's sizes again, through memory: the runtime scripts gain the memory path, as
+  `systolic_runtime.py --sizes` runs `SystolicEngineMem`.
+
+**Gate:** RTL exact, and the measurements recorded.
+
+#### 9f. CG with the systolic engine in the loop (large; D8 first)
+
+Today every `S = A·P` is precomputed into the stimulus, so the 3,359 cycles a job (Stage 6) leave out
+the multiply's latency and the round trip. This sub-stage builds the closed loop, one job at a time.
+**Contexts** (two jobs resident at once) stay out of scope.
+
+The loop: a stream-fed `SystolicEngine` in CG's formats (`a = A`, `b = P`, `c = S`, the plain
+product), and the CG unit, joined by an adapter:
+- each `P` the unit emits (`VecResp` and payload) becomes an engine command with `P` as its `B`
+  operand;
+- each engine result (`Resp` and `C`) becomes the headerless `S` burst on the unit's input.
+
+D5 chose the unit's block layout to be the engine's, so no reorder should be needed; check it.
+
+**D8 decides:**
+- the adapter: an HLS task in the composite, or the system's host;
+- `A`: re-sent with every product (64 values), or held in the engine;
+- the engine's configuration (its `Kmax`, `Nmax` against CG's `k`, `n`).
+
+**Pause for approval.**
+
+**Gate:** RTL exact against `cg.cg_solve` on four solves. Report:
+- cycles a job with the real multiply, against Stage 6's 3,359 with `S` precomputed;
+- the iteration's critical path from the trace (9b): the unit's third pass, `P` out, the engine, `S`
+  in, the next first pass;
+- the unit's idle share while it waits for `S`;
+- csynth of the engine at 2024.1, recorded beside its 2025.1 figures, never mixed with them.
+
+#### 9g. Coarser pysim granularities (optional; to confirm with the user first)
+
+As `SystolicEngine(pysim="flat")` and `SystolicEngineMem(pysim="tiles")`:
+- `VecUnit(pysim="flat")`: one process, the three tasks passive, the same per-item timing;
+- `"jobs"`: a job's arithmetic in one interpreter call, charged from `job_features` in one delay.
+
+Measure the SimPy events, the time, and the cycle error against `"tasks"` and the RTL on Stage 8's
+sizes. **This is a pysim speed optimization,** which the user reserved for their own later work at
+Stage 8. Do not start it until the user says whether it belongs here.
+
+**Stage gate:** each sub-stage's gate, and the docs that change: `docs/guide/dsp/vecunit.md` (the
+calibration, the limits), both example pages, and `docs/evaluation/sim_speed/vecunit_{cg,mf}.md`
+after 9d and 9e. **Pause** at D7, at D8, and at the end.
+
 ## Out of scope
 
 - Moving `examples/mimo_cg` onto this unit, or onto the systolic engine (a separate plan).
-- The CG system with the systolic engine and contexts (Stage 6, second item).
+- Contexts: two jobs resident at once beside the systolic engine (Stage 6, second item). The closed
+  loop without contexts, one job at a time, is Stage 9f.
 - Masks, DRAM addressing, branches, bit-level RVV encoding compatibility.
 
 ## References (checked against OpenAlex, 2026-10-20)
@@ -1015,3 +1181,4 @@ the fits are on the pages.
 | 2026-10-22 | 6 | Fused runs (in-order issue): CG 3,359 cycles a job against CgVectorUnit's 3,581 (0.94x, Vitis 2024.1), the matched filter 1.22x its floor; 82k LUT / 72k FF. Open: a mixed-mode format set with fusion exceeds 12 GB in csynth | Stage 6 record |
 | 2026-10-22 | 7 | Pre-registered (`83687710`), then calibrated (Vitis 2024.1): timing held out 1.9 % mean, 7.5 % worst (the matched filter: the decode loop's schedule differs by configuration); resources held out LUT 2.4 % / 3.9 %, FF 1.4 % / 2.8 %, DSP and BRAM exact. The slot capability mask now reaches the datapath. Guide and two example pages | Stage 7 record |
 | 2026-10-24 | 8 | Simulation speed, measurement only (Vitis 2024.1, a lab workstation): CG `8 × 32`..`8 × 2048` -- the RTL 34-50× the whole pysim, 180-280× its run; the matched filter 256..16,384 samples -- 53-148×; every run exact. CG's harness build is 82 % of its pysim (the closed-loop stimulus, element-major) | Stage 8 record, `docs/evaluation/sim_speed/vecunit_{cg,mf}.md` |
+| 2026-10-24 | 9 | Added with the user: measurement parity with the systolic example -- 128-bit words, trace-based binding analysis, an RTL catalogue against the bounds over workloads and configurations, calibration by phase and configuration (pre-registered), a memory wrapper (D7), CG with the systolic engine in the loop (D8); coarser pysim granularities optional, to confirm | Stage 9 |
