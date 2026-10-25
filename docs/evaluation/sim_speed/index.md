@@ -3,7 +3,7 @@ title: Simulation speed
 parent: Evaluation
 nav_order: 1
 has_children: true
-summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy and the SSR FFT: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation, before RTL's minutes of synthesis and build per design point. What is still slow and what to do about it. The systolic engine and the vector unit's two programs (CG and a matched filter) follow, across problem sizes."
+summary: "Is Waveflow's Python simulation fast enough to be the design loop? The claim, the cost model (pysim time = the untimed model's time + SimPy events x a per-event cost), how it is measured, and the results on memcpy, the SSR FFT and the processor model: the flat FFT pysim costs 1.22x the untimed bit-exact model and runs about 57x faster than RTL simulation, before RTL's minutes of synthesis and build per design point; the processor model's pysim is 33x faster than gem5 simulating the same software. What is still slow and what to do about it. The systolic engine and the vector unit's two programs (CG and a matched filter) follow, across problem sizes."
 ---
 
 # Simulation speed
@@ -35,23 +35,29 @@ pysim time  =  untimed model time  +  (SimPy events) x (cost per event)
   How many a transaction needs is a property of the model's structure.
 - **The cost per event** is SimPy's own (about 0.6 us for a bare event on the test machine) plus
   Waveflow's work around it: building and parsing a message, interface bookkeeping. On memcpy it is
-  about 16 us today.
+  about 16 us today; on the processor model about 2.7 us, measured on another machine (below). It is a
+  property of what an event carries: a processor call moves no data.
 
 So the honest questions are how many events a design needs, and what each one costs -- which is why
 the first block measured is memcpy, which has no arithmetic at all.
 
 ## Results
 
-| block | untimed model | Waveflow pysim | RTL (XSI) | notes |
+| block | untimed model | Waveflow pysim | RTL (XSI) or gem5 | notes |
 |---|---|---|---|---|
 | [memcpy](memcpy.md), per copy | 0.5 us | 0.4 ms (25 events) | -- | no compute: the per-transaction cost, flat in the copy length |
 | [SSR FFT](fft.md) `L = 1024`, per frame | 1.87 ms (vectorized numpy) | 2.29 ms flat; 4.44 ms per task | 131 ms | plus ~131 s csynth and a 24.5 s XSI build per design point |
+| [processor model](cpu.md), per scheduler operation | 2.77 us (Python + calibrated prices) | 14.7 us (4.46 events) | gem5 HPI: 481 us simulating it; 10.8 ms of a whole run, plus 5.5 s a run | three optimization rounds took the pysim from 31.8 us; warm prices (cold first pass 20.1 us) |
 | [systolic engine](systolic.md) `8×8×32`, per product (preliminary) | 0.036 ms | 0.73 ms (44 events) | 43 ms | plus ~80 s csynth and a 20 s XSI build per design point |
 | [CG on the vector unit](vecunit_cg.md), per `8×32` job of three iterations | 0.05 ms (`cg_solve`); 7.4 ms the unit's interpreter | 15 ms, of which 8.1 ms builds the harness (104 events) | 3.9 s | plus ~98 s csynth and a 93 s XSI build per design point |
 | [matched filter on the vector unit](vecunit_mf.md), per 64-sample chunk at 8 antennas | 0.009 ms (numpy); 0.35 ms the unit's interpreter | 0.92 ms (34 events) | 159 ms | plus ~89 s csynth and an 85 s XSI build per design point |
 
 Measured 2026-10-13 on one Windows 11 machine (Intel 13th-generation-class CPU, Python 3.14),
-nothing else running, best of several runs. The two vector-unit rows were measured 2026-10-24 on a
+nothing else running, best of several runs. The processor-model row was measured 2026-10-19 on a
+Linux workstation (Intel Core i7-7700K, 8 threads at 4.2 GHz, Python 3.12.3, SimPy 4.1.2) with gem5
+v25.1, its load average below 1 before each series; the two machines differ in age and Python
+version, so compare times within a machine, and across machines the ratios. The two vector-unit rows
+were measured 2026-10-24 on a
 Linux workstation (Intel Core i7-7700K, Python 3.12) with Vitis HLS / Vivado xsim 2024.1, otherwise
 idle, each fitted over four problem sizes, after Stage 10 of `plans/vecunit_new.md` made the unit's
 own Python faster.
@@ -90,6 +96,8 @@ The estimate and its basis are on [the FFT page](fft.md#with-a-compiled-model-an
 - [memcpy](memcpy.md) -- the cost of a transaction, with no arithmetic to hide it.
 - [The SSR FFT](fft.md) -- three ways to run the same bit-exact FFT, and the lessons from making
   its pysim fast.
+- [The processor model](cpu.md) -- a scheduler's operations untimed, in the pysim and on gem5, and
+  three rounds that halved the pysim's cost with every simulated outcome unchanged.
 - [The systolic engine](systolic.md) -- preliminary: a tiny model beside a timed simulation, and
   where its pysim time goes.
 - [CG on the vector unit](vecunit_cg.md) -- an iterative program on the programmable vector unit:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,7 @@ from waveflow.cpu.calib.kernels.sched_ops import (
 from waveflow.cpu.platform import CpuPlatform
 from waveflow.cpu.processor import Processor
 from waveflow.cpu.report import CpuReport
-from waveflow.cpu.task import SwFunction
+from waveflow.cpu.task import SwFunction, TaskRecord
 from waveflow.hw.aximm import DirectMMIF, MMIFMaster
 from waveflow.hw.clock import Clock
 from waveflow.hw.irq import IrqIF, IrqIFSink
@@ -238,6 +238,8 @@ class RunResult:
     jobs: dict[int, Job]
     trace: list[dict[str, Any]]
     sim_s: float
+    #: The processor's task records, in completion order: the simulated outcome.
+    records: list[TaskRecord] = field(default_factory=list)
 
     @property
     def all_correct(self) -> bool:
@@ -280,7 +282,11 @@ def run(
             f"jobs not dispatched exactly once: {wrong or len(sched.jobs)}"
         )
     return RunResult(
-        report=cpu.report(), jobs=sched.jobs, trace=sched.trace, sim_s=sim.env.now
+        report=cpu.report(),
+        jobs=sched.jobs,
+        trace=sched.trace,
+        sim_s=sim.env.now,
+        records=cpu.records,
     )
 
 
