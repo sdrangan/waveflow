@@ -82,8 +82,8 @@ BUILDS = {
     "mf_v256": ("mf", {"VLMAX": 256}), "mf_l8": ("mf", {"L": 8}),
 }
 #: The fit: ``(build, workload)`` -- two configurations of each application, so no schedule is the
-#: only one seen (lesson 9).  A job enters the fit only if its bounds (``report.job_bounds``) say the
-#: execute task binds by :data:`EXECUTE_MARGIN`: the model is the execute task's time.
+#: only one seen (lesson 9).  A job enters the fit only if the execute task set its interval, by
+#: :data:`EXECUTE_MARGIN` (:func:`timing2_rows`): the model is the execute task's time.
 TIMING2_FIT = (("cg", "calib"), ("cg", "steady"), ("cg_l2", "calib"),
                ("mf", "calib"), ("mf", "steady"), ("mf_v256", "calib"))
 EXECUTE_MARGIN = 1.2
@@ -281,8 +281,11 @@ def _run(runs: dict, build: str, kind: str) -> dict:
 
 def timing2_rows(runs: dict, pairs, *, execute_only: bool) -> list[dict]:
     """Per job but each run's first (its interval is the run's start-up): its features, its build's
-    schedule offset and its RTL interval.  *execute_only*: only jobs whose bounds say the execute
-    task binds by :data:`EXECUTE_MARGIN` (the fit's rule)."""
+    schedule offset and its RTL interval.  *execute_only*: only jobs whose interval is the execute
+    task's -- longer by :data:`EXECUTE_MARGIN` than the I/O that could have set it: the job's load,
+    its store, and the previous job's store, which frees the output blocks the job writes (the fit's
+    rule; the first fit read only the job's own bounds against the then-filed execute estimate, and
+    admitted two jobs whose interval the previous job's store set: the plan's Stage 9 record)."""
     from waveflow.vecunit.report import job_bounds
     from waveflow.vecunit.unit import Schedule, job_features
 
@@ -292,9 +295,11 @@ def timing2_rows(runs: dict, pairs, *, execute_only: bool) -> list[dict]:
         unit = build_unit(build)
         sched = Schedule.from_dict(run["schedule"])
         meas = np.diff(run["status_cycles"]).astype(int).tolist()
-        for (_tx, progs, _inp), m in zip(unit.jobs(kind)[1:], meas):
-            b = job_bounds(unit.cfg, progs)
-            if execute_only and b["execute"] < EXECUTE_MARGIN * max(b["load"], b["store"]):
+        jobs = unit.jobs(kind)
+        bounds = [job_bounds(unit.cfg, progs) for _tx, progs, _inp in jobs]
+        for j, ((_tx, progs, _inp), m) in enumerate(zip(jobs[1:], meas), start=1):
+            io = max(bounds[j]["load"], bounds[j]["store"], bounds[j - 1]["store"])
+            if execute_only and m < EXECUTE_MARGIN * io:
                 continue
             f = job_features(progs.execute, unit.cfg)
             rows.append({"build": build, "kind": kind, "feats": f, "offset": sched.offset(f),
@@ -325,7 +330,7 @@ def calibrate_timing2(paths) -> dict:
     old = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     schedules = {r["header"]: r["schedule"] for r in runs.values() if r.get("schedule")}
     default = header_name(build_unit("cg").cfg)
-    record = {"version": 2, "features": list(FEATURES), "coefs": coefs, "schedules": schedules,
+    record: dict = {"version": 2, "features": list(FEATURES), "coefs": coefs, "schedules": schedules,
               "default_schedule": default,
               "v1": old.get("v1") or {k: v for k, v in old.items()
                                       if k not in ("model", "part", "tool")},
@@ -374,6 +379,51 @@ def score_timing2(paths) -> dict:
     record["holdout"] = out
     _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
     return out
+
+
+def settle_timing2(paths) -> dict:
+    """After :func:`score_timing2`: the incumbent timing (Stage 7's, kept under ``"v1"``) scored on the
+    same held-out set -- no fit, a comparison against the model pysim already used -- and the one with
+    the lower held-out mean filed for pysim, the other's record kept beside it (``"v1"`` or ``"v2"``),
+    with both scores under ``"comparison"``."""
+    from waveflow.vecunit import unit as U
+
+    path = model_path(TIMING_MODEL)
+    v2 = json.loads(path.read_text(encoding="utf-8"))
+    if v2.get("version") != 2 or "holdout" not in v2:
+        raise RuntimeError(f"{path}: fit and score Stage 9d's timing first")
+    v1 = v2.pop("v1")
+    t1 = U.VecTiming.from_coefs(v1["coefs"])
+    saved = dict(U.SCHEDULES), list(U.DEFAULT_SCHEDULE)
+    U.SCHEDULES.clear()  # Stage 7's timing carries no schedule
+    U.DEFAULT_SCHEDULE.clear()
+    runs = measured_runs(paths)
+    pred, meas, pairs = [], [], {}
+    try:
+        for build, kind in TIMING2_HOLDOUT:
+            run = _run(runs, build, kind)
+            ps = pysim_status(build_unit(build), kind, t1)
+            p, m = np.diff(ps).tolist(), np.diff(run["status_cycles"]).astype(int).tolist()
+            pairs[f"{build} {kind}"] = {**errors(p, m), "start": round(ps[0] - run["status_cycles"][0], 1)}
+            pred += p
+            meas += m
+    finally:
+        U.SCHEDULES.update(saved[0])
+        U.DEFAULT_SCHEDULE[:] = saved[1]
+    a = errors(pred, meas)
+    comparison = {"set": [list(x) for x in TIMING2_HOLDOUT],
+                  "v1": {"all": {"mean": a["mean"], "worst": a["worst"]}, "pairs": pairs},
+                  "v2": {"all": v2["holdout"]["all"]}}
+    keep_v1 = a["mean"] < v2["holdout"]["all"]["mean"]
+    rest = {k: v for k, v in v2.items() if k not in ("model", "part", "tool")}
+    if keep_v1:
+        record = {**{k: v for k, v in v1.items() if k not in ("model", "part", "tool")},
+                  "v2": rest, "comparison": comparison, "kept": "v1"}
+    else:
+        record = {**rest, "v1": v1, "comparison": comparison, "kept": "v2"}
+    _file(TIMING_MODEL, record)
+    _reload_timing()
+    return {"kept": record["kept"], **comparison}
 
 
 # -- resources ------------------------------------------------------------------------------------
@@ -553,8 +603,8 @@ def score_resources(directory) -> dict:
 
 def main(argv=None) -> int:
     """``fit-timing <calib root>``; ``score-timing <cg holdout> <cg steady> <mf steady>`` (roots of
-    the RTL runs); ``fit-timing2 <measured.json>...``, ``score-timing2 <measured.json>...`` (Stage 9d,
-    on the Stage 9c catalogues); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
+    the RTL runs); ``fit-timing2 <measured.json>...``, ``score-timing2 <measured.json>...``,
+    ``settle-timing2 <measured.json>...`` (Stage 9d, on the Stage 9c catalogues); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
     ``fit-resources <dir>``, ``score-resources <dir>`` (the rows ``csynth`` printed, saved as
     ``<dir>/<fit|holdout>_<index>.json``)."""
     a = list(sys.argv[1:] if argv is None else argv)
@@ -571,6 +621,10 @@ def main(argv=None) -> int:
         return 0
     if a[:1] == ["score-timing2"] and len(a) >= 2:
         print(json.dumps(score_timing2(a[1:]), indent=1))
+        return 0
+    if a[:1] == ["settle-timing2"] and len(a) >= 2:
+        r = settle_timing2(a[1:])
+        print(json.dumps({"kept": r["kept"], "v1": r["v1"]["all"], "v2": r["v2"]["all"]}, indent=1))
         return 0
     if a[:1] == ["csynth"] and len(a) == 4:
         spec = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[a[1]][int(a[2])]

@@ -302,6 +302,19 @@ chunk's three decoded passes and two runs that is 23 of the 26 cycles pysim over
 per-pass and per-run terms come from each build's loop schedule, with the fit spread over
 configurations, is the next step; it needs a fresh held-out set.
 
+**By phase and configuration: tried, not kept** (Stage 9d of `plans/vecunit_new.md`). That model takes
+each build's execute-loop schedule from csynth's log (`report.loop_schedule`, `unit.Schedule`: the
+decode and reduction loops' II a pass, each loop's depth a run) and fits only the rest, on two builds
+of each application, committed before any run. Held out, scored once, over 14 scenarios on nine builds
+(`L` 2, 4 and 8; `VLMAX` 16, 64 and 256; 64- and 128-bit words): **6.2 % mean, 22.1 % worst**. The
+Stage 7 timing on the same set, no fit: **4.4 % and 18.8 %** -- 0.02 to 0.85 % on every CG scenario,
+including builds it never saw, and 7.5 to 13 % on the matched filter's. pysim keeps the Stage 7 timing
+(`params.json` files the other model's record and both scores under `v2` and `comparison`). Why the
+new model lost: the matched filter's frames run close to the loader's bound, so the fit's rule (only
+jobs the execute task sets) excluded every one, and its coefficients came from random jobs whose
+control-heavy programs overcharge a frame. The next step has no free parameter: the Stage 7
+coefficients plus each build's schedule difference from the CG build's, scored on a fresh held-out set.
+
 **Resources.** csynth's estimate of the whole unit (Vitis HLS 2024.1, `xczu48dr`, 4 ns) over ten
 configurations committed before any run -- `L` 2, 4, 8; `NG` 8 to 64; `S` 2 and 3; every slot
 multiplying, or only slot 0; the CG and the matched-filter format sets -- with three more held out.

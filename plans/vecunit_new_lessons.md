@@ -38,10 +38,23 @@
 11. **Never leave a placeholder in a module a running job imports.** A `BASIS_TBD` in `calib.py`
     failed six sweep rows that started after it; write placeholders as valid values.
 12. **`a && X=1 && (job1) & (job2) &` backgrounds the whole first list:** the variable is set only in
-    that subshell, and `job2` ran with it empty. Set variables on their own line first.
+    that subshell, and `job2` ran with it empty. Set variables on their own line first.  Relearned at
+    Stage 9: `cd ... && S=... && (A) & (B) & (C) & wait` started only A; B and C got an empty `$S`.
 13. **A build root reused from a smoke run caches the one-time costs out of the record.** The first
     matched-filter sweep reused the root of a one-size RTL check, so `runtime.json` showed csynth and
     the XSI build as 0 s. Take a measurement that reports one-time costs from a fresh root.
 14. **`datetime.now(timezone.utc).date()` stamps tomorrow's date on an evening run** (EDT: UTC is four
     hours ahead). Ruff's DTZ011 fix for `date.today()` is `datetime.now().astimezone().date()`, the local
     date with a time zone, not UTC.
+15. **A fit's admission rule must not lean on the model it replaces, nor on the job alone.** Stage 9d's
+    "execute-bound" rule read the then-filed execute estimate against the job's own load and store,
+    and admitted two jobs whose interval the *previous* job's store had set (a 1,000-cycle drain).
+    Compare the measured interval with every I/O that could have set it.
+16. **Check a filtered fit set's coverage per scenario before fitting.** The same rule excluded every
+    matched-filter frame (they run near the loader's bound), so the matched filter's coefficients came
+    from random jobs alone, and the held-out frames came out 17-22 % long. Count the rows each
+    application keeps.
+17. **A simulated clock that can lag the simulation's must not catch up on an interaction that did not
+    wait.** pysim's execute task set its job clock to "now" after every queue take; a job still
+    consuming its start-up lead (its program arriving) lost it at the first one -- 350 cycles on a long
+    program. Catch up only if the call took simulated time.

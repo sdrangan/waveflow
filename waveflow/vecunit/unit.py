@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -104,7 +104,7 @@ class Schedule:
 
     @classmethod
     def from_dict(cls, d: dict) -> Schedule:
-        return cls(**{k: tuple(int(x) for x in v) for k, v in d.items()
+        return cls(**{k: (int(v[0]), int(v[1])) for k, v in d.items()
                       if k in cls.__dataclass_fields__})
 
 
@@ -164,8 +164,9 @@ class VecTiming:
 
     @classmethod
     def from_coefs(cls, coefs: dict) -> VecTiming:
-        return cls(**{k: float(v) for k, v in coefs.items()
-                      if k in cls.__dataclass_fields__ and k != "schedule"})
+        kw: dict[str, Any] = {k: float(v) for k, v in coefs.items()
+                              if k in cls.__dataclass_fields__ and k != "schedule"}
+        return cls(**kw)
 
 
 def job_features(prog, cfg: VecUnitConfig) -> dict:
@@ -332,6 +333,7 @@ class VecExec(_VecPart):
         self.qo = [self._block(SobIFMaster, f"qo{j}") for j in range(cfg.NQO)]
         self.m_status = self._ep(FramedStreamIFMaster, "m_status", CTRL_BITS)
         self.halted = False
+        self._vt: float = 0.0  # the job's clock (run_iter)
 
     def kernel_task(self):
         sig = ("s_prog", *(f"qi{j}" for j in range(self.cfg.NQI)),
@@ -346,9 +348,13 @@ class VecExec(_VecPart):
         if self._vt > self.env.now:
             yield self.timeout(self._vt - self.env.now)
 
-    def _caught_up(self) -> None:
-        """After a wait on a queue block: the job's clock cannot be behind the moment it ended."""
-        self._vt = max(self._vt, self.env.now)
+    def _caught_up(self, before: float) -> None:
+        """After a queue block was taken or committed: if the simulation waited for it (it was
+        *before* when asked), the job's clock cannot be behind the moment the wait ended.  An
+        immediate one leaves the clock alone -- a job still behind the simulation (its program
+        arriving) keeps its lead (Stage 9d)."""
+        if self.env.now > before:
+            self._vt = max(self._vt, self.env.now)
 
     def run_iter(self) -> ProcessGen[None]:
         if self.halted:
@@ -374,13 +380,15 @@ class VecExec(_VecPart):
                     for y in chain:
                         o = operands(y)
                         if o.qread is not None and m.head[o.qread] is None:
+                            before = self.env.now
                             blk = yield from self.qi[o.qread].acquire_read()
                             m.head[o.qread] = blk.payload
-                            self._caught_up()
+                            self._caught_up(before)
                         if o.qwrite is not None and m.tail[o.qwrite] is None:
+                            before = self.env.now
                             held_out[o.qwrite] = yield from self.qo[o.qwrite].acquire_write()
                             m.tail[o.qwrite] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
-                            self._caught_up()
+                            self._caught_up(before)
                 for chain in item.chains:
                     m.run_pass(list(chain), "serial")
                 yield from self._until(t.run_cycles(item.chains, m.vl) * period)
@@ -396,21 +404,24 @@ class VecExec(_VecPart):
                 yield from self._until((t.instr + t.control) * period)
             elif int(x.funct) == I.COp.QPOP:
                 if m.head[x.rs1] is None:  # released without a read: take it first
+                    before = self.env.now
                     yield from self.qi[x.rs1].acquire_read()
-                    self._caught_up()
+                    self._caught_up(before)
                 m.head[x.rs1] = None
                 yield from self._until((t.instr + t.control) * period)
                 yield from self.qi[x.rs1].release_read()
             else:  # QPUSH
                 if m.tail[x.rd] is None:
+                    before = self.env.now
                     held_out[x.rd] = yield from self.qo[x.rd].acquire_write()
                     m.tail[x.rd] = Block.empty(cfg.Kmax * cfg.NGQ, cfg.L)
-                    self._caught_up()
+                    self._caught_up(before)
                 held_out[x.rd].payload = m.tail[x.rd]
                 m.tail[x.rd] = None
                 yield from self._until((t.instr + t.control) * period)
+                before = self.env.now
                 yield from self.qo[x.rd].commit_write(held_out[x.rd])
-                self._caught_up()
+                self._caught_up(before)
         yield from self._until(t.job * period)
         s = I.VecStatus()
         s.tx_id, s.status = int(tx_id), int(st)

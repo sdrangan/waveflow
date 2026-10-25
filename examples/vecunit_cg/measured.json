@@ -1,0 +1,1903 @@
+{
+ "target": {
+  "part": "xczu48dr-ffvg1517-2-e",
+  "period_ns": 4.0
+ },
+ "runs": {
+  "cg_calib": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "calib",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2512,
+    5946,
+    9477,
+    14856,
+    17784,
+    21415,
+    25154,
+    29313,
+    31958,
+    35722,
+    40288,
+    44345,
+    45744,
+    48123,
+    50108,
+    52701,
+    54696,
+    59035,
+    61064,
+    63035
+   ],
+   "intervals": [
+    3434,
+    3531,
+    5379,
+    2928,
+    3631,
+    3739,
+    4159,
+    2645,
+    3764,
+    4566,
+    4057,
+    1399,
+    2379,
+    1985,
+    2593,
+    1995,
+    4339,
+    2029,
+    1971
+   ],
+   "done_cycle": 63133,
+   "pysim_cycles": 63282.74826678754,
+   "pysim_status": [
+    2623.8,
+    6050.9,
+    9584.8,
+    14980.7,
+    17922.0,
+    21545.4,
+    25289.1,
+    29440.7,
+    32094.3,
+    35868.0,
+    40426.8,
+    44483.7,
+    45880.9,
+    48259.3,
+    50246.2,
+    52845.4,
+    54843.0,
+    59184.0,
+    61214.6,
+    63186.7
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 22,
+     "load": 48.0,
+     "output": 24,
+     "store": 44.0,
+     "elements": 247,
+     "execute": 2525.7,
+     "binds": "execute"
+    },
+    {
+     "input": 10,
+     "load": 26.0,
+     "output": 12,
+     "store": 22.0,
+     "elements": 188,
+     "execute": 3426.2,
+     "binds": "execute"
+    },
+    {
+     "input": 4,
+     "load": 14.0,
+     "output": 6,
+     "store": 10.0,
+     "elements": 205,
+     "execute": 3532.8,
+     "binds": "execute"
+    },
+    {
+     "input": 42,
+     "load": 90.0,
+     "output": 44,
+     "store": 86.0,
+     "elements": 636,
+     "execute": 5379.8,
+     "binds": "execute"
+    },
+    {
+     "input": 18,
+     "load": 42.0,
+     "output": 20,
+     "store": 38.0,
+     "elements": 492,
+     "execute": 2937.1,
+     "binds": "execute"
+    },
+    {
+     "input": 30,
+     "load": 66.0,
+     "output": 32,
+     "store": 62.0,
+     "elements": 454,
+     "execute": 3622.4,
+     "binds": "execute"
+    },
+    {
+     "input": 6,
+     "load": 18.0,
+     "output": 8,
+     "store": 14.0,
+     "elements": 558,
+     "execute": 3742.7,
+     "binds": "execute"
+    },
+    {
+     "input": 6,
+     "load": 18.0,
+     "output": 8,
+     "store": 14.0,
+     "elements": 632,
+     "execute": 4150.6,
+     "binds": "execute"
+    },
+    {
+     "input": 16,
+     "load": 36.0,
+     "output": 18,
+     "store": 32.0,
+     "elements": 412,
+     "execute": 2651.4,
+     "binds": "execute"
+    },
+    {
+     "input": 40,
+     "load": 46.0,
+     "output": 42,
+     "store": 42.0,
+     "elements": 468,
+     "execute": 3772.7,
+     "binds": "execute"
+    },
+    {
+     "input": 30,
+     "load": 66.0,
+     "output": 32,
+     "store": 62.0,
+     "elements": 561,
+     "execute": 4548.7,
+     "binds": "execute"
+    },
+    {
+     "input": 12,
+     "load": 30.0,
+     "output": 14,
+     "store": 26.0,
+     "elements": 222,
+     "execute": 4055.8,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 384,
+     "load": 393.0,
+     "output": 387,
+     "store": 387.0,
+     "elements": 560,
+     "execute": 2377.4,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 216,
+     "execute": 1985.9,
+     "binds": "execute"
+    },
+    {
+     "input": 192,
+     "load": 210.0,
+     "output": 198,
+     "store": 198.0,
+     "elements": 308,
+     "execute": 2598.1,
+     "binds": "execute"
+    },
+    {
+     "input": 96,
+     "load": 105.0,
+     "output": 99,
+     "store": 99.0,
+     "elements": 176,
+     "execute": 1996.6,
+     "binds": "execute"
+    },
+    {
+     "input": 640,
+     "load": 655.0,
+     "output": 645,
+     "store": 645.0,
+     "elements": 1008,
+     "execute": 4340.0,
+     "binds": "execute"
+    },
+    {
+     "input": 132,
+     "load": 272.0,
+     "output": 136,
+     "store": 264.0,
+     "elements": 260,
+     "execute": 2029.6,
+     "binds": "execute"
+    },
+    {
+     "input": 288,
+     "load": 297.0,
+     "output": 291,
+     "store": 291.0,
+     "elements": 420,
+     "execute": 1971.2,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 176.81304788589478,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_holdout2": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "holdout2",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2900,
+    6051,
+    9461,
+    12031,
+    15603,
+    19023,
+    24342,
+    26629
+   ],
+   "intervals": [
+    3151,
+    3410,
+    2570,
+    3572,
+    3420,
+    5319,
+    2287
+   ],
+   "done_cycle": 26671,
+   "pysim_cycles": 26866.210186215976,
+   "pysim_status": [
+    3008.4,
+    6162.8,
+    9586.9,
+    12178.8,
+    15776.9,
+    19211.5,
+    24533.8,
+    26826.2
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 24,
+     "load": 54.0,
+     "output": 26,
+     "store": 50.0,
+     "elements": 323,
+     "execute": 2906.4,
+     "binds": "execute"
+    },
+    {
+     "input": 4,
+     "load": 14.0,
+     "output": 6,
+     "store": 10.0,
+     "elements": 344,
+     "execute": 3153.4,
+     "binds": "execute"
+    },
+    {
+     "input": 4,
+     "load": 14.0,
+     "output": 6,
+     "store": 10.0,
+     "elements": 203,
+     "execute": 3423.1,
+     "binds": "execute"
+    },
+    {
+     "input": 2,
+     "load": 10.0,
+     "output": 4,
+     "store": 6.0,
+     "elements": 174,
+     "execute": 2590.9,
+     "binds": "execute"
+    },
+    {
+     "input": 4,
+     "load": 14.0,
+     "output": 6,
+     "store": 10.0,
+     "elements": 358,
+     "execute": 3597.1,
+     "binds": "execute"
+    },
+    {
+     "input": 8,
+     "load": 14.0,
+     "output": 10,
+     "store": 10.0,
+     "elements": 110,
+     "execute": 3433.5,
+     "binds": "execute"
+    },
+    {
+     "input": 768,
+     "load": 786.0,
+     "output": 774,
+     "store": 774.0,
+     "elements": 1232,
+     "execute": 5321.3,
+     "binds": "execute"
+    },
+    {
+     "input": 160,
+     "load": 172.0,
+     "output": 164,
+     "store": 164.0,
+     "elements": 270,
+     "execute": 2291.4,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 64.60758852958679,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_l2_calib": {
+   "header": "wf_vecunit_1165625956.h",
+   "word_bits": 64,
+   "workload": "calib",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    4720,
+    10048,
+    15414,
+    21749,
+    26259,
+    32246,
+    38664,
+    45452,
+    50161,
+    55549,
+    61596,
+    67862,
+    70636,
+    75362,
+    78369,
+    81850,
+    85808,
+    94438,
+    97282,
+    101130
+   ],
+   "intervals": [
+    5328,
+    5366,
+    6335,
+    4510,
+    5987,
+    6418,
+    6788,
+    4709,
+    5388,
+    6047,
+    6266,
+    2774,
+    4726,
+    3007,
+    3481,
+    3958,
+    8630,
+    2844,
+    3848
+   ],
+   "done_cycle": 101227,
+   "pysim_cycles": 101945.09338325742,
+   "pysim_status": [
+    4930.0,
+    10298.4,
+    15690.9,
+    22066.3,
+    26618.0,
+    32633.6,
+    39105.7,
+    45925.1,
+    50677.0,
+    56101.9,
+    62200.2,
+    68477.0,
+    71260.5,
+    76002.6,
+    79013.3,
+    82498.1,
+    86478.6,
+    95138.0,
+    97985.6,
+    101849.1
+   ],
+   "resources": {
+    "lut": 53400,
+    "ff": 35399,
+    "dsp": 29,
+    "bram": 20,
+    "clock_ns": 3.091
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 22,
+     "load": 48.0,
+     "output": 24,
+     "store": 44.0,
+     "elements": 474,
+     "execute": 4755.0,
+     "binds": "execute"
+    },
+    {
+     "input": 18,
+     "load": 24.0,
+     "output": 20,
+     "store": 20.0,
+     "elements": 499,
+     "execute": 5367.4,
+     "binds": "execute"
+    },
+    {
+     "input": 8,
+     "load": 14.0,
+     "output": 10,
+     "store": 10.0,
+     "elements": 362,
+     "execute": 5391.5,
+     "binds": "execute"
+    },
+    {
+     "input": 10,
+     "load": 16.0,
+     "output": 12,
+     "store": 12.0,
+     "elements": 848,
+     "execute": 6374.5,
+     "binds": "execute"
+    },
+    {
+     "input": 12,
+     "load": 18.0,
+     "output": 14,
+     "store": 14.0,
+     "elements": 472,
+     "execute": 4550.6,
+     "binds": "execute"
+    },
+    {
+     "input": 16,
+     "load": 22.0,
+     "output": 18,
+     "store": 18.0,
+     "elements": 1217,
+     "execute": 6014.6,
+     "binds": "execute"
+    },
+    {
+     "input": 40,
+     "load": 86.0,
+     "output": 42,
+     "store": 82.0,
+     "elements": 1408,
+     "execute": 6457.0,
+     "binds": "execute"
+    },
+    {
+     "input": 6,
+     "load": 16.0,
+     "output": 8,
+     "store": 12.0,
+     "elements": 868,
+     "execute": 6818.4,
+     "binds": "execute"
+    },
+    {
+     "input": 30,
+     "load": 36.0,
+     "output": 32,
+     "store": 32.0,
+     "elements": 781,
+     "execute": 4750.8,
+     "binds": "execute"
+    },
+    {
+     "input": 6,
+     "load": 18.0,
+     "output": 8,
+     "store": 14.0,
+     "elements": 968,
+     "execute": 5424.0,
+     "binds": "execute"
+    },
+    {
+     "input": 40,
+     "load": 86.0,
+     "output": 42,
+     "store": 82.0,
+     "elements": 1309,
+     "execute": 6083.2,
+     "binds": "execute"
+    },
+    {
+     "input": 6,
+     "load": 12.0,
+     "output": 8,
+     "store": 8.0,
+     "elements": 525,
+     "execute": 6275.8,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 672,
+     "execute": 2782.5,
+     "binds": "execute"
+    },
+    {
+     "input": 384,
+     "load": 393.0,
+     "output": 387,
+     "store": 387.0,
+     "elements": 1120,
+     "execute": 4741.1,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 432,
+     "execute": 3009.7,
+     "binds": "execute"
+    },
+    {
+     "input": 192,
+     "load": 210.0,
+     "output": 198,
+     "store": 198.0,
+     "elements": 616,
+     "execute": 3483.8,
+     "binds": "execute"
+    },
+    {
+     "input": 96,
+     "load": 105.0,
+     "output": 99,
+     "store": 99.0,
+     "elements": 352,
+     "execute": 3979.5,
+     "binds": "execute"
+    },
+    {
+     "input": 640,
+     "load": 655.0,
+     "output": 645,
+     "store": 645.0,
+     "elements": 2016,
+     "execute": 8658.4,
+     "binds": "execute"
+    },
+    {
+     "input": 132,
+     "load": 272.0,
+     "output": 136,
+     "store": 264.0,
+     "elements": 455,
+     "execute": 2846.6,
+     "binds": "execute"
+    },
+    {
+     "input": 288,
+     "load": 297.0,
+     "output": 291,
+     "store": 291.0,
+     "elements": 840,
+     "execute": 3862.5,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 233.15500497817993,
+   "build": "cg_l2",
+   "params": {
+    "L": 2
+   },
+   "date": "2026-10-24"
+  },
+  "cg_l2_steady": {
+   "header": "wf_vecunit_1165625956.h",
+   "word_bits": 64,
+   "workload": "steady",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    6680,
+    13358,
+    20036,
+    26714
+   ],
+   "intervals": [
+    6678,
+    6678,
+    6678
+   ],
+   "done_cycle": 26843,
+   "pysim_cycles": 26932.070356667155,
+   "pysim_status": [
+    6701.8,
+    13402.5,
+    20103.3,
+    26804.1
+   ],
+   "resources": {
+    "lut": 53400,
+    "ff": 35399,
+    "dsp": 29,
+    "bram": 20,
+    "clock_ns": 3.091
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 1568,
+     "execute": 6699.8,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 1568,
+     "execute": 6699.8,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 1568,
+     "execute": 6699.8,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 1568,
+     "execute": 6699.8,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 70.41374349594116,
+   "build": "cg_l2",
+   "params": {
+    "L": 2
+   },
+   "date": "2026-10-24"
+  },
+  "cg_l8_holdout2": {
+   "header": "wf_vecunit_1725969398.h",
+   "word_bits": 64,
+   "workload": "holdout2",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2146,
+    4132,
+    6530,
+    8262,
+    10759,
+    13810,
+    17291,
+    19036
+   ],
+   "intervals": [
+    1986,
+    2398,
+    1732,
+    2497,
+    3051,
+    3481,
+    1745
+   ],
+   "done_cycle": 19119,
+   "pysim_cycles": 19153.488059818883,
+   "pysim_status": [
+    2203.8,
+    4186.2,
+    6573.3,
+    8302.1,
+    10787.0,
+    13841.1,
+    17326.0,
+    19073.5
+   ],
+   "resources": {
+    "lut": 133449,
+    "ff": 126131,
+    "dsp": 101,
+    "bram": 72,
+    "clock_ns": 3.113
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 24,
+     "load": 54.0,
+     "output": 26,
+     "store": 50.0,
+     "elements": 190,
+     "execute": 2133.8,
+     "binds": "execute"
+    },
+    {
+     "input": 2,
+     "load": 8.0,
+     "output": 4,
+     "store": 4.0,
+     "elements": 64,
+     "execute": 1981.4,
+     "binds": "execute"
+    },
+    {
+     "input": 4,
+     "load": 12.0,
+     "output": 6,
+     "store": 8.0,
+     "elements": 72,
+     "execute": 2386.1,
+     "binds": "execute"
+    },
+    {
+     "input": 12,
+     "load": 30.0,
+     "output": 14,
+     "store": 26.0,
+     "elements": 144,
+     "execute": 1727.6,
+     "binds": "execute"
+    },
+    {
+     "input": 24,
+     "load": 30.0,
+     "output": 26,
+     "store": 26.0,
+     "elements": 158,
+     "execute": 2483.9,
+     "binds": "execute"
+    },
+    {
+     "input": 24,
+     "load": 30.0,
+     "output": 26,
+     "store": 26.0,
+     "elements": 184,
+     "execute": 3053.2,
+     "binds": "execute"
+    },
+    {
+     "input": 768,
+     "load": 786.0,
+     "output": 774,
+     "store": 774.0,
+     "elements": 616,
+     "execute": 3483.8,
+     "binds": "execute"
+    },
+    {
+     "input": 160,
+     "load": 332.0,
+     "output": 164,
+     "store": 324.0,
+     "elements": 162,
+     "execute": 1746.5,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 28.082661151885986,
+   "build": "cg_l8",
+   "params": {
+    "L": 8
+   },
+   "date": "2026-10-24"
+  },
+  "cg_l8_steady": {
+   "header": "wf_vecunit_1725969398.h",
+   "word_bits": 64,
+   "workload": "steady",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2170,
+    4331,
+    6492,
+    8653
+   ],
+   "intervals": [
+    2161,
+    2161,
+    2161
+   ],
+   "done_cycle": 8783,
+   "pysim_cycles": 8902.903736304728,
+   "pysim_status": [
+    2290.5,
+    4452.0,
+    6613.4,
+    8774.9
+   ],
+   "resources": {
+    "lut": 133449,
+    "ff": 126131,
+    "dsp": 101,
+    "bram": 72,
+    "clock_ns": 3.113
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 392,
+     "execute": 2160.5,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 392,
+     "execute": 2160.5,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 392,
+     "execute": 2160.5,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 392,
+     "execute": 2160.5,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 12.597766876220703,
+   "build": "cg_l8",
+   "params": {
+    "L": 8
+   },
+   "date": "2026-10-24"
+  },
+  "cg_steady": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "steady",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    3361,
+    6720,
+    10079,
+    13438
+   ],
+   "intervals": [
+    3359,
+    3359,
+    3359
+   ],
+   "done_cycle": 13568,
+   "pysim_cycles": 13567.894932516712,
+   "pysim_status": [
+    3360.7,
+    6720.4,
+    10080.2,
+    13439.9
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 512,
+     "load": 524.0,
+     "output": 516,
+     "store": 516.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 23.026458263397217,
+   "trace": {
+    "tasks": {
+     "load": {
+      "firings": 4,
+      "spans": [
+       2734,
+       3358,
+       3358,
+       3358
+      ],
+      "first": 17,
+      "last": 12827
+     },
+     "exec": {
+      "firings": 4,
+      "spans": [
+       3360,
+       3358,
+       3358,
+       3358
+      ],
+      "first": 17,
+      "last": 13453
+     },
+     "store": {
+      "firings": 4,
+      "spans": [
+       3493,
+       3358,
+       3358,
+       3358
+      ],
+      "first": 17,
+      "last": 13586
+     }
+    },
+    "queues": {
+     "qi0": {
+      "producer": "load",
+      "consumer": "exec",
+      "blocks": 4,
+      "held": 0,
+      "slack": [
+       12,
+       -2209,
+       -2209,
+       -2209
+      ],
+      "waited": 0
+     },
+     "qi1": {
+      "producer": "load",
+      "consumer": "exec",
+      "blocks": 12,
+      "held": 11,
+      "slack": [
+       -121,
+       145,
+       145,
+       153,
+       145,
+       145,
+       153,
+       145,
+       145,
+       153,
+       145,
+       145
+      ],
+      "waited": 0
+     },
+     "qo0": {
+      "producer": "exec",
+      "consumer": "store",
+      "blocks": 12,
+      "held": 0,
+      "slack": [
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5,
+       5
+      ],
+      "waited": 11
+     },
+     "qo1": {
+      "producer": "exec",
+      "consumer": "store",
+      "blocks": 4,
+      "held": 0,
+      "slack": [
+       5,
+       5,
+       5,
+       5
+      ],
+      "waited": 3
+     }
+    },
+    "ports": {
+     "s_in0": {
+      "words": 2048,
+      "first": 2,
+      "last": 11960,
+      "busy": 0.17125177690442345
+     }
+    },
+    "binds": "exec"
+   },
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_steady_k2": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "steady_k2",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2833,
+    5664,
+    8495,
+    11326
+   ],
+   "intervals": [
+    2831,
+    2831,
+    2831
+   ],
+   "done_cycle": 11360,
+   "pysim_cycles": 11399.62107934026,
+   "pysim_status": [
+    2859.3,
+    5695.4,
+    8531.5,
+    11367.6
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 256,
+     "execute": 2835.1,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 256,
+     "execute": 2835.1,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 256,
+     "execute": 2835.1,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 140.0,
+     "output": 132,
+     "store": 132.0,
+     "elements": 256,
+     "execute": 2835.1,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 44.478705406188965,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_steady_n4": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "steady_n4",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    1311,
+    2620,
+    3929,
+    5238
+   ],
+   "intervals": [
+    1309,
+    1309,
+    1309
+   ],
+   "done_cycle": 5256,
+   "pysim_cycles": 5301.488636241467,
+   "pysim_status": [
+    1348.4,
+    2660.8,
+    3973.1,
+    5285.5
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 64,
+     "load": 76.0,
+     "output": 68,
+     "store": 68.0,
+     "elements": 98,
+     "execute": 1311.4,
+     "binds": "execute"
+    },
+    {
+     "input": 64,
+     "load": 76.0,
+     "output": 68,
+     "store": 68.0,
+     "elements": 98,
+     "execute": 1311.4,
+     "binds": "execute"
+    },
+    {
+     "input": 64,
+     "load": 76.0,
+     "output": 68,
+     "store": 68.0,
+     "elements": 98,
+     "execute": 1311.4,
+     "binds": "execute"
+    },
+    {
+     "input": 64,
+     "load": 76.0,
+     "output": 68,
+     "store": 68.0,
+     "elements": 98,
+     "execute": 1311.4,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 9.805845975875854,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_steady_nit1": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "steady_nit1",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    1401,
+    2800,
+    4199,
+    5598
+   ],
+   "intervals": [
+    1399,
+    1399,
+    1399
+   ],
+   "done_cycle": 5728,
+   "pysim_cycles": 5717.622738687403,
+   "pysim_status": [
+    1398.2,
+    2795.3,
+    4192.5,
+    5589.6
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 262.0,
+     "output": 258,
+     "store": 258.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 21.067086219787598,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_steady_nit8": {
+   "header": "wf_vecunit_666698675.h",
+   "word_bits": 64,
+   "workload": "steady_nit8",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    8261,
+    16520,
+    24779,
+    33038
+   ],
+   "intervals": [
+    8259,
+    8259,
+    8259
+   ],
+   "done_cycle": 33168,
+   "pysim_cycles": 33538.13785790055,
+   "pysim_status": [
+    8611.7,
+    16877.9,
+    25144.0,
+    33410.1
+   ],
+   "resources": {
+    "lut": 82063,
+    "ff": 71661,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 1152,
+     "load": 1179.0,
+     "output": 1161,
+     "store": 1161.0,
+     "elements": 1904,
+     "execute": 8265.1,
+     "binds": "execute"
+    },
+    {
+     "input": 1152,
+     "load": 1179.0,
+     "output": 1161,
+     "store": 1161.0,
+     "elements": 1904,
+     "execute": 8265.1,
+     "binds": "execute"
+    },
+    {
+     "input": 1152,
+     "load": 1179.0,
+     "output": 1161,
+     "store": 1161.0,
+     "elements": 1904,
+     "execute": 8265.1,
+     "binds": "execute"
+    },
+    {
+     "input": 1152,
+     "load": 1179.0,
+     "output": 1161,
+     "store": 1161.0,
+     "elements": 1904,
+     "execute": 8265.1,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 91.26987886428833,
+   "build": "cg",
+   "params": {},
+   "date": "2026-10-24"
+  },
+  "cg_w128_steady": {
+   "header": "wf_vecunit_422514948.h",
+   "word_bits": 128,
+   "workload": "steady",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    3361,
+    6720,
+    10079,
+    13438
+   ],
+   "intervals": [
+    3359,
+    3359,
+    3359
+   ],
+   "done_cycle": 13503,
+   "pysim_cycles": 13503.894932516712,
+   "pysim_status": [
+    3360.7,
+    6720.4,
+    10080.2,
+    13439.9
+   ],
+   "resources": {
+    "lut": 81653,
+    "ff": 71631,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 256,
+     "load": 268.0,
+     "output": 260,
+     "store": 260.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 268.0,
+     "output": 260,
+     "store": 260.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 268.0,
+     "output": 260,
+     "store": 260.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    },
+    {
+     "input": 256,
+     "load": 268.0,
+     "output": 260,
+     "store": 260.0,
+     "elements": 784,
+     "execute": 3358.7,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 21.400557279586792,
+   "build": "cg_w128",
+   "params": {
+    "word_bits": 128
+   },
+   "date": "2026-10-24"
+  },
+  "cg_w128_steady_nit1": {
+   "header": "wf_vecunit_422514948.h",
+   "word_bits": 128,
+   "workload": "steady_nit1",
+   "tool": "2024.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    1401,
+    2800,
+    4199,
+    5598
+   ],
+   "intervals": [
+    1399,
+    1399,
+    1399
+   ],
+   "done_cycle": 5663,
+   "pysim_cycles": 5653.622738687403,
+   "pysim_status": [
+    1398.2,
+    2795.3,
+    4192.5,
+    5589.6
+   ],
+   "resources": {
+    "lut": 81653,
+    "ff": 71631,
+    "dsp": 53,
+    "bram": 36,
+    "clock_ns": 3.102
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     13,
+     23
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     3,
+     7
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     49
+    ]
+   },
+   "bounds": [
+    {
+     "input": 128,
+     "load": 134.0,
+     "output": 130,
+     "store": 130.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 134.0,
+     "output": 130,
+     "store": 130.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 134.0,
+     "output": 130,
+     "store": 130.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    },
+    {
+     "input": 128,
+     "load": 134.0,
+     "output": 130,
+     "store": 130.0,
+     "elements": 336,
+     "execute": 1396.2,
+     "binds": "execute"
+    }
+   ],
+   "simulate_s": 9.659559726715088,
+   "build": "cg_w128",
+   "params": {
+    "word_bits": 128
+   },
+   "date": "2026-10-24"
+  }
+ }
+}

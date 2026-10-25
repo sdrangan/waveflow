@@ -52,7 +52,7 @@ def test_a_negative_slack_is_unknown_not_a_wait():
     assert trace_report(t)["queues"]["qi0"]["waited"] == 0
 
 
-def test_the_loader_binds_when_its_port_is_busy_and_the_execute_task_waits(tmp_path):
+def test_the_loader_binds_when_it_never_waits_for_the_execute_task(tmp_path):
     from waveflow.vecunit.build import TOP, WORK_DIR
 
     acc = tmp_path / WORK_DIR / TOP / "xsi_run" / "vectors" / "s_in0_acc"
@@ -62,6 +62,13 @@ def test_the_loader_binds_when_its_port_is_busy_and_the_execute_task_waits(tmp_p
     r = trace_report(t, tmp_path)
     assert r["ports"]["s_in0"]["busy"] == 1.0
     assert r["binds"] == "load"
+
+
+def test_the_store_binds_when_the_execute_task_waits_for_it():
+    from waveflow.vecunit.report import binding
+
+    q = {"qi0": {"producer": "load", "held": 3}, "qo0": {"producer": "exec", "held": 2}}
+    assert binding({"queues": q}) == "store"
 
 
 def test_job_bounds():

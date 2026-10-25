@@ -67,7 +67,7 @@ def load_unit_trace(unit, root: Path):
     """The traced RTL run of *unit*'s harness at *root* (``build_dag(..., trace=True)``) bound by
     name (:func:`waveflow.utils.trace.load_trace`): the unit's manifest, resolved at the scope its
     tasks are found under in the waveform."""
-    from vcdvcd import VCDVCD
+    from vcdvcd import VCDVCD  # type: ignore[import-untyped]
 
     from waveflow.build.composite_gen import composite_top_spec
     from waveflow.utils.trace import load_trace
@@ -99,8 +99,7 @@ def trace_report(bt, root: Path | None = None) -> dict:
       wait is then unknown;
     * with *root*, each input port's accepted words (the BFMs' own record, ``vectors/<port>_acc``):
       how many, over how many cycles;
-    * ``binds``: the task that waits on neither side -- none of its commits held, and its input
-      blocks taken with slack to spare (the loader: its input port busy instead)."""
+    * ``binds``: :func:`binding` of the above."""
     tasks = {_role(t["inst"]): t["inst"] for t in bt.manifest["tasks"]}
     out: dict = {"tasks": {}, "queues": {}, "ports": {}}
     for role, inst in tasks.items():
@@ -124,19 +123,22 @@ def trace_report(bt, root: Path | None = None) -> dict:
                 out["ports"][d.name[:-4]] = {"words": int(c.size), "first": int(c[0]),
                                              "last": int(c[-1]),
                                              "busy": float(c.size / (c[-1] - c[0] + 1))}
-    q = out["queues"].values()
-
-    def free(role: str) -> bool:
-        held = sum(x["held"] for x in q if x["producer"] == role)
-        waited = sum(x["waited"] for x in q if x["consumer"] == role)
-        return held == 0 and waited == 0
-
-    candidates = [r for r in ("exec", "store") if free(r)]
-    load_busy = max((p["busy"] for p in out["ports"].values()), default=0.0)
-    if not any(x["held"] for x in q if x["producer"] == "load") and load_busy > 0.9:
-        candidates.append("load")
-    out["binds"] = candidates[0] if len(candidates) == 1 else candidates or None
+    out["binds"] = binding(out)
     return out
+
+
+def binding(report: dict) -> str:
+    """The task that binds, from a :func:`trace_report`'s queues, by who waits on whom (a run's first
+    block, its start-up, aside): the loader binds if its commits are never held -- it never waits
+    for the execute task; otherwise the execute task binds, unless its own commits are held -- it
+    waits for the store, which binds.  (The execute task's waits on its inputs cannot be read: its
+    fused loop enables every queue's memory in every pass.)"""
+    def held(role: str) -> int:
+        return sum(x["held"] for x in report["queues"].values() if x["producer"] == role)
+
+    if not held("load"):
+        return "load"
+    return "exec" if not held("exec") else "store"
 
 
 def job_bounds(cfg, progs) -> dict:

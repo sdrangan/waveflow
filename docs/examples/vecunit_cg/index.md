@@ -2,7 +2,7 @@
 title: CG as a vector program
 parent: Examples
 nav_order: 22
-has_children: false
+has_children: true
 example_dir: examples/vecunit_cg
 summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a program for the programmable vector unit (VecUnit): the CG knowledge moves out of the hardware into a program builder, the unit stays application-free, and the solve is bit-exact with waveflow.linalg.cg's model in the interpreter, in pysim and at RTL. A harness plays the systolic array (S = A·P on each P the unit emits). What it shows: grouping the column groups' work kind by kind makes long fused runs, and the program runs a steady 8×32 solve of three iterations in 3,359 cycles against the dedicated CgVectorUnit's 3,581 (Vitis 2024.1), at about four times its LUTs."
 ---
@@ -83,7 +83,8 @@ python -m examples.vecunit_cg.cg_runtime --rtl --root /tmp/vu_cg_rt   # untimed 
 ```
 
 What a solve costs to simulate, against the untimed models and the RTL, from one to 64 jobs, is
-measured in [Evaluation: CG on the vector unit](../../evaluation/sim_speed/vecunit_cg.md).
+measured in [Evaluation: CG on the vector unit](../../evaluation/sim_speed/vecunit_cg.md); the RTL
+across workloads, word widths and lanes, against each job's bounds, in [Timing at RTL](timing.md).
 
 `tests/examples/test_vecunit_cg.py` runs the program on the interpreter against `cg.cg_solve` -- every
 `P` and the final `X` -- for four format sets, `nit` 1 to 8, shapes at and below the maxima and the

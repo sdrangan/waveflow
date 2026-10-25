@@ -2,7 +2,7 @@
 title: A matched filter as a vector program
 parent: Examples
 nav_order: 23
-has_children: false
+has_children: true
 example_dir: examples/vecunit_mf
 summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: a streaming program is bound by I/O, not compute -- a frame every 1,408 cycles against an input floor of 1,152 words (1.22x, Vitis 2024.1) -- and how to count the instructions a chunk so issue never binds."
 ---
@@ -70,7 +70,9 @@ python -m examples.vecunit_mf.mf_runtime --rtl --root /tmp/vu_mf_rt   # untimed 
 ```
 
 What a frame costs to simulate, against the untimed models and the RTL, from 256 to 16,384 samples,
-is measured in [Evaluation: the matched filter on the vector unit](../../evaluation/sim_speed/vecunit_mf.md).
+is measured in [Evaluation: the matched filter on the vector unit](../../evaluation/sim_speed/vecunit_mf.md);
+the RTL across antenna counts, chunk lengths, word widths and lanes, against each frame's bounds, in
+[Timing at RTL](timing.md).
 
 | Workload | Frames |
 |---|---|

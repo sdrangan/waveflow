@@ -2,7 +2,7 @@
 title: "Simulation speed: the matched filter on the vector unit"
 parent: Simulation speed
 nav_order: 5
-summary: "One bit-exact matched-filter frame of 256 to 16,384 samples at 8 antennas (4 to 256 chunks on the vector unit) run four ways on the same operands: the application's untimed model (0.07 to 2.4 ms), the unit's interpreter (2.0 to 128 ms), Waveflow's pysim of the unit (8.7 to 274 ms) and the synthesized RTL under XSI (0.46 to 40 s, after 89 s of csynth and 85 s of XSI build). The RTL takes 53 to 148 times as long as the whole pysim. A streaming program moves a small block per event, so here the timing costs 1.6 to 2.2 times the interpreter's arithmetic, and the pysim over-charges a chunk by 11% (the calibration's known gap on this build). Measurement only: nothing has been optimized yet."
+summary: "One bit-exact matched-filter frame of 256 to 16,384 samples at 8 antennas (4 to 256 chunks on the vector unit) run four ways on the same operands: the application's untimed model (0.07 to 2.3 ms), the unit's interpreter (2.1 to 127 ms), Waveflow's pysim of the unit (8.9 to 280 ms) and the synthesized RTL under XSI (0.46 to 40 s, after 89 s of csynth and 85 s of XSI build). The RTL takes 52 to 144 times as long as the whole pysim. A streaming program moves a small block per event, so here the timing costs 1.6 to 2.2 times the interpreter's arithmetic, and the pysim over-charges a chunk by 11% (the calibration's known gap on this build). Measurement only: nothing has been optimized yet."
 ---
 
 # Simulation speed: the matched filter on the vector unit
@@ -51,22 +51,22 @@ One frame per size; every run exact, in the interpreter (`Y` against the golden)
 
 | frame | chunks | RTL cycles | golden | interpreter | pysim | RTL under XSI | RTL ÷ pysim |
 |---|---|---|---|---|---|---|---|
-| 256×8 | 4 | 1,825 | 0.07 ms | 2.0 ms | **8.7 ms** (183 events) | **0.46 s** | **53×** |
-| 1024×8 | 16 | 6,037 | 0.14 ms | 8.0 ms | **21 ms** (611 events) | **2.2 s** | **105×** |
-| 4096×8 | 64 | 22,885 | 0.44 ms | 32 ms | **72 ms** (2,339 events) | **9.8 s** | **137×** |
-| 16384×8 | 256 | 90,277 | 2.4 ms | 128 ms | **274 ms** (9,251 events) | **40 s** | **148×** |
+| 256×8 | 4 | 1,825 | 0.07 ms | 2.1 ms | **8.9 ms** (181 events) | **0.46 s** | **52×** |
+| 1024×8 | 16 | 6,037 | 0.14 ms | 8.0 ms | **22 ms** (609 events) | **2.2 s** | **103×** |
+| 4096×8 | 64 | 22,885 | 0.41 ms | 32 ms | **74 ms** (2,330 events) | **9.8 s** | **133×** |
+| 16384×8 | 256 | 90,277 | 2.3 ms | 127 ms | **280 ms** (9,242 events) | **40 s** | **144×** |
 
 The pysim column is the whole run, harness included. Apart:
 
 | frame | pysim: build the harness | pysim: run | run ÷ interpreter | RTL ÷ run | pysim cycles (vs RTL) |
 |---|---|---|---|---|---|
-| 256×8 | 4.3 ms | 4.4 ms | 2.17 | 105× | 1,911 (+4.7%) |
-| 1024×8 | 7.3 ms | 14 ms | 1.74 | 162× | 6,483 (+7.4%) |
-| 4096×8 | 20 ms | 52 ms | 1.61 | 190× | 25,159 (+9.9%) |
-| 16384×8 | 70 ms | 204 ms | 1.60 | 198× | 99,863 (+10.6%) |
+| 256×8 | 4.3 ms | 4.6 ms | 2.23 | 101× | 1,911 (+4.7%) |
+| 1024×8 | 7.4 ms | 14 ms | 1.79 | 156× | 6,448 (+6.8%) |
+| 4096×8 | 20 ms | 54 ms | 1.68 | 183× | 24,660 (+7.8%) |
+| 16384×8 | 70 ms | 209 ms | 1.64 | 193× | 99,363 (+10.1%) |
 
 Per 64-sample chunk, fitted over the four sizes (`setup + chunks × per chunk`): golden 0.009 ms,
-interpreter 0.50 ms (16.8 ms element-major), pysim 1.05 ms (0.26 ms building the harness, 0.79 ms
+interpreter 0.50 ms (16.5 ms element-major), pysim 1.08 ms (0.26 ms building the harness, 0.81 ms
 running, 36 SimPy events), RTL 159 ms.
 
 One-time costs, per design point: csynth 89 s; the XSI build 85 s the first time (compile 2.6,
@@ -77,7 +77,9 @@ Measured 2026-10-24 (Vitis HLS / Vivado xsim 2024.1) on the machine of
 [CG on the vector unit](vecunit_cg.md#results-across-sizes), otherwise idle; the untimed ways and the
 pysim are the best of eleven runs, the RTL one run a size. A first sweep the same evening, from a build
 root whose csynth was cached, gave the same cycles, and the interpreter, pysim and RTL times within 2%
-(the golden's sub-millisecond times within 9%).
+(the golden's sub-millisecond times within 9%). The untimed and pysim columns are from a re-run after
+Stage 9 of `plans/vecunit_new.md`, which fixed pysim's first-job start-up: the first frame's program no
+longer delays it (6,483 cycles became 6,448 at 1024×8).
 
 **How the RTL column is counted.** As for CG: XSI simulates a fixed bound, `1.2 × pysim cycles +
 2,000`, and the table charges it `simulate × done ÷ bound`, where `done` is the cycle the last output
@@ -100,38 +102,38 @@ call: read the shares):
 |---|---|
 | **building the harness** (28% of the pysim's time): the programs, the matrices into words | not split further |
 | **the run** (72%) | |
-| ... the interpreter (the execute task's passes and decode) | 55% |
-| ... converting words to blocks and back (the load and store tasks) | 5.8% |
-| ... SimPy, the interfaces, the tasks' own code | 39% |
+| ... the interpreter (the execute task's passes and decode) | 53% |
+| ... converting words to blocks and back (the load and store tasks) | 5.6% |
+| ... SimPy, the interfaces, the tasks' own code | 41% |
 
 The raw profile split is in `runtime.json` under `"profile"`.
 
 ## Insights
 
-- **The RTL takes 53 to 148 times as long as the whole pysim,** and 105 to 198 times its run, before
+- **The RTL takes 52 to 144 times as long as the whole pysim,** and 101 to 193 times its run, before
   the RTL's three minutes of csynth and XSI build. The ratio grows with the frame: the pysim's fixed
   cost is a few milliseconds, and XSI's time grows with the cycles.
 - **A streaming program pays more for its timing than CG does.** Each chunk is a small block (64
   samples) and a few instructions, so the events are many for the arithmetic: 36 a chunk against CG's
-  118 a job, but a job's arithmetic is 26 times a chunk's. The pysim's run costs 1.6 to 2.2 times the
-  interpreter's here, against 1.06 to 1.16 for CG, and SimPy with the framework is 39% of the run.
+  117 a job, but a job's arithmetic is 27 times a chunk's. The pysim's run costs 1.6 to 2.2 times the
+  interpreter's here, against 1.07 to 1.16 for CG, and SimPy with the framework is 41% of the run.
 - **The pysim over-charges a chunk by 11%** (389 cycles against the RTL's 351), so its cycle count
-  drifts from 4.7% over the RTL's for one frame of 4 chunks to 10.6% at 256. This is the calibration's
+  drifts from 4.7% over the RTL's for one frame of 4 chunks to 10.1% at 256. This is the calibration's
   known gap on this build, recorded by the calibration (Stage 7 of `plans/vecunit_new.md`): the timing
   was fitted on the CG build, whose execute
   decode loop is deeper (depth 23 against 14).
 - **The interpreter costs 54 times the golden a chunk,** 0.50 ms against 0.009: the golden is a few
   numpy calls over the whole frame, the interpreter decodes and runs each chunk's 11 instructions. Its
-  element-major mode costs another 34×, far more than for CG (4.5×), because the chunk's vectors are
+  element-major mode costs another 33×, far more than for CG (4.5×), because the chunk's vectors are
   64 elements long, not 8.
 
 ## Future work
 
 The optimizations this page points at, none done here:
 
-- **SimPy and the framework**, 39% of the run: fewer events a chunk, or cheaper ones. For a streaming
+- **SimPy and the framework**, 41% of the run: fewer events a chunk, or cheaper ones. For a streaming
   program this is the larger share.
-- **The interpreter**, 55% of the run.
+- **The interpreter**, 53% of the run.
 - **The timing**: take each build's decode-loop schedule into the per-pass and per-run costs (the
   calibration's recorded next step), which closes the 11% a chunk.
 - **A host model that ends the RTL run** when the frame is done, so XSI simulates only the work's

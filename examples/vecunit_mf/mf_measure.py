@@ -40,14 +40,19 @@ RUNS = {
 TRACED = {("mf", "steady"), ("mf_v256", "steady")}
 
 
+def _load() -> dict:
+    if MEASURED.exists():
+        return json.loads(MEASURED.read_text(encoding="utf-8"))
+    return {"target": {"part": "xczu48dr-ffvg1517-2-e", "period_ns": 4.0}, "runs": {}}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, type=Path, help="a build root per build under it")
     ap.add_argument("--builds", nargs="+", default=list(RUNS), choices=list(RUNS))
     ap.add_argument("--force", action="store_true", help="re-run runs already recorded")
     a = ap.parse_args(argv)
-    data = json.loads(MEASURED.read_text(encoding="utf-8")) if MEASURED.exists() else {
-        "target": {"part": "xczu48dr-ffvg1517-2-e", "period_ns": 4.0}, "runs": {}}
+    data = _load()
     ok = True
     for build in a.builds:
         for kind in RUNS[build]:
@@ -58,6 +63,7 @@ def main(argv=None) -> int:
                             trace=(build, kind) in TRACED)
             r.update({"build": build, "params": BUILDS[build][1],
                       "date": datetime.now().astimezone().date().isoformat()})
+            data = _load()  # another process may have filed runs meanwhile (one per build)
             data["runs"][name] = r
             data["runs"] = dict(sorted(data["runs"].items()))
             MEASURED.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")

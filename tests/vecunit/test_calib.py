@@ -81,3 +81,16 @@ def test_the_filed_resource_model():
     for counter in ("lut", "ff"):
         assert rec["holdout"][counter]["mean"] < calib.TARGET_MEAN
         assert rec["holdout"][counter]["worst"] < calib.TARGET_WORST
+
+
+def test_stage9d_kept_the_timing_with_the_lower_held_out_mean():
+    """Stage 9d fitted a timing by phase and configuration and scored it once; the incumbent was
+    scored on the same held-out set (no fit), and the one with the lower mean is what pysim loads.
+    Both records and both scores are filed (the plan's Stage 9 record reports them)."""
+    rec = json.loads(calib.model_path(calib.TIMING_MODEL).read_text(encoding="utf-8"))
+    cmp = rec["comparison"]
+    other = rec["v2"] if rec["kept"] == "v1" else rec["v1"]
+    assert "holdout" in other and "fit" in other
+    kept, lost = cmp[rec["kept"]]["all"]["mean"], cmp["v2" if rec["kept"] == "v1" else "v1"]["all"]["mean"]
+    assert kept <= lost
+    assert [tuple(x) for x in cmp["set"]] == list(calib.TIMING2_HOLDOUT)
