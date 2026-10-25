@@ -1,0 +1,265 @@
+{
+ "frame_vlmax64_nrx8": {
+  "workload": "one frame of nsamp samples at 8 antennas; MfVecUnit (VLMAX 64, nrx_max 8, L 4), 64-bit words",
+  "date": "2026-10-24",
+  "machine": {
+   "cpu": "Intel(R) Core(TM) i7-7700K CPU @ 4.20GHz",
+   "threads": 8,
+   "python": "3.12.3",
+   "system": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39"
+  },
+  "reps": 11,
+  "sizes": {
+   "256": {
+    "nsamp": 256,
+    "nrx": 8,
+    "chunks": 4,
+    "input_words": 1152,
+    "golden_s": 6.598900654353201e-05,
+    "interpreter_s": 0.002031894982792437,
+    "interpreter_pass_s": 0.06472732999827713,
+    "exact": true,
+    "pysim": {
+     "s": 0.00868114799959585,
+     "build_s": 0.00426978399627842,
+     "run_s": 0.004410927009303123,
+     "cycles": 1910.9456574355372,
+     "events": 183,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.009550271002808586,
+      "scenario": 0.0014571390056516975,
+      "csynth": 88.5983335619967,
+      "pysim": 0.012031654012389481,
+      "system_rtl": 0.01124629398691468,
+      "system_xsi": 85.70901958900504,
+      "compare": 0.0004515309992711991
+     },
+     "phases_s": {
+      "compile_rtl": 2.620879650115967,
+      "elaborate": 80.500070810318,
+      "compile_tb": 1.3803811073303223,
+      "simulate": 1.0909931659698486
+     },
+     "exact": true,
+     "failed": null,
+     "tool": "2024.1",
+     "bound_cycles": 4293,
+     "simulate_s": 1.0909931659698486,
+     "done_cycle": 1825,
+     "last_cycles": {
+      "m_status": 1567,
+      "s_in0_acc": 1324,
+      "s_lprog_acc": 738,
+      "s_out0": 1825,
+      "s_sprog_acc": 863,
+      "s_xprog_acc": 1369
+     },
+     "status_cycles": [
+      1567
+     ],
+     "cycles_per_s": 3934.9467383544034,
+     "rtl_s": 0.46379280873397943
+    }
+   },
+   "1024": {
+    "nsamp": 1024,
+    "nrx": 8,
+    "chunks": 16,
+    "input_words": 4608,
+    "golden_s": 0.00014436899800784886,
+    "interpreter_s": 0.007985568983713165,
+    "interpreter_pass_s": 0.2649892670160625,
+    "exact": true,
+    "pysim": {
+     "s": 0.02128738001920283,
+     "build_s": 0.007321125973248854,
+     "run_s": 0.01386839000042528,
+     "cycles": 6483.28604880113,
+     "events": 611,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.011439918976975605,
+      "scenario": 0.0015749739832244813,
+      "csynth": 0.0,
+      "pysim": 0.017300301988143474,
+      "system_rtl": 0.00473858299665153,
+      "system_xsi": 3.6810350919840857,
+      "compare": 0.00045642099576070905
+     },
+     "phases_s": {
+      "simulate": 3.6352434158325195
+     },
+     "exact": true,
+     "failed": null,
+     "tool": "2024.1",
+     "bound_cycles": 9779,
+     "simulate_s": 3.6352434158325195,
+     "done_cycle": 6037,
+     "last_cycles": {
+      "m_status": 5779,
+      "s_in0_acc": 5468,
+      "s_lprog_acc": 4862,
+      "s_out0": 6037,
+      "s_sprog_acc": 5075,
+      "s_xprog_acc": 5581
+     },
+     "status_cycles": [
+      5779
+     ],
+     "cycles_per_s": 2690.053699680652,
+     "rtl_s": 2.2441931180469292
+    }
+   },
+   "4096": {
+    "nsamp": 4096,
+    "nrx": 8,
+    "chunks": 64,
+    "input_words": 18432,
+    "golden_s": 0.0004449599946383387,
+    "interpreter_s": 0.03195706399856135,
+    "interpreter_pass_s": 1.0715457529877312,
+    "exact": true,
+    "pysim": {
+     "s": 0.07159919702098705,
+     "build_s": 0.019917686004191637,
+     "run_s": 0.05158848501741886,
+     "cycles": 25159.144195204637,
+     "events": 2339,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.011569861002499238,
+      "scenario": 0.0018265200196765363,
+      "csynth": 0.0,
+      "pysim": 0.05755371000850573,
+      "system_rtl": 0.0045911219785921276,
+      "system_xsi": 13.829866901010973,
+      "compare": 0.000482761999592185
+     },
+     "phases_s": {
+      "simulate": 13.782954454421997
+     },
+     "exact": true,
+     "failed": null,
+     "tool": "2024.1",
+     "bound_cycles": 32190,
+     "simulate_s": 13.782954454421997,
+     "done_cycle": 22885,
+     "last_cycles": {
+      "m_status": 22627,
+      "s_in0_acc": 22316,
+      "s_lprog_acc": 21710,
+      "s_out0": 22885,
+      "s_sprog_acc": 21923,
+      "s_xprog_acc": 22429
+     },
+     "status_cycles": [
+      22627
+     ],
+     "cycles_per_s": 2335.49346088657,
+     "rtl_s": 9.798785731265841
+    }
+   },
+   "16384": {
+    "nsamp": 16384,
+    "nrx": 8,
+    "chunks": 256,
+    "input_words": 73728,
+    "golden_s": 0.0023750229738652706,
+    "interpreter_s": 0.1276128310128115,
+    "interpreter_pass_s": 4.2940077719977126,
+    "exact": true,
+    "pysim": {
+     "s": 0.2734615379886236,
+     "build_s": 0.06987501698313281,
+     "run_s": 0.2035865210054908,
+     "cycles": 99862.57678081853,
+     "events": 9251,
+     "exact": true
+    },
+    "rtl": {
+     "steps_s": {
+      "codegen": 0.011807957984274253,
+      "scenario": 0.002894559991545975,
+      "csynth": 0.0,
+      "pysim": 0.21259515901328996,
+      "system_rtl": 0.005070231010904536,
+      "system_xsi": 54.56262275701738,
+      "compare": 0.000587902992265299
+     },
+     "phases_s": {
+      "simulate": 54.51529550552368
+     },
+     "exact": true,
+     "failed": null,
+     "tool": "2024.1",
+     "bound_cycles": 121835,
+     "simulate_s": 54.51529550552368,
+     "done_cycle": 90277,
+     "last_cycles": {
+      "m_status": 90019,
+      "s_in0_acc": 89708,
+      "s_lprog_acc": 89102,
+      "s_out0": 90277,
+      "s_sprog_acc": 89315,
+      "s_xprog_acc": 89821
+     },
+     "status_cycles": [
+      90019
+     ],
+     "cycles_per_s": 2234.8773655213013,
+     "rtl_s": 40.39461018879765
+    }
+   }
+  },
+  "profile": {
+   "size": 16384,
+   "build_s": 0.157347201,
+   "build_interpreter_s": 0,
+   "run_s": 0.39756810300000006,
+   "interpreter_s": 0.21915354900000003,
+   "conversion_s": 0.023120172,
+   "rest_s": 0.15529438200000004,
+   "events": 9251
+  },
+  "fit": {
+   "golden": {
+    "per_ms": 0.00930343864625374,
+    "setup_ms": -0.03320704166782072
+   },
+   "interpreter": {
+    "per_ms": 0.49836864710122375,
+    "setup_ms": 0.035504740865571656
+   },
+   "interpreter_pass": {
+    "per_ms": 16.784842821307617,
+    "setup_ms": -2.894109311202497
+   },
+   "pysim": {
+    "per_ms": 1.0507837686401726,
+    "setup_ms": 4.4406954226876385
+   },
+   "pysim_build": {
+    "per_ms": 0.2604464516187435,
+    "setup_ms": 3.207954851619721
+   },
+   "pysim_run": {
+    "per_ms": 0.790550505043172,
+    "setup_ms": 1.1667878294898748
+   },
+   "pysim_events": {
+    "per": 35.992098331870054
+   },
+   "rtl": {
+    "per_ms": 158.74761728795056,
+    "setup_ms": -268.20200776469994
+   }
+  }
+ }
+}

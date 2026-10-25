@@ -66,7 +66,11 @@ python -m examples.vecunit_mf.harness --root /tmp/vu_mf --through compare --work
 python -m waveflow.vecunit.report /tmp/vu_mf
 pytest tests/examples/test_vecunit_mf.py              # the program against the golden, bit for bit
 pytest -m xsi tests/vecunit/test_unit_xsi.py          # the RTL gates
+python -m examples.vecunit_mf.mf_runtime --rtl --root /tmp/vu_mf_rt   # untimed vs pysim vs RTL, by size
 ```
+
+What a frame costs to simulate, against the untimed models and the RTL, from 256 to 16,384 samples,
+is measured in [Evaluation: the matched filter on the vector unit](../../evaluation/sim_speed/vecunit_mf.md).
 
 | Workload | Frames |
 |---|---|

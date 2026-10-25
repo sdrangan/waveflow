@@ -81,3 +81,16 @@ def test_pysim_unit_equals_the_interpreter(kind, tmp_path):
         assert len(got) == len(bursts)
         assert all(np.array_equal(np.asarray(a, np.uint64).reshape(-1), np.asarray(b, np.uint64))
                    for a, b in zip(got, bursts))
+
+
+def test_frame_workload_is_exact():
+    """The ``"frame_<nsamp>"`` sizes ``docs/evaluation/sim_speed/vecunit_mf.md`` sweeps (Stage 8):
+    one frame at ``nrx_max`` -- pysim's every output equal to the interpreter's, the interpreter's
+    ``Y`` (both pass orders) equal to ``mf_golden``'s."""
+    from examples.vecunit_mf import mf_runtime
+    from examples.vecunit_mf.harness import unit
+    from waveflow.vecunit import runtime as RT
+
+    assert unit().frames("frame_200") == [(200, 8, 1)]
+    assert RT.time_pysim(unit(), "frame_200", 1)["exact"]
+    assert mf_runtime.time_untimed(200, 1)["exact"]

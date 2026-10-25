@@ -39,21 +39,30 @@ class MfVecUnit(VecUnit):
     def frames(self, kind: str = "test") -> list[tuple[int, int, int]]:
         """``(nsamp, nrx, seed)`` per frame.  ``"test"``: every antenna count shape -- below, at and
         above ``L`` -- with whole and short last chunks.  ``"steady"``: four full frames of four
-        chunks at ``nrx_max`` (the input floor's measurement)."""
+        chunks at ``nrx_max`` (the input floor's measurement).  ``"frame_<nsamp>"``: one frame of
+        ``nsamp`` samples at ``nrx_max`` (the simulation-speed sizes,
+        ``docs/evaluation/sim_speed/vecunit_mf.md``)."""
         V, N = int(self.VLMAX), int(self.nrx_max)
+        if kind.startswith("frame_"):
+            return [(int(kind[6:]), N, 1)]
         if kind == "test":
             return [(2 * V, N, 1), (V + 5, max(1, N - 1), 2), (V, min(N, self.L), 3), (7, 1, 4)]
         if kind == "steady":
             return [(4 * V, N, s) for s in range(4)]
         raise ValueError(f"no workload {kind!r}")
 
+    @staticmethod
+    def frame(nsamp: int, nrx: int, seed: int):
+        """A frame's ``X`` (``nsamp``) and ``R`` (``nsamp x nrx``): random 16-bit stored integers."""
+        rng = np.random.default_rng(seed)
+        lo, hi = -(1 << 15), 1 << 15
+        xr, xi = rng.integers(lo, hi, nsamp), rng.integers(lo, hi, nsamp)
+        rr, ri = rng.integers(lo, hi, (nsamp, nrx)), rng.integers(lo, hi, (nsamp, nrx))
+        return xr, xi, rr, ri
+
     def jobs(self, kind: str = "test") -> list:
         out = []
         for j, (nsamp, nrx, seed) in enumerate(self.frames(kind)):
-            rng = np.random.default_rng(seed)
-            lo, hi = -(1 << 15), 1 << 15
-            xr, xi = rng.integers(lo, hi, nsamp), rng.integers(lo, hi, nsamp)
-            rr, ri = rng.integers(lo, hi, (nsamp, nrx)), rng.integers(lo, hi, (nsamp, nrx))
             out.append((300 + j, mf_programs(self.cfg, nsamp, nrx),
-                        mf_inputs(self.cfg, xr, xi, rr, ri)))
+                        mf_inputs(self.cfg, *self.frame(nsamp, nrx, seed))))
         return out

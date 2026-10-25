@@ -79,7 +79,11 @@ python -m examples.vecunit_cg.harness --root /tmp/vu_cg --through compare --work
 python -m waveflow.vecunit.report /tmp/vu_cg
 pytest tests/examples/test_vecunit_cg.py              # the program against cg.cg_solve, bit for bit
 pytest -m xsi tests/vecunit/test_unit_xsi.py          # the RTL gates
+python -m examples.vecunit_cg.cg_runtime --rtl --root /tmp/vu_cg_rt   # untimed vs pysim vs RTL, by size
 ```
+
+What a solve costs to simulate, against the untimed models and the RTL, from one to 64 jobs, is
+measured in [Evaluation: CG on the vector unit](../../evaluation/sim_speed/vecunit_cg.md).
 
 `tests/examples/test_vecunit_cg.py` runs the program on the interpreter against `cg.cg_solve` -- every
 `P` and the final `X` -- for four format sets, `nit` 1 to 8, shapes at and below the maxima and the

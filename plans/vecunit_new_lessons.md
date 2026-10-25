@@ -39,3 +39,9 @@
     failed six sweep rows that started after it; write placeholders as valid values.
 12. **`a && X=1 && (job1) & (job2) &` backgrounds the whole first list:** the variable is set only in
     that subshell, and `job2` ran with it empty. Set variables on their own line first.
+13. **A build root reused from a smoke run caches the one-time costs out of the record.** The first
+    matched-filter sweep reused the root of a one-size RTL check, so `runtime.json` showed csynth and
+    the XSI build as 0 s. Take a measurement that reports one-time costs from a fresh root.
+14. **`datetime.now(timezone.utc).date()` stamps tomorrow's date on an evening run** (EDT: UTC is four
+    hours ahead). Ruff's DTZ011 fix for `date.today()` is `datetime.now().astimezone().date()`, the local
+    date with a time zone, not UTC.

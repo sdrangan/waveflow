@@ -1,6 +1,6 @@
 # Plan: a general vector unit (RVV-style, decoupled), with CG as its first program
 
-**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7) (drafted 2026-10-20 with the user).
+**Status:** Stages 0-7 done 2026-10-22; open: the Stage 6 csynth item, and the timing model's worst held-out score (Stage 7). Stage 8 (simulation speed, measurement only) added and done 2026-10-24 (drafted 2026-10-20 with the user).
 **Complexity:** L3. A new package (`waveflow/vecunit/`): an ISA, an assembler, a bit-exact interpreter,
 a pysim module of four tasks, their HLS bodies, a harness and a calibration. Plus two examples that
 program the unit: `examples/vecunit_cg/` (CG) and `examples/vecunit_mf/` (a multi-antenna matched
@@ -868,6 +868,116 @@ the XSI gate floor (238 -> 241, Stage 5's three gates), the build steps no page 
 manifest (`tests/linalg/test_no_example_imports.py`). `pytest -m xsi tests/vecunit/test_unit_xsi.py`:
 3 passed in 557 s (the generic configuration fusion-off, CG, the matched filter, on the gated HLS).
 
+### Stage 8: simulation speed -- CG and the matched filter, untimed, pysim and RTL across sizes
+
+(Added 2026-10-24 with the user.) The twin of `docs/evaluation/sim_speed/systolic.md` for the unit's
+two applications: the same bit-exact work run several ways, timed across problem sizes, on one build
+per application. **Measurement only.** Nothing in the pysim, the interpreter, the harness or the HLS
+is optimized in this stage; the user will optimize later. Where the time goes is recorded so that
+work can start from it.
+
+**The ways, on the same operands** (the cost model of `docs/evaluation/sim_speed/index.md`: pysim
+time = the untimed model's time + events × a per-event cost; here the execute task calls the
+interpreter's `Machine`, so the interpreter is the untimed term):
+
+| way | CG | matched filter |
+|---|---|---|
+| untimed, the application's golden | `cg.cg_solve` on the whole `B`, every column at once | `mf_golden` on the whole frame |
+| untimed, the unit's interpreter | `run_cg` per job (closed loop: `mm_step` on each `P` the unit emits) | `run_mf` |
+| pysim | `CgVecUnit` in its harness: building the harness (the stimulus) and the run | `MfVecUnit` likewise |
+| RTL | the csynth'd unit under XSI through the system flow (`waveflow.vecunit.build.build_dag`), untraced; csynth and the XSI build reported apart | the same |
+
+**Sizes: one build each,** the one Stages 5-7 measured and calibrated, so the cycle counts can be
+checked against those records. The problem grows on fixed hardware, as the systolic page's does:
+- **CG:** `CgVecUnit` at the centre (`Kmax 8, Nmax 32, L 4`, the `CENTRE` formats, 64-bit words).
+  An `8 × n` right-hand side, `n` = 32, 128, 512, 2,048, `nit` 3, one `A`: `n / 32` jobs, each a
+  column block of `8 × 32`. The columns are independent CG problems, so this is how a wider `B` runs on
+  this unit; `k` cannot pass `Kmax` without a new build. Workload `"rhs_<n>"`; a width that is not a
+  multiple of `Nmax` is refused.
+- **Matched filter:** `MfVecUnit` as built (`VLMAX 64, nrx_max 8, L 4`). One frame of `nsamp` = 256,
+  1,024, 4,096, 16,384 samples at 8 antennas (4 to 256 chunks). Workload `"frame_<nsamp>"`.
+
+Expected RTL lengths from Stages 6-7: about 3,360 cycles a CG job (3.4k to 215k cycles) and 1,408 per
+256 samples (1.4k to 90k), the systolic page's range.
+
+**How it is counted** (as `examples/systolic/systolic_runtime.py`): the untimed ways and the pysim are
+the best of `--reps` runs (11), the RTL one run a size. The pysim's time includes building the harness;
+the build and the run are also recorded apart, with the SimPy events and the simulated cycles. The
+harness has no host to end the RTL run, so XSI simulates a fixed bound, `1.2 × pysim cycles + 2,000`;
+the table charges it `simulate × done ÷ bound`, where `done` is the cycle the last output word left.
+The raw times go in `runtime.json`. **Every run is checked:** the interpreter against the golden
+(CG: every `X` against `cg_solve` on the whole `B`), pysim's every output burst against the
+interpreter's after the clock stops, the RTL by the flow's `compare`. Per way, a fit
+`setup + jobs × per job` (CG) or `setup + chunks × per chunk` (matched filter) over the sizes. A
+cProfile of the largest pysim run is split into the interpreter, the word conversion, and SimPy with
+the framework. It is recorded and not acted on.
+
+**Code:**
+- `waveflow/vecunit/runtime.py`: the application-free part. A unit's pysim timed and checked, its
+  RTL timed through `build_dag`, the bound, the fit, the profile split. It takes a unit and a
+  workload kind (rule 9).
+- `examples/vecunit_cg/cg_runtime.py` → `examples/vecunit_cg/runtime.json`, and
+  `examples/vecunit_mf/mf_runtime.py` → `examples/vecunit_mf/runtime.json`: each holds its sizes, its
+  untimed ways, the command line and the results, as the systolic script does.
+- The workloads `"rhs_<n>"` (`cg_unit.py`) and `"frame_<nsamp>"` (`mf_unit.py`), with tests: pysim
+  exact at a small size, the CG `X` equal to `cg_solve` on the whole `B`, a bad size refused, the
+  runtime helpers on the smallest size.
+- Docs: `docs/evaluation/sim_speed/vecunit_cg.md` and `vecunit_mf.md` (the set-up, the command,
+  results across sizes, one-time costs, insights, where the time goes, future work), and their rows
+  and links on `docs/evaluation/sim_speed/index.md`.
+
+**Gate:** both scripts run with `--rtl`, every run exact in pysim and at RTL; both `runtime.json`
+committed; both pages written from them, the tool version (Vitis 2024.1) and the machine on each
+table; `pytest tests/vecunit tests/examples/test_vecunit_cg.py tests/examples/test_vecunit_mf.py
+tests/docs -q` passes. **Pause.**
+
+#### Record: Stage 8 (2026-10-24) -- Vitis HLS / Vivado xsim 2024.1, xczu48dr, 4 ns
+
+Machine: a Linux workstation in the lab (Intel Core i7-7700K, 4 cores / 8 threads, 32 GB, Python
+3.12.3), otherwise idle; untimed and pysim the best of 11 runs, the RTL one run a size.
+
+**Built.** `waveflow/vecunit/runtime.py` (pysim timed and checked against the golden bursts, the RTL
+timed through `build_dag` with the XSI phases and the last output's cycle, the bound, the fit, the
+cProfile split, the record kept across runs); `examples/vecunit_cg/cg_runtime.py` and
+`examples/vecunit_mf/mf_runtime.py` with their `runtime.json`; the workloads `"rhs_<n>"` and
+`"frame_<nsamp>"` (`MfVecUnit.frame` now makes a frame's operands); 7 tests
+(`tests/vecunit/test_runtime.py`, one each in the two example test files);
+`docs/evaluation/sim_speed/vecunit_cg.md` and `vecunit_mf.md`, two rows and two links on the section's
+index, and a link from each example page. Nothing was optimized.
+
+**Gate:** `python -m examples.vecunit_cg.cg_runtime --rtl --root <r>` (12 min 51 s) and
+`python -m examples.vecunit_mf.mf_runtime --rtl --root <fresh r>` (5 min 33 s), each then `--profile`:
+every run exact (the interpreter against the golden, pysim against the interpreter, the RTL by
+`compare`). `pytest -m "not vitis and not xsi and not gem5" tests/vecunit tests/examples/test_vecunit_cg.py
+tests/examples/test_vecunit_mf.py tests/docs tests/linalg/test_no_example_imports.py` -> 322 passed.
+
+| CG, `8 × n` (jobs) | RTL cycles | golden | interpreter | pysim (build + run) | RTL under XSI | RTL ÷ pysim |
+|---|---|---|---|---|---|---|
+| 32 (1) | 3,491 | 0.98 ms | 12.9 ms | 81 ms (66 + 15) | 2.7 s | 34× |
+| 2,048 (64) | 215,108 | 4.2 ms | 847 ms | 5.0 s (4.1 + 0.9) | 250 s | 50× |
+
+| matched filter, `nsamp × 8` (chunks) | RTL cycles | golden | interpreter | pysim (build + run) | RTL under XSI | RTL ÷ pysim |
+|---|---|---|---|---|---|---|
+| 256 (4) | 1,825 | 0.07 ms | 2.0 ms | 8.7 ms (4.3 + 4.4) | 0.46 s | 53× |
+| 16,384 (256) | 90,277 | 2.4 ms | 128 ms | 274 ms (70 + 204) | 40 s | 148× |
+
+One-time: csynth 98 s (CG) and 89 s (matched filter); the XSI build 93 s and 85 s. The other sizes and
+the fits are on the pages.
+
+**Found** (recorded, not acted on):
+- **CG's harness build is 82 % of its pysim time:** the stimulus's closed-loop capture
+  (`cg_unit.cg_job`) runs the interpreter in its default element-major mode, 4.5× the instruction-major
+  mode pysim's execute task uses.
+- **pysim's run costs 1.06-1.16× the interpreter for CG, 1.6-2.2× for the matched filter**: a chunk is
+  a small block, and SimPy with the framework is 39 % of the matched filter's run (7.5 % of CG's).
+- **CG pysim's first job starts 233 cycles late** (its status at 3,594 against 3,361); every later
+  interval is the RTL's to a cycle. The Stage 7 fit used intervals only, so a run's start-up was never
+  calibrated.
+- **The matched filter's pysim over-charges a chunk by 11 %** (389 cycles against 351), Stage 7's open
+  item, so a 256-chunk frame reads 10.6 % long.
+- XSI ran the CG build at 860-1,290 cycles a second and the matched filter's at 2,240-3,940 (csynth:
+  82.1k / 74.5k LUT, 71.7k / 48.3k FF).
+
 ## Out of scope
 
 - Moving `examples/mimo_cg` onto this unit, or onto the systolic engine (a separate plan).
@@ -904,3 +1014,4 @@ manifest (`tests/linalg/test_no_example_imports.py`). `pytest -m xsi tests/vecun
 | 2026-10-22 | 5 | Generated HLS bodies; RTL bit-exact (generic, CG, matched filter); CG 7,295 cycles a job against CgVectorUnit's 3,581 (2.04x, Vitis 2024.1), 59.6k LUT against 21.6k; the matched filter 1.26x its input floor | Stage 5 record |
 | 2026-10-22 | 6 | Fused runs (in-order issue): CG 3,359 cycles a job against CgVectorUnit's 3,581 (0.94x, Vitis 2024.1), the matched filter 1.22x its floor; 82k LUT / 72k FF. Open: a mixed-mode format set with fusion exceeds 12 GB in csynth | Stage 6 record |
 | 2026-10-22 | 7 | Pre-registered (`83687710`), then calibrated (Vitis 2024.1): timing held out 1.9 % mean, 7.5 % worst (the matched filter: the decode loop's schedule differs by configuration); resources held out LUT 2.4 % / 3.9 %, FF 1.4 % / 2.8 %, DSP and BRAM exact. The slot capability mask now reaches the datapath. Guide and two example pages | Stage 7 record |
+| 2026-10-24 | 8 | Simulation speed, measurement only (Vitis 2024.1, a lab workstation): CG `8 × 32`..`8 × 2048` -- the RTL 34-50× the whole pysim, 180-280× its run; the matched filter 256..16,384 samples -- 53-148×; every run exact. CG's harness build is 82 % of its pysim (the closed-loop stimulus, element-major) | Stage 8 record, `docs/evaluation/sim_speed/vecunit_{cg,mf}.md` |

@@ -155,3 +155,19 @@ def test_pysim_unit_equals_the_interpreter(kind, tmp_path):
         assert len(got) == len(bursts)
         assert all(np.array_equal(np.asarray(a, np.uint64).reshape(-1), np.asarray(b, np.uint64))
                    for a, b in zip(got, bursts))
+
+
+def test_rhs_workload_is_exact():
+    """The ``"rhs_<n>"`` sizes ``docs/evaluation/sim_speed/vecunit_cg.md`` sweeps (Stage 8): an
+    ``8 x n`` right-hand side as ``n / 32`` column-block jobs -- pysim's every output equal to the
+    interpreter's, the interpreter's ``X`` equal to ``cg_solve`` on the whole ``B`` (in both pass
+    orders); a width that is not a multiple of ``Nmax`` refused."""
+    from examples.vecunit_cg import cg_runtime
+    from examples.vecunit_cg.harness import unit
+    from waveflow.vecunit import runtime as RT
+
+    assert len(unit().jobs("rhs_64")) == 2
+    assert RT.time_pysim(unit(), "rhs_64", 1)["exact"]
+    assert cg_runtime.time_untimed(64, 1)["exact"]
+    with pytest.raises(ValueError, match="multiple"):
+        unit().jobs("rhs_40")

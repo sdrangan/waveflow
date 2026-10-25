@@ -26,6 +26,9 @@ def reg(W: int, I: int) -> Format:
     return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
 
 
+#: Iterations of each ``"rhs_<n>"`` solve (the ``"steady"`` workload's).
+RHS_NIT = 3
+
 #: The guide's centre formats (``docs/guide/dsp/cg_vector.md``): 12-bit vectors, ``alpha``, ``beta``;
 #: 20-bit ``ps`` and ``rz``; ``g_div`` 6 -- the CG core's calibration build.
 CENTRE = cg.CgFormats(A=reg(12, 3), B=reg(12, 4), P=reg(12, 4), R=reg(12, 4), S=reg(12, 5),
@@ -84,11 +87,17 @@ class CgVecUnit(VecUnit):
         ``"steady"``: four full solves of three iterations (the comparison with the CG core).
         ``"calib"``, ``"holdout"``: the calibration's pre-registered jobs
         (:data:`waveflow.vecunit.calib.CG_JOBS`): random jobs over every instruction form on this
-        configuration, then CG solves."""
+        configuration, then CG solves.  ``"rhs_<n>"``: one ``Kmax x n`` right-hand side of three
+        iterations as ``n / Nmax`` jobs, a column block each (:meth:`rhs`; the simulation-speed
+        sizes, ``docs/evaluation/sim_speed/vecunit_cg.md``)."""
         from waveflow.vecunit.calib import CG_JOBS
 
         f, K, N = self.cg_formats, int(self.Kmax), int(self.Nmax)
         out = []
+        if kind.startswith("rhs_"):
+            ar, ai, br, bi = self.rhs(int(kind[4:]))
+            return [cg_job(self.cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, 200 + j)
+                    for j, c in enumerate(range(0, br.shape[1], N))]
         if kind == "test":
             shapes = [(K, N, 3, 1), (min(K, 5), min(N, 13), 2, 2), (K, N, 1, 3), (K, min(N, 9), 4, 4)]
         elif kind == "steady":
@@ -108,3 +117,12 @@ class CgVecUnit(VecUnit):
                 br[:, 2] = bi[:, 2] = 0  # a zero column: both guards fire
             out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + len(out)))
         return out
+
+    def rhs(self, n: int):
+        """The ``"rhs_<n>"`` problem: one ``A`` (``Kmax x Kmax``) and a ``B`` of ``Kmax x n``, ``n``
+        a multiple of ``Nmax`` (the columns are independent CG problems, so a wider ``B`` runs as
+        column blocks of ``Nmax``, one job each)."""
+        N = int(self.Nmax)
+        if n < N or n % N:
+            raise ValueError(f"rhs_{n}: the width must be a multiple of Nmax = {N}")
+        return problem(self.cg_formats, int(self.Kmax), n, seed=0)
