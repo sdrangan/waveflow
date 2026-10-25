@@ -194,7 +194,12 @@ def test_the_index_rows_quote_the_pages(cpu):
          f"{f['gem5_region']} simulating it",
          f"{f['gem5_wall']} of a whole run, plus {f['gem5_wall_setup']} a run",
          f"cold first pass {f['cold_pysim']}")  # fmt: skip
-    _has(INDEX, _text(INDEX), f"about {f['per_event']}", f"{f['vs_region']} faster than gem5")
+    _has(
+        INDEX,
+        _text(INDEX),
+        f"about {f['per_event']}",
+        f"{f['vs_region']} faster than gem5",
+    )
 
 
 def test_the_scheduling_guide_quotes_the_bench_and_the_page(cpu):
