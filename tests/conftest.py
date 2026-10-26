@@ -166,6 +166,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 178 + 7 -> 185 on 2026-10-11: ``main`` merged into ``feat/cpu-model``; ``pytest -m xsi
 #: --collect-only -q`` counts 185.
 #:
+#: 185 -> 186 on 2026-10-12 (plans/sionna_rt/sionna_rt.md step 18, AC6): the ray-traced source's
+#: rendered bundle replayed through ``rf_pass_through`` at RTL (test_rt_sounder_xsi.py).
+#:
 #: In parallel on ``main``, after 168:
 #: 168 -> 173 on 2026-10-12 (plans/system_model.md S5): each markov / mm_fir sub-top elaborates
 #: alone (test_markov_xsi.py x3, test_mm_fir_xsi.py x2).  173 -> 174 (S3a): mem_copy's system top,
@@ -190,6 +193,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: composed BRAM equal to the measured (test_markov_tieoffs.py); both synthesis routes run fresh
 #: against the record the docs quote (test_markov_routes.py).
 #:
+#: 195 + 18 -> 213 on 2026-10-13: ``origin/main`` merged into ``feat/sionna-prod``.  This branch's
+#: 18 gates beyond 168 (the ``paper/mimo-cg`` / ``feat/cpu-model`` line above and the sounder's
+#: replay) on top of main's 195; ``pytest -m xsi --collect-only -q`` counts 213.
+#: In parallel on ``main``:
 #: 195 + 17 -> 212 on 2026-10-13: ``origin/main`` merged into ``feat/cpu-model``.  This branch's
 #: 17 gates beyond 168 (the ``paper/mimo-cg`` line above) on top of main's 195;
 #: ``pytest -m xsi --collect-only -q`` counts 212.
@@ -217,7 +224,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: with its memory stand-in at 128 bits (tests/linalg/test_systolic_engine.py).
 #: 239 -> 238 on 2026-10-19: the systolic unit's 390-cycle gate retired with the unit's docs (its
 #: other gates are quarantined with the MIMO-CG example, and still counted).
-WANT_XSI_GATES = 238
+#:
+#: 238 + 1 -> 239 on 2026-10-24: ``origin/main`` merged into ``feat/sionna-prod`` again -- main's 238
+#: and the sounder's replay (test_rt_sounder_xsi.py); ``pytest -m xsi --collect-only -q`` counts 239.
+WANT_XSI_GATES = 239
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
@@ -227,8 +237,33 @@ WANT_XSI_GATES = 238
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
 WANT_GEM5_GATES = 12
 
+#: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
+#: environment's tests that trace a scene (``plans/sionna_rt/sionna_rt.md``).  The same two rules:
+#: none may skip, and a full run collects at least this many.  To update:
+#: ``pytest -m sionna --collect-only -q``.
+#: 0 on 2026-10-12 (step 1): the marker exists; the gates arrive from step 7 on.
+#: 0 -> 4 on 2026-10-12 (step 7): the backend traces a built-in scene, twice identically, and a 1x4
+#: array with and without the synthetic array (tests/rfenv/test_sionna_backend.py).
+#: 4 -> 13 on 2026-10-12 (step 8): free space, two plates, four Doppler cases and the taps against
+#: Sionna's own, SISO and 1x4 (tests/rfenv/test_sionna_reference.py).
+#: 13 -> 14 on 2026-10-12 (step 9): a real trace cached, reused, and retraced when the scene changes
+#: (tests/rfenv/test_cache.py).
+#: 14 -> 16 on 2026-10-12 (step 10): tracing each committed reference channel again reproduces it
+#: (tests/rfenv/test_reference.py).
+#: 16 -> 19 on 2026-10-12 (M3 review): the variant requested after and before the import, and a
+#: dual-polarized array's channel order (tests/rfenv/test_sionna_backend.py).
+#: 19 -> 21 on 2026-10-12 (step 13): a live channel and a live source give the cached samples
+#: (tests/rfenv/test_live.py).
+#: 21 -> 22 on 2026-10-12 (M6 review): a user's Mitsuba XML scene, by path, traces as its built-in
+#: twin (tests/rfenv/test_sionna_backend.py).
+WANT_SIONNA_GATES = 22
+
 #: Each gated marker, the floor its full session must collect, and how its messages name it.
-_GATES = {"xsi": (WANT_XSI_GATES, "XSI"), "gem5": (WANT_GEM5_GATES, "gem5")}
+_GATES = {
+    "xsi": (WANT_XSI_GATES, "XSI"),
+    "gem5": (WANT_GEM5_GATES, "gem5"),
+    "sionna": (WANT_SIONNA_GATES, "Sionna RT"),
+}
 
 #: Filled in at collection; module state because a pytest run is one process and the hooks that
 #: write and read it are plain functions.  Keyed by marker: at most one is active per session.
