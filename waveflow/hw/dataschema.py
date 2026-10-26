@@ -3440,13 +3440,21 @@ class DataArray(DataSchema):
     def __setitem__(self, key, value):
         self.val[key] = value
 
-    def __array__(self, dtype=None) -> np.ndarray:
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        if copy:
+            return np.array(self.val, dtype=dtype, copy=True)
         return np.asarray(self.val, dtype=dtype)
+
+    #: numpy's buffer protocols, which np.asarray tries before __array__.  Forwarded, they hand over
+    #: the value's buffer without a structured dtype's fields: a complex array came back as raw V16.
+    _NOT_FORWARDED: ClassVar[frozenset[str]] = frozenset({"__array_struct__", "__array_interface__"})
 
     def __getattr__(self, name: str):
         # Delegate numpy ndarray attributes (shape, size, dtype, flatten, …) to self.val.
         # __getattr__ is only called when normal lookup fails, so instance attributes
         # like '_val' are never forwarded here.
+        if name in DataArray._NOT_FORWARDED:
+            raise AttributeError(name)
         return getattr(self.val, name)
 
     def __repr__(self) -> str:
