@@ -24,6 +24,7 @@ inner (they produce signed results); ``cadd``/``csub`` follow the inner rule.
 """
 from __future__ import annotations
 
+import sys
 from typing import Any, ClassVar, cast
 
 import numpy as np
@@ -44,6 +45,46 @@ def _inner_kind(inner: type[DataField]) -> str:
             f"ComplexField inner must be a FloatField / FixedField / IntField, got "
             f"{inner.__name__}.")
     return kind
+
+
+# --- words that are the (re, im) pairs' own bytes ----------------------------------------------
+# When each component is a machine number (8/16/32/64-bit integer, 32/64-bit float) on a
+# little-endian host, a complex array's lane layout (element k at bit (k % pf) * 2bw of its word,
+# re low, im high) is the byte order of an (n, 2) array of the components: converting is a
+# reinterpretation of the buffer, not a shift and OR per lane.
+_PART_BITS = (8, 16, 32, 64)
+
+
+def part_dtype(kind: str, bw: int, signed: bool = True) -> np.dtype | None:
+    """The numpy dtype of one ``bw``-bit component when its bytes are its wire bits, else None."""
+    if sys.byteorder != "little":
+        return None
+    if kind == "float":
+        return np.dtype(f"f{bw // 8}") if bw in (32, 64) else None
+    if bw not in _PART_BITS:
+        return None
+    return np.dtype(f"i{bw // 8}" if signed else f"u{bw // 8}")
+
+
+def pairs_to_words(pairs: np.ndarray, word_bw: int) -> np.ndarray:
+    """The words whose bytes are *pairs* (``(n, 2)`` components, ``n`` filling whole words): a 1-D
+    array of ``word_bw``-bit unsigned words up to 64 bits, ``(nwords, word_bw // 64)`` ``uint64``
+    chunks (chunk 0 the low bits) above."""
+    flat = np.ascontiguousarray(pairs).reshape(-1)
+    if word_bw <= 64:
+        return flat.view(f"u{word_bw // 8}")
+    return flat.view(np.uint64).reshape(-1, word_bw // 64)
+
+
+def words_to_pairs(words: np.ndarray, dt: np.dtype, word_bw: int) -> np.ndarray:
+    """The ``(n, 2)`` components of dtype *dt* whose bytes are *words* (as :func:`pairs_to_words`
+    gives them; bits of a word above ``word_bw`` are dropped)."""
+    w = np.asarray(words)
+    if word_bw <= 64:
+        buf = w.astype(f"u{word_bw // 8}")
+    else:
+        buf = np.ascontiguousarray(w, dtype=np.uint64)
+    return buf.reshape(-1).view(dt).reshape(-1, 2)
 
 
 class ComplexField(DataField):
@@ -174,6 +215,47 @@ class ComplexField(DataField):
             return out
         out = np.empty(bits.shape, dtype=complex_dtype(cls.inner_format()))
         out["re"], out["im"] = re, im
+        return out
+
+    # --- the whole array's words as its (re, im) pairs' bytes ---------------------------------
+    @classmethod
+    def _part_dtype(cls, word_bw: int) -> np.dtype | None:
+        """The component dtype when the array's words at ``word_bw`` are its pairs' own bytes:
+        machine-number components, whole elements to a word, and a word of whole bytes up to 64
+        bits or of whole 64-bit chunks above."""
+        bw = cls.inner_type.get_bitwidth()
+        if word_bw % (2 * bw):
+            return None
+        if (word_bw % 64 != 0) if word_bw > 64 else word_bw not in (8, 16, 32, 64):
+            return None
+        return part_dtype(cls.kind, bw, getattr(cls.inner_type, "signed", True))
+
+    @classmethod
+    def _words_numpy(cls, values: np.ndarray, nwords: int, word_bw: int) -> np.ndarray | None:
+        dt = cls._part_dtype(word_bw)
+        if dt is None:
+            return None
+        if cls.kind == "float":
+            re, im = values.real, values.imag
+        elif values.dtype.names:
+            re, im = values["re"], values["im"]
+        else:
+            return None
+        pairs = np.zeros((nwords * (word_bw // cls.get_bitwidth()), 2), dt)   # the last word padded
+        pairs[: re.size, 0] = re.astype(dt)            # the cast keeps the low bw bits: the wrap
+        pairs[: re.size, 1] = im.astype(dt)
+        return pairs_to_words(pairs, word_bw)
+
+    @classmethod
+    def _from_words_numpy(cls, words: np.ndarray, n: int, word_bw: int) -> np.ndarray | None:
+        dt = cls._part_dtype(word_bw)
+        if dt is None:
+            return None
+        pairs = words_to_pairs(words, dt, word_bw)[:n]
+        if cls.kind == "float":
+            return np.ascontiguousarray(pairs).view(cls._np_complex_type()).reshape(-1)
+        out = np.empty(n, dtype=complex_dtype(cls.inner_format()))
+        out["re"], out["im"] = pairs[:, 0], pairs[:, 1]  # widened: sign- or zero-extended
         return out
 
     # --- interleaved I/Q (de)serialization, composing the inner field ---------

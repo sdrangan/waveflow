@@ -609,6 +609,19 @@ class DataSchema(ABC):
         """The stored values of ``uint64`` flat bit patterns (1-D), or ``None``."""
         return None
 
+    # A step further: an element type whose array's words are its values' own bytes gives the words
+    # (or reads them) at once, with no flat bits or lane shifts.  ``None`` means use the lanes.
+    @classmethod
+    def _words_numpy(cls, values: np.ndarray, nwords: int, word_bw: int) -> np.ndarray | None:
+        """``nwords`` words holding *values* (1-D) in the array layout -- 1-D unsigned words up to
+        64 bits, ``(nwords, word_bw // 64)`` ``uint64`` chunks above -- or ``None``."""
+        return None
+
+    @classmethod
+    def _from_words_numpy(cls, words: np.ndarray, n: int, word_bw: int) -> np.ndarray | None:
+        """The first *n* stored values in *words* (as :meth:`_words_numpy` gives them), or ``None``."""
+        return None
+
     def write_uint32_file(self, file_path: str | Path) -> Path:
         """Serialize this schema to 32-bit words and write them to a binary file."""
         out_path = Path(file_path)
@@ -4820,6 +4833,9 @@ class DataArray(DataSchema):
         if layout is not None and isinstance(data, np.ndarray) and \
                 data.shape == self.__class__._normalized_shape():
             elem = self.__class__._element_type()
+            words = elem._words_numpy(data.reshape(-1), max(layout[1], 1), word_bw)
+            if words is not None:
+                return words.astype(np.uint32) if word_bw <= 32 else words
             bits = elem._flat_bits_numpy(data.reshape(-1))
             if bits is not None:
                 pf, nwords, k = layout
@@ -4845,8 +4861,10 @@ class DataArray(DataSchema):
                 if arr.shape[0] < nwords:                    # missing words read as zero
                     arr = np.vstack([arr, np.zeros((nwords - arr.shape[0], arr.shape[1]), np.uint64)])
                 elem = self.__class__._element_type()
-                bits = _chunks_to_lanes(arr[:nwords], pf, elem.get_bitwidth(), data.size)
-                vals = elem._from_flat_bits_numpy(bits)
+                vals = elem._from_words_numpy(arr[:nwords], data.size, word_bw)
+                if vals is None and elem.get_bitwidth() <= 64:      # the lanes are uint64
+                    bits = _chunks_to_lanes(arr[:nwords], pf, elem.get_bitwidth(), data.size)
+                    vals = elem._from_flat_bits_numpy(bits)
                 if vals is not None:
                     data[...] = vals.reshape(data.shape)
                     self._val = data
@@ -4929,7 +4947,7 @@ class DataArray(DataSchema):
         start = curr_iword + (1 if curr_ipos > 0 else 0)
         elem_bw = self.__class__._element_type().get_bitwidth()
         elem_mask = (1 << elem_bw) - 1
-        if pf >= 1 and isinstance(data, np.ndarray) and data.shape == shape:
+        if pf >= 1 and elem_bw <= 64 and isinstance(data, np.ndarray) and data.shape == shape:
             ws = words[start:start + nwords]
             bits = _unpack_lanes(ws + [0] * (nwords - len(ws)), pf, elem_bw, data.size, word_bw)
             vals = self.__class__._element_type()._from_flat_bits_numpy(bits)
