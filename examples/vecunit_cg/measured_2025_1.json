@@ -1,0 +1,81 @@
+{
+ "note": "CG steady (four 8 x 32 solves of three iterations, formats W12g8) on Vitis HLS / Vivado xsim 2025.1, xczu48dr at 4 ns, 2026-10-27. vecunit: waveflow.vecunit.measure.measure_run on calib build 'cg' (scalar_ext, rs_max and fuse_raw_vl off). CgVectorUnit: the step-8.3 bench of tests/linalg/test_cg_vector_unit.py (its rx, load, core and store tasks), four steady jobs; resources summed over the four tasks from csynth.",
+ "vecunit": {
+  "tool": "2025.1",
+  "exact": true,
+  "intervals": [
+   3447,
+   3447,
+   3447
+  ],
+  "resources": {
+   "lut": 82624,
+   "ff": 60668,
+   "dsp": 53,
+   "bram": 40,
+   "clock_ns": 3.102
+  },
+  "schedule": {
+   "rung": [
+    14,
+    24
+   ],
+   "run": [
+    1,
+    24
+   ],
+   "deliver": [
+    3,
+    7
+   ],
+   "sgather": [
+    2,
+    2
+   ],
+   "srun": [
+    2,
+    49
+   ]
+  }
+ },
+ "cg_vector_unit": {
+  "tool": "Vitis HLS / Vivado xsim 2025.1",
+  "job_intervals": [
+   3581,
+   3581,
+   3581
+  ],
+  "resources": {
+   "lut": 21464,
+   "ff": 11914,
+   "dsp": 52,
+   "bram18": 0
+  }
+ },
+ "before_the_batch": {
+  "vecunit_intervals": [
+   3458,
+   3458,
+   3458
+  ],
+  "rung": [
+   14,
+   25
+  ],
+  "lut": 82489,
+  "ff": 61219
+ },
+ "batch_features_always_built": {
+  "vecunit_intervals": [
+   4034,
+   4034,
+   4034
+  ],
+  "rung": [
+   20,
+   28
+  ],
+  "lut": 85883,
+  "ff": 57933
+ }
+}

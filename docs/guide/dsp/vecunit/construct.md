@@ -44,7 +44,9 @@ the rounding mode (`AP_RND` or `AP_TRN`) and the overflow mode (`AP_SAT` or `AP_
 
 The last three are **features that cost nothing when off**: off, the hardware is not generated and an
 instruction that needs it is refused (`BAD_OP`, or `BAD_DIMS` for a shift). They are off by default,
-so a plain configuration is the lean unit. CG is built with all three off.
+so a plain configuration is the lean unit. CG is built with all three off, and pays nothing for them:
+3,447 cycles a job with them in the code, against 3,458 before they existed, and 4,034 when the
+scalar extensions' decode was built in every unit (Vitis HLS 2025.1).
 | `word_bits` | 64 | the data ports' width: 32, 64 or 128 bits |
 | `lane_bits` | 16 | the bits of each part, real or imaginary, of a value on a port |
 | `n_in_ports` | 1 | input data ports `s_in0`, `s_in1`, ... |

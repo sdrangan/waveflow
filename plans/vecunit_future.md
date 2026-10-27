@@ -17,7 +17,9 @@ Vitis / Vivado **2025.1**, and every number names its tool version.
 1. **Every number at 2025.1.** CG on the vector unit and on `CgVectorUnit` (the comparison
    baseline, which so far has no committed record) re-measured at 2025.1: the `steady` workload, four
    `8 × 32` solves of three iterations, formats `W12g8`; cycles a job and csynth's resources, both
-   committed with their tool version. *Running, 2026-10-27.*
+   committed with their tool version. **Done 2026-10-27** (`examples/vecunit_cg/measured_2025_1.json`):
+   `CgVectorUnit` 3,581 cycles a job (as at 2024.1), 21,464 LUT; the vector unit 3,447 (0.96×),
+   82,624 LUT, decode loop at II 14.
 2. **pysim's accuracy at 2025.1.** pysim runs about 10 % fast against the 2025.1 builds (their decode
    loop is at II 20, the 2024.1 CG build's at 13). Either recalibrate the timing at 2025.1 (the
    pre-registered fit and held-out sets of `waveflow/vecunit/calib.py`, re-run) or state the error
