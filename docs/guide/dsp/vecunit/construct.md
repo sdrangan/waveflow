@@ -38,8 +38,13 @@ the rounding mode (`AP_RND` or `AP_TRN`) and the overflow mode (`AP_SAT` or `AP_
 | `g_div` | 0 | fraction bits `wf.sdivz` widens its dividend by, for a more precise quotient |
 | `max_run` | 8 | the most passes the execute task fuses into one run |
 | `max_srun` | 8 | the most scalar instructions it fuses into one scalar run |
-| `rs_max` | 15 | the largest result shift (`wf.setrs`); 0 builds no shifter |
+| `scalar_ext` | `False` (off) | build the scalar extensions: `wf.vmul.vs`, `wf.vadd.vs`, `wf.vsub.vs`, `wf.vmv.s.v`, `wf.sli` |
+| `rs_max` | 0 (off) | the largest result shift (`wf.setrs`); 0 builds no shift at all |
 | `fuse_raw_vl` | 0 (off) | fuse dependent passes when `VL` is at least this ([runs](isa.md#runs)) |
+
+The last three are **features that cost nothing when off**: off, the hardware is not generated and an
+instruction that needs it is refused (`BAD_OP`, or `BAD_DIMS` for a shift). They are off by default,
+so a plain configuration is the lean unit. CG is built with all three off.
 | `word_bits` | 64 | the data ports' width: 32, 64 or 128 bits |
 | `lane_bits` | 16 | the bits of each part, real or imaginary, of a value on a port |
 | `n_in_ports` | 1 | input data ports `s_in0`, `s_in1`, ... |
@@ -60,6 +65,8 @@ What each costs, roughly (the calibrated [resource model](timing.md#the-calibrat
   the most fraction bits of any of them. Keep them close.
 - **`rs_max`** adds that many bits of fraction to every result: about 8 % more LUTs on the toy unit
   at 15 (Vitis HLS 2025.1).
+- **`scalar_ext`** adds decode for five instructions and two operand paths: no DSPs, but more logic in
+  the decode loop, which sets a pass's cost.
 
 ## The sizes it derives
 
@@ -75,7 +82,8 @@ FS = Format(32, 12, True, QMode.AP_RND, OMode.AP_SAT)  # two scalars for sums
 FA = Format(16, 4, True, QMode.AP_RND, OMode.AP_SAT)   # one scalar for a gain
 cfg = VecUnitConfig(group_formats=(FV,) * 4, scalar_formats=(FS, FS, FA),
                     in_queue_formats=(FV, FV), out_queue_formats=(FV,),
-                    L=4, VLMAX=16, Kmax=16, Nmax=4, S=3, NB=4)
+                    L=4, VLMAX=16, Kmax=16, Nmax=4, S=3, NB=4,
+                    scalar_ext=True, rs_max=15)                # for its poly and cmul kernels
 
 from examples.vecunit.toy import toy_config
 print(cfg == toy_config())

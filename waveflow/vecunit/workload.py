@@ -29,15 +29,17 @@ def _matrix(rng, fmt, k: int, n: int):
 
 
 def _random_rs(rng, cfg: VecUnitConfig) -> int | None:
-    """A scaled instruction's own result shift, half the time (else ``wf.setrs``'s)."""
-    return int(rng.integers(cfg.rs_max + 1)) if rng.integers(2) else None
+    """A scaled instruction's own result shift, half the time (else ``wf.setrs``'s); none on a unit
+    built without the shift."""
+    return int(rng.integers(cfg.rs_max + 1)) if cfg.rs_max and rng.integers(2) else None
 
 
 def _random_vector(rng, cfg: VecUnitConfig, G: int, extended: bool = False) -> I.Instr:
     g = lambda: int(rng.integers(cfg.NG))
     s = lambda: int(rng.integers(cfg.NS))
     if extended and rng.integers(3) == 0:  # the scalar extensions and the result shift (F2, F4)
-        kind = int(rng.integers(6))
+        kinds = (0, 1, 2, 3, 4, 5) if cfg.scalar_ext else (4, 5)  # only what the unit has
+        kind = int(kinds[int(rng.integers(len(kinds)))])
         if kind == 0:
             return I.vmul_vs(g(), s(), g(), rs=_random_rs(rng, cfg))
         if kind in (1, 2):
@@ -75,7 +77,8 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int 
     queue's block written in full, the queues balanced.  ``n_max`` and ``k_max`` bound the blocks'
     columns and rows (small blocks keep a job execute-bound: a calibration measures the execute
     task).  ``extended`` also uses the scalar extensions, the result shift and ``wf.setrs``
-    (``plans/vecunit_future.md`` F2, F4); off, the jobs are the ones the calibration registered."""
+    (``plans/vecunit_future.md`` F2, F4) where the unit has them; off, the jobs are the ones the
+    calibration registered."""
     k = int(rng.integers(1, min(cfg.Kmax, cfg.VLMAX, k_max or cfg.Kmax) + 1))
     n = int(rng.integers(1, min(cfg.Nmax, n_max or cfg.Nmax) + 1))
     G = cfg.groups_per_row(n)
@@ -98,7 +101,7 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int 
         r = float(rng.random())
         if r < 0.12:
             s = lambda: int(rng.integers(cfg.NS))
-            if extended and rng.integers(3) == 0:
+            if extended and cfg.scalar_ext and rng.integers(3) == 0:
                 j = s()
                 W = cfg.scalar_formats[j].W
                 ex.append(I.sli(j, int(rng.integers(-(1 << (W - 1)), 1 << (W - 1)))))
@@ -106,7 +109,7 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int 
             ex.append(I.sdivz(s(), s(), s()) if rng.integers(2) else I.smv(s(), s()))
             continue
         if r < 0.2:
-            if extended and rng.integers(2):
+            if extended and cfg.rs_max and rng.integers(2):
                 ex.append(I.setrs(int(rng.integers(cfg.rs_max + 1))))
                 continue
             ex.append(I.setvl(int(rng.integers(1, k + 1))))

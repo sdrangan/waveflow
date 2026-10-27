@@ -245,10 +245,11 @@ close, as an application's usually are.
 
 **The result shift.** A multiplying instruction's product can be scaled by `2^−RS` before its one
 rounding (`wf.setrs`, or the instruction's own shift; see the [examples](program_examples.md)). The
-datapath carries `rs_max` more fraction bits for it (a build parameter, default 15) and shifts the
+datapath carries `rs_max` more fraction bits for it (a build parameter, 0 by default) and shifts the
 product left by `rs_max − RS`, so the scaling is exact and the quantizers keep their constant
-shifts. `rs_max = 0` builds the datapath without it; the CG and matched-filter units are built that
-way, as they were calibrated.
+shifts. `rs_max = 0` builds neither; the CG and matched-filter units are built that way. Likewise the
+scalar extensions (`wf.vmul.vs`, `wf.vadd.vs`, `wf.vsub.vs`, `wf.vmv.s.v`, `wf.sli`) are built only
+with `scalar_ext` ([the options](construct.md#the-options)).
 
 ## Ports and words
 

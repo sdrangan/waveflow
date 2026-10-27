@@ -72,7 +72,7 @@ int instr_status(const VecInstr& d) {
     const int BAD_OP = wf_linalg::BAD_OP, BAD_DIMS = wf_linalg::BAD_DIMS, OK = wf_linalg::OK;
     if (d.chain && !is_vector(d)) return BAD_OP;
     if (d.opcode == OPC_V) {
-        if (f > V_MVS) return BAD_OP;
+        if (f > (C::SEXT ? int(V_MVS) : int(V_DOTR))) return BAD_OP;  // the extensions, if built
         if ((d.conj || d.bcast) && !multiplying(f)) return BAD_OP;
         if (scaled(f) && (i2 & RS_OVERRIDE) && (i2 & RS_MASK) > C::RSM) return BAD_DIMS;
         bool ok;
@@ -97,7 +97,7 @@ int instr_status(const VecInstr& d) {
     if (d.opcode == OPC_S) {
         if (f == S_DIVZ) return in(rd, C::NS) && in(rs1, C::NS) && in(rs2, C::NS) ? OK : BAD_DIMS;
         if (f == S_MV) return in(rd, C::NS) && in(rs1, C::NS) ? OK : BAD_DIMS;
-        if (f == S_LI) {
+        if (C::SEXT && f == S_LI) {
             if (!in(rd, C::NS)) return BAD_DIMS;
             // The immediate fits the scalar's format: always at 24 bits or more (it is 24 bits; and
             // 1 << (w - 1) would overflow an int at w = 32), else its range.
@@ -133,7 +133,8 @@ struct Ops {
     ap_uint<8> s, wg, ws, q;
 };
 
-inline Ops operands(const VecInstr& d) {
+template <class C>
+Ops operands(const VecInstr& d) {
 #pragma HLS INLINE
     Ops o;
     o.nv = 0;
@@ -190,12 +191,12 @@ inline Ops operands(const VecInstr& d) {
         o.v[1] = d.rs2;
         o.sw = true;
         o.ws = d.rd;
-    } else if (f == V_MVS) {  // element 0 into a scalar: a reduction's write
+    } else if (C::SEXT && f == V_MVS) {  // element 0 into a scalar: a reduction's write
         o.nv = 1;
         o.v[0] = d.rs1;
         o.sw = true;
         o.ws = d.rd;
-    } else {  // MUL_S, ADD_S, SUB_S: vs2 with a scalar
+    } else if (C::SEXT) {  // MUL_S, ADD_S, SUB_S: vs2 with a scalar
         o.nv = 1;
         o.v[0] = d.rs2;
         o.sr = true;
@@ -239,7 +240,7 @@ int pass_status(const VecInstr d[C::S], int ns) {
         wgrp[s] = dots[s] = 0;
         if (s < ns) {
             if (!(cap_of(d[s]) & C::cap(s))) bad = 1;
-            const Ops o = operands(d[s]);
+            const Ops o = operands<C>(d[s]);
             for (int r = 0; r < 3; ++r) {
 #pragma HLS UNROLL
                 if (r < o.nv) {
@@ -307,7 +308,8 @@ struct Slot {
     ap_int<12> imm;
 };
 
-inline Slot slot_of(const VecInstr& d) {
+template <class C>
+Slot slot_of(const VecInstr& d) {
 #pragma HLS INLINE
     Slot s;
     s.kind = K_ARITH;
@@ -326,7 +328,8 @@ inline Slot slot_of(const VecInstr& d) {
     s.dfmt = 0;
     s.imm = ap_int<12>(d.imm1);
     const int f = d.funct;
-    s.rs_own = d.opcode == OPC_V && scaled(f) && (d.imm2 & RS_OVERRIDE);
+    // no result shift built (RSM 0): nothing of it is decoded
+    s.rs_own = C::RSM && d.opcode == OPC_V && scaled(f) && (d.imm2 & RS_OVERRIDE);
     s.rs = s.rs_own ? ap_uint<4>(d.imm2 & RS_MASK) : ap_uint<4>(0);
     if (d.opcode == OPC_Q) {
         s.ysel = Y_B;
@@ -367,16 +370,19 @@ inline Slot slot_of(const VecInstr& d) {
         s.a_src = SRC_SCALAR; s.b_src = SRC_BANK; s.b_idx = d.rd; s.c_src = SRC_BANK;
         s.c_idx = d.rs2; s.xsel = X_C; s.ysel = Y_P;
         break;
+    // The scalar extensions (built only with SEXT; without it the decode answers them BAD_OP).
     case V_MUL_S:  // vd = s * vs2
-        s.a_src = SRC_SCALAR; s.b_src = SRC_BANK; s.ysel = Y_P;
+        if (C::SEXT) { s.a_src = SRC_SCALAR; s.b_src = SRC_BANK; s.ysel = Y_P; }
         break;
     case V_ADD_S:
     case V_SUB_S:  // vd = vs2 +- s: the scalar is A', taken straight to the adder
-        s.a_src = SRC_SCALAR; s.c_src = SRC_BANK; s.c_idx = d.rs2; s.xsel = X_C; s.ysel = Y_A;
-        s.neg = f == V_SUB_S;
+        if (C::SEXT) {
+            s.a_src = SRC_SCALAR; s.c_src = SRC_BANK; s.c_idx = d.rs2; s.xsel = X_C; s.ysel = Y_A;
+            s.neg = f == V_SUB_S;
+        }
         break;
     case V_MVS:  // sd = q_sd(Re(vs1[0])): A' = vs1, held at element 0, delivered at the run's end
-        s.kind = K_MVS; s.a_src = SRC_BANK; s.conj = false; s.bcast = false;
+        if (C::SEXT) { s.kind = K_MVS; s.a_src = SRC_BANK; s.conj = false; s.bcast = false; }
         break;
     default:  // DOTR: sd = q_sd(sum Re(conj(vs1) vs2))
         s.kind = K_DOT; s.a_src = SRC_BANK; s.b_src = SRC_BANK; s.conj = true; s.bcast = false;

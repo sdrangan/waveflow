@@ -52,9 +52,9 @@ def cfg_id(cfg: VecUnitConfig) -> int:
               cfg.lane_bits, cfg.n_in_ports, cfg.n_out_ports, cfg.max_run, cfg.max_srun]
     # Added with the batch of plans/vecunit_future.md, named only when not zero, so a build that
     # uses neither keeps the identity (and the header) it was measured and calibrated under.
-    for name in ("rs_max", "fuse_raw_vl"):
+    for name in ("scalar_ext", "rs_max", "fuse_raw_vl"):
         if getattr(cfg, name):
-            parts += [name, getattr(cfg, name)]
+            parts += [name, int(getattr(cfg, name))]
     return format_id(*parts)
 
 
@@ -217,6 +217,7 @@ struct wf_vec_cfg_{i} {{
     static const int MULS = {muls}, DOTS = {dots};  // bit s: slot s has a multiplier, an accumulator
     static const int RSM = {cfg.rs_max}, FPR = {w.FPR};  // the result shift's range; a result's frac
     static const int FRVL = {cfg.fuse_raw_vl};  // dependent passes fuse at VL >= FRVL (0: never)
+    static const bool SEXT = {"true" if cfg.scalar_ext else "false"};  // the scalar extensions are built
     typedef ap_int<{w.FU + w.IU}> vu_t;   // the union vector format (frac FU)
     typedef ap_int<{w.FS + w.IS}> su_t;   // the union scalar format (frac FS)
     typedef ap_int<{w.AW}> au_t;          // a multiplier's A input (frac FA)
@@ -500,7 +501,7 @@ INSTR:
                 for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
                     if (s < ns) {
-                        const wf_vec::Ops o = wf_vec::operands(g[s]);
+                        const wf_vec::Ops o = wf_vec::operands<C>(g[s]);
                         for (int v = 0; v < 3; ++v) {
 #pragma HLS UNROLL
                             if (v < o.nv && !pw[o.v[v]]) rg[o.v[v]] = 1;  // not forwarded in the pass
@@ -562,7 +563,7 @@ INSTR:
 #pragma HLS UNROLL
                     wf_vec::Slot x;
                     if (s < ns) {
-                        x = wf_vec::slot_of(g[s]);
+                        x = wf_vec::slot_of<C>(g[s]);
                     } else {
                         x.kind = wf_vec::K_NONE;
                         x.a_src = x.b_src = x.c_src = wf_vec::SRC_ZERO;
@@ -573,7 +574,7 @@ INSTR:
                         x.rs = 0;
                         x.imm = 0;
                     }
-                    if (!x.rs_own) x.rs = rsm;
+                    if (C::RSM && !x.rs_own) x.rs = rsm;
                     wf_vec::resolve<C>(x.a_src, x.a_idx, s, written, wgrp, rbase, rfmt);
                     wf_vec::resolve<C>(x.b_src, x.b_idx, s, written, wgrp, rbase, rfmt);
                     wf_vec::resolve<C>(x.c_src, x.c_idx, s, written, wgrp, rbase, rfmt);
@@ -722,7 +723,7 @@ $QREADS
                             const res_t yar = res_t(pa_r) << (C::FU + C::RSM);
                             const res_t yai = res_t(pa_i) << (C::FU + C::RSM);
                             if (dot) {
-                                const bool mvs = x.kind == wf_vec::K_MVS;
+                                const bool mvs = C::SEXT && x.kind == wf_vec::K_MVS;
                                 const dot_t term = mvs ? dot_t(yar) : dot_t(prs);
                                 const dot_t sum = first ? term : (mvs ? acc[s][l] : dot_t(acc[s][l] + term));
                                 acc[s][l] = sum;
@@ -734,7 +735,7 @@ $QREADS
                             else if (x.xsel == wf_vec::X_IMM) { xr = res_t(x.imm) << C::FPR; }
                             if (x.ysel == wf_vec::Y_P) { yr = prs; yi = pis; }
                             else if (x.ysel == wf_vec::Y_B) { yr = res_t(br) << (C::FPR - C::FU); yi = res_t(bi) << (C::FPR - C::FU); }
-                            else if (x.ysel == wf_vec::Y_A) { yr = yar; yi = yai; }
+                            else if (C::SEXT && x.ysel == wf_vec::Y_A) { yr = yar; yi = yai; }
                             const res_t rr = x.neg ? res_t(xr - yr) : res_t(xr + yr);
                             const res_t ri = x.neg ? res_t(xi - yi) : res_t(xi + yi);
                             wr[s][l] = C::quant_v(rr, x.dfmt);
@@ -775,7 +776,7 @@ $QWRITES
                     for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
                         const wf_vec::Slot x = dsl[q][s];
-                        if (((C::DOTS >> s) & 1) && (x.kind == wf_vec::K_DOT || x.kind == wf_vec::K_MVS)) {
+                        if (((C::DOTS >> s) & 1) && (x.kind == wf_vec::K_DOT || (C::SEXT && x.kind == wf_vec::K_MVS))) {
                             for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
                                 sf[l][x.dst] = C::quant_dot(dacc[q][s][l], x.dfmt);
@@ -794,7 +795,7 @@ $QWRITES
             int nr = 0;
         SGATHER:
             for (int r = 0; r < C::MAXSRUN; ++r) {
-                const bool raw = d.funct != wf_vec::S_LI &&
+                const bool raw = !(C::SEXT && d.funct == wf_vec::S_LI) &&
                                  (sw[d.rs1] || (d.funct == wf_vec::S_DIVZ && sw[d.rs2]));
                 if (nr > 0 && raw) {
                     pd = d;
@@ -805,7 +806,7 @@ $QWRITES
                 srd[nr] = d.rd;
                 sra[nr] = d.rs1;
                 srb[nr] = d.rs2;
-                sim[nr] = wf_vec::simm24(d);
+                sim[nr] = C::SEXT ? wf_vec::simm24(d) : ap_int<24>(0);
                 sw[d.rd] = 1;
                 ++nr;
                 if (nr == C::MAXSRUN || pc == n) break;
@@ -838,7 +839,7 @@ $QWRITES
                     const ap_int<C::WSR> mv = C::quant_s(C::conv_s(a, fa), fd);
                     // wf.sli: the immediate is the scalar's stored integer (the decode checked it fits)
                     sf[l][srd[r]] = sfn[r] == wf_vec::S_DIVZ ? ((b == 0) ? ap_int<C::WSR>(0) : qv)
-                                    : sfn[r] == wf_vec::S_LI ? ap_int<C::WSR>(sim[r]) : mv;
+                                    : (C::SEXT && sfn[r] == wf_vec::S_LI) ? ap_int<C::WSR>(sim[r]) : mv;
                 }
             }
             if (st != wf_linalg::OK) break;

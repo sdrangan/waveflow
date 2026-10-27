@@ -17,9 +17,13 @@ them -- the unit knows nothing about any application.
   passes into one pipelined loop, and up to ``max_srun`` consecutive independent scalar instructions
   into another (:func:`waveflow.vecunit.model.exec_items`; Stage 6).
 * **Divides.** ``wf.sdivz`` widens its dividend by ``g_div`` fraction bits first.
+* **Scalar extensions.** ``scalar_ext``: the unit has ``wf.vmul.vs``, ``wf.vadd.vs``,
+  ``wf.vsub.vs``, ``wf.vmv.s.v`` and ``wf.sli`` (F2).  Off (the default), they are not decoded --
+  the execute task answers them ``BAD_OP`` and the assembler refuses them -- and cost nothing.
 * **Result shift.** A scaled instruction's product is scaled by ``2**-RS`` before its one rounding,
   ``0 <= RS <= rs_max`` (``wf.setrs``, or the instruction's own field; ``plans/vecunit_future.md``
-  F4).  The datapath carries ``rs_max`` more fraction bits; ``rs_max = 0`` builds it as before.
+  F4).  The datapath carries ``rs_max`` more fraction bits; ``rs_max = 0`` (the default) builds
+  neither the bits nor the shift's decode.
 * **Dependent fusion.** With ``fuse_raw_vl > 0`` a run may hold a pass that reads a group an earlier
   pass of the run writes, when ``VL >= fuse_raw_vl``: the earlier pass has written each element
   before the later one reads it, so ``fuse_raw_vl`` must be at least the run loop's read-to-write
@@ -73,7 +77,8 @@ class VecUnitConfig:
     g_div: int = 0
     max_run: int = 8
     max_srun: int = 8
-    rs_max: int = 15
+    scalar_ext: bool = False
+    rs_max: int = 0
     fuse_raw_vl: int = 0
     word_bits: int = 64
     lane_bits: int = DEFAULT_LANE_BITS

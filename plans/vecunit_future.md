@@ -369,7 +369,12 @@ against 26 (+2 cycles of latency, II 1 both), 2.917 ns both. Both builds' decode
 
 1. Both the per-instruction field and the `wf.setrs` mode, the field overriding when non-zero:
    decided 2026-10-27.
-2. `RS_MAX` a build parameter, default 15 (a 4-bit field): decided 2026-10-27.
+2. `RS_MAX` a build parameter (a 4-bit field): decided 2026-10-27, default 15. **Superseded the same
+   day by the scope rule** (features cost nothing when off): default 0, the toy unit and the generic
+   gate build it at 15. The reason, measured (Vitis HLS 2025.1, CG `steady`): before the batch, II 14
+   and 3,458 cycles a job; with the batch's decode always built, II 20 and 4,034 -- 17 % slower
+   although CG uses none of it. Hence `scalar_ext` (F2, default off) and the F4 decode gated on
+   `rs_max` too.
 3. `vadd.vv` / `vsub.vv` are not scaled (products are where the range grows): decided 2026-10-27.
 4. Every multiplying instruction takes `RS`, the multiply-accumulates and reductions included (the
    full cost, ≈ 4-6k LUT): the accumulations are where the range grows (CG's `wf.vmacc.vs` /

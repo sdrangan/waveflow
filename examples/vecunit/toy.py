@@ -52,11 +52,12 @@ PORT = 0
 def toy_config(*, word_bits: int = 64, VLMAX: int = 16, fuse_raw_vl: int = 0) -> VecUnitConfig:
     """The toy unit: four groups and three scalars, two input queues and one output queue, four lanes,
     ``VLMAX`` 16, blocks of up to ``VLMAX`` rows and 4 columns (one lane group a row), three slots,
-    the result shift up to 15.  ``fuse_raw_vl``: dependent passes fuse at that ``VL`` and above."""
+    the scalar extensions and the result shift up to 15 built.  ``fuse_raw_vl``: dependent passes
+    fuse at that ``VL`` and above."""
     return VecUnitConfig(group_formats=(FV,) * 4, scalar_formats=(FS, FS, FA),
                          in_queue_formats=(FV, FV), out_queue_formats=(FV,),
                          L=4, VLMAX=VLMAX, Kmax=VLMAX, Nmax=4, S=3, NB=4, word_bits=word_bits,
-                         fuse_raw_vl=fuse_raw_vl)
+                         scalar_ext=True, rs_max=15, fuse_raw_vl=fuse_raw_vl)
 
 
 # --- the programs ------------------------------------------------------------------------------------

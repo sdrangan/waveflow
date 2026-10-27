@@ -12,10 +12,24 @@ import numpy as np
 import pytest
 
 from tests.vecunit import _ref as ref
-from tests.vecunit.test_model import L, VLMAX, centre, cmul, filled, rand_cfg, vals
+from tests.vecunit import test_model as M
+from tests.vecunit.test_model import L, VLMAX, cmul, filled, vals
 from waveflow.linalg.message import Status
 from waveflow.vecunit import isa as I
 from waveflow.vecunit.model import exec_items, instr_status, pass_status, split_passes
+
+
+def _ext(cfg):
+    """*cfg* with the scalar extensions and the result shift built, which these tests exercise."""
+    return dataclasses.replace(cfg, scalar_ext=True, rs_max=15)
+
+
+def rand_cfg(rng):
+    return _ext(M.rand_cfg(rng))
+
+
+def centre():
+    return _ext(M.centre())
 
 
 def scale(x, rs: int):
@@ -128,6 +142,19 @@ def test_sli_and_setrs():
 ])
 def test_instruction_status(x, st):
     assert instr_status(x, centre()) == st
+
+
+def test_a_unit_built_without_the_features_refuses_them():
+    """Off -- the defaults -- the extensions are not decoded (BAD_OP) and no shift is allowed."""
+    lean = M.centre()
+    assert not lean.scalar_ext and lean.rs_max == 0 and lean.fuse_raw_vl == 0
+    for x in (I.vmul_vs(0, 0, 1), I.vadd_vs(0, 0, 1), I.vsub_vs(0, 0, 1), I.vmv_s_v(0, 1),
+              I.sli(0, 1)):
+        assert instr_status(x, lean) == Status.BAD_OP, str(x)
+    assert instr_status(I.vmul_vv(0, 1, 2, rs=1), lean) == Status.BAD_DIMS
+    assert instr_status(I.setrs(1), lean) == Status.BAD_DIMS
+    assert instr_status(I.vmul_vv(0, 1, 2, rs=0), lean) == Status.OK
+    assert instr_status(I.setrs(0), lean) == Status.OK
 
 
 def test_a_shift_past_rs_max_is_refused():

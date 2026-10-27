@@ -51,6 +51,9 @@ from waveflow.vecunit.isa import (
 #: ``vmv.v.i``'s immediate: a signed 12-bit integer.
 IMM_FORMAT = Format(12, 12, True)
 
+#: The vector instructions of the scalar extensions (``VecUnitConfig.scalar_ext``; ``wf.sli`` too).
+SCALAR_EXT = (VOp.MUL_S, VOp.ADD_S, VOp.SUB_S, VOp.MVS)
+
 
 # --- fixed point, without the per-call generality ---------------------------------------------------
 # The interpreter's arithmetic is fixputils', on small arrays (a group's L members by VL elements), where
@@ -233,6 +236,8 @@ def instr_status(x: Instr, cfg: VecUnitConfig) -> Status:
         if f not in tuple(VOp):
             return Status.BAD_OP
         v = VOp(f)
+        if v in SCALAR_EXT and not cfg.scalar_ext:
+            return Status.BAD_OP  # a unit built without the scalar extensions does not decode them
         if (x.conj or x.bcast) and v not in MULTIPLYING:
             return Status.BAD_OP
         if v in SCALED and x.rs_field is not None and x.rs_field > cfg.rs_max:
@@ -264,6 +269,8 @@ def instr_status(x: Instr, cfg: VecUnitConfig) -> Status:
         if f == SOp.MV:
             return _ranges((x.rd, cfg.NS), (x.rs1, cfg.NS))
         if f == SOp.LI:
+            if not cfg.scalar_ext:
+                return Status.BAD_OP
             if _ranges((x.rd, cfg.NS)) != Status.OK:
                 return Status.BAD_DIMS
             W = cfg.scalar_formats[x.rd].W

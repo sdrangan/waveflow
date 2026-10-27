@@ -49,7 +49,8 @@ def rtl_config() -> VecUnitConfig:
     pick = lambda fs, n: tuple(fs[int(i)] for i in rng.integers(len(fs), size=n))
     return VecUnitConfig(group_formats=pick(vec, 8), scalar_formats=pick(sca, 6),
                          in_queue_formats=pick(vec, 2), out_queue_formats=pick(vec, 2),
-                         L=4, VLMAX=8, Kmax=8, Nmax=9, g_div=3)
+                         L=4, VLMAX=8, Kmax=8, Nmax=9, g_div=3,
+                         scalar_ext=True, rs_max=15)  # its random jobs use them (F2, F4)
 
 
 def two_ports() -> VecUnitConfig:
