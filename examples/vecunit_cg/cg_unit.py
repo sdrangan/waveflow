@@ -1,0 +1,157 @@
+"""The vector unit configured and fed for CG: ``CgVecUnit`` is a :class:`~waveflow.vecunit.unit.VecUnit`
+whose scenarios are CG solves (the unit itself stays application-free; this subclass only supplies
+the configuration from a ``CgFormats`` and the jobs).
+
+A job's stimulus is its three programs, ``B``, and the ``nit`` matrices ``S`` the systolic array would
+send -- ``S = cg.mm_step(A, P)`` on each ``P`` the unit emits, taken from a closed-loop run of the
+interpreter (:func:`cg_job`), so a static stream carries exactly what the loop would.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import ClassVar
+
+import numpy as np
+
+from examples.vecunit_cg.cg_program import PORT, cg_config, cg_programs
+from waveflow.linalg import cg
+from waveflow.utils import fixputils as fxu
+from waveflow.utils.fixputils import Format, OMode, QMode
+from waveflow.vecunit.model import run_job
+from waveflow.vecunit.unit import VecUnit
+
+
+def reg(W: int, I: int) -> Format:
+    return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+
+
+#: Iterations of each ``"rhs_<n>"`` solve (the ``"steady"`` workload's).
+RHS_NIT = 3
+
+#: The guide's centre formats (``docs/guide/dsp/cg_vector.md``): 12-bit vectors, ``alpha``, ``beta``;
+#: 20-bit ``ps`` and ``rz``; ``g_div`` 6 -- the CG core's calibration build.
+CENTRE = cg.CgFormats(A=reg(12, 3), B=reg(12, 4), P=reg(12, 4), R=reg(12, 4), S=reg(12, 5),
+                      X=reg(12, 3), ps=reg(20, 10), rz=reg(20, 9), alpha=reg(12, 5),
+                      beta=reg(12, 3), g_div=6)
+
+
+def problem(f: cg.CgFormats, k: int, n: int, seed: int):
+    """A random Hermitian positive definite ``A`` (``k x k``) and a ``B`` (``k x n``), quantized
+    (the guide's construction)."""
+    rng = np.random.default_rng(seed)
+    m = 8 * k
+    H = (rng.standard_normal((m, k)) + 1j * rng.standard_normal((m, k))) / np.sqrt(2)
+    Y = (rng.standard_normal((m, n)) + 1j * rng.standard_normal((m, n))) / np.sqrt(2)
+    A = (H.conj().T @ H + 0.1 * np.eye(k)) / m
+    B = H.conj().T @ Y / m
+    q = fxu.quantize_real
+    return q(A.real, f.A), q(A.imag, f.A), q(B.real, f.B), q(B.imag, f.B)
+
+
+def cg_job(cfg, f: cg.CgFormats, ar, ai, br, bi, nit: int, tx_id: int, *, skip_dead: bool = True,
+           checks: dict | None = None, results: list | None = None):
+    """One CG solve as a job ``(tx_id, Programs, inputs)``: its inputs are ``B`` then the ``S``
+    matrices a closed-loop run hands the unit.  The closed-loop run is the interpreter's, so its
+    result is the job's golden: appended to *results* when given (Stage 10).  It runs its passes
+    instruction-major, the same bits as element-major, faster; *checks* is
+    :func:`~waveflow.vecunit.model.run_job`'s program-check cache."""
+    k, n = np.shape(br)
+    progs = cg_programs(cfg, nit, k, n, skip_dead=skip_dead)
+    fed = [(np.asarray(br), np.asarray(bi))]
+
+    def systolic(port, result):
+        _resp, pr, pi = result.outputs[PORT][-1]
+        s = cg.mm_step(ar, ai, pr, pi, f)
+        fed.append(s)
+        return s
+
+    r = run_job(cfg, *progs, {PORT: [fed[0]]}, tx_id=tx_id, on_starve=systolic, mode="serial",
+                checks=checks)
+    if results is not None:
+        results.append(r)
+    return tx_id, progs, {PORT: fed}
+
+
+@dataclass
+class CgVecUnit(VecUnit):
+    """A vector unit for CG on ``k x n`` jobs up to ``Kmax x Nmax`` with ``cg_formats``, its data
+    ports ``word_bits`` wide."""
+
+    cg_formats: cg.CgFormats = CENTRE
+    Kmax: int = 8
+    Nmax: int = 32
+    L: int = 4
+    word_bits: int = 64
+    build_fields: ClassVar[tuple[str, ...]] = ("cfg", "cg_formats", "Kmax", "Nmax", "L", "word_bits")
+
+    def __post_init__(self) -> None:
+        if self.cfg is None:
+            self.cfg = cg_config(self.cg_formats, Kmax=self.Kmax, Nmax=self.Nmax, L=self.L,
+                                 word_bits=self.word_bits)
+        super().__post_init__()
+
+    def jobs(self, kind: str = "test") -> list:
+        """``"test"``: four solves -- the full ``Kmax x Nmax`` at three iterations, a short one
+        (``k`` 5, ``n`` 13, ``L`` not dividing it), one iteration, and a zero column (the guards).
+        ``"steady"``: four full solves of three iterations (the comparison with the CG core).
+        ``"steady_<p><v>..."``: the same four solves with ``k``, ``n`` or ``nit`` changed, as
+        ``steady_k2`` or ``steady_nit1`` (the RTL catalogue's workloads, Stage 9c: each makes a
+        different bound bind).
+        ``"calib"``, ``"holdout"``: the calibration's pre-registered jobs
+        (:data:`waveflow.vecunit.calib.CG_JOBS`): random jobs over every instruction form on this
+        configuration, then CG solves.  ``"rhs_<n>"``: one ``Kmax x n`` right-hand side of three
+        iterations as ``n / Nmax`` jobs, a column block each (:meth:`rhs`; the simulation-speed
+        sizes, ``docs/evaluation/sim_speed/vecunit_cg.md``)."""
+        from waveflow.vecunit.calib import CG_JOBS
+
+        f, K, N = self.cg_formats, int(self.Kmax), int(self.Nmax)
+        out: list = []
+        checks: dict = {}  # one program-check cache for the solves of this workload
+        solved: list = []  # their closed-loop results: the golden (Stage 10)
+        if kind.startswith("rhs_"):
+            ar, ai, br, bi = self.rhs(int(kind[4:]))
+            out = [cg_job(self.cfg, f, ar, ai, br[:, c:c + N], bi[:, c:c + N], RHS_NIT, 200 + j,
+                          checks=checks, results=solved)
+                   for j, c in enumerate(range(0, br.shape[1], N))]
+            self.remember_results(kind, out, solved)
+            return out
+        if kind == "test":
+            shapes = [(K, N, 3, 1), (min(K, 5), min(N, 13), 2, 2), (K, N, 1, 3), (K, min(N, 9), 4, 4)]
+        elif kind == "steady":
+            shapes = [(K, N, 3, s) for s in range(4)]
+        elif kind.startswith("steady_"):
+            shape = {"k": K, "n": N, "nit": 3}
+            for part in kind[len("steady_"):].split("_"):
+                m = re.fullmatch(r"(nit|k|n)(\d+)", part)
+                if m is None:
+                    raise ValueError(f"no workload {kind!r}: {part!r} is not k<v>, n<v> or nit<v>")
+                shape[m[1]] = int(m[2])
+            shapes = [(shape["k"], shape["n"], shape["nit"], s) for s in range(4)]
+        elif kind in CG_JOBS:  # the calibration's pre-registered sets (waveflow/vecunit/calib.py)
+            from waveflow.vecunit.workload import random_jobs
+
+            spec = CG_JOBS[kind]
+            out = random_jobs(self.cfg, spec["random"], seed=spec["seed"], npass=spec["npass"],
+                              n_max=spec["n_max"])
+            shapes = spec["solves"]
+        else:
+            raise ValueError(f"no workload {kind!r}")
+        for j, (k, n, nit, seed) in enumerate(shapes):
+            ar, ai, br, bi = problem(f, k, n, seed)
+            if kind == "test" and j == 3:
+                br[:, 2] = bi[:, 2] = 0  # a zero column: both guards fire
+            out.append(cg_job(self.cfg, f, ar, ai, br, bi, nit, 200 + len(out), checks=checks,
+                              results=solved))
+        self.remember_results(kind, out, [None] * (len(out) - len(solved)) + solved)
+        return out
+
+    def rhs(self, n: int):
+        """The ``"rhs_<n>"`` problem: one ``A`` (``Kmax x Kmax``) and a ``B`` of ``Kmax x n``, ``n``
+        a multiple of ``Nmax`` (the columns are independent CG problems, so a wider ``B`` runs as
+        column blocks of ``Nmax``, one job each)."""
+        N = int(self.Nmax)
+        if n < N or n % N:
+            raise ValueError(f"rhs_{n}: the width must be a multiple of Nmax = {N}")
+        return problem(self.cg_formats, int(self.Kmax), n, seed=0)

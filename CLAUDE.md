@@ -72,6 +72,14 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
   `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
   platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (Vitis 2024.1).
   Tests in `tests/linalg/`; guide in `docs/guide/dsp/` (`linalg_common.md`, `systolic/`, `cg_vector.md`).
+- **`waveflow/vecunit/`** — A programmable complex fixed-point vector unit (RVV-style ISA `Xwfvec`,
+  one 64-bit word an instruction): a fixed-point format per register, chained passes and fused runs,
+  decoupled load / execute / store tasks on queues of blocks. `VecUnitConfig`, the assembler (`asm`),
+  the bit-exact interpreter (`model`), the pysim `VecUnit`, the generated HLS (`hls.py` on
+  `waveflow/build/vecunit_core.h`), and timing and resource models calibrated on the packaged platform
+  `xczu48dr_250mhz_vitis2024_1` (`calib.py`). Application-free: CG and a matched filter are programs in
+  `examples/vecunit_cg/` and `examples/vecunit_mf/`, and toy kernels the guide excerpts in
+  `examples/vecunit/`. Tests in `tests/vecunit/`; guide `docs/guide/dsp/vecunit/`.
 - **`waveflow/cpu/`** — A loosely-timed, calibrated general-purpose processor for software beside
   the hardware: `Processor` (N cores, priority ready queue, context switches, optional preemption),
   `SwFunction` (Python that reports work counters, priced by calibrated cycle / pJ models), `CpuReport`,
@@ -82,7 +90,7 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). `mcp/knowledge/` is local search and read over `docs/guide/` and the reference examples — an in-memory BM25 index built from the checkout at server start, also reachable as `waveflow kb <cmd>`.
-- **`examples/`** — Reference designs. The curated set is the twenty-four with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
+- **`examples/`** — Reference designs. The curated set is the twenty-seven with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
 
 ### Simulation flow
 

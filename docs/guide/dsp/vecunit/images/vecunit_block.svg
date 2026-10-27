@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 620" width="1240" height="620" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <title>The vector unit as a block diagram. Three program streams, one per task, feed the load task, the decoder of the execute task and the store task; there is no program memory. Input words enter the load task, which fills input queues of two blocks each. In the execute task the decoder gathers passes and controls the datapath: S slots chained in one pass, each with L parallel lanes, reading the input queues and the vector register file of NG groups in banks and the scalar file, and writing the register files and the output queues. The store task empties the output queues onto the output ports, and the execute task sends a status per job.</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5b6b"/>
+    </marker>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a97a3"/>
+    </marker>
+    <marker id="l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3d7a4f"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1240" height="620" fill="#ffffff"/>
+
+  <!-- program streams (no program memory) -->
+  <text x="620" y="26" text-anchor="middle" font-size="13" fill="#4a5b6b">three program streams, one per task: no program memory -- each task decodes its program as it arrives</text>
+  <g stroke="#8a97a3" stroke-width="1.6" fill="#f3f5f7">
+    <rect x="95" y="44" width="110" height="28" rx="4"/>
+    <rect x="555" y="44" width="130" height="28" rx="4"/>
+    <rect x="1035" y="44" width="110" height="28" rx="4"/>
+  </g>
+  <g font-size="13" text-anchor="middle" fill="#2b3640">
+    <text x="150" y="63">s_lprog: load</text>
+    <text x="620" y="63">s_xprog: execute</text>
+    <text x="1090" y="63">s_sprog: store</text>
+  </g>
+  <g stroke="#8a97a3" stroke-width="1.8" fill="none" stroke-dasharray="6 4">
+    <line x1="150" y1="72" x2="150" y2="248" marker-end="url(#c)"/>
+    <line x1="620" y1="72" x2="620" y2="143" marker-end="url(#c)"/>
+    <line x1="1090" y1="72" x2="1090" y2="248" marker-end="url(#c)"/>
+    <line x1="620" y1="195" x2="620" y2="223" marker-end="url(#c)"/>
+  </g>
+
+  <!-- data in and out -->
+  <g stroke="#4a5b6b" stroke-width="2" fill="none">
+    <line x1="18" y1="290" x2="88" y2="290" marker-end="url(#a)"/>
+    <line x1="210" y1="290" x2="233" y2="290" marker-end="url(#a)"/>
+    <line x1="325" y1="294" x2="368" y2="294" marker-end="url(#a)"/>
+    <line x1="870" y1="300" x2="913" y2="300" marker-end="url(#a)"/>
+    <line x1="1005" y1="300" x2="1028" y2="300" marker-end="url(#a)"/>
+    <line x1="1150" y1="290" x2="1222" y2="290" marker-end="url(#a)"/>
+    <line x1="760" y1="560" x2="760" y2="596" marker-end="url(#a)"/>
+  </g>
+  <g font-size="13" fill="#2b3640">
+    <text x="18" y="280">s_in&lt;p&gt;</text>
+    <text x="1160" y="280">s_out&lt;p&gt;</text>
+    <text x="772" y="594">m_status: a VecStatus per job</text>
+  </g>
+
+  <!-- load and store tasks -->
+  <g stroke="#2f5d8a" stroke-width="2" fill="#e8f0f8">
+    <rect x="90" y="250" width="120" height="80" rx="8"/>
+    <rect x="1030" y="250" width="120" height="80" rx="8"/>
+  </g>
+  <g text-anchor="middle" fill="#1f3550">
+    <text x="150" y="285" font-weight="bold">VecLoad</text>
+    <text x="150" y="305" font-size="12">a burst → a block</text>
+    <text x="1090" y="285" font-weight="bold">VecStore</text>
+    <text x="1090" y="305" font-size="12">a block → a burst</text>
+  </g>
+
+  <!-- queues: two blocks each (ping-pong) -->
+  <g stroke="#b07d2b" stroke-width="1.6" fill="#fdf3e1">
+    <rect x="235" y="228" width="90" height="28"/>
+    <rect x="235" y="260" width="90" height="28"/>
+    <rect x="235" y="300" width="90" height="28"/>
+    <rect x="235" y="332" width="90" height="28"/>
+    <rect x="915" y="270" width="90" height="28"/>
+    <rect x="915" y="302" width="90" height="28"/>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#6b4a12">
+    <text x="280" y="246">qi0 block A</text>
+    <text x="280" y="278">qi0 block B</text>
+    <text x="280" y="318">qi1 block A</text>
+    <text x="280" y="350">qi1 block B</text>
+    <text x="960" y="288">qo0 block A</text>
+    <text x="960" y="320">qo0 block B</text>
+    <text x="280" y="216" font-size="13">input queues</text>
+    <text x="280" y="378">two blocks each</text>
+    <text x="960" y="258" font-size="13">output queues</text>
+    <text x="960" y="348">two blocks each</text>
+  </g>
+
+  <!-- the execute task -->
+  <rect x="350" y="110" width="540" height="450" rx="10" fill="none" stroke="#2f5d8a" stroke-width="2"/>
+  <text x="366" y="133" font-weight="bold" fill="#1f3550">VecExec: the execute task</text>
+  <rect x="370" y="145" width="500" height="50" rx="6" fill="#e8f0f8" stroke="#2f5d8a" stroke-width="1.6"/>
+  <text x="620" y="167" text-anchor="middle" fill="#1f3550" font-weight="bold">decode</text>
+  <text x="620" y="185" text-anchor="middle" fill="#1f3550" font-size="12">gather each pass, check it, fuse independent passes into runs</text>
+
+  <!-- datapath: S slots, L lanes -->
+  <rect x="370" y="225" width="500" height="150" rx="6" fill="#f2f8f3" stroke="#3d7a4f" stroke-width="1.6"/>
+  <text x="380" y="243" font-size="13" fill="#24502f" font-weight="bold">datapath: S slots chained in one pass</text>
+  <g stroke="#3d7a4f" stroke-width="1.4" fill="#dcefe0">
+    <rect x="440" y="263" width="110" height="93" rx="4"/>
+    <rect x="580" y="263" width="110" height="93" rx="4"/>
+    <rect x="750" y="263" width="110" height="93" rx="4"/>
+  </g>
+  <g font-size="12" text-anchor="middle" fill="#24502f">
+    <text x="495" y="258">slot 0</text>
+    <text x="635" y="258">slot 1</text>
+    <text x="805" y="258">slot S−1</text>
+    <text x="720" y="315" font-size="16">⋯</text>
+  </g>
+  <g stroke="#3d7a4f" stroke-width="1.6" fill="none">
+    <line x1="438" y1="279" x2="866" y2="279" marker-end="url(#l)"/>
+    <line x1="438" y1="301" x2="866" y2="301" marker-end="url(#l)"/>
+    <line x1="438" y1="340" x2="866" y2="340" marker-end="url(#l)"/>
+  </g>
+  <g font-size="12" fill="#24502f">
+    <text x="380" y="283">lane 0</text>
+    <text x="380" y="305">lane 1</text>
+    <text x="396" y="323">⋮</text>
+    <text x="380" y="344">lane L−1</text>
+  </g>
+  <text x="620" y="370" text-anchor="middle" font-size="12" fill="#24502f">in by wf.vlse · forwarded slot to slot · one quantizer · out by wf.vsse</text>
+
+  <!-- register file and scalar file -->
+  <rect x="370" y="398" width="280" height="150" rx="6" fill="#ffffff" stroke="#6a5a8a" stroke-width="1.6"/>
+  <text x="380" y="416" font-size="13" fill="#3e3160" font-weight="bold">vector register file</text>
+  <g font-size="12" fill="#3e3160">
+    <text x="380" y="440">v0</text>
+    <text x="380" y="462">v1</text>
+    <text x="380" y="484">v2</text>
+    <text x="388" y="502">⋮</text>
+    <text x="380" y="522">v(NG−1)</text>
+  </g>
+  <g stroke="#6a5a8a" stroke-width="1">
+    <g fill="#dbe7f3"><rect x="440" y="427" width="45" height="18"/><rect x="485" y="427" width="45" height="18"/><rect x="530" y="427" width="45" height="18"/><rect x="575" y="427" width="45" height="18"/></g>
+    <g fill="#f6e3c8"><rect x="440" y="449" width="45" height="18"/><rect x="485" y="449" width="45" height="18"/><rect x="530" y="449" width="45" height="18"/><rect x="575" y="449" width="45" height="18"/></g>
+    <g fill="#dcefe0"><rect x="440" y="471" width="45" height="18"/><rect x="485" y="471" width="45" height="18"/><rect x="530" y="471" width="45" height="18"/><rect x="575" y="471" width="45" height="18"/></g>
+    <g fill="#efdcef"><rect x="440" y="509" width="45" height="18"/><rect x="485" y="509" width="45" height="18"/><rect x="530" y="509" width="45" height="18"/><rect x="575" y="509" width="45" height="18"/></g>
+  </g>
+  <g font-size="11" text-anchor="middle" fill="#3e3160">
+    <text x="462" y="440">lane 0</text><text x="507" y="440">lane 1</text><text x="552" y="440">…</text><text x="597" y="440">L−1</text>
+  </g>
+  <text x="380" y="542" font-size="11" fill="#3e3160">NG groups × L members × VLMAX; colour: bank g % NB</text>
+
+  <rect x="670" y="398" width="200" height="110" rx="6" fill="#ffffff" stroke="#6a5a8a" stroke-width="1.6"/>
+  <text x="680" y="416" font-size="13" fill="#3e3160" font-weight="bold">scalar file</text>
+  <g font-size="12" fill="#3e3160">
+    <text x="680" y="440">s0</text>
+    <text x="680" y="462">s1</text>
+    <text x="688" y="480">⋮</text>
+  </g>
+  <g stroke="#6a5a8a" stroke-width="1" fill="#f3f0f8">
+    <rect x="720" y="427" width="35" height="18"/><rect x="755" y="427" width="35" height="18"/><rect x="790" y="427" width="35" height="18"/><rect x="825" y="427" width="35" height="18"/>
+    <rect x="720" y="449" width="35" height="18"/><rect x="755" y="449" width="35" height="18"/><rect x="790" y="449" width="35" height="18"/><rect x="825" y="449" width="35" height="18"/>
+  </g>
+  <text x="680" y="500" font-size="11" fill="#3e3160">NS scalars, one real value per lane</text>
+
+  <!-- register reads and writes -->
+  <g stroke="#6a5a8a" stroke-width="1.8" fill="none">
+    <line x1="480" y1="397" x2="480" y2="378" marker-end="url(#a)"/>
+    <line x1="560" y1="378" x2="560" y2="397" marker-end="url(#a)"/>
+    <line x1="770" y1="378" x2="770" y2="397" marker-start="url(#a)" marker-end="url(#a)"/>
+  </g>
+  <g font-size="11" fill="#3e3160">
+    <text x="425" y="392">read</text>
+    <text x="566" y="392">write</text>
+    <text x="778" y="392">reductions, .vs</text>
+  </g>
+</svg>

@@ -66,6 +66,12 @@ The core path, in order: each one is the next rung of the [Flow Overview](../gui
     hardware.
 21. [A systolic matrix multiply, measured](systolic/index.md) -- a composite kernel in its own
     harness, measured at RTL against its bounds, and the stage that binds found from a trace.
+22. [Toy vector programs](vecunit/index.md) -- three kernels of a few instructions each for the
+    programmable vector unit, checked by the assembler and bit-exact with a NumPy golden.
+23. [CG as a vector program](vecunit_cg/index.md) -- an algorithm as three programs for a
+    programmable unit, ordered so the unit fuses it, against a dedicated kernel.
+24. [A matched filter as a vector program](vecunit_mf/index.md) -- a streaming kernel on the same
+    unit, broadcast and conjugate operands, measured against its input floor.
 
 ## Legacy
 

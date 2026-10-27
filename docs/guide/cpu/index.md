@@ -26,7 +26,9 @@ and only its *duration* is simulated.
   result *and* the work it did, as counters (items scanned, elements moved, samples processed). Its
   cost models map those counters to cycles and to dynamic energy in pJ. Counters, not input size,
   because control code costs what it *did*: a scheduler that finds its task at the head of a queue is
-  cheap however long the queue is.
+  cheap however long the queue is. A function prices each distinct set of counters once and
+  remembers it; replacing its models or its `working_set` starts afresh, but a `working_set` must
+  depend on the counters alone, and a model must not be refitted while the function is in use.
 - **[`Processor`](../../../waveflow/cpu/processor.py)** — a `SimObj` with N cores, a priority ready
   queue, a context-switch cost and optional preemption. `yield from cpu.execute(func, *args)` runs
   the function when a core is granted and returns its result once the charged time has elapsed. See

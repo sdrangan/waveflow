@@ -49,6 +49,9 @@ MANIFEST = (
     f"{PLATFORM}/models/cg_vector_unit_channels/params.json",
     f"{PLATFORM}/components/systolic_unit/params.json",
     f"{PLATFORM}/components/cg_vector_unit/params.json",
+    # the vector unit's calibrated timing and resource models (plans/vecunit_new.md, Stage 7)
+    f"{PLATFORM}/models/vecunit_timing/params.json",
+    f"{PLATFORM}/models/vecunit_resources/params.json",
     # the systolic engine core's calibrated timed phase, one record per configuration (by identity)
     *(p.relative_to(ROOT).as_posix()
       for p in (ROOT / "waveflow/linalg/calib/modules").glob("engine_core-*/**/*") if p.is_file()),

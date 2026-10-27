@@ -28,6 +28,13 @@ Nothing downstream can see an answer before the processor could have produced it
 Timing is never charged twice: bus and memory-mapped traffic a task issues goes through the
 ``MMIFMaster`` it holds and is timed by the bus model, outside the task.  A task that talks to
 hardware is split at each interaction — one ``execute`` per stretch of pure computation.
+
+NO PROCESS PER TASK.  A core's segment -- the switch and the compute of one task -- is one timeout
+with a callback, not a spawned SimPy process: a process costs an object, a generator and two more
+events (its start, and its end that nothing waits on) for every call.  The segment still begins where
+a process's first step would run -- an event at this instant ahead of every normal one, as SimPy's
+``Initialize`` -- so bodies run in the same order; a preemption is delivered the same way, as SimPy's
+``Interruption``, and a segment that has already ended ignores it.
 """
 
 from __future__ import annotations
@@ -36,18 +43,20 @@ import bisect
 import heapq
 import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import simpy
+from simpy.events import URGENT
 
 from waveflow.cpu.config import IRQ_PRIO, CpuConfig
 from waveflow.cpu.report import CpuReport, build_report
-from waveflow.cpu.task import SwFunction, TaskRecord, eval_cost, eval_cycles
+from waveflow.cpu.task import SwFunction, TaskRecord, eval_cycles
 from waveflow.simulation.simobj import ProcessGen, SimObj
 
 
-@dataclass(eq=False)
+@dataclass(eq=False, slots=True)
 class _Task:
     """One submitted call, while it is queued or running."""
 
@@ -70,6 +79,23 @@ class _Task:
     queued: bool = True
 
 
+class _Now(simpy.Event):
+    """An event that fires at this instant, ahead of every normal event of it, and calls *callback*.
+
+    What SimPy schedules to start a process (``Initialize``) or to interrupt one (``Interruption``),
+    without the process: the initialization is inlined from ``Event.__init__``, as ``Initialize``'s is.
+    """
+
+    def __init__(
+        self, env: simpy.Environment, callback: Callable[[simpy.Event], None]
+    ) -> None:
+        self.env = env
+        self.callbacks = [callback]
+        self._value = None
+        self._ok = True
+        env.schedule(self, URGENT)
+
+
 @dataclass(eq=False)
 class _Core:
     """A core token: what it runs, whose context it holds (for the switch charge), what waits on it."""
@@ -78,7 +104,11 @@ class _Core:
     #: The owner whose context the core holds; ``None`` after a switch cut short (no one's).
     last_owner: object = None
     running: _Task | None = None
-    proc: simpy.Process | None = None
+    #: The running segment's pending event -- its start, then its timeout -- or ``None`` when idle.
+    #: A timeout that is no longer this is stale (its segment was preempted) and is ignored.
+    seg: simpy.Event | None = None
+    #: Counts the segments started on this core: a preemption names the segment it was sent to.
+    seg_id: int = 0
     #: When the running segment's compute (after its switch) begins.
     work_start: float = 0.0
     seg_start: float = 0.0
@@ -112,6 +142,9 @@ class Processor(SimObj):
         self._free: list[int] = list(range(self.config.n_cores))
         #: One record per finished task, in completion order.
         self.records: list[TaskRecord] = []
+        # The context-switch cost, evaluated once per cost object (it is a constant of the config).
+        self._switch_src: object = object()
+        self._switch_val = 0.0
 
     def report(self, elapsed_s: float | None = None) -> CpuReport:
         """Utilization, latency, queueing and confidence over the run so far.
@@ -179,8 +212,12 @@ class Processor(SimObj):
             done=env.event(),
             owner=owner,
         )
-        heapq.heappush(self._ready, (prio, seq, task))
-        self._dispatch()
+        if not self._ready and self._free:
+            # Nothing queued and a core free: the task would be pushed and popped at once.
+            self._start(self._cores[self._pick_core(owner)], task)
+        else:
+            heapq.heappush(self._ready, (prio, seq, task))
+            self._dispatch()
         if task.queued and (is_irq or self.config.preemptive):
             self._preempt_for(task)
         return task
@@ -197,9 +234,7 @@ class Processor(SimObj):
         victim = None
         for core in self._cores:
             run = core.running
-            if run is None or core.preempt_pending or core.proc is None:
-                continue
-            if not core.proc.is_alive:
+            if run is None or core.preempt_pending or core.seg is None:
                 continue
             if victim is None or (run.prio, run.seq) > (
                 victim.running.prio,  # type: ignore[union-attr]
@@ -217,7 +252,17 @@ class Processor(SimObj):
             # preemption is delivered.
             task.queued = False
             victim.irq_pending = task
-        victim.proc.interrupt("preempt")  # type: ignore[union-attr]
+        seg_id, running = victim.seg_id, victim.running
+        _Now(self.env, lambda _ev: self._deliver(victim, running, seg_id))
+
+    def _deliver(self, core: _Core, task: _Task, seg_id: int) -> None:
+        """A preemption reaches *core*'s segment *seg_id* (of *task*), as an ``Interruption`` reaches
+        a process; a segment that has ended since is left alone, as a dead process is.
+        """
+        if core.seg_id != seg_id or core.running is not task or core.seg is None:
+            return
+        core.seg = None  # its timeout is now stale
+        self._preempted(core, task)
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -233,24 +278,30 @@ class Processor(SimObj):
             if not self._free:
                 return
             heapq.heappop(self._ready)
-            # Prefer a free core that still holds this owner's context; else the lowest-numbered.
-            free, owner = self._free, task.owner
-            index = free[0]
-            if len(free) > 1 and self._cores[index].last_owner is not owner:
-                for i in free:
-                    if self._cores[i].last_owner is owner:
-                        index = i
-                        break
-            free.remove(index)
-            self._start(self._cores[index], task)
+            self._start(self._cores[self._pick_core(task.owner)], task)
+
+    def _pick_core(self, owner: object) -> int:
+        """Take a free core for *owner*'s task: one that still holds its context, else the
+        lowest-numbered."""
+        free = self._free
+        index = free[0]
+        if len(free) > 1 and self._cores[index].last_owner is not owner:
+            for i in free:
+                if self._cores[i].last_owner is owner:
+                    index = i
+                    break
+        free.remove(index)
+        return index
 
     def _start(self, core: _Core, task: _Task) -> None:
         task.queued = False
         core.running = task
-        core.proc = self.env.process(self._segment(core, task))
+        core.seg_id += 1
+        core.seg = _Now(self.env, lambda _ev: self._begin(core, task))
 
-    def _segment(self, core: _Core, task: _Task) -> ProcessGen[None]:
-        """Hold *core* for *task*'s switch and remaining compute, then finish the task."""
+    def _begin(self, core: _Core, task: _Task) -> None:
+        """Hold *core* for *task*'s switch and remaining compute: run the body if this is the task's
+        first segment, then one timeout, whose end (:meth:`_end`) finishes the task."""
         cfg = self.config
         rec = task.rec
         env = self.env
@@ -259,25 +310,33 @@ class Processor(SimObj):
             task.started = True
             rec.t_start = now
             task.result, counters = task.func.fn(*task.args, **task.kw)
-            rec.feats = task.func.features(counters, cfg)
-            cycles = eval_cycles(task.func.cycles, rec.feats)
+            rec.feats, cycles, energy = task.func.price(counters, cfg)
             if task.rec.is_irq:
                 cycles += eval_cycles(cfg.irq_entry_cycles, {})
             task.left = cycles
             rec.cycles = cycles
-            if task.func.energy_pj is not None:
-                rec.energy_pj = eval_cost(task.func.energy_pj, rec.feats)
+            if energy is not None:
+                rec.energy_pj = energy
         same = core.last_owner is not None and core.last_owner is task.owner
-        switch = 0.0 if same else eval_cycles(cfg.switch_cycles, {})
+        if same:
+            switch = 0.0
+        else:
+            if cfg.switch_cycles is not self._switch_src:
+                self._switch_src = cfg.switch_cycles
+                self._switch_val = eval_cycles(cfg.switch_cycles, {})
+            switch = self._switch_val
         core.seg_start = now
         core.seg_switch = switch
         core.work_start = now + switch * cfg.period
-        try:
-            yield env.timeout((switch + task.left) * cfg.period)
-        except simpy.Interrupt:
-            self._preempted(core, task)
+        ev = env.timeout((switch + task.left) * cfg.period)
+        ev.callbacks.append(lambda _ev: self._end(core, task, ev))
+        core.seg = ev
+
+    def _end(self, core: _Core, task: _Task, ev: simpy.Event) -> None:
+        """*task*'s segment ran to its end: finish the task -- unless it was preempted meanwhile."""
+        if core.seg is not ev:
             return
-        rec.switch_cycles += switch
+        task.rec.switch_cycles += core.seg_switch
         task.left = 0.0
         self._complete(core, task)
         self._release(core)
@@ -353,7 +412,7 @@ class Processor(SimObj):
 
     def _release(self, core: _Core) -> None:
         core.running = None
-        core.proc = None
+        core.seg = None
         core.preempt_pending = False
         if (
             core.resume
