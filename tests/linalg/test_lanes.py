@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from waveflow.hw.complexfield import ComplexField
 from waveflow.linalg import lanes as LN
 from waveflow.utils.fixputils import Format, OMode, QMode
 
@@ -73,12 +74,17 @@ def test_words_round_trip(lane_bits, word_bits, W, I):
         (16, Format(10, 4, False)),
         (32, reg(24, 6)),
         (32, Format(32, 8, True)),
+        (64, reg(40, 9)),
+        (64, reg(64, 9)),
+        (64, Format(1, 1, True)),
+        (64, Format(50, 7, False)),
     ],
 )
 @pytest.mark.parametrize("n", [1, 7, 64, 1000])
 def test_direct_words_are_the_general_paths(monkeypatch, word_bits, lane_bits, fmt, n):
     """The direct path (machine-width lanes: a reinterpretation of the buffer) gives the general
-    ComplexField path's words, padding and shape included, and reads them back the same way."""
+    ComplexField path's words, padding and shape included, and reads them back the same way.  The
+    general path here is the lanes' shifts: the array's own byte path is switched off too."""
     if word_bits % (2 * lane_bits):
         pytest.skip("the word does not hold whole elements")
     assert LN._direct_dtype(fmt, lane_bits) is not None
@@ -86,11 +92,14 @@ def test_direct_words_are_the_general_paths(monkeypatch, word_bits, lane_bits, f
         re, im = stored(fmt.W, n, seed=n + lane_bits)
     else:
         rng = np.random.default_rng(n)
-        re, im = rng.integers(0, 1 << fmt.W, n), rng.integers(0, 1 << fmt.W, n)
+        re = rng.integers(0, 1 << fmt.W, n, dtype=np.uint64).astype(np.int64)
+        im = rng.integers(0, 1 << fmt.W, n, dtype=np.uint64).astype(np.int64)
     fast = LN.to_words(re, im, fmt, lane_bits, word_bits)
     back = LN.from_words(fast, n, fmt, lane_bits, word_bits)
     with monkeypatch.context() as m:
         m.setattr(LN, "_direct_dtype", lambda *a: None)
+        m.setattr(ComplexField, "_words_numpy", classmethod(lambda cls, *a: None))
+        m.setattr(ComplexField, "_from_words_numpy", classmethod(lambda cls, *a: None))
         slow = LN.to_words(re, im, fmt, lane_bits, word_bits)
         slow_back = LN.from_words(slow, n, fmt, lane_bits, word_bits)
     assert fast.dtype == slow.dtype and fast.shape == slow.shape

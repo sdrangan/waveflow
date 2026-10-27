@@ -224,3 +224,36 @@ def test_complex_inherits_the_inner_include_dir() -> None:
     assert ComplexField.specialize(inner, include_dir="hdr").include_dir == "hdr"
     plain = ComplexField.specialize(IntField.specialize(bitwidth=19, signed=True))
     assert plain.include_dir == "."
+
+
+@pytest.mark.parametrize("inner", [IntField.specialize(64), FloatField.specialize(64)],
+                         ids=lambda t: t.__name__)
+@pytest.mark.parametrize("word_bw", [128, 256])
+def test_a_128_bit_element_reads_back_from_an_ndarray(inner, word_bw) -> None:
+    """A 128-bit element is wider than the uint64 lanes: deserialize falls back instead of
+    overflowing building the lane mask."""
+    elem = ComplexField.specialize(inner)
+    arr_t = DataArray.specialize(elem, max_shape=(3,))
+    if elem.kind == "float":
+        v = np.array([1.5 - 2j, -0.0 + 1e300j, 3j], dtype=np.complex128)
+    else:
+        v = cx.make_complex(np.array([-(1 << 63), 5, (1 << 63) - 1]),
+                            np.array([(1 << 63) - 1, -7, -(1 << 63)]), elem.inner_format())
+    words = np.asarray(arr_t(v).serialize(word_bw))
+    assert arr_t().deserialize(words, word_bw).val.tobytes() == v.tobytes()
+
+
+@pytest.mark.filterwarnings("error")
+def test_asarray_keeps_the_complex_dtype() -> None:
+    """np.asarray of a complex DataArray is its value, fields and all (not raw V16 bytes), with no
+    copy; a plain array is still a view of its value; copy=True copies."""
+    elem = ComplexField.specialize(IntField.specialize(16))
+    x = DataArray.specialize(elem, max_shape=(3,))(
+        cx.make_complex(np.array([1, -2, 3]), np.array([4, 5, -6]), elem.inner_format()))
+    a = np.asarray(x)
+    assert a.dtype == x.val.dtype and a.dtype.names == ("re", "im")
+    assert np.shares_memory(a, x.val) and list(a["im"]) == [4, 5, -6]
+    assert not np.shares_memory(np.array(x, copy=True), x.val)
+    y = DataArray.specialize(IntField.specialize(16), max_shape=(3,))(np.array([7, 8, 9]))
+    assert np.shares_memory(np.asarray(y), y.val)
+    assert np.asarray(y, dtype=np.float64).tolist() == [7.0, 8.0, 9.0]
