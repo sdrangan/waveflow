@@ -2,7 +2,7 @@
 title: Vector unit instruction set
 parent: Vector Unit
 grand_parent: DSP Blocks
-nav_order: 4
+nav_order: 5
 summary: "Every instruction of the vector unit, with how to read the tables: operand names, what holds for each lane and element, and q_d(x) -- the one rounding and saturation to the destination's format, worked on a small format. Moves and adds, multiplies and their conjugate and broadcast forms, a scalar with a vector, reductions, queue reads and writes, scalar and control instructions, the load and store programs; the result shift; the 64-bit encoding, with one instruction encoded field by field; the rules a pass must keep, each with its reason; and how passes fuse into runs."
 ---
 

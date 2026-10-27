@@ -2,7 +2,7 @@
 title: Vector unit hardware
 parent: Vector Unit
 grand_parent: DSP Blocks
-nav_order: 6
+nav_order: 8
 summary: "How the vector unit becomes hardware: the per-configuration header that hls.py generates on vecunit_core.h, the build steps (VecUnitHeaderStep, VecUnitCodegenStep, build_dag), and the tests -- the interpreter against an exact-rational reference, pysim against the interpreter, and the XSI RTL gates."
 ---
 

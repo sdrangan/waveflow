@@ -2,7 +2,7 @@
 title: Vector unit timing and resources
 parent: Vector Unit
 grand_parent: DSP Blocks
-nav_order: 7
+nav_order: 9
 summary: "Where the vector unit's time is measured and charged: a job's interval between statuses at RTL, pysim's per-item execute charge from VecTiming and its features, the loader and store at a word or a value a cycle; the calibrated timing model (pre-registered fit and held-out scores, Vitis HLS 2024.1) and the by-phase model that was tried and not kept; the calibrated resource model (LUT, FF, DSP, BRAM); and the unit's limits."
 ---
 

@@ -60,12 +60,16 @@ Read them in order the first time:
    formats and the ports.
 3. [Vector unit program examples](program_examples.md) -- programs read line by line, one idea an
    example, on the toy kernels.
-4. [Vector unit instruction set](isa.md) -- every instruction, its 64-bit encoding, the rules a pass
-   must keep, and how passes fuse into runs.
-5. [Programming the vector unit](programming.md) -- building programs in Python, the assembler and
-   its checks, the interpreter, and running a program in pysim.
-6. [Vector unit hardware](hardware.md) -- the generated HLS, the build flow and the RTL tests.
-7. [Vector unit timing and resources](timing.md) -- where a job's cycles go, which task binds, and the
+4. [Configuring and constructing a vector unit](construct.md) -- every configuration option, what it
+   costs, and constructing the unit in Python.
+5. [Vector unit instruction set](isa.md) -- every instruction, how to read its formula, its 64-bit
+   encoding, the rules a pass must keep, and how passes fuse into runs.
+6. [Programming the vector unit](programming.md) -- writing programs in Python, the assembler and its
+   checks, the interpreter, pysim, errors, and what makes a program fast.
+7. [Vector unit interface](interface.md) -- the protocol: the streams, what a job sends and receives,
+   the word formats and the ordering rules.
+8. [Vector unit hardware](hardware.md) -- the generated HLS, the build flow and the RTL tests.
+9. [Vector unit timing and resources](timing.md) -- where a job's cycles go, which task binds, and the
    calibrated timing and resource models.
 
 The examples: [toy kernels](../../../examples/vecunit/index.md) (the pages excerpt them),
