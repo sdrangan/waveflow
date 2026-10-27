@@ -104,8 +104,13 @@ The program is 6 % faster because it runs each kind of work across the eight col
 pipelined run, and the eight divides of a kind side by side, where the dedicated core's loop order
 serializes them. The price is resources: the fused execute loop, four pipelined dividers (one a
 lane, about 33k FF together), and the run decode. A CG job is 233 instruction words: 88 passes in 11
-runs, 704 run elements, 5 scalar runs of 8 divides, 9 control instructions; about 20 cycles of
-decode a pass is the largest share left, which a decode stage running ahead of execution would hide.
+runs, 704 run elements, 5 scalar runs of 8 divides, 9 control instructions; about 16 cycles of
+decode a pass (42 % of the job, [Timing at RTL](timing.md)) is the largest share left, which a decode
+stage running ahead of execution would hide.
+
+The `CgVectorUnit` row is the measurement recorded in `plans/vecunit_new.md` (Stage 5 and 6
+records); this repository holds no measurement record or script that reproduces it, unlike the vector
+unit's row (`measured.json`).
 
 pysim's timing is calibrated at RTL on CG-configuration jobs
 ([the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models)): held out, it predicts these steady

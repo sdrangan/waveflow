@@ -63,3 +63,24 @@ def test_xsi_matched_filter_unit_128(tmp_path):
     from examples.vecunit_mf.mf_unit import MfVecUnit
 
     _run(MfVecUnit(name="vecunit", sim=Simulation(), word_bits=128), tmp_path)
+
+
+@pytest.mark.xsi
+def test_xsi_toy_unit(tmp_path):
+    """The toy kernels (``examples/vecunit``), the scalar extensions and the result shift among them
+    (``plans/vecunit_future.md`` F2, F4): a build with ``rs_max`` 15."""
+    from examples.vecunit.harness import unit
+
+    _run(unit(), tmp_path)
+
+
+@pytest.mark.xsi
+def test_xsi_toy_unit_fused_dependent_passes(tmp_path):
+    """F7 at RTL: ``poly``'s two dependent passes fused into one run at ``VL`` 64 (``fuse_raw_vl``
+    64), bit-exact; and the build's fused loop is shallower than 64, which is what makes it safe."""
+    from examples.vecunit.harness import unit
+    from waveflow.vecunit import report
+
+    _run(unit(VLMAX=64, fuse_raw_vl=64), tmp_path, workload="poly_64")
+    _ii, depth = report.loop_schedule(tmp_path)["run"]
+    assert depth < 64, f"the fused loop is {depth} deep: fuse_raw_vl 64 would not be safe"

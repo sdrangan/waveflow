@@ -222,7 +222,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: (tests/vecunit/test_unit_xsi.py).
 #: 241 -> 243 on 2026-10-24 (plans/vecunit_new.md, Stage 9a): the CG and matched-filter units at
 #: 128-bit data words (tests/vecunit/test_unit_xsi.py).
-WANT_XSI_GATES = 243
+#: 243 -> 245 on 2026-10-27 (plans/vecunit_future.md): the toy unit (examples/vecunit) with the
+#: scalar extensions and the result shift, and with dependent passes fused (tests/vecunit/test_unit_xsi.py).
+WANT_XSI_GATES = 245
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

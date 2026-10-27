@@ -50,6 +50,11 @@ def cfg_id(cfg: VecUnitConfig) -> int:
         parts += [name, *getattr(cfg, name)]
     parts += [cfg.L, cfg.VLMAX, cfg.Kmax, cfg.Nmax, cfg.S, cfg.NB, cfg.g_div, cfg.word_bits,
               cfg.lane_bits, cfg.n_in_ports, cfg.n_out_ports, cfg.max_run, cfg.max_srun]
+    # Added with the batch of plans/vecunit_future.md, named only when not zero, so a build that
+    # uses neither keeps the identity (and the header) it was measured and calibrated under.
+    for name in ("rs_max", "fuse_raw_vl"):
+        if getattr(cfg, name):
+            parts += [name, getattr(cfg, name)]
     return format_id(*parts)
 
 
@@ -84,7 +89,8 @@ class Widths:
     IS: int
     FA: int  # a multiplier's A input (a vector or a scalar)
     AW: int
-    FP: int  # a product's fraction bits, and a slot's result's
+    FP: int  # a product's fraction bits
+    FPR: int  # a slot's result's: the product's plus rs_max, for the result shift (F4)
     RW: int  # a slot's exact result
     DW: int  # an exact reduction
     NW: int  # a divide's numerator
@@ -98,13 +104,16 @@ def widths(cfg: VecUnitConfig) -> Widths:
     FS, IS = max(f.frac_bits for f in sf), max(f.int_bits for f in sf)
     FA, IA = max(FU, FS), max(IU, IS)
     FP = FA + FU
+    RSM = int(cfg.rs_max)
     prod_int = (IA + 1) + IU + 1  # A' (with a sign bit to negate) times B, then a complex sum
     res_int = max(prod_int, IU, 12) + 1  # X +- Y, X up to a 12-bit immediate
     dot_int = prod_int + (int(cfg.VLMAX) - 1).bit_length()
     WSR = max(f.W for f in sf)
     NW = WSR + int(cfg.g_div) + FS + 2
+    # A result carries rs_max more fraction bits: P 2^-rs is P shifted left by rs_max - rs, exact.
     return Widths(WV=max(f.W for f in vf), WSR=WSR, FU=FU, IU=IU, FS=FS, IS=IS, FA=FA,
-                  AW=FA + IA + 1, FP=FP, RW=res_int + FP + 1, DW=dot_int + FP + 1, NW=NW,
+                  AW=FA + IA + 1, FP=FP, FPR=FP + RSM, RW=res_int + FP + RSM + 1,
+                  DW=dot_int + FP + RSM + 1, NW=NW,
                   QW=NW + 1 + FS - min(f.frac_bits for f in sf), FQ=FS + int(cfg.g_div))
 
 
@@ -206,11 +215,13 @@ struct wf_vec_cfg_{i} {{
     static const int WV = {w.WV}, WSR = {w.WSR}, FU = {w.FU}, FS = {w.FS}, FA = {w.FA}, FP = {w.FP};
     static const int GDIV = {cfg.g_div}, MAXRUN = {cfg.max_run}, MAXSRUN = {cfg.max_srun};
     static const int MULS = {muls}, DOTS = {dots};  // bit s: slot s has a multiplier, an accumulator
+    static const int RSM = {cfg.rs_max}, FPR = {w.FPR};  // the result shift's range; a result's frac
+    static const int FRVL = {cfg.fuse_raw_vl};  // dependent passes fuse at VL >= FRVL (0: never)
     typedef ap_int<{w.FU + w.IU}> vu_t;   // the union vector format (frac FU)
     typedef ap_int<{w.FS + w.IS}> su_t;   // the union scalar format (frac FS)
     typedef ap_int<{w.AW}> au_t;          // a multiplier's A input (frac FA)
-    typedef ap_int<{w.RW}> res_t;         // a slot's exact result (frac FP)
-    typedef ap_int<{w.DW}> dot_t;         // an exact reduction (frac FP)
+    typedef ap_int<{w.RW}> res_t;         // a slot's exact result (frac FPR)
+    typedef ap_int<{w.DW}> dot_t;         // an exact reduction (frac FPR)
     typedef ap_int<{w.NW}> num_t;         // a divide's numerator
     typedef ap_int<{w.QW}> qa_t;          // a quotient at FQ = {w.FQ} fraction bits
     typedef ap_uint<{2 * w.WV * cfg.L}> lg_t;  // a queue lane group
@@ -218,6 +229,7 @@ struct wf_vec_cfg_{i} {{
 {_table("qfmt_in", "ap_uint<8>", [vid[f] for f in cfg.in_queue_formats])}\
 {_table("qfmt_out", "ap_uint<8>", [vid[f] for f in cfg.out_queue_formats])}\
 {_table("sfmt", "ap_uint<8>", [sid[f] for f in cfg.scalar_formats])}\
+{_table("swd", "ap_uint<8>", [f.W for f in cfg.scalar_formats])}\
 {_table("cap", "ap_uint<5>", list(cfg.slot_caps))}\
     static vu_t conv_v(ap_int<WV> raw, int f) {{
 #pragma HLS INLINE
@@ -233,9 +245,9 @@ struct wf_vec_cfg_{i} {{
         default: return 0;
         }}
     }}
-{_quantizer("quant_v", "res_t", w.FP, w.RW, w.WV, vf)}\
+{_quantizer("quant_v", "res_t", w.FPR, w.RW, w.WV, vf)}\
 {_quantizer("quant_s", "su_t", w.FS, w.FS + w.IS, w.WSR, sf)}\
-{_quantizer("quant_dot", "dot_t", w.FP, w.DW, w.WSR, sf)}\
+{_quantizer("quant_dot", "dot_t", w.FPR, w.DW, w.WSR, sf)}\
 {_quantizer("quant_q", "qa_t", w.FQ, w.QW, w.WSR, sf)}\
     // fixputils.div(w(a), b), b != 0: (a << (GDIV + Fb)) / b truncated toward zero has Fa + GDIV
     // fraction bits; aligned to FQ (exact), then rounded once to the destination.
@@ -410,6 +422,7 @@ $BUFS
     const int n = job.ninstr;
     int st = (last == (n == 0)) ? int(wf_linalg::OK) : int(wf_linalg::BAD_LENGTH);
     int vl = C::VLMAX, pc = 0;
+    int rsm = 0;  // the result shift wf.setrs set: a scaled instruction without its own uses it
     // Held over: an instruction read ahead that a run ended before (pend), or a whole pass gathered
     // that would have read what its run writes (pendc) -- it starts the next run.
     bool pend = false, pendc = false;
@@ -480,6 +493,8 @@ INSTR:
                     if (st != wf_linalg::OK) break;  // the run gathered so far still runs
                 }
                 // ---- a hazard with the run: this pass reads what an earlier pass writes ------------
+                // (a group read is no hazard at VL >= FRVL: the earlier pass wrote each element
+                // before this one reads it -- F7; a scalar read always is: reductions deliver last)
                 ap_uint<C::NG> rg = 0, pw = 0;
                 ap_uint<C::NS> rs = 0, psw = 0;
                 for (int s = 0; s < C::S; ++s) {
@@ -495,7 +510,8 @@ INSTR:
                         if (o.sw) psw[o.ws] = 1;
                     }
                 }
-                if (np > 0 && ((rg & wg) != 0 || (rs & wsc) != 0)) {
+                const bool raw_ok = C::FRVL > 0 && vl >= C::FRVL;
+                if (np > 0 && (((rg & wg) != 0 && !raw_ok) || (rs & wsc) != 0)) {
                     for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
                         pg[s] = g[s];
@@ -553,8 +569,11 @@ INSTR:
                         x.a_idx = x.b_idx = x.c_idx = x.dst = x.dfmt = 0;
                         x.xsel = x.ysel = 0;
                         x.neg = x.conj = x.bcast = false;
+                        x.rs_own = false;
+                        x.rs = 0;
                         x.imm = 0;
                     }
+                    if (!x.rs_own) x.rs = rsm;
                     wf_vec::resolve<C>(x.a_src, x.a_idx, s, written, wgrp, rbase, rfmt);
                     wf_vec::resolve<C>(x.b_src, x.b_idx, s, written, wgrp, rbase, rfmt);
                     wf_vec::resolve<C>(x.c_src, x.c_idx, s, written, wgrp, rbase, rfmt);
@@ -695,17 +714,27 @@ $QREADS
                             const bool mul = (C::MULS >> s) & 1, dot = (C::DOTS >> s) & 1;
                             const res_t pr = mul ? res_t(res_t(pa_r) * br - res_t(pa_i) * bi) : res_t(0);
                             const res_t pi = mul ? res_t(res_t(pa_r) * bi + res_t(pa_i) * br) : res_t(0);
+                            // The result shift, exact: P 2^-rs at FPR = FP + RSM fraction bits is P
+                            // shifted left by RSM - rs (no shifter at all when RSM is 0).
+                            const res_t prs = C::RSM ? res_t(pr << (C::RSM - x.rs)) : pr;
+                            const res_t pis = C::RSM ? res_t(pi << (C::RSM - x.rs)) : pi;
+                            // A' alone at FPR (wf.vadd.vs, wf.vsub.vs; wf.vmv.s.v's element 0)
+                            const res_t yar = res_t(pa_r) << (C::FU + C::RSM);
+                            const res_t yai = res_t(pa_i) << (C::FU + C::RSM);
                             if (dot) {
-                                const dot_t sum = (first ? dot_t(0) : acc[s][l]) + pr;
+                                const bool mvs = x.kind == wf_vec::K_MVS;
+                                const dot_t term = mvs ? dot_t(yar) : dot_t(prs);
+                                const dot_t sum = first ? term : (mvs ? acc[s][l] : dot_t(acc[s][l] + term));
                                 acc[s][l] = sum;
-                                if (lastel && x.kind == wf_vec::K_DOT) dacc[p][s][l] = sum;
+                                if (lastel && (x.kind == wf_vec::K_DOT || mvs)) dacc[p][s][l] = sum;
                             }
                             res_t xr = 0, xi = 0, yr = 0, yi = 0;
-                            if (x.xsel == wf_vec::X_C) { xr = res_t(cr) << (C::FP - C::FU); xi = res_t(ci) << (C::FP - C::FU); }
-                            else if (x.xsel == wf_vec::X_A) { xr = res_t(ar) << (C::FP - C::FU); xi = res_t(ai) << (C::FP - C::FU); }
-                            else if (x.xsel == wf_vec::X_IMM) { xr = res_t(x.imm) << C::FP; }
-                            if (x.ysel == wf_vec::Y_P) { yr = pr; yi = pi; }
-                            else if (x.ysel == wf_vec::Y_B) { yr = res_t(br) << (C::FP - C::FU); yi = res_t(bi) << (C::FP - C::FU); }
+                            if (x.xsel == wf_vec::X_C) { xr = res_t(cr) << (C::FPR - C::FU); xi = res_t(ci) << (C::FPR - C::FU); }
+                            else if (x.xsel == wf_vec::X_A) { xr = res_t(ar) << (C::FPR - C::FU); xi = res_t(ai) << (C::FPR - C::FU); }
+                            else if (x.xsel == wf_vec::X_IMM) { xr = res_t(x.imm) << C::FPR; }
+                            if (x.ysel == wf_vec::Y_P) { yr = prs; yi = pis; }
+                            else if (x.ysel == wf_vec::Y_B) { yr = res_t(br) << (C::FPR - C::FU); yi = res_t(bi) << (C::FPR - C::FU); }
+                            else if (x.ysel == wf_vec::Y_A) { yr = yar; yi = yai; }
                             const res_t rr = x.neg ? res_t(xr - yr) : res_t(xr + yr);
                             const res_t ri = x.neg ? res_t(xi - yi) : res_t(xi + yi);
                             wr[s][l] = C::quant_v(rr, x.dfmt);
@@ -746,7 +775,7 @@ $QWRITES
                     for (int s = 0; s < C::S; ++s) {
 #pragma HLS UNROLL
                         const wf_vec::Slot x = dsl[q][s];
-                        if (((C::DOTS >> s) & 1) && x.kind == wf_vec::K_DOT) {
+                        if (((C::DOTS >> s) & 1) && (x.kind == wf_vec::K_DOT || x.kind == wf_vec::K_MVS)) {
                             for (int l = 0; l < C::L; ++l) {
 #pragma HLS UNROLL
                                 sf[l][x.dst] = C::quant_dot(dacc[q][s][l], x.dfmt);
@@ -760,11 +789,13 @@ $QWRITES
             // ==== a run of scalar instructions: gather, then one pipelined loop ======================
             ap_uint<6> sfn[C::MAXSRUN];
             ap_uint<8> srd[C::MAXSRUN], sra[C::MAXSRUN], srb[C::MAXSRUN];
+            ap_int<24> sim[C::MAXSRUN];  // wf.sli's immediate
             ap_uint<C::NS> sw = 0;
             int nr = 0;
         SGATHER:
             for (int r = 0; r < C::MAXSRUN; ++r) {
-                const bool raw = sw[d.rs1] || (d.funct == wf_vec::S_DIVZ && sw[d.rs2]);
+                const bool raw = d.funct != wf_vec::S_LI &&
+                                 (sw[d.rs1] || (d.funct == wf_vec::S_DIVZ && sw[d.rs2]));
                 if (nr > 0 && raw) {
                     pd = d;
                     pend = true;
@@ -774,6 +805,7 @@ $QWRITES
                 srd[nr] = d.rd;
                 sra[nr] = d.rs1;
                 srb[nr] = d.rs2;
+                sim[nr] = wf_vec::simm24(d);
                 sw[d.rd] = 1;
                 ++nr;
                 if (nr == C::MAXSRUN || pc == n) break;
@@ -804,12 +836,16 @@ $QWRITES
                     const ap_int<C::WSR> den = (b == 0) ? ap_int<C::WSR>(1) : b;
                     const ap_int<C::WSR> qv = C::div_s(a, fa, den, fb, fd);
                     const ap_int<C::WSR> mv = C::quant_s(C::conv_s(a, fa), fd);
-                    sf[l][srd[r]] = sfn[r] == wf_vec::S_DIVZ ? ((b == 0) ? ap_int<C::WSR>(0) : qv) : mv;
+                    // wf.sli: the immediate is the scalar's stored integer (the decode checked it fits)
+                    sf[l][srd[r]] = sfn[r] == wf_vec::S_DIVZ ? ((b == 0) ? ap_int<C::WSR>(0) : qv)
+                                    : sfn[r] == wf_vec::S_LI ? ap_int<C::WSR>(sim[r]) : mv;
                 }
             }
             if (st != wf_linalg::OK) break;
         } else if (d.funct == wf_vec::C_SETVL) {
             vl = d.imm1;
+        } else if (d.funct == wf_vec::C_SETRS) {
+            rsm = d.imm1;
         } else if (d.funct == wf_vec::C_QPOP) {
             switch (int(d.rs1)) {
 $POP

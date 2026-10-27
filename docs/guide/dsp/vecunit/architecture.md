@@ -131,17 +131,20 @@ write a register before it reads it, which the assembler checks.
 ## The scalar file
 
 The `NS` **scalars** (`s0` .. `s{NS-1}`) are real values, one per lane: `s[l]` belongs to lane `l`,
-so each column's problem has its own. Scalars come from two places:
+so each column's problem has its own. Scalars come from three places:
 
 - a **reduction**, `wf.vdotr s, va, vb`, which sums `Re(conj(va)·vb)` over the `VL` elements of each
-  member and delivers it at the end of its pass;
+  member, or `wf.vmv.s.v s, va`, which takes element 0 of each member; both deliver at the end of
+  their pass;
 - a **scalar instruction**: `wf.sdivz` divides one scalar by another (0 for a zero divisor) and
-  `wf.smv` copies one.
+  `wf.smv` copies one;
+- an **immediate**: `wf.sli s, imm` sets every lane's `s` to a constant from the program.
 
-They are used by the `.vs` instructions, which scale a vector by a scalar (`wf.vmacc.vs`,
-`wf.vnmsac.vs`, `wf.vmadd.vs`). There is no other scalar arithmetic, and no instruction loads a
-scalar from outside. A program that needs a scalar must compute it. The toy `gain` kernel shows all of
-this in eight instructions (see the [programming page](programming.md)).
+They are used by the `.vs` instructions: a scalar times a vector (`wf.vmul.vs`), a scalar added to or
+subtracted from a vector's real part (`wf.vadd.vs`, `wf.vsub.vs`), and the in-place multiply-adds
+(`wf.vmacc.vs`, `wf.vnmsac.vs`, `wf.vmadd.vs`). There is no other scalar arithmetic. The toy kernels
+show them: `gain` computes its scalars, `poly` takes them as constants (see the
+[program examples](program_examples.md)).
 
 ## Queues and blocks
 
@@ -195,8 +198,8 @@ has hardware for:
 | `Cap` | Instructions |
 |---|---|
 | `MOVE` | `vmv.v.i`, `vmv.v.v`, `vadd.vv`, `vsub.vv` |
-| `MUL` | `vmul`, `vmacc`, `vnmsac`, `vmadd` and their `.vs`, conjugate and broadcast forms |
-| `DOT` | `wf.vdotr` |
+| `MUL` | `vmul`, `vmacc`, `vnmsac`, `vmadd` and their `.vs`, conjugate and broadcast forms; `wf.vmul.vs`, and `wf.vadd.vs` / `wf.vsub.vs` (the scalar enters through the multiplier's operand path) |
+| `DOT` | `wf.vdotr`, `wf.vmv.s.v` (the accumulator delivers it) |
 | `LOAD` | `wf.vlse` |
 | `STORE` | `wf.vsse` |
 
@@ -239,6 +242,13 @@ The union's width is a cost. Formats whose integer and fraction bits spread wide
 multipliers and a wide quantizer: integer parts from 1 to 14 bits gave 52-bit results and a csynth of
 more than 50 minutes (Vitis HLS 2024.1, `plans/vecunit_new.md` Stage 5). Keep a unit's formats
 close, as an application's usually are.
+
+**The result shift.** A multiplying instruction's product can be scaled by `2^−RS` before its one
+rounding (`wf.setrs`, or the instruction's own shift; see the [examples](program_examples.md)). The
+datapath carries `rs_max` more fraction bits for it (a build parameter, default 15) and shifts the
+product left by `rs_max − RS`, so the scaling is exact and the quantizers keep their constant
+shifts. `rs_max = 0` builds the datapath without it; the CG and matched-filter units are built that
+way, as they were calibrated.
 
 ## Ports and words
 

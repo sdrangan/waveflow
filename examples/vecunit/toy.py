@@ -8,15 +8,19 @@ kernel     computes                               introduces
 =========  =====================================  ==============================================
 ``double`` ``Y = X + X``                          a job: three programs, one chained pass, queues
 ``cmul``   ``Z = conj(X) * Y``, elementwise       chaining up to ``S`` slots, the conjugate form,
-                                                  strip-mining a long matrix in chunks of ``VLMAX``
+                                                  strip-mining a long matrix in chunks of ``VLMAX``;
+                                                  with ``rs``, a result shift (``wf.setrs``)
 ``gain``   ``r = y - a x``, ``a = Re(x^H y) /     reductions, the scalar file, the divide, a
            |x|^2`` per column                     scalar times a vector (``.vs``)
+``poly``   ``y = a x^2 + b x + c``, constants     scalar immediates (``wf.sli``), a scalar with a
+                                                  vector (``wf.vmul.vs``, ``wf.vadd.vs``)
 =========  =====================================  ==============================================
 
 ``cmul`` is the matched filter's pass (``examples/vecunit_mf``) without the broadcast; ``gain`` is the
 shape of a CG step (``examples/vecunit_cg``): reductions to scalars, a divide, an update.  Each kernel
 has a NumPy golden on stored integers (:mod:`waveflow.utils.fixputils`), independent of the
-interpreter.
+interpreter.  ``poly``'s two passes depend on each other: on a unit with ``fuse_raw_vl`` they fuse
+into one run (:func:`toy_config`'s ``fuse_raw_vl``).
 """
 
 from __future__ import annotations
@@ -45,12 +49,14 @@ Q_Z = 0  # output queue
 PORT = 0
 
 
-def toy_config(*, word_bits: int = 64) -> VecUnitConfig:
+def toy_config(*, word_bits: int = 64, VLMAX: int = 16, fuse_raw_vl: int = 0) -> VecUnitConfig:
     """The toy unit: four groups and three scalars, two input queues and one output queue, four lanes,
-    ``VLMAX`` 16, blocks of up to 16 rows and 4 columns (one lane group a row), three slots."""
+    ``VLMAX`` 16, blocks of up to ``VLMAX`` rows and 4 columns (one lane group a row), three slots,
+    the result shift up to 15.  ``fuse_raw_vl``: dependent passes fuse at that ``VL`` and above."""
     return VecUnitConfig(group_formats=(FV,) * 4, scalar_formats=(FS, FS, FA),
                          in_queue_formats=(FV, FV), out_queue_formats=(FV,),
-                         L=4, VLMAX=16, Kmax=16, Nmax=4, S=3, NB=4, word_bits=word_bits)
+                         L=4, VLMAX=VLMAX, Kmax=VLMAX, Nmax=4, S=3, NB=4, word_bits=word_bits,
+                         fuse_raw_vl=fuse_raw_vl)
 
 
 # --- the programs ------------------------------------------------------------------------------------
@@ -75,10 +81,13 @@ def chunks(cfg: VecUnitConfig, nrows: int) -> list[int]:
     return [min(cfg.VLMAX, nrows - r0) for r0 in range(0, nrows, cfg.VLMAX)]
 
 
-def cmul_programs(cfg: VecUnitConfig, nrows: int, n: int) -> Programs:
+def cmul_programs(cfg: VecUnitConfig, nrows: int, n: int, *, rs: int = 0) -> Programs:
     """``Z = conj(X) * Y`` on ``nrows x n`` matrices, strip-mined: per chunk of ``VLMAX`` rows, ``X``
-    read alone, then ``Y`` read, multiplied and written in one chained pass."""
+    read alone, then ``Y`` read, multiplied and written in one chained pass.  ``rs``: every product
+    scaled by ``2**-rs`` (``wf.setrs rs`` first)."""
     p = Programs()
+    if rs:
+        p.execute.append(I.setrs(rs))
     for c, k in enumerate(chunks(cfg, nrows)):
         p.load += [I.ld(Q_X, PORT, k, n), I.ld(Q_Y, PORT, k, n)]
         p.execute += [I.setvl(k),
@@ -104,6 +113,34 @@ def gain_programs(k: int, n: int) -> Programs:
                  I.vsse(Q_Z, V1, 0, 1),                              # r = v1
                  I.qpush(Q_Z)],
         store=[I.st(PORT, Q_Z, 0, k, n)])
+
+
+def stored(value: float, fmt: Format) -> int:
+    """A real constant as ``fmt``'s stored integer (rounded to its fraction bits)."""
+    return int(round(value * (1 << fmt.frac_bits)))
+
+
+def poly_programs(cfg: VecUnitConfig, nrows: int, n: int, a: float, b: float,
+                  c: float) -> Programs:
+    """``y = a x^2 + b x + c`` (Horner: ``(a x + b) x + c``) on an ``nrows x n`` matrix, strip-mined,
+    the constants scalar immediates set once: per chunk, pass 1 ``v1 = a x``, ``v2 = v1 + b``; pass 2
+    ``v3 = v2 x``, ``v1 = v3 + c``, written out.  Pass 2 reads what pass 1 wrote: two runs, or one on a
+    unit with ``fuse_raw_vl <= VL``."""
+    fs = cfg.scalar_formats
+    p = Programs(execute=[I.sli(S_XY, stored(a, fs[S_XY])), I.sli(S_XX, stored(b, fs[S_XX])),
+                          I.sli(S_A, stored(c, fs[S_A]))])
+    for ch, k in enumerate(chunks(cfg, nrows)):
+        p.load.append(I.ld(Q_X, PORT, k, n))
+        p.execute += [I.setvl(k),
+                      I.vlse(V0, Q_X, 0, 1).c,          # pass 1: v0 = x
+                      I.vmul_vs(V1, S_XY, V0).c,        #         v1 = a x
+                      I.vadd_vs(V2, S_XX, V1),          #         v2 = a x + b
+                      I.vmul_vv(3, V2, V0).c,           # pass 2: v3 = v2 x
+                      I.vadd_vs(V1, S_A, 3).c,          #         v1 = v3 + c
+                      I.vsse(Q_Z, V1, 0, 1),            #         y = v1
+                      I.qpop(Q_X), I.qpush(Q_Z)]
+        p.store.append(I.st(PORT, Q_Z, ch, k, n))
+    return p
 
 
 # --- running them on the interpreter -----------------------------------------------------------------
@@ -144,15 +181,42 @@ def double_golden(xr, xi):
     return fx.quantize(re, f, FV), fx.quantize(im, f, FV)
 
 
-def cmul_golden(xr, xi, yr, yi):
-    """``q(conj(X) * Y)``, exact before the one rounding."""
+def _scaled(f: Format, rs: int) -> Format:
+    """The same stored integers, ``rs`` more fraction bits: a value times ``2**-rs``, exact."""
+    return Format(f.W + rs, f.int_bits, True) if rs else f
+
+
+def cmul_golden(xr, xi, yr, yi, rs: int = 0):
+    """``q(conj(X) * Y * 2**-rs)``, exact before the one rounding."""
     p_rr, fp = fx.mult(xr, FV, yr, FV)
     p_ii, _ = fx.mult(xi, FV, yi, FV)
     p_ri, _ = fx.mult(xr, FV, yi, FV)
     p_ir, _ = fx.mult(xi, FV, yr, FV)
     re, f_re = fx.add(p_rr, fp, p_ii, fp)  # Re(conj(x) y) = xr yr + xi yi
     im, f_im = fx.sub(p_ri, fp, p_ir, fp)  # Im(conj(x) y) = xr yi - xi yr
-    return fx.quantize(re, f_re, FV), fx.quantize(im, f_im, FV)
+    return fx.quantize(re, _scaled(f_re, rs), FV), fx.quantize(im, _scaled(f_im, rs), FV)
+
+
+def poly_golden(cfg: VecUnitConfig, xr, xi, a: float, b: float, c: float):
+    """``y = q(q(q(q(a x) + b) x) + c)``: each write rounded to ``FV``, the constants to their
+    scalars' formats, a scalar added to the real part only."""
+    fs = cfg.scalar_formats
+    sa, sb, sc = (stored(v, fs[j]) for v, j in ((a, S_XY), (b, S_XX), (c, S_A)))
+
+    def smul(s, f, vr, vi):  # q(s v), s real
+        return (fx.quantize(*fx.mult(s, f, vr, FV), FV), fx.quantize(*fx.mult(s, f, vi, FV), FV))
+
+    def sadd(s, f, vr, vi):  # q(v + s) on the real part
+        return fx.quantize(*fx.add(vr, FV, s, f), FV), fx.quantize(vi, FV, FV)
+
+    t1 = smul(sa, fs[S_XY], xr, xi)
+    t2 = sadd(sb, fs[S_XX], *t1)
+    p_rr, fp = fx.mult(t2[0], FV, xr, FV)
+    p_ii, _ = fx.mult(t2[1], FV, xi, FV)
+    p_ri, _ = fx.mult(t2[0], FV, xi, FV)
+    p_ir, _ = fx.mult(t2[1], FV, xr, FV)
+    t3 = fx.quantize(*fx.sub(p_rr, fp, p_ii, fp), FV), fx.quantize(*fx.add(p_ri, fp, p_ir, fp), FV)
+    return sadd(sc, fs[S_A], *t3)
 
 
 def gain_golden(xr, xi, yr, yi):

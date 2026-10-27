@@ -49,11 +49,12 @@ PORT = 0
 def mf_config(fx: Format, fr: Format, fy: Format, *, L: int = 4, VLMAX: int = 64,
               nrx_max: int = 8, word_bits: int = 64) -> VecUnitConfig:
     """A unit for the matched filter: four groups (``X``, ``R``, ``Y`` and a spare, one a bank),
-    queues ``X``, ``R`` in and ``Y`` out; blocks of ``VLMAX`` rows and ``nrx_max`` columns."""
+    queues ``X``, ``R`` in and ``Y`` out; blocks of ``VLMAX`` rows and ``nrx_max`` columns.  Built
+    without the result shift (``rs_max = 0``), as it was calibrated."""
     return VecUnitConfig(
         group_formats=(fx, fr, fy, fy), scalar_formats=(fy,),
         in_queue_formats=(fx, fr), out_queue_formats=(fy,),
-        L=L, VLMAX=VLMAX, Kmax=VLMAX, Nmax=nrx_max, NB=4, word_bits=word_bits)
+        L=L, VLMAX=VLMAX, Kmax=VLMAX, Nmax=nrx_max, NB=4, rs_max=0, word_bits=word_bits)
 
 
 def chunks(cfg: VecUnitConfig, nsamp: int) -> list[tuple[int, int]]:

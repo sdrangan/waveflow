@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 24
 has_children: true
 example_dir: examples/vecunit_mf
-summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: a streaming program is bound by I/O, not compute -- a frame every 1,408 cycles against an input floor of 1,152 words (1.22x, Vitis 2024.1) -- and how to count the instructions a chunk so issue never binds."
+summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: how close a streaming program comes to its input floor -- a frame every 1,408 cycles against 1,152 input words (1.22x, Vitis 2024.1), the execute task binding just above the loader at VLMAX 64 -- and how to count the instructions a chunk so issue stays small."
 ---
 
 # A matched filter as a vector program

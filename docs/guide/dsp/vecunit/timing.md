@@ -60,6 +60,11 @@ from it within 0.16 % and 0.45 %.
 | matched filter steady: frames at `VLMAX` 64 | 3 | **7.5 %** | **7.5 %** |
 | all | 13 | 1.9 % | 7.5 % |
 
+**These scores predate two fixes to pysim's job start** (Stage 9d: a job's clock now starts when its
+program's first word arrives, and keeps that lead through a queue take that did not wait). On the
+current code, the same coefficients score **4.4 % mean, 18.8 % worst** on Stage 9d's wider held-out
+set (below); the Stage 7 set itself has not been re-scored (`plans/vecunit_future.md`, R7).
+
 Against the targets of 3 % mean and 6 % worst, the mean holds and the worst does not: pysim gives the
 matched filter 1,513 cycles a frame against the RTL's 1,408. The cause is in csynth's schedule: the
 execute task's decode loop is configuration-dependent -- II 13 and depth 23 in the CG build, II 12
@@ -119,7 +124,9 @@ counters meet the 3 % mean and 6 % worst targets.
 - **The union's width is a cost.** Formats whose integer and fraction bits spread widely build a wide
   datapath: integer bits 1 to 14 gave 28- by 21-bit multiplier inputs and 52-bit results, and a csynth past
   50 minutes.
-- **Decode is the largest share of a CG job's time** -- about 20 cycles a pass, some 1,760 of 3,359.
+- **Decode is the largest share of a CG job's time** -- about 16 cycles a pass (the fitted `decode`
+  coefficient; csynth's decode loop runs at II 13 in the CG build), 42 % of a 3,359-cycle job
+  ([the CG example's timing](../../../examples/vecunit_cg/timing.md)).
   A decode stage that runs ahead of execution, feeding run descriptors, would hide most of it; it is
   not built.
 - **The dividers' flip-flops.** A scalar run uses one pipelined divider a lane (II 2), about 33k FF

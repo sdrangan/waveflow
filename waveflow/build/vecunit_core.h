@@ -21,16 +21,18 @@ namespace wf_vec {
 // waveflow.vecunit.isa: Opcode, VOp, QOp, SOp, COp; waveflow.vecunit.config.Cap
 enum { OPC_V = 0x0B, OPC_Q = 0x2B, OPC_S = 0x5B, OPC_C = 0x7B };
 enum { V_MVI = 0, V_MV, V_ADD, V_SUB, V_MUL, V_MACC, V_NMSAC, V_MADD, V_MACC_S, V_NMSAC_S,
-       V_MADD_S, V_DOTR };
-enum { Q_VLSE = 0, Q_VSSE, Q_LD, Q_ST };
-enum { S_DIVZ = 0, S_MV };
-enum { C_SETVL = 0, C_QPOP, C_QPUSH };
+       V_MADD_S, V_DOTR, V_MUL_S, V_ADD_S, V_SUB_S, V_MVS };
+enum { Q_VLSE = 0, Q_VSSE, Q_LD, Q_ST };  // 4: reserved (a window read)
+enum { S_DIVZ = 0, S_MV, S_LI };
+enum { C_SETVL = 0, C_QPOP, C_QPUSH, C_SETRS };
 enum { CAP_MOVE = 1, CAP_MUL = 2, CAP_DOT = 4, CAP_LOAD = 8, CAP_STORE = 16 };
+// A scaled instruction's own result shift: imm2 bit 4 set, the shift in bits 0-3 (isa.RS_OVERRIDE).
+enum { RS_OVERRIDE = 16, RS_MASK = 15 };
 // What a slot does, once decoded; where an operand comes from; the two terms of R = X +- Y.
-enum { K_NONE = 0, K_ARITH, K_DOT, K_LOAD, K_STORE };
+enum { K_NONE = 0, K_ARITH, K_DOT, K_LOAD, K_STORE, K_MVS };
 enum { SRC_ZERO = 0, SRC_BANK, SRC_FWD, SRC_SCALAR, SRC_QUEUE };
 enum { X_ZERO = 0, X_C, X_A, X_IMM };
-enum { Y_ZERO = 0, Y_P, Y_B };
+enum { Y_ZERO = 0, Y_P, Y_B, Y_A };
 
 inline bool is_vector(const VecInstr& d) {
 #pragma HLS INLINE
@@ -40,6 +42,21 @@ inline bool is_vector(const VecInstr& d) {
 inline bool multiplying(int f) {
 #pragma HLS INLINE
     return f == V_MUL || f == V_MACC || f == V_NMSAC || f == V_MADD;
+}
+
+// The instructions whose product is scaled by 2^-RS (waveflow.vecunit.isa.SCALED).
+inline bool scaled(int f) {
+#pragma HLS INLINE
+    return (f >= V_MUL && f <= V_DOTR) || f == V_MUL_S;
+}
+
+// wf.sli's immediate: imm2:imm1, a signed 24-bit integer.
+inline ap_int<24> simm24(const VecInstr& d) {
+#pragma HLS INLINE
+    ap_uint<24> u;
+    u(11, 0) = ap_uint<12>(d.imm1);
+    u(23, 12) = ap_uint<12>(d.imm2);
+    return ap_int<24>(u);
 }
 
 inline bool in(int v, int n) {
@@ -55,12 +72,14 @@ int instr_status(const VecInstr& d) {
     const int BAD_OP = wf_linalg::BAD_OP, BAD_DIMS = wf_linalg::BAD_DIMS, OK = wf_linalg::OK;
     if (d.chain && !is_vector(d)) return BAD_OP;
     if (d.opcode == OPC_V) {
-        if (f > V_DOTR) return BAD_OP;
+        if (f > V_MVS) return BAD_OP;
         if ((d.conj || d.bcast) && !multiplying(f)) return BAD_OP;
+        if (scaled(f) && (i2 & RS_OVERRIDE) && (i2 & RS_MASK) > C::RSM) return BAD_DIMS;
         bool ok;
         if (f == V_MVI) ok = in(rd, C::NG);
         else if (f == V_MV) ok = in(rd, C::NG) && in(rs1, C::NG);
         else if (f == V_DOTR) ok = in(rd, C::NS) && in(rs1, C::NG) && in(rs2, C::NG);
+        else if (f == V_MVS) ok = in(rd, C::NS) && in(rs1, C::NG);
         else if (f >= V_MACC_S) ok = in(rd, C::NG) && in(rs1, C::NS) && in(rs2, C::NG);
         else ok = in(rd, C::NG) && in(rs1, C::NG) && in(rs2, C::NG);
         return ok ? OK : BAD_DIMS;
@@ -78,12 +97,18 @@ int instr_status(const VecInstr& d) {
     if (d.opcode == OPC_S) {
         if (f == S_DIVZ) return in(rd, C::NS) && in(rs1, C::NS) && in(rs2, C::NS) ? OK : BAD_DIMS;
         if (f == S_MV) return in(rd, C::NS) && in(rs1, C::NS) ? OK : BAD_DIMS;
+        if (f == S_LI) {
+            if (!in(rd, C::NS)) return BAD_DIMS;
+            const int v = simm24(d), w = C::swd(rd);  // the immediate fits the scalar's format
+            return (v >= -(1 << (w - 1)) && v < (1 << (w - 1))) ? OK : BAD_DIMS;
+        }
         return BAD_OP;
     }
     if (d.opcode == OPC_C) {
         if (f == C_SETVL) return i1 >= 1 && i1 <= C::VLMAX ? OK : BAD_DIMS;
         if (f == C_QPOP) return in(rs1, C::NQI) ? OK : BAD_DIMS;
         if (f == C_QPUSH) return in(rd, C::NQO) ? OK : BAD_DIMS;
+        if (f == C_SETRS) return i1 <= C::RSM ? OK : BAD_DIMS;
         return BAD_OP;
     }
     return BAD_OP;
@@ -94,7 +119,7 @@ inline int cap_of(const VecInstr& d) {
 #pragma HLS INLINE
     if (d.opcode == OPC_Q) return d.funct == Q_VLSE ? CAP_LOAD : CAP_STORE;
     if (d.funct <= V_SUB) return CAP_MOVE;
-    return d.funct == V_DOTR ? CAP_DOT : CAP_MUL;
+    return (d.funct == V_DOTR || d.funct == V_MVS) ? CAP_DOT : CAP_MUL;
 }
 
 // What an (in-range) execute vector instruction reads and writes (waveflow.vecunit.model.operands):
@@ -157,12 +182,24 @@ inline Ops operands(const VecInstr& d) {
         o.s = d.rs1;
         o.vw = true;
         o.wg = d.rd;
-    } else {  // DOTR
+    } else if (f == V_DOTR) {
         o.nv = 2;
         o.v[0] = d.rs1;
         o.v[1] = d.rs2;
         o.sw = true;
         o.ws = d.rd;
+    } else if (f == V_MVS) {  // element 0 into a scalar: a reduction's write
+        o.nv = 1;
+        o.v[0] = d.rs1;
+        o.sw = true;
+        o.ws = d.rd;
+    } else {  // MUL_S, ADD_S, SUB_S: vs2 with a scalar
+        o.nv = 1;
+        o.v[0] = d.rs2;
+        o.sr = true;
+        o.s = d.rs1;
+        o.vw = true;
+        o.wg = d.rd;
     }
     return o;
 }
@@ -253,13 +290,16 @@ int pass_status(const VecInstr d[C::S], int ns) {
 
 // A slot's decoded configuration: constant over its pass. Its datapath, per lane: one complex
 // multiplier P = A' * B (A' the vector a, conjugated or member 0 broadcast, or a real scalar), then
-// R = X +- Y with X in {0, c, a, imm} and Y in {0, P, b}, quantized to the destination's format.
+// R = X +- Y with X in {0, c, a, imm} and Y in {0, P 2^-rs, b, A'}, quantized to the destination's
+// format. A reduction sums P 2^-rs over the elements; wf.vmv.s.v keeps element 0's A'.
 struct Slot {
     ap_uint<3> kind;
     ap_uint<3> a_src, b_src, c_src;
     ap_uint<8> a_idx, b_idx, c_idx;  // a group (then a bank or an earlier slot), a queue or a scalar
     ap_uint<2> xsel, ysel;
     bool neg, conj, bcast;
+    bool rs_own;     // the instruction's own result shift, else wf.setrs's (the decode resolves it)
+    ap_uint<4> rs;
     ap_uint<8> dst;   // a group, an output queue or a scalar
     ap_uint<8> dfmt;  // the destination's format id
     ap_int<12> imm;
@@ -284,6 +324,8 @@ inline Slot slot_of(const VecInstr& d) {
     s.dfmt = 0;
     s.imm = ap_int<12>(d.imm1);
     const int f = d.funct;
+    s.rs_own = d.opcode == OPC_V && scaled(f) && (d.imm2 & RS_OVERRIDE);
+    s.rs = s.rs_own ? ap_uint<4>(d.imm2 & RS_MASK) : ap_uint<4>(0);
     if (d.opcode == OPC_Q) {
         s.ysel = Y_B;
         if (f == Q_VLSE) {  // vd = q_vd(the queue's element)
@@ -322,6 +364,17 @@ inline Slot slot_of(const VecInstr& d) {
     case V_MADD_S:  // vd = vd * s + vs2
         s.a_src = SRC_SCALAR; s.b_src = SRC_BANK; s.b_idx = d.rd; s.c_src = SRC_BANK;
         s.c_idx = d.rs2; s.xsel = X_C; s.ysel = Y_P;
+        break;
+    case V_MUL_S:  // vd = s * vs2
+        s.a_src = SRC_SCALAR; s.b_src = SRC_BANK; s.ysel = Y_P;
+        break;
+    case V_ADD_S:
+    case V_SUB_S:  // vd = vs2 +- s: the scalar is A', taken straight to the adder
+        s.a_src = SRC_SCALAR; s.c_src = SRC_BANK; s.c_idx = d.rs2; s.xsel = X_C; s.ysel = Y_A;
+        s.neg = f == V_SUB_S;
+        break;
+    case V_MVS:  // sd = q_sd(Re(vs1[0])): A' = vs1, held at element 0, delivered at the run's end
+        s.kind = K_MVS; s.a_src = SRC_BANK; s.conj = false; s.bcast = false;
         break;
     default:  // DOTR: sd = q_sd(sum Re(conj(vs1) vs2))
         s.kind = K_DOT; s.a_src = SRC_BANK; s.b_src = SRC_BANK; s.conj = true; s.bcast = false;

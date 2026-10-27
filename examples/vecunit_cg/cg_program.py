@@ -62,13 +62,15 @@ def scalars(g: int) -> tuple[int, int, int, int, int]:
 
 def cg_config(f: cg.CgFormats, *, Kmax: int = 8, Nmax: int = 32, L: int = 4,
               word_bits: int = 64) -> VecUnitConfig:
-    """A unit that runs CG on ``k x n`` jobs up to ``Kmax x Nmax``, with ``f``'s formats."""
+    """A unit that runs CG on ``k x n`` jobs up to ``Kmax x Nmax``, with ``f``'s formats.  Built
+    without the result shift (``rs_max = 0``): CG's program does not use it, and the build stays
+    the one the timing and resource models were calibrated on."""
     ng = -(-Nmax // L)
     return VecUnitConfig(
         group_formats=(f.X, f.R, f.P, f.S) * ng,
         scalar_formats=(f.ps, f.alpha, f.beta, f.rz, f.rz) * ng,
         in_queue_formats=(f.B, f.S), out_queue_formats=(f.P, f.X),
-        L=L, VLMAX=Kmax, Kmax=Kmax, Nmax=Nmax, NB=4, g_div=f.g_div, word_bits=word_bits)
+        L=L, VLMAX=Kmax, Kmax=Kmax, Nmax=Nmax, NB=4, g_div=f.g_div, rs_max=0, word_bits=word_bits)
 
 
 def cg_programs(cfg: VecUnitConfig, nit: int, k: int, n: int, *, skip_dead: bool = True,

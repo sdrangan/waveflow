@@ -20,7 +20,9 @@ summary: "The vector unit's instruction set (Xwfvec): one 64-bit word an instruc
 | 14 | `conj` | `conj(vs1)` in place of `vs1` (the multiplying instructions) |
 | 15 | `bcast` | member 0 of `vs1` for every lane (`.vb` in place of `.vv`) |
 | 23:16, 31:24, 39:32 | `rd`, `rs1`, `rs2` | registers, scalars, queues or ports |
-| 51:40, 63:52 | `imm1`, `imm2` | `VL`, `k`, `n`, a column group, a stride, an immediate |
+| 51:40, 63:52 | `imm1`, `imm2` | `VL`, `k`, `n`, a column group, a stride, an immediate; in a multiplying instruction, `imm2` bit 4 set means its own result shift, in bits 3:0 |
+
+The queue class uses `funct` 0-3; 4 is reserved for a window read (`plans/vecunit_future.md`).
 
 ## The instructions
 
@@ -36,12 +38,17 @@ Per member `l < L` and element `i < VL` (`q_d` quantizes to `d`'s format):
 | `vmadd.vv vd, vs1, vs2` | `vd = q_vd(vd · vs1 + vs2)` | `MUL` |
 | `wf.vmacc.vs` / `wf.vnmsac.vs vd, s, vs2` | `vd = q_vd(vd ± s[l] · vs2)`, a real scalar | `MUL` |
 | `wf.vmadd.vs vd, s, vs2` | `vd = q_vd(vd · s[l] + vs2)` | `MUL` |
+| `wf.vmul.vs vd, s, vs2` | `vd = q_vd(s[l] · vs2)` | `MUL` |
+| `wf.vadd.vs` / `wf.vsub.vs vd, s, vs2` | `vd = q_vd(vs2 ± s[l])`, the scalar on the real part | `MUL` |
 | `wf.vdotr sd, vs1, vs2` | `sd[l] = q_sd(Σ_i Re(conj(vs1) · vs2))`, delivered at the end of its pass | `DOT` |
+| `wf.vmv.s.v sd, vs1` | `sd[l] = q_sd(Re(vs1[l][0]))`, delivered at the end of its pass | `DOT` |
 | `wf.vlse vd, q, g, stride` | `vd[l][i] = q_vd(B[i][g·L + l])` of input queue `q`'s head block | `LOAD` |
 | `wf.vsse q, vs, g, stride` | column group `g` of output queue `q`'s tail block `= q_q(vs)` | `STORE` |
 | `wf.sdivz sd, sa, sb` | `sd = sb == 0 ? 0 : q_sd(w(sa) / sb)` | scalar |
 | `wf.smv sd, sa` | `sd = q_sd(sa)` | scalar |
+| `wf.sli sd, imm` | `sd[l] = imm`, a signed 24-bit stored integer of `sd`'s format (it must fit) | scalar |
 | `wf.setvl k` | `VL = k` | control |
+| `wf.setrs k` | `RS = k`, the result shift of every multiplying instruction without its own (`k ≤ rs_max`) | control |
 | `wf.qpop q` / `wf.qpush q` | release input queue `q`'s head block / commit output queue `q`'s tail block | control |
 | `wf.ld q, port, k, n` | (load program) the next `k × n` burst on `port` into queue `q` | -- |
 | `wf.st port, q, tag, k, n` | (store program) queue `q`'s next block onto `port`, headed by `VecResp(tx_id, tag, k, n)` | -- |
@@ -53,6 +60,12 @@ straight-line, one job at a time.
 
 `wf.sdivz` widens its dividend by `g_div` fraction bits first (exact) and returns 0 for a zero
 divisor; the quotient then quantizes to the destination scalar's format.
+
+**The result shift.** Every multiplying instruction -- `vmul`, `vmacc`, `vnmsac`, `vmadd`, their `.vs`
+forms, `wf.vmul.vs` and `wf.vdotr` -- scales its product by `2^−RS` before its one rounding:
+`vd = q_vd(vd + vs1·vs2·2^−RS)`, exact before the rounding. `RS` is the instruction's own shift when
+it has one (written `, rs=k` after the operands), else the last `wf.setrs`'s, 0 at a job's start. An
+add, a move or a load is never scaled.
 
 ## Passes and the chaining rule
 
@@ -78,3 +91,13 @@ either: a later pass of a run writes a group only after an earlier pass has read
 pipeline's depth later. The rule is one definition, `waveflow.vecunit.model.exec_items`, which pysim's
 timing uses and the HLS decode mirrors. A program groups independent work to make long runs: CG's
 program does its eight column groups' passes kind by kind.
+
+**Dependent passes.** A unit built with `fuse_raw_vl` > 0 also lets a run hold a pass that reads a
+group an earlier pass of the run writes, when `VL ≥ fuse_raw_vl`. Pass `p+1` reads element `i`
+about `VL` cycles after pass `p` read it, and pass `p` writes element `i` a pipeline depth after
+reading it, so with `VL` at least the depth the value is in the register file before it is read. So
+`fuse_raw_vl` must be at least the fused loop's depth in the built hardware: the RTL gate
+`tests/vecunit/test_unit_xsi.py::test_xsi_toy_unit_fused_dependent_passes` builds a unit with
+`fuse_raw_vl` 64, runs dependent passes fused, and checks csynth's depth is below it. A scalar read
+still ends a run, since a reduction delivers at the run's end. `fuse_raw_vl = 0` (the default) turns
+it off.
