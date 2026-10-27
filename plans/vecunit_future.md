@@ -1,13 +1,61 @@
-# Vector unit: planned changes, batched
+# Vector unit: finishing for the CG paper, and what comes later
 
-Changes to `waveflow/vecunit/` collected so they can be made together: the slow gates (csynth, the
-XSI RTL runs, on Vitis / Vivado 2025.1 on this machine) then run once for the whole batch rather
-than once a change. Each item says what changes, why, where, and which tests it needs:
-**fast** (`pytest -m "not vitis and not xsi and not gem5"`), **csynth** (`-m vitis`), or **XSI**
-(`-m xsi`, `tests/vecunit/test_unit_xsi.py` and the examples' gates).
+**The scope (decided 2026-10-27).** Finish the unit for the CG paper and keep it simple: no new
+architecture until an application needs it. Every further feature waits, and comes as a **build
+option that costs nothing when it is off** (as `rs_max = 0` and `fuse_raw_vl = 0` do today), so the
+CG build pays only for what CG uses. The risk this guards against: a "mini" processing unit grows an
+instruction at a time into a full processor, with all the work and none of the saving of a
+specialized block. Everything lands in PR #302 unless it breaks something.
 
-Status: a first batch implemented on branch `vecunit-batch` (2026-10-27, local, not pushed); see
-*Batch status* below.
+Each item says what changes, why, where, and which tests it needs: **fast**
+(`pytest -m "not vitis and not xsi and not gem5"`), **csynth** (`-m vitis`), or **XSI** (`-m xsi`,
+`tests/vecunit/test_unit_xsi.py` and the examples' gates). Measurements from here on are taken with
+Vitis / Vivado **2025.1**, and every number names its tool version.
+
+## For the CG paper (now)
+
+1. **Every number at 2025.1.** CG on the vector unit and on `CgVectorUnit` (the comparison
+   baseline, which so far has no committed record) re-measured at 2025.1: the `steady` workload, four
+   `8 × 32` solves of three iterations, formats `W12g8`; cycles a job and csynth's resources, both
+   committed with their tool version. *Running, 2026-10-27.*
+2. **pysim's accuracy at 2025.1.** pysim runs about 10 % fast against the 2025.1 builds (their decode
+   loop is at II 20, the 2024.1 CG build's at 13). Either recalibrate the timing at 2025.1 (the
+   pre-registered fit and held-out sets of `waveflow/vecunit/calib.py`, re-run) or state the error
+   wherever the paper quotes pysim.
+3. **The review's remaining items.** R1 / R2 (load and store errors reported: a decision, below) --
+   or deferred, if the paper does not rest on error handling. R7 (the Stage 7 held-out score
+   re-scored on the current code).
+4. **Docs.** `hardware.md` and `timing.md` rewritten for the reader the rest of the section is
+   written for (the other pages are done: theory, architecture, program examples, construct, ISA,
+   programming, interface).
+5. **Merge PR #302** with all of the above.
+
+## Later, each as a build option that costs nothing when off
+
+Not before an application asks for it. Each item's record, where it has one, is below.
+
+- **F3, real lanes** -- or the cheaper **packed real** forms on today's complex lanes (two real
+  products a lane a cycle, mostly decode and result muxes): real × real at 2× (packed) or 4× (F3).
+  Decided: complex × complex as two instructions (Arm's `FCMLA` way), unless it costs much more;
+  open: whether real-valued work is a priority, which picks between the two.
+- **F5, long vectors**: a large `VLMAX` (a configuration, to measure), runs that continue across
+  blocks, or cutting the per-run overhead.
+- **Optional or shared dividers** (F8): a build switch to drop them for applications that never
+  divide (the matched filter, the toy kernels), or one shared, time-multiplexed divider -- about 15k LUT
+  and 33k FF at `L` 4 in the CG build.
+- **`slot_caps` per application**: most passes multiply at most once (the matched filter, `cmul`,
+  `gain`); CG's update multiplies in all three slots. A mask with only the middle slot multiplying
+  suits the streaming kernels (21 DSPs against 53 at `L` 4).
+- **A scalar-add path** outside the multiplier, so `wf.vadd.vs` / `wf.vsub.vs` need no multiplying
+  slot.
+- **A build switch for F2** (the scalar extensions), so a build without them carries none of their
+  decode.
+- **A decoder that runs ahead of execution**, feeding run descriptors: decoding a pass is about 16
+  cycles, 42 % of a CG job. The one CG-specific speed-up, and real work.
+- **FIR (PR #300)**: kept possible (below).
+
+How many of these the CG paper needs: none. CG runs a steady `8 × 32` job in 3,359 cycles against
+`CgVectorUnit`'s 3,581 (2024.1; item 1 above re-measures both).
 
 ## Batch status (2026-10-27)
 
@@ -62,7 +110,9 @@ DSP `= 4 · n_mul · L + 5` = 53 (exact); BRAM18 36 (exact). The device has abou
 LUTs: the multipliers are about 1 % of it, the LUTs about 19 %. **LUTs are the budget**: the
 forwarding multiplexers and the dividers above all.
 
-## Planned (from reading the docs)
+## Item records
+
+The detailed record of each item, done or deferred: what, why, where, cost, tests and decisions.
 
 ### F1. Queue and port names in the assembly text say which side they are on
 
@@ -244,15 +294,17 @@ back near 15k. FF grows the same way (the dividers' about 33k FF in the baseline
 
 **Tests.** Everything: fast, csynth, XSI, and new calibration runs.
 
-**Decisions (open).**
+**Decisions.**
 
-1. Complex × complex: two phases (a) or two instructions (b)?
-2. Is real data a first-class target? Mostly complex workloads (CG, the matched filter, MIMO) gain 2×
-   on complex × real and 4× on real data; real-valued kernels (an FIR on real samples, power and
-   magnitude, features) gain more.
-3. Scope: this batch, or a v2 after the current PR merges with F1, F2 and the review fixes? Suggested:
-   merge the current unit first, then plan the real-lane unit as its own staged plan in `plans/`, as
-   `vecunit_new.md` was; F2's scalar instructions carry over to it.
+1. Complex × complex: **two instructions (b)**, Arm's `FCMLA` way, unless it costs much more
+   (decided 2026-10-27). It costs no more hardware by itself; but a complex multiply then takes two
+   slots, so "read, multiply, write" needs `S` = 4 or two passes, and a fourth slot grows the
+   `S²·L` multiplexers by about 16/9. Measure `S` = 3 against 4 when it is built.
+2. **Open:** is real data a first-class target? If it is, F3 (real lanes: real × real 4×, complex ×
+   real 2×, about 2× the LUTs, a rebuild). If complex stays first, **packed real** forms on today's
+   complex lanes instead (a lane's four products written apart: real × real 2×, complex × real
+   vector, mostly decode and result muxes, perhaps a few thousand LUTs).
+3. Scope: **later**, as a build option (decided 2026-10-27, with the scope above: finish CG first).
 
 ### F4. A run-time result shift: `wf.setrs`
 
@@ -551,22 +603,14 @@ range check overflowed an `int` at a 32-bit scalar -- fixed in that commit. Not 
 counts of CG and the matched filter at 2025.1, and the timing recalibration the decode loop's II 20
 (against 13 at 2024.1) calls for.
 
-## Docs follow-ups (no unit change)
+## Docs record
 
-- ~~`docs/guide/dsp/vecunit/program_examples.md`: show only assembly; check each listing with a
-  small test instead of Python fences on the page.~~ Done (2026-10-26): `tests/docs/test_vecunit_listings.py`.
-  F1 changes the listings' text: regenerate them with it.
-- Rewrite `isa.md`, `programming.md`, `hardware.md` and `timing.md` (today the old `vecunit.md`'s
-  sections, split).
+- `program_examples.md`: assembly only, each listing checked by `tests/docs/test_vecunit_listings.py`
+  (2026-10-26); examples 2-8 (2026-10-27).
+- `isa.md` rewritten (how to read the tables, `q_d` worked, instructions by kind); `construct.md`,
+  `interface.md` new and `programming.md` rewritten (2026-10-27).
+- Open: `hardware.md`, `timing.md` (see *For the CG paper*).
 
-## Ideas, not planned
-
-- **Build-time switches to drop unused features** (not this pass): once the batch's csynth numbers
-  show what each feature costs, a `VecUnitConfig` parameter per expensive one -- the scalar
-  extensions (F2), the complex pair forms (F3), the dividers, the broadcast and conjugate forms -- so
-  a unit built for one application pays only for what its programs use. `slot_caps` is the existing
-  model for this: a slot without `MUL` is built without a multiplier, and the assembler refuses a
-  program that needs one.
-
-- **A decoder that runs ahead of execution**, feeding run descriptors, so decoding a pass (about 16
-  cycles, the largest share of a CG job) overlaps the datapath. In `timing.md`'s limits.
+The build-switch principle, which *Later* applies: `slot_caps` is the model -- a slot without `MUL`
+is built without a multiplier, and the assembler refuses a program that needs one. Each switch should
+work the same way: off, the hardware is not built and the assembler refuses the instructions.
