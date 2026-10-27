@@ -17,6 +17,13 @@ them -- the unit knows nothing about any application.
   passes into one pipelined loop, and up to ``max_srun`` consecutive independent scalar instructions
   into another (:func:`waveflow.vecunit.model.exec_items`; Stage 6).
 * **Divides.** ``wf.sdivz`` widens its dividend by ``g_div`` fraction bits first.
+* **Result shift.** A scaled instruction's product is scaled by ``2**-RS`` before its one rounding,
+  ``0 <= RS <= rs_max`` (``wf.setrs``, or the instruction's own field; ``plans/vecunit_future.md``
+  F4).  The datapath carries ``rs_max`` more fraction bits; ``rs_max = 0`` builds it as before.
+* **Dependent fusion.** With ``fuse_raw_vl > 0`` a run may hold a pass that reads a group an earlier
+  pass of the run writes, when ``VL >= fuse_raw_vl``: the earlier pass has written each element
+  before the later one reads it, so ``fuse_raw_vl`` must be at least the run loop's read-to-write
+  distance (its depth in csynth's schedule).  ``0`` (the default): such a pass starts a new run (F7).
 * **Ports.** ``n_in_ports`` input and ``n_out_ports`` output streams of ``word_bits``-bit words, each
   value a memory element ``lane_bits`` wide (:func:`waveflow.linalg.formats.mem_format`).
 """
@@ -40,8 +47,9 @@ class Cap(IntFlag):
     """Operation classes a slot may have hardware for."""
 
     MOVE = 1  # vmv.v.i, vmv.v.v, vadd.vv, vsub.vv: no multiplier
-    MUL = 2  # vmul, vmacc, vnmsac, vmadd and their .vs, conjugate and broadcast forms
-    DOT = 4  # wf.vdotr
+    MUL = 2  # vmul, vmacc, vnmsac, vmadd and their .vs, conjugate and broadcast forms; wf.vmul.vs,
+    #          and wf.vadd.vs / wf.vsub.vs (the scalar enters through the multiplier's operand path)
+    DOT = 4  # wf.vdotr, wf.vmv.s.v (the accumulator delivers it)
     LOAD = 8  # wf.vlse
     STORE = 16  # wf.vsse
     ALL = 31
@@ -65,6 +73,8 @@ class VecUnitConfig:
     g_div: int = 0
     max_run: int = 8
     max_srun: int = 8
+    rs_max: int = 15
+    fuse_raw_vl: int = 0
     word_bits: int = 64
     lane_bits: int = DEFAULT_LANE_BITS
     n_in_ports: int = 1
@@ -92,6 +102,20 @@ class VecUnitConfig:
             problems.append(f"NB = {NB} banks must divide NG = {self.NG}")
         if self.S < 1 or len(self.slot_caps) != self.S:
             problems.append(f"S = {self.S} slots, but {len(self.slot_caps)} slot_caps")
+        # The generated body's narrow fields (waveflow/vecunit/hls.py): a slot index is 2 bits, a
+        # queue pointer 12, a bank's base 16.
+        if self.S > 4:
+            problems.append(f"S = {self.S} slots: at most 4 (a slot index is 2 bits)")
+        if self.Kmax * self.NGQ > 4096:
+            problems.append(f"Kmax * ceil(Nmax / L) = {self.Kmax * self.NGQ} lane groups a block: "
+                            "at most 4096 (a queue pointer is 12 bits)")
+        if NB >= 1 and self.NG // NB * self.VLMAX > 65536:
+            problems.append(f"(NG / NB) * VLMAX = {self.NG // NB * self.VLMAX} entries a bank: at "
+                            "most 65536 (a bank's base is 16 bits)")
+        if not 0 <= self.rs_max < 16:
+            problems.append(f"rs_max = {self.rs_max} is not in 0..15 (a 4-bit result shift)")
+        if self.fuse_raw_vl < 0:
+            problems.append(f"fuse_raw_vl = {self.fuse_raw_vl} is negative")
         if any(not 0 < int(c) <= int(Cap.ALL) for c in self.slot_caps):
             problems.append(f"slot_caps {self.slot_caps}: each a nonzero Cap mask")
         if self.g_div < 0:

@@ -38,6 +38,7 @@ from waveflow.utils.fixputils import Format
 from waveflow.vecunit.config import Cap, VecUnitConfig
 from waveflow.vecunit.isa import (
     MULTIPLYING,
+    SCALED,
     COp,
     Instr,
     Opcode,
@@ -182,6 +183,12 @@ def _widened(f: Format, bits: int) -> Format:
     return Format(f.W + bits, f.int_bits, True)
 
 
+def _scaled(f: Format, rs: int) -> Format:
+    """The format whose stored integers are *f*'s times ``2**-rs``: the same integers, ``rs`` more
+    fraction bits -- the result shift, exact (F4)."""
+    return f if not rs else _by_id_n(_widened, f, int(rs))
+
+
 class ProgramError(Exception):
     """A program that the hardware would run but whose result is undefined (a read of a register or
     a lane group never written, a queue read while empty): the assembler refuses these."""
@@ -228,13 +235,17 @@ def instr_status(x: Instr, cfg: VecUnitConfig) -> Status:
         v = VOp(f)
         if (x.conj or x.bcast) and v not in MULTIPLYING:
             return Status.BAD_OP
+        if v in SCALED and x.rs_field is not None and x.rs_field > cfg.rs_max:
+            return Status.BAD_DIMS
         if v == VOp.MVI:
             return _ranges((x.rd, cfg.NG))
         if v == VOp.MV:
             return _ranges((x.rd, cfg.NG), (x.rs1, cfg.NG))
         if v == VOp.DOTR:
             return _ranges((x.rd, cfg.NS), (x.rs1, cfg.NG), (x.rs2, cfg.NG))
-        if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S):
+        if v == VOp.MVS:
+            return _ranges((x.rd, cfg.NS), (x.rs1, cfg.NG))
+        if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S, VOp.MUL_S, VOp.ADD_S, VOp.SUB_S):
             return _ranges((x.rd, cfg.NG), (x.rs1, cfg.NS), (x.rs2, cfg.NG))
         return _ranges((x.rd, cfg.NG), (x.rs1, cfg.NG), (x.rs2, cfg.NG))
     if x.conj or x.bcast:
@@ -252,6 +263,11 @@ def instr_status(x: Instr, cfg: VecUnitConfig) -> Status:
             return _ranges((x.rd, cfg.NS), (x.rs1, cfg.NS), (x.rs2, cfg.NS))
         if f == SOp.MV:
             return _ranges((x.rd, cfg.NS), (x.rs1, cfg.NS))
+        if f == SOp.LI:
+            if _ranges((x.rd, cfg.NS)) != Status.OK:
+                return Status.BAD_DIMS
+            W = cfg.scalar_formats[x.rd].W
+            return Status.OK if -(1 << (W - 1)) <= x.simm24 < (1 << (W - 1)) else Status.BAD_DIMS
         return Status.BAD_OP
     if op == Opcode.CTRL:
         if f == COp.SETVL:
@@ -260,6 +276,8 @@ def instr_status(x: Instr, cfg: VecUnitConfig) -> Status:
             return _ranges((x.rs1, cfg.NQI))
         if f == COp.QPUSH:
             return _ranges((x.rd, cfg.NQO))
+        if f == COp.SETRS:
+            return Status.OK if 0 <= x.imm1 <= cfg.rs_max else Status.BAD_DIMS
         return Status.BAD_OP
     return Status.BAD_OP
 
@@ -275,7 +293,7 @@ def cap_of(x: Instr) -> Cap:
     v = VOp(int(x.funct))
     if v in (VOp.MVI, VOp.MV, VOp.ADD, VOp.SUB):
         return Cap.MOVE
-    return Cap.DOT if v == VOp.DOTR else Cap.MUL
+    return Cap.DOT if v in (VOp.DOTR, VOp.MVS) else Cap.MUL
 
 
 @dataclass(frozen=True)
@@ -305,13 +323,18 @@ def operands(x: Instr) -> Operands:
             return Operands(vreads=(x.rd, x.rs1, x.rs2), vwrite=x.rd)
         if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S):
             return Operands(vreads=(x.rd, x.rs2), sreads=(x.rs1,), vwrite=x.rd)
+        if v in (VOp.MUL_S, VOp.ADD_S, VOp.SUB_S):
+            return Operands(vreads=(x.rs2,), sreads=(x.rs1,), vwrite=x.rd)
+        if v == VOp.MVS:
+            return Operands(vreads=(x.rs1,), swrite=x.rd)
         return Operands(vreads=(x.rs1, x.rs2), swrite=x.rd)  # DOTR
     if op == Opcode.QUEUE:
         if f == QOp.VLSE:
             return Operands(vwrite=x.rd, qread=x.rs1)
         return Operands(vreads=(x.rs1,), qwrite=x.rd)  # VSSE
     if op == Opcode.SCALAR:
-        return Operands(sreads=(x.rs1, x.rs2) if f == SOp.DIVZ else (x.rs1,), swrite=x.rd)
+        reads = {SOp.DIVZ: (x.rs1, x.rs2), SOp.LI: ()}.get(SOp(f), (x.rs1,))
+        return Operands(sreads=reads, swrite=x.rd)
     return Operands()
 
 
@@ -425,15 +448,21 @@ def exec_items(prog: list[Instr], cfg: VecUnitConfig, *, cut: bool = False) -> l
     fewer than ``max_run``); consecutive scalar instructions fused while each reads no scalar an
     earlier one writes (fewer than ``max_srun``).  Any other instruction ends a run.  Fusion changes
     no result: a fused run is serial execution with the pipeline filled once (a later pass writes a
-    group only after an earlier one has read it, ``VL`` plus the depth later).  ``cut``: the program
-    burst's framing failed after ``prog`` (:func:`program_prefix`): the job then stops with
-    ``BAD_LENGTH``, after the items gathered before it."""
+    group only after an earlier one has read it, ``VL`` plus the depth later).  With
+    ``cfg.fuse_raw_vl`` set and ``VL >= cfg.fuse_raw_vl``, a pass may also read a group an earlier
+    pass of the run writes: the earlier pass has written each element before the later one reads it
+    (``plans/vecunit_future.md`` F7); a scalar read still ends the run, since a reduction delivers at
+    the run's end.  ``cut``: the program burst's framing failed after ``prog``
+    (:func:`program_prefix`): the job then stops with ``BAD_LENGTH``, after the items gathered before
+    it."""
     items: list[Item] = []
     run: list[tuple] = []
     wg: set[int] = set()
     ws: set[int] = set()
     srun: list[tuple] = []
     sw: set[int] = set()
+    vl = int(cfg.VLMAX)
+    raw_vl = int(cfg.fuse_raw_vl)
 
     def flush() -> None:
         nonlocal run, srun, wg, ws, sw
@@ -466,7 +495,8 @@ def exec_items(prog: list[Instr], cfg: VecUnitConfig, *, cut: bool = False) -> l
                     writes_g.add(o.vwrite)
                 if o.swrite is not None:
                     writes_s.add(o.swrite)
-            if run and (len(run) == cfg.max_run or reads_g & wg or reads_s & ws):
+            raw_ok = raw_vl > 0 and vl >= raw_vl
+            if run and (len(run) == cfg.max_run or (reads_g & wg and not raw_ok) or reads_s & ws):
                 flush()
             run.append(tuple(chain))
             wg |= writes_g
@@ -482,6 +512,8 @@ def exec_items(prog: list[Instr], cfg: VecUnitConfig, *, cut: bool = False) -> l
         else:
             flush()
             items.append(Item("control", (tuple(chain),)))
+            if int(x.funct) == COp.SETVL:
+                vl = int(x.imm1)
     flush()
     if cut:
         items.append(Item("error", (), int(Status.BAD_LENGTH)))
@@ -546,6 +578,7 @@ class Machine:
         self.s = np.zeros((NS, L), np.int64)
         self.sset = np.zeros(NS, bool)
         self.vl = int(cfg.VLMAX)
+        self.rs = 0  # the result shift wf.setrs set
         self.inq: list[deque] = [deque() for _ in range(cfg.NQI)]
         self.outq: list[deque] = [deque() for _ in range(cfg.NQO)]
         self.head: list[Block | None] = [None] * cfg.NQI
@@ -631,17 +664,27 @@ class Machine:
             fn = _add if v == VOp.ADD else _sub
             (rr, fr), (ri, fi) = fn(a_r, fa, b_r, fb), fn(a_i, fa, b_i, fb)
             self._vwrite(x.rd, sl, rr, fr, ri, fi)
+        elif v in (VOp.ADD_S, VOp.SUB_S):  # vs2 +- s, the scalar on the real part
+            b_r, b_i, fb = self._vread(x.rs2, sl)
+            sv, fs = self._sread(x.rs1)
+            rr, fr = (_add if v == VOp.ADD_S else _sub)(b_r, fb, sv, fs)
+            self._vwrite(x.rd, sl, rr, fr, b_i, fb)
+        elif v == VOp.MVS:  # element 0's real part, delivered at the end of the pass
+            if sl.start == 0:
+                re, _im, fv = self._vread(x.rs1, slice(0, 1))
+                acc[x.rd] = (re[:, 0].copy(), fv)
         elif v == VOp.DOTR:
             a_r, a_i, fa = self._vread(x.rs1, sl)
             b_r, b_i, fb = self._vread(x.rs2, sl)
             (pr, fp), (pi, _) = _mul(a_r, fa, b_r, fb), _mul(a_i, fa, b_i, fb)
             term, ft = _add(pr, fp, pi, fp)  # Re(conj(a) b), exact
+            ft = _scaled(ft, self._rs(x))
             part = term.sum(axis=1)  # over the elements: an integer sum
             prev = acc.get(x.rd)
             acc[x.rd] = (part if prev is None else prev[0] + part,
                          _by_id_n(_sum_format, ft, int(cfg.VLMAX)))
         else:
-            if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S):
+            if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S, VOp.MUL_S):
                 sv, fs = self._sread(x.rs1)
                 a = (sv, np.zeros_like(sv), fs)
             else:
@@ -653,14 +696,22 @@ class Machine:
             if v in (VOp.MADD, VOp.MADD_S):  # vd * a + vs2
                 b, c = self._vread(x.rd, sl), self._vread(x.rs2, sl)
             else:  # a * vs2 (+- vd)
-                b, c = self._vread(x.rs2, sl), self._vread(x.rd, sl) if v != VOp.MUL else None
+                b = self._vread(x.rs2, sl)
+                c = None if v in (VOp.MUL, VOp.MUL_S) else self._vread(x.rd, sl)
             (pr, fpr), (pi, fpi) = _cmul(a, b, conj=bool(x.conj))
+            rs = self._rs(x)
+            fpr, fpi = _scaled(fpr, rs), _scaled(fpi, rs)
             if c is None:
                 self._vwrite(x.rd, sl, pr, fpr, pi, fpi)
             else:
                 fn = _sub if v in (VOp.NMSAC, VOp.NMSAC_S) else _add
                 (rr, fr), (ri, fi) = fn(c[0], c[2], pr, fpr), fn(c[1], c[2], pi, fpi)
                 self._vwrite(x.rd, sl, rr, fr, ri, fi)
+
+    def _rs(self, x: Instr) -> int:
+        """A scaled instruction's result shift: its own, else ``wf.setrs``'s."""
+        own = x.rs_field
+        return self.rs if own is None else own
 
     def deliver(self, acc: dict) -> None:
         """A pass's reductions, delivered at its end: each quantized once to its scalar."""
@@ -671,6 +722,10 @@ class Machine:
 
     def scalar(self, x: Instr) -> None:
         cfg = self.cfg
+        if int(x.funct) == SOp.LI:  # every lane, the immediate (instr_status: it fits the format)
+            self.s[x.rd] = x.simm24
+            self.sset[x.rd] = True
+            return
         a, fa = self._sread(x.rs1)
         fd = cfg.scalar_formats[x.rd]
         if int(x.funct) == SOp.DIVZ:
@@ -686,6 +741,8 @@ class Machine:
         f = int(x.funct)
         if f == COp.SETVL:
             self.vl = int(x.imm1)
+        elif f == COp.SETRS:
+            self.rs = int(x.imm1)
         elif f == COp.QPOP:  # release the head block (taking it first if it was not taken)
             self._head(x.rs1)
             self.head[x.rs1] = None

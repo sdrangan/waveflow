@@ -14,7 +14,13 @@ job with any:
   stride that is not the block's layout (``ceil(n / L)`` lane groups a row), a block pushed with lane
   groups never written, or one whose store instruction reads it at another shape;
 * **queue balance** between the programs: per input queue, as many ``wf.qpop`` as ``wf.ld``; per
-  output queue, as many ``wf.qpush`` as ``wf.st``; no block held when the job ends.
+  output queue, as many ``wf.qpush`` as ``wf.st``; no block held when the job ends;
+* **deadlock** (:func:`schedule_problems`): the three programs run against queues of two blocks,
+  a task waiting when the block it needs is not there or the queue it fills is full; if they cannot
+  all finish, every task's waiting instruction is named.
+
+A job can also be written as **one program** in the order it would run sequentially -- loads,
+computation, stores -- and :func:`split` gives the three (``plans/vecunit_future.md`` F6).
 
 Each program serializes as one framed burst: a :class:`~waveflow.vecunit.isa.VecJob` word, then its
 instruction words.
@@ -28,7 +34,7 @@ import numpy as np
 
 from waveflow.linalg.message import Status
 from waveflow.vecunit.config import VecUnitConfig
-from waveflow.vecunit.isa import COp, Instr, Opcode, VecJob
+from waveflow.vecunit.isa import COp, Instr, Opcode, QOp, VecJob
 from waveflow.vecunit.model import (
     instr_status,
     load_status,
@@ -81,7 +87,134 @@ def check(cfg: VecUnitConfig, progs: Programs) -> list[str]:
     for name, prog in zip(PROGRAMS, progs):
         if len(prog) >= 1 << 16:
             out.append(f"the {name} program has {len(prog)} instructions; a VecJob counts 65,535")
+    if not out:  # a job whose programs are each well formed: can the three run together?
+        out += schedule_problems(cfg, progs)
     return out
+
+
+def _is(x: Instr, opcode: int, funct: int) -> bool:
+    return int(x.opcode) == opcode and int(x.funct) == funct
+
+
+def split(prog: list[Instr]) -> Programs:
+    """One program, written in the order it would run sequentially, as the three tasks take it: its
+    ``wf.ld`` instructions the load program, its ``wf.st`` the store program, the rest the execute
+    program, each in its order.  Programs are straight-line and each instruction belongs to one task
+    by its opcode, so the split is exact; the queues carry the order between them (a load's block is
+    the next one of its queue, a store's the next one pushed)."""
+    return Programs(load=[x for x in prog if _is(x, Opcode.QUEUE, QOp.LD)],
+                    execute=[x for x in prog if not (_is(x, Opcode.QUEUE, QOp.LD)
+                                                     or _is(x, Opcode.QUEUE, QOp.ST))],
+                    store=[x for x in prog if _is(x, Opcode.QUEUE, QOp.ST)])
+
+
+#: Blocks a queue holds (``StreamOfBlocksIF(depth=2)``, the RTL's ping-pong).
+QUEUE_DEPTH = 2
+
+
+def schedule_problems(cfg: VecUnitConfig, progs: Programs) -> list[str]:
+    """Whether the three programs can run to their ends together, on queues of
+    :data:`QUEUE_DEPTH` blocks: empty if they can, else what each task waits on when none can move.
+
+    The tasks are run one step at a time, any task that can move moving: the load task's next
+    ``wf.ld`` when its queue has a free block; the execute task's next pass when each queue block it
+    takes is there (an input block loaded, an output block free), its next ``wf.qpop`` / ``wf.qpush``
+    likewise; the store task's next ``wf.st`` when a block was pushed.  The order does not matter:
+    each queue has one producer and one consumer, and a task able to move stays able until it does,
+    so if any order finishes every order does (``tests/vecunit/test_asm.py`` checks this against
+    every interleaving of small jobs).  An input word is taken to be there when the load task asks."""
+    from waveflow.vecunit.model import operands, split_passes
+
+    passes = split_passes(progs.execute, cfg.S)
+    avail = [0] * cfg.NQI  # loaded blocks not yet taken
+    head = [False] * cfg.NQI  # the execute task holds one
+    pushed = [0] * cfg.NQO  # committed blocks not yet stored
+    tail = [False] * cfg.NQO
+    pc = {"load": 0, "execute": 0, "store": 0}
+
+    def take_in(q: int, apply: bool) -> bool:
+        if head[q]:
+            return True
+        if avail[q] < 1:
+            return False
+        if apply:
+            avail[q] -= 1
+            head[q] = True
+        return True
+
+    def take_out(q: int, apply: bool) -> bool:
+        if tail[q]:
+            return True
+        if pushed[q] + 1 > QUEUE_DEPTH:
+            return False
+        if apply:
+            tail[q] = True
+        return True
+
+    def step_execute(apply: bool) -> bool:
+        chain = passes[pc["execute"]]
+        x = chain[0]
+        if x.vector:
+            qs = [(operands(y).qread, operands(y).qwrite) for y in chain]
+            if not all((qr is None or take_in(qr, False)) and (qw is None or take_out(qw, False))
+                       for qr, qw in qs):
+                return False
+            if apply:
+                for qr, qw in qs:
+                    if qr is not None:
+                        take_in(qr, True)
+                    if qw is not None:
+                        take_out(qw, True)
+            return True
+        if _is(x, Opcode.CTRL, COp.QPOP):
+            if not take_in(x.rs1, apply):
+                return False
+            if apply:
+                head[x.rs1] = False
+            return True
+        if _is(x, Opcode.CTRL, COp.QPUSH):
+            if not take_out(x.rd, apply):
+                return False
+            if apply:
+                tail[x.rd] = False
+                pushed[x.rd] += 1
+            return True
+        return True
+
+    def step(task: str, apply: bool) -> bool:
+        if task == "execute":
+            return step_execute(apply)
+        x = (progs.load if task == "load" else progs.store)[pc[task]]
+        if task == "load":
+            if avail[x.rd] + head[x.rd] >= QUEUE_DEPTH:
+                return False
+            if apply:
+                avail[x.rd] += 1
+            return True
+        if pushed[x.rs1] < 1:
+            return False
+        if apply:
+            pushed[x.rs1] -= 1
+        return True
+
+    ends = {"load": len(progs.load), "execute": len(passes), "store": len(progs.store)}
+    moved = True
+    while moved:
+        moved = False
+        for task in ("load", "execute", "store"):
+            while pc[task] < ends[task] and step(task, False):
+                step(task, True)
+                pc[task] += 1
+                moved = True
+    stuck = [t for t in ("load", "execute", "store") if pc[t] < ends[t]]
+    if not stuck:
+        return []
+    waits = []
+    for t in stuck:
+        x = passes[pc[t]][0] if t == "execute" else (progs.load if t == "load" else progs.store)[pc[t]]
+        waits.append(f"the {t} task at {x}")
+    return ["the programs deadlock on queues of two blocks: " + "; ".join(waits) + " wait for "
+            "each other (reorder the loads or the queue reads, or pop and push sooner)"]
 
 
 def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
@@ -160,10 +293,10 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
                     if dims is not None:
                         k, n = dims
                         gpr = cfg.groups_per_row(n)
-                        if int(x.imm2) != gpr or int(x.imm1) >= gpr:
+                        if int(x.imm2) != gpr or int(x.imm1) >= gpr or vl > k:
                             out.append(f"execute: {x} writes a {k} x {n} block (as the store "
                                        f"takes it): the stride is {gpr}, the column groups "
-                                       f"0..{gpr - 1}")
+                                       f"0..{gpr - 1}, VL <= {k}")
                         cover = tail[o.qwrite]
                         assert cover is not None  # take_tail made it
                         cover.update((i, int(x.imm1)) for i in range(vl))

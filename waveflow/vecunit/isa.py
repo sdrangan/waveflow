@@ -61,10 +61,15 @@ class VOp(IntEnum):
     NMSAC_S = 9  # wf.vnmsac.vs vd, s, vs2     vd = q_vd(vd - s[l] * vs2)
     MADD_S = 10  # wf.vmadd.vs  vd, s, vs2     vd = q_vd(vd * s[l] + vs2)
     DOTR = 11  # wf.vdotr    sd, vs1, vs2    sd[l] = q_sd(sum_i Re(conj(vs1) vs2))
+    MUL_S = 12  # wf.vmul.vs   vd, s, vs2     vd = q_vd(s[l] * vs2)
+    ADD_S = 13  # wf.vadd.vs   vd, s, vs2     vd = q_vd(vs2 + s[l])
+    SUB_S = 14  # wf.vsub.vs   vd, s, vs2     vd = q_vd(vs2 - s[l])
+    MVS = 15  # wf.vmv.s.v   sd, vs1        sd[l] = q_sd(Re(vs1[l][0]))
 
 
 class QOp(IntEnum):
-    """``funct`` of :attr:`Opcode.QUEUE`."""
+    """``funct`` of :attr:`Opcode.QUEUE`.  ``funct`` 4 is reserved for a window read
+    (``plans/vecunit_future.md``, "Keeping PR #300 open")."""
 
     VLSE = 0  # wf.vlse vd, q, g, stride   vd = q_vd(column group g of q's head block)
     VSSE = 1  # wf.vsse q, vs, g, stride   column group g of q's tail block = q_q(vs)
@@ -77,6 +82,7 @@ class SOp(IntEnum):
 
     DIVZ = 0  # wf.sdivz sd, sa, sb   sd = sb == 0 ? 0 : q_sd(w(sa) / sb)
     MV = 1  # wf.smv   sd, sa       sd = q_sd(sa)
+    LI = 2  # wf.sli   sd, imm      sd = imm, a stored integer of sd's format (24 bits, signed)
 
 
 class COp(IntEnum):
@@ -85,6 +91,7 @@ class COp(IntEnum):
     SETVL = 0  # wf.setvl k   VL = k
     QPOP = 1  # wf.qpop q    release q's head block
     QPUSH = 2  # wf.qpush q   commit q's tail block
+    SETRS = 3  # wf.setrs k   RS = k: the result shift a scaled instruction uses by default
 
 
 #: The instructions that run in a pass (and so may chain): the vector class and the queue reads and
@@ -95,6 +102,15 @@ def is_vector(opcode: int, funct: int) -> bool:
 
 #: Multiplying instructions: the ones that take the conjugate and broadcast forms.
 MULTIPLYING = (VOp.MUL, VOp.MACC, VOp.NMSAC, VOp.MADD)
+
+#: The instructions whose product is scaled by ``2**-RS`` (every multiplying instruction, the
+#: reductions included): ``vd = q_vd(... + p * 2**-RS)``, exact before the one rounding.  ``RS`` is
+#: the instruction's own shift when its override bit is set (``imm2`` bit 4, the shift in bits 0-3),
+#: else the one ``wf.setrs`` set (0 at a job's start).
+SCALED = (VOp.MUL, VOp.MACC, VOp.NMSAC, VOp.MADD, VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S, VOp.DOTR,
+          VOp.MUL_S)
+RS_OVERRIDE = 1 << 4
+RS_BITS = 4
 
 
 # --- the words -------------------------------------------------------------------------------------
@@ -212,16 +228,40 @@ class Instr:
         v = int(self.imm1) & 0xFFF
         return v - (1 << 12) if v >= (1 << 11) else v
 
+    @property
+    def simm24(self) -> int:
+        """``imm2:imm1`` as a signed 24-bit immediate (``wf.sli``)."""
+        v = (int(self.imm2) & 0xFFF) << 12 | (int(self.imm1) & 0xFFF)
+        return v - (1 << 24) if v >= (1 << 23) else v
+
+    @property
+    def rs_field(self) -> int | None:
+        """A scaled instruction's own result shift, or ``None`` (it uses ``wf.setrs``'s)."""
+        if int(self.imm2) & RS_OVERRIDE:
+            return int(self.imm2) & ((1 << RS_BITS) - 1)
+        return None
+
     def __str__(self) -> str:
         return disassemble(self)
 
 
+def _rs_imm2(rs: int | None) -> int:
+    if rs is None:
+        return 0
+    if not 0 <= rs < (1 << RS_BITS):
+        raise ValueError(f"a result shift of {rs} does not fit {RS_BITS} bits")
+    return RS_OVERRIDE | rs
+
+
 def _v(funct: VOp, vd: int, vs1: int = 0, vs2: int = 0, *, conj: bool = False,
-       bcast: bool = False) -> Instr:
+       bcast: bool = False, rs: int | None = None) -> Instr:
     if (conj or bcast) and funct not in MULTIPLYING:
         raise ValueError(f"{funct.name}: the conjugate and broadcast forms are for multiplying "
                          "instructions")
-    return Instr(Opcode.VEC, funct, rd=vd, rs1=vs1, rs2=vs2, conj=conj, bcast=bcast)
+    if rs is not None and funct not in SCALED:
+        raise ValueError(f"{funct.name}: only a multiplying instruction takes a result shift")
+    return Instr(Opcode.VEC, funct, rd=vd, rs1=vs1, rs2=vs2, conj=conj, bcast=bcast,
+                 imm2=_rs_imm2(rs))
 
 
 def setvl(k: int) -> Instr:
@@ -249,40 +289,80 @@ def vsub_vv(vd: int, vs1: int, vs2: int) -> Instr:
     return _v(VOp.SUB, vd, vs1, vs2)
 
 
-def vmul_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False) -> Instr:
-    return _v(VOp.MUL, vd, vs1, vs2, conj=conj, bcast=bcast)
+def vmul_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False,
+            rs: int | None = None) -> Instr:
+    return _v(VOp.MUL, vd, vs1, vs2, conj=conj, bcast=bcast, rs=rs)
 
 
-def vmacc_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False) -> Instr:
-    return _v(VOp.MACC, vd, vs1, vs2, conj=conj, bcast=bcast)
+def vmacc_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False,
+             rs: int | None = None) -> Instr:
+    return _v(VOp.MACC, vd, vs1, vs2, conj=conj, bcast=bcast, rs=rs)
 
 
-def vnmsac_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False) -> Instr:
-    return _v(VOp.NMSAC, vd, vs1, vs2, conj=conj, bcast=bcast)
+def vnmsac_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False,
+              rs: int | None = None) -> Instr:
+    return _v(VOp.NMSAC, vd, vs1, vs2, conj=conj, bcast=bcast, rs=rs)
 
 
-def vmadd_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False) -> Instr:
-    return _v(VOp.MADD, vd, vs1, vs2, conj=conj, bcast=bcast)
+def vmadd_vv(vd: int, vs1: int, vs2: int, *, conj: bool = False, bcast: bool = False,
+             rs: int | None = None) -> Instr:
+    return _v(VOp.MADD, vd, vs1, vs2, conj=conj, bcast=bcast, rs=rs)
 
 
-def vmacc_vs(vd: int, s: int, vs2: int) -> Instr:
+def vmacc_vs(vd: int, s: int, vs2: int, *, rs: int | None = None) -> Instr:
     """``wf.vmacc.vs vd, s, vs2``: ``vd = q_vd(vd + s[l] * vs2)``, a per-member real scalar."""
-    return _v(VOp.MACC_S, vd, s, vs2)
+    return _v(VOp.MACC_S, vd, s, vs2, rs=rs)
 
 
-def vnmsac_vs(vd: int, s: int, vs2: int) -> Instr:
-    return _v(VOp.NMSAC_S, vd, s, vs2)
+def vnmsac_vs(vd: int, s: int, vs2: int, *, rs: int | None = None) -> Instr:
+    return _v(VOp.NMSAC_S, vd, s, vs2, rs=rs)
 
 
-def vmadd_vs(vd: int, s: int, vs2: int) -> Instr:
+def vmadd_vs(vd: int, s: int, vs2: int, *, rs: int | None = None) -> Instr:
     """``wf.vmadd.vs vd, s, vs2``: ``vd = q_vd(vd * s[l] + vs2)``."""
-    return _v(VOp.MADD_S, vd, s, vs2)
+    return _v(VOp.MADD_S, vd, s, vs2, rs=rs)
 
 
-def vdotr(sd: int, vs1: int, vs2: int) -> Instr:
+def vmul_vs(vd: int, s: int, vs2: int, *, rs: int | None = None) -> Instr:
+    """``wf.vmul.vs vd, s, vs2``: ``vd = q_vd(s[l] * vs2)``, a per-member real scalar."""
+    return _v(VOp.MUL_S, vd, s, vs2, rs=rs)
+
+
+def vadd_vs(vd: int, s: int, vs2: int) -> Instr:
+    """``wf.vadd.vs vd, s, vs2``: ``vd = q_vd(vs2 + s[l])``, the scalar added to the real part."""
+    return _v(VOp.ADD_S, vd, s, vs2)
+
+
+def vsub_vs(vd: int, s: int, vs2: int) -> Instr:
+    """``wf.vsub.vs vd, s, vs2``: ``vd = q_vd(vs2 - s[l])``."""
+    return _v(VOp.SUB_S, vd, s, vs2)
+
+
+def vmv_s_v(sd: int, vs1: int) -> Instr:
+    """``wf.vmv.s.v sd, vs1``: ``sd[l] = q_sd(Re(vs1[l][0]))``, element 0 of each member into its
+    lane's scalar; delivered at the end of its pass, as a reduction is."""
+    return Instr(Opcode.VEC, VOp.MVS, rd=sd, rs1=vs1)
+
+
+def vdotr(sd: int, vs1: int, vs2: int, *, rs: int | None = None) -> Instr:
     """``wf.vdotr sd, vs1, vs2``: ``sd[l] = q_sd(sum_{i<VL} Re(conj(vs1[l][i]) vs2[l][i]))``,
     exact before the one rounding; delivered at the end of its pass."""
-    return Instr(Opcode.VEC, VOp.DOTR, rd=sd, rs1=vs1, rs2=vs2)
+    return Instr(Opcode.VEC, VOp.DOTR, rd=sd, rs1=vs1, rs2=vs2, imm2=_rs_imm2(rs))
+
+
+def sli(sd: int, imm: int) -> Instr:
+    """``wf.sli sd, imm``: every lane's ``sd = imm``, the stored integer of ``sd``'s format (a signed
+    24-bit immediate, in ``imm2:imm1``; it must fit the format, or the instruction is
+    ``BAD_DIMS``)."""
+    if not -(1 << 23) <= imm < (1 << 23):
+        raise ValueError(f"wf.sli: {imm} is not a signed 24-bit immediate")
+    v = imm & 0xFFFFFF
+    return Instr(Opcode.SCALAR, SOp.LI, rd=sd, imm1=v & 0xFFF, imm2=v >> 12)
+
+
+def setrs(k: int) -> Instr:
+    """``wf.setrs k``: ``RS = k``, the result shift of every scaled instruction without its own."""
+    return Instr(Opcode.CTRL, COp.SETRS, imm1=k)
 
 
 def sdivz(sd: int, sa: int, sb: int) -> Instr:
@@ -335,11 +415,14 @@ def st(port: int, q: int, tag: int, k: int, n: int) -> Instr:
 _VNAMES = {VOp.MVI: "vmv.v.i", VOp.MV: "vmv.v.v", VOp.ADD: "vadd.vv", VOp.SUB: "vsub.vv",
            VOp.MUL: "vmul", VOp.MACC: "vmacc", VOp.NMSAC: "vnmsac", VOp.MADD: "vmadd",
            VOp.MACC_S: "wf.vmacc.vs", VOp.NMSAC_S: "wf.vnmsac.vs", VOp.MADD_S: "wf.vmadd.vs",
-           VOp.DOTR: "wf.vdotr"}
+           VOp.DOTR: "wf.vdotr", VOp.MUL_S: "wf.vmul.vs", VOp.ADD_S: "wf.vadd.vs",
+           VOp.SUB_S: "wf.vsub.vs", VOp.MVS: "wf.vmv.s.v"}
+_SCALAR_A = (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S, VOp.MUL_S, VOp.ADD_S, VOp.SUB_S)
 
 
 def disassemble(x: Instr) -> str:
-    """The instruction in assembly syntax, e.g. ``wf.vmacc.vs.c v0, s2, v2``."""
+    """The instruction in assembly syntax, e.g. ``wf.vmacc.vs.c v0, s2, v2``; a scaled instruction
+    with its own result shift ends ``, rs=<k>``."""
     op, f = int(x.opcode), int(x.funct)
     if op == Opcode.VEC and f in _VNAMES:
         v = VOp(f)
@@ -348,10 +431,12 @@ def disassemble(x: Instr) -> str:
             name = ("wf." if (x.conj or x.bcast) else "") + name + ("c" if x.conj else "") + \
                 (".vb" if x.bcast else ".vv")
         args = {VOp.MVI: f"v{x.rd}, {x.simm}", VOp.MV: f"v{x.rd}, v{x.rs1}",
-                VOp.DOTR: f"s{x.rd}, v{x.rs1}, v{x.rs2}"}.get(v)
+                VOp.DOTR: f"s{x.rd}, v{x.rs1}, v{x.rs2}", VOp.MVS: f"s{x.rd}, v{x.rs1}"}.get(v)
         if args is None:
-            mid = "s" if v in (VOp.MACC_S, VOp.NMSAC_S, VOp.MADD_S) else "v"
+            mid = "s" if v in _SCALAR_A else "v"
             args = f"v{x.rd}, {mid}{x.rs1}, v{x.rs2}"
+        if v in SCALED and x.rs_field is not None:
+            args += f", rs={x.rs_field}"
     elif op == Opcode.QUEUE and f in tuple(QOp):
         q = QOp(f)
         name = {QOp.VLSE: "wf.vlse", QOp.VSSE: "wf.vsse", QOp.LD: "wf.ld", QOp.ST: "wf.st"}[q]
@@ -360,12 +445,17 @@ def disassemble(x: Instr) -> str:
                 QOp.LD: f"qi{x.rd}, p{x.rs1}, {x.imm1}, {x.imm2}",
                 QOp.ST: f"p{x.rd}, qo{x.rs1}, {x.rs2}, {x.imm1}, {x.imm2}"}[q]
     elif op == Opcode.SCALAR and f in tuple(SOp):
-        name = "wf.sdivz" if f == SOp.DIVZ else "wf.smv"
-        args = f"s{x.rd}, s{x.rs1}" + (f", s{x.rs2}" if f == SOp.DIVZ else "")
+        name = {SOp.DIVZ: "wf.sdivz", SOp.MV: "wf.smv", SOp.LI: "wf.sli"}[SOp(f)]
+        if f == SOp.LI:
+            args = f"s{x.rd}, {x.simm24}"
+        else:
+            args = f"s{x.rd}, s{x.rs1}" + (f", s{x.rs2}" if f == SOp.DIVZ else "")
     elif op == Opcode.CTRL and f in tuple(COp):
         c = COp(f)
-        name = {COp.SETVL: "wf.setvl", COp.QPOP: "wf.qpop", COp.QPUSH: "wf.qpush"}[c]
-        args = {COp.SETVL: f"{x.imm1}", COp.QPOP: f"qi{x.rs1}", COp.QPUSH: f"qo{x.rd}"}[c]
+        name = {COp.SETVL: "wf.setvl", COp.QPOP: "wf.qpop", COp.QPUSH: "wf.qpush",
+                COp.SETRS: "wf.setrs"}[c]
+        args = {COp.SETVL: f"{x.imm1}", COp.QPOP: f"qi{x.rs1}", COp.QPUSH: f"qo{x.rd}",
+                COp.SETRS: f"{x.imm1}"}[c]
     else:
         return f".word 0x{x.encode():016x}"
     return f"{name}{'.c' if x.chain else ''} {args}"

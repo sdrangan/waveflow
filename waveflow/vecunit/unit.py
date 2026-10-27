@@ -305,8 +305,9 @@ class VecLoad(_VecPart):
             k, n = int(x.imm1), int(x.imm2)
             words = yield from self.s_in[x.rs1].get()
             # The RTL loader takes a word a cycle when L divides n and a group is whole words;
-            # otherwise a value a cycle (the row padding), slower than the words arrive.
-            slow = k * n - len(np.asarray(words).reshape(-1)) if _slow_path(cfg, n) else 0
+            # otherwise a value a cycle (the row padding), slower than the words arrive.  A word
+            # above 64 bits arrives as a row of 64-bit chunks: count the rows.
+            slow = k * n - np.shape(words)[0] if _slow_path(cfg, n) else 0
             if slow > 0:
                 yield self.timeout(slow * self.clk.period)
             re, im = from_words(words, k * n, cfg.in_queue_formats[x.rd], cfg.lane_bits,
@@ -437,7 +438,7 @@ class VecExec(_VecPart):
                 yield from self._until(t.srun_cycles(item.chains) * period)
                 continue
             x = item.chains[0][0]
-            if int(x.funct) == I.COp.SETVL:
+            if int(x.funct) in (I.COp.SETVL, I.COp.SETRS):
                 m.control(x)
                 yield from self._until((t.instr + t.control) * period)
             elif int(x.funct) == I.COp.QPOP:
@@ -569,12 +570,13 @@ class VecUnit(_VecPart):
     # -- scenarios --------------------------------------------------------------------------------
     def jobs(self, kind: str = "test") -> list:
         """The jobs of a scenario: ``(tx_id, Programs, inputs)``.  ``"test"``: random jobs over
-        every instruction form (:func:`waveflow.vecunit.workload.random_jobs`).  An application
-        subclasses the unit to give its own."""
+        every instruction form (:func:`waveflow.vecunit.workload.random_jobs`), the scalar
+        extensions and the result shift included.  An application subclasses the unit to give its
+        own."""
         from waveflow.vecunit.workload import random_jobs
 
         if kind == "test":
-            return random_jobs(self.cfg, 4, seed=1)
+            return random_jobs(self.cfg, 4, seed=1, extended=True)
         raise ValueError(f"no workload {kind!r}")
 
     def remember_results(self, kind: str, jobs: list, results: list) -> None:

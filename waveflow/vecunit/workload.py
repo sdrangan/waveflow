@@ -28,9 +28,26 @@ def _matrix(rng, fmt, k: int, n: int):
     return rng.integers(lo, hi, (k, n)), rng.integers(lo, hi, (k, n))
 
 
-def _random_vector(rng, cfg: VecUnitConfig, G: int) -> I.Instr:
+def _random_rs(rng, cfg: VecUnitConfig) -> int | None:
+    """A scaled instruction's own result shift, half the time (else ``wf.setrs``'s)."""
+    return int(rng.integers(cfg.rs_max + 1)) if rng.integers(2) else None
+
+
+def _random_vector(rng, cfg: VecUnitConfig, G: int, extended: bool = False) -> I.Instr:
     g = lambda: int(rng.integers(cfg.NG))
     s = lambda: int(rng.integers(cfg.NS))
+    if extended and rng.integers(3) == 0:  # the scalar extensions and the result shift (F2, F4)
+        kind = int(rng.integers(6))
+        if kind == 0:
+            return I.vmul_vs(g(), s(), g(), rs=_random_rs(rng, cfg))
+        if kind in (1, 2):
+            return (I.vadd_vs if kind == 1 else I.vsub_vs)(g(), s(), g())
+        if kind == 3:
+            return I.vmv_s_v(s(), g())
+        ctor = (I.vmul_vv, I.vmacc_vs)[kind - 4]
+        if kind == 4:
+            return ctor(g(), g(), g(), conj=bool(rng.integers(2)), rs=_random_rs(rng, cfg))
+        return ctor(g(), s(), g(), rs=_random_rs(rng, cfg))
     kind = int(rng.integers(16))
     conj, bcast = bool(rng.integers(2)), bool(rng.integers(2))
     if kind == 0:
@@ -52,12 +69,13 @@ def _random_vector(rng, cfg: VecUnitConfig, G: int) -> I.Instr:
 
 
 def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int | None = None,
-               k_max: int | None = None):
+               k_max: int | None = None, extended: bool = False):
     """A job using every instruction form: a block per input queue, every group and scalar written,
     ``npass`` random passes (and divides, moves and ``VL`` changes between them), every output
     queue's block written in full, the queues balanced.  ``n_max`` and ``k_max`` bound the blocks'
     columns and rows (small blocks keep a job execute-bound: a calibration measures the execute
-    task)."""
+    task).  ``extended`` also uses the scalar extensions, the result shift and ``wf.setrs``
+    (``plans/vecunit_future.md`` F2, F4); off, the jobs are the ones the calibration registered."""
     k = int(rng.integers(1, min(cfg.Kmax, cfg.VLMAX, k_max or cfg.Kmax) + 1))
     n = int(rng.integers(1, min(cfg.Nmax, n_max or cfg.Nmax) + 1))
     G = cfg.groups_per_row(n)
@@ -80,12 +98,21 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int 
         r = float(rng.random())
         if r < 0.12:
             s = lambda: int(rng.integers(cfg.NS))
+            if extended and rng.integers(3) == 0:
+                j = s()
+                W = cfg.scalar_formats[j].W
+                ex.append(I.sli(j, int(rng.integers(-(1 << (W - 1)), 1 << (W - 1)))))
+                continue
             ex.append(I.sdivz(s(), s(), s()) if rng.integers(2) else I.smv(s(), s()))
             continue
         if r < 0.2:
+            if extended and rng.integers(2):
+                ex.append(I.setrs(int(rng.integers(cfg.rs_max + 1))))
+                continue
             ex.append(I.setvl(int(rng.integers(1, k + 1))))
             continue
-        chain = [_random_vector(rng, cfg, G) for _ in range(int(rng.integers(1, cfg.S + 1)))]
+        chain = [_random_vector(rng, cfg, G, extended)
+                 for _ in range(int(rng.integers(1, cfg.S + 1)))]
         if pass_status(chain, cfg) != Status.OK:
             continue
         ex += [x.c for x in chain[:-1]] + [chain[-1]]
@@ -103,11 +130,13 @@ def random_job(cfg: VecUnitConfig, rng, tx_id: int, npass: int = 12, n_max: int 
 
 
 def random_jobs(cfg: VecUnitConfig, count: int, *, seed: int = 0, npass=12,
-                n_max: int | None = None, k_max: int | None = None) -> list:
+                n_max: int | None = None, k_max: int | None = None,
+                extended: bool = False) -> list:
     """``count`` random jobs; ``npass`` an int, or a sequence cycled over the jobs."""
     rng = np.random.default_rng(seed)
     seq = [npass] if isinstance(npass, int) else list(npass)
-    return [random_job(cfg, rng, 100 + j, seq[j % len(seq)], n_max, k_max) for j in range(count)]
+    return [random_job(cfg, rng, 100 + j, seq[j % len(seq)], n_max, k_max, extended)
+            for j in range(count)]
 
 
 def job_bursts(cfg: VecUnitConfig, jobs: list) -> dict[str, list[StreamBurst]]:

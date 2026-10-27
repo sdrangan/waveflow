@@ -82,3 +82,127 @@ def test_problems_are_refused(progs, says):
     assert any(says in p for p in problems), problems
     with pytest.raises(AsmError):
         assemble(CFG, progs, tx_id=1)
+
+
+def test_a_write_past_the_blocks_rows_is_refused():
+    """``wf.vsse`` at ``VL`` beyond the block's ``k`` rows (review R4): the read side refused it, the
+    write side now does too."""
+    k = 4
+    p = Programs(load=[I.ld(0, 0, k, 4)],
+                 execute=[I.setvl(8), I.vmv_v_i(0, 1), I.vsse(0, 0, 0, 1), I.setvl(k),
+                          I.vlse(1, 0, 0, 1), I.qpop(0), I.qpush(0)],
+                 store=[I.st(0, 0, 0, k, 4)])
+    assert any("VL <= 4" in s for s in check(CFG, p))
+
+
+# --- one program, split (F6); the deadlock check (R3) ----------------------------------------------
+
+
+def test_one_program_splits_into_the_three():
+    from waveflow.vecunit.asm import split
+
+    p = job()
+    one = [p.load[0], p.load[1]] + p.execute + p.store
+    q = split(one)
+    assert (q.load, q.execute, q.store) == (p.load, p.execute, p.store)
+    assert check(CFG, q) == []
+
+
+def test_a_job_that_deadlocks_on_two_block_queues_is_refused():
+    """Three blocks into qi0 before execute reads qi1: the load task waits for a third qi0 block, the
+    execute task for qi1's (review R3)."""
+    ld = [I.ld(0, 0, 8, 4)] * 3 + [I.ld(1, 0, 8, 4)]
+    ex = [I.setvl(8), I.vlse(0, 1, 0, 1), I.qpop(1)]
+    for _ in range(3):
+        ex += [I.vlse(1, 0, 0, 1), I.qpop(0)]
+    ex += [I.vsse(0, 0, 0, 1), I.qpush(0)]
+    p = Programs(load=ld, execute=ex, store=[I.st(0, 0, 0, 8, 4)])
+    problems = check(CFG, p)
+    assert any("deadlock" in s and "the load task at wf.ld qi0" in s
+               and "the execute task at wf.vlse v0, qi1" in s for s in problems), problems
+    p.load = [I.ld(0, 0, 8, 4), I.ld(1, 0, 8, 4), I.ld(0, 0, 8, 4), I.ld(0, 0, 8, 4)]
+    assert check(CFG, p) == []  # the same job with qi1's block loaded second runs
+
+
+def _small_job(rng):
+    """Balanced programs over two input queues and one output queue, in random orders."""
+    nin = [int(rng.integers(0, 6)), int(rng.integers(0, 6))]
+    nout = int(rng.integers(0, 5))
+    loads = [q for q in (0, 1) for _ in range(nin[q])]
+    rng.shuffle(loads)
+    uses = [("i", q) for q in (0, 1) for _ in range(nin[q])] + [("o", 0)] * nout
+    rng.shuffle(uses)
+    ex = [I.setvl(2), I.vmv_v_i(0, 1)]
+    for side, q in uses:
+        ex += ([I.vlse(1, q, 0, 1), I.qpop(q)] if side == "i" else [I.vsse(0, 0, 0, 1), I.qpush(0)])
+    return Programs(load=[I.ld(q, 0, 2, 4) for q in loads], execute=ex,
+                    store=[I.st(0, 0, 0, 2, 4)] * nout)
+
+
+def _completes_every_way(progs) -> tuple[bool, bool]:
+    """Every interleaving of the three programs, one instruction at a time, on two-block queues:
+    ``(some order finishes, some order deadlocks)``."""
+    from functools import cache
+
+    L_, X, S_ = progs.load, progs.execute, progs.store
+
+    @cache
+    def go(a, b, c, av0, av1, h0, h1, pushed, tail):
+        if (a, b, c) == (len(L_), len(X), len(S_)):
+            return True, False
+        av, hd = [av0, av1], [h0, h1]
+        nxt = []
+        if a < len(L_) and av[L_[a].rd] + hd[L_[a].rd] < 2:
+            av2 = list(av)
+            av2[L_[a].rd] += 1
+            nxt.append((a + 1, b, c, *av2, h0, h1, pushed, tail))
+        if b < len(X):
+            x = X[b]
+            if x.opcode == I.Opcode.QUEUE and x.funct == I.QOp.VLSE:
+                q = x.rs1
+                if hd[q]:
+                    nxt.append((a, b + 1, c, av0, av1, h0, h1, pushed, tail))
+                elif av[q]:
+                    av2, hd2 = list(av), list(hd)
+                    av2[q] -= 1
+                    hd2[q] = True
+                    nxt.append((a, b + 1, c, *av2, *hd2, pushed, tail))
+            elif x.opcode == I.Opcode.CTRL and x.funct == I.COp.QPOP:
+                hd2 = list(hd)
+                hd2[x.rs1] = False
+                nxt.append((a, b + 1, c, av0, av1, *hd2, pushed, tail))
+            elif x.opcode == I.Opcode.QUEUE and x.funct == I.QOp.VSSE:
+                if tail or pushed < 2:
+                    nxt.append((a, b + 1, c, av0, av1, h0, h1, pushed, True))
+            elif x.opcode == I.Opcode.CTRL and x.funct == I.COp.QPUSH:
+                nxt.append((a, b + 1, c, av0, av1, h0, h1, pushed + 1, False))
+            else:
+                nxt.append((a, b + 1, c, av0, av1, h0, h1, pushed, tail))
+        if c < len(S_) and pushed:
+            nxt.append((a, b, c + 1, av0, av1, h0, h1, pushed - 1, tail))
+        if not nxt:
+            return False, True
+        res = [go(*n) for n in nxt]
+        return any(r[0] for r in res), any(r[1] for r in res)
+
+    return go(0, 0, 0, 0, 0, False, False, 0, False)
+
+
+def test_the_deadlock_check_agrees_with_every_interleaving():
+    """The check runs one order; on small jobs every order is tried: a job finishes in one order
+    exactly when it finishes in all of them, and the check says which."""
+    from waveflow.vecunit.asm import schedule_problems
+
+    f = fmt(12, 4)
+    cfg = VecUnitConfig(group_formats=(f,) * 4, scalar_formats=(f,), in_queue_formats=(f, f),
+                        out_queue_formats=(f,), L=4, VLMAX=2, Kmax=2, Nmax=4)
+    rng = np.random.default_rng(21)
+    seen = {True: 0, False: 0}
+    for _ in range(300):
+        p = _small_job(rng)
+        some_finish, some_deadlock = _completes_every_way(p)
+        assert some_finish != some_deadlock  # order-independent: never both
+        ok = schedule_problems(cfg, p) == []
+        assert ok == some_finish
+        seen[ok] += 1
+    assert seen[True] > 30 and seen[False] > 30

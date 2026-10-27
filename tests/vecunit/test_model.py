@@ -291,7 +291,7 @@ def centre() -> VecUnitConfig:
 
 
 @pytest.mark.parametrize("x, st", [
-    (I.Instr(I.Opcode.VEC, 12), Status.BAD_OP),
+    (I.Instr(I.Opcode.VEC, 16), Status.BAD_OP),  # 12-15: the scalar extensions (F2)
     (I.Instr(I.Opcode.VEC, I.VOp.ADD, conj=True), Status.BAD_OP),
     (I.Instr(I.Opcode.SCALAR, I.SOp.DIVZ, chain=True), Status.BAD_OP),
     (I.ld(0, 0, 8, 8), Status.BAD_OP),
