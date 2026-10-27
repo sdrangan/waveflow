@@ -8,7 +8,7 @@ summary: "Bit-exact CG solves of an 8×n right-hand side (n = 32 to 2,048, 1 to 
 # Simulation speed: CG on the vector unit
 
 [CG as a vector program](../../examples/vecunit_cg/index.md) run four ways on the same operands, across
-problem sizes, on one build of [the vector unit](../../guide/dsp/vecunit.md). Stage 8 of
+problem sizes, on one build of [the vector unit](../../guide/dsp/vecunit/index.md). Stage 8 of
 `plans/vecunit_new.md` measured it; Stage 10 then made the unit's own Python faster without changing
 any result. The tables are the current code's;
 [Faster, with no result changed](#faster-with-no-result-changed) has the before and after.
@@ -40,7 +40,7 @@ RTL:          AXI-Stream BFMs --> synthesized vecunit --> recorded outputs      
 - **The pysim** is `CgVecUnit` in its harness: building the harness (the stimulus, including its
   closed-loop interpreter run), writing the scenario, and the run. Its execute task calls the
   interpreter per instruction and charges the
-  [calibrated timing](../../guide/dsp/vecunit.md#the-calibrated-models). Every output burst, every `P`,
+  [calibrated timing](../../guide/dsp/vecunit/timing.md#the-calibrated-models). Every output burst, every `P`,
   `X` and status, is checked against the interpreter's.
 - **The RTL** is the csynth'd unit simulated by XSI through the system flow, untraced; its outputs are
   compared with the pysim's. csynth and the XSI build are reported apart from the simulation.

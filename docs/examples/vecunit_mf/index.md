@@ -1,7 +1,7 @@
 ---
 title: A matched filter as a vector program
 parent: Examples
-nav_order: 23
+nav_order: 24
 has_children: true
 example_dir: examples/vecunit_mf
 summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: a streaming program is bound by I/O, not compute -- a frame every 1,408 cycles against an input floor of 1,152 words (1.22x, Vitis 2024.1) -- and how to count the instructions a chunk so issue never binds."
@@ -9,7 +9,7 @@ summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a 
 
 # A matched filter as a vector program
 
-The second application of [the vector unit](../../guide/dsp/vecunit.md), next to
+The second application of [the vector unit](../../guide/dsp/vecunit/index.md), next to
 [CG](../vecunit_cg/index.md): a multi-antenna matched filter in the frequency domain,
 
 ```
@@ -98,4 +98,4 @@ lands a value a cycle (`L` does not divide `n` = 1), 64 cycles for its 32 words.
 
 pysim gives this frame 1,513 cycles, 7.5 % over the RTL: its timing was calibrated on the CG
 configuration, whose decode loop is deeper (depth 23 against 14 in this build) -- see
-[the guide](../../guide/dsp/vecunit.md#the-calibrated-models).
+[the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models).

@@ -8,7 +8,7 @@ summary: "One bit-exact matched-filter frame of 256 to 16,384 samples at 8 anten
 # Simulation speed: the matched filter on the vector unit
 
 [The matched filter as a vector program](../../examples/vecunit_mf/index.md) run four ways on the same
-operands, across frame lengths, on one build of [the vector unit](../../guide/dsp/vecunit.md). The
+operands, across frame lengths, on one build of [the vector unit](../../guide/dsp/vecunit/index.md). The
 twin of [CG on the vector unit](vecunit_cg.md): the same unit and the same harness, with a streaming
 program in place of an iterative one. Stage 8 of `plans/vecunit_new.md` measured it; Stage 10 then made
 the unit's own Python faster without changing any result. The tables are the current code's;

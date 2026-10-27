@@ -79,5 +79,5 @@ II 13, depth 23 against 12 and 14 here; `DELIVER` depth 7 against 6). Stage 9d f
 takes each build's loop schedule from csynth and scored it on held-out runs: it did worse on these
 frames (17 to 22%, though better at `L 8`), because the matched filter's frames, close to the
 loader's bound, were not in its fit. pysim keeps the Stage 7 timing; the guide's
-[calibration section](../../guide/dsp/vecunit.md#the-calibrated-models) has both scores and the next
+[calibration section](../../guide/dsp/vecunit/timing.md#the-calibrated-models) has both scores and the next
 step.

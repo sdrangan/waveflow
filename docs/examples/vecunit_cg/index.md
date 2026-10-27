@@ -1,7 +1,7 @@
 ---
 title: CG as a vector program
 parent: Examples
-nav_order: 22
+nav_order: 23
 has_children: true
 example_dir: examples/vecunit_cg
 summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a program for the programmable vector unit (VecUnit): the CG knowledge moves out of the hardware into a program builder, the unit stays application-free, and the solve is bit-exact with waveflow.linalg.cg's model in the interpreter, in pysim and at RTL. A harness plays the systolic array (S = A·P on each P the unit emits). What it shows: grouping the column groups' work kind by kind makes long fused runs, and the program runs a steady 8×32 solve of three iterations in 3,359 cycles against the dedicated CgVectorUnit's 3,581 (Vitis 2024.1), at about four times its LUTs."
@@ -12,7 +12,7 @@ summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a pr
 [The CG vector unit](../../guide/dsp/cg_vector.md) is the vector half of fixed-point conjugate
 gradient built as hardware: the loop, the three passes per column group, the two guarded divides,
 all in its HLS body. This example runs the same arithmetic as a **program** on
-[the vector unit](../../guide/dsp/vecunit.md), which knows nothing about CG: the formats, the
+[the vector unit](../../guide/dsp/vecunit/index.md), which knows nothing about CG: the formats, the
 register allocation and the order of the work all live in `examples/vecunit_cg/`.
 
 ## Learning objectives
@@ -108,5 +108,5 @@ runs, 704 run elements, 5 scalar runs of 8 divides, 9 control instructions; abou
 decode a pass is the largest share left, which a decode stage running ahead of execution would hide.
 
 pysim's timing is calibrated at RTL on CG-configuration jobs
-([the guide](../../guide/dsp/vecunit.md#the-calibrated-models)): held out, it predicts these steady
+([the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models)): held out, it predicts these steady
 jobs within 0.02 % and fresh random jobs and solves within 0.64 %.

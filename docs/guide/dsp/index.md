@@ -25,6 +25,6 @@ vendor library and rebuild what is not.
   Starts from [how a systolic array works](systolic/systolic_theory.md).
 - [CG Vector Unit](cg_vector.md) -- `CgVectorCore` and `CgVectorUnit`: the vector steps of conjugate
   gradient on `A X = B`, multi-RHS.
-- [Vector Unit](vecunit.md) -- `VecUnit`: a programmable complex fixed-point vector unit, RVV-style,
+- [Vector Unit](vecunit/index.md) -- `VecUnit`: a programmable complex fixed-point vector unit, RVV-style,
   with a format per register and decoupled load, execute and store tasks; CG and a matched filter
   run on it as programs.

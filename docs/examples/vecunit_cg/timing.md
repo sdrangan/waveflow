@@ -86,5 +86,5 @@ block it takes at once. Before, the first job of a long program started up to a 
 (350 cycles for eight iterations). On the `L 8` build the first job is still 120 cycles late, not yet
 explained.
 
-The [guide](../../guide/dsp/vecunit.md#the-calibrated-models) has the timing's calibration, and the
+The [guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models) has the timing's calibration, and the
 fit by phase and configuration that Stage 9d tried and did not keep.
