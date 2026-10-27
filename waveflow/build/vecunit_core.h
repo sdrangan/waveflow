@@ -99,8 +99,10 @@ int instr_status(const VecInstr& d) {
         if (f == S_MV) return in(rd, C::NS) && in(rs1, C::NS) ? OK : BAD_DIMS;
         if (f == S_LI) {
             if (!in(rd, C::NS)) return BAD_DIMS;
-            const int v = simm24(d), w = C::swd(rd);  // the immediate fits the scalar's format
-            return (v >= -(1 << (w - 1)) && v < (1 << (w - 1))) ? OK : BAD_DIMS;
+            // The immediate fits the scalar's format: always at 24 bits or more (it is 24 bits; and
+            // 1 << (w - 1) would overflow an int at w = 32), else its range.
+            const int v = simm24(d), w = C::swd(rd);
+            return (w >= 24 || (v >= -(1 << (w - 1)) && v < (1 << (w - 1)))) ? OK : BAD_DIMS;
         }
         return BAD_OP;
     }

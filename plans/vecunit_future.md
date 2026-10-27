@@ -6,7 +6,35 @@ than once a change. Each item says what changes, why, where, and which tests it 
 **fast** (`pytest -m "not vitis and not xsi and not gem5"`), **csynth** (`-m vitis`), or **XSI**
 (`-m xsi`, `tests/vecunit/test_unit_xsi.py` and the examples' gates).
 
-Status: collecting. Nothing here is implemented.
+Status: a first batch implemented on branch `vecunit-batch` (2026-10-27, local, not pushed); see
+*Batch status* below.
+
+## Batch status (2026-10-27)
+
+| Item | State | Where |
+|---|---|---|
+| F1 queue names | done: `qi<n>` / `qo<n>`; ports stay `p<n>` (`in` / `out` was not confirmed) | commit 654615d8 |
+| F2 scalar extensions | done: interpreter, assembler, pysim, HLS; exact-rational tests; toy `poly` | d489b934, ddf2f966 |
+| F3 real lanes | not started: its decisions are open; to become its own staged plan | -- |
+| F4 result shift | done, decision 5 (the override bit) as proposed; `rs_max` default 15; CG and the matched filter pinned at `rs_max = 0` (their calibrated builds) | d489b934, ddf2f966 |
+| F5 long vectors | not started: its first steps are measurements | -- |
+| F6 one program | done: `asm.split` | d489b934 |
+| F7 dependent fusion | done, `fuse_raw_vl` a configuration constant (default 0, off); an RTL gate at 64 checks csynth's depth is below it | d489b934, ddf2f966 |
+| R1, R2 load/store errors | **not done**: needs a decision -- how the load and store tasks report (below) | -- |
+| R3 deadlock | done: `asm.schedule_problems`, exact (checked against every interleaving of small jobs) | d489b934 |
+| R4, R5, R6 | done | d489b934 |
+| R7 held-out score | partly: the guide says the Stage 7 scores predate the Stage 9d fixes; the re-score is open | ddf2f966 |
+| R8 docs | done | ddf2f966 |
+| PR #300 | queue `funct` 4 reserved (`isa.QOp`, `vecunit_core.h`) | d489b934, ddf2f966 |
+
+**R1 / R2, the decision they need.** A load or store program error, and a burst whose length is
+not its `wf.ld`'s (R1), must be fatal *and reported*, but only the execute task owns a status stream,
+and it may be blocked on the very queue the halted loader would have filled. Options: (a) a status
+stream from each of the load and store tasks (`m_lstatus`, `m_sstatus`: two more boundary ports, the
+harness and golden extended); (b) the loader commits an error-marked block that the execute task
+reads as a fatal status (a flag beside each block; the store side has no such path back). (a) is the
+simpler contract and works for both; (b) keeps one status stream. Either changes the boundary and
+needs XSI.
 
 ## Cost accounting
 
@@ -276,6 +304,12 @@ rounding and saturation is about 50-100 LUT a value: ≈ 2-3k LUT for the quanti
 multiply-accumulates' variable alignment about as much again: **≈ 4-6k LUT in all, 5-8 % of the
 baseline**. Restricting `RS` to `vmul` and the reductions would take off about half. No DSP, no BRAM;
 FF small (a stage at most).
+
+**Measured (2026-10-27, Vitis HLS 2025.1, `xczu48dr`, 4 ns; the toy unit, `L` 4, `S` 3, `NG` 4,
+csynth only).** `rs_max` 0 against 15: LUT 94,203 against 102,273 (**+8,070, +8.6 %**, above the
+4-6k estimate), FF 70,315 against 72,300 (+1,985), DSP 77 and BRAM 24 both, the fused loop 24 deep
+against 26 (+2 cycles of latency, II 1 both), 2.917 ns both. Both builds' decode loop runs at II 20
+(the CG build's was 13 at 2024.1): not the shift's doing; to look into with the 2025.1 retest.
 
 **Tests.** Fast, csynth, XSI.
 
