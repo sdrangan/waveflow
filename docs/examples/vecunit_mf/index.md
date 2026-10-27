@@ -45,9 +45,9 @@ the block's zero padding -- then runs one chained pass per column group: read `R
 
 ```
 wf.setvl k
-wf.vlse v0, q0, 0, 1 ; wf.qpop q0
-for g:  wf.vlse.c v1, q1, g, G ; wf.vmulc.vb.c v2, v0, v1 ; wf.vsse q0, v2, g, G
-wf.qpop q1 ; wf.qpush q0
+wf.vlse v0, qi0, 0, 1 ; wf.qpop qi0
+for g:  wf.vlse.c v1, qi1, g, G ; wf.vmulc.vb.c v2, v0, v1 ; wf.vsse qo0, v2, g, G
+wf.qpop qi1 ; wf.qpush qo0
 ```
 
 That is `5 + 3·ceil(nrx / L)` instructions a chunk (`mf_program.instructions_per_chunk`), 11 at eight

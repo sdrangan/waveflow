@@ -45,7 +45,7 @@ def test_a_well_formed_job_assembles_and_runs():
     assert set(words) == {"load", "execute", "store"}
     assert int(words["execute"][0]) == 9 | (len(p.execute) << 16)
     text = disassemble_words(words["execute"])
-    assert text[0] == f"# job tx_id=9 ninstr={len(p.execute)}" and text[3] == "wf.vlse.c v1, q0, 0, 2"
+    assert text[0] == f"# job tx_id=9 ninstr={len(p.execute)}" and text[3] == "wf.vlse.c v1, qi0, 0, 2"
     assert [I.Instr.decode(int(w)) for w in words["execute"][1:]] == p.execute
     rng = np.random.default_rng(0)
     data = [tuple(rng.integers(-2048, 2048, (K, N)) for _ in range(2)) for _ in range(2)]
@@ -61,8 +61,8 @@ def broken(**edit) -> Programs:
 
 
 @pytest.mark.parametrize("progs, says", [
-    (broken(execute=lambda e: e[:-1]), "holding output queue q1"),
-    (broken(execute=lambda e: e[:-4] + e[-3:]), "holding input queue q0"),
+    (broken(execute=lambda e: e[:-1]), "holding output queue qo1"),
+    (broken(execute=lambda e: e[:-4] + e[-3:]), "holding input queue qi0"),
     (broken(store=lambda s: s[:1]), "fills more blocks than the store program takes"),
     (broken(load=lambda ld: ld[:1]), "no more blocks"),
     (broken(execute=lambda e: [e[0], I.vmv_v_v(0, 1)] + e[1:]), "reads v1 at 8 elements; 0 were"),

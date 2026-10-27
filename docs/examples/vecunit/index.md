@@ -60,16 +60,16 @@ for x in p.execute:
 ```text
 []
 wf.setvl 16
-wf.vlse.c v0, q0, 0, 1
+wf.vlse.c v0, qi0, 0, 1
 wf.vdotr s1, v0, v0
-wf.vlse.c v1, q1, 0, 1
+wf.vlse.c v1, qi1, 0, 1
 wf.vdotr s0, v0, v1
-wf.qpop q0
-wf.qpop q1
+wf.qpop qi0
+wf.qpop qi1
 wf.sdivz s2, s0, s1
 wf.vnmsac.vs.c v1, s2, v0
-wf.vsse q0, v1, 0, 1
-wf.qpush q0
+wf.vsse qo0, v1, 0, 1
+wf.qpush qo0
 ```
 
 Two passes read `x` and `y` and reduce them to `s1 = ‖x‖²` and `s0 = Re(xᴴy)`, one value a lane. The

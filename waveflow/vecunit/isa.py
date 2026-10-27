@@ -355,17 +355,17 @@ def disassemble(x: Instr) -> str:
     elif op == Opcode.QUEUE and f in tuple(QOp):
         q = QOp(f)
         name = {QOp.VLSE: "wf.vlse", QOp.VSSE: "wf.vsse", QOp.LD: "wf.ld", QOp.ST: "wf.st"}[q]
-        args = {QOp.VLSE: f"v{x.rd}, q{x.rs1}, {x.imm1}, {x.imm2}",
-                QOp.VSSE: f"q{x.rd}, v{x.rs1}, {x.imm1}, {x.imm2}",
-                QOp.LD: f"q{x.rd}, p{x.rs1}, {x.imm1}, {x.imm2}",
-                QOp.ST: f"p{x.rd}, q{x.rs1}, {x.rs2}, {x.imm1}, {x.imm2}"}[q]
+        args = {QOp.VLSE: f"v{x.rd}, qi{x.rs1}, {x.imm1}, {x.imm2}",
+                QOp.VSSE: f"qo{x.rd}, v{x.rs1}, {x.imm1}, {x.imm2}",
+                QOp.LD: f"qi{x.rd}, p{x.rs1}, {x.imm1}, {x.imm2}",
+                QOp.ST: f"p{x.rd}, qo{x.rs1}, {x.rs2}, {x.imm1}, {x.imm2}"}[q]
     elif op == Opcode.SCALAR and f in tuple(SOp):
         name = "wf.sdivz" if f == SOp.DIVZ else "wf.smv"
         args = f"s{x.rd}, s{x.rs1}" + (f", s{x.rs2}" if f == SOp.DIVZ else "")
     elif op == Opcode.CTRL and f in tuple(COp):
         c = COp(f)
         name = {COp.SETVL: "wf.setvl", COp.QPOP: "wf.qpop", COp.QPUSH: "wf.qpush"}[c]
-        args = {COp.SETVL: f"{x.imm1}", COp.QPOP: f"q{x.rs1}", COp.QPUSH: f"q{x.rd}"}[c]
+        args = {COp.SETVL: f"{x.imm1}", COp.QPOP: f"qi{x.rs1}", COp.QPUSH: f"qo{x.rd}"}[c]
     else:
         return f".word 0x{x.encode():016x}"
     return f"{name}{'.c' if x.chain else ''} {args}"

@@ -99,7 +99,7 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
     def take_head(q: int, x: Instr) -> tuple[int, int] | None:
         if head[q] is None:
             if in_next[q] >= len(in_blocks[q]):
-                out.append(f"execute: {x}: input queue q{q} has no more blocks (the load program "
+                out.append(f"execute: {x}: input queue qi{q} has no more blocks (the load program "
                            f"loads {len(in_blocks[q])})")
                 return None
             head[q] = in_blocks[q][in_next[q]]
@@ -109,7 +109,7 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
     def take_tail(q: int, x: Instr) -> tuple[int, int] | None:
         if tail[q] is None:
             if out_next[q] >= len(out_blocks[q]):
-                out.append(f"execute: {x}: output queue q{q} fills more blocks than the store program "
+                out.append(f"execute: {x}: output queue qo{q} fills more blocks than the store program "
                            f"takes ({len(out_blocks[q])})")
                 return None
             tail[q] = set()
@@ -199,15 +199,15 @@ def _check_execute(cfg, prog, in_blocks, out_blocks) -> list[str]:
             tail[x.rd] = None
     for q in range(cfg.NQI):
         if head[q] is not None:
-            out.append(f"the job ends holding input queue q{q}'s head block (no wf.qpop)")
+            out.append(f"the job ends holding input queue qi{q}'s head block (no wf.qpop)")
         if in_next[q] != len(in_blocks[q]):
-            out.append(f"input queue q{q}: the load program loads {len(in_blocks[q])} blocks, the "
+            out.append(f"input queue qi{q}: the load program loads {len(in_blocks[q])} blocks, the "
                        f"execute program takes {in_next[q]}")
     for q in range(cfg.NQO):
         if tail[q] is not None:
-            out.append(f"the job ends holding output queue q{q}'s tail block (no wf.qpush)")
+            out.append(f"the job ends holding output queue qo{q}'s tail block (no wf.qpush)")
         if out_next[q] != len(out_blocks[q]):
-            out.append(f"output queue q{q}: the execute program pushes {out_next[q]} blocks, the "
+            out.append(f"output queue qo{q}: the execute program pushes {out_next[q]} blocks, the "
                        f"store program takes {len(out_blocks[q])}")
     return out
 

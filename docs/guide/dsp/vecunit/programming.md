@@ -55,11 +55,11 @@ for x in p.execute:
 ```text
 []
 wf.setvl 3
-wf.vlse.c v0, q0, 0, 1
+wf.vlse.c v0, qi0, 0, 1
 vadd.vv.c v1, v0, v0
-wf.vsse q0, v1, 0, 1
-wf.qpop q0
-wf.qpush q0
+wf.vsse qo0, v1, 0, 1
+wf.qpop qi0
+wf.qpush qo0
 ```
 
 The interpreter runs the job on stored integers; `assemble` gives the three bursts the tasks take:

@@ -40,12 +40,12 @@ def test_encode_matches_the_schema_and_round_trips():
     (I.vnmsac_vv(1, 2, 3), "vnmsac.vv v1, v2, v3"),
     (I.vdotr(4, 1, 1), "wf.vdotr s4, v1, v1"),
     (I.sdivz(2, 1, 0), "wf.sdivz s2, s1, s0"),
-    (I.vlse(1, 0, 3, 8).c, "wf.vlse.c v1, q0, 3, 8"),
-    (I.vsse(1, 0, 2, 8), "wf.vsse q1, v0, 2, 8"),
-    (I.qpop(1), "wf.qpop q1"),
-    (I.qpush(0), "wf.qpush q0"),
-    (I.ld(1, 0, 8, 32), "wf.ld q1, p0, 8, 32"),
-    (I.st(0, 1, 7, 8, 32), "wf.st p0, q1, 7, 8, 32"),
+    (I.vlse(1, 0, 3, 8).c, "wf.vlse.c v1, qi0, 3, 8"),
+    (I.vsse(1, 0, 2, 8), "wf.vsse qo1, v0, 2, 8"),
+    (I.qpop(1), "wf.qpop qi1"),
+    (I.qpush(0), "wf.qpush qo0"),
+    (I.ld(1, 0, 8, 32), "wf.ld qi1, p0, 8, 32"),
+    (I.st(0, 1, 7, 8, 32), "wf.st p0, qo1, 7, 8, 32"),
 ])
 def test_disassembly(x, text):
     assert str(x) == text

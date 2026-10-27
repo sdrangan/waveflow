@@ -14,13 +14,12 @@ every instruction is listed on [the instruction-set page](isa.md). The programs 
 is checked against them by `tests/docs/test_vecunit_listings.py`, so it is the program that actually
 runs.
 
-**Notation.** `v0`, `v1`, ... are vector register groups, `s0`, ... scalars, `q0`, ... queues and `p0`,
-... ports. As in RISC-V assembly, the destination comes first: `vadd.vv v1, v0, v0` writes `v1`. An
-instruction with the `wf.` prefix is the unit's own, not RVV's. A queue or port number means an input
-or an output depending on the instruction: in `wf.ld`, `wf.vlse` and `wf.qpop`, `q0` is input queue
-`qi0` and `p0` is input port `s_in0`; in `wf.st`, `wf.vsse` and `wf.qpush`, `q0` is output queue
-`qo0` and `p0` is output port `s_out0` (the names of the
-[block diagram](architecture.md#the-block-diagram)).
+**Notation.** `v0`, `v1`, ... are vector register groups, `s0`, ... scalars, `qi0`, ... input queues,
+`qo0`, ... output queues, and `p0`, ... ports (the names of the
+[block diagram](architecture.md#the-block-diagram)). As in RISC-V assembly, the destination comes
+first: `vadd.vv v1, v0, v0` writes `v1`. An instruction with the `wf.` prefix is the unit's own, not
+RVV's. A port number means an input or an output depending on the instruction: in `wf.ld`, `p0` is
+input port `s_in0`; in `wf.st`, output port `s_out0`.
 
 ## Example 1: `Y = X + X`, unchained and chained
 
@@ -36,14 +35,14 @@ each, and they are the same for both versions:
 <!-- listing: double.load_store -->
 ```text
 # load program
-wf.ld q0, p0, 16, 4
+wf.ld qi0, p0, 16, 4
 # store program
-wf.st p0, q0, 0, 16, 4
+wf.st p0, qo0, 0, 16, 4
 ```
 
-- `wf.ld q0, p0, 16, 4`: the load task takes the next burst on input port 0, a `16 × 4` matrix, and
+- `wf.ld qi0, p0, 16, 4`: the load task takes the next burst on input port 0, a `16 × 4` matrix, and
   lands it in the next free block of input queue `qi0`.
-- `wf.st p0, q0, 0, 16, 4`: the store task takes output queue `qo0`'s next block, a `16 × 4` matrix,
+- `wf.st p0, qo0, 0, 16, 4`: the store task takes output queue `qo0`'s next block, a `16 × 4` matrix,
   and sends it on output port 0, headed by a `VecResp` with tag 0.
 
 The execute program is where the two versions differ.
@@ -53,21 +52,21 @@ The execute program is where the two versions differ.
 <!-- listing: double.unchained -->
 ```text
 wf.setvl 16
-wf.vlse v0, q0, 0, 1
+wf.vlse v0, qi0, 0, 1
 vadd.vv v1, v0, v0
-wf.vsse q0, v1, 0, 1
-wf.qpop q0
-wf.qpush q0
+wf.vsse qo0, v1, 0, 1
+wf.qpop qi0
+wf.qpush qo0
 ```
 
 | Instruction              | Does                                                                                                                                                                                                                                                                  |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wf.setvl 16`          | sets the vector length: each vector instruction after it works on 16 elements                                                                                                                                                                                         |
-| `wf.vlse v0, q0, 0, 1` | reads input queue `qi0`'s block into `v0`: element `i` of lane `l` is row `i`, column `l`. The `0, 1` are the column group and the stride: one lane group a row, the first. It is the first read of that block, so the execute task takes the block here |
+| `wf.vlse v0, qi0, 0, 1` | reads input queue `qi0`'s block into `v0`: element `i` of lane `l` is row `i`, column `l`. The `0, 1` are the column group and the stride: one lane group a row, the first. It is the first read of that block, so the execute task takes the block here |
 | `vadd.vv v1, v0, v0`   | `v1 = v0 + v0`, element by element in all four lanes, rounded and saturated to `v1`'s format                                                                                                                                                                      |
-| `wf.vsse q0, v1, 0, 1` | writes `v1` into output queue `qo0`'s block, the reverse of `wf.vlse`                                                                                                                                                                                            |
-| `wf.qpop q0`           | gives the input block back: the load task may refill it                                                                                                                                                                                                               |
-| `wf.qpush q0`          | hands the filled output block to the store task                                                                                                                                                                                                                       |
+| `wf.vsse qo0, v1, 0, 1` | writes `v1` into output queue `qo0`'s block, the reverse of `wf.vlse`                                                                                                                                                                                            |
+| `wf.qpop qi0`           | gives the input block back: the load task may refill it                                                                                                                                                                                                               |
+| `wf.qpush qo0`          | hands the filled output block to the store task                                                                                                                                                                                                                       |
 
 None of the three vector instructions carries `.c`, so each is a **pass** of its own. Each pass goes
 once through the pipeline over all 16 elements, reads its operands from the register file and writes
@@ -80,11 +79,11 @@ draining the pipeline.
 <!-- listing: double.chained -->
 ```text
 wf.setvl 16
-wf.vlse.c v0, q0, 0, 1
+wf.vlse.c v0, qi0, 0, 1
 vadd.vv.c v1, v0, v0
-wf.vsse q0, v1, 0, 1
-wf.qpop q0
-wf.qpush q0
+wf.vsse qo0, v1, 0, 1
+wf.qpop qi0
+wf.qpush qo0
 ```
 
 The same instructions, but `.c` on the first two **chains** each into the next. The three now form
@@ -92,9 +91,9 @@ one pass, one instruction per slot:
 
 | Slot | Instruction                | Its operand comes from                                    |
 | ---- | -------------------------- | --------------------------------------------------------- |
-| 0    | `wf.vlse.c v0, q0, 0, 1` | the input block                                           |
+| 0    | `wf.vlse.c v0, qi0, 0, 1` | the input block                                           |
 | 1    | `vadd.vv.c v1, v0, v0`   | slot 0's result for the same element, **forwarded** |
-| 2    | `wf.vsse q0, v1, 0, 1`   | slot 1's result for the same element, forwarded           |
+| 2    | `wf.vsse qo0, v1, 0, 1`   | slot 1's result for the same element, forwarded           |
 
 Each element now goes through all three slots in one trip down the pipeline: element `i` is read,
 doubled and written while element `i + 1` is one cycle behind it. `v0` and `v1` are still written to
@@ -111,7 +110,7 @@ three:
 <!-- listing: double.checks -->
 ```text
 one slot,    unchained:  accepted
-one slot,    chained:    execute[1] wf.vlse.c v0, q0, 0, 1: the chain is left open (it ends the program or runs past S = 1 instructions)
+one slot,    chained:    execute[1] wf.vlse.c v0, qi0, 0, 1: the chain is left open (it ends the program or runs past S = 1 instructions)
 three slots, unchained:  accepted
 three slots, chained:    accepted
 ```

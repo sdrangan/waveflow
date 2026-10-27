@@ -584,7 +584,7 @@ class Machine:
             if not self.inq[q]:
                 self.pull(q)
             if not self.inq[q]:
-                raise ProgramError(f"input queue q{q} is read while empty")
+                raise ProgramError(f"input queue qi{q} is read while empty")
             blk = self.head[q] = self.inq[q].popleft()
         return blk
 
@@ -603,7 +603,7 @@ class Machine:
             if f == QOp.VLSE:
                 blk = self._head(x.rs1)
                 if (idx >= len(blk.written)).any() or not blk.written[idx].all():
-                    raise ProgramError(f"{x}: lane groups {idx.tolist()} of q{x.rs1}'s head block "
+                    raise ProgramError(f"{x}: lane groups {idx.tolist()} of qi{x.rs1}'s head block "
                                        "were not all loaded")
                 fq = cfg.in_queue_formats[x.rs1]
                 self._vwrite(x.rd, sl, blk.re[idx].T, fq, blk.im[idx].T, fq)
@@ -824,9 +824,9 @@ def run_job(cfg: VecUnitConfig, load: list[Instr], execute: list[Instr], store: 
         result.executed += len(chain)
     if result.status != Status.OK:
         return result  # fatal: nothing more is taken or answered
-    held = [f"q{q} (input)" for q, b in enumerate(m.head) if b is not None]
-    held += [f"q{q} (output)" for q, b in enumerate(m.tail) if b is not None]
-    left = [f"q{q}" for q, d in enumerate(m.inq) if d]
+    held = [f"qi{q}" for q, b in enumerate(m.head) if b is not None]
+    held += [f"qo{q}" for q, b in enumerate(m.tail) if b is not None]
+    left = [f"qi{q}" for q, d in enumerate(m.inq) if d]
     if held or left or at["load"] < len(load):
         raise ProgramError(f"the job ends holding {held}, with blocks left in {left} and "
                            f"{len(load) - at['load']} load instructions not run: every block a job "

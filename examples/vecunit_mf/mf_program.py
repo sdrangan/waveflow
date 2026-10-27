@@ -20,9 +20,9 @@ group into ``v1``, ``v2 = conj(v0[member 0]) * v1`` (the conjugate and broadcast
 ``v2`` straight to the output block::
 
     wf.setvl k
-    wf.vlse v0, q0, 0, 1 ; wf.qpop q0
-    for g:  wf.vlse.c v1, q1, g, G ; wf.vmulc.vb.c v2, v0, v1 ; wf.vsse q0, v2, g, G
-    wf.qpop q1 ; wf.qpush q0
+    wf.vlse v0, qi0, 0, 1 ; wf.qpop qi0
+    for g:  wf.vlse.c v1, qi1, g, G ; wf.vmulc.vb.c v2, v0, v1 ; wf.vsse qo0, v2, g, G
+    wf.qpop qi1 ; wf.qpush qo0
 
 ``5 + 3·ceil(nrx / L)`` instructions a chunk; each pass moves ``k`` elements.  The load program
 alternates ``wf.ld`` of ``X`` and ``R`` per chunk; the store program is one ``wf.st`` per chunk

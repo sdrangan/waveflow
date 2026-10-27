@@ -77,11 +77,11 @@ print(to_float(yr, T.FV).ravel())
 
 ```text
 wf.setvl 5
-wf.vlse.c v0, q0, 0, 1
+wf.vlse.c v0, qi0, 0, 1
 vadd.vv.c v1, v0, v0
-wf.vsse q0, v1, 0, 1
-wf.qpop q0
-wf.qpush q0
+wf.vsse qo0, v1, 0, 1
+wf.qpop qi0
+wf.qpush qo0
 [0.  0.5 1.  1.5 2. ]
 ```
 
@@ -173,13 +173,13 @@ for x in T.cmul_programs(cfg, 16, 4).execute:
 
 ```text
 wf.setvl 16
-wf.vlse v0, q0, 0, 1
-wf.vlse.c v1, q1, 0, 1
+wf.vlse v0, qi0, 0, 1
+wf.vlse.c v1, qi1, 0, 1
 wf.vmulc.vv.c v2, v0, v1
-wf.vsse q0, v2, 0, 1
-wf.qpop q0
-wf.qpop q1
-wf.qpush q0
+wf.vsse qo0, v2, 0, 1
+wf.qpop qi0
+wf.qpop qi1
+wf.qpush qo0
 ```
 
 The execute task goes one step further and **fuses** consecutive passes that do not depend on each
