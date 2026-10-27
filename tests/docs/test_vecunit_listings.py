@@ -1,7 +1,7 @@
-"""The vector unit's program-examples page shows assembly only: every ``text`` block on it is marked
-``<!-- listing: NAME -->`` and equals what :data:`LISTINGS` ``[NAME]`` prints from the toy kernels
-(``examples/vecunit/toy.py``), so a listing cannot go stale.  An unmarked block, or a name with no
-listing, fails."""
+"""The vector unit's program-examples and instruction-set pages show assembly and tables, not Python:
+every ``text`` block on them is marked ``<!-- listing: NAME -->`` and equals what
+:data:`LISTINGS` ``[NAME]`` prints (from the toy kernels, ``examples/vecunit/toy.py``, and the ISA), so
+a listing cannot go stale.  An unmarked block, or a name with no listing, fails."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from examples.vecunit import toy as T
 from waveflow.vecunit import isa as I
@@ -17,7 +18,8 @@ from waveflow.vecunit.asm import check
 from waveflow.vecunit.isa import disassemble
 from waveflow.vecunit.unit import VecUnit, job_features
 
-PAGE = Path(__file__).resolve().parents[2] / "docs/guide/dsp/vecunit/program_examples.md"
+PAGES = [Path(__file__).resolve().parents[2] / "docs/guide/dsp/vecunit" / name
+         for name in ("program_examples.md", "isa.md")]
 
 CFG = T.toy_config()
 ONE_SLOT = replace(CFG, S=1, slot_caps=())  # the toy unit, built with one slot
@@ -107,7 +109,48 @@ def one_program() -> str:
     return asm(one)
 
 
+def q_examples() -> str:
+    """``q_d(x)`` on a small format, in each rounding and overflow mode (exact inputs)."""
+    from waveflow.utils import fixputils as fx
+    from waveflow.utils.fixputils import Format, OMode, QMode
+
+    src = Format(16, 8, True)  # holds every x below exactly
+    modes = [("AP_RND, AP_SAT", QMode.AP_RND, OMode.AP_SAT), ("AP_TRN, AP_SAT", QMode.AP_TRN, OMode.AP_SAT),
+             ("AP_RND, AP_WRAP", QMode.AP_RND, OMode.AP_WRAP)]
+    out = ["d: 8 bits, 3 integer, 5 fraction (steps of 1/32), from -4 to 3.96875",
+           f"{'x':>10}  " + "".join(f"{name:>17}" for name, _q, _o in modes)]
+    for x in (0.296875, 5.0, -0.015625):
+        row = f"{x:>10}  "
+        for _name, q, o in modes:
+            d = Format(8, 3, True, q, o)
+            s = fx.quantize(int(round(x * 2 ** src.frac_bits)), src, d)
+            row += f"{float(fx.to_float(s, d)):>17}"
+        out.append(row)
+    return "\n".join(out)
+
+
+def encoding_example() -> str:
+    x = I.vmacc_vs(0, 2, 2).c
+    word = x.encode()
+    out = [f"{x}  ->  0x{word:016x}", "field     bits    value"]
+    pos = 0
+    for name, bits in I._FIELDS:
+        v = (word >> pos) & ((1 << bits) - 1)
+        out.append(f"{name:8}  {pos + bits - 1:>2}:{pos:<2}   {v}")
+        pos += bits
+    return "\n".join(out)
+
+
+def operand_forms() -> str:
+    return "\n".join(str(x) for x in (I.vmul_vv(2, 0, 1), I.vmul_vv(2, 0, 1, conj=True),
+                                      I.vmul_vv(2, 0, 1, bcast=True),
+                                      I.vmul_vv(2, 0, 1, conj=True, bcast=True)))
+
+
 LISTINGS = {
+    "isa.q": q_examples,
+    "isa.encoding": encoding_example,
+    "isa.forms": operand_forms,
     "double.load_store": lambda: "\n".join([
         "# load program", asm(T.double_programs(16, 4).load),
         "# store program", asm(T.double_programs(16, 4).store)]),
@@ -132,21 +175,23 @@ LISTINGS = {
 _BLOCK = re.compile(r"(?:<!-- listing: (?P<name>[\w.]+) -->\n)?```text\n(?P<body>.*?)```", re.S)
 
 
-def blocks() -> list[tuple[str | None, str]]:
-    return [(m["name"], m["body"].rstrip("\n")) for m in _BLOCK.finditer(PAGE.read_text("utf-8"))]
+def blocks(page: Path) -> list[tuple[str | None, str]]:
+    return [(m["name"], m["body"].rstrip("\n")) for m in _BLOCK.finditer(page.read_text("utf-8"))]
 
 
-def test_every_text_block_is_a_checked_listing():
-    found = blocks()
-    assert found, "no listings on the page"
-    assert [b for b in found if b[0] is None] == [], "a text block without a listing marker"
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_every_text_block_is_a_checked_listing(page):
+    found = blocks(page)
+    assert found, f"no listings on {page.name}"
+    assert [b for b in found if b[0] is None] == [], f"a text block without a listing marker on {page.name}"
     unknown = {n for n, _ in found} - set(LISTINGS)
     assert not unknown, f"markers with no listing: {sorted(unknown)}"
 
 
-def test_listings_match_the_toy_kernels():
-    for name, body in blocks():
-        assert body == LISTINGS[name](), f"listing {name!r} differs from what the toy prints"
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_listings_match_what_they_print(page):
+    for name, body in blocks(page):
+        assert body == LISTINGS[name](), f"listing {name!r} on {page.name} differs from what it prints"
 
 
 def test_unchained_and_chained_double_give_the_same_bits():
