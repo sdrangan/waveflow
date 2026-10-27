@@ -471,6 +471,12 @@ from the build).
 datapath change. The risk is in correctness, not cost: `D` must be the true distance of the built
 pipeline, checked at RTL (an XSI gate with `VL = D` and `VL = D − 1` on a dependent pair).
 
+**Measured (2026-10-27, Vitis HLS / Vivado xsim 2025.1, `xczu48dr`, 4 ns; the toy unit at `VLMAX`
+64, four `poly` jobs of 64 rows).** RTL, a job: **420 cycles unfused, 347 fused** (`fuse_raw_vl` 64;
+−73, −17 %), bit-exact both; csynth's fused loop 26 deep, so 64 has ample margin. pysim gives 379 and
+313: about 10 % short of the RTL, both -- its timing was calibrated on the CG build at 2024.1, whose
+decode loop ran at II 13 against this build's 20 (see F4's measurement).
+
 **Tests.** Fast, csynth, XSI, and a timing recalibration (the `run` feature counts change).
 
 **Decisions (open).** Whether `D` is a configuration constant or read from the build's schedule; the
@@ -537,6 +543,13 @@ The five vector-unit XSI gates (`WANT_XSI_GATES` 243) were last run on Vitis / V
 execute task relies on `hls::read_buf` / `hls::write_buf` under `EXPLICIT_ACQUIRE_RELEASE`, checked
 only against the 2024.1 header. Run them on 2025.1 after the batch, once; record every number with
 its tool version. The toy unit (`examples/vecunit`) has no RTL gate yet: add one in the same run.
+
+**Done (2026-10-27).** On Vitis / Vivado 2025.1: the five gates pass on the code before the batch
+(`read_buf` / `write_buf` work as at 2024.1), and all seven (`WANT_XSI_GATES` 245, the two toy gates
+added) pass on the batch (commit 7ed92483). The first batch run failed both toy gates -- `wf.sli`'s
+range check overflowed an `int` at a 32-bit scalar -- fixed in that commit. Not done: the cycle
+counts of CG and the matched filter at 2025.1, and the timing recalibration the decode loop's II 20
+(against 13 at 2024.1) calls for.
 
 ## Docs follow-ups (no unit change)
 
