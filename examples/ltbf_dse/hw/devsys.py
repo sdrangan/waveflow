@@ -159,12 +159,20 @@ class LtbfIngestHost(DevHost):
 
 
 def dev_system(
-    dev, *, mem_words: int, host: DevHost, driver=None, sym_port: str = "s_sym"
+    dev,
+    *,
+    mem_words: int,
+    host: DevHost,
+    driver=None,
+    sym_port: str = "s_sym",
+    fresh=None,
 ):
     """*dev* (a wrapper) with a one-source RespHub, Shared Mem at 0 and *host*, on one crossbar; an
     optional *driver* feeds the device's *sym_port*."""
     sim, clk = dev.sim, dev.clk
-    mem_words = 1 << (int(mem_words) - 1).bit_length()  # the crossbar's RTL: power-of-two ranges
+    mem_words = (
+        1 << (int(mem_words) - 1).bit_length()
+    )  # the crossbar's RTL: power-of-two ranges
     hub = RespHub1(name="hub", sim=sim, clk=clk, word_bits=W)
     mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk, nwords_tot=mem_words,
                     addr_unit=AddrUnit.byte)  # fmt: skip
@@ -217,8 +225,12 @@ def dev_system(
         ifs=[xbar, *links],
     )
     return HwSystem(
-        sim, dut, run_until=host.done, check=lambda s: (host.resps, host.got)
-    )
+        sim,
+        dut,
+        run_until=host.done,
+        check=lambda s: (host.resps, host.got),
+        fresh=fresh,
+    )  # fresh: the flow's pysim runs an unrun copy
 
 
 def _ac9():
@@ -270,7 +282,7 @@ def sys_system() -> HwSystem:
                                   c_base=cc).serialize(word_bw=W))  # fmt: skip
         reads.append((cc, S.w(m, n)))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host)
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=sys_system)
 
 
 def vec_system() -> HwSystem:
@@ -317,7 +329,7 @@ def vec_system() -> HwSystem:
     job(S.prog_at["eq"], lds, [(xh, wb, wb)], d.J)
     reads.append((xh, d.J * wb))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host)
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=vec_system)
 
 
 def ingest_system(n_sym: int = 2) -> HwSystem:
@@ -347,4 +359,10 @@ def ingest_system(n_sym: int = 2) -> HwSystem:
                    ingest=(cfg.serialize(word_bw=W), n_sym * d.n_chunks, S.slot_words, 0, depth))  # fmt: skip
     host.extra_bundles = {"vectors/oru": bursts}
     host.drivers = [oru]
-    return dev_system(dev, mem_words=depth * S.slot_words, host=host, driver=oru)
+    return dev_system(
+        dev,
+        mem_words=depth * S.slot_words,
+        host=host,
+        driver=oru,
+        fresh=lambda: ingest_system(n_sym),
+    )
