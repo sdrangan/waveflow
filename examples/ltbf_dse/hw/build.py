@@ -192,11 +192,7 @@ def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) 
     its timing filed in ``calib/``.  The Resp FIFO's order is timing's, so the gate (the test) compares what
     must agree word for word rather than the flow's ``ltbf_compare`` (plan §9 e)."""
     from examples.ltbf_dse.hw import system as sy
-    from waveflow.build.phase_calib import MemCalibStep
     from waveflow.build.system_dag import add_system_steps
-    from waveflow.calib.record_store import ModuleStore
-    from waveflow.hw.clock import Clock
-    from waveflow.hw.harness import memory_harness
 
     dag = BuildDag()
     dag.add(LtbfCodegenStep(name="codegen"))
@@ -205,13 +201,40 @@ def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) 
                      trace=trace, trace_bus=trace_bus)  # fmt: skip
     # Shared Mem alone first (plans/unit_harness.md Stage 4c): its RTL reads cost a cycle more a word
     # than pysim's plain memory, so the system's pysim loads the timing measured here.
+    dag.require("ltbf_pysim", [add_memcal(dag, S.mem_span, "umemcal_", work_dir)])
+    return dag
+
+
+#: Shared Mem's spans in the DSE's systems (a power of two each): N_rx 64, 256 and 1024 at AC9's
+#: other parameters.  A memory's timing record is filed under its identity, its span included.
+MEM_SPANS = (1 << 17, 1 << 19, 1 << 21)
+
+
+def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR) -> str:
+    """Shared Mem of *span* words in its own harness, through XSI, and its timing fitted and filed
+    in ``calib/`` (``MemCalibStep``); returns the record's artifact."""
+    from examples.ltbf_dse.hw import system as sy
+    from waveflow.build.phase_calib import MemCalibStep
+    from waveflow.build.system_dag import add_system_steps
+    from waveflow.calib.record_store import ModuleStore
+    from waveflow.hw.clock import Clock
+    from waveflow.hw.harness import memory_harness
+
     clk = Clock(freq=sy.F_HOST)
-    uncal = memory_harness(lambda sim: sy.shared_mem(sim, S.mem_span, clk, calibrated=False),
-                           sy.mem_script("calib", S.mem_span), n_cycles=40_000)  # fmt: skip
-    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix="umemcal_")
-    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=ModuleStore(sy.CALIB_DIR))
+    uncal = memory_harness(lambda sim: sy.shared_mem(sim, span, clk, calibrated=False),
+                           sy.mem_script("calib", span), n_cycles=40_000)  # fmt: skip
+    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix=prefix)
+    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix=prefix, store=ModuleStore(sy.CALIB_DIR))
     dag.add(mem_cal)
-    dag.require("ltbf_pysim", [mem_cal.a("mem_timing")])
+    return mem_cal.a("mem_timing")
+
+
+def memcal_dag(spans=MEM_SPANS, work_dir=WORK_DIR) -> BuildDag:
+    """Shared Mem's timing at every span the DSE's systems use (:func:`add_memcal`); the memory is
+    framework RTL, so no codegen."""
+    dag = BuildDag()
+    for span in spans:
+        add_memcal(dag, span, f"umemcal{span.bit_length() - 1}_", work_dir)
     return dag
 
 

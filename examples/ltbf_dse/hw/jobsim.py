@@ -17,7 +17,14 @@ times and A53 charges, which checks this simulator's event logic alone: at AC9 (
 calibrated, the O-RU at 1 ms a symbol) its end is pysim's to 0.00% and its long-term update's to
 0.01%.  A chunk's arrival as a fixed offset from its symbol's start holds only while ingest keeps up:
 at 500 µs the Ingest DMA's writes queue behind the ``Z`` jobs' reads on the serialized Shared Mem
-port and arrivals fall symbols behind -- step 5.5 models the port itself.
+port and arrivals fall symbols behind.
+
+:func:`fitted` is the DSE's: the frozen models (``hw/models.py``), every job's cycles from its shape,
+and Shared Mem's one port shared by processor sharing (:class:`Port`) -- each engine job's, host
+operation's and DMA symbol's port work (the words they move, at the fitted cost a word) advances at
+``1/k`` while ``k`` share the port, the rest of their time adds.  Without the port, jobs that overlap
+under the dynamic policy (two CG chains: ``U`` on the systolic engine beside a step on the vector
+unit) ran 12% short of pysim's long-term update; with it, AC11's scores (``hw/validate.py``).
 
     python -m examples.ltbf_dse.hw.jobsim          # AC9 against its pysim run (the oracle)
 """
@@ -54,6 +61,15 @@ class Timing:
     proj: Callable[[int], float] | None = None
     #: The projection model's Jacobi counters when :attr:`proj` is ``None``.
     proj_counters: dict = field(default_factory=lambda: {"n_rot": 168.0, "n_sweeps": 6.0})
+    #: Each projection job's counters (``job -> dict``), overriding :attr:`proj_counters`.
+    proj_counters_of: Callable[[Any], dict] | None = None
+    #: The Ingest DMA's time a symbol, which paces the O-RU's writes (``None``: the writes' own).
+    symbol: float | None = None
+    #: Shared Mem's port shared (:class:`Port`): ``sys_job`` / ``vec_job`` then return ``(port,
+    #: rest)`` cycles, the host's reads and writes are port work, and a symbol's
+    #: :attr:`symbol_port` of its :attr:`symbol` is the DMA's writes.
+    port: bool = False
+    symbol_port: float = 0.0
     read: tuple = (2.0, 1.0)  # a + b n
     write: tuple = (17.4, 1.03)
     queue: tuple = (3.0, 1.0)
@@ -67,6 +83,55 @@ class Timing:
     def writes(self, n: int) -> float:
         return sum(self.write[0] + self.write[1] * min(MAX_BURST, n - i)
                    for i in range(0, n, MAX_BURST))  # fmt: skip
+
+
+class Port:
+    """Shared Mem's one port (it serves one transaction at a time), shared by processor sharing:
+    while ``k`` transfers are active, each one's remaining port work advances at ``1/k`` of the clock."""
+
+    def __init__(self, env: simpy.Environment, period: float) -> None:
+        self.env, self.period = env, period
+        self.active: dict = {}  # event -> remaining cycles of port work
+        self.t = env.now
+        self.gen = 0
+        self.busy = 0.0  # cycles with at least one transfer active
+
+    def _advance(self) -> None:
+        k = len(self.active)
+        if k:
+            dt = (self.env.now - self.t) / self.period
+            self.busy += dt
+            for ev in self.active:
+                self.active[ev] -= dt / k
+        self.t = self.env.now
+
+    def transfer(self, cycles: float) -> simpy.Event:
+        """An event that fires once *cycles* of port work are done."""
+        self._advance()
+        ev = self.env.event()
+        if cycles <= 0:
+            ev.succeed()
+            return ev
+        self.active[ev] = cycles
+        self._schedule()
+        return ev
+
+    def _schedule(self) -> None:
+        self.gen += 1
+        if self.active:
+            dt = min(self.active.values()) * len(self.active) * self.period
+            self.env.process(self._wake(self.gen, max(dt, 0.0)))
+
+    def _wake(self, gen: int, dt: float):
+        yield self.env.timeout(dt)
+        if gen != self.gen:
+            return  # rescheduled by a later transfer
+        self._advance()
+        for ev, rem in list(self.active.items()):
+            if rem <= 1e-6:
+                del self.active[ev]
+                ev.succeed()
+        self._schedule()
 
 
 @dataclass
@@ -111,6 +176,7 @@ class JobSim:
         self.inbox = simpy.Store(self.env)
         self.cpu_q = simpy.Store(self.env)
         self.gp_lock = simpy.Resource(self.env, capacity=1)
+        self.port = Port(self.env, self.period)
         self.fifo = {e: simpy.Store(self.env, capacity=max(1, cfg.cap[e] - 1)) for e in ("sys", "vec")}
         self.slot_start = self.env.event()
         self.done = self.env.event()
@@ -164,6 +230,13 @@ class JobSim:
         if cycles > 0:
             yield self.env.timeout(cycles * self.period)
 
+    def xfer(self, cycles: float):
+        """A host read or write over Shared Mem: port work when the port is shared, else a wait."""
+        if self.t.port:
+            yield self.port.transfer(cycles)
+        else:
+            yield from self.wait(cycles)
+
     # -- the host's threads (LtbfHost's) ---------------------------------------------------------
 
     def run(self) -> dict:
@@ -181,7 +254,7 @@ class JobSim:
 
     def _main(self):
         sch, d, t = self.sch, self.cfg.d, self.t
-        yield from self.wait(t.writes(self.cfg.setup_words))
+        yield from self.xfer(t.writes(self.cfg.setup_words))
         yield from self.wait(t.queue[0] + 2 * t.queue[1])  # the Ingest DMA's Ctrl
         sch.add(self.lt)
         rt_added = False
@@ -228,7 +301,7 @@ class JobSim:
                     yield from self.wait(t.queue[0] + t.queue[1] * words)
         if sch.credit != self.credit_sent:
             self.credit_sent = sch.credit
-            yield from self.wait(t.writes(1))
+            yield from self.xfer(t.writes(1))
             self.credit_seen = sch.credit
         yield from self._charge_trace()
 
@@ -253,15 +326,15 @@ class JobSim:
         b = self._bufs(gid)
         if j.op in ("srs", "init"):
             for name in j.writes:
-                yield from self.wait(t.writes(b[name]))
+                yield from self.xfer(t.writes(b[name]))
         elif j.op == "dmrs":
             for name in j.reads:
-                yield from self.wait(t.reads(b[name]))
+                yield from self.xfer(t.reads(b[name]))
             for name in j.writes:
-                yield from self.wait(t.writes(b[name]))
+                yield from self.xfer(t.writes(b[name]))
         elif j.op == "meas":
             for name in j.reads:
-                yield from self.wait(t.reads(b[name]))
+                yield from self.xfer(t.reads(b[name]))
         else:
             raise ValueError(f"no Python stage {j.op!r}")
 
@@ -270,15 +343,17 @@ class JobSim:
         j = self.sch.jobs[gid]
         b = self._bufs(gid)
         for name in j.reads:
-            yield from self.wait(t.reads(b[name]))
+            yield from self.xfer(t.reads(b[name]))
         if t.proj is not None:
             yield from self.charge(type(self._fns["ctrl"]).fixed("ltbf_proj", t.proj(gid)))
+        elif t.proj_counters_of is not None:
+            yield from self.charge(self._fns["proj"], **t.proj_counters_of(j))
         else:
             yield from self.charge(self._fns["proj"], n=float(d.n_rx), r=float(d.r),
                                    conn=float(d.U_conn or d.U), **t.proj_counters)  # fmt: skip
         with self.gp_lock.request() as req:
             yield req
-            yield from self.wait(t.writes(d.words(d.rows, d.S)))
+            yield from self.xfer(t.writes(d.words(d.rows, d.S)))
 
     # -- the engines and the Ingest DMA -----------------------------------------------------------
 
@@ -288,7 +363,12 @@ class JobSim:
             gid, tx = yield self.fifo[e].get()
             self.t_start[gid] = self.env.now
             job = self.sch.jobs[gid]
-            yield from self.wait(t.sys_job(gid, job) if e == "sys" else t.vec_job(gid, job))
+            r = t.sys_job(gid, job) if e == "sys" else t.vec_job(gid, job)
+            if isinstance(r, tuple):  # (port work, the rest)
+                yield self.port.transfer(r[0])
+                yield from self.wait(r[1])
+            else:
+                yield from self.wait(r)
             yield from self.wait(t.resp)
             yield self.inbox.put(("resp", SRC[e], tx, 0))
 
@@ -303,20 +383,105 @@ class JobSim:
         for s in range(d.n_sym):
             yield self.env.timeout(max(0.0, t0 + (s + 1) * cfg.sym_period - self.env.now))
             start = self.env.now
-            if ring - (self.taken - self.credit_seen) < d.n_chunks:
+            dropped = ring - (self.taken - self.credit_seen) < d.n_chunks
+            first = self.seq
+            if dropped:
                 self.overruns += 1
-                self.seq += d.n_chunks
             else:
                 self.taken += d.n_chunks
-                for k in range(d.n_chunks):
-                    self.env.process(self._chunk(start, k, self.seq + k))
-                self.seq += d.n_chunks
-            yield from self.wait(d.n_rx * (t.queue[0] + t.queue[1] * ant_words))
+                if not t.port:
+                    for k in range(d.n_chunks):
+                        self.env.process(self._chunk(start, k, first + k))
+            self.seq += d.n_chunks
+            if t.port:  # the DMA's writes share the port, the rest of its symbol time adds; its
+                # chunks complete with its last antenna group
+                yield self.port.transfer(t.symbol_port)
+                yield from self.wait((t.symbol or 0.0) - t.symbol_port)
+                if not dropped:
+                    for k in range(d.n_chunks):
+                        self.chunks += 1
+                        yield self.inbox.put(("resp", SRC_INGEST, 0, (first + k) % (1 << 16)))
+            else:
+                yield from self.wait(max(t.symbol or 0.0, d.n_rx * (t.queue[0] + t.queue[1] * ant_words)))
 
     def _chunk(self, start: float, k: int, seq: int):
         yield self.env.timeout(max(0.0, start + self.t.chunk(k) * self.period - self.env.now))
         self.chunks += 1
         yield self.inbox.put(("resp", SRC_INGEST, 0, seq % (1 << 16)))
+
+
+# -- the fitted models (step 5.5) --------------------------------------------------------------------
+
+
+def fitted(S, model: dict) -> tuple[Config, Timing]:
+    """``(Config, Timing)`` for the system *S* (``system.LtbfSystem``) on the frozen models
+    (``models.json``): each engine job's cycles from its shape (the words it moves over Shared Mem,
+    its tiles; a vector job's program's execute cycles), each chunk from the Ingest DMA's symbol
+    model, each projection priced on its UE's Jacobi counters -- computed from the fixed-point chain's
+    ``W`` as the host computes them.  Shared Mem as built: a host read two cycles a word, a write one."""
+    from examples.ltbf_dse import ltbf_fixed_chain as fc
+    from examples.ltbf_dse import ltbf_proj
+    from examples.ltbf_dse.hw import programs as pg
+    from examples.ltbf_dse.hw.vec_wrap import VecMemJob
+    from waveflow.linalg.systolic_engine_mem import EngineJobDesc
+    from waveflow.vecunit.unit import VecTiming, job_features
+
+    d, p, inp = S.d, S.p, S.inp
+    cy = model["cycles"]
+
+    def pred(kind: str, terms: dict) -> float:
+        return sum(cy[kind][k] * terms.get(k, 0.0) for k in cy[kind])
+
+    wa, wb, wc = S.w(d.Mmax, d.c), S.w(d.c, d.c), S.w(d.Mmax, d.c)
+
+    def split(kind: str, terms: dict) -> tuple[float, float]:
+        """``(port, rest)``: the words' terms are the job's port work, the others its own time."""
+        port = sum(cy[kind][k] * terms.get(k, 0.0) for k in ("rd", "wr") if k in cy[kind])
+        return port, pred(kind, terms) - port
+
+    def sys_job(gid: int, j) -> tuple[float, float]:
+        tiles, P = (j.shape["M"] // d.Mmax) * (j.shape["N"] // d.c), j.shape["K"] // d.c
+        return split("sys", {"1": 1.0, "rd": tiles * P * (wa + wb), "wr": tiles * wc, "tiles": tiles})
+
+    vt = VecTiming().for_config(S.vu)
+    progs = {"cg": pg.cg_step_programs(S.vu, d.rows, d.c, inp.sh),
+             "cg_last": pg.cg_step_programs(S.vu, d.rows, d.c, inp.sh, last_m=S.cfg.m_shift),
+             "eq": pg.eq_programs(S.vu, d.u_pad, d.c, p.r, d.J, off=S.off)}  # fmt: skip
+    ex = {k: vt.predict(job_features(v.execute, S.vu)) for k, v in progs.items()}
+    pw = {k: sum(len(x) for x in v) for k, v in progs.items()}
+    mw, wbv = S.w(d.rows, d.c), S.w(d.u_pad, d.c)
+
+    def vec_job(gid: int, j) -> tuple[float, float]:
+        if j.op == "step":
+            k = "cg_last" if j.shape["last"] else "cg"
+            return split("vec", {"1": 1.0, "rd": 4 * mw + pw[k], "wr": len(j.writes) * mw, "exec": ex[k]})
+        return split("vec", {"1": 1.0, "rd": d.J * 2 * p.r * wbv + pw["eq"], "wr": d.J * wbv,
+                             "exec_eq": ex["eq"], "eq": 1.0})  # fmt: skip
+
+    groups = d.rows // d.c
+    in_words = d.n_rx * (d.words(1, d.n_sc) + 1)
+    t_sym = pred("ing", {"1": 1.0, "words": in_words, "tiles": groups * d.n_chunks * d.J})
+    # Its writes to Shared Mem: every input word once, at a write's cost a word.
+    sym_port = in_words * cy["sys"]["wr"]
+
+    def chunk(k: int) -> float:  # a symbol's chunks complete with its last antenna group
+        return t_sym * (1 - (d.n_chunks - 1 - k) / (groups * d.n_chunks))
+
+    w = fc.fixed_long_term(inp.prep, S.cfg, p.t)[p.sector].w[p.t - 1]
+    n_conn = d.U_conn or d.U
+    counters = {k: ltbf_proj.proj_counters(w[: 8 * n_conn, 8 * k : 8 * k + 8] * 2.0 ** (inp.sh + S.cfg.m_shift),
+                                           d.n_rx, inp.prep.pos[u], p.r)
+                for k, u in enumerate(inp.own)}  # fmt: skip
+    timing = Timing(sys_job=sys_job, vec_job=vec_job, chunk=chunk, symbol=t_sym, port=True,
+                    symbol_port=min(sym_port, t_sym),
+                    proj_counters_of=lambda j: counters[j.key[1]], read=(3.0, 2.0), write=(2.0, 1.0))  # fmt: skip
+    W = p.word_bits
+    desc = {"sys": len(EngineJobDesc().serialize(word_bw=W)), "vec": len(VecMemJob().serialize(word_bw=W))}
+    cfg = Config(d=d, policy=p.policy, qresp_depth=p.qresp_depth, ring_symbols=p.ring_symbols,
+                 n_cores=p.n_cores, sym_period=p.sym_period, word_bits=W,
+                 cap={e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))},
+                 setup_words=sum(len(x) for _a, x in S.programs.values()))  # fmt: skip
+    return cfg, timing
 
 
 # -- the oracle: a pysim run's own times ---------------------------------------------------------------
