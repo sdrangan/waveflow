@@ -37,8 +37,13 @@ pytest -m xsi
 # Run only the processor-model ground-truth gates (plans/cpu_model.md): gem5 v25.1 HPI in Docker
 # (ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1) from a build at WAVEFLOW_GEM5_ROOT, McPAT at
 # WAVEFLOW_MCPAT_ROOT, the Vitis 2024.1 aarch64 gcc.  Like -m xsi, a skip fails the session.
-# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5"
+# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5 and not sionna"
 pytest -m gem5
+
+# Run only the ray-traced RF environment's Sionna gates (plans/sionna_rt/sionna_rt.md): the tests that
+# trace a scene with Sionna RT, which needs pip install -e ".[sionna]" (CPU is fine).  Like -m xsi, a
+# skip fails the session, and a full run must collect WANT_SIONNA_GATES.
+pytest -m sionna
 
 # Lint / format
 ruff check waveflow/
@@ -86,11 +91,19 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
   and `CpuPlatform` for the shipped Cortex-A53 platform `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/`
   (gem5 v25.1 HPI + McPAT 22 nm). Calibration harness in `waveflow/cpu/calib/`; tests in `tests/cpu/`;
   guide in `docs/guide/cpu/`; example `examples/cpu_sched/`.
+- **`waveflow/rfenv/`** — The ray-traced RF environment on `RFSampIF` edges: a scene traced with NVIDIA
+  Sionna RT (the optional `.[sionna]` extra; runs on a CPU) into a channel file (`PathSet`: every path's
+  amplitude, absolute delay and Doppler, per antenna pair), applied block by block by the pysim nodes
+  `RtChannel` (the air between a DAC edge and an ADC edge) and `RtSignalSource` (what a receiver hears;
+  its XSI twin is `RfFileSource` replaying `render_bundle()`). Cached (`load_or_trace`,
+  `TraceChannelStep`) or live tracing; a committed channel file needs only numpy. Tests in
+  `tests/rfenv/` (`-m sionna` for those that trace); guide in `docs/guide/rf/rfenv/`; example
+  `examples/rt_sounder/`.
 - **`waveflow/toolchain/`** — Vitis HLS / Vivado toolchain detection and integration.
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). `mcp/knowledge/` is local search and read over `docs/guide/` and the reference examples — an in-memory BM25 index built from the checkout at server start, also reachable as `waveflow kb <cmd>`.
-- **`examples/`** — Reference designs. The curated set is the twenty-seven with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
+- **`examples/`** — Reference designs. The curated set is the twenty-eight with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
 
 ### Simulation flow
 

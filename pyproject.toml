@@ -36,6 +36,12 @@ dev = [
     "ruff",
     "mypy",
 ]
+# The ray-traced RF environment's backend (waveflow.rfenv.sionna_backend, plans/sionna_rt/).
+# Optional on purpose: a cached channel file needs only numpy, so nothing else imports it.  Bounded
+# below 3 because each Sionna major has reshaped the RT API.
+sionna = [
+    "sionna-rt>=2.2,<3",
+]
 
 [project.scripts]
 create_doc_assets = "waveflow.scripts.create_doc_assets:main"
@@ -118,6 +124,7 @@ markers = [
     "vitis: marks tests as requiring Vitis HLS installation (slow integration tests)",
     "xsi: marks tests as requiring Vivado xsim + mingw g++ AND a prior csynth (RTL-level BFM gates)",
     "gem5: marks tests as requiring gem5 (WAVEFLOW_GEM5_ROOT), Docker and an aarch64 cross gcc (processor-model ground truth)",
+    "sionna: marks tests as requiring Sionna RT (pip install -e '.[sionna]'): ray tracing on the CPU or GPU",
     "phase1: HwModule codegen phase 14 — phase 1 (HwTestbench + extractor mode)",
     "phase2: HwModule codegen phase 14 — phase 2 (HlsCodegenStep.is_testbench)",
     "phase3: HwModule codegen phase 14 — phase 3 (DUT binding + dut.run)",
