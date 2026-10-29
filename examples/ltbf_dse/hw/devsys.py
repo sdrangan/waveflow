@@ -275,16 +275,23 @@ def _ac9(p=None):
 class _Mem:
     """A bump allocator over Shared Mem's words, and the image written into it."""
 
-    def __init__(self, start: int = 0, seed: int = 51) -> None:
+    def __init__(self, S, start: int = 0, seed: int = 51) -> None:
+        self.S = S
         self.top = start
         self.image: list = []
         self.rng = np.random.default_rng(seed)
 
-    def region(self, n: int, fill: bool = False) -> int:
+    def region(self, n: int, fill=None) -> int:
+        """*n* words; *fill* a format: random values in it, packed as the system packs them (a
+        register narrower than its lane leaves the lane's finer bits zero)."""
         a = self.top
         self.top += n
-        if fill:  # any 16-bit pattern is a lane value: random words are valid operands
-            self.image.append((a, self.rng.integers(0, 1 << 63, n, dtype=np.uint64)))
+        if fill is not None:
+            p = self.S.p
+            lim = 1 << (fill.W - 1)
+            count = n * p.word_bits // (2 * p.lane_bits)
+            re, im = (self.rng.integers(-lim, lim, count) * 2.0**-fill.frac_bits for _ in range(2))
+            self.image.append((a, self.S.to_w(re, im, fill)))
         return a
 
 
@@ -306,17 +313,17 @@ def sys_system(p=None) -> HwSystem:
     shapes = [("T", MatmulOp.MUL_AH, C, R, c), ("U", MatmulOp.MUL, R, C, c),
               ("W", MatmulOp.MUL_AH, C, R, c), ("Z", MatmulOp.MUL_AH, d.S, R, d.J * c),
               ("K", MatmulOp.MUL, R, C, R)][: 5 if d.n_rx <= 64 else 4]  # fmt: skip
-    mem = _Mem()
+    mem = _Mem(S)
     jobs, reads = [], []
     for tx, (_name, op, m, k, n) in enumerate(shapes):
-        a = mem.region(S.w(m, k), fill=True)
-        b = mem.region(S.w(k, n), fill=True)
+        a = mem.region(S.w(m, k), fill=S.cfg.a)
+        b = mem.region(S.w(k, n), fill=S.cfg.bc)
         cc = mem.region(S.w(m, n))
         jobs.append(EngineJobDesc(tx_id=tx, op=int(op), M=m, K=k, N=n, a_base=a, b_base=b,
                                   c_base=cc).serialize(word_bw=W))  # fmt: skip
         reads.append((cc, S.w(m, n)))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host, fresh=sys_system)
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: sys_system(p))
 
 
 def vec_system(p=None) -> HwSystem:
@@ -330,7 +337,7 @@ def vec_system(p=None) -> HwSystem:
     dev = VecWrap(
         name="ltbf_vec", sim=sim, clk=Clock(freq=F_HOST), vu_cfg=S.vu, word_bits=W
     )
-    mem = _Mem(start=max(a + len(w) for a, w in S.programs.values()))
+    mem = _Mem(S, start=max(a + len(w) for a, w in S.programs.values()))
     mem.image += list(S.programs.values())
     jobs, reads = [], []
 
@@ -349,13 +356,13 @@ def vec_system(p=None) -> HwSystem:
 
     mw = S.w(d.rows, d.c)
     for name, n_out in (("cg", 3), ("cg_last", 4)):
-        ins = [(mem.region(mw, fill=True), 0, mw) for _ in range(4)]
+        ins = [(mem.region(mw, fill=f), 0, mw) for f in (S.f.X, S.f.R, S.f.D, S.f.U)]
         outs = [(mem.region(mw), 0, mw) for _ in range(n_out)]
         job(S.prog_at[name], ins, outs, 1)
         reads += [(a, n) for a, _s, n in outs]
     wb, wt = S.w(d.u_pad, d.c), S.w(d.S, d.c)
-    z = mem.region(d.J * wt, fill=True)
-    w = mem.region(d.J * wt, fill=True)
+    z = mem.region(d.J * wt, fill=S.cfg.eq.z)
+    w = mem.region(d.J * wt, fill=S.cfg.eq.w)
     xh = mem.region(d.J * wb)
     lds = []
     for k in range(p.r):
@@ -363,7 +370,7 @@ def vec_system(p=None) -> HwSystem:
     job(S.prog_at["eq"], lds, [(xh, wb, wb)], d.J)
     reads.append((xh, d.J * wb))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host, fresh=vec_system)
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: vec_system(p))
 
 
 def ingest_system(n_sym: int = 2, p=None) -> HwSystem:
@@ -393,5 +400,5 @@ def ingest_system(n_sym: int = 2, p=None) -> HwSystem:
         dev,
         mem_words=depth * S.slot_words,
         host=host,
-        fresh=lambda: ingest_system(n_sym),
+        fresh=lambda: ingest_system(n_sym, p),
     )
