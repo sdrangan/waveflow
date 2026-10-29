@@ -81,3 +81,10 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
 - **The software host's queue writes are at most 64 bits wide** (`mm_host.py:427` concatenates a 1-D
   header with `(n, 2)` 128-bit words). The system runs a 64-bit bus, as markov and mm_fir do; 128-bit
   engine ports are measured at engine level and modeled.
+- **A `CreditIn` view's stream holds old values** (step 4.3): the view hands its newest value to the
+  kernel only when the kernel's credit stream (depth 2) has room, so a kernel that drains the stream
+  only now and then reads the two oldest values ever written and acts on a stale credit (the Ingest
+  DMA dropped a symbol it had room for). Keep the credit in a register a separate process refreshes
+  (the RTL's non-blocking read every cycle). Also: a register bank's config is
+  `BoundMemSlaveAdaptor.stream_master(name)`, its status `.status(name).read()` (decoded); the host
+  writes a credit with `m.write(words, layout["credit"].base)`.

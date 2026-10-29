@@ -48,3 +48,34 @@ class SysStatus(DataList):
         "last_tx_id": {"schema": U16, "description": "the last finished job's tx_id"},
         "last_status": {"schema": U8, "description": "its status"},
     }
+
+
+class IngestCfg(DataList):
+    """The Ingest DMA's configuration (spec §5.4), written before the first symbol."""
+
+    include_filename: ClassVar[str | None] = "ltbf_ingest_cfg.h"
+    elements: ClassVar[dict] = {
+        "enable": {
+            "schema": U16,
+            "description": "1: take symbols (0: drop them uncounted)",
+        },
+        "ring_depth": {"schema": U16, "description": "chunk slots in the ring"},
+        "ring_base": {
+            "schema": U32,
+            "description": "the ring's first bus word in Shared Mem",
+        },
+        "chunk_words": {"schema": U32, "description": "a slot's stride, in bus words"},
+    }
+
+
+class IngestStatus(DataList):
+    """The Ingest DMA's status, the latest after every symbol."""
+
+    include_filename: ClassVar[str | None] = "ltbf_ingest_status.h"
+    elements: ClassVar[dict] = {
+        "chunks": {"schema": U32, "description": "chunks written since reset"},
+        "overruns": {
+            "schema": U32,
+            "description": "symbols dropped for want of credit",
+        },
+    }

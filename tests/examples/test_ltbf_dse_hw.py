@@ -18,8 +18,9 @@ from examples.ltbf_dse.hw.resp_hub import RespHub
 from examples.ltbf_dse.hw.sys_wrap import SysWrap
 from examples.ltbf_dse.ltbf_fixed import reg
 from waveflow.hw.clock import Clock
+from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_system import DutTop, HwSystem
-from waveflow.hw.interface import StreamIF
+from waveflow.hw.interface import StreamIF, StreamIFMaster
 from waveflow.hw.irq import IrqIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import AddrUnit, MemoryMod
@@ -278,3 +279,219 @@ def test_vector_unit_wrapper_runs_a_cg_step_from_shared_mem():
         assert np.array_equal(gr.reshape(k, n), re) and np.array_equal(
             gi.reshape(k, n), im
         ), name
+
+
+# -- the Ingest DMA ---------------------------------------------------------------------------------
+
+ING_BASE = 0x8003_0000
+T_SYM = 125e-6 / 14  # a symbol at 30 kHz
+
+
+@dataclass
+class OruSource(FreeRunMod):
+    """The O-RU: a symbol every ``period``, antenna by antenna (one burst each), then nothing.  A
+    symbol listed in ``gates`` waits for its event first."""
+
+    symbols: list = field(default_factory=list)
+    period: float = T_SYM
+    gates: dict = field(default_factory=dict)
+    clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.m_out = StreamIFMaster(name=f"{self.name}_m_out", sim=self.sim, bitwidth=W)
+        self.add_endpoint(self.m_out)
+
+    def run_iter(self):
+        for s, bursts in enumerate(self.symbols):
+            if s in self.gates:
+                yield self.gates[s]
+            yield self.env.timeout(max(0.0, (s + 1) * self.period - self.env.now))
+            for b in bursts:
+                yield from self.m_out.write(b)
+        yield self.env.event()  # done: wait forever
+
+
+@dataclass
+class IngestHost(SwHost):
+    """Configures the Ingest DMA, then runs the test's ``script`` (a generator function of the host)."""
+
+    cfg: object = None
+    script: object = None
+    clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
+    cpp_model: ClassVar[str | None] = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.add_bus_master("m", bitwidth=W)
+        self.irq = {"qresp": self.add_irq("irq_qresp")}
+        self.ctrl = self.status = self.qresp = None
+        self.credit_addr = 0
+        self.done = self.env.event()
+        self.resps: list = []
+        self.freed = 0
+
+    def scenario_bursts(self):
+        return []
+
+    def take(self):
+        r = yield from self.qresp.get_schema(Resp)
+        self.resps.append(r)
+        return r
+
+    def free(self, n: int):
+        """Return ``n`` chunks: the credit view takes the cumulative count."""
+        self.freed += n
+        yield from self.m.write(np.asarray([self.freed], np.uint64), self.credit_addr)
+
+    def main(self):
+        yield from self.ctrl.write(self.cfg)
+        yield from self.script(self)
+        self.done.succeed()
+
+
+def ingest_system(n_ant: int, J: int, depth: int, n_sym: int, script, *, km=8, nm=8):
+    """The Ingest DMA, the RespHub, Shared Mem at 0, the O-RU stand-in and a host on one crossbar;
+    the grid is random ``Y`` in a 16-bit format.  ``want(s, c)`` is chunk ``c`` of symbol ``s`` in
+    ``SystolicEngineMem``'s B layout (``block_major``), zero-padded past ``n_sc``."""
+    from types import SimpleNamespace
+
+    from examples.ltbf_dse.hw.ingest import IngestDev
+    from examples.ltbf_dse.hw.records import IngestCfg
+    from waveflow.linalg.lanes import to_words
+    from waveflow.linalg.systolic_engine_mem import block_major
+
+    n_sc, lb, fmt = 792, 16, reg(16, 4)
+    rng = np.random.default_rng(9)
+    gr = rng.integers(-(1 << 15), 1 << 15, (n_sym, n_ant, n_sc))
+    gi = rng.integers(-(1 << 15), 1 << 15, (n_sym, n_ant, n_sc))
+    symbols = [[np.asarray(to_words(gr[s, a], gi[s, a], fmt, lb, W), np.uint64)
+                for a in range(n_ant)] for s in range(n_sym)]  # fmt: skip
+    sim = Simulation()
+    clk = Clock(freq=250e6)
+    dma_cfg = {"word_bits": W, "Kmax": km, "Nmax": nm, "n_ant": n_ant, "J": J}
+    dev = IngestDev(name="ing", sim=sim, clk=clk, dma_cfg=dma_cfg)
+    dma = dev.dma
+    hub = RespHub(name="hub", sim=sim, clk=clk, n_src=1, word_bits=W)
+    oru = OruSource(name="oru", sim=sim, clk=clk, symbols=symbols)
+    mem_words = depth * dma.slot_words
+    mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
+                    nwords_tot=mem_words, addr_unit=AddrUnit.byte)  # fmt: skip
+    assert mem.alloc(mem_words) == 0
+    cfg = IngestCfg(enable=1, ring_depth=depth, ring_base=0, chunk_words=dma.slot_words)
+    host = IngestHost(name="host", sim=sim, clk=clk, cfg=cfg)
+    idev = build_mm_device(dev, sim=sim, clk=clk, mem_dwidth=W, prefix="ing_")
+    hdev = build_mm_device(hub, sim=sim, clk=clk, mem_dwidth=W, prefix="hub_")
+    links = []
+    for name, m, s in (("sym", oru.m_out, dev.s_sym), ("resp", dev.m_resp, hub.s_in0)):
+        li = StreamIF(name=name, sim=sim, clk=clk, bitwidth=W)
+        li.bind("master", m)
+        li.bind("slave", s)
+        links.append(li)
+    masters = [host.m, dev.m_w]
+    is_, ir = idev.ranges(ING_BASE)
+    hs, hr = hdev.ranges(HUB_BASE)
+    slaves = is_ + hs + [mem.s_mm]
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
+                           nports_slave=len(slaves), bitwidth=W)  # fmt: skip
+    for k, m in enumerate(masters):
+        xbar.bind(f"master_{k}", m)
+    for k, s in enumerate(slaves):
+        xbar.bind(f"slave_{k}", s)
+    assign_address_ranges(slaves, ir + hr + [(0, mem_words * W // 8)])
+    imap = MemSlaveLayout.of(IngestDev, mem_dwidth=W).at(ING_BASE)
+    hmap = MemSlaveLayout.of(RespHub, mem_dwidth=W).at(HUB_BASE)
+    line = IrqIF(name="qresp_irq", sim=sim)
+    line.bind("source", hdev.views["qresp"].m_irq)
+    line.bind("sink", host.irq["qresp"])
+    iad = BoundMemSlaveAdaptor(imap, host.m)
+    host.ctrl, host.status = iad.stream_master("ctrl"), iad.status("ctrl")
+    host.credit_addr = imap["credit"].base
+    host.qresp = BoundMemSlaveAdaptor(hmap, host.m).stream_slave(
+        "qresp", irq=host.irq["qresp"]
+    )
+    host.script = script
+    dut = DutTop.of(
+        "ltbf_ing_dut", sim, comps=[idev, hdev, mem, oru], ifs=[xbar, *links]
+    )
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.resps)
+    per = J * nm
+
+    def want(s: int, c: int) -> np.ndarray:
+        re = np.zeros((n_ant, per), np.int64)
+        im = np.zeros((n_ant, per), np.int64)
+        hi = min(n_sc, (c + 1) * per)
+        re[:, : hi - c * per], im[:, : hi - c * per] = (
+            gr[s][:, c * per : hi],
+            gi[s][:, c * per : hi],
+        )
+        bm = block_major(re, im, fmt, km, nm, lane_bits=lb, word_bits=W, order="row")
+        return np.asarray(bm, np.uint64).reshape(-1)
+
+    def slot(k: int) -> np.ndarray:
+        a = k * dma.slot_words * W // 8
+        return np.asarray(mem._mem.read(a, dma.slot_words), np.uint64)
+
+    return SimpleNamespace(sysm=sysm, host=host, oru=oru, dma=dma, want=want, slot=slot)
+
+
+def test_ingest_dma_writes_chunks_in_the_systolic_b_layout():
+    """Step 4.3: three symbols of a 16-antenna grid, antenna by antenna, through the Ingest DMA into
+    a ring of two symbols' chunks (the host frees each chunk after its ``Resp``).  ``J = 4`` tiles of
+    8 make 25 chunks a symbol, the last zero-padded.  Each chunk's slot holds the chunk's
+    ``N_rx x J·Nmax`` matrix in ``SystolicEngineMem``'s B layout (panel ``(p, j)`` at
+    ``(p·J + j)·wb``), one ``Resp`` (``src`` 2) arrives a chunk, in order, and the status counts them.
+    """
+    n_sym, depth = 3, 50
+    ok: dict[int, bool] = {}
+
+    def script(h):
+        for k in range(n_sym * 25):
+            r = yield from h.take()
+            s, c = divmod(int(r.seq), 25)
+            ok[int(r.seq)] = np.array_equal(t.slot(k % depth), t.want(s, c))
+            yield from h.free(1)
+        h.final = yield from h.status.read()
+
+    t = ingest_system(16, 4, depth, n_sym, script)
+    assert t.dma.n_chunks == 25 and t.dma.P == 2
+    resps = t.sysm.run()
+    assert [int(r.src) for r in resps] == [2] * (n_sym * 25)
+    assert [int(r.seq) for r in resps] == list(range(n_sym * 25))
+    assert len(ok) == n_sym * 25 and all(ok.values())
+    assert (int(t.host.final.chunks), int(t.host.final.overruns)) == (n_sym * 25, 0)
+
+
+def test_ingest_dma_drops_a_symbol_without_credit():
+    """Flow control: a ring of one symbol's 11 chunks (``J = 9``) that the host does not free.
+    Symbols 1 and 2 arrive without credit and are dropped and counted; once the host returns the
+    11 credits, symbol 3 goes into the same slots with ``seq`` 33..43 (the gap marks the drop).
+    """
+    n_sym = 4
+    ok: dict[int, bool] = {}
+
+    def script(h):
+        for k in range(11):
+            r = yield from h.take()
+            ok[int(r.seq)] = np.array_equal(t.slot(k), t.want(0, k))
+        for _ in range(200):  # wait for the two drops
+            st = yield from h.status.read()
+            if int(st.overruns) == 2:
+                break
+            yield h.env.timeout(T_SYM / 4)
+        h.mid = st
+        yield from h.free(11)
+        go.succeed()
+        for k in range(11):
+            r = yield from h.take()
+            ok[int(r.seq)] = np.array_equal(t.slot(k), t.want(3, k))
+        h.final = yield from h.status.read()
+
+    t = ingest_system(8, 9, 11, n_sym, script)
+    go = t.host.env.event()
+    t.oru.gates[3] = go
+    resps = t.sysm.run()
+    assert [int(r.seq) for r in resps] == list(range(11)) + list(range(33, 44))
+    assert len(ok) == 22 and all(ok.values())
+    assert (int(t.host.mid.chunks), int(t.host.mid.overruns)) == (11, 2)
+    assert (int(t.host.final.chunks), int(t.host.final.overruns)) == (22, 2)
