@@ -97,6 +97,8 @@ class SysParams:
     c: int = 8
     Mmax: int = 16
     J: int = 9
+    R: int = 4  # the systolic array's rows and columns
+    C: int = 8
     ring_symbols: int = 2  # the ring's depth, in symbols
     qresp_depth: int = 64
     policy: str = "static"
@@ -820,7 +822,7 @@ def engine_cfg(S: LtbfSystem) -> dict:
     dimension, the configuration's one format triple ``(a, bc, bc)``."""
     d, p, cfg = S.d, S.p, S.cfg
     return {"word_bits": p.word_bits, "Mmax": d.Mmax, "Kmax": d.c, "Nmax": d.c,
-            "Pmax": max(d.rows, d.cols) // d.c, "R": 4, "C": 8, "L": 4, "a": cfg.a, "b": cfg.bc,
+            "Pmax": max(d.rows, d.cols) // d.c, "R": p.R, "C": p.C, "L": max(4, p.R), "a": cfg.a, "b": cfg.bc,
             "c": cfg.bc, "pysim": "tiles", "lane_bits": p.lane_bits}  # fmt: skip
 
 
