@@ -184,6 +184,23 @@ def device_dag(names=DEVICES, work_dir=WORK_DIR, trace: bool = False,
     return dag
 
 
+def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) -> BuildDag:
+    """``codegen``, then the framework's system flow for AC9's system (step 5.2): ``system.build`` at
+    :data:`~examples.ltbf_dse.hw.system.AC9` for the RTL flow -- csynth of its tops, the system RTL,
+    the scenario (the C++ host's, from a reference pysim run), pysim, and XSI with ``hw/ltbf_host.h``,
+    each prefixed ``ltbf_``.  The Resp FIFO's order is timing's, so the gate (the test) compares what
+    must agree word for word rather than the flow's ``ltbf_compare`` (plan §9 e)."""
+    from examples.ltbf_dse.hw import system as sy
+    from waveflow.build.system_dag import add_system_steps
+
+    dag = BuildDag()
+    dag.add(LtbfCodegenStep(name="codegen"))
+    hw, _S, _host = sy.build(sy.inputs(sy.AC9), rtl=True)
+    add_system_steps(dag, hw, work_dir=work_dir, top="ltbf_top", prefix="ltbf_", workspace="ltbf",
+                     trace=trace, trace_bus=trace_bus)  # fmt: skip
+    return dag
+
+
 if __name__ == "__main__":
     from waveflow.build.cli import run_dag_cli
 
