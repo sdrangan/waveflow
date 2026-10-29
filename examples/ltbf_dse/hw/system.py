@@ -226,8 +226,8 @@ def mem_script(kind: str = "test", span: int = 1 << 17) -> list:
         ops.append(script_op(READ, addr, n, t))
         t += 2 * n + 100
     if kind != "test":
-        for n in (4, 16, 64, 256):
-            ops.append(script_op(READ, 0, n, t))
+        for n in (4, 16, 64, 256):  # reading back what the length-n write above left
+            ops.append(script_op(READ, (n * 0x1000) % (span * 8 - 0x1000), n, t))
             ops.append(script_op(WRITE, 0x8000, n, t, np.arange(n, dtype=np.uint64)))
             t += 4 * n + 200
     return ops

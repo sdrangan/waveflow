@@ -194,6 +194,7 @@ def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) 
     from examples.ltbf_dse.hw import system as sy
     from waveflow.build.phase_calib import MemCalibStep
     from waveflow.build.system_dag import add_system_steps
+    from waveflow.calib.record_store import ModuleStore
     from waveflow.hw.clock import Clock
     from waveflow.hw.harness import memory_harness
 
@@ -208,7 +209,7 @@ def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) 
     uncal = memory_harness(lambda sim: sy.shared_mem(sim, S.mem_span, clk, calibrated=False),
                            sy.mem_script("calib", S.mem_span), n_cycles=40_000)  # fmt: skip
     xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix="umemcal_")
-    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=sy.CALIB_DIR)
+    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=ModuleStore(sy.CALIB_DIR))
     dag.add(mem_cal)
     dag.require("ltbf_pysim", [mem_cal.a("mem_timing")])
     return dag
