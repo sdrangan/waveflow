@@ -39,9 +39,10 @@ JOBS = OUT / "jobs"
 PROFILE_DROPS = tuple(range(1, 11))
 EVAL_DROPS = tuple(range(11, 101))
 ARRAYS = (8, 16, 32)
-#: The evaluation drops of each array: 32x32 trimmed to 30 (11-40) so the sweep fits its 8 h budget
-#: (plan §14, 2026-10-29: four 32x32 jobs side by side ran 980 s each, three times the pilot's).
-EVAL_BY_ARRAY = {8: EVAL_DROPS, 16: EVAL_DROPS, 32: tuple(range(11, 41))}
+#: The evaluation drops of each array, trimmed so the sweep fits its 8 h budget (plan §14,
+#: 2026-10-29): measured under the run's own contention, a 32x32 job takes 16-22 min and a 16x16 one
+#: about 4; 32x32 keeps 20 drops (11-30), 16x16 60 (11-70), 8x8 all 90.
+EVAL_BY_ARRAY = {8: EVAL_DROPS, 16: tuple(range(11, 71)), 32: tuple(range(11, 31))}
 TARGETS = ("-6_3", "-6_14")
 #: Operand widths (16-bit lanes up to 16, 32-bit lanes above), guard bits, forms.
 WIDTHS = (10, 12, 14, 16, 20)
