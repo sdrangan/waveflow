@@ -33,3 +33,18 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   `tests/build/test_xsi_session_gate.py` uses); without it the count is lower by the quarantined gates
   (229 vs 246 here). This repo's `-q` prints no pass/skip summary line: read the progress dots, and
   never pipe pytest through `tail` when its exit code matters.
+- **`SystolicEngineMem` crashes Vitis HLS 2024.1** (spike 1.2 b). The redesigned engine (Part B of
+  `plans/systolic_characterization.md`) was only ever built with 2025.1. With 2024.1, csynth of the
+  unchanged centre configuration segfaults (`Abnormal program termination (11)`, `hs_err_pid*.log`,
+  `FreeRunPipe::getBlockCondOfMemFifoPort`) right after HLS turns the core's `STEP` pipeline into a
+  free-running pipeline (control fanout about 23k). Adding `config_compile -pipeline_style flp` to the
+  csynth script, with the source unchanged, avoids it: 49 s, 144 DSP, 32,937 LUT, 37,278 FF,
+  29 BRAM18, 3.35 ns estimated.
+- **Render a sector's signals as `A @ D`, not path by path** (spike 1.2 a). The synthetic array shares
+  one delay per (UE, path) across a sector's antennas, so delaying each (UE, path) waveform once with
+  rfenv's own kernel and applying the array as one matrix product equals `reference_apply` to 4e-16
+  and renders a 32x32 slot of three sectors in 0.38 s, against about 48 s through `ChannelApplier`.
+  The kernel index: `convolve(x, c)[n - k + half - 1]`, not the reversed kernel.
+- **The three sectors are co-located**, so after a per-UE timing advance no path of any sector
+  arrives before the window; 2.96% of UE-sector links (13,122 over 100 drops x 2 snapshots) spread
+  beyond the 0.586 us CP, at most 4.2 us. (spike 1.2 a)
