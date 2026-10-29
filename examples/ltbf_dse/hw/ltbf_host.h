@@ -344,8 +344,13 @@ private:
             for (const auto& f : in_flight_)
                 if (f.first / SEQ_MOD == e) --room;
             for (const auto& act : take(e, room > 0 ? room : 0)) {
-                if (pos_[e] >= desc_[e].size() || desc_[e][pos_[e]].gid != act.first)
-                    fatal("engine %ld: job %ld is not the one pysim dispatched here", e, act.first);
+                if (pos_[e] >= desc_[e].size() || desc_[e][pos_[e]].gid != act.first) {
+                    std::fprintf(stderr, "FATAL: ltbf host: engine %d took job %ld as its %zu-th; pysim took "
+                                 "%ld there (cycle %ld; chunks arrived %ld, overruns %ld, dropped %ld)\n",
+                                 e, act.first, pos_[e], pos_[e] < desc_[e].size() ? desc_[e][pos_[e]].gid : -1L,
+                                 now(), arrived_, overruns_, dropped_);
+                    std::exit(7);
+                }
                 (e == SYS ? qjob_sys : qjob_vec).write(desc_[e][pos_[e]++].words);
             }
         }

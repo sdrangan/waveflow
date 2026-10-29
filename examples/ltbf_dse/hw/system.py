@@ -116,8 +116,10 @@ class SysParams:
     sym_period: float = T_SYM
 
 
-#: AC9's configuration (step 5.2): the defaults, the O-RU paced at 500 µs a symbol (spike d).
-AC9 = SysParams(sym_period=500e-6)
+#: AC9's configuration (step 5.2): the defaults, the O-RU paced at 1 ms a symbol.  At RTL a
+#: symbol's work on the serialized Shared Mem port (11 ``Z`` jobs reading at two cycles a word, the
+#: Ingest DMA's writes) is about 180k cycles, over 500 µs's 125k: the ring overran (plan §15).
+AC9 = SysParams(sym_period=1e-3)
 
 
 # -- the inputs and the fixed-point chain's answer ------------------------------------------------------
