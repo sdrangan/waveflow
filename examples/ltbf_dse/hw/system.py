@@ -9,9 +9,12 @@
   Shared Mem over its bus), hands CPU jobs to its worker threads, and returns ring credit.  A reader
   thread moves ``qresp`` records into the dispatcher's inbox;
 * the **systolic wrapper** (``SysWrap``), the **vector unit's wrapper** (``VecWrap``, one build for the
-  CG step and the equalizer), the **Ingest DMA** (``IngestDev``), the **RespHub** and **Shared Mem**;
-* the **O-RU** stand-in (:class:`OruSource`): the front end's quantized grid ``Y = q_bc(2^-k y)``,
-  antenna by antenna, a symbol every 125/14 µs once the slot is released.
+  CG step and the equalizer), the **Ingest DMA** (``IngestDevQ``: its symbol input behind a ``qsym``
+  queue view), the **RespHub** and **Shared Mem**;
+* the **O-RU** stand-in, a host thread (:meth:`LtbfHost._oru`): the front end's quantized grid
+  ``Y = q_bc(2^-k y)`` into ``qsym``, antenna by antenna, a symbol a ``sym_period`` once the slot is
+  released.  Under XSI a host system gives no other participant a stream of its own, so the host
+  plays the O-RU in both realizations.
 
 The run (AC9's shape): one long-term update of one sector, then one slot.  Every Python stage and CPU
 job uses the fixed-point chain's own code on what it reads from Shared Mem (``chest``,
@@ -21,6 +24,9 @@ gate's C++ host replays.
 
 Shared Mem is at bus address 0 and the devices above ``0x8000_0000`` (the engines address memory in
 words from 0); the layout: the programs, ``G'_stackᴴ``, the ring, then the two graphs' plans.
+
+At RTL (step 5.2) the host's C++ twin is ``hw/ltbf_host.h``: the same threads and the static
+policy's decisions, replaying what Python computes from :func:`scenario` (``build(rtl=True)``).
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from examples.ltbf_dse import ltbf_link as lk
 from examples.ltbf_dse import signals as sg
 from examples.ltbf_dse.hw import programs as pg
 from examples.ltbf_dse.hw.graphs import Dims, long_term, real_time
-from examples.ltbf_dse.hw.ingest import IngestDev
+from examples.ltbf_dse.hw.ingest import IngestDevQ
 from examples.ltbf_dse.hw.records import IngestCfg, Resp
 from examples.ltbf_dse.hw.resp_hub import RespHub
 from examples.ltbf_dse.hw.sched import Scheduler, footprint, plan_memory
@@ -48,11 +54,10 @@ from examples.ltbf_dse.hw.sys_wrap import SysWrap
 from examples.ltbf_dse.hw.vec_wrap import VecMemJob, VecWrap
 from waveflow.cpu.platform import CpuPlatform
 from waveflow.cpu.processor import Processor
-from waveflow.cpu.task import SwFunction
+from waveflow.cpu.task import SwFunction, eval_cycles
 from waveflow.hw.clock import Clock
-from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_system import DutTop, HwSystem
-from waveflow.hw.interface import StreamIF, StreamIFMaster
+from waveflow.hw.interface import StreamIF
 from waveflow.hw.irq import IrqIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import AddrUnit, MemoryMod
@@ -66,6 +71,8 @@ from waveflow.sw import SwHost, SwLock, SwQueue
 from waveflow.vecunit.asm import assemble
 
 F_HOST = 250e6
+#: AXI4's longest burst: the host's plain reads and writes are split to it (both twins).
+MAX_BURST = 256
 T_SYM = 125e-6 / 14
 SYS_BASE, VEC_BASE, ING_BASE, HUB_BASE = (
     0x8000_0000,
@@ -103,6 +110,10 @@ class SysParams:
     #: The O-RU's symbol period.  A real slot is 125/14 µs a symbol; one 64-bit port cannot carry
     #: 64 antennas at that rate (spike d), so a correctness run paces the slot slower.
     sym_period: float = T_SYM
+
+
+#: AC9's configuration (step 5.2): the defaults, the O-RU paced at 500 µs a symbol (spike d).
+AC9 = SysParams(sym_period=500e-6)
 
 
 # -- the inputs and the fixed-point chain's answer ------------------------------------------------------
@@ -179,36 +190,6 @@ def golden(inp: Inputs) -> dict:
     return out
 
 
-# -- the O-RU ------------------------------------------------------------------------------------------
-
-
-@dataclass
-class OruSource(FreeRunMod):
-    """The O-RU stand-in: once ``start`` fires, a symbol every ``period``, antenna by antenna."""
-
-    symbols: list = field(default_factory=list)
-    period: float = T_SYM
-    word_bits: int = 64
-    clk: Clock = field(default_factory=lambda: Clock(freq=F_HOST))
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.m_out = StreamIFMaster(
-            name=f"{self.name}_m_out", sim=self.sim, bitwidth=self.word_bits
-        )
-        self.add_endpoint(self.m_out)
-        self.start = self.env.event()
-
-    def run_iter(self):
-        yield self.start
-        t0 = self.env.now
-        for s, bursts in enumerate(self.symbols):
-            yield self.env.timeout(max(0.0, t0 + (s + 1) * self.period - self.env.now))
-            for b in bursts:
-                yield from self.m_out.write(b)
-        yield self.env.event()  # done: wait forever
-
-
 # -- the host ------------------------------------------------------------------------------------------
 
 
@@ -250,7 +231,8 @@ class LtbfHost(SwHost):
     cpu: Processor | None = None
     platform: Any = None
     clk: Clock = field(default_factory=lambda: Clock(freq=F_HOST))
-    cpp_model: ClassVar[str | None] = None
+    cpp_model: ClassVar[str | None] = "LtbfHostModel"
+    cpp_header: ClassVar[str | None] = "ltbf_host.h"
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -258,15 +240,31 @@ class LtbfHost(SwHost):
         #: Plain bus reads and writes (the Python stages' and CPU jobs' data, the ring credit),
         #: recorded: the C++ twin's ``BusRw``.
         self.bus = BusReader(self.m)
-        self.irq = {
-            v: self.add_irq(f"irq_{v}") for v in ("qjob_sys", "qjob_vec", "qresp")
-        }
+        # Named attributes: the generated C++ endpoints are read off them (sw_host_gen).
+        self.irq_qjob_sys = self.add_irq("irq_qjob_sys")
+        self.irq_qjob_vec = self.add_irq("irq_qjob_vec")
+        self.irq_qresp = self.add_irq("irq_qresp")
+        self.irq_qsym = self.add_irq("irq_qsym")
+        # The endpoints, bound by build(): the engines' Job FIFOs, the Resp FIFO, the Ingest DMA's
+        # Ctrl, status and symbol queue.
+        self.qjob_sys: Any = None
+        self.qjob_vec: Any = None
+        self.qresp: Any = None
+        self.ing_ctrl: Any = None
+        self.ing_status: Any = None
+        self.qsym: Any = None
+        self.slot_start = self.env.event()
+        #: Built for the RTL flow: :meth:`scenario_bursts` serializes a reference run.
+        self.rtl = False
         self.done = self.env.event()
         self.sys: Any = None  # set by build(): the run's plan and endpoints
         self.replay: list[dict] = []
         self.results: dict = {"xh": {}, "z_dmrs": {}, "w": {}}
         self.resp_log: list[tuple] = []
         self.jobs_log: dict = {"sys": [], "vec": []}
+        #: Each engine's Job FIFO writes in order, with the job each describes: the C++ twin replays
+        #: these words and checks that its own scheduler takes the same jobs in the same order.
+        self.dispatch_log: dict = {"sys": [], "vec": []}
         #: Which price each step 4.6 kernel got: "calibrated" (the local fit) or "provisional".
         self.pricing: dict[str, str] = {}
         model = a53cal.load_model(ltbf_proj.CAL)
@@ -276,7 +274,18 @@ class LtbfHost(SwHost):
             cycles=model or _ProvisionalProj())  # fmt: skip
 
     def scenario_bursts(self):
-        return []
+        """The C++ twin's scenario (:func:`scenario`) for a system built for the RTL flow
+        (``build(rtl=True)``): a reference pysim run of a fresh copy, serialized -- deterministic, so
+        the flow's own pysim run does the same -- and kept per parameter set, as the flow builds
+        fresh copies.  A pysim-only system's is empty (``HwSystem.run`` writes one every run)."""
+        if not self.rtl:
+            return []
+        key = self.sys.p
+        if key not in _SCENARIOS:
+            hw, S, host = build(self.sys.inp)
+            hw.sim.run_sim(until=hw.run_until)  # not hw.run(): it writes a scenario first
+            _SCENARIOS[key] = scenario(S, host)
+        return _SCENARIOS[key]
 
     # -- charging -----------------------------------------------------------------------------
 
@@ -294,6 +303,7 @@ class LtbfHost(SwHost):
             yield self.env.timeout(pad)
         if ctx is not None:
             ctx["cycles"] += n
+            ctx["ops"].append(("C", float(rec.cycles)))
         else:
             self.sched_cycles.append(n)
         return result
@@ -326,13 +336,24 @@ class LtbfHost(SwHost):
     # -- the bus --------------------------------------------------------------------------------
 
     def write_words(self, word_addr: int, words, ctx: dict | None = None) -> Any:
+        """A plain write, in AXI4 bursts of at most :data:`MAX_BURST` beats; recorded in *ctx*."""
         words = np.asarray(words, np.uint64)
-        if ctx is not None:
-            ctx["writes"].append((int(word_addr), words.copy()))
-        yield from self.bus.write(words, word_addr * 8)
+        for i in range(0, len(words), MAX_BURST):
+            part = words[i : i + MAX_BURST]
+            if ctx is not None:
+                ctx["writes"].append((int(word_addr) + i, part.copy()))
+                ctx["ops"].append(("W", int(word_addr) + i, part.copy()))
+            yield from self.bus.write(part, (word_addr + i) * 8)
 
-    def read_words(self, word_addr: int, n: int):
-        return np.asarray((yield from self.bus.read(int(n), word_addr * 8)), np.uint64)
+    def read_words(self, word_addr: int, n: int, ctx: dict | None = None):
+        """A plain read, in AXI4 bursts of at most :data:`MAX_BURST` beats; recorded in *ctx*."""
+        out = []
+        for i in range(0, int(n), MAX_BURST):
+            m = min(MAX_BURST, int(n) - i)
+            if ctx is not None:
+                ctx["ops"].append(("R", int(word_addr) + i, m))
+            out.append(np.asarray((yield from self.bus.read(m, (word_addr + i) * 8)), np.uint64))
+        return np.concatenate(out) if out else np.zeros(0, np.uint64)
 
     # -- threads --------------------------------------------------------------------------------
 
@@ -346,13 +367,15 @@ class LtbfHost(SwHost):
         self.cpu_q = SwQueue(self, name="cpu_q")
         self.gp_lock = SwLock(self, name="gp")
         self.start(self._resp_reader, name="resp")
+        self.start(self._oru, name="oru")
         for k in range(S.p.n_cores):
             self.start(self._cpu_worker, name=f"worker{k}")
-        setup = {"key": ["setup"], "op": "programs", "writes": [], "cycles": 0}
+        setup = {"gid": -1, "key": ["setup"], "op": "programs", "writes": [], "ops": [],
+                 "cycles": 0}  # fmt: skip
         self.replay.append(setup)
         for a, words in S.programs.values():
             yield from self.write_words(a, words, setup)
-        yield from S.ing_ctrl.write(S.ing_cfg)
+        yield from self.ing_ctrl.write(S.ing_cfg)
         S.sch.add(S.lt)
         rt_added = False
         yield from self._pump()
@@ -374,7 +397,7 @@ class LtbfHost(SwHost):
                 S.sch.host_done(ev[1], self.env.now)
             elif ev[0] == "tick" and S.sch.idle and not S.sch.finished:
                 # Nothing moves but arrivals: a drop after the last chunk seen shows only here.
-                st = yield from S.ing_status.read()
+                st = yield from self.ing_status.read()
                 S.sch.on_status(int(st.chunks), int(st.overruns), self.env.now)
             lt_done = all(S.sch.state[g] == "done" for g in range(len(S.lt.jobs)))
             if not rt_added and lt_done:
@@ -383,7 +406,7 @@ class LtbfHost(SwHost):
                     S.d, t0=self.env.now
                 )  # deadlines from the slot's real start
                 S.rt_base = S.sch.add(S.rt)
-                S.oru.start.succeed()
+                self.slot_start.succeed()
                 self.start(self._ticker, name="ticker")
             yield from self._pump()
         self.done.succeed()
@@ -393,9 +416,20 @@ class LtbfHost(SwHost):
             yield self.env.timeout(T_SYM)
             yield from self.inbox.put(("tick",))
 
+    def _oru(self):
+        """The O-RU stand-in: once the slot is released, a symbol every ``sym_period``, an antenna's
+        burst a packet into the Ingest DMA's ``qsym``.  Not the A53's work: nothing is charged."""
+        S = self.sys
+        yield self.slot_start
+        t0 = self.env.now
+        for s, bursts in enumerate(S.symbols):
+            yield self.env.timeout(max(0.0, t0 + (s + 1) * S.p.sym_period - self.env.now))
+            for b in bursts:
+                yield from self.qsym.write(b)
+
     def _resp_reader(self):
         while True:
-            r = yield from self.sys.qresp.get_schema(Resp)
+            r = yield from self.qresp.get_schema(Resp)
             yield from self.inbox.put(("resp", r))
 
     def _cpu_worker(self):
@@ -424,7 +458,8 @@ class LtbfHost(SwHost):
                 if act[0] == "job":
                     words = S.descriptor(act[1], act[2])
                     self.jobs_log[e].append(words)
-                    yield from S.qjob[e].write(words)
+                    self.dispatch_log[e].append((act[1], words))
+                    yield from getattr(self, f"qjob_{e}").write(words)
         if sch.credit != S.credit_sent:
             S.credit_sent = sch.credit
             yield from self.bus.write(np.asarray([sch.credit], np.uint64), S.credit_addr)
@@ -435,7 +470,7 @@ class LtbfHost(SwHost):
     def _ctx(self, gid: int) -> dict:
         """A host job's record for the replay file: its bus writes and charged host cycles."""
         j = self.sys.sch.jobs[gid]
-        ctx = {"key": list(j.key), "op": j.op, "writes": [], "cycles": 0}
+        ctx = {"gid": gid, "key": list(j.key), "op": j.op, "writes": [], "ops": [], "cycles": 0}
         self.replay.append(ctx)
         return ctx
 
@@ -457,7 +492,7 @@ class LtbfHost(SwHost):
             _m, p, c = j.key
             name = f"xh{p}:{c}"
             got = yield from self.read_words(
-                S.addr(gid, name), S.lt_rt_words(gid, name)
+                S.addr(gid, name), S.lt_rt_words(gid, name), ctx
             )
             self.results["xh"][p, c] = got
         else:
@@ -651,8 +686,8 @@ class LtbfSystem:
         j = self.sch.jobs[gid]
         wname, xname = j.reads
         q = 8 * k // d.c
-        ww = yield from host.read_words(self.addr(gid, wname), self.lt.buffers[wname])
-        xw = yield from host.read_words(self.addr(gid, xname), self.lt.buffers[xname])
+        ww = yield from host.read_words(self.addr(gid, wname), self.lt.buffers[wname], ctx)
+        xw = yield from host.read_words(self.addr(gid, xname), self.lt.buffers[xname], ctx)
         wr, wi = self.from_w(ww, d.cols * d.c, cfg.bc)
         xr, xi = self.from_w(xw, d.rows * d.c, self.f.X)
         n_conn = d.U_conn or d.U
@@ -690,7 +725,7 @@ class LtbfSystem:
             for c in range(d.n_chunks):
                 name = f"Z{s}:{c}"
                 words = yield from host.read_words(
-                    self.addr(gid, name), self.rt.buffers[name]
+                    self.addr(gid, name), self.rt.buffers[name], ctx
                 )
                 zr, zi = self._tiles_from(words, d.S, n)
                 z[s][0][:, c * n : (c + 1) * n], z[s][1][:, c * n : (c + 1) * n] = (
@@ -751,8 +786,9 @@ def ingest_cfg(S: LtbfSystem) -> dict:
             "n_ant": d.rows, "J": d.J, "n_sc": sg.N_SC}  # fmt: skip
 
 
-def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
-    """The pysim system for *inp* (see the module docstring)."""
+def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
+    """The pysim system for *inp* (see the module docstring); *rtl*: for the RTL flow (its host
+    writes the C++ twin's scenario, and the flow can rebuild it fresh)."""
     S = LtbfSystem(inp)
     p, d, cfg = S.p, S.d, S.cfg
     W = p.word_bits
@@ -761,20 +797,18 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
     platform = CpuPlatform.load()
     cpu = Processor(name="cpu", sim=sim, config=platform.cpu_config(n_cores=p.n_cores))
     host = LtbfHost(name="host", sim=sim, clk=clk, cpu=cpu, platform=platform)
+    host.rtl = rtl
     # The A53 is the host's own resource, not a testbench participant: under XSI the host's C++ twin
     # charges the same cycles with compute(n), so the Processor needs no lowering of its own.
     cpu.parent = host
     host.sys = S
     sysw = SysWrap(name="sys", sim=sim, clk=clk, engine_cfg=engine_cfg(S))
     vecw = VecWrap(name="vec", sim=sim, clk=clk, vu_cfg=S.vu, word_bits=W)
-    ing = IngestDev(name="ing", sim=sim, clk=clk, dma_cfg=ingest_cfg(S))
+    ing = IngestDevQ(name="ing", sim=sim, clk=clk, dma_cfg=ingest_cfg(S))
     hub = RespHub(name="hub", sim=sim, clk=clk, n_src=3, word_bits=W)
     yr, yi = inp.y
-    symbols = [[S.to_w(yr[a, s], yi[a, s], cfg.bc) for a in range(d.n_rx)]
-               for s in range(sg.N_SYM)]  # fmt: skip
-    oru = OruSource(name="oru", sim=sim, clk=clk, symbols=symbols, word_bits=W,
-                    period=p.sym_period)  # fmt: skip
-    S.oru = oru
+    S.symbols = [[S.to_w(yr[a, s], yi[a, s], cfg.bc) for a in range(d.n_rx)]
+                 for s in range(sg.N_SYM)]  # fmt: skip
     mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
                     nwords_tot=S.mem_span, addr_unit=AddrUnit.byte)  # fmt: skip
     assert mem.alloc(S.mem_span) == 0
@@ -782,11 +816,11 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
     devs = {
         "sys": (build_mm_device(sysw, sim=sim, clk=clk, mem_dwidth=W, prefix="sys_"), SysWrap, SYS_BASE),
         "vec": (build_mm_device(vecw, sim=sim, clk=clk, mem_dwidth=W, prefix="vec_"), VecWrap, VEC_BASE),
-        "ing": (build_mm_device(ing, sim=sim, clk=clk, mem_dwidth=W, prefix="ing_"), IngestDev, ING_BASE),
+        "ing": (build_mm_device(ing, sim=sim, clk=clk, mem_dwidth=W, prefix="ing_"), IngestDevQ, ING_BASE),
         "hub": (build_mm_device(hub, sim=sim, clk=clk, mem_dwidth=W, prefix="hub_"), RespHub, HUB_BASE),
     }  # fmt: skip
     links = []
-    for name, m, s in (("sym", oru.m_out, ing.s_sym), ("resp_sys", sysw.m_resp, hub.s_in0),
+    for name, m, s in (("resp_sys", sysw.m_resp, hub.s_in0),
                        ("resp_vec", vecw.m_resp, hub.s_in1), ("resp_ing", ing.m_resp, hub.s_in2)):  # fmt: skip
         li = StreamIF(name=name, sim=sim, clk=clk, bitwidth=W)
         li.bind("master", m)
@@ -813,18 +847,17 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
         for k, (_d, cls, base) in devs.items()
     }
     for key, dev_key, view in (("qjob_sys", "sys", "qjob"), ("qjob_vec", "vec", "qjob"),
-                               ("qresp", "hub", "qresp")):  # fmt: skip
+                               ("qresp", "hub", "qresp"), ("qsym", "ing", "qsym")):  # fmt: skip
         line = IrqIF(name=f"{key}_irq", sim=sim)
         line.bind("source", devs[dev_key][0].views[view].m_irq)
-        line.bind("sink", host.irq[key])
+        line.bind("sink", getattr(host, f"irq_{key}"))
     ad = {k: BoundMemSlaveAdaptor(m, host.m) for k, m in maps.items()}
-    S.qjob = {
-        e: ad[e].stream_master("qjob", irq=host.irq[f"qjob_{e}"])
-        for e in ("sys", "vec")
-    }
-    S.qresp = ad["hub"].stream_slave("qresp", irq=host.irq["qresp"])
-    S.ing_ctrl = ad["ing"].stream_master("ctrl")
-    S.ing_status = ad["ing"].status("ctrl")
+    host.qjob_sys = ad["sys"].stream_master("qjob", irq=host.irq_qjob_sys)
+    host.qjob_vec = ad["vec"].stream_master("qjob", irq=host.irq_qjob_vec)
+    host.qresp = ad["hub"].stream_slave("qresp", irq=host.irq_qresp)
+    host.ing_ctrl = ad["ing"].stream_master("ctrl")
+    host.ing_status = ad["ing"].status("ctrl")
+    host.qsym = ad["ing"].stream_master("qsym", irq=host.irq_qsym)
     S.credit_addr = maps["ing"]["credit"].base
     S.ing_cfg = IngestCfg(enable=1, ring_depth=S.sch.ring_depth, ring_base=S.ring_addr,
                           chunk_words=S.slot_words)  # fmt: skip
@@ -836,9 +869,10 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
         "vec": len(VecMemJob().serialize(word_bw=W)),
     }
     S.capacity = {e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))}
-    dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem, oru],
+    dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem],
                     ifs=[xbar, *links])  # fmt: skip
-    hw = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results)
+    hw = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
+                  fresh=(lambda: build(inp, rtl=True)[0]) if rtl else None)  # fmt: skip
     return hw, S, host
 
 
@@ -921,3 +955,95 @@ def write_replay(host: LtbfHost, path) -> dict:
         np.concatenate(words) if words else np.zeros(0, np.uint64),
     )
     return index
+
+
+# -- the RTL host's scenario -----------------------------------------------------------------------------
+
+#: The scenario's burst kinds, each burst ``[kind, fields...]`` (read by ``ltbf_host.h``):
+#:
+#: * ``K_HEAD``    ``[0, n_cores, ring_depth, n_chunks, max_in_flight, cap_sys, cap_vec, credit byte
+#:   address, n_rx, n_sym, sym_period, tick (host cycles), n_lt, n_rt, f_host, f_cpu, switch, dispatch,
+#:   ctrl (doubles as their bits)]``;
+#: * ``K_RELEASE`` ``[1, n_succ, price at n_ready = 0 .. n_succ (doubles)]``, one a successor count;
+#: * ``K_JOB``     ``[2, gid, engine, pending, n, succ..., n, data succ..., n, chunk roots it reads...,
+#:   readers left (a chunk root)]``, every job of both graphs by global id;
+#: * ``K_CHUNKS``  ``[3, chunk roots in arrival order...]``;
+#: * ``K_DESC``    ``[4, engine, gid, descriptor words...]``, each engine's Job FIFO writes in order;
+#: * ``K_HOST``    ``[5, gid (all ones: the setup), ops...]``, an op ``[0, addr, n]`` a read, ``[1,
+#:   addr, n, words...]`` a write, ``[2, A53 cycles (a double)]`` a charge;
+#: * ``K_ICFG``    ``[6, IngestCfg words...]``;
+#: * ``K_SYM``     ``[7, words...]``, an antenna's burst, symbol by symbol.
+K_HEAD, K_RELEASE, K_JOB, K_CHUNKS, K_DESC, K_HOST, K_ICFG, K_SYM = range(8)
+#: Each RTL system's scenario, by its parameters (one reference run each).
+_SCENARIOS: dict = {}
+ENGINE_CODE = {"sys": 0, "vec": 1, "py": 2, "cpu": 3, "ingest": 4}
+NO_GID = (1 << 64) - 1
+
+
+def _bits(x: float) -> int:
+    """A double's bits: the C++ twin prices with the very numbers pysim did."""
+    return int(np.asarray(float(x), np.float64).view(np.uint64))
+
+
+def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
+    """The RTL host's scenario from a finished pysim run (*S*, *host*): the graphs and the scheduler's
+    parameters and prices (its own decisions are the C++ twin's), each engine's descriptors as pysim
+    wrote them (the twin checks it takes the same jobs), the host jobs' bus operations and charges
+    (the Python stages' and the A53's results, replayed), the Ingest DMA's configuration and the
+    O-RU's symbols."""
+    p, d, sch = S.p, S.d, S.sch
+    if p.policy != "static":
+        raise ValueError("the RTL host runs the static policy")
+    if any(j.cfg is not None for g in (S.lt, S.rt) for j in g.jobs):
+        raise ValueError("the RTL host writes no engine Ctrl: no job may carry a configuration")
+    cfg = host.cpu.config
+    out: list[np.ndarray] = []
+
+    def burst(*words) -> None:
+        out.append(np.asarray([int(w) for w in words], np.uint64))
+
+    # The release prices at every successor count the graphs have.
+    graphs = ((0, S.lt), (len(S.lt.jobs), S.rt))
+    max_succ = max(len(sc) for _b, g in graphs for sc in g.successors())
+
+    def price(op: str, **kw) -> float:  # A53 cycles, as the host's charge priced it
+        return host._fns[op].price({k: float(v) for k, v in kw.items()}, cfg)[1]
+
+    burst(K_HEAD, p.n_cores, sch.ring_depth, sch.n_chunks, sch.max_in_flight, S.capacity["sys"],
+          S.capacity["vec"], S.credit_addr, d.n_rx, len(S.symbols),
+          round(p.sym_period * host.clk.freq), round(T_SYM * host.clk.freq), len(S.lt.jobs),
+          len(S.rt.jobs), _bits(host.clk.freq), _bits(cfg.f_clk_hz),
+          _bits(eval_cycles(cfg.switch_cycles, {})), _bits(price("dispatch", n_dispatch=1)),
+          _bits(price("ctrl")))  # fmt: skip
+    for n in range(max_succ + 1):
+        burst(K_RELEASE, n, *(_bits(price("release", n_succ=n, n_ready=k)) for k in range(n + 1)))
+    for base, g in graphs:
+        succ, dsucc = g.successors(), g.successors(data_only=True)
+        for j in g.jobs:
+            roots = [base + x for x in j.deps
+                     if g.jobs[x].engine == "ingest" and set(j.reads) & set(g.jobs[x].writes)]
+            left = (sum(1 for s in succ[j.jid] if set(g.jobs[s].reads) & set(j.writes))
+                    if j.engine == "ingest" else 0)  # fmt: skip
+            burst(K_JOB, base + j.jid, ENGINE_CODE[j.engine], len(j.deps) + len(j.after),
+                  len(succ[j.jid]), *(base + x for x in succ[j.jid]),
+                  len(dsucc[j.jid]), *(base + x for x in dsucc[j.jid]),
+                  len(roots), *roots, left)  # fmt: skip
+    burst(K_CHUNKS, *(len(S.lt.jobs) + c for c in S.rt.chunks))
+    for e in ("sys", "vec"):
+        for gid, words in host.dispatch_log[e]:
+            burst(K_DESC, ENGINE_CODE[e], gid, *words)
+    for ctx in host.replay:
+        ops: list[int] = []
+        for op in ctx["ops"]:
+            if op[0] == "R":
+                ops += [0, op[1], op[2]]
+            elif op[0] == "W":
+                ops += [1, op[1], len(op[2]), *(int(w) for w in op[2])]
+            else:
+                ops += [2, _bits(op[1])]
+        burst(K_HOST, NO_GID if ctx["gid"] < 0 else ctx["gid"], *ops)
+    burst(K_ICFG, *S.ing_cfg.serialize(word_bw=p.word_bits))
+    for bursts in S.symbols:
+        for b in bursts:
+            burst(K_SYM, *b)
+    return out
