@@ -150,6 +150,8 @@ class Config:
     cap: dict = field(default_factory=lambda: {"sys": 5, "vec": 2})
     #: The vector unit's programs, written once before the first job.
     setup_words: int = 173
+    #: Stop once the long-term update is done (no slot).
+    lt_only: bool = False
 
 
 class JobSim:
@@ -177,6 +179,8 @@ class JobSim:
         self.cpu_q = simpy.Store(self.env)
         self.gp_lock = simpy.Resource(self.env, capacity=1)
         self.port = Port(self.env, self.period)
+        #: Each engine's busy cycles (its jobs, end to end).
+        self.busy = {"sys": 0.0, "vec": 0.0}
         self.fifo = {e: simpy.Store(self.env, capacity=max(1, cfg.cap[e] - 1)) for e in ("sys", "vec")}
         self.slot_start = self.env.event()
         self.done = self.env.event()
@@ -249,8 +253,10 @@ class JobSim:
             env.process(self._engine(e))
         env.run(until=self.done)
         sch = self.sch
+        cpu = sum(r.cycles + r.switch_cycles for r in self.cpu.records) / self.cpu.config.f_clk_hz * F_HOST
         return {"end": env.now, "t_lt": self.t_lt, "overruns": sch.overruns, "dropped": sch.dropped,
-                "misses": dict(sch.misses), "finished": sch.finished}  # fmt: skip
+                "misses": dict(sch.misses), "finished": sch.finished,
+                "busy": {**self.busy, "port": self.port.busy, "cpu": cpu}}  # fmt: skip
 
     def _main(self):
         sch, d, t = self.sch, self.cfg.d, self.t
@@ -270,6 +276,9 @@ class JobSim:
                 yield from self.wait(t.status)
                 sch.on_status(self.chunks, self.overruns, self.env.now)
             lt_done = all(sch.state[g] == "done" for g in range(len(self.lt.jobs)))
+            if not rt_added and lt_done and self.cfg.lt_only:
+                self.t_lt = self.env.now
+                break
             if not rt_added and lt_done:
                 rt_added = True
                 self.t_lt = self.env.now
@@ -363,12 +372,14 @@ class JobSim:
             gid, tx = yield self.fifo[e].get()
             self.t_start[gid] = self.env.now
             job = self.sch.jobs[gid]
+            t0 = self.env.now
             r = t.sys_job(gid, job) if e == "sys" else t.vec_job(gid, job)
             if isinstance(r, tuple):  # (port work, the rest)
                 yield self.port.transfer(r[0])
                 yield from self.wait(r[1])
             else:
                 yield from self.wait(r)
+            self.busy[e] += (self.env.now - t0) / self.period
             yield from self.wait(t.resp)
             yield self.inbox.put(("resp", SRC[e], tx, 0))
 
