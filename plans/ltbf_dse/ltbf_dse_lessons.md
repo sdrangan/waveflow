@@ -133,3 +133,9 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   the requests ahead of the reads bounded (the feeder now runs 6 ahead, one more a panel). To find
   it: in the VCD, the task's `ARVALID` rises only with the adapter's `ARREADY`, so a task waiting on a
   full queue shows both low -- compare the requests taken with the words read.
+- **A host's scenario cannot come from a run of the same system** (step 5.2): `HwSystem.run()` writes
+  the scenario before it simulates, so a `scenario_bursts()` that runs a fresh copy recurses. Serialize
+  only for the RTL flow (`build(rtl=True)`), run the reference with `hw.sim.run_sim(...)`, and keep
+  it per parameter set (the flow builds fresh copies).
+- **A host run's RTL cap was fixed at 1,000,000 cycles** (step 5.2): the system flow now takes the
+  system's `n_cycles` (user-approved); set it on any host system whose run is longer.
