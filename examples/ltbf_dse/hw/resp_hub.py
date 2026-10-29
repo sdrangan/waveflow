@@ -25,6 +25,7 @@ N_SRC = 3
 class RespHub(FreeRunMod):
     """Round-robin merge of the sources' done records into the CPU's response queue."""
 
+    cpp_kernel_name: ClassVar[str | None] = "ltbf_hub"
     mm_views: ClassVar[tuple] = (QueueOut("qresp", port="m_out", depth=64),)
 
     n_src: int = N_SRC
@@ -52,6 +53,24 @@ class RespHub(FreeRunMod):
             has_tlast=False,
         )
         self.add_endpoint(self.m_out)
+
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: one source passed through, or three
+        round-robin (the system's)."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        n = int(self.n_src)
+        if n not in (1, 3):
+            raise ValueError(
+                f"{self.name}: the HLS RespHub has 1 or 3 sources, not {n}"
+            )
+        ports = (*(f"s_in{k}" for k in range(n)), "m_out")
+        return KernelTask(
+            f"ltbf_resp_hub{n}_task",
+            "ltbf_tasks.h",
+            ports,
+            template_args=(int(self.word_bits),),
+        )
 
     def pre_sim(self) -> None:
         super().pre_sim()

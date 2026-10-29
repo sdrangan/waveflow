@@ -110,3 +110,9 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   job's process group when it starts (`$!` after `setsid`) and stop exactly those.
 - **Print validation alone, then score the test once** (step 4.6): a fit that prints both reads the
   test score before the model form is settled; a revision then needs a fresh registered test set.
+- **A composite's `boundary` names pair with its unwired child endpoints in walk order** (step 5.1):
+  children in `add_comp` order, then each child's ports in `add_endpoint` order
+  (`composite_gen.derive_boundary`). pysim looks ports up by attribute and never notices a list in
+  another order; the generated top silently wires the wrong streams. Check
+  `[(n, e.name) for n, e in comp.boundary]` before csynth. A composite's top name is its
+  `cpp_kernel_name`.

@@ -726,6 +726,22 @@ class LtbfSystem:
                                          fmt) for j in range(re.shape[1] // d.c)])  # fmt: skip
 
 
+def engine_cfg(S: LtbfSystem) -> dict:
+    """The systolic engine's build: ``Kmax = Nmax = c``, ``Mmax``, ``Pmax`` for the longest inner
+    dimension, the configuration's one format triple ``(a, bc, bc)``."""
+    d, p, cfg = S.d, S.p, S.cfg
+    return {"word_bits": p.word_bits, "Mmax": d.Mmax, "Kmax": d.c, "Nmax": d.c,
+            "Pmax": max(d.rows, d.cols) // d.c, "R": 4, "C": 8, "L": 4, "a": cfg.a, "b": cfg.bc,
+            "c": cfg.bc, "pysim": "tiles", "lane_bits": p.lane_bits}  # fmt: skip
+
+
+def ingest_cfg(S: LtbfSystem) -> dict:
+    """The Ingest DMA's build: ``Kmax = Nmax = c``, every antenna, ``J`` tiles a chunk."""
+    d, p = S.d, S.p
+    return {"word_bits": p.word_bits, "lane_bits": p.lane_bits, "Kmax": d.c, "Nmax": d.c,
+            "n_ant": d.rows, "J": d.J, "n_sc": sg.N_SC}  # fmt: skip
+
+
 def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
     """The pysim system for *inp* (see the module docstring)."""
     S = LtbfSystem(inp)
@@ -740,14 +756,9 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
     # charges the same cycles with compute(n), so the Processor needs no lowering of its own.
     cpu.parent = host
     host.sys = S
-    pmax = max(d.rows, d.cols) // d.c
-    sysw = SysWrap(name="sys", sim=sim, clk=clk, engine_cfg={
-        "word_bits": W, "Mmax": d.Mmax, "Kmax": d.c, "Nmax": d.c, "Pmax": pmax, "R": 4, "C": 8,
-        "L": 4, "a": cfg.a, "b": cfg.bc, "c": cfg.bc, "pysim": "tiles", "lane_bits": p.lane_bits})  # fmt: skip
+    sysw = SysWrap(name="sys", sim=sim, clk=clk, engine_cfg=engine_cfg(S))
     vecw = VecWrap(name="vec", sim=sim, clk=clk, vu_cfg=S.vu, word_bits=W)
-    ing = IngestDev(name="ing", sim=sim, clk=clk, dma_cfg={
-        "word_bits": W, "lane_bits": p.lane_bits, "Kmax": d.c, "Nmax": d.c, "n_ant": d.rows,
-        "J": d.J, "n_sc": sg.N_SC})  # fmt: skip
+    ing = IngestDev(name="ing", sim=sim, clk=clk, dma_cfg=ingest_cfg(S))
     hub = RespHub(name="hub", sim=sim, clk=clk, n_src=3, word_bits=W)
     yr, yi = inp.y
     symbols = [[S.to_w(yr[a, s], yi[a, s], cfg.bc) for a in range(d.n_rx)]

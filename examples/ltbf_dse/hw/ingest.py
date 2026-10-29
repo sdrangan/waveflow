@@ -127,6 +127,29 @@ class IngestDma(FreeRunMod):
                              f"{self.slot_words} words; got ring_depth {int(cfg.ring_depth)}, "
                              f"chunk_words {int(cfg.chunk_words)}")  # fmt: skip
 
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_ingest_task.h``: the twin of :meth:`run_iter` (one
+        firing a symbol; the credit register read every cycle, as :meth:`_credit_reg` models).
+        """
+        from waveflow.hw.mem_stream import KernelTask
+
+        ports = ("s_sym", "s_cfg", "s_crd", "m_w", "m_status")
+        return KernelTask(
+            "ltbf_ingest_task",
+            "ltbf_ingest_task.h",
+            ports,
+            framed=ports,
+            template_args=(
+                int(self.word_bits),
+                int(self.lane_bits),
+                int(self.Kmax),
+                int(self.Nmax),
+                int(self.n_ant),
+                int(self.J),
+                int(self.n_sc),
+            ),
+        )
+
     def run_iter(self):
         """One firing: the configuration, then symbols forever."""
         cfg = yield from self.s_cfg.get_schema(IngestCfg)
@@ -198,6 +221,7 @@ class IngestDma(FreeRunMod):
 class IngestDev(FreeRunMod):
     """The Ingest DMA with its memory writer: the device on the bus."""
 
+    cpp_kernel_name: ClassVar[str | None] = "ltbf_ingest"
     mm_views: ClassVar[tuple] = IngestDma.mm_views
 
     dma_cfg: dict = field(default_factory=dict)
@@ -223,7 +247,8 @@ class IngestDev(FreeRunMod):
         link.bind("master", self.dma.m_w)
         link.bind("slave", self.wstream.s_in)
         self.add_if(link)
-        self.boundary = ["s_sym", "s_cfg", "s_crd", "m_w", "m_resp", "m_status"]
+        # In the walk order the top generator pairs names with (children, then their ports).
+        self.boundary = ["s_sym", "s_cfg", "s_crd", "m_status", "m_w", "m_resp"]
         self.s_sym, self.s_cfg, self.s_crd = (
             self.dma.s_sym,
             self.dma.s_cfg,

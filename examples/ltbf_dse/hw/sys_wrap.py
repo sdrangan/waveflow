@@ -56,6 +56,18 @@ class SysTap(FreeRunMod):
             self.add_endpoint(ep)
         self.jobs_done = 0
 
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: the twin of :meth:`run_iter`."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        return KernelTask(
+            "ltbf_sys_tap_task",
+            "ltbf_tasks.h",
+            ("s_done", "m_resp", "m_status"),
+            template_args=(int(self.word_bits),),
+            framed=("s_done", "m_status"),
+        )
+
     def run_iter(self):
         d = yield from self.s_done.get_schema(EngineDone)
         self.jobs_done += 1
@@ -86,6 +98,18 @@ class SysCtrl(FreeRunMod):
         self.add_endpoint(self.s_cfg)
         self.enable = 1
 
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: the configuration, taken and held."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        return KernelTask(
+            "ltbf_cfg_sink_task",
+            "ltbf_tasks.h",
+            ("s_cfg",),
+            template_args=(int(self.word_bits),),
+            framed=("s_cfg",),
+        )
+
     def run_iter(self):
         cfg = yield from self.s_cfg.get_schema(SysCfg)
         self.enable = int(cfg.enable)
@@ -95,6 +119,7 @@ class SysCtrl(FreeRunMod):
 class SysWrap(FreeRunMod):
     """The systolic array's device: ``SystolicEngineMem`` with its Job FIFO, Ctrl and done record."""
 
+    cpp_kernel_name: ClassVar[str | None] = "ltbf_sys"
     mm_views: ClassVar[tuple] = (
         QueueIn("qjob", port="s_job", depth=16),
         RegBank("ctrl", cfg_port="s_cfg", status_port="m_status", cfg_type=SysCfg,
@@ -128,7 +153,8 @@ class SysWrap(FreeRunMod):
         done_if.bind("master", self.engine.s_done)
         done_if.bind("slave", self.tap.s_done)
         self.add_if(done_if)
-        self.boundary = ["s_job", "m_in", "m_out", "m_resp", "s_cfg", "m_status"]
+        # In the walk order the top generator pairs names with (children, then their ports).
+        self.boundary = ["s_job", "m_in", "m_out", "m_resp", "m_status", "s_cfg"]
         self.s_job = self.engine.s_job
         self.m_in = self.engine.m_in
         self.m_out = self.engine.m_out

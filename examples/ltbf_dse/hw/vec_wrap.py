@@ -10,8 +10,8 @@
   store plan for the writer;
 * a **data reader** (``MemRStream``) feeds ``s_in0``;
 * :class:`VecWriter` turns each ``VecResp`` and its data into an in-band memory write (the store
-  streams' affine walks), and the job's last store carries the job's done record, which the memory
-  writer (``MemWStream``) forwards only once that data is in memory, after the job's ``VecStatus``.
+  streams' affine walks); after the job's ``VecStatus`` a zero-length write carries the job's done
+  record, which the memory writer (``MemWStream``) echoes only once the stores before it are in memory.
 
 The programs live in Shared Mem, written once by the host; a job's descriptor names their addresses
 (the spec's program table, carried in the descriptor). Stored programs carry ``tx_id`` 0; the done
@@ -140,6 +140,19 @@ class VecDecoder(FreeRunMod):
         ):
             self.add_endpoint(ep)
 
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: the twin of :meth:`run_iter`."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        ports = ("s_job", "m_lcmd", "m_xcmd", "m_scmd", "m_dcmd", "m_plan")
+        return KernelTask(
+            "ltbf_vec_decoder_task",
+            "ltbf_tasks.h",
+            ports,
+            template_args=(int(self.word_bits),),
+            framed=ports,
+        )
+
     def run_iter(self):
         j = yield from self.s_job.get_schema(VecMemJob)
         for ep, a, n in ((self.m_lcmd, j.l_addr, j.l_words), (self.m_xcmd, j.x_addr, j.x_words),
@@ -184,8 +197,26 @@ class VecWriter(FreeRunMod):
         self.m_w = FramedStreamIFMaster(
             name=f"{self.name}_m_w", sim=self.sim, bitwidth=w
         )
-        for ep in (self.s_plan, self.s_out, self.s_status, self.m_w):
+        #: The Ctrl's status (``SysStatus``), published after every job.
+        self.m_status = StreamIFMaster(
+            name=f"{self.name}_m_status", sim=self.sim, bitwidth=w
+        )
+        for ep in (self.s_plan, self.s_out, self.s_status, self.m_w, self.m_status):
             self.add_endpoint(ep)
+        self.jobs_done = 0
+
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: the twin of :meth:`run_iter`."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        ports = ("s_plan", "s_out", "s_status", "m_w", "m_status")
+        return KernelTask(
+            "ltbf_vec_writer_task",
+            "ltbf_tasks.h",
+            ports,
+            template_args=(int(self.word_bits),),
+            framed=ports,
+        )
 
     def run_iter(self):
         plan = yield from self.s_plan.get_schema(StorePlan)
@@ -196,21 +227,23 @@ class VecWriter(FreeRunMod):
                 data = yield from self.s_out.get()
                 base = int(getattr(plan, f"st{k}_base"))
                 stride = int(getattr(plan, f"st{k}_stride"))
-                last = i == count - 1 and k == n_st - 1
-                fwd = 0
-                if last:
-                    st = yield from self.s_status.get_schema(VecStatus)
-                    done = Resp(
-                        src=SRC_VEC, status=int(st.status), tx_id=int(plan.tx_id), seq=0
+                yield from self.m_w.write(
+                    MemWCmd(
+                        addr=base + i * stride, len=int(np.shape(data)[0]), fwd_bursts=0
                     )
-                    fwd = 1
-                cmd = MemWCmd(
-                    addr=base + i * stride, len=int(np.shape(data)[0]), fwd_bursts=fwd
                 )
-                yield from self.m_w.write(cmd)
-                if last:
-                    yield from self.m_w.write(done)
                 yield from self.m_w.write(data)
+        # The job's status, then a zero-length write whose forwarded burst is its done record: the
+        # memory writer echoes it once the stores before it are in memory.
+        st = yield from self.s_status.get_schema(VecStatus)
+        yield from self.m_w.write(MemWCmd(addr=0, len=0, fwd_bursts=1))
+        yield from self.m_w.write(
+            Resp(src=SRC_VEC, status=int(st.status), tx_id=int(plan.tx_id), seq=0)
+        )
+        self.jobs_done += 1
+        yield from self.m_status.write(SysStatus(jobs_done=self.jobs_done,
+                                                 last_tx_id=int(plan.tx_id),
+                                                 last_status=int(st.status)))  # fmt: skip
 
 
 @dataclass
@@ -227,6 +260,18 @@ class VecCtrl(FreeRunMod):
         self.add_endpoint(self.s_cfg)
         self.enable = 1
 
+    def kernel_task(self):
+        """The hand-written HLS body, ``src/ltbf_tasks.h``: the configuration, taken and held."""
+        from waveflow.hw.mem_stream import KernelTask
+
+        return KernelTask(
+            "ltbf_cfg_sink_task",
+            "ltbf_tasks.h",
+            ("s_cfg",),
+            template_args=(int(self.word_bits),),
+            framed=("s_cfg",),
+        )
+
     def run_iter(self):
         cfg = yield from self.s_cfg.get_schema(SysCfg)
         self.enable = int(cfg.enable)
@@ -236,6 +281,7 @@ class VecCtrl(FreeRunMod):
 class VecWrap(FreeRunMod):
     """The vector unit's device (spec §5.4)."""
 
+    cpp_kernel_name: ClassVar[str | None] = "ltbf_vec"
     mm_views: ClassVar[tuple] = (
         QueueIn("qjob", port="s_job", depth=32),
         RegBank("ctrl", cfg_port="s_cfg", status_port="m_status", cfg_type=SysCfg,
@@ -292,15 +338,13 @@ class VecWrap(FreeRunMod):
             iface.bind("master", m)
             iface.bind("slave", s)
             self.add_if(iface)
-        self.boundary = ["s_job", "m_rl", "m_rx", "m_rs", "m_rd", "m_w", "m_resp", "s_cfg",
-                         "m_status"]  # fmt: skip
+        # In the walk order the top generator pairs names with (children, then their ports).
+        self.boundary = ["s_job", "m_rl", "m_rx", "m_rs", "m_rd", "m_status", "m_w", "m_resp",
+                         "s_cfg"]  # fmt: skip
         self.s_job = self.dec.s_job
         self.m_rl, self.m_rx = self.readers["l"].m_mem, self.readers["x"].m_mem
         self.m_rs, self.m_rd = self.readers["s"].m_mem, self.readers["d"].m_mem
         self.m_w = self.wstream.m_mem
         self.m_resp = self.wstream.s_done
         self.s_cfg = self.ctrl.s_cfg
-        self.m_status = StreamIFMaster(
-            name=f"{self.name}_m_status", sim=sim, bitwidth=w
-        )
-        self.add_endpoint(self.m_status)
+        self.m_status = self.writer.m_status
