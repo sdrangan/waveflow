@@ -281,6 +281,79 @@ def test_vector_unit_wrapper_runs_a_cg_step_from_shared_mem():
         ), name
 
 
+def test_vector_unit_wrapper_equalizes_a_chunk_by_affine_walks():
+    """Step 4.2: the equalizer (``hw/programs.eq_programs``, ``r`` = 2) on a chunk of 3 tiles, one
+    ``VecMemJob`` of 3 rounds.  ``Z`` and ``w`` sit in the spec's C-tile layout (tile ``j`` at
+    ``base + j·wt``, stream ``r``'s ``U_pad x c`` block ``r·wb`` into it), so each load stream is an
+    affine walk (``base + r·wb``, stride ``wt``); ``x̂`` goes out a tile at a time.  Every tile equals
+    ``equalize_fixed`` (proven equal to ``vecunit.model.run_job`` in step 3.1) bit for bit.
+    """
+    from examples.ltbf_dse import ltbf_fixed_chain as fc
+    from examples.ltbf_dse.hw import programs as pg
+    from examples.ltbf_dse.hw.records import SRC_VEC
+    from examples.ltbf_dse.hw.vec_wrap import VecMemJob
+    from waveflow.linalg.lanes import from_words, nwords, to_words
+    from waveflow.vecunit.asm import assemble
+
+    ranges = {"H": 0.025, "G": 0.24, "BC": 0.08, "X": 6.8, "Y": 6.7, "Z": 8.5, "R": 0.07,
+              "S": 0.02, "ps": 0.05, "rz": 0.18, "alpha": 200.0, "beta": 5.1, "w": 0.5, "y": 1.8,
+              "xh": 1.8}  # fmt: skip
+    cfg = fc.formats(ranges, 14)
+    r, u_pad, c, tiles, lb = 2, 16, 8, 3, 16
+    vu = pg.eq_config(cfg.eq, u_pad, c, L=8, r=r, word_bits=W, lane_bits=lb)
+    words = assemble(vu, pg.eq_programs(vu, u_pad, c, r, tiles), tx_id=0)
+    rng = np.random.default_rng(11)
+
+    def ints(fmt, shift=0):
+        lo, hi = -(1 << (fmt.W - 1)), 1 << (fmt.W - 1)
+        return tuple(
+            rng.integers(lo, hi, (tiles, r, u_pad, c)) >> shift for _ in range(2)
+        )
+
+    zr, zi = ints(cfg.eq.z)
+    wr, wi = ints(cfg.eq.w, 2)
+    wb = nwords(u_pad * c, lb, W)  # one stream's block
+    wt = r * wb  # a C tile (Mmax = S = r·U_pad rows)
+
+    def tiled(re, im, fmt):
+        return np.concatenate([np.asarray(to_words(re[j, k], im[j, k], fmt, lb, W), np.uint64)
+                               for j in range(tiles) for k in range(r)])  # fmt: skip
+
+    layout, addr, image = {}, 0, []
+    for name in ("load", "execute", "store"):
+        layout[name] = (addr, len(words[name]))
+        image.append(np.asarray(words[name], np.uint64))
+        addr += len(words[name])
+    for name, data in (("w", tiled(wr, wi, cfg.eq.w)), ("z", tiled(zr, zi, cfg.eq.z)),
+                       ("xh", np.zeros(tiles * wb, np.uint64))):  # fmt: skip
+        layout[name] = (addr, len(data))
+        image.append(data)
+        addr += len(data)
+    image = np.concatenate(image)
+    job = VecMemJob(tx_id=9, count=tiles, n_ld=2 * r, n_st=1,
+                    l_addr=layout["load"][0], l_words=layout["load"][1],
+                    x_addr=layout["execute"][0], x_words=layout["execute"][1],
+                    s_addr=layout["store"][0], s_words=layout["store"][1])  # fmt: skip
+    for q, (name, k) in enumerate((("w", 0), ("z", 0), ("w", 1), ("z", 1))):
+        setattr(job, f"ld{q}_base", layout[name][0] + k * wb)
+        setattr(job, f"ld{q}_stride", wt)
+        setattr(job, f"ld{q}_words", wb)
+    job.st0_base, job.st0_stride, job.st0_words = layout["xh"][0], wb, wb
+    sysm = vec_system(vu, len(image), [np.asarray(job.serialize(word_bw=W), np.uint64)])
+    sysm.mem._mem.write(0, image)
+    resps = sysm.run()
+    assert [(int(x.src), int(x.tx_id), int(x.status)) for x in resps] == [
+        (SRC_VEC, 9, 0)
+    ]
+    a = layout["xh"][0]
+    for j in range(tiles):
+        got = np.asarray(sysm.mem._mem.read((a + j * wb) * W // 8, wb), np.uint64)
+        gr, gi = from_words(got, u_pad * c, cfg.eq.xh, lb, W)
+        xr, xi = fc.equalize_fixed(zr[j], zi[j], wr[j], wi[j], cfg.eq)
+        assert np.array_equal(gr.reshape(u_pad, c), xr), j
+        assert np.array_equal(gi.reshape(u_pad, c), xi), j
+
+
 # -- the Ingest DMA ---------------------------------------------------------------------------------
 
 ING_BASE = 0x8003_0000
