@@ -119,6 +119,15 @@ class DevHost(SwHost):
         ) in self.drivers:  # the flow anchors only the host: the bundles' readers too
             drv.root = Path(root)
 
+    def _read(self, addr: int, n: int):
+        """*n* words at word address *addr*, in AXI4 bursts of at most 256 beats (as the twin)."""
+        parts = []
+        for i in range(0, n, MAX_BURST):
+            parts.append(
+                (yield from self.bus.read(min(MAX_BURST, n - i), (addr + i) * 8))
+            )
+        return np.concatenate(parts)
+
     def main(self):
         for addr, words in self.image:
             for i in range(0, len(words), MAX_BURST):
@@ -130,7 +139,7 @@ class DevHost(SwHost):
         for _ in self.jobs:
             self.resps.append((yield from self.qresp.get_schema(Resp)))
         for a, n in self.reads:
-            self.got.append((yield from self.bus.read(n, a * 8)))
+            self.got.append((yield from self._read(a, n)))
         if self.ingest is not None:
             cfg, n_chunks, slot_words, base, depth = self.ingest
             yield from self.ctrl.write(np.asarray(cfg, np.uint64))
@@ -139,7 +148,7 @@ class DevHost(SwHost):
             for k in range(n_chunks):
                 self.resps.append((yield from self.qresp.get_schema(Resp)))
                 a = base + (k % depth) * slot_words
-                self.got.append((yield from self.bus.read(slot_words, a * 8)))
+                self.got.append((yield from self._read(a, slot_words)))
                 yield from self.bus.write(
                     np.asarray([k + 1], np.uint64), self.credit_addr
                 )

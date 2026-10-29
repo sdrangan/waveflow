@@ -41,6 +41,12 @@ struct DevScenario {
         }
     }
 };
+/// Plain reads in AXI4 bursts of at most 256 beats (as the pysim host: DevHost._read).
+template <class Bus>
+inline void read_bursts(Bus& bus, uint64_t word_addr, uint32_t n) {
+    for (uint32_t i = 0; i < n; i += 256)
+        bus.read((word_addr + i) * 8, (n - i < 256) ? (n - i) : 256u);
+}
 #endif  // EXAMPLES_LTBF_DSE_DEV_SCENARIO
 
 class LtbfJobHostModel : public LtbfJobHost_endpoints {
@@ -51,7 +57,7 @@ public:
         for (const auto& w : sc.image) bus.write(w.first * 8, w.second);
         for (const auto& j : sc.jobs) qjob.write(j);
         for (size_t i = 0; i < sc.jobs.size(); ++i) qresp.get(1);
-        for (const auto& r : sc.reads) bus.read(r.first * 8, r.second);
+        for (const auto& r : sc.reads) read_bursts(bus, r.first, r.second);
     }
 };
 

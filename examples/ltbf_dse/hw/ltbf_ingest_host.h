@@ -41,6 +41,12 @@ struct DevScenario {
         }
     }
 };
+/// Plain reads in AXI4 bursts of at most 256 beats (as the pysim host: DevHost._read).
+template <class Bus>
+inline void read_bursts(Bus& bus, uint64_t word_addr, uint32_t n) {
+    for (uint32_t i = 0; i < n; i += 256)
+        bus.read((word_addr + i) * 8, (n - i < 256) ? (n - i) : 256u);
+}
 #endif  // EXAMPLES_LTBF_DSE_DEV_SCENARIO
 
 class LtbfIngestHostModel : public LtbfIngestHost_endpoints {
@@ -53,7 +59,7 @@ public:
         for (const auto& b : sc.symbols) qsym.write(b);  // the O-RU: an antenna's burst a packet
         for (uint64_t k = 0; k < sc.n_chunks; ++k) {
             qresp.get(1);
-            bus.read((sc.base + (k % sc.depth) * sc.slot) * 8, (uint32_t)sc.slot);
+            read_bursts(bus, sc.base + (k % sc.depth) * sc.slot, (uint32_t)sc.slot);
             bus.write(sc.credit, std::vector<uint64_t>{k + 1});
         }
     }
