@@ -45,6 +45,12 @@ MAX_BURST = 256
 K_IMAGE, K_JOB, K_READ, K_CFG, K_CHUNKS, K_SYM = 0, 1, 2, 3, 4, 5
 
 
+def _burst(head, words=()) -> np.ndarray:
+    """A scenario burst: its kind and fields, then *words*, all ``uint64``.  (Concatenating a Python
+    int list with uint64 words promotes to float64 and rounds every word to 53 bits.)"""
+    return np.concatenate([np.asarray(head, np.uint64), np.asarray(words, np.uint64)])
+
+
 @dataclass
 class RespHub1(RespHub):
     """A RespHub of one source: a device system's (its own HLS top)."""
@@ -90,15 +96,13 @@ class DevHost(SwHost):
         out = []
         for addr, words in self.image:
             for i in range(0, len(words), MAX_BURST):
-                out.append(
-                    np.concatenate([[K_IMAGE, addr + i], words[i : i + MAX_BURST]])
-                )
-        out += [np.concatenate([[K_JOB], j]) for j in self.jobs]
-        out += [np.asarray([K_READ, a, n]) for a, n in self.reads]
+                out.append(_burst([K_IMAGE, addr + i], words[i : i + MAX_BURST]))
+        out += [_burst([K_JOB], j) for j in self.jobs]
+        out += [_burst([K_READ, a, n]) for a, n in self.reads]
         if self.ingest is not None:
             cfg, n_chunks, slot_words, base, depth = self.ingest
-            out.append(np.concatenate([[K_CFG], cfg]))
-            out += [np.concatenate([[K_SYM], b]) for b in self.symbols]
+            out.append(_burst([K_CFG], cfg))
+            out += [_burst([K_SYM], b) for b in self.symbols]
             out.append(
                 np.asarray(
                     [K_CHUNKS, n_chunks, slot_words, base, depth, self.credit_addr]

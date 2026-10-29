@@ -167,7 +167,7 @@ def build_dag() -> BuildDag:
     return dag
 
 
-def device_dag(names=DEVICES, work_dir=WORK_DIR) -> BuildDag:
+def device_dag(names=DEVICES, work_dir=WORK_DIR, trace: bool = False) -> BuildDag:
     """``codegen``, then the framework's system flow for each device's gate system
     (``devsys.<name>_system``): csynth of its tops, the system RTL, the scenario, pysim, XSI with the
     host's C++ twin, and ``compare`` (RTL against pysim), each prefixed ``<name>_``."""
@@ -179,7 +179,7 @@ def device_dag(names=DEVICES, work_dir=WORK_DIR) -> BuildDag:
     for name in names:
         sysm = getattr(devsys, f"{name}_system")()
         add_system_steps(dag, sysm, work_dir=work_dir, top=f"ltbf_{name}_top", prefix=f"{name}_",
-                         workspace=f"ltbf_{name}")  # fmt: skip
+                         workspace=f"ltbf_{name}", trace=trace, trace_bus=trace)  # fmt: skip
     return dag
 
 

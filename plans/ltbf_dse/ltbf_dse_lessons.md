@@ -116,3 +116,12 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   another order; the generated top silently wires the wrong streams. Check
   `[(n, e.name) for n, e in comp.boundary]` before csynth. A composite's top name is its
   `cpp_kernel_name`.
+- **Do not carry state across firings of a free-running task in statics** (step 5.1, Vitis HLS 2024.1):
+  the Ingest DMA's `seq`, then `taken`, came out of RTL one firing stale (Resps and ring slots a
+  symbol late) while C simulation was right; an `empty()` polling loop before the first read made it
+  worse (a hang). A body that never returns (`for (;;)` over symbols, the state loop-carried locals),
+  as the Python twin's `run_iter`, passed XSI = pysim. Check C simulation (g++ with the Vitis HLS
+  include directory) first, then a VCD (`add_system_steps(trace=True, trace_bus=True)`).
+- **Scenario bursts must be built as `uint64`** (step 5.1): `np.concatenate([[kind], words])` promotes
+  to float64 and rounds 64-bit words to 53 bits; only the C++ twin reads the scenario, so pysim
+  never notices.
