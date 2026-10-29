@@ -133,6 +133,22 @@ class OpLog:
             f"copy:{what}" if what else "copy", (np.shape(a),), out, n_in=np.size(a)
         )
 
+    def note(
+        self,
+        op: str,
+        shapes: tuple,
+        out: np.ndarray,
+        *,
+        cmacs=0,
+        divides=0,
+        sqrts=0,
+        n_in=0,
+    ) -> np.ndarray:
+        """Log an operation computed outside this class (an interpolation, a phase ramp)."""
+        return self._log(
+            op, shapes, out, cmacs=cmacs, divides=divides, sqrts=sqrts, n_in=n_in
+        )
+
     # -- reading the log ----------------------------------------------------------------------------
 
     def totals(self, stage: str | None = None) -> dict:

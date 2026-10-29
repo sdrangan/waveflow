@@ -62,7 +62,7 @@ def estimate(y: np.ndarray, base: np.ndarray, port: int, w: np.ndarray) -> np.nd
     h = np.fft.ifft(y * np.conj(base))
     shift = port * m / N_CS
     # The window, moved by -shift taps: a whole-tap roll when 8 divides m, else the nearest tap.
-    w_p = np.roll(w, -int(round(shift)))
+    w_p = np.roll(w, -round(shift))
     return np.fft.fft(h * w_p) * np.exp(-2j * np.pi * port * n / N_CS)
 
 
