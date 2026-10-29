@@ -252,9 +252,12 @@ def dev_system(
         comps=[ddev, hdev, mem],
         ifs=[xbar, *links],
     )
+    # The RTL run's bound (it ends when the host is done): a device gate at N_rx 1024 moves 16 times
+    # AC9's data at two cycles a read word.
     return HwSystem(
         sim,
         dut,
+        n_cycles=40_000_000,
         run_until=host.done,
         check=lambda s: (host.resps, host.got),
         fresh=fresh,
