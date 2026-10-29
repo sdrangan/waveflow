@@ -57,7 +57,7 @@ from waveflow.hw.irq import IrqIF
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_device import build_mm_device
-from waveflow.hw.mm_host import BoundMemSlaveAdaptor, MemSlaveLayout
+from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
 from waveflow.linalg.lanes import from_words, to_words
 from waveflow.linalg.systolic import MatmulOp
 from waveflow.linalg.systolic_engine_mem import EngineJobDesc, block_major
@@ -253,6 +253,9 @@ class LtbfHost(SwHost):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.add_bus_master("m", bitwidth=64)
+        #: Plain bus reads and writes (the Python stages' and CPU jobs' data, the ring credit),
+        #: recorded: the C++ twin's ``BusRw``.
+        self.bus = BusReader(self.m)
         self.irq = {
             v: self.add_irq(f"irq_{v}") for v in ("qjob_sys", "qjob_vec", "qresp")
         }
@@ -324,10 +327,10 @@ class LtbfHost(SwHost):
         words = np.asarray(words, np.uint64)
         if ctx is not None:
             ctx["writes"].append((int(word_addr), words.copy()))
-        yield from self.m.write(words, word_addr * 8)
+        yield from self.bus.write(words, word_addr * 8)
 
     def read_words(self, word_addr: int, n: int):
-        return np.asarray((yield from self.m.read(int(n), word_addr * 8)), np.uint64)
+        return np.asarray((yield from self.bus.read(int(n), word_addr * 8)), np.uint64)
 
     # -- threads --------------------------------------------------------------------------------
 
@@ -422,7 +425,7 @@ class LtbfHost(SwHost):
                     yield from S.qjob[e].write(words)
         if sch.credit != S.credit_sent:
             S.credit_sent = sch.credit
-            yield from self.m.write(np.asarray([sch.credit], np.uint64), S.credit_addr)
+            yield from self.bus.write(np.asarray([sch.credit], np.uint64), S.credit_addr)
         yield from self._charge_trace()
 
     # -- the host's jobs ------------------------------------------------------------------------
