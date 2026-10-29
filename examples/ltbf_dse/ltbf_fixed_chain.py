@@ -315,7 +315,12 @@ def fixed_projection(
             keep = np.ones(n_conn * lk.N_SRS, dtype=bool)
             keep[rows] = False
             rt = g @ g.conj().T + gh[:, keep] @ gh[:, keep].conj().T
-            out[u] = np.linalg.solve(np.linalg.cholesky(rt), g)
+            try:
+                out[u] = np.linalg.solve(np.linalg.cholesky(rt), g)
+            except np.linalg.LinAlgError:
+                # A degenerate solve (every entry of A_i below one LSB, or rank < r): the projection
+                # receives nothing, and the UE scores the SINR floor (ltbf.SINR_FLOOR), not an error.
+                out[u] = np.zeros_like(g)
     return out
 
 

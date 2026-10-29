@@ -43,7 +43,10 @@ def whitened(
     keep = np.ones(h_alpha.shape[1], dtype=bool)
     keep[cols_i] = False
     rt = g @ g.conj().T + gh[:, keep] @ gh[:, keep].conj().T
-    chol = np.linalg.cholesky(rt)
+    try:
+        chol = np.linalg.cholesky(rt)
+    except np.linalg.LinAlgError:  # a degenerate G receives nothing (the SINR floor)
+        return np.zeros_like(g), rt
     return np.linalg.solve(chol, g), rt
 
 

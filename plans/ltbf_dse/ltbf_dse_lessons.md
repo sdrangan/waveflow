@@ -68,3 +68,16 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   not beside `Vitis/2024.1/bin/vitis-run`; `find_vitis_include_dir` now looks there too. Running a
   module as `__main__` through `runpy` breaks dataclasses whose `ClassVar` annotations are strings
   (the class's module is the driver): call the module's functions instead.
+- **One format triple needs power-of-two gains** (step 3.1, spec amendment 1). CG's `X` outgrows `D`
+  by about `1/λ_min`, the real-time `Y`, `Z` are 100x the long-term values, and the vector unit's
+  formats need integer bits >= 1 (`VecUnitConfig`); a profile-driven `2^-s` on `Ĥα`, `2^q` on the
+  right-hand side, `2^-k` on `Y`, `2^-g` on `G'` and `2^-m` on `X_b` keep every hand-off in one triple,
+  each removed exactly downstream. Without them W <= 14 collapsed to zero.
+- **Framework usage that cost iterations** (step 4.1): a `FreeRunMod` subclass needs `@dataclass`
+  for its fields to be constructor arguments; `build_mm_device`'s `views` are keyed by the declared
+  view name, not the prefixed one; a `MemoryMod(inline=False)` has no storage until `mem.alloc(n)`
+  (its `Memory` is `mem._mem`); a stream slave reads with `get(nwords_max=n)`; the views' streams take
+  the bus width, so every control word in a device is a bus word.
+- **The software host's queue writes are at most 64 bits wide** (`mm_host.py:427` concatenates a 1-D
+  header with `(n, 2)` 128-bit words). The system runs a 64-bit bus, as markov and mm_fir do; 128-bit
+  engine ports are measured at engine level and modeled.
