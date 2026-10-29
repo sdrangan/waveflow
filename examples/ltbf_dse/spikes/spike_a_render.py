@@ -87,7 +87,9 @@ def pathset_of(a_nup: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray) -> P
         "schema_version": SCHEMA_VERSION,
         "carrier_hz": sc.FC,
         "delays": ABSOLUTE_DELAYS,
-        "channels": channel_map([("bs", i) for i in range(n)], [("ue", j) for j in range(u)]),
+        "channels": channel_map(
+            [("bs", i) for i in range(n)], [("ue", j) for j in range(u)]
+        ),
         "generator": {"name": "examples.ltbf_dse.spikes.spike_a_render"},
         "spec": spec,
         "spec_hash": spec_hash(spec),
@@ -100,7 +102,8 @@ def pathset_of(a_nup: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray) -> P
 
 def delayed(x: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray) -> np.ndarray:
     """``((U*P), L)``: every (UE, path)'s waveform delayed by ``tau`` with rfenv's interpolator,
-    including its group delay ``D = filt_len / 2`` (as :class:`ChannelApplier` outputs it)."""
+    including its group delay ``D = filt_len / 2`` (as :class:`ChannelApplier` outputs it).
+    """
     half = DEFAULT_FILT_LEN // 2
     u_n, p_n = tau_up.shape
     length = x.shape[1]
@@ -122,14 +125,18 @@ def delayed(x: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray) -> np.ndarr
     return out
 
 
-def render_fast(a_nup: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray, x: np.ndarray):
+def render_fast(
+    a_nup: np.ndarray, tau_up: np.ndarray, valid_up: np.ndarray, x: np.ndarray
+):
     n, u, p = a_nup.shape
     return a_nup.reshape(n, u * p) @ delayed(x, tau_up, valid_up)
 
 
 def waveform(u: int, length: int, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
-    return (rng.choice([-1.0, 1.0], (u, length)) + 1j * rng.choice([-1.0, 1.0], (u, length))) / 2
+    return (
+        rng.choice([-1.0, 1.0], (u, length)) + 1j * rng.choice([-1.0, 1.0], (u, length))
+    ) / 2
 
 
 def main() -> None:
@@ -163,7 +170,9 @@ def main() -> None:
     out["rfenv_8x8_one_sector_slot_s"] = round(t_rfenv8, 2)
     out["rfenv_32x32_three_sectors_slot_s_est"] = round(t_rfenv8 * 16 * 3, 1)
     y8f = render_fast(a8, tau_up, valid_up, x)
-    out["fast_vs_rfenv_rel_err_8x8_slot"] = float(np.linalg.norm(y8f - y8) / np.linalg.norm(y8))
+    out["fast_vs_rfenv_rel_err_8x8_slot"] = float(
+        np.linalg.norm(y8f - y8) / np.linalg.norm(y8)
+    )
 
     # (3) the fast path at 32x32: one sector, one slot.
     a32 = ant_coeffs(drop, snapshot, s, 32)
@@ -182,7 +191,9 @@ def main() -> None:
     for f in files:
         d = sc.load_drop(int(f.stem.split("_")[1]))
         for snap in (0, 1):
-            g = lk.power_control(lk.channel(d, snap, 8, "100MHz"), lk.TARGETS["-6_14"]).gnb_idx
+            g = lk.power_control(
+                lk.channel(d, snap, 8, "100MHz"), lk.TARGETS["-6_14"]
+            ).gnb_idx
             ta_d = timing_advance(d, snap, g)
             tau, valid = d[f"tau{snap}"], d[f"valid{snap}"]
             for u in range(tau.shape[1]):

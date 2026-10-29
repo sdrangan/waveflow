@@ -48,3 +48,15 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
 - **The three sectors are co-located**, so after a per-UE timing advance no path of any sector
   arrives before the window; 2.96% of UE-sector links (13,122 over 100 drops x 2 snapshots) spread
   beyond the 0.586 us CP, at most 4.2 us. (spike 1.2 a)
+- **Vector-unit pass rules shape the programs** (spike 1.2 c). A pass reads and writes at most one
+  group a bank, and a group once (`vlse S` then `vadd S, S, D` in one pass is refused); the broadcast
+  form copies **lane 0 to every lane** (not an element along a vector), and `.vs` scalars are real;
+  so a per-subcarrier complex weight cannot be applied across symbols: give `h` a resource element.
+  `waveflow.vecunit.asm.check(cfg, progs)` lists every rule a program breaks; run it first.
+- **The queue-pointer limit caps joint CG at 1024 antennas** (spike 1.2 c):
+  `Kmax * ceil(Nmax / L) <= 4096` and a column's dot product needs all `N_rx` rows in one block, so
+  at `N_rx = 1024` a job holds at most 64 columns (`L = 16`).
+- **`Processor` frees a core at the unrounded A53 time** (spike 1.2 e). Padding a call to a host-clock
+  edge after `execute` makes its own time match the C++ twin's `compute(n)`, but a call queued behind
+  it starts up to one host cycle earlier than behind the twin's core semaphore. Exact with one
+  scheduler thread (the RTL gate); within a host cycle a call otherwise.
