@@ -1,9 +1,9 @@
 # Spec: LTBF on the shared-memory accelerator (`plans/ltbf_dse/ltbf_dse.md`, step 1.1)
 
-**Status:** v2, draft for the 👁 review of step 1.4 (v1 reviewed 2026-10-28 by a read-only agent:
-3 blockers, 6 major, 12 minor findings, all acted on here; §7 lists them). Frozen when the user
-approves; its SHA-256 then goes into the plan's §15. A choice marked **[gate X]** is a recommendation
-the review must confirm or change (§6).
+**Status:** **Frozen** 2026-10-28: v2, approved by the user at the 👁 review of step 1.4 with every
+recommendation of §6 (gate E: the weights from the Python estimator). v1 was reviewed by a read-only
+agent (3 blockers, 6 major, 12 minor findings, all acted on; §7). Its SHA-256 is in the plan's §15;
+a change after this needs the user's yes and a new hash.
 **Inputs:** the plan (§1–§2, §14), the LTBF paper and its code, the spikes of step 1.2 (scripts in
 `examples/ltbf_dse/spikes/`, results local in `examples/ltbf_dse/data/spikes/`; the plan's §15; the
 lessons file).
