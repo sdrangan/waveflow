@@ -182,3 +182,14 @@ def test_gem5_run_matches_the_new_twins(cal, point):
     row = run.measure(cal.kernel, point, empty_cycles=0.0, smoke=True)
     assert row["output_matches_twin"], row
     assert row["cycles"] > 0
+
+
+@pytest.mark.parametrize("cal", [lp.CAL, sr.CAL], ids=lambda c: c.kernel.name)
+def test_the_fitted_models_meet_ac10(cal):
+    """AC10: the held-out test median within 10% (the local calibration; ``release``'s revised form
+    is scored on its fresh test set, plan §14)."""
+    if not cal.model_path.is_file():
+        pytest.skip("local calibration not run")
+    errors = json.loads(cal.model_path.read_text())["errors"]
+    assert errors["test"]["points"] >= 6
+    assert errors["test"]["median"] <= 0.10, errors

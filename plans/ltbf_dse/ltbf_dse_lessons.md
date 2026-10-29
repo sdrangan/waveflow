@@ -105,3 +105,8 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   bits); a wide `Y` chunk costs `J` reads of `G'`.
 - **Drops must not follow order edges** (step 4.5): a window edge carries no data; dropping through it
   dropped jobs whose chunks had arrived, their ring slots were never freed and the ring leaked.
+- **Never stop processes by grepping their command line from a shell** (step 3.2): the grep matched
+  the shell's own command and the kill took the shell's process group with it. Record each detached
+  job's process group when it starts (`$!` after `setsid`) and stop exactly those.
+- **Print validation alone, then score the test once** (step 4.6): a fit that prints both reads the
+  test score before the model form is settled; a revision then needs a fresh registered test set.
