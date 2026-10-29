@@ -222,6 +222,8 @@ class IngestDev(FreeRunMod):
     """The Ingest DMA with its memory writer: the device on the bus."""
 
     cpp_kernel_name: ClassVar[str | None] = "ltbf_ingest"
+    #: What the system top re-creates the kernel from (``hw_module.build_params``).
+    build_fields: ClassVar[tuple[str, ...]] = ("dma_cfg",)
     mm_views: ClassVar[tuple] = IngestDma.mm_views
 
     dma_cfg: dict = field(default_factory=dict)

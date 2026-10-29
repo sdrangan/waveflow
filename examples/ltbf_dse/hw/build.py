@@ -48,12 +48,16 @@ from waveflow.vecunit.isa import SCHEMAS as VEC_SCHEMAS
 ROOT = Path(__file__).resolve().parents[1]
 #: Vitis HLS 2024.1 and the systolic engine (spike 1.2 b, plan §14).
 FLP = ("config_compile -pipeline_style flp",)
-TOPS = ("ltbf_sys", "ltbf_vec", "ltbf_ingest", "ltbf_hub")
+TOPS = ("ltbf_sys", "ltbf_vec", "ltbf_ingest", "ltbf_hub", "ltbf_hub1")
+#: The device gates' systems (``devsys``) and their workspaces under ``xsi_work/``.
+DEVICES = ("sys", "vec", "ingest")
+WORK_DIR = "xsi_work"
 
 
 def devices(sim: Simulation | None = None) -> dict[str, Any]:
     """The four devices at AC9's parameters, named as their tops."""
     from examples.ltbf_dse.hw import system as sy
+    from examples.ltbf_dse.hw.devsys import RespHub1
     from examples.ltbf_dse.hw.ingest import IngestDev
     from examples.ltbf_dse.hw.resp_hub import RespHub
     from examples.ltbf_dse.hw.sys_wrap import SysWrap
@@ -69,6 +73,7 @@ def devices(sim: Simulation | None = None) -> dict[str, Any]:
         "ltbf_vec": VecWrap(name="ltbf_vec", sim=sim, vu_cfg=S.vu, word_bits=W),
         "ltbf_ingest": IngestDev(name="ltbf_ingest", sim=sim, dma_cfg=sy.ingest_cfg(S)),
         "ltbf_hub": RespHub(name="ltbf_hub", sim=sim, n_src=3, word_bits=W),
+        "ltbf_hub1": RespHub1(name="ltbf_hub1", sim=sim, word_bits=W),
         "_formats": (cfg.a, cfg.bc),
         "_vu": S.vu,
         "_word_bits": W,
@@ -131,6 +136,7 @@ def generate(root: Path = ROOT) -> list[str]:
         gen_top(root, devs["ltbf_vec"], W, defines=DEFINES),
         gen_top(root, devs["ltbf_ingest"], W),
         gen_top(root, devs["ltbf_hub"], W),
+        gen_top(root, devs["ltbf_hub1"], W),
     ]
 
 
@@ -158,6 +164,22 @@ def build_dag() -> BuildDag:
     dag.add(LtbfCodegenStep(name="codegen"))
     for top in TOPS:
         dag.add(CsynthStep(top=top))
+    return dag
+
+
+def device_dag(names=DEVICES, work_dir=WORK_DIR) -> BuildDag:
+    """``codegen``, then the framework's system flow for each device's gate system
+    (``devsys.<name>_system``): csynth of its tops, the system RTL, the scenario, pysim, XSI with the
+    host's C++ twin, and ``compare`` (RTL against pysim), each prefixed ``<name>_``."""
+    from examples.ltbf_dse.hw import devsys
+    from waveflow.build.system_dag import add_system_steps
+
+    dag = BuildDag()
+    dag.add(LtbfCodegenStep(name="codegen"))
+    for name in names:
+        sysm = getattr(devsys, f"{name}_system")()
+        add_system_steps(dag, sysm, work_dir=work_dir, top=f"ltbf_{name}_top", prefix=f"{name}_",
+                         workspace=f"ltbf_{name}")  # fmt: skip
     return dag
 
 

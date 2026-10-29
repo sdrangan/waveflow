@@ -3,8 +3,9 @@
 // ltbf_tasks.h -- examples/ltbf_dse's small kernels (HAND-WRITTEN), the HLS twins of their run_iter
 // (plans/ltbf_dse/ltbf_dse.md step 5.1; spec §5.4).  One firing = one message, written as the Python
 // reads (docs/guide/vectorization/hls/loop_optimization.md: a loop per message); every record moves
-// through its generated schema, every data word through streamutils.  A framed port's word type is a
-// template parameter: an internal FIFO carries framed_word, a top-level port axi4s_word.
+// through its generated schema, every data word through streamutils.  Each framed port's word type is
+// a template parameter of its own, in port order (the generated top passes one a framed port): an
+// internal FIFO carries framed_word, a top-level port axi4s_word.
 //
 //   ltbf_sys_tap_task    examples/ltbf_dse/hw/sys_wrap.py  SysTap
 //   ltbf_cfg_sink_task   SysCtrl / VecCtrl (the Ctrl's configuration, held)
@@ -87,10 +88,10 @@ static void ltbf_resp_hub3_task(hls::stream<ap_uint<W> >& s_in0, hls::stream<ap_
 
 // VecDecoder: a VecMemJob in; a MemRCmd to each program reader, the store plan to the writer, then
 // the data reader's commands (count rounds, each load stream once a round).  One firing a job.
-template <int W, typename JOB_T, typename CMD_T, typename PLAN_T>
-static void ltbf_vec_decoder_task(hls::stream<JOB_T>& s_job, hls::stream<CMD_T>& m_lcmd,
-                                  hls::stream<CMD_T>& m_xcmd, hls::stream<CMD_T>& m_scmd,
-                                  hls::stream<CMD_T>& m_dcmd, hls::stream<PLAN_T>& m_plan) {
+template <int W, typename JOB_T, typename LC_T, typename XC_T, typename SC_T, typename DC_T>
+static void ltbf_vec_decoder_task(hls::stream<JOB_T>& s_job, hls::stream<LC_T>& m_lcmd,
+                                  hls::stream<XC_T>& m_xcmd, hls::stream<SC_T>& m_scmd,
+                                  hls::stream<DC_T>& m_dcmd, hls::stream<ap_uint<W> >& m_plan) {
     VecMemJob j;
     streamutils::read_msg<W>(j, s_job);
     MemRCmd c;
@@ -112,7 +113,7 @@ static void ltbf_vec_decoder_task(hls::stream<JOB_T>& s_job, hls::stream<CMD_T>&
     p.st1_base = j.st1_base; p.st1_stride = j.st1_stride; p.st1_words = j.st1_words;
     p.st2_base = j.st2_base; p.st2_stride = j.st2_stride; p.st2_words = j.st2_words;
     p.st3_base = j.st3_base; p.st3_stride = j.st3_stride; p.st3_words = j.st3_words;
-    streamutils::write_msg<W>(p, m_plan);
+    p.template write_stream<W>(m_plan);
     const ap_uint<32> base[ltbf::MAX_LD] = {j.ld0_base, j.ld1_base, j.ld2_base, j.ld3_base};
     const ap_uint<32> stride[ltbf::MAX_LD] = {j.ld0_stride, j.ld1_stride, j.ld2_stride, j.ld3_stride};
     const ap_uint<32> words[ltbf::MAX_LD] = {j.ld0_words, j.ld1_words, j.ld2_words, j.ld3_words};
@@ -137,13 +138,13 @@ ROUNDS:
 // forwarded burst is the job's Resp (src 1): the memory writer echoes it only after the stores before
 // it are in memory.  Then the Ctrl's status.  (Waiting for the status before the last store's data would deadlock: the unit
 // reports its status only once all its data has left.)
-template <int W, typename PLAN_T, typename OUT_T, typename ST_T, typename WOUT_T, typename CST_T>
-static void ltbf_vec_writer_task(hls::stream<PLAN_T>& s_plan, hls::stream<OUT_T>& s_out,
+template <int W, typename OUT_T, typename ST_T, typename WOUT_T, typename CST_T>
+static void ltbf_vec_writer_task(hls::stream<ap_uint<W> >& s_plan, hls::stream<OUT_T>& s_out,
                                  hls::stream<ST_T>& s_status, hls::stream<WOUT_T>& m_w,
                                  hls::stream<CST_T>& m_status) {
     static ap_uint<32> jobs_done = 0;
     StorePlan p;
-    streamutils::read_msg<W>(p, s_plan);
+    p.template read_stream<W>(s_plan);
     const ap_uint<32> base[ltbf::MAX_ST] = {p.st0_base, p.st1_base, p.st2_base, p.st3_base};
     const ap_uint<32> stride[ltbf::MAX_ST] = {p.st0_stride, p.st1_stride, p.st2_stride, p.st3_stride};
     const ap_uint<32> words[ltbf::MAX_ST] = {p.st0_words, p.st1_words, p.st2_words, p.st3_words};

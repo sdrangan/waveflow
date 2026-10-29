@@ -150,7 +150,7 @@ class VecDecoder(FreeRunMod):
             "ltbf_tasks.h",
             ports,
             template_args=(int(self.word_bits),),
-            framed=ports,
+            framed=ports[:5],  # the plan link is unframed
         )
 
     def run_iter(self):
@@ -215,7 +215,7 @@ class VecWriter(FreeRunMod):
             "ltbf_tasks.h",
             ports,
             template_args=(int(self.word_bits),),
-            framed=ports,
+            framed=ports[1:],  # the plan link is unframed
         )
 
     def run_iter(self):
@@ -282,6 +282,8 @@ class VecWrap(FreeRunMod):
     """The vector unit's device (spec §5.4)."""
 
     cpp_kernel_name: ClassVar[str | None] = "ltbf_vec"
+    #: What the system top re-creates the kernel from (``hw_module.build_params``).
+    build_fields: ClassVar[tuple[str, ...]] = ("vu_cfg", "word_bits")
     mm_views: ClassVar[tuple] = (
         QueueIn("qjob", port="s_job", depth=32),
         RegBank("ctrl", cfg_port="s_cfg", status_port="m_status", cfg_type=SysCfg,

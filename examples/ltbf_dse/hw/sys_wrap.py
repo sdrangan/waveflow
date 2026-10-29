@@ -120,6 +120,8 @@ class SysWrap(FreeRunMod):
     """The systolic array's device: ``SystolicEngineMem`` with its Job FIFO, Ctrl and done record."""
 
     cpp_kernel_name: ClassVar[str | None] = "ltbf_sys"
+    #: What the system top re-creates the kernel from (``hw_module.build_params``).
+    build_fields: ClassVar[tuple[str, ...]] = ("engine_cfg",)
     mm_views: ClassVar[tuple] = (
         QueueIn("qjob", port="s_job", depth=16),
         RegBank("ctrl", cfg_port="s_cfg", status_port="m_status", cfg_type=SysCfg,

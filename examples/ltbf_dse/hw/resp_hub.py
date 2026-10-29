@@ -26,6 +26,8 @@ class RespHub(FreeRunMod):
     """Round-robin merge of the sources' done records into the CPU's response queue."""
 
     cpp_kernel_name: ClassVar[str | None] = "ltbf_hub"
+    #: What the system top re-creates the kernel from (``hw_module.build_params``).
+    build_fields: ClassVar[tuple[str, ...]] = ("n_src", "word_bits")
     mm_views: ClassVar[tuple] = (QueueOut("qresp", port="m_out", depth=64),)
 
     n_src: int = N_SRC
