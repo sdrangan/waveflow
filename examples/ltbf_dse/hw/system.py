@@ -871,7 +871,10 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
     S.capacity = {e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))}
     dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem],
                     ifs=[xbar, *links])  # fmt: skip
+    # The RTL run's bound: twice a generous run (4 ms of long-term update, then the slot's symbols).
+    bound = round(2 * (4e-3 + (sg.N_SYM + 1) * p.sym_period) * F_HOST)
     hw = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
+                  n_cycles=bound if rtl else None,
                   fresh=(lambda: build(inp, rtl=True)[0]) if rtl else None)  # fmt: skip
     return hw, S, host
 
