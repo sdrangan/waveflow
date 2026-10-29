@@ -90,3 +90,95 @@ def test_gem5_run_matches_the_twin(point):
     row = run.measure(le.KERNEL, point, empty_cycles=0.0, smoke=True)
     assert row["output_matches_twin"], row
     assert row["cycles"] > 0
+
+
+# -- step 4.6: the per-UE job and the scheduler's release (plans/ltbf_dse/ltbf_dse.md) -------------
+
+from examples.ltbf_dse import ltbf_proj as lp
+from examples.ltbf_dse import sched_release as sr
+
+PROJ_POINTS = (
+    *lp.KERNEL.smoke,
+    {"n": 64, "r": 2, "conn": 22, "rank": 1, "seed": 3},
+    {"n": 200, "r": 1, "conn": 30, "rank": 4, "seed": 5},
+    {"n": 16, "r": 2, "conn": 1, "rank": 2, "seed": 9},
+)
+RELEASE_POINTS = (*sr.KERNEL.smoke, {"succ": 1000, "ready": 0, "seed": 4},
+                  {"succ": 4096, "ready": 4096, "seed": 2})  # fmt: skip
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="needs a host gcc")
+@pytest.mark.parametrize(
+    "point", PROJ_POINTS, ids=lambda p: "-".join(f"{k}{v}" for k, v in p.items())
+)
+def test_proj_twin_matches_the_host_build(point, tmp_path):
+    assert lp.ltbf_proj(**point) == lp.CAL.host_run(point, tmp_path)
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="needs a host gcc")
+@pytest.mark.parametrize(
+    "point", RELEASE_POINTS, ids=lambda p: "-".join(f"{k}{v}" for k, v in p.items())
+)
+def test_release_twin_matches_the_host_build(point, tmp_path):
+    assert sr.release_kernel(**point) == sr.CAL.host_run(point, tmp_path)
+
+
+def test_the_proj_twin_computes_the_chains_projection():
+    """The kernel's arithmetic is the CPU job's: on one input, its ``G'`` equals
+    ``ltbf_fixed_chain.project_ue``'s (numpy) up to each row's phase (Jacobi and eigh pick their own
+    eigenvector phases; ``G'`` is defined up to them)."""
+    from examples.ltbf_dse import ltbf_fixed_chain as fc
+
+    rng = np.random.default_rng(4)
+    n, conn, pu, r = 32, 6, 2, 2
+    x = rng.standard_normal((n, 8)) + 1j * rng.standard_normal((n, 8))
+    w = rng.standard_normal((8 * conn, 8)) + 1j * rng.standard_normal((8 * conn, 8))
+    b = rng.standard_normal((8, 8)) + 1j * rng.standard_normal((8, 8))
+    w[pu * 8 : (pu + 1) * 8] = b @ b.conj().T  # an own block with a clear spectrum
+    to = lambda a: [[[float(v.real), float(v.imag)] for v in row] for row in a]
+    gp, _lam, _nr, _ns, deg = lp._proj(to(x), to(w), n, r, conn, pu)
+    got = np.array([[complex(*v) for v in row] for row in gp])
+    want = fc.project_ue(w, x, pu, r)
+    assert deg == 0
+    # G' is defined up to its rows' phases D (D·G' from D·G): compare G'ᴴG', which D leaves alone.
+    assert np.allclose(got.conj().T @ got, want.conj().T @ want, rtol=1e-9, atol=1e-12)
+    cos = abs(np.vdot(want[0], got[0])) / (
+        np.linalg.norm(want[0]) * np.linalg.norm(got[0])
+    )
+    assert cos == pytest.approx(1.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("cal", [lp.CAL, sr.CAL], ids=lambda c: c.kernel.name)
+def test_committed_plans_are_the_registered_rows(cal):
+    """Pre-registration: the committed plan file holds exactly ``sweep.py``'s rows."""
+    from waveflow.cpu.calib import sweep
+    from waveflow.cpu.calib.prereg import SweepPlan
+
+    rows = getattr(sweep, cal.rows_fn)()
+    plan = SweepPlan.load(cal.plan)
+    import pandas as pd
+
+    df = pd.read_csv(plan.path)
+    assert [(r.kernel, json.loads(r.point), r.role) for r in df.itertuples()] == rows
+
+
+def test_proj_counters_of_a_real_ue():
+    rng = np.random.default_rng(2)
+    w = rng.standard_normal((8 * 5, 8)) + 1j * rng.standard_normal((8 * 5, 8))
+    c = lp.proj_counters(w, 64, 1, 2)
+    assert (c["n"], c["r"], c["conn"]) == (64, 2, 5) and c["n_rot"] > 0
+
+
+@pytest.mark.gem5
+@pytest.mark.parametrize("cal,point", [(c, p) for c in (lp.CAL, sr.CAL) for p in c.kernel.smoke],
+                         ids=lambda x: getattr(getattr(x, "kernel", None), "name", None) or
+                         "-".join(f"{k}{v}" for k, v in x.items()))  # fmt: skip
+def test_gem5_run_matches_the_new_twins(cal, point):
+    """The ground truth for ``ltbf_proj`` and ``release``: gem5's binary prints the twin's outputs."""
+    run = cal.runner()
+    why = run.unavailable()
+    if why:
+        pytest.skip(f"gem5 unavailable: {why}")
+    row = run.measure(cal.kernel, point, empty_cycles=0.0, smoke=True)
+    assert row["output_matches_twin"], row
+    assert row["cycles"] > 0

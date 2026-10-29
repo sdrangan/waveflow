@@ -197,6 +197,55 @@ def ltbf_eig_rows() -> list[Row]:
     return rows
 
 
+def ltbf_proj_rows() -> list[Row]:
+    """``examples/ltbf_dse``'s per-UE A53 job (plans/ltbf_dse/ltbf_dse.md step 4.6): ``M`` from the
+    systolic ``W``, the 8 x 8 Jacobi, ``G``, the cross terms, ``R̃``, Cholesky and ``G'``.  Its own plan
+    file (``examples/ltbf_dse/cpu/sweep_plan_proj.csv``): ``n`` spans the arrays (8x8 .. 32x32),
+    ``conn`` the connected UEs, ``rank`` the own block's rank, both ``r``."""
+    rows = _grid("ltbf_proj", "fit", [
+        {"n": n, "r": r, "conn": c, "rank": k, "seed": 1}
+        for n in (8, 64, 256, 1024) for r in (1, 2) for c in (2, 32) for k in (1, 8)
+    ])  # fmt: skip
+    rows += _grid("ltbf_proj", "validation", [
+        {"n": n, "r": r, "conn": c, "rank": 4, "seed": VAL_SEEDS[0]}
+        for n in (32, 512) for r in (1, 2) for c in (8, 24)
+    ])  # fmt: skip
+    rows += _grid("ltbf_proj", "test", [
+        {"n": n, "r": r, "conn": c, "rank": k, "seed": TEST_SEEDS[0]}
+        for n in (100, 400, 900) for r in (1, 2) for c, k in ((12, 2), (28, 8))
+    ])  # fmt: skip
+    return rows
+
+
+def release_rows() -> list[Row]:
+    """``examples/ltbf_dse``'s scheduler ``release`` (plans/ltbf_dse/ltbf_dse.md step 4.6): a finished
+    job's successors decremented, the ready ones collected.  Its own plan file
+    (``examples/ltbf_dse/cpu/sweep_plan_release.csv``)."""
+    rows = _grid("release", "fit", [
+        {"succ": n, "ready": k, "seed": 1}
+        for n in (1, 4, 16, 64, 256, 1024) for k in sorted({0, n // 2, n})
+    ])  # fmt: skip
+    rows += _grid("release", "validation", [
+        {"succ": n, "ready": k, "seed": VAL_SEEDS[0]} for n in (8, 128) for k in (1, n // 2)
+    ])  # fmt: skip
+    rows += _grid("release", "test", [
+        {"succ": n, "ready": k, "seed": TEST_SEEDS[0]} for n in (32, 512, 2048) for k in (0, n // 3)
+    ])  # fmt: skip
+    return rows
+
+
+def ltbf_eig_recheck_rows() -> list[Row]:
+    """Five held-out inputs re-checking ``ltbf_eig``'s model fitted on ``paper/cg_dse``
+    (plans/ltbf_dse/ltbf_dse.md step 4.6): sizes and ranks between its points, a new seed."""
+    return _grid("ltbf_eig", "test", [
+        {"n": 48, "r": 1, "rank": 3, "seed": TEST_SEEDS[1]},
+        {"n": 96, "r": 2, "rank": 6, "seed": TEST_SEEDS[1]},
+        {"n": 384, "r": 1, "rank": 2, "seed": TEST_SEEDS[1]},
+        {"n": 640, "r": 2, "rank": 5, "seed": TEST_SEEDS[1]},
+        {"n": 1000, "r": 1, "rank": 7, "seed": TEST_SEEDS[1]},
+    ])  # fmt: skip
+
+
 def sweep_rows() -> list[Row]:
     """Every registered kernel point, in a fixed order."""
     return sched_rows() + cdot_rows() + gather_rows() + dispatch_rows() + switch_rows()

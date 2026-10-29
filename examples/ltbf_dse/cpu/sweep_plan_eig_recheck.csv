@@ -1,0 +1,6 @@
+kernel,point,role
+ltbf_eig,"{""n"": 48, ""r"": 1, ""rank"": 3, ""seed"": 202}",test
+ltbf_eig,"{""n"": 96, ""r"": 2, ""rank"": 6, ""seed"": 202}",test
+ltbf_eig,"{""n"": 384, ""r"": 1, ""rank"": 2, ""seed"": 202}",test
+ltbf_eig,"{""n"": 640, ""r"": 2, ""rank"": 5, ""seed"": 202}",test
+ltbf_eig,"{""n"": 1000, ""r"": 1, ""rank"": 7, ""seed"": 202}",test

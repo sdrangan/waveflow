@@ -245,7 +245,9 @@ WANT_XSI_GATES = 246
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
 #: 12 -> 14 on 2026-10-28 (plans/ltbf_dse/ltbf_dse.md step 0.5): the LTBF A53 eigendecomposition
 #: kernel's gem5 runs against its twin, copied from ``paper/cg_dse`` (test_ltbf_dse_cpu.py).
-WANT_GEM5_GATES = 14
+#: 14 -> 18 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md step 4.6): the per-UE projection job and the
+#: scheduler's release, two smoke points each, against their twins (test_ltbf_dse_cpu.py).
+WANT_GEM5_GATES = 18
 
 #: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
 #: environment's tests that trace a scene (``plans/sionna_rt/sionna_rt.md``).  The same two rules:
