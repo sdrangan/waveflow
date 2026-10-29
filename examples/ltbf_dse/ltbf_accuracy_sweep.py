@@ -9,8 +9,9 @@ file exists (resumable).  ``merge`` turns the jobs into ``paper_data/accuracy_lo
 config, dB) over the served UEs of the evaluation drops.
 
 Formats come from ``profile`` on the **profile drops** (1-10) per (array, target); the evaluation drops
-(11-100) never set a format.  Every draw is seeded; workers run single-threaded BLAS, so a job's file is
-byte for byte the same on a re-run.
+(11-100) never set a format.  Every draw is seeded and every command computes in **spawned** workers
+with single-threaded BLAS (a forked worker would keep the parent's already-started BLAS threads), so a
+job's file is byte for byte the same on a re-run.
 
     python -m examples.ltbf_dse.ltbf_accuracy_sweep profile
     python -m examples.ltbf_dse.ltbf_accuracy_sweep pilot
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import multiprocessing as mp
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -45,9 +47,23 @@ T_EVAL = (1, 2, 3, 5, 7, 10)
 RANKS = (1, 2)
 
 
-def _threads1() -> None:
-    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-        os.environ[v] = "1"
+_SINGLE_THREAD_ENV = {
+    k: "1" for k in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+}
+
+
+def _pool(workers: int) -> ProcessPoolExecutor:
+    """Spawned workers with single-threaded BLAS: the parent's BLAS started its threads when this
+    module imported numpy, so the variables only reach a fresh interpreter."""
+    os.environ.update(_SINGLE_THREAD_ENV)
+    return ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
+
+
+def profile_job(args) -> str:
+    n, target = args
+    t0 = time.time()
+    profile(n, target)
+    return f"profiled {n}x{n} {target} in {time.time() - t0:.1f} s"
 
 
 def profile_path(n: int, target: str) -> Path:
@@ -85,7 +101,6 @@ def run_job(args) -> str:
     path = job_path(n, target, drop)
     if path.exists():
         return f"skip {path.name}"
-    _threads1()
     from examples.ltbf_dse import ltbf as lt
     from examples.ltbf_dse import ltbf_chain as lc
     from examples.ltbf_dse import ltbf_fixed_chain as fc
@@ -175,19 +190,20 @@ def main() -> None:
     p.add_argument("--arrays", type=int, nargs="+", default=list(ARRAYS))
     a = p.parse_args()
     if a.cmd == "profile":
-        _threads1()
-        for n in a.arrays:
-            for tg in TARGETS:
-                t0 = time.time()
-                profile(n, tg)
-                print(f"profiled {n}x{n} {tg} in {time.time() - t0:.1f} s", flush=True)
+        with _pool(1) as ex:
+            for msg in ex.map(
+                profile_job, [(n, tg) for n in a.arrays for tg in TARGETS]
+            ):
+                print(msg, flush=True)
     elif a.cmd == "pilot":
-        for n in a.arrays:
-            print(run_job((n, "-6_14", EVAL_DROPS[0])), flush=True)
+        # One job an array, side by side as in the run (the timing includes the contention).
+        with _pool(len(a.arrays)) as ex:
+            for msg in ex.map(run_job, [(n, "-6_14", EVAL_DROPS[0]) for n in a.arrays]):
+                print(msg, flush=True)
     elif a.cmd == "run":
         jobs = all_jobs(tuple(a.drops) if a.drops else EVAL_DROPS, tuple(a.arrays))
         jobs.sort(key=lambda j: -j[0])  # the largest arrays first
-        with ProcessPoolExecutor(max_workers=a.workers) as ex:
+        with _pool(a.workers) as ex:
             for msg in ex.map(run_job, jobs):
                 print(msg, flush=True)
     else:
