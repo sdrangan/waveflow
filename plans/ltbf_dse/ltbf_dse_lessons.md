@@ -88,3 +88,11 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   (the RTL's non-blocking read every cycle). Also: a register bank's config is
   `BoundMemSlaveAdaptor.stream_master(name)`, its status `.status(name).read()` (decoded); the host
   writes a credit with `m.write(words, layout["credit"].base)`.
+- **Forked workers keep the parent's BLAS threads** (step 3.2): setting `OPENBLAS_NUM_THREADS` after
+  `import numpy` does nothing, and a forked worker inherits the started pool (8 threads each here,
+  seen with `threadpoolctl.threadpool_info()`). Set the variables, then spawn (mimo_cg's `_pool`).
+- **A static memory plan needs dependencies to reuse space** (step 4.4): a plan safe under every
+  dispatch order can share two buffers only when the graph orders them; independent symbols or CG
+  jobs never share. Windows (`cg_window`, `rt_window`) are the edges that make reuse possible.
+- **A drop at the end of a stream has no gap after it** (step 4.4): the scheduler learns of a dropped
+  symbol from the next record's `seq`; the last ones need the DMA's status.
