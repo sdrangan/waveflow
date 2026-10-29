@@ -22,7 +22,6 @@ from examples.ltbf_dse.hw.records import SRC_SYS, Resp, SysCfg, SysStatus
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import (
-    FramedStreamIFSlave,
     StreamIF,
     StreamIFMaster,
     StreamIFSlave,
@@ -40,9 +39,9 @@ class SysTap(FreeRunMod):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.s_done = FramedStreamIFSlave(
-            name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.word_bits)
-        )
+        # Unframed: the engine's in-band memory writer's done port is never framed in HLS.
+        self.s_done = StreamIFSlave(name=f"{self.name}_s_done", sim=self.sim,
+                                    bitwidth=int(self.word_bits), has_tlast=False)  # fmt: skip
         self.m_resp = StreamIFMaster(
             name=f"{self.name}_m_resp",
             sim=self.sim,
@@ -65,7 +64,7 @@ class SysTap(FreeRunMod):
             "ltbf_tasks.h",
             ("s_done", "m_resp", "m_status"),
             template_args=(int(self.word_bits),),
-            framed=("s_done", "m_status"),
+            framed=("m_status",),
         )
 
     def run_iter(self):
@@ -145,12 +144,11 @@ class SysWrap(FreeRunMod):
         )
         for comp in (self.engine, self.tap, self.ctrl):
             self.add_comp(comp)
+        # The engine's done record leaves its memory writer unframed in HLS (a plain word stream,
+        # ``MemWStream.done_framed``): pysim says so too.
+        self.engine.s_done.has_tlast = False
         done_if = StreamIF(
-            name=f"{self.name}_done_if",
-            sim=self.sim,
-            clk=self.clk,
-            bitwidth=w,
-            framed=True,
+            name=f"{self.name}_done_if", sim=self.sim, clk=self.clk, bitwidth=w
         )
         done_if.bind("master", self.engine.s_done)
         done_if.bind("slave", self.tap.s_done)

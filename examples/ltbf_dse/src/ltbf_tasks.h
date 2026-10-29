@@ -31,12 +31,12 @@ static const int MAX_LD = 4, MAX_ST = 4;
 }  // namespace ltbf
 
 // SysTap: EngineDone in; a Resp (src 0) to the RespHub and the Ctrl's status out.  One firing a job.
-template <int W, typename DONE_T, typename ST_T>
-static void ltbf_sys_tap_task(hls::stream<DONE_T>& s_done, hls::stream<ap_uint<W> >& m_resp,
+template <int W, typename ST_T>
+static void ltbf_sys_tap_task(hls::stream<ap_uint<W> >& s_done, hls::stream<ap_uint<W> >& m_resp,
                               hls::stream<ST_T>& m_status) {
     static ap_uint<32> jobs_done = 0;
     EngineDone d;
-    streamutils::read_msg<W>(d, s_done);
+    d.template read_stream<W>(s_done);  // the memory writer's done port: plain words
     jobs_done += 1;
     Resp r;
     r.src = ltbf::SRC_SYS;
