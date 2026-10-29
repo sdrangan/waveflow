@@ -69,9 +69,11 @@ def test_system_at_rtl():
     _toolchain()
     cfg = build_config(b.ROOT)
     cfg.params["synth"] = "build"
-    res = b.system_dag().run(cfg, through="ltbf_xsi")
-    bad = {k: (r.message or "")[-2000:] for k, r in res.items() if not r.success}
-    assert not bad, bad
+    dag = b.system_dag()
+    for through in ("ltbf_pysim", "ltbf_system_xsi"):  # not ltbf_compare: endpoint by endpoint
+        res = dag.run(cfg, through=through)
+        bad = {k: (r.message or "")[-2000:] for k, r in res.items() if not r.success}
+        assert not bad, bad
     work = b.ROOT / b.WORK_DIR / "ltbf"
     py, rtl = work / "pysim_traces", work / "traces"
     for ep in ("qjob_sys", "qjob_vec", "ing_ctrl", "qsym"):

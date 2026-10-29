@@ -266,14 +266,14 @@ private:
         while (!work.empty()) {
             const long g = work.back();
             work.pop_back();
-            for (long s : done(g)) {
+            for (long s : job_done(g)) {
                 if (skip_.count(s)) work.push_back(s);
                 else state_[s] = READY;
             }
         }
     }
 
-    std::vector<long> done(long gid) {
+    std::vector<long> job_done(long gid) {
         Job& j = jobs_[gid];
         const bool noop = skip_.count(gid) != 0;
         state_[gid] = noop ? DROPPED : DONE;
@@ -399,10 +399,13 @@ private:
 
     // -- the other threads ----------------------------------------------------------------------
 
+    /// ~ LtbfHost._resp_reader, ending with the run: the queue's data interrupt is armed for one
+    /// record (the line rises only once armed), then the record or the run's end, whichever first.
     void resp_reader() {
         for (;;) {
-            if (wait_any(sched_, {[this] { return irq_qresp.level(); }, [this] { return done_.is_set(); }}) == 1) return;
-            const Resp r = decode_words<Resp, 64>(qresp.get(1));
+            SwIrq& irq = qresp.data_irq(1);
+            if (wait_any(sched_, {[&irq] { return irq.level(); }, [this] { return done_.is_set(); }}) == 1) return;
+            const Resp r = decode_words<Resp, 64>(qresp.pop(1));
             inbox_.put(Ev{RESP, r.src.to_uint64(), r.status.to_uint64(), r.tx_id.to_uint64(),
                           r.seq.to_uint64()});
         }

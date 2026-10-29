@@ -235,7 +235,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: and the sounder's replay (test_rt_sounder_xsi.py); ``pytest -m xsi --collect-only -q`` counts 239.
 #: 245 + 1 -> 246 on 2026-10-28 (plans/ltbf_dse/ltbf_dse.md step 0.2): ``feat/sionna-prod`` merged
 #: into ``paper/ltbf_dse`` -- main's 245 and the sounder's replay; ``pytest -m xsi --collect-only -q`` counts 246.
-WANT_XSI_GATES = 246
+#: 246 + 4 -> 250 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md steps 5.1-5.2): the LTBF example's device
+#: gates (systolic, vector unit, Ingest DMA) and its system at RTL (tests/examples/test_ltbf_dse_xsi.py);
+#: ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q`` counts 250.
+WANT_XSI_GATES = 250
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

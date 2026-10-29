@@ -188,16 +188,29 @@ def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) 
     """``codegen``, then the framework's system flow for AC9's system (step 5.2): ``system.build`` at
     :data:`~examples.ltbf_dse.hw.system.AC9` for the RTL flow -- csynth of its tops, the system RTL,
     the scenario (the C++ host's, from a reference pysim run), pysim, and XSI with ``hw/ltbf_host.h``,
-    each prefixed ``ltbf_``.  The Resp FIFO's order is timing's, so the gate (the test) compares what
+    each prefixed ``ltbf_``; before pysim, Shared Mem measured in its own harness (``umemcal_``) and
+    its timing filed in ``calib/``.  The Resp FIFO's order is timing's, so the gate (the test) compares what
     must agree word for word rather than the flow's ``ltbf_compare`` (plan §9 e)."""
     from examples.ltbf_dse.hw import system as sy
+    from waveflow.build.phase_calib import MemCalibStep
     from waveflow.build.system_dag import add_system_steps
+    from waveflow.hw.clock import Clock
+    from waveflow.hw.harness import memory_harness
 
     dag = BuildDag()
     dag.add(LtbfCodegenStep(name="codegen"))
-    hw, _S, _host = sy.build(sy.inputs(sy.AC9), rtl=True)
+    hw, S, _host = sy.build(sy.inputs(sy.AC9), rtl=True)
     add_system_steps(dag, hw, work_dir=work_dir, top="ltbf_top", prefix="ltbf_", workspace="ltbf",
                      trace=trace, trace_bus=trace_bus)  # fmt: skip
+    # Shared Mem alone first (plans/unit_harness.md Stage 4c): its RTL reads cost a cycle more a word
+    # than pysim's plain memory, so the system's pysim loads the timing measured here.
+    clk = Clock(freq=sy.F_HOST)
+    uncal = memory_harness(lambda sim: sy.shared_mem(sim, S.mem_span, clk, calibrated=False),
+                           sy.mem_script("calib", S.mem_span), n_cycles=40_000)  # fmt: skip
+    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix="umemcal_")
+    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix="umemcal_", store=sy.CALIB_DIR)
+    dag.add(mem_cal)
+    dag.require("ltbf_pysim", [mem_cal.a("mem_timing")])
     return dag
 
 

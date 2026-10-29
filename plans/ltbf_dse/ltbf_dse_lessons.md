@@ -145,3 +145,10 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   minutes). The framework's record (`plans/vecunit_new.md` Stage 6) saw the same class of blow-up from
   a format mix and fusion. Profile a stalled csynth by the last `Preprocessing Module` in
   `.autopilot/db/autopilot.flow.log`, and test one factor per build under a memory watchdog.
+- **A C++ host's queue interrupt rises only once armed** (step 5.2): `QueueReader::get(n)` arms the
+  view's data threshold and then waits; waiting on `irq.level()` first waits forever (AC9's RTL hung
+  at its first `Resp`). To wait on a record *or* something else, `data_irq(n)` (arms, returns the line),
+  `wait_any`, then `pop(n)`. Found from a capped traced copy (`trace=True`, a few 10k cycles in its
+  own workspace): the record reached the queue view and nothing read it.
+- **A base-class name hidden in a C++ twin breaks the generated testbench** (step 5.2): a scheduler
+  method `done(long)` in the host model hid `SwHostModel::done()`, which the harness calls.

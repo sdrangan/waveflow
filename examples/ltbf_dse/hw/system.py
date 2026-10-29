@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -191,6 +192,45 @@ def golden(inp: Inputs) -> dict:
         d = list(sg.DATA_SYMS)
         out["xh"][u] = fc.equalize_fixed(zr[:, d], zi[:, d], wr, wi, cfg.eq)
     return out
+
+
+# -- Shared Mem ----------------------------------------------------------------------------------------
+
+#: Shared Mem's timing records (``waveflow.calib.mem_timing``), local: the system flow measures the
+#: memory in its own harness (``build.system_dag``) before pysim runs.
+CALIB_DIR = Path(__file__).resolve().parents[1] / "calib"
+
+
+def shared_mem(sim, span: int, clk: Clock, *, calibrated: bool = True) -> MemoryMod:
+    """Shared Mem, for the system and its own harness: *span* 64-bit words, its timing from its
+    record in :data:`CALIB_DIR` when there is one (*calibrated*; the harness that measures it builds
+    one without).  At RTL a read costs a cycle more a word than a write (``mm_bram_port.v``: one
+    read in flight, ``LAT + 1`` cycles), and the front serves one transaction at a time."""
+    return MemoryMod(name="mem", sim=sim, word_size=64, inline=False, clk=clk, nwords_tot=span,
+                     addr_unit=AddrUnit.byte, calib_dir=CALIB_DIR if calibrated else None)  # fmt: skip
+
+
+def mem_script(kind: str = "test", span: int = 1 << 17) -> list:
+    """What Shared Mem's harness plays (``waveflow.hw.harness.memory_harness``): each length a write
+    then a read back, spaced so no two meet; ``"calib"``: every length the host and the engines use
+    (1 to 32, the panels' 32 and 64, AXI4's 256) and a read and a write started together at several
+    lengths."""
+    from waveflow.simulation.mm_tb import READ, WRITE, script_op
+
+    lens = (1, 2, 8, 32, 64, 256) if kind == "test" else (*range(1, 33), 38, 64, 128, 256)
+    ops, t = [], 10
+    for n in lens:
+        addr = (n * 0x1000) % (span * 8 - 0x1000)
+        ops.append(script_op(WRITE, addr, n, t, np.arange(n, dtype=np.uint64) * 3 + n))
+        t += 2 * n + 100
+        ops.append(script_op(READ, addr, n, t))
+        t += 2 * n + 100
+    if kind != "test":
+        for n in (4, 16, 64, 256):
+            ops.append(script_op(READ, 0, n, t))
+            ops.append(script_op(WRITE, 0x8000, n, t, np.arange(n, dtype=np.uint64)))
+            t += 4 * n + 200
+    return ops
 
 
 # -- the host ------------------------------------------------------------------------------------------
@@ -812,8 +852,7 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
     yr, yi = inp.y
     S.symbols = [[S.to_w(yr[a, s], yi[a, s], cfg.bc) for a in range(d.n_rx)]
                  for s in range(sg.N_SYM)]  # fmt: skip
-    mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
-                    nwords_tot=S.mem_span, addr_unit=AddrUnit.byte)  # fmt: skip
+    mem = shared_mem(sim, S.mem_span, clk)
     assert mem.alloc(S.mem_span) == 0
     S.mem = mem
     devs = {
@@ -874,8 +913,9 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
     S.capacity = {e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))}
     dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem],
                     ifs=[xbar, *links])  # fmt: skip
-    # The RTL run's bound: twice a generous run (4 ms of long-term update, then the slot's symbols).
-    bound = round(2 * (4e-3 + (sg.N_SYM + 1) * p.sym_period) * F_HOST)
+    # The RTL run's bound: three times a generous run (4 ms of long-term update, then the slot's
+    # symbols); the RTL Shared Mem reads at half pysim's rate (plan §15).
+    bound = round(3 * (4e-3 + (sg.N_SYM + 1) * p.sym_period) * F_HOST)
     hw = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results,
                   n_cycles=bound if rtl else None,
                   fresh=(lambda: build(inp, rtl=True)[0]) if rtl else None)  # fmt: skip
