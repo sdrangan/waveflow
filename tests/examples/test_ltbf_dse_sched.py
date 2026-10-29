@@ -71,6 +71,7 @@ class Bench:
         self.start: dict[int, float] = {}
         self.end: dict[int, float] = {}
         self.order = {e: [] for e in (*SRC, "py", "cpu")}
+        self.txs: dict[str, list] = {}  # each engine's job ids, in dispatch order
         # The Ingest DMA.
         self.taken = self.seq = 0
         self.dropped_symbols: list[int] = []
@@ -175,6 +176,7 @@ class Bench:
                 if act[0] == "job":
                     self.fifo[e].append((act[1], act[2]))
                     self.order[e].append(act[1])
+                    self.txs.setdefault(e, []).append(act[2])
             self._start(e)
         if self.qresp and not self.host_busy:
             self.host_busy = True
@@ -426,6 +428,9 @@ def test_static_order_is_the_graphs_whatever_the_timing():
         )
         assert b.run() and s.overruns == 0
         seqs.append({e: list(b.order[e]) for e in ("sys", "vec", "cpu", "py")})
+        seqs[-1]["tx"] = dict(
+            b.txs
+        )  # each engine's job ids too: they are in its Job FIFO words
         for e in ("sys", "vec", "cpu", "py"):
             assert b.order[e] == sorted(b.order[e])
     assert seqs[0] == seqs[1]

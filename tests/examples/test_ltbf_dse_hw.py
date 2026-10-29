@@ -574,19 +574,24 @@ def test_ingest_dma_drops_a_symbol_without_credit():
 # -- the system -------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["static", "dynamic"])
-def test_system_equals_the_fixed_chain(policy, tmp_path):
+@pytest.mark.parametrize(
+    "policy,sector", [("static", 1), ("dynamic", 1), ("static", 0)]
+)
+def test_system_equals_the_fixed_chain(policy, sector, tmp_path):
     """Step 4.5 (AC9's configuration in pysim): drop 1, sector 1 (10 own UEs, 22 connected), N_rx =
     64, factored, ``t`` 3, ``r`` 1, ``c`` 8, ``Mmax`` 16, ``J`` 9, a ring of 2 symbols.  The host runs
     the scheduler over one long-term update, then one slot through the Ingest DMA (the O-RU paced at
     500 µs a symbol: one 64-bit port cannot carry 64 antennas at 8.9 µs).  Every job runs (no symbol
     dropped); ``G'`` in Shared Mem, the DMRS symbols' ``Z``, the weights ``w`` and every ``x̂`` tile
-    equal the fixed-point chain's (``ltbf_fixed_chain``) bit for bit, under either policy.  The
-    replay file holds every host job's writes."""
+    equal the fixed-point chain's (``ltbf_fixed_chain``) bit for bit, under either policy.  Sector 0
+    (5 own UEs: ``U_pad`` 8 under ``S`` = ``Mmax`` 16, padding rows in every tile) too.  The replay
+    file holds every host job's writes."""
     from examples.ltbf_dse.hw import system as sy
 
-    inp = sy.inputs(sy.SysParams(policy=policy, sym_period=500e-6))
-    assert (inp.dims.U, inp.dims.U_conn) == (10, 22)
+    inp = sy.inputs(sy.SysParams(policy=policy, sector=sector, sym_period=500e-6))
+    assert (inp.dims.U, inp.dims.u_pad, inp.dims.S) == (
+        (10, 16, 16) if sector else (5, 8, 16)
+    )
     hw, S, host = sy.build(inp)
     hw.run()
     assert S.sch.finished and S.sch.overruns == 0 and S.sch.dropped == 0

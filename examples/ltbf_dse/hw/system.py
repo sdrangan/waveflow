@@ -31,6 +31,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from examples.ltbf_dse import a53cal, ltbf_proj, sched_release
 from examples.ltbf_dse import chest as ce
 from examples.ltbf_dse import ltbf_chain as lc
 from examples.ltbf_dse import ltbf_fixed as lf
@@ -215,11 +216,18 @@ def host_cycles(cpu_cycles: float, f_cpu: float, f_host: float = F_HOST) -> int:
 
 
 def proj_cycles(n_rx: int, n_conn: int, r: int) -> float:
-    """**Provisional** A53 cycles of one UE's CPU job until step 4.6 calibrates ``ltbf_proj``: its
+    """**Provisional** A53 cycles of one UE's CPU job when ``ltbf_proj`` has no local fit: its
     complex MACs (``8r·N_rx`` for ``G``, ``r²(N_rx + 8·n_conn)`` for ``R̃``, ``r²·N_rx`` for ``G'``)
     at 8 cycles each, and an 8x8 Jacobi at 30,000."""
     cmacs = 8 * r * n_rx + r * r * (n_rx + 8 * n_conn) + r * r * n_rx
     return 8.0 * cmacs + 30_000.0
+
+
+class _ProvisionalProj:
+    """:func:`proj_cycles` on the job's counters (no local calibration of ``ltbf_proj``)."""
+
+    def predict_feat(self, feats) -> float:
+        return proj_cycles(int(feats["n"]), int(feats["conn"]), int(feats["r"]))
 
 
 @dataclass(frozen=True)
@@ -254,6 +262,13 @@ class LtbfHost(SwHost):
         self.results: dict = {"xh": {}, "z_dmrs": {}, "w": {}}
         self.resp_log: list[tuple] = []
         self.jobs_log: dict = {"sys": [], "vec": []}
+        #: Which price each step 4.6 kernel got: "calibrated" (the local fit) or "provisional".
+        self.pricing: dict[str, str] = {}
+        model = a53cal.load_model(ltbf_proj.CAL)
+        self.pricing["ltbf_proj"] = "calibrated" if model is not None else "provisional"
+        self.proj_fn = SwFunction(
+            name="ltbf_proj", fn=lambda **kw: (None, kw),
+            cycles=model or _ProvisionalProj())  # fmt: skip
 
     def scenario_bursts(self):
         return []
@@ -279,10 +294,15 @@ class LtbfHost(SwHost):
         return result
 
     def _sched_fn(self, family: str) -> SwFunction:
-        # The release kernel is priced provisionally until step 4.6 calibrates it.
-        if family == "release":
+        if (
+            family == "release"
+        ):  # step 4.6's kernel: its local fit, or a provisional price
+            model = a53cal.load_model(sched_release.CAL)
+            self.pricing["release"] = (
+                "calibrated" if model is not None else "provisional"
+            )
             return SwFunction(name="release", fn=lambda **kw: (None, kw),
-                              cycles=_Linear(20.0, {"n_succ": 12.0}))  # fmt: skip
+                              cycles=model or _Linear(20.0, {"n_succ": 12.0}))  # fmt: skip
         if family == "ctrl":
             return SwFunction.fixed("ctrl", 40.0)
         return SwFunction(name=family, fn=lambda **kw: (None, kw),
@@ -354,6 +374,9 @@ class LtbfHost(SwHost):
             lt_done = all(S.sch.state[g] == "done" for g in range(len(S.lt.jobs)))
             if not rt_added and lt_done:
                 rt_added = True
+                S.rt = real_time(
+                    S.d, t0=self.env.now
+                )  # deadlines from the slot's real start
                 S.rt_base = S.sch.add(S.rt)
                 S.oru.start.succeed()
                 self.start(self._ticker, name="ticker")
@@ -391,9 +414,7 @@ class LtbfHost(SwHost):
             else:
                 yield from self.cpu_q.put(gid)
         for e in ("sys", "vec"):
-            room = S.capacity[e] - sum(
-                1 for g in sch.in_flight.values() if sch.jobs[g].engine == e
-            )
+            room = S.capacity[e] - sum(1 for (e2, _tx) in sch.in_flight if e2 == e)
             for act in sch.take(e, max(0, room)):
                 if act[0] == "job":
                     words = S.descriptor(act[1], act[2])
@@ -460,7 +481,7 @@ class LtbfSystem:
         self.chunk_slot: dict[int, int] = {}
         self.credit_sent = 0
         self.f = cfg.cg_step()
-        self.vu, self.off = pg.system_config(self.f, cfg.eq, k=d.rows, n=d.c, u_pad=d.S // p.r,
+        self.vu, self.off = pg.system_config(self.f, cfg.eq, k=d.rows, n=d.c, u_pad=d.u_pad,
                                              r=p.r, L=p.L, word_bits=p.word_bits,
                                              lane_bits=p.lane_bits, s_max=max(4, inp.sh),
                                              m_max=max(8, cfg.m_shift))  # fmt: skip
@@ -478,7 +499,7 @@ class LtbfSystem:
             "cg_last": pg.cg_step_programs(
                 self.vu, d.rows, d.c, inp.sh, last_m=cfg.m_shift
             ),
-            "eq": pg.eq_programs(self.vu, d.S // p.r, d.c, p.r, d.J, off=self.off),
+            "eq": pg.eq_programs(self.vu, d.u_pad, d.c, p.r, d.J, off=self.off),
         }
         addr = 0
         self.programs: dict[str, tuple[int, np.ndarray]] = {}
@@ -589,9 +610,11 @@ class LtbfSystem:
             count = 1
         else:  # eq: J rounds, each tile's w_r and z_r blocks, x̂ a tile
             prog = self.prog_at["eq"]
-            u_pad = d.S // p.r
+            u_pad = d.u_pad
             wb = self.w(u_pad, d.c)
-            wt = p.r * wb
+            wt = self.w(
+                d.S, d.c
+            )  # a C tile of Z (and w): S rows, r blocks of U_pad, then padding
             zb, wbase = (self.addr(gid, b) for b in j.reads)  # (Z, w)
             lds = []
             for k in range(p.r):
@@ -631,11 +654,10 @@ class LtbfSystem:
         u = inp.own[k]
         g = fc.project_ue(wsc, x[: d.n_rx, cols], inp.prep.pos[u], self.p.r)
         gr, gi = lf.to_stored(g.conj().T * 2.0**-cfg.g_shift, cfg.a)
-        yield from host.charge(
-            SwFunction.fixed("ltbf_proj", proj_cycles(d.n_rx, n_conn, self.p.r)), ctx
-        )
+        yield from host.charge(host.proj_fn, ctx, **ltbf_proj.proj_counters(
+            wsc, d.n_rx, inp.prep.pos[u], self.p.r))  # fmt: skip
         yield from host.gp_lock.acquire()
-        u_pad = d.S // self.p.r
+        u_pad = d.u_pad
         for s in range(self.p.r):
             self.gp_stage[0][: d.n_rx, s * u_pad + k] = gr[:, s]
             self.gp_stage[1][: d.n_rx, s * u_pad + k] = gi[:, s]
@@ -667,7 +689,7 @@ class LtbfSystem:
                     zi,
                 )
         host.results["z_dmrs"] = z
-        u_pad = d.S // p.r
+        u_pad = d.u_pad
         wr = np.zeros((d.S, nf), np.int64)
         wi = np.zeros((d.S, nf), np.int64)
         for k, u in enumerate(inp.own):
@@ -786,7 +808,14 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
     S.credit_addr = maps["ing"]["credit"].base
     S.ing_cfg = IngestCfg(enable=1, ring_depth=S.sch.ring_depth, ring_base=S.ring_addr,
                           chunk_words=S.slot_words)  # fmt: skip
-    S.capacity = {"sys": 16 // (3 + 1), "vec": 32 // (16 + 1)}
+    # Jobs an engine may have unanswered: what its Job FIFO holds (a descriptor and its length word
+    # a slot) and the one it is running.  A queue write past a full FIFO waits on the view's room
+    # interrupt, so it never stalls the bus.
+    desc = {
+        "sys": len(EngineJobDesc().serialize(word_bw=W)),
+        "vec": len(VecMemJob().serialize(word_bw=W)),
+    }
+    S.capacity = {e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))}
     dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem, oru],
                     ifs=[xbar, *links])  # fmt: skip
     hw = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.results)
@@ -797,7 +826,7 @@ def check(S: LtbfSystem, host: LtbfHost) -> dict[str, bool]:
     """Shared Mem and the host's reads against the fixed-point chain (``golden``), bit for bit."""
     d, cfg, inp, p = S.d, S.cfg, S.inp, S.p
     gold = inp.gold
-    u_pad = d.S // p.r
+    u_pad = d.u_pad
     out = {}
     words = np.asarray(S.mem._mem.read(S.gp_addr * 8, S.w(d.rows, d.S)), np.uint64)
     gr = np.zeros((d.rows, d.S), np.int64)

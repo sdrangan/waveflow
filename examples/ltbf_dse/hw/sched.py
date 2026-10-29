@@ -112,8 +112,10 @@ class Scheduler:
         }  # dynamic: (gid, prio)
         self.order: dict[str, deque] = {e: deque() for e in (*HW, *HOST)}  # static
         self.cfg_now: dict[str, object] = {e: None for e in HW}
-        self.in_flight: dict[int, int] = {}  # tx_id -> gid
-        self._tx = 0
+        #: (engine, tx_id) -> gid.  Each engine numbers its own jobs, so under the static policy an
+        #: engine's ids (and so its Job FIFO words) do not depend on the other engine's timing.
+        self.in_flight: dict[tuple[str, int], int] = {}
+        self._tx = {e: 0 for e in HW}
         self._chunks: deque = deque()  # chunk roots (gid) in arrival order
         self._next_seq = 0
         self._arrived = 0  # chunks the DMA wrote (arrival index)
@@ -218,10 +220,11 @@ class Scheduler:
                 self.ctrl_writes += 1
                 self.trace.append({"op": "ctrl", "engine": engine})
                 out.append(("ctrl", j.cfg))
-            while self._tx in self.in_flight:
-                self._tx = (self._tx + 1) % SEQ_MOD
-            tx, self._tx = self._tx, (self._tx + 1) % SEQ_MOD
-            self.in_flight[tx] = gid
+            while (engine, self._tx[engine]) in self.in_flight:
+                self._tx[engine] = (self._tx[engine] + 1) % SEQ_MOD
+            tx = self._tx[engine]
+            self._tx[engine] = (tx + 1) % SEQ_MOD
+            self.in_flight[engine, tx] = gid
             self.state[gid] = "run"
             self.dispatched[engine] += 1
             self.trace.append({"op": "dispatch", "engine": engine, "n_dispatch": 1})
@@ -251,7 +254,7 @@ class Scheduler:
         """One ``qresp`` record.  Returns the finished job's id (``None`` for an error)."""
         if src == SRC_INGEST:
             return self._chunk(int(seq), now)
-        gid = self.in_flight.pop(int(tx_id))
+        gid = self.in_flight.pop((SRC_ENGINE[int(src)], int(tx_id)))
         if int(status):
             self.error = (gid, int(status))
             return None
@@ -313,7 +316,9 @@ class Scheduler:
         self.t_done[gid] = now
         if noop:
             self.dropped += 1
-        elif now > j.deadline:
+        elif (
+            now > j.deadline and j.engine != "ingest"
+        ):  # a chunk is an arrival, not work
             self.misses[j.cls] += 1
         gi, lid = self.where[gid]
         rec = self.graphs[gi]

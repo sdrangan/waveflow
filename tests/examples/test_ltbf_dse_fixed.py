@@ -29,13 +29,14 @@ def _ints(rng, shape, f):
     return rng.integers(lo, hi, shape), rng.integers(lo, hi, shape)
 
 
-@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("seed", range(20))
 def test_systolic_jobs_equal_the_matmul_model(seed):
-    """Every systolic job shape of the chain (T, U, W, Z: ``Aᴴ·B`` and ``A·B``; K explicit),
-    ``ltbf_fixed.mm`` (float64 BLAS) equal to ``linalg.matmul.matmul`` -- 5 jobs a seed, 20 in all.
-    """
+    """Every systolic job shape of the chain (T, U, W, Z: ``Aᴴ·B`` and ``A·B``; ``U = K'D``; and
+    the explicit ``K`` itself), ``ltbf_fixed`` (float64 BLAS) equal to ``linalg.matmul.matmul``: 20
+    problems a job kind (AC6), three widths."""
     rng = np.random.default_rng(seed)
-    cfg = fc.formats(RANGES, 12 + 2 * seed)
+    w = (12, 14, 16)[seed % 3]
+    cfg = fc.formats(RANGES, w)
     n, cols, c, r = 32, 24, 8, 2
     a, bc = cfg.a, cfg.bc
     jobs = [
@@ -49,6 +50,19 @@ def test_systolic_jobs_equal_the_matmul_model(seed):
         got = lf.mm(ar, ai, fa, br, bi, fb, bc, adjoint=adj)
         want = mmod.matmul(ar, ai, fa, br, bi, fb, bc, adjoint=adj)
         assert np.array_equal(got[0], want[0]) and np.array_equal(got[1], want[1])
+    # K = q_bc(Ĥα Ĥαᴴ) (explicit form, where a = bc): the engine's MUL of the Ĥα copy by the stored
+    # Ĥαᴴ copy (spec §5.3) -- k_explicit's conjugate-and-negate route must give the same integers.
+    cx = fc.formats(RANGES, w, form="explicit")
+    assert cx.a == cx.bc
+    hr, hi = _ints(rng, (n, cols), cx.a)
+    hi = np.maximum(
+        hi, -(1 << (cx.a.W - 1)) + 1
+    )  # stored Ĥα is a guard bit inside its range: the
+    kr, ki = fc.k_explicit(
+        hr, hi, cx
+    )  # most negative value, whose negation overflows, never occurs
+    want = mmod.matmul(hr, hi, cx.a, hr.T.copy(), -hi.T, cx.a, cx.bc)
+    assert np.array_equal(kr, want[0]) and np.array_equal(ki, want[1])
 
 
 def _state(rng, f: lcg.CgFormats, k, n, zero_col):

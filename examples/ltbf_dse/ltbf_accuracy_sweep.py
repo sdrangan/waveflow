@@ -26,6 +26,7 @@ import csv
 import json
 import multiprocessing as mp
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -95,13 +96,21 @@ def configs(ranges: dict) -> list:
     return [fc.formats(ranges, w, g, f) for f in FORMS for w in WIDTHS for g in GUARDS]
 
 
-def job_path(n: int, target: str, drop: int) -> Path:
-    return JOBS / f"{n}x{n}_{target}_{drop:03d}.json"
+#: AC7's pre-chosen subset (two drops over the whole grid) and where its re-run goes.
+SUBSET_DROPS = (11, 12)
+RERUN = OUT / "rerun"
+
+
+def job_path(n: int, target: str, drop: int, jobs_dir: Path | None = None) -> Path:
+    return (jobs_dir or JOBS) / f"{n}x{n}_{target}_{drop:03d}.json"
 
 
 def run_job(args) -> str:
-    n, target, drop = args
-    path = job_path(n, target, drop)
+    """One job, ``(n, target, drop)`` or ``(n, target, drop, jobs_dir)``: skipped when its file exists
+    (a spawned worker does not see the parent's globals, so the directory travels with the job).
+    """
+    n, target, drop, *rest = args
+    path = job_path(n, target, drop, rest[0] if rest else None)
     if path.exists():
         return f"skip {path.name}"
     from examples.ltbf_dse import ltbf as lt
@@ -153,13 +162,21 @@ def all_jobs(drops=None, arrays=ARRAYS, targets=TARGETS) -> list:
     ]
 
 
-def merge(drops=None, out_csv: Path | None = None) -> Path:
-    """The jobs of *drops* (or each array's :data:`EVAL_BY_ARRAY`) into the losses CSV."""
+def merge(
+    drops=None, out_csv: Path | None = None, jobs_dir: Path | None = None
+) -> Path:
+    """The jobs of *drops* (or each array's :data:`EVAL_BY_ARRAY`) in *jobs_dir* into the losses CSV;
+    a job missing from the set is an error, not a smaller sample."""
     rows = []
     for n in ARRAYS:
         for tg in TARGETS:
             ds = drops or EVAL_BY_ARRAY[n]
-            files = [job_path(n, tg, d) for d in ds if job_path(n, tg, d).exists()]
+            files = [job_path(n, tg, d, jobs_dir) for d in ds]
+            missing = [f.name for f in files if not f.exists()]
+            if missing:
+                raise FileNotFoundError(
+                    f"{len(missing)} jobs missing, e.g. {missing[:3]}"
+                )
             if not files:
                 continue
             losses: dict = {}
@@ -195,7 +212,7 @@ def merge(drops=None, out_csv: Path | None = None) -> Path:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("cmd", choices=("profile", "pilot", "run", "merge"))
+    p.add_argument("cmd", choices=("profile", "pilot", "run", "merge", "subset"))
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--drops", type=int, nargs="+", default=None)
     p.add_argument("--arrays", type=int, nargs="+", default=list(ARRAYS))
@@ -217,8 +234,36 @@ def main() -> None:
         with _pool(a.workers) as ex:
             for msg in ex.map(run_job, jobs):
                 print(msg, flush=True)
+    elif a.cmd == "subset":
+        sys.exit(subset(a.workers))
     else:
         print(merge(tuple(a.drops) if a.drops else None))
+
+
+def subset(workers: int = 4) -> int:
+    """AC7: re-run :data:`SUBSET_DROPS` over the whole grid into :data:`RERUN` (fresh, nothing
+    skipped), then compare every job file and the subset's merged rows with the main run's, byte
+    for byte.  Returns 0 when all are identical."""
+    import filecmp
+    import shutil
+
+    shutil.rmtree(RERUN, ignore_errors=True)
+    jobs_dir = RERUN / "jobs"
+    jobs_dir.mkdir(parents=True)
+    jobs = [(*j, jobs_dir) for j in all_jobs(SUBSET_DROPS)]
+    jobs.sort(key=lambda j: -j[0])
+    with _pool(workers) as ex:
+        for msg in ex.map(run_job, jobs):
+            print(msg, flush=True)
+    bad = [j[:3] for j in jobs
+           if not filecmp.cmp(job_path(*j[:3]), job_path(*j[:3], jobs_dir), shallow=False)]  # fmt: skip
+    a = merge(SUBSET_DROPS, RERUN / "subset_main.csv")
+    b = merge(SUBSET_DROPS, RERUN / "subset_rerun.csv", jobs_dir)
+    same_rows = filecmp.cmp(a, b, shallow=False)
+    print(
+        f"{len(jobs) - len(bad)}/{len(jobs)} job files identical; merged rows identical: {same_rows}"
+    )
+    return 0 if not bad and same_rows else 1
 
 
 if __name__ == "__main__":

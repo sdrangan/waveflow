@@ -92,9 +92,14 @@ class Dims:
         return _pad(self.n_rx, self.c)
 
     @property
+    def u_pad(self) -> int:
+        """The own UEs padded to 8 (``U_pad``): a stream's rows in ``Z``, ``w`` and ``x̂``."""
+        return _pad(self.U, 8)
+
+    @property
     def S(self) -> int:
         """Real-time streams ``r·U_pad``, padded to ``Mmax``."""
-        return _pad(self.r * _pad(self.U, 8), self.Mmax)
+        return _pad(self.r * self.u_pad, self.Mmax)
 
     @property
     def n_cg(self) -> int:
@@ -276,10 +281,10 @@ def real_time(
                 if p in d.dmrs:
                     continue
                 for c in range(d.n_chunks):
-                    xh = g.buffer(f"xh{p}:{c}", d.words(_pad(d.U, 8), n))
+                    xh = g.buffer(f"xh{p}:{c}", d.words(d.u_pad, n))
                     ej = g.add("vec", "eq", deps=(zj[p, c], zj["w", c]),
                                reads=(f"Z{p}:{c}", f"w:{c}"), writes=(xh,),
-                               shape={"u_pad": _pad(d.U, 8), "c": d.c, "r": d.r, "tiles": d.J},
+                               shape={"u_pad": d.u_pad, "c": d.c, "r": d.r, "tiles": d.J},
                                key=("eq", p, c), deadline=dl)  # fmt: skip
                     last[p, c] = g.add("py", "meas", deps=(ej,), reads=(xh,),
                                        key=("meas", p, c), deadline=dl)  # fmt: skip
