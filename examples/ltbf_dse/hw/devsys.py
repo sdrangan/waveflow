@@ -42,7 +42,7 @@ DEV_BASE, HUB_BASE = 0x8000_0000, 0x8001_0000
 #: The longest plain bus write (AXI4's 256 beats).
 MAX_BURST = 256
 #: Scenario burst kinds (the C++ twin decodes them the same way).
-K_IMAGE, K_JOB, K_READ, K_CFG, K_CHUNKS = 0, 1, 2, 3, 4
+K_IMAGE, K_JOB, K_READ, K_CFG, K_CHUNKS, K_SYM = 0, 1, 2, 3, 4, 5
 
 
 @dataclass
@@ -62,8 +62,10 @@ class DevHost(SwHost):
     image: list = field(default_factory=list)  # (word address, words)
     jobs: list = field(default_factory=list)  # descriptor words
     reads: list = field(default_factory=list)  # (word address, words)
-    #: The Ingest DMA's run: (IngestCfg words, chunks, slot words, ring base, ring depth).
+    #: The Ingest DMA's run: (IngestCfg words, chunks, slot words, ring base, ring depth), and the
+    #: O-RU's antenna bursts it writes into the DMA's ``qsym`` queue.
     ingest: tuple | None = None
+    symbols: list = field(default_factory=list)
     clk: Clock = field(default_factory=lambda: Clock(freq=F_HOST))
     #: Whether the device has a Job FIFO (its C++ twin then writes one).
     has_qjob: ClassVar[bool] = True
@@ -96,6 +98,7 @@ class DevHost(SwHost):
         if self.ingest is not None:
             cfg, n_chunks, slot_words, base, depth = self.ingest
             out.append(np.concatenate([[K_CFG], cfg]))
+            out += [np.concatenate([[K_SYM], b]) for b in self.symbols]
             out.append(
                 np.asarray(
                     [K_CHUNKS, n_chunks, slot_words, base, depth, self.credit_addr]
@@ -131,6 +134,8 @@ class DevHost(SwHost):
         if self.ingest is not None:
             cfg, n_chunks, slot_words, base, depth = self.ingest
             yield from self.ctrl.write(np.asarray(cfg, np.uint64))
+            for b in self.symbols:  # the O-RU: an antenna's burst a packet
+                yield from self.qsym.write(np.asarray(b, np.uint64))
             for k in range(n_chunks):
                 self.resps.append((yield from self.qresp.get_schema(Resp)))
                 a = base + (k % depth) * slot_words
@@ -156,6 +161,11 @@ class LtbfIngestHost(DevHost):
     cpp_model: ClassVar[str | None] = "LtbfIngestHostModel"
     cpp_header: ClassVar[str | None] = "ltbf_ingest_host.h"
     has_qjob: ClassVar[bool] = False
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.irq_qsym = self.add_irq("irq_qsym")
+        self.qsym = None
 
 
 def dev_system(
@@ -215,6 +225,11 @@ def dev_system(
     if "credit" in ddev.views:
         host.credit_addr = dmap["credit"].base
         host.ctrl = dad.stream_master("ctrl")
+    if "qsym" in ddev.views:
+        sl = IrqIF(name="qsym_irq", sim=sim)
+        sl.bind("source", ddev.views["qsym"].m_irq)
+        sl.bind("sink", host.irq_qsym)
+        host.qsym = dad.stream_master("qsym", irq=host.irq_qsym)
     host.qresp = BoundMemSlaveAdaptor(hmap, host.m).stream_slave(
         "qresp", irq=host.irq_qresp
     )
@@ -333,15 +348,15 @@ def vec_system() -> HwSystem:
 
 
 def ingest_system(n_sym: int = 2) -> HwSystem:
-    """The Ingest DMA on *n_sym* of AC9's symbols (64 antennas), a ring of two symbols; a
-    ``StreamDriver`` is the O-RU."""
-    from examples.ltbf_dse.hw.ingest import IngestDev
-    from waveflow.simulation.stream_tb import StreamDriver
+    """The Ingest DMA (its queue-fed form, ``IngestDevQ``) on *n_sym* of AC9's symbols (64
+    antennas), a ring of two symbols; the host plays the O-RU, writing each antenna's burst.
+    """
+    from examples.ltbf_dse.hw.ingest import IngestDevQ
 
     sy, S = _ac9()
     d = S.d
     sim = Simulation()
-    dev = IngestDev(
+    dev = IngestDevQ(
         name="ltbf_ingest", sim=sim, clk=Clock(freq=F_HOST), dma_cfg=sy.ingest_cfg(S)
     )
     depth = 2 * d.n_chunks
@@ -351,18 +366,13 @@ def ingest_system(n_sym: int = 2) -> HwSystem:
         for s in range(n_sym)
         for a in range(d.n_rx)
     ]
-    oru = StreamDriver(
-        sim=sim, name="oru", bitwidth=W, in_bundle="vectors/oru", has_tlast=True
-    )
     cfg = IngestCfg(enable=1, ring_depth=depth, ring_base=0, chunk_words=S.slot_words)
-    host = LtbfIngestHost(name="host", sim=sim,
-                   ingest=(cfg.serialize(word_bw=W), n_sym * d.n_chunks, S.slot_words, 0, depth))  # fmt: skip
-    host.extra_bundles = {"vectors/oru": bursts}
-    host.drivers = [oru]
+    host = LtbfIngestHost(name="host", sim=sim, symbols=bursts,
+                          ingest=(cfg.serialize(word_bw=W), n_sym * d.n_chunks, S.slot_words, 0,
+                                  depth))  # fmt: skip
     return dev_system(
         dev,
         mem_words=depth * S.slot_words,
         host=host,
-        driver=oru,
         fresh=lambda: ingest_system(n_sym),
     )
