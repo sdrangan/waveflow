@@ -261,10 +261,11 @@ def dev_system(
     )  # fresh: the flow's pysim runs an unrun copy
 
 
-def _ac9():
+def _ac9(p=None):
+    """``(system, LtbfSystem)`` at *p* (``SysParams``; AC9's when ``None``)."""
     from examples.ltbf_dse.hw import system as sy
 
-    S = sy.LtbfSystem(sy.inputs(sy.SysParams()))
+    S = sy.LtbfSystem(sy.inputs(p or sy.SysParams()))
     return sy, S
 
 
@@ -284,13 +285,15 @@ class _Mem:
         return a
 
 
-def sys_system() -> HwSystem:
-    """The systolic wrapper on one job of each kind at AC9's shapes (N_rx 64, 22 connected UEs)."""
+def sys_system(p=None) -> HwSystem:
+    """The systolic wrapper on one job of each kind at AC9's shapes (N_rx 64, 22 connected UEs), or
+    at *p*'s; ``K`` (``R x C x R``: 8192 tiles at N_rx 1024) only up to N_rx 64, where its tile count
+    is an XSI run's, not hours."""
     from examples.ltbf_dse.hw.sys_wrap import SysWrap
     from waveflow.linalg.systolic import MatmulOp
     from waveflow.linalg.systolic_engine_mem import EngineJobDesc
 
-    sy, S = _ac9()
+    sy, S = _ac9(p)
     d = S.d
     sim = Simulation()
     dev = SysWrap(
@@ -299,7 +302,7 @@ def sys_system() -> HwSystem:
     R, C, c = d.rows, d.cols, d.c
     shapes = [("T", MatmulOp.MUL_AH, C, R, c), ("U", MatmulOp.MUL, R, C, c),
               ("W", MatmulOp.MUL_AH, C, R, c), ("Z", MatmulOp.MUL_AH, d.S, R, d.J * c),
-              ("K", MatmulOp.MUL, R, C, R)]  # fmt: skip
+              ("K", MatmulOp.MUL, R, C, R)][: 5 if d.n_rx <= 64 else 4]  # fmt: skip
     mem = _Mem()
     jobs, reads = [], []
     for tx, (_name, op, m, k, n) in enumerate(shapes):
@@ -313,12 +316,12 @@ def sys_system() -> HwSystem:
     return dev_system(dev, mem_words=mem.top, host=host, fresh=sys_system)
 
 
-def vec_system() -> HwSystem:
+def vec_system(p=None) -> HwSystem:
     """The vector unit's wrapper on a CG step, the last CG step and an equalizer chunk, with the
     system's programs (AC9's build: one unit for both)."""
     from examples.ltbf_dse.hw.vec_wrap import VecMemJob, VecWrap
 
-    _sy, S = _ac9()
+    _sy, S = _ac9(p)
     d, p = S.d, S.p
     sim = Simulation()
     dev = VecWrap(
@@ -360,13 +363,13 @@ def vec_system() -> HwSystem:
     return dev_system(dev, mem_words=mem.top, host=host, fresh=vec_system)
 
 
-def ingest_system(n_sym: int = 2) -> HwSystem:
+def ingest_system(n_sym: int = 2, p=None) -> HwSystem:
     """The Ingest DMA (its queue-fed form, ``IngestDevQ``) on *n_sym* of AC9's symbols (64
     antennas), a ring of two symbols; the host plays the O-RU, writing each antenna's burst.
     """
     from examples.ltbf_dse.hw.ingest import IngestDevQ
 
-    sy, S = _ac9()
+    sy, S = _ac9(p)
     d = S.d
     sim = Simulation()
     dev = IngestDevQ(
