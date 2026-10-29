@@ -127,3 +127,11 @@ def dmrs_weights(
     den = log.add(log.sumsq(h, axis=0), 1.0)
     w = log.divide(h, den[None, :])
     return h, w
+
+
+def sector_scale(h_alpha: np.ndarray, log: OpLog) -> int:
+    """The sector's scale ``s`` (spec §4): the smallest ``s >= 0`` with ``‖2^-s Ĥα‖²_F <= 1``, so the
+    scaled ``U = Ĥα'(Ĥα'ᴴD)`` stays on ``D``'s scale (``λ_max(ĤαĤαᴴ) <= ‖Ĥα‖²_F``)."""
+    log.stage = "scale"
+    fro = float(log.sumsq(h_alpha.reshape(-1), axis=0))
+    return max(0, int(np.ceil(0.5 * np.log2(fro)))) if fro > 0 else 0

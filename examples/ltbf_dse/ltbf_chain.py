@@ -79,6 +79,115 @@ class ChainResult:
     log: OpLog = field(default_factory=OpLog)
 
 
+@dataclass
+class Prepared:
+    """What every configuration of one (drop, array, target) shares: the SRS estimates and the
+    long-term inputs (snapshot 0), the rendered slot of every sector (snapshot 1), the data.
+    """
+
+    drop: dict
+    drop_id: int
+    n: int
+    pc0: lk.PowerControl
+    pc1: lk.PowerControl
+    served: np.ndarray
+    ltin: lk.LongTerm
+    pos: dict
+    data: np.ndarray
+    ports: np.ndarray
+    y: dict  # sector -> (N, 14, 792)
+    hf: np.ndarray  # the scaled snapshot-1 channel, for the genie SINR
+    log: OpLog
+
+
+def prepare(
+    drop_id: int, n: int, target: tuple[float, float], data_seed: int = 0
+) -> Prepared:
+    """Render and estimate once: the SRS (snapshot 0) into ``Ĥα``, and every sector's slot."""
+    drop = sc.load_drop(drop_id)
+    n_sect = drop["yaws"].size
+    n_ue = drop["a0"].shape[1]
+    pc0 = lk.power_control(lk.channel(drop, 0, n, BAND), target)
+    pc1 = lk.power_control(lk.channel(drop, 1, n, BAND), target)
+    same = pc0.gnb_idx == pc1.gnb_idx
+    served = np.array(
+        [u for u in np.intersect1d(pc0.iconn, pc1.iconn) if same[u]], dtype=int
+    )
+    log = OpLog()
+    srs = sg.srs_grid(n_ue)
+    blocks = [
+        ce.srs_blocks(
+            sg.received(drop, drop_id, 0, n, pc0, srs, s)[:, 0, :], pc0.iconn, log
+        )
+        for s in range(n_sect)
+    ]
+    ltin = ce.long_term_from_srs(blocks, pc0, log)
+    data = sg.qpsk_data(n_ue, seed=1000 * drop_id + data_seed)
+    grid = sg.pusch_grid(pc1.gnb_idx, data)
+    y = {
+        s: sg.received(drop, drop_id, 1, n, pc1, grid, s)
+        for s in range(n_sect)
+        if any(pc1.gnb_idx[u] == s for u in served)
+    }
+    hf = lk.scaled(lk.channel(drop, 1, n, BAND), pc1)
+    pos = {int(u): k for k, u in enumerate(pc0.iconn)}
+    return Prepared(
+        drop,
+        drop_id,
+        n,
+        pc0,
+        pc1,
+        served,
+        ltin,
+        pos,
+        data,
+        sg.dmrs_ports(pc1.gnb_idx),
+        y,
+        hf,
+        log,
+    )
+
+
+def project(
+    prep: Prepared, a_per_ue: dict[int, np.ndarray], r: int
+) -> tuple[dict, dict]:
+    """``(G, G')`` per UE from its ``Aᵢ``: ``Gᵢ = (AᵢΦᵢ)ᴴ`` and the whitened ``G'ᵢ = Lᵢ⁻¹Gᵢ``."""
+    g_all, gp_all = {}, {}
+    for u, a in a_per_ue.items():
+        g = lt.projection(a, prep.ltin.srs_own[u], r)
+        s = int(prep.pc0.gnb_idx[u])
+        cols = slice(prep.pos[u] * lk.N_SRS, (prep.pos[u] + 1) * lk.N_SRS)
+        gp_all[u], _ = whitened(g, prep.ltin.h_alpha[s], cols)
+        g_all[u] = g
+    return g_all, gp_all
+
+
+def real_time(
+    prep: Prepared, gp_all: dict[int, np.ndarray], project_fn=None, equalize_fn=None
+):
+    """Per served UE with a projection: ``z' = G'y``, the DMRS weights, ``x̂`` and its metrics.
+    *project_fn(u, s)* and *equalize_fn(z, w)* replace the float projection and equalizer (the
+    fixed-point chain's engines)."""
+    out = {}
+    for s, y in prep.y.items():
+        yf = y.reshape(y.shape[0], -1)
+        for u in prep.served:
+            u = int(u)
+            if prep.pc1.gnb_idx[u] != s or u not in gp_all:
+                continue
+            if project_fn is None:
+                z = (gp_all[u] @ yf).reshape(-1, sg.N_SYM, sg.N_SC)
+            else:
+                z = project_fn(u, s)
+            _h, w = ce.dmrs_weights(
+                z[:, list(sg.DMRS_SYMS)], int(prep.ports[u]), s, prep.log
+            )
+            zd = z[:, list(sg.DATA_SYMS)]
+            xh = equalize(zd, w) if equalize_fn is None else equalize_fn(zd, w)
+            out[u] = measure(xh, prep.data[u])
+    return out
+
+
 def run_chain(
     drop_id: int,
     n: int,
@@ -93,62 +202,19 @@ def run_chain(
     """The whole chain on drop *drop_id*'s ``n x n`` arrays at *target*; CG configurations for
     every *solve* and every ``t`` in *t_eval* (default all ``1..t_max``), plus the exact reference.
     """
-    drop = sc.load_drop(drop_id)
-    n_sect = drop["yaws"].size
-    n_ue = drop["a0"].shape[1]
-    pc0 = lk.power_control(lk.channel(drop, 0, n, BAND), target)
-    pc1 = lk.power_control(lk.channel(drop, 1, n, BAND), target)
-    same = pc0.gnb_idx == pc1.gnb_idx
-    served = np.array(
-        [u for u in np.intersect1d(pc0.iconn, pc1.iconn) if same[u]], dtype=int
-    )
-    res = ChainResult(served)
-    log = res.log
-
-    # -- long term ------------------------------------------------------------------------------
-    srs = sg.srs_grid(n_ue)
-    blocks = []
-    for s in range(n_sect):
-        y = sg.received(drop, drop_id, 0, n, pc0, srs, s)[:, 0, :]
-        blocks.append(ce.srs_blocks(y, pc0.iconn, log))
-    ltin = ce.long_term_from_srs(blocks, pc0, log)
-    pos = {int(u): k for k, u in enumerate(pc0.iconn)}
+    prep = prepare(drop_id, n, target, data_seed)
+    res = ChainResult(prep.served, log=prep.log)
     configs: dict = {}
-    for s in range(n_sect):
-        for u, a in lt.sector_a(ltin, s, lt.Solve(), None).items():
+    for s in range(len(prep.ltin.own)):
+        for u, a in lt.sector_a(prep.ltin, s, lt.Solve(), None).items():
             configs.setdefault(("exact",), {})[u] = a
         for sv in solves:
-            for u, a_t in lt.sector_a(ltin, s, sv, t_max).items():
+            for u, a_t in lt.sector_a(prep.ltin, s, sv, t_max).items():
                 for t in t_eval or range(1, t_max + 1):
                     configs.setdefault((sv.form, sv.regime, t), {})[u] = a_t[t - 1]
-    proj: dict = {}
     for key, per_ue in configs.items():
         for r in ranks:
-            g_all, gp_all = {}, {}
-            for u, a in per_ue.items():
-                g = lt.projection(a, ltin.srs_own[u], r)
-                s = int(pc0.gnb_idx[u])
-                cols = slice(pos[u] * lk.N_SRS, (pos[u] + 1) * lk.N_SRS)
-                gp_all[u], _ = whitened(g, ltin.h_alpha[s], cols)
-                g_all[u] = g
-            proj[key + (r,)] = gp_all
-            hf = lk.scaled(lk.channel(drop, 1, n, BAND), pc1)
-            res.genie[key + (r,)] = lt.sinr_lt_db(g_all, hf, pc1, served)
-
-    # -- real time --------------------------------------------------------------------------------
-    data = sg.qpsk_data(n_ue, seed=1000 * drop_id + data_seed)
-    grid = sg.pusch_grid(pc1.gnb_idx, data)
-    ports = sg.dmrs_ports(pc1.gnb_idx)
-    for s in range(n_sect):
-        mine = [u for u in served if pc1.gnb_idx[u] == s]
-        if not mine:
-            continue
-        y = sg.received(drop, drop_id, 1, n, pc1, grid, s)  # (N, 14, 792)
-        yf = y.reshape(y.shape[0], -1)
-        for key, gp_all in proj.items():
-            for u in mine:
-                z = (gp_all[u] @ yf).reshape(-1, sg.N_SYM, sg.N_SC)
-                _h, w = ce.dmrs_weights(z[:, list(sg.DMRS_SYMS)], int(ports[u]), s, log)
-                xh = equalize(z[:, list(sg.DATA_SYMS)], w)
-                res.metrics.setdefault(key, {})[u] = measure(xh, data[u])
+            g_all, gp_all = project(prep, per_ue, r)
+            res.genie[key + (r,)] = lt.sinr_lt_db(g_all, prep.hf, prep.pc1, prep.served)
+            res.metrics[key + (r,)] = real_time(prep, gp_all)
     return res

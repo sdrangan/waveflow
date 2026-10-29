@@ -3,7 +3,8 @@
 **Status:** **Frozen** 2026-10-28: v2, approved by the user at the 👁 review of step 1.4 with every
 recommendation of §6 (gate E: the weights from the Python estimator). v1 was reviewed by a read-only
 agent (3 blockers, 6 major, 12 minor findings, all acted on; §7). Its SHA-256 is in the plan's §15;
-a change after this needs the user's yes and a new hash.
+a change after this needs the user's yes and a new hash. **Amendment 1** (§4.1, approved by the user
+2026-10-28 during step 3.1) changes the format scheme; the plan's §15 holds both hashes.
 **Inputs:** the plan (§1–§2, §14), the LTBF paper and its code, the spikes of step 1.2 (scripts in
 `examples/ltbf_dse/spikes/`, results local in `examples/ltbf_dse/data/spikes/`; the plan's §15; the
 lessons file).
@@ -147,6 +148,26 @@ unit's Ctrl), and `Aᵢ` comes out scaled by a known `2^{s}` the CPU removes.
 
 **Ranges** profiled on held-out drops per (target, array) with guard bits (as `paper/cg_dse`'s
 `ltbf_fixed`); **CPU** float64 in C, its outputs quantized to `a`.
+
+### 4.1 Amendment 1 (step 3.1, approved 2026-10-28): what one format triple can hold
+
+Building the bit-exact model showed that one shared `bc` collapses values to zero: CG's `X` outgrows
+`D` by about `1/λ_min` (6.8 against 0.08 on drop 1 at 8x8), and the real-time `Y` and `Z` are about
+100 times the long-term values. So, with every scale a power of two chosen from the profiled ranges
+and removed exactly downstream:
+
+1. **`X` keeps its own format** (register and queue) in the CG state, which never enters the systolic
+   engine; the **last CG iteration also stores `X_b = q_bc(2^-m X)`** (a `wf.vmacc.vs` with the
+   result shift `m` into a zeroed group, then a store to a `bc`-format output), the B operand of
+   `W = Ĥα'ᴴX_b`.
+2. **The ingest writes `2^-k Y`** (its digital gain, a field of `IngestCfg`) and **the CPU writes
+   `2^-g G'`**, so `Y` and `Z` share `bc` with the long-term values.
+3. **The DMRS estimator** reads the stored `Z` times `2^(g+k)` and writes `2^(g+k) w`, so the
+   equalizer's `x̂ = Σ conj(w) z` is unscaled.
+4. **The CPU job** forms `Mᵢ` and `ĤαᴴAᵢ` from `W` times `2^(s+m)` and `Gᵢ` from the stored `X`.
+
+The vector unit's `rs_max` is then `max(2·s_max, m_max)` (at most 15). Measured on drop 1, 8x8,
+`t = 3`, against float CG: median loss 0.001 / 0.016 / 0.71 / 2.40 dB at W = 16 / 14 / 12 / 10.
 
 ## 5. The system
 
