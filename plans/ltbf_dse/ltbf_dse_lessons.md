@@ -125,3 +125,11 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
 - **Scenario bursts must be built as `uint64`** (step 5.1): `np.concatenate([[kind], words])` promotes
   to float64 and rounds 64-bit words to 53 bits; only the C++ twin reads the scenario, so pysim
   never notices.
+- **Never request more `burst_maxi` reads than the adapter can hold before reading** (step 5.1, Vitis
+  HLS 2024.1): the systolic feeder requested all `2P` panels of a tile, then read; the `m_axi` adapter
+  takes a request only while its queue (`USER_MAXREQS` 7) has room, a request leaving it only as its
+  bursts fit the 256-word read buffer, which drains only as the kernel reads -- a deadlock at `P > 8`.
+  C simulation's request queue is unbounded and pysim reads panel by panel, so only RTL shows it. Keep
+  the requests ahead of the reads bounded (the feeder now runs 6 ahead, one more a panel). To find
+  it: in the VCD, the task's `ARVALID` rises only with the adapter's `ARREADY`, so a task waiting on a
+  full queue shows both low -- compare the requests taken with the words read.
