@@ -101,7 +101,10 @@ class SysParams:
     policy: str = "static"
     B_LT: int | None = None
     n_cores: int = 1
-    L: int = 8  # the vector unit's lanes
+    #: The vector unit's lanes.  At 8, csynth (Vitis HLS 2024.1) of this format mix's fused body runs
+    #: out of memory (plan §15); at 4 it builds in under 4 minutes, and the jobs are bound by their
+    #: loads and stores, not by execution.
+    L: int = 4
     word_bits: int = 64
     lane_bits: int = 16
     cg_window: int = 2

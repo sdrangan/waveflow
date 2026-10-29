@@ -139,3 +139,9 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   it per parameter set (the flow builds fresh copies).
 - **A host run's RTL cap was fixed at 1,000,000 cycles** (step 5.2): the system flow now takes the
   system's `n_cycles` (user-approved); set it on any host system whose run is longer.
+- **The vector unit's csynth explodes with lanes at a wide format mix** (step 5.1, Vitis HLS 2024.1): the
+  fused body's preprocessing (`RUN`'s `cdfg_preprocess`) ran 2 h at 10 GB + swap at 8 lanes and finished
+  in 3 minutes at 4; no single width, `VLMAX` or fusion change rescued 8 lanes (each passed 6 GB in 8
+  minutes). The framework's record (`plans/vecunit_new.md` Stage 6) saw the same class of blow-up from
+  a format mix and fusion. Profile a stalled csynth by the last `Preprocessing Module` in
+  `.autopilot/db/autopilot.flow.log`, and test one factor per build under a memory watchdog.
