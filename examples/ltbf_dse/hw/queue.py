@@ -58,14 +58,15 @@ def gated(p: sp.Part, role: str) -> bool:
     return role in ("fit", "heldout") and p.word_bits == 64
 
 
-def _codegen_step(p: sp.Part):
+def _codegen_step(p: sp.Part, gate: bool):
     from examples.ltbf_dse.hw import build as hb
     from waveflow.build.build import BuildConfig, BuildStep
     from waveflow.build.composite_gen import GEN_DIR, INCLUDE_DIR
 
     @dataclass(kw_only=True)
     class PartCodegen(BuildStep):
-        """Headers, the part's top and the one-source Resp hub (its gate's), at its parameters."""
+        """Headers, the part's top and, for its gate, the one-source Resp hub, at its parameters: only
+        the devices it needs (the vector wrapper is 64-bit only)."""
 
         description = "Headers and the part's tops at its parameters."
         params: ClassVar[dict] = {}
@@ -86,15 +87,18 @@ def _codegen_step(p: sp.Part):
             shutil.copytree(ROOT / "src", r / "src", dirs_exist_ok=True)
             S = sy.LtbfSystem(sy.inputs(params(p)))
             sim, W = Simulation(), S.p.word_bits
-            devs = {"ltbf_sys": SysWrap(name="ltbf_sys", sim=sim, engine_cfg=sy.engine_cfg(S)),
-                    "ltbf_vec": VecWrap(name="ltbf_vec", sim=sim, vu_cfg=S.vu, word_bits=W),
-                    "ltbf_ingest": IngestDev(name="ltbf_ingest", sim=sim, dma_cfg=sy.ingest_cfg(S)),
-                    "ltbf_hub1": RespHub1(name="ltbf_hub1", sim=sim, word_bits=W),
-                    "_vu": S.vu, "_word_bits": W}  # fmt: skip
+            # The headers need the systolic wrapper's parts and the vector unit's configuration.
+            devs: dict[str, Any] = {"ltbf_sys": SysWrap(name="ltbf_sys", sim=sim, engine_cfg=sy.engine_cfg(S)),
+                                    "_vu": S.vu, "_word_bits": W}  # fmt: skip
+            if p.kind == "vec":
+                devs["ltbf_vec"] = VecWrap(name="ltbf_vec", sim=sim, vu_cfg=S.vu, word_bits=W)
+            if p.kind == "ing":
+                devs["ltbf_ingest"] = IngestDev(name="ltbf_ingest", sim=sim, dma_cfg=sy.ingest_cfg(S))
             hb.gen_headers(r, devs)
             tcl = {"sys": {"solution_config": hb.FLP}, "vec": {"defines": hb.DEFINES}, "ing": {}}[p.kind]
             hb.gen_top(r, devs[TOP[p.kind]], W, **tcl)
-            hb.gen_top(r, devs["ltbf_hub1"], W)
+            if gate:
+                hb.gen_top(r, RespHub1(name="ltbf_hub1", sim=sim, word_bits=W), W)
             return {"include": r / INCLUDE_DIR, "gen": r / GEN_DIR}
 
     return PartCodegen(name="codegen")
@@ -112,9 +116,9 @@ def build_part(p: sp.Part, role: str, root: Path) -> dict:
     cfg = build_config(root)
     cfg.params["synth"] = "build"
     dag = BuildDag()
-    dag.add(_codegen_step(p))
     top = TOP[p.kind]
     gate = gated(p, role)
+    dag.add(_codegen_step(p, gate))
     if gate:
         sysm = {"sys": lambda: devsys.sys_system(params(p)), "vec": lambda: devsys.vec_system(params(p)),
                 "ing": lambda: devsys.ingest_system(p=params(p))}[p.kind]()  # fmt: skip

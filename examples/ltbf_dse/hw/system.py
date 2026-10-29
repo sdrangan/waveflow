@@ -92,6 +92,7 @@ class SysParams:
     target: str = "-6_14"
     sector: int = 1
     W: int = 16  # the operand width of the fixed-point configuration
+    form: str = "factored"  # Q̂ factored (Ĥα'(Ĥα'ᴴD)) or explicit (K = Ĥα'Ĥα'ᴴ, once a T_LT)
     t: int = 3
     r: int = 1
     c: int = 8
@@ -152,7 +153,7 @@ def inputs(p: SysParams) -> Inputs:
     the fixed-point chain's answer for the sector (``golden``)."""
     prep = lc.prepare(p.drop, p.n, lk.TARGETS[p.target])
     ranges = fc.profile(prep, t_max=p.t, ranks=(p.r,))
-    cfg = fc.formats(ranges, p.W)
+    cfg = fc.formats(ranges, p.W, form=p.form)
     s = p.sector
     own = [int(u) for u in prep.ltin.own[s]]
     ha = prep.ltin.h_alpha[s]
@@ -161,7 +162,7 @@ def inputs(p: SysParams) -> Inputs:
     h = lf.to_stored(ha * 2.0**-sh, cfg.a)
     b = lf.to_stored(prep.ltin.rhs[s] * 2.0 ** (cfg.q_shift - sh), cfg.bc)
     y = lf.to_stored(prep.y[s] * 2.0**-cfg.k_shift, cfg.bc)
-    dims = Dims(n_rx=p.n * p.n, U=len(own), U_conn=n_conn, c=p.c, Mmax=p.Mmax, r=p.r, t=p.t,
+    dims = Dims(n_rx=p.n * p.n, U=len(own), U_conn=n_conn, c=p.c, Mmax=p.Mmax, r=p.r, t=p.t, form=p.form,
                 J=p.J, lane_bits=p.lane_bits, word_bits=p.word_bits, B_LT=p.B_LT,
                 cg_window=p.cg_window, rt_window=p.rt_window,
                 xh_window=p.xh_window)  # fmt: skip
@@ -526,7 +527,7 @@ class LtbfHost(SwHost):
         j = S.sch.jobs[gid]
         ctx = self._ctx(gid)
         if j.op == "srs":
-            for name in ("Hah", "Ham"):
+            for name in j.writes:  # Hah, Ham (and HaHB, explicit)
                 yield from self.write_words(S.addr(gid, name), S.ha_words[name], ctx)
         elif j.op == "init":
             q = j.key[1]
@@ -624,6 +625,9 @@ class LtbfSystem:
             "Ham": block_major(hr, hi, cfg.a, d.Mmax, d.c, lane_bits=p.lane_bits,
                                word_bits=p.word_bits, order="row"),
         }  # fmt: skip
+        if d.form == "explicit":  # Ĥαᴴ as K's B operand (a = bc in this form)
+            self.ha_words["HaHB"] = block_major(hr.T, -hi.T, cfg.a, d.c, d.c, lane_bits=p.lane_bits,
+                                                word_bits=p.word_bits, order="row")  # fmt: skip
         self.gp_stage = (
             np.zeros((d.rows, d.S), np.int64),
             np.zeros((d.rows, d.S), np.int64),
