@@ -96,3 +96,12 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   jobs never share. Windows (`cg_window`, `rt_window`) are the edges that make reuse possible.
 - **A drop at the end of a stream has no gap after it** (step 4.4): the scheduler learns of a dropped
   symbol from the next record's `seq`; the last ones need the DMA's status.
+- **`HwSystem`'s participants are the simulation's root SimObjs** (step 4.5): anything outside the DUT
+  needs a `bfm_model()`, an `xsi_model()` or to be a `SwHost`; a `Processor` the host charges is the
+  host's (its `parent`). A `SwFunction`'s `cycles` is a number or a model with `predict_feat`, not a
+  function; `SwQueue(owner, capacity=None)`; `MatmulOp` lives in `waveflow.linalg.systolic`.
+- **A one-row-tile `A` is re-read for every column tile** (step 4.5): with `Mmax = S` the projection's
+  `G'_stack` is read again for each of a chunk's `J` tiles, so `Z` jobs are bus-bound (28.9 µs at 64
+  bits); a wide `Y` chunk costs `J` reads of `G'`.
+- **Drops must not follow order edges** (step 4.5): a window edge carries no data; dropping through it
+  dropped jobs whose chunks had arrived, their ring slots were never freed and the ring leaked.

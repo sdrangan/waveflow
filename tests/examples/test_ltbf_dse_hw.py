@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 import numpy as np
+import pytest
 
 from examples.ltbf_dse.hw.records import SRC_SYS, Resp
 from examples.ltbf_dse.hw.resp_hub import RespHub
@@ -568,3 +569,31 @@ def test_ingest_dma_drops_a_symbol_without_credit():
     assert len(ok) == 22 and all(ok.values())
     assert (int(t.host.mid.chunks), int(t.host.mid.overruns)) == (11, 2)
     assert (int(t.host.final.chunks), int(t.host.final.overruns)) == (22, 2)
+
+
+# -- the system -------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("policy", ["static", "dynamic"])
+def test_system_equals_the_fixed_chain(policy, tmp_path):
+    """Step 4.5 (AC9's configuration in pysim): drop 1, sector 1 (10 own UEs, 22 connected), N_rx =
+    64, factored, ``t`` 3, ``r`` 1, ``c`` 8, ``Mmax`` 16, ``J`` 9, a ring of 2 symbols.  The host runs
+    the scheduler over one long-term update, then one slot through the Ingest DMA (the O-RU paced at
+    500 µs a symbol: one 64-bit port cannot carry 64 antennas at 8.9 µs).  Every job runs (no symbol
+    dropped); ``G'`` in Shared Mem, the DMRS symbols' ``Z``, the weights ``w`` and every ``x̂`` tile
+    equal the fixed-point chain's (``ltbf_fixed_chain``) bit for bit, under either policy.  The
+    replay file holds every host job's writes."""
+    from examples.ltbf_dse.hw import system as sy
+
+    inp = sy.inputs(sy.SysParams(policy=policy, sym_period=500e-6))
+    assert (inp.dims.U, inp.dims.U_conn) == (10, 22)
+    hw, S, host = sy.build(inp)
+    hw.run()
+    assert S.sch.finished and S.sch.overruns == 0 and S.sch.dropped == 0
+    assert S.sch.error is None
+    assert sy.check(S, host) == {"G'": True, "Z (DMRS)": True, "w": True, "x̂": True}
+    n_host = sum(j.engine in ("py", "cpu") for j in [*S.lt.jobs, *S.rt.jobs])
+    index = sy.write_replay(host, tmp_path / "replay")
+    assert len(index["jobs"]) == n_host + 1  # and the programs' setup
+    assert index["words"] == sum(n for j in index["jobs"] for _a, n, _o in j["writes"])
+    assert {src for src, *_ in host.resp_log} == {0, 1, 2}

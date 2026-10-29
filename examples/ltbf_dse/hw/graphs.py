@@ -15,7 +15,8 @@ Ingest DMA's) and ``G'_stack`` (the long-term graph's product, the real-time gra
   bounds their state in Shared Mem.
 * :func:`real_time` -- one slot: symbol by symbol, chunk by chunk along frequency, the Ingest DMA's
   chunk (a root, completed by its ``Resp``), ``Z = G'_stack Y`` on the systolic array, the DMRS
-  estimate (Python) from symbols 2-3's ``Z``, and on the vector unit ``x̂ = Σ conj(w) ⊙ z`` per data
+  estimate (Python, one a slot: the estimator is full-band) from symbols 2-3's ``Z``, and on the
+  vector unit ``x̂ = Σ conj(w) ⊙ z`` per data
   chunk; the measurement reads ``x̂``.  Symbols 0-1's ``Z`` wait in Shared Mem for ``w``.  A symbol's
   ``Z`` at a chunk position waits for the last use of the one ``rt_window`` symbols earlier: nothing
   else orders two symbols, so without it no plan safe under every order could reuse their space.
@@ -47,7 +48,10 @@ class Dims:
     """One configuration's sizes (spec §5.3): the systolic maxima are ``Kmax = Nmax = c``."""
 
     n_rx: int
+    #: The sector's own UEs (CG columns, CPU jobs, real-time streams).
     U: int
+    #: The UEs in ``Ĥα`` (own and the other sectors' connected ones); default ``U``.
+    U_conn: int | None = None
     c: int = 8
     Mmax: int = 8
     r: int = 1
@@ -79,8 +83,8 @@ class Dims:
 
     @property
     def cols(self) -> int:
-        """``8U`` padded to a multiple of ``Mmax`` and ``c``."""
-        return _pad(8 * self.U, math.lcm(self.Mmax, self.c))
+        """``Ĥα``'s ``8·U_conn`` columns padded to a multiple of ``Mmax`` and ``c``."""
+        return _pad(8 * (self.U_conn or self.U), math.lcm(self.Mmax, self.c))
 
     @property
     def rows(self) -> int:
@@ -94,7 +98,8 @@ class Dims:
 
     @property
     def n_cg(self) -> int:
-        return self.cols // self.c
+        """CG jobs: the own UEs' ``8U`` columns, ``c`` a job."""
+        return -(-8 * self.U // self.c)
 
     @property
     def n_chunks(self) -> int:
@@ -122,6 +127,8 @@ class Job:
     cfg: object = None
     #: What it is: ``("step", q, it)``, ``("chunk", sym, c)``, ...
     key: tuple = ()
+    #: Order-only predecessors (a window's edge: no data flows, a drop does not follow it).
+    after: tuple = ()
 
 
 @dataclass
@@ -138,16 +145,16 @@ class Graph:
     chunks: list = field(default_factory=list)
 
     def add(self, engine, op, *, deps=(), reads=(), writes=(), shape=None, key=(), cfg=None,
-            deadline=None) -> int:  # fmt: skip
+            deadline=None, after=()) -> int:  # fmt: skip
         jid = len(self.jobs)
-        for d in deps:
+        for d in (*deps, *after):
             if not 0 <= d < jid:
                 raise ValueError(
                     f"{self.name}: job {jid} depends on {d}, not an earlier job"
                 )
         self.jobs.append(Job(jid, engine, op, self.cls, tuple(deps), tuple(reads), tuple(writes),
                              dict(shape or {}), math.inf if deadline is None else deadline, cfg,
-                             tuple(key)))  # fmt: skip
+                             tuple(key), tuple(after)))  # fmt: skip
         return jid
 
     def buffer(self, name: str, words: int, *, external: bool = False) -> str:
@@ -156,10 +163,11 @@ class Graph:
             self.external.add(name)
         return name
 
-    def successors(self) -> list[list[int]]:
+    def successors(self, *, data_only: bool = False) -> list[list[int]]:
+        """Each job's successors: through every edge, or (*data_only*) through ``deps`` alone."""
         succ: list[list[int]] = [[] for _ in self.jobs]
         for j in self.jobs:
-            for d in j.deps:
+            for d in j.deps if data_only else (*j.deps, *j.after):
                 succ[d].append(j.jid)
         return succ
 
@@ -199,7 +207,7 @@ def long_term(
     for q in range(d.n_cg):
         x, r_, dd = (g.buffer(f"{v}{q}@0", d.words(R, c)) for v in "XRD")
         prev = w_jobs[q - d.cg_window] if q >= d.cg_window else []
-        init = g.add("py", "init", deps=(srs, *prev), writes=(x, r_, dd), key=("init", q),
+        init = g.add("py", "init", deps=(srs,), after=prev, writes=(x, r_, dd), key=("init", q),
                      deadline=dl)  # fmt: skip
         last = [init, *k_jobs]
         for it in range(1, d.t + 1):
@@ -248,15 +256,17 @@ def real_time(
             g.chunks.append(ch)
             z = g.buffer(f"Z{s}:{c}", d.words(S, n))
             win = (last[s - d.rt_window, c],) if s >= d.rt_window else ()
-            zj[s, c] = g.add("sys", "MUL_AH", deps=(ch, *win), reads=("Gp", y), writes=(z,),
+            zj[s, c] = g.add("sys", "MUL_AH", deps=(ch,), after=win, reads=("Gp", y), writes=(z,),
                              shape={"M": S, "K": R, "N": n, "row0": 0}, key=("Z", s, c),
                              deadline=dl)  # fmt: skip
         if s == max(d.dmrs):
+            # One estimate for the slot: the DMRS estimator is full-band (spec §2: one phase slope
+            # over the band, interpolation across it), and all of a symbol's chunks arrive at once.
+            ws = tuple(g.buffer(f"w:{c}", d.words(S, n)) for c in range(d.n_chunks))
+            wj = g.add("py", "dmrs", deps=tuple(zj[p, c] for p in d.dmrs for c in range(d.n_chunks)),
+                       reads=tuple(f"Z{p}:{c}" for p in d.dmrs for c in range(d.n_chunks)),
+                       writes=ws, key=("dmrs",), deadline=dl)  # fmt: skip
             for c in range(d.n_chunks):
-                w = g.buffer(f"w:{c}", d.words(S, n))
-                wj = g.add("py", "dmrs", deps=tuple(zj[p, c] for p in d.dmrs),
-                           reads=tuple(f"Z{p}:{c}" for p in d.dmrs), writes=(w,),
-                           key=("dmrs", c), deadline=dl)  # fmt: skip
                 zj["w", c] = wj
                 for p in d.dmrs:
                     last[p, c] = wj

@@ -80,6 +80,7 @@ class _Graph:
     g: Graph
     base: int
     succ: list
+    dsucc: list  # successors through data edges (a drop follows these)
     pending: list
     #: Each ring chunk's readers still to finish, by the chunk root's job id.
     ring_left: dict = field(default_factory=dict)
@@ -127,6 +128,9 @@ class Scheduler:
         self.misses = {0: 0, 1: 0}
         self.overruns = 0
         self.dropped = 0
+        #: Jobs a drop reached: no-ops that still complete in dependency order (so the jobs after
+        #: them through an order edge, and the ring slots they read, are released).
+        self.skip: set = set()
         self.t_done: dict[int, float] = {}
 
     # -- graphs ---------------------------------------------------------------------------------
@@ -136,8 +140,8 @@ class Scheduler:
         base = len(self.jobs)
         gi = len(self.graphs)
         succ = g.successors()
-        pending = [len(j.deps) for j in g.jobs]
-        rec = _Graph(g, base, succ, pending)
+        pending = [len(j.deps) + len(j.after) for j in g.jobs]
+        rec = _Graph(g, base, succ, g.successors(data_only=True), pending)
         self.graphs.append(rec)
         for j in g.jobs:
             self.jobs.append(j)
@@ -154,7 +158,7 @@ class Scheduler:
         for ch in g.chunks:
             self._chunks.append(base + ch)
         for j in g.jobs:
-            if not j.deps and j.engine != "ingest":
+            if not j.deps and not j.after and j.engine != "ingest":
                 self._make_ready(base + j.jid)
         return base
 
@@ -251,11 +255,11 @@ class Scheduler:
         if int(status):
             self.error = (gid, int(status))
             return None
-        self._done(gid, now)
+        self._complete(gid, now)
         return gid
 
     def host_done(self, gid: int, now: float) -> None:
-        self._done(gid, now)
+        self._complete(gid, now)
 
     def _chunk(self, seq: int, now: float) -> int:
         gap = (seq - self._next_seq) % SEQ_MOD
@@ -263,17 +267,17 @@ class Scheduler:
             raise ValueError(f"chunk seq {seq} after {self._next_seq - 1}: a gap of {gap} is not "
                              f"whole symbols of {self.n_chunks} chunks")  # fmt: skip
         for _ in range(gap):
-            self._drop(self._chunks.popleft())
+            self._drop(self._chunks.popleft(), now)
         self.overruns += gap // max(1, self.n_chunks)
         self._next_seq = (seq + 1) % SEQ_MOD
         gid = self._chunks.popleft()
         self._slot_of[gid] = self._arrived
         self._arrived += 1
         self.state[gid] = "run"
-        self._done(gid, now)
+        self._complete(gid, now)
         return gid
 
-    def on_status(self, chunks: int, overruns: int) -> None:
+    def on_status(self, chunks: int, overruns: int, now: float = 0.0) -> None:
         """The Ingest DMA's status (``IngestStatus``), read when the scheduler is idle: a drop after
         the last chunk seen leaves no gap in ``seq`` until the next record, maybe never.  Once every
         chunk the DMA wrote has been seen, the overruns beyond those counted are the next symbols.
@@ -283,7 +287,7 @@ class Scheduler:
         for _ in range(int(overruns) - self.overruns):
             for _c in range(self.n_chunks):
                 if self._chunks:
-                    self._drop(self._chunks.popleft())
+                    self._drop(self._chunks.popleft(), now)
             self._next_seq = (self._next_seq + self.n_chunks) % SEQ_MOD
             self.overruns += 1
 
@@ -291,11 +295,25 @@ class Scheduler:
         """The ring slot the DMA wrote this chunk into."""
         return self._slot_of[chunk_gid] % max(1, self.ring_depth)
 
-    def _done(self, gid: int, now: float) -> None:
+    def _complete(self, gid: int, now: float) -> None:
+        """A job finished (or a dropped one reached its turn): release its successors; dropped ones
+        among them complete at once, as no-ops."""
+        work = [gid]
+        while work:
+            for s in self._done(work.pop(), now):
+                if s in self.skip:
+                    work.append(s)
+                else:
+                    self._make_ready(s)
+
+    def _done(self, gid: int, now: float) -> list[int]:
         j = self.jobs[gid]
-        self.state[gid] = "done"
+        noop = gid in self.skip
+        self.state[gid] = "dropped" if noop else "done"
         self.t_done[gid] = now
-        if now > j.deadline:
+        if noop:
+            self.dropped += 1
+        elif now > j.deadline:
             self.misses[j.cls] += 1
         gi, lid = self.where[gid]
         rec = self.graphs[gi]
@@ -305,35 +323,33 @@ class Scheduler:
                 rec.ring_left[d] -= 1
                 if rec.ring_left[d] == 0:
                     self._retire(rec.base + d)
-        succ = [s for s in rec.succ[lid] if self.state[rec.base + s] != "dropped"]
-        ready, counters = release(succ, rec.pending)
+        ready, counters = release(rec.succ[lid], rec.pending)
         self.trace.append({"op": "release", **counters})
-        for s in ready:
-            self._make_ready(rec.base + s)
         if j.engine == "ingest" and rec.ring_left.get(lid, 0) == 0:
             self._retire(gid)  # a chunk nobody reads
+        return [rec.base + s for s in ready]
 
     def _retire(self, chunk_gid: int) -> None:
+        if chunk_gid not in self._slot_of:
+            return  # a chunk the DMA dropped holds no slot
         self._retired.add(self._slot_of[chunk_gid])
         while self.credit in self._retired:
             self._retired.discard(self.credit)
             self.credit += 1
 
-    def _drop(self, gid: int) -> None:
-        """A chunk the DMA dropped: it and every job after it never run."""
+    def _drop(self, gid: int, now: float) -> None:
+        """A chunk the DMA dropped: it and every job its data reaches become no-ops, completing in
+        dependency order; a job after one only through an order edge still runs."""
         stack = [gid]
         while stack:
             g = stack.pop()
-            if self.state[g] == "dropped":
+            if g in self.skip:
                 continue
-            if self.state[g] == "ready" and self.policy == "dynamic":
-                e = self.jobs[g].engine
-                self.ready[e] = [t for t in self.ready[e] if t[0] != g]
-            self.state[g] = "dropped"
-            self.dropped += 1
+            self.skip.add(g)
             gi, lid = self.where[g]
             rec = self.graphs[gi]
-            stack.extend(rec.base + s for s in rec.succ[lid])
+            stack.extend(rec.base + s for s in rec.dsucc[lid])
+        self._complete(gid, now)  # the chunk itself has no predecessors
 
     # -- state ----------------------------------------------------------------------------------
 
@@ -352,7 +368,7 @@ def ancestors(g: Graph) -> list[int]:
     anc = [0] * len(g.jobs)
     for j in g.jobs:
         a = 0
-        for d in j.deps:
+        for d in (*j.deps, *j.after):
             a |= anc[d] | (1 << d)
         anc[j.jid] = a
     return anc

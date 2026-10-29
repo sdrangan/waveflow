@@ -168,9 +168,8 @@ class Bench:
             if self.cores == 0 and s._next("py") is None:
                 break
         if not self.qresp and s.idle and not s.finished:
-            s.on_status(
-                self.taken, len(self.dropped_symbols)
-            )  # the host reads the DMA's status
+            # The host reads the DMA's status.
+            s.on_status(self.taken, len(self.dropped_symbols), self.now)
         for e in SRC:
             for act in s.take(e, self.qjob - len(self.fifo[e])):
                 if act[0] == "job":
@@ -188,11 +187,12 @@ class Bench:
             if self.s.state[gid] != "done":
                 continue
             base = gid - j.jid
-            for d in j.deps:
-                assert self.end[base + d] <= self.start[gid], (
-                    j.key,
-                    self.s.jobs[base + d].key,
-                )
+            for d in (*j.deps, *j.after):
+                if base + d in self.end:  # a dropped predecessor never ran
+                    assert self.end[base + d] <= self.start[gid], (
+                        j.key,
+                        self.s.jobs[base + d].key,
+                    )
 
     def lifetimes(self, g: Graph, base: int) -> dict[str, tuple[float, float]]:
         life: dict[str, list[float]] = {}
@@ -249,7 +249,7 @@ def test_graphs_have_the_spec_shape():
     assert sum(j.key[:1] == ("W",) for j in lt.jobs) == 4 * 4
     # CG job q's copy waits for job q - 2's W (cg_window 2).
     init2 = next(j for j in lt.jobs if j.key == ("init", 2))
-    assert {lt.jobs[x].key[:2] for x in init2.deps} >= {("W", 0)}
+    assert {lt.jobs[x].key[:2] for x in init2.after} == {("W", 0)}
     rt = real_time(d)
     assert len(rt.chunks) == d.n_sym * d.n_chunks == 14 * 11
     eq = [j for j in rt.jobs if j.op == "eq"]
@@ -260,7 +260,8 @@ def test_graphs_have_the_spec_shape():
     assert all(j.cls == RT for j in rt.jobs) and all(j.cls == LT for j in lt.jobs)
     # Symbol 4's Z at a chunk position waits for symbol 0's measurement there (rt_window 4).
     z4 = next(j for j in rt.jobs if j.key == ("Z", 4, 5))
-    assert {rt.jobs[x].key for x in z4.deps} == {("chunk", 4, 5), ("meas", 0, 5)}
+    assert [rt.jobs[x].key for x in z4.deps] == [("chunk", 4, 5)]
+    assert [rt.jobs[x].key for x in z4.after] == [("meas", 0, 5)]  # order only
 
 
 def test_no_deadlock_at_the_smallest_fifo_and_ring_depths():
@@ -441,7 +442,7 @@ def test_the_trace_prices_every_decision():
     assert ops.count("sched_ops.add") == ops.count("sched_ops.delete") == n_run
     assert ops.count("dispatch") == s.dispatched["sys"] + s.dispatched["vec"]
     assert ops.count("release") == len(s.jobs)
-    edges = sum(len(j.deps) for j in [*lt.jobs, *rt.jobs])
+    edges = sum(len(j.deps) + len(j.after) for j in [*lt.jobs, *rt.jobs])
     assert sum(t["n_succ"] for t in s.trace if t["op"] == "release") == edges
     for t in s.trace:
         if t["op"] == "sched_ops.delete":

@@ -299,29 +299,33 @@ def fixed_projection(
         x, w = o.x[t - 1], o.w[t - 1]
         # W = Ĥα'ᴴ X_b = 2^-s 2^-m Ĥαᴴ X: relative to Gᵢ's scale (A' = X), Ĥα,ⱼᴴA'ᵢ = 2^(s+m) W[j, i]
         wsc = w * 2.0 ** (o.s + cfg.m_shift)
-        n_conn = wsc.shape[0] // lk.N_SRS
         for k, u in enumerate(prep.ltin.own[s]):
-            u = int(u)
-            pu = prep.pos[u]
             cols = slice(k * lk.N_SRS, (k + 1) * lk.N_SRS)
-            rows = slice(pu * lk.N_SRS, (pu + 1) * lk.N_SRS)
-            m = wsc[rows, cols] * np.sqrt(lk.N_SRS)
-            m = 0.5 * (m + m.conj().T)
-            ev, v = np.linalg.eigh(m)
-            phi = v[:, np.argsort(ev)[::-1][:r]]
-            a = x[:, cols]
-            g = (a @ phi).conj().T
-            gh = phi.conj().T @ wsc[:, cols].conj().T  # (r, 8 n_conn): G Ĥα
-            keep = np.ones(n_conn * lk.N_SRS, dtype=bool)
-            keep[rows] = False
-            rt = g @ g.conj().T + gh[:, keep] @ gh[:, keep].conj().T
-            try:
-                out[u] = np.linalg.solve(np.linalg.cholesky(rt), g)
-            except np.linalg.LinAlgError:
-                # A degenerate solve (every entry of A_i below one LSB, or rank < r): the projection
-                # receives nothing, and the UE scores the SINR floor (ltbf.SINR_FLOOR), not an error.
-                out[u] = np.zeros_like(g)
+            out[int(u)] = project_ue(wsc[:, cols], x[:, cols], prep.pos[int(u)], r)
     return out
+
+
+def project_ue(wsc: np.ndarray, x: np.ndarray, pu: int, r: int) -> np.ndarray:
+    """One UE's CPU job: *wsc* its columns of ``2^(s+m) W`` (``8·n_conn x 8``, rows every connected
+    UE's), *x* its columns of the stored ``X`` (``N_rx x 8``), *pu* its row block; ``G'ᵢ`` (``r x
+    N_rx``).  Shared by :func:`fixed_projection` and the system's host (``hw/system.py``)."""
+    n_conn = wsc.shape[0] // lk.N_SRS
+    rows = slice(pu * lk.N_SRS, (pu + 1) * lk.N_SRS)
+    m = wsc[rows] * np.sqrt(lk.N_SRS)
+    m = 0.5 * (m + m.conj().T)
+    ev, v = np.linalg.eigh(m)
+    phi = v[:, np.argsort(ev)[::-1][:r]]
+    g = (x @ phi).conj().T
+    gh = phi.conj().T @ wsc.conj().T  # (r, 8 n_conn): G Ĥα
+    keep = np.ones(n_conn * lk.N_SRS, dtype=bool)
+    keep[rows] = False
+    rt = g @ g.conj().T + gh[:, keep] @ gh[:, keep].conj().T
+    try:
+        return np.linalg.solve(np.linalg.cholesky(rt), g)
+    except np.linalg.LinAlgError:
+        # A degenerate solve (every entry of A_i below one LSB, or rank < r): the projection
+        # receives nothing, and the UE scores the SINR floor (ltbf.SINR_FLOOR), not an error.
+        return np.zeros_like(g)
 
 
 def _cmul_conj(wr, wi, fw, zr, zi, fz):
