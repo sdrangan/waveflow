@@ -13,7 +13,11 @@ device does (a symbol whose first word finds fewer than ``n_chunks`` free slots 
 ``n`` words ``n + 2`` cycles, a write about ``17 + 1.03 n``, a queue write ``n + 3`` once there is
 room, a status read 3); each engine job's service time and each chunk's arrival after its symbol's
 start are its methods.  :func:`oracle` builds a :class:`Timing` that replays a pysim run's own job
-times and A53 charges, which checks this simulator's event logic alone.
+times and A53 charges, which checks this simulator's event logic alone: at AC9 (Shared Mem
+calibrated, the O-RU at 1 ms a symbol) its end is pysim's to 0.00% and its long-term update's to
+0.01%.  A chunk's arrival as a fixed offset from its symbol's start holds only while ingest keeps up:
+at 500 µs the Ingest DMA's writes queue behind the ``Z`` jobs' reads on the serialized Shared Mem
+port and arrivals fall symbols behind -- step 5.5 models the port itself.
 
     python -m examples.ltbf_dse.hw.jobsim          # AC9 against its pysim run (the oracle)
 """
