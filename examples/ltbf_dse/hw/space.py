@@ -21,16 +21,19 @@ Three sets of parts, fixed here before any of them is built, hashed into the pla
 
 * **fit** -- per kind, one knob at a time around a centre (N_rx 256, ``Mmax`` 16, ``c`` 8, a 4 x 8
   array, ``W`` 16, 64-bit words, 4 lanes, ``J`` 9), plus each array's centre and corners;
-* **held-out** -- seeded draws from the valid parts, none in the fit set: 4 ``sys``, 4 ``vec``,
-  2 ``ing`` (AC11: >= 8);
+* **held-out** -- seeded draws from the valid 64-bit parts, none in the fit set: 4 ``sys``, 4 ``vec``,
+  2 ``ing`` (AC11: >= 8, each with measured cycles);
 * **brute force** -- every part of AC13's sub-grid of designs: per array, at ``Mmax`` 16, ``c`` 8
   and 64-bit words (one crossbar width a system), the systolic array and width, the vector unit's
   lanes and width, the DMA.
 
 :data:`DECISION_RULE` is AC13's rule, registered with them.  How each part is measured (step 5.4):
-a fit or held-out part by csynth (its resources) and by its device gate's XSI run (its per-job
-cycles: ``hw/devsys.py``'s job set at its parameters); a brute-force part by csynth (its resources
-and latency report, the cycles corrected by the fit parts' XSI anchors).
+every part by csynth (its resources and latency report); a 64-bit fit or held-out part also by its
+device gate's XSI run (its per-job cycles: ``hw/devsys.py``'s job set at its parameters).  The
+device gates are 64-bit (their host, crossbar and scenario), and a system has one crossbar width
+while the vector wrapper is 64-bit only, so 128-bit parts give resources alone and a 128-bit
+system is a modeled what-if; a brute-force part's cycles are its latency report corrected by the
+fit parts' XSI anchors.
 
     python -m examples.ltbf_dse.hw.space     # write the sets and the rule (local) and print hashes
 """
@@ -158,14 +161,39 @@ def all_valid() -> list[Part]:
     return [p for p in out if p.valid()]
 
 
+#: Each kind's main knob, which the held-out draw spreads.
+MAIN_KNOB = {"sys": lambda p: (p.R, p.C), "vec": lambda p: (p.L, p.W), "ing": lambda p: p.J}
+
+
+def _stratified(order: list[Part], count: int) -> list[Part]:
+    """*count* parts from *order*: first those that bring both a new array and a new main knob,
+    then a new main knob, then any, each pass in *order*."""
+    got: list[Part] = []
+
+    def new_main(p: Part) -> bool:
+        return all(MAIN_KNOB[p.kind](p) != MAIN_KNOB[g.kind](g) for g in got)
+
+    def new_array(p: Part) -> bool:
+        return all(p.n_rx != g.n_rx for g in got)
+
+    for rank in range(3):
+        for p in order:
+            ok = (new_main(p) and new_array(p), new_main(p), True)[rank]
+            if len(got) < count and p not in got and ok:
+                got.append(p)
+    return got
+
+
 def heldout_set(seed: int = 529) -> list[Part]:
-    """Seeded draws from the valid parts, none in the fit set: 4 ``sys``, 4 ``vec``, 2 ``ing``."""
+    """Seeded draws from the valid 64-bit parts, none in the fit set: 4 ``sys``, 4 ``vec``,
+    2 ``ing``, stratified by the kind's main knob (the systolic array, the lanes and width, ``J``):
+    :func:`_stratified` over the seeded order."""
     fit = set(fit_set())
     rng = np.random.default_rng(seed)
     out: list[Part] = []
     for kind, count in (("sys", 4), ("vec", 4), ("ing", 2)):
-        pool = [p for p in all_valid() if p.kind == kind and p not in fit]
-        out += [pool[i] for i in sorted(rng.permutation(len(pool))[:count])]
+        pool = [p for p in all_valid() if p.kind == kind and p.word_bits == 64 and p not in fit]
+        out += _stratified([pool[i] for i in rng.permutation(len(pool))], count)
     return sorted(out)
 
 
