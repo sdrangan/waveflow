@@ -264,3 +264,81 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# -- the equalizer of the spec's gate E: weights from the estimator, the Z-tile layout -------------
+
+#: Input queues W0, Z0, W1, Z1 (each U_pad x c: streams x resource elements); output X.
+QW0, QZ0, QW1, QZ1 = 0, 1, 2, 3
+
+
+def apply_config(
+    u_pad: int, c: int, L: int, r: int, word_bits: int = 128
+) -> VecUnitConfig:
+    G = -(-c // L)
+    fz, fw = reg(16, 4), reg(16, 3)
+    return VecUnitConfig(
+        group_formats=(fw, fz, FXH, fw, fz, FXH, fw, fz) * G,
+        scalar_formats=(FONE,),
+        in_queue_formats=(fw, fz, fw, fz)[: 2 * r],
+        out_queue_formats=(FXH,),
+        L=L,
+        VLMAX=u_pad,
+        Kmax=u_pad,
+        Nmax=c,
+        NB=4,
+        rs_max=0,
+        word_bits=word_bits,
+    )
+
+
+def apply_programs(
+    cfg: VecUnitConfig, u_pad: int, c: int, r: int, tiles: int
+) -> Programs:
+    """``x = sum_r conj(w_r) z_r`` on *tiles* tiles of ``u_pad`` streams x ``c`` REs: lanes are REs,
+    elements are UEs (a pass writes a group once and one group a bank)."""
+    G = cfg.groups_per_row(c)
+    ex = [I.setvl(u_pad)]
+    for _ in range(tiles):
+        for g in range(G):
+            b = 8 * g
+            W0, Z0, Y, W1, Z1 = b, b + 1, b + 2, b + 3, b + 4
+            ex += [I.vlse(W0, QW0, g, G).c, I.vlse(Z0, QZ0, g, G).c]
+            ex += [I.vmul_vv(Y, W0, Z0, conj=True)]
+            if r == 2:
+                ex += [I.vlse(W1, QW1, g, G).c, I.vlse(Z1, QZ1, g, G).c]
+                ex += [I.vmacc_vv(Y, W1, Z1, conj=True)]
+            ex += [I.vsse(OXH, Y, g, G)]
+        ins = (QW0, QZ0, QW1, QZ1)[: 2 * r]
+        ex += [I.qpop(q) for q in ins] + [I.qpush(OXH)]
+    load = [
+        I.ld(q, PORT, u_pad, c)
+        for _ in range(tiles)
+        for q in (QW0, QZ0, QW1, QZ1)[: 2 * r]
+    ]
+    store = [I.st(PORT, OXH, t, u_pad, c) for t in range(tiles)]
+    return Programs(load=load, execute=ex, store=store)
+
+
+def check_apply(
+    u_pad: int = 16, c: int = 8, L: int = 8, r: int = 2, seed: int = 7
+) -> dict:
+    rng = np.random.default_rng(seed)
+    z = (
+        rng.standard_normal((r, u_pad, c)) + 1j * rng.standard_normal((r, u_pad, c))
+    ) / 3
+    w = (
+        rng.standard_normal((r, u_pad, c)) + 1j * rng.standard_normal((r, u_pad, c))
+    ) / 3
+    cfg = apply_config(u_pad, c, L, r)
+    ins = []
+    for k in range(r):
+        ins += [_q(w[k], reg(16, 3)), _q(z[k], reg(16, 4))]
+    res = run_job(cfg, *apply_programs(cfg, u_pad, c, r, 1), {PORT: ins})
+    want = np.sum(np.conj(w) * z, axis=0)
+    _r, re, im = res.outputs[PORT][0]
+    g = _deq(re, im, FXH)
+    return {
+        "status": int(res.status),
+        "rel_err": float(np.linalg.norm(g - want) / np.linalg.norm(want)),
+    }

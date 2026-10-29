@@ -1,293 +1,331 @@
 # Spec: LTBF on the shared-memory accelerator (`plans/ltbf_dse/ltbf_dse.md`, step 1.1)
 
-**Status:** Draft for the 👁 review of step 1.4. Frozen when the user approves; its SHA-256 then goes
-into the plan's §15, and every later step builds against it. A choice marked **[gate]** is a
-recommendation the review must confirm or change.
-**Inputs:** the plan (§1–§2), the LTBF paper and its code, and the spikes of step 1.2 (the plan's §15
-and `plans/ltbf_dse/ltbf_dse_lessons.md`; scripts in `examples/ltbf_dse/spikes/`, results local in
-`examples/ltbf_dse/data/spikes/`).
+**Status:** v2, draft for the 👁 review of step 1.4 (v1 reviewed 2026-10-28 by a read-only agent:
+3 blockers, 6 major, 12 minor findings, all acted on here; §7 lists them). Frozen when the user
+approves; its SHA-256 then goes into the plan's §15. A choice marked **[gate X]** is a recommendation
+the review must confirm or change (§6).
+**Inputs:** the plan (§1–§2, §14), the LTBF paper and its code, the spikes of step 1.2 (scripts in
+`examples/ltbf_dse/spikes/`, results local in `examples/ltbf_dse/data/spikes/`; the plan's §15; the
+lessons file).
 
 ## 0. What the spikes fixed
 
 | Spike | Result that shapes this spec |
 |---|---|
-| a, rendering | The factored path (`A @ D`, rfenv's own interpolator) equals `reference_apply` to 4e-16 and renders a 32x32 three-sector slot in 0.38 s: signals are rendered on the fly. 2.96% of UE-sector links spread beyond the CP after timing advance; none arrives early (one site). |
-| b, systolic | `SystolicEngineMem` builds with Vitis HLS 2024.1 only with `config_compile -pipeline_style flp` (2024.1+flp). At `Pmax` 128 (K up to 1024): 144 DSP, 47,380 LUT, 53,572 FF, 44 BRAM18, 3.35 ns. Operand width ≤ 26 bits at K = 1024. Formats are fixed per build. Only `MUL` (`A·B`) and `MUL_AH` (`Aᴴ·B`). |
-| c, vector unit | A pass writes a group once and reads/writes one group a bank; broadcast copies lane 0 to all lanes; `.vs` scalars are real; divides only on scalar lanes (`wf.sdivz`). A column's dot product needs all its rows in one block (`VLMAX ≥ N_rx`), and `Kmax·⌈Nmax/L⌉ ≤ 4096`. The per-iteration CG step works (8,679 cycles at 1024 × 8, extrapolated) and moves `7·k·n` elements. |
-| d, memory | 7.56 MB on chip. The factored long-term set fits at every size (2.95 MB at 1024); explicit at 1024 needs 6.95 MB. Full-band ingest needs 5.7 / 22.7 / 91 128-bit ports at 64 / 256 / 1024 antennas. |
-| e, host | A `SwHost`'s threads charge a `Processor`; padding each call to host cycles matches the C++ twin's `compute(n)` exactly with one scheduler thread. The C++-host XSI flow works on this machine after the `find_vitis_include_dir` fix. |
+| a, rendering | The factored path (`A @ D`, rfenv's interpolator) equals `reference_apply` to 4e-16, renders a 32x32 three-sector slot in 0.38 s: rendering is on the fly. On a real slot, links within the CP render to within -54.7 dB of the ideal; 2.96% of links spread beyond the CP (ISI kept). |
+| b, systolic | `SystolicEngineMem` builds with Vitis HLS 2024.1 only with `config_compile -pipeline_style flp` (2024.1+flp); at `Pmax` 128: 144 DSP, 47,380 LUT, 3.35 ns. Formats fixed per build; an operand is at most the memory lane (16 bits, or 32: `mem_format`); accumulator W ≤ 26 at K = 1024. Only `MUL` (`A·B`) and `MUL_AH` (`Aᴴ·B`). |
+| c, vector unit | Pass rules (a group written once a pass, one group a bank; broadcast is lane 0 to all lanes; `.vs` scalars real; divides on scalar lanes only). A column's dot product needs all its rows in one block (`VLMAX ≥ N_rx`; `Kmax·⌈Nmax/L⌉ ≤ 4096`). The per-iteration CG step: 8,679 cycles at 1024 x 8 (extrapolated), memory-bound (moves `7kn` elements). The gate-E equalizer (§3): legal, bit-exact on the interpreter, 0.42–1.55 UE·RE a cycle (`c`, `L`, `r`). |
+| d, memory | Usable on chip about 6.7 MiB (1,080 BRAM36 x 32 Kb + 80 URAM x 256 Kb of data, not the 7.56 MB raw). Full-band ingest needs 5.7 / 22.7 / 91 128-bit ports at 64 / 256 / 1024 antennas. The engines' own memories come out of the same BRAM (the vector unit's CG queues alone about 1.8 MB at N_rx 1024, `c` 32). |
+| e, host | A `SwHost`'s threads charge a `Processor`; padded to host cycles, the C++ twin's `compute(n)` matches exactly with one scheduler thread. The C++-host XSI flow works here after the `find_vitis_include_dir` fix. |
+| f, SRS (after review) | With 198 comb subcarriers the 8 cyclic shifts fall on fractional taps: ports leak -10 to -20 dB even on a flat channel. With **192** a whole-tap path separates exactly (-277 dB); a path a quarter / half tap off leaks -22.8 / -20.0 dB into other ports with a 4-tap lead and 4-tap taper (-10.4 dB with a plain window). |
 
-## 1. Signals (rendered by `examples/ltbf_dse/signals.py`, front end `frontend.py`)
+## 1. Signals (`signals.py`, `frontend.py`; partly built in step 2.1)
 
-**Numerology** (the paper's 100 MHz at 120 kHz): FFT 1024 at 122.88 Msps, CP 72 samples (0.586 µs;
-the longer first CP of each 0.5 ms is not modeled), 792 active subcarriers (66 RBs) centred on DC,
-a slot of 14 symbols (125 µs). Two snapshots per drop, `T_LT` = 10 ms apart: the drop's `a0, tau0,
-valid0, k_rx0` (snapshot 0) and `a1, …` (snapshot 1).
+**Numerology:** FFT 1024 at 122.88 Msps, CP 72 (0.586 µs; the longer first CP of each 0.5 ms not
+modeled), 792 active subcarriers (66 RBs) centred on DC, 14 symbols a slot (125 µs). Two snapshots a
+drop, `T_LT` = 10 ms apart (the drop's `*0` and `*1` arrays).
 
-**Channel.** Per sector, the synthetic array of `ltbf_link.channel` (one delay per (UE, path) shared by
-the sector's antennas, the array phase in the amplitude), each UE timing-advanced to its serving
-sector's earliest path, everything else as traced (delay spread beyond the CP stays as real ISI).
-Doppler inside a snapshot is zero. Power control is `ltbf_link.power_control` (serving sector,
-outage, the scale that puts a UE at its SINR target), with the noise normalized to **unit variance
-per resource element after a unitary FFT**: complex white Gaussian noise drawn by sample index
-(`waveflow.rfenv.noise.ThermalNoise`, seeded per drop, snapshot and sector).
+**Channel:** a sector's synthetic array (`ltbf_link.channel`), each UE scaled by its power control and
+timing-advanced to its serving sector's earliest path, everything else as traced (ISI beyond the CP
+kept), Doppler zero inside a snapshot. Noise: `waveflow.rfenv.noise.ThermalNoise`, unit power a
+sample, so unit variance a resource element after the unitary FFT, seeded by (drop, snapshot, sector).
 
-**Snapshot 0: one SRS symbol** carrying all 30 UEs (every sector hears every UE):
-- comb 4 (`K_TC` = 4), the four comb offsets used, **8 equally spaced cyclic shifts per comb**
-  (`α_p = 2π p / 8`), 30 UEs on combs 0–3 as 8, 8, 7, 7. NR's comb 4 allows 12 shifts; 8 equally
-  spaced ones are a stated simplification so every port's delay window is the same.
-- the base sequence: Zadoff–Chu of prime length 197 extended cyclically to the 198 comb subcarriers;
-- each UE's power spread over its 198 comb REs (4x the per-RE energy of a data symbol).
+**Snapshot 0, one SRS symbol** for all 30 UEs (every sector hears every UE):
+- **64 RBs sounded** (`m_SRS` = 64, a valid NR bandwidth), centred: **192 comb subcarriers** a comb;
+- comb 4 (`K_TC` = 4), the four comb offsets, **8 cyclic shifts a comb** (`α_p = 2πp/8`, exactly 24
+  delay taps apart at 192); 30 UEs on combs 0–3 as 8, 8, 7, 7, cyclic shift `p` = the UE's rank on its
+  comb **[gate P]**;
+- base sequence: Zadoff–Chu of length 191 extended cyclically to 192;
+- each UE's power over its 192 comb REs: per-RE amplitude 2 (4x the energy of a data RE).
 
-**Snapshot 1: one PUSCH slot.** DMRS on symbols 2 and 3 (NR type-2, double symbol: 3 CDM groups of
-2 adjacent subcarriers in 6, FD-OCC of length 2 and TD-OCC of length 2, 12 ports); the 10 UEs of a
-sector on ports 0–9, the same ports reused by the other sectors (pilot contamination, as deployed).
-Data: uncoded QPSK on all 792 subcarriers of the other 12 symbols (9,504 REs a UE a slot). A UE
-transmits at the same per-RE energy on DMRS and data.
+**Snapshot 1, one PUSCH slot:** symbols 0, 1, 4–13 data (uncoded QPSK, all 792 subcarriers: 9,504
+data REs a UE); symbols 2, 3 DMRS (NR type-2, double symbol: 3 CDM groups of 2 adjacent subcarriers
+in 6, FD-OCC 2 x TD-OCC 2, 12 ports; a sector's 10 UEs on ports 0–9, reused by every sector). No data
+on the DMRS symbols, so the DMRS is boosted **4.77 dB** as NR does with 3 CDM groups **[gate D]**.
 
-**Front end** (stands for the O-RU, O-RAN 7.2x): per antenna, CP removal and a unitary 1024-point FFT,
-the 792 active bins kept. It produces the grid in **tiles** (§5.4); in the system simulation the
-Ingest DMA writes each tile into Shared Mem.
+**Front end** (the O-RU, O-RAN 7.2x): per antenna, CP removal and the unitary FFT, 792 bins kept;
+it delivers each symbol **antenna by antenna** (as 7.2x does) to the Ingest DMA (§5.4).
 
-## 2. Channel estimation in Python, with op counts (`chest.py`, `opcount.py`)
+## 2. Channel estimation in Python, with op counts (`chest.py` on `opcount.py`)
 
-`opcount.py` is a thin layer over numpy that every estimator calls for its arithmetic. Each call logs
-`(stage, op, shapes, cmacs, divides, sqrts, bytes_in, bytes_out)`; a run's log sums to the stage's
-complexity, and the spec's formulas below are what a test checks it against (plan AC4 c). Every
-operation is written as a product of matrices of known shape, so it can later be priced on the
-systolic engine's models.
+Every operation goes through `opcount.OpLog` (built: logs stage, op, shapes, complex MACs, divides,
+square roots and bytes; 2 tests). Closed-form counts below are what AC4 (c) checks.
 
-**SRS → `Ĥⱼ` (per sector, per comb).** With `Y_c` the `N_rx × 198` received comb, `r` the base
-sequence and `P` the `198 × (8·n_ports)` matrix of each port's windowed delay-domain filter
-(IDFT, keep the port's `198/8`-tap window, DFT, then the 8 snapshot columns):
+**SRS → `Ĥⱼ`, per sector and comb.** `Y_c` (`N_rx × 192`), `r` the base sequence, and `P`
+(`192 × 8·n_ports`) each port's linear filter: de-rotate, IDFT, keep its window (24 taps, a 4-tap
+lead, a 4-tap raised-cosine taper each side), DFT, remove its phase ramp, divide the comb's amplitude
+2, and take the 8 snapshot subcarriers (every 24th comb subcarrier):
 
-    E_c = Y_c ⊙ conj(r)ᵀ                        N_rx·198 cmacs
-    Ĥ_c = E_c · P                                N_rx·198·8·n_ports cmacs (one product a comb)
+    E_c = Y_c ⊙ conj(r)ᵀ          N_rx·192 cmacs
+    Ĥ_c = E_c · P                  N_rx·192·8·n_ports cmacs        (a product a comb)
 
-`Ĥⱼ` (`N_rx × 8`) is port j's 8 columns: **`N_SRS` = 8 snapshots** at 8 comb subcarriers equally
-spaced over the band. `Ĥα = [Ĥ₁, …, Ĥ₃₀]/√N_SRS` over the connected UEs; the estimator writes it into
-Shared Mem in the layouts §5.3 lists (copies, logged as bytes). **Processing gain** for a flat channel:
-the comb concentrates 4x the energy per RE and the window keeps 1/8 of the delay taps, so
-`G_SRS = 10·log10(4·8) = 15.05 dB` below the data-domain noise floor (the paper used 10 dB; its code
-measured ≥ 10.8 dB from the coherence bandwidth). AC4 (a) checks this number on a flat synthetic
-channel; on the drops the achieved `G_SRS` is reported (multipath beyond a port's 260 ns window leaks
-into the next port).
+`Ĥⱼ` is port j's 8 columns, `N_SRS` = 8 snapshots; `Ĥα = [Ĥ₁, …, Ĥ₃₀]/√N_SRS` over the connected
+UEs, written into Shared Mem in the layouts of §5.3 (copies, counted as bytes). **`G_SRS` = 16.14 dB**
+for this window (4 / its noise gain 0.0973; spike f), against the paper's 10 dB nominal. AC4 (a):
+on a synthetic flat channel with whole-tap delays, cross-port leakage ≤ -30 dB (spike f: -277 dB) and
+the error variance within ±1 dB of 16.14 dB; on the drops, the achieved `G_SRS` and leakage are
+reported (fractional delays leak about -20 dB a port).
 
-**DMRS → the effective channel `h̃'ᵢ[n]` (per sector, after the projection).** On the DMRS REs of the
-whitened projection `z'ᵢ = G'ᵢ y` (§3): despread UE i's OCC over each 2-subcarrier × 2-symbol block of
-its CDM group (one estimate per 6 subcarriers), interpolate linearly across frequency to all 792
-subcarriers. `h̃'ᵢ[n]` is `r × 1`, constant over the slot. Then the MMSE weight (§3) **[gate E]**:
+**DMRS → `wᵢ[n]`, per sector, after the projection.** On UE i's DMRS REs of the whitened `z'ᵢ`
+(`r × …`, §3): despread its OCC over each 2-subcarrier x 2-symbol block of its CDM group (one
+estimate per 6 subcarriers, 132 a UE: `4r` cmacs each); estimate the UE's mean delay from the phase
+slope between neighbouring estimates and remove it (`r` cmacs a block); interpolate linearly across
+frequency (`2r` cmacs a subcarrier) with the nearest estimate at the band edges; restore the delay
+ramp (`r` cmacs a subcarrier). Then **[gate E]** the MMSE weight
 
-    wᵢ[n] = h̃'ᵢ[n] / (1 + ‖h̃'ᵢ[n]‖²)              r cmacs + 1 divide a (UE, subcarrier)
+    wᵢ[n] = h̃'ᵢ[n] / (1 + ‖h̃'ᵢ[n]‖²)        r cmacs + 1 divide a (UE, subcarrier)
 
-written per resource element in the layout the vector unit's equalizer reads (§5.3).
+stored per resource element of one symbol's chunk in the `Z` layout (§5.3), reused by every data
+symbol (constant over the slot).
 
-In the system simulation each estimator runs as a **zero-time** stage the host calls when its inputs
-are in Shared Mem; its outputs are written there. In the RTL gate the C++ host replays them from a
-file the pysim run writes.
+**Placement in the system simulation:** each estimator is a **zero-time** compute stage the host
+runs when its inputs are in Shared Mem; its inputs are read and its outputs written **over the host's
+bus master** (timed, the same in both realizations). In the RTL gate the C++ host replays its outputs
+from the scenario file the pysim run writes.
 
 ## 3. The algorithm
 
-**Long term, per sector, once per `T_LT`** (paper §III, code `compute_lt_bf`, regime 1 by default):
+**Long term, per sector, once per `T_LT`** (regime 1; the paper's code `compute_lt_bf`):
 
-1. `Q̂ = I + ĤαĤαᴴ`. **Factored** `S = D + Ĥα(ĤαᴴD)`; **explicit** `K = ĤαĤαᴴ` formed once, `S = D + K D`.
-2. Multi-right-hand-side CG on `Q̂Aᵢ = Ĥᵢ` from `X₀ = 0`, `R₀ = D₀ = Ĥᵢ`, `t` iterations, each column
-   its own `ω, ν` (`ω = ‖r‖²/(dᴴs)`, `X += Dω`, `R -= Sω`, `ν = ‖r'‖²/‖r‖²`, `D = R + Dν`); a zero
-   divisor gives 0 (`wf.sdivz`), the fixed-point form of the code's stop rule. Regime 2 (`Q̂X = I`, then
-   `Aᵢ = XĤᵢ`) is a modeled DSE option.
-3. `Mᵢ = sym(ĤᵢᴴAᵢ)` (8 × 8), Jacobi on the A53, `Φᵢ` its top-r eigenvectors.
-4. **Whitening folded into the projection** **[gate W]**: with `Gᵢ = (AᵢΦᵢ)ᴴ`,
-   `R̃ᵢ = GᵢGᵢᴴ + Σ_{j≠i} (GᵢĤα,ⱼ)(GᵢĤα,ⱼ)ᴴ = Φᵢᴴ [AᵢᴴAᵢ + Σ_{j≠i}(AᵢᴴĤα,ⱼ)(AᵢᴴĤα,ⱼ)ᴴ] Φᵢ` (r × r),
-   `Φ'ᵢ = Φᵢ R̃ᵢ^{-H/2}`, and the projection actually applied is `G'ᵢ = Φ'ᵢᴴAᵢᴴ = R̃ᵢ^{-1/2}Gᵢ`.
-   Its projected interference plus noise is white, so the equalizer below needs one real divide a
-   (UE, subcarrier) and no r × r inverse per resource element, for r = 1 and r = 2 alike.
+1. `Q̂ = I + ĤαĤαᴴ`; **factored** `S = D + Ĥα(ĤαᴴD)`, **explicit** `K = ĤαĤαᴴ` once and `S = D + KD`.
+   The SRS noise inflates `Q̂` by about `(U/G_SRS)·I` (0.73 at U = 30, 16.14 dB); kept as the paper
+   does **[gate Q]**.
+2. Multi-right-hand-side CG on `Q̂Aᵢ = Ĥᵢ`, `c/8` UEs a job, from `X₀ = 0`, `R₀ = D₀ = Ĥ_job`, `t`
+   iterations, per column `ω = ‖r‖²/(dᴴs)`, `X += Dω`, `R -= Sω`, `ν = ‖r'‖²/‖r‖²`, `D = R + Dν`; a zero
+   divisor gives 0 (`wf.sdivz`), the fixed-point form of the code's stop rule. Regime 2 modeled.
+3. **One product for the rest:** `W = ĤαᴴX` (`8U × c`). Then `Mᵢ = √N_SRS · W[UE i's rows, UE i's
+   columns]` (8 x 8, symmetrized), and `AᵢᴴĤα,ⱼ = W[j's rows, i's columns]ᴴ`.
+4. On the A53, per UE: Jacobi on `Mᵢ` → `Φᵢ` (top r); `Gᵢᴴ = AᵢΦᵢ` (`8r·N_rx` cmacs, reading `Aᵢ`);
+   `R̃ᵢ = GᵢGᵢᴴ + Σ_{j≠i} (ΦᵢᴴW[j,i]ᴴ)(ΦᵢᴴW[j,i]ᴴ)ᴴ` (`r²·N_rx + …` cmacs); **whitening folded into
+   the projection [gate W]**: the Cholesky factor `R̃ᵢ = LᵢLᵢᴴ`, `G'ᵢ = Lᵢ⁻¹Gᵢ` (`r²·N_rx` cmacs).
+   `G'ᵢ`'s interference plus noise is white.
 
-**Real time, every slot:** `z'ᵢ = G'ᵢ y` for every RE; `h̃'ᵢ[n]` from the DMRS REs of `z'ᵢ` (§2); and
+**Real time, every slot:** `z'ᵢ = G'ᵢy` for every RE; the DMRS estimate and `wᵢ[n]` (§2); and
 
-    x̂ᵢ[n,k] = wᵢ[n]ᴴ z'ᵢ[n,k],   wᵢ[n] = h̃'ᵢ[n] / (1 + ‖h̃'ᵢ[n]‖²)
+    x̂ᵢ[n,k] = Σ_r conj(wᵢ,r[n]) z'ᵢ,r[n,k]
 
-the MMSE estimate (`z' = h̃'x + n'`, `E[n'n'ᴴ] = I`), whose SINR is `‖h̃'ᵢ‖² = h̃ᵢᴴR̃ᵢ⁻¹h̃ᵢ`, the
+the MMSE estimate for `z' = h̃'x + n'`, `E[n'n'ᴴ] = I`; its SINR `‖h̃'ᵢ‖² = h̃ᵢᴴR̃ᵢ⁻¹h̃ᵢ` is the
 paper's eq. `sinr_proj`.
 
-**Measurement (Python):** per UE, the measured post-equalization SINR `1/mean|x̂ - x|² - 1` over its
-data REs (unbiased by the MMSE's known bias), EVM, uncoded QPSK BER; and the paper's genie SINR
-(`compute_sinr_lt`: true per-frequency `Q`, frequency mean of the linear `γ`). The DSE's accuracy metric
-is the measured SINR's loss against the same chain in float64 with a direct solve (plan §2).
+**Measurement (Python):** per UE over its data REs, (a) `1/mean|x̂ - x|² - 1` -- the MMSE SINR, of the
+biased estimate as it comes out (not debiased first); (b) the scale-invariant `|ρ|²/(1 - |ρ|²)`, ρ the
+normalized correlation of `x̂` and `x`; EVM; uncoded QPSK BER; and the paper's genie SINR
+(`compute_sinr_lt`). The DSE's accuracy metric is (a)'s loss against the same chain in float64 with a
+direct solve; (b) is reported beside it (it does not count a gain error as loss).
 
 ## 4. Fixed-point formats
 
-- Every buffer in Shared Mem is a memory element of 16 + 16 bits (`lane_bits` 16) holding the stored
-  integer of its format; a format is `(W, I)` with `W ≤ 16` in memory (wider registers inside the
-  engines). The DSE's word width W (10–24) sets the engines' internal formats; memory stays 16-bit
-  lanes, so W > 16 is an internal-precision axis only. **[gate F]**
-- **Systolic:** one format triple `(a, b, c)` per build serves every job (long-term and real-time
-  alike). W ≤ 26 at K = 1024 (`acc_format`); the c format's integer bits are set by the job with the
-  largest range (`ĤαᴴD` or `Z`), the others lose those bits of precision. The accuracy DSE shows the
-  cost; separate long-term and real-time builds are a modeled nice-to-have.
-- **Vector unit:** a format per register group, scalar and queue (the CG step's centre at 12/16 bits as
-  spike c; the equalizer's at 16).
-- **Ranges** are profiled on held-out drops (as `paper/cg_dse`'s `ltbf_fixed` profile) per (target,
-  array), with guard bits; a per-sector power-of-two scale on `Ĥα` (logged by the estimator) keeps
-  `|Ĥα| < 1`.
-- **CPU** (A53): float64 in C (Jacobi, `R̃`, `R̃^{-1/2}`, `Φ'`, `G'`); its output written to Shared Mem
-  quantized to the systolic `a` format.
+**Memory elements:** `lane_bits` 16 (default) or 32 **[gate F]** -- a DSE axis: 32 doubles every
+buffer and every word moved, and is what operands wider than 16 bits need (`mem_format` refuses an
+operand wider than the lane). A value is stored as the integer of its producer's format; a consumer
+reads it in its own format, so the two must have **the same integer bits** (else the value is scaled
+by `2^ΔI`) and the consumer at least the producer's width.
+
+**One systolic triple `(a, b, c)` per build.** The hand-offs force:
+
+| Buffer | Producer (format) | Consumer (format) | Constraint |
+|---|---|---|---|
+| `Ĥα` copies | estimator | systolic A (`a`) | written in `a` |
+| `D`, `X` | vector unit queue `D`, `X` | systolic B (`b`) | `I_D = I_X = I_b` |
+| `T = ĤαᴴD` | systolic C (`c`) | systolic B (`b`) | `I_c = I_b` |
+| `U` | systolic C (`c`) | vector unit queue `U` | `I_U = I_c` |
+| `K` (explicit) | systolic C (`c`) | systolic A (`a`) | `I_a = I_c` |
+| `W` | systolic C (`c`) | CPU (float) | none |
+| `G'_stackᴴ` | CPU | systolic A (`a`) | written in `a` |
+| `Y` | Ingest DMA (`y`) | systolic B (`b`) | `I_y = I_b` |
+| `Z` | systolic C (`c`) | vector unit queue `Z` | `I_Z = I_c` |
+| `w` | estimator | vector unit queue `w` | written in that format |
+
+So a factored build has one integer-bit count for `b` and `c` (and `a` too, explicit), and one
+`(I, W)` serves the long-term and the real-time jobs; the accuracy DSE shows what that costs (two
+builds are a modeled nice-to-have).
+
+**Per-sector scale:** the estimator stores `Ĥα' = 2^{-s}Ĥα` (`s` chosen so `|Ĥα'| < 1`, logged).
+Then `S = D + Ĥα(ĤαᴴD) = 2^{2s}(2^{-2s}D + U')`: CG is solved in the scaled system, the vector unit
+forms `S' = 2^{-2s}D + U'` with its result shift (`rs_max ≥ 2·s_max`; `s` a field of the vector
+unit's Ctrl), and `Aᵢ` comes out scaled by a known `2^{s}` the CPU removes.
+
+**Ranges** profiled on held-out drops per (target, array) with guard bits (as `paper/cg_dse`'s
+`ltbf_fixed`); **CPU** float64 in C, its outputs quantized to `a`.
 
 ## 5. The system
 
-### 5.1 Diagram (the plan's §1.2, with what the spikes added)
+### 5.1 Diagram
 
 ```
-                IRQ (data)
-  ┌──────────────────┐ ───────► ┌───────────────────────────┐  ┌───────────────────┐  ┌────────────────────────┐
-  │ Resp FIFO        │          │ Host: SwHost + Processor  │  │ Ingest DMA        │  │ Shared Mem             │
-  │ (RespHub:        │          │ A53 model, 1-4 cores:     │  │ tiles from the    │  │ MemoryMod, on-chip     │
-  │  merge of 3 done │          │ scheduler, Jacobi, R~,    │  │ front end into a  │  │ BRAM/URAM; the DDR     │
-  │  streams; a      │          │ Phi', G'; Python stages   │  │ ring of buffers   │  │ model prices the sets  │
-  │  QueueOut view)  │          │ (zero time)               │  │ (MemWStream)      │  │ that do not fit        │
-  └────▲───▲───▲─────┘          └─────────────┬─────────────┘  └─────────┬─────────┘  └───────────▲────────────┘
-       │   │   │                              │ M0                       │ M1                      │ S
-  ═════╪═══╪═══╪══════════════════════════════╪══════════ AXI-MM crossbar ═══════════════════════════╪══════
-       │   │   │   S │ qjob  S │ ctrl   M2 ▲ rd  M3 ▲ wr      S │ qjob  S │ ctrl  M4 ▲ prog  M5 ▲ data  M6 ▲ wr
-       │   │   │ ┌───▼──┐ ┌────▼──┐      │       │         ┌──▼───┐ ┌──▼────┐     │         │         │
-       │   │   │ │JobFIFO│ │ Ctrl  │      │       │         │JobFIFO│ │ Ctrl  │     │         │         │
-       │   │   │ └───┬──┘ └────┬──┘      │       │         └──┬───┘ └──┬────┘     │         │         │
-       │   │   │ ┌───▼─────────▼─────────┴───────┴─┐       ┌──▼────────▼──────────┴─────────┴─────────┴─┐
-       │   │   │ │ Systolic wrapper                 │       │ Vector-unit wrapper                        │
-       │   │   │ │ SystolicEngineMem (feeder, writer)│       │ job decoder, program reader + splitter,    │
-       │   │   │ │                                   │       │ data reader, VecUnit, writer, done join   │
-       │   │   │ └──────────────┬────────────────────┘       └─────────────────────┬──────────────────────┘
-       │   │   └── done ────────┘                                                  │
-       │   └────── done (VecStatus + its writes in memory) ────────────────────────┘
-       └────────── tile-ready (Ingest DMA) ── (Ingest DMA's Ctrl: ring base, tile bytes, depth, enable)
+                 IRQ (data)
+  ┌──────────────────┐ ──────► ┌──────────────────────────┐  ┌──────────────────────┐  ┌────────────────────────┐
+  │ Resp FIFO        │         │ Host: SwHost + Processor │  │ Ingest DMA           │  │ Shared Mem             │
+  │ RespHub: merges  │         │ A53 model, 1-4 cores:    │  │ corner-turn buffer   │  │ MemoryMod, on chip     │
+  │ 3 done streams,  │         │ scheduler, Jacobi, G, R~,│  │ (8 antennas x 792),  │  │ (about 6.7 MiB usable, │
+  │ a QueueOut view  │         │ Cholesky, G'; Python     │  │ a ring of chunks,    │  │ less the engines' own) │
+  │                  │         │ stages (zero time)       │  │ CreditIn for slots   │  │ DDR model beyond       │
+  └───▲───▲───▲──────┘         └────────────┬─────────────┘  └──────────┬───────────┘  └───────────▲────────────┘
+      │   │   │                             │ M0                        │ M1                       │ S
+  ════╪═══╪═══╪═════════════════════════════╪══════════════ AXI-MM crossbar ══════════════════════════╪═══════════
+      │   │   │   S│qjob S│ctrl  M2▲rd M3▲wr       S│qjob S│ctrl  M4▲lprog M5▲xprog M6▲sprog M7▲data M8▲wr
+      │   │   │ ┌──▼─┐ ┌──▼─┐    │     │         ┌──▼─┐ ┌──▼─┐     │        │        │        │       │
+      │   │   │ │Job │ │Ctrl│    │     │         │Job │ │Ctrl│     │        │        │        │       │
+      │   │   │ └──┬─┘ └──┬─┘    │     │         └──┬─┘ └──┬─┘     │        │        │        │       │
+      │   │   │ ┌──▼──────▼──────┴─────┴──┐      ┌──▼──────▼───────┴────────┴────────┴────────┴───────┴─┐
+      │   │   │ │ Systolic wrapper         │      │ Vector-unit wrapper: decoder (affine descriptors),   │
+      │   │   │ │ SystolicEngineMem        │      │ three program readers, a data reader, VecUnit, the   │
+      │   │   │ │ (feeder, writer)         │      │ writer, the done join                                │
+      │   │   │ └───────────┬──────────────┘      └─────────────────────────┬────────────────────────────┘
+      │   │   └── done ──────┘                                              │
+      │   └────── done (VecStatus and its last write) ──────────────────────┘
+      └────────── chunk-ready (Ingest DMA; its Ctrl: ring base, chunk words, ring depth, enable)
 ```
 
-The RespHub is a device of its own (its `qresp` view). Bus masters: M0 host, M1 Ingest DMA, M2/M3 the systolic feeder and writer, M4/M5/M6 the vector unit's
-program reader, data reader and writer (seven). Slaves: Shared Mem, both Job FIFOs, both Ctrls, the
-Ingest DMA's Ctrl, the Resp FIFO. Each engine and the Ingest DMA is one `build_mm_device` device.
+Masters: M0 host, M1 Ingest DMA, M2/M3 the systolic feeder and writer, M4–M6 the vector unit's three
+program readers, M7 its data reader, M8 its writer (nine). Slaves: Shared Mem, the two Job FIFOs, the
+two engine Ctrls, the Ingest DMA's Ctrl and credit window, the Resp FIFO. Each engine, the Ingest DMA
+and the RespHub is one `build_mm_device` device.
 
-### 5.2 Address map (bytes; the host's endpoints come from `MemSlaveLayout.at(base)`)
+### 5.2 Address map (bytes; the host's endpoints from `MemSlaveLayout.at(base)`)
 
 | Device | Base | Views (4 KB each, in order) |
 |---|---|---|
-| Systolic wrapper | `0x0000_0000` | `qjob` (`QueueIn`, depth 16 words), `ctrl` (`RegBank`) |
-| Vector-unit wrapper | `0x0000_4000` | `qjob` (`QueueIn`, depth 64 words), `ctrl` (`RegBank`) |
-| Ingest DMA | `0x0000_8000` | `ctrl` (`RegBank`) |
-| RespHub | `0x0000_C000` | `qresp` (`QueueOut`, depth 32 words) |
-| Shared Mem | `0x1000_0000` | one window, size a knob (gate: 1 MB; DSE: up to 7.5 MB) |
+| Systolic wrapper | `0x0000_0000` | `qjob` (`QueueIn`, 16 words), `ctrl` (`RegBank`) |
+| Vector-unit wrapper | `0x0000_4000` | `qjob` (`QueueIn`, 32 words), `ctrl` (`RegBank`) |
+| Ingest DMA | `0x0000_8000` | `ctrl` (`RegBank`), `credit` (`CreditIn`) |
+| RespHub | `0x0000_C000` | `qresp` (`QueueOut`, 64 words) |
+| Shared Mem | `0x1000_0000` | one window; its size a knob (gate: 1 MiB; DSE up to 6.7 MiB less the engines') |
 
 ### 5.3 The layout contract
 
-`SystolicEngineMem` reads and writes **block-major** (`MUL`: A as row-major `Mmax × Kmax` blocks, row
-block outer; `MUL_AH`: the stored A as `Kmax × Mmax` blocks, block column outer; B as `Kmax × Nmax`
-panels, panel row outer; C as `Mmax × Nmax` tiles, tile row outer). The vector unit, the CPU and the
-Ingest DMA read and write **row-major** blocks. Without a converter, a matrix moves between them only
-where the two coincide, which is exactly when it is **one tile wide in its role**: `K = Kmax` for a
-`MUL` A, `M = Mmax` for a `MUL_AH` A, `N = Nmax` for a B or a C. The build follows from that:
+`SystolicEngineMem` addresses block-major (`systolic_engine_mem.py:197–208`): `MUL`'s A as row-major
+`Mmax × Kmax` blocks, row block outer; `MUL_AH`'s stored A as `Kmax × Mmax` blocks, block column
+outer; B panel `(p, j)` (`Kmax × Nmax`) at `b_base + (p·NT + j)·wb`; C tile `(i, j)` at
+`c_base + (i·NT + j)·wc`. The vector unit, the CPU and the estimators read and write row-major. A
+matrix passes between them unconverted only when it is **one tile wide in its role** (`K = Kmax`
+for a `MUL` A, `M = Mmax` for a `MUL_AH` A, `N = Nmax` for a B or C). Hence:
 
-- **`Mmax = Kmax = 8`** (= `N̄`, one UE's SRS block), **`Nmax = c` ∈ {8, 16, 32}** (a knob; the RTL
-  gate builds 8). A CG job solves `c/8` UEs at once (joint per job; accuracy-identical to per-UE).
-- Every buffer and who writes it:
+- **systolic maxima:** `Kmax = Nmax = c` (columns a CG job, ∈ {8, 16, 32}; RTL gate 8), `Mmax` free
+  (∈ {8, 16, 32}; `Mmax = S`, the real-time streams, avoids re-reading `Y` a row tile at a time).
+  (These are the systolic engine's; the vector unit's own `Kmax`/`Nmax` are written `VU.Kmax`,
+  `VU.Nmax` below.)
+- every buffer:
 
 | Buffer | Shape | Layout | Written by | Read as |
 |---|---|---|---|---|
-| `Ĥα` (AH copy) | `N_rx × 8` per UE, concatenated | row-major per UE | estimator | `MUL_AH` A (`ĤαᴴD`, `ĤᵢᴴX`) |
-| `Ĥα` (MUL copy) | `N_rx × 8U` | `8 × 8` blocks, row block outer | estimator | `MUL` A (`Ĥα T`, explicit `K`) |
-| `Ĥα` (B copy) | `N_rx × 8U` | `8 × c` panels, panel row outer | estimator | `MUL_AH` B (`XᴴĤα`) |
-| `Ĥαᴴ` (B copy, explicit only) | `8U × N_rx` | `8 × c` panels | estimator | `MUL` B (`K = ĤαĤαᴴ`) |
-| `K` (explicit only) | `N_rx × N_rx` | C tiles = A blocks only when `c = 8` | systolic | `MUL` A (`K D`) |
-| `D, X, R` | `N_rx × c` | row-major | vector unit | `MUL` B, vector unit |
-| `X` (AH copy) | `N_rx × 8` per UE | row-major per UE | vector unit (last iteration, `L ≤ 8`) | `MUL_AH` A (`XᴴX`, `XᴴĤα`) |
-| `T = ĤαᴴD` | `8U × c` | row-major (C, one tile wide) | systolic | `MUL` B |
-| `U = Ĥα T` or `K D` | `N_rx × c` | row-major | systolic | vector unit |
-| `M`, `XᴴX`, `XᴴĤα` | `c × c`, `c × c`, `c × 8U` | row-major / C tiles | systolic | CPU |
-| `G'_stackᴴ` | `N_rx × 8` per 8 streams | row-major per group | CPU | `MUL_AH` A (`Z = G' Y`) |
-| `Y` chunk | `N_rx × J·c` (J tiles) | B panels (`8 × c`, panel row outer): the order the front end streams it | Ingest DMA | `MUL_AH` B (`Z = G' Y`) |
-| `Z` chunk | `S × J·c` (`S = r·U_pad` streams, r-major, `U_pad = 8⌈U/8⌉`) | C tiles (`8 × c`) | systolic | vector unit, a tile (`8` streams × `c` REs) a load |
-| `w` chunk | `S × J·c` | C tiles, as `Z` | estimator | vector unit |
-| `x̂` | `8 × c` a tile of 8 UEs | row-major | vector unit | measurement |
-| `R₀ = D₀` | `N_rx × c` a CG job | row-major | estimator (a copy of the job's `Ĥᵢ`) | `MUL` B, vector unit |
+| `Ĥα` AH copy | `N_rx × 8U` | `N_rx × Mmax` row-major groups, one after another | estimator | `MUL_AH` A (`T = ĤαᴴD`, `W = ĤαᴴX`) |
+| `Ĥα` MUL copy | `N_rx × 8U` | `Mmax × c` blocks, row block outer | estimator | `MUL` A (`U = ĤαT`; explicit `K`) |
+| `Ĥαᴴ` B copy (explicit) | `8U × N_rx` | `c × c` panels | estimator | `MUL` B (`K`) |
+| `K` (explicit) | `N_rx × N_rx` | C tiles = `MUL` A blocks (`Nmax = Kmax`) | systolic | `MUL` A (`U = KD`) |
+| `R₀ = D₀` | `N_rx × c` a job | row-major | estimator | `MUL` B, vector unit |
+| `D`, `X`, `R` | `N_rx × c` | row-major | vector unit | `MUL` B; vector unit |
+| `T` | `8U × c` | row-major (C one tile wide) | systolic | `MUL` B |
+| `U` | `N_rx × c` | row-major | systolic | vector unit |
+| `W` | `8U × c` | row-major | systolic | CPU |
+| `G'_stackᴴ` | `N_rx × S` (`S = r·U_pad`, `U_pad = 8⌈U/8⌉`, r-major) | `N_rx × Mmax` row-major groups | CPU | `MUL_AH` A (`Z = G'Y`) |
+| `Y` chunk | `N_rx × J·c` | B panels (`c`-wide panels, panel row outer) | Ingest DMA | `MUL_AH` B |
+| `Z` chunk | `S × J·c` | C tiles (`Mmax × c`) | systolic | vector unit: per tile, `r` blocks of `U_pad × c` |
+| `w` | `S × J·c` (one symbol's chunk) | as `Z` | estimator | vector unit |
+| `x̂` | `U_pad × c` a tile | row-major | vector unit | measurement |
 
-- **Consequences.** The explicit `Q̂` is built only at `c = 8` (its `K` as the systolic writes it is
-  the `MUL` A layout only then); at `c > 8` it is modeled. `G'` is formed on the CPU (`r·8·N_rx`
-  cmacs a UE), which also writes it in the projection's layout; forming it on the systolic engine
-  needs a layout converter (modeled). The vector unit's last CG iteration stores `X` twice at `c > 8`
-  (needs `L ≤ 8` there).
+Padding: `8U` (240) to a multiple of `Mmax` and `c`; `N_rx` to `Kmax`; `S` to `Mmax`. **Memory**
+(per sector, 16-bit lanes): two `Ĥα` copies (three explicit), `K` (explicit), one CG job's `X, R, D, T,
+U, W`, `G'_stack`, the ring of `Y` chunks, the `Z`/`w`/`x̂` chunks and the data symbols' `Z` held
+until the DMRS weights exist (symbols 0–1 come before the DMRS) -- checked by the memory plan (§5.6).
 
-### 5.4 Job descriptors, records and registers (`DataList`s; never packed by hand)
+### 5.4 Descriptors, records and registers (`DataList`s; never packed by hand)
 
-- **Systolic `qjob`**: `EngineJobDesc` as it is (`tx_id, op, M, K, N, a_base, b_base, c_base`); the
-  wrapper passes it to `s_job` unchanged. Its `EngineDone` goes to the RespHub tagged `src = 0`.
-- **Systolic `ctrl`** (thin, user 2026-10-28): config `SysCfg{enable}`; status `SysStatus{jobs_done,
-  last_tx_id, last_status}` (a tap on the done stream).
-- **Vector-unit `qjob`**: `VecMemJob{tx_id, prog_slot, n_ld, n_st}` then `n_ld` load addresses and
-  `n_st` store addresses (word addresses in Shared Mem), in the order the job's `wf.ld` / `wf.st`
-  instructions run.
-- **Vector-unit `ctrl`**: config `VecCfg{enable, prog_base}`; a program table in Shared Mem at
-  `prog_base`: per slot `{l_addr, l_words, x_addr, x_words, s_addr, s_words}`, the programs written
-  once by the host at start. Status `VecStatus2{jobs_done, last_tx_id, last_status}`.
-- **The vector-unit front end**: the job decoder turns a `VecMemJob` into a program fetch (slot →
-  three bursts, the `VecJob` word of each rewritten with the job's `tx_id`), load commands and store
-  commands; **one reader per program stream** through a splitter and a separate data reader (spike c's
-  deadlock rule); the writer turns each `VecResp` + data into a memory write at its store address; the
-  done join waits for the job's `VecStatus` **and** its last write's completion, then emits the done
-  record (`src = 1`). An error status is fatal (the unit takes no more input).
-- **Ingest DMA `ctrl`**: `IngestCfg{enable, ring_base, tile_words, ring_depth}`; status
-  `IngestStatus{tiles, overruns}`. It writes tile `k` at `ring_base + (k mod ring_depth)·tile_words`
-  and pushes `TileReady{seq = k}` (`src = 2`); a tile that finds the ring full is dropped and counted
-  (the host frees a slot by writing `IngestCfg` … **[gate R]**: or a credit register).
-- **RespHub**: a `FreeRunMod` merging the three done streams round-robin into one `QueueOut`; a record
+- **Systolic `qjob`:** `EngineJobDesc` (`tx_id, op, M, K, N, a_base, b_base, c_base`), passed to
+  `s_job` unchanged; `EngineDone` to the RespHub tagged `src = 0`. **`ctrl`** (thin, user 2026-10-28):
+  `SysCfg{enable}`; `SysStatus{jobs_done, busy_cycles, last_tx_id, last_status}`.
+- **Vector-unit `qjob`:** a fixed-size **affine** descriptor `VecMemJob{tx_id, prog_slot, s}` then, for
+  each load stream and each store stream, `{base, stride, count}` (word addresses; the `i`-th `wf.ld`
+  of the stream reads its `k·n` elements at `base + i·stride`). Its size is a constant of the slot, at
+  most the `qjob` depth, so the host's `q.write` waits for room and never stalls the bus mid-packet.
+- **Vector-unit `ctrl`:** `VecCfg{enable, prog_base}`; the program table at `prog_base` in Shared Mem
+  (per slot: address and length of its load, execute and store programs, written once at start);
+  `VecStatus2{jobs_done, busy_cycles, last_tx_id, last_status}`.
+- **The vector-unit front end:** the decoder turns a descriptor into one command per stream; **three
+  program readers** (one per program stream: a `VecJob` word's `tx_id` rewritten to the job's), **a
+  data reader** (the load streams' affine walks, in the load program's order) and **the writer** (each
+  `VecResp` + data to its store stream's next address). Every stream has its own reader and a command
+  of constant size a job, so no stream waits behind another (the v1 single reader + splitter
+  deadlocked; spike-c lesson). **The done join** emits `Resp{src = 1}` when the job's `VecStatus` and
+  its last write's completion have both arrived. An error status is fatal.
+- **Ingest DMA:** a **corner-turn buffer** of `Kmax` antennas x 792 subcarriers (ping-pong): the O-RU's
+  antenna-by-antenna symbol fills it; each full group of `Kmax` antennas is written as the chunk's
+  panels, panel `(p, j)` at `chunk_base + (p·J + j)·wb` (`J` bursts of `Kmax·c` elements). A chunk is
+  `J·c` subcarriers of one symbol on every antenna (along frequency); a ring of `ring_depth` chunks.
+  When a chunk's last panel is written it pushes `ChunkReady{seq}` (`src = 2`). Flow control: the
+  framework's `CreditIn` view (`mm_device.py`): the host returns a credit per freed chunk; with none,
+  the incoming symbol is dropped and counted (`IngestStatus{chunks, overruns}`). `IngestCfg{enable,
+  ring_base, chunk_words, ring_depth}`.
+- **RespHub:** a `FreeRunMod` merging the three done streams round-robin into one `QueueOut`; a record
   is one 64-bit word `Resp{src(2), tx_id(16), status(8), seq(16)}`.
-- **Tile and chunk**: a tile is `c` subcarriers of one symbol on every antenna; the Ingest DMA writes a
-  **chunk** of `J` tiles (a knob) as one buffer in the projection's B layout, which is the order the
-  front end streams it, so one projection job covers `J·c` REs. One tile a job would mean about 1,400
-  projection jobs a slot a sector at `c` = 8, far beyond what the A53 can dispatch.
 
 ### 5.5 Job graphs
 
-**Long term, per sector** (regime 1, factored, `c/8` UEs a CG job; `t` iterations):
+**Long term, per sector** (factored; `c/8` UEs a CG job; `t` iterations; a long-term product split
+into `B_LT`-row jobs, the plan's tile-size knob, so a real-time job never waits behind more than one):
 
-    [py] SRS estimate → Ĥα (copies) ──► for each CG job (c/8 UEs):
-        D₀ = R₀ = Ĥ_job (the estimator's copy), X₀ = 0 (set by the first step's program)
-        t × { SYS T = ĤαᴴD ; SYS U = Ĥα T ; VEC step }        (explicit, c = 8: SYS U = K D)
-        SYS M = Ĥ_jobᴴ X ;  SYS XᴴX ;  SYS XᴴĤα
-        CPU per UE: Jacobi(Mᵢ) → Φᵢ ; R̃ᵢ ; R̃ᵢ^{-1/2} ; Φ'ᵢ ; G'ᵢ written into G'_stackᴴ
-    (explicit only, once: SYS K = ĤαĤαᴴ)
+    [py] SRS estimate → Ĥα' (copies), R₀ = D₀ per job, scale s        (written over the host's bus)
+    (explicit, once: SYS K = Ĥα'Ĥα'ᴴ)
+    per CG job:  t × { SYS T = Ĥα'ᴴD ; SYS U = Ĥα'T ; VEC step S' = 2^{-2s}D + U, … }
+                 SYS W = Ĥα'ᴴX
+                 CPU per UE: Jacobi(Mᵢ) ; Gᵢ = (AᵢΦᵢ)ᴴ ; R̃ᵢ ; Cholesky ; G'ᵢ → G'_stackᴴ
 
-**Real time, per slot and sector:** per tile `k` (DMRS symbols first):
+**Real time, per slot and sector:** chunk by chunk along frequency, symbol by symbol:
 
-    INGEST chunk k (J tiles) → SYS Zₖ = G'_stack Yₖ ─► (DMRS chunks) [py] DMRS estimate → w
-                                                    └► (data chunks) VEC, per 8-UE tile:
-                                                         x̂ = Σ_r conj(w_r) ⊙ z_r
+    INGEST chunk → SYS Z = G'_stack Y ─► DMRS symbols 2–3: [py] DMRS estimate → w (per chunk position)
+                                     └─► data symbols: VEC x̂ = Σ_r conj(w_r) ⊙ z_r, per tile
+    (symbols 0–1 arrive before the DMRS: their Z chunks wait in Shared Mem for w)
 
 ### 5.6 The scheduler (the plan's §1.4)
 
-A list scheduler in the host's dispatcher thread: ready jobs (all predecessors done) go into their
-engine's `qjob` while it has room; on the `qresp` data IRQ every record is popped and its successors
-released. Two classes (real-time tiles before long-term jobs), earliest deadline first inside a class;
-no preemption inside an engine job. A static memory plan per graph (buffer lifetimes, the ingest ring),
-checked against the Shared Mem size before dispatch. Jobs in flight plus ring tiles ≤ the `qresp`
-depth. Policies: dynamic (built) and static in-order (baseline). Costs on the A53: `sched_ops` (ready
-list), `dispatch` (calibrated), the new `release` kernel (pre-registered gem5 campaign), Jacobi.
+The host's dispatcher thread runs a list scheduler: ready jobs go into their engine's `qjob` while it
+has room; on the `qresp` data IRQ every record is popped and its successors released; a freed ring
+chunk returns a credit. Two classes (real-time chunks before long-term jobs), earliest deadline first
+inside a class; no preemption inside an engine job (hence `B_LT`). A static memory plan per graph
+(buffer lifetimes, the ring, the held data symbols), checked against Shared Mem before dispatch. Jobs
+in flight plus ring chunks ≤ the `qresp` depth. Policies: dynamic (built) and static in-order
+(baseline). **A53 costs:** `sched_ops`, `dispatch` (calibrated); `release` (new); and the per-UE CPU
+job of §3.4 as a new kernel `ltbf_proj` (Jacobi from `M`, `G`, `R̃`, Cholesky, `G'`), calibrated by a
+pre-registered gem5 campaign like `paper/cg_dse`'s `ltbf_eig`. **Assumption:** the A53 reads `Aᵢ` and
+`W` and writes `G'` through the bus model's timing (the SwHost's bus master), not an HPM port's
+uncached-load latency, which on the real chip is much slower a word; stated with every time result.
 
 ### 5.7 The host (spike e)
 
-`LtbfHost(SwHost)`: a bus master `m`, IRQ inputs `qjob_sys`, `qjob_vec`, `qresp`; a `Processor`
-(the A53 platform, `n_cores` a knob) its threads charge through `charge(func, ...)`, padded to whole
-host cycles (`examples/ltbf_dse/spikes/spike_e_host.py`). Threads: the dispatcher (the scheduler) and
-the CPU-job workers. The C++ twin `LtbfHostModel` runs the same scheduler with the **deterministic
-policy** (static order, dependency waits), charges `compute(ceil(c·f_host/f_cpu))` per operation,
-links `ltbf_eig.c` for Jacobi, and replays the Python stages' outputs and the CPU jobs' results from
-the scenario file the pysim run writes. The RTL gate (plan AC9) compares each engine's `qjob` writes
-and `ctrl` writes, each source's subsequence of `qresp` records, and the final Shared Mem.
+`LtbfHost(SwHost)`: bus master `m`; IRQ inputs `qjob_sys`, `qjob_vec`, `qresp`; a `Processor` (`n_cores`
+a knob) its threads charge through `charge(func, …)`, padded to host cycles. Threads: the dispatcher
+and the CPU-job workers. **RTL gate (AC9):** one thread on one core, the deterministic policy (static
+order, dependency waits); the C++ twin `LtbfHostModel` **replays** every CPU job's and Python stage's
+results and charged cycles from the scenario file the pysim run writes (no CPU arithmetic in C++),
+writes them over the bus as pysim does, and charges `compute(n)`. The gate compares each engine's
+`qjob` and `ctrl` writes, each source's subsequence of `qresp` records, and the final Shared Mem.
 
 ## 6. Open choices for the review
 
 | Id | Choice | Recommendation | Why |
 |---|---|---|---|
-| **E** | Where the equalizer's divide happens | **The estimator computes `wᵢ[n] = h̃'ᵢ/(1+‖h̃'ᵢ‖²)` (Python, counted); the vector unit applies `x̂ = Σ_r conj(w_r) ⊙ z_r` per RE.** Alternative: the vector unit computes `w` with scalar-lane divides; it needs `h̃'` with lanes = (UE, subcarrier) and then a transposition into the `Z` tile layout the ISA cannot do (a converter, modeled). | The ISA has no elementwise divide and no lane transposition (spike c); the per-RE application is the bulk of the work and is in hardware. |
-| **W** | Whitening | **Fold `R̃ᵢ^{-1/2}` into `G'`** on the CPU. | One real divide a (UE, subcarrier) for r = 1 and 2, no r × r inverse per RE. |
-| **F** | Memory element width | **16 + 16 bits in Shared Mem**; W > 16 only inside the engines. | The engines' `lane_bits` 16 and the memory budget of spike d. |
-| **R** | Ingest flow control | **A credit register** in the Ingest DMA's `ctrl` the host bumps when it frees a ring slot. | No overwrite of a tile still in use; overruns counted, not silent. |
-| **C** | `c` (columns a CG job, = `Nmax`) | **8 for the RTL gate; 8, 16, 32 in the DSE** (16 and 32 need `L ≤ 8` for `X`'s second copy). | The layout contract; explicit `Q̂` built at 8 only. |
-| **G** | `G'` formation | **CPU** (A53, `r·8·N_rx` cmacs a UE); systolic modeled. | Layout (§5.3). |
-| **P** | The paper's SRS simplification | **8 equally spaced cyclic shifts per comb** (NR allows 12). | Equal per-port windows; 30 UEs on one symbol. |
+| **E** | Where the equalizer's divide happens | The estimator computes `w = h̃'/(1+‖h̃'‖²)` (Python, counted); the vector unit applies `x̂ = Σ conj(w) ⊙ z` per RE (spike: 0.42–1.55 UE·RE a cycle). | The ISA has no elementwise divide and no lane transposition; computing `w` in hardware needs a layout converter (modeled). |
+| **W** | Whitening | Fold `L⁻¹` (Cholesky of `R̃`) into `G'` on the CPU. | One real divide a (UE, subcarrier) for r = 1 and 2; Cholesky is cheaper than the Hermitian root and whitens as well. |
+| **F** | Memory lane | 16 bits by default, 32 as a DSE axis. | Wider operands need it (`mem_format`); it doubles memory and traffic. |
+| **Q** | SRS noise in `Q̂` | As the paper (kept); `S = βD + U` with `β = 1 - U/G_SRS` as an accuracy option. | Fidelity to the paper first. |
+| **P** | SRS layout | 64 RBs, comb 4, 8 shifts, lead 4, taper 4 (`G_SRS` 16.14 dB); two SRS symbols (4 shifts a comb, 48-tap windows) as an option. | Spike f. |
+| **D** | DMRS power | Boost 4.77 dB (NR, 3 CDM groups, no data). | As deployed. |
+| **C** | `c`, `Mmax`, `J`, ring depth | `c` ∈ {8, 16, 32}, `Mmax` ∈ {8, 16, 32}, `J` and ring depth knobs; RTL gate: `c = 8`, `Mmax = 16`, `J = 4`, ring depth 4. | Layout contract; a small gate. |
+| **G** | `G'` formation | CPU (`ltbf_proj`, calibrated); systolic modeled. | Layout. |
+
+## 7. Review of v1 (2026-10-28) and what changed
+
+Blockers: **B1** the `Y` chunk's B layout (panel `(p, j)` at `(p·NT + j)·wb`) cannot come from
+tile-contiguous writes → the corner-turn buffer, chunk-level ring and ready records (§5.4). **B2** a
+single program reader + splitter and variable-length address lists deadlock → three program readers,
+a data reader, affine fixed-size descriptors (§5.4). **B3** 198 comb subcarriers leak -7 to -20 dB
+between ports → 192, lead and taper, `G_SRS` re-derived (spike f). Major: **M1** formats → the table of
+§4 and the lane axis; **M2** `W = ĤαᴴX` replaces three products, frees `Mmax`, drops the `Ĥα` B copy
+and `X`'s second copy, explicit `Q̂` at every `c`; usable memory 6.7 MiB less the engines'; **M3** long-term
+jobs split (`B_LT`); **M4** Python and CPU results reach Shared Mem over the host's bus and are replayed
+in C++, one thread at the gate; **M5** the CPU work as the calibrated `ltbf_proj` kernel and the HPM
+assumption; **M6** the measured SINR stated without "unbiased", the scale-invariant SINR added, gate Q.
+Minor: SRS amplitude 2 removed in `P`; DMRS op counts, band edges, delay removal, the boost; data
+symbols before DMRS held; the systolic/vector `Kmax`/`Nmax` names; `CreditIn`; the gate-E equalizer
+checked and priced; `J`, ring depth, Ctrl cycle counters, `w` storage, Cholesky, the shift-to-UE
+assignment listed.
