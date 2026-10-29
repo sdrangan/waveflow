@@ -129,3 +129,152 @@ def test_systolic_wrapper_runs_jobs_from_its_job_fifo():
     for c_base, want in sysm.sysw.engine.expected_c("test"):
         got = mem._mem.read(c_base * W // 8, len(want))
         assert np.array_equal(np.asarray(got, np.uint64).reshape(want.shape), want)
+
+
+# -- the vector unit's wrapper ------------------------------------------------------------------------
+
+VEC_BASE = 0x8002_0000
+
+
+def vec_system(vu_cfg, image_words: int, jobs: list):
+    """The vector-unit wrapper, the RespHub, Shared Mem at bus address 0 and a host on one crossbar;
+    the host sends *jobs* (``VecMemJob`` bursts)."""
+    from examples.ltbf_dse.hw.vec_wrap import VecWrap
+
+    sim = Simulation()
+    clk = Clock(freq=250e6)
+    vw = VecWrap(name="vec", sim=sim, clk=clk, vu_cfg=vu_cfg, word_bits=W)
+    hub = RespHub(name="hub", sim=sim, clk=clk, n_src=1, word_bits=W)
+    mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
+                    nwords_tot=image_words, addr_unit=AddrUnit.byte)  # fmt: skip
+    assert mem.alloc(image_words) == 0
+    host = JobHost(name="host", sim=sim, clk=clk, bursts=jobs)
+    vdev = build_mm_device(vw, sim=sim, clk=clk, mem_dwidth=W, prefix="vec_")
+    hdev = build_mm_device(hub, sim=sim, clk=clk, mem_dwidth=W, prefix="hub_")
+    link = StreamIF(name="vec_resp", sim=sim, clk=clk, bitwidth=W)
+    link.bind("master", vw.m_resp)
+    link.bind("slave", hub.s_in0)
+    masters = [host.m, vw.m_rl, vw.m_rx, vw.m_rs, vw.m_rd, vw.m_w]
+    vs, vr = vdev.ranges(VEC_BASE)
+    hs, hr = hdev.ranges(HUB_BASE)
+    slaves = vs + hs + [mem.s_mm]
+    ranges = vr + hr + [(0, image_words * W // 8)]
+    xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
+                           nports_slave=len(slaves), bitwidth=W)  # fmt: skip
+    for k, m in enumerate(masters):
+        xbar.bind(f"master_{k}", m)
+    for k, s in enumerate(slaves):
+        xbar.bind(f"slave_{k}", s)
+    assign_address_ranges(slaves, ranges)
+    from examples.ltbf_dse.hw.vec_wrap import VecWrap as _VW
+
+    vmap = MemSlaveLayout.of(_VW, mem_dwidth=W).at(VEC_BASE)
+    hmap = MemSlaveLayout.of(RespHub, mem_dwidth=W).at(HUB_BASE)
+    for dev, view in ((vdev, "qjob"), (hdev, "qresp")):
+        line = IrqIF(name=f"{view}_irq", sim=sim)
+        line.bind("source", dev.views[view].m_irq)
+        line.bind("sink", host.irq[view])
+    host.qjob = BoundMemSlaveAdaptor(vmap, host.m).stream_master(
+        "qjob", irq=host.irq["qjob"]
+    )
+    host.qresp = BoundMemSlaveAdaptor(hmap, host.m).stream_slave(
+        "qresp", irq=host.irq["qresp"]
+    )
+    dut = DutTop.of("ltbf_vec_dut", sim, comps=[vdev, hdev, mem], ifs=[xbar, link])
+    sysm = HwSystem(sim, dut, run_until=host.done, check=lambda s: host.resps)
+    sysm.mem, sysm.host, sysm.vw = mem, host, vw
+    return sysm
+
+
+def test_vector_unit_wrapper_runs_a_cg_step_from_shared_mem():
+    """Step 4.2: one CG step (``hw/programs.py``, the last iteration's variant with ``X_b``) run by the
+    vector-unit wrapper from Shared Mem: the programs and ``X, R, D, U`` in memory, one ``VecMemJob``
+    in the Job FIFO, one ``Resp`` (``src`` 1, OK) after the outputs are in memory, and ``X, R, D, X_b``
+    equal to the fixed-point chain's step (``linalg.cg.vec_step``) bit for bit."""
+    from examples.ltbf_dse import ltbf_fixed_chain as fc
+    from examples.ltbf_dse.hw import programs as pg
+    from examples.ltbf_dse.hw.records import SRC_VEC
+    from examples.ltbf_dse.hw.vec_wrap import MAX_LD, MAX_ST, VecMemJob
+    from waveflow.linalg import cg as lcg
+    from waveflow.linalg.lanes import from_words, nwords, to_words
+    from waveflow.vecunit.asm import assemble
+
+    ranges = {"H": 0.025, "G": 0.24, "BC": 0.08, "X": 6.8, "Y": 6.7, "Z": 8.5, "R": 0.07,
+              "S": 0.02, "ps": 0.05, "rz": 0.18, "alpha": 200.0, "beta": 5.1, "w": 0.5, "y": 1.8,
+              "xh": 1.8}  # fmt: skip
+    cfg = fc.formats(ranges, 14)
+    k, n, s = 16, 8, 2
+    f = cfg.cg_step()
+    vu = pg.cg_step_config(
+        f, k, n, L=8, word_bits=W, lane_bits=16, m_max=max(8, cfg.m_shift)
+    )
+    progs = pg.cg_step_programs(vu, k, n, s, last_m=cfg.m_shift)
+    words = assemble(vu, progs, tx_id=0)
+    rng = np.random.default_rng(5)
+
+    def ints(fmt, shift=3):
+        lo, hi = -(1 << (fmt.W - 1)), 1 << (fmt.W - 1)
+        return (
+            rng.integers(lo, hi, (k, n)) >> shift,
+            rng.integers(lo, hi, (k, n)) >> shift,
+        )
+
+    xr, xi = ints(cfg.cg.X, 0)
+    rr, ri = ints(cfg.cg.R)
+    dr, di = ints(cfg.bc)
+    ur, ui = ints(cfg.bc, 2)
+    lb = 16
+    mw = nwords(k * n, lb, W)
+    # Shared Mem: the three programs, then X, R, D, U, then four outputs
+    layout, addr, image = {}, 0, []
+    for name in ("load", "execute", "store"):
+        layout[name] = (addr, len(words[name]))
+        image.append(np.asarray(words[name], np.uint64))
+        addr += len(words[name])
+    ins = {
+        "X": (xr, xi, cfg.cg.X),
+        "R": (rr, ri, cfg.cg.R),
+        "D": (dr, di, cfg.bc),
+        "U": (ur, ui, cfg.bc),
+    }
+    for name, (re, im, fmt) in ins.items():
+        layout[name] = (addr, mw)
+        image.append(np.asarray(to_words(re, im, fmt, lb, W), np.uint64))
+        addr += mw
+    for name in ("oX", "oR", "oD", "oXB"):
+        layout[name] = (addr, mw)
+        image.append(np.zeros(mw, np.uint64))
+        addr += mw
+    image = np.concatenate(image)
+    job = VecMemJob(tx_id=7, count=1, n_ld=4, n_st=4,
+                    l_addr=layout["load"][0], l_words=layout["load"][1],
+                    x_addr=layout["execute"][0], x_words=layout["execute"][1],
+                    s_addr=layout["store"][0], s_words=layout["store"][1])  # fmt: skip
+    for q, name in enumerate(("X", "R", "D", "U")):
+        setattr(job, f"ld{q}_base", layout[name][0]), setattr(job, f"ld{q}_stride", 0)
+        setattr(job, f"ld{q}_words", mw)
+    for q, name in enumerate(("oX", "oR", "oD", "oXB")):
+        setattr(job, f"st{q}_base", layout[name][0]), setattr(job, f"st{q}_stride", 0)
+        setattr(job, f"st{q}_words", mw)
+    assert MAX_LD == MAX_ST == 4
+    sysm = vec_system(vu, len(image), [np.asarray(job.serialize(word_bw=W), np.uint64)])
+    sysm.mem._mem.write(0, image)
+    resps = sysm.run()
+    assert [(int(r.src), int(r.tx_id), int(r.status)) for r in resps] == [
+        (SRC_VEC, 7, 0)
+    ]
+    rz_full, rz_fmt = lcg._column_dot(rr, ri, cfg.cg.R, rr, ri, cfg.cg.R)
+    st = lcg.CgState(xr, xi, rr, ri, dr, di, lcg._q(rz_full, rz_fmt, cfg.cg.rz))
+    sr, si = fc.cg_step_s(dr, di, ur, ui, cfg, s)
+    new, _ = lcg.vec_step(st, sr, si, cfg.cg)
+    xb = fc.Format(cfg.cg.X.W + cfg.m_shift, cfg.cg.X.int_bits, True)
+    want = {"oX": (new.xr, new.xi, cfg.cg.X), "oR": (new.rr, new.ri, cfg.cg.R),
+            "oD": (new.pr, new.pi, cfg.bc),
+            "oXB": (fc.fx.quantize(new.xr, xb, cfg.bc), fc.fx.quantize(new.xi, xb, cfg.bc), cfg.bc)}  # fmt: skip
+    for name, (re, im, fmt) in want.items():
+        a, nw = layout[name]
+        got = np.asarray(sysm.mem._mem.read(a * W // 8, nw), np.uint64)
+        gr, gi = from_words(got, k * n, fmt, lb, W)
+        assert np.array_equal(gr.reshape(k, n), re) and np.array_equal(
+            gi.reshape(k, n), im
+        ), name

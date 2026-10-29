@@ -37,13 +37,19 @@ class RespHub(FreeRunMod):
         self.ins = []
         for k in range(int(self.n_src)):
             ep = StreamIFSlave(
-                name=f"{self.name}_s_in{k}", sim=self.sim, bitwidth=int(self.word_bits)
+                name=f"{self.name}_s_in{k}",
+                sim=self.sim,
+                bitwidth=int(self.word_bits),
+                has_tlast=False,
             )
             setattr(self, f"s_in{k}", ep)
             self.ins.append(ep)
             self.add_endpoint(ep)
         self.m_out = StreamIFMaster(
-            name=f"{self.name}_m_out", sim=self.sim, bitwidth=int(self.word_bits)
+            name=f"{self.name}_m_out",
+            sim=self.sim,
+            bitwidth=int(self.word_bits),
+            has_tlast=False,
         )
         self.add_endpoint(self.m_out)
 

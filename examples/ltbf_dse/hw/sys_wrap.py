@@ -44,7 +44,10 @@ class SysTap(FreeRunMod):
             name=f"{self.name}_s_done", sim=self.sim, bitwidth=int(self.word_bits)
         )
         self.m_resp = StreamIFMaster(
-            name=f"{self.name}_m_resp", sim=self.sim, bitwidth=int(self.word_bits)
+            name=f"{self.name}_m_resp",
+            sim=self.sim,
+            bitwidth=int(self.word_bits),
+            has_tlast=False,
         )
         self.m_status = StreamIFMaster(
             name=f"{self.name}_m_status", sim=self.sim, bitwidth=int(self.word_bits)
