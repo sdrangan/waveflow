@@ -1,0 +1,7 @@
+kernel,point,role
+release,"{""ready"": 6, ""seed"": 202, ""succ"": 24}",test
+release,"{""ready"": 0, ""seed"": 202, ""succ"": 48}",test
+release,"{""ready"": 75, ""seed"": 202, ""succ"": 300}",test
+release,"{""ready"": 150, ""seed"": 202, ""succ"": 300}",test
+release,"{""ready"": 0, ""seed"": 202, ""succ"": 1500}",test
+release,"{""ready"": 500, ""seed"": 202, ""succ"": 1500}",test

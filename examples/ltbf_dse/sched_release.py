@@ -58,9 +58,27 @@ KERNEL = Kernel(
     source_path=SOURCE,
 )
 
-FAMILY = Family("release", "release", ("n_succ", "n_ready"), ("n_succ", "n_ready"))
+#: The first model form, linear in both counters: its held-out test median was 10.3%, above AC10's
+#: 10% (plan §14) -- the ready decision's branch costs about 3.5 cycles when the outcomes are mixed
+#: and nothing when all or none become ready.
+FAMILY_V1 = Family("release", "release", ("n_succ", "n_ready"), ("n_succ", "n_ready"))
+
+
+def _features(row: dict) -> dict:
+    n, k = float(row["n_succ"]), float(row["n_ready"])
+    return {"n_succ": n, "n_ready": k, "mix": k * (n - k) / n if n else 0.0}
+
+
+#: The revised form: and ``mix``, the expected mispredictions of a random ready decision.  Scored on
+#: a fresh test set (``sweep.release_retest_rows``, ``cpu/sweep_plan_release_retest.csv``).
+FAMILY = Family("release", "release", ("n_succ", "n_ready"), ("n_succ", "n_ready", "mix"),
+                transform=_features)  # fmt: skip
+RETEST_PLAN = HERE / "cpu" / "sweep_plan_release_retest.csv"
 
 CAL = a53cal.Calibration(KERNEL, FAMILY, SOURCE, PLAN, DATA, "release_rows")
+RETEST = a53cal.Calibration(
+    KERNEL, FAMILY, SOURCE, RETEST_PLAN, DATA, "release_retest_rows"
+)
 
 if __name__ == "__main__":
     sys.exit(CAL.main())

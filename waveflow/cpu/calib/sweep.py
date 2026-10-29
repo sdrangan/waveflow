@@ -234,6 +234,15 @@ def release_rows() -> list[Row]:
     return rows
 
 
+def release_retest_rows() -> list[Row]:
+    """A fresh held-out set for ``release``'s revised model form (plans/ltbf_dse/ltbf_dse.md §14,
+    2026-10-29: the first form's test score was read, so the revision is scored on new points)."""
+    return _grid("release", "test", [
+        {"succ": n, "ready": k, "seed": TEST_SEEDS[1]}
+        for n, k in ((24, 6), (48, 0), (300, 75), (300, 150), (1500, 0), (1500, 500))
+    ])  # fmt: skip
+
+
 def ltbf_eig_recheck_rows() -> list[Row]:
     """Five held-out inputs re-checking ``ltbf_eig``'s model fitted on ``paper/cg_dse``
     (plans/ltbf_dse/ltbf_dse.md step 4.6): sizes and ranks between its points, a new seed."""
