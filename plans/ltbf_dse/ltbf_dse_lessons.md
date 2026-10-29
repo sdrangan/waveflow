@@ -60,3 +60,11 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   edge after `execute` makes its own time match the C++ twin's `compute(n)`, but a call queued behind
   it starts up to one host cycle earlier than behind the twin's core semaphore. Exact with one
   scheduler thread (the RTL gate); within a host cycle a call otherwise.
+- **Building another example appends to its tracked calibration** (spike 1.2 e). `markov_build`
+  writes timing records into `examples/markov/calib/modules/*/timing/records.jsonl` (tracked) and
+  leaves its `*_proj` csynth directories untracked but not ignored. After using another example as
+  evidence, `git status` and restore what it touched.
+- **2024.1 keeps the HLS headers apart** (spike 1.2 e): `ap_int.h` is in `Vitis_HLS/2024.1/include`,
+  not beside `Vitis/2024.1/bin/vitis-run`; `find_vitis_include_dir` now looks there too. Running a
+  module as `__main__` through `runpy` breaks dataclasses whose `ClassVar` annotations are strings
+  (the class's module is the driver): call the module's functions instead.
