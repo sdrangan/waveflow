@@ -20,3 +20,16 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   (plan review)
 - **The Denver drops' absolute delays exceed the 120 kHz CP** (0.59 µs): render with a per-UE timing
   advance; about 2.9% of links still exceed the CP afterwards. (plan review)
+
+## From execution
+
+- **The editor publishes new branches by itself** (step 0.2). VS Code's git extension ran
+  `git push -u origin paper/ltbf_dse` three seconds after the branch's first commit (its `Git.log`
+  under `~/.vscode-server/data/logs/<session>/exthost1/vscode.git/`). Earlier branches show it pushing
+  later commits too. Check `git status -sb` right after the first commit, not only at milestones, and
+  never tell the user a push was "one-time" without reading that log.
+- **Gate floors count quarantined tests as present** (step 0.2). Measure `WANT_XSI_GATES` with
+  `WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q` (the rule
+  `tests/build/test_xsi_session_gate.py` uses); without it the count is lower by the quarantined gates
+  (229 vs 246 here). This repo's `-q` prints no pass/skip summary line: read the progress dots, and
+  never pipe pytest through `tail` when its exit code matters.
