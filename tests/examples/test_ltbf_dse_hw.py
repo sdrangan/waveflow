@@ -593,6 +593,7 @@ def test_system_equals_the_fixed_chain(policy, sector, tmp_path):
         (10, 16, 16) if sector else (5, 8, 16)
     )
     hw, S, host = sy.build(inp)
+    assert S.fits_gate  # Shared Mem within the RTL gate's 1 MiB (spec §5.2)
     hw.run()
     assert S.sch.finished and S.sch.overruns == 0 and S.sch.dropped == 0
     assert S.sch.error is None

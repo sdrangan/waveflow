@@ -99,6 +99,7 @@ class SysParams:
     lane_bits: int = 16
     cg_window: int = 2
     rt_window: int = 4
+    xh_window: int = 3
     #: The O-RU's symbol period.  A real slot is 125/14 µs a symbol; one 64-bit port cannot carry
     #: 64 antennas at that rate (spike d), so a correctness run paces the slot slower.
     sym_period: float = T_SYM
@@ -143,7 +144,8 @@ def inputs(p: SysParams) -> Inputs:
     y = lf.to_stored(prep.y[s] * 2.0**-cfg.k_shift, cfg.bc)
     dims = Dims(n_rx=p.n * p.n, U=len(own), U_conn=n_conn, c=p.c, Mmax=p.Mmax, r=p.r, t=p.t,
                 J=p.J, lane_bits=p.lane_bits, word_bits=p.word_bits, B_LT=p.B_LT,
-                cg_window=p.cg_window, rt_window=p.rt_window)  # fmt: skip
+                cg_window=p.cg_window, rt_window=p.rt_window,
+                xh_window=p.xh_window)  # fmt: skip
     if dims.S != p.Mmax:
         raise ValueError(
             f"the streams r·U_pad = {dims.S} must fill one Mmax = {p.Mmax} row tile"
@@ -525,6 +527,10 @@ class LtbfSystem:
         self.rt_plan = plan_memory(self.rt, 1 << 30, base=addr)
         addr += footprint(self.rt, self.rt_plan, base=addr)
         self.mem_words = addr
+        #: The memory's span: a power of two (the crossbar's RTL decodes power-of-two ranges);
+        #: the RTL gate's is at most 1 MiB (spec §5.2).
+        self.mem_span = 1 << (addr - 1).bit_length()
+        self.fits_gate = self.mem_span * p.word_bits <= 8 << 20
         # The Python stages' operands.
         hr, hi = (
             np.pad(v, ((0, d.rows - v.shape[0]), (0, d.cols - v.shape[1])))
@@ -770,8 +776,8 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
                     period=p.sym_period)  # fmt: skip
     S.oru = oru
     mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
-                    nwords_tot=S.mem_words, addr_unit=AddrUnit.byte)  # fmt: skip
-    assert mem.alloc(S.mem_words) == 0
+                    nwords_tot=S.mem_span, addr_unit=AddrUnit.byte)  # fmt: skip
+    assert mem.alloc(S.mem_span) == 0
     S.mem = mem
     devs = {
         "sys": (build_mm_device(sysw, sim=sim, clk=clk, mem_dwidth=W, prefix="sys_"), SysWrap, SYS_BASE),
@@ -794,7 +800,7 @@ def build(inp: Inputs) -> tuple[HwSystem, LtbfSystem, LtbfHost]:
         slaves += sl
         ranges += rg
     slaves.append(mem.s_mm)
-    ranges.append((0, S.mem_words * W // 8))
+    ranges.append((0, S.mem_span * W // 8))
     xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
                            nports_slave=len(slaves), bitwidth=W)  # fmt: skip
     for k, m in enumerate(masters):

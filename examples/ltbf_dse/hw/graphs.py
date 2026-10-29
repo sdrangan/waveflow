@@ -18,8 +18,9 @@ Ingest DMA's) and ``G'_stack`` (the long-term graph's product, the real-time gra
   estimate (Python, one a slot: the estimator is full-band) from symbols 2-3's ``Z``, and on the
   vector unit ``x̂ = Σ conj(w) ⊙ z`` per data
   chunk; the measurement reads ``x̂``.  Symbols 0-1's ``Z`` wait in Shared Mem for ``w``.  A symbol's
-  ``Z`` at a chunk position waits for the last use of the one ``rt_window`` symbols earlier: nothing
-  else orders two symbols, so without it no plan safe under every order could reuse their space.
+  ``Z`` at a chunk position waits for the last use of the one ``rt_window`` symbols earlier, and a
+  data symbol's ``x̂`` there for the measurement ``xh_window`` data symbols earlier: nothing else
+  orders two symbols, so without them no plan safe under every order could reuse their space.
 
 Engines: ``sys`` and ``vec`` (Job FIFOs), ``cpu`` (the host's worker threads), ``py`` (the zero-time
 Python stages, run by the host), ``ingest`` (roots only).
@@ -66,6 +67,8 @@ class Dims:
     cg_window: int = 2
     #: Symbols a chunk position whose ``Z`` may be live at once (> the last DMRS symbol: 0-1 wait).
     rt_window: int = 4
+    #: Data symbols a chunk position whose ``x̂`` may be live at once (the measurements free them).
+    xh_window: int = 3
     n_sym: int = 14
     dmrs: tuple = (2, 3)
 
@@ -78,6 +81,8 @@ class Dims:
             raise ValueError(
                 f"rt_window {self.rt_window} must exceed the DMRS symbols {self.dmrs}"
             )
+        if self.xh_window < 1:
+            raise ValueError(f"xh_window {self.xh_window} must be at least 1")
         if self.B_LT is not None and self.B_LT % self.Mmax:
             raise ValueError(f"B_LT {self.B_LT} is not a multiple of Mmax {self.Mmax}")
 
@@ -254,6 +259,7 @@ def real_time(
     g.buffer("Gp", d.words(R, S), external=True)
     zj: dict[tuple, int] = {}
     last: dict[tuple, int] = {}  # the last job using symbol s's Z at chunk position c
+    meas: dict[int, list] = {}  # chunk position -> its measurements, in data-symbol order
     for s in range(d.n_sym):
         for c in range(d.n_chunks):
             y = g.buffer(f"Y{s}:{c}", d.words(R, n), external=True)  # a ring slot
@@ -282,10 +288,13 @@ def real_time(
                     continue
                 for c in range(d.n_chunks):
                     xh = g.buffer(f"xh{p}:{c}", d.words(d.u_pad, n))
-                    ej = g.add("vec", "eq", deps=(zj[p, c], zj["w", c]),
+                    done = meas.setdefault(c, [])
+                    win = (done[-d.xh_window],) if len(done) >= d.xh_window else ()
+                    ej = g.add("vec", "eq", deps=(zj[p, c], zj["w", c]), after=win,
                                reads=(f"Z{p}:{c}", f"w:{c}"), writes=(xh,),
                                shape={"u_pad": d.u_pad, "c": d.c, "r": d.r, "tiles": d.J},
                                key=("eq", p, c), deadline=dl)  # fmt: skip
                     last[p, c] = g.add("py", "meas", deps=(ej,), reads=(xh,),
                                        key=("meas", p, c), deadline=dl)  # fmt: skip
+                    done.append(last[p, c])
     return g
