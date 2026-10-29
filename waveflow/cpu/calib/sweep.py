@@ -158,6 +158,45 @@ def switch_rows() -> list[Row]:
     return rows
 
 
+def ltbf_eig_rows() -> list[Row]:
+    """``examples/ltbf_dse``'s A53 step (plans/ltbf_dse/ltbf_dse.md step 0.5; first registered by
+    ``paper/cg_dse``'s plans/mimo_cg/ltbf_cg_dse.md step 4.8): ``M = sym(H^H A)``, the 8 x 8 Jacobi
+    eigendecomposition and ``G``.  Its own plan file (``examples/ltbf_dse/cpu/``), not part of
+    :func:`sweep_rows`: the n axis spans the arrays (8x8 .. 32x32), ``rank`` the SRS block's rank
+    (1: a single path; 8: full), both ``r``."""
+    rows = _grid(
+        "ltbf_eig",
+        "fit",
+        [
+            {"n": n, "r": r, "rank": k, "seed": 1}
+            for n in (8, 32, 128, 512, 1024)
+            for r in (1, 2)
+            for k in (1, 8)
+        ],
+    )
+    rows += _grid(
+        "ltbf_eig",
+        "validation",
+        [
+            {"n": n, "r": r, "rank": k, "seed": VAL_SEEDS[0]}
+            for n in (16, 256)
+            for r in (1, 2)
+            for k in (1, 4)
+        ],
+    )
+    rows += _grid(
+        "ltbf_eig",
+        "test",
+        [
+            {"n": n, "r": r, "rank": k, "seed": TEST_SEEDS[0]}
+            for n in (64, 200, 768)
+            for r in (1, 2)
+            for k in (2, 8)
+        ],
+    )
+    return rows
+
+
 def sweep_rows() -> list[Row]:
     """Every registered kernel point, in a fixed order."""
     return sched_rows() + cdot_rows() + gather_rows() + dispatch_rows() + switch_rows()
