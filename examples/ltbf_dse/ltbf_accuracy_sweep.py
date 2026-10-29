@@ -38,6 +38,9 @@ JOBS = OUT / "jobs"
 PROFILE_DROPS = tuple(range(1, 11))
 EVAL_DROPS = tuple(range(11, 101))
 ARRAYS = (8, 16, 32)
+#: The evaluation drops of each array: 32x32 trimmed to 30 (11-40) so the sweep fits its 8 h budget
+#: (plan §14, 2026-10-29: four 32x32 jobs side by side ran 980 s each, three times the pilot's).
+EVAL_BY_ARRAY = {8: EVAL_DROPS, 16: EVAL_DROPS, 32: tuple(range(11, 41))}
 TARGETS = ("-6_3", "-6_14")
 #: Operand widths (16-bit lanes up to 16, 32-bit lanes above), guard bits, forms.
 WIDTHS = (10, 12, 14, 16, 20)
@@ -140,15 +143,23 @@ def run_job(args) -> str:
     return f"done {path.name} in {time.time() - t0:.1f} s"
 
 
-def all_jobs(drops=EVAL_DROPS, arrays=ARRAYS, targets=TARGETS) -> list:
-    return [(n, tg, d) for n in arrays for tg in targets for d in drops]
+def all_jobs(drops=None, arrays=ARRAYS, targets=TARGETS) -> list:
+    """Every (array, target, drop) job: *drops*, or each array's :data:`EVAL_BY_ARRAY`."""
+    return [
+        (n, tg, d)
+        for n in arrays
+        for tg in targets
+        for d in (drops or EVAL_BY_ARRAY[n])
+    ]
 
 
-def merge(drops=EVAL_DROPS, out_csv: Path | None = None) -> Path:
+def merge(drops=None, out_csv: Path | None = None) -> Path:
+    """The jobs of *drops* (or each array's :data:`EVAL_BY_ARRAY`) into the losses CSV."""
     rows = []
     for n in ARRAYS:
         for tg in TARGETS:
-            files = [job_path(n, tg, d) for d in drops if job_path(n, tg, d).exists()]
+            ds = drops or EVAL_BY_ARRAY[n]
+            files = [job_path(n, tg, d) for d in ds if job_path(n, tg, d).exists()]
             if not files:
                 continue
             losses: dict = {}
@@ -201,13 +212,13 @@ def main() -> None:
             for msg in ex.map(run_job, [(n, "-6_14", EVAL_DROPS[0]) for n in a.arrays]):
                 print(msg, flush=True)
     elif a.cmd == "run":
-        jobs = all_jobs(tuple(a.drops) if a.drops else EVAL_DROPS, tuple(a.arrays))
+        jobs = all_jobs(tuple(a.drops) if a.drops else None, tuple(a.arrays))
         jobs.sort(key=lambda j: -j[0])  # the largest arrays first
         with _pool(a.workers) as ex:
             for msg in ex.map(run_job, jobs):
                 print(msg, flush=True)
     else:
-        print(merge(tuple(a.drops) if a.drops else EVAL_DROPS))
+        print(merge(tuple(a.drops) if a.drops else None))
 
 
 if __name__ == "__main__":
