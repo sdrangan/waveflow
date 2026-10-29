@@ -46,7 +46,7 @@ from waveflow.hw.interface import (
     StreamIFSlave,
 )
 from waveflow.hw.mem_stream import MemWCmd, MemWStream
-from waveflow.hw.mm_device import CreditIn, RegBank
+from waveflow.hw.mm_device import CreditIn, QueueIn, RegBank
 from waveflow.linalg.lanes import nwords
 
 #: The credit view's counter width (cumulative chunks freed, modulo 2^16).
@@ -259,3 +259,12 @@ class IngestDev(FreeRunMod):
         self.m_status = self.dma.m_status
         self.m_w = self.wstream.m_mem
         self.m_resp = self.wstream.s_done
+
+
+@dataclass
+class IngestDevQ(IngestDev):
+    """The Ingest DMA with its symbol input as a memory-mapped queue (``qsym``): the RTL gates' form,
+    where the software host plays the O-RU, an antenna's burst a packet (a stream driver beside a
+    software host has no bundle in the XSI run).  The same HLS top; the view is RTL beside it."""
+
+    mm_views: ClassVar[tuple] = (*IngestDev.mm_views, QueueIn("qsym", port="s_sym", depth=512))
