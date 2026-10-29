@@ -1,0 +1,14 @@
+# Everything the LTBF DSE produces or copies stays local (plans/ltbf_dse/ltbf_dse.md, Rule 10).
+data/
+cache/
+paper_data/
+results/
+logs/
+runs/
+gen/
+include/
+xsi/
+*_proj/
+hw/build/
+hw/prereg/
+hw/reports/
