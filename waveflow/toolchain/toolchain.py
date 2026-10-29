@@ -202,12 +202,18 @@ def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Option
 
     The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
     ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
-    is ``<install>/bin/vitis-run[.bat]``."""
+    is ``<install>/bin/vitis-run[.bat]``.
+
+    Up to 2024.x the headers are not in the Vitis tree but in the separate Vitis HLS install beside
+    it (``<root>/Vitis/2024.1`` and ``<root>/Vitis_HLS/2024.1/include``), which is looked in next."""
     exe = find_vitis_path(top_dir)
     if not exe:
         return None
-    inc = Path(exe).resolve().parent.parent / "include"
-    return inc if (inc / "ap_int.h").is_file() else None
+    install = Path(exe).resolve().parent.parent
+    for inc in (install / "include", install.parent.parent / "Vitis_HLS" / install.name / "include"):
+        if (inc / "ap_int.h").is_file():
+            return inc
+    return None
 
 
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:

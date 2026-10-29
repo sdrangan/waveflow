@@ -311,3 +311,36 @@ def test_run_vitis_hls_rejects_tclargs_before_launching(monkeypatch, tmp_path):
     monkeypatch.setattr(toolchain, "find_vitis_path", lambda top_dir=None: str(tmp_path / "vitis-run"))
     with pytest.raises(ValueError, match=r"no --tclargs.*env="):
         toolchain.run_vitis_hls(tmp_path / "run.tcl", args=["csim"])
+
+
+def _vitis_install(root, version, *, headers_in_vitis):
+    """A fake Linux Vitis install under *root*: ``Vitis/<version>/bin/vitis-run``, and ``ap_int.h``
+    either in its own ``include`` (2025.1 on) or in a sibling ``Vitis_HLS/<version>/include``."""
+    exe = root / "Vitis" / version / "bin" / "vitis-run"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    inc = (root / "Vitis" / version if headers_in_vitis else root / "Vitis_HLS" / version) / "include"
+    inc.mkdir(parents=True)
+    (inc / "ap_int.h").write_text("// ap_int\n", encoding="utf-8")
+    return exe, inc
+
+
+def test_find_vitis_include_dir_in_the_vitis_tree(tmp_path, monkeypatch):
+    exe, inc = _vitis_install(tmp_path, "2025.1", headers_in_vitis=True)
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() == inc.resolve()
+
+
+def test_find_vitis_include_dir_falls_back_to_vitis_hls(tmp_path, monkeypatch):
+    # 2024.1's split install: the headers are only in Vitis_HLS/<version>/include.
+    exe, inc = _vitis_install(tmp_path, "2024.1", headers_in_vitis=False)
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() == inc.resolve()
+
+
+def test_find_vitis_include_dir_none_without_headers(tmp_path, monkeypatch):
+    exe, inc = _vitis_install(tmp_path, "2024.1", headers_in_vitis=False)
+    (inc / "ap_int.h").unlink()
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() is None
