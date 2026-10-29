@@ -157,13 +157,19 @@ def eq_config(
     )  # fmt: skip
 
 
-def eq_programs(cfg: VecUnitConfig, u_pad: int, c: int, r: int, tiles: int) -> Programs:
-    """``x = Σ_r conj(w_r) z_r`` on *tiles* tiles (one load of each ``w_r``, ``z_r`` a tile)."""
+def eq_programs(cfg: VecUnitConfig, u_pad: int, c: int, r: int, tiles: int,
+                off: Offsets | None = None) -> Programs:  # fmt: skip
+    """``x = Σ_r conj(w_r) z_r`` on *tiles* tiles (one load of each ``w_r``, ``z_r`` a tile); *off*
+    places its groups and queues after the CG step's in a combined unit (:func:`system_config`).
+    """
+    o = off or Offsets()
+    QW0, QZ0, QW1, QZ1 = (o.qi + q for q in (0, 1, 2, 3))
+    OXH = o.qo
     G = cfg.groups_per_row(c)
     ex = [I.setvl(u_pad)]
     for _ in range(tiles):
         for g in range(G):
-            b = 8 * g
+            b = o.g + 8 * g
             W0, Z0, Y, W1, Z1 = b, b + 1, b + 2, b + 3, b + 4
             ex += [I.vlse(W0, QW0, g, G).c, I.vlse(Z0, QZ0, g, G).c]
             ex += [I.vmul_vv(Y, W0, Z0, conj=True)]
@@ -176,3 +182,36 @@ def eq_programs(cfg: VecUnitConfig, u_pad: int, c: int, r: int, tiles: int) -> P
     load = [I.ld(q, PORT, u_pad, c) for _ in range(tiles) for q in ins]
     store = [I.st(PORT, OXH, t, u_pad, c) for t in range(tiles)]
     return Programs(load=load, execute=ex, store=store)
+
+
+# -- one unit for both -------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Offsets:
+    """Where the equalizer's groups, input and output queues start in a combined unit."""
+
+    g: int = 0
+    qi: int = 0
+    qo: int = 0
+
+
+def system_config(cg: CgStepFormats, eq: EqFormats, *, k: int, n: int, u_pad: int, r: int,
+                  L: int, word_bits: int = 128, lane_bits: int = 16, s_max: int = 4,
+                  m_max: int = 8) -> tuple[VecUnitConfig, Offsets]:  # fmt: skip
+    """One vector unit that runs both programs (a build has one format a register): the CG step's
+    groups, scalars and queues first (its programs unchanged), the equalizer's after them (its
+    programs with the returned :class:`Offsets`)."""
+    a = cg_step_config(cg, k, n, L, word_bits, lane_bits, s_max, m_max)
+    b = eq_config(eq, u_pad, n, L, r, word_bits, lane_bits)
+    cfg = VecUnitConfig(
+        group_formats=a.group_formats + b.group_formats,
+        scalar_formats=a.scalar_formats + b.scalar_formats,
+        in_queue_formats=a.in_queue_formats + b.in_queue_formats,
+        out_queue_formats=a.out_queue_formats + b.out_queue_formats,
+        L=L, VLMAX=max(a.VLMAX, b.VLMAX), Kmax=max(a.Kmax, b.Kmax), Nmax=max(a.Nmax, b.Nmax),
+        NB=4, g_div=a.g_div, rs_max=a.rs_max, word_bits=word_bits, lane_bits=lane_bits,
+    )  # fmt: skip
+    return cfg, Offsets(
+        len(a.group_formats), len(a.in_queue_formats), len(a.out_queue_formats)
+    )

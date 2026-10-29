@@ -122,3 +122,42 @@ def test_equalizer_equals_the_vector_unit_program(case):
     wr, wi = np.stack([x[0] for x in w]), np.stack([x[1] for x in w])
     xr, xi = fc.equalize_fixed(zr, zi, wr, wi, cfg.eq)
     assert np.array_equal(gr, xr) and np.array_equal(gi, xi)
+
+
+@pytest.mark.parametrize("case", range(6))
+def test_one_unit_runs_both_programs(case):
+    """``hw/programs.system_config``: one vector-unit build (the CG step's registers and queues, then
+    the equalizer's) runs the CG step's last-iteration program and the equalizer's (with its
+    ``Offsets``) bit for bit as their own builds do; ``k = N_rx = 64``, ``U_pad = 16``.
+    """
+    rng = np.random.default_rng(300 + case)
+    cfg = fc.formats(RANGES, (12, 14, 16)[case % 3])
+    k, n, u_pad, r, s = 64, 8, 16, 1 + case % 2, 1
+    vu, off = pg.system_config(cfg.cg_step(), cfg.eq, k=k, n=n, u_pad=u_pad, r=r, L=8,
+                               lane_bits=cfg.lane_bits, m_max=max(8, cfg.m_shift))  # fmt: skip
+    st = _state(rng, cfg.cg, k, n, zero_col=case == 3)
+    ur, ui = (v >> 2 for v in _ints(rng, (k, n), cfg.bc))
+    res = run_job(vu, *pg.cg_step_programs(vu, k, n, s, last_m=cfg.m_shift),
+                  {pg.PORT: [(st.xr, st.xi), (st.rr, st.ri), (st.pr, st.pi), (ur, ui)]})  # fmt: skip
+    assert int(res.status) == 0
+    got = {resp["tag"]: (re, im) for resp, re, im in res.outputs[pg.PORT]}
+    sr, si = fc.cg_step_s(st.pr, st.pi, ur, ui, cfg, s)
+    new, _ = lcg.vec_step(st, sr, si, cfg.cg)
+    xb = fc.Format(cfg.cg.X.W + cfg.m_shift, cfg.cg.X.int_bits, True)
+    want = {pg.OX: (new.xr, new.xi), pg.OR: (new.rr, new.ri), pg.OD: (new.pr, new.pi),
+            pg.OXB: (fc.fx.quantize(new.xr, xb, cfg.bc), fc.fx.quantize(new.xi, xb, cfg.bc))}  # fmt: skip
+    for tag, (re, im) in want.items():
+        assert np.array_equal(got[tag][0], re) and np.array_equal(got[tag][1], im), tag
+    z = [_ints(rng, (u_pad, n), cfg.eq.z) for _ in range(r)]
+    w = [tuple(v >> 2 for v in _ints(rng, (u_pad, n), cfg.eq.w)) for _ in range(r)]
+    ins = [x for q in range(r) for x in (w[q], z[q])]
+    res = run_job(
+        vu, *pg.eq_programs(vu, u_pad, n, r, tiles=2, off=off), {pg.PORT: ins + ins}
+    )
+    assert int(res.status) == 0
+    zr, zi = np.stack([x[0] for x in z]), np.stack([x[1] for x in z])
+    wr, wi = np.stack([x[0] for x in w]), np.stack([x[1] for x in w])
+    xr, xi = fc.equalize_fixed(zr, zi, wr, wi, cfg.eq)
+    assert len(res.outputs[pg.PORT]) == 2
+    for _resp, gr, gi in res.outputs[pg.PORT]:
+        assert np.array_equal(gr, xr) and np.array_equal(gi, xi)
