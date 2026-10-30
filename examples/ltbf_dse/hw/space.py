@@ -260,14 +260,16 @@ DECISION_RULE = {
 }
 
 
-def write_prereg() -> dict[str, str]:
+def write_prereg(force: bool = False) -> dict[str, str]:
     """Write the three sets and the rule as JSON under ``hw/prereg/`` (local) and return their
-    SHA-256."""
+    SHA-256.  A registered file is never replaced by a different one unless *force*."""
     PREREG.mkdir(parents=True, exist_ok=True)
     bodies = {role: json.dumps([p.as_dict() for p in ps], indent=0, sort_keys=True)
               for role, ps in (("fit", fit_set()), ("heldout", heldout_set()),
                                ("brute", brute_set()))}  # fmt: skip
     bodies["rule"] = json.dumps(DECISION_RULE, indent=0, sort_keys=True)
+    for role, text in bodies.items():
+        guard(PREREG / f"{role}.json", text, force)
     hashes = {}
     for role, text in bodies.items():
         (PREREG / f"{role}.json").write_bytes(text.encode())
@@ -275,12 +277,20 @@ def write_prereg() -> dict[str, str]:
     return hashes
 
 
+def guard(path: Path, text: str, force: bool) -> None:
+    """Refuse to replace a pre-registered *path* with different content (``--force`` overrides)."""
+    if not force and path.is_file() and path.read_bytes() != text.encode():
+        raise FileExistsError(
+            f"{path} is registered (plan §15) and differs; pass --force to replace it"
+        )
+
+
 def load(role: str) -> list[Part]:
     return [Part(**d) for d in json.loads((PREREG / f"{role}.json").read_text())]
 
 
 if __name__ == "__main__":
-    h = write_prereg()
+    h = write_prereg(force="--force" in sys.argv)
     print(f"rule     sha256 {h['rule']}")
     for role in ("fit", "heldout", "brute"):
         ps = load(role)

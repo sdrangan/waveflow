@@ -20,6 +20,7 @@ resources against the frozen models' prediction (``dse.cost``: the parts, the hu
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import shutil
 import sys
@@ -43,6 +44,7 @@ def implement(name: str) -> dict:
     from examples.ltbf_dse.hw import system as sy
     from waveflow.build.build import BuildDag
     from waveflow.build.system_dag import SystemSynthStep, add_system_steps
+    from waveflow.vecunit import build as vb
     from waveflow.vecunit.build import build_config
 
     k = FINALISTS[name]
@@ -58,7 +60,11 @@ def implement(name: str) -> dict:
     )
     synth = next(s for s in dag.steps() if isinstance(s, SystemSynthStep))
     synth.impl = True  # place and route too: the record carries closure
-    cfg = build_config(root)
+    # The system's synthesis takes its part and clock from the build's platform (none: the
+    # framework's default, a Zynq-7020 at 10 ns), so a platform of this root's own, never the
+    # packaged one's corpus.
+    cfg = dataclasses.replace(build_config(root), platform="ltbf_finalist", part=vb.PART,
+                              clk_freq=1e9 / vb.PERIOD_NS, platforms_root=root / "calib" / "platforms")  # fmt: skip
     cfg.params["synth"] = "build"
     t0 = time.time()
     res = dag.run(cfg, through="f_system_synth")

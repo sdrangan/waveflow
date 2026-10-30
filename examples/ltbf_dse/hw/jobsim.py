@@ -166,6 +166,9 @@ class Config:
     lt_only: bool = False
     #: The slot from the start, beside the long-term update (their interference), not after it.
     overlap: bool = False
+    #: Slots back to back, the O-RU's pace unbroken (the sustained-rate check runs 3: a backlog a
+    #: 2-symbol ring hides over one slot shows over three).
+    n_slots: int = 1
 
 
 class JobSim:
@@ -288,17 +291,14 @@ class JobSim:
                 "busy": {**self.busy, "port": self.port.busy, "cpu": cpu}}  # fmt: skip
 
     def _main(self):
-        sch, d, t = self.sch, self.cfg.d, self.t
+        sch, t = self.sch, self.t
         yield from self.xfer(t.writes(self.cfg.setup_words))
         yield from self.wait(t.queue[0] + 2 * t.queue[1])  # the Ingest DMA's Ctrl
         sch.add(self.lt)
         rt_added = False
         if self.cfg.overlap:
             rt_added = True
-            self.rt = real_time(d, t0=self.env.now)
-            sch.add(self.rt)
-            self.slot_start.succeed()
-            self.env.process(self._ticker())
+            self._add_slots()
         yield from self._pump()
         while not (rt_added and sch.finished):
             ev = yield self.inbox.get()
@@ -319,12 +319,20 @@ class JobSim:
             if not rt_added and lt_done:
                 rt_added = True
                 self.t_lt = self.env.now
-                self.rt = real_time(d, t0=self.env.now)
-                sch.add(self.rt)
-                self.slot_start.succeed()
-                self.env.process(self._ticker())
+                self._add_slots()
             yield from self._pump()
         self.done.succeed()
+
+    def _add_slots(self) -> None:
+        """The slot graphs (one a slot, each a slot's symbols later), and the O-RU released."""
+        d, now = self.cfg.d, self.env.now
+        for k in range(self.cfg.n_slots):
+            g = real_time(d, slot=k, t0=now + k * d.n_sym * self.cfg.sym_period)
+            if self.rt is None:  # every slot's buffers are the first's shapes
+                self.rt = g
+            self.sch.add(g)
+        self.slot_start.succeed()
+        self.env.process(self._ticker())
 
     def _pump(self):
         sch, t = self.sch, self.t
@@ -434,7 +442,7 @@ class JobSim:
         t0 = self.env.now
         ring = cfg.ring_symbols * d.n_chunks
         ant_words = d.words(1, d.n_sc)
-        for s in range(d.n_sym):
+        for s in range(d.n_sym * cfg.n_slots):
             yield self.env.timeout(
                 max(0.0, t0 + (s + 1) * cfg.sym_period - self.env.now)
             )
@@ -453,18 +461,18 @@ class JobSim:
                     for k in range(d.n_chunks):
                         self.env.process(self._chunk(start, k, first + k))
             self.seq += d.n_chunks
-            if (
-                t.port
-            ):  # the DMA's writes share the port, the rest of its symbol time adds; its
-                # chunks complete with its last antenna group
+            if t.port and dropped:  # the DMA drains the antennas and writes nothing
+                yield from self.wait(d.n_rx * (ant_words + 1))
+            elif t.port:
+                # The DMA's writes share the port, the rest of its symbol time adds; its chunks
+                # complete with its last antenna group.
                 yield self.port.transfer(t.symbol_port)
                 yield from self.wait((t.symbol or 0.0) - t.symbol_port)
-                if not dropped:
-                    for k in range(d.n_chunks):
-                        self.chunks += 1
-                        yield self.inbox.put(
-                            ("resp", SRC_INGEST, 0, (first + k) % (1 << 16))
-                        )
+                for k in range(d.n_chunks):
+                    self.chunks += 1
+                    yield self.inbox.put(
+                        ("resp", SRC_INGEST, 0, (first + k) % (1 << 16))
+                    )
             else:
                 yield from self.wait(
                     max(t.symbol or 0.0, d.n_rx * (t.queue[0] + t.queue[1] * ant_words))

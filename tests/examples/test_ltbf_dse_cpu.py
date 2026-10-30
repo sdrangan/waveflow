@@ -70,6 +70,7 @@ def test_counters_of_a_real_ue_drive_the_model():
     )
 
 
+@pytest.mark.gem5  # the local calibration from the gem5 runs: a skip fails a -m gem5 session
 @pytest.mark.skipif(
     not (le.DATA / "model.json").is_file(), reason="local calibration not run"
 )
@@ -184,6 +185,7 @@ def test_gem5_run_matches_the_new_twins(cal, point):
     assert row["cycles"] > 0
 
 
+@pytest.mark.gem5  # the local calibration from the gem5 runs: a skip fails a -m gem5 session
 @pytest.mark.parametrize("cal", [lp.CAL, sr.CAL], ids=lambda c: c.kernel.name)
 def test_the_fitted_models_meet_ac10(cal):
     """AC10: the held-out test median within 10% (the local calibration; ``release``'s revised form

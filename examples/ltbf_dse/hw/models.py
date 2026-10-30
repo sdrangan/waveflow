@@ -14,9 +14,9 @@ are read, then scored on them.
   (:func:`sys_job_terms`, :func:`vec_job_terms`), so the port's read
   cost -- two cycles a word as built -- is a fitted coefficient, and a one-word-a-cycle leaf a
   what-if on it.
-* **Shared Mem** as built (user, 2026-10-29); sizes past the on-chip budget are priced with
-  ``DDR4-2400 x64 at 70%`` (:data:`DDR_WORDS_PER_CYCLE`), as ``paper/cg_dse``, and flagged
-  *model-only*.
+* **Shared Mem** as built (user, 2026-10-29), its storage block RAM at the system's span
+  (``dse.cost``); a design over the device is flagged *model-only* and timed as if on chip -- the
+  DDR of plan §9 d is not modelled (plan §14, final review).
 
     python -m examples.ltbf_dse.hw.models fit      # fit on the fit set, freeze, print the hash
     python -m examples.ltbf_dse.hw.models score    # the held-out scores (once frozen)
@@ -41,8 +41,6 @@ MODELS = sp.PREREG / "models.json"
 COUNTERS = ("LUT", "FF", "DSP", "BRAM_18K", "URAM")
 #: The device gates' bus addresses (``devsys``): the device's Job FIFO, and the Ingest DMA's ``qsym``.
 JOB_FIFO, QSYM = 0x8000_0000, 0x8000_2000
-#: DDR4-2400 x64 at 70%: 2400 MT/s x 8 bytes x 0.7 over a 250 MHz host clock, in 64-bit words.
-DDR_WORDS_PER_CYCLE = 2400e6 * 8 * 0.7 / 250e6 / 8
 
 
 def resource_terms(p: sp.Part) -> dict[str, float]:
@@ -226,8 +224,9 @@ def fit() -> dict:
     return model
 
 
-def freeze(model: dict) -> str:
+def freeze(model: dict, force: bool = False) -> str:
     text = json.dumps(model, indent=0, sort_keys=True)
+    sp.guard(MODELS, text, force)
     MODELS.write_bytes(text.encode())
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -277,6 +276,6 @@ if __name__ == "__main__":
         print("fit parts", len(m["fit_parts"]))
         print(json.dumps({k: m[k] for k in ("resources", "cycles")}, indent=1)[:3000])
         if "--freeze" in sys.argv:
-            print("models sha256", freeze(m))
+            print("models sha256", freeze(m, force="--force" in sys.argv))
     else:
         print(json.dumps(score(json.loads(MODELS.read_text())), indent=1))

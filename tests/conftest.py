@@ -250,7 +250,9 @@ WANT_XSI_GATES = 250
 #: kernel's gem5 runs against its twin, copied from ``paper/cg_dse`` (test_ltbf_dse_cpu.py).
 #: 14 -> 18 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md step 4.6): the per-UE projection job and the
 #: scheduler's release, two smoke points each, against their twins (test_ltbf_dse_cpu.py).
-WANT_GEM5_GATES = 18
+#: 18 -> 21 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md step 7.2, final review M4): the fitted A53
+#: models' scores on the local calibration, which skipped unseen in the fast suite (test_ltbf_dse_cpu.py).
+WANT_GEM5_GATES = 21
 
 #: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
 #: environment's tests that trace a scene (``plans/sionna_rt/sionna_rt.md``).  The same two rules:

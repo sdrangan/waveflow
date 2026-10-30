@@ -12,9 +12,11 @@ point (``t``, form; ``r`` 1); a *decision*: (array, target, loss budget, T_LT bu
   frozen per-job model scaled, per part kind and array (and lanes), by the median ratio of measured to
   predicted cycles over that size's gated builds.  (The rule names csynth's latency corrected by the
   anchors; a free-running part's csynth reports no job latency -- its tasks never return -- so the
-  anchors carry it alone: plan §14.)
+  anchors carry it alone: plan §14.)  A pick's measured time is so its predicted one times an
+  anchor near 1 (0.955-1.064): AC13 tests cost, not time (final review, plan §14).
 
-The model's pick is the least predicted cost among the designs predicted to meet both budgets; it is
+A design over the device (Shared Mem as built included) is picked on neither side.  The model's
+pick is the least predicted cost among the designs predicted to meet both budgets; it is
 right when its measured T_LT <= 1.02 x the budget and its measured cost <= 1.10 x the least measured
 cost among the designs measured to meet both ("none feasible" on both sides is right; on one only,
 wrong).  AC13: >= 90% right per cost measure.  Loss is the accuracy table's on both sides.
@@ -154,6 +156,7 @@ def decide(rows: list[dict], cost_key, time_key) -> dict:
             for r in rows
             if r["n"] == n
             and r["target"] == target
+            and cost_key(r)["max"] <= 1  # fits the device
             and r["loss"] <= lb
             and time_key(r) <= tb
         ]
@@ -170,7 +173,7 @@ def main() -> dict:
     with dse._pool() as pool:
         lt_meas = dse.t_lt_table(pool.map(_lt_case_measured, cases, chunksize=1))
     rows = []
-    for n, (R, C), W, L, form, t, target in itertools.product(dse.ARRAYS, dse.TILES, dse.WIDTHS, dse.LANES,
+    for n, (R, C), W, L, form, t, target in itertools.product(dse.ARRAYS, dse.SYSTOLIC_SHAPES, dse.WIDTHS, dse.LANES,
                                                               dse.FORMS, dse.TS, RULE["targets"]):  # fmt: skip
         lo = dse.loss(n, target, W, form, t)
         if lo is None or (n, L, form, t) not in lt_pred:

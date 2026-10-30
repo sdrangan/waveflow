@@ -14,6 +14,11 @@ score:
   long-term update's (limit: 5%);
 * ``rtl``: the simulator against AC9's XSI run (``xsi_work/ltbf``, the system flow's) (limit: 5%).
 
+The registered checks compare whole runs, whose 14 symbol periods (the O-RU's pace, the same on both
+sides) are most of the slot, so beside them, unregistered (``registered`` False; plan §14, final
+review): each run less those periods (``_less_symbols``), the slot after its last symbol is due
+(``_slot_tail``), T_LT against 5%, and AC9's own comparison -- its pysim run against RTL.
+
     python -m examples.ltbf_dse.hw.validate
 """
 
@@ -69,6 +74,22 @@ def rtl_end(work: Path) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def _row(
+    check: str, what: str, model: float, ref: float, limit="", registered=True
+) -> dict:
+    err = model / ref - 1
+    return {"check": check, "what": what, "n": 1, "median": err, "worst": abs(err), "limit": limit,
+            "ok": abs(err) <= limit if limit != "" else "", "registered": registered, "model": model,
+            "reference": ref}  # fmt: skip
+
+
+def _symbols(S) -> float:
+    """The slot's symbol periods (cycles): the O-RU's pace, on both sides."""
+    from examples.ltbf_dse.hw import jobsim as js
+
+    return S.d.n_sym * S.p.sym_period * js.F_HOST
+
+
 def main() -> list[dict]:
     from examples.ltbf_dse.hw import build as hb
     from examples.ltbf_dse.hw import models as hm
@@ -79,26 +100,31 @@ def main() -> list[dict]:
     sc = hm.score(model, "heldout")
     for c, v in sc["resources"].items():
         rows.append({"check": "heldout", "what": c, "n": v["n"], "median": v["median"], "worst": v["worst"],
-                     "limit": LIMITS[c], "ok": v["median"] <= LIMITS[c]})  # fmt: skip
+                     "limit": LIMITS[c], "ok": v["median"] <= LIMITS[c], "registered": True})  # fmt: skip
     for k, v in sc["cycles"].items():
         rows.append({"check": "heldout", "what": f"cycles_{k}", "n": v["n"], "median": v["median"],
-                     "worst": v["worst"], "limit": LIMITS["cycles"], "ok": v["median"] <= LIMITS["cycles"]})  # fmt: skip
+                     "worst": v["worst"], "limit": LIMITS["cycles"], "ok": v["median"] <= LIMITS["cycles"],
+                     "registered": True})  # fmt: skip
+    lim = LIMITS["time"]
     for n, form, policy in CONFIGS:
         ref, S = pysim(n, form, policy)
         sim = simulate(S, model)
-        name = f"n{n * n}_{form}_{policy}"
-        for k in ("end", "t_lt"):
-            err = sim[k] / ref[k] - 1
-            rows.append({"check": "pysim", "what": f"{name}_{k}", "n": 1, "median": err, "worst": abs(err),
-                         "limit": LIMITS["time"] if k == "end" else "", "ok": abs(err) <= LIMITS["time"]
-                         if k == "end" else "", "model": sim[k], "reference": ref[k]})  # fmt: skip
-    t_rtl = rtl_end(hb.ROOT / hb.WORK_DIR / "ltbf")
+        name, sym = f"n{n * n}_{form}_{policy}", _symbols(S)
+        rows += [_row("pysim", f"{name}_end", sim["end"], ref["end"], lim),
+                 _row("pysim", f"{name}_end_less_symbols", sim["end"] - sym, ref["end"] - sym, lim, False),
+                 _row("pysim", f"{name}_slot_tail", sim["end"] - sim["t_lt"] - sym,
+                      ref["end"] - ref["t_lt"] - sym, "", False),
+                 _row("pysim", f"{name}_t_lt", sim["t_lt"], ref["t_lt"], lim, False)]  # fmt: skip
+    work = hb.ROOT / hb.WORK_DIR / "ltbf"
+    t_rtl = rtl_end(work)
     if t_rtl is not None:
-        sim = simulate(sy.LtbfSystem(sy.inputs(sy.AC9)), model)
-        err = sim["end"] / t_rtl - 1
-        rows.append({"check": "rtl", "what": "ac9_end", "n": 1, "median": err, "worst": abs(err),
-                     "limit": LIMITS["time"], "ok": abs(err) <= LIMITS["time"], "model": sim["end"],
-                     "reference": t_rtl})  # fmt: skip
+        S = sy.LtbfSystem(sy.inputs(sy.AC9))
+        sim, sym = simulate(S, model), _symbols(S)
+        t_py = json.loads((work / "pysim.json").read_text())["cycles"]
+        rows += [_row("rtl", "ac9_end", sim["end"], t_rtl, lim),
+                 _row("rtl", "ac9_end_less_symbols", sim["end"] - sym, t_rtl - sym, lim, False),
+                 _row("rtl", "ac9_pysim_end", t_py, t_rtl, lim, False),
+                 _row("rtl", "ac9_pysim_end_less_symbols", t_py - sym, t_rtl - sym, lim, False)]  # fmt: skip
     OUT.parent.mkdir(parents=True, exist_ok=True)
     keys = [
         "check",
@@ -108,6 +134,7 @@ def main() -> list[dict]:
         "worst",
         "limit",
         "ok",
+        "registered",
         "model",
         "reference",
     ]

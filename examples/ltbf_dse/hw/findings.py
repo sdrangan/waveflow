@@ -38,7 +38,7 @@ INDEX = (
     ("dse_realtime.csv", "the real-time load sustained with ingest, an array and lane count", "hw.dse"),
     ("dse_designs.csv", "every design: accuracy, cost (the frozen models) and time (the job-level simulator)", "hw.dse"),
     ("dse_decisions.csv", "the cheapest design a scenario, loss budget, T_LT budget and cost measure", "hw.dse"),
-    ("dse_frontiers.csv", "a frontier per array and target, on max cost, loss and T_LT", "hw.dse"),
+    ("dse_frontiers.csv", "a frontier per array, target, loss and T_LT budget (budget `none`: every design), on max cost, loss and T_LT", "hw.dse"),
     ("dse_whatif.csv", "Shared Mem's what-ifs: a one-word-a-cycle leaf, banks", "hw.findings"),
     ("dse_interference.csv", "the slot beside a long-term update", "hw.findings"),
     ("model_validation.csv", "AC11: the frozen models on the held-out builds; the simulator against pysim and RTL", "hw.validate"),
@@ -97,10 +97,8 @@ WHAT_IFS = (
 
 def what_if() -> list[dict]:
     """Per array (L 4, factored, ``t`` 3, drop 1 sector 1) and Shared Mem what-if: one sector's
-    long-term update and the slot's sustained RE rate (bisection, as ``dse._rt_case``).
+    long-term update and the slot's sustained RE rate (``dse.shortest_period``).
     """
-    import math
-
     from examples.ltbf_dse.hw import jobsim as js
     from examples.ltbf_dse.hw import models as hm
     from examples.ltbf_dse.hw import system as sy
@@ -115,19 +113,7 @@ def what_if() -> list[dict]:
                 js.JobSim(dataclasses.replace(cfg, lt_only=True), timing).run()["t_lt"]
                 * dse.F_HOST
             )
-
-            def ok(c: float, cfg=cfg, timing=timing) -> bool:
-                r = js.JobSim(
-                    dataclasses.replace(cfg, sym_period=c / dse.F_HOST), timing
-                ).run()
-                return js.sustained(r, c)
-
-            lo, hi = 1_000.0, 250_000.0 * n * n / 64
-            while not ok(hi):
-                hi *= 2
-            while hi / lo > 1.02:
-                mid = math.sqrt(lo * hi)
-                lo, hi = (lo, mid) if ok(mid) else (mid, hi)
+            hi = dse.shortest_period(cfg, timing, n)
             rows.append({"array": f"{n}x{n}", "shared_mem": label, "t_lt_sector_cycles": lt,
                          "period_cycles": hi, "re_per_s": 792 / (hi / dse.F_HOST)})  # fmt: skip
     dse._write("dse_whatif.csv", rows)
@@ -143,20 +129,41 @@ def main() -> Path:
     wif = what_if()
     L = []
     w = L.append
+    by = {
+        (r["array"], r["form"], r["t"], r["L"], r["W"], r["R"], r["C"], r["target"]): r
+        for r in designs
+    }
+
+    def dag(a: str) -> str:
+        """'†' after an array whose reference design (4 x 8, W 16, 4 lanes, factored) is model-only."""
+        r = by.get((a, "factored", "3", "4", "16", "4", "8", "-6_14"))
+        return "†" if r and r["model_only"] == "True" else ""
+
     w("# LTBF DSE -- findings\n")
     w(
         "Every built number: Vitis HLS / Vivado 2024.1, xczu48dr at 250 MHz.  Shared Mem as built (the framework's "
-        "BRAM leaf: a read word two cycles, a write one, one transaction at a time).  A design: the systolic array, "
+        "BRAM leaf: a read word two cycles, a write one, one transaction at a time; its storage block RAM at the "
+        "system's power-of-two span, 512 words a BRAM36).  A design: the systolic array, "
         "`W`, the vector unit's lanes, the form and `t` at `r` 1, `Mmax` 16, `c` 8, `J` 9, 64-bit words, the dynamic "
-        "policy, one A53 core.  T_LT: the three sectors' long-term updates back to back, the worst of drops 1, 11, 12.\n"
+        "policy, one A53 core.  T_LT: the three sectors' long-term updates back to back, the worst of drops 1, 11, 12.  "
+        "† *model-only*: over the device (Shared Mem included), timed as if on chip (DDR is not modelled), never "
+        "picked.  RE/s: one sector's slot with ingest, the long-term update idle, kept over 3 slots.\n"
+    )
+    fit = {}
+    for r in designs:
+        fit.setdefault(r["array"], []).append(r["model_only"] != "True")
+    w(
+        "Designs that fit the device: "
+        + "; ".join(f"{a} {sum(v)} of {len(v)}" for a, v in fit.items())
+        + ".\n"
     )
     # 1 -------------------------------------------------------------------------------------------
     w("## 1. The cheapest design per array (`dse_decisions.csv`, `dse_realtime.csv`)\n")
     w(
-        "Cost measure `max` (the largest resource fraction).  '--': no design meets both budgets.\n"
+        "Cost measure `max` (the largest resource fraction).  '--': no design fits and meets both budgets.\n"
     )
     w(
-        "| array | target | loss budget (dB) | T_LT budget (ms) | design | median loss (dB) | T_LT (ms) | max cost | RE/s sustained (of 88.7 M) |"
+        "| array | target | loss budget (dB) | T_LT budget (ms) | design | median loss (dB) | T_LT (ms) | max cost | RE/s, one sector (of 88.7 M) |"
     )
     w("|---|---|---|---|---|---|---|---|---|")
     for d in decisions:
@@ -164,9 +171,8 @@ def main() -> Path:
             continue
         if d.get("R"):
             design = f"{d['R']}x{d['C']} W{d['W']} L{d['L']} {d['form']} t{d['t']}"
-            mo = " (model-only: DDR)" if d.get("model_only") == "True" else ""
             w(
-                f"| {d['array']} | {d['target']} | {d['loss_budget_db']} | {d['time_budget_ms']} | {design}{mo} | "
+                f"| {d['array']} | {d['target']} | {d['loss_budget_db']} | {d['time_budget_ms']} | {design} | "
                 f"{_f(d['median_loss_db']):.3f} | {_f(d['t_lt_ms']):.2f} | {_f(d['cost_max']):.1%} | "
                 f"{_f(d['re_per_s']) / 1e6:.2f} M ({_f(d['re_per_s']) / RE_TARGET:.2%}) |"
             )
@@ -176,9 +182,11 @@ def main() -> Path:
             )
     w("")
     for r in rt:
+        a = f"{r['n']}x{r['n']}"
         w(
-            f"* {r['n']}x{r['n']}, {r['L']} lanes: a symbol every {_f(r['period_cycles']):,.0f} cycles at best, "
-            f"{_f(r['re_per_s']) / 1e6:.2f} M RE/s = {_f(r['re_per_s']) / RE_TARGET:.2%} of 100 MHz with ingest."
+            f"* {a}{dag(a)}, {r['L']} lanes: a symbol every {_f(r['period_cycles']):,.0f} cycles at best, "
+            f"{_f(r['re_per_s']) / 1e6:.2f} M RE/s = {_f(r['re_per_s']) / RE_TARGET:.2%} of 100 MHz with ingest "
+            "(one sector, the long-term update idle)."
         )
     w("")
     # 2 -------------------------------------------------------------------------------------------
@@ -187,10 +195,6 @@ def main() -> Path:
         "| array | t | T_LT factored (ms) | T_LT explicit (ms) | Shared Mem words factored | explicit | median loss f / e (dB, -6_14, W16) |"
     )
     w("|---|---|---|---|---|---|---|")
-    by = {
-        (r["array"], r["form"], r["t"], r["L"], r["W"], r["R"], r["C"], r["target"]): r
-        for r in designs
-    }
     for n in dse.ARRAYS:
         a = f"{n}x{n}"
         for t in dse.TS:
@@ -198,7 +202,7 @@ def main() -> Path:
             e = by.get((a, "explicit", str(t), "4", "16", "4", "8", "-6_14"))
             if f and e:
                 w(
-                    f"| {a} | {t} | {_f(f['t_lt_ms']):.2f} | {_f(e['t_lt_ms']):.2f} | {int(_f(f['mem_words'])):,} | "
+                    f"| {a}{dag(a)} | {t} | {_f(f['t_lt_ms']):.2f} | {_f(e['t_lt_ms']):.2f} | {int(_f(f['mem_words'])):,} | "
                     f"{int(_f(e['mem_words'])):,} | {_f(f['median_loss_db']):.3f} / {_f(e['median_loss_db']):.3f} |"
                 )
     w("")
@@ -230,7 +234,7 @@ def main() -> Path:
             for t in dse.TS
         ]
         w(
-            f"| {n}x{n} | T_LT (ms) | | "
+            f"| {n}x{n}{dag(f'{n}x{n}')} | T_LT (ms) | | "
             + " | ".join("" if r is None else f"{_f(r['t_lt_ms']):.2f}" for r in tl)
             + " |"
         )
@@ -247,7 +251,7 @@ def main() -> Path:
         r = by.get((f"{n}x{n}", "factored", "3", "4", "16", "4", "8", "-6_14"))
         if r:
             w(
-                f"| {n}x{n} | {_f(r['t_lt_ms']):.2f} | {_f(r['sys_busy']):.0%} | {_f(r['vec_busy']):.0%} | "
+                f"| {n}x{n}{dag(f'{n}x{n}')} | {_f(r['t_lt_ms']):.2f} | {_f(r['sys_busy']):.0%} | {_f(r['vec_busy']):.0%} | "
                 f"{_f(r['port_busy']):.0%} | {_f(r['cpu_busy']):.0%} |"
             )
     w("")
@@ -260,11 +264,13 @@ def main() -> Path:
         "Shared Mem what-ifs (`dse_whatif.csv`; L 4, factored, `t` 3, drop 1 sector 1): one sector's long-term "
         "update and the slot's sustained rate with ingest.\n"
     )
-    w("| array | Shared Mem | one sector's update (ms) | RE/s sustained | of 100 MHz |")
+    w(
+        "| array | Shared Mem | one sector's update (ms) | RE/s, one sector | of 100 MHz |"
+    )
     w("|---|---|---|---|---|")
     for r in wif:
         w(
-            f"| {r['array']} | {r['shared_mem']} | {_f(r['t_lt_sector_cycles']) / dse.F_HOST * 1e3:.2f} | "
+            f"| {r['array']}{dag(r['array'])} | {r['shared_mem']} | {_f(r['t_lt_sector_cycles']) / dse.F_HOST * 1e3:.2f} | "
             f"{_f(r['re_per_s']) / 1e6:.2f} M | {_f(r['re_per_s']) / RE_TARGET:.2%} |"
         )
     w("")
@@ -279,7 +285,7 @@ def main() -> Path:
     for r in inter:
         a, b = _f(r["t_lt_alone"]), _f(r["t_lt_beside_slot"])
         w(
-            f"| {r['array']} | {_f(r['sym_period_cycles']):,.0f} | {a:,.0f} | {b:,.0f} ({b / a - 1:+.1%}) | "
+            f"| {r['array']}{dag(r['array'])} | {_f(r['sym_period_cycles']):,.0f} | {a:,.0f} | {b:,.0f} ({b / a - 1:+.1%}) | "
             f"{r['overruns_together']} |"
         )
     w("")
