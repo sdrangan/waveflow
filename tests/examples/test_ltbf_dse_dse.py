@@ -127,23 +127,26 @@ def _parts_cost(monkeypatch, span: int, each: float = 10.0) -> dict:
     return dse.cost(8, 2, 4, 12, 2, "factored")
 
 
-def test_shared_mem_is_costed_as_the_block_ram_it_builds(monkeypatch):
+def test_shared_mem_is_costed_as_the_block_ram_vivado_builds(monkeypatch):
     c = _parts_cost(monkeypatch, 1 << 17)
-    # Three parts, then 2^17 64-bit words at 512 a BRAM36 (two BRAM18 each); no URAM.
-    assert c["res"]["BRAM_18K"] == 3 * 10 + 2 * (1 << 17) // 512
+    # Three parts, then 2^17 64-bit words as Vivado 2024.1 mapped them in the finalists: 228 RAMB36
+    # (seven 9-bit slices of 4K x 9, one 1-bit slice of 32K x 1); no URAM.
+    assert dse.shared_mem_bram18(1 << 17) == 2 * 228
+    assert c["res"]["BRAM_18K"] == 3 * 10 + 2 * 228
     assert c["res"]["URAM"] == 3 * 10
     assert not c["model_only"] and c["uram_alt"] == (1 << 17) // 4096
     assert c["frac"]["max"] == max(c["res"][k] / v for k, v in dse.AVAILABLE.items())
 
 
 def test_a_design_over_the_device_is_model_only(monkeypatch):
+    assert dse.shared_mem_bram18(1 << 19) == 1824
     c = _parts_cost(
-        monkeypatch, 1 << 19, each=50.0
-    )  # 2,048 BRAM18 of Shared Mem and 150 more
+        monkeypatch, 1 << 19, each=120.0
+    )  # 1,824 BRAM18 of Shared Mem and 360 more
     assert c["frac"]["BRAM_18K"] > 1 and c["model_only"]
     assert not _parts_cost(monkeypatch, 1 << 19, each=10.0)[
         "model_only"
-    ]  # 2,078 of 2,160
+    ]  # 1,854 of 2,160
 
 
 def _design(cost: float, *, loss=0.05, t_lt=0.5, model_only=False, R=2) -> dict:

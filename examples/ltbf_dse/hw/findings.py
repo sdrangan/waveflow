@@ -289,7 +289,30 @@ def main() -> Path:
             f"{r['overruns_together']} |"
         )
     w("")
-    w("## 5. Figures and tables (`paper_data/`)\n")
+    # 5 -------------------------------------------------------------------------------------------
+    if (dse.PAPER / "finalists_impl.csv").is_file():
+        w("## 5. The finalists after implementation (`finalists_impl.csv`)\n")
+        w(
+            "The whole system (both engines, the Ingest DMA, the Resp hub, the crossbar, Shared Mem) placed and "
+            "routed on the xczu48dr at 4 ns, Vivado 2024.1; the models predict csynth's estimates.\n"
+        )
+        w(
+            "| finalist | WNS (ns) | LUT impl / model | FF impl / model | DSP impl / model | BRAM18 impl / model | worst path |"
+        )
+        w("|---|---|---|---|---|---|---|")
+        for r in _read("finalists_impl.csv"):
+            name = f"{r['finalist']} {r['R']}x{r['C']} W{r['W']} L{r['L']}"
+            if r["wns_ns"] in ("", "None"):
+                w(f"| {name} | not built: {r['errors']} | | | | | |")
+                continue
+            cells = " | ".join(f"{_f(r[c + '_impl']):,.0f} / {_f(r[c + '_model']):,.0f}"
+                               for c in ("LUT", "FF", "DSP", "BRAM_18K"))  # fmt: skip
+            path = r.get("worst_path", "").split(" -> ")
+            w(
+                f"| {name} | {_f(r['wns_ns']):+.3f} | {cells} | {' → '.join(p.split('/')[0] + '/…/' + p.split('/')[-2] for p in path if p)} |"
+            )
+        w("")
+    w("## 6. Figures and tables (`paper_data/`)\n")
     w("| file | what | written by `python -m examples.ltbf_dse.` |")
     w("|---|---|---|")
     for name, what, by_mod in INDEX:

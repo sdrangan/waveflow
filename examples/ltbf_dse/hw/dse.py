@@ -10,8 +10,8 @@ dynamic policy and one A53 core.  For each design and target:
   90th (the worst);
 * **cost** -- the frozen resource models' prediction (``hw/models.py``) of its three parts, the Resp
   hub (its csynth), and Shared Mem's storage as built: the framework's memory is block RAM
-  (``bram_t2p.v``, ``ram_style = "block"``) at the system's power-of-two span, 512 64-bit words a
-  BRAM36 (plan §14, final review).  Each resource a fraction of the xczu48dr; ``max`` the largest.  A
+  (``bram_t2p.v``, ``ram_style = "block"``) at the system's power-of-two span, as Vivado maps it
+  (:func:`shared_mem_bram18`; plan §14, final review).  Each resource a fraction of the xczu48dr; ``max`` the largest.  A
   design over the device is *model-only*: flagged, timed as if on chip (the DDR of plan §9 d is not
   modelled) and never picked.  ``uram_alt``: Shared Mem in URAM instead (4,096 words each), a what-if;
 * **T_LT** -- the long-term update of the three sectors back to back on the job-level simulator
@@ -50,8 +50,17 @@ PAPER = HERE.parent / "paper_data"
 #: xczu48dr-ffvg1517-2-e (the csynth reports' AvailableResources).
 AVAILABLE = {"LUT": 425280, "FF": 850560, "DSP": 4272, "BRAM_18K": 2160, "URAM": 80}
 COSTS = ("DSP", "LUT", "FF", "BRAM_18K", "URAM", "max")
-#: 64-bit words a BRAM36 holds (1K x 36 halves, two a word) and a URAM (4K x 72).
-BRAM36_WORDS, URAM_WORDS = 512, 4096
+#: 64-bit words a URAM holds (4K x 72), for the what-if.
+URAM_WORDS = 4096
+
+
+def shared_mem_bram18(span: int) -> int:
+    """BRAM18 of Shared Mem's ``span`` 64-bit words as Vivado 2024.1 maps ``bram_t2p.v`` (the
+    finalists' implementation, plan §15: 2^17 words -> 228 RAMB36): seven 9-bit slices of
+    4K x 9 RAMB36 and one 1-bit slice of 32K x 1."""
+    return 2 * (7 * math.ceil(span / 4096) + math.ceil(span / 32768))
+
+
 #: Slots the sustained-rate check runs back to back.
 RT_SLOTS = 3
 ARRAYS = (8, 16, 32)
@@ -221,7 +230,7 @@ def cost(n: int, R: int, C: int, W: int, L: int, form: str) -> dict:
         for c in hm.COUNTERS
     }
     words, span = _mem(n, form)
-    res["BRAM_18K"] += 2 * math.ceil(span / BRAM36_WORDS)
+    res["BRAM_18K"] += shared_mem_bram18(span)
     frac = {c: res[c] / AVAILABLE[c] for c in AVAILABLE}
     frac["max"] = max(frac.values())
     return {
