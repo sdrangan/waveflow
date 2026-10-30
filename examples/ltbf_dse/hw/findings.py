@@ -27,6 +27,25 @@ from pathlib import Path
 from examples.ltbf_dse.hw import dse
 
 RE_TARGET = 14 * 792 / 125e-6  # 100 MHz: 88.7 M RE/s
+#: The figure and table index (plan step 7.1): each file this work writes to ``paper_data/``, what it
+#: holds and the module that writes it (``<target>``: ``-6_3``, ``-6_14``).
+INDEX = (
+    ("figures/loss_vs_t_<target>.svg", "median loss against `t`, a line a width; factored, `r` 1; a panel an array", "ltbf_accuracy_figures"),
+    ("figures/form_<target>.svg", "explicit against factored `Q̂` against the width; `t` 3, `r` 1", "ltbf_accuracy_figures"),
+    ("figures/rank_<target>.svg", "`r` 1 against 2 against the width; `t` 3, factored", "ltbf_accuracy_figures"),
+    ("accuracy_losses.csv", "the accuracy sweep: a row a drop, array, target, form, width and `t` (its jobs in `acc/`)", "ltbf_accuracy_sweep"),
+    ("dse_time.csv", "T_LT and the busy shares a drop, sector, form and `t`, at 2 and 4 lanes", "hw.dse"),
+    ("dse_realtime.csv", "the real-time load sustained with ingest, an array and lane count", "hw.dse"),
+    ("dse_designs.csv", "every design: accuracy, cost (the frozen models) and time (the job-level simulator)", "hw.dse"),
+    ("dse_decisions.csv", "the cheapest design a scenario, loss budget, T_LT budget and cost measure", "hw.dse"),
+    ("dse_frontiers.csv", "a frontier per array and target, on max cost, loss and T_LT", "hw.dse"),
+    ("dse_whatif.csv", "Shared Mem's what-ifs: a one-word-a-cycle leaf, banks", "hw.findings"),
+    ("dse_interference.csv", "the slot beside a long-term update", "hw.findings"),
+    ("model_validation.csv", "AC11: the frozen models on the held-out builds; the simulator against pysim and RTL", "hw.validate"),
+    ("decision_fidelity.csv", "AC13: each decision, the model's pick against brute force's measured best", "hw.fidelity"),
+    ("decision_fidelity_metrics.csv", "AC13: the right decisions per cost measure", "hw.fidelity"),
+    ("finalists_impl.csv", "AC14: the finalists after Vivado implementation, WNS and resources against the model", "hw.finalists"),
+)  # fmt: skip
 
 
 def _read(name: str) -> list[dict]:
@@ -263,6 +282,16 @@ def main() -> Path:
             f"| {r['array']} | {_f(r['sym_period_cycles']):,.0f} | {a:,.0f} | {b:,.0f} ({b / a - 1:+.1%}) | "
             f"{r['overruns_together']} |"
         )
+    w("")
+    w("## 5. Figures and tables (`paper_data/`)\n")
+    w("| file | what | written by `python -m examples.ltbf_dse.` |")
+    w("|---|---|---|")
+    for name, what, by_mod in INDEX:
+        have = all(
+            (dse.PAPER / name.replace("<target>", tg)).is_file()
+            for tg in ("-6_3", "-6_14")
+        )
+        w(f"| `{name}` | {what}{'' if have else ' (not yet written)'} | `{by_mod}` |")
     w("")
     out = dse.PAPER / "FINDINGS.md"
     out.write_text("\n".join(L) + "\n", encoding="utf-8")
