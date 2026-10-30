@@ -152,3 +152,7 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   own workspace): the record reached the queue view and nothing read it.
 - **A base-class name hidden in a C++ twin breaks the generated testbench** (step 5.2): a scheduler
   method `done(long)` in the host model hid `SwHostModel::done()`, which the harness calls.
+- **`pgrep -f <pattern>` in a wait loop matches the loop's own shell** (step 6.2): `until ! pgrep -f
+  hw.fidelity` never ended, the command line holding the pattern. Wait on a recorded PID (`kill -0`).
+- **A sustained-rate test must check the producer's pace too** (step 6.1): with the engines fast, the
+  Ingest DMA backpressured the O-RU and no ring ever overran, so "no overrun" passed at any period.
