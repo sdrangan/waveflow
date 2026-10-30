@@ -54,8 +54,8 @@ DEVICES = ("sys", "vec", "ingest")
 WORK_DIR = "xsi_work"
 
 
-def devices(sim: Simulation | None = None) -> dict[str, Any]:
-    """The four devices at AC9's parameters, named as their tops."""
+def devices(sim: Simulation | None = None, p: Any = None) -> dict[str, Any]:
+    """The four devices at AC9's parameters (or *p*'s, a ``SysParams``), named as their tops."""
     from examples.ltbf_dse.hw import system as sy
     from examples.ltbf_dse.hw.devsys import RespHub1
     from examples.ltbf_dse.hw.ingest import IngestDev
@@ -64,7 +64,7 @@ def devices(sim: Simulation | None = None) -> dict[str, Any]:
     from examples.ltbf_dse.hw.vec_wrap import VecWrap
 
     sim = sim or Simulation()
-    inp = sy.inputs(sy.SysParams())
+    inp = sy.inputs(p or sy.SysParams())
     S = sy.LtbfSystem(inp)
     p, d, cfg = S.p, S.d, S.cfg
     W = p.word_bits
@@ -126,9 +126,9 @@ def gen_top(root: Path, mod, W: int, **tcl) -> str:
     return spec.top_name
 
 
-def generate(root: Path = ROOT) -> list[str]:
-    """Headers, the four tops and their ``.tcl``: Python only, seconds."""
-    devs = devices()
+def generate(root: Path = ROOT, p: Any = None) -> list[str]:
+    """Headers, the four tops and their ``.tcl`` (at *p*, else AC9's): Python only, seconds."""
+    devs = devices(p=p)
     gen_headers(root, devs)
     W = int(devs["_word_bits"])
     return [
@@ -148,13 +148,15 @@ class LtbfCodegenStep(BuildStep):
     description = "Generate the headers, the four device tops and their .tcl."
     params: ClassVar[dict] = {}
     produces: ClassVar[dict] = {"include": Path(INCLUDE_DIR), "gen": Path(GEN_DIR)}
+    #: The system's parameters (``SysParams``; AC9's when ``None``).
+    sysp: Any = None
 
     def is_fresh(self, config: BuildConfig, paths: dict[str, Path]) -> bool:
         return False
 
     def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
         root = Path(config.root_dir)
-        generate(root)
+        generate(root, self.sysp)
         return {"include": root / INCLUDE_DIR, "gen": root / GEN_DIR}
 
 
