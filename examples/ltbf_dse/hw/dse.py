@@ -17,14 +17,14 @@ dynamic policy and one A53 core.  For each design and target:
   (16-bit lanes at every ``W``), not its array or width, so T_LT is simulated per (array, ``L``, form,
   ``t``); the engine, port and A53 busy cycles go with it (finding 4);
 * **real time** -- the slot's sustained RE rate with ingest: the shortest symbol period the simulator
-  runs without a ring overrun (bisection, drop 1 sector 1), as REs a second against 100 MHz's
-  88.7 M RE/s.
+  keeps (``jobsim.sustained``: no ring overrun, the O-RU on pace; bisection, drop 1 sector 1), as
+  REs a second against 100 MHz's 88.7 M RE/s.
 
 Writes ``paper_data/dse_designs.csv``, ``dse_time.csv``, ``dse_realtime.csv``, ``dse_decisions.csv``
 (AC13's rule: the cheapest design per array, target, loss budget, T_LT budget and cost measure) and
 ``dse_frontiers.csv`` (per array and target, the designs no other beats on max cost, loss and T_LT).
 
-    python -m examples.ltbf_dse.hw.dse
+    python -m examples.ltbf_dse.hw.dse [--reuse-time]
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ def _rt_case(args: tuple) -> dict:
 
     def ok(period_cycles: float) -> bool:
         r = js.JobSim(dataclasses.replace(cfg, sym_period=period_cycles / F_HOST), timing).run()
-        return r["overruns"] == 0 and r["finished"]
+        return js.sustained(r, period_cycles)
 
     lo, hi = 1_000.0, 250_000.0 * n * n / 64
     while not ok(hi):
@@ -279,7 +279,14 @@ def _write(name: str, rows: list[dict]) -> Path:
 
 
 def main() -> None:
-    lt, rt = time_tables()
+    if "--reuse-time" in sys.argv:  # the long-term table from the last run; the slot's rate afresh
+        from examples.ltbf_dse.hw.fidelity import _load_time
+
+        lt = _load_time("dse_time.csv")
+        with _pool() as pool:
+            rt = pool.map(_rt_case, list(itertools.product(ARRAYS, LANES)), chunksize=1)
+    else:
+        lt, rt = time_tables()
     _write("dse_time.csv", [{k: v for k, v in r.items() if not isinstance(v, dict)}
                             | {f"{L}_{k}": v for L in ("L2", "L4") if L in r for k, v in r[L].items()}
                             for r in lt])  # fmt: skip

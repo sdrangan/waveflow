@@ -70,6 +70,8 @@ class Timing:
     #: :attr:`symbol_port` of its :attr:`symbol` is the DMA's writes.
     port: bool = False
     symbol_port: float = 0.0
+    #: Shared Mem's banks (a what-if): up to this many transfers proceed at full speed at once.
+    banks: int = 1
     read: tuple = (2.0, 1.0)  # a + b n
     write: tuple = (17.4, 1.03)
     queue: tuple = (3.0, 1.0)
@@ -89,8 +91,8 @@ class Port:
     """Shared Mem's one port (it serves one transaction at a time), shared by processor sharing:
     while ``k`` transfers are active, each one's remaining port work advances at ``1/k`` of the clock."""
 
-    def __init__(self, env: simpy.Environment, period: float) -> None:
-        self.env, self.period = env, period
+    def __init__(self, env: simpy.Environment, period: float, banks: int = 1) -> None:
+        self.env, self.period, self.banks = env, period, banks
         self.active: dict = {}  # event -> remaining cycles of port work
         self.t = env.now
         self.gen = 0
@@ -102,7 +104,7 @@ class Port:
             dt = (self.env.now - self.t) / self.period
             self.busy += dt
             for ev in self.active:
-                self.active[ev] -= dt / k
+                self.active[ev] -= dt * min(1.0, self.banks / k)
         self.t = self.env.now
 
     def transfer(self, cycles: float) -> simpy.Event:
@@ -119,7 +121,7 @@ class Port:
     def _schedule(self) -> None:
         self.gen += 1
         if self.active:
-            dt = min(self.active.values()) * len(self.active) * self.period
+            dt = min(self.active.values()) / min(1.0, self.banks / len(self.active)) * self.period
             self.env.process(self._wake(self.gen, max(dt, 0.0)))
 
     def _wake(self, gen: int, dt: float):
@@ -152,6 +154,8 @@ class Config:
     setup_words: int = 173
     #: Stop once the long-term update is done (no slot).
     lt_only: bool = False
+    #: The slot from the start, beside the long-term update (their interference), not after it.
+    overlap: bool = False
 
 
 class JobSim:
@@ -178,7 +182,7 @@ class JobSim:
         self.inbox = simpy.Store(self.env)
         self.cpu_q = simpy.Store(self.env)
         self.gp_lock = simpy.Resource(self.env, capacity=1)
-        self.port = Port(self.env, self.period)
+        self.port = Port(self.env, self.period, timing.banks)
         #: Each engine's busy cycles (its jobs, end to end).
         self.busy = {"sys": 0.0, "vec": 0.0}
         self.fifo = {e: simpy.Store(self.env, capacity=max(1, cfg.cap[e] - 1)) for e in ("sys", "vec")}
@@ -189,6 +193,8 @@ class JobSim:
         self.credit_seen = 0
         self.taken = self.seq = self.chunks = self.overruns = 0
         self.credit_sent = 0
+        #: The O-RU's largest delay behind its symbol pace (cycles).
+        self.oru_late = 0.0
         self.t_lt = math.nan
 
     # -- the A53 --------------------------------------------------------------------------------
@@ -255,7 +261,7 @@ class JobSim:
         sch = self.sch
         cpu = sum(r.cycles + r.switch_cycles for r in self.cpu.records) / self.cpu.config.f_clk_hz * F_HOST
         return {"end": env.now, "t_lt": self.t_lt, "overruns": sch.overruns, "dropped": sch.dropped,
-                "misses": dict(sch.misses), "finished": sch.finished,
+                "misses": dict(sch.misses), "finished": sch.finished, "oru_late": self.oru_late,
                 "busy": {**self.busy, "port": self.port.busy, "cpu": cpu}}  # fmt: skip
 
     def _main(self):
@@ -264,6 +270,12 @@ class JobSim:
         yield from self.wait(t.queue[0] + 2 * t.queue[1])  # the Ingest DMA's Ctrl
         sch.add(self.lt)
         rt_added = False
+        if self.cfg.overlap:
+            rt_added = True
+            self.rt = real_time(d, t0=self.env.now)
+            sch.add(self.rt)
+            self.slot_start.succeed()
+            self.env.process(self._ticker())
         yield from self._pump()
         while not (rt_added and sch.finished):
             ev = yield self.inbox.get()
@@ -276,6 +288,8 @@ class JobSim:
                 yield from self.wait(t.status)
                 sch.on_status(self.chunks, self.overruns, self.env.now)
             lt_done = all(sch.state[g] == "done" for g in range(len(self.lt.jobs)))
+            if lt_done and math.isnan(self.t_lt):
+                self.t_lt = self.env.now
             if not rt_added and lt_done and self.cfg.lt_only:
                 self.t_lt = self.env.now
                 break
@@ -394,6 +408,8 @@ class JobSim:
         for s in range(d.n_sym):
             yield self.env.timeout(max(0.0, t0 + (s + 1) * cfg.sym_period - self.env.now))
             start = self.env.now
+            # The O-RU keeps its pace only while the DMA takes each symbol on time.
+            self.oru_late = max(self.oru_late, (start - t0 - (s + 1) * cfg.sym_period) / self.period)
             dropped = ring - (self.taken - self.credit_seen) < d.n_chunks
             first = self.seq
             if dropped:
@@ -424,12 +440,14 @@ class JobSim:
 # -- the fitted models (step 5.5) --------------------------------------------------------------------
 
 
-def fitted(S, model: dict) -> tuple[Config, Timing]:
+def fitted(S, model: dict, *, read_scale: float = 1.0, banks: int = 1) -> tuple[Config, Timing]:
     """``(Config, Timing)`` for the system *S* (``system.LtbfSystem``) on the frozen models
     (``models.json``): each engine job's cycles from its shape (the words it moves over Shared Mem,
     its tiles; a vector job's program's execute cycles), each chunk from the Ingest DMA's symbol
     model, each projection priced on its UE's Jacobi counters -- computed from the fixed-point chain's
-    ``W`` as the host computes them.  Shared Mem as built: a host read two cycles a word, a write one."""
+    ``W`` as the host computes them.  Shared Mem as built: a host read two cycles a word, a write one.
+    What-ifs: *read_scale* scales every read word's cost (``0.5``: a one-word-a-cycle leaf), *banks*
+    the port's banks."""
     from examples.ltbf_dse import ltbf_fixed_chain as fc
     from examples.ltbf_dse import ltbf_proj
     from examples.ltbf_dse.hw import programs as pg
@@ -438,7 +456,9 @@ def fitted(S, model: dict) -> tuple[Config, Timing]:
     from waveflow.vecunit.unit import VecTiming, job_features
 
     d, p, inp = S.d, S.p, S.inp
-    cy = model["cycles"]
+    cy = {k: dict(v) for k, v in model["cycles"].items()}
+    for k in ("sys", "vec"):
+        cy[k]["rd"] *= read_scale
 
     def pred(kind: str, terms: dict) -> float:
         return sum(cy[kind][k] * terms.get(k, 0.0) for k in cy[kind])
@@ -485,7 +505,8 @@ def fitted(S, model: dict) -> tuple[Config, Timing]:
                 for k, u in enumerate(inp.own)}  # fmt: skip
     timing = Timing(sys_job=sys_job, vec_job=vec_job, chunk=chunk, symbol=t_sym, port=True,
                     symbol_port=min(sym_port, t_sym),
-                    proj_counters_of=lambda j: counters[j.key[1]], read=(3.0, 2.0), write=(2.0, 1.0))  # fmt: skip
+                    proj_counters_of=lambda j: counters[j.key[1]], read=(3.0, 2.0 * read_scale),
+                    write=(2.0, 1.0), banks=banks)  # fmt: skip
     W = p.word_bits
     desc = {"sys": len(EngineJobDesc().serialize(word_bw=W)), "vec": len(VecMemJob().serialize(word_bw=W))}
     cfg = Config(d=d, policy=p.policy, qresp_depth=p.qresp_depth, ring_symbols=p.ring_symbols,
@@ -551,3 +572,9 @@ if __name__ == "__main__":
         print(f"{k}: jobsim {out[k] * F_HOST:,.0f} cycles, pysim {ref[k] * F_HOST:,.0f} "
               f"({out[k] / ref[k] - 1:+.2%})")
     print({k: out[k] for k in ("overruns", "dropped", "misses", "finished")})
+
+
+def sustained(r: dict, period_cycles: float) -> bool:
+    """A run keeps up with its symbol pace: no ring overrun, every job done, and the O-RU never more
+    than 5% of a period behind (else the Ingest DMA, not the engines, sets the rate)."""
+    return r["overruns"] == 0 and r["finished"] and r["oru_late"] <= 0.05 * period_cycles
