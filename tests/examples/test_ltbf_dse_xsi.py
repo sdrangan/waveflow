@@ -35,7 +35,9 @@ def _toolchain() -> None:
 
 
 @pytest.mark.xsi
-@pytest.mark.parametrize("name", ["sys", "vec", "ingest"], ids=["systolic", "vec", "ingest"])
+@pytest.mark.parametrize(
+    "name", ["sys", "vec", "ingest"], ids=["systolic", "vec", "ingest"]
+)
 def test_device_rtl_equals_pysim(name):
     from examples.ltbf_dse.hw import build as b
     from waveflow.utils.csynthparse import synth_target
@@ -70,7 +72,10 @@ def test_system_at_rtl():
     cfg = build_config(b.ROOT)
     cfg.params["synth"] = "build"
     dag = b.system_dag()
-    for through in ("ltbf_pysim", "ltbf_system_xsi"):  # not ltbf_compare: endpoint by endpoint
+    for through in (
+        "ltbf_pysim",
+        "ltbf_system_xsi",
+    ):  # not ltbf_compare: endpoint by endpoint
         res = dag.run(cfg, through=through)
         bad = {k: (r.message or "")[-2000:] for k, r in res.items() if not r.success}
         assert not bad, bad
@@ -83,13 +88,16 @@ def test_system_at_rtl():
         out: dict = {}
         for burst in _bursts(d):
             r = Resp().deserialize(list(burst), word_bw=64)
-            out.setdefault(int(r.src), []).append((int(r.status), int(r.tx_id), int(r.seq)))
+            out.setdefault(int(r.src), []).append(
+                (int(r.status), int(r.tx_id), int(r.seq))
+            )
         return out
 
     assert by_source(py / "qresp") == by_source(rtl / "qresp")
     # The host's data; its one-word credit writes batch as timing has it.
     assert sorted(x for x in _bursts(py / "bus") if len(x) > 1) == sorted(
-        x for x in _bursts(rtl / "bus") if len(x) > 1)
+        x for x in _bursts(rtl / "bus") if len(x) > 1
+    )
     t_py = json.loads((work / "pysim.json").read_text())["cycles"]
     out = json.loads((work / "report.json").read_text())["output"]
     t_rtl = int(re.search(r"DONE done=1 cycles=(\d+)", out).group(1))

@@ -265,6 +265,10 @@ class IngestDev(FreeRunMod):
 class IngestDevQ(IngestDev):
     """The Ingest DMA with its symbol input as a memory-mapped queue (``qsym``): the RTL gates' form,
     where the software host plays the O-RU, an antenna's burst a packet (a stream driver beside a
-    software host has no bundle in the XSI run).  The same HLS top; the view is RTL beside it."""
+    software host has no bundle in the XSI run).  The same HLS top; the view is RTL beside it.
+    """
 
-    mm_views: ClassVar[tuple] = (*IngestDev.mm_views, QueueIn("qsym", port="s_sym", depth=512))
+    mm_views: ClassVar[tuple] = (
+        *IngestDev.mm_views,
+        QueueIn("qsym", port="s_sym", depth=512),
+    )

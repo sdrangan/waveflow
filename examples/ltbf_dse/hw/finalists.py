@@ -53,7 +53,9 @@ def implement(name: str) -> dict:
     dag = BuildDag()
     dag.add(hb.LtbfCodegenStep(name="codegen", sysp=p))
     hw, _S, _host = sy.build(sy.inputs(p), rtl=True)
-    add_system_steps(dag, hw, work_dir="xsi_work", top="ltbf_top", prefix="f_", workspace="fin")
+    add_system_steps(
+        dag, hw, work_dir="xsi_work", top="ltbf_top", prefix="f_", workspace="fin"
+    )
     synth = next(s for s in dag.steps() if isinstance(s, SystemSynthStep))
     synth.impl = True  # place and route too: the record carries closure
     cfg = build_config(root)
@@ -94,7 +96,9 @@ def main(names) -> Path:
             impl = _key(rec.get("total", {}), c)
             model = rec["model"].get(c, float("nan"))
             row[f"{c}_impl"], row[f"{c}_model"] = impl, round(model, 1)
-            row[f"{c}_err"] = (model / impl - 1) if impl > 0 else ""  # NaN compares false
+            row[f"{c}_err"] = (
+                (model / impl - 1) if impl > 0 else ""
+            )  # NaN compares false
         rows.append(row)
         print(row, flush=True)
     OUT.parent.mkdir(parents=True, exist_ok=True)

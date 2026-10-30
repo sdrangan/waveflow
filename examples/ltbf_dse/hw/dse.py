@@ -81,7 +81,7 @@ def _lt_case(args: tuple) -> dict:
     out = {"n": n, "drop": drop, "sector": sector, "form": form, "t": t}
     try:
         inp = sy.inputs(_params(n, drop=drop, sector=sector, form=form, t=t))
-    except Exception as e:  # noqa: BLE001 -- a sector with no own UE has no long-term update
+    except Exception as e:  # noqa: BLE001 -- reported
         out["skip"] = f"{type(e).__name__}: {e}"[:200]
         return out
     if not inp.own:
@@ -107,7 +107,9 @@ def _rt_case(args: tuple) -> dict:
     cfg, timing = js.fitted(sy.LtbfSystem(sy.inputs(_params(n, L=L))), model)
 
     def ok(period_cycles: float) -> bool:
-        r = js.JobSim(dataclasses.replace(cfg, sym_period=period_cycles / F_HOST), timing).run()
+        r = js.JobSim(
+            dataclasses.replace(cfg, sym_period=period_cycles / F_HOST), timing
+        ).run()
         return js.sustained(r, period_cycles)
 
     lo, hi = 1_000.0, 250_000.0 * n * n / 64
@@ -140,7 +142,12 @@ def t_lt_table(lt: list[dict]) -> dict:
     for n, L, form, t in itertools.product(ARRAYS, LANES, FORMS, TS):
         per_drop = []
         for drop in DROPS:
-            rows = [r for r in lt if (r["n"], r["drop"], r["form"], r["t"]) == (n, drop, form, t) and f"L{L}" in r]
+            rows = [
+                r
+                for r in lt
+                if (r["n"], r["drop"], r["form"], r["t"]) == (n, drop, form, t)
+                and f"L{L}" in r
+            ]
             tot: dict = {}
             for r in rows:
                 for k, v in r[f"L{L}"].items():
@@ -166,7 +173,9 @@ def _model() -> dict:
 def _hub() -> dict:
     from waveflow.utils.csynthparse import CsynthParser
 
-    cp = CsynthParser(report_path=str(HERE.parent / "ltbf_hub_proj" / "solution1" / "syn" / "report"))
+    cp = CsynthParser(
+        report_path=str(HERE.parent / "ltbf_hub_proj" / "solution1" / "syn" / "report")
+    )
     cp.get_total_resources()
     return cp.total_resources
 
@@ -184,8 +193,15 @@ def cost(n: int, R: int, C: int, W: int, L: int, form: str) -> dict:
 
     m = _model()
     nrx = n * n
-    parts = (sp.sys_part(nrx, R=R, C=C, W=W), sp.vec_part(nrx, L=L, W=W), sp.ing_part(nrx))
-    res = {c: sum(hm.predict_resources(m, p)[c] for p in parts) + _hub().get(c, 0) for c in hm.COUNTERS}
+    parts = (
+        sp.sys_part(nrx, R=R, C=C, W=W),
+        sp.vec_part(nrx, L=L, W=W),
+        sp.ing_part(nrx),
+    )
+    res = {
+        c: sum(hm.predict_resources(m, p)[c] for p in parts) + _hub().get(c, 0)
+        for c in hm.COUNTERS
+    }
     bits = _mem_words(n, form) * 64
     uram = min(AVAILABLE["URAM"] - res["URAM"], math.ceil(bits / URAM_BITS))
     bram = max(0, math.ceil((bits - uram * URAM_BITS) / BRAM_BITS))
@@ -195,7 +211,12 @@ def cost(n: int, R: int, C: int, W: int, L: int, form: str) -> dict:
         res["BRAM_18K"] += bram
     frac = {c: res[c] / AVAILABLE[c] for c in AVAILABLE}
     frac["max"] = max(frac.values())
-    return {"res": res, "frac": frac, "mem_words": _mem_words(n, form), "model_only": ddr}
+    return {
+        "res": res,
+        "frac": frac,
+        "mem_words": _mem_words(n, form),
+        "model_only": ddr,
+    }
 
 
 # -- loss -------------------------------------------------------------------------------------------
@@ -207,12 +228,16 @@ def _losses() -> dict:
     with (PAPER / "accuracy_losses.csv").open() as fh:
         for r in csv.DictReader(fh):
             out[r["array"], r["target"], r["config"], int(r["t"]), int(r["r"])] = (
-                float(r["median_loss_db"]), float(r["p10_loss_db"]))
+                float(r["median_loss_db"]),
+                float(r["p10_loss_db"]),
+            )
     return out
 
 
 def loss(n: int, target: str, W: int, form: str, t: int) -> tuple[float, float] | None:
-    return _losses().get((f"{n}x{n}", target, f"W{W}g1l16{'e' if form == 'explicit' else 'f'}", t, 1))
+    return _losses().get(
+        (f"{n}x{n}", target, f"W{W}g1l16{'e' if form == 'explicit' else 'f'}", t, 1)
+    )
 
 
 # -- the joint table, decisions, frontiers ----------------------------------------------------------
@@ -221,7 +246,9 @@ def loss(n: int, target: str, W: int, form: str, t: int) -> tuple[float, float] 
 def designs(times: dict, rt: list[dict]) -> list[dict]:
     rate = {(r["n"], r["L"]): r for r in rt}
     out = []
-    for n, (R, C), W, L, form, t, target in itertools.product(ARRAYS, TILES, WIDTHS, LANES, FORMS, TS, TARGETS):
+    for n, (R, C), W, L, form, t, target in itertools.product(
+        ARRAYS, TILES, WIDTHS, LANES, FORMS, TS, TARGETS
+    ):
         lo = loss(n, target, W, form, t)
         tm = times.get((n, L, form, t))
         if lo is None or tm is None:
@@ -244,10 +271,16 @@ def designs(times: dict, rt: list[dict]) -> list[dict]:
 def decisions(rows: list[dict]) -> list[dict]:
     """AC13's rule on the predicted table: the cheapest design meeting both budgets (none: empty)."""
     out = []
-    for n, target, lb, tb, cm in itertools.product(ARRAYS, TARGETS, LOSS_BUDGETS, TIME_BUDGETS_MS, COSTS):
+    for n, target, lb, tb, cm in itertools.product(
+        ARRAYS, TARGETS, LOSS_BUDGETS, TIME_BUDGETS_MS, COSTS
+    ):
         ok = [r for r in rows if r["array"] == f"{n}x{n}" and r["target"] == target
               and r["median_loss_db"] <= lb and r["t_lt_ms"] <= tb]  # fmt: skip
-        best = min(ok, key=lambda r: (r[f"cost_{cm}"], r["cost_max"], r["t_lt_ms"]), default=None)
+        best = min(
+            ok,
+            key=lambda r: (r[f"cost_{cm}"], r["cost_max"], r["t_lt_ms"]),
+            default=None,
+        )
         out.append({"array": f"{n}x{n}", "target": target, "loss_budget_db": lb, "time_budget_ms": tb,
                     "cost_measure": cm, "feasible": len(ok),
                     **({k: best[k] for k in ("R", "C", "W", "L", "form", "t", "median_loss_db", "t_lt_ms",
@@ -261,7 +294,10 @@ def frontiers(rows: list[dict]) -> list[dict]:
         rs = [r for r in rows if r["array"] == f"{n}x{n}" and r["target"] == target]
         keys = ("cost_max", "median_loss_db", "t_lt_ms")
         for r in rs:
-            if not any(all(o[k] <= r[k] for k in keys) and any(o[k] < r[k] for k in keys) for o in rs):
+            if not any(
+                all(o[k] <= r[k] for k in keys) and any(o[k] < r[k] for k in keys)
+                for o in rs
+            ):
                 out.append(r)
     return out
 
@@ -274,12 +310,16 @@ def _write(name: str, rows: list[dict]) -> Path:
         w = csv.DictWriter(fh, fieldnames=keys)
         w.writeheader()
         for r in rows:
-            w.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()})
+            w.writerow(
+                {k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()}
+            )
     return path
 
 
 def main() -> None:
-    if "--reuse-time" in sys.argv:  # the long-term table from the last run; the slot's rate afresh
+    if (
+        "--reuse-time" in sys.argv
+    ):  # the long-term table from the last run; the slot's rate afresh
         from examples.ltbf_dse.hw.fidelity import _load_time
 
         lt = _load_time("dse_time.csv")
@@ -292,8 +332,11 @@ def main() -> None:
                             for r in lt])  # fmt: skip
     _write("dse_realtime.csv", rt)
     rows = designs(t_lt_table(lt), rt)
-    for name, table in (("dse_designs.csv", rows), ("dse_decisions.csv", decisions(rows)),
-                        ("dse_frontiers.csv", frontiers(rows))):
+    for name, table in (
+        ("dse_designs.csv", rows),
+        ("dse_decisions.csv", decisions(rows)),
+        ("dse_frontiers.csv", frontiers(rows)),
+    ):
         print(_write(name, table), len(table))
 
 

@@ -53,7 +53,9 @@ def resource_terms(p: sp.Part) -> dict[str, float]:
         pe = p.R * p.C
         return {"1": 1.0, "pe": pe, "pe_w": pe * p.W, "panels": math.log2(max(p.n_rx, 176) / p.c),
                 "c": p.c, "Mmax": p.Mmax, "word": w}  # fmt: skip
-    if p.kind == "vec":  # the register files' BRAM18 as the framework's resource model counts them
+    if (
+        p.kind == "vec"
+    ):  # the register files' BRAM18 as the framework's resource model counts them
         from waveflow.vecunit.calib import config_features
 
         return {"1": 1.0, "L": p.L, "L_w": p.L * p.W, "bram18": config_features(_system(p).vu)["bram18"],
@@ -117,19 +119,24 @@ def sys_job_terms(p: sp.Part) -> list[dict[str, float]]:
     S = _system(p)
     d = S.d
     R, C, c = d.rows, d.cols, d.c
-    shapes = [(C, R, c), (R, C, c), (C, R, c), (d.S, R, d.J * c), (R, C, R)][: 5 if d.n_rx <= 64 else 4]
+    shapes = [(C, R, c), (R, C, c), (C, R, c), (d.S, R, d.J * c), (R, C, R)][
+        : 5 if d.n_rx <= 64 else 4
+    ]
     wa, wb, wc = S.w(d.Mmax, c), S.w(c, c), S.w(d.Mmax, c)
     out = []
     for m, k, n in shapes:
         tiles, P = (m // d.Mmax) * (n // c), k // c
-        out.append({"1": 1.0, "rd": tiles * P * (wa + wb), "wr": tiles * wc, "tiles": tiles})
+        out.append(
+            {"1": 1.0, "rd": tiles * P * (wa + wb), "wr": tiles * wc, "tiles": tiles}
+        )
     return out
 
 
 def vec_job_terms(p: sp.Part) -> list[dict[str, float]]:
     """The vector gate's jobs at *p* (``devsys.vec_system``): a CG step, the last one, an equalizer
     chunk -- the words each loads and stores, and its execute cycles (``VecTiming`` on its program),
-    the equalizer's apart (it streams its rounds, the CG step loads, runs, then stores)."""
+    the equalizer's apart (it streams its rounds, the CG step loads, runs, then stores).
+    """
     from examples.ltbf_dse.hw import programs as pg
     from waveflow.vecunit.unit import VecTiming, job_features
 
@@ -146,7 +153,9 @@ def vec_job_terms(p: sp.Part) -> list[dict[str, float]]:
     for pr, (ld, st) in zip(progs, moves, strict=True):
         prog = sum(len(x) for x in pr)
         ex = vt.predict(job_features(pr.execute, S.vu))
-        eq = pr is progs[2]  # the equalizer streams its rounds: its loads overlap its execution
+        eq = (
+            pr is progs[2]
+        )  # the equalizer streams its rounds: its loads overlap its execution
         out.append({"1": 1.0, "rd": ld + prog, "wr": st, "exec": 0.0 if eq else ex,
                     "exec_eq": ex if eq else 0.0, "eq": float(eq)})  # fmt: skip
     return out
@@ -154,10 +163,15 @@ def vec_job_terms(p: sp.Part) -> list[dict[str, float]]:
 
 def gate_symbols(rep: dict) -> list[float]:
     """The Ingest DMA's time a symbol in RTL cycles from its gate's host log: the host writes each
-    symbol's antennas into ``qsym`` back to back, so a symbol's span is the DMA's rate."""
+    symbol's antennas into ``qsym`` back to back, so a symbol's span is the DMA's rate.
+    """
     q = [o for o in rep.get("ops") or [] if o[0] == "W" and o[1] == QSYM and o[2] > 1]
     per = len(q) // 2  # the gate's two symbols
-    return [float(q[(s + 1) * per - 1][4] - q[s * per][3]) for s in range(2)] if per else []
+    return (
+        [float(q[(s + 1) * per - 1][4] - q[s * per][3]) for s in range(2)]
+        if per
+        else []
+    )
 
 
 def ing_symbol_terms(p: sp.Part) -> list[dict[str, float]]:
@@ -172,7 +186,9 @@ def ing_symbol_terms(p: sp.Part) -> list[dict[str, float]]:
 
 
 def job_rows(kind: str, reports: list[dict]) -> tuple[list[dict], list[float]]:
-    terms_of = {"sys": sys_job_terms, "vec": vec_job_terms, "ing": ing_symbol_terms}[kind]
+    terms_of = {"sys": sys_job_terms, "vec": vec_job_terms, "ing": ing_symbol_terms}[
+        kind
+    ]
     X, y = [], []
     for r in reports:
         if r["part"]["kind"] != kind or not r.get("ops"):
@@ -190,13 +206,19 @@ def job_rows(kind: str, reports: list[dict]) -> tuple[list[dict], list[float]]:
 
 def fit() -> dict:
     reps = load_reports("fit")
-    model: dict = {"resources": {}, "cycles": {}, "fit_parts": sorted(r["name"] for r in reps)}
+    model: dict = {
+        "resources": {},
+        "cycles": {},
+        "fit_parts": sorted(r["name"] for r in reps),
+    }
     for kind in sp.KINDS:
         rk = [r for r in reps if r["part"]["kind"] == kind]
         if not rk:
             continue
         terms = [resource_terms(sp.Part(**r["part"])) for r in rk]
-        model["resources"][kind] = {c: _lstsq(terms, [r["resources"][c] for r in rk]) for c in COUNTERS}
+        model["resources"][kind] = {
+            c: _lstsq(terms, [r["resources"][c] for r in rk]) for c in COUNTERS
+        }
     for kind in sp.KINDS:
         X, y = job_rows(kind, reps)
         if X:
@@ -225,14 +247,26 @@ def score(model: dict, role: str = "heldout") -> dict:
             meas = r["resources"][c]
             if meas == 0:
                 continue
-            errs.append(abs(predict_resources(model, sp.Part(**r["part"]))[c] / meas - 1))
+            errs.append(
+                abs(predict_resources(model, sp.Part(**r["part"]))[c] / meas - 1)
+            )
         if errs:
-            out["resources"][c] = {"median": float(np.median(errs)), "worst": float(max(errs)), "n": len(errs)}
+            out["resources"][c] = {
+                "median": float(np.median(errs)),
+                "worst": float(max(errs)),
+                "n": len(errs),
+            }
     for kind, coef in model["cycles"].items():
         X, y = job_rows(kind, reps)
-        errs = [abs(_predict(coef, x) / v - 1) for x, v in zip(X, y, strict=True) if v > 0]
+        errs = [
+            abs(_predict(coef, x) / v - 1) for x, v in zip(X, y, strict=True) if v > 0
+        ]
         if errs:
-            out["cycles"][kind] = {"median": float(np.median(errs)), "worst": float(max(errs)), "n": len(errs)}
+            out["cycles"][kind] = {
+                "median": float(np.median(errs)),
+                "worst": float(max(errs)),
+                "n": len(errs),
+            }
     return out
 
 

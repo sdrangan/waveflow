@@ -290,7 +290,10 @@ class _Mem:
             p = self.S.p
             lim = 1 << (fill.W - 1)
             count = n * p.word_bits // (2 * p.lane_bits)
-            re, im = (self.rng.integers(-lim, lim, count) * 2.0**-fill.frac_bits for _ in range(2))
+            re, im = (
+                self.rng.integers(-lim, lim, count) * 2.0**-fill.frac_bits
+                for _ in range(2)
+            )
             self.image.append((a, self.S.to_w(re, im, fill)))
         return a
 

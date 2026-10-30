@@ -308,7 +308,8 @@ def fixed_projection(
 def project_ue(wsc: np.ndarray, x: np.ndarray, pu: int, r: int) -> np.ndarray:
     """One UE's CPU job: *wsc* its columns of ``2^(s+m) W`` (``8·n_conn x 8``, rows every connected
     UE's), *x* its columns of the stored ``X`` (``N_rx x 8``), *pu* its row block; ``G'ᵢ`` (``r x
-    N_rx``).  Shared by :func:`fixed_projection` and the system's host (``hw/system.py``)."""
+    N_rx``).  Shared by :func:`fixed_projection` and the system's host (``hw/system.py``).
+    """
     n_conn = wsc.shape[0] // lk.N_SRS
     rows = slice(pu * lk.N_SRS, (pu + 1) * lk.N_SRS)
     m = wsc[rows] * np.sqrt(lk.N_SRS)

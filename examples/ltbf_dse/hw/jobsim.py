@@ -60,7 +60,9 @@ class Timing:
     chunk: Callable[[int], float]
     proj: Callable[[int], float] | None = None
     #: The projection model's Jacobi counters when :attr:`proj` is ``None``.
-    proj_counters: dict = field(default_factory=lambda: {"n_rot": 168.0, "n_sweeps": 6.0})
+    proj_counters: dict = field(
+        default_factory=lambda: {"n_rot": 168.0, "n_sweeps": 6.0}
+    )
     #: Each projection job's counters (``job -> dict``), overriding :attr:`proj_counters`.
     proj_counters_of: Callable[[Any], dict] | None = None
     #: The Ingest DMA's time a symbol, which paces the O-RU's writes (``None``: the writes' own).
@@ -80,7 +82,10 @@ class Timing:
     resp: float = 3.0
 
     def reads(self, n: int) -> float:
-        return sum(self.read[0] + self.read[1] * min(MAX_BURST, n - i) for i in range(0, n, MAX_BURST))
+        return sum(
+            self.read[0] + self.read[1] * min(MAX_BURST, n - i)
+            for i in range(0, n, MAX_BURST)
+        )
 
     def writes(self, n: int) -> float:
         return sum(self.write[0] + self.write[1] * min(MAX_BURST, n - i)
@@ -89,7 +94,8 @@ class Timing:
 
 class Port:
     """Shared Mem's one port (it serves one transaction at a time), shared by processor sharing:
-    while ``k`` transfers are active, each one's remaining port work advances at ``1/k`` of the clock."""
+    while ``k`` transfers are active, each one's remaining port work advances at ``1/k`` of the clock.
+    """
 
     def __init__(self, env: simpy.Environment, period: float, banks: int = 1) -> None:
         self.env, self.period, self.banks = env, period, banks
@@ -121,7 +127,11 @@ class Port:
     def _schedule(self) -> None:
         self.gen += 1
         if self.active:
-            dt = min(self.active.values()) / min(1.0, self.banks / len(self.active)) * self.period
+            dt = (
+                min(self.active.values())
+                / min(1.0, self.banks / len(self.active))
+                * self.period
+            )
             self.env.process(self._wake(self.gen, max(dt, 0.0)))
 
     def _wake(self, gen: int, dt: float):
@@ -171,7 +181,11 @@ class JobSim:
         self.sim = Simulation()
         self.env: simpy.Environment = self.sim.env
         self.platform = CpuPlatform.load()
-        self.cpu = Processor(name="cpu", sim=self.sim, config=self.platform.cpu_config(n_cores=cfg.n_cores))
+        self.cpu = Processor(
+            name="cpu",
+            sim=self.sim,
+            config=self.platform.cpu_config(n_cores=cfg.n_cores),
+        )
         self.period = 1.0 / F_HOST
         self.sch = Scheduler(policy=cfg.policy, qresp_depth=cfg.qresp_depth,
                              ring_depth=cfg.ring_symbols * d.n_chunks, n_chunks=d.n_chunks)  # fmt: skip
@@ -185,7 +199,10 @@ class JobSim:
         self.port = Port(self.env, self.period, timing.banks)
         #: Each engine's busy cycles (its jobs, end to end).
         self.busy = {"sys": 0.0, "vec": 0.0}
-        self.fifo = {e: simpy.Store(self.env, capacity=max(1, cfg.cap[e] - 1)) for e in ("sys", "vec")}
+        self.fifo = {
+            e: simpy.Store(self.env, capacity=max(1, cfg.cap[e] - 1))
+            for e in ("sys", "vec")
+        }
         self.slot_start = self.env.event()
         self.done = self.env.event()
         self.t_start: dict[int, float] = {}
@@ -222,7 +239,9 @@ class JobSim:
         """As ``LtbfHost.charge``: the Processor's time, padded to whole host cycles."""
         yield from self.cpu.execute(func, **kw)
         rec = self.cpu.records[-1]
-        n = math.ceil((rec.cycles + rec.switch_cycles) * F_HOST / self.cpu.config.f_clk_hz - 1e-9)
+        n = math.ceil(
+            (rec.cycles + rec.switch_cycles) * F_HOST / self.cpu.config.f_clk_hz - 1e-9
+        )
         pad = rec.t_start + n * self.period - self.env.now
         if pad > 0:
             yield self.env.timeout(pad)
@@ -259,7 +278,11 @@ class JobSim:
             env.process(self._engine(e))
         env.run(until=self.done)
         sch = self.sch
-        cpu = sum(r.cycles + r.switch_cycles for r in self.cpu.records) / self.cpu.config.f_clk_hz * F_HOST
+        cpu = (
+            sum(r.cycles + r.switch_cycles for r in self.cpu.records)
+            / self.cpu.config.f_clk_hz
+            * F_HOST
+        )
         return {"end": env.now, "t_lt": self.t_lt, "overruns": sch.overruns, "dropped": sch.dropped,
                 "misses": dict(sch.misses), "finished": sch.finished, "oru_late": self.oru_late,
                 "busy": {**self.busy, "port": self.port.busy, "cpu": cpu}}  # fmt: skip
@@ -319,8 +342,12 @@ class JobSim:
             room = self.cfg.cap[e] - sum(1 for (e2, _tx) in sch.in_flight if e2 == e)
             for act in sch.take(e, max(0, room)):
                 if act[0] == "job":
-                    words = 3 if e == "sys" else 16  # EngineJobDesc, VecMemJob at 64 bits
-                    yield self.fifo[e].put((act[1], act[2]))  # waits for room, as the queue view
+                    words = (
+                        3 if e == "sys" else 16
+                    )  # EngineJobDesc, VecMemJob at 64 bits
+                    yield self.fifo[e].put(
+                        (act[1], act[2])
+                    )  # waits for room, as the queue view
                     yield from self.wait(t.queue[0] + t.queue[1] * words)
         if sch.credit != self.credit_sent:
             self.credit_sent = sch.credit
@@ -368,7 +395,9 @@ class JobSim:
         for name in j.reads:
             yield from self.xfer(t.reads(b[name]))
         if t.proj is not None:
-            yield from self.charge(type(self._fns["ctrl"]).fixed("ltbf_proj", t.proj(gid)))
+            yield from self.charge(
+                type(self._fns["ctrl"]).fixed("ltbf_proj", t.proj(gid))
+            )
         elif t.proj_counters_of is not None:
             yield from self.charge(self._fns["proj"], **t.proj_counters_of(j))
         else:
@@ -406,10 +435,14 @@ class JobSim:
         ring = cfg.ring_symbols * d.n_chunks
         ant_words = d.words(1, d.n_sc)
         for s in range(d.n_sym):
-            yield self.env.timeout(max(0.0, t0 + (s + 1) * cfg.sym_period - self.env.now))
+            yield self.env.timeout(
+                max(0.0, t0 + (s + 1) * cfg.sym_period - self.env.now)
+            )
             start = self.env.now
             # The O-RU keeps its pace only while the DMA takes each symbol on time.
-            self.oru_late = max(self.oru_late, (start - t0 - (s + 1) * cfg.sym_period) / self.period)
+            self.oru_late = max(
+                self.oru_late, (start - t0 - (s + 1) * cfg.sym_period) / self.period
+            )
             dropped = ring - (self.taken - self.credit_seen) < d.n_chunks
             first = self.seq
             if dropped:
@@ -420,19 +453,27 @@ class JobSim:
                     for k in range(d.n_chunks):
                         self.env.process(self._chunk(start, k, first + k))
             self.seq += d.n_chunks
-            if t.port:  # the DMA's writes share the port, the rest of its symbol time adds; its
+            if (
+                t.port
+            ):  # the DMA's writes share the port, the rest of its symbol time adds; its
                 # chunks complete with its last antenna group
                 yield self.port.transfer(t.symbol_port)
                 yield from self.wait((t.symbol or 0.0) - t.symbol_port)
                 if not dropped:
                     for k in range(d.n_chunks):
                         self.chunks += 1
-                        yield self.inbox.put(("resp", SRC_INGEST, 0, (first + k) % (1 << 16)))
+                        yield self.inbox.put(
+                            ("resp", SRC_INGEST, 0, (first + k) % (1 << 16))
+                        )
             else:
-                yield from self.wait(max(t.symbol or 0.0, d.n_rx * (t.queue[0] + t.queue[1] * ant_words)))
+                yield from self.wait(
+                    max(t.symbol or 0.0, d.n_rx * (t.queue[0] + t.queue[1] * ant_words))
+                )
 
     def _chunk(self, start: float, k: int, seq: int):
-        yield self.env.timeout(max(0.0, start + self.t.chunk(k) * self.period - self.env.now))
+        yield self.env.timeout(
+            max(0.0, start + self.t.chunk(k) * self.period - self.env.now)
+        )
         self.chunks += 1
         yield self.inbox.put(("resp", SRC_INGEST, 0, seq % (1 << 16)))
 
@@ -440,7 +481,9 @@ class JobSim:
 # -- the fitted models (step 5.5) --------------------------------------------------------------------
 
 
-def fitted(S, model: dict, *, read_scale: float = 1.0, banks: int = 1) -> tuple[Config, Timing]:
+def fitted(
+    S, model: dict, *, read_scale: float = 1.0, banks: int = 1
+) -> tuple[Config, Timing]:
     """``(Config, Timing)`` for the system *S* (``system.LtbfSystem``) on the frozen models
     (``models.json``): each engine job's cycles from its shape (the words it moves over Shared Mem,
     its tiles; a vector job's program's execute cycles), each chunk from the Ingest DMA's symbol
@@ -467,12 +510,17 @@ def fitted(S, model: dict, *, read_scale: float = 1.0, banks: int = 1) -> tuple[
 
     def split(kind: str, terms: dict) -> tuple[float, float]:
         """``(port, rest)``: the words' terms are the job's port work, the others its own time."""
-        port = sum(cy[kind][k] * terms.get(k, 0.0) for k in ("rd", "wr") if k in cy[kind])
+        port = sum(
+            cy[kind][k] * terms.get(k, 0.0) for k in ("rd", "wr") if k in cy[kind]
+        )
         return port, pred(kind, terms) - port
 
     def sys_job(gid: int, j) -> tuple[float, float]:
         tiles, P = (j.shape["M"] // d.Mmax) * (j.shape["N"] // d.c), j.shape["K"] // d.c
-        return split("sys", {"1": 1.0, "rd": tiles * P * (wa + wb), "wr": tiles * wc, "tiles": tiles})
+        return split(
+            "sys",
+            {"1": 1.0, "rd": tiles * P * (wa + wb), "wr": tiles * wc, "tiles": tiles},
+        )
 
     vt = VecTiming().for_config(S.vu)
     progs = {"cg": pg.cg_step_programs(S.vu, d.rows, d.c, inp.sh),
@@ -485,17 +533,29 @@ def fitted(S, model: dict, *, read_scale: float = 1.0, banks: int = 1) -> tuple[
     def vec_job(gid: int, j) -> tuple[float, float]:
         if j.op == "step":
             k = "cg_last" if j.shape["last"] else "cg"
-            return split("vec", {"1": 1.0, "rd": 4 * mw + pw[k], "wr": len(j.writes) * mw, "exec": ex[k]})
+            return split(
+                "vec",
+                {
+                    "1": 1.0,
+                    "rd": 4 * mw + pw[k],
+                    "wr": len(j.writes) * mw,
+                    "exec": ex[k],
+                },
+            )
         return split("vec", {"1": 1.0, "rd": d.J * 2 * p.r * wbv + pw["eq"], "wr": d.J * wbv,
                              "exec_eq": ex["eq"], "eq": 1.0})  # fmt: skip
 
     groups = d.rows // d.c
     in_words = d.n_rx * (d.words(1, d.n_sc) + 1)
-    t_sym = pred("ing", {"1": 1.0, "words": in_words, "tiles": groups * d.n_chunks * d.J})
+    t_sym = pred(
+        "ing", {"1": 1.0, "words": in_words, "tiles": groups * d.n_chunks * d.J}
+    )
     # Its writes to Shared Mem: every input word once, at a write's cost a word.
     sym_port = in_words * cy["sys"]["wr"]
 
-    def chunk(k: int) -> float:  # a symbol's chunks complete with its last antenna group
+    def chunk(
+        k: int,
+    ) -> float:  # a symbol's chunks complete with its last antenna group
         return t_sym * (1 - (d.n_chunks - 1 - k) / (groups * d.n_chunks))
 
     w = fc.fixed_long_term(inp.prep, S.cfg, p.t)[p.sector].w[p.t - 1]
@@ -508,7 +568,10 @@ def fitted(S, model: dict, *, read_scale: float = 1.0, banks: int = 1) -> tuple[
                     proj_counters_of=lambda j: counters[j.key[1]], read=(3.0, 2.0 * read_scale),
                     write=(2.0, 1.0), banks=banks)  # fmt: skip
     W = p.word_bits
-    desc = {"sys": len(EngineJobDesc().serialize(word_bw=W)), "vec": len(VecMemJob().serialize(word_bw=W))}
+    desc = {
+        "sys": len(EngineJobDesc().serialize(word_bw=W)),
+        "vec": len(VecMemJob().serialize(word_bw=W)),
+    }
     cfg = Config(d=d, policy=p.policy, qresp_depth=p.qresp_depth, ring_symbols=p.ring_symbols,
                  n_cores=p.n_cores, sym_period=p.sym_period, word_bits=W,
                  cap={e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))},
@@ -539,7 +602,9 @@ def oracle(inp) -> tuple[Config, Timing, dict]:
     serv: dict[int, float] = {}
     for e in ("sys", "vec"):
         prev = 0.0
-        for g in sorted((g for g in disp if sch.jobs[g].engine == e), key=lambda g: sch.t_done[g]):
+        for g in sorted(
+            (g for g in disp if sch.jobs[g].engine == e), key=lambda g: sch.t_done[g]
+        ):
             serv[g] = (sch.t_done[g] - max(disp[g], prev)) * F_HOST
             prev = sch.t_done[g]
     # Chunks: each Resp's time after its symbol's O-RU start (the slot's start plus the symbol's
@@ -551,7 +616,9 @@ def oracle(inp) -> tuple[Config, Timing, dict]:
         j = sch.jobs[g]
         if j.engine == "ingest":
             _c, s, k = j.key
-            offs.setdefault(k, []).append((sch.t_done[g] - t_lt - (s + 1) * p.sym_period) * F_HOST)
+            offs.setdefault(k, []).append(
+                (sch.t_done[g] - t_lt - (s + 1) * p.sym_period) * F_HOST
+            )
     proj = {ctx["gid"]: sum(op[1] for op in ctx["ops"] if op[0] == "C") for ctx in host.replay
             if ctx["gid"] >= 0 and sch.jobs[ctx["gid"]].engine == "cpu"}  # fmt: skip
     timing = Timing(sys_job=lambda g, j: serv[g], vec_job=lambda g, j: serv[g],
@@ -569,12 +636,16 @@ if __name__ == "__main__":
     cfg, timing, ref = oracle(sy.inputs(sy.AC9))
     out = JobSim(cfg, timing).run()
     for k in ("end", "t_lt"):
-        print(f"{k}: jobsim {out[k] * F_HOST:,.0f} cycles, pysim {ref[k] * F_HOST:,.0f} "
-              f"({out[k] / ref[k] - 1:+.2%})")
+        print(
+            f"{k}: jobsim {out[k] * F_HOST:,.0f} cycles, pysim {ref[k] * F_HOST:,.0f} "
+            f"({out[k] / ref[k] - 1:+.2%})"
+        )
     print({k: out[k] for k in ("overruns", "dropped", "misses", "finished")})
 
 
 def sustained(r: dict, period_cycles: float) -> bool:
     """A run keeps up with its symbol pace: no ring overrun, every job done, and the O-RU never more
     than 5% of a period behind (else the Ingest DMA, not the engines, sets the rate)."""
-    return r["overruns"] == 0 and r["finished"] and r["oru_late"] <= 0.05 * period_cycles
+    return (
+        r["overruns"] == 0 and r["finished"] and r["oru_late"] <= 0.05 * period_cycles
+    )

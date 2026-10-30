@@ -91,11 +91,19 @@ def _codegen_step(p: sp.Part, gate: bool):
             devs: dict[str, Any] = {"ltbf_sys": SysWrap(name="ltbf_sys", sim=sim, engine_cfg=sy.engine_cfg(S)),
                                     "_vu": S.vu, "_word_bits": W}  # fmt: skip
             if p.kind == "vec":
-                devs["ltbf_vec"] = VecWrap(name="ltbf_vec", sim=sim, vu_cfg=S.vu, word_bits=W)
+                devs["ltbf_vec"] = VecWrap(
+                    name="ltbf_vec", sim=sim, vu_cfg=S.vu, word_bits=W
+                )
             if p.kind == "ing":
-                devs["ltbf_ingest"] = IngestDev(name="ltbf_ingest", sim=sim, dma_cfg=sy.ingest_cfg(S))
+                devs["ltbf_ingest"] = IngestDev(
+                    name="ltbf_ingest", sim=sim, dma_cfg=sy.ingest_cfg(S)
+                )
             hb.gen_headers(r, devs)
-            tcl = {"sys": {"solution_config": hb.FLP}, "vec": {"defines": hb.DEFINES}, "ing": {}}[p.kind]
+            tcl = {
+                "sys": {"solution_config": hb.FLP},
+                "vec": {"defines": hb.DEFINES},
+                "ing": {},
+            }[p.kind]
             hb.gen_top(r, devs[TOP[p.kind]], W, **tcl)
             if gate:
                 hb.gen_top(r, RespHub1(name="ltbf_hub1", sim=sim, word_bits=W), W)
@@ -122,7 +130,14 @@ def build_part(p: sp.Part, role: str, root: Path) -> dict:
     if gate:
         sysm = {"sys": lambda: devsys.sys_system(params(p)), "vec": lambda: devsys.vec_system(params(p)),
                 "ing": lambda: devsys.ingest_system(p=params(p))}[p.kind]()  # fmt: skip
-        add_system_steps(dag, sysm, work_dir="xsi_work", top=f"{top}_top", prefix="g_", workspace="gate")
+        add_system_steps(
+            dag,
+            sysm,
+            work_dir="xsi_work",
+            top=f"{top}_top",
+            prefix="g_",
+            workspace="gate",
+        )
         res = dag.run(cfg, through="g_compare")
     else:
         dag.add(CsynthStep(top=top))
@@ -144,7 +159,9 @@ def build_part(p: sp.Part, role: str, root: Path) -> dict:
         if (work / "report.json").is_file():
             out = json.loads((work / "report.json").read_text()).get("output", "")
             m = re.search(r"DONE done=(\d) cycles=(\d+)", out)
-            rep["rtl_done"], rep["rtl_cycles"] = (int(m.group(1)), int(m.group(2))) if m else (0, None)
+            rep["rtl_done"], rep["rtl_cycles"] = (
+                (int(m.group(1)), int(m.group(2))) if m else (0, None)
+            )
             rep["ops"] = [(k, int(a, 16), int(n), int(s), int(e)) for k, a, n, s, e in
                           re.findall(r"OP (\w) 0x([0-9a-f]+) n=(\d+) s=(\d+) e=(\d+)", out)]  # fmt: skip
     rep["minutes"] = round((time.time() - t0) / 60, 2)
@@ -173,7 +190,9 @@ def _pgroup_rss_kb(pgid: int) -> int:
         try:
             with open(f"/proc/{pid}/stat") as fh:
                 fields = fh.read().rsplit(")", 1)[1].split()
-            if int(fields[2]) != pgid:  # the process group, after the state and the parent
+            if (
+                int(fields[2]) != pgid
+            ):  # the process group, after the state and the parent
                 continue
             with open(f"/proc/{pid}/status") as fh:
                 for line in fh:
@@ -192,7 +211,11 @@ def run(workers: int = 4) -> None:
     while todo or running:
         big = any(p.n_rx >= 256 for _po, p, _t in running.values())
         cap = 2 if big else workers
-        while todo and len(running) < cap and not (todo[0][1].n_rx >= 256 and len(running) >= 2):
+        while (
+            todo
+            and len(running) < cap
+            and not (todo[0][1].n_rx >= 256 and len(running) >= 2)
+        ):
             role, p = todo.pop(0)
             po = subprocess.Popen([sys.executable, "-m", "examples.ltbf_dse.hw.queue", "one", role, p.name],
                                   cwd=ROOT.parents[1], start_new_session=True)  # fmt: skip
@@ -204,16 +227,22 @@ def run(workers: int = 4) -> None:
         for pgid, (po, p, t0) in list(running.items()):
             if po.poll() is not None:
                 ok = (REPORTS / f"{p.name}.json").is_file()
-                print(f"{time.strftime('%T')} {'done' if ok else 'FAILED'} {p.name} in "
-                      f"{(time.time() - t0) / 60:.1f} min", flush=True)
+                print(
+                    f"{time.strftime('%T')} {'done' if ok else 'FAILED'} {p.name} in "
+                    f"{(time.time() - t0) / 60:.1f} min",
+                    flush=True,
+                )
                 del running[pgid]
                 continue
             rss = _pgroup_rss_kb(pgid)
             if rss > RSS_CAP_KB or time.time() - t0 > TIME_CAP_S:
                 os.killpg(pgid, 15)
                 why = f"rss {rss // 1024} MB" if rss > RSS_CAP_KB else "over 2 h"
-                (REPORTS / f"{p.name}.json").write_text(json.dumps(
-                    {"part": p.as_dict(), "name": p.name, "stopped": why}, indent=1))
+                (REPORTS / f"{p.name}.json").write_text(
+                    json.dumps(
+                        {"part": p.as_dict(), "name": p.name, "stopped": why}, indent=1
+                    )
+                )
                 print(f"{time.strftime('%T')} STOPPED {p.name}: {why}", flush=True)
                 del running[pgid]
     print(f"{time.strftime('%T')} queue empty", flush=True)
@@ -226,14 +255,23 @@ def one(role: str, name: str) -> None:
     root.mkdir(parents=True)
     try:
         rep = build_part(p, role, root)
-    except Exception as e:  # noqa: BLE001 -- the report says what went wrong
-        rep = {"part": p.as_dict(), "name": name, "role": role, "error": f"{type(e).__name__}: {e}"[-1500:]}
+    except Exception as e:  # noqa: BLE001 -- reported
+        rep = {
+            "part": p.as_dict(),
+            "name": name,
+            "role": role,
+            "error": f"{type(e).__name__}: {e}"[-1500:],
+        }
     (REPORTS / f"{name}.json").write_text(json.dumps(rep, indent=1))
     shutil.rmtree(root, ignore_errors=True)
 
 
 def status() -> None:
-    done = {f.stem: json.loads(f.read_text()) for f in REPORTS.glob("*.json")} if REPORTS.is_dir() else {}
+    done = (
+        {f.stem: json.loads(f.read_text()) for f in REPORTS.glob("*.json")}
+        if REPORTS.is_dir()
+        else {}
+    )
     by: dict[str, list] = {}
     for role, p in plan():
         r = done.get(p.name)

@@ -576,8 +576,12 @@ def test_ingest_dma_drops_a_symbol_without_credit():
 
 @pytest.mark.parametrize(
     "policy,sector,form",
-    [("static", 1, "factored"), ("dynamic", 1, "factored"), ("static", 0, "factored"),
-     ("static", 1, "explicit")],
+    [
+        ("static", 1, "factored"),
+        ("dynamic", 1, "factored"),
+        ("static", 0, "factored"),
+        ("static", 1, "explicit"),
+    ],
 )
 def test_system_equals_the_fixed_chain(policy, sector, form, tmp_path):
     """Step 4.5 (AC9's configuration in pysim): drop 1, sector 1 (10 own UEs, 22 connected), N_rx =
@@ -591,7 +595,9 @@ def test_system_equals_the_fixed_chain(policy, sector, form, tmp_path):
     file holds every host job's writes."""
     from examples.ltbf_dse.hw import system as sy
 
-    inp = sy.inputs(sy.SysParams(policy=policy, sector=sector, form=form, sym_period=500e-6))
+    inp = sy.inputs(
+        sy.SysParams(policy=policy, sector=sector, form=form, sym_period=500e-6)
+    )
     assert (inp.dims.U, inp.dims.u_pad, inp.dims.S) == (
         (10, 16, 16) if sector else (5, 8, 16)
     )

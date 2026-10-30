@@ -86,7 +86,12 @@ class Part:
         return self.kind + "_" + "_".join(f"{f}{v}" for f, v in k.items())
 
     def valid(self) -> bool:
-        if self.kind not in KINDS or self.n_rx not in NRX or self.c not in CS or self.word_bits not in WORDS:
+        if (
+            self.kind not in KINDS
+            or self.n_rx not in NRX
+            or self.c not in CS
+            or self.word_bits not in WORDS
+        ):
             return False
         if self.kind == "sys":
             return (self.Mmax in MMAX and (self.R, self.C) in ARRAYS and self.W in WIDTHS
@@ -136,7 +141,11 @@ def fit_set() -> list[Part]:
         out.add(vec_part(L=lanes))
     for w in WIDTHS:
         out.add(vec_part(W=w))
-    out |= {vec_part(1024, L=2, W=12), vec_part(64, c=16, L=2, W=14), vec_part(1024, c=16, W=12)}
+    out |= {
+        vec_part(1024, L=2, W=12),
+        vec_part(64, c=16, L=2, W=14),
+        vec_part(1024, c=16, W=12),
+    }
     # ing
     for c in CS:
         out.add(ing_part(c=c))
@@ -144,7 +153,10 @@ def fit_set() -> list[Part]:
         out.add(ing_part(J=j))
     for wb in WORDS:
         out.add(ing_part(word_bits=wb))
-    out |= {ing_part(1024, c=16, word_bits=128, J=4), ing_part(64, c=16, word_bits=128, J=4)}
+    out |= {
+        ing_part(1024, c=16, word_bits=128, J=4),
+        ing_part(64, c=16, word_bits=128, J=4),
+    }
     assert all(p.valid() for p in out), [p for p in out if not p.valid()]
     return sorted(out)
 
@@ -162,7 +174,11 @@ def all_valid() -> list[Part]:
 
 
 #: Each kind's main knob, which the held-out draw spreads.
-MAIN_KNOB = {"sys": lambda p: (p.R, p.C), "vec": lambda p: (p.L, p.W), "ing": lambda p: p.J}
+MAIN_KNOB = {
+    "sys": lambda p: (p.R, p.C),
+    "vec": lambda p: (p.L, p.W),
+    "ing": lambda p: p.J,
+}
 
 
 def _stratified(order: list[Part], count: int) -> list[Part]:
@@ -192,7 +208,11 @@ def heldout_set(seed: int = 529) -> list[Part]:
     rng = np.random.default_rng(seed)
     out: list[Part] = []
     for kind, count in (("sys", 4), ("vec", 4), ("ing", 2)):
-        pool = [p for p in all_valid() if p.kind == kind and p.word_bits == 64 and p not in fit]
+        pool = [
+            p
+            for p in all_valid()
+            if p.kind == kind and p.word_bits == 64 and p not in fit
+        ]
         out += _stratified([pool[i] for i in rng.permutation(len(pool))], count)
     return sorted(out)
 
@@ -228,7 +248,11 @@ DECISION_RULE = {
     "time": "the long-term update of the three sectors, back to back (T_LT)",
     "time_budgets_ms": [1.0, 5.0, 10.0],
     "cost_measures": ["DSP", "LUT", "FF", "BRAM_18K", "max"],
-    "runtime_axes": {"t": list(range(1, 11)), "form": ["factored", "explicit"], "r": [1]},
+    "runtime_axes": {
+        "t": list(range(1, 11)),
+        "form": ["factored", "explicit"],
+        "r": [1],
+    },
     "design": "one brute-force part of each kind at the array, sharing W, 64-bit words",
     "time_tolerance": 1.02,
     "cost_tolerance": 1.10,

@@ -92,7 +92,9 @@ class SysParams:
     target: str = "-6_14"
     sector: int = 1
     W: int = 16  # the operand width of the fixed-point configuration
-    form: str = "factored"  # Q̂ factored (Ĥα'(Ĥα'ᴴD)) or explicit (K = Ĥα'Ĥα'ᴴ, once a T_LT)
+    form: str = (
+        "factored"  # Q̂ factored (Ĥα'(Ĥα'ᴴD)) or explicit (K = Ĥα'Ĥα'ᴴ, once a T_LT)
+    )
     t: int = 3
     r: int = 1
     c: int = 8
@@ -210,7 +212,8 @@ def shared_mem(sim, span: int, clk: Clock, *, calibrated: bool = True) -> Memory
     """Shared Mem, for the system and its own harness: *span* 64-bit words, its timing from its
     record in :data:`CALIB_DIR` when there is one (*calibrated*; the harness that measures it builds
     one without).  At RTL a read costs a cycle more a word than a write (``mm_bram_port.v``: one
-    read in flight, ``LAT + 1`` cycles), and the front serves one transaction at a time."""
+    read in flight, ``LAT + 1`` cycles), and the front serves one transaction at a time.
+    """
     return MemoryMod(name="mem", sim=sim, word_size=64, inline=False, clk=clk, nwords_tot=span,
                      addr_unit=AddrUnit.byte, calib_dir=CALIB_DIR if calibrated else None)  # fmt: skip
 
@@ -222,7 +225,9 @@ def mem_script(kind: str = "test", span: int = 1 << 17) -> list:
     lengths."""
     from waveflow.simulation.mm_tb import READ, WRITE, script_op
 
-    lens = (1, 2, 8, 32, 64, 256) if kind == "test" else (*range(1, 33), 38, 64, 128, 256)
+    lens = (
+        (1, 2, 8, 32, 64, 256) if kind == "test" else (*range(1, 33), 38, 64, 128, 256)
+    )
     ops, t = [], 10
     for n in lens:
         addr = (n * 0x1000) % (span * 8 - 0x1000)
@@ -325,13 +330,16 @@ class LtbfHost(SwHost):
         """The C++ twin's scenario (:func:`scenario`) for a system built for the RTL flow
         (``build(rtl=True)``): a reference pysim run of a fresh copy, serialized -- deterministic, so
         the flow's own pysim run does the same -- and kept per parameter set, as the flow builds
-        fresh copies.  A pysim-only system's is empty (``HwSystem.run`` writes one every run)."""
+        fresh copies.  A pysim-only system's is empty (``HwSystem.run`` writes one every run).
+        """
         if not self.rtl:
             return []
         key = self.sys.p
         if key not in _SCENARIOS:
             hw, S, host = build(self.sys.inp)
-            hw.sim.run_sim(until=hw.run_until)  # not hw.run(): it writes a scenario first
+            hw.sim.run_sim(
+                until=hw.run_until
+            )  # not hw.run(): it writes a scenario first
             _SCENARIOS[key] = scenario(S, host)
         return _SCENARIOS[key]
 
@@ -400,7 +408,11 @@ class LtbfHost(SwHost):
             m = min(MAX_BURST, int(n) - i)
             if ctx is not None:
                 ctx["ops"].append(("R", int(word_addr) + i, m))
-            out.append(np.asarray((yield from self.bus.read(m, (word_addr + i) * 8)), np.uint64))
+            out.append(
+                np.asarray(
+                    (yield from self.bus.read(m, (word_addr + i) * 8)), np.uint64
+                )
+            )
         return np.concatenate(out) if out else np.zeros(0, np.uint64)
 
     # -- threads --------------------------------------------------------------------------------
@@ -466,12 +478,15 @@ class LtbfHost(SwHost):
 
     def _oru(self):
         """The O-RU stand-in: once the slot is released, a symbol every ``sym_period``, an antenna's
-        burst a packet into the Ingest DMA's ``qsym``.  Not the A53's work: nothing is charged."""
+        burst a packet into the Ingest DMA's ``qsym``.  Not the A53's work: nothing is charged.
+        """
         S = self.sys
         yield self.slot_start
         t0 = self.env.now
         for s, bursts in enumerate(S.symbols):
-            yield self.env.timeout(max(0.0, t0 + (s + 1) * S.p.sym_period - self.env.now))
+            yield self.env.timeout(
+                max(0.0, t0 + (s + 1) * S.p.sym_period - self.env.now)
+            )
             for b in bursts:
                 yield from self.qsym.write(b)
 
@@ -510,7 +525,9 @@ class LtbfHost(SwHost):
                     yield from getattr(self, f"qjob_{e}").write(words)
         if sch.credit != S.credit_sent:
             S.credit_sent = sch.credit
-            yield from self.bus.write(np.asarray([sch.credit], np.uint64), S.credit_addr)
+            yield from self.bus.write(
+                np.asarray([sch.credit], np.uint64), S.credit_addr
+            )
         yield from self._charge_trace()
 
     # -- the host's jobs ------------------------------------------------------------------------
@@ -518,7 +535,14 @@ class LtbfHost(SwHost):
     def _ctx(self, gid: int) -> dict:
         """A host job's record for the replay file: its bus writes and charged host cycles."""
         j = self.sys.sch.jobs[gid]
-        ctx = {"gid": gid, "key": list(j.key), "op": j.op, "writes": [], "ops": [], "cycles": 0}
+        ctx = {
+            "gid": gid,
+            "key": list(j.key),
+            "op": j.op,
+            "writes": [],
+            "ops": [],
+            "cycles": 0,
+        }
         self.replay.append(ctx)
         return ctx
 
@@ -737,8 +761,12 @@ class LtbfSystem:
         j = self.sch.jobs[gid]
         wname, xname = j.reads
         q = 8 * k // d.c
-        ww = yield from host.read_words(self.addr(gid, wname), self.lt.buffers[wname], ctx)
-        xw = yield from host.read_words(self.addr(gid, xname), self.lt.buffers[xname], ctx)
+        ww = yield from host.read_words(
+            self.addr(gid, wname), self.lt.buffers[wname], ctx
+        )
+        xw = yield from host.read_words(
+            self.addr(gid, xname), self.lt.buffers[xname], ctx
+        )
         wr, wi = self.from_w(ww, d.cols * d.c, cfg.bc)
         xr, xi = self.from_w(xw, d.rows * d.c, self.f.X)
         n_conn = d.U_conn or d.U
@@ -1049,7 +1077,9 @@ def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
     if p.policy != "static":
         raise ValueError("the RTL host runs the static policy")
     if any(j.cfg is not None for g in (S.lt, S.rt) for j in g.jobs):
-        raise ValueError("the RTL host writes no engine Ctrl: no job may carry a configuration")
+        raise ValueError(
+            "the RTL host writes no engine Ctrl: no job may carry a configuration"
+        )
     cfg = host.cpu.config
     out: list[np.ndarray] = []
 
@@ -1070,12 +1100,19 @@ def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
           _bits(eval_cycles(cfg.switch_cycles, {})), _bits(price("dispatch", n_dispatch=1)),
           _bits(price("ctrl")))  # fmt: skip
     for n in range(max_succ + 1):
-        burst(K_RELEASE, n, *(_bits(price("release", n_succ=n, n_ready=k)) for k in range(n + 1)))
+        burst(
+            K_RELEASE,
+            n,
+            *(_bits(price("release", n_succ=n, n_ready=k)) for k in range(n + 1)),
+        )
     for base, g in graphs:
         succ, dsucc = g.successors(), g.successors(data_only=True)
         for j in g.jobs:
-            roots = [base + x for x in j.deps
-                     if g.jobs[x].engine == "ingest" and set(j.reads) & set(g.jobs[x].writes)]
+            roots = [
+                base + x
+                for x in j.deps
+                if g.jobs[x].engine == "ingest" and set(j.reads) & set(g.jobs[x].writes)
+            ]
             left = (sum(1 for s in succ[j.jid] if set(g.jobs[s].reads) & set(j.writes))
                     if j.engine == "ingest" else 0)  # fmt: skip
             burst(K_JOB, base + j.jid, ENGINE_CODE[j.engine], len(j.deps) + len(j.after),

@@ -63,7 +63,9 @@ def rtl_end(work: Path) -> float | None:
     rep = work / "report.json"
     if not rep.is_file():
         return None
-    m = re.search(r"DONE done=1 cycles=(\d+)", json.loads(rep.read_text()).get("output", ""))
+    m = re.search(
+        r"DONE done=1 cycles=(\d+)", json.loads(rep.read_text()).get("output", "")
+    )
     return float(m.group(1)) if m else None
 
 
@@ -98,16 +100,33 @@ def main() -> list[dict]:
                      "limit": LIMITS["time"], "ok": abs(err) <= LIMITS["time"], "model": sim["end"],
                      "reference": t_rtl})  # fmt: skip
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    keys = ["check", "what", "n", "median", "worst", "limit", "ok", "model", "reference"]
+    keys = [
+        "check",
+        "what",
+        "n",
+        "median",
+        "worst",
+        "limit",
+        "ok",
+        "model",
+        "reference",
+    ]
     with OUT.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=keys)
         w.writeheader()
         for r in rows:
-            w.writerow({k: (f"{r[k]:.6g}" if isinstance(r.get(k), float) else r.get(k, "")) for k in keys})
+            w.writerow(
+                {
+                    k: (f"{r[k]:.6g}" if isinstance(r.get(k), float) else r.get(k, ""))
+                    for k in keys
+                }
+            )
     return rows
 
 
 if __name__ == "__main__":
     for r in main():
-        print(f"{r['check']:8} {r['what']:34} median {r['median']:+.2%} worst {r['worst']:.2%} "
-              f"limit {r['limit']} ok {r['ok']}")
+        print(
+            f"{r['check']:8} {r['what']:34} median {r['median']:+.2%} worst {r['worst']:.2%} "
+            f"limit {r['limit']} ok {r['ok']}"
+        )

@@ -169,8 +169,9 @@ def build_dag() -> BuildDag:
     return dag
 
 
-def device_dag(names=DEVICES, work_dir=WORK_DIR, trace: bool = False,
-               trace_bus: bool = False) -> BuildDag:
+def device_dag(
+    names=DEVICES, work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False
+) -> BuildDag:
     """``codegen``, then the framework's system flow for each device's gate system
     (``devsys.<name>_system``): csynth of its tops, the system RTL, the scenario, pysim, XSI with the
     host's C++ twin, and ``compare`` (RTL against pysim), each prefixed ``<name>_``."""
@@ -186,7 +187,9 @@ def device_dag(names=DEVICES, work_dir=WORK_DIR, trace: bool = False,
     return dag
 
 
-def system_dag(work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False) -> BuildDag:
+def system_dag(
+    work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False
+) -> BuildDag:
     """``codegen``, then the framework's system flow for AC9's system (step 5.2): ``system.build`` at
     :data:`~examples.ltbf_dse.hw.system.AC9` for the RTL flow -- csynth of its tops, the system RTL,
     the scenario (the C++ host's, from a reference pysim run), pysim, and XSI with ``hw/ltbf_host.h``,
@@ -225,8 +228,12 @@ def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR) -> str:
     clk = Clock(freq=sy.F_HOST)
     uncal = memory_harness(lambda sim: sy.shared_mem(sim, span, clk, calibrated=False),
                            sy.mem_script("calib", span), n_cycles=40_000)  # fmt: skip
-    xsi = add_system_steps(dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix=prefix)
-    mem_cal = MemCalibStep(sysm=uncal, work=xsi.work, prefix=prefix, store=ModuleStore(sy.CALIB_DIR))
+    xsi = add_system_steps(
+        dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix=prefix
+    )
+    mem_cal = MemCalibStep(
+        sysm=uncal, work=xsi.work, prefix=prefix, store=ModuleStore(sy.CALIB_DIR)
+    )
     dag.add(mem_cal)
     return mem_cal.a("mem_timing")
 

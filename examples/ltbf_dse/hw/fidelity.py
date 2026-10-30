@@ -55,7 +55,10 @@ def anchors() -> dict:
             kind, p = r["part"]["kind"], sp.Part(**r["part"])
             X, y = hm.job_rows(kind, [r])
             key = (kind, p.n_rx, p.L if kind == "vec" else 0)
-            ratios.setdefault(key, []).extend(v / hm._predict(model["cycles"][kind], x) for x, v in zip(X, y, strict=True))
+            ratios.setdefault(key, []).extend(
+                v / hm._predict(model["cycles"][kind], x)
+                for x, v in zip(X, y, strict=True)
+            )
     return {k: float(np.median(v)) for k, v in ratios.items()}
 
 
@@ -74,6 +77,7 @@ def _scaled(timing, n_rx: int, L: int):
         def job(gid, j):
             r = f(gid, j)
             return (r[0] * g, r[1] * g) if isinstance(r, tuple) else r * g
+
         return job
 
     return dataclasses.replace(timing, sys_job=wrap(timing.sys_job, fs), vec_job=wrap(timing.vec_job, fv),
@@ -91,7 +95,7 @@ def _lt_case_measured(args: tuple) -> dict:
     out = {"n": n, "drop": drop, "sector": sector, "form": form, "t": t}
     try:
         inp = sy.inputs(dse._params(n, drop=drop, sector=sector, form=form, t=t))
-    except Exception as e:  # noqa: BLE001 -- as dse._lt_case
+    except Exception as e:  # noqa: BLE001 -- reported
         out["skip"] = f"{type(e).__name__}: {e}"[:200]
         return out
     if not inp.own:
@@ -100,7 +104,9 @@ def _lt_case_measured(args: tuple) -> dict:
     for L in dse.LANES:
         p = dataclasses.replace(inp.p, L=L)
         cfg, timing = js.fitted(sy.LtbfSystem(dataclasses.replace(inp, p=p)), model)
-        r = js.JobSim(dataclasses.replace(cfg, lt_only=True), _scaled(timing, n * n, L)).run()
+        r = js.JobSim(
+            dataclasses.replace(cfg, lt_only=True), _scaled(timing, n * n, L)
+        ).run()
         out[f"L{L}"] = {"t_lt": r["t_lt"] * dse.F_HOST, **r["busy"]}
     return out
 
@@ -114,7 +120,11 @@ def _report(name: str) -> dict:
 
 def measured_cost(n: int, R: int, C: int, W: int, L: int, form: str) -> dict:
     nrx = n * n
-    parts = (sp.sys_part(nrx, R=R, C=C, W=W), sp.vec_part(nrx, L=L, W=W), sp.ing_part(nrx))
+    parts = (
+        sp.sys_part(nrx, R=R, C=C, W=W),
+        sp.vec_part(nrx, L=L, W=W),
+        sp.ing_part(nrx),
+    )
     res = {c: sum(_report(p.name)["resources"][c] for p in parts) + dse._hub().get(c, 0)
            for c in ("LUT", "FF", "DSP", "BRAM_18K", "URAM")}  # fmt: skip
     pred = dse.cost(n, R, C, W, L, form)
@@ -139,7 +149,14 @@ def decide(rows: list[dict], cost_key, time_key) -> dict:
     out = {}
     for n, target, lb, tb, cm in itertools.product(dse.ARRAYS, RULE["targets"], RULE["loss_budgets_db"],
                                                    RULE["time_budgets_ms"], RULE["cost_measures"]):  # fmt: skip
-        ok = [r for r in rows if r["n"] == n and r["target"] == target and r["loss"] <= lb and time_key(r) <= tb]
+        ok = [
+            r
+            for r in rows
+            if r["n"] == n
+            and r["target"] == target
+            and r["loss"] <= lb
+            and time_key(r) <= tb
+        ]
         out[n, target, lb, tb, cm] = min(ok, key=lambda r: (cost_key(r)[cm], cost_key(r)["max"], time_key(r)),
                                          default=None)  # fmt: skip
     return out
@@ -147,7 +164,9 @@ def decide(rows: list[dict], cost_key, time_key) -> dict:
 
 def main() -> dict:
     lt_pred = dse.t_lt_table(_load_time("dse_time.csv"))
-    cases = list(itertools.product(dse.ARRAYS, dse.DROPS, dse.SECTORS, dse.FORMS, dse.TS))
+    cases = list(
+        itertools.product(dse.ARRAYS, dse.DROPS, dse.SECTORS, dse.FORMS, dse.TS)
+    )
     with dse._pool() as pool:
         lt_meas = dse.t_lt_table(pool.map(_lt_case_measured, cases, chunksize=1))
     rows = []
@@ -170,8 +189,10 @@ def main() -> dict:
         if p is None or b is None:
             ok = p is None and b is None
         else:
-            ok = p["meas_ms"] <= RULE["time_tolerance"] * tb and \
-                p["meas_cost"][cm] <= RULE["cost_tolerance"] * b["meas_cost"][cm]
+            ok = (
+                p["meas_ms"] <= RULE["time_tolerance"] * tb
+                and p["meas_cost"][cm] <= RULE["cost_tolerance"] * b["meas_cost"][cm]
+            )
         right[cm].append(ok)
         out_rows.append({"array": f"{n}x{n}", "target": target, "loss_budget_db": lb, "time_budget_ms": tb,
                          "cost_measure": cm, "right": ok,
@@ -180,9 +201,15 @@ def main() -> dict:
                          "pick_meas_cost": "" if p is None else p["meas_cost"][cm],
                          "best": "" if b is None else f"{b['R']}x{b['C']} W{b['W']} L{b['L']} {b['form']} t{b['t']}",
                          "best_meas_cost": "" if b is None else b["meas_cost"][cm]})  # fmt: skip
-    metrics = {cm: {"right": sum(v), "decisions": len(v), "fraction": sum(v) / len(v)} for cm, v in right.items()}
+    metrics = {
+        cm: {"right": sum(v), "decisions": len(v), "fraction": sum(v) / len(v)}
+        for cm, v in right.items()
+    }
     dse._write("decision_fidelity.csv", out_rows)
-    dse._write("decision_fidelity_metrics.csv", [{"cost_measure": cm, **m} for cm, m in metrics.items()])
+    dse._write(
+        "decision_fidelity_metrics.csv",
+        [{"cost_measure": cm, **m} for cm, m in metrics.items()],
+    )
     return metrics
 
 
@@ -195,11 +222,16 @@ def _load_time(name: str) -> list[dict]:
                    "t": int(r["t"])}  # fmt: skip
             for L in ("L2", "L4"):
                 if r.get(f"{L}_t_lt"):
-                    row[L] = {k: float(r[f"{L}_{k}"]) for k in ("t_lt", "sys", "vec", "port", "cpu")}
+                    row[L] = {
+                        k: float(r[f"{L}_{k}"])
+                        for k in ("t_lt", "sys", "vec", "port", "cpu")
+                    }
             out.append(row)
     return out
 
 
 if __name__ == "__main__":
     for cm, m in main().items():
-        print(f"{cm:9} right {m['right']}/{m['decisions']} ({m['fraction']:.1%})  AC13: >= {RULE['pass_fraction']:.0%}")
+        print(
+            f"{cm:9} right {m['right']}/{m['decisions']} ({m['fraction']:.1%})  AC13: >= {RULE['pass_fraction']:.0%}"
+        )

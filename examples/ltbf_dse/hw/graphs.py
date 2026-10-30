@@ -259,7 +259,9 @@ def real_time(
     g.buffer("Gp", d.words(R, S), external=True)
     zj: dict[tuple, int] = {}
     last: dict[tuple, int] = {}  # the last job using symbol s's Z at chunk position c
-    meas: dict[int, list] = {}  # chunk position -> its measurements, in data-symbol order
+    meas: dict[int, list] = (
+        {}
+    )  # chunk position -> its measurements, in data-symbol order
     for s in range(d.n_sym):
         for c in range(d.n_chunks):
             y = g.buffer(f"Y{s}:{c}", d.words(R, n), external=True)  # a ring slot
