@@ -264,7 +264,7 @@ models. In the RTL gate the C++ host replays its outputs from a file written by 
 Tier **A** backs the core claim; tier **B** is best effort and cut first when a budget runs out. A
 missed target is ⚠️ with the number, never ✅ (Rule 13).
 
-- [ ] **AC0 (A) Branch and hygiene.** `paper/ltbf_dse` contains `b0de5a26` and `193dc4ef`
+- [x] **AC0 (A) Branch and hygiene.** `paper/ltbf_dse` contains `b0de5a26` and `193dc4ef`
   (`git merge-base --is-ancestor <sha> HEAD` for both); `git rev-parse main feat/sionna-prod paper/cg_dse`
   = `b0de5a26…`, `193dc4ef…`, `ba757884…`;
   `git ls-files examples/ltbf_dse | grep -E '(^|/)(data|paper_data|results|logs|runs|build|reports|prereg)/|\.(npz|csv|pdf|png)$'`
@@ -348,7 +348,7 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
 - [ ] **AC14 (B) Implemented finalists.** 2–4 finalists through Vivado implementation (2024.1) meet
   4 ns (WNS ≥ 0); post-implementation resources compared with the model. Verify:
   `paper_data/finalists_impl.csv`.
-- [ ] **AC15 (A) Regression and lint.** The fast suite shows no failures beyond the step 0.3 baseline;
+- [x] **AC15 (A) Regression and lint.** The fast suite shows no failures beyond the step 0.3 baseline;
   `pytest -m sionna -rs` passes; the example's own `-m vitis`, `-m xsi`, `-m gem5` tests pass, and the
   `WANT_XSI_GATES` / `WANT_GEM5_GATES` floors equal the measured collected counts; new files pass
   `ruff check` and `black --check`; changed existing files keep their ruff finding counts from step
@@ -640,14 +640,14 @@ detached compute job (Rules 5, 6).
 |---|---|---|---|---|---|---|
 | 6.1 | `hw/dse.py`: join accuracy × cost × time (long-term within the T_LT budgets, real-time sustained rate with ingest); frontiers; `hw/findings.py` writes `FINDINGS.md` (findings 1–4) | 3.2, 5.5 | AC12 | `python -m examples.ltbf_dse.hw.dse` | commit | ☑ |
 | 6.2 | `hw/fidelity.py`: score decision fidelity on the brute-force builds (AC13's measured cost and time) | 5.4, 6.1 | AC13, or the shortfall with its cause | `python -m examples.ltbf_dse.hw.fidelity` | commit | ☑ |
-| 6.3 ⏱ | Implement 2–4 finalists (Vivado 2024.1) | 6.1 | AC14, or the cut recorded | `paper_data/finalists_impl.csv` | commit | ☐ |
+| 6.3 ⏱ | Implement 2–4 finalists (Vivado 2024.1) | 6.1 | AC14, or the cut recorded | `paper_data/finalists_impl.csv` | commit | ☑ |
 
 ### Phase 7 — Close-out
 
 | # | Step | Inputs | Exit condition | Verify with | Checkpoint | Status |
 |---|---|---|---|---|---|---|
-| 7.1 | Regression (§11); figure index; `FINDINGS.md` final | all | AC15 | §11 commands | commit | ☐ |
-| 7.2 | Final background reviewer agent; act on its findings with the user; propose to the user any `CLAUDE.md` or guide additions this work suggests (for example the `SwHost` + `Processor` host pattern), applied only on their yes; §16; status | all | §16 written; AC0 re-checked | AC0's commands | commit | ☐ |
+| 7.1 | Regression (§11); figure index; `FINDINGS.md` final | all | AC15 | §11 commands | commit | ☑ |
+| 7.2 | Final background reviewer agent; act on its findings with the user; propose to the user any `CLAUDE.md` or guide additions this work suggests (for example the `SwHost` + `Processor` host pattern), applied only on their yes; §16; status | all | §16 written; AC0 re-checked | AC0's commands | commit | ☑ |
 
 ## 11. Verification strategy
 
@@ -824,19 +824,86 @@ detached compute job (Rules 5, 6).
 | 2026-10-30 | 7.1 | **Regression (AC15's commands; Vitis HLS / Vivado 2024.1, pinned)**: the fast suite (`pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`, 23:01-23:04) 5,561 passed, 98 skipped, 4 failed: three of step 0.3's four (`test_xsi_workspace_copies[vitis_fft]`, both `test_markov_figures`), the fourth (`test_vitis_fft` looking for headers under 2025.1) now passing with 2025.1 installed; the new one `tests/mcp/test_knowledge_corpus.py::test_index_builds_in_under_three_seconds` (3.08 s against 3.0 s while Vivado and XSI ran beside it; alone 3 of 3 pass) -- re-run idle below. `pytest -m sionna -rs` 22 passed, 0 skipped. The example's `-m xsi` 4 passed, 0 skipped (56 min); `-m gem5` 6 passed, 0 skipped (and the 3 the review marked, below). Floors = collected counts with quarantine off: XSI 250, gem5 21 (after the review), Sionna 22. ruff and black clean on `examples/ltbf_dse` and `tests/examples/test_ltbf_dse*.py`; `tests/conftest.py` 2 ruff findings (unchanged; step 0.3's "1" was misread, row above), `waveflow/cpu/calib/sweep.py` 0. No example `-m vitis` tests exist. `FINDINGS.md` gained its figure and table index (section 5) | the commands | the timing test fails under load only |
 | 2026-10-30 | 7.2 | **The final review** (a read-only background agent over `0c50ae1d..HEAD`): three high findings, four medium, three low, two suspicions -- H1 AC9 and AC11 pass on whole runs that are two-thirds the O-RU's common symbol wait (without it: jobsim +10.3..+12.6% against pysim, pysim -7.3% against RTL, T_LT +6.4% / +7.2% at N_rx 256 with no limit); H2 AC13's measured time is the model times an anchor, so time cannot make a pick wrong, and 51 of 54 decisions a measure were none-feasible; H3 Shared Mem's storage costed as URAM at 288 Kb; M1 the DDR model never applied; M2 the RE/s is one sector with the update idle; M3 dropped symbols charged port time; M4 no tests for the DSE modules and two A53 model tests skipping unseen; L1 quoted numbers; L2 `p10` is the best tail; L3 frontiers per (array, target) only, the committed CSVs unnamed, `hw/prereg` unguarded; S1 features changed between the draft models and the freeze; S2 one slot hides a backlog. Checked sound: the pre-registration hashes, hygiene, the framework edits, AC7, most quoted numbers. The user chose the four recommended dispositions (§14); applied in `3d2485bd`: Shared Mem costed as built, model-only designs never picked, three slots for the rate, a dropped symbol charging no port time, the unregistered validation rows, per-budget frontiers, `p90`, `space.guard`, 16 synthetic tests (`test_ltbf_dse_dse.py`) and the A53 model tests gem5-marked (`WANT_GEM5_GATES` 18 -> 21, pre-approved). AC1-AC6 and step 4.1 ticked: their evidence rows (0.2, 1.4, 2.1, 2.3, 3.1, 4.1) and this step's regression | the review; the commits | AC9, AC11, AC13 stay ticked as registered and are ⚠️ in §16 |
 | 2026-10-30 | 7.2 | **Disclosures the review asked for.** (S1) The held-out builds' reports were written 15:45-16:15, between the draft models (`e0aed640`, 14:59) and the freeze (`df84c7e9`, 18:52), while the vector unit's resource terms (`vlmax` -> its register files' `bram18`), its cycle terms (`exec` / `exec_eq` / `eq`) and the Ingest DMA's symbol model were added; the scores were read once, after the freeze, but that the held-out data was not looked at in between rests on the process, not on a mechanism. (L3) The committed pre-registration files AC0's command prints: `examples/ltbf_dse/cpu/sweep_plan.csv` (step 0.5), `sweep_plan_proj.csv`, `sweep_plan_release.csv`, `sweep_plan_eig_recheck.csv` (step 4.6, `51b90030`), `sweep_plan_release_retest.csv` (`1227c192`). (L1) Corrected numbers, superseding row 6.1's: T_LT over every lane count, form and `t` 7.36-48.4 ms (8x8), 25.95-178.6 (16x16), 100.7-2,151 (32x32); a one-word-a-cycle leaf cuts one sector's update 31.4-46.0% and raises the rate x1.62-1.67, two banks cut it 1.1-1.7% and raise the rate x1.20-1.40, both x2.21-2.42; with dropped symbols no longer charging the port, the update beside the slot is +3.2% (8x8) and +4.0% (16x16, 32x32), 2-3 symbols of 14 dropped | the CSVs; git log | — |
+| 2026-10-30 | 6.3 ⏱ | **AC14 not met** (`python -m examples.ltbf_dse.hw.finalists`, then `--collect`; `paper_data/finalists_impl.csv` local; Vivado 2024.1, xczu48dr at 4 ns, the whole system placed and routed): F1 (2 x 4, `W` 12, 2 lanes -- the pick's hardware) WNS **-0.348 ns**, F2 (4 x 8, `W` 16, 4 lanes -- AC9's design) **-0.183 ns**; both worst paths end at a Shared Mem BRAM enable (`u_mem_sub/u_mem_mem/mem_reg_bram_17x/ENARDEN`, from the Ingest DMA's write throttle and from the crossbar's write mux): the framework leaf's 228 cascaded RAMB36 behind one enable. F3 (8 x 8) cut: its synthesis passed the framework's fixed 2 h Vivado limit (`system_synth.py:366`), which kills Vivado's loader and leaves Vivado itself running -- the orphan held about 12 GB for 5 h and pushed the machine into swap until stopped (06:42); a timeout parameter and a process-group kill are framework changes, left to the user. Post-implementation against the frozen models (which predict csynth): LUT 59,751 / 129,759 (F1), 100,704 / 210,607 (F2); FF 59,471 / 101,794, 105,077 / 190,772; DSP 109 / 109.4, 253 / 252.9; BRAM18 520 / 563, 546 / 601 (Shared Mem 456 of them). The first launch synthesized for the framework's default part (a Zynq-7020) and was discarded (§14) | the CSV | AC14 ❌ (2 implemented, 0 meet 4 ns) |
+| 2026-10-30 | 7.1 | **AC15 holds**: the fast suite on an idle machine (07:08-07:11): 5,575 passed, 98 skipped, 3 failed -- all three of step 0.3's baseline (`test_xsi_workspace_copies[vitis_fft]`, both `test_markov_figures`); the knowledge-index timing test passes. With the -m sionna, example -m xsi / -m gem5 runs, floors and lint above | the log in the session scratchpad (`final_fast2.log`) | — |
+| 2026-10-30 | 7.2 | **The DSE re-run after the review** (`dse --reuse-time`, `findings`, `fidelity`; `validate` unchanged by cost): designs that fit 8x8 576 of 576, 16x16 576 of 576 (94.2-95.4% max cost, the BRAM), 32x32 0 of 576 (367-368%); 18 of 324 decisions have a pick, all 8x8, [-6, 3] dB, 10 ms -- for `max` 2 x 4, `W` 12, 2 lanes, **factored**, `t` 1: T_LT 7.57 ms, 0.086 dB, 30.5% (LUT); with Shared Mem's storage the same for both forms the tie goes to the shorter T_LT (the old pick was explicit, 8.39 ms). Real time over 3 slots: 8x8 247,318 cycles a symbol = 0.80 M RE/s (0.90% of 88.7 M), 16x16 0.24 M, 32x32 0.064 M -- 1% slower than over one slot, the same at 2 and 4 lanes. AC13 by its rule: DSP, LUT, FF, BRAM18, max 54/54 each; 15 of the 270 decisions test a pick (one point, three loss budgets), the BRAM18 pick an 8 x 8 array against brute force's 2 x 4 within the 10% tolerance. `fidelity` ran with two workers (about 9 GB each; four thrash a 31 GB machine). Report for the meeting (local, `docs/me/meeting-10.30.2026/`) | the CSVs; `FINDINGS.md` | — |
 
 ## 16. Completion report
 
-*Filled in when the work ends.*
+*Written 2026-10-30 at step 7.2 (the user away: "finish the plan").  Every built number: Vitis HLS /
+Vivado 2024.1, xczu48dr at 250 MHz, pinned with `WAVEFLOW_VITIS_PATH` / `WAVEFLOW_VIVADO_PATH` since
+the machine's default became 2025.1 (§15).*
 
-- **Changed:**
-- **Tested (commands and results):**
-- **Acceptance criteria:** AC0 … AC15 ✅/❌/⚠️ with evidence
-- **Decisions made:**
+- **Changed:** 80 commits on `paper/ltbf_dse` after the merge of `feat/sionna-prod` (`0c50ae1d`):
+  `examples/ltbf_dse/` -- signals, op-counted channel estimation, the float and fixed-point chains,
+  the accuracy sweep, and `hw/` (records, the systolic and vector wrappers, the Ingest DMA, the Resp
+  hub, the scheduler and job graphs, the pysim system and its C++ host twin, the device and system
+  gates, the build queue, the cost and time models, the job-level simulator, the DSE, findings,
+  fidelity, finalists); eleven test files `tests/examples/test_ltbf_dse*.py`. Framework edits, each
+  approved: the systolic feeder's bounded read run-ahead (`systolic_engine_mem_task.h`), the XSI
+  harness's run cap (`system_dag.py`), `arrayutils.py`, `toolchain.py`, additions-only rows in
+  `waveflow/cpu/calib/sweep.py`, and the gate floors in `tests/conftest.py` (XSI 250, gem5 21).
+  Results are local (`paper_data/`, `hw/reports/`, `hw/prereg/`, `calib/`); the meeting report is
+  `docs/me/meeting-10.30.2026/ltbf_dse.md` (local).
+- **Tested (commands and results):** fast suite idle: 5,575 passed, 98 skipped, 3 failed (step 0.3's
+  baseline); `pytest -m sionna -rs` 22 passed, 0 skipped; the example's `-m xsi` 4 passed, 0 skipped
+  (56 min); its `-m gem5` 6 + 3 passed, 0 skipped; floors equal the collected counts; ruff and black
+  clean on the example and its tests; `tests/conftest.py` 2 ruff findings and `sweep.py` 0, both
+  unchanged.
+- **Acceptance criteria:**
+  - AC0 ✅ (both ancestors; `main`, `feat/sionna-prod`, `paper/cg_dse` unmoved; only the five
+    committed calibration plans in git) -- except its "no remote" clause: the editor pushed the
+    branch, which the user accepted.
+  - AC1-AC8 ✅, AC10 ✅, AC12 ✅ (frontiers per budget since the review), AC15 ✅.
+  - AC9 ⚠️ met as registered (the same jobs, Resp records and data bursts; end -2.7%), but the end
+    is two-thirds the O-RU's symbol wait: without it pysim is -7.3% against RTL.
+  - AC11 ⚠️ met as registered (held-out LUT 0.5%, FF 0.5%, DSP 0.0%, BRAM18 11% (worst 111%);
+    cycles 0.2-2.7%; whole runs within 4.2%), but without the common wait the simulator is
+    +10.3..+12.6% against pysim, and T_LT +6.4% / +7.2% at N_rx 256.
+  - AC13 ⚠️ 54/54 per measure by the rule, but one distinct decision tests a pick, and the measured
+    time is the model times an anchor, so time is untested.
+  - AC14 ❌ two finalists implemented, neither meets 4 ns (-0.348, -0.183 ns: the Shared Mem BRAM
+    enable); F3 cut.
+- **Decisions made:** §14, chiefly:
+  - Shared Mem as built (the calibrated leaf) with what-ifs (a one-word-a-cycle leaf, banks);
+  - its storage costed as Vivado maps it;
+  - designs that do not fit labelled model-only and never picked (DDR not modelled);
+  - the weak acceptance tests reported, not re-tuned;
+  - three slots for the sustained rate;
+  - the finalists' own platform;
+  - the held-out set re-registered from 64-bit parts;
+  - AC13's time anchored on XSI alone.
 - **Assumptions and not verified:**
+  - The real-time rate is one sector with the long-term update idle; beside it the update slows
+    3-4% and 2-3 of 14 symbols drop.
+  - The resource models predict csynth's estimates; implementation's LUT and FF are about half of
+    that.
+  - 32x32 is timed as if on chip.
+  - The held-out set's isolation between the draft models and the freeze rests on process (S1).
+  - Float CG's 57 dB loss at t = 2 (32x32, [-6, 3] dB) and the negative losses at t = 1 are
+    unexplained.
+  - The Ctrl register sets are thinner than the spec's.
 - **Remaining risks and issues:**
+  - The design does not close 4 ns as built; the leaf's BRAM enable needs pipelining, a framework
+    change.
+  - The framework's system synthesis defaults to a Zynq-7020 when no platform is selected, and its
+    fixed 2 h Vivado timeout orphans Vivado.
+  - This machine's toolchain default is now 2025.1 (`.venv/bin/activate`'s comment is stale).
+  - `fidelity`'s workers need about 9 GB each; use two on this machine.
 - **Next steps:**
+  - The memory system: a faster leaf and banks (x2.4 real time), and a pipelined BRAM enable.
+  - Models calibrated on implementation.
+  - XSI gates on brute-force designs, so AC13 tests time.
+  - The t = 2 anomaly.
+  - A DDR model for 32x32.
 - **Reusable artifacts saved / tools that would have helped:**
+  - Saved: the job-level simulator (`hw/jobsim.py`), the synthetic DSE tests, the
+    `SwHost` + `Processor` host pattern with its C++ twin, and `finalists.py --collect`.
+  - Would have helped: a platform-default warning in system synthesis, a configurable synthesis
+    timeout, and a memory-aware pool size.
+  - Proposed to the user (not applied, step 7.2): a `CLAUDE.md` note that system synthesis needs a
+    platform (else a Zynq-7020); a guide page on the `SwHost` + `Processor` host pattern; a note that
+    `bram_t2p.v` at 2^17 x 64 maps to 228 RAMB36 and limits timing through its enable.
 
 ## Checklist coverage
 

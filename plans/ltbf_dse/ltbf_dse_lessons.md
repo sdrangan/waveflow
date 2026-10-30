@@ -156,3 +156,21 @@ surprises, and rules worth keeping. One entry per lesson, newest last, each with
   hw.fidelity` never ended, the command line holding the pattern. Wait on a recorded PID (`kill -0`).
 - **A sustained-rate test must check the producer's pace too** (step 6.1): with the engines fast, the
   Ingest DMA backpressured the O-RU and no ring ever overran, so "no overrun" passed at any period.
+- **A tolerance on whole runs can hide the error that matters** (step 7.2, final review): AC9 and
+  AC11 compared run ends whose two thirds were the O-RU's symbol wait, common to both sides; within
+  5% as registered, 7-13% once the wait is removed. Register checks on the part that differs.
+- **`ruff check <file> | tail -1` is not a count** (step 0.3): its last line is "[*] N fixable",
+  so the baseline recorded 1 finding where there were 2. Count the rule codes.
+- **A machine's toolchain can change under a long study** (step 6.3): a root-installed 2025.1
+  became the default search's pick mid-run. Pin the tool path (`WAVEFLOW_VITIS_PATH`,
+  `WAVEFLOW_VIVADO_PATH`) for every run and check the report's build tag, not its version line.
+- **System synthesis needs a platform for its part** (step 6.3): with none, the framework's system
+  synthesis targets a Zynq-7020 at 10 ns while the kernels' own scripts pin the xczu48dr; the
+  mismatch only shows as a DRC over-utilization.
+- **A subprocess timeout on Vivado's launcher orphans Vivado** (step 6.3): the 2 h limit killed the
+  loader, and Vivado with four workers kept 12 GB for 5 h, pushing the machine into swap. Kill the
+  process group, and check for orphans after any timeout.
+- **Cost a memory as the tool maps it** (step 7.2): 128 K x 64 is 228 RAMB36 (seven 9-bit slices
+  and one 1-bit), not 256 (512 words a BRAM36); the difference decided whether 16x16 fits.
+- **Size a process pool by memory, not cores** (step 7.2): each `fidelity` worker loads about
+  9 GB, so four on a 31 GB machine thrash for hours where two finish in 20 minutes.
