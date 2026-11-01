@@ -213,4 +213,4 @@ integration agent verifies a system whose devices it never saw inside.
 - `plans/maxi_pointer_fifo.md` — an RTL-only failure, and what found it.
 - `plans/ip_packaging_routes.md` — one IP per device: the unit.
 - `plans/unit_harness.md` — the device's harness: the contract a sub-agent works against (its Part B).
-- `plans/mcp_fir.md` — the agent-facing tools, and its tools-vs-workspace experiment.
+- `plans/dse_cg.md` — the agent-facing tools, and its tools-vs-workspace experiment.

@@ -1,0 +1,74 @@
+<!--
+  One design's context for the dse skill.  brief.py renders it into DSE.md (in the repository for
+  the user flow, in the sandbox for a run) and drops this comment.
+    {{name}}           a generated block (brief.py says where each one comes from)
+    arm:waveflow       a block between the arm:waveflow and /arm markers is kept in the Waveflow
+                       arm and removed in the traditional arm
+  Everything else is the same text in both arms.  No objective and no budget: the objective is the
+  prompt, and budget() reports the budget.
+-->
+# {{design_title}}
+
+Design `{{design_name}}`, on the platform `{{platform}}`.
+
+{{system_description}}
+
+## Architecture
+
+The architecture is fixed: every design point has the same parts, connected the same way. Only the
+sizes inside the parts change.
+
+{{data_flow}}
+
+The DUT is synthesized in parts: each device (a kernel with the views, adaptor and bus writers that
+belong to it) and each memory is a **sub-top**, synthesized on its own, and the crossbar between
+them is vendor IP. A design parameter changes only the parts it depends on, and only those are
+synthesized again; a part already synthesized at the same sizes costs nothing.
+
+{{subtop_tree}}
+
+How the parts are connected:
+
+{{interconnects_table}}
+
+The modules inside each part, with their documentation and source:
+
+{{modules_table}}
+
+## Parameters
+
+**Design** parameters change the hardware: a new value means a new synthesis of the parts listed.
+**Workload** parameters are fields of a command: a new value costs only simulation.
+
+{{parameters_table}}
+
+A design is legal only when all of these hold:
+
+{{constraints}}
+
+## Workloads
+
+{{workloads_table}}
+
+`space()` returns the parameters, constraints and workloads as data.
+
+## Metrics
+
+{{metrics_table}}
+
+## What each evaluation costs
+
+| function | cost |
+|---|---|
+| `golden(params, workload)` | {{cost_golden}} per call |
+<!-- arm:waveflow -->
+| `pysim(params, workload)` | {{cost_pysim}} per call |
+<!-- /arm -->
+| `hls_estimate(points)` | {{cost_hls_estimate}}, for each HLS kernel not compiled before at the same sizes |
+| `synth(points)` | {{cost_synth}}, for each part not synthesized before at the same sizes |
+| `rtlsim(points, workload)` | {{cost_rtlsim_design}} for a new design (plus the synthesis of its new parts); {{cost_rtlsim_workload}} for a new workload on a design already simulated |
+
+Up to {{k_workers}} `hls_estimate`, `synth` and `rtlsim` jobs run at once; more wait their turn.
+
+`hls_estimate` covers the HLS kernels: {{hls_kernels}}. The rest of each part (adaptors, memory
+windows, the crossbar) is not HLS and has no estimate.
