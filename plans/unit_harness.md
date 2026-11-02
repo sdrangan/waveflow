@@ -802,7 +802,7 @@ A device's harness is the contract a sub-agent would work against.  What crosses
 - **out:** a kernel body that passes the harness, fitted timing parameters, the records it filed, and a
   short report -- never the device's internals.
 
-To work out with `plans/multi_agent_flows.md` (the open problem) and `plans/mcp_fir.md` (the agent-facing
+To work out with `plans/multi_agent_flows.md` (the open problem) and `plans/dse_cg.md` (the agent-facing
 tools, and its tools-vs-workspace experiment): who draws the cut, how a brief is generated from a
 harness, what context rules apply, and whether an integration agent can verify a system it never saw
 inside of.  The first experiment is in the multi-agent notes: one multi-device spec, one agent against
@@ -835,4 +835,4 @@ agents splitting by device.
   Stage 3; its composition claim is D8.
 - `plans/pipelined_ops.md` -- timed phases, the calibration they make generated, and the migration this
   plan's harness enables (see above).
-- `plans/multi_agent_flows.md`, `plans/mcp_fir.md` -- Part B.
+- `plans/multi_agent_flows.md`, `plans/dse_cg.md` -- Part B.
