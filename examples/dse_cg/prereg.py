@@ -3,7 +3,7 @@
 Committed in one commit before the first scored run, and not edited after; a change means a new
 pre-registration with a new date, and the old runs stay scored against the old one.  The ground-truth
 grid G1 and its integration builds are pre-registered separately, before any of their builds run
-(plan phase P1).
+(plan step 4).
 
 Python rather than JSON: the repository's ``.gitignore`` ignores ``*.json``.
 

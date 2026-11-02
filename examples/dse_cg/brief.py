@@ -64,7 +64,7 @@ repository for the user flow, into the copied ``docs/`` and ``src/`` for a sandb
 only difference between the two renderings of one arm.
 
 Skeleton: :func:`select_arm` and :func:`render` are written, because they define what "the arms
-differ only in pysim" means; the rest is plan phase P2.
+differ only in pysim" means; the rest is plan Phase 3 (``build_sandbox``: step 5).
 """
 
 from __future__ import annotations
@@ -108,24 +108,24 @@ def render(template: str, blocks: dict[str, str], arm: str) -> str:
 def build_blocks(design, link_root: Path) -> dict[str, str]:
     """Every ``{{block}}`` of ``DSE.md.tmpl``, generated (see the table above), with links
     relative to ``link_root``."""
-    raise NotImplementedError("P2")
+    raise NotImplementedError("Phase 3")
 
 
 def install_skill(skills_dir: Path, arm: str = "waveflow") -> Path:
     """Write ``skill/dse/`` for ``arm`` into ``skills_dir/dse/`` (``SKILL.md`` and ``dselib``, each
     through :func:`select_arm`, comments dropped) and return that directory."""
-    raise NotImplementedError("P2")
+    raise NotImplementedError("Phase 3")
 
 
 def write_context(design, path: Path, arm: str = "waveflow") -> Path:
     """Render ``DSE.md.tmpl`` for ``design`` and ``arm`` to ``path``, linking into the repository."""
-    raise NotImplementedError("P2")
+    raise NotImplementedError("Phase 3")
 
 
 def build_sandbox(design, arm: str, out_dir: Path) -> Path:
     """Write one run's sandbox (the tree above) and return ``out_dir``.  The objective is not in
     it: it is the prompt."""
-    raise NotImplementedError("P2")
+    raise NotImplementedError("step 5")
 
 
 def prompt(context_path: str, objective: dict) -> str:

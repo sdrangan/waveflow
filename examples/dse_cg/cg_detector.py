@@ -1,7 +1,7 @@
 """cg_detector.py -- the CG detector as a DSE design (V1 in ``plans/dse_cg.md``).
 
 Wraps ``examples/mimo_cg/hw/``.  V2, the descriptor-ring system, is a second adaptor written when
-that system exists (plan phase P5).
+that system exists (plan step 8).
 
 Skeleton: :meth:`CgDetectorAdaptor.space` is filled in because it is only a restatement of
 ``examples/mimo_cg/hw/space.py``, and seeing the real knobs helps review.
@@ -57,24 +57,19 @@ class CgDetectorAdaptor(DseAdaptor):
                 {"rule": f"R * C <= {S.MAX_PES}", "why": "the largest array the device holds"},
                 {"rule": "nit <= K", "why": "CG converges in at most K iterations"},
             ],
-            "workloads": [],   # TODO(P2): "steady" (timing) and "snr_sweep" (accuracy), with costs
+            "workloads": [],   # TODO(Phase 1c): "steady" (timing) and "snr_sweep" (accuracy), with costs
         }
 
     def context(self) -> dict:
-        raise NotImplementedError("P2: description, data flow, doc paths, workload text, metrics")
+        raise NotImplementedError("Phase 2: description, data flow, doc paths, workload text, metrics")
 
     def build_system(self, params: dict) -> Any:
-        raise NotImplementedError("P1b: the detector's HwSystem at HwConfig(**params)")
+        raise NotImplementedError("Phase 1a: the detector's HwSystem at HwConfig(**params)")
 
     def golden(self, params: dict, workload: dict) -> dict:
         raise NotImplementedError(
-            "P1b: examples/mimo_cg/mimo_cg_fixed.py over the workload's scenarios (or its "
+            "Phase 2: examples/mimo_cg/mimo_cg_fixed.py over the workload's scenarios (or its "
             "accuracy table, examples/mimo_cg/hw/dse.py:accuracy)")
-
-    def pysim(self, params: dict, workload: dict) -> dict:
-        raise NotImplementedError(
-            "P1b: examples/mimo_cg/hw/models.py ported to the 2025.1 platform (P0) for cycles and "
-            "resources, the golden for accuracy; per-block activity from P6")
 
 
 #: The designs the experiment knows, by name (``prereg.DESIGN``).

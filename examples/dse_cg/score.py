@@ -2,7 +2,7 @@
 
 Reads only ledgers, reports and the ground-truth table; never re-runs anything.
 
-Skeleton (plan phases P3, P4).
+Skeleton (plan steps 6 and 7).
 """
 
 from __future__ import annotations

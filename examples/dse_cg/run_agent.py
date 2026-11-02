@@ -19,7 +19,7 @@ A run is the user flow (README, *Using it yourself*) in a fresh session with no 
 Before writing step 3, load the ``claude-api`` skill rather than working from memory: the Agent SDK's
 options (settings sources, skills, tools) and the model id are easy to get subtly wrong.
 
-Skeleton (plan phase P4).
+Skeleton (plan step 7).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pathlib import Path
 
 def run_one(arm: str, objective_id: str, seed: int, root: Path) -> Path:
     """Run one agent and return its record directory."""
-    raise NotImplementedError("P4")
+    raise NotImplementedError("step 7")
 
 
 def main(argv: list[str] | None = None) -> int:

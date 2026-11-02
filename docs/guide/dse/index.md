@@ -70,10 +70,11 @@ a conjugate-gradient solver built from a systolic array and a vector unit, with 
   how all of that is written down for an agent.
 - [The design context](context.md): how `DSE.md`, the file that describes one design to the agent,
   is generated from the design's Python.
-- [Skills](skill.md): how an agent is given a method, and how it reads it. Read this first if you
-  have not worked with AI agents before.
-- [The service](service.md): the process behind every evaluation: what it checks and charges, the
-  ledger it keeps, and the live and replay backends.
+- [The service](service.md): the process behind every evaluation: why the adaptor is hidden, the
+  `dselib` functions, what the service checks and charges, the ledger, and the live and replay
+  backends.
+- [Skills](skill.md): how the agent is given the method for using all of this, and how it reads it.
+  If you have not worked with AI agents before, its first sections stand on their own.
 
 For the sweep tools that run a grid of designs without an agent, see
 [Design-space exploration](../systems/dse.md) in the flow overview.

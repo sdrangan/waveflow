@@ -58,7 +58,7 @@ def bind(session: Any) -> None:
 
 def _call(fn: str, **kwargs: Any) -> Any:
     """One request: to the bound session if there is one, else to the service at ``DSE_SERVICE``.
-    Skeleton: neither path is written yet (plan phase P1b)."""
+    Skeleton: neither path is written yet (plan Phase 3)."""
     raise NotImplementedError(f"dselib.{fn}: the service transport is not built yet")
 
 

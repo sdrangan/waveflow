@@ -1,7 +1,7 @@
 ---
 title: The service
 parent: Agentic DSE
-nav_order: 4
+nav_order: 3
 audience: python
 summary: "The process that answers every dselib call: it checks the call, synthesizes part by part and charges only parts not built before, schedules synthesis and RTL jobs on k worker slots on a simulated tool clock, enforces the budget and the submit rule, writes small derived artifacts back, and keeps the ledger -- the complete record of what was evaluated and what it cost, which results() returns and score.py reads. Two backends: live (runs the tools; a user's flow, and how the ground truth is measured) and replay (answers from the recorded ground truth; every scored run). Why it runs outside the agent's sandbox."
 ---

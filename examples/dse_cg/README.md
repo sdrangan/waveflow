@@ -36,7 +36,7 @@ In your own project, with your own `CLAUDE.md` and session:
    /dse examples/dse_cg/DSE.md Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.
    ```
 
-(Steps 1–3 are not written yet: plan phases P1b and P2.)
+(Steps 1–3 are not written yet: plan Phase 3.)
 
 ## A run is that flow in a clean sandbox
 
@@ -78,17 +78,18 @@ second design uses them, then move into the `waveflow` package; `cg_detector.py`
 
 ## Order of work
 
-Follows the plan's V1 phases:
+Follows [`plans/dse_cg.md`](../../plans/dse_cg.md). The stubs name the phase or step that writes
+them.
 
-1. **P0, P1** (lab machine): the units recalibrated at 2025.1 (`plans/calib_2025_1.md`), then the
-   ground-truth grid G1 measured, which is `LiveBackend` driven over a pre-registered grid, and the
-   system-level predictions scored on it. This directory waits on G1 for real data, but not for its
-   code.
-2. **P1b**: `service.py` and the `dselib` transport, with `CgDetectorAdaptor.golden`, `.pysim`,
-   `.build_system` and the base class's `identities` and `synth`, against a few G1 points.
-3. **P2**: `brief.py`, the rest of the adaptor, and a test that the two arms' sandboxes differ only
-   in the `arm:waveflow` blocks. The user flow works from here.
-4. **P3**: `policies.py` and `score.py`: the first result, with no agent.
-5. **P4**: `run_agent.py`, pilot runs, pre-registration (`prereg.py`), the scored runs.
+1. **Phase 1: complete the CG system.** First and blocking: the detector as an `HwSystem` (it runs
+   only on the older kernel-testbench flow today), so that `build_system` exists. Then synthesis
+   and csynth through the system flow, the two workloads, and pysim from the system.
+2. **Phase 2: the adaptor, verified.** `adaptor.py`'s defaults and `cg_detector.py`'s methods; fast
+   tests with no toolchain; then five design points through every method, checked against each
+   other.
+3. **Phase 3: the service and `dselib` on the live backend**, and `DSE.md` generated. The user flow
+   above works from here: **the hand-off point.**
 
-V2 (the descriptor-ring system) adds a second adaptor, and nothing else here changes.
+After that: the ground-truth grid G1 and the validation of pysim's predictions (step 4), replay and
+the sandbox (5), the scripted policies (6), the agents (7), and V2, the descriptor-ring system,
+which adds a second adaptor and changes nothing else here (8).

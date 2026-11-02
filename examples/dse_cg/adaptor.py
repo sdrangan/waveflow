@@ -11,7 +11,7 @@ The CG detector's adaptor is ``cg_detector.py`` (V1 in ``plans/dse_cg.md``).  Th
 about CG; it moves into the ``waveflow`` package once a second design uses it.
 
 Skeleton: :meth:`defaults`, :meth:`fill` and :meth:`legal` are written, because they follow from
-:meth:`space` alone; the defaults that need a built system are plan phases P1b and P2.
+:meth:`space` alone; the defaults that need a built system are plan Phase 2.
 """
 
 from __future__ import annotations
@@ -99,7 +99,7 @@ class DseAdaptor(ABC):
         """Accuracy (exact) + cycles, per-block activity, resources (calibrated): the body of
         ``dselib.pysim``.  Default: run :meth:`build_system`'s system on the workload in pysim for
         cycles and activity, and ``estimate_system`` for resources."""
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     def synth(self, node: str, params: dict) -> dict:
         """Synthesize node ``node`` of :meth:`architecture` (with everything under it) at
@@ -110,7 +110,7 @@ class DseAdaptor(ABC):
         Default: the per-device route (``synth_route="per_device"``, ``waveflow.build.system_ooc``)
         on that sub-top, or the crossbar IP.
         """
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     def rtlsim(self, params: dict, workload: dict) -> dict:
         """Simulate the DUT at ``params`` at RTL on the workload and return its row: cycles, the
@@ -120,7 +120,7 @@ class DseAdaptor(ABC):
         (``add_system_steps`` to ``system_xsi``), incremental, so a new workload on a design already
         elaborated pays for simulation alone.
         """
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     def hls_estimate(self, kernel: str, params: dict) -> dict:
         """C-synthesize HLS kernel ``kernel`` (an HLS top of :meth:`build_system`'s DUT) at
@@ -133,7 +133,7 @@ class DseAdaptor(ABC):
         report parser.  The same step runs before every synthesis, so measuring the ground truth
         records these as a by-product.
         """
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     # -- provided -----------------------------------------------------------------------------
 
@@ -173,7 +173,7 @@ class DseAdaptor(ABC):
         parameter's extreme values must match, or the "parameter" changes the architecture and the
         adaptor is refused.
         """
-        raise NotImplementedError("P2")
+        raise NotImplementedError("Phase 2")
 
     def identities(self, params: dict) -> dict[str, str]:
         """``{node: identity}`` at ``params``: for each node of :meth:`architecture`, a hash of what
@@ -183,17 +183,17 @@ class DseAdaptor(ABC):
         so two points that share a sub-top share its synthesis.  Replay looks results up by it.
         Never shown to the agent.
         """
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     def hls_identities(self, params: dict) -> dict[str, str]:
         """``{kernel: identity}`` at ``params``: for each HLS top of the DUT, a hash of what would be
         C-synthesized (its generated source and build options).  The cache and charge key for
         ``hls_estimate``, finer than :meth:`identities` because one part may hold several HLS
         kernels.  Never shown to the agent."""
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 2")
 
     def rebuilds(self) -> dict[str, list[str]]:
         """For each design parameter, the nodes whose identity changes when it moves from its
         default to another legal value: :meth:`identities` at both, compared node by node.  Shown in
         ``DSE.md`` as each node's "depends on" and each parameter's "rebuilds"."""
-        raise NotImplementedError("P2")
+        raise NotImplementedError("Phase 2")

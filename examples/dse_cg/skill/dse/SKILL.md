@@ -41,7 +41,7 @@ from dselib import pysim
 | `pysim(params, workload)` | accuracy, **exact**; cycles, per-block activity and resources, **approximate**, each with a confidence level. |
 <!-- /arm -->
 | `hls_estimate(points)` | resources and, where computable, latency of each HLS kernel, **estimated** by the HLS compiler. Not the logic around the kernels. |
-| `synth(points)` | resources and II, **measured**. |
+| `synth(points)` | resources and II, **measured**, in total and for each part of the design. |
 | `rtlsim(points, workload)` | cycles and per-block activity, **measured**. |
 
 `DSE.md` gives the cost of each one for this design. `hls_estimate`, `synth` and `rtlsim` run as
@@ -53,7 +53,14 @@ jobs, a few at once;
 - Every call is charged. `budget()` shows what you have spent and what is left; the run ends when
   the budget is spent.
 - A failure is a result, not an exception: a row with a `status` and the time it cost.
-- `results()` returns everything evaluated so far, so you never need to repeat a call.
+- A design is synthesized part by part (`DSE.md` lists the parts and which parameters each depends
+  on). A part already synthesized at the same sizes is not charged again, so a change that touches
+  one part costs only that part's synthesis. A repeated evaluation costs nothing.
+- `results()` returns every evaluation so far, flattened for `pandas.DataFrame`; `results("synth")`
+  keeps one function's rows. Use it to recover your state instead of repeating calls or relying on
+  notes.
+- Some rows carry `artifacts`: paths to small files written under `results/` in the working
+  directory, such as a utilization report or a per-block activity table.
 - The design you submit must be one you have synthesized **and** RTL-simulated, on the workloads the
   objective names.
 - Work in Python. Write scripts and notes in the working directory as you like.

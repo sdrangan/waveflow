@@ -1,7 +1,7 @@
 ---
 title: Skills
 parent: Agentic DSE
-nav_order: 3
+nav_order: 4
 audience: python
 summary: "How an AI agent is given a method, for readers new to agents. What the model actually sees (text only; the harness reads files and runs tools for it), the three ways to give it instructions (prompt, CLAUDE.md, skill), what a skill is (a folder with SKILL.md: a description that is always listed, a body loaded on demand, files read only when needed), how a skill is invoked and expanded ($ARGUMENTS is replaced by the harness before the model sees the text), and why the DSE experiment uses one: the same skill, context and prompt serve a user in their own project and an agent in a clean sandbox."
 ---
@@ -166,10 +166,11 @@ Here is everything that happens when you ask for a CG design in your own project
 4. **The model reads the body** and follows it. It asks to read `examples/dse_cg/DSE.md`, and the
    harness returns the design's parameters, constraints, workloads and costs.
 5. **The model writes Python** that imports `dselib` from the skill's directory and calls `space()`,
-   `golden(...)`, `pysim(...)`. The harness runs it. Each call goes to the DSE service, which runs
-   the tool and charges the time.
-6. **The model keeps going**: reading results, deciding what to synthesize, calling `synth` and
-   `rtlsim`, until it calls `submit(params, report)` or the budget runs out.
+   `golden(...)`, `pysim(...)`. The harness runs it. Each call goes to the
+   [DSE service](service.md), which runs the tool and charges the time.
+6. **The model keeps going**: reading results (and `results()` when it needs its history back),
+   deciding what to estimate and synthesize, calling `hls_estimate`, `synth` and `rtlsim`, until it
+   calls `submit(params, report)` or the budget runs out.
 
 Who knows what:
 

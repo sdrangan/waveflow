@@ -5,7 +5,7 @@ the same ``score.py``.  The vision asks that the core result not depend on an ag
 variance); these give that result, and the agent runs show the advantage survives an autonomous
 explorer.
 
-Skeleton: the algorithms are stated, not written (plan phase P3).
+Skeleton: the algorithms are stated, not written (plan step 6).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def traditional(lib, objective: dict, analytic_cost) -> dict:
        are met and the best verified objective has not improved for one batch.
     4. ``submit`` the best verified design.
     """
-    raise NotImplementedError("P3")
+    raise NotImplementedError("step 6")
 
 
 def waveflow(lib, objective: dict, top_k: int) -> dict:
@@ -35,4 +35,4 @@ def waveflow(lib, objective: dict, top_k: int) -> dict:
        enough to change the ranking, widen to the next ``top_k``.
     4. ``submit`` the best verified design.
     """
-    raise NotImplementedError("P3")
+    raise NotImplementedError("step 6")

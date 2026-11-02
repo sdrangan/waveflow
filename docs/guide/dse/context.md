@@ -185,9 +185,11 @@ workload's channels.
 approximate number with a confidence level. The default runs `build_system`'s system in pysim on the
 workload and prices resources with the calibrated models (`estimate_system`).
 
-The CG detector overrides it, because its cycles and resources come from the analytic models of
-[`examples/mimo_cg/hw/models.py`](../../../examples/mimo_cg/hw/models.py), written before the system
-flow existed.
+The CG detector uses the default. Its study also has an analytic model,
+[`examples/mimo_cg/hw/models.py`](../../../examples/mimo_cg/hw/models.py), fitted by hand before the
+system flow existed. It is kept as a comparison, not used as `pysim`: the experiment has to measure
+Waveflow's generic pysim, not a model written for one design. Override `pysim` only when a design
+cannot be simulated as a system.
 
 ### `synth(node, params)`: one part's synthesis
 

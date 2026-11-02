@@ -37,7 +37,7 @@ Every call, its charge and its result are appended to the ledger file, which ``s
 run starts empty, or it would inherit earlier runs' measurements for free); as long as the project
 for a user (a synthesis done yesterday is still in it today).
 
-Skeleton: interfaces only (plan phase P1b).
+Skeleton: interfaces only (plan Phase 3 on the live backend; replay is step 5).
 """
 
 from __future__ import annotations
@@ -78,16 +78,16 @@ class Ledger:
 
     def charge(self, fn: str, args: dict, cost_s: float, cached: bool, result: Any,
                t_start_s: float, t_end_s: float) -> LedgerEntry:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def summary(self) -> dict:
         """The body of ``dselib.budget()``."""
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def rows(self, fn: str | list[str] | None = None) -> list[dict]:
         """The body of ``dselib.results()``: the returned rows, filtered by function and
         flattened (one column per parameter, dotted columns for nested values)."""
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
 
 class WorkerPool:
@@ -98,16 +98,16 @@ class WorkerPool:
         self.k = k
 
     def submit(self, duration_s: float) -> str:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def finish_time(self, job: str) -> float:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
 
 class ReplayBackend:
     """Answers ``golden``, ``pysim``, ``synth`` and ``rtlsim`` from the ground-truth table.
 
-    The table is G1 (plan phase P1): for every grid point, the measured resources and cycles, the
+    The table is G1 (plan step 4): for every grid point, the measured resources and cycles, the
     golden accuracy, the pysim predictions, and the recorded cost of each evaluation, all at 2025.1.
     A point outside the table is a row with ``status: "not_in_space"`` (the agents' space is the
     table, so this means a bug in the brief or the client).
@@ -118,7 +118,7 @@ class ReplayBackend:
 
     def lookup(self, fn: str, params: dict, workload: dict | None) -> tuple[dict, float]:
         """``(result row, recorded cost_s)`` for one evaluation."""
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("step 5")
 
 
 class LiveBackend:
@@ -126,7 +126,7 @@ class LiveBackend:
     through ``system_synth`` and ``rtlsim`` through the incremental XSI flow, on this machine.  The
     cost is the time the tools took.
 
-    Measuring G1 (plan phase P1) is this backend driven over the pre-registered grid, with every
+    Measuring G1 (plan step 4) is this backend driven over the pre-registered grid, with every
     row and cost written to the replay table.
     """
 
@@ -135,7 +135,7 @@ class LiveBackend:
 
     def lookup(self, fn: str, params: dict, workload: dict | None) -> tuple[dict, float]:
         """``(result row, measured cost_s)`` for one evaluation."""
-        raise NotImplementedError("P1")
+        raise NotImplementedError("Phase 3")
 
 
 class Service:
@@ -152,27 +152,27 @@ class Service:
         self.backend = backend
 
     def space(self) -> dict:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def golden(self, params: dict, workload: Any) -> dict:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def pysim(self, params: dict, workload: Any) -> dict:
-        raise NotImplementedError("P1b: refuse unless arm == 'waveflow'")
+        raise NotImplementedError("Phase 3: refuse unless arm == 'waveflow'")
 
     def hls_estimate(self, points: list[dict]) -> str:
-        raise NotImplementedError("P1b: one job per kernel identity in design.hls_identities(params) "
+        raise NotImplementedError("Phase 3: one job per kernel identity in design.hls_identities(params) "
                                   "the ledger does not hold; both arms")
 
     def synth(self, points: list[dict]) -> str:
-        raise NotImplementedError("P1b: one job per part identity in design.identities(params) "
+        raise NotImplementedError("Phase 3: one job per part identity in design.identities(params) "
                                   "the ledger does not hold; the row sums the parts")
 
     def rtlsim(self, points: list[dict], workload: Any) -> str:
-        raise NotImplementedError("P1b: synth first if needed; first workload pays elaboration")
+        raise NotImplementedError("Phase 3: synth first if needed; first workload pays elaboration")
 
     def wait(self, job: Any) -> list[dict]:
-        raise NotImplementedError("P1b")
+        raise NotImplementedError("Phase 3")
 
     def results(self, fn: str | list[str] | None = None) -> list[dict]:
         return self.ledger.rows(fn)
@@ -181,11 +181,11 @@ class Service:
         return self.ledger.summary()
 
     def submit(self, params: dict, report: dict) -> dict:
-        raise NotImplementedError("P1b: refuse unless synthesized and rtlsim'd on the objective's "
+        raise NotImplementedError("Phase 3: refuse unless synthesized and rtlsim'd on the objective's "
                                   "workloads; record the report; close the run")
 
 
 def serve(service: Service, address: str) -> None:
     """Expose ``service`` to ``dselib`` at ``address`` (the ``DSE_SERVICE`` the client reads).
     A local HTTP or socket server; the choice is open."""
-    raise NotImplementedError("P1b")
+    raise NotImplementedError("Phase 3")
