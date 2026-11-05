@@ -4,7 +4,7 @@
 **Complexity:** L3 Complex. A new workload two orders of magnitude larger than the existing linear-algebra units, ray-traced channels, fixed-point and hardware/software design axes, calibrated models with Vitis validation, under a hard 48-hour deadline; everything is undoable with git. Scores: scope 3 · clarity 3 · novelty 3 · dependencies 3 · verification 3 · risk 2
 **Created:** 2026-10-13 · **Updated:** 2026-10-13 (revised after the independent plan review)
 **Plan file:** `plans/mimo_cg/ltbf_cg_dse.md` · **Lessons learned:** `plans/mimo_cg/ltbf_cg_dse_lessons.md` (created in step 0.1)
-**Branch:** `paper/cg_dse` (created in step 0.1 from `feat/cpu-model`)
+**Branch:** `paper/ltbf_cg_seq_dse` (created in step 0.1 from `feat/cpu-model`)
 **Deadline (hard):** **2026-10-15 20:25 EDT** (48 h after the user set it, 2026-10-13 ~20:25 EDT). All compute stops by **2026-10-15 18:30 EDT**; the completion report is written by **20:00 EDT**.
 
 > **For the agent executing this plan:** read *Rules for the doer* first. The
@@ -47,7 +47,7 @@
 7. **Long jobs run detached** (review B5; `mimo_cg_lessons.md`: a harness
    background task is killed after 30 min by default and 2 h at most, which
    killed an 8 h sweep). Every job longer than 30 min is launched as
-   `setsid nohup <cmd> > examples/ltbf_cg/logs/<job>.log 2>&1 &`, is resumable
+   `setsid nohup <cmd> > examples/ltbf_cg_seq_dse/logs/<job>.log 2>&1 &`, is resumable
    per item (it skips finished items on restart), and has its PID and start time
    recorded in §15. Poll it with the Monitor tool (an until-loop on the log or a
    done-file) and long `ScheduleWakeup` fallbacks; never with a foreground sleep.
@@ -63,7 +63,7 @@
 11. **No DSE data in git** (user, 2026-10-13): the copied Denver scene, traced
     drops, channel files, sweep outputs, CSVs, figures, logs and build trees stay
     local under the example's gitignored directories (step 0.3). Commit only
-    code, tests, `examples/ltbf_cg/.gitignore`, the plan, the lessons file, and
+    code, tests, `examples/ltbf_cg_seq_dse/.gitignore`, the plan, the lessons file, and
     the step 0.2 merge commit (including the root `.gitignore` lines it brings,
     pre-approved). Pre-registered sets (step 4.5) are fixed by recording their
     SHA-256 in §15 and committing that record.
@@ -157,14 +157,14 @@ figures, and a findings summary.
 | Type | Item |
 |---|---|
 | Must | Scope: the **whole long-term update** per sector (factoring or forming `Q̂`, the CG solve in both regimes, `Mᵢ`, the 8×8 eigendecomposition, `Gᵢ`), three sectors per T_LT (user, 2026-10-13). The real-time per-RE path is out of scope. |
-| Must | Channels: the paper's Denver scene, **copied into the repo** (`examples/ltbf_cg/data/denver/`, gitignored), ray-traced with `waveflow.rfenv` (Sionna RT 2.2.0, CPU; merged in step 0.2), with the paper's geometry and solver settings (§1), two snapshots per drop, specular-only (deterministic). |
+| Must | Channels: the paper's Denver scene, **copied into the repo** (`examples/ltbf_cg_seq_dse/data/denver/`, gitignored), ray-traced with `waveflow.rfenv` (Sionna RT 2.2.0, CPU; merged in step 0.2), with the paper's geometry and solver settings (§1), two snapshots per drop, specular-only (deterministic). |
 | Must | Arrays: each drop traced once with the **32×32** BS array; **16×16 and 8×8 taken as sub-arrays** at the same spacing (paired drops; user, 2026-10-13). |
 | Must | Scenarios: 3.5 GHz, 3 sectors × N_UE 10, N_SRS 8, N_s 1, G_SRS 10 dB (nominal) and noiseless SRS (for the paper comparison), SINR targets [−6, 3] and [−6, 14] dB, r ∈ {1, 2}, the 100 MHz band and the 1.44 MHz sensitivity; an N_UE sweep (4 to 40 per sector) at 16×16 for the regime and explicit/factored crossovers. Drops set by the step 1.2 spike within the tracing budget, aiming at 100, never below 20. |
 | Must | Accuracy metric: per-UE SINR loss of an approximate (finite-t and/or fixed-point) LTBF projection against **exact float LTBF** (`Aᵢ = Q̂⁻¹Ĥᵢ` by a direct solve), as the median and the 10th-percentile loss over the reported UEs and drops; SINR-loss budgets 0.1, 0.25 and 0.5 dB. The Prop. 2 subspace error is a diagnostic. |
 | Must | Arithmetic: a complex128 reference and a **bit-exact fixed-point** LTBF CG built on `waveflow.linalg`'s `matmul` and `cg` models, with word width (10–24 bits) and guard bits as axes; bit-exact to Vitis 2024.1 `ap_fixed`. |
 | Must | Design axes. Algorithm: t ∈ {1…10}; word width; guard bits; `Q̂` **explicit** (`S = Q̂D`) or **factored** (`S = D + Ĥα(ĤαᴴD)`); regime; per-UE or joint solve (a hardware axis; accuracy-identical, §9 b). Architecture: systolic R×C, lanes L, number of units, on-chip memory, the eigendecomposition on the A53 or in the PL. |
 | Must | Platform: RFSoC 4x2 `xczu48dr-ffvg1517-2-e` at 250 MHz (Vitis/Vivado 2024.1) plus the A53 model (`waveflow/cpu`, gem5 v25.1 HPI + McPAT) for the eigendecomposition and `Gᵢ`. |
-| Must | HLS bodies at LTBF sizes are **example-level** (`examples/ltbf_cg/src/`), derived from `waveflow/linalg`'s; `waveflow/linalg` is not changed (gate 4.0 decided by the user, 2026-10-13: `SystolicCore` fully partitions its operand registers over `MMAX`, `systolic_core_task.h:106–145, 235–236`, so m = 1024 cannot build). |
+| Must | HLS bodies at LTBF sizes are **example-level** (`examples/ltbf_cg_seq_dse/src/`), derived from `waveflow/linalg`'s; `waveflow/linalg` is not changed (gate 4.0 decided by the user, 2026-10-13: `SystolicCore` fully partitions its operand registers over `MMAX`, `systolic_core_task.h:106–145, 235–236`, so m = 1024 cannot build). |
 | Must | Explicit `Q̂` built and measured **on chip up to the largest N_rx that fits** (about 256); N_rx = 1024 explicit is **modeled** (measured tile cost + a stated DDR-bandwidth model), flagged *model-only* (user, 2026-10-13). Factored `Q̂` measured at 64 and 256 (tier A) and 1024 (tier B; modeled from 64/256 if its csynth fails). |
 | Must | Validation (user, reduced for the deadline): fit builds spanning the target sizes, **≥ 8 held-out** builds, a **pre-registered brute-force sub-grid** (≤ 8 h), **2–4 Vivado implementations** of finalists; each time-boxed. |
 | Must | Every figure and table regenerated by one documented command with fixed seeds; a forced re-run of a pre-chosen subset reproduces it byte for byte (figures written with fixed metadata). |
@@ -182,13 +182,13 @@ figures, and a findings summary.
 
 | Deliverable | Format | Location | For whom |
 |---|---|---|---|
-| Branch with the code and tests | git | `paper/cg_dse` (committed) | the user, the paper |
-| Drop generator, LTBF link model (float), bit-exact fixed-point LTBF CG | Python | `examples/ltbf_cg/` (committed) | paper, reproducibility |
-| LTBF engines (factored and explicit `Q̂`), HLS bodies, harnesses, models, DSE | Python + C++ | `examples/ltbf_cg/hw/`, `examples/ltbf_cg/src/` (committed) | paper |
-| A53 eigendecomposition kernel, `SwFunction`, calibration | Python + C | `examples/ltbf_cg/cpu/` (committed); pre-registration rows in `waveflow/cpu/calib/sweep.py` (pre-approved) | paper |
-| Copied Denver scene, drops, channel files | XML, PLY, `.npz`/`.json` | `examples/ltbf_cg/data/` (**local**, gitignored) | the doer |
-| Accuracy, cost, DSE, validation and fidelity tables; figures | CSV, PDF/PNG | `examples/ltbf_cg/paper_data/`, `examples/ltbf_cg/results/` (**local**) | the paper |
-| Findings summary and figure index | Markdown | `examples/ltbf_cg/paper_data/FINDINGS.md` (**local**) and §16 (committed) | the user |
+| Branch with the code and tests | git | `paper/ltbf_cg_seq_dse` (committed) | the user, the paper |
+| Drop generator, LTBF link model (float), bit-exact fixed-point LTBF CG | Python | `examples/ltbf_cg_seq_dse/` (committed) | paper, reproducibility |
+| LTBF engines (factored and explicit `Q̂`), HLS bodies, harnesses, models, DSE | Python + C++ | `examples/ltbf_cg_seq_dse/hw/`, `examples/ltbf_cg_seq_dse/src/` (committed) | paper |
+| A53 eigendecomposition kernel, `SwFunction`, calibration | Python + C | `examples/ltbf_cg_seq_dse/cpu/` (committed); pre-registration rows in `waveflow/cpu/calib/sweep.py` (pre-approved) | paper |
+| Copied Denver scene, drops, channel files | XML, PLY, `.npz`/`.json` | `examples/ltbf_cg_seq_dse/data/` (**local**, gitignored) | the doer |
+| Accuracy, cost, DSE, validation and fidelity tables; figures | CSV, PDF/PNG | `examples/ltbf_cg_seq_dse/paper_data/`, `examples/ltbf_cg_seq_dse/results/` (**local**) | the paper |
+| Findings summary and figure index | Markdown | `examples/ltbf_cg_seq_dse/paper_data/FINDINGS.md` (**local**) and §16 (committed) | the user |
 | Plan and lessons | Markdown | `plans/mimo_cg/` (committed) | continuity |
 
 ## 4. Acceptance criteria
@@ -196,14 +196,14 @@ figures, and a findings summary.
 Tier **A** criteria back the core claim and come first; tier **B** criteria are best effort,
 cut first. A missed target is ⚠️ with the number, never ✅ (Rule 14).
 
-- [x] **AC0 (A) Branch and data hygiene.** `paper/cg_dse` exists from `feat/cpu-model` with `feat/sionna-prod` merged; `git ls-files examples/ltbf_cg | grep -E '(^|/)(data|paper_data|results|logs)/|\.(npz|csv|pdf|png)$'` prints nothing; `git rev-parse feat/cpu-model feat/sionna-prod` = `e0f12e19…`, `8ca01221…`. Verify: those commands.
-- [x] **AC1 (A) Drops.** ≥ 20 (target 100) drops, each two snapshots T_LT apart, traced at 32×32 from the repo-local scene copy with §1's geometry and solver settings (specular only); the 16×16 and 8×8 channels are sub-arrays of the same traces; re-tracing one drop from its seed reproduces its channel files bit for bit on this install. Verify: `pytest tests/examples/test_ltbf_cg.py -k drops` and the drop manifest.
-- [x] **AC2 (A) Float reference.** (a) CG to convergence (relative residual `‖rⱼ‖/‖bⱼ‖ < 1e-12` per column, t capped at 4·N_rx) matches the direct solve with relative error ≤ 1e-8 in `Aᵢ`, both regimes, explicit and factored `S`; (b) for the same `D`, explicit and factored `S` agree to ≤ 1e-12 relative; (c) on our drops, in regime 1 as the paper's code ran, the paper's statements are re-checked and the numbers printed in §15: exact LTBF against instantaneous MMSE with a noiseless SRS estimate, and t = 3 on [−6, 3] dB, at the 1.44 MHz band (the code's) and at 100 MHz. Verify: `pytest tests/examples/test_ltbf_cg.py -k float`; the step 2.2 script.
-- [ ] ⚠️ **AC3 (A) Bit-exact fixed point.** The fixed-point LTBF CG is bit-exact to an `ap_fixed` C-simulation of the same algorithm on ≥ 20 random problems per regime and `Q̂` form at N_rx ≤ 64, including a zero-divisor case; at a 24-bit format (the widest whose accumulators fit `matmul.acc_format`'s 64-bit limit at K = 1024) its SINR equals the float pipeline's within 0.01 dB. Verify: `pytest -m vitis -rs tests/examples/test_ltbf_cg_conformance.py`; `pytest tests/examples/test_ltbf_cg.py -k fixed`.
+- [x] **AC0 (A) Branch and data hygiene.** `paper/ltbf_cg_seq_dse` exists from `feat/cpu-model` with `feat/sionna-prod` merged; `git ls-files examples/ltbf_cg_seq_dse | grep -E '(^|/)(data|paper_data|results|logs)/|\.(npz|csv|pdf|png)$'` prints nothing; `git rev-parse feat/cpu-model feat/sionna-prod` = `e0f12e19…`, `8ca01221…`. Verify: those commands.
+- [x] **AC1 (A) Drops.** ≥ 20 (target 100) drops, each two snapshots T_LT apart, traced at 32×32 from the repo-local scene copy with §1's geometry and solver settings (specular only); the 16×16 and 8×8 channels are sub-arrays of the same traces; re-tracing one drop from its seed reproduces its channel files bit for bit on this install. Verify: `pytest tests/examples/test_ltbf_cg_seq_dse.py -k drops` and the drop manifest.
+- [x] **AC2 (A) Float reference.** (a) CG to convergence (relative residual `‖rⱼ‖/‖bⱼ‖ < 1e-12` per column, t capped at 4·N_rx) matches the direct solve with relative error ≤ 1e-8 in `Aᵢ`, both regimes, explicit and factored `S`; (b) for the same `D`, explicit and factored `S` agree to ≤ 1e-12 relative; (c) on our drops, in regime 1 as the paper's code ran, the paper's statements are re-checked and the numbers printed in §15: exact LTBF against instantaneous MMSE with a noiseless SRS estimate, and t = 3 on [−6, 3] dB, at the 1.44 MHz band (the code's) and at 100 MHz. Verify: `pytest tests/examples/test_ltbf_cg_seq_dse.py -k float`; the step 2.2 script.
+- [ ] ⚠️ **AC3 (A) Bit-exact fixed point.** The fixed-point LTBF CG is bit-exact to an `ap_fixed` C-simulation of the same algorithm on ≥ 20 random problems per regime and `Q̂` form at N_rx ≤ 64, including a zero-divisor case; at a 24-bit format (the widest whose accumulators fit `matmul.acc_format`'s 64-bit limit at K = 1024) its SINR equals the float pipeline's within 0.01 dB. Verify: `pytest -m vitis -rs tests/examples/test_ltbf_cg_seq_dse_conformance.py`; `pytest tests/examples/test_ltbf_cg_seq_dse.py -k fixed`.
 - [x] **AC4 (A) Accuracy DSE.** The §9 (b) grid evaluated with no Vitis in the loop, one command, deterministic; `paper_data/accuracy_losses.csv` holds median and 10th-percentile SINR loss per (band, scenario, array, t, format, `Q̂` form, regime, r); re-running a pre-chosen subset (2 drops over the whole grid) reproduces its rows byte for byte, and the figures are byte-stable. Verify: the step 3.2 subset command and `cmp`.
-- [x] **AC5 (A) Factored engine.** The factored engine is bit-exact at RTL (XSI) against the fixed-point model at N_rx = 64 (per-UE and joint), and csynth reports an estimated clock ≤ 4 ns at N_rx 64 and 256. Verify: `pytest -m xsi -rs tests/examples/test_ltbf_cg_xsi.py -k factored`; the csynth reports.
-- [x] **AC5b (B) Explicit engine and 1024.** The explicit engine is bit-exact in pysim at N_rx = 64 and at RTL (XSI) at 64, with csynth ≤ 4 ns at 64 and the largest size that fits (recorded); the factored engine's csynth at N_rx = 1024 (or its model from 64/256, flagged). Verify: `pytest -m xsi -rs tests/examples/test_ltbf_cg_xsi.py -k explicit`; the reports.
-- [x] **AC6 (A) A53 eigendecomposition.** The 8×8 Hermitian Jacobi eigendecomposition and `Gᵢ` (r ∈ {1, 2}) run as a `SwFunction` on the A53 model, calibrated on gem5 v25.1 HPI with a pre-registered campaign; cycle-model error on held-out inputs ≤ 10% (median). Verify: `pytest -m gem5 -rs tests/examples/test_ltbf_cg_cpu.py`.
+- [x] **AC5 (A) Factored engine.** The factored engine is bit-exact at RTL (XSI) against the fixed-point model at N_rx = 64 (per-UE and joint), and csynth reports an estimated clock ≤ 4 ns at N_rx 64 and 256. Verify: `pytest -m xsi -rs tests/examples/test_ltbf_cg_seq_dse_xsi.py -k factored`; the csynth reports.
+- [x] **AC5b (B) Explicit engine and 1024.** The explicit engine is bit-exact in pysim at N_rx = 64 and at RTL (XSI) at 64, with csynth ≤ 4 ns at 64 and the largest size that fits (recorded); the factored engine's csynth at N_rx = 1024 (or its model from 64/256, flagged). Verify: `pytest -m xsi -rs tests/examples/test_ltbf_cg_seq_dse_xsi.py -k explicit`; the reports.
+- [x] **AC6 (A) A53 eigendecomposition.** The 8×8 Hermitian Jacobi eigendecomposition and `Gᵢ` (r ∈ {1, 2}) run as a `SwFunction` on the A53 model, calibrated on gem5 v25.1 HPI with a pre-registered campaign; cycle-model error on held-out inputs ≤ 10% (median). Verify: `pytest -m gem5 -rs tests/examples/test_ltbf_cg_seq_dse_cpu.py`.
 - [x] **AC7 (A) Cost models.** Resource (DSP, LUT, FF, BRAM, URAM) and cycle models of the engines' blocks, from fit builds spanning the target sizes, scored on **≥ 8 held-out** builds fixed before fitting: median relative error ≤ 10% for cycles and DSP, ≤ 15% for LUT, FF, BRAM and URAM, worst case reported. Verify: the step 4.9 command; `paper_data/model_validation.csv`.
 - [x] **AC8 (A) The DSE and its findings.** The joint accuracy × cost space explored in Python; "cost" is each resource's utilization fraction of the xczu48dr and their maximum, and "time" is the long-term update of all three sectors, with budgets of T_LT = 10 ms and 1 ms and 5 ms; the Pareto frontiers per (band, scenario, array, loss budget); the findings of §9 (d) stated in numbers in `FINDINGS.md` and §16, each pointing at its table. Verify: the step 5.2 command; `FINDINGS.md`.
 - [ ] ⚠️ **AC9 (B) Decision fidelity.** The brute-force sub-grid, pre-registered (SHA-256 in §15) before any build runs, is measured with Vitis HLS (and RTL where the cycle count needs it). A decision is (scenario, loss budget, time budget, cost measure); the model's pick (the least predicted cost among designs predicted to meet both budgets) is *right* when its measured time ≤ 1.02 × the time budget and its measured cost ≤ 1.10 × the least measured cost among designs measured to meet both budgets. ≥ 90% right per cost measure. Verify: the step 5.3 command.
@@ -218,7 +218,7 @@ cut first. A missed target is ⚠️ with the number, never ✅ (Rule 14).
 | LTBF paper | The algorithm (§III-B.1; eqs. (Halpha), (cg_rhs), (CG_K)–(CG_omega)), the regimes, the parameters (`simulation.tex` Table "parameters"), the accuracy method | `/home/wirelesslab914/ali/salsa-ltbf/{solution,simulation,analysis}.tex` (read-only) | HEAD `d2ffa83` |
 | The paper's deviation log | D5 (`Iserved`), D12 (rank one), D18/D20 (scattering), D21 (1.44 MHz band) and the rest | `salsa-ltbf/docs/known_deviations.md` (read-only) | same HEAD |
 | Paper code | `cg_solve_complex` (`salsa/salsa/utils.py:557`); long-term statistics and projection (`salsa_cap.py:540–700`); SINR (`salsa_cap.py:268–292, 968`); the second snapshot (`salsa_cap.py:920–945`); geometry and arrays (`ray_tracing.py:249, 351–355, 466–547, 589–592, 660–705`); solver settings (`salsa_main.py:150–165`); configs (`salsa/salsa/configs/*.json`) | read-only; semantics only, never imported or used as data | same HEAD |
-| Denver scene | Mitsuba XML + 2,573 PLY meshes (about 12 MB; `denver.blend` not needed) | copied once into `examples/ltbf_cg/data/denver/` (step 0.3); only the copy is used | — |
+| Denver scene | Mitsuba XML + 2,573 PLY meshes (about 12 MB; `denver.blend` not needed) | copied once into `examples/ltbf_cg_seq_dse/data/denver/` (step 0.3); only the copy is used | — |
 | `waveflow.linalg` | Bit-exact `matmul` (`acc_format` ≤ 64 bits), multi-RHS `cg` model, HLS bodies `waveflow/build/systolic_core_task.h`, `cg_vector_task.h`, cost models `cost.py`, `cg_cost.py` (calibrated at Mmax/Kmax ≤ 16, Nmax ≤ 32; LUT/FF fits UNCALIBRATED; `INDEX_BITS` 16) | `waveflow/linalg/`, `docs/guide/linalg/` | this branch |
 | Previous CG DSE study | Sweep runner, measurement harness, models, DSE, fidelity, finalists, implementation check; its lessons (background-task kills, BLAS oversubscription, csynth memory) | `examples/mimo_cg/`, `plans/mimo_cg/mimo_cg_paper_sims.md`, `plans/mimo_cg/mimo_cg_lessons.md` | this branch |
 | `waveflow.rfenv` | `SceneSpec`, `DeviceSpec`, `ArraySpec`, `SolverSpec`, `load_or_trace`, `TraceChannelStep`, `taps` | `feat/sionna-prod` (`8ca01221`), merged in step 0.2; `docs/guide/rf/rfenv/index.md` | sionna-rt 2.2.0 |
@@ -231,7 +231,7 @@ cut first. A missed target is ⚠️ with the number, never ✅ (Rule 14).
 - **Languages and runtimes:** Python 3.12.3 (`.venv`); g++ 13.3.
 - **Key dependencies:** numpy 2.5.3, scipy; sionna-rt 2.2.0, Mitsuba 3.9.1, Dr.Jit 1.5.0 (`llvm_ad_mono_polarized`, LLVM 20); Vitis HLS / Vivado 2024.1; gem5 v25.1 (`~/ali/tools/gem5/build/ARM/gem5.opt`, image `ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1`), McPAT (`~/ali/tools/mcpat`).
 - **Commands:** fast suite `pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`; gates `pytest -m vitis|xsi|gem5|sionna -rs`; lint `ruff check <paths>`, `black --check <paths>`.
-- **Project structure:** `waveflow/linalg/`, `waveflow/rfenv/` (after 0.2), `waveflow/cpu/`, `examples/mimo_cg/` (previous study), `examples/ltbf_cg/` (this study).
+- **Project structure:** `waveflow/linalg/`, `waveflow/rfenv/` (after 0.2), `waveflow/cpu/`, `examples/mimo_cg/` (previous study), `examples/ltbf_cg_seq_dse/` (this study).
 - **Limitations:** no GPU (Sionna on CPU); 2024.1 tools only; the paper's results and environment (sionna-rt 1.2.0, TensorFlow, another host) are unavailable, so its numbers are a qualitative target.
 
 ## 7. Existing system and reuse
@@ -302,7 +302,7 @@ inputs exist, everything long detached and resumable; the DSE joins accuracy and
 calibrated models; validation is pre-registered early, queued behind calibration, and cut
 first if behind.
 
-**(a) Drops.** `examples/ltbf_cg/scenario.py` reproduces §1's geometry and solver settings as
+**(a) Drops.** `examples/ltbf_cg_seq_dse/scenario.py` reproduces §1's geometry and solver settings as
 `rfenv` `SceneSpec`s from a seed: the scene copy, 3 BS sectors, 30 UEs on the coverage grid,
 the 32×32 synthetic array, two snapshots T_LT apart. If the antenna pattern or solver settings
 are not expressible through `SceneSpec`, stop (Rule 6 d): changes to `waveflow/rfenv` are not
@@ -325,7 +325,7 @@ fixed point), regime. The SINR is evaluated in low rank (`GᵢQGᵢᴴ = GᵢG�
 never forming an N_rx × N_rx matrix per subcarrier. Runner: the `SweepRunner` pattern,
 detached, ≤ 4 workers.
 
-**(c) Hardware.** Example-level HLS bodies (`examples/ltbf_cg/src/`), derived from the linalg
+**(c) Hardware.** Example-level HLS bodies (`examples/ltbf_cg_seq_dse/src/`), derived from the linalg
 bodies but streaming the long dimension instead of fully partitioning it: a thin-product
 systolic core (k up to 1024, n up to 80 per sector solve) that keeps `Ĥα` resident in a store
 usable in both orientations (or reloads it twice per iteration; the cycle model accounts for
@@ -444,12 +444,12 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 ## 11. Verification strategy
 
 - **Per step:** the step's *Verify with*. The float pipeline against direct solves; the fixed point against `ap_fixed` C-simulation; the engines against the fixed-point model in pysim and at RTL; the models against held-out builds; the DSE's decisions against brute force.
-- **Regression check:** `pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf` (no failures beyond the step 0.4 baseline); `pytest -m sionna -rs`; the example's own `-m vitis`, `-m xsi`, `-m gem5` tests; `ruff check examples/ltbf_cg tests/examples/test_ltbf_cg*.py` and `black --check` on the same; the ruff counts of `waveflow/cpu/calib/sweep.py` and any other changed existing file.
+- **Regression check:** `pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf` (no failures beyond the step 0.4 baseline); `pytest -m sionna -rs`; the example's own `-m vitis`, `-m xsi`, `-m gem5` tests; `ruff check examples/ltbf_cg_seq_dse tests/examples/test_ltbf_cg_seq_dse*.py` and `black --check` on the same; the ruff counts of `waveflow/cpu/calib/sweep.py` and any other changed existing file.
 - **Independent review:** a read-only `general-purpose` reviewer agent at M2, M4 and the end, in the background (Rule 6); findings and dispositions in §14.
 
 ## 12. Safety
 
-- **Version control:** branch `paper/cg_dse`; commit per step; nothing pushed.
+- **Version control:** branch `paper/ltbf_cg_seq_dse`; commit per step; nothing pushed.
 - **Diff review by the user:** only on a stop under Rule 6.
 - **Irreversible or costly actions:**
 
@@ -476,7 +476,7 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 | Kind | Item | Resolution / owner |
 |---|---|---|
 | Decision | Level L3; the whole long-term update; RFSoC FPGA + A53; Denver re-traced through `rfenv`; the accuracy–cost claim; `Q̂` explicit and factored as an axis; fixed point + float reference; validation reduced for the deadline (held-out + small brute force + 2–4 implementations); explicit `Q̂` measured on chip, modeled at 1024 | user, 2026-10-13 |
-| Decision | Branch `paper/cg_dse` from `feat/cpu-model`, `feat/sionna-prod` merged in | user, 2026-10-13 |
+| Decision | Branch `paper/ltbf_cg_seq_dse` from `feat/cpu-model`, `feat/sionna-prod` merged in | user, 2026-10-13 |
 | Decision | Scene copied into the repo and kept local; no DSE data, drops or results committed; no data from outside the repo | user, 2026-10-13 |
 | Decision | Deadline 2026-10-15 20:25 EDT; scope *full, best effort*; pauses only when required | user, 2026-10-13 |
 | Decision | Accepted as suggested: findings (§9 d), the metric and budgets 0.1/0.25/0.5 dB, the scenarios, the design axes with Jacobi preconditioning, warm start and a PL eigendecomposition as nice-to-haves | user, 2026-10-13 |
@@ -496,7 +496,7 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 | Decision | **Drops: D = 100** (the paper's count): tracing costs about 2.2 s per drop (both snapshots, 30 UEs, 3 sectors, 4 Dr.Jit threads), so all 100 trace in about 4 min; the reciprocity option is not needed | doer, 2026-10-13 (step 1.2) |
 | Decision | **The noise floor stays the code's** (`used_bw` = 192 × 120 kHz) in both bands, so the 100 MHz band changes only the channel's frequency diversity, not who is connected | doer, 2026-10-13 |
 | Decision | **The loss metric, made precise:** per served UE, `loss = SINR_exact − SINR_approx` in dB (signed: an approximation can beat exact LTBF on noisy SRS estimates, observed on drop 1 at t = 1); a configuration meets a budget when the **median** and the **90th percentile** of the per-UE loss over UEs and drops are both within it ("10th-percentile loss" in §2/AC4 means this upper tail) | doer, 2026-10-13 |
-| Decision | `WANT_SIONNA_GATES` 22 → 25 (`tests/conftest.py`), the exact count of the three new `sionna` tests of `tests/examples/test_ltbf_cg.py` (an exact bump, pre-approved by the standing rule for Sionna gate floors); without it `test_sionna_gates` and `test_no_sionna` fail | doer, 2026-10-13 |
+| Decision | `WANT_SIONNA_GATES` 22 → 25 (`tests/conftest.py`), the exact count of the three new `sionna` tests of `tests/examples/test_ltbf_cg_seq_dse.py` (an exact bump, pre-approved by the standing rule for Sionna gate floors); without it `test_sionna_gates` and `test_no_sionna` fail | doer, 2026-10-13 |
 | Assumption | The code's sector nuller `P_v` is the identity in the paper's runs (it is set only when interference nulling is on, which is off by default), so it is not modeled | doer, 2026-10-13 |
 | Deviation | **The 100 MHz band is sampled at 66 frequencies**, equally spaced edge to edge across the 792 subcarriers (1.46 MHz apart; §9 a said 792): the SRS draw picks 8 of the 66 and the SINR is the mean over them. Measured on drops 1–5, [−6, 3] dB, at 8×8 and 16×16 against all 792 subcarriers: exact-LTBF, MMSE and CG-loss medians and 90th percentiles within 0.02 dB with noiseless SRS, medians within 0.13 dB with nominal SRS (the random SRS subcarriers differ); 6–7× faster | doer, 2026-10-13 |
 | Decision | **Fixed-point formats** (step 2.3): every register `ap_fixed<W, I, AP_RND, AP_SAT>`; `I` from a float range profile (largest real or imaginary magnitude) plus the guard bits; vectors (`H`, `Q`, `T`, `B`, `P`, `R`, `S`, `X`) `W` wide (widened to keep 2 fraction bits), the column scalars `min(W + 8, 28)`, `g_div` 6 (the exact `rz'/rz` quotient stays within 64 bits). `Q` is formed as the conjugate of `(Hᵀ)ᴴHᵀ` so the stored `H` is never negated | doer, 2026-10-13 |
@@ -516,6 +516,7 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 | Decision | **Rule 8, restored**: the sweep had run 4 workers × 2 BLAS threads beside the 4-worker csynth queue; a job's output is byte-identical at 1 and 2 threads (checked on a 16 × 16 job), so the sweep was restarted at 4 workers × 1 thread (23:41), to go to 8 × 1 once the queue ends; the AC4 subset is unaffected | doer, 2026-10-13 |
 | Decision | **Final review (step 6.2)**, acted on: (B1) the modeled options (`a53x4`, `pl`, L = 4, explicit Q in DDR at 32 × 32) cost no resources in the model and won 34 of the 48 main picks: decisions are now taken over the **built** options (the calibrated A53 does M_i, Jacobi, G_i; L = 1) as the primary result, with all options as a labelled what-if, and every design string marks `[modeled]`; (B2) `FINDINGS.md` now states the findings in sentences, every table carries the median SINR, and it explains the nominal-SRS result (below); §2b reports the N_UE crossovers at fixed t (3, 5, 10) instead of the t meeting the budget (which was 1 everywhere); (B3) AC9 is reported ⚠️ and split (below); (S1) `FINDINGS.md` regenerated; (S3) the form crossover is per placement at L = 1, explicit at 32 × 32 flagged modeled; (N1) the N_UE times use the measured Jacobi counters; (N3) the header says 90 held-out drops for the loss, 100 drops for the time | doer, 2026-10-14 |
 | Note | **Limitations the findings carry** (final review): (1) with only the built options, **no design meets any time budget at 32 × 32**: the scalar A53 alone needs about 12.5 ms (p90) for its share of one update, so 32 × 32 relies on a faster A53 kernel or on forming M_i and G_i in the PL, both modeled, not built; (2) **with nominal SRS the CG at t = 1 is a matched filter** (X₁ = αB, Q̂ entering only through α), which beats exact LTBF because exact LTBF is 2.4 / 6.0 / 10.5 dB below MMSE at 8 × 8 / 16 × 16 / 32 × 32 ([−6, 3] dB): the loss-budget axis is degenerate there, and the noiseless-SRS results are the ones that measure the CG's approximation; (3) AC9: 165 of the 270 registered decisions are right because neither side finds a feasible design (all 90 at 32 × 32, which is therefore untested); on the 105 others DSP, FF, BRAM 21/21, LUT 8/21, max 15/21; (4) the 8 × 8 finalist (W10) is a measured wrong pick, so its W12 neighbour was implemented too; (5) the finalists' implementations check one engine's resources and timing, not the update-time claims (which rest on the RTL-anchored cycle count); (6) regime 2's X_sym storage and its N_rx² words are not costed (its times are lower bounds; it is never picked); (7) the DDR model for explicit at 1024 assumes 70 % of a 64-bit DDR4-2400 reachable from the PL and uses W, not Q's width (never picked: compute-bound anyway); (8) ties go to table order (regime 1, `a53`, L = 1, the smallest t) | doer, 2026-10-14 |
+| Decision | **Renamed** (user, 2026-11-05): the branch `paper/cg_dse` → `paper/ltbf_cg_seq_dse`, `examples/ltbf_cg/` → `examples/ltbf_cg_seq_dse/`, `tests/examples/test_ltbf_cg*.py` → `test_ltbf_cg_seq_dse*.py`. The code, the tests and this plan's forward-looking text use the new names; ticked steps and §15 rows keep the names as they were, as do the commits up to `ba757884`. The plan and its lessons file keep their names. | user, 2026-11-05 |
 | Open question | None at planning | — |
 
 ## 15. Progress log
@@ -558,24 +559,25 @@ Flags: ⚠️ irreversible (none planned) · 👁 gate (none left open; §14 rec
 | 2026-10-14 11:35 | 6.2 | Final reviewer (M5): 3 blocking, 5 should-fix, 5 nits; acted on as §14 records (decisions recomputed over built vs all options with the SINR kept, `FINDINGS.md` rewritten with sentences, the W12 8 × 8 finalist added) | `python -m examples.ltbf_cg.hw.dse --decisions-only`; `python -m examples.ltbf_cg.hw.findings` | final review (§14) |
 | 2026-10-14 11:55 | 5.4 | **AC10 ⚠️ (3 of 4 meet 4 ns)**: Vivado 2024.1 `export_design -flow impl`, xczu48dr, 4 ns: 8 × 8 explicit 4 × 4 W10 3.566 ns ✓ (583 s), its W12 neighbour 3.648 ns ✓ (756 s), 16 × 16 factored 8 × 4 W12 3.891 ns ✓ (990 s), 32 × 32 factored 16 × 8 W12 **4.190 ns ✗ (WNS −0.19 ns**, 2,620 s; the R = 16 tile's 256-bank H multiplexing, which csynth's 2.867 ns estimate cannot see). Post-implementation against csynth and the model (`paper_data/finalists_impl.csv`): DSP within 4 % except W10 (Vivado undoes csynth's packing: 192 vs 108); LUT 2.4–3.6 × below csynth's estimate and FF 1.3–1.7 × below (the models track csynth); BRAM equal except 8 × 8 (32 vs 96). **After implementation the W10 8 × 8 pick uses fewer LUTs than W12 (8,598 vs 9,756), reversing csynth's ordering**: AC9's LUT "wrong" picks are wrong against csynth's estimate, not necessarily against the device. Four implementations used (the plan's cap): no re-run with another strategy | `python -m examples.ltbf_cg.hw.finalists --builds …` | — |
 | 2026-10-14 12:05 | 6.1 | **Regression (AC11 ✅)**: fast suite (`pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`, after the last code change, no Vivado job running): exactly the 6 step-0.4 baseline failures (`test_xsi_workspace_copies[vitis_fft]`, `test_cpu_replay_figures…`, the two `test_markov_figures`, `test_vitis_fft::test_generate_writes_the_build_tree`, `test_retrieval_eval::test_generated_code…`), no other; `pytest -m sionna -rs`: 22 passed, 0 skipped; `pytest -m xsi -rs tests/examples/test_ltbf_cg_xsi.py`: 2 passed (re-run after the padding change); `pytest -m gem5 -rs tests/examples/test_ltbf_cg_cpu.py`: 2 passed; `pytest -m vitis -rs tests/examples/test_ltbf_cg_conformance.py`: 9 passed (2026-10-13 22:05, after the last change to the arithmetic); `ruff check` / `black --check` clean on every new file; `tests/conftest.py` 1 ruff finding before and after, `waveflow/cpu/calib/sweep.py` 0 and 0. All compute ended 12:05 on 2026-10-14 (AC12) | the commands | — |
+| 2026-11-05 | housekeeping | At the user's request, the rename of §14: `git mv` of the example and its tests; references updated in the example, the tests, `tests/conftest.py`, `waveflow/cpu/calib/sweep.py` and this plan's forward-looking text; the local data moved with the example | `pytest tests/examples/test_ltbf_cg_seq_dse*.py -m "not vitis and not xsi and not gem5 and not sionna"` with the local data: 58 passed, as before the rename | — |
 
 ## 16. Completion report
 
-*Written 2026-10-14 (EDT). Every measured number is Vitis/Vivado 2024.1, gem5 v25.1 HPI, Sionna RT 2.2.0, on the branch `paper/cg_dse`. Results, drops and tables are local (`examples/ltbf_cg/{data,results,paper_data,logs}`); `paper_data/FINDINGS.md` is the findings summary.*
+*Written 2026-10-14 (EDT). Every measured number is Vitis/Vivado 2024.1, gem5 v25.1 HPI, Sionna RT 2.2.0, on the branch `paper/ltbf_cg_seq_dse`. Results, drops and tables are local (`examples/ltbf_cg_seq_dse/{data,results,paper_data,logs}`); `paper_data/FINDINGS.md` is the findings summary.*
 
 - **Changed:**
-  - `examples/ltbf_cg/` (new): the drop tracer and link model (`scenario.py`, `ltbf_link.py`), the float LTBF with the paper's CG (`ltbf.py`), the bit-exact fixed-point model (`ltbf_fixed.py`) and its C-sim conformance (`ltbf_conformance.py`, `src/ltbf_ref.h`), the paper comparison, the accuracy sweep and figures, the A53 eigendecomposition kernel and its gem5 calibration (`cpu/ltbf_eig.c`, `ltbf_eig.py`), and the hardware (`hw/`: the engine body `cpp/ltbf_engine_task.h` and its `FreeRunMod`, csynth, the system-flow XSI gate, the knob space and pre-registered sets, the build queue, the cost models and their validation, the RTL anchors, the time model, the DSE, the fidelity score, the findings, the finalists).
-  - Tests (new): `tests/examples/test_ltbf_cg.py`, `_conformance.py`, `_hw.py`, `_xsi.py`, `_cpu.py`.
+  - `examples/ltbf_cg_seq_dse/` (new): the drop tracer and link model (`scenario.py`, `ltbf_link.py`), the float LTBF with the paper's CG (`ltbf.py`), the bit-exact fixed-point model (`ltbf_fixed.py`) and its C-sim conformance (`ltbf_conformance.py`, `src/ltbf_ref.h`), the paper comparison, the accuracy sweep and figures, the A53 eigendecomposition kernel and its gem5 calibration (`cpu/ltbf_eig.c`, `ltbf_eig.py`), and the hardware (`hw/`: the engine body `cpp/ltbf_engine_task.h` and its `FreeRunMod`, csynth, the system-flow XSI gate, the knob space and pre-registered sets, the build queue, the cost models and their validation, the RTL anchors, the time model, the DSE, the fidelity score, the findings, the finalists).
+  - Tests (new): `tests/examples/test_ltbf_cg_seq_dse.py`, `_conformance.py`, `_hw.py`, `_xsi.py`, `_cpu.py`.
   - Shared files: `tests/conftest.py` (gate floors, each measured: `WANT_XSI_GATES` 213 → 215, `WANT_GEM5_GATES` 12 → 14, `WANT_SIONNA_GATES` 25 → 22 after the review moved three data-dependent tests out of the marker); `waveflow/cpu/calib/sweep.py` (`ltbf_eig_rows()`, a pre-approved addition). `waveflow/linalg` and `waveflow/rfenv` unchanged. Merges: `feat/sionna-prod` into the branch (step 0.2).
 - **Tested (commands and results):**
-  - `pytest -m vitis -rs tests/examples/test_ltbf_cg_conformance.py`: 9 passed (2,331,840 words bit-exact, re-run after the negative-integer-bit change).
-  - `pytest -m xsi -rs tests/examples/test_ltbf_cg_xsi.py`: 2 passed (factored and explicit at N_rx 64: 3,072 X words equal the model; RTL = pysim). Plus the 256-antenna RTL anchor (RTL words = model).
-  - `pytest -m gem5 -rs tests/examples/test_ltbf_cg_cpu.py`: 2 passed (gem5 output = twin).
-  - `pytest tests/examples/test_ltbf_cg*.py -m "not vitis and not xsi and not gem5"`: all pass (link, float, fixed, the ragged-size, time-model and A53 tests).
+  - `pytest -m vitis -rs tests/examples/test_ltbf_cg_seq_dse_conformance.py`: 9 passed (2,331,840 words bit-exact, re-run after the negative-integer-bit change).
+  - `pytest -m xsi -rs tests/examples/test_ltbf_cg_seq_dse_xsi.py`: 2 passed (factored and explicit at N_rx 64: 3,072 X words equal the model; RTL = pysim). Plus the 256-antenna RTL anchor (RTL words = model).
+  - `pytest -m gem5 -rs tests/examples/test_ltbf_cg_seq_dse_cpu.py`: 2 passed (gem5 output = twin).
+  - `pytest tests/examples/test_ltbf_cg_seq_dse*.py -m "not vitis and not xsi and not gem5"`: all pass (link, float, fixed, the ragged-size, time-model and A53 tests).
   - The fast suite (`pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`): the 6 baseline failures of step 0.4 and no other (final run 12:05); `pytest -m sionna -rs`: 22 passed, 0 skipped.
-  - `ruff check` and `black --check` on `examples/ltbf_cg`, the new tests and `waveflow/cpu/calib/sweep.py`: clean; `tests/conftest.py` keeps its one ruff finding, `sweep.py` its zero.
+  - `ruff check` and `black --check` on `examples/ltbf_cg_seq_dse`, the new tests and `waveflow/cpu/calib/sweep.py`: clean; `tests/conftest.py` keeps its one ruff finding, `sweep.py` its zero.
 - **Acceptance criteria:**
-  - **AC0 ✅** branch from `feat/cpu-model` (`e0f12e19`) with `feat/sionna-prod` (`8ca01221`) merged, both unchanged; no drop, result, table or figure is tracked. The AC0 grep prints one file, `examples/ltbf_cg/cpu/sweep_plan.csv`: the A53 pre-registration (40 points, no results), which `waveflow`'s `SweepPlan` requires to be committed.
+  - **AC0 ✅** branch from `feat/cpu-model` (`e0f12e19`) with `feat/sionna-prod` (`8ca01221`) merged, both unchanged; no drop, result, table or figure is tracked. The AC0 grep prints one file, `examples/ltbf_cg_seq_dse/cpu/sweep_plan.csv`: the A53 pre-registration (40 points, no results), which `waveflow`'s `SweepPlan` requires to be committed.
   - **AC1 ✅** 100 drops, two snapshots each, traced once at 32 × 32 from the repo-local Denver copy (16 × 16 and 8 × 8 as sub-arrays); a drop re-traces bit for bit (test).
   - **AC2 ✅** (a), (b) tests; (c) the paper comparison: noiseless SRS MMSE − exact ≤ 0.002 dB, t = 3 loss ≤ 0.012 dB; nominal SRS 2.38 / 6.27 / 10.71 dB at 8 × 8 / 16 × 16 / 32 × 32 (100 MHz) against the paper's 2.25 / 6.30 / 10.58.
   - **AC3 ⚠️** bit-exact (9 case sets, both regimes and forms, N_rx ≤ 64, zero-divisor and saturating cases); at 24 bits the SINR equals the float pipeline's within 0.01 dB on the synthetic link at every t and on the drops for t ≤ 7, but not at t = 8–10 with nominal SRS (up to 0.12 dB: the static formats' precision floor).

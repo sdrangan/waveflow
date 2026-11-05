@@ -197,10 +197,10 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 17 gates beyond 168 (the ``paper/mimo-cg`` line above) on top of main's 195;
 #: ``pytest -m xsi --collect-only -q`` counts 212.
 #: 212 + 1 -> 213 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 0.2): ``feat/sionna-prod`` merged
-#: into ``paper/cg_dse``, bringing the sounder's replay gate (test_rt_sounder_xsi.py);
+#: into ``paper/ltbf_cg_seq_dse``, bringing the sounder's replay gate (test_rt_sounder_xsi.py);
 #: ``pytest -m xsi --collect-only -q`` counts 213.
 #: 213 + 2 -> 215 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 4.3): the LTBF engine's factored
-#: and explicit RTL gates (test_ltbf_cg_xsi.py); ``pytest -m xsi --collect-only -q`` counts 215.
+#: and explicit RTL gates (test_ltbf_cg_seq_dse_xsi.py); ``pytest -m xsi --collect-only -q`` counts 215.
 WANT_XSI_GATES = 215
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
@@ -210,7 +210,7 @@ WANT_XSI_GATES = 215
 #: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
 #: 12 -> 14 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 4.8): the LTBF eigendecomposition
-#: kernel's gem5 run equals its twin at the two smoke points (tests/examples/test_ltbf_cg_cpu.py).
+#: kernel's gem5 run equals its twin at the two smoke points (tests/examples/test_ltbf_cg_seq_dse_cpu.py).
 WANT_GEM5_GATES = 14
 
 #: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
@@ -234,7 +234,7 @@ WANT_GEM5_GATES = 14
 #: twin (tests/rfenv/test_sionna_backend.py).
 #: 22 -> 25 on 2026-10-13 (plans/mimo_cg/ltbf_cg_dse.md step 1.1): the LTBF DSE's Denver drops follow
 #: the paper's geometry, the one-element trace plus the synthetic array equals Sionna's own, and a
-#: drop retraces bit for bit (tests/examples/test_ltbf_cg.py).
+#: drop retraces bit for bit (tests/examples/test_ltbf_cg_seq_dse.py).
 #: 25 -> 22 on 2026-10-13 (ltbf_cg_dse.md step 2.4 review): those three trace the local, uncommitted
 #: scene copy, so every other checkout would skip them and fail its ``-m sionna`` session; they are
 #: now skip-if-missing tests outside the marker.

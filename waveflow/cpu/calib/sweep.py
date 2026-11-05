@@ -159,8 +159,8 @@ def switch_rows() -> list[Row]:
 
 
 def ltbf_eig_rows() -> list[Row]:
-    """``examples/ltbf_cg``'s A53 step (plans/mimo_cg/ltbf_cg_dse.md step 4.8): ``M = sym(H^H A)``,
-    the 8 x 8 Jacobi eigendecomposition and ``G``.  Its own plan file (``examples/ltbf_cg/cpu/``),
+    """``examples/ltbf_cg_seq_dse``'s A53 step (plans/mimo_cg/ltbf_cg_dse.md step 4.8): ``M = sym(H^H A)``,
+    the 8 x 8 Jacobi eigendecomposition and ``G``.  Its own plan file (``examples/ltbf_cg_seq_dse/cpu/``),
     not part of :func:`sweep_rows`: the n axis spans the arrays (8x8 .. 32x32), ``rank`` the SRS
     block's rank (1: a single path; 8: full), both ``r``."""
     rows = _grid(
