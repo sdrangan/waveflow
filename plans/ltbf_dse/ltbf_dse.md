@@ -5,7 +5,7 @@
 **Created:** 2026-10-28 · **Updated:** 2026-10-28 (revised after the independent plan review)
 **Plan file:** `plans/ltbf_dse/ltbf_dse.md` · **Lessons learned:** `plans/ltbf_dse/ltbf_dse_lessons.md` (created in step 0.1)
 **Spec (written in Phase 1, frozen at the 👁 gate):** `plans/ltbf_dse/ltbf_dse_spec.md`
-**Branch:** `paper/ltbf_dse`, created in step 0.1 from `main` (`b0de5a26`)
+**Branch:** `paper/ltbf_cg_mem_dse`, created in step 0.1 from `main` (`b0de5a26`)
 **Deadline:** none. Compute is bounded by the budgets in §2.
 
 > **For the agent executing this plan:** read *Rules for the doer* first. The
@@ -23,7 +23,7 @@
    command and its result as evidence. Before changing code, read it and its callers. Check the
    authoritative docs for any version-sensitive API (versions in §6). Before building a tool, script
    or integration the plan didn't foresee, search for an existing one (start with
-   `examples/ltbf_dse/` (copied from `paper/cg_dse`), `git show paper/cg_dse:examples/ltbf_cg/hw/<file>`,
+   `examples/ltbf_cg_mem_dse/` (copied from `paper/ltbf_cg_seq_dse`), `git show paper/ltbf_cg_seq_dse:examples/ltbf_cg_seq_dse/hw/<file>`,
    `examples/mimo_cg/`, `examples/markov/`, `examples/cpu_sched/`, `examples/vecunit_cg/`,
    `waveflow/linalg/`, `waveflow/vecunit/`, `waveflow/cpu/`, `waveflow/sw/`, `waveflow/hw/mm_device.py`)
    and propose it first.
@@ -40,7 +40,7 @@
    run in the background and never block; their findings go to the user at the next stop.
 6. **Long jobs run detached** (`plans/mimo_cg/mimo_cg_lessons.md`: a harness background task is killed
    after 30 min by default and 2 h at most). Every job longer than 30 min is launched as
-   `setsid nohup <cmd> > examples/ltbf_dse/logs/<job>.log 2>&1 &`, is resumable per item (it skips
+   `setsid nohup <cmd> > examples/ltbf_cg_mem_dse/logs/<job>.log 2>&1 &`, is resumable per item (it skips
    finished items on restart), and has its PID and start time recorded in §15. Poll it with the
    Monitor tool (an until-loop on the log or a done-file), with long `ScheduleWakeup` fallbacks if
    that tool is available; never with a foreground sleep.
@@ -54,13 +54,13 @@
    pre-approved for its two known conflicts only. VS Code has published a branch on its own before:
    run `git status -sb` at each milestone and report it if the branch shows a remote.
 10. **No data in git.** The Denver scene copy, drops, rendered signals, grids, sweep outputs, CSVs,
-    figures, logs and build trees stay local under `examples/ltbf_dse/`'s gitignored directories.
-    Commit only code, tests, `examples/ltbf_dse/.gitignore`, pre-registration files that a framework
-    API requires to be committed (each listed in §15; the first is `examples/ltbf_dse/cpu/sweep_plan.csv`),
+    figures, logs and build trees stay local under `examples/ltbf_cg_mem_dse/`'s gitignored directories.
+    Commit only code, tests, `examples/ltbf_cg_mem_dse/.gitignore`, pre-registration files that a framework
+    API requires to be committed (each listed in §15; the first is `examples/ltbf_cg_mem_dse/cpu/sweep_plan.csv`),
     the plan, the spec and the lessons file. Pre-registered sets are fixed by committing their SHA-256
     in §15.
 11. **No data from outside the repo.** The scene, drops and A53 calibration are copied once from
-    `examples/ltbf_cg/data/` (inside this checkout, local) in step 0.4, and only the copies are used.
+    `examples/ltbf_cg_seq_dse/data/` (inside this checkout, local) in step 0.4, and only the copies are used.
     The paper repo `/home/wirelesslab914/ali/salsa-ltbf` is read-only, read for its text and code
     (the algorithm's source of truth), never imported and never a data source.
 12. **Commits** use the repo's effective identity (`ali-rasteh`); never pass `--author` or set
@@ -179,13 +179,13 @@ CPU                         Systolic                       Vec Unit             
 | Phase | Python (zero simulated time) | Ingest DMA | Systolic | Vector unit | CPU (A53 model) |
 |---|---|---|---|---|---|
 | Inputs | `rfenv` renders the antenna samples; the front end (stands for the O-RU, O-RAN 7.2x) removes the CP and FFTs each antenna into grid tiles | writes each tile into Shared Mem (timed), tile-ready → Resp FIFO | | | |
-| Long term | **SRS channel estimation** → `Ĥⱼ`, `Ĥα` stored in the layouts the systolic jobs need (§9 c), with op counts | the SRS symbol's tiles | explicit `K = ĤαĤαᴴ`; per iteration `KD` or `ĤαᴴD`, `Ĥα(·)`; `Mᵢ = ĤᵢᴴAᵢ`; `Gᵢᴴ = AᵢΦᵢ`; `G_stack G_stackᴴ`, `G_stack Ĥα` | the CG step (the `+D` the engine can't add, norms, `ω`/`ν` divides, updates) | scheduler; 8×8 Jacobi eigendecomposition (the `paper/cg_dse` kernel); `R̃ᵢ` and other r × r math |
+| Long term | **SRS channel estimation** → `Ĥⱼ`, `Ĥα` stored in the layouts the systolic jobs need (§9 c), with op counts | the SRS symbol's tiles | explicit `K = ĤαĤαᴴ`; per iteration `KD` or `ĤαᴴD`, `Ĥα(·)`; `Mᵢ = ĤᵢᴴAᵢ`; `Gᵢᴴ = AᵢΦᵢ`; `G_stack G_stackᴴ`, `G_stack Ĥα` | the CG step (the `+D` the engine can't add, norms, `ω`/`ν` divides, updates) | scheduler; 8×8 Jacobi eigendecomposition (the `paper/ltbf_cg_seq_dse` kernel); `R̃ᵢ` and other r × r math |
 | Real time | **DMRS channel estimation** on `zᵢ` → `h̃ᵢ[n,k]`, with op counts | the slot's tiles | `Z = G_stack·Y` per tile (`G_stack`: all UEs' `Gᵢ`, `N_UE·r × N_rx`, padded to the tile) | per-RE MMSE weights and `x̂ = Wz` | scheduler |
 | Measurement | demapping, EVM, BER, post-equalization SINR, the paper's genie SINR | | | | |
 
 **Channel estimation stays in Python** (user, 2026-10-28) but is written for later complexity
 calculations: every estimator is explicit matrix operations through an op-counting helper
-(`examples/ltbf_dse/opcount.py`) that logs each operation's kind, shapes, complex MACs, divides and
+(`examples/ltbf_cg_mem_dse/opcount.py`) that logs each operation's kind, shapes, complex MACs, divides and
 bytes read and written. In the system simulation the host calls it as a **zero-time** stage when its
 inputs are in Shared Mem, and it writes its outputs there; its counts are logged, not costed. Its
 operations are matrix products of known shapes, so they can later be priced on the systolic engine's
@@ -224,10 +224,10 @@ models. In the RTL gate the C++ host replays its outputs from a file written by 
 | Type | Item |
 |---|---|
 | Must | The architecture of §1.2: one Shared Mem; per engine a Job FIFO written by the CPU and a Ctrl register space; one Resp FIFO at the CPU fed by both engines and the Ingest DMA; the Ingest DMA as the only way the grid enters Shared Mem; every inter-engine hand-off through Shared Mem (user). |
-| Must | The engines are `waveflow.linalg.SystolicEngineMem`, `waveflow.vecunit.VecUnit` and `waveflow.cpu.Processor` on the shipped A53 platform, **unchanged**; the Job FIFOs, Ctrl, the Resp path, the vector unit's memory front end and the Ingest DMA are **example-level** in `examples/ltbf_dse/hw/` (user). |
-| Must | `feat/sionna-prod` merged into `paper/ltbf_dse` (step 0.2), and `waveflow.rfenv` used to render the received signals the hardware consumes (user). |
+| Must | The engines are `waveflow.linalg.SystolicEngineMem`, `waveflow.vecunit.VecUnit` and `waveflow.cpu.Processor` on the shipped A53 platform, **unchanged**; the Job FIFOs, Ctrl, the Resp path, the vector unit's memory front end and the Ingest DMA are **example-level** in `examples/ltbf_cg_mem_dse/hw/` (user). |
+| Must | `feat/sionna-prod` merged into `paper/ltbf_cg_mem_dse` (step 0.2), and `waveflow.rfenv` used to render the received signals the hardware consumes (user). |
 | Must | Inputs: the frequency-domain grid from a Python front end (CP removal, FFT); **channel estimation (SRS and DMRS) in Python** with op counts (§1.3) (user). Projection and equalization in hardware (user). |
-| Must | Scenario (from `paper/cg_dse`): the 100 locally traced Denver drops, two snapshots T_LT apart (the drops' keys `a0…`/`a1…`: snapshot 0 for the long-term statistics, snapshot 1 for the slot), 3 sectors × 10 UEs, `N_s` = 1, `N_SRS` = 8, 3.5 GHz, 120 kHz SCS, 100 MHz (792 subcarriers, FFT 1024, 122.88 Msps, CP 72 samples ≈ 0.59 µs), 8×8 / 16×16 / 32×32 as sub-arrays of one trace, SINR targets [−6, 3] and [−6, 14] dB, r ∈ {1, 2}. Doppler inside a snapshot is zero (§14). |
+| Must | Scenario (from `paper/ltbf_cg_seq_dse`): the 100 locally traced Denver drops, two snapshots T_LT apart (the drops' keys `a0…`/`a1…`: snapshot 0 for the long-term statistics, snapshot 1 for the slot), 3 sectors × 10 UEs, `N_s` = 1, `N_SRS` = 8, 3.5 GHz, 120 kHz SCS, 100 MHz (792 subcarriers, FFT 1024, 122.88 Msps, CP 72 samples ≈ 0.59 µs), 8×8 / 16×16 / 32×32 as sub-arrays of one trace, SINR targets [−6, 3] and [−6, 14] dB, r ∈ {1, 2}. Doppler inside a snapshot is zero (§14). |
 | Must | Signals: snapshot 0 carries one SRS symbol (all 30 UEs); snapshot 1 one PUSCH slot (DMRS + uncoded QPSK). Each UE is timing-advanced to its serving sector's earliest path; everything else is kept as traced, so delay spread beyond the CP (about 2.9% of UE–sector links) is real inter-symbol interference, reported (user, 2026-10-28). Thermal noise through `rfenv`. No LDPC. |
 | Must | Rendering **on the fly** per drop, array and target inside each job (power control depends on both, and storing every grid would take about 77 GB); a cache of at most 30 GB for reuse; deterministic (§4 AC3). |
 | Must | Accuracy: per-UE post-equalization SINR measured from the data REs (`1/mean(MSE) − 1`) of the hardware's arithmetic (finite t, fixed point) against **exact float LTBF on the same signals and estimates** (direct solve, float64): its loss in dB, median and 10th percentile; budgets 0.1, 0.25, 0.5 dB; uncoded BER and EVM as secondary metrics. |
@@ -237,10 +237,10 @@ models. In the RTL gate the C++ host replays its outputs from a file written by 
 | Must | Verification: the whole system at RTL at N_rx = 64 (§4 AC9); per-engine calibration builds, ≥ 8 held-out builds, a pre-registered brute-force sub-grid, 2–4 finalists through Vivado implementation. |
 | Must | Every figure and table regenerated by one documented command with fixed seeds; a forced re-run of a pre-chosen subset reproduces it byte for byte. |
 | Must not | Commit data (Rule 10); read data from outside the repo (Rule 11); open `~/.Xilinx/Xilinx.lic` or any credential file. |
-| Must not | Push or merge unasked; change `main`, `feat/sionna-prod` or `paper/cg_dse`. |
+| Must not | Push or merge unasked; change `main`, `feat/sionna-prod` or `paper/ltbf_cg_seq_dse`. |
 | Must not | Change anything under `waveflow/` without a 👁 stop, except the pre-approved edits in §14 (the merge's counters; the `WANT_XSI_GATES` and `WANT_GEM5_GATES` floors raised by the measured counts of this example's new tests; additions-only pre-registration rows in `waveflow/cpu/calib/sweep.py`). Change behaviour of any existing API. |
 | Must not | Reformat existing files; overwrite the repo's recorded gate numbers or calibration corpora (new corpora are local; the A53 calibration uses a local platform directory). |
-| Nice to have | A comparison against `paper/cg_dse`'s fused streaming engine (what the shared memory costs in time and memory traffic, from that branch's recorded numbers); 16-QAM data; Jacobi preconditioning and warm start from the previous T_LT as accuracy axes; 2 engines of a kind built, not only modeled; separate systolic builds for long-term and real-time jobs, modeled. |
+| Nice to have | A comparison against `paper/ltbf_cg_seq_dse`'s fused streaming engine (what the shared memory costs in time and memory traffic, from that branch's recorded numbers); 16-QAM data; Jacobi preconditioning and warm start from the previous T_LT as accuracy axes; 2 engines of a kind built, not only modeled; separate systolic builds for long-term and real-time jobs, modeled. |
 | Constraint | Budgets (each a hard stop for its job; exceeding one stops for the user): accuracy sweeps ≤ 8 h wall clock including their on-the-fly rendering (≤ 4 workers); csynth fit + held-out + brute force ≤ 14 h in one queue (≤ 4 workers, ≤ 2 for N_rx ≥ 256); Vivado implementations ≤ 4; gem5 ≤ 1 h of compute. Disk: signal caches ≤ 30 GB, ≥ 20 GB kept free; build trees removed once their reports are harvested. |
 | Constraint | Python 3.12.3 `.venv`; Vitis HLS / Vivado 2024.1 (the only version on this machine; main's 2025.1 vector-unit numbers are not comparable); sionna-rt 2.2.0; gem5 v25.1 via Docker; the repo's `CLAUDE.md`. 8 cores, 31 GB RAM, about 100 GB free disk. |
 
@@ -248,15 +248,15 @@ models. In the RTL gate the C++ host replays its outputs from a file written by 
 
 | Deliverable | Format | Location | For whom |
 |---|---|---|---|
-| Branch with the code and tests | git | `paper/ltbf_dse` (committed, not pushed) | the user, the paper |
+| Branch with the code and tests | git | `paper/ltbf_cg_mem_dse` (committed, not pushed) | the user, the paper |
 | The frozen system and algorithm spec | Markdown | `plans/ltbf_dse/ltbf_dse_spec.md` (committed) | the user's review, the doer |
-| Signal rendering and front end, channel estimators with op counts, float LTBF chain | Python | `examples/ltbf_dse/` (committed) | the paper, reproducibility |
-| Vector programs and the bit-exact fixed-point model of the whole hardware path | Python | `examples/ltbf_dse/` (committed) | the accuracy DSE |
-| Engine wrappers, Ingest DMA, Shared Mem system, host and scheduler, harnesses, RTL gates | Python + C++ | `examples/ltbf_dse/hw/` (committed) | the paper |
-| A53 kernels (Jacobi, release) and their calibration | C + Python | `examples/ltbf_dse/cpu/` (committed); rows in `waveflow/cpu/calib/sweep.py` (pre-approved) | the paper |
-| Cost models, job-level timing simulator, DSE, fidelity, finalists | Python | `examples/ltbf_dse/hw/` (committed) | the paper |
-| Scene and drop copies, signal caches, accuracy and cost tables, figures | `.npz`, CSV, PDF/PNG | `examples/ltbf_dse/{data,paper_data,results}/` (**local**) | the paper |
-| Findings and figure index | Markdown | `examples/ltbf_dse/paper_data/FINDINGS.md` (**local**) and §16 (committed) | the user |
+| Signal rendering and front end, channel estimators with op counts, float LTBF chain | Python | `examples/ltbf_cg_mem_dse/` (committed) | the paper, reproducibility |
+| Vector programs and the bit-exact fixed-point model of the whole hardware path | Python | `examples/ltbf_cg_mem_dse/` (committed) | the accuracy DSE |
+| Engine wrappers, Ingest DMA, Shared Mem system, host and scheduler, harnesses, RTL gates | Python + C++ | `examples/ltbf_cg_mem_dse/hw/` (committed) | the paper |
+| A53 kernels (Jacobi, release) and their calibration | C + Python | `examples/ltbf_cg_mem_dse/cpu/` (committed); rows in `waveflow/cpu/calib/sweep.py` (pre-approved) | the paper |
+| Cost models, job-level timing simulator, DSE, fidelity, finalists | Python | `examples/ltbf_cg_mem_dse/hw/` (committed) | the paper |
+| Scene and drop copies, signal caches, accuracy and cost tables, figures | `.npz`, CSV, PDF/PNG | `examples/ltbf_cg_mem_dse/{data,paper_data,results}/` (**local**) | the paper |
+| Findings and figure index | Markdown | `examples/ltbf_cg_mem_dse/paper_data/FINDINGS.md` (**local**) and §16 (committed) | the user |
 | Plan and lessons | Markdown | `plans/ltbf_dse/` (committed) | continuity |
 
 ## 4. Acceptance criteria
@@ -264,10 +264,10 @@ models. In the RTL gate the C++ host replays its outputs from a file written by 
 Tier **A** backs the core claim; tier **B** is best effort and cut first when a budget runs out. A
 missed target is ⚠️ with the number, never ✅ (Rule 13).
 
-- [x] **AC0 (A) Branch and hygiene.** `paper/ltbf_dse` contains `b0de5a26` and `193dc4ef`
-  (`git merge-base --is-ancestor <sha> HEAD` for both); `git rev-parse main feat/sionna-prod paper/cg_dse`
+- [x] **AC0 (A) Branch and hygiene.** `paper/ltbf_cg_mem_dse` contains `b0de5a26` and `193dc4ef`
+  (`git merge-base --is-ancestor <sha> HEAD` for both); `git rev-parse main feat/sionna-prod paper/ltbf_cg_seq_dse`
   = `b0de5a26…`, `193dc4ef…`, `ba757884…`;
-  `git ls-files examples/ltbf_dse | grep -E '(^|/)(data|paper_data|results|logs|runs|build|reports|prereg)/|\.(npz|csv|pdf|png)$'`
+  `git ls-files examples/ltbf_cg_mem_dse | grep -E '(^|/)(data|paper_data|results|logs|runs|build|reports|prereg)/|\.(npz|csv|pdf|png)$'`
   prints only the committed pre-registration files listed in §15; `git status -sb` shows no remote
   for the branch. Verify: those commands.
 - [x] **AC1 (A) Merge.** After step 0.2: `pytest tests/rfenv -m "not sionna"` passes;
@@ -281,26 +281,26 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
   advance is within the CP, the front end's grid on the data REs equals the applier's own frequency
   response (`rfenv.taps` at the sample rate, DFT'd) times `x` to ≤ 1e-3 relative (the interpolator's
   documented floor is about −67 dB); the fraction of links beyond the CP is reported; (c) rendering
-  one drop twice gives byte-identical grids. Verify: `pytest tests/examples/test_ltbf_dse_signals.py`.
+  one drop twice gives byte-identical grids. Verify: `pytest tests/examples/test_ltbf_cg_mem_dse_signals.py`.
 - [x] **AC4 (A) Channel estimation with op counts.** (a) The spec derives, for its SRS estimator and
   power convention, the processing gain `G_SRS` it achieves; on a flat synthetic channel the SRS
   estimates' error variance per snapshot is within ±1 dB of that derivation, with no cross-port
   leakage above −30 dB; the achieved `G_SRS` on the drops is reported; (b) the DMRS reduced-domain
   estimate on a noiseless synthetic case equals `Gᵢhᵢ` to ≤ 1e-9; (c) every estimator's logged op
   counts equal the spec's closed-form formulas for at least three shapes. Verify:
-  `pytest tests/examples/test_ltbf_dse_chest.py`.
+  `pytest tests/examples/test_ltbf_cg_mem_dse_chest.py`.
 - [x] **AC5 (A) Float chain.** (a) CG to convergence (`‖rⱼ‖/‖bⱼ‖ < 1e-12`) matches the direct solve
   to ≤ 1e-8 relative in `Aᵢ`, both regimes and both `S` forms; (b) on a synthetic channel with exact
   estimates and `R̃ᵢ` from the true statistics, the measured SINR (`1/mean(MSE) − 1` over the data
   REs) equals `1/mean(1/(1 + γ_RE)) − 1` from the paper's per-RE projected-MMSE SINR (eq. `sinr_proj`)
-  within 0.1 dB; (c) the paper check of step 2.4 (genie SINR, like for like with `paper/cg_dse` and the
-  paper) is recorded in §15 (not a gate). Verify: `pytest tests/examples/test_ltbf_dse_float.py`; the
+  within 0.1 dB; (c) the paper check of step 2.4 (genie SINR, like for like with `paper/ltbf_cg_seq_dse` and the
+  paper) is recorded in §15 (not a gate). Verify: `pytest tests/examples/test_ltbf_cg_mem_dse_float.py`; the
   step 2.4 script.
 - [x] **AC6 (A) Bit-exact model.** The fixed-point chain is composed of the engines' own bit-exact
   models (`waveflow.linalg.matmul` for every systolic job with the build's one format triple,
   `waveflow.vecunit.model` running the actual vector programs, the A53 kernel's Python twin) and equals
   each of them job by job on ≥ 20 random problems per job kind, including a zero-divisor case.
-  Verify: `pytest tests/examples/test_ltbf_dse_fixed.py`.
+  Verify: `pytest tests/examples/test_ltbf_cg_mem_dse_fixed.py`.
 - [x] **AC7 (A) Accuracy DSE.** The accuracy grid (§9 b) evaluated with no Vitis in the loop, one
   command, deterministic; `paper_data/accuracy_losses.csv` holds the median and 10th-percentile loss
   per configuration; re-running a pre-chosen subset (2 drops over the whole grid) reproduces its rows
@@ -308,7 +308,7 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
 - [x] **AC8 (A) Wrappers at RTL.** The systolic wrapper, the vector-unit wrapper and the Ingest DMA
   are each bit-exact at RTL (XSI) against their pysim twins on their job sets (every job kind of
   §1.3 at N_rx = 64), with csynth's estimated clock ≤ 4 ns. Verify:
-  `pytest -m xsi -rs tests/examples/test_ltbf_dse_xsi.py -k "systolic or vec or ingest"`.
+  `pytest -m xsi -rs tests/examples/test_ltbf_cg_mem_dse_xsi.py -k "systolic or vec or ingest"`.
 - [x] **AC9 (A) System at RTL.** Configuration: N_rx = 64, one sector of 10 UEs, factored `Q̂`,
   regime 1, r = 1, t = 3, the spec's smallest tile and ring, the deterministic policy; one long-term
   update then one slot, the Python stages' outputs and the Jacobi results replayed from the pysim
@@ -316,27 +316,27 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
   bit; each engine's Job FIFO writes, Ctrl writes and its own done records (as a per-source sequence
   of the Resp FIFO) are identical in pysim and at RTL; pysim's end time is within 5% of RTL's, with
   the C++ host charged the calibrated A53 cycles through `compute(n)`. Verify:
-  `pytest -m xsi -rs tests/examples/test_ltbf_dse_xsi.py -k system`.
+  `pytest -m xsi -rs tests/examples/test_ltbf_cg_mem_dse_xsi.py -k system`.
 - [x] **AC10 (A) Scheduler.** Unit tests: every dependency respected; no deadlock at the smallest
   FIFO and ring depths in the space; the Resp FIFO never overflows; the memory plan stays within
   capacity; deadline misses and ring overruns counted correctly on a constructed case. The new release
   kernel is calibrated by a pre-registered gem5 campaign with held-out median cycle error ≤ 10%; the
-  Jacobi kernel's calibration from `paper/cg_dse` is re-used and re-checked on 5 held-out inputs.
-  Verify: `pytest tests/examples/test_ltbf_dse_sched.py`; `pytest -m gem5 -rs tests/examples/test_ltbf_dse_cpu.py`.
+  Jacobi kernel's calibration from `paper/ltbf_cg_seq_dse` is re-used and re-checked on 5 held-out inputs.
+  Verify: `pytest tests/examples/test_ltbf_cg_mem_dse_sched.py`; `pytest -m gem5 -rs tests/examples/test_ltbf_cg_mem_dse_cpu.py`.
 - [x] **AC11 (A) Cost and time models.** Resource and per-job cycle models of the wrappers and the
   Ingest DMA, from fit builds spanning the target sizes, scored on ≥ 8 held-out builds fixed before
   fitting: median relative error ≤ 10% for cycles and DSP, ≤ 15% for LUT, FF, BRAM, URAM, worst case
   reported. The job-level timing simulator (§9 d) is within 5% of full pysim on these 5
   configurations: N_rx ∈ {64, 256} × {explicit, factored} with the dynamic policy, and N_rx = 64
   factored with the static policy (each one long-term update and one slot); and within 5% of RTL on
-  the AC9 configuration. Verify: `python -m examples.ltbf_dse.hw.validate`;
+  the AC9 configuration. Verify: `python -m examples.ltbf_cg_mem_dse.hw.validate`;
   `paper_data/model_validation.csv`.
 - [x] **AC12 (A) The DSE and its findings.** The joint accuracy × cost × time space explored in
   Python; Pareto frontiers per (array, target, loss budget, T_LT budget); `FINDINGS.md` states in
   numbers, each pointing at its table: (1) the cheapest design per array meeting each loss and time
   budget, and the real-time load it sustains with ingest; (2) explicit vs factored `Q̂`; (3) iterations
   vs word length; (4) where the time goes (engine busy time, Shared Mem and ingest contention, CPU
-  dispatch overhead, real-time vs long-term interference). Verify: `python -m examples.ltbf_dse.hw.dse`;
+  dispatch overhead, real-time vs long-term interference). Verify: `python -m examples.ltbf_cg_mem_dse.hw.dse`;
   `FINDINGS.md`.
 - [x] **AC13 (B) Decision fidelity.** On the brute-force sub-grid, pre-registered (SHA-256 in §15)
   before any of its builds runs: a decision is (scenario, loss budget, time budget, cost measure). A
@@ -344,7 +344,7 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
   with every job's cycle count taken from that build (its csynth latency report, corrected by the XSI
   anchors of step 5.4) instead of the fitted models. The model's pick is *right* when its measured time
   ≤ 1.02 × the budget and its measured cost ≤ 1.10 × the least measured cost among designs measured to
-  meet both budgets; ≥ 90% right per cost measure. Verify: `python -m examples.ltbf_dse.hw.fidelity`.
+  meet both budgets; ≥ 90% right per cost measure. Verify: `python -m examples.ltbf_cg_mem_dse.hw.fidelity`.
 - [ ] **AC14 (B) Implemented finalists.** 2–4 finalists through Vivado implementation (2024.1) meet
   4 ns (WNS ≥ 0); post-implementation resources compared with the model. Verify:
   `paper_data/finalists_impl.csv`.
@@ -360,8 +360,8 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
 |---|---|---|---|
 | LTBF paper | The algorithm and its parameters: `longterm.tex` (system model, eqs. `zproj`, `xhat_stage2`, `sinr_proj`), `solution.tex` (SRS estimation eq. `QHprod`, Woodbury remark, CG eqs. `cg_rhs`, `CG_K`–`CG_omega`, `GioptAPP`, signaling §`signalling`), `simulation.tex` (Table "parameters"; `G_SRS` = subcarriers per coherence bandwidth, ≥ 10.8 dB measured, 10 dB used, lines 60–74) | `/home/wirelesslab914/ali/salsa-ltbf/*.tex` (read-only) | repo HEAD `c52662e` |
 | Paper code | `draw_srs`, `estimate_Q`, `compute_lt_bf` (`salsa/salsa/salsa_cap.py:329–713`), `compute_sinr_lt` (`:231–302`, the genie SINR), `cg_solve_complex` (`utils.py:557`), `nr_pilots.py` (SRS and DMRS port counts), `srs_budget.py` (`G_SRS` from the coherence bandwidth) | read-only; semantics only, never imported | same HEAD (the `salsa/` tree is untracked there) |
-| Previous study | `paper/cg_dse` (`ba757884`): `plans/mimo_cg/ltbf_cg_dse.md` (+ lessons), `examples/ltbf_cg/` | `git show paper/cg_dse:<path>` | 2026-10-14 |
-| Local data from that study | 100 drops (`examples/ltbf_cg/data/drops/drop_000NN.{npz,json}`: per sector × UE × path `a0/a1`, `tau0/tau1`, `valid0/valid1`, `k_rx0/k_rx1`, plus positions and velocities), the Denver copy (`data/denver/`), the A53 Jacobi calibration (`data/a53_ltbf/`) | local, untracked (`.git/info/exclude`); copied in step 0.4 | sionna-rt 2.2.0 |
+| Previous study | `paper/ltbf_cg_seq_dse` (`ba757884`): `plans/mimo_cg/ltbf_cg_dse.md` (+ lessons), `examples/ltbf_cg_seq_dse/` | `git show paper/ltbf_cg_seq_dse:<path>` | 2026-10-14 |
+| Local data from that study | 100 drops (`examples/ltbf_cg_seq_dse/data/drops/drop_000NN.{npz,json}`: per sector × UE × path `a0/a1`, `tau0/tau1`, `valid0/valid1`, `k_rx0/k_rx1`, plus positions and velocities), the Denver copy (`data/denver/`), the A53 Jacobi calibration (`data/a53_ltbf/`) | local, untracked (`.git/info/exclude`); copied in step 0.4 | sionna-rt 2.2.0 |
 | `waveflow.rfenv` | `PathSet` (`[n_rx_ch, n_tx_ch, n_paths]`), `ChannelApplier`, `reference_apply`, `taps`, `RtSignalSource`, `ArrayWaveform`; `apply.py`'s header (interpolator floor about −67 dB) | `feat/sionna-prod` `193dc4ef`, merged in step 0.2; `docs/guide/rf/rfenv/index.md` | sionna-rt 2.2.0 |
 | Systolic engine | `SystolicEngineMem` (`waveflow/linalg/systolic_engine_mem.py`: `EngineJobDesc`, `EngineDone`, `MUL` and `MUL_AH` only, `K/Kmax ≤ Pmax`, formats `a`, `b`, `c` fixed per build (`:311–313`), `MUL` reads A as row-major `Mmax × Kmax` blocks and `MUL_AH` as stored `Kmax × Mmax` blocks (`:505–522`)); `waveflow/linalg/matmul.py` (`acc_format`, ≤ 64 bits); cost `waveflow/linalg/cost.py` | `docs/guide/dsp/systolic/systolic_engine_mem.md` | main `b0de5a26` |
 | Vector unit | `VecUnit` (`waveflow/vecunit/unit.py`: stream-only data ports, three program streams, registers and scalars live one job); ISA (`isa.py`: divides only `wf.sdivz`, L lanes; control ops SETVL, QPOP, QPUSH, SETRS: programs are straight-line); `VecUnitConfig` (`VLMAX` < 4096, `Kmax·ceil(Nmax/L)` limits; `scalar_ext` off by default); `hls.py` (programs streamed one instruction at a time); CG program `examples/vecunit_cg/cg_program.py` | `docs/guide/dsp/vecunit/` (`interface.md`, `architecture.md`, `timing.md`) | main; its 2025.1 numbers are from another machine |
@@ -377,23 +377,23 @@ missed target is ⚠️ with the number, never ✅ (Rule 13).
 - **Languages and runtimes:** Python 3.12.3 (`.venv`); g++ 13.3.0.
 - **Key dependencies:** numpy 2.5.3, scipy 1.18.1, simpy 4.1.2; sionna-rt 2.2.0, Mitsuba 3.9.1, Dr.Jit 1.5.0 (`llvm_ad_mono_polarized`); Vitis HLS / Vivado 2024.1; gem5 v25.1 (`~/ali/tools/gem5/build/ARM/gem5.opt`, image `ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1`), McPAT (`~/ali/tools/mcpat`).
 - **Commands:** fast suite `pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf`; gates `pytest -m vitis|xsi|gem5|sionna -rs`; lint `ruff check <paths>`, `black --check <paths>`.
-- **Project structure:** `waveflow/linalg/`, `waveflow/vecunit/`, `waveflow/cpu/`, `waveflow/sw/`, `waveflow/hw/` (bus, memory, mm devices), `waveflow/rfenv/` (after step 0.2); the new `examples/ltbf_dse/`.
+- **Project structure:** `waveflow/linalg/`, `waveflow/vecunit/`, `waveflow/cpu/`, `waveflow/sw/`, `waveflow/hw/` (bus, memory, mm devices), `waveflow/rfenv/` (after step 0.2); the new `examples/ltbf_cg_mem_dse/`.
 - **Limitations:** no GPU; Vitis/Vivado 2024.1 only; the paper's own environment (sionna-rt 1.2, TensorFlow) is unavailable, so its numbers are a qualitative target; an off-chip memory cannot be wired into the RTL system yet (`plans/offchip_memory.md` is a draft), so DDR is model-only.
 
 ## 7. Existing system and reuse
 
-- **Current implementation.** `paper/cg_dse` solved the long-term CG with one fused, example-level
+- **Current implementation.** `paper/ltbf_cg_seq_dse` solved the long-term CG with one fused, example-level
   engine fed by streams, the A53 eigendecomposition afterwards in sequence; no shared memory, no
   real-time path, no signals (channels as frequency responses plus SRS noise). Main has since gained
   `SystolicEngineMem` (the systolic engine behind memory), the programmable `VecUnit`, and the CPU
   model.
-- **Copied from `paper/cg_dse` in step 0.5** (`git show paper/cg_dse:<path> > <new path>`, then
-  `ltbf_cg` → `ltbf_dse` in imports and paths): `examples/ltbf_cg/scenario.py`, `ltbf_link.py`,
+- **Copied from `paper/ltbf_cg_seq_dse` in step 0.5** (`git show paper/ltbf_cg_seq_dse:<path> > <new path>`, then
+  `ltbf_cg` → `ltbf_dse` in imports and paths): `examples/ltbf_cg_seq_dse/scenario.py`, `ltbf_link.py`,
   `ltbf.py`, `ltbf_fixed.py`, `ltbf_eig.py`, `cpu/ltbf_eig.c`, `cpu/sweep_plan.csv` (the committed A53
-  pre-registration `ltbf_eig.py` needs), and the tests `tests/examples/test_ltbf_cg.py` and
-  `test_ltbf_cg_cpu.py` (as `test_ltbf_dse_link.py` and `test_ltbf_dse_cpu.py`); and
+  pre-registration `ltbf_eig.py` needs), and the tests `tests/examples/test_ltbf_cg_seq_dse.py` and
+  `test_ltbf_cg_seq_dse_cpu.py` (as `test_ltbf_cg_mem_dse_link.py` and `test_ltbf_cg_mem_dse_cpu.py`); and
   `waveflow/cpu/calib/sweep.py`'s `ltbf_eig_rows()` (a pre-approved addition, §14). **Not copied:**
-  `examples/ltbf_cg/hw/*` imports the old engine (`engine`, `space`, `timing`, `build`, `host_check`);
+  `examples/ltbf_cg_seq_dse/hw/*` imports the old engine (`engine`, `space`, `timing`, `build`, `host_check`);
   read those files with `git show` as references when writing `hw/models.py`, `hw/dse.py`,
   `hw/fidelity.py`, `hw/finalists.py`, `hw/queue.py` and `hw/validate.py`.
 - **Reuse from main, unchanged:** `SystolicEngineMem` and its cost model; `VecUnit`, its assembler,
@@ -422,7 +422,7 @@ READY="$MARKETPLACE_ROOT/common/plugins/guided-task/skills/guided-task/scripts/c
   --path .venv/bin/python \
   --path /home/wirelesslab914/ali/salsa-ltbf/solution.tex \
   --path /home/wirelesslab914/ali/salsa-ltbf/salsa/salsa/salsa_cap.py \
-  --path examples/ltbf_cg/data/drops --path examples/ltbf_cg/data/denver/denver.xml \
+  --path examples/ltbf_cg_seq_dse/data/drops --path examples/ltbf_cg_seq_dse/data/denver/denver.xml \
   --path /home/wirelesslab914/ali/tools/gem5/build/ARM/gem5.opt --path /home/wirelesslab914/ali/tools/mcpat \
   --writable plans/ltbf_dse --writable examples --git .
 # Read-only probes:
@@ -431,7 +431,7 @@ source .venv/bin/activate
 /tools/Xilinx/Vivado/2024.1/bin/vivado -version | grep -m1 -i "vivado v"
 python -c "import sionna.rt, mitsuba as mi, importlib.metadata as m; print('sionna-rt', m.version('sionna-rt'), mi.variant())"
 docker image inspect ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1 --format '{{.Id}}'
-for r in main feat/sionna-prod paper/cg_dse; do git rev-parse --short $r; done
+for r in main feat/sionna-prod paper/ltbf_cg_seq_dse; do git rev-parse --short $r; done
 git merge-tree --write-tree --name-only main feat/sionna-prod   # expect conflicts in CLAUDE.md, tests/conftest.py only
 nproc; free -g; df -h /home/wirelesslab914
 ```
@@ -446,8 +446,8 @@ nproc; free -g; df -h /home/wirelesslab914
 | path | `.venv/bin/python` | ✅ ready | file, readable |
 | path | `/home/wirelesslab914/ali/salsa-ltbf/solution.tex` | ✅ ready | file, readable |
 | path | `/home/wirelesslab914/ali/salsa-ltbf/salsa/salsa/salsa_cap.py` | ✅ ready | file, readable |
-| path | `examples/ltbf_cg/data/drops` | ✅ ready | directory, readable |
-| path | `examples/ltbf_cg/data/denver/denver.xml` | ✅ ready | file, readable |
+| path | `examples/ltbf_cg_seq_dse/data/drops` | ✅ ready | directory, readable |
+| path | `examples/ltbf_cg_seq_dse/data/denver/denver.xml` | ✅ ready | file, readable |
 | path | `/home/wirelesslab914/ali/tools/gem5/build/ARM/gem5.opt` | ✅ ready | file, readable |
 | path | `/home/wirelesslab914/ali/tools/mcpat` | ✅ ready | directory, readable |
 | writable | `plans/ltbf_dse` | ✅ ready | does not exist yet — will be created (parent is writable) |
@@ -458,7 +458,7 @@ nproc; free -g; df -h /home/wirelesslab914
 
 Probes (2026-10-28): Vitis HLS v2024.1; Vivado v2024.1; sionna-rt 2.2.0, `llvm_ad_mono_polarized`;
 gem5 image `sha256:a06a11d9371d…`; `main` = `origin/main` = `b0de5a26`, `feat/sionna-prod` =
-`origin/feat/sionna-prod` = `193dc4ef`, `paper/cg_dse` = `ba757884`; the dry-run merge conflicts in
+`origin/feat/sionna-prod` = `193dc4ef`, `paper/ltbf_cg_seq_dse` = `ba757884`; the dry-run merge conflicts in
 `CLAUDE.md` (curated count, 27 vs 25; 28 after the merge) and `tests/conftest.py` (`WANT_XSI_GATES`
 245 vs 239) only; 100 drops (2.6 MB) and the Denver copy (12 MB) present; 8 cores, 31 GB RAM
 (26 GB available), 100 GB free.
@@ -480,9 +480,9 @@ vector programs and the bit-exact model (accuracy is ready early and needs no Vi
 wrappers, the Ingest DMA, the host and scheduler and the system in pysim, then at RTL; then
 calibration, the job-level timing simulator and the DSE. Everything long is detached and resumable.
 
-**(a) Signals.** `examples/ltbf_dse/signals.py` builds each UE's waveforms (SRS symbol at snapshot 0;
+**(a) Signals.** `examples/ltbf_cg_mem_dse/signals.py` builds each UE's waveforms (SRS symbol at snapshot 0;
 PUSCH slot with DMRS and QPSK at snapshot 1) per the spec, as `rfenv` `ArrayWaveform`s; each drop's
-paths become `PathSet`s per sector (the synthetic array applied as `paper/cg_dse`'s `scenario.py`
+paths become `PathSet`s per sector (the synthetic array applied as `paper/ltbf_cg_seq_dse`'s `scenario.py`
 does), with each UE timing-advanced to its serving sector's earliest path. Rendering goes through
 `rfenv`; if spike 1.2 a shows it too slow for on-the-fly use at 32×32, the example uses a factored
 fast path (each path's delay is shared across a sector's antennas, so the received samples are
@@ -534,7 +534,7 @@ uses a **job-level timing simulator** (`hw/jobsim.py`): the same scheduler code 
 Ingest DMA's tile arrivals at line rate, each job's duration from its calibrated per-job model,
 Shared Mem port contention from the bus model, no data. It is validated against full pysim and RTL
 (AC11). Sizes whose working set exceeds the on-chip Shared Mem are priced with a stated DDR model
-(`DDR4-2400 x64 at 70%`, as `paper/cg_dse`) and flagged *model-only*.
+(`DDR4-2400 x64 at 70%`, as `paper/ltbf_cg_seq_dse`) and flagged *model-only*.
 
 **(e) Host and RTL.** In pysim the host is a `SwHost` whose threads run the scheduler and submit
 their compute to the `Processor`; spike 1.2 e builds the smallest version of this (one thread, one
@@ -546,11 +546,11 @@ depends on timing, so the framework's byte-for-byte per-endpoint host gate is no
 is: the example's gate (AC9) compares each source's subsequence of Resp records, the Job FIFO and
 Ctrl writes per engine, and the final Shared Mem contents.
 
-**(f) Findings** (§4 AC12) and, as nice-to-have, the comparison with `paper/cg_dse`'s fused engine.
+**(f) Findings** (§4 AC12) and, as nice-to-have, the comparison with `paper/ltbf_cg_seq_dse`'s fused engine.
 
 **Search before building:** `waveflow.linalg.SystolicEngineMem`, `waveflow.vecunit` (programs,
 interpreter, timing), `waveflow.cpu` and `examples/cpu_sched`, `waveflow.sw.SwHost`,
-`waveflow.hw.mm_device` and `examples/markov`, `waveflow.rfenv`, and the whole `paper/cg_dse`
+`waveflow.hw.mm_device` and `examples/markov`, `waveflow.rfenv`, and the whole `paper/ltbf_cg_seq_dse`
 example. New code: the signal builder and front end, the estimators and op counter, the vector
 programs, the wrappers, the Ingest DMA, the host and scheduler, the job-level simulator, and the glue.
 
@@ -659,9 +659,9 @@ detached compute job (Rules 5, 6).
   and RTL; the DSE's decisions against brute force.
 - **Regression check:** `pytest -m "not vitis and not xsi and not gem5 and not sionna" -q -rf` (no
   failures beyond the step 0.3 baseline); `pytest -m sionna -rs`; the example's own
-  `pytest -m vitis -rs tests/examples/test_ltbf_dse*.py`, `-m xsi`, `-m gem5`; the gate floors equal
-  the collected counts; `ruff check` and `black --check` on `examples/ltbf_dse` and
-  `tests/examples/test_ltbf_dse*.py`; the ruff counts of `tests/conftest.py` and
+  `pytest -m vitis -rs tests/examples/test_ltbf_cg_mem_dse*.py`, `-m xsi`, `-m gem5`; the gate floors equal
+  the collected counts; `ruff check` and `black --check` on `examples/ltbf_cg_mem_dse` and
+  `tests/examples/test_ltbf_cg_mem_dse*.py`; the ruff counts of `tests/conftest.py` and
   `waveflow/cpu/calib/sweep.py` unchanged from step 0.3.
 - **Independent review:** a read-only `general-purpose` reviewer agent ran on this plan before
   approval (§14); then at steps 1.3, 4.7 and 7.2, in the background (Rule 5); findings and
@@ -669,7 +669,7 @@ detached compute job (Rules 5, 6).
 
 ## 12. Safety
 
-- **Version control:** branch `paper/ltbf_dse`; commit per step; nothing pushed; `git status -sb` at
+- **Version control:** branch `paper/ltbf_cg_mem_dse`; commit per step; nothing pushed; `git status -sb` at
   each milestone (Rule 9).
 - **Diff review by the user:** at the 👁 spec gate (step 1.4), and on any stop under Rule 5.
 - **Irreversible or costly actions:**
@@ -692,7 +692,7 @@ detached compute job (Rules 5, 6).
 |---|---|---|
 | Doer | Claude Opus 5.5 (this session or a fresh one) | every step |
 | Reviewer | `general-purpose` subagent, read-only | the plan before approval (done); steps 1.3, 4.7, 7.2, in the background |
-| Explorer | `Explore` subagent | optional, for reading `paper/cg_dse` or framework code quickly |
+| Explorer | `Explore` subagent | optional, for reading `paper/ltbf_cg_seq_dse` or framework code quickly |
 
 ## 14. Decisions, assumptions, risks, open questions
 
@@ -705,7 +705,7 @@ detached compute job (Rules 5, 6).
 | Decision | Hardware input is the frequency-domain grid from a Python front end (O-RAN 7.2x); channel estimation in Python with op counts for later complexity calculations; projection and equalization in hardware | user, 2026-10-28 |
 | Decision | Each UE timing-advanced to its serving sector; delay spread beyond the CP kept as real ISI and reported | user, 2026-10-28 |
 | Decision | Shared Mem on chip; sizes that don't fit priced by a DDR model, flagged model-only | user, 2026-10-28 |
-| Decision | Branch from `main`; merge `feat/sionna-prod`; copy reusable `paper/cg_dse` code (the list of §7) into `examples/ltbf_dse/`; reuse the 100 local drops (no re-tracing) | user, 2026-10-28 |
+| Decision | Branch from `main`; merge `feat/sionna-prod`; copy reusable `paper/ltbf_cg_seq_dse` code (the list of §7) into `examples/ltbf_cg_mem_dse/`; reuse the 100 local drops (no re-tracing) | user, 2026-10-28 |
 | Decision | Wrappers (Job FIFO, Ctrl, Resp path, the vector unit's memory front end, the Ingest DMA) at example level; engines unchanged | user, 2026-10-28 |
 | Decision | Accepted as suggested: the claim (§1), no hard deadline with the budgets of §2, the DSE axes, the metrics and budgets, the verification set, the paper check as a report, the confirmations of the interview | user, 2026-10-28 |
 | Decision | The scheduler (§1.4) is supporting infrastructure, not a contribution of the paper: one dynamic policy built, static in-order as the baseline, its new kernel calibrated on gem5 | user, 2026-10-28 |
@@ -734,6 +734,7 @@ detached compute job (Rules 5, 6).
 | Decision | **Shared Mem modeled as built** (user, 2026-10-29): the DSE uses the calibrated leaf (a read word two cycles, a write one, one transaction at a time: `mm_bram_port.v` keeps one read in flight) and reports a one-word-a-cycle leaf and Shared Mem banks as modeled what-ifs; no framework change, AC8 / AC9 and the calibration stand; the findings state the leaf as a framework limit | user, 2026-10-29 |
 | Decision | **AC13's measured time anchors on XSI alone** (step 6.2; the rule registered "csynth latency corrected by the XSI anchors"): a free-running part's csynth reports no job latency -- its tasks never return -- so a brute-force design's measured T_LT is the simulator's with each frozen per-job model scaled, per part kind and array (and lanes), by the median ratio of measured to predicted cycles over that size's gated fit and held-out builds (systolic 0.995-1.002, Ingest 0.996-1.002, vector 0.955-1.064). Its measured cost is each part's own csynth resources; the Resp hub and Shared Mem's storage are the same on both sides. The DSE's runtime axis `t` is the accuracy table's {1, 2, 3, 5, 7, 10} (the rule listed 1-10). Everything else as registered | doer, 2026-10-29; reported at the next stop |
 | Finding (candidate, step 3.3) | From `accuracy_losses.csv` (340 jobs; medians over served UEs; loss against exact float LTBF on the same signals): **(F-a) width.** At `[-6, 3]` dB and `t` 3 (factored, `r` 1), W12 keeps 8x8 within 0.1 dB, 16x16 and 32x32 need W16; at `[-6, 14]` no width is within 0.1 dB at `t` 3 because float CG itself loses 1.2–3.4 dB there, and the quantization's own share at W16 is 0.08 / 0.06 / 0.09 dB (8x8 / 16x16 / 32x32). **(F-b) explicit vs factored `Q̂`** at W16, `t` 3: within 0.01 dB at 8x8 and 16x16; explicit worse by 0.19–0.29 dB at 32x32. **(F-c) more iterations hurt narrow widths**: at W ≤ 14 the loss grows past `t` 3 at 16x16 and 32x32, W12–14 collapsing to the SINR floor at 32x32 from `t` 3–5 on (fixed-point CG diverges); W16 drifts up 0.9 → 3.6 dB from `t` 5 to 10 at 32x32 `[-6, 14]`; W20 tracks float CG to `t` 10 | doer, 2026-10-29 |
+| Decision | **Renamed** (user, 2026-11-05): the branch `paper/ltbf_dse` → `paper/ltbf_cg_mem_dse`, `examples/ltbf_dse/` → `examples/ltbf_cg_mem_dse/`, `tests/examples/test_ltbf_dse_*.py` → `test_ltbf_cg_mem_dse_*.py`; and the earlier study's `paper/cg_dse` → `paper/ltbf_cg_seq_dse`, `examples/ltbf_cg/` → `examples/ltbf_cg_seq_dse/`. The code, the tests and this plan's forward-looking text use the new names; ticked steps, §15 rows, the lessons file and the frozen spec (its SHA-256 unchanged) keep the names as they were, as do the commits up to `f76d1c58`. `plans/ltbf_dse/` keeps its name, and so do two identifiers that are not paths (`svg.hashsalt`, the spike cache's `kind`). | user, 2026-11-05 |
 | Open question | **Float CG's projection at `t` 2 is poor at 16x16 and 32x32**: median loss 56.7 dB at 32x32 `[-6, 3]` (5.6 dB at `[-6, 14]`, 4.4 at 16x16 `[-6, 14]`), while `t` 1 and 3 are near exact. Checked on drop 11, 32x32, `[-6, 3]`: (1) CG's `A` at `t` 2 is finite and nearer the exact solve than at `t` 1 (relative error 0.14 vs 0.37), so not a CG failure; (2) the paper's genie SINR on the same `G` is also bad (UE 1: −20.5 dB at `t` 2 vs −1.9 at `t` 1, −2.3 at `t` 3), so not the DMRS estimator: the `t` 2 iterate gives a poor projection for about half the UEs (12 of 22 at the SINR floor). Two hypotheses tested (Rule 4); not pursued further: the operating point is `t` 3; reported at the next stop | doer, 2026-10-29 |
 | Decision (default, confirm at 1.4) | The Resp path: direct done streams from both wrappers and the Ingest DMA into a merge in front of the Resp FIFO's `QueueOut`, rather than writes routed over the crossbar | spec gate |
 | Decision (default, confirm at 1.4) | `R̃ᵢ` from the long-term statistics (`GᵢGᵢᴴ` and `GᵢĤα`), not from DMRS residuals | spec gate |
@@ -747,7 +748,7 @@ detached compute job (Rules 5, 6).
 | Risk | One systolic format triple for long-term and real-time jobs may cost accuracy on one of them | the accuracy DSE shows it; separate builds are a modeled nice-to-have |
 | Risk | Full-band real time at 1024 antennas is far beyond one FPGA (about 9×10¹¹ complex MAC/s for the projection alone, and the ingest bandwidth) | reported as the sustained fraction (§2) |
 | Risk | The host pattern (`SwHost` charging a `Processor`, with a C++ twin) is new in this repo | spike 1.2 e before the spec freezes |
-| Risk | Single-path specular channels (the paper's D12): `Qⱼ` near rank one | stated limitation, as in `paper/cg_dse` |
+| Risk | Single-path specular channels (the paper's D12): `Qⱼ` near rank one | stated limitation, as in `paper/ltbf_cg_seq_dse` |
 | Decision | **Shared Mem's storage costed as built** (final review H3): the framework's memory (`waveflow/build/rtl/bram_t2p.v`, `ram_style = "block"`) is BRAM at the system's power-of-two span (`LtbfSystem.mem_span`), 512 64-bit words a BRAM36 (2 BRAM18), not URAM at 288 Kb; checked against the finalists' post-implementation count. URAM (4,096 words each, `ram_style = "ultra"`) a labelled what-if column. `dse`, `findings`, `fidelity` re-run | user, 2026-10-29 |
 | Decision | **Designs that do not fit on chip are labelled, not modelled** (final review M1): a design whose cost exceeds the device (Shared Mem as built included) is *model-only*, flagged in every table and in `FINDINGS.md`, and never picked by a decision (on either side of AC13). The DDR timing of §9 d is not applied -- a deviation recorded here; a model-only design's T_LT is on-chip timing | user, 2026-10-29 |
 | Decision | **The weak acceptance tests reported honestly** (final review H1, H2): `validate.py` adds each run's time with the slot's 14 symbol periods (common to both sides) removed and a T_LT row, unregistered; §16 marks AC9, AC11 and AC13 ⚠️ (met as registered, weak) with these numbers. jobsim is not re-tuned on its own validation data | user, 2026-10-29 |
@@ -827,6 +828,7 @@ detached compute job (Rules 5, 6).
 | 2026-10-30 | 6.3 ⏱ | **AC14 not met** (`python -m examples.ltbf_dse.hw.finalists`, then `--collect`; `paper_data/finalists_impl.csv` local; Vivado 2024.1, xczu48dr at 4 ns, the whole system placed and routed): F1 (2 x 4, `W` 12, 2 lanes -- the pick's hardware) WNS **-0.348 ns**, F2 (4 x 8, `W` 16, 4 lanes -- AC9's design) **-0.183 ns**; both worst paths end at a Shared Mem BRAM enable (`u_mem_sub/u_mem_mem/mem_reg_bram_17x/ENARDEN`, from the Ingest DMA's write throttle and from the crossbar's write mux): the framework leaf's 228 cascaded RAMB36 behind one enable. F3 (8 x 8) cut: its synthesis passed the framework's fixed 2 h Vivado limit (`system_synth.py:366`), which kills Vivado's loader and leaves Vivado itself running -- the orphan held about 12 GB for 5 h and pushed the machine into swap until stopped (06:42); a timeout parameter and a process-group kill are framework changes, left to the user. Post-implementation against the frozen models (which predict csynth): LUT 59,751 / 129,759 (F1), 100,704 / 210,607 (F2); FF 59,471 / 101,794, 105,077 / 190,772; DSP 109 / 109.4, 253 / 252.9; BRAM18 520 / 563, 546 / 601 (Shared Mem 456 of them). The first launch synthesized for the framework's default part (a Zynq-7020) and was discarded (§14) | the CSV | AC14 ❌ (2 implemented, 0 meet 4 ns) |
 | 2026-10-30 | 7.1 | **AC15 holds**: the fast suite on an idle machine (07:08-07:11): 5,575 passed, 98 skipped, 3 failed -- all three of step 0.3's baseline (`test_xsi_workspace_copies[vitis_fft]`, both `test_markov_figures`); the knowledge-index timing test passes. With the -m sionna, example -m xsi / -m gem5 runs, floors and lint above | the log in the session scratchpad (`final_fast2.log`) | — |
 | 2026-10-30 | 7.2 | **The DSE re-run after the review** (`dse --reuse-time`, `findings`, `fidelity`; `validate` unchanged by cost): designs that fit 8x8 576 of 576, 16x16 576 of 576 (94.2-95.4% max cost, the BRAM), 32x32 0 of 576 (367-368%); 18 of 324 decisions have a pick, all 8x8, [-6, 3] dB, 10 ms -- for `max` 2 x 4, `W` 12, 2 lanes, **factored**, `t` 1: T_LT 7.57 ms, 0.086 dB, 30.5% (LUT); with Shared Mem's storage the same for both forms the tie goes to the shorter T_LT (the old pick was explicit, 8.39 ms). Real time over 3 slots: 8x8 247,318 cycles a symbol = 0.80 M RE/s (0.90% of 88.7 M), 16x16 0.24 M, 32x32 0.064 M -- 1% slower than over one slot, the same at 2 and 4 lanes. AC13 by its rule: DSP, LUT, FF, BRAM18, max 54/54 each; 15 of the 270 decisions test a pick (one point, three loss budgets), the BRAM18 pick an 8 x 8 array against brute force's 2 x 4 within the 10% tolerance. `fidelity` ran with two workers (about 9 GB each; four thrash a 31 GB machine). Report for the meeting (local, `docs/me/meeting-10.30.2026/`) | the CSVs; `FINDINGS.md` | — |
+| 2026-11-05 | housekeeping | At the user's request, the rename of §14: `git mv` of the example and its tests; references updated in the example, the tests, `tests/conftest.py`, `waveflow/cpu/calib/sweep.py` and this plan's forward-looking text; the local data moved with the example | `pytest tests/examples/test_ltbf_cg_mem_dse_*.py -m "not vitis and not xsi and not gem5 and not sionna"` with the local data: 171 passed, as before the rename | — |
 
 ## 16. Completion report
 
@@ -834,12 +836,12 @@ detached compute job (Rules 5, 6).
 Vivado 2024.1, xczu48dr at 250 MHz, pinned with `WAVEFLOW_VITIS_PATH` / `WAVEFLOW_VIVADO_PATH` since
 the machine's default became 2025.1 (§15).*
 
-- **Changed:** 80 commits on `paper/ltbf_dse` after the merge of `feat/sionna-prod` (`0c50ae1d`):
-  `examples/ltbf_dse/` -- signals, op-counted channel estimation, the float and fixed-point chains,
+- **Changed:** 80 commits on `paper/ltbf_cg_mem_dse` after the merge of `feat/sionna-prod` (`0c50ae1d`):
+  `examples/ltbf_cg_mem_dse/` -- signals, op-counted channel estimation, the float and fixed-point chains,
   the accuracy sweep, and `hw/` (records, the systolic and vector wrappers, the Ingest DMA, the Resp
   hub, the scheduler and job graphs, the pysim system and its C++ host twin, the device and system
   gates, the build queue, the cost and time models, the job-level simulator, the DSE, findings,
-  fidelity, finalists); eleven test files `tests/examples/test_ltbf_dse*.py`. Framework edits, each
+  fidelity, finalists); eleven test files `tests/examples/test_ltbf_cg_mem_dse*.py`. Framework edits, each
   approved: the systolic feeder's bounded read run-ahead (`systolic_engine_mem_task.h`), the XSI
   harness's run cap (`system_dag.py`), `arrayutils.py`, `toolchain.py`, additions-only rows in
   `waveflow/cpu/calib/sweep.py`, and the gate floors in `tests/conftest.py` (XSI 250, gem5 21).
@@ -851,7 +853,7 @@ the machine's default became 2025.1 (§15).*
   clean on the example and its tests; `tests/conftest.py` 2 ruff findings and `sweep.py` 0, both
   unchanged.
 - **Acceptance criteria:**
-  - AC0 ✅ (both ancestors; `main`, `feat/sionna-prod`, `paper/cg_dse` unmoved; only the five
+  - AC0 ✅ (both ancestors; `main`, `feat/sionna-prod`, `paper/ltbf_cg_seq_dse` unmoved; only the five
     committed calibration plans in git) -- except its "no remote" clause: the editor pushed the
     branch, which the user accepted.
   - AC1-AC8 ✅, AC10 ✅, AC12 ✅ (frontiers per budget since the review), AC15 ✅.

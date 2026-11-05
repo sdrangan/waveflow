@@ -234,9 +234,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 238 + 1 -> 239 on 2026-10-24: ``origin/main`` merged into ``feat/sionna-prod`` again -- main's 238
 #: and the sounder's replay (test_rt_sounder_xsi.py); ``pytest -m xsi --collect-only -q`` counts 239.
 #: 245 + 1 -> 246 on 2026-10-28 (plans/ltbf_dse/ltbf_dse.md step 0.2): ``feat/sionna-prod`` merged
-#: into ``paper/ltbf_dse`` -- main's 245 and the sounder's replay; ``pytest -m xsi --collect-only -q`` counts 246.
+#: into ``paper/ltbf_cg_mem_dse`` -- main's 245 and the sounder's replay; ``pytest -m xsi --collect-only -q`` counts 246.
 #: 246 + 4 -> 250 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md steps 5.1-5.2): the LTBF example's device
-#: gates (systolic, vector unit, Ingest DMA) and its system at RTL (tests/examples/test_ltbf_dse_xsi.py);
+#: gates (systolic, vector unit, Ingest DMA) and its system at RTL (tests/examples/test_ltbf_cg_mem_dse_xsi.py);
 #: ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q`` counts 250.
 WANT_XSI_GATES = 250
 
@@ -247,11 +247,11 @@ WANT_XSI_GATES = 250
 #: 9 -> 11 on 2026-10-08 (step 11): the McPAT converter's description and run (test_mcpat.py).
 #: 11 -> 12 on 2026-10-08 (step 14): the scheduler replay (test_cpu_sched_replay.py).
 #: 12 -> 14 on 2026-10-28 (plans/ltbf_dse/ltbf_dse.md step 0.5): the LTBF A53 eigendecomposition
-#: kernel's gem5 runs against its twin, copied from ``paper/cg_dse`` (test_ltbf_dse_cpu.py).
+#: kernel's gem5 runs against its twin, copied from ``paper/ltbf_cg_seq_dse`` (test_ltbf_cg_mem_dse_cpu.py).
 #: 14 -> 18 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md step 4.6): the per-UE projection job and the
-#: scheduler's release, two smoke points each, against their twins (test_ltbf_dse_cpu.py).
+#: scheduler's release, two smoke points each, against their twins (test_ltbf_cg_mem_dse_cpu.py).
 #: 18 -> 21 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md step 7.2, final review M4): the fitted A53
-#: models' scores on the local calibration, which skipped unseen in the fast suite (test_ltbf_dse_cpu.py).
+#: models' scores on the local calibration, which skipped unseen in the fast suite (test_ltbf_cg_mem_dse_cpu.py).
 WANT_GEM5_GATES = 21
 
 #: How many ``sionna``-marked tests a full ``-m sionna`` run collects -- the ray-traced RF
