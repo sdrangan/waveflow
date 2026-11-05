@@ -15,21 +15,21 @@ from __future__ import annotations
 #: The date of this pre-registration.  TBD
 DATE = None
 
-#: The design (``cg_detector.DESIGNS``).
-DESIGN = "cg_detector"
+#: The design (``ltbf_cg_mem.DESIGNS``).
+DESIGN = "ltbf_cg_mem"
 
 #: The objectives; each run gets one.  Several, so that no single answer can be learned.  TBD
 OBJECTIVES = [
     {
-        "id": "lut_at_mse20_cyc4000",
-        "text": "Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.",
+        "id": "lut_at_loss01_tlt10",
+        "text": "Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.",
         "minimize": "lut",
         "subject_to": [
-            {"metric": "mse_db", "workload": "snr_sweep", "at": {"snr_db": 10}, "op": "<=", "value": -20},
-            {"metric": "cycles_per_solve", "workload": "steady", "op": "<=", "value": 4000},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"target": "-6_3"}, "op": "<=", "value": 0.1},
+            {"metric": "t_lt_ms", "workload": "long_term", "op": "<=", "value": 10},
         ],
     },
-    # TBD: two or three more (another accuracy target; minimize cycles under a LUT budget; ...)
+    # TBD: two or three more (the other SINR targets; minimize T_LT under a LUT budget; ...)
 ]
 
 #: Budget per run, tool-seconds.  TBD (a fraction of the full grid's cost, so that exhausting

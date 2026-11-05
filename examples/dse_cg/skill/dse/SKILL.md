@@ -78,9 +78,9 @@ End by calling `submit(params, report)`, with `report` a dict:
 {
     "params": {...},                  # the design submitted, as passed to synth
     "evidence": [                     # one entry per constraint and the objective
-        {"metric": "lut", "value": 18432, "source": "synth"},
-        {"metric": "cycles_per_solve", "value": 3870, "workload": "steady", "source": "rtlsim"},
-        {"metric": "mse_db", "value": -21.4, "workload": "snr_sweep", "source": "golden"},
+        {"metric": "lut", "value": 59751, "source": "synth"},
+        {"metric": "t_lt_ms", "value": 7.6, "workload": "long_term", "source": "rtlsim"},
+        {"metric": "median_loss_db", "value": 0.086, "workload": "accuracy", "source": "golden"},
     ],
     "rationale": "a few sentences: how you searched, and why this design",
 }

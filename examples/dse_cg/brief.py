@@ -15,7 +15,7 @@ prompt     one task: the objective                       the user; ``prereg.py``
 ``.claude/skills/dse/``; :func:`write_context` writes ``examples/dse_cg/DSE.md`` with links into the
 repository.  With the service running (``DSE_SERVICE``), the user types::
 
-    /dse examples/dse_cg/DSE.md Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and ...
+    /dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets ...
 
 **A run.**  :func:`build_sandbox` writes the same layers for one arm into a fresh directory, with
 nothing else in it (no ``CLAUDE.md``, no repository)::

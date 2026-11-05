@@ -7,7 +7,7 @@ how to build its system, its golden model -- and inherits the rest: defaults, le
 architecture (the sub-top tree and its interconnects, the same at every point), each sub-top's
 identity at a point, its synthesis, and which sub-tops each parameter rebuilds.
 
-The CG detector's adaptor is ``cg_detector.py`` (V1 in ``plans/dse_cg.md``).  This file knows nothing
+The LTBF system's adaptor is ``ltbf_cg_mem.py`` (V1 in ``plans/dse_cg.md``).  This file knows nothing
 about CG; it moves into the ``waveflow`` package once a second design uses it.
 
 Skeleton: :meth:`defaults`, :meth:`fill` and :meth:`legal` are written, because they follow from
@@ -154,7 +154,7 @@ class DseAdaptor(ABC):
         """``None`` if the point satisfies every constraint, else the first rule it breaks.
 
         Constraints are evaluated over every parameter, the ones not given at their defaults, so a
-        rule that mixes design and workload parameters (``nit <= K``) is checked like any other.
+        rule that mixes design and workload parameters is checked like any other.
         """
         values = {**self.defaults(), **params, **(workload or {})}
         for c in self.space()["constraints"]:

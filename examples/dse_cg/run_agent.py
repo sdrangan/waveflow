@@ -1,6 +1,6 @@
 """run_agent.py -- one agent run: build the sandbox, start the service, run the agent, keep the record.
 
-    python -m examples.dse_cg.run_agent --arm waveflow --objective lut_at_mse20_cyc4000 --seed 3
+    python -m examples.dse_cg.run_agent --arm waveflow --objective lut_at_loss01_tlt10 --seed 3
 
 A run is the user flow (README, *Using it yourself*) in a fresh session with no context of its own.
 

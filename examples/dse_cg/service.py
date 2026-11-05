@@ -11,7 +11,7 @@ report names), and a budget only if the user sets one.
 What it does on each call (plan ``plans/dse_cg.md``, *The service and the ledger*):
 
 * **checks the arm** -- ``pysim`` is refused in the traditional arm, here and not only in the client;
-* **checks the point** -- an illegal design comes back as a row (``status: "illegal: K % R != 0"``);
+* **checks the point** -- an illegal design comes back as a row (``status: "illegal: n > 16"``);
 * **charges the recorded cost** of each evaluation, from the 2025.1 lab-machine timing events stored
   with the replay table: per build for ``synth``, elaboration + simulation for a design's first
   ``rtlsim``, simulation alone after that, the measured run time for ``golden`` and ``pysim``;

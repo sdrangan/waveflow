@@ -3,13 +3,13 @@ title: The design context
 parent: Agentic DSE
 nav_order: 2
 audience: python
-api: [DseAdaptor, CgDetectorAdaptor]
-summary: "How a design is described for DSE. A subclass of DseAdaptor defines the design's context: its parameter space and constraints, its prose, how to build its system at a design point, and its golden model. The base class derives the rest: defaults and legality; the architecture (the sub-top tree and its interconnects, the same at every point, and checked to be); each part's identity at a point and its synthesis; and which parts each parameter rebuilds. Each method, what it returns and who uses it, with the CG detector as the example. Once the class is defined, the generator renders DSE.md, the file passed to the agent: what it contains, where each section comes from, and the rules that keep it honest."
+api: [DseAdaptor, LtbfCgMemAdaptor]
+summary: "How a design is described for DSE. A subclass of DseAdaptor defines the design's context: its parameter space and constraints, its prose, how to build its system at a design point, and its golden model. The base class derives the rest: defaults and legality; the architecture (the sub-top tree and its interconnects, the same at every point, and checked to be); each part's identity at a point and its synthesis; and which parts each parameter rebuilds. Each method, what it returns and who uses it, with the LTBF system as the example. Once the class is defined, the generator renders DSE.md, the file passed to the agent: what it contains, where each section comes from, and the rules that keep it honest."
 ---
 
 # The design context
 
-**Under construction.** The base class and the CG adaptor are in
+**Under construction.** The base class and the LTBF system's adaptor are in
 [`examples/dse_cg`](../../../examples/dse_cg/README.md); most methods are not written yet.
 
 A design is described for DSE by one Python class, a subclass of **`DseAdaptor`**
@@ -31,8 +31,8 @@ You subclass `DseAdaptor` and implement what only your design can know:
 ```python
 from examples.dse_cg.adaptor import DseAdaptor
 
-class CgDetectorAdaptor(DseAdaptor):
-    name = "cg_detector"
+class LtbfCgMemAdaptor(DseAdaptor):
+    name = "ltbf_cg_mem"
     platform = "xczu48dr_250mhz_vitis2025_1"
 
     def space(self): ...                       # parameters, constraints, workloads
@@ -41,7 +41,7 @@ class CgDetectorAdaptor(DseAdaptor):
     def golden(self, params, workload): ...    # the untimed bit-exact simulation
 ```
 
-The CG detector's is [`cg_detector.py`](../../../examples/dse_cg/cg_detector.py). The members fall in
+The LTBF system's is [`ltbf_cg_mem.py`](../../../examples/dse_cg/ltbf_cg_mem.py). The members fall in
 three groups:
 
 | | member | what it gives |
@@ -78,15 +78,16 @@ Two class attributes. `name` identifies the design to the service and in the age
 ### `space()`: the parameters, constraints and workloads
 
 `space()` returns plain data: every parameter with its kind, legal values, default and meaning; the
-constraints; and the workloads. The CG detector's imports the knobs already defined in
-[`examples/mimo_cg/hw/space.py`](../../../examples/mimo_cg/hw/space.py) rather than copying them:
+constraints; and the workloads. The LTBF system's imports the axes already defined in
+[`examples/ltbf_cg_mem_dse/hw/dse.py`](../../../examples/ltbf_cg_mem_dse/hw/dse.py) (as `D`) rather
+than copying them:
 
 ```python
 def space(self) -> dict:
     design = [
-        ("K", S.K_VALUES, 4, "users solved for: the CG system is K x K"),
-        ("R", S.R_VALUES, 4, "systolic array rows"),
-        ("W", SPACE_W, 12, "word width of the fixed-point formats, bits"),
+        ("n", D.ARRAYS, 8, "antenna array side: N_rx = n x n receive antennas"),
+        ("R", sorted({r for r, _c in D.SYSTOLIC_SHAPES}), 4, "systolic array rows"),
+        ("W", D.WIDTHS, 16, "operand width of the fixed-point formats, bits"),
         ...
     ]
     return {
@@ -94,19 +95,19 @@ def space(self) -> dict:
             {"name": n, "kind": "design", "values": list(v), "default": d, "description": t}
             for n, v, d, t in design
         ] + [
-            {"name": "nit", "kind": "workload", "values": list(range(1, 9)), "default": 4,
-             "description": "CG iterations, a field of each command (at most K)"},
+            {"name": "t", "kind": "workload", "values": list(D.TS), "default": 3,
+             "description": "CG iterations of the long-term update"},
             ...
         ],
         "constraints": [
-            {"rule": "K % R == 0", "why": "the array's rows tile K"},
-            {"rule": f"R * C <= {S.MAX_PES}", "why": "the largest array the device holds"},
-            ...
+            {"rule": f"(R, C) in {list(D.SYSTOLIC_SHAPES)}",
+             "why": "the systolic shapes built and modelled at c 8, Mmax 16 (hw/space.py)"},
+            {"rule": "n <= 16", "why": "Shared Mem at N_rx 1024 needs about 3.7 devices of block RAM"},
         ],
         "workloads": [
-            {"name": "steady", "fixes": {"nit": 3}, "valid_for": ["cycles_per_solve"]},
-            {"name": "snr_sweep", "fixes": {"snr_db": [0, 5, 10, 15, 20]},
-             "valid_for": ["mse_db", "ber"]},
+            {"name": "long_term", "fixes": {"drops": [1, 11, 12]}, "valid_for": ["t_lt_ms"]},
+            {"name": "accuracy", "fixes": {"target": ["-6_3", "-6_14"]},
+             "valid_for": ["median_loss_db", "p90_loss_db"]},
         ],
     }
 ```
@@ -114,9 +115,9 @@ def space(self) -> dict:
 - A **design** parameter changes the hardware; a **workload** parameter changes only what the
   hardware is asked to do ([The DSE problem](problem.md#parameters)).
 - A **constraint** is a Python expression over the parameter names, with a sentence saying why. It
-  may mix design and workload parameters, as `nit <= K` does.
+  may mix design and workload parameters.
 - A **workload** fixes the workload parameters for one kind of measurement and names the metrics it
-  is valid for. (The CG detector's workloads are not written yet; the two above show the shape.)
+  is valid for. (The LTBF system's workloads are not written yet; the two above show the shape.)
 
 `space()` is the one method everything else reads: the agent's `dselib.space()` returns it, the
 service checks points against it, and the generator turns it into the parameters section of the
@@ -129,16 +130,17 @@ agent's file.
 ```python
 def context(self) -> dict:
     return {
-        "title": "CG detector",
-        "description": "A conjugate-gradient solver for MIMO detection: ...",
+        "title": "LTBF on a shared-memory accelerator",
+        "description": "The long-term beamforming receiver: a CG solve per sector every T_LT, ...",
         "data_flow": {
-            "text": "The host writes a job descriptor; the systolic array forms the Gram matrix, "
-                    "then passes the descriptor to the vector unit, which runs the CG iterations ...",
-            "docs": ["docs/examples/mimo_cg/index.md"],
+            "text": "The CPU writes each job into an engine's Job FIFO; the engine reads its operands "
+                    "from Shared Mem, writes its result there and reports done through the Resp "
+                    "FIFO, whose interrupt wakes the CPU to release the jobs that depend on it ...",
+            "docs": ["plans/ltbf_dse/ltbf_dse.md"],
         },
         "metrics": [
-            {"name": "mse_db", "unit": "dB", "description": "error against the floating-point answer"},
-            {"name": "cycles_per_solve", "unit": "cycles", "description": "throughput on `steady`"},
+            {"name": "median_loss_db", "unit": "dB", "description": "SINR loss against exact LTBF"},
+            {"name": "t_lt_ms", "unit": "ms", "description": "the long-term update, on `long_term`"},
             ...
         ],
     }
@@ -160,8 +162,9 @@ simulation, the DUT and its testbench, built with those parameter values. It is 
 DSE problem to the rest of Waveflow, and it is what lets the base class derive so much: the system
 can be simulated in pysim, its DUT can be cut into parts, and each part has an identity.
 
-For the CG detector it builds the detector at `HwConfig(**params)`. `params` arrives filled: every
-design parameter present, defaults included.
+For the LTBF system it is `build(inputs(SysParams(...)))` of
+[`hw/system.py`](../../../examples/ltbf_cg_mem_dse/hw/system.py) at the point. `params` arrives
+filled: every design parameter present, defaults included.
 
 ### `golden(params, workload)`: the untimed bit-exact simulation
 
@@ -169,13 +172,13 @@ design parameter present, defaults included.
 the accuracy metrics for the workload, the body of `dselib.golden`:
 
 ```python
-{"mse_db": {"0": -8.1, "5": -13.0, "10": -21.4, ...}, "ber": {...}}
+{"median_loss_db": {"-6_3": 0.086, "-6_14": 1.83}, "p90_loss_db": {...}}
 ```
 
 It has no default because no general rule produces it: the bit-exact model is the design's own. For
-the CG detector it is the fixed-point CG of
-[`examples/mimo_cg/mimo_cg_fixed.py`](../../../examples/mimo_cg/mimo_cg_fixed.py) run over the
-workload's channels.
+the LTBF system it is the fixed-point chain of
+[`examples/ltbf_cg_mem_dse/ltbf_fixed_chain.py`](../../../examples/ltbf_cg_mem_dse/ltbf_fixed_chain.py),
+scored against exact floating-point LTBF over the workload's channel drops.
 
 ## Methods with a default
 
@@ -185,11 +188,11 @@ workload's channels.
 approximate number with a confidence level. The default runs `build_system`'s system in pysim on the
 workload and prices resources with the calibrated models (`estimate_system`).
 
-The CG detector uses the default. Its study also has an analytic model,
-[`examples/mimo_cg/hw/models.py`](../../../examples/mimo_cg/hw/models.py), fitted by hand before the
-system flow existed. It is kept as a comparison, not used as `pysim`: the experiment has to measure
-Waveflow's generic pysim, not a model written for one design. Override `pysim` only when a design
-cannot be simulated as a system.
+The LTBF system uses the default. Its study also has hand-fitted models: per-part resource and
+per-job cycle models ([`hw/models.py`](../../../examples/ltbf_cg_mem_dse/hw/models.py)) and a
+job-level simulator ([`hw/jobsim.py`](../../../examples/ltbf_cg_mem_dse/hw/jobsim.py)). They are kept
+as a comparison, not used as `pysim`: the experiment has to measure Waveflow's generic pysim, not a
+model written for one design. Override `pysim` only when a design cannot be simulated as a system.
 
 ### `synth(node, params)`: one part's synthesis
 
@@ -233,7 +236,7 @@ kernels.
 |---|---|
 | `defaults()` | every parameter's default, from `space()` |
 | `fill(params)` | a design point with its missing parameters set to their defaults; a name that is not a parameter is an error, so a typo cannot silently evaluate the default |
-| `legal(params, workload)` | the first constraint a point breaks, or `None`; parameters not given are taken at their defaults, so a rule like `nit <= K` is checked like any other |
+| `legal(params, workload)` | the first constraint a point breaks, or `None`; parameters not given are taken at their defaults, so a rule that mixes design and workload parameters is checked like any other |
 
 ### `architecture()`: the parts and how they connect
 
@@ -284,9 +287,9 @@ given about the design:
 ```python
 from pathlib import Path
 from examples.dse_cg import brief
-from examples.dse_cg.cg_detector import CgDetectorAdaptor
+from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
 
-brief.write_context(CgDetectorAdaptor(), Path("examples/dse_cg/DSE.md"))
+brief.write_context(LtbfCgMemAdaptor(), Path("examples/dse_cg/DSE.md"))
 ```
 
 The agent reads `DSE.md` because the [skill](skill.md) tells it to: the first argument of
@@ -313,8 +316,7 @@ The generator fills the template [`DSE.md.tmpl`](../../../examples/dse_cg/DSE.md
 Everything comes from the class except the costs, which are measured. Nothing is a number someone
 typed into the file.
 
-For the descriptor-ring CG system (V2 in the plan), the architecture section would render to something
-like this:
+For the LTBF system, the architecture section would render to something like this:
 
 ```markdown
 ## Architecture
@@ -322,27 +324,31 @@ like this:
 The architecture is fixed: every design point has the same parts, connected the same way. Only the
 sizes inside the parts change.
 
-The host writes a job descriptor to memory and notifies the systolic unit. The systolic unit forms
-the Gram matrix, writes it back, and passes the descriptor to the vector unit, which runs the CG
-iterations ...
+The CPU writes each job into an engine's Job FIFO. The engine reads its operands from Shared Mem,
+writes its result back, and reports done through the Resp FIFO, whose interrupt wakes the CPU to
+release the jobs that depended on it ...
 
 dut
-├── systolic   device     SystolicUnit, its descriptor front end, its views   depends on R, C, cmul, W, mem_dw
-├── vec        device     VecUnit, its descriptor front end, its views        depends on L, W, g_s, mem_dw
-└── xbar       crossbar   AXI crossbar                                        depends on mem_dw
+├── sys    device     SystolicEngineMem, its Job FIFO, Ctrl and memory port    depends on n, R, C, W
+├── vec    device     VecUnit, its Job FIFO, Ctrl and memory port              depends on n, W, L
+├── ing    device     the Ingest DMA, its Ctrl, ring credit and symbol queue   depends on n
+├── hub    device     the Resp hub and the Resp FIFO
+├── mem    memory     Shared Mem (block RAM)                                   depends on n
+└── xbar   crossbar   AXI crossbar
 
 How the parts are connected:
 
 | from | to | over | carries |
 |---|---|---|---|
-| host | systolic, vec | xbar, AXI-Lite | job descriptors, notifications |
-| systolic, vec | memory | xbar, AXI4 | matrices and vectors |
-| systolic | vec | xbar, credit stream | the descriptor after each half iteration |
-| vec | host | interrupt | job done |
+| host | sys, vec, ing | xbar, AXI4 | jobs, configuration, ring credit |
+| host, sys, vec, ing | mem | xbar, AXI4 | operands and results |
+| sys, vec, ing | hub | stream | done and chunk-ready records |
+| hub | host | interrupt | the Resp FIFO holds records |
+| radio | ing | stream | each symbol's samples, antenna by antenna |
 ```
 
-The CG detector of V1 is synthesized as one top, so its tree has one part, `detector`, and every
-design parameter rebuilds it.
+A design parameter rebuilds only the parts it reaches: a new `L` rebuilds `vec` alone, a new `W`
+rebuilds `sys` and `vec`, and a new `n` rebuilds every part but `hub` and `xbar`.
 
 ### For an experiment run
 

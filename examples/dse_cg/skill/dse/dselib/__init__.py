@@ -10,8 +10,8 @@ Conventions
 * ``params`` is a dict of **design** parameters, ``{name: value}``.  Missing names take their default
   (see :func:`space`).
 * ``workload`` is a workload's name from :func:`space`, or a dict ``{"name": ..., <workload
-  parameter>: value}`` that overrides that workload's parameters (for example ``{"name": "steady",
-  "nit": 4}``).
+  parameter>: value}`` that overrides that workload's parameters (for example ``{"name": "long_term",
+  "t": 5}``).
 * Every result is a plain dict, or a list of dicts, ready for ``pandas.DataFrame``.  Every row has
   a ``status`` (``"ok"`` or the reason it failed), and the evaluation rows carry ``cost_s``, the
   tool seconds charged, and ``cached``.  A failure is a row, never an exception.  The exceptions
@@ -26,7 +26,7 @@ Conventions
   ``results/<eval id>/`` in the working directory -- small, derived files (a utilization report, a
   per-block activity table), never raw waveforms.
 
-The example results below are the CG detector's, and illustrative: their shape is exact, their
+The example results below are the LTBF system's, and illustrative: their shape is exact, their
 numbers are not.  Another design has other parameters, metrics and blocks in the same shape.
 """
 
@@ -68,16 +68,16 @@ def space() -> dict:
     Returns::
 
         {"parameters": [
-            {"name": "R", "kind": "design", "values": [1, 2, 4, 8, 16], "default": 4,
-             "rebuilds": ["systolic"], "description": "systolic array rows"},
-            {"name": "nit", "kind": "workload", "values": [1, 2, 3, 4, 5, 6, 7, 8], "default": 4,
-             "description": "CG iterations, a field of each command"},
+            {"name": "R", "kind": "design", "values": [2, 4, 8], "default": 4,
+             "rebuilds": ["sys"], "description": "systolic array rows"},
+            {"name": "t", "kind": "workload", "values": [1, 2, 3, 5, 7, 10], "default": 3,
+             "description": "CG iterations of the long-term update"},
             ...],
-         "constraints": [{"rule": "K % R == 0", "why": "the array's rows tile K"}, ...],
+         "constraints": [{"rule": "n <= 16", "why": "Shared Mem must fit on chip"}, ...],
          "workloads": [
-            {"name": "steady", "fixes": {"nit": 3, "jobs": 4}, "valid_for": ["cycles_per_solve"]},
-            {"name": "snr_sweep", "fixes": {"snr_db": [0, 5, 10, 15, 20]},
-             "valid_for": ["mse_db", "ber"]},
+            {"name": "long_term", "fixes": {"drops": [1, 11, 12]}, "valid_for": ["t_lt_ms"]},
+            {"name": "accuracy", "fixes": {"target": ["-6_3", "-6_14"]},
+             "valid_for": ["median_loss_db", "p90_loss_db"]},
             ...]}
     """
     return _call("space")
@@ -90,10 +90,10 @@ def golden(params: dict, workload: str | dict) -> dict:
 
     Returns::
 
-        {"params": {...}, "workload": "snr_sweep", "status": "ok",
-         "mse_db": {"0": -8.1, "5": -13.0, "10": -21.4, "15": -27.9, "20": -31.2},
-         "ber":    {"0": 0.081, "5": 0.012, "10": 4.1e-4, "15": 2.0e-6, "20": 0.0},
-         "cost_s": 0.5, "cached": false}
+        {"params": {...}, "workload": "accuracy", "status": "ok",
+         "median_loss_db": {"-6_3": 0.086, "-6_14": 1.83},
+         "p90_loss_db":    {"-6_3": 0.31,  "-6_14": 4.6},
+         "cost_s": 40.0, "cached": false}
     """
     return _call("golden", params=params, workload=workload)
 
@@ -109,18 +109,18 @@ def pysim(params: dict, workload: str | dict) -> dict:
 
     Returns::
 
-        {"params": {...}, "workload": "steady", "status": "ok",
-         "mse_db": {...}, "ber": {...},                                   # exact
-         "cycles_per_solve": {"est": 3912, "level": "interpolated"},      # approximate
+        {"params": {...}, "workload": "long_term", "status": "ok",
+         "median_loss_db": {...},                                         # exact
+         "t_lt_ms": {"est": 16.1, "level": "interpolated"},               # approximate
          "per_block": {                                                   # approximate
-            "mm":  {"busy": 0.71, "stalled": {"input": 0.18, "output": 0.04}, "level": "interpolated"},
-            "vec": {"busy": 0.52, "stalled": {"input": 0.41, "output": 0.00}, "level": "interpolated"},
+            "sys": {"busy": 0.83, "stalled": {"input": 0.61, "output": 0.02}, "level": "interpolated"},
+            "vec": {"busy": 0.12, "stalled": {"input": 0.08, "output": 0.00}, "level": "interpolated"},
             ...},
          "resources": {                                                   # approximate
-            "lut":  {"est": 18900, "level": "interpolated"},
-            "ff":   {"est": 24100, "level": "interpolated"},
-            "dsp":  {"est": 64,    "level": "exact"},
-            "bram": {"est": 12,    "level": "exact"}},
+            "lut":  {"est": 100700, "level": "interpolated"},
+            "ff":   {"est": 105100, "level": "interpolated"},
+            "dsp":  {"est": 253,    "level": "exact"},
+            "bram": {"est": 546,    "level": "interpolated"}},
          "artifacts": {"activity": "results/e0042/activity.csv"},         # approximate
          "cost_s": 1.1, "cached": false}
 
@@ -145,10 +145,10 @@ def hls_estimate(points: list[dict]) -> str:
 
         {"params": {...}, "status": "ok",
          "kernels": {
-            "systolic_core": {"lut": 13900, "ff": 16200, "dsp": 48, "bram": 4,
-                              "latency": None, "ii": 1, "cached": false},   # None: not computable
-            "vec_exec":      {"lut":  6100, "ff":  7400, "dsp": 16, "bram": 8,
-                              "latency": 412, "ii": 1, "cached": true},
+            "ltbf_sys": {"lut": 38700, "ff": 48200, "dsp": 144, "bram": 24,
+                         "latency": None, "ii": 1, "cached": false},   # None: not computable
+            "ltbf_hub": {"lut":   600, "ff":   900, "dsp":   0, "bram":  0,
+                         "latency": None, "ii": 1, "cached": true},
             ...},
          "artifacts": {"csynth": "results/e0045/csynth_reports/"},
          "cost_s": 70.0, "cached": false}           # cost_s: the kernels compiled this time
@@ -166,11 +166,13 @@ def synth(points: list[dict]) -> str:
     Each row, the design's totals and each part's own numbers::
 
         {"params": {...}, "status": "ok",           # or "fails_timing", "over_capacity", ...
-         "lut": 18432, "ff": 23870, "dsp": 64, "bram": 12, "ii": 1,
+         "lut": 59751, "ff": 59471, "dsp": 109, "bram": 520, "ii": 1,
          "parts": {
-            "systolic": {"lut": 12100, "ff": 15800, "dsp": 48, "bram": 4, "cached": true},
-            "vec":      {"lut":  5200, "ff":  7100, "dsp": 16, "bram": 8, "cached": false},
-            "xbar":     {"lut":  1132, "ff":   970, "dsp":  0, "bram": 0, "cached": true}},
+            "sys":  {"lut": 10256, "ff": 12841, "dsp": 47, "bram":   4, "cached": true},
+            "vec":  {"lut": 41387, "ff": 40037, "dsp": 58, "bram":  58, "cached": false},
+            "mem":  {"lut":   490, "ff":     4, "dsp":  0, "bram": 456, "cached": true},
+            "xbar": {"lut":  3003, "ff":  1169, "dsp":  0, "bram":   0, "cached": true},
+            ...},
          "artifacts": {"utilization": "results/e0043/utilization.txt"},   # per instance
          "cost_s": 61.0, "cached": false}           # cost_s: the parts built this time
 
@@ -188,9 +190,9 @@ def rtlsim(points: list[dict], workload: str | dict) -> str:
 
     Each row::
 
-        {"params": {...}, "workload": "steady", "status": "ok",   # or "deadlock", "mismatch", ...
-         "cycles_per_solve": 3870, "bit_exact": true,
-         "per_block": {"mm": {"busy": 0.70, "stalled": {"input": 0.19, "output": 0.04}}, ...},
+        {"params": {...}, "workload": "long_term", "status": "ok",   # or "deadlock", "mismatch", ...
+         "t_lt_ms": 16.4, "bit_exact": true,
+         "per_block": {"sys": {"busy": 0.82, "stalled": {"input": 0.62, "output": 0.02}}, ...},
          "artifacts": {"activity": "results/e0044/activity.csv"},
          "cost_s": 31.0, "cached": false}
 
@@ -214,7 +216,7 @@ def results(fn: str | list[str] | None = None) -> list[dict]:
     ``fn`` keeps only those functions' rows (``"pysim"``, or ``["synth", "rtlsim"]``).  The rows
     are the ones the functions returned, flattened so that ``pandas.DataFrame(results(...))`` needs
     no further work: ``params`` become one column per parameter, and nested values become dotted
-    columns (``lut.est``, ``lut.level``, ``parts.vec.lut``, ``per_block.mm.busy``).
+    columns (``lut.est``, ``lut.level``, ``parts.vec.lut``, ``per_block.sys.busy``).
 
         df = pd.DataFrame(results("pysim"))
         measured = pd.DataFrame(results("synth"))

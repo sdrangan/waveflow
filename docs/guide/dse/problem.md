@@ -3,7 +3,7 @@ title: The DSE problem
 parent: Agentic DSE
 nav_order: 1
 audience: python
-summary: "The parametric DSE problem stated precisely: design parameters and workload parameters, legality constraints, metrics, an objective with constraints, evaluations that differ in cost and in what they can see (golden, pysim, synth, rtlsim), a budget of tool time, and the rule that the answer must be measured. Then how it is written down for an agent, in three layers: a skill (the method), a design context file DSE.md (this design), and a prompt (this task). The CG detector is the example throughout."
+summary: "The parametric DSE problem stated precisely: design parameters and workload parameters, legality constraints, metrics, an objective with constraints, evaluations that differ in cost and in what they can see (golden, pysim, synth, rtlsim), a budget of tool time, and the rule that the answer must be measured. Then how it is written down for an agent, in three layers: a skill (the method), a design context file DSE.md (this design), and a prompt (this task). The LTBF system of examples/ltbf_cg_mem_dse is the example throughout."
 ---
 
 # The DSE problem
@@ -19,35 +19,34 @@ A **design parameter** changes the hardware: a new value is a new design, which 
 again. A **workload parameter** changes what the hardware is asked to do: a new value costs only
 another simulation. The distinction matters because it decides what an evaluation costs.
 
-For the CG detector:
+For the LTBF system (the rest of its build is fixed):
 
 | parameter | kind | meaning |
 |---|---|---|
-| `K` | design | users solved for: the CG system is K × K |
-| `L` | design | lanes: complex elements per bus word |
+| `n` | design | antenna array side: N_rx = n × n receive antennas |
 | `R`, `C` | design | systolic array rows and columns |
-| `cmul` | design | real multiplies per complex multiply (3 or 4) |
-| `W` | design | word width of the fixed-point formats, bits |
-| `g_s` | design | guard bits on the CG scalars |
-| `mem_dw` | design | memory bus width, bits |
-| `sob_depth`, `cmd_depth` | design | channel and command-queue depths |
-| `nit` | workload | CG iterations per solve (at most `K`) |
-| `snr_db` | workload | the channel SNR the accuracy is measured at |
+| `W` | design | operand width of the fixed-point formats, bits |
+| `L` | design | the vector unit's lanes |
+| `t` | workload | CG iterations of the long-term update |
+| `form` | workload | how the CG step applies Q̂: factored, or Q̂ formed once (explicit) |
+| `target` | workload | the UEs' SINR targets the accuracy is measured at |
 
 The **design space** is every combination of the design parameters' values that is legal.
 
 ### Constraints on legality
 
-Some combinations are not a design at all. For the CG detector, the array's rows must tile `K`
-(`K % R == 0`), the lanes must tile the columns (`C % L == 0`), and the array must fit the device
-(`R * C <= 256`). These rules are part of the problem, not something to discover by failed builds.
+Some combinations are not a design at all. For the LTBF system, the systolic array must be one of the
+shapes its engine is built at (`(R, C) in [(2, 4), (4, 4), (4, 8), (8, 8)]`), and the antenna array
+must leave Shared Mem on chip (`n <= 16`: at 32 × 32 its block RAM alone is 3.7 devices). These rules
+are part of the problem, not something to discover by failed builds.
 
 ### Workloads
 
-A **workload** fixes the workload parameters and the input data for one kind of measurement. The CG
-detector has two: `steady`, a stream of solves to measure throughput, and `snr_sweep`, a set of
-channels at several SNRs to measure accuracy. A metric is only meaningful on the workload it was
-measured with.
+A **workload** fixes the workload parameters and the input data for one kind of measurement. The LTBF
+system has three: `long_term`, the long-term updates of the three sectors back to back, to measure
+T_LT; `slot`, one slot of 14 symbols at the radio's pace after the update, to see whether the system
+keeps up; and `accuracy`, held-out channel drops at each set of SINR targets, to measure accuracy. A
+metric is only meaningful on the workload it was measured with.
 
 ### Metrics
 
@@ -55,16 +54,17 @@ What can be measured about a design on a workload:
 
 | metric | what | units |
 |---|---|---|
-| `mse_db`, `ber` | accuracy against the floating-point answer | dB, fraction |
-| `cycles_per_solve` | throughput | cycles |
-| `lut`, `ff`, `dsp`, `bram` | resources | counts |
+| `median_loss_db`, `p90_loss_db` | SINR loss against exact floating-point LTBF, median and 90th percentile over the UEs | dB |
+| `t_lt_ms` | the long-term update of the three sectors, back to back | ms |
+| `dropped` | symbols the Ingest DMA dropped in a slot (0: it keeps the radio's pace) | count |
+| `lut`, `ff`, `dsp`, `bram`, `uram` | resources | counts |
 | per-block activity | how much of the time each block is busy, or stalled waiting for input or for room to send output | fractions |
 
 ### The objective
 
 An **objective** picks one metric to minimize (or maximize) and puts limits on others. For example:
 
-> Minimize LUTs, subject to MSE ≤ −20 dB at SNR 10 dB and ≤ 4,000 cycles per solve.
+> Minimize LUTs, subject to a median loss ≤ 0.1 dB at SINR targets [−6, 3] dB and T_LT ≤ 10 ms.
 
 The answer is a set of design parameters. It is good if it meets the limits and its LUT count is
 close to the best that any legal design reaches.
@@ -123,10 +123,10 @@ refuses calls once the budget is spent:
 ```python
 from dselib import space, golden, pysim, hls_estimate, synth, rtlsim, wait, results, budget, submit
 
-space()                                     # the parameters, constraints and workloads, as data
-golden({"K": 8, "W": 12}, "snr_sweep")      # exact accuracy, no timing
-pysim({"K": 8, "W": 12, "R": 4}, "steady")  # exact accuracy, approximate cycles and resources
-job = synth([{"K": 8, "W": 12, "R": 4}])    # measured resources, as a job
+space()                                         # the parameters, constraints and workloads, as data
+golden({"W": 12}, "accuracy")                   # exact accuracy, no timing
+pysim({"R": 2, "C": 4, "W": 12}, "long_term")   # exact accuracy, approximate T_LT and resources
+job = synth([{"R": 2, "C": 4, "W": 12}])        # measured resources, as a job
 wait(job)                                   # the measured rows
 submit(params, report)                      # the answer, with the evidence for it
 ```

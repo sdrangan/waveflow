@@ -4,7 +4,7 @@ parent: Guide
 nav_order: 12.8
 has_children: true
 audience: python
-summary: "Design-space exploration by an AI agent: given a fixed architecture, choose its parameters to meet an objective within a budget of tool time, using an untimed bit-exact simulation, synthesis, RTL simulation and, in Waveflow, pysim. What DSE is, why this section covers the parametric kind, and the running example (the CG detector, examples/dse_cg). Under construction."
+summary: "Design-space exploration by an AI agent: given a fixed architecture, choose its parameters to meet an objective within a budget of tool time, using an untimed bit-exact simulation, synthesis, RTL simulation and, in Waveflow, pysim. What DSE is, why this section covers the parametric kind, and the running example (the LTBF receiver's shared-memory system, examples/ltbf_cg_mem_dse, explored in examples/dse_cg). Under construction."
 ---
 
 # Agentic DSE
@@ -59,10 +59,14 @@ and measures how much tool time each needs to find a good design.
 
 ## The running example
 
-The running example is the **CG detector** of [`examples/mimo_cg`](../../examples/mimo_cg/index.md):
-a conjugate-gradient solver built from a systolic array and a vector unit, with ten build parameters
-(array rows and columns, lanes, word width, queue depths, ...). The DSE work on it lives in
-[`examples/dse_cg`](../../../examples/dse_cg/README.md).
+The running example is the **LTBF system** of
+[`examples/ltbf_cg_mem_dse`](../../../examples/ltbf_cg_mem_dse/hw/system.py) (its plan,
+[`plans/ltbf_dse/ltbf_dse.md`](../../../plans/ltbf_dse/ltbf_dse.md)): the long-term beamforming
+receiver on a shared-memory accelerator. A CPU schedules jobs onto a systolic engine and a vector
+unit, which solve each sector's conjugate-gradient system and equalize every symbol, with an Ingest
+DMA and one shared memory on one crossbar. It has five build parameters (the antenna array, the
+systolic array's rows and columns, the word width and the vector unit's lanes). The DSE work on it
+lives in [`examples/dse_cg`](../../../examples/dse_cg/README.md).
 
 ## The pages
 

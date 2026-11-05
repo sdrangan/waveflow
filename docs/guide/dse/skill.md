@@ -118,7 +118,7 @@ replaces `$ARGUMENTS` with them, much as a shell replaces `$1` in a script.
 Suppose you type:
 
 ```text
-/dse examples/dse_cg/DSE.md Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.
+/dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.
 ```
 
 The skill's name is `dse`. The arguments are everything after it:
@@ -130,7 +130,7 @@ Base directory for this skill: /home/me/project/.claude/skills/dse
 
 # Design-space exploration
 
-Your task: **examples/dse_cg/DSE.md Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.**
+Your task: **examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.**
 
 The first argument is the path to the design's `DSE.md`; the rest is the objective. Read `DSE.md`
 first. ...

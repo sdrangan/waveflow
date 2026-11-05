@@ -77,8 +77,8 @@ a failure is a row, never an exception.
 
 `dselib` knows nothing about any design. It is a thin client: each function forwards its arguments
 to whatever service it is bound to, and the service was built around one adaptor
-(`Service(CgDetectorAdaptor(), ...)`). The CG detector and the descriptor-ring system use the same
-`dselib`, bound to different services.
+(`Service(LtbfCgMemAdaptor(), ...)`). The LTBF system and its descriptor-ring variant (V2 in the plan)
+use the same `dselib`, bound to different services.
 
 - **It ships with the skill.** It is plain Python with no Waveflow dependency, so it runs in a
   sandbox that has no Waveflow. It lives in the skill's folder and is copied with it.
@@ -91,7 +91,7 @@ to whatever service it is bound to, and the service was built around one adaptor
 ## What happens on each call
 
 1. **Check.** Unknown parameter names are refused. An illegal design (`DseAdaptor.legal`) comes back
-   as a row with `status: "illegal: K % R != 0"`, at no cost. `pysim` is refused in the traditional
+   as a row with `status: "illegal: n > 16"`, at no cost. `pysim` is refused in the traditional
    arm.
 2. **Look up.** A result the ledger already holds is returned again, marked `cached`, at no cost.
 3. **Charge.** The cost of what is new is taken from the budget. A call the budget cannot cover is
