@@ -92,14 +92,11 @@ reviewer could say the advantage is a bespoke model, not the method. They stay, 
 *Gate:* at the default point, pysim's cycles and resources sit next to 1a's and 1b's measurements in
 a table: reported, not gated (scoring is the ground-truth phase's job).
 
-**1e. The units at 2025.1** (`plans/calib_2025_1.md`, lab machine), in parallel: Stage 3 (the vector
-unit) and Stage 4 (the systolic units, whose core model `SystolicEngineMem` uses). The LTBF system
-also needs what that plan does not cover: the Shared Mem leaf's calibration at each span
-(`hw/build.py`'s `add_memcal`), and models for the Ingest DMA and the Resp hub, which have none of
-their own. The A53's platform is gem5's, not Vitis's, and stays. Until the platform
-`xczu48dr_250mhz_vitis2025_1` exists, pysim uses the current one and its confidence levels say so.
-Phases 2 and 3 test that the machinery is right, not that the predictions are good, so they do not
-wait for it.
+**1e. The units at 2025.1** (`plans/calib_2025_1.md`, lab machine), run before this plan: its
+Stage 3 (the vector unit), Stage 4 (the systolic engine: its core's timing at the LTBF configurations
+and a resource model on the platform) and Stage 4b (the A53, the shipped platform and the LTBF kernels,
+recompiled by 2025.1's gcc). The Ingest DMA and Shared Mem are not calibrated (user, 2026-11-05):
+pysim takes their timing from their own models, and reports their resources uncalibrated.
 
 ## Phase 2: the adaptor, verified
 
@@ -192,8 +189,8 @@ of the two wrappers' descriptor forwarding; then 4–7 again on a grid G2 of abo
 
 1. **One difference.** The arms differ in `pysim`, in `dselib`, the skill and `DSE.md`, rendered from
    the same files ([Skills](../docs/guide/dse/skill.md)).
-2. **Calibration is charged to Waveflow**: the units' builds in `calib_2025_1.md` and 1e, and the
-   system's integration builds, reported up front (the headline) and amortized.
+2. **Calibration is charged to Waveflow**: the units' builds in `calib_2025_1.md` and the system's
+   integration builds, reported up front (the headline) and amortized.
 3. **A strong baseline.** The traditional arm reads all docs and source and may build its own models.
    Both arms have `hls_estimate`, the quick look a real hardware team takes. It covers the HLS kernels
    only, not the hand-written adaptors or the crossbar, so pysim must beat the HLS compiler's
@@ -360,7 +357,7 @@ between the units and the port. The prediction: **pysim's advantage holds as the
 | phase | needs |
 |---|---|
 | 1, 2, 3 | laptop (Vitis / Vivado 2025.1, `xczu7ev` for synthesis, N_rx 64 only); lab machine for Phase 2's large point and to rerun the five for the record |
-| 1e | lab machine (`calib_2025_1.md`, and the LTBF units it does not cover) |
+| 1e | lab machine (`calib_2025_1.md`, run first) |
 | 4 | lab machine; days, set by the system's RTL runs |
 | 5, 6 | laptop |
 | 7 | API access |
