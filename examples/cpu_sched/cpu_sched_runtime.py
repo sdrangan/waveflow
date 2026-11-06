@@ -17,7 +17,7 @@ does the same work and the cost per operation is a constant to fit.  The fidelit
   software thread issuing them in order (:meth:`~waveflow.cpu.bench.SchedTrace.pysim`).  Same Python
   as untimed, so the difference is the simulation's own cost;
 - **pysim (system)** -- the whole example per job, the scheduler on the A53 and two accelerators
-  behind AXI-Lite, at ``--system-interarrival`` (0.8 us: the list stays short, so the work per job
+  behind AXI-Lite, at ``--system-interarrival`` (0.9 us: the list stays short, so the work per job
   is the same at every job count);
 - **gem5** (``--gem5``, plan step 4) and the **bench**'s per-task floor (``waveflow.cpu.bench``).
 
@@ -57,11 +57,18 @@ RUNTIME = HERE / "runtime.json"
 TRACE_JOBS = 200
 COPIES = (1, 2, 4)
 SYSTEM_JOBS = (100, 200, 400)
-SYSTEM_INTERARRIVAL_S = 0.8e-6
+#: The system row's mean inter-arrival.  0.8 us on the 2024.1 platform; with the 2025.1 prices (an
+#: ``add`` about 70 cycles dearer, ``plans/calib_2025_1.md`` Stage 4b) the scheduler is near
+#: saturation there -- the list grows past 400 jobs (1.9 -> 6.7 -> 184 entries an operation at
+#: 400, 800, 1,600) -- and 0.9 us keeps it as short as 0.8 us did before (1.8-2.0 entries).
+SYSTEM_INTERARRIVAL_S = 0.9e-6
 #: The bench's sizes: plan step 3 (stream 100,000, burst 20,000), as plans/cpu_model.md measured.
 BENCH = {"stream": 100_000, "burst": 20_000}
-#: The relative spread the work per operation (and per job) may have across sizes.
-FLAT = 0.10
+#: The relative spread the work per operation (and per job) may have across sizes.  The arrivals are
+#: one seeded stream, so the smaller runs are prefixes of the larger, and at a list this short (one
+#: to three entries an operation) the stream's own fluctuation spreads them: 9.1 % at 2024.1, 11-20 %
+#: at 2025.1 for any inter-arrival from 0.9 to 1.2 us, with no growth.  10 % until 2025.1.
+FLAT = 0.15
 
 
 # --- the machine ------------------------------------------------------------------------------
