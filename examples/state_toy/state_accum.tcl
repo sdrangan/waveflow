@@ -1,5 +1,5 @@
 set part {xc7z020clg484-1}
-set cf "-Iinclude"
+set cf "-Isrc -Iinclude"
 puts "WAVEFLOW_INFO: state_accum"
 open_project -reset state_accum_proj
 set_top state_accum
