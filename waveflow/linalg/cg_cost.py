@@ -8,8 +8,8 @@ Resources
 Each task of :class:`~waveflow.linalg.cg_vector.CgVectorUnit` declares its structure: DSPs and
 block RAM are **counted**, LUT and FF are **fitted** on the terms it writes out.  The core holds
 twelve multiplies per lane (two in the start, two in pass 1, six in pass 2, two in pass 3), of which
-Vitis HLS 2024.1 on ``xczu48dr`` binds 12 to DSPs from 12-bit vectors up, 5 at 10 bits and 3 at
-8 bits (:func:`dsps_per_lane`; measured on the calibration builds), and
+Vitis HLS 2024.1 and 2025.1 on ``xczu48dr`` bind 12 to DSPs from 12-bit vectors up, 5 at 10 bits and
+3 at 8 bits (:func:`dsps_per_lane`; measured on the calibration builds), and
 its six state arrays (``X``, ``R``, ``P``, real and imaginary, ``Kmax × Nmax/L`` per lane) by the
 device rule.  The receiver, the loader, the store and the core each compute one run-time index
 product (``k·n``).  The unit's channels are its four stream-of-blocks buffers (the systolic unit's buffer
@@ -84,8 +84,8 @@ SLICE_BITS = 18
 
 
 def dsps_per_lane(W: int) -> int:
-    """DSP slices per lane of the core: the twelve multiplies, of which Vitis HLS 2024.1 on
-    xczu48dr builds some from LUTs at narrow widths (``W``: the vectors' width)."""
+    """DSP slices per lane of the core: the twelve multiplies, of which Vitis HLS 2024.1 and 2025.1
+    on xczu48dr build some from LUTs at narrow widths (``W``: the vectors' width)."""
     W = int(W)
     return 12 if W >= 12 else (5 if W >= 10 else 3)
 

@@ -12,6 +12,12 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 #: against them.
 MIN_TOOL_VERSION: Tuple[int, int] = (2025, 1)
 
+#: The release every packaged platform and recorded number was measured with
+#: (``plans/calib_2025_1.md``).  A newer release runs, but its cycle counts and resources are not
+#: what the platforms describe (2024.1 against 2025.1 moved some by over 10 %), so the tool check
+#: warns about it.
+CALIBRATED_TOOL_VERSION: tuple[int, int] = (2025, 1)
+
 VITIS_PATH_ENV = "WAVEFLOW_VITIS_PATH"
 VIVADO_PATH_ENV = "WAVEFLOW_VIVADO_PATH"
 
@@ -390,6 +396,17 @@ class ToolInfo:
         if parsed is None:
             return None
         return parsed >= MIN_TOOL_VERSION
+
+    @property
+    def above_calibrated(self) -> bool | None:
+        """
+        Whether the release is newer than :data:`CALIBRATED_TOOL_VERSION`, the one the packaged
+        platforms were measured with; ``None`` when the version is unknown.
+        """
+        parsed = version_tuple(self.version)
+        if parsed is None:
+            return None
+        return parsed > CALIBRATED_TOOL_VERSION
 
 
 def probe_amd_tools(check_versions: bool = True) -> List[ToolInfo]:

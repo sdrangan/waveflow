@@ -59,26 +59,33 @@ PROJ = LOOPBACK / f"{TOP}_proj" / "solution1" / "syn" / "verilog"
 #: Samples per AXIS word (the I/Q word: two complex samples).
 SPW = 2
 
-#: **The drop pattern, recorded** (Vivado 2024.1 xsim, ``rf_pass_through`` csynth'd with Vitis HLS
-#: 2024.1 on 2026-10-12): the source words skipped between delivered ones, as ``(first skipped
-#: word, count)``.  Pinned exactly rather than bounded by the ADC's drop count: the 30 drops after the
+#: **The drop pattern, recorded** (Vivado xsim 2025.1, ``rf_pass_through`` csynth'd with Vitis HLS
+#: 2025.1 on 2026-11-06, Linux): the source words skipped between delivered ones, as ``(first skipped
+#: word, count)``.  Pinned exactly rather than bounded by the ADC's drop count: the 32 drops after the
 #: last delivered word would otherwise leave room for an RTL that lost words of its own.  The pattern
 #: is a property of the RTL and the converter model's input FIFO, not of the data -- the loopback
 #: I/Q gate's random scenario drops the same words (M5 review) -- so it moves only with one of those,
 #: and a change wants diagnosing, like :data:`WANT_IQ_SINK_LAST_BLOCK_CYCLE`, before re-recording.
+#:
+#: At 2024.1 (2026-10-12) it was ``(194, 14), (272, 16), (352, 14), (430, 15), (509, 15), (588, 15),
+#: (667, 16), (747, 14), (825, 15)`` and 164 drops (134 + 30).  2025.1's csynth schedules
+#: ``rf_samp_relay_task`` one FSM state shorter (136 cycles a firing, not 137), which shifts where the
+#: relay's write phases fall against the ADC's words (``plans/calib_2025_1.md`` Stage 1).  Every
+#: other count is the I/Q gate's, unchanged -- the same 768 words delivered, the same data periods,
+#: the last sink block at the same cycle -- and every gap is an ADC drop.
 WANT_SRC_GAPS = (
-    (194, 14),
-    (272, 16),
-    (352, 14),
-    (430, 15),
-    (509, 15),
-    (588, 15),
+    (194, 11),
+    (269, 15),
+    (348, 15),
+    (427, 16),
+    (507, 16),
+    (587, 16),
     (667, 16),
-    (747, 14),
-    (825, 15),
+    (747, 16),
+    (827, 16),
 )
-#: Words the ADC dropped in all: the gaps' 134 plus 30 after the last word that reached the sink.
-WANT_ADC_DROPPED = 164
+#: Words the ADC dropped in all: the gaps' 137 plus 32 after the last word that reached the sink.
+WANT_ADC_DROPPED = 169
 #: The grid periods at the sink that carry data (zero-fill between them: the relay cannot sustain
 #: the DAC's rate).
 WANT_DATA_PERIODS = (1, 2, 4, 5, 6, 7)

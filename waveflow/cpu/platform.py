@@ -12,9 +12,10 @@ turns that into the objects a simulation uses:
   leakage model;
 * :meth:`CpuPlatform.area_model` — the :class:`~waveflow.cpu.area.CpuAreaModel` for a DSE.
 
-The reference platform is the RFSoC 4x2's A53 on gem5 v25.1 (``a53_hpi_1200mhz_gem5v25_1``).  Its
-measured accuracy is in ``cpu/accuracy.csv``; three cycle models miss the 25 % max bound on small
-operations (``plans/cpu_model.md`` §14), which the docs state beside every number.
+The reference platform is the RFSoC 4x2's A53 on gem5 v25.1, its kernels compiled by Vitis 2025.1's
+aarch64 gcc 13.3.0 (``a53_hpi_1200mhz_gem5v25_1_vitis2025_1``).  Its measured accuracy is in
+``cpu/accuracy.csv``; two cycle models miss the 25 % max bound (``plans/calib_2025_1.md`` Stage 4b),
+which the docs state beside every number.
 """
 
 from __future__ import annotations

@@ -8,75 +8,75 @@
    "header": "wf_vecunit_858521179.h",
    "word_bits": 64,
    "workload": "calib",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1424,
-    4382,
-    7246,
-    8108,
-    10130,
-    13173,
-    14145,
-    15497,
-    18167,
-    19677,
-    20458,
-    21958,
-    22234
+    1484,
+    4569,
+    7609,
+    8539,
+    10683,
+    13876,
+    14936,
+    16396,
+    19250,
+    20832,
+    21622,
+    23107,
+    23397
    ],
    "intervals": [
-    2958,
-    2864,
-    862,
-    2022,
-    3043,
-    972,
-    1352,
-    2670,
-    1510,
-    781,
-    1500,
-    276
+    3085,
+    3040,
+    930,
+    2144,
+    3193,
+    1060,
+    1460,
+    2854,
+    1582,
+    790,
+    1485,
+    290
    ],
-   "done_cycle": 22366,
-   "pysim_cycles": 24355.140935589512,
+   "done_cycle": 23528,
+   "pysim_cycles": 24402.544939463824,
    "pysim_status": [
-    1590.5,
-    4764.4,
-    7919.3,
-    8894.0,
-    11122.2,
-    14480.8,
-    15578.7,
-    17089.1,
-    20058.9,
-    21714.0,
-    22471.1,
-    23927.4,
-    24227.1
+    1594.0,
+    4772.9,
+    7936.7,
+    8916.9,
+    11154.3,
+    14520.9,
+    15621.3,
+    17139.7,
+    20113.6,
+    21769.5,
+    22524.3,
+    23977.1,
+    24274.5
    ],
    "resources": {
-    "lut": 74506,
-    "ff": 48342,
+    "lut": 71809,
+    "ff": 45053,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -94,7 +94,7 @@
      "output": 87,
      "store": 87.0,
      "elements": 519,
-     "execute": 1416.5,
+     "execute": 1419.2,
      "binds": "execute"
     },
     {
@@ -103,7 +103,7 @@
      "output": 62,
      "store": 123.0,
      "elements": 1352,
-     "execute": 3115.8,
+     "execute": 3118.4,
      "binds": "execute"
     },
     {
@@ -112,7 +112,7 @@
      "output": 23,
      "store": 45.0,
      "elements": 902,
-     "execute": 3135.8,
+     "execute": 3142.4,
      "binds": "execute"
     },
     {
@@ -121,7 +121,7 @@
      "output": 6,
      "store": 11.0,
      "elements": 66,
-     "execute": 972.6,
+     "execute": 975.8,
      "binds": "execute"
     },
     {
@@ -130,7 +130,7 @@
      "output": 43,
      "store": 85.0,
      "elements": 764,
-     "execute": 2189.1,
+     "execute": 2196.0,
      "binds": "execute"
     },
     {
@@ -139,7 +139,7 @@
      "output": 48,
      "store": 95.0,
      "elements": 1145,
-     "execute": 3314.6,
+     "execute": 3320.2,
      "binds": "execute"
     },
     {
@@ -148,7 +148,7 @@
      "output": 9,
      "store": 9.0,
      "elements": 60,
-     "execute": 1096.9,
+     "execute": 1099.4,
      "binds": "execute"
     },
     {
@@ -157,7 +157,7 @@
      "output": 6,
      "store": 10.0,
      "elements": 74,
-     "execute": 1509.3,
+     "execute": 1517.4,
      "binds": "execute"
     },
     {
@@ -166,7 +166,7 @@
      "output": 58,
      "store": 115.0,
      "elements": 736,
-     "execute": 2968.9,
+     "execute": 2972.9,
      "binds": "execute"
     },
     {
@@ -175,7 +175,7 @@
      "output": 70,
      "store": 139.0,
      "elements": 615,
-     "execute": 1654.1,
+     "execute": 1654.9,
      "binds": "execute"
     },
     {
@@ -184,7 +184,7 @@
      "output": 514,
      "store": 514.0,
      "elements": 384,
-     "execute": 756.2,
+     "execute": 753.8,
      "binds": "execute"
     },
     {
@@ -193,7 +193,7 @@
      "output": 504,
      "store": 1004.0,
      "elements": 600,
-     "execute": 1345.7,
+     "execute": 1341.2,
      "binds": "execute"
     },
     {
@@ -202,73 +202,73 @@
      "output": 65,
      "store": 129.0,
      "elements": 128,
-     "execute": 298.8,
+     "execute": 296.5,
      "binds": "execute"
     }
    ],
-   "simulate_s": 37.290725231170654,
+   "simulate_s": 46.734455585479736,
    "build": "mf",
    "params": {},
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_holdout2": {
    "header": "wf_vecunit_858521179.h",
    "word_bits": 64,
    "workload": "holdout2",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1960,
-    3522,
-    4494,
-    7061,
-    8152,
-    10078,
-    12017,
-    12626
+    2010,
+    3724,
+    4777,
+    7517,
+    8683,
+    10775,
+    12709,
+    13331
    ],
    "intervals": [
-    1562,
-    972,
-    2567,
-    1091,
-    1926,
-    1939,
-    609
+    1714,
+    1053,
+    2740,
+    1166,
+    2092,
+    1934,
+    622
    ],
-   "done_cycle": 12738,
-   "pysim_cycles": 13472.779166963848,
+   "done_cycle": 13442,
+   "pysim_cycles": 13515.906261938799,
    "pysim_status": [
-    2045.6,
-    3800.5,
-    4873.2,
-    7741.0,
-    8959.9,
-    11161.8,
-    12736.6,
-    13364.8
+    2055.0,
+    3818.3,
+    4900.2,
+    7772.1,
+    8997.4,
+    11205.7,
+    12781.9,
+    13407.9
    ],
    "resources": {
-    "lut": 74506,
-    "ff": 48342,
+    "lut": 71809,
+    "ff": 45053,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -286,7 +286,7 @@
      "output": 79,
      "store": 157.0,
      "elements": 917,
-     "execute": 1806.5,
+     "execute": 1815.2,
      "binds": "execute"
     },
     {
@@ -295,7 +295,7 @@
      "output": 5,
      "store": 5.0,
      "elements": 56,
-     "execute": 1753.9,
+     "execute": 1762.3,
      "binds": "execute"
     },
     {
@@ -304,7 +304,7 @@
      "output": 13,
      "store": 13.0,
      "elements": 110,
-     "execute": 1071.6,
+     "execute": 1080.9,
      "binds": "execute"
     },
     {
@@ -313,7 +313,7 @@
      "output": 36,
      "store": 71.0,
      "elements": 731,
-     "execute": 2835.7,
+     "execute": 2837.5,
      "binds": "execute"
     },
     {
@@ -322,7 +322,7 @@
      "output": 21,
      "store": 21.0,
      "elements": 182,
-     "execute": 1217.9,
+     "execute": 1224.3,
      "binds": "execute"
     },
     {
@@ -331,7 +331,7 @@
      "output": 10,
      "store": 19.0,
      "elements": 88,
-     "execute": 2195.8,
+     "execute": 2199.9,
      "binds": "execute"
     },
     {
@@ -340,7 +340,7 @@
      "output": 772,
      "store": 1540.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "load"
     },
     {
@@ -349,61 +349,208 @@
      "output": 152,
      "store": 302.0,
      "elements": 200,
-     "execute": 542.0,
+     "execute": 537.4,
      "binds": "execute"
     }
    ],
-   "simulate_s": 23.830286502838135,
+   "simulate_s": 29.714366674423218,
    "build": "mf",
    "params": {},
-   "date": "2026-10-24"
+   "date": "2026-11-06"
+  },
+  "mf_holdout3": {
+   "header": "wf_vecunit_858521179.h",
+   "word_bits": 64,
+   "workload": "holdout3",
+   "tool": "2025.1",
+   "exact": true,
+   "failed": null,
+   "status_cycles": [
+    2089,
+    4046,
+    5317,
+    7962,
+    9572,
+    11237,
+    12035,
+    13006
+   ],
+   "intervals": [
+    1957,
+    1271,
+    2645,
+    1610,
+    1665,
+    798,
+    971
+   ],
+   "done_cycle": 13233,
+   "pysim_cycles": 13715.11886428187,
+   "pysim_status": [
+    2230.4,
+    4292.9,
+    5644.5,
+    8424.0,
+    10096.1,
+    11837.3,
+    12664.2,
+    13491.1
+   ],
+   "resources": {
+    "lut": 71809,
+    "ff": 45053,
+    "dsp": 53,
+    "bram": 40,
+    "clock_ns": 3.124
+   },
+   "meets_clock": true,
+   "schedule": {
+    "rung": [
+     14,
+     24
+    ],
+    "run": [
+     1,
+     24
+    ],
+    "deliver": [
+     1,
+     3
+    ],
+    "sgather": [
+     2,
+     2
+    ],
+    "srun": [
+     2,
+     39
+    ]
+   },
+   "bounds": [
+    {
+     "input": 204,
+     "load": 210.0,
+     "output": 103,
+     "store": 103.0,
+     "elements": 822,
+     "execute": 2023.6,
+     "binds": "execute"
+    },
+    {
+     "input": 22,
+     "load": 48.0,
+     "output": 12,
+     "store": 22.0,
+     "elements": 306,
+     "execute": 2053.0,
+     "binds": "execute"
+    },
+    {
+     "input": 24,
+     "load": 54.0,
+     "output": 13,
+     "store": 25.0,
+     "elements": 130,
+     "execute": 1340.3,
+     "binds": "execute"
+    },
+    {
+     "input": 124,
+     "load": 252.0,
+     "output": 63,
+     "store": 124.0,
+     "elements": 845,
+     "execute": 2719.1,
+     "binds": "execute"
+    },
+    {
+     "input": 126,
+     "load": 258.0,
+     "output": 64,
+     "store": 127.0,
+     "elements": 399,
+     "execute": 1671.1,
+     "binds": "execute"
+    },
+    {
+     "input": 40,
+     "load": 46.0,
+     "output": 21,
+     "store": 21.0,
+     "elements": 198,
+     "execute": 1740.2,
+     "binds": "execute"
+    },
+    {
+     "input": 400,
+     "load": 498.0,
+     "output": 323,
+     "store": 323.0,
+     "elements": 320,
+     "execute": 825.9,
+     "binds": "execute"
+    },
+    {
+     "input": 384,
+     "load": 780.0,
+     "output": 338,
+     "store": 674.0,
+     "elements": 288,
+     "execute": 658.7,
+     "binds": "load"
+    }
+   ],
+   "simulate_s": 21.49625325202942,
+   "build": "mf",
+   "params": {},
+   "date": "2026-11-06"
   },
   "mf_l8_steady": {
    "header": "wf_vecunit_1251563816.h",
    "word_bits": 64,
    "workload": "steady",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1440,
-    2767,
-    4094,
-    5421
+    1437,
+    2764,
+    4091,
+    5418
    ],
    "intervals": [
     1327,
     1327,
     1327
    ],
-   "done_cycle": 5679,
-   "pysim_cycles": 5181.651497707115,
+   "done_cycle": 5676,
+   "pysim_cycles": 5146.047000507268,
    "pysim_status": [
-    1337.6,
-    2533.6,
-    3729.6,
-    4925.7
+    1329.6,
+    2516.4,
+    3703.2,
+    4890.0
    ],
    "resources": {
-    "lut": 124052,
-    "ff": 81809,
+    "lut": 116238,
+    "ff": 76412,
     "dsp": 101,
-    "bram": 64,
+    "bram": 77,
     "clock_ns": 3.135
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -421,7 +568,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "load"
     },
     {
@@ -430,7 +577,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "load"
     },
     {
@@ -439,7 +586,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "load"
     },
     {
@@ -448,63 +595,63 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "load"
     }
    ],
-   "simulate_s": 3.4379281997680664,
+   "simulate_s": 6.914091110229492,
    "build": "mf_l8",
    "params": {
     "L": 8
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_steady": {
    "header": "wf_vecunit_858521179.h",
    "word_bits": 64,
    "workload": "steady",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1567,
-    2975,
-    4383,
-    5791
+    1604,
+    3068,
+    4532,
+    5996
    ],
    "intervals": [
-    1408,
-    1408,
-    1408
+    1464,
+    1464,
+    1464
    ],
-   "done_cycle": 6049,
-   "pysim_cycles": 6450.910194036384,
+   "done_cycle": 6254,
+   "pysim_cycles": 6433.417961017411,
    "pysim_status": [
-    1654.9,
-    3168.3,
-    4681.6,
-    6194.9
+    1651.4,
+    3160.1,
+    4668.8,
+    6177.4
    ],
    "resources": {
-    "lut": 74506,
-    "ff": 48342,
+    "lut": 71809,
+    "ff": 45053,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -522,7 +669,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -531,7 +678,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -540,7 +687,7 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -549,45 +696,45 @@
      "output": 1028,
      "store": 1028.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     }
    ],
-   "simulate_s": 7.52164888381958,
+   "simulate_s": 11.446471214294434,
    "trace": {
     "tasks": {
      "load": {
       "firings": 4,
       "spans": [
        1328,
-       1339,
-       1407,
-       1407
+       1411,
+       1463,
+       1463
       ],
       "first": 17,
-      "last": 5500
+      "last": 5684
      },
      "exec": {
       "firings": 4,
       "spans": [
-       1566,
-       1407,
-       1407,
-       1407
+       1603,
+       1463,
+       1463,
+       1463
       ],
       "first": 17,
-      "last": 5806
+      "last": 6011
      },
      "store": {
       "firings": 4,
       "spans": [
-       1827,
-       1407,
-       1407,
-       1407
+       1864,
+       1463,
+       1463,
+       1463
       ],
       "first": 17,
-      "last": 6067
+      "last": 6272
      }
     },
     "queues": {
@@ -595,26 +742,26 @@
       "producer": "load",
       "consumer": "exec",
       "blocks": 16,
-      "held": 9,
+      "held": 11,
       "slack": [
        15,
        -59,
-       -39,
-       -19,
-       -2,
-       22,
-       42,
-       49,
-       49,
-       49,
-       49,
-       49,
-       49,
-       49,
-       49,
-       49
+       -25,
+       9,
+       40,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61,
+       61
       ],
-      "waited": 0
+      "waited": 1
      },
      "qi1": {
       "producer": "load",
@@ -623,23 +770,23 @@
       "held": 0,
       "slack": [
        -246,
-       -113,
-       -93,
-       -73,
-       -52,
-       -32,
-       -12,
+       -108,
+       -74,
+       -40,
        -5,
-       -1,
-       -5,
-       -5,
-       -5,
-       -1,
-       -5,
-       -5,
-       -5
+       12,
+       12,
+       12,
+       16,
+       12,
+       12,
+       12,
+       16,
+       12,
+       12,
+       12
       ],
-      "waited": 0
+      "waited": 9
      },
      "qo0": {
       "producer": "exec",
@@ -671,62 +818,62 @@
      "s_in0": {
       "words": 4608,
       "first": 2,
-      "last": 5480,
-      "busy": 0.8410293849242563
+      "last": 5665,
+      "busy": 0.8135593220338984
      }
     },
     "binds": "exec"
    },
    "build": "mf",
    "params": {},
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_steady_nrx1": {
    "header": "wf_vecunit_858521179.h",
    "word_bits": 64,
    "workload": "steady_nrx1",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1138,
-    2230,
-    3322,
-    4414
+    1184,
+    2332,
+    3480,
+    4628
    ],
    "intervals": [
-    1092,
-    1092,
-    1092
+    1148,
+    1148,
+    1148
    ],
-   "done_cycle": 4482,
-   "pysim_cycles": 4913.062921683907,
+   "done_cycle": 4695,
+   "pysim_cycles": 4877.073377289952,
    "pysim_status": [
-    1261.0,
-    2457.0,
-    3653.1,
-    4849.1
+    1252.6,
+    2439.4,
+    3626.3,
+    4813.1
    ],
    "resources": {
-    "lut": 74506,
-    "ff": 48342,
+    "lut": 71809,
+    "ff": 45053,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -744,7 +891,7 @@
      "output": 132,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -753,7 +900,7 @@
      "output": 132,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -762,7 +909,7 @@
      "output": 132,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -771,61 +918,61 @@
      "output": 132,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     }
    ],
-   "simulate_s": 6.571090221405029,
+   "simulate_s": 8.615031957626343,
    "build": "mf",
    "params": {},
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_steady_nrx4": {
    "header": "wf_vecunit_858521179.h",
    "word_bits": 64,
    "workload": "steady_nrx4",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1138,
-    2230,
-    3322,
-    4414
+    1184,
+    2332,
+    3480,
+    4628
    ],
    "intervals": [
-    1092,
-    1092,
-    1092
+    1148,
+    1148,
+    1148
    ],
-   "done_cycle": 4544,
-   "pysim_cycles": 4977.062921683907,
+   "done_cycle": 4758,
+   "pysim_cycles": 4941.073377289953,
    "pysim_status": [
-    1261.0,
-    2457.0,
-    3653.1,
-    4849.1
+    1252.6,
+    2439.4,
+    3626.3,
+    4813.1
    ],
    "resources": {
-    "lut": 74506,
-    "ff": 48342,
+    "lut": 71809,
+    "ff": 45053,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -843,7 +990,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -852,7 +999,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -861,7 +1008,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -870,61 +1017,61 @@
      "output": 516,
      "store": 516.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     }
    ],
-   "simulate_s": 7.167508602142334,
+   "simulate_s": 7.686545133590698,
    "build": "mf",
    "params": {},
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_v16_steady": {
    "header": "wf_vecunit_674895660.h",
    "word_bits": 64,
    "workload": "steady",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    834,
-    1666,
-    2498,
-    3330
+    890,
+    1778,
+    2666,
+    3554
    ],
    "intervals": [
-    832,
-    832,
-    832
+    888,
+    888,
+    888
    ],
-   "done_cycle": 3396,
-   "pysim_cycles": 3875.4811037952495,
+   "done_cycle": 3620,
+   "pysim_cycles": 3816.5146824788144,
    "pysim_status": [
-    985.1,
-    1927.3,
-    2869.4,
-    3811.5
+    938.9,
+    1876.8,
+    2814.6,
+    3752.5
    ],
    "resources": {
-    "lut": 74334,
-    "ff": 48224,
+    "lut": 71765,
+    "ff": 46132,
     "dsp": 53,
-    "bram": 32,
+    "bram": 24,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -942,7 +1089,7 @@
      "output": 260,
      "store": 260.0,
      "elements": 192,
-     "execute": 941.1,
+     "execute": 936.9,
      "binds": "execute"
     },
     {
@@ -951,7 +1098,7 @@
      "output": 260,
      "store": 260.0,
      "elements": 192,
-     "execute": 941.1,
+     "execute": 936.9,
      "binds": "execute"
     },
     {
@@ -960,7 +1107,7 @@
      "output": 260,
      "store": 260.0,
      "elements": 192,
-     "execute": 941.1,
+     "execute": 936.9,
      "binds": "execute"
     },
     {
@@ -969,90 +1116,90 @@
      "output": 260,
      "store": 260.0,
      "elements": 192,
-     "execute": 941.1,
+     "execute": 936.9,
      "binds": "execute"
     }
    ],
-   "simulate_s": 3.0998876094818115,
+   "simulate_s": 9.89516544342041,
    "build": "mf_v16",
    "params": {
     "VLMAX": 16
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_v256_calib": {
    "header": "wf_vecunit_1803519929.h",
    "word_bits": 64,
    "workload": "calib",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1424,
-    4382,
-    7246,
-    8108,
-    10130,
-    13173,
-    14145,
-    15497,
-    18167,
-    19677,
-    20491,
-    21850,
-    22859
+    1484,
+    4569,
+    7609,
+    8539,
+    10683,
+    13876,
+    14936,
+    16396,
+    19250,
+    20832,
+    21641,
+    23000,
+    24008
    ],
    "intervals": [
-    2958,
-    2864,
-    862,
-    2022,
-    3043,
-    972,
-    1352,
-    2670,
-    1510,
-    814,
+    3085,
+    3040,
+    930,
+    2144,
+    3193,
+    1060,
+    1460,
+    2854,
+    1582,
+    809,
     1359,
-    1009
+    1008
    ],
-   "done_cycle": 22995,
-   "pysim_cycles": 24340.501113780883,
+   "done_cycle": 24143,
+   "pysim_cycles": 24397.336010663497,
    "pysim_status": [
-    1590.5,
-    4764.4,
-    7919.3,
-    8894.0,
-    11122.2,
-    14480.8,
-    15578.7,
-    17089.1,
-    20058.9,
-    21714.0,
-    22283.5,
-    23211.5,
-    24212.5
+    1594.0,
+    4772.9,
+    7936.7,
+    8916.9,
+    11154.3,
+    14520.9,
+    15621.3,
+    17139.7,
+    20113.6,
+    21769.5,
+    22337.7,
+    23268.3,
+    24269.3
    ],
    "resources": {
-    "lut": 74688,
-    "ff": 48361,
+    "lut": 71991,
+    "ff": 45557,
     "dsp": 53,
-    "bram": 44,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -1070,7 +1217,7 @@
      "output": 87,
      "store": 87.0,
      "elements": 519,
-     "execute": 1416.5,
+     "execute": 1419.2,
      "binds": "execute"
     },
     {
@@ -1079,7 +1226,7 @@
      "output": 62,
      "store": 123.0,
      "elements": 1352,
-     "execute": 3115.8,
+     "execute": 3118.4,
      "binds": "execute"
     },
     {
@@ -1088,7 +1235,7 @@
      "output": 23,
      "store": 45.0,
      "elements": 902,
-     "execute": 3135.8,
+     "execute": 3142.4,
      "binds": "execute"
     },
     {
@@ -1097,7 +1244,7 @@
      "output": 6,
      "store": 11.0,
      "elements": 66,
-     "execute": 972.6,
+     "execute": 975.8,
      "binds": "execute"
     },
     {
@@ -1106,7 +1253,7 @@
      "output": 43,
      "store": 85.0,
      "elements": 764,
-     "execute": 2189.1,
+     "execute": 2196.0,
      "binds": "execute"
     },
     {
@@ -1115,7 +1262,7 @@
      "output": 48,
      "store": 95.0,
      "elements": 1145,
-     "execute": 3314.6,
+     "execute": 3320.2,
      "binds": "execute"
     },
     {
@@ -1124,7 +1271,7 @@
      "output": 9,
      "store": 9.0,
      "elements": 60,
-     "execute": 1096.9,
+     "execute": 1099.4,
      "binds": "execute"
     },
     {
@@ -1133,7 +1280,7 @@
      "output": 6,
      "store": 10.0,
      "elements": 74,
-     "execute": 1509.3,
+     "execute": 1517.4,
      "binds": "execute"
     },
     {
@@ -1142,7 +1289,7 @@
      "output": 58,
      "store": 115.0,
      "elements": 736,
-     "execute": 2968.9,
+     "execute": 2972.9,
      "binds": "execute"
     },
     {
@@ -1151,7 +1298,7 @@
      "output": 70,
      "store": 139.0,
      "elements": 615,
-     "execute": 1654.1,
+     "execute": 1654.9,
      "binds": "execute"
     },
     {
@@ -1160,7 +1307,7 @@
      "output": 513,
      "store": 513.0,
      "elements": 384,
-     "execute": 568.5,
+     "execute": 567.2,
      "binds": "load"
     },
     {
@@ -1169,7 +1316,7 @@
      "output": 501,
      "store": 1001.0,
      "elements": 600,
-     "execute": 782.7,
+     "execute": 781.2,
      "binds": "load"
     },
     {
@@ -1178,63 +1325,63 @@
      "output": 65,
      "store": 129.0,
      "elements": 128,
-     "execute": 298.8,
+     "execute": 296.5,
      "binds": "execute"
     }
    ],
-   "simulate_s": 15.5287926197052,
+   "simulate_s": 34.648170709609985,
    "build": "mf_v256",
    "params": {
     "VLMAX": 256
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_v256_steady": {
    "header": "wf_vecunit_1803519929.h",
    "word_bits": 64,
    "workload": "steady",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    5731,
-    10898,
-    16065,
-    21232
+    5726,
+    10893,
+    16060,
+    21227
    ],
    "intervals": [
     5167,
     5167,
     5167
    ],
-   "done_cycle": 22258,
-   "pysim_cycles": 20069.51127565498,
+   "done_cycle": 22253,
+   "pysim_cycles": 20069.209774484825,
    "pysim_status": [
-    5221.5,
-    9829.5,
-    14437.5,
-    19045.5
+    5221.2,
+    9829.2,
+    14437.2,
+    19045.2
    ],
    "resources": {
-    "lut": 74688,
-    "ff": 48361,
+    "lut": 71991,
+    "ff": 45557,
     "dsp": 53,
-    "bram": 44,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -1252,7 +1399,7 @@
      "output": 4100,
      "store": 4100.0,
      "elements": 3072,
-     "execute": 3797.2,
+     "execute": 3790.8,
      "binds": "load"
     },
     {
@@ -1261,7 +1408,7 @@
      "output": 4100,
      "store": 4100.0,
      "elements": 3072,
-     "execute": 3797.2,
+     "execute": 3790.8,
      "binds": "load"
     },
     {
@@ -1270,7 +1417,7 @@
      "output": 4100,
      "store": 4100.0,
      "elements": 3072,
-     "execute": 3797.2,
+     "execute": 3790.8,
      "binds": "load"
     },
     {
@@ -1279,11 +1426,11 @@
      "output": 4100,
      "store": 4100.0,
      "elements": 3072,
-     "execute": 3797.2,
+     "execute": 3790.8,
      "binds": "load"
     }
    ],
-   "simulate_s": 6.831686496734619,
+   "simulate_s": 15.044201850891113,
    "trace": {
     "tasks": {
      "load": {
@@ -1300,24 +1447,24 @@
      "exec": {
       "firings": 4,
       "spans": [
-       5730,
+       5725,
        5166,
        5166,
        5166
       ],
       "first": 17,
-      "last": 21247
+      "last": 21242
      },
      "store": {
       "firings": 4,
       "spans": [
-       6759,
+       6754,
        5166,
        5166,
        5166
       ],
       "first": 17,
-      "last": 22276
+      "last": 22271
      }
     },
     "queues": {
@@ -1353,21 +1500,21 @@
       "held": 0,
       "slack": [
        -1014,
-       -689,
-       -689,
-       -689,
-       -688,
-       -689,
-       -689,
-       -689,
-       -688,
-       -689,
-       -689,
-       -689,
-       -688,
-       -689,
-       -689,
-       -689
+       -684,
+       -684,
+       -684,
+       -683,
+       -684,
+       -684,
+       -684,
+       -683,
+       -684,
+       -684,
+       -684,
+       -683,
+       -684,
+       -684,
+       -684
       ],
       "waited": 0
      },
@@ -1401,8 +1548,8 @@
      "s_in0": {
       "words": 18432,
       "first": 2,
-      "last": 20665,
-      "busy": 0.89198606271777
+      "last": 20666,
+      "busy": 0.8919428986208565
      }
     },
     "binds": "load"
@@ -1411,54 +1558,54 @@
    "params": {
     "VLMAX": 256
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_w128_steady": {
    "header": "wf_vecunit_929754547.h",
    "word_bits": 128,
    "workload": "steady",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1455,
-    2863,
-    4271,
-    5679
+    1500,
+    2964,
+    4428,
+    5892
    ],
    "intervals": [
-    1408,
-    1408,
-    1408
+    1464,
+    1464,
+    1464
    ],
-   "done_cycle": 5808,
-   "pysim_cycles": 6230.321618013176,
+   "done_cycle": 6021,
+   "pysim_cycles": 6228.444337800095,
    "pysim_status": [
-    1562.4,
-    3075.7,
-    4589.0,
-    6102.3
+    1574.5,
+    3083.1,
+    4591.8,
+    6100.4
    ],
    "resources": {
-    "lut": 74450,
-    "ff": 48853,
+    "lut": 71718,
+    "ff": 45000,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -1476,7 +1623,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -1485,7 +1632,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -1494,7 +1641,7 @@
      "output": 516,
      "store": 516.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     },
     {
@@ -1503,63 +1650,63 @@
      "output": 516,
      "store": 516.0,
      "elements": 768,
-     "execute": 1512.3,
+     "execute": 1507.7,
      "binds": "execute"
     }
    ],
-   "simulate_s": 6.497768878936768,
+   "simulate_s": 9.305373668670654,
    "build": "mf_w128",
    "params": {
     "word_bits": 128
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   },
   "mf_w128_steady_nrx1": {
    "header": "wf_vecunit_929754547.h",
    "word_bits": 128,
    "workload": "steady_nrx1",
-   "tool": "2024.1",
+   "tool": "2025.1",
    "exact": true,
    "failed": null,
    "status_cycles": [
-    1139,
-    2231,
-    3323,
-    4415
+    1184,
+    2332,
+    3480,
+    4628
    ],
    "intervals": [
-    1092,
-    1092,
-    1092
+    1148,
+    1148,
+    1148
    ],
-   "done_cycle": 4483,
-   "pysim_cycles": 4897.062921683907,
+   "done_cycle": 4695,
+   "pysim_cycles": 4877.073377289953,
    "pysim_status": [
-    1245.0,
-    2441.0,
-    3637.1,
-    4833.1
+    1252.6,
+    2439.4,
+    3626.3,
+    4813.1
    ],
    "resources": {
-    "lut": 74450,
-    "ff": 48853,
+    "lut": 71718,
+    "ff": 45000,
     "dsp": 53,
-    "bram": 32,
+    "bram": 40,
     "clock_ns": 3.124
    },
    "meets_clock": true,
    "schedule": {
     "rung": [
-     12,
-     14
+     14,
+     24
     ],
     "run": [
      1,
      24
     ],
     "deliver": [
-     3,
-     6
+     1,
+     3
     ],
     "sgather": [
      2,
@@ -1577,7 +1724,7 @@
      "output": 68,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -1586,7 +1733,7 @@
      "output": 68,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -1595,7 +1742,7 @@
      "output": 68,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     },
     {
@@ -1604,16 +1751,17 @@
      "output": 68,
      "store": 260.0,
      "elements": 512,
-     "execute": 1195.0,
+     "execute": 1185.8,
      "binds": "execute"
     }
    ],
-   "simulate_s": 3.5789618492126465,
+   "simulate_s": 8.38383936882019,
    "build": "mf_w128",
    "params": {
     "word_bits": 128
    },
-   "date": "2026-10-24"
+   "date": "2026-11-06"
   }
- }
+ },
+ "pysim_fields": "pysim_cycles, pysim_status and bounds recomputed 2026-11-06 with the timing filed on xczu48dr_250mhz_vitis2025_1 (they were first recorded with pysim's default timing, before the fit)"
 }

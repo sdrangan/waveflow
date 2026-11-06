@@ -19,7 +19,8 @@ them; the standalone unit takes `S` in its messages.
 
 **Status.** This unit is part of the MIMO-CG example (`examples/mimo_cg`), which pairs it with the
 older `SystolicUnit`. Until that example moves to the systolic engine, its tests are quarantined
-(`tests/conftest.py`), and this page describes the unit as it was measured with Vitis HLS 2024.1.
+(`tests/conftest.py`), and this page describes the unit as it was measured with Vitis HLS / Vivado
+xsim 2025.1 (`plans/calib_2025_1.md` Stage 4).
 
 The bit-exact model is `waveflow.linalg.cg`. The pysim modules call it, and the HLS body equals it
 in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at RTL. For what the
@@ -283,19 +284,19 @@ for op in (CgOp.START, CgOp.STEP):
 ```
 
 ```text
-cg_vector_rx_task       lut= 1090 ff=  485 dsp=    1 bram=    0
-cg_vector_load_task     lut= 3010 ff= 1078 dsp=    1 bram=    0
-cg_vector_task          lut=15091 ff= 9352 dsp=   49 bram=    0
-cg_vector_store_task    lut= 1890 ff=  832 dsp=    1 bram=    0
-cg_vector_unit_channels lut= 2628 ff= 2606 dsp=    0 bram=   20
-total                   lut=23709 ff=14353 dsp=   52 bram=   20
-START 475 196
-STEP 1420 1141
+cg_vector_rx_task       lut= 1043 ff=  464 dsp=    1 bram=    0
+cg_vector_load_task     lut= 3012 ff= 1081 dsp=    1 bram=    0
+cg_vector_task          lut=15014 ff= 9419 dsp=   49 bram=    0
+cg_vector_store_task    lut= 1884 ff=  828 dsp=    1 bram=    0
+cg_vector_unit_channels lut= 2208 ff= 2182 dsp=    0 bram=   28
+total                   lut=23161 ff=13974 dsp=   52 bram=   28
+START 218 205
+STEP 1130 1116
 ```
 
-This configuration was a calibration build. Measured with Vitis HLS / Vivado xsim 2024.1
-(`examples/mimo_cg/paper_data/cg_modules.csv` and `cg_cycles.csv`), it took 24,224 LUT, 14,482 FF,
-52 DSP and 20 block RAM, and its `8 × 32` steps came 1,411 to 1,413 cycles apart.
+This configuration was a calibration build. Measured with Vitis HLS / Vivado xsim 2025.1
+(`examples/mimo_cg/paper_data/cg_modules.csv` and `cg_cycles.csv`), it took 23,672 LUT, 14,096 FF,
+52 DSP and 28 block RAM, and its `8 × 32` steps came 1,130 cycles apart.
 
 ## Building and testing it
 
@@ -346,9 +347,10 @@ inside them.
 | receiver | 1 (index product) | none | the word width |
 | loader | 1 | none | `L·W`, `L·log₂L·W`, `W` over `B` and `S` |
 | store | 1 | none | `L·W`, `L·log₂L·W`, `W` over `P` and `X`, the word width |
-| channels | none | the four stream-of-blocks buffers, by the buffer rule measured in the linear-algebra calibration; plus the `m_axi` adapters: 8 with 64-bit words, 4 with 32-bit | the word width |
+| channels | none | the four stream-of-blocks buffers, by the buffer rule measured in the linear-algebra calibration; plus the `m_axi` adapters: 16 with 64-bit words, 12 with 32-bit (fitted at 2025.1) | the word width |
 
-The binding of narrow multiplies to LUTs is Vitis HLS 2024.1's on this part, kept with the model.
+The binding of narrow multiplies to LUTs is Vitis HLS's on this part (measured at 2024.1, and the
+DSP count is exact on every 2025.1 held-out build), kept with the model.
 `cg_cost.predict_unit(unit)` gives each part and the sum; or
 `top.add_rm(cost.platform())` and `compose(top)`, where the `CgVectorUnit` carries its channels.
 
@@ -377,7 +379,7 @@ in: the receiver answers a request before draining it, so the gap follows the pr
 **Simulated time.** pysim takes its time from the same model: the core spends the intercept and
 its compute terms per `START` and per `STEP` (`cg_cost.core_interval`). Transfers take a word per
 cycle and overlap the compute, so a stream sent straight to the unit runs at the core's share in
-pysim: 1,141 cycles per step for the job of the example, where the memory-fed sum is 1,420.
+pysim: 1,116 cycles per step for the job of the example, where the memory-fed sum is 1,130.
 
 ### Calibration and accuracy
 
@@ -387,33 +389,41 @@ both sides of the block-RAM threshold, and other widths at many lanes. Each buil
 4 ns for `xczu48dr-ffvg1517-2-e` and simulated at RTL on four job shapes, each twice back to back,
 a job with a rejected request inside it, and rejected requests after served ones and back to back.
 Every reply was checked bit for bit. One fitted term, `start_groups`, was added on the calibration
-builds before the models were frozen.
+builds before the models were frozen. The models were refitted on the same builds at Vitis 2025.1.
+There, 13 of the 43 builds -- every one with one lane, most with two at 64-bit words -- at first sent
+no reply at all: csynth 2025.1 merged the loader's loop over the `S` matrices into its word loop,
+breaking the hand-off of each `S` block to the core. `#pragma HLS LOOP_FLATTEN off` on that loop
+(`cg_vector_load_task.h`, commit `200ed10b`) made all 43 bit-exact.
 
-The models were then frozen and scored on **12 held-out builds**, drawn at random with a fixed
-seed from the parameter space minus the calibration builds and committed before the campaign ran.
-All 12 were bit-exact at RTL. The scores (Vitis HLS / Vivado xsim 2024.1;
-`examples/mimo_cg/paper_data/cg_validation_metrics.csv`, per build in `cg_validation.csv`):
+The models were then frozen and scored once on **12 held-out builds**, drawn at random with a
+fixed seed from the parameter space minus the calibration builds and committed before the 2025.1
+campaign ran. All 12 were bit-exact at RTL. The scores (Vitis HLS / Vivado xsim 2025.1;
+`examples/mimo_cg/paper_data/cg_validation_metrics_v2.csv`, per build in `cg_validation_v2.csv`):
 
 | Quantity | Unit | Core |
 |---|---|---|
 | DSP exact | 100% of builds | 100% of builds |
-| block RAM exact | 100% of builds | 100% of builds |
-| LUT, mean error (worst) | 2.6% (6.4%) | 1.3% (3.2%) |
-| FF, mean error (worst) | 4.3% (8.3%) | 5.1% (17.4%) |
-| served intervals, mean error (worst) | 2.0% (30.8%) | |
+| block RAM exact | 8% of builds | 100% of builds |
+| LUT, mean error (worst) | 4.1% (6.5%) | 1.8% (5.8%) |
+| FF, mean error (worst) | 5.3% (12.4%) | 7.6% (18.4%) |
+| served intervals, mean error (worst) | 14.3% (141.1%) | |
 
-The three RTL runs of `tests/linalg/test_cg_vector_unit.py`, predicted as the sum of their
-requests' intervals: centre 14,007.5 cycles against 14,070 measured (0.4%), smallest 2.4%, stress
-1.8% (`paper_data/cg_unit_8_3_cycles.csv`). Every one of the 43 builds met 4 ns in synthesis
+Two parts miss. The unit's block RAM is in its channels, priced by the linear-algebra buffer rule,
+which is Vitis 2024.1's binding. And the cycle model's form describes a unit that no longer exists:
+a fix of October 2026 made the receiver-to-store channel two reply headers deep, so the unit now
+overlaps consecutive jobs, while the form's terms were fitted to a unit that serialized them. The
+three RTL runs of `tests/linalg/test_cg_vector_unit.py` pass bit-exact at 2025.1; their recorded
+cycles (`paper_data/cg_unit_8_3_cycles.csv`) predate that fix and the gates' current scenarios, so
+the sum-of-intervals check was not re-scored. Every one of the 43 builds met 4 ns in synthesis
 (estimated 3.352 ns, `cg_builds.csv`). The study tooling is `examples/mimo_cg/hw/cg_cal.py`.
 
 ## Limits
 
 * **One tool version, one part, one clock.** The cost models describe Vitis HLS / Vivado xsim
-  2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+  2025.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
 * **Steady intervals only.** The model gives the time a message adds to a stream. The first reply
-  after reset comes later: on the held-out builds it came 38 to 115 cycles after the model's steady
-  `START` interval (`cg_validation_metrics.csv`).
+  after reset comes later: on the held-out builds it came 66 to 1,069 cycles after the model's steady
+  `START` interval (`cg_validation_metrics_v2.csv`).
 * **The calibrated range.** The calibration builds spanned `Kmax` in {4, 8, 16} with `nitmax =
   Kmax`, `Nmax` in {16, 32}, `L` in {1, 2, 4, 8, 16}, the example's formats with vector width `W` in
   {8, 10, 12, 14, 16} and guard `g` in {0, 4, 8} (`ps` and `rz` `W + g` bits, `g_div` 6) and its
@@ -421,8 +431,8 @@ requests' intervals: centre 14,007.5 cycles against 14,070 measured (0.4%), smal
   outside this range was measured.
 * **Rejections after rejections.** A rejected request after another rejection is priced from the
   previous request's drain, which misses chains of overlaps: on the held-out builds such requests
-  were off by 26% on average and 84% at worst, a few dozen cycles each. Right after a served
-  request, a rejection was off by 9.3% on average.
+  were off by 19% on average and 86% at worst. Right after a served request, a rejection was off by
+  11.3% on average.
 * **`S` comes from outside.** The standalone unit takes `S` in its messages. The loop closed
   around a systolic multiply is not tested here.
 * **A job must finish.** A job in progress waits for its next valid `STEP`; a client that abandons a
@@ -433,7 +443,7 @@ requests' intervals: centre 14,007.5 cycles against 14,070 measured (0.4%), smal
 * **The cycle model's setting.** The sum form was measured with the unit fed from memory. pysim
   overlaps transfers with compute, and a unit fed straight from a stream at RTL is untested.
 * **Back-pressure.** Every RTL test drains `s_out` with an always-ready sink.
-* **C-simulation of a design with the core.** Vitis HLS 2024.1's threaded C-simulation hands a
+* **C-simulation of a design with the core.** Vitis HLS's threaded C-simulation (seen at 2024.1) hands a
   stream-of-blocks block to its reader as soon as the writer acquires it; the tests C-simulate the
   task bodies one after another.
 * **Reported confidence.** `compose` reports the fitted LUT and FF as `UNCALIBRATED` (the

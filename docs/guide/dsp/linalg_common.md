@@ -140,14 +140,15 @@ holds.
 ## Cost data
 
 The calibrated cost models live in a packaged [platform](../platform/),
-`waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/`, whose name carries the part, the clock
+`waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1/`, whose name carries the part, the clock
 and the tool version that the numbers belong to:
 
 | Path | Holds |
 |---|---|
-| `platform.json` | the part (`xczu48dr-ffvg1517-2-e`), the clock (250 MHz) and the tool (Vitis HLS / Vivado xsim 2024.1) |
+| `platform.json` | the part (`xczu48dr-ffvg1517-2-e`), the clock (250 MHz) and the tool (Vitis HLS / Vivado xsim 2025.1) |
 | `models/<task>/params.json` | each task's fitted resource model, in the framework's layout, so a composed estimate (`add_rm`, then `compose()`) prices a design that contains the task |
 | `models/systolic_unit_channels/params.json`, `models/cg_vector_unit_channels/params.json` | each unit's channels: its stream-of-blocks buffers, FIFOs and memory adapters |
+| `models/systolic_engine_*/params.json` | the [systolic engine](systolic/systolic_engine.md)'s resource model: one per task, and the composites' own buffers and FIFOs (`systolic_engine_channels`) |
 | `components/systolic_unit/params.json`, `components/cg_vector_unit/params.json` | each unit's cycle model, per message |
 | `provenance.json` | per component, the tool, the step and model version, and the builds the models were fitted on |
 
@@ -155,6 +156,18 @@ A model measured with one tool version describes that version only. The componen
 refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost` and
 `cg_cost` read only this one. Pricing another part, clock or tool version takes a new calibration and a
 platform of its own; [the CG page](./cg_vector.md#calibration-and-accuracy) describes how this one was
-calibrated, and the systolic unit's half of the same study is in `examples/mimo_cg/paper_data/`. The
-[systolic engine](systolic/systolic_engine.md) is not in this platform: it is to be calibrated with
-Vitis 2025.1.
+calibrated, and the systolic unit's half of the same study is in `examples/mimo_cg/paper_data/`.
+
+**How well the units' models hold at 2025.1** (`plans/calib_2025_1.md` Stage 4, each scored once on
+builds held out of the fit). DSP is exact on every held-out build, LUT and FF within 2.7 to 5.3 %
+mean. Two parts miss. The units' channel block RAM is exact on 1 of 12 builds: its rule
+(`cost.buffer_blocks`) is Vitis 2024.1's binding. And the cycle models miss -- the systolic unit's
+intervals by 10.6 % mean, the CG unit's by 14.3 % -- because a fix of October 2026 made both units
+overlap consecutive jobs (the receiver-to-store channel two reply headers deep), while the models'
+form was fitted to units that serialized them. Both units have been set aside since that month
+(`tests/conftest.py`, until the MIMO-CG example moves to the systolic engine).
+
+The systolic engine's resources are on the platform too: DSP and BRAM18 by rule, exact on all 23
+calibration builds, LUT and FF fitted per task, and on the two builds held out 3.7 % and 3.3 % mean
+(`examples/systolic/engine_resources.py`; [its resources](../../examples/systolic/resource.md)). Its
+core's timing is calibrated per configuration in `waveflow/linalg/calib/modules/`.

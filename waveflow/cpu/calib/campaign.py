@@ -6,7 +6,7 @@ row to ``cpu/<kernel>/corpus.csv`` as it lands — so an interrupted campaign re
 A point whose program output disagrees with its Python twin is still recorded (with
 ``output_matches_twin = False``) and reported: it is evidence, not something to drop.
 
-    python -m waveflow.cpu.calib.campaign --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1
+    python -m waveflow.cpu.calib.campaign --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1
 """
 
 from __future__ import annotations

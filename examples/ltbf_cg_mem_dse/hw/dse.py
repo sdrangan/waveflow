@@ -147,9 +147,12 @@ def shortest_period(cfg, timing, n: int) -> float:
 
 
 def _pool():
+    """The simulator's worker pool: 4 workers, or ``LTBF_DSE_WORKERS``.  A fidelity worker grows to
+    about 12 GB, so on a 31 GB machine run 2 (four were OOM-killed at 2025.1, and a pool whose worker
+    is killed waits on its task forever)."""
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
-    return mp.get_context("spawn").Pool(4)
+    return mp.get_context("spawn").Pool(int(os.environ.get("LTBF_DSE_WORKERS", "4")))
 
 
 def time_tables() -> tuple[list[dict], list[dict]]:

@@ -21,6 +21,7 @@ import sys
 from typing import List, Optional, Sequence
 
 from waveflow.toolchain.toolchain import (
+    CALIBRATED_TOOL_VERSION,
     MIN_TOOL_VERSION,
     VITIS_PATH_ENV,
     ToolInfo,
@@ -28,6 +29,7 @@ from waveflow.toolchain.toolchain import (
 )
 
 _MIN_VERSION_STR = f"{MIN_TOOL_VERSION[0]}.{MIN_TOOL_VERSION[1]}"
+_CALIBRATED_STR = f"{CALIBRATED_TOOL_VERSION[0]}.{CALIBRATED_TOOL_VERSION[1]}"
 
 
 def _status(info: ToolInfo) -> str:
@@ -37,6 +39,8 @@ def _status(info: ToolInfo) -> str:
         return "TOO OLD"
     if info.meets_min is None:
         return "FOUND (version unknown)"
+    if info.above_calibrated:
+        return f"OK (newer than the calibrated {_CALIBRATED_STR})"
     return "OK"
 
 
@@ -119,6 +123,15 @@ def report_amd_tools(check_versions: bool = True) -> int:
         versions = ", ".join(f"{i.name} {i.version}" for i in infos)
         lines.append(f"All tools found: {versions}.")
         lines.append(f"Waveflow is ready for synthesis (minimum {_MIN_VERSION_STR}).")
+        newer = [i for i in infos if i.above_calibrated]
+        if newer:
+            names = " and ".join(f"{i.name} {i.version}" for i in newer)
+            lines.append("")
+            verb = "are" if len(newer) > 1 else "is"
+            lines.append(f"WARNING: {names} {verb} newer than {_CALIBRATED_STR}, the release Waveflow's")
+            lines.append("platforms were calibrated with.  It runs, but its cycle counts and resources")
+            lines.append("can differ from what the platforms predict (2024.1 against 2025.1 moved some")
+            lines.append(f"parts by over 10 %); a recorded number must come from {_CALIBRATED_STR}.")
 
     lines.append("")
     print("\n".join(lines))

@@ -4,7 +4,7 @@
 1 MiB on-chip gate), each the whole system -- the systolic wrapper, the vector unit's, the Ingest DMA,
 the Resp hub, the crossbar and Shared Mem -- built at its parameters in its own root
 (``hw/build/fin_<name>/``) and taken through the system flow's synthesis with placement and routing
-(``SystemSynthStep(impl=True)``, Vivado 2024.1, the xczu48dr at 4 ns):
+(``SystemSynthStep(impl=True)``, Vivado 2025.1, the xczu48dr at 4 ns):
 
 * ``F1`` -- the DSE's cheapest pick at 8x8 (``dse_decisions.csv``: a 2 x 4 array, ``W`` 12, 2 lanes;
   built with the explicit form's buffers, the hardware of the factored pick too);

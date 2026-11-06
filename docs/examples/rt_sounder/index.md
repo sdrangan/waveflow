@@ -114,7 +114,7 @@ example's I/Q gate: 128 MSa/s, 8 blocks of 256 samples.
   `rf_loopback`'s `rf_pass_through` RTL, used as it is.
 
 That pass-through reads a whole 64-word block before it writes one, so while the DAC paces its writes
-the ADC's words have nowhere to go. At RTL it drops 164 of the 1024 words, in 9 gaps, and 6 data
+the ADC's words have nowhere to go. At RTL it drops 169 of the 1024 words, in 9 gaps, and 6 data
 blocks reach the sink, among 31 grid periods. The first survives whole; the rest are spliced across
 source blocks at the gaps. So the gate checks every word: each one that reaches the sink is the
 matching word of the quantized source, in order, and the words between are exactly the recorded

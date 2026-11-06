@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PLATFORM = "waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1"
+PLATFORM = "waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1"
 _TASKS = (
     "systolic_rx_task", "systolic_load_task", "systolic_core_task", "systolic_store_task",
     "cg_vector_rx_task", "cg_vector_load_task", "cg_vector_task", "cg_vector_store_task",
@@ -52,6 +52,11 @@ MANIFEST = (
     # the vector unit's calibrated timing and resource models (plans/vecunit_new.md, Stage 7)
     f"{PLATFORM}/models/vecunit_timing/params.json",
     f"{PLATFORM}/models/vecunit_resources/params.json",
+    # the systolic engine's resource model, a model per task and the composites' shares
+    # (plans/calib_2025_1.md Stage 4)
+    *(f"{PLATFORM}/models/systolic_engine_{t}/params.json"
+      for t in ("rx_task", "load_a_task", "load_b_task", "core_task", "collect_task", "store_task",
+                "seq_task", "feed_task", "writer_task", "channels")),
     # the systolic engine core's calibrated timed phase, one record per configuration (by identity)
     *(p.relative_to(ROOT).as_posix()
       for p in (ROOT / "waveflow/linalg/calib/modules").glob("engine_core-*/**/*") if p.is_file()),

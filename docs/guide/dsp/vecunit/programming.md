@@ -184,11 +184,11 @@ print("statuses at cycles", [round(c) for c in cycles])
 ```
 
 ```text
-statuses at cycles [138, 243, 347, 452]
+statuses at cycles [137, 240, 342, 445]
 ```
 
-The first job takes about 138 cycles, its load and its execute one after the other; after that a job
-finishes every 105 cycles, its execute time, because the next job's load overlaps it. To check pysim's
+The first job takes about 137 cycles, its load and its execute one after the other; after that a job
+finishes every 103 cycles, its execute time, because the next job's load overlaps it. To check pysim's
 outputs against the interpreter, `harness(unit, workload=kind)` runs the system and its sinks hold
 every word; `unit.golden(kind)` is what they must hold (`tests/examples/test_vecunit_toy.py` does
 this). The same unit runs at RTL through `waveflow.vecunit.build.build_dag`

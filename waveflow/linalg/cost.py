@@ -11,9 +11,11 @@ its tasks plus its channels (:func:`predict_channels`): the three stream-of-bloc
 per word width, and LUT/FF fitted on the word width).
 
 Some rules are the tool's binding, not device geometry, and are kept here with their tool
-version (Vitis HLS 2024.1 on ``xczu48dr``, measured on the calibration builds): the
-four-multiply form's DSPs per element (:func:`form4_dsps_per_element`: narrow multiplies are packed),
-and the shapes of the stream-of-blocks buffers (:func:`buffer_blocks`).
+version (measured on the calibration builds on ``xczu48dr``): the four-multiply form's DSPs per
+element (:func:`form4_dsps_per_element`: narrow multiplies are packed; Vitis HLS 2024.1, and exact on
+every 2025.1 held-out build), and the shapes of the stream-of-blocks buffers (:func:`buffer_blocks`:
+Vitis HLS 2024.1's binding -- at 2025.1 the unit's block RAM is exact on 1 of 12 held-out builds,
+``plans/calib_2025_1.md`` Stage 4).
 
 Cycles
 ------
@@ -27,19 +29,20 @@ transposing load (:func:`fit_message_model`: least squares).  A rejected request
 ``r0 + r1·w_in`` (its payload is drained), fitted on rejected requests sent back to back
 (:func:`fit_reject_model`).
 
-**This cycle model describes the unit before its 2026-10 fix** (Vitis 2024.1).  Its terms added
+**This cycle model's form describes the unit before its 2026-10 fix** (Vitis 2024.1).  Its terms added
 because a 2-deep reply FIFO serialized each job's load behind the previous job's store -- not, as
 this docstring used to say, because of the ``m_axi`` pointer FIFOs.  With the FIFO two headers deep
 the unit runs at its core's pace, fed from streams or from memory (390 cycles for ``8x8x32`` at the
 centre, Vitis 2025.1), and pysim times the core by its calibrated timed phases
 (:class:`~waveflow.linalg.systolic.SystolicCore`, ``docs/guide/dsp/systolic/timing.md``).  The model
 is kept for the study that used it (``examples/mimo_cg``); the loader's transposing load still takes
-its per-value cost ``c_ah`` from it.
+its per-value cost ``c_ah`` from it.  Refitted at 2025.1 on the fixed unit (``plans/calib_2025_1.md``
+Stage 4) it misses: 10.6 % mean on the held-out builds, against 1.8 % at 2024.1.
 
 The fitted numbers live in the packaged platform :data:`PLATFORM`: the task fits under
 ``models/<task>/params.json`` (the framework's resource-model layout), the channel model under
 ``models/systolic_unit_channels/params.json`` and the message model under
-``components/systolic_unit/params.json``.  Calibrated with Vitis HLS and Vivado xsim 2024.1, at
+``components/systolic_unit/params.json``.  Calibrated with Vitis HLS and Vivado xsim 2025.1, at
 4 ns, with operands of one width (``A``, ``B``, ``C`` of ``W`` bits with 3, 4 and 5 integer bits);
 for operands of different widths the terms use each operand's own width.
 """
@@ -128,8 +131,8 @@ def _acc_bits(core) -> int:
 
 
 def form4_dsps_per_element(Wa: int, Wb: int) -> int:
-    """DSP slices per element of the four-multiply form.  Vitis HLS 2024.1 on xczu48dr packs the
-    narrow products: 4 from 12 bits up, 3 at 10-11 bits, 2 at 9 bits and below (the narrower of
+    """DSP slices per element of the four-multiply form.  Vitis HLS 2024.1 and 2025.1 on xczu48dr
+    pack the narrow products: 4 from 12 bits up, 3 at 10-11 bits, 2 at 9 bits and below (the narrower of
     ``A`` and ``B``)."""
     w = min(int(Wa), int(Wb))
     return 4 if w >= 12 else (3 if w >= 10 else 2)
@@ -225,7 +228,8 @@ def buffer_blocks(
     depth: int, bits: int, halves: int, word_bits: int, per_half: bool = False
 ) -> int:
     """Block RAMs (18K) of one stream-of-blocks buffer: ``halves`` blocks of ``depth`` words of
-    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr, measured on the calibration builds:
+    ``bits`` bits.  Vitis HLS 2024.1 on xczu48dr, measured on the calibration builds (2025.1 binds
+    differently: exact on 1 of 12 held-out units, ``plans/calib_2025_1.md`` Stage 4):
     from 32 bits wide, ``ceil(bits/36)`` columns of 512 x 36 shared by the halves; under 32 bits,
     distributed RAM below :data:`LUTRAM_MAX_BITS` in all, else ``ceil(bits/18)`` columns of
     1024 x 18 per half with 64-bit message words (two values written per cycle) and shared

@@ -86,18 +86,25 @@ def test_a_slot_without_a_multiplier_is_built_without_one():
     assert "MULS = 7, DOTS = 7;" in render_cfg(rtl_config())[0]
 
 
+#: The FF held-out miss of the 2025.1 fit (``plans/calib_2025_1.md`` Stage 3), accepted by the user
+#: 2026-11-06 as a documented limit: (mean, worst), pinned so a refit that moves it is looked at.
+ACCEPTED_FF_MISS = (0.1106, 0.2949)
+
+
 def test_the_filed_resource_model():
     """DSP and BRAM are structural (four DSPs a complex multiplier and five more; the memories as they
-    bind), and the held-out score the guide reports is the filed one."""
+    bind), and the held-out score the guide reports is the filed one: LUT within the targets, FF the
+    accepted miss."""
     rec = json.loads(calib.model_path(calib.RESOURCE_MODEL).read_text(encoding="utf-8"))
     for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT + calib.RESOURCE_HOLDOUT2:
         f = calib.config_features(calib.resource_config(spec))
         p = calib.predict_resources(rec["counters"], f)
         assert p["dsp"] == pytest.approx(4 * f["n_mul"] * f["L"] + 5)
         assert p["bram"] == pytest.approx(f["bram18"])
-    for counter in ("lut", "ff"):
-        assert rec["holdout"][counter]["mean"] < calib.TARGET_MEAN
-        assert rec["holdout"][counter]["worst"] < calib.TARGET_WORST
+    assert rec["holdout"]["lut"]["mean"] < calib.TARGET_MEAN
+    assert rec["holdout"]["lut"]["worst"] < calib.TARGET_WORST
+    ff = rec["holdout"]["ff"]
+    assert (ff["mean"], ff["worst"]) == pytest.approx(ACCEPTED_FF_MISS, abs=1e-4)
 
 
 def test_the_filed_timing_is_stage7s_form_scored_on_its_preregistered_set():

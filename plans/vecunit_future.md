@@ -19,11 +19,15 @@ Vitis / Vivado **2025.1**, and every number names its tool version.
    `8 × 32` solves of three iterations, formats `W12g8`; cycles a job and csynth's resources, both
    committed with their tool version. **Done 2026-10-27** (`examples/vecunit_cg/measured_2025_1.json`):
    `CgVectorUnit` 3,581 cycles a job (as at 2024.1), 21,464 LUT; the vector unit 3,447 (0.96×),
-   82,624 LUT, decode loop at II 14.
+   82,624 LUT, decode loop at II 14. **Re-measured on the lab machine (2026-11-06,
+   `plans/calib_2025_1.md` Stage 3):** the same cycles; the vector unit 82,960 LUT, 61,310 FF
+   (`examples/vecunit_cg/measured.json`, which now holds both records).
 2. **pysim's accuracy at 2025.1.** pysim runs about 10 % fast against the 2025.1 builds (their decode
    loop is at II 20, the 2024.1 CG build's at 13). Either recalibrate the timing at 2025.1 (the
    pre-registered fit and held-out sets of `waveflow/vecunit/calib.py`, re-run) or state the error
-   wherever the paper quotes pysim.
+   wherever the paper quotes pysim. **Done (2026-11-06, `plans/calib_2025_1.md` Stage 3):** Stage
+   7's form refitted at 2025.1 and scored once on `TIMING3_HOLDOUT` -- CG within 0.40 % mean (worst
+   1.95 %), the matched filter missing (14.84 % worst); every build's decode loop is at II 14.
 3. **The review's remaining items.** R1 / R2 (load and store errors reported: a decision, below) --
    or deferred, if the paper does not rest on error handling. R7 (the Stage 7 held-out score
    re-scored on the current code).
@@ -608,7 +612,9 @@ its tool version. The toy unit (`examples/vecunit`) has no RTL gate yet: add one
 added) pass on the batch (commit 7ed92483). The first batch run failed both toy gates -- `wf.sli`'s
 range check overflowed an `int` at a 32-bit scalar -- fixed in that commit. Not done: the cycle
 counts of CG and the matched filter at 2025.1, and the timing recalibration the decode loop's II 20
-(against 13 at 2024.1) calls for.
+(against 13 at 2024.1) calls for. **Both done (2026-11-06, `plans/calib_2025_1.md` Stage 3):** the
+RTL catalogues of both examples at 2025.1 (all 30 runs exact) and the timing refitted on them; the
+calibration builds' decode loop is at II 14.
 
 ## Docs record
 

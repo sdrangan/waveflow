@@ -3,9 +3,11 @@
 The numbers are read from the platform's committed tables -- the one-time test evaluation
 (``cpu/accuracy.csv``) and the corpus -- so this test is cheap and needs no tools.
 
-AC6 is accepted with a documented miss (``plans/cpu_model.md`` §14, user, 2026-10-08): three cycle
-models miss the 25 % max bound on small operations.  Their maxima are **pinned** here, so a
-recalibration that moves them shows up as a failure to be looked at, not as a silent change.
+AC6 is accepted with a documented miss: two cycle models miss the 25 % max bound on the 2025.1
+platform (``plans/calib_2025_1.md`` Stage 4b, accepted by the user 2026-11-06).  Their maxima are
+**pinned** here, so a recalibration that moves them shows up as a failure to be looked at, not as a
+silent change.  (The 2024.1 platform's accepted misses, 2026-10-08: ``sched_ops.add`` 0.393,
+``sched_ops.delete`` 0.290, ``dispatch`` 0.381 -- all within the bound at 2025.1.)
 """
 
 from __future__ import annotations
@@ -23,11 +25,10 @@ CPU = (
     / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/cpu"
 )
 
-#: (family, target) -> the test-set max relative error accepted on 2026-10-08.
+#: (family, target) -> the test-set max relative error accepted on 2026-11-06 (gcc 13.3.0).
 ACCEPTED_MISSES = {
-    ("sched_ops.add", "cycles"): 0.393,
-    ("sched_ops.delete", "cycles"): 0.290,
-    ("dispatch", "cycles"): 0.381,
+    ("sched_ops.sort", "cycles"): 0.468,
+    ("cdot_q15", "cycles"): 0.250,
 }
 
 

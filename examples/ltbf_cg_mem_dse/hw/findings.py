@@ -12,7 +12,7 @@ interference, ``jobsim`` with ``overlap``) -- and writes ``paper_data/FINDINGS.m
    the real-time load against 100 MHz, Shared Mem's what-ifs (a one-word-a-cycle leaf, banks:
    ``dse_whatif.csv``) and the slot's interference with a long-term update (``dse_interference.csv``).
 
-Vitis HLS / Vivado 2024.1 for every built number; Shared Mem as built (a read word two cycles).
+Vitis HLS / Vivado 2025.1 for every built number; Shared Mem as built (a read word two cycles).
 
     python -m examples.ltbf_cg_mem_dse.hw.findings
 """
@@ -141,7 +141,7 @@ def main() -> Path:
 
     w("# LTBF DSE -- findings\n")
     w(
-        "Every built number: Vitis HLS / Vivado 2024.1, xczu48dr at 250 MHz.  Shared Mem as built (the framework's "
+        "Every built number: Vitis HLS / Vivado 2025.1, xczu48dr at 250 MHz.  Shared Mem as built (the framework's "
         "BRAM leaf: a read word two cycles, a write one, one transaction at a time; its storage block RAM at the "
         "system's power-of-two span, 512 words a BRAM36).  A design: the systolic array, "
         "`W`, the vector unit's lanes, the form and `t` at `r` 1, `Mmax` 16, `c` 8, `J` 9, 64-bit words, the dynamic "
@@ -294,7 +294,7 @@ def main() -> Path:
         w("## 5. The finalists after implementation (`finalists_impl.csv`)\n")
         w(
             "The whole system (both engines, the Ingest DMA, the Resp hub, the crossbar, Shared Mem) placed and "
-            "routed on the xczu48dr at 4 ns, Vivado 2024.1; the models predict csynth's estimates.\n"
+            "routed on the xczu48dr at 4 ns, Vivado 2025.1; the models predict csynth's estimates.\n"
         )
         w(
             "| finalist | WNS (ns) | LUT impl / model | FF impl / model | DSP impl / model | BRAM18 impl / model | worst path |"

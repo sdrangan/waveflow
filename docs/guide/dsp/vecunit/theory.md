@@ -143,8 +143,9 @@ An arithmetic operation in hardware takes several clock cycles from operands to 
 is split into stages, one stage a cycle. A new element can enter the first stage every cycle while
 earlier elements are still in later stages. This is a **pipeline**. The number of stages is its
 **depth**, and the cycles between successive elements entering is the **initiation interval (II)**.
-In this unit the II is 1. A pass of three chained instructions is 22 to 24 stages deep from reading
-an element to writing its result (Vitis HLS 2024.1, `plans/vecunit_new.md` Stage 1).
+In this unit the II is 1. A pass of three chained instructions is about 24 stages deep from reading
+an element to writing its result (the run loop's depth in the three-slot CG and matched-filter
+builds, Vitis HLS 2025.1).
 
 So one vector instruction on `VL` elements takes about `depth + VL` cycles: the pipeline fills, then
 one result leaves per cycle. A second instruction that needs the first's results has two choices:

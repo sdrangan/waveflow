@@ -19,7 +19,7 @@ from waveflow.cpu.calib.calibrate import FAMILIES, load_corpus
 from waveflow.cpu.calib.prereg import SweepPlan, history_available, require_committed
 
 ROOT = Path(__file__).resolve().parents[2]
-CPU = ROOT / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu"
+CPU = ROOT / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/cpu"
 
 
 @pytest.fixture(scope="module")

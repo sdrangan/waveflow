@@ -169,6 +169,14 @@ def test_tool_info_meets_min_boundary():
     assert _info("2024.2").meets_min is False
 
 
+def test_tool_info_above_calibrated_boundary():
+    assert _info("2025.1").above_calibrated is False
+    assert _info("2025.2").above_calibrated is True
+    assert _info("2026.1").above_calibrated is True
+    assert _info("2024.1").above_calibrated is False
+    assert _info(None).above_calibrated is None
+
+
 def test_tool_info_unknown_version_is_not_a_verdict():
     assert _info(None).meets_min is None
     assert _info(None, path=None).found is False
@@ -198,13 +206,26 @@ def _patch_probe(monkeypatch, vitis_version, vivado_version, found=True):
 
 
 def test_report_succeeds_when_both_tools_are_current(monkeypatch, capsys):
+    _patch_probe(monkeypatch, "2025.1", "2025.1")
+
+    assert report_mod.main([]) == 0
+
+    out = capsys.readouterr().out
+    assert "All tools found: Vitis 2025.1, Vivado 2025.1." in out
+    assert "WARNING" not in out
+
+
+def test_report_warns_but_succeeds_above_the_calibrated_version(monkeypatch, capsys):
+    """2026.1 runs (it is above the minimum) but is not what the platforms were calibrated with
+    (plans/calib_2025_1.md Stage 5): a warning, not a failure."""
     _patch_probe(monkeypatch, "2026.1", "2026.1")
 
     assert report_mod.main([]) == 0
 
     out = capsys.readouterr().out
     assert "All tools found: Vitis 2026.1, Vivado 2026.1." in out
-    assert "WARNING" not in out
+    assert "OK (newer than the calibrated 2025.1)" in out
+    assert "WARNING: Vitis 2026.1 and Vivado 2026.1 are newer than 2025.1" in out
 
 
 def test_report_warns_and_fails_when_tools_are_missing(monkeypatch, capsys):

@@ -730,7 +730,9 @@ def _cg_page() -> str:
 
 
 def _cg_metrics() -> dict:
-    return {r["metric"]: r["value"] for r in _linalg_rows("cg_validation_metrics.csv")}
+    """The held-out scores the page quotes: the 2025.1 round (``holdout2``, plans/calib_2025_1.md
+    Stage 4); ``cg_validation_metrics.csv`` is the 2024.1 study's."""
+    return {r["metric"]: r["value"] for r in _linalg_rows("cg_validation_metrics_v2.csv")}
 
 
 def test_cg_page_quotes_the_held_out_scores():
@@ -759,7 +761,7 @@ def test_cg_page_quotes_the_held_out_scores():
         assert row in text, f"cg_vector.md's accuracy table no longer has the row {row!r}"
     roles = [r["role"] for r in _linalg_rows("cg_builds.csv")]
     assert f"**{roles.count('fit')} builds**" in text
-    assert f"**{roles.count('holdout')} held-out builds**" in text
+    assert f"**{roles.count('holdout2')} held-out builds**" in text
     after_reject = (f"off by {float(m['reject_after_reject_mape_pct']):.0f}% on average and "
                     f"{float(m['reject_after_reject_max_pct']):.0f}% at worst")
     assert after_reject in text
@@ -767,15 +769,14 @@ def test_cg_page_quotes_the_held_out_scores():
 
 
 def test_cg_page_quotes_the_step_8_3_runs():
+    """The step-8.3 runs' recorded cycles predate the 2026-10 reply-FIFO fix and the gates' current
+    scenarios, so at 2025.1 the page says they were not re-scored (plans/calib_2025_1.md Stage 4)
+    rather than quote ``run_8_3``; the first-reply range is the 2025.1 round's."""
     m = _cg_metrics()
-    c = "run_8_3.centre"
     text = _cg_page()
-    assert (f"centre {float(m[c + '.predicted']):,.1f} cycles against {int(m[c + '.measured']):,} "
-            f"measured ({float(m[c + '.ape_pct']):.1f}%)") in text
-    for name in ("smallest", "stress"):
-        assert f"{name} {float(m[f'run_8_3.{name}.ape_pct']):.1f}%" in text
+    assert "the sum-of-intervals check was not re-scored" in text
     lo, hi = float(m["first_message.over_steady_min"]), float(m["first_message.over_steady_max"])
-    assert f"it came {lo:.0f} to {hi:.0f} cycles after the model's steady `START` interval" in text
+    assert f"it came {lo:,.0f} to {hi:,.0f} cycles after the model's steady `START` interval" in text
 
 
 def test_cg_page_quotes_the_measured_centre_build():
@@ -785,8 +786,9 @@ def test_cg_page_quotes_the_measured_centre_build():
     steps = [int(r["interval"]) for r in _linalg_rows("cg_cycles.csv")
              if r["build"] == build and r["op"] == "2" and r["status"] == "OK"
              and r["prev_status"] == "OK" and (r["k"], r["n"]) == ("8", "32")]
+    span = f"{min(steps):,}" if min(steps) == max(steps) else f"{min(steps):,} to {max(steps):,}"
     want = (f"{int(unit['lut']):,} LUT, {int(unit['ff']):,} FF, {unit['dsp']} DSP and {unit['bram']} "
-            f"block RAM, and its `8 × 32` steps came {min(steps):,} to {max(steps):,} cycles apart")
+            f"block RAM, and its `8 × 32` steps came {span} cycles apart")
     assert want in _cg_page(), f"cg_vector.md no longer quotes the measured centre build: {want!r}"
 
 
@@ -943,7 +945,7 @@ def test_mm_fir_pages_quote_the_recorded_cycle_gates():
 # The processor model (plans/cpu_model.md) — docs/guide/cpu/ and docs/examples/cpu_sched/
 # ---------------------------------------------------------------------------
 
-CPU_PLATFORM = REPO / "waveflow" / "calib" / "platforms" / "a53_hpi_1200mhz_gem5v25_1" / "cpu"
+CPU_PLATFORM = REPO / "waveflow" / "calib" / "platforms" / "a53_hpi_1200mhz_gem5v25_1_vitis2025_1" / "cpu"
 
 
 def _cpu_page(rel: str) -> str:

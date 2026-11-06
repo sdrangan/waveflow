@@ -16,7 +16,7 @@ sit at 4,096 and 131,072 samples; ``gather_hist``: 4 bytes per bin, at 8,192 and
 
 The area plan is a grid of core configurations, fit on its edges and held out in its interior.
 
-    python -m waveflow.cpu.calib.sweep --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1
+    python -m waveflow.cpu.calib.sweep --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1
 """
 
 from __future__ import annotations

@@ -15,7 +15,7 @@
 
 The flows run in the example's root, as ``python -m examples.ltbf_cg_mem_dse.hw.build`` does, so a top's
 csynth is reused while its sources are unchanged (the vector unit's takes hours, plan §15).
-Vitis HLS / Vivado 2024.1.
+Vitis HLS / Vivado 2025.1 (first passed at 2024.1; plans/calib_2025_1.md Stage 1).
 """
 
 from __future__ import annotations

@@ -29,9 +29,9 @@ from waveflow.cpu.platform import CpuPlatform
 #: gem5's total for the replayed trace, the replay compiled by Vitis 2025.1's aarch64 gcc 13.3.0
 #: (plans/calib_2025_1.md Stage 4b); 63,266 with 2024.1's gcc 12.2.0.
 MEASURED_TOTAL = 63124.0
-#: The model's miss on that total, accepted 2026-10-08 on the gcc 12.2.0 platform.  The 2025.1
-#: platform's models miss by 43.1 % (90,347 predicted): not re-accepted here -- the user's decision.
-ACCEPTED_TOTAL_REL_ERR = 0.196
+#: The model's miss on that total (90,347 predicted), accepted by the user 2026-11-06 for the 2025.1
+#: platform (plans/calib_2025_1.md Stage 4b); 0.196 was the gcc 12.2.0 platform's, accepted 2026-10-08.
+ACCEPTED_TOTAL_REL_ERR = 0.431
 
 
 @pytest.mark.gem5

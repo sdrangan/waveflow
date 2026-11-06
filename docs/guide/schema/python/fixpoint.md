@@ -89,8 +89,9 @@ unbiased rounding, do not assume `AP_RND` provides it.
 
 ## Division
 
-`div(a, b)` is `ap_fixed` division, as Vitis 2024.1 implements it in
-`ap_fixed_base.h`, plus a guard that Waveflow adds:
+`div(a, b)` is `ap_fixed` division, as Vitis 2024.1 and 2025.1 implement it in
+`ap_fixed_base.h` (bit-exact against both: `tests/hw/test_fixpoint_vitis.py`), plus a guard that
+Waveflow adds:
 
 - **Result format.** `<Sb + Wa + max(Fb, 0), Sb + Ia + Fb>`, where `Sb` is 1 for a
   signed divisor. The quotient keeps the **dividend's** fraction bits.

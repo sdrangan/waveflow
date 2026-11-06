@@ -142,11 +142,16 @@ def build_part(p: sp.Part, role: str, root: Path) -> dict:
     else:
         dag.add(CsynthStep(top=top))
         res = dag.run(cfg, through=f"csynth_{top}")
-    rep: dict[str, Any] = {"part": p.as_dict(), "name": p.name, "role": role, "tool": "Vitis HLS / Vivado 2024.1",
+    rep: dict[str, Any] = {"part": p.as_dict(), "name": p.name, "role": role, "tool": "unknown",
                            "steps": {k: bool(r.success) for k, r in res.items()},
                            "errors": {k: (r.message or "")[-1500:] for k, r in res.items() if not r.success}}  # fmt: skip
     rdir = root / f"{top}_proj" / "solution1" / "syn" / "report"
     if (rdir / "csynth.xml").is_file():
+        import xml.etree.ElementTree as ET
+
+        # the release that ran, from csynth's own report -- never a constant
+        ver = ET.parse(rdir / "csynth.xml").getroot().findtext(".//ReportVersion/Version")
+        rep["tool"] = f"Vitis HLS / Vivado {ver}" if ver else "unknown"
         cp = CsynthParser(report_path=str(rdir))
         cp.get_total_resources()
         rep["resources"], rep["available"] = cp.total_resources, cp.available_resources
@@ -210,7 +215,7 @@ def run(workers: int = 4) -> None:
     running: dict[int, tuple] = {}  # pgid -> (popen, part, t0)
     while todo or running:
         big = any(p.n_rx >= 256 for _po, p, _t in running.values())
-        cap = 2 if big else workers
+        cap = min(2, workers) if big else workers
         while (
             todo
             and len(running) < cap
@@ -222,7 +227,7 @@ def run(workers: int = 4) -> None:
             running[po.pid] = (po, p, time.time())
             print(f"{time.strftime('%T')} start {p.name} ({role})", flush=True)
             big = big or p.n_rx >= 256
-            cap = 2 if big else workers
+            cap = min(2, workers) if big else workers
         time.sleep(10)
         for pgid, (po, p, t0) in list(running.items()):
             if po.poll() is not None:

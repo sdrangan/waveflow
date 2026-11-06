@@ -16,7 +16,7 @@ processor's share of them from the shipped calibration:
 ```python
 from waveflow.cpu.platform import CpuPlatform
 
-platform = CpuPlatform.load()   # a53_hpi_1200mhz_gem5v25_1
+platform = CpuPlatform.load()   # a53_hpi_1200mhz_gem5v25_1_vitis2025_1
 for cores in (1, 2, 4):
     cfg = platform.cpu_config(n_cores=cores)
     est = platform.area_model().estimate(cfg)
@@ -26,9 +26,9 @@ for cores in (1, 2, 4):
 ```
 
 ```text
-1 core(s): 3.07 mm2, 97 mW static, switch 81.8 cycles, INTERPOLATED
-2 core(s): 4.12 mm2, 144 mW static, switch 81.8 cycles, INTERPOLATED
-4 core(s): 6.20 mm2, 239 mW static, switch 81.8 cycles, INTERPOLATED
+1 core(s): 3.07 mm2, 97 mW static, switch 81.3 cycles, INTERPOLATED
+2 core(s): 4.12 mm2, 144 mW static, switch 81.3 cycles, INTERPOLATED
+4 core(s): 6.20 mm2, 239 mW static, switch 81.3 cycles, INTERPOLATED
 ```
 
 - `cpu_config(n_cores, ...)` — a `CpuConfig` at the platform's clock, with the context-switch cost
@@ -47,7 +47,7 @@ for cores in (1, 2, 4):
 The cycle models were fitted at the A53's 32 KB L1D and 1 MB L2. Their cache-sensitive features are
 expressed against the configuration — the working set beyond L1, beyond L2 — so a configuration with
 other caches is priced without refitting. At 16 KB L1D and 512 KB L2, gem5 measured `gather_hist`
-1.61x slower than at the reference, and the unchanged model predicted it within 6.9 % (median 2.7 %).
+1.62x slower than at the reference, and the unchanged model predicted it within 7.3 % (median 2.7 %).
 The cache-insensitive families measured the same at both.
 
 ## Read the confidence

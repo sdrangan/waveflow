@@ -16,7 +16,7 @@ from waveflow.cpu.calib.mcpat import MCPAT_COMMIT, TECH_NODE_NM
 
 CPU = (
     Path(__file__).resolve().parents[2]
-    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu"
+    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/cpu"
 )
 
 COLUMNS = (
@@ -64,13 +64,14 @@ def test_the_tools_are_the_ones_the_plan_names():
     assert set(df["source"]) == {"gem5"}
     assert set(df["gem5_tag"]) == {GEM5_TAG}
     assert df["gem5_commit"].str.startswith("c8222cc").all()  # v25.1.0.1
-    assert df["compiler_version"].str.contains("12.2.0").all()
+    # Vitis 2025.1's aarch64 gcc (plans/calib_2025_1.md); the 2024.1 platform's was 12.2.0
+    assert df["compiler_version"].str.contains("13.3.0").all()
     assert set(df["cflags"]) == {" ".join(CFLAGS)}
     assert set(df["cpu_model"]) == {"hpi"} and set(df["f_clk_hz"]) == {1.2e9}
     assert set(df["dram"]) == {"DDR4_2400_8x8x1"}
     assert set(df["mcpat_commit"]) == {MCPAT_COMMIT}
     assert set(df["mcpat_node_nm"]) == {TECH_NODE_NM}
-    assert set(df["empty_region_cycles"]) == {94.0}
+    assert set(df["empty_region_cycles"]) == {95.0}  # 94.0 with gcc 12.2.0
 
 
 def test_no_row_records_a_home_path():

@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 24
 has_children: true
 example_dir: examples/vecunit_mf
-summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: how close a streaming program comes to its input floor -- a frame every 1,408 cycles against 1,152 input words (1.22x, Vitis 2024.1), the execute task binding just above the loader at VLMAX 64 -- and how to count the instructions a chunk so issue stays small."
+summary: "A multi-antenna matched filter, Y[i, j] = conj(X[i]) · R[i, j], as a program for the programmable vector unit (VecUnit): antennas on lanes, samples as elements strip-mined in chunks of VLMAX, the reference broadcast from member 0 and conjugated in the multiply. The same RTL template as CG at another build configuration (VLMAX 64, few groups), bit-exact with a NumPy golden at RTL. What it shows: how close a streaming program comes to its input floor -- a frame every 1,464 cycles against 1,152 input words (1.27x, Vitis 2025.1), the execute task binding just above the loader at VLMAX 64 -- and how to count the instructions a chunk so issue stays small."
 ---
 
 # A matched filter as a vector program
@@ -83,19 +83,16 @@ the RTL across antenna counts, chunk lengths, word widths and lanes, against eac
 
 A frame of 256 samples at eight antennas moves, per chunk, `X` (64 values, 32 words at two 32-bit
 complex values a 64-bit word) and `R` (512 values, 256 words): **1,152 input words a frame**, the
-fewest cycles a frame can take at one word a cycle. Vitis HLS / Vivado xsim 2024.1, `xczu48dr` at
-4 ns, the `steady` workload:
-
-| | cycles a frame | against the floor |
-|---|---|---|
-| fused runs (Stage 6 of the plan) | **1,408** | 1.22x |
-| one pass at a time (Stage 5) | 1,448 | 1.26x |
+fewest cycles a frame can take at one word a cycle. Vitis HLS / Vivado xsim 2025.1, `xczu48dr` at
+4 ns, the `steady` workload: **1,464 cycles a frame, 1.27x the floor**
+(`examples/vecunit_mf/measured.json`).
 
 The gap is the cost of programmability for a streaming kernel: each chunk pays the execute task's
 decode and the two runs' pipeline fill, which a dedicated kernel would not. The execute task binds, at
-about 352 cycles a chunk; the loader needs about 320 -- 288 words, but `X`'s single-column block
+about 366 cycles a chunk; the loader needs about 320 -- 288 words, but `X`'s single-column block
 lands a value a cycle (`L` does not divide `n` = 1), 64 cycles for its 32 words.
 
-pysim gives this frame 1,513 cycles, 7.5 % over the RTL: its timing was calibrated on the CG
-configuration, whose decode loop is deeper (depth 23 against 14 in this build) -- see
+pysim gives this frame 1,509 cycles, 3.1 % over the RTL: its timing was calibrated on the CG
+configuration, whose execute task schedules a pass's reductions differently (csynth: II 3, depth 7
+against II 1, depth 3 in this build) -- see
 [the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models).

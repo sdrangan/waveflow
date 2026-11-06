@@ -111,7 +111,11 @@ panel = 5 + 1.00 · steps       (cycles; steps = T·P, the gap, the run-out)
 
 exact on all 24 fitted panels and on the 4 held out (36 and 60 steps): the step count the schedule
 predicts is the RTL's to the cycle, plus 5. The records are filed by the core's identity in
-`waveflow/linalg/calib/modules/engine_core-*`, one per word width, and pysim loads them.
+`waveflow/linalg/calib/modules/engine_core-*`, one per configuration, and pysim loads them. Ten
+configurations are calibrated, all at Vitis HLS / Vivado xsim 2025.1 and all giving the same
+`5 + 1.00 · steps`: these two, and the eight memory-backed shapes of the LTBF system (`R × C` 2 × 4 to
+8 × 8, `Pmax` 22 and 32; `engine_harness --point`). Another configuration runs on the seed, `2 + 1.00 · steps`,
+until it is calibrated.
 
 ## pysim against the RTL
 

@@ -4,15 +4,17 @@ parent: Processor Model
 nav_order: 2
 audience: python
 api: [CpuPlatform, Gem5Runner, SweepPlan, RelLinCalibModel, Mcpat]
-summary: "How the shipped Cortex-A53 platform was calibrated and how accurate it is. Ground truth is gem5 v25.1's HPI in-order core in syscall-emulation mode, configured as the RFSoC 4x2's A53 (1.2 GHz, 32 KB L1s, 1 MB L2, DDR4-2400); energy and area come from McPAT at 22 nm. Six C kernels with bit-exact Python twins, 305 pre-registered points split fit / validation / test, models fitted by relative-error least squares, and the one-time test result per family -- including the documented misses on small operations and on back-to-back sequences."
+summary: "How the shipped Cortex-A53 platform was calibrated and how accurate it is. Ground truth is gem5 v25.1's HPI in-order core in syscall-emulation mode, configured as the RFSoC 4x2's A53 (1.2 GHz, 32 KB L1s, 1 MB L2, DDR4-2400), running code compiled by Vitis 2025.1's aarch64 gcc 13.3.0; energy and area come from McPAT at 22 nm. Six C kernels with bit-exact Python twins, 305 pre-registered points split fit / validation / test, models fitted by relative-error least squares, and the one-time test result per family -- including the documented misses on small operations and on back-to-back sequences."
 ---
 
 # Calibration
 
-The shipped platform, `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/`, prices software on the
-Cortex-A53 of the RFSoC 4x2. Everything below was measured with **gem5 v25.1.0.1**, **Vitis 2024.1's
-aarch64 gcc 12.2.0** (`-O2 -static`) and **McPAT** at commit `74d4759f`; a number from other tools
-belongs to them, not to this platform.
+The shipped platform, `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/`, prices
+software on the Cortex-A53 of the RFSoC 4x2. Everything below was measured with **gem5 v25.1.0.1**,
+**Vitis 2025.1's aarch64 gcc 13.3.0** (`-O2 -static`) and **McPAT** at commit `74d4759f`; a number
+from other tools belongs to them, not to this platform. The compiler matters: the same points
+compiled by 2024.1's gcc 12.2.0 cost the same in the median of every kernel, but small operations
+moved by up to 2.7x either way.
 
 ## Ground truth
 
@@ -43,7 +45,7 @@ binary gem5 ran:
 | `swapcontext` | libc's switch, for information (gem5 emulates its syscall at near-zero cost) | `n_switches` |
 
 Each program draws its inputs, makes one warm-up call, then measures one call between m5 markers. The
-markers' own cost in that position — 94 cycles — is measured once and subtracted.
+markers' own cost in that position — 95 cycles — is measured once and subtracted.
 
 ## Pre-registration
 
@@ -65,32 +67,38 @@ most 10 % and a maximum of at most 25 %.
 
 | Family | Cycles median | Cycles max | Energy median | Energy max |
 |---|---|---|---|---|
-| `sched_ops.add` | 4.7 % | **39.3 %** | 1.6 % | 1.9 % |
-| `sched_ops.delete` | 3.3 % | **29.0 %** | 2.5 % | 9.1 % |
-| `sched_ops.reprio` | 2.1 % | 16.6 % | 2.5 % | 8.4 % |
-| `sched_ops.sort` | 5.8 % | 18.1 % | 0.4 % | 2.4 % |
-| `cdot_q15` | 1.9 % | 21.8 % | 0.1 % | 1.8 % |
-| `gather_hist` | 7.6 % | 12.3 % | 1.3 % | 2.4 % |
-| `dispatch` | 1.1 % | **38.1 %** | 0.5 % | 3.3 % |
-| `ctx_switch` | 0.8 % | 12.5 % | 0.2 % | 0.3 % |
+| `sched_ops.add` | 3.8 % | 5.6 % | 2.2 % | 5.3 % |
+| `sched_ops.delete` | 1.4 % | 14.1 % | 1.4 % | 4.8 % |
+| `sched_ops.reprio` | 1.9 % | 14.6 % | 1.7 % | 7.0 % |
+| `sched_ops.sort` | 6.3 % | **46.8 %** | 0.6 % | 5.2 % |
+| `cdot_q15` | 2.4 % | **25.0 %** | 0.1 % | 1.8 % |
+| `gather_hist` | 7.2 % | 12.5 % | 1.2 % | 2.4 % |
+| `dispatch` | 0.3 % | 2.9 % | 0.7 % | 1.9 % |
+| `ctx_switch` | 0.3 % | 4.2 % | 0.2 % | 1.3 % |
 
 Area and leakage, over a grid of 96 configurations (1–4 cores, 16–64 KB L1, 256 KB–2 MB L2): area
 median 4.4 %, max 6.3 %; leakage median 0.3 %, max 0.9 %.
 
 ### The two documented misses
 
-- **Small operations.** The three bold maxima are the smallest test points — an `add` on a list of
-  six, a `dispatch` of 32 calls — where branch-predictor and pipeline state that no counter sees
-  moves the cost by tens of cycles. Their medians are within bound.
+- **Small operations.** The `sched_ops.sort` maximum is the smallest test point, a sort of six
+  (306 cycles measured, 163 predicted), where branch-predictor and pipeline state that no counter
+  sees moves the cost by tens to a hundred cycles; the median is within bound. `cdot_q15` misses at
+  the other end, its largest point (150,000 samples, 25.0 % under). Which small points miss depends
+  on the compiler: at gcc 12.2.0 they were an `add` on a list of six (39.3 %), a `delete` and a
+  `dispatch` of 32 calls, all within bound at gcc 13.3.0.
 - **Back-to-back sequences.** Each calibration point is one call after one warm-up; a scheduler runs
   operations back to back. On the [example](../../examples/cpu_sched/index.md)'s 410 operations and
-  200 dispatches, gem5 measured 63,266 cycles in one region and the model predicted 75,656: **19.6 %**
-  high, a roughly constant 20–40 cycles per call. Timing each operation in its own region does not
-  settle it either: the markers perturb a region by tens of cycles, the size of the operations
-  themselves (94 cycles when their code is cold, 8 when it is hot).
+  200 dispatches, gem5 measured 63,124 cycles in one region and the model predicted 90,347: **43.1 %**
+  high. Almost all of it is the `add` model: an `add` measured alone costs about 70 cycles more with
+  gcc 13.3.0 than with 12.2.0 (143–164 cycles on short lists against 75–92), while back to back the
+  replay barely moved (63,266 cycles at gcc 12.2.0, where the miss was 19.6 %). Timing each operation
+  in its own region does not settle it either: the markers perturb a region by tens of cycles, the
+  size of the operations themselves (95 cycles when their code is cold; 8 when it was hot, measured
+  at gcc 12.2.0).
 
-Both were accepted as recorded; calibrating small operations as batches of back-to-back calls is the
-known way to measure the steady state.
+Both were accepted as recorded (2026-11-06); calibrating small operations as batches of back-to-back
+calls is the known way to measure the steady state.
 
 ## Recalibrating
 

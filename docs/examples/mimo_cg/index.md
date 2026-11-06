@@ -22,7 +22,11 @@ This example shows:
   [CG vector unit](../../guide/dsp/cg_vector.md);
 - **verification** from the Python model through pysim and C-simulation to RTL, bit for bit.
 
-Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz.
+Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz: a
+record of the study as it was, kept until it moves to the engine. The one exception is the
+linear-algebra units' calibration tables in `paper_data/` (`linalg_*`, `cg_*`), re-measured at
+2025.1 for the packaged platform (`plans/calib_2025_1.md`, Stage 4); the study's own figures and
+tables were made from their 2024.1 versions, which are in git history.
 
 **Status: set aside, to be moved to the systolic engine.** The detector is built on the older
 `SystolicUnit` and `SystolicCore`, which the [systolic engine](../../guide/dsp/systolic/systolic_engine.md)

@@ -4,7 +4,7 @@ parent: Examples
 nav_order: 23
 has_children: true
 example_dir: examples/vecunit_cg
-summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a program for the programmable vector unit (VecUnit): the CG knowledge moves out of the hardware into a program builder, the unit stays application-free, and the solve is bit-exact with waveflow.linalg.cg's model in the interpreter, in pysim and at RTL. A harness plays the systolic array (S = A·P on each P the unit emits). What it shows: grouping the column groups' work kind by kind makes long fused runs, and the program runs a steady 8×32 solve of three iterations in 3,359 cycles against the dedicated CgVectorUnit's 3,581 (Vitis 2024.1), at about four times its LUTs."
+summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a program for the programmable vector unit (VecUnit): the CG knowledge moves out of the hardware into a program builder, the unit stays application-free, and the solve is bit-exact with waveflow.linalg.cg's model in the interpreter, in pysim and at RTL. A harness plays the systolic array (S = A·P on each P the unit emits). What it shows: grouping the column groups' work kind by kind makes long fused runs, and the program runs a steady 8×32 solve of three iterations in 3,447 cycles against the dedicated CgVectorUnit's 3,581 (Vitis 2025.1), at about four times its LUTs."
 ---
 
 # CG as a vector program
@@ -92,34 +92,24 @@ zero guards, in pass and serial modes, both orders, with and without the dead wo
 
 ## What it measured
 
-Vitis HLS / Vivado xsim 2024.1, `xczu48dr` at 4 ns, the `steady` workload, the formats `W12g8` (12-bit
-vectors, 20-bit `ps` and `rz`, `g_div` 6) on both sides:
-
-| | cycles a job | LUT | FF | DSP | BRAM |
-|---|---|---|---|---|---|
-| `CgVectorUnit` | 3,581 | 21,596 | 11,876 | 52 | 20 |
-| vector unit, CG program | **3,359** (0.94x) | 82,063 | 71,661 | 53 | 36 |
-
-The program is 6 % faster because it runs each kind of work across the eight column groups as one
-pipelined run, and the eight divides of a kind side by side, where the dedicated core's loop order
-serializes them. The price is resources: the fused execute loop, four pipelined dividers (one a
-lane, about 33k FF together), and the run decode. A CG job is 233 instruction words: 88 passes in 11
-runs, 704 run elements, 5 scalar runs of 8 divides, 9 control instructions; about 16 cycles of
-decode a pass (42 % of the job, [Timing at RTL](timing.md)) is the largest share left, which a decode
-stage running ahead of execution would hide.
-
-**Re-measured with Vitis HLS / Vivado xsim 2025.1** (the same workload and formats, 2026-10-27;
-`examples/vecunit_cg/measured_2025_1.json`):
+Vitis HLS / Vivado xsim 2025.1, `xczu48dr` at 4 ns, the `steady` workload, the formats `W12g8` (12-bit
+vectors, 20-bit `ps` and `rz`, `g_div` 6) on both sides (`examples/vecunit_cg/measured.json`):
 
 | | cycles a job | LUT | FF | DSP |
 |---|---|---|---|---|
 | `CgVectorUnit` (rx, load, core, store) | 3,581 | 21,464 | 11,914 | 52 |
-| vector unit, CG program | **3,447** (0.96x) | 82,624 | 60,668 | 53 |
+| vector unit, CG program | **3,447** (0.96x) | 82,960 | 61,310 | 53 |
 
-`CgVectorUnit` takes the same cycles as at 2024.1; the vector unit about 3 % more (its decode loop runs
-at II 14 against 13). The 2024.1 `CgVectorUnit` row above is the record of `plans/vecunit_new.md`
-(Stages 5 and 6); the 2025.1 one comes from the bench of `tests/linalg/test_cg_vector_unit.py`.
+The program is 4 % faster because it runs each kind of work across the eight column groups as one
+pipelined run, and the eight divides of a kind side by side, where the dedicated core's loop order
+serializes them. The price is resources: the fused execute loop, four pipelined dividers (one a
+lane), and the run decode. A CG job is 233 instruction words: 88 passes in 11 runs, 704 run
+elements, 5 scalar runs of 8 divides, 9 control instructions; about 17 cycles of decode a pass (44 %
+of the job, [Timing at RTL](timing.md)) is the largest share left, which a decode stage running ahead
+of execution would hide. (With Vitis 2024.1 the decode loop ran at II 13 against 14, and the program
+took 3,359 cycles a job; `CgVectorUnit` took the same 3,581.) The `CgVectorUnit` row comes from the
+bench of `tests/linalg/test_cg_vector_unit.py`, its four tasks' csynth estimates summed.
 
 pysim's timing is calibrated at RTL on CG-configuration jobs
 ([the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models)): held out, it predicts these steady
-jobs within 0.02 % and fresh random jobs and solves within 0.64 %.
+jobs within 0.06 % and fresh random jobs and solves within 0.86 % (Vitis HLS / Vivado xsim 2025.1).

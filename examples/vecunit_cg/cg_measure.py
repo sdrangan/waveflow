@@ -27,8 +27,8 @@ from waveflow.vecunit.calib import BUILDS, build_unit
 from waveflow.vecunit.measure import measure_run
 
 HERE = Path(__file__).resolve().parent
-#: The 2025.1 recalibration's catalogue (plans/calib_2025_1.md Stage 3); 2024.1's is ``measured.json``.
-MEASURED = HERE / "measured_new.json"
+#: The catalogue, Vitis HLS / Vivado xsim 2025.1 (plans/calib_2025_1.md Stage 3).
+MEASURED = HERE / "measured.json"
 
 #: build -> its workloads, in run order.
 RUNS = {

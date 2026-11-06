@@ -584,8 +584,10 @@ def time_gem5(
         "anchor": {
             "trace": "tests/fixtures/cpu/cpu_sched_trace.jsonl",
             **anchor,
-            "pinned": 63266.0,
-            "ok": anchor["counters_match"] and anchor["total_cycles"] == 63266.0,
+            # gem5's total with Vitis 2025.1's gcc 13.3.0 (63,266 with 2024.1's gcc 12.2.0), as
+            # tests/examples/test_cpu_sched_replay.py pins it
+            "pinned": 63124.0,
+            "ok": anchor["counters_match"] and anchor["total_cycles"] == 63124.0,
         },
         "build_s": build_s,
         "gem5_tag": GEM5_TAG,
