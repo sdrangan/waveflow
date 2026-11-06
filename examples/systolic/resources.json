@@ -15,10 +15,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -39,10 +40,11 @@
     "L": 4,
     "word_bits": 128
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 36,
     "dsp": 154,
@@ -63,10 +65,11 @@
     "L": 2,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 15,
     "dsp": 59,
@@ -87,10 +90,11 @@
     "L": 2,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 23,
     "dsp": 91,
@@ -111,15 +115,16 @@
     "L": 8,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 42,
     "dsp": 281,
     "ff": 56090,
-    "lut": 48732,
+    "lut": 48885,
     "est_clock_ns": 2.92
    },
    "meets_clock": true
@@ -135,10 +140,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 18,
     "dsp": 91,
@@ -159,15 +165,16 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 48,
     "dsp": 281,
     "ff": 63187,
-    "lut": 51111,
+    "lut": 51048,
     "est_clock_ns": 2.92
    },
    "meets_clock": true
@@ -183,15 +190,16 @@
     "L": 8,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 42,
     "dsp": 154,
     "ff": 30018,
-    "lut": 27560,
+    "lut": 27551,
     "est_clock_ns": 2.92
    },
    "meets_clock": true
@@ -207,10 +215,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 16,
     "dsp": 154,
@@ -231,10 +240,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -255,10 +265,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -279,10 +290,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -303,10 +315,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -327,10 +340,11 @@
     "L": 4,
     "word_bits": 64
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 32,
     "dsp": 154,
@@ -351,68 +365,323 @@
     "L": 8,
     "word_bits": 128
    },
+   "engine": "systolic_engine",
    "tool": "2025.1",
    "ok": true,
    "failed": null,
-   "date": "2026-10-20",
+   "date": "2026-11-06",
    "resources": {
     "bram": 62,
     "dsp": 537,
     "ff": 110203,
-    "lut": 94032,
+    "lut": 94068,
     "est_clock_ns": 2.92
    },
    "meets_clock": true
-  }
- },
- "fit": {
-  "features": {
-   "dsp": [
-    "rc"
-   ],
-   "lut": [
-    "rc",
-    "groups"
-   ],
-   "ff": [
-    "rc",
-    "groups"
-   ]
   },
-  "holdout": [
-   "c4",
-   "r8"
-  ],
-  "params": {
-   "dsp": {
-    "intercept": 26.62,
-    "rc": 3.98,
-    "train_max_err_pct": 0.9,
-    "holdout_err_pct": {
-     "r8": 0.2,
-     "c4": -0.7
-    }
+  "ltbf_r2c4_p22": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 22,
+    "R": 2,
+    "C": 4,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -3
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
    },
-   "lut": {
-    "intercept": 9014.93,
-    "rc": 630.01,
-    "groups": 243.87,
-    "train_max_err_pct": 9.4,
-    "holdout_err_pct": {
-     "r8": 5.2,
-     "c4": 2.9
-    }
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 62,
+    "ff": 21897,
+    "lut": 24325,
+    "est_clock_ns": 3.352
    },
-   "ff": {
-    "intercept": 5750.53,
-    "rc": 702.77,
-    "groups": 910.25,
-    "train_max_err_pct": 19.8,
-    "holdout_err_pct": {
-     "r8": 3.4,
-     "c4": 6.4
-    }
-   }
+   "meets_clock": true
+  },
+  "ltbf_r2c4_p32": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 32,
+    "R": 2,
+    "C": 4,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -4
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 62,
+    "ff": 22259,
+    "lut": 25251,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r4c4_p22": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 22,
+    "R": 4,
+    "C": 4,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -3
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 94,
+    "ff": 29839,
+    "lut": 28584,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r4c4_p32": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 32,
+    "R": 4,
+    "C": 4,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -4
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 94,
+    "ff": 30201,
+    "lut": 29510,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r4c8_p22": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 22,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -3
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 157,
+    "ff": 51177,
+    "lut": 41789,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r4c8_p32": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 32,
+    "R": 4,
+    "C": 8,
+    "L": 4,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -4
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 24,
+    "dsp": 157,
+    "ff": 51539,
+    "lut": 42715,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r8c8_p22": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 22,
+    "R": 8,
+    "C": 8,
+    "L": 8,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -3
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 38,
+    "dsp": 283,
+    "ff": 76247,
+    "lut": 59248,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
+  },
+  "ltbf_r8c8_p32": {
+   "params": {
+    "Mmax": 16,
+    "Kmax": 8,
+    "Nmax": 8,
+    "Pmax": 32,
+    "R": 8,
+    "C": 8,
+    "L": 8,
+    "word_bits": 64,
+    "lane_bits": 16,
+    "a": [
+     16,
+     -4
+    ],
+    "b": [
+     16,
+     1
+    ],
+    "c": [
+     16,
+     1
+    ]
+   },
+   "engine": "systolic_engine_mem",
+   "tool": "2025.1",
+   "ok": true,
+   "failed": null,
+   "date": "2026-11-06",
+   "resources": {
+    "bram": 38,
+    "dsp": 283,
+    "ff": 76609,
+    "lut": 60168,
+    "est_clock_ns": 3.352
+   },
+   "meets_clock": true
   }
  }
 }

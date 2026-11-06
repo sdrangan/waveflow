@@ -3,6 +3,7 @@
 
     python -m examples.systolic.engine_harness --root C:/wfsc/eh --through golden      # pysim only
     python -m examples.systolic.engine_harness --root C:/wfsc/eh --through compare     # + csynth, XSI
+    python -m examples.systolic.engine_harness --root /tmp/eh --point ltbf_r4c8_p22 --calibrate
 
 Build from a short root on Windows: past 260 characters a csynth path fails silently.
 """
@@ -113,12 +114,20 @@ if __name__ == "__main__":
     ap.add_argument("--workload", default="test")
     ap.add_argument("--trace", action="store_true")
     ap.add_argument("--word-bits", type=int, default=64)
+    ap.add_argument("--point", help="a configuration of examples/systolic/systolic_sweep.py's "
+                    "LTBF_POINTS (the LTBF system's engine builds) instead of the centre")
     ap.add_argument("--calibrate", action="store_true",
                     help="also fit the core's timed phase on workload('calib') and file it")
     a = ap.parse_args()
     root = Path(a.root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    res = build_dag({"word_bits": a.word_bits}, workload=a.workload, trace=a.trace,
+    if a.point:
+        from examples.systolic.systolic_sweep import LTBF_POINTS
+
+        cfg = {k: reg(*v) if k in ("a", "b", "c") else v for k, v in LTBF_POINTS[a.point].items()}
+    else:
+        cfg = {"word_bits": a.word_bits}
+    res = build_dag(cfg, workload=a.workload, trace=a.trace,
                     calibrate=a.calibrate).run(build_config(root), through=a.through)
     ok = True
     for name, r in res.items():

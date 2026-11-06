@@ -1,19 +1,19 @@
-# cg_fit_report.csv: step 8.4 fit, model v1; tool=Vitis HLS / Vivado xsim 2024.1
+# cg_fit_report.csv: step 8.4 fit, model v1; tool=Vitis HLS / Vivado xsim 2025.1
 metric,value
-loo.unit_lut.mean_pct,3.2876299883338835
-loo.unit_lut.max_pct,8.622267412303
-loo.unit_ff.mean_pct,2.8158615239703564
-loo.unit_ff.max_pct,8.14992663732162
-loo.core_lut.mean_pct,2.094269286648285
-loo.core_lut.max_pct,10.604658337189573
-loo.core_ff.mean_pct,3.8277874154847393
-loo.core_ff.max_pct,13.612099644128115
-loo.interval.mean_pct,2.1972382387569236
-loo.interval.max_pct,38.13400655641364
+loo.unit_lut.mean_pct,3.4110699220391316
+loo.unit_lut.max_pct,8.961452193417141
+loo.unit_ff.mean_pct,2.917849114044692
+loo.unit_ff.max_pct,8.94183601962161
+loo.core_lut.mean_pct,2.1358878684976217
+loo.core_lut.max_pct,10.893009543021181
+loo.core_ff.mean_pct,3.7782899499051994
+loo.core_ff.max_pct,13.372093023255813
+loo.interval.mean_pct,10.545952752396312
+loo.interval.max_pct,153.44086306938348
 n_builds,31
-sha256.models/cg_vector_task/params.json,2292a9caddb2005a251f4e456fffcc07efbac1c90766780987f4ac147be202af
-sha256.models/cg_vector_rx_task/params.json,9c52c27e842ccec320a9b8a73bfb29331793bb474e6141f9ba3fe927a93070e6
-sha256.models/cg_vector_load_task/params.json,640639eead9eca7246b9cc66fb9067bc428282094e9aee4663b444c64e07e2f8
-sha256.models/cg_vector_store_task/params.json,72f7d422a333e10fff90139fb515c7b053e3c16dde3785050c7368e039d87adf
-sha256.models/cg_vector_unit_channels/params.json,f2e0dc081ba24dda00cc187fc5c0870a7443d99ed556d4020d87a467899edae1
-sha256.components/cg_vector_unit/params.json,db41221df2f84e9a9ff70fe733bc9b8125ebbc788c8af73e7f555b29c449d278
+sha256.models/cg_vector_task/params.json,eada1f621b5c2190750425c02ecab832c1349dde5e6342f2ac601e5b2d5afca4
+sha256.models/cg_vector_rx_task/params.json,779ac93145d7fad16a2625674493582393803564306212dfdb6ce50a91d73e68
+sha256.models/cg_vector_load_task/params.json,c19b3b11f99698dce4bbce88f9e97e3bb10f08bb9f4ed08aeeb9cb5aa3a34dd2
+sha256.models/cg_vector_store_task/params.json,5b2550c912140a3a1e0945699201a9bb2165806bda8a96d0de110776b0f39ead
+sha256.models/cg_vector_unit_channels/params.json,3517fa3862b330a2a95977eba34ce79f5c11b8f60b1496cd61b4b51dd73ceb12
+sha256.components/cg_vector_unit/params.json,d744c351adeae638c92f7387f2ffbcf633367d9982e7e14842ea606d19c05fb1

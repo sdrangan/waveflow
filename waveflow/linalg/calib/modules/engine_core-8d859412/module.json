@@ -1,0 +1,19 @@
+{
+  "key": "engine_core-8d859412",
+  "cls_name": "EngineCore",
+  "cls_module": "waveflow.linalg.systolic_engine",
+  "params": {
+    "C": 8,
+    "Kmax": 8,
+    "L": 4,
+    "Mmax": 16,
+    "Nmax": 8,
+    "Pmax": 32,
+    "R": 4,
+    "form": 4,
+    "lane_bits": 16,
+    "sob_depth": 2,
+    "word_bits": 64
+  },
+  "signature": "8d8594120e437d61cc12721a72304515a98541d07b9f4705612f4b679880da62"
+}

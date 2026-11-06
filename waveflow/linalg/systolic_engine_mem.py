@@ -172,6 +172,17 @@ class EngineSeq(_MemPart):
         self.feed_out = self._ep(StreamIFMaster, "feed_out", CTRL_BITS, False)
         self.tile_out = self._ep(StreamIFMaster, "tile_out", CTRL_BITS, False)
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 3)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_seq_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_seq_task", MEM_HEADERS[0], ("s_job", "feed_out", "tile_out"),
                           framed=("s_job",), template_args=self._targs())
@@ -226,6 +237,17 @@ class EngineFeeder(_MemPart):
         self.add_endpoint(self.m_mem)
         self.m_out = self._ep(StreamIFMaster, "m_out", w, True)
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 0)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_feed_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_feed_task", MEM_HEADERS[0], ("feed_in", "m_mem", "m_out"),
                           template_args=self._targs())
@@ -263,6 +285,17 @@ class EngineWriter(_MemPart):
         self.c_in = self._ep(StreamIFSlave, "c_in", w, True)
         self.st_in = self._ep(StreamIFSlave, "st_in", CTRL_BITS, True)
         self.w_out = self._ep(StreamIFMaster, "w_out", w, True)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 0)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_writer_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_writer_task", MEM_HEADERS[0],
@@ -320,6 +353,26 @@ class SystolicEngineMem(_MemPart):
     #: transaction, so another master's reads interleave per tile, not per panel.
     pysim: str = "tasks"
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
+
+    @classmethod
+    def get_rm(cls, platform):
+        """The kernel, whole -- every task's model, the buffers and FIFOs, summed
+        (:class:`~waveflow.linalg.cost.EngineKernelModel`): what ``estimate_system`` asks a kernel's
+        class.  In a composed estimate the composite installs only its own share (``add_rm_self``)."""
+        from waveflow.linalg.cost import engine_kernel_model
+
+        return engine_kernel_model(platform)
+
+    def add_rm_self(self, platform) -> None:
+        """In a composed estimate the wrapper contributes its own share -- its FIFOs and the
+        ``m_axi`` adapters -- and prices its memory writer, a ``MemWStream`` with no model of its own
+        on this platform (:class:`~waveflow.linalg.cost.EngineShareModel`); its tasks and its engine
+        carry their own.  :meth:`get_rm` answers for the kernel whole."""
+        from waveflow.linalg.cost import engine_share_model
+
+        share = engine_share_model(platform)
+        self._resource_model = share
+        self.wstream._resource_model = share
 
     def __post_init__(self) -> None:
         super().__post_init__()

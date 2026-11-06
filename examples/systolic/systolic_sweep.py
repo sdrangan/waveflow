@@ -24,6 +24,9 @@ from examples.systolic import engine_mem_harness as EMH
 from examples.systolic.systolic_measure import _resources
 
 HERE = Path(__file__).resolve().parent
+#: The record, csynth 2025.1 on the lab machine (plans/calib_2025_1.md Stage 4).  The engine's resource
+#: model fitted on it is on the platform (examples/systolic/engine_resources.py); ``--fit`` below is the
+#: first, whole-engine fit, kept for comparison.
 RESOURCES = HERE / "resources.json"
 
 CENTRE = dict(Mmax=8, Kmax=8, Nmax=32, Pmax=4, R=4, C=8, L=4, word_bits=64)

@@ -1,0 +1,3687 @@
+{
+ "plan": "plans/calib_2025_1.md Stage 4 (the systolic engine, resources)",
+ "tool": "Vitis HLS / Vivado xsim 2025.1",
+ "part": "xczu48dr-ffvg1517-2-e",
+ "targets": {
+  "dsp_bram_exact_share": 0.9,
+  "lut_ff_mean": 0.1
+ },
+ "points": {
+  "big": {
+   "top": {
+    "lut": 94068,
+    "ff": 110203,
+    "dsp": 537,
+    "bram": 62
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_128_16_8_64_4_8_8_16_1556958752_axis_s",
+     "counters": {
+      "lut": 1245,
+      "ff": 568,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2111,
+      "ff": 1704,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1458,
+      "ff": 821,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_64_4_8_8_16_4_2_4_119916511_s",
+     "counters": {
+      "lut": 86629,
+      "ff": 104077,
+      "dsp": 515,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_128_16_8_64_4_8_8_16_2_119916511_s",
+     "counters": {
+      "lut": 811,
+      "ff": 705,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1226,
+      "ff": 660,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 588,
+    "ff": 1668,
+    "dsp": 0,
+    "bram": 62
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 92998,
+    "ff": 109888,
+    "dsp": 537,
+    "bram": 62
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 128,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 64,
+     "Pmax": 4,
+     "L": 8,
+     "R": 8,
+     "C": 16,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "c16": {
+   "top": {
+    "lut": 51048,
+    "ff": 63187,
+    "dsp": 281,
+    "bram": 48
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_64_4_4_4_16_1556958752_axis_s",
+     "counters": {
+      "lut": 1274,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1262,
+      "ff": 802,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_64_4_4_4_16_4_2_2_119916511_s",
+     "counters": {
+      "lut": 44151,
+      "ff": 57777,
+      "dsp": 259,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_64_4_4_4_16_2_119916511_s",
+     "counters": {
+      "lut": 820,
+      "ff": 683,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1284,
+    "dsp": 0,
+    "bram": 48
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 52757,
+    "ff": 65474,
+    "dsp": 281,
+    "bram": 48
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 64,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 16,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "c4": {
+   "top": {
+    "lut": 19506,
+    "ff": 19391,
+    "dsp": 91,
+    "bram": 18
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_4_4_4_4_1556958752_axis_s",
+     "counters": {
+      "lut": 1272,
+      "ff": 481,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1157,
+      "ff": 770,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_4_4_4_4_4_2_2_119916511_s",
+     "counters": {
+      "lut": 12803,
+      "ff": 14144,
+      "dsp": 69,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_4_4_4_4_2_119916511_s",
+     "counters": {
+      "lut": 712,
+      "ff": 604,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 561,
+    "ff": 1230,
+    "dsp": 0,
+    "bram": 18
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 20128,
+    "ff": 20071,
+    "dsp": 91,
+    "bram": 18
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "centre": {
+   "top": {
+    "lut": 31718,
+    "ff": 36354,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1273,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_4_4_4_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 24892,
+      "ff": 30983,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_4_4_4_8_2_119916511_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1282,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30175,
+    "ff": 34883,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "k16": {
+   "top": {
+    "lut": 31821,
+    "ff": 36609,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_16_32_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1281,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1921,
+      "ff": 1446,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1192,
+      "ff": 768,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_16_32_4_4_4_8_4_2_2_325710813_s",
+     "counters": {
+      "lut": 24989,
+      "ff": 31386,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_16_32_4_4_4_8_2_325710813_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 592,
+    "ff": 1284,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 29929,
+    "ff": 34820,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 16,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "k4": {
+   "top": {
+    "lut": 31567,
+    "ff": 36410,
+    "dsp": 154,
+    "bram": 16
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_4_32_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1283,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1967,
+      "ff": 1596,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 766,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_4_32_4_4_4_8_4_2_2_2043760165_s",
+     "counters": {
+      "lut": 24668,
+      "ff": 30659,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_4_32_4_4_4_8_2_2043760165_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 612,
+    "ff": 1664,
+    "dsp": 0,
+    "bram": 16
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30468,
+    "ff": 35332,
+    "dsp": 154,
+    "bram": 16
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 4,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "l8": {
+   "top": {
+    "lut": 27551,
+    "ff": 30018,
+    "dsp": 154,
+    "bram": 42
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_4_8_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1273,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_4_8_4_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 20767,
+      "ff": 24614,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_4_8_4_8_2_119916511_s",
+     "counters": {
+      "lut": 701,
+      "ff": 620,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1104,
+      "ff": 661,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 539,
+    "ff": 1280,
+    "dsp": 0,
+    "bram": 42
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 28990,
+    "ff": 30578,
+    "dsp": 154,
+    "bram": 42
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 8,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r2c4_p22": {
+   "top": {
+    "lut": 24325,
+    "ff": 21897,
+    "dsp": 62,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_22_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 619,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_22_4_2_4_1416384957_framed_word_64_s",
+     "counters": {
+      "lut": 3004,
+      "ff": 1081,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 960,
+      "ff": 673,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_22_4_2_4_4_2_2_1397277514_s",
+     "counters": {
+      "lut": 9481,
+      "ff": 9451,
+      "dsp": 37,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_22_4_2_4_2_1397277514_s",
+     "counters": {
+      "lut": 712,
+      "ff": 601,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2718,
+    "ff": 3856,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 24088,
+    "ff": 22041,
+    "dsp": 62,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 22,
+     "L": 4,
+     "R": 2,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r2c4_p32": {
+   "top": {
+    "lut": 25251,
+    "ff": 22259,
+    "dsp": 62,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_32_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 623,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_32_4_2_4_1240846357_framed_word_64_s",
+     "counters": {
+      "lut": 3954,
+      "ff": 1439,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 960,
+      "ff": 673,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_32_4_2_4_4_2_2_1935333983_s",
+     "counters": {
+      "lut": 9457,
+      "ff": 9451,
+      "dsp": 37,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_32_4_2_4_2_1935333983_s",
+     "counters": {
+      "lut": 712,
+      "ff": 601,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2718,
+    "ff": 3856,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 25046,
+    "ff": 22382,
+    "dsp": 62,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 32,
+     "L": 4,
+     "R": 2,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r4c4_p22": {
+   "top": {
+    "lut": 28584,
+    "ff": 29839,
+    "dsp": 94,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_22_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 619,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_22_4_4_4_1416384957_framed_word_64_s",
+     "counters": {
+      "lut": 3004,
+      "ff": 1083,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 960,
+      "ff": 673,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_22_4_4_4_4_2_2_1397277514_s",
+     "counters": {
+      "lut": 13741,
+      "ff": 17392,
+      "dsp": 69,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_22_4_4_4_2_1397277514_s",
+     "counters": {
+      "lut": 712,
+      "ff": 600,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2717,
+    "ff": 3856,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30720,
+    "ff": 31870,
+    "dsp": 94,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 22,
+     "L": 4,
+     "R": 4,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r4c8_p22": {
+   "top": {
+    "lut": 41789,
+    "ff": 51177,
+    "dsp": 157,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_22_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 619,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_22_4_4_8_1416384957_framed_word_64_s",
+     "counters": {
+      "lut": 3005,
+      "ff": 1081,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 993,
+      "ff": 671,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_22_4_4_8_4_2_2_1397277514_s",
+     "counters": {
+      "lut": 26761,
+      "ff": 38094,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_22_4_4_8_2_1397277514_s",
+     "counters": {
+      "lut": 820,
+      "ff": 676,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2760,
+    "ff": 4420,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 42461,
+    "ff": 51400,
+    "dsp": 157,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 22,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r4c8_p32": {
+   "top": {
+    "lut": 42715,
+    "ff": 51539,
+    "dsp": 157,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_32_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 623,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_32_4_4_8_1240846357_framed_word_64_s",
+     "counters": {
+      "lut": 3955,
+      "ff": 1439,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 993,
+      "ff": 671,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_32_4_4_8_4_2_2_1935333983_s",
+     "counters": {
+      "lut": 26737,
+      "ff": 38094,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_32_4_4_8_2_1935333983_s",
+     "counters": {
+      "lut": 820,
+      "ff": 676,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2760,
+    "ff": 4420,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 43419,
+    "ff": 51741,
+    "dsp": 157,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 32,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r8c8_p22": {
+   "top": {
+    "lut": 59248,
+    "ff": 76247,
+    "dsp": 283,
+    "bram": 38
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_22_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 619,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_22_8_8_8_1416384957_framed_word_64_s",
+     "counters": {
+      "lut": 3006,
+      "ff": 1084,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 993,
+      "ff": 671,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_22_8_8_8_4_2_2_1397277514_s",
+     "counters": {
+      "lut": 44265,
+      "ff": 63232,
+      "dsp": 259,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_22_8_8_8_2_1397277514_s",
+     "counters": {
+      "lut": 673,
+      "ff": 477,
+      "dsp": 4,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1089,
+      "ff": 674,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_22_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2760,
+    "ff": 4420,
+    "dsp": 0,
+    "bram": 38
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 59250,
+    "ff": 76237,
+    "dsp": 283,
+    "bram": 38
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 22,
+     "L": 8,
+     "R": 8,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "m16": {
+   "top": {
+    "lut": 32424,
+    "ff": 36786,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_32_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1281,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2142,
+      "ff": 1638,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_32_4_4_4_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 25371,
+      "ff": 30983,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_32_4_4_4_8_2_119916511_s",
+     "counters": {
+      "lut": 822,
+      "ff": 686,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 592,
+    "ff": 1668,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 32855,
+    "ff": 36398,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "n64": {
+   "top": {
+    "lut": 31848,
+    "ff": 36447,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_64_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1272,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1192,
+      "ff": 768,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_64_4_4_4_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 25021,
+      "ff": 31070,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_64_4_4_4_8_2_119916511_s",
+     "counters": {
+      "lut": 822,
+      "ff": 686,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1282,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 32626,
+    "ff": 35948,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 64,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "p1": {
+   "top": {
+    "lut": 30981,
+    "ff": 35638,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_1_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 984,
+      "ff": 411,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_1_4_4_8_4_2_2_998446828_s",
+     "counters": {
+      "lut": 24444,
+      "ff": 30335,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_1_4_4_8_2_998446828_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1282,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30340,
+    "ff": 34767,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 1,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "p8": {
+   "top": {
+    "lut": 32314,
+    "ff": 36844,
+    "dsp": 154,
+    "bram": 32
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_8_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1645,
+      "ff": 645,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_8_4_4_8_4_2_2_325710813_s",
+     "counters": {
+      "lut": 25116,
+      "ff": 31307,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_8_4_4_8_2_325710813_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1025,
+      "ff": 565,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1282,
+    "dsp": 0,
+    "bram": 32
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30332,
+    "ff": 35025,
+    "dsp": 154,
+    "bram": 32
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 8,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "r2": {
+   "top": {
+    "lut": 20709,
+    "ff": 23390,
+    "dsp": 91,
+    "bram": 23
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_8_8_32_4_2_2_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1273,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1976,
+      "ff": 1597,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_4_2_2_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 14198,
+      "ff": 18195,
+      "dsp": 69,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_8_8_32_4_2_2_8_2_119916511_s",
+     "counters": {
+      "lut": 822,
+      "ff": 686,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 687,
+      "ff": 436,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 562,
+    "ff": 1230,
+    "dsp": 0,
+    "bram": 23
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 21384,
+    "ff": 24393,
+    "dsp": 91,
+    "bram": 23
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 2,
+     "R": 2,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "r8": {
+   "top": {
+    "lut": 48885,
+    "ff": 56090,
+    "dsp": 281,
+    "bram": 42
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_32_4_8_8_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1282,
+      "ff": 482,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2142,
+      "ff": 1638,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1191,
+      "ff": 767,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_32_4_8_8_8_4_2_2_119916511_s",
+     "counters": {
+      "lut": 41873,
+      "ff": 50251,
+      "dsp": 259,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_32_4_8_8_8_2_119916511_s",
+     "counters": {
+      "lut": 701,
+      "ff": 623,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1104,
+      "ff": 661,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 592,
+    "ff": 1668,
+    "dsp": 0,
+    "bram": 42
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 50471,
+    "ff": 57274,
+    "dsp": 281,
+    "bram": 42
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 8,
+     "R": 8,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "small": {
+   "top": {
+    "lut": 14317,
+    "ff": 12534,
+    "dsp": 59,
+    "bram": 15
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_4_8_16_4_2_2_4_1556958752_axis_s",
+     "counters": {
+      "lut": 1283,
+      "ff": 479,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1833,
+      "ff": 1484,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1156,
+      "ff": 769,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_4_8_16_4_2_2_4_4_2_2_119916511_s",
+     "counters": {
+      "lut": 7999,
+      "ff": 7651,
+      "dsp": 37,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_4_8_16_4_2_2_4_2_119916511_s",
+     "counters": {
+      "lut": 822,
+      "ff": 679,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 687,
+      "ff": 436,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 537,
+    "ff": 1036,
+    "dsp": 0,
+    "bram": 15
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 13661,
+    "ff": 13781,
+    "dsp": 59,
+    "bram": 15
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 4,
+     "Kmax": 8,
+     "Nmax": 16,
+     "Pmax": 4,
+     "L": 2,
+     "R": 2,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "w128": {
+   "top": {
+    "lut": 31629,
+    "ff": 36481,
+    "dsp": 154,
+    "bram": 36
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine.systolic_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_128_8_8_32_4_4_4_8_1556958752_axis_s",
+     "counters": {
+      "lut": 1235,
+      "ff": 568,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 1945,
+      "ff": 1663,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 1387,
+      "ff": 823,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_8_8_32_4_4_4_8_4_2_4_119916511_s",
+     "counters": {
+      "lut": 24892,
+      "ff": 30983,
+      "dsp": 132,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_128_8_8_32_4_4_4_8_2_119916511_s",
+     "counters": {
+      "lut": 821,
+      "ff": 681,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine.systolic_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 809,
+      "ff": 483,
+      "dsp": 1,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 540,
+    "ff": 1280,
+    "dsp": 0,
+    "bram": 36
+   },
+   "role": "fit",
+   "predicted": {
+    "lut": 30206,
+    "ff": 35033,
+    "dsp": 154,
+    "bram": 36
+   },
+   "kernel": {
+    "cls": "SystolicEngine",
+    "name": "systolic_engine",
+    "params": {
+     "word_bits": 128,
+     "Mmax": 8,
+     "Kmax": 8,
+     "Nmax": 32,
+     "Pmax": 4,
+     "L": 4,
+     "R": 4,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      12,
+      3,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      12,
+      4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      12,
+      5,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r4c4_p32": {
+   "top": {
+    "lut": 29510,
+    "ff": 30201,
+    "dsp": 94,
+    "bram": 24
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_32_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 623,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_32_4_4_4_1240846357_framed_word_64_s",
+     "counters": {
+      "lut": 3954,
+      "ff": 1441,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 960,
+      "ff": 673,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_32_4_4_4_4_2_2_1935333983_s",
+     "counters": {
+      "lut": 13717,
+      "ff": 17392,
+      "dsp": 69,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_32_4_4_4_2_1935333983_s",
+     "counters": {
+      "lut": 712,
+      "ff": 600,
+      "dsp": 5,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 988,
+      "ff": 546,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2717,
+    "ff": 3856,
+    "dsp": 0,
+    "bram": 24
+   },
+   "role": "holdout",
+   "predicted": {
+    "lut": 31678,
+    "ff": 32211,
+    "dsp": 94,
+    "bram": 24
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 32,
+     "L": 4,
+     "R": 4,
+     "C": 4,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  },
+  "ltbf_r8c8_p32": {
+   "top": {
+    "lut": 60168,
+    "ff": 76609,
+    "dsp": 283,
+    "bram": 38
+   },
+   "tasks": [
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_seq",
+     "cls": "EngineSeq",
+     "task": "systolic_engine_seq_task",
+     "rtl": "systolic_engine_seq_task_64_16_8_8_32_64_32_64_axis_s",
+     "counters": {
+      "lut": 803,
+      "ff": 623,
+      "dsp": 3,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_feeder",
+     "cls": "EngineFeeder",
+     "task": "systolic_engine_feed_task",
+     "rtl": "systolic_engine_feed_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 1292,
+      "ff": 865,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_rx",
+     "cls": "EngineRx",
+     "task": "systolic_engine_rx_task",
+     "rtl": "systolic_engine_rx_task_64_16_8_8_32_8_8_8_1240846357_framed_word_64_s",
+     "counters": {
+      "lut": 3956,
+      "ff": 1442,
+      "dsp": 2,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_a",
+     "cls": "EngineLoadA",
+     "task": "systolic_engine_load_a_task",
+     "rtl": "systolic_engine_load_a_task",
+     "counters": {
+      "lut": 2060,
+      "ff": 1806,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_load_b",
+     "cls": "EngineLoadB",
+     "task": "systolic_engine_load_b_task",
+     "rtl": "systolic_engine_load_b_task",
+     "counters": {
+      "lut": 993,
+      "ff": 671,
+      "dsp": 7,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_core",
+     "cls": "EngineCore",
+     "task": "systolic_engine_core_task",
+     "rtl": "systolic_engine_core_task_16_8_8_32_8_8_8_4_2_2_1935333983_s",
+     "counters": {
+      "lut": 44235,
+      "ff": 63232,
+      "dsp": 259,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_collect",
+     "cls": "EngineCollect",
+     "task": "systolic_engine_collect_task",
+     "rtl": "systolic_engine_collect_task_64_16_8_8_32_8_8_8_2_1935333983_s",
+     "counters": {
+      "lut": 673,
+      "ff": 477,
+      "dsp": 4,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_engine.systolic_engine_mem_engine_store",
+     "cls": "EngineStore",
+     "task": "systolic_engine_store_task",
+     "rtl": "systolic_engine_store_task",
+     "counters": {
+      "lut": 1089,
+      "ff": 674,
+      "dsp": 1,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_writer",
+     "cls": "EngineWriter",
+     "task": "systolic_engine_writer_task",
+     "rtl": "systolic_engine_writer_task_64_16_8_8_32_64_32_64_s",
+     "counters": {
+      "lut": 289,
+      "ff": 166,
+      "dsp": 0,
+      "bram": 0
+     }
+    },
+    {
+     "path": "systolic_engine_mem.systolic_engine_mem_memw",
+     "cls": "MemWStream",
+     "task": "mem_w_stream_framed_done_task",
+     "rtl": "mem_w_stream_framed_done_task_64_8_s",
+     "counters": {
+      "lut": 2018,
+      "ff": 2233,
+      "dsp": 0,
+      "bram": 0
+     }
+    }
+   ],
+   "share": {
+    "lut": 2760,
+    "ff": 4420,
+    "dsp": 0,
+    "bram": 38
+   },
+   "role": "holdout",
+   "predicted": {
+    "lut": 60208,
+    "ff": 76578,
+    "dsp": 283,
+    "bram": 38
+   },
+   "kernel": {
+    "cls": "SystolicEngineMem",
+    "name": "systolic_engine_mem",
+    "params": {
+     "word_bits": 64,
+     "Mmax": 16,
+     "Kmax": 8,
+     "Nmax": 8,
+     "Pmax": 32,
+     "L": 8,
+     "R": 8,
+     "C": 8,
+     "form": 4,
+     "sob_depth": 2,
+     "lane_bits": 16
+    },
+    "formats": {
+     "a": [
+      16,
+      -4,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "b": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ],
+     "c": [
+      16,
+      1,
+      true,
+      "AP_RND",
+      "AP_SAT"
+     ]
+    }
+   }
+  }
+ },
+ "fit": {
+  "summary": {
+   "lut": {
+    "mean": 0.032031925618353954,
+    "worst": 0.07472712006717044
+   },
+   "ff": {
+    "mean": 0.02864334664610729,
+    "worst": 0.09948938886229455
+   },
+   "dsp": {
+    "exact_share": 1.0
+   },
+   "bram": {
+    "exact_share": 1.0
+   }
+  },
+  "errors": {
+   "big": {
+    "lut": -0.01137475018072033,
+    "ff": -0.0028583613876210267,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "c16": {
+    "lut": 0.03347829493809747,
+    "ff": 0.036194153860762496,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "c4": {
+    "lut": 0.03188762432072183,
+    "ff": 0.03506781496570574,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "centre": {
+    "lut": -0.04864745570338609,
+    "ff": -0.04046322275402982,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "k16": {
+    "lut": -0.05945759089909179,
+    "ff": -0.04886776475730012,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "k4": {
+    "lut": -0.034814838280482784,
+    "ff": -0.029607250755287008,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "l8": {
+    "lut": 0.05223040905956226,
+    "ff": 0.018655473382637084,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r2c4_p22": {
+    "lut": -0.00974306269270298,
+    "ff": 0.006576243321002877,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r2c4_p32": {
+    "lut": -0.008118490356817552,
+    "ff": 0.005525854710454198,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r4c4_p22": {
+    "lut": 0.07472712006717044,
+    "ff": 0.06806528368913167,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r4c8_p22": {
+    "lut": 0.016080786809926056,
+    "ff": 0.004357426187545186,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r4c8_p32": {
+    "lut": 0.016481329743649773,
+    "ff": 0.003919362036516037,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r8c8_p22": {
+    "lut": 3.375641371860653e-05,
+    "ff": -0.00013115270108987894,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "m16": {
+    "lut": 0.013292622748581298,
+    "ff": -0.010547490893274615,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "n64": {
+    "lut": 0.02442853554383321,
+    "ff": -0.013691113123165144,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "p1": {
+    "lut": -0.02069010038410639,
+    "ff": -0.02444020427633425,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "p8": {
+    "lut": -0.06133564399331559,
+    "ff": -0.04937031809792639,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "r2": {
+    "lut": 0.03259452411994785,
+    "ff": 0.04288157332193245,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "r8": {
+    "lut": 0.03244348982305411,
+    "ff": 0.02110893207345338,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "small": {
+    "lut": -0.04581965495564713,
+    "ff": 0.09948938886229455,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "w128": {
+    "lut": -0.04499035695089949,
+    "ff": -0.03969189441078918,
+    "dsp": 0.0,
+    "bram": 0.0
+   }
+  }
+ },
+ "holdout": {
+  "set": [
+   "ltbf_r4c4_p32",
+   "ltbf_r8c8_p32"
+  ],
+  "summary": {
+   "lut": {
+    "mean": 0.037065713348157746,
+    "worst": 0.07346662148424263
+   },
+   "ff": {
+    "mean": 0.03347936990395239,
+    "worst": 0.06655408761299295
+   },
+   "dsp": {
+    "exact_share": 1.0
+   },
+   "bram": {
+    "exact_share": 1.0
+   },
+   "met": {
+    "dsp_bram": true,
+    "lut_ff": true
+   }
+  },
+  "errors": {
+   "ltbf_r4c4_p32": {
+    "lut": 0.07346662148424263,
+    "ff": 0.06655408761299295,
+    "dsp": 0.0,
+    "bram": 0.0
+   },
+   "ltbf_r8c8_p32": {
+    "lut": 0.0006648052120728626,
+    "ff": -0.000404652194911825,
+    "dsp": 0.0,
+    "bram": 0.0
+   }
+  },
+  "date": "2026-11-06"
+ }
+}

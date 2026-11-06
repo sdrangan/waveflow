@@ -323,6 +323,17 @@ class EngineRx(_EnginePart):
         self.pay_b = self._ep(StreamIFMaster, "pay_b", w, True)
         self.halted = False
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_rx_structure
+
+        return engine_rx_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_rx_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_rx_task", ENGINE_HEADERS[0],
                           ("s_in", "a_job", "b_job", "core_job", "reply", "pay_a", "pay_b"),
@@ -372,6 +383,11 @@ class _EngineLoad(_EnginePart):
         else:
             self.blk = self._block(SobIFMaster, "blk", self.b, K * N, 1)
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_load_structure
+
+        return engine_load_structure(self)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask(f"systolic_engine_load_{self.operand.lower()}_task", ENGINE_HEADERS[1],
                           ("job_in", "s_in", "blk"),
@@ -408,6 +424,12 @@ class EngineLoadA(_EngineLoad):
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine_load_a"
     operand: ClassVar[str] = "A"
 
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_load_a_task", cls, platform)
+
 
 @dataclass
 class EngineLoadB(_EngineLoad):
@@ -415,6 +437,12 @@ class EngineLoadB(_EngineLoad):
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine_load_b"
     operand: ClassVar[str] = "B"
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_load_b_task", cls, platform)
 
 
 @dataclass
@@ -442,6 +470,17 @@ class EngineCore(_EnginePart):
             "panel", spans={"panel": (self.b_blk.first, self.b_blk.last)}, features=("steps",),
             seed={"panel": {"intercept": 2.0, "steps": 1.0}}, calib_dir=CALIB_DIR)
         self.add_timing_phase(self.panel)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_core_structure
+
+        return engine_core_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_core_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_core_task", ENGINE_HEADERS[2],
@@ -511,6 +550,17 @@ class EngineCollect(_EnginePart):
         self.c_blk = self._block(SobIFMaster, "c_blk", self.c, int(self.Mmax) * int(self.Nmax),
                                  int(self.L))
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_collect_structure
+
+        return engine_collect_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_collect_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_collect_task", ENGINE_HEADERS[2],
                           ("job_in", "c_in", "c_blk"),
@@ -543,6 +593,17 @@ class EngineStore(_EnginePart):
                                  int(self.L))
         self.s_out = self._ep(FramedStreamIFMaster, "s_out", int(self.word_bits), True)
         self.m_status = self._ep(FramedStreamIFMaster, "m_status", CTRL_BITS, True)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_store_structure
+
+        return engine_store_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_store_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_store_task", ENGINE_HEADERS[3],
@@ -589,6 +650,23 @@ class SystolicEngine(_EnginePart):
     #: own events).
     pysim: str = "tasks"
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
+
+    @classmethod
+    def get_rm(cls, platform):
+        """The kernel, whole -- every task's model, the buffers and FIFOs, summed
+        (:class:`~waveflow.linalg.cost.EngineKernelModel`): what ``estimate_system`` asks a kernel's
+        class.  In a composed estimate the composite installs only its own share (``add_rm_self``)."""
+        from waveflow.linalg.cost import engine_kernel_model
+
+        return engine_kernel_model(platform)
+
+    def add_rm_self(self, platform) -> None:
+        """In a composed estimate the engine contributes its own share -- its buffers and FIFOs
+        (:class:`~waveflow.linalg.cost.EngineShareModel`); its six tasks carry their own models.
+        :meth:`get_rm` answers for the kernel whole, which here would count the tasks twice."""
+        from waveflow.linalg.cost import engine_share_model
+
+        self._resource_model = engine_share_model(platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
