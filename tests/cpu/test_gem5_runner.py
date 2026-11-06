@@ -185,11 +185,16 @@ def empty_cycles(runner):
     return runner.empty_region_cycles()
 
 
+#: The region markers' own cost: gem5 v25.1.0.1, HPI at 1.2 GHz, DDR4_2400_8x8 x1, the code compiled by
+#: Vitis 2025.1's aarch64 gcc 13.3.0.  94 with 2024.1's gcc 12.2.0 (plans/cpu_model.md step 2); 95 since
+#: the recalibration (plans/calib_2025_1.md Stage 4b) -- the compiler, not the code under test.
+EMPTY_REGION_CYCLES = 95
+
+
 @pytest.mark.gem5
-def test_the_empty_region_costs_94_cycles(empty_cycles):
-    # gem5 v25.1.0.1, HPI at 1.2 GHz, DDR4_2400_8x8 x1 (plans/cpu_model.md step 2).  gem5 is
-    # deterministic, so this is exact for these tools; a change means the tools changed.
-    assert empty_cycles == 94
+def test_the_empty_region_costs_95_cycles(empty_cycles):
+    # gem5 is deterministic, so this is exact for these tools; a change means the tools changed.
+    assert empty_cycles == EMPTY_REGION_CYCLES
 
 
 SMOKE = [
@@ -208,7 +213,7 @@ def test_a_kernel_runs_end_to_end(runner, empty_cycles, name, point):
     k = KERNELS[name]
     row = runner.measure(k, point, empty_cycles=empty_cycles, smoke=True)
     assert row["output_matches_twin"] is True
-    assert row["cycles"] > 0 and math.isclose(row["cycles"], row["cycles_raw"] - 94)
+    assert row["cycles"] > 0 and math.isclose(row["cycles"], row["cycles_raw"] - EMPTY_REGION_CYCLES)
     assert row["role"] == "smoke" and row["prereg_commit"] == ""
     for col in ("gem5_commit", "compiler_version", "cflags", "dram", "kernel_sig"):
         assert row[col], col

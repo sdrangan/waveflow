@@ -20,7 +20,7 @@ from waveflow.cpu.calib.calibrate import MAX_BOUND, MEDIAN_BOUND, summarize
 
 CPU = (
     Path(__file__).resolve().parents[2]
-    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu"
+    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/cpu"
 )
 
 #: (family, target) -> the test-set max relative error accepted on 2026-10-08.
