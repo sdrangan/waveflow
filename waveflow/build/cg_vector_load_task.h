@@ -38,6 +38,10 @@ static void cg_vector_load_task(
 ITERS:
     for (int it = 0; it < nit; ++it) {
 #pragma HLS LOOP_TRIPCOUNT max = NITMAX
+// A block a matrix: the lock is taken and released each iteration.  Vitis HLS 2025.1 flattens this
+// loop into wf_load_matrix's WORDS loop when L is narrow (ITERS_WORDS) and the unit then never
+// replies; 2024.1 did not flatten it (plans/calib_2025_1.md, Stage 4).
+#pragma HLS LOOP_FLATTEN off
         hls::write_lock<typename wf_lanes::group<s_t, L>::type[BG]> s(s_blk);
         wf_load_matrix<WBW, L, BG, s_t, typename IO::s_mem>(s_in, s, kn, tl);
     }
