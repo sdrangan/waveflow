@@ -17,7 +17,10 @@ import json
 from datetime import date
 from pathlib import Path
 
+import numpy as np
+
 from examples.systolic import engine_harness as EH
+from examples.systolic import engine_mem_harness as EMH
 from examples.systolic.systolic_measure import _resources
 
 HERE = Path(__file__).resolve().parent
@@ -45,22 +48,48 @@ POINTS = {
 }
 
 
+#: plans/calib_2025_1.md Stage 2 (pre-registered 2026-11-05): the engine as the LTBF system builds it
+#: (``engine_cfg`` in ``examples/ltbf_cg_mem_dse/hw/system.py``, at its default ``W`` 16), on
+#: ``SystolicEngineMem``: the four array shapes of its DSE, ``Mmax`` 16, ``Kmax = Nmax = c = 8``,
+#: ``L = max(4, R)``, 64-bit words of 16-bit lanes, and ``Pmax`` for N_rx 64 (22: the long dimension
+#: is the 176 columns, not the 64 antennas) and for N_rx 256 (32), each with the formats the system
+#: profiles there (``a``, ``b``, ``c`` as ``(W, integer bits)``).
+LTBF_POINTS = {
+    f"ltbf_r{R}c{C}_p{P}": {"Mmax": 16, "Kmax": 8, "Nmax": 8, "Pmax": P, "R": R, "C": C,
+                            "L": max(4, R), "word_bits": 64, "lane_bits": 16,
+                            "a": (16, ai), "b": (16, 1), "c": (16, 1)}
+    for R, C in ((2, 4), (4, 4), (4, 8), (8, 8))
+    for P, ai in ((22, -3), (32, -4))
+}
+
+
+def params(name: str) -> dict:
+    """A point's parameters: the centre and :data:`POINTS`, or :data:`LTBF_POINTS`."""
+    return dict(LTBF_POINTS[name]) if name in LTBF_POINTS else {**CENTRE, **POINTS[name]}
+
+
 def synth(name: str, root: Path) -> dict:
-    cfg = {**CENTRE, **POINTS[name]}
+    cfg = params(name)
+    H = EMH if name in LTBF_POINTS else EH
+    built = {k: EH.reg(*v) if k in ("a", "b", "c") else v for k, v in cfg.items()}
     run_root = root / name
     run_root.mkdir(parents=True, exist_ok=True)
-    res = EH.build_dag(cfg).run(EH.build_config(run_root), through="csynth")
+    res = H.build_dag(built).run(EH.build_config(run_root), through="csynth")
     bad = {k: r.message[-500:] for k, r in res.items() if not r.success}
-    out = {"params": cfg, "tool": EH.build_config(run_root).vitis_version, "ok": not bad,
-           "failed": bad or None, "date": date.today().isoformat()}
+    out = {"params": cfg, "engine": H.KERNEL, "tool": EH.build_config(run_root).vitis_version,
+           "ok": not bad, "failed": bad or None, "date": date.today().isoformat()}
     if not bad:
-        out["resources"] = _resources(run_root / f"{EH.KERNEL}_proj")
+        out["resources"] = _resources(run_root / f"{H.KERNEL}_proj")
         out["meets_clock"] = out["resources"]["est_clock_ns"] <= EH.PERIOD_NS
     return out
 
 
-#: The points held out of the fit, to score it: a smaller array and a larger one.
-HOLDOUT = ("c4", "r8")
+#: The points held out of the fit, to score it.  At 2024.1 a smaller array and a larger one, ``c4``
+#: and ``r8``, now scored; the 2025.1 recalibration holds out two of :data:`LTBF_POINTS`, drawn with
+#: :data:`HOLDOUT_SEED`.
+HOLDOUT_SEED = 2025
+HOLDOUT = tuple(sorted(str(n) for n in np.random.default_rng(HOLDOUT_SEED).choice(
+    sorted(LTBF_POINTS), size=2, replace=False)))
 #: Each resource's features: the elements (R·C) and, for the logic, the drain groups (R·C/L).
 FEATURES = {"dsp": ("rc",), "lut": ("rc", "groups"), "ff": ("rc", "groups")}
 
@@ -101,7 +130,8 @@ def fit(points: dict) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", required=True, help="a short build root (Windows path length)")
-    ap.add_argument("--points", nargs="+", default=list(POINTS), choices=list(POINTS))
+    ap.add_argument("--points", nargs="+", default=[*POINTS, *LTBF_POINTS],
+                    choices=[*POINTS, *LTBF_POINTS])
     ap.add_argument("--force", action="store_true", help="re-synthesize points already recorded")
     ap.add_argument("--fit", action="store_true", help="fit the resource model on what is recorded")
     a = ap.parse_args()

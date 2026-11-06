@@ -36,7 +36,11 @@ Row = tuple[str, dict[str, Any], str]
 #: Seeds per role, disjoint so a held-out point never repeats a fitted input.
 FIT_SEEDS = (1, 2, 3)
 VAL_SEEDS = (101, 102)
-TEST_SEEDS = (201, 202)
+#: The 2025.1 recalibration's (plans/calib_2025_1.md Stage 2): 2024.1's (201, 202) have been scored.
+TEST_SEEDS = (301, 302)
+#: The 2024.1 study's second test seed, kept for the two re-test sets it drew (their plan files are
+#: that study's record): :func:`release_retest_rows`, :func:`ltbf_eig_recheck_rows`.
+RETEST_SEED_2024_1 = 202
 
 
 def _grid(kernel: str, role: str, points: list[dict[str, Any]]) -> list[Row]:
@@ -152,9 +156,9 @@ def dispatch_rows() -> list[Row]:
 def switch_rows() -> list[Row]:
     rows = _grid("ctx_switch", "fit", [{"k": k} for k in (1, 4, 16, 64, 256)])
     rows += _grid("ctx_switch", "validation", [{"k": k} for k in (8, 32, 128)])
-    rows += _grid("ctx_switch", "test", [{"k": k} for k in (2, 12, 48, 200)])
+    rows += _grid("ctx_switch", "test", [{"k": k} for k in (3, 24, 96, 180)])  # 2024.1: 2, 12, 48, 200
     rows += _grid("swapcontext", "fit", [{"k": k} for k in (1, 16, 64)])
-    rows += _grid("swapcontext", "test", [{"k": k} for k in (8, 32)])
+    rows += _grid("swapcontext", "test", [{"k": k} for k in (6, 40)])  # 2024.1: 8, 32
     return rows
 
 
@@ -238,7 +242,7 @@ def release_retest_rows() -> list[Row]:
     """A fresh held-out set for ``release``'s revised model form (plans/ltbf_dse/ltbf_dse.md §14,
     2026-10-29: the first form's test score was read, so the revision is scored on new points)."""
     return _grid("release", "test", [
-        {"succ": n, "ready": k, "seed": TEST_SEEDS[1]}
+        {"succ": n, "ready": k, "seed": RETEST_SEED_2024_1}
         for n, k in ((24, 6), (48, 0), (300, 75), (300, 150), (1500, 0), (1500, 500))
     ])  # fmt: skip
 
@@ -247,11 +251,11 @@ def ltbf_eig_recheck_rows() -> list[Row]:
     """Five held-out inputs re-checking ``ltbf_eig``'s model fitted on ``paper/ltbf_cg_seq_dse``
     (plans/ltbf_dse/ltbf_dse.md step 4.6): sizes and ranks between its points, a new seed."""
     return _grid("ltbf_eig", "test", [
-        {"n": 48, "r": 1, "rank": 3, "seed": TEST_SEEDS[1]},
-        {"n": 96, "r": 2, "rank": 6, "seed": TEST_SEEDS[1]},
-        {"n": 384, "r": 1, "rank": 2, "seed": TEST_SEEDS[1]},
-        {"n": 640, "r": 2, "rank": 5, "seed": TEST_SEEDS[1]},
-        {"n": 1000, "r": 1, "rank": 7, "seed": TEST_SEEDS[1]},
+        {"n": 48, "r": 1, "rank": 3, "seed": RETEST_SEED_2024_1},
+        {"n": 96, "r": 2, "rank": 6, "seed": RETEST_SEED_2024_1},
+        {"n": 384, "r": 1, "rank": 2, "seed": RETEST_SEED_2024_1},
+        {"n": 640, "r": 2, "rank": 5, "seed": RETEST_SEED_2024_1},
+        {"n": 1000, "r": 1, "rank": 7, "seed": RETEST_SEED_2024_1},
     ])  # fmt: skip
 
 

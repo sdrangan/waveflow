@@ -1,0 +1,8 @@
+{
+  "part": "cortex-a53 (gem5 HPI)",
+  "clk_freq_hz": 1200000000.0,
+  "res_types": [
+    "area_mm2",
+    "leak_mw"
+  ]
+}

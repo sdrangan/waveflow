@@ -96,6 +96,26 @@ TIMING2_HOLDOUT = (
     ("mf_l8", "steady"), ("mf_w128", "steady"),
 )
 
+# -- plans/calib_2025_1.md Stage 2: the 2025.1 recalibration's held-out sets (pre-registered
+# 2026-11-05, before any of its runs; the sets above have been scored) ------------------------------
+CG_JOBS["holdout3"] = {"random": 6, "seed": 399, "npass": (14, 22, 30), "n_max": 8,
+                       "solves": [(8, 32, 3, 51), (6, 24, 2, 52)]}
+MF_JOBS["holdout3"] = {"random": 6, "seed": 499, "npass": (10, 18), "n_max": 4, "k_max": 64,
+                       "frames": [(160, 4, 71), (96, 7, 72)]}
+#: Stage 7's timing form refitted at 2025.1 on the CG build's ``calib`` run, scored once on: fresh
+#: jobs on both applications and on a build never fitted, and the catalogue's steady workloads on
+#: every build of :data:`BUILDS` (``examples/vecunit_cg/cg_measure.py``, ``examples/vecunit_mf/mf_measure.py``).
+TIMING3_HOLDOUT = (
+    ("cg", "holdout3"), ("mf", "holdout3"), ("cg_l8", "holdout3"),
+    ("cg", "steady"), ("cg", "steady_k2"), ("cg", "steady_nit1"), ("cg", "steady_nit8"),
+    ("cg", "steady_n4"), ("cg_w128", "steady"), ("cg_w128", "steady_nit1"), ("cg_l2", "steady"),
+    ("cg_l8", "steady"),
+    ("mf", "steady"), ("mf", "steady_nrx4"), ("mf", "steady_nrx1"), ("mf_w128", "steady"),
+    ("mf_w128", "steady_nrx1"), ("mf_v16", "steady"), ("mf_v256", "steady"), ("mf_l8", "steady"),
+)
+#: The resource model refitted at 2025.1 on :data:`RESOURCE_FIT`, scored once on these.
+RESOURCE_HOLDOUT2 = ((8, 8, 3, "all", "mf"), (2, 32, 2, "mul1", "cg"), (4, 64, 2, "all", "cg"))
+
 
 #: The units the sets above name, as ``module:class`` (the library imports no example).
 UNITS = {"cg": "examples.vecunit_cg.cg_unit:CgVecUnit", "mf": "examples.vecunit_mf.mf_unit:MfVecUnit"}

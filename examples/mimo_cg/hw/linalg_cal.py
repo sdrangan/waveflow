@@ -6,12 +6,12 @@ Study tooling for plan step 7.5 (``plans/mimo_cg/mimo_cg_paper_sims.md``, §14 d
 scores it.  The bench is ``tests/linalg/_unit_bench.py``: the unit fed from memory through the
 in-band memory streams, as in the step 7.4 RTL gate.
 
-    python -m examples.mimo_cg.hw.linalg_cal split [--check]     # the pre-registered builds
+    python -m examples.mimo_cg.hw.linalg_cal split [--version 2|3] [--check]   # the pre-registered builds
     python -m examples.mimo_cg.hw.linalg_cal run --role fit [--shard i/n]
     python -m examples.mimo_cg.hw.linalg_cal merge
-    python -m examples.mimo_cg.hw.linalg_cal fit                 # writes the packaged platform
-    python -m examples.mimo_cg.hw.linalg_cal run --role holdout [--shard i/n]
-    python -m examples.mimo_cg.hw.linalg_cal validate
+    python -m examples.mimo_cg.hw.linalg_cal fit [--version 3]   # writes the packaged platform
+    python -m examples.mimo_cg.hw.linalg_cal run --role holdout [--shard i/n]   # 2025.1: holdout3
+    python -m examples.mimo_cg.hw.linalg_cal validate [--version 3]
 
 **The builds.**  The space: ``Mmax, Kmax`` in (4, 8, 16), ``Nmax`` in (16, 32), the array ``R × C``
 with ``R | Mmax``, ``C`` in (4, 8, 16, 32) with ``C | Nmax`` and ``R·C <= 256``, ``L`` in
@@ -65,11 +65,13 @@ PAPER = EX / "paper_data"
 SPLIT = PAPER / "linalg_split.csv"
 #: The second round (step 7.5, v2): more calibration builds and a fresh held-out set.
 SPLIT_V2 = PAPER / "linalg_split_v2.csv"
+#: The 2025.1 recalibration (plans/calib_2025_1.md Stage 2): the second round's fit, a fresh held-out set.
+SPLIT_V3 = PAPER / "linalg_split_v3.csv"
 POINTS = EX / "results" / "linalg_points"
 BUILDS = HERE / "build" / "linalg"
 RUN_7_4 = PAPER / "linalg_unit_7_4_cycles.csv"
 PART, PERIOD_NS = cost.PART, 4
-TOOL = "Vitis HLS / Vivado xsim 2024.1"
+TOOL = cost.TOOL
 
 VALUES = {
     "M": (4, 8, 16),
@@ -87,11 +89,13 @@ MAX_PES = 256
 REPEATS = 4
 HOLDOUT_SEED = 75
 HOLDOUT2_SEED = 76
+HOLDOUT3_SEED = 77
 N_HOLDOUT = 12
 #: A request the unit rejects (an unknown operation), measured in every second-round build.
 REJECT_OP = 7
 #: Per model version: the roles it is fitted on, and the held-out role it is judged on.
-VERSIONS = {1: (("fit",), "holdout"), 2: (("fit", "holdout", "fit2"), "holdout2")}
+VERSIONS = {1: (("fit",), "holdout"), 2: (("fit", "holdout", "fit2"), "holdout2"),
+            3: (("fit", "holdout", "fit2"), "holdout3")}
 #: AC7's thresholds.
 MIN_EXACT_PCT, MAX_AREA_MAPE, MAX_CYCLE_MAPE = 90.0, 10.0, 5.0
 
@@ -241,6 +245,25 @@ def holdout2_set() -> list[UnitConfig]:
     return [rest[i] for i in picks]
 
 
+def holdout3_set() -> list[UnitConfig]:
+    """The 2025.1 recalibration's held-out set: :data:`N_HOLDOUT` configurations drawn uniformly
+    (seed :data:`HOLDOUT3_SEED`) from the space without any build of the first two rounds."""
+    seen = set(fit_set()) | set(holdout_set()) | set(fit2_set()) | set(holdout2_set())
+    rest = [c for c in space() if c not in seen]
+    rng = np.random.default_rng(HOLDOUT3_SEED)
+    picks = sorted(int(i) for i in rng.choice(len(rest), size=N_HOLDOUT, replace=False))
+    return [rest[i] for i in picks]
+
+
+def split_v3_text() -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["role", "build", *VALUES])
+    for c in holdout3_set():
+        w.writerow(["holdout3", c.name, *(getattr(c, k) for k in VALUES)])
+    return buf.getvalue()
+
+
 def split_v2_text() -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
@@ -263,7 +286,7 @@ def split_text() -> str:
 
 def load_split() -> dict[str, list[UnitConfig]]:
     roles: dict[str, list[UnitConfig]] = {}
-    for path in (SPLIT, SPLIT_V2):
+    for path in (SPLIT, SPLIT_V2, SPLIT_V3):
         if not path.is_file():
             continue
         with path.open(encoding="utf-8") as f:
@@ -339,7 +362,7 @@ def measure(c: UnitConfig, role: str) -> dict:
         }
         rec["est_ns"] = _est_ns(out)
         rng = np.random.default_rng(zlib.crc32(c.name.encode()))
-        reject = role in ("fit2", "holdout2")
+        reject = role in ("fit2", "holdout2", "holdout3")
         jobs = [
             UB.random_job(
                 rng,
@@ -806,22 +829,22 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("split")
     sp.add_argument("--check", action="store_true")
-    sp.add_argument("--version", type=int, default=1, choices=(1, 2))
+    sp.add_argument("--version", type=int, default=1, choices=(1, 2, 3))
     rp = sub.add_parser("run")
     rp.add_argument(
-        "--role", required=True, choices=("fit", "holdout", "fit2", "holdout2")
+        "--role", required=True, choices=("fit", "holdout", "fit2", "holdout2", "holdout3")
     )
     rp.add_argument("--shard")
     sub.add_parser("merge")
     for cmd in ("fit", "validate"):
         sub.add_parser(cmd).add_argument(
-            "--version", type=int, default=2, choices=(1, 2)
+            "--version", type=int, default=2, choices=(1, 2, 3)
         )
     a = ap.parse_args(argv)
     if a.cmd == "split":
-        path, text = (
-            (SPLIT, split_text()) if a.version == 1 else (SPLIT_V2, split_v2_text())
-        )
+        path, text = {
+            1: (SPLIT, split_text()), 2: (SPLIT_V2, split_v2_text()), 3: (SPLIT_V3, split_v3_text())
+        }[a.version]
         if a.check:
             same = path.read_text(encoding="utf-8") == text
             print(f"{path.name}:", "unchanged" if same else "DIFFERS")

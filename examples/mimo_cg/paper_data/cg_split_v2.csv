@@ -1,0 +1,13 @@
+role,build,K,N,L,W,g,word,stress
+holdout2,cg_k4_n16_l2_w10_g0_b64,4,16,2,10,0,64,0
+holdout2,cg_k4_n16_l8_w10_g0_b32,4,16,8,10,0,32,0
+holdout2,cg_k4_n16_l16_w10_g0_b64,4,16,16,10,0,64,0
+holdout2,cg_k4_n32_l1_w10_g0_b32,4,32,1,10,0,32,0
+holdout2,cg_k4_n32_l1_w12_g0_b64,4,32,1,12,0,64,0
+holdout2,cg_k8_n16_l1_w16_g0_b64,8,16,1,16,0,64,0
+holdout2,cg_k8_n16_l1_w16_g8_b32,8,16,1,16,8,32,0
+holdout2,cg_k8_n16_l16_w16_g0_b64,8,16,16,16,0,64,0
+holdout2,cg_k8_n32_l8_w10_g8_b32,8,32,8,10,8,32,0
+holdout2,cg_k8_n32_l8_w12_g0_b64,8,32,8,12,0,64,0
+holdout2,cg_k16_n16_l8_w16_g4_b32,16,16,8,16,4,32,0
+holdout2,cg_k16_n32_l8_w10_g8_b32,16,32,8,10,8,32,0

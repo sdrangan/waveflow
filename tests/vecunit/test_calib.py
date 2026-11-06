@@ -51,11 +51,28 @@ def test_the_resource_rows_build_what_they_name():
 
 
 def test_the_filed_timing_is_what_pysim_charges():
+    """The filed fit is what pysim loads, and its held-out score is recomputed, not read back: each
+    scenario's intervals charged by pysim from the filed coefficients, against the RTL intervals the
+    record holds (review item R7 of ``plans/vecunit_future.md``)."""
+    from waveflow.linalg.cost import TOOL
+
     path = calib.model_path(calib.TIMING_MODEL)
     rec = json.loads(path.read_text(encoding="utf-8"))
-    assert rec["features"] == list(FEATURES) and rec["tool"].endswith("2024.1")
-    assert _VecPart.timing == VecTiming.from_coefs(rec["coefs"])
-    assert rec["holdout"]["all"]["mean"] < calib.TARGET_MEAN  # the score the guide reports
+    assert rec["features"] == list(FEATURES) and rec["tool"] == TOOL
+    t = VecTiming.from_coefs(rec["coefs"])
+    assert _VecPart.timing == t
+    pred, meas = [], []
+    for scenario, filed in rec["holdout"].items():
+        if scenario in ("all", "targets"):
+            continue
+        build, kind = scenario.split()
+        p = calib.pysim_intervals(calib.build_unit(build), kind, t)
+        assert calib.errors(p, filed["rtl"])["mean"] == pytest.approx(filed["mean"]), scenario
+        pred += p
+        meas += filed["rtl"]
+    mean = calib.errors(pred, meas)["mean"]
+    assert mean == pytest.approx(rec["holdout"]["all"]["mean"])
+    assert mean < calib.TARGET_MEAN  # the score the guide reports
 
 
 def test_a_slot_without_a_multiplier_is_built_without_one():

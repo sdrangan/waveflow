@@ -67,7 +67,7 @@ from waveflow.linalg.lanes import n_groups
 from waveflow.linalg.message import header_words
 
 #: The packaged calibration platform of these models.
-PLATFORM = "xczu48dr_250mhz_vitis2024_1"
+PLATFORM = "xczu48dr_250mhz_vitis2025_1"
 
 
 def platform_dir() -> Path:

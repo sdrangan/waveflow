@@ -60,7 +60,7 @@ MANIFEST = (
 #: What the scan allows in code, and why.
 ALLOWED = {
     "Clock(freq=250e6)": "the components' default clock (a module's clock is set where it is used)",
-    'PLATFORM = "xczu48dr_250mhz_vitis2024_1"': "the packaged platform the cost models describe",
+    'PLATFORM = "xczu48dr_250mhz_vitis2025_1"': "the packaged platform the cost models describe",
 }
 #: The example's constants, a part, a clock, a plan path.
 FORBIDDEN = re.compile(

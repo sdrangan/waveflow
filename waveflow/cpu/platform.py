@@ -40,7 +40,7 @@ from waveflow.cpu.config import CpuConfig
 from waveflow.cpu.task import SwFunction
 
 PLATFORMS_ROOT = Path(__file__).resolve().parents[1] / "calib" / "platforms"
-DEFAULT_PLATFORM = "a53_hpi_1200mhz_gem5v25_1"
+DEFAULT_PLATFORM = "a53_hpi_1200mhz_gem5v25_1_vitis2025_1"
 
 
 @dataclass
