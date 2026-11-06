@@ -1,0 +1,33 @@
+{
+  "coeffs": [
+    94.0074962843421,
+    438.8639872415158,
+    982.6676752050008
+  ],
+  "intercept": 866.3389681515937,
+  "_fit_summary": {
+    "features": [
+      "n_scanned",
+      "n_moved",
+      "n_tasks"
+    ],
+    "ranges": {
+      "n_scanned": [
+        0.0,
+        63798.0
+      ],
+      "n_moved": [
+        0.0,
+        63288.0
+      ],
+      "n_tasks": [
+        1.0,
+        512.0
+      ]
+    },
+    "n_points": 30,
+    "max_abs_residual": 230746.40467070788,
+    "max_rel_residual": 0.1640706089016626,
+    "n_free_params": 4
+  }
+}
