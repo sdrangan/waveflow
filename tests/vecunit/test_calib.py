@@ -42,7 +42,7 @@ def test_the_per_item_charges_are_the_job_model(make):
 
 
 def test_the_resource_rows_build_what_they_name():
-    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT:
+    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT + calib.RESOURCE_HOLDOUT2:
         L, NG, S, caps, _fmts = spec
         cfg = calib.resource_config(spec)
         f = calib.config_features(cfg)
@@ -90,7 +90,7 @@ def test_the_filed_resource_model():
     """DSP and BRAM are structural (four DSPs a complex multiplier and five more; the memories as they
     bind), and the held-out score the guide reports is the filed one."""
     rec = json.loads(calib.model_path(calib.RESOURCE_MODEL).read_text(encoding="utf-8"))
-    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT:
+    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT + calib.RESOURCE_HOLDOUT2:
         f = calib.config_features(calib.resource_config(spec))
         p = calib.predict_resources(rec["counters"], f)
         assert p["dsp"] == pytest.approx(4 * f["n_mul"] * f["L"] + 5)
@@ -100,14 +100,13 @@ def test_the_filed_resource_model():
         assert rec["holdout"][counter]["worst"] < calib.TARGET_WORST
 
 
-def test_stage9d_kept_the_timing_with_the_lower_held_out_mean():
-    """Stage 9d fitted a timing by phase and configuration and scored it once; the incumbent was
-    scored on the same held-out set (no fit), and the one with the lower mean is what pysim loads.
-    Both records and both scores are filed (the plan's Stage 9 record reports them)."""
+def test_the_filed_timing_is_stage7s_form_scored_on_its_preregistered_set():
+    """At 2025.1 (``plans/calib_2025_1.md`` Stage 3) the timing is Stage 7's form -- one set of
+    coefficients, fitted on the CG build's ``calib`` run of the RTL catalogue -- not Stage 9d's by-phase
+    model, and its held-out score covers exactly the pre-registered :data:`calib.TIMING3_HOLDOUT`.
+    (Stage 9d's comparison at 2024.1 is in git history with the record it chose.)"""
     rec = json.loads(calib.model_path(calib.TIMING_MODEL).read_text(encoding="utf-8"))
-    cmp = rec["comparison"]
-    other = rec["v2"] if rec["kept"] == "v1" else rec["v1"]
-    assert "holdout" in other and "fit" in other
-    kept, lost = cmp[rec["kept"]]["all"]["mean"], cmp["v2" if rec["kept"] == "v1" else "v1"]["all"]["mean"]
-    assert kept <= lost
-    assert [tuple(x) for x in cmp["set"]] == list(calib.TIMING2_HOLDOUT)
+    assert rec["plan"].startswith("plans/calib_2025_1.md Stage 3")
+    assert rec["fit"]["set"] == "cg calib" and "comparison" not in rec
+    scored = {tuple(s.split()) for s in rec["holdout"] if s not in ("all", "targets")}
+    assert scored == set(calib.TIMING3_HOLDOUT)

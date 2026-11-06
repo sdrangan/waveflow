@@ -27,14 +27,16 @@ from waveflow.vecunit.calib import BUILDS, build_unit
 from waveflow.vecunit.measure import measure_run
 
 HERE = Path(__file__).resolve().parent
-MEASURED = HERE / "measured.json"
+#: The 2025.1 recalibration's catalogue (plans/calib_2025_1.md Stage 3); 2024.1's is ``measured.json``.
+MEASURED = HERE / "measured_new.json"
 
 #: build -> its workloads, in run order.
 RUNS = {
-    "cg": ("steady", "steady_k2", "steady_nit1", "steady_nit8", "steady_n4", "calib", "holdout2"),
+    "cg": ("steady", "steady_k2", "steady_nit1", "steady_nit8", "steady_n4", "calib", "holdout2",
+           "holdout3"),
     "cg_w128": ("steady", "steady_nit1"),
     "cg_l2": ("steady", "calib"),
-    "cg_l8": ("steady", "holdout2"),
+    "cg_l8": ("steady", "holdout2", "holdout3"),
 }
 #: Runs also traced, for the trace report (which task binds).
 TRACED = {("cg", "steady")}
@@ -51,6 +53,8 @@ def main(argv=None) -> int:
     ap.add_argument("--root", required=True, type=Path, help="a build root per build under it")
     ap.add_argument("--builds", nargs="+", default=list(RUNS), choices=list(RUNS))
     ap.add_argument("--force", action="store_true", help="re-run runs already recorded")
+    ap.add_argument("--bound-factor", type=float, default=1.2,
+                    help="the RTL run's bound over pysim's length (larger before a timing is filed)")
     a = ap.parse_args(argv)
     data = _load()
     ok = True
@@ -60,7 +64,7 @@ def main(argv=None) -> int:
             if name in data["runs"] and data["runs"][name].get("exact") and not a.force:
                 continue
             r = measure_run(build_unit(build), kind, a.root.resolve() / build,
-                            trace=(build, kind) in TRACED)
+                            trace=(build, kind) in TRACED, bound_factor=a.bound_factor)
             r.update({"build": build, "params": BUILDS[build][1],
                       "date": datetime.now().astimezone().date().isoformat()})
             data = _load()  # another process may have filed runs meanwhile (one per build)

@@ -96,10 +96,12 @@ def time_pysim(unit, kind: str, reps: int) -> dict:
             "events": events, "exact": exact}
 
 
-def rtl_bound(pysim_cycles: float) -> int:
+def rtl_bound(pysim_cycles: float, factor: float = 1.2) -> int:
     """The RTL's fixed run: the harness has no host to end it, so it simulates every cycle of its
-    bound -- set a little past the pysim's length, not far past it."""
-    return int(1.2 * pysim_cycles) + 2000
+    bound -- set a little past the pysim's length, not far past it.  A larger *factor* is for a pysim
+    whose timing is not the tool's (a recalibration before its fit is filed: the default timing ran
+    1.11-1.65x short of the 2025.1 RTL, ``plans/calib_2025_1.md`` Stage 3)."""
+    return int(factor * pysim_cycles) + 2000
 
 
 def _last_cycles(vectors: Path) -> dict[str, int]:

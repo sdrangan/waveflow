@@ -115,6 +115,8 @@ TIMING3_HOLDOUT = (
 )
 #: The resource model refitted at 2025.1 on :data:`RESOURCE_FIT`, scored once on these.
 RESOURCE_HOLDOUT2 = ((8, 8, 3, "all", "mf"), (2, 32, 2, "mul1", "cg"), (4, 64, 2, "all", "cg"))
+#: The sets the ``csynth`` / ``fit-resources`` / ``score-resources`` commands name (2025.1's held out).
+RESOURCE_SETS = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT2}
 
 
 #: The units the sets above name, as ``module:class`` (the library imports no example).
@@ -446,6 +448,56 @@ def settle_timing2(paths) -> dict:
     return {"kept": record["kept"], **comparison}
 
 
+# -- Stage 7's form refitted at 2025.1, from the catalogues (plans/calib_2025_1.md Stage 3) ------------
+def calibrate_timing3(paths) -> dict:
+    """Stage 7's timing (:func:`calibrate_timing`'s form: no schedules) refitted on the CG build's
+    ``calib`` run of the catalogues at *paths* (``measured_new.json``) and filed; returns the record
+    (with the fit's in-sample errors: the model's, and pysim's charged from it)."""
+    from waveflow.vecunit.unit import FEATURES, VecTiming
+
+    run = _run(measured_runs(paths), "cg", "calib")
+    unit = build_unit("cg")
+    feats = features(unit, "calib")
+    meas = np.diff(run["status_cycles"]).astype(int).tolist()
+    coefs = fit_timing(feats, meas)
+    t = VecTiming.from_coefs(coefs)
+    record = {"features": list(FEATURES), "coefs": coefs,
+              "fit": {"set": "cg calib", "jobs": len(meas), "rtl": meas,
+                      "model": errors([t.predict(f) for f in feats], meas),
+                      "pysim": errors(pysim_intervals(unit, "calib", t), meas)},
+              "plan": "plans/calib_2025_1.md Stage 3 (the form of plans/vecunit_new.md Stage 7)"}
+    _file(TIMING_MODEL, record)
+    _reload_timing()
+    return record
+
+
+def score_timing3(paths) -> dict:
+    """The held-out score, once: each :data:`TIMING3_HOLDOUT` pair's job intervals but the first,
+    pysim charged from the filed fit against the catalogues' RTL; filed beside the fit."""
+    from waveflow.vecunit.unit import VecTiming
+
+    path = model_path(TIMING_MODEL)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if "holdout" in record:
+        raise RuntimeError(f"{path}: the held-out set is scored once, and it has been")
+    if record.get("version") == 2:
+        raise RuntimeError(f"{path}: Stage 9d's timing; fit Stage 7's form first (calibrate_timing3)")
+    t = VecTiming.from_coefs(record["coefs"])
+    runs = measured_runs(paths)
+    out, pred, meas = {}, [], []
+    for build, kind in TIMING3_HOLDOUT:
+        m = np.diff(_run(runs, build, kind)["status_cycles"]).astype(int).tolist()
+        p = pysim_intervals(build_unit(build), kind, t)
+        out[f"{build} {kind}"] = {"rtl": m, "pysim": [round(x, 1) for x in p], **errors(p, m)}
+        pred += p
+        meas += m
+    out["all"] = {k: v for k, v in errors(pred, meas).items() if k != "rel"}
+    out["targets"] = {"mean": TARGET_MEAN, "worst": TARGET_WORST}
+    record["holdout"] = out
+    _file(TIMING_MODEL, {k: v for k, v in record.items() if k not in ("model", "part", "tool")})
+    return out
+
+
 # -- resources ------------------------------------------------------------------------------------
 def resource_config(spec):
     """The configuration a :data:`RESOURCE_FIT` / :data:`RESOURCE_HOLDOUT` row names.  ``"cg"``: the
@@ -490,16 +542,28 @@ def config_features(cfg) -> dict:
 
 
 def _bram18(cfg, w) -> int:
-    """The unit's BRAM18 as its memories bind (Vitis HLS 2024.1): the register file, a simple
-    dual-port memory a bank and lane (up to 36 bits wide, 512 deep); the scalar file, a true
-    dual-port memory a lane (18-bit ports); each queue's two blocks, one memory of lane groups."""
-    def sdp(width: int, depth: int) -> int:
-        return -(-width // 36) * -(-depth // 512)
+    """The unit's BRAM18 as its memories bind (Vitis HLS 2025.1, csynth's memory tables on the ten
+    fit rows, plans/calib_2025_1.md Stage 3): the register file, a simple dual-port memory a bank and
+    lane (up to 36 bits wide, 512 deep); the scalar file, a true dual-port memory a lane (18-bit
+    ports); each queue, its two blocks one memory of 18-bit ports, 1024 deep.  A memory of fewer than
+    :data:`BRAM_MIN_BITS` bits binds to LUTs and flip-flops instead, no BRAM.
 
-    rf = cfg.NB * cfg.L * sdp(2 * w.WV, cfg.NG // cfg.NB * cfg.VLMAX)
-    sf = cfg.L * -(-w.WSR // 18) * -(-cfg.NS // 1024)
-    q = (cfg.NQI + cfg.NQO) * sdp(2 * w.WV * cfg.L, 2 * cfg.Kmax * cfg.NGQ)
+    2024.1 bound every one of these to BRAM, and each queue at 36 bits wide, 512 deep."""
+    def mem(width: int, depth: int, port: int, deep: int) -> int:
+        if width * depth < BRAM_MIN_BITS:
+            return 0
+        return -(-width // port) * -(-depth // deep)
+
+    rf = cfg.NB * cfg.L * mem(2 * w.WV, cfg.NG // cfg.NB * cfg.VLMAX, 36, 512)
+    sf = cfg.L * mem(w.WSR, cfg.NS, 18, 1024)
+    q = (cfg.NQI + cfg.NQO) * mem(2 * w.WV * cfg.L, 2 * cfg.Kmax * cfg.NGQ, 18, 1024)
     return rf + sf + q
+
+
+#: Below this many bits Vitis HLS 2025.1 binds a memory to LUTs and flip-flops.  Measured between:
+#: 768 and 800 bits bound there (a register file bank of 32 x 24, the scalar file of 40 x 20),
+#: 1,536 and 1,600 to BRAM (64 x 24, 80 x 20); 1,024 is the boundary assumed between them.
+BRAM_MIN_BITS = 1024
 
 
 def measure_resources(spec, root) -> dict:
@@ -575,7 +639,7 @@ def predict_resources(model: dict, feats: dict) -> dict[str, float]:
 def _rows(directory, which: str) -> list[dict]:
     """The sweep's rows of one set (``<directory>/<which>_<i>.json``, as ``csynth`` prints them), in
     the set's order; a missing row is an error."""
-    specs = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[which]
+    specs = RESOURCE_SETS[which]
     rows = []
     for i, spec in enumerate(specs):
         r = json.loads((Path(directory) / f"{which}_{i}.json").read_text(encoding="utf-8"))
@@ -624,7 +688,9 @@ def score_resources(directory) -> dict:
 def main(argv=None) -> int:
     """``fit-timing <calib root>``; ``score-timing <cg holdout> <cg steady> <mf steady>`` (roots of
     the RTL runs); ``fit-timing2 <measured.json>...``, ``score-timing2 <measured.json>...``,
-    ``settle-timing2 <measured.json>...`` (Stage 9d, on the Stage 9c catalogues); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
+    ``settle-timing2 <measured.json>...`` (Stage 9d, on the Stage 9c catalogues);
+    ``fit-timing3 <measured_new.json>...``, ``score-timing3 <measured_new.json>...`` (the 2025.1
+    recalibration, plans/calib_2025_1.md Stage 3); ``csynth <fit|holdout> <index> <root>`` (one resource row, its JSON printed);
     ``fit-resources <dir>``, ``score-resources <dir>`` (the rows ``csynth`` printed, saved as
     ``<dir>/<fit|holdout>_<index>.json``)."""
     a = list(sys.argv[1:] if argv is None else argv)
@@ -646,8 +712,15 @@ def main(argv=None) -> int:
         r = settle_timing2(a[1:])
         print(json.dumps({"kept": r["kept"], "v1": r["v1"]["all"], "v2": r["v2"]["all"]}, indent=1))
         return 0
+    if a[:1] in (["fit-timing3"], ["score-timing3"]) and len(a) >= 2:
+        if a[0] == "fit-timing3":
+            r = calibrate_timing3(a[1:])
+            print(json.dumps({k: r[k] for k in ("coefs", "fit")}, indent=1))
+        else:
+            print(json.dumps(score_timing3(a[1:]), indent=1))
+        return 0
     if a[:1] == ["csynth"] and len(a) == 4:
-        spec = {"fit": RESOURCE_FIT, "holdout": RESOURCE_HOLDOUT}[a[1]][int(a[2])]
+        spec = RESOURCE_SETS[a[1]][int(a[2])]
         print(json.dumps(measure_resources(spec, a[3])))
         return 0
     if a[:1] in (["fit-resources"], ["score-resources"]) and len(a) == 2:
