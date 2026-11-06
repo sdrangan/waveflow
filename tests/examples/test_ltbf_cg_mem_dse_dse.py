@@ -129,8 +129,8 @@ def _parts_cost(monkeypatch, span: int, each: float = 10.0) -> dict:
 
 def test_shared_mem_is_costed_as_the_block_ram_vivado_builds(monkeypatch):
     c = _parts_cost(monkeypatch, 1 << 17)
-    # Three parts, then 2^17 64-bit words as Vivado 2024.1 mapped them in the finalists: 228 RAMB36
-    # (seven 9-bit slices of 4K x 9, one 1-bit slice of 32K x 1); no URAM.
+    # Three parts, then 2^17 64-bit words as Vivado 2025.1 mapped them in the finalists (and 2024.1
+    # before it): 228 RAMB36 (seven 9-bit slices of 4K x 9, one 1-bit slice of 32K x 1); no URAM.
     assert dse.shared_mem_bram18(1 << 17) == 2 * 228
     assert c["res"]["BRAM_18K"] == 3 * 10 + 2 * 228
     assert c["res"]["URAM"] == 3 * 10

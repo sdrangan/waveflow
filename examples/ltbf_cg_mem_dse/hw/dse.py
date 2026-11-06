@@ -55,9 +55,9 @@ URAM_WORDS = 4096
 
 
 def shared_mem_bram18(span: int) -> int:
-    """BRAM18 of Shared Mem's ``span`` 64-bit words as Vivado 2024.1 maps ``bram_t2p.v`` (the
-    finalists' implementation, plan §15: 2^17 words -> 228 RAMB36): seven 9-bit slices of
-    4K x 9 RAMB36 and one 1-bit slice of 32K x 1."""
+    """BRAM18 of Shared Mem's ``span`` 64-bit words as Vivado 2025.1 maps ``bram_t2p.v`` (the
+    finalists' implementation, plan §15: 2^17 words -> 228 RAMB36, as at 2024.1): seven 9-bit
+    slices of 4K x 9 RAMB36 and one 1-bit slice of 32K x 1."""
     return 2 * (7 * math.ceil(span / 4096) + math.ceil(span / 32768))
 
 
