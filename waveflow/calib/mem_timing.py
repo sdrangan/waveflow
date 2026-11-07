@@ -24,6 +24,8 @@ from back-to-back bursts in a traced run of the memory in a system (``plans/dse_
 """
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 
 #: The payload kind of a memory-timing record in a ``ModuleStore`` (``target="timing"``).
@@ -118,10 +120,9 @@ def back_to_back_rows(write_bursts, read_bursts, clk_period: float) -> list[tupl
     out = []
     for kind, bursts in (("write", write_bursts), ("read", read_bursts)):
         done = [b for b in bursts if b.get("data_tstart") is not None and 0 in list(b["beat_type"])]
-        for b, nxt in zip(done, done[1:]):
+        for b, nxt in itertools.pairwise(done):
             if float(nxt["tstart"]) <= float(b["data_tend"]):
-                out.append((kind, int(len(b["data"])),
-                            int(round((first_beat(nxt) - first_beat(b)) / clk_period))))
+                out.append((kind, len(b["data"]), round((first_beat(nxt) - first_beat(b)) / clk_period)))
     return out
 
 
