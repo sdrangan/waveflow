@@ -150,6 +150,11 @@ class Timing:
     store_end: dict = field(default_factory=dict)  # out window -> list of store-end cycles
     load_wait: int = 0  # vector-unit cycles idle waiting on an input block
     end: int = 0
+    #: pysim (``waveflow.simdcore.unit``) moves the blocks itself: it sets ``arrival`` (the cycle the
+    #: block it took arrived) before a ``wf.qpop``, and the loader / storer models stand aside.
+    external: bool = False
+    arrival: float | None = None
+    last_push: int = 0  # the cycle the last wf.qpush handed its block over
 
     def scalar(self, cycles: int = 1) -> None:
         self.n_scalar += 1
@@ -191,9 +196,12 @@ class Timing:
         """Block ``b`` of input window ``wname``: the port's loader fills the window's free copy as soon
         as the port is idle and the copy released (it runs ahead of the program), then the swap."""
         rel = self.release.setdefault(wname, [])
-        start = max(self.port_load.get(port, 0), rel[b - 2] if b >= 2 else 0)
-        arrive = start + words
-        self.port_load[port] = arrive
+        if self.external:
+            arrive = self.arrival if self.arrival is not None else 0
+        else:
+            start = max(self.port_load.get(port, 0), rel[b - 2] if b >= 2 else 0)
+            arrive = start + words
+            self.port_load[port] = arrive
         self.n_vector += 1
         t_issue = self.ts + self.cfg.issue_latency
         self.ts += 1
@@ -214,6 +222,9 @@ class Timing:
         t = max([self.ts + self.cfg.issue_latency, self.tv_free] + [self.done.get(r, 0) for r in regs])
         self.n_vector += 1
         self.ts += 1
+        self.last_push = t
+        if self.external:  # the pysim storer and its queue pace the copies
+            return
         start = max(self.port_store.get(port, 0), t)
         ends.append(start + words)
         self.port_store[port] = ends[-1]
@@ -240,6 +251,8 @@ class JobResult:
     timing: Timing
     steps: int
     error: SimdCoreError | None = None
+    pops: list = field(default_factory=list)  # the windows, in the order the job popped them
+    pushes: list = field(default_factory=list)  # (window, block), in the order the job pushed them
 
     @property
     def cycles(self) -> int:
@@ -284,13 +297,24 @@ class Core:
         """One job.  ``on_empty(window, core)`` closes a loop: called when a ``wf.qpop`` finds no
         block, it returns the next block (e.g. ``S = A @ P`` from the ``P`` just pushed) or ``None``.
         Its timing is a static testbench's: the block is on the port as soon as the port is free."""
+        self.begin(program, inputs, args, dm_init, budget, max_steps, vregs, on_empty)
+        while self.step():
+            pass
+        return self.result()
+
+    def begin(self, program, inputs: dict[str, list] | None = None, args: dict | list | None = None,
+              dm_init: list[tuple[int, np.ndarray]] | None = None, budget: int = 0,
+              max_steps: int = 10_000_000, vregs: dict[int, np.ndarray] | None = None,
+              on_empty=None) -> None:
+        """Start a job (:meth:`step` runs it an instruction at a time; :meth:`result` ends it): what a
+        timed caller, the pysim unit, drives to wait on its queues between instructions."""
         cfg = self.cfg
         self.on_empty = on_empty
         words = assemble(program).words if isinstance(program, str) else list(program)
         if len(words) > cfg.imem_words:
             raise ValueError(f"program of {len(words)} words exceeds imem_words {cfg.imem_words}")
         st = self.st = State(cfg)
-        tm = self.tm = Timing(cfg)
+        self.tm = Timing(cfg)
         if isinstance(args, (list, tuple)):
             args = {10 + i: a for i, a in enumerate(args)}  # a0..a7
         for r, val in (args or {}).items():
@@ -304,33 +328,56 @@ class Core:
         self.inq = {w.name: list((inputs or {}).get(w.name, [])) for w in cfg.windows if w.direction == "in"}
         self.npop = {w.name: 0 for w in cfg.windows}
         self.outq: dict[str, list[np.ndarray]] = {w.name: [] for w in cfg.windows if w.direction == "out"}
-        steps = 0
-        err = None
+        self.words, self.budget, self.max_steps = words, budget, max_steps
+        self.steps, self.err, self.done = 0, None, False
+        self.pops: list[str] = []
+        self.pushes: list[tuple[str, np.ndarray]] = []
+
+    def peek(self) -> Decoded | None:
+        """The next instruction, or ``None`` (the job is over, or the fetch would fail)."""
+        st = self.st
+        if self.done or st.pc % 4 or not 0 <= st.pc < 4 * len(self.words):
+            return None
         try:
-            while True:
-                if st.pc % 4 or not 0 <= st.pc < 4 * len(words):
-                    raise SimdCoreError("PC", f"fetch at 0x{st.pc:x}", st.pc)
-                if budget and steps >= budget:
-                    raise SimdCoreError("BUDGET", f"{steps} instructions", st.pc)
-                if steps >= max_steps:
-                    raise SimdCoreError("BUDGET", f"max_steps {max_steps}", st.pc)
-                try:
-                    d = self._decode(words[st.pc // 4])
-                except IllegalInstruction as e:
-                    raise SimdCoreError("ILLEGAL", str(e), st.pc) from None
-                ext = d.spec.ext
-                if (ext == "WFC" and not cfg.cplx_ops) or (ext == "VDIV" and not cfg.vdiv) or (
-                        d.spec.sem in ("div", "divu", "rem", "remu") and d.spec.ext == "M" and not cfg.div):
-                    self._illegal(f"{d.name} not in this build")
-                steps += 1
-                if d.spec.sem == "ecall":
-                    tm.scalar()
-                    break
-                npc = self._exec(d)
-                st.pc = npc if npc is not None else st.pc + 4
+            return self._decode(self.words[st.pc // 4])
+        except IllegalInstruction:
+            return None
+
+    def step(self) -> bool:
+        """Run one instruction; ``False`` once the job is over (``ecall`` or an error)."""
+        if self.done:
+            return False
+        st, cfg = self.st, self.cfg
+        try:
+            if st.pc % 4 or not 0 <= st.pc < 4 * len(self.words):
+                raise SimdCoreError("PC", f"fetch at 0x{st.pc:x}", st.pc)
+            if self.budget and self.steps >= self.budget:
+                raise SimdCoreError("BUDGET", f"{self.steps} instructions", st.pc)
+            if self.steps >= self.max_steps:
+                raise SimdCoreError("BUDGET", f"max_steps {self.max_steps}", st.pc)
+            try:
+                d = self._decode(self.words[st.pc // 4])
+            except IllegalInstruction as e:
+                raise SimdCoreError("ILLEGAL", str(e), st.pc) from None
+            ext = d.spec.ext
+            if (ext == "WFC" and not cfg.cplx_ops) or (ext == "VDIV" and not cfg.vdiv) or (
+                    d.spec.sem in ("div", "divu", "rem", "remu") and d.spec.ext == "M" and not cfg.div):
+                self._illegal(f"{d.name} not in this build")
+            self.steps += 1
+            if d.spec.sem == "ecall":
+                self.tm.scalar()
+                self.done = True
+                return False
+            npc = self._exec(d)
+            st.pc = npc if npc is not None else st.pc + 4
         except SimdCoreError as e:
-            err = e
-        return JobResult("OK" if err is None else err.code, self.outq, st, tm, steps, err)
+            self.err, self.done = e, True
+            return False
+        return True
+
+    def result(self) -> JobResult:
+        return JobResult("OK" if self.err is None else self.err.code, self.outq, self.st, self.tm,
+                         self.steps, self.err, self.pops, self.pushes)
 
     # --- one instruction ---------------------------------------------------------------------------
 
@@ -415,7 +462,7 @@ class Core:
         if name is None:
             self._illegal(f"csr 0x{c:x}")
         old = {"vstart": 0, "vxsat": st.vxsat, "vxrm": st.vxrm, "vcsr": (st.vxrm << 1) | st.vxsat,
-               "cycle": self.tm.ts & M32, "vl": st.vl, "vtype": st.vtype, "vlenb": self.cfg.vlenb,
+               "cycle": int(self.tm.ts) & M32, "vl": st.vl, "vtype": st.vtype, "vlenb": self.cfg.vlenb,
                "wfsh": st.wfsh}[name]
         op = d.spec.sem
         src = d.rs1 if op.endswith("i") else self.st.x[d.rs1]
@@ -866,6 +913,7 @@ class Core:
                 col[:] = 0
                 if j < n:
                     col[:k] = (blk[:, j].astype(np.int64) & m).astype(col.dtype)
+            self.pops.append(w.name)
             b = self.npop[w.name]
             self.npop[w.name] += 1
             tm.qpop(w.name, w.port, b, tm.block_words(k, n, w.sew), list(w.regs))
@@ -875,6 +923,7 @@ class Core:
             k = st.vl
             blk = np.stack([st.velems(r, w.sew)[:k].copy() for r in w.regs], axis=1)
             self.outq[w.name].append(blk)
+            self.pushes.append((w.name, blk))
             if w.copies == 2:
                 for r in w.regs:  # unspecified until written (the other copy): poison, so a misuse shows
                     st.v[r] = POISON

@@ -227,6 +227,26 @@ def run_cg(cfg: SimdCoreConfig, ar, ai, br, bi, nit: int, *, skip_dead: bool = T
     return CgResult(xr.T, xi.T, [], []), r
 
 
+def cg_job(cfg: SimdCoreConfig, ar, ai, br, bi, nit: int, tx_id: int):
+    """One solve as a pysim job: its inputs are ``B`` then the ``S`` blocks a closed-loop interpreter
+    run fed it -- the static stimulus of ``examples/vecunit_cg``'s bench."""
+    from waveflow.simdcore.unit import Job
+
+    K, N = np.shape(br)
+    fed: list = [cpack(np.asarray(br).T, np.asarray(bi).T)]
+
+    def systolic(window, core):
+        if window != "IN" or not core.outq["OUT"]:
+            return None
+        pr, pi = cunpack(core.outq["OUT"][-1])
+        sr, si = mm_step(np.asarray(ar), np.asarray(ai), pr.T, pi.T)
+        fed.append(cpack(sr.T, si.T))
+        return fed[-1]
+
+    run_job(cfg, cg_text(K, nit), inputs={"IN": [fed[0]]}, args=[N], on_empty=systolic).check()
+    return Job(tx_id, cg_text(K, nit), args=(N,), inputs={"IN": fed})
+
+
 def float_problem(K: int, N: int, seed: int):
     """The unquantized ``A``, ``B`` of :func:`problem` (the same construction and draws)."""
     rng = np.random.default_rng(seed)

@@ -327,3 +327,39 @@ recorded, not guarded.
 ../pysilicon-venv/Scripts/python.exe -m pytest tests/simdcore tests/examples/test_simdcore_toy.py tests/examples/test_simdcore_mf.py tests/examples/test_simdcore_cg.py -q
 195 passed
 ```
+
+## Stage 4: the pysim module and its harness
+
+**Done 2026-11-07** (`waveflow/simdcore/unit.py`, `tests/simdcore/test_unit.py`).
+
+- `SimdCore` (composite): a `SimdLoad` an input port, `SimdExec`, a `SimdStore` an output port, joined by
+  stream-of-blocks queues (depth 2): one a input window (the loader routes a block by its header's
+  window), one an output port (blocks in push order, tagged with their window).
+- The protocol: a job's program burst on `s_prog` (header `tx_id ninstr nargs budget`, `a0..`
+  arguments, instructions two a 64-bit word); an input block per burst (header `window k n`, elements
+  row-major two a word); per `wf.qpush` one burst on its port (a response word `tx_id window k n`, then
+  the elements); a status word per job on `m_status` (`tx_id status steps`). An error is fatal.
+- `SimdExec` drives the interpreter an instruction at a time (`Core.begin / peek / step / result`, a
+  refactor of `run`, same results): at a `wf.qpop` it waits on the queue and hands the block's arrival
+  cycle to the cycle model (`Timing.external`); at a `wf.qpush` it waits until the model's push cycle
+  and commits the block. So pysim's time is the D2 model's, with the real queues' back-pressure.
+- An application subclasses `SimdCore` and gives `jobs(kind)` (`Job`: program, arguments, budget, input
+  blocks); `workload` and `golden` come from the interpreter (`job_bursts`, `golden_bursts`), input
+  blocks on each port in the order the interpreter popped them. Data memory is not loaded over the
+  protocol (a program fills it from a window), so the `lut` toy kernel is interpreter-only for now.
+
+**pysim's steady interval, the matched filter** (5 back-to-back frames of 256 x 8, the cycle model's
+`depth` 8): `L` 1: 2,081 cycles a frame (compute-bound, 2,048 lane-cycles); `L` 2: **1,160** (1.007x
+the 1,152-word floor) -- the loader runs into the next job while this one's tail computes, which the
+single-job interpreter run (1,282) cannot show.
+
+**Gate:**
+
+```
+../pysilicon-venv/Scripts/python.exe -m pytest tests/simdcore tests/examples/test_simdcore_toy.py tests/examples/test_simdcore_mf.py tests/examples/test_simdcore_cg.py -q
+201 passed
+```
+
+The pysim tests: the matched filter (`nrx` 8 at `L` 2, `nrx` 3 at `L` 4; three jobs, a short last
+chunk) and CG (two closed-loop solves, static `S` stimulus) equal the interpreter burst for burst; a
+fatal `ADDR` in the second of three jobs stops the unit after its status; the steady intervals above.
