@@ -11,7 +11,7 @@ Conventions
   (see :func:`space`).
 * ``workload`` is a workload's name from :func:`space`, or a dict ``{"name": ..., <workload
   parameter>: value}`` that overrides that workload's parameters (for example ``{"name": "long_term",
-  "t": 5}``).
+  "t": 2}``).
 * Every result is a plain dict, or a list of dicts, ready for ``pandas.DataFrame``.  Every row has
   a ``status`` (``"ok"`` or the reason it failed), and the evaluation rows carry ``cost_s``, the
   tool seconds charged, and ``cached``.  A failure is a row, never an exception.  The exceptions
@@ -70,15 +70,21 @@ def space() -> dict:
         {"parameters": [
             {"name": "R", "kind": "design", "values": [2, 4, 8], "default": 4,
              "rebuilds": ["sys"], "description": "systolic array rows"},
-            {"name": "t", "kind": "workload", "values": [1, 2, 3, 5, 7, 10], "default": 3,
+            {"name": "mem_rate", "kind": "design", "values": [2, 1], "default": 2,
+             "rebuilds": [], "description": "Shared Mem's cycles per read word"},   # simulation only
+            {"name": "t", "kind": "workload", "values": [2, 3], "default": 3,
              "description": "CG iterations of the long-term update"},
             ...],
-         "constraints": [{"rule": "n <= 16", "why": "Shared Mem must fit on chip"}, ...],
+         "constraints": [{"rule": "(R, C) in [(2, 4), (4, 4), (4, 8), (8, 8)]",
+                          "why": "the systolic shapes built and calibrated"}, ...],
          "workloads": [
-            {"name": "long_term", "fixes": {"drops": [1, 11, 12]}, "valid_for": ["t_lt_ms"]},
-            {"name": "accuracy", "fixes": {"target": ["-6_3", "-6_14"]},
+            {"name": "long_term", "fixes": {"drop": 1, "sector": 1}, "valid_for": ["t_upd_ms"]},
+            {"name": "accuracy", "fixes": {"drops": "11-100"},
              "valid_for": ["median_loss_db", "p90_loss_db"]},
             ...]}
+
+    A design parameter whose ``rebuilds`` is empty changes no part: a new value costs an RTL
+    simulation and no synthesis.
     """
     return _call("space")
 
@@ -90,9 +96,8 @@ def golden(params: dict, workload: str | dict) -> dict:
 
     Returns::
 
-        {"params": {...}, "workload": "accuracy", "status": "ok",
-         "median_loss_db": {"-6_3": 0.086, "-6_14": 1.83},
-         "p90_loss_db":    {"-6_3": 0.31,  "-6_14": 4.6},
+        {"params": {...}, "workload": {"name": "accuracy", "target": "-6_3"}, "status": "ok",
+         "median_loss_db": 0.086, "p90_loss_db": 0.31,
          "cost_s": 40.0, "cached": false}
     """
     return _call("golden", params=params, workload=workload)
@@ -111,10 +116,11 @@ def pysim(params: dict, workload: str | dict) -> dict:
 
         {"params": {...}, "workload": "long_term", "status": "ok",
          "median_loss_db": {...},                                         # exact
-         "t_lt_ms": {"est": 16.1, "level": "interpolated"},               # approximate
+         "t_upd_ms": {"est": 6.4, "level": "interpolated"},               # approximate
          "per_block": {                                                   # approximate
             "sys": {"busy": 0.83, "stalled": {"input": 0.61, "output": 0.02}, "level": "interpolated"},
             "vec": {"busy": 0.12, "stalled": {"input": 0.08, "output": 0.00}, "level": "interpolated"},
+            "mem": {"busy": 0.90, "level": "uncalibrated"},               # a modelled part's port
             ...},
          "resources": {                                                   # approximate
             "lut":  {"est": 100700, "level": "interpolated"},
@@ -166,12 +172,12 @@ def synth(points: list[dict]) -> str:
     Each row, the design's totals and each part's own numbers::
 
         {"params": {...}, "status": "ok",           # or "fails_timing", "over_capacity", ...
-         "lut": 59751, "ff": 59471, "dsp": 109, "bram": 520, "ii": 1,
+         "lut": 55400, "ff": 54900, "dsp": 105, "bram": 518, "ii": 1,
          "parts": {
             "sys":  {"lut": 10256, "ff": 12841, "dsp": 47, "bram":   4, "cached": true},
             "vec":  {"lut": 41387, "ff": 40037, "dsp": 58, "bram":  58, "cached": false},
-            "mem":  {"lut":   490, "ff":     4, "dsp":  0, "bram": 456, "cached": true},
             "xbar": {"lut":  3003, "ff":  1169, "dsp":  0, "bram":   0, "cached": true},
+            "mem":  {"bram": 456, "source": "formula"},   # modelled, not synthesized
             ...},
          "artifacts": {"utilization": "results/e0043/utilization.txt"},   # per instance
          "cost_s": 61.0, "cached": false}           # cost_s: the parts built this time
@@ -184,14 +190,14 @@ def synth(points: list[dict]) -> str:
 def rtlsim(points: list[dict], workload: str | dict) -> str:
     """Simulate designs at RTL, cycle-accurate.  Expensive for a new design; runs as a job.
 
-    A design not yet synthesized is synthesized first, and that is charged too.  Once a design has
-    been simulated, a new workload on it costs only the simulation.  Returns a job id; :func:`wait`
-    returns the rows.
+    A design not yet synthesized is synthesized first, and that is charged too.  Once a design's
+    RTL is elaborated, a new workload on it, or a new value of a parameter that rebuilds no part,
+    costs only the simulation.  Returns a job id; :func:`wait` returns the rows.
 
     Each row::
 
         {"params": {...}, "workload": "long_term", "status": "ok",   # or "deadlock", "mismatch", ...
-         "t_lt_ms": 16.4, "bit_exact": true,
+         "t_upd_ms": 6.6, "bit_exact": true,
          "per_block": {"sys": {"busy": 0.82, "stalled": {"input": 0.62, "output": 0.02}}, ...},
          "artifacts": {"activity": "results/e0044/activity.csv"},
          "cost_s": 31.0, "cached": false}

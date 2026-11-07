@@ -11,7 +11,8 @@ from pathlib import Path
 
 
 def optimum(truth_dir: Path, objective: dict) -> dict:
-    """The ground-truth best feasible design for ``objective``, from the replay table."""
+    """The ground-truth best feasible design for ``objective``, from the replay table: exact, since
+    the table holds every legal point of the space."""
     raise NotImplementedError
 
 

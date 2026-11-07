@@ -8,7 +8,10 @@ directory says *what*.
 
 An agent explores the design space of the LTBF receiver on a shared-memory accelerator
 ([`examples/ltbf_cg_mem_dse`](../ltbf_cg_mem_dse/hw/system.py)) to meet an objective (for example,
-the fewest LUTs at a given accuracy and long-term update time) within a budget of tool time. It runs twice, in two **arms**
+the fewest LUTs at a given accuracy and long-term update time) within a budget of tool time. The
+built hardware is the systolic engine, the vector unit, the AXI crossbar and the Resp hub, with the
+scheduler as software on the A53; Shared Mem and the Ingest DMA are modelled, and Shared Mem's speed
+and banks are axes of the space, its bottleneck. It runs twice, in two **arms**
 that are identical except for one function. The **traditional** arm has what a systems team and a
 hardware team have: an untimed bit-exact simulation (`golden`), synthesis (`synth`) and RTL
 simulation (`rtlsim`). The **Waveflow** arm also has `pysim`: bit-exact, with calibrated cycles,
@@ -34,7 +37,7 @@ In your own project, with your own `CLAUDE.md` and session:
 4. Ask:
 
    ```
-   /dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.
+   /dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.
    ```
 
 (Steps 1–3 are not written yet: plan Phase 3.)
@@ -56,7 +59,9 @@ The same skill, the same context and the same prompt, in a new session with no c
 no `CLAUDE.md`, no user settings or memory, not this repository, not the calibration records, not
 the ground truth. The two arms differ only in the `arm:waveflow` blocks of `SKILL.md`, `dselib` and
 `DSE.md`. The one difference from the user flow is the backend: a run replays recorded results and
-costs, so it finishes in minutes and every run sees the same numbers.
+costs, so it finishes in minutes and every run sees the same numbers. The design's space is
+small enough to measure in full (about 768 RTL runs, under a week on the lab machine), so replay
+always has the answer, and each objective's optimum is known exactly.
 
 ## Files
 
@@ -66,7 +71,7 @@ costs, so it finishes in minutes and every run sees the same numbers.
 | [`skill/dse/dselib/__init__.py`](skill/dse/dselib/__init__.py) | the agent | the library; its docstrings are the API reference, with an example result for each function |
 | [`DSE.md.tmpl`](DSE.md.tmpl) | the agent | one design's context, with `{{blocks}}` the generator fills |
 | [`adaptor.py`](adaptor.py) | the harness | `DseAdaptor`, the base class a design subclasses; `defaults`, `fill` and `legal` are written |
-| [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1) |
+| [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1); its space, `GRID`, is written |
 | [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user or a sandbox; `select_arm`, `render` and `prompt` are written |
 | [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; replay and live backends |
 | [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model |
@@ -82,17 +87,18 @@ second design uses them, then move into the `waveflow` package; `ltbf_cg_mem.py`
 Follows [`plans/dse_cg.md`](../../plans/dse_cg.md). The stubs name the phase or step that writes
 them.
 
-1. **Phase 1: the LTBF system at any design point.** It already runs as an `HwSystem` through the
-   system flow (at 2024.1). First and blocking: `build_system` at a design point, and its RTL gate at
-   2025.1. Then synthesis and csynth through the system flow part by part, the three workloads, and
-   pysim from the system.
+1. **Phase 1: the LTBF system at any grid point.** It already runs as an `HwSystem` through the
+   system flow, gated at 2025.1. First and blocking: Shared Mem and the Ingest DMA modelled, the
+   memory axes and the per-design formats, as options of the example that keep its defaults. Then
+   `build_system` at a point, synthesis and csynth of the built parts, the two workloads with the
+   end-to-end test (a Sionna drop to the equalized symbols), and pysim from the system.
 2. **Phase 2: the adaptor, verified.** `adaptor.py`'s defaults and `ltbf_cg_mem.py`'s methods; fast
-   tests with no toolchain; then five design points through every method, checked against each
-   other.
+   tests with no toolchain; then six design points through every method, checked against each
+   other, which also measure the costs the grid is sized by.
 3. **Phase 3: the service and `dselib` on the live backend**, and `DSE.md` generated. The user flow
    above works from here: **the hand-off point.**
 
-After that: the ground-truth grid G1 and the validation of pysim's predictions (step 4), replay and
+After that: the grid G1, the whole space measured, and the validation of pysim's predictions (step 4), replay and
 the sandbox (5), the scripted policies (6), the agents (7), and V2, the same system with its CG
 chains sequenced on chip by descriptor passing, which adds a second adaptor and changes nothing else
 here (8).

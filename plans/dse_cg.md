@@ -94,7 +94,8 @@ measure the curation later.
 
 ## The space: a grid measured in a week
 
-The agents' space is a full product of these values, every point legal and measured:
+The agents' space is the product of these values, restricted to the four systolic shapes (the
+adaptor's `R` and `C` with that constraint), and every legal point is measured:
 
 | axis | kind | values | default | what a new value changes |
 |---|---|---|---|---|

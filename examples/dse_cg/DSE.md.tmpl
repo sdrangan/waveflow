@@ -21,11 +21,16 @@ sizes inside the parts change.
 {{data_flow}}
 
 The DUT is synthesized in parts: each device (a kernel with the views, adaptor and bus writers that
-belong to it) and each memory is a **sub-top**, synthesized on its own, and the crossbar between
-them is vendor IP. A design parameter changes only the parts it depends on, and only those are
-synthesized again; a part already synthesized at the same sizes costs nothing.
+belong to it) is a **sub-top**, synthesized on its own, and the crossbar between them is vendor IP.
+A design parameter changes only the parts it depends on, and only those are synthesized again; a
+part already synthesized at the same sizes costs nothing.
 
 {{subtop_tree}}
+
+Some parts are **modelled**, not built: they are simulated (in RTL simulation too, by a model
+outside the DUT) but never synthesized, and their resources come from a formula or are not counted:
+
+{{modelled_table}}
 
 How the parts are connected:
 
@@ -37,8 +42,10 @@ The modules inside each part, with their documentation and source:
 
 ## Parameters
 
-**Design** parameters change the hardware: a new value means a new synthesis of the parts listed.
-**Workload** parameters are fields of a command: a new value costs only simulation.
+**Design** parameters set the design. A new value means a new synthesis of the parts listed; a
+design parameter that rebuilds no part (a modelled part's setting, or the host's software) costs only
+a new RTL simulation. **Workload** parameters are fields of a command: a new value costs only
+simulation.
 
 {{parameters_table}}
 
@@ -66,7 +73,7 @@ A design is legal only when all of these hold:
 <!-- /arm -->
 | `hls_estimate(points)` | {{cost_hls_estimate}}, for each HLS kernel not compiled before at the same sizes |
 | `synth(points)` | {{cost_synth}}, for each part not synthesized before at the same sizes |
-| `rtlsim(points, workload)` | {{cost_rtlsim_design}} for a new design (plus the synthesis of its new parts); {{cost_rtlsim_workload}} for a new workload on a design already simulated |
+| `rtlsim(points, workload)` | {{cost_rtlsim_build}} for a design whose RTL is new (plus the synthesis of its new parts); {{cost_rtlsim_run}} for a new workload, or a new value of a parameter that rebuilds no part, on RTL already elaborated |
 
 Up to {{k_workers}} `hls_estimate`, `synth` and `rtlsim` jobs run at once; more wait their turn.
 

@@ -11,10 +11,12 @@ report names), and a budget only if the user sets one.
 What it does on each call (plan ``plans/dse_cg.md``, *The service and the ledger*):
 
 * **checks the arm** -- ``pysim`` is refused in the traditional arm, here and not only in the client;
-* **checks the point** -- an illegal design comes back as a row (``status: "illegal: n > 16"``);
+* **checks the point** -- an illegal design comes back as a row (``status: "illegal: (R, C) in
+  [...]"``);
 * **charges the recorded cost** of each evaluation, from the 2025.1 lab-machine timing events stored
-  with the replay table: per build for ``synth``, elaboration + simulation for a design's first
-  ``rtlsim``, simulation alone after that, the measured run time for ``golden`` and ``pysim``;
+  with the replay table: per part for ``synth``; for ``rtlsim``, elaboration once per RTL build and
+  simulation per run (``design.sim_identity``: a design parameter that rebuilds nothing, or a new
+  workload, is a new run on the same build); the measured run time for ``golden`` and ``pysim``;
 * **synthesizes part by part** -- a design point's parts are the nodes of ``design.architecture()``;
   ``design.identities(params)`` names what each would synthesize, and only identities the ledger
   does not hold are charged and built (``design.synth(node, params)`` on the live backend); the
@@ -24,8 +26,9 @@ What it does on each call (plan ``plans/dse_cg.md``, *The service and the ledger
 * **caches by identity** -- a part, a kernel, or a simulation already done costs 0;
 * **schedules jobs on k worker slots** on a simulated tool clock, so both tool-hours and time-to-
   decision are known; ``wait`` advances the clock, the agent's thinking does not;
-* **answers from a backend** -- :class:`ReplayBackend` (the pre-registered ground-truth grid, G1 for
-  V1) for every scored run; :class:`LiveBackend` for a user, and for measuring G1 itself;
+* **answers from a backend** -- :class:`ReplayBackend` (the ground truth G1: every legal point of
+  the design's space, measured before any scored run) for every scored run; :class:`LiveBackend` for
+  a user, and for measuring G1 itself;
 * **enforces the budget and the submit rule** (synthesized and RTL-simulated on the objective's
   workloads).
 
@@ -169,7 +172,8 @@ class Service:
                                   "the ledger does not hold; the row sums the parts")
 
     def rtlsim(self, points: list[dict], workload: Any) -> str:
-        raise NotImplementedError("Phase 3: synth first if needed; first workload pays elaboration")
+        raise NotImplementedError("Phase 3: synth first if needed; a new build (design.sim_identity) "
+                                  "pays elaboration, a new run on it simulation alone")
 
     def wait(self, job: Any) -> list[dict]:
         raise NotImplementedError("Phase 3")

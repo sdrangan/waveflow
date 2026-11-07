@@ -55,7 +55,9 @@ jobs, a few at once;
 - A failure is a result, not an exception: a row with a `status` and the time it cost.
 - A design is synthesized part by part (`DSE.md` lists the parts and which parameters each depends
   on). A part already synthesized at the same sizes is not charged again, so a change that touches
-  one part costs only that part's synthesis. A repeated evaluation costs nothing.
+  one part costs only that part's synthesis. Some design parameters rebuild no part (`DSE.md` says
+  which): a new value of one costs an RTL simulation and no synthesis. A repeated evaluation costs
+  nothing.
 - `results()` returns every evaluation so far, flattened for `pandas.DataFrame`; `results("synth")`
   keeps one function's rows. Use it to recover your state instead of repeating calls or relying on
   notes.
@@ -78,9 +80,10 @@ End by calling `submit(params, report)`, with `report` a dict:
 {
     "params": {...},                  # the design submitted, as passed to synth
     "evidence": [                     # one entry per constraint and the objective
-        {"metric": "lut", "value": 59751, "source": "synth"},
-        {"metric": "t_lt_ms", "value": 7.6, "workload": "long_term", "source": "rtlsim"},
-        {"metric": "median_loss_db", "value": 0.086, "workload": "accuracy", "source": "golden"},
+        {"metric": "lut", "value": 55400, "source": "synth"},
+        {"metric": "t_upd_ms", "value": 5.9, "workload": "long_term", "source": "rtlsim"},
+        {"metric": "median_loss_db", "value": 0.07,
+         "workload": {"name": "accuracy", "target": "-6_3"}, "source": "golden"},
     ],
     "rationale": "a few sentences: how you searched, and why this design",
 }

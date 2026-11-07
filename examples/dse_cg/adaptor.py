@@ -53,8 +53,13 @@ class DseAdaptor(ABC):
     :meth:`architecture`    the sub-top tree and its interconnects; checks it is point-invariant
     :meth:`identities`      each node's identity at a point: the service's cache and charge key
     :meth:`hls_identities`  each HLS kernel's identity at a point: the same, for ``hls_estimate``
+    :meth:`sim_identity`    an RTL simulation's identity: the same, for ``rtlsim``
     :meth:`rebuilds`        for each design parameter, the sub-tops a new value rebuilds
     ======================  ==================================================================
+
+    A design parameter may rebuild nothing: one that sets a modelled part (a memory model's speed)
+    or the host's software (a scheduler setting) changes no node's identity, only
+    :meth:`sim_identity`'s, so a new value costs an RTL simulation and no synthesis.
 
     The architecture is what DSE.md shows the agent; the identities are bookkeeping only the
     service sees.
@@ -72,7 +77,11 @@ class DseAdaptor(ABC):
             {"parameters": [{"name", "kind": "design" | "workload", "values", "default",
                              "description"}, ...],
              "constraints": [{"rule": "<Python expression over parameter names>", "why"}, ...],
-             "workloads": [{"name", "fixes": {...}, "valid_for": [metric, ...]}, ...]}
+             "workloads": [{"name", "fixes": {...}, "valid_for": [metric, ...],
+                            "description"}, ...]}
+
+        Every legal point of this space is measured before any scored run (the agents' space is
+        the measured grid), so it must be small enough to measure; plan ``plans/dse_cg.md``.
 
         The shape ``dselib.space()`` returns, minus ``rebuilds``, which :meth:`rebuilds` adds.
         """
@@ -81,8 +90,9 @@ class DseAdaptor(ABC):
     def context(self) -> dict:
         """The hand-written parts of ``DSE.md``: title, description (what the system does),
         data flow (how work moves through the architecture: what no walk of the tree can say),
-        doc pages, workload descriptions, metrics (name, unit, description).  Facts only: no
-        objective, no advice."""
+        doc pages, workload descriptions, metrics (name, unit, description), and the modelled parts
+        (each part simulated but not synthesized: its model in pysim and at RTL, and how its
+        resources are counted).  Facts only: no objective, no advice."""
 
     @abstractmethod
     def build_system(self, params: dict) -> Any:
@@ -117,8 +127,9 @@ class DseAdaptor(ABC):
         bit-exact check against pysim, per-block activity, and the activity table as an artifact.
 
         Called only by the live backend.  Default: the system flow on :meth:`build_system`'s system
-        (``add_system_steps`` to ``system_xsi``), incremental, so a new workload on a design already
-        elaborated pays for simulation alone.
+        (``add_system_steps`` to ``system_xsi``), incremental, so a new run on a build already
+        elaborated -- a new workload, or a design parameter that rebuilds nothing -- pays for
+        simulation alone (:meth:`sim_identity`).
         """
         raise NotImplementedError("Phase 2")
 
@@ -192,8 +203,17 @@ class DseAdaptor(ABC):
         kernels.  Never shown to the agent."""
         raise NotImplementedError("Phase 2")
 
+    def sim_identity(self, params: dict, workload: dict) -> dict[str, str]:
+        """``{"build": ..., "run": ...}`` at ``params`` and ``workload``: ``build`` combines every
+        node's identity (what the RTL is elaborated from), ``run`` adds the design parameters that
+        rebuild nothing and the workload.  The cache and charge key for ``rtlsim``: a new ``build``
+        pays elaboration and simulation, a new ``run`` on an elaborated ``build`` pays simulation
+        alone.  Never shown to the agent."""
+        raise NotImplementedError("Phase 2")
+
     def rebuilds(self) -> dict[str, list[str]]:
         """For each design parameter, the nodes whose identity changes when it moves from its
-        default to another legal value: :meth:`identities` at both, compared node by node.  Shown in
+        default to another legal value: :meth:`identities` at both, compared node by node; empty
+        for a parameter that rebuilds nothing (it changes only :meth:`sim_identity`).  Shown in
         ``DSE.md`` as each node's "depends on" and each parameter's "rebuilds"."""
         raise NotImplementedError("Phase 2")

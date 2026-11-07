@@ -47,11 +47,14 @@ subtop_tree              ``design.architecture()``: the tree of nodes (sub-tops 
                          (``design.rebuilds()``, inverted)
 interconnects_table      ``design.architecture()``: crossbar slots, stream nets between sub-tops,
                          interrupt lines, what crosses the DUT boundary
+modelled_table           ``design.context()['modelled']`` (hand-written): each modelled part, what
+                         its model is in pysim and at RTL, and how its resources are counted
 modules_table            the same walk, one row per module, grouped by node: class, docstring;
                          source via ``inspect``; docs via the front-matter ``api:`` scan of
                          ``docs/guide``
 parameters_table         ``design.space()``, plus ``design.rebuilds()``: for each design parameter,
-                         the nodes whose identity changes when it changes
+                         the nodes whose identity changes when it changes, or "none: a new RTL
+                         simulation only"
 constraints              ``design.space()['constraints']``, checked at the defaults
 workloads_table          ``design.space()['workloads']``
 metrics_table            ``design.context()['metrics']``: name, unit, which functions give it
