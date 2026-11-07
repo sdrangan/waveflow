@@ -281,6 +281,9 @@ def rtl_against_pysim(work: Path, tolerance: float = 0.05) -> dict:
     from waveflow.utils.burst_io import read_burst_bundle
 
     def bursts(d: Path) -> list[tuple]:
+        # An endpoint the run never wrote has no bundle (no slot: no symbols).
+        if not (d / "words.bin").exists():
+            return []
         return [tuple(int(w) for w in b) for b in read_burst_bundle(d)]
 
     def by_source(d: Path) -> dict:
