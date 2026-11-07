@@ -251,14 +251,30 @@ def test_golden_is_charged_once_per_accuracy_table():
 
 
 class Synthetic(Backend):
-    """Metrics that follow the parameters (pysim a little off on T_upd): enough for the scripted
-    policies to have something to find."""
+    """Metrics that follow the parameters, enough for the scripted policies to have something to find:
+    each part's synthesis follows its own parameters (as G1's rows do: a part shared by identity has
+    one row), the kernels' csynth leaves out the crossbar (as ``hls_estimate`` does), and pysim is 1%
+    over on LUTs and 2% on T_upd."""
 
     @staticmethod
-    def _m(p, t=3):
-        lut = p["R"] * p["C"] * 1000 * p["W"] // 16 + 5000 * p["L"]
-        tupd = (6.4 if p["mem_rate"] == 2 else 4.7) * (0.73 if t == 2 else 1.0)
-        return lut, p["R"] * p["C"] * 5 + 20 * p["L"], tupd
+    def part(node, p):
+        if node == "sys":
+            lut = p["R"] * p["C"] * 1000 * p["W"] // 16
+            return {"lut": lut, "ff": lut, "dsp": p["R"] * p["C"] * 5, "bram": 2}
+        if node == "vec":
+            return {"lut": 5000 * p["L"], "ff": 5000 * p["L"], "dsp": 20 * p["L"], "bram": 2}
+        if node == "xbar":
+            return {"lut": 500 * p["banks"], "ff": 100, "dsp": 0, "bram": 0}
+        return {"lut": 300, "ff": 300, "dsp": 0, "bram": 0}                 # hub
+
+    @classmethod
+    def total(cls, p):
+        return {r: sum(cls.part(n, p)[r] for n in ("sys", "vec", "hub", "xbar")) + (456 if r == "bram" else 0)
+                for r in ("lut", "ff", "dsp", "bram")}
+
+    @staticmethod
+    def tupd(p, t=3):
+        return (6.4 if p["mem_rate"] == 2 else 4.7) * (0.73 if t == 2 else 1.0)
 
     def call(self, what, *args):
         self.calls.append(what)
@@ -268,24 +284,37 @@ class Synthetic(Backend):
                     "p90_loss_db": 0.5}, COST["golden"]
         if what == "pysim":
             p, w = args
-            lut, dsp, tupd = self._m(p, w.get("t", 3))
-            return {"status": "ok", "t_upd_ms": tupd * 1.02, "cycles": 1,
-                    "resources": {"lut": lut, "ff": lut, "dsp": dsp, "bram": 2}}, COST["pysim"]
+            res = self.total(p)
+            res["lut"] = round(res["lut"] * 1.01)
+            return {"status": "ok", "t_upd_ms": self.tupd(p, w.get("t", 3)) * 1.02, "cycles": 1,
+                    "resources": res}, COST["pysim"]
         if what == "synth":
             node, p = args
-            lut, dsp, _ = self._m(p)
-            return {"status": "ok", "lut": lut // 4, "ff": lut // 4, "dsp": dsp // 4, "bram": 0}, COST["synth"]
+            return {"status": "ok", **self.part(node, p)}, COST["synth"]
+        if what == "hls_estimate":
+            kernel, p = args
+            node = {"ltbf_sys": "sys", "ltbf_vec": "vec", "ltbf_hub": "hub"}[kernel]
+            est = {r: round(v * 0.8) for r, v in self.part(node, p).items()}
+            return {"kernel": kernel, "status": "ok", **est, "latency": None}, COST["hls_estimate"]
         if what == "rtlsim":
             p, w = args
-            return ({"status": "ok", "t_upd_ms": self._m(p, w.get("t", 3))[2], "bit_exact": True,
+            return ({"status": "ok", "t_upd_ms": self.tupd(p, w.get("t", 3)), "bit_exact": True,
                      "build_s": COST["build"], "simulate_s": COST["simulate"]},
                     COST["build"] + COST["simulate"])
         return super().call(what, *args)
 
 
+#: The first objective's optimum on Synthetic: W 16 (accuracy), mem_rate 1 (T_upd), the smallest
+#: array and lanes, one bank (its crossbar is 500 LUTs smaller, which only synthesis sees).
+OPT0 = {"R": 2, "C": 4, "W": 16, "L": 2, "banks": 1, "mem_rate": 1}
+OPT0_LUT = 2 * 4 * 1000 + 2 * 5000 + 300 + 500
+
+
 @pytest.mark.parametrize("arm", ["traditional", "waveflow"])
 def test_the_scripted_policies_find_the_optimum(arm):
-    """Both policies submit an optimum of the first objective; the Waveflow one verifies fewer."""
+    """Both policies submit a design of the first objective within 5% of its optimum -- the Waveflow
+    one the optimum, the traditional one a design the kernels' estimate cannot tell from it (two
+    banks: its crossbar is not a kernel) -- and the Waveflow one verifies fewer."""
     from examples.dse_cg import policies
     from examples.dse_cg.prereg import OBJECTIVES
     from examples.dse_cg.skill.dse import dselib
@@ -295,16 +324,74 @@ def test_the_scripted_policies_find_the_optimum(arm):
     s = sv.Service(Design(), arm, obj, None, 2, be, None)
     dselib.bind(s)
     try:
-        if arm == "traditional":
-            out = policies.traditional(dselib, obj, lambda p: p["R"] * p["C"] + p["L"])
-        else:
-            out = policies.waveflow(dselib, obj, top_k=2)
+        out = policies.traditional(dselib, obj) if arm == "traditional" else policies.waveflow(dselib, obj)
     finally:
         dselib.bind(None)
-    assert out["accepted"] and out["submitted"]["W"] == 16 and out["submitted"]["mem_rate"] == 1
-    assert (out["submitted"]["R"], out["submitted"]["C"], out["submitted"]["L"]) == (2, 4, 2)
-    # Synthetic rows put each part at a quarter of the design's numbers, so the totals are the design's
-    assert out["value"] == 2 * 4 * 1000 + 2 * 5000
+    sub = out["submitted"]
+    keys = ("R", "C", "W", "L", "mem_rate")
+    assert out["accepted"] and {k: sub[k] for k in keys} == {k: OPT0[k] for k in keys}
+    if arm == "waveflow":
+        assert sub["banks"] == 1 and out["value"] == OPT0_LUT
+    else:
+        assert out["value"] <= OPT0_LUT * 1.05
     verified = be.calls.count("rtlsim")
-    print(arm, "RTL runs", verified, "syntheses", be.calls.count("synth"))
-    assert verified <= (8 if arm == "waveflow" else 400), (arm, verified)
+    assert verified <= (4 if arm == "waveflow" else 8), (arm, verified)
+
+
+def synthetic_table(tmp_path, design):
+    """G1's table for Synthetic over every legal design of the space, in ``grid.py``'s layout."""
+    import itertools
+    import json
+
+    be = Synthetic()
+    names = [k for k, v in GRID.items() if v[0] == "design"]
+    t: dict[str, dict] = {fn: {} for fn in ("synth", "hls", "rtlsim", "golden", "pysim")}
+    pts = []
+    for combo in itertools.product(*[GRID[k][1] for k in names]):
+        p = design.fill(dict(zip(names, combo, strict=True)))
+        if design.legal(p):
+            continue
+        pts.append(p)
+        for node, ident in design.identities(p).items():
+            t["synth"].setdefault(ident, be.call("synth", node, p))
+        for kernel, ident in design.hls_identities(p).items():
+            t["hls"].setdefault(ident, be.call("hls_estimate", kernel, p))
+        for tt in GRID["t"][1]:
+            name, w = design.workload({"name": "long_term", "t": tt})
+            row, _ = be.call("rtlsim", p, {"name": name, **w})
+            t["rtlsim"][design.sim_identity(p, {"name": name, **w})["run"]] = (row, 0.0)
+            t["pysim"][sv.eval_key("pysim", p, name, w)] = be.call("pysim", p, w)
+            for g in GRID["target"][1]:
+                name, w = design.workload({"name": "accuracy", "t": tt, "target": g})
+                t["golden"][sv.eval_key("golden", p, name, w)] = be.call("golden", p, w)
+    for fn, rows in t.items():
+        (tmp_path / f"{fn}.jsonl").write_text("".join(json.dumps({"key": k, "row": r, "cost_s": c}) + "\n"
+                                                      for k, (r, c) in rows.items()))
+    return pts
+
+
+def test_scripted_runs_on_replay_are_scored(tmp_path):
+    """Plan step 6 end to end on a synthetic G1: both policies on the replay backend, recorded, and
+    scored by ``score.summarize`` -- each reaches the target, the Waveflow one with fewer RTL runs, and
+    every number either report states is backed by its ledger."""
+    from examples.dse_cg import policies, score
+    from examples.dse_cg.prereg import OBJECTIVES
+
+    d = Design()
+    table = tmp_path / "table"
+    table.mkdir()
+    pts = synthetic_table(table, d)
+    obj = OBJECTIVES[0]
+    recs = [policies.run_scripted(arm, obj, table, tmp_path / "runs" / arm, design=d)
+            for arm in ("traditional", "waveflow")]
+    truth = score.Truth(table, d)
+    out = score.summarize(recs, truth, [obj], pts, epsilon=0.05, calibration_s=3600.0)
+    assert out["optimum"][obj["id"]]["value"] == OPT0_LUT
+    by = {r["arm"]: r for r in out["runs"]}
+    for arm, r in by.items():
+        assert r["time_to_target"] is not None, arm
+        assert r["submitted"]["feasible"] and r["report_errors"] == [], (arm, r["report_errors"])
+    assert by["waveflow"]["quality"] == 0.0
+    assert by["waveflow"]["spend"]["rtl_runs"] < by["traditional"]["spend"]["rtl_runs"]
+    g = out["groups"][f"waveflow/{obj['id']}"]
+    assert g["time_to_target_s_upfront"]["median"] == g["time_to_target_s"]["median"] + 3600.0

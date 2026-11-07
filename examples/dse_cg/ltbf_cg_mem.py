@@ -372,8 +372,19 @@ class LtbfCgMemAdaptor(DseAdaptor):
         """Every node's identity, the modelled ones (``ing``, ``mem``) too: a hash of the sub-top's
         Verilog and its HLS tops' sources (:meth:`_hls_digest`); for ``mem``, every bank's Verilog;
         for ``xbar``, the top with every sub-top a black box and the crossbar's configuration (what
-        ``synth_top_ooc`` caches on).  Builds the Python system and generates the HLS; synthesizes
-        nothing."""
+        ``synth_top_ooc`` caches on).  Builds the Python system and generates the HLS (about 2 s);
+        synthesizes nothing.  Memoized per instance by the filled point: an identity is a function
+        of the point and the repository's sources, and the service and ``score.py`` ask for the same
+        point's many times."""
+        import json
+
+        key = json.dumps(self.fill(params), sort_keys=True)
+        memo = self.__dict__.setdefault("_identities_memo", {})
+        if key not in memo:
+            memo[key] = self._all_identities(params)
+        return dict(memo[key])
+
+    def _all_identities(self, params: dict) -> dict[str, str]:
         import json
 
         from waveflow.build.system_ooc import top_with_black_boxes
