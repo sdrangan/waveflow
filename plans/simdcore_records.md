@@ -201,6 +201,57 @@ soon as the port is free, as `examples/vecunit_cg`'s RTL bench.
 A 32-bit field `budget` in the job header: instructions issued (scalar and vector). Exhausted -> `Status`
 error `BUDGET`, fatal (the command-response rule). 0 = no budget.
 
+### D12 Mask layout (added 2026-11-07, from Stage 1 -- **REVIEW**)
+
+**Element `i`'s mask is bit 0 of element `i`** (RVV 0.7.1's layout at `MLEN = SEW`, `LMUL` 1), not RVV
+1.0's packed bits. A compare or mask-logic instruction writes each active element whole (0 or 1); the
+rest undisturbed. Why: with packed bits, mask bit `i` lives in word `i / 32`, another lane than element
+`i` -- every masked op and every compare would cross lanes, and a compare would read-modify-write a
+word another lane owns. Element-aligned, the hardware keeps a one-bit-an-element shadow of `v0` in each
+lane (witness 6's mask file), written by every write to `v0`. Cost to programs: `vlm` / `vsm` and
+moving a mask as data do not mean what RVV 1.0 says (none are in the subset; the guide's habits table
+says so); a mask written at one `SEW` and read at the other is unspecified. Reverse: an agent test
+failure traced to it.
+
+### D13 Hardware rules and optional memory paths (added 2026-11-07, for Stage 5 -- **REVIEW**)
+
+The first RTL builds what the applications and the pre-registered agent kernels use; the rest becomes
+build options (features off by default), illegal unless built, in the interpreter as in the RTL:
+
+- `lut` (`vluxei` on the LUT region), `strided` (`vlse vsse vlseg2 vsseg2`), `scalar_mem`
+  (`lh lhu lw sh sw`): **off**. No application or agent kernel uses them (the toy LUT kernel builds
+  `lut`). The LUT also needs a way to fill it that the job protocol lacks. Stage 5 builds none of the
+  three; a later stage may.
+- `vle` / `vse` base a multiple of `4·L` bytes (else `ADDR`): element `i` then lives in lane `i mod L`'s
+  bank, with no crossbar. CG's `X` rows are padded to 16 elements (`L` <= 16).
+- **No window holds `v0`** (the mask shadow is written by the vector loop, not the loader); the
+  matched filter's `X` moved to `v1`.
+- **Input-window registers are read-only.** The loader owns the next copy and the program reads the
+  current one; a write would need a third write path into the window's memories.
+- After `wf.qpop`, rows `>= k` and registers `>= n` of the window are **unspecified** (the interpreter
+  poisons them): the loader writes only what the block holds, rather than spending cycles clearing.
+
+### Stage 5 architecture (proposal, 2026-11-07)
+
+From the witnesses (W4: a window needs a memory a copy, each with one write site):
+
+- **Tasks:** a loader per input port, a **scalar task** (fetch, decode, RV32IM, CSRs, `vsetvli`, the
+  budget, every legality check; forwards vector instructions with their scalar operands, `vl`, `vtype`,
+  `vxrm`, `wfsh` on a queue; waits on a return stream for `vmv.x.s` / `vcpop` / `vfirst` / a `vxsat`
+  read), a **vector task** (witness 6's flattened instruction x element loop: lanes, register file, data
+  memory, the window memories), a storer per output port. The status leaves the scalar task at `ecall`.
+- **Register file:** witness 6's, per lane, three read replicas (`vs2`, `vs1`, `vd`) written alike; a
+  one-bit-an-element shadow of `v0` (D12).
+- **Window memories:** per window, lane and copy, **one write site each**: an input window's copies are
+  written only by its port's loader and read (two replicas: `vs2`, `vs1`) only by the vector loop; an
+  output window's copies are written only by the vector loop and read by it (`vs2`, `vs1`, `vd`) and by
+  the storer. The copy bit lives in the vector task; loader and storer exchange tokens with it ("block
+  `b` of window `w` is full" / "is free") on small streams -- a ping-pong without `stream_of_blocks`.
+- **Short vectors:** the vector task stalls an instruction that reads a register written fewer than `D`
+  iterations before (W6: required).
+- **`vdiv`** (option): a pipelined divider beside the loop writing a per-lane result buffer, drained
+  into `vd` by a second pass -- so the loop's depth (and `D`) does not grow to the divider's.
+
 ## Stage 1: HLS witnesses
 
 **Done 2026-11-07** (`plans/witness/simdcore/`, its README has every row and the raw outputs). Vitis HLS

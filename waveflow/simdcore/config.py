@@ -13,6 +13,13 @@ parameter; nothing here names an application.
   ``base + j``, row ``i`` its element ``i``.
 * **Data memory.** ``dm_bytes`` bytes, word-interleaved over ``L`` banks; the top ``4 * lut_entries``
   bytes are the LUT region, the only target of ``vluxei`` (D5).
+* **Optional memory paths** (records D13), off by default -- features are build options: ``lut``
+  (``vluxei`` on the LUT region), ``strided`` (``vlse`` / ``vsse`` / ``vlseg2`` / ``vsseg2``) and
+  ``scalar_mem`` (``lh lhu lw sh sw``).  Off, they are illegal.  Unit-stride ``vle`` / ``vse`` are
+  always there; their base address must be a multiple of ``4·L`` bytes (element ``i`` in lane
+  ``i mod L``'s bank).
+* **Hardware rules** (D13): no window holds ``v0`` (the mask register); an input window's registers
+  are read-only (an instruction writing one is illegal).
 * **Complex ops** (D7).  ``cplx_ops``: the ``wf.`` complex instructions exist; off, they are illegal.
 * **Timing** (D2; the interpreter's cycle model, not a calibration).  ``depth`` is the lane pipeline's
   read-to-write distance ``D``; ``scalar_ii`` the scalar unit's cycles an instruction (vector ones
@@ -72,6 +79,9 @@ class SimdCoreConfig:
     div: bool = True
     vdiv: bool = False  # vdiv / vdivu / vrem / vremu: a pipelined divider a lane (records D6)
     vdiv_latency: int = 36  # its read-to-write distance, in place of ``depth``
+    lut: bool = False  # vluxei on the LUT region (D5, D13)
+    strided: bool = False  # vlse / vsse / vlseg2 / vsseg2 (D13)
+    scalar_mem: bool = False  # lh lhu lw sh sw (D13)
     word_bits: int = 64  # a stream port's word: the loader / storer move one a cycle
     # timing (D2)
     depth: int = 9  # witness 6 (2025.1): the flattened loop's depth at L 2-16
@@ -96,6 +106,8 @@ class SimdCoreConfig:
         for w in self.windows:
             if w.sew not in self.sews:
                 raise ValueError(f"window {w.name}: sew {w.sew} not in {self.sews}")
+            if w.base == 0:
+                raise ValueError(f"window {w.name}: v0 is the mask register, in no window (D13)")
             for r in w.regs:
                 if r in used:
                     raise ValueError(f"window {w.name}: v{r} already in window {used[r]}")
@@ -134,6 +146,11 @@ class SimdCoreConfig:
                     return w
             raise KeyError(q)
         return self.windows[q]
+
+    @property
+    def in_window_regs(self) -> frozenset[int]:
+        """The registers of the input windows: read-only (D13)."""
+        return frozenset(r for w in self.windows if w.direction == "in" for r in w.regs)
 
     def window_index(self, name: str) -> int:
         for i, w in enumerate(self.windows):

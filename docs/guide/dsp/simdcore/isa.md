@@ -47,16 +47,22 @@ next vector instruction is illegal.
 | mask logic | `vmand.mm vmor.mm vmnand.mm`; `vmnot.m vmmv.m` pseudo; `vcpop.m vfirst.m` |
 | reductions | `vredsum vredmax vredmaxu vredmin vredminu` (`.vs`: `vd[0] = op(vs1[0], vs2[*])`) |
 | scalar moves | `vmv.x.s vmv.s.x` |
-| memory | `vle16/32.v vse16/32.v vlse16/32.v vsse16/32.v vlseg2e16/32.v vsseg2e16/32.v vluxei16/32.v` |
+| memory | `vle16/32.v vse16/32.v`; build options: `vlse vsse vlseg2 vsseg2` (`strided`), `vluxei16/32.v` (`lut`) |
 | divide (build option `vdiv`) | `vdiv vdivu vrem vremu` (`.vv .vx`) |
 
-**Masking.** A trailing `v0.t` masks an instruction by `v0`'s bits.
+**Masks are one element each, not packed bits.** Element `i`'s mask is **bit 0 of element `i`** of
+the mask register (RVV 0.7's layout at `MLEN = SEW`, not RVV 1.0's packed bits), so the lane that holds
+an element holds its mask. A compare or mask instruction writes each active element whole, 0 or 1. A
+trailing `v0.t` masks an instruction by `v0`'s elements. A mask written at one `SEW` and read at the
+other is unspecified.
 
 **Choices RVV leaves open.** Tail elements (`i >= vl`) and masked-off elements are **left undisturbed**
 (legal under `ta`/`ma` too). `vstart` is always 0.
 
 **Memory.** Element width `EEW` at most `SEW` (a smaller `EEW` is a fractional `EMUL`, legal). Every
-access aligned and inside data memory, else status `ADDR`. `vluxei` (indexed) may only read the **LUT
+access aligned and inside data memory, else status `ADDR`; a `vle` / `vse` base address must also be a
+multiple of `4 · L` bytes (element `i` is in lane `i mod L`'s bank). Scalar `lh lhu lw sh sw` are a
+build option (`scalar_mem`). `vluxei` (indexed) may only read the **LUT
 region**, the top `4 · lut_entries` bytes of data memory: the one per-lane address in the machine, for
 tables. Strided and indexed accesses that hit one memory bank twice in a group cost the extra cycles.
 

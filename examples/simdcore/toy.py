@@ -189,7 +189,7 @@ def run_kernel(name: str, n: int, *, L: int = 2, seed: int = 0, vlen: int = 2048
     k = KERNELS[name]
     rng = np.random.default_rng(seed)
     d = k.data(rng, n)
-    cfg = config(L, vlen, k.sew, k.two_in)
+    cfg = config(L, vlen, k.sew, k.two_in, lut=k.lut is not None)
     inputs = {"A": [_block(k, d["A"])]}
     if k.two_in:
         inputs["B"] = [_block(k, d["B"])]

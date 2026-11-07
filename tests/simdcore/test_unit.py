@@ -101,7 +101,7 @@ def test_an_error_is_fatal(tmp_path):
     cfg = mf_config(2, L=2)
     xr, xi, rr, ri = frame(64, 2, seed=1)
     good = Job(1, mf_text(2), args=(64,), inputs=mf_inputs(cfg, xr, xi, rr, ri))
-    bad_text = mf_text(2).replace("    ecall\n", "    li t1, 0x7FFFFFF0\n    lw t1, 0(t1)\n    ecall\n")
+    bad_text = mf_text(2).replace("    ecall\n", "    li t1, 0x7FFFFFF0\n    vle32.v v3, (t1)\n    ecall\n")
     bad = Job(2, bad_text, args=(64,), inputs=mf_inputs(cfg, xr, xi, rr, ri))
     jobs = [good, bad, Job(3, mf_text(2), args=(64,), inputs=mf_inputs(cfg, xr, xi, rr, ri))]
     gold = golden_bursts(cfg, jobs)

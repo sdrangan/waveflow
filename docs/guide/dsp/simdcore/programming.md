@@ -23,14 +23,16 @@ The build declares them; the matched filter's:
 
 ```python
 SimdCoreConfig(L=2, vlen=2048, windows=(
-    Window("X", base=0, n=1, direction="in"),        # v0
+    Window("X", base=1, n=1, direction="in"),        # v1 (v0 is the mask)
     Window("R", base=8, n=8, direction="in"),        # v8 .. v15: antenna j in v8+j
     Window("Y", base=16, n=8, direction="out")))     # v16 .. v23
 ```
 
 A block is a `k x n` matrix on the stream, row-major. **Column `j` lands in register `base + j`, row `i`
 in its element `i`.** So a matrix whose rows are the data's natural vectors should arrive transposed
-(CG's `S` arrives as `N x K` so that each register is one of its `K` rows).
+(CG's `S` arrives as `N x K` so that each register is one of its `K` rows). After `wf.qpop`, rows at and
+beyond the block's `k` (and registers beyond its `n`) are unspecified, and an input window's registers
+are **read-only**.
 
 `wf.qpop q` takes the next block of input window `q` (windows are numbered in the order they are
 declared); `wf.qpush q` hands output window `q`'s rows `0 .. vl-1` to the storer. Each window has two
@@ -52,14 +54,14 @@ chunk:
     vsetvli t0, a0, e32, m1, ta, ma
     wf.qpop 0                     # X: k x 1
     wf.qpop 1                     # R: k x 8
-    wf.vcmulc.vv v16, v0, v8      # Y_j = conj(X) * R_j, one an antenna
-    wf.vcmulc.vv v17, v0, v9
-    wf.vcmulc.vv v18, v0, v10
-    wf.vcmulc.vv v19, v0, v11
-    wf.vcmulc.vv v20, v0, v12
-    wf.vcmulc.vv v21, v0, v13
-    wf.vcmulc.vv v22, v0, v14
-    wf.vcmulc.vv v23, v0, v15
+    wf.vcmulc.vv v16, v1, v8      # Y_j = conj(X) * R_j, one an antenna
+    wf.vcmulc.vv v17, v1, v9
+    wf.vcmulc.vv v18, v1, v10
+    wf.vcmulc.vv v19, v1, v11
+    wf.vcmulc.vv v20, v1, v12
+    wf.vcmulc.vv v21, v1, v13
+    wf.vcmulc.vv v22, v1, v14
+    wf.vcmulc.vv v23, v1, v15
     wf.qpush 2                    # Y
     sub     a0, a0, t0
     bnez    a0, chunk
@@ -76,8 +78,8 @@ A complex 16-bit sample is one `e32` element, `re` low. The `wf.` instructions t
     vsetvli     t0, a0, e32, m1, ta, ma
     wf.qpop     0
     wf.qpop     1
-    wf.vcmulc.vv v2, v0, v1       # z   = conj(x) * y, Q15 (csh = 15 at reset)
-    wf.vcabs2.v  v3, v2           # |z|^2: a 32-bit real, Q30 at rsh = 0
+    wf.vcmulc.vv v3, v1, v2       # z   = conj(x) * y, Q15 (csh = 15 at reset)
+    wf.vcabs2.v  v4, v3           # |z|^2: a 32-bit real, Q30 at rsh = 0
     wf.qpush    2
     wf.qpush    3
     ecall
@@ -204,5 +206,7 @@ So: keep `vl / L` at least `D`, keep scalar reads of vector results rare, and co
 | widening `vwmul`, narrowing `vnclip` | absent: accumulate at `e32`, shift with `vssra`, or use the `wf.` shifts |
 | `vslide*`, `vrgather`, `vid.v`, `vcompress` | absent: lanes never exchange data except through a reduction |
 | relying on tail-agnostic ones | tails are left undisturbed |
-| `vle`/`vse` for the streams | the streams are windows (`wf.qpop`, `wf.qpush`); `vle`/`vse` are for data memory |
+| `vle`/`vse` for the streams | the streams are windows (`wf.qpop`, `wf.qpush`); `vle`/`vse` are for data memory, at bases that are multiples of `4 · L` |
+| masks as packed bits (`vlm`, a mask moved as data) | a mask is bit 0 of each element (one element, one mask) |
+| writing into an input block, or a window on `v0` | input-window registers are read-only; no window holds `v0` |
 | floating point | absent: integers and shifts |

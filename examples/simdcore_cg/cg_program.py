@@ -55,7 +55,7 @@ CSH_BETA = F_P + F_BETA - F_P  # 13
 def cg_config(K: int = 8, N: int = 32, *, L: int = 2, vlen: int = 2048, **kw) -> SimdCoreConfig:
     if not (1 <= K <= 8 and 1 <= N <= vlen // 32):
         raise ValueError(f"K = {K} (1..8), N = {N} (1..{vlen // 32})")
-    return SimdCoreConfig(L=L, vlen=vlen, vdiv=True, dm_bytes=max(4096, 4 * N * K * 2), windows=(
+    return SimdCoreConfig(L=L, vlen=vlen, vdiv=True, dm_bytes=max(4096, 4 * -(-N // 16) * 16 * K * 2), windows=(
         Window("IN", V_IN, K, "in"), Window("OUT", V_P, K, "out", copies=1)), **kw)
 
 
@@ -77,7 +77,8 @@ def cg_text(K: int, nit: int, *, skip_dead: bool = True) -> str:
     """One job: ``B`` in, ``nit`` iterations (``S`` in, ``P`` out each but the last), ``X`` out.
     ``a0`` = ``N``."""
     t = ["    vsetvli t0, a0, e32, m1, ta, ma", "    li s1, 32767", "    li s2, -32768", "    li s3, 0xFFFF",
-         "    slli s4, a0, 2"]  # s4 = a row's bytes in DM (X)
+         "    addi s4, a0, 15", "    andi s4, s4, -16",  # s4 = a row's bytes in DM (X): N rounded
+         "    slli s4, s4, 2"]  # up to 16 elements, so every row starts on a bank boundary (L <= 16, D13)
     t.append(f"    wf.qpop {Q_IN}")  # B
     t += [f"    vmv.v.v v{V_R + k}, v{V_IN + k}" for k in range(K)]  # R = B
     t += [f"    vmv.v.v v{V_P + k}, v{V_R + k}" for k in range(K)]  # P = R

@@ -10,12 +10,12 @@ rdn (floor).
 matched filter         SIMD core (records D10: I/O register windows)
 =====================  ==========================================================================
 a chunk of samples     ``VL <= VLMAX`` elements (``vsetvli`` strip-mines the frame)
-``X`` (chunk)          input window ``X``: one register, ``v0``
+``X`` (chunk)          input window ``X``: one register, ``v1`` (``v0`` is the mask register)
 ``R`` (chunk x nrx)    input window ``R``: ``v8 .. v8+nrx-1``, antenna ``j`` in ``v8+j``
 ``Y``                  output window ``Y``: ``v16 .. v16+nrx-1``
 =====================  ==========================================================================
 
-A chunk is ``nrx`` instructions ``wf.vcmulc.vv v16+j, v0, v8+j`` -- one complex multiply each, ``S`` = 1
+A chunk is ``nrx`` instructions ``wf.vcmulc.vv v16+j, v1, v8+j`` -- one complex multiply each, ``S`` = 1
 an antenna -- between two ``wf.qpop`` and a ``wf.qpush``::
 
         csrwi   wfsh, 14
@@ -24,7 +24,7 @@ an antenna -- between two ``wf.qpop`` and a ``wf.qpush``::
         vsetvli t0, a0, e32, m1, ta, ma
         wf.qpop 0                       # X
         wf.qpop 1                       # R
-        wf.vcmulc.vv v16, v0, v8        # ... one an antenna
+        wf.vcmulc.vv v16, v1, v8        # ... one an antenna
         wf.qpush 2                      # Y
         sub     a0, a0, t0
         bnez    a0, chunk
@@ -40,7 +40,7 @@ from waveflow.simdcore.model import JobResult, cpack, cunpack, run_job
 
 #: Window indices, in the order of the configuration's ``windows``.
 Q_X, Q_R, Q_Y = 0, 1, 2
-V_X, V_R, V_Y = 0, 8, 16
+V_X, V_R, V_Y = 1, 8, 16
 CSH = 14  # Q2.14 x Q3.13 -> Q3.13
 VXRM_RDN = 2
 

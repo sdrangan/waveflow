@@ -9,7 +9,11 @@ Semantics: RV32IM, RVV 1.0 (``Zve32x`` subset, ``LMUL`` 1) and the ``wf.`` exten
 * vector memory: ``EEW == SEW`` (``EMUL`` 1); ``vluxei`` index ``EEW <= SEW``, addresses only in the LUT
   region (D5); every access aligned and in range, else an ``ADDR`` error;
 * ``wf.qpop q`` writes the next input block of window ``q`` into its registers (column ``j`` -> register
-  ``base + j``, rows ``>= k`` zero); ``wf.qpush q`` hands rows ``0 .. vl-1`` of window ``q`` to the
+  ``base + j``; rows ``>= k`` and columns ``>= n`` unspecified, read as ``POISON`` bytes);
+* masks: element ``i``'s mask is bit 0 of element ``i`` (D12); a mask-writing instruction writes the
+  whole element, 0 or 1;
+* hardware rules (D13): input-window registers are read-only; ``vle`` / ``vse`` bases are multiples of
+  ``4·L``; ``vluxei``, strided / segment and scalar memory access are build options; ``wf.qpush q`` hands rows ``0 .. vl-1`` of window ``q`` to the
   storer;
 * errors are fatal (``plans/simdcore_records.md`` D11): ``ILLEGAL``, ``ADDR``, ``BUDGET``, ``EMPTY``
   (a ``wf.qpop`` with no block left: the hardware would wait forever), ``PC``.
@@ -119,10 +123,16 @@ class State:
         return self.v[r].view(dt)
 
     def mask_bits(self, r: int) -> np.ndarray:
-        return np.unpackbits(self.v[r], bitorder="little").astype(bool)
+        """Register ``r`` as a mask at the current ``SEW``: element ``i``'s mask is **bit 0 of element
+        ``i``** (records D12: the lane holding the element holds its mask bit -- RVV 0.7's layout at
+        ``MLEN = SEW``, not RVV 1.0's packed bits)."""
+        return (self.velems(r, self.sew) & 1).astype(bool)
 
-    def set_mask_bits(self, r: int, bits: np.ndarray) -> None:
-        self.v[r] = np.packbits(bits.astype(np.uint8), bitorder="little")
+    def set_mask_elems(self, r: int, bits: np.ndarray, sel: np.ndarray) -> None:
+        """Write mask element ``i`` (the whole element, 0 or 1) where ``sel[i]``; the rest undisturbed."""
+        e = self.velems(r, self.sew)
+        n = len(sel)
+        e[:n] = np.where(sel, bits[:n].astype(e.dtype), e[:n])
 
 
 # --- the cycle model -------------------------------------------------------------------------------
@@ -359,10 +369,15 @@ class Core:
                 d = self._decode(self.words[st.pc // 4])
             except IllegalInstruction as e:
                 raise SimdCoreError("ILLEGAL", str(e), st.pc) from None
-            ext = d.spec.ext
+            ext, sem = d.spec.ext, d.spec.sem
             if (ext == "WFC" and not cfg.cplx_ops) or (ext == "VDIV" and not cfg.vdiv) or (
-                    d.spec.sem in ("div", "divu", "rem", "remu") and d.spec.ext == "M" and not cfg.div):
+                    sem in ("div", "divu", "rem", "remu") and ext == "M" and not cfg.div) or (
+                    sem == "vluxei" and not cfg.lut) or (
+                    sem in ("vlse", "vsse", "vlseg2", "vsseg2") and not cfg.strided) or (
+                    sem in ("lh", "lhu", "lw", "sh", "sw") and not cfg.scalar_mem):
                 self._illegal(f"{d.name} not in this build")
+            if _writes_vd(d) and {d.vd, d.vd + (sem == "vlseg2")} & cfg.in_window_regs:
+                self._illegal(f"{d.name} writes v{d.vd}, in an input window (read-only, D13)")
             self.steps += 1
             if d.spec.sem == "ecall":
                 self.tm.scalar()
@@ -599,10 +614,8 @@ class Core:
             a = st.mask_bits(d.vs2)[:vl]
             b = st.mask_bits(d.vs1)[:vl]
             r = {"vmand": a & b, "vmor": a | b, "vmnand": ~(a & b)}[s]
-            bits = st.mask_bits(d.vd)
-            bits[:vl] = r
-            st.set_mask_bits(d.vd, bits)
-            tm.vector([d.vs2, d.vs1], [d.vd], ceil(vl / (cfg.L * 32)) or 1)
+            st.set_mask_elems(d.vd, r, np.ones(vl, dtype=bool))
+            tm.vector([d.vs2, d.vs1], [d.vd], occ)
             return None
 
         # reductions -----------------------------------------------------------------------------
@@ -683,9 +696,7 @@ class Core:
         elif s in ("vmseq", "vmsne", "vmsltu", "vmslt", "vmsleu", "vmsle", "vmsgtu", "vmsgt"):
             c = {"vmseq": ua == ub, "vmsne": ua != ub, "vmsltu": ua < ub, "vmslt": a < b, "vmsleu": ua <= ub,
                  "vmsle": a <= b, "vmsgtu": ua > ub, "vmsgt": a > b}[s]
-            bits = st.mask_bits(d.vd)
-            bits[:vl] = np.where(act, c, bits[:vl])
-            st.set_mask_bits(d.vd, bits)
+            st.set_mask_elems(d.vd, c, act)
             tm.vector(srcs, [d.vd], occ)
             return None
         elif s == "vmerge":
@@ -845,6 +856,9 @@ class Core:
             stride = _s32(st.x[d.rs2])
         else:
             stride = eb * nf
+        if s in ("vle", "vse") and base % (4 * cfg.L):
+            raise SimdCoreError("ADDR", f"{d.name} base 0x{base:x}: not a multiple of 4 L = {4 * cfg.L} (D13)",
+                                st.pc)
         addrs = [(base + i * stride) & M32 for i in range(vl)]
         load = s in ("vle", "vlse", "vlseg2")
         for fld in range(nf):
@@ -908,9 +922,9 @@ class Core:
             if k > cfg.vlmax(w.sew) or n > w.n:
                 raise SimdCoreError("ADDR", f"block {k}x{n} exceeds window {w.name}", st.pc)
             m = (1 << w.sew) - 1
-            for j in range(w.n):
+            for j in range(w.n):  # the loader writes rows < k of columns < n; the rest unspecified (D13)
+                st.v[w.base + j] = POISON
                 col = st.velems(w.base + j, w.sew)
-                col[:] = 0
                 if j < n:
                     col[:k] = (blk[:, j].astype(np.int64) & m).astype(col.dtype)
             self.pops.append(w.name)
@@ -931,6 +945,15 @@ class Core:
             self.npop[w.name] += 1
             tm.qpush(w.name, w.port, b, tm.block_words(k, w.n, w.sew), list(w.regs), w.copies)
         return None
+
+
+_NO_VD = ("vmv.x.s", "vcpop", "vfirst", "vse", "vsse", "vsseg2")
+
+
+def _writes_vd(d: Decoded) -> bool:
+    """Whether the instruction writes vector register ``vd`` (and ``vd + 1`` for ``vlseg2``)."""
+    k = d.spec.kind
+    return (k == "OPV" or k == "VMEM" or d.spec.ext == "WFC") and d.spec.ext != "WFQ"         and d.spec.sem not in _NO_VD
 
 
 def run_job(cfg: SimdCoreConfig, program, **kw) -> JobResult:

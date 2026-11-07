@@ -11,7 +11,7 @@ from waveflow.simdcore.config import SimdCoreConfig, Window
 from waveflow.simdcore.isa import SPECS
 from waveflow.simdcore.model import cpack, cunpack, run_job
 
-CFG = SimdCoreConfig(L=2, vlen=256, vdiv=True)  # small VLEN: 8 e32 / 16 e16 elements, tail-heavy
+CFG = SimdCoreConfig(L=2, vlen=256, vdiv=True, lut=True, strided=True, scalar_mem=True)  # small VLEN: 8 e32 / 16 e16 elements, tail-heavy
 RNG_SEED = 20261107
 
 ELEMWISE = ["vadd", "vsub", "vrsub", "vminu", "vmin", "vmaxu", "vmax", "vand", "vor", "vxor", "vsll", "vsrl",
@@ -32,8 +32,9 @@ def _elems(vreg_bytes: np.ndarray, sew: int) -> list[int]:
     return [int(v) for v in vreg_bytes.view("<u2" if sew == 16 else "<u4")]
 
 
-def _mask(vreg_bytes: np.ndarray) -> list[int]:
-    return [int(b) for b in np.unpackbits(vreg_bytes, bitorder="little")]
+def _mask(vreg_bytes: np.ndarray, sew: int) -> list[int]:
+    """Mask element ``i`` = bit 0 of element ``i`` (records D12)."""
+    return [e & 1 for e in _elems(vreg_bytes, sew)]
 
 
 def _setup(sew, vl, vxrm, line, scalar=0, csh=None, rsh=None):
@@ -81,7 +82,7 @@ def test_elementwise_vs_reference(spec):
         r = run_job(CFG, prog, args=args, vregs=vregs).check()
         a = _elems(vregs[vs2], sew)
         old = _elems(vregs[vd], sew)
-        m0 = _mask(vregs[0])
+        m0 = _mask(vregs[0], sew)
         f3 = spec.fixed["funct3"]
         if "x:vs1" in spec.ops:
             bs = [scalar & ((1 << sew) - 1)] * vlmax
@@ -123,13 +124,13 @@ def test_compares_vs_reference(spec):
             bs = [imm] * len(a)
         else:
             bs = _elems(vregs[vs1], sew)
-        exp = _mask(vregs[vd])
-        m0 = _mask(vregs[0])
+        exp = _elems(vregs[vd], sew)  # a mask element is written whole (0 or 1); the rest undisturbed
+        m0 = _mask(vregs[0], sew)
         for i in range(vl):
             if masked and not m0[i]:
                 continue
             exp[i] = int(_ref.compare(spec.sem, a[i], bs[i], sew))
-        assert _mask(r.state.v[vd]) == exp, line
+        assert _elems(r.state.v[vd], sew) == exp, line
 
 
 def test_merge_and_move():
@@ -140,7 +141,7 @@ def test_merge_and_move():
         vregs = _rand_vregs(rng, CFG)
         scalar = int(rng.integers(0, 1 << 32))
         m = (1 << sew) - 1
-        a, b, old, m0 = (_elems(vregs[3], sew), _elems(vregs[4], sew), _elems(vregs[2], sew), _mask(vregs[0]))
+        a, b, old, m0 = (_elems(vregs[3], sew), _elems(vregs[4], sew), _elems(vregs[2], sew), _mask(vregs[0], sew))
         for line, src in (("vmerge.vvm v2, v3, v4, v0", lambda i: b[i] if m0[i] else a[i]),
                           ("vmerge.vxm v2, v3, a1, v0", lambda i: (scalar & m) if m0[i] else a[i]),
                           ("vmerge.vim v2, v3, -5, v0", lambda i: (-5 & m) if m0[i] else a[i]),
@@ -165,7 +166,7 @@ def test_reductions_vs_reference():
             signed = not name.endswith("u") or name == "vredsum"
             cv = (lambda v: _ref.sext(v, sew)) if signed else (lambda v: v)
             a = [cv(v) for v in _elems(vregs[6], sew)]
-            m0 = _mask(vregs[0])
+            m0 = _mask(vregs[0], sew)
             xs = [a[i] for i in range(vl) if not masked or m0[i]]
             exp = _elems(vregs[5], sew)
             if vl:
@@ -179,16 +180,16 @@ def test_mask_ops_and_scalar_moves():
         sew = int(rng.choice([16, 32]))
         vl = int(rng.integers(0, CFG.vlmax(sew) + 1))
         vregs = _rand_vregs(rng, CFG)
-        a, b, old = _mask(vregs[3]), _mask(vregs[4]), _mask(vregs[2])
+        a, b, old = _mask(vregs[3], sew), _mask(vregs[4], sew), _elems(vregs[2], sew)
         for line, f in (("vmand.mm v2, v3, v4", lambda x, y: x & y), ("vmor.mm v2, v3, v4", lambda x, y: x | y),
                         ("vmnand.mm v2, v3, v4", lambda x, y: 1 - (x & y)), ("vmnot.m v2, v3", lambda x, y: 1 - x)):
             r = run_job(CFG, _setup(sew, vl, 0, line)[0], args={10: vl}, vregs=vregs).check()
             exp = [f(a[i], b[i]) if i < vl else old[i] for i in range(len(old))]
-            assert _mask(r.state.v[2]) == exp, line
+            assert _elems(r.state.v[2], sew) == exp, line
         r = run_job(CFG, _setup(sew, vl, 0, "vcpop.m a2, v3")[0], args={10: vl}, vregs=vregs).check()
         assert r.state.x[12] == sum(a[:vl])
         r = run_job(CFG, _setup(sew, vl, 0, "vcpop.m a2, v3, v0.t")[0], args={10: vl}, vregs=vregs).check()
-        m0 = _mask(vregs[0])
+        m0 = _mask(vregs[0], sew)
         assert r.state.x[12] == sum(a[i] & m0[i] for i in range(vl))
         r = run_job(CFG, _setup(sew, vl, 0, "vfirst.m a2, v3")[0], args={10: vl}, vregs=vregs).check()
         assert r.state.x[12] == ((a[:vl].index(1)) if 1 in a[:vl] else 0xFFFFFFFF)
@@ -222,7 +223,7 @@ def test_complex_vs_reference(spec):
         line = f"{spec.name} {_operands(spec, vd, vs1, vs2, 0, masked)}"
         prog, args = _setup(32, vl, vxrm, line, scalar, csh, rsh)
         r = run_job(CFG, prog, args=args, vregs=vregs).check()
-        a, old, m0 = _elems(vregs[vs2], 32), _elems(vregs[vd], 32), _mask(vregs[0])
+        a, old, m0 = _elems(vregs[vs2], 32), _elems(vregs[vd], 32), _mask(vregs[0], 32)
         bs = [scalar] * 8 if "x:vs1" in spec.ops else _elems(vregs[vs1], 32)
         exp, sat = list(old), 0
         for i in range(vl):
@@ -347,7 +348,7 @@ def test_vsetvli_vl_and_vill():
 
 
 def test_vector_memory_roundtrip_strided_segments_and_lut():
-    cfg = SimdCoreConfig(L=2, vlen=256, dm_bytes=4096, lut_entries=64)
+    cfg = SimdCoreConfig(L=2, vlen=256, dm_bytes=4096, lut_entries=64, lut=True, strided=True, scalar_mem=True)
     data = np.arange(64, dtype=np.uint32) * 0x01010101
     prog = f"""
         vsetvli t0, a0, e32, m1, ta, ma
@@ -383,7 +384,7 @@ def test_errors_are_fatal_codes():
     assert run_job(CFG, "li a0, 3\nlw a1, 0(a0)\necall\n").status == "ADDR"
     assert run_job(CFG, ".word 0\n" if False else "j 4096\necall\n").status == "PC"
     assert run_job(CFG, "loop: j loop\n", budget=100).status == "BUDGET"
-    cfg = SimdCoreConfig(L=2, vlen=256, dm_bytes=4096, lut_entries=64)
+    cfg = SimdCoreConfig(L=2, vlen=256, dm_bytes=4096, lut_entries=64, lut=True, strided=True, scalar_mem=True)
     assert run_job(cfg, "vsetvli t0, a0, e32, m1, ta, ma\nvluxei32.v v1, (zero), v2\necall\n", args=[1]).status == "ADDR"
     assert run_job(CFG, "csrw vl, a0\necall\n").status == "ILLEGAL"
     assert run_job(CFG, "wf.qpop 0\necall\n").status == "ILLEGAL"
