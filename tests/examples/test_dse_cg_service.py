@@ -167,6 +167,19 @@ def test_submit_needs_synthesis_and_the_objective_s_rtl_runs():
         s.golden({}, "accuracy")                                  # closed
 
 
+def test_submit_needs_the_run_at_the_objective_s_workload_parameters():
+    """A constraint stated ``at`` a workload parameter (``t`` 2) needs the run at it, not the default."""
+    from examples.dse_cg.prereg import OBJECTIVES
+
+    obj = next(o for o in OBJECTIVES if o["id"] == "dsp_tupd4_t2_loss03")
+    s = _service(objective=obj)
+    s.wait(s.synth([{}]))
+    s.wait(s.rtlsim([{}], "long_term"))                           # t 3, the default
+    assert not s.submit({}, {"evidence": []})["accepted"]
+    s.wait(s.rtlsim([{}], {"name": "long_term", "t": 2}))
+    assert s.submit({}, {"evidence": []})["accepted"]
+
+
 def test_results_need_no_further_work_for_a_data_frame():
     pd = pytest.importorskip("pandas")
     s = _service()

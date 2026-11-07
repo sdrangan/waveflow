@@ -451,7 +451,10 @@ class Service:
         missing = [n for n, i in self.design.identities(p).items() if i not in self.ledger.parts]
         if missing:
             return {"accepted": False, "reason": f"not synthesized in this run: parts {missing}"}
-        wls = [c.get("workload") for c in (self.objective or {}).get("subject_to", [])]
+        cons = list((self.objective or {}).get("subject_to", []))
+        if (self.objective or {}).get("workload"):          # the minimized metric's own workload
+            cons.append({"workload": self.objective["workload"]})
+        wls = [self._workload_of(c) for c in cons]
         wls += [e.get("workload") for e in report.get("evidence", []) if not self.objective]
         for w in [w for w in wls if w is not None and self._timing(w)]:
             name, wf = self.design.workload(w)
@@ -462,6 +465,16 @@ class Service:
                            self.clock_s)
         self.closed = True
         return {"accepted": True}
+
+    @staticmethod
+    def _workload_of(c: dict) -> Any:
+        """An objective's constraint's workload: its ``workload`` (a name or a dict), its ``at`` --
+        the workload parameters the constraint is stated at (``t``, ``target``) -- filled in."""
+        w = c.get("workload")
+        if w is None:
+            return None
+        w = {"name": w} if isinstance(w, str) else dict(w)
+        return {**w, **c.get("at", {})}
 
     def _timing(self, w: Any) -> bool:
         """A workload whose metrics come from simulation (``rtlsim``), not ``golden``."""

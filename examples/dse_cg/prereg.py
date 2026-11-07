@@ -8,7 +8,8 @@ builds run (plan step 4).
 
 Python rather than JSON: the repository's ``.gitignore`` ignores ``*.json``.
 
-Skeleton: every value below is a placeholder, marked TBD.
+The objectives are fixed (step 4, :data:`OBJECTIVES_DATE`); every other value is a placeholder,
+marked TBD, fixed at step 7.
 """
 
 from __future__ import annotations
@@ -19,21 +20,50 @@ DATE = None
 #: The design (``ltbf_cg_mem.DESIGNS``).
 DESIGN = "ltbf_cg_mem"
 
-#: The objectives; each run gets one.  Several, so that no single answer can be learned.  TBD
+#: The date the objectives were fixed: plan step 4, chosen by the user before any result of G1 was
+#: examined (the rest of this file is fixed at step 7).
+OBJECTIVES_DATE = "2026-11-07"
+
+#: The objectives; each run gets one.  Three, each binding a different constraint -- the memory axis
+#: through ``T_upd``, ``W`` through accuracy, the shapes through resources -- so that no single answer
+#: can be learned.  ``T_upd`` is one sector's long-term update (``long_term``) at the stated ``t``; the
+#: accuracy at the same ``t`` and the SINR targets [-6, 3] dB; LUT and DSP are the built parts'
+#: synthesized totals.
 OBJECTIVES = [
     {
-        "id": "lut_at_loss01_tlt10",
-        # TBD: the T_upd bound, from the measured grid's range (one sector's update at N_rx 64, 4
-        # lanes, factored, t 3 in the 2025.1 study: 6.6 ms as built, 4.5 ms with a one-word-a-cycle
-        # Shared Mem).
-        "text": "Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.",
+        "id": "lut_tupd5_loss01",
+        "text": "Minimize LUTs subject to T_upd <= 5 ms (t = 3) and median SINR loss <= 0.1 dB at SINR "
+                "targets [-6, 3] dB.",
         "minimize": "lut",
         "subject_to": [
-            {"metric": "median_loss_db", "workload": "accuracy", "at": {"target": "-6_3"}, "op": "<=", "value": 0.1},
-            {"metric": "t_upd_ms", "workload": "long_term", "op": "<=", "value": 6},
+            {"metric": "t_upd_ms", "workload": "long_term", "at": {"t": 3}, "op": "<=", "value": 5},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 3, "target": "-6_3"},
+             "op": "<=", "value": 0.1},
         ],
     },
-    # TBD: two or three more (the other SINR targets; minimize T_upd under a LUT budget; ...)
+    {
+        "id": "tupd_lut100k_loss05",
+        "text": "Minimize T_upd (t = 3) subject to LUTs <= 100,000 and median SINR loss <= 0.5 dB at SINR "
+                "targets [-6, 3] dB.",
+        "minimize": "t_upd_ms",
+        "workload": {"name": "long_term", "t": 3},
+        "subject_to": [
+            {"metric": "lut", "op": "<=", "value": 100_000},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 3, "target": "-6_3"},
+             "op": "<=", "value": 0.5},
+        ],
+    },
+    {
+        "id": "dsp_tupd4_t2_loss03",
+        "text": "Minimize DSPs subject to T_upd <= 4 ms (t = 2) and median SINR loss <= 0.3 dB at SINR "
+                "targets [-6, 3] dB (t = 2).",
+        "minimize": "dsp",
+        "subject_to": [
+            {"metric": "t_upd_ms", "workload": "long_term", "at": {"t": 2}, "op": "<=", "value": 4},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 2, "target": "-6_3"},
+             "op": "<=", "value": 0.3},
+        ],
+    },
 ]
 
 #: Budget per run, tool-seconds.  TBD: a fraction of the grid's measured cost (plan step 7), so that
