@@ -532,6 +532,14 @@ class VecUnit(_VecPart):
     cpp_kernel_name: ClassVar[str | None] = "vecunit"
     endpoint_port_widths: ClassVar[bool] = True  # 64-bit programs and status beside data words
 
+    @classmethod
+    def get_rm(cls, platform):
+        """The unit's resources as calibrated (``vecunit_resources``, its csynth estimate): what
+        ``estimate_system`` prices a unit by, wherever it sits."""
+        from waveflow.vecunit.calib import resource_model
+
+        return resource_model(platform)
+
     def __post_init__(self) -> None:
         super().__post_init__()
         cfg = self.cfg

@@ -787,3 +787,19 @@ class MemoryMod(HwModule):
         words = self._mem.read(addr, nwords)
         return read_array(words, elem_type, word_bw=self.word_size, shape=int(count))
     
+
+@dataclass
+class PipelinedMemoryMod(MemoryMod):
+    """A :class:`MemoryMod` whose RTL slave reads a word every cycle: its BRAM window is
+    ``mm_bram_port_p1.v`` (the memory's output register is the read response) where a
+    :class:`MemoryMod`'s is ``mm_bram_port.v`` (a read word every ``LAT + 1`` cycles).
+
+    For a memory that is simulated, not synthesized -- a modelled memory in a system whose other
+    parts are built -- since that response path would not close timing as it stands.  Its own class,
+    so its identity and its timing record (``waveflow.calib.mem_timing``, measured in its harness
+    like any memory's) are its own, and every :class:`MemoryMod` keys as before.  pysim needs nothing
+    else: the stored timing is what makes it read faster.
+    """
+
+    #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).
+    BRAM_LEAF: ClassVar[str] = "mm_bram_port_p1"

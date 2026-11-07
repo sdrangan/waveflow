@@ -223,27 +223,43 @@ def _kernel_estimate(i, store, platform, cost: float, top: str, use_in_context: 
                                 how="--", facts={"summary": "no platform: no store to look in"},
                                 **base)
     total, sources, missing = zero_counters(), [], []
+    modelled: dict[str, Any] = {}      # path -> the confidence of the model that priced it
     for path, comp, ident in walk_modules(hw):
+        if any(path.startswith(m + ".") for m in modelled):
+            continue                   # inside a module its own model already priced, whole
         expects_own = not getattr(comp, "sub_comps", None)       # a leaf: a task or a taskless top
         rec = store.best(ident.key, "resource")
         if rec is not None:
             total = add_counters(total, _counters(rec.payload))
             sources.append(rec.source)
+            continue
+        # No record: a module that declares its own model (``get_rm``) -- a calibrated unit inside
+        # this kernel -- is priced by it, its children with it.
+        sub_rm = getattr(type(comp), "get_rm", None) if comp is not hw else None
+        sub_model = sub_rm(platform) if (sub_rm is not None and platform is not None) else None
+        if sub_model is not None:
+            total = add_counters(total, sub_model.predict(comp))
+            modelled[path] = sub_model.confidence(comp)
+            sources.append(type(sub_model).__name__)
         elif expects_own:
             missing.append(path)
+    levels = {p: c.level for p, c in modelled.items()}
     integ = store.best(i.identity.key, INTEGRATION_TARGET) if i.identity else None
     if integ is not None:
         total = add_counters(total, _counters(integ.payload))
         sources.append(integ.source)
     else:
         missing.append(f"{i.inst} (integration)")
+    priced = {p: c.facts.get("summary", "") for p, c in modelled.items()}
     if missing:
         return InstanceEstimate(counters=total, level=ConfidenceLevel.UNCALIBRATED, how="compose",
                                 source=" + ".join(dict.fromkeys(sources)),
-                                facts={"summary": f"no record for {missing}", "missing": missing},
-                                **base)
-    return InstanceEstimate(counters=total, level=ConfidenceLevel.EXACT, how="compose",
-                            source=" + ".join(dict.fromkeys(sources)), **base)
+                                facts={"summary": f"no record for {missing}", "missing": missing,
+                                       **({"modelled": priced} if priced else {})}, **base)
+    level = min(levels.values(), key=lambda lv: lv.rank) if levels else ConfidenceLevel.EXACT
+    return InstanceEstimate(counters=total, level=level, how="compose",
+                            source=" + ".join(dict.fromkeys(sources)),
+                            **({"facts": {"modelled": priced}} if priced else {}), **base)
 
 
 def _rtl_estimate(i, store, platform, top: str, use_in_context: bool,

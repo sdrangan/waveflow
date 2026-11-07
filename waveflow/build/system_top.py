@@ -83,6 +83,7 @@ from waveflow.build.axi_xbar import (
 from waveflow.build.composite_gen import ExtPort, _CONTROL_UNDRIVEN, has_control_slave
 from waveflow.build.hwcodegen import LoweringError
 from waveflow.build.mm_adaptor_gen import (
+    BRAM_VIEWS,
     BramView,
     CreditInView,
     QueueView,
@@ -738,8 +739,9 @@ def system_top_spec(xbar, inside, *, top: str = "system_top", xbar_name: str | N
                 raise LoweringError(f"memory '{mod.name}': {nwords} words is not a power of two")
             law = int(ep.addr_range.size).bit_length() - 1
             kport = f"{mod.name}_b"
+            view = BRAM_VIEWS[getattr(type(mod), "BRAM_LEAF", "mm_bram_port")]
             mi.append(MiSlot("memory", mod.name,
-                             (BramView(mod.name, kport=kport, baw=baw, law=law, owner=mod),), mod,
+                             (view(mod.name, kport=kport, baw=baw, law=law, owner=mod),), mod,
                              group=mod.name))
             idle_mem.append(kport)
             continue

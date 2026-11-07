@@ -1446,7 +1446,17 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         decoded = [(self._decode_address(int(a)), int(n)) for a, n in runs]
         ep_name, slave_ep, _ = decoded[0][0]
         if any(d[0][0] != ep_name for d in decoded):
-            raise ValueError(f"{self.name}: read_gather runs span more than one slave")
+            # Runs on several slaves (a banked memory): each stretch of consecutive runs on one slave
+            # is its own gather, in order -- the master's one read port takes them one after another.
+            out: list = []
+            k = 0
+            while k < len(runs):
+                j = k + 1
+                while j < len(runs) and decoded[j][0][0] == decoded[k][0][0]:
+                    j += 1
+                out += yield from self.read_gather(runs[k:j], master_port)
+                k = j
+            return out
         if self._slave_protocols.get(ep_name, AXIMMProtocol.FULL) != AXIMMProtocol.FULL:
             raise NotImplementedError(f"{self.name}: read_gather needs an AXI4 (FULL) slave")
         dtype = self._dtype()

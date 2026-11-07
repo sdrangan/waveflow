@@ -142,6 +142,75 @@ def _vivado(vivado, work: Path, tcl_name: str, what: str) -> dict:
     return mk
 
 
+def synth_sub_ooc(spec, sub_name: str, *, kernel_dirs: dict[str, Path], part: str,
+                  period_ns: float, out_dir: str | Path, vivado: str | None = None,
+                  force: bool = False):
+    """Sub-top *sub_name* of *spec* (a device or a memory) synthesized out of context, its netlist
+    kept: :func:`~waveflow.build.rtl_ooc.synth_rtl_ooc` on its rendered Verilog, its leaves and its
+    kernels' RTL, cached by the content of everything it reads under ``<out_dir>/parts`` -- so a
+    directory shared by several systems synthesizes each distinct sub-top once.  Returns
+    ``(result, cached)``: the ``synth_rtl_ooc`` result and whether no Vivado ran."""
+    from waveflow.build.rtl_ooc import synth_rtl_ooc
+
+    out_dir = Path(out_dir)
+    sub = next(s for s in spec.subs if s.name == sub_name)
+    src = out_dir / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    sub_v = src / f"{sub.module}.v"
+    sub_v.write_text(spec.render_sub_verilog(sub.name), encoding="utf-8")
+    leaves, kernels = spec.sources_of(sub.name)
+    sources = [sub_v, *leaves] + [f for m in kernels
+                                  for f in sorted(Path(kernel_dirs[m]).glob("*.v"))]
+    t0 = time.perf_counter()
+    r = synth_rtl_ooc(sub.module, {}, sources, part=part, period_ns=period_ns,
+                      out_dir=out_dir / "parts", vivado=vivado, force=force, checkpoint=True)
+    return r, (time.perf_counter() - t0) < 1.0
+
+
+def synth_top_ooc(spec, *, ip, part: str, period_ns: float, out_dir: str | Path,
+                  vivado: str | None = None, force: bool = False) -> dict:
+    """*spec*'s top with every sub-top a black box -- the crossbar and the glue -- synthesized out of
+    context, cached by its black-box text, the crossbar's configuration, the part and the clock under
+    ``<out_dir>/top/<digest>``.  Returns ``{"counters", "seconds", "cached", "dir"}`` (the directory
+    holds ``top.dcp``)."""
+    import hashlib
+
+    from waveflow.utils.vivado_report import parse_utilization
+
+    if vivado is None:
+        from waveflow.toolchain.toolchain import find_vivado_path
+        vivado = find_vivado_path()
+    if not vivado:
+        raise RuntimeError("synth_top_ooc: Vivado not found (set WAVEFLOW_VIVADO_PATH or PATH)")
+    out_dir = Path(out_dir)
+    top_text = top_with_black_boxes(spec)
+    digest = hashlib.sha256("|".join([top_text.replace("\r\n", "\n"),
+                                      json.dumps(spec.xbar.hw_params(), sort_keys=True),
+                                      ip.module, part, f"{period_ns:g}"]).encode()).hexdigest()[:12]
+    top_dir = out_dir / "top" / digest
+    stamp = top_dir / "result.json"
+    if stamp.exists() and (top_dir / "top.dcp").exists() and not force:
+        cached = json.loads(stamp.read_text(encoding="utf-8"))
+        return {"counters": cached["counters"], "seconds": cached["seconds"], "cached": True,
+                "dir": str(top_dir)}
+    if top_dir.exists():
+        shutil.rmtree(top_dir)
+    top_dir.mkdir(parents=True)
+    ip_copy = top_dir / "ip" / ip.module           # generate_target rewrites files under the IP
+    shutil.copytree(ip.root, ip_copy)
+    (top_dir / f"{spec.top}.v").write_text(top_text, encoding="utf-8")
+    (top_dir / "clocks.xdc").write_text(f"create_clock -period {period_ns:g} -name ap_clk "
+                                        f"[get_ports ap_clk]\n", encoding="utf-8")
+    (top_dir / "top.tcl").write_text(top_tcl(spec.top, part=part,
+                                             xci=(ip_copy / f"{ip.module}.xci").as_posix(),
+                                             top_v=f"{spec.top}.v"), encoding="utf-8")
+    mk = _vivado(vivado, top_dir, "top.tcl", f"the top of {spec.top}, out of context")
+    counters = parse_utilization((top_dir / "util_top.rpt").read_text(encoding="utf-8"))
+    seconds = float(mk.get("SECONDS") or 0.0)
+    stamp.write_text(json.dumps({"counters": counters, "seconds": seconds}), encoding="utf-8")
+    return {"counters": counters, "seconds": seconds, "cached": False, "dir": str(top_dir)}
+
+
 def synth_ooc_link(spec, *, kernel_dirs: dict[str, Path], ip, part: str, period_ns: float,
                    out_dir: str | Path, vivado: str | None = None,
                    force: bool = False) -> OocLink:
@@ -151,9 +220,6 @@ def synth_ooc_link(spec, *, kernel_dirs: dict[str, Path], ip, part: str, period_
     reads (:func:`~waveflow.build.rtl_ooc.synth_rtl_ooc`), and so is the top's run (its black-box
     text and the crossbar's configuration), so a change to one device re-synthesizes that device
     and re-links -- nothing else.  The link always runs."""
-    import hashlib
-
-    from waveflow.build.rtl_ooc import synth_rtl_ooc
     from waveflow.utils.vivado_report import parse_utilization
 
     t_start = time.perf_counter()
@@ -161,17 +227,9 @@ def synth_ooc_link(spec, *, kernel_dirs: dict[str, Path], ip, part: str, period_
     res = OocLink(top=spec.top, part=part, period_ns=float(period_ns))
     cells: dict[str, str] = {}
     for sub in spec.subs:
-        src = out_dir / "src"
-        src.mkdir(parents=True, exist_ok=True)
-        sub_v = src / f"{sub.module}.v"
-        sub_v.write_text(spec.render_sub_verilog(sub.name), encoding="utf-8")
-        leaves, kernels = spec.sources_of(sub.name)
-        sources = [sub_v, *leaves] + [f for m in kernels
-                                      for f in sorted(Path(kernel_dirs[m]).glob("*.v"))]
-        t0 = time.perf_counter()
-        r = synth_rtl_ooc(sub.module, {}, sources, part=part, period_ns=period_ns,
-                          out_dir=out_dir / "parts", vivado=vivado, force=force, checkpoint=True)
-        res.part_cached[sub.name] = (time.perf_counter() - t0) < 1.0
+        r, cached = synth_sub_ooc(spec, sub.name, kernel_dirs=kernel_dirs, part=part,
+                                  period_ns=period_ns, out_dir=out_dir, vivado=vivado, force=force)
+        res.part_cached[sub.name] = cached
         res.parts[sub.name] = r.counters
         res.part_seconds[sub.name] = r.seconds
         cells[sub.inst] = r.checkpoint
@@ -182,34 +240,10 @@ def synth_ooc_link(spec, *, kernel_dirs: dict[str, Path], ip, part: str, period_
     if not vivado:
         raise RuntimeError("synth_ooc_link: Vivado not found (set WAVEFLOW_VIVADO_PATH or PATH)")
 
-    # The top: cached by its black-box text, the crossbar's configuration, the part and the clock.
-    top_text = top_with_black_boxes(spec)
-    digest = hashlib.sha256("|".join([top_text.replace("\r\n", "\n"),
-                                      json.dumps(spec.xbar.hw_params(), sort_keys=True),
-                                      ip.module, part, f"{period_ns:g}"]).encode()).hexdigest()[:12]
-    top_dir = out_dir / "top" / digest
-    stamp = top_dir / "result.json"
-    if stamp.exists() and (top_dir / "top.dcp").exists() and not force:
-        cached = json.loads(stamp.read_text(encoding="utf-8"))
-        res.top_counters, res.top_seconds = cached["counters"], cached["seconds"]
-        res.top_cached = True
-    else:
-        if top_dir.exists():
-            shutil.rmtree(top_dir)
-        top_dir.mkdir(parents=True)
-        ip_copy = top_dir / "ip" / ip.module           # generate_target rewrites files under the IP
-        shutil.copytree(ip.root, ip_copy)
-        (top_dir / f"{spec.top}.v").write_text(top_text, encoding="utf-8")
-        (top_dir / "clocks.xdc").write_text(f"create_clock -period {period_ns:g} -name ap_clk "
-                                            f"[get_ports ap_clk]\n", encoding="utf-8")
-        (top_dir / "top.tcl").write_text(top_tcl(spec.top, part=part,
-                                                 xci=(ip_copy / f"{ip.module}.xci").as_posix(),
-                                                 top_v=f"{spec.top}.v"), encoding="utf-8")
-        mk = _vivado(vivado, top_dir, "top.tcl", f"the top of {spec.top}, out of context")
-        res.top_counters = parse_utilization((top_dir / "util_top.rpt").read_text(encoding="utf-8"))
-        res.top_seconds = float(mk.get("SECONDS") or 0.0)
-        stamp.write_text(json.dumps({"counters": res.top_counters, "seconds": res.top_seconds}),
-                         encoding="utf-8")
+    top = synth_top_ooc(spec, ip=ip, part=part, period_ns=period_ns, out_dir=out_dir,
+                        vivado=vivado, force=force)
+    res.top_counters, res.top_seconds, res.top_cached = top["counters"], top["seconds"], top["cached"]
+    top_dir = Path(top["dir"])
 
     work = out_dir / "link"
     if work.exists():
@@ -227,4 +261,5 @@ def synth_ooc_link(spec, *, kernel_dirs: dict[str, Path], ip, part: str, period_
     return res
 
 
-__all__ = ["OocLink", "black_box", "link_tcl", "synth_ooc_link", "top_tcl", "top_with_black_boxes"]
+__all__ = ["OocLink", "black_box", "link_tcl", "synth_ooc_link", "synth_sub_ooc", "synth_top_ooc",
+           "top_tcl", "top_with_black_boxes"]

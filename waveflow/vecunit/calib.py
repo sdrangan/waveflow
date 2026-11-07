@@ -733,3 +733,60 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# -- the filed resource model, as a module's model (``VecUnit.get_rm``) ------------------------------
+
+
+def resource_model(for_platform=None):
+    """The vector unit's resource model, filed by :func:`calibrate_resources`, as a
+    :class:`~waveflow.calib.resource_model.ResourceModel` -- what ``VecUnit.get_rm`` returns, so
+    ``estimate_system`` prices a unit inside a kernel by it."""
+    from waveflow.linalg.cost import check_platform, platform
+
+    check_platform(for_platform)
+    return VecUnitResourceModel(name=RESOURCE_MODEL, platform=platform())
+
+
+def _resource_record() -> dict | None:
+    path = model_path(RESOURCE_MODEL)
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+from waveflow.calib.resource_model import ResourceModel as _ResourceModel  # noqa: E402
+
+
+class VecUnitResourceModel(_ResourceModel):
+    """The unit's LUT, FF, DSP and BRAM18 from its configuration's :func:`config_features`, by the
+    filed fit (:func:`predict_resources`).  The fit is of the unit's **csynth estimate**, so that is
+    what it predicts.  ``INTERPOLATED`` inside the range of every feature the fit configurations
+    span, ``EXTRAPOLATED`` outside it."""
+
+    def declared_counters(self) -> tuple:
+        return ("lut", "ff", "dsp", "bram")
+
+    def predict(self, comp, **runtime) -> dict:
+        rec = _resource_record()
+        if rec is None:
+            return {k: 0 for k in self.declared_counters()}
+        return {k: round(v) for k, v in predict_resources(rec["counters"], config_features(comp.cfg)).items()}
+
+    def confidence(self, comp, **runtime):
+        from waveflow.calib.confidence import Confidence, ConfidenceLevel
+
+        rec = _resource_record()
+        if rec is None:
+            return Confidence.uncalibrated(f"{RESOURCE_MODEL} has not been fitted")
+        feats = config_features(comp.cfg)
+        fit = [config_features(resource_config(s)) for s in rec["fit"]["configurations"]]
+        outside = sorted(k for k, v in feats.items()
+                         if not min(f[k] for f in fit) <= v <= max(f[k] for f in fit))
+        level = ConfidenceLevel.EXTRAPOLATED if outside else ConfidenceLevel.INTERPOLATED
+        held = rec.get("holdout", {})
+        return Confidence(level=level, facts={
+            "model": RESOURCE_MODEL, "predicts": "the unit's csynth estimate",
+            "outside_fit": outside,
+            "holdout": {k: {"mean": held[k]["mean"], "worst": held[k]["worst"]} for k in held
+                        if isinstance(held.get(k), dict) and "mean" in held[k]},
+            "summary": f"{RESOURCE_MODEL}: the unit's csynth estimate"
+                       + (f", extrapolated in {outside}" if outside else ", inside its fit's range")})
