@@ -220,7 +220,12 @@ elaborated from) and `run` (the build, the design parameters that rebuild nothin
 approximate number with a confidence level. The LTBF system's runs `build_system`'s system in pysim
 on the workload, checks it bit for bit against the fixed-point golden, and prices resources with the
 calibrated models (`estimate_system`, each engine by its own resource model), plus Shared Mem's
-block RAM by formula.
+block RAM by formula. The units' models were fitted to csynth's estimate, and the parts' glue, the hub
+and the crossbar have none, so a system-level integration term
+([`integration.py`](../../../examples/dse_cg/integration.py)) maps each part's estimate to Vivado's
+synthesis: one form a part and resource, fitted on the six points of plan step 2c and nowhere else
+(the points the grid's pre-registration excludes from scoring). `pysim` reports the integrated total;
+the units' sum stays beside it (`total_units`).
 
 Its study also has hand-fitted models: per-part resource and
 per-job cycle models ([`hw/models.py`](../../../examples/ltbf_cg_mem_dse/hw/models.py)) and a

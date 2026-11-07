@@ -588,15 +588,22 @@ class LtbfCgMemAdaptor(DseAdaptor):
                 nodes[node]["missing"] += part.facts.get("missing", []) or (
                     [part.inst] if part.level.value == "UNCALIBRATED" and not part.facts.get("missing")
                     else [])
+        from examples.dse_cg import integration
+
+        p = self.fill(params)
         out = {n: {"counters": v["counters"], "level": min(v["levels"], key=lambda lv: lv.rank).value,
-                   "missing": v["missing"]} for n, v in nodes.items()}
+                   "missing": v["missing"],
+                   # Vivado's numbers as the integration term predicts them from the units' (step 4)
+                   "integrated": integration.apply(n, v["counters"], p)} for n, v in nodes.items()}
         bram = len(S.mems) * D.shared_mem_bram18(S.bank_span)
-        out["mem"] = {"counters": {**zero_counters(), "bram": bram}, "level": "FORMULA",
-                      "missing": []}
-        total = zero_counters()
+        mem = {**zero_counters(), "bram": bram}
+        out["mem"] = {"counters": mem, "level": "FORMULA", "missing": [], "integrated": dict(mem)}
+        total, raw = zero_counters(), zero_counters()
         for v in out.values():
-            total = add_counters(total, v["counters"])
-        out["total"] = total
+            raw = add_counters(raw, v["counters"])
+            total = add_counters(total, {**zero_counters(), **v["integrated"]})
+        out["total"] = total                # what pysim reports: the integrated parts, Shared Mem's formula
+        out["total_units"] = raw            # the units' models alone, for comparison
         return out
 
     def pysim(self, params: dict, workload: str | dict | None = None) -> dict:
@@ -621,7 +628,8 @@ class LtbfCgMemAdaptor(DseAdaptor):
         return {"status": "ok" if exact else "mismatch", "workload": {"name": name, **w},
                 "bit_exact": exact, "cycles": cycles, "t_upd_ms": cycles / F_CLK * 1e3,
                 "median_loss_db": acc["median_loss_db"], "p90_loss_db": acc["p90_loss_db"],
-                "resources": res["total"], "parts": {k: v for k, v in res.items() if k != "total"},
+                "resources": res["total"],
+                "parts": {k: v for k, v in res.items() if k not in ("total", "total_units")},
                 "events": next(hw.sim.env._eid), "seconds": seconds}
 
 
