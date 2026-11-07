@@ -104,7 +104,7 @@ Encoding `custom-1` (`0x2B`), I-type, the window index in `imm`:
 
 | Instruction | Meaning |
 |---|---|
-| `wf.qpop q` | input window `q` becomes the next block from its loader: column `j` of the `k x n` block in register `base + j`, row `i` its element `i`; rows `>= k` zero |
+| `wf.qpop q` | input window `q` becomes the next block from its loader: column `j` of the `k x n` block in register `base + j`, row `i` its element `i`; rows `>= k` and registers `>= base + n` unspecified; the window's registers are read-only |
 | `wf.qpush q` | output window `q`'s rows `0 .. vl-1` go to its storer as a block; with two copies, the registers are unspecified until written again; with one, they keep their values |
 
 Windows are build parameters (`Window(name, base, n, direction, sew, port, copies)`): which
