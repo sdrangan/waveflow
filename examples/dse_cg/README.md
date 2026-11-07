@@ -1,10 +1,11 @@
 # dse_cg: does pysim speed up design-space exploration?
 
-**Status: written through Phase 3** of [`plans/dse_cg.md`](../../plans/dse_cg.md) (2026-11-07): the
-LTBF design's adaptor, the service on the live backend, `dselib` and the generated `DSE.md`, so the
-user flow below runs on the real tools. The measured grid, replay, the sandbox, the scripted
-policies and the agents' runs (steps 4–7) raise `NotImplementedError` naming their step. The plan
-says *why*; this directory says *what*.
+**Status** (2026-11-07, [`plans/dse_cg.md`](../../plans/dse_cg.md)): Phases 1–3 done -- the LTBF
+design's adaptor, the service on the live backend, `dselib` and the generated `DSE.md`, so the user
+flow below runs on the real tools. The grid G1 is measuring (step 4, about four days); replay, the
+sandbox, the scripted policies, the scoring and the agent harness (steps 5–7) are written and tested
+without it, and run once G1's table is complete. The agents' runs wait for the pre-registration of
+the model, the effort and the budget (`prereg.py`). The plan says *why*; this directory says *what*.
 
 ## The experiment in one paragraph
 
@@ -59,7 +60,8 @@ Step 3 runs the tools on this machine (Vitis HLS and Vivado 2025.1, XSI); `--bud
 
 The same skill, the same context and the same prompt, in a new session with no context of its own:
 no `CLAUDE.md`, no user settings or memory, not this repository, not the calibration records, not
-the ground truth. The two arms differ only in the `arm:waveflow` blocks of `SKILL.md`, `dselib` and
+the ground truth. The agent's Claude Code runs in a container ([`agent/Dockerfile`](agent/Dockerfile))
+that mounts the sandbox and nothing else of the machine, so its shell cannot reach them either. The two arms differ only in the `arm:waveflow` blocks of `SKILL.md`, `dselib` and
 `DSE.md`. The one difference from the user flow is the backend: a run replays recorded results and
 costs, so it finishes in minutes and every run sees the same numbers. The design's space is
 small enough to measure in full (about 768 RTL runs, under a week on the lab machine), so replay
@@ -76,12 +78,15 @@ always has the answer, and each objective's optimum is known exactly.
 | [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1): its space `GRID`, identities, and the tools at a point |
 | [`points.py`](points.py) | the harness | plan step 2c: six points through every method, timed; writes `costs.py` |
 | [`costs.py`](costs.py) | the harness | each evaluation's measured tool time, quoted in `DSE.md` |
-| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user (`write_context`, `install_skill`); the sandbox is step 5 |
-| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; the live backend and its command line (replay is step 5) |
-| [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model |
-| [`policies.py`](policies.py) | the harness | the scripted explorers, one per arm: the agent-free comparison |
-| [`run_agent.py`](run_agent.py) | the harness | one agent run, end to end |
-| [`score.py`](score.py) | the analysis | ledgers → anytime curves, time to target, report checks |
+| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user (`write_context`, `install_skill`) and a run's sandbox (`build_sandbox`) |
+| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; the live and replay backends and its command line |
+| [`g1_prereg.py`](g1_prereg.py) | the harness | G1's pre-registration: the grid, what is measured, pysim's scoring targets, the integration points |
+| [`grid.py`](grid.py) | the harness | measures G1 on the live backend (resumable), consolidates its table, adds pysim and golden over the grid |
+| [`integration.py`](integration.py) | the harness | the system-level term mapping the units' resource estimates to Vivado's, fitted on the six integration points only |
+| [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model, effort, the agent's container |
+| [`policies.py`](policies.py) | the harness | the scripted explorers, one per arm: the agent-free comparison, recorded as agent runs are |
+| [`run_agent.py`](run_agent.py), [`agent/Dockerfile`](agent/Dockerfile) | the harness | one agent run, end to end, on the Agent SDK (`pip install -e ".[dse]"`), its Claude Code in the container |
+| [`score.py`](score.py) | the analysis | the ground truth; pysim scored against it; runs' ledgers → anytime curves, time to target, spend, report checks, the summary |
 
 The skill, `dselib`, `DseAdaptor` and the generator know nothing about CG. They stay here until a
 second design uses them, then move into the `waveflow` package; `ltbf_cg_mem.py` stays.
