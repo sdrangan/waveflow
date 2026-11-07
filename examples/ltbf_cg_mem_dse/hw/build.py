@@ -36,7 +36,7 @@ from waveflow.build.composite_gen import (
     tcl_path,
 )
 from waveflow.build.streamutils import MemMgrStep, MemStreamStep
-from waveflow.build.system_dag import CsynthStep
+from waveflow.build.system_dag import CsynthStep, _SystemStep
 from waveflow.hw.dataschema import DataSchemaStep
 from waveflow.hw.mem_stream import MemRCmd, MemWCmd
 from waveflow.linalg.build import collect_parts, linalg_headers_dag
@@ -141,6 +141,37 @@ def generate(root: Path = ROOT, p: Any = None) -> list[str]:
 
 
 @dataclass(kw_only=True)
+class TurnaroundStep(_SystemStep):
+    """``<prefix>mem_turnaround``: Shared Mem's turnaround fitted from a traced run of the systolic
+    device alone on it (:func:`add_turnaround`) and filed in ``calib/`` (:func:`file_mem_turnaround`)."""
+
+    description = "Fit Shared Mem's turnaround from the systolic device's back-to-back reads."
+    step_name: ClassVar[str] = "mem_turnaround"
+    stamped: ClassVar[bool] = False
+    top: str = ""
+    span: int = 0
+    rate: int = 2
+
+    @property
+    def consumes(self) -> list:  # type: ignore[override]
+        return [self.a("report")]
+
+    @property
+    def produces(self) -> dict:  # type: ignore[override]
+        return {self.a("mem_turnaround"): self.work / "mem_turnaround.json"}
+
+    def run(self, config: BuildConfig, **_: Any) -> dict[str, Any]:
+        import json
+
+        work = self.work_dir(config)
+        fit = file_mem_turnaround(work / f"{self.top}_trace.vcd", f"{self.top}.u_ltbf_sys_sub.u_ltbf_sys",
+                                  "m_axi_gmem0", self.rate, spans=(self.span,))  # fmt: skip
+        out = work / "mem_turnaround.json"
+        out.write_text(json.dumps({str(k): v for k, v in fit.items()}, indent=1) + "\n", encoding="utf-8")
+        return {self.a("mem_turnaround"): out}
+
+
+@dataclass
 class LtbfCodegenStep(BuildStep):
     """``codegen``: :func:`generate`.  Never fresh: its inputs are Python the DAG cannot see, and
     csynth after it decides by content."""
@@ -258,6 +289,36 @@ def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR, rate: i
     return mem_cal.a("mem_timing")
 
 
+def add_turnaround(dag: BuildDag, p, mem_timing: str, work_dir=WORK_DIR) -> str | None:
+    """Shared Mem's turnaround at *p*'s bank span and rate (:func:`file_mem_turnaround`), measured
+    once a machine: when the memory already has a record in ``calib/``, nothing is added (``None``);
+    else the systolic device alone on Shared Mem (``devsys.sys_system(shared=True)``), traced, after
+    the memory's timing (*mem_timing*, :func:`add_memcal`'s artifact), and a step filing the fit --
+    the artifact to require before a pysim."""
+    from examples.ltbf_cg_mem_dse.hw import devsys
+    from examples.ltbf_cg_mem_dse.hw import system as sy
+    from waveflow.build.system_dag import add_system_steps
+    from waveflow.calib.mem_timing import stored_mem_turnaround
+    from waveflow.calib.record_store import ModuleStore
+    from waveflow.hw.clock import Clock
+    from waveflow.simulation.simulation import Simulation
+
+    S = sy.LtbfSystem(sy.inputs(p))
+    span, rate = S.bank_span, S.p.mem_rate
+    mem = sy.shared_mem(Simulation(), span, Clock(freq=sy.F_HOST), rate=rate)
+    if stored_mem_turnaround(ModuleStore(sy.CALIB_DIR), mem) is not None:
+        return None
+    tag = f"turn{span.bit_length() - 1}r{rate}"
+    sysm = devsys.sys_system(p=p, shared=True)
+    xsi = add_system_steps(dag, sysm, work_dir=work_dir, top=f"ltbf_{tag}_top", prefix=f"{tag}_",
+                           workspace=f"ltbf_{tag}", trace=True)  # fmt: skip
+    dag.require(f"{tag}_scenario", [mem_timing])
+    step = TurnaroundStep(sysm=sysm, work=xsi.work, prefix=f"{tag}_", top=f"ltbf_{tag}_top",
+                          span=span, rate=rate)  # fmt: skip
+    dag.add(step)
+    return step.a("mem_turnaround")
+
+
 def variant_dag(variants: dict, work_dir=WORK_DIR, trace: bool = False,
                 timeout: int = 4 * 3600) -> BuildDag:
     """``codegen`` at the variants' one HLS configuration, then the system flow for each variant
@@ -274,6 +335,7 @@ def variant_dag(variants: dict, work_dir=WORK_DIR, trace: bool = False,
     dag = BuildDag()
     dag.add(LtbfCodegenStep(name="codegen", sysp=first))
     cals: dict = {}
+    turns: dict = {}
     for tag, p in variants.items():
         hw, S, _host = sy.build(sy.inputs(p), rtl=True)
         add_system_steps(dag, hw, work_dir=work_dir, top=f"ltbf_top_{tag}", prefix=f"{tag}_",
@@ -282,7 +344,8 @@ def variant_dag(variants: dict, work_dir=WORK_DIR, trace: bool = False,
         if key not in cals:
             cals[key] = add_memcal(dag, S.bank_span, f"umemcal{S.bank_span.bit_length() - 1}r{p.mem_rate}_",
                                    work_dir, rate=p.mem_rate)  # fmt: skip
-        dag.require(f"{tag}_pysim", [cals[key]])
+            turns[key] = add_turnaround(dag, p, cals[key], work_dir)
+        dag.require(f"{tag}_pysim", [cals[key]] + ([turns[key]] if turns[key] else []))
     return dag
 
 
