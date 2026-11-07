@@ -95,7 +95,7 @@ confuses agents.
   shows the two-task form costs more than it hides. Note the request-response law
   (`reference-hls-request-response-deadlock`): the scalar task reads the return stream only after it
   has pushed the producing instruction, and the return stream's depth covers every result in flight.
-- **D**: picked from witnesses 1 and 6.
+- **D = 9**: picked from witness 6 (Stage 1).
 
 ### D3 Element widths and the lane
 
@@ -203,7 +203,47 @@ error `BUDGET`, fatal (the command-response rule). 0 = no budget.
 
 ## Stage 1: HLS witnesses
 
-*(not started)*
+**Done 2026-11-07** (`plans/witness/simdcore/`, its README has every row and the raw outputs). Vitis HLS
+2025.1, `xczu48dr`, 4 ns, csynth estimates unless marked cosim.
+
+| Witness | Result | Decides |
+|---|---|---|
+| W6 flattened instruction x element loop, L 2 | **II 1, depth 9**, cosim bit-exact on a 12-instruction dependent chain; latency = one fill, no flush between instructions | the core's shape (Stage 5) |
+| W6 at `VL/L` = 2 | csim passes, **cosim fails** | the short-vector stall (D2) is required hardware |
+| W6 without the dependence pragma | II 2, 6.5 ns est. | the pragma is required |
+| W2 L 2 / 4 / 8 / 16 | 8,744 / 15,804 / 29,548 / 59,861 LUT; 4 DSP a lane | linear in L (~3.7k a lane) |
+| W1 one lane | 3,889 LUT; fixed shifts 2,960; + e32 multiply 4,235 (+8.9 %) | D3: keep the e32 multiply |
+| W3 reduction | ~270 LUT a lane, depth 3 + 1 a tree level | |
+| W5 scalar + vector `hls::task`s | two jobs, no deadlock; issue loop **II 3** at 4.05 ns (II 1: 6.8 ns) | D2 decoupling holds; `scalar_ii` = 3 |
+| W4 window ping-pong | inconclusive: HLS split each window 3 ways (24 BRAM18) | Stage 5 builds windows port-per-copy |
+| W7 `VecUnit` L 4, CG layout | S 3: 81,862; S 1: 42,522; S 1 one format: **37,386** LUT | D9 second reference |
+
+**Picked:**
+
+- **D = 9** (`SimdCoreConfig.depth`, was 8). **`scalar_ii` = 3** (new field: the scalar unit issues an
+  instruction every 3 cycles, a vector instruction included, since it decodes them). `vdiv_latency` 36
+  stays a guess (not witnessed; CG only).
+- **The `wf.` shifts stay run-time** for now (24 % of a lane). If Stage 5's L 2 total misses 20k LUT,
+  the first cut is `csh` / `rsh` fixed per build (`-1.9k` at L 2).
+
+**Re-run on the interpreter with D 9 and `scalar_ii` 3** (was D 8, `scalar_ii` 1):
+
+| | L 1 | L 2 | L 4 | L 8 |
+|---|---|---|---|---|
+| matched filter, cycles a frame (x floor) | 2,186 (1.90) | **1,282 (1.11)** | 1,250 (1.09) | 1,234 (1.07) |
+| CG, cycles a job (3 iterations) | 7,945 | **4,125** | **2,412** | 2,000 |
+
+Both D9 cycle targets still hold (matched filter <= 1.15x at L 2; CG <= 5,170 at L 2 and <= 3,447 at
+L 4). CG at L 4 has 227 cycles of dependence stall (`VL/L` = 8 < D = 9) and at L 8, 775: L 8 buys
+little for CG.
+
+**D9 revised (logged, rule 2):** add the un-chained `VecUnit` (`S` 1, one vector and one scalar format,
+**37,386 LUT** at L 4) as a **second reference** beside the 82k build. Reason: an un-chained `VecUnit`
+runs at the same `S·N/L` as this core, so it is the like-for-like cost baseline; W7 shows chaining is
+48 % of `VecUnit`'s LUT and the formats 6 %. The decision rule's 50 % is unchanged and still measured
+against the 82k build; the comparison with the S 1 build is **reported** beside it, since it is what
+says whether the ISA, rather than dropping chaining, saves anything. Expectation from the witnesses:
+this core at L 4 ~23k + loader / storer / control, i.e. tens of percent under S 1, not 3x.
 
 ## Stage 2: ISA, assembler, interpreter
 

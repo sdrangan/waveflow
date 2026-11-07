@@ -189,8 +189,8 @@ The cycle model (`waveflow.simdcore.model.Timing`):
   cycle: 1 at `e32` and for the complex instructions, 2 at `e16`;
 - a dependent instruction starts at least `D` (`depth`) cycles after its producer: free when
   `vl / L >= D`, a stall otherwise;
-- the scalar unit issues one instruction a cycle, ahead of the vector unit by up to `vq_depth`
-  instructions; `div` takes about 34 cycles; a scalar read of a vector result waits for it;
+- the scalar unit issues one instruction every `scalar_ii` cycles (3: it decodes the vector
+  instructions too), ahead of the vector unit by up to `vq_depth` instructions; `D` is 9; `div` takes about 34 cycles; a scalar read of a vector result waits for it;
 - `vdiv` (option) occupies the lanes like any instruction but its result comes `vdiv_latency` later.
 
 So: keep `vl / L` at least `D`, keep scalar reads of vector results rare, and count instructions --

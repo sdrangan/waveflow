@@ -426,12 +426,12 @@ def test_cycle_model_S_N_over_L_plus_D():
             r = run_job(cfg, prog, args=[n]).check()
             pred = S * n // L + cfg.depth
             # + the vsetvli and the first issue's latency
-            assert pred <= r.cycles <= pred + 3, (L, S, r.cycles, pred)
+            assert pred <= r.cycles <= pred + cfg.scalar_ii + 2, (L, S, r.cycles, pred)
             assert r.timing.dep_stall == 0
 
 
 def test_cycle_model_short_vectors_stall():
-    cfg = SimdCoreConfig(L=4, vlen=2048, depth=8)
+    cfg = SimdCoreConfig(L=4, vlen=2048, depth=8, scalar_ii=1)  # issue never the bound here
     prog = "vsetvli t0, a0, e32, m1, ta, ma\n" + "".join(
         f"wf.vcmul.vv v{i + 2}, v{i + 1}, v{i + 1}\n" for i in range(4)) + "ecall\n"
     r = run_job(cfg, prog, args=[8]).check()  # VL/L = 2 < D = 8

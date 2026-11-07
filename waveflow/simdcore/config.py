@@ -15,7 +15,8 @@ parameter; nothing here names an application.
   bytes are the LUT region, the only target of ``vluxei`` (D5).
 * **Complex ops** (D7).  ``cplx_ops``: the ``wf.`` complex instructions exist; off, they are illegal.
 * **Timing** (D2; the interpreter's cycle model, not a calibration).  ``depth`` is the lane pipeline's
-  read-to-write distance ``D``; ``div_cycles`` the iterative scalar divide; ``vq_depth`` the scalar ->
+  read-to-write distance ``D``; ``scalar_ii`` the scalar unit's cycles an instruction (vector ones
+  included: it decodes them); ``div_cycles`` the iterative scalar divide; ``vq_depth`` the scalar ->
   vector instruction queue; ``tree_depth`` the reduction tree's extra latency (``log2 L`` by default).
 """
 
@@ -73,10 +74,11 @@ class SimdCoreConfig:
     vdiv_latency: int = 36  # its read-to-write distance, in place of ``depth``
     word_bits: int = 64  # a stream port's word: the loader / storer move one a cycle
     # timing (D2)
-    depth: int = 8
+    depth: int = 9  # witness 6 (2025.1): the flattened loop's depth at L 2-16
     div_cycles: int = 34
     vq_depth: int = 8
     issue_latency: int = 1
+    scalar_ii: int = 3  # witness 5 (2025.1): the scalar unit issues an instruction every 3 cycles
     tree_depth: int | None = None
 
     def __post_init__(self) -> None:

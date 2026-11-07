@@ -158,7 +158,7 @@ class Timing:
 
     def scalar(self, cycles: int = 1) -> None:
         self.n_scalar += 1
-        self.ts += cycles
+        self.ts += max(cycles, self.cfg.scalar_ii)
 
     def wait_scalar(self, t: int) -> None:
         if t > self.ts:
@@ -173,7 +173,7 @@ class Timing:
         while self.starts and len(self.starts) >= cfg.vq_depth:
             self.wait_scalar(self.starts.popleft())
         t_issue = self.ts + cfg.issue_latency
-        self.ts += 1
+        self.ts += self.cfg.scalar_ii
         dep = max([self.ready.get(r, 0) for r in srcs] + [self.wfree.get(r, 0) for r in dsts] + [0])
         start = max(t_issue, self.tv_free, dep)
         if dep > max(t_issue, self.tv_free):
@@ -204,7 +204,7 @@ class Timing:
             self.port_load[port] = arrive
         self.n_vector += 1
         t_issue = self.ts + self.cfg.issue_latency
-        self.ts += 1
+        self.ts += self.cfg.scalar_ii
         if b >= 1:
             rel.append(self.tv_free)  # block b-1's copy is free once every issued reader has run
         t = max(t_issue, arrive)
@@ -221,7 +221,7 @@ class Timing:
         ends = self.store_end.setdefault(wname, [])
         t = max([self.ts + self.cfg.issue_latency, self.tv_free] + [self.done.get(r, 0) for r in regs])
         self.n_vector += 1
-        self.ts += 1
+        self.ts += self.cfg.scalar_ii
         self.last_push = t
         if self.external:  # the pysim storer and its queue pace the copies
             return
