@@ -527,6 +527,7 @@ class LtbfCgMemAdaptor(DseAdaptor):
         from examples.ltbf_cg_mem_dse.hw import build as hb
         from waveflow import events
 
+        self._run(params, "{tag}_pysim", workload)      # the traces the RTL's are checked against
         with events.collect() as spans:
             self._run(params, "{tag}_system_xsi", workload)
         phases: dict[str, float] = {}
