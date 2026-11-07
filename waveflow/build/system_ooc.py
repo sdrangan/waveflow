@@ -22,7 +22,9 @@ Four numbers come out, and they are what the plan compares with the global synth
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -154,10 +156,17 @@ def synth_sub_ooc(spec, sub_name: str, *, kernel_dirs: dict[str, Path], part: st
 
     out_dir = Path(out_dir)
     sub = next(s for s in spec.subs if s.name == sub_name)
-    src = out_dir / "src"
+    text = spec.render_sub_verilog(sub.name)
+    # A directory per content: systems that render one sub-top module differently can share
+    # *out_dir* from several processes, and Vivado reads the file in place.  The cache key hashes
+    # file names and content, not directories, so it is the same wherever the file lands.
+    src = out_dir / "src" / hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     src.mkdir(parents=True, exist_ok=True)
     sub_v = src / f"{sub.module}.v"
-    sub_v.write_text(spec.render_sub_verilog(sub.name), encoding="utf-8")
+    if not sub_v.is_file():
+        tmp = sub_v.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, sub_v)
     leaves, kernels = spec.sources_of(sub.name)
     sources = [sub_v, *leaves] + [f for m in kernels
                                   for f in sorted(Path(kernel_dirs[m]).glob("*.v"))]
@@ -173,7 +182,6 @@ def synth_top_ooc(spec, *, ip, part: str, period_ns: float, out_dir: str | Path,
     context, cached by its black-box text, the crossbar's configuration, the part and the clock under
     ``<out_dir>/top/<digest>``.  Returns ``{"counters", "seconds", "cached", "dir"}`` (the directory
     holds ``top.dcp``)."""
-    import hashlib
 
     from waveflow.utils.vivado_report import parse_utilization
 
