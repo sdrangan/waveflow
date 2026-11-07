@@ -13,7 +13,8 @@ metrics their calls returned: synthesized ``lut``/``ff``/``dsp``/``bram``, ``t_u
 from __future__ import annotations
 
 import itertools
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from examples.dse_cg.score import feasible, objective_value
 
