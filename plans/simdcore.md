@@ -82,7 +82,9 @@ both units so the claim is checked, not assumed.
    instruction, so `S` counts the steps of the math. Fusion does not change the multiplier-limited
    throughput (the matched filter costs about `8N/M` cycles on `M` multipliers either way); it buys 4x
    fewer instructions, fewer temporaries and programs that read like the math. A real-only build stays
-   a configuration so Stage 5 measures the trade (D7).
+   a configuration so Stage 5 measures the trade (D7). **Optimize for complex-heavy glue now**; the
+   lane type is a build option (`lane="cplx4"` default, `lane="real2"` for real-heavy glue; see
+   *Throughput and the lane*).
 8. **Application-free.** As with `VecUnit` (rule 9 of `plans/vecunit_new.md`): no application name,
    constant or special case goes into `waveflow/simdcore/`.
 
@@ -193,6 +195,38 @@ counter of D2). Stage 1 witness 6 settles this before anything else is built on 
   `Resp`, a `Status` per job on its own stream. An error -- illegal instruction, out-of-range address,
   **the instruction budget exhausted** (D11; an agent-written program that never ends must not hang an
   RTL gate) -- is fatal.
+
+### Throughput and the lane
+
+Count `M` 16-bit multipliers (one DSP each). The multiplier bound, MACs a cycle:
+
+| Operation (16-bit) | Multiplies a MAC | Bound |
+|---|---|---|
+| real x real | 1 | `M` |
+| real x complex | 2 | `M/2` |
+| complex x complex | 4 (3 with the DSP pre-adder) | `M/4` (`M/3`) |
+
+A lane also has an **operand bandwidth**: two 32-bit operand words a cycle. A complex multiply does 4
+multiplies on 64 operand bits, a real one 1 on 32 -- half as many a bit -- so no fixed lane keeps its
+multipliers busy on all three. The two lane types (a build option, `lane`):
+
+| MACs a cycle at `M` multipliers | `lane="cplx4"` (default): 4 mul a 32-bit word, `M/4` lanes | `lane="real2"`: 2 mul a 32-bit word, `M/2` lanes |
+|---|---|---|
+| complex x complex | **`M/4`** (4 of 4 busy) | **`M/4`** (2 cycles an element) |
+| real x complex | `M/4` (2 of 4 busy) | **`M/2`** |
+| real x real, two `e16` packed | `M/2` (2 of 4 busy) | **`M`** |
+
+`real2` reaches the multiplier bound on all three but needs twice the lanes -- twice the register
+bandwidth, DM banks and lane control -- for the same complex throughput, and its complex ops take two
+cycles an element (the cost model's `T` doubles for them). For complex-heavy glue `cplx4` is cheaper
+in everything but DSPs, so it is the default; Stage 3's instruction mix and Stage 5's numbers say
+whether `real2` earns a place.
+
+**Accumulators** are a third, wider operand. A complex MAC keeps its sum in the DSPs' 48-bit
+accumulators (four cascaded DSPs, no extra LUT) where the instruction allows (`wf.vcdotr` into a
+reduction); a MAC into a register (`wf.vcmacc`, `vmacc`) reads `vd` as a third operand, which the
+register file must supply (D2, witness 1). The 3-multiply complex product (DSP pre-adder) is a D7
+option: one bit of growth on the pre-sums and a different rounding the golden must follow.
 
 ## The ISA (provisional; D1 fixes it)
 
@@ -322,8 +356,9 @@ The same set as `VecUnit`, so the comparison is like for like, plus the kernels 
 
 ## Rules for the doer
 
-1. Work on a branch `simdcore` from `main`, in a separate worktree if another agent shares the
-   checkout (set `PYTHONPATH` to the worktree root).
+1. Work on the plan's branch `simdcore-plan` (PR #308: one PR, many commits), in a separate worktree
+   if another agent shares the checkout (set `PYTHONPATH` to the worktree root). Records -- decisions,
+   gate commands and their results -- go in `plans/simdcore_records.md`.
 2. One stage at a time. A stage is done when its gate passes by the stated command; paste the command
    and its result into the stage's record. **Pause for review at the end of every stage and on any
    surprise.**
@@ -364,11 +399,12 @@ the candidate `L`. D9's targets are set from it, not before it.
   cover; what happens when `VL/L < D` (stall cycles, counted); whether scalar instructions overlap a
   running vector instruction (vector issue queue) or wait. The interleaved-warp alternative is recorded
   and rejected or kept.
-- **D3 Element widths and the real-data lane.** The `SEW` set (16 and 32 proposed; complex at `e32`).
-  Widening: register-pair destinations or none (see *Widening and `LMUL`*). Whether a complex lane runs
-  real `e16` data two elements a cycle (two of its four multipliers) or one. Whether a real `e32`
-  multiply is built from the lane's four 16-bit multipliers. `plans/vecunit_new_lessons.md` lesson 8:
-  width follows the spread, so keep the set small.
+- **D3 Element widths and the lane.** The `SEW` set (16 and 32 proposed; complex at `e32`).
+  Widening: register-pair destinations or none (see *Widening and `LMUL`*). The lane type (`cplx4`
+  default, `real2` option; *Throughput and the lane*). Whether a `cplx4` lane runs real `e16` data two
+  elements a cycle (two of its four multipliers) or one. Whether a real `e32` multiply is built from
+  the lane's four 16-bit multipliers. `plans/vecunit_new_lessons.md` lesson 8: width follows the
+  spread, so keep the set small.
 - **D4 Complex layout** in DM (packed 32-bit word, `re` low, proposed) and its bank mapping.
 - **D5 LUT region and conflicts**: size, replicated per lane or banked; strided and indexed conflicts
   charged or forbidden.
@@ -511,3 +547,4 @@ Check each against OpenAlex before the docs cite it (as `plans/vecunit_new.md` d
 |---|---|---|---|
 | 2026-11-07 | -- | Drafted with the user: integer-only SIMD core, predication not divergence, RVV-subset ISA for agent familiarity, FFT / FIR / systolic left to their own PEs | this file |
 | 2026-11-07 | -- | Revised after review: temporal execution and the cost model (`S·N/L + D`, `O(L)`) against `VecUnit`'s `S²·L`; load / store parallel to compute (D10); fused complex lanes in v1; `Zve32x`; new goldens and an accuracy criterion; D9 decision rule; witnesses 6 (flattened loop) and 7 (`VecUnit` at `S` = 1); instruction budget (D11) | this file |
+| 2026-11-07 | 0 | Throughput bounds and the lane option (`cplx4` default, `real2`); Stage 0 records written as proposals while the user is away (D10 revised to I/O register windows) | `plans/simdcore_records.md` |
