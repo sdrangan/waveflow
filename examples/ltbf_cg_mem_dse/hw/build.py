@@ -170,20 +170,39 @@ def build_dag() -> BuildDag:
 
 
 def device_dag(
-    names=DEVICES, work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False
+    names=DEVICES, work_dir=WORK_DIR, trace: bool = False, trace_bus: bool = False,
+    p=None, shared: bool = False, tag: str = "",
 ) -> BuildDag:
     """``codegen``, then the framework's system flow for each device's gate system
     (``devsys.<name>_system``): csynth of its tops, the system RTL, the scenario, pysim, XSI with the
-    host's C++ twin, and ``compare`` (RTL against pysim), each prefixed ``<name>_``."""
+    host's C++ twin, and ``compare`` (RTL against pysim), each prefixed ``<name>_``.
+
+    *p* (``SysParams``): the devices at *p*'s build (``codegen`` at its HLS configuration).
+    *shared*: each device on Shared Mem as the system builds it (``sys`` and ``vec``), its timing
+    measured first (:func:`add_memcal`) -- to time a device as the system runs it.  *tag*: added to
+    each device's prefix, top and workspace, so several variants share a DAG and a root."""
     from examples.ltbf_cg_mem_dse.hw import devsys
     from waveflow.build.system_dag import add_system_steps
 
     dag = BuildDag()
-    dag.add(LtbfCodegenStep(name="codegen"))
+    dag.add(LtbfCodegenStep(name="codegen", sysp=p))
+    cals: dict = {}
     for name in names:
-        sysm = getattr(devsys, f"{name}_system")()
-        add_system_steps(dag, sysm, work_dir=work_dir, top=f"ltbf_{name}_top", prefix=f"{name}_",
-                         workspace=f"ltbf_{name}", trace=trace, trace_bus=trace_bus)  # fmt: skip
+        build = getattr(devsys, f"{name}_system")
+        sysm = build(p=p, shared=True) if shared else (build(p=p) if p is not None else build())
+        add_system_steps(dag, sysm, work_dir=work_dir, top=f"ltbf_{name}{tag}_top",
+                         prefix=f"{name}{tag}_", workspace=f"ltbf_{name}{tag}", trace=trace,
+                         trace_bus=trace_bus)  # fmt: skip
+        if shared:
+            from examples.ltbf_cg_mem_dse.hw import system as sy
+
+            S = sy.LtbfSystem(sy.inputs(p or sy.SysParams()))
+            key = (S.bank_span, S.p.mem_rate)
+            if key not in cals:
+                cals[key] = add_memcal(dag, S.bank_span,
+                                       f"umemcal{S.bank_span.bit_length() - 1}r{S.p.mem_rate}_",
+                                       work_dir, rate=S.p.mem_rate)  # fmt: skip
+            dag.require(f"{name}{tag}_pysim", [cals[key]])
     return dag
 
 

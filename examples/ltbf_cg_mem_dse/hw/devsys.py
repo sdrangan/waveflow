@@ -189,17 +189,24 @@ def dev_system(
     driver=None,
     sym_port: str = "s_sym",
     fresh=None,
+    mem=None,
 ):
     """*dev* (a wrapper) with a one-source RespHub, Shared Mem at 0 and *host*, on one crossbar; an
-    optional *driver* feeds the device's *sym_port*."""
+    optional *driver* feeds the device's *sym_port*.  *mem*: the memory to use (``None``: a plain
+    ``MemoryMod`` of *mem_words* rounded up to a power of two -- the gates'); its span is its own."""
     sim, clk = dev.sim, dev.clk
-    mem_words = (
-        1 << (int(mem_words) - 1).bit_length()
-    )  # the crossbar's RTL: power-of-two ranges
+    if mem is None:
+        mem_words = (
+            1 << (int(mem_words) - 1).bit_length()
+        )  # the crossbar's RTL: power-of-two ranges
+        mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk,
+                        nwords_tot=mem_words, addr_unit=AddrUnit.byte)  # fmt: skip
+        assert mem.alloc(mem_words) == 0
+    else:
+        if int(mem_words) > int(mem.nwords_tot):
+            raise ValueError(f"{mem_words} words do not fit the given memory's {mem.nwords_tot}")
+        mem_words = int(mem.nwords_tot)
     hub = RespHub1(name="hub", sim=sim, clk=clk, word_bits=W)
-    mem = MemoryMod(name="mem", sim=sim, word_size=W, inline=False, clk=clk, nwords_tot=mem_words,
-                    addr_unit=AddrUnit.byte)  # fmt: skip
-    assert mem.alloc(mem_words) == 0
     ddev = build_mm_device(dev, sim=sim, clk=clk, mem_dwidth=W, prefix="dev_")
     hdev = build_mm_device(hub, sim=sim, clk=clk, mem_dwidth=W, prefix="hub_")
     links = []
@@ -264,6 +271,16 @@ def dev_system(
     )  # fresh: the flow's pysim runs an unrun copy
 
 
+def _shared(sy, S, sim, clk, shared: bool):
+    """Shared Mem as the system builds it (``system.shared_mem``: the bank's span, calibrated, at
+    ``S.p.mem_rate``) when *shared*; else ``None`` (the gates' plain memory)."""
+    if not shared:
+        return None
+    mem = sy.shared_mem(sim, S.bank_span, clk, rate=S.p.mem_rate)
+    assert mem.alloc(S.bank_span) == 0
+    return mem
+
+
 def _ac9(p=None):
     """``(system, LtbfSystem)`` at *p* (``SysParams``; AC9's when ``None``)."""
     from examples.ltbf_cg_mem_dse.hw import system as sy
@@ -298,10 +315,11 @@ class _Mem:
         return a
 
 
-def sys_system(p=None) -> HwSystem:
+def sys_system(p=None, shared: bool = False) -> HwSystem:
     """The systolic wrapper on one job of each kind at AC9's shapes (N_rx 64, 22 connected UEs), or
     at *p*'s; ``K`` (``R x C x R``: 8192 tiles at N_rx 1024) only up to N_rx 64, where its tile count
-    is an XSI run's, not hours."""
+    is an XSI run's, not hours.  *shared*: on Shared Mem as the system builds it (its calibrated
+    timing at ``p.mem_rate``), to time the device as the system runs it (``plans/dse_cg.md``)."""
     from examples.ltbf_cg_mem_dse.hw.sys_wrap import SysWrap
     from waveflow.linalg.systolic import MatmulOp
     from waveflow.linalg.systolic_engine_mem import EngineJobDesc
@@ -326,12 +344,13 @@ def sys_system(p=None) -> HwSystem:
                                   c_base=cc).serialize(word_bw=W))  # fmt: skip
         reads.append((cc, S.w(m, n)))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: sys_system(p))
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: sys_system(p, shared),
+                      mem=_shared(sy, S, sim, dev.clk, shared))
 
 
-def vec_system(p=None) -> HwSystem:
+def vec_system(p=None, shared: bool = False) -> HwSystem:
     """The vector unit's wrapper on a CG step, the last CG step and an equalizer chunk, with the
-    system's programs (AC9's build: one unit for both)."""
+    system's programs (AC9's build: one unit for both).  *shared*: as :func:`sys_system`'s."""
     from examples.ltbf_cg_mem_dse.hw.vec_wrap import VecMemJob, VecWrap
 
     _sy, S = _ac9(p)
@@ -373,7 +392,8 @@ def vec_system(p=None) -> HwSystem:
     job(S.prog_at["eq"], lds, [(xh, wb, wb)], d.J)
     reads.append((xh, d.J * wb))
     host = LtbfJobHost(name="host", sim=sim, image=mem.image, jobs=jobs, reads=reads)
-    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: vec_system(p))
+    return dev_system(dev, mem_words=mem.top, host=host, fresh=lambda: vec_system(p, shared),
+                      mem=_shared(_sy, S, sim, dev.clk, shared))
 
 
 def ingest_system(n_sym: int = 2, p=None) -> HwSystem:
