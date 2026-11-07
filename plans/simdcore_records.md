@@ -191,7 +191,40 @@ error `BUDGET`, fatal (the command-response rule). 0 = no budget.
 
 ## Stage 2: ISA, assembler, interpreter
 
-*(not started)*
+**Done 2026-11-07** (`waveflow/simdcore/{config,isa,asm,model}.py`, `tests/simdcore/`).
+
+- `isa.py`: one table (`SPECS`, 170 mnemonics) drives encode, decode and the assembler; the real RV32IM /
+  Zicsr / RVV 1.0 encodings; `wf.` complex ops under `custom-0` in the OP-V layout, queue ops under
+  `custom-1` (D1).
+- `asm.py`: GNU-syntax text with labels and the pseudo-ops (`li` expands as GNU's does); the Python form
+  (`Program`, one method per mnemonic) builds the same text; `to_gnu` renders `wf.` ops as `.insn`.
+- `model.py`: the interpreter (tail and mask undisturbed; `vill` on an unsupported `vtype`; EEW <= SEW
+  vector memory, fractional EMUL legal; LUT-region-only `vluxei`; windows; fatal error codes) and the D2
+  cycle model (`Timing`).
+- `tests/simdcore/_ref.py`: a plain-Python reference written from the RVV spec text (per element,
+  Python integers, nothing from the interpreter); `test_model.py` checks every elementwise, compare,
+  merge / move, reduction, mask, scalar-move and complex instruction against it on random registers,
+  `vl`, masks, `vxrm` and shifts, plus scalar RV32IM, memory, `vsetvli`, windows, errors and the cycle
+  model (`S·N/L + D` within 3 cycles for `L` 1-4, `S` 1-8; the short-vector stall exactly
+  `(S-1)(D - VL/L)`).
+- **Encodings checked against GNU as** (`test_asm.py`): three random corpora of every mnemonic (and
+  `li`'s expansions) assemble to GNU as's words. GNU as here: Vitis 2025.1's
+  `riscv64-unknown-elf-as` (binutils 2.39), `-march=rv32im_zicsr_zve32x`.
+
+One correction found by the tests: RVV allows `EEW < SEW` vector loads and stores (fractional `EMUL`,
+e.g. `vlseg2e16.v` at `e32`); the first interpreter made them illegal.
+
+**Gate:**
+
+```
+../pysilicon-venv/Scripts/python.exe -m pytest tests/simdcore -q -rs
+129 passed
+```
+
+**Spike: not run.** This laptop has no Spike and no WSL; the `-m spike` comparison (plan Stage 2) is
+deferred to a Linux machine -- the doer did not write a harness it could not run. On Linux: build Spike,
+run each Stage 3 program with `--isa=rv32imv_zicsr --varch=vlen:<VLEN>,elen:32` (windows preloaded by
+`vle`, as D10 says) and compare register state at `ecall`.
 
 ## Stage 3: applications on the interpreter
 
