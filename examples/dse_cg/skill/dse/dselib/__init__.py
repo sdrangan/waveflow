@@ -56,10 +56,33 @@ def bind(session: Any) -> None:
     _SESSION = session
 
 
+class Refused(Exception):
+    """The service refused the call: a wrong arm, an exhausted budget, a closed run, a bad name."""
+
+
 def _call(fn: str, **kwargs: Any) -> Any:
-    """One request: to the bound session if there is one, else to the service at ``DSE_SERVICE``.
-    Skeleton: neither path is written yet (plan Phase 3)."""
-    raise NotImplementedError(f"dselib.{fn}: the service transport is not built yet")
+    """One request: to the bound session if there is one, else to the service at ``DSE_SERVICE``
+    (``host:port``; an HTTP ``POST /call``).  A refusal raises :class:`Refused`."""
+    if _SESSION is not None:
+        try:
+            return getattr(_SESSION, fn)(**kwargs)
+        except Exception as e:  # the service's own refusal type lives with the service
+            if type(e).__name__ == "Refused":
+                raise Refused(str(e)) from None
+            raise
+    if not _SERVICE:
+        raise Refused("no DSE service: set DSE_SERVICE to its host:port")
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(f"http://{_SERVICE}/call", method="POST",
+                                 data=json.dumps({"fn": fn, "kwargs": kwargs}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=None) as r:
+        out = json.loads(r.read())
+    if "refused" in out:
+        raise Refused(out["refused"])
+    return out["ok"]
 
 
 def space() -> dict:

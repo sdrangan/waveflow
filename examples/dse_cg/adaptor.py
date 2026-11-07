@@ -95,9 +95,10 @@ class DseAdaptor(ABC):
         resources are counted).  Facts only: no objective, no advice."""
 
     @abstractmethod
-    def build_system(self, params: dict) -> Any:
-        """The ``HwSystem`` at design point ``params`` (filled): what is simulated, synthesized, and
-        walked for the architecture."""
+    def build_system(self, params: dict, workload: Any = None, rtl: bool = False) -> Any:
+        """The ``HwSystem`` at design point ``params`` (filled), playing *workload* (default: the
+        design's timing workload), for the RTL flow when *rtl*: what is simulated, synthesized, and
+        walked for the architecture.  Synthesis and the architecture do not depend on the workload."""
 
     @abstractmethod
     def golden(self, params: dict, workload: dict) -> dict:
