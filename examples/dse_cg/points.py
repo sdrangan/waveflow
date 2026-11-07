@@ -132,6 +132,48 @@ def write_costs() -> dict:
     return med
 
 
+def write_table(out_dir: Path) -> dict:
+    """The six points as a ground-truth table in G1's format (``grid.py table`` + ``finish``): their
+    parts, kernels and RTL runs as measured, pysim and ``golden`` computed -- for the replay backend
+    and ``score.py`` before G1 is measured."""
+    from examples.dse_cg.service import eval_key
+
+    a = LtbfCgMemAdaptor()
+    t: dict[str, dict] = {fn: {} for fn in ("synth", "hls", "rtlsim", "golden", "pysim")}
+    for name in POINTS:
+        f = OUT / f"{name}.json"
+        if not f.is_file():
+            continue
+        rec = json.loads(f.read_text())
+        calls, params, w = rec["calls"], rec["params"], rec["workload"]
+        for node, ident in rec["identities"].items():
+            row = calls.get(f"synth.{node}")
+            if isinstance(row, dict) and row.get("status") == "ok":
+                t["synth"].setdefault(ident, {"key": ident, "row": row, "cost_s": float(row["seconds"])})
+        for kernel, ident in rec["hls_identities"].items():
+            row = calls.get(f"hls_estimate.{kernel}")
+            if isinstance(row, dict) and row.get("status") == "ok":
+                t["hls"].setdefault(ident, {"key": ident, "row": row, "cost_s": float(row["seconds"])})
+        row = calls["rtlsim"]
+        run = rec["sim_identity"]["run"]
+        t["rtlsim"][run] = {"key": run, "row": row,
+                            "cost_s": float(row.get("build_s", 0)) + float(row.get("simulate_s", 0))}
+        nm, ww = a.workload(w)
+        prow = a.pysim(params, {"name": nm, **ww})
+        t["pysim"][eval_key("pysim", params, nm, ww)] = {"key": eval_key("pysim", params, nm, ww),
+                                                         "row": prow, "cost_s": float(prow["seconds"])}
+        for target in ("-6_14", "-6_3"):
+            nm2, w2 = a.workload({"name": "accuracy", "t": ww["t"], "target": target})
+            grow = a.golden(params, {"name": nm2, **w2})
+            t["golden"][eval_key("golden", params, nm2, w2)] = {"key": eval_key("golden", params, nm2, w2),
+                                                                "row": grow, "cost_s": float(grow.get("seconds") or 0)}
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for fn, rows in t.items():
+        (out_dir / f"{fn}.jsonl").write_text("".join(json.dumps(r, default=str) + "\n" for r in rows.values()))
+    return {fn: len(v) for fn, v in t.items()}
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if "--costs" in args:
