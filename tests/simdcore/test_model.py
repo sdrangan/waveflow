@@ -11,17 +11,17 @@ from waveflow.simdcore.config import SimdCoreConfig, Window
 from waveflow.simdcore.isa import SPECS
 from waveflow.simdcore.model import cpack, cunpack, run_job
 
-CFG = SimdCoreConfig(L=2, vlen=256)  # small VLEN: 8 e32 / 16 e16 elements, quick and tail-heavy
+CFG = SimdCoreConfig(L=2, vlen=256, vdiv=True)  # small VLEN: 8 e32 / 16 e16 elements, tail-heavy
 RNG_SEED = 20261107
 
 ELEMWISE = ["vadd", "vsub", "vrsub", "vminu", "vmin", "vmaxu", "vmax", "vand", "vor", "vxor", "vsll", "vsrl",
             "vsra", "vsaddu", "vsadd", "vssubu", "vssub", "vsmul", "vssrl", "vssra", "vmul", "vmulh", "vmulhu",
-            "vmacc", "vnmsac", "vmadd", "vnmsub"]
+            "vmacc", "vnmsac", "vmadd", "vnmsub", "vdiv", "vdivu", "vrem", "vremu"]
 COMPARES = ["vmseq", "vmsne", "vmsltu", "vmslt", "vmsleu", "vmsle", "vmsgtu", "vmsgt"]
 
 
 def _specs(sems):
-    return [s for s in SPECS.values() if s.sem in sems and s.ext == "V"]
+    return [s for s in SPECS.values() if s.sem in sems and s.ext in ("V", "VDIV")]
 
 
 def _rand_vregs(rng, cfg):
@@ -240,6 +240,23 @@ def test_complex_needs_e32_and_the_build_option():
     off = SimdCoreConfig(L=2, vlen=256, cplx_ops=False)
     r = run_job(off, _setup(32, 4, 0, "wf.vcmul.vv v1, v2, v3")[0], args={10: 4})
     assert r.status == "ILLEGAL"
+    r = run_job(off, _setup(32, 4, 0, "vdiv.vv v1, v2, v3")[0], args={10: 4})
+    assert r.status == "ILLEGAL"  # vdiv is off by default
+
+
+def test_divide_corners():
+    """x/0 and the most negative / -1, at both widths (RVV 1.0 section 11.11)."""
+    for sew in (16, 32):
+        lo = -(1 << (sew - 1))
+        a = np.array([7, -7, lo, 5, 0, lo, -1, 9], dtype=np.int64)
+        b = np.array([0, 2, -1, -2, 3, 1, 0, -4], dtype=np.int64)
+        m = (1 << sew) - 1
+        dt = "<u2" if sew == 16 else "<u4"
+        vregs = {2: (a & m).astype(dt).view(np.uint8), 3: (b & m).astype(dt).view(np.uint8)}
+        for op in ("vdiv", "vrem", "vdivu", "vremu"):
+            r = run_job(CFG, _setup(sew, 8, 0, f"{op}.vv v1, v2, v3")[0], args={10: 8}, vregs=vregs).check()
+            exp = [_ref.elem(op, int(x) & m, int(y) & m, 0, sew, 0)[0] for x, y in zip(a, b)]
+            assert _elems(r.state.v[1], sew)[:8] == exp, (op, sew)
 
 
 # --- scalar ----------------------------------------------------------------------------------------

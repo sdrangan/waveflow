@@ -97,6 +97,29 @@ def elem(op: str, a: int, b: int, vd: int, sew: int, vxrm: int) -> tuple[int, in
         r = sb * svd + sa
     elif op == "vnmsub":  # vd = -(vs1 * vd) + vs2
         r = -(sb * svd) + sa
+    # RVV 1.0 section 11.11: quotient rounds toward zero; x/0 = all ones (-1), x%0 = x;
+    # the overflow (most negative)/-1 gives the dividend and remainder 0
+    elif op == "vdivu":
+        r = m if ub == 0 else ua // ub
+    elif op == "vremu":
+        r = ua if ub == 0 else ua % ub
+    elif op == "vdiv":
+        if sb == 0:
+            r = -1
+        elif sa == smin and sb == -1:
+            r = sa
+        else:
+            q = abs(sa) // abs(sb)
+            r = q if (sa < 0) == (sb < 0) else -q
+    elif op == "vrem":
+        if sb == 0:
+            r = sa
+        elif sa == smin and sb == -1:
+            r = 0
+        else:
+            q = abs(sa) // abs(sb)
+            q = q if (sa < 0) == (sb < 0) else -q
+            r = sa - q * sb
     else:
         raise KeyError(op)
     return r & m, s
@@ -144,6 +167,10 @@ def cplx(op: str, a: int, b: int, vd: int, csh: int, rsh: int, vxrm: int) -> tup
     if op == "vcdotr":
         r, s = clip(roundoff(ar * br + ai * bi, rsh, vxrm), -(1 << 31), (1 << 31) - 1)
         return r & 0xFFFFFFFF, s
+    if op == "vcdotra":  # vd = sat32(vd + rs32(Re(conj(vs2) vs1)))
+        t, s1 = clip(roundoff(ar * br + ai * bi, rsh, vxrm), -(1 << 31), (1 << 31) - 1)
+        r, s2 = clip(sext(vd, 32) + t, -(1 << 31), (1 << 31) - 1)
+        return r & 0xFFFFFFFF, s1 | s2
     if op == "vcconj":
         return cword(ar, s16(-ai)), sat
     raise KeyError(op)

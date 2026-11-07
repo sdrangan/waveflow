@@ -35,6 +35,8 @@ from waveflow.simdcore.config import SimdCoreConfig
 from waveflow.simdcore.isa import Decoded, IllegalInstruction, vtype_decode
 
 M32 = 0xFFFFFFFF
+#: The byte an output window's registers read as after ``wf.qpush`` (unspecified: the other copy).
+POISON = 0xA5
 
 
 class SimdCoreError(Exception):
@@ -141,10 +143,12 @@ class Timing:
     lane_cycles: int = 0  # sum of vector occupancies
     dep_stall: int = 0  # vector-unit cycles idle waiting on a dependence
     scalar_wait: int = 0  # scalar cycles waiting on a vector result or a full queue
-    # windows
-    load_end: dict = field(default_factory=dict)  # window -> list of block load-end cycles
-    release: dict = field(default_factory=dict)  # window -> list of block release cycles
-    store_end: dict = field(default_factory=dict)  # window -> list of store-end cycles
+    # windows: the loader / storer of a port move one word a cycle, blocks in program order
+    port_load: dict = field(default_factory=dict)  # in port -> its last load-end cycle
+    port_store: dict = field(default_factory=dict)  # out port -> its last store-end cycle
+    release: dict = field(default_factory=dict)  # in window -> list of block release cycles
+    store_end: dict = field(default_factory=dict)  # out window -> list of store-end cycles
+    load_wait: int = 0  # vector-unit cycles idle waiting on an input block
     end: int = 0
 
     def scalar(self, cycles: int = 1) -> None:
@@ -180,34 +184,43 @@ class Timing:
         self.end = max(self.end, start + occ + cfg.depth + extra)
         return start + occ + cfg.depth + extra
 
-    def block_words(self, k: int, n: int, sew: int, word_bits: int = 64) -> int:
-        return ceil(k * n * sew / word_bits)
+    def block_words(self, k: int, n: int, sew: int) -> int:
+        return ceil(k * n * sew / self.cfg.word_bits)
 
-    def qpop(self, wname: str, b: int, words: int, regs) -> None:
-        """Block ``b`` of input window ``wname``: loaded into the free copy, then swapped in."""
-        ends = self.load_end.setdefault(wname, [])
+    def qpop(self, wname: str, port: int, b: int, words: int, regs) -> None:
+        """Block ``b`` of input window ``wname``: the port's loader fills the window's free copy as soon
+        as the port is idle and the copy released (it runs ahead of the program), then the swap."""
         rel = self.release.setdefault(wname, [])
-        start = max(ends[-1] if ends else 0, rel[b - 2] if b >= 2 else 0)
-        ends.append(start + words)
-        # the swap waits for the block and for the readers of the current copy (in-order: tv_free)
-        t = max(self.ts + self.cfg.issue_latency, ends[-1])
+        start = max(self.port_load.get(port, 0), rel[b - 2] if b >= 2 else 0)
+        arrive = start + words
+        self.port_load[port] = arrive
         self.n_vector += 1
+        t_issue = self.ts + self.cfg.issue_latency
         self.ts += 1
         if b >= 1:
             rel.append(self.tv_free)  # block b-1's copy is free once every issued reader has run
+        t = max(t_issue, arrive)
+        if arrive > max(t_issue, self.tv_free):
+            self.load_wait += arrive - max(t_issue, self.tv_free)
         for r in regs:
             self.ready[r] = max(self.ready.get(r, 0), t)
         self.tv_free = max(self.tv_free, t)
 
-    def qpush(self, wname: str, b: int, words: int, regs) -> None:
+    def qpush(self, wname: str, port: int, b: int, words: int, regs, copies: int = 2) -> None:
+        """Hand the window's copy to the port's storer once every element is written.  Two copies: the
+        program writes next into block ``b-1``'s, free once the storer has drained it; one copy:
+        into this block's, free once drained."""
         ends = self.store_end.setdefault(wname, [])
         t = max([self.ts + self.cfg.issue_latency, self.tv_free] + [self.done.get(r, 0) for r in regs])
         self.n_vector += 1
         self.ts += 1
-        start = max(ends[-1] if ends else 0, t)
+        start = max(self.port_store.get(port, 0), t)
         ends.append(start + words)
-        # the copy now written next is block b-1's, free once the storer has drained it
-        free = ends[-2] if len(ends) >= 2 else 0
+        self.port_store[port] = ends[-1]
+        if copies == 1:
+            free = ends[-1]
+        else:
+            free = ends[-2] if len(ends) >= 2 else 0
         for r in regs:
             self.wfree[r] = free
         self.end = max(self.end, ends[-1])
@@ -266,8 +279,13 @@ class Core:
 
     def run(self, program, inputs: dict[str, list] | None = None, args: dict | list | None = None,
             dm_init: list[tuple[int, np.ndarray]] | None = None, budget: int = 0,
-            max_steps: int = 10_000_000, vregs: dict[int, np.ndarray] | None = None) -> JobResult:
+            max_steps: int = 10_000_000, vregs: dict[int, np.ndarray] | None = None,
+            on_empty=None) -> JobResult:
+        """One job.  ``on_empty(window, core)`` closes a loop: called when a ``wf.qpop`` finds no
+        block, it returns the next block (e.g. ``S = A @ P`` from the ``P`` just pushed) or ``None``.
+        Its timing is a static testbench's: the block is on the port as soon as the port is free."""
         cfg = self.cfg
+        self.on_empty = on_empty
         words = assemble(program).words if isinstance(program, str) else list(program)
         if len(words) > cfg.imem_words:
             raise ValueError(f"program of {len(words)} words exceeds imem_words {cfg.imem_words}")
@@ -301,8 +319,8 @@ class Core:
                 except IllegalInstruction as e:
                     raise SimdCoreError("ILLEGAL", str(e), st.pc) from None
                 ext = d.spec.ext
-                if (ext == "WFC" and not cfg.cplx_ops) or (d.spec.sem in ("div", "divu", "rem", "remu")
-                                                            and not cfg.div):
+                if (ext == "WFC" and not cfg.cplx_ops) or (ext == "VDIV" and not cfg.vdiv) or (
+                        d.spec.sem in ("div", "divu", "rem", "remu") and d.spec.ext == "M" and not cfg.div):
                     self._illegal(f"{d.name} not in this build")
                 steps += 1
                 if d.spec.sem == "ecall":
@@ -559,7 +577,7 @@ class Core:
         # elementwise ----------------------------------------------------------------------------
         signed_ops = {"vmin", "vmax", "vsra", "vsadd", "vssub", "vsmul", "vssra", "vmslt", "vmsle", "vmsgt",
                       "vmulh", "vmerge", "vmv", "vadd", "vsub", "vrsub", "vand", "vor", "vxor", "vsll",
-                      "vmseq", "vmsne", "vmul", "vmacc", "vnmsac", "vmadd", "vnmsub"}
+                      "vmseq", "vmsne", "vmul", "vmacc", "vnmsac", "vmadd", "vnmsub", "vdiv", "vrem"}
         signed = s in signed_ops
         a = st.velems(d.vs2, sew, signed)[:vl].astype(np.int64)
         b = self._src(d, sew, vl, signed)
@@ -636,6 +654,31 @@ class Core:
             res = (a * b) >> sew
         elif s == "vmulhu":
             res = ((ua.astype(np.uint64) * ub.astype(np.uint64)) >> np.uint64(sew)).astype(np.int64)
+        elif s in ("vdiv", "vrem"):
+            sa_, sb_ = a, b  # signed (signed_ops)
+            q = np.zeros(vl, dtype=np.int64)
+            rm = np.zeros(vl, dtype=np.int64)
+            for i in range(vl):
+                x_, y_ = int(sa_[i]), int(sb_[i])
+                if y_ == 0:
+                    q[i], rm[i] = -1, x_
+                elif x_ == lo and y_ == -1:
+                    q[i], rm[i] = lo, 0
+                else:
+                    qq = abs(x_) // abs(y_) * (1 if (x_ < 0) == (y_ < 0) else -1)  # toward zero
+                    q[i], rm[i] = qq, x_ - qq * y_
+            res = q if s == "vdiv" else rm
+            self._write(d.vd, sew, res, act)
+            tm.vector(srcs, [d.vd], occ, extra=cfg.vdiv_latency - cfg.depth)
+            return None
+        elif s in ("vdivu", "vremu"):
+            q = np.array([M if int(y_) == 0 else int(x_) // int(y_) for x_, y_ in zip(ua, ub)], dtype=np.int64) \
+                if vl else ua
+            rm = np.array([int(x_) if int(y_) == 0 else int(x_) % int(y_) for x_, y_ in zip(ua, ub)],
+                          dtype=np.int64) if vl else ua
+            self._write(d.vd, sew, q if s == "vdivu" else rm, act)
+            tm.vector(srcs, [d.vd], occ, extra=cfg.vdiv_latency - cfg.depth)
+            return None
         elif s in ("vmacc", "vnmsac", "vmadd", "vnmsub"):
             vd = st.velems(d.vd, sew, True)[:vl].astype(np.int64)
             p1 = (b & M).astype(np.uint64)  # vs1 / rs1
@@ -700,11 +743,17 @@ class Core:
                     rr, ri = s16(xr + rr), s16(xi + ri)
                     srcs.append(d.vd)
             res = cpack(rr, ri).astype(np.int64)
-        elif s == "vcdotr":
+        elif s in ("vcdotr", "vcdotra"):
             p = ar * br + ai * bi
             t = roundoff(p, rsh, st.vxrm)
             sat = (t > 2**31 - 1) | (t < -(2**31))
-            res = np.clip(t, -(2**31), 2**31 - 1)
+            t = np.clip(t, -(2**31), 2**31 - 1)
+            if s == "vcdotra":
+                t = t + st.velems(d.vd, 32, True)[:vl].astype(np.int64)
+                sat = sat | (t > 2**31 - 1) | (t < -(2**31))
+                t = np.clip(t, -(2**31), 2**31 - 1)
+                srcs.append(d.vd)
+            res = t
         elif s == "vcconj":
             res = cpack(ar, s16(-ai)).astype(np.int64)
         else:
@@ -799,6 +848,10 @@ class Core:
         if d.spec.sem == "qpop":
             if w.direction != "in":
                 self._illegal(f"wf.qpop on output window {w.name}")
+            if not self.inq[w.name] and self.on_empty is not None:
+                blk = self.on_empty(w.name, self)
+                if blk is not None:
+                    self.inq[w.name].append(blk)
             if not self.inq[w.name]:
                 raise SimdCoreError("EMPTY", f"wf.qpop {w.name}: no block left", st.pc)
             blk = np.asarray(self.inq[w.name].pop(0))
@@ -815,16 +868,19 @@ class Core:
                     col[:k] = (blk[:, j].astype(np.int64) & m).astype(col.dtype)
             b = self.npop[w.name]
             self.npop[w.name] += 1
-            tm.qpop(w.name, b, tm.block_words(k, n, w.sew), list(w.regs))
+            tm.qpop(w.name, w.port, b, tm.block_words(k, n, w.sew), list(w.regs))
         else:
             if w.direction != "out":
                 self._illegal(f"wf.qpush on input window {w.name}")
             k = st.vl
             blk = np.stack([st.velems(r, w.sew)[:k].copy() for r in w.regs], axis=1)
             self.outq[w.name].append(blk)
+            if w.copies == 2:
+                for r in w.regs:  # unspecified until written (the other copy): poison, so a misuse shows
+                    st.v[r] = POISON
             b = self.npop[w.name]
             self.npop[w.name] += 1
-            tm.qpush(w.name, b, tm.block_words(k, w.n, w.sew), list(w.regs))
+            tm.qpush(w.name, w.port, b, tm.block_words(k, w.n, w.sew), list(w.regs), w.copies)
         return None
 
 

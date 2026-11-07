@@ -64,6 +64,9 @@ pipelined divider as the fallback.
   | 3 | `wf.vcmadd.vx vd, vs2, rs1` | `vd = sat(rs(vd · rs1) + vs2)` |
   | 4 | `wf.vcdotr.vv vd, vs2, vs1` | `vd = rs32(Re(conj(vs2) · vs1))`, a 32-bit real (`wf.vcabs2 vd, vs` is the pseudo-op with `vs2 = vs1`) |
   | 5 | `wf.vcconj.v vd, vs2` | `vd = conj(vs2)` |
+  | 6 | `wf.vcdotra.vv vd, vs2, vs1` | `vd = sat32(vd + rs32(Re(conj(vs2) · vs1)))` (added in Stage 3 for CG's dot products) |
+
+  `wf.vcmadd` also got its `.vv` form in Stage 3 (CG's `P = R + βP` in place).
 
   `rs(p)` = `sat16(round(p >> csh))` per part, `rs32(p)` = `sat32(round(p >> rsh))`; rounding by
   `vxrm`, saturation sets `vxsat`. The shifts are a **custom CSR `wfsh`** (`0x800`, user read/write):
@@ -128,6 +131,11 @@ word-interleaved over `L` banks, bank = word address mod `L`.
 scalar unit only. With D2's decoupling the vector queue keeps running. Fallback (if CG's Stage 3 count
 shows divides bind): a pipelined divider, II 1, a build option.
 
+**Revised in Stage 3:** CG's `alpha` and `beta` are vectors of `N` (a register a row), so the scalar
+divide would cost 32 x 34 cycles a step. Added the standard **`vdiv` / `vdivu` / `vrem` / `vremu`** as
+a build option (`SimdCoreConfig.vdiv`, off by default): a pipelined divider a lane, occupancy `VL/L`,
+read-to-write `vdiv_latency` (36, a guess for witness 1 to replace). CG builds it; nothing else does.
+
 ### D7 Fused complex ops
 
 On in v1 (decided, item 7): the D1 table. The real-only configuration (`cplx_ops=False`: the `wf.`
@@ -180,6 +188,14 @@ port the program needs.
   standard programs, but the memory instructions still move every element twice (loader -> DM -> register),
   so it needs about twice the DM bandwidth of (a) for a streaming kernel.
 
+**Settled in Stages 2-3:** after `wf.qpush` a two-copy window's registers are unspecified until
+written (the interpreter fills them with `0xA5` bytes so a misuse shows); a write waits until the
+storer has drained the copy it lands in. An **output window may have one copy** (`Window.copies = 1`):
+`wf.qpush` keeps the values and a write waits until the storer has drained them -- CG keeps `P` in its
+output window this way. Windows on one port share its loader or storer (one 64-bit word a cycle). The
+closed loop (`on_empty`, CG's `S = A P`) is timed as a static testbench: the block is on the port as
+soon as the port is free, as `examples/vecunit_cg`'s RTL bench.
+
 ### D11 Instruction budget
 
 A 32-bit field `budget` in the job header: instructions issued (scalar and vector). Exhausted -> `Status`
@@ -228,4 +244,86 @@ run each Stage 3 program with `--isa=rv32imv_zicsr --varch=vlen:<VLEN>,elen:32` 
 
 ## Stage 3: applications on the interpreter
 
-*(not started)*
+**Done 2026-11-07** (`examples/simdcore/`, `examples/simdcore_mf/`, `examples/simdcore_cg/`; tests in
+`tests/examples/test_simdcore_*.py`). All cycle numbers below are **the interpreter's D2 cycle model
+(`depth` 8, `vdiv_latency` 36, guesses until Stage 1's witnesses), not measurements.**
+
+### Toy kernels
+
+`cmul gain abs2 clip poly pwl lut argmax sum` (`examples/simdcore/toy.py`), each against a NumPy golden
+written from the math, at `N` 1-128 and `L` 1-8. `lut` is a 64-segment piecewise-linear sin from the
+LUT region (`vluxei16`); `argmax` the `vredmax` -> `vmseq` -> `vfirst` idiom.
+
+### Matched filter
+
+`examples/simdcore_mf/mf_program.py`: `wf.vcmulc` per antenna with `csh` 14, `vxrm` rdn reproduces
+`examples/vecunit_mf`'s golden **bit for bit** (its formats: one floor rounding of the exact product)
+-- so its accuracy equals the vector unit's by construction. One frame = one job; `S` = 1 an antenna,
+`nrx + 2` vector instructions a chunk.
+
+Four back-to-back frames (256 samples x 8 antennas, one job), per frame, against the input floor of
+1,152 words (`python -m examples.simdcore_mf.mf_program`):
+
+| `L` (`cplx4`) | DSP | cycles a frame | x floor | lanes busy |
+|---|---|---|---|---|
+| 1 | 4 | 2,186 | 1.90 | 2,048 (compute-bound) |
+| **2** | **8** | **1,282** | **1.11** | 1,024 (load-bound) |
+| 4 | 16 | 1,250 | 1.09 | 512 |
+| 8 | 32 | 1,234 | 1.07 | 256 |
+
+The vector unit (2024.1 RTL): 1,408 cycles a frame (1.22x), 53 DSP at `L` 4. D9's target (`L` 2,
+<= 1.15x) holds as a prediction. A single frame alone takes 1,672 at `L` 2: the first chunk's load and
+the last chunk's store are not hidden within one job.
+
+**D7's evidence (computed from the model, not run).** Without the `wf.` complex ops, `conj(x)·r` is 4
+`vsmul` and 2 `vsadd`/`vssub` at `e16` on split `re`/`im` registers (two elements a lane-cycle): 3N/L
+lane-cycles against N/L -- three times the compute -- and each product rounded before the sum, so not
+bit-exact with the golden (that needs the widening ops D3 left out). At `L` 2 the real-only program
+would be compute-bound (~3,100 cycles a frame); it would need `L` 6 to reach the floor.
+
+### CG
+
+`examples/simdcore_cg/cg_program.py`. A register is a row (`VL = N` = 32 columns); a column's dot
+product is `K` = 8 accumulating `wf.vcdotra`; `alpha`, `beta` are vectors by `vdiv`, guarded
+(`vmseq` + `vmerge`) and saturated to 16 bits. `P` lives in the one-copy output window, `R` in
+registers, `X` in DM (`vle` / `vse`, 16 a iteration: 32 registers hold `IN`, `P`, `R` and the
+temporaries, not `X` too). The integer golden (`cg_golden`) follows the program step by step; the
+interpreter matches it bit for bit, closed loop through `S = A P`, for `K` 3-8, `N` 13-64, 1-6
+iterations, `L` 1-8, and a zero column (both guards).
+
+The steady shape (8 x 32, 3 iterations; 248 vector and 71 scalar instructions a job):
+
+| `L` | DSP (+ `L` dividers) | cycles a job | lanes busy | `VecUnit` (2025.1 RTL) |
+|---|---|---|---|---|
+| 2 | 8 | **4,124** | 3,840 | |
+| 4 | 16 | **2,284** | 1,920 | 3,447 at 53 DSP |
+
+D9's targets (`L` 2 <= 5,170; `L` 4 <= 3,447) hold as predictions. At `L` 4, `VL/L` = 8 = `D`: the
+dependence stalls start there (100 cycles); at `L` 8 the short vectors would bind.
+
+**Accuracy (criterion 2):** mean relative residual `‖B − A X‖ / ‖B‖` on the float problem after 3
+iterations, 8 problems (`accuracy()`):
+
+| float CG | this core (16-bit vectors) | `VecUnit` centre build (12-bit) |
+|---|---|---|
+| 0.0266 | **0.0282** | 0.0639 |
+
+A first version with the centre build's scalar precision (`ps` frac 10, `alpha` frac 7, `beta` frac 9)
+gave 0.098 -- worse than the vector unit despite 16-bit vectors; widening the scalars into the room 32
+and 16 bits leave (`ps`, `rz` frac 14, `alpha` frac 11, `beta` frac 13) fixed it. The comparison is not
+like for like (the vector unit's 12-bit centre formats were chosen for its cost); what it shows is that
+integer shifts lose nothing against per-register formats here. **Headroom:** `rz << 11` must fit 31
+bits, so `rz < 64` (`|R|²` summed); `vsll` wraps rather than saturates -- the program's responsibility,
+recorded, not guarded.
+
+### What Stage 3 changed
+
+- ISA: `vdiv` family (a build option, D6), `wf.vcdotra.vv`, `wf.vcmadd.vv` (D1) -- each for CG.
+- Windows: one-copy output windows; the port-shared loader and storer; `on_empty` for closed loops (D10).
+
+**Gate:**
+
+```
+../pysilicon-venv/Scripts/python.exe -m pytest tests/simdcore tests/examples/test_simdcore_toy.py tests/examples/test_simdcore_mf.py tests/examples/test_simdcore_cg.py -q
+195 passed
+```

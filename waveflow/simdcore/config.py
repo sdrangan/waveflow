@@ -36,10 +36,17 @@ class Window:
     n: int
     direction: str  # "in" or "out"
     sew: int = 32
+    port: int = 0  # the loader's (or storer's) stream port; windows on one port share its words
+    #: Physical copies.  2 (ping-pong): after ``wf.qpush`` the registers are the other copy,
+    #: unspecified until written.  1 (output windows only): ``wf.qpush`` keeps the values -- the
+    #: storer reads the one copy -- and a write to the window waits until the storer has drained it.
+    copies: int = 2
 
     def __post_init__(self) -> None:
         if self.direction not in ("in", "out"):
             raise ValueError(f"window {self.name}: direction {self.direction!r} is not 'in' or 'out'")
+        if self.copies not in (1, 2) or (self.copies == 1 and self.direction != "out"):
+            raise ValueError(f"window {self.name}: copies {self.copies} (1 only for an output window)")
         if not (0 <= self.base and self.base + self.n <= 32 and self.n >= 1):
             raise ValueError(f"window {self.name}: registers v{self.base}..v{self.base + self.n - 1} out of range")
 
@@ -62,6 +69,9 @@ class SimdCoreConfig:
     imem_words: int = 4096
     cplx_ops: bool = True
     div: bool = True
+    vdiv: bool = False  # vdiv / vdivu / vrem / vremu: a pipelined divider a lane (records D6)
+    vdiv_latency: int = 36  # its read-to-write distance, in place of ``depth``
+    word_bits: int = 64  # a stream port's word: the loader / storer move one a cycle
     # timing (D2)
     depth: int = 8
     div_cycles: int = 34

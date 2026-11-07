@@ -194,6 +194,10 @@ for _n, _f6 in (("vmulhu", 0b100100), ("vmul", 0b100101), ("vmulh", 0b100111)):
 for _n, _f6 in (("vmadd", 0b101001), ("vnmsub", 0b101011), ("vmacc", 0b101101), ("vnmsac", 0b101111)):
     _opv(f"{_n}.vv", _f6, OPMVV, ("v:vd", "v:vs1", "v:vs2", "vm"), _n)
     _opv(f"{_n}.vx", _f6, OPMVX, ("v:vd", "x:vs1", "v:vs2", "vm"), _n)
+# divide (a build option, SimdCoreConfig.vdiv: CG's alpha and beta across columns; records D6)
+for _n, _f6 in (("vdivu", 0b100000), ("vdiv", 0b100001), ("vremu", 0b100010), ("vrem", 0b100011)):
+    _opv(f"{_n}.vv", _f6, OPMVV, _VV, _n, ext="VDIV")
+    _opv(f"{_n}.vx", _f6, OPMVX, _VX, _n, ext="VDIV")
 
 # reductions
 for _n, _f6 in (("vredsum", 0b000000), ("vredminu", 0b000100), ("vredmin", 0b000101),
@@ -217,9 +221,11 @@ _opv("wf.vcmul.vx", 0, WFVX, _VX, "vcmul", **_WFC)
 _opv("wf.vcmulc.vv", 1, WFVV, _VV, "vcmulc", **_WFC)
 _opv("wf.vcmacc.vv", 2, WFVV, _VV, "vcmacc", **_WFC)
 _opv("wf.vcmacc.vx", 2, WFVX, _VX, "vcmacc", **_WFC)
+_opv("wf.vcmadd.vv", 3, WFVV, _VV, "vcmadd", **_WFC)
 _opv("wf.vcmadd.vx", 3, WFVX, _VX, "vcmadd", **_WFC)
 _opv("wf.vcdotr.vv", 4, WFVV, _VV, "vcdotr", **_WFC)
 _opv("wf.vcconj.v", 5, WFVV, ("v:vd", "v:vs2", "vm"), "vcconj", {"vs1": 0}, **_WFC)
+_opv("wf.vcdotra.vv", 6, WFVV, _VV, "vcdotra", **_WFC)
 
 # wf. queues (custom-1) --------------------------------------------------------------------------------
 _add(Spec("wf.qpop", "I", {"opcode": OP_CUSTOM1, "funct3": 0, "rd": 0, "rs1": 0}, ("u:imm",), "qpop", "WFQ"))
