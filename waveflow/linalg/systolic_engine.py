@@ -401,18 +401,29 @@ class _EngineLoad(_EnginePart):
         fmt, shape = (self.a, stored_shape(op, m, kp)) if self.operand == "A" else (self.b, (kp, n))
         keep = self.operand == "A" and bool(int(job.keep_a))
         held = None
+        period = self.clk.period
         for q in range(count):
+            # As the HLS body: the block first (hls::write_lock), then its words.  The A loader writes
+            # it an element a cycle (the ELEMS loop, II 1 an element; keep_a's repeat copied as
+            # fast), from the later of the block and its first word; the B loader a word a cycle, no
+            # slower than its words come.
+            blk = yield from self.blk.acquire_write()
+            t_from = self.env.now
             if keep and q > 0:                           # keep_a: the one A, repeated
                 re, im = held
             else:
                 words = yield from self.s_in.get()
+                t_from = max(t_from, self.env.now - (len(words) - 1) * period)
                 re, im = from_words(words, shape[0] * shape[1], fmt, int(self.lane_bits),
                                     int(self.word_bits))
                 re, im = re.reshape(shape), im.reshape(shape)
                 if self.operand == "A" and op == MatmulOp.MUL_AH:
                     re, im = re.T.copy(), im.T.copy()       # the block holds X = Aᵀ
                 held = (re, im)
-            blk = yield from self.blk.acquire_write()
+            if self.operand == "A":
+                t_done = t_from + shape[0] * shape[1] * period
+                if t_done > self.env.now:
+                    yield self.timeout(t_done - self.env.now)
             blk.payload = (re, im)
             yield from self.blk.commit_write(blk)
 
@@ -722,6 +733,8 @@ class SystolicEngine(_EnginePart):
             import simpy
 
             self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._a_free = 0.0                    # when the A loader finishes its last block so far
+            self._a_rel: list = []                # when the core released its last X blocks
             self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one command's outputs at a time
 
     # -- the flat pysim (pysim="flat") ----------------------------------------------------------
@@ -754,7 +767,7 @@ class SystolicEngine(_EnginePart):
         from waveflow.utils import fixputils as fx
 
         order = operand_order(c)                  # the bursts in arrival order: (name, output, panel)
-        ops, arrived = {}, {}
+        ops, arrived, first = {}, {}, {}
         t = self._core_free
         for ob in range(nb):
             # this output's operands, read as they arrive (the ones before it are read already), so
@@ -763,6 +776,7 @@ class SystolicEngine(_EnginePart):
                 name, o, pp = order.pop(0)
                 words = yield from self.rx.s_in.get()
                 arrived[name, o, pp] = self.now
+                first[name, o, pp] = self.now - (len(words) - 1) * period
                 fmt, shape = (self.a, stored_shape(op, m, kp)) if name == "A" else (self.b, (kp, n))
                 re, im = from_words(words, shape[0] * shape[1], fmt, lb, w)
                 ops[name, o, pp] = (re.reshape(shape), im.reshape(shape))
@@ -774,11 +788,19 @@ class SystolicEngine(_EnginePart):
                                               form=int(self.form))
                 accr, acci = (pr, pi) if accr is None else (accr + pr, acci + pi)
                 # the panel starts when its blocks are loaded (a cycle behind their last word in)
-                # and the core is free, and takes the core's calibrated phase
+                # and the core is free, and takes the core's calibrated phase.  The A loader writes a
+                # block an element a cycle (the ELEMS loop), from its first word -- or, keep_a's
+                # repeat, at once -- once it is done with the block before: it can bind.
+                # It writes into one of sob_depth blocks, so it waits for the core to free one.
                 last = pp == npan - 1
-                ready = max(arrived[akey], arrived["B", ob, pp]) + period
+                a_from = self._a_free if keep and (ob, pp) != (0, 0) else first[akey]
+                sd = int(self.sob_depth)
+                slot = self._a_rel[-sd] if len(self._a_rel) >= sd else 0.0
+                self._a_free = max(a_from, self._a_free, slot) + m * kp * period
+                ready = max(arrived[akey] + period, self._a_free + period, arrived["B", ob, pp] + period)
                 steps = self.core.steps(m, kp, n, last, last and ob == nb - 1)
                 t = max(t, ready) + self.core.panel.predict(steps=steps)["panel"] * period
+                self._a_rel = (self._a_rel + [t])[-sd:]
             cr, ci = fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c)
             resp = EngineResp()
             resp.tx_id, resp.index, resp.m, resp.n = int(c.tx_id), ob, m, n

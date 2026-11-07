@@ -145,11 +145,11 @@ A design is legal only when all of these hold:
 
 | function | cost |
 |---|---|
-| `golden(params, workload)` | to be measured per call |
-| `pysim(params, workload)` | to be measured per call |
-| `hls_estimate(points)` | to be measured, for each HLS kernel not compiled before at the same sizes |
-| `synth(points)` | to be measured, for each part not synthesized before at the same sizes |
-| `rtlsim(points, workload)` | to be measured for a design whose RTL is new (plus the synthesis of its new parts); to be measured for a new workload, or a new value of a parameter that rebuilds no part, on RTL already elaborated |
+| `golden(params, workload)` | about 4 min per call |
+| `pysim(params, workload)` | about 1 s per call |
+| `hls_estimate(points)` | about 56 s, for each HLS kernel not compiled before at the same sizes |
+| `synth(points)` | about 6 min, for each part not synthesized before at the same sizes |
+| `rtlsim(points, workload)` | about 15 min for a design whose RTL is new (plus the synthesis of its new parts); about 12 min for a new workload, or a new value of a parameter that rebuilds no part, on RTL already elaborated |
 
 Up to 2 `hls_estimate`, `synth` and `rtlsim` jobs run at once; more wait their turn.
 

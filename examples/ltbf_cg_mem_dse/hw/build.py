@@ -324,6 +324,48 @@ def rtl_against_pysim(work: Path, tolerance: float = 0.05) -> dict:
     return {"match": all(eps.values()), "endpoints": eps, "pysim_cycles": t_py, "rtl_cycles": t_rtl}
 
 
+def file_mem_turnaround(vcd, scope: str, bundle: str, rate: int, spans=(1 << 16, 1 << 17)) -> dict:
+    """Shared Mem's turnaround (``plans/dse_cg.md`` step 1f), from a traced run of a device on it: the
+    back-to-back read bursts of the ``m_axi`` *bundle* of the kernel at *scope* in *vcd* (the
+    systolic feeder's, which requests a tile's panels ahead), fitted against each memory's stored
+    timing and filed beside it in ``calib/`` -- for Shared Mem at *rate* and each bank span in
+    *spans* (the leaf is the same RTL whatever its span).  Returns ``{span: fit}``.  The writers never
+    meet back to back here (they wait on their data), so writes keep none."""
+    from vcdvcd import VCDVCD
+
+    from examples.ltbf_cg_mem_dse.hw import system as sy
+    from waveflow.calib.mem_timing import (
+        back_to_back_rows,
+        fit_turnaround,
+        mem_turnaround_record,
+        stored_mem_timing,
+    )
+    from waveflow.calib.record_store import ModuleStore
+    from waveflow.hw.clock import Clock
+    from waveflow.simulation.simulation import Simulation
+    from waveflow.utils.vcd import VcdParser
+
+    parser = VcdParser(VCDVCD(str(vcd)))
+    clock = f"{scope}.ap_clk"
+    parser.add_signal(clock)
+    sigs, _bits = parser.add_aximm_signals(prefix=f"{scope}.{bundle}_", dir="read")
+    _w, reads, period = parser.extract_aximm_bursts(clock, sigs)
+    rows = back_to_back_rows([], reads, period)
+    store, out = ModuleStore(sy.CALIB_DIR), {}
+    for span in spans:
+        mem = sy.shared_mem(Simulation(), span, Clock(freq=sy.F_HOST), rate=rate)
+        timing = stored_mem_timing(store, mem)
+        if timing is None:
+            raise RuntimeError(f"no stored timing for Shared Mem of {span} words at rate {rate}: "
+                               "measure it first (add_memcal)")
+        fit = fit_turnaround(rows, timing.payload)
+        rec, ident = mem_turnaround_record(mem, fit, workload=f"{Path(vcd).name}:{bundle}",
+                                           period_ns=1e9 / sy.F_HOST, tool="vitis 2025.1")
+        store.append(rec, identity=ident)
+        out[span] = fit
+    return out
+
+
 def memcal_dag(spans=MEM_SPANS, work_dir=WORK_DIR) -> BuildDag:
     """Shared Mem's timing at every span the DSE's systems use (:func:`add_memcal`); the memory is
     framework RTL, so no codegen."""

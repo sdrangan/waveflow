@@ -10,12 +10,12 @@ to expect.
 #: Tool-seconds: ``golden`` and ``pysim`` per call, ``hls_estimate`` per kernel, ``synth`` per part,
 #: ``rtlsim_build`` for a design whose RTL is new, ``rtlsim_run`` for a new run on elaborated RTL.
 COSTS: dict[str, float | None] = {
-    "golden": None,
-    "pysim": None,
-    "hls_estimate": None,
-    "synth": None,
-    "rtlsim_build": None,
-    "rtlsim_run": None,
+    "golden": 215.8,
+    "pysim": 1.1,
+    "hls_estimate": 55.7,
+    "synth": 346.2,
+    "rtlsim_build": 902.4,
+    "rtlsim_run": 744.2,
 }
 #: Where they were measured.
-MEASURED = None
+MEASURED = "2026-11-07, Vitis HLS / Vivado 2025.1, the lab machine"

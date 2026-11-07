@@ -429,6 +429,7 @@ class SystolicEngineMem(_MemPart):
             for comp in (self.seq, self.feeder, self.engine, self.writer, self.wstream):
                 comp.make_passive()
             self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._a_free = 0.0                    # when the A loader finishes its last block so far
             self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one job's writes at a time
 
     # -- the tile-level pysim (pysim="tiles") -----------------------------------------------------
@@ -506,6 +507,13 @@ class SystolicEngineMem(_MemPart):
                 rate = (self.now - t_rd) / int(ends[-1])
                 for p in range(P):
                     ready = t_rd + (int(ends[p]) * rate) + self.TILE_READY_CYCLES * period
+                    # The A loader writes its block an element a cycle (systolic_engine_load_a_task's
+                    # ELEMS loop), from A(p)'s first word once it is done with A(p-1): when the read
+                    # outruns it, it binds the engine (plans/dse_cg.md step 1f: 128 cycles a panel of
+                    # 16 x 8 at RTL, against a read of 108).
+                    a_start = max(t_rd + int(ends[p] - wb - wa) * rate, self._a_free)
+                    self._a_free = a_start + Mm * Km * period
+                    ready = max(ready, self._a_free + self.TILE_READY_CYCLES * period)
                     last = p == P - 1
                     steps = core.steps(Mm, Km, Nm, last, last)
                     t0 = max(t, ready)

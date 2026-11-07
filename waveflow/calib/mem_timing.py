@@ -105,6 +105,26 @@ def stored_mem_timing(store, mem, *, workload: str | None = None):
 __all__ = ["MEM_TIMING_KIND", "fit_mem_timing", "mem_timing_record", "stored_mem_timing"]
 
 
+def back_to_back_rows(write_bursts, read_bursts, clk_period: float) -> list[tuple]:
+    """``[(kind, beats, period)]`` of one master's back-to-back bursts, from
+    :meth:`~waveflow.utils.vcd.VcdParser.extract_aximm_bursts`'s output for its ``m_axi`` bundle: each
+    burst whose successor's address was taken before its own last beat (an HLS master requests ahead),
+    with the cycles from its first data beat to the successor's -- what :func:`fit_turnaround` reads."""
+
+    def first_beat(b: dict) -> float:
+        kinds = list(b["beat_type"])
+        return float(b["data_tstart"]) + kinds.index(0) * clk_period
+
+    out = []
+    for kind, bursts in (("write", write_bursts), ("read", read_bursts)):
+        done = [b for b in bursts if b.get("data_tstart") is not None and 0 in list(b["beat_type"])]
+        for b, nxt in zip(done, done[1:]):
+            if float(nxt["tstart"]) <= float(b["data_tend"]):
+                out.append((kind, int(len(b["data"])),
+                            int(round((first_beat(nxt) - first_beat(b)) / clk_period))))
+    return out
+
+
 def fit_turnaround(rows, timing: dict) -> dict:
     """The memory's turnaround per direction, in cycles: from back-to-back transactions at RTL, *rows*
     ``[(kind, nwords, period)]`` (``kind`` ``"read"`` or ``"write"``; *period* the cycles from one
