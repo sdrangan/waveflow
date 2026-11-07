@@ -63,37 +63,37 @@ The modules inside each part, with their documentation and source:
 
 | module | class | what | source |
 |---|---|---|---|
-| `sys` | `SysWrap` | The systolic array's device: ``SystolicEngineMem`` with its Job FIFO, Ctrl and done record. | [sys_wrap.py](../ltbf_cg_mem_dse/hw/sys_wrap.py) |
+| `sys` | `SysWrap` | The systolic array's device: `SystolicEngineMem` with its Job FIFO, Ctrl and done record. | [sys_wrap.py](../ltbf_cg_mem_dse/hw/sys_wrap.py) |
 | &nbsp;&nbsp;`sys_eng` | `SystolicEngineMem` | The engine between an in-band memory reader and writer (see the module doc). | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_seq` | `EngineSeq` | The output-stationary loop: per ``C`` tile, the engine command and its panels' reads. | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_seq` | `EngineSeq` | The output-stationary loop: per `C` tile, the engine command and its panels' reads. | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
 | &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_feeder` | `EngineFeeder` | The read port's owner: per tile, the engine's command and its panels, in one stream. | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine` | `SystolicEngine` | The engine: commands and operands in on ``s_in``, outputs on ``s_out``, a status per command on ``m_status`` (see the module doc). | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_rx` | `EngineRx` | Validates each command, routes the job, and forwards the operand bursts -- ``A`` to one loader, ``B`` to the other.  A refused command is answered and is fatal:... | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_load_a` | `EngineLoadA` | Loads ``A`` (or ``Aᵀ`` for ``MUL_AH``) into the ``X`` block, a bank per row and word lane. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_load_b` | `EngineLoadB` | Loads ``B`` into its block, a bank per array column. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_core` | `EngineCore` | The streaming systolic array (``systolic_engine_core_task.h``): per output, per panel, it sweeps the ``X`` and ``B`` blocks in place, accumulating exactly; the ... | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_collect` | `EngineCollect` | Per output, ``C``'s lane groups off ``c_in`` in the core's drain order, each into its place in a ``C`` block for the store. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_store` | `EngineStore` | Per output, its ``Resp`` and ``C``; then the command's ``Status``. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_writer` | `EngineWriter` | Per tile, the engine's ``C`` into a memory write; the job's ``EngineDone`` on its last. | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole ``m_axi`` **write** owner.  An :class:`MWCmd` queue + an ``s_in`` word stream -> a pure-write, word-aligned burst in... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
-| &nbsp;&nbsp;`sys_tap` | `SysTap` | ``EngineDone`` in, a ``Resp`` record and the Ctrl status out: one firing a job. | [sys_wrap.py](../ltbf_cg_mem_dse/hw/sys_wrap.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine` | `SystolicEngine` | The engine: commands and operands in on `s_in`, outputs on `s_out`, a status per command on `m_status` (see the module doc). | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_rx` | `EngineRx` | Validates each command, routes the job, and forwards the operand bursts -- `A` to one loader, `B` to the other.  A refused command is answered and is fatal: the... | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_load_a` | `EngineLoadA` | Loads `A` (or `Aᵀ` for `MUL_AH`) into the `X` block, a bank per row and word lane. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_load_b` | `EngineLoadB` | Loads `B` into its block, a bank per array column. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_core` | `EngineCore` | The streaming systolic array (`systolic_engine_core_task.h`): per output, per panel, it sweeps the `X` and `B` blocks in place, accumulating exactly; the last p... | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_collect` | `EngineCollect` | Per output, `C`'s lane groups off `c_in` in the core's drain order, each into its place in a `C` block for the store. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_engine_store` | `EngineStore` | Per output, its `Resp` and `C`; then the command's `Status`. | [systolic_engine.py](../../waveflow/linalg/systolic_engine.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_writer` | `EngineWriter` | Per tile, the engine's `C` into a memory write; the job's `EngineDone` on its last. | [systolic_engine_mem.py](../../waveflow/linalg/systolic_engine_mem.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`sys_eng_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole `m_axi` **write** owner.  An :class:`MWCmd` queue + an `s_in` word stream -> a pure-write, word-aligned burst into... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;`sys_tap` | `SysTap` | `EngineDone` in, a `Resp` record and the Ctrl status out: one firing a job. | [sys_wrap.py](../ltbf_cg_mem_dse/hw/sys_wrap.py) |
 | &nbsp;&nbsp;`sys_ctrl` | `SysCtrl` | The Ctrl configuration: one firing a write. | [sys_wrap.py](../ltbf_cg_mem_dse/hw/sys_wrap.py) |
 | `vec` | `VecWrap` | The vector unit's device (spec §5.4). | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
-| &nbsp;&nbsp;`vec_vu` | `VecUnit` | The vector unit: programs in on ``s_lprog``, ``s_xprog``, ``s_sprog``; matrices in on ``s_in<p>`` and out on ``s_out<p>``; a status per job on ``m_status`` (see... | [unit.py](../../waveflow/vecunit/unit.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`vec_vu_load` | `VecLoad` | The load task: lands each ``wf.ld``'s burst as the next block of its input queue. | [unit.py](../../waveflow/vecunit/unit.py) |
+| &nbsp;&nbsp;`vec_vu` | `VecUnit` | The vector unit: programs in on `s_lprog`, `s_xprog`, `s_sprog`; matrices in on `s_in<p>` and out on `s_out<p>`; a status per job on `m_status` (see the module ... | [unit.py](../../waveflow/vecunit/unit.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`vec_vu_load` | `VecLoad` | The load task: lands each `wf.ld`'s burst as the next block of its input queue. | [unit.py](../../waveflow/vecunit/unit.py) |
 | &nbsp;&nbsp;&nbsp;&nbsp;`vec_vu_exec` | `VecExec` | The execute task: one firing is one job (see the module doc). | [unit.py](../../waveflow/vecunit/unit.py) |
-| &nbsp;&nbsp;&nbsp;&nbsp;`vec_vu_store` | `VecStore` | The store task: each ``wf.st`` as a ``VecResp`` and its matrix on an output port. | [unit.py](../../waveflow/vecunit/unit.py) |
-| &nbsp;&nbsp;`vec_dec` | `VecDecoder` | A ``VecMemJob`` in; read commands to the three program readers and the data reader, the store plan to the writer.  One firing a job. | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
-| &nbsp;&nbsp;`vec_rl` | `MemRStream` | The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
-| &nbsp;&nbsp;`vec_rx` | `MemRStream` | The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
-| &nbsp;&nbsp;`vec_rs` | `MemRStream` | The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
-| &nbsp;&nbsp;`vec_rd` | `MemRStream` | The sole ``m_axi`` **read** owner: an :class:`MRCmd` queue -> word-granular ``m_out`` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
-| &nbsp;&nbsp;`vec_wr` | `VecWriter` | Each ``VecResp`` + data to an in-band memory write at its store stream's next address; the job's last store forwards the job's done record (after its ``VecStatu... | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
-| &nbsp;&nbsp;`vec_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole ``m_axi`` **write** owner.  An :class:`MWCmd` queue + an ``s_in`` word stream -> a pure-write, word-aligned burst in... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`vec_vu_store` | `VecStore` | The store task: each `wf.st` as a `VecResp` and its matrix on an output port. | [unit.py](../../waveflow/vecunit/unit.py) |
+| &nbsp;&nbsp;`vec_dec` | `VecDecoder` | A `VecMemJob` in; read commands to the three program readers and the data reader, the store plan to the writer.  One firing a job. | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
+| &nbsp;&nbsp;`vec_rl` | `MemRStream` | The sole `m_axi` **read** owner: an :class:`MRCmd` queue -> word-granular `m_out` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;`vec_rx` | `MemRStream` | The sole `m_axi` **read** owner: an :class:`MRCmd` queue -> word-granular `m_out` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;`vec_rs` | `MemRStream` | The sole `m_axi` **read** owner: an :class:`MRCmd` queue -> word-granular `m_out` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;`vec_rd` | `MemRStream` | The sole `m_axi` **read** owner: an :class:`MRCmd` queue -> word-granular `m_out` burst. | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| &nbsp;&nbsp;`vec_wr` | `VecWriter` | Each `VecResp` + data to an in-band memory write at its store stream's next address; the job's last store forwards the job's done record (after its `VecStatus`)... | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
+| &nbsp;&nbsp;`vec_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole `m_axi` **write** owner.  An :class:`MWCmd` queue + an `s_in` word stream -> a pure-write, word-aligned burst into... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
 | &nbsp;&nbsp;`vec_ctrl` | `VecCtrl` | The vector unit's Ctrl: configuration in, status after every job. | [vec_wrap.py](../ltbf_cg_mem_dse/hw/vec_wrap.py) |
-| `ing` | `IngestDevQ` | The Ingest DMA with its symbol input as a memory-mapped queue (``qsym``): the RTL gates' form, where the software host plays the O-RU, an antenna's burst a pack... | [ingest.py](../ltbf_cg_mem_dse/hw/ingest.py) |
-| &nbsp;&nbsp;`ing_dma` | `IngestDma` | Antenna-by-antenna symbols in; chunk panels to memory, a ``Resp`` a chunk, credit flow control. | [ingest.py](../ltbf_cg_mem_dse/hw/ingest.py) |
-| &nbsp;&nbsp;`ing_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole ``m_axi`` **write** owner.  An :class:`MWCmd` queue + an ``s_in`` word stream -> a pure-write, word-aligned burst in... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
+| `ing` | `IngestDevQ` | The Ingest DMA with its symbol input as a memory-mapped queue (`qsym`): the RTL gates' form, where the software host plays the O-RU, an antenna's burst a packet... | [ingest.py](../ltbf_cg_mem_dse/hw/ingest.py) |
+| &nbsp;&nbsp;`ing_dma` | `IngestDma` | Antenna-by-antenna symbols in; chunk panels to memory, a `Resp` a chunk, credit flow control. | [ingest.py](../ltbf_cg_mem_dse/hw/ingest.py) |
+| &nbsp;&nbsp;`ing_memw` | `MemWStream` | The mirror of :class:`MemRStream`: the sole `m_axi` **write** owner.  An :class:`MWCmd` queue + an `s_in` word stream -> a pure-write, word-aligned burst into... | [mem_stream.py](../../waveflow/hw/mem_stream.py) |
 | `hub` | `RespHub` | Round-robin merge of the sources' done records into the CPU's response queue. | [resp_hub.py](../ltbf_cg_mem_dse/hw/resp_hub.py) |
 
 ## Parameters

@@ -113,7 +113,7 @@ def test_defaults_fill_and_legal(adaptor):
 def test_the_architecture_is_the_same_at_every_extreme(adaptor):
     arch = adaptor.architecture()                                  # raises if a parameter changes it
     assert {n["name"] for n in arch["nodes"]} == {"sys", "vec", "hub", "xbar", "ing", "mem"}
-    assert adaptor.architecture_at({"banks": 2})["sizes"]["mem_banks"] == 2
+    assert adaptor.architecture_at({"banks": 2})["sizes"]["memories"] == 2
 
 
 def test_rebuilds_are_what_the_grid_says(adaptor):

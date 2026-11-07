@@ -7,9 +7,10 @@ summary: "How an AI agent is given a method, for readers new to agents. What the
 ---
 # Skills
 
-**Under construction.** The skill described here is
-[`examples/dse_cg/skill/dse/SKILL.md`](../../../examples/dse_cg/skill/dse/SKILL.md); the tooling around
-it is not written yet.
+The skill described here is
+[`examples/dse_cg/skill/dse/SKILL.md`](../../../examples/dse_cg/skill/dse/SKILL.md). Installing it in a
+project and running it against the live service work today; the clean sandbox an experiment run uses
+is a later step of [`plans/dse_cg.md`](../../../plans/dse_cg.md).
 
 This page is for readers who have not worked with AI agents. It explains how an agent is given a
 method to follow, and in particular what happens to a line like
@@ -118,7 +119,7 @@ replaces `$ARGUMENTS` with them, much as a shell replaces `$1` in a script.
 Suppose you type:
 
 ```text
-/dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.
+/dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.
 ```
 
 The skill's name is `dse`. The arguments are everything after it:
@@ -130,7 +131,7 @@ Base directory for this skill: /home/me/project/.claude/skills/dse
 
 # Design-space exploration
 
-Your task: **examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_LT <= 10 ms.**
+Your task: **examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.**
 
 The first argument is the path to the design's `DSE.md`; the rest is the objective. Read `DSE.md`
 first. ...

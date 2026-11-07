@@ -8,8 +8,9 @@ the plan's decisions of 2026-11-06 fix:
   **scheduler** is software on the A53, priced by the calibrated platform in pysim and run by the C++
   host at RTL;
 * **modelled** (never synthesized): Shared Mem -- in pysim a model with ``mem_rate`` and ``banks``,
-  at RTL a C++ memory behind the crossbar, its block RAM by formula -- and the Ingest DMA.  Both are
-  options of the example whose defaults keep its behaviour (plan step 1a);
+  at RTL the framework's behavioural memory inside the DUT (one leaf per ``mem_rate``), simulated,
+  its block RAM by formula -- and the Ingest DMA (its HLS RTL simulated, not counted).  The memory
+  options are options of the example whose defaults keep its behaviour (plan step 1a);
 * **formats per design**: profiled once over drops 1-10, ``t`` up to 10 and both target sets, so
   ``t`` and ``target`` are workload parameters on one build and ``form`` is a design parameter.
 
@@ -18,8 +19,7 @@ the resizing rule of the plan's *The space* edits :data:`GRID` and nothing else.
 with its CG chains sequenced on chip by descriptor passing, is a second adaptor written when that
 system exists (plan step 8).
 
-Skeleton: :meth:`LtbfCgMemAdaptor.space` is written, because it only restates :data:`GRID`; the rest
-names the plan step that writes it.
+Written through plan Phase 3 (2026-11-07); the grid's measurement and replay are steps 4 and 5.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from examples.dse_cg.adaptor import DseAdaptor
 
@@ -164,7 +164,10 @@ class LtbfCgMemAdaptor(DseAdaptor):
     name = "ltbf_cg_mem"
     platform = "xczu48dr_250mhz_vitis2025_1"   # created by plans/calib_2025_1.md Stage 2
     #: The built nodes' HLS tops (``hls_estimate``'s kernels), for ``DSE.md``.
-    BUILT_KERNELS = {n: t for n, t in NODE_TOPS.items() if n in BUILT}
+    BUILT_KERNELS: ClassVar[dict[str, tuple[str, ...]]] = {n: t for n, t in NODE_TOPS.items() if n in BUILT}
+    BUILT = BUILT
+    MODELLED = MODELLED
+    TOP = "ltbf_top"
 
     def space(self) -> dict:
         return {
@@ -410,79 +413,10 @@ class LtbfCgMemAdaptor(DseAdaptor):
                              f"target={w['target']}".encode()).hexdigest()
         return {"build": build[:16], "run": run[:16]}
 
-    def rebuilds(self) -> dict[str, list[str]]:
-        base = self.identities({})
-        out = {}
-        for p in self.space()["parameters"]:
-            if p["kind"] != "design":
-                continue
-            changed: set[str] = set()
-            for v in p["values"]:
-                if v == p["default"]:
-                    continue
-                point = {p["name"]: v}
-                if self.legal(point) is not None:   # R alone can leave the shapes: move C with it
-                    point = self._legal_with(point)
-                ids = self.identities(point)
-                changed |= {n for n in base if ids[n] != base[n]}
-            out[p["name"]] = sorted(changed)
-        return out
-
-    @staticmethod
-    def _node(name: str) -> str:
-        """A sub-top's or kernel instance's node: Shared Mem's banks are one node, ``mem``."""
-        n = name.removeprefix("u_").removesuffix("_sub")
+    def node_of(self, name: str) -> str:
+        """Shared Mem's banks (``mem``, ``mem1``) are one node, ``mem``."""
+        n = super().node_of(name)
         return "mem" if n.startswith("mem") else n
-
-    def architecture_at(self, params: dict) -> dict:
-        """The DUT at *params*, as :meth:`architecture` describes it, with its ``sizes``: Shared Mem's
-        banks and the crossbar's ports, the sizes inside the nodes that a parameter may change."""
-        spec = self.spec(params)
-        nodes: dict = {}
-        for sub in spec.subs:
-            n = self._node(sub.name)
-            nodes.setdefault(n, {"name": n, "kind": sub.kind, "built": n in BUILT,
-                                 "description": BUILT.get(n) or MODELLED.get(n, "")})
-        nodes["xbar"] = {"name": "xbar", "kind": "crossbar", "built": True, "description": BUILT["xbar"]}
-        by_prefix = {prefix: (inst, port) for inst, port, prefix in spec.maxi_si}
-        masters = sorted({(self._node(by_prefix[p][0]), by_prefix[p][1]) if p in by_prefix
-                          else ("host", "bus (outside the DUT)") for p, _outside in spec.si})
-        slaves = sorted({(self._node(m.group), "memory" if m.kind == "memory"
-                          else ", ".join(v.name for v in m.views)) for m in spec.mi})
-        ends: dict = {}
-        for inst, port, net in spec.axis_nets:
-            ends.setdefault(net, []).append((self._node(inst), port))
-        # each stream's ends, its producer (an ``m_`` port) first
-        streams = sorted((net, tuple(sorted(e, key=lambda x: (not x[1].startswith("m_"), x))))
-                         for net, e in ends.items() if len({n for n, _p in e}) > 1)
-        irqs = sorted((self._node(view.split("_")[0]), view) for _port, view in spec.irqs)
-        hw = spec.xbar.hw_params()
-        return {"nodes": [nodes[n] for n in sorted(nodes)],
-                "interconnects": {"crossbar_masters": masters, "crossbar_slaves": slaves,
-                                  "streams": streams, "interrupts": irqs,
-                                  "boundary": ["host bus master", "interrupt lines to the host"]},
-                "sizes": {"mem_banks": sum(1 for sub in spec.subs if sub.kind == "memory"),
-                          "xbar_si": hw["n_si"], "xbar_mi": hw["n_mi"]}}
-
-    def architecture(self) -> dict:
-        """The DUT's nodes and interconnects (Shared Mem's banks one node, the crossbar's ports a
-        size), the same at the defaults and at every design parameter's extreme values -- checked,
-        or the adaptor is refused (:meth:`DseAdaptor.architecture`)."""
-        if getattr(self, "_arch", None) is not None:
-            return self._arch
-        ref = self.architecture_at({})
-        shape = {k: v for k, v in ref.items() if k != "sizes"}
-        for p in self.space()["parameters"]:
-            if p["kind"] != "design":
-                continue
-            for v in (min(p["values"], key=str), max(p["values"], key=str)):
-                point = {p["name"]: v}
-                point = point if self.legal(point) is None else self._legal_with(point)
-                got = self.architecture_at(point)
-                if {k: x for k, x in got.items() if k != "sizes"} != shape:
-                    raise ValueError(f"{p['name']} = {v!r} changes the architecture, not a size in it")
-        self._arch = shape
-        return shape
 
     def node_kernels(self, node: str) -> tuple[str, ...]:
         """The HLS tops a built node's synthesis needs csynth'd first (none for the crossbar)."""
@@ -496,13 +430,6 @@ class LtbfCgMemAdaptor(DseAdaptor):
 
         S = sy.LtbfSystem(sy.inputs(self.sys_params(params)))
         return {"bram": self.fill(params)["banks"] * D.shared_mem_bram18(S.bank_span)}
-
-    def _legal_with(self, point: dict) -> dict:
-        """*point* completed to a legal one: the first shape with its ``R`` (or ``C``)."""
-        for r, c in SHAPES:
-            if point.get("R", r) == r and point.get("C", c) == c:
-                return {**point, "R": r, "C": c}
-        raise ValueError(f"no legal shape for {point}")
 
     # -- the tools at a point (plan steps 1c-1e) ------------------------------------------------
 
@@ -538,13 +465,6 @@ class LtbfCgMemAdaptor(DseAdaptor):
         if bad:
             raise RuntimeError(f"{through.format(tag=tag)} at {self.fill(params)}: {bad}")
         return res
-
-    def spec(self, params: dict) -> Any:
-        """The system top as synthesized (``SystemTopSpec``), its top named ``ltbf_top`` whatever the
-        point, so a part's Verilog is the same wherever the hardware is."""
-        from waveflow.build.system_top import SystemTopSpec
-
-        return SystemTopSpec.from_system(self.build_system(params, rtl=True), top="ltbf_top")
 
     def synth(self, node: str, params: dict) -> dict:
         """Node *node* (one of :data:`BUILT`) synthesized out of context on the ``xczu48dr`` at 4 ns:

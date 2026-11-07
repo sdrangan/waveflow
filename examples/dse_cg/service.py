@@ -40,7 +40,8 @@ Every call, its charge and its result are appended to the ledger file, which ``s
 run starts empty, or it would inherit earlier runs' measurements for free); as long as the project
 for a user (a synthesis done yesterday is still in it today).
 
-The live backend is written (plan Phase 3a); :class:`ReplayBackend` is plan step 5.
+The live backend and its command line (:func:`main`) are written (plan Phase 3); :class:`ReplayBackend` is
+plan step 5.
 """
 
 from __future__ import annotations
@@ -476,3 +477,38 @@ def serve(service: Service, address: str) -> None:
             pass
 
     ThreadingHTTPServer((host, int(port)), Handler).serve_forever()
+
+
+def main(argv: list[str] | None = None) -> None:
+    """``python -m examples.dse_cg.service --live``: the service for a user, on this machine's tools.
+
+    The LTBF design (``ltbf_cg_mem.LtbfCgMemAdaptor``), the Waveflow arm unless ``--arm`` says
+    otherwise, no objective (the prompt has it), a budget only with ``--budget-h``.  Each session
+    starts a new account, appended to ``--ledger``; the tools' own caches (csynth, the parts' netlists,
+    the RTL builds) persist across sessions, so a part synthesized yesterday runs no tool today (its
+    recorded time is still what the new account charges).  Prints the address to export as
+    ``DSE_SERVICE``, then serves until interrupted."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m examples.dse_cg.service", description=main.__doc__)
+    ap.add_argument("--live", action="store_true", help="run the tools on this machine")
+    ap.add_argument("--arm", choices=ARMS, default="waveflow")
+    ap.add_argument("--address", default="127.0.0.1:8765", help="host:port to serve on")
+    ap.add_argument("--workers", type=int, default=2, help="tool slots (the lab machine's two heavy jobs)")
+    ap.add_argument("--budget-h", type=float, default=None, help="a budget of tool time, in hours")
+    ap.add_argument("--ledger", type=Path, default=Path("dse_ledger.jsonl"))
+    args = ap.parse_args(argv)
+    if not args.live:
+        ap.error("only --live is written: the replay backend is plans/dse_cg.md step 5")
+    from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
+
+    design = LtbfCgMemAdaptor()
+    budget = None if args.budget_h is None else args.budget_h * 3600.0
+    service = Service(design, args.arm, None, budget, args.workers, LiveBackend(design), args.ledger)
+    print(f"DSE service: {design.name}, the {args.arm} arm, live; ledger {args.ledger}\n"
+          f"export DSE_SERVICE={args.address}", flush=True)
+    serve(service, args.address)
+
+
+if __name__ == "__main__":
+    main()

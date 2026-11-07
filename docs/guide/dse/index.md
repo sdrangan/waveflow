@@ -4,15 +4,16 @@ parent: Guide
 nav_order: 12.8
 has_children: true
 audience: python
-summary: "Design-space exploration by an AI agent: given a fixed architecture, choose its parameters to meet an objective within a budget of tool time, using an untimed bit-exact simulation, synthesis, RTL simulation and, in Waveflow, pysim. What DSE is, why this section covers the parametric kind, and the running example (the LTBF receiver's shared-memory system, examples/ltbf_cg_mem_dse, explored in examples/dse_cg). Under construction."
+summary: "Design-space exploration by an AI agent: given a fixed architecture, choose its parameters to meet an objective within a budget of tool time, using an untimed bit-exact simulation, synthesis, RTL simulation and, in Waveflow, pysim. What DSE is, why this section covers the parametric kind, and the running example (the LTBF receiver's shared-memory system, examples/ltbf_cg_mem_dse, explored in examples/dse_cg)."
 ---
 
 # Agentic DSE
 
-**Under construction.** This section is being written alongside the experiment it describes
+This section is written alongside the experiment it describes
 ([`examples/dse_cg`](../../../examples/dse_cg/README.md), plan
-[`plans/dse_cg.md`](../../../plans/dse_cg.md)). The interfaces are settled; most of the code is not
-written yet.
+[`plans/dse_cg.md`](../../../plans/dse_cg.md)). The flow on the real tools -- the design's adaptor,
+the service on the live backend, `dselib` and the generated `DSE.md` -- is written; the measured grid,
+replay and the experiment's runs come next.
 
 ## What design-space exploration is
 

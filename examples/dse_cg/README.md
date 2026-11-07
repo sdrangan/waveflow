@@ -1,8 +1,10 @@
 # dse_cg: does pysim speed up design-space exploration?
 
-**Status: skeleton.** The interfaces are settled; the bodies raise `NotImplementedError` naming the
-phase of [`plans/dse_cg.md`](../../plans/dse_cg.md) that writes them. The plan says *why*; this
-directory says *what*.
+**Status: written through Phase 3** of [`plans/dse_cg.md`](../../plans/dse_cg.md) (2026-11-07): the
+LTBF design's adaptor, the service on the live backend, `dselib` and the generated `DSE.md`, so the
+user flow below runs on the real tools. The measured grid, replay, the sandbox, the scripted
+policies and the agents' runs (steps 4–7) raise `NotImplementedError` naming their step. The plan
+says *why*; this directory says *what*.
 
 ## The experiment in one paragraph
 
@@ -10,8 +12,8 @@ An agent explores the design space of the LTBF receiver on a shared-memory accel
 ([`examples/ltbf_cg_mem_dse`](../ltbf_cg_mem_dse/hw/system.py)) to meet an objective (for example,
 the fewest LUTs at a given accuracy and long-term update time) within a budget of tool time. The
 built hardware is the systolic engine, the vector unit, the AXI crossbar and the Resp hub, with the
-scheduler as software on the A53; Shared Mem and the Ingest DMA are modelled, and Shared Mem's speed
-and banks are axes of the space, its bottleneck. It runs twice, in two **arms**
+scheduler as software on the A53; Shared Mem and the Ingest DMA are modelled (simulated, never
+synthesized), and Shared Mem's speed and banks are axes of the space, its bottleneck. It runs twice, in two **arms**
 that are identical except for one function. The **traditional** arm has what a systems team and a
 hardware team have: an untimed bit-exact simulation (`golden`), synthesis (`synth`) and RTL
 simulation (`rtlsim`). The **Waveflow** arm also has `pysim`: bit-exact, with calibrated cycles,
@@ -40,7 +42,7 @@ In your own project, with your own `CLAUDE.md` and session:
    /dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.
    ```
 
-(Steps 1–3 are not written yet: plan Phase 3.)
+Step 3 runs the tools on this machine (Vitis HLS and Vivado 2025.1, XSI); `--budget-h` sets a budget.
 
 ## A run is that flow in a clean sandbox
 
@@ -70,10 +72,12 @@ always has the answer, and each objective's optimum is known exactly.
 | [`skill/dse/SKILL.md`](skill/dse/SKILL.md) | the agent | the skill: the method, with `arm:waveflow` blocks |
 | [`skill/dse/dselib/__init__.py`](skill/dse/dselib/__init__.py) | the agent | the library; its docstrings are the API reference, with an example result for each function |
 | [`DSE.md.tmpl`](DSE.md.tmpl) | the agent | one design's context, with `{{blocks}}` the generator fills |
-| [`adaptor.py`](adaptor.py) | the harness | `DseAdaptor`, the base class a design subclasses; `defaults`, `fill` and `legal` are written |
-| [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1); its space, `GRID`, is written |
-| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user or a sandbox; `select_arm`, `render` and `prompt` are written |
-| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; replay and live backends |
+| [`adaptor.py`](adaptor.py) | the harness | `DseAdaptor`, the base class a design subclasses: legality, the architecture and its check, `rebuilds` |
+| [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1): its space `GRID`, identities, and the tools at a point |
+| [`points.py`](points.py) | the harness | plan step 2c: six points through every method, timed; writes `costs.py` |
+| [`costs.py`](costs.py) | the harness | each evaluation's measured tool time, quoted in `DSE.md` |
+| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user (`write_context`, `install_skill`); the sandbox is step 5 |
+| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; the live backend and its command line (replay is step 5) |
 | [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model |
 | [`policies.py`](policies.py) | the harness | the scripted explorers, one per arm: the agent-free comparison |
 | [`run_agent.py`](run_agent.py) | the harness | one agent run, end to end |

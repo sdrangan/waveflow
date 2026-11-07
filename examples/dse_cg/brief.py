@@ -85,9 +85,9 @@ _ARM_BLOCK = re.compile(
     r"^[ \t]*(?:<!--|#)[ \t]*arm:(?P<arm>\w+)[ \t]*(?:-->)?[ \t]*\n"
     r"(?P<body>.*?)"
     r"^[ \t]*(?:<!--|#)[ \t]*/arm[ \t]*(?:-->)?[ \t]*\n",
-    re.S | re.M,
+    re.DOTALL | re.MULTILINE,
 )
-_COMMENT = re.compile(r"<!--.*?-->\n?", re.S)
+_COMMENT = re.compile(r"<!--.*?-->\n?", re.DOTALL)
 
 
 def select_arm(text: str, arm: str) -> str:
@@ -211,6 +211,19 @@ def _modules_table(design, arch, link_root: Path) -> str:
     return _table(["module", "class", "what", "source"], rows) if rows else "(see the source links)"
 
 
+def _summary(doc: str, width: int = 160) -> str:
+    """A docstring's first paragraph as one Markdown table cell: reStructuredText's double-backtick
+    literals as Markdown code spans, ``|`` escaped, cut at *width* characters without leaving a code
+    span open."""
+    text = re.sub(r"``(.+?)``", r"`\1`", doc.split("\n\n")[0].replace("\n", " "))
+    if len(text) > width:
+        text = text[:width]
+        if text.count("`") % 2:
+            text = text[: text.rindex("`")].rstrip()
+        text += "..."
+    return text.replace("|", "\\|")
+
+
 def _mod_rows(comp, rows, link_root, inspect, depth) -> None:
     cls = type(comp)
     try:
@@ -218,9 +231,8 @@ def _mod_rows(comp, rows, link_root, inspect, depth) -> None:
         link = _link(src, link_root, src.rsplit("/", 1)[-1])
     except (TypeError, ValueError):
         link = ""
-    doc = (inspect.getdoc(cls) or "").split("\n\n")[0].replace("\n", " ").replace("|", "\\|")
     rows.append([("&nbsp;&nbsp;" * depth) + f"`{getattr(comp, 'name', '?')}`", f"`{cls.__name__}`",
-                 doc[:160] + ("..." if len(doc) > 160 else ""), link])
+                 _summary(inspect.getdoc(cls) or ""), link])
     subs = getattr(comp, "sub_comps", None) or {}
     for sub in subs.values() if isinstance(subs, dict) else subs:
         _mod_rows(sub, rows, link_root, inspect, depth + 1)
