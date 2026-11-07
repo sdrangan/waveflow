@@ -42,6 +42,11 @@ dev = [
 sionna = [
     "sionna-rt>=2.2,<3",
 ]
+# The DSE study's agent harness (examples/dse_cg/run_agent.py, plans/dse_cg.md step 7).  Pinned: the
+# SDK bundles the Claude Code that runs every agent, which the study pre-registers.
+dse = [
+    "claude-agent-sdk==0.2.179",
+]
 
 [project.scripts]
 create_doc_assets = "waveflow.scripts.create_doc_assets:main"

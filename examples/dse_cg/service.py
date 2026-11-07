@@ -530,9 +530,11 @@ def serve(service: Service, address: str) -> None:
     """Expose *service* to ``dselib`` at *address* (``host:port``, what ``DSE_SERVICE`` holds): a
     local HTTP server, one ``POST /call`` of ``{"fn", "kwargs"}`` a call, answered with
     ``{"ok": result}`` or ``{"refused": reason}``.  Blocks."""
+    import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     host, port = address.rsplit(":", 1)
+    lock = threading.Lock()                 # one call at a time: the service keeps one ledger
     allowed = {"space", "golden", "pysim", "hls_estimate", "synth", "rtlsim", "wait", "results",
                "budget", "submit"}
 
@@ -542,7 +544,8 @@ def serve(service: Service, address: str) -> None:
             try:
                 if body["fn"] not in allowed:
                     raise Refused(f"no dselib function {body['fn']!r}")
-                out = {"ok": getattr(service, body["fn"])(**body.get("kwargs", {}))}
+                with lock:
+                    out = {"ok": getattr(service, body["fn"])(**body.get("kwargs", {}))}
             except (Refused, KeyError, ValueError) as e:
                 out = {"refused": str(e)}
             data = json.dumps(out, default=str).encode()

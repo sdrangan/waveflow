@@ -1,46 +1,292 @@
 """run_agent.py -- one agent run: build the sandbox, start the service, run the agent, keep the record.
 
-    python -m examples.dse_cg.run_agent --arm waveflow --objective lut_at_loss01_tlt10 --seed 3
+    python -m examples.dse_cg.run_agent --arm waveflow --objective lut_tupd5_loss01 --seed 3
+    python -m examples.dse_cg.run_agent --pilot --model claude-opus-5-5 --effort high --budget-h 40 \\
+        --arm traditional --objective dsp_tupd4_t2_loss03
 
 A run is the user flow (README, *Using it yourself*) in a fresh session with no context of its own.
 
-1. ``brief.build_sandbox`` into a fresh directory under the run root.
-2. A ``service.Service`` for this design, arm, objective and budget (``prereg.py``), on the replay
-   backend; ``service.serve`` at an address passed to the agent's environment as ``DSE_SERVICE``.
-3. The agent, headless, with the sandbox as its working directory: file and shell tools inside it,
-   no network but the API and the service, the pre-registered model and settings, the same in both
-   arms.  Project settings only (the sandbox's ``.claude/skills``), never the user's ``~/.claude``:
-   no other CLAUDE.md, memory or skills reach the agent.  The prompt is ``brief.prompt("DSE.md",
-   objective)``, the line a user would type.
-4. On ``submit``, on an exhausted budget, or on a turn limit: stop.  Keep the transcript, the token
-   counts, the ledger, and the sandbox as the agent left it.  Check from the transcript that the
-   skill loaded; a run where it did not is void, not scored.
+1. ``brief.build_sandbox`` into ``<record>/sandbox``, made a git repository of its own (Claude Code
+   looks for project skills up to the repository root, and must not reach a parent's).
+2. A ``service.Service`` for this design, arm, objective and budget (``prereg.py``) on the replay
+   backend over G1's table, served at a free local port; the address goes to the agent as
+   ``DSE_SERVICE``.  The ledger is ``<record>/ledger.jsonl``, outside the sandbox.
+3. The agent: Claude Code through the Agent SDK (``claude-agent-sdk``, its bundled Claude Code), with
+   the sandbox as its working directory, the pre-registered model and effort, the same in both arms.
+   **Its process runs in a container** (``agent/Dockerfile``, :data:`prereg.AGENT_IMAGE`) that mounts
+   the sandbox, the run's own home (``<record>/home``, also ``CLAUDE_CONFIG_DIR``) and the bundled
+   Claude Code read-only, and nothing else: its file tools and its shell see no repository, no G1
+   table, no Waveflow package and no Vitis -- only what the sandbox holds, a Python with numpy,
+   pandas, scipy and matplotlib, and ``dselib``.  Project settings only (``setting_sources``
+   ``["project"]``: the sandbox's ``.claude/skills``), no user settings, no auto memory, no claude.ai
+   connectors, no web tools.  The container shares the host's network (the API and the service on
+   127.0.0.1); a shell command that names any other address is flagged in the record
+   (``network_flags``) for review.  The prompt is ``brief.prompt("DSE.md", objective)``, the line a
+   user would type.
+4. The run stops when the agent ends its turn -- after ``submit``, on an exhausted budget (every call
+   refused), on the turn limit (``max_turns``) or the wall-clock limit.  Kept in ``<record>``:
+   ``transcript.jsonl`` (every message of the stream), ``record.json`` (the settings, the token usage
+   and cost, the stop reason, the checks), ``ledger.jsonl`` and the sandbox as the agent left it.
+   **The skill must load**: the session's ``init`` message must list ``dse``, or the run is void
+   (recorded, not scored).
 
-Before writing step 3, load the ``claude-api`` skill rather than working from memory: the Agent SDK's
-options (settings sources, skills, tools) and the model id are easy to get subtly wrong.
+A scored run takes every setting from ``prereg.py`` and refuses to start before its ``DATE`` is set;
+``--pilot`` runs (plan step 7's pilots) take the unset ones from the command line and are recorded
+under ``<root>/pilot``.
 
-Skeleton (plan step 7).
+Needs Docker (the user in its group), the image built (``docker build -t waveflow-dse-agent:1
+examples/dse_cg/agent``), ``pip install claude-agent-sdk`` and an API credential in the environment
+(``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN``), which reaches the container by name only.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import dataclasses
+import json
+import os
+import re
+import socket
+import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import Any
+
+#: What the agent's Claude Code process gets from the harness's environment, by name: the SDK's own
+#: variables, the run's, and the credential.  Nothing else of the host's environment (an editor's
+#: Claude Code session, for one, sets variables that would connect the agent to it).
+FORWARD_ENV = ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_CODE_SDK_READS_SESSION_STATE",
+               "HOME", "CLAUDE_CONFIG_DIR",
+               "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "ENABLE_CLAUDEAI_MCP_SERVERS", "DSE_SERVICE",
+               "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
+
+#: Tools removed from the agent: the web (the plan's "no network but the API and the service").
+DISALLOWED_TOOLS = ["WebFetch", "WebSearch"]
+
+#: Messages the agent may still send after ``submit`` before the harness stops it.
+AFTER_SUBMIT = 6
 
 
-def run_one(arm: str, objective_id: str, seed: int, root: Path) -> Path:
-    """Run one agent and return its record directory."""
-    raise NotImplementedError("step 7")
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _bundled_cli() -> Path:
+    import claude_agent_sdk
+
+    return Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+
+
+def write_wrapper(path: Path, image: str, cli: Path, mounts: list[Path], name: str) -> Path:
+    """The executable the SDK starts as Claude Code: ``docker run`` of the bundled Claude Code in
+    *image*, with *mounts* bound read-write at their own paths, the CLI read-only, the working
+    directory the SDK gives (``$PWD``), the user's uid, and only :data:`FORWARD_ENV` passed by name."""
+    vols = " ".join(f"-v {m}:{m}" for m in mounts)
+    names = " ".join(FORWARD_ENV)
+    path.write_text(f"""#!/bin/bash
+# Generated by examples/dse_cg/run_agent.py: Claude Code inside the agent's container.
+env_args=()
+for v in {names}; do
+  if [ -n "${{!v+x}}" ]; then env_args+=(-e "$v"); fi
+done
+exec docker run --rm -i --name "{name}-$$" --network host --user {os.getuid()}:{os.getgid()} \\
+  {vols} -v {cli}:/opt/claude/claude:ro -w "$PWD" "${{env_args[@]}}" {image} /opt/claude/claude "$@"
+""", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _plain(m: Any) -> dict:
+    """A message of the stream as JSON-able data: its type and fields."""
+    d = dataclasses.asdict(m) if dataclasses.is_dataclass(m) else {"value": m}
+    return {"type": type(m).__name__, **d}
+
+
+_URL = re.compile(r"(?:https?|ftp)://([^/\s:'\"]+)")
+
+
+def network_flags(transcript: list[dict]) -> list[str]:
+    """Shell commands that name an address other than the local service, or install packages."""
+    out = []
+    for m in transcript:
+        blocks = m.get("content") if isinstance(m.get("content"), list) else []
+        for b in blocks:
+            if not isinstance(b, dict) or b.get("name") != "Bash":
+                continue
+            cmd = str((b.get("input") or {}).get("command", ""))
+            hosts = [h for h in _URL.findall(cmd) if h not in ("127.0.0.1", "localhost")]
+            if hosts or re.search(r"\bpip3? install\b|\bapt(-get)? install\b", cmd):
+                out.append(cmd[:300])
+    return out
+
+
+def _usage(transcript: list[dict], result: dict | None) -> dict:
+    """Token usage: the result message's when the session ended normally, else the sum over the
+    assistant messages (each API response once, by its id)."""
+    if result and result.get("usage"):
+        u = dict(result["usage"])
+        u["model_usage"] = result.get("model_usage")
+        u["total_cost_usd"] = result.get("total_cost_usd")
+        return u
+    seen: dict[str, dict] = {}
+    for m in transcript:
+        if m["type"] == "AssistantMessage" and m.get("usage"):
+            seen[m.get("message_id") or str(len(seen))] = m["usage"]
+    keys = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    return {k: sum(int(u.get(k) or 0) for u in seen.values()) for k in keys} | {"from": "assistant messages"}
+
+
+def settings(pilot: bool, overrides: dict) -> dict:
+    """The run's settings: ``prereg.py``'s, every one set for a scored run; a pilot takes an unset
+    one (or any one) from *overrides*."""
+    from examples.dse_cg import prereg
+
+    s = {"model": prereg.MODEL, "effort": prereg.EFFORT, "budget_s": prereg.BUDGET_S,
+         "max_turns": prereg.MAX_TURNS, "max_wall_s": prereg.MAX_WALL_S, "k_workers": prereg.K_WORKERS,
+         "image": prereg.AGENT_IMAGE, "prereg_date": prereg.DATE}
+    if not pilot:
+        missing = [k for k, v in s.items() if v is None]
+        if missing:
+            raise SystemExit(f"prereg.py is not frozen ({', '.join(missing)} unset): a scored run needs "
+                             "every setting pre-registered; use --pilot for a pilot run")
+        return s
+    s.update({k: v for k, v in overrides.items() if v is not None})
+    missing = [k for k in ("model", "budget_s") if s[k] is None]
+    if missing:
+        raise SystemExit(f"a pilot needs {', '.join(missing)} (prereg.py has none yet)")
+    return s
+
+
+async def _drive(options: Any, prompt: str, service: Any, transcript_path: Path,
+                 max_wall_s: float | None) -> tuple[list[dict], dict | None, str]:
+    """Run the session; every message to *transcript_path* as it arrives.  ``(transcript, the
+    result message, why it stopped)``."""
+    from claude_agent_sdk import query
+
+    transcript: list[dict] = []
+    result, why, after = None, "ended", 0
+
+    async def consume() -> None:
+        nonlocal result, why, after
+        with transcript_path.open("w", encoding="utf-8") as fh:
+            async for m in query(prompt=prompt, options=options):
+                d = _plain(m)
+                transcript.append(d)
+                fh.write(json.dumps(d, default=str) + "\n")
+                fh.flush()
+                if d["type"] == "ResultMessage":
+                    result = d
+                if service.closed:
+                    after += 1
+                    if after > AFTER_SUBMIT:
+                        why = "stopped after submit"
+                        return
+
+    try:
+        await asyncio.wait_for(consume(), timeout=max_wall_s)
+    except TimeoutError:
+        why = "wall-clock limit"
+    return transcript, result, why
+
+
+def run_one(arm: str, objective_id: str, seed: int, root: Path, pilot: bool = False,
+            overrides: dict | None = None, table: Path | None = None, design: Any = None) -> Path:
+    """Run one agent and return its record directory (``<root>/<scored|pilot>/<arm>/<objective>/
+    seed<NN>``).  *design* defaults to the LTBF adaptor (a test passes a stand-in)."""
+    from claude_agent_sdk import ClaudeAgentOptions
+    from claude_agent_sdk import __version__ as sdk_version
+
+    from examples.dse_cg import brief, prereg
+    from examples.dse_cg import service as sv
+    from examples.dse_cg.grid import TABLE
+    from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
+
+    s = settings(pilot, overrides or {})
+    objective = next(o for o in prereg.OBJECTIVES if o["id"] == objective_id)
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")):
+        raise SystemExit("no API credential: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
+    table = Path(table or TABLE)
+    rec = Path(root).resolve() / ("pilot" if pilot else "scored") / arm / objective_id / f"seed{seed:02d}"
+    if rec.exists():
+        raise FileExistsError(f"{rec}: a run is recorded once")
+    sandbox, home = rec / "sandbox", rec / "home"
+    home.mkdir(parents=True)
+    design = design or LtbfCgMemAdaptor()
+    brief.build_sandbox(design, arm, sandbox)
+    subprocess.run(["git", "init", "-q", str(sandbox)], check=True)
+
+    service = sv.Service(design, arm, objective, s["budget_s"], s["k_workers"],
+                         sv.ReplayBackend(design, table), rec / "ledger.jsonl")
+    address = f"127.0.0.1:{_free_port()}"
+    threading.Thread(target=sv.serve, args=(service, address), daemon=True).start()
+
+    name = f"dse-{arm}-{objective_id}-{seed:02d}".replace("_", "-")
+    wrapper = write_wrapper(rec / "claude.sh", s["image"], _bundled_cli(), [sandbox, home], name)
+    stderr = (rec / "stderr.log").open("w", encoding="utf-8")
+    options = ClaudeAgentOptions(
+        cwd=str(sandbox), cli_path=str(wrapper), model=s["model"], effort=s["effort"],
+        setting_sources=["project"], skills=["dse"], disallowed_tools=list(DISALLOWED_TOOLS),
+        permission_mode="bypassPermissions", max_turns=s["max_turns"],
+        env={"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+             "DSE_SERVICE": address},
+        stderr=lambda line: (stderr.write(line + "\n"), stderr.flush()))
+    text = brief.prompt("DSE.md", objective)
+    t0 = time.time()
+    try:
+        transcript, result, why = asyncio.run(
+            _drive(options, text, service, rec / "transcript.jsonl", s["max_wall_s"]))
+        error = None
+    except Exception as e:  # noqa: BLE001 -- a harness failure is recorded, and voids the run
+        transcript, result, why, error = [], None, "harness error", f"{type(e).__name__}: {e}"
+    finally:
+        stderr.close()
+        subprocess.run(["bash", "-c", f"docker ps -q --filter name={name} | xargs -r docker rm -f"],
+                       capture_output=True, check=False)
+    init = next((m.get("data") for m in transcript
+                 if m["type"] == "SystemMessage" and m.get("subtype") == "init"), None) or {}
+    loaded = "dse" in (init.get("skills") or []) or "dse" in (init.get("slash_commands") or [])
+    void = None if loaded and error is None else (error or "the dse skill did not load")
+    record = {
+        "arm": arm, "objective": objective_id, "seed": seed, "pilot": pilot, "agent": s["model"],
+        "settings": s, "sdk": sdk_version, "init": init,
+        "prompt": text, "started": t0, "wall_s": time.time() - t0, "stopped": why,
+        "result": {k: (result or {}).get(k) for k in ("subtype", "is_error", "num_turns", "duration_ms",
+                                                       "duration_api_ms", "stop_reason", "result")},
+        "usage": _usage(transcript, result), "submitted": service.closed,
+        "budget": service.budget(), "calls": len(service.ledger.entries),
+        "network_flags": network_flags(transcript), "void": void,
+    }
+    (rec / "record.json").write_text(json.dumps(record, indent=1, default=str), encoding="utf-8")
+    return rec
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--arm", choices=("traditional", "waveflow"), required=True)
-    ap.add_argument("--objective", required=True)
+    ap.add_argument("--objective", required=True, help="an id of prereg.OBJECTIVES")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--root", type=Path, default=Path("dse_runs"))
+    ap.add_argument("--root", type=Path, default=Path.home() / "ali" / "dse_cg" / "runs",
+                    help="the records' root (outside the repository)")
+    ap.add_argument("--table", type=Path, default=None, help="G1's table (default grid.TABLE)")
+    ap.add_argument("--pilot", action="store_true", help="a pilot run: unset settings from the flags")
+    ap.add_argument("--model")
+    ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
+    ap.add_argument("--budget-h", type=float)
+    ap.add_argument("--max-turns", type=int)
+    ap.add_argument("--max-wall-h", type=float)
     a = ap.parse_args(argv)
-    run_one(a.arm, a.objective, a.seed, a.root)
+    if not a.pilot and any(x is not None for x in (a.model, a.effort, a.budget_h, a.max_turns, a.max_wall_h)):
+        ap.error("a scored run takes its settings from prereg.py; --model and the rest are for --pilot")
+    over = {"model": a.model, "effort": a.effort, "max_turns": a.max_turns,
+            "budget_s": None if a.budget_h is None else a.budget_h * 3600.0,
+            "max_wall_s": None if a.max_wall_h is None else a.max_wall_h * 3600.0}
+    rec = run_one(a.arm, a.objective, a.seed, a.root, a.pilot, over, a.table)
+    print(json.loads((rec / "record.json").read_text())["void"] or "ok", rec)
     return 0
 
 

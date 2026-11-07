@@ -79,8 +79,25 @@ EPSILON = 0.05
 #: Runs per arm per objective.
 N_RUNS = 10
 
-#: The agent's model and settings, identical in both arms.  TBD
+#: The agent's model, identical in both arms.  TBD
 MODEL = None
+
+#: The agent's effort (the Agent SDK's ``effort``), identical in both arms.  TBD
+EFFORT = None
+
+#: The turn limit of a run (the Agent SDK's ``max_turns``).  TBD
+MAX_TURNS = None
+
+#: The wall-clock limit of a run, seconds: a guard against a stuck session (the budget is tool time,
+#: on the service's clock).  TBD
+MAX_WALL_S = None
+
+#: The agent's container (``agent/Dockerfile``): what its file tools and shell can see.  Its image
+#: digest is recorded here when the pre-registration is frozen.
+AGENT_IMAGE = "waveflow-dse-agent:1"
+
+#: The harness: the Agent SDK and the Claude Code it bundles (``run_agent.py``).
+AGENT_SDK = "claude-agent-sdk 0.2.179 (Claude Code 2.1.319)"
 
 #: How calibration cost enters the Waveflow arm: reported both ways, headline "upfront".
 CALIBRATION_CHARGE = ("upfront", "amortized")
