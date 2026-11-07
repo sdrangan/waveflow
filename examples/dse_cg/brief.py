@@ -22,9 +22,9 @@ nothing else in it (no ``CLAUDE.md``, no repository)::
 
     out_dir/
         .claude/skills/dse/   SKILL.md + dselib/, this arm
-        DSE.md                this arm, links into docs/ and src/
-        docs/                 the architecture and module pages, copied
-        src/                  the modules' Python and HLS source, copied
+        DSE.md                this arm, its links relative to out_dir
+        docs/...              the architecture and module pages it links, each with its section
+        examples/..., waveflow/...   the modules' Python source it links, at their repository paths
 
 and ``run_agent.py`` sends the same prompt a user would, ``/dse DSE.md <objective>``.  A run is the
 user flow in a new session with no context of its own.
@@ -261,8 +261,39 @@ def write_context(design, path: Path, arm: str = "waveflow") -> Path:
 
 def build_sandbox(design, arm: str, out_dir: Path) -> Path:
     """Write one run's sandbox (the tree above) and return ``out_dir``.  The objective is not in
-    it: it is the prompt."""
-    raise NotImplementedError("step 5")
+    it: it is the prompt.
+
+    ``DSE.md`` is rendered with its links relative to the repository's root and every file it links
+    is copied to the same path under ``out_dir`` -- a documentation page with its whole section, so
+    the page's own links still resolve; a source file alone -- so the agent reads what a user would,
+    and nothing else of the repository is there.  Both arms get the same copies; they differ only in
+    ``DSE.md`` and the skill, by the ``arm:waveflow`` blocks."""
+    import shutil
+
+    out = Path(out_dir)
+    if out.exists() and any(out.iterdir()):
+        raise FileExistsError(f"{out}: a sandbox goes into an empty directory")
+    out.mkdir(parents=True, exist_ok=True)
+    install_skill(out / ".claude" / "skills", arm)
+    text = render(CONTEXT_TEMPLATE.read_text(encoding="utf-8"), build_blocks(design, REPO), arm)
+    (out / "DSE.md").write_text(text, encoding="utf-8")
+    for target in sorted(set(re.findall(r"\]\(([^)#\s]+)", text))):
+        if "://" in target:
+            continue
+        src = (REPO / target).resolve()
+        if REPO.resolve() not in src.parents:
+            raise ValueError(f"DSE.md links outside the repository: {target}")
+        if src.suffix == ".md" and src.parent.name and "docs" in src.relative_to(REPO.resolve()).parts:
+            sec = src.parent
+            shutil.copytree(sec, out / sec.relative_to(REPO.resolve()), dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        elif src.is_file():
+            dst = out / src.relative_to(REPO.resolve())
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        else:
+            raise FileNotFoundError(f"DSE.md links {target}, which is not in the repository")
+    return out
 
 
 def prompt(context_path: str, objective: dict) -> str:

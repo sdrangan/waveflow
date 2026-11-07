@@ -47,3 +47,28 @@ def test_the_arms_differ_only_in_their_pysim_blocks(tmp_path):
             want = brief.select_arm(src, arm)
             want = brief._COMMENT.sub("", want) if rel.endswith(".md") else want
             assert (out / rel).read_text(encoding="utf-8") == want, (rel, arm)
+
+
+def test_the_two_sandboxes_differ_only_in_the_waveflow_blocks(tmp_path):
+    """build_sandbox for each arm: the same files but for DSE.md and the skill, and those differ by
+    exactly the arm:waveflow blocks; every link of DSE.md resolves inside the sandbox; nothing of the
+    repository's own instructions (CLAUDE.md) is there (plan step 5, *Fairness rules* 1)."""
+    import re
+
+    design = LtbfCgMemAdaptor()
+    wf = brief.build_sandbox(design, "waveflow", tmp_path / "wf")
+    tr = brief.build_sandbox(design, "traditional", tmp_path / "tr")
+    files = {a: {p.relative_to(d).as_posix(): p.read_bytes() for p in d.rglob("*") if p.is_file()}
+             for a, d in (("waveflow", wf), ("traditional", tr))}
+    assert files["waveflow"].keys() == files["traditional"].keys()
+    differ = {f for f in files["waveflow"] if files["waveflow"][f] != files["traditional"][f]}
+    assert differ == {"DSE.md", ".claude/skills/dse/SKILL.md", ".claude/skills/dse/dselib/__init__.py"}
+    tmpl = brief.CONTEXT_TEMPLATE.read_text(encoding="utf-8")
+    blocks = brief.build_blocks(design, brief.REPO)
+    assert files["traditional"]["DSE.md"].decode() == brief.render(tmpl, blocks, "traditional")
+    assert "pysim" in files["waveflow"]["DSE.md"].decode()
+    assert not any(f.endswith("CLAUDE.md") for f in files["waveflow"])
+    for d in (wf, tr):
+        text = (d / "DSE.md").read_text(encoding="utf-8")
+        for target in re.findall(r"\]\(([^)#\s]+)", text):
+            assert (d / target).is_file(), target

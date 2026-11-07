@@ -207,3 +207,30 @@ def test_dselib_in_process_and_over_http(monkeypatch):
     assert dselib.budget()["spent_s"] == COST["golden"]
     with pytest.raises(dselib.Refused):
         dselib._call("not_a_function")
+
+
+def test_the_replay_backend_answers_from_the_table_at_its_recorded_cost(tmp_path):
+    """ReplayBackend over a table (``grid.py table`` / ``finish``): each row as measured, at the tool
+    time it took; a point outside the table is ``not_in_space``; the service charges as live."""
+    import json
+
+    d = Design()
+    p = d.fill({})
+    sid = d.sim_identity(p, {"name": "long_term", "t": 3})
+    rows = {
+        "synth": [{"key": i, "row": {"status": "ok", "lut": 10, "dsp": 1, "bram": 2, "seconds": 600.0},
+                   "cost_s": 600.0} for i in d.identities(p).values()],
+        "hls": [{"key": i, "row": {"status": "ok", "lut": 20, "seconds": 120.0}, "cost_s": 120.0}
+                for i in d.hls_identities(p).values()],
+        "rtlsim": [{"key": sid["run"], "row": {"status": "ok", "cycles": 1_611_880, "build_s": 180.0,
+                                               "simulate_s": 797.0}, "cost_s": 977.0}],
+        "pysim": [{"key": sv.eval_key("pysim", p, "long_term", {"t": 3, "target": "-6_14"}),
+                   "row": {"status": "ok", "cycles": 1_620_803, "seconds": 1.1}, "cost_s": 1.1}],
+    }
+    for fn, rs in rows.items():
+        (tmp_path / f"{fn}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rs))
+    s = sv.Service(d, "waveflow", None, None, 2, sv.ReplayBackend(d, tmp_path), None)
+    assert s.pysim({}, "long_term")["cycles"] == 1_620_803
+    r = s.wait(s.rtlsim([{}], "long_term"))[0]
+    assert r["cycles"] == 1_611_880 and r["cost_s"] == 3 * 120.0 + 4 * 600.0 + 180.0 + 797.0
+    assert s.pysim({"L": 2}, "long_term")["status"] == "not_in_space"

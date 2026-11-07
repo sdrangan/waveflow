@@ -40,8 +40,8 @@ Every call, its charge and its result are appended to the ledger file, which ``s
 run starts empty, or it would inherit earlier runs' measurements for free); as long as the project
 for a user (a synthesis done yesterday is still in it today).
 
-The live backend and its command line (:func:`main`) are written (plan Phase 3); :class:`ReplayBackend` is
-plan step 5.
+The live backend and its command line (:func:`main`) are plan Phase 3; :class:`ReplayBackend`, over
+G1's table (``grid.py``), plan step 5.
 """
 
 from __future__ import annotations
@@ -180,21 +180,57 @@ class WorkerPool:
         return sum(1 for s, _e in self.jobs.values() if s > now_s)
 
 
-class ReplayBackend:
-    """Answers ``golden``, ``pysim``, ``synth`` and ``rtlsim`` from the ground-truth table.
+def eval_key(fn: str, p: dict, name: str, w: dict) -> str:
+    """The key ``golden`` and ``pysim`` rows are cached and replayed by: the filled point and the
+    workload's name and parameters."""
+    return fn + "|" + json.dumps([p, name, w], sort_keys=True)
 
-    The table is G1 (plan step 4): for every grid point, the measured resources and cycles, the
-    golden accuracy, the pysim predictions, and the recorded cost of each evaluation, all at 2025.1.
-    A point outside the table is a row with ``status: "not_in_space"`` (the agents' space is the
-    table, so this means a bug in the brief or the client).
+
+class ReplayBackend:
+    """Answers every evaluation from the ground-truth table, at the tool time it was measured.
+
+    The table is G1 (plan step 4), consolidated by ``grid.py table`` and completed by ``grid.py
+    finish``: one JSON line a row in ``synth.jsonl`` and ``hls.jsonl`` (by part and kernel identity),
+    ``rtlsim.jsonl`` (by the run's simulation identity), ``golden.jsonl`` and ``pysim.jsonl`` (by
+    :func:`eval_key`), each ``{"key", "row", "cost_s"}`` -- for ``rtlsim`` the row's ``build_s`` and
+    ``simulate_s``, which the service charges as the ledger says.  A point outside the table is a
+    row with ``status: "not_in_space"`` (the agents' space is the table, so this means a bug in the
+    brief or the client).
     """
 
-    def __init__(self, table_dir: Path):
-        self.table_dir = table_dir
+    def __init__(self, design: Any, table_dir: Path):
+        self.design, self.table_dir = design, Path(table_dir)
+        self.tables: dict[str, dict] = {}
+        for fn in ("synth", "hls", "rtlsim", "golden", "pysim"):
+            f = self.table_dir / f"{fn}.jsonl"
+            rows = [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines()
+                    if line.strip()] if f.is_file() else []
+            self.tables[fn] = {r["key"]: r for r in rows}
+
+    def _row(self, fn: str, key: str) -> tuple[dict, float]:
+        r = self.tables[fn].get(key)
+        if r is None:
+            return {"status": "not_in_space", "table": fn}, 0.0
+        return dict(r["row"]), float(r.get("cost_s", 0.0))
 
     def call(self, what: str, *args) -> tuple[dict, float]:
-        """``(result row, recorded cost_s)`` for one evaluation."""
-        raise NotImplementedError("step 5")
+        """``(row, recorded cost_s)`` for one evaluation."""
+        d = self.design
+        if what in ("golden", "pysim"):
+            p, w = args
+            w = dict(w)
+            return self._row(what, eval_key(what, p, w.pop("name"), w))
+        if what == "hls_estimate":
+            kernel, p = args
+            return self._row("hls", d.hls_identities(p)[kernel])
+        if what == "synth":
+            node, p = args
+            return self._row("synth", d.identities(p)[node])
+        if what == "rtlsim":
+            p, w = args
+            row, _ = self._row("rtlsim", d.sim_identity(p, w)["run"])
+            return row, float(row.get("build_s", 0.0)) + float(row.get("simulate_s", 0.0))
+        raise ValueError(f"no evaluation {what!r}")
 
 
 class LiveBackend:
@@ -302,7 +338,7 @@ class Service:
             self.ledger.charge("golden", args, 0.0, False, row, self.clock_s, self.clock_s)
             return row
         name, w = self.design.workload("accuracy" if workload is None else workload)
-        key = "golden|" + json.dumps([p, name, w], sort_keys=True)
+        key = eval_key("golden", p, name, w)
         return self._now("golden", args, key, "golden", (p, {"name": name, **w}), p)
 
     def pysim(self, params: dict, workload: Any = None) -> dict:
@@ -316,7 +352,7 @@ class Service:
             self.ledger.charge("pysim", args, 0.0, False, row, self.clock_s, self.clock_s)
             return row
         name, w = self.design.workload(workload)
-        key = "pysim|" + json.dumps([p, name, w], sort_keys=True)
+        key = eval_key("pysim", p, name, w)
         return self._now("pysim", args, key, "pysim", (p, {"name": name, **w}), p)
 
     def _job(self, fn: str, args: dict, rows: list[dict], cost: float) -> str:
@@ -516,7 +552,8 @@ def serve(service: Service, address: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """``python -m examples.dse_cg.service --live``: the service for a user, on this machine's tools.
+    """``python -m examples.dse_cg.service --live``: the service for a user, on this machine's tools;
+    ``--replay <table>``: on G1's measured table instead (``grid.py``), at each row's recorded cost.
 
     The LTBF design (``ltbf_cg_mem.LtbfCgMemAdaptor``), the Waveflow arm unless ``--arm`` says
     otherwise, no objective (the prompt has it), a budget only with ``--budget-h``.  Each session
@@ -528,20 +565,23 @@ def main(argv: list[str] | None = None) -> None:
 
     ap = argparse.ArgumentParser(prog="python -m examples.dse_cg.service", description=main.__doc__)
     ap.add_argument("--live", action="store_true", help="run the tools on this machine")
+    ap.add_argument("--replay", type=Path, default=None, help="answer from G1's table in this directory")
     ap.add_argument("--arm", choices=ARMS, default="waveflow")
     ap.add_argument("--address", default="127.0.0.1:8765", help="host:port to serve on")
     ap.add_argument("--workers", type=int, default=2, help="tool slots (the lab machine's two heavy jobs)")
     ap.add_argument("--budget-h", type=float, default=None, help="a budget of tool time, in hours")
     ap.add_argument("--ledger", type=Path, default=Path("dse_ledger.jsonl"))
     args = ap.parse_args(argv)
-    if not args.live:
-        ap.error("only --live is written: the replay backend is plans/dse_cg.md step 5")
+    if args.live == (args.replay is not None):
+        ap.error("one of --live and --replay <table>")
     from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
 
     design = LtbfCgMemAdaptor()
     budget = None if args.budget_h is None else args.budget_h * 3600.0
-    service = Service(design, args.arm, None, budget, args.workers, LiveBackend(design), args.ledger)
-    print(f"DSE service: {design.name}, the {args.arm} arm, live; ledger {args.ledger}\n"
+    backend = LiveBackend(design) if args.live else ReplayBackend(design, args.replay)
+    service = Service(design, args.arm, None, budget, args.workers, backend, args.ledger)
+    how = "live" if args.live else f"replaying {args.replay}"
+    print(f"DSE service: {design.name}, the {args.arm} arm, {how}; ledger {args.ledger}\n"
           f"export DSE_SERVICE={args.address}", flush=True)
     serve(service, args.address)
 

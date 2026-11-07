@@ -3,6 +3,8 @@
     python -m examples.dse_cg.grid shared               # the parts every root shares, first
     python -m examples.dse_cg.grid measure 0 2          # process 0 of 2 (the lab machine's two slots)
     python -m examples.dse_cg.grid status               # what is measured
+    python -m examples.dse_cg.grid table                # G1's table, for the replay backend
+    python -m examples.dse_cg.grid finish               # pysim and golden over the grid, into it
 
 Every legal design of ``ltbf_cg_mem.GRID`` with every timing workload (``t``): each root's csynth
 (``hls_estimate`` of its kernels), each part's synthesis, each RTL run, through the adaptor as the live
@@ -162,6 +164,67 @@ def status() -> dict:
     return out
 
 
+TABLE = OUT / "table"
+
+
+def _rows() -> list[dict]:
+    rows = []
+    for f in sorted(OUT.glob("g1_*.jsonl")):
+        rows += [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return rows
+
+
+def _write(fn: str, entries: dict) -> None:
+    TABLE.mkdir(parents=True, exist_ok=True)
+    with (TABLE / f"{fn}.jsonl").open("w", encoding="utf-8") as fh:
+        for e in entries.values():
+            fh.write(json.dumps(e, default=str) + "\n")
+
+
+def table() -> dict:
+    """G1's measured rows by what the replay backend looks them up by (``service.ReplayBackend``):
+    a part's synthesis and a kernel's csynth by identity, an RTL run by its simulation identity --
+    the first ``ok`` row of each, at the tool time it took."""
+    out: dict[str, dict] = {"synth": {}, "hls": {}, "rtlsim": {}}
+    for r in _rows():
+        if r["row"].get("status") not in ("ok", "mismatch"):
+            continue
+        if r["fn"] == "synth":
+            out["synth"].setdefault(r["identity"], {"key": r["identity"], "row": r["row"],
+                                                    "cost_s": float(r["row"].get("seconds") or 0.0)})
+        elif r["fn"] == "hls_estimate":
+            out["hls"].setdefault(r["identity"], {"key": r["identity"], "row": r["row"],
+                                                  "cost_s": float(r["row"].get("seconds") or 0.0)})
+        elif r["fn"] == "rtlsim":
+            run = r["sim_identity"]["run"]
+            out["rtlsim"].setdefault(run, {"key": run, "row": r["row"], "cost_s":
+                                           float(r["row"].get("build_s", 0)) + float(r["row"].get("simulate_s", 0))})
+    for fn, entries in out.items():
+        _write(fn, entries)
+    return {fn: len(v) for fn, v in out.items()}
+
+
+def finish() -> dict:
+    """``pysim`` at every timing workload and ``golden`` at every accuracy workload, over the grid,
+    into the table (keyed as the service caches them)."""
+    from examples.dse_cg.service import eval_key
+
+    a = LtbfCgMemAdaptor()
+    out: dict[str, dict] = {"pysim": {}, "golden": {}}
+    acc = [{"name": "accuracy", "t": t, "target": g} for t in GRID["t"][1] for g in GRID["target"][1]]
+    for p in designs(a):
+        q = a.fill(p)
+        for fn, wls, run in (("pysim", workloads(), a.pysim), ("golden", acc, a.golden)):
+            for w in wls:
+                name, ww = a.workload(w)
+                row = run(q, {"name": name, **ww})
+                out[fn][eval_key(fn, q, name, ww)] = {"key": eval_key(fn, q, name, ww), "row": row,
+                                                      "cost_s": float(row.get("seconds") or 0.0)}
+    for fn, entries in out.items():
+        _write(fn, entries)
+    return {fn: len(v) for fn, v in out.items()}
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args or args[0] == "status":
@@ -170,5 +233,9 @@ if __name__ == "__main__":
         shared()
     elif args[0] == "measure":
         measure(int(args[1]), int(args[2]))
+    elif args[0] == "table":
+        print(table())
+    elif args[0] == "finish":
+        print(finish())
     else:
         raise SystemExit(__doc__)
