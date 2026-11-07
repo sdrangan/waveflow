@@ -521,8 +521,9 @@ class LtbfCgMemAdaptor(DseAdaptor):
 
     def rtlsim(self, params: dict, workload: str | dict | None = None) -> dict:
         """The point's DUT at RTL on *workload* (default ``long_term``) through XSI, against pysim's run
-        of the same system (``hw/build.py``'s ``rtl_against_pysim``): cycles and whether every
-        endpoint matched."""
+        of the same system (``hw/build.py``'s ``rtl_against_pysim``): the RTL's cycles and whether
+        every endpoint's data matched (``bit_exact``); how close pysim's cycles came is not the run's
+        result and is not reported here."""
         from examples.ltbf_cg_mem_dse.hw import build as hb
         from waveflow import events
 
@@ -534,9 +535,13 @@ class LtbfCgMemAdaptor(DseAdaptor):
                 phases[sp["name"]] = phases.get(sp["name"], 0.0) + float(sp.get("elapsed", 0.0))
         tag = self.system_tag(params, workload)
         cmp = hb.rtl_against_pysim(Path(self.config(params).root_dir) / hb.WORK_DIR / tag)
-        return {"status": "ok" if cmp["match"] else "mismatch", "cycles": cmp["rtl_cycles"],
-                "t_upd_ms": cmp["rtl_cycles"] / F_CLK * 1e3, "bit_exact": cmp["match"],
-                "pysim_cycles": cmp["pysim_cycles"], "endpoints": cmp["endpoints"],
+        # The RTL is the measurement: the row is ok when every endpoint's data is pysim's, whatever
+        # pysim's end ("end", its timing within 5%, is pysim's accuracy, not the run's).  No pysim
+        # number rides along: both arms see the same rtlsim row (Fairness rules).
+        data = {k: v for k, v in cmp["endpoints"].items() if k != "end"}
+        exact = all(data.values())
+        return {"status": "ok" if exact else "mismatch", "cycles": cmp["rtl_cycles"],
+                "t_upd_ms": cmp["rtl_cycles"] / F_CLK * 1e3, "bit_exact": exact, "endpoints": data,
                 "phases_s": phases, "build_s": sum(v for k, v in phases.items() if k != "simulate"),
                 "simulate_s": phases.get("simulate", 0.0)}
 

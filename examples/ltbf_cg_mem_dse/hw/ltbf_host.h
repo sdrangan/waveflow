@@ -35,7 +35,9 @@ public:
     void main() override {
         parse();
         start("resp", [this] { resp_reader(); });
-        start("oru", [this] { oru(); });
+        // No slot (SysParams.slot False, n_rt 0): no O-RU, which would wait for ever and keep the run
+        // from ending (the harness ends it when every thread has).
+        if (n_rt_ > 0) start("oru", [this] { oru(); });
         for (int k = 0; k < n_cores_; ++k) start("worker" + std::to_string(k), [this, k] { worker(k); });
         run_host(setup_, 0);
         ing_ctrl.write(icfg_);
@@ -59,7 +61,7 @@ public:
             if (!rt_added && lt_done) {
                 rt_added = true;
                 add(n_lt_, n_rt_);
-                if (n_rt_ > 0) slot_start_.set();  // no slot (SysParams.slot False): no O-RU
+                slot_start_.set();
                 start("ticker", [this] { ticker(); });
             }
             pump();
