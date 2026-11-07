@@ -209,6 +209,17 @@ class LiveBackend:
         self.design, self.build_dir = design, build_dir
 
     def call(self, what: str, *args) -> tuple[dict, float]:
+        """``(row, cost)``.  A failure of the tools (a build that breaks, a run that times out) is a
+        row, ``status: "failed: ..."``, charged the time it took, not an exception: the agent sees
+        it as it would see any other result."""
+        t0 = time.perf_counter()
+        try:
+            return self._call(what, *args)
+        except Exception as e:  # noqa: BLE001 -- every tool failure is a result
+            return ({"status": f"failed: {type(e).__name__}: {str(e)[-800:]}"},
+                    time.perf_counter() - t0)
+
+    def _call(self, what: str, *args) -> tuple[dict, float]:
         d = self.design
         t0 = time.perf_counter()
         if what == "golden":
@@ -275,7 +286,8 @@ class Service:
             return row
         row, cost = self.backend.call(what, *call_args)
         row = {**row, "params": p, "cost_s": cost, "cached": False}
-        self.ledger.evals[key] = row
+        if row.get("status") == "ok":
+            self.ledger.evals[key] = row
         t0 = self.clock_s
         self.clock_s += cost
         self.ledger.charge(fn, args, cost, False, row, t0, self.clock_s)
@@ -320,7 +332,8 @@ class Service:
         if ident in self.ledger.kernels:
             return {**self.ledger.kernels[ident], "cached": True}, 0.0
         row, cost = self.backend.call("hls_estimate", kernel, p)
-        self.ledger.kernels[ident] = {**row, "cost_s": cost}
+        if row.get("status") == "ok":
+            self.ledger.kernels[ident] = {**row, "cost_s": cost}
         return {**row, "cached": False}, cost
 
     def hls_estimate(self, points: list[dict]) -> str:
@@ -335,8 +348,9 @@ class Service:
             for kernel, ident in self.design.hls_identities(p).items():
                 kernels[kernel], c = self._kernel(kernel, ident, p)
                 cost += c
-            rows.append({"params": p, "status": "ok", "kernels": kernels, "cost_s": cost,
-                         "cached": cost == 0.0})
+            ok = all(k.get("status") == "ok" for k in kernels.values())
+            rows.append({"params": p, "status": "ok" if ok else "failed", "kernels": kernels,
+                         "cost_s": cost, "cached": cost == 0.0})
             total += cost
         return self._job("hls_estimate", {"points": points}, rows, total)
 
@@ -355,7 +369,8 @@ class Service:
                 cost += c
             row, c = self.backend.call("synth", node, p)
             cost += c
-            self.ledger.parts[ident] = row
+            if row.get("status") == "ok":
+                self.ledger.parts[ident] = row
             parts[node] = {**row, "cached": False}
         counters = ("lut", "ff", "dsp", "bram", "uram")
         total = {k: sum(int(v.get(k, 0) or 0) for v in parts.values()) for k in counters}
@@ -387,18 +402,26 @@ class Service:
             if rule:
                 rows.append({"params": params, "status": f"illegal: {rule}", "cost_s": 0.0})
                 continue
-            _srow, cost = self._synth_point(p)        # synthesized first, as the rules say
+            srow, cost = self._synth_point(p)         # synthesized first, as the rules say
             name, w = self.design.workload(workload)
             sid = self.design.sim_identity(p, {"name": name, **w})
+            if srow["status"] != "ok":
+                rows.append({"params": p, "status": "failed: synthesis", "parts": srow["parts"],
+                             "cost_s": cost, "cached": False})
+                total += cost
+                continue
             if sid["run"] in self.ledger.runs:
                 row = {**self.ledger.runs[sid["run"]], "cached": True}
             else:
-                row, _c = self.backend.call("rtlsim", p, {"name": name, **w})
-                sim = float(row.get("simulate_s", 0.0))
-                build = 0.0 if sid["build"] in self.ledger.builds else float(row.get("build_s", 0.0))
-                self.ledger.builds.setdefault(sid["build"], {"build_s": row.get("build_s")})
-                self.ledger.runs[sid["run"]] = row
-                cost += build + sim
+                row, c = self.backend.call("rtlsim", p, {"name": name, **w})
+                if row.get("status") in ("ok", "mismatch"):     # a mismatch is a result too
+                    sim = float(row.get("simulate_s", 0.0))
+                    build = 0.0 if sid["build"] in self.ledger.builds else float(row.get("build_s", 0.0))
+                    self.ledger.builds.setdefault(sid["build"], {"build_s": row.get("build_s")})
+                    self.ledger.runs[sid["run"]] = row
+                    cost += build + sim
+                else:
+                    cost += c
                 row = {**row, "cached": False}
             rows.append({**row, "params": p, "workload": {"name": name, **w}, "cost_s": cost})
             total += cost

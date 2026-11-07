@@ -110,6 +110,39 @@ def test_an_illegal_point_is_a_row_and_a_typo_is_an_error():
         s.golden({"Wx": 12}, "accuracy")
 
 
+class Breaking(Backend):
+    """Fails the vector part's synthesis once (a build that breaks, a run that times out)."""
+
+    def __init__(self):
+        super().__init__()
+        self.broken = True
+
+    def call(self, what, *args):
+        if what == "synth" and args[0] == "vec" and self.broken:
+            self.broken = False
+            return {"status": "failed: RuntimeError: vivado exited 1"}, 42.0
+        return super().call(what, *args)
+
+
+def test_a_failed_build_is_a_row_charged_and_not_cached():
+    s = sv.Service(Design(), "waveflow", None, None, 2, Breaking(), None)
+    row = s.wait(s.synth([{}]))[0]
+    assert row["status"] == "failed" and row["parts"]["vec"]["status"].startswith("failed")
+    assert row["cost_s"] == 3 * COST["hls_estimate"] + 3 * COST["synth"] + 42.0
+    r = s.wait(s.rtlsim([{}], "long_term"))[0]            # the vector part is built again first
+    assert r["status"] == "ok" and r["cost_s"] == COST["synth"] + COST["build"] + COST["simulate"]
+
+
+def test_the_live_backend_turns_a_tool_failure_into_a_row():
+    class Broken(Design):
+        def synth(self, node, params):
+            raise RuntimeError("xsi_run: timed out after 3600 seconds")
+
+    row, cost = sv.LiveBackend(Broken()).call("synth", "sys", {})
+    assert row["status"].startswith("failed: RuntimeError") and "timed out" in row["status"]
+    assert cost >= 0.0
+
+
 def test_the_budget_refuses_a_call_once_spent():
     s = _service(budget=100.0)
     s.wait(s.synth([{}]))                 # over budget now

@@ -238,9 +238,12 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 246 + 4 -> 250 on 2026-10-29 (plans/ltbf_dse/ltbf_dse.md steps 5.1-5.2): the LTBF example's device
 #: gates (systolic, vector unit, Ingest DMA) and its system at RTL (tests/examples/test_ltbf_cg_mem_dse_xsi.py);
 #: ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q`` counts 250.
-#: 250 + 4 -> 254 on 2026-11-07 (plans/dse_cg.md step 1a): the LTBF system with its memory modelled at
-#: two bank counts and two read rates (test_ltbf_cg_mem_dse_xsi.py::test_modelled_memory_at_rtl).
-WANT_XSI_GATES = 255
+#: 250 + 5 -> 255 on 2026-11-07 (plans/dse_cg.md steps 1a, 1d): the LTBF system with its memory modelled at
+#: two bank counts and two read rates, the long-term update alone, and the end-to-end run at the default
+#: point (test_ltbf_cg_mem_dse_xsi.py::test_modelled_memory_at_rtl).
+#: 255 + 1 -> 256 on 2026-11-07 (plans/dse_cg.md step 3): dselib through step 2c's six design points on
+#: the live backend (tests/examples/test_dse_cg_live.py).
+WANT_XSI_GATES = 256
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run
