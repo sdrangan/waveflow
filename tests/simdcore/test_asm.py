@@ -106,6 +106,13 @@ def test_python_form_matches_text():
     assert p.assemble() == assemble(text).words
 
 
+def test_constant_expressions():
+    assert assemble("li t2, (9 << 8) | 10").words == assemble("li t2, 0x90A").words
+    assert assemble("addi a0, a0, -(1 << 4) + 3").words == assemble("addi a0, a0, -13").words
+    with pytest.raises(AsmError):
+        assemble("addi a0, a0, foo + 1")
+
+
 def test_errors():
     for bad in ("vadd.vv v1, v2", "addi a0, a0, 5000", "foo a0", "vadd.vv v1, v2, x3", "beq a0, a1, 3",
                 "vsetvli t0, a0, m1", "lw a0, (a9)"):

@@ -58,10 +58,36 @@ def _split_operands(s: str) -> list[str]:
     return [o.strip() for o in s.split(",") if o.strip()] if s.strip() else []
 
 
+_BINOPS = {"Add": lambda a, b: a + b, "Sub": lambda a, b: a - b, "Mult": lambda a, b: a * b,
+           "LShift": lambda a, b: a << b, "RShift": lambda a, b: a >> b, "BitOr": lambda a, b: a | b,
+           "BitAnd": lambda a, b: a & b, "BitXor": lambda a, b: a ^ b, "FloorDiv": lambda a, b: a // b,
+           "Mod": lambda a, b: a % b}
+
+
+def _const(node) -> int:
+    """A constant integer expression (GNU as's operators on literals; no symbols)."""
+    import ast
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)):
+        v = _const(node.operand)
+        return -v if isinstance(node.op, ast.USub) else (~v if isinstance(node.op, ast.Invert) else v)
+    if isinstance(node, ast.BinOp) and type(node.op).__name__ in _BINOPS:
+        return _BINOPS[type(node.op).__name__](_const(node.left), _const(node.right))
+    raise ValueError(node)
+
+
 def _int(s: str) -> int:
     try:
         return int(s.replace("_", ""), 0)
-    except ValueError as e:
+    except ValueError:
+        pass
+    import ast
+
+    try:
+        return _const(ast.parse(s.replace("/", "//"), mode="eval").body)
+    except (SyntaxError, ValueError, TypeError) as e:
         raise AsmError(f"not an integer: {s!r}") from e
 
 
