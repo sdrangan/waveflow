@@ -60,12 +60,13 @@ class Refused(Exception):
     """The service refused the call: a wrong arm, an exhausted budget, a closed run, a bad name."""
 
 
-def _call(fn: str, **kwargs: Any) -> Any:
+def _call(name: str, /, **kwargs: Any) -> Any:
     """One request: to the bound session if there is one, else to the service at ``DSE_SERVICE``
-    (``host:port``; an HTTP ``POST /call``).  A refusal raises :class:`Refused`."""
+    (``host:port``; an HTTP ``POST /call``).  A refusal raises :class:`Refused`.  *name* is
+    positional only: a call's own arguments (``results(fn=...)``) may use any keyword."""
     if _SESSION is not None:
         try:
-            return getattr(_SESSION, fn)(**kwargs)
+            return getattr(_SESSION, name)(**kwargs)
         except Exception as e:  # the service's own refusal type lives with the service
             if type(e).__name__ == "Refused":
                 raise Refused(str(e)) from None
@@ -76,7 +77,7 @@ def _call(fn: str, **kwargs: Any) -> Any:
     import urllib.request
 
     req = urllib.request.Request(f"http://{_SERVICE}/call", method="POST",
-                                 data=json.dumps({"fn": fn, "kwargs": kwargs}).encode(),
+                                 data=json.dumps({"fn": name, "kwargs": kwargs}).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=None) as r:
         out = json.loads(r.read())

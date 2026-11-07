@@ -313,17 +313,23 @@ class Service:
                 p["rebuilds"] = rb.get(p["name"], [])
         return sp
 
-    def _now(self, fn: str, args: dict, key: str, what: str, call_args: tuple, p: dict) -> dict:
+    def _now(self, fn: str, args: dict, key: str, what: str, call_args: tuple, p: dict,
+             share: str | None = None) -> dict:
         """An evaluation answered at once (``golden``, ``pysim``): cached by *key*, else run and
-        charged, the tool clock moved by its cost."""
+        charged, the tool clock moved by its cost -- nothing when *share* (the computation it reads,
+        ``golden_identity``) was charged before in this run."""
         if key in self.ledger.evals:
             row = {**self.ledger.evals[key], "cost_s": 0.0, "cached": True}
             self.ledger.charge(fn, args, 0.0, True, row, self.clock_s, self.clock_s)
             return row
         row, cost = self.backend.call(what, *call_args)
+        if share is not None and share in self.ledger.evals:
+            cost = 0.0                          # its computation is this run's already
         row = {**row, "params": p, "cost_s": cost, "cached": False}
         if row.get("status") == "ok":
             self.ledger.evals[key] = row
+            if share is not None:
+                self.ledger.evals.setdefault(share, {"status": "ok", "share": True})
         t0 = self.clock_s
         self.clock_s += cost
         self.ledger.charge(fn, args, cost, False, row, t0, self.clock_s)
@@ -339,7 +345,8 @@ class Service:
             return row
         name, w = self.design.workload("accuracy" if workload is None else workload)
         key = eval_key("golden", p, name, w)
-        return self._now("golden", args, key, "golden", (p, {"name": name, **w}), p)
+        share = "golden-id|" + self.design.golden_identity(p, {"name": name, **w})
+        return self._now("golden", args, key, "golden", (p, {"name": name, **w}), p, share)
 
     def pysim(self, params: dict, workload: Any = None) -> dict:
         if self.arm != "waveflow":

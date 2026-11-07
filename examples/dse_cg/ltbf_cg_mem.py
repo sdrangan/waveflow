@@ -546,6 +546,13 @@ class LtbfCgMemAdaptor(DseAdaptor):
                 "phases_s": phases, "build_s": sum(v for k, v in phases.items() if k != "simulate"),
                 "simulate_s": phases.get("simulate", 0.0)}
 
+    def golden_identity(self, params: dict, workload: dict) -> str:
+        """One accuracy table a (``W``, ``form``, ``target``) -- every ``t`` and every other parameter
+        read from it -- so the service charges its computation once (:meth:`golden`'s ``seconds``)."""
+        d = self.fill(params)
+        _name, w = self.workload(workload)
+        return f"acc|W{d['W']}|{d['form']}|{w['target']}"
+
     def golden(self, params: dict, workload: str | dict | None = None) -> dict:
         """The accuracy the hardware will have, bit-exact: the fixed-point chain with the design's
         formats against exact float LTBF over the held-out drops 11-100 at the workload's ``t`` and

@@ -196,6 +196,7 @@ def test_dselib_in_process_and_over_http(monkeypatch):
     dselib.bind(s)
     try:
         assert dselib.golden({}, "accuracy")["status"] == "ok"
+        assert len(dselib.results("golden")) == 1 and dselib.results() is not None   # results(fn=...)
     finally:
         dselib.bind(None)
     t = threading.Thread(target=sv.serve, args=(s, "127.0.0.1:18765"), daemon=True)
@@ -205,6 +206,7 @@ def test_dselib_in_process_and_over_http(monkeypatch):
     time.sleep(0.3)
     monkeypatch.setattr(dselib, "_SERVICE", "127.0.0.1:18765")
     assert dselib.budget()["spent_s"] == COST["golden"]
+    assert len(dselib.results("golden")) == 1                         # results(fn=...) over HTTP
     with pytest.raises(dselib.Refused):
         dselib._call("not_a_function")
 
@@ -234,3 +236,75 @@ def test_the_replay_backend_answers_from_the_table_at_its_recorded_cost(tmp_path
     r = s.wait(s.rtlsim([{}], "long_term"))[0]
     assert r["cycles"] == 1_611_880 and r["cost_s"] == 3 * 120.0 + 4 * 600.0 + 180.0 + 797.0
     assert s.pysim({"L": 2}, "long_term")["status"] == "not_in_space"
+
+
+def test_golden_is_charged_once_per_accuracy_table():
+    """golden_identity: two points that read one accuracy table (same W, form, target) share its
+    computation; another target is a new table."""
+    s = _service()
+    a = s.golden({}, "accuracy")
+    b = s.golden({"R": 8, "C": 8, "L": 2}, "accuracy")               # another design, the same table
+    c = s.golden({}, {"name": "accuracy", "target": "-6_3"})          # a new table
+    assert a["cost_s"] == COST["golden"] and not a["cached"]
+    assert b["cost_s"] == 0.0 and not b["cached"]
+    assert c["cost_s"] == COST["golden"]
+
+
+class Synthetic(Backend):
+    """Metrics that follow the parameters (pysim a little off on T_upd): enough for the scripted
+    policies to have something to find."""
+
+    @staticmethod
+    def _m(p, t=3):
+        lut = p["R"] * p["C"] * 1000 * p["W"] // 16 + 5000 * p["L"]
+        tupd = (6.4 if p["mem_rate"] == 2 else 4.7) * (0.73 if t == 2 else 1.0)
+        return lut, p["R"] * p["C"] * 5 + 20 * p["L"], tupd
+
+    def call(self, what, *args):
+        self.calls.append(what)
+        if what == "golden":
+            p, w = args
+            return {"status": "ok", "median_loss_db": 0.02 if p["W"] == 16 else 0.25,
+                    "p90_loss_db": 0.5}, COST["golden"]
+        if what == "pysim":
+            p, w = args
+            lut, dsp, tupd = self._m(p, w.get("t", 3))
+            return {"status": "ok", "t_upd_ms": tupd * 1.02, "cycles": 1,
+                    "resources": {"lut": lut, "ff": lut, "dsp": dsp, "bram": 2}}, COST["pysim"]
+        if what == "synth":
+            node, p = args
+            lut, dsp, _ = self._m(p)
+            return {"status": "ok", "lut": lut // 4, "ff": lut // 4, "dsp": dsp // 4, "bram": 0}, COST["synth"]
+        if what == "rtlsim":
+            p, w = args
+            return ({"status": "ok", "t_upd_ms": self._m(p, w.get("t", 3))[2], "bit_exact": True,
+                     "build_s": COST["build"], "simulate_s": COST["simulate"]},
+                    COST["build"] + COST["simulate"])
+        return super().call(what, *args)
+
+
+@pytest.mark.parametrize("arm", ["traditional", "waveflow"])
+def test_the_scripted_policies_find_the_optimum(arm):
+    """Both policies submit an optimum of the first objective; the Waveflow one verifies fewer."""
+    from examples.dse_cg import policies
+    from examples.dse_cg.prereg import OBJECTIVES
+    from examples.dse_cg.skill.dse import dselib
+
+    obj = OBJECTIVES[0]                             # min LUT s.t. T_upd <= 5 ms (t 3), loss <= 0.1 dB
+    be = Synthetic()
+    s = sv.Service(Design(), arm, obj, None, 2, be, None)
+    dselib.bind(s)
+    try:
+        if arm == "traditional":
+            out = policies.traditional(dselib, obj, lambda p: p["R"] * p["C"] + p["L"])
+        else:
+            out = policies.waveflow(dselib, obj, top_k=2)
+    finally:
+        dselib.bind(None)
+    assert out["accepted"] and out["submitted"]["W"] == 16 and out["submitted"]["mem_rate"] == 1
+    assert (out["submitted"]["R"], out["submitted"]["C"], out["submitted"]["L"]) == (2, 4, 2)
+    # Synthetic rows put each part at a quarter of the design's numbers, so the totals are the design's
+    assert out["value"] == 2 * 4 * 1000 + 2 * 5000
+    verified = be.calls.count("rtlsim")
+    print(arm, "RTL runs", verified, "syntheses", be.calls.count("synth"))
+    assert verified <= (8 if arm == "waveflow" else 400), (arm, verified)

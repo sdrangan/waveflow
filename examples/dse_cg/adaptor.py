@@ -290,6 +290,15 @@ class DseAdaptor(ABC):
         kernels.  Never shown to the agent."""
         raise NotImplementedError(f"{type(self).__name__} runs its own build flow")
 
+    def golden_identity(self, params: dict, workload: dict) -> str:
+        """What ``golden`` computes at ``params`` and ``workload``, as a key: two calls with one key
+        share one computation, so the service charges it once.  Default: the whole point and workload
+        (nothing shared); a design whose accuracy depends on fewer parameters names them.  Never shown
+        to the agent."""
+        import json
+
+        return json.dumps([self.fill(params), workload], sort_keys=True, default=str)
+
     def sim_identity(self, params: dict, workload: dict) -> dict[str, str]:
         """``{"build": ..., "run": ...}`` at ``params`` and ``workload``: ``build`` combines every
         node's identity (what the RTL is elaborated from), ``run`` adds the design parameters that
