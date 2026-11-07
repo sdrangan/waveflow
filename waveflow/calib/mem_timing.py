@@ -14,6 +14,13 @@ RTL, each op's start and end recorded by both (:class:`~waveflow.simulation.mm_t
 
 :func:`mem_timing_record` files the fit under the memory's identity (D7), where
 :class:`~waveflow.hw.memory.MemoryMod` loads it (``calib_dir``).
+
+The harness's master keeps one read and one write in flight, so it never shows what an ``m_axi``
+master with its next burst already waiting does: the memory's **turnaround**, the cycles its front
+stays busy after a transaction before the next one's first beat.  :func:`fit_turnaround` measures it
+from back-to-back bursts in a traced run of the memory in a system (``plans/dse_cg.md`` step 1f) and
+:func:`mem_turnaround_record` files it beside the timing; the memory declares it on its slave port
+(``MMIFSlave.turnaround``).
 """
 from __future__ import annotations
 
@@ -21,6 +28,8 @@ import numpy as np
 
 #: The payload kind of a memory-timing record in a ``ModuleStore`` (``target="timing"``).
 MEM_TIMING_KIND = "mem_timing"
+#: The payload kind of a memory's turnaround record (:func:`fit_turnaround`), filed beside its timing.
+MEM_TURNAROUND_KIND = "mem_turnaround"
 
 
 def _alone(times) -> list[bool]:
@@ -94,3 +103,48 @@ def stored_mem_timing(store, mem, *, workload: str | None = None):
 
 
 __all__ = ["MEM_TIMING_KIND", "fit_mem_timing", "mem_timing_record", "stored_mem_timing"]
+
+
+def fit_turnaround(rows, timing: dict) -> dict:
+    """The memory's turnaround per direction, in cycles: from back-to-back transactions at RTL, *rows*
+    ``[(kind, nwords, period)]`` (``kind`` ``"read"`` or ``"write"``; *period* the cycles from one
+    transaction's first data beat to the next one's, the next already waiting), less what pysim holds
+    the memory for one transaction -- the record's ``init + per_word * n`` and the ``n`` beats on the
+    bus (*timing*: the memory's :data:`MEM_TIMING_KIND` payload).  The median over each direction's
+    rows, and how far they spread: ``{kind: {"cycles", "n", "spread"}}`` (a direction without rows is
+    absent)."""
+    out: dict = {}
+    for kind in ("read", "write"):
+        k = timing[kind]
+        extra = [float(p) - (float(k["init"]) + float(k["per_word"]) * int(n) + int(n))
+                 for kd, n, p in rows if kd == kind]
+        if extra:
+            e = np.asarray(extra)
+            out[kind] = {"cycles": float(np.median(e)), "n": len(e),
+                         "spread": [float(e.min()), float(e.max())]}
+    return out
+
+
+def mem_turnaround_record(mem, payload: dict, *, workload: str, part: str = "", period_ns: float = 0.0,
+                          tool: str = "", source: str = "xsi"):
+    """The turnaround :class:`~waveflow.calib.record_store.Record` of *mem* (``kind:
+    mem_turnaround``; *payload* :func:`fit_turnaround`'s), and the identity it is filed under."""
+    from waveflow.calib.phases import module_identity
+    from waveflow.calib.record_store import Provenance, Record
+
+    ident = module_identity(mem)
+    rec = Record(key=ident.key, target="timing", source=source,
+                 payload={"kind": MEM_TURNAROUND_KIND, "workload": workload, "turnaround": payload},
+                 provenance=Provenance(signature=ident.signature, part=part,
+                                       period_ns=float(period_ns), tool=tool))
+    return rec, ident
+
+
+def stored_mem_turnaround(store, mem):
+    """The newest turnaround record for *mem* in *store*, verified against its identity, or ``None``."""
+    from waveflow.calib.phases import module_identity
+
+    ident = module_identity(mem)
+    recs = [r for r in store.read(ident.key, "timing", identity=ident)
+            if r.payload.get("kind") == MEM_TURNAROUND_KIND]
+    return recs[-1] if recs else None

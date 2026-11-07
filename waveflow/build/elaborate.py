@@ -246,6 +246,11 @@ _CONTEXT_ATTRS = frozenset({
     # between transactions, matching the XSI AxiMmMaster), and ``_slots`` holds its simpy resources.  Adding the field moved every FirBlock
     # key in one commit, caught by tests/calib/test_key_stability.py -- the same lesson as above.
     "max_outstanding", "issue_cycles", "_slots",        # MMIFMaster
+    # Likewise how a transfer meets a slave that serves one transaction at a time: an HLS master's
+    # burst length (fixed by the module's class) and the slave's measured turnaround (loaded from its
+    # record) -- plans/dse_cg.md step 1f.  Neither moves what a module is.
+    "axi_burst",                                        # MMIFMaster
+    "turnaround",                                       # MMIFSlave
     "mm_device",          # a view/adaptor's back-reference to its MmSlaveDevice (an address-map walk)
     # MemWStream.done_framed only chooses whether pysim's s_done carries TLAST (the HLS port never
     # does); the endpoint's own has_tlast still tells two such writers apart.  Adding the field moved

@@ -200,6 +200,29 @@ advantage came from them, a reviewer could say the advantage is a bespoke model,
 stay, as a comparison. *Gate:* at the default point, pysim's cycles and resources sit next to 1a's
 and 1c's measurements in a table: reported, not gated (scoring is step 4's job).
 
+**1f. The devices' timing in the system, calibrated (decided 2026-11-07, after 1a's gates).** 1a's
+gates passed pysim's end within 5% only at one bank and the BRAM's rate (+0.03%); at two banks
+-6.1%, with the one-cycle memory -8.8% (one bank) and -12.4% (two), every endpoint's data equal.
+Three causes, from each job's dispatch and Resp-pop times in the RTL runs' operation logs against
+pysim's:
+- a gather (the systolic feeder's coalesced read of a tile's panels) held a memory that serves one
+  transaction at a time for all its bursts, so the host's reads waited a whole gather (up to 4k
+  cycles) where the RTL makes them wait one burst. At one bank this alone lengthened pysim's run by
+  about 5%, which hid the next two causes; at RTL a second bank gains nothing. Fixed in the framework:
+  each burst holds the slave on its own (`AXIMMCrossBarIF.read_gather`).
+- the systolic engine's read port idles between its bursts at RTL longer than pysim's 2.2 cycles
+  (`TILE_BURST_CYCLES`, fitted to the tasks' pysim, not the RTL): about 16 cycles a burst with the
+  one-cycle memory and 8-11 with the BRAM's, 176 bursts a job of the long-term update
+  (`docs/examples/systolic/timing.md`: the `m_axi` adapter's gaps and the feeder's per-tile command).
+- the vector device's wrapper (program loads, decoder, memory streams, writer) costs about 540-730
+  cycles a job more at RTL at either rate: the unit's own calibration covers its job interval, not
+  the wrapper.
+
+The crossbar's model stays as it is. Each device is measured alone on Shared Mem as the system builds
+it, traced, at both rates (`devsys.sys_system`/`vec_system(shared=True)`, `device_dag(shared=True)`);
+the gaps are modelled as the traces show them and fitted there. *Gates:* 1a's five points within 5%,
+then step 2c's six.
+
 **The units at 2025.1** are done (`plans/calib_2025_1.md`): the vector unit, the systolic engine (its
 core's timing at the LTBF configurations and a resource model on the platform) and the A53 (the
 shipped platform and the LTBF kernels, recompiled by 2025.1's gcc). The crossbar, Shared Mem and the
@@ -509,3 +532,6 @@ so no request falls off it.
 | 2026-11-07 | 3 | The service (live backend), `dselib`'s two transports, `DSE.md` generated (`brief.build_blocks`), costs from `costs.py` (filled by step 2c). | `tests/examples/test_dse_cg_service.py` (9 passed), `test_dse_cg_brief.py` (2 passed) |
 | 2026-11-07 | 2a | What any adaptor needs moved into the base (`examples/dse_cg/adaptor.py`): `BUILT`, `MODELLED` and `TOP` as class attributes; `legal_with` (a point completed to a legal one, defaults first), `node_of`, `spec`, `architecture_at` and the parametric `architecture` (checked at each parameter's extremes), and `rebuilds` computed from identities. The LTBF adaptor keeps only what is LTBF's (`node_of` groups Shared Mem's banks into one node). The tool methods' stubs say the adaptor runs its own build flow. | `tests/examples/test_dse_cg_ltbf.py` (the architecture at every extreme, `rebuilds` equal to the grid table) |
 | 2026-11-07 | 3 | The service's command line (`python -m examples.dse_cg.service --live`, which prints the `DSE_SERVICE` to export; the replay backend is step 5). **A failed tool call is a row**: `LiveBackend` returns `failed: <error>` charged with the time it took, the ledger keeps only `ok` rows, so asking again retries; an `rtlsim` whose synthesis failed is a `failed: synthesis` row. `DSE.md`'s module table renders the docstrings' literals as Markdown. The step-3 gate on the live backend: `dselib` through the six points of `points.py` (every call `ok`, `rtlsim` bit-exact, golden and pysim the same accuracy, a repeat free, a workload change a new run on the same build, a simulation-only change no new part). Two races fixed on the way: `synth_sub_ooc` wrote each sub-top's Verilog to one path for every point, so two processes could store one point's netlist under the other's key -- now a directory per content -- and `rtl_against_pysim` read the symbol endpoint a run without a slot never writes. | `test_dse_cg_service.py` (11 passed); `test_dse_cg_live.py` (`-m xsi`, after step 2c) |
+| 2026-11-07 | 1a | **The gates at 2025.1** (AC9's design, long-term update alone unless noted; RTL cycles, pysim's error): one bank, BRAM rate 1,611,880 (+0.03%); two banks, BRAM rate 1,618,954 (-6.11%); one bank, one-cycle memory 1,189,582 (-8.81%); two banks, one-cycle 1,187,716 (-12.42%); end to end (one bank, BRAM rate, the slot) 5,488,089 (-2.42%, passed). Every Job FIFO, Ctrl and symbol word, every Resp per source and every data burst equal at all five. At RTL a second bank gains nothing and the one-cycle memory 26%; pysim gave the bank 5.7% and the rate 33%. An RTL run of the update takes about 16 minutes alone (13 of simulation). | `tests/examples/test_ltbf_cg_mem_dse_xsi.py::test_modelled_memory_at_rtl` (2 passed, 3 failed on the timing check) |
+| 2026-11-07 | 1f | The user's decision: calibrate before going on (the choices were to widen the gate or model only the fixed costs). The causes and the plan are 1f's. The gather fix is in (`read_gather`, a burst a hold): pysim's bank effect falls from 5.7% to 1.0%, and what is left is uniform: -4.9% (one bank) and -6.3% (two) at the BRAM rate, -12.1% and -12.6% with the one-cycle memory. The device harnesses take Shared Mem as an option for the traced measurements. | each job's dispatch and Resp pop in the gates' RTL operation logs (`report.json`) against pysim's |
+| 2026-11-07 | 1f | **What the RTL traces show, and the framework's answers.** A trace of a system run (AC9, Shared Mem at the BRAM's rate) shows every HLS master reading and writing in 16-beat bursts (HLS's default burst length), Shared Mem serving one at a time with 2n + 2 cycles a back-to-back read burst against pysim's 2n + 1, and the vector unit's writer waiting for each burst's response before the next (21 cycles a 16-beat burst against pysim's 17). pysim had read a tile's panels or a 256-word transfer as one transaction, and let an early-anchored write whose anchor had passed into memory without occupying it (79 of the update's 240 such writes, 31,936 words). In the framework now: an HLS master declares its burst length (`MMIFMaster.axi_burst`, 16 for the systolic feeder, `MemRStream` and `MemWStream`), and on a slave that serves one transaction at a time each burst holds it on its own; an anchored write holds such a slave for its words; a slave may declare a measured turnaround (`MMIFSlave.turnaround`, a memory's from a `mem_turnaround` record filed beside its timing, `fit_turnaround`), released after each transaction in the background. Both new attributes stay out of the module identity, so no record moves (`tests/calib/test_key_stability.py`). pysim's error now: -1.3% and -2.9% at the BRAM's rate (one and two banks), -7.3% and -7.9% with the one-cycle memory; the turnarounds and the writers' response wait are measured next, at 2025.1. | `tests/hw/test_serialized_bursts.py` (5 passed) |

@@ -38,7 +38,14 @@ from waveflow.hw.dataschema import DataList
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFSlave, StreamIF, StreamIFMaster, StreamIFSlave
-from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemWCmd, MemWStream, _word_type
+from waveflow.hw.mem_stream import (
+    MEM_AXI_MAX_BURST,
+    KernelTask,
+    MemRCmd,
+    MemWCmd,
+    MemWStream,
+    _word_type,
+)
 from waveflow.hw.memif import MMIFReadMaster
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.lanes import DEFAULT_WORD_BITS, from_words, nwords, to_words
@@ -230,7 +237,8 @@ class EngineFeeder(_MemPart):
         super().__post_init__()
         w = int(self.word_bits)
         self.feed_in = self._ep(StreamIFSlave, "feed_in", CTRL_BITS, False)
-        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w,
+                                    axi_burst=MEM_AXI_MAX_BURST)
         # The body requests a tile's panels ahead of their data (hls::burst_maxi), so the read port
         # does not idle between them.
         self.m_mem.burst_maxi = True

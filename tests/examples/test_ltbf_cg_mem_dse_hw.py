@@ -587,7 +587,9 @@ def test_system_equals_the_fixed_chain(policy, sector, form, tmp_path):
     """Step 4.5 (AC9's configuration in pysim): drop 1, sector 1 (10 own UEs, 22 connected), N_rx =
     64, factored, ``t`` 3, ``r`` 1, ``c`` 8, ``Mmax`` 16, ``J`` 9, a ring of 2 symbols.  The host runs
     the scheduler over one long-term update, then one slot through the Ingest DMA (the O-RU paced at
-    500 µs a symbol: one 64-bit port cannot carry 64 antennas at 8.9 µs).  Every job runs (no symbol
+    1 ms a symbol, AC9's: one 64-bit port cannot carry 64 antennas at 8.9 µs, and at 500 µs the RTL's
+    own lag from a symbol's arrival to its chunks' credit, 249k to 409k cycles at 2025.1, passes the
+    two-symbol ring's 250k -- plans/dse_cg.md step 1f).  Every job runs (no symbol
     dropped); ``G'`` in Shared Mem, the DMRS symbols' ``Z``, the weights ``w`` and every ``x̂`` tile
     equal the fixed-point chain's (``ltbf_fixed_chain``) bit for bit, under either policy.  Sector 0
     (5 own UEs: ``U_pad`` 8 under ``S`` = ``Mmax`` 16, padding rows in every tile) too, and the explicit
@@ -596,7 +598,7 @@ def test_system_equals_the_fixed_chain(policy, sector, form, tmp_path):
     from examples.ltbf_cg_mem_dse.hw import system as sy
 
     inp = sy.inputs(
-        sy.SysParams(policy=policy, sector=sector, form=form, sym_period=500e-6)
+        sy.SysParams(policy=policy, sector=sector, form=form, sym_period=1e-3)
     )
     assert (inp.dims.U, inp.dims.u_pad, inp.dims.S) == (
         (10, 16, 16) if sector else (5, 8, 16)

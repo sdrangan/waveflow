@@ -253,6 +253,15 @@ class MMIFSlave(InterfaceEndpoint):
     "data, then doorbell" safe (``plans/mm_slave_adaptor.md``, guarantee 1).  Measured: without this
     flag the pysim adaptor let a doorbell overtake a 256-word burst that the RTL held it behind."""
 
+    turnaround: dict | None = None
+    """Cycles a slave that serves one transaction at a time (:attr:`serialize_transactions`) stays
+    busy after a transaction before it can begin the next, per direction (``{"read": .., "write":
+    ..}``), beyond what the transfer itself is charged.  A lone transaction does not show it -- its
+    latency is the transfer's -- but back-to-back transactions are spaced by it: the RTL front takes
+    the next address only once the last beat is out and its first beat comes a few cycles later.
+    ``None`` (default): none.  A memory measures it at RTL from back-to-back bursts
+    (:func:`waveflow.calib.mem_timing.fit_turnaround`) and declares it when it loads its record."""
+
     bus_timing: "BusTiming | None" = None
     """Calibrated per-direction bus-occupancy span model for this slave's memory port
     (the contended physical resource).  ``None`` ⇒ the pipelined :class:`Region` slices
@@ -368,6 +377,15 @@ class MMIFMaster(TypedCodecMixin, InterfaceEndpoint):
     writer and a reader polls on both, and an unlimited master lets two of those reads travel the
     crossbar together where a real one-outstanding master serializes them.  The XSI testbench's
     ``AxiMmMaster(..., overlap_rw=true)`` is ``max_outstanding = 1``; set the two from one setting."""
+
+    axi_burst: int | None = None
+    """The longest burst the master issues, in beats: a transfer longer than this is several bursts
+    at RTL, each its own transaction at the slave.  An HLS ``m_axi`` master's is HLS's
+    ``max_read_burst_length`` / ``max_write_burst_length`` (16 by default:
+    :data:`~waveflow.hw.mem_stream.MEM_AXI_MAX_BURST`).  ``None`` (default): a transfer is one
+    transaction, the model every design used before this existed.  Only a slave that serves one
+    transaction at a time (``serialize_transactions``) sees the difference: each burst holds it on its
+    own and pays its cost per transaction, and another master's transaction can go between them."""
 
     issue_cycles: float = 0.
     """Cycles between a caller asking for a transaction and the master presenting it -- the host's
@@ -1294,6 +1312,60 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             return (self.bitwidth if self.bitwidth is not None else 32) // 8
         return 1
 
+    def _release(self, channel, req, slave_ep, kind: str) -> None:
+        """Release a serializing slave's *channel* (*req*): at once, or after the slave's
+        :attr:`~MMIFSlave.turnaround` for *kind* -- in the background, so the master goes on while
+        the slave is still busy."""
+        t = float((getattr(slave_ep, "turnaround", None) or {}).get(kind, 0.0)) / self.clk.freq
+        if t <= 0:
+            channel.release(req)
+            return
+
+        def later():
+            yield self.timeout(t)
+            channel.release(req)
+
+        self.env.process(later())
+
+    def _max_burst(self, master_port: int) -> int | None:
+        """The master's :attr:`~MMIFMaster.axi_burst` (``None``: a transfer is one burst)."""
+        mb = getattr(self.endpoints.get(f"master_{master_port}"), "axi_burst", None)
+        return int(mb) if mb else None
+
+    def _serialized_reads(self, ep_name: str, slave_ep, runs, master_port: int) -> ProcessGen[list]:
+        """Runs ``[((ep, slave, local), nwords)]`` on one slave that serves a transaction at a time,
+        read as the master issues them: each run cut at the master's :meth:`_max_burst`, every burst
+        holding the slave on its own -- the slave's cost per transaction, the words, the return -- so
+        another master's transaction can go between two bursts.  The address latency is paid once:
+        the master's requests are pipelined ahead of its data.  Returns each run's words."""
+        dtype = self._dtype()
+        if self.latency_travel > 0:
+            yield self.timeout(self.latency_travel / self.clk.freq)
+        step, cap = self._word_step(), self._max_burst(master_port)
+        bursts = [(local + off * step, min(cap or n, n - off), k)
+                  for k, ((_e, _s, local), n) in enumerate(runs) for off in range(0, n, cap or max(n, 1))]
+        parts: list[list] = [[] for _ in runs]
+        for b, (local, n, k) in enumerate(bursts):
+            ch = slave_ep.read_channel
+            req = ch.request()
+            yield req
+            try:
+                dly = (self.latency_init - self.latency_travel) / self.clk.freq if b == 0 else 0.0
+                if dly > 0:
+                    yield self.timeout(dly)
+                if slave_ep.rx_read_proc is not None:
+                    parts[k].append((yield from slave_ep.rx_read_proc(n, local)))
+                else:
+                    parts[k].append(np.zeros(n, dtype=dtype))
+                dly = (n * self._poll_stretch(ep_name)
+                       + (self.latency_read_return if b == len(bursts) - 1 else 0.0)) / self.clk.freq
+                if dly > 0:
+                    yield self.timeout(dly)
+            finally:
+                self._release(ch, req, slave_ep, "read")
+        return [p[0] if len(p) == 1 else (np.concatenate(p) if p else np.zeros(0, dtype=dtype))
+                for p in parts]
+
     # ------------------------------------------------------------------
     # Write path
     # ------------------------------------------------------------------
@@ -1307,13 +1379,42 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         # they arrive.  Not for an early-anchored (``tstart``) write: its words already landed.
         begin = getattr(slave_ep, "rx_write_begin", None) if tstart is None else None
 
-        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
+        mb = self._max_burst(master_port)
+        if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions and begin is None \
+                and mb is not None and words.shape[0] > mb:
+            # The master's bursts (see MMIFMaster.axi_burst): each holds the slave on its own, the
+            # address latency paid once.  An early-anchored burst ends no sooner than its words could
+            # have arrived (tstart, a word a cycle) but always holds the slave for them: one
+            # transaction at a time, so its words cannot have landed while the slave served another.
+            if self.latency_travel > 0:
+                yield self.timeout(self.latency_travel / self.clk.freq)
+            step = self._word_step()
+            for off in range(0, words.shape[0], mb):
+                part = words[off:off + mb]
+                ch = slave_ep.write_channel
+                req = ch.request()
+                yield req
+                try:
+                    head = (self.latency_init - self.latency_travel) / self.clk.freq if off == 0 else 0.0
+                    dly = head + part.shape[0] * self._poll_stretch(ep_name) / self.clk.freq
+                    if tstart is not None:
+                        dly += max(0.0, tstart + off / self.clk.freq - self.env.now)
+                    if dly > 0:
+                        yield self.timeout(dly)
+                    if slave_ep.rx_write_proc is not None:
+                        yield from slave_ep.rx_write_proc(part, local_addr + off * step)
+                finally:
+                    self._release(ch, req, slave_ep, "write")
+
+        elif protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
             # One transaction at a time from the address phase on: travel, then take the channel,
             # then charge the rest, so a later transaction cannot slip in ahead (see the field).
             if self.latency_travel > 0:
                 yield self.timeout(self.latency_travel / self.clk.freq)
-            with slave_ep.write_channel.request() as req:
-                yield req
+            ch = slave_ep.write_channel
+            req = ch.request()
+            yield req
+            try:
                 head = (self.latency_init - self.latency_travel) / self.clk.freq
                 body = words.shape[0] * self._poll_stretch(ep_name) / self.clk.freq
                 if begin is not None:
@@ -1323,13 +1424,17 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
                     if body > 0:
                         yield self.timeout(body)
                 else:
+                    # An early-anchored write ends no sooner than its anchor allows, and holds the
+                    # slave for its words even when the anchor is past (see the bursts above).
                     dly = head + body
                     if tstart is not None:
-                        dly = max(0.0, dly + (tstart - self.env.now))
+                        dly += max(0.0, tstart - self.env.now)
                     if dly > 0:
                         yield self.timeout(dly)
                 if slave_ep.rx_write_proc is not None:
                     yield from slave_ep.rx_write_proc(words, local_addr)
+            finally:
+                self._release(ch, req, slave_ep, "write")
 
         elif protocol == AXIMMProtocol.FULL:
             # Derate only the per-word (nwords) occupancy term by 1/(1-ov); the
@@ -1382,23 +1487,10 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
 
         if protocol == AXIMMProtocol.FULL and slave_ep.serialize_transactions:
             # The whole read -- the rest of the address latency, the slave, the return -- inside the
-            # channel, after the travel (see latency_travel).
-            if self.latency_travel > 0:
-                yield self.timeout(self.latency_travel / self.clk.freq)
-            with slave_ep.read_channel.request() as req:
-                yield req
-                req_dly = (self.latency_init - self.latency_travel) / self.clk.freq
-                if req_dly > 0:
-                    yield self.timeout(req_dly)
-                if slave_ep.rx_read_proc is not None:
-                    words = yield from slave_ep.rx_read_proc(nwords, local_addr)
-                else:
-                    words = np.zeros(nwords, dtype=dtype)
-                ret_dly = (
-                    self.latency_read_return + nwords * self._poll_stretch(ep_name)
-                ) / self.clk.freq
-                if ret_dly > 0:
-                    yield self.timeout(ret_dly)
+            # channel, after the travel (see latency_travel); in the master's bursts (see
+            # MMIFMaster.axi_burst), each holding the slave on its own, then its turnaround.
+            (words,) = yield from self._serialized_reads(
+                ep_name, slave_ep, [((ep_name, slave_ep, local_addr), int(nwords))], master_port)
             return words
 
         if protocol == AXIMMProtocol.FULL:
@@ -1442,7 +1534,12 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
         """Several runs ``[(global_addr, nwords)]`` on one slave as **one** read (see
         :meth:`MMIFMaster.read_gather`): the same channel and timing as :meth:`read` of the runs'
         total words -- or, when the slave declares a calibrated read model, its span over
-        ``{num_trans: len(runs), nwords}`` -- with every run's words moved inside it."""
+        ``{num_trans: len(runs), nwords}`` -- with every run's words moved inside it.
+
+        On a slave that serves one transaction at a time (``serialize_transactions``) each burst --
+        a run, cut at the master's :attr:`~MMIFMaster.axi_burst` -- holds the slave on its own and
+        pays the slave's cost per transaction, so another master's transaction waits for one burst,
+        not the whole gather, as the RTL's arbitration grants a burst at a time."""
         decoded = [(self._decode_address(int(a)), int(n)) for a, n in runs]
         ep_name, slave_ep, _ = decoded[0][0]
         if any(d[0][0] != ep_name for d in decoded):
@@ -1483,17 +1580,7 @@ class AXIMMCrossBarIF(_MMPollSupport, QueuedTransferIF):
             return out
         ret_dly = (self.latency_read_return + total * self._poll_stretch(ep_name)) / self.clk.freq
         if slave_ep.serialize_transactions:
-            if self.latency_travel > 0:
-                yield self.timeout(self.latency_travel / self.clk.freq)
-            with slave_ep.read_channel.request() as req:
-                yield req
-                req_dly = (self.latency_init - self.latency_travel) / self.clk.freq
-                if req_dly > 0:
-                    yield self.timeout(req_dly)
-                out = yield from move()
-                if ret_dly > 0:
-                    yield self.timeout(ret_dly)
-            return out
+            return (yield from self._serialized_reads(ep_name, slave_ep, decoded, master_port))
         if self.latency_init > 0:
             yield self.timeout(self.latency_init / self.clk.freq)
         with slave_ep.read_channel.request() as req:
