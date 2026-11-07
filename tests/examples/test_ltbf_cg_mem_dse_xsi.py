@@ -102,3 +102,72 @@ def test_system_at_rtl():
     out = json.loads((work / "report.json").read_text())["output"]
     t_rtl = int(re.search(r"DONE done=1 cycles=(\d+)", out).group(1))
     assert abs(t_py / t_rtl - 1) <= 0.05, (t_py, t_rtl)
+
+
+#: plans/dse_cg.md steps 1a and 1d: the system with the options the DSE uses -- the per-design formats,
+#: and Shared Mem modelled (simulated, never synthesized) with ``mem_banks`` 1 or 2 and ``mem_rate`` 2
+#: (the BRAM leaf as built) or 1 (``PipelinedMemoryMod``) -- at AC9's design: (banks, rate, slot).  The
+#: ``lt_`` gates run what the DSE times, the long-term update alone (``slot=False``, the C++ host's
+#: ``n_rt == 0`` path); ``e2e_b1r2`` is step 1d's end-to-end run at RTL, once, at the default point.
+MODELLED = {"lt_b1r2": (1, 2, False), "lt_b2r2": (2, 2, False), "lt_b1r1": (1, 1, False),
+            "lt_b2r1": (2, 1, False), "e2e_b1r2": (1, 2, True)}  # fmt: skip
+
+
+def _bursts_or_none(d) -> list[tuple]:
+    """A trace endpoint's bursts, or none when the run never wrote it (no slot: no symbols)."""
+    return _bursts(d) if (d / "words.bin").exists() else []
+
+
+@pytest.mark.xsi
+@pytest.mark.parametrize("tag", list(MODELLED))
+def test_modelled_memory_at_rtl(tag):
+    """The gate of ``test_system_at_rtl``, in the DSE's configuration: every Job FIFO, Ctrl and symbol
+    write word for word, the Resp records per source in order, every data burst as a multiset, and
+    pysim's end within 5% of RTL's.  Built in a root of its own per bank count (``hw/build/dse_gate_b<n>``,
+    local; the example's root keeps AC9's sources), sharing one csynth between its runs."""
+    import json
+    import re
+    import shutil
+    from dataclasses import replace
+
+    from examples.ltbf_cg_mem_dse.hw import build as b
+    from examples.ltbf_cg_mem_dse.hw import system as sy
+    from examples.ltbf_cg_mem_dse.hw.records import Resp
+    from waveflow.vecunit.build import build_config
+
+    _toolchain()
+    banks, rate, slot = MODELLED[tag]
+    p = replace(sy.AC9, formats="design", mem_banks=banks, mem_rate=rate, slot=slot)
+    root = b.ROOT / "hw" / "build" / f"dse_gate_b{banks}"
+    root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(b.ROOT / "src", root / "src", dirs_exist_ok=True)
+    cfg = build_config(root)
+    cfg.params["synth"] = "build"
+    dag = b.variant_dag({tag: p})
+    for through in (f"{tag}_pysim", f"{tag}_system_xsi"):
+        res = dag.run(cfg, through=through)
+        bad = {k: (r.message or "")[-2000:] for k, r in res.items() if not r.success}
+        assert not bad, bad
+    work = root / b.WORK_DIR / tag
+    py, rtl = work / "pysim_traces", work / "traces"
+    for ep in ("qjob_sys", "qjob_vec", "ing_ctrl", "qsym"):
+        assert _bursts_or_none(py / ep) == _bursts_or_none(rtl / ep), ep
+    assert _bursts(py / "qjob_sys") and _bursts(py / "qjob_vec")
+    assert bool(_bursts_or_none(py / "qsym")) == slot
+
+    def by_source(d) -> dict:
+        out: dict = {}
+        for burst in _bursts(d):
+            r = Resp().deserialize(list(burst), word_bw=64)
+            out.setdefault(int(r.src), []).append((int(r.status), int(r.tx_id), int(r.seq)))
+        return out
+
+    assert by_source(py / "qresp") == by_source(rtl / "qresp")
+    assert sorted(x for x in _bursts(py / "bus") if len(x) > 1) == sorted(
+        x for x in _bursts(rtl / "bus") if len(x) > 1
+    )
+    t_py = json.loads((work / "pysim.json").read_text())["cycles"]
+    out = json.loads((work / "report.json").read_text())["output"]
+    t_rtl = int(re.search(r"DONE done=1 cycles=(\d+)", out).group(1))
+    print(f"{tag}: pysim {t_py} RTL {t_rtl} cycles ({t_py / t_rtl - 1:+.2%})")
+    assert abs(t_py / t_rtl - 1) <= 0.05, (t_py, t_rtl)

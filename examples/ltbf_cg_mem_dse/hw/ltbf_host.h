@@ -59,7 +59,7 @@ public:
             if (!rt_added && lt_done) {
                 rt_added = true;
                 add(n_lt_, n_rt_);
-                slot_start_.set();
+                if (n_rt_ > 0) slot_start_.set();  // no slot (SysParams.slot False): no O-RU
                 start("ticker", [this] { ticker(); });
             }
             pump();

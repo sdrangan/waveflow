@@ -215,9 +215,10 @@ def system_dag(
 MEM_SPANS = (1 << 17, 1 << 19, 1 << 21)
 
 
-def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR) -> str:
+def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR, rate: int = 2) -> str:
     """Shared Mem of *span* words in its own harness, through XSI, and its timing fitted and filed
-    in ``calib/`` (``MemCalibStep``); returns the record's artifact."""
+    in ``calib/`` (``MemCalibStep``); returns the record's artifact.  *rate*: the memory's cycles a
+    read word at RTL (``system.shared_mem``; 1, the pipelined leaf)."""
     from examples.ltbf_cg_mem_dse.hw import system as sy
     from waveflow.build.phase_calib import MemCalibStep
     from waveflow.build.system_dag import add_system_steps
@@ -226,7 +227,7 @@ def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR) -> str:
     from waveflow.hw.harness import memory_harness
 
     clk = Clock(freq=sy.F_HOST)
-    uncal = memory_harness(lambda sim: sy.shared_mem(sim, span, clk, calibrated=False),
+    uncal = memory_harness(lambda sim: sy.shared_mem(sim, span, clk, calibrated=False, rate=rate),
                            sy.mem_script("calib", span), n_cycles=40_000)  # fmt: skip
     xsi = add_system_steps(
         dag, uncal, work_dir=work_dir, top="ltbf_mem_unit", prefix=prefix
@@ -236,6 +237,69 @@ def add_memcal(dag: BuildDag, span: int, prefix: str, work_dir=WORK_DIR) -> str:
     )
     dag.add(mem_cal)
     return mem_cal.a("mem_timing")
+
+
+def variant_dag(variants: dict, work_dir=WORK_DIR, trace: bool = False,
+                timeout: int = 4 * 3600) -> BuildDag:
+    """``codegen`` at the variants' one HLS configuration, then the system flow for each variant
+    (``{tag: SysParams}``), prefixed ``<tag>_`` with its own top ``ltbf_top_<tag>`` and workspace
+    ``<tag>``, each pysim after its Shared Mem's timing is measured (:func:`add_memcal` at its bank
+    span and rate).  The variants must differ only in what generates no HLS (``mem_banks``,
+    ``mem_rate``, the workload), so their tops' csynth is shared; run it in a root of its own
+    (``plans/dse_cg.md`` step 1a), not the example's, whose sources are AC9's.  *timeout*: the XSI
+    run's, in seconds (the system's run with a slot is close to an hour on a quiet machine)."""
+    from examples.ltbf_cg_mem_dse.hw import system as sy
+    from waveflow.build.system_dag import add_system_steps
+
+    first = next(iter(variants.values()))
+    dag = BuildDag()
+    dag.add(LtbfCodegenStep(name="codegen", sysp=first))
+    cals: dict = {}
+    for tag, p in variants.items():
+        hw, S, _host = sy.build(sy.inputs(p), rtl=True)
+        add_system_steps(dag, hw, work_dir=work_dir, top=f"ltbf_top_{tag}", prefix=f"{tag}_",
+                         workspace=tag, trace=trace, timeout=timeout)  # fmt: skip
+        key = (S.bank_span, p.mem_rate)
+        if key not in cals:
+            cals[key] = add_memcal(dag, S.bank_span, f"umemcal{S.bank_span.bit_length() - 1}r{p.mem_rate}_",
+                                   work_dir, rate=p.mem_rate)  # fmt: skip
+        dag.require(f"{tag}_pysim", [cals[key]])
+    return dag
+
+
+def rtl_against_pysim(work: Path, tolerance: float = 0.05) -> dict:
+    """A system run's RTL against its pysim, in workspace *work* (after ``<prefix>system_xsi``), as
+    ``test_system_at_rtl`` checks it (plan §9 e: the Resp FIFO's order is timing's): each engine's
+    Job FIFO writes, the Ingest DMA's Ctrl writes and the O-RU's symbols word for word, the Resp
+    records per source in order, every burst of data the host read or wrote as a multiset (its
+    one-word credit writes batch as timing has it), and pysim's end within *tolerance* of RTL's.
+    Returns ``{"match", "endpoints": {name: bool}, "pysim_cycles", "rtl_cycles"}``."""
+    import json
+    import re
+
+    from examples.ltbf_cg_mem_dse.hw.records import Resp
+    from waveflow.utils.burst_io import read_burst_bundle
+
+    def bursts(d: Path) -> list[tuple]:
+        return [tuple(int(w) for w in b) for b in read_burst_bundle(d)]
+
+    def by_source(d: Path) -> dict:
+        out: dict = {}
+        for burst in bursts(d):
+            r = Resp().deserialize(list(burst), word_bw=64)
+            out.setdefault(int(r.src), []).append((int(r.status), int(r.tx_id), int(r.seq)))
+        return out
+
+    py, rtl = Path(work) / "pysim_traces", Path(work) / "traces"
+    eps = {ep: bursts(py / ep) == bursts(rtl / ep) for ep in ("qjob_sys", "qjob_vec", "ing_ctrl", "qsym")}
+    eps["qresp"] = by_source(py / "qresp") == by_source(rtl / "qresp")
+    eps["bus"] = sorted(x for x in bursts(py / "bus") if len(x) > 1) == sorted(
+        x for x in bursts(rtl / "bus") if len(x) > 1)
+    t_py = int(json.loads((Path(work) / "pysim.json").read_text())["cycles"])
+    out = json.loads((Path(work) / "report.json").read_text())["output"]
+    t_rtl = int(re.search(r"DONE done=1 cycles=(\d+)", out).group(1))
+    eps["end"] = abs(t_py / t_rtl - 1) <= tolerance
+    return {"match": all(eps.values()), "endpoints": eps, "pysim_cycles": t_py, "rtl_cycles": t_rtl}
 
 
 def memcal_dag(spans=MEM_SPANS, work_dir=WORK_DIR) -> BuildDag:

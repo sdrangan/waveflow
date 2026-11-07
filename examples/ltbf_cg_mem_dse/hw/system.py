@@ -119,6 +119,24 @@ class SysParams:
     #: The O-RU's symbol period.  A real slot is 125/14 µs a symbol; one 64-bit port cannot carry
     #: 64 antennas at that rate (spike d), so a correctness run paces the slot slower.
     sym_period: float = T_SYM
+    # -- options of plans/dse_cg.md (2026-11-06); each default is the system as it was -------------
+    #: The fixed-point formats: ``"point"``, profiled on this run's drop at its ``t``, ``form`` and
+    #: ``target``; ``"design"``, once per (array, ``W``, ``form``) over drops 1-10, ``t`` up to 10
+    #: and both target sets (:func:`design_ranges`), with the shift bound at :data:`DESIGN_S_MAX`:
+    #: then ``t``, ``target`` and the drop change no hardware.
+    formats: str = "point"
+    #: Shared Mem's banks: 1, one memory; 2, the matrices (the programs, ``G'``, the symbol ring,
+    #: ``Ĥα`` in its layouts, ``K``) in bank 0 and the vectors (the CG chains', the slot's) in bank
+    #: 1, each its own crossbar slave, so the systolic engine's matrix reads and the vectors' traffic
+    #: reach different ports.
+    mem_banks: int = 1
+    #: Shared Mem's cycles a read word at RTL: 2, the BRAM leaf as built (``mm_bram_port.v``); 1, a
+    #: pipelined leaf (``PipelinedMemoryMod``, ``mm_bram_port_p1.v``), for a memory that is simulated
+    #: and not synthesized.  pysim reads either one's timing from its record (``CALIB_DIR``).
+    mem_rate: int = 2
+    #: The run: the long-term update, then the real-time slot (``True``); ``False``, the update
+    #: alone -- ``plans/dse_cg.md``'s ``long_term`` workload, its end ``T_upd``.
+    slot: bool = True
 
 
 #: AC9's configuration (step 5.2): the defaults, the O-RU paced at 1 ms a symbol.  At RTL a
@@ -154,7 +172,12 @@ def inputs(p: SysParams) -> Inputs:
     """Render and estimate (``ltbf_chain.prepare``), profile the formats on this drop, and compute
     the fixed-point chain's answer for the sector (``golden``)."""
     prep = lc.prepare(p.drop, p.n, lk.TARGETS[p.target])
-    ranges = fc.profile(prep, t_max=p.t, ranks=(p.r,))
+    if p.formats == "design":
+        ranges = design_ranges(p.n)
+    elif p.formats == "point":
+        ranges = fc.profile(prep, t_max=p.t, ranks=(p.r,))
+    else:
+        raise ValueError(f"formats must be 'point' or 'design', not {p.formats!r}")
     cfg = fc.formats(ranges, p.W, form=p.form)
     s = p.sector
     own = [int(u) for u in prep.ltin.own[s]]
@@ -175,6 +198,37 @@ def inputs(p: SysParams) -> Inputs:
     inp = Inputs(p, prep, cfg, dims, own, sh, h, b, y)
     inp.gold = golden(inp)
     return inp
+
+
+#: The vector unit's shift bound under per-design formats (``SysParams.formats == "design"``): the
+#: sector scales ``sh`` of the drops seen are 4 and 5 (drops 1-3, 11, 12 at N_rx 64), so 5, with a
+#: run that needs more refused rather than built differently.
+DESIGN_S_MAX = 5
+
+
+def design_ranges(n: int) -> dict[str, float]:
+    """The per-design profile (plans/dse_cg.md decision 6): the largest magnitude of every stored
+    quantity over drops 1-10, ``t`` up to 10, ranks 1 and 2 and both target sets -- the accuracy
+    sweep's profiles (``ltbf_accuracy_sweep.profile``, computed when missing), merged."""
+    return dict(_design_ranges(n))
+
+
+def _design_ranges(n: int) -> tuple:
+    import json
+
+    from examples.ltbf_cg_mem_dse import ltbf_accuracy_sweep as acc
+
+    key = ("design_ranges", n)
+    if key not in _MEMO:
+        rs = []
+        for target in acc.TARGETS:
+            path = acc.profile_path(n, target)
+            rs.append(json.loads(path.read_text()) if path.is_file() else acc.profile(n, target))
+        _MEMO[key] = tuple(sorted(fc.merge(*rs).items()))
+    return _MEMO[key]
+
+
+_MEMO: dict = {}
 
 
 def golden(inp: Inputs) -> dict:
@@ -208,14 +262,22 @@ def golden(inp: Inputs) -> dict:
 CALIB_DIR = Path(__file__).resolve().parents[1] / "calib"
 
 
-def shared_mem(sim, span: int, clk: Clock, *, calibrated: bool = True) -> MemoryMod:
+def shared_mem(sim, span: int, clk: Clock, *, calibrated: bool = True, rate: int = 2,
+               name: str = "mem") -> MemoryMod:
     """Shared Mem, for the system and its own harness: *span* 64-bit words, its timing from its
     record in :data:`CALIB_DIR` when there is one (*calibrated*; the harness that measures it builds
     one without).  At RTL a read costs a cycle more a word than a write (``mm_bram_port.v``: one
-    read in flight, ``LAT + 1`` cycles), and the front serves one transaction at a time.
+    read in flight, ``LAT + 1`` cycles), and the front serves one transaction at a time.  *rate* 1:
+    a :class:`~waveflow.hw.memory.PipelinedMemoryMod`, a read word every cycle at RTL
+    (``SysParams.mem_rate``); *name*: a bank's (``SysParams.mem_banks``).
     """
-    return MemoryMod(name="mem", sim=sim, word_size=64, inline=False, clk=clk, nwords_tot=span,
-                     addr_unit=AddrUnit.byte, calib_dir=CALIB_DIR if calibrated else None)  # fmt: skip
+    from waveflow.hw.memory import PipelinedMemoryMod
+
+    if rate not in (1, 2):
+        raise ValueError(f"mem_rate must be 2 (the BRAM leaf as built) or 1 (pipelined), not {rate}")
+    cls = PipelinedMemoryMod if rate == 1 else MemoryMod
+    return cls(name=name, sim=sim, word_size=64, inline=False, clk=clk, nwords_tot=span,
+               addr_unit=AddrUnit.byte, calib_dir=CALIB_DIR if calibrated else None)  # fmt: skip
 
 
 def mem_script(kind: str = "test", span: int = 1 << 17) -> list:
@@ -460,6 +522,8 @@ class LtbfHost(SwHost):
                 st = yield from self.ing_status.read()
                 S.sch.on_status(int(st.chunks), int(st.overruns), self.env.now)
             lt_done = all(S.sch.state[g] == "done" for g in range(len(S.lt.jobs)))
+            if not rt_added and lt_done and not S.p.slot:
+                rt_added = True  # the update alone: nothing follows it
             if not rt_added and lt_done:
                 rt_added = True
                 S.rt = real_time(
@@ -593,9 +657,16 @@ class LtbfSystem:
         self.chunk_slot: dict[int, int] = {}
         self.credit_sent = 0
         self.f = cfg.cg_step()
+        if p.formats == "design":
+            if inp.sh > DESIGN_S_MAX:
+                raise ValueError(f"drop {p.drop} sector {p.sector}: its scale {inp.sh} is past the "
+                                 f"design's shift bound {DESIGN_S_MAX}")
+            s_max = DESIGN_S_MAX
+        else:
+            s_max = max(4, inp.sh)
         self.vu, self.off = pg.system_config(self.f, cfg.eq, k=d.rows, n=d.c, u_pad=d.u_pad,
                                              r=p.r, L=p.L, word_bits=p.word_bits,
-                                             lane_bits=p.lane_bits, s_max=max(4, inp.sh),
+                                             lane_bits=p.lane_bits, s_max=s_max,
                                              m_max=max(8, cfg.m_shift))  # fmt: skip
         self._layout()
 
@@ -629,14 +700,21 @@ class LtbfSystem:
         self.ring_addr = addr
         self.slot_words = (d.rows // d.c) * d.J * self.w(d.c, d.c)
         addr += self.sch.ring_depth * self.slot_words
-        self.lt_plan = plan_memory(self.lt, 1 << 30, base=addr)
-        addr += footprint(self.lt, self.lt_plan, base=addr)
-        self.rt_plan = plan_memory(self.rt, 1 << 30, base=addr)
-        addr += footprint(self.rt, self.rt_plan, base=addr)
-        self.mem_words = addr
-        #: The memory's span: a power of two (the crossbar's RTL decodes power-of-two ranges);
-        #: the RTL gate's is at most 1 MiB (spec §5.2).
-        self.mem_span = 1 << (addr - 1).bit_length()
+        if p.mem_banks == 1:
+            self.lt_plan = plan_memory(self.lt, 1 << 30, base=addr)
+            addr += footprint(self.lt, self.lt_plan, base=addr)
+            self.rt_plan = plan_memory(self.rt, 1 << 30, base=addr)
+            addr += footprint(self.rt, self.rt_plan, base=addr)
+            self.mem_words = addr
+            #: The memory's span: a power of two (the crossbar's RTL decodes power-of-two ranges);
+            #: the RTL gate's is at most 1 MiB (spec §5.2).
+            self.mem_span = 1 << (addr - 1).bit_length()
+            #: Each bank's span (one bank: the memory's).
+            self.bank_span = self.mem_span
+        elif p.mem_banks == 2:
+            self._layout_banks(addr)
+        else:
+            raise ValueError(f"mem_banks must be 1 or 2, not {p.mem_banks}")
         self.fits_gate = self.mem_span * p.word_bits <= 8 << 20
         # The Python stages' operands.
         hr, hi = (
@@ -656,6 +734,36 @@ class LtbfSystem:
             np.zeros((d.rows, d.S), np.int64),
             np.zeros((d.rows, d.S), np.int64),
         )
+
+    #: The long-term graph's matrices: what the systolic engine streams (``Ĥα`` in both layouts,
+    #: the explicit form's ``Ĥαᴴ`` operand and ``K``).  Bank 0 with two banks.
+    MATRICES = ("Hah", "Ham", "HaHB", "K")
+
+    def _layout_banks(self, addr: int) -> None:
+        """Two banks of one power-of-two span each: bank 0 holds what is below *addr* (the programs,
+        ``G'``, the ring) and the long-term graph's :data:`MATRICES`, bank 1 the rest of the
+        long-term graph's buffers and the real-time graph's.  Each set is planned on its own
+        (``plan_memory`` over a graph whose other buffers are external), so reuse within a bank is
+        the planner's and nothing straddles the banks."""
+        from dataclasses import replace as _replace
+
+        lt = self.lt
+        own = set(lt.buffers) - set(lt.external)
+        mats = {b for b in self.MATRICES if b in own}
+        g_mat = _replace(lt, external=set(lt.external) | (own - mats))
+        g_vec = _replace(lt, external=set(lt.external) | mats)
+        plan_m = plan_memory(g_mat, 1 << 30, base=addr)
+        end0 = addr + footprint(g_mat, plan_m, base=addr)
+        plan_v = plan_memory(g_vec, 1 << 30, base=0)
+        fp_v = footprint(g_vec, plan_v, base=0)
+        plan_r = plan_memory(self.rt, 1 << 30, base=fp_v)
+        end1 = fp_v + footprint(self.rt, plan_r, base=fp_v)
+        self.bank_span = 1 << (max(end0, end1) - 1).bit_length()
+        b1 = self.bank_span
+        self.lt_plan = {**plan_m, **{k: v + b1 for k, v in plan_v.items()}}
+        self.rt_plan = {k: v + b1 for k, v in plan_r.items()}
+        self.mem_words = b1 + end1
+        self.mem_span = 2 * b1
 
     def addr(self, gid: int, name: str) -> int:
         """A buffer's word address for job *gid*'s graph."""
@@ -888,9 +996,12 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
     yr, yi = inp.y
     S.symbols = [[S.to_w(yr[a, s], yi[a, s], cfg.bc) for a in range(d.n_rx)]
                  for s in range(sg.N_SYM)]  # fmt: skip
-    mem = shared_mem(sim, S.mem_span, clk)
-    assert mem.alloc(S.mem_span) == 0
-    S.mem = mem
+    mems = [shared_mem(sim, S.bank_span, clk, rate=p.mem_rate, name="mem" if k == 0 else f"mem{k}")
+            for k in range(p.mem_banks)]  # fmt: skip
+    for m in mems:
+        assert m.alloc(S.bank_span) == 0
+    S.mem = mems[0]  # bank 0: the programs, G', the ring, the matrices
+    S.mems = mems
     devs = {
         "sys": (build_mm_device(sysw, sim=sim, clk=clk, mem_dwidth=W, prefix="sys_"), SysWrap, SYS_BASE),
         "vec": (build_mm_device(vecw, sim=sim, clk=clk, mem_dwidth=W, prefix="vec_"), VecWrap, VEC_BASE),
@@ -911,8 +1022,9 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
         sl, rg = dev.ranges(base)
         slaves += sl
         ranges += rg
-    slaves.append(mem.s_mm)
-    ranges.append((0, S.mem_span * W // 8))
+    for k, m in enumerate(mems):
+        slaves.append(m.s_mm)
+        ranges.append((k * S.bank_span * W // 8, S.bank_span * W // 8))
     xbar = AXIMMCrossBarIF(name="xbar", sim=sim, clk=clk, nports_master=len(masters),
                            nports_slave=len(slaves), bitwidth=W)  # fmt: skip
     for k, m in enumerate(masters):
@@ -947,7 +1059,7 @@ def build(inp: Inputs, *, rtl: bool = False) -> tuple[HwSystem, LtbfSystem, Ltbf
         "vec": len(VecMemJob().serialize(word_bw=W)),
     }
     S.capacity = {e: qd // (desc[e] + 1) + 1 for e, qd in (("sys", 16), ("vec", 32))}
-    dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + [mem],
+    dut = DutTop.of("ltbf_dut", sim, comps=[d_[0] for d_ in devs.values()] + mems,
                     ifs=[xbar, *links])  # fmt: skip
     # The RTL run's bound: three times a generous run (4 ms of long-term update, then the slot's
     # symbols); the RTL Shared Mem reads at half pysim's rate (plan §15).
@@ -975,6 +1087,8 @@ def check(S: LtbfSystem, host: LtbfHost) -> dict[str, bool]:
             )
     out["G'"] = np.array_equal(words, block_major(gr, gi, cfg.a, d.c, d.Mmax, lane_bits=p.lane_bits,
                                                   word_bits=p.word_bits, order="col"))  # fmt: skip
+    if not p.slot:  # the update alone: G' is its result
+        return out
     z = host.results["z_dmrs"]
     ok_z = ok_w = True
     for k, u in enumerate(inp.own):
@@ -1086,8 +1200,10 @@ def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
     def burst(*words) -> None:
         out.append(np.asarray([int(w) for w in words], np.uint64))
 
-    # The release prices at every successor count the graphs have.
-    graphs = ((0, S.lt), (len(S.lt.jobs), S.rt))
+    # The release prices at every successor count the graphs have.  Without a slot the host runs the
+    # long-term graph alone (``SysParams.slot``): no real-time jobs, and the O-RU is never released.
+    graphs = ((0, S.lt), (len(S.lt.jobs), S.rt)) if p.slot else ((0, S.lt),)
+    n_rt = len(S.rt.jobs) if p.slot else 0
     max_succ = max(len(sc) for _b, g in graphs for sc in g.successors())
 
     def price(op: str, **kw) -> float:  # A53 cycles, as the host's charge priced it
@@ -1096,7 +1212,7 @@ def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
     burst(K_HEAD, p.n_cores, sch.ring_depth, sch.n_chunks, sch.max_in_flight, S.capacity["sys"],
           S.capacity["vec"], S.credit_addr, d.n_rx, len(S.symbols),
           round(p.sym_period * host.clk.freq), round(T_SYM * host.clk.freq), len(S.lt.jobs),
-          len(S.rt.jobs), _bits(host.clk.freq), _bits(cfg.f_clk_hz),
+          n_rt, _bits(host.clk.freq), _bits(cfg.f_clk_hz),
           _bits(eval_cycles(cfg.switch_cycles, {})), _bits(price("dispatch", n_dispatch=1)),
           _bits(price("ctrl")))  # fmt: skip
     for n in range(max_succ + 1):
@@ -1119,7 +1235,7 @@ def scenario(S: LtbfSystem, host: LtbfHost) -> list[np.ndarray]:
                   len(succ[j.jid]), *(base + x for x in succ[j.jid]),
                   len(dsucc[j.jid]), *(base + x for x in dsucc[j.jid]),
                   len(roots), *roots, left)  # fmt: skip
-    burst(K_CHUNKS, *(len(S.lt.jobs) + c for c in S.rt.chunks))
+    burst(K_CHUNKS, *(len(S.lt.jobs) + c for c in (S.rt.chunks if p.slot else ())))
     for e in ("sys", "vec"):
         for gid, words in host.dispatch_log[e]:
             burst(K_DESC, ENGINE_CODE[e], gid, *words)
