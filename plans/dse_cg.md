@@ -1,25 +1,74 @@
-# Plan: does pysim speed up design-space exploration? An agentic A/B on CG
+# Plan: does pysim speed up design-space exploration? An agentic A/B on LTBF
 
 **Status: rewritten 2026-11-01; retargeted 2026-11-05** from the `mimo_cg` CG detector to the LTBF
 system of [`examples/ltbf_cg_mem_dse`](../examples/ltbf_cg_mem_dse/hw/system.py) (its plan
-[`plans/ltbf_dse/ltbf_dse.md`](ltbf_dse/ltbf_dse.md)). Replaces `plans/mcp_fir.md` (in git history). The design is now
-described elsewhere, and this plan says what to build, in what order, and how to know it works:
+[`plans/ltbf_dse/ltbf_dse.md`](ltbf_dse/ltbf_dse.md)); **the decisions of 2026-11-06 folded in**
+([below](#decisions-2026-11-06)): what is hardware and what is modelled, the end-to-end pipeline,
+the formats, the memory axes, and the space as a grid measured in a week. Replaces
+`plans/mcp_fir.md` (in git history). The design is described elsewhere, and this plan says what to
+build, in what order, and how to know it works:
 
 | what | where |
 |---|---|
 | the problem, the adaptor, the skill, the service, explained | the guide section [`docs/guide/dse/`](../docs/guide/dse/index.md) |
 | the code skeleton: interfaces settled, bodies stubbed by phase | [`examples/dse_cg/`](../examples/dse_cg/README.md) |
 
+The guide and the skeleton predate the decisions of 2026-11-06; Phase 2a brings them in line.
+
 **The first goal is a working user flow on V1:** the LTBF system's adaptor, verified on a few design
 points, behind a working service and `dselib`. That is Phases 1–3 below, and the hand-off point for
-the student. The experiment itself (ground truth, replay, agents) and V2 come after, outlined at the
-end.
+the student. The experiment itself (the grid, replay, agents) and V2 come after, outlined at the end.
 
-**Version: everything at 2025.1**, Vitis / Vivado, on the laptop and the lab machine. The lab machine
-is licensed for `xczu48dr` and makes every recorded number; the laptop uses `xczu7ev` as a stand-in
-for synthesis; it holds the N_rx 64 designs only (Shared Mem at 2¹⁷ words is 456 of its 624 BRAM18). No
-2024.1 record is used as calibration, ground truth or cost: the LTBF study's numbers were all measured
-at 2024.1, and they guide the choices below without being reused.
+**Version and machine: everything at Vitis / Vivado 2025.1, on the lab machine** (`xczu48dr` at
+4 ns; licensed for every version and device since 2026-11-06), which makes every recorded number.
+The units were recalibrated at 2025.1 by [`plans/calib_2025_1.md`](calib_2025_1.md), complete
+2026-11-06, and the LTBF study was re-measured at 2025.1 the same day; no 2024.1 number is used.
+
+## Decisions (2026-11-06)
+
+Made with the user before execution:
+
+1. **Built (synthesized, simulated at RTL, calibrated where a calibration exists):** the systolic
+   engine and the vector unit, each with its wrapper (Job FIFO window, Ctrl bank, memory front end,
+   done record), the AXI crossbar (Vivado's IP, with pysim's current crossbar model: **not
+   calibrated**), and the Resp hub (an HLS device, as today). **The CPU scheduler** is the
+   scheduler's real software: priced by the calibrated A53 platform in pysim, run by the C++ host at
+   RTL, as today; the A53 is the RFSoC's hard core and is never synthesized.
+2. **Modelled only, never synthesized:** Shared Mem and the Ingest DMA. In pysim, each is its own
+   model; at RTL, Shared Mem is a C++ memory behind the crossbar's slave port and the Ingest DMA a
+   testbench process writing into it, with the same parameters as pysim's models. Shared Mem's block
+   RAM is estimated by formula (`hw/dse.py`'s `shared_mem_bram18`) and counted against the device;
+   the DMA's resources are not counted.
+3. **The example is extended, not changed.** Every new behaviour is an option of
+   `examples/ltbf_cg_mem_dse` whose default keeps today's behaviour; no existing code is removed or
+   changes what it does, and the example's tests pass unchanged.
+4. **The whole LTBF pipeline runs end to end in Python**, from the Sionna RT drops to the equalized
+   symbols, and only the built parts are hardware. The 100 Denver drops traced with Sionna RT 2.2
+   (`data/drops/`) are used as cached; one `-m sionna` test re-traces a drop and checks it matches.
+5. **Stage mapping, as today:** rendering and OFDM demodulation (`signals.received`, `frontend.py`)
+   in the O-RU stand-in; SRS estimation, CG initialization, DMRS estimation and the measurement as
+   Python stages at **zero simulated time, charged to nothing**; the products and `Z` on the systolic
+   engine; the CG steps and the equalizer on the vector unit; the per-UE projections on the A53.
+6. **Formats per design.** The fixed-point formats are compiled into the hardware (the systolic
+   engine's format traits, the vector unit's datapath widths), and today `inputs()` profiles them from
+   the point's `t`, `form` and `target`, so each of the three rebuilt hardware. They are now profiled
+   once per design, over drops 1–10, `t` up to 10 and both target sets (which gives the [−6, 14]
+   formats exactly): `t` and `target` are workload parameters on one build, and `form` is a design
+   parameter. [−6, 3] then runs on the [−6, 14] formats, slightly less accurate than the study's
+   per-target formats.
+7. **The memory bottleneck is a DSE axis.** Validated on the 2025.1 re-run (`paper_data/FINDINGS.md`):
+   Shared Mem's port is busy 90–97% of the long-term update at every array size, and the systolic
+   engine is bound by it at about 2.13 cycles a word it reads, so a 2 × 4 and an 8 × 8 array take
+   the same time. The study's what-ifs at N_rx 64 (one sector's update; resource elements a second):
+   as built 6.59 ms, 0.81 M; one word a cycle 4.51 ms, 1.31 M; 2 banks 6.48 ms, 1.12 M; both
+   4.44 ms, 1.98 M. Two axes follow, `mem_rate` and `banks`.
+8. **The agents' space is the grid, measured in full** (option (a) of the discussion): every point
+   is measured on the live backend before any scored run, and measuring the whole grid takes **at
+   most a week of real time** on the lab machine at two heavy jobs at once. That sets the space
+   ([The space](#the-space-a-grid-measured-in-a-week)).
+9. **The timing metric is one sector's long-term update** (`T_upd`: drop 1, sector 1), not the
+   study's T_LT (three sectors back to back, the worst of drops 1, 11 and 12: nine updates a
+   point). The slot workload is not in the grid.
 
 ## The claim
 
@@ -43,115 +92,177 @@ A second contribution comes with it and must be named in the paper: the curated 
 without pysim. Both arms get it, so the A/B isolates pysim; an extra arm on the raw tools could
 measure the curation later.
 
-## Phase 1: the LTBF system at any design point (V1)
+## The space: a grid measured in a week
+
+The agents' space is a full product of these values, every point legal and measured:
+
+| axis | kind | values | default | what a new value changes |
+|---|---|---|---|---|
+| (`R`, `C`) | design | (2, 4), (4, 4), (4, 8), (8, 8): the calibrated shapes | (4, 8) | the systolic part |
+| `W` | design | 12, 16 | 16 | the systolic and vector parts (their formats) |
+| `form` | design | factored, explicit | factored | the systolic part |
+| `L` | design | 2, 4 | 4 | the vector part |
+| `banks` | design | 1, 2: Shared Mem's banks, each its own crossbar port | 1 | the crossbar |
+| `mem_rate` | design | a read word every 2 cycles (the BRAM leaf as built), every cycle | 2 | nothing synthesized: the memory model |
+| `cg_window` | design | 1, 2, 4: CG chains in flight in the scheduler | 2 | nothing synthesized: the host's software |
+| `t` | workload | 2, 3: CG iterations of the long-term update | 3 | nothing synthesized: the job graphs |
+| `target` | workload | [−6, 14], [−6, 3] dB: the UEs' SINR targets | [−6, 14] | the data only: `golden`'s accuracy, not the cycles |
+
+**Fixed:** N_rx 64 (`n` 8), one A53 core, the static policy, `c` 8, `Mmax` 16, `J` 9, 64-bit words,
+drop 1 sector 1 for timing. The default point is AC9's design (4 × 8, `W` 16, 4 lanes, factored).
+
+**Size.** 64 hardware builds (shape × `W` × `form` × `L` × `banks`) × 6 simulation settings
+(`mem_rate` × `cg_window`) = 384 designs; × 2 values of `t` = 768 RTL points; × 2 targets = 1,536
+(design, workload) points the agents see. Half the axes (`mem_rate`, `cg_window`, `t`) change
+nothing that synthesis or the HLS compiler sees: their effect shows only in a simulation, about
+12 minutes at RTL against about a minute in pysim. That is where pysim should pay.
+
+**What measuring it costs (estimates at 2025.1; Phase 2c measures them):**
+
+| work | count | slot-hours | basis |
+|---|---|---|---|
+| part builds (csynth + Vivado) | about 23: 16 systolic, 4 vector, 2 crossbar, 1 hub | about 8 | csynth 1.7 min median (systolic, max 10.4), 7.4 (vector, max 11.2) in the study's 2025.1 builds; Vivado per part estimated 10–20 min |
+| RTL builds (elaboration) | 64 | about 6 | |
+| RTL simulations | 768, one sector's update each | about 155 | the AC9 run: 5,493,471 cycles in about 52 min with its build; one update is about 1.65 M cycles |
+| pysim and `golden` | every point | about 15 | |
+| **total** | | **about 185** | **about 4 days at two jobs at once** |
+
+**The resizing rule**, applied once, before the grid is pre-registered (step 4), on the costs Phase 2c
+measures: the grid's estimated cost × 1.3 must fit 7 days × 2 slots = 336 slot-hours. With room to
+spare, add `t` 5 first, then `W` 14; over, drop `cg_window` 4 first, then `banks` 2.
+
+**Left out, and why:** N_rx 256 (an RTL run about four times as long); the slot at RTL (about
+45 min a run: it would double the grid); the dynamic policy (the RTL host replays the static
+policy's decisions, precomputed in Python; dynamic would need the scheduler in C++); 2 cores (the
+A53 is busy 23% of the update); `W` 14 and `t` 5 (each pushes the grid to about 6 days).
+
+With the grid as the space, the DSE is hard because the agents' budget is small against the grid's
+cost, not because of the grid's size: the budget is pre-registered (step 7) as a fraction of the
+grid's measured cost.
+
+## Phase 1: the LTBF system at any grid point (V1)
 
 V1 is the system of `examples/ltbf_cg_mem_dse` (`hw/system.py`): the LTBF receiver on a shared-memory
 accelerator. A CPU (the calibrated A53) schedules jobs into the Job FIFOs of a systolic engine
 (`SystolicEngineMem`) and a vector unit (`VecUnit`); an Ingest DMA brings each symbol into Shared Mem;
 every engine reads its operands from Shared Mem and writes its results there over one AXI crossbar,
 and reports done through a Resp hub into the CPU's Resp FIFO. Its golden (the fixed-point chain,
-`ltbf_fixed_chain.py`), its devices and their gates, and a DSE over it exist, all at 2024.1. It
-already runs as an `HwSystem` through the system flow (`hw/build.py`'s `system_dag`; the gate
-`tests/examples/test_ltbf_cg_mem_dse_xsi.py::test_system_at_rtl`), so Phase 1 is not a migration: it
-is the system at any design point, at 2025.1, plus the pieces the adaptor needs.
+`ltbf_fixed_chain.py`), its devices and their gates, and a DSE over it exist, re-measured at
+2025.1. It runs as an `HwSystem` through the system flow (`hw/build.py`'s `system_dag`; the gate
+`tests/examples/test_ltbf_cg_mem_dse_xsi.py::test_system_at_rtl`, passing at 2025.1).
 
-**1a. The system at a design point -- first, and blocking.** `build_system(params)` is
-`build(inputs(SysParams(...)))` of `hw/system.py` at the point, its sources generated by
-`LtbfCodegenStep(sysp=...)` (as `hw/finalists.py` builds a finalist in a root of its own). Map the
-adaptor's parameters to `SysParams`: `n`, `R`, `C`, `W`, `L`, and the workload's `t`, `form`,
-`target` and symbol period.
-*Gate:* at the default point (AC9's design: N_rx 64, a 4 × 8 array, `W` 16, 4 lanes, factored,
-`t` 3), the system flow's XSI run at 2025.1 passes `test_system_at_rtl`: every Job FIFO and Ctrl
-write, every Resp record per source and every data burst equal pysim's, and pysim's end within 5% of
-RTL's (−2.7% at 2024.1), or the difference is explained.
+**1a. The modelled parts and the memory axes, as options of the example -- first, and blocking.**
+New options of `SysParams` (or of `build`), each defaulting to today's behaviour:
+- Shared Mem modelled: in pysim, a memory model with `mem_rate` and `banks`; at RTL, outside the
+  DUT, a C++ memory behind the crossbar's slave port(s) with the same parameters (the framework
+  serves a kernel's memory ports this way today, `harness._memory_stand_in`); the memory plan
+  places the buffers across the banks;
+- the Ingest DMA modelled: in pysim its own model, at RTL a testbench process;
+- the formats per design (decision 6): `inputs()` takes the per-design formats instead of profiling
+  the point's `t`, `form` and `target`.
 
-**1b. Synthesis and csynth through the system flow.** The DUT is cut into parts: the systolic, vector,
-Ingest DMA and Resp hub devices, Shared Mem, and the crossbar. Synthesize them with the per-device
-route (`synth_route="per_device"`) and read the csynth report of each HLS top (`ltbf_sys`, `ltbf_vec`,
-`ltbf_ingest`, `ltbf_hub`). Select a platform for the build: without one the system synthesis
-targets the framework's default part, a Zynq-7020 at 10 ns (`hw/finalists.py` learned this).
-*Gate:* the default point synthesized on the laptop (`xczu7ev`), with resources per instance and a
-csynth report per kernel. (The 2024.1 study's resource models predict csynth's numbers, which
-overstated implementation's LUT and FF about twofold; here `synth` is Vivado's, and csynth's numbers
-are `hls_estimate`.)
+First check that the framework can put a memory outside a system's DUT at RTL; if it cannot, stop
+and report. *Gates:* every existing test of the example passes unchanged; at the default point in
+the modelled configuration, pysim against RTL as `test_system_at_rtl` checks (every Job FIFO and
+Ctrl write, every Resp record per source, every data burst; pysim's end within 5% of RTL's), at
+`banks` 1 and 2 and `mem_rate` 2 and 1; generating the HLS at `t` 2 and 3 and at both targets gives
+identical sources.
 
-**1c. Workloads.** Define the three as data, from the study: `long_term` (the three sectors'
-long-term updates back to back, for T_LT; drops 1, 11 and 12, the worst, as `hw/dse.py` does),
-`slot` (one slot of 14 symbols at the radio's pace after the update, for the symbols the ring drops;
-the symbol period is its workload parameter) and `accuracy` (the median and 90th-percentile SINR loss
-against exact float LTBF over the held-out drops at each set of SINR targets, as
-`ltbf_accuracy_sweep.py` does).
-*Gate:* each runs through `golden`, and `long_term` and `slot` through the 1a system in pysim and at
-RTL.
+**1b. The system at a design point.** `build_system(params)` maps the grid's parameters to
+`SysParams` and returns `build(inputs(SysParams(...)))` with the modelled options, its sources
+generated by `LtbfCodegenStep(sysp=...)` in a root of its own (as `hw/finalists.py` builds a
+finalist). *Gate:* the default point's system is the one 1a gated.
 
-**1d. pysim from the system, not from `hw/models.py` and `hw/jobsim.py`.** The adaptor's `pysim` is
-the default: the 1a system simulated in pysim with the units' calibrated timing, and resources from
-`estimate_system`. The study's frozen per-part models (`hw/models.py`) and its job-level simulator
-(`hw/jobsim.py`) were fitted by hand for this one system; if pysim's advantage came from them, a
-reviewer could say the advantage is a bespoke model, not the method. They stay, as a comparison.
-*Gate:* at the default point, pysim's cycles and resources sit next to 1a's and 1b's measurements in
-a table: reported, not gated (scoring is the ground-truth phase's job).
+**1c. Synthesis and csynth per part.** The built parts are the systolic, vector and Resp hub devices
+and the crossbar. Synthesize them with the per-device route (`synth_route="per_device"`) on the
+`xczu48dr` at 4 ns (a platform of the build's own: without one, the system synthesis targets the
+framework's default Zynq-7020 at 10 ns, as `hw/finalists.py` learned), and read the csynth report of
+each HLS top (`ltbf_sys`, `ltbf_vec`, `ltbf_hub`). Shared Mem's resources are the formula's, the
+DMA's none. *Gate:* the default point synthesized, with resources per instance and a csynth report
+per kernel, and each step's tool time recorded.
 
-**1e. The units at 2025.1** (`plans/calib_2025_1.md`, lab machine), run before this plan: its
-Stage 3 (the vector unit), Stage 4 (the systolic engine: its core's timing at the LTBF configurations
-and a resource model on the platform) and Stage 4b (the A53, the shipped platform and the LTBF kernels,
-recompiled by 2025.1's gcc). The Ingest DMA and Shared Mem are not calibrated (user, 2026-11-05):
-pysim takes their timing from their own models, and reports their resources uncalibrated.
+**1d. Workloads and the end-to-end pipeline.** Two workloads as data: `long_term` (one sector's
+long-term update, drop 1 sector 1: `T_upd`) and `accuracy` (the median and 90th-percentile SINR loss
+against exact float LTBF over the held-out drops at each target set, with the design's formats, as
+`ltbf_accuracy_sweep.py` measures it). The **end-to-end test** (decision 4): a cached Sionna drop,
+rendered and OFDM-demodulated, through the system in pysim -- the long-term update and one slot --
+to the equalized symbols, checked bit for bit against the fixed-point golden and in SINR loss
+against float LTBF; at RTL once, at the default point; and the `-m sionna` test that re-traces a drop.
+*Gates:* each workload runs through `golden`, and `long_term` through the 1b system in pysim and at
+RTL; the end-to-end test passes.
+
+**1e. pysim from the system, not from `hw/models.py` and `hw/jobsim.py`.** The adaptor's `pysim` is
+the 1b system simulated in pysim with the units' calibrated timing, and resources from
+`estimate_system` plus the Shared Mem formula. The study's frozen per-part models (`hw/models.py`)
+and its job-level simulator (`hw/jobsim.py`) were fitted by hand for this one system; if pysim's
+advantage came from them, a reviewer could say the advantage is a bespoke model, not the method. They
+stay, as a comparison. *Gate:* at the default point, pysim's cycles and resources sit next to 1a's
+and 1c's measurements in a table: reported, not gated (scoring is step 4's job).
+
+**The units at 2025.1** are done (`plans/calib_2025_1.md`): the vector unit, the systolic engine (its
+core's timing at the LTBF configurations and a resource model on the platform) and the A53 (the
+shipped platform and the LTBF kernels, recompiled by 2025.1's gcc). The crossbar, Shared Mem and the
+Ingest DMA are not calibrated: pysim takes their timing from their own models, and Shared Mem's
+resources from the formula.
 
 ## Phase 2: the adaptor, verified
 
 **2a. Write it.** The base class's defaults in
 [`adaptor.py`](../examples/dse_cg/adaptor.py) (`architecture` with its parametric check,
 `identities`, `hls_identities`, `rebuilds`, `pysim`, `synth`, `rtlsim`, `hls_estimate`), and the LTBF
-system's own methods in [`ltbf_cg_mem.py`](../examples/dse_cg/ltbf_cg_mem.py) (`context`,
-`build_system`, `golden`, the workloads). What each must return is in
-[The design context](../docs/guide/dse/context.md).
+system's own methods in [`ltbf_cg_mem.py`](../examples/dse_cg/ltbf_cg_mem.py) (`space` as the grid
+above, `context`, `build_system`, `golden`, the workloads). What each must return is in
+[The design context](../docs/guide/dse/context.md). Bring the guide section and the skeleton's README
+in line with the decisions of 2026-11-06.
 
 **2b. Fast tests, no toolchain** (`tests/examples/test_dse_cg_adaptor.py`):
-- `defaults`, `fill`, `legal`, including a typo refused and both constraints checked;
+- `defaults`, `fill`, `legal`, including a typo refused;
 - `architecture()` has the same shape at the defaults and at every parameter's extremes;
-- identities: changing a workload parameter changes none; changing a design parameter changes the
-  parts it reaches and no others (`L`: `vec` alone); every design parameter's `rebuilds` is non-empty;
+- identities: changing a workload parameter (`t`, `target`) changes none; changing `mem_rate` or
+  `cg_window` changes no part's identity (only `rtlsim`'s); changing a design parameter changes the
+  parts it reaches and no others (`L`: `vec` alone; `banks`: the crossbar alone); every hardware
+  parameter's `rebuilds` is non-empty;
 - `golden` and `pysim` agree bit for bit on accuracy at a few points.
 
-**2c. A few design points, every method, checked against each other** (`-m vitis` and `-m xsi`).
-Pre-choose five points:
+**2c. Six design points, every method, checked against each other** (`-m vitis` and `-m xsi`):
 
 | point | why |
 |---|---|
 | the defaults | the reference, from Phase 1 |
-| the smallest legal design (N_rx 64, 2 × 4, `W` 12, 2 lanes) | the edges of the space build |
-| a large legal design (N_rx 256, 8 × 8, `W` 16, 4 lanes) | the other edge; the longest synthesis |
-| the defaults with `R` changed | a design change: a new identity for `sys` alone, its synthesis only |
-| the defaults with `t` changed | a workload change: same identities, no new synthesis |
+| the smallest (2 × 4, `W` 12, 2 lanes, factored, 1 bank) | an edge of the grid builds |
+| the largest (8 × 8, `W` 16, 4 lanes, explicit, 2 banks, `mem_rate` 1, `cg_window` 4) | the other edge |
+| the defaults with `R` changed | a hardware change: a new identity for `sys` alone |
+| the defaults with `mem_rate` 1 and `cg_window` 4 | a simulation-only change: no new part, a new RTL run |
+| the defaults with `t` 2 | a workload change: same identities, no new synthesis |
 
 Run `golden`, `pysim`, `hls_estimate`, `synth` and `rtlsim` at each. *Gates:*
 - every call returns a row in the documented shape, with `status: "ok"`;
 - `rtlsim` is bit-exact at every point;
 - `golden` and `pysim` report the same accuracy;
-- the workload-only point has the defaults' identities.
+- the workload-only and simulation-only points have the defaults' part identities.
 
 *Reported, not gated:* a table of pysim against `rtlsim` cycles, pysim and `hls_estimate` against
-`synth` resources, and each call's tool time. It is the first look at prediction quality and at the
-costs `DSE.md` will quote. On the laptop, synthesis uses `xczu7ev`, which holds N_rx 64 only; the
-lab machine synthesizes the large point and reruns the five for the record.
+`synth` resources, and each call's tool time: the first look at prediction quality, the costs
+`DSE.md` will quote, and **the measured costs the resizing rule is applied to**.
 
 ## Phase 3: the service and `dselib`, on the live backend
 
 **3a. The service, in process.** [`service.py`](../examples/dse_cg/service.py) on the live backend:
 the checks, the cache by identity (parts, kernels, simulations), the ledger file, an optional budget,
-jobs on `k` worker slots on the real clock, `results(fn)` flattened for a data frame, and artifacts
-in `results/<eval id>/`. What it does on each call is in [The service](../docs/guide/dse/service.md).
+jobs on `k` = 2 worker slots on the real clock (the lab machine's limit for heavy jobs),
+`results(fn)` flattened for a data frame, and artifacts in `results/<eval id>/`. What it does on each
+call is in [The service](../docs/guide/dse/service.md).
 
 **3b. The `dselib` transport.** `dselib.bind(service)` in process first; then `serve()` and
-`DSE_SERVICE` for a service in another process or on the lab machine.
+`DSE_SERVICE` for a service in another process.
 
 **3c. `DSE.md` for the LTBF system.** `brief.write_context` and `brief.install_skill`. The generated
 `DSE.md` is committed, and a fast test regenerates it and fails on any difference.
 
 *Gates:*
-- a scripted test drives `dselib` through Phase 2's five points and gets the adaptor's rows;
-- a repeated call is `cached` at cost 0, and the workload-only point charges no synthesis;
+- a scripted test drives `dselib` through Phase 2's six points and gets the adaptor's rows;
+- a repeated call is `cached` at cost 0; the workload-only point charges no synthesis, and the
+  simulation-only point charges only its RTL run;
 - an illegal point and a failed build come back as rows;
 - the budget refuses a call it cannot cover; `submit` refuses a design not synthesized and simulated;
 - `pandas.DataFrame(results("pysim"))` needs no further work.
@@ -166,24 +277,26 @@ every later phase builds on that flow.
 
 Outlined; each gets detail when it starts.
 
-**4. Ground truth and validation (G1).** Pre-register a grid of V1 points (about 300, if the RTL
-runs allow: the system's RTL run is the slowest evaluation, and the example's four XSI gates took
-about an hour at 2024.1) with their workloads, the 6–10 points that fit the integration term (excluded from scoring), the targets and the
-objectives. Measure it on the lab machine: the live backend driven over the grid, every row, artifact
-and cost recorded. Score pysim's predictions once (proposed targets: DSP and BRAM exact; LUT, FF and
-cycles mean ≤ 5%; at least 90% of objectives' picks within 10% of the measured optimum). A miss stops
-here: fix the model's form and draw a fresh grid. G1 becomes V1's replay table.
+**4. The grid, measured (G1).** Apply the resizing rule to Phase 2c's costs, then pre-register the
+grid, its workloads, the objectives and the scoring targets. Measure every point on the live backend
+(at most 7 days at two jobs at once), every row, artifact and cost recorded. Score pysim's
+predictions once, over the whole grid (proposed targets: DSP and BRAM of the built parts exact; LUT,
+FF and cycles mean ≤ 5%; at least 90% of objectives' picks within 10% of the measured optimum); if a
+system-level integration term is needed, the few points that fit it are chosen beforehand and
+excluded from scoring. A miss stops here and goes to the user. G1 is the replay table, and each
+objective's optimum is known exactly.
 
 **5. Replay and the sandbox.** The replay backend on G1; `brief.build_sandbox` for both arms, with the
 test that their files differ only in the `arm:waveflow` blocks; `run_agent.py`.
 
 **6. Scripted policies** ([`policies.py`](../examples/dse_cg/policies.py)): the first result, with no
 agent. **7. Agents:** pilot runs (and the checks below), freeze and pre-register
-([`prereg.py`](../examples/dse_cg/prereg.py)), N = 10 runs per arm per objective.
+([`prereg.py`](../examples/dse_cg/prereg.py)) -- the budget as a fraction of the grid's measured
+cost --, N = 10 runs per arm per objective.
 
 **8. V2, the descriptor-ring system** ([below](#v2-the-descriptor-ring-system)): the system in pysim,
 bit-exact; the per-block activity report (pysim and RTL in one schema); the system at RTL; calibration
-of the two wrappers' descriptor forwarding; then 4–7 again on a grid G2 of about 200 points.
+of the two wrappers' descriptor forwarding; then 4–7 again on a grid G2, sized by the same rule.
 
 ## Fairness rules
 
@@ -195,8 +308,8 @@ of the two wrappers' descriptor forwarding; then 4–7 again on a grid G2 of abo
    Both arms have `hls_estimate`, the quick look a real hardware team takes. It covers the HLS kernels
    only, not the hand-written adaptors or the crossbar, so pysim must beat the HLS compiler's
    estimates, not only full synthesis; it should, because the compiler sees each kernel alone.
-4. **Pre-registered** before any scored run: objectives, ε, budget, `k`, N, the model, the skill and
-   `DSE.md`.
+4. **Pre-registered** before any scored run: the grid, objectives, ε, budget, `k`, N, the model, the
+   skill and `DSE.md`.
 5. **Several objectives**, so no single answer can be learned.
 6. **Meter costs; never gate reasoning or information.** The agent has Python, a shell and every file;
    only expensive evaluations go through `dselib`. Capabilities an engineer would use (a raw trace of
@@ -285,8 +398,8 @@ memory at an address the descriptor names. That is what lets several chains be i
 keeps the systolic array clear of a known problem: state held across commands makes csynth run out
 of memory (`systolic_characterization.md`). The cost is memory traffic: `Ĥα` is read twice an
 iteration (for `T` and for `U`), and the vector unit reads four `rows × c` operands and writes three.
-That is already V1's traffic, on the Shared Mem port the 2024.1 study found busy 90–97% of the
-long-term update, and it is what the interconnect parameters trade against. Programs and formats are
+That is already V1's traffic, on the Shared Mem port the study found busy 90–97% of the
+long-term update (at 2024.1 and at 2025.1), and it is what the interconnect parameters trade against. Programs and formats are
 configuration, not job state.
 
 ### Each unit's wrapper
@@ -356,29 +469,30 @@ between the units and the port. The prediction: **pysim's advantage holds as the
 
 | phase | needs |
 |---|---|
-| 1, 2, 3 | laptop (Vitis / Vivado 2025.1, `xczu7ev` for synthesis, N_rx 64 only); lab machine for Phase 2's large point and to rerun the five for the record |
-| 1e | lab machine (`calib_2025_1.md`, run first) |
-| 4 | lab machine; days, set by the system's RTL runs |
-| 5, 6 | laptop |
+| 1, 2, 3 | the lab machine (Vitis / Vivado 2025.1, `xczu48dr`) |
+| 4 | the lab machine; at most 7 days, set by the grid's RTL runs |
+| 5, 6 | the lab machine (replay needs no tools) |
 | 7 | API access |
-| 8 | laptop, then the lab machine for G2 (15–30 tool-hours) |
+| 8 | the lab machine; G2 sized by the same rule |
 
 ## Open questions
 
-1. **`k`, the worker slots.** It changes elapsed time, not tool time. Fix it at what the lab machine
-   runs.
-2. **Out-of-grid requests on replay.** The agents' space is exactly the grid (leaning), so both arms
-   always see the same world.
-3. **The host's software time on V2** at high `J`: V1 prices it with the A53 model already; on V2
+1. **The host's software time on V2** at high `J`: V1 prices it with the A53 model already; on V2
    it shrinks to each chain's first descriptor and its done.
-4. **Where V2's initialization runs:** on the host (V1's Python `init` stage), or as an `INIT` phase on
+2. **Where V2's initialization runs:** on the host (V1's Python `init` stage), or as an `INIT` phase on
    the vector unit; and the explicit form's `K` as a phase of its own on the systolic engine.
-5. **The vector unit or `CgVectorUnit` as a V2 knob:** 3,447 against 3,581 cycles a job at 2025.1, and
+3. **The vector unit or `CgVectorUnit` as a V2 knob:** 3,447 against 3,581 cycles a job at 2025.1, and
    82.6k against 21.5k LUT. A finding of its own: what programmability costs.
+
+Settled 2026-11-06: `k` is 2 (the lab machine's limit for heavy jobs); the agents' space is the grid,
+so no request falls off it.
 
 ## Non-goals
 
 - An MCP tool surface. The workspace, the skill and `dselib` are the interface; the service is the
   only boundary.
 - Improving the models' forms, or active calibration: later, once the A/B result exists.
+- Calibrating the crossbar, Shared Mem or the Ingest DMA (decisions 1 and 2).
+- In V1's grid: N_rx 256, the slot at RTL, the dynamic policy, more than one core
+  ([The space](#the-space-a-grid-measured-in-a-week)).
 - A general DSE algorithm. The agent, or the scripted policy, chooses the points.
