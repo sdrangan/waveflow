@@ -87,6 +87,6 @@ Vitis 2025.1's gcc 13.3.0 an `add` measured alone costs about 70 cycles more tha
 12.2.0, while the sequence's total barely moved (63,266 cycles then, a 19.6 % miss). That is a
 documented limit of the shipped platform; see [Calibration](../../guide/cpu/calibration.md).
 
-Pricing the same trace through the model takes about 5 ms; gem5, with a marker around every
+Pricing the same trace through the model takes about 4 ms; gem5, with a marker around every
 operation, took 657 s. What each fidelity costs per operation, and which comparison with gem5 is
 fair, is measured in [Evaluation: the processor model](../../evaluation/sim_speed/cpu.md).
