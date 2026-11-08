@@ -1,7 +1,9 @@
 # Plan: a minimal integer SIMD core with an RVV-subset ISA (`waveflow/simdcore/`)
 
 **Status:** drafted 2026-11-07 with the user; revised the same day after review (execution model, cost
-model, fused complex lanes, decoupled load / store, decision rule). Stage 0 (decisions) not started.
+model, fused complex lanes, decoupled load / store, decision rule). **Closed 2026-11-07 after Stage 5:
+the D9 rule was not met, so the core is merged as an experimental, frozen package; Stages 6-7 are not
+run.** VecUnit is unchanged; its guide recommends `S` 1 for un-chained work.
 **Complexity:** L3. A new package (`waveflow/simdcore/`): an ISA that is a strict subset of RV32IM +
 RVV 1.0 (`Zve32x`) plus a few `wf.` extensions, an assembler, a bit-exact interpreter, a pysim module,
 the generated HLS, calibration, and programs. Nothing irreversible: `waveflow/vecunit/` (`VecUnit`) and
@@ -554,3 +556,4 @@ Check each against OpenAlex before the docs cite it (as `plans/vecunit_new.md` d
 | 2026-11-07 | 4 | `SimdCore` in pysim (loaders, core, storers on block queues; command-response words); equals the interpreter on MF and closed-loop CG; MF steady 1,160 cycles a frame at `L` 2 (1.007x floor) | records, Stage 4 |
 | 2026-11-07 | 5 (prep) | D12 element-aligned masks, D13 hardware rules (optional `lut` / `strided` / `scalar_mem`, `vle`/`vse` bank-aligned, no window on `v0`, input windows read-only); Stage 5 architecture proposed; the agent test's goldens and scorer written, reference solutions pass all 8 | records D12, D13; `tests/simdcore/agent_test/` |
 | 2026-11-07 | 5 | Generated HLS core (scalar, vector, divider tasks): csim 27/27 and XSI (MF, CG with vdiv) bit-exact. MF L 2: 1,168 cycles a frame (1.01x input floor), 36.5k LUT; CG L 2: 5,657 cycles, 49.0k LUT; CG L 4: 76.8k LUT. Vector loop II 1 at 5.31 ns (not closed at 4). **D9 rule not met** (CG); no VecUnit retirement | records, Stage 5 |
+| 2026-11-07 | close | Closed with the user: merged as experimental and frozen; Stages 6-7 not run. VecUnit untouched; `docs/guide/dsp/vecunit/construct.md` notes `S` 1 as the un-chained build that matches this core | `docs/guide/dsp/simdcore/index.md` Status |

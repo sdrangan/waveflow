@@ -3,7 +3,7 @@ title: SIMD Core
 parent: DSP Blocks
 nav_order: 6
 has_children: true
-summary: "The SIMD core is a minimal programmable integer unit for the elementwise glue between DSP blocks: a scalar RV32IM control unit and L identical complex lanes running a subset of the RISC-V vector extension (Zve32x, LMUL 1) plus a few wf. complex and queue instructions. One vector instruction runs over a whole strip before the next starts, so a program of S instructions on N elements takes about S·N/L + D cycles on O(L) hardware, with no forwarding network. This page says what it is, why it exists beside the vector unit, what it costs, and where the ISA, the programming guide and the examples are. Status: interpreter and pysim done; HLS not yet."
+summary: "The SIMD core is a minimal programmable integer unit for the elementwise glue between DSP blocks: a scalar RV32IM control unit and L identical complex lanes running a subset of the RISC-V vector extension (Zve32x, LMUL 1) plus a few wf. complex and queue instructions. One vector instruction runs over a whole strip before the next starts, so a program of S instructions on N elements takes about S·N/L + D cycles on O(L) hardware, with no forwarding network. This page says what it is, why it exists beside the vector unit, what it costs, and where the ISA, the programming guide and the examples are. Status: experimental and frozen after Stage 5 (HLS bit-exact at RTL); use the vector unit at S 1 instead."
 ---
 
 # SIMD Core
@@ -82,16 +82,26 @@ sample is one 32-bit element. With `M = 4L` multipliers:
 `cplx4` suits complex-heavy glue; `real2` (two multipliers a 32-bit word, twice the lanes for the same
 complex throughput) suits real-heavy glue.
 
-## Status and numbers
+## Status: experimental, frozen
 
-The interpreter (the golden), the assembler, the pysim module and the examples are done
-(`plans/simdcore.md`, Stages 2-4; `plans/simdcore_records.md`). The HLS bodies are not; until they are,
-**every cycle count below is the interpreter's cycle model (`D` = 8), not a measurement**:
+**Use [the vector unit](../vecunit/index.md) instead, at `S` 1 if chaining is not needed.** The SIMD core
+works end to end:
+- the interpreter (the golden), the assembler and the pysim module;
+- the generated HLS core (`waveflow/simdcore/hls.py` on `waveflow/build/simdcore_core.h`, emitted by
+  the build step `SimdCoreCodegenStep` in `waveflow/simdcore/build.py`), bit-exact
+  with pysim at RTL (XSI) on the matched filter and on CG.
 
-| | this core | vector unit (2025.1 RTL) |
+It did not pass the decision rule it was built against (`plans/simdcore.md`, D9). Development stopped
+after Stage 5; calibration (Stage 6) and the agent test (Stage 7) were not run.
+
+| Vitis HLS 2025.1 | this core | vector unit |
 |---|---|---|
-| matched filter, 256 x 8 a frame, steady | 1,160 cycles at `L` 2 (8 DSP), 1.007x the input floor (pysim) | 1,408 (1.22x), 53 DSP |
-| CG, 8 x 32, 3 iterations | 4,124 at `L` 2; 2,284 at `L` 4 | 3,447 |
-| CG accuracy (residual after 3 iterations; float CG 0.0266) | 0.0282 (16-bit vectors) | 0.0639 (12-bit centre formats) |
+| matched filter, 256 x 8 a frame, steady | 1,168 cycles, 36.5k LUT at `L` 2 | 1,408 cycles, 74.5k LUT |
+| CG, 8 x 32, 3 iterations | 5,657 cycles, 49.0k LUT at `L` 2; 76.8k LUT at `L` 4 | 3,447 cycles, 82.6k LUT |
+| un-chained vector unit (`S` 1, one format, `L` 4) | | 37.4k LUT |
 
-The matched filter is bit-exact with the vector unit's golden; CG has its own integer golden.
+The comparison that matters is with the un-chained vector unit: at the same `L` the core is the same
+size or larger. Removing chaining is where the saving comes from; the RISC-V ISA adds no saving
+on top. Its vector loop also closes at 5.31 ns, not 4. What the core still offers is a standard ISA
+(GNU as, RVV habits) and general scalar control, with branches and scalar results such as `vfirst`
+and `vcpop`. Records: `plans/simdcore_records.md`, Stage 5.

@@ -45,3 +45,4 @@ from this table, by someone other than the agent under test).
 |---|---|
 | 2026-11-07 | Registered (8 kernels, the rule, the target) |
 | 2026-11-07 | `tests/simdcore/agent_test/kernels.py` written from the table (goldens, configurations, `score`), with reference programs (`solutions.py`) that pass every kernel on seeds 0-4: each golden is reachable with the documented instructions. No kernel, golden or rule changed. Since registration the ISA gained D12 (masks one an element) and D13 (input windows read-only, no window on `v0`); the kernels use neither `v0` windows nor writes to inputs, so the set stands. Data choices the table left open: power-count's `T` is one element's energy (ties exercise `>`); argmin sometimes repeats its minimum; normalize-peak sometimes includes `-2^20` |
+| 2026-11-07 | Not scored: the core was frozen after Stage 5 (D9 not met). The registration and the harness stand, if the core is ever reopened |
