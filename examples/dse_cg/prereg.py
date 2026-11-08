@@ -101,3 +101,8 @@ AGENT_SDK = "claude-agent-sdk 0.2.179 (Claude Code 2.1.319)"
 
 #: How calibration cost enters the Waveflow arm: reported both ways, headline "upfront".
 CALIBRATION_CHARGE = ("upfront", "amortized")
+
+#: The calibration charged, tool-seconds (about 8.0 hours): ``calibration.CALIBRATION_S``, itemized
+#: there (the units' builds, the memory's traces and the six integration points; what is not charged
+#: and why).
+CALIBRATION_S = 28740.4

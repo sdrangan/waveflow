@@ -74,3 +74,10 @@ def test_optimum_pick_and_scoring(tmp_path):
     assert r["lut"]["mean_abs_rel"] == pytest.approx(0.01 / 6)                    # one part of six, 1% off
     assert r["cycles"]["mean_abs_rel"] == pytest.approx((0.1 / 4.0 + 0.6 / 4.5) / 2)
     assert r["picks"]["share"] == 1.0
+
+
+def test_the_pre_registered_calibration_is_the_itemized_one():
+    from examples.dse_cg import calibration, prereg
+
+    assert prereg.CALIBRATION_S == calibration.CALIBRATION_S
+    assert all(s > 0 and src for _, _, s, src in calibration.CHARGED)
