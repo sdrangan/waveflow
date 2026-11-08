@@ -4,7 +4,7 @@
 // accepted request (status OK) it then writes, as one burst of memory elements (k x n), the core's
 // next P (the reply to a START, or to a STEP with steps still to come: nfollow > 0) or X (the reply
 // to the job's last STEP).  A rejected request's reply is the header alone.
-// Python twin: waveflow.linalg.cg_vector.CgVectorStore.
+// Python twin: waveflow.linalg.legacy.cg_vector.CgVectorStore.
 #ifndef WF_CG_VECTOR_STORE_TASK_H
 #define WF_CG_VECTOR_STORE_TASK_H
 #include "hls_stream.h"

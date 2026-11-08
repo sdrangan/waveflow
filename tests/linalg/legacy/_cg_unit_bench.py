@@ -1,6 +1,6 @@
 """A test bench for the standalone CG vector unit: fed from memory, its replies landed in memory.
 
-The DUT (:class:`CgUnitBench`) is a :class:`~waveflow.linalg.cg_vector.CgVectorUnit` between the
+The DUT (:class:`CgUnitBench`) is a :class:`~waveflow.linalg.legacy.cg_vector.CgVectorUnit` between the
 framework's in-band memory streams::
 
     s_req -> CgReqFramer -> MemRStream (in-band) -> CgVectorUnit -> CgReplyFramer
@@ -14,7 +14,7 @@ the memory writer echoes the reply header on ``s_done``.  The framers are test-o
 A scenario is a list of :class:`Message`: the requests of CG jobs (:func:`job_messages`, ``S``
 from the model, :func:`waveflow.linalg.cg.mm_step` on the job's ``A``) and requests meant to be
 rejected, in any order.  :func:`expected_replies` runs the receiver's rules
-(:func:`~waveflow.linalg.cg_vector.message_status`) over it and gives every reply header and every
+(:func:`~waveflow.linalg.legacy.cg_vector.message_status`) over it and gives every reply header and every
 served reply's payload.  The same scenario runs in pysim (:meth:`CgUnitBenchSim.run`) and at RTL
 through XSI (:func:`generate`, :func:`csynth`, :func:`generate_tb`, :func:`run_xsi`,
 :func:`check_xsi`).
@@ -31,7 +31,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from tests.linalg._unit_bench import check_xsi as _check_xsi
+from tests.linalg.legacy._unit_bench import check_xsi as _check_xsi
 from waveflow.build.build import BuildConfig
 from waveflow.build.composite_gen import (
     GEN_DIR,
@@ -60,7 +60,8 @@ from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
 from waveflow.linalg import cg
 from waveflow.linalg.build import collect_parts, linalg_headers_dag
-from waveflow.linalg.cg_vector import (
+from waveflow.linalg.lanes import to_words
+from waveflow.linalg.legacy.cg_vector import (
     CgOp,
     CgVectorUnit,
     Job,
@@ -68,7 +69,6 @@ from waveflow.linalg.cg_vector import (
     message_words,
     reply_header,
 )
-from waveflow.linalg.lanes import to_words
 from waveflow.linalg.message import U32, LinalgHeader, Status, header
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation

@@ -4,12 +4,12 @@
 // (m x k, or k x m for A^H), then B (k x n), each one burst of memory elements (wf_matrix_io.h).
 // The header is validated: the operation (BAD_OP), nfollow == 0 (BAD_SEQUENCE: jobs are
 // self-contained), the dimensions against the core's maxima and array (BAD_DIMS:
-// waveflow.linalg.systolic.cmd_status), and length against the dimensions (BAD_LENGTH).  A valid
+// waveflow.linalg.legacy.systolic.cmd_status), and length against the dimensions (BAD_LENGTH).  A valid
 // request sends the job to the load task and the core, the reply header to the store, and its
 // payload words to the load task.  A rejected one sends the store a reply with its status and no
 // payload, and is drained by length.  IN_T is s_in's word type (KernelTask.framed): framed_word
 // inside a composite, axi4s_word at the unit's own top.  Python twin:
-// waveflow.linalg.systolic.SystolicRx.
+// waveflow.linalg.legacy.systolic.SystolicRx.
 #ifndef WF_SYSTOLIC_RX_TASK_H
 #define WF_SYSTOLIC_RX_TASK_H
 #include "hls_stream.h"
@@ -35,7 +35,7 @@ static void systolic_rx_task(hls::stream<IN_T>& s_in,
     const bool k_ok = (k & (L - 1)) == 0 || (k < L && (k & (k - 1)) == 0);
     const ap_uint<32> wa = (m * k + LW - 1) / LW, wb = (k * n + LW - 1) / LW;
     int st = wf_linalg::OK;
-    if (op != 1 && op != 2) {  // waveflow.linalg.systolic.MatmulOp
+    if (op != 1 && op != 2) {  // waveflow.linalg.matmul.MatmulOp
         st = wf_linalg::BAD_OP;
     } else if (h.nfollow != 0) {
         st = wf_linalg::BAD_SEQUENCE;

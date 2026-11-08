@@ -22,12 +22,17 @@ import json
 import numpy as np
 import pytest
 
-from tests.linalg import _unit_bench as UB
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis
+from tests.linalg.legacy import _unit_bench as UB
 from waveflow.hw.interface import StreamIF
 from waveflow.linalg.lanes import to_words
+from waveflow.linalg.legacy.systolic import (
+    MatmulOp,
+    SystolicUnit,
+    request_words,
+    stored_shape,
+)
 from waveflow.linalg.message import Status, header
-from waveflow.linalg.systolic import MatmulOp, SystolicUnit, request_words, stored_shape
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
 from waveflow.toolchain import toolchain

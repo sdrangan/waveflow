@@ -55,10 +55,11 @@ import numpy as np
 from examples.mimo_cg.hw.campaign import shard
 from examples.mimo_cg.hw.linalg_cal import _ape, _flatten, _write_kv
 from examples.mimo_cg.hw.measure import prune_build
-from tests.linalg import _cg_unit_bench as UB
+from tests.linalg.legacy import _cg_unit_bench as UB
 from waveflow.calib.synth_report import report_from_solution
-from waveflow.linalg import cg_cost, cost
-from waveflow.linalg.cg_vector import (
+from waveflow.linalg import cost
+from waveflow.linalg.legacy import cg_cost
+from waveflow.linalg.legacy.cg_vector import (
     CgOp,
     CgVectorUnit,
     iter_cycles,
@@ -613,7 +614,7 @@ def _loo(recs: list[dict]) -> dict:
 
 
 def _run_8_3_formats(run_name: str):
-    from tests.linalg.test_cg_vector_unit import UNITS
+    from tests.linalg.legacy.test_cg_vector_unit import UNITS
 
     return UNITS[run_name]
 
@@ -622,7 +623,7 @@ def _score_8_3(msg: dict) -> dict:
     """The step 8.3 runs: the span from the first reply to the last against the sum of the
     predicted intervals of the requests after the first (rebuilt from the test's scenarios).
     """
-    from tests.linalg.test_cg_vector_unit import make_sim
+    from tests.linalg.legacy.test_cg_vector_unit import make_sim
 
     with RUN_8_3.open(encoding="utf-8") as f:
         rows = list(csv.DictReader(line for line in f if not line.startswith("#")))

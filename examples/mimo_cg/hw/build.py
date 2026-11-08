@@ -385,7 +385,7 @@ def unit_fields(
 
 
 def _generate_unit(top: str, out_dir: Path | None, K: int, fmt: int, **knobs) -> Path:
-    from tests.linalg import _cg_unit_bench, _unit_bench
+    from tests.linalg.legacy import _cg_unit_bench, _unit_bench
 
     bench = _cg_unit_bench if top == "vec" else _unit_bench
     name = CG_UNIT_TOP if top == "vec" else SYSTOLIC_UNIT_TOP

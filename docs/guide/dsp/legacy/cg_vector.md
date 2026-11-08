@@ -1,20 +1,25 @@
 ---
-title: CG Vector Unit
-parent: DSP Blocks
-nav_order: 4
+title: CG Vector Unit (retired)
+parent: Retired Components
+nav_order: 1
 has_children: false
 snippets: run
-summary: "CgVectorCore and CgVectorUnit run the vector steps of fixed-point conjugate gradient, multi-RHS: the start and, per iteration, the column dots, the two guarded divisions and the updates of X, R and P, bit for bit like the model in waveflow.linalg.cg. The matrix multiply S = A·P of each iteration comes from outside: a systolic multiply, or a STEP message. Covers the model, the parameters, the core's command and blocks, the unit's START/STEP messages, a runnable example, building and testing, the calibrated cost model with its held-out scores, and the limits."
+summary: "Retired (kept for examples/mimo_cg; new designs run CG as a program on VecUnit). CgVectorCore and CgVectorUnit run the vector steps of fixed-point conjugate gradient, multi-RHS: the start and, per iteration, the column dots, the two guarded divisions and the updates of X, R and P, bit for bit like the model in waveflow.linalg.cg. The matrix multiply S = A·P of each iteration comes from outside: a systolic multiply, or a STEP message. Covers the model, the parameters, the core's command and blocks, the unit's START/STEP messages, a runnable example, building and testing, the calibrated cost model with its held-out scores, and the limits."
 ---
 
-# CG Vector Unit
+# CG Vector Unit (retired)
 
-`CgVectorCore` and `CgVectorUnit` (`waveflow/linalg/cg_vector.py`) run the vector steps of
+**Retired.** `CgVectorCore` and `CgVectorUnit` are kept for [the MIMO-CG example](../../../examples/mimo_cg/index.md)
+only; new designs run CG as a program on [the vector unit](../vecunit/index.md)
+([the CG example](../../../examples/vecunit_cg/index.md)). See [Retired Components](index.md). The page
+below describes the unit as it was; its paths are the retired ones.
+
+`CgVectorCore` and `CgVectorUnit` (`waveflow/linalg/legacy/cg_vector.py`) run the vector steps of
 fixed-point **conjugate gradient** on `A X = B`: `A` Hermitian positive definite (`k × k`) and `n`
 right-hand sides (`B`, `k × n`), each column with its own step sizes. A job runs `nit` iterations
 from `X = 0`. The matrix multiply of each iteration, `S = A·P`, is not in this unit: in a design, a
 systolic multiply computes the `nit` matrices `S` from the `nit` matrices `P` this unit writes -- a
-[systolic engine](systolic/systolic_engine.md) command with `keep_a` and `nb = nit`, one `A` for all of
+[systolic engine](../systolic/systolic_engine.md) command with `keep_a` and `nb = nit`, one `A` for all of
 them; the standalone unit takes `S` in its messages.
 
 **Status.** This unit is part of the MIMO-CG example (`examples/mimo_cg`), which pairs it with the
@@ -25,7 +30,7 @@ xsim 2025.1 (`plans/calib_2025_1.md` Stage 4).
 The bit-exact model is `waveflow.linalg.cg`. The pysim modules call it, and the HLS body equals it
 in C-simulation (with the tasks fired in order; see [Limits](#limits)) and at RTL. For what the
 linear-algebra components share (formats, lane groups, messages, the build step), see
-[Linear-Algebra Conventions](./linalg_common.md).
+[Linear-Algebra Conventions](../linalg_common.md).
 
 ## The model
 
@@ -69,7 +74,7 @@ dimensions.
 | `clk` | 250 MHz | the clock of the pysim timing | |
 
 **Run-time values.** Each job states its own `nit`, `k` and `n`: `1 ≤ nit ≤ nitmax`,
-`1 ≤ k ≤ Kmax`, and `1 ≤ n ≤ Nmax` with `L` dividing `n`. `waveflow.linalg.cg_vector.cmd_status`
+`1 ≤ k ≤ Kmax`, and `1 ≤ n ≤ Nmax` with `L` dividing `n`. `waveflow.linalg.legacy.cg_vector.cmd_status`
 says whether a job is valid. The iteration count is fixed per job, so a job's time does not depend
 on its data.
 
@@ -86,7 +91,7 @@ on its data.
 | `x_blk` | stream of blocks, out | `X`, after the last iteration |
 
 Every block holds a `k × n` matrix as row-major lane groups of `L`
-([lane groups](linalg_common.md#lane-groups-and-message-words)). A
+([lane groups](../linalg_common.md#lane-groups-and-message-words)). A
 job reads `B`, starts, and writes `P₀`; then, per iteration, it reads `S` and writes the next `P`,
 or `X` after the last. Per iteration and per group of `L` columns it makes three pipelined passes
 over the `k` rows: the dot `ps`, then `X`, `R` and `rz'`, then `P`, with the two divisions between
@@ -96,7 +101,7 @@ Paired with a `SystolicCore`, a CG job is a `SystolicCore` job with `nb = nit` (
 matrices `P` in, the `nit` matrices `S` out) beside one `CgVectorCore` job; the two cores must then
 share `L`, and the dimensions must also meet the systolic multiply's rules.
 
-The body is `waveflow/build/cg_vector_task.h`, a template on the maxima, `L`, `sob_depth` and the
+The body is `waveflow/build/legacy/cg_vector_task.h`, a template on the maxima, `L`, `sob_depth` and the
 format id. Its traits carry the registers and the exact types the body needs: `rzw_t` (the widened
 dividend) and the dot accumulators `dot_ps_t` and `dot_rz_t`, sums of `Kmax` terms. The example
 below prints these three for one configuration.
@@ -104,7 +109,7 @@ below prints these three for one configuration.
 ## The standalone unit
 
 `CgVectorUnit` puts the core behind three tasks and speaks the framed messages of
-[Linear-Algebra Conventions](./linalg_common.md#messages) on `s_in` and `s_out`:
+[Linear-Algebra Conventions](../linalg_common.md#messages) on `s_in` and `s_out`:
 
 | Task | Body | Does |
 |---|---|---|
@@ -145,7 +150,7 @@ bits, `ps` and `rz` 20 bits, `g_div` 6. The traits derive the exact types from t
 
 ```python
 from waveflow.linalg import cg
-from waveflow.linalg.cg_vector import CgVectorUnit
+from waveflow.linalg.legacy.cg_vector import CgVectorUnit
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils.fixputils import Format, OMode, QMode
 
@@ -203,7 +208,7 @@ The requests: a `START` with `B`, then the three `STEP` requests with `S`, and b
 and the second step one more `STEP` whose `nfollow` is wrong:
 
 ```python
-from waveflow.linalg.cg_vector import CgOp
+from waveflow.linalg.legacy.cg_vector import CgOp
 from waveflow.linalg.lanes import to_words
 from waveflow.linalg.message import header
 
@@ -272,7 +277,7 @@ The cost model prices this configuration per task, plus the unit's channels, and
 `START` and a `STEP` of this job add to a stream of messages, with the core's share of each:
 
 ```python
-from waveflow.linalg import cg_cost
+from waveflow.linalg.legacy import cg_cost
 
 for task, row in cg_cost.predict_unit(unit).items():
     print(f"{task:23} " + " ".join(f"{key}={row[key]:5.0f}" for key in ("lut", "ff", "dsp", "bram")))
@@ -316,7 +321,7 @@ with tempfile.TemporaryDirectory() as tmp:
 ['cg_vector_load_task.h', 'cg_vector_rx_task.h', 'cg_vector_store_task.h', 'cg_vector_task.h', 'wf_cg_vector_cmd.h', 'wf_cg_vector_cmd_tb.h', 'wf_lanes.h', 'wf_linalg_header.h', 'wf_linalg_header_tb.h', 'wf_linalg_msg.h', 'wf_linalg_traits.h', 'wf_matrix_io.h']
 ```
 
-**The top and the RTL test.** `tests/linalg/_cg_unit_bench.py` feeds the unit from memory through
+**The top and the RTL test.** `tests/linalg/legacy/_cg_unit_bench.py` feeds the unit from memory through
 an in-band `MemRStream` and lands its replies through an in-band `MemWStream`, with one memory read
 per request and one write per reply. A scenario is a list of
 CG jobs, whose `S` matrices the model computes, and requests meant to be rejected, between jobs or
@@ -333,9 +338,9 @@ inside them.
 
 ## The cost model
 
-`waveflow/linalg/cg_cost.py` holds the model forms, beside the systolic unit's in
+`waveflow/linalg/legacy/cg_cost.py` holds the model forms, beside the systolic unit's in
 `waveflow/linalg/cost.py`. The fitted numbers live in the same packaged platform
-([Linear-Algebra Conventions](./linalg_common.md#cost-data)).
+([Linear-Algebra Conventions](../linalg_common.md#cost-data)).
 
 ### Resources
 
@@ -412,7 +417,7 @@ Two parts miss. The unit's block RAM is in its channels, priced by the linear-al
 which is Vitis 2024.1's binding. And the cycle model's form describes a unit that no longer exists:
 a fix of October 2026 made the receiver-to-store channel two reply headers deep, so the unit now
 overlaps consecutive jobs, while the form's terms were fitted to a unit that serialized them. The
-three RTL runs of `tests/linalg/test_cg_vector_unit.py` pass bit-exact at 2025.1; their recorded
+three RTL runs of `tests/linalg/legacy/test_cg_vector_unit.py` pass bit-exact at 2025.1; their recorded
 cycles (`paper_data/cg_unit_8_3_cycles.csv`) predate that fix and the gates' current scenarios, so
 the sum-of-intervals check was not re-scored. Every one of the 43 builds met 4 ns in synthesis
 (estimated 3.352 ns, `cg_builds.csv`). The study tooling is `examples/mimo_cg/hw/cg_cal.py`.

@@ -1,10 +1,14 @@
-"""cg_vector.py — the CG vector unit: fixed-point conjugate gradient's vector steps, multi-RHS.
+"""cg_vector.py — the CG vector unit (retired): fixed-point conjugate gradient's vector steps, multi-RHS.
+
+**Retired.**  ``CgVectorCore`` and ``CgVectorUnit`` are kept for ``examples/mimo_cg``, the study that
+used them; new designs run CG as a program on the vector unit (:class:`~waveflow.vecunit.unit.VecUnit`,
+``examples/vecunit_cg``).  See :mod:`waveflow.linalg.legacy`.
 
 :class:`CgVectorCore` runs the start and register steps 2–9 of :mod:`waveflow.linalg.cg` (the
 column dots, the two guarded divisions, the updates of ``X``, ``R`` and ``P``), bit for bit like
 :func:`~waveflow.linalg.cg.cg_init` and :func:`~waveflow.linalg.cg.vec_step`.  Its body is
-``waveflow/build/cg_vector_task.h``.  The matrix multiply ``S = A·P`` of each iteration is not
-here: a :class:`~waveflow.linalg.systolic.SystolicCore` job with ``nb = nit`` computes the ``nit``
+``waveflow/build/legacy/cg_vector_task.h``.  The matrix multiply ``S = A·P`` of each iteration is not
+here: a :class:`~waveflow.linalg.legacy.systolic.SystolicCore` job with ``nb = nit`` computes the ``nit``
 matrices ``S`` from the ``nit`` matrices ``P`` this core writes.
 
 The core
@@ -61,7 +65,6 @@ from waveflow.hw.interface import (
     StreamOfBlocksIF,
 )
 from waveflow.hw.mem_stream import KernelTask
-from waveflow.linalg import cg_cost
 from waveflow.linalg import cost as _cost
 from waveflow.linalg.build import LinalgParts
 from waveflow.linalg.cg import CgFormats, accumulator_formats, cg_init, vec_step
@@ -74,12 +77,13 @@ from waveflow.linalg.lanes import (
     nwords,
     to_words,
 )
+from waveflow.linalg.legacy import cg_cost
 from waveflow.linalg.message import U16, LinalgHeader, Status, header_words
 from waveflow.simulation.simobj import ProcessGen
 
-#: The task body of the core, in ``waveflow/build/``.
+#: The task body of the core, in ``waveflow/build/legacy/``.
 CORE_BODY = "cg_vector_task.h"
-#: The headers a design with the core copies from ``waveflow/build/``.
+#: The headers a design with the core copies from ``waveflow/build/legacy/``.
 CORE_HEADERS = (CORE_BODY,)
 #: The traits family of the core.
 CORE_TRAITS = "wf_cg_traits"
@@ -87,7 +91,7 @@ CORE_TRAITS = "wf_cg_traits"
 CMD_BITS = 64
 #: The traits family of the unit's message side: registers and memory elements.
 IO_TRAITS = "wf_cg_io_traits"
-#: The task bodies of the standalone unit, in ``waveflow/build/``.
+#: The task bodies of the standalone unit, in ``waveflow/build/legacy/``.
 UNIT_HEADERS = (
     "cg_vector_rx_task.h",
     "cg_vector_load_task.h",
@@ -734,6 +738,6 @@ class CgVectorUnit(FreeRunMod):
 
     @classmethod
     def get_rm(cls, platform):
-        """The unit's own share, its channels (:class:`~waveflow.linalg.cg_cost.CgUnitResourceModel`);
+        """The unit's own share, its channels (:class:`~waveflow.linalg.legacy.cg_cost.CgUnitResourceModel`);
         each task has its own model."""
         return cg_cost.unit_model(platform)

@@ -88,7 +88,7 @@ the [default command-response rule](../../systems/command_response.md). The engi
 the way its receiver will:
 
 ```python
-from waveflow.linalg.systolic import MatmulOp
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.systolic_engine import SystolicEngine, command
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils.fixputils import Format, OMode, QMode

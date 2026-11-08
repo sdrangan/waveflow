@@ -19,11 +19,11 @@ import re
 import numpy as np
 import pytest
 
-from tests.linalg import _cg_core_bench as CB
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis, run_csim
-from tests.linalg.test_systolic_core import csynth_summary
-from waveflow.linalg import cg_vector as CV
+from tests.linalg.legacy import _cg_core_bench as CB
+from tests.linalg.legacy.test_systolic_core import csynth_summary
 from waveflow.linalg.build import collect_parts
+from waveflow.linalg.legacy import cg_vector as CV
 from waveflow.linalg.message import Status
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain

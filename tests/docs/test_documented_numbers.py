@@ -721,12 +721,12 @@ def _linalg_rows(name: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# guide/dsp/cg_vector.md — the CG unit's cost model, measured runs and limits
+# guide/dsp/legacy/cg_vector.md — the CG unit's cost model, measured runs and limits
 # ---------------------------------------------------------------------------
 
 
 def _cg_page() -> str:
-    return " ".join(_page("guide/dsp/cg_vector.md").split())
+    return " ".join(_page("guide/dsp/legacy/cg_vector.md").split())
 
 
 def _cg_metrics() -> dict:
@@ -798,8 +798,9 @@ def test_cg_page_quotes_the_figures_it_states_in_prose():
     import json
 
     from examples.mimo_cg.hw.cg_cal import VALUES
-    from waveflow.linalg import cg, cg_cost, cost
-    from waveflow.linalg.cg_vector import CgOp, CgVectorUnit
+    from waveflow.linalg import cg, cost
+    from waveflow.linalg.legacy import cg_cost
+    from waveflow.linalg.legacy.cg_vector import CgOp, CgVectorUnit
     from waveflow.simulation.simulation import Simulation
     from waveflow.utils.fixputils import Format, OMode, QMode
 

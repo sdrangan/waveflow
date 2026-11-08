@@ -65,7 +65,7 @@ from waveflow.hw.memory import AddrUnit, MemoryMod
 from waveflow.hw.mm_device import build_mm_device
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor, BusReader, MemSlaveLayout
 from waveflow.linalg.lanes import from_words, to_words
-from waveflow.linalg.systolic import MatmulOp
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.systolic_engine_mem import EngineJobDesc, block_major
 from waveflow.simulation.simulation import Simulation
 from waveflow.sw import SwHost, SwLock, SwQueue

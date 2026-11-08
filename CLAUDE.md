@@ -71,13 +71,15 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 - **`waveflow/build/`** — Code generation for Vitis HLS (C++ API, stream utilities, TCL scripts).
 - **`waveflow/linalg/`** — Reusable complex fixed-point linear-algebra components:
-  the systolic matrix multiply (`SystolicCore`, `SystolicUnit`) and the CG vector
-  unit (`CgVectorCore`, `CgVectorUnit`). Each is a bit-exact Python model, a pysim
-  module, a Vitis HLS task body in `waveflow/build/` (`systolic_*_task.h`,
-  `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
-  platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1/` (Vitis 2025.1), which also holds
-  the systolic engine's resource model.
-  Tests in `tests/linalg/`; guide in `docs/guide/dsp/` (`linalg_common.md`, `systolic/`, `cg_vector.md`).
+  the systolic matrix multiply (`SystolicEngine`, and `SystolicEngineMem` behind memory). It is a
+  bit-exact Python model (`matmul.py`), a pysim module, Vitis HLS task bodies in `waveflow/build/`
+  (`systolic_engine_*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged platform
+  `waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1/` (Vitis 2025.1; `cost.py`). `cg.py` is the
+  CG algorithm's bit-exact model (run as a program on `VecUnit`). Tests in `tests/linalg/`; guide in
+  `docs/guide/dsp/` (`linalg_common.md`, `systolic/`).
+  **Retired** (`waveflow/linalg/legacy/`, kept only for `examples/mimo_cg`): `SystolicUnit` /
+  `SystolicCore` and `CgVectorUnit` / `CgVectorCore`, their bodies in `waveflow/build/legacy/`, tests
+  in `tests/linalg/legacy/`, guide page `docs/guide/dsp/legacy/`. Never use them in new work.
 - **`waveflow/vecunit/`** — A programmable complex fixed-point vector unit (RVV-style ISA `Xwfvec`,
   one 64-bit word an instruction): a fixed-point format per register, chained passes and fused runs,
   decoupled load / execute / store tasks on queues of blocks. `VecUnitConfig`, the assembler (`asm`),

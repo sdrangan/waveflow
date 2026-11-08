@@ -31,9 +31,9 @@ from examples.mimo_cg.hw.common import (
 )
 from examples.mimo_cg.hw.detector import CgDetectorSim, detector_problems
 from examples.mimo_cg.mimo_cg_accuracy_sweep import sweep_format
-from tests.linalg import _cg_unit_bench as CUB
-from tests.linalg import _unit_bench as SUB
-from waveflow.linalg.systolic import MatmulOp
+from tests.linalg.legacy import _cg_unit_bench as CUB
+from tests.linalg.legacy import _unit_bench as SUB
+from waveflow.linalg.legacy.systolic import MatmulOp
 
 N = 32
 SPACE_FORMATS = [f"W{W}g{g}" for W in SPACE_W for g in SPACE_G]

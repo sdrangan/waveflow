@@ -9,7 +9,7 @@ summary: "VecUnit is a programmable complex fixed-point vector unit: an instruct
 # Vector Unit
 
 `VecUnit` (`waveflow/vecunit/`) is a small **processor** for complex fixed-point linear algebra. A
-fixed-function block such as [the CG vector unit](../cg_vector.md) does one algorithm, which is
+fixed-function block such as [the (retired) CG vector unit](../legacy/cg_vector.md) does one algorithm, which is
 built into its hardware. `VecUnit` instead runs **programs**: lists of instructions such as "add these
 two vectors" or "multiply this vector by a scalar", which the host sends with each job. The same
 hardware then runs conjugate gradient ([the CG example](../../../examples/vecunit_cg/index.md)), a

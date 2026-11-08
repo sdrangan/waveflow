@@ -166,6 +166,52 @@ _MEM_STRUCT = """\
     }};"""
 
 
+#: The traits family of the systolic array (``SystolicEngine``'s core): its registers and the exact
+#: types of the array.
+SYSTOLIC_TRAITS = "wf_systolic_traits"
+#: The traits family of a systolic multiply's message side: registers and memory elements.
+SYSTOLIC_IO_TRAITS = "wf_systolic_io_traits"
+
+
+def check_signed(name: str, *formats: Format) -> None:
+    """The complex multiply takes signed formats only."""
+    if not all(f.signed for f in formats):
+        raise ValueError(f"{name}: the formats of A, B and C must be signed")
+
+
+def systolic_traits(a: Format, b: Format, c: Format, Kmax: int) -> Traits:
+    """The traits of a systolic array with these formats: the registers and the exact types of the
+    array -- ``ba_t`` (``B`` in the array, one bit wider for the negation), ``p_t`` (one complex
+    product) and ``acc_t`` (a sum of ``Kmax`` products)."""
+    from waveflow.linalg import matmul as mm
+    from waveflow.utils import complexutils as cx
+
+    ba = cx.conj_format(b)
+    return Traits(
+        SYSTOLIC_TRAITS,
+        (
+            ("a_t", a),
+            ("b_t", b),
+            ("c_t", c),
+            ("ba_t", ba),
+            ("p_t", cx.cmult_format(a, ba)),
+            ("acc_t", mm.acc_format(a, ba, Kmax)),
+        ),
+    )
+
+
+def systolic_io_traits(
+    a: Format, b: Format, c: Format, lane_bits: int = DEFAULT_LANE_BITS
+) -> Traits:
+    """The traits of a systolic multiply's message side: the registers and their memory elements."""
+    return Traits(
+        SYSTOLIC_IO_TRAITS,
+        (("a_t", a), ("b_t", b), ("c_t", c)),
+        (("a_mem", a), ("b_mem", b), ("c_mem", c)),
+        int(lane_bits),
+    )
+
+
 def unique_traits(traits: Iterable[Traits]) -> list[Traits]:
     """``traits`` without repeats, in order; raises if two differ but share a family and an id."""
     seen: dict[tuple[str, int], Traits] = {}

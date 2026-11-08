@@ -270,8 +270,8 @@ def test_python_simulation_takes_the_cores_cycle_models(c, monkeypatch):
     vector core's ``P``) and sweep the tiles -- so the interval is START + nit·(copy B + sweep + STEP).
     (Until 2026-10 the systolic core took the 2024.1 cycle model's share; plans/systolic_characterization.md.)"""
     from examples.mimo_cg.hw.detector import CgDetectorSim, detector_problems
-    from waveflow.linalg import cg_cost
-    from waveflow.linalg.cg_vector import CgOp
+    from waveflow.linalg.legacy import cg_cost
+    from waveflow.linalg.legacy.cg_vector import CgOp
     from waveflow.simulation.stream_tb import StreamSink
 
     done_at: list[float] = []

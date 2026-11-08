@@ -31,8 +31,8 @@ from examples.mimo_cg.hw.build import (
 from examples.mimo_cg.hw.detector import CgDetector, CgDetectorSim, detector_problems
 from waveflow.build.trace_steps import rtl_staleness
 from waveflow.hw.mem_stream import MemRStream, MemWStream
-from waveflow.linalg.cg_vector import CgVectorCore
-from waveflow.linalg.systolic import SystolicCore
+from waveflow.linalg.legacy.cg_vector import CgVectorCore
+from waveflow.linalg.legacy.systolic import SystolicCore
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain
 from waveflow.utils.csynthparse import CsynthParser, synth_target

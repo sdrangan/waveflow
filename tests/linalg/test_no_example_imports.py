@@ -34,13 +34,16 @@ MANIFEST = (
     *(
         f"waveflow/linalg/{m}.py"
         for m in (
-            "__init__", "formats", "lanes", "message", "build", "matmul", "systolic", "cost",
-            "cg", "cg_vector", "cg_cost",
+            "__init__", "formats", "lanes", "message", "build", "matmul", "cost", "cg",
             # the systolic engine and its memory wrapper (plans/systolic_characterization.md, Part B)
             "systolic_engine", "systolic_engine_mem",
+            # the retired units and their cost models (2026-11-08: waveflow.linalg.legacy)
+            "legacy/__init__", "legacy/systolic", "legacy/systolic_cost", "legacy/cg_vector",
+            "legacy/cg_cost",
         )
     ),
-    *(f"waveflow/build/{h}.h" for h in ("wf_lanes", "wf_matrix_io", "wf_linalg_msg", *_TASKS)),
+    *(f"waveflow/build/{h}.h" for h in ("wf_lanes", "wf_matrix_io", "wf_linalg_msg")),
+    *(f"waveflow/build/legacy/{h}.h" for h in _TASKS),
     *(f"waveflow/build/systolic_engine_{t}_task.h" for t in ("rx", "load", "core", "store", "mem")),
     f"{PLATFORM}/platform.json",
     f"{PLATFORM}/provenance.json",

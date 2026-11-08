@@ -15,8 +15,8 @@ Step 4.8 of ``plans/mimo_cg/mimo_cg_paper_sims.md`` built it on the example's ow
   (a FIFO, depth ``cmd_depth``): a ``SystolicCmd`` of ``nb = nit`` matrices (``A`` once, then one
   ``P`` in and one ``S`` out per iteration) and a ``CgVectorCmd`` of ``nit`` iterations.  It
   passes the descriptor on to the store.
-* ``vec`` (:class:`~waveflow.linalg.cg_vector.CgVectorCore`) and ``mm``
-  (:class:`~waveflow.linalg.systolic.SystolicCore`) exchange ``P`` and ``S`` through the ``p_blk``
+* ``vec`` (:class:`~waveflow.linalg.legacy.cg_vector.CgVectorCore`) and ``mm``
+  (:class:`~waveflow.linalg.legacy.systolic.SystolicCore`) exchange ``P`` and ``S`` through the ``p_blk``
   / ``s_blk`` stream-of-blocks — the **shared memory**, ``sob_depth`` blocks each — in a feedback
   loop: ``P₀`` from ``B``, then each ``S`` makes the next ``P``, and the last makes ``X`` instead.
 * ``cg_store`` writes ``X`` and then a zero-length write whose echo is the job's done on
@@ -63,10 +63,10 @@ from waveflow.hw.interface import (
 from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemRStream, MemWCmd, MemWStream
 from waveflow.hw.memif import AXIMMCrossBarIF, assign_address_ranges
 from waveflow.hw.memory import MemoryMod, MemSeg
-from waveflow.linalg import cg_vector, systolic
-from waveflow.linalg.cg_vector import CgVectorCore
+from waveflow.linalg.legacy import cg_vector, systolic
+from waveflow.linalg.legacy.cg_vector import CgVectorCore
 from waveflow.linalg.lanes import block_type, n_groups
-from waveflow.linalg.systolic import MatmulOp, SystolicCore
+from waveflow.linalg.legacy.systolic import MatmulOp, SystolicCore
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink

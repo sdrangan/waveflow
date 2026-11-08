@@ -1,7 +1,7 @@
 """Step 9.3: the two standalone units composed message to message, in pysim (no Vitis).
 
-A relay host plays CG jobs through two :class:`~waveflow.linalg.cg_vector.CgVectorUnit` and one
-:class:`~waveflow.linalg.systolic.SystolicUnit`.  Each ``P`` a vector unit replies with goes to the
+A relay host plays CG jobs through two :class:`~waveflow.linalg.legacy.cg_vector.CgVectorUnit` and one
+:class:`~waveflow.linalg.legacy.systolic.SystolicUnit`.  Each ``P`` a vector unit replies with goes to the
 systolic unit as the ``B`` of a ``MUL`` request whose ``A`` is the job's, and each ``C`` that unit
 replies with goes back to the vector unit as the next ``STEP``'s ``S``.  The reply payloads are
 forwarded word for word, never decoded: the two units share the memory format (lane width,
@@ -24,17 +24,17 @@ import numpy as np
 import pytest
 import simpy
 
-from tests.linalg._cg_core_bench import cg_formats
-from tests.linalg._cg_unit_bench import random_job
+from tests.linalg.legacy._cg_core_bench import cg_formats
+from tests.linalg.legacy._cg_unit_bench import random_job
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwModule
 from waveflow.hw.interface import StreamIF, StreamIFMaster, StreamIFSlave
 from waveflow.linalg.cg import cg_solve
-from waveflow.linalg.cg_vector import CgOp, CgVectorUnit
 from waveflow.linalg.lanes import from_words, to_words
+from waveflow.linalg.legacy.cg_vector import CgOp, CgVectorUnit
+from waveflow.linalg.legacy.systolic import MatmulOp, SystolicUnit
 from waveflow.linalg.message import LinalgHeader, Status, header
-from waveflow.linalg.systolic import MatmulOp, SystolicUnit
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 

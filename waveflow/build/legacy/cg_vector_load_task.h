@@ -2,7 +2,7 @@
 //
 // Reads the job (CgVectorCmd) from the receiver, then the payloads it forwards, which are the job's
 // accepted requests in order: B (k x n) into the core's B block, then each of the nit matrices S
-// into its S block.  Python twin: waveflow.linalg.cg_vector.CgVectorLoad.
+// into its S block.  Python twin: waveflow.linalg.legacy.cg_vector.CgVectorLoad.
 #ifndef WF_CG_VECTOR_LOAD_TASK_H
 #define WF_CG_VECTOR_LOAD_TASK_H
 #include "hls_stream.h"

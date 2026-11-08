@@ -8,7 +8,7 @@ from __future__ import annotations
 from tests.linalg._hls import reg
 from waveflow.build.composite_gen import composite_top_spec, render_top
 from waveflow.linalg.message import Status
-from waveflow.linalg.systolic import MatmulOp
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.systolic_engine import SystolicEngine, command, command_status
 from waveflow.linalg.systolic_engine_mem import EngineJobDesc, job_status
 from waveflow.simulation.simulation import Simulation

@@ -9,7 +9,7 @@ summary: "Conjugate gradient on A X = B (multi-RHS, complex fixed point) as a pr
 
 # CG as a vector program
 
-[The CG vector unit](../../guide/dsp/cg_vector.md) is the vector half of fixed-point conjugate
+[The CG vector unit](../../guide/dsp/legacy/cg_vector.md) (now retired) is the vector half of fixed-point conjugate
 gradient built as hardware: the loop, the three passes per column group, the two guarded divides,
 all in its HLS body. This example runs the same arithmetic as a **program** on
 [the vector unit](../../guide/dsp/vecunit/index.md), which knows nothing about CG: the formats, the
@@ -108,7 +108,7 @@ elements, 5 scalar runs of 8 divides, 9 control instructions; about 17 cycles of
 of the job, [Timing at RTL](timing.md)) is the largest share left, which a decode stage running ahead
 of execution would hide. (With Vitis 2024.1 the decode loop ran at II 13 against 14, and the program
 took 3,359 cycles a job; `CgVectorUnit` took the same 3,581.) The `CgVectorUnit` row comes from the
-bench of `tests/linalg/test_cg_vector_unit.py`, its four tasks' csynth estimates summed.
+bench of `tests/linalg/legacy/test_cg_vector_unit.py`, its four tasks' csynth estimates summed.
 
 pysim's timing is calibrated at RTL on CG-configuration jobs
 ([the guide](../../guide/dsp/vecunit/timing.md#the-calibrated-models)): held out, it predicts these steady

@@ -1,6 +1,6 @@
 """A test bench for the standalone systolic unit: fed from memory, its replies landed in memory.
 
-The DUT (:class:`UnitBench`) is a :class:`~waveflow.linalg.systolic.SystolicUnit` between the
+The DUT (:class:`UnitBench`) is a :class:`~waveflow.linalg.legacy.systolic.SystolicUnit` between the
 framework's in-band memory streams::
 
     s_req -> UnitReqFramer -> MemRStream (in-band) -> SystolicUnit -> UnitReplyFramer
@@ -56,8 +56,7 @@ from waveflow.hw.memory import MemoryMod, MemSeg
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import collect_parts, linalg_headers_dag
 from waveflow.linalg.lanes import to_words
-from waveflow.linalg.message import U32, LinalgHeader, Status, header, header_words
-from waveflow.linalg.systolic import (
+from waveflow.linalg.legacy.systolic import (
     MatmulOp,
     SystolicUnit,
     reply_words,
@@ -65,6 +64,7 @@ from waveflow.linalg.systolic import (
     request_words,
     stored_shape,
 )
+from waveflow.linalg.message import U32, LinalgHeader, Status, header, header_words
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink

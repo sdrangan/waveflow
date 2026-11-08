@@ -23,10 +23,10 @@ import json
 import numpy as np
 import pytest
 
-from tests.linalg import _cg_unit_bench as UB
-from tests.linalg._cg_core_bench import cg_formats, stress_formats
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis
-from waveflow.linalg.cg_vector import CgOp, CgVectorUnit, Job, message_status
+from tests.linalg.legacy import _cg_unit_bench as UB
+from tests.linalg.legacy._cg_core_bench import cg_formats, stress_formats
+from waveflow.linalg.legacy.cg_vector import CgOp, CgVectorUnit, Job, message_status
 from waveflow.linalg.message import Status, header
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain

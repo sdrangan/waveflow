@@ -3,7 +3,7 @@
 // Reads the job (SystolicCmd) from the receiver, then the payload it forwards: A, landed in the
 // core's A block as X = A (m x k), or for A^H transposed from k x m into X = A^T, a value per
 // cycle at best (wf_load_matrix_transposed); then B (k x n) into the B block.
-// Python twin: waveflow.linalg.systolic.SystolicLoad.
+// Python twin: waveflow.linalg.legacy.systolic.SystolicLoad.
 #ifndef WF_SYSTOLIC_LOAD_TASK_H
 #define WF_SYSTOLIC_LOAD_TASK_H
 #include "hls_stream.h"

@@ -19,12 +19,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.linalg import _core_bench as CB
 from tests.linalg._hls import PART, PERIOD_NS, require_vitis, run_csim
-from waveflow.linalg import systolic as SY
+from tests.linalg.legacy import _core_bench as CB
 from waveflow.linalg.build import collect_parts
+from waveflow.linalg.legacy import systolic as SY
+from waveflow.linalg.legacy.systolic import MatmulOp
 from waveflow.linalg.message import Status
-from waveflow.linalg.systolic import MatmulOp
 from waveflow.simulation.simulation import Simulation
 from waveflow.toolchain import toolchain
 from waveflow.utils.fixputils import Format, OMode, QMode

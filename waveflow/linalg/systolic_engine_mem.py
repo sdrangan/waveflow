@@ -49,8 +49,8 @@ from waveflow.hw.mem_stream import (
 from waveflow.hw.memif import MMIFReadMaster
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.lanes import DEFAULT_WORD_BITS, from_words, nwords, to_words
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.message import U8, U16, U32, Status
-from waveflow.linalg.systolic import MatmulOp
 from waveflow.linalg.systolic_engine import (CTRL_BITS, EngineCmd, EngineResp, EngineStatus,
                                              SystolicEngine, command)
 from waveflow.simulation.simobj import ProcessGen

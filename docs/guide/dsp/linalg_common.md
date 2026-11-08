@@ -22,7 +22,7 @@ Each component comes in five forms, and the first four agree bit for bit:
 | Component | Computes | Page |
 |---|---|---|
 | Systolic matrix multiply | `C = q(A·B)` and `C = q(Aᴴ·B)` | [Systolic Matrix Multiply](systolic/index.md) |
-| CG vector unit | the vector steps of conjugate gradient on `A X = B`, multi-RHS | [CG Vector Unit](./cg_vector.md) |
+| CG vector unit (retired) | the vector steps of conjugate gradient on `A X = B`, multi-RHS | [CG Vector Unit](./legacy/cg_vector.md) |
 
 ## Two layers: core and unit
 
@@ -134,7 +134,7 @@ to a design's own `BuildDag` when that DAG already has the stream-utility and sc
 
 The top of a design is then generated like that of any free-running composite
 ([Hardware modules and Flows](../flows/)). The
-[CG vector page](cg_vector.md#building-and-testing-it) lists what a built unit's include directory
+[CG vector page](legacy/cg_vector.md#building-and-testing-it) lists what a built unit's include directory
 holds.
 
 ## Cost data
@@ -155,7 +155,7 @@ and the tool version that the numbers belong to:
 A model measured with one tool version describes that version only. The components' `get_rm`
 refuses any other platform, even one with the same part and clock, and `waveflow.linalg.cost` and
 `cg_cost` read only this one. Pricing another part, clock or tool version takes a new calibration and a
-platform of its own; [the CG page](./cg_vector.md#calibration-and-accuracy) describes how this one was
+platform of its own; [the CG page](./legacy/cg_vector.md#calibration-and-accuracy) describes how this one was
 calibrated, and the systolic unit's half of the same study is in `examples/mimo_cg/paper_data/`.
 
 **How well the units' models hold at 2025.1** (`plans/calib_2025_1.md` Stage 4, each scored once on

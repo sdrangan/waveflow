@@ -30,7 +30,7 @@ def reg(W: int, I: int) -> Format:
 #: Iterations of each ``"rhs_<n>"`` solve (the ``"steady"`` workload's).
 RHS_NIT = 3
 
-#: The guide's centre formats (``docs/guide/dsp/cg_vector.md``): 12-bit vectors, ``alpha``, ``beta``;
+#: The guide's centre formats (``docs/guide/dsp/legacy/cg_vector.md``): 12-bit vectors, ``alpha``, ``beta``;
 #: 20-bit ``ps`` and ``rz``; ``g_div`` 6 -- the CG core's calibration build.
 CENTRE = cg.CgFormats(A=reg(12, 3), B=reg(12, 4), P=reg(12, 4), R=reg(12, 4), S=reg(12, 5),
                       X=reg(12, 3), ps=reg(20, 10), rz=reg(20, 9), alpha=reg(12, 5),

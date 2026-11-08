@@ -4,7 +4,7 @@
 // served request (status OK) it then writes C (m x n) from the core's C block as one burst of
 // memory elements.  A rejected request's reply is the header alone.  OUT_T is s_out's word type
 // (KernelTask.framed): framed_word inside a composite, axi4s_word at the unit's own top.
-// Python twin: waveflow.linalg.systolic.SystolicStore.
+// Python twin: waveflow.linalg.legacy.systolic.SystolicStore.
 #ifndef WF_SYSTOLIC_STORE_TASK_H
 #define WF_SYSTOLIC_STORE_TASK_H
 #include "hls_stream.h"

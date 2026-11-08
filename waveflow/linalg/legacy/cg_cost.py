@@ -1,11 +1,12 @@
-"""cg_cost.py — the cost model of the CG vector unit: resources and cycles.
+"""cg_cost.py — the cost model of the retired CG vector unit: resources and cycles.
 
-The CG twin of :mod:`waveflow.linalg.cost` (the systolic unit's), in the same packaged platform and
+**Retired** with :mod:`waveflow.linalg.legacy.cg_vector`, kept for ``examples/mimo_cg``.  The CG twin of
+:mod:`waveflow.linalg.legacy.systolic_cost` (the retired systolic unit's), in the same packaged platform and
 with the same conventions.
 
 Resources
 ---------
-Each task of :class:`~waveflow.linalg.cg_vector.CgVectorUnit` declares its structure: DSPs and
+Each task of :class:`~waveflow.linalg.legacy.cg_vector.CgVectorUnit` declares its structure: DSPs and
 block RAM are **counted**, LUT and FF are **fitted** on the terms it writes out.  The core holds
 twelve multiplies per lane (two in the start, two in pass 1, six in pass 2, two in pass 3), of which
 Vitis HLS 2024.1 and 2025.1 on ``xczu48dr`` bind 12 to DSPs from 12-bit vectors up, 5 at 10 bits and
@@ -13,7 +14,7 @@ Vitis HLS 2024.1 and 2025.1 on ``xczu48dr`` bind 12 to DSPs from 12-bit vectors 
 its six state arrays (``X``, ``R``, ``P``, real and imaginary, ``Kmax × Nmax/L`` per lane) by the
 device rule.  The receiver, the loader, the store and the core each compute one run-time index
 product (``k·n``).  The unit's channels are its four stream-of-blocks buffers (the systolic unit's buffer
-rule, :func:`waveflow.linalg.cost.buffer_blocks`), the FIFOs and, in a design fed from memory, the
+rule, :func:`waveflow.linalg.legacy.systolic_cost.buffer_blocks`), the FIFOs and, in a design fed from memory, the
 ``m_axi`` adapters (a block-RAM constant per word width, LUT and FF fitted on the word width).
 
 Cycles
@@ -50,8 +51,8 @@ import numpy as np
 from waveflow.calib.confidence import Confidence, ConfidenceLevel
 from waveflow.calib.resource_model import ResourceModel
 from waveflow.calib.vitis_model import DesignStructure, LutFfBasis, MemArray, MultGroup
-from waveflow.linalg import cost
 from waveflow.linalg.lanes import n_groups
+from waveflow.linalg.legacy import systolic_cost as cost
 from waveflow.linalg.message import header_words
 
 #: The task models, by task body.
@@ -254,7 +255,7 @@ def predict_unit(unit) -> dict:
 
 def compute_features(op: int, k: int, n: int, *, L: int, formats) -> dict:
     """The compute terms of one served message on a core with ``L`` lanes and these formats."""
-    from waveflow.linalg.cg_vector import CgOp
+    from waveflow.linalg.legacy.cg_vector import CgOp
 
     ng = int(n) // int(L)
     _, wdiv = _widths(formats)
@@ -272,7 +273,7 @@ def compute_features(op: int, k: int, n: int, *, L: int, formats) -> dict:
 
 def message_features(unit, op: int, k: int, n: int) -> dict:
     """The terms of one served message's interval on ``unit``."""
-    from waveflow.linalg.cg_vector import message_words
+    from waveflow.linalg.legacy.cg_vector import message_words
 
     lb, wb = int(unit.lane_bits), int(unit.word_bits)
     words = header_words(wb) + message_words(k, n, lb, wb)

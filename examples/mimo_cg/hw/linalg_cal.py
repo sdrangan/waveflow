@@ -51,11 +51,11 @@ import numpy as np
 
 from examples.mimo_cg.hw.campaign import shard
 from examples.mimo_cg.hw.measure import prune_build
-from tests.linalg import _unit_bench as UB
+from tests.linalg.legacy import _unit_bench as UB
 from waveflow.calib.synth_report import report_from_solution
-from waveflow.linalg import cost
+from waveflow.linalg.legacy import systolic_cost as cost
 from waveflow.linalg.message import Status
-from waveflow.linalg.systolic import MatmulOp, SystolicUnit, cmd_status, core_cycles
+from waveflow.linalg.legacy.systolic import MatmulOp, SystolicUnit, cmd_status, core_cycles
 from waveflow.simulation.simulation import Simulation
 from waveflow.utils.fixputils import Format, OMode, QMode
 
@@ -779,7 +779,7 @@ def _score_7_4(msg: dict) -> dict:
     """The step 7.4 runs: the span from the first reply to the last against the sum of the
     predicted intervals of the messages after the first."""
     from waveflow.linalg.message import header_words
-    from waveflow.linalg.systolic import request_words
+    from waveflow.linalg.legacy.systolic import request_words
 
     out = {}
     for name, run_ in load_7_4().items():

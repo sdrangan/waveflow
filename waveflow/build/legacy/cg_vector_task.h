@@ -20,10 +20,10 @@
 // hold a sum of KMAX terms exactly, so the only rounding is the assignment to a register: the
 // model's quantize points, whatever k <= KMAX.
 //
-// The command is not checked here (waveflow.linalg.cg_vector.cmd_status says which are valid:
+// The command is not checked here (waveflow.linalg.legacy.cg_vector.cmd_status says which are valid:
 // 1 <= nit <= NITMAX, 1 <= k <= KMAX, L divides n, 1 <= n <= NMAX).  Requires L a power of two and
-// L | NMAX.  Types: wf_cg_traits<FID> (waveflow.linalg.cg_vector.cg_traits).  Python twin:
-// waveflow.linalg.cg_vector.CgVectorCore.
+// L | NMAX.  Types: wf_cg_traits<FID> (waveflow.linalg.legacy.cg_vector.cg_traits).  Python twin:
+// waveflow.linalg.legacy.cg_vector.CgVectorCore.
 #ifndef WF_CG_VECTOR_TASK_H
 #define WF_CG_VECTOR_TASK_H
 #include "hls_stream.h"
@@ -36,7 +36,7 @@
 
 namespace wf_cg {
 
-// The operations of the standalone unit's messages (waveflow.linalg.cg_vector.CgOp).
+// The operations of the standalone unit's messages (waveflow.linalg.legacy.cg_vector.CgOp).
 enum Op { START = 1, STEP = 2 };
 
 // Lane groups of a block of ROWS x COLS values (COLS a multiple of L).

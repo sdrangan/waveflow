@@ -1,6 +1,6 @@
 """The systolic engine: ``C = q(A·B)`` / ``q(Aᴴ·B)`` on a streaming systolic array, fed in order.
 
-The redesign of :class:`~waveflow.linalg.systolic.SystolicUnit` (``plans/systolic_characterization.md``,
+The redesign of :class:`~waveflow.linalg.legacy.systolic.SystolicUnit` (retired) (``plans/systolic_characterization.md``,
 Part B).  What changes:
 
 * **No copy.** The loaders write ``A`` and ``B`` straight into banked stream-of-blocks buffers in the
@@ -57,24 +57,25 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.timed_phase import TimedPhase
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
-from waveflow.linalg.formats import DEFAULT_LANE_BITS, mem_format
+from waveflow.linalg.formats import (
+    DEFAULT_LANE_BITS,
+    check_signed,
+    mem_format,
+    systolic_io_traits,
+    systolic_traits,
+)
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
     block_type,
     elems_per_word,
     from_words,
     nwords,
+    pack_groups,
     to_words,
+    unpack_groups,
 )
-from waveflow.linalg.lanes import pack_groups, unpack_groups
+from waveflow.linalg.matmul import MatmulOp, stored_shape
 from waveflow.linalg.message import U8, U16, Status
-from waveflow.linalg.systolic import (
-    MatmulOp,
-    _check_signed,
-    core_traits,
-    io_traits,
-    stored_shape,
-)
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils.fixputils import Format
 
@@ -252,7 +253,7 @@ class _EnginePart(FreeRunMod):
         super().__post_init__()
         if None in (self.a, self.b, self.c):
             raise ValueError(f"{self.name}: the engine needs the formats a, b and c")
-        _check_signed(self.name, self.a, self.b, self.c)
+        check_signed(self.name, self.a, self.b, self.c)
         M, N, L, R, C = int(self.Mmax), int(self.Nmax), int(self.L), int(self.R), int(self.C)
         if L < 1 or L & (L - 1):
             raise ValueError(f"the lane count L = {L} is not a power of two")
@@ -266,8 +267,8 @@ class _EnginePart(FreeRunMod):
         for fmt in (self.a, self.b, self.c):
             mem_format(fmt, int(self.lane_bits))
         # the accumulator covers a whole K: Kmax products per panel, Pmax panels
-        self.core_traits = core_traits(self.a, self.b, self.c, int(self.Kmax) * int(self.Pmax))
-        self.io_traits = io_traits(self.a, self.b, self.c, int(self.lane_bits))
+        self.core_traits = systolic_traits(self.a, self.b, self.c, int(self.Kmax) * int(self.Pmax))
+        self.io_traits = systolic_io_traits(self.a, self.b, self.c, int(self.lane_bits))
 
     def _ep(self, cls, name: str, bits: int, tlast: bool):
         ep = cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=int(bits), has_tlast=tlast)

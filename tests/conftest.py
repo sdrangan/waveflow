@@ -315,7 +315,9 @@ _Q_J = ("examples/cpu_sched/replay_result.json was never committed (the repo ign
 #: - test_mimo_cg_hw_detector::test_detector_rtl_is_bit_exact: needs the step-4.9 csynth RTL.
 #: Added 2026-10-19 (plans/systolic_characterization.md): the MIMO-CG example and what only it uses --
 #: SystolicUnit (superseded by SystolicEngine) and the CG vector unit -- set aside until mimo_cg moves
-#: to the engine.  The code stays; its docs are retired.
+#: to the engine.  The code stays; its docs are retired.  2026-11-08: the units retired to
+#: waveflow/linalg/legacy/ and their tests to tests/linalg/legacy/ (the dated notes above keep the
+#: paths of their day).
 _Q_CG = ("the MIMO-CG example and the systolic unit and CG vector unit only it uses, set aside until "
          "it moves to SystolicEngine (plans/systolic_characterization.md)")
 QUARANTINE: dict[str, str] = {
@@ -371,15 +373,15 @@ QUARANTINE: dict[str, str] = {
         _Q_CG,
     "tests/examples/test_mimo_cg_sweep_no_vitis.py":
         _Q_CG,
-    "tests/linalg/test_systolic_core.py":
+    "tests/linalg/legacy/test_systolic_core.py":
         _Q_CG,
-    "tests/linalg/test_systolic_unit.py":
+    "tests/linalg/legacy/test_systolic_unit.py":
         _Q_CG,
-    "tests/linalg/test_cg_vector_unit.py":
+    "tests/linalg/legacy/test_cg_vector_unit.py":
         _Q_CG,
-    "tests/linalg/test_cg_cost.py":
+    "tests/linalg/legacy/test_cg_cost.py":
         _Q_CG,
-    "tests/linalg/test_unit_pair.py":
+    "tests/linalg/legacy/test_unit_pair.py":
         _Q_CG,
 }
 

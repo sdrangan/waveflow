@@ -19,7 +19,7 @@ This example shows:
 - a **free-running detector** composed from Waveflow's
   [linear-algebra components](../../guide/dsp/linalg_common.md): the
   [systolic matrix multiply](../../guide/dsp/systolic/index.md) and the
-  [CG vector unit](../../guide/dsp/cg_vector.md);
+  [CG vector unit](../../guide/dsp/legacy/cg_vector.md);
 - **verification** from the Python model through pysim and C-simulation to RTL, bit for bit.
 
 Every measured number here is Vitis HLS / Vivado 2024.1 on `xczu48dr-ffvg1517-2-e` at 250 MHz: a
@@ -30,7 +30,8 @@ tables were made from their 2024.1 versions, which are in git history.
 
 **Status: set aside, to be moved to the systolic engine.** The detector is built on the older
 `SystolicUnit` and `SystolicCore`, which the [systolic engine](../../guide/dsp/systolic/systolic_engine.md)
-supersedes and which are no longer documented in the guide. Until this example moves to the engine, its
+supersedes and which are retired to `waveflow/linalg/legacy/` with the CG vector unit
+([Retired Components](../../guide/dsp/legacy/index.md)). Until this example moves to the engine, its
 tests are quarantined (`tests/conftest.py`) and its numbers are not re-measured: this page describes it
 as it was.
 

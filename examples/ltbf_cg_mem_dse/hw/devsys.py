@@ -321,7 +321,7 @@ def sys_system(p=None, shared: bool = False) -> HwSystem:
     is an XSI run's, not hours.  *shared*: on Shared Mem as the system builds it (its calibrated
     timing at ``p.mem_rate``), to time the device as the system runs it (``plans/dse_cg.md``)."""
     from examples.ltbf_cg_mem_dse.hw.sys_wrap import SysWrap
-    from waveflow.linalg.systolic import MatmulOp
+    from waveflow.linalg.matmul import MatmulOp
     from waveflow.linalg.systolic_engine_mem import EngineJobDesc
 
     sy, S = _ac9(p)

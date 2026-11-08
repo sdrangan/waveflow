@@ -1,8 +1,12 @@
-"""systolic.py — the systolic matrix multiply: its core, command and formats.
+"""systolic.py — the first systolic matrix multiply (retired): its core, command and formats.
+
+**Retired.**  ``SystolicCore`` and ``SystolicUnit`` are kept for ``examples/mimo_cg``, the study that
+used them; new designs use :class:`~waveflow.linalg.systolic_engine.SystolicEngine` and
+:class:`~waveflow.linalg.systolic_engine_mem.SystolicEngineMem` (:mod:`waveflow.linalg.legacy`).
 
 :class:`SystolicCore` computes ``C = q_c(A·B)`` or ``C = q_c(Aᴴ·B)`` on complex fixed-point
 matrices, as an output-stationary array of ``R × C`` processing elements, bit for bit like
-:func:`~waveflow.linalg.matmul.matmul`.  Its body is ``waveflow/build/systolic_core_task.h``.
+:func:`~waveflow.linalg.matmul.matmul`.  Its body is ``waveflow/build/legacy/systolic_core_task.h``.
 
 The core
 --------
@@ -37,7 +41,6 @@ and ``acc_t`` (a sum of ``Kmax`` products).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import IntEnum
 from typing import ClassVar
 
 import numpy as np
@@ -57,11 +60,18 @@ from waveflow.hw.interface import (
     StreamOfBlocksIF,
 )
 from waveflow.hw.mem_stream import KernelTask
+from waveflow.hw.timed_phase import TimedPhase
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
-from waveflow.hw.timed_phase import TimedPhase
-from waveflow.linalg.cost import message_model
-from waveflow.linalg.formats import DEFAULT_LANE_BITS, Traits, mem_format
+from waveflow.linalg.formats import (
+    DEFAULT_LANE_BITS,
+    SYSTOLIC_IO_TRAITS,
+    SYSTOLIC_TRAITS,
+    check_signed,
+    mem_format,
+    systolic_io_traits,
+    systolic_traits,
+)
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
     block_type,
@@ -71,34 +81,32 @@ from waveflow.linalg.lanes import (
     nwords,
     to_words,
 )
+from waveflow.linalg.legacy.systolic_cost import message_model
+from waveflow.linalg.matmul import MatmulOp, stored_shape
 from waveflow.linalg.message import U8, U16, LinalgHeader, Status, header_words, reply
 from waveflow.simulation.simobj import ProcessGen
-from waveflow.utils import complexutils as cx
 from waveflow.utils.fixputils import Format
 
-#: The task body of the core, in ``waveflow/build/``.
+#: The task body of the core, in ``waveflow/build/legacy/``.
 CORE_BODY = "systolic_core_task.h"
 #: Where the core's calibrated phases are filed (a ModuleStore, one record per configuration, under
 #: its identity): plans/systolic_characterization.md, Stage 3.
-CALIB_DIR = __import__("pathlib").Path(__file__).resolve().parent / "calib"
-#: The headers a design with the core copies from ``waveflow/build/``.
+CALIB_DIR = __import__("pathlib").Path(__file__).resolve().parents[1] / "calib"
+#: The headers a design with the core copies from ``waveflow/build/`` (the body from ``legacy/``).
 CORE_HEADERS = (CORE_BODY, "complex_utils.hpp", "wf_cint.h")
-#: The traits family of the core.
-CORE_TRAITS = "wf_systolic_traits"
+#: The traits family of the core (shared with the engine).
+CORE_TRAITS = SYSTOLIC_TRAITS
 #: The traits family of the unit's message side: registers and memory elements.
-IO_TRAITS = "wf_systolic_io_traits"
-#: The task bodies of the standalone unit, in ``waveflow/build/``.
+IO_TRAITS = SYSTOLIC_IO_TRAITS
+#: The task bodies of the standalone unit, in ``waveflow/build/legacy/``.
 UNIT_HEADERS = ("systolic_rx_task.h", "systolic_load_task.h", "systolic_store_task.h")
 #: Bits of the core's command stream: one :class:`SystolicCmd` per word.
 CMD_BITS = 64
 FORMS = mm.FORMS
-
-
-class MatmulOp(IntEnum):
-    """The operations of the matrix multiply (``0`` is not one, so a zeroed header is refused)."""
-
-    MUL = 1  # C = q(A·B)
-    MUL_AH = 2  # C = q(Aᴴ·B)
+#: The shared traits builders under their first names (``examples/mimo_cg`` and the tests use them).
+core_traits = systolic_traits
+io_traits = systolic_io_traits
+_check_signed = check_signed
 
 
 class SystolicCmd(DataList):
@@ -119,28 +127,6 @@ def command(op: int, m: int, k: int, n: int, nb: int = 1) -> SystolicCmd:
     c = SystolicCmd()
     c.op, c.nb, c.m, c.k, c.n = int(op), int(nb), int(m), int(k), int(n)
     return c
-
-
-def core_traits(a: Format, b: Format, c: Format, Kmax: int) -> Traits:
-    """The traits of a core with these formats: the registers and the exact types of the array."""
-    ba = cx.conj_format(b)
-    return Traits(
-        CORE_TRAITS,
-        (
-            ("a_t", a),
-            ("b_t", b),
-            ("c_t", c),
-            ("ba_t", ba),
-            ("p_t", cx.cmult_format(a, ba)),
-            ("acc_t", mm.acc_format(a, ba, Kmax)),
-        ),
-    )
-
-
-def stored_shape(op: int, m: int, k: int) -> tuple[int, int]:
-    """The shape of ``A`` as a job states it: ``m × k``, or ``k × m`` for ``Aᴴ``.  (The core's
-    block always holds ``m × k``: ``A``, or ``Aᵀ``.)"""
-    return (int(k), int(m)) if int(op) == MatmulOp.MUL_AH else (int(m), int(k))
 
 
 def cmd_status(
@@ -188,15 +174,9 @@ def core_cycles(
     op: int, nb: int, m: int, k: int, n: int, *, L: int, R: int, C: int
 ) -> int:
     """Rough cycles of one job, not calibrated: a budget for a run's length, and pysim's timing
-    when no calibrated model is packaged (:func:`waveflow.linalg.cost.message_model`).
+    when no calibrated model is packaged (:func:`waveflow.linalg.legacy.systolic_cost.message_model`).
     """
     return load_a_cycles(m, k, L=L) + nb * per_b_cycles(m, k, n, L=L, R=R, C=C)
-
-
-def _check_signed(name: str, *formats: Format) -> None:
-    """The complex multiply takes signed formats only."""
-    if not all(f.signed for f in formats):
-        raise ValueError(f"{name}: the formats of A, B and C must be signed")
 
 
 @dataclass
@@ -328,14 +308,14 @@ class SystolicCore(FreeRunMod):
         return LinalgParts((self.traits,), CORE_HEADERS, (SystolicCmd,))
 
     def resource_structure(self):
-        """What the core contains, for its resource model (:func:`~waveflow.linalg.cost.core_structure`)."""
-        from waveflow.linalg.cost import core_structure
+        """What the core contains, for its resource model (:func:`~waveflow.linalg.legacy.systolic_cost.core_structure`)."""
+        from waveflow.linalg.legacy.systolic_cost import core_structure
 
         return core_structure(self)
 
     @classmethod
     def get_rm(cls, platform):
-        from waveflow.linalg.cost import resource_model
+        from waveflow.linalg.legacy.systolic_cost import resource_model
 
         return resource_model("systolic_core_task", cls, platform)
 
@@ -385,18 +365,6 @@ class SystolicCore(FreeRunMod):
 
 
 # --- the standalone unit -----------------------------------------------------------------------
-
-
-def io_traits(
-    a: Format, b: Format, c: Format, lane_bits: int = DEFAULT_LANE_BITS
-) -> Traits:
-    """The traits of the unit's message side: the registers and their memory elements."""
-    return Traits(
-        IO_TRAITS,
-        (("a_t", a), ("b_t", b), ("c_t", c)),
-        (("a_mem", a), ("b_mem", b), ("c_mem", c)),
-        int(lane_bits),
-    )
 
 
 def request_words(
@@ -521,13 +489,13 @@ class SystolicRx(_UnitPart):
     cpp_kernel_name: ClassVar[str | None] = "systolic_rx"
 
     def resource_structure(self):
-        from waveflow.linalg.cost import rx_structure
+        from waveflow.linalg.legacy.systolic_cost import rx_structure
 
         return rx_structure(self)
 
     @classmethod
     def get_rm(cls, platform):
-        from waveflow.linalg.cost import resource_model
+        from waveflow.linalg.legacy.systolic_cost import resource_model
 
         return resource_model("systolic_rx_task", cls, platform)
 
@@ -603,13 +571,13 @@ class SystolicLoad(_UnitPart):
     cpp_kernel_name: ClassVar[str | None] = "systolic_load"
 
     def resource_structure(self):
-        from waveflow.linalg.cost import load_structure
+        from waveflow.linalg.legacy.systolic_cost import load_structure
 
         return load_structure(self)
 
     @classmethod
     def get_rm(cls, platform):
-        from waveflow.linalg.cost import resource_model
+        from waveflow.linalg.legacy.systolic_cost import resource_model
 
         return resource_model("systolic_load_task", cls, platform)
 
@@ -672,13 +640,13 @@ class SystolicStore(_UnitPart):
     cpp_kernel_name: ClassVar[str | None] = "systolic_store"
 
     def resource_structure(self):
-        from waveflow.linalg.cost import store_structure
+        from waveflow.linalg.legacy.systolic_cost import store_structure
 
         return store_structure(self)
 
     @classmethod
     def get_rm(cls, platform):
-        from waveflow.linalg.cost import resource_model
+        from waveflow.linalg.legacy.systolic_cost import resource_model
 
         return resource_model("systolic_store_task", cls, platform)
 
@@ -900,8 +868,8 @@ class SystolicUnit(FreeRunMod):
 
     @classmethod
     def get_rm(cls, platform):
-        """The unit's own share, its channels (:class:`~waveflow.linalg.cost.UnitResourceModel`);
+        """The unit's own share, its channels (:class:`~waveflow.linalg.legacy.systolic_cost.UnitResourceModel`);
         each task has its own model."""
-        from waveflow.linalg.cost import unit_model
+        from waveflow.linalg.legacy.systolic_cost import unit_model
 
         return unit_model(platform)

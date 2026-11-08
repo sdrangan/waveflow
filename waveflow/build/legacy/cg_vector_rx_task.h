@@ -5,14 +5,14 @@
 // burst of memory elements (wf_matrix_io.h).  Every request is validated: the operation (BAD_OP);
 // its place in the job (BAD_SEQUENCE: a STEP outside a job, a START inside one, a STEP whose k, n
 // or nfollow disagree with its job); a START's dimensions and iteration count against the core's
-// maxima (BAD_DIMS: waveflow.linalg.cg_vector.cmd_status); the length against the dimensions
+// maxima (BAD_DIMS: waveflow.linalg.legacy.cg_vector.cmd_status); the length against the dimensions
 // (BAD_LENGTH).  An accepted START sends the job (CgVectorCmd) to the loader and the core.  Every
 // request sends the store its reply header (the request's header with the status and the reply's
 // length; nfollow is kept, so the store knows the job's last reply).  An accepted request's payload
 // goes to the loader; a rejected one is drained by its length and leaves the job as it was.
 //
 // One firing is one request outside a job, or one whole job with every request rejected inside it,
-// so the job's state lives in the firing.  Python twin: waveflow.linalg.cg_vector.CgVectorRx.
+// so the job's state lives in the firing.  Python twin: waveflow.linalg.legacy.cg_vector.CgVectorRx.
 #ifndef WF_CG_VECTOR_RX_TASK_H
 #define WF_CG_VECTOR_RX_TASK_H
 #include "hls_stream.h"

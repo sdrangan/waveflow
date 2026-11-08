@@ -1,17 +1,15 @@
-"""A test bench for CG vector cores: a feeder and a drain around each, in one composite.
+"""A test bench for systolic cores: a feeder and a drain around each, in one composite.
 
-The boundary of a :class:`CgCoreBench` is plain 64-bit streams, three per core: ``s_cmd<i>`` (one
-:class:`~waveflow.linalg.cg_vector.CgVectorCmd` word per job), ``s_in<i>`` (``B``, then the job's
-``nit`` matrices ``S``, as lane groups of ``ceil(2 W L / 64)`` words each, low word first; one
-burst per matrix) and ``s_out<i>`` (the ``nit`` matrices ``P`` and then ``X``, the same way).  The
-C++ bodies are ``cpp/cg_core_bench_tasks.h``.
+The boundary of a :class:`CoreBench` is plain 64-bit streams, three per core: ``s_cmd<i>`` (one
+:class:`~waveflow.linalg.legacy.systolic.SystolicCmd` word per job), ``s_in<i>`` (``X``: ``A``, or ``Aᵀ``
+for ``Aᴴ``, then the ``B`` matrices, as lane groups of ``ceil(2 W L / 64)`` words each, low word first; one burst per
+matrix) and ``s_out<i>`` (each ``C`` the same way).  The C++ bodies are ``cpp/core_bench_tasks.h``.
 
-``S`` comes from the model: a job carries its ``A``, and :func:`expected` runs
-:func:`waveflow.linalg.cg.cg_init`, then per iteration :func:`~waveflow.linalg.cg.mm_step` and
-:func:`~waveflow.linalg.cg.vec_step`, recording every ``S``, ``P`` and the final ``X``.  The same
-jobs run three ways: the pysim composite (:func:`run_pysim`), a sequential Vitis C-simulation of the
-generated top (:func:`render_seq_csim`, every task fired once per job in dependency order, as
-``_core_bench`` does), and csynth of the top.
+The same jobs run three ways: the pysim composite (:func:`run_pysim`), a sequential Vitis
+C-simulation of the generated top (:func:`render_seq_csim`: the top's channels declared in a
+``main()``, every task fired once per job in dependency order, since Vitis 2024.1's threaded C-sim
+of ``hls::stream_of_blocks`` hands a block over before it is written), and csynth of the top.
+Expected outputs come from :func:`waveflow.linalg.matmul.matmul`.
 """
 
 from __future__ import annotations
@@ -23,7 +21,6 @@ from typing import ClassVar
 
 import numpy as np
 
-from tests.linalg._core_bench import from_words64, group_words, to_words64
 from waveflow.build.build import BuildConfig, BuildDag
 from waveflow.build.composite_gen import (
     GEN_DIR,
@@ -46,108 +43,102 @@ from waveflow.hw.interface import (
     StreamOfBlocksIF,
 )
 from waveflow.hw.mem_stream import KernelTask
-from waveflow.linalg import cg
+from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import collect_parts, gen_linalg_headers
-from waveflow.linalg.cg_vector import CgVectorCmd, CgVectorCore, command
-from waveflow.linalg.lanes import block_type, pack_matrix, unpack_matrix
+from waveflow.linalg.lanes import block_type, n_groups, pack_matrix, unpack_matrix
+from waveflow.linalg.legacy.systolic import (
+    MatmulOp,
+    SystolicCmd,
+    SystolicCore,
+    command,
+    stored_shape,
+)
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.simulation.simulation import Simulation
 from waveflow.simulation.stream_tb import StreamDriver, StreamSink
-from waveflow.utils import fixputils as fx
 from waveflow.utils.burst_io import write_burst_bundle
-from waveflow.utils.fixputils import Format, OMode, QMode
 
 CPP_DIR = Path(__file__).resolve().parent / "cpp"
-BENCH_HEADER = "cg_core_bench_tasks.h"
+BENCH_HEADER = "core_bench_tasks.h"
+MASK64 = (1 << 64) - 1
 
 
-# --- formats --------------------------------------------------------------------------------------
-
-#: Integer bits per register, sign included: the parameterization the CG example studied (its
-#: ``INT_BITS``), written out because the tests cannot import the example.
-INT_BITS = {
-    "A": 3, "B": 4, "P": 4, "R": 4, "S": 5, "X": 3,
-    "ps": 10, "rz": 9, "alpha": 5, "beta": 3,
-}  # fmt: skip
+def group_words(W: int, L: int) -> int:
+    return -(-2 * int(W) * int(L) // 64)
 
 
-def reg(W: int, I: int) -> Format:
-    return Format(W, I, True, QMode.AP_RND, OMode.AP_SAT)
+def to_words64(groups, W: int, L: int) -> np.ndarray:
+    nw = group_words(W, L)
+    return np.array(
+        [(int(g) >> (64 * w)) & MASK64 for g in groups for w in range(nw)], np.uint64
+    )
 
 
-def cg_formats(W: int, g: int = 0, g_div: int = 6) -> cg.CgFormats:
-    """Vectors and ``alpha``, ``beta`` ``W`` bits wide, ``ps`` and ``rz`` ``W + g``: the example's
-    sweep formats (``W12g8`` is ``cg_formats(12, 8)``)."""
-    regs = {
-        v: reg(W, INT_BITS[v]) for v in ("A", "B", "P", "R", "S", "X", "alpha", "beta")
-    }
-    regs |= {s: reg(W + g, INT_BITS[s]) for s in ("ps", "rz")}
-    return cg.CgFormats(**regs, g_div=g_div)
-
-
-def stress_formats() -> cg.CgFormats:
-    """The example's saturation stress set: 12-bit vectors, 14-bit scalars, and ``alpha`` and
-    ``beta`` with 2 and 1 integer bits, so they saturate."""
-    regs = {v: reg(12, INT_BITS[v]) for v in ("A", "B", "P", "R", "S", "X")}
-    regs |= {
-        "ps": reg(14, 10),
-        "rz": reg(14, 9),
-        "alpha": reg(14, 2),
-        "beta": reg(14, 1),
-    }
-    return cg.CgFormats(**regs, g_div=2)
+def from_words64(words, W: int, L: int) -> list[int]:
+    nw = group_words(W, L)
+    words = [int(w) for w in words]
+    return [
+        sum(words[g * nw + w] << (64 * w) for w in range(nw))
+        for g in range(len(words) // nw)
+    ]
 
 
 # --- the feeder and the drain ---------------------------------------------------------------------
 
 
 @dataclass
-class CgFeed(FreeRunMod):
-    """Test only: forwards each job's command, then lands ``B`` and the ``nit`` matrices ``S``."""
+class CoreFeed(FreeRunMod):
+    """Test only: forwards each job's command, then lands ``X`` (``A``, or ``Aᵀ`` for ``Aᴴ``) and
+    the ``B`` matrices in blocks."""
 
-    cpp_kernel_name: ClassVar[str | None] = "cg_feed"
+    cpp_kernel_name: ClassVar[str | None] = "core_feed"
+    Mmax: HwParam[int] = 8
     Kmax: HwParam[int] = 8
     Nmax: HwParam[int] = 32
-    nitmax: HwParam[int] = 8
     L: HwParam[int] = 4
     sob_depth: HwParam[int] = 2
     fid: HwParam[int] = 0
+    wa: HwParam[int] = 12
     wb: HwParam[int] = 12
-    ws: HwParam[int] = 12
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        G = int(self.Kmax) * int(self.Nmax) // int(self.L)
+        M, K, N, L = int(self.Mmax), int(self.Kmax), int(self.Nmax), int(self.L)
         mk = {"sim": self.sim, "bitwidth": 64, "has_tlast": False}
         self.s_cmd = StreamIFSlave(name=f"{self.name}_s_cmd", **mk)
         self.s_in = StreamIFSlave(name=f"{self.name}_s_in", queue_size=1 << 16, **mk)
         self.core_cmd = StreamIFMaster(name=f"{self.name}_core_cmd", **mk)
         self.drain_cmd = StreamIFMaster(name=f"{self.name}_drain_cmd", **mk)
+        self.a_blk = SobIFMaster(
+            name=f"{self.name}_a_blk",
+            sim=self.sim,
+            element_type=block_type(int(self.wa), n_groups(M * K, L), L),
+        )
         self.b_blk = SobIFMaster(
             name=f"{self.name}_b_blk",
             sim=self.sim,
-            element_type=block_type(int(self.wb), G, int(self.L)),
+            element_type=block_type(int(self.wb), K * N // L, L),
         )
-        self.s_blk = SobIFMaster(
-            name=f"{self.name}_s_blk",
-            sim=self.sim,
-            element_type=block_type(int(self.ws), G, int(self.L)),
-        )
-        for ep in (self.s_cmd, self.s_in, self.core_cmd, self.drain_cmd):
+        for ep in (
+            self.s_cmd,
+            self.s_in,
+            self.core_cmd,
+            self.drain_cmd,
+            self.a_blk,
+            self.b_blk,
+        ):
             self.add_endpoint(ep)
-        self.add_endpoint(self.b_blk)
-        self.add_endpoint(self.s_blk)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(
-            "cg_feed_task",
+            "core_feed_task",
             BENCH_HEADER,
-            ("s_cmd", "s_in", "core_cmd", "drain_cmd", "b_blk", "s_blk"),
+            ("s_cmd", "s_in", "core_cmd", "drain_cmd", "a_blk", "b_blk"),
             template_args=(
+                int(self.Mmax),
                 int(self.Kmax),
                 int(self.Nmax),
-                int(self.nitmax),
                 int(self.L),
                 int(self.sob_depth),
                 int(self.fid),
@@ -156,68 +147,65 @@ class CgFeed(FreeRunMod):
 
     def _matrix(self, rows: int, cols: int, W: int):
         L = int(self.L)
-        words = yield from self.s_in.get(
-            nwords_max=group_words(W, L) * rows * cols // L
-        )
+        nw = group_words(W, L) * n_groups(rows * cols, L)
+        words = yield from self.s_in.get(nwords_max=nw)
         re, im = unpack_matrix(from_words64(words, W, L), rows * cols, W, L)
         return re.reshape(rows, cols), im.reshape(rows, cols)
 
     def run_iter(self) -> ProcessGen[None]:
-        cmd = yield from self.s_cmd.get_schema(CgVectorCmd)
+        cmd = yield from self.s_cmd.get_schema(SystolicCmd)
         words = np.asarray(cmd.serialize(word_bw=64), np.uint64)
         yield from self.core_cmd.write(words)
         yield from self.drain_cmd.write(words)
-        nit, k, n = int(cmd.nit), int(cmd.k), int(cmd.n)
-        for ep, W in [(self.b_blk, int(self.wb))] + [(self.s_blk, int(self.ws))] * nit:
-            m = yield from self._matrix(k, n, W)
-            blk = yield from ep.acquire_write()
-            blk.payload = m
-            yield from ep.commit_write(blk)
+        m, k, n = int(cmd.m), int(cmd.k), int(cmd.n)
+        a = yield from self._matrix(m, k, int(self.wa))  # X: A, or Aᵀ for Aᴴ
+        blk = yield from self.a_blk.acquire_write()
+        blk.payload = a
+        yield from self.a_blk.commit_write(blk)
+        for _ in range(int(cmd.nb)):
+            b = yield from self._matrix(k, n, int(self.wb))
+            blk = yield from self.b_blk.acquire_write()
+            blk.payload = b
+            yield from self.b_blk.commit_write(blk)
 
 
 @dataclass
-class CgDrain(FreeRunMod):
-    """Test only: writes the ``nit`` matrices ``P`` and then ``X`` of each job as lane-group words."""
+class CoreDrain(FreeRunMod):
+    """Test only: writes each ``C`` of a job as lane-group words, one burst per matrix."""
 
-    cpp_kernel_name: ClassVar[str | None] = "cg_drain"
+    cpp_kernel_name: ClassVar[str | None] = "core_drain"
+    Mmax: HwParam[int] = 8
     Kmax: HwParam[int] = 8
     Nmax: HwParam[int] = 32
-    nitmax: HwParam[int] = 8
     L: HwParam[int] = 4
     sob_depth: HwParam[int] = 2
     fid: HwParam[int] = 0
-    wp: HwParam[int] = 12
-    wx: HwParam[int] = 12
+    wc: HwParam[int] = 12
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        G = int(self.Kmax) * int(self.Nmax) // int(self.L)
+        M, N, L = int(self.Mmax), int(self.Nmax), int(self.L)
         mk = {"sim": self.sim, "bitwidth": 64, "has_tlast": False}
         self.s_cmd = StreamIFSlave(name=f"{self.name}_s_cmd", **mk)
-        self.p_blk = SobIFSlave(
-            name=f"{self.name}_p_blk",
+        self.c_blk = SobIFSlave(
+            name=f"{self.name}_c_blk",
             sim=self.sim,
-            element_type=block_type(int(self.wp), G, int(self.L)),
-        )
-        self.x_blk = SobIFSlave(
-            name=f"{self.name}_x_blk",
-            sim=self.sim,
-            element_type=block_type(int(self.wx), G, int(self.L)),
+            element_type=block_type(int(self.wc), M * N // L, L),
         )
         self.s_out = StreamIFMaster(name=f"{self.name}_s_out", **mk)
-        for ep in (self.s_cmd, self.p_blk, self.x_blk, self.s_out):
+        for ep in (self.s_cmd, self.c_blk, self.s_out):
             self.add_endpoint(ep)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask(
-            "cg_drain_task",
+            "core_drain_task",
             BENCH_HEADER,
-            ("s_cmd", "p_blk", "x_blk", "s_out"),
+            ("s_cmd", "c_blk", "s_out"),
             template_args=(
+                int(self.Mmax),
                 int(self.Kmax),
                 int(self.Nmax),
-                int(self.nitmax),
                 int(self.L),
                 int(self.sob_depth),
                 int(self.fid),
@@ -225,56 +213,51 @@ class CgDrain(FreeRunMod):
         )
 
     def run_iter(self) -> ProcessGen[None]:
-        cmd = yield from self.s_cmd.get_schema(CgVectorCmd)
-        L = int(self.L)
-        for ep, W in [(self.p_blk, int(self.wp))] * int(cmd.nit) + [
-            (self.x_blk, int(self.wx))
-        ]:
-            blk = yield from ep.acquire_read()
-            re, im = blk.payload
-            yield from self.s_out.write(to_words64(pack_matrix(re, im, W, L), W, L))
-            yield from ep.release_read()
+        cmd = yield from self.s_cmd.get_schema(SystolicCmd)
+        W, L = int(self.wc), int(self.L)
+        for _ in range(int(cmd.nb)):
+            blk = yield from self.c_blk.acquire_read()
+            cr, ci = blk.payload
+            yield from self.s_out.write(to_words64(pack_matrix(cr, ci, W, L), W, L))
+            yield from self.c_blk.release_read()
 
 
 # --- the bench composite --------------------------------------------------------------------------
 
 
 @dataclass
-class CgCoreBench(FreeRunMod):
-    """One feeder, core and drain per entry of ``cores`` (each a dict of ``CgVectorCore`` fields)."""
+class CoreBench(FreeRunMod):
+    """One feeder, core and drain per entry of ``cores`` (each a dict of ``SystolicCore`` fields)."""
 
-    cpp_kernel_name: ClassVar[str | None] = "cg_core_bench"
+    cpp_kernel_name: ClassVar[str | None] = "core_bench"
     cores: tuple = ()
     clk: Clock = field(default_factory=lambda: Clock(freq=250e6))
 
     def __post_init__(self) -> None:
         super().__post_init__()
         boundary: list[str] = []
-        self.core_list: list[CgVectorCore] = []
+        self.core_list: list[SystolicCore] = []
         for i, spec in enumerate(self.cores):
-            core = CgVectorCore(name=f"core{i}", sim=self.sim, clk=self.clk, **spec)
-            f = core.formats
+            core = SystolicCore(name=f"core{i}", sim=self.sim, clk=self.clk, **spec)
             kw = {
                 "sim": self.sim,
                 "clk": self.clk,
+                "Mmax": int(core.Mmax),
                 "Kmax": int(core.Kmax),
                 "Nmax": int(core.Nmax),
-                "nitmax": int(core.nitmax),
                 "L": int(core.L),
                 "sob_depth": int(core.sob_depth),
                 "fid": core.traits.id,
             }
-            feed = CgFeed(name=f"feed{i}", wb=f.B.W, ws=f.S.W, **kw)
-            drain = CgDrain(name=f"drain{i}", wp=f.P.W, wx=f.X.W, **kw)
+            feed = CoreFeed(name=f"feed{i}", wa=core.a.W, wb=core.b.W, **kw)
+            drain = CoreDrain(name=f"drain{i}", wc=core.c.W, **kw)
             for c in (feed, core, drain):
                 self.add_comp(c)
             self._stream(f"ccmd{i}", feed.core_cmd, core.cmd_in)
             self._stream(f"dcmd{i}", feed.drain_cmd, drain.s_cmd)
-            depth = int(core.sob_depth)
-            self._blocks(f"b{i}", feed.b_blk, core.b_blk, depth)
-            self._blocks(f"s{i}", feed.s_blk, core.s_blk, depth)
-            self._blocks(f"p{i}", core.p_blk, drain.p_blk, depth)
-            self._blocks(f"x{i}", core.x_blk, drain.x_blk, depth)
+            self._blocks(f"a{i}", feed.a_blk, core.a_blk, int(core.sob_depth))
+            self._blocks(f"b{i}", feed.b_blk, core.b_blk, int(core.sob_depth))
+            self._blocks(f"c{i}", core.c_blk, drain.c_blk, int(core.sob_depth))
             setattr(self, f"s_cmd{i}", feed.s_cmd)
             setattr(self, f"s_in{i}", feed.s_in)
             setattr(self, f"s_out{i}", drain.s_out)
@@ -307,72 +290,83 @@ class CgCoreBench(FreeRunMod):
 
 @dataclass
 class Job:
-    """One job: ``nit`` iterations on ``A`` (``k × k``) and ``B`` (``k × n``), stored integers."""
+    """One job: the operation, the dimensions, ``A`` as stored and the ``B`` matrices."""
 
-    nit: int
+    op: int
+    m: int
     k: int
     n: int
-    a: tuple
-    b: tuple
+    a: tuple  # (re, im), shape stored_shape(op, m, k)
+    bs: list  # [(re, im)], each k x n
+
+    @property
+    def nb(self) -> int:
+        return len(self.bs)
 
 
 def random_job(
-    rng, core: CgVectorCore, nit: int, k: int, n: int, *, zero_column: bool = False
+    rng,
+    core: SystolicCore,
+    op: int,
+    m: int,
+    k: int,
+    n: int,
+    nb: int = 1,
+    *,
+    edge: bool = False,
 ) -> Job:
-    """A CG system ``(HᴴH + σ²I)/M · X = HᴴY/M`` over Rayleigh ``H`` (M = 8k), quantized to the
-    core's formats; ``zero_column`` zeroes the first column of ``B`` (its residual is exactly zero,
-    so both divisions take the zero guard)."""
-    f = core.formats
-    M = 8 * k
+    """A job with random operands; ``edge`` puts every imaginary part of the first row (or column)
+    of ``A`` and of ``B`` at ``-2^(W-1)``."""
 
-    def cn(shape):
-        return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(
-            2
+    def draw(fmt, shape):
+        lo, hi = -(1 << (fmt.W - 1)), (1 << (fmt.W - 1)) - 1
+        return rng.integers(lo, hi + 1, size=shape), rng.integers(
+            lo, hi + 1, size=shape
         )
 
-    H, Y = cn((M, k)), cn((M, n))
-    A = (H.conj().T @ H + 10 ** rng.uniform(-2, 0) * np.eye(k)) / M
-    B = H.conj().T @ Y / M
-    if zero_column:
-        B[:, 0] = 0
-    a = fx.quantize_real(A.real, f.A), fx.quantize_real(A.imag, f.A)
-    b = fx.quantize_real(B.real, f.B), fx.quantize_real(B.imag, f.B)
-    return Job(int(nit), int(k), int(n), a, b)
+    a = draw(core.a, stored_shape(op, m, k))
+    bs = [draw(core.b, (k, n)) for _ in range(nb)]
+    if edge:
+        a[1][0, :] = -(1 << (core.a.W - 1))
+        for _, bi in bs:
+            bi[0, :] = -(1 << (core.b.W - 1))
+    return Job(int(op), m, k, n, a, bs)
 
 
-def expected(core: CgVectorCore, job: Job) -> tuple[list, list, tuple]:
-    """The job's ``S`` matrices (the core's input), its ``P`` matrices and ``X``, by the model."""
-    f = core.formats
-    state = cg.cg_init(*job.b, f)
-    ss, ps = [], [(state.pr, state.pi)]
-    for it in range(1, job.nit + 1):
-        sr, si = cg.mm_step(*job.a, state.pr, state.pi, f)
-        ss.append((sr, si))
-        state, _ = cg.vec_step(state, sr, si, f)
-        if it < job.nit:
-            ps.append((state.pr, state.pi))
-    return ss, ps, (state.xr, state.xi)
+def expected(core: SystolicCore, job: Job) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The ``C`` matrices of a job, from the bit-exact model."""
+    adjoint = job.op == MatmulOp.MUL_AH
+    return [
+        mm.matmul(
+            *job.a, core.a, *b, core.b, core.c, adjoint=adjoint, form=int(core.form)
+        )
+        for b in job.bs
+    ]
 
 
-def job_streams(core: CgVectorCore, job: Job) -> tuple[np.ndarray, list[np.ndarray]]:
-    """The command word and the ``s_in`` bursts of a job: ``B``, then each ``S``."""
-    f, L = core.formats, int(core.L)
-    cmd = np.asarray(command(job.nit, job.k, job.n).serialize(word_bw=64), np.uint64)
-    ss, _, _ = expected(core, job)
-    bursts = [to_words64(pack_matrix(*job.b, f.B.W, L), f.B.W, L)]
-    bursts += [to_words64(pack_matrix(*s, f.S.W, L), f.S.W, L) for s in ss]
+def job_streams(core: SystolicCore, job: Job) -> tuple[np.ndarray, list[np.ndarray]]:
+    """The command word and the ``s_in`` bursts of a job."""
+    L = int(core.L)
+    cmd = np.asarray(
+        command(job.op, job.m, job.k, job.n, job.nb).serialize(word_bw=64), np.uint64
+    )
+    x = (
+        job.a if job.op == MatmulOp.MUL else (job.a[0].T, job.a[1].T)
+    )  # the core takes Aᵀ
+    bursts = [to_words64(pack_matrix(*x, core.a.W, L), core.a.W, L)]
+    bursts += [to_words64(pack_matrix(*b, core.b.W, L), core.b.W, L) for b in job.bs]
     return cmd, bursts
 
 
-def expected_words(core: CgVectorCore, job: Job) -> list[np.ndarray]:
-    f, L = core.formats, int(core.L)
-    _, ps, x = expected(core, job)
-    out = [to_words64(pack_matrix(*p, f.P.W, L), f.P.W, L) for p in ps]
-    return out + [to_words64(pack_matrix(*x, f.X.W, L), f.X.W, L)]
+def expected_words(core: SystolicCore, job: Job) -> list[np.ndarray]:
+    L, W = int(core.L), core.c.W
+    return [
+        to_words64(pack_matrix(cr, ci, W, L), W, L) for cr, ci in expected(core, job)
+    ]
 
 
-def check_jobs(core: CgVectorCore, jobs, got_bursts) -> None:
-    """Every ``P`` and ``X`` the bench wrote equals the model's, in order."""
+def check_jobs(core: SystolicCore, jobs, got_bursts) -> None:
+    """Every ``C`` the bench wrote equals the model's, in order."""
     want = [w for job in jobs for w in expected_words(core, job)]
     assert len(got_bursts) == len(
         want
@@ -387,9 +381,9 @@ def check_jobs(core: CgVectorCore, jobs, got_bursts) -> None:
 def run_pysim(
     cores: tuple, jobs: list[list[Job]], root: Path
 ) -> list[list[np.ndarray]]:
-    """Run the bench in pysim; returns each core's ``P`` and ``X`` bursts."""
+    """Run the bench in pysim; returns each core's ``C`` bursts."""
     sim = Simulation()
-    bench = CgCoreBench(name="bench", sim=sim, cores=cores)
+    bench = CoreBench(name="bench", sim=sim, cores=cores)
     clk = bench.clk
     sinks = []
     for i, core in enumerate(bench.core_list):
@@ -420,7 +414,7 @@ def generate(cores: tuple, out_dir: Path, *, part: str, period_ns: float) -> Top
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
-    bench = CgCoreBench(name="cg_core_bench", sim=Simulation(), cores=cores)
+    bench = CoreBench(name="core_bench", sim=Simulation(), cores=cores)
     parts = collect_parts(bench)
     inc = gen_linalg_headers(
         out_dir, parts.traits, parts.bodies, INCLUDE_DIR, schemas=parts.schemas
@@ -444,7 +438,7 @@ def generate(cores: tuple, out_dir: Path, *, part: str, period_ns: float) -> Top
 def render_seq_csim(spec: TopSpec, cores: tuple, jobs: list[list[Job]]) -> str:
     """A ``main()`` that declares the top's channels, fires each core's feeder, core and drain once
     per job, and prints every word of every ``s_out<i>``."""
-    bench = CgCoreBench(name="cg_core_bench", sim=Simulation(), cores=cores)
+    bench = CoreBench(name="core_bench", sim=Simulation(), cores=cores)
     top_cpp = render_top(spec)
     includes = [ln for ln in top_cpp.splitlines() if ln.startswith("#include")]
     decls = [p.decl.replace("&", "") + ";" for p in spec.ports]
@@ -485,7 +479,7 @@ def render_seq_csim(spec: TopSpec, cores: tuple, jobs: list[list[Job]]) -> str:
         for i in range(len(cores))
     ]
     nl = "\n"
-    return f"""// GENERATED by tests/linalg/_cg_core_bench.py -- sequential C-simulation of {spec.top_name}.
+    return f"""// GENERATED by tests/linalg/_core_bench.py -- sequential C-simulation of {spec.top_name}.
 {nl.join(includes)}
 #include <cstdio>
 {nl.join(data)}
@@ -505,7 +499,7 @@ int main(int argc, char** argv) {{
 def parse_seq_csim(
     text: str, cores: tuple, jobs: list[list[Job]]
 ) -> list[list[np.ndarray]]:
-    """The ``P`` and ``X`` bursts of each core from the C-simulation's output."""
+    """The ``C`` bursts of each core from the C-simulation's output."""
     assert "CSIM_DONE" in text, text[-500:]
     words: list[list[int]] = [[] for _ in cores]
     cur = -1
@@ -514,7 +508,7 @@ def parse_seq_csim(
             cur = int(line[2:])
         elif line and line != "CSIM_DONE":
             words[cur].append(int(line, 16))
-    bench = CgCoreBench(name="cg_core_bench", sim=Simulation(), cores=cores)
+    bench = CoreBench(name="core_bench", sim=Simulation(), cores=cores)
     out = []
     for i, core in enumerate(bench.core_list):
         sizes = [len(w) for job in jobs[i] for w in expected_words(core, job)]

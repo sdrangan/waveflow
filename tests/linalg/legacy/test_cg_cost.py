@@ -1,4 +1,4 @@
-"""Step 8.4: the CG vector unit's cost-model forms (``waveflow.linalg.cg_cost``), before calibration.
+"""Step 8.4: the CG vector unit's cost-model forms (``waveflow.linalg.legacy.cg_cost``), before calibration.
 
 The counted halves are checked against what csynth measured on the step 8.2 and 8.3 builds (Vitis
 HLS 2024.1): DSPs and block RAM of the core, the other tasks' DSPs, and the block RAM of the unit's
@@ -11,10 +11,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tests.linalg._cg_core_bench import cg_formats, stress_formats
+from tests.linalg.legacy._cg_core_bench import cg_formats, stress_formats
 from waveflow.calib.vitis_model import VitisResourceModel
-from waveflow.linalg import cg_cost, cost
-from waveflow.linalg.cg_vector import CgOp, CgVectorUnit
+from waveflow.linalg import cost
+from waveflow.linalg.legacy import cg_cost
+from waveflow.linalg.legacy.cg_vector import CgOp, CgVectorUnit
 from waveflow.simulation.simulation import Simulation
 
 

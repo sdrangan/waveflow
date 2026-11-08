@@ -20,9 +20,9 @@
 // bank takes the group's lanes in place, so a group of short rows is written to every row it holds
 // (the lanes of the other rows are never read) and the array reads row i from lane (i k) mod L on.
 //
-// The command is not checked here (waveflow.linalg.systolic.cmd_status says which are valid).
+// The command is not checked here (waveflow.linalg.legacy.systolic.cmd_status says which are valid).
 // Requires L a power of two, L | C, C | NMAX and R | MMAX.  Types: wf_systolic_traits<FID>
-// (waveflow.linalg.systolic.core_traits).  Python twin: waveflow.linalg.systolic.SystolicCore.
+// (waveflow.linalg.formats.systolic_traits).  Python twin: waveflow.linalg.legacy.systolic.SystolicCore.
 #ifndef WF_SYSTOLIC_CORE_TASK_H
 #define WF_SYSTOLIC_CORE_TASK_H
 #include "hls_stream.h"
@@ -36,7 +36,7 @@
 
 namespace wf_systolic {
 
-// waveflow.linalg.systolic.MatmulOp
+// waveflow.linalg.matmul.MatmulOp
 enum Op { MUL = 1, MUL_AH = 2 };
 
 // Lane groups of a block of ROWS x COLS values.
