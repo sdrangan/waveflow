@@ -16,7 +16,10 @@ framework rather than measured a model's input.
 Each item's seconds come from the run's own record where one exists (a G1-style row's ``seconds`` or
 ``build_s + simulate_s``), else from the campaign log's start and end lines (one job at a time), else
 from its build directory's file times (each build's first file to its result); the sources are the
-lab machine's local logs, named per item.  Python rather than JSON: the repository ignores ``*.json``.
+lab machine's local logs, named per item.  ``calib_2025_1/`` is ``~/ali/data/calib_2025_1/`` since
+2026-11-08, when its build folders were deleted: the file times of ``vecunit_res``, ``vu_cg_m`` and
+``vu_mf_m`` are kept in its ``logs/file_times/``, and ``vecunit_res``'s ``.err`` / ``.json`` files.
+Python rather than JSON: the repository ignores ``*.json``.
 """
 
 from __future__ import annotations
