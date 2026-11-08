@@ -454,3 +454,254 @@ single-job interpreter run (1,282) cannot show.
 The pysim tests: the matched filter (`nrx` 8 at `L` 2, `nrx` 3 at `L` 4; three jobs, a short last
 chunk) and CG (two closed-loop solves, static `S` stimulus) equal the interpreter burst for burst; a
 fatal `ADDR` in the second of three jobs stops the unit after its status; the steady intervals above.
+
+## Stage 5: HLS
+
+**Functionally done, not timing-closed (2026-11-07).** Both XSI gates re-run on the final source and
+pass (MF, CG). Vitis HLS 2025.1; `xczu48dr-ffvg1517-2-e`, 4 ns.
+Every number below is a Vitis HLS 2025.1 csynth estimate (no Vivado synthesis: not licensed for this
+part on the laptop) or an XSI (Vivado xsim 2025.1) cycle count. The source measured is the last one
+(`v27` in the timing log below).
+
+### Summary
+
+| | MF, `L` 2 | CG, `L` 2 | CG, `L` 4 |
+|---|---|---|---|
+| full top LUT | **36,517** | **49,038** | **76,813** |
+| FF | 19,057 | 46,058 | 84,316 |
+| DSP | 12 | 26 | 48 |
+| BRAM18 | 94 | 74 | 114 |
+| est. ns (target 4) | **5.31** (vector loop; scalar 4.03) | **4.71** | **4.71** |
+| -- scalar task LUT | 9,035 | 9,097 | 9,099 |
+| -- vector task LUT | 27,287 | 25,918 | 40,517 |
+| -- divider task LUT | -- | 13,716 | 26,890 |
+| RTL cycles (XSI) | **292 a 64-sample chunk = ~1,168 a 256 x 8 frame** (1.01x the 1,152-word floor) | **5,657 a job** (status at cycles 5,654, 11,311) | not run at RTL (step simulation: ~4.2k a job) |
+| `S·N/L + D` prediction | 8 x 64/2 + 8 = 264 compute < 290 input words: input-bound, **290**: met | lane cycles 3,840 + D (interpreter, L 2): **~3,850**; RTL is 1.47x it | ~1,930 |
+| bit-exact vs pysim / interpreter | **yes** (XSI) | **yes** (XSI) | yes (step mode) |
+
+Per lane the vector task costs **~7.3k LUT** (40.5k at L 4 against 25.9k at L 2), on **~11.3k** of fixed
+control, windows and loaders / storers; the scalar task is 9.1k whatever `L` (of which ~4k is the RISC-V
+decode); the divider, built only for `vdiv`, ~6.7k a lane.
+
+**Why CG's RTL is 1.47x its `S·N/L + D`** (estimates, not yet measured instruction by instruction): the
+scalar task issues one instruction every 4 cycles (CG's ~330 instructions a job, scalar and vector,
+when the vector queue runs dry between short vector instructions), each `vdiv` is two passes plus the
+divider's 41-cycle latency (6 a job: ~650 cycles), every instruction start after a one-group
+instruction or a fresh fetch costs a cycle (the registered readiness), and `D` is 16 where the loop is 8
+deep. Fixes in that order: issue at II 2-3 (the scalar timing below), `D` = the measured depth (8), and
+a `vdiv` drain overlapping the next instruction.
+
+### The D9 decision (applied 2026-11-07)
+
+D9's targets, at RTL / csynth:
+
+| target | result | |
+|---|---|---|
+| MF `L` 2 cycles <= 1.15x floor (1,325) | ~1,168 (1.01x) | **met** |
+| MF `L` 2 LUT <= 20k (stretch 12k) | 36,517 | **missed** (1.8x) |
+| CG `L` 2 cycles <= 5,170 | 5,657 | **missed** (1.09x) |
+| CG `L` 2 LUT <= 25k (15k) | 49,038 | **missed** (2.0x) |
+| CG `L` 4 cycles <= 3,447 | ~4.2k (step simulation; no RTL run) | **missed** |
+| CG `L` 4 LUT <= 30k (21.5k) | 76,813 | **missed** (2.6x) |
+| accuracy (MF SNR within 1 dB, CG residual within 2x of `VecUnit`) | bit-exact with the interpreter: MF bit-exact with `VecUnit`'s golden, CG residual 0.028 vs `VecUnit` 0.064 (Stage 3) | **met** |
+
+**The rule** ("default programmable unit, and a plan to retire `VecUnit`, if on both MF and CG, at the
+smallest `L` within 10 % of `VecUnit`'s cycles, LUT <= 50 % of `VecUnit`'s"):
+
+- **Matched filter:** `VecUnit` (2024.1, MF build) 1,408 cycles a frame, 74,506 LUT. This core at `L` 2:
+  ~1,168 cycles (**17 % faster**), 36,517 LUT = **49 %** of `VecUnit`'s -- passes, by a hair, and with
+  its vector loop at 5.3 ns, not 4.
+- **CG:** `VecUnit` (2025.1) 3,447 cycles a job, 82,624 LUT. This core: `L` 2 5,657 cycles (1.64x),
+  `L` 4 ~4.2k (step simulation, ~1.2x): **no built `L` is within 10 % of `VecUnit`'s cycles**, and the
+  LUT at `L` 4 is 76,813 = **93 %** of `VecUnit`'s.
+- **Outcome: the rule is NOT met.** The core does not become the default programmable unit; no plan to
+  retire `VecUnit` opens.
+- **Against the un-chained `VecUnit` (`S` 1, one format, 37,386 LUT at `L` 4; reported, not part of
+  the rule):** this core's MF build (36,517 at `L` 2) is the same size; its CG builds are 1.3x (`L` 2)
+  and 2.1x (`L` 4) larger. **On this evidence the familiar ISA does not save LUT over an un-chained
+  `VecUnit`**; what it buys is the ISA (assembled by GNU as, the agent test of Stage 7) and the
+  matched filter's input-bound throughput at `L` 2.
+- **What could change the verdict** (each a measured, not a guessed, follow-up): timing closure at 4 ns
+  (it may cost LUT); the scalar task's decode (~4k) by a ROM over `funct6` / `funct3`; the vector task's
+  fixed ~11k (windows in BRAM rather than muxed replicas; fewer read replicas); `vdiv` as an iterative
+  divider shared by the lanes for a CG that divides twice an iteration; and Vivado's real LUT counts
+  (HLS counts a 1-bit operation at a LUT or more).
+
+### What is built
+
+- `waveflow/build/simdcore_core.h`: the instruction record `sc_vi`, the vector op codes, the lane
+  (`sc_elem<W>`, `sc_lane`: four shared 17 x 17 products, witness 1's sharing extended to every
+  multiplying op, `e16` pairs, `e32` from the four, complex), and the scalar task `sc_scalar<C>`.
+- `waveflow/simdcore/hls.py`: per configuration, `wf_simdcore_<id>.h`: the decoder generated from
+  `isa.SPECS` (each spec a disjoint `(mask, value)`; factored into per-field comparators, ANDs and an
+  OR tree a pre-decoded bit), the vector task `sc_vector_<id>`, the divider task with `vdiv`, a
+  free-running AXI-Stream top, and a step-mode testbench.
+- `waveflow/simdcore/csynth.py`: the generated top through csynth alone, and its report
+  (`loop_depth_ok`: the vector loop's depth against `D`).
+- `waveflow/simdcore/build.py`: the system flow (`SimdCoreCodegenStep`, `build_dag`): the core in its
+  harness, csynth, XSI, `compare` against pysim.
+- `waveflow/simdcore/stepsim.py`: **step-mode C simulation**. The same source compiled with
+  `-DSC_STEP` runs one loop iteration a call; a generated testbench interleaves the tasks (the vector
+  task every step, the scalar task every fourth: its II), deterministic, with Vitis's MinGW g++ and HLS
+  headers -- no `hls::task` threads.
+- `tests/simdcore/test_hls_csim.py` (marked `vitis`): toy kernels (L 2, 4), the matched filter (L 2,
+  4), random jobs over every vector instruction the RTL builds (L 2, 4), vector memory, every scalar
+  instruction, a fatal error. `tests/simdcore/test_hls.py`: the decoder's disjointness and agreement
+  with `isa.decode`. `tests/simdcore/test_unit_xsi.py` (marked `xsi`): the matched filter and CG at RTL.
+
+- **`vdiv`** (build option) as the records' D6 design: a third task, `sc_divider_<id>` (a pipelined
+  divide a lane, `e32` or two `e16`), fed by the vector loop's first pass of a `vdiv` (`dq`, one word
+  of `L` dividend / divisor pairs a group) and drained by its second pass (`drq`, depth `VLEN/(32 L)`)
+  into `vd`: the vector loop's depth does not grow to the divider's.
+- **pysim structure = the RTL's** (`unit.py`): `SimdCore` is a composite of `SimdScalar`, `SimdVector`
+  (and `SimdDivider` with `vdiv`) joined by `vq` (136-bit words), `rq` (32), `dq`, `drq` -- what
+  `composite_top_spec` turns into the top's `hls::task`s and channels. The children are passive; the
+  composite runs the Stage 4 model itself (loaders, the interpreter, storers on simpy queues), as the
+  systolic engine's tile model does. The Stage 4 tests are unchanged and pass.
+- **The decoder is generated from `isa.SPECS`** and runs at **program load**: each instruction's kind,
+  form, op and flags go into a pre-decoded memory beside the instruction memory (first csynth: the
+  decoder in the issue loop gave II 5 at 5.9 ns).
+
+### C simulation results (step mode)
+
+All bit-exact against the interpreter: toy kernels except `lut` (L 2, 4); the matched filter (4 frames,
+L 2, 4); random jobs over every vector instruction the RTL builds (4 each, L 2, 4); `vse` / `vle`
+(e16, e32, masked); a fatal `ILLEGAL` (counted, the next job unanswered); **CG with `vdiv`** (two
+3-iteration solves, L 2, 4). Steps (the HLS source's own loops, D = 16, inputs preloaded): matched
+filter 336 a 64-sample chunk at L 2 (1.17x the 288-word input floor), 315 at L 4; CG ~4.8k a job at
+L 2, ~4.0k at L 4 (the model: 4,125 / 2,412 at D 9).
+
+### The scalar task at csynth (Vitis HLS 2025.1, alone, MF configuration)
+
+| Step | LUT | FF | II | est. ns | Note |
+|---|---|---|---|---|---|
+| first-match decoder in the issue loop | -- | -- | 5 | 5.86 | and a 16 GB schedule report |
+| decoder at load, first-match chain | -- | -- | -- | -- | report past 16 GB, csynth stuck (killed) |
+| disjoint (mask, value) matches, OR of attribute words | 20,030 | 10,797 | 3 | 4.50 | the decoder ~12k |
+| factored decoder (72 field compares, ANDs, OR per bit) | 11,691 | 8,593 | 3 | 4.78 | |
+| + one ALU and one multiplier for R and I forms, balanced ORs, scalar registers in LUTRAM with valid bits | 8,998 | 2,095 | 3 | 5.30 | loop-carried: register read -> CSR / illegality -> phase |
+| **issue loop at II 4** | **9,177** | **2,407** | **4** | **4.03** | 4 DSP, 14 BRAM18 (instruction memory + pre-decode) |
+
+Findings:
+
+- **Surprise (rule 2): the RISC-V decode is ~4k LUT** of the scalar task's 9.2k (HLS's estimate,
+  which counts a 1-bit operation at a LUT or more; Vivado packs them). It is the price of the real
+  encodings; a narrower decoder (a ROM over `funct6` / `funct3` with field checks) is the next step if
+  the totals need it.
+- **The issue loop is II 4, not witness 5's 3**: a full RV32IM + Zicsr + the vector issue checks feed
+  the next instruction's phase. The interpreter's `scalar_ii` stays 3 (witness 5) until Stage 6
+  calibrates it; the step simulation runs the scalar task every fourth step.
+- **Never generate a long first-match `if` chain for HLS**: csynth's verbose schedule report grew to
+  16-18 GB (twice) before the run was killed.
+
+### The vector task at csynth (Vitis HLS 2025.1, alone, MF configuration, L 2): what each step bought
+
+What each csynth found, and the change it forced (all kept bit-exact in step mode). The decisive
+lesson: **in a II-1 loop HLS merges a variable after a branch only once the branch's slowest arm is
+done, and any loop-carried variable whose next value passes through such a merge drags the whole
+datapath into one cycle** -- the fix each time was flat code (flags and selects), state read as it was
+at the iteration's start, or a request registered and applied a cycle later.
+
+1. `rq` written at three pipeline stages, `s_out` at two, `s_in` read at two: II violations. **One
+   access site a stream an iteration.**
+2. `s_out.full()` checked early and written late: an II violation. **A blocking write**: an output
+   port's back-pressure stalls the loop.
+3. II 1 but **20 ns**: `vxsat` (set by every lane's saturation, read by the `vxsat` CSR reply) made one
+   recurrence of the whole lane datapath. **`vxsat` in a two-word LUTRAM declared independent**, set by
+   write-only stores at one site, read or cleared only after `satwait` (`D` iterations after the last
+   lane op). A `DEPENDENCE` pragma on a scalar is ignored.
+4. Still **26 ns**: the loaders' state waited on the lanes -- HLS merges the state after an `if`
+   only when its slowest arm (the lane datapath) is done. **The loop body is ordered control (fetch,
+   issue, every state update), then the loaders and storers, then the datapath**, which feeds no
+   control.
+5. A recurrence through the fetch (`have` -> `vq.read_nb` -> unpack -> the issue checks -> `go` ->
+   `have`): **a one-entry prefetch register** `nx` (its group count precomputed), moved into `ci`
+   when the current instruction ends.
+6. The issue recurrence (readiness -> `go` -> `have` -> `ci`): **readiness computed from the
+   iteration's starting state and registered**, ANDed with "nothing started this iteration" (exact:
+   every state change that matters comes from a start). II 2 -> 1, 9.3 ns.
+7. Loader multiply (`k n`) in the carried state: **a block ends when its row counter reaches `k`** (no
+   count, no multiply). The divide test from a registered flag.
+8. LUT: `e16` built only when `sews` has 16 (`SC_SEW16`; MF and CG are `e32`), data memory sized to the
+   application: 39.2k -> 31.5k LUT, 100 -> 72 BRAM18.
+9. **The lane, ALU-style**: one adder (add / sub / rsub / saturating / multiply-add / compare / min /
+   max), one right-shift rounding unit (a thermometer-mask sticky bit instead of a second shifter), one
+   left shifter; the complex path's three roundings in two units: 31.5k -> 27.4k LUT.
+10. The reductions' carried state out of the op chain; `vs1[0]` / `vd[0]` read at group 0 for a
+   reduction (no carried `rinit`); the lane body branch-free (every candidate computed, a mux);
+   per-lane saturation flags ORed after the lanes; the datapath unconditional with its side effects
+   gated: 6.6 ns (stuck: every step moved the path elsewhere at the same delay).
+11. Loader and storer branch-free (memories read unconditionally and selected); the storer from a
+   start-of-iteration snapshot of its state; `vq` through a raw-word register; `wf.qpush` and `wf.qpop`
+   **registered requests applied next cycle** (exact: the next instruction starts two or more cycles
+   later); the loader's free check a register; the groups left a down-counter; the `vq` read first:
+   6.6 -> 5.84 -> 5.59 -> **5.31 ns** (v27, depth 8; 27,268 LUT, 16,282 FF, 8 DSP, 72 BRAM18 alone).
+
+**What remains on the critical path (v27, 5.31 ns):** the loader's header: the header word -> the
+window-index compare -> the copy select (`lcp`) -> the free check -> the registered `fr` (HLS reports it
+as the one carried path it cannot fit). **Best estimate of the fix:** a header setup cycle (the header
+into a register, applied the next cycle: one cycle a block), as was done for `wf.qpush`. Behind it HLS
+showed the lane datapath at ~4.5-5 ns in single stages once the carried paths were gone; whether it
+then splits the lane into more stages (the loop is 8 deep, `D` 16 leaves room) is the next csynth's
+question. CG's builds estimate 4.71 ns (their windows differ). The scalar task is 4.03 ns at II 4.
+
+### XSI: the matched filter at RTL (2026-11-07) -- PASS
+
+`pytest -m xsi tests/simdcore/test_unit_xsi.py` (the system flow: codegen, csynth of the generated
+two-task top, XSI with the harness's drivers and sinks, `compare` against pysim): **every output
+burst and status word equal**, three frames (128, 64, 100 samples x 8 antennas) on the `e32`-only build
+(`mf_config(8, L=2, sews=(32,), dm_bytes=1024)`). The RTL is the source as of the restructuring
+step 5 above (its vector loop estimated at 6.6 ns: functionally exact, not yet timing-closed).
+
+- **RTL throughput: an output block every 292 cycles** (bursts at cycles 575, 867, 1159, 1451): a
+  64-sample chunk is 290 input words on the one port (`X` 32 + `R` 256 + two headers), so the RTL runs
+  at **1.01x the input floor** -- loads and stores overlap compute, as the design intends.
+- The full top (both tasks, csynth): **36,621 LUT, 18,212 FF, 14 DSP, 94 BRAM18** (Vitis HLS 2025.1
+  estimates, before the lane rework below).
+
+### XSI: CG at RTL (2026-11-07) -- PASS
+
+`pytest -m xsi tests/simdcore/test_unit_xsi.py -k cg`: two 3-iteration solves (8 x 32, static `S`
+stimulus), `cg_config(8, 32, L=2, sews=(32,))` with `vdiv` -- **bit-exact against pysim** (so the
+divider task, its feed and drain, and the closed CG program are right at RTL).
+
+- **RTL: ~5,676 cycles a job** (status words at cycles 5,673 and 11,349). The D9 target at L 2 is
+  <= 5,170; the interpreter's model said 4,125 (D 9, scalar II 3). Not yet analysed: the RTL's scalar
+  issue is II 4, `D` is 16 (conservative: the loop is 6-7 deep), each instruction start costs the
+  registered readiness, a `vdiv` is two passes plus the divider's 41-cycle latency.
+- The full top (that source): **48,183 LUT, 43,148 FF, 28 DSP, 74 BRAM18**; the divider task (a
+  41-deep pipelined divide a lane, II 1) is most of the extra FF.
+
+### Deviations from the Stage 5 architecture proposal
+
+- **The loaders and storers are inside the vector task's loop**, not tasks of their own: an
+  `hls::task` cannot share an array with another, and a window's memories must be read by the vector
+  loop. Each moves one 64-bit word a cycle beside the instruction stream, non-blocking (`read_nb`,
+  `full()`), so loads and stores still overlap compute.
+- **Window memories**: per window, copy, column parity and lane, with one write site each (the
+  loader for an input window, the loop for an output window) and a read replica per reader (`vs2`,
+  `vs1` for input windows; `vs2`, `vs1`, `vd`, storer for output windows). The parity split puts a
+  word's two elements (two adjacent columns of one row) in different memories; a one-register window's
+  two elements (two rows) go to two lanes. Hence two RTL build rules (raised by `hls.py`, not
+  interpreter semantics): **L >= 2**, and an **`e16` window holds one register**.
+- **Hazards** by a per-register countdown (set to `D` when an instruction starts writing a register;
+  `D + groups` for a reduction), checked when an instruction starts; the read set (`rmask`) comes
+  from the scalar task. `D` is `hls.D_DEFAULT` = 16, to be checked against csynth's loop depth.
+  `vd` is always in the read set (tail and masked-off elements keep its old value).
+- **`vxsat`** lives in the vector task; a CSR access to `vxsat` / `vcsr` is a round trip on `rq`. A
+  `JOB` token clears it at each job's start.
+
+### Differences from the interpreter (open; no interpreter change made)
+
+- **Vector registers and data memory are not cleared at a job's start in RTL** (the interpreter
+  starts them at 0): clearing would cost `32 x VLEN/(32 L)` cycles a job. A program that reads a
+  register or a DM word it has not written in the job sees the previous job's value. The tests write
+  before reading. (Scalar registers are cleared.)
+- A masked `vle` / `vse` whose inactive elements fall outside data memory: the RTL reports `ADDR`
+  (it checks `base + vl·EEW` in the scalar task); the interpreter checks active elements only.
+- A masked `vle16` / `vse16` at `SEW` 32 (`EEW` < `SEW`): the RTL reads element `i`'s mask in the
+  `e16` layout, the interpreter at `SEW` 32 (D12 leaves a mask read at the other width unspecified;
+  this is the one place an instruction does it).
+- `cycle` reads the scalar task's iteration count, not the cycle model's.
+- A block larger than its window (`k > VLMAX` or `n > window n`): the interpreter reports `ADDR` at
+  the `wf.qpop`; the RTL loader does not check.

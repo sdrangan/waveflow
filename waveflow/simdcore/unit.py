@@ -1,19 +1,24 @@
-"""unit.py — the SIMD core in pysim: loaders, the core and storers joined by block queues
-(``plans/simdcore.md`` Stage 4).
+"""unit.py — the SIMD core in pysim (``plans/simdcore.md`` Stages 4 and 5).
 
-``SimdCore`` is a composite of free-running tasks:
+**Structure** (what the generated top instantiates; ``plans/simdcore_records.md`` Stage 5):
+``SimdCore`` is a composite of two free-running tasks joined by two streams --
 
-* **SimdLoad** (one an input port ``s_in<p>``): each burst is one block -- a header word
-  :func:`block_header` (window, ``k``, ``n``) and ``k x n`` elements row-major, two 32-bit elements a
-  64-bit word -- landed as the next block of that window's queue (a ping-pong of two blocks);
-* **SimdExec**: a job a firing.  Its program burst on ``s_prog`` (:func:`job_words`: header, ``a0``..
-  arguments, the instructions two to a word) runs on the interpreter
-  (:class:`~waveflow.simdcore.model.Core`) an instruction at a time, timed by its cycle model; at a
-  ``wf.qpop`` it releases the window's previous block and waits for the next, at a ``wf.qpush`` it
-  hands the block to the port's storer.  One status word per job on ``m_status``
-  (:func:`status_word`); an error is fatal: the status, then the task takes nothing more;
-* **SimdStore** (one an output port ``s_out<p>``): each pushed block as one burst, a
-  :func:`resp_word` (``tx_id``, window, ``k``, ``n``) then its elements.
+* **SimdScalar** (``s_prog``, ``m_status``): the scalar task, decoding and issuing; the vector
+  instructions on ``vq`` (:data:`~waveflow.simdcore.hls.VQ_BITS`-bit words), the scalar results back on
+  ``rq``;
+* **SimdVector** (``s_in<p>``, ``s_out<p>``): the vector task with the ports' loaders and storers.
+
+**pysim** is the composite's own flat model (the two tasks are passive, as the tile model of
+``waveflow/linalg/systolic_engine_mem.py``): per input port a loader, each burst one block -- a header
+word :func:`block_header` (window, ``k``, ``n``) and ``k x n`` elements row-major, two 32-bit elements a
+64-bit word -- landed as the next block of that window's queue (a ping-pong of two blocks); the core, a
+job at a time -- its program burst on ``s_prog`` (:func:`job_words`: header, ``a0``.. arguments, the
+instructions two to a word) on the interpreter (:class:`~waveflow.simdcore.model.Core`) an instruction
+at a time, timed by its cycle model; at a ``wf.qpop`` it releases the window's previous block and waits
+for the next, at a ``wf.qpush`` it hands the block to the port's storer; one status word per job on
+``m_status`` (:func:`status_word`), an error fatal (the status, then nothing more) -- and per output
+port a storer, each pushed block one burst, a :func:`resp_word` (``tx_id``, window, ``k``, ``n``) then
+its elements.
 
 The protocol is ``docs/guide/systems/command_response.md``'s: a job's command is its program burst,
 its results bursts headed by a response that echoes ``tx_id``, a status per job on its own stream.
@@ -28,14 +33,13 @@ from typing import ClassVar
 import numpy as np
 
 from waveflow.hw.clock import Clock
-from waveflow.hw.dataschema import DataArray, IntField
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.interface import (
     FramedStreamIFMaster,
     FramedStreamIFSlave,
-    SobIFMaster,
-    SobIFSlave,
-    StreamOfBlocksIF,
+    StreamIF,
+    StreamIFMaster,
+    StreamIFSlave,
 )
 from waveflow.simdcore.asm import assemble
 from waveflow.simdcore.config import SimdCoreConfig
@@ -182,11 +186,6 @@ def golden_bursts(cfg: SimdCoreConfig, jobs: list[Job]) -> dict[str, list[np.nda
 
 # --- the tasks ---------------------------------------------------------------------------------------
 
-def _block_type(cfg: SimdCoreConfig, n: int) -> type[DataArray]:
-    return DataArray.specialize(element_type=IntField.specialize(bitwidth=32, signed=False),
-                                max_shape=(cfg.vlmax(32) * n,), member_name="elems")
-
-
 @dataclass
 class _Part(FreeRunMod):
     cfg: SimdCoreConfig = None  # type: ignore[assignment]  # required: checked below
@@ -198,136 +197,104 @@ class _Part(FreeRunMod):
         if self.cfg is None:
             raise ValueError(f"{self.name}: a SIMD core needs its SimdCoreConfig")
 
-    def _ep(self, cls, name: str, bits: int = WORD_BITS):
-        ep = cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=int(bits), has_tlast=True)
+    def _ep(self, cls, name: str, bits: int = WORD_BITS, framed: bool = True):
+        kw = {"has_tlast": True} if framed else {}
+        ep = cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=int(bits), **kw)
         self.add_endpoint(ep)
         setattr(self, name, ep)
         return ep
 
-    def _blocks(self, cls, name: str, n: int):
-        ep = cls(name=f"{self.name}_{name}", sim=self.sim, element_type=_block_type(self.cfg, n))
-        self.add_endpoint(ep)
-        setattr(self, name, ep)
-        return ep
+    def _ports(self, direction: str) -> list[int]:
+        return sorted({w.port for w in self.cfg.windows if w.direction == direction})
 
-    def _halt(self) -> ProcessGen[None]:
+    def _kernel(self, fn: str, signature: tuple[str, ...], framed: tuple[str, ...]):
+        from waveflow.hw.mem_stream import KernelTask
+        from waveflow.simdcore.hls import header_name
+
+        return KernelTask(fn, header_name(self.cfg), signature, framed=framed)
+
+
+@dataclass
+class SimdScalar(_Part):
+    """The scalar task: ``s_prog`` in, ``m_status`` out; vector instructions on ``m_vq``, results on
+    ``s_rq`` (its body: ``simdcore_scalar_<id>``, waveflow/build/simdcore_core.h)."""
+
+    cpp_kernel_name: ClassVar[str | None] = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from waveflow.simdcore.hls import VQ_BITS
+
+        self._ep(FramedStreamIFSlave, "s_prog")
+        self._ep(FramedStreamIFMaster, "m_status")
+        self._ep(StreamIFMaster, "m_vq", VQ_BITS, framed=False)
+        self._ep(StreamIFSlave, "s_rq", 32, framed=False)
+
+    def kernel_task(self):
+        from waveflow.simdcore.hls import cfg_id
+
+        return self._kernel(f"simdcore_scalar_{cfg_id(self.cfg)}", ("s_prog", "m_status", "m_vq", "s_rq"),
+                            ("s_prog", "m_status"))
+
+    def run_iter(self) -> ProcessGen[None]:
+        # Passive: SimdCore's flat model does the work through these ports (see the module doc).
         yield self.env.event()
 
 
 @dataclass
-class SimdLoad(_Part):
-    """The loader of one input port: each burst is a block of the window its header names."""
+class SimdVector(_Part):
+    """The vector task and the ports' loaders and storers (its body: ``sc_vector_<id>``)."""
 
-    port: int = 0
     cpp_kernel_name: ClassVar[str | None] = None
-    build_fields: ClassVar[tuple[str, ...]] = ("cfg", "port")
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self._ep(FramedStreamIFSlave, "s_in")
-        self.wins = [i for i, w in enumerate(self.cfg.windows) if w.direction == "in" and w.port == self.port]
-        self.q = {i: self._blocks(SobIFMaster, f"q{i}", self.cfg.windows[i].n) for i in self.wins}
+        from waveflow.simdcore.hls import VQ_BITS
+
+        self._ep(StreamIFSlave, "s_vq", VQ_BITS, framed=False)
+        self._ep(StreamIFMaster, "m_rq", 32, framed=False)
+        if self.cfg.vdiv:
+            from waveflow.simdcore.hls import dq_bits
+
+            self._ep(StreamIFMaster, "m_dq", dq_bits(self.cfg), framed=False)
+            self._ep(StreamIFSlave, "s_drq", 32 * self.cfg.L, framed=False)
+        for p in self._ports("in"):
+            self._ep(FramedStreamIFSlave, f"s_in{p}")
+        for p in self._ports("out"):
+            self._ep(FramedStreamIFMaster, f"s_out{p}")
+
+    def kernel_task(self):
+        from waveflow.simdcore.hls import cfg_id
+
+        io = tuple(f"s_in{p}" for p in self._ports("in")) + tuple(f"s_out{p}" for p in self._ports("out"))
+        div = ("m_dq", "s_drq") if self.cfg.vdiv else ()
+        return self._kernel(f"sc_vector_{cfg_id(self.cfg)}", ("s_vq", "m_rq", *div, *io), io)
 
     def run_iter(self) -> ProcessGen[None]:
-        words = np.asarray((yield from self.s_in.get()), np.uint64).reshape(-1)
-        head = int(words[0])
-        win, k, n = head & 0xFF, (head >> 8) & 0xFFFF, (head >> 24) & 0xFF
-        if win not in self.q:
-            raise ValueError(f"{self.name}: a block for window {win}, not on port {self.port}")
-        blk = yield from self.q[win].acquire_write()
-        blk.payload = unpack_elems(words[1:], k, n)
-        yield from self.q[win].commit_write(blk)
+        yield self.env.event()  # passive (see SimdScalar)
 
 
 @dataclass
-class SimdStore(_Part):
-    """The storer of one output port: each pushed block as a response word and its elements."""
-
-    port: int = 0
-    cpp_kernel_name: ClassVar[str | None] = None
-    build_fields: ClassVar[tuple[str, ...]] = ("cfg", "port")
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        nmax = max([w.n for w in self.cfg.windows if w.direction == "out" and w.port == self.port] or [1])
-        self._blocks(SobIFSlave, "q", nmax)
-        self._ep(FramedStreamIFMaster, "s_out")
-
-    def run_iter(self) -> ProcessGen[None]:
-        blk = yield from self.q.acquire_read()
-        tx_id, win, data = blk.payload
-        yield from self.s_out.write(out_burst(tx_id, win, data))
-        yield from self.q.release_read()
-
-
-@dataclass
-class SimdExec(_Part):
-    """The core: a job a firing (see the module doc)."""
+class SimdDivider(_Part):
+    """The divider task of a ``vdiv`` build (its body: ``sc_divider_<id>``): a word of ``L`` dividends
+    and divisors a cycle in, ``L`` results out."""
 
     cpp_kernel_name: ClassVar[str | None] = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        cfg = self.cfg
-        self._ep(FramedStreamIFSlave, "s_prog")
-        self._ep(FramedStreamIFMaster, "m_status")
-        self.qi = {i: self._blocks(SobIFSlave, f"qi{i}", w.n) for i, w in enumerate(cfg.windows)
-                   if w.direction == "in"}
-        oports = sorted({w.port for w in cfg.windows if w.direction == "out"})
-        self.qo = {p: self._blocks(SobIFMaster, f"qo{p}",
-                                   max(w.n for w in cfg.windows if w.direction == "out" and w.port == p))
-                   for p in oports}
-        self.halted = False
-        self.results: list[JobResult] = []
-        self.status_times: list[float] = []
+        from waveflow.simdcore.hls import dq_bits
 
-    def _until(self, t0: float, cycles: float) -> ProcessGen[None]:
-        t = t0 + cycles * self.clk.period
-        if t > self.env.now:
-            yield self.timeout(t - self.env.now)
+        self._ep(StreamIFSlave, "s_dq", dq_bits(self.cfg), framed=False)
+        self._ep(StreamIFMaster, "m_drq", 32 * self.cfg.L, framed=False)
+
+    def kernel_task(self):
+        from waveflow.simdcore.hls import cfg_id
+
+        return self._kernel(f"sc_divider_{cfg_id(self.cfg)}", ("s_dq", "m_drq"), ())
 
     def run_iter(self) -> ProcessGen[None]:
-        if self.halted:
-            yield from self._halt()
-        cfg = self.cfg
-        words = np.asarray((yield from self.s_prog.get()), np.uint64).reshape(-1)
-        tx_id, prog, args, budget = parse_job(words)
-        # the job's clock starts when its program's first word arrived (a word a cycle)
-        t0 = self.env.now - (words.size - 1) * self.clk.period
-        core = Core(cfg)
-        core.begin(prog, args=args, budget=budget)
-        core.tm.external = True
-        held: dict[int, object] = {}
-        while True:
-            d = core.peek()
-            if d is not None and d.spec.sem == "qpop" and d.imm in self.qi:
-                q = int(d.imm)
-                yield from self._until(t0, core.tm.ts)
-                if q in held:
-                    yield from self.qi[q].release_read()
-                blk = yield from self.qi[q].acquire_read()
-                held[q] = blk
-                core.inq[cfg.windows[q].name].append(blk.payload)
-                core.tm.arrival = int(np.ceil((self.env.now - t0) / self.clk.period - 1e-9))
-            pushes = sum(len(v) for v in core.outq.values())
-            more = core.step()
-            if sum(len(v) for v in core.outq.values()) > pushes:  # a wf.qpush ran
-                w = cfg.windows[int(d.imm)]
-                yield from self._until(t0, core.tm.last_push)
-                out = yield from self.qo[w.port].acquire_write()
-                out.payload = (tx_id, int(d.imm), core.outq[w.name][-1])
-                yield from self.qo[w.port].commit_write(out)
-            if not more:
-                break
-        r = core.result()
-        self.results.append(r)
-        for q in list(held):
-            yield from self.qi[q].release_read()
-        yield from self._until(t0, r.cycles)
-        yield from self.m_status.write(np.asarray([status_word(tx_id, Status[r.status], r.steps)], np.uint64))
-        self.status_times.append(self.env.now)  # a job's interval in pysim: the record, not the RTL
-        if r.status != "OK":
-            self.halted = True
+        yield self.env.event()  # passive (see SimdScalar)
 
 
 @dataclass
@@ -339,36 +306,127 @@ class SimdCore(_Part):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        cfg = self.cfg
-        iports = sorted({w.port for w in cfg.windows if w.direction == "in"})
-        oports = sorted({w.port for w in cfg.windows if w.direction == "out"})
-        self.loads = [SimdLoad(name=f"{self.name}_load{p}", sim=self.sim, clk=self.clk, cfg=cfg, port=p)
-                      for p in iports]
-        self.exe = SimdExec(name=f"{self.name}_exec", sim=self.sim, clk=self.clk, cfg=cfg)
-        self.stores = [SimdStore(name=f"{self.name}_store{p}", sim=self.sim, clk=self.clk, cfg=cfg, port=p)
-                       for p in oports]
-        for comp in (*self.loads, self.exe, *self.stores):
-            self.add_comp(comp)
-        for ld in self.loads:
-            for i, ep in ld.q.items():
-                self._link(f"qi{i}", ep, self.exe.qi[i])
-        for st in self.stores:
-            self._link(f"qo{st.port}", self.exe.qo[st.port], st.q)
-        for p, ld in zip(iports, self.loads):
-            setattr(self, f"s_in{p}", ld.s_in)
-        for p, st in zip(oports, self.stores):
-            setattr(self, f"s_out{p}", st.s_out)
-        self.s_prog, self.m_status = self.exe.s_prog, self.exe.m_status
-        self.boundary = ([f"s_in{p}" for p in iports] + ["s_prog", "m_status"]
-                         + [f"s_out{p}" for p in oports])
+        from waveflow.simdcore.hls import VQ_BITS
 
-    def _link(self, name, master, slave) -> StreamOfBlocksIF:
-        iface = StreamOfBlocksIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk,
-                                 element_type=master.element_type, depth=2)
-        iface.bind("master", master)
-        iface.bind("slave", slave)
-        self.add_if(iface)
-        return iface
+        cfg = self.cfg
+        iports, oports = self._ports("in"), self._ports("out")
+        self.scal = SimdScalar(name=f"{self.name}_scalar", sim=self.sim, clk=self.clk, cfg=cfg)
+        self.vec = SimdVector(name=f"{self.name}_vector", sim=self.sim, clk=self.clk, cfg=cfg)
+        kids = [self.scal, self.vec]
+        links = [("vq", self.scal.m_vq, self.vec.s_vq, VQ_BITS, cfg.vq_depth),
+                 ("rq", self.vec.m_rq, self.scal.s_rq, 32, 2)]
+        if cfg.vdiv:
+            from waveflow.simdcore.hls import dq_bits
+
+            self.div = SimdDivider(name=f"{self.name}_divider", sim=self.sim, clk=self.clk, cfg=cfg)
+            kids.append(self.div)
+            links += [("dq", self.vec.m_dq, self.div.s_dq, dq_bits(cfg), 2),
+                      ("drq", self.div.m_drq, self.vec.s_drq, 32 * cfg.L, cfg.vlen // 32 // cfg.L)]
+        for comp in kids:
+            self.add_comp(comp)
+            comp.make_passive()
+        for name, m, s, bits, depth in links:
+            iface = StreamIF(name=f"{self.name}_{name}_if", sim=self.sim, clk=self.clk, bitwidth=bits,
+                             depth=depth)
+            iface.bind("master", m)
+            iface.bind("slave", s)
+            self.add_if(iface)
+        for p in iports:
+            setattr(self, f"s_in{p}", getattr(self.vec, f"s_in{p}"))
+        for p in oports:
+            setattr(self, f"s_out{p}", getattr(self.vec, f"s_out{p}"))
+        self.s_prog, self.m_status = self.scal.s_prog, self.scal.m_status
+        # Boundary names pair with the children's unwired ports in walk order: the scalar task's
+        # program and status, then the vector task's inputs and outputs.
+        self.boundary = (["s_prog", "m_status"] + [f"s_in{p}" for p in iports]
+                         + [f"s_out{p}" for p in oports])
+        self.halted = False
+        self.results: list[JobResult] = []
+        self.status_times: list[float] = []
+
+    # -- the flat pysim -------------------------------------------------------------------------------
+    def run_proc(self):
+        import simpy
+
+        env, cfg = self.sim.env, self.cfg
+        self._free = {i: simpy.Container(env, capacity=2, init=2) for i, w in enumerate(cfg.windows)
+                      if w.direction == "in"}
+        self._full = {i: simpy.Store(env) for i in self._free}
+        self._ofree = {p: simpy.Container(env, capacity=2, init=2) for p in self._ports("out")}
+        self._ofull = {p: simpy.Store(env) for p in self._ports("out")}
+        for p in self._ports("in"):
+            env.process(self._loader(p))
+        for p in self._ports("out"):
+            env.process(self._storer(p))
+        return self._core_forever()
+
+    def _loader(self, p: int) -> ProcessGen[None]:
+        ep = getattr(self.vec, f"s_in{p}")
+        while True:
+            words = np.asarray((yield from ep.get()), np.uint64).reshape(-1)
+            head = int(words[0])
+            win, k, n = head & 0xFF, (head >> 8) & 0xFFFF, (head >> 24) & 0xFF
+            if win not in self._free or self.cfg.windows[win].port != p:
+                raise ValueError(f"{self.name}: a block for window {win}, not an input of port {p}")
+            yield self._free[win].get(1)
+            yield self._full[win].put(unpack_elems(words[1:], k, n))
+
+    def _storer(self, p: int) -> ProcessGen[None]:
+        ep = getattr(self.vec, f"s_out{p}")
+        while True:
+            tx_id, win, data = yield self._ofull[p].get()
+            yield from ep.write(out_burst(tx_id, win, data))
+            yield self._ofree[p].put(1)
+
+    def _until(self, t0: float, cycles: float) -> ProcessGen[None]:
+        t = t0 + cycles * self.clk.period
+        if t > self.env.now:
+            yield self.timeout(t - self.env.now)
+
+    def _core_forever(self) -> ProcessGen[None]:
+        while not self.halted:
+            yield from self._job()
+        yield self.env.event()
+
+    def _job(self) -> ProcessGen[None]:
+        cfg = self.cfg
+        words = np.asarray((yield from self.scal.s_prog.get()), np.uint64).reshape(-1)
+        tx_id, prog, args, budget = parse_job(words)
+        # the job's clock starts when its program's first word arrived (a word a cycle)
+        t0 = self.env.now - (words.size - 1) * self.clk.period
+        core = Core(cfg)
+        core.begin(prog, args=args, budget=budget)
+        core.tm.external = True
+        held: set[int] = set()
+        while True:
+            d = core.peek()
+            if d is not None and d.spec.sem == "qpop" and d.imm in self._free:
+                q = int(d.imm)
+                yield from self._until(t0, core.tm.ts)
+                if q in held:
+                    yield self._free[q].put(1)
+                blk = yield self._full[q].get()
+                held.add(q)
+                core.inq[cfg.windows[q].name].append(blk)
+                core.tm.arrival = int(np.ceil((self.env.now - t0) / self.clk.period - 1e-9))
+            pushes = sum(len(v) for v in core.outq.values())
+            more = core.step()
+            if sum(len(v) for v in core.outq.values()) > pushes:  # a wf.qpush ran
+                w = cfg.windows[int(d.imm)]
+                yield from self._until(t0, core.tm.last_push)
+                yield self._ofree[w.port].get(1)
+                yield self._ofull[w.port].put((tx_id, int(d.imm), core.outq[w.name][-1]))
+            if not more:
+                break
+        r = core.result()
+        self.results.append(r)
+        for q in held:
+            yield self._free[q].put(1)
+        yield from self._until(t0, r.cycles)
+        yield from self.scal.m_status.write(np.asarray([status_word(tx_id, Status[r.status], r.steps)], np.uint64))
+        self.status_times.append(self.env.now)  # a job's interval in pysim: the record, not the RTL
+        if r.status != "OK":
+            self.halted = True
 
     # -- scenarios: an application subclasses the core and gives its jobs ---------------------------
     def jobs(self, kind: str = "test") -> list[Job]:

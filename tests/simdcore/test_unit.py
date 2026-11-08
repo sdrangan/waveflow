@@ -69,10 +69,8 @@ def test_cg_pysim_equals_the_interpreter(tmp_path):
 
 
 def _exec(sysm):
-    from waveflow.simdcore.unit import SimdExec
-
     objs = sysm.sim._sim_objs
-    return next(o for o in (objs.values() if isinstance(objs, dict) else objs) if isinstance(o, SimdExec))
+    return next(o for o in (objs.values() if isinstance(objs, dict) else objs) if isinstance(o, SimdCore))
 
 
 @dataclass
