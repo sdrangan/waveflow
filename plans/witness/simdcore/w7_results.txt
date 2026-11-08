@@ -1,0 +1,6 @@
+{"name": "s1one", "n_vfmt": 1, "n_sfmt": 1, "bad": []}
+{"lut": 37386, "ff": 25579, "dsp": 21, "bram": 24, "clock_ns": 3.124}
+{"name": "s1", "n_vfmt": 3, "n_sfmt": 4, "bad": []}
+{"lut": 42522, "ff": 36512, "dsp": 21, "bram": 24, "clock_ns": 3.124}
+{"name": "s3", "n_vfmt": 3, "n_sfmt": 4, "bad": []}
+{"lut": 81862, "ff": 61401, "dsp": 53, "bram": 24, "clock_ns": 3.124}

@@ -59,6 +59,15 @@ What each costs, roughly (the calibrated [resource model](timing.md#the-calibrat
 - **`S`** costs most of the logic beyond that: each slot can multiply (four DSPs a lane), and the
   operand and forwarding multiplexers grow as `S²·L`. A slot without `MUL` and `DOT` in `slot_caps`
   has no multiplier.
+
+  **`S` 1 is a useful build in its own right.** Without chaining, a program of `S` vector
+  instructions on `N` elements takes about `S·N/L` cycles: the throughput of a plain SIMD unit.
+  Chaining is about half the LUTs. At `L` 4 on the CG layout, `S` 3 is 81.9k LUT, `S` 1 is 42.5k,
+  and `S` 1 with one vector and one scalar format is 37.4k (Vitis HLS 2025.1, csynth). For glue that
+  is bound by the rate its input arrives, start at `S` 1 and add slots only when the cycle count
+  needs them. The [SIMD core](../simdcore/index.md) tested whether a RISC-V vector ISA on a
+  temporal SIMD datapath is cheaper still. It is not: at the same `L` it costs the same or more
+  (`plans/simdcore_records.md`, Stage 5).
 - **`NG`** costs little: the groups are entries in the banks' memories. `NB` sets how many memories
   there are and so how many groups a pass can read at once.
 - **`VLMAX`, `Kmax`, `Nmax`** set the memories' depths: the register file holds `NG · L · VLMAX`
