@@ -66,9 +66,10 @@ OBJECTIVES = [
     },
 ]
 
-#: Budget per run, tool-seconds.  TBD: a fraction of the grid's measured cost (plan step 7), so that
-#: exhausting the grid is not an option.
-BUDGET_S = None
+#: Budget per run, tool-seconds: 8 hours (the user's choice, 2026-11-12), 4.9 % of the grid's measured
+#: synthesis, csynth and RTL tool time (163.1 h, ``grid.py table`` after the re-timing), so that
+#: exhausting the grid is not an option; both scripted policies need 1-4 h (step 6).
+BUDGET_S = 28_800.0
 
 #: Worker slots for synth / rtlsim jobs: the lab machine's limit for heavy jobs (plan, 2026-11-06).
 K_WORKERS = 2
@@ -79,11 +80,11 @@ EPSILON = 0.05
 #: Runs per arm per objective.
 N_RUNS = 10
 
-#: The agent's model, identical in both arms.  TBD
-MODEL = None
+#: The agent's model, identical in both arms (the user's choice, 2026-11-12).
+MODEL = "claude-opus-5-5"
 
-#: The agent's effort (the Agent SDK's ``effort``), identical in both arms.  TBD
-EFFORT = None
+#: The agent's effort (the Agent SDK's ``effort``), identical in both arms (the user's choice, 2026-11-12).
+EFFORT = "high"
 
 #: The turn limit of a run (the Agent SDK's ``max_turns``).  TBD
 MAX_TURNS = None
@@ -102,7 +103,7 @@ AGENT_SDK = "claude-agent-sdk 0.2.179 (Claude Code 2.1.319)"
 #: How calibration cost enters the Waveflow arm: reported both ways, headline "upfront".
 CALIBRATION_CHARGE = ("upfront", "amortized")
 
-#: The calibration charged, tool-seconds (about 8.0 hours): ``calibration.CALIBRATION_S``, itemized
-#: there (the units' builds, the memory's traces and the six integration points; what is not charged
-#: and why).
-CALIBRATION_S = 28740.4
+#: The calibration charged, tool-seconds (about 10.6 hours): ``calibration.CALIBRATION_S``, itemized
+#: there (the units' builds -- the retired systolic and CG units' included, the user's decision of
+#: 2026-11-12 --, the memory's traces and the six integration points; what is not charged and why).
+CALIBRATION_S = 38031.4

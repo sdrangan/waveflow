@@ -7,11 +7,13 @@ was fitted and scored on, at Vitis HLS / Vivado 2025.1 on the lab machine.
 
 **Charged:** the vector unit's resource builds and timing catalogues, the systolic engine's resource
 sweep and timing points, the A53 platform and the LTBF kernels on it, the memory's traced device runs,
-and the six integration points (step 2c), on which the integration term is fitted.  **Not charged,
-listed for the reader:** the systolic and CG units (``SystolicUnit``, ``CgVectorUnit``), whose models
-this system does not read; the toolchain gates and simulation-speed runs (no model reads them); and
-the system's development runs (the step 1a / 1f gates and the live gate), which built and checked the
-framework rather than measured a model's input.
+and the six integration points (step 2c), on which the integration term is fitted -- and, by the
+user's decision of 2026-11-12 (the conservative charge, 10.6 h rather than 8.0 h), the systolic and CG
+units' calibration (``SystolicUnit``, ``CgVectorUnit``, now retired), which ran in the same campaign
+although this system's models do not read it.  **Not charged, listed for the reader:** the toolchain
+gates and simulation-speed runs (no model reads them), and the system's development runs (the step
+1a / 1f gates and the live gate), which built and checked the framework rather than measured a model's
+input.
 
 Each item's seconds come from the run's own record where one exists (a G1-style row's ``seconds`` or
 ``build_s + simulate_s``), else from the campaign log's start and end lines (one job at a time), else
@@ -46,17 +48,19 @@ CHARGED: list[tuple[str, str, float, str]] = [
      688.0, "dse_cg/logs/devcal.log (105 + 244 + 95 + 244 s)"),
     ("integration", "the six points: 3 + 5 csynth kernels, 4 + 7 part syntheses, 6 RTL runs (step 2c)",
      8891.4, "hw/build/dse/points/*.json: each identity's row once (hls 698 s, synth 2,458 s, rtlsim 5,735 s)"),
+    # Charged by the user's decision (2026-11-12): the retired units' calibration, from the same campaign;
+    # this system uses SystolicEngine and VecUnit, so no model here reads these.
+    ("systolic unit", "linalg_cal fit / holdout / fit2 / holdout3 (Stage 4)", 4459.0,
+     "calib_2025_1/logs/laneA.log 02:22:52-03:37:11"),
+    ("CG unit", "cg_cal fit / holdout2, and their rerun after the LOOP_FLATTEN fix (Stage 4)", 4832.0,
+     "calib_2025_1/logs/laneB.log 02:32:12-03:10:31, laneC.log 09:27:16-10:09:29"),
 ]
 
 #: ``(unit, what, seconds or None if not totalled, why not charged)``.
 NOT_CHARGED: list[tuple[str, str, float | None, str]] = [
-    ("systolic unit", "linalg_cal fit / holdout / fit2 / holdout3 (Stage 4)", 4459.0,
-     "SystolicUnit: this system uses SystolicEngine (laneA.log 02:22:52-03:37:11)"),
-    ("CG unit", "cg_cal fit / holdout2, and their rerun after the LOOP_FLATTEN fix (Stage 4)", 4832.0,
-     "CgVectorUnit: this system uses VecUnit (laneB.log 02:32:12-03:10:31, laneC.log 09:27:16-10:09:29)"),
     ("system", "the step 1a / 1f gates and the live gate", None,
      "development: they built and checked the framework (hours, several timed out), not a model's input"),
 ]
 
-#: The Waveflow arm's calibration charge, in tool-seconds (about 8.0 hours).
+#: The Waveflow arm's calibration charge, in tool-seconds (about 10.6 hours).
 CALIBRATION_S: float = round(sum(s for _, _, s, _ in CHARGED), 1)
