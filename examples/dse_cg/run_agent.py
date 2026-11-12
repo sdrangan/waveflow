@@ -161,6 +161,22 @@ def settings(pilot: bool, overrides: dict) -> dict:
     return s
 
 
+def find_objective(objective_id: str, pilot: bool) -> dict:
+    """The objective *objective_id*: a pre-registered one (``prereg.OBJECTIVES``), or, for a pilot
+    only, an exploratory one (``deadline.OBJECTIVES``, chosen after G1 and never scored)."""
+    from examples.dse_cg import deadline, prereg
+
+    found = [o for o in prereg.OBJECTIVES if o["id"] == objective_id]
+    extra = [o for o in deadline.OBJECTIVES if o["id"] == objective_id]
+    if found:
+        return found[0]
+    if extra and pilot:
+        return extra[0]
+    if extra:
+        raise SystemExit(f"{objective_id} is exploratory (deadline.py), not pre-registered: --pilot only")
+    raise SystemExit(f"{objective_id}: no such objective")
+
+
 async def _drive(options: Any, prompt: str, service: Any, transcript_path: Path,
                  max_wall_s: float | None) -> tuple[list[dict], dict | None, str]:
     """Run the session; every message to *transcript_path* as it arrives.  ``(transcript, the
@@ -180,6 +196,8 @@ async def _drive(options: Any, prompt: str, service: Any, transcript_path: Path,
                 fh.flush()
                 if d["type"] == "ResultMessage":
                     result = d
+                    if service.closed:      # the turn that submitted has ended ("ended"): stop
+                        return              # here, so a session a background task keeps open cannot hang
                 if service.closed:
                     after += 1
                     if after > AFTER_SUBMIT:
@@ -200,13 +218,13 @@ def run_one(arm: str, objective_id: str, seed: int, root: Path, pilot: bool = Fa
     from claude_agent_sdk import ClaudeAgentOptions
     from claude_agent_sdk import __version__ as sdk_version
 
-    from examples.dse_cg import brief, prereg
+    from examples.dse_cg import brief
     from examples.dse_cg import service as sv
     from examples.dse_cg.grid import TABLE
     from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
 
     s = settings(pilot, overrides or {})
-    objective = next(o for o in prereg.OBJECTIVES if o["id"] == objective_id)
+    objective = find_objective(objective_id, pilot)
     if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")):
         raise SystemExit("no API credential: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
     table = Path(table or TABLE)

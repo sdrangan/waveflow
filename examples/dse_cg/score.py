@@ -34,6 +34,7 @@ class Truth:
                 if f.is_file() else []
             self.t[fn] = {r["key"]: r["row"] for r in rows}
         self._ids: dict[str, dict] = {}
+        self._measured: dict[str, dict | None] = {}
 
     def _key(self, p: dict) -> str:
         import json
@@ -49,7 +50,15 @@ class Truth:
     def measured(self, p: dict) -> dict | None:
         """The design's measured metrics, or ``None`` if a part or run is missing: the built parts'
         synthesized ``lut``, ``ff``, ``dsp``, ``bram`` (Shared Mem's block RAM by formula added, as
-        the service's rows have it), ``t_upd_ms`` at each ``t``, and ``golden``'s losses."""
+        the service's rows have it), ``t_upd_ms`` at each ``t``, and ``golden``'s losses.  Computed
+        once a design (the identities are slow) and returned as a copy."""
+        k = self._key(p)
+        if k not in self._measured:
+            self._measured[k] = self._measure(p)
+        m = self._measured[k]
+        return None if m is None else dict(m)
+
+    def _measure(self, p: dict) -> dict | None:
         from examples.dse_cg.service import eval_key
 
         d, out = self.design, {}
