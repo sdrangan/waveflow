@@ -338,6 +338,46 @@ def test_the_scripted_policies_find_the_optimum(arm):
     assert verified <= (4 if arm == "waveflow" else 8), (arm, verified)
 
 
+class Pessimistic(Synthetic):
+    """``hls_estimate`` over its kernels' synthesis by 1.9x, as csynth's LUT estimate of the LTBF
+    kernels is (plan row of 2026-11-12)."""
+
+    def call(self, what, *args):
+        if what == "hls_estimate":
+            kernel, p = args
+            self.calls.append(what)
+            node = {"ltbf_sys": "sys", "ltbf_vec": "vec", "ltbf_hub": "hub"}[kernel]
+            est = {r: round(v * 1.9) for r, v in self.part(node, p).items()}
+            return {"kernel": kernel, "status": "ok", **est, "latency": None}, COST["hls_estimate"]
+        return super().call(what, *args)
+
+
+@pytest.mark.parametrize("calibrate", [True, False])
+def test_the_traditional_rule_corrects_its_estimate_on_one_synthesis(calibrate):
+    """Minimize T_upd under a LUT limit that only the smallest designs meet (20,000; the smallest
+    estimate is over 30,000): corrected by one synthesis, the traditional policy finds the fastest design
+    under the limit; uncorrected, it removes every design and submits nothing (step 6's ablation)."""
+    from examples.dse_cg import policies
+    from examples.dse_cg.prereg import OBJECTIVES
+    from examples.dse_cg.skill.dse import dselib
+
+    obj = {**OBJECTIVES[1], "id": "tupd_lut20k",
+           "subject_to": [{**c, "value": 20_000} if c["metric"] == "lut" else c for c in OBJECTIVES[1]["subject_to"]]}
+    be = Pessimistic()
+    s = sv.Service(Design(), "traditional", obj, None, 2, be, None)
+    dselib.bind(s)
+    try:
+        out = policies.traditional(dselib, obj, lambda lib, o, c: policies.rank_traditional(lib, o, c, calibrate))
+    finally:
+        dselib.bind(None)
+    if not calibrate:
+        assert out["submitted"] is None and "synth" not in be.calls
+        return
+    sub = out["submitted"]
+    assert out["accepted"] and sub["mem_rate"] == 1 and out["value"] == pytest.approx(4.7)
+    assert Synthetic.total(Design().fill(sub))["lut"] <= 20_000
+
+
 def synthetic_table(tmp_path, design):
     """G1's table for Synthetic over every legal design of the space, in ``grid.py``'s layout."""
     import itertools

@@ -11,9 +11,12 @@ metrics their calls returned: synthesized ``lut``/``ff``/``dsp``/``bram``, ``t_u
 parameters and its legality rules) and nothing measured beforehand.
 
     python -m examples.dse_cg.policies --table <G1 table> --out <records root>
+    python -m examples.dse_cg.policies --table <G1 table> --out <records root> --uncalibrated
 
 runs both policies on every objective on the replay backend and writes one record each (``score.py``'s
-layout); ``score.summarize`` over them is step 6's result.
+layout); ``score.summarize`` over them is step 6's result.  ``--uncalibrated`` runs the traditional
+policy with its ``hls_estimate`` uncorrected, the rule as first written (the ablation; plan row of
+2026-11-12).
 """
 
 from __future__ import annotations
@@ -122,26 +125,37 @@ def speed_rank(p: dict) -> tuple:
     return (p["mem_rate"], -p["banks"], -p["R"] * p["C"], -p["L"], -p["cg_window"])
 
 
-def rank_traditional(lib, objective: dict, cands: list[dict]) -> list[dict]:
+def rank_traditional(lib, objective: dict, cands: list[dict], calibrate: bool = True) -> list[dict]:
     """The hardware team's ranking, without pysim.
 
     A resource objective (``lut``, ``ff``, ``dsp``, ``bram``): ``hls_estimate`` every candidate (one
     csynth a kernel identity, the quick look a team takes), ranked by its kernels' total of that
-    resource, ties broken by :func:`speed_rank`.  A timing objective: :func:`speed_rank`.  Either way a
-    resource constraint is applied to the kernels' totals first (the estimate leaves out the glue and
-    the crossbar, so it errs on the permissive side, and verification has the last word)."""
+    resource, ties broken by :func:`speed_rank`.  A timing objective: :func:`speed_rank`.
+
+    A resource constraint is applied to the kernels' totals, corrected first: the team synthesizes the
+    candidate it would verify first and scales each resource's estimate by measured / estimated on it
+    (csynth's LUT estimate of these kernels is about 1.9x their synthesis, its BRAM about 0.2x; plan
+    row of 2026-11-12), and verification has the last word.  *calibrate* False applies the constraint
+    to the totals as they are, the rule as first written (step 6's ablation: there a LUT constraint
+    removes every design)."""
     res_cons = [c for c in objective.get("subject_to", []) if c["metric"] in RESOURCES]
+    if not (objective["minimize"] in RESOURCES or res_cons):
+        return sorted(cands, key=speed_rank)
     est: dict[tuple, dict] = {}
-    if objective["minimize"] in RESOURCES or res_cons:
-        for row in lib.wait([lib.hls_estimate([p]) for p in cands]):
-            if row.get("status") == "ok":
-                est[_key(row["params"])] = {r: sum(float(k.get(r) or 0) for k in row["kernels"].values())
-                                            for r in RESOURCES}
-        cands = [p for p in cands if _key(p) in est and feasible(est[_key(p)], {"subject_to": res_cons})]
-    if objective["minimize"] in RESOURCES:
-        r = objective["minimize"]
-        return sorted(cands, key=lambda p: (est[_key(p)][r], speed_rank(p)))
-    return sorted(cands, key=speed_rank)
+    for row in lib.wait([lib.hls_estimate([p]) for p in cands]):
+        if row.get("status") == "ok":
+            est[_key(row["params"])] = {r: sum(float(k.get(r) or 0) for k in row["kernels"].values())
+                                        for r in RESOURCES}
+    cands = [p for p in cands if _key(p) in est]
+    r0 = objective["minimize"] if objective["minimize"] in RESOURCES else None
+    order = sorted(cands, key=lambda p: (est[_key(p)][r0], speed_rank(p))) if r0 else sorted(cands, key=speed_rank)
+    scale: dict[str, float] = {}
+    if res_cons and calibrate and order:
+        m, e = lib.wait([lib.synth([order[0]])])[0], est[_key(order[0])]
+        if m.get("status") == "ok":
+            scale = {r: float(m[r]) / e[r] for r in RESOURCES if e[r] and m.get(r) is not None}
+    return [p for p in order
+            if feasible({r: v * scale.get(r, 1.0) for r, v in est[_key(p)].items()}, {"subject_to": res_cons})]
 
 
 def traditional(lib, objective: dict, rank: Callable[[Any, dict, list[dict]], list[dict]] | None = None,
@@ -230,9 +244,11 @@ def waveflow(lib, objective: dict, top_k: int = 2) -> dict:
 
 
 def run_scripted(arm: str, objective: dict, table: Path, out_dir: Path, budget_s: float | None = None,
-                 k_workers: int = 2, design: Any = None, backend: Any = None) -> Path:
+                 k_workers: int = 2, design: Any = None, backend: Any = None, calibrate: bool = True) -> Path:
     """One scripted run on the replay backend over G1's *table*, recorded in *out_dir* as an agent run
-    is (``record.json`` and ``ledger.jsonl``, ``score.py``'s layout).  The ledger starts empty."""
+    is (``record.json`` and ``ledger.jsonl``, ``score.py``'s layout).  The ledger starts empty.
+    *calibrate*: the traditional rule's, :func:`rank_traditional`."""
+    import functools
     import json
     import time
 
@@ -252,12 +268,15 @@ def run_scripted(arm: str, objective: dict, table: Path, out_dir: Path, budget_s
     dselib.bind(s)
     t0 = time.perf_counter()
     try:
-        out = traditional(dselib, objective) if arm == "traditional" else waveflow(dselib, objective)
+        out = traditional(dselib, objective, functools.partial(rank_traditional, calibrate=calibrate)) \
+            if arm == "traditional" else waveflow(dselib, objective)
     finally:
         dselib.bind(None)
     rec = {"arm": arm, "objective": objective["id"], "agent": "scripted", "seed": 0, "void": False,
            "budget_s": budget_s, "k_workers": k_workers, "wall_s": time.perf_counter() - t0,
            "outcome": out, "table": str(table)}
+    if arm == "traditional":
+        rec["calibrate"] = calibrate
     (out_dir / "record.json").write_text(json.dumps(rec, indent=1, default=str), encoding="utf-8")
     return out_dir
 
@@ -272,13 +291,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--table", type=Path, required=True, help="G1's table (grid.py table + finish)")
     ap.add_argument("--out", type=Path, required=True, help="the records' root")
     ap.add_argument("--objective", action="append", help="an objective id (default: every one)")
+    ap.add_argument("--uncalibrated", action="store_true",
+                    help="the traditional policy only, its estimate uncorrected (the rule as first written; "
+                         "step 6's ablation), into scripted_uncalibrated/")
     a = ap.parse_args(argv)
+    arms, sub = (("traditional",), "scripted_uncalibrated") if a.uncalibrated else (("traditional", "waveflow"), "scripted")
     for o in prereg.OBJECTIVES:
         if a.objective and o["id"] not in a.objective:
             continue
-        for arm in ("traditional", "waveflow"):
-            d = run_scripted(arm, o, a.table, a.out / arm / o["id"] / "scripted", prereg.BUDGET_S,
-                             prereg.K_WORKERS)
+        for arm in arms:
+            d = run_scripted(arm, o, a.table, a.out / arm / o["id"] / sub, prereg.BUDGET_S,
+                             prereg.K_WORKERS, calibrate=not a.uncalibrated)
             print(arm, o["id"], json.loads((d / "record.json").read_text())["outcome"], flush=True)
     return 0
 
