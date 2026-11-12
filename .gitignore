@@ -411,3 +411,6 @@ examples/ssr_fft/system/
 
 # Personal Claude Code instructions (venv path, toolchain version, OS): per machine, never shared.
 CLAUDE.local.md
+
+# Local secrets: the agent runs' API credential (plans/dse_cg.md step 7); never committed
+/.secrets/
