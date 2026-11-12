@@ -86,12 +86,13 @@ MODEL = "claude-opus-5-5"
 #: The agent's effort (the Agent SDK's ``effort``), identical in both arms (the user's choice, 2026-11-12).
 EFFORT = "high"
 
-#: The turn limit of a run (the Agent SDK's ``max_turns``).  TBD
-MAX_TURNS = None
+#: The turn limit of a run (the Agent SDK's ``max_turns``): about 3x the most any pilot used (17 of
+#: six pilots, 2026-11-12; the user's rule), so that it guards against a looping agent without binding.
+MAX_TURNS = 50
 
 #: The wall-clock limit of a run, seconds: a guard against a stuck session (the budget is tool time,
-#: on the service's clock).  TBD
-MAX_WALL_S = None
+#: on the service's clock); about 3x the longest pilot (143 s of six, 2026-11-12; the user's rule).
+MAX_WALL_S = 450.0
 
 #: The agent's container (``agent/Dockerfile``): what its file tools and shell can see.  Its image
 #: digest is recorded here when the pre-registration is frozen.
