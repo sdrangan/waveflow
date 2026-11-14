@@ -258,6 +258,58 @@ A short internal note in the style of the tight-deadline note:
 
 **Pause here** and decide the next step with the user.
 
+### S7 (follow-up). A spectrum-sensing receiver where data and timing interact
+
+Only after S6, and only if the user decides to go on. It reuses S1's harness and
+S2's method, and repeats S3–S6 on a richer DUT.
+
+**Why.** In the S1–S6 toy, overflow depends only on timing. A smart agent can
+split the problem: a timing-only queue model for the drops, the untimed model
+for the data, combined by Monte Carlo. This variant makes the data change the
+timing, so that split gives the wrong answer.
+
+**The DUT.** The receiver takes an FFT of each frame and forms a short-time
+PSD. It averages the PSD over a band and across frames, and declares a
+detection when the average crosses a threshold. Frames the input FIFO drops are
+missing from the average.
+
+**The two-way coupling.** When a detection fires, the receiver extracts the
+detected band (or runs a finer FFT on it) and writes the result to the shared
+memory. That traffic arrives exactly when a signal is present, so frames are
+dropped more often exactly when they matter:
+
+> signal → detection → extraction writes → contention → overflow → dropped
+> frames → thinner average → miss.
+
+Signals that arrive with bursts of background traffic make the correlation
+stronger.
+
+**The requirement.** P(miss) ≤ a target of about 10⁻² to 10⁻³, over a set of
+signal scenarios (bandwidths, levels, arrival patterns). A miss has two causes:
+an FFT too coarse to resolve the signal, or too many dropped frames.
+
+**Design parameters,** added to the toy's FIFO depth, banks and burst length:
+FFT size, averaging length, detection threshold, and the extraction's buffer
+and burst size. A larger FFT resolves narrower signals but takes longer per
+frame and uses more memory, so the best size lies in the middle and moves with
+the background load.
+
+**What to measure, beyond S6's list:**
+
+- the true P(miss) against the estimate from the decomposition above (drops
+  simulated without the signal, then combined with the detector); the gap is
+  the error an agent makes by assuming drops and signals are independent;
+- whether baseline agents assume independence, or simulate data and timing
+  jointly;
+- the build cost and accuracy of the hand-written simulator of S2 for this DUT,
+  in both forms (decomposed and joint).
+
+**Reuse.** Waveflow's FFT examples (`examples/ssr_fft`, `examples/vitis_fft`)
+are the starting point for the FFT stage.
+
+**Done when:** the S6-style note covers this DUT, including the independence
+gap, and the user has decided what comes next.
+
 ## 6. What would count as a clear result
 
 - **PySim helps:** at PySim errors of 3 % or less, the simulator arm submits at
