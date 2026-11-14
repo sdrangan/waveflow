@@ -58,15 +58,15 @@ formulas. The agent's tools are views of it:
 | Untimed model | The DUT's bit-exact output, so the data-dependent quantities | per block, small |
 | HLS estimate | Per-block resources and latency, no contention | about 1 min |
 | Synthesis | True resources plus small noise | about 6 min |
-| RTL simulation | True cycles and overflow events for the requested length | about 1,000 cycles/s |
-| PySim (simulator arm only) | The true model with a tunable error: a timing bias, a spread, one effect left out | about 10⁶ cycles/s |
+| RTL simulation | True cycles and overflow events for the requested length | about 160 s to build, then about 1,800 cycles/s |
+| PySim (simulator arm only) | The true model with a tunable error: a timing bias, a spread, one effect left out | about 5×10⁵ cycles/s |
 
-The tool rates are assumptions taken from the CG grid (about 850k cycles in
-12–15 min of RTL simulation, about 1 s in PySim). They are parameters of the
+The tool rates are the CG grid's medians (S0, Q3), not the toy's: the toy is a
+smaller design, and its rates are still unknown. They are parameters of the
 harness.
 
-The harness reuses the service's ledger and scoring if its backend can be
-swapped (question 2 in S0). The virtual clock is event-driven over 2 worker
+The harness reuses the service's ledger, cache and scoring through a new
+backend (S0, Q2). The virtual clock is event-driven over 2 worker
 slots, so a batch is charged by when the slots free up. Results return at once.
 
 ## 4. Arms and scoring
@@ -88,58 +88,104 @@ slots, so a batch is charged by when the slots free up. Results return at once.
 
 ## 5. Steps
 
-### S0. Answers from Ali, before building anything
+### S0. Questions before building, and their answers
 
 Four questions decide how much work S1 is and whether the toy's central
-assumption holds. Ask them first and write the answers here.
+assumption holds. Q1, Q2 and most of Q3 were answered on 2026-11-14 by reading
+`main` (at `3165c45`) and Ali's branch `paper/ltbf_cg_dse_agentic` (at
+`c26043a`), and the CG grid's measurements. What remains for Ali is at the end
+of this step.
 
-**Q1. Which parts of the toy does Waveflow already model?** The true model
-needs a FIFO, a banked shared memory, an arbiter and a traffic generator. The
-CG system has a shared memory; the others may not exist.
+**Q1. Which parts of the toy does Waveflow already model?**
 
-- *If Waveflow has them:* build the true model from them. S1 is shorter. The
-  true model and PySim then share code, so PySim's error must be added on
-  purpose (§3), and the hand-written simulator in S2 must not reuse those
-  units.
-- *If it doesn't:* write the true model as a small standalone event-driven
-  Python program. It doesn't need to be Waveflow. S1 takes longer.
+| Part of the toy | In Waveflow | Where |
+|---|---|---|
+| Input FIFO that never stalls and counts drops | Yes. The framework's sample buffer between a converter and a design: its ingress never stalls, and pysim counts dropped samples. A pysim twin of hand-written RTL. | `waveflow/hw/rf_samp_buf.py` (`RfSampBufRx`) |
+| Banked shared memory | Yes. A memory model with `banks` and `mem_rate`, each bank on its own crossbar port, used by the CG system. At RTL it is the framework's behavioural memory, so its block RAM comes from a formula. | `examples/dse_cg/ltbf_cg_mem.py` on Ali's branch; `waveflow/hw/memory.py` |
+| Crossbar and contention | Yes. `AXIMMCrossBarIF` routes masters to slaves; each slave port is a SimPy resource per direction, with a calibrated bus-occupancy model (`BusTiming`). The AMD crossbar IP's area and latency are measured per shape. | `waveflow/hw/memif.py`; `examples/xbar_profile/` |
+| Arbiter policy | Partly. Contending masters are served in request order (a SimPy resource). There is no round-robin or weighted option. | `waveflow/hw/memif.py` (`MMIFSlave`) |
+| Random background traffic | No. No traffic-generator module was found. | |
+| Data-dependent stage | No ready-made one for this toy. | |
+
+*Choice:* build the true model from these units: `RfSampBufRx` as the DUT's
+front end, the CG system's banked memory behind `AXIMMCrossBarIF`. Write two
+small new pieces: a traffic generator (an `MMIFMaster` issuing bursts with
+heavy-tailed on-periods) and a data-dependent stage. Make the arbiter's policy a
+parameter (a priority resource) only if S2 shows request order is too easy.
+Since the true model and PySim share these units, PySim's error is added on
+purpose (§3), and the hand-written simulator in S2 uses none of them.
+
+*Note for later:* the AMD crossbar IP has its own arbitration, which pysim's
+request-order model may not match. In Part A that mismatch is a natural choice
+for the "effect left out" of PySim's error. With real tools it is a calibration
+item.
 
 **Q2. Can the service answer calls from a model instead of the measured
-grid?** In the DAC runs, the service looks each call up in the 384-design table,
-charges the measured tool time to the ledger and scores the run.
+grid?** Yes. `examples/dse_cg/service.py` (Ali's branch) talks to its backend
+through one method, `call(what, *args) -> (row, cost_s)`; `ReplayBackend` (the
+grid) and `LiveBackend` (the tools) both implement it. The service itself keeps
+the ledger, the cache by identity, the 2 worker slots on a virtual clock, the
+budget and the submit rule.
 
-- *If the lookup is one replaceable piece:* reuse the service, the ledger, the
-  scoring and the agent-run scripts. S1 becomes the true model plus a small
-  adapter.
-- *If it isn't:* write a minimal standalone harness (tool calls, virtual clock
-  over 2 worker slots, ledger), and keep its ledger in the same format so the
-  existing scoring and plotting scripts still work. Don't refactor the service
-  for this.
+*Choice:* add a third backend, `ModelBackend`, that answers from the true model
+and returns the charged times of §3, and a design adaptor for the toy
+(a `DseAdaptor` subclass: `space`, `golden`, `pysim`, `synth`, `rtlsim`,
+`hls_estimate`, `identities`, `sim_identity`). Three things need small changes
+or additions, not a refactor:
 
-**Q3. How fast are RTL simulation and PySim, in cycles per second, for a design
-of this size?** The toy works only if checking the tail with RTL is too slow for
-the baseline to test many designs. At ε = 10⁻⁴ a tail estimate needs about
-3×10⁷ cycles.
+- *Run length and seed.* A tail estimate is an RTL run of a chosen length. The
+  workload carries the number of blocks and the seed, so a longer run is a new
+  simulation identity, and `rtlsim`'s charge (build once per build, then
+  `simulate_s`) follows from `ModelBackend`'s `simulate_s = cycles / rate`.
+- *Submit rule.* Today a design is accepted if it was synthesized and
+  RTL-simulated on the objective's workloads. For the toy, the RTL run must be a
+  seed-matched check of PySim or of the agent's own model, not a full tail
+  estimate. Decide the rule in S1 and write it here.
+- *Scoring.* `score.py` scores time to a known optimum. The toy's primary score
+  is the resources of the submitted design among designs that truly meet the
+  limit. `score.py` already has an anytime curve (`anytime_curve`), which the
+  secondary score can use.
 
-- *If RTL runs at about 10³ cycles/s and PySim is 100× faster or more:* keep
-  the harness defaults (§3). One RTL tail estimate takes about 8 h, the whole
-  budget.
-- *If RTL is much faster, say 10⁴ cycles/s:* one RTL tail estimate takes about
-  50 min, and the baseline can test about 10 designs in 8 h. Make the
-  requirement stricter (smaller ε) or the blocks longer, so that one RTL tail
-  estimate still takes at least a quarter of the budget.
-- *If PySim is less than about 30× faster than RTL:* speed alone won't separate
-  the arms. Say so in the S6 note, and decide with the user whether to go on.
-- *If nobody knows yet:* run the harness at two speed ratios, 100× and 1,000×,
-  and report both.
+**Q3. How fast are RTL simulation and PySim?** For the CG system, from the
+grid's 247 RTL runs and 768 PySim runs (`data/g1/` in the paper repository):
 
-**Q4. Is the DAC-period work merged into Waveflow's `main`?** The user asked Ali
-to merge it there. Start S1 from `main` once the merge is done. If it isn't done
-yet, start from `paper/ltbf_cg_dse_agentic` and rebase onto `main` later. This
-doesn't change the plan.
+| | Median | Range |
+|---|---|---|
+| RTL simulation | 1,800 cycles/s, plus about 160 s to build | 780–3,200 cycles/s |
+| PySim | 5.5×10⁵ cycles/s (about 1.8 s a design) | 1.4×10⁵–9.1×10⁵ cycles/s |
 
-**Done when:** the four answers and the choice made for each are written in
-this step.
+So PySim is about 300× faster than RTL on the CG system. At ε = 10⁻⁴ a tail
+estimate needs about 3×10⁷ cycles: about 4.6 h of RTL, about a minute of PySim.
+
+*Choice:* use these rates in the harness (§3), and also run it at 100× and
+1,000× (S5). The toy is a much smaller design, so its RTL may run several times
+faster per cycle, and its PySim cost depends on how many events a cycle needs.
+If the toy's own ratio comes out below about 30×, speed alone won't separate the
+arms; the S6 note says so and the user decides whether to go on. If RTL is fast
+enough that one tail estimate takes less than a quarter of the 8-h budget, make
+ε smaller or the blocks longer.
+
+**Q4. Is the DAC-period work merged into `main`?** Not yet. `main` has an
+earlier `examples/dse_cg/`; the service's backends, the calibration and
+integration code, `ltbf_cg_mem.py` and the tight-deadline work are on
+`paper/ltbf_cg_dse_agentic`. Two related branches also exist,
+`paper/ltbf_cg_mem_dse` and `paper/ltbf_cg_seq_dse`.
+
+*Choice:* start S1 from `main` once Ali's merge lands. Until then, start from
+`paper/ltbf_cg_dse_agentic` and rebase onto `main` later.
+
+**Still for Ali:**
+
+1. Roughly how fast does XSI simulate a design the toy's size (a sample buffer,
+   a small block, a 2-bank memory and a crossbar)? Is it far faster per cycle
+   than the CG system's 1,800 cycles/s?
+2. Does the AMD crossbar IP arbitrate round-robin, and does pysim's request-order
+   model match it closely enough in the CG runs?
+3. When will `paper/ltbf_cg_dse_agentic` be merged into `main`, and should the
+   two other `paper/` branches be merged too?
+
+**Done when:** Ali's three answers are written here, and the choices above are
+confirmed or changed.
 
 ### S1. True model and harness
 
