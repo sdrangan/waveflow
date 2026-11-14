@@ -1,7 +1,7 @@
 # Plan: a toy experiment on the value of a calibrated simulator
 
-**Status: DRAFT, not started, written 2026-11-14.** Follows the tight-deadline
-experiment of `plans/dse_cg.md` and reuses its service, ledger and scoring where
+**Status: DRAFT, not started, written 2026-11-14.** Follows the agentic DSE study
+of `plans/dse_cg.md` and its tight-deadline experiment, and reuses its service, ledger and scoring where
 it can (S0, Q2). Separate from `plans/dse_arch.md`: this plan isolates one
 question on one small design before any architecture search.
 
