@@ -16,6 +16,8 @@ recursive-include waveflow *.txt
 recursive-include waveflow *.md
 recursive-include waveflow/templates *
 recursive-include waveflow/assets *
+recursive-include waveflow/board/boards *
+recursive-include waveflow/board/tcl *
 
 # Shipped calibration corpus + fixtures (reference platforms, sweep harnesses) — every file type,
 # including the distilled corpus.csv the *.json recursion above does not cover.

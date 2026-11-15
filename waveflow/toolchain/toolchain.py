@@ -14,6 +14,7 @@ MIN_TOOL_VERSION: Tuple[int, int] = (2025, 1)
 
 VITIS_PATH_ENV = "WAVEFLOW_VITIS_PATH"
 VIVADO_PATH_ENV = "WAVEFLOW_VIVADO_PATH"
+VIVADO_ERROR_SENTINEL = "WAVEFLOW_ERROR:"
 
 
 def _is_tool_binary(path: Path, binary_name: str) -> bool:
@@ -545,6 +546,78 @@ def _csynth_top(tcl_script: Union[str, Path]) -> Optional[str]:
         return None
     m = re.search(r"^\s*set_top\s+(\w+)", text, re.M)
     return m.group(1) if m and "csynth_design" in text else None
+
+
+def run_vivado(
+    tcl_script: Union[str, Path],
+    work_dir: Optional[Union[str, Path]] = None,
+    *,
+    args: Optional[Sequence[str]] = None,
+    capture_output: bool = True,
+    env: Optional[Dict[str, str]] = None,
+    required_version: Optional[str] = None,
+) -> subprocess.CompletedProcess:
+    """Execute a Tcl script in Vivado batch mode with local log and journal files.
+
+    ``required_version`` is compared exactly with Vivado's ``YYYY.M`` release before the script
+    runs. Board build steps must pass their :class:`~waveflow.board.Board` version here. Tcl
+    scripts should prefix explicit validation failures with ``WAVEFLOW_ERROR:``; when output is
+    captured, the runner rejects that sentinel even if the script accidentally exits zero.
+    """
+    vivado_path = find_vivado_path()
+    if not vivado_path:
+        raise RuntimeError(
+            "Vivado installation not found. Please set WAVEFLOW_VIVADO_PATH "
+            "(run `test_amd_tools` to diagnose)."
+        )
+
+    if required_version is not None:
+        actual_version = tool_version(vivado_path, "-version")
+        if actual_version != required_version:
+            actual = actual_version if actual_version is not None else "unknown"
+            raise RuntimeError(
+                f"Vivado version mismatch: board requires {required_version}, found {actual} "
+                f"at {vivado_path}"
+            )
+
+    tcl_path = Path(tcl_script).resolve()
+    run_dir = Path(work_dir).resolve() if work_dir is not None else tcl_path.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    cmd_list = [
+        str(vivado_path),
+        "-mode", "batch",
+        "-journal", str(run_dir / "vivado.jou"),
+        "-log", str(run_dir / "vivado.log"),
+        "-source", str(tcl_path),
+    ]
+    if args:
+        cmd_list.append("-tclargs")
+        cmd_list.extend(str(arg) for arg in args)
+
+    final_cmd, use_shell = _build_final_cmd(cmd_list)
+    final_env = None
+    if env is not None:
+        final_env = os.environ.copy()
+        final_env.update(env)
+
+    result = subprocess.run(
+        final_cmd,
+        cwd=run_dir,
+        shell=use_shell,
+        check=True,
+        text=True,
+        capture_output=capture_output,
+        env=final_env,
+    )
+    if capture_output:
+        output = f"{result.stdout or ''}\n{result.stderr or ''}"
+        sentinel_lines = [
+            line.strip() for line in output.splitlines()
+            if line.strip().startswith(VIVADO_ERROR_SENTINEL)
+        ]
+        if sentinel_lines:
+            raise RuntimeError("Vivado Tcl reported failure: " + " | ".join(sentinel_lines))
+    return result
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:

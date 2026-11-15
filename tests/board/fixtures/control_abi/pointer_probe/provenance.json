@@ -1,0 +1,12 @@
+{
+  "tool_version": "2025.1",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "hls_period_ns": 10,
+  "vlnv": "waveflow:hls:pointer_probe:1.0",
+  "generated": "2026-09-30",
+  "hashes": {
+    "pointer_probe.cpp": "f5399d4bc463ad063f433077e50c7a052c0ba1c67f993a79202189e06012c583",
+    "control.h": "c0143bb705f567855f99e51520987f70647dba26d01d1d85a22169c38dea3669",
+    "component.xml": "1003e1e50ba19a4c2ec5612d925de813affe8e1e482fdfc482634d45fdf22c24"
+  }
+}

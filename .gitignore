@@ -402,3 +402,10 @@ examples/ssr_fft/system/
 
 # Personal Claude Code instructions (venv path, toolchain version, OS): per machine, never shared.
 CLAUDE.local.md
+
+# Board packaging source resources and parser conformance fixtures.
+board_build/
+!waveflow/board/boards/**/*.xml
+!waveflow/board/boards/**/*.json
+!tests/board/fixtures/control_abi/*/component.xml
+!tests/board/fixtures/control_abi/*/provenance.json

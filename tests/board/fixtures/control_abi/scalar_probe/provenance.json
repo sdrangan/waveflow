@@ -1,0 +1,12 @@
+{
+  "tool_version": "2025.1",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "hls_period_ns": 10,
+  "vlnv": "waveflow:hls:scalar_probe:1.0",
+  "generated": "2026-09-30",
+  "hashes": {
+    "scalar_probe.cpp": "9bb2675528bc1dc0a020392331fb97a3044b228ab5e71484ae037b8cadce0802",
+    "control.h": "177fe6c8e33f7044325356d622736948c0688fd95297bb6d81b8b8dde0b41f0e",
+    "component.xml": "6e4af00e0391772e39483cb8f5b74782b9906a6b9a47b1a478486f73f2bc82f1"
+  }
+}
