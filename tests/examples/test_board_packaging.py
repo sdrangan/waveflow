@@ -143,7 +143,7 @@ def test_board_codegen_uses_current_sources(tmp_path, factory, config, top):
         assert "int32_t" in header or "ap_int<32>" in header
 
 
-def synthetic_overlay(root, name, cls, host, *, legacy_coefficients=False):
+def synthetic_overlay(root, name, cls, host, *, legacy_coefficients=False, schema_version=2):
     """Ephemeral integrity fixture; never a real BIT/HWH or a Vitis receipt."""
     abi = model_abi(elaborate(cls).regmap)
     spec = HlsControlSpec(f"waveflow:hls:{name}:1.0", "s_axi_control", 0x10000,
@@ -154,15 +154,22 @@ def synthetic_overlay(root, name, cls, host, *, legacy_coefficients=False):
         spec = replace(spec, modeled_fields=(*spec.modeled_fields, "coeffs"),
                        fields=(*spec.fields, ControlField("coeffs", "array", 0x40, 32,
                                                           "RW", count=4, stride=4)))
-    generated = generate_host_driver(spec, root)
-    overlay = generated.manifest.parent
-    for suffix in ("bit", "hwh", "xsa"):
+    generated = generate_host_driver(spec, root / "generated")
+    overlay = root / "overlay"
+    overlay.mkdir()
+    shutil.copyfile(generated.driver, overlay / "driver.py")
+    for suffix in (("bit", "hwh", "xsa") if schema_version == 1 else ("bit", "hwh")):
         (overlay / f"{name}.{suffix}").write_text("synthetic test fixture only")
     dm = json.loads(generated.manifest.read_text())
-    record = {"schema_version": 1, "validation_level": "collected_overlay",
+    record = {"schema_version": schema_version, "validation_level": "collected_overlay",
               "target": {"board": "rfsoc4x2"}, "abi_sha256": dm["abi_sha256"],
-              "driver_manifest_sha256": host.sha256(generated.manifest),
               "address_map": [{"segment": f"{name}/s_axi_control/Reg", "offset": 0xA1000000, "size": 0x10000}]}
+    if schema_version == 1:
+        shutil.copyfile(generated.manifest, overlay / "driver_manifest.json")
+        shutil.copyfile(generated.driver.parent / "control_abi.json", overlay / "control_abi.json")
+        record["driver_manifest_sha256"] = host.sha256(generated.manifest)
+    else:
+        record["vlnv"] = spec.vlnv
     if name == "poly":
         record["address_map"].append({"segment": "dma/S_AXI_LITE/Reg", "offset": 0xA1010000, "size": 0x10000})
     record["files"] = {p.name: host.sha256(p) for p in overlay.iterdir()}
@@ -171,20 +178,55 @@ def synthetic_overlay(root, name, cls, host, *, legacy_coefficients=False):
 
 
 @pytest.mark.parametrize("name,cls,host", [("simp_fun", SimpFun, simp_host), ("poly", PolyAccel, poly_host)])
-def test_pynq_staging_preserves_package_and_checks_integrity(tmp_path, name, cls, host):
-    path = synthetic_overlay(tmp_path, name, cls, host)
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_pynq_staging_preserves_package_and_checks_integrity(tmp_path, name, cls, host, schema_version):
+    path = synthetic_overlay(tmp_path, name, cls, host, schema_version=schema_version)
     manifest, record = host.verify_overlay(path)
     bit = host._pynq_bitfile(manifest, record)
     assert bit.is_file() and bit.with_suffix(".hwh").is_file()
     assert not bit.with_suffix(".xsa").exists()
-    assert (manifest.parent / f"{name}.xsa").is_file()
+    if schema_version == 1:
+        assert (manifest.parent / f"{name}.xsa").is_file()
+        assert bit.parent != manifest.parent
+    else:
+        assert bit.parent == manifest.parent
+        assert {p.name for p in manifest.parent.iterdir()} == {
+            f"{name}.bit", f"{name}.hwh", "driver.py", "manifest.json"}
     (manifest.parent / f"{name}.hwh").write_text("changed")
     with pytest.raises(ValueError, match="integrity"):
         host.verify_overlay(path)
 
 
-def test_s1_pynq_path_with_real_model_behind_mmio(tmp_path, monkeypatch):
-    path = synthetic_overlay(tmp_path, "simp_fun", SimpFun, simp_host)
+@pytest.mark.parametrize("name,cls,host", [("simp_fun", SimpFun, simp_host), ("poly", PolyAccel, poly_host)])
+@pytest.mark.parametrize("fault", ["manifest_abi", "embedded_abi", "vlnv"])
+def test_compact_overlay_rejects_mixed_driver_before_programming(tmp_path, monkeypatch, name, cls, host, fault):
+    path = synthetic_overlay(tmp_path, name, cls, host)
+    record = json.loads(path.read_text())
+    if fault == "manifest_abi":
+        record["abi_sha256"] = "0" * 64
+    elif fault == "vlnv":
+        record["vlnv"] = "waveflow:hls:wrong:1.0"
+    else:
+        driver = path.parent / "driver.py"
+        driver.write_text(driver.read_text().replace(
+            f"ABI_SHA256 = {record['abi_sha256']!r}", f"ABI_SHA256 = {'0' * 64!r}"))
+        record["files"]["driver.py"] = host.sha256(driver)
+    path.write_text(json.dumps(record))
+    monkeypatch.setitem(sys.modules, "pynq", SimpleNamespace(
+        Overlay=lambda *a, **k: pytest.fail("mixed driver must fail before metadata loading")))
+    extra = {"cases": DEFAULT_CASES}
+    if name == "poly":
+        vectors = tmp_path / "vectors.json"
+        vectors.write_text(json.dumps(make_vectors([0, 1, 0, 0])))
+        extra = {"vectors_path": vectors}
+    with pytest.raises(ValueError, match="ABI|identity"):
+        host.run(backend="pynq", overlay_manifest=path, **extra)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_s1_pynq_path_with_real_model_behind_mmio(tmp_path, monkeypatch, schema_version):
+    path = synthetic_overlay(tmp_path, "simp_fun", SimpFun, simp_host, schema_version=schema_version)
+    shutil.rmtree(tmp_path / "generated")  # Runtime cannot depend on the build workspace.
     backend = SimpBackend(); downloads = []
     class MMIO:
         def read(self, offset): return backend.read_registers(offset, 1)[0]
@@ -220,8 +262,10 @@ def test_board_cli_uses_upstream_introspection(module, tmp_path):
         assert flag in help_text
 
 
-def test_s2_pynq_path_with_current_model_and_inband_coefficients(tmp_path, monkeypatch):
-    path = synthetic_overlay(tmp_path, "poly", PolyAccel, poly_host)
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_s2_pynq_path_with_current_model_and_inband_coefficients(tmp_path, monkeypatch, schema_version):
+    path = synthetic_overlay(tmp_path, "poly", PolyAccel, poly_host, schema_version=schema_version)
+    shutil.rmtree(tmp_path / "generated")
     vectors = tmp_path / "vectors.json"
     vectors.write_text(json.dumps(make_vectors([0, 1, 0, 0])))
     backend = PolyBackend(); downloads = []

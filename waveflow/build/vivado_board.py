@@ -536,7 +536,7 @@ def build_bitstream(config, validation_path, *, work_dir):
 
 
 def collect_overlay(config, bitstream_path, driver_manifest, *, work_dir):
-    """Collect only receipt-bound outputs; never glob a Vivado project for 'latest'."""
+    """Collect BIT/HWH/driver and one manifest; keep build evidence in its workspace."""
     bitstream_path, driver_manifest = Path(bitstream_path).resolve(), Path(driver_manifest).resolve()
     before = (_sha(bitstream_path), _sha(driver_manifest))
     result, source = _read_receipt(config, bitstream_path, "implemented_bitstream")
@@ -553,35 +553,21 @@ def collect_overlay(config, bitstream_path, driver_manifest, *, work_dir):
         (bitstream_path.parent / "sources/control_abi.json").read_text()), "driver ABI content mismatch")
     run = _new_run(Path(work_dir), "overlay-")
     name = source["design"]["name"]
-    for ext in ("bit", "hwh", "xsa"):
+    for ext in ("bit", "hwh"):
         shutil.copyfile(bitstream_path.parent / f"artifacts/design.{ext}", run / f"{name}.{ext}")
-    shutil.copytree(bitstream_path.parent / "reports", run / "reports")
     shutil.copyfile(driver_path, run / "driver.py")
-    shutil.copyfile(abi_path, run / "control_abi.json")
-    shutil.copyfile(driver_manifest, run / "driver_manifest.json")
-    # Carry a self-contained source bundle so relocation does not need the old workspace.
-    _, replay = _clone_inputs(config, bitstream_path.parent / "bd_inputs.json", run, "rebuild-")
     _read_receipt(config, bitstream_path, "implemented_bitstream")
     _require(before == (_sha(bitstream_path), _sha(driver_manifest)), "inputs changed during collection")
-    for ext in ("bit", "hwh", "xsa"):
+    for ext in ("bit", "hwh"):
         _require(_sha(run / f"{name}.{ext}") == result["files"][f"artifacts/design.{ext}"],
                  "artifact changed during collection")
-    _require(_sha(run / "driver.py") == driver["driver_sha256"]
-             and _sha(run / "control_abi.json") == driver["control_abi_sha256"]
-             and _sha(run / "driver_manifest.json") == before[1],
-             "driver changed during collection")
-    for report in (run / "reports").rglob("*"):
-        if report.is_file():
-            _require(_sha(report) == result["files"][report.relative_to(run).as_posix()],
-                     "report changed during collection")
+    _require(_sha(run / "driver.py") == driver["driver_sha256"], "driver changed during collection")
     manifest = run / "manifest.json"
     _write_json(manifest, {
-        "schema_version": 1, "validation_level": "collected_overlay", "target": source["target"],
-        "source_commit": source["source_commit"], "ip_manifest_sha256": source["ip_manifest_sha256"],
-        "abi_sha256": source["abi_sha256"], "bitstream_manifest_sha256": before[0],
-        "driver_manifest_sha256": before[1], "address_map": result["verdict"]["addresses"],
+        "schema_version": 2, "validation_level": "collected_overlay", "target": source["target"],
+        "source_commit": source["source_commit"], "vlnv": driver["vlnv"],
+        "abi_sha256": source["abi_sha256"], "address_map": result["verdict"]["addresses"],
         "physical_hz": result["verdict"]["physical_hz"], "implementation": result["implementation"],
-        "rebuild_inputs": str(replay.relative_to(run) / "bd_inputs.json"),
         "files": _hash_tree(run), "board_execution_verified": False,
     })
     return manifest

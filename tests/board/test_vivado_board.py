@@ -252,18 +252,24 @@ def test_implementation_failures_do_not_publish(validated, monkeypatch, fault):
     assert not list((config.root_dir / "reject").rglob("bitstream_manifest.json"))
 
 
-def test_overlay_carries_matching_outputs_and_replay(implemented):
+def test_overlay_has_four_files_and_keeps_build_evidence(implemented):
     config, bit, driver = implemented
     before = (_hash_tree(bit.parent), _hash_tree(driver.parent))
     path = vb.collect_overlay(config, bit, driver, work_dir=config.root_dir / "overlay")
     record = json.loads(path.read_text())
+    assert record["schema_version"] == 2
     assert not record["board_execution_verified"]
     assert record["address_map"][0]["offset"] == 0xA1000000
     assert record["physical_hz"] == 99999985
     for name, digest in record["files"].items(): assert _sha(path.parent / name) == digest
-    for ext in ("bit", "hwh", "xsa"):
+    assert set(record["files"]) == {"s0d_control.bit", "s0d_control.hwh", "driver.py"}
+    assert {p.name for p in path.parent.iterdir()} == {*record["files"], "manifest.json"}
+    assert record["vlnv"] == json.loads(driver.read_text())["vlnv"]
+    for ext in ("bit", "hwh"):
         assert _sha(path.parent / ("s0d_control." + ext)) == _sha(bit.parent / ("artifacts/design." + ext))
-    vb._read_inputs(config, path.parent / record["rebuild_inputs"])
+    assert (bit.parent / "artifacts/design.xsa").is_file()
+    assert (bit.parent / "reports/timing.rpt").is_file()
+    vb._read_inputs(config, bit.parent / "bd_inputs.json")
     assert (_hash_tree(bit.parent), _hash_tree(driver.parent)) == before
 
 

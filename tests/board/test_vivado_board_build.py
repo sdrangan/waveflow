@@ -112,7 +112,12 @@ def test_real_bitstream_overlay(real_bd, tmp_path):
     assert manifest["implementation"]["timing_passed"]
     assert manifest["implementation"]["drc_passed"]
     assert manifest["board_execution_verified"] is False
-    for ext in ("bit", "hwh", "xsa"):
+    assert manifest["schema_version"] == 2
+    assert {p.name for p in path.parent.iterdir()} == {
+        "s0d_control.bit", "s0d_control.hwh", "driver.py", "manifest.json"}
+    for ext in ("bit", "hwh"):
         assert (path.parent / ("s0d_control." + ext)).stat().st_size > 0
+    implementation = built["bitstream"].path("bitstream_manifest").parent
+    assert (implementation / "artifacts/design.xsa").stat().st_size > 0
     assert _hash_tree(receipt.parent) == before
     print("S0D_OVERLAY_MANIFEST=" + str(path))

@@ -24,6 +24,12 @@ def load_driver(path):
     spec = importlib.util.spec_from_file_location("poly_generated_driver", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    payload = json.dumps(module.ABI, sort_keys=True, separators=(",", ":"))
+    if (hashlib.sha256(payload.encode()).hexdigest() != module.ABI_SHA256
+            or module.ABI["vlnv"] != "waveflow:hls:poly:1.0"):
+        raise ValueError("generated driver ABI mismatch")
+    if set(module.ABI.get("modeled_fields", [])) != {"halted", "error", "tx_id"}:
+        raise ValueError("overlay does not implement the current in-band coefficient protocol")
     return module
 
 
@@ -42,30 +48,25 @@ def load_vectors(path=None):
 def verify_overlay(manifest_path):
     path = Path(manifest_path).resolve()
     record = json.loads(path.read_text())
-    if (record.get("schema_version") != 1 or record.get("validation_level") != "collected_overlay"
+    if (record.get("schema_version") not in (1, 2) or record.get("validation_level") != "collected_overlay"
             or record["target"]["board"] != "rfsoc4x2"):
         raise ValueError("expected a collected RFSoC4x2 overlay")
-    required = {"poly.bit", "poly.hwh", "poly.xsa", "driver.py", "control_abi.json", "driver_manifest.json"}
+    if record["schema_version"] == 2 and record.get("vlnv") != "waveflow:hls:poly:1.0":
+        raise ValueError("overlay / driver IP identity mismatch")
+    required = {"poly.bit", "poly.hwh", "driver.py"}
     if not required <= record["files"].keys():
         raise ValueError("incomplete PolyAccel overlay")
     for name, digest in record["files"].items():
         item = (path.parent / name).resolve()
         if not item.is_relative_to(path.parent) or sha256(item) != digest:
             raise ValueError(f"overlay file integrity failure: {name}")
-    dm = json.loads((path.parent / "driver_manifest.json").read_text())
-    abi = json.loads((path.parent / "control_abi.json").read_text())
-    if (dm["abi_sha256"] != record["abi_sha256"] or abi["abi_sha256"] != record["abi_sha256"]
-            or dm["vlnv"] != "waveflow:hls:poly:1.0"
-            or dm["driver_sha256"] != sha256(path.parent / "driver.py")
-            or dm["control_abi_sha256"] != sha256(path.parent / "control_abi.json")
-            or record["driver_manifest_sha256"] != sha256(path.parent / "driver_manifest.json")):
-        raise ValueError("overlay / generated driver ABI mismatch")
-    if set(abi.get("modeled_fields", [])) != {"halted", "error", "tx_id"}:
-        raise ValueError("overlay does not implement the current in-band coefficient protocol")
     return path, record
 
 
 def _pynq_bitfile(manifest, record):
+    bitfile = manifest.parent / "poly.bit"
+    if not bitfile.with_suffix(".xsa").exists():
+        return bitfile
     runtime = manifest.parent / ".pynq_runtime" / sha256(manifest)
     runtime.mkdir(parents=True, exist_ok=True)
     bitfile = runtime / "poly.bit"

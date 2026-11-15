@@ -22,6 +22,10 @@ resolve to that commit when checked on 2026-11-15. The three migration commits
 (`1e0376ce`, `8ba53fd9`, `c3773dde`) are published on the fork's
 [`board_packaging` branch](https://github.com/Ruibin2000/waveflow/tree/board_packaging).
 The progress and developer documentation are follow-up changes on that branch.
+The runtime output is now reduced to BIT, HWH, `driver.py` and one schema-2
+`manifest.json`. XSA, reports and rebuild inputs remain in the build workspace;
+intermediate validation gates and receipts are retained. The portable hosts
+also accept existing schema-1 overlays.
 The source audit against that base found 2,837 upstream files identical in
 content and Git mode, 13 existing files changed for board integration or this
 documentation, 72 added board-related files, and no deleted upstream files.
@@ -30,15 +34,17 @@ documentation, 72 added board-related files, and no deleted upstream files.
 | --- | --- | --- |
 | S0: target and clocks | `waveflow.board`, vendored RealDigital resources, optional board-aware `BuildConfig`, explicit clock resolution and target mismatch checks | Fresh tool/clock probes and applicable XSI gates |
 | S0: packaging pipeline | Export receipts, header/XML control ABI, generated host driver, Tcl contracts, BD validation, implementation and overlay collection; offline conformance/failure tests | Fresh Vitis export and Vivado validation/implementation |
-| S1: SimpFun | Current upstream model/codegen reused; AXI-Lite template, portable host and manual build notebook | Rebuild overlay and rerun the host on RFSoC4x2 |
+| S1: SimpFun | Current upstream model/codegen reused; manually built notebook overlay, compact recollection and collected-driver model checks | CMD rebuild and physical acceptance for both paths |
 | S2: PolyAccel | Current upstream in-band coefficient protocol, PS DDR/simple DMA template, portable host and manual build notebook | Rebuild overlay and rerun all three cases on RFSoC4x2 |
 | S3: direct AXI master to DDR | Future stage | Design, implementation and all acceptance gates |
 | S4: mixed HLS/RTL IP | Future stage | Packaging route, implementation and all acceptance gates |
 | S5: RF converter path | Future stage | RFDC topology/clocks, implementation and instrument/loopback acceptance |
 
-After cleanup, the core/application/configuration suite passed **382 offline
-tests**, with **23 tool-dependent cases deselected**. A further **27 documentation
-and MCP corpus checks passed**, including developer-guide snippet execution.
+After output simplification, the core/application/configuration suite passed
+**390 offline tests**, with **23 tool-dependent cases deselected**. A further
+**29 notebook, documentation and MCP corpus checks passed**, including
+developer-guide snippet execution. Notebook defaults were checked in an isolated
+checkout so the user's saved S1 executions and manual switches remained intact.
 These exercise configuration, export/ABI/driver contracts, template generation,
 portable host protocols and manual notebooks.
 They do not establish Vitis, Vivado, XSI or physical-board acceptance. Broader
@@ -52,6 +58,12 @@ acceptance records were not migrated, and their success does not accept the new
 branch. The old untracked board build directories have now been removed. The
 separate migration clone, note and backups are retained outside the repository;
 future verification starts from the committed sources and fresh outputs.
+
+Since that cleanup, the S1 notebook has been run manually. Its existing
+implementation receipts were checked again when collecting the four-file
+overlay, with matching BIT/HWH/driver hashes and model outputs `0`, `11`, `17`.
+The source overlay had 53 files; the compact overlay has four. This collection
+did not rerun AMD tools or program the board, and physical acceptance is pending.
 
 The next actions are sequential and remain **manual**:
 
@@ -267,7 +279,9 @@ and `ExportIpStep` refuses a part mismatch in a unit test.
 ## 6. Stage S1 — `examples/regmap`: AXI-Lite only
 
 **Progress:** source-to-overlay DAG, template, portable host and manual notebook
-implemented; offline gates passed. Fresh tool builds and board acceptance pending.
+implemented; offline gates passed. A manually built notebook overlay is available
+and its implementation receipts passed compact collection checks. CMD rebuilding
+and physical-board acceptance remain pending.
 
 The smallest possible closed loop, and the stage that carries most of the framework. Budget
 accordingly: S1 is not 1/5 of the work.
@@ -500,7 +514,8 @@ examples/<name>/
 ```
 
 S2 also has a portable DMA adapter and frame checks. The generated overlay
-contains `driver.py`, ABI/driver manifests, BIT/HWH/XSA and rebuild metadata.
+contains only BIT/HWH, `driver.py` and `manifest.json`. The driver embeds its ABI;
+XSA, ABI/driver sidecars, reports and rebuild inputs remain in build directories.
 Future S5 pin constraints belong with its application sources when implemented.
 **Never commit the Vivado project tree** (`.xpr`, `.runs/`, `.cache/`, `.gen/`, `.hw/`, `.sim/`,
 `.ip_user_files/`) — all regenerated, huge, path-dependent.

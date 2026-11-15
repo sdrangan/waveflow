@@ -25,6 +25,10 @@ def load_driver(path):
     spec = importlib.util.spec_from_file_location("simp_fun_generated_driver", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    payload = json.dumps(module.ABI, sort_keys=True, separators=(",", ":"))
+    if (hashlib.sha256(payload.encode()).hexdigest() != module.ABI_SHA256
+            or module.ABI["vlnv"] != "waveflow:hls:simp_fun:1.0"):
+        raise ValueError("generated driver ABI mismatch")
     return module
 
 
@@ -40,31 +44,27 @@ def verify_overlay(manifest_path):
     """Reject changed/mixed artifacts before loading code or programming the PL."""
     path = Path(manifest_path).resolve()
     record = json.loads(path.read_text())
-    if record.get("schema_version") != 1 or record.get("validation_level") != "collected_overlay":
+    if record.get("schema_version") not in (1, 2) or record.get("validation_level") != "collected_overlay":
         raise ValueError("expected a collected overlay manifest")
     if record["target"]["board"] != "rfsoc4x2":
         raise ValueError("SimpFun requires the RFSoC4x2 target")
-    required = {"simp_fun.bit", "simp_fun.hwh", "simp_fun.xsa", "driver.py",
-                "control_abi.json", "driver_manifest.json"}
+    if record["schema_version"] == 2 and record.get("vlnv") != "waveflow:hls:simp_fun:1.0":
+        raise ValueError("overlay / driver IP identity mismatch")
+    required = {"simp_fun.bit", "simp_fun.hwh", "driver.py"}
     if not required <= record["files"].keys():
         raise ValueError("overlay is missing required files")
     for name, digest in record["files"].items():
         item = (path.parent / name).resolve()
         if not item.is_relative_to(path.parent) or sha256(item) != digest:
             raise ValueError(f"overlay file integrity failure: {name}")
-    dm = json.loads((path.parent / "driver_manifest.json").read_text())
-    abi = json.loads((path.parent / "control_abi.json").read_text())
-    if (dm["abi_sha256"] != record["abi_sha256"] or abi["abi_sha256"] != record["abi_sha256"]
-            or dm["vlnv"] != "waveflow:hls:simp_fun:1.0"
-            or dm["driver_sha256"] != sha256(path.parent / "driver.py")
-            or dm["control_abi_sha256"] != sha256(path.parent / "control_abi.json")
-            or record["driver_manifest_sha256"] != sha256(path.parent / "driver_manifest.json")):
-        raise ValueError("overlay / driver ABI mismatch")
     return path, record
 
 
 def _pynq_bitfile(manifest, record):
-    """Stage a verified BIT/HWH pair without PYNQ's sibling-XSA ambiguity."""
+    """Use the compact overlay directly; isolate BIT/HWH for older XSA bundles."""
+    bitfile = manifest.parent / "simp_fun.bit"
+    if not bitfile.with_suffix(".xsa").exists():
+        return bitfile
     runtime = manifest.parent / ".pynq_runtime" / sha256(manifest)
     runtime.mkdir(parents=True, exist_ok=True)
     bitfile = runtime / "simp_fun.bit"

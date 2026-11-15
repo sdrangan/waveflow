@@ -131,7 +131,9 @@ serialization. Explicit `pointer_bindings` associate a generated pointer registe
 with its AXI master; DDR wiring and allocation are application responsibilities.
 
 `HostDriverGenStep` generates `driver.py`, `control_abi.json` and
-`driver_manifest.json`. The generated runtime uses only Python's standard
+`driver_manifest.json` in the build workspace. The driver embeds the verified
+ABI; the final overlay collects only `driver.py` and records its identity and
+hash in the overlay manifest. The generated runtime uses only Python's standard
 library. Its backend supplies `read_registers(offset, count)` and
 `write_registers(offset, values)` over unsigned 32-bit words. Scalars preserve
 the verified signed/float representation; array access uses raw ABI element values.
@@ -312,20 +314,34 @@ gates when ready:
 python -m pytest tests/examples/test_board_packaging_tools.py -v
 ```
 
-A collected overlay contains BIT/HWH/XSA, `driver.py`, `control_abi.json`,
-`driver_manifest.json`, reports and a relocatable rebuild bundle. Its manifest
-records hashes, target, addresses and implementation verdicts, and keeps
-`board_execution_verified=False`. The ABI/driver/rebuild evidence is why the
-build output includes more than a BIT/HWH pair. The upstream legacy
-`collect_overlay` script retains its own interface; this flow uses
-`CollectOverlayStep`.
+A collected overlay contains exactly four files:
+
+```
+<name>.bit
+<name>.hwh
+driver.py
+manifest.json
+```
+
+The schema-2 manifest records the three payload hashes, IP and ABI identity,
+target, addresses and implementation verdicts, and keeps
+`board_execution_verified=False`. No separate ABI/driver JSON files are needed
+on the board because the verified ABI is embedded in `driver.py`.
+
+XSA, tool reports, input snapshots and intermediate receipts remain in their
+build directories. The implementation run retains `artifacts/design.xsa`,
+`reports/`, `bd_inputs.json` and its staged sources/Tcl for rebuilding. Collection
+still verifies them before publishing the compact overlay. The upstream legacy
+`collect_overlay` script retains its own interface; this flow uses `CollectOverlayStep`.
 
 For physical acceptance, copy the entire collected overlay directory and the
 application's portable host to a fresh board test directory. Copy the matching
 S2 vectors as well. Run the portable host with `--backend pynq` in the board's
 PYNQ-enabled environment, and retain new acceptance JSON files. The host verifies
-the collected package before programming and stages a matching BIT/HWH pair
-without a sibling XSA for PYNQ metadata loading. Choose new output paths on reruns.
+the collected files and embedded driver ABI before programming. Compact overlays
+load their BIT/HWH pair directly. The hosts also accept existing schema-1 bundles
+and stage their BIT/HWH pair separately when a sibling XSA is present. Choose new
+output paths on reruns.
 
 Use the exact manifest returned by the successful build for each test. Do not mix
 an old overlay or driver with new vectors, and do not use historical physical
