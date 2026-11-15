@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union, overload
 
 #: Oldest AMD/Xilinx release Waveflow is tested against.  Older toolchains may work, but the
 #: generated HLS pragmas and the Vitis ``vitis-run --mode hls`` entry point are not validated
@@ -505,11 +505,7 @@ def run_vitis_hls(
 
     cmd_list, default_work_dir = _build_vitis_hls_cmd(tcl_script=tcl_script, args=args)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
-
-    final_env = None
-    if env is not None:
-        final_env = os.environ.copy()
-        final_env.update(env)
+    final_env = _tool_env(env)
 
     # One timing span per Vitis run (waveflow.events); a csim, csynth or cosim is told apart by
     # the build step it runs inside.
@@ -545,6 +541,34 @@ def _csynth_top(tcl_script: Union[str, Path]) -> Optional[str]:
         return None
     m = re.search(r"^\s*set_top\s+(\w+)", text, re.M)
     return m.group(1) if m and "csynth_design" in text else None
+
+
+#: Variables a Windows shell sets that must not reach the AMD tools.  Git Bash (MSYS2) exports
+#: MSYSTEM=MINGW64; Vitis HLS 2025.1 inherits it and C/RTL co-simulation then fails at
+#: "Instrumenting C test bench" with only COSIM 212-5, "file generation failed": the design
+#: file's top function is never wrapped.  The same run from PowerShell or cmd passes.
+_SHELL_VARS_TO_DROP = ("MSYSTEM",)
+
+
+@overload
+def _tool_env(env: None) -> Optional[Dict[str, str]]: ...
+@overload
+def _tool_env(env: Dict[str, str]) -> Dict[str, str]: ...
+def _tool_env(env: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The environment for a tool subprocess: ours, without the shell variables above, plus
+    ``env``.  None, meaning inherit unchanged, when there is nothing to remove or add.
+
+    Every launch of an AMD tool (Vitis, Vivado, xsim, an XSI runner) goes through this.  A
+    caller that needs a full environment to edit passes ``{}``."""
+    drop = [k for k in _SHELL_VARS_TO_DROP if k in os.environ] \
+        if platform.system() == "Windows" else []
+    if env is None and not drop:
+        return None
+    final_env = os.environ.copy()
+    for key in drop:
+        final_env.pop(key, None)
+    final_env.update(env or {})
+    return final_env
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:
@@ -624,10 +648,7 @@ def subprocess_result(
     """
     effective_capture_output = capture_output or (output_path is not None)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
-    final_env = None
-    if env is not None:
-        final_env = os.environ.copy()
-        final_env.update(env)
+    final_env = _tool_env(env)
 
     try:
         result = subprocess.run(

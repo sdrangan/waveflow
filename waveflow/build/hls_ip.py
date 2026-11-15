@@ -25,6 +25,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 #: Libraries every VHDL file may name that are not IP (the compiler's own, and ``work``).
 _STD_LIBS = {"ieee", "std", "work"}
 
@@ -114,7 +116,7 @@ def generate_hls_ips(tcls, out_dir: str | Path, *, part: str, vivado: str | None
     with events.span("tool", "vivado", script=script.name):
         proc = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-nolog", "-source",
                                script.name], cwd=str(work), capture_output=True, text=True,
-                              timeout=900)
+                              timeout=900, env=_tool_env(None))
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
         raise RuntimeError(f"generate_hls_ips: Vivado failed:\n{out[-3000:]}")

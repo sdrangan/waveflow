@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from waveflow.build.trace_steps import run_xsi, xsi_runner_cmd, xsi_runner_name
+from waveflow.toolchain.toolchain import _tool_env
 
 
 class XsiRunError(RuntimeError):
@@ -241,7 +242,7 @@ class XsiSnapshot:
     # ---- build and run --------------------------------------------------------------------------
 
     def _env(self) -> dict[str, str]:
-        env = dict(os.environ)
+        env = _tool_env({})
         if self.tb_cxxflags:
             env["WF_TB_CXXFLAGS"] = self.tb_cxxflags
         else:

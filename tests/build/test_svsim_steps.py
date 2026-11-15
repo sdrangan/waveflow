@@ -34,7 +34,7 @@ def recorded(monkeypatch):
     calls: list[dict[str, Any]] = []
     plan: dict[str, Any] = {"codes": None, "stdout": "", "stderr": ""}
 
-    def fake_run(cmd, shell=False, cwd=None, capture_output=False, text=False):
+    def fake_run(cmd, shell=False, cwd=None, capture_output=False, text=False, env=None):
         calls.append({"cmd": cmd, "cwd": cwd, "capture_output": capture_output})
         codes = plan["codes"]
         rc = 0 if codes is None else codes[min(len(calls) - 1, len(codes) - 1)]

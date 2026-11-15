@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
-from waveflow.toolchain.toolchain import find_vivado_path
+from waveflow.toolchain.toolchain import _tool_env, find_vivado_path
 
 
 class SvSimError(RuntimeError):
@@ -97,6 +97,7 @@ def _run(cmd: str, cwd: Path, *, capture_output: bool, echo: bool) -> str | None
         cwd=cwd,
         capture_output=capture_output,
         text=True,
+        env=_tool_env(None),
     )
     out = None
     if capture_output:
