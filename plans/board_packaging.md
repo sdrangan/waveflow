@@ -1,9 +1,9 @@
 # Plan — board packaging: an example becomes IP, a bitstream, and a PynQ host
 
-**Status: SCOPE, not started.** 2026-09-20. This is the plan for **Flow 4** —
-`docs/guide/flows/bitstream_ipi.md` has been a `nav_exclude` stub naming it since the flows
-restructure, and `docs/future/vivado_backend.md` has pointed at a `plans/vivado_plan.md` that was
-never written. This file is that plan.
+**Status: S0 core and S1/S2 application paths implemented; fresh tool and board
+acceptance pending. Updated 2026-11-15.** This plan tracks the template-driven
+RFSoC4x2 board packaging extension. The implemented APIs, source map and manual
+commands are in [Board packaging development](../docs/guide/flows/board_packaging.md).
 
 **Who this is written for.** Someone other than its author, with a board and a Vitis/Vivado
 install, working **one stage at a time**. Each stage below is one PR (many commits), lands green,
@@ -14,11 +14,68 @@ and is independently useful. A stage that cannot be finished should be *cut at a
 
 ---
 
+## 0. Progress and next actions
+
+The minimal implementation was migrated onto upstream `main` at
+`4bb72aa9d2f90d6851aa9c4ee85ccdb588ff13c9`. Both upstream and fork `main` still
+resolve to that commit when checked on 2026-11-15. The three migration commits
+(`1e0376ce`, `8ba53fd9`, `c3773dde`) are published on the fork's
+[`board_packaging` branch](https://github.com/Ruibin2000/waveflow/tree/board_packaging).
+The progress and developer documentation are follow-up changes on that branch.
+The source audit against that base found 2,837 upstream files identical in
+content and Git mode, 13 existing files changed for board integration or this
+documentation, 72 added board-related files, and no deleted upstream files.
+
+| Work | Implemented and checked | Remaining acceptance |
+| --- | --- | --- |
+| S0: target and clocks | `waveflow.board`, vendored RealDigital resources, optional board-aware `BuildConfig`, explicit clock resolution and target mismatch checks | Fresh tool/clock probes and applicable XSI gates |
+| S0: packaging pipeline | Export receipts, header/XML control ABI, generated host driver, Tcl contracts, BD validation, implementation and overlay collection; offline conformance/failure tests | Fresh Vitis export and Vivado validation/implementation |
+| S1: SimpFun | Current upstream model/codegen reused; AXI-Lite template, portable host and manual build notebook | Rebuild overlay and rerun the host on RFSoC4x2 |
+| S2: PolyAccel | Current upstream in-band coefficient protocol, PS DDR/simple DMA template, portable host and manual build notebook | Rebuild overlay and rerun all three cases on RFSoC4x2 |
+| S3: direct AXI master to DDR | Future stage | Design, implementation and all acceptance gates |
+| S4: mixed HLS/RTL IP | Future stage | Packaging route, implementation and all acceptance gates |
+| S5: RF converter path | Future stage | RFDC topology/clocks, implementation and instrument/loopback acceptance |
+
+After cleanup, the core/application/configuration suite passed **382 offline
+tests**, with **23 tool-dependent cases deselected**. A further **27 documentation
+and MCP corpus checks passed**, including developer-guide snippet execution.
+These exercise configuration, export/ABI/driver contracts, template generation,
+portable host protocols and manual notebooks.
+They do not establish Vitis, Vivado, XSI or physical-board acceptance. Broader
+build/toolchain checks also encountered the upstream workspace-census test
+expecting three XSI workspaces while the base contains two; it was reproduced
+on the unmodified base and remains outside this extension.
+
+S1 and both S2 build paths previously passed user-run board tests **before the
+migration**. Those runs are historical context only. Their reports, overlays and
+acceptance records were not migrated, and their success does not accept the new
+branch. The old untracked board build directories have now been removed. The
+separate migration clone, note and backups are retained outside the repository;
+future verification starts from the committed sources and fresh outputs.
+
+The next actions are sequential and remain **manual**:
+
+1. Use [the S1 notebook](../examples/regmap/board/build_simp_fun.ipynb) and
+   [the S2 notebook](../examples/stream_inband/board/build_poly.ipynb). Each ends
+   with CMD commands including the environment setup; the BD and implementation
+   switches initially remain disabled.
+2. Rebuild through `bd_validate` with Vitis/Vivado 2025.1. Check the actual exported
+   ABI and generated-driver simulation, the target and 100 MHz clock readback,
+   addresses and topology before implementation.
+3. Generate fresh overlays independently for the notebook and CMD paths. Retain
+   their manifests, tool reports and hashes with the new run, outside source control.
+4. Upload the portable host, new overlay and S2 vectors to RFSoC4x2. Run the S1
+   cases and S2 cubic/identity/constant cases for each path; return the new
+   acceptance records and match them to their overlay hashes.
+5. Mark S1/S2 accepted only after reviewing those records. Then start S3; keep
+   generic multi-IP/system packaging and RF work as separate follow-up scope.
+
+---
+
 ## 1. What this adds, and what "done" means
 
-Today a Waveflow example ends at **RTL that has been proven** — csynth, cosim, and for several
-examples an XSI gate asserting an exact cycle count. Nothing downstream of that exists. This plan
-carries five examples the rest of the way:
+This extension carries application examples beyond their model, code-generation
+and RTL checks into a PS-connected board design:
 
 > generated kernel → **Vitis IP** → **Vivado block design** → **bitstream** → **PynQ host code that
 > drives it on the 4x2**
@@ -31,63 +88,39 @@ and that only surfaces on a clean clone.
 
 ---
 
-## 2. What exists today (cited from code, so this plan can be checked)
+## 2. Current implementation and integration boundaries
 
-**The build DAG is the right host for all of this.** Every example already has a `*_build.py`
-defining `BuildStep` subclasses with `consumes` / `produces` / `params`, assembled into a `BuildDag`
-and driven by `run_dag_cli` (`--through STEP`, `--status`, `--force-step`). New rungs are new steps
-on the existing DAG; nothing about the driver needs to change.
+**The existing DAG and CLI host the extension.** Optional steps in
+`waveflow/build/board_steps.py` use the upstream `BuildDag`, artifact handling and
+`run_dag_cli`. The canonical SimpFun and PolyAccel models, handwritten arithmetic
+and upstream build entry points are unchanged by the migration.
 
-**The csynth TCL emitter is one line short of exporting IP.**
-`waveflow/build/composite_gen.py::render_tcl` emits `open_project` / `set_top` / `add_files` /
-`open_solution` / `set_part` / `create_clock` / `csynth_design`. It does **not** emit
-`export_design`. `export_design` appears nowhere in `waveflow/`.
+**Board and calibration Platform have separate jobs.** `waveflow/board/spec.py`
+defines the physical target, versioned vendor resources and named clock profiles.
+Board-aware `BuildConfig` checks target consistency before resolving the optional
+measurement platform. Builds without a board retain upstream target selection.
 
-**The default synthesis part is not the board.** `DEFAULT_PART = "xc7z020clg484-1"`
-(`composite_gen.py:2668`) — a Zynq-7020. `RFSOC4X2_CLK_HZ = 250e6` / `RFSOC4X2_PERIOD_NS = 4.0`
-exist beside it, and `tcl_target(config)` will use a resolved platform's part/clock when there is
-one, but the only platform in the tree is `waveflow/calib/platforms/zynq7020_bfm_100mhz`. **An IP
-exported today would be built for the wrong device.** This is why S0 exists.
+**Export is an explicit, verified step.** `waveflow/build/ip_export.py` creates a
+fresh board-targeted HLS solution and binds its synthesis inputs, RTL, reports
+and exported IP to receipts. It refuses mismatched targets and changed inputs.
+The generic csynth Tcl emitter does not export every upstream build implicitly.
 
-**`Platform` is a calibration platform, not a board.** `waveflow/calib/platform.py::Platform` is
-`name` / `dir` / `part` / `clk_freq` / `res_types_stored` — a directory of measurements plus the
-part and clock those measurements are valid for. It has no `board_part`, no board-files provenance,
-no PS preset, no address map. Its `resolve()` is a **create-or-confirm gate** on part/clock, which
-is exactly the hook S0 needs.
+**The hardware ABI comes from the export.** `waveflow/build/hls_control.py`
+cross-checks the actual header and IP-XACT against register intent. The generated
+driver uses that verified ABI; model-only layouts are marked as unverified.
+Array and pointer fixtures exercise conformance without changing canonical models.
 
-**The toolchain layer knows where Vivado is but never runs it.**
-`waveflow/toolchain/toolchain.py` has `find_vivado_path()` and `run_vitis_hls()`. There is no
-`run_vivado()`.
+**Vivado and the application template have explicit contracts.** `run_vivado`
+provides version-checked batch execution. `waveflow/build/vivado_board.py` renders
+the project and template, checks connections/properties/addresses/clocks, invokes
+`validate_bd_design`, and checks implementation timing/DRC before collection.
+The legacy `waveflow/scripts/collect_overlay.py` remains unchanged.
 
-**Two loose pre-DAG scripts already do fragments of this work.**
-`waveflow/scripts/collect_overlay.py` globs for a `.bit` under `impl_1` plus the matching `.hwh` and
-copies them into `overlay/`. `waveflow/scripts/build_lab_autograder.py` packages a lab for
-Gradescope. Both predate the DAG, neither is wired into it, and `collect_overlay.py` is superseded
-by S0's `CollectOverlayStep`.
-
-**The `bram_access` glue top is already generated.** `waveflow/build/wrapper_gen.py::render_wrapper`
-emits a Verilog module instantiating the Vitis kernel *and* the hand-written memory
-(`waveflow/build/rtl/bram_t2p.v`), joined — and that wrapper is already the elaborated top the XSI
-gate runs. S4 is therefore **not** "write the glue"; it is "package a mixed IP".
-
-**The regmap models the Vitis layout but nothing enforces that it does.**
-`waveflow/hw/regmap.py::VitisRegMap` documents the verified layout (`0x00` packed control word,
-`0x04` GIER, `0x08` IER, `0x0c` ISR, user fields from `0x10` on an 8-byte stride) and exposes
-`offset_of` / `nwords_of` / `field_name_at_offset` / `total_size_bytes`. Its own docstring says:
-*"Nothing yet enforces that this layout tracks Vitis; control.h is the authoritative artifact a
-conformance test could check against."* These offsets were **wrong** once already (`ap_done` was
-modelled at `0x04`, which is really GIER) and it went unnoticed for months because the offsets are a
-closed loop inside the Python simulation — no generated C++ contains an offset, and there was no
-firmware path. **This plan creates the firmware path**, so the conformance gate stops being optional
-(§6.3).
-
-**PYNQ can be driven off-board.** Verified 2026-08-22, pynq 3.1.2 on Windows 11 with no board and no
-XRT: `Device.devices` returns `[]` with a warning rather than raising. `DeviceMeta` auto-registers
-any subclass defining `_probe_`, and `capabilities = {"REGISTER_RW": True, "MEMORY_MAPPED": False}`
-reduces the whole hardware surface to `read_registers` / `write_registers`. The in-tree template is
-`pynq/pl_server/remote_device.py`. Install traps, in the order they bite: no win_amd64 wheel (source
-build, ~10 min); `grpcio` has no cp314 wheel so use `pip install --no-deps pynq pynqmetadata
-pynqutils`; needs `setuptools<=80`; install to a **short** path or `WinError 206`.
+**Two board application paths are supplied.** S1 uses PS AXI-Lite. S2 uses PS DDR
+through simple DMA and one 100 MHz clock; coefficients travel in-band. Each has
+an application-owned Tcl template, portable model/PYNQ host and manual notebook.
+The generic upstream `SystemTopSpec` device/system packaging path remains a
+separate flow; this extension does not infer arbitrary PS topologies from it.
 
 ---
 
@@ -110,7 +143,7 @@ a try.
 address-map and clock-domain error in about a minute, without synthesis. Do not let a stage reach
 rung 5 before rung 4 is a test.
 
-Two new pytest markers go in `pyproject.toml` beside the existing `vitis` / `xsi`:
+The extension registers two pytest markers in `pyproject.toml` beside `vitis` / `xsi`:
 
 ```
 "vivado: marks tests as requiring a Vivado installation (block design / bitstream; slow)",
@@ -125,19 +158,16 @@ skips quietly is a gate that is not there; see [PR #177](https://github.com/sdra
 
 ## 4. Decisions already taken (do not relitigate without a reason)
 
-**4.1 Artifacts: commit the `.hwh`, not the `.bit`.** PYNQ needs the `.hwh` and it is small; a 4x2
-bitstream is tens of MB and five of them in git history is permanent. So:
+**4.1 Artifacts: commit sources and contracts; retain generated overlays per run.**
+For the minimal migration, BIT/HWH/XSA, generated drivers, manifests, tool reports
+and acceptance records stay in ignored build directories. No historical overlay
+or experiment result is committed. A collected overlay binds its files, exported
+ABI, target and tool receipts by hashes. Release publication is future work and
+has not been performed.
 
-- `examples/<name>/board/overlay/<name>.hwh` — **committed**.
-- `examples/<name>/board/overlay/manifest.json` — **committed**: Vivado version, part, board-files
-  version, the source commit, and the **sha256 of the `.bit`**.
-- `<name>.bit` — **not committed**; published as a GitHub Release asset named
-  `<name>-rfsoc4x2-<vivado-version>.bit`. `examples/*/board/overlay/*.bit` goes in `.gitignore`.
-
-The manifest is what separates *"my rebuild broke"* from *"the board is misconfigured"*: rebuild,
-hash, compare.
-
-**4.2 The PynQ driver is generated from the `VitisRegMap`.** A hand-written script per example would
+**4.2 The PYNQ driver is generated from the verified exported ABI.** `VitisRegMap`
+expresses design intent; the actual header/XML must agree before driver generation.
+A hand-written script per example would
 be faster to the first demo and would drift five ways, with offsets hand-copied. Generating the
 driver from the same regmap object the kernel is built from is what makes this a *feature* rather
 than five one-offs — and it forces the conformance gate in §6.3, which is a debt this repo already
@@ -164,27 +194,30 @@ not be attempted before all five exist — there is nothing to generalize from u
 
 ## 5. Stage S0 — the board becomes a first-class object
 
+**Progress:** core implemented and covered by offline tests. Fresh Vitis/Vivado
+and applicable XSI acceptance remain pending for the migrated branch.
+
 **No example. Framework only. Everything else depends on it.**
 
-**Why first:** the default part is a Zynq-7020 (§2). Without a board object, five examples each
-hard-code the 4x2 and the sixth diverges.
+**Why first:** the board target and clock must be explicit and consistent with
+the calibration platform and exported IP.
 
-**5.1 New `waveflow/board/` subpackage.** A `Board` dataclass — a *build target*, distinct from
+**5.1 Implemented `waveflow/board/` subpackage.** A `Board` dataclass — a *build target*, distinct from
 `Platform`, which is a *directory of measurements*:
 
 ```python
-@dataclass(frozen=True)
-class Board:
-    name: str                  # "rfsoc4x2"
-    part: str                  # "xczu48dr-ffvg1517-2-e"
-    board_part: str | None     # the Vivado board_part string, if board files are installed
-    board_files: str           # provenance: vendor + version (RealDigital, vX.Y)
-    default_clk_hz: float      # 250e6 — RFSOC4X2_CLK_HZ
-    ps_preset: str | None      # the PS configuration preset the BD templates apply
+from waveflow.board import Board
+
+board = Board.rfsoc4x2()
+assert board.part == "xczu48dr-ffvg1517-2-e"
+assert board.board_files_version == "1.0"
+assert board.clock("ps_control").physical_hz == 100e6
+assert board.clock("ps_control").hls_target_hz == 100e6
 ```
 
-with `Board.rfsoc4x2()` as the one concrete instance. `RFSOC4X2_CLK_HZ` / `RFSOC4X2_PERIOD_NS` in
-`composite_gen.py` become derived from it rather than stated twice.
+`Board.rfsoc4x2()` supplies the bundled target, vendor resources, tool release and
+clock profiles. Existing non-board synthesis defaults are preserved. Clock
+resolution is explicit and does not run during `BuildConfig` construction.
 
 **5.2 The board is upstream of the calibration platform.** `Platform.resolve()` already
 create-or-confirms `part` / `clk_freq`; a build that selects a `Board` feeds those in, so a
@@ -200,16 +233,17 @@ built on the existing `find_vivado_path()`. Batch mode, non-interactive, journal
 step's work dir, a `WAVEFLOW_ERROR:`-style sentinel convention so a step can tell a real failure from
 a noisy-but-successful run.
 
-**5.5 New `waveflow/build/board_steps.py`** — the steps every stage draws from:
+**5.5 Implemented `waveflow/build/board_steps.py`** — the steps every stage draws from:
 
 | Step | Produces | Rung |
 |---|---|---|
 | `ExportIpStep` | the exported IP dir/zip + its pinned VLNV | 3 |
-| `HostDriverGenStep` | `board/host/<top>_driver.py` from the `VitisRegMap` | 2 |
-| `BdGenStep` | `board/bd/create_bd.tcl`, rendered from the stage's template | 1 |
+| `HlsControlSpecStep` | header/XML ABI checked against register intent | 2/3 |
+| `HostDriverGenStep` | standalone `driver.py` and ABI/driver manifests | 2 |
+| `BdGenStep` | `create_bd.tcl`, rendered into the build directory | 1 |
 | `BdValidateStep` | a `validate_bd_design` verdict, **no synthesis** | 4 |
 | `BitstreamStep` | `.bit` + `.hwh` | 5 |
-| `CollectOverlayStep` | `board/overlay/` + `manifest.json` (retires `collect_overlay.py`) | 5 |
+| `CollectOverlayStep` | isolated overlay directory + `manifest.json` | 5 |
 
 **5.6 `export_design` keeps its own solution.** Emit `export_design -format ip_catalog` with a
 pinned `-ipname` / `-version`, and **no `-flow`** — `-flow syn|impl` runs Vivado underneath and turns
@@ -232,6 +266,9 @@ and `ExportIpStep` refuses a part mismatch in a unit test.
 
 ## 6. Stage S1 — `examples/regmap`: AXI-Lite only
 
+**Progress:** source-to-overlay DAG, template, portable host and manual notebook
+implemented; offline gates passed. Fresh tool builds and board acceptance pending.
+
 The smallest possible closed loop, and the stage that carries most of the framework. Budget
 accordingly: S1 is not 1/5 of the work.
 
@@ -241,33 +278,36 @@ accordingly: S1 is not 1/5 of the work.
 **The block design.** Zynq UltraScale+ PS → AXI SmartConnect → the exported IP's `s_axi_control`.
 One clock, one reset, one address-map assignment. This is the smallest 4x2 BD that does anything.
 
-**6.1 The host.** `board/host/simp_fun_driver.py`, generated: field offsets from `offset_of`, widths
-from `nwords_of`, field packing from each `RegField`'s type, and `start()` / `done()` / `wait()`
+**6.1 The host.** `driver.py`, generated into the overlay from the verified ABI:
+field offsets, widths, packing and `start()` / `done()` / `wait()`
 against the **bits of the control word at `0x00`** (not registers of their own — the mistake the
 model itself once made). On top of it, a hand-written `board/host/run_simp_fun.py` that writes
-`x`/`a`/`b`, starts, polls, reads `y`, and compares against the same `DEFAULT_VECTOR` the DAG's
-`BuildInputsStep` uses. **Same vector, three places** — pysim, cosim, board.
+`x`/`a`/`b`, starts, polls, reads `y`, and compares against the canonical vectors
+from `simp_fun.py`. The board entry reuses upstream source/code-generation steps.
 
 **6.2 `HostDriverGenStep` design note.** The driver must not import `pynq` at module scope; it takes
 a backend object exposing `read_registers` / `write_registers` (§12). That is what lets rung 2 run
 on any machine.
 
-**6.3 The `control.h` conformance gate — the debt this plan pays.** A new `-m vitis` test parses
-`<top>_proj/solution1/.autopilot/db/coregen/control.h` for its `ADDR_*` defines and compares them,
-name by name, against `VitisRegMap.offset_of`. Any mismatch fails.
+**6.3 The implemented conformance gate.** `HlsControlSpecStep` parses the actual
+exported control header and IP-XACT and checks register intent, offsets, widths,
+access and side effects before publishing a driver. Tool-free fixtures cover
+failure cases; opt-in Vitis tests exercise fresh exported files.
 
 This is the test `VitisRegMap`'s own docstring asks for, and until now there was no reason it had to
 exist: the offsets were a closed loop in the simulator, with the model on both ends. **The generated
 driver breaks that loop** — it puts a Waveflow-computed offset on a real AXI bus — so from S1 onward
 a wrong offset is a wrong read on hardware, not a harmless internal convention.
 
-**Known trap, and it lands in S2 rather than here:** `VitisRegMap`'s docstring warns that its
+**Array conformance remains a core concern:** `VitisRegMap`'s docstring warns that its
 multi-word stride rule is verified for 32-bit scalars only, and that **Vitis maps array arguments on
 `s_axilite` as a BRAM-backed region, which the model does not reproduce.** `simp_fun` has only
-scalars, so S1 is safe — `PolyAccel`'s `coeffs` array is not. Write the gate here; expect it to fire
-in S2.
+scalars. Current upstream `PolyAccel` sends coefficients in-band, so S2 no longer
+has an AXI-Lite coefficient array. Core array fixtures retain the conformance gate
+for future IPs that do expose such arrays.
 
-**Gates:** rungs 1–6. Rung 6 = `y == a*x + b` read back over PYNQ.
+**Gates:** rungs 1–6. Rung 6 = the canonical SimpFun result read back over PYNQ,
+including its zero-clamping case.
 
 **Done when:** a notebook on the 4x2 computes `y` through the generated driver, and the conformance
 test is green.
@@ -278,12 +318,19 @@ test is green.
 
 ## 7. Stage S2 — `examples/stream_inband`: streams via DMA
 
+**Progress:** current upstream protocol adapted without changing `poly.py` or its
+handwritten body; DMA/DDR template, portable host and manual notebook implemented.
+Offline gates passed; fresh tool builds and board acceptance pending.
+
 **The design.** `PolyAccel` is `HostActivated` with `s_in` (`StreamIFSlave`), `m_out`
-(`StreamIFMaster`), and a regmap carrying `coeffs` plus status fields. The command rides **in band**
-on `s_in`.
+(`StreamIFMaster`), and a regmap carrying `halted`, `error` and `tx_id` status.
+Commands and four polynomial coefficients ride **in band** on `s_in`.
 
 **The block design.** PS → SmartConnect → AXI DMA (MM2S + S2MM) → the IP's AXIS ports, plus the
 AXI-Lite control path from S1. The DMA's own control slave joins the address map.
+Separate control and memory SmartConnects route DMA MM2S/S2MM to PS HP0 DDR
+in the lower 2 GiB aperture. All blocks use the same 100 MHz PS PL clock. The
+template uses 32-bit streams and simple DMA with SG and DRE disabled.
 
 **7.1 The one thing most likely to hang the board: TLAST.** An AXI DMA **S2MM channel does not
 terminate without TLAST**. This repo's standing law is that boundary TLAST comes from `ap_axis` —
@@ -294,13 +341,17 @@ codegen change, not a TCL change.
 
 A hang here looks exactly like a host bug. Check TLAST in the VCD before suspecting the host.
 
-**7.2 Expect the `coeffs` array to break the conformance gate.** See §6.3. Resolve it by making the
-model match what `control.h` actually says — not by relaxing the gate.
+**7.2 Match the current exported status ABI and in-band schema.** Coefficients
+are not registers. DATA and END headers each serialize to six 32-bit words.
+The exported status enum follows the kernel's C++ representation; it must not be
+confused with compact stream serialization. Old register-coefficient vectors are
+rejected before programming the board.
 
-**7.3 The host.** `pynq.allocate` for the input and output buffers, `dma.sendchannel` /
-`dma.recvchannel`, with coefficients written through the generated driver first. The in-band command
-header is built with the example's existing schema — **do not hand-pack it**; use the `DataSchema`
-serializers (this is a recurring failure mode in this repo, and it hides at width 1).
+**7.3 The host.** `pynq.allocate` supplies input/output buffers, with explicit
+cache maintenance and DMA timeouts. The portable DMA adapter arms S2MM before
+output-producing MM2S transfers. Vectors use the upstream schema/scenarios and
+contain DATA, samples and END; the host checks response ID, samples and final
+status. Cubic, identity and constant cases exercise the same five-frame protocol.
 
 **Gates:** rungs 1–6. Rung 6 = the board's output stream equals the pysim output for the committed
 vector.
@@ -316,6 +367,9 @@ vector.
 ---
 
 ## 8. Stage S3 — `examples/shared_mem`: a master to DDR
+
+**Progress:** not implemented in this extension. Start after fresh S1/S2 acceptance.
+S2 already accesses PS DDR through DMA; S3 adds the accelerator's own AXI master.
 
 **The design.** `HistAccel` is `HostActivated` with `s_in`, `m_out`, and `m_mem` (`MMIFMaster`),
 and a **deliberately empty** `VitisRegMap({})` whose only job is `ap_start`/`ap_done`.
@@ -344,6 +398,8 @@ result, not like a cache problem — say which choice the example makes, in the 
 ---
 
 ## 9. Stage S4 — `examples/bram_access`: a mixed IP
+
+**Progress:** future board application stage; no new board acceptance claimed.
 
 **Less new work than it looks, in a different place than expected.**
 
@@ -389,6 +445,8 @@ design and the XSI gate on the *same* RTL, which is worth more than using the ve
 
 ## 10. Stage S5 — `examples/rf_shot_tx`: the converter
 
+**Progress:** future board application stage; no RFDC overlay or measurement claimed.
+
 **Hardest, last, and the only stage with board-specific physical constraints.**
 
 **The design.** `RfShotTx` is a `FreeRunMod` composite (`waveflow/hw/rf_shot_tx.py`) — a loader and
@@ -413,7 +471,7 @@ prerequisite, not a parallel concern.
 **10.4 Rung 6 needs an instrument.** Unlike S1–S4, "matches pysim" is not checkable from the host
 alone — the output leaves the chip. The honest gate is a **loopback**: DAC out to ADC in, captured
 and compared. That means S5 in practice pulls in the RX half, and the loopback example
-(`examples/rf_shot_loopback`, the most recent commit on `main`) is the natural target. **Scope S5
+(`examples/rf_shot_loopback`) is the natural target. **Scope S5
 deliberately:** either stop at rung 5 (a bitstream that builds and loads, with the DAC verified on a
 scope) and open S6 for the loopback measurement, or plan for both halves up front. Do not discover
 this at the end.
@@ -424,25 +482,26 @@ this at the end.
 
 ## 11. Per-example repo layout
 
+The implemented S1/S2 layout keeps source inputs separate from generated runs:
+
 ```
 examples/<name>/
   board/
-    bd/create_bd.tcl           # committed, de-absolutized, parameter header at the top
-    constraints/<name>.xdc     # board pins (S5 only; earlier stages have none)
-    scripts/build.tcl          # create project -> IP repo -> BD -> wrapper -> bitstream
-    ip/                        # generated: the exported Vitis IP (gitignored)
-    overlay/
-      <name>.hwh               # COMMITTED
-      manifest.json            # COMMITTED -- versions, part, board files, commit, .bit sha256
-      <name>.bit               # gitignored; a Release asset
+    bd/template.tcl            # committed cells and connections
+    design.py                  # committed address/topology/clock contracts
+    build_<name>.ipynb         # manual notebook; name follows the application
     host/
-      <top>_driver.py          # GENERATED from the VitisRegMap
-      run_<name>.py            # hand-written; runs on board or against pysim
-      <name>.ipynb             # hand-written notebook (optional)
-  README.md                    # + "On the board" section: how to build, how to run, what to expect
+      run_<name>.py            # portable model/PYNQ entry
+      sim_backend.py           # model adapter
+  <name>_board.py               # application DAG using the shared CLI
+  board_build/                 # generated; ignored; absent in a fresh clone
+    notebook/run-*/            # notebook outputs
+    overlays/overlay-*/         # collected overlay and manifests
 ```
 
-The `build.tcl` starts life as `write_project_tcl -no_ip_version -force` output, de-absolutized.
+S2 also has a portable DMA adapter and frame checks. The generated overlay
+contains `driver.py`, ABI/driver manifests, BIT/HWH/XSA and rebuild metadata.
+Future S5 pin constraints belong with its application sources when implemented.
 **Never commit the Vivado project tree** (`.xpr`, `.runs/`, `.cache/`, `.gen/`, `.hw/`, `.sim/`,
 `.ip_user_files/`) — all regenerated, huge, path-dependent.
 
@@ -450,22 +509,23 @@ The `build.tcl` starts life as `write_project_tcl -no_ip_version -force` output,
 
 ## 12. Off-board host execution
 
-`waveflow/board/emu.py`: a `pynq.pl_server.device.Device` subclass with `_probe_`,
-`_probe_priority_`, and `capabilities = {"REGISTER_RW": True, "MEMORY_MAPPED": False}`, whose
-`read_registers` / `write_registers` route into a running pysim `Simulation` of the DUT. Copy the
-method list from `pynq/pl_server/remote_device.py` rather than inventing one — it is structurally the
-same thing over a different transport.
+The implemented generated register driver depends only on a backend exposing
+`read_registers` / `write_registers`; it imports neither PYNQ nor Waveflow.
+Application `sim_backend.py` adapters connect that interface to the canonical
+models. S2's model adapter exercises the framed transaction protocol without
+claiming to emulate physical DMA, allocation or cache behavior.
 
-`REGISTER_RW` alone covers S1. S2/S3 additionally need `allocate()`, which is where this gets
-harder — a simulated DMA buffer has to be reachable from the model's memory. **Scope honestly:**
-S1's host runs off-board on day one; S2/S3 off-board support may lag by a stage, and that is
-acceptable as long as it is stated rather than quietly dropped.
+Before export, `host_sim` checks the model protocol. After export,
+`export_host_sim` runs the generated hardware-ABI driver against the model.
+The board host uses PYNQ MMIO, allocation and the actual DMA. Physical acceptance
+remains separate. A generic `pynq.Device` emulation layer was not added by this
+minimal migration.
 
 ---
 
 ## 13. Environment manifest (the part everyone forgets)
 
-Recorded once in `docs/` and repeated per-overlay in `manifest.json`:
+Documented in the developer guide and recorded with generated overlay metadata:
 
 - **Vitis HLS / Vivado version** — 2025.1 is what the author's machine has; a different version
   changes generated RTL, interface names, and the VLNV strings the BD TCL pins.
@@ -483,8 +543,12 @@ Recorded once in `docs/` and repeated per-overlay in `manifest.json`:
   version bump as a real change with its own PR.
 - **Rung 5 is slow.** 20–40 min per bitstream, five examples. Bitstream builds should never be part
   of a default test run; `-m vivado` is opt-in, and CI (if any) runs rungs 1–2 only.
-- **`allocate()` in the emulated device** (§12) is the least-solved piece of this plan.
-- **The `coeffs` array offsets** (§7.2) are a known unknown that the conformance gate will expose.
+- **Fresh acceptance is still pending.** Offline tests and historical board runs
+  cannot establish compatibility of newly generated RTL, exports or overlays.
+- **DMA framing, allocation and cache maintenance** still need physical validation;
+  the model adapter does not simulate the PS memory/cache system.
+- **ABI changes must be checked against the actual export.** This includes arrays
+  in future IPs and enum/pointer representation; S2 coefficients are now in-band.
 - **S5's rung 6 needs either an instrument or the RX half** (§10.4).
 - **Open: where does a shared host API live?** This plan deliberately generates a *per-example*
   driver and stops there. `plans/rf_lab_platform.md` proposes a backend-neutral `RfLab` façade for
@@ -504,5 +568,7 @@ Recorded once in `docs/` and repeated per-overlay in `manifest.json`:
 - the resource_model plan ([commit b715f1d](https://github.com/sdrangan/waveflow/commit/b715f1d)) — the wrapper as the first scope an area number can be defined against;
   S4's IP is that scope made physical.
 - [PR #177](https://github.com/sdrangan/waveflow/pull/177) — why a skipped gate is a missing gate (§3).
-- `docs/guide/flows/bitstream_ipi.md` — the Flow 4 stub this plan fills in; un-hide it
-  (`nav_exclude`) when S1 lands.
+- [Board packaging development](../docs/guide/flows/board_packaging.md) — current
+  APIs, extension procedure, source map, validation contracts and manual commands.
+- `docs/guide/flows/bitstream_ipi.md` — the broader device/system packaging flow;
+  it links to the application-template extension without replacing that flow.
