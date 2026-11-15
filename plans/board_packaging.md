@@ -1,7 +1,7 @@
 # Plan — board packaging: an example becomes IP, a bitstream, and a PynQ host
 
-**Status: S0 core and S1/S2 application paths implemented; fresh tool and board
-acceptance pending. Updated 2026-11-15.** This plan tracks the template-driven
+**Status: S0 core and S1/S2 application paths implemented; S1 notebook board run
+reported passed, receipt review and CMD/S2 acceptance pending. Updated 2026-11-15.** This plan tracks the template-driven
 RFSoC4x2 board packaging extension. The implemented APIs, source map and manual
 commands are in [Board packaging development](../docs/guide/flows/board_packaging.md).
 
@@ -34,7 +34,7 @@ documentation, 72 added board-related files, and no deleted upstream files.
 | --- | --- | --- |
 | S0: target and clocks | `waveflow.board`, vendored RealDigital resources, optional board-aware `BuildConfig`, explicit clock resolution and target mismatch checks | Fresh tool/clock probes and applicable XSI gates |
 | S0: packaging pipeline | Export receipts, header/XML control ABI, generated host driver, Tcl contracts, BD validation, implementation and overlay collection; offline conformance/failure tests | Fresh Vitis export and Vivado validation/implementation |
-| S1: SimpFun | Current upstream model/codegen reused; manually built notebook overlay, compact recollection and collected-driver model checks | CMD rebuild and physical acceptance for both paths |
+| S1: SimpFun | Current upstream model/codegen reused; fresh notebook tool build checked and RFSoC4x2 run reported passed | Return notebook acceptance JSON and review hashes; independently build and test the CMD path |
 | S2: PolyAccel | Current upstream in-band coefficient protocol, PS DDR/simple DMA template, portable host and manual build notebook | Rebuild overlay and rerun all three cases on RFSoC4x2 |
 | S3: direct AXI master to DDR | Future stage | Design, implementation and all acceptance gates |
 | S4: mixed HLS/RTL IP | Future stage | Packaging route, implementation and all acceptance gates |
@@ -59,27 +59,35 @@ branch. The old untracked board build directories have now been removed. The
 separate migration clone, note and backups are retained outside the repository;
 future verification starts from the committed sources and fresh outputs.
 
-Since that cleanup, the S1 notebook has been run manually. Its existing
-implementation receipts were checked again when collecting the four-file
-overlay, with matching BIT/HWH/driver hashes and model outputs `0`, `11`, `17`.
-The source overlay had 53 files; the compact overlay has four. This collection
-did not rerun AMD tools or program the board, and physical acceptance is pending.
+Since that cleanup, the S1 notebook was rebuilt manually at source commit
+`5a788856`, producing `run-vzfkcj1w/overlays/overlay-mp59jnfe`. Its C/RTL checks,
+export/driver ABI, BD and implementation receipts were checked locally. The
+clock readback is 99.999985 MHz, WNS is 4.728 ns, hold slack is 0.022 ns and
+severe DRC count is zero. The compact overlay has four delivery files.
+
+On 2026-11-15, the user reported a successful RFSoC4x2 run of this notebook
+overlay: `passed=True`, outputs `[0, 11, 17]`, and
+`board_execution_verified=True`. The board saved
+`test_s1_notebook_vzfkcj1w/board-acceptance-20261115T164059914431Z.json`.
+That JSON has not yet been returned to the workstation, so matching its recorded
+manifest, bitstream and ABI hashes against the local overlay remains pending.
+The independently generated CMD overlay has not yet been accepted.
 
 The next actions are sequential and remain **manual**:
 
-1. Use [the S1 notebook](../examples/regmap/board/build_simp_fun.ipynb) and
-   [the S2 notebook](../examples/stream_inband/board/build_poly.ipynb). Each ends
-   with CMD commands including the environment setup; the BD and implementation
-   switches initially remain disabled.
-2. Rebuild through `bd_validate` with Vitis/Vivado 2025.1. Check the actual exported
-   ABI and generated-driver simulation, the target and 100 MHz clock readback,
-   addresses and topology before implementation.
-3. Generate fresh overlays independently for the notebook and CMD paths. Retain
-   their manifests, tool reports and hashes with the new run, outside source control.
-4. Upload the portable host, new overlay and S2 vectors to RFSoC4x2. Run the S1
-   cases and S2 cubic/identity/constant cases for each path; return the new
-   acceptance records and match them to their overlay hashes.
-5. Mark S1/S2 accepted only after reviewing those records. Then start S3; keep
+1. Return the S1 notebook acceptance JSON and compare its manifest, bitstream
+   and ABI hashes with `run-vzfkcj1w/overlays/overlay-mp59jnfe`.
+2. Independently build the S1 CMD overlay using the environment/CMD instructions
+   at the end of [the S1 notebook](../examples/regmap/board/build_simp_fun.ipynb).
+   Check HLS/export/ABI, BD validation, target/clock, timing and DRC gates.
+3. Upload that CMD overlay and the current portable host to RFSoC4x2. Run all
+   three S1 cases and return its separate acceptance JSON.
+4. Build and test S2 via [its notebook](../examples/stream_inband/board/build_poly.ipynb)
+   and independently via CMD. Check `bd_validate` before implementation, then
+   run cubic/identity/constant cases on RFSoC4x2 with each new overlay.
+5. Match all new acceptance records to their overlay hashes. Keep generated
+   overlays, reports and acceptance JSON outside tracked source control.
+6. Mark S1/S2 accepted after reviewing the required records. Then start S3; keep
    generic multi-IP/system packaging and RF work as separate follow-up scope.
 
 ---
@@ -279,9 +287,10 @@ and `ExportIpStep` refuses a part mismatch in a unit test.
 ## 6. Stage S1 — `examples/regmap`: AXI-Lite only
 
 **Progress:** source-to-overlay DAG, template, portable host and manual notebook
-implemented; offline gates passed. A manually built notebook overlay is available
-and its implementation receipts passed compact collection checks. CMD rebuilding
-and physical-board acceptance remain pending.
+implemented; offline gates and the fresh notebook tool build passed. The user
+reported a passing notebook-overlay board run with outputs `0`, `11`, `17`.
+Review of the returned notebook acceptance JSON and independent CMD build/board
+acceptance remain pending.
 
 The smallest possible closed loop, and the stage that carries most of the framework. Budget
 accordingly: S1 is not 1/5 of the work.
