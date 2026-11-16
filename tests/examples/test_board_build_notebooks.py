@@ -3,10 +3,51 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("checkout_available", [True, False])
+def test_s2_environment_handles_a_deleted_working_directory(tmp_path, checkout_available):
+    path = REPO / "examples/stream_inband/board/build_poly.ipynb"
+    notebook = json.loads(path.read_text())
+    source = next("".join(c["source"]) for c in notebook["cells"] if c["id"] == "environment")
+    gone = tmp_path / "deleted-kernel-directory"
+    gone.mkdir()
+    script = r'''
+import os
+from pathlib import Path
+import sys
+
+checkout, gone = map(Path, sys.argv[1:3])
+available = sys.argv[3] == "True"
+source = sys.stdin.read()
+sys.prefix = str(checkout / ".venv" if available else gone.parent / "other-environment")
+os.chdir(gone)
+gone.rmdir()
+try:
+    os.getcwd()
+except FileNotFoundError:
+    pass
+else:
+    raise AssertionError("The subprocess must reproduce a deleted working directory")
+
+namespace = {}
+try:
+    exec(compile(source, "<S2 environment cell>", "exec"), namespace)
+except RuntimeError as exc:
+    assert not available, exc
+    assert "os.chdir('/absolute/path/to/checkout')" in str(exc), exc
+else:
+    assert available
+    assert namespace["repo"] == checkout
+    assert Path.cwd() == checkout
+'''
+    subprocess.run([sys.executable, "-c", script, str(REPO), str(gone), str(checkout_available)],
+                   input=source, text=True, check=True)
 
 
 @pytest.mark.parametrize("app,filename,entry", [
