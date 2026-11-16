@@ -23,6 +23,8 @@ equal; ``form`` exists so a model of a datapath can run the order the hardware r
 
 from __future__ import annotations
 
+from enum import IntEnum
+
 import numpy as np
 
 from waveflow.utils import complexutils as cx
@@ -30,6 +32,19 @@ from waveflow.utils import fixputils as fx
 from waveflow.utils.fixputils import Format
 
 FORMS = (3, 4)
+
+
+class MatmulOp(IntEnum):
+    """The operations of the matrix multiply (``0`` is not one, so a zeroed header is refused)."""
+
+    MUL = 1  # C = q(A·B)
+    MUL_AH = 2  # C = q(Aᴴ·B)
+
+
+def stored_shape(op: int, m: int, k: int) -> tuple[int, int]:
+    """The shape of ``A`` as a job states it: ``m × k``, or ``k × m`` for ``Aᴴ``.  (The array's
+    block always holds ``m × k``: ``A``, or ``Aᵀ``.)"""
+    return (int(k), int(m)) if int(op) == MatmulOp.MUL_AH else (int(m), int(k))
 
 
 def acc_format(a: Format, b: Format, K: int) -> Format:

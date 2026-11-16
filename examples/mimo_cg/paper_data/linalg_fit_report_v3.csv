@@ -1,0 +1,20 @@
+# linalg_fit_report_v3.csv: step 7.5 fit, model v3; tool=Vitis HLS / Vivado xsim 2025.1
+metric,value
+version,3
+loo.unit_lut.mean_pct,5.012577283266133
+loo.unit_lut.max_pct,26.88544034792923
+loo.unit_ff.mean_pct,1.9593258546174432
+loo.unit_ff.max_pct,6.888440364511735
+loo.core_lut.mean_pct,7.519537820338349
+loo.core_lut.max_pct,36.975372875476936
+loo.core_ff.mean_pct,2.754621522494339
+loo.core_ff.max_pct,9.779743175440087
+loo.interval.mean_pct,11.18753438969605
+loo.interval.max_pct,59.492887385853464
+n_builds,61
+sha256.models/systolic_core_task/params.json,34de8259434bae10860752de6f2380d45685e93998c0aab8eeaa4c70c5dee75d
+sha256.models/systolic_rx_task/params.json,1475fb3051cc798053eddcf1727cfe16029b471711deb795c8d5bce4454374d0
+sha256.models/systolic_load_task/params.json,2f22ffca5429e973e787101cf30aae2f5adb7592981bd1c3af7754291fcfc649
+sha256.models/systolic_store_task/params.json,6743d89537030210a9c0eb28d0de2fe97de9deb7b1cbfae646c7b553991ec09d
+sha256.models/systolic_unit_channels/params.json,884eaae6a867e069d2704a157cbfa62559d3b6f4120421d4f09cb0b060865c82
+sha256.components/systolic_unit/params.json,0886676627eca2c6fc2ae18ca861f2dbcfaff112b904ff396803913d8da45d46

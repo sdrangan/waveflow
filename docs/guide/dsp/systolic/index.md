@@ -39,5 +39,5 @@ The key difference is where the operands live:
   product is divided into tiles and panels and the loop over them, the block-major layout, the feeder,
   performance, limits.
 
-The older `SystolicUnit` (`waveflow/linalg/systolic.py`), which the engine supersedes, remains only for
-`examples/mimo_cg` until that example moves to the engine; it is no longer documented here.
+The older `SystolicUnit` (`waveflow/linalg/legacy/systolic.py`), which the engine supersedes, is retired: it
+remains only for `examples/mimo_cg` ([Retired Components](../legacy/index.md)).

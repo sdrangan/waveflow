@@ -2,7 +2,7 @@
 title: "Simulation speed: CG on the vector unit"
 parent: Simulation speed
 nav_order: 4
-summary: "Bit-exact CG solves of an 8×n right-hand side (n = 32 to 2,048, 1 to 64 jobs on the vector unit) run four ways on the same operands: the application's untimed model (1 to 4 ms), the unit's interpreter (8.5 to 474 ms), Waveflow's pysim of the unit (27 ms to 1.0 s, cycle counts within 0.07% of the RTL's) and the synthesized RTL under XSI (2.7 to 250 s, after 98 s of csynth and 93 s of XSI build). The RTL takes 101 to 250 times as long as the whole pysim. Making the unit's own Python faster without changing a single result (Stage 10 of the plan) cut the pysim by 3 to 5 times and the interpreter by 1.6 to 1.8 times: how, and what is left."
+summary: "Bit-exact CG solves of an 8×n right-hand side (n = 32 to 2,048, 1 to 64 jobs on the vector unit) run four ways on the same operands: the application's untimed model (1 to 4 ms), the unit's interpreter (8.5 to 474 ms), Waveflow's pysim of the unit (28 ms to 1.0 s, cycle counts within 0.14% of the RTL's) and the synthesized RTL under XSI (4.1 to 315 s, after 114 s of csynth and 154 s of XSI build). The RTL takes 146 to 315 times as long as the whole pysim. Making the unit's own Python faster without changing a single result (Stage 10 of the plan) cut the pysim by 3 to 5 times and the interpreter by 1.6 to 1.8 times: how, and what is left."
 ---
 
 # Simulation speed: CG on the vector unit
@@ -56,38 +56,41 @@ One solve per size; every run exact, in the interpreter (`X` against `cg_solve`)
 
 | `B` | jobs | RTL cycles | golden | interpreter | pysim | RTL under XSI | RTL ÷ pysim |
 |---|---|---|---|---|---|---|---|
-| 8×32 | 1 | 3,491 | 1.0 ms | 8.5 ms | **27 ms** (129 events) | **2.7 s** | **101×** |
-| 8×128 | 4 | 13,568 | 1.2 ms | 31 ms | **73 ms** (438 events) | **14 s** | **195×** |
-| 8×512 | 16 | 53,876 | 1.8 ms | 120 ms | **277 ms** (1,686 events) | **61 s** | **221×** |
-| 8×2048 | 64 | 215,108 | 4.2 ms | 474 ms | **1.00 s** (6,678 events) | **250 s** | **250×** |
+| 8×32 | 1 | 3,579 | 1.0 ms | 8.5 ms | **28 ms** (129 events) | **4.1 s** | **146×** |
+| 8×128 | 4 | 13,920 | 1.2 ms | 31 ms | **74 ms** (438 events) | **19 s** | **253×** |
+| 8×512 | 16 | 55,284 | 1.8 ms | 119 ms | **278 ms** (1,686 events) | **78 s** | **281×** |
+| 8×2048 | 64 | 220,740 | 4.1 ms | 474 ms | **1.00 s** (6,678 events) | **315 s** | **315×** |
 
 The pysim column is the whole run, harness included. Apart:
 
 | `B` | pysim: build the harness | pysim: run | run ÷ interpreter | RTL ÷ run | pysim cycles (vs RTL) |
 |---|---|---|---|---|---|
-| 8×32 | 15 ms | 12 ms | 1.36 | 234× | 3,489 (−0.07%) |
-| 8×128 | 39 ms | 34 ms | 1.10 | 419× | 13,568 (0.00%) |
-| 8×512 | 154 ms | 122 ms | 1.02 | 501× | 53,885 (+0.02%) |
-| 8×2048 | 525 ms | 475 ms | 1.00 | 526× | 215,151 (+0.02%) |
+| 8×32 | 17 ms | 12 ms | 1.36 | 356× | 3,574 (−0.14%) |
+| 8×128 | 40 ms | 34 ms | 1.08 | 555× | 13,909 (−0.08%) |
+| 8×512 | 156 ms | 122 ms | 1.02 | 640× | 55,247 (−0.07%) |
+| 8×2048 | 526 ms | 472 ms | 1.00 | 667× | 220,601 (−0.06%) |
 
 Per job, fitted over the four sizes (`setup + jobs × per job`): golden 0.05 ms, interpreter 7.4 ms
-(35 ms element-major), pysim 15 ms (8.1 ms building the harness, 7.4 ms running, 104 SimPy events),
-RTL 3.9 s.
+(34 ms element-major), pysim 15 ms (8.1 ms building the harness, 7.3 ms running, 104 SimPy events),
+RTL 4.9 s.
 
-One-time costs, per design point: csynth 98 s; the XSI build 93 s the first time (compile 2.8,
-elaborate 89, testbench 1.4), then nothing but the simulation for each new workload. The pysim needs
+One-time costs, per design point: csynth 114 s; the XSI build 154 s the first time (compile 4.8,
+elaborate 148, testbench 1.6), then nothing but the simulation for each new workload. The pysim needs
 neither.
 
-Measured 2026-10-24 (Vitis HLS / Vivado xsim 2024.1) on a Linux workstation in the lab (Intel Core
+Measured 2026-11-06 (Vitis HLS / Vivado xsim 2025.1) on a Linux workstation in the lab (Intel Core
 i7-7700K, 4 cores and 8 threads at 4.2 GHz, 32 GB, Python 3.12.3), otherwise idle; the untimed ways and
-the pysim are the best of eleven runs, the RTL one run a size. `runtime.json` keeps the record from
-before Stage 10 under `rhs_centre_before_stage10`.
+the pysim are the best of eleven runs, the RTL one run a size. The same runs at 2024.1 (2026-10-24, the
+same machine) gave the golden, interpreter and pysim times within 6%, and an RTL 2.5% shorter in cycles
+(3,491 to 215,108) simulated 1.26 to 1.52 times as fast (2.7 to 250 s), after 98 s of csynth and a
+93 s XSI build (elaborate 89 s). `runtime.json` keeps the record from before Stage 10 (2024.1) under
+`rhs_centre_before_stage10`.
 
 **How the RTL column is counted.** As on [the systolic page](systolic.md#results-across-sizes): the
 harness has no host to end the RTL run, so XSI simulates a fixed bound, `1.2 × pysim cycles + 2,000`,
 and the table charges it `simulate × done ÷ bound`, where `done` is the cycle the last output word left
-(for 8×2048, 303 s for 260,461 cycles, of which 215,108 were the work). That favours the RTL: the run's
-fixed start-up is scaled down with it. XSI simulated this unit at 860 to 1,290 cycles a second. The raw
+(for 8×2048, 381 s for 266,721 cycles, of which 220,740 were the work). That favours the RTL: the run's
+fixed start-up is scaled down with it. XSI simulated this unit at 700 to 870 cycles a second. The raw
 times are in `examples/vecunit_cg/runtime.json`.
 
 ## Faster, with no result changed
@@ -96,7 +99,7 @@ Stage 10 of `plans/vecunit_new.md` made the unit's own Python faster -- `waveflo
 example's code only; nothing in `fixputils`, `lanes`, `cg.cg_solve`, the interfaces or SimPy -- and
 changed no result: every output burst of 17 pysim workloads (both applications, the generic unit, four
 builds; 724 bursts) carries the same words at the same simulated time as before, and the RTL is
-untouched. Same machine, idle, best of eleven:
+untouched. Same machine, idle, best of eleven, both on 2026-10-24:
 
 | `B` | interpreter | pysim: build | pysim: run | pysim | SimPy events |
 |---|---|---|---|---|---|
@@ -134,22 +137,23 @@ call: read the shares), after Stage 10 (before, in brackets):
 | | share |
 |---|---|
 | **building the harness** | 50% (82%) |
-| ... the closed-loop interpreter run that makes the stimulus | 89% (93%) |
+| ... the closed-loop interpreter run that makes the stimulus | 88% (93%) |
 | **the run** | 50% (18%) |
 | ... the interpreter (the execute task's passes, scalars, decode) | 77% (90%) |
-| ... converting words to blocks and back (the load and store tasks) | 2.7% (1.3%) |
-| ... SimPy, the interfaces, the tasks' own code | 21% (8.4%) |
+| ... converting words to blocks and back (the load and store tasks) | 3.0% (1.3%) |
+| ... SimPy, the interfaces, the tasks' own code | 20% (8.4%) |
 
 The raw profile splits are in `runtime.json` under `"profile"`.
 
 ## Insights
 
-- **The RTL takes 101 to 250 times as long as the whole pysim, and 234 to 526 times its run,** before
-  the RTL's three minutes of csynth and XSI build. At 64 jobs that is four minutes against one second.
+- **The RTL takes 146 to 315 times as long as the whole pysim, and 356 to 667 times its run,** before
+  the RTL's four and a half minutes of csynth and XSI build. At 64 jobs that is five minutes against
+  one second.
   A change to the unit or its configuration costs a new csynth and XSI build on the RTL side and
   nothing on the pysim side.
-- **The pysim's timing is right where it was calibrated.** Its cycle count is within 0.07% of the
-  RTL's at every size, and exactly the RTL's at four jobs. The first measurement found the first job
+- **The pysim's timing is right where it was calibrated.** Its cycle count is within 0.14% of the
+  RTL's at every size. The first measurement found the first job
   233 cycles late -- the execute task waited for its whole program burst, 233 words, where the RTL
   decodes each instruction as it arrives -- 6.6% of a single job. The calibration (Stage 7 of
   `plans/vecunit_new.md`) fitted the intervals between statuses, which never include a run's first
@@ -159,7 +163,7 @@ The raw profile splits are in `runtime.json` under `"profile"`.
   [Simulation speed](index.md#the-cost-model) holds, and the untimed term is the interpreter.
 - **The interpreter is the cost of programmability, in simulation.** It runs the unit's program
   instruction by instruction, 7.4 ms a job, where the golden does the whole `B` in numpy at 0.05 ms a
-  job once its 1 ms of set-up is paid: 8 to 112 times the golden across these sizes. Its element-major
+  job once its 1 ms of set-up is paid: 8 to 115 times the golden across these sizes. Its element-major
   mode costs another 4.7×.
 - **Half the pysim's time is still the testbench.** The stimulus is a closed-loop interpreter run; in a
   system where the systolic engine is simulated beside the unit, `S` would come from that engine instead.

@@ -239,8 +239,8 @@ scalar union: 32 bits, 12 integer
 ```
 
 The union's width is a cost. Formats whose integer and fraction bits spread widely build wide
-multipliers and a wide quantizer: integer parts from 1 to 14 bits gave 52-bit results and a csynth of
-more than 50 minutes (Vitis HLS 2024.1, `plans/vecunit_new.md` Stage 5). Keep a unit's formats
+multipliers and a wide quantizer: integer parts from 1 to 14 bits gave 52-bit results and a csynth
+many times longer than the usual builds' (`plans/vecunit_new.md` Stage 5). Keep a unit's formats
 close, as an application's usually are.
 
 **The result shift.** A multiplying instruction's product can be scaled by `2^−RS` before its one

@@ -41,6 +41,7 @@ TOC_EXAMPLES = {
     "rf_shot_loopback",
     "rf_shot_rx",
     "rf_shot_tx",
+    "rt_sounder",
     "shared_mem",
     "ssr_fft",
     "stream_inband",

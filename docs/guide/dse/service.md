@@ -8,8 +8,9 @@ summary: "The process that answers every dselib call: it checks the call, synthe
 
 # The service
 
-**Under construction.** The interfaces are in
-[`examples/dse_cg/service.py`](../../../examples/dse_cg/service.py); nothing is written yet.
+The service is [`examples/dse_cg/service.py`](../../../examples/dse_cg/service.py). The live backend,
+the ledger, the cache, the budget and both transports are written; the replay backend is a later step
+of [`plans/dse_cg.md`](../../../plans/dse_cg.md).
 
 The agent explores through `dselib`, a small Python library in the [skill](skill.md). Every
 `dselib` function is a request to the **service**, a separate process that does the work: it runs
@@ -77,8 +78,8 @@ a failure is a row, never an exception.
 
 `dselib` knows nothing about any design. It is a thin client: each function forwards its arguments
 to whatever service it is bound to, and the service was built around one adaptor
-(`Service(CgDetectorAdaptor(), ...)`). The CG detector and the descriptor-ring system use the same
-`dselib`, bound to different services.
+(`Service(LtbfCgMemAdaptor(), ...)`). The LTBF system and its descriptor-ring variant (V2 in the plan)
+use the same `dselib`, bound to different services.
 
 - **It ships with the skill.** It is plain Python with no Waveflow dependency, so it runs in a
   sandbox that has no Waveflow. It lives in the skill's folder and is copied with it.
@@ -91,7 +92,7 @@ to whatever service it is bound to, and the service was built around one adaptor
 ## What happens on each call
 
 1. **Check.** Unknown parameter names are refused. An illegal design (`DseAdaptor.legal`) comes back
-   as a row with `status: "illegal: K % R != 0"`, at no cost. `pysim` is refused in the traditional
+   as a row with `status: "illegal: n > 16"`, at no cost. `pysim` is refused in the traditional
    arm.
 2. **Look up.** A result the ledger already holds is returned again, marked `cached`, at no cost.
 3. **Charge.** The cost of what is new is taken from the budget. A call the budget cannot cover is
@@ -214,5 +215,7 @@ The same service serves a user in their own project, either in the same process
   report names;
 - a **budget only if the user sets one**.
 
-A user starts it (`python -m examples.dse_cg.service --live`, not written yet) and sets `DSE_SERVICE`
-to its address; the skill's `dselib` finds it there.
+A user starts it (`python -m examples.dse_cg.service --live`, with `--budget-h`, `--arm` and
+`--address` if wanted) and sets `DSE_SERVICE` to the address it prints; the skill's `dselib` finds it
+there. Each session starts a new account (appended to `--ledger`); the tools' own caches persist, so
+a part synthesized yesterday runs no tool today.

@@ -39,3 +39,7 @@ import.
 
 See [choosing a sample buffer](./choosing.md) for more detail on selecting between them — it turns
 the choice into one question you can check against your own design.
+
+On the other side of the converter is the world. The [**RF environment**](./rfenv/) puts ray-traced
+propagation (NVIDIA Sionna RT) on the RF edges: a multipath channel between a DAC and an ADC, or the
+signal a receiver hears, from a committed channel file or traced inside the simulation.

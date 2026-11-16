@@ -171,6 +171,19 @@ class BramView:
         return {"DW": dw, "AW": self.baw}
 
 
+@dataclass(frozen=True)
+class BramViewP1(BramView):
+    """A BRAM window whose leaf is ``mm_bram_port_p1.v``: a read word every cycle, its response the
+    memory's own output register.  For a memory that is simulated, not synthesized
+    (:class:`~waveflow.hw.memory.PipelinedMemoryMod`); everything else is :class:`BramView`'s."""
+
+    module = "mm_bram_port_p1"
+
+
+#: The BRAM window of each memory leaf a memory class may name (``MemoryMod.BRAM_LEAF``).
+BRAM_VIEWS: dict[str, type[BramView]] = {"mm_bram_port": BramView, "mm_bram_port_p1": BramViewP1}
+
+
 def bram_read_latency() -> int:
     """``bram_t2p.v``'s published read latency -- the single source the leaf's ``LAT`` comes from."""
     from waveflow.build.rtl_gen import RtlModule, rtl_read_latency
@@ -185,7 +198,7 @@ def bram_read_latency() -> int:
 LEAF_DEPS: dict[str, tuple[str, ...]] = {
     "mm_sync_fifo": (), "axi_slave_front": (), "mm_queue_in": ("mm_sync_fifo",),
     "mm_queue_out": ("mm_sync_fifo",), "mm_regbank": (), "mm_bram_port": (), "bram_t2p": (),
-    "mm_credit_in": (),
+    "mm_credit_in": (), "mm_bram_port_p1": (),
 }
 
 

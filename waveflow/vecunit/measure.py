@@ -18,9 +18,11 @@ import numpy as np
 from waveflow.vecunit.build import PERIOD_NS
 
 
-def measure_run(unit, workload: str, root: Path, *, trace: bool = False) -> dict:
+def measure_run(unit, workload: str, root: Path, *, trace: bool = False,
+                bound_factor: float = 1.2) -> dict:
     """*unit*'s harness on *workload* in pysim, then through csynth and XSI at *root* (one root per
-    build: csynth runs on its first workload only), its RTL bounded a little past pysim's length."""
+    build: csynth runs on its first workload only), its RTL bounded a little past pysim's length
+    (:func:`~waveflow.vecunit.runtime.rtl_bound`, *bound_factor* times it)."""
     from waveflow.hw.harness import harness
     from waveflow.vecunit import report
     from waveflow.vecunit.calib import pysim_status
@@ -30,7 +32,8 @@ def measure_run(unit, workload: str, root: Path, *, trace: bool = False) -> dict
     sysm = harness(unit, workload=workload, n_cycles=PYSIM_BOUND)
     sysm.run()
     pysim_cycles = sysm.sim.env.now / sysm.clock().period
-    rtl = time_rtl(unit, workload, Path(root), rtl_bound(pysim_cycles), trace=trace)
+    rtl = time_rtl(unit, workload, Path(root), rtl_bound(pysim_cycles, bound_factor),
+                   trace=trace)
     out = {"header": header_name(unit.cfg), "word_bits": int(unit.cfg.word_bits),
            "workload": workload, "tool": rtl["tool"], "exact": rtl["exact"],
            "failed": rtl["failed"]}

@@ -7,12 +7,12 @@ merges the measurements, fits the model and scores it.  The bench is
 ``tests/linalg/_cg_unit_bench.py``: the unit fed from memory through the in-band memory streams, as
 in the step 8.3 RTL gate.
 
-    python -m examples.mimo_cg.hw.cg_cal split [--check]     # the pre-registered builds
+    python -m examples.mimo_cg.hw.cg_cal split [--version 2] [--check]   # the pre-registered builds
     python -m examples.mimo_cg.hw.cg_cal run --role fit [--shard i/n]
     python -m examples.mimo_cg.hw.cg_cal merge
     python -m examples.mimo_cg.hw.cg_cal fit                 # writes the packaged platform
-    python -m examples.mimo_cg.hw.cg_cal run --role holdout [--shard i/n]
-    python -m examples.mimo_cg.hw.cg_cal validate
+    python -m examples.mimo_cg.hw.cg_cal run --role holdout2 [--shard i/n]   # 2025.1's; 2024.1: holdout
+    python -m examples.mimo_cg.hw.cg_cal validate [--role holdout]
 
 **The builds.**  The space: ``Kmax`` in (4, 8, 16) (``nitmax = Kmax``), ``Nmax`` in (16, 32), ``L``
 in (1 .. 16) with ``L | Nmax``, the example's sweep formats ``W`` in (8 .. 16) and ``g`` in (0, 4,
@@ -55,10 +55,11 @@ import numpy as np
 from examples.mimo_cg.hw.campaign import shard
 from examples.mimo_cg.hw.linalg_cal import _ape, _flatten, _write_kv
 from examples.mimo_cg.hw.measure import prune_build
-from tests.linalg import _cg_unit_bench as UB
+from tests.linalg.legacy import _cg_unit_bench as UB
 from waveflow.calib.synth_report import report_from_solution
-from waveflow.linalg import cg_cost, cost
-from waveflow.linalg.cg_vector import (
+from waveflow.linalg import cost
+from waveflow.linalg.legacy import cg_cost
+from waveflow.linalg.legacy.cg_vector import (
     CgOp,
     CgVectorUnit,
     iter_cycles,
@@ -71,11 +72,13 @@ HERE = Path(__file__).resolve().parent
 EX = HERE.parent
 PAPER = EX / "paper_data"
 SPLIT = PAPER / "cg_split.csv"
+#: The 2025.1 recalibration (plans/calib_2025_1.md Stage 2): the same fit, a fresh held-out set.
+SPLIT_V2 = PAPER / "cg_split_v2.csv"
 POINTS = EX / "results" / "cg_points"
 BUILDS = HERE / "build" / "cg"
 RUN_8_3 = PAPER / "cg_unit_8_3_cycles.csv"
 PART, PERIOD_NS = cost.PART, 4
-TOOL = "Vitis HLS / Vivado xsim 2024.1"
+TOOL = cost.TOOL
 
 VALUES = {
     "K": (4, 8, 16),
@@ -86,6 +89,7 @@ VALUES = {
     "word": (32, 64),
 }
 HOLDOUT_SEED = 85
+HOLDOUT2_SEED = 86
 N_HOLDOUT = 12
 #: The unknown operation of the rejected requests.
 REJECT_OP = 7
@@ -208,6 +212,16 @@ def holdout_set() -> list[CgConfig]:
     return [rest[i] for i in picks]
 
 
+def holdout2_set() -> list[CgConfig]:
+    """The 2025.1 recalibration's held-out set: :data:`N_HOLDOUT` configurations drawn uniformly
+    (seed :data:`HOLDOUT2_SEED`) from the space without the calibration and first held-out builds."""
+    seen = set(fit_set()) | set(holdout_set())
+    rest = [c for c in space() if c not in seen]
+    rng = np.random.default_rng(HOLDOUT2_SEED)
+    picks = sorted(int(i) for i in rng.choice(len(rest), size=N_HOLDOUT, replace=False))
+    return [rest[i] for i in picks]
+
+
 FIELDS = (*VALUES, "stress")
 
 
@@ -221,13 +235,25 @@ def split_text() -> str:
     return buf.getvalue()
 
 
+def split_v2_text() -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["role", "build", *FIELDS])
+    for c in holdout2_set():
+        w.writerow(["holdout2", c.name, *(getattr(c, k) for k in FIELDS)])
+    return buf.getvalue()
+
+
 def load_split() -> dict[str, list[CgConfig]]:
     roles: dict[str, list[CgConfig]] = {}
-    with SPLIT.open(encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            roles.setdefault(row["role"], []).append(
-                CgConfig(*(int(row[k]) for k in FIELDS))
-            )
+    for path in (SPLIT, SPLIT_V2):
+        if not path.is_file():
+            continue
+        with path.open(encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                roles.setdefault(row["role"], []).append(
+                    CgConfig(*(int(row[k]) for k in FIELDS))
+                )
     return roles
 
 
@@ -588,7 +614,7 @@ def _loo(recs: list[dict]) -> dict:
 
 
 def _run_8_3_formats(run_name: str):
-    from tests.linalg.test_cg_vector_unit import UNITS
+    from tests.linalg.legacy.test_cg_vector_unit import UNITS
 
     return UNITS[run_name]
 
@@ -597,7 +623,7 @@ def _score_8_3(msg: dict) -> dict:
     """The step 8.3 runs: the span from the first reply to the last against the sum of the
     predicted intervals of the requests after the first (rebuilt from the test's scenarios).
     """
-    from tests.linalg.test_cg_vector_unit import make_sim
+    from tests.linalg.legacy.test_cg_vector_unit import make_sim
 
     with RUN_8_3.open(encoding="utf-8") as f:
         rows = list(csv.DictReader(line for line in f if not line.startswith("#")))
@@ -728,10 +754,12 @@ def score(role: str) -> tuple[dict, list, list]:
     return metrics, rows, cyc
 
 
-def validate() -> dict:
-    """Score the packaged models on the held-out builds and on the step 8.3 runs (AC8)."""
-    metrics, rows, cyc = score("holdout")
-    for name, data in (("cg_validation.csv", rows), ("cg_validation_cycles.csv", cyc)):
+def validate(role: str = "holdout2") -> dict:
+    """Score the packaged models on the held-out builds of ``role`` (``"holdout2"``: the 2025.1
+    recalibration's) and on the step 8.3 runs (AC8)."""
+    metrics, rows, cyc = score(role)
+    sfx = "" if role == "holdout" else "_v2"
+    for name, data in ((f"cg_validation{sfx}.csv", rows), (f"cg_validation_cycles{sfx}.csv", cyc)):
         with (PAPER / name).open("w", encoding="utf-8", newline="") as f:
             f.write(f"# {name}: step 8.4, model v1; tool={TOOL}\n")
             keys = list(dict.fromkeys(k for r in data for k in r))
@@ -739,7 +767,7 @@ def validate() -> dict:
             w.writeheader()
             w.writerows(data)
     _write_kv(
-        PAPER / "cg_validation_metrics.csv", _flatten(metrics), "step 8.4, model v1"
+        PAPER / f"cg_validation_metrics{sfx}.csv", _flatten(metrics), f"step 8.4, model v1, {role}"
     )
     print(json.dumps(metrics, indent=1))
     return metrics
@@ -750,21 +778,26 @@ def main(argv: list[str] | None = None) -> int:
         description="step 8.4: the CG vector unit's cost model"
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("split").add_argument("--check", action="store_true")
+    sp = sub.add_parser("split")
+    sp.add_argument("--check", action="store_true")
+    sp.add_argument("--version", type=int, default=1, choices=(1, 2))
     rp = sub.add_parser("run")
-    rp.add_argument("--role", required=True, choices=("fit", "holdout"))
+    rp.add_argument("--role", required=True, choices=("fit", "holdout", "holdout2"))
     rp.add_argument("--shard")
-    for cmd in ("merge", "fit", "validate"):
+    for cmd in ("merge", "fit"):
         sub.add_parser(cmd)
+    sub.add_parser("validate").add_argument(
+        "--role", default="holdout2", choices=("holdout", "holdout2")
+    )
     a = ap.parse_args(argv)
     if a.cmd == "split":
-        text = split_text()
+        path, text = (SPLIT, split_text()) if a.version == 1 else (SPLIT_V2, split_v2_text())
         if a.check:
-            same = SPLIT.read_text(encoding="utf-8") == text
-            print(f"{SPLIT.name}:", "unchanged" if same else "DIFFERS")
+            same = path.read_text(encoding="utf-8") == text
+            print(f"{path.name}:", "unchanged" if same else "DIFFERS")
             return 0 if same else 1
-        SPLIT.write_text(text, encoding="utf-8")
-        print(f"wrote {SPLIT.relative_to(EX)}: {text.count(chr(10)) - 1} builds")
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path.relative_to(EX)}: {text.count(chr(10)) - 1} builds")
     elif a.cmd == "run":
         run(a.role, a.shard)
     elif a.cmd == "merge":
@@ -772,7 +805,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "fit":
         fit()
     elif a.cmd == "validate":
-        validate()
+        validate(a.role)
     return 0
 
 

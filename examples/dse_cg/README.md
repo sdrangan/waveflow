@@ -1,13 +1,20 @@
 # dse_cg: does pysim speed up design-space exploration?
 
-**Status: skeleton.** The interfaces are settled; the bodies raise `NotImplementedError` naming the
-phase of [`plans/dse_cg.md`](../../plans/dse_cg.md) that writes them. The plan says *why*; this
-directory says *what*.
+**Status** (2026-11-07, [`plans/dse_cg.md`](../../plans/dse_cg.md)): Phases 1–3 done -- the LTBF
+design's adaptor, the service on the live backend, `dselib` and the generated `DSE.md`, so the user
+flow below runs on the real tools. The grid G1 is measuring (step 4, about four days); replay, the
+sandbox, the scripted policies, the scoring and the agent harness (steps 5–7) are written and tested
+without it, and run once G1's table is complete. The agents' runs wait for the pre-registration of
+the model, the effort and the budget (`prereg.py`). The plan says *why*; this directory says *what*.
 
 ## The experiment in one paragraph
 
-An agent explores the CG detector's design space to meet an objective (for example, the fewest LUTs
-at a given accuracy and cycle budget) within a budget of tool time. It runs twice, in two **arms**
+An agent explores the design space of the LTBF receiver on a shared-memory accelerator
+([`examples/ltbf_cg_mem_dse`](../ltbf_cg_mem_dse/hw/system.py)) to meet an objective (for example,
+the fewest LUTs at a given accuracy and long-term update time) within a budget of tool time. The
+built hardware is the systolic engine, the vector unit, the AXI crossbar and the Resp hub, with the
+scheduler as software on the A53; Shared Mem and the Ingest DMA are modelled (simulated, never
+synthesized), and Shared Mem's speed and banks are axes of the space, its bottleneck. It runs twice, in two **arms**
 that are identical except for one function. The **traditional** arm has what a systems team and a
 hardware team have: an untimed bit-exact simulation (`golden`), synthesis (`synth`) and RTL
 simulation (`rtlsim`). The **Waveflow** arm also has `pysim`: bit-exact, with calibrated cycles,
@@ -27,16 +34,16 @@ The agent works the way a user of Waveflow would. The instructions come in three
 In your own project, with your own `CLAUDE.md` and session:
 
 1. Install the skill in the project: `brief.install_skill(Path(".claude/skills"))`.
-2. Generate the context: `brief.write_context(CgDetectorAdaptor(), Path("examples/dse_cg/DSE.md"))`.
+2. Generate the context: `brief.write_context(LtbfCgMemAdaptor(), Path("examples/dse_cg/DSE.md"))`.
 3. Start the service on the live backend (`python -m examples.dse_cg.service --live`) and set
    `DSE_SERVICE` to its address.
 4. Ask:
 
    ```
-   /dse examples/dse_cg/DSE.md Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.
+   /dse examples/dse_cg/DSE.md Minimize LUTs subject to median loss <= 0.1 dB at SINR targets [-6, 3] dB and T_upd <= 6 ms.
    ```
 
-(Steps 1–3 are not written yet: plan Phase 3.)
+Step 3 runs the tools on this machine (Vitis HLS and Vivado 2025.1, XSI); `--budget-h` sets a budget.
 
 ## A run is that flow in a clean sandbox
 
@@ -53,9 +60,12 @@ In your own project, with your own `CLAUDE.md` and session:
 
 The same skill, the same context and the same prompt, in a new session with no context of its own:
 no `CLAUDE.md`, no user settings or memory, not this repository, not the calibration records, not
-the ground truth. The two arms differ only in the `arm:waveflow` blocks of `SKILL.md`, `dselib` and
+the ground truth. The agent's Claude Code runs in a container ([`agent/Dockerfile`](agent/Dockerfile))
+that mounts the sandbox and nothing else of the machine, so its shell cannot reach them either. The two arms differ only in the `arm:waveflow` blocks of `SKILL.md`, `dselib` and
 `DSE.md`. The one difference from the user flow is the backend: a run replays recorded results and
-costs, so it finishes in minutes and every run sees the same numbers.
+costs, so it finishes in minutes and every run sees the same numbers. The design's space is
+small enough to measure in full (about 768 RTL runs, under a week on the lab machine), so replay
+always has the answer, and each objective's optimum is known exactly.
 
 ## Files
 
@@ -64,32 +74,40 @@ costs, so it finishes in minutes and every run sees the same numbers.
 | [`skill/dse/SKILL.md`](skill/dse/SKILL.md) | the agent | the skill: the method, with `arm:waveflow` blocks |
 | [`skill/dse/dselib/__init__.py`](skill/dse/dselib/__init__.py) | the agent | the library; its docstrings are the API reference, with an example result for each function |
 | [`DSE.md.tmpl`](DSE.md.tmpl) | the agent | one design's context, with `{{blocks}}` the generator fills |
-| [`adaptor.py`](adaptor.py) | the harness | `DseAdaptor`, the base class a design subclasses; `defaults`, `fill` and `legal` are written |
-| [`cg_detector.py`](cg_detector.py) | the harness | `CgDetectorAdaptor`, the CG detector (V1) |
-| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user or a sandbox; `select_arm`, `render` and `prompt` are written |
-| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; replay and live backends |
-| [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model |
-| [`policies.py`](policies.py) | the harness | the scripted explorers, one per arm: the agent-free comparison |
-| [`run_agent.py`](run_agent.py) | the harness | one agent run, end to end |
-| [`score.py`](score.py) | the analysis | ledgers → anytime curves, time to target, report checks |
+| [`adaptor.py`](adaptor.py) | the harness | `DseAdaptor`, the base class a design subclasses: legality, the architecture and its check, `rebuilds` |
+| [`ltbf_cg_mem.py`](ltbf_cg_mem.py) | the harness | `LtbfCgMemAdaptor`, the LTBF system of `examples/ltbf_cg_mem_dse` (V1): its space `GRID`, identities, and the tools at a point |
+| [`points.py`](points.py) | the harness | plan step 2c: six points through every method, timed; writes `costs.py` |
+| [`costs.py`](costs.py) | the harness | each evaluation's measured tool time, quoted in `DSE.md` |
+| [`brief.py`](brief.py) | the harness | renders the skill and `DSE.md` for a user (`write_context`, `install_skill`) and a run's sandbox (`build_sandbox`) |
+| [`service.py`](service.py) | the harness | charges, caches, schedules and answers every `dselib` call; owns the ledger; the live and replay backends and its command line |
+| [`g1_prereg.py`](g1_prereg.py) | the harness | G1's pre-registration: the grid, what is measured, pysim's scoring targets, the integration points |
+| [`grid.py`](grid.py) | the harness | measures G1 on the live backend (resumable), consolidates its table, adds pysim and golden over the grid |
+| [`integration.py`](integration.py) | the harness | the system-level term mapping the units' resource estimates to Vivado's, fitted on the six integration points only |
+| [`prereg.py`](prereg.py) | the harness | what is fixed before any scored run: objectives (the prompts), budget, ε, workers, runs, model, effort, the agent's container |
+| [`policies.py`](policies.py) | the harness | the scripted explorers, one per arm: the agent-free comparison, recorded as agent runs are |
+| [`run_agent.py`](run_agent.py), [`agent/Dockerfile`](agent/Dockerfile) | the harness | one agent run, end to end, on the Agent SDK (`pip install -e ".[dse]"`), its Claude Code in the container |
+| [`score.py`](score.py) | the analysis | the ground truth; pysim scored against it; runs' ledgers → anytime curves, time to target, spend, report checks, the summary |
 
 The skill, `dselib`, `DseAdaptor` and the generator know nothing about CG. They stay here until a
-second design uses them, then move into the `waveflow` package; `cg_detector.py` stays.
+second design uses them, then move into the `waveflow` package; `ltbf_cg_mem.py` stays.
 
 ## Order of work
 
 Follows [`plans/dse_cg.md`](../../plans/dse_cg.md). The stubs name the phase or step that writes
 them.
 
-1. **Phase 1: complete the CG system.** First and blocking: the detector as an `HwSystem` (it runs
-   only on the older kernel-testbench flow today), so that `build_system` exists. Then synthesis
-   and csynth through the system flow, the two workloads, and pysim from the system.
-2. **Phase 2: the adaptor, verified.** `adaptor.py`'s defaults and `cg_detector.py`'s methods; fast
-   tests with no toolchain; then five design points through every method, checked against each
-   other.
+1. **Phase 1: the LTBF system at any grid point.** It already runs as an `HwSystem` through the
+   system flow, gated at 2025.1. First and blocking: Shared Mem and the Ingest DMA modelled, the
+   memory axes and the per-design formats, as options of the example that keep its defaults. Then
+   `build_system` at a point, synthesis and csynth of the built parts, the two workloads with the
+   end-to-end test (a Sionna drop to the equalized symbols), and pysim from the system.
+2. **Phase 2: the adaptor, verified.** `adaptor.py`'s defaults and `ltbf_cg_mem.py`'s methods; fast
+   tests with no toolchain; then six design points through every method, checked against each
+   other, which also measure the costs the grid is sized by.
 3. **Phase 3: the service and `dselib` on the live backend**, and `DSE.md` generated. The user flow
    above works from here: **the hand-off point.**
 
-After that: the ground-truth grid G1 and the validation of pysim's predictions (step 4), replay and
-the sandbox (5), the scripted policies (6), the agents (7), and V2, the descriptor-ring system,
-which adds a second adaptor and changes nothing else here (8).
+After that: the grid G1, the whole space measured, and the validation of pysim's predictions (step 4), replay and
+the sandbox (5), the scripted policies (6), the agents (7), and V2, the same system with its CG
+chains sequenced on chip by descriptor passing, which adds a second adaptor and changes nothing else
+here (8).

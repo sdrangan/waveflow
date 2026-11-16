@@ -1,0 +1,57 @@
+family,point,l1d,l2,measured,measured_at_reference,predicted,rel_err,level,output_matches_twin,gem5_tag,compiler_version
+sched_ops.add,"{""n"": 6, ""op"": ""add"", ""seed"": 301}",16384,524288,230.0,230.0,217.21172437180317,0.05560119838346447,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 6, ""op"": ""add"", ""seed"": 302}",16384,524288,230.0,230.0,217.21172437180317,0.05560119838346447,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 24, ""op"": ""add"", ""seed"": 301}",16384,524288,297.0,297.0,283.47951907785125,0.045523504788379625,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 24, ""op"": ""add"", ""seed"": 302}",16384,524288,244.0,244.0,230.82787283923602,0.05398412770804909,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 96, ""op"": ""add"", ""seed"": 301}",16384,524288,418.0,417.0,430.0844938651593,0.02891027240468729,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 96, ""op"": ""add"", ""seed"": 302}",16384,524288,691.0,691.0,706.5056366178895,0.022439416234282975,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 384, ""op"": ""add"", ""seed"": 301}",16384,524288,4148.0,4148.0,4215.091902010268,0.016174518324558417,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.add,"{""n"": 384, ""op"": ""add"", ""seed"": 302}",16384,524288,4812.0,4812.0,4886.400391552614,0.015461428003452547,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 6, ""op"": ""delete"", ""seed"": 301}",16384,524288,101.0,101.0,115.28935334364135,0.14147874597664706,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 6, ""op"": ""delete"", ""seed"": 302}",16384,524288,101.0,101.0,115.28935334364135,0.14147874597664706,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 24, ""op"": ""delete"", ""seed"": 301}",16384,524288,253.0,253.0,230.5764215326871,0.08863074493009049,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 24, ""op"": ""delete"", ""seed"": 302}",16384,524288,279.0,279.0,275.87311447980863,0.01120747498276475,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 96, ""op"": ""delete"", ""seed"": 301}",16384,524288,708.0,707.0,709.8433714677186,0.0026036320165517116,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 96, ""op"": ""delete"", ""seed"": 302}",16384,524288,653.0,654.0,664.5466785205971,0.01768250921990365,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 384, ""op"": ""delete"", ""seed"": 301}",16384,524288,2975.0,2976.0,2992.3044943146256,0.005816636744411957,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.delete,"{""n"": 384, ""op"": ""delete"", ""seed"": 302}",16384,524288,2437.0,2437.0,2433.645281300126,0.0013765772260459401,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 6, ""op"": ""reprio"", ""seed"": 301}",16384,524288,156.0,156.0,178.8375245654641,0.14639438824015444,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 6, ""op"": ""reprio"", ""seed"": 302}",16384,524288,207.0,207.0,204.86841916281153,0.010297491967094037,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 24, ""op"": ""reprio"", ""seed"": 301}",16384,524288,573.0,573.0,529.9867739631298,0.07506671210623063,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 24, ""op"": ""reprio"", ""seed"": 302}",16384,524288,644.0,644.0,618.3489186372225,0.03983087168133155,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 96, ""op"": ""reprio"", ""seed"": 301}",16384,524288,1474.0,1474.0,1457.71046211953,0.011051246865990575,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 96, ""op"": ""reprio"", ""seed"": 302}",16384,524288,1011.0,1011.0,983.9164814749507,0.02678884127106753,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 384, ""op"": ""reprio"", ""seed"": 301}",16384,524288,7456.0,7456.0,7478.14834917218,0.002970540393264503,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.reprio,"{""n"": 384, ""op"": ""reprio"", ""seed"": 302}",16384,524288,5167.0,5167.0,5174.890919794958,0.0015271762715227174,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 6, ""op"": ""sort"", ""seed"": 301}",16384,524288,314.0,314.0,274.00683470493965,0.1273667684556062,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 6, ""op"": ""sort"", ""seed"": 302}",16384,524288,306.0,306.0,162.8679454924519,0.4677518121161703,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 24, ""op"": ""sort"", ""seed"": 301}",16384,524288,1897.0,1897.0,1728.831015662019,0.08864996538638961,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 24, ""op"": ""sort"", ""seed"": 302}",16384,524288,2284.0,2284.0,2064.7978380291206,0.09597292555642706,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 96, ""op"": ""sort"", ""seed"": 301}",16384,524288,28194.0,28194.0,28527.585844279558,0.011831802662962259,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 96, ""op"": ""sort"", ""seed"": 302}",16384,524288,26372.0,26372.0,26562.8770634526,0.00723786832445779,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 384, ""op"": ""sort"", ""seed"": 301}",16384,524288,421071.0,421071.0,436692.16745912796,0.03709865428663565,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+sched_ops.sort,"{""n"": 384, ""op"": ""sort"", ""seed"": 302}",16384,524288,419193.0,419193.0,434669.97371355677,0.036920878243569835,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 512, ""seed"": 301}",16384,524288,5703.0,5703.0,5652.320596279284,0.008886446382731271,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 3800, ""seed"": 301}",16384,524288,44418.0,41862.0,42868.10984282155,0.0348932900440914,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 4500, ""seed"": 301}",16384,524288,52837.0,51216.0,51037.02722400605,0.03406652111198495,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 120000, ""seed"": 301}",16384,524288,1991635.0,1436681.0,1815773.2399880143,0.08830019557398101,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 150000, ""seed"": 301}",16384,524288,2478719.0,2523875.0,2395488.2609115303,0.03357812607579546,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+cdot_q15,"{""n"": 400000, ""seed"": 301}",16384,524288,6535250.0,6589726.0,7226446.768607497,0.10576439594621433,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 512, ""n"": 50000, ""seed"": 301}",16384,524288,400764.0,400764.0,430162.3656530543,0.07335580454595304,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 7500, ""n"": 4096, ""seed"": 301}",16384,524288,64359.0,37448.0,65080.6918510205,0.011213534253492124,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 9000, ""n"": 50000, ""seed"": 301}",16384,524288,847185.0,555387.0,870763.3813537698,0.02783144337278139,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 240000, ""n"": 4096, ""seed"": 301}",16384,524288,266663.0,92523.0,274588.60403056454,0.02972142378419407,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 290000, ""n"": 50000, ""seed"": 301}",16384,524288,3869077.0,1904912.0,3798839.115051806,0.01815365394593957,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+gather_hist,"{""m"": 2000000, ""n"": 50000, ""seed"": 301}",16384,524288,5769695.0,5461345.0,5621865.941211986,0.0256216418351427,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 32, ""seed"": 301}",16384,524288,630.0,630.0,612.0373906393045,0.028512078350310357,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 32, ""seed"": 302}",16384,524288,613.0,613.0,612.0373906393045,0.0015703252213630078,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 512, ""seed"": 301}",16384,524288,9358.0,9364.0,9295.909627528736,0.0066350045384980065,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 512, ""seed"": 302}",16384,524288,9340.0,9346.0,9295.909627528736,0.004720596624332371,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 3000, ""seed"": 301}",16384,524288,54280.0,54286.0,54307.314055405615,0.0005032066213267385,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+dispatch,"{""n"": 3000, ""seed"": 302}",16384,524288,54298.0,54304.0,54307.314055405615,0.00017153588356137175,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+ctx_switch,"{""k"": 3}",16384,524288,551.0,551.0,527.6442124613332,0.042387999162734745,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+ctx_switch,"{""k"": 24}",16384,524288,3944.0,3944.0,3944.29401835585,7.454826466781377e-05,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+ctx_switch,"{""k"": 96}",16384,524288,15624.0,15624.0,15658.521924279907,0.002209544564766172,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+ctx_switch,"{""k"": 180}",16384,524288,29232.0,29232.0,29325.12114785797,0.003185589349273798,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+swapcontext,"{""k"": 6}",16384,524288,2538.0,2538.0,2547.96212812114,0.003925188385003866,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0
+swapcontext,"{""k"": 40}",16384,524288,16632.0,16632.0,16637.196063419575,0.0003124136255155594,INTERPOLATED,True,v25.1.0.1,aarch64-amd-linux-gcc.real (GCC) 13.3.0

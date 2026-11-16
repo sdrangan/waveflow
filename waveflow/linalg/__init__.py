@@ -17,7 +17,14 @@ The C++ helpers are ``waveflow/build/wf_lanes.h``, ``wf_matrix_io.h`` and ``wf_l
 Models:
 
 * :mod:`~waveflow.linalg.matmul` — the complex matrix multiply, exact before one rounding
-  (the systolic array, :mod:`~waveflow.linalg.systolic`);
-* :mod:`~waveflow.linalg.cg` — fixed-point conjugate gradient, multi-RHS (the CG vector unit,
-  :mod:`~waveflow.linalg.cg_vector`).
+  (the systolic array: :mod:`~waveflow.linalg.systolic_engine`,
+  :mod:`~waveflow.linalg.systolic_engine_mem`);
+* :mod:`~waveflow.linalg.cg` — fixed-point conjugate gradient, multi-RHS (a program on
+  :class:`~waveflow.vecunit.unit.VecUnit`: ``examples/vecunit_cg``).
+
+The platform these components' models are calibrated on, and the engine's resource model:
+:mod:`~waveflow.linalg.cost`.
+
+Retired (:mod:`~waveflow.linalg.legacy`, kept for ``examples/mimo_cg`` only): ``SystolicUnit`` /
+``SystolicCore`` and ``CgVectorUnit`` / ``CgVectorCore``.
 """

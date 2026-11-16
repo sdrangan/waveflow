@@ -36,7 +36,7 @@ It is built to be **cheap** and **familiar**:
 run every operation in every lane. Its calibrated resource model
 ([Timing and resources](../vecunit/timing.md)) has LUT terms in `S²·L` -- the operand and forwarding
 multiplexers between slots -- and in the per-register fixed-point formats; at `L` 4, `S` 3 it is 82.6k
-LUT (Vitis HLS 2025.1), against 21.5k for [the fixed-function CG unit](../cg_vector.md). Chaining buys
+LUT (Vitis HLS 2025.1), against 21.5k for [the fixed-function CG unit](../legacy/cg_vector.md). Chaining buys
 a factor of `S` in throughput, which elementwise glue, bounded by the rate its input arrives, mostly
 does not need.
 

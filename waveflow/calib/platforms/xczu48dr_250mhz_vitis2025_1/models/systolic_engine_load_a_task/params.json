@@ -1,0 +1,75 @@
+{
+  "model": "systolic_engine_load_a_task",
+  "part": "xczu48dr-ffvg1517-2-e",
+  "counters": {
+    "lut": {
+      "basis": [
+        "rows_w",
+        "k_log",
+        "word",
+        "w"
+      ],
+      "params": {
+        "coeffs": [
+          1.9082711442786067,
+          -22.99999999999986,
+          -0.43866604477611837,
+          -52.45024875621888
+        ],
+        "intercept": 2507.7611940298502
+      }
+    },
+    "ff": {
+      "basis": [
+        "rows_w",
+        "k_log",
+        "word",
+        "w"
+      ],
+      "params": {
+        "coeffs": [
+          0.7280783582089567,
+          -75.00000000000003,
+          1.1514692164179294,
+          28.66231343283581
+        ],
+        "intercept": 1312.3208955223868
+      }
+    }
+  },
+  "provenance": {
+    "plan": "plans/calib_2025_1.md Stage 4 (the systolic engine, resources)",
+    "tool": "Vitis HLS / Vivado xsim 2025.1",
+    "part": "xczu48dr-ffvg1517-2-e",
+    "fit_points": [
+      "big",
+      "c16",
+      "c4",
+      "centre",
+      "k16",
+      "k4",
+      "l8",
+      "ltbf_r2c4_p22",
+      "ltbf_r2c4_p32",
+      "ltbf_r4c4_p22",
+      "ltbf_r4c8_p22",
+      "ltbf_r4c8_p32",
+      "ltbf_r8c8_p22",
+      "m16",
+      "n64",
+      "p1",
+      "p8",
+      "r2",
+      "r8",
+      "small",
+      "w128"
+    ],
+    "held_out": [
+      "ltbf_r4c4_p32",
+      "ltbf_r8c8_p32"
+    ],
+    "source": "csynth of examples/systolic/systolic_sweep.py",
+    "date": "2026-11-06",
+    "builds": 21
+  }
+}

@@ -34,6 +34,15 @@ from waveflow.linalg.message import LinalgHeader
 
 #: Where the hand-written headers live in the package.
 BUILD_DIR = Path(__file__).resolve().parents[1] / "build"
+#: Where the retired units' task bodies live (:mod:`waveflow.linalg.legacy`).
+LEGACY_DIR = BUILD_DIR / "legacy"
+
+
+def body_path(name: str) -> Path:
+    """The package's copy of header *name*: in ``waveflow/build/``, or for a retired unit's task body
+    in ``waveflow/build/legacy/``."""
+    p = BUILD_DIR / name
+    return p if p.is_file() or not (LEGACY_DIR / name).is_file() else LEGACY_DIR / name
 #: The helper headers every linear-algebra design includes.
 HELPERS = ("wf_lanes.h", "wf_matrix_io.h", "wf_linalg_msg.h")
 
@@ -41,7 +50,8 @@ HELPERS = ("wf_lanes.h", "wf_matrix_io.h", "wf_linalg_msg.h")
 @dataclass(frozen=True)
 class LinalgParts:
     """What a linear-algebra component needs in its design's include directory: traits to
-    render, task bodies to copy (names in ``waveflow/build/``) and command schemas to generate.
+    render, task bodies to copy (names in ``waveflow/build/``, a retired unit's in ``legacy/``) and
+    command schemas to generate.
     """
 
     traits: tuple[Traits, ...] = ()
@@ -113,7 +123,7 @@ class LinalgStep(Buildable):
     def generate(self, key: str, config: BuildConfig) -> str:
         if key == TRAITS_HEADER:
             return render_traits_header(self._traits, self._output_dir.as_posix())
-        return (BUILD_DIR / key).read_text(encoding="utf-8")
+        return body_path(key).read_text(encoding="utf-8")
 
     def run(
         self, config: BuildConfig, results: dict[str, BuildResult] | None = None

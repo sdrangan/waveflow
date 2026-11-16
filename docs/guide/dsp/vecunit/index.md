@@ -9,7 +9,7 @@ summary: "VecUnit is a programmable complex fixed-point vector unit: an instruct
 # Vector Unit
 
 `VecUnit` (`waveflow/vecunit/`) is a small **processor** for complex fixed-point linear algebra. A
-fixed-function block such as [the CG vector unit](../cg_vector.md) does one algorithm, which is
+fixed-function block such as [the (retired) CG vector unit](../legacy/cg_vector.md) does one algorithm, which is
 built into its hardware. `VecUnit` instead runs **programs**: lists of instructions such as "add these
 two vectors" or "multiply this vector by a scalar", which the host sends with each job. The same
 hardware then runs conjugate gradient ([the CG example](../../../examples/vecunit_cg/index.md)), a
@@ -40,13 +40,12 @@ the pysim model, the generated HLS, and the RTL.
 |---|---|---|
 | what it computes | CG's vector steps, built in | whatever the program says |
 | a new algorithm | new hardware | a new program |
-| CG, a job of `8 × 32`, three iterations | 3,581 cycles, 21.6k LUT | 3,359 cycles, 82k LUT |
+| CG, a job of `8 × 32`, three iterations | 3,581 cycles, 21.5k LUT | 3,447 cycles, 83k LUT |
 
-(Vitis HLS / Vivado xsim 2024.1, `xczu48dr` at 4 ns, as measured in `plans/vecunit_new.md`.) The
+(Vitis HLS / Vivado xsim 2025.1, `xczu48dr` at 4 ns, `examples/vecunit_cg/measured.json`.) The
 programmable unit is about four times the logic, and in return it runs other programs. It runs CG
 at about the fixed-function unit's speed only because the execute task fuses independent work into
-long pipelined runs. Issued one pass at a time, the same program took 7,295 cycles (see
-[Timing and resources](timing.md)).
+long pipelined runs (see [Timing and resources](timing.md)).
 
 ## The pages
 

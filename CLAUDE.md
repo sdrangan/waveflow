@@ -36,9 +36,14 @@ pytest -m xsi
 
 # Run only the processor-model ground-truth gates (plans/cpu_model.md): gem5 v25.1 HPI in Docker
 # (ghcr.io/gem5/ubuntu-24.04_all-dependencies:v25-1) from a build at WAVEFLOW_GEM5_ROOT, McPAT at
-# WAVEFLOW_MCPAT_ROOT, the Vitis 2024.1 aarch64 gcc.  Like -m xsi, a skip fails the session.
-# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5"
+# WAVEFLOW_MCPAT_ROOT, the Vitis 2025.1 aarch64 gcc.  Like -m xsi, a skip fails the session.
+# The usual dev loop excludes them too: pytest -m "not vitis and not xsi and not gem5 and not sionna"
 pytest -m gem5
+
+# Run only the ray-traced RF environment's Sionna gates (plans/sionna_rt/sionna_rt.md): the tests that
+# trace a scene with Sionna RT, which needs pip install -e ".[sionna]" (CPU is fine).  Like -m xsi, a
+# skip fails the session, and a full run must collect WANT_SIONNA_GATES.
+pytest -m sionna
 
 # Lint / format
 ruff check waveflow/
@@ -66,31 +71,43 @@ Waveflow is a Python-native hardware design platform. The philosophy is that Pyt
 
 - **`waveflow/build/`** — Code generation for Vitis HLS (C++ API, stream utilities, TCL scripts).
 - **`waveflow/linalg/`** — Reusable complex fixed-point linear-algebra components:
-  the systolic matrix multiply (`SystolicCore`, `SystolicUnit`) and the CG vector
-  unit (`CgVectorCore`, `CgVectorUnit`). Each is a bit-exact Python model, a pysim
-  module, a Vitis HLS task body in `waveflow/build/` (`systolic_*_task.h`,
-  `cg_vector*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged
-  platform `waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1/` (Vitis 2024.1).
-  Tests in `tests/linalg/`; guide in `docs/guide/dsp/` (`linalg_common.md`, `systolic/`, `cg_vector.md`).
+  the systolic matrix multiply (`SystolicEngine`, and `SystolicEngineMem` behind memory). It is a
+  bit-exact Python model (`matmul.py`), a pysim module, Vitis HLS task bodies in `waveflow/build/`
+  (`systolic_engine_*_task.h`, `wf_*.h`) and a cost model calibrated on the packaged platform
+  `waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1/` (Vitis 2025.1; `cost.py`). `cg.py` is the
+  CG algorithm's bit-exact model (run as a program on `VecUnit`). Tests in `tests/linalg/`; guide in
+  `docs/guide/dsp/` (`linalg_common.md`, `systolic/`).
+  **Retired** (`waveflow/linalg/legacy/`, kept only for `examples/mimo_cg`): `SystolicUnit` /
+  `SystolicCore` and `CgVectorUnit` / `CgVectorCore`, their bodies in `waveflow/build/legacy/`, tests
+  in `tests/linalg/legacy/`, guide page `docs/guide/dsp/legacy/`. Never use them in new work.
 - **`waveflow/vecunit/`** — A programmable complex fixed-point vector unit (RVV-style ISA `Xwfvec`,
   one 64-bit word an instruction): a fixed-point format per register, chained passes and fused runs,
   decoupled load / execute / store tasks on queues of blocks. `VecUnitConfig`, the assembler (`asm`),
   the bit-exact interpreter (`model`), the pysim `VecUnit`, the generated HLS (`hls.py` on
   `waveflow/build/vecunit_core.h`), and timing and resource models calibrated on the packaged platform
-  `xczu48dr_250mhz_vitis2024_1` (`calib.py`). Application-free: CG and a matched filter are programs in
+  `xczu48dr_250mhz_vitis2025_1` (`calib.py`). Application-free: CG and a matched filter are programs in
   `examples/vecunit_cg/` and `examples/vecunit_mf/`, and toy kernels the guide excerpts in
   `examples/vecunit/`. Tests in `tests/vecunit/`; guide `docs/guide/dsp/vecunit/`.
 - **`waveflow/cpu/`** — A loosely-timed, calibrated general-purpose processor for software beside
   the hardware: `Processor` (N cores, priority ready queue, context switches, optional preemption),
   `SwFunction` (Python that reports work counters, priced by calibrated cycle / pJ models), `CpuReport`,
-  and `CpuPlatform` for the shipped Cortex-A53 platform `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/`
-  (gem5 v25.1 HPI + McPAT 22 nm). Calibration harness in `waveflow/cpu/calib/`; tests in `tests/cpu/`;
+  and `CpuPlatform` for the shipped Cortex-A53 platform
+  `waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/` (gem5 v25.1 HPI + McPAT 22 nm, the
+  kernels compiled by Vitis 2025.1's aarch64 gcc 13.3.0). Calibration harness in `waveflow/cpu/calib/`; tests in `tests/cpu/`;
   guide in `docs/guide/cpu/`; example `examples/cpu_sched/`.
+- **`waveflow/rfenv/`** — The ray-traced RF environment on `RFSampIF` edges: a scene traced with NVIDIA
+  Sionna RT (the optional `.[sionna]` extra; runs on a CPU) into a channel file (`PathSet`: every path's
+  amplitude, absolute delay and Doppler, per antenna pair), applied block by block by the pysim nodes
+  `RtChannel` (the air between a DAC edge and an ADC edge) and `RtSignalSource` (what a receiver hears;
+  its XSI twin is `RfFileSource` replaying `render_bundle()`). Cached (`load_or_trace`,
+  `TraceChannelStep`) or live tracing; a committed channel file needs only numpy. Tests in
+  `tests/rfenv/` (`-m sionna` for those that trace); guide in `docs/guide/rf/rfenv/`; example
+  `examples/rt_sounder/`.
 - **`waveflow/toolchain/`** — Vitis HLS / Vivado toolchain detection and integration.
 - **`waveflow/scripts/`** — CLI entry points (`sv_sim`, `sv_synth`, `sv_impl`, `waveflow_mcp_server`, etc.).
 - **`waveflow/utils/`** — VCD waveform parsing, timing analysis, C-synthesis report parsing, fixed-point utilities.
 - **`waveflow/mcp/`** — MCP server exposing hardware design tools to AI assistants (Claude Code, VS Code). Two modes: *workspace* (uses host file tools) and *headless* (self-contained, for CI/API use). `mcp/knowledge/` is local search and read over `docs/guide/` and the reference examples — an in-memory BM25 index built from the checkout at server start, also reachable as `waveflow kb <cmd>`.
-- **`examples/`** — Reference designs. The curated set is the twenty-seven with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
+- **`examples/`** — Reference designs. The curated set is the twenty-eight with a page under `docs/examples/<name>/index.md`, each naming its directory in an `example_dir:` front-matter key; the rest are older work. `waveflow kb examples` lists them.
 
 ### Simulation flow
 
@@ -126,6 +143,6 @@ A Component's Python behavior is translated to Vitis HLS C++ via `BuildConfig` (
 - Python 3.10+ required.
 - Vitis HLS is optional and only needed for synthesis tests (`-m vitis`). The toolchain is auto-detected by `waveflow/toolchain/toolchain.py`.
 - Run everything inside the project's virtual environment. Its location, the installed Vitis/Vivado version, and any machine-specific setup the toolchain needs are per-machine: they belong in each developer's personal `CLAUDE.local.md` (gitignored), not here.
-- A measured number belongs to a tool version. Vitis/Vivado 2024.1 does not reproduce every number recorded with 2025.1 (co-simulation of `examples/regmap` gives 49 cycles against 5), so name the version next to any measured number. The `examples/mimo_cg` study was measured entirely with 2024.1.
+- A measured number belongs to a tool version. The supported version is Vitis/Vivado 2025.1: the `xczu48dr` and A53 platforms were calibrated with it (`plans/calib_2025_1.md`), and the toolchain check warns about a newer one. Another version does not reproduce every number (co-simulation of `examples/regmap` gives 49 cycles at 2024.1 against 5 at 2025.1), so name the version next to any measured number. The `examples/mimo_cg` study was measured entirely with 2024.1.
 - The project is early-stage research software; many planned features are not yet built.
 - Non-commercial use only under the Waveflow Research License.

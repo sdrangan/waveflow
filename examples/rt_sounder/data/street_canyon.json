@@ -1,0 +1,100 @@
+{
+ "carrier_hz": 3500000000.0,
+ "channels": {
+  "rx": [
+   {
+    "antenna": 0,
+    "device": "rx"
+   }
+  ],
+  "tx": [
+   {
+    "antenna": 0,
+    "device": "tx"
+   }
+  ]
+ },
+ "created": "2026-10-12",
+ "delays": "absolute",
+ "generator": {
+  "name": "waveflow.rfenv.sionna_backend",
+  "variant": "llvm_ad_mono_polarized",
+  "versions": {
+   "drjit": "1.5.0",
+   "mitsuba": "3.9.1",
+   "numpy": "2.5.3",
+   "sionna-rt": "2.2.0"
+  }
+ },
+ "scene_path": "simple_street_canyon",
+ "schema_version": 1,
+ "spec": {
+  "frequency_hz": 3500000000.0,
+  "receivers": [
+   {
+    "look_at": null,
+    "name": "rx",
+    "orientation": null,
+    "position": [
+     40.0,
+     5.0,
+     1.5
+    ],
+    "velocity": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   }
+  ],
+  "rx_array": {
+   "horizontal_spacing": 0.5,
+   "num_cols": 1,
+   "num_rows": 1,
+   "pattern": "iso",
+   "polarization": "V",
+   "vertical_spacing": 0.5
+  },
+  "scene": "simple_street_canyon",
+  "solver": {
+   "diffraction": false,
+   "diffraction_lit_region": true,
+   "diffuse_reflection": false,
+   "edge_diffraction": false,
+   "los": true,
+   "max_depth": 3,
+   "max_num_paths_per_src": 1000000,
+   "refraction": true,
+   "samples_per_src": 1000000,
+   "seed": 42,
+   "specular_reflection": true,
+   "synthetic_array": true
+  },
+  "transmitters": [
+   {
+    "look_at": null,
+    "name": "tx",
+    "orientation": null,
+    "position": [
+     -30.0,
+     0.0,
+     20.0
+    ],
+    "velocity": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   }
+  ],
+  "tx_array": {
+   "horizontal_spacing": 0.5,
+   "num_cols": 1,
+   "num_rows": 1,
+   "pattern": "iso",
+   "polarization": "V",
+   "vertical_spacing": 0.5
+  }
+ },
+ "spec_hash": "9a1c9409063cab679c118cbd331c5e7a36220d231ddff374d669305a881692e6"
+}

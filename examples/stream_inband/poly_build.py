@@ -364,6 +364,7 @@ class CSimStep(BuildStep):
                 (width_dir(root, bw) / name / "csim").mkdir(parents=True, exist_ok=True)
             _run_vitis(config, "csim", bw, live_output, clk_freq)
         done = root / "results" / "csim_done.txt"
+        done.parent.mkdir(parents=True, exist_ok=True)  # the first step of a fresh project to write there
         done.write_text("done\n", encoding="utf-8")
         return {"csim_done": done}
 

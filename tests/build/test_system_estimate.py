@@ -160,7 +160,7 @@ def test_leaf_clock_ports_and_generics():
     clocks = {m: clock_port(RTL_DIR / f"{m}.v", m) for m in LEAF_DEPS}
     assert clocks == {"mm_sync_fifo": "clk", "axi_slave_front": "ap_clk", "mm_queue_in": "ap_clk",
                       "mm_queue_out": "ap_clk", "mm_regbank": "ap_clk", "mm_bram_port": "ap_clk",
-                      "bram_t2p": "clk", "mm_credit_in": "ap_clk"}
+                      "bram_t2p": "clk", "mm_credit_in": "ap_clk", "mm_bram_port_p1": "ap_clk"}
     tcl = ooc_tcl("mm_queue_in", {"DW": 64, "DEPTH": 128}, ["a.v"], part="p")
     assert "-generic DW=64 -generic DEPTH=128" in tcl and "-mode out_of_context" in tcl
 

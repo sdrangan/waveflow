@@ -178,6 +178,9 @@ the converter's job, so it splits the way the hardware does — an amplitude ref
 converter, path loss in the channel. Accept a scalar gain on the edge and the next request is a
 frequency-dependent one, which is a filter in the transport layer by accident.
 
+That channel block exists: [`RtChannel`](../rfenv/) applies a ray-traced multipath channel, fractional
+delays and Doppler included, between a DAC edge and an ADC edge.
+
 ## Next
 
   needs the sample grid.

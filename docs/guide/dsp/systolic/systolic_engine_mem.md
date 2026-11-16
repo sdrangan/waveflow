@@ -38,7 +38,7 @@ sums of a tile stay on chip, so a longer `K` needs a larger `Pmax`. A job that b
 `BAD_OP` or `BAD_DIMS` with no write. Pad other shapes with zeros.
 
 ```python
-from waveflow.linalg.systolic import MatmulOp
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.systolic_engine_mem import EngineJobDesc, job_status
 
 for tx, (M, K, N) in enumerate([(64, 32, 128), (64, 40, 128), (12, 8, 32)], start=1):

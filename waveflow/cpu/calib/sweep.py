@@ -16,7 +16,7 @@ sit at 4,096 and 131,072 samples; ``gather_hist``: 4 bytes per bin, at 8,192 and
 
 The area plan is a grid of core configurations, fit on its edges and held out in its interior.
 
-    python -m waveflow.cpu.calib.sweep --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1
+    python -m waveflow.cpu.calib.sweep --platform-dir waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1
 """
 
 from __future__ import annotations
@@ -36,7 +36,11 @@ Row = tuple[str, dict[str, Any], str]
 #: Seeds per role, disjoint so a held-out point never repeats a fitted input.
 FIT_SEEDS = (1, 2, 3)
 VAL_SEEDS = (101, 102)
-TEST_SEEDS = (201, 202)
+#: The 2025.1 recalibration's (plans/calib_2025_1.md Stage 2): 2024.1's (201, 202) have been scored.
+TEST_SEEDS = (301, 302)
+#: The 2024.1 study's second test seed, kept for the two re-test sets it drew (their plan files are
+#: that study's record): :func:`release_retest_rows`, :func:`ltbf_eig_recheck_rows`.
+RETEST_SEED_2024_1 = 202
 
 
 def _grid(kernel: str, role: str, points: list[dict[str, Any]]) -> list[Row]:
@@ -152,10 +156,107 @@ def dispatch_rows() -> list[Row]:
 def switch_rows() -> list[Row]:
     rows = _grid("ctx_switch", "fit", [{"k": k} for k in (1, 4, 16, 64, 256)])
     rows += _grid("ctx_switch", "validation", [{"k": k} for k in (8, 32, 128)])
-    rows += _grid("ctx_switch", "test", [{"k": k} for k in (2, 12, 48, 200)])
+    rows += _grid("ctx_switch", "test", [{"k": k} for k in (3, 24, 96, 180)])  # 2024.1: 2, 12, 48, 200
     rows += _grid("swapcontext", "fit", [{"k": k} for k in (1, 16, 64)])
-    rows += _grid("swapcontext", "test", [{"k": k} for k in (8, 32)])
+    rows += _grid("swapcontext", "test", [{"k": k} for k in (6, 40)])  # 2024.1: 8, 32
     return rows
+
+
+def ltbf_eig_rows() -> list[Row]:
+    """``examples/ltbf_cg_mem_dse``'s A53 step (plans/ltbf_dse/ltbf_dse.md step 0.5; first registered by
+    ``paper/ltbf_cg_seq_dse``'s plans/mimo_cg/ltbf_cg_dse.md step 4.8): ``M = sym(H^H A)``, the 8 x 8 Jacobi
+    eigendecomposition and ``G``.  Its own plan file (``examples/ltbf_cg_mem_dse/cpu/``), not part of
+    :func:`sweep_rows`: the n axis spans the arrays (8x8 .. 32x32), ``rank`` the SRS block's rank
+    (1: a single path; 8: full), both ``r``."""
+    rows = _grid(
+        "ltbf_eig",
+        "fit",
+        [
+            {"n": n, "r": r, "rank": k, "seed": 1}
+            for n in (8, 32, 128, 512, 1024)
+            for r in (1, 2)
+            for k in (1, 8)
+        ],
+    )
+    rows += _grid(
+        "ltbf_eig",
+        "validation",
+        [
+            {"n": n, "r": r, "rank": k, "seed": VAL_SEEDS[0]}
+            for n in (16, 256)
+            for r in (1, 2)
+            for k in (1, 4)
+        ],
+    )
+    rows += _grid(
+        "ltbf_eig",
+        "test",
+        [
+            {"n": n, "r": r, "rank": k, "seed": TEST_SEEDS[0]}
+            for n in (64, 200, 768)
+            for r in (1, 2)
+            for k in (2, 8)
+        ],
+    )
+    return rows
+
+
+def ltbf_proj_rows() -> list[Row]:
+    """``examples/ltbf_cg_mem_dse``'s per-UE A53 job (plans/ltbf_dse/ltbf_dse.md step 4.6): ``M`` from the
+    systolic ``W``, the 8 x 8 Jacobi, ``G``, the cross terms, ``R̃``, Cholesky and ``G'``.  Its own plan
+    file (``examples/ltbf_cg_mem_dse/cpu/sweep_plan_proj.csv``): ``n`` spans the arrays (8x8 .. 32x32),
+    ``conn`` the connected UEs, ``rank`` the own block's rank, both ``r``."""
+    rows = _grid("ltbf_proj", "fit", [
+        {"n": n, "r": r, "conn": c, "rank": k, "seed": 1}
+        for n in (8, 64, 256, 1024) for r in (1, 2) for c in (2, 32) for k in (1, 8)
+    ])  # fmt: skip
+    rows += _grid("ltbf_proj", "validation", [
+        {"n": n, "r": r, "conn": c, "rank": 4, "seed": VAL_SEEDS[0]}
+        for n in (32, 512) for r in (1, 2) for c in (8, 24)
+    ])  # fmt: skip
+    rows += _grid("ltbf_proj", "test", [
+        {"n": n, "r": r, "conn": c, "rank": k, "seed": TEST_SEEDS[0]}
+        for n in (100, 400, 900) for r in (1, 2) for c, k in ((12, 2), (28, 8))
+    ])  # fmt: skip
+    return rows
+
+
+def release_rows() -> list[Row]:
+    """``examples/ltbf_cg_mem_dse``'s scheduler ``release`` (plans/ltbf_dse/ltbf_dse.md step 4.6): a finished
+    job's successors decremented, the ready ones collected.  Its own plan file
+    (``examples/ltbf_cg_mem_dse/cpu/sweep_plan_release.csv``)."""
+    rows = _grid("release", "fit", [
+        {"succ": n, "ready": k, "seed": 1}
+        for n in (1, 4, 16, 64, 256, 1024) for k in sorted({0, n // 2, n})
+    ])  # fmt: skip
+    rows += _grid("release", "validation", [
+        {"succ": n, "ready": k, "seed": VAL_SEEDS[0]} for n in (8, 128) for k in (1, n // 2)
+    ])  # fmt: skip
+    rows += _grid("release", "test", [
+        {"succ": n, "ready": k, "seed": TEST_SEEDS[0]} for n in (32, 512, 2048) for k in (0, n // 3)
+    ])  # fmt: skip
+    return rows
+
+
+def release_retest_rows() -> list[Row]:
+    """A fresh held-out set for ``release``'s revised model form (plans/ltbf_dse/ltbf_dse.md §14,
+    2026-10-29: the first form's test score was read, so the revision is scored on new points)."""
+    return _grid("release", "test", [
+        {"succ": n, "ready": k, "seed": RETEST_SEED_2024_1}
+        for n, k in ((24, 6), (48, 0), (300, 75), (300, 150), (1500, 0), (1500, 500))
+    ])  # fmt: skip
+
+
+def ltbf_eig_recheck_rows() -> list[Row]:
+    """Five held-out inputs re-checking ``ltbf_eig``'s model fitted on ``paper/ltbf_cg_seq_dse``
+    (plans/ltbf_dse/ltbf_dse.md step 4.6): sizes and ranks between its points, a new seed."""
+    return _grid("ltbf_eig", "test", [
+        {"n": 48, "r": 1, "rank": 3, "seed": RETEST_SEED_2024_1},
+        {"n": 96, "r": 2, "rank": 6, "seed": RETEST_SEED_2024_1},
+        {"n": 384, "r": 1, "rank": 2, "seed": RETEST_SEED_2024_1},
+        {"n": 640, "r": 2, "rank": 5, "seed": RETEST_SEED_2024_1},
+        {"n": 1000, "r": 1, "rank": 7, "seed": RETEST_SEED_2024_1},
+    ])  # fmt: skip
 
 
 def sweep_rows() -> list[Row]:

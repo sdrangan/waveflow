@@ -21,7 +21,7 @@ The predictions
 ---------------
 DSP and block RAM are counted quantities.  A detector's is predicted as its old total, minus its old
 blocks (the measured ``CgMm`` and ``CgVec`` rows) and its old ``A`` channel, plus the two cores'
-counted rules (:mod:`waveflow.linalg.cost`, :mod:`waveflow.linalg.cg_cost`) and the ``A`` channel in
+counted rules (:mod:`waveflow.linalg.legacy.systolic_cost`, :mod:`waveflow.linalg.legacy.cg_cost`) and the ``A`` channel in
 its new shape (lane groups instead of K-lane rows) by the study's channel rule
 (:func:`~examples.mimo_cg.hw.models.sob_memory`).  A finalist's old blocks and channel come from the
 study's counted rules, which reproduce every one of the 28 detectors' rows (its module rows were not
@@ -120,8 +120,8 @@ def old_label(build: str) -> str:
 def cores(top: str, c: HwConfig) -> dict:
     """The cores of a build, ``{"mm": SystolicCore, "vec": CgVectorCore}`` as it has them, sized
     as the detector and the unit builds size them."""
-    from waveflow.linalg.cg_vector import CgVectorCore
-    from waveflow.linalg.systolic import SystolicCore
+    from waveflow.linalg.legacy.cg_vector import CgVectorCore
+    from waveflow.linalg.legacy.systolic import SystolicCore
     from waveflow.simulation.simulation import Simulation
 
     f, sim, K = hw_format(c.fmt), Simulation(), c.K

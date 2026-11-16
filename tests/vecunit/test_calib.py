@@ -42,7 +42,7 @@ def test_the_per_item_charges_are_the_job_model(make):
 
 
 def test_the_resource_rows_build_what_they_name():
-    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT:
+    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT + calib.RESOURCE_HOLDOUT2:
         L, NG, S, caps, _fmts = spec
         cfg = calib.resource_config(spec)
         f = calib.config_features(cfg)
@@ -51,11 +51,28 @@ def test_the_resource_rows_build_what_they_name():
 
 
 def test_the_filed_timing_is_what_pysim_charges():
+    """The filed fit is what pysim loads, and its held-out score is recomputed, not read back: each
+    scenario's intervals charged by pysim from the filed coefficients, against the RTL intervals the
+    record holds (review item R7 of ``plans/vecunit_future.md``)."""
+    from waveflow.linalg.cost import TOOL
+
     path = calib.model_path(calib.TIMING_MODEL)
     rec = json.loads(path.read_text(encoding="utf-8"))
-    assert rec["features"] == list(FEATURES) and rec["tool"].endswith("2024.1")
-    assert _VecPart.timing == VecTiming.from_coefs(rec["coefs"])
-    assert rec["holdout"]["all"]["mean"] < calib.TARGET_MEAN  # the score the guide reports
+    assert rec["features"] == list(FEATURES) and rec["tool"] == TOOL
+    t = VecTiming.from_coefs(rec["coefs"])
+    assert _VecPart.timing == t
+    pred, meas = [], []
+    for scenario, filed in rec["holdout"].items():
+        if scenario in ("all", "targets"):
+            continue
+        build, kind = scenario.split()
+        p = calib.pysim_intervals(calib.build_unit(build), kind, t)
+        assert calib.errors(p, filed["rtl"])["mean"] == pytest.approx(filed["mean"]), scenario
+        pred += p
+        meas += filed["rtl"]
+    mean = calib.errors(pred, meas)["mean"]
+    assert mean == pytest.approx(rec["holdout"]["all"]["mean"])
+    assert mean < calib.TARGET_MEAN  # the score the guide reports
 
 
 def test_a_slot_without_a_multiplier_is_built_without_one():
@@ -69,28 +86,34 @@ def test_a_slot_without_a_multiplier_is_built_without_one():
     assert "MULS = 7, DOTS = 7;" in render_cfg(rtl_config())[0]
 
 
+#: The FF held-out miss of the 2025.1 fit (``plans/calib_2025_1.md`` Stage 3), accepted by the user
+#: 2026-11-06 as a documented limit: (mean, worst), pinned so a refit that moves it is looked at.
+ACCEPTED_FF_MISS = (0.1106, 0.2949)
+
+
 def test_the_filed_resource_model():
     """DSP and BRAM are structural (four DSPs a complex multiplier and five more; the memories as they
-    bind), and the held-out score the guide reports is the filed one."""
+    bind), and the held-out score the guide reports is the filed one: LUT within the targets, FF the
+    accepted miss."""
     rec = json.loads(calib.model_path(calib.RESOURCE_MODEL).read_text(encoding="utf-8"))
-    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT:
+    for spec in calib.RESOURCE_FIT + calib.RESOURCE_HOLDOUT + calib.RESOURCE_HOLDOUT2:
         f = calib.config_features(calib.resource_config(spec))
         p = calib.predict_resources(rec["counters"], f)
         assert p["dsp"] == pytest.approx(4 * f["n_mul"] * f["L"] + 5)
         assert p["bram"] == pytest.approx(f["bram18"])
-    for counter in ("lut", "ff"):
-        assert rec["holdout"][counter]["mean"] < calib.TARGET_MEAN
-        assert rec["holdout"][counter]["worst"] < calib.TARGET_WORST
+    assert rec["holdout"]["lut"]["mean"] < calib.TARGET_MEAN
+    assert rec["holdout"]["lut"]["worst"] < calib.TARGET_WORST
+    ff = rec["holdout"]["ff"]
+    assert (ff["mean"], ff["worst"]) == pytest.approx(ACCEPTED_FF_MISS, abs=1e-4)
 
 
-def test_stage9d_kept_the_timing_with_the_lower_held_out_mean():
-    """Stage 9d fitted a timing by phase and configuration and scored it once; the incumbent was
-    scored on the same held-out set (no fit), and the one with the lower mean is what pysim loads.
-    Both records and both scores are filed (the plan's Stage 9 record reports them)."""
+def test_the_filed_timing_is_stage7s_form_scored_on_its_preregistered_set():
+    """At 2025.1 (``plans/calib_2025_1.md`` Stage 3) the timing is Stage 7's form -- one set of
+    coefficients, fitted on the CG build's ``calib`` run of the RTL catalogue -- not Stage 9d's by-phase
+    model, and its held-out score covers exactly the pre-registered :data:`calib.TIMING3_HOLDOUT`.
+    (Stage 9d's comparison at 2024.1 is in git history with the record it chose.)"""
     rec = json.loads(calib.model_path(calib.TIMING_MODEL).read_text(encoding="utf-8"))
-    cmp = rec["comparison"]
-    other = rec["v2"] if rec["kept"] == "v1" else rec["v1"]
-    assert "holdout" in other and "fit" in other
-    kept, lost = cmp[rec["kept"]]["all"]["mean"], cmp["v2" if rec["kept"] == "v1" else "v1"]["all"]["mean"]
-    assert kept <= lost
-    assert [tuple(x) for x in cmp["set"]] == list(calib.TIMING2_HOLDOUT)
+    assert rec["plan"].startswith("plans/calib_2025_1.md Stage 3")
+    assert rec["fit"]["set"] == "cg calib" and "comparison" not in rec
+    scored = {tuple(s.split()) for s in rec["holdout"] if s not in ("all", "targets")}
+    assert scored == set(calib.TIMING3_HOLDOUT)

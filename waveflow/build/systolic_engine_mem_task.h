@@ -9,8 +9,9 @@
 // C(i,j) at c_base + (i NT + j) WC.
 //
 // systolic_engine_feed_task: one tile per firing, the read port's owner.  Writes the tile's EngineCmd,
-// then A(i,0) B(0,j) A(i,1) B(1,j) ...: every panel's read requested ahead (hls::burst_maxi), then the
-// words in one loop, a word a cycle (last on each panel's final word).
+// then A(i,0) B(0,j) A(i,1) B(1,j) ...: up to six panels' reads requested ahead (hls::burst_maxi), the
+// rest one as each panel's last word is read, the words in one loop, a word a cycle (last on each
+// panel's final word).
 //
 // systolic_engine_writer_task: one tile (or refused job) per firing.  Takes the engine's Resp and C
 // and its Status, and writes MemWCmd(C tile, fwd = last) | [EngineDone] | C.
@@ -103,20 +104,33 @@ static void systolic_engine_feed_task(hls::stream<ap_uint<64> >& feed_in,
     c.nb = 1;
     streamutils::write_msg<WBW>(c, m_out);
     const int P = f.npanels;
-    // Every panel's read requested up front (hls::burst_maxi), in the order the engine takes them,
-    // then all their words in ONE loop: the requests queue in the m_axi adapter, so the port does not
-    // wait between panels.  (A burst loop per panel idled the port ~12 cycles at each switch between
-    // loops, 8 a tile; one flattened loop with a computed address read a single beat every two cycles;
-    // A's panels then B's as two runs waited behind the core's last panel --
-    // plans/systolic_characterization.md.)
+    // The panels' reads requested ahead (hls::burst_maxi), in the order the engine takes them -- request
+    // r is A(i, r/2) for even r, B(r/2, j) for odd -- and all their words in ONE loop: the requests queue
+    // in the m_axi adapter, so the port does not wait between panels.  (A burst loop per panel idled the
+    // port ~12 cycles at each switch between loops, 8 a tile; one flattened loop with a computed address
+    // read a single beat every two cycles; A's panels then B's as two runs waited behind the core's last
+    // panel -- plans/systolic_characterization.md.)  At most RQ requests run ahead of the words read:
+    // RQ up front, then one more as each panel's last word is read.  The adapter takes a request only
+    // while its request queue has room (USER_MAXREQS 7 in Vitis 2024.1's RTL); a request leaves it as its
+    // bursts go out, each only once its words fit the read buffer (num_read_outstanding x
+    // max_read_burst_length, 256 words), which drains only as this loop reads: requesting all 2P first
+    // deadlocked once they outgrew both (P > 8 at 32-word panels -- plans/ltbf_dse/ltbf_dse.md §15).
+    const int RQ = 6;
+    const int nreq = 2 * P;
     ap_uint<32> a = f.a_addr, b = f.b_addr;
+    int r = 0;
 REQ:
-    for (int p = 0; p < P; ++p) {
-#pragma HLS LOOP_TRIPCOUNT max = PMAX
-        m_mem.read_request(a, WA);
-        m_mem.read_request(b, WB);
-        a += WA;
-        b += f.b_step;
+    for (int q = 0; q < RQ; ++q) {
+        if (q < nreq) {
+            const bool ra = (q & 1) == 0;
+            m_mem.read_request(ra ? a : b, ra ? WA : WB);
+            if (ra) {
+                a += WA;
+            } else {
+                b += f.b_step;
+            }
+            ++r;
+        }
     }
     const int total = P * (WA + WB);
     ap_uint<16> w = 0;
@@ -127,6 +141,16 @@ WORDS:
 #pragma HLS PIPELINE II = 1
         const bool last = w == (is_a ? WA : WB) - 1;
         streamutils::write_boundary_word<streamutils::framed_word<WBW>, WBW>(m_out, m_mem.read(), last);
+        if (last && r < nreq) {  // a panel read: request the one RQ ahead
+            const bool ra = (r & 1) == 0;
+            m_mem.read_request(ra ? a : b, ra ? WA : WB);
+            if (ra) {
+                a += WA;
+            } else {
+                b += f.b_step;
+            }
+            ++r;
+        }
         if (last) {
             w = 0;
             is_a = !is_a;

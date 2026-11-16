@@ -12,6 +12,12 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union, overload
 #: against them.
 MIN_TOOL_VERSION: Tuple[int, int] = (2025, 1)
 
+#: The release every packaged platform and recorded number was measured with
+#: (``plans/calib_2025_1.md``).  A newer release runs, but its cycle counts and resources are not
+#: what the platforms describe (2024.1 against 2025.1 moved some by over 10 %), so the tool check
+#: warns about it.
+CALIBRATED_TOOL_VERSION: tuple[int, int] = (2025, 1)
+
 VITIS_PATH_ENV = "WAVEFLOW_VITIS_PATH"
 VIVADO_PATH_ENV = "WAVEFLOW_VIVADO_PATH"
 
@@ -202,12 +208,18 @@ def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Option
 
     The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
     ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
-    is ``<install>/bin/vitis-run[.bat]``."""
+    is ``<install>/bin/vitis-run[.bat]``.
+
+    Up to 2024.x the headers are not in the Vitis tree but in the separate Vitis HLS install beside
+    it (``<root>/Vitis/2024.1`` and ``<root>/Vitis_HLS/2024.1/include``), which is looked in next."""
     exe = find_vitis_path(top_dir)
     if not exe:
         return None
-    inc = Path(exe).resolve().parent.parent / "include"
-    return inc if (inc / "ap_int.h").is_file() else None
+    install = Path(exe).resolve().parent.parent
+    for inc in (install / "include", install.parent.parent / "Vitis_HLS" / install.name / "include"):
+        if (inc / "ap_int.h").is_file():
+            return inc
+    return None
 
 
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:
@@ -384,6 +396,17 @@ class ToolInfo:
         if parsed is None:
             return None
         return parsed >= MIN_TOOL_VERSION
+
+    @property
+    def above_calibrated(self) -> bool | None:
+        """
+        Whether the release is newer than :data:`CALIBRATED_TOOL_VERSION`, the one the packaged
+        platforms were measured with; ``None`` when the version is unknown.
+        """
+        parsed = version_tuple(self.version)
+        if parsed is None:
+            return None
+        return parsed > CALIBRATED_TOOL_VERSION
 
 
 def probe_amd_tools(check_versions: bool = True) -> List[ToolInfo]:
