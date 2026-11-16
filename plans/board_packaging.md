@@ -1,7 +1,8 @@
 # Plan — board packaging: an example becomes IP, a bitstream, and a PynQ host
 
 **Status: S0 core and S1/S2 application paths implemented; S1 notebook board run
-reported passed, receipt review and CMD/S2 acceptance pending. Updated 2026-11-15.** This plan tracks the template-driven
+reported passed; S2 notebook validation next, CMD validation deferred by the user.
+Receipt review remains pending. Updated 2026-11-15.** This plan tracks the template-driven
 RFSoC4x2 board packaging extension. The implemented APIs, source map and manual
 commands are in [Board packaging development](../docs/guide/flows/board_packaging.md).
 
@@ -34,8 +35,8 @@ documentation, 72 added board-related files, and no deleted upstream files.
 | --- | --- | --- |
 | S0: target and clocks | `waveflow.board`, vendored RealDigital resources, optional board-aware `BuildConfig`, explicit clock resolution and target mismatch checks | Fresh tool/clock probes and applicable XSI gates |
 | S0: packaging pipeline | Export receipts, header/XML control ABI, generated host driver, Tcl contracts, BD validation, implementation and overlay collection; offline conformance/failure tests | Fresh Vitis export and Vivado validation/implementation |
-| S1: SimpFun | Current upstream model/codegen reused; fresh notebook tool build checked and RFSoC4x2 run reported passed | Return notebook acceptance JSON and review hashes; independently build and test the CMD path |
-| S2: PolyAccel | Current upstream in-band coefficient protocol, PS DDR/simple DMA template, portable host and manual build notebook | Rebuild overlay and rerun all three cases on RFSoC4x2 |
+| S1: SimpFun | Current upstream model/codegen reused; fresh notebook tool build checked and RFSoC4x2 run reported passed | Return notebook acceptance JSON and review hashes; CMD validation deferred |
+| S2: PolyAccel | Current upstream in-band coefficient protocol, PS DDR/simple DMA template, portable host and manual build notebook | Next: manually build the notebook overlay and test all three cases on RFSoC4x2; CMD validation deferred |
 | S3: direct AXI master to DDR | Future stage | Design, implementation and all acceptance gates |
 | S4: mixed HLS/RTL IP | Future stage | Packaging route, implementation and all acceptance gates |
 | S5: RF converter path | Future stage | RFDC topology/clocks, implementation and instrument/loopback acceptance |
@@ -71,24 +72,26 @@ overlay: `passed=True`, outputs `[0, 11, 17]`, and
 `test_s1_notebook_vzfkcj1w/board-acceptance-20261115T164059914431Z.json`.
 That JSON has not yet been returned to the workstation, so matching its recorded
 manifest, bitstream and ABI hashes against the local overlay remains pending.
-The independently generated CMD overlay has not yet been accepted.
+The independently generated CMD overlay has not yet been accepted. The user
+explicitly deferred CMD testing on 2026-11-15 and chose to proceed with the S2
+notebook. Deferred CMD checks do not block that next notebook validation.
 
 The next actions are sequential and remain **manual**:
 
-1. Return the S1 notebook acceptance JSON and compare its manifest, bitstream
-   and ABI hashes with `run-vzfkcj1w/overlays/overlay-mp59jnfe`.
-2. Independently build the S1 CMD overlay using the environment/CMD instructions
-   at the end of [the S1 notebook](../examples/regmap/board/build_simp_fun.ipynb).
-   Check HLS/export/ABI, BD validation, target/clock, timing and DRC gates.
-3. Upload that CMD overlay and the current portable host to RFSoC4x2. Run all
-   three S1 cases and return its separate acceptance JSON.
-4. Build and test S2 via [its notebook](../examples/stream_inband/board/build_poly.ipynb)
-   and independently via CMD. Check `bd_validate` before implementation, then
-   run cubic/identity/constant cases on RFSoC4x2 with each new overlay.
-5. Match all new acceptance records to their overlay hashes. Keep generated
-   overlays, reports and acceptance JSON outside tracked source control.
-6. Mark S1/S2 accepted after reviewing the required records. Then start S3; keep
-   generic multi-IP/system packaging and RF work as separate follow-up scope.
+1. Run [the S2 notebook](../examples/stream_inband/board/build_poly.ipynb) on the
+   workstation. Check the software/model protocol first; then manually enable
+   HLS/export/ABI and `bd_validate`, followed by implementation/collection.
+2. Review that run's clock, addresses, timing/DRC and collected-driver results.
+   Upload its compact overlay, current portable host/DMA adapter and matching
+   cubic/identity/constant vectors to RFSoC4x2. Run all three board cases.
+3. Return the S1 notebook acceptance JSON and the new S2 records. Match their
+   manifest, bitstream and ABI hashes to the respective workstation overlays.
+   Keep generated overlays, reports and acceptance JSON outside tracked source.
+4. Track notebook acceptance and the explicitly deferred CMD validation
+   separately. The notebook CMD sections remain available for a later independent
+   build/test; do not run them during this notebook-only validation round.
+5. Proceed to later stages after reviewing the current acceptance evidence;
+   retain generic multi-IP/system packaging and RF work as follow-up scope.
 
 ---
 
@@ -290,7 +293,8 @@ and `ExportIpStep` refuses a part mismatch in a unit test.
 implemented; offline gates and the fresh notebook tool build passed. The user
 reported a passing notebook-overlay board run with outputs `0`, `11`, `17`.
 Review of the returned notebook acceptance JSON and independent CMD build/board
-acceptance remain pending.
+acceptance remain pending. CMD validation is deferred by the user's request and
+does not block proceeding to S2 notebook validation.
 
 The smallest possible closed loop, and the stage that carries most of the framework. Budget
 accordingly: S1 is not 1/5 of the work.
@@ -344,6 +348,8 @@ test is green.
 **Progress:** current upstream protocol adapted without changing `poly.py` or its
 handwritten body; DMA/DDR template, portable host and manual notebook implemented.
 Offline gates passed; fresh tool builds and board acceptance pending.
+The current next action is the manual notebook build and board test. CMD
+validation is explicitly deferred for this round.
 
 **The design.** `PolyAccel` is `HostActivated` with `s_in` (`StreamIFSlave`), `m_out`
 (`StreamIFMaster`), and a regmap carrying `halted`, `error` and `tx_id` status.
