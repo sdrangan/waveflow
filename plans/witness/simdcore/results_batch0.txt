@@ -1,0 +1,45 @@
+
+== w6_l2: flattened loop, L 2, dependence false  [Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns]
+   lut: 8744
+   ff: 4040
+   dsp: 8
+   bram: 14
+   clock: 2.898
+   latency: 6165
+   cosim: PASS
+   cosim_rpt: | Verilog| Pass| 4495| 4495| 4495| NA| NA| NA| 4495|
+   loop w6_top_Pipeline_DUMP:DUMP: II 1 depth 3 trip 2048
+   loop w6_top_Pipeline_EXEC:EXEC: II 1 depth 9 trip 
+   loop w6_top_Pipeline_LOAD_P:LOAD_P: II 1 depth 2 trip 64
+   loop w6_top_Pipeline_LOAD_R:LOAD_R: II 1 depth 2 trip 2048
+   tb: w6: L=2 ng=32 instructions=12 total=384 mismatches=0 -> PASS
+   tb: w6: L=2 ng=32 instructions=12 total=384 mismatches=0 -> PASS
+   tb: w6_top_virtual_sqr       w6_top_virtual_sequencer           -     @444
+   tb: w6_top_virtual_sqr       w6_top_virtual_sequencer           -     @444
+   tb: w6_top_cfg               w6_top_config                      -     @374
+   tb: w6: L=2 ng=32 instructions=12 total=384 mismatches=0 -> PASS
+
+== w1_lane: one lane, II 1  [Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns]
+   lut: 3889
+   ff: 1530
+   dsp: 4
+   bram: 0
+   clock: 2.835
+   latency: 265
+   loop w1_top_Pipeline_LANE:LANE: II 1 depth 7 trip 256
+
+== w5_scalar_ii2: scalar issue loop at II 2  [Vitis HLS 2025.1, xczu48dr-ffvg1517-2-e, 4 ns]
+   lut: 6034
+   ff: 3331
+   dsp: 3
+   bram: 3
+   clock: 4.051
+   latency: undef
+   loop scalar_task_Pipeline_INIT:INIT: II 1 depth 1 trip 32
+   loop scalar_task_Pipeline_LOAD:LOAD: II 1 depth 2 trip 
+   loop scalar_task_Pipeline_RUN:RUN: II 3 depth 4 trip undef
+   loop vector_task_Pipeline_EW:EW: II 1 depth 3 trip 8
+   loop vector_task_Pipeline_RED:RED: II 1 depth 3 trip 8
+   tb: w5: job 0 a4 = 56 (want 56)
+   tb: w5: job 1 a4 = 56 (want 56)
+   tb: w5: PASS

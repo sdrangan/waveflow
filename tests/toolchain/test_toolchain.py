@@ -285,6 +285,66 @@ def test_run_vitis_hls_result_forces_capture_when_writing_report(monkeypatch, tm
     assert out["status"] == "passed"
 
 
+def test_tool_env_drops_msystem_on_windows(monkeypatch):
+    """Git Bash's MSYSTEM breaks Vitis cosim file generation (COSIM 212-5): never pass it on."""
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setenv("KEEP_ME", "1")
+
+    env = toolchain._tool_env(None)
+    assert env is not None and "MSYSTEM" not in env and env["KEEP_ME"] == "1"
+
+    env = toolchain._tool_env({"STAGE": "cosim"})
+    assert "MSYSTEM" not in env and env["STAGE"] == "cosim"
+
+
+def test_tool_env_inherits_unchanged_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    assert toolchain._tool_env(None) is None
+
+    # Off Windows the variable means nothing to the tools, and is left alone.
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    assert toolchain._tool_env(None) is None
+    assert toolchain._tool_env({"STAGE": "csim"})["MSYSTEM"] == "MINGW64"
+
+
+def test_run_vitis_hls_launches_without_msystem(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(final_cmd, cwd=None, shell=None, check=None, text=None, capture_output=None, env=None):
+        seen["env"] = env
+        return subprocess.CompletedProcess(args=final_cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setattr(toolchain, "find_vitis_path", lambda top_dir=None: str(tmp_path / "vitis-run.bat"))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    toolchain.run_vitis_hls(tmp_path / "run.tcl", work_dir=tmp_path, env={"STAGE": "cosim"})
+
+    assert "MSYSTEM" not in seen["env"] and seen["env"]["STAGE"] == "cosim"
+
+
+def test_run_xsi_launches_without_msystem(monkeypatch, tmp_path):
+    """The XSI runner (run.bat: xvlog / xelab / the TB) gets the same environment as Vitis."""
+    from waveflow.build import trace_steps
+
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="XSI_EXITCODE=0", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    trace_steps.run_xsi(["run.bat"], cwd=tmp_path, capture_output=True, text=True)
+    assert seen["env"] is not None and "MSYSTEM" not in seen["env"]
+
+
 # Get the directory where this test file lives
 TEST_DIR = Path(__file__).parent
 RESOURCE_DIR = TEST_DIR / "resources"

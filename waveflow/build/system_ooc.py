@@ -32,6 +32,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 
 @dataclass
 class OocLink:
@@ -135,7 +137,7 @@ def _vivado(vivado, work: Path, tcl_name: str, what: str) -> dict:
     with events.span("tool", "vivado", script=tcl_name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", tcl_name], cwd=str(work), capture_output=True, text=True,
-                           timeout=7200)
+                           timeout=7200, env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
     mk = parse_markers(out)

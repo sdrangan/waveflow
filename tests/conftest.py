@@ -243,7 +243,13 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: point (test_ltbf_cg_mem_dse_xsi.py::test_modelled_memory_at_rtl).
 #: 255 + 1 -> 256 on 2026-11-07 (plans/dse_cg.md step 3): dselib through step 2c's six design points on
 #: the live backend (tests/examples/test_dse_cg_live.py).
-WANT_XSI_GATES = 256
+#: In parallel on ``main``:
+#: 245 -> 247 on 2026-11-07 (plans/simdcore.md, Stage 5): the SIMD core at RTL, bit-exact against
+#: pysim through the system flow -- the matched filter and CG with vdiv (tests/simdcore/test_unit_xsi.py).
+#: 256 + 2 -> 258 on 2026-11-16: ``origin/main`` merged into ``paper/ltbf_cg_dse_agentic`` -- this
+#: branch's 256 and main's two SIMD-core gates; ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q``
+#: counts 258.
+WANT_XSI_GATES = 258
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

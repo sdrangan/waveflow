@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from waveflow.toolchain.toolchain import _tool_env
+
 
 @dataclass
 class OocSynth:
@@ -180,7 +182,7 @@ def synth_rtl_ooc(module: str, params: dict, sources, *, part: str, period_ns: f
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", tcl.name], cwd=str(work), capture_output=True, text=True,
-                           timeout=3600)
+                           timeout=3600, env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
     mk = parse_markers(out)

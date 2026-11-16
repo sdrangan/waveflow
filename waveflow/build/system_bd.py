@@ -33,6 +33,8 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 #: The block-design recipe's revision: part of the cache key (see :data:`system_ip.RECIPE`).
 RECIPE = "2"
 XBAR_VLNV = "xilinx.com:ip:axi_crossbar:2.1"
@@ -319,7 +321,8 @@ def build_block_design(spec, sysip, *, period_ns: float, out_dir: str | Path,
         bd_tcl(spec, sysip.ips, name=name, part=sysip.part, period_ns=period_ns, repo=repo,
                proj=proj, out=out_dir, links=links, synth=synth), encoding="utf-8")
     r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log", "-source",
-                        "bd.tcl"], cwd=str(work), capture_output=True, text=True, timeout=3600)
+                        "bd.tcl"], cwd=str(work), capture_output=True, text=True, timeout=3600,
+                       env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
     mk = parse_markers(out)
