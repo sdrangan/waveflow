@@ -17,6 +17,7 @@ import pytest
 from examples.ltbf_cg_mem_dse.hw.records import SRC_SYS, Resp
 from examples.ltbf_cg_mem_dse.hw.resp_hub import RespHub
 from examples.ltbf_cg_mem_dse.hw.sys_wrap import SysWrap
+from examples.ltbf_cg_mem_dse import scenario as sc
 from examples.ltbf_cg_mem_dse.ltbf_fixed import reg
 from waveflow.hw.clock import Clock
 from waveflow.hw.hw_freerun import FreeRunMod
@@ -29,6 +30,12 @@ from waveflow.hw.mm_device import build_mm_device
 from waveflow.hw.mm_host import BoundMemSlaveAdaptor, MemSlaveLayout
 from waveflow.simulation.simulation import Simulation
 from waveflow.sw import SwHost
+
+#: The system tests build from a drop, and the drops are local data (not in git): without them they skip.
+needs_drops = pytest.mark.skipif(
+    not (sc.DROPS_DIR / "drop_00001.npz").is_file(),
+    reason="the LTBF drops are local data (examples/ltbf_cg_mem_dse/data/drops; plan step 0.4)",
+)
 
 W = 64  # mm_host writes queue words of at most 64 bits (mm_host.py:427); the bus is 64-bit
 SYS_BASE, HUB_BASE = 0x8000_0000, 0x8001_0000
@@ -574,6 +581,7 @@ def test_ingest_dma_drops_a_symbol_without_credit():
 # -- the system -------------------------------------------------------------------------------------
 
 
+@needs_drops
 @pytest.mark.parametrize(
     "policy,sector,form",
     [

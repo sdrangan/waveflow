@@ -24,6 +24,13 @@ import pytest
 from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
 from examples.ltbf_cg_mem_dse.hw import build as hb
 from examples.ltbf_cg_mem_dse.hw import system as sy
+from examples.ltbf_cg_mem_dse import scenario as sc
+
+#: Building the system loads a drop, and the drops are local data (not in git): without them these skip.
+needs_drops = pytest.mark.skipif(
+    not (sc.DROPS_DIR / "drop_00001.npz").is_file(),
+    reason="the LTBF drops are local data (examples/ltbf_cg_mem_dse/data/drops; plan step 0.4)",
+)
 
 
 @pytest.fixture(scope="module")
@@ -45,6 +52,7 @@ def test_the_default_point_is_ac9_with_the_dse_options(adaptor):
     assert adaptor.sys_params({}, "end_to_end").slot
 
 
+@needs_drops
 def test_what_generates_hls_and_what_does_not(tmp_path):
     """Per-design formats: the workload and the simulated memory change no source; W and form do."""
     base = replace(sy.AC9, formats="design")
@@ -59,6 +67,7 @@ def test_what_generates_hls_and_what_does_not(tmp_path):
         assert changed == parts, (tag, changed)
 
 
+@needs_drops
 def test_the_long_term_update_runs_alone(adaptor):
     hw = adaptor.build_system({})
     S, host = hw.ltbf
@@ -68,6 +77,7 @@ def test_the_long_term_update_runs_alone(adaptor):
     assert int(head[12]) == len(S.lt.jobs) and int(head[13]) == 0  # n_lt, n_rt (after K_HEAD)
 
 
+@needs_drops
 @pytest.mark.parametrize("params", [{}, {"banks": 2, "mem_rate": 1, "cg_window": 4}],
                          ids=["defaults", "b2r1g4"])  # fmt: skip
 def test_end_to_end_from_a_sionna_drop_in_pysim(adaptor, params):
@@ -110,12 +120,14 @@ def test_defaults_fill_and_legal(adaptor):
     assert adaptor.legal({"R": 2, "C": 8}) is not None             # not a calibrated shape
 
 
+@needs_drops
 def test_the_architecture_is_the_same_at_every_extreme(adaptor):
     arch = adaptor.architecture()                                  # raises if a parameter changes it
     assert {n["name"] for n in arch["nodes"]} == {"sys", "vec", "hub", "xbar", "ing", "mem"}
     assert adaptor.architecture_at({"banks": 2})["sizes"]["memories"] == 2
 
 
+@needs_drops
 def test_rebuilds_are_what_the_grid_says(adaptor):
     """Computed from content (each part's Verilog and HLS sources), the parts each design parameter
     reaches are exactly the grid table's (plans/dse_cg.md, *The space*)."""

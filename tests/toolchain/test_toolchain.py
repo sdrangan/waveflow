@@ -374,9 +374,14 @@ def test_run_vitis_hls_rejects_tclargs_before_launching(monkeypatch, tmp_path):
 
 
 def _vitis_install(root, version, *, headers_in_vitis):
-    """A fake Linux Vitis install under *root*: ``Vitis/<version>/bin/vitis-run``, and ``ap_int.h``
-    either in its own ``include`` (2025.1 on) or in a sibling ``Vitis_HLS/<version>/include``."""
-    exe = root / "Vitis" / version / "bin" / "vitis-run"
+    """A fake Vitis install under *root*: ``Vitis/<version>/bin/vitis-run`` (``vitis-run.bat`` on
+    Windows, the name find_vitis_path looks for there -- else the env path is passed over and the
+    machine's real install is found), and ``ap_int.h`` either in its own ``include`` (2025.1 on) or
+    in a sibling ``Vitis_HLS/<version>/include``."""
+    import platform
+
+    name = "vitis-run.bat" if platform.system() == "Windows" else "vitis-run"
+    exe = root / "Vitis" / version / "bin" / name
     exe.parent.mkdir(parents=True)
     exe.write_text("#!/bin/sh\n", encoding="utf-8")
     exe.chmod(0o755)

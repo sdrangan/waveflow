@@ -11,8 +11,16 @@ import pytest
 
 from examples.dse_cg import brief
 from examples.dse_cg.ltbf_cg_mem import LtbfCgMemAdaptor
+from examples.ltbf_cg_mem_dse import scenario as sc
 
 HERE = Path(brief.__file__).resolve().parent
+
+#: The brief's blocks build the LTBF system, which loads a drop; the drops are local data (not in git),
+#: so without them these skip -- and DSE.md's freshness is checked only where the drops are.
+needs_drops = pytest.mark.skipif(
+    not (sc.DROPS_DIR / "drop_00001.npz").is_file(),
+    reason="the LTBF drops are local data (examples/ltbf_cg_mem_dse/data/drops; plan step 0.4)",
+)
 
 
 @pytest.fixture(scope="module")
@@ -20,6 +28,7 @@ def blocks():
     return brief.build_blocks(LtbfCgMemAdaptor(), HERE)
 
 
+@needs_drops
 def test_the_committed_dse_md_is_what_the_generator_writes(blocks):
     want = brief.render(brief.CONTEXT_TEMPLATE.read_text(encoding="utf-8"), blocks, "waveflow")
     got = (HERE / "DSE.md").read_text(encoding="utf-8")
@@ -49,6 +58,7 @@ def test_the_arms_differ_only_in_their_pysim_blocks(tmp_path):
             assert (out / rel).read_text(encoding="utf-8") == want, (rel, arm)
 
 
+@needs_drops
 def test_the_two_sandboxes_differ_only_in_the_waveflow_blocks(tmp_path):
     """build_sandbox for each arm: the same files but for DSE.md and the skill, and those differ by
     exactly the arm:waveflow blocks; every link of DSE.md resolves inside the sandbox; nothing of the
