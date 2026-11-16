@@ -18,6 +18,7 @@ from pathlib import Path
 
 from waveflow.simdcore.config import SimdCoreConfig
 from waveflow.simdcore.hls import D_DEFAULT, header_name, render_header, top_name
+from waveflow.toolchain.toolchain import _tool_env
 
 PART, PERIOD_NS = "xczu48dr-ffvg1517-2-e", 4
 BUILD = Path(__file__).resolve().parents[1] / "build"
@@ -57,7 +58,7 @@ def run_csynth(cfg: SimdCoreConfig, out: str | Path, d: int = D_DEFAULT) -> dict
     top = write_project(cfg, out, d)
     with open(out / "run.log", "w") as log:
         subprocess.call([_vitis_run(), "--mode", "hls", "--tcl", "run.tcl"], cwd=out, stdout=log,
-                        stderr=subprocess.STDOUT)
+                        stderr=subprocess.STDOUT, env=_tool_env(None))
     return report(out, top)
 
 

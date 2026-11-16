@@ -38,12 +38,19 @@ from waveflow.hw.dataschema import DataList
 from waveflow.hw.hw_freerun import FreeRunMod
 from waveflow.hw.hw_module import HwParam
 from waveflow.hw.interface import FramedStreamIFSlave, StreamIF, StreamIFMaster, StreamIFSlave
-from waveflow.hw.mem_stream import KernelTask, MemRCmd, MemWCmd, MemWStream, _word_type
+from waveflow.hw.mem_stream import (
+    MEM_AXI_MAX_BURST,
+    KernelTask,
+    MemRCmd,
+    MemWCmd,
+    MemWStream,
+    _word_type,
+)
 from waveflow.hw.memif import MMIFReadMaster
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.lanes import DEFAULT_WORD_BITS, from_words, nwords, to_words
+from waveflow.linalg.matmul import MatmulOp
 from waveflow.linalg.message import U8, U16, U32, Status
-from waveflow.linalg.systolic import MatmulOp
 from waveflow.linalg.systolic_engine import (CTRL_BITS, EngineCmd, EngineResp, EngineStatus,
                                              SystolicEngine, command)
 from waveflow.simulation.simobj import ProcessGen
@@ -172,6 +179,17 @@ class EngineSeq(_MemPart):
         self.feed_out = self._ep(StreamIFMaster, "feed_out", CTRL_BITS, False)
         self.tile_out = self._ep(StreamIFMaster, "tile_out", CTRL_BITS, False)
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 3)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_seq_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_seq_task", MEM_HEADERS[0], ("s_job", "feed_out", "tile_out"),
                           framed=("s_job",), template_args=self._targs())
@@ -219,12 +237,24 @@ class EngineFeeder(_MemPart):
         super().__post_init__()
         w = int(self.word_bits)
         self.feed_in = self._ep(StreamIFSlave, "feed_in", CTRL_BITS, False)
-        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w)
+        self.m_mem = MMIFReadMaster(name=f"{self.name}_m_mem", sim=self.sim, bitwidth=w,
+                                    axi_burst=MEM_AXI_MAX_BURST)
         # The body requests a tile's panels ahead of their data (hls::burst_maxi), so the read port
         # does not idle between them.
         self.m_mem.burst_maxi = True
         self.add_endpoint(self.m_mem)
         self.m_out = self._ep(StreamIFMaster, "m_out", w, True)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 0)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_feed_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_feed_task", MEM_HEADERS[0], ("feed_in", "m_mem", "m_out"),
@@ -263,6 +293,17 @@ class EngineWriter(_MemPart):
         self.c_in = self._ep(StreamIFSlave, "c_in", w, True)
         self.st_in = self._ep(StreamIFSlave, "st_in", CTRL_BITS, True)
         self.w_out = self._ep(StreamIFMaster, "w_out", w, True)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_mem_task_structure
+
+        return engine_mem_task_structure(self, 0)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_writer_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_writer_task", MEM_HEADERS[0],
@@ -321,6 +362,26 @@ class SystolicEngineMem(_MemPart):
     pysim: str = "tasks"
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
 
+    @classmethod
+    def get_rm(cls, platform):
+        """The kernel, whole -- every task's model, the buffers and FIFOs, summed
+        (:class:`~waveflow.linalg.cost.EngineKernelModel`): what ``estimate_system`` asks a kernel's
+        class.  In a composed estimate the composite installs only its own share (``add_rm_self``)."""
+        from waveflow.linalg.cost import engine_kernel_model
+
+        return engine_kernel_model(platform)
+
+    def add_rm_self(self, platform) -> None:
+        """In a composed estimate the wrapper contributes its own share -- its FIFOs and the
+        ``m_axi`` adapters -- and prices its memory writer, a ``MemWStream`` with no model of its own
+        on this platform (:class:`~waveflow.linalg.cost.EngineShareModel`); its tasks and its engine
+        carry their own.  :meth:`get_rm` answers for the kernel whole."""
+        from waveflow.linalg.cost import engine_share_model
+
+        share = engine_share_model(platform)
+        self._resource_model = share
+        self.wstream._resource_model = share
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.pysim not in ("tasks", "flat", "tiles"):
@@ -368,6 +429,7 @@ class SystolicEngineMem(_MemPart):
             for comp in (self.seq, self.feeder, self.engine, self.writer, self.wstream):
                 comp.make_passive()
             self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._a_free = 0.0                    # when the A loader finishes its last block so far
             self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one job's writes at a time
 
     # -- the tile-level pysim (pysim="tiles") -----------------------------------------------------
@@ -445,6 +507,13 @@ class SystolicEngineMem(_MemPart):
                 rate = (self.now - t_rd) / int(ends[-1])
                 for p in range(P):
                     ready = t_rd + (int(ends[p]) * rate) + self.TILE_READY_CYCLES * period
+                    # The A loader writes its block an element a cycle (systolic_engine_load_a_task's
+                    # ELEMS loop), from A(p)'s first word once it is done with A(p-1): when the read
+                    # outruns it, it binds the engine (plans/dse_cg.md step 1f: 128 cycles a panel of
+                    # 16 x 8 at RTL, against a read of 108).
+                    a_start = max(t_rd + int(ends[p] - wb - wa) * rate, self._a_free)
+                    self._a_free = a_start + Mm * Km * period
+                    ready = max(ready, self._a_free + self.TILE_READY_CYCLES * period)
                     last = p == P - 1
                     steps = core.steps(Mm, Km, Nm, last, last)
                     t0 = max(t, ready)

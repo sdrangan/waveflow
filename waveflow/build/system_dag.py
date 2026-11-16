@@ -734,7 +734,8 @@ class SystemRtlStep(_SystemStep):
 @dataclass(kw_only=True)
 class HarnessStep(_Inner):
     """The host harness: the testbench ``main`` around the host's C++ twin and its generated endpoints
-    (``system_top.render_system_tb``), pointed at the scenario and the RTL trace directory."""
+    (``system_top.render_system_tb``), pointed at the scenario and the RTL trace directory; the run is
+    capped at the system's ``n_cycles`` when it sets one (else 1,000,000)."""
 
     description = "The testbench: the host's C++ twin on its generated endpoints."
     consumes: ClassVar[list] = ["scenario"]
@@ -748,7 +749,8 @@ class HarnessStep(_Inner):
             r.host.scenario, r.host.trace_dir = Path(scenario).as_posix(), o.traces(config).as_posix()
         tb = system_tb_spec(r.spec, r.xbar, [r.host] if r.host is not None else [],
                             probes=list(r.probes or ()), graph=o.sysm)
-        return {"harness": render_system_tb(r.spec, tb)}
+        return {"harness": render_system_tb(r.spec, tb,
+                                            n_max=getattr(o.sysm, "n_cycles", None) or 1_000_000)}
 
 
 @dataclass(kw_only=True)

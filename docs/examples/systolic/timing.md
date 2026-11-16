@@ -2,7 +2,7 @@
 title: Systolic timing results
 parent: A systolic matrix multiply, measured
 nav_order: 2
-summary: "What the RTL measured (Vitis 2025.1, centre): the engine at 171 cycles per 8×8×32 product with 64-bit words (the input bound) and 141 with short panels (the output bound); with 128-bit words 94 whatever the panel -- the core's own floor, 64 tile steps and about 30 cycles a command -- and 81 an output when a command carries four, at the input's bound. How the binding stage was found from block hold times and input gaps; the design's steps from 390 cycles to 94; the wrapper at 5,813 and 3,033 cycles on 32×32×64 once its feeder requests a tile's panels ahead; the core's panel phase calibrated at RTL, 5 + 1.00·steps cycles, exact on held-out panels; pysim within 5 to 12% of the RTL."
+summary: "What the RTL measured (Vitis 2025.1, centre): the engine at 171 cycles per 8×8×32 product with 64-bit words (the input bound) and 141 with short panels (the output bound); with 128-bit words 94 whatever the panel -- the core's own floor, 64 tile steps and about 30 cycles a command -- and 81 an output when a command carries four, at the input's bound. How the binding stage was found from block hold times and input gaps; the design's steps from 390 cycles to 94; the wrapper at 5,813 and 3,033 cycles on 32×32×64 once its feeder requests a tile's panels ahead; the core's panel phase calibrated at RTL, 5 + 1.00·steps cycles, exact on held-out panels; pysim within 5 to 11% of the RTL once the A loader's element a cycle is charged."
 ---
 
 # Timing
@@ -111,14 +111,27 @@ panel = 5 + 1.00 · steps       (cycles; steps = T·P, the gap, the run-out)
 
 exact on all 24 fitted panels and on the 4 held out (36 and 60 steps): the step count the schedule
 predicts is the RTL's to the cycle, plus 5. The records are filed by the core's identity in
-`waveflow/linalg/calib/modules/engine_core-*`, one per word width, and pysim loads them.
+`waveflow/linalg/calib/modules/engine_core-*`, one per configuration, and pysim loads them. Ten
+configurations are calibrated, all at Vitis HLS / Vivado xsim 2025.1 and all giving the same
+`5 + 1.00 · steps`: these two, and the eight memory-backed shapes of the LTBF system (`R × C` 2 × 4 to
+8 × 8, `Pmax` 22 and 32; `engine_harness --point`). Another configuration runs on the seed, `2 + 1.00 · steps`,
+until it is calibrated.
 
 ## pysim against the RTL
 
 With the calibrated phase -- and with the receiver, the feeder and the writer forwarding a word a cycle
-as the RTL does -- pysim's runs end 5% to 12% before the RTL's last output (8% on the 128-bit `steady`
-run, 5% on the 128-bit wrapper's `big` product; 23% on the mixed `test` workload). What pysim lacks are
-the fixed costs per command outside the panels -- the receiver's command handling and the core's restart
-between commands -- which are not yet phases of their own. Before, it ran 1.5× (the engine) to 1.9×
+as the RTL does -- pysim's runs end 5% to 11% before the RTL's last output (10% on the 128-bit `steady`
+run, 8% on the mixed `test` workload). What pysim lacks are the fixed costs per command outside the
+panels -- the receiver's command handling and the core's restart between commands -- which are not yet
+phases of their own.
+
+**The A loader binds when its input outruns it.** `systolic_engine_load_a_task` writes its block an
+element a cycle (its `ELEMS` loop, II 1 an element), so a panel's `A` takes `m·kp` cycles whatever the
+word width, while the B loader takes a word a cycle. pysim charges it in every mode (2026-11-07): the
+task model's loader takes its block first, as the HLS body's `write_lock` does, then loads from the
+later of the block and its first word; the flat and tile models follow the same timeline, the loader at
+most `sob_depth` blocks ahead of the core. It took the mixed `test` workload at 128-bit words from 23%
+short of the RTL to 8%, and it is what binds the LTBF system's engine with a one-cycle Shared Mem: 128
+cycles a 16 x 8 panel, against 108 for its words to arrive (`plans/dse_cg.md` step 1f). Before, it ran 1.5× (the engine) to 1.9×
 (the wrapper) long: its tasks stored and forwarded each burst, and the core sent `C` after its last panel
 instead of draining it as the tiles ran.

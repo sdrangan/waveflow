@@ -51,6 +51,8 @@ import subprocess
 import argparse
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 
 def launcher_names(os_name: str | None = None) -> tuple[str, str]:
     """
@@ -187,9 +189,9 @@ def run_batch(batch_path, os_name: str | None = None):
     :func:`waveflow.build.trace_steps.xsi_runner_cmd`.
     """
     if (os_name or os.name) == "nt":
-        subprocess.run(batch_path, shell=True, check=True)
+        subprocess.run(batch_path, shell=True, check=True, env=_tool_env(None))
     else:
-        subprocess.run(["bash", str(batch_path)], check=True)
+        subprocess.run(["bash", str(batch_path)], check=True, env=_tool_env(None))
 
 def copy_vcd(sim_dir, base_dir, component_path, output_vcd):
     src = os.path.join(sim_dir, 'dump.vcd')

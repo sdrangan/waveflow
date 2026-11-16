@@ -285,6 +285,66 @@ def test_run_vitis_hls_result_forces_capture_when_writing_report(monkeypatch, tm
     assert out["status"] == "passed"
 
 
+def test_tool_env_drops_msystem_on_windows(monkeypatch):
+    """Git Bash's MSYSTEM breaks Vitis cosim file generation (COSIM 212-5): never pass it on."""
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setenv("KEEP_ME", "1")
+
+    env = toolchain._tool_env(None)
+    assert env is not None and "MSYSTEM" not in env and env["KEEP_ME"] == "1"
+
+    env = toolchain._tool_env({"STAGE": "cosim"})
+    assert "MSYSTEM" not in env and env["STAGE"] == "cosim"
+
+
+def test_tool_env_inherits_unchanged_when_nothing_to_do(monkeypatch):
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    assert toolchain._tool_env(None) is None
+
+    # Off Windows the variable means nothing to the tools, and is left alone.
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    assert toolchain._tool_env(None) is None
+    assert toolchain._tool_env({"STAGE": "csim"})["MSYSTEM"] == "MINGW64"
+
+
+def test_run_vitis_hls_launches_without_msystem(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(final_cmd, cwd=None, shell=None, check=None, text=None, capture_output=None, env=None):
+        seen["env"] = env
+        return subprocess.CompletedProcess(args=final_cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setattr(toolchain, "find_vitis_path", lambda top_dir=None: str(tmp_path / "vitis-run.bat"))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    toolchain.run_vitis_hls(tmp_path / "run.tcl", work_dir=tmp_path, env={"STAGE": "cosim"})
+
+    assert "MSYSTEM" not in seen["env"] and seen["env"]["STAGE"] == "cosim"
+
+
+def test_run_xsi_launches_without_msystem(monkeypatch, tmp_path):
+    """The XSI runner (run.bat: xvlog / xelab / the TB) gets the same environment as Vitis."""
+    from waveflow.build import trace_steps
+
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="XSI_EXITCODE=0", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    trace_steps.run_xsi(["run.bat"], cwd=tmp_path, capture_output=True, text=True)
+    assert seen["env"] is not None and "MSYSTEM" not in seen["env"]
+
+
 # Get the directory where this test file lives
 TEST_DIR = Path(__file__).parent
 RESOURCE_DIR = TEST_DIR / "resources"
@@ -382,3 +442,64 @@ def test_run_vivado_rejects_failure_sentinel_on_zero_exit(monkeypatch, tmp_path)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: result)
     with pytest.raises(RuntimeError, match="missing board"):
         toolchain.run_vivado(tmp_path / "run.tcl", tmp_path)
+
+
+@pytest.mark.parametrize("extra_env", [None, {"STAGE": "bd_validate"}])
+def test_run_vivado_launches_without_msystem(monkeypatch, tmp_path, extra_env):
+    """Board Vivado launches use upstream's AMD environment cleanup as well."""
+    seen = {}
+
+    def fake_run(cmd, cwd=None, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(toolchain.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("MSYSTEM", "MINGW64")
+    monkeypatch.setenv("WAVEFLOW_PARENT", "kept")
+    monkeypatch.setattr(toolchain, "find_vivado_path", lambda top_dir=None: "/tools/vivado.bat")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    toolchain.run_vivado(tmp_path / "run.tcl", work_dir=tmp_path, env=extra_env)
+
+    assert seen["env"] is not None and "MSYSTEM" not in seen["env"]
+    assert seen["env"]["WAVEFLOW_PARENT"] == "kept"
+    if extra_env is not None:
+        assert seen["env"]["STAGE"] == "bd_validate"
+
+
+def _vitis_install(root, version, *, headers_in_vitis):
+    """A fake Vitis install under *root*: ``Vitis/<version>/bin/vitis-run`` (``vitis-run.bat`` on
+    Windows, the name find_vitis_path looks for there -- else the env path is passed over and the
+    machine's real install is found), and ``ap_int.h`` either in its own ``include`` (2025.1 on) or
+    in a sibling ``Vitis_HLS/<version>/include``."""
+    import platform
+
+    name = "vitis-run.bat" if platform.system() == "Windows" else "vitis-run"
+    exe = root / "Vitis" / version / "bin" / name
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    inc = (root / "Vitis" / version if headers_in_vitis else root / "Vitis_HLS" / version) / "include"
+    inc.mkdir(parents=True)
+    (inc / "ap_int.h").write_text("// ap_int\n", encoding="utf-8")
+    return exe, inc
+
+
+def test_find_vitis_include_dir_in_the_vitis_tree(tmp_path, monkeypatch):
+    exe, inc = _vitis_install(tmp_path, "2025.1", headers_in_vitis=True)
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() == inc.resolve()
+
+
+def test_find_vitis_include_dir_falls_back_to_vitis_hls(tmp_path, monkeypatch):
+    # 2024.1's split install: the headers are only in Vitis_HLS/<version>/include.
+    exe, inc = _vitis_install(tmp_path, "2024.1", headers_in_vitis=False)
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() == inc.resolve()
+
+
+def test_find_vitis_include_dir_none_without_headers(tmp_path, monkeypatch):
+    exe, inc = _vitis_install(tmp_path, "2024.1", headers_in_vitis=False)
+    (inc / "ap_int.h").unlink()
+    monkeypatch.setenv("WAVEFLOW_VITIS_PATH", str(exe))
+    assert toolchain.find_vitis_include_dir() is None

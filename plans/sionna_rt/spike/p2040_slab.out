@@ -1,0 +1,5 @@
+free space on the unfolded path: -72.3600 dB
+Sionna |R|^2, simple_reflector (ITU metal): -0.0020 dB
+Sionna |R|^2, floor_wall (ITU concrete): -12.4480 dB
+concrete 0.1 m, 45 deg: single TE -5.8094  single TM -11.6187  slab TE -6.4790  slab TM -12.4485 dB
+metal 0.01 m, 45 deg: slab TM -0.0024 dB

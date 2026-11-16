@@ -121,15 +121,15 @@ they cost:
 <!-- listing: double.costs -->
 ```text
            passes  runs  elements  cycles (about)
-unchained       3     3        48       299
-chained         1     1        16       104
+unchained       3     3        48       298
+chained         1     1        16       102
 ```
 
 The execute task **decodes** each pass (`passes`), fills the pipeline once per **run** (`runs`, here
 one per pass), and streams each pass's elements through it (`elements`, passes × `VL`). Chaining cuts
 all three by three. The cycles are the [calibrated timing model](timing.md#the-calibrated-models)'s,
-about 16 cycles a decoded pass, 66 a run and 1 an element. It was fitted on a three-slot build (Vitis
-HLS 2024.1), whose pipeline is deeper than a one-slot build's, so the unchained figure is indicative
+about 17 cycles a decoded pass, 65 a run and 1 an element. It was fitted on a three-slot build (Vitis
+HLS 2025.1), whose pipeline is deeper than a one-slot build's, so the unchained figure is indicative
 only.
 
 Three passes that depend on each other cannot overlap. Chaining is how a program makes dependent
@@ -172,7 +172,7 @@ wf.st p0, qo0, 0, 16, 4
 <!-- listing: cmul.chunk.costs -->
 ```text
            passes  runs  elements  cycles (about)
-cmul            2     2        32       204
+cmul            2     2        32       201
 ```
 
 ## Example 3: the same, strip-mined
@@ -299,8 +299,8 @@ an earlier pass of the run wrote when `VL` is at least 16: by the time the secon
 <!-- listing: poly.costs -->
 ```text
            passes  runs  elements  cycles (about)
-poly            2     2        32       283
-fused           2     1        32       217
+poly            2     2        32       281
+fused           2     1        32       215
 ```
 
 `fuse_raw_vl` must be at least the fused loop's depth in the built hardware, which csynth's schedule

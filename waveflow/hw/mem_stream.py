@@ -320,7 +320,8 @@ class MemRStream(FreeRunMod):
         # See InterfaceEndpoint's boundary-kind contract in waveflow/hw/interface.py.
         # (plans/endpoint_types_not_tags.md argued it; completed and deleted in cd6a1ed.)
         self.m_mem = MMIFReadMaster(
-            name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
+            name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth),
+            axi_burst=MEM_AXI_MAX_BURST)
         # In-band mode relays OPAQUE bursts, which is only defined on a packet-delimited stream.
         self.s_cmd = StreamIFSlave(
             name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),
@@ -515,7 +516,8 @@ class MemWStream(FreeRunMod):
         self._complete_cls = MemComplete.specialize(max_xfer_len=int(self.max_xfer_len))
         # The sole write owner — the type declares it (see MemRStream.m_mem above).
         self.m_mem = MMIFWriteMaster(
-            name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth))
+            name=f"{self.name}_m_mem", sim=self.sim, bitwidth=int(self.mem_dwidth),
+            axi_burst=MEM_AXI_MAX_BURST)
         if not self.inband:
             self.s_cmd = StreamIFSlave(
                 name=f"{self.name}_s_cmd", sim=self.sim, bitwidth=int(self.mem_dwidth),

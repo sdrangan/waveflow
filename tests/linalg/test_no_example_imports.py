@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PLATFORM = "waveflow/calib/platforms/xczu48dr_250mhz_vitis2024_1"
+PLATFORM = "waveflow/calib/platforms/xczu48dr_250mhz_vitis2025_1"
 _TASKS = (
     "systolic_rx_task", "systolic_load_task", "systolic_core_task", "systolic_store_task",
     "cg_vector_rx_task", "cg_vector_load_task", "cg_vector_task", "cg_vector_store_task",
@@ -34,13 +34,16 @@ MANIFEST = (
     *(
         f"waveflow/linalg/{m}.py"
         for m in (
-            "__init__", "formats", "lanes", "message", "build", "matmul", "systolic", "cost",
-            "cg", "cg_vector", "cg_cost",
+            "__init__", "formats", "lanes", "message", "build", "matmul", "cost", "cg",
             # the systolic engine and its memory wrapper (plans/systolic_characterization.md, Part B)
             "systolic_engine", "systolic_engine_mem",
+            # the retired units and their cost models (2026-11-08: waveflow.linalg.legacy)
+            "legacy/__init__", "legacy/systolic", "legacy/systolic_cost", "legacy/cg_vector",
+            "legacy/cg_cost",
         )
     ),
-    *(f"waveflow/build/{h}.h" for h in ("wf_lanes", "wf_matrix_io", "wf_linalg_msg", *_TASKS)),
+    *(f"waveflow/build/{h}.h" for h in ("wf_lanes", "wf_matrix_io", "wf_linalg_msg")),
+    *(f"waveflow/build/legacy/{h}.h" for h in _TASKS),
     *(f"waveflow/build/systolic_engine_{t}_task.h" for t in ("rx", "load", "core", "store", "mem")),
     f"{PLATFORM}/platform.json",
     f"{PLATFORM}/provenance.json",
@@ -52,6 +55,11 @@ MANIFEST = (
     # the vector unit's calibrated timing and resource models (plans/vecunit_new.md, Stage 7)
     f"{PLATFORM}/models/vecunit_timing/params.json",
     f"{PLATFORM}/models/vecunit_resources/params.json",
+    # the systolic engine's resource model, a model per task and the composites' shares
+    # (plans/calib_2025_1.md Stage 4)
+    *(f"{PLATFORM}/models/systolic_engine_{t}/params.json"
+      for t in ("rx_task", "load_a_task", "load_b_task", "core_task", "collect_task", "store_task",
+                "seq_task", "feed_task", "writer_task", "channels")),
     # the systolic engine core's calibrated timed phase, one record per configuration (by identity)
     *(p.relative_to(ROOT).as_posix()
       for p in (ROOT / "waveflow/linalg/calib/modules").glob("engine_core-*/**/*") if p.is_file()),
@@ -60,7 +68,7 @@ MANIFEST = (
 #: What the scan allows in code, and why.
 ALLOWED = {
     "Clock(freq=250e6)": "the components' default clock (a module's clock is set where it is used)",
-    'PLATFORM = "xczu48dr_250mhz_vitis2024_1"': "the packaged platform the cost models describe",
+    'PLATFORM = "xczu48dr_250mhz_vitis2025_1"': "the packaged platform the cost models describe",
 }
 #: The example's constants, a part, a clock, a plan path.
 FORBIDDEN = re.compile(

@@ -1,0 +1,84 @@
+{
+  "terms": [
+    "fifos",
+    "bram_fifos",
+    "mem_regbits",
+    "adapters"
+  ],
+  "adapters_bram": {
+    "64": 4
+  },
+  "ranges": {
+    "fifos": [
+      6.0,
+      13.0
+    ],
+    "bram_fifos": [
+      1.0,
+      2.0
+    ],
+    "mem_regbits": [
+      192.0,
+      1536.0
+    ],
+    "adapters": [
+      0.0,
+      2.0
+    ]
+  },
+  "lut": {
+    "intercept": -255.29551455514445,
+    "fifos": 98.49865518655132,
+    "bram_fifos": 81.54785567855645,
+    "mem_regbits": 0.12419280442804848,
+    "adapters": 740.8035424354276
+  },
+  "ff": {
+    "intercept": -195.6066584665842,
+    "fifos": 123.60150881508748,
+    "bram_fifos": 175.61134891348922,
+    "mem_regbits": 1.0019218942189383,
+    "adapters": 621.3553751537554
+  },
+  "mem_writer": {
+    "64": {
+      "lut": 2018,
+      "ff": 2233
+    }
+  },
+  "model": "systolic_engine_channels",
+  "provenance": {
+    "plan": "plans/calib_2025_1.md Stage 4 (the systolic engine, resources)",
+    "tool": "Vitis HLS / Vivado xsim 2025.1",
+    "part": "xczu48dr-ffvg1517-2-e",
+    "fit_points": [
+      "big",
+      "c16",
+      "c4",
+      "centre",
+      "k16",
+      "k4",
+      "l8",
+      "ltbf_r2c4_p22",
+      "ltbf_r2c4_p32",
+      "ltbf_r4c4_p22",
+      "ltbf_r4c8_p22",
+      "ltbf_r4c8_p32",
+      "ltbf_r8c8_p22",
+      "m16",
+      "n64",
+      "p1",
+      "p8",
+      "r2",
+      "r8",
+      "small",
+      "w128"
+    ],
+    "held_out": [
+      "ltbf_r4c4_p32",
+      "ltbf_r8c8_p32"
+    ],
+    "source": "csynth of examples/systolic/systolic_sweep.py",
+    "date": "2026-11-06"
+  }
+}

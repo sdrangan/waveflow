@@ -4,13 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 
 # ------------------------------------------------------------
 # Shared helper: run a shell command
 # ------------------------------------------------------------
 def run(cmd, cwd=None):
     print(f"\n>>> {cmd}")
-    result = subprocess.run(cmd, shell=True, cwd=cwd)
+    result = subprocess.run(cmd, shell=True, cwd=cwd, env=_tool_env(None))
     if result.returncode != 0:
         print(f"Error: command failed\n{cmd}")
         sys.exit(result.returncode)

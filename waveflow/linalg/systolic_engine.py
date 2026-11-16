@@ -1,6 +1,6 @@
 """The systolic engine: ``C = q(A·B)`` / ``q(Aᴴ·B)`` on a streaming systolic array, fed in order.
 
-The redesign of :class:`~waveflow.linalg.systolic.SystolicUnit` (``plans/systolic_characterization.md``,
+The redesign of :class:`~waveflow.linalg.legacy.systolic.SystolicUnit` (retired) (``plans/systolic_characterization.md``,
 Part B).  What changes:
 
 * **No copy.** The loaders write ``A`` and ``B`` straight into banked stream-of-blocks buffers in the
@@ -57,24 +57,25 @@ from waveflow.hw.mem_stream import KernelTask
 from waveflow.hw.timed_phase import TimedPhase
 from waveflow.linalg import matmul as mm
 from waveflow.linalg.build import LinalgParts
-from waveflow.linalg.formats import DEFAULT_LANE_BITS, mem_format
+from waveflow.linalg.formats import (
+    DEFAULT_LANE_BITS,
+    check_signed,
+    mem_format,
+    systolic_io_traits,
+    systolic_traits,
+)
 from waveflow.linalg.lanes import (
     DEFAULT_WORD_BITS,
     block_type,
     elems_per_word,
     from_words,
     nwords,
+    pack_groups,
     to_words,
+    unpack_groups,
 )
-from waveflow.linalg.lanes import pack_groups, unpack_groups
+from waveflow.linalg.matmul import MatmulOp, stored_shape
 from waveflow.linalg.message import U8, U16, Status
-from waveflow.linalg.systolic import (
-    MatmulOp,
-    _check_signed,
-    core_traits,
-    io_traits,
-    stored_shape,
-)
 from waveflow.simulation.simobj import ProcessGen
 from waveflow.utils.fixputils import Format
 
@@ -252,7 +253,7 @@ class _EnginePart(FreeRunMod):
         super().__post_init__()
         if None in (self.a, self.b, self.c):
             raise ValueError(f"{self.name}: the engine needs the formats a, b and c")
-        _check_signed(self.name, self.a, self.b, self.c)
+        check_signed(self.name, self.a, self.b, self.c)
         M, N, L, R, C = int(self.Mmax), int(self.Nmax), int(self.L), int(self.R), int(self.C)
         if L < 1 or L & (L - 1):
             raise ValueError(f"the lane count L = {L} is not a power of two")
@@ -266,8 +267,8 @@ class _EnginePart(FreeRunMod):
         for fmt in (self.a, self.b, self.c):
             mem_format(fmt, int(self.lane_bits))
         # the accumulator covers a whole K: Kmax products per panel, Pmax panels
-        self.core_traits = core_traits(self.a, self.b, self.c, int(self.Kmax) * int(self.Pmax))
-        self.io_traits = io_traits(self.a, self.b, self.c, int(self.lane_bits))
+        self.core_traits = systolic_traits(self.a, self.b, self.c, int(self.Kmax) * int(self.Pmax))
+        self.io_traits = systolic_io_traits(self.a, self.b, self.c, int(self.lane_bits))
 
     def _ep(self, cls, name: str, bits: int, tlast: bool):
         ep = cls(name=f"{self.name}_{name}", sim=self.sim, bitwidth=int(bits), has_tlast=tlast)
@@ -323,6 +324,17 @@ class EngineRx(_EnginePart):
         self.pay_b = self._ep(StreamIFMaster, "pay_b", w, True)
         self.halted = False
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_rx_structure
+
+        return engine_rx_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_rx_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_rx_task", ENGINE_HEADERS[0],
                           ("s_in", "a_job", "b_job", "core_job", "reply", "pay_a", "pay_b"),
@@ -372,6 +384,11 @@ class _EngineLoad(_EnginePart):
         else:
             self.blk = self._block(SobIFMaster, "blk", self.b, K * N, 1)
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_load_structure
+
+        return engine_load_structure(self)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask(f"systolic_engine_load_{self.operand.lower()}_task", ENGINE_HEADERS[1],
                           ("job_in", "s_in", "blk"),
@@ -385,18 +402,29 @@ class _EngineLoad(_EnginePart):
         fmt, shape = (self.a, stored_shape(op, m, kp)) if self.operand == "A" else (self.b, (kp, n))
         keep = self.operand == "A" and bool(int(job.keep_a))
         held = None
+        period = self.clk.period
         for q in range(count):
+            # As the HLS body: the block first (hls::write_lock), then its words.  The A loader writes
+            # it an element a cycle (the ELEMS loop, II 1 an element; keep_a's repeat copied as
+            # fast), from the later of the block and its first word; the B loader a word a cycle, no
+            # slower than its words come.
+            blk = yield from self.blk.acquire_write()
+            t_from = self.env.now
             if keep and q > 0:                           # keep_a: the one A, repeated
                 re, im = held
             else:
                 words = yield from self.s_in.get()
+                t_from = max(t_from, self.env.now - (len(words) - 1) * period)
                 re, im = from_words(words, shape[0] * shape[1], fmt, int(self.lane_bits),
                                     int(self.word_bits))
                 re, im = re.reshape(shape), im.reshape(shape)
                 if self.operand == "A" and op == MatmulOp.MUL_AH:
                     re, im = re.T.copy(), im.T.copy()       # the block holds X = Aᵀ
                 held = (re, im)
-            blk = yield from self.blk.acquire_write()
+            if self.operand == "A":
+                t_done = t_from + shape[0] * shape[1] * period
+                if t_done > self.env.now:
+                    yield self.timeout(t_done - self.env.now)
             blk.payload = (re, im)
             yield from self.blk.commit_write(blk)
 
@@ -408,6 +436,12 @@ class EngineLoadA(_EngineLoad):
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine_load_a"
     operand: ClassVar[str] = "A"
 
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_load_a_task", cls, platform)
+
 
 @dataclass
 class EngineLoadB(_EngineLoad):
@@ -415,6 +449,12 @@ class EngineLoadB(_EngineLoad):
 
     cpp_kernel_name: ClassVar[str | None] = "systolic_engine_load_b"
     operand: ClassVar[str] = "B"
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_load_b_task", cls, platform)
 
 
 @dataclass
@@ -442,6 +482,17 @@ class EngineCore(_EnginePart):
             "panel", spans={"panel": (self.b_blk.first, self.b_blk.last)}, features=("steps",),
             seed={"panel": {"intercept": 2.0, "steps": 1.0}}, calib_dir=CALIB_DIR)
         self.add_timing_phase(self.panel)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_core_structure
+
+        return engine_core_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_core_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_core_task", ENGINE_HEADERS[2],
@@ -511,6 +562,17 @@ class EngineCollect(_EnginePart):
         self.c_blk = self._block(SobIFMaster, "c_blk", self.c, int(self.Mmax) * int(self.Nmax),
                                  int(self.L))
 
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_collect_structure
+
+        return engine_collect_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_collect_task", cls, platform)
+
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_collect_task", ENGINE_HEADERS[2],
                           ("job_in", "c_in", "c_blk"),
@@ -543,6 +605,17 @@ class EngineStore(_EnginePart):
                                  int(self.L))
         self.s_out = self._ep(FramedStreamIFMaster, "s_out", int(self.word_bits), True)
         self.m_status = self._ep(FramedStreamIFMaster, "m_status", CTRL_BITS, True)
+
+    def resource_structure(self):
+        from waveflow.linalg.cost import engine_store_structure
+
+        return engine_store_structure(self)
+
+    @classmethod
+    def get_rm(cls, platform):
+        from waveflow.linalg.cost import resource_model
+
+        return resource_model("systolic_engine_store_task", cls, platform)
 
     def kernel_task(self) -> KernelTask:
         return KernelTask("systolic_engine_store_task", ENGINE_HEADERS[3],
@@ -589,6 +662,23 @@ class SystolicEngine(_EnginePart):
     #: own events).
     pysim: str = "tasks"
     build_fields: ClassVar[tuple[str, ...]] = ("a", "b", "c", "pysim")
+
+    @classmethod
+    def get_rm(cls, platform):
+        """The kernel, whole -- every task's model, the buffers and FIFOs, summed
+        (:class:`~waveflow.linalg.cost.EngineKernelModel`): what ``estimate_system`` asks a kernel's
+        class.  In a composed estimate the composite installs only its own share (``add_rm_self``)."""
+        from waveflow.linalg.cost import engine_kernel_model
+
+        return engine_kernel_model(platform)
+
+    def add_rm_self(self, platform) -> None:
+        """In a composed estimate the engine contributes its own share -- its buffers and FIFOs
+        (:class:`~waveflow.linalg.cost.EngineShareModel`); its six tasks carry their own models.
+        :meth:`get_rm` answers for the kernel whole, which here would count the tasks twice."""
+        from waveflow.linalg.cost import engine_share_model
+
+        self._resource_model = engine_share_model(platform)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -644,6 +734,8 @@ class SystolicEngine(_EnginePart):
             import simpy
 
             self._core_free = 0.0                 # when the core finishes its last panel so far
+            self._a_free = 0.0                    # when the A loader finishes its last block so far
+            self._a_rel: list = []                # when the core released its last X blocks
             self._out_lock = simpy.Resource(self.sim.env, capacity=1)   # one command's outputs at a time
 
     # -- the flat pysim (pysim="flat") ----------------------------------------------------------
@@ -676,7 +768,7 @@ class SystolicEngine(_EnginePart):
         from waveflow.utils import fixputils as fx
 
         order = operand_order(c)                  # the bursts in arrival order: (name, output, panel)
-        ops, arrived = {}, {}
+        ops, arrived, first = {}, {}, {}
         t = self._core_free
         for ob in range(nb):
             # this output's operands, read as they arrive (the ones before it are read already), so
@@ -685,6 +777,7 @@ class SystolicEngine(_EnginePart):
                 name, o, pp = order.pop(0)
                 words = yield from self.rx.s_in.get()
                 arrived[name, o, pp] = self.now
+                first[name, o, pp] = self.now - (len(words) - 1) * period
                 fmt, shape = (self.a, stored_shape(op, m, kp)) if name == "A" else (self.b, (kp, n))
                 re, im = from_words(words, shape[0] * shape[1], fmt, lb, w)
                 ops[name, o, pp] = (re.reshape(shape), im.reshape(shape))
@@ -696,11 +789,19 @@ class SystolicEngine(_EnginePart):
                                               form=int(self.form))
                 accr, acci = (pr, pi) if accr is None else (accr + pr, acci + pi)
                 # the panel starts when its blocks are loaded (a cycle behind their last word in)
-                # and the core is free, and takes the core's calibrated phase
+                # and the core is free, and takes the core's calibrated phase.  The A loader writes a
+                # block an element a cycle (the ELEMS loop), from its first word -- or, keep_a's
+                # repeat, at once -- once it is done with the block before: it can bind.
+                # It writes into one of sob_depth blocks, so it waits for the core to free one.
                 last = pp == npan - 1
-                ready = max(arrived[akey], arrived["B", ob, pp]) + period
+                a_from = self._a_free if keep and (ob, pp) != (0, 0) else first[akey]
+                sd = int(self.sob_depth)
+                slot = self._a_rel[-sd] if len(self._a_rel) >= sd else 0.0
+                self._a_free = max(a_from, self._a_free, slot) + m * kp * period
+                ready = max(arrived[akey] + period, self._a_free + period, arrived["B", ob, pp] + period)
                 steps = self.core.steps(m, kp, n, last, last and ob == nb - 1)
                 t = max(t, ready) + self.core.panel.predict(steps=steps)["panel"] * period
+                self._a_rel = (self._a_rel + [t])[-sd:]
             cr, ci = fx.quantize(accr, fmt, self.c), fx.quantize(acci, fmt, self.c)
             resp = EngineResp()
             resp.tx_id, resp.index, resp.m, resp.n = int(c.tx_id), ob, m, n

@@ -33,6 +33,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 #: The vendor every packaged IP carries; the library is the system's top.
 VENDOR = "waveflow.org"
 VERSION = "1.0"
@@ -273,7 +275,7 @@ def package_system(spec, *, kernel_dirs: dict[str, Path], part: str, out_dir: st
         (work / "package.tcl").write_text(package_tcl(todo, part=part), encoding="utf-8")
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", "package.tcl"], cwd=str(work), capture_output=True,
-                           text=True, timeout=3600)
+                           text=True, timeout=3600, env=_tool_env(None))
         out = (r.stdout or "") + (r.stderr or "")
         (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
         mk = parse_markers(out)

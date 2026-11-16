@@ -43,6 +43,8 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 #: ``CONFIG.CONNECTIVITY_MODE`` values: a crossbar (the IP's default) or a shared bus.
 XBAR_MODES = ("SAMD", "SASD")
 
@@ -276,7 +278,8 @@ def generate_axi_xbar(cfg: AxiXbarConfig, out_dir: str | Path, vivado: str | Non
 
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-nolog", "-source", tcl.name],
-                           cwd=str(work), capture_output=True, text=True, timeout=900)
+                           cwd=str(work), capture_output=True, text=True, timeout=900,
+                           env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or "XBAR_FILE" not in out:
         raise RuntimeError(f"axi_crossbar generation failed for {cfg.name}:\n{out[-3000:]}")
@@ -511,7 +514,7 @@ def synth_axi_xbar(cfg: AxiXbarConfig, ip: AxiXbarIp, out_dir: str | Path, perio
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", tcl.name], cwd=str(work), capture_output=True, text=True,
-                           timeout=7200)
+                           timeout=7200, env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
     mk = parse_markers(out)

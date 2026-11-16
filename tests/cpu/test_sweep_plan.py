@@ -24,7 +24,7 @@ from waveflow.cpu.calib.sweep import (
 
 PLATFORM = (
     Path(__file__).resolve().parents[2]
-    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1/cpu"
+    / "waveflow/calib/platforms/a53_hpi_1200mhz_gem5v25_1_vitis2025_1/cpu"
 )
 
 

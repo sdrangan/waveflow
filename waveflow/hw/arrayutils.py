@@ -325,7 +325,9 @@ def _array_utils_stem(elem_type: type[DataSchema]) -> str:
     if uint_match is not None:
         return f"uint{uint_match.group(1)}"
 
-    return elem_type._camel_to_snake(name)
+    # A specialized type's name carries its parameters; a negative one (a fixed-point format with
+    # negative integer bits, ``Fixed16_-3``) would put '-' in a C++ namespace: spell it 'm'.
+    return elem_type._camel_to_snake(name).replace("-", "m")
 
 
 def _array_utils_filename(elem_type: type[DataSchema]) -> str:

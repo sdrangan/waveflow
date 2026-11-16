@@ -263,3 +263,20 @@ def test_an_int_complex_element_gets_wf_cint_beside_its_header(tmp_path):
     hdr = next((tmp_path / "include").glob("*_array_utils.h"))
     assert '#include "wf_cint.h"' in hdr.read_text(encoding="utf-8")
     assert (hdr.parent / "wf_cint.h").is_file()
+
+
+def test_negative_integer_bits_give_a_cpp_identifier():
+    """A fixed-point element with negative integer bits (``Fixed16_-3``) names its array utilities
+    with 'm' for '-': the namespace and file are C++ identifiers; other names are unchanged."""
+    import re
+
+    from waveflow.hw.arrayutils import _array_utils_filename, _array_utils_namespace
+    from waveflow.linalg.formats import mem_elem_type
+    from waveflow.utils.fixputils import Format
+
+    neg = mem_elem_type(Format(16, -3, True), 16)
+    assert _array_utils_namespace(neg) == "complex__fixed16_m3_array_utils"
+    assert _array_utils_filename(neg) == "complex__fixed16_m3_array_utils.h"
+    assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _array_utils_namespace(neg))
+    pos = mem_elem_type(Format(16, 4, True), 16)
+    assert _array_utils_namespace(pos) == "complex__fixed16_4_array_utils"

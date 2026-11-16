@@ -29,6 +29,7 @@ from waveflow.build.build import BuildConfig, BuildStep
 from waveflow.build.composite_gen import DEFAULT_MEM_DW, composite_top_spec
 from waveflow.build.elaborate import elaborate
 from waveflow.build.hwgen import cpp_kernel_name
+from waveflow.toolchain.toolchain import _tool_env
 
 
 def xsi_runner_name(os_name: str | None = None) -> str:
@@ -136,6 +137,8 @@ def run_xsi(cmd: list[str], *, cwd: str | os.PathLike[str], name: str = "xsi",
     """
     from waveflow import events
 
+    if kwargs.get("env") is None:
+        kwargs["env"] = _tool_env(None)
     with events.span("tool", name, cwd=str(cwd)) as ev:
         r = subprocess.run(cmd, cwd=str(cwd), **kwargs)
         out = (r.stdout or "") if isinstance(r.stdout, str) else ""

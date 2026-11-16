@@ -41,6 +41,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from waveflow.toolchain.toolchain import _tool_env
+
 #: The store target per-instance system-synthesis numbers file under (see the module doc).
 INSTANCE_TARGET = "instance"
 
@@ -363,7 +365,7 @@ def synth_system(spec, *, top_v: Path, kernel_dirs: dict[str, Path], ip, out_dir
     with events.span("tool", "vivado", script=tcl.name):
         r = subprocess.run([vivado, "-mode", "batch", "-nojournal", "-log", "vivado.log",
                             "-source", tcl.name], cwd=str(work), capture_output=True, text=True,
-                           timeout=7200)
+                           timeout=7200, env=_tool_env(None))
     out = (r.stdout or "") + (r.stderr or "")
     (work / "vivado_stdout.txt").write_text(out, encoding="utf-8")
     mk = parse_markers(out)

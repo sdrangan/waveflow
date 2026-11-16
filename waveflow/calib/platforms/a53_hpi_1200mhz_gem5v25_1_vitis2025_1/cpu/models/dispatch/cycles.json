@@ -1,0 +1,21 @@
+{
+  "coeffs": [
+    18.091400493519647
+  ],
+  "intercept": 33.11257484667579,
+  "_fit_summary": {
+    "features": [
+      "n_dispatch"
+    ],
+    "ranges": {
+      "n_dispatch": [
+        1.0,
+        4096.0
+      ]
+    },
+    "n_points": 14,
+    "max_abs_residual": 422.48899630314554,
+    "max_rel_residual": 0.06656480689597889,
+    "n_free_params": 2
+  }
+}

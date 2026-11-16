@@ -1,13 +1,15 @@
 """prereg.py -- what is fixed before any scored run (plan ``plans/dse_cg.md``, *Fairness rules* 4).
 
 Committed in one commit before the first scored run, and not edited after; a change means a new
-pre-registration with a new date, and the old runs stay scored against the old one.  The ground-truth
-grid G1 and its integration builds are pre-registered separately, before any of their builds run
-(plan step 4).
+pre-registration with a new date, and the old runs stay scored against the old one.  The grid G1 --
+the design's whole space (``ltbf_cg_mem.GRID``), resized once by the plan's rule on Phase 2c's
+measured costs -- and its integration builds are pre-registered separately, before any of their
+builds run (plan step 4).
 
 Python rather than JSON: the repository's ``.gitignore`` ignores ``*.json``.
 
-Skeleton: every value below is a placeholder, marked TBD.
+The objectives are fixed (step 4, :data:`OBJECTIVES_DATE`); every other value is a placeholder,
+marked TBD, fixed at step 7.
 """
 
 from __future__ import annotations
@@ -15,29 +17,62 @@ from __future__ import annotations
 #: The date of this pre-registration.  TBD
 DATE = None
 
-#: The design (``cg_detector.DESIGNS``).
-DESIGN = "cg_detector"
+#: The design (``ltbf_cg_mem.DESIGNS``).
+DESIGN = "ltbf_cg_mem"
 
-#: The objectives; each run gets one.  Several, so that no single answer can be learned.  TBD
+#: The date the objectives were fixed: plan step 4, chosen by the user before any result of G1 was
+#: examined (the rest of this file is fixed at step 7).
+OBJECTIVES_DATE = "2026-11-07"
+
+#: The objectives; each run gets one.  Three, each binding a different constraint -- the memory axis
+#: through ``T_upd``, ``W`` through accuracy, the shapes through resources -- so that no single answer
+#: can be learned.  ``T_upd`` is one sector's long-term update (``long_term``) at the stated ``t``; the
+#: accuracy at the same ``t`` and the SINR targets [-6, 3] dB; LUT and DSP are the built parts'
+#: synthesized totals.
 OBJECTIVES = [
     {
-        "id": "lut_at_mse20_cyc4000",
-        "text": "Minimize LUTs subject to MSE <= -20 dB at SNR 10 dB and <= 4,000 cycles per solve.",
+        "id": "lut_tupd5_loss01",
+        "text": "Minimize LUTs subject to T_upd <= 5 ms (t = 3) and median SINR loss <= 0.1 dB at SINR "
+                "targets [-6, 3] dB.",
         "minimize": "lut",
         "subject_to": [
-            {"metric": "mse_db", "workload": "snr_sweep", "at": {"snr_db": 10}, "op": "<=", "value": -20},
-            {"metric": "cycles_per_solve", "workload": "steady", "op": "<=", "value": 4000},
+            {"metric": "t_upd_ms", "workload": "long_term", "at": {"t": 3}, "op": "<=", "value": 5},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 3, "target": "-6_3"},
+             "op": "<=", "value": 0.1},
         ],
     },
-    # TBD: two or three more (another accuracy target; minimize cycles under a LUT budget; ...)
+    {
+        "id": "tupd_lut100k_loss05",
+        "text": "Minimize T_upd (t = 3) subject to LUTs <= 100,000 and median SINR loss <= 0.5 dB at SINR "
+                "targets [-6, 3] dB.",
+        "minimize": "t_upd_ms",
+        "workload": {"name": "long_term", "t": 3},
+        "subject_to": [
+            {"metric": "lut", "op": "<=", "value": 100_000},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 3, "target": "-6_3"},
+             "op": "<=", "value": 0.5},
+        ],
+    },
+    {
+        "id": "dsp_tupd4_t2_loss03",
+        "text": "Minimize DSPs subject to T_upd <= 4 ms (t = 2) and median SINR loss <= 0.3 dB at SINR "
+                "targets [-6, 3] dB (t = 2).",
+        "minimize": "dsp",
+        "subject_to": [
+            {"metric": "t_upd_ms", "workload": "long_term", "at": {"t": 2}, "op": "<=", "value": 4},
+            {"metric": "median_loss_db", "workload": "accuracy", "at": {"t": 2, "target": "-6_3"},
+             "op": "<=", "value": 0.3},
+        ],
+    },
 ]
 
-#: Budget per run, tool-seconds.  TBD (a fraction of the full grid's cost, so that exhausting
-#: the grid is not an option)
-BUDGET_S = None
+#: Budget per run, tool-seconds: 8 hours (the user's choice, 2026-11-12), 4.9 % of the grid's measured
+#: synthesis, csynth and RTL tool time (163.1 h, ``grid.py table`` after the re-timing), so that
+#: exhausting the grid is not an option; both scripted policies need 1-4 h (step 6).
+BUDGET_S = 28_800.0
 
-#: Worker slots for synth / rtlsim jobs (what the lab machine runs at once).  TBD
-K_WORKERS = None
+#: Worker slots for synth / rtlsim jobs: the lab machine's limit for heavy jobs (plan, 2026-11-06).
+K_WORKERS = 2
 
 #: "Within EPSILON of the optimum" for time-to-target, as a fraction of the objective.  TBD
 EPSILON = 0.05
@@ -45,8 +80,31 @@ EPSILON = 0.05
 #: Runs per arm per objective.
 N_RUNS = 10
 
-#: The agent's model and settings, identical in both arms.  TBD
-MODEL = None
+#: The agent's model, identical in both arms (the user's choice, 2026-11-12).
+MODEL = "claude-opus-5-5"
+
+#: The agent's effort (the Agent SDK's ``effort``), identical in both arms (the user's choice, 2026-11-12).
+EFFORT = "high"
+
+#: The turn limit of a run (the Agent SDK's ``max_turns``): about 3x the most any pilot used (17 of
+#: six pilots, 2026-11-12; the user's rule), so that it guards against a looping agent without binding.
+MAX_TURNS = 50
+
+#: The wall-clock limit of a run, seconds: a guard against a stuck session (the budget is tool time,
+#: on the service's clock); about 3x the longest pilot (143 s of six, 2026-11-12; the user's rule).
+MAX_WALL_S = 450.0
+
+#: The agent's container (``agent/Dockerfile``): what its file tools and shell can see.  Its image
+#: digest is recorded here when the pre-registration is frozen.
+AGENT_IMAGE = "waveflow-dse-agent:1"
+
+#: The harness: the Agent SDK and the Claude Code it bundles (``run_agent.py``).
+AGENT_SDK = "claude-agent-sdk 0.2.179 (Claude Code 2.1.319)"
 
 #: How calibration cost enters the Waveflow arm: reported both ways, headline "upfront".
 CALIBRATION_CHARGE = ("upfront", "amortized")
+
+#: The calibration charged, tool-seconds (about 10.6 hours): ``calibration.CALIBRATION_S``, itemized
+#: there (the units' builds -- the retired systolic and CG units' included, the user's decision of
+#: 2026-11-12 --, the memory's traces and the six integration points; what is not charged and why).
+CALIBRATION_S = 38031.4

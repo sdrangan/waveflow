@@ -19,12 +19,14 @@ import tempfile
 import time
 from pathlib import Path
 
+from waveflow.toolchain.toolchain import _tool_env
+
 VIV = Path(os.environ.get("XILINX_VIVADO", r"C:\Xilinx\2025.1\Vivado"))
 MINGW = VIV / "tps" / "mingw" / "6.2.0" / "win64.o" / "nt"
 
 
 def _env(xsi: Path, top: str) -> dict:
-    env = dict(os.environ)
+    env = _tool_env({})
     env["PATH"] = os.pathsep.join([str(xsi / "xsim.dir" / top), str(MINGW / "bin"),
                                    str(VIV / "lib" / "win64.o"), str(VIV / "bin"), env["PATH"]])
     return env

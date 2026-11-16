@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 
 from examples.mimo_cg.hw import cg_cal as CC
-from tests.linalg import _cg_unit_bench as UB
+from tests.linalg.legacy import _cg_unit_bench as UB
 from waveflow.linalg.message import Status
 
 

@@ -717,14 +717,22 @@ class MemoryMod(HwModule):
         from waveflow.calib.mem_timing import stored_mem_timing
         from waveflow.calib.record_store import ModuleStore
 
-        rec = stored_mem_timing(ModuleStore(self.calib_dir), self)
+        from waveflow.calib.mem_timing import stored_mem_turnaround
+
+        # Both looked up before the port changes: the identity is the memory as built.
+        store = ModuleStore(self.calib_dir)
+        rec, turn = stored_mem_timing(store, self), stored_mem_turnaround(store, self)
         if rec is None:
             return
         self._mem_timing = rec.payload
         if rec.payload.get("serialize"):
-            # One transaction at a time, reads and writes alike: one channel, held for the transfer.
+            # One transaction at a time, reads and writes alike: one channel, held for the transfer
+            # -- and busy a few cycles after each before the next can start, when measured.
             self.s_mm.serialize_transactions = True
             self.s_mm.write_channel = self.s_mm.read_channel
+            if turn is not None:
+                self.s_mm.turnaround = {k: max(0.0, float(v["cycles"]))
+                                        for k, v in turn.payload["turnaround"].items()}
 
     def _access_delay(self, nwords: int, kind: str | None = None) -> float:
         """Modeled RAM access time (seconds) for an *nwords*-word transfer -- a ``"read"`` or a
@@ -787,3 +795,19 @@ class MemoryMod(HwModule):
         words = self._mem.read(addr, nwords)
         return read_array(words, elem_type, word_bw=self.word_size, shape=int(count))
     
+
+@dataclass
+class PipelinedMemoryMod(MemoryMod):
+    """A :class:`MemoryMod` whose RTL slave reads a word every cycle: its BRAM window is
+    ``mm_bram_port_p1.v`` (the memory's output register is the read response) where a
+    :class:`MemoryMod`'s is ``mm_bram_port.v`` (a read word every ``LAT + 1`` cycles).
+
+    For a memory that is simulated, not synthesized -- a modelled memory in a system whose other
+    parts are built -- since that response path would not close timing as it stands.  Its own class,
+    so its identity and its timing record (``waveflow.calib.mem_timing``, measured in its harness
+    like any memory's) are its own, and every :class:`MemoryMod` keys as before.  pysim needs nothing
+    else: the stored timing is what makes it read faster.
+    """
+
+    #: The BRAM window leaf of :data:`~waveflow.build.mm_adaptor_gen.BRAM_VIEWS` (``system_top``).
+    BRAM_LEAF: ClassVar[str] = "mm_bram_port_p1"

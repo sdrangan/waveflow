@@ -5,12 +5,18 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union, overload
 
 #: Oldest AMD/Xilinx release Waveflow is tested against.  Older toolchains may work, but the
 #: generated HLS pragmas and the Vitis ``vitis-run --mode hls`` entry point are not validated
 #: against them.
 MIN_TOOL_VERSION: Tuple[int, int] = (2025, 1)
+
+#: The release every packaged platform and recorded number was measured with
+#: (``plans/calib_2025_1.md``).  A newer release runs, but its cycle counts and resources are not
+#: what the platforms describe (2024.1 against 2025.1 moved some by over 10 %), so the tool check
+#: warns about it.
+CALIBRATED_TOOL_VERSION: tuple[int, int] = (2025, 1)
 
 VITIS_PATH_ENV = "WAVEFLOW_VITIS_PATH"
 VIVADO_PATH_ENV = "WAVEFLOW_VIVADO_PATH"
@@ -203,12 +209,18 @@ def find_vitis_include_dir(top_dir: Optional[Union[str, Path]] = None) -> Option
 
     The headers the generated DataSchema structs include, which host-side C++ (an XSI software host,
     ``plans/host_runtime.md``) needs as well as HLS.  Derived from :func:`find_vitis_path`, whose result
-    is ``<install>/bin/vitis-run[.bat]``."""
+    is ``<install>/bin/vitis-run[.bat]``.
+
+    Up to 2024.x the headers are not in the Vitis tree but in the separate Vitis HLS install beside
+    it (``<root>/Vitis/2024.1`` and ``<root>/Vitis_HLS/2024.1/include``), which is looked in next."""
     exe = find_vitis_path(top_dir)
     if not exe:
         return None
-    inc = Path(exe).resolve().parent.parent / "include"
-    return inc if (inc / "ap_int.h").is_file() else None
+    install = Path(exe).resolve().parent.parent
+    for inc in (install / "include", install.parent.parent / "Vitis_HLS" / install.name / "include"):
+        if (inc / "ap_int.h").is_file():
+            return inc
+    return None
 
 
 def find_vivado_path(top_dir: Optional[Union[str, Path]] = None) -> Optional[str]:
@@ -386,6 +398,17 @@ class ToolInfo:
             return None
         return parsed >= MIN_TOOL_VERSION
 
+    @property
+    def above_calibrated(self) -> bool | None:
+        """
+        Whether the release is newer than :data:`CALIBRATED_TOOL_VERSION`, the one the packaged
+        platforms were measured with; ``None`` when the version is unknown.
+        """
+        parsed = version_tuple(self.version)
+        if parsed is None:
+            return None
+        return parsed > CALIBRATED_TOOL_VERSION
+
 
 def probe_amd_tools(check_versions: bool = True) -> List[ToolInfo]:
     """
@@ -506,11 +529,7 @@ def run_vitis_hls(
 
     cmd_list, default_work_dir = _build_vitis_hls_cmd(tcl_script=tcl_script, args=args)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
-
-    final_env = None
-    if env is not None:
-        final_env = os.environ.copy()
-        final_env.update(env)
+    final_env = _tool_env(env)
 
     # One timing span per Vitis run (waveflow.events); a csim, csynth or cosim is told apart by
     # the build step it runs inside.
@@ -595,10 +614,7 @@ def run_vivado(
         cmd_list.extend(str(arg) for arg in args)
 
     final_cmd, use_shell = _build_final_cmd(cmd_list)
-    final_env = None
-    if env is not None:
-        final_env = os.environ.copy()
-        final_env.update(env)
+    final_env = _tool_env(env)
 
     result = subprocess.run(
         final_cmd,
@@ -618,6 +634,34 @@ def run_vivado(
         if sentinel_lines:
             raise RuntimeError("Vivado Tcl reported failure: " + " | ".join(sentinel_lines))
     return result
+
+
+#: Variables a Windows shell sets that must not reach the AMD tools.  Git Bash (MSYS2) exports
+#: MSYSTEM=MINGW64; Vitis HLS 2025.1 inherits it and C/RTL co-simulation then fails at
+#: "Instrumenting C test bench" with only COSIM 212-5, "file generation failed": the design
+#: file's top function is never wrapped.  The same run from PowerShell or cmd passes.
+_SHELL_VARS_TO_DROP = ("MSYSTEM",)
+
+
+@overload
+def _tool_env(env: None) -> Optional[Dict[str, str]]: ...
+@overload
+def _tool_env(env: Dict[str, str]) -> Dict[str, str]: ...
+def _tool_env(env: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The environment for a tool subprocess: ours, without the shell variables above, plus
+    ``env``.  None, meaning inherit unchanged, when there is nothing to remove or add.
+
+    Every launch of an AMD tool (Vitis, Vivado, xsim, an XSI runner) goes through this.  A
+    caller that needs a full environment to edit passes ``{}``."""
+    drop = [k for k in _SHELL_VARS_TO_DROP if k in os.environ] \
+        if platform.system() == "Windows" else []
+    if env is None and not drop:
+        return None
+    final_env = os.environ.copy()
+    for key in drop:
+        final_env.pop(key, None)
+    final_env.update(env or {})
+    return final_env
 
 
 def _build_final_cmd(cmd_list: Sequence[Union[str, Path]]) -> tuple[Union[str, List[str]], bool]:
@@ -697,10 +741,7 @@ def subprocess_result(
     """
     effective_capture_output = capture_output or (output_path is not None)
     final_cmd, use_shell = _build_final_cmd(cmd_list)
-    final_env = None
-    if env is not None:
-        final_env = os.environ.copy()
-        final_env.update(env)
+    final_env = _tool_env(env)
 
     try:
         result = subprocess.run(

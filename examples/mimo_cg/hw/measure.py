@@ -89,11 +89,11 @@ def comp_class(top: str):
     """The top's component class: a unit build is Waveflow's standalone unit in its bench (gate
     9.0)."""
     if top == "vec":
-        from tests.linalg._cg_unit_bench import CgUnitBench
+        from tests.linalg.legacy._cg_unit_bench import CgUnitBench
 
         return CgUnitBench
     if top == "mm":
-        from tests.linalg._unit_bench import UnitBench
+        from tests.linalg.legacy._unit_bench import UnitBench
 
         return UnitBench
     from examples.mimo_cg.hw.detector import CgDetector
@@ -160,7 +160,7 @@ def workload(top: str, c: HwConfig, build: str, steady: bool = False):
             64 if c.K > 4 else 32, c.K, DEFAULT_N, len(jobs), seed
         )
     elif top == "vec":
-        from tests.linalg._cg_unit_bench import random_job
+        from tests.linalg.legacy._cg_unit_bench import random_job
 
         rng = np.random.default_rng([seed, c.K])
         f = hw_format(c.fmt)
@@ -169,8 +169,8 @@ def workload(top: str, c: HwConfig, build: str, steady: bool = False):
             for i, nit in enumerate(jobs)
         ]
     else:
-        from tests.linalg._unit_bench import random_job
-        from waveflow.linalg.systolic import MatmulOp
+        from tests.linalg.legacy._unit_bench import random_job
+        from waveflow.linalg.legacy.systolic import MatmulOp
 
         rng = np.random.default_rng([seed, c.K])
         unit = B.unit_fields("mm", **gen_kwargs("mm", c))
@@ -225,9 +225,9 @@ def cycles_budget(c: HwConfig, jobs: list[int]) -> int:
 def _bench(top: str):
     """The ``tests/linalg/`` bench module of a unit build."""
     if top == "vec":
-        from tests.linalg import _cg_unit_bench as bench
+        from tests.linalg.legacy import _cg_unit_bench as bench
     else:
-        from tests.linalg import _unit_bench as bench
+        from tests.linalg.legacy import _unit_bench as bench
     return bench
 
 

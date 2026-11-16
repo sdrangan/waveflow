@@ -2,6 +2,7 @@
 
 from .stagetest import StageTest, TestStage
 from .toolchain import (
+	CALIBRATED_TOOL_VERSION,
 	MIN_TOOL_VERSION,
 	ToolInfo,
 	find_vitis_path,
@@ -15,6 +16,7 @@ from .toolchain import (
 )
 
 __all__ = [
+	"CALIBRATED_TOOL_VERSION",
 	"MIN_TOOL_VERSION",
 	"StageTest",
 	"TestStage",
