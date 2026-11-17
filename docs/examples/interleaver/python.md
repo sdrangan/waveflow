@@ -188,7 +188,7 @@ self.boundary = ["s_cmd", "m_in", "m_out", "s_done"]
 self.s_cmd  = self.rx.s_cmd
 self.m_in   = self.rstream.m_mem      # → gmem0
 self.m_out  = self.wstream.m_mem      # → gmem1
-self.s_done = self.wstream.s_done
+self.s_done = self.wstream.m_done
 ```
 
 Everything else about the graph is *derived* from `add_comp` / `add_if`, exactly as in `mem_copy`: which

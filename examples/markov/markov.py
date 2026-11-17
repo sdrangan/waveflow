@@ -439,7 +439,7 @@ class MarkovChain(FreeRunMod):
         self.boundary = ["s_u_fwd", "s_u_crd", "m_mem", "m_resp"]
         self.s_u = self.core.s_u
         self.m_mem = self.writer.m_mem
-        self.m_resp = self.writer.s_done
+        self.m_resp = self.writer.m_done
 
     @property
     def njobs(self) -> int:

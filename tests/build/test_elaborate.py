@@ -64,11 +64,11 @@ class TestElaborate:
         }
 
     def test_param_override_changes_structure(self):
-        # emit_done adds the s_done endpoint (structure is param-driven).
+        # emit_done adds the m_done endpoint (structure is param-driven).
         plain = elaborate(MemWStream)
         done = elaborate(MemWStream, {"emit_done": True})
-        assert not any(ep.endswith("_s_done") for ep in plain.endpoints)
-        assert any(ep.endswith("_s_done") for ep in done.endpoints)
+        assert not any(ep.endswith("_m_done") for ep in plain.endpoints)
+        assert any(ep.endswith("_m_done") for ep in done.endpoints)
 
     def test_uses_an_elaboration_context(self):
         comp = elaborate(MemRStream)

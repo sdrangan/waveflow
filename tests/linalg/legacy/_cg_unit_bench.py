@@ -216,7 +216,7 @@ class CgUnitBench(FreeRunMod):
         self.s_req = self.req.s_req
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
-        self.s_done = self.wstream.s_done
+        self.s_done = self.wstream.m_done
         self.extra_includes = ["hls_streamofblocks.h"]
 
 

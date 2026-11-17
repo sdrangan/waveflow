@@ -6,12 +6,12 @@ accelerator on that platform (:mod:`waveflow.calib.platform`).
 
 The vehicle here drives the writer **standalone** — a :class:`~waveflow.simulation.stream_tb.StreamDriver`
 feeds ``s_in`` the framed ``[MemWCmd | fwd bursts | data words]`` directly, a memory sits behind
-``m_mem``, a sink drains ``s_done`` — so the fixture depends only on the package, never on the
+``m_mem``, a sink drains ``m_done`` — so the fixture depends only on the package, never on the
 mem_copy example.  It sweeps two independent axes:
 
 * ``nwords`` / ``num_trans`` — the write size (data words, and the AXI bursts they take), and
 * ``n_fwd`` — the number of forwarded bursts the writer buffers across the store and echoes on
-  ``s_done``.  mem_copy holds this at 1, so its residual absorbs the per-message cost into the
+  ``m_done``.  mem_copy holds this at 1, so its residual absorbs the per-message cost into the
   intercept; only a sweep that varies ``n_fwd`` **independently** of ``nwords`` can identify the
   per-message coefficient (a constant regressor is collinear with the intercept).
 
@@ -98,7 +98,7 @@ def _run_writer(*, nwords: int, n_fwd: int, jobs: int, timing_model, platform_di
     ``firing_records``.
 
     Each job frames ``[MemWCmd(addr, len=nwords, fwd_bursts=n_fwd) | n_fwd 1-word bursts | nwords data
-    words]`` onto ``s_in``; the writer stores the data and echoes the forwarded bursts on ``s_done``.
+    words]`` onto ``s_in``; the writer stores the data and echoes the forwarded bursts on ``m_done``.
     We do not check the copy — this is a *timing* vehicle — but the writer records one firing per job,
     each carrying ``{nwords, num_trans, n_fwd, span, current_dly}``.
     """
@@ -153,7 +153,7 @@ def _run_writer(*, nwords: int, n_fwd: int, jobs: int, timing_model, platform_di
         in_if.bind(ep_name="slave", endpoint=wr.s_in)
 
         done_if = StreamIF(name="done_if", sim=sim, clk=clk, bitwidth=w)
-        done_if.bind(ep_name="master", endpoint=wr.s_done)
+        done_if.bind(ep_name="master", endpoint=wr.m_done)
         done_if.bind(ep_name="slave", endpoint=sink.stream_ep)
 
         xbar = AXIMMCrossBarIF(sim=sim, clk=clk, nports_master=1, nports_slave=1, bitwidth=w)

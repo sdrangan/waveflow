@@ -270,7 +270,7 @@ class MemCopy(FreeRunMod):
         self.s_cmd = self.seq.s_cmd
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
-        self.s_done = self.wstream.s_done
+        self.s_done = self.wstream.m_done
 
     def workload(self, kind: str = "test") -> dict:
         """The scenario of this module's harness (:func:`~waveflow.hw.harness.harness`): ``"test"`` is

@@ -76,7 +76,7 @@ def _run(jobs, responses, tmp_path, arena_words=4096):
     mid.bind(ep_name="slave", endpoint=wr.s_in)
 
     done_if = StreamIF(name="done_if", sim=sim, clk=clk, bitwidth=MEM_DW)
-    done_if.bind(ep_name="master", endpoint=wr.s_done)
+    done_if.bind(ep_name="master", endpoint=wr.m_done)
     done_if.bind(ep_name="slave", endpoint=sink.stream_ep)
 
     xbar = AXIMMCrossBarIF(sim=sim, clk=clk, nports_master=2, nports_slave=1, bitwidth=MEM_DW)
@@ -133,3 +133,15 @@ def test_legacy_two_stream_path_is_untouched():
     assert hasattr(w, "s_cmd"), "the legacy protocol keeps its separate command port"
     wi = MemWStream(name="framed", sim=Simulation(), mem_dwidth=MEM_DW, inband=True)
     assert not hasattr(wi, "s_cmd"), "in-band mode has no separate command port"
+
+
+@pytest.mark.parametrize("cls", [MemRStream, MemWStream])
+def test_completion_endpoint_is_m_done_with_deprecated_s_done_alias(cls):
+    """The completion endpoint sends, so it is ``m_done``; ``s_done`` survives as a warning alias."""
+    ms = cls(name="ms", sim=Simulation(), emit_done=True)
+    assert ms.m_done.name == "ms_m_done"
+    with pytest.warns(DeprecationWarning, match="renamed m_done"):
+        assert ms.s_done is ms.m_done
+    plain = cls(name="plain", sim=Simulation())
+    with pytest.warns(DeprecationWarning), pytest.raises(AttributeError, match="emit_done=True"):
+        plain.s_done

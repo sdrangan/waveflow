@@ -347,6 +347,6 @@ class VecWrap(FreeRunMod):
         self.m_rl, self.m_rx = self.readers["l"].m_mem, self.readers["x"].m_mem
         self.m_rs, self.m_rd = self.readers["s"].m_mem, self.readers["d"].m_mem
         self.m_w = self.wstream.m_mem
-        self.m_resp = self.wstream.s_done
+        self.m_resp = self.wstream.m_done
         self.s_cfg = self.ctrl.s_cfg
         self.m_status = self.writer.m_status

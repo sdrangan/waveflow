@@ -421,7 +421,7 @@ class SystolicEngineMem(_MemPart):
         self.s_job = self.seq.s_job
         self.m_in = self.feeder.m_mem
         self.m_out = self.wstream.m_mem
-        self.s_done = self.wstream.s_done
+        self.s_done = self.wstream.m_done
         self.extra_includes = ["hls_streamofblocks.h"]
         if tiles:
             import simpy

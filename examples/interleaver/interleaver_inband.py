@@ -389,7 +389,7 @@ class InterleaverInband(FreeRunMod):
         self.s_cmd = self.rx.s_cmd
         self.m_in = self.rstream.m_mem
         self.m_out = self.wstream.m_mem
-        self.s_done = self.wstream.s_done
+        self.s_done = self.wstream.m_done
 
 
 # ---------------------------------------------------------------------------
