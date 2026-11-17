@@ -34,7 +34,7 @@ flowchart LR
     cmd["s_cmd: MRCmd"] --> R["MemRStream"]
     mem[("memory")] -->|"m_mem (m_axi read)"| R
     R --> out["m_out: word stream"]
-    R -. "emit_done" .-> done["s_done: MemComplete"]
+    R -. "emit_done" .-> done["m_done: MemComplete"]
 ```
 
 **The command.** One `MRCmd` per burst — where to start, how many words, plus the transfer message:
@@ -68,7 +68,7 @@ ld.bind_base(0x4000)                                 # physical base of this rea
 # read 128 words from word offset 16, tagged with a job id:
 cmd = ld.Cmd(addr=16, len=128, xfer_len=1, xfer_msg=np.array([job_id], np.uint32))
 # an upstream component writes `cmd` to ld.s_cmd; ld bursts 128 words out ld.m_out, then
-# (emit_done) echoes a MemComplete carrying that xfer_msg on ld.s_done.
+# (emit_done) echoes a MemComplete carrying that xfer_msg on ld.m_done.
 ```
 
 ## MemWStream
@@ -80,7 +80,7 @@ flowchart LR
     cmd["s_cmd: MWCmd"] --> W["MemWStream"]
     data["s_in: word stream"] --> W
     W -->|"m_mem (m_axi write)"| mem[("memory")]
-    W -. "emit_done" .-> done["s_done: MemComplete"]
+    W -. "emit_done" .-> done["m_done: MemComplete"]
 ```
 
 **The command.** An `MWCmd`, the same shape as `MRCmd` (`addr`, `len`, `xfer_len`, `xfer_msg`). `addr`
@@ -97,7 +97,7 @@ st = MemWStream(name="st", sim=sim, mem_dwidth=64, emit_done=True)
 st.bind_base(0x8000)
 cmd = st.Cmd(addr=16, len=128, xfer_len=1, xfer_msg=np.array([job_id], np.uint32))
 # an upstream component writes `cmd` to st.s_cmd and streams 128 words to st.s_in; st writes
-# them from word offset 16, then echoes a MemComplete on st.s_done.
+# them from word offset 16, then echoes a MemComplete on st.m_done.
 ```
 
 ## The transfer message
@@ -131,11 +131,13 @@ the other end of each of the reader's:
 |---|---|---|---|
 | `m_cmd` | `StreamIFMaster` (the kernel sends) | `s_cmd` | one `MRCmd` per burst |
 | `s_data` | `StreamIFSlave` (the kernel receives) | `m_out` | the burst's words |
-| `s_done` | `StreamIFSlave` (the kernel receives) | `s_done` | one `MemComplete` per burst, with `emit_done=True` |
+| `s_done` | `StreamIFSlave` (the kernel receives) | `m_done` | one `MemComplete` per burst, with `emit_done=True` |
 
-Mind the last row: the reader's `s_done` is the *sending* end — a `StreamIFMaster` despite its prefix —
-so the kernel's `s_done` is the receiving one. A `MemWStream` is the same with one more stream: the
-kernel *writes* the burst's words to its `s_in`.
+Each row pairs an `m_` endpoint, which sends, with an `s_` endpoint, which receives. A `MemWStream`
+is the same with one more stream: the kernel *writes* the burst's words to its `s_in`.
+
+> Before this release the completion endpoint was named `s_done`. That name still works but warns:
+> use `m_done`.
 
 A complete, runnable example: a kernel that asks for one 16-word block per firing, sums it, and reads
 the completion to learn which block it was.
@@ -173,7 +175,7 @@ class BlockSum(FreeRunMod):
         self.s_data = StreamIFSlave(name=f"{self.name}_s_data", sim=self.sim, bitwidth=64,
                                     has_tlast=False)   # data IN        <- reader.m_out
         self.s_done = StreamIFSlave(name=f"{self.name}_s_done", sim=self.sim, bitwidth=64,
-                                    has_tlast=False)   # completions IN <- reader.s_done
+                                    has_tlast=False)   # completions IN <- reader.m_done
         for ep in (self.m_cmd, self.s_data, self.s_done):
             self.add_endpoint(ep)
         self.blk = 0
@@ -209,7 +211,7 @@ kern = BlockSum(name="kern", sim=sim, clk=clk)
 
 for name, master, slave in (("cmd", kern.m_cmd, rd.s_cmd),      # kernel -> reader
                             ("data", rd.m_out, kern.s_data),     # reader -> kernel
-                            ("done", rd.s_done, kern.s_done)):   # reader -> kernel
+                            ("done", rd.m_done, kern.s_done)):   # reader -> kernel
     s = StreamIF(name=name, sim=sim, clk=clk, bitwidth=64, depth=16)
     s.bind(ep_name="master", endpoint=master)
     s.bind(ep_name="slave", endpoint=slave)

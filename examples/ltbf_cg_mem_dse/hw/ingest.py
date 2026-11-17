@@ -258,7 +258,7 @@ class IngestDev(FreeRunMod):
         )
         self.m_status = self.dma.m_status
         self.m_w = self.wstream.m_mem
-        self.m_resp = self.wstream.s_done
+        self.m_resp = self.wstream.m_done
 
 
 @dataclass

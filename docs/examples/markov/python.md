@@ -144,7 +144,7 @@ class MarkovChain(FreeRunMod):
         ...                                               # core.m_x -> writer.s_in, a framed FIFO
         self.s_u = self.core.s_u                          # the composite's ports
         self.m_mem = self.writer.m_mem
-        self.m_resp = self.writer.s_done
+        self.m_resp = self.writer.m_done
 ```
 
 ## The host and the system

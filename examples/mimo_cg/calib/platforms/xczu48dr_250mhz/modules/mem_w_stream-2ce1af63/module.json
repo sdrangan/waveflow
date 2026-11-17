@@ -1,5 +1,5 @@
 {
-  "key": "mem_w_stream-cd0e01a4",
+  "key": "mem_w_stream-2ce1af63",
   "cls_name": "MemWStream",
   "cls_module": "waveflow.hw.mem_stream",
   "params": {

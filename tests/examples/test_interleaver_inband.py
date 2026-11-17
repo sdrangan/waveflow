@@ -39,7 +39,7 @@ def test_inband_uses_framework_mem_streams():
     # the read/write bundles come straight off the framework mem-streams
     assert il.m_in is il.rstream.m_mem
     assert il.m_out is il.wstream.m_mem
-    assert il.s_done is il.wstream.s_done
+    assert il.s_done is il.wstream.m_done
 
 
 def test_inband_tb_pysim_golden():
