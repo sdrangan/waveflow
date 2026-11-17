@@ -1,9 +1,24 @@
 # Plan: a toy experiment on the value of a calibrated simulator
 
-**Status: DRAFT, not started, written 2026-11-14.** Follows the agentic DSE study
+**Status: DRAFT, not started, written 2026-11-14, revised 2026-11-16.** Follows the agentic DSE study
 of `plans/dse_cg.md` and its tight-deadline experiment, and reuses its service, ledger and scoring where
-it can (S0, Q2). Separate from `plans/dse_arch.md`: this plan isolates one
-question on one small design before any architecture search.
+it can (S0, Q2). It is the next experiment, and it gates `plans/dse_arch.md`: this plan isolates one
+question on one small design before any architecture search (§9).
+
+## 0. Why this experiment
+
+`dse_cg` found the parametric problem easy (Progress log, 2026-11-12). All six pre-registered pilots and
+all 36 tight-deadline runs submitted the measured optimum. The baseline agents learned the space from
+`golden`, `hls_estimate`'s relative sizes and a few RTL runs (median 9 a run). The simulator arm used
+1.4-3.5x less tool time in the pilots and 1.1-1.8x on tight deadlines, before calibration. With the
+calibration charged up front (10.6 h) the baseline wins every objective; amortized over the runs the
+arms are about even.
+
+The reason: on that grid a few measurements predict the rest. Time per job is smooth in the parameters,
+so an agent can interpolate. A simulator pays off when the quantity that decides the design cannot be
+measured cheaply and cannot be interpolated from a few measurements. A tail probability under random
+contention is such a quantity: one RTL estimate at ε = 10⁻⁴ takes hours (S0, Q3), and the tail moves
+sharply with the parameters near the limit.
 
 ## 1. Goal
 
@@ -17,7 +32,16 @@ simulation is too slow to check it for more than a few designs.
 
 Everything in this plan runs on a simulated-tools harness: a hidden "true"
 model stands in for synthesis and RTL simulation, and a virtual clock charges
-realistic tool times. Building real hardware is future work (§8).
+realistic tool times. Where a part of the toy exists in Waveflow or the AMD
+IP, the true model's numbers (timing, arbitration, resources, tool times) are
+measured on the lab machine (S0b); the rest are made up and say so. Building
+the toy itself as hardware is future work (§8).
+
+So the experiment measures the value of *a* calibrated simulator, at a chosen error, not of Waveflow's
+pysim itself. It says something about Waveflow through one link: the error at which the simulator's
+advantage disappears (S5's sweep), against the error Waveflow's pysim actually reaches. On the CG system
+pysim's cycles were within 1.44 % of RTL (mean absolute, G1, Vitis 2025.1). A tail is more sensitive
+than a mean, so the error knob is set in timing terms and its effect on the tail is reported (§3).
 
 The questions, in order:
 
@@ -47,6 +71,24 @@ The questions, in order:
 
 Keep it small: one DUT, one traffic source, one memory.
 
+**The space must not be monotone.** If one knob (FIFO depth) buys feasibility on its own, an agent
+over-provisions it and lands near the optimum without any tail estimate. The cheapest feasible design
+should need a combination: for example banks and address mapping that remove conflicts, so a shallower
+FIFO suffices, against a deeper FIFO on one bank. S3's shortcut test checks this.
+
+**Microarchitectural effects in the true model.** An agent's own simulator goes wrong where the hardware
+does something its description does not say. Put in the true model the effects `dse_cg` found only by
+tracing RTL (Progress log, 2026-11-07, step 1f), at the sizes measured there and
+re-measured at the toy's options by S0b (L2, L3):
+
+- each master's transfers split into 16-beat bursts, each burst holding the slave on its own;
+- a turnaround of one cycle between back-to-back bursts (2n + 2 cycles a read burst, not 2n + 1);
+- a writer that waits for each burst's response before the next;
+- bank conflicts set by the address mapping, not only by the number of banks.
+
+None is hidden on purpose: an engineer with the RTL could find each one. They are what a short RTL run
+shows only in aggregate, and what moves a 10⁻⁴ tail.
+
 ## 3. The simulated-tools harness
 
 The hidden true model is an event-driven Python model of the toy. It lives
@@ -58,16 +100,35 @@ formulas. The agent's tools are views of it:
 | Untimed model | The DUT's bit-exact output, so the data-dependent quantities | per block, small |
 | HLS estimate | Per-block resources and latency, no contention | about 1 min |
 | Synthesis | True resources plus small noise | about 6 min |
-| RTL simulation | True cycles and overflow events for the requested length | about 160 s to build, then about 1,800 cycles/s |
-| PySim (simulator arm only) | The true model with a tunable error: a timing bias, a spread, one effect left out | about 5×10⁵ cycles/s |
+| RTL simulation | True cycles and overflow events for the requested length and seed; optionally a per-transaction trace (each burst's start, end and port), as an engineer would take from a waveform | about 160 s to build, then about 1,800 cycles/s |
+| PySim (simulator arm only) | The true model with a tunable error: a timing bias, a spread, one effect of §2 left out | about 5×10⁵ cycles/s |
 
-The tool rates are the CG grid's medians (S0, Q3), not the toy's: the toy is a
-smaller design, and its rates are still unknown. They are parameters of the
-harness.
+The tool rates are the CG grid's medians (S0, Q3) until S0b's L1 and L5
+measure them at the toy's size. They stay parameters of the harness.
 
 The harness reuses the service's ledger, cache and scoring through a new
 backend (S0, Q2). The virtual clock is event-driven over 2 worker
 slots, so a batch is charged by when the slots free up. Results return at once.
+
+**PySim's error knob.** Set in timing terms (a bias on each burst's service time, a random spread on it,
+or one effect of §2 left out), since that is how a calibrated model errs. For each setting, report the
+error it causes in the overflow probability near the limit, from long runs of both models. The
+mean-cycle error and the tail error are both reported; only the first is comparable with `dse_cg`.
+
+**Calibration charge.** A real PySim has to be calibrated, and in `dse_cg` that charge decided the
+result. The harness charges the simulator arm a calibration time, a parameter, reported three ways as in
+`dse_cg`: up front, amortized over the arm's runs, and as the break-even charge at which the arms tie.
+The default is what calibrating the toy's parts would take at the CG grid's rates: the memory's traced
+runs (688 s in `dse_cg`), the crossbar's shapes, and a sweep of the DUT stage; a first guess is 1-2 h,
+replaced by the charge S0b's L5 measures. Calibration is
+per part, so a part already calibrated for another design costs nothing; the break-even charge says how
+much reuse the result needs.
+
+**What the agents are told.** Both arms get the same brief: the block diagram, the parameters and their
+costs per option, the requirement, the tools and their charges, and a datasheet for each part that says
+what a vendor's documentation would say (the arbiter's policy, the burst length, the memory's latency),
+not the turnaround or the writer's response wait. The simulator arm's brief adds PySim and its stated
+accuracy. The baseline may write any code.
 
 ## 4. Arms and scoring
 
@@ -76,6 +137,12 @@ slots, so a batch is charged by when the slots free up. Results return at once.
 | Baseline | Untimed model, HLS estimate, synthesis, RTL simulation. It may write any code in its sandbox, including its own simulator. |
 | Simulator | The same, plus PySim. |
 
+- **Submit rule:** no verification gate. An agent submits one design with its
+  own estimate of the overflow probability and the evidence for it, as an
+  engineer signs off. The harness judges it by a long run of the true model.
+  Gating on an RTL tail estimate would cost hours a design and hand the
+  baseline the very measurement the experiment is about. A submission that
+  misses the limit scores as no submission.
 - **Primary score:** resources of the submitted design, among designs that
   truly meet the limit (judged by a long run of the true model), at a fixed
   budget of tool time.
@@ -138,9 +205,10 @@ or additions, not a refactor:
   simulation identity, and `rtlsim`'s charge (build once per build, then
   `simulate_s`) follows from `ModelBackend`'s `simulate_s = cycles / rate`.
 - *Submit rule.* Today a design is accepted if it was synthesized and
-  RTL-simulated on the objective's workloads. For the toy, the RTL run must be a
-  seed-matched check of PySim or of the agent's own model, not a full tail
-  estimate. Decide the rule in S1 and write it here.
+  RTL-simulated on the objective's workloads. For the toy there is no gate:
+  the submission carries the agent's estimate and evidence, and the true
+  model judges it (§4). The service needs a `submit` that skips the check
+  and records the estimate.
 - *Scoring.* `score.py` scores time to a known optimum. The toy's primary score
   is the resources of the submitted design among designs that truly meet the
   limit. `score.py` already has an anytime curve (`anytime_curve`), which the
@@ -165,27 +233,107 @@ arms; the S6 note says so and the user decides whether to go on. If RTL is fast
 enough that one tail estimate takes less than a quarter of the 8-h budget, make
 ε smaller or the blocks longer.
 
-**Q4. Is the DAC-period work merged into `main`?** Not yet. `main` has an
-earlier `examples/dse_cg/`; the service's backends, the calibration and
-integration code, `ltbf_cg_mem.py` and the tight-deadline work are on
-`paper/ltbf_cg_dse_agentic`. Two related branches also exist,
-`paper/ltbf_cg_mem_dse` and `paper/ltbf_cg_seq_dse`.
+**Q4. Is the DAC-period work merged into `main`?** Yes, since 2026-11-16:
+`paper/ltbf_cg_dse_agentic` merged as PR #311, so the service's backends, the
+calibration and integration code, `ltbf_cg_mem.py` and `deadline.py` are in
+`examples/dse_cg/` on `main`. Two related branches also exist,
+`paper/ltbf_cg_mem_dse` and `paper/ltbf_cg_seq_dse`; nothing here needs them.
 
-*Choice:* start S1 from `main` once Ali's merge lands. Until then, start from
-`paper/ltbf_cg_dse_agentic` and rebase onto `main` later.
+*Choice:* start S1 from `main`.
 
-**Still for Ali:**
+**Still open** (none blocks S1; the harness takes each as a parameter):
 
-1. Roughly how fast does XSI simulate a design the toy's size (a sample buffer,
-   a small block, a 2-bank memory and a crossbar)? Is it far faster per cycle
-   than the CG system's 1,800 cycles/s?
-2. Does the AMD crossbar IP arbitrate round-robin, and does pysim's request-order
-   model match it closely enough in the CG runs?
-3. When will `paper/ltbf_cg_dse_agentic` be merged into `main`, and should the
-   two other `paper/` branches be merged too?
+1. How fast does XSI simulate a design the toy's size? Measured by S0b, L1.
+2. Does the AMD crossbar IP arbitrate round-robin, and does pysim's
+   request-order model match it? Measured by S0b, L2.
+3. For Ali: should the two other `paper/` branches be merged? (The first half
+   of this question, `paper/ltbf_cg_dse_agentic`, is answered: PR #311.)
 
-**Done when:** Ali's three answers are written here, and the choices above are
-confirmed or changed.
+**Done when:** the choices above are confirmed or changed. S0b's answers are
+copied here when they arrive.
+
+### S0b. Lab calibration (the lab machine, unattended)
+
+The true model's numbers are made up only where nothing real exists. The
+toy's other parts exist in Waveflow and the AMD IP, so measure them on the lab
+machine (Vitis HLS / Vivado 2025.1, `xczu48dr` licensed) while S1 is written.
+The traffic generator and the data-dependent stage do not exist as hardware;
+they stay made up (plausible numbers, written in S1 with their source).
+
+This step runs in a Claude Code session on the lab machine, without the user.
+What that session must know:
+
+- **Launch long jobs detached** (`setsid`, its own session, as
+  `~/ali/dse_cg/g1_resume.sh` did). A session's background task dies with the
+  session: G1 lost 12.7 h that way (`dse_cg` Progress log, 2026-11-09).
+- **Load matters to tool time.** In G1 a run beside other jobs took up to 1.8x
+  as long. Run L1's timed runs at a stated condition (alone, or beside exactly
+  one other RTL run, as the harness's 2 slots assume), and log anything else
+  that ran.
+- Each task writes its results to `~/ali/toy/lab/<task>.json` with the tool
+  version, the part, the commit and the date; each is resumable and skips what
+  is recorded. Keep build paths short.
+- **No change to the framework without the user.** A new probe or a longer
+  workload in an example is fine on a branch; a change under `waveflow/` is
+  written down and waits.
+- When done, write a short note `~/ali/toy/lab/NOTE.md`: what ran, what
+  failed, the tables of L1-L5, and anything surprising. Then stop.
+
+**L1. RTL simulation speed at the toy's size** (answers Ali's Q1). For three
+existing designs near the toy's size, record the XSI build time, the cycles
+simulated, the simulation time and cycles per second, alone and beside one
+other RTL run:
+
+- `examples/rf_samp_buf_rx` through the system flow
+  (`rf_samp_buf_rx_system_build`): the sample buffer, the toy's front end;
+- `examples/mem_copy` (`mem_copy_system_build`): `MemRStream` and `MemWStream`
+  on the behavioural memory;
+- the 2 x 1 crossbar of `examples/xbar_profile`: two masters on one memory.
+
+Lengthen each workload to at least 10⁶ cycles (the gates run a few thousand,
+too short to time); three lengths per design, so build and per-cycle costs
+separate. *Output:* build s and cycles/s per design and condition. This sets
+the harness's RTL rate (§3) in place of the CG system's 1,800 cycles/s.
+
+**L2. Crossbar arbitration under sustained contention** (answers Ali's Q2).
+`xbar_profile`'s `same_w16` probe has every master write at once, one burst
+each. Add probes where the two masters of a 2 x 1 crossbar (SAMD and SASD,
+64-bit) each issue 8 bursts of 16 beats back to back, then with master 1
+starting 1, 5 and 17 cycles late, and with mixed reads and writes. Read the
+grant order and each burst's start and end from the VCD (count
+`VALID && READY`; the BFM's counters are not the wire). Run the same traffic
+in pysim (`AXIMMCrossBarIF`, request order). *Output:* the grant sequences,
+whether the IP alternates (round robin) or serves in request order, the gap
+cycles at each switch of master, and pysim's error per probe.
+
+**L3. Memory burst timing at the toy's options.** The toy's banks (1, 2, 4)
+and burst lengths (4, 8, 16, 32 beats) on the behavioural memory, at BRAM rate
+and one-cycle rate. Reuse `dse_cg`'s flow from step 1f (the device harnesses
+on Shared Mem traced, `fit_turnaround` in `waveflow/calib/mem_timing.py`):
+record cycles per burst, the turnaround, and the writer's wait for each
+response. *Output:* a table per (banks, rate, burst length), and whether
+`dse_cg`'s numbers (2n + 2 a read burst, 21 cycles a 16-beat write) hold.
+
+**L4. Resources per option.** Out-of-context synthesis at `xczu48dr`:
+
+- the sample buffer at depths 256 to 8192 words (the toy's FIFO depth);
+- the crossbar shapes 2 x 1, 2 x 2, 3 x 1 at 64 and 128 bits (the existing
+  `xbar_profile` records are at the stand-in `xczu7ev`; rerun at `xczu48dr`);
+- `MemRStream` / `MemWStream` at the burst lengths of L3.
+
+The memory's block RAM comes from a formula (`dse_cg` decision 2), so it needs
+no synthesis. *Output:* LUT, FF, DSP and BRAM per option: the cost table of
+the true model.
+
+**L5. Tool times and the calibration charge.** From L1-L4's logs: csynth,
+synthesis and XSI build seconds per part and option, which set the harness's
+charges (§3). Then the calibration charge: the tool-seconds of the runs a real
+PySim would need for the toy's parts (L2's probes, L3's traces and a subset of
+L4), listed run by run as `examples/dse_cg/calibration.py` does. This
+replaces the 1-2 h guess of §3.
+
+**Done when:** `NOTE.md` and the five result files are on the lab machine,
+and the user has copied the tables into this plan (S0's answers and §3).
 
 ### S1. True model and harness
 
@@ -215,8 +363,11 @@ and on, the build cost, the tail error near the limit, and whether the chosen
 design matches the true best.
 
 **Decision:** if S2a picks the true best design with the data-dependent stage
-on, the toy is too easy. Strengthen the data dependence or the traffic quirks
-and repeat S2 before going on.
+on, the toy is too easy. Strengthen the data dependence or the effects of §2
+and repeat S2 before going on. If S2b picks it (data statistics combined with
+a timing-only queue model by Monte Carlo), the split that S7 is designed to
+break works on this toy: consider moving S7's coupled DUT into S4-S5 as the
+main design, and decide with the user.
 
 ### S3. Sanity checks
 
@@ -236,11 +387,28 @@ choice of design depends on the tail.
 **Done when:** the objectives and their true best designs are written in this
 plan.
 
+### S4b. Pilots and pre-registration
+
+As in `dse_cg` step 7: one agent run per arm per objective, then read every
+transcript. Check that the brief is enough (what the agents say they lacked),
+that no agent works around the tools, that runs end at their submit, and how
+many turns and how much wall time they take. Set the caps from the pilots
+(`dse_cg`'s rule: about 3x the pilots' maximum). Then freeze, before any scored
+run: the objectives, the budget, the calibration charge, PySim's error
+settings, the model and effort, N, and the caps.
+
+If every pilot of both arms submits the true best design, stop: the toy is too
+easy, as the CG grid was. Return to S2.
+
+**Done when:** the pilots' records are saved and the pre-registration is
+committed with a date.
+
 ### S5. Agent runs
 
 10 runs per arm per objective, with the data-dependent stage on, with Claude at
 high effort and a fresh sandbox each run. Then repeat the simulator arm at PySim
-errors of 1, 3 and 10 %.
+errors of 1, 3 and 10 %. Also run the scripted policies of S3 on each objective,
+as a floor for both arms.
 
 **Done when:** all runs are scored from their ledgers and the per-run records of
 §4 are complete.
@@ -254,7 +422,10 @@ A short internal note in the style of the tight-deadline note:
   and against the truth;
 - the spread of the tail estimates across the agents' models;
 - how often submitted designs miss the limit, per arm;
-- the PySim error at which the simulator arm's advantage disappears.
+- the PySim error at which the simulator arm's advantage disappears, in both
+  timing and tail terms, against pysim's error on the CG system;
+- the result with the calibration charged up front and amortized, and the
+  break-even charge.
 
 **Pause here** and decide the next step with the user.
 
@@ -314,7 +485,9 @@ gap, and the user has decided what comes next.
 
 - **PySim helps:** at PySim errors of 3 % or less, the simulator arm submits at
   least 25 % less BRAM, or reaches the target at least 2× sooner, on most
-  objectives, and its designs miss the limit no more often.
+  objectives, and its designs miss the limit no more often. The advantage must
+  survive the calibration charge amortized over the arm's runs; `dse_cg`'s did
+  not survive it up front, so report that view too.
 - **Agents match it:** baseline agents reach comparable designs by building
   their own models. Then the note reports what those models cost to build, how
   far apart they are, and how often they were wrong. That is a result too.
@@ -336,3 +509,14 @@ Only after S6, and only if the toy is informative:
 - ask an agent to build a simulator from a summary of Waveflow's requirements;
 - the larger CG design space with local buffering;
 - Waveflow as a platform for training and testing agents.
+
+## 9. Relation to `dse_arch`
+
+`plans/dse_arch.md` (architecture search by composing calibrated blocks) waits
+on this plan. Its primary experiment, E1, needs workloads where system timing
+cannot be reasoned out from a few measurements, which is what this toy tests.
+If the simulator arm wins here, E1's workloads should carry the same feature
+(contention and a tail requirement), and `ModelBackend` may score architectures
+off its measured catalogue (`dse_arch` §7). If agents match it here, `dse_arch`
+needs a different argument before it is built. V2, the descriptor-ring CG
+system (`dse_cg` step 8), is not needed for this plan.

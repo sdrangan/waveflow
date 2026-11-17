@@ -5,6 +5,10 @@ identity, budget and submit machinery. Takes up the architecture exploration tha
 `plans/paper_cg_dse_vision.md` scoped out ("The fixed architecture"), and the agent split builds on
 `plans/multi_agent_flows.md` ("Encapsulation, for agents", "The device as the unit"). Nothing here is built yet.
 
+**On hold (2026-11-16)** until `plans/toy_shared_memory.md` reports. `dse_cg` showed the parametric problem
+easy for agents; the toy tests whether a calibrated simulator pays off where timing is emergent, which
+E1 depends on (see the toy plan's §9). V2 (§5) is planned in `dse_cg` step 8, not built.
+
 ## 1. Question
 
 `dse_cg` asks whether pysim speeds up *parametric* DSE on a fixed architecture. This plan asks the next question:
@@ -105,7 +109,7 @@ S3 is not used for the comparison because variance in block writing would swamp 
 ### 8.1 Library design (S1, S2)
 
 - The library holds **primitives, not finished architectures.** No fused CG iteration block and no descriptor-ring subsystem. Otherwise the search is trivial.
-- Primitives: `CgVectorCore`, `SystolicCore`, SSR FFT, Vitis L1 FFT, memory reader/writer, stream utilities, crossbar, queue/FIFO blocks, register-map host interface, DMA.
+- Primitives: `VecUnit`, `SystolicEngine` / `SystolicEngineMem` (the CG units `CgVectorCore` and `SystolicCore` were retired to `waveflow/linalg/legacy/` on 2026-11-08), SSR FFT, Vitis L1 FFT, memory reader/writer, stream utilities, crossbar, queue/FIFO blocks, register-map host interface, DMA.
 - Each primitive has a calibrated range wide enough for the benchmark workloads.
 
 ## 9. Arms and fairness
