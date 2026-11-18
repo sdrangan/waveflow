@@ -90,8 +90,8 @@ bt = BusCalib(platform_dir="waveflow/calib/platforms/zynq7020_bfm_100mhz").bus_t
   directions `None` — so a slice degrades to the plain per-word span rather than crashing.
 
 Charging the bus term in pysim is what lets the [component residual](./component_residual.md) shrink to
-the component's own control cost: on the reference platform the writer's residual drops from ~36
-(bus + control lumped) to ~22 (control only), and the 14-cycle burst term moves onto this shared model.
+the component's own control cost: on the reference platform the writer's residual drops from ~40
+(bus + control lumped) to ~26 (control only), and the 14-cycle burst term moves onto this shared model.
 
 ## Automating it: `CalibBusStep`
 

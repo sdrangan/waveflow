@@ -129,6 +129,6 @@ scenario that needs longer is cut short at RTL and its `compare` fails on the mi
 workload (thousands of samples at one per cycle) raises it.
 
 At RTL (Vitis/Vivado 2025.1) the harness's memory and completions match pysim word for word, and the
-last completion lands at cycle **2908** -- the number [mem_copy's system](../../examples/memcpy/rtlsim.md)
+last completion lands at cycle **3000** -- the number [mem_copy's system](../../examples/memcpy/rtlsim.md)
 gates on, since the testbench is the same: a driver, a sink and one memory behind both bundles
 ([`test_mem_copy_unit_xsi.py`](../../../tests/examples/test_mem_copy_unit_xsi.py)).

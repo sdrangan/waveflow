@@ -4,7 +4,7 @@
 (``tests/examples/test_interleaver_inband_xsi.py``, the m_axi pointer-FIFO regression), taken through
 ``add_system_steps``: ``csynth`` -> ``system_rtl`` (no crossbar, so no IP) -> ``scenario`` / ``pysim``
 -> ``system_xsi`` -> ``compare``.  What the sink and the memory record is compared RTL against pysim;
-the golden -- every Y region bit-exact, one completion per job, the last at **1300** cycles -- runs on
+the golden -- every Y region bit-exact, one completion per job, the last at **1326** cycles -- runs on
 the RTL's recordings: :func:`check_xsi`.
 
     python -m examples.interleaver.interleaver_inband_system_build --synth check     # the whole flow
@@ -26,7 +26,9 @@ HERE = Path(__file__).resolve().parent
 TOP = "interleaver_inband_system"
 WORK_DIR = "xsi_work"
 #: The kernel flow's gate, which this flow must reproduce: the cycle of the last completion.
-WANT_LAST_DONE_CYCLE = 1300
+#: 1300 -> 1326 on 2026-11-17: the writer's completion waits for the write response (hls::fence,
+#: plans/mem_stream_followups.md item 1) -- the first job +26, the 98-cycle period unchanged.
+WANT_LAST_DONE_CYCLE = 1326
 
 
 def system() -> HwSystem:

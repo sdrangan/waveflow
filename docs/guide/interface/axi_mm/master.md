@@ -103,7 +103,11 @@ cmd = st.Cmd(addr=16, len=128, xfer_len=1, xfer_msg=np.array([job_id], np.uint32
 ## The transfer message
 
 `xfer_msg` is an opaque, fixed-capacity array (`max_xfer_len` words, default 8) carried *with* a command
-and — when `emit_done=True` — echoed back **unmodified** on a `MemComplete` after the burst:
+and — when `emit_done=True` — echoed back **unmodified** on a `MemComplete` once the memory has
+acknowledged the burst (its last write response). A consumer that reads the destination when the
+completion arrives therefore reads the new data. The write body orders the echo after the response
+with an `hls::fence`; without it, Vitis 2025.1 sent the completion while the response was still
+outstanding.
 
 <!-- snippet: skip -->
 ```python

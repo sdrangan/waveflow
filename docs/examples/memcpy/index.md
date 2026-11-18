@@ -59,7 +59,7 @@ model it, test it in Python, generate the kernel, state the system, then run the
 5. [The system](./system.md) — `mem_copy_system()`, the cut, and what the system flow derives from it:
    the system top, the harness of BFM models, the scenario.
 6. [RTL simulation](./rtlsim.md) — running the system flow end to end, the RTL-vs-pysim comparison,
-   and the golden at 2908 cycles.
+   and the golden at 3000 cycles.
 7. [Visualizing timing](./timing.md) — tracing an RTL run and rendering it: the pipeline overlap, the
    bottleneck, where every cycle of the period goes, and why the loosely-timed pysim reproduces it using
    the platform's shipped infra models (no per-example calibration).

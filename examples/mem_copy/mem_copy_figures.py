@@ -4,12 +4,12 @@ Three figures, in the order the story is told on
 ``docs/examples/memcpy/timing.md``:
 
 * **timeline_full.svg** — the whole run: every observation point on one cycle axis.
-  The 183-cycle cadence and the read/write overlap are visible at a glance.
+  The 187-cycle cadence and the read/write overlap are visible at a glance.
 * **timeline_job.svg** — one steady-state job, beat by beat, with the ``copy_data``
-  FIFO occupancy underneath.  This is where the 30 cycles of backpressure become a
+  FIFO occupancy underneath.  This is where the 34 cycles of backpressure become a
   thing you can *see*: the channel pinned at capacity while the writer drains.
 * **firing_spans.svg** — per-firing spans per component.  The writer is uniform at
-  183 (100% utilised, the bottleneck); the reader is 153 on its one uncontended
+  187 (100% utilised, the bottleneck); the reader is 153 on its one uncontended
   firing and 183 on every later one.
 
 The first two need the waveform (per-beat detail); the third is rendered from
@@ -119,7 +119,7 @@ def render_timeline_full(bt, out: Path, n_cycles: int | None = None) -> None:
 def render_timeline_job(bt, out: Path, job: int = 8) -> None:
     """One steady-state firing, beat by beat, with the copy_data FIFO occupancy underneath.
 
-    The occupancy panel is the point of the figure: `copy_data` sits at capacity for ~30 cycles at
+    The occupancy panel is the point of the figure: `copy_data` sits at capacity for ~34 cycles at
     the start of the firing, which is the reader blocked on a writer that has not drained yet.  A
     write-enable-based metric shows nothing there -- HLS gates the enable -- so the counter is the
     only place that congestion is visible.

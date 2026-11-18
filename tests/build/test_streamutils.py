@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from waveflow.build.build import BuildConfig
-from waveflow.build.streamutils import MemMgrStep, StreamUtilsStep
+from waveflow.build.streamutils import MemMgrStep, MemStreamStep, StreamUtilsStep
 
 
 # ---------------------------------------------------------------------------
@@ -214,3 +214,21 @@ def test_memmgr_step_output_dir(tmp_path: Path):
     result = MemMgrStep(output_dir="util").run(BuildConfig(root_dir=tmp_path))
     assert (tmp_path / "util" / "memmgr.hpp").exists()
     assert (tmp_path / "util" / "memmgr_tb.hpp").exists()
+
+
+def test_memstream_step_default_copies_every_body(tmp_path: Path):
+    MemStreamStep(output_dir="include").run(BuildConfig(root_dir=tmp_path))
+    assert (tmp_path / "include" / "mem_w_stream_done_task.h").exists()
+    assert (tmp_path / "include" / "il_load_inband_task.h").exists()
+
+
+def test_memstream_step_copies_only_the_named_headers(tmp_path: Path):
+    step = MemStreamStep(output_dir="include", headers=["mem_r_stream_task", "mem_w_stream_done_task"])
+    step.run(BuildConfig(root_dir=tmp_path))
+    assert sorted(p.name for p in (tmp_path / "include").iterdir()) == [
+        "mem_r_stream_task.h", "mem_w_stream_done_task.h"]
+
+
+def test_memstream_step_rejects_an_unknown_header():
+    with pytest.raises(KeyError, match="mem_bogus_task"):
+        MemStreamStep(headers=["mem_bogus_task"])

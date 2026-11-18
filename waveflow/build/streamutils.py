@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from waveflow.build.build import Buildable, BuildConfig, BuildResult, FileArtifact
@@ -433,11 +434,21 @@ class MemStreamStep(Buildable):
     output_dir : str | Path
         Directory path **relative to** ``BuildConfig.root_dir`` where the task headers are written.
         Defaults to ``"."`` (the root directory).
+    headers : iterable of str, optional
+        The output keys to copy (``"mem_w_stream_done_task"``, ...).  ``None`` (the default) copies
+        every body, including the in-band interleaver's ``il_*`` tiles and ``mem_seq_framed_task``;
+        a design that instantiates only the mem-stream bodies names them so its ``include/`` does
+        not collect unrelated headers.
     """
 
-    def __init__(self, output_dir: str | Path = ".") -> None:
+    def __init__(self, output_dir: str | Path = ".", headers: Iterable[str] | None = None) -> None:
         super().__init__()
         self._output_dir = Path(output_dir)
+        self._headers = None if headers is None else tuple(headers)
+        if self._headers is not None:
+            unknown = sorted(set(self._headers) - set(self._all_outputs()))
+            if unknown:
+                raise KeyError(f"Unknown MemStreamStep header key(s): {unknown}")
 
     @property
     def output_dir(self) -> Path:
@@ -446,6 +457,12 @@ class MemStreamStep(Buildable):
 
     @property
     def build_outputs(self) -> dict[str, Path]:
+        outs = self._all_outputs()
+        if self._headers is None:
+            return outs
+        return {k: v for k, v in outs.items() if k in self._headers}
+
+    def _all_outputs(self) -> dict[str, Path]:
         return {
             # Standalone gate-1 mem-stream bodies (3-arg) + the done-emitting write variant.  Legacy
             # two-stream composition bodies: MemCopy retired them for the framed trio below (they own

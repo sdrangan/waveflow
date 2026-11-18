@@ -470,7 +470,7 @@ paths, `pysim_cycles` and `trace_mismatches`.
 from waveflow.build.system_xsi import run_system_xsi
 
 run = run_system_xsi(markov_system(jobs, link="mm"), work_dir, top="markov_top")
-run.cycles, run.trace_mismatches          # 1870, []
+run.cycles, run.trace_mismatches          # 1951, []
 ```
 
 [`run_system_xsi`](../../../waveflow/build/system_xsi.py) is the same DAG as a one-call wrapper:

@@ -50,7 +50,8 @@ whenever the component issues `m_axi` **writes**, because an `m_axi` store is **
 when the adapter *accepts* the word, not when the beat reaches the bus. The component's own code has
 moved on; the write burst is still draining behind it.
 
-On `mem_copy`'s writer, three plausible window-ends give three different stories:
+On `mem_copy`'s writer before its `hls::fence` (Vitis/Vivado 2025.1), three plausible window-ends gave
+three different stories:
 
 | window ends at | firing span | conclusion it supports |
 | --- | --- | --- |
@@ -58,7 +59,9 @@ On `mem_copy`'s writer, three plausible window-ends give three different stories
 | last `B` response | 180 | "a few cycles of restart latency" |
 | **`ap_done`** | **183** | **the writer is 100% utilised — the bottleneck** |
 
-Only the last is right. `ap_done` is unambiguous because **HLS holds it until the firing's
+Only the last is right.  The fence makes the writer's `s_done` wait for the write response, so today
+`s_done` and `ap_done` coincide at 187 (the last `B` is still at 180) -- but that is a property of this
+body, not of firings: anchor on `ap_done` anyway. `ap_done` is unambiguous because **HLS holds it until the firing's
 outstanding writes have responded** — it is the one signal that means "this firing is actually done".
 
 The subtlety: a free-running top is `ap_ctrl_none` and has **no** control interface. But each
@@ -70,10 +73,11 @@ pulses once per firing — and Vitis lifts the pin into the top scope where a le
 
 {: .note }
 > A consequence worth holding separately from timing: because the store is posted, a response emitted
-> *inside* the firing (like `mem_copy`'s `CopyResp`) can go out **before** the data it reports has
-> actually landed in memory. If a downstream consumer must not read the destination until the write
-> is durable, the guarantee has to ride the **task boundary** (`ap_done`), not a stream write inside
-> the body.
+> *inside* the firing can go out **before** the data it reports has landed in memory. `mem_copy`'s
+> `CopyResp` did, about 25 cycles before the last write response (Vitis 2025.1). The framework's
+> write bodies now order the completion after the response with
+> `hls::fence({m_mem}, {s_done})` (`hls_fence.h`); a body of your own that reports a write on a
+> stream needs the same fence, or a downstream reader can see the old data.
 
 ## 3. Read backpressure from occupancy, not the write enable
 
@@ -91,7 +95,7 @@ blocked = bt.channel_blocked("copy_data", firing.start, firing.end)
 ```
 
 which compares `<ch>_num_data_valid` against `<ch>_fifo_cap` (both named in the manifest, both dumped
-at level 1). This is what located `mem_copy`'s 30 cycles/job of blocking — invisible on every write
+at level 1). This is what located `mem_copy`'s 34 cycles/job of blocking — invisible on every write
 handshake in the design.
 
 ## Why these matter for calibration

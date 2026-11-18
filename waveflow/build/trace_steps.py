@@ -127,6 +127,44 @@ def xsi_phases(output: str) -> list[tuple[str, float]]:
     return out
 
 
+def _elab_only_failed_cleanup(out: str) -> bool:
+    """xelab built the library and then failed only to delete its scratch ``obj/`` directory.
+
+    Seen on Windows, twice in one ``-m xsi`` session (``bo_top``, ``mm_fir_top``): ``Built XSI
+    simulation shared library ...`` followed by ``Could not remove the obj directory: ... being used
+    by another process`` and exit status 1 -- a freshly written ``xsim_N.c`` still held open
+    (an indexer or scanner).  The library is complete; a real elaboration error prints ``ERROR:``.
+    The runner ignored xelab's status before this module read it, so this was always happening.
+    """
+    return ("Built XSI simulation shared library" in out and "Could not remove the obj directory" in out
+            and not re.search(r"^ERROR:", out, re.M))
+
+
+#: The status line each runner phase prints (run.bat / run.sh): ``xvlog errorlevel=0``, ...,
+#: ``XSI_EXITCODE=0``.  Which ones appear depends on the verb.
+_STATUS_LINE = re.compile(r"^(xvlog errorlevel|xelab errorlevel|gpp errorlevel|XSI_EXITCODE)=(-?\d+)",
+                          re.MULTILINE)
+
+
+def xsi_output_ok(out: str) -> bool:
+    """Whether every phase the runner ran succeeded, whatever the verb.
+
+    A build-only invocation (``rtl`` / ``tb`` / ``build``) never prints ``XSI_EXITCODE``, so the
+    run's status alone would mark a good build as failed.  Every status line printed must be 0
+    (xelab's tolerated cleanup failure aside), and at least one must be printed.
+    """
+    codes = _STATUS_LINE.findall(out)
+    if not codes:
+        return False
+    for what, code in codes:
+        if code == "0":
+            continue
+        if what == "xelab errorlevel" and _elab_only_failed_cleanup(out):
+            continue
+        return False
+    return True
+
+
 def run_xsi(cmd: list[str], *, cwd: str | os.PathLike[str], name: str = "xsi",
             **kwargs: Any) -> subprocess.CompletedProcess:
     """:func:`subprocess.run` of an XSI runner, timed: one ``tool`` span, one child per phase.
@@ -142,7 +180,7 @@ def run_xsi(cmd: list[str], *, cwd: str | os.PathLike[str], name: str = "xsi",
     with events.span("tool", name, cwd=str(cwd)) as ev:
         r = subprocess.run(cmd, cwd=str(cwd), **kwargs)
         out = (r.stdout or "") if isinstance(r.stdout, str) else ""
-        ev["ok"] = "XSI_EXITCODE=0" in out
+        ev["ok"] = xsi_output_ok(out)
         at = ev["start"]
         for phase, seconds in xsi_phases(out):
             events.record("phase", phase, elapsed=seconds, start=at)
@@ -181,10 +219,23 @@ def render_vcd_dumper(top: str, scopes: "list[str] | None" = None) -> str:
 
     *scopes* are the hierarchical scopes dumped, each at level 1 (its own nets); the default is
     *top* itself.  A system top names the scopes the waveform claims read -- a wrapper's, inside a
-    sub-top -- because its own level-1 nets are only the wiring between sub-tops."""
+    sub-top -- because its own level-1 nets are only the wiring between sub-tops.
+
+    Raises ``ValueError`` on two **nested** scopes (one is a prefix of the other at a ``.``): xsim
+    (2025.1, measured twice) compiles and runs that without a word but dumps only the outer one, and
+    the missing scope surfaces much later as "no signals under scope ..." in ``load_trace``.  Dump
+    the outer scope one level deeper instead -- ``$dumpvars(2, outer)`` reaches each instance in it
+    -- or name siblings only, as :meth:`SystemTopSpec.trace_scopes` does."""
     text = _DUMPER_TEMPLATE.format(top=top)
     if scopes is None:
         return text
+    for outer in scopes:
+        for inner in scopes:
+            if inner.startswith(outer + "."):
+                raise ValueError(
+                    f"render_vcd_dumper: scope {inner!r} is nested in {outer!r}; xsim dumps only "
+                    f"the outer of two nested $dumpvars scopes, silently.  Drop {inner!r} and dump "
+                    f"{outer!r} at level {1 + inner.count('.') - outer.count('.')} instead.")
     dumps = "".join(f"        $dumpvars(1, {s});\n" for s in scopes)
     return text.replace(f"        $dumpvars(1, {top});\n", dumps)
 

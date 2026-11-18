@@ -61,8 +61,10 @@ And the theory: over 20,000 steps the fraction of ones is within 0.03 of `p01 / 
 
 ## How close is the timing?
 
-The RTL takes **1870** cycles for this scenario; pysim says **1926**, 3.0% over. A gate keeps them
-within 5% ([RTL simulation](rtlsim.md)).
+The RTL takes **1951** cycles for this scenario (Vitis/Vivado 2025.1); pysim says **1854**, 5.0% under.
+A gate keeps them within 5% ([RTL simulation](rtlsim.md)) -- only just: most of the gap is the chain's
+memory writer waiting for each write's acknowledgement before it reports, which the RTL does and pysim
+does not yet charge ([`plans/mem_stream_followups.md`](https://github.com/sdrangan/waveflow/tree/main/plans/mem_stream_followups.md)).
 
 pysim is a loosely-timed model, so its timing is only as good as what it charges. Here that is the HLS
 bodies' rate -- one step per cycle -- plus each kernel's **fixed cost per chunk**, measured at RTL with

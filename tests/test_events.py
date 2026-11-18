@@ -18,7 +18,7 @@ import pytest
 
 from waveflow import events
 from waveflow.build.build import BuildConfig, BuildDag, BuildStep
-from waveflow.build.trace_steps import xsi_phases
+from waveflow.build.trace_steps import xsi_output_ok, xsi_phases
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +143,16 @@ def test_xsi_phases_from_run_bat_and_run_sh():
     # Past midnight, %time% wraps.
     assert xsi_phases("WF_PHASE simulate 23:59:59.00\nWF_PHASE end  0:00:01.00\n") == [
         ("simulate", 2.0)]
+
+
+def test_xsi_output_ok_judges_the_phases_the_verb_ran():
+    build = "xvlog errorlevel=0\nxelab errorlevel=0\ngpp errorlevel=0\n"
+    assert xsi_output_ok(build)                                   # build only: no XSI_EXITCODE
+    assert xsi_output_ok("gpp errorlevel=0\n")                    # tb only
+    assert xsi_output_ok(build + "XSI_EXITCODE=0\n")              # all
+    assert not xsi_output_ok(build + "XSI_EXITCODE=1\n")
+    assert not xsi_output_ok("xvlog errorlevel=0\nxelab errorlevel=1\nERROR: [XSIM 43-3322]\n")
+    assert not xsi_output_ok("WF_PHASE end 10:00:15.25\n")        # nothing ran
+    # xelab's tolerated failure to delete obj/ after building the library.
+    assert xsi_output_ok("xvlog errorlevel=0\nBuilt XSI simulation shared library x\n"
+                         "Could not remove the obj directory: busy\nxelab errorlevel=1\n")

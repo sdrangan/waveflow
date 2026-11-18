@@ -4,13 +4,17 @@
 // the framed alternative to mem_w_stream_done_task.h.  There is NO separate command port: the single
 // framed s_in carries [MemWCmd | fwd_bursts opaque bursts | len data words], so a descriptor can never
 // be paired with the wrong data.  The writer reads the MemWCmd, BUFFERS the opaque forward bursts (the
-// response — it must not go out before the data is stored), pure-writes len words to m_mem, then emits
-// the buffered words on the word s_done boundary.  It never parses what it forwards and constructs no
+// response — it must not go out before the data is stored), pure-writes len words to m_mem, then, once
+// the memory has ACKNOWLEDGED the write (its last write response), emits the buffered words on the
+// word s_done boundary.  The hls::fence below is what orders the echo after B: without it Vitis 2025.1
+// issued the echo while still waiting for the response -- 25 cycles before the job's last B on the
+// mem_copy trace (plans/mem_stream_followups.md, item 1).  It never parses what it forwards and constructs no
 // completion of its own — the composite's sequencer framed the response (a CopyResp).  MAX_FWD bounds
 // the forward buffer, not the protocol.  Single-firing (the hls::task runtime re-fires per command);
 // the sole m_axi WRITE owner touches ONLY streams besides m_mem.  Its pysim twin is
 // MemWStream._run_iter_inband.  Verify via XSI.
 #include "hls_stream.h"
+#include "hls_fence.h"
 #include <ap_int.h>
 #include "streamutils_hls.h"
 #include "mem_w_cmd.h"
@@ -48,6 +52,7 @@ S2A: for (int w = 0; w < nw; ++w) {
         m_mem[w0 + w] =
             streamutils::read_boundary_word<streamutils::framed_word<MEM_DW>, MEM_DW>(s_in, last);
     }
+    hls::fence({m_mem}, {s_done});      // the echo goes out only after the write is acknowledged
 ECHO: for (int i = 0; i < n_buf; ++i) {
 #pragma HLS PIPELINE II=1
         s_done.write(fwd[i]);

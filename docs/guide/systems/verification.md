@@ -105,7 +105,7 @@ still produce exactly pysim's words.
 
 ## An exact cycle count
 
-The RTL run's cycle count is a gate of its own: `mem_copy` 2908 cycles, markov 1870 (Vivado 2025.1). It
+The RTL run's cycle count is a gate of its own: `mem_copy` 3000 cycles, markov 1951 (Vivado 2025.1). It
 is exact, not a bound -- a count that moves is a real change in behavior, a regression or an improvement,
 and both deserve a look. Whether pysim's timing *predicts* it is the next page.
 
