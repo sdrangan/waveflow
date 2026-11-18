@@ -49,8 +49,8 @@ WORK = Path(__file__).resolve().parents[2] / "tests" / "build" / "_xsi_work"
 #:         mem_w_stream_framed_done_task.h, plans/mem_stream_followups.md item 1) -- it used to
 #:         leave before the write was acknowledged.  Correctness, not speed: +81 cycles.
 EXPECTED_CYCLES = 1951
-#: pysim must stay within this of RTL.  It is -5.0% (1854 against 1951) since the writer's fence: pysim
-#: does not charge the write-response wait (plans/mem_stream_followups.md).
+#: pysim must stay within this of RTL.  It is -1.4% (1924 against 1951): pysim charges the writer's
+#: fence, 14 cycles a firing (MemWStream.fence_cycles); without it, -5.0% (1854).
 PYSIM_TOLERANCE = 0.05
 
 

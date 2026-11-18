@@ -464,8 +464,12 @@ class SystolicEngineMem(_MemPart):
         done_words = np.asarray(done.serialize(word_bw=w), np.uint64)
         mem_r, mem_w = self.feeder.m_mem, self.wstream.m_mem
         wb_bytes = mem_r._word_bytes(w)
+        # The writer fires once a tile (and once for a refused job's lone done), each firing paying
+        # its fence before its completion (MemWStream.fence_cycles).
+        fence = self.wstream.fence_cycles * period
         if st != Status.OK:
-            self.call_after(0, self._tiles_store, mem_w, self.s_done, [], done_words, self._out_lock)
+            self.call_after(0, self._tiles_store, self.env, mem_w, self.s_done, [], done_words,
+                            self._out_lock, fence)
             return
         MT, NT, P = int(d.M) // Mm, int(d.N) // Nm, int(d.K) // Km
         K = P * Km
@@ -531,19 +535,24 @@ class SystolicEngineMem(_MemPart):
             k += 1
         writes = []
         if k:
-            writes.append((c0 * wb_bytes, cw[:k * wc], now - (k * wc + 1) * period))
-        writes += [((c0 + q * wc) * wb_bytes, cw[q * wc:(q + 1) * wc], anchors[q])
+            writes.append((c0 * wb_bytes, cw[:k * wc], now - (k * wc + 1) * period, k))
+        writes += [((c0 + q * wc) * wb_bytes, cw[q * wc:(q + 1) * wc], anchors[q], 1)
                    for q in range(k, len(anchors))]
-        self.call_after(0, self._tiles_store, mem_w, self.s_done, writes, done_words, self._out_lock)
+        self.call_after(0, self._tiles_store, self.env, mem_w, self.s_done, writes, done_words,
+                        self._out_lock, fence)
 
     @staticmethod
-    def _tiles_store(mem_w, s_done, writes, done_words, lock) -> ProcessGen[None]:
-        """A job's deferred writes -- each anchored at its time -- then its done: a pure function
-        of its arguments, as ``call_after`` requires; one job's after another."""
+    def _tiles_store(env, mem_w, s_done, writes, done_words, lock, fence) -> ProcessGen[None]:
+        """A job's deferred writes -- each anchored at its time, each of its *ntiles* writer firings
+        paying its *fence* -- then its done: a pure function of its arguments, as ``call_after``
+        requires; one job's after another."""
         with lock.request() as req:
             yield req
-            for addr, words, anchor in writes:
+            for addr, words, anchor, ntiles in writes:
                 yield from mem_w.write(words, addr, tstart=anchor)
+                yield env.timeout(ntiles * fence)
+            if not writes:
+                yield env.timeout(fence)
             yield from s_done.write(done_words)
 
     def linalg_parts(self):

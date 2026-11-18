@@ -531,6 +531,16 @@ class MemWStream(FreeRunMod):
     #: without recalibrating (:class:`~waveflow.calib.platform.PlatformCalib`).  Prefer this over
     #: ``calib_dir`` for the framework components; ``calib_dir`` remains the one-off/local override.
     platform_dir: "str | Path | None" = None
+    #: Cycles a firing with a completion spends in its ``hls::fence({m_mem}, {s_done})``: the fence
+    #: holds the completion until the bus has acknowledged every write, and the round trip through
+    #: the kernel's ``m_axi`` adapter costs this much after the firing's last input word **whether or
+    #: not the firing wrote anything**.  Measured on markov's traced RTL (Vitis/Vivado 2025.1, BFM write
+    #: slave): its zero-length response firing echoes 14 cycles after its last input word, and its
+    #: 8-word chunk firings end 17 after theirs (the write's own drain, then the fence).  Charged on
+    #: every firing with ``emit_done``, inside the firing, so a calibrated residual fitted on top of it
+    #: (mem_copy's) is the writer's other control cost.  A structural constant of the body at this
+    #: tool version, not a calibration knob.
+    fence_cycles: ClassVar[float] = 14.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -636,11 +646,18 @@ class MemWStream(FreeRunMod):
             yield from region.write_slice_pipelined(
                 w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
                 num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        yield from self._fence()
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         if self.emit_done:
             complete = self._complete_cls(len=nw, xfer_len=int(cmd.xfer_len), xfer_msg=cmd.xfer_msg)
             yield from self.m_done.write(complete)
+
+    def _fence(self) -> ProcessGen[None]:
+        """The body's fence before its completion: :attr:`fence_cycles` when one follows
+        (``emit_done``) -- on a zero-length command too, whose firing still runs the fence."""
+        if self.emit_done and self.fence_cycles:
+            yield self.timeout(self.fence_cycles * self.clk.period)
 
     def _run_iter_inband(self) -> ProcessGen[None]:
         """One framed transfer off ``s_in`` (``inband=True``) — the forwarding writer.
@@ -680,6 +697,7 @@ class MemWStream(FreeRunMod):
             yield from region.write_slice_pipelined(
                 w0, words, t_out_start=t0 + self._fill, element_type=self._word_t,
                 num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
+        yield from self._fence()
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
         # Calibrated delay: the write-response drain.  The RTL echo waits for the memory to

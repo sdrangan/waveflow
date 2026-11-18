@@ -71,7 +71,7 @@ differ from pysim's.
 
 | | pysim | RTL |
 |---|---|---|
-| 4 jobs x 300 steps, 2 in flight | 1854 cycles | **1951 cycles** |
+| 4 jobs x 300 steps, 2 in flight | 1924 cycles | **1951 cycles** |
 | `x` | bit-exact | **bit-exact** |
 | host reads other than responses and `x` | 0 | **0** |
 
@@ -98,6 +98,7 @@ same events from pysim, they showed where the time went:
 | 4 | the chain now the bottleneck at **79** cycles a chunk, the generator at **71**: 64 steps plus a fixed cost per chunk | pysim charges each kernel's measured `chunk_overhead` (15 and 7) | pysim 1700 -> 1926 |
 | 5 | -- | the credit handling moved into the framework's `credit::Producer` / `credit::Consumer` -- equivalent logic, scheduled slightly differently | 1870 |
 | 6 | the memory writer reported each write ~25 cycles before the memory acknowledged it | its completion waits for the write response (`hls::fence`): correctness, not speed | 1951 |
+| 7 | traced, the writer's response firing echoes **14** cycles after its last input though it writes nothing: the fence's round trip, in every firing, on each job's path to the host | pysim charges it (`MemWStream.fence_cycles`) | pysim 1854 -> 1924 |
 
 Steps 2 and 3 were defects in the **design** -- the RTL got faster -- and step 4 a gap in the
 **model**. The design lessons are general, and are on the guide page

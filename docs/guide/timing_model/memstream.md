@@ -25,8 +25,8 @@ the `ap_done` handshake, and (for the writer) the posted-write drain. That gap i
 residual  =  rtl_firing_span  −  (bus-charged pysim span)      # the component's own control cost
 ```
 
-It is small and roughly constant — on the reference BFM platform ~26 cycles for the writer (it models the
-posted-write drain) and ~15 for the reader (its own control cost). A
+It is small and roughly constant — on the reference BFM platform ~13 cycles for the writer at 128 words (it models the
+posted-write drain; its fence, 14 cycles a firing, `MemWStream.fence_cycles` charges itself) and ~15 for the reader (its own control cost). A
 [`StreamTimingModel`](./component_residual.md) captures it and charges it per firing via `timed_delay`, on
 top of the bus term. This is exactly the [component residual](./component_residual.md) method; what follows
 is how you *produce* one for a mem-stream.

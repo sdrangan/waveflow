@@ -31,8 +31,8 @@ residual = rtl_span − pysim_span + current_dly        # all in cycles
 The `+ current_dly` corrects for whatever delay the model *already* injected on that run, so the fit is
 self-correcting: any run is a datapoint (no model-disabled baseline needed), and online calibration
 converges from a zero seed. Because pysim already models the fill and the overlapped drain, the residual
-is small — on the reference platform the writer's is ~26 cycles, even though its *total* control cost
-measured in RTL is ~45; pysim was already accounting for the rest.
+is small — on the reference platform the writer's is ~13 cycles, even though its *total* control cost
+measured in RTL is ~45; pysim was already accounting for the rest, its fence's 14 cycles included.
 
 ## Where the model lives
 
