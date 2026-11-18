@@ -3,7 +3,7 @@ the harness's memory stand-in, which lowers to the one ``FlatMemory`` both bundl
 
 The same 16 jobs as the system gate (``test_mem_copy_system_xsi.py``), so the same numbers: the
 memory's final arena and the completions identical RTL against pysim, every destination equal to its
-source, and the last completion at the kernel flow's **2908** cycles (Vitis/Vivado 2025.1).
+source, and the last completion at the kernel flow's **3000** cycles (Vitis/Vivado 2025.1).
 """
 from __future__ import annotations
 

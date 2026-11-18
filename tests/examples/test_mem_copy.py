@@ -7,7 +7,7 @@ real Phase-2 deliverable): one ``ap_ctrl_none`` top instantiating three ``hls::t
 ``hls_thread_local`` ``framed_word`` streams derived from the component/interface graph, with two
 ``m_axi`` bundles + two AXIS ports on the boundary.  The csynth + XSI legs of Gate 2 need Vitis/Vivado
 and are driven out-of-band by ``examples/mem_copy/mem_copy.py`` + ``examples/mem_copy/xsi/run.bat`` —
-the in-band gate is 2908 (plans/memcopy_inband_integration.md).
+the in-band gate is 3000 (plans/memcopy_inband_integration.md).
 """
 from __future__ import annotations
 

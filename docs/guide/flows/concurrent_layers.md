@@ -53,7 +53,7 @@ The picture is mem_copy, the kernel-scale twin of the system picture in
 `HwSystem` whose `dut()` names the DUT, and everything else is testbench. mem_copy is one kernel and
 no crossbar: its kernel's four ports (two streams, two `m_axi` bundles) leave the top, and each is
 answered by a testbench model. It runs through the system flow (`mem_copy_system_build.py`) and
-reproduces the single-kernel gate exactly: 2908 cycles.
+reproduces the single-kernel gate exactly: 3000 cycles.
 
 mem_copy builds its modules directly on one simulation and names the kernel as the DUT,
 `HwSystem(sim, dut)` ([The system](../../examples/memcpy/system.md)), as every curated example now
@@ -126,7 +126,7 @@ and it is worth being precise about which is which.
 ([`examples/interleaver/gen/mem_r_stream.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/gen/mem_r_stream.cpp),
 XSI gate **158**) and as a task inside `mem_copy`
 ([`examples/mem_copy/gen/mem_copy.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/gen/mem_copy.cpp),
-gate **2908**). But those two are **two protocols**, not one module at two cuts: the standalone one
+gate **3000**). But those two are **two protocols**, not one module at two cuts: the standalone one
 reads an `MRCmd` and bursts; the composite one reads a `MemRCmd` and relays `fwd_bursts` opaque
 bursts first. `inband` is a `HwParam` — a build-time parameter of the *design* — precisely because it
 selects a protocol, and the framing follows from the protocol rather than the other way round.
@@ -143,7 +143,7 @@ void mem_r_stream(hls::stream<ap_uint<64> >& s_cmd, ...) {          // plain wor
 That does not compile, and nothing in Python catches it. The task body's argument word types are not
 part of `kernel_task()`'s contract, so the generator cannot check them — and the obvious proxy does
 not work either: `mem_copy`'s own `s_done` endpoint is `has_tlast=True` in Python while
-`mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and that design is the 2908
+`mem_w_stream_framed_done_task` declares it a plain `ap_uint` stream, and that design is the 3000
 gate. The Python framing flag and the C++ word type already disagree on a *working* design.
 
 Making the cut free in the artifact means teaching `kernel_task()` about the cut, and for framed

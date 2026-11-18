@@ -129,14 +129,14 @@ pysim object. After `system_synth` (xc7z020, 10 ns) the measured total sits besi
 
 | row | LUT | FF | BRAM18 |
 |---|---:|---:|---:|
-| `chain` (`MarkovChain`) | 2,031 | 3,115 | 0 |
+| `chain` (`MarkovChain`) | 2,036 | 3,116 | 0 |
 | `u` (`MmCreditStreamIF`: two writers and a FIFO) | 1,355 | 1,658 | 2 |
 | `gen` (`MarkovGen`) | 1,193 | 1,298 | 0 |
 | `xbar` (the crossbar) | 849 | 680 | 0 |
 | `chain_mm`, `gen_mm` (the adaptors) | 719 | 395 | 0 |
 | `mem` (`MemoryMod`: the BRAM window and its memory) | 132 | 39 | 2 |
 | system integration | 2 | 2 | 0 |
-| **total** | **6,281** | **7,187** | **4** |
+| **total** | **6,286** | **7,188** | **4** |
 
 The kernels are the cost, and each is about half what its csynth report estimated. The memory is one
 RAMB36 -- since `bram_t2p` was recoded with one `always` block per port: the first synthesis found it
@@ -178,16 +178,16 @@ timers, start-up excluded.*
 | | LUT | FF | BRAM18 |
 |---|---:|---:|---:|
 | generator device, alone | 2,299 | 2,560 | 2 |
-| chain device, alone | 3,028 | 3,934 | 0 |
+| chain device, alone | 3,034 | 3,936 | 0 |
 | memory, alone | 103 | 39 | 2 |
 | crossbar and glue, alone | 1,292 | 808 | 0 |
 | link term | −472 | −242 | 0 |
-| **per device, linked** | **6,250** | **7,099** | **4** |
-| **global** | **6,228** | **7,091** | **4** |
+| **per device, linked** | **6,256** | **7,101** | **4** |
+| **global** | **6,233** | **7,092** | **4** |
 
 The parts plus the measured link term are the linked total exactly. The link term is mostly the
 crossbar's: 1,292 LUT alone against 849 in the global synthesis (the resources table above). Against global
-synthesis, per device costs **22 LUT (+0.35%)** and 8 FF: what Vivado can no longer optimize across
+synthesis, per device costs **23 LUT (+0.37%)** and 9 FF: what Vivado can no longer optimize across
 a device's boundary. The memory's tie-off is inside its own module, so it prunes alone, and the
 BRAM is the same.
 

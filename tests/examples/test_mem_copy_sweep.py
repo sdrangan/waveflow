@@ -3,7 +3,7 @@
 The RTL is scenario-independent (``len`` is a runtime command field), so a timing sweep varies only
 the vectors + the harness arena + the ``h.run(N)`` bound.  These check the two knobs (``xsi_jobs`` /
 ``xsi_run_cycles``) generalize while the defaults reproduce the committed gate scenario exactly — so
-the 2908 gate is untouched.  No toolchain needed.
+the 3000 gate is untouched.  No toolchain needed.
 """
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ class TestDefaultsPreserveTheGate:
         assert [x.dst_off for x in j[:3]] == [4096, 4224, 4352]
 
     def test_default_run_bound_clears_the_gate(self):
-        # The gate completes at 2908; the derived bound must sit past it (the committed main still
+        # The gate completes at 3000; the derived bound must sit past it (the committed main still
         # bakes its own 3400 -- this is for sweep points that need more).
-        assert xsi_run_cycles() > 2908
+        assert xsi_run_cycles() > 3000
 
 
 class TestSweepPoints:

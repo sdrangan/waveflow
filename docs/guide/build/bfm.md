@@ -230,7 +230,7 @@ pipeline's throughput.
 
 One trap worth stating plainly: the meaningful number is **time-to-last-completion**, not the loop
 count. A run loops a fixed number of cycles and then drains, so the loop bound overstates the work —
-`mem_copy` finishes at 2908 inside a 3400-cycle loop. Compare completion cycles, never the total.
+`mem_copy` finishes at 3000 inside a 3400-cycle loop. Compare completion cycles, never the total.
 
 ## See also
 

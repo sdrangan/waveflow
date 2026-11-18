@@ -2,12 +2,18 @@
 #define WAVEFLOW_BUILD_MEM_W_STREAM_DONE_TASK_H
 // mem_w_stream_done_task.h — the FIXED s2a body WITH a completion echo, the composition variant of
 // mem_w_stream_task.h (plans/mem_stream_impl.md Phase 2).  Identical pure-write burst, plus one
-// MemComplete struct emitted on s_done after the burst — words written, plus the command's xfer_msg
-// cookie echoed back unmodified — so a downstream/host can correlate per-job completion on the
-// MemCopy composite.  Single-firing (the hls::task runtime re-fires per command); the sole m_axi
-// WRITE owner still touches ONLY streams besides m_mem.  Copied verbatim by MemStreamStep and
-// instantiated at a concrete width by the generated composite top.  Verify via XSI.
+// MemComplete struct emitted on s_done once the memory has ACKNOWLEDGED the burst (its last write
+// response) — words written, plus the command's xfer_msg cookie echoed back unmodified — so a
+// downstream/host that reads the data on the completion reads what was written.  Single-firing (the
+// hls::task runtime re-fires per command); the sole m_axi WRITE owner still touches ONLY streams
+// besides m_mem.  Copied verbatim by MemStreamStep and instantiated at a concrete width by the
+// generated composite top.  Verify via XSI.
+//
+// The hls::fence is what orders the completion after the write response.  Without it Vitis 2025.1
+// issues the s_done words while it is still waiting for B: on the mem_copy trace the completion
+// left 25 cycles before the job's last B (plans/mem_stream_followups.md, item 1).
 #include "hls_stream.h"
+#include "hls_fence.h"
 #include <ap_int.h>
 #include "m_w_cmd.h"
 #include "mem_complete.h"
@@ -27,6 +33,7 @@ S2A: for (int w = 0; w < nw; ++w) {
 #pragma HLS PIPELINE II=1
         m_mem[w0 + w] = s_in.read();
     }
+    hls::fence({m_mem}, {s_done});      // the completion goes out only after the write is acknowledged
     MemComplete comp;
     comp.len = nw;
     comp.xfer_len = c.xfer_len;

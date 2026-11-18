@@ -129,8 +129,8 @@ whether a *nested* project's work tier is actually ignored.
 1. **Seed the identity** — creating the platform writes `platform.json` (`xc7z020clg484-1`, 100 MHz).
 2. **Fit the bus law** — `add_run` the measured burst laws (write `nwords + 2·(num_trans−1)`, read
    `nwords + (num_trans−1)`) at two sizes, then `fit()` → `mm_bus.json`.
-3. **Fit the writer residual** — `collect_rtl` the measured RTL spans (183 cyc at n=128, 615 at n=512)
-   and `collect_pysim` a run **with the bus law active**, so the residual is control-only (~22 cyc),
+3. **Fit the writer residual** — `collect_rtl` the measured RTL spans (187 cyc at n=128, 619 at n=512)
+   and `collect_pysim` a run **with the bus law active**, so the residual is control-only (~26 cyc),
    then `fit()` → `components/mem_w_stream_framed_done_task/`.
 4. **Publish** — `publish_calib calib/work/zynq7020_bfm_100mhz
    waveflow/calib/platforms/zynq7020_bfm_100mhz --apply`.

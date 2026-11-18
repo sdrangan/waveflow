@@ -218,7 +218,7 @@ class TestExtractedTableAgainstTheRealTrace:
     def test_blocked_isolates_the_calibratable_rows(self, events):
         """`blocked == 0` is the "safe to calibrate on" filter, computed rather than assumed.
 
-        Only the reader's FIRST firing is uncontended; every later one absorbs 30 cycles waiting on
+        Only the reader's FIRST firing is uncontended; every later one absorbs 34 cycles waiting on
         a writer that is still draining.  The writer is never blocked -- it is the bottleneck."""
         # Configuration-QUALIFIED ids: a span belongs to the body at the template args it was
         # synthesized with.  The bare name here is what made the RTL and pysim corpora fail to
@@ -227,15 +227,15 @@ class TestExtractedTableAgainstTheRealTrace:
         w = [f for f in events["firings"] if f["component"] == "mem_w_stream_framed_done_task_64_8"]
 
         assert r[0]["blocked"] == 0 and r[0]["span"] == 153
-        assert {f["blocked"] for f in r[1:]} == {30}
-        assert {f["span"] for f in r[1:]} == {183}
+        assert {f["blocked"] for f in r[1:]} == {34}
+        assert {f["span"] for f in r[1:]} == {187}
         assert {f["blocked"] for f in w} == {0}
-        assert {f["span"] for f in w} == {183}
+        assert {f["span"] for f in w} == {187}
 
     def test_the_bus_term_is_shared_and_the_fixed_term_is_per_component(self, events):
         """The whole point of the two-level split: subtract the bus occupancy
         (`nwords + 2*(bursts-1)`) and what remains is a CONSTANT per component -- the writer's
-        control cost is 41, the reader's 11.  Same bus law, different component constants."""
+        control cost is 45, the reader's 11.  Same bus law, different component constants."""
         fixed = {}
         for f in events["firings"]:
             if f["blocked"] or not f["nwords"]:
@@ -243,7 +243,7 @@ class TestExtractedTableAgainstTheRealTrace:
             bus = f["nwords"] + 2 * (f["num_trans"] - 1)
             fixed.setdefault(f["component"], set()).add(f["span"] - bus)
 
-        assert fixed["mem_w_stream_framed_done_task_64_8"] == {41}
+        assert fixed["mem_w_stream_framed_done_task_64_8"] == {45}
         assert fixed["mem_r_stream_framed_task_64"] == {11}
 
     def test_num_trans_matches_the_recorded_burst_length(self, events):

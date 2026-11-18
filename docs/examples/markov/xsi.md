@@ -153,7 +153,7 @@ The k-th region read follows the k-th response, so each response is paired with 
 ```python
 run = load_run("examples/markov/xsi_work/markov")    # after python -m examples.markov.markov_build
 run.output += trace_report(run.output, run.traces)
-run.cycles, run.polls, run.trace_mismatches          # 1870, 0, []
+run.cycles, run.polls, run.trace_mismatches          # 1951, 0, []
 job_results(run.output)[2]["ones"]                   # 257
 ```
 
@@ -169,7 +169,7 @@ a gate never synthesizes, and never runs against RTL that was not built from the
 |---|---|
 | `test_markov_rtl_bit_exact` | every job's `x` and `ones` against the golden |
 | `test_markov_rtl_host_never_polls` | every host read is a response or an `x` read -- no queue count |
-| `test_markov_rtl_cycles` | exactly **1870** cycles |
+| `test_markov_rtl_cycles` | exactly **1951** cycles |
 | `test_markov_pysim_tracks_rtl` | pysim's cycle count (`run.pysim_cycles`) within 5% of the RTL's |
 | `test_markov_host_traces_match_pysim` | the host's three traces **byte-identical** between pysim and RTL |
 

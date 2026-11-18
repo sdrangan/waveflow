@@ -21,11 +21,11 @@ compiled testbench are reused (``plans/incremental_xsi.md``; the scenario's size
 
 The grid replaces the constants ``calibrate_platform.py`` carries::
 
-    RTL_SPAN = {128: 183.0, 512: 615.0}
+    RTL_SPAN = {128: 187.0, 512: 619.0}
 
 Those are real measurements, typed in by hand because the automated path filed nothing -- the trace
 manifest named a task by its function while the timing model keyed itself by its configuration, so
-the two corpora never joined (fixed in ``_task_trace``).  A sweep that reproduces 183 and 615 is what
+the two corpora never joined (fixed in ``_task_trace``).  A sweep that reproduces 187 and 619 is what
 lets them go.
 """
 from __future__ import annotations

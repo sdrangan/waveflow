@@ -1,7 +1,7 @@
 """tests/examples/test_mem_copy_calibration.py — the calibration loop closes.
 
-The end-to-end proof, toolchain-free: given the writer's MEASURED RTL firing spans (183 cycles at
-n_words=128, 615 at n_words=512 — see plans/memcpy_timing_calibration.md), calibrate the writer on
+The end-to-end proof, toolchain-free: given the writer's MEASURED RTL firing spans (187 cycles at
+n_words=128, 619 at n_words=512 — see plans/memcpy_timing_calibration.md), calibrate the writer on
 UNCONTENDED firings and check that a re-run of pysim reproduces the RTL *period* at both sizes.
 
 Two things make this a real test and not a tautology:
@@ -31,7 +31,7 @@ from waveflow.hw.clock import Clock
 
 COMPONENT = "mem_w_stream_framed_done_task"
 #: The writer's measured RTL firing span (cycles), per n_words — the ap_done-anchored period.
-RTL_SPAN = {128: 183.0, 512: 615.0}
+RTL_SPAN = {128: 187.0, 512: 619.0}
 
 
 def _rtl_events(n_words, span):
@@ -76,9 +76,9 @@ def test_calibrated_pysim_reproduces_the_rtl_period(tmp_path):
 
 def test_without_calibration_the_period_is_short(tmp_path):
     """The gap the calibration closes: uncalibrated pysim runs optimistic (the writer's firing
-    cadence is well under the RTL 183), so the fix is real, not a no-op."""
+    cadence is well under the RTL 187), so the fix is real, not a no-op."""
     dut = MemCopySim(jobs=xsi_jobs(128, 16), calib_dir=str(tmp_path / "c")).run()  # unfitted seed=0
-    assert _pysim_period(dut) < RTL_SPAN[128] - 20   # ~147 measured, comfortably short of 183
+    assert _pysim_period(dut) < RTL_SPAN[128] - 20   # ~147 measured, comfortably short of 187
 
 
 def _writer_span(dut):

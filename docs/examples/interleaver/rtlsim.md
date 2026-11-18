@@ -56,8 +56,8 @@ It asserts three things on the RTL's recordings:
 1. **all twelve jobs completed**: fewer is that deadlock coming back;
 2. **every `Y` region is bit-exact** against `golden`, with one echoed descriptor per job
    (`check_xsi_outputs`);
-3. **the last completion lands at cycle 1300**: 98 cycles a job at n = 64 after a 222-cycle first
-   job. Exact, like every XSI gate, so a move gets a human look.
+3. **the last completion lands at cycle 1326** (Vitis/Vivado 2025.1): 98 cycles a job at n = 64
+   after a 248-cycle first job. Exact, like every XSI gate, so a move gets a human look.
 
 The completions and the final arena are also compared with pysim, word for word.
 

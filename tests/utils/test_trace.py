@@ -263,7 +263,7 @@ def gate_trace(tmp_path_factory) -> Path:
     vcd = xsi / "mem_copy_trace.vcd"
     vcd.unlink(missing_ok=True)
     XsiSnapshot(xsi, "mem_copy", "mem_copy_bfm_tb", trace=True).run(point / "vectors")
-    check_mem_copy_xsi_outputs(point, 2908)
+    check_mem_copy_xsi_outputs(point, 3000)
     assert vcd.is_file(), "the traced run wrote no VCD"
     return vcd
 
@@ -306,10 +306,12 @@ def test_binds_against_the_real_trace(gate_trace):
 def test_firing_window_is_ap_done_anchored_not_last_output(gate_trace):
     """The writer's firing does NOT end at its last stream output.
 
-    `m_axi` stores are posted: they retire when the adapter accepts the word, so MemWStream keeps
-    working for ~25 cycles after `s_done`.  Anchoring on the output beat measures 155 where the
-    firing is 183 -- a 15% under-count that made the bottleneck look like the faster stage.  This
-    pins the corrected anchor against the real trace.
+    Anchor a firing on its ``ap_done``, never on its last output beat.  Before the writer's
+    ``hls::fence`` (plans/mem_stream_followups.md, item 1) its ``s_done`` left ~25 cycles before the
+    write response, and the last-output anchor measured 155 where the firing was 183 -- a 15%
+    under-count that made the bottleneck look like the faster stage.  The echo now waits for the
+    response, but the firing still outlasts it by a few cycles; this pins the anchor against the
+    real trace (187 cycles a firing, Vitis/Vivado 2025.1).
     """
 
     from examples.mem_copy.mem_copy import MemCopy
@@ -325,7 +327,7 @@ def test_firing_window_is_ap_done_anchored_not_last_output(gate_trace):
 
     # 100% utilised at n_words=128: every firing is the full period, with no idle between.
     spans = [f.span for f in firings]
-    assert set(spans) == {183}, f"expected a uniform 183-cycle firing, got {sorted(set(spans))}"
+    assert set(spans) == {187}, f"expected a uniform 187-cycle firing, got {sorted(set(spans))}"
 
     # ...and the firings tile the timeline with no gap -- which is what "bottleneck" means.
     for a, b in zip(firings, firings[1:]):
@@ -334,4 +336,4 @@ def test_firing_window_is_ap_done_anchored_not_last_output(gate_trace):
     # The reader is the one that gets blocked: its first firing is clean, the rest are not.
     r = bt.component_firings("mem_r_stream_framed_task")
     assert r[0].span == 153, "job 0 is the only backpressure-free reader firing"
-    assert {f.span for f in r[1:]} == {183}, "later firings absorb 30 cycles of backpressure"
+    assert {f.span for f in r[1:]} == {187}, "later firings absorb 34 cycles of backpressure"

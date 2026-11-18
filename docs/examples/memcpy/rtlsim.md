@@ -80,10 +80,10 @@ recordings. It asserts the three things that make the run correct:
 
 1. **the copy**: every destination region equals `golden`;
 2. **completion**: one `CopyResp` per job, each echoing back the `tx_id` the command set;
-3. **timing**: the last completion landed at cycle exactly **2908**.
+3. **timing**: the last completion landed at cycle exactly **3000** (Vitis/Vivado 2025.1).
 
 The third catches silent regressions. It is time-to-last-completion, not the loop bound: the run
-steps a fixed 3400 cycles, but the work finishes at 2908, the last entry of `s_done/cycles.bin`. It
+steps a fixed 3400 cycles, but the work finishes at 3000, the last entry of `s_done/cycles.bin`. It
 is a direct fingerprint of the free-running schedule. If a change moves it, that is a real behaviour
 change worth a human look, which an inequality would have absorbed.
 
@@ -94,7 +94,7 @@ pytest -m xsi tests/examples/test_mem_copy_system_xsi.py
 ```
 
 It runs the same DAG through `compare`, then asserts the comparison came back clean and the golden
-holds at 2908.
+holds at 3000.
 
 ## Which rung to trust for what
 
@@ -102,14 +102,14 @@ The pysim rung and the RTL rung agree **word for word** on what the testbench re
 `compare` checks. They agree on the **architectural** story: the design is pipelined, not
 sequential; the period is dominated by one direction (`max(read, write)`), not the sum; the job count
 and ordering match. They do **not** agree on the cycle count. pysim's 16 jobs end at about 2361
-cycles; the RTL's at 2908. A transaction-level model does not reproduce every source of per-cycle
+cycles; the RTL's at 3000. A transaction-level model does not reproduce every source of per-cycle
 contention in the generated RTL.
 
 So use each for what it is good at:
 
 - **pysim**: correctness, overlap and structure, deadlock, job accounting. Fast enough to run on
   every edit.
-- **RTL**: the number you would quote. The gate asserts **2908** exactly.
+- **RTL**: the number you would quote. The gate asserts **3000** exactly.
 
 *Why* the two agree once calibrated, and how to *see* it, is the next page. [Visualizing
 timing](./timing.md) traces the internal channels and both `m_axi` bundles out of an RTL run,

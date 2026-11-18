@@ -63,7 +63,8 @@ ROOT_OF = {
 #:
 #: What the numbers say: mem_copy is the IN-BAND forwarding chain (plans/memcopy_inband_integration.md)
 #: -- Sequencer frames [MemRCmd | MemWCmd | CopyResp], each stage strips its descriptor and relays the
-#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient).  The reads hide behind
+#: rest opaquely.  2908 = 163 + 15*183 (steady 183 cyc/job, no fill transient) until 2026-11-17; since the
+#: writer's hls::fence (its completion waits for the write response) 3000 = 195 + 15*187.  The reads hide behind
 #: the writes (per-job cost ~= max(read, write) + the in-band descriptor beats that ride ahead of each
 #: 128-word data burst), the ~1.9x free-running overlap the generated testbench preserves.  The s_done
 #: response is one CopyResp word per job.
@@ -74,7 +75,7 @@ GATES = [
     # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
     # an exact-cycle gate here.
     #
-    # mem_copy (2908) and rf_pass_through (1066) moved to the system flow (plans/system_model.md
+    # mem_copy (3000) and rf_pass_through (1066) moved to the system flow (plans/system_model.md
     # S3f): tests/examples/test_mem_copy_system_xsi.py and test_rf_dut_system_xsi.py.
     #
 ]

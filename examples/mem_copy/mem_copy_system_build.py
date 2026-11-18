@@ -6,7 +6,7 @@ kernel's two streams and two ``m_axi`` bundles are top ports) -> ``scenario`` / 
 ``system_xsi`` -> ``compare``.  The testbench -- the command driver, the completion sink and the
 memory behind both bundles -- is answered by its participants' own models, and what the sink and
 the memory record is compared RTL against pysim.  The golden check (the destination equals the
-source, one completion per job, the last completion at 2908 cycles) runs on the RTL's recordings
+source, one completion per job, the last completion at 3000 cycles) runs on the RTL's recordings
 afterwards: :func:`check_xsi`.
 
     python -m examples.mem_copy.mem_copy_system_build --synth check     # the whole flow
@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 TOP = "mem_copy_system"
 WORK_DIR = "xsi_work"
 #: The single-kernel flow's gate, which this flow must reproduce.
-EXPECTED_CYCLES = 2908
+EXPECTED_CYCLES = 3000
 
 
 def system() -> HwSystem:

@@ -4,7 +4,7 @@ behind both ``m_axi`` bundles -- answered by the participants' own models.
 
 Two gates, as for any system now: what the testbench recorded (the sink's completions, the memory's
 arena) is identical RTL against pysim, and the golden -- every destination equals its source, one
-completion per job, the last at **2908** cycles, the single-kernel flow's own gate
+completion per job, the last at **3000** cycles, the single-kernel flow's own gate
 (``test_xsi_bfm.py``) -- holds on the RTL's recordings.
 
 The DAG runs with ``synth="check"``: a stale or missing csynth top fails the run, naming it -- it is
