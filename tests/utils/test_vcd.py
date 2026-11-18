@@ -1336,3 +1336,29 @@ class TestFloatThroughParser:
         assert si.numeric_type == "float"
         assert list(si.numeric_values) == [0.0, 0.5, -1.25]
         assert si.disp_values == ["0.000", "0.500", "-1.250"]
+
+
+def test_handshake_cycles_counts_the_cycle_the_flops_took(tmp_path):
+    """VALID rises between edges 0 and 1 and falls between 2 and 3; READY is high throughout except a
+    stall over edge 2 on the second pair.  Edges are read just before they rise, and leaf names
+    resolve at the shallowest scope."""
+    from waveflow.utils.vcd import handshake_cycles
+
+    vcd = tmp_path / "t.vcd"
+    lines = ["$timescale 1ps $end", "$scope module top $end",
+             "$var wire 1 ! ap_clk $end", '$var wire 1 " a_VALID $end', "$var wire 1 # a_READY $end",
+             "$var wire 1 $ b_VALID $end", "$var wire 1 % b_READY $end",
+             "$scope module inner $end", "$var wire 1 & a_VALID $end", "$upscope $end",
+             "$upscope $end", "$enddefinitions $end",
+             "#0", "0!", '0"', "1#", "0$", "1%", "0&"]
+    for e in range(6):                              # rising edges at 5, 15, ..., 55 ns
+        lines += [f"#{e * 10000 + 5000}", "1!", f"#{e * 10000 + 10000}", "0!"]
+    # The data changes, on falling edges.  Appended after the clock: each signal's own changes stay
+    # in time order, which is all vcdvcd needs.
+    lines += ["#10000", '1"', "1$", "#20000", "0%", "#30000", '0"', "0$", "1%"]
+    vcd.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    hs = handshake_cycles(vcd, {"a": ("a_VALID", "a_READY"), "b": ("b_VALID", "b_READY")})
+    assert hs["a"].tolist() == [1, 2]
+    assert hs["b"].tolist() == [1]
+    with pytest.raises(ValueError, match="no signal named"):
+        handshake_cycles(vcd, {"x": ("x_VALID", "x_READY")})

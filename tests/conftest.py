@@ -249,7 +249,9 @@ os.environ.setdefault("WAVEFLOW_EVENTS", "off")
 #: 256 + 2 -> 258 on 2026-11-16: ``origin/main`` merged into ``paper/ltbf_cg_dse_agentic`` -- this
 #: branch's 256 and main's two SIMD-core gates; ``WAVEFLOW_NO_QUARANTINE=1 pytest -m xsi --collect-only -q``
 #: counts 258.
-WANT_XSI_GATES = 258
+#: 258 -> 259 on 2026-11-17 (plans/mem_stream_followups.md, item 1): every mem_copy completion follows
+#: its job's write response, checked on a traced run (tests/build/test_xsi_snapshot_xsi.py).
+WANT_XSI_GATES = 259
 
 #: How many ``gem5``-marked tests a full ``-m gem5`` run collects -- the processor model's ground-truth
 #: gates (``plans/cpu_model.md``).  The same two rules as the XSI gates: none may skip, and a full run

@@ -682,16 +682,17 @@ class MemWStream(FreeRunMod):
                 num_trans=math.ceil(nw / MEM_AXI_MAX_BURST))
         self.transfer_spans.append(self.now - t_start)
         self.fire_log.append((t_start / self.clk.period, self.now / self.clk.period))
-        if self.emit_done:
-            for burst in fwd:
-                yield from self.m_done.write(burst)
-        # Trailing calibration delay: the posted-write drain the RTL keeps running after m_done, so
-        # the firing is not really done -- and the next cannot start -- until it completes.  A no-op
-        # (0, but still records the firing) when uncalibrated; see FreeRunMod.timed_delay.
-        # `n_fwd` (the forwarded/echoed bursts) is a feature too: buffering and echoing them costs
-        # cycles that scale with the count.  A model whose basis omits n_fwd ignores the key; one that
-        # includes it (a fixture that swept it) charges the per-message cost.
+        # Calibrated delay: the write-response drain.  The RTL echo waits for the memory to
+        # acknowledge the write (the body's hls::fence), so the drain comes BEFORE m_done -- the
+        # response never announces data the memory has not taken.  A no-op (0, but still records the
+        # firing) when uncalibrated; see FreeRunMod.timed_delay.  `n_fwd` (the forwarded/echoed
+        # bursts) is a feature too: buffering and echoing them costs cycles that scale with the
+        # count.  A model whose basis omits n_fwd ignores the key; one that includes it (a fixture
+        # that swept it) charges the per-message cost.
         dly = self.timed_delay(
             {"nwords": nw, "num_trans": math.ceil(nw / MEM_AXI_MAX_BURST), "n_fwd": n_fwd})
         if dly:
             yield self.timeout(dly)
+        if self.emit_done:
+            for burst in fwd:
+                yield from self.m_done.write(burst)
