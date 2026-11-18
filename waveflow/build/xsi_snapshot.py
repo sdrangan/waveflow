@@ -48,7 +48,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from waveflow.build.trace_steps import run_xsi, xsi_runner_cmd, xsi_runner_name
+from waveflow.build.trace_steps import (_elab_only_failed_cleanup, run_xsi, xsi_runner_cmd,
+                                        xsi_runner_name)
 from waveflow.toolchain.toolchain import _tool_env
 
 
@@ -62,18 +63,6 @@ _INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.M)
 #: The ``.f`` options whose next token is an include DIRECTORY.
 _INCDIR_OPTS = ("--include", "-i")
 
-
-def _elab_only_failed_cleanup(out: str) -> bool:
-    """xelab built the library and then failed only to delete its scratch ``obj/`` directory.
-
-    Seen on Windows, twice in one ``-m xsi`` session (``bo_top``, ``mm_fir_top``): ``Built XSI
-    simulation shared library ...`` followed by ``Could not remove the obj directory: ... being used
-    by another process`` and exit status 1 -- a freshly written ``xsim_N.c`` still held open
-    (an indexer or scanner).  The library is complete; a real elaboration error prints ``ERROR:``.
-    The runner ignored xelab's status before this module read it, so this was always happening.
-    """
-    return ("Built XSI simulation shared library" in out and "Could not remove the obj directory" in out
-            and not re.search(r"^ERROR:", out, re.M))
 
 
 def _sha(path: Path) -> str:

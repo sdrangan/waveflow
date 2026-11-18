@@ -106,6 +106,23 @@ class TestAddVcdTop:
         assert "$dumpvars(1, mem_copy);" in text
         assert '$dumpfile("mem_copy_trace.vcd");' in text
 
+    def test_sibling_scopes_each_get_a_level_1_dump(self):
+        from waveflow.build.trace_steps import render_vcd_dumper
+        text = render_vcd_dumper("top", ["top.u_a", "top.u_ab"])
+        assert "$dumpvars(1, top.u_a);" in text and "$dumpvars(1, top.u_ab);" in text
+        assert "$dumpvars(1, top);" not in text
+
+    @pytest.mark.parametrize("scopes", [["hist", "hist.u_kernel"], ["hist.u_kernel.u_x", "hist"]])
+    def test_nested_scopes_are_refused(self, scopes):
+        """xsim (2025.1) dumps only the outer of two nested scopes and says nothing: the inner one's
+        absence surfaced only in load_trace (the hwdesign histogram demo).  Refuse it here, naming
+        the level that reaches the inner scope from the outer one."""
+        from waveflow.build.trace_steps import render_vcd_dumper
+        inner = max(scopes, key=len)
+        with pytest.raises(ValueError, match=rf"{inner!r}.*nested in 'hist'.*level "
+                                             rf"{1 + inner.count('.')}"):
+            render_vcd_dumper("hist", scopes)
+
     def test_produces_declares_the_same_path_it_writes(self, dumper_step, tmp_path):
         declared = dumper_step.produces["vcd_dumper"]
         written = dumper_step.run(BuildConfig(root_dir=str(tmp_path)))["vcd_dumper"]
