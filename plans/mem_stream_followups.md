@@ -11,7 +11,7 @@ adaptors, measured on Vitis/Vivado 2025.1 with Waveflow's XSI bus models. The hi
 | # | report | status |
 |---|---|---|
 | 1 | the write completion leaves before the bus acknowledges the write | fixed on `fix/mem-w-done-after-bresp` (below) |
-| 2 | the fixed 8-word `xfer_msg` makes every two-stream command long | **open**: [Command length](#2-command-length-open) |
+| 2 | the fixed 8-word `xfer_msg` makes every two-stream command long | fixed: the cookie is removed ([Command length](#2-command-length-fixed)) |
 | 3 | `MemStreamStep` copies unrelated headers | fixed: `MemStreamStep(headers=[...])` |
 | 4 | `run_dag_cli --timing` marks a good XSI build FAILED | fixed: `trace_steps.xsi_output_ok` |
 | 5 | the XSI memory models are optimistic | **open**: [Memory-model knobs](#5-memory-model-knobs-open) |
@@ -51,7 +51,20 @@ writer residual on `zynq7020_bfm_100mhz` was re-fit (intercept +4).
 - `docs/guide/resource/systems.md` quotes report outputs dated 2026-10-13 (pre-fence markov totals);
   re-run them with the next resource-model change.
 
-## 2. Command length (open)
+## 2. Command length (fixed)
+
+**Resolution (2026-11-19, branch `refactor/drop-xfer-msg`).** The cookie is gone: `MRCmd` / `MWCmd`
+are `{addr, len}` and `MemComplete` is `{len}`, plain `DataList`s, and `max_xfer_len` is no longer a
+parameter of either mem-stream. A design that needs to correlate a completion frames its own
+descriptor with the in-band protocol (`fwd_bursts`), which every curated example already uses;
+`docs/guide/interface/axi_mm/master.md` now leads with it. At `MEM_DW=64` a command is one word instead
+of six: the XSI gates moved `mem_r_stream` 158 -> 151 and `mem_w_stream` 176 -> 169 (Vitis/Vivado
+2025.1). Dropping the parameter moved the mem-stream module keys; the 12 stored directories
+(zynq7020_bfm_100mhz shipped and fir_block copies, mimo_cg) were re-addressed one-to-one, and the key
+snapshot regenerated. The inter-job gap below is still open. The hwdesign histogram must delete its
+`xfer_len` / `xfer_msg` fields.
+
+What follows is the analysis as it stood before the fix.
 
 **Problem.** `MRCmd`, `MWCmd` and `MemComplete` are `ParamSchema`s with `max_xfer_len = Param(8)`. At
 `MEM_DW=32` they serialize to 11, 11 and 10 words, and all 8 cookie words move whatever `xfer_len`

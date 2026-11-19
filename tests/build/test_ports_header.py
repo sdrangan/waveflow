@@ -211,7 +211,7 @@ def test_a_leaf_walks_exactly_like_a_composite():
     sim = Simulation()
     for cls, top in ((MemRStream, "mem_r_stream"), (MemWStream, "mem_w_stream")):
         leaf = cls(name=top, sim=sim, mem_dwidth=64)
-        leaf.cmd_headers = (leaf._cmd_cls.resolved_include_filename(),)
+        leaf.cmd_headers = (leaf.Cmd.resolved_include_filename(),)
         spec = composite_top_spec(leaf, width=64)
 
         assert spec.top_name == top

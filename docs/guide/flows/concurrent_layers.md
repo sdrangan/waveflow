@@ -124,7 +124,7 @@ and it is worth being precise about which is which.
 
 `MemRStream` genuinely is generated at two cuts: as its own top
 ([`examples/interleaver/gen/mem_r_stream.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/interleaver/gen/mem_r_stream.cpp),
-XSI gate **158**) and as a task inside `mem_copy`
+XSI gate **151**) and as a task inside `mem_copy`
 ([`examples/mem_copy/gen/mem_copy.cpp`](https://github.com/sdrangan/waveflow/tree/main/examples/mem_copy/gen/mem_copy.cpp),
 gate **3000**). But those two are **two protocols**, not one module at two cuts: the standalone one
 reads an `MRCmd` and bursts; the composite one reads a `MemRCmd` and relays `fwd_bursts` opaque

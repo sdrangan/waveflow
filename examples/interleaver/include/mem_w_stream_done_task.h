@@ -3,8 +3,7 @@
 // mem_w_stream_done_task.h — the FIXED s2a body WITH a completion echo, the composition variant of
 // mem_w_stream_task.h (plans/mem_stream_impl.md Phase 2).  Identical pure-write burst, plus one
 // MemComplete struct emitted on s_done once the memory has ACKNOWLEDGED the burst (its last write
-// response) — words written, plus the command's xfer_msg cookie echoed back unmodified — so a
-// downstream/host that reads the data on the completion reads what was written.  Single-firing (the
+// response) — the words written — so a downstream/host that reads the data on the completion reads what was written.  Single-firing (the
 // hls::task runtime re-fires per command); the sole m_axi WRITE owner still touches ONLY streams
 // besides m_mem.  Copied verbatim by MemStreamStep and instantiated at a concrete width by the
 // generated composite top.  Verify via XSI.
@@ -19,7 +18,7 @@
 #include "mem_complete.h"
 
 // stream->AXI with done: pure-write len words (addr element coordinate — no byte<->word
-// conversion, m_mem is a word pointer), then echo a MemComplete (words written + xfer_msg). Word rate.
+// conversion, m_mem is a word pointer), then send a MemComplete (words written). Word rate.
 template <int MEM_DW>
 static void mem_w_stream_done_task(hls::stream<ap_uint<MEM_DW> >& s_cmd,
                                    hls::stream<ap_uint<MEM_DW> >& s_in,
@@ -36,11 +35,6 @@ S2A: for (int w = 0; w < nw; ++w) {
     hls::fence({m_mem}, {s_done});      // the completion goes out only after the write is acknowledged
     MemComplete comp;
     comp.len = nw;
-    comp.xfer_len = c.xfer_len;
-COPY_MSG: for (int i = 0; i < 8; ++i) {
-#pragma HLS UNROLL
-        comp.xfer_msg.data[i] = c.xfer_msg.data[i];
-    }
     comp.write_stream<MEM_DW>(s_done);
 }
 

@@ -10,16 +10,11 @@
 #endif
 #include "streamutils_hls.h"
 
-#include "u_int32_array.h"
-
 struct MRCmd {
     ap_uint<32> addr;  // element/word offset within the bound buffer
     ap_uint<32> len;  // number of packed words to read
-    ap_uint<32> xfer_len;  // active length of xfer_msg (<= max_xfer_len)
-    // opaque per-job correlation cookie, round-tripped on completion
-    UInt32Array xfer_msg;
 
-    static constexpr int bitwidth = 352;
+    static constexpr int bitwidth = 64;
 
     template<int word_bw>
     struct word_bw_tag {};
@@ -31,11 +26,11 @@ struct MRCmd {
     }
 
     static constexpr int nwords_value(word_bw_tag<32>) {
-            return 11;
+            return 2;
     }
 
     static constexpr int nwords_value(word_bw_tag<64>) {
-            return 6;
+            return 1;
     }
 
     template<int word_bw>
@@ -47,8 +42,6 @@ struct MRCmd {
         ap_uint<bitwidth> res = 0;
         res.range(31, 0) = data.addr;
         res.range(63, 32) = data.len;
-        res.range(95, 64) = data.xfer_len;
-        res.range(351, 96) = UInt32Array::pack_to_uint(data.xfer_msg);
         return res;
     }
 
@@ -56,8 +49,6 @@ struct MRCmd {
         MRCmd data;
         data.addr = (ap_uint<32>)(packed.range(31, 0));
         data.len = (ap_uint<32>)(packed.range(63, 32));
-        data.xfer_len = (ap_uint<32>)(packed.range(95, 64));
-        data.xfer_msg = UInt32Array::unpack_from_uint(packed.range(351, 96));
         return data;
     }
 
@@ -71,37 +62,12 @@ struct MRCmd {
     static void write_array_impl(word_bw_tag<32>, const MRCmd* self, ap_uint<32> x[]) {
         x[0] = self->addr;
         x[1] = self->len;
-        x[2] = self->xfer_len;
-        {
-            const int n0_eff = 8;
-            int out_idx = 3;
-            for (int i0 = 0; i0 < n0_eff; ++i0) {
-                x[out_idx++] = self->xfer_msg.data[i0];
-            }
-        }
     }
 
     static void write_array_impl(word_bw_tag<64>, const MRCmd* self, ap_uint<64> x[]) {
         x[0] = 0;
         x[0].range(31, 0) = self->addr;
         x[0].range(63, 32) = self->len;
-        x[1] = 0;
-        x[1].range(31, 0) = self->xfer_len;
-        {
-            const int n0_eff = 8;
-            int out_idx = 2;
-            for (int i = 0; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                ap_uint<64> w = 0;
-                if (i + 0 < n0_eff) {
-                    w.range(31, 0) = self->xfer_msg.data[i + 0];
-                }
-                if (i + 1 < n0_eff) {
-                    w.range(63, 32) = self->xfer_msg.data[i + 1];
-                }
-                x[out_idx++] = w;
-            }
-        }
     }
 
     template<int word_bw>
@@ -124,18 +90,6 @@ struct MRCmd {
         w = self->len;
         s.write(w);
         w = 0;
-        w = self->xfer_len;
-        s.write(w);
-        w = 0;
-        {
-            const int n0_eff = 8;
-            int out_idx = 0;
-            for (int i0 = 0; i0 < n0_eff; ++i0) {
-                w = self->xfer_msg.data[i0];
-                s.write(w);
-                out_idx++;
-            }
-        }
     }
 
     static void write_stream_impl(word_bw_tag<64>, const MRCmd* self, hls::stream<ap_uint<64>> &s) {
@@ -144,25 +98,6 @@ struct MRCmd {
         w.range(63, 32) = self->len;
         s.write(w);
         w = 0;
-        w.range(31, 0) = self->xfer_len;
-        {
-            s.write(w);
-            w = 0;
-            const int n0_eff = 8;
-            int out_idx = 0;
-            for (int i = 0; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                w = 0;
-                if (i + 0 < n0_eff) {
-                    w.range(31, 0) = self->xfer_msg.data[i + 0];
-                }
-                if (i + 1 < n0_eff) {
-                    w.range(63, 32) = self->xfer_msg.data[i + 1];
-                }
-                s.write(w);
-                out_idx++;
-            }
-        }
     }
 
     template<int word_bw>
@@ -184,47 +119,16 @@ struct MRCmd {
         streamutils::write_axi4_word<32>(s, w, false);
         w = 0;
         w = self->len;
-        streamutils::write_axi4_word<32>(s, w, false);
+        streamutils::write_axi4_word<32>(s, w, tlast);
         w = 0;
-        w = self->xfer_len;
-        streamutils::write_axi4_word<32>(s, w, false);
-        w = 0;
-        {
-            const int n0_eff = 8;
-            int out_idx = 0;
-            for (int i0 = 0; i0 < n0_eff; ++i0) {
-                w = self->xfer_msg.data[i0];
-                streamutils::write_axi4_word<32>(s, w, tlast && (out_idx == (n0_eff) - 1));
-                out_idx++;
-            }
-        }
     }
 
     static void write_axi4_stream_impl(word_bw_tag<64>, const MRCmd* self, hls::stream<streamutils::axi4s_word<64>> &s, bool tlast) {
             ap_uint<64> w = 0;
         w.range(31, 0) = self->addr;
         w.range(63, 32) = self->len;
-        streamutils::write_axi4_word<64>(s, w, false);
+        streamutils::write_axi4_word<64>(s, w, tlast);
         w = 0;
-        w.range(31, 0) = self->xfer_len;
-        {
-            streamutils::write_axi4_word<64>(s, w, false);
-            w = 0;
-            const int n0_eff = 8;
-            int out_idx = 0;
-            for (int i = 0; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                w = 0;
-                if (i + 0 < n0_eff) {
-                    w.range(31, 0) = self->xfer_msg.data[i + 0];
-                }
-                if (i + 1 < n0_eff) {
-                    w.range(63, 32) = self->xfer_msg.data[i + 1];
-                }
-                streamutils::write_axi4_word<64>(s, w, tlast && (i + 2 >= n0_eff));
-                out_idx++;
-            }
-        }
     }
 
     template<int word_bw>
@@ -242,35 +146,11 @@ struct MRCmd {
     static void read_array_impl(word_bw_tag<32>, MRCmd* self, const ap_uint<32> x[]) {
         self->addr = (ap_uint<32>)(x[0]);
         self->len = (ap_uint<32>)(x[1]);
-        self->xfer_len = (ap_uint<32>)(x[2]);
-        {
-            const int n0_eff = 8;
-            int in_idx = 3;
-            for (int i0 = 0; i0 < n0_eff; ++i0) {
-                self->xfer_msg.data[i0] = (ap_uint<32>)(x[in_idx]);
-                in_idx++;
-            }
-        }
     }
 
     static void read_array_impl(word_bw_tag<64>, MRCmd* self, const ap_uint<64> x[]) {
         self->addr = (ap_uint<32>)(x[0].range(31, 0));
         self->len = (ap_uint<32>)(x[0].range(63, 32));
-        self->xfer_len = (ap_uint<32>)(x[1].range(31, 0));
-        {
-            const int n0_eff = 8;
-            int in_idx = 2;
-            for (int i = 0; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                ap_uint<64> w = x[in_idx++];
-                if (i + 0 < n0_eff) {
-                    self->xfer_msg.data[i + 0] = (ap_uint<32>)(w.range(31, 0));
-                }
-                if (i + 1 < n0_eff) {
-                    self->xfer_msg.data[i + 1] = (ap_uint<32>)(w.range(63, 32));
-                }
-            }
-        }
     }
 
     template<int word_bw>
@@ -291,17 +171,6 @@ struct MRCmd {
         self->addr = (ap_uint<32>)(w);
         w = s.read();
         self->len = (ap_uint<32>)(w);
-        w = s.read();
-        self->xfer_len = (ap_uint<32>)(w);
-        {
-            const int n0_eff = 8;
-            int in_idx = 3;
-            for (int i0 = 0; i0 < n0_eff; ++i0) {
-                w = s.read();
-                self->xfer_msg.data[i0] = (ap_uint<32>)(w);
-                in_idx++;
-            }
-        }
     }
 
     static void read_stream_impl(word_bw_tag<64>, MRCmd* self, hls::stream<ap_uint<64>> &s) {
@@ -309,23 +178,6 @@ struct MRCmd {
         w = s.read();
         self->addr = (ap_uint<32>)(w.range(31, 0));
         self->len = (ap_uint<32>)(w.range(63, 32));
-        w = s.read();
-        self->xfer_len = (ap_uint<32>)(w.range(31, 0));
-        {
-            const int n0_eff = 8;
-            int in_idx = 2;
-            for (int i = 0; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                w = s.read();
-                in_idx++;
-                if (i + 0 < n0_eff) {
-                    self->xfer_msg.data[i + 0] = (ap_uint<32>)(w.range(31, 0));
-                }
-                if (i + 1 < n0_eff) {
-                    self->xfer_msg.data[i + 1] = (ap_uint<32>)(w.range(63, 32));
-                }
-            }
-        }
     }
 
     template<int word_bw>
@@ -370,47 +222,6 @@ struct MRCmd {
         }
         self->len = (ap_uint<32>)(w);
         if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        if (last) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        {
-            auto axis_word = s.read();
-            w = axis_word.data;
-            last = axis_word.last;
-        }
-        self->xfer_len = (ap_uint<32>)(w);
-        if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        {
-            const int n0_eff = 8;
-            int in_idx = 3;
-            int elem_idx = 0;
-            bool stop = false;
-            for (int i0 = 0; i0 < n0_eff && !stop; ++i0) {
-                {
-                    auto axis_word = s.read();
-                    w = axis_word.data;
-                    last = axis_word.last;
-                }
-                self->xfer_msg.data[i0] = (ap_uint<32>)(w);
-                in_idx++;
-                elem_idx++;
-                if (last && elem_idx < (n0_eff)) {
-                    stop = true;
-                }
-            }
-            if (stop) {
-                tl = streamutils::tlast_status::tlast_early;
-                return;
-            }
-        }
-        if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }
         if (last) {
@@ -437,54 +248,6 @@ struct MRCmd {
             return;
         }
         self->len = (ap_uint<32>)(w.range(63, 32));
-        if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        if (last) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        {
-            auto axis_word = s.read();
-            w = axis_word.data;
-            last = axis_word.last;
-        }
-        self->xfer_len = (ap_uint<32>)(w.range(31, 0));
-        if (tl != streamutils::tlast_status::no_tlast) {
-            tl = streamutils::tlast_status::tlast_early;
-            return;
-        }
-        {
-            const int n0_eff = 8;
-            int in_idx = 2;
-            int i = 0;
-            for (; i < n0_eff; i += 2) {
-                #pragma HLS PIPELINE II=1
-                if (last) {
-                    break;
-                }
-                {
-                    auto axis_word = s.read();
-                    w = axis_word.data;
-                    last = axis_word.last;
-                }
-                in_idx++;
-                if (i + 0 < n0_eff) {
-                    self->xfer_msg.data[i + 0] = (ap_uint<32>)(w.range(31, 0));
-                }
-                if (i + 1 < n0_eff) {
-                    self->xfer_msg.data[i + 1] = (ap_uint<32>)(w.range(63, 32));
-                }
-                if (last) {
-                    break;
-                }
-            }
-            if ((i + 2) < n0_eff) {
-                tl = streamutils::tlast_status::tlast_early;
-                return;
-            }
-        }
         if (tl != streamutils::tlast_status::no_tlast) {
             return;
         }

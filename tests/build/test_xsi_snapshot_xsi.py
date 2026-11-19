@@ -1,7 +1,7 @@
 """XsiSnapshot against real RTL: what a no-change rebuild skips, and what a run costs
 (plans/incremental_xsi.md Stages 1-3).
 
-On ``mem_r_stream`` (``examples/interleaver``), the smallest of the gated kernels: 158 cycles, the
+On ``mem_r_stream`` (``examples/interleaver``), the smallest of the gated kernels: 151 cycles, the
 same count ``tests/examples/test_xsi_bfm.py`` holds the full runner to.  These gates check the
 incremental path does not change that, and that it is incremental:
 
@@ -30,7 +30,7 @@ from waveflow.build.xsi_snapshot import XsiSnapshot
 
 ROOT = Path(__file__).resolve().parents[2] / "examples" / "interleaver"
 XSI = ROOT / "xsi"
-TOP, TB, CYCLES = "mem_r_stream", "mem_r_bfm_tb", 158
+TOP, TB, CYCLES = "mem_r_stream", "mem_r_bfm_tb", 151
 
 pytestmark = pytest.mark.xsi
 
