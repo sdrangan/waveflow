@@ -106,11 +106,16 @@ So for a small model the first problem is getting the skill loaded at all, not w
 
 **The test also found Waveflow defects.** The Opus MCP-only agent reported that the generated C++
 `get_nwords<W>(n)` counts densely packed elements, which is short when an element's width does not
-divide the word's (five 12-bit samples need 3 words at 32 bits, not 2). That is fixed on its own
-branch. Two smaller gaps are open:
+divide the word's (five 12-bit samples need 3 words at 32 bits, not 2). Two smaller gaps came up
+too:
 
-- `from_real` returns an array of a cached format class, which `write_uint32_file` then refuses;
-- Python cannot compare a signed fixed-point value with an unsigned one.
+- `from_real` returned an array of a cached format class, which `write_uint32_file` then refused;
+- Python had no way to compare fixed-point values, so a signed sample against an unsigned threshold
+  had to be improvised (floats, or shifted stored integers).
+
+All three are fixed. The fixed-point page now has
+[exact comparisons](../../guide/schema/python/fixpoint.md#comparison), and the skill points to them.
+The runs above used the skill as it was before that line was added.
 
 **The smoke run** that checked the harness before these, on trigger prompt 1 with Opus, loaded the
 skill at its first tool call and wrote a correct `DataList`.
