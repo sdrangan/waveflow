@@ -135,6 +135,7 @@ review, run with `--no-approve`, read the agent's work, and continue by hand.
 | `--silent` | do not print the agent's activity while it runs |
 | `--resume` | continue an unfinished run; see [Interrupted runs](#interrupted-runs) |
 | `--no-waveflow` | the baseline arm: see [Comparing against a run without Waveflow](#comparing-against-a-run-without-waveflow) |
+| `--skills <folder>` | install a skill (a folder holding `SKILL.md`), or every skill in a folder, into the trial folder's `.claude/skills/`, and allow the `Skill` tool; repeatable. See [Testing a skill](#testing-a-skill) |
 | `--force` | start a new run in a non-empty folder, replacing the earlier report. The old partial work stays in the folder, so the run is not blind; prefer deleting the folder |
 
 ### Usage
@@ -228,6 +229,32 @@ Both arms then go through the same **independent grader**, which neither wrote: 
 generates hidden transactions, drives each arm's kernel with its own C++ testbench in
 Vitis C simulation, and checks every sample bit for bit.  See
 [`examples/mcp_test/grader/README.md`](https://github.com/sdrangan/waveflow/tree/main/examples/mcp_test/grader/README.md).
+
+## Testing a skill
+
+An [agent skill](./skills.md) is tested the same way, with two runs that differ only in the skill:
+
+```
+waveflow blind-test --prompt <spec> --folder <trial_a> --message "<message>"
+waveflow blind-test --prompt <spec> --folder <trial_b> --message "<message>" --skills waveflow/skills/waveflow-schema
+```
+
+`--skills` copies the skill into the trial folder's `.claude/skills/`, where Claude Code finds a
+project's skills, and adds the `Skill` tool to the allowlist. Reading only the trial folder's settings
+does **not** remove every other skill: Claude Code still offers its built-in skills and those of the
+plugins on your account (measured with Claude Code in November 2026: 19 others, from 3 plugins and the
+built-ins). They are the same in both runs, so the two runs still differ only in the skill under test.
+`summary.md` then has a **Skills** section:
+
+- what the harness installed;
+- what Claude Code offered at start-up but the harness did not install. Compare this line across the
+  two runs: a skill that appears in only one of them means the runs differ in more than the skill;
+- which skill the agent loaded, and at which tool call: before or after its first write;
+- which of the skill's files it read.
+
+The message should not name the skill: whether the agent finds it on its own is part of the test. The
+specs, review sheets and trigger prompts are in `evaluation/skill_tests/`, and the method and results
+are in [Evaluation: Agent skills](../../evaluation/agent_skills/index.md).
 
 ## Example
 

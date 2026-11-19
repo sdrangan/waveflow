@@ -234,6 +234,74 @@ def test_the_no_waveflow_arm_differs_only_in_waveflow(tmp_path, monkeypatch):
     assert "with Waveflow" in seen["first"] and "stream_inband" not in seen["first"]
 
 
+def _skill(d: Path, name: str) -> Path:
+    (d / name / "reference").mkdir(parents=True)
+    (d / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: x\n---\n", encoding="utf-8")
+    (d / name / "reference" / "more.md").write_text("more", encoding="utf-8")
+    return d / name
+
+
+def test_the_skill_arm_installs_the_skills_and_allows_the_skill_tool(tmp_path, monkeypatch):
+    spec = tmp_path / "src" / "spec.md"
+    spec.parent.mkdir()
+    spec.write_text("x", encoding="utf-8")
+    lib = tmp_path / "lib"
+    _skill(lib, "alpha")
+    _skill(lib, "beta")
+    seen = {}
+    monkeypatch.setattr(bt, "_drive", lambda folder, logdir, config, **kw: seen.update(config=config))
+
+    # A folder of skills, and one skill folder named directly, both work.
+    bt.run_blind_test(spec, tmp_path / "with", silent=True, skills=[lib])
+    assert seen["config"]["skills"] == ["alpha", "beta"] and "Skill" in seen["config"]["allowed"]
+    assert (tmp_path / "with" / ".claude" / "skills" / "beta" / "reference" / "more.md").is_file()
+    bt.run_blind_test(spec, tmp_path / "one", silent=True, skills=[lib / "alpha"])
+    assert seen["config"]["skills"] == ["alpha"]
+
+    # The other arm: nothing installed, the Skill tool not allowed.
+    bt.run_blind_test(spec, tmp_path / "without", silent=True)
+    assert seen["config"]["skills"] == [] and "Skill" not in seen["config"]["allowed"]
+    assert not (tmp_path / "without" / ".claude").exists()
+
+    out = bt.run_blind_test(spec, tmp_path / "bad", silent=True, skills=[tmp_path / "src"])
+    assert "not a skill folder" in out["error"]
+
+
+def test_the_summary_says_which_skill_loaded_and_when(tmp_path):
+    folder = tmp_path / "trial"
+    sk = folder / ".claude" / "skills" / "alpha"
+    sk.mkdir(parents=True)
+
+    def tool(name, /, **inp):
+        return {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": name, "input": inp}]}}
+
+    t = tmp_path / "t.jsonl"
+    _jsonl(t,
+           {"type": "system", "subtype": "init", "model": "m", "tools": ["Skill"],
+            "skills": ["alpha", "operator-thing"], "session_id": "s"},
+           tool("Read", file_path=str(folder / "spec.md")),
+           tool("Skill", skill="alpha"),
+           tool("Read", file_path=str(sk / "reference" / "more.md")),
+           tool("Write", file_path=str(folder / "msgs.py"), content="x"),
+           {"type": "result", "subtype": "success", "session_id": "s"})
+    phase = {"phase": 1, "message": "go", "transcript": str(t), "exit_code": 0, "timed_out": False,
+             "wall_s": 1.0, "session_id": "s", "result": bt._result_record(t)}
+    s = bt.summarize([phase], folder=folder, repo=None, copied=["spec.md"], allowed=["Skill"],
+                     skills=["alpha"])
+    assert "- installed by the harness: `alpha`" in s
+    assert "- loaded `alpha` at tool call #2 of 4, before the first write" in s
+    assert "- skill files read: `alpha/reference/more.md`" in s
+    assert "not installed by the harness: `operator-thing`" in s
+    assert "**installed skill**" in s.split("## What it read")[1]
+
+    # The arm without skills reports none loaded, and an installed skill Claude Code did not
+    # offer is flagged.
+    s = bt.summarize([phase], folder=folder, repo=None, copied=["spec.md"], allowed=["Skill"],
+                     skills=["gamma"])
+    assert "**`gamma` was not offered at start-up**" in s
+
+
 def test_the_no_waveflow_arm_keeps_the_operators_path(monkeypatch):
     monkeypatch.setattr(bt, "_vitis_bin", lambda: None)   # Vitis's own PATH entry: next test
     monkeypatch.setattr(bt, "_vivado_bin", lambda: None)
