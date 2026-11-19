@@ -1653,6 +1653,35 @@ def _gen_tb_helpers(elem_type: type[DataSchema], indent_level: int = 0) -> str:
     return "\n".join(lines)
 
 
+def _gen_get_nwords(bits: int, widths: list[int]) -> list[str]:
+    """``get_nwords<W>(len)``: the words *len* elements take, the count Python's :func:`get_nwords`
+    gives -- by the word layout rule, ``pf = W // bits`` whole elements to a word, and an element
+    wider than a word ``ceil(bits / W)`` words of its own.
+
+    The dense count ``ceil(len * bits / W)`` is that same number when, at every supported width,
+    the element width divides the word width or the word width divides it -- and that dense line is
+    what every header emitted before the rule was fixed carries.  Those headers are emitted
+    unchanged: their RTL's source stamp (:mod:`waveflow.build.rtl_digest`) hashes ``include/``, and
+    changing text whose meaning did not change would mark every synthesized design stale.  Only an
+    element the dense count gets wrong (12 bits in a 32-bit word: 5 elements take 3 words, not 2)
+    gets the general form.
+    """
+    exact_dense = all(w % bits == 0 or bits % w == 0 for w in widths)
+    if exact_dense:
+        body = ["    return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);"]
+    else:
+        body = [
+            "    // The layout rule: pf = W / value_bitwidth whole elements to a word (an element never",
+            "    // straddles two), or ceil(value_bitwidth / W) words to an element wider than a word.",
+            "    // Not ceil(len * value_bitwidth / W): that is the count of a dense packing.",
+            "    return (len <= 0) ? 0",
+            "         : (word_bw >= value_bitwidth)",
+            "               ? (len + word_bw / value_bitwidth - 1) / (word_bw / value_bitwidth)",
+            "               : len * ((value_bitwidth + word_bw - 1) / word_bw);",
+        ]
+    return ["template<int word_bw>", "static constexpr int get_nwords(int len) {", *body, "}"]
+
+
 def _gen_array_utils_content(
     elem_type: type[DataSchema],
     widths: list[int],
@@ -1698,10 +1727,7 @@ def _gen_array_utils_content(
         "template<int>",
         "struct unsupported_word_bw { static constexpr bool value = false; };",
         "",
-        "template<int word_bw>",
-        "static constexpr int get_nwords(int len) {",
-        "    return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);",
-        "}",
+        *_gen_get_nwords(elem_type.get_bitwidth(), widths),
         "",
         _gen_stream_elem_helpers(elem_type=elem_type, word_bw_supported=widths),
     ])
