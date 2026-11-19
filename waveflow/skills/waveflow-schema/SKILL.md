@@ -112,6 +112,10 @@ schema (`schema/python/tagged_union.md`). Not a hand-written `if (word & 0xF) ==
 **Samples after a header** -- the header is a schema; the samples are an array of an element schema,
 moved with the generated lane routines (`vectorization/hls/arrayutils.md`). Not `.range(32*k+31, 32*k)`.
 
+**Comparing fixed-point values in Python** -- `x > thresh` on `FixedField` arrays (or a `FixedField`
+value, `Thresh(cmd.thresh)`) compares exactly, as `ap_fixed` does, for any two formats, signed or not;
+`fixpoint.eq` / `ne` for equality (`schema/python/fixpoint.md`). Not floats, not shifted stored integers.
+
 ## Before you finish, check your own code
 
 - [ ] Every message on every port is a schema class; every code is an `EnumField`.
