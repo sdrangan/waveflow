@@ -58,6 +58,17 @@ everyone working on it, and every assistant, gets the same skills.
 Each agent also needs the [MCP server](./mcp_setup.md): a skill tells the assistant which page to read,
 and the server is how it reads the page.
 
+**On claude.ai/code**, a session works from a clone of your repository, so it is offered exactly the
+skills committed there: run `waveflow skills install` once on your machine and commit both folders.
+
+## In the Waveflow repository itself
+
+The Waveflow repository commits the same copies (`.claude/skills/`, `.agents/skills/`), so an
+assistant opened on the repository -- locally, or in a claude.ai/code chat -- is offered the skills
+too. `waveflow/skills/` is the source: after editing a skill there, refresh the copies with
+`waveflow skills install --dir . --force` and commit them. A test
+(`tests/mcp/test_skills.py`) fails when a copy differs from its source.
+
 ## Testing a skill
 
 A skill is tested the way the MCP server is: with a [blind test](./blind.md). Two runs on the same

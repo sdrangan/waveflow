@@ -81,6 +81,31 @@ def test_the_schema_tests_reference_answer_runs(tmp_path):
     assert not list(work.glob("*_array_utils*.h"))       # none left in the root
 
 
+def _tree(d: Path) -> dict[str, str]:
+    """Every file under *d*, by relative path, line endings normalized (git may convert them)."""
+    return {p.relative_to(d).as_posix(): p.read_text(encoding="utf-8").replace("\r\n", "\n")
+            for p in sorted(d.rglob("*")) if p.is_file() and "__pycache__" not in p.parts}
+
+
+def test_the_repos_committed_skills_match_the_shipped_ones():
+    """The repo commits a copy of every shipped skill in ``.claude/skills/`` and ``.agents/skills/``,
+    so an agent opened on the repo itself (Claude Code, claude.ai/code, Codex) is offered them.
+    ``waveflow/skills/`` is the source; after editing a skill there, refresh the copies with
+    ``waveflow skills install --dir . --force`` and commit them.  A copy of a skill that no longer
+    ships fails too."""
+    shipped = {s["name"] for s in sk.list_skills()["skills"]}
+    for target in sk.TARGETS.values():
+        copies = REPO / target
+        found = {d.name for d in copies.glob("waveflow-*") if d.is_dir()}
+        assert found == shipped, (
+            f"{target}: {sorted(found)} != shipped {sorted(shipped)}; run "
+            "`waveflow skills install --dir . --force` and commit (delete a retired skill's copy)")
+        for name in shipped:
+            assert _tree(copies / name) == _tree(sk.SKILLS_DIR / name), (
+                f"{target}/{name} differs from waveflow/skills/{name}; run "
+                "`waveflow skills install --dir . --force` and commit")
+
+
 HLS_BODY = REPO / "evaluation" / "skill_tests" / "hls_body"
 
 

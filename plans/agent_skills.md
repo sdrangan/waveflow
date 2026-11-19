@@ -81,7 +81,10 @@ Each is the same recipe (below). Scope is a starting point; adjust after reading
    pages; it never restates them (it would drift).
 2. **Write `waveflow/skills/<name>/SKILL.md`**: front matter (`name` = folder name; a description
    saying what and when, in the user's words), the rules that always apply, a "page before step" table,
-   one short pattern, a self-check. Copy the shape of `waveflow-hls-body`.
+   one short pattern, a self-check. Copy the shape of `waveflow-hls-body`. Then refresh the repo's
+   committed copies, `waveflow skills install --dir . --force`, and commit `.claude/skills/` and
+   `.agents/skills/` with it (`test_the_repos_committed_skills_match_the_shipped_ones` fails
+   otherwise). Never edit the copies; never commit the rest of `.claude/` (local settings).
 3. **Write the test** in `evaluation/skill_tests/<name>/`: a spec (`01_<task>.md`), a review sheet
    (`answers/01_<task>.review.md`, items scored 0/1/2), a reference answer (`answers/ref_01/`), trigger
    prompts. Given files go through `--files`. If correctness can be checked cheaply without Vitis,

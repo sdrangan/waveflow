@@ -76,6 +76,10 @@ For the trigger prompts, run each with the stub spec, which only says the reques
 message: `--prompt evaluation/skill_tests/trigger_stub.md --message "<prompt>" --no-approve
 --timeout 0.1` (six minutes is enough to see whether the skill loads).
 
+The repo itself commits copies of the shipped skills in `.claude/skills/` and `.agents/skills/` (so an
+agent working on Waveflow is offered them). The trial folders are outside the clone, so neither arm
+sees those copies: the MCP-only arm stays without the skill.
+
 ## Rules (from `evaluation/planning_tests/`)
 
 - A spec is outside `docs/` and `examples/`, so the knowledge index never serves it.
