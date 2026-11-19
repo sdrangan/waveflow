@@ -2,13 +2,13 @@
 title: "Agent skills: data schemas"
 parent: Agent skills
 nav_order: 1
-summary: "The first skill, waveflow-schema: defining a message as a DataSchema and moving it in Python and in Vitis HLS without packing anything by hand. What it contains, its test (a pulse detector's messages, chosen so the defaults are wrong and hand packing is tempting), and the results: a smoke run shows the agent loads the skill first and follows it to the right guide page; the A/B task runs are still to do."
+summary: "The first skill, waveflow-schema: defining a message as a DataSchema and moving it in Python and in Vitis HLS without packing anything by hand. What it contains, its test (a pulse detector's messages, chosen so the defaults are wrong and hand packing is tempting), and the first results, one run per arm on Opus, Sonnet and Haiku: on Opus and Sonnet both arms follow the main patterns and the skill adds the last few points at about half the tokens; Haiku never loaded the skill, and without it hand-packed. The test also found a codegen bug."
 ---
 
 # Agent skills: data schemas
 
-> **Status: just started.** The skill is written and its test is ready to run. One smoke run, no task
-> results yet.
+> **Status: first results.** One run per arm on each of three models, scored by one reviewer. Too few
+> runs to estimate an effect; enough to see where to look next.
 
 ## The skill
 
@@ -48,20 +48,85 @@ register map).
 
 ## Results
 
-No task runs yet. One smoke run (2026-11-19, Claude Code with `claude-opus-5-5`) checked that the
-harness works. Given trigger prompt 1 ("define the command header for a kernel: an opcode, a 16-bit
-transaction id, ..."), the agent:
+Six runs on 2026-11-19, one per arm on each of three Claude models, all in Claude Code. The class
+this skill is for lets students choose their own model, so the test spans a large, a middle and a
+small one. Every run used the same spec and the same first message. The per-item scores, what decided
+each one, and the commands are in
+[`evaluation/skill_tests/results/schema01_2026-11-19.md`](https://github.com/sdrangan/waveflow/tree/main/evaluation/skill_tests/results/schema01_2026-11-19.md).
+The scores are by one reviewer, by eye, against the review sheet. A second reviewer has not checked
+them.
 
-- loaded `waveflow-schema` at its first tool call, before writing anything;
-- read the fields page the skill points to;
-- wrote a `DataList` with an `EnumField` opcode and sized fields.
-
-One run of one prompt shows the mechanism works, not that the skill helps. The command is the one in
-`evaluation/skill_tests/schema/trigger_prompts.md`.
-
-| run | arm | model | tokens in / out | review score (of 54) | hand packing | skill loaded at |
+| model | arm | skill loaded | score (of 54) | hand packing | turns | tokens in / out |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| Opus 5.5 | MCP | -- | 51 | no | 62 | 3.36M / 25.7k |
+| Opus 5.5 | MCP + skill | 2nd tool call, before any write | 53 | no | 38 | 1.59M / 17.3k |
+| Sonnet 5.5 | MCP | -- | 52 | no | 46 | 2.02M / 14.1k |
+| Sonnet 5.5 | MCP + skill | 2nd tool call, before any write | 54 | no | 36 | 1.39M / 12.2k |
+| Haiku 4.5 | MCP | -- | 27 | **yes** | 53 | 3.83M / 21.6k |
+| Haiku 4.5 | MCP + skill | **never** | 20 | no (its C++ reads and writes nothing) | 26 | 1.22M / 22.7k |
+
+Wall-clock times are left out: the runs were made on a laptop in use, and four of them ran at once.
+Tokens in are mostly cache reads (over 90% in every run).
+
+**Opus and Sonnet follow the main patterns with or without the skill.** All four runs:
+
+- write every message as a schema, with 8-bit `EnumField` codes and both fixed-point formats;
+- build the tagged union with a tag schema;
+- declare the sample type with the `include_dir` its array header needs;
+- read and write every message with the generated methods, and the samples with the generated lane
+  routine.
+
+None packs anything by hand, and every layout in their notes matches `serialize`.
+
+The skill adds the last few points:
+
+- **Defensive casts.** Both MCP-only runs wrap field reads in `int()` and `np.asarray()`
+  (`Op(int(cmd.op)) == Op.END`), 10 and 13 times. Both skill runs keep values as they come, as the
+  skill's rule 7 says.
+- **State between commands.** The Opus MCP-only kernel keeps a `static` flag across firings, which
+  the spec rules out.
+
+**With the skill, these models also take less work:** 22% (Sonnet) to 39% (Opus) fewer turns, and 31%
+(Sonnet) to 53% (Opus) fewer tokens in. One run per arm cannot separate that from run-to-run variation, but both
+models point the same way.
+
+**Haiku is a different story, and the skill did not get a chance.**
+
+- **With the skill installed, Haiku never loaded it.** It saw the skill's description among the
+  others and went on without it. Its work stopped short:
+  - a header script that imports modules that do not exist and was never run;
+  - a model that never decodes its input;
+  - a C++ body whose reads and writes are comments.
+- **Without the skill, Haiku hand-packed in both languages:**
+  - extracting samples by bit offset, at the wrong number per word;
+  - calling C++ methods that do not exist;
+  - packing its own 64-bit test vectors with shifts and masks.
+
+So for a small model the first problem is getting the skill loaded at all, not what the skill says.
+
+**The test also found Waveflow defects.** The Opus MCP-only agent reported that the generated C++
+`get_nwords<W>(n)` counts densely packed elements, which is short when an element's width does not
+divide the word's (five 12-bit samples need 3 words at 32 bits, not 2). That is fixed on its own
+branch. Two smaller gaps are open:
+
+- `from_real` returns an array of a cached format class, which `write_uint32_file` then refuses;
+- Python cannot compare a signed fixed-point value with an unsigned one.
+
+**The smoke run** that checked the harness before these, on trigger prompt 1 with Opus, loaded the
+skill at its first tool call and wrote a correct `DataList`.
+
+## What next
+
+- **Get the skill loaded on small models.** Options to test, smallest first:
+  - a line in the project's `AGENTS.md` / `CLAUDE.md` (which `waveflow skills install` could write)
+    saying to load the `waveflow-*` skill before writing Waveflow code;
+  - the same sentence in the MCP server's instructions;
+  - a sharper description.
+  Then rerun Haiku.
+- **More runs per arm** on Sonnet and Haiku, the models a student is most likely to pick on a budget,
+  to tell an effect from noise.
+- **The trigger prompts**, on Haiku first: a small model that does not load the skill on the task is
+  unlikely to load it on a one-line request.
 
 ## What is not covered yet
 

@@ -3,13 +3,13 @@ title: Agent skills
 parent: Evaluation
 nav_order: 2
 has_children: true
-summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? The question, and the method every skill is tested by: blind runs with and without the skill that write code, reviewed by eye against a per-pattern sheet. Just started: one skill (data schemas), with its own page; no results yet."
+summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? The question, and the method every skill is tested by: blind runs with and without the skill that write code, reviewed by eye against a per-pattern sheet. Just started: one skill (data schemas), with its own page and first results on three models."
 ---
 
 # Agent skills
 
-> **Status: just started.** One skill is written and its test is ready to run. There are no results
-> yet. This page records the method so the numbers, when they come, can be checked.
+> **Status: just started.** One skill is written and has first results: one run per arm on three
+> models (see [data schemas](schemas.md)). This page records the method so the numbers can be checked.
 
 ## The question
 
@@ -34,7 +34,7 @@ Each skill has its own page: what it contains, its test, and its results.
 
 | skill | covers | status |
 |---|---|---|
-| [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | test ready; one smoke run |
+| [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
 
 Each `SKILL.md` points to the guide and does not repeat it, so it stays correct as the guide changes.
 
