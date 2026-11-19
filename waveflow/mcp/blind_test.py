@@ -246,6 +246,35 @@ def _companions(prompt: Path) -> list[Path]:
     return out
 
 
+def skill_dirs(sources: list[str | Path]) -> list[Path]:
+    """The skill folders named by *sources*: each is a skill (it holds a ``SKILL.md``) or a
+    folder of skills.  Raises ``ValueError`` for one that is neither, or a name given twice."""
+    found: dict[str, Path] = {}
+    for src in sources:
+        src = Path(src).resolve()
+        if (src / "SKILL.md").is_file():
+            dirs = [src]
+        else:
+            dirs = sorted(d for d in src.iterdir() if (d / "SKILL.md").is_file()) if src.is_dir() else []
+            if not dirs:
+                raise ValueError(f"{src} is not a skill folder (no SKILL.md) and holds none")
+        for d in dirs:
+            if d.name in found and found[d.name] != d:
+                raise ValueError(f"two skills named {d.name!r}: {found[d.name]} and {d}")
+            found[d.name] = d
+    return list(found.values())
+
+
+def _install_skills(folder: Path, dirs: list[Path]) -> list[str]:
+    """Copy each skill to ``<folder>/.claude/skills/<name>/``, where Claude Code finds a
+    project's skills.  The run's ``--setting-sources project`` loads these and none of the
+    operator's own."""
+    for d in dirs:
+        shutil.copytree(d, folder / ".claude" / "skills" / d.name,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    return [d.name for d in dirs]
+
+
 def _context_leaks(folder: Path) -> list[str]:
     """Files above *folder* that Claude Code would load as project context."""
     leaks = []
@@ -696,6 +725,7 @@ def run_blind_test(
     silent: bool = False,
     resume: bool = False,
     no_waveflow: bool = False,
+    skills: list[str | Path] | None = None,
 ) -> dict[str, Any]:
     """Run the blind test and write ``<folder>.blindtest/summary.md``.
 
@@ -707,6 +737,10 @@ def run_blind_test(
 
     *no_waveflow* runs the baseline arm: no MCP server, no Waveflow tools on the allowlist,
     the operator's own Python, and a first message that says to use Vitis directly.
+
+    *skills* are skill folders (or folders of them) copied into the trial folder's
+    ``.claude/skills/``, with the ``Skill`` tool allowed: the skill arm of an A/B test whose
+    other arm is the same run without them (``evaluation/skill_tests/``).
     """
     if folder is None:
         if prompt is None:
@@ -725,6 +759,10 @@ def run_blind_test(
     prompt = Path(prompt).resolve()
     if not prompt.is_file():
         return {"error": f"no such prompt file: {prompt}"}
+    try:
+        skill_src = skill_dirs(skills or [])
+    except (ValueError, OSError) as exc:
+        return {"error": str(exc)}
 
     repo = _repo_root()
     if repo is not None and (folder == repo or repo in folder.parents):
@@ -752,6 +790,7 @@ def run_blind_test(
     for f in [prompt, *_companions(prompt)]:
         shutil.copy2(f, folder / f.name)
         copied.append(f.name)
+    installed = _install_skills(folder, skill_src)
 
     mcp_config = logdir / "mcp.json"
     servers = {} if no_waveflow else {
@@ -765,12 +804,14 @@ def run_blind_test(
 
     first = message or (NO_WAVEFLOW_FIRST if no_waveflow else WAVEFLOW_FIRST).format(
         spec=prompt.name)
-    allowed = [*DEFAULT_ALLOWED_TOOLS, *vitis_allowed(), *(extra_allowed or [])]
+    allowed = [*DEFAULT_ALLOWED_TOOLS, *vitis_allowed(), *(["Skill"] if installed else []),
+               *(extra_allowed or [])]
     config = {
         "prompt": str(prompt),
         "first_message": first,
         "folder": str(folder),
         "copied": copied,
+        "skills": installed,
         "allowed": baseline_allowed(allowed) if no_waveflow else allowed,
         "no_waveflow": no_waveflow,
         "waveflow_importable": _waveflow_importable(no_waveflow),
@@ -920,7 +961,8 @@ def _drive(
 
     repo = _repo_root()
     summary = summarize(phases, folder=folder, repo=repo,
-                        copied=config.get("copied", []), allowed=config["allowed"])
+                        copied=config.get("copied", []), allowed=config["allowed"],
+                        skills=config.get("skills") or [])
     (logdir / "summary.md").write_text(summary, encoding="utf-8")
     if interrupted and not silent:
         _echo(f"\nInterrupted. Continue later with:\n"
@@ -958,6 +1000,9 @@ def _classify_read(path: str, folder: Path, repo: Path | None, toc: set[str]) ->
         p = Path(path).resolve()
     except (OSError, ValueError):
         return "other"
+    skills = folder / ".claude" / "skills"
+    if skills in p.parents:
+        return "installed skill"
     if p == folder or folder in p.parents:
         return "own folder"
     if repo is not None and (p == repo or repo in p.parents):
@@ -1053,6 +1098,59 @@ def _choice(
              else "- direct Vitis / Vivado commands: none")
     for c in direct[:5]:
         L.append(f"    - `{_short(c, 120)}`")
+    L.append("")
+    return L
+
+
+def _skill_name(entry: Any) -> str:
+    """A skill's name from the init record, which lists a skill as a name or a dict."""
+    return str(entry.get("name", entry)) if isinstance(entry, dict) else str(entry)
+
+
+def _skills_section(
+    calls: list[tuple[int, str, dict[str, Any]]],
+    init: dict[str, Any] | None,
+    installed: list[str] | tuple[str, ...],
+    folder: Path,
+    repo: Path | None,
+    toc: set[str],
+) -> list[str]:
+    """Which skills the agent was offered, which it loaded and when, and what it read of them.
+
+    The arm without skills must be blind to them too: a skill offered at start-up that the
+    harness did not install (the operator's own, say) is flagged, since it would make the two
+    arms differ in more than the skill under test.
+    """
+    offered = [_skill_name(s) for s in ((init or {}).get("skills") or [])]
+    loads = [(i, str(a.get("skill") or a.get("name") or "?")) for i, (_, n, a) in enumerate(calls)
+             if n == "Skill"]
+    writes = [i for i, (_, n, _) in enumerate(calls) if n in ("Write", "Edit")]
+    first_write = writes[0] if writes else len(calls)
+    read_set: set[str] = set()
+    for _, n, a in calls:
+        path = str(a.get("file_path") or a.get("path") or "")
+        if n in ("Read", "Glob", "Grep") and path and \
+                _classify_read(path, folder, repo, toc) == "installed skill":
+            read_set.add(Path(path).resolve().relative_to(folder / ".claude" / "skills").as_posix())
+    reads = sorted(read_set)
+    L = ["## Skills", ""]
+    L.append("- installed by the harness: " + (", ".join(f"`{s}`" for s in installed)
+                                                 if installed else "none"))
+    for s in installed:
+        if init is not None and s not in offered:
+            L.append(f"    - **`{s}` was not offered at start-up**: Claude Code did not load it")
+    if init is not None:
+        others = [s for s in offered if s not in installed]
+        L.append("- offered at start-up, not installed by the harness: " + (
+            ", ".join(f"`{s}`" for s in others) if others else "none"))
+    if loads:
+        for i, name in loads:
+            when = "before the first write" if i < first_write else "**after the first write**"
+            L.append(f"- loaded `{name}` at tool call #{i + 1} of {len(calls)}, {when}")
+    else:
+        L.append("- loaded: **none**" if installed else "- loaded: none")
+    if reads:
+        L.append("- skill files read: " + ", ".join(f"`{r}`" for r in reads))
     L.append("")
     return L
 
@@ -1208,6 +1306,7 @@ def summarize(
     repo: Path | None,
     copied: list[str],
     allowed: list[str],
+    skills: list[str] | tuple[str, ...] = (),
 ) -> str:
     toc = _toc_example_dirs(repo)
     calls: list[tuple[int, str, dict[str, Any]]] = []
@@ -1252,6 +1351,7 @@ def summarize(
 
     wf_calls = [(ph, n, a) for ph, n, a in calls if n.startswith("mcp__waveflow")]
     L += _choice(calls, folder, repo, toc)
+    L += _skills_section(calls, init, skills, folder, repo, toc)
     L += _time_split(phases, folder)
 
     L += ["## Waveflow tools", ""]

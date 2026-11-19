@@ -86,6 +86,9 @@ include-package-data = true
 # corpus includes a .csv the MANIFEST's *.json recursion would otherwise miss).
 [tool.setuptools.package-data]
 "waveflow.calib" = ["platforms/**", "fixtures/**"]
+# The agent skills (SKILL.md folders, the Agent Skills format): `waveflow skills install` copies
+# them into a project, so a pip-installed user gets the skills that match the installed API.
+"waveflow.skills" = ["**/*.md"]
 # The XSI harness is C++ source + the run.bat / run.sh drivers, copied into a design's xsi/
 # workspace by XsiHarnessStep.  Not Python, so package discovery misses it; without this a
 # pip-installed user hits "XSI harness source file not found" the first time they build a testbench.

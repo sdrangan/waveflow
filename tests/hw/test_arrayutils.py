@@ -135,6 +135,8 @@ def test_gen_array_utils_writes_companion_tb_header(tmp_path: Path):
     assert "static constexpr int pf() {" in content
     assert "return word_bw / 16;" in content
     assert "static constexpr int get_nwords(int len) {" in content
+    # 16 divides 32, so the dense count is exact and the line is the one every header has always
+    # carried (test_arrayutils_get_nwords.py covers the widths where it is not).
     assert "return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);" in content
     # The per-element *_elem_impl<W> structs are kept (lane methods + bulk loops delegate to them).
     assert "struct read_array_elem_impl {" in content

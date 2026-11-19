@@ -106,12 +106,19 @@ For a 32-bit float element:
 from waveflow.hw.dataschema import FloatField
 from waveflow.hw.arrayutils import ArrayUtilsStep
 
-Float32 = FloatField.specialize(32)
+Float32 = FloatField.specialize(32, include_dir="include")   # where its array utils go
 
 dag.add(StreamUtilsStep(output_dir="include"))   # shared dependency (as above)
 dag.add(ArrayUtilsStep(Float32, [32, 64]))        # element type, supported word widths
 dag.run(cfg)
 ```
+
+**The files go to the element type's `include_dir`, not to a directory given to the step.** An element
+declared without one (`FloatField.specialize(32)`) has its array utils written to the project root,
+beside the build script, while the schema headers go to `include/`. A kernel that includes
+`"include/float32_array_utils.h"` then fails to compile. The same holds for every element type:
+`FixedField.specialize(12, 1, include_dir="include")`, `IntField.specialize(bitwidth=16,
+include_dir="include")`.
 
 `ArrayUtilsStep` writes two files:
 

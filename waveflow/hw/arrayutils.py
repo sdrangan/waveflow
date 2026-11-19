@@ -81,6 +81,46 @@ def _normalize_array_shape(shape: int | tuple[int, ...] | list[int]) -> tuple[in
     return norm_shape
 
 
+def _same_bits(a: type[DataSchema], b: type[DataSchema]) -> bool:
+    """Whether element classes *a* and *b* describe the same bits, so either may name the other's array.
+
+    The same class, or two classes of one plain numeric kind that differ only in what a class carries
+    beyond its bits (``include_dir``, say): fixed point of one ``ap_fixed`` format, integers of one
+    width and signedness, floats of one width.  An array built by an operation has the cached class
+    of its format, so it must still be accepted under the class the user declared.  Enums and
+    booleans are not plain integers: they must be the same class.
+    """
+    if a is b:
+        return True
+    from waveflow.hw.dataschema import BooleanField, EnumField, IntField, _elem_kind
+    kind = _elem_kind(a)
+    if kind != _elem_kind(b):
+        return False
+    if kind == "fixed":
+        return a.get_format() == b.get_format()
+    if kind == "float":
+        return a.get_bitwidth() == b.get_bitwidth()
+    if kind == "int":
+        special = (EnumField, BooleanField)
+        if issubclass(a, special) or issubclass(b, special):
+            return False
+        return (issubclass(a, IntField) and issubclass(b, IntField)
+                and a.get_bitwidth() == b.get_bitwidth() and bool(a.signed) == bool(b.signed))
+    return False
+
+
+def _check_elem_type(arr: DataArray, elem_type: type[DataSchema] | None) -> type[DataSchema]:
+    """The element type of *arr*, after checking that a given *elem_type* describes the same bits."""
+    inferred = type(arr).element_type
+    if elem_type is not None and not _same_bits(elem_type, inferred):
+        raise TypeError(
+            f"elem_type mismatch: the DataArray holds {inferred.__name__} "
+            f"({getattr(inferred, 'cpp_type', None) or inferred.get_bitwidth()} bits) but "
+            f"elem_type={elem_type.__name__} "
+            f"({getattr(elem_type, 'cpp_type', None) or elem_type.get_bitwidth()} bits) was supplied.")
+    return inferred
+
+
 def write_array(arr: DataArray | Any, elem_type: type[T] | None = None, *, word_bw: int) -> Words:
     """Pack a Python array of schema elements into hardware words.
 
@@ -103,13 +143,7 @@ def write_array(arr: DataArray | Any, elem_type: type[T] | None = None, *, word_
         Packed hardware words as returned by ``DataSchema.serialize()``.
     """
     if isinstance(arr, DataArray):
-        inferred_elem = type(arr).element_type
-        if elem_type is not None and elem_type is not inferred_elem:
-            raise TypeError(
-                f"elem_type mismatch: DataArray carries {inferred_elem.__name__!r} "
-                f"but elem_type={elem_type.__name__!r} was also supplied."
-            )
-        elem_type = inferred_elem
+        elem_type = _check_elem_type(arr, elem_type)
         np_arr = arr.val
     else:
         if elem_type is None:
@@ -177,13 +211,7 @@ def write_uint32_file(
         raise ValueError("nwrite must be non-negative.")
 
     if isinstance(arr, DataArray):
-        inferred_elem = type(arr).element_type
-        if elem_type is not None and elem_type is not inferred_elem:
-            raise TypeError(
-                f"elem_type mismatch: DataArray carries {inferred_elem.__name__!r} "
-                f"but elem_type={elem_type.__name__!r} was also supplied."
-            )
-        elem_type, arr = inferred_elem, arr.val
+        elem_type, arr = _check_elem_type(arr, elem_type), arr.val
     elif elem_type is None:
         raise TypeError("elem_type must be provided when arr is not a DataArray.")
 
@@ -1653,6 +1681,35 @@ def _gen_tb_helpers(elem_type: type[DataSchema], indent_level: int = 0) -> str:
     return "\n".join(lines)
 
 
+def _gen_get_nwords(bits: int, widths: list[int]) -> list[str]:
+    """``get_nwords<W>(len)``: the words *len* elements take, the count Python's :func:`get_nwords`
+    gives -- by the word layout rule, ``pf = W // bits`` whole elements to a word, and an element
+    wider than a word ``ceil(bits / W)`` words of its own.
+
+    The dense count ``ceil(len * bits / W)`` is that same number when, at every supported width,
+    the element width divides the word width or the word width divides it -- and that dense line is
+    what every header emitted before the rule was fixed carries.  Those headers are emitted
+    unchanged: their RTL's source stamp (:mod:`waveflow.build.rtl_digest`) hashes ``include/``, and
+    changing text whose meaning did not change would mark every synthesized design stale.  Only an
+    element the dense count gets wrong (12 bits in a 32-bit word: 5 elements take 3 words, not 2)
+    gets the general form.
+    """
+    exact_dense = all(w % bits == 0 or bits % w == 0 for w in widths)
+    if exact_dense:
+        body = ["    return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);"]
+    else:
+        body = [
+            "    // The layout rule: pf = W / value_bitwidth whole elements to a word (an element never",
+            "    // straddles two), or ceil(value_bitwidth / W) words to an element wider than a word.",
+            "    // Not ceil(len * value_bitwidth / W): that is the count of a dense packing.",
+            "    return (len <= 0) ? 0",
+            "         : (word_bw >= value_bitwidth)",
+            "               ? (len + word_bw / value_bitwidth - 1) / (word_bw / value_bitwidth)",
+            "               : len * ((value_bitwidth + word_bw - 1) / word_bw);",
+        ]
+    return ["template<int word_bw>", "static constexpr int get_nwords(int len) {", *body, "}"]
+
+
 def _gen_array_utils_content(
     elem_type: type[DataSchema],
     widths: list[int],
@@ -1698,10 +1755,7 @@ def _gen_array_utils_content(
         "template<int>",
         "struct unsupported_word_bw { static constexpr bool value = false; };",
         "",
-        "template<int word_bw>",
-        "static constexpr int get_nwords(int len) {",
-        "    return (len <= 0) ? 0 : ((len * value_bitwidth + word_bw - 1) / word_bw);",
-        "}",
+        *_gen_get_nwords(elem_type.get_bitwidth(), widths),
         "",
         _gen_stream_elem_helpers(elem_type=elem_type, word_bw_supported=widths),
     ])
