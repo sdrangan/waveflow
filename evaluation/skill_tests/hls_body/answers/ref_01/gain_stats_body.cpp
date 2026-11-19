@@ -20,9 +20,11 @@ template <int W>
 void gain_stats(hls::stream<streamutils::axi4s_word<W>>& s_in,
                 hls::stream<streamutils::axi4s_word<W>>& m_out,
                 hls::stream<streamutils::axi4s_word<W>>& m_status) {
-    // The one value kept across commands.  Zero at power-on; reset does not move it, because
-    // every firing starts with a blocking read of s_in.
+    // The one value kept across commands: samples since RESET, so a reset must clear it (a static
+    // alone is zero only at power-on).  Nothing moves it during reset either: every firing starts
+    // with a blocking read of s_in.
     static ap_uint<32> total;
+#pragma HLS reset variable=total
 
     GainCmd cmd;
     cmd.read_axi4_stream<W>(s_in);

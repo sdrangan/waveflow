@@ -36,6 +36,7 @@ The reference is `ref_01/gain_stats_body.cpp`.
 | # | item | the pattern | score |
 |---|---|---|---|
 | C1 | `total` is a `static`, 32 bits, and the only `static` | not a global, not a `static` flag or counter the spec does not keep | |
+| C4 | `total` is cleared by reset: `#pragma HLS reset variable=total` (or `config_rtl -reset state` stated for the build) | the spec counts "since reset"; a `static` alone is zero only at power-on. `check_body.py` cannot see this | |
 | C2 | the firing starts with the blocking read of the command | no write before it (a write first lets the statics move during reset) | |
 | C3 | `total` updated by `n` once per command, wrapping at 32 bits | | |
 
@@ -63,7 +64,7 @@ The reference is `ref_01/gain_stats_body.cpp`.
 | F2 | no API names guessed and then corrected (count them: ___ ) | |
 | F3 | ran `gen_headers.py` (and `gain_model.py`); changed no given file | |
 
-**Total:** ____ / 42.  **Hand packing anywhere (a 0 on B1, B2, B3 or B4):** [ ] yes  [ ] no
+**Total:** ____ / 44.  **Hand packing anywhere (a 0 on B1, B2, B3 or B4):** [ ] yes  [ ] no
 
 Free notes -- what it got wrong and which line of the skill (or which missing line) would have
 prevented it:

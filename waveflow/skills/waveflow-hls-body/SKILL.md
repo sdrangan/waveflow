@@ -36,10 +36,15 @@ something else.
    `msg.write_axi4_stream<W>(m_out, last)` (or `streamutils::read_msg` / `write_msg`); every code is the
    generated `enum class`, not an integer. (The `waveflow-schema` skill has the details.)
 5. **State that outlives a message is a `static`, and only that.** Keep across firings exactly what the
-   spec keeps (a running count, filter history), declared `static` with no initializer (statics are
-   zero at power-on). Nothing else: no `static` flag that remembers an earlier command. **A task whose
-   firing starts with a write, not a blocking read, advances its statics during reset**: begin with
-   the blocking read of the command, or set `config_rtl -reset state`.
+   spec keeps (a running count, filter history, an error flag), declared `static`. Nothing else: no
+   `static` that remembers an earlier command when the spec says nothing is kept.
+   - **Reset.** A `static` alone is zero only when the FPGA is programmed; asserting the kernel's reset
+     does not clear it. If the value must restart on reset ("since reset", "until a reset clears
+     it"), add `#pragma HLS reset variable=<name>` under it. Vitis 2025.1 honours it, although csynth
+     still warns "Register '<name>' is power-on initialization" (it prints that either way).
+   - **Write-first bodies.** A task whose firing starts with a write, not a blocking read, runs during
+     reset and advances its state there: begin with the blocking read of the command, or reset every
+     register with `config_rtl -reset state` in the build.
 6. **Decide once per chunk, outside the loop; do not decide, compute and commit in one iteration.** A
    test that gates the loop (is there room, which buffer, how many) goes before the loop; the loop
    body only computes and moves data. Counting and accumulating inside the loop is fine.
@@ -77,6 +82,7 @@ template <int W>
 void kern(hls::stream<streamutils::axi4s_word<W>>& s_in,
           hls::stream<streamutils::axi4s_word<W>>& m_out) {
     static ap_uint<32> seen;                         // only what the spec keeps across commands
+#pragma HLS reset variable=seen                      // when it must restart on reset
     Cmd cmd;
     cmd.read_axi4_stream<W>(s_in);                   // a blocking read first
     Resp r;  /* ... */  r.write_axi4_stream<W>(m_out, false);
@@ -105,6 +111,7 @@ void kern(hls::stream<streamutils::axi4s_word<W>>& s_in,
 - [ ] `PIPELINE II=1` on that loop; the lane arrays partitioned; the lane compute unrolled.
 - [ ] The lane-loop shape matches the throughput asked for; the tail count is passed.
 - [ ] No `.range(`, shifts or masks on words; every message by its schema's reader and writer.
-- [ ] Every `static` is state the spec keeps across commands; the firing starts with a blocking read.
+- [ ] Every `static` is state the spec keeps across commands, under `#pragma HLS reset` if a reset
+      must clear it; the firing starts with a blocking read.
 - [ ] No blocking read of a reply after a write on another stream.
 - [ ] The arithmetic and TLAST positions match the golden, line for line.
