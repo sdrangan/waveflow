@@ -2,13 +2,13 @@
 title: Agent skills
 parent: Evaluation
 nav_order: 2
-has_children: false
-summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? Just started: the first skill covers data schemas (DataList, fixed-point fields, serialization in Python and HLS), tested by blind runs with and without it that write code and are reviewed by eye against a per-pattern sheet. No results yet; this page says what is measured and how."
+has_children: true
+summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? The question, and the method every skill is tested by: blind runs with and without the skill that write code, reviewed by eye against a per-pattern sheet. Just started: one skill (data schemas), with its own page; no results yet."
 ---
 
 # Agent skills
 
-> **Status: just started.** One skill is written and one test is ready to run. There are no results
+> **Status: just started.** One skill is written and its test is ready to run. There are no results
 > yet. This page records the method so the numbers, when they come, can be checked.
 
 ## The question
@@ -28,21 +28,17 @@ agent's context when the task is about something else.
 
 The question is whether that changes what the agent writes.
 
-## The first skill: data schemas
+## The skills
 
-`waveflow-schema` covers defining a message as a `DataSchema` and moving it in Python and in Vitis
-HLS. It contains:
+Each skill has its own page: what it contains, its test, and its results.
 
-- eight rules: every message is a schema, every field is sized, codes are `EnumField`s, nothing is
-  packed by hand, generated files are never edited, headers come from the build steps, field values are
-  used as they come, and word counts come from the schema;
-- a table naming the guide page to read before each step;
-- two short patterns (a command header, several kinds of message on one stream), and a checklist the
-  agent runs on its own code before finishing.
+| skill | covers | status |
+|---|---|---|
+| [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | test ready; one smoke run |
 
-It points to the guide and does not repeat it, so it stays correct as the guide changes.
+Each `SKILL.md` points to the guide and does not repeat it, so it stays correct as the guide changes.
 
-## How it is tested
+## How a skill is tested
 
 Each test is a [blind test](../../guide/ai_tooling/blind.md): a fresh agent in an empty folder, with a
 spec and nothing else. The two arms differ only in the skill:
@@ -57,42 +53,26 @@ functionally correct, but not whether it follows the patterns, and patterns are 
 Leaving Vitis out also makes a run a fraction as long. Python that needs no Vitis -- generating the
 headers, running the model on a worked example -- is run, so a reviewer starts from code that executes.
 
-Each run is then **reviewed by eye** against a sheet with one line per pattern, scored 0, 1 or 2: is the
-command a `DataList`? Is the opcode an 8-bit `EnumField`? Does the C++ read the header with the
-schema's reader, and the samples with the generated lane routine? A small script lists the lines worth
-reading first (shifts, masks, `.range()`, defensive casts) but does not score them. Its hits are places
-to look, not verdicts.
+Each run is then **reviewed by eye** against the skill's review sheet, one line per pattern, scored 0,
+1 or 2. A small script lists the lines worth reading first (shifts, masks, `.range()`, defensive casts)
+but does not score them. Its hits are places to look, not verdicts.
 
 Two further checks run beside the task:
 
-- **Triggering:** fifteen one-line prompts, ten that should load the skill and five that should not
-  (two of them near misses: Waveflow, but not data types).
-- **Process:** from the blind-test report, whether the agent read the skill or the schema pages before
-  writing its first schema, and how many API names it guessed wrong.
+- **Triggering:** one-line prompts, some that should load the skill and some that should not,
+  including near misses (about Waveflow, but not what the skill covers).
+- **Process:** from the blind-test report, whether the agent loaded the skill, or read the pages it
+  points to, before writing its first file, and how many API names it guessed wrong.
 
-The first task is a pulse detector's messages: a command with an 8-bit opcode and an unsigned
-fixed-point threshold, 12-bit fixed-point samples, and three kinds of report on one stream. It was
-chosen so that the defaults are wrong (an enum's minimum width is 1 bit, not 8) and hand packing is
-tempting (two 12-bit samples per 32-bit word). A reference answer generates its headers and passes its
-own check at 32 and 64 bits.
-
-## Results
-
-No task runs yet. One smoke run (2026-11-19, Claude Code with `claude-opus-5-5`) checked that the
-harness works: given trigger prompt 1 ("define the command header for a kernel: an opcode, a 16-bit
-transaction id, ..."), the agent loaded `waveflow-schema` at its first tool call, before writing
-anything, read the fields page the skill points to, and wrote a `DataList` with an `EnumField` opcode
-and sized fields. One run of one prompt shows the mechanism works, not that the skill helps. (The
-command is the one in `evaluation/skill_tests/schema/trigger_prompts.md`.)
-
-| run | arm | model | tokens in / out | review score (of 54) | hand packing | skill loaded at |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+The specs, review sheets, reference answers and trigger prompts are in `evaluation/skill_tests/`, one
+folder per skill.
 
 ## What is not covered yet
 
-- **One skill, one task.** The guide suggests about twenty skills. Others follow only if this one
-  shows an effect.
+These limits apply to every skill; each skill's page lists its own.
+
+- **One skill so far.** The guide suggests about twenty skills. Others follow only if this one shows
+  an effect.
 - **One agent.** The blind-test harness drives Claude Code. The skill format is shared, but other
   agents are untested.
 - **Other skills are present.** Claude Code offers its built-in skills and those of the operator's
