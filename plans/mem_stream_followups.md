@@ -39,9 +39,15 @@ writer residual on `zynq7020_bfm_100mhz` was re-fit (intercept +4).
 
 **Left over from item 1.**
 
-- **pysim does not charge the write-response wait.** markov's pysim is 1854 against RTL 1951,
-  -5.0%, at the edge of its 5% gate (pysim did not move; the RTL did). The bus model needs a
-  write-response latency that `MemWStream` waits out before its echo -- the pysim half of item 5.
+- **pysim did not charge the fence** -- fixed: markov's pysim was 1854 against RTL 1951 (-5.0%, at
+  its 5% gate). Traced (`markov_trace` workspace), the writer's zero-length response firing echoes 14
+  cycles after its last input word with no write outstanding, and its chunk firings end 17 after
+  theirs: the fence's round trip through the `m_axi` adapter, in every firing, and on each job's path
+  to the host. `MemWStream.fence_cycles = 14` charges it inside every `emit_done` firing (and
+  `SystolicEngineMem`'s tile pysim once a tile); markov's pysim is now 1924 (-1.4%). mem_copy's
+  calibrated residual was re-fit on top of it (intercept 34.67 -> 20.67, slopes unchanged), so its
+  pysim totals do not move. It is not a bus latency: the memory's own write costs 1 cycle
+  (markov's `memory_mod` record), so item 5's `write_resp_latency` stays a separate knob.
 - **The staleness guard cannot see a framework header change.** `rtl_staleness` compares the RTL
   with the design's own `include/` copy, which only a build refreshes; `fir_block`, the systolic
   engine's memory harness and the vector-unit builds under `C:\wfsc` kept pre-fence copies and their

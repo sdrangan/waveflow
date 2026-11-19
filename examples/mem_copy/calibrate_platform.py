@@ -17,7 +17,7 @@ Provenance of the numbers (all from the closed mem_copy calibration loop, gated 
   real DDR controller would widen it.
 * **Writer residual** — the writer's ap_done-anchored RTL firing span is 187 cycles at n=128, 619 at
   n=512 (measured).  Fit against a pysim run that already charges the bus law, so the residual is the
-  writer's own *control* cost (~26 cycles), not the bus term.
+  writer's own *control* cost (~13 cycles), not the bus term nor the fence (``MemWStream.fence_cycles``).
 
 The pysim side is run live here (no toolchain); only the RTL spans are measured constants.
 """
