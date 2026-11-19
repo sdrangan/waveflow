@@ -25,7 +25,7 @@ model**. What differs is how much of it anyone had to write:
 
 | module | model | parameters its cost depends on | authored? |
 |---|---|---|---|
-| `MemRStream`, `MemWStream` | `LookupResourceModel` | `mem_dwidth`, `mem_awidth`, `max_xfer_len`, `inband` | no — the default |
+| `MemRStream`, `MemWStream` | `LookupResourceModel` | `mem_dwidth`, `mem_awidth`, `inband` | no — the default |
 | `FirCmdRx` | `LookupResourceModel` | `mem_dwidth`, `samp_w` | no — the default |
 | `FirCompute` | `VitisResourceModel` | `mem_dwidth`, `ntap`, `samp_w`, `unroll_lane` | **yes** |
 | `FirBlock` | `InterfaceResourceModel` | `mem_dwidth` only, through the port widths | **yes** |

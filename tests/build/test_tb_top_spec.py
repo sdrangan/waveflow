@@ -111,7 +111,7 @@ def test_an_unwired_dut_port_fails_loudly():
 def _tb_graphs():
     """Every testbench declared as a graph — the designs `tb_top_spec` actually walks.
 
-    The two standalone mem-stream tops (gates 158 / 176) are deliberately absent: they hand-assemble
+    The two standalone mem-stream tops (gates 151 / 169) are deliberately absent: they hand-assemble
     their `main`, so there is no graph to derive and nothing here to reproduce.
     """
     from examples.fir_block.fir_block_sim import FirBlockTB

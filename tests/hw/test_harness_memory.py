@@ -15,7 +15,7 @@ from waveflow.utils.burst_io import StreamBurst, read_burst_bundle
 
 
 def _mr_cmd(k: MemRStream, addr: int, n: int) -> StreamBurst:
-    cmd = k.Cmd(addr=addr, len=n, xfer_len=0)
+    cmd = k.Cmd(addr=addr, len=n)
     return StreamBurst(np.asarray(cmd.serialize(word_bw=int(k.mem_dwidth)), dtype=np.uint64))
 
 
@@ -63,7 +63,7 @@ def test_a_write_master_writes_the_arena(tmp_path):
     from waveflow.simulation.simulation import Simulation
 
     proto = MemWStream(name="proto", sim=Simulation())
-    cmd = proto.Cmd(addr=4, len=8, xfer_len=0)
+    cmd = proto.Cmd(addr=4, len=8)
     words = np.arange(1, 9, dtype=np.uint64)
     sysm = harness(MemWStream, workload={
         "s_cmd": [StreamBurst(np.asarray(cmd.serialize(word_bw=64), dtype=np.uint64))],

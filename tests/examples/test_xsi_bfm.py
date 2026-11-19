@@ -68,9 +68,12 @@ ROOT_OF = {
 #: the writes (per-job cost ~= max(read, write) + the in-band descriptor beats that ride ahead of each
 #: 128-word data burst), the ~1.9x free-running overlap the generated testbench preserves.  The s_done
 #: response is one CopyResp word per job.
+#:
+#: mem_r_stream 158 -> 151 and mem_w_stream 176 -> 169 on 2026-11-19 (Vitis/Vivado 2025.1): the
+#: xfer_msg cookie left MRCmd / MWCmd, so a command is one 64-bit word {addr, len} instead of six.
 GATES = [
-    ("mem_r_stream", "mem_r_bfm_tb", 158, "collected=128"),
-    ("mem_w_stream", "mem_w_bfm_tb", 176, "w_count=128"),
+    ("mem_r_stream", "mem_r_bfm_tb", 151, "collected=128"),
+    ("mem_w_stream", "mem_w_bfm_tb", 169, "w_count=128"),
     # interleaver retired from the gate with InterleaverCanon (2026-07); the in-band interleaver's RTL
     # is checked via its own Y=X[P] XSI harness (examples/interleaver/interleaver_inband_sim.py), not
     # an exact-cycle gate here.
