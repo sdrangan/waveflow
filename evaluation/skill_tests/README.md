@@ -30,6 +30,14 @@ skill_tests/
     answers/                      linked by no spec, so never copied to an agent
       01_pulse_report.review.md   the review sheet
       ref_01/                     a reference answer: runs, generates its headers, passes its check
+  hls_body/                       the waveflow-hls-body skill
+    01_gain_stats.md              a task spec: the kernel body only
+    given_01/                     the schemas, header script and golden the agent is given (--files)
+    check_body.py                 compiles a trial's body (plain g++) and compares it with the golden
+    trigger_prompts.md
+    answers/
+      01_gain_stats.review.md
+      ref_01/                     the reference body (II=1 at csynth) and the driver check_body.py uses
   results/                        one file per batch of runs: arm, model, tokens, sheet totals
 ```
 
@@ -57,6 +65,12 @@ skill: whether the agent finds it is part of the test.
 start-up (anything there that the harness did not install is listed, so both arms can be checked for
 the same set), which skill was loaded at which tool call, before or after the first write, and which
 of its files were read.
+
+A test that starts from given code (`hls_body/`: the agent writes a body against schemas and a golden
+it must not change) passes each given file with `--files`, which copies it beside the spec:
+`--files evaluation/skill_tests/hls_body/given_01/gain_msgs.py` (and `gen_headers.py`,
+`gain_model.py`).  Its reviewer also runs `hls_body/check_body.py <trial folder>`: a plain-C++
+compile of the body against the golden, no Vitis -- a correctness item on the sheet, not a pattern score.
 
 For the trigger prompts, run each with the stub spec, which only says the request is in the first
 message: `--prompt evaluation/skill_tests/trigger_stub.md --message "<prompt>" --no-approve

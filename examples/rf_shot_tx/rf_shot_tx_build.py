@@ -15,8 +15,11 @@ The system top instantiates the kernel as its **wrapper** (the kernel and its ``
 
 **The reset trap is closed here and only here.**  The player holds four ``static``\\ s and **writes
 before it reads** — writing without being asked is what *the side that cannot stop* means — so
-``config_rtl -reset state`` is in :data:`SOLUTION_CONFIG`, which is what actually closed it under
-Vitis 2025.1 in ``rf_repeat_play`` when the pragma alone did not.
+``config_rtl -reset state`` is in :data:`SOLUTION_CONFIG`: it resets every state register, pipeline
+registers included.  (``rf_repeat_play`` once concluded the body's ``#pragma HLS reset`` lines were
+ignored, from csynth's "power-on initialization" warning; Vitis 2025.1 prints that whether or not a
+pragma took, and the pragmas do reset the statics they name.  Whether they alone would close the trap
+was never measured.)
 """
 from __future__ import annotations
 

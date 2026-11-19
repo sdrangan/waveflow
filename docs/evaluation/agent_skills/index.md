@@ -3,13 +3,14 @@ title: Agent skills
 parent: Evaluation
 nav_order: 2
 has_children: true
-summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? The question, and the method every skill is tested by: blind runs with and without the skill that write code, reviewed by eye against a per-pattern sheet. Just started: one skill (data schemas), with its own page and first results on three models."
+summary: "Do agent skills -- short SKILL.md instruction folders an AI coding agent loads when a task matches -- help an agent that has never seen Waveflow follow its patterns? The question, and the method every skill is tested by: blind runs with and without the skill that write code, reviewed by eye against a per-pattern sheet. Just started: two skills (data schemas, HLS kernel bodies), each with its own page and first results."
 ---
 
 # Agent skills
 
-> **Status: just started.** One skill is written and has first results: one run per arm on three
-> models (see [data schemas](schemas.md)). This page records the method so the numbers can be checked.
+> **Status: just started.** Two skills are written and have first results, one run per arm (see
+> [data schemas](schemas.md) and [HLS kernel bodies](hls_body.md)). This page records the method so the
+> numbers can be checked.
 
 ## The question
 
@@ -35,6 +36,7 @@ Each skill has its own page: what it contains, its test, and its results.
 | skill | covers | status |
 |---|---|---|
 | [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
+| [`waveflow-hls-body`](hls_body.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
 
 Each `SKILL.md` points to the guide and does not repeat it, so it stays correct as the guide changes.
 
@@ -71,8 +73,9 @@ folder per skill.
 
 These limits apply to every skill; each skill's page lists its own.
 
-- **One skill so far.** The guide suggests about twenty skills. Others follow only if this one shows
-  an effect.
+- **Two skills so far.** The guide suggests about twenty. On the large models tested, both show their
+  clearest effect on the tokens and on details; the next tests are built where the guide gives an agent
+  less to copy.
 - **One agent.** The blind-test harness drives Claude Code. The skill format is shared, but other
   agents are untested.
 - **Other skills are present.** Claude Code offers its built-in skills and those of the operator's

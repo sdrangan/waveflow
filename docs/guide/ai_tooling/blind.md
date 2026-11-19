@@ -136,6 +136,7 @@ review, run with `--no-approve`, read the agent's work, and continue by hand.
 | `--resume` | continue an unfinished run; see [Interrupted runs](#interrupted-runs) |
 | `--no-waveflow` | the baseline arm: see [Comparing against a run without Waveflow](#comparing-against-a-run-without-waveflow) |
 | `--skills <folder>` | install a skill (a folder holding `SKILL.md`), or every skill in a folder, into the trial folder's `.claude/skills/`, and allow the `Skill` tool; repeatable. See [Testing a skill](#testing-a-skill) |
+| `--files <file>` | give the agent a file (schemas or a golden model it must use), copied into the trial folder beside the spec; repeatable. Only `.md` files the spec links to are copied otherwise |
 | `--force` | start a new run in a non-empty folder, replacing the earlier report. The old partial work stays in the folder, so the run is not blind; prefer deleting the folder |
 
 ### Usage

@@ -56,8 +56,11 @@
 // with the numbers above.  What DID look like slack exhaustion was the `k = 1` bug below.
 //
 // THE RESET TRAP APPLIES.  This body WRITES (a command) before it has read anything blocking on the
-// FIRST path.  `#pragma HLS reset` in the body does not close it under Vitis 2025.1 -- measured;
-// what does is `config_rtl -reset state` at the solution level, which the generated tcl carries.
+// FIRST path.  What closes it is `config_rtl -reset state` at the solution level, which the
+// generated tcl carries and which resets every state register.  The `#pragma HLS reset` lines put
+// the named statics on reset too (Vitis 2025.1; csynth's "power-on initialization" warning is
+// printed either way, so it is no evidence they were ignored); whether they alone would close the
+// trap here was never measured.
 #include "hls_stream.h"
 #include <ap_int.h>
 #include "rf_tx_cmd.h"

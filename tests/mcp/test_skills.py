@@ -81,6 +81,37 @@ def test_the_schema_tests_reference_answer_runs(tmp_path):
     assert not list(work.glob("*_array_utils*.h"))       # none left in the root
 
 
+HLS_BODY = REPO / "evaluation" / "skill_tests" / "hls_body"
+
+
+def test_the_hls_body_tests_reference_matches_the_golden(tmp_path):
+    """The kernel-body test's given files generate their headers and pass their own check; the
+    reference body, compiled as plain C++ by the reviewer's ``check_body.py`` (Vivado's MinGW + the
+    Vitis headers), writes exactly the golden model's words, TLAST included, at both widths."""
+    import importlib.util
+
+    import pytest
+
+    work = tmp_path / "given"
+    work.mkdir()
+    for f in (HLS_BODY / "given_01").glob("*.py"):
+        shutil.copy2(f, work / f.name)
+    for script in ("gen_headers.py", "gain_model.py"):
+        r = subprocess.run([sys.executable, script], cwd=work, capture_output=True, text=True,
+                           timeout=300)
+        assert r.returncode == 0, f"{script}:\n{r.stdout}\n{r.stderr}"
+
+    spec = importlib.util.spec_from_file_location("check_body", HLS_BODY / "check_body.py")
+    cb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cb)
+    res = cb.check(HLS_BODY / "answers" / "ref_01", work=tmp_path / "check")
+    if res.get("skipped"):
+        pytest.skip(res["error"])
+    assert res["compiled"], res["error"]
+    for w in (32, 64):
+        assert all(res["widths"][w].values()), (w, res["widths"][w])
+
+
 def test_the_lint_flags_hand_packing_and_spares_generated_headers(tmp_path):
     lint = REPO / "evaluation" / "skill_tests" / "lint_schema_use.py"
     (tmp_path / "include").mkdir()

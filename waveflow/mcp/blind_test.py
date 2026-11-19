@@ -726,6 +726,7 @@ def run_blind_test(
     resume: bool = False,
     no_waveflow: bool = False,
     skills: list[str | Path] | None = None,
+    files: list[str | Path] | None = None,
 ) -> dict[str, Any]:
     """Run the blind test and write ``<folder>.blindtest/summary.md``.
 
@@ -741,6 +742,9 @@ def run_blind_test(
     *skills* are skill folders (or folders of them) copied into the trial folder's
     ``.claude/skills/``, with the ``Skill`` tool allowed: the skill arm of an A/B test whose
     other arm is the same run without them (``evaluation/skill_tests/``).
+
+    *files* are given files (the schemas a kernel-body test starts from, say), copied flat into
+    the trial folder beside the spec.
     """
     if folder is None:
         if prompt is None:
@@ -763,6 +767,10 @@ def run_blind_test(
         skill_src = skill_dirs(skills or [])
     except (ValueError, OSError) as exc:
         return {"error": str(exc)}
+    given = [Path(f).resolve() for f in files or []]
+    missing = [str(f) for f in given if not f.is_file()]
+    if missing:
+        return {"error": f"no such file to give the agent: {missing}"}
 
     repo = _repo_root()
     if repo is not None and (folder == repo or repo in folder.parents):
@@ -787,7 +795,7 @@ def run_blind_test(
     logdir.mkdir(parents=True, exist_ok=True)
 
     copied = []
-    for f in [prompt, *_companions(prompt)]:
+    for f in [prompt, *_companions(prompt), *given]:
         shutil.copy2(f, folder / f.name)
         copied.append(f.name)
     installed = _install_skills(folder, skill_src)
