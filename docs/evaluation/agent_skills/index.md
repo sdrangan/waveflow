@@ -37,6 +37,15 @@ Each skill has its own page: what it contains, its test, and its results.
 |---|---|---|
 | [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
 | [`waveflow-hls-body`](hls_body.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
+| `waveflow-module` | an `HwModule`, its ports and pysim behaviour, the command / response protocol, its unit harness | planned |
+| `waveflow-memory` | AXI-MM, memory streams, BRAM, register maps, credit streams | planned |
+| `waveflow-system` | composing modules with `HwSystem` and the system flow | planned |
+| `waveflow-verify` | pysim, csim / cosim and XSI tests that assert counts, so a deadlock cannot pass | planned |
+
+The skills are grouped by step in the design flow, about six in all rather than one per guide page:
+sub-tasks that happen together share a skill, and fewer descriptions are easier for an agent to tell
+apart. The plan for the remaining four is
+[`plans/agent_skills.md`](https://github.com/sdrangan/waveflow/tree/main/plans/agent_skills.md).
 
 Each `SKILL.md` points to the guide and does not repeat it, so it stays correct as the guide changes.
 
