@@ -27,24 +27,91 @@ It points to the guide and does not repeat it, so it stays correct as the guide 
 ## The test
 
 The method is the one on [Agent skills](index.md): two blind runs that differ only in the skill, code
-written but not run in Vitis, each run reviewed by eye. The files are in `evaluation/skill_tests/schema/`.
+written but not run in Vitis, each run reviewed by eye. This section summarizes the test; the full
+spec, review sheet, reference answer and prompts are in `evaluation/skill_tests/schema/`.
 
-**The task** is a pulse detector's messages: a command with an 8-bit opcode and an unsigned
-fixed-point threshold, 12-bit fixed-point samples, and three kinds of report on one stream. The agent
-writes the schemas, a script that generates the C++ headers, a Python model of the detector, and the
-HLS body. The task was chosen so that the defaults are wrong (an enum's minimum width is 1 bit, not 8)
-and hand packing is tempting (two 12-bit samples per 32-bit word). A reference answer generates its
-headers and passes its own check at 32 and 64 bits.
+### The task: a pulse detector's messages
 
-**The review sheet** has 27 lines, each scored 0, 1 or 2 (54 in all), in five groups: the Python
-schemas, the header generation, the model, the HLS body, and the process. For example: is the command
-a `DataList`? Is the opcode an 8-bit `EnumField`? Does the C++ read the header with the schema's
-reader, and the samples with the generated lane routine? A run that hand-packs anywhere is marked
-separately, whatever its total.
+The agent gets a one-page spec for a free-running kernel on two AXI4-Streams of 32- or 64-bit words.
+For each command it reads a burst of samples and reports every sample above a threshold.
 
-**Triggering:** fifteen one-line prompts, ten that should load the skill and five that should not. Two
-of the five are near misses: they mention Waveflow but are not about data types (a simulation clock, a
-register map).
+| stream | message | fields |
+|---|---|---|
+| `s_in` | command | `op` (uint8: `DETECT`, `END`), `tx_id` (uint16), `nsamp` (uint16), `thresh` (`ap_ufixed<16, 4>`) |
+| `s_in` | samples | `nsamp` values, each `ap_fixed<12, 1>` |
+| `m_out` | `START` | `kind` (uint8), `tx_id` |
+| `m_out` | `PEAK` | `kind`, `index` (uint16), `value` (`ap_fixed<12, 1>`) |
+| `m_out` | `DONE` | `kind`, `tx_id`, `count` (uint16); TLAST on its last word only |
+
+The agent writes five files:
+
+1. `pulse_msgs.py`: every message as Python;
+2. `gen_headers.py`: generates the C++ headers for both word widths, and is run;
+3. `pulse_model.py`: the detector as a function from input words to output words, with a check on a
+   worked example at both widths, and is run;
+4. `pulse_det_body.cpp`: the HLS kernel body, written as for synthesis but not compiled;
+5. `NOTES.md`: each message's word layout at 32 bits, and anything Waveflow could not do.
+
+The task is built to catch the usual mistakes:
+
+- **The defaults are wrong.** An `EnumField`'s default width is the minimum (1 or 2 bits here); the
+  spec says 8.
+- **Hand packing is tempting.** Two 12-bit samples fit in a 32-bit word, five in a 64-bit word, and
+  neither divides evenly.
+- **Two fixed-point formats meet.** A signed sample is compared with an unsigned threshold.
+- **Several kinds of message share one stream**, so the agent needs a tag schema rather than a test
+  on raw bits.
+
+A reference answer generates its headers and passes its own check at 32 and 64 bits.
+
+### How a run is made
+
+Each run is one `waveflow blind-test` in a fresh folder outside the clone, with the same first message
+in both arms:
+
+```bash
+waveflow blind-test --prompt evaluation/skill_tests/schema/01_pulse_report.md \
+    --folder ../waveflow_blind_tests/schema01_skill_sonnet --model sonnet --no-approve \
+    --message "Write the code specified in 01_pulse_report.md, in this folder, with Waveflow: its MCP server is available." \
+    --skills waveflow/skills/waveflow-schema      # the skill arm only
+```
+
+The harness writes a `summary.md` beside the agent's files: every tool call, which guide pages the
+agent read and when, whether the skill was loaded and at which call, edits to generated files, and
+the token counts.
+
+### How a run is scored
+
+The reviewer first runs `lint_schema_use.py` on the folder, which lists lines worth reading (shifts,
+masks, `.range()`, `int.from_bytes`, defensive casts). It does not score anything. The reviewer then
+reads the code against the review sheet: 27 items, each scored **2** (as the guide does it), **1**
+(partly) or **0** (not done, or done by hand), 54 in all.
+
+| group | items | what is checked |
+|---|---|---|
+| A. Python schemas | 6 | the command is a `DataList`; `op` and `kind` are 8-bit `EnumField`s; both `FixedField` formats; the samples as an element array; one schema per output kind plus a tag schema; every width as specified |
+| B. Header generation | 4 | `StreamUtilsStep` and a `DataSchemaStep` per schema; `ArrayUtilsStep` for the samples; the script ran; nothing generated was edited or written by hand |
+| C. Python model | 7 | the command by `deserialize`; the samples by `read_array`; outputs built as schema instances and serialized; word counts from the schema; the threshold compared exactly; the worked example asserted at both widths and passing; no defensive `int()` / `np.asarray()` |
+| D. HLS body | 7 | the command by `read_axi4_stream<W>`; the samples by the generated lane routine; outputs by `write_axi4_stream<W>` with TLAST on `DONE` only; the generated enum, not an integer; the compare in `ap_fixed`; a loop per command and a straight-line loop over the samples; plausibly compiles |
+| E. Process | 3 | read the skill or the schema pages before writing; no API names guessed and then corrected; the layout in `NOTES.md` matches `serialize` |
+
+A run that packs or unpacks by hand anywhere (a 0 on any of C1-C3 or D1-D3) is flagged separately,
+whatever its total.
+
+### Triggering
+
+Fifteen one-line prompts check whether the skill loads when it should and stays out when it should
+not. Each is a short blind run with the skill installed, stopped after its first few tool calls;
+`summary.md` says whether the skill loaded.
+
+- **Ten should load it**, for example "Using Waveflow, define the command header for a kernel: an
+  opcode (READ, WRITE, RESET), a 16-bit transaction id, a 32-bit address and a 12-bit length", or
+  "With Waveflow, how should I pack four signed 10-bit samples into a 64-bit stream word?"
+- **Five should not**, for example "Explain what TLAST means on an AXI4-Stream". Two of the five are
+  near misses: they mention Waveflow but are not about data types (a simulation clock, a register
+  map). A load there means the description is too broad.
+
+The trigger prompts have not been run yet.
 
 ## Results
 
@@ -122,16 +189,13 @@ skill at its first tool call and wrote a correct `DataList`.
 
 ## What next
 
-- **Get the skill loaded on small models.** Options to test, smallest first:
-  - a line in the project's `AGENTS.md` / `CLAUDE.md` (which `waveflow skills install` could write)
-    saying to load the `waveflow-*` skill before writing Waveflow code;
-  - the same sentence in the MCP server's instructions;
-  - a sharper description.
-  Then rerun Haiku.
-- **More runs per arm** on Sonnet and Haiku, the models a student is most likely to pick on a budget,
-  to tell an effect from noise.
-- **The trigger prompts**, on Haiku first: a small model that does not load the skill on the task is
-  unlikely to load it on a one-line request.
+- **Haiku is set aside.** It is well below the models students use, so getting it to load the skill
+  is not pursued; later runs use Sonnet and Opus.
+- **More runs per arm** on Sonnet, the model a student is most likely to pick on a budget, to tell an
+  effect from noise.
+- **The trigger prompts**, on Sonnet.
+- **The next skill**: writing HLS kernel bodies (the lane loop, a straight-line loop per message, no
+  state across firings), the area where the one structural mistake on a strong model came from.
 
 ## What is not covered yet
 
