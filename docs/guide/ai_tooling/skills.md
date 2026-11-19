@@ -29,6 +29,7 @@ other agents read it, each from its own folder.
 | skill | use it for |
 |---|---|
 | `waveflow-schema` | defining a message as a `DataSchema` (`DataList`, `EnumField`, `FixedField`, arrays) and moving it in Python and in Vitis HLS: serializing it, reading and writing it on a stream or memory, and generating its C++ header |
+| `waveflow-hls-body` | writing a Vitis HLS kernel body: one firing per message, the lane loop over packed samples with the generated array utils, `PIPELINE II=1`, state kept across commands, fixed-point datapaths, and the deadlocks and reset traps C simulation does not show |
 
 `waveflow skills list` prints each skill's description, which is what decides when an assistant loads
 it.

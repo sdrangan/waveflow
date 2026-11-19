@@ -238,6 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="a skill folder (holding SKILL.md) or a folder of them, copied into "
                        "the trial folder's .claude/skills/ with the Skill tool allowed; repeatable "
                        "(e.g. waveflow/skills)")
+    blind.add_argument("--files", action="append", default=[],
+                       help="a file the agent is given, copied into the trial folder beside the "
+                       "spec (e.g. schemas it must use); repeatable")
     blind.add_argument("--text", action="store_true")
 
     skills = sub.add_parser("skills", help="the agent skills shipped with Waveflow")
@@ -283,6 +286,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             resume=args.resume,
             no_waveflow=args.no_waveflow,
             skills=args.skills,
+            files=args.files,
         )
     if args.group == "skills":
         from waveflow.mcp.skills import install_skills, list_skills

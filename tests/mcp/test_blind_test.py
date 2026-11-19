@@ -267,6 +267,23 @@ def test_the_skill_arm_installs_the_skills_and_allows_the_skill_tool(tmp_path, m
     assert "not a skill folder" in out["error"]
 
 
+def test_given_files_are_copied_beside_the_spec(tmp_path, monkeypatch):
+    spec = tmp_path / "src" / "spec.md"
+    (tmp_path / "src" / "given").mkdir(parents=True)
+    spec.write_text("x", encoding="utf-8")
+    given = tmp_path / "src" / "given" / "msgs.py"
+    given.write_text("A = 1\n", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(bt, "_drive", lambda folder, logdir, config, **kw: seen.update(config=config))
+
+    bt.run_blind_test(spec, tmp_path / "trial", silent=True, files=[given])
+    assert (tmp_path / "trial" / "msgs.py").read_text(encoding="utf-8") == "A = 1\n"   # flat
+    assert seen["config"]["copied"] == ["spec.md", "msgs.py"]
+
+    out = bt.run_blind_test(spec, tmp_path / "bad", silent=True, files=[tmp_path / "nope.py"])
+    assert "no such file" in out["error"] and not (tmp_path / "bad").exists()
+
+
 def test_the_summary_says_which_skill_loaded_and_when(tmp_path):
     folder = tmp_path / "trial"
     sk = folder / ".claude" / "skills" / "alpha"
