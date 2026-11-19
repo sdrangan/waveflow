@@ -3481,6 +3481,22 @@ class DataArray(DataSchema):
     def __abs__(self) -> "DataArray":
         return _datarray_abs(self)
 
+    # --- ordering, for fixed-point elements: exact, as ap_fixed compares (any two formats, signed
+    # or not) -- see waveflow.hw.fixpoint.lt.  Other kinds return NotImplemented, so Python raises
+    # the TypeError it always has.  No __eq__: == stays identity, so a DataArray stays hashable;
+    # fixpoint.eq / ne compare values.
+    def __lt__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "lt")
+
+    def __le__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "le")
+
+    def __gt__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "gt")
+
+    def __ge__(self, other: Any) -> Any:
+        return _datarray_compare(self, other, "ge")
+
     @classmethod
     def _normalized_shape(cls) -> tuple[int, ...]:
         max_shape = cls.max_shape
@@ -5902,6 +5918,14 @@ def _datarray_abs(a: DataArray) -> DataArray:
     raise TypeError(
         f"abs() is not defined for {a.element_type.__name__} arrays (int, fixed or float only; "
         "a complex magnitude is not type-preserving).")
+
+
+def _datarray_compare(a: DataArray, b: Any, op: str) -> Any:
+    """``a < b`` and the like: exact fixed-point ordering, else ``NotImplemented``."""
+    if _elem_kind(a.element_type) != "fixed":            # complex is its own kind, never "fixed"
+        return NotImplemented
+    from waveflow.hw.fixpoint import _compare          # lazy import avoids a module cycle
+    return _compare(a, b, op)
 
 
 def _datarray_binop(a: DataArray, b: Any, op: str) -> DataArray:
