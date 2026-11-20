@@ -24,9 +24,11 @@ simulation and code generation need neither.
 
 ## Where things are
 
-- **The guide**: `docs/guide/`. The design flow starts at `docs/guide/systems/index.md` (*Flow
-  Overview*); the default protocol is `docs/guide/systems/command_response.md`; HLS kernel bodies
-  follow `docs/guide/vectorization/hls/loop_optimization.md`.
+- **The guide**: `docs/guide/`. What is built comes first, on four concept pages in
+  `docs/guide/systems/`: `index.md` (*Waveflow Architecture*), `kernels.md`, `devices.md` and
+  `command_response.md` (the default protocol); the terms are in `glossary.md`. The design flow is
+  `flow.md` (*Flow Overview*), a page per step. HLS kernel bodies follow
+  `docs/guide/vectorization/hls/loop_optimization.md`.
 - **The reference examples**: the curated ones each have a page `docs/examples/<name>/index.md`
   naming their folder under `examples/`. Others in `examples/` are older work: prefer the curated.
 - **Search** rather than grep when you do not know Waveflow's word for something:

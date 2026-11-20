@@ -8,7 +8,7 @@ summary: "The first kernel that masters memory: a composite of free-running hls:
 ---
 # Memory Copy — a free-running composite kernel
 
-This is the worked example for the [concurrent (free-running) flow](../../guide/systems/index.md),
+This is the worked example for the [concurrent (free-running) flow](../../guide/systems/flow.md),
 the counterpart to the sequential [register-map example](../regmap/). Where `simp_fun` is a single
 host-launched function, `mem_copy` is a **composite of free-running `hls::task`s** that copies a run of
 words from one memory region to another — and it is verified not by Vitis co-simulation (which cannot

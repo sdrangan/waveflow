@@ -231,7 +231,7 @@ and the system is the simulation with that DUT named:
     return sysm
 ```
 
-[`HwSystem(sim, dut)`](../../guide/systems/index.md) is what every system flow takes: the simulation,
+[`HwSystem(sim, dut)`](../../guide/systems/rtl.md#the-system) is what every system flow takes: the simulation,
 and the **DUT**, the one root that is synthesized. Here that is a tree: the two devices and the memory
 are its children, and the crossbar and the routed credit stream are the links between them. Binding
 the credit stream in Step 5 already put each of its bus writers in the device of the kernel it acts

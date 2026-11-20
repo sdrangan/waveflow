@@ -33,11 +33,13 @@ every name below is one call away.
 
 All of these are also `waveflow kb <cmd>` on the command line.
 
-**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` -- the
-*Flow Overview*: what a Waveflow system is (a testbench and a DUT, the DUT a tree of modules, any module
-the DUT of its own harness), the two levels of simulation (anything can join a `Simulation`; only what has
-an RTL twin can join an `HwSystem`), and a page per step of the flow.  The steps below follow those
-pages, in order:
+**The picture, and the order of the work:** `waveflow_get_doc("docs/guide/systems/index.md")` --
+*Waveflow Architecture*: what a Waveflow system is (a testbench and a DUT, the DUT a tree of kernels,
+adaptors and devices, any module the DUT of its own harness), the three levels of simulation (the golden;
+anything can join a `Simulation`; only what has an RTL twin can join an `HwSystem`).  Then
+`docs/guide/systems/kernels.md` (*Kernels*: streams only) and `docs/guide/systems/devices.md` (*Devices
+and the DUT*); the terms are in `docs/guide/systems/glossary.md`.  The *Flow Overview*,
+`docs/guide/systems/flow.md`, is a page per step; the steps below follow those pages, in order:
 
 | step | page |
 |---|---|

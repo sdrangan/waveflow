@@ -75,7 +75,7 @@ What the flows then use:
 
 A flow given an object that is not a `HwSystem` refuses it by naming this contract. A system written
 before this form subclasses `HwSystem` and implements `dut()` and `run()` itself; the flows take both.
-[`harness(module)`](../systems/index.md) builds the same object around one module, with generated
+[`harness(module)`](../systems/pysim.md#the-cut) builds the same object around one module, with generated
 stand-ins as its testbench.
 
 **The DUT is a tree.** `build_mm_device` returns each kernel's **device**, a composite module

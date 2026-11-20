@@ -17,7 +17,7 @@ The navigation lists them in reading order, in four groups.
 
 ## The flow
 
-The core path, in order: each one is the next rung of the [Flow Overview](../guide/systems/index.md).
+The core path, in order: each one is the next rung of the [Flow Overview](../guide/systems/flow.md).
 
 1. [Basic vector arithmetic](basic_vec/index.md) -- schemas and fields, vectorized NumPy goldens,
    bit-exact against Vitis: data before any interface.
