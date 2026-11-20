@@ -1,50 +1,18 @@
 ---
-title: The DUT and two levels of simulation
-parent: Flow Overview
+title: Designing the DUT
+parent: Waveflow Architecture
 nav_order: 1
 audience: python
 api: [FreeRunMod, run_iter, add_comp, add_if, DataList, StreamBroadcast, Simulation, HwSystem]
-summary: "The first step of the flow: what is built, and how it is tested. The DUT -- the design under test -- is the hardware that will be synthesized, and Waveflow tests it at two levels: in a Simulation beside any SimObj (a host, a wireless channel, a traffic source), and in an HwSystem whose testbench is the part of that simulation with an RTL twin, the DUT running as RTL. Then the recipe for designing a DUT -- five questions: what it does (a bit-exact golden from intents), its boundary, its modules (a leaf with one run_iter, or a composite of stages that run concurrently; devices for what a bus reaches), the interfaces between them, and the messages on each -- answered first in brief for the free-running polynomial, then each in turn, with steps up to a three-stage pipeline (block_eq) and a bus system (markov)."
+summary: "The first step of the flow: designing the DUT, the hardware that will be synthesized. Five questions answered before any module is written: what it does (a bit-exact golden from intents), its boundary, its modules (a leaf with one run_iter, or a composite of stages that run concurrently; devices for what a bus reaches), the interfaces between them, and the messages on each -- answered first in brief for the free-running polynomial, then each in turn, with steps up to a three-stage pipeline (block_eq) and a bus system (markov). What the DUT is, and the simulations it runs in, are on Waveflow Architecture."
 ---
 
-# The DUT and two levels of simulation
+# Designing the DUT
 
-The DUT -- the design under test -- is what will be synthesized: the hardware. Synthesized hardware must
-be **tested**, and Waveflow offers two modes. Both put the DUT in a simulation; they differ in what may
-sit around it.
+The DUT -- the design under test -- is what will be synthesized: the hardware. What it is made of, and
+the simulations it runs in, are on [Waveflow Architecture](index.md); this page is how to design one.
 
-```mermaid
-flowchart LR
-  subgraph S["Simulation: pysim"]
-    direction TB
-    H1["host program"] --> D1[["DUT"]]
-    C1["wireless channel"] --> D1
-    T1["traffic source"] --> C1
-    D1 --> P1["processor model"]
-  end
-  subgraph H["HwSystem: RTL simulation"]
-    direction TB
-    H2["host<br/>(C++ twin)"] --> D2[["DUT<br/>(its RTL)"]]
-    DR["stream driver<br/>(AxisMaster)"] --> D2
-    D2 --> SK["stream sink<br/>(AxisSlave)"]
-  end
-```
-
-- **pysim** runs the DUT in a **[`Simulation`](../sim/index.md)**: a discrete-event simulation of any
-  collection of `SimObj`s. Beside the DUT there can be anything the question needs -- a host program, a
-  wireless channel, a traffic source, a processor model. It is fast, its timing is a model, and it is
-  where a design is explored and evaluated as part of a larger system ([Simulating in Python](pysim.md)).
-- **RTL simulation** runs the DUT in an **[`HwSystem(sim, dut)`](rtl.md#the-system)**: the same kind of
-  simulation, with the DUT named, and everything else its **testbench**. The DUT's Verilog runs cycle by
-  cycle under Vivado's simulator, and every testbench part runs as its C++ twin beside it
-  ([Simulating at RTL](rtl.md)).
-
-The rule between them is one line: **anything can join a `Simulation`; only what has an RTL twin can
-join an `HwSystem`.** A host has a C++ twin, so it can drive the RTL; a wireless channel model has none,
-so a study with one is a pysim study, and its RTL simulation draws the testbench where everything has
-a twin. Here the DUT is a black box; the rest of this page is what goes inside it.
-
-## Designing the DUT: the recipe
+## The recipe
 
 Designing the DUT means answering five questions before any module is written. They are the system's
 design, and every later step follows from them.

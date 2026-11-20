@@ -1,6 +1,6 @@
 ---
 title: Command–response
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 3
 audience: python
 summary: "The default shape of an accelerator in Waveflow: read a command carrying n, do the work on n elements, answer. The protocol has a data plane and a status plane -- s_in carries Cmd | data, m_out carries Resp(tx_id, n) | results, m_status carries Status(tx_id, code) per command, the last command seen -- and an error is fatal: the kernel closes its data, reports, and stops taking input until a reset. Why the two output streams (different consumers, a status register on a bus, a data path free of control), the rules that make it robust (the size travels in the header, read in the order written, one header per command), the bus mapping (queues for data, a status register with an interrupt), the variable-length variant (a tagged union ending in END), the Python run_iter and its timing, the HLS body, the host, and the pipeline form where the command travels with the data and the last stage answers."

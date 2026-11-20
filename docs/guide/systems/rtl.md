@@ -1,6 +1,6 @@
 ---
 title: Simulating at RTL
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 5
 audience: python
 api: [HwSystem, DutTop, harness, KernelTask, add_system_steps, run_dag_cli, SystemTopSpec, SwHost]

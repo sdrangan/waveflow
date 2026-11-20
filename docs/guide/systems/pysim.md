@@ -1,6 +1,6 @@
 ---
 title: Simulating in Python
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 4
 audience: python
 api: [Simulation, SimObj, FreeRunMod, run_iter, harness, StreamDriver, StreamSink, SwHost, Processor]

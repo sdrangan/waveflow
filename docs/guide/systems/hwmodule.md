@@ -1,6 +1,6 @@
 ---
 title: Defining the kernel in Python and HLS
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 3.5
 audience: python
 api: [HwModule, FreeRunMod, run_iter, kernel_task, workload, TimedPhase, FramedStreamIFSlave, FramedStreamIFMaster]

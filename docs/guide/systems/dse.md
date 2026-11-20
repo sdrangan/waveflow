@@ -1,6 +1,6 @@
 ---
 title: Design-space exploration
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 8
 audience: python
 api: [ParamGrid, SweepRunner, sweep_cli, ResourceModel, HwParam]

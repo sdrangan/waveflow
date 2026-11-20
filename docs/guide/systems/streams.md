@@ -1,6 +1,6 @@
 ---
 title: Stream patterns
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 2
 audience: python
 api: [FramedStreamIFSlave, FramedStreamIFMaster, StreamIF, MemRStream, MemWStream, MemSlaveAdaptor, IrqIF, StreamBroadcast, CreditStreamIF]
