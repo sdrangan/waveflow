@@ -38,6 +38,13 @@ skill_tests/
     answers/
       01_gain_stats.review.md
       ref_01/                     the reference body (II=1 at csynth) and the driver check_body.py uses
+  module/                         the waveflow-module skill
+    01_three_blocks.md            three blocks described by what they talk to: Python modules + tests
+    check_blocks.py               runs a trial's tests; lists each module's kind, ports and mm_views
+    trigger_prompts.md
+    answers/
+      01_three_blocks.review.md
+      ref_01/                     the reference: three blocks, their harness tests, DESIGN.md
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)
