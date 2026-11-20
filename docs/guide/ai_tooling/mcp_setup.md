@@ -8,8 +8,9 @@ summary: "Setting up the Waveflow MCP server: which assistants are supported (VS
 
 # Installing the MCP Server
 
-Setting up has two parts. First, install Waveflow so the server can find the
-guide and the examples. Then, run `waveflow init` in your project folder, which
+Setting up has two parts. First, [install Waveflow](#install-waveflow) so the
+server can find the guide and the examples. Then, run
+[`waveflow init`](#set-up-your-project-waveflow-init) in your project folder, which
 connects every assistant to the server and gives it the Waveflow instructions
 and skills.
 
@@ -98,6 +99,24 @@ existed. Re-run `pip install -e ".[dev]"`; do the same after any update that
 adds new commands.
 
 ## Set up your project: `waveflow init`
+
+The folders end up like this:
+
+```text
+waveflow/           the clone (git clone); the guide and the examples live here
+waveflow-venv/      the virtual environment; pip install -e points it at the clone
+my_project/         your project: its own folder, its own git repository
+  AGENTS.md         written by waveflow init (a Waveflow section; yours is kept)
+  CLAUDE.md
+  .claude/skills/
+  .agents/skills/
+  .mcp.json         on this machine only (gitignored)
+  .vscode/mcp.json  on this machine only (gitignored)
+```
+
+The virtual environment can also live inside `my_project/` (then add it to
+`.gitignore`). Nothing from Waveflow is copied into your project except the
+skills and the Waveflow section of `AGENTS.md`.
 
 **Activate** the virtual environment, go to your own project folder, and run:
 
