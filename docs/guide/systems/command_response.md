@@ -1,22 +1,23 @@
 ---
 title: Command–response
 parent: Waveflow Architecture
-nav_order: 3
+nav_order: 0.45
 audience: python
-summary: "The default shape of an accelerator in Waveflow: read a command carrying n, do the work on n elements, answer. The protocol has a data plane and a status plane -- s_in carries Cmd | data, m_out carries Resp(tx_id, n) | results, m_status carries Status(tx_id, code) per command, the last command seen -- and an error is fatal: the kernel closes its data, reports, and stops taking input until a reset. Why the two output streams (different consumers, a status register on a bus, a data path free of control), the rules that make it robust (the size travels in the header, read in the order written, one header per command), the bus mapping (queues for data, a status register with an interrupt), the variable-length variant (a tagged union ending in END), the Python run_iter and its timing, the HLS body, the host, and the pipeline form where the command travels with the data and the last stage answers."
+summary: "What kernels say on their streams. Work is requested by a command, and command-response is the default shape: read a command carrying n, do the work on n elements, answer; the other shapes (continuous stream, configured stream, host-launched one-shot) are named. The protocol has a data plane and a status plane -- s_in carries Cmd | data, m_out carries Resp(tx_id, n) | results, m_status carries Status(tx_id, code) per command -- every message a schema, and an error is fatal: the kernel closes its data, reports, and stops taking input until a reset. Why two output streams, the rules that make it robust, the bus mapping, the variable-length variant (a tagged union ending in END). Memory is reached the same way: a kernel sends MemRCmd to its memory reader and gets the data, sends MemWCmd and the data to its writer and gets an echo when the write is done. Through a pipeline the command travels with the data and the last stage answers."
 ---
 
 # Command–response
 
-Most kernels in this repo do the same three things, over and over:
+[Kernels](kernels.md) talk only on streams, and every stream is typed. This page is what they say on
+them. Work is requested by a **command**, and most kernels do the same three things, over and over:
 
 1. **read a command** that says how much work there is -- `n` elements -- and anything else the job needs;
 2. **do the work** on those `n` elements;
 3. **answer**: the results, and what happened.
 
 It is the easiest pattern to get right and the most robust to run: every job is named, bounded and
-answered. This page is the pattern end to end -- the protocol, the reasons for it, the Python model, the
-HLS body, the host -- with links to the layer page for each piece. Its worked example is the
+answered. Kernels answer each other this way, and -- below -- memory is reached the same way. This page
+is the pattern end to end: the protocol, the reasons for it, the bus mapping, memory, and pipelines. Its worked example is the
 [free-running polynomial](../../examples/stream_kernel/index.md).
 
 ## Command-response among the shapes {#the-shape}
@@ -51,7 +52,8 @@ m_status : Status(tx_id, code)                        one per command, after its
   that the kernel is alive and what it last did.
 - **An error is fatal** (below): the kernel closes `m_out`, writes the error on `m_status`, and stops.
 
-The messages are [`DataList`](../schema/python/datalists.md) schemas: Python declares the fields once,
+The messages are [`DataList`](../schema/python/datalists.md) schemas, as on every stream
+([Every stream is typed](kernels.md#every-stream-is-typed)): Python declares the fields once,
 and the C++ structs and their stream readers and writers are generated from them, so neither side packs
 a word by hand.
 
@@ -194,6 +196,25 @@ last.
 How a command-response kernel is written -- its Python model, its HLS body written to read the same way,
 and the host that drives it -- is the next page, [Defining the kernel in Python and HLS](hwmodule.md).
 
+## Memory is reached the same way
+
+A kernel never touches memory itself: it sends commands to the memory reader and writer in its device
+([Devices and the DUT](devices.md#adaptors)), and they answer on streams -- the same pattern, with the
+adaptor as the kernel at the other end:
+
+```text
+to the reader   : MemRCmd(addr, len, fwd_bursts)        read len words at addr
+from the reader : [fwd_bursts relayed] | data[0..len-1] the words, as a stream burst
+
+to the writer   : MemWCmd(addr, len, fwd_bursts) | data[0..len-1]
+from the writer : m_done: the fwd_bursts, echoed once the data is written
+```
+
+The writer's echo is the response: it comes back only after the words are in memory. So a kernel that
+forwards its own command through the writer, and answers when the echo returns, answers "done", not
+"seen" -- the [mem_copy](../../examples/memcpy/index.md) pattern, and the start of a pipeline, below
+([AXI-MM master](../interface/axi_mm/master.md)).
+
 ## Through a pipeline: the command travels with the data
 
 When the work spans several kernels, the pattern does not change -- **the command is passed down the
@@ -237,3 +258,5 @@ registers, and an error ends the run ([the stream_inband contract](../../example
 When there is no job -- samples arrive forever and leave forever -- there is nothing for a command to
 bound, and a [continuous or configured stream](#the-shape) is the honest shape. Forcing
 commands onto it only adds a header nobody needs.
+
+Next: [Flow Overview](flow.md) -- how a design is built and checked, step by step.

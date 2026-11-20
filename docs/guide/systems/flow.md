@@ -9,17 +9,18 @@ summary: "How to build a system with Waveflow, start to finish, a page per step:
 # Flow Overview
 
 This section is how to build a system: the flow, a page per step, in the order a design takes them.
-What is being built -- the three levels of simulation, the DUT's tree, what you write and what Waveflow
-provides, and the terms -- is [Waveflow Architecture](index.md): read it first. Each page walks the same
+What is being built is the four pages before this one, read first: [Waveflow Architecture](index.md)
+(the three levels of simulation, the layer around the DUT), [Kernels](kernels.md), [Devices and the
+DUT](devices.md) (with what you write and what Waveflow provides) and
+[Command-response](command_response.md); the terms are in the [Glossary](glossary.md). Each page walks the same
 running example and links down to the reference sections for the details.
 
 ## Build a system, step by step {#the-flow}
 
 | step | the question | page |
 |---|---|---|
-| **Design the DUT** | what it does (the golden), its modules, interfaces and messages | [Designing the DUT](dut.md) |
-| | how modules talk on streams | [Stream patterns](streams.md) |
-| | how a job goes in and its answer comes out | [Command-response](command_response.md) |
+| **Design the DUT** | what it does (the golden), its kernels, what each talks to, the messages, one firing | [Designing the DUT](dut.md) |
+| | the detail of the streams: bursts and lanes, the read order, what goes between kernels | [Stream patterns](streams.md) |
 | | the kernel, twice: a Python model and an HLS body that must agree | [Defining the kernel in Python and HLS](hwmodule.md) |
 | **Simulate in Python** | does the design work, as part of everything around it | [Simulating in Python](pysim.md) |
 | **Simulate at RTL** | does the hardware do what the Python does, cycle by cycle | [Simulating at RTL](rtl.md) |

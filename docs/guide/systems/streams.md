@@ -9,14 +9,15 @@ summary: "How the modules of a free-running design talk: on streams, and only on
 
 # Stream patterns
 
-The modules of a free-running design talk on **streams**. This page is how: what a message on a stream
-is, how its words are packed, the order things must be read in, the rule that keeps every module's logic
-on streams, and the pieces that go between kernels.
+Kernels talk on **streams**. What a kernel is, the stream for each thing it talks to, and the rule in
+brief are on [Kernels](kernels.md); this page is the detail: what a message on a stream is, how its words
+are packed, the order things must be read in, the rule that keeps every kernel on streams and why, and
+the pieces that go between kernels.
 
 ## A message is a burst
 
 A stream carries **words**; a **message** is a burst of them, closed by **TLAST**. The polynomial's
-ports are framed -- they carry TLAST at RTL -- because its protocol is made of messages:
+streams are framed -- they carry TLAST at RTL -- because its protocol is made of messages:
 
 ```python
 self.s_in = FramedStreamIFSlave(name=f"{self.name}_s_in", sim=self.sim, bitwidth=W)
@@ -64,8 +65,8 @@ bursts recorded, statuses written, jobs answered ([Functional verification](veri
 
 Under every free-running design sits one rule:
 
-> **A module's own logic reads and writes only streams. Anything that is not a stream reaches it
-> through an adaptor.**
+> **A kernel reads and writes only streams. Anything that is not a stream reaches it through an
+> adaptor.**
 
 A module that reads memory does not own an `m_axi` port in its body; it sends a read command on a
 stream to a reader and gets the words back on another. A module a host must reach does not expose
@@ -93,8 +94,8 @@ flowchart LR
 
 | what the module needs | the adaptor | where it lives | why there |
 |---|---|---|---|
-| to read or write memory -- it *masters* the bus | [`MemRStream` / `MemWStream`](../interface/axi_mm/master.md): a command on a stream in, a burst on `m_axi` out | a kernel module, inside the Vitis kernel | Vitis HLS generates `m_axi` |
-| to *be reached* by a host or another master | a [`MemSlaveAdaptor`](../interface/axi_mm/slave.md) of views -- queue in, queue out, register bank, BRAM window | an RTL module, beside the kernel | Vitis HLS cannot generate an AXI4-full slave |
+| to read or write memory -- it *masters* the bus | [`MemRStream` / `MemWStream`](../interface/axi_mm/master.md): a command on a stream in, a burst on `m_axi` out | HLS, in the device's HLS top beside the kernel ([devices](devices.md)) | Vitis HLS generates `m_axi` |
+| to *be reached* by a host or another master | a [`MemSlaveAdaptor`](../interface/axi_mm/slave.md) of views -- queue in, queue out, register bank, BRAM window | Verilog, in the device's sub-top beside the HLS top | Vitis HLS cannot generate an AXI4-full slave |
 | to tell a host something is ready | an [`IrqIF`](../interface/axi_mm/slave.md#interrupts), driven by a queue view's threshold -- the adaptor raises it, not the module | a wire out of the adaptor | the host waits on it instead of polling |
 
 Where an adaptor lives is decided by what Vitis HLS can generate
@@ -174,4 +175,4 @@ A pipeline of kernels needs a few more rules, and a few framework pieces:
   In the HLS body the chunk's writes are guarded on the credit wait
   ([the guard](../interface/axi_mm/credit_streams_hls.md#the-guard)).
 
-Next: [Command-response](command_response.md) -- the protocol most designs speak on these streams.
+Next: [Defining the kernel in Python and HLS](hwmodule.md) -- a leaf kernel, written twice.

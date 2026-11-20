@@ -4,7 +4,7 @@ parent: Waveflow Architecture
 nav_order: 3.5
 audience: python
 api: [HwModule, FreeRunMod, run_iter, kernel_task, workload, TimedPhase, FramedStreamIFSlave, FramedStreamIFMaster]
-summary: "Writing the kernel, twice: a Python model and an HLS body, which must agree -- the Python is the specification, the HLS is the hardware, and the RTL comparison is what checks them against each other. A hardware module (HwModule) is a SimObj with typed ports and a behavior -- one Python class that is both the model pysim runs and the source of the hardware. A free-running kernel is a FreeRunMod, and its class has a fixed structure: its C++ name, its build parameters as dataclass fields, its ports and timed phases in __post_init__, its behavior in run_iter (one firing, one job), its HLS body behind kernel_task(), and its scenarios in workload(kind). Shown on the polynomial's PolyKernel; then the command-response kernel's Python model, its HLS body written to read the same way, and the host that drives it."
+summary: "Writing a leaf kernel, twice: a Python model and an HLS body, which must agree -- the Python is the specification, the HLS is the hardware, and the RTL comparison is what checks them against each other. The class has a fixed structure: its C++ name, its build parameters as dataclass fields, its streams and timed phases in __post_init__, its behavior in run_iter (one firing, one job), its HLS body behind kernel_task(), and its scenarios in workload(kind). Shown on the polynomial's PolyKernel; then the command-response kernel's Python model, its HLS body written to read the same way, and the host that drives it."
 ---
 
 # Defining the kernel in Python and HLS
@@ -27,23 +27,13 @@ then write the HLS to match it. (A simple body can be generated from `run_iter` 
 
 Everything else is derived from the one Python class: the testbench, the RTL top, the calibration.
 
-## A hardware module
+A kernel is a [`FreeRunMod`](kernels.md): a leaf with its own `run_iter`, or a composite of child
+kernels. This page is the leaf, the one with a body to write; a composite is its children and their
+wiring (`add_comp`, `add_if`), and nothing else ([Kernels](kernels.md#what-a-kernel-is)).
 
-A **[`HwModule`](../flows/modules.md)** is a [`SimObj`](../sim/simobj.md) with **typed ports** and a
-**behavior**. Three things define it: its endpoints (the ports, each an interface type with a
-direction), how it is wired (to other modules, by interfaces), and what it does. It comes in three kinds:
+## A leaf kernel: the structure
 
-| kind | what it is | in the flow |
-|---|---|---|
-| `HwModule` | a model with ports, simulated only | a testbench part, the world around the DUT |
-| **`FreeRunMod`** | a kernel that runs on its own, fired once per message; a **leaf** (`run_iter`) or a **composite** (children wired by internal interfaces) | the DUT's kernels: one `hls::task` each |
-| `HostActivated` | a kernel a host launches (`ap_start` / `ap_done`) | a device a host starts; its own sequential flow is [legacy](../legacy/index.md) |
-
-A kernel in this flow is a `FreeRunMod`.
-
-## A free-running kernel: the structure
-
-Every `FreeRunMod` has the same parts. The polynomial's, with each part's job:
+Every leaf kernel has the same parts. The polynomial's, with each part's job:
 
 ```python
 @dataclass
@@ -54,7 +44,7 @@ class PolyKernel(FreeRunMod):
 
     clk: Clock = field(default_factory=lambda: Clock(freq=100e6))   # parameters are dataclass fields
 
-    def __post_init__(self) -> None:      # the structure: its ports and its timed phases
+    def __post_init__(self) -> None:      # the structure: its streams and its timed phases
         ...
     def run_iter(self):                   # the behavior: one firing, one command
         ...
@@ -68,13 +58,13 @@ class PolyKernel(FreeRunMod):
 |---|---|---|
 | `cpp_kernel_name` | the kernel's name in C++ | code generation: the top, the task, the csynth script |
 | dataclass fields | build parameters ([`HwParam`](../flows/parametrization.md): a width, a depth) and the clock | every flow: a different value is a different module |
-| `__post_init__` | the ports, each registered with `add_endpoint`; the [timed phases](../timing_model/timed_phases.md) | pysim, the harness, the RTL top, calibration |
+| `__post_init__` | its streams, each end registered with `add_endpoint`; the [timed phases](../timing_model/timed_phases.md) | pysim, the harness, the RTL top, calibration |
 | `run_iter` | one firing: read a message, do the work, write the answer | pysim -- and the specification of the HLS body |
 | `kernel_task()` | which hand-written HLS body realizes `run_iter`, and its argument order | code generation |
-| `workload(kind)` | the scenarios, `{input port: bursts}`: `"test"`, `"calib"` | its [harness](pysim.md#the-cut) |
+| `workload(kind)` | the scenarios, `{input stream: bursts}`: `"test"`, `"calib"` | its [harness](pysim.md#the-cut) |
 | `mm_views`, `calib_holdout` | optional: its memory-mapped side; the calibration's held-out values | a bus system; calibration |
 
-### The ports
+### Its streams
 
 ```python
 def __post_init__(self) -> None:
@@ -90,8 +80,9 @@ def __post_init__(self) -> None:
         self.add_timing_phase(ph)
 ```
 
-A **slave** port receives, a **master** port sends; a **framed** port carries TLAST, because the protocol
-is made of messages ([Stream patterns](streams.md)). The timed phases are the module's timing, declared
+An input stream is declared by its **slave** end (`s_...`), an output stream by its **master** end
+(`m_...`); a **framed** stream carries TLAST, because the protocol is made of messages
+([Kernels](kernels.md#every-stream-is-typed)). The timed phases are the module's timing, declared
 here and calibrated later ([Timing and resources](calibration.md)).
 
 ### The HLS body it names
@@ -102,15 +93,9 @@ def kernel_task(self):
                       template_args=(W,))
 ```
 
-The body's ports are named in the order the C++ function takes them; the generator writes the top
+The body's streams are named in the order the C++ function takes them; the generator writes the top
 around it ([Simulating at RTL](rtl.md#a-modules-hls-body)). A leaf whose body can be extracted from
 `run_iter` names none.
-
-### A composite instead
-
-A kernel whose work has stages that should overlap is a **composite**: no `run_iter`, only children
-(`add_comp`) wired by internal interfaces (`add_if`), each child a leaf of its own -- block_eq's
-broadcast, gain and apply ([Writing a free-running module](../flows/concurrent_python.md)).
 
 ## The command-response kernel in Python {#the-python-model}
 

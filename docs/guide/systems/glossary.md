@@ -58,7 +58,7 @@ tree -- is [Waveflow Architecture](index.md).
 | term | what it is | class | defined on |
 |---|---|---|---|
 | **interface** | a typed connection between two modules, or between the DUT and its testbench | `Interface` | [Interfaces](../interface/index.md) |
-| **port** (endpoint) | one end of an interface on a module, a master or a slave (`m_out`, `s_in`) | `add_endpoint` | [Defining the kernel](hwmodule.md#the-ports) |
+| **port** (endpoint) | one end of an interface on a module, a master or a slave (`m_out`, `s_in`) | `add_endpoint` | [Defining the kernel](hwmodule.md#its-streams) |
 | **stream** | messages in order, each delivered once; **framed** when TLAST ends each message | `StreamIF`, `FramedStreamIFSlave` / `Master` | [Streams](../interface/primitive/stream.md) |
 | **credit stream** | a stream whose producer may not overrun a queue across the bus | `CreditStreamIF` | [Credit stream](../interface/derived/credit_stream.md) |
 | **BRAM** | a memory shared by address: storage, not an event | `BramIF` | [BRAM](../interface/primitive/bram.md) |

@@ -101,5 +101,6 @@ The DUT is the same tree at both simulated levels. Two pages describe it:
   is devices, memories and the interconnect. That page also lists what you write and what Waveflow
   provides.
 
-Next: [Flow Overview](flow.md) -- how a design is built and checked, step by step. Every term
+Next: [Kernels](kernels.md) -- what does the work, and how it talks; then [Devices and the DUT](devices.md),
+[Command-response](command_response.md), and the [Flow Overview](flow.md). Every term
 on this page, with its class and the page that defines it, is in the [Glossary](glossary.md).

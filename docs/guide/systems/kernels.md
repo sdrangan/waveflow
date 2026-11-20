@@ -160,7 +160,8 @@ bursts recorded, statuses written, jobs answered ([Functional verification](veri
 - **The cut falls on streams.** Any kernel can be the DUT of its own harness, because what surrounds it
   is always streams -- what both simulations model best.
 
-More on streams between kernels (stream blocks, internal link depths and widths, a token per job
-through a pipeline, credit) is in [Stream patterns](streams.md#between-kernels).
+Each section here is the short form. The detail -- bursts and lanes, the read order, why the rule
+holds and where it stops, and what goes between kernels (stream blocks, internal stream depths and
+widths, a token per job through a pipeline, credit) -- is [Stream patterns](streams.md).
 
-Next: [Command-response](command_response.md) -- the protocol kernels speak on these streams.
+Next: [Devices and the DUT](devices.md) -- adaptors, devices, and how they become hardware.

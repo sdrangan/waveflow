@@ -160,4 +160,4 @@ devices -- each kernel with the queue views the host and the other kernel reach 
 memory, and the crossbar between them; the host is the testbench. The stream between the kernels is a
 credit stream, because the generator must not overrun the chain's queue across the bus.
 
-Next: [Stream patterns](streams.md) -- more on how kernels talk.
+Next: [Stream patterns](streams.md) -- the detail of the streams between kernels.
