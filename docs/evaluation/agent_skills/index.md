@@ -42,7 +42,7 @@ Each skill has its own page: what it contains, its test, and its results.
 | [`waveflow-kernel-hls`](kernel_hls.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
 | [`waveflow-kernel`](kernel.md) | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | one run per arm on Opus and Sonnet; all at 49-52 of 52; turns -13..44% |
 | `waveflow-device` | adaptors and devices: memory readers and writers, the host's queues, register bank and interrupts, credit across a bus, BRAM, the HLS top and sub-top | written; its test (`evaluation/skill_tests/device/`) and reference are ready, not yet run blind |
-| `waveflow-pipeline` | composite kernels: stages, internal streams, broadcast, a token per job | planned |
+| `waveflow-pipeline` | composite kernels: stages, internal streams and their depths, broadcast (drain your own copy), a token per job, the last stage answers | written; its test (`evaluation/skill_tests/pipeline/`) and reference are ready, not yet run blind |
 | `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG, tests that count so a deadlock cannot pass | planned |
 
 The skills are grouped by step in the design flow, about six in all rather than one per guide page:

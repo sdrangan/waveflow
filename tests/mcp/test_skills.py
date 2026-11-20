@@ -228,3 +228,18 @@ def test_the_device_tests_reference_passes(tmp_path):
                        timeout=1800)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "6 passed" in r.stdout, r.stdout
+
+
+PIPELINE = REPO / "evaluation" / "skill_tests" / "pipeline"
+
+
+def test_the_pipeline_tests_reference_passes(tmp_path):
+    """The pipeline test's reference -- a broadcast, a statistics stage, a detect stage -- passes its
+    own tests (pysim), and the one recording what pysim cannot show stays an expected failure."""
+    work = tmp_path / "ref"
+    shutil.copytree(PIPELINE / "answers" / "ref_01", work, ignore=shutil.ignore_patterns("__pycache__"))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                        str(work / "test_peaks.py")], cwd=work, capture_output=True, text=True,
+                       timeout=1800)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "11 passed, 1 xfailed" in r.stdout, r.stdout

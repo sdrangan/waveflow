@@ -51,6 +51,12 @@ skill_tests/
     answers/
       01_scale_offload.review.md
       ref_01/                     the reference: messages, kernel, device, bus system, tests, DESIGN.md
+  pipeline/                       the waveflow-pipeline skill
+    01_peak_picker.md             a broadcast and two concurrent stages; the drain-first and token traps
+    trigger_prompts.md
+    answers/
+      01_peak_picker.review.md
+      ref_01/                     the reference: stages, composite, tests (one strict xfail: a pysim gap)
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)
