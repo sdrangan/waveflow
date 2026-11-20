@@ -45,6 +45,12 @@ skill_tests/
     answers/
       01_three_blocks.review.md
       ref_01/                     the reference: three blocks, their harness tests, DESIGN.md
+  device/                         the waveflow-device skill
+    01_scale_offload.md           a kernel between a memory reader and writer, behind a host's queues
+    trigger_prompts.md
+    answers/
+      01_scale_offload.review.md
+      ref_01/                     the reference: messages, kernel, device, bus system, tests, DESIGN.md
   onboarding/                     does an agent get oriented on a researcher's project (not design quality)
     01_energy.md                  the request, in a researcher's words
     given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)

@@ -213,3 +213,18 @@ def test_the_module_tests_reference_passes_and_the_checker_reads_it(tmp_path):
         assert f"{cls}  [FreeRunMod]" in out, out
     assert "NOT A STREAM" not in out and "could not build" not in out, out
     assert "mm_views: RegBank(regs), QueueOut(q_report)" in out
+
+
+DEVICE = REPO / "evaluation" / "skill_tests" / "device"
+
+
+def test_the_device_tests_reference_passes(tmp_path):
+    """The device test's reference answer -- a kernel between a memory reader and writer, behind a
+    queue in and a status queue out, then on a bus with its host -- passes its own tests (pysim)."""
+    work = tmp_path / "ref"
+    shutil.copytree(DEVICE / "answers" / "ref_01", work, ignore=shutil.ignore_patterns("__pycache__"))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                        str(work / "test_scale.py")], cwd=work, capture_output=True, text=True,
+                       timeout=1800)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "6 passed" in r.stdout, r.stdout

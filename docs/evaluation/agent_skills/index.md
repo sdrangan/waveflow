@@ -8,8 +8,9 @@ summary: "Do agent skills -- short SKILL.md instruction folders an AI coding age
 
 # Agent skills
 
-> **Status: just started.** Two skills are written and have first results, one run per arm (see
-> [data schemas](schemas.md) and [HLS kernel bodies](kernel_hls.md)). A third, `waveflow-start`, is
+> **Status: just started.** Three skills are written and have first results, one run per arm (see
+> [data schemas](schemas.md), [HLS kernel bodies](kernel_hls.md) and [kernels](kernel.md)); the
+> device, pipeline and system skills have their tests and references, not yet run. A third, `waveflow-start`, is
 > the entry point; [onboarding](onboarding.md) lists what is verified about it and what is not. This page records the method so the
 > numbers can be checked.
 
@@ -40,9 +41,9 @@ Each skill has its own page: what it contains, its test, and its results.
 | [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
 | [`waveflow-kernel-hls`](kernel_hls.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
 | [`waveflow-kernel`](kernel.md) | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | one run per arm on Opus and Sonnet; all at 49-52 of 52; turns -13..44% |
-| `waveflow-memory` | AXI-MM, memory streams, BRAM, register maps, credit streams | planned |
-| `waveflow-system` | composing modules with `HwSystem` and the system flow | planned |
-| `waveflow-verify` | pysim, csim / cosim and XSI tests that assert counts, so a deadlock cannot pass | planned |
+| `waveflow-device` | adaptors and devices: memory readers and writers, the host's queues, register bank and interrupts, credit across a bus, BRAM, the HLS top and sub-top | written; its test (`evaluation/skill_tests/device/`) and reference are ready, not yet run blind |
+| `waveflow-pipeline` | composite kernels: stages, internal streams, broadcast, a token per job | planned |
+| `waveflow-system` | `HwSystem(sim, dut)`, the harness and the cut, the build DAG, tests that count so a deadlock cannot pass | planned |
 
 The skills are grouped by step in the design flow, about six in all rather than one per guide page:
 sub-tasks that happen together share a skill, and fewer descriptions are easier for an agent to tell
