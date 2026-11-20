@@ -1,7 +1,7 @@
 % dut_tree.tex -- ONE source, ONE rendered SVG (dut_tree.svg), embedded in ../../systems/index.md.
 %
 % The DUT alone, the same tree in pysim and at RTL: a device (kernel A behind its slave adaptor), a
-% composite (a memory reader, kernel C, a memory writer), a memory, the crossbar.  Each block is
+% composite kernel C (a memory reader, leaf kernel C1, a memory writer), a memory, the crossbar.  Each block is
 % coloured by WHO WRITES IT: you (a kernel: run_iter and its HLS body), Waveflow (framework RTL and
 % HLS), or vendor IP.  system_cut.tex is the whole system coloured by build step.
 %
@@ -48,11 +48,11 @@
 \begin{scope}[on background layer]
   \node[device, fit=(fa)(ka), inner xsep=3mm, inner ysep=4mm] (dev) {};
 \end{scope}
-\node[lbl, anchor=north west] at (dev.south west) {\textbf{device} = a kernel + its slave adaptor};
+\node[lbl, anchor=north west] at (dev.south west) {\textbf{device} = kernel A + its slave adaptor};
 
 % ---------------- the composite: memory reader -> kernel C -> memory writer ------------------
 \node[wf]  (rd) at (3.3, -0.4) {\texttt{MemRStream}\\[-1pt]\scriptsize memory reader};
-\node[you] (kc) at (6.9, -0.4) {kernel C\\[-1pt]\scriptsize\texttt{run\_iter} + HLS body};
+\node[you] (kc) at (6.9, -0.4) {kernel C1\\[-1pt]\scriptsize\texttt{run\_iter} + HLS body};
 \node[wf]  (wr) at (10.5, -0.4) {\texttt{MemWStream}\\[-1pt]\scriptsize memory writer};
 \draw[data] (rd.east) -- node[lbl, above] {stream} (kc.west);
 \draw[data] (kc.east) -- node[lbl, above] {stream} (wr.west);
@@ -62,7 +62,7 @@
   \node[comp, fit=(rd)(kc)(wr), inner xsep=3mm, inner ysep=4mm] (cmp) {};
 \end{scope}
 \draw[bus]  (wr.south) |- node[lbl, pos=0.75, above] {m\_axi} (xbar.east |- 0,-2.15);
-\node[lbl, anchor=north east] at (cmp.south east) {\textbf{composite} = children wired by streams; no body};
+\node[lbl, anchor=north east] at (cmp.south east) {\textbf{kernel C}, a composite = child kernels wired by streams; no body};
 
 % ---------------- the memory: front + window, RAM --------------------------------------------
 \node[wf]  (fm) at (3.3, -3.0) {front + window};
@@ -91,15 +91,15 @@
 % ---------------- legend ---------------------------------------------------------------------
 \begin{scope}[shift={($(d.south west)+(0.4,-0.9)$)}, every node/.style={font=\sffamily\scriptsize}]
   \node[you, minimum width=6mm, minimum height=4mm] (l1) at (0,0) {};
-  \node[anchor=west, text=inkgray] at (l1.east) {you write it: the Python model and the HLS body};
+  \node[anchor=west, text=inkgray] at (l1.east) {you write it: a leaf kernel's Python model and HLS body};
   \node[wf, minimum width=6mm, minimum height=4mm] (l2) at (7.4,0) {};
-  \node[anchor=west, text=inkgray] at (l2.east) {Waveflow provides it (framework RTL and HLS)};
+  \node[anchor=west, text=inkgray] at (l2.east) {Waveflow provides it (framework RTL and kernels)};
   \node[ip, minimum width=6mm, minimum height=4mm] (l3) at (0,-0.6) {};
   \node[anchor=west, text=inkgray] at (l3.east) {vendor IP, generated from the address map};
   \draw[device, rounded corners=1pt] (7.1,-0.45) rectangle (7.7,-0.75);
   \node[anchor=west, text=inkgray] at (7.75,-0.6) {device or memory: one sub-top, one IP};
   \draw[comp, rounded corners=1pt] (-0.3,-1.05) rectangle (0.3,-1.35);
-  \node[anchor=west, text=inkgray] at (0.35,-1.2) {composite: a task per child};
+  \node[anchor=west, text=inkgray] at (0.35,-1.2) {composite kernel: a task per child};
 \end{scope}
 
 \end{tikzpicture}
