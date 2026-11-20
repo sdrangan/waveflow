@@ -2,7 +2,7 @@
 
 For the reviewer, not the agent (no spec links this file). Fill one sheet per run. First run:
 
-- `python evaluation/skill_tests/module/check_blocks.py <trial folder>`: runs the trial's
+- `python evaluation/skill_tests/kernel/check_blocks.py <trial folder>`: runs the trial's
   `test_blocks.py`, then lists every module class in `block_*.py` with its ports by type and its
   `mm_views` (items G1, A1, B2, C1); it points, the sheet scores.
 - `python evaluation/skill_tests/lint_schema_use.py <trial folder>`: hand-packing lines (G2).

@@ -1,12 +1,13 @@
 ---
-name: waveflow-hls-body
-description: Write the body of a Waveflow Vitis HLS kernel -- the C++ an hls::task or a host-launched kernel runs for each command -- in Waveflow's loop patterns -- one firing per message, the lane loop over packed samples with the generated array utils, PIPELINE II=1, state kept across commands, fixed-point datapaths -- and without the deadlocks and reset traps that csim does not show. Use whenever you write, review or restructure HLS C++ for a Waveflow kernel, or the user asks about its loops, pragmas, throughput, II or state.
+name: waveflow-kernel-hls
+description: Write the HLS body of a Waveflow leaf kernel -- the Vitis HLS C++ an hls::task (or a host-launched kernel) runs for each command -- in Waveflow's loop patterns -- one firing per message, the lane loop over packed samples with the generated array utils, PIPELINE II=1, state kept across commands, fixed-point datapaths -- and without the deadlocks and reset traps that csim does not show. Use whenever you write, review or restructure HLS C++ for a Waveflow kernel, or the user asks about its loops, pragmas, throughput, II or state.
 ---
 
 # Waveflow HLS kernel bodies
 
-A Waveflow kernel body is written to read like its Python golden: one command in, a loop over its
-data, the answers out. The messages and packed samples are moved by generated code; the body supplies
+A leaf kernel (`systems/kernels.md`) is written twice: its Python `run_iter` (the `waveflow-kernel`
+skill) and its HLS body, this skill. The body is written to read like its Python golden: one command
+in, a loop over its data, the answers out. The messages and packed samples are moved by generated code; the body supplies
 the loop structure and the arithmetic. Several mistakes here pass C simulation and fail only in RTL
 (a deadlock, a counter that moves during reset), so follow the rules even when csim would accept
 something else.

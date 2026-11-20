@@ -146,6 +146,12 @@ def init_project(
     if skills["skipped"]:
         notes.append("skills already installed were left as they are; "
                      "`waveflow init --force-skills` replaces them (after upgrading Waveflow)")
+    for p in skills["removed"]:
+        files[Path(p).relative_to(root).as_posix()] = "removed (retired)"
+    if skills["retired_kept"]:
+        notes.append("retired skills you edited were left in place; delete them or merge your edits "
+                     "into their replacements: " + ", ".join(
+                         Path(p).relative_to(root).as_posix() for p in skills["retired_kept"]))
 
     files["AGENTS.md"] = _write_agents_md(root)
     files["CLAUDE.md"] = _write_claude_md(root)

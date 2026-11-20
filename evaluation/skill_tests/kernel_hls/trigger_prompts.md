@@ -1,14 +1,14 @@
-# Trigger prompts: waveflow-hls-body
+# Trigger prompts: waveflow-kernel-hls
 
 Does the skill load when it should, and stay out when it should not? Each line is one blind run's
 **first message**, with the skill installed and only the stub spec (`../trigger_stub.md`) in the folder:
 
 ```bash
-waveflow blind-test --prompt evaluation/skill_tests/trigger_stub.md --skills waveflow/skills/waveflow-hls-body \
-    --folder ../waveflow_blind_tests/trig_body_01 --message "<prompt>" --no-approve --timeout 0.1
+waveflow blind-test --prompt evaluation/skill_tests/trigger_stub.md --skills waveflow/skills/waveflow-kernel-hls \
+    --folder ../waveflow_blind_tests/trig_kernel_hls_01 --message "<prompt>" --no-approve --timeout 0.1
 ```
 
-The **Skills** section of `summary.md` says whether `waveflow-hls-body` was loaded, and at which call.
+The **Skills** section of `summary.md` says whether `waveflow-kernel-hls` was loaded, and at which call.
 
 ## Should load
 

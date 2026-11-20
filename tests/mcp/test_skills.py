@@ -55,6 +55,45 @@ def test_install_copies_to_each_target_and_keeps_local_edits(tmp_path):
     assert "no skill" in sk.install_skills(tmp_path, names=["nope"])["error"]
 
 
+def _retired_copy(tmp_path: Path, target: str, name: str) -> Path:
+    """A project's copy of the retired skill *name* as Waveflow last shipped it (from git)."""
+    text = subprocess.run(["git", "show", f"9c1af60:waveflow/skills/{name}/SKILL.md"], cwd=REPO,
+                          capture_output=True, text=True, check=True).stdout
+    d = tmp_path / sk.TARGETS[target] / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(text, encoding="utf-8", newline="\r\n")   # as git on Windows wrote it
+    return d
+
+
+def test_installing_removes_retired_skills_but_never_an_edited_one(tmp_path):
+    """A project that installed ``waveflow-module`` before the rename must not keep it beside
+    ``waveflow-kernel``: installing the replacement removes a shipped copy, and only that."""
+    import pytest
+
+    try:
+        old = _retired_copy(tmp_path, "claude", "waveflow-module")
+        edited = _retired_copy(tmp_path, "agents", "waveflow-hls-body")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("no git history to take the retired skills from")
+    (edited / "notes.md").write_text("my notes", encoding="utf-8")   # the project's own addition
+
+    assert set(sk.RETIRED.values()) <= {s["name"] for s in sk.list_skills()["skills"]}
+    assert not set(sk.RETIRED) & {s["name"] for s in sk.list_skills()["skills"]}
+
+    out = sk.install_skills(tmp_path, names=["waveflow-schema"])        # not the replacement
+    assert old.is_dir() and not out["removed"]
+
+    out = sk.install_skills(tmp_path)
+    assert not old.exists() and out["removed"] == [str(old)]
+    assert edited.is_dir() and out["retired_kept"] == [str(edited)]
+    assert "waveflow-kernel-hls" in out["note"] and str(edited) in out["note"]
+    assert (tmp_path / ".claude" / "skills" / "waveflow-kernel" / "SKILL.md").is_file()
+
+    (edited / "notes.md").unlink()                                       # back to the shipped file
+    out = sk.install_skills(tmp_path, force=True)
+    assert not edited.exists() and out["removed"] == [str(edited)]
+
+
 def test_the_cli_lists_and_installs(tmp_path, capsys):
     from waveflow.cli import main
 
@@ -106,7 +145,7 @@ def test_the_repos_committed_skills_match_the_shipped_ones():
                 "`waveflow skills install --dir . --force` and commit")
 
 
-HLS_BODY = REPO / "evaluation" / "skill_tests" / "hls_body"
+HLS_BODY = REPO / "evaluation" / "skill_tests" / "kernel_hls"
 
 
 def test_the_hls_body_tests_reference_matches_the_golden(tmp_path):
@@ -156,7 +195,7 @@ def test_the_lint_flags_hand_packing_and_spares_generated_headers(tmp_path):
     assert any("model.py:2: [shift]" in h for h in hits) and any("[mask]" in h for h in hits)
 
 
-MODULE = REPO / "evaluation" / "skill_tests" / "module"
+MODULE = REPO / "evaluation" / "skill_tests" / "kernel"
 
 
 def test_the_module_tests_reference_passes_and_the_checker_reads_it(tmp_path):

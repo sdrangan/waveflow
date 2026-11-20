@@ -1,6 +1,6 @@
 """Compile a trial's ``gain_stats_body.cpp`` as plain C++ and compare it with the golden model.
 
-    python evaluation/skill_tests/hls_body/check_body.py <trial folder>
+    python evaluation/skill_tests/kernel_hls/check_body.py <trial folder>
 
 For the reviewer of ``01_gain_stats``: not a pattern score (that is the review sheet), only whether
 the body compiles (Vivado's MinGW g++ and the Vitis headers, no Vitis run) and writes exactly the

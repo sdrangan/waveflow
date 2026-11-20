@@ -1,19 +1,27 @@
 ---
-name: waveflow-module
-description: Write a Waveflow hardware module -- an HwModule / FreeRunMod (or, when the spec says the host launches it, a HostActivated kernel) -- from the interfaces a user describes in their own words: map each one to a stream port and the adaptor it needs (a queue, a register bank, an interrupt, a memory reader or writer), choose how commands and data travel, write its pysim behaviour (run_iter, one firing per message) and its harness test that asserts counts. Use whenever you design or review a module's ports, its protocol on them, its Python model, or the user describes what a block receives, sends, is told or tells the host.
+name: waveflow-kernel
+description: Write a Waveflow kernel -- a FreeRunMod whose interfaces are all streams (or, only when the spec says the host launches it, a HostActivated kernel) -- from the interfaces a user describes in their own words: pick the stream for each thing it talks to (another kernel, a host's queue or registers, memory), choose and state how commands and data travel, write its pysim behaviour (run_iter, one firing per message) and its harness test that asserts counts. Use whenever you design or review a kernel's ports, its protocol on them, its Python model, or the user describes what a block receives, sends, is told or tells the host.
 ---
 
-# Waveflow modules: from the user's interfaces to streams
+# Waveflow kernels: from the user's interfaces to streams
 
 A user describes a block by what it talks to: "samples from the ADC", "the host sets a threshold",
-"results go to memory", "tell the host when it is done". A Waveflow module turns every one of those into
-a **stream port**; whatever is not a stream (a bus, registers, memory, an interrupt) is an **adaptor**
-outside the module's logic. Your job is that mapping, then the module's behaviour on its streams, then
-a test that cannot mistake a deadlock for success.
+"results go to memory", "tell the host when it is done". A Waveflow **kernel** -- a `FreeRunMod` whose
+interfaces are all streams -- turns every one of those into a **stream port**; whatever is not a stream
+(a bus, registers, memory, an interrupt) is an **adaptor** outside it, and a kernel with its adaptors is
+a **device** (the words as `systems/glossary.md` defines them). Your job is that mapping, then the
+kernel's behaviour on its streams, then a test that cannot mistake a deadlock for success.
+
+Read `systems/kernels.md` (*Kernels*) first: what a kernel is, leaf or composite, and its table *The
+stream for each thing a kernel talks to*. This skill does not repeat that table; it adds the choices
+the page leaves to you.
 
 Building a whole accelerator? Run the process first (`waveflow frames --text`, then `waveflow process
 <frame> --text`, or the MCP tools `waveflow_list_frames` / `waveflow_get_process`): it picks the
-reference example and the order of work. This skill is the module step inside it.
+reference example and the order of work. This skill is the kernel step inside it. Its neighbours:
+`waveflow-schema` (the messages), `waveflow-kernel-hls` (the HLS body), `waveflow-device` (memory
+readers and writers, the bus views, a device's HLS top), `waveflow-pipeline` (a composite of kernels),
+`waveflow-system` (`HwSystem`, the build, RTL).
 
 ## The rules (all of them, every time)
 
@@ -22,8 +30,10 @@ reference example and the order of work. This skill is the module step inside it
    `stream_inband` example and `flows/sequential.md`. Otherwise -- including when a host merely sends
    it data, configures it or reads from it -- it is a `FreeRunMod`. The word "host" alone decides
    nothing.
-2. **The module's own logic reads and writes only streams.** No `MMIFMaster`, no register map, no
-   address in a leaf's `run_iter`. Memory, bus slaves and interrupts are adaptors (the table below).
+2. **A kernel reads and writes only streams.** No `MMIFMaster`, no register map, no address in a
+   leaf's `run_iter`. Memory, bus slaves and interrupts are adaptors: pick the stream for each from
+   Kernels' table. A kernel that reads or writes a buffer in memory sits in a **device** beside
+   `MemRStream` / `MemWStream`: that part is the `waveflow-device` skill (or `systems/devices.md`).
 3. **Command-response is the default protocol**: a command carrying `tx_id` and `n` (and its
    parameters), the work on `n` elements, a `Resp(tx_id, n)` heading the results on `m_out`, and one
    `Status(tx_id, code)` per command on its own `m_status`. Ports are framed
@@ -35,8 +45,8 @@ reference example and the order of work. This skill is the module step inside it
    (`schema/python/complex.md`), not two integers split by hand. (The `waveflow-schema` skill has the
    details.)
 6. **Read in the order the writer writes.** A blocking read on the wrong stream deadlocks. Where the
-   module must not wait (a setting that may or may not have changed), check with `get_schema_nb` --
-   and the order of those checks is the module's priority: state it. A check made once before a
+   kernel must not wait (a setting that may or may not have changed), check with `get_schema_nb` --
+   and the order of those checks is the kernel's priority: state it. A check made once before a
    blocking wait for the next data leaves a window: a setting written during the wait applies one
    block late. If that matters, check both streams in one loop until the data arrives, or state the
    window.
@@ -68,23 +78,24 @@ example: *"Control and data share `s_in` (each command carries its parameters an
 configuration stream would be needed only if the configuration were too large to repeat or came from
 another source."* Ask only when the choice changes an interface someone else has already built.
 
-## The mapping: what the user says -> what you declare
+## The mapping: one stream for each interface
 
-| the user says | the module declares | outside the module |
-|---|---|---|
-| data arrives / leaves as a stream (another kernel, an ADC, a DAC) | `FramedStreamIFSlave` / `FramedStreamIFMaster` | nothing, or the RF edge |
-| a host (or another master) sends jobs or data over the bus | a stream slave, e.g. `s_in` | a `QueueIn` view in `mm_views` |
-| the host takes results over the bus | a stream master, e.g. `m_out`; a queue out drops TLAST, so the host sizes what it reads from a header or a fixed-size message | a `QueueOut` view; the host waits on its `IrqIF` |
-| the host sets something, at any time, by register | a stream slave `s_cfg`, one message per commit; read with `get_schema` (must have it) or `get_schema_nb` (may have changed) at a stated point | a `RegBank` view (`cfg_port`) |
-| the host reads a status at any time | the `m_status` stream | the same `RegBank` (`status_port`; it keeps the latest) |
-| the host is woken when something is ready | nothing in the module | the queue view's level `IrqIF` (threshold set by the host's endpoint). Never polling |
-| the module reads or writes a buffer in memory | a composite: the logic issues commands on a stream; `MemRStream` / `MemWStream` children own `m_axi` | the memory (`MemoryMod` in the harness) |
-| a table it computes against by address | a `BramIF` port: storage, not an event; what says it is ready is still a stream message | the memory |
-| it writes into something shared across a bus | a credit stream (`CreditStreamIF`), writes guarded on credit | a `CreditIn` view |
+Kernels' table (`systems/kernels.md`, *The stream for each thing a kernel talks to*) gives the stream
+for each thing the user names, and what sits outside the kernel. For each interface write one line in
+the design notes: the port (`s_...` / `m_...`), its schema, and its adaptor or view -- or "Waveflow
+cannot do this yet". What the table leaves to you:
 
-`mm_views` is a `ClassVar` tuple on the class (`QueueIn`, `QueueOut`, `RegBank`, `CreditIn`,
-`BramWindow`, from `waveflow.hw.mm_device`); it declares the views. Building them and the bus around
-the module is the system step, not this one.
+- **A host reaches the kernel over the bus**: the views go on the class, `mm_views: ClassVar[tuple]`
+  (`QueueIn`, `QueueOut`, `RegBank`, `CreditIn`, `BramWindow`, from `waveflow.hw.mm_device`). A queue out
+  drops TLAST, so the host sizes what it reads from a header or a fixed-size message. A host is woken by
+  the queue view's `IrqIF`, never by polling; the register bank raises no interrupt. Building the bus
+  around the kernel is the device and system steps, not this one.
+- **Settings by register**: one `s_cfg` message per commit, read with `get_schema` (must have it) or
+  `get_schema_nb` (may have changed) at a stated point (rule 6).
+- **A buffer in memory**: the kernel issues `MemRCmd` / `MemWCmd` on streams; the adaptors and the
+  device around it are `waveflow-device`.
+- **A table it computes against by address**: a `BramIF` -- storage, not an event; what says it is
+  ready is still a stream message.
 
 ## Which page to read before which step
 
@@ -92,7 +103,9 @@ Read the page **before** writing the code, with `waveflow_get_doc` (MCP) or the 
 
 | step | page |
 |---|---|
-| the rule and its adaptors; reading order; between kernels | `systems/streams.md` |
+| what a kernel is; the stream for each thing it talks to | `systems/kernels.md` |
+| adaptors and devices, the words | `systems/devices.md`, `systems/glossary.md` |
+| reading order; bursts and lanes; between kernels | `systems/streams.md` |
 | the protocol, the default and the alternatives, errors, the bus mapping | `systems/command_response.md` |
 | the class: `cpp_kernel_name`, fields, ports in `__post_init__`, `run_iter`, `kernel_task`, `workload` | `systems/hwmodule.md` |
 | the kinds (`FreeRunMod`, `HostActivated`), leaf or composite | `flows/modules.md`, `flows/concurrent_python.md` |
@@ -101,12 +114,12 @@ Read the page **before** writing the code, with `waveflow_get_doc` (MCP) or the 
 | reading or writing memory | `interface/axi_mm/master.md` |
 | non-blocking reads, framed ports | `interface/primitive/stream.md`, `interface/primitive/index.md` |
 | credit across a bus | `interface/derived/credit_stream.md` |
-| a module alone: its harness, `workload(kind)`, `golden(kind)` | `systems/pysim.md`, `flows/units_harness.md` |
+| a kernel alone: its harness, `workload(kind)`, `golden(kind)` | `systems/pysim.md`, `flows/units_harness.md` |
 | what each test compares; asserting counts | `systems/verification.md` |
 
 Worked examples: `stream_kernel` (one kernel, the default protocol: copy it), `stream_kernel_mm` (the
 same kernel behind queues), `mm_fir` (a register bank and a config id across two streams), `block_eq`
-(a composite), `memcpy` (memory adaptors). If a name is not on those pages, `waveflow_search` it --
+(a composite: `waveflow-pipeline`), `memcpy` (memory adaptors: `waveflow-device`). If a name is not on those pages, `waveflow_search` it --
 **do not guess an API name.**
 
 ## The shape
@@ -147,7 +160,7 @@ recorded, `sysm.stand_ins["m_out"].words`, compared with the golden **by count a
 ## Before you finish, check your own work
 
 - [ ] Every interface the user named is in a mapping: a port, a direction, a schema on it, its
-      adaptor or view, or a stated "Waveflow cannot do this yet".
+      adaptor or view (Kernels' table), or a stated "Waveflow cannot do this yet".
 - [ ] `FreeRunMod` unless the spec asks for a launch; no memory, register or address in the logic.
 - [ ] How commands and data travel is chosen and **stated** with its reason and the alternative; two
       input streams carry an id where order matters.

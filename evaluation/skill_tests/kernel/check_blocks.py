@@ -1,7 +1,7 @@
 """The reviewer's checker for module/01_three_blocks: does the trial's test pass, and what did each module
 declare?
 
-    python evaluation/skill_tests/module/check_blocks.py <trial folder> [--no-tests]
+    python evaluation/skill_tests/kernel/check_blocks.py <trial folder> [--no-tests]
 
 1. Runs the trial's ``test_blocks.py`` (pytest, in the trial folder): item G1.
 2. Imports every ``block_*.py``, finds the hardware modules defined there, builds each on a fresh

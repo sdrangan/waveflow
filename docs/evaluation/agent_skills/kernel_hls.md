@@ -2,17 +2,20 @@
 title: "Agent skills: HLS kernel bodies"
 parent: Agent skills
 nav_order: 2
-summary: "The second skill, waveflow-hls-body: writing a Vitis HLS kernel body in Waveflow's loop patterns. What it contains, its test (a gain stage that keeps a count across commands, written against given schemas and a golden, and checked by a plain-C++ compile against that golden), and the first results, one run per arm on Opus and Sonnet: every run, with or without the skill, wrote a correct body in the reference's shape, so the test is at the ceiling; the skill cut the tokens by a third to two fifths. An early version of the skill was wrong about reset, and both models followed it. A harder test is next."
+summary: "The second skill, waveflow-kernel-hls: writing a Vitis HLS kernel body in Waveflow's loop patterns. What it contains, its test (a gain stage that keeps a count across commands, written against given schemas and a golden, and checked by a plain-C++ compile against that golden), and the first results, one run per arm on Opus and Sonnet: every run, with or without the skill, wrote a correct body in the reference's shape, so the test is at the ceiling; the skill cut the tokens by a third to two fifths. An early version of the skill was wrong about reset, and both models followed it. A harder test is next."
 ---
 
 # Agent skills: HLS kernel bodies
+
+> **Renamed 2026-11-20.** The skill was run as `waveflow-hls-body` (test folder `hls_body/`); it is
+> now `waveflow-kernel-hls` (`kernel_hls/`). The results file keeps its name.
 
 > **Status: first results.** One run per arm on two models, scored by one reviewer. Both arms reached
 > the ceiling, so this test cannot yet show what the skill does.
 
 ## The skill
 
-`waveflow-hls-body` ([`waveflow/skills/waveflow-hls-body/SKILL.md`](https://github.com/sdrangan/waveflow/tree/main/waveflow/skills/waveflow-hls-body/SKILL.md))
+`waveflow-kernel-hls` ([`waveflow/skills/waveflow-kernel-hls/SKILL.md`](https://github.com/sdrangan/waveflow/tree/main/waveflow/skills/waveflow-kernel-hls/SKILL.md))
 covers writing the body of a Vitis HLS kernel. It contains:
 
 - eight rules: one firing per message; packed samples through the lane loop, in the shape the
@@ -29,7 +32,7 @@ or a counter that moves during reset.
 
 ## The test
 
-The method is the one on [Agent skills](index.md). The files are in `evaluation/skill_tests/hls_body/`.
+The method is the one on [Agent skills](index.md). The files are in `evaluation/skill_tests/kernel_hls/`.
 
 ### The task: a gain stage with statistics
 
@@ -59,13 +62,13 @@ II=1.
 As for the schema test, with the given files passed by `--files`, which copies them beside the spec:
 
 ```bash
-waveflow blind-test --prompt evaluation/skill_tests/hls_body/01_gain_stats.md \
-    --files evaluation/skill_tests/hls_body/given_01/gain_msgs.py \
-    --files evaluation/skill_tests/hls_body/given_01/gen_headers.py \
-    --files evaluation/skill_tests/hls_body/given_01/gain_model.py \
+waveflow blind-test --prompt evaluation/skill_tests/kernel_hls/01_gain_stats.md \
+    --files evaluation/skill_tests/kernel_hls/given_01/gain_msgs.py \
+    --files evaluation/skill_tests/kernel_hls/given_01/gen_headers.py \
+    --files evaluation/skill_tests/kernel_hls/given_01/gain_model.py \
     --folder ../waveflow_blind_tests/body01_skill_sonnet --model sonnet --no-approve \
     --message "Write the code specified in 01_gain_stats.md, in this folder, with Waveflow: its MCP server is available." \
-    --skills waveflow/skills/waveflow-hls-body     # the skill arm only
+    --skills waveflow/skills/waveflow-kernel-hls     # the skill arm only
 ```
 
 ### How a run is scored

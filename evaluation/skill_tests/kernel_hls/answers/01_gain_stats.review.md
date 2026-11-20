@@ -2,7 +2,7 @@
 
 For the reviewer, not the agent (no spec links this file). Fill one sheet per run. First run:
 
-- `python evaluation/skill_tests/hls_body/check_body.py <trial folder>`: compiles the body as plain C++
+- `python evaluation/skill_tests/kernel_hls/check_body.py <trial folder>`: compiles the body as plain C++
   and compares it with the golden at both widths (item E1);
 - `python evaluation/skill_tests/lint_schema_use.py <trial folder>`: lists hand-packing lines (B4).
 

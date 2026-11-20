@@ -14,7 +14,7 @@ def test_a_fresh_project_gets_skills_instructions_and_the_server(tmp_path):
     out = init_project(tmp_path)
     assert "error" not in out, out
     assert (tmp_path / ".claude" / "skills" / "waveflow-schema" / "SKILL.md").is_file()
-    assert (tmp_path / ".agents" / "skills" / "waveflow-hls-body" / "SKILL.md").is_file()
+    assert (tmp_path / ".agents" / "skills" / "waveflow-kernel-hls" / "SKILL.md").is_file()
 
     agents = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert BEGIN in agents and END in agents

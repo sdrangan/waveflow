@@ -1,18 +1,21 @@
 ---
-title: "Agent skills: modules"
+title: "Agent skills: kernels"
 parent: Agent skills
 nav_order: 3
-summary: "The third skill, waveflow-module: writing a free-running module from the interfaces its user describes -- each mapped to a stream port and the adaptor outside it, the protocol chosen and stated when the user leaves it open, run_iter, and a harness test that counts. Its test is three blocks in a student's words (the protocol left open; an ADC and a host on the bus, with a request Waveflow cannot meet; two streams the user asked for). First results, one run per arm on Opus and Sonnet: all four at 49-52 of 52, because the frames process and the mm_fir example already carry the mapping; the skill cut turns by 13-44% and was the only arm to state the open choice with its alternative. The runs found a timing window the reference had missed."
+summary: "The third skill, waveflow-kernel: writing a free-running module from the interfaces its user describes -- each mapped to a stream port and the adaptor outside it, the protocol chosen and stated when the user leaves it open, run_iter, and a harness test that counts. Its test is three blocks in a student's words (the protocol left open; an ADC and a host on the bus, with a request Waveflow cannot meet; two streams the user asked for). First results, one run per arm on Opus and Sonnet: all four at 49-52 of 52, because the frames process and the mm_fir example already carry the mapping; the skill cut turns by 13-44% and was the only arm to state the open choice with its alternative. The runs found a timing window the reference had missed."
 ---
 
-# Agent skills: modules
+# Agent skills: kernels
+
+> **Renamed 2026-11-20.** The skill was run as `waveflow-module` (test folder `module/`); it is now
+> `waveflow-kernel` (`kernel/`). The results file keeps its name.
 
 > **Status: first results.** One run per arm on two models, scored by one reviewer. All four runs are
 > at or near the ceiling.
 
 ## The skill
 
-`waveflow-module` ([`waveflow/skills/waveflow-module/SKILL.md`](https://github.com/sdrangan/waveflow/tree/main/waveflow/skills/waveflow-module/SKILL.md))
+`waveflow-kernel` ([`waveflow/skills/waveflow-kernel/SKILL.md`](https://github.com/sdrangan/waveflow/tree/main/waveflow/skills/waveflow-kernel/SKILL.md))
 covers one step: the user names what a block talks to ("the host sets a threshold", "results go to
 the host", "samples from the ADC"); the module turns each into a **stream port**, and whatever is not
 a stream (a bus, registers, an interrupt, memory) into an **adaptor** outside its logic
@@ -29,12 +32,12 @@ a stream (a bus, registers, an interrupt, memory) into an **adaptor** outside it
   (`QueueIn`, `QueueOut` and its `IrqIF`, `RegBank`, `MemRStream` / `MemWStream`, `BramIF`, credit).
 - A page per step, a skeleton class, a self-check.
 
-Building the bus around the module is the system step (`waveflow-system`, planned); memory adaptors in
-detail are `waveflow-memory`.
+Building the bus around the module is the system step (`waveflow-system`); memory adaptors in
+detail are `waveflow-device`.
 
 ## The test
 
-`evaluation/skill_tests/module/01_three_blocks.md`: three blocks, described as a student would, by
+`evaluation/skill_tests/kernel/01_three_blocks.md`: three blocks, described as a student would, by
 what each talks to. Python modules in pysim with their tests; no Vitis.
 
 | block | what it tests |
@@ -73,7 +76,7 @@ Per item: `evaluation/skill_tests/results/module01_2026-11-20.md`.
 
 ## What next
 
-- **The trigger prompts** (`module/trigger_prompts.md`), on Sonnet.
+- **The trigger prompts** (`kernel/trigger_prompts.md`), on Sonnet.
 - **A second task where the MCP server has no near copy**: a module whose data is in memory (a
   composite with `MemRStream`), or a mid-stream setting whose exact frame matters.
 - A second reviewer.

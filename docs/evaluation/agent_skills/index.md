@@ -9,7 +9,7 @@ summary: "Do agent skills -- short SKILL.md instruction folders an AI coding age
 # Agent skills
 
 > **Status: just started.** Two skills are written and have first results, one run per arm (see
-> [data schemas](schemas.md) and [HLS kernel bodies](hls_body.md)). A third, `waveflow-start`, is
+> [data schemas](schemas.md) and [HLS kernel bodies](kernel_hls.md)). A third, `waveflow-start`, is
 > the entry point; [onboarding](onboarding.md) lists what is verified about it and what is not. This page records the method so the
 > numbers can be checked.
 
@@ -38,8 +38,8 @@ Each skill has its own page: what it contains, its test, and its results.
 |---|---|---|
 | [`waveflow-start`](onboarding.md) | the entry point: finding Waveflow (MCP or shell), installing it when a session lacks it; set up by `waveflow init` | verified locally in one smoke run; the cloud case and agents without MCP are untested (the page says how to test them) |
 | [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
-| [`waveflow-hls-body`](hls_body.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
-| [`waveflow-module`](module.md) | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | one run per arm on Opus and Sonnet; all at 49-52 of 52; turns -13..44% |
+| [`waveflow-kernel-hls`](kernel_hls.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
+| [`waveflow-kernel`](kernel.md) | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | one run per arm on Opus and Sonnet; all at 49-52 of 52; turns -13..44% |
 | `waveflow-memory` | AXI-MM, memory streams, BRAM, register maps, credit streams | planned |
 | `waveflow-system` | composing modules with `HwSystem` and the system flow | planned |
 | `waveflow-verify` | pysim, csim / cosim and XSI tests that assert counts, so a deadlock cannot pass | planned |
