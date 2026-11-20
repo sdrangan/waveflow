@@ -249,6 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
     blind.add_argument("--files", action="append", default=[],
                        help="a file the agent is given, copied into the trial folder beside the "
                        "spec (e.g. schemas it must use); repeatable")
+    blind.add_argument("--init", action="store_true",
+                       help="run `waveflow init` on the trial folder first (skills, AGENTS.md, "
+                       "CLAUDE.md), as a user would on their project")
     blind.add_argument("--text", action="store_true")
 
     skills = sub.add_parser("skills", help="the agent skills shipped with Waveflow")
@@ -307,6 +310,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             no_waveflow=args.no_waveflow,
             skills=args.skills,
             files=args.files,
+            init=args.init,
         )
     if args.group == "init":
         from waveflow.mcp.init_project import init_project

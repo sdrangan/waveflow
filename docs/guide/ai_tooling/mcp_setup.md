@@ -189,6 +189,10 @@ missing. From there the agent uses the same lookups through the shell
 (`waveflow kb search`, `waveflow kb doc`, ...), which return what the MCP
 tools would.
 
+This path is **not verified yet**: see
+[Evaluation: onboarding](../../evaluation/agent_skills/onboarding.md) for what has been tested and
+how to test the rest.
+
 A session opened on the **Waveflow repository itself** needs none of this: the
 guide and the examples are in the clone, and the repository commits its own
 `AGENTS.md` and skills.
