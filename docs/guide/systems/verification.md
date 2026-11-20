@@ -1,6 +1,6 @@
 ---
 title: Functional verification
-parent: Flow Overview
+parent: Waveflow Architecture
 nav_order: 6
 audience: python
 api: [harness, StreamSink, add_system_steps, add_robustness_steps, StandInPolicy, load_run]

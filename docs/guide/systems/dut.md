@@ -1,59 +1,28 @@
 ---
-title: The DUT and two levels of simulation
-parent: Flow Overview
+title: Designing the DUT
+parent: Waveflow Architecture
 nav_order: 1
 audience: python
-api: [FreeRunMod, run_iter, add_comp, add_if, DataList, StreamBroadcast, Simulation, HwSystem]
-summary: "The first step of the flow: what is built, and how it is tested. The DUT -- the design under test -- is the hardware that will be synthesized, and Waveflow tests it at two levels: in a Simulation beside any SimObj (a host, a wireless channel, a traffic source), and in an HwSystem whose testbench is the part of that simulation with an RTL twin, the DUT running as RTL. Then the recipe for designing a DUT -- five questions: what it does (a bit-exact golden from intents), its boundary, its modules (a leaf with one run_iter, or a composite of stages that run concurrently; devices for what a bus reaches), the interfaces between them, and the messages on each -- answered first in brief for the free-running polynomial, then each in turn, with steps up to a three-stage pipeline (block_eq) and a bus system (markov)."
+api: [FreeRunMod, run_iter, add_comp, add_state, DataList, StreamBroadcast, build_mm_device]
+summary: "The first step of the flow, on the running example: designing the DUT. Five questions answered before any code is written: what it does (a bit-exact golden from intents), its kernels (a leaf, or a composite of child kernels where work should overlap), what each kernel talks to (a stream for each, and an adaptor -- making it a device -- for a bus or memory), the messages on each stream (schemas), and one firing (what each leaf run_iter reads, computes and writes). The polynomial: one leaf kernel on three streams, no adaptor. Steps up to a composite (block_eq) and a bus system of devices (markov)."
 ---
 
-# The DUT and two levels of simulation
+# Designing the DUT
 
-The DUT -- the design under test -- is what will be synthesized: the hardware. Synthesized hardware must
-be **tested**, and Waveflow offers two modes. Both put the DUT in a simulation; they differ in what may
-sit around it.
+The DUT is the hardware being built. What it is made of -- kernels, the adaptors around them, devices,
+memories -- is [Kernels](kernels.md) and [Devices and the DUT](devices.md); this page is how to design
+one, on the running example.
 
-```mermaid
-flowchart LR
-  subgraph S["Simulation: pysim"]
-    direction TB
-    H1["host program"] --> D1[["DUT"]]
-    C1["wireless channel"] --> D1
-    T1["traffic source"] --> C1
-    D1 --> P1["processor model"]
-  end
-  subgraph H["HwSystem: RTL simulation"]
-    direction TB
-    H2["host<br/>(C++ twin)"] --> D2[["DUT<br/>(its RTL)"]]
-    DR["stream driver<br/>(AxisMaster)"] --> D2
-    D2 --> SK["stream sink<br/>(AxisSlave)"]
-  end
-```
+## The recipe
 
-- **pysim** runs the DUT in a **[`Simulation`](../sim/index.md)**: a discrete-event simulation of any
-  collection of `SimObj`s. Beside the DUT there can be anything the question needs -- a host program, a
-  wireless channel, a traffic source, a processor model. It is fast, its timing is a model, and it is
-  where a design is explored and evaluated as part of a larger system ([Simulating in Python](pysim.md)).
-- **RTL simulation** runs the DUT in an **[`HwSystem(sim, dut)`](rtl.md#the-system)**: the same kind of
-  simulation, with the DUT named, and everything else its **testbench**. The DUT's Verilog runs cycle by
-  cycle under Vivado's simulator, and every testbench part runs as its C++ twin beside it
-  ([Simulating at RTL](rtl.md)).
-
-The rule between them is one line: **anything can join a `Simulation`; only what has an RTL twin can
-join an `HwSystem`.** A host has a C++ twin, so it can drive the RTL; a wireless channel model has none,
-so a study with one is a pysim study, and its RTL simulation draws the testbench where everything has
-a twin. Here the DUT is a black box; the rest of this page is what goes inside it.
-
-## Designing the DUT: the recipe
-
-Designing the DUT means answering five questions before any module is written. They are the system's
+Designing the DUT means answering five questions before any code is written. They are the hardware's
 design, and every later step follows from them.
 
-1. **What it does** -- pinned as a golden model.
-2. **Its boundary** -- where it meets everything else.
-3. **Its modules** -- how the work is partitioned.
-4. **The interfaces** between them.
-5. **The messages** on each interface.
+1. **What it does** -- pinned as a golden.
+2. **Its kernels** -- how the work is split.
+3. **What each kernel talks to** -- its streams, and an adaptor for anything that is not a stream.
+4. **The messages** on each stream.
+5. **One firing** -- what each leaf kernel's `run_iter` reads, computes and writes.
 
 ## Example: the polynomial
 
@@ -62,19 +31,21 @@ answers, in brief:
 
 1. **What it does:** for each command, evaluate $y = c_0 + c_1 x + c_2 x^2 + c_3 x^3$ on its float32
    samples, in Horner order, and report how the command ended.
-2. **Its boundary:** three streams -- `s_in` takes a command and its samples, `m_out` gives the results,
-   `m_status` gives one status per command.
-3. **Its modules:** one -- `PolyKernel`, a leaf with one `run_iter`, which becomes one task. The work is
-   one stage, so there is nothing to split.
-4. **The interfaces:** the three streams, each framed (TLAST ends each message).
-5. **The messages:** `CmdHdr(tx_id, nsamp, c0..c3)` and the samples in; `Resp(tx_id, nsamp)` and the
-   results out; `Status(tx_id, status)`, with `status` `OK` or `TLAST_EARLY`.
+2. **Its kernels:** one, `PolyKernel`, a leaf. The work is one stage, so there is nothing to split.
+3. **What it talks to:** only streams -- no bus, no memory -- so it needs **no adaptor**: the DUT is one
+   device, and the device is the kernel itself. Three streams: `s_in` brings a command and its samples, `m_out` takes the results,
+   `m_status` takes one status per command.
+4. **The messages:** `CmdHdr(tx_id, nsamp, c0..c3)` then the samples on `s_in`; `Resp(tx_id, nsamp)`
+   then the results on `m_out`; `Status(tx_id, status)` on `m_status`, with `status` `OK` or
+   `TLAST_EARLY`.
+5. **One firing:** read a command, answer its header, read its samples, evaluate the golden's
+   polynomial on them, write the results, write the status -- and on a short burst, stop.
 
 ```mermaid
 flowchart LR
   IN(["s_in<br/>CmdHdr | x[0..n-1]"]) --> T
-  subgraph DUT["DUT: PolyKernel"]
-    T["poly_kernel_task<br/>(one hls::task)"]
+  subgraph DUT["DUT: PolyKernel, one kernel"]
+    T["run_iter<br/>(one hls::task)"]
   end
   T --> OUT(["m_out<br/>Resp | y[0..n-1]"])
   T --> ST(["m_status<br/>Status"])
@@ -84,7 +55,7 @@ Each answer in turn, below.
 
 ## What it does: the golden first
 
-Write the operation as **pure functions**, independent of any module and bit-exact: every rounding,
+Write the operation as **pure functions**, independent of any kernel and bit-exact: every rounding,
 every saturation, the order of every sum. The polynomial's is Horner's rule in float32, in the order the
 C++ uses, so the hardware matches it bit for bit:
 
@@ -103,56 +74,42 @@ want_out, want_status = expected(cmds)     # what it must answer, from the inten
 ```
 
 A bug in `stimulus` cannot hide by being repeated in `expected`. The golden is what every later
-simulation is checked against ([The polynomial's golden](../../examples/stream_kernel/golden.md)).
+simulation is checked against ([The polynomial's golden](../../examples/stream_kernel/golden.md)), and
+the kernel's `run_iter` calls the same `poly_eval`.
 
-## Its boundary
+## Its kernels
 
-The DUT's **ports** are where it meets the rest of the system: a stream from a source, a stream to a
-sink, a bus a host reaches it by, a memory it reads. Draw them first, with what crosses each: the
-polynomial has three -- `s_in` (commands and samples), `m_out` (results), `m_status` (one status per
-command).
+Split the work into kernels where it has **parts that should overlap**: a load, a compute and a store
+pipelined across jobs, or two computations at different rates. Those parts are child kernels of a
+**composite**, and they run concurrently. Work that is one stage is one **leaf**
+([Kernels](kernels.md#what-a-kernel-is)).
 
-Everything outside the boundary is the **testbench** at RTL and the world in pysim. That split is a
-build choice, not a property of the design: any module inside can later be the DUT of its own harness
-([the cut](pysim.md#the-cut)).
+The polynomial is one stage: read, evaluate, write. So the DUT is one leaf kernel.
 
-## Its modules
+## What each kernel talks to
 
-A module is a [`HwModule`](../flows/modules.md): typed ports and a behavior. The modules of a free-running
-design are [`FreeRunMod`](../flows/modules.md)s, and each takes one of two shapes -- **a body or
-children, never both**:
+For each kernel, list everything it talks to, and give each one its stream from the table in
+[Kernels](kernels.md#the-stream-for-each-thing-a-kernel-talks-to): another kernel is a framed stream; a host on the bus is a queue
+or a register bank, behind a **slave adaptor**; memory is a command to a memory reader or writer. The
+kernels and the adaptors they need are a **device** ([Devices and the DUT](devices.md)); the views a bus
+needs are declared on the kernel's class (`mm_views`).
 
-- **A leaf** implements `run_iter`: **one firing**, the work on one message. The runtime fires it again
-  for the next; there is no "before the loop", and state that must outlive a firing is declared
-  ([`add_state`](../memory/hwstate.md)). At RTL it is one `hls::task`.
-- **A composite** has children (`add_comp`) wired by internal interfaces (`add_if`), and no body. Each
-  child becomes its own task, each internal interface a FIFO, and the stages **run concurrently**.
+The polynomial talks only to streams, so it needs no adaptor:
 
-**Split into stages when the work has parts that should overlap** -- a load, a compute and a store
-pipelined across jobs, or two computations at different rates. One stage of work is a leaf.
-
-**On a bus, a kernel is a device**: the kernel with the memory-mapped views a host reaches it through,
-built from what its class declares (`mm_views`, [`build_mm_device`](../interface/axi_mm/slave.md)).
-
-Under every free-running design sits one rule: **a module's own logic reads and writes only streams**;
-memory, bus masters and interrupts reach it through adaptors ([Stream patterns](streams.md)).
-
-## The interfaces
-
-Each link between modules, or between the DUT and its testbench, is one typed interface:
-
-| the link | interface | reference |
+| stream | direction | carries |
 |---|---|---|
-| a stream of messages | `StreamIF` (framed, with TLAST, for messages) | [Streams](../interface/primitive/stream.md) |
-| a stream whose producer must not overrun a far queue | `CreditStreamIF` | [Credit stream](../interface/derived/credit_stream.md) |
-| a host or another master reaching a kernel | a memory-mapped device and the AXI crossbar | [AXI-MM slave](../interface/axi_mm/slave.md) |
-| a kernel reading or writing memory | `MemRStream` / `MemWStream` on `m_axi` | [AXI-MM master](../interface/axi_mm/master.md) |
-| a memory shared by address | `BramIF` | [BRAM](../interface/primitive/bram.md) |
-| "something is ready" to a host | `IrqIF` | [Interrupts](../interface/axi_mm/slave.md#interrupts) |
+| `s_in` | in | a command, then its samples |
+| `m_out` | out | the results' header, then the results |
+| `m_status` | out | one status per command |
+
+All three are framed: TLAST closes each message. What sits at their other ends is not part of the
+design: the testbench at RTL (a stream driver and two sinks), anything at all in pysim. Put the same
+kernel on a bus and its device gains a slave adaptor, its `run_iter` unchanged
+([The polynomial on a bus](../../examples/stream_kernel_mm/index.md)).
 
 ## The messages
 
-On each interface, the messages and their fields, as [schemas](../schema/index.md) -- one class per
+On each stream, the messages and their fields, as [schemas](../schema/index.md) -- one class per
 message, and every word packed by generated code on both sides:
 
 ```python
@@ -169,20 +126,38 @@ class Status(DataList):                    # one per command on m_status
 The same classes generate the C++ structs the HLS body reads and writes, so the two sides agree on
 every bit by construction. Several kinds of message on one stream are a
 [tagged union](../schema/python/tagged_union.md); validate each schema as it is written
-(`waveflow_validate_schema` for an assistant).
+(`waveflow_validate_schema` for an assistant). How a command and its answer are laid out across the
+streams is [Command-response](command_response.md).
+
+## One firing
+
+A leaf's `run_iter` is **one firing**: the work on one message. The runtime fires it again for the next;
+there is no "before the loop", and state that must outlive a firing is declared
+([`add_state`](../memory/hwstate.md)). The polynomial's firing, in order:
+
+1. read the command, `CmdHdr`, from `s_in`;
+2. write the results' header, `Resp(tx_id, nsamp)`, to `m_out`;
+3. read the samples from `s_in` -- fewer than `nsamp` if the burst ended early;
+4. evaluate the golden's `poly_eval` on them, and write the results to `m_out`;
+5. write `Status(tx_id, OK)` to `m_status`, or `TLAST_EARLY` if the samples were short -- and then
+   stop taking input, since an error is fatal.
+
+The firing is written in Python, and again, to read the same way, as the kernel's HLS body
+([Defining the kernel in Python and HLS](hwmodule.md)).
 
 ## Steps up
 
 **A pipeline: [block_eq](../../examples/block_eq/index.md).** A block equalizer computes a gain per row
 from a channel estimate, then applies it to that row's samples -- two computations at different rates.
-The DUT is a composite of three: a framework [`StreamBroadcast`](../streams/broadcast.md) giving each
-stage its own copy of the input, a `gain` stage, and an `apply` stage, joined by internal framed
-streams whose depths are sized against what can pile up in them.
+The DUT is one device, a composite kernel of three children: a framework
+[`StreamBroadcast`](../streams/broadcast.md) giving each stage its own copy of the input, a `gain`
+stage, and an `apply` stage, joined by internal framed streams whose depths are sized against what can
+pile up in them. Still only streams: no adaptor.
 
 **A bus system: [markov](../../examples/markov/index.md).** A generator draws random numbers and a chain
 walks a Markov chain on them, writing its states to a shared memory a host reads back. The DUT is two
 devices -- each kernel with the queue views the host and the other kernel reach it by -- an on-chip
-memory, and the crossbar between them; the host is the testbench. The link between the kernels is a
+memory, and the crossbar between them; the host is the testbench. The stream between the kernels is a
 credit stream, because the generator must not overrun the chain's queue across the bus.
 
-Next: [Stream patterns](streams.md) -- how the modules talk.
+Next: [Stream patterns](streams.md) -- the detail of the streams between kernels.
