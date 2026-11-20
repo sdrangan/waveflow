@@ -37,7 +37,9 @@ it.
 ## Installing them into a project
 
 The skills ship with the Waveflow package, so a project gets the skills that match its version of
-Waveflow. From the project folder, with the virtual environment active:
+Waveflow. [`waveflow init`](./mcp_setup.md#set-up-your-project-waveflow-init) installs them, along
+with the MCP server config and an `AGENTS.md`; that is the usual way. To install only the skills,
+from the project folder, with the virtual environment active:
 
 ```bash
 waveflow skills install
@@ -59,12 +61,13 @@ Each agent also needs the [MCP server](./mcp_setup.md): a skill tells the assist
 and the server is how it reads the page.
 
 **On claude.ai/code**, a session works from a clone of your repository, so it is offered exactly the
-skills committed there: run `waveflow skills install` once on your machine and commit both folders.
+skills committed there: run `waveflow init` (or `waveflow skills install`) once on your machine and
+commit both folders.
 
 ## In the Waveflow repository itself
 
-The Waveflow repository commits the same copies (`.claude/skills/`, `.agents/skills/`), so an
-assistant opened on the repository -- locally, or in a claude.ai/code chat -- is offered the skills
+The Waveflow repository commits the same copies (`.claude/skills/`, `.agents/skills/`) and its own
+`AGENTS.md`, so an assistant opened on the repository -- locally, or in a claude.ai/code chat -- is offered the skills
 too. `waveflow/skills/` is the source: after editing a skill there, refresh the copies with
 `waveflow skills install --dir . --force` and commit them. A test
 (`tests/mcp/test_skills.py`) fails when a copy differs from its source.

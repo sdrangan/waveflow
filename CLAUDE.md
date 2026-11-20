@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+@AGENTS.md
+
+The rest of this file is the developer notes: commands, architecture, toolchain.
+
 ## Commands
 
 ```bash
