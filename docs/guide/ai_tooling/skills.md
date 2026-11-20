@@ -8,7 +8,7 @@ summary: "Short SKILL.md instruction folders an AI coding agent loads when a tas
 
 # Agent Skills
 
-> **Experimental.** There is one skill so far, and whether it helps is still being measured: see
+> **Experimental.** There are three skills so far, and whether they help is still being measured: see
 > [Evaluation: Agent skills](../../evaluation/agent_skills/index.md).
 
 The [MCP server](./index.md) lets an assistant *search* the guide, but it only finds a pattern if it
@@ -28,6 +28,7 @@ other agents read it, each from its own folder.
 
 | skill | use it for |
 |---|---|
+| `waveflow-start` | any task that uses Waveflow: how to look up its API and guide (the MCP tools, or the same commands in a shell), installing Waveflow when a session does not have it, and how to begin a design |
 | `waveflow-schema` | defining a message as a `DataSchema` (`DataList`, `EnumField`, `FixedField`, arrays) and moving it in Python and in Vitis HLS: serializing it, reading and writing it on a stream or memory, and generating its C++ header |
 | `waveflow-hls-body` | writing a Vitis HLS kernel body: one firing per message, the lane loop over packed samples with the generated array utils, `PIPELINE II=1`, state kept across commands, fixed-point datapaths, and the deadlocks and reset traps C simulation does not show |
 

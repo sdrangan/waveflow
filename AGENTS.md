@@ -34,8 +34,9 @@ simulation and code generation need neither.
   `waveflow kb --text examples`, `waveflow kb --text usage <Symbol>` (every place a name is used).
   The Waveflow MCP server (`python -m waveflow.mcp.server`; setup in
   `docs/guide/ai_tooling/mcp_setup.md`) offers the same as `waveflow_*` tools.
-- **Skills**: `.claude/skills/` and `.agents/skills/` hold the `waveflow-*` skills (data schemas, HLS
-  kernel bodies). Load the matching one before that step. They are copies: the source is
+- **Skills**: `.claude/skills/` and `.agents/skills/` hold the `waveflow-*` skills: `waveflow-start`
+  (looking Waveflow up, beginning a design), then data schemas and HLS kernel bodies. Load the
+  matching one before that step. They are copies: the source is
   `waveflow/skills/`.
 
 ## Rules

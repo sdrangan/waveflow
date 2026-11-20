@@ -29,6 +29,7 @@ too weak; Haiku 5.5 is untested.)
 |---|---|---|
 | `waveflow-schema` | DataSchema, fields, enums, fixed point, tagged unions, HLS serialize, array utils, header generation | Opus/Sonnet at 51-54 of 54 in both arms; the skill removed defensive casts and cut tokens 31-53% |
 | `waveflow-hls-body` | kernel body shape, the lane loop, pragmas, state across commands and reset, deadlock rules | all runs at the ceiling (43-44 of 44) in both arms; tokens -30..41% |
+| `waveflow-start` | the entry point: looking Waveflow up (MCP or shell), installing it when a session lacks it, beginning a design. `waveflow init` writes a five-line `AGENTS.md` section pointing at it | **untested**: the onboarding blind test (fresh project, only what `init` writes) checks that it loads |
 
 ## To build, in this order
 

@@ -87,18 +87,31 @@ def test_the_cli(tmp_path, capsys):
     assert "AGENTS.md" in text and "next: commit" in text
 
 
-def test_every_tool_and_command_the_block_names_exists():
-    """The AGENTS.md block names MCP tools, CLI commands and guide pages; each must be real."""
+def test_the_block_is_short_and_names_the_start_skill():
+    """Projects usually have an AGENTS.md of their own, maybe with other packages' parts: ours is a
+    few lines, and the detail lives in the ``waveflow-start`` skill, loaded only when needed."""
+    from importlib import resources
+
+    from waveflow.mcp.skills import list_skills
+
+    block = resources.files("waveflow.mcp.resources").joinpath("agents_block.md").read_text(
+        encoding="utf-8")
+    assert len(block.splitlines()) <= 10
+    assert "`waveflow-start`" in block
+    assert "waveflow-start" in [s["name"] for s in list_skills()["skills"]]
+
+
+def test_every_tool_and_command_the_start_skill_names_exists():
+    """The start skill names MCP tools, CLI commands and guide pages; each must be real."""
     import asyncio
     import re
-    from importlib import resources
 
     from waveflow.cli import build_parser
     from waveflow.mcp.knowledge import waveflow_get_doc
     from waveflow.mcp.server import mcp
+    from waveflow.mcp.skills import SKILLS_DIR
 
-    block = resources.files("waveflow.mcp.resources").joinpath("agents_block.md").read_text(
-        encoding="utf-8")
+    block = (SKILLS_DIR / "waveflow-start" / "SKILL.md").read_text(encoding="utf-8")
     tools = {t.name for t in asyncio.run(mcp.list_tools())}
     for name in set(re.findall(r"`(waveflow_\w+)`", block)):
         assert name in tools, name

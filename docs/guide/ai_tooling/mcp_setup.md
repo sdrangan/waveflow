@@ -132,7 +132,7 @@ This sets the folder up for every assistant at once:
 | `.mcp.json` | registers the MCP server for Claude Code | no (`init` adds it to `.gitignore`) |
 | `.vscode/mcp.json` | registers the MCP server for VS Code | no (likewise) |
 | `.claude/skills/`, `.agents/skills/` | the [agent skills](./skills.md) | yes |
-| `AGENTS.md` | instructions for any agent: what Waveflow is, where to look things up, what to do when Waveflow is not installed | yes |
+| `AGENTS.md` | a short Waveflow section (five lines) for any agent: the project uses Waveflow, load the `waveflow-start` skill, and how to install Waveflow when it is missing | yes |
 | `CLAUDE.md` | imports `AGENTS.md` (Claude Code reads `CLAUDE.md`) | yes |
 
 The two server files name the interpreter you ran `init` with, which is why
@@ -149,6 +149,11 @@ they stay on your machine:
   }
 }
 ```
+
+The `AGENTS.md` section is kept short on purpose: a project's `AGENTS.md`
+usually holds its own instructions, and every line there is read in every
+session. The detail (how to look Waveflow up, what to do first) is in the
+`waveflow-start` skill, which an agent loads only when a task involves Waveflow.
 
 `init` never replaces your own content. An existing `AGENTS.md` or `CLAUDE.md`
 gets the Waveflow part appended, an existing `.mcp.json` gets a `waveflow`

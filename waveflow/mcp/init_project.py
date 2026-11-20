@@ -9,8 +9,10 @@ claude.ai/code session working from a clone of the project, gets them too):
 - the agent skills, in ``.claude/skills/`` and ``.agents/skills/`` (:func:`install_skills`; a skill
   already there is left alone);
 - ``AGENTS.md``, the instructions file Codex, Copilot, Gemini CLI and others read, with a Waveflow
-  block: what Waveflow is, where to look things up (MCP tools, or the same in a shell), and what to
-  do when Waveflow is not installed -- clone it beside the project;
+  block of a few lines: the project uses Waveflow, load the ``waveflow-start`` skill, and how to
+  install Waveflow when it is missing.  It is short on purpose: a project's ``AGENTS.md`` is usually
+  its own (and other packages' too) and is read in every session; the detail is in the skill, which
+  loads only when a task involves Waveflow;
 - ``CLAUDE.md``, importing ``AGENTS.md`` (Claude Code reads ``CLAUDE.md``, not ``AGENTS.md``).
 
 **Kept on this machine** (they name this machine's Python interpreter, so they are added to
