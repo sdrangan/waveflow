@@ -154,3 +154,23 @@ def test_the_lint_flags_hand_packing_and_spares_generated_headers(tmp_path):
     assert not any("body.cpp:1:" in h for h in hits)
     assert any("model.py:1: [int(field)]" in h for h in hits)
     assert any("model.py:2: [shift]" in h for h in hits) and any("[mask]" in h for h in hits)
+
+
+MODULE = REPO / "evaluation" / "skill_tests" / "module"
+
+
+def test_the_module_tests_reference_passes_and_the_checker_reads_it(tmp_path):
+    """The module test's reference answer -- three blocks, each in its harness -- passes its own tests,
+    and the reviewer's ``check_blocks.py`` finds every module free-running with stream ports only, and
+    block B's register bank and queue."""
+    work = tmp_path / "ref"
+    shutil.copytree(MODULE / "answers" / "ref_01", work, ignore=shutil.ignore_patterns("__pycache__"))
+    r = subprocess.run([sys.executable, str(MODULE / "check_blocks.py"), str(work)],
+                       capture_output=True, text=True, timeout=1800)
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert "G1 test_blocks.py: PASS" in out, out
+    for cls in ("ContrastStretch", "EnergyMonitor", "Correlator"):
+        assert f"{cls}  [FreeRunMod]" in out, out
+    assert "NOT A STREAM" not in out and "could not build" not in out, out
+    assert "mm_views: RegBank(regs), QueueOut(q_report)" in out

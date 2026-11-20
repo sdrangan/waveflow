@@ -39,7 +39,7 @@ Each skill has its own page: what it contains, its test, and its results.
 | [`waveflow-start`](onboarding.md) | the entry point: finding Waveflow (MCP or shell), installing it when a session lacks it; set up by `waveflow init` | verified locally in one smoke run; the cloud case and agents without MCP are untested (the page says how to test them) |
 | [`waveflow-schema`](schemas.md) | data schemas: defining a message and moving it in Python and in Vitis HLS | one run per arm on Opus, Sonnet and Haiku |
 | [`waveflow-hls-body`](hls_body.md) | Vitis HLS kernel bodies: loop shape, the lane loop, state across commands | one run per arm on Opus and Sonnet; both arms at the ceiling |
-| `waveflow-module` | an `HwModule`, its ports and pysim behaviour, the command / response protocol, its unit harness | planned |
+| `waveflow-module` | a module from the interfaces its user describes: streams and adaptors, how commands and data travel, `run_iter`, its harness test | written; test `module/01_three_blocks` ready, not yet run |
 | `waveflow-memory` | AXI-MM, memory streams, BRAM, register maps, credit streams | planned |
 | `waveflow-system` | composing modules with `HwSystem` and the system flow | planned |
 | `waveflow-verify` | pysim, csim / cosim and XSI tests that assert counts, so a deadlock cannot pass | planned |

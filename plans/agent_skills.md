@@ -36,6 +36,18 @@ too weak; Haiku 5.5 is untested.)
 Each is the same recipe (below). Scope is a starting point; adjust after reading the guide.
 
 ### 1. `waveflow-module` -- an HwModule and its pysim twin
+
+**Status (2026-11-19, branch `feat/skill-module`):** skill written (`waveflow/skills/waveflow-module`),
+test `evaluation/skill_tests/module/01_three_blocks.md` with review sheet (52 points), reference
+(`answers/ref_01`, passes in pysim) and checker (`check_blocks.py`). **Next: the four blind runs.**
+Decisions taken: the skill maps the user's interfaces to streams + adaptors and declares `mm_views`;
+building the bus is `waveflow-system`, memory-adaptor detail `waveflow-memory`. When the user does not
+say how control and data travel: one input stream (command header, then data), two outputs; the agent
+chooses, does not ask, and states the choice with its reason and the alternative. The test has three
+blocks: A unspecified (the default), B different sources + a host on the bus + a request Waveflow
+cannot do (interrupt-enable / clear registers), C two streams the user asked for (an id pairs them).
+The plan's single-module test idea became block A + the D items; a mutation check of the agent's own
+tests is left for `waveflow-verify`.
 - **Covers:** `HwModule` ports and directions, `Interface` wiring, the pysim behaviour (`run_proc`, slave
   methods), `HostActivated` vs `FreeRunMod`, the command / response / status protocol, the module in
   its unit harness.
