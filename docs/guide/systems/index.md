@@ -5,81 +5,105 @@ nav_order: 1.2
 has_children: true
 audience: python
 api: [Simulation, SimObj, HwSystem, DutTop, harness, HwModule, FreeRunMod, HostActivated, MmSlaveDevice, build_mm_device, MemSlaveAdaptor, MemRStream, MemWStream, MemoryMod, AXIMMCrossBarIF, StreamIF, CreditStreamIF, BramIF, IrqIF, SwHost, DataSchema]
-summary: "What Waveflow builds and simulates, before how -- where the guide starts. A design is a concurrent system, and Waveflow runs it at three levels: the golden (untimed, bit-exact pure functions, for accuracy and design-space search), pysim (a Simulation of SimObjs, one of them the DUT, with timing), and RTL simulation (an HwSystem: the DUT as Verilog, its testbench as C++ twins). The DUT is the same tree at both simulated levels -- devices (a kernel with its slave adaptor: a front and views), composites, kernels (a free-running leaf: run_iter in Python, an HLS body at RTL), memory adaptors, the crossbar -- and only the layer around it changes. What you write (schemas, the golden, run_iter, the HLS body, the wiring, mm_views, workloads, a host) and what Waveflow provides. Any module can be the DUT of its own harness. A glossary of every term, with its class and page. Then the Flow Overview: how it is built, step by step."
+summary: "What Waveflow builds and simulates, before how -- where the guide starts. Waveflow designs hardware (the DUT) and simulates it in its environment, to answer three questions -- accuracy, timing, cost -- and explore their trade-off. Three levels: the golden (untimed, bit-exact pure functions, for accuracy and design-space search), pysim (a Simulation of SimObjs, one of them the DUT, with timing), and RTL simulation (an HwSystem: the DUT as Verilog, its testbench as C++ twins); two descriptions, not three: run_iter calls the golden, and each kernel's HLS body is the second, checked against it. The DUT is the same tree at both simulated levels -- devices (a kernel with its slave adaptor: a front and views), composites, kernels (a free-running leaf: run_iter in Python, an HLS body at RTL), memory adaptors, the crossbar -- and only the layer around it changes. What you write (schemas, the golden, run_iter, the HLS body, the wiring, mm_views, workloads, a host) and what Waveflow provides. Any module can be the DUT of its own harness. A glossary of every term, with its class and page. Then the Flow Overview: how it is built, step by step."
 ---
 
 # Waveflow Architecture
 
-**Waveflow models concurrent systems.** A design is several things running at once -- kernels,
-memories, a host program, the world around them -- joined by streams and buses, and the questions worth
-asking are about the whole: does it compute the right answer, how fast, at what cost. Waveflow
-describes the hardware once, in Python, and runs that one description at three levels.
+## What is Waveflow?
+
+Waveflow is a Python package for designing hardware and simulating it in the environment it will work
+in. Its first target is hardware for wireless communications and sensing. The hardware being built is
+the **DUT**. The environment is several things running at once: the DUT itself -- kernels and memories
+joined by streams and interconnects -- and the world around it, such as host processors, peripherals,
+wireless channels and RF components.
+
+The simulations answer three questions about the hardware:
+
+- **Accuracy and correctness.** Are the computations right, and how accurate are they? For example,
+  how does the number of iterations, or the bit-width of a fixed-point approximation, change the
+  result?
+- **Timing.** How fast is it? The system's throughput, its latency, how often a deadline is missed.
+- **Cost.** What does the hardware take? Resources (LUTs, DSPs, BRAM), estimated from calibrated
+  models in Python and measured by synthesis; energy, for the processor model.
+
+In most designs accuracy, throughput and cost trade off against one another. Waveflow is built to
+explore that trade-off quickly, by hand or with an agent searching the design space.
 
 This page is **what** is built and simulated. How to build it, step by step, is the
 [Flow Overview](flow.md).
 
 ## Three levels of simulation {#three-levels}
 
-| level | what runs | it answers | used for |
-|---|---|---|---|
-| **golden** | the operation as pure, bit-exact functions: no time, no modules | does it compute the right answer | accuracy studies; design-space search at scale; the reference every other level is checked against |
-| **pysim** | the DUT's modules in a [`Simulation`](pysim.md), with timing, beside anything else the question needs | how fast, and does it work as part of the system | exploring and evaluating the design; each module alone, then together |
-| **RTL simulation** | the DUT's Verilog in an [`HwSystem`](rtl.md#the-system), cycle by cycle, its testbench as C++ twins | does the hardware do what the Python does | verifying the hardware; measuring it |
+Waveflow simulates the DUT at three levels:
 
-The levels are not three descriptions of the design. The **golden** is a set of functions; a
-kernel's Python behavior (`run_iter`) **calls** them, so pysim computes exactly what the golden does and
-adds time. RTL runs the hardware written to read the same way, and is compared with pysim word for
-word. In the running example, the golden's `poly_eval` is what
-[`PolyKernel.run_iter`](../../../examples/stream_kernel/stream_kernel.py) evaluates.
+| level | what runs | what it tells you |
+|---|---|---|
+| **golden** | the operation as pure, bit-exact Python functions: no time, no modules | functional accuracy, fast enough to search a design space at scale; the reference the other two levels are checked against |
+| **pysim** | the DUT's modules in Python, timed, in a [`Simulation`](pysim.md) with its environment | throughput, latency, missed deadlines; whether the modules work together, without a protocol error or a deadlock; cost from calibrated models |
+| **RTL** | the DUT's Verilog in an [`HwSystem`](rtl.md#the-system), cycle by cycle, its testbench as C++ twins | whether the hardware does what the Python does; exact cycle counts; cost measured by synthesis |
+
+There are **two descriptions of the DUT, not three.** The golden and pysim share the first: a
+kernel's Python behavior (`run_iter`) **calls** the golden's functions, so pysim computes exactly what
+the golden does and adds time. The second is each kernel's **HLS body**, written separately in C++; the
+RTL simulation runs it, and its outputs are compared with pysim's word for word. In the running example,
+the golden's `poly_eval` is what
+[`PolyKernel.run_iter`](../../../examples/stream_kernel/stream_kernel.py) evaluates, and the HLS body is
+written to read the same way.
 
 The golden takes three forms, all from the same functions: the **functions** themselves (what it
-does, [The DUT](dut.md#what-it-does-the-golden-first)); a module's **`golden(kind)`**, the bursts each
-output must record for a workload, which its harness checks pysim against
+does, [Designing the DUT](dut.md#what-it-does-the-golden-first)); a module's **`golden(kind)`**, the
+bursts each output must record for a workload, which its harness checks pysim against
 ([verification](verification.md)); and a design's **`golden(params, workload)`** for design-space
 search, the accuracy metrics of an untimed run ([DSE context](../dse/context.md)).
 
-## The pysim hierarchy
+## Around the DUT: pysim and RTL {#around-the-dut}
 
+The two simulated levels hold the same DUT. What changes is the layer around it:
+
+```mermaid
+flowchart LR
+  subgraph S["Simulation: pysim"]
+    direction TB
+    H1["host program"] --> D1[["DUT"]]
+    C1["wireless channel"] --> D1
+    T1["traffic source"] --> C1
+    D1 --> P1["processor model"]
+  end
+  subgraph H["HwSystem: RTL simulation"]
+    direction TB
+    H2["host<br/>(C++ twin)"] --> D2[["DUT<br/>(its RTL)"]]
+    DR["stream driver<br/>(AxisMaster)"] --> D2
+    D2 --> SK["stream sink<br/>(AxisSlave)"]
+  end
 ```
-Simulation                     a discrete-event simulation of SimObjs
-├── SimObj ...                 anything the question needs: a host program, a wireless channel,
-│                              a traffic source, a processor model
-└── DUT                        a module (a module is a SimObj too): the tree below
-```
 
-**Anything can join a `Simulation`.** The DUT is the part that will become hardware; everything
-around it is the world, at whatever level of detail the question needs
-([Simulating in Python](pysim.md)).
-
-## The RTL hierarchy
-
-```
-HwSystem(sim, dut)             a Simulation with one module named the DUT; flat
-├── testbench                  everything outside the DUT, derived, never listed:
-│                              hosts, stream drivers and sinks, memory models -- each with a C++ twin
-└── DUT                        what is synthesized: the same tree as in pysim
-```
-
-**Only what has an RTL twin can join an `HwSystem`.** A host has a C++ twin, so it can drive the RTL;
-a wireless channel model has none, so a study with one is a pysim study, and its RTL simulation draws
-the testbench where everything has a twin ([Simulating at RTL](rtl.md)).
-
-![A generic system. A host (a SwHost, tan) is a bus master on an AXI crossbar (purple, vendor IP). The crossbar's slaves are three sub-tops, each in a dashed box. Device A holds a front with views (green, hand-written RTL), kernel A (blue, Vitis HLS) and a bus writer (blue) that acts for kernel A. Device B holds a front with views and kernel B, which also masters the bus through m_axi. The memory holds a front with a window and the RAM (both green). A solid box around the crossbar and the three sub-tops is the DUT; a dotted box around everything, host included, is the HwSystem. An interrupt line runs from device A's front across the DUT boundary to the host. A legend names the build step that realizes each colour: csynth for blue, system_rtl for green, xbar_ip for purple, system_xsi for tan.](../flows/figures/system_cut.svg)
+- **In pysim** the outer layer is a [`Simulation`](pysim.md): a discrete-event simulation of
+  `SimObj`s. The DUT is one of them (every module is a `SimObj`), and the rest is anything the question
+  needs -- a host program, a wireless channel, a traffic source, a processor model -- at whatever level of
+  detail. **Anything can join a `Simulation`.**
+- **At RTL** the outer layer is an [`HwSystem(sim, dut)`](rtl.md#the-system): a simulation with one
+  module named the DUT. Everything else is its **testbench**, derived, never listed: hosts, stream
+  drivers and sinks, memory models, each running as a C++ twin beside the DUT's Verilog. **Only what has
+  an RTL twin can join an `HwSystem`.** A wireless channel model has none, so a study with one is a
+  pysim study, and its RTL simulation draws the testbench where everything has a twin
+  ([Simulating at RTL](rtl.md)).
 
 ## Inside the DUT: the same tree at both levels {#the-dut-tree}
 
-```
-DUT                            one module, or a DutTop grouping several
-├── device                     a kernel or composite + its slave adaptor; one IP, reached over a bus
-│   ├── slave adaptor          a front (the one part that speaks AXI) + views (queues, a register bank,
-│   │                          a BRAM window): the bus, as streams
-│   └── kernel or composite    the logic, streams only
-├── composite                  children wired by internal interfaces; no body; the children run concurrently
-│   ├── kernel                 a free-running leaf: one run_iter -> one hls::task
-│   └── MemRStream / MemWStream  memory, as streams
-├── crossbar                   the AXI bus between devices and memories
-└── memory
-```
+![The DUT alone, in a solid box, with a crossbar (purple, vendor IP) on its left reached by the host from outside. A device, in a dashed box, holds a front with views (green, Waveflow provides it) and kernel A (blue, you write it: run_iter and its HLS body), joined by streams; an interrupt runs from the views out of the DUT to the host. Kernel A sends commands on a stream to kernel C, inside a composite (dash-dot box) with a memory reader, MemRStream, and a memory writer, MemWStream (both green), each on the crossbar through m_axi. A memory, in a dashed box, holds a front with a window and the RAM (green), on the crossbar. A legend: blue, you write it, the Python model and the HLS body; green, Waveflow provides it; purple, vendor IP generated from the address map; dashed, a device or memory, one sub-top and one IP; dash-dot, a composite, a task per child.](../flows/figures/dut_tree.svg)
+
+The DUT is one module, or a `DutTop` grouping several with the interfaces between them. Its parts:
+
+- **A kernel** is a free-running leaf: one `run_iter` in Python, one HLS body, one `hls::task`.
+- **A composite** has children wired by internal interfaces and no body of its own; the children run
+  concurrently, a task each.
+- **A device** is a kernel or composite with its **slave adaptor**: a **front**, the one part that
+  speaks AXI, and **views** behind it (queues, a register bank, a BRAM window) that turn bus accesses
+  into streams. A device is one sub-top in the Verilog and one IP when packaged.
+- **Memory readers and writers** (`MemRStream`, `MemWStream`) move data between memory and streams
+  through `m_axi`.
+- **The crossbar** joins devices and memories by an address map, and **memories** hold the data.
 
 Under every part sits one rule: **a module's own logic reads and writes only streams.** A bus, a memory
 and an interrupt reach it through **adaptors** -- a slave adaptor's views on the bus side, memory readers
@@ -101,7 +125,7 @@ simulated alone, at both levels, before the whole ([The cut](pysim.md#the-cut)).
 | a composite | its children and their wiring (`add_comp`, `add_if`) | a task per child, a FIFO per internal interface |
 | a device | the views on the kernel's class (`mm_views`) | the views and the front (framework RTL), the address map, the crossbar |
 | memory access | the commands the logic issues | `MemRStream` / `MemWStream`, the memory models |
-| the testbench | each module's `workload(kind)` and `golden(kind)`; a host's threads | the stand-ins, the C++ twins, the Verilog top, the build steps |
+| the testbench | each module's `workload(kind)` and `golden(kind)`; a host's threads, twice: in Python, and in C++ for RTL ([Software threads](../build/sw_threads.md)) | the stand-ins and their C++ twins, the host's generated endpoints, the Verilog top, the build steps |
 
 **The HLS body is needed only for the hardware levels**: RTL simulation, and the timing and resources
 measured from synthesis ([Timing and resources](calibration.md)). A study that stays in the golden and
