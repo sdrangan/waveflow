@@ -38,6 +38,11 @@ skill_tests/
     answers/
       01_gain_stats.review.md
       ref_01/                     the reference body (II=1 at csynth) and the driver check_body.py uses
+  onboarding/                     a researcher's first request, with and without `waveflow init`
+    01_energy.md                  the request, in a researcher's words
+    given_01/                     the lab's own AGENTS.md and CLAUDE.md (--files)
+    README.md                     the arms, the commands, and the cloud case run by hand
+    answers/01_energy.review.md
   results/                        one file per batch of runs: arm, model, tokens, sheet totals
 ```
 

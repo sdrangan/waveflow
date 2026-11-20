@@ -284,6 +284,27 @@ def test_given_files_are_copied_beside_the_spec(tmp_path, monkeypatch):
     assert "no such file" in out["error"] and not (tmp_path / "bad").exists()
 
 
+def test_init_sets_the_trial_up_as_waveflow_init_would(tmp_path, monkeypatch):
+    """``--init``: the skills and the AGENTS.md section, appended to a given AGENTS.md; no MCP
+    config in the folder (the run's own --mcp-config gives the server); the Skill tool allowed."""
+    spec = tmp_path / "src" / "spec.md"
+    spec.parent.mkdir()
+    spec.write_text("x", encoding="utf-8")
+    mine = tmp_path / "src" / "AGENTS.md"
+    mine.write_text("# Our lab\n\nUse numpy.\n", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(bt, "_drive", lambda folder, logdir, config, **kw: seen.update(config=config))
+
+    bt.run_blind_test(spec, tmp_path / "trial", silent=True, files=[mine], init=True)
+    trial = tmp_path / "trial"
+    agents = (trial / "AGENTS.md").read_text(encoding="utf-8")
+    assert agents.startswith("# Our lab") and "waveflow-start" in agents
+    assert (trial / ".claude" / "skills" / "waveflow-start" / "SKILL.md").is_file()
+    assert not (trial / ".mcp.json").exists()
+    assert "waveflow-start" in seen["config"]["skills"] and "Skill" in seen["config"]["allowed"]
+    assert seen["config"]["init"]["AGENTS.md"] == "appended"
+
+
 def test_the_summary_says_which_skill_loaded_and_when(tmp_path):
     folder = tmp_path / "trial"
     sk = folder / ".claude" / "skills" / "alpha"

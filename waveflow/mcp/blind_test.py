@@ -727,6 +727,7 @@ def run_blind_test(
     no_waveflow: bool = False,
     skills: list[str | Path] | None = None,
     files: list[str | Path] | None = None,
+    init: bool = False,
 ) -> dict[str, Any]:
     """Run the blind test and write ``<folder>.blindtest/summary.md``.
 
@@ -745,6 +746,11 @@ def run_blind_test(
 
     *files* are given files (the schemas a kernel-body test starts from, say), copied flat into
     the trial folder beside the spec.
+
+    *init* runs ``waveflow init`` on the trial folder after the files are copied, as a user would
+    on their project: the skills, the Waveflow section of ``AGENTS.md`` (appended to a given
+    ``AGENTS.md``) and ``CLAUDE.md``.  Not its MCP configs: the run's own ``--mcp-config``
+    gives the server, as in every arm.  The onboarding test (``evaluation/skill_tests/onboarding/``).
     """
     if folder is None:
         if prompt is None:
@@ -799,6 +805,16 @@ def run_blind_test(
         shutil.copy2(f, folder / f.name)
         copied.append(f.name)
     installed = _install_skills(folder, skill_src)
+    init_files: dict[str, str] = {}
+    if init:
+        from waveflow.mcp.init_project import init_project
+
+        res = init_project(folder, mcp=False)
+        if "error" in res:
+            return res
+        init_files = res["files"]
+        installed += sorted({p.split("/")[2] for p in init_files
+                             if p.startswith(".claude/skills/")} - set(installed))
 
     mcp_config = logdir / "mcp.json"
     servers = {} if no_waveflow else {
@@ -820,6 +836,7 @@ def run_blind_test(
         "folder": str(folder),
         "copied": copied,
         "skills": installed,
+        "init": init_files,
         "allowed": baseline_allowed(allowed) if no_waveflow else allowed,
         "no_waveflow": no_waveflow,
         "waveflow_importable": _waveflow_importable(no_waveflow),
